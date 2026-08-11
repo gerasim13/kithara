@@ -6,8 +6,8 @@ use super::{
     expand_async::{emit_async_runtime_test, emit_async_timeout_test},
     parse::TestArgs,
     shared::{
-        finalize_body, make_ambient_stmt, make_serial_attr, make_tracing_init, wrap_with_model,
-        wrap_with_timeout,
+        finalize_body, make_ambient_stmt, make_serial_attr, make_tracing_init,
+        make_wasm_serial_guard, wrap_with_model, wrap_with_timeout,
     },
 };
 
@@ -32,6 +32,7 @@ pub(crate) fn emit_one_test(
     let full_plain = quote! { #tracing_init #preamble #(#body_stmts)* };
     let full_held = quote! { #tracing_init #preamble #ambient #(#body_stmts)* };
     let serial_attr = make_serial_attr(args);
+    let wasm_serial_guard = make_wasm_serial_guard(args);
 
     if is_async && args.timeout.is_some() {
         let mut output = emit_async_timeout_test(
@@ -49,7 +50,10 @@ pub(crate) fn emit_one_test(
             #(#remaining_attrs)*
             #[cfg(target_arch = "wasm32")]
             #[wasm_bindgen_test::wasm_bindgen_test]
-            #vis async fn #fn_name() #ret_type #wasm_wrapped
+            #vis async fn #fn_name() #ret_type {
+                #wasm_serial_guard
+                #wasm_wrapped
+            }
         });
         return output;
     }
@@ -70,7 +74,10 @@ pub(crate) fn emit_one_test(
             #(#remaining_attrs)*
             #[cfg(target_arch = "wasm32")]
             #[wasm_bindgen_test::wasm_bindgen_test]
-            #vis async fn #fn_name() #ret_type #wasm_wrapped
+            #vis async fn #fn_name() #ret_type {
+                #wasm_serial_guard
+                #wasm_wrapped
+            }
         });
         return output;
     }
@@ -78,6 +85,24 @@ pub(crate) fn emit_one_test(
     let modeled = wrap_with_model(&full_held, args);
     let with_timeout = wrap_with_timeout(&modeled, &args.timeout, false, fn_name);
     let wrapped = finalize_body(&with_timeout, args, fn_name, false);
+
+    if args.is_serial {
+        return quote! {
+            #(#remaining_attrs)*
+            #[cfg(not(target_arch = "wasm32"))]
+            #serial_attr
+            #[test]
+            #vis fn #fn_name() #ret_type #wrapped
+
+            #(#remaining_attrs)*
+            #[cfg(target_arch = "wasm32")]
+            #[wasm_bindgen_test::wasm_bindgen_test]
+            #vis async fn #fn_name() #ret_type {
+                #wasm_serial_guard
+                #wrapped
+            }
+        };
+    }
 
     quote! {
         #(#remaining_attrs)*

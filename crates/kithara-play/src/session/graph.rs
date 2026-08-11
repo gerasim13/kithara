@@ -7,13 +7,13 @@ use tracing::{debug, warn};
 
 use super::{
     protocol::{AllocatedSlot, PlayerId, PlayerLevel, Reply, SessionError},
-    state::{PlayerState, SessionState, SlotNodes, ensure_ctx, prepare_eq_layout},
+    state::{MixTap, PlayerState, SessionState, SlotNodes, ensure_ctx, prepare_eq_layout},
     transport::SessionTransportState,
 };
 use crate::{
     api::{SessionDuckingMode, SlotId},
-    bridge::slot_channels,
-    rt::{MasterEqNode, PlayerNode},
+    bridge::{MixTapWriter, slot_channels},
+    rt::{MasterEqNode, PlayerNode, TapNode},
 };
 pub(super) fn ducking_gain(mode: SessionDuckingMode) -> f32 {
     match mode {
@@ -50,6 +50,70 @@ fn connect_stereo<B: AudioBackend>(
         .connect(from, to, &[(0, 0), (1, 1)], false)
         .map(|_| ())
         .map_err(|err| SessionError::Graph(format!("{label} failed: {err}")))
+}
+
+pub(super) mod tap {
+    use super::*;
+
+    pub(in crate::session) fn enable<B: AudioBackend>(
+        state: &mut SessionState<B>,
+        writer: MixTapWriter,
+    ) -> Result<(), SessionError> {
+        if state.mix_tap.is_some() {
+            return Err(SessionError::MixTapActive);
+        }
+        let Some(limiter_id) = state.session_limiter_node_id else {
+            state.mix_tap = Some(MixTap::Requested(writer));
+            return Ok(());
+        };
+        install(state, limiter_id, writer)
+    }
+
+    pub(in crate::session) fn disable<B: AudioBackend>(state: &mut SessionState<B>) {
+        let Some(MixTap::Installed(tap_id)) = state.mix_tap.take() else {
+            return;
+        };
+        let Some(ref mut fw_ctx) = state.ctx else {
+            return;
+        };
+        if let Err(err) = fw_ctx.remove_node(tap_id) {
+            warn!(?err, "failed to remove session mix tap node");
+        }
+        if let Err(err) = fw_ctx.update() {
+            warn!("graph update after mix tap disable failed: {err:?}");
+        }
+    }
+
+    pub(in crate::session) fn install_requested<B: AudioBackend>(
+        state: &mut SessionState<B>,
+        limiter_id: NodeID,
+    ) -> Result<(), SessionError> {
+        let Some(MixTap::Requested(writer)) = state.mix_tap.take() else {
+            return Ok(());
+        };
+        install(state, limiter_id, writer)
+    }
+
+    fn install<B: AudioBackend>(
+        state: &mut SessionState<B>,
+        limiter_id: NodeID,
+        writer: MixTapWriter,
+    ) -> Result<(), SessionError> {
+        let fw_ctx = state.ctx.as_mut().ok_or(SessionError::NoContext)?;
+        let tap_id = fw_ctx.add_node(TapNode::new(writer), None);
+        if let Err(err) = connect_stereo(fw_ctx, limiter_id, tap_id, "connect limiter->mix_tap") {
+            if let Err(remove_err) = fw_ctx.remove_node(tap_id) {
+                warn!(?remove_err, "failed to remove the unconnected mix tap node");
+            }
+            return Err(err);
+        }
+        if let Err(err) = fw_ctx.update() {
+            warn!("graph update after mix tap install failed: {err:?}");
+        }
+        state.mix_tap = Some(MixTap::Installed(tap_id));
+        debug!(?tap_id, "[KITHARA-ROUTE] session mix tap installed");
+        Ok(())
+    }
 }
 
 pub(super) mod lifecycle {
@@ -153,6 +217,7 @@ pub(super) mod lifecycle {
             }
             state.ctx = None;
             state.transport_control = None;
+            state.mix_tap = None;
             state.transport = SessionTransportState::default();
             state.session_output_node_id = None;
             state.session_output_memo = None;

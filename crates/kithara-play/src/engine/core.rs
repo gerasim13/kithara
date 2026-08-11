@@ -18,7 +18,7 @@ use crate::{
     api::{EngineEvent, SlotId},
     bridge::{PlaybackShared, PlayerCmd, PlayerNotification, SharedEq, SlotControl},
     error::PlayError,
-    session::{PlayerId, SessionHandle},
+    session::{PlayerId, SessionHandle, SessionSampleRate},
 };
 
 type SlotHandle = SlotControl;
@@ -292,7 +292,9 @@ impl EngineImpl {
         if !self.running.load(Ordering::Acquire) {
             return self.config.sample_rate;
         }
-        self.session.query_sample_rate(self.config.sample_rate)
+        self.session
+            .sample_rate()
+            .map_or(self.config.sample_rate, SessionSampleRate::output)
     }
 
     pub fn master_volume(&self) -> f32 {

@@ -297,7 +297,16 @@ impl RunnerManager<'_> {
     fn boot_job_vm(&self, tart: &str) -> Result<String> {
         let mut command = self.process.command(tart);
         command
-            .args(["run", "--no-graphics"])
+            // `--no-audio` is what makes the iOS Simulator usable here. With
+            // the pass-through on, the guest's virtual sound device carries an
+            // input channel that leads nowhere, and `AudioUnitInitialize` on
+            // `AURemoteIO` inside a simulator blocks on it: CoreAudio waits
+            // nine seconds, reports "Initialize: RPC timeout. Apparently
+            // deadlocked" and aborts the process. Every test that starts
+            // playback died that way. Without the pass-through the device is
+            // output-only and the same unit initializes in two seconds. The
+            // jobs never play audible sound, so nothing is lost.
+            .args(["run", "--no-graphics", "--no-audio"])
             .args(self.job_vm_mounts())
             .arg(JobVm::NAME)
             .stdout(Stdio::null())

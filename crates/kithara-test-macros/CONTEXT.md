@@ -19,7 +19,9 @@ parameterization and `#[kithara::fixture]` injection.
 - `soft_fail("pattern", ...)` — catches panics whose message contains any pattern (case-insensitive; `"timeout"` also
   matches `timed out`) and prints `[SOFT FAIL]`; other panics resume unwinding. Requires `futures` at the call site for
   async tests.
-- `serial` — emits `#[serial_test::serial]`; requires `serial_test` at the call site.
+- `serial` — native tests use `#[serial_test::serial]`; wasm tests acquire one async
+  test-binary lock before their individual timeout begins, so queued tests do not spend
+  their timeout budget waiting for a prior serial body.
 - `multi_thread` — `new_multi_thread().worker_threads(2)` instead of `new_current_thread()`; requires `tokio`.
 - `selenium` — implies `native + tokio + serial + multi_thread`. It injects no `#[ignore]`: the suite is picked up only by
   the wasm-target driver (`just test run --lane=selenium`).

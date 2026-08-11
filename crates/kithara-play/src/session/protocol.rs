@@ -10,7 +10,7 @@ mod wire {
             SessionDuckingMode, SessionTransportSnapshot, SlotId, SyncUnavailable, Tempo,
             TrackBinding,
         },
-        bridge::SlotControl,
+        bridge::{MixTapWriter, SlotControl},
     };
 
     pub type PlayerId = u64;
@@ -41,6 +41,8 @@ mod wire {
         StreamStart(String),
         #[error("graph edit failed: {0}")]
         Graph(String),
+        #[error("session mix tap already has a consumer")]
+        MixTapActive,
         #[error("session transport has not been processed")]
         TransportNotProcessed,
         #[error("session transport commit was rejected at the render boundary")]
@@ -135,6 +137,10 @@ mod wire {
             eq_layout: Vec<EqBandConfig>,
             player_id: PlayerId,
         },
+        EnableMixTap {
+            writer: MixTapWriter,
+        },
+        DisableMixTap,
         SetSessionDucking {
             mode: SessionDuckingMode,
         },
@@ -186,8 +192,37 @@ mod wire {
         SessionTransport(SessionTransportSnapshot),
         SessionAnchor(Arc<SessionAnchorCell>),
         SlotAllocated(AllocatedSlot),
-        SampleRate(u32),
+        SampleRate(SessionSampleRate),
         Err(SessionError),
+    }
+
+    /// What the session knows about its output rate.
+    #[derive(Clone, Copy)]
+    #[non_exhaustive]
+    pub struct SessionSampleRate {
+        /// The rate the output stream runs at, once a stream exists.
+        pub measured: Option<u32>,
+        /// The rate the session last asked the device for.
+        pub requested: u32,
+    }
+
+    impl SessionSampleRate {
+        #[must_use]
+        pub const fn new(measured: Option<u32>, requested: u32) -> Self {
+            Self {
+                measured,
+                requested,
+            }
+        }
+
+        /// The rate to build a resampler for.
+        #[must_use]
+        pub const fn output(self) -> u32 {
+            match self.measured {
+                Some(measured) => measured,
+                None => self.requested,
+            }
+        }
     }
 
     #[non_exhaustive]
@@ -203,7 +238,9 @@ mod handle {
     use kithara_events::EventBus;
     use kithara_platform::sync::Arc;
 
-    use super::wire::{AllocatedSlot, Cmd, PlayerId, PlayerLevel, Reply, SessionError};
+    use super::wire::{
+        AllocatedSlot, Cmd, PlayerId, PlayerLevel, Reply, SessionError, SessionSampleRate,
+    };
     use crate::{
         api::{SessionTransportSnapshot, SlotId, Tempo, TrackBinding},
         error::PlayError,
@@ -327,11 +364,12 @@ mod handle {
             .map(|_| ())
         }
 
-        #[must_use]
-        pub fn query_sample_rate(&self, fallback: u32) -> u32 {
-            match self.exec(Cmd::QuerySampleRate) {
-                Ok(Reply::SampleRate(sr)) => sr,
-                _ => fallback,
+        pub fn sample_rate(&self) -> Result<SessionSampleRate, PlayError> {
+            match self.exec_ok(Cmd::QuerySampleRate)? {
+                Reply::SampleRate(sample_rate) => Ok(sample_rate),
+                _ => Err(PlayError::Internal(
+                    "unexpected reply for session sample rate query".into(),
+                )),
             }
         }
 
@@ -437,5 +475,6 @@ mod handle {
 
 pub use handle::{SessionDispatcher, SessionHandle};
 pub use wire::{
-    AllocatedSlot, Cmd, CmdMsg, PlayerId, PlayerLevel, Reply, SessionError, StartStreamFn,
+    AllocatedSlot, Cmd, CmdMsg, PlayerId, PlayerLevel, Reply, SessionError, SessionSampleRate,
+    StartStreamFn,
 };

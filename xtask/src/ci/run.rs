@@ -197,7 +197,7 @@ pub(crate) fn run(args: &RunArgs, ctx: &Ctx) -> Result<()> {
         Lane::LinuxCoverage => lane::linux::coverage(&process),
         Lane::AndroidBuild => lane::android::build(&process),
         Lane::AndroidTest => lane::android::test(&process, &ci_config),
-        Lane::WebChromium => lane::web::chromium(&process),
+        Lane::WebChromium => lane::web::chromium(&process, &ci_config.pins),
         Lane::WebFirefox => lane::web::firefox(&process),
         Lane::WebSize => lane::web::size(&process),
         Lane::WindowsArm64 => lane::windows::tests(&process, "aarch64-pc-windows-msvc"),

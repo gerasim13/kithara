@@ -1,8 +1,6 @@
 use std::{num::NonZeroU32, sync::atomic::Ordering};
 
-use kithara_audio::{
-    SeekOutcome, SessionBeat, SourceFrame, TrackBeat, TrackBeatMap, analysis::TrackAnalysis,
-};
+use kithara_audio::{SeekOutcome, SessionBeat, TrackBeat, analysis::TrackAnalysis};
 use kithara_events::PlaybackDirection;
 use kithara_platform::{sync::Arc, time::Duration};
 use tracing::{debug, warn};
@@ -33,23 +31,6 @@ pub struct BeatStart {
 }
 
 impl PlayerImpl {
-    /// Binds the running deck at its current media position and current session
-    /// beat. The resident tempo stage performs the render handoff; no track is
-    /// armed or loaded.
-    pub fn bind_playing_to_grid(&self, analysis: &TrackAnalysis) -> Result<(), PlayError> {
-        let transport = self.core.engine.session_handle().transport()?;
-        let host_sample_rate =
-            NonZeroU32::new(self.core.engine.master_sample_rate()).ok_or_else(|| {
-                PlayError::BindUnavailable {
-                    reason: "the audio engine has no host sample rate yet".to_owned(),
-                }
-            })?;
-        let position = self.position_seconds().ok_or(PlayError::NotReady)?;
-        let at = transport.position();
-        let binding = binding_at_position(analysis, host_sample_rate, position, at)?;
-        self.bind(&binding, at)
-    }
-
     /// Returns a bound deck to its resident free renderer.
     pub fn unbind_from_grid(&self) -> Result<(), PlayError> {
         self.unbind()
@@ -58,8 +39,7 @@ impl PlayerImpl {
     /// Places this deck on the session grid and plans a start on the next beat
     /// that lands on `quantum`.
     ///
-    /// A cold item still needs arming because it is not in the processor. A
-    /// running item uses [`Self::bind_playing_to_grid`] instead.
+    /// A cold item still needs arming because it is not in the processor.
     ///
     /// # Errors
     ///
@@ -129,79 +109,6 @@ impl PlayerImpl {
                 revision: start.revision,
             },
         })
-    }
-}
-
-fn binding_at_position(
-    analysis: &TrackAnalysis,
-    host_sample_rate: NonZeroU32,
-    position_seconds: f64,
-    session_beat: SessionBeat,
-) -> Result<TrackBinding, PlayError> {
-    let source = SourceFrame::new(position_seconds * f64::from(host_sample_rate.get())).map_err(
-        |reason| PlayError::BindUnavailable {
-            reason: reason.to_string(),
-        },
-    )?;
-    let map = TrackBeatMap::new(analysis, host_sample_rate).map_err(|reason| {
-        PlayError::BindUnavailable {
-            reason: reason.to_string(),
-        }
-    })?;
-    let track_anchor = map
-        .track_beat_at(source)
-        .ok_or_else(|| PlayError::BindUnavailable {
-            reason: "the current play position lies outside the analysed beat map".to_owned(),
-        })?;
-    TrackBinding::new(
-        analysis,
-        host_sample_rate,
-        session_beat,
-        track_anchor,
-        PlaybackDirection::Forward,
-    )
-    .map_err(|reason| PlayError::BindUnavailable {
-        reason: reason.to_string(),
-    })
-}
-
-#[cfg(test)]
-mod binding_tests {
-    use kithara_audio::{BeatGrid, analysis::TrackAnalysis};
-    use kithara_test_utils::kithara;
-
-    use super::*;
-
-    fn sample_rate() -> NonZeroU32 {
-        NonZeroU32::new(48_000).expect("invariant: fixture rate is non-zero")
-    }
-
-    fn analysis() -> TrackAnalysis {
-        TrackAnalysis::with_source_rate(
-            Some(BeatGrid::new(
-                120.0,
-                vec![0, 24_000, 48_000, 72_000, 96_000],
-                vec![0],
-                Vec::new(),
-            )),
-            None,
-            120_000,
-            sample_rate(),
-        )
-    }
-
-    #[kithara::test]
-    fn a_deck_bound_while_playing_continues_from_its_current_play_position_in_beat_time() {
-        let at = SessionBeat::new(7.25).expect("invariant: fixture beat is finite");
-        let binding = binding_at_position(&analysis(), sample_rate(), 1.25, at)
-            .expect("fixture position can be bound");
-
-        assert_eq!(
-            binding.source_frame_at(at),
-            Ok(Some(
-                SourceFrame::new(60_000.0).expect("fixture source frame is valid")
-            ))
-        );
     }
 }
 

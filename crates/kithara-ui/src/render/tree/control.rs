@@ -41,7 +41,6 @@ pub(super) fn render_control<'a>(
     let value = value.as_ref();
     let path = ui.resolve(path);
     let scope = read_scope(read, ui);
-    let mut align = Horizontal::Left;
     let element = match spec {
         ControlSpec::DeckSummary { style } => deck_summary(*style, value, scope, reads, skin),
         ControlSpec::Brand => Brand::builder().skin(skin).build().view(),
@@ -71,20 +70,17 @@ pub(super) fn render_control<'a>(
             color,
             active_color,
             active,
-            align: declared,
-        } => {
-            align = horizontal(*declared);
-            Text::builder()
-                .style(*style)
-                .maybe_value(value)
-                .maybe_label(label.map(|id| ui.resolve(id)))
-                .maybe_color(*color)
-                .maybe_active_color(*active_color)
-                .active(read_flag(active.as_ref(), reads, ui))
-                .skin(skin)
-                .build()
-                .view()
-        }
+            ..
+        } => Text::builder()
+            .style(*style)
+            .maybe_value(value)
+            .maybe_label(label.map(|id| ui.resolve(id)))
+            .maybe_color(*color)
+            .maybe_active_color(*active_color)
+            .active(read_flag(active.as_ref(), reads, ui))
+            .skin(skin)
+            .build()
+            .view(),
         ControlSpec::Glyph {
             icon,
             active_icon,
@@ -137,7 +133,15 @@ pub(super) fn render_control<'a>(
         ControlSpec::Checkbox => checkbox(path, value, skin),
         ControlSpec::Segmented { items } => segmented(path, items, value, ui, skin),
         ControlSpec::Select { label } => select(*label, ui, skin),
-        ControlSpec::StatusDot { label, tone } => status_dot(*label, *tone, ui, skin),
+        ControlSpec::StatusDot {
+            label,
+            tone,
+            active_tone,
+            active,
+        } => {
+            let on = read_flag(active.as_ref(), reads, ui);
+            status_dot(*label, *tone, *active_tone, on, ui, skin)
+        }
         ControlSpec::Swatch { role, label } => swatch(*role, *label, ui, skin),
         ControlSpec::Cell { label, highlighted } => cell(*label, *highlighted, ui, skin),
         ControlSpec::Readout {
@@ -179,10 +183,13 @@ pub(super) fn render_control<'a>(
             context_bar(path, scope_items, scope.as_ref(), value, ui, reads, skin)
         }
     };
-    Rendered::new(element, align)
+    Rendered::new(element, alignment(spec))
 }
 
-fn horizontal(align: TextAlign) -> Horizontal {
+fn alignment(spec: &ControlSpec) -> Horizontal {
+    let ControlSpec::Text { align, .. } = spec else {
+        return Horizontal::Left;
+    };
     match align {
         TextAlign::Start => Horizontal::Left,
         TextAlign::Center => Horizontal::Center,

@@ -4251,6 +4251,7 @@ dependencies = [
  "futures",
  "iced",
  "kithara",
+ "kithara-broadcast",
  "kithara-drm",
  "kithara-net",
  "kithara-platform",
@@ -4262,6 +4263,7 @@ dependencies = [
  "num-traits",
  "obfstr",
  "rand 0.10.2",
+ "ringbuf 0.5.0",
  "serde",
  "serde_yaml_ng",
  "sha2 0.11.0",
@@ -4386,6 +4388,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "kithara-broadcast"
+version = "0.0.1-alpha4"
+dependencies = [
+ "arc-swap",
+ "axum",
+ "bon",
+ "bytes",
+ "hls_m3u8",
+ "kithara-encode",
+ "kithara-platform",
+ "kithara-workspace-hack",
+ "ringbuf 0.5.0",
+ "thiserror 2.0.18",
+ "tower-http 0.7.0",
+ "tracing",
+]
+
+[[package]]
 name = "kithara-bufpool"
 version = "0.0.1-alpha4"
 dependencies = [
@@ -4485,11 +4505,12 @@ dependencies = [
 name = "kithara-encode"
 version = "0.0.1-alpha4"
 dependencies = [
- "fdk-aac",
+ "bon",
  "fdk-aac-sys",
  "ffmpeg-next",
  "kithara-stream",
  "kithara-workspace-hack",
+ "num-traits",
  "tempfile",
  "thiserror 2.0.18",
  "tracing",
@@ -4668,6 +4689,7 @@ dependencies = [
  "js-sys",
  "kithara",
  "kithara-app",
+ "kithara-broadcast",
  "kithara-devtools",
  "kithara-encode",
  "kithara-test-utils",

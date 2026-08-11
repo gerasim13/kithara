@@ -193,12 +193,16 @@ mod resident_tests {
         waveform::BeatGrid,
     };
 
-    const RATE: u32 = 48_000;
-    const BEAT_FRAMES: u64 = 24_000;
-    const CHUNK_FRAMES: usize = 2_048;
+    struct Fixture;
+
+    impl Fixture {
+        const RATE: u32 = 48_000;
+        const BEAT_FRAMES: u64 = 24_000;
+        const CHUNK_FRAMES: usize = 2_048;
+    }
 
     fn rate() -> NonZeroU32 {
-        NonZeroU32::new(RATE).expect("invariant: fixture rate is non-zero")
+        NonZeroU32::new(Fixture::RATE).expect("invariant: fixture rate is non-zero")
     }
 
     fn spec() -> PcmSpec {
@@ -206,11 +210,11 @@ mod resident_tests {
     }
 
     fn schedule(origin_frame: u64, session_bpm: f64) -> Arc<SourceSchedule> {
-        let markers: Vec<u64> = (0..16).map(|beat| beat * BEAT_FRAMES).collect();
+        let markers: Vec<u64> = (0..16).map(|beat| beat * Fixture::BEAT_FRAMES).collect();
         let analysis = TrackAnalysis::with_source_rate(
             Some(BeatGrid::new(120.0, markers, vec![0], Vec::new())),
             None,
-            BEAT_FRAMES * 16,
+            Fixture::BEAT_FRAMES * 16,
             rate(),
         );
         let map = TrackBeatMap::new(&analysis, rate()).expect("fixture map is valid");
@@ -239,11 +243,11 @@ mod resident_tests {
     }
 
     fn chunk(offset: u64) -> PcmChunk {
-        let samples = vec![0.25; CHUNK_FRAMES * 2];
+        let samples = vec![0.25; Fixture::CHUNK_FRAMES * 2];
         PcmChunk::new(
             PcmMeta {
                 spec: spec(),
-                frames: u32::try_from(CHUNK_FRAMES).expect("fixture chunk fits u32"),
+                frames: u32::try_from(Fixture::CHUNK_FRAMES).expect("fixture chunk fits u32"),
                 frame_offset: offset,
                 ..Default::default()
             },
@@ -264,9 +268,12 @@ mod resident_tests {
         let stage_address = std::ptr::from_ref::<dyn AudioEffect>(&*stage) as *const ();
         let _ = stage.process(chunk(0)).expect("free chunk renders");
 
-        slot.bind(schedule(CHUNK_FRAMES as u64, 120.0), SessionBeat::default());
+        slot.bind(
+            schedule(Fixture::CHUNK_FRAMES as u64, 120.0),
+            SessionBeat::default(),
+        );
         let _ = stage
-            .process(chunk(CHUNK_FRAMES as u64))
+            .process(chunk(Fixture::CHUNK_FRAMES as u64))
             .expect("bound chunk renders through the resident stage");
 
         assert_eq!(
@@ -279,11 +286,14 @@ mod resident_tests {
     fn a_deck_bound_while_playing_reaches_session_phase_without_a_seek() {
         let (slot, mut stage) = free_stage();
         let _ = stage.process(chunk(0)).expect("free chunk renders");
-        slot.bind(schedule(CHUNK_FRAMES as u64, 120.0), SessionBeat::default());
+        slot.bind(
+            schedule(Fixture::CHUNK_FRAMES as u64, 120.0),
+            SessionBeat::default(),
+        );
         assert_eq!(slot.state(), TempoState::Converging);
 
         let output = stage
-            .process(chunk(CHUNK_FRAMES as u64))
+            .process(chunk(Fixture::CHUNK_FRAMES as u64))
             .expect("the retained source tail primes the bound renderer");
 
         assert!(output.is_some());
@@ -294,9 +304,12 @@ mod resident_tests {
     fn an_unbind_while_playing_leaves_the_deck_running_free_at_the_tempo_it_had() {
         let (slot, mut stage) = free_stage();
         let _ = stage.process(chunk(0)).expect("free chunk renders");
-        slot.bind(schedule(CHUNK_FRAMES as u64, 144.0), SessionBeat::default());
+        slot.bind(
+            schedule(Fixture::CHUNK_FRAMES as u64, 144.0),
+            SessionBeat::default(),
+        );
         let _ = stage
-            .process(chunk(CHUNK_FRAMES as u64))
+            .process(chunk(Fixture::CHUNK_FRAMES as u64))
             .expect("bound chunk renders");
 
         let rate = slot.unbind();

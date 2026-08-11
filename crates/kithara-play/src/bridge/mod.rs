@@ -4,7 +4,7 @@ pub mod metrics;
 pub mod playback;
 pub mod protocol;
 
-pub use channels::{NodeInputs, SlotControl, slot_channels};
+pub use channels::{MixTapWriter, NodeInputs, SlotControl, slot_channels};
 pub use eq::SharedEq;
 pub(crate) use eq::{EQ_MAX_GAIN_DB, EQ_MIN_GAIN_DB};
 pub use metrics::{RtMetrics, RtMetricsSnapshot};
@@ -15,5 +15,5 @@ pub use protocol::{
 
 pub use crate::session::{
     AllocatedSlot, Cmd, CmdMsg, PlayerId, PlayerLevel, Reply, SessionDispatcher, SessionError,
-    SessionHandle, SessionState, StartStreamFn, run_cmd,
+    SessionHandle, SessionSampleRate, SessionState, StartStreamFn, run_cmd,
 };

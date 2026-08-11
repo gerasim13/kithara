@@ -25,6 +25,20 @@ struct EqModeChange<'a> {
 
 pub(crate) fn update(state: &mut Kithara, message: Message) -> Task<Message> {
     let task = match message {
+        Message::BroadcastToggle => state
+            .broadcast
+            .toggle()
+            .map_or_else(Task::none, stop_broadcast),
+        Message::BroadcastStopped(duration) => {
+            state.broadcast.complete_stop();
+            if let Some(duration) = duration {
+                tracing::info!(
+                    elapsed_ms = duration.as_secs_f64() * 1_000.0,
+                    "broadcast stopped"
+                );
+            }
+            Task::none()
+        }
         Message::Ui(event) => {
             if let Some(translated) = studio_ui::translate(state, event) {
                 return update(state, translated);
@@ -73,6 +87,10 @@ pub(crate) fn update(state: &mut Kithara, message: Message) -> Task<Message> {
 
     refresh_snapshots(state);
     task
+}
+
+fn stop_broadcast(stop: crate::broadcast::BroadcastStop) -> Task<Message> {
+    Task::perform(stop.run(), Message::BroadcastStopped)
 }
 
 /// The studio draws its own window chrome, so the app executes what the bar
@@ -223,6 +241,7 @@ fn handle_load(state: &mut Kithara, index: usize, id: DeckId) {
 /// Every deck advances on the same tick: a deck the user is not looking at
 /// still plays, streams and needs its continuous values pulled.
 fn handle_tick(state: &mut Kithara) {
+    state.broadcast.poll();
     for deck in state.decks.iter() {
         let _ = deck.controller.queue().tick();
         deck.controller.refresh_continuous();

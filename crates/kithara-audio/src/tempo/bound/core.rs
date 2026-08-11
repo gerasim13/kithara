@@ -1,11 +1,9 @@
 use kithara_bufpool::PcmPool;
 use kithara_decode::{DecodeError, DecodeResult, PcmChunk, PcmMeta, PcmSpec};
 use kithara_platform::sync::Arc;
-#[cfg(test)]
-use kithara_stretch::ElasticRequest;
 use kithara_stretch::{
-    ElasticCapabilities, ElasticCursor, ElasticEngine, ElasticPriming, ElasticSpan,
-    ElasticSpanConfig, ElasticSpanPlan,
+    ElasticCapabilities, ElasticCursor, ElasticEngine, ElasticLatency, ElasticPriming,
+    ElasticRequest, ElasticSpan, ElasticSpanConfig, ElasticSpanPlan,
 };
 use num_traits::ToPrimitive;
 use tracing::warn;
@@ -18,6 +16,287 @@ use crate::{
     traits::AudioEffect,
 };
 
+trait PrimingLifecycle: Sized {
+    fn new(latency: ElasticLatency, spec: PcmSpec) -> Self;
+    fn activate_resident(&mut self);
+    fn deactivate(&mut self);
+    fn reset(&mut self);
+}
+
+trait PrimingOps {
+    fn retained_source_frames(&self, request: ElasticRequest) -> Result<usize, BoundError>;
+    fn prime_if_needed(&mut self, start: u64, request: ElasticRequest) -> Result<(), BoundError>;
+}
+
+#[cfg(not(test))]
+mod priming {
+    use kithara_decode::PcmSpec;
+    use kithara_stretch::{ElasticLatency, ElasticPriming, ElasticRequest};
+
+    use super::{BoundError, BoundRenderer, PrimingLifecycle, PrimingOps};
+
+    pub(super) struct State;
+
+    impl PrimingLifecycle for State {
+        fn new(_latency: ElasticLatency, _spec: PcmSpec) -> Self {
+            Self
+        }
+
+        fn activate_resident(&mut self) {}
+
+        fn deactivate(&mut self) {}
+
+        fn reset(&mut self) {}
+    }
+
+    impl<E: ElasticPriming> PrimingOps for BoundRenderer<E> {
+        fn retained_source_frames(&self, _request: ElasticRequest) -> Result<usize, BoundError> {
+            Ok(0)
+        }
+
+        fn prime_if_needed(
+            &mut self,
+            _start: u64,
+            _request: ElasticRequest,
+        ) -> Result<(), BoundError> {
+            Ok(())
+        }
+    }
+}
+
+#[cfg(test)]
+mod priming {
+    use kithara_bufpool::PcmPool;
+    use kithara_decode::PcmSpec;
+    use kithara_platform::sync::Arc;
+    use kithara_stretch::{
+        ElasticEngine, ElasticLatency, ElasticPriming, ElasticRequest, ElasticSpanConfig,
+    };
+    use num_traits::ToPrimitive;
+
+    use super::{BoundError, BoundRenderer, PrimingLifecycle, PrimingOps};
+    use crate::{
+        musical::{SessionBeat, SourceSchedule},
+        tempo::slot::TempoBinding,
+    };
+
+    pub(super) struct State {
+        primed: bool,
+        retain_for_priming: bool,
+        discarded: Vec<f32>,
+        history: Vec<f32>,
+        warmup: Vec<f32>,
+    }
+
+    impl PrimingLifecycle for State {
+        fn new(latency: ElasticLatency, spec: PcmSpec) -> Self {
+            let channels = usize::from(spec.channels.max(1));
+            Self {
+                primed: true,
+                retain_for_priming: false,
+                discarded: vec![0.0; latency.output_frames().saturating_mul(channels)],
+                history: vec![0.0; latency.source_frames().saturating_mul(channels)],
+                warmup: vec![
+                    0.0;
+                    latency
+                        .output_frames()
+                        .saturating_mul(2)
+                        .saturating_mul(channels)
+                ],
+            }
+        }
+
+        fn activate_resident(&mut self) {
+            self.retain_for_priming = false;
+            self.primed = true;
+        }
+
+        fn deactivate(&mut self) {
+            self.primed = true;
+        }
+
+        fn reset(&mut self) {
+            self.primed = !self.retain_for_priming;
+        }
+    }
+
+    impl<E: ElasticPriming> BoundRenderer<E> {
+        pub(crate) fn new(
+            schedule: Arc<SourceSchedule>,
+            session_origin: SessionBeat,
+            engine: E,
+            span_config: ElasticSpanConfig,
+            spec: PcmSpec,
+            pool: PcmPool,
+        ) -> Result<Self, BoundError> {
+            let mut renderer = Self::resident(engine, span_config, spec, pool);
+            renderer.bind(Arc::new(TempoBinding::new_for_renderer(
+                schedule,
+                session_origin,
+            )))?;
+            Ok(renderer)
+        }
+
+        pub(crate) fn bind(&mut self, binding: Arc<TempoBinding>) -> Result<(), BoundError> {
+            ElasticEngine::reset(&mut self.engine)?;
+            self.priming.retain_for_priming = true;
+            self.priming.primed = false;
+            self.install_binding(binding)
+        }
+
+        fn copy_preceding(
+            pending: &[f32],
+            pending_start: u64,
+            channels: usize,
+            end: u64,
+            frames: usize,
+            output: &mut [f32],
+        ) -> Result<(), BoundError> {
+            let frame_count = frames.to_u64().ok_or(BoundError::BlockOverflow)?;
+            let available_frames = end.min(frame_count);
+            let start = end.saturating_sub(frame_count);
+            let samples = frames
+                .checked_mul(channels)
+                .ok_or(BoundError::BlockOverflow)?;
+            if output.len() != samples {
+                return Err(BoundError::BlockOverflow);
+            }
+            output.fill(0.0);
+            if available_frames == 0 {
+                return Ok(());
+            }
+            if start < pending_start {
+                return Err(BoundError::BehindWindow {
+                    requested: i64::try_from(start).map_err(|_| BoundError::BlockOverflow)?,
+                    available: pending_start,
+                });
+            }
+            let source_start = usize::try_from(start - pending_start)
+                .map_err(|_| BoundError::BlockOverflow)?
+                .checked_mul(channels)
+                .ok_or(BoundError::BlockOverflow)?;
+            let source_samples = usize::try_from(available_frames)
+                .map_err(|_| BoundError::BlockOverflow)?
+                .checked_mul(channels)
+                .ok_or(BoundError::BlockOverflow)?;
+            let source_end = source_start
+                .checked_add(source_samples)
+                .ok_or(BoundError::BlockOverflow)?;
+            let source = pending
+                .get(source_start..source_end)
+                .ok_or(BoundError::BlockOverflow)?;
+            let copy_start = samples
+                .checked_sub(source_samples)
+                .ok_or(BoundError::BlockOverflow)?;
+            output[copy_start..].copy_from_slice(source);
+            Ok(())
+        }
+
+        fn priming_request(&self, request: ElasticRequest) -> Result<ElasticRequest, BoundError> {
+            let latency = self.capabilities.latency();
+            let source_frames = request
+                .source_frames()
+                .to_f64()
+                .zip(request.output_frames().to_f64())
+                .zip(latency.output_frames().to_f64())
+                .and_then(|((source, output), warmup)| {
+                    (source / output * warmup).floor().to_usize()
+                })
+                .ok_or(BoundError::BlockOverflow)?;
+            Ok(ElasticRequest::new(source_frames, latency.output_frames())?)
+        }
+
+        fn retained_source_frames_for_priming(
+            &self,
+            request: ElasticRequest,
+        ) -> Result<usize, BoundError> {
+            if !self.priming.retain_for_priming {
+                return Ok(0);
+            }
+            self.capabilities
+                .latency()
+                .source_frames()
+                .checked_add(self.priming_request(request)?.source_frames())
+                .ok_or(BoundError::BlockOverflow)
+        }
+
+        fn prime(&mut self, start: u64, request: ElasticRequest) -> Result<(), BoundError> {
+            let latency = self.capabilities.latency();
+            let warmup_frames = request
+                .source_frames()
+                .to_u64()
+                .ok_or(BoundError::BlockOverflow)?;
+            let channels = self.channels();
+            Self::copy_preceding(
+                &self.pending,
+                self.pending_start,
+                channels,
+                start.saturating_sub(warmup_frames),
+                latency.source_frames(),
+                &mut self.priming.history,
+            )?;
+            let warmup_samples = request
+                .source_frames()
+                .checked_mul(channels)
+                .ok_or(BoundError::BlockOverflow)?;
+            let warmup = self
+                .priming
+                .warmup
+                .get_mut(..warmup_samples)
+                .ok_or(BoundError::BlockOverflow)?;
+            Self::copy_preceding(
+                &self.pending,
+                self.pending_start,
+                channels,
+                start,
+                request.source_frames(),
+                warmup,
+            )?;
+            let discarded_samples = latency
+                .output_frames()
+                .checked_mul(channels)
+                .ok_or(BoundError::BlockOverflow)?;
+            let discarded = self
+                .priming
+                .discarded
+                .get_mut(..discarded_samples)
+                .ok_or(BoundError::BlockOverflow)?;
+            discarded.fill(0.0);
+            self.engine
+                .prime(request, &self.priming.history, warmup, discarded)?;
+            self.priming.primed = true;
+            Ok(())
+        }
+
+        fn prime_if_needed_inner(
+            &mut self,
+            start: u64,
+            request: ElasticRequest,
+        ) -> Result<(), BoundError> {
+            if !self.priming.primed {
+                let priming = self.priming_request(request)?;
+                self.prime(start, priming)?;
+            }
+            Ok(())
+        }
+    }
+
+    impl<E: ElasticPriming> PrimingOps for BoundRenderer<E> {
+        fn retained_source_frames(&self, request: ElasticRequest) -> Result<usize, BoundError> {
+            self.retained_source_frames_for_priming(request)
+        }
+
+        fn prime_if_needed(
+            &mut self,
+            start: u64,
+            request: ElasticRequest,
+        ) -> Result<(), BoundError> {
+            self.prime_if_needed_inner(start, request)
+        }
+    }
+}
+
+#[path = "streaming.rs"]
 mod streaming;
 
 /// Exact-span tempo slot for a deck bound to the session grid.
@@ -49,16 +328,7 @@ pub(crate) struct BoundRenderer<E: ElasticPriming> {
     consumed: u64,
     /// Next output frame to plan.
     output_frame: u64,
-    #[cfg(test)]
-    primed: bool,
-    #[cfg(test)]
-    retain_for_priming: bool,
-    #[cfg(test)]
-    prime_discarded: Vec<f32>,
-    #[cfg(test)]
-    prime_history: Vec<f32>,
-    #[cfg(test)]
-    prime_warmup: Vec<f32>,
+    priming: priming::State,
     /// Session beats this deck has advanced since its start.
     ///
     /// The deck's own count, not a reading of the session clock: a tempo
@@ -85,23 +355,6 @@ impl<E: ElasticPriming> BoundRenderer<E> {
     /// Output frames planned per block. A commit may split the block into two
     /// engine calls inside one exact-span plan.
     pub(crate) const BLOCK_FRAMES: u64 = 512;
-    #[cfg(test)]
-    pub(crate) fn new(
-        schedule: Arc<SourceSchedule>,
-        session_origin: SessionBeat,
-        engine: E,
-        span_config: ElasticSpanConfig,
-        spec: PcmSpec,
-        pool: PcmPool,
-    ) -> Result<Self, BoundError> {
-        let mut renderer = Self::resident(engine, span_config, spec, pool);
-        renderer.bind(Arc::new(TempoBinding::new_for_renderer(
-            schedule,
-            session_origin,
-        )))?;
-        Ok(renderer)
-    }
-
     pub(crate) fn resident(
         engine: E,
         span_config: ElasticSpanConfig,
@@ -109,10 +362,6 @@ impl<E: ElasticPriming> BoundRenderer<E> {
         pool: PcmPool,
     ) -> Self {
         let capabilities = engine.capabilities();
-        #[cfg(test)]
-        let channels = usize::from(spec.channels.max(1));
-        #[cfg(test)]
-        let latency = capabilities.latency();
         Self {
             capabilities,
             engine,
@@ -127,22 +376,7 @@ impl<E: ElasticPriming> BoundRenderer<E> {
             last_input_meta: None,
             old_beats_per_frame: None,
             output_frame: 0,
-            #[cfg(test)]
-            primed: true,
-            #[cfg(test)]
-            retain_for_priming: false,
-            #[cfg(test)]
-            prime_discarded: vec![0.0; latency.output_frames().saturating_mul(channels)],
-            #[cfg(test)]
-            prime_history: vec![0.0; latency.source_frames().saturating_mul(channels)],
-            #[cfg(test)]
-            prime_warmup: vec![
-                0.0;
-                latency
-                    .output_frames()
-                    .saturating_mul(2)
-                    .saturating_mul(channels)
-            ],
+            priming: priming::State::new(capabilities.latency(), spec),
             elapsed_beats: 0.0,
             pending: Vec::new(),
             pending_start: 0,
@@ -156,20 +390,8 @@ impl<E: ElasticPriming> BoundRenderer<E> {
         }
     }
 
-    #[cfg(test)]
-    pub(crate) fn bind(&mut self, binding: Arc<TempoBinding>) -> Result<(), BoundError> {
-        ElasticEngine::reset(&mut self.engine)?;
-        self.retain_for_priming = true;
-        self.primed = false;
-        self.install_binding(binding)
-    }
-
     pub(crate) fn bind_resident(&mut self, binding: Arc<TempoBinding>) -> Result<(), BoundError> {
-        #[cfg(test)]
-        {
-            self.retain_for_priming = false;
-            self.primed = true;
-        }
+        self.priming.activate_resident();
         self.install_binding(binding)
     }
 
@@ -208,10 +430,7 @@ impl<E: ElasticPriming> BoundRenderer<E> {
         self.cursor = None;
         self.consumed = 0;
         self.output_frame = 0;
-        #[cfg(test)]
-        {
-            self.primed = true;
-        }
+        self.priming.deactivate();
         self.elapsed_beats = 0.0;
         self.old_beats_per_frame = None;
         self.pending_start = 0;
@@ -242,129 +461,6 @@ impl<E: ElasticPriming> BoundRenderer<E> {
         (self.pending.len() / self.channels())
             .to_u64()
             .unwrap_or(u64::MAX)
-    }
-
-    #[cfg(test)]
-    fn copy_preceding(
-        pending: &[f32],
-        pending_start: u64,
-        channels: usize,
-        end: u64,
-        frames: usize,
-        output: &mut [f32],
-    ) -> Result<(), BoundError> {
-        let frame_count = frames.to_u64().ok_or(BoundError::BlockOverflow)?;
-        let available_frames = end.min(frame_count);
-        let start = end.saturating_sub(frame_count);
-        let samples = frames
-            .checked_mul(channels)
-            .ok_or(BoundError::BlockOverflow)?;
-        if output.len() != samples {
-            return Err(BoundError::BlockOverflow);
-        }
-        output.fill(0.0);
-        if available_frames == 0 {
-            return Ok(());
-        }
-        if start < pending_start {
-            return Err(BoundError::BehindWindow {
-                requested: i64::try_from(start).map_err(|_| BoundError::BlockOverflow)?,
-                available: pending_start,
-            });
-        }
-        let source_start = usize::try_from(start - pending_start)
-            .map_err(|_| BoundError::BlockOverflow)?
-            .checked_mul(channels)
-            .ok_or(BoundError::BlockOverflow)?;
-        let source_samples = usize::try_from(available_frames)
-            .map_err(|_| BoundError::BlockOverflow)?
-            .checked_mul(channels)
-            .ok_or(BoundError::BlockOverflow)?;
-        let source_end = source_start
-            .checked_add(source_samples)
-            .ok_or(BoundError::BlockOverflow)?;
-        let source = pending
-            .get(source_start..source_end)
-            .ok_or(BoundError::BlockOverflow)?;
-        let copy_start = samples
-            .checked_sub(source_samples)
-            .ok_or(BoundError::BlockOverflow)?;
-        output[copy_start..].copy_from_slice(source);
-        Ok(())
-    }
-
-    #[cfg(test)]
-    fn priming_request(&self, request: ElasticRequest) -> Result<ElasticRequest, BoundError> {
-        let latency = self.capabilities.latency();
-        let source_frames = request
-            .source_frames()
-            .to_f64()
-            .zip(request.output_frames().to_f64())
-            .zip(latency.output_frames().to_f64())
-            .and_then(|((source, output), warmup)| (source / output * warmup).floor().to_usize())
-            .ok_or(BoundError::BlockOverflow)?;
-        Ok(ElasticRequest::new(source_frames, latency.output_frames())?)
-    }
-
-    #[cfg(test)]
-    fn retained_source_frames(&self, request: ElasticRequest) -> Result<usize, BoundError> {
-        self.capabilities
-            .latency()
-            .source_frames()
-            .checked_add(self.priming_request(request)?.source_frames())
-            .ok_or(BoundError::BlockOverflow)
-    }
-
-    /// Seeds the engine from the source *preceding* the deck's first span, so
-    /// that the span itself is rendered rather than swallowed as warmup. The
-    /// history and the warmup span are contiguous and both end where the first
-    /// span begins; before track frame zero the source is silence, which is
-    /// what is actually there.
-    #[cfg(test)]
-    fn prime(&mut self, start: u64, request: ElasticRequest) -> Result<(), BoundError> {
-        let latency = self.capabilities.latency();
-        let warmup_frames = request
-            .source_frames()
-            .to_u64()
-            .ok_or(BoundError::BlockOverflow)?;
-        let channels = self.channels();
-        Self::copy_preceding(
-            &self.pending,
-            self.pending_start,
-            channels,
-            start.saturating_sub(warmup_frames),
-            latency.source_frames(),
-            &mut self.prime_history,
-        )?;
-        let warmup_samples = request
-            .source_frames()
-            .checked_mul(channels)
-            .ok_or(BoundError::BlockOverflow)?;
-        let warmup = self
-            .prime_warmup
-            .get_mut(..warmup_samples)
-            .ok_or(BoundError::BlockOverflow)?;
-        Self::copy_preceding(
-            &self.pending,
-            self.pending_start,
-            channels,
-            start,
-            request.source_frames(),
-            warmup,
-        )?;
-        let discarded_samples = latency
-            .output_frames()
-            .checked_mul(channels)
-            .ok_or(BoundError::BlockOverflow)?;
-        let discarded = self
-            .prime_discarded
-            .get_mut(..discarded_samples)
-            .ok_or(BoundError::BlockOverflow)?;
-        discarded.fill(0.0);
-        self.engine
-            .prime(request, &self.prime_history, warmup, discarded)?;
-        self.primed = true;
-        Ok(())
     }
 
     fn span(&self, start: f64, end: f64, output_frames: usize) -> Result<ElasticSpan, BoundError> {
@@ -476,11 +572,7 @@ impl<E: ElasticPriming> BoundRenderer<E> {
             }
 
             let channels = self.channels();
-            #[cfg(test)]
-            if !self.primed {
-                let priming = self.priming_request(segment.request())?;
-                self.prime(start, priming)?;
-            }
+            self.prime_if_needed(start, segment.request())?;
 
             let mut source_offset = skip;
             for segment in plan.segments() {
@@ -518,21 +610,15 @@ impl<E: ElasticPriming> BoundRenderer<E> {
                 }
             }
             let consumed_end = start.saturating_add(consumed);
-            #[cfg(test)]
-            let retained = if self.retain_for_priming {
-                self.retained_source_frames(
+            let retained = self
+                .retained_source_frames(
                     plan.segments()
                         .last()
                         .ok_or(BoundError::EmptyPlan)?
                         .request(),
                 )?
                 .to_u64()
-                .ok_or(BoundError::BlockOverflow)?
-            } else {
-                0
-            };
-            #[cfg(not(test))]
-            let retained = 0;
+                .ok_or(BoundError::BlockOverflow)?;
             let retained_start = consumed_end.saturating_sub(retained);
             let drain_frames = retained_start
                 .saturating_sub(self.pending_start)
@@ -571,18 +657,18 @@ impl<E: ElasticPriming> BoundRenderer<E> {
         self.output_frame = self.output_frame.saturating_add(emitted);
         Some(PcmChunk::new(meta, pcm))
     }
+}
 
-    #[cfg(test)]
+#[cfg(test)]
+impl<E: ElasticPriming> BoundRenderer<E> {
     pub(super) const fn presentation_frame(&self) -> u64 {
         self.output_frame
     }
 
-    #[cfg(test)]
     pub(super) const fn consumed_source_frames(&self) -> u64 {
         self.consumed
     }
 
-    #[cfg(test)]
     pub(super) const fn elapsed_session_beats(&self) -> f64 {
         self.elapsed_beats
     }
@@ -614,10 +700,7 @@ impl<E: ElasticPriming + Send + 'static> AudioEffect for BoundRenderer<E> {
         self.cursor = None;
         self.consumed = 0;
         self.output_frame = 0;
-        #[cfg(test)]
-        {
-            self.primed = !self.retain_for_priming;
-        }
+        self.priming.reset();
         self.elapsed_beats = 0.0;
         self.old_beats_per_frame = None;
         self.pending_start = 0;
