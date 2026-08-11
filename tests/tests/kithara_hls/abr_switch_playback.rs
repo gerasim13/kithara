@@ -274,7 +274,9 @@ async fn packaged_abr_switch_keeps_player_continuity(temp_dir: TestTempDir) {
         }
 
         if read == 0 {
-            time::sleep(Duration::from_millis(10)).await;
+            spawn_blocking(|| paced_backoff(Duration::from_millis(10)))
+                .await
+                .expect("packaged ABR pending pace");
             progress_probe.observe_idle();
             continue;
         }
