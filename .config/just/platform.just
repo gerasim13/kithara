@@ -115,12 +115,18 @@ apple MODE="xcframework" *ARGS:
           just platform apple xcframework --profile debug
         fi
         just platform _xcodegen-local
+        # Explicit modules build the SDK's own PCMs into a shared module cache,
+        # and on a cold cache Xcode 26.6 fails that step for this scheme with
+        # `redefinition of module 'SwiftShims'` — every fresh CI guest hit it
+        # before any test ran. A warm cache hides it, which is why it looks
+        # intermittent.
         KITHARA_LOCAL_DEV=1 \
         TEST_RUNNER_KITHARA_TEST_SERVER_URL="$test_server_url" \
           xcodebuild test \
             -project apple/Examples/KitharaDemo/KitharaDemo.xcodeproj \
             -scheme KitharaDemoUnitTests_iOS \
-            -destination "$destination"
+            -destination "$destination" \
+            SWIFT_ENABLE_EXPLICIT_MODULES=NO
         ;;
       integration-regressions)
         # One xcodebuild invocation for the whole suite: the tests share a
@@ -149,7 +155,8 @@ apple MODE="xcframework" *ARGS:
         KITHARA_LOCAL_DEV=1 xcodebuild build-for-testing \
             -project apple/Examples/KitharaDemo/KitharaDemo.xcodeproj \
             -scheme KitharaDemoUnitTests_iOS \
-            -destination "$destination" || exit 1
+            -destination "$destination" \
+            SWIFT_ENABLE_EXPLICIT_MODULES=NO || exit 1
         selection=(-only-testing:KitharaDemoUnitTests_iOS/IntegrationRegressionsIOS)
         log="$TMPDIR/kithara-integration-regressions.log"
         if [[ -n "$only_test" ]]; then

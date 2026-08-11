@@ -22,7 +22,7 @@ extension IntegrationRegressionsIOS {
 
         let player = KitharaPlayer(config: .init(store: AssetStore(root: cacheURL.path)))
         let target = KitharaPlayerItem(
-            url: try TestServerFixture.asset("hls/master.m3u8").absoluteString
+            url: try await TestServerFixture.pacedHlsMasterURL().absoluteString
         )
         let fallback = KitharaPlayerItem(
             url: try TestServerFixture.asset("test.mp3").absoluteString

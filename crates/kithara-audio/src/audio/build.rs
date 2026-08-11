@@ -199,7 +199,6 @@ where
             pcm_buffer_chunks,
         );
 
-        shared_stream.set_blocking(true);
         let gapless_mode = decoder.gapless_mode();
         let deps = DecoderDeps::new(
             decoder,
@@ -210,7 +209,6 @@ where
         let initial_reader = shared_stream.open_initial_reader();
         let decoder =
             create_initial_decoder(initial_reader, initial_media_info.clone(), hint, &deps).await;
-        shared_stream.set_blocking(false);
         let decoder = decoder?;
 
         let initial_spec = decoder.spec();
@@ -495,6 +493,7 @@ where
     B: Default + ResamplerBackend,
 {
     let byte_len = reader.byte_len().unwrap_or(0);
+    let construction_gate = reader.construction_gate();
     let config = DecoderConfig::builder()
         .backend(deps.decoder.backend())
         .byte_len_handle(Arc::new(AtomicU64::new(byte_len)))
@@ -506,15 +505,21 @@ where
         .maybe_resampler(deps.resampler_config())
         .build();
     let source = reader.into_inner();
-    spawn_blocking(move || {
+    if let Some(gate) = &construction_gate {
+        gate.arm();
+    }
+    let built = spawn_blocking(move || {
         if let Some(info) = &media_info {
             DecoderFactory::create_from_media_info(source, info, config)
         } else {
             DecoderFactory::create_with_probe(source, hint.as_deref(), config)
         }
     })
-    .await
-    .map_err(|error| DecodeError::Io {
+    .await;
+    if let Some(gate) = &construction_gate {
+        gate.disarm();
+    }
+    built.map_err(|error| DecodeError::Io {
         source: IoError::other(format!("decoder task panicked: {error}")),
     })?
 }

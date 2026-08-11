@@ -187,6 +187,7 @@ struct RouteSignalDecoder {
     next_frame: u64,
     remaining_chunks: Option<usize>,
     sample_rate: u32,
+    timeline_gap: u64,
 }
 
 impl RouteSignalDecoder {
@@ -204,7 +205,13 @@ impl RouteSignalDecoder {
             next_frame: 0,
             remaining_chunks,
             sample_rate,
+            timeline_gap: 0,
         }
+    }
+
+    fn with_timeline_gap(mut self, timeline_gap: u64) -> Self {
+        self.timeline_gap = timeline_gap;
+        self
     }
 
     fn pcm_spec(&self) -> PcmSpec {
@@ -286,6 +293,10 @@ impl Decoder for RouteSignalDecoder {
 
     fn spec(&self) -> PcmSpec {
         self.pcm_spec()
+    }
+
+    fn timeline_gap_frames(&self) -> u64 {
+        self.timeline_gap
     }
 
     fn update_byte_len(&self, _len: u64) {}
@@ -704,6 +715,33 @@ async fn test_source(variant: u32) -> RebuildFixture {
     test_source_with_mode(variant, GaplessMode::Disabled).await
 }
 
+#[kithara::test(native, tokio)]
+async fn decoder_readers_have_isolated_construction_gates() {
+    let control = Arc::new(TestControl::new(media_info(0)));
+    let stream = match Stream::<TestStream>::new(TestConfig {
+        source: TestSource::new(control),
+    })
+    .await
+    {
+        Ok(stream) => stream,
+        Err(error) => panic!("test stream construction failed: {error}"),
+    };
+    let shared_stream = SharedStream::new(stream);
+    let initial = shared_stream.open_initial_reader();
+    let rebuild = shared_stream.open_rebuild_reader(0);
+    let Some(initial_gate) = initial.construction_gate() else {
+        panic!("initial reader must carry a construction gate");
+    };
+    let Some(rebuild_gate) = rebuild.construction_gate() else {
+        panic!("rebuild reader must carry a construction gate");
+    };
+
+    initial_gate.arm();
+
+    assert!(initial_gate.is_armed());
+    assert!(!rebuild_gate.is_armed());
+}
+
 async fn test_source_with_mode(variant: u32, gapless_mode: GaplessMode) -> RebuildFixture {
     let control = Arc::new(TestControl::new(media_info(variant)));
     let drops = Arc::new(Mutex::new(Vec::new()));
@@ -762,6 +800,8 @@ struct RouteParams {
     chunks_before_eof: Option<usize>,
     gapless: Option<GaplessInfo>,
     incoming_chunks_before_eof: Option<usize>,
+    active_timeline_gap: u64,
+    incoming_timeline_gap: u64,
     segmented: bool,
     initial_host_rate: u32,
 }
@@ -779,6 +819,8 @@ pub(super) async fn route_signal_source_with_effects(
             chunks_before_eof: None,
             gapless: None,
             incoming_chunks_before_eof: None,
+            active_timeline_gap: 0,
+            incoming_timeline_gap: 0,
             initial_host_rate,
             segmented: false,
         },
@@ -796,6 +838,8 @@ pub(super) async fn route_signal_source_with_gapless(
             chunks_before_eof: None,
             gapless: Some(gapless),
             incoming_chunks_before_eof: None,
+            active_timeline_gap: 0,
+            incoming_timeline_gap: 0,
             initial_host_rate,
             segmented: false,
         },
@@ -814,6 +858,8 @@ pub(super) async fn route_signal_source_with_gapless_eof(
             chunks_before_eof: Some(chunks_before_eof),
             gapless: Some(gapless),
             incoming_chunks_before_eof: None,
+            active_timeline_gap: 0,
+            incoming_timeline_gap: 0,
             initial_host_rate,
             segmented: false,
         },
@@ -831,6 +877,8 @@ pub(super) async fn route_signal_source_with_finite_incoming(
             chunks_before_eof: None,
             gapless: None,
             incoming_chunks_before_eof: Some(incoming_chunks_before_eof),
+            active_timeline_gap: 0,
+            incoming_timeline_gap: 0,
             initial_host_rate,
             segmented: false,
         },
@@ -846,6 +894,8 @@ async fn route_source(params: RouteParams, effects: Vec<Box<dyn AudioEffect>>) -
     let chunks_before_eof = params.chunks_before_eof;
     let gapless = params.gapless;
     let incoming_chunks_before_eof = params.incoming_chunks_before_eof;
+    let active_timeline_gap = params.active_timeline_gap;
+    let incoming_timeline_gap = params.incoming_timeline_gap;
     let segmented = params.segmented;
     let stream = match Stream::<TestStream>::new(TestConfig {
         source: if segmented {
@@ -871,13 +921,16 @@ async fn route_source(params: RouteParams, effects: Vec<Box<dyn AudioEffect>>) -
                 });
             }
             let rate = factory_host_rate.load(Ordering::Acquire);
-            Ok(Box::new(RouteSignalDecoder::new(
-                99,
-                rate,
-                gapless,
-                incoming_chunks_before_eof,
-                factory_drops.clone(),
-            )))
+            Ok(Box::new(
+                RouteSignalDecoder::new(
+                    99,
+                    rate,
+                    gapless,
+                    incoming_chunks_before_eof,
+                    factory_drops.clone(),
+                )
+                .with_timeline_gap(incoming_timeline_gap),
+            ))
         },
         None,
     );
@@ -887,13 +940,16 @@ async fn route_source(params: RouteParams, effects: Vec<Box<dyn AudioEffect>>) -
     };
     let decode = DecodeInit {
         decoder_factory,
-        decoder: Box::new(RouteSignalDecoder::new(
-            1,
-            Consts::SAMPLE_RATE,
-            gapless,
-            chunks_before_eof,
-            drops.clone(),
-        )),
+        decoder: Box::new(
+            RouteSignalDecoder::new(
+                1,
+                Consts::SAMPLE_RATE,
+                gapless,
+                chunks_before_eof,
+                drops.clone(),
+            )
+            .with_timeline_gap(active_timeline_gap),
+        ),
         decoder_backend: kithara_decode::DecoderBackend::default(),
         gapless_mode: if gapless.is_some() {
             GaplessMode::MediaOnly
@@ -922,6 +978,25 @@ async fn route_source(params: RouteParams, effects: Vec<Box<dyn AudioEffect>>) -
         host_sample_rate,
         source: StreamAudioSource::new(shared_stream, parts),
     }
+}
+
+pub(super) async fn route_signal_source_with_gaps(
+    active_timeline_gap: u64,
+    incoming_timeline_gap: u64,
+) -> RouteFixture {
+    route_source(
+        RouteParams {
+            chunks_before_eof: None,
+            gapless: None,
+            incoming_chunks_before_eof: None,
+            active_timeline_gap,
+            incoming_timeline_gap,
+            initial_host_rate: Consts::SAMPLE_RATE,
+            segmented: false,
+        },
+        Vec::new(),
+    )
+    .await
 }
 
 fn run_pending_rebuild_inline(source: &mut StreamAudioSource<TestStream>) {
@@ -1467,6 +1542,8 @@ async fn route_change_recreate_roots_the_demuxer_at_the_container_origin() {
             chunks_before_eof: None,
             gapless: None,
             incoming_chunks_before_eof: None,
+            active_timeline_gap: 0,
+            incoming_timeline_gap: 0,
             initial_host_rate: Consts::SAMPLE_RATE,
             segmented: true,
         },

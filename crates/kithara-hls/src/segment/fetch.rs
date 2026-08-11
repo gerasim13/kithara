@@ -21,14 +21,38 @@ use crate::{
     variant::HlsVariant,
 };
 
-/// Whether a fetch error is terminal for the slot. The net layer's
-/// resilient body already retried stalls and transient body errors, so a
-/// `Fatal` error reaching the settle path means the downloader gave up —
-/// the slot must be parked `Failed` rather than re-dispatched. `Cancelled`
-/// is the one `Fatal` variant that stays recoverable: a cancel marks an
-/// epoch rebuild, which owns the re-dispatch, so it keeps `Missing`.
+/// Whether a fetch error is terminal for the slot — whether this segment is
+/// unobtainable, not whether this download failed.
+///
+/// `Cancelled` stays recoverable: a cancel marks an epoch rebuild, which owns
+/// the re-dispatch. `RetryExhausted` is unwrapped to the cause underneath it.
+/// The net layer spends its budget on one download in well under a second,
+/// while the slot it parks may not be read for another half a minute — so
+/// treating "the network was briefly away" as a permanent verdict strands a
+/// segment that would fetch fine by the time anyone wants it. A transient
+/// cause therefore returns the slot to the pool and the next dispatch asks
+/// again; a fatal one (a missing resource, a body that will not decode) parks
+/// it, because asking again cannot change the answer.
 fn is_terminal_fetch_error(e: &NetError) -> bool {
-    !matches!(e, NetError::Cancelled) && e.retryability() == Retryability::Fatal
+    match e {
+        NetError::Cancelled => false,
+        // The budget is spent on one download in well under a second, while
+        // the slot it parks may not be read for another half a minute — so
+        // what matters is whether the segment is obtainable later, not
+        // whether this attempt failed. A reachable server that answered
+        // "not now" (503, 429, 408) says nothing about later, and an outage
+        // of a few seconds must not cost the track every segment that
+        // happened to be in flight. Anything else that burnt the budget —
+        // a body that stopped arriving, a socket that never answered — the
+        // resilient body already re-fetched and gave up on; parking it is
+        // right, and a reader waiting on it gets a terminal error rather
+        // than a retry loop with nothing behind it.
+        NetError::RetryExhausted { source, .. } => match source.as_ref() {
+            status @ NetError::Status { .. } => status.retryability() != Retryability::Transient,
+            _ => true,
+        },
+        other => other.retryability() == Retryability::Fatal,
+    }
 }
 
 /// Phantom-typed handle to a segment / init slot. `S` is one of
@@ -283,6 +307,7 @@ impl FetchSlot {
             writer,
             reader,
             bus,
+            signal,
             ..
         } = self;
         let committed = matches!(reader.status(), ResourceStatus::Committed { .. });
@@ -298,14 +323,12 @@ impl FetchSlot {
             }
         } else {
             writer.fail(e.to_string());
-            // The net layer's resilient body already retried stalls and
-            // transient body errors; a `Fatal` error here (e.g.
-            // `RetryExhausted`) means the downloader gave up, so the slot
-            // is terminal — parking it as `Failed` stops the re-dispatch
-            // loop and lets a waiting reader surface a terminal error.
-            // `Cancelled` is recoverable (epoch rebuild owns it) and stays
-            // `Missing`. The typed cause is logged here; readers see only
-            // the fixed terminal message (no transport detail).
+            // A terminal cause parks the slot `Failed`, which stops the
+            // re-dispatch loop and lets a waiting reader surface a terminal
+            // error. Everything else — a cancel (the epoch rebuild owns the
+            // re-dispatch) and a spent retry budget over a transient cause —
+            // returns to `Missing`. The typed cause is logged here; readers
+            // see only the fixed terminal message (no transport detail).
             if is_terminal_fetch_error(e) {
                 error!(
                     target: "kithara_hls::settle",
@@ -317,7 +340,21 @@ impl FetchSlot {
                 });
                 handle.into_failed();
             } else {
+                // Freeing the slot is not enough to get this segment fetched
+                // again. Dispatch popped its plan entry when it sent the
+                // fetch, and `poll_next` only runs on reader progress or the
+                // slow-fetch hook — neither of which a failed download
+                // produces. So the work has to go back on the plan, and the
+                // peer has to be woken to take it; without both, the segment
+                // is never asked for again and playback stops at the gap it
+                // leaves, even once the network is back.
+                let planned = handle.planned();
+                let variant = handle.variant();
                 handle.into_missing();
+                if let Some(variant) = variant {
+                    variant.requeue_planned(planned);
+                }
+                signal.wake_peer();
             }
         }
     }
