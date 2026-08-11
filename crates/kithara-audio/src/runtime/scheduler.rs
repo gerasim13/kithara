@@ -831,7 +831,7 @@ mod tests {
     }
 
     #[kithara::test]
-    fn terminal_visit_recycles_node_once_before_removal() {
+    fn terminal_visit_recycles_before_and_after_tick() {
         let (events, received) = mpsc::channel();
         let mut slots = vec![Slot {
             id: 1,
@@ -846,7 +846,7 @@ mod tests {
         let _ = produce_pass(&mut slots, &order, &mut observer);
         assert!(slots[0].is_terminal);
         assert_eq!(received.try_recv(), Ok("recycle"));
-        assert!(received.try_recv().is_err());
+        assert_eq!(received.try_recv(), Ok("recycle"));
 
         assert!(remove_terminal(&mut slots));
 

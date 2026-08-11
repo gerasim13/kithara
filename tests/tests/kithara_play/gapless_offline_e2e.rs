@@ -37,9 +37,9 @@ use kithara_integration_tests::{
 
 use super::offline_player_harness::{OfflinePlayerHarness, OfflinePlayerOptions};
 use crate::gapless_common::{
-    AAC_FDK_OUTPUT_DELAY, AAC_FRAME_SAMPLES, AAC_GAPLESS_ENCODER_DELAY, AAC_GAPLESS_SEGMENT_FRAMES,
+    AAC_FRAME_SAMPLES, AAC_GAPLESS_ENCODER_DELAY, AAC_GAPLESS_SEGMENT_FRAMES,
     AAC_GAPLESS_SEGMENT_SECS, AAC_GAPLESS_SEGMENTS, AAC_GAPLESS_TRAILING_DELAY, GAPLESS_CHANNELS,
-    GAPLESS_SAMPLE_RATE, generated_aac_elst_visible_frames,
+    GAPLESS_SAMPLE_RATE,
 };
 
 const BLOCK_FRAMES: usize = 512;
@@ -88,7 +88,6 @@ fn expected_visible_frames(encoder_delay: u32, trailing_delay: u32) -> usize {
         .saturating_sub(native_encoder_delay)
         .saturating_sub(usize::try_from(encoder_delay).expect("encoder delay fits usize"))
         .saturating_sub(usize::try_from(trailing_delay).expect("trailing delay fits usize"))
-        .saturating_sub(AAC_FDK_OUTPUT_DELAY)
 }
 
 fn expected_total_decoded_frames() -> usize {
@@ -167,7 +166,7 @@ async fn single_track_silence_trim_strips_leading_priming(temp_dir: TestTempDir)
 )]
 async fn two_tracks_gapless_no_click_with_silence_trim_zero_crossfade(temp_dir: TestTempDir) {
     let server = TestServerHelper::new().await;
-    let visible = generated_aac_elst_visible_frames();
+    let visible = expected_visible_frames(AAC_GAPLESS_ENCODER_DELAY, AAC_GAPLESS_TRAILING_DELAY);
     let harness = OfflinePlayerHarness::with_sample_rate(
         OfflinePlayerOptions::builder()
             .crossfade_duration(0.0)
@@ -257,7 +256,7 @@ async fn two_tracks_gapless_no_click_with_silence_trim_zero_crossfade(temp_dir: 
 )]
 async fn two_tracks_gapless_stitch_continuity_metric(temp_dir: TestTempDir) {
     let server = TestServerHelper::new().await;
-    let stitch_frame = generated_aac_elst_visible_frames();
+    let stitch_frame = crate::gapless_common::generated_aac_elst_visible_frames();
     let harness = OfflinePlayerHarness::with_sample_rate(
         OfflinePlayerOptions::builder()
             .crossfade_duration(0.0)
@@ -618,7 +617,7 @@ async fn two_tracks_silence_trim_heuristic_no_click_when_no_gapless_metadata(
         GAPLESS_SAMPLE_RATE,
     );
 
-    let visible = generated_aac_elst_visible_frames();
+    let visible = expected_visible_frames(AAC_GAPLESS_ENCODER_DELAY, AAC_GAPLESS_TRAILING_DELAY);
 
     let first = create_resource_with_encoding(
         harness.player(),
@@ -1256,9 +1255,6 @@ async fn render_until_item_end_with_post_roll(
     post_roll_blocks: usize,
 ) -> (Vec<f32>, Vec<TimedPlayerEvent>) {
     let deadline = Instant::now() + Duration::from_secs(15);
-    let block_frames = u32::try_from(BLOCK_FRAMES).expect("invariant: block frame count fits u32");
-    let block_budget =
-        Duration::from_secs_f64(f64::from(block_frames) / f64::from(GAPLESS_SAMPLE_RATE));
     let mut rendered = Vec::new();
     let mut rendered_frames = 0usize;
     let mut events = Vec::new();
@@ -1305,7 +1301,7 @@ async fn render_until_item_end_with_post_roll(
             Instant::now() <= deadline,
             "timed out waiting for {terminal_item_id} to finish; events={events:?}"
         );
-        time::sleep(block_budget).await;
+        time::sleep(Duration::from_millis(5)).await;
     }
 }
 
