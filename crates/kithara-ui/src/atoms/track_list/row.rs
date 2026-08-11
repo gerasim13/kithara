@@ -5,7 +5,9 @@ use super::{
     track_list_row_pitch, track_list_vertical_scrollbar_rect,
 };
 use crate::{
+    atoms::table::TableCell,
     draw::{Pt, Rect},
+    module::TrackColumn,
     render::{Skin, TrackRow},
 };
 
@@ -36,6 +38,26 @@ impl From<&TrackRow<'_>> for TrackListRowData {
             transition: track.transition.map(str::to_owned),
         }
     }
+}
+
+impl TrackListRowData {
+    pub(super) fn cell(&self, column: TrackColumn) -> TableCell {
+        match column {
+            TrackColumn::Index => TableCell::Empty,
+            TrackColumn::Deck => text_cell(&self.deck),
+            TrackColumn::Title => TableCell::Text(self.title.clone()),
+            TrackColumn::Artist => text_cell(&self.artist),
+            TrackColumn::Bpm => text_cell(&self.bpm),
+            TrackColumn::Key => text_cell(&self.key),
+            TrackColumn::Time => text_cell(&self.time),
+            TrackColumn::Energy => self.energy.map_or(TableCell::Empty, TableCell::Number),
+            TrackColumn::Transition => text_cell(&self.transition),
+        }
+    }
+}
+
+fn text_cell(value: &Option<String>) -> TableCell {
+    value.clone().map_or(TableCell::Empty, TableCell::Text)
 }
 
 pub(crate) fn track_list_row_rect(

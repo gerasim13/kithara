@@ -1,6 +1,6 @@
 use super::{controls::MasonryControl, custom::HostAction};
 use crate::{
-    atoms::{track_list::face::TrackList as TrackListFace, tree::face::Tree as TreeFace},
+    atoms::{track_list::face::TrackTable, tree::face::Tree as TreeFace},
     draw::{DrawList, Rect},
     interact::{Hit, Input, Outcome},
     render::{
@@ -61,7 +61,7 @@ impl Projected for TrackListPlan {
         let Some(drawn) = self.drawn() else {
             return DrawList::default();
         };
-        TrackListFace::commands(&self.picture(), text, bounds, &drawn)
+        TrackTable::commands(&self.picture(), text, bounds, &drawn)
     }
 
     fn refresh(&self, reads: &dyn Reads) -> bool {

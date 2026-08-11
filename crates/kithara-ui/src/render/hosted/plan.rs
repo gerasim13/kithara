@@ -8,7 +8,7 @@ use crate::{
     atoms::{
         bar::context::Context,
         track_list::{
-            ColumnLayout, TrackListRowData, column_layouts, column_resizable, face::TrackList,
+            ColumnLayout, TrackListRowData, column_layouts, column_resizable, face::TrackTable,
             minimum_table_width, track_list_content_height,
         },
         tree::face::Tree,
@@ -111,7 +111,7 @@ pub(crate) struct TrackListPlan {
     pub(crate) path: String,
     pub(crate) row_target: String,
     min_column_width: f32,
-    pub(super) picture: Rc<RefCell<TrackList>>,
+    pub(super) picture: Rc<RefCell<TrackTable>>,
     #[cfg(feature = "masonry-host")]
     pub(super) state: TrackListState,
 }
@@ -534,7 +534,7 @@ impl TrackListPlan {
             path: path.to_owned(),
             row_target: format!("{path}/rows"),
             min_column_width: skin.track_list.min_column_width,
-            picture: Rc::new(RefCell::new(TrackList::new(rows, columns, skin))),
+            picture: Rc::new(RefCell::new(TrackTable::new(rows, columns, skin))),
             #[cfg(feature = "masonry-host")]
             state: TrackListState::default(),
         }

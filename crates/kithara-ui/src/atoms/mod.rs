@@ -11,6 +11,7 @@ pub(crate) mod nav_item;
 pub(crate) mod painter;
 pub(crate) mod readout;
 pub(crate) mod tab;
+pub(crate) mod table;
 pub(crate) mod text;
 pub(crate) mod toggle;
 pub(crate) mod track_list;

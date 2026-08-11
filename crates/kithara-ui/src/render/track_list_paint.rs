@@ -10,7 +10,7 @@ use super::{Skin, UiEvent, controls::RetainedCanvasState};
 use crate::{
     atoms::track_list::{
         ColumnLayout, TrackListRowData, column_resizable,
-        face::{Drawn, TrackList},
+        face::{Drawn, TrackTable},
         minimum_table_width, track_list_content_height, track_list_row_at,
     },
     backends::replay_ordered,
@@ -25,7 +25,7 @@ use crate::{
 };
 
 pub(super) struct TrackListPaint {
-    pub(super) face: TrackList,
+    pub(super) face: TrackTable,
     pub(super) path: String,
 }
 
@@ -37,7 +37,7 @@ impl TrackListPaint {
         skin: &Skin,
     ) -> Self {
         Self {
-            face: TrackList::new(rows, columns, skin),
+            face: TrackTable::new(rows, columns, skin),
             path: path.to_owned(),
         }
     }
@@ -255,7 +255,7 @@ pub(super) fn hovered_row(
     row_count: usize,
     horizontal: f32,
     vertical: f32,
-    face: &TrackList,
+    face: &TrackTable,
 ) -> Option<usize> {
     track_list_row_at(
         point,

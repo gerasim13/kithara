@@ -12,7 +12,7 @@ use crate::{
         design::fader::rail_bounds as fader_bounds,
         track_list::{
             TrackListRowData, column_layouts, column_resizable,
-            face::{Drawn, TrackList},
+            face::{Drawn, TrackTable},
             track_list_body, track_list_dividers, track_list_overflows, track_list_row_at,
             track_list_visible_divider_hit, track_list_visible_row_rect,
         },
@@ -332,7 +332,7 @@ impl TrackListPlan {
             .and_then(|projection| projection.project(self))
     }
 
-    pub(crate) fn picture(&self) -> Ref<'_, TrackList> {
+    pub(crate) fn picture(&self) -> Ref<'_, TrackTable> {
         self.picture.borrow()
     }
 
@@ -484,7 +484,7 @@ impl TrackListSource {
         }
     }
 
-    fn picture(&self, reads: &dyn Reads, skin: &Skin) -> TrackList {
+    fn picture(&self, reads: &dyn Reads, skin: &Skin) -> TrackTable {
         let rows = self
             .rows
             .as_deref()
@@ -501,7 +501,7 @@ impl TrackListSource {
             .as_ref()
             .map(|(prefix, scope)| (prefix.as_str(), scope.as_str()));
         let columns = column_layouts(&self.columns, reads, state, skin);
-        TrackList::new(rows, columns, skin)
+        TrackTable::new(rows, columns, skin)
     }
 }
 

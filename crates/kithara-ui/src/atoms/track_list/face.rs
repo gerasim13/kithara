@@ -1,10 +1,14 @@
 use num_traits::ToPrimitive;
 
 use crate::{
-    atoms::track_list::{
-        ColumnLayout, TrackListRowData, column_label, track_list_body, track_list_content_height,
-        track_list_content_width, track_list_dividers, track_list_overflows, track_list_row_pitch,
-        track_list_row_rect, track_list_vertical_scrollbar_rect,
+    atoms::{
+        table::{Table, TableCell, TableRow},
+        track_list::{
+            ColumnLayout, TrackListRowData, column_label, track_list_body,
+            track_list_content_height, track_list_content_width, track_list_dividers,
+            track_list_overflows, track_list_row_pitch, track_list_row_rect,
+            track_list_vertical_scrollbar_rect,
+        },
     },
     draw::{DrawList, DrawListBuilder, Pt, Rect, Rgba, Transform},
     interact::ScrollAxis,
@@ -16,11 +20,8 @@ use crate::{
 
 #[derive(Clone, Debug, PartialEq, fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
-pub(crate) struct TrackList {
-    #[field(get, vis = "pub(crate)")]
-    columns: Vec<ColumnLayout>,
-    #[field(get, vis = "pub(crate)")]
-    rows: Vec<TrackListRowData>,
+pub(crate) struct TrackTable {
+    table: Table<ColumnLayout>,
     #[field(get, vis = "pub(crate)")]
     skin: Skin,
 }
@@ -34,16 +35,34 @@ pub(crate) struct Drawn {
     pub(crate) vertical: f32,
 }
 
-impl TrackList {
+impl TrackTable {
     pub(crate) fn new(
         rows: Vec<TrackListRowData>,
         columns: Vec<ColumnLayout>,
         skin: &Skin,
     ) -> Self {
+        let rows = rows
+            .into_iter()
+            .map(|row| {
+                TableRow::new(
+                    columns
+                        .iter()
+                        .map(|column| row.cell(column.column))
+                        .collect(),
+                    row.selected,
+                )
+            })
+            .collect();
         Self {
-            columns,
-            rows,
+            table: Table::new(columns, rows),
             skin: skin.clone(),
+        }
+    }
+
+    delegate::delegate! {
+        to self.table {
+            pub(crate) fn columns(&self) -> &[ColumnLayout];
+            pub(crate) fn rows(&self) -> &[TableRow];
         }
     }
 
@@ -145,7 +164,7 @@ impl TrackList {
         let (horizontal, vertical) = offsets;
         let body = track_list_body(bounds, &self.skin);
         let pitch = track_list_row_pitch(&self.skin);
-        let visible = visible_rows(self.rows.len(), pitch, body.h, vertical);
+        let visible = visible_rows(self.rows().len(), pitch, body.h, vertical);
         let mut rows = DrawListBuilder::default();
         for index in visible {
             let row_bounds =
@@ -165,11 +184,11 @@ impl TrackList {
         columns: &[ColumnLayout],
     ) {
         let (hovered, pressed) = (interaction.0 == Some(index), interaction.1 == Some(index));
-        let row = &self.rows[index];
+        let row = &self.rows()[index];
         let frame = self.skin.track_list.row_frame;
         let fill = if pressed {
             self.skin.palette.accent_soft
-        } else if row.selected {
+        } else if row.selected() {
             self.skin.palette.bg_select
         } else if hovered {
             self.skin.palette.bg_panel_2
@@ -178,7 +197,7 @@ impl TrackList {
         };
         list.fill_rounded_rect(bounds, frame.radius, fill);
         paint_frame(list, bounds, frame, &self.skin);
-        for (column, cell) in column_cells(
+        for (column_index, (column, cell)) in column_cells(
             Rect {
                 w: bounds.w,
                 x: bounds.x,
@@ -186,8 +205,10 @@ impl TrackList {
             },
             columns,
             0.0,
-        ) {
-            self.paint_cell(list, text, column.column, index, row, cell);
+        )
+        .enumerate()
+        {
+            self.paint_cell(list, text, index, row, (column.column, column_index, cell));
         }
         for divider in track_list_dividers(
             Rect {
@@ -215,11 +236,11 @@ impl TrackList {
         &self,
         list: &mut DrawListBuilder,
         text: &mut TextContext,
-        column: TrackColumn,
         index: usize,
-        row: &TrackListRowData,
-        bounds: Rect,
+        row: &TableRow,
+        cell: (TrackColumn, usize, Rect),
     ) {
+        let (column, column_index, bounds) = cell;
         match column {
             TrackColumn::Index => paint_text(
                 list,
@@ -234,11 +255,17 @@ impl TrackList {
                     TextAlign::Right,
                 ),
             ),
-            TrackColumn::Deck => paint_deck(self, list, text, row.deck.as_deref(), bounds),
+            TrackColumn::Deck => paint_deck(
+                self,
+                list,
+                text,
+                row.cell(column_index).and_then(TableCell::text),
+                bounds,
+            ),
             TrackColumn::Title => paint_text(
                 list,
                 text,
-                value_or_dash(&row.title),
+                optional_or_dash(row.cell(column_index).and_then(TableCell::text)),
                 bounds,
                 (
                     self.skin.track_list.title_text,
@@ -251,7 +278,7 @@ impl TrackList {
             TrackColumn::Artist => paint_text(
                 list,
                 text,
-                optional_or_dash(row.artist.as_deref()),
+                optional_or_dash(row.cell(column_index).and_then(TableCell::text)),
                 bounds,
                 (
                     self.skin.track_list.artist_text,
@@ -261,11 +288,17 @@ impl TrackList {
                     TextAlign::Left,
                 ),
             ),
-            TrackColumn::Bpm => paint_bpm(self, list, text, row.bpm.as_deref(), bounds),
+            TrackColumn::Bpm => paint_bpm(
+                self,
+                list,
+                text,
+                row.cell(column_index).and_then(TableCell::text),
+                bounds,
+            ),
             TrackColumn::Key => paint_text(
                 list,
                 text,
-                optional_or_dash(row.key.as_deref()),
+                optional_or_dash(row.cell(column_index).and_then(TableCell::text)),
                 bounds,
                 (
                     self.skin.track_list.key_text,
@@ -278,7 +311,7 @@ impl TrackList {
             TrackColumn::Time => paint_text(
                 list,
                 text,
-                optional_or_dash(row.time.as_deref()),
+                optional_or_dash(row.cell(column_index).and_then(TableCell::text)),
                 bounds,
                 (
                     self.skin.track_list.time_text,
@@ -288,11 +321,17 @@ impl TrackList {
                     TextAlign::Right,
                 ),
             ),
-            TrackColumn::Energy => paint_energy(self, list, text, row.energy, bounds),
+            TrackColumn::Energy => paint_energy(
+                self,
+                list,
+                text,
+                row.cell(column_index).and_then(TableCell::number),
+                bounds,
+            ),
             TrackColumn::Transition => {
                 let transition = row
-                    .transition
-                    .as_deref()
+                    .cell(column_index)
+                    .and_then(TableCell::text)
                     .map_or_else(|| "\u{2014}".to_owned(), str::to_uppercase);
                 paint_text(
                     list,
@@ -313,7 +352,7 @@ impl TrackList {
 }
 
 fn paint_deck(
-    paint: &TrackList,
+    paint: &TrackTable,
     list: &mut DrawListBuilder,
     text: &mut TextContext,
     marks: Option<&str>,
@@ -347,7 +386,7 @@ fn paint_deck(
 }
 
 fn paint_bpm(
-    paint: &TrackList,
+    paint: &TrackTable,
     list: &mut DrawListBuilder,
     text: &mut TextContext,
     value: Option<&str>,
@@ -386,7 +425,7 @@ fn paint_bpm(
 }
 
 fn paint_energy(
-    paint: &TrackList,
+    paint: &TrackTable,
     list: &mut DrawListBuilder,
     text: &mut TextContext,
     value: Option<u8>,
@@ -435,7 +474,7 @@ fn paint_energy(
 }
 
 fn paint_footer(
-    paint: &TrackList,
+    paint: &TrackTable,
     list: &mut DrawListBuilder,
     text: &mut TextContext,
     bounds: Rect,
@@ -451,7 +490,7 @@ fn paint_footer(
     list.fill_rect(footer, paint.skin.palette.bg_footer);
     let label = format!(
         "{} {}",
-        paint.rows.len(),
+        paint.rows().len(),
         paint.skin.track_list.labels.footer_tracks
     );
     paint_text(
@@ -470,7 +509,7 @@ fn paint_footer(
 }
 
 fn paint_vertical_scrollbar(
-    paint: &TrackList,
+    paint: &TrackTable,
     list: &mut DrawListBuilder,
     bounds: Rect,
     horizontal: f32,
@@ -478,11 +517,11 @@ fn paint_vertical_scrollbar(
     columns: &[ColumnLayout],
 ) {
     let body = track_list_body(bounds, &paint.skin);
-    let content = track_list_content_height(paint.rows.len(), &paint.skin);
+    let content = track_list_content_height(paint.rows().len(), &paint.skin);
     let Some(rail) = track_list_vertical_scrollbar_rect(
         bounds,
         columns,
-        paint.rows.len(),
+        paint.rows().len(),
         horizontal,
         &paint.skin,
     ) else {
@@ -500,7 +539,7 @@ fn paint_vertical_scrollbar(
 }
 
 fn paint_horizontal_scrollbar(
-    paint: &TrackList,
+    paint: &TrackTable,
     list: &mut DrawListBuilder,
     bounds: Rect,
     offset: f32,
@@ -761,7 +800,7 @@ mod tests {
         assert!(row_bottom.is_some_and(|bottom| bottom > body.y + body.h));
     }
 
-    fn fixture() -> (TrackList, TextContext, Rect, Drawn) {
+    fn fixture() -> (TrackTable, TextContext, Rect, Drawn) {
         let skin = builtin::skin();
         let columns = vec![ColumnLayout {
             column: TrackColumn::Title,
@@ -780,7 +819,7 @@ mod tests {
                 selected: false,
             })
             .collect();
-        let picture = TrackList::new(rows, columns.clone(), skin);
+        let picture = TrackTable::new(rows, columns.clone(), skin);
         (
             picture,
             TextContext::from(skin.text_resources()),
