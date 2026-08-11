@@ -690,6 +690,7 @@ const fn command_cursor(command: WindowCommand) -> CursorShape {
         WindowCommand::Drag
         | WindowCommand::Minimize
         | WindowCommand::ToggleMaximize
+        | WindowCommand::Fullscreen
         | WindowCommand::Close => CursorShape::None,
     }
 }

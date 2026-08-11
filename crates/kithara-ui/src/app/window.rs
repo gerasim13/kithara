@@ -485,6 +485,10 @@ where
                 WindowCommand::ToggleMaximize => {
                     self.window.set_maximized(!self.window.is_maximized());
                 }
+                WindowCommand::Fullscreen => {
+                    self.window
+                        .set_fullscreen(Some(winit::window::Fullscreen::Borderless(None)));
+                }
                 WindowCommand::Close => close = true,
             }
         }

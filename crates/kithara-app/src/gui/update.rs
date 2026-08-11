@@ -99,6 +99,7 @@ fn window_task(state: &Kithara, command: WindowCommand) -> Task<Message> {
         }),
         WindowCommand::Minimize => window::minimize(state.window_id, true),
         WindowCommand::ToggleMaximize => window::toggle_maximize(state.window_id),
+        WindowCommand::Fullscreen => window::set_mode(state.window_id, window::Mode::Fullscreen),
         WindowCommand::Close => iced::exit(),
         other => {
             warn!(?other, "unhandled window command");

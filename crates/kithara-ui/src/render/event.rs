@@ -203,6 +203,7 @@ pub enum WindowCommand {
     Resize(WindowEdge),
     Minimize,
     ToggleMaximize,
+    Fullscreen,
     Close,
 }
 
