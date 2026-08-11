@@ -21,14 +21,24 @@ use crate::{
     variant::HlsVariant,
 };
 
-/// Whether a fetch error is terminal for the slot. The net layer's
-/// resilient body already retried stalls and transient body errors, so a
-/// `Fatal` error reaching the settle path means the downloader gave up —
-/// the slot must be parked `Failed` rather than re-dispatched. `Cancelled`
-/// is the one `Fatal` variant that stays recoverable: a cancel marks an
-/// epoch rebuild, which owns the re-dispatch, so it keeps `Missing`.
+/// Whether a fetch error is terminal for the slot — whether this segment is
+/// unobtainable, not whether this download failed.
+///
+/// `Cancelled` stays recoverable: a cancel marks an epoch rebuild, which owns
+/// the re-dispatch. `RetryExhausted` is unwrapped to the cause underneath it.
+/// The net layer spends its budget on one download in well under a second,
+/// while the slot it parks may not be read for another half a minute — so
+/// treating "the network was briefly away" as a permanent verdict strands a
+/// segment that would fetch fine by the time anyone wants it. A transient
+/// cause therefore returns the slot to the pool and the next dispatch asks
+/// again; a fatal one (a missing resource, a body that will not decode) parks
+/// it, because asking again cannot change the answer.
 fn is_terminal_fetch_error(e: &NetError) -> bool {
-    !matches!(e, NetError::Cancelled) && e.retryability() == Retryability::Fatal
+    match e {
+        NetError::Cancelled => false,
+        NetError::RetryExhausted { source, .. } => is_terminal_fetch_error(source),
+        other => other.retryability() == Retryability::Fatal,
+    }
 }
 
 /// Phantom-typed handle to a segment / init slot. `S` is one of
@@ -283,6 +293,7 @@ impl FetchSlot {
             writer,
             reader,
             bus,
+            signal,
             ..
         } = self;
         let committed = matches!(reader.status(), ResourceStatus::Committed { .. });
@@ -298,14 +309,12 @@ impl FetchSlot {
             }
         } else {
             writer.fail(e.to_string());
-            // The net layer's resilient body already retried stalls and
-            // transient body errors; a `Fatal` error here (e.g.
-            // `RetryExhausted`) means the downloader gave up, so the slot
-            // is terminal — parking it as `Failed` stops the re-dispatch
-            // loop and lets a waiting reader surface a terminal error.
-            // `Cancelled` is recoverable (epoch rebuild owns it) and stays
-            // `Missing`. The typed cause is logged here; readers see only
-            // the fixed terminal message (no transport detail).
+            // A terminal cause parks the slot `Failed`, which stops the
+            // re-dispatch loop and lets a waiting reader surface a terminal
+            // error. Everything else — a cancel (the epoch rebuild owns the
+            // re-dispatch) and a spent retry budget over a transient cause —
+            // returns to `Missing`. The typed cause is logged here; readers
+            // see only the fixed terminal message (no transport detail).
             if is_terminal_fetch_error(e) {
                 error!(
                     target: "kithara_hls::settle",
@@ -318,6 +327,14 @@ impl FetchSlot {
                 handle.into_failed();
             } else {
                 handle.into_missing();
+                // Returning the slot to the pool is not enough to get it
+                // fetched again: `poll_next` is driven by reader progress and
+                // by the slow-fetch hook, and a download that failed produces
+                // neither. Without this wake the peer emits no further
+                // command, so a segment freed here is simply never asked for
+                // — playback stops at the gap and stays there even once the
+                // network is back. Wake the peer so it re-aims.
+                signal.wake_peer();
             }
         }
     }
