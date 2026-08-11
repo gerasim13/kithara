@@ -334,7 +334,13 @@ shared only with that reader's `SharedStream` clone. The initial builder and
 disarm it after a normal return, join error, or caught panic. A rebuild therefore
 cannot switch an active decoder reader into blocking mode. Steady-state reads
 use non-blocking `Stream::probe_read`; on-core seeks use `probe_seek` (position
-math only, no `prime_seek_range` spin on the forbid path). Blocking makes a
+math only, no `prime_seek_range` spin on the forbid path). The gate selects the
+read mode and nothing else: `SharedStream`'s `Seek` is the blocking adapter in
+both phases, because a decoder seeks past residual lateness in steady state as
+well, and a probe seek there only reports not-ready to a caller that can do
+nothing but ask again. Staying off the blocking path is `OffsetReader`'s own
+choice, made by naming `probe_seek` — not a consequence of a disarmed gate.
+Blocking makes a
 slow-but-arriving prefix wait, off the RT worker, up to the stream's blocking-read
 budget rather than error on the first not-ready probe. A construction-range byte
 that never arrives surfaces the **stream layer's** typed terminal verbatim; the
