@@ -36,7 +36,21 @@ use crate::{
 fn is_terminal_fetch_error(e: &NetError) -> bool {
     match e {
         NetError::Cancelled => false,
-        NetError::RetryExhausted { source, .. } => is_terminal_fetch_error(source),
+        // The budget is spent on one download in well under a second, while
+        // the slot it parks may not be read for another half a minute — so
+        // what matters is whether the segment is obtainable later, not
+        // whether this attempt failed. A reachable server that answered
+        // "not now" (503, 429, 408) says nothing about later, and an outage
+        // of a few seconds must not cost the track every segment that
+        // happened to be in flight. Anything else that burnt the budget —
+        // a body that stopped arriving, a socket that never answered — the
+        // resilient body already re-fetched and gave up on; parking it is
+        // right, and a reader waiting on it gets a terminal error rather
+        // than a retry loop with nothing behind it.
+        NetError::RetryExhausted { source, .. } => match source.as_ref() {
+            status @ NetError::Status { .. } => status.retryability() != Retryability::Transient,
+            _ => true,
+        },
         other => other.retryability() == Retryability::Fatal,
     }
 }
