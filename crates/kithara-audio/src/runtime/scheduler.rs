@@ -1101,7 +1101,7 @@ mod tests {
 
     impl Node for TerminalDeferredNode {
         fn recycle(&mut self) {
-            if std::mem::take(&mut self.pending) {
+            if mem::take(&mut self.pending) {
                 self.flushed.store(true, Ordering::Release);
             }
         }

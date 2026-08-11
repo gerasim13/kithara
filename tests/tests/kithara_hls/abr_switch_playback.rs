@@ -30,6 +30,8 @@ fn forced_downswitch_abr_options() -> AbrMode {
     auto(0)
 }
 
+const PRE_SWITCH_PACE_SAMPLES: u64 = 17_640;
+
 fn packaged_identical_content_abr_builder(codec: AudioCodec) -> HlsFixtureBuilder {
     let builder = HlsFixtureBuilder::new()
         .variant_count(2)
@@ -215,6 +217,7 @@ async fn packaged_abr_switch_keeps_player_continuity(temp_dir: TestTempDir) {
     let mut switch_seen = false;
     let mut total_samples = 0u64;
     let mut post_switch_samples = 0u64;
+    let mut consumed = Duration::ZERO;
     let mut buf = vec![0.0f32; 4096];
     total_samples += read_audio_some(&mut progress_audio, "packaged_abr_warmup").await as u64;
     progress_probe.drain(&mut progress_rx);
@@ -223,7 +226,13 @@ async fn packaged_abr_switch_keeps_player_continuity(temp_dir: TestTempDir) {
     while Instant::now() < deadline {
         let _ = progress_audio.preload();
         let read: usize = match progress_audio.read(&mut buf) {
-            Ok(ReadOutcome::Frames { count, .. }) => count.get(),
+            Ok(ReadOutcome::Frames { count, position }) => {
+                if !switch_seen && total_samples >= PRE_SWITCH_PACE_SAMPLES {
+                    paced_backoff(position.saturating_sub(consumed));
+                }
+                consumed = position;
+                count.get()
+            }
             Ok(ReadOutcome::Pending { .. }) => 0,
             Ok(ReadOutcome::Eof { .. }) => {
                 progress_probe.drain(&mut progress_rx);
