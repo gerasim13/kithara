@@ -1,12 +1,11 @@
+#[cfg(feature = "iced")]
 use iced::Element;
 
 use crate::{
     draw::{DrawList, DrawListBuilder, Pt, Rect, Rgba},
     interact::{CursorShape, Hit, Input, Outcome, PointerPhase},
     module::WindowControlsStyle,
-    render::{
-        HostLayer, LayerHit, Skin, UiEvent, Widget, WindowCommand, WindowLayerProgram, window_layer,
-    },
+    render::{HostLayer, LayerHit, Skin, WindowCommand, WindowLayerProgram},
     skin::{FrameSkin, WindowControlSkin},
     solve::{Length, Size},
     text::TextResources,
@@ -18,9 +17,10 @@ pub(crate) struct WindowControls<'skin> {
     style: WindowControlsStyle,
 }
 
-impl<'a> Widget<'a> for WindowControls<'_> {
-    fn view(self) -> Element<'a, UiEvent> {
-        window_layer(ControlsProgram::new(self.style, self.skin))
+#[cfg(feature = "iced")]
+impl<'a> crate::render::Widget<'a> for WindowControls<'_> {
+    fn view(self) -> Element<'a, crate::render::UiEvent> {
+        crate::render::window_layer(ControlsProgram::new(self.style, self.skin))
     }
 }
 

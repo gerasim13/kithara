@@ -13,13 +13,12 @@ categories = ["gui", "config"]
 ignored = ["kithara-workspace-hack"]
 
 [features]
-default = ["render"]
+default = ["iced"]
 # Tests that need a graphics device. Off by default: a machine without one
 # would fail them for having no hardware rather than for a defect.
-gpu = ["render", "dep:pollster"]
-masonry = ["dep:futures-lite", "dep:masonry", "dep:winit", "render", "vello"]
+gpu = ["iced", "dep:pollster"]
+masonry = ["dep:futures-lite", "dep:masonry", "dep:winit", "vello"]
 render = [
-    "dep:iced",
     "dep:kithara-platform",
     "dep:lucide-icons",
     "dep:num-traits",
@@ -27,9 +26,10 @@ render = [
     "dep:skrifa",
     "dep:tracing",
     "dep:unicode-segmentation",
-    "iced/advanced",
 ]
+iced = ["render", "dep:iced", "iced/advanced"]
 vello = [
+    "render",
     "dep:kithara-platform",
     "dep:lucide-icons",
     "dep:num-traits",
@@ -86,7 +86,7 @@ workspace = true
 
 [[example]]
 name = "gallery"
-required-features = ["render"]
+required-features = ["iced"]
 test = true
 
 [[example]]
@@ -97,4 +97,4 @@ test = true
 [[bench]]
 name = "ui"
 harness = false
-required-features = ["render"]
+required-features = ["iced"]

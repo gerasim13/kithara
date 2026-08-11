@@ -1,12 +1,11 @@
+#[cfg(feature = "iced")]
 use iced::{
     Rectangle, Renderer,
     widget::canvas::{Frame, Geometry},
 };
 
 use crate::{
-    backends::replay_ordered,
     draw::{DrawList, DrawListBuilder, Pt, Rect, Transform},
-    engine::TextInputSnapshot,
     interact::TextInputLayout,
     render::Skin,
     skin::{ColorRole, FontFamily, TextRoleSkin},
@@ -52,14 +51,15 @@ impl<'a> TextInputPaint<'a> {
         self.layout.clone()
     }
 
+    #[cfg(feature = "iced")]
     pub(super) fn geometry(
         &self,
-        snapshot: &TextInputSnapshot,
+        snapshot: &crate::engine::TextInputSnapshot,
         renderer: &Renderer,
         bounds: Rectangle,
     ) -> Vec<Geometry> {
         let mut frame = Frame::new(renderer, bounds.size());
-        replay_ordered(
+        crate::backends::replay_ordered(
             &self.commands(
                 snapshot,
                 Rect {
@@ -75,7 +75,8 @@ impl<'a> TextInputPaint<'a> {
         vec![frame.into_geometry()]
     }
 
-    fn commands(&self, snapshot: &TextInputSnapshot, bounds: Rect) -> DrawList {
+    #[cfg(feature = "iced")]
+    fn commands(&self, snapshot: &crate::engine::TextInputSnapshot, bounds: Rect) -> DrawList {
         let mut list = DrawListBuilder::default();
         list.fill_rect(bounds, self.skin.rgba(self.skin.tree.search_background));
 
@@ -131,6 +132,7 @@ impl<'a> TextInputPaint<'a> {
         list.finish()
     }
 
+    #[cfg(feature = "iced")]
     fn paint_text(
         &self,
         list: &mut DrawListBuilder,

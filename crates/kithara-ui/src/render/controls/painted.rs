@@ -20,72 +20,19 @@ use crate::{
         painter::{ControlPainter, IndexedVisual},
     },
     backends::replay_ordered,
-    compile::CompiledUi,
     draw::{DrawList, DrawListBuilder, Rect},
     interact::{
         CursorShape, Hit, Hover, Input, Outcome, iced as iced_interact,
         recognizers::{Crossing, Scalar, ScalarState, click},
     },
     render::{
-        ReadValue, Reads, Skin, UiEvent, activate, command,
-        controls::{Drag, Grip, IndexEvent, IndexPress, Indexing, Press},
+        Skin, UiEvent, activate, command,
+        controls::{Drag, IndexEvent, IndexPress, Indexing, Press},
         publish, scalar,
     },
     solve,
     text::{TextContext, TextResources},
 };
-
-/// A control that draws itself: one painter, and the value it paints.
-///
-/// Declared once, in the control's own file, so what a control looks like
-/// cannot differ between the two hosts by construction. Each host mounts it
-/// through its own adapter and adds nothing to the picture.
-pub(crate) trait Draws {
-    type Painter: ControlPainter;
-
-    /// The painter, with the skin already resolved into it.
-    fn painter(&self, skin: &Skin) -> Self::Painter;
-
-    /// What it draws this frame, or nothing at all when its endpoint has not
-    /// said yet — an unbound switch is an empty box, not an idle switch.
-    fn data(&self, read: Reading<'_>) -> Option<<Self::Painter as ControlPainter>::Data>;
-
-    /// What the pointer means to it where the document says the leaf owns
-    /// input.
-    ///
-    /// A drag counts from the value the control draws, and the skin names how
-    /// far the hand has to travel to cross it, so both are handed in rather
-    /// than read a second time.
-    fn grip(&self, _skin: &Skin, _data: &<Self::Painter as ControlPainter>::Data) -> Grip {
-        Grip::None
-    }
-
-    fn index_event(&self) -> Option<IndexEvent<<Self::Painter as ControlPainter>::Data>> {
-        None
-    }
-
-    #[cfg(feature = "masonry")]
-    fn retained_refresh(&self) -> Option<DataRefresh<<Self::Painter as ControlPainter>::Data>> {
-        None
-    }
-}
-
-#[cfg(feature = "masonry")]
-pub(crate) type DataRefresh<Data> = fn(&mut Data, &dyn Reads) -> bool;
-
-/// What a control is handed when it decides what to draw.
-///
-/// Its own endpoint's value is resolved by the host, because the host had to
-/// resolve it anyway. Everything else a control names — a second flag, a
-/// sibling's reading — it looks up for itself, which needs the reads, the
-/// document the names live in, and the scope its siblings share.
-#[derive(Clone, Copy)]
-pub(crate) struct Reading<'a> {
-    pub(crate) reads: &'a dyn Reads,
-    pub(crate) scope: &'a str,
-    pub(crate) ui: &'a CompiledUi,
-    pub(crate) value: Option<&'a ReadValue<'a>>,
-}
 
 /// One neutral painter drawn straight into an iced canvas.
 ///

@@ -51,7 +51,7 @@ kithara-drm = { workspace = true }
 kithara-platform = { workspace = true }
 kithara-queue = { workspace = true, default-features = false, features = ["backend-cpal"] }
 kithara-test-utils = { workspace = true }
-kithara-ui = { workspace = true, features = ["render"], optional = true }
+kithara-ui = { workspace = true, features = ["iced"], optional = true }
 
 delegate = { workspace = true }
 

@@ -1,12 +1,10 @@
+#[cfg(feature = "iced")]
 use iced::Element;
 
 use crate::{
     draw::{DrawList, Pt, Rect},
     interact::CursorShape,
-    render::{
-        HostLayer, LayerHit, UiEvent, Widget, WindowCommand, WindowEdge, WindowLayerProgram,
-        window_layer,
-    },
+    render::{HostLayer, LayerHit, WindowCommand, WindowEdge, WindowLayerProgram},
     solve::{Length, Size},
     text::TextResources,
 };
@@ -136,9 +134,10 @@ impl WindowSurface {
     }
 }
 
-impl<'a> Widget<'a> for WindowSurface {
-    fn view(self) -> Element<'a, UiEvent> {
-        window_layer(self.program())
+#[cfg(feature = "iced")]
+impl<'a> crate::render::Widget<'a> for WindowSurface {
+    fn view(self) -> Element<'a, crate::render::UiEvent> {
+        crate::render::window_layer(self.program())
     }
 }
 

@@ -1,5 +1,6 @@
 use std::sync::OnceLock;
 
+#[cfg(feature = "iced")]
 use iced::{
     Color, Element, Length,
     widget::{
@@ -8,11 +9,7 @@ use iced::{
     },
 };
 
-use crate::{
-    draw::Outline,
-    module::IconName,
-    render::{fonts, model::TreeIcon},
-};
+use crate::{draw::Outline, module::IconName, render::model::TreeIcon};
 
 /// Icon available to renderers.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -190,10 +187,11 @@ impl Icon {
 
     /// Renders this icon with the given size and color.
     #[must_use]
+    #[cfg(feature = "iced")]
     pub fn view<'a, M: 'a>(self, size: f32, color: Color) -> Element<'a, M> {
         match source(self) {
             IconSource::Lucide(icon) => text(char::from(icon).to_string())
-                .font(fonts::LUCIDE)
+                .font(crate::render::fonts::LUCIDE)
                 .size(size)
                 .color(color)
                 .into(),

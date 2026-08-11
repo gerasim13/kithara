@@ -1,13 +1,12 @@
 use std::cell::RefCell;
 
+#[cfg(feature = "iced")]
 use iced::Element;
 
 use crate::{
     draw::{DrawList, DrawListBuilder, Pt, Rect, Rgba, Transform},
     interact::CursorShape,
-    render::{
-        HostLayer, LayerHit, Skin, UiEvent, Widget, WindowCommand, WindowLayerProgram, window_layer,
-    },
+    render::{HostLayer, LayerHit, Skin, WindowCommand, WindowLayerProgram},
     skin::TextRoleSkin,
     solve::{Length, Size},
     text::{TextContext, TextResources},
@@ -19,9 +18,10 @@ pub(crate) struct TitleBar<'label, 'skin> {
     label: &'label str,
 }
 
-impl<'a> Widget<'a> for TitleBar<'_, '_> {
-    fn view(self) -> Element<'a, UiEvent> {
-        window_layer(TitleProgram::new(self.label, self.skin))
+#[cfg(feature = "iced")]
+impl<'a> crate::render::Widget<'a> for TitleBar<'_, '_> {
+    fn view(self) -> Element<'a, crate::render::UiEvent> {
+        crate::render::window_layer(TitleProgram::new(self.label, self.skin))
     }
 }
 

@@ -1,4 +1,5 @@
 mod cursor;
+#[cfg(feature = "iced")]
 pub(crate) mod iced;
 mod input;
 #[cfg(feature = "masonry")]
