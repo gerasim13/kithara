@@ -1,8 +1,6 @@
 branch = "main"
-github_app_id = 1
-github_installation_id = 1
-github_private_key = "/path/to/github-app.pem"
 github_repo = "zvuk/kithara"
+github_token_file = "/path/to/github-token"
 gitlab_project_id = 1
 gitlab_project_path = "group/kithara"
 gitlab_token_file = "/path/to/gitlab-token"

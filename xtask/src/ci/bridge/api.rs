@@ -1,15 +1,7 @@
-use std::{
-    fs,
-    io::Write,
-    process::{Command, Stdio},
-    time::Duration,
-};
+use std::{fs, time::Duration};
 
 use anyhow::{Context, Result, bail};
-use base64::{
-    Engine,
-    engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD},
-};
+use base64::{Engine, engine::general_purpose::STANDARD};
 use reqwest::{
     Method, Url,
     blocking::{Client, RequestBuilder},
@@ -79,13 +71,20 @@ fn response_json(request: RequestBuilder, method: &Method, url: &Url) -> Result<
 pub(super) struct Github {
     config: BridgeConfig,
     api: Api,
+    token: String,
 }
+
+/// The name the verification wears on a pull request. Commit statuses are keyed
+/// by it, so a later report replaces the earlier one.
+const STATUS_CONTEXT: &str = "kithara/gitlab-verification";
 
 impl Github {
     pub(super) fn new(config: &BridgeConfig) -> Result<Self> {
+        let token = read_secret(&config.github_token_file, "GitHub token")?;
         Ok(Self {
             config: config.clone(),
             api: Api::new()?,
+            token,
         })
     }
 
@@ -122,96 +121,38 @@ impl Github {
         }))
     }
 
-    pub(super) fn create_check(&self, sha: &str) -> Result<u64> {
-        let response = self.request(
-            &Method::POST,
-            &format!("/repos/{}/check-runs", self.config.github_repo),
-            Some(&json!({
-                "name": "Kithara / GitLab verification",
-                "head_sha": sha,
-                "status": "in_progress",
-                "started_at": utc_timestamp()?,
-            })),
-        )?;
-        response["id"]
-            .as_u64()
-            .context("GitHub check response has no numeric id")
-    }
-
-    pub(super) fn finish_check(
-        &self,
-        check_run_id: u64,
-        conclusion: &str,
-        summary: &str,
-    ) -> Result<()> {
+    /// Check runs are a GitHub App API, and this bridge authenticates with a
+    /// token. A commit status draws the same mark on the pull request and is
+    /// keyed by its context rather than by an id, so nothing has to be carried
+    /// between the two calls.
+    pub(super) fn report_status(&self, sha: &str, state: &str, description: &str) -> Result<()> {
         self.request(
-            &Method::PATCH,
-            &format!(
-                "/repos/{}/check-runs/{check_run_id}",
-                self.config.github_repo
-            ),
+            &Method::POST,
+            &format!("/repos/{}/statuses/{sha}", self.config.github_repo),
             Some(&json!({
-                "status": "completed",
-                "conclusion": conclusion,
-                "completed_at": utc_timestamp()?,
-                "output": {
-                    "title": "GitLab verification",
-                    "summary": summary,
-                },
+                "state": state,
+                "context": STATUS_CONTEXT,
+                "description": status_description(description),
             })),
         )?;
         Ok(())
     }
 
-    pub(super) fn git_header(&self) -> Result<String> {
-        let basic = STANDARD.encode(format!("x-access-token:{}", self.app_token()?));
-        Ok(format!("Authorization: Basic {basic}"))
+    pub(super) fn git_header(&self) -> String {
+        let basic = STANDARD.encode(format!("x-access-token:{}", self.token));
+        format!("Authorization: Basic {basic}")
     }
 
     fn request(&self, method: &Method, path: &str, body: Option<&Value>) -> Result<Value> {
-        let token = self.app_token()?;
         let url = Url::parse(&format!("https://api.github.com{path}"))
             .with_context(|| format!("building GitHub API URL for {path}"))?;
         let payload = body.map(Payload::Json);
         self.api.request(
             method,
             &url,
-            ("Authorization", &format!("Bearer {token}")),
+            ("Authorization", &format!("Bearer {}", self.token)),
             payload.as_ref(),
         )
-    }
-
-    fn app_token(&self) -> Result<String> {
-        let now = unix_time()?;
-        let header = URL_SAFE_NO_PAD.encode(br#"{"alg":"RS256","typ":"JWT"}"#);
-        let payload = URL_SAFE_NO_PAD.encode(
-            serde_json::to_vec(&json!({
-                "iat": now.saturating_sub(30),
-                "exp": now + 540,
-                "iss": self.config.github_app_id,
-            }))
-            .context("serializing GitHub App JWT")?,
-        );
-        let signing_input = format!("{header}.{payload}");
-        let signature = openssl_sign(&self.config.github_private_key, signing_input.as_bytes())?;
-        let jwt = format!("{signing_input}.{}", URL_SAFE_NO_PAD.encode(signature));
-        let url = Url::parse(&format!(
-            "https://api.github.com/app/installations/{}/access_tokens",
-            self.config.github_installation_id
-        ))
-        .context("building GitHub installation token URL")?;
-        let body = json!({});
-        let payload = Payload::Json(&body);
-        let response = self.api.request(
-            &Method::POST,
-            &url,
-            ("Authorization", &format!("Bearer {jwt}")),
-            Some(&payload),
-        )?;
-        response["token"]
-            .as_str()
-            .map(str::to_string)
-            .context("GitHub installation token response has no token")
     }
 }
 
@@ -223,18 +164,7 @@ pub(super) struct Gitlab {
 
 impl Gitlab {
     pub(super) fn new(config: &BridgeConfig) -> Result<Self> {
-        let token = fs::read_to_string(&config.gitlab_token_file)
-            .with_context(|| {
-                format!(
-                    "reading GitLab token {}",
-                    config.gitlab_token_file.display()
-                )
-            })?
-            .trim()
-            .to_string();
-        if token.is_empty() {
-            bail!("GitLab token file is empty");
-        }
+        let token = read_secret(&config.gitlab_token_file, "GitLab token")?;
         Ok(Self {
             config: config.clone(),
             api: Api::new()?,
@@ -344,31 +274,30 @@ impl Gitlab {
     }
 }
 
-fn openssl_sign(key: &std::path::Path, payload: &[u8]) -> Result<Vec<u8>> {
-    let mut child = Command::new("openssl")
-        .args(["dgst", "-sha256", "-sign"])
-        .arg(key)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .context("starting OpenSSL for GitHub App JWT")?;
-    child
-        .stdin
-        .take()
-        .context("OpenSSL stdin was not piped")?
-        .write_all(payload)
-        .context("writing GitHub App JWT to OpenSSL")?;
-    let output = child
-        .wait_with_output()
-        .context("waiting for OpenSSL JWT signature")?;
-    if !output.status.success() {
-        bail!(
-            "OpenSSL JWT signing failed: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        );
+fn read_secret(path: &std::path::Path, label: &str) -> Result<String> {
+    let secret = fs::read_to_string(path)
+        .with_context(|| format!("reading {label} {}", path.display()))?
+        .trim()
+        .to_string();
+    if secret.is_empty() {
+        bail!("{label} file is empty");
     }
-    Ok(output.stdout)
+    Ok(secret)
+}
+
+/// GitHub rejects a commit status whose description exceeds 140 characters, and
+/// a rejection detail naming several control paths goes well past that.
+fn status_description(detail: &str) -> String {
+    const LIMIT: usize = 140;
+    let single_line = detail.split_whitespace().collect::<Vec<_>>().join(" ");
+    if single_line.chars().count() <= LIMIT {
+        return single_line;
+    }
+    single_line
+        .chars()
+        .take(LIMIT - 1)
+        .chain(std::iter::once('…'))
+        .collect()
 }
 
 fn string_field(value: &Value, path: &[&str], label: &str) -> Result<String> {
@@ -421,29 +350,6 @@ fn blocking_downstream_status(value: &Value) -> Result<Option<String>> {
     Ok(None)
 }
 
-fn unix_time() -> Result<u64> {
-    Ok(std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .context("system clock is before Unix epoch")?
-        .as_secs())
-}
-
-fn utc_timestamp() -> Result<String> {
-    let output = Command::new("date")
-        .args(["-u", "+%Y-%m-%dT%H:%M:%SZ"])
-        .output()
-        .context("running date for API timestamp")?;
-    if !output.status.success() {
-        bail!(
-            "date failed: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        );
-    }
-    String::from_utf8(output.stdout)
-        .context("date timestamp was not UTF-8")
-        .map(|value| value.trim().to_string())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -457,6 +363,22 @@ mod tests {
         assert_eq!(first_pipeline(&json!([])).unwrap(), None);
         assert!(first_pipeline(&json!([{"id": 7}])).is_err());
         assert!(first_pipeline(&json!([{"status": "success"}])).is_err());
+    }
+
+    #[test]
+    fn a_status_description_survives_a_multi_line_rejection() {
+        let detail = "The merged GitHub pull request changes CI control files.\n\n- `xtask/`";
+        assert_eq!(
+            status_description(detail),
+            "The merged GitHub pull request changes CI control files. - `xtask/`"
+        );
+    }
+
+    #[test]
+    fn a_status_description_stays_within_what_github_accepts() {
+        let described = status_description(&"path ".repeat(80));
+        assert_eq!(described.chars().count(), 140);
+        assert!(described.ends_with('…'));
     }
 
     #[test]

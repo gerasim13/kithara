@@ -175,8 +175,11 @@ Android, and web checks.
 ## Repository bridge
 
 Copy `ci/bridge/config.example.toml` to
-`/Volumes/KitharaCI/services/bridge/config.toml`. The config, GitHub App key,
-and GitLab token must belong to UID 504 (`kithara-sync`) and have mode `0600`.
+`/Volumes/KitharaCI/services/bridge/config.toml`. The config and the two
+tokens must belong to UID 504 (`kithara-sync`) and have mode `0600`. The GitHub
+token needs `Contents: write` to publish `main`, `Pull requests: read` to
+recognise a merged pull request, and `Commit statuses: write` to report the
+verdict — check runs are a GitHub App API and the bridge does not use one.
 Validate without network mutation:
 
 ```text

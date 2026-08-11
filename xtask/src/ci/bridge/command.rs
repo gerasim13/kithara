@@ -51,9 +51,7 @@ enum BridgeCommand {
 #[serde(deny_unknown_fields)]
 pub(super) struct BridgeConfig {
     pub(super) github_repo: String,
-    pub(super) github_app_id: u64,
-    pub(super) github_installation_id: u64,
-    pub(super) github_private_key: PathBuf,
+    pub(super) github_token_file: PathBuf,
     pub(super) gitlab_url: Url,
     pub(super) gitlab_project_id: u64,
     pub(super) gitlab_project_path: String,
@@ -84,14 +82,11 @@ impl BridgeConfig {
         if !simple_repository(&self.gitlab_project_path) {
             bail!("gitlab_project_path must use a safe group/name form");
         }
-        if self.github_app_id == 0
-            || self.github_installation_id == 0
-            || self.gitlab_project_id == 0
-        {
-            bail!("GitHub App, installation, and GitLab project ids must be positive");
+        if self.gitlab_project_id == 0 {
+            bail!("GitLab project id must be positive");
         }
         for (label, path) in [
-            ("GitHub App private key", &self.github_private_key),
+            ("GitHub token", &self.github_token_file),
             ("GitLab token", &self.gitlab_token_file),
         ] {
             if !regular_file(path) {
