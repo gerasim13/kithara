@@ -203,7 +203,7 @@ impl Width {
 ///
 /// Only the retained host asks: the immediate one reads the box off the built
 /// widget, which by then holds the painter.
-#[cfg(feature = "masonry-host")]
+#[cfg(feature = "masonry")]
 pub(crate) fn declared_width(style: ButtonStyle, skin: &Skin) -> Length {
     match Width::new(style, skin) {
         Width::Content => Length::Shrink,

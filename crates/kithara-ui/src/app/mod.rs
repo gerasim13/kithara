@@ -1,4 +1,4 @@
-#![cfg(feature = "masonry-host")]
+#![cfg(feature = "masonry")]
 
 mod embed;
 mod frame;

@@ -187,7 +187,7 @@ impl RetainedComponent {
         }
     }
 
-    #[cfg(feature = "masonry-host")]
+    #[cfg(feature = "masonry")]
     pub(in crate::engine) fn column_divider_value(&self) -> Option<f32> {
         if let Self::Scalar(component) = self
             && component.kind() == Kind::ColumnDivider

@@ -1,20 +1,19 @@
+#[cfg(feature = "render")]
 use iced::{Element, widget::canvas::Action};
 
-use crate::{
-    engine::EngineEvent,
-    interact::{
-        Outcome,
-        recognizers::{DragEvent, StepEvent},
-    },
-};
+#[cfg(feature = "render")]
+use crate::interact::{Outcome, recognizers::StepEvent};
+use crate::{engine::EngineEvent, interact::recognizers::DragEvent};
 
 /// Shared view contract: a built control renders itself into the event tree.
+#[cfg(feature = "render")]
 pub(crate) trait Widget<'a> {
     fn view(self) -> Element<'a, UiEvent>;
 }
 
 /// Carry a recognizer's verdict out to the toolkit. The recognizer decides
 /// whether the gesture took the pointer; this only names the event it produced.
+#[cfg(feature = "render")]
 fn action<T>(outcome: Outcome<T>, event: impl FnOnce(T) -> UiEvent) -> Option<Action<UiEvent>> {
     let captured = outcome.is_captured();
     let Some(value) = outcome.value() else {
@@ -28,6 +27,7 @@ fn action<T>(outcome: Outcome<T>, event: impl FnOnce(T) -> UiEvent) -> Option<Ac
     })
 }
 
+#[cfg(feature = "render")]
 pub(crate) fn publish(outcome: Outcome<UiEvent>) -> Option<Action<UiEvent>> {
     action(outcome, |event| event)
 }
@@ -42,14 +42,17 @@ pub(crate) fn control_event(path: &str, action: ControlAction) -> UiEvent {
     }
 }
 
+#[cfg(feature = "render")]
 fn set_scalar(path: &str, value: f64) -> UiEvent {
     control_event(path, ControlAction::SetScalar(value))
 }
 
+#[cfg(feature = "render")]
 pub(crate) fn scalar(path: &str, outcome: Outcome<f64>) -> Option<Action<UiEvent>> {
     action(outcome, |value| set_scalar(path, value))
 }
 
+#[cfg(feature = "render")]
 pub(crate) fn step(path: &str, outcome: Outcome<StepEvent>) -> Option<Action<UiEvent>> {
     action(outcome, |event| {
         control_event(
@@ -62,14 +65,17 @@ pub(crate) fn step(path: &str, outcome: Outcome<StepEvent>) -> Option<Action<UiE
     })
 }
 
+#[cfg(feature = "render")]
 pub(crate) fn activate(path: &str, outcome: Outcome<()>) -> Option<Action<UiEvent>> {
     action(outcome, |()| control_event(path, ControlAction::Activate))
 }
 
+#[cfg(feature = "render")]
 pub(crate) fn toggle_module(module: &str, outcome: Outcome<()>) -> Option<Action<UiEvent>> {
     action(outcome, |()| UiEvent::ToggleModule(module.to_owned()))
 }
 
+#[cfg(feature = "render")]
 pub(crate) fn window(command: WindowCommand, outcome: Outcome<()>) -> Option<Action<UiEvent>> {
     action(outcome, |()| UiEvent::Window(command))
 }
@@ -77,16 +83,19 @@ pub(crate) fn window(command: WindowCommand, outcome: Outcome<()>) -> Option<Act
 /// What a control says to the document rather than to its own endpoint. The
 /// event is built only once the gesture produced one, so a command that carries
 /// a word costs nothing on the inputs that are not it.
+#[cfg(feature = "render")]
 pub(crate) fn command(event: fn() -> UiEvent, outcome: Outcome<()>) -> Option<Action<UiEvent>> {
     action(outcome, |()| event())
 }
 
+#[cfg(feature = "render")]
 pub(crate) fn index(path: &str, outcome: Outcome<usize>) -> Option<Action<UiEvent>> {
     action(outcome, |index| {
         control_event(path, ControlAction::SelectIndex(index))
     })
 }
 
+#[cfg(feature = "render")]
 pub(crate) fn engine(
     path: &str,
     child: Option<&str>,
@@ -113,7 +122,7 @@ pub(crate) fn engine(
     }
 }
 
-#[cfg(feature = "masonry-host")]
+#[cfg(feature = "masonry")]
 pub(crate) fn engine_value(path: &str, child: Option<&str>, event: EngineEvent) -> UiEvent {
     match event {
         EngineEvent::Scalar(value) => {
@@ -136,6 +145,7 @@ pub(crate) fn engine_value(path: &str, child: Option<&str>, event: EngineEvent) 
     }
 }
 
+#[cfg(feature = "render")]
 fn typed_outcome<T>(value: T, captured: bool) -> Outcome<T> {
     if captured {
         Outcome::set(value)
@@ -146,10 +156,12 @@ fn typed_outcome<T>(value: T, captured: bool) -> Outcome<T> {
 
 /// A value a control decides for itself, addressed under one of its own
 /// endpoints rather than the one its gesture writes.
+#[cfg(feature = "render")]
 pub(crate) fn scalar_child(path: &str, child: &str, value: f64) -> Action<UiEvent> {
     Action::publish(set_scalar(&format!("{path}/{child}"), value)).and_capture()
 }
 
+#[cfg(feature = "render")]
 pub(crate) fn drag(
     path: &str,
     index: usize,
@@ -164,6 +176,7 @@ pub(crate) fn drag(
     )
 }
 
+#[cfg(feature = "render")]
 fn drag_phase(path: &str, outcome: Outcome<DragPhase>) -> Option<Action<UiEvent>> {
     action(outcome, |phase| {
         control_event(path, ControlAction::Drag(phase))
@@ -233,7 +246,7 @@ pub enum UiEvent {
     Window(WindowCommand),
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "render"))]
 mod tests {
     use iced::{event, window::RedrawRequest};
     use kithara_test_utils::kithara;

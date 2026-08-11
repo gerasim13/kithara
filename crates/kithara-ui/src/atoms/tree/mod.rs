@@ -1,3 +1,3 @@
 pub(crate) mod face;
-#[cfg(feature = "masonry-host")]
+#[cfg(feature = "masonry")]
 pub(crate) mod retained;

@@ -49,7 +49,7 @@ impl VisFrame {
         })
     }
 
-    #[cfg(all(test, any(feature = "gpu", feature = "masonry-host")))]
+    #[cfg(all(test, any(feature = "gpu", feature = "masonry")))]
     pub(crate) const fn new(level: f32, time: f32, preset: u32) -> Self {
         Self {
             level,

@@ -19,7 +19,7 @@ pub(in crate::engine) struct ScalarComponent {
 }
 
 impl ScalarComponent {
-    #[cfg(feature = "masonry-host")]
+    #[cfg(feature = "masonry")]
     pub(super) const fn current(&self) -> Option<f32> {
         self.current
     }

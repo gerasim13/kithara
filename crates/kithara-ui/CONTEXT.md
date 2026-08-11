@@ -138,7 +138,7 @@ bare width keeps working, the way `impl From<Rgba> for Paint` does for fills.
 `backends::vello` owns Vello translation and scene encoding; the draw list needs no GPU dependency.
 Vello is held at 0.6 because masonry 0.4 hands a widget a `Scene` from that release, and `Scene`
 from a different Vello version is an unrelated type. The direct Vello dependency keeps its `wgpu`
-feature off because the backend only encodes commands. Enabling `masonry-host` still brings Vello's
+feature off because the backend only encodes commands. Enabling `masonry` still brings Vello's
 wgpu 26 renderer through Masonry while iced brings wgpu 27. Cargo keeps the two majors distinct;
 `deny.toml` reports multiple versions as a warning, so this coexistence is intentional.
 
@@ -738,7 +738,7 @@ tree `.max()`-merges it in `render::tree::flex` and `render::immediate::anchored
 type and convert only at each `mouse_interaction` return.
 
 `interact` is gated on `render` although its core names no toolkit, and that is a cost rather than a
-contract. Its consumers are all `render`-gated, so under a `vello-backend`-only build - which
+contract. Its consumers are all `render`-gated, so under a `vello`-only build - which
 `cargo hack --feature-powerset` really compiles - every item would be dead code. A separate `engine`
 feature would buy nothing: the `dead_exports` check treats only `target_os`/`target_arch` as a gate,
 so a feature offers no exemption from the rule that actually governs this code, and `just check clippy` runs without `--all-features`, which would make the module a permanent lint blind spot. The

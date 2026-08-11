@@ -42,7 +42,7 @@ impl Track {
     /// next drag walks the control back to where it mounted. An absolute track
     /// reads the position itself and has nothing to move; a pixel track's value
     /// is a width rather than a fraction, and is not what an endpoint reports.
-    #[cfg(feature = "masonry-host")]
+    #[cfg(feature = "masonry")]
     pub(crate) const fn at(self, value: f32) -> Self {
         match self {
             Self::RelativeVertical { range, .. } => Self::RelativeVertical { range, value },

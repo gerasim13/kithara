@@ -64,13 +64,13 @@ pub(crate) trait Draws {
         None
     }
 
-    #[cfg(feature = "masonry-host")]
+    #[cfg(feature = "masonry")]
     fn retained_refresh(&self) -> Option<DataRefresh<<Self::Painter as ControlPainter>::Data>> {
         None
     }
 }
 
-#[cfg(feature = "masonry-host")]
+#[cfg(feature = "masonry")]
 pub(crate) type DataRefresh<Data> = fn(&mut Data, &dyn Reads) -> bool;
 
 /// What a control is handed when it decides what to draw.
@@ -637,7 +637,7 @@ impl GestureState {
     }
 }
 
-#[cfg(all(test, feature = "masonry-host"))]
+#[cfg(all(test, feature = "masonry"))]
 mod tests {
     use std::rc::Rc;
 
@@ -2153,7 +2153,7 @@ mod lengths {
         assert_eq!(node.size().height, skin.tab_large.height);
     }
 
-    #[cfg(feature = "masonry-host")]
+    #[cfg(feature = "masonry")]
     mod masonry_host {
         use super::*;
         use crate::atoms::button::declared_width;

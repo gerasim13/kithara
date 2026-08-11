@@ -17,7 +17,7 @@ default = ["render"]
 # Tests that need a graphics device. Off by default: a machine without one
 # would fail them for having no hardware rather than for a defect.
 gpu = ["render", "dep:pollster"]
-masonry-host = ["dep:futures-lite", "dep:masonry", "dep:winit", "render", "vello-backend"]
+masonry = ["dep:futures-lite", "dep:masonry", "dep:winit", "render", "vello"]
 render = [
     "dep:iced",
     "dep:kithara-platform",
@@ -29,7 +29,7 @@ render = [
     "dep:unicode-segmentation",
     "iced/advanced",
 ]
-vello-backend = [
+vello = [
     "dep:kithara-platform",
     "dep:lucide-icons",
     "dep:num-traits",
@@ -91,7 +91,7 @@ test = true
 
 [[example]]
 name = "masonry_host"
-required-features = ["masonry-host"]
+required-features = ["masonry"]
 test = true
 
 [[bench]]

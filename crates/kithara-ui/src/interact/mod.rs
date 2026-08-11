@@ -1,7 +1,7 @@
 mod cursor;
 pub(crate) mod iced;
 mod input;
-#[cfg(feature = "masonry-host")]
+#[cfg(feature = "masonry")]
 pub(crate) mod masonry;
 mod modifiers;
 mod outcome;

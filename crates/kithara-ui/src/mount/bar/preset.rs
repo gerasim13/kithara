@@ -26,7 +26,7 @@ impl Control for Preset {
 #[cfg(feature = "render")]
 mod host {
     use super::{ITEMS, Preset};
-    #[cfg(feature = "masonry-host")]
+    #[cfg(feature = "masonry")]
     use crate::render::controls::DataRefresh;
     use crate::{
         atoms::bar::preset::{Preset as Face, PresetData, PresetItem},
@@ -57,7 +57,7 @@ mod host {
             Some(select)
         }
 
-        #[cfg(feature = "masonry-host")]
+        #[cfg(feature = "masonry")]
         fn retained_refresh(&self) -> Option<DataRefresh<PresetData>> {
             Some(refresh)
         }
@@ -84,7 +84,7 @@ mod host {
             .map(|item| UiEvent::SelectPreset(item.name.to_owned()))
     }
 
-    #[cfg(feature = "masonry-host")]
+    #[cfg(feature = "masonry")]
     fn refresh(data: &mut PresetData, reads: &dyn Reads) -> bool {
         let active = active(data.items, reads);
         std::mem::replace(&mut data.active, active) != active

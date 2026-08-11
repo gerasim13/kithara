@@ -2,7 +2,7 @@ use std::{cell::RefCell, ops::Range, rc::Rc};
 
 use num_traits::cast::AsPrimitive;
 
-#[cfg(feature = "masonry-host")]
+#[cfg(feature = "masonry")]
 use super::masonry::{TrackListSource, TrackListState, TreeSource, TreeState};
 use crate::{
     atoms::{
@@ -100,7 +100,7 @@ pub(crate) struct TreePlan {
     pub(crate) path: String,
     pub(super) picture: Rc<RefCell<Tree>>,
     pub(crate) search_path: String,
-    #[cfg(feature = "masonry-host")]
+    #[cfg(feature = "masonry")]
     pub(super) state: TreeState,
 }
 
@@ -112,7 +112,7 @@ pub(crate) struct TrackListPlan {
     pub(crate) row_target: String,
     min_column_width: f32,
     pub(super) picture: Rc<RefCell<TrackTable>>,
-    #[cfg(feature = "masonry-host")]
+    #[cfg(feature = "masonry")]
     pub(super) state: TrackListState,
 }
 
@@ -407,10 +407,10 @@ fn tree_plan(
         path: path.to_owned(),
         picture: Rc::new(RefCell::new(Tree::new(rows, query_text, skin))),
         search_path: format!("{path}/search"),
-        #[cfg(feature = "masonry-host")]
+        #[cfg(feature = "masonry")]
         state: TreeState::default(),
     };
-    #[cfg(feature = "masonry-host")]
+    #[cfg(feature = "masonry")]
     plan.bind_source(TreeSource::new(
         _read.map(|binding| ui.resolve(binding.key).to_owned()),
         query.map(|binding| ui.resolve(binding.key).to_owned()),
@@ -508,7 +508,7 @@ impl TrackListPlan {
         let columns = column_layouts(declared_columns, reads, state, skin);
         let rows = rows.iter().map(TrackListRowData::from).collect();
         let plan = Self::new(path, rows, columns, skin);
-        #[cfg(feature = "masonry-host")]
+        #[cfg(feature = "masonry")]
         plan.bind_source(TrackListSource::new(
             declared_columns.to_vec(),
             columns_state.map(|binding| {
@@ -535,7 +535,7 @@ impl TrackListPlan {
             row_target: format!("{path}/rows"),
             min_column_width: skin.track_list.min_column_width,
             picture: Rc::new(RefCell::new(TrackTable::new(rows, columns, skin))),
-            #[cfg(feature = "masonry-host")]
+            #[cfg(feature = "masonry")]
             state: TrackListState::default(),
         }
     }

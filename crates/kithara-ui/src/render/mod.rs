@@ -7,7 +7,7 @@ mod hosted;
 mod icons;
 mod immediate;
 mod layer;
-#[cfg(feature = "masonry-host")]
+#[cfg(feature = "masonry")]
 pub mod masonry;
 pub mod model;
 mod owner;
@@ -25,14 +25,14 @@ mod window;
 
 pub use address::{Node, Scope, Walk};
 pub(crate) use controls::{ChromeLeaf, chrome_leaf, header_chevron, tree_rows};
-#[cfg(feature = "masonry-host")]
+#[cfg(feature = "masonry")]
 pub(crate) use event::engine_value;
 pub use event::{ControlAction, DragPhase, UiEvent, WindowCommand, WindowEdge};
 pub(crate) use event::{
     activate, command, control_event, drag, engine, index, publish, scalar, scalar_child, step,
     toggle_module, window,
 };
-#[cfg(feature = "masonry-host")]
+#[cfg(feature = "masonry")]
 pub(crate) use hosted::hosted_control_plan;
 pub(crate) use hosted::{HostedControlPlan, Resolving};
 pub use icons::Icon;
@@ -57,7 +57,7 @@ pub use skin::Skin;
 pub(crate) use text_input::{search_input, sync_text_input, text_input_layout};
 pub(crate) use track_list::{sync_track_list_scroll, track_list};
 pub use typography::shaped_text;
-#[cfg(feature = "masonry-host")]
+#[cfg(feature = "masonry")]
 pub(crate) use window::{ControlsProgram, TitleProgram};
 pub(crate) use window::{DragGhost, TitleBar, WindowControls, WindowSurface};
 

@@ -1,8 +1,8 @@
 mod capture;
 mod compare;
-#[cfg(feature = "masonry-host")]
+#[cfg(feature = "masonry")]
 mod host;
-#[cfg(feature = "masonry-host")]
+#[cfg(feature = "masonry")]
 mod masonry_shots;
 mod mock;
 mod mock_data;
@@ -493,7 +493,7 @@ fn main() -> iced::Result {
     if offscreen::run() {
         return Ok(());
     }
-    #[cfg(feature = "masonry-host")]
+    #[cfg(feature = "masonry")]
     if masonry_shots::run() || host::run() {
         return Ok(());
     }

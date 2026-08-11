@@ -66,7 +66,7 @@ impl Drag {
     /// The same drag counting from the value the control now draws. Only a
     /// host that keeps its widgets needs this; the other builds a fresh drag
     /// with every frame.
-    #[cfg(feature = "masonry-host")]
+    #[cfg(feature = "masonry")]
     pub(crate) fn at(self, value: f32) -> Self {
         Self {
             track: self.track.at(value),
@@ -204,7 +204,7 @@ impl IndexPress {
         (changed, selected)
     }
 
-    #[cfg(feature = "masonry-host")]
+    #[cfg(feature = "masonry")]
     pub(crate) fn hover(&mut self, hovered: bool) -> bool {
         if hovered || self.hovered.is_none() {
             return false;

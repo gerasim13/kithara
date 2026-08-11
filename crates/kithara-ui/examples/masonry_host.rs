@@ -119,7 +119,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     )?;
     let skin = Skin::resolve_with_font_policy(
         builtin::skin_doc().clone(),
-        &SourceUri("example:masonry-host".to_owned()),
+        &SourceUri("example:masonry".to_owned()),
         FontPolicy::Embedded,
     )?;
     let reads = EmptyReads;

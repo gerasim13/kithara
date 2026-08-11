@@ -26,7 +26,7 @@ gui = ["dep:iced", "dep:kithara-ui"]
 # Draw the studio through the retained host (masonry + Vello) instead of the
 # immediate one. Both hosts read the same documents and the same state; only
 # the window and the paint pass differ.
-masonry = ["gui", "kithara-ui/masonry-host"]
+masonry = ["gui", "kithara-ui/masonry"]
 # NN beat/downbeat detection.
 beat-nn = ["kithara/beat-nn"]
 # Waveform analysis for the deck overview.

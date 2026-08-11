@@ -3,11 +3,11 @@
 pub mod app;
 #[cfg(feature = "render")]
 pub(crate) mod atoms;
-#[cfg(any(feature = "render", feature = "vello-backend"))]
+#[cfg(any(feature = "render", feature = "vello"))]
 pub mod backends;
 pub mod builtin;
 pub mod compile;
-#[cfg(any(feature = "render", feature = "vello-backend"))]
+#[cfg(any(feature = "render", feature = "vello"))]
 pub mod draw;
 #[cfg(feature = "render")]
 pub(crate) mod engine;
@@ -24,7 +24,7 @@ pub mod size;
 #[cfg(feature = "render")]
 pub(crate) mod solve;
 pub mod source;
-#[cfg(any(feature = "render", feature = "vello-backend"))]
+#[cfg(any(feature = "render", feature = "vello"))]
 pub mod text;
 
 pub use doc::{envelope, layout, module, param, skin};

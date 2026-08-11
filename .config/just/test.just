@@ -127,7 +127,7 @@ ui:
     set -euo pipefail
     dir=target/parity
     rm -rf "$dir/iced" "$dir/masonry" "$dir/masks"
-    gallery=(cargo run -p kithara-ui --example gallery --features kithara-ui/masonry-host)
+    gallery=(cargo run -p kithara-ui --example gallery --features kithara-ui/masonry)
     KITHARA_GALLERY_CAPTURE_OFFSCREEN="$dir/iced" "${gallery[@]}"
     KITHARA_GALLERY_CAPTURE_MASONRY="$dir/masonry" "${gallery[@]}"
     KITHARA_GALLERY_COMPARE="$dir/iced:$dir/masonry:$dir/masks" \

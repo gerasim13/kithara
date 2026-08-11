@@ -52,7 +52,7 @@ impl Engine {
             .and_then(RetainedComponent::scroll_offset)
     }
 
-    #[cfg(feature = "masonry-host")]
+    #[cfg(feature = "masonry")]
     pub(crate) fn column_divider_value(&self, path: &str) -> Option<f32> {
         self.components
             .iter()
@@ -131,7 +131,7 @@ impl Engine {
         }
     }
 
-    #[cfg(feature = "masonry-host")]
+    #[cfg(feature = "masonry")]
     pub(crate) fn clear_focus(&mut self) {
         self.router.clear_focus(&mut self.components);
     }
