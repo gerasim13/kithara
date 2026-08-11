@@ -51,6 +51,7 @@ struct Volume {
     path: PathBuf,
     used: u64,
     total: u64,
+    available: u64,
 }
 
 impl Volume {
@@ -63,6 +64,7 @@ impl Volume {
             path: path.to_path_buf(),
             used: total.saturating_sub(available),
             total,
+            available,
         })
     }
 }
@@ -167,6 +169,7 @@ impl<'a> HostStorage<'a> {
                 self.prune_old_trees("cache/bootstrap/trusted", 7 * Self::DAY)?;
                 self.prune_old_trees("vm/tart/cache", 7 * Self::DAY)?;
                 self.prune_docker_cache("168h");
+                self.trim_linux_guest();
             }
             Pressure::Normal => {}
         }
@@ -284,34 +287,31 @@ impl<'a> HostStorage<'a> {
         Ok(worst)
     }
 
-    /// Thresholds are configured against the main volume. Any other volume is
-    /// held to the same proportions of its own capacity, so a second volume
-    /// needs no second set of numbers to go stale.
+    /// Pressure is what is left, not what was spent.
+    ///
+    /// The thresholds are written as bytes used against `quota_bytes`, and this
+    /// reads them as the free space each one intends to keep: a volume at the
+    /// reject threshold is one with `quota - reject` bytes to spare. On an APFS
+    /// container the volume shares, the two are not the same question. This one
+    /// measured 279 GB with 170 used — never within 100 GB of a 285 GB reject
+    /// threshold, so cleanup stayed `Normal` and never recycled the guest —
+    /// while jobs were already being refused for having 10 GB free where the
+    /// preflight wants 15.
+    ///
+    /// Read this way the ladder and the refusal agree by construction:
+    /// `quota - reject` is exactly the free space a job is required to find.
     fn pressure_of(&self, volume: &Volume) -> Pressure {
-        let quota = self.config.host.quota_bytes;
-        if volume.path == self.root || volume.total == 0 || quota == 0 {
-            return self.pressure(volume.used);
-        }
-        let scale = |bytes: u64| -> u64 {
-            (u128::from(bytes) * u128::from(volume.total) / u128::from(quota))
-                .try_into()
-                .unwrap_or(u64::MAX)
-        };
         pressure_for(
-            volume.used,
-            scale(self.config.host.soft_cleanup_bytes),
-            scale(self.config.host.aggressive_cleanup_bytes),
-            scale(self.config.host.reject_bytes),
+            volume.available,
+            self.floor(self.config.host.soft_cleanup_bytes),
+            self.floor(self.config.host.aggressive_cleanup_bytes),
+            self.floor(self.config.host.reject_bytes),
         )
     }
 
-    fn pressure(&self, used: u64) -> Pressure {
-        pressure_for(
-            used,
-            self.config.host.soft_cleanup_bytes,
-            self.config.host.aggressive_cleanup_bytes,
-            self.config.host.reject_bytes,
-        )
+    /// The free space a used-bytes threshold was asking for.
+    fn floor(&self, threshold: u64) -> u64 {
+        self.config.host.quota_bytes.saturating_sub(threshold)
     }
 
     /// Cache namespaces nothing writes to any more, once they have gone quiet
@@ -492,6 +492,39 @@ impl<'a> HostStorage<'a> {
         }
     }
 
+    /// Hand the guest's freed blocks back to the volume.
+    ///
+    /// Pruning inside the guest returns nothing here on its own: the data disk
+    /// is a sparse file that grows to its high-water mark and keeps every block
+    /// it has ever written. Measured on 2026-08-11 it held 77 GB for 25 GB of
+    /// images and build cache — fifty gigabytes of blocks the guest had already
+    /// released. A discard is what tells the host they are free, and it is the
+    /// step between pruning, which frees nothing here, and recycling, which
+    /// costs a cold image build.
+    fn trim_linux_guest(&self) {
+        let colima = self.config.host.brew_tool("colima");
+        if !colima.is_file() {
+            return;
+        }
+        let home = self.root.join("home").join(&self.config.host.ci_user);
+        let mut command = self.process.command(colima);
+        command.env("COLIMA_HOME", home.join(".colima")).args([
+            "ssh",
+            "--profile",
+            Self::COLIMA_PROFILE,
+            "--",
+            "sudo",
+            "fstrim",
+            "-a",
+        ]);
+        if let Err(error) = self
+            .process
+            .run_command(&mut command, "return the Linux guest's freed blocks")
+        {
+            warn!(%error, "could not trim the Linux guest's disk");
+        }
+    }
+
     /// Delete the Linux guest and the disk it kept, so the space is allocated
     /// again from nothing.
     ///
@@ -605,12 +638,14 @@ impl<'a> HostStorage<'a> {
     }
 }
 
-pub(super) fn pressure_for(used: u64, soft: u64, aggressive: u64, reject: u64) -> Pressure {
-    if used >= reject {
+/// Floors are free-space limits, so a smaller number is a tighter one: at or
+/// below `reject` the volume refuses work.
+pub(super) fn pressure_for(available: u64, soft: u64, aggressive: u64, reject: u64) -> Pressure {
+    if available <= reject {
         Pressure::Reject
-    } else if used >= aggressive {
+    } else if available <= aggressive {
         Pressure::Aggressive
-    } else if used >= soft {
+    } else if available <= soft {
         Pressure::Soft
     } else {
         Pressure::Normal
@@ -722,31 +757,37 @@ mod tests {
 
     #[test]
     fn pressure_thresholds_are_exact() {
-        assert_eq!(pressure_for(239, 240, 270, 285), Pressure::Normal);
-        assert_eq!(pressure_for(240, 240, 270, 285), Pressure::Soft);
-        assert_eq!(pressure_for(270, 240, 270, 285), Pressure::Aggressive);
-        assert_eq!(pressure_for(285, 240, 270, 285), Pressure::Reject);
+        // 300 GB quota with 240/270/285 used-byte thresholds keeps 60/30/15
+        // free.
+        assert_eq!(pressure_for(61, 60, 30, 15), Pressure::Normal);
+        assert_eq!(pressure_for(60, 60, 30, 15), Pressure::Soft);
+        assert_eq!(pressure_for(30, 60, 30, 15), Pressure::Aggressive);
+        assert_eq!(pressure_for(15, 60, 30, 15), Pressure::Reject);
     }
 
     #[test]
-    fn a_second_volume_is_held_to_the_same_proportions_of_its_own_size() {
+    fn a_volume_smaller_than_the_quota_still_reaches_reject() {
         let directory = tempfile::tempdir().unwrap();
         let cfg = config(directory.path());
         let process = Process::new(directory.path(), BTreeMap::new());
         let storage =
             HostStorage::for_test(directory.path().to_path_buf(), &cfg, &process).unwrap();
-        // Thresholds are 240/270/285 against a 300-byte main volume, so a
-        // volume half that size refuses at 142 and is content at 119.
-        let half = |used| Volume {
+        // The volume this replaces a proportional rule for: 279 GB total with
+        // 170 used never came within a hundred of a 285 reject threshold, so
+        // cleanup stayed `Normal` and never recycled the guest, while jobs were
+        // already being refused for free space. Judged by what is left, a
+        // volume half the quota's size reaches every step.
+        let half = |available| Volume {
             path: PathBuf::from("/elsewhere"),
-            used,
+            used: 150 - available,
             total: 150,
+            available,
         };
 
-        assert_eq!(storage.pressure_of(&half(119)), Pressure::Normal);
-        assert_eq!(storage.pressure_of(&half(120)), Pressure::Soft);
-        assert_eq!(storage.pressure_of(&half(135)), Pressure::Aggressive);
-        assert_eq!(storage.pressure_of(&half(143)), Pressure::Reject);
+        assert_eq!(storage.pressure_of(&half(61)), Pressure::Normal);
+        assert_eq!(storage.pressure_of(&half(60)), Pressure::Soft);
+        assert_eq!(storage.pressure_of(&half(30)), Pressure::Aggressive);
+        assert_eq!(storage.pressure_of(&half(15)), Pressure::Reject);
     }
 
     #[test]

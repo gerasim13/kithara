@@ -237,6 +237,18 @@ carries.
 
 ## Storage policy
 
+Pressure is read from what is left, not from what was spent. The thresholds
+below are written as bytes used against the quota, and cleanup takes each one
+as the free space it intends to keep — a volume at the reject threshold is one
+with 15 GB to spare, which is exactly what a job's preflight requires. On an
+APFS container the volume shares with others the two are different questions,
+and reading them the old way left a 279 GB volume with 24 GB free reported as
+`Normal` while jobs were already being refused.
+
+The Linux guest's data disk is sparse and never deflates: pruning inside it
+returns nothing to this volume. Aggressive cleanup therefore discards its freed
+blocks, and only refusal recycles the guest outright.
+
 The CI volume has a 300 GB APFS quota. New work stops at 285 GB. Cleanup starts
 at 240 GB and becomes aggressive at 270 GB. Workspaces, VM overlays, logs, and
 whole inactive cache namespaces are pruned; individual Cargo, Gradle, and
