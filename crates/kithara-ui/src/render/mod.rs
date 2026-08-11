@@ -5,12 +5,14 @@ pub mod event;
 pub mod fonts;
 mod hosted;
 mod icons;
+mod immediate;
 mod layer;
 #[cfg(feature = "masonry-host")]
 pub mod masonry;
 pub mod model;
 mod owner;
 mod picker;
+mod preview;
 pub mod skin;
 mod text_input;
 pub mod theme;
@@ -34,6 +36,9 @@ pub(crate) use hosted::hosted_control_plan;
 pub(crate) use hosted::{HostedControlPlan, Resolving};
 pub use icons::Icon;
 pub(crate) use icons::{Mark, document_icon, tree_icon};
+pub(crate) use immediate::{
+    Anchored, DropZone, MiniWave, ModuleChrome, Placement, Text, Tree, WheelSurface, frame_overlay,
+};
 pub(crate) use layer::{
     HostLayer, LayerHit, WindowLayerProgram, draw_host_layer, place_popover, window_layer,
     window_layers,
@@ -45,6 +50,7 @@ pub use owner::InputOwner;
 pub(crate) use picker::{
     hosted_picker_overlay, picker_hits, picker_selected_index, scope_picker, sync_picker,
 };
+pub use preview::LayoutPreview;
 pub(crate) use skin::IcedSkin;
 pub use skin::Skin;
 pub(crate) use text_input::{search_input, sync_text_input, text_input_layout};

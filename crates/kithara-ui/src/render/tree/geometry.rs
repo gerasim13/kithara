@@ -7,10 +7,9 @@ use iced::{
 use crate::{
     expand::ExpandedNode,
     layout::FrameSides,
-    render::{IcedSkin, Skin, UiEvent},
+    render::{IcedSkin, Skin, UiEvent, frame_overlay},
     size::{Dim, SizeSpec},
     skin::ColorRole,
-    widgets::frame_overlay,
 };
 
 pub(super) struct Rendered<'a> {

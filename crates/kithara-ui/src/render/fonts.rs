@@ -35,11 +35,6 @@ pub const MONO: Font = font(FontFamily::Mono, FontWeight::Normal);
 pub const LUCIDE: Font = Font::with_name("lucide");
 
 #[must_use]
-pub const fn sans(weight: FontWeight) -> Font {
-    font(FontFamily::Sans, weight)
-}
-
-#[must_use]
 pub const fn mono(weight: FontWeight) -> Font {
     font(FontFamily::Mono, weight)
 }

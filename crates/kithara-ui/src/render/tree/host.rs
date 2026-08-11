@@ -968,15 +968,15 @@ mod tests {
         module::WaveStyle,
         registry::{EndpointCategory, EndpointDesc, EndpointRegistry, ValueKind},
         render::{
-            ControlAction, DragPhase, HostLayer, InputOwner, LayerHit, ReadValue, StereoLevels,
-            TrackRow, TreeIcon, TreeRow, WaveBucket, WaveformView, WindowCommand,
-            WindowLayerProgram,
+            ControlAction, DragPhase, DropZone, HostLayer, InputOwner, LayerHit, ModuleChrome,
+            ReadValue, StereoLevels, TrackRow, TreeIcon, TreeRow, WaveBucket, WaveformView,
+            WheelSurface, WindowCommand, WindowLayerProgram,
+            event::Widget,
             fonts::{FONT_BYTES, SANS},
             window_layer,
         },
         source::{MemResolver, UiConfig},
         text::TextResources,
-        widgets::{DropZone, ModuleChrome, Widget, wheel::WheelSurface},
     };
 
     fn redraw_event() -> Event {

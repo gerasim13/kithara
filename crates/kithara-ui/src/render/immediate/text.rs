@@ -17,10 +17,9 @@ use crate::{
     backends::replay_ordered,
     draw::{DrawListBuilder, Rect},
     module::TextStyle,
-    render::{ReadValue, Skin, UiEvent, tree::active_tone},
+    render::{ReadValue, Skin, UiEvent, event::Widget, tree::active_tone},
     skin::{ColorRole, TextRoleSkin},
     text::TextContext,
-    widgets::Widget,
 };
 
 #[derive(bon::Builder)]

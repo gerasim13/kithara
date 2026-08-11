@@ -6,8 +6,10 @@ use iced::{
 
 use crate::{
     atoms::tree::face::Tree as TreeFace,
-    render::{IcedSkin, Icon, InputOwner, ReadValue, Skin, UiEvent, search_input, tree_rows},
-    widgets::Widget,
+    render::{
+        IcedSkin, Icon, InputOwner, ReadValue, Skin, UiEvent, event::Widget, search_input,
+        tree_rows,
+    },
 };
 
 #[derive(bon::Builder)]

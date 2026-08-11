@@ -18,18 +18,15 @@ use crate::{
     layout::Axis,
     module::TextAlign,
     render::{
-        ControlAction, InputOwner, Reads, Skin, UiEvent,
+        Anchored, ControlAction, DropZone, InputOwner, ModuleChrome, Placement, Reads, Skin,
+        UiEvent, WheelSurface,
         document::{
             Group, Host as DocumentHost, Module as DocumentModule, Popover as DocumentPopover,
         },
+        event::Widget,
         window_layers,
     },
     size::{Dim, SizeSpec},
-    widgets::{
-        DropZone, ModuleChrome, Widget,
-        anchored::{Anchored, Placement},
-        wheel::WheelSurface,
-    },
 };
 
 pub(super) struct IcedHost<'a, 'reads> {

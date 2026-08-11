@@ -11,9 +11,11 @@ use crate::{
     expand::Binding,
     ids::InternId,
     module::TrackColumn,
-    render::{InputOwner, ReadValue, Reads, Skin, UiEvent, controls::Paint, scope_picker, vis},
+    render::{
+        InputOwner, ReadValue, Reads, Skin, Tree, UiEvent, controls::Paint, event::Widget,
+        scope_picker, vis,
+    },
     text::TextContext,
-    widgets::{Widget, nav::Tree},
 };
 
 /// The context strip, with the menu its scope face opens.

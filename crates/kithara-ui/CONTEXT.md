@@ -734,7 +734,7 @@ already expressed in the area's space; feeding it the event position would be an
 coordinate-space bug the moment a control is not at the window origin.
 
 `CursorShape` deliberately derives no ordering. `mouse::Interaction` derives `Ord` and the render
-tree `.max()`-merges it in `render::tree::flex` and `widgets::anchored`; those merges stay on iced's
+tree `.max()`-merges it in `render::tree::flex` and `render::immediate::anchored`; those merges stay on iced's
 type and convert only at each `mouse_interaction` return.
 
 `interact` is gated on `render` although its core names no toolkit, and that is a cost rather than a
@@ -758,7 +758,7 @@ double-click window testable at all, and the window is `[0 ms, 301 ms)` rather t
 `ScalarDragState` formed with `interact::ScalarState`. Six tracks now share one state machine
 instead of two machines sharing a field bag: press, move while active, release, plus the two
 opt-ins. Every pointer gesture in the crate is a recognizer, including the stepping surface: what is left
-under `widgets::interaction` is a canvas that draws nothing and forwards, which is the shape every
+under `render::immediate` is a canvas that draws nothing and forwards, which is the shape every
 ported control now has.
 
 `render::event::control_event` is the only place production builds a `UiEvent::Control`. That is
@@ -784,7 +784,7 @@ loud.
 
 The `Text` control is the first control whose measurement and painting both belong to the base.
 `atoms::text` owns the pair: it shapes through `TextContext` and either reports an intrinsic size
-or emits one `DrawCmd::Text`. `widgets::text` owns only the iced side - it resolves the style,
+or emits one `DrawCmd::Text`. `render::immediate::text` owns only the iced side - it resolves the style,
 colour and content, then hosts the atom as a leaf `Widget` whose `layout` returns the base's
 intrinsic and whose `draw` replays the command list through `IcedBackend`. It reports
 `Shrink` by `Fill`, which is what the `container` it replaced reported.
@@ -812,7 +812,7 @@ the visible track fraction; a wheel detent emits `SetScalar` at `<wave-path>/zoo
 emits `SetScalar` at the wave path for playback position. The renderer keeps neither value, derives
 the centred window from each read snapshot, and falls back to `zoom_math::DEFAULT_ZOOM` when the
 zoom read is absent.
-`widgets/wave/zoom_math.rs` owns the zoom scale for every widget that draws a wave: opening window,
+`atoms/wave/zoom_math.rs` owns the zoom scale for every widget that draws a wave: opening window,
 `MIN_ZOOM`/`MAX_ZOOM` clamp, and what each gesture is worth - a wheel detent (`1.25` / `0.8`) is
 finer than a zoom button (`BUTTON_FACTOR = 0.7`). A host driving zoom from a button takes
 `render::zoom_in` / `render::zoom_out` and gets the same bounds.
@@ -835,12 +835,12 @@ supplies; `active` selects only a tone, never content.
   `Row.background` selects among palette roles; a node naming no colour takes its skin entry's.
   `Glyph` sizing stays skin-owned through `GlyphStyle`, and `active_icon` switches the glyph itself,
   so one caret is one node with one path and one style.
-- `widgets/text.rs::text_role` is the one `TextStyle` to `TextRoleSkin` join, feeding `active_tone`
+- `render/immediate/text.rs::text_role` is the one `TextStyle` to `TextRoleSkin` join, feeding `active_tone`
   the node's pair with the skin entry's active colour behind it (`text.deck_letter_active`, marking
   the focused deck). No wildcard arm, so a new style must be given a skin entry.
 - `Row` alone carries `active`, `active_background`, `frame_color`, `active_frame_color`; `Column`
   carries none. `geometry::frame_tone` resolves the frame pair, defaulting to the skin divider;
-  `widgets/module/chrome.rs::frame_overlay` takes colour and width as arguments and reads no skin
+  `render/immediate/chrome.rs::frame_overlay` takes colour and width as arguments and reads no skin
   section, which lets one surface carry two hairline colours.
 
 An `active` binding needs no `id`, and the shipped App Menu relies on that: `validate` requires an
@@ -849,7 +849,7 @@ id-less container as its own module, its `ControlSite` path being the enclosing 
 every id-less sibling. That sharing holds only while the visitor body stays validation-only -
 `check_controls` keys nothing by the path, and a container without `write` yields no `SurfaceSpec`.
 A visitor keeping state per `ControlSite.path` needs the id rule widened first.
-Joins live one place each: `text_role` in `widgets/text.rs`, `glyph_tone` in `render/tree/atom.rs`,
+Joins live one place each: `text_role` in `render/immediate/text.rs`, `glyph_tone` in `render/tree/atom.rs`,
 `frame_tone` beside `active_tone` in `render/tree/geometry.rs`, both called from
 `render/tree/node.rs`. `render/tree/mod.rs` keeps `geometry` private and re-exports only
 `active_tone`, so a join under `widgets` would duplicate the rule. Each is pinned by a
@@ -955,7 +955,7 @@ the column pitch for both the deck wave and the overview row.
 ### Wheel surfaces
 
 A `Row` or `Column` declaring `write` is an interactive surface over its whole box (`SurfaceSpec`,
-drawn by `widgets/wheel.rs::WheelSurface`):
+drawn by `render/immediate/wheel.rs::WheelSurface`):
 
 - A wheel detent emits one signed `ControlAction::StepScalar`, a double click emits
   `ControlAction::Activate`, both on the container's own path.
@@ -1161,7 +1161,7 @@ the widget owns how. `at: PopoverAt` chooses anchor rectangle or pointer, defaul
 up with the anchor's. A menu on a full-width row needs `Pointer` (an anchor rectangle spanning the
 list cannot say where the user clicked); a burger under a fixed cell needs `Anchor`.
 
-Everything else stays in `widgets/anchored.rs`:
+Everything else stays in `render/immediate/anchored.rs`:
 
 - `place` puts the surface below whichever geometry it opens from, overhangs it `FRAME_OVERHANG`
   (1 px) past the aligned edge so the content column lands flush, flips above when the room below
