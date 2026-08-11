@@ -24,11 +24,6 @@ linux:check:
   script:
     - just ci run linux-check
 
-linux:wasm:
-  extends: .linux-lane
-  script:
-    - just ci run linux-wasm
-
 linux:test:
   extends:
     - .linux-job

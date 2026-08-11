@@ -13,12 +13,17 @@
 # from the checkout the job already has, so the image is tagged with whatever
 # the commit pins — the mismatch that made the tag change silently break the
 # lane cannot happen here.
+#
+# It answers for the Linux lane, so it appears only on a run that asked for
+# Linux. A manual job is still a job on the pipeline page, and a repair nobody
+# requested reads as work the run intends to do.
 linux:image:
   extends: .release-job
   stage: linux
   timeout: 90 minutes
   needs: []
   rules:
+    - !reference [.platform-linux, rules]
     - when: manual
       allow_failure: true
   script:
