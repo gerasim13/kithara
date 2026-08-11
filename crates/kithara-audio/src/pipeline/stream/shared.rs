@@ -19,30 +19,27 @@ use super::offset::OffsetReader;
 /// - `StreamAudioSource` to check `media_info()` for format changes
 pub(crate) struct SharedStream<T: StreamType> {
     inner: Arc<Mutex<Stream<T>>>,
-    /// Construction-phase read mode, shared across clones. When set, `Read`
-    /// routes through the blocking off-RT [`Stream::read`] adapter (waits for
-    /// the seeked range to download, cancel-bounded by its own timeout)
-    /// instead of the non-blocking RT [`Stream::probe_read`]. Decoder builders
-    /// arm it only around their off-RT factory call and disarm it before
-    /// steady-state decoding resumes. See the crate `CONTEXT.md`
-    /// "Construction reads".
-    blocking: ConstructionGate,
+    /// Construction mode for one decoder reader. Coordinator clones carry no
+    /// gate; every opened reader receives a fresh gate so an off-RT rebuild
+    /// cannot switch the active decoder to blocking I/O.
+    construction_gate: Option<ConstructionGate>,
 }
 
 impl<T: StreamType> SharedStream<T> {
     pub(crate) fn new(stream: Stream<T>) -> Self {
         Self {
             inner: Arc::new(Mutex::new(stream)),
-            blocking: ConstructionGate::default(),
+            construction_gate: None,
         }
     }
 
     pub(crate) fn open_initial_reader(&self) -> OpenedReader {
+        let construction_gate = ConstructionGate::default();
         OpenedReader::new(
-            self.clone(),
+            self.with_construction_gate(construction_gate.clone()),
             self.len(),
             self.byte_map(),
-            Some(self.blocking.clone()),
+            Some(construction_gate),
             self.take_reader_event_sink(),
         )
     }
@@ -51,23 +48,24 @@ impl<T: StreamType> SharedStream<T> {
         let byte_len = self.len().map(|length| length.saturating_sub(base_offset));
         let byte_map = self.byte_map();
         let event_sink = self.take_reader_event_sink();
-        let input = OffsetReader::new(self.clone(), base_offset);
+        let construction_gate = ConstructionGate::default();
+        let input = OffsetReader::new(
+            self.with_construction_gate(construction_gate.clone()),
+            base_offset,
+        );
         OpenedReader::new(
             input,
             byte_len,
             byte_map,
-            Some(self.blocking.clone()),
+            Some(construction_gate),
             event_sink,
         )
     }
 
-    /// Arm/disarm the initial construction read mode. Rebuilds use the same
-    /// gate through [`OpenedReader`].
-    pub(crate) fn set_blocking(&self, on: bool) {
-        if on {
-            self.blocking.arm();
-        } else {
-            self.blocking.disarm();
+    fn with_construction_gate(&self, construction_gate: ConstructionGate) -> Self {
+        Self {
+            inner: Arc::clone(&self.inner),
+            construction_gate: Some(construction_gate),
         }
     }
 
@@ -124,7 +122,7 @@ impl<T: StreamType> Clone for SharedStream<T> {
     fn clone(&self) -> Self {
         Self {
             inner: Arc::clone(&self.inner),
-            blocking: self.blocking.clone(),
+            construction_gate: self.construction_gate.clone(),
         }
     }
 }
@@ -132,13 +130,17 @@ impl<T: StreamType> Clone for SharedStream<T> {
 impl<T: StreamType> Read for SharedStream<T> {
     /// Steady state (RT worker / `OffsetReader`): the non-blocking
     /// [`Stream::probe_read`] — a not-ready range surfaces immediately so the
-    /// scheduler parks and re-ticks. During construction only (the `blocking`
-    /// flag armed by a decoder builder), routes through the blocking off-RT
-    /// [`Stream::read`] adapter so construction waits for residual init
-    /// lateness instead of erroring on the first not-ready probe.
+    /// scheduler parks and re-ticks. During this reader's construction only,
+    /// routes through the blocking off-RT [`Stream::read`] adapter so
+    /// construction waits for residual init lateness instead of erroring on
+    /// the first not-ready probe.
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         let mut stream = self.inner.lock();
-        if self.blocking.is_armed() {
+        if self
+            .construction_gate
+            .as_ref()
+            .is_some_and(ConstructionGate::is_armed)
+        {
             stream.read(buf)
         } else {
             stream.probe_read(buf)
@@ -147,9 +149,16 @@ impl<T: StreamType> Read for SharedStream<T> {
 }
 
 impl<T: StreamType> Seek for SharedStream<T> {
-    delegate! {
-        to self.inner.lock() {
-            fn seek(&mut self, pos: SeekFrom) -> io::Result<u64>;
+    fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
+        let mut stream = self.inner.lock();
+        if self
+            .construction_gate
+            .as_ref()
+            .is_some_and(ConstructionGate::is_armed)
+        {
+            stream.seek(pos)
+        } else {
+            stream.probe_seek(pos)
         }
     }
 }

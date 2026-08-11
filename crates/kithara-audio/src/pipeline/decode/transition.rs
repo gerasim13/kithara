@@ -329,6 +329,9 @@ impl super::core::ActiveDecode {
             });
             return None;
         }
+        if shares_default_profile(self.active.gapless_profile(), generation.gapless_profile()) {
+            generation.align_timeline_gap(self.active.timeline_gap());
+        }
         self.blender.join_active(generation.blender_profile());
         Some(std::mem::replace(&mut self.active, generation))
     }
@@ -550,13 +553,19 @@ fn incoming_origin_from(
     mode: kithara_decode::GaplessMode,
 ) -> u64 {
     let incoming_profile = incoming.gapless_profile();
-    let same_default_profile = active_profile.gapless().is_none()
-        && incoming_profile.gapless().is_none()
-        && active_profile.default_priming_frames() == incoming_profile.default_priming_frames();
-    let gap = if same_default_profile {
+    let gap = if shares_default_profile(active_profile, incoming_profile) {
         active_gap.max(incoming.timeline_gap())
     } else {
         incoming.timeline_gap()
     };
     incoming.timeline_origin_with_gap(mode, gap)
+}
+
+fn shares_default_profile(
+    active: kithara_decode::GaplessProfile,
+    incoming: kithara_decode::GaplessProfile,
+) -> bool {
+    active.gapless().is_none()
+        && incoming.gapless().is_none()
+        && active.default_priming_frames() == incoming.default_priming_frames()
 }

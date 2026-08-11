@@ -19,6 +19,12 @@ pub(crate) struct DecoderGeneration {
     #[field(get, vis = "pub(crate)", copy)]
     gapless_profile: GaplessProfile,
     gapless: GaplessStage,
+    /// Lower bound for the decoder's observed timeline gap after an exact
+    /// variant splice. The overlap proof normalizes equal codec profiles to
+    /// the larger gap; promotion transfers that normalization here so a later
+    /// transition cannot reinterpret the new active generation on a smaller
+    /// origin.
+    timeline_gap_floor: u64,
     media_info: Option<MediaInfo>,
     pending_head_skip: Option<ResumeState>,
     staged: VecDeque<PcmChunk>,
@@ -47,6 +53,7 @@ impl DecoderGeneration {
             installed_at_seek_epoch,
             gapless_profile,
             gapless,
+            timeline_gap_floor: 0,
             pending_head_skip,
             staged: VecDeque::new(),
         }
@@ -59,8 +66,6 @@ impl DecoderGeneration {
             pub(crate) fn decoder(&self) -> &dyn Decoder;
             #[call(as_mut)]
             pub(crate) fn decoder_mut(&mut self) -> &mut dyn Decoder;
-            #[call(timeline_gap_frames)]
-            pub(crate) fn timeline_gap(&self) -> u64;
         }
         to self.staged {
             #[call(pop_front)]
@@ -138,6 +143,16 @@ impl DecoderGeneration {
                 .saturating_add(u64::from(last.meta.frames)),
             first.meta.spec.sample_rate.get(),
         ))
+    }
+
+    pub(crate) fn align_timeline_gap(&mut self, gap: u64) {
+        self.timeline_gap_floor = self.timeline_gap_floor.max(gap);
+    }
+
+    pub(crate) fn timeline_gap(&self) -> u64 {
+        self.decoder
+            .timeline_gap_frames()
+            .max(self.timeline_gap_floor)
     }
 
     pub(crate) fn timeline_origin(&self, mode: GaplessMode) -> u64 {
