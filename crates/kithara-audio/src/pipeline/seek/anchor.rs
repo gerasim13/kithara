@@ -55,7 +55,7 @@ pub(crate) fn variant_boundary(
             || container.is_some_and(|format| format != ContainerFormat::Wav && needs_init(format)))
 }
 
-pub(crate) fn needs_init(container: ContainerFormat) -> bool {
+pub(crate) const fn needs_init(container: ContainerFormat) -> bool {
     matches!(
         container,
         ContainerFormat::Fmp4
@@ -66,7 +66,7 @@ pub(crate) fn needs_init(container: ContainerFormat) -> bool {
     )
 }
 
-pub(crate) fn stale(anchor_variant: Option<usize>, current_variant: Option<usize>) -> bool {
+pub(crate) const fn stale(anchor_variant: Option<usize>, current_variant: Option<usize>) -> bool {
     matches!(
         (anchor_variant, current_variant),
         (Some(anchor), Some(current)) if anchor != current

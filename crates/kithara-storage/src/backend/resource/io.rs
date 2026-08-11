@@ -458,7 +458,7 @@ mod tests {
                         if target == 0 {
                             continue;
                         }
-                        match reader.wait_range_inner(0..target as u64) {
+                        match reader.wait_range_inner(0..target as u64, None) {
                             Ok(WaitOutcome::Ready) => {}
                             _ => continue,
                         }

@@ -95,7 +95,7 @@ fn open_rejects_when_stale_tmp_blocks_claim() {
 
     let cancel = CancelToken::never();
     let factory = {
-        let cancel = cancel.clone();
+        let cancel = cancel;
         move |target: &Path, intent: OpenIntent| {
             let mode = match intent {
                 OpenIntent::Fresh => OpenMode::ReadWrite,
@@ -112,7 +112,7 @@ fn open_rejects_when_stale_tmp_blocks_claim() {
         }
     };
 
-    let err = AtomicChunked::<MmapDriver>::open(canonical.clone(), factory)
+    let err = AtomicChunked::<MmapDriver>::open(canonical, factory)
         .expect_err("stale tmp must block atomic claim");
     assert!(
         matches!(err, crate::StorageError::TmpClaimed(_)),
@@ -127,7 +127,7 @@ fn concurrent_open_atomic_claim_returns_tmp_claimed() {
 
     let cancel = CancelToken::never();
     let factory = {
-        let cancel = cancel.clone();
+        let cancel = cancel;
         move |target: &Path, intent: OpenIntent| {
             let mode = match intent {
                 OpenIntent::Fresh => OpenMode::ReadWrite,
@@ -147,7 +147,7 @@ fn concurrent_open_atomic_claim_returns_tmp_claimed() {
     let _holder = AtomicChunked::<MmapDriver>::open(canonical.clone(), factory.clone())
         .expect("first open claims tmp");
 
-    let err = AtomicChunked::<MmapDriver>::open(canonical.clone(), factory)
+    let err = AtomicChunked::<MmapDriver>::open(canonical, factory)
         .expect_err("second concurrent open must be rejected");
     assert!(
         matches!(err, crate::StorageError::TmpClaimed(_)),

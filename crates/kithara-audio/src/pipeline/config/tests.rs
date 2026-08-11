@@ -24,7 +24,7 @@ fn spec() -> PcmSpec {
 }
 
 fn pool() -> PcmPool {
-    PcmPool::default().clone()
+    PcmPool::default()
 }
 
 #[kithara::test]
@@ -41,28 +41,45 @@ mod native {
     use kithara_resampler::NoResamplerBackend;
 
     use super::*;
-    use crate::pipeline::config::AudioConfig;
+    use crate::pipeline::config::{AudioConfig, ConsumerWakeMode};
+
+    fn file_config() -> FileConfig {
+        FileConfig::for_src(FileSrc::Local(
+            std::env::temp_dir().join("kithara-audio-config.wav"),
+        ))
+        .store(
+            AssetStore::builder()
+                .backend(StorageBackend::Memory)
+                .build(),
+        )
+        .build()
+    }
 
     #[kithara::test]
     fn audio_config_with_effect_adds_to_chain() {
         let effects: Vec<Box<dyn AudioEffect>> =
             vec![Box::new(PassthroughEffect), Box::new(PassthroughEffect)];
-        let config = AudioConfig::<kithara_file::File, NoResamplerBackend>::for_stream(
-            FileConfig::for_src(FileSrc::Local(
-                std::env::temp_dir().join("kithara-audio-config.wav"),
-            ))
-            .store(
-                AssetStore::builder()
-                    .backend(StorageBackend::Memory)
-                    .build(),
-            )
-            .build(),
-        )
-        .byte_pool(BytePool::default())
-        .pcm_pool(PcmPool::default())
-        .effects(effects)
-        .build();
+        let config =
+            AudioConfig::<kithara_file::File, NoResamplerBackend>::for_stream(file_config())
+                .byte_pool(BytePool::default())
+                .pcm_pool(PcmPool::default())
+                .effects(effects)
+                .build();
         assert_eq!(config.effects().len(), 2);
+    }
+
+    #[kithara::test]
+    fn audio_config_defaults_to_realtime_deferred_consumer_wakes() {
+        let config =
+            AudioConfig::<kithara_file::File, NoResamplerBackend>::for_stream(file_config())
+                .byte_pool(BytePool::default())
+                .pcm_pool(PcmPool::default())
+                .build();
+
+        assert_eq!(
+            config.consumer_wake_mode(),
+            ConsumerWakeMode::RealtimeDeferred
+        );
     }
 }
 
@@ -121,7 +138,7 @@ mod stretch {
             frames: u32::try_from(frames).unwrap(),
             ..Default::default()
         };
-        let chunk = PcmChunk::new(meta, PcmPool::default().attach(samples.clone()));
+        let chunk = PcmChunk::new(meta, PcmPool::default().attach(samples));
         let out = effects[0]
             .process(chunk)
             .expect("vinyl stretch emits a chunk");

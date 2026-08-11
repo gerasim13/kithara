@@ -305,7 +305,7 @@ impl<'a> HostStorage<'a> {
         )
     }
 
-    fn pressure(&self, used: u64) -> Pressure {
+    const fn pressure(&self, used: u64) -> Pressure {
         pressure_for(
             used,
             self.config.host.soft_cleanup_bytes,
@@ -605,7 +605,7 @@ impl<'a> HostStorage<'a> {
     }
 }
 
-pub(super) fn pressure_for(used: u64, soft: u64, aggressive: u64, reject: u64) -> Pressure {
+pub(super) const fn pressure_for(used: u64, soft: u64, aggressive: u64, reject: u64) -> Pressure {
     if used >= reject {
         Pressure::Reject
     } else if used >= aggressive {

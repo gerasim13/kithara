@@ -84,9 +84,9 @@ impl PlayerImpl {
             .eq_layout(config.eq_layout.clone())
             .max_slots(config.max_slots)
             .sample_rate(config.sample_rate)
-            .pcm_pool(resolved_pool.clone())
+            .pcm_pool(resolved_pool)
             .maybe_session(config.session.clone())
-            .cancel(cancel.clone())
+            .cancel(cancel)
             .build();
         let engine = EngineImpl::new(engine_config, bus.clone());
         if config.abr.is_none() {
@@ -148,7 +148,7 @@ impl PlayerImpl {
 
     /// Byte pool used for resources created by this player.
     #[must_use]
-    pub fn byte_pool(&self) -> &BytePool {
+    pub const fn byte_pool(&self) -> &BytePool {
         &self.core.byte_pool
     }
 

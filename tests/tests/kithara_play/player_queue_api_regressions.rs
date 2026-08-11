@@ -48,6 +48,7 @@ async fn auto_advance_starts_next_track_without_explicit_play(temp_dir: TestTemp
     let _ = harness.tick_and_drain();
 
     let deadline = Instant::now() + STARTUP_CLEAR_TIMEOUT;
+    let block_budget = Duration::from_secs_f64(BLOCK_FRAMES as f64 / f64::from(SAMPLE_RATE));
     let mut events = Vec::new();
     let mut rendered_frames = 0usize;
     let mut second_current_item_changed = None;
@@ -88,7 +89,7 @@ async fn auto_advance_starts_next_track_without_explicit_play(temp_dir: TestTemp
             break;
         }
 
-        time::sleep(Duration::from_millis(5)).await;
+        time::sleep(block_budget).await;
     }
 
     let first_item_finished = first_item_finished.unwrap_or_else(|| {

@@ -41,7 +41,11 @@ impl TrackAnalysis {
     /// Use [`Self::with_source_rate`] when beat markers must form a
     /// [`crate::TrackBeatMap`].
     #[must_use]
-    pub fn new(beat: Option<BeatGrid>, waveform: Option<Waveform>, source_frames: u64) -> Self {
+    pub const fn new(
+        beat: Option<BeatGrid>,
+        waveform: Option<Waveform>,
+        source_frames: u64,
+    ) -> Self {
         Self {
             beat,
             waveform,
@@ -52,7 +56,7 @@ impl TrackAnalysis {
 
     /// Creates an analysis snapshot with its decoded-source sample-rate axis.
     #[must_use]
-    pub fn with_source_rate(
+    pub const fn with_source_rate(
         beat: Option<BeatGrid>,
         waveform: Option<Waveform>,
         source_frames: u64,
@@ -67,12 +71,12 @@ impl TrackAnalysis {
     }
 
     #[must_use]
-    pub fn beat(&self) -> Option<&BeatGrid> {
+    pub const fn beat(&self) -> Option<&BeatGrid> {
         self.beat.as_ref()
     }
 
     #[must_use]
-    pub fn waveform(&self) -> Option<&Waveform> {
+    pub const fn waveform(&self) -> Option<&Waveform> {
         self.waveform.as_ref()
     }
 }

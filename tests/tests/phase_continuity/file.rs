@@ -25,7 +25,7 @@ use super::common::{
 ))]
 const APPLE_FUSED_HOST_RATE: u32 = 48_000;
 
-fn format_ext(fmt: SignalFormat) -> Option<&'static str> {
+const fn format_ext(fmt: SignalFormat) -> Option<&'static str> {
     match fmt {
         SignalFormat::Mp3 => Some("mp3"),
         SignalFormat::Aac => Some("aac"),
@@ -471,16 +471,6 @@ impl std::fmt::Display for CodecProfile {
     }
 }
 
-/// Decode PCM, profile encoder distortion against the theoretical sine.
-/// Reports per-window LS-fit amplitude, phase wobble (std of measured
-/// phase minus theoretical), and post-amp/phase-correction residual SNR
-/// (how much noise the encoder injected on top of the sine).
-fn profile_codec(label: &str, pcm: &[f32], chan: usize) -> CodecProfile {
-    const WINDOW: usize = 128;
-    const STRIDE: usize = 1024;
-    profile_codec_window(label, pcm, chan, WINDOW, STRIDE)
-}
-
 fn profile_codec_window(
     label: &str,
     pcm: &[f32],
@@ -507,9 +497,9 @@ fn profile_codec_window(
         phase_devs_rad.push(dev);
         let mut sq = 0.0_f64;
         for (k, &s) in mono.iter().enumerate() {
-            let recon = amp * (delta * (frame + k) as f64 + dev).sin();
+            let recon = amp * delta.mul_add((frame + k) as f64, dev).sin();
             let r = s - recon;
-            sq += r * r;
+            sq = r.mul_add(r, sq);
         }
         residuals.push((sq / window as f64).sqrt());
         frame += stride;
@@ -654,7 +644,7 @@ async fn dump_aac_for_listening() {
         let (phi, amp) = measure_phase_rad_window(&mono_f64, delta);
         let residual: Vec<f32> = (0..aligned_to)
             .map(|k| {
-                let ref_aligned = amp * (delta * k as f64 + phi).sin();
+                let ref_aligned = amp * delta.mul_add(k as f64, phi).sin();
                 mono[k] - num_traits::cast::<f64, f32>(ref_aligned).unwrap_or(0.0)
             })
             .collect();

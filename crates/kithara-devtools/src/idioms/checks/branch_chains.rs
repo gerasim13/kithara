@@ -201,7 +201,7 @@ fn extract_binary(cond: &Expr) -> Option<(String, &'static str)> {
     Some((lhs, op_str))
 }
 
-fn bin_op_str(op: &BinOp) -> Option<&'static str> {
+const fn bin_op_str(op: &BinOp) -> Option<&'static str> {
     Some(match op {
         BinOp::Eq(_) => "==",
         BinOp::Ne(_) => "!=",

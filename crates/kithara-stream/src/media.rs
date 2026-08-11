@@ -106,7 +106,7 @@ impl MediaInfo {
 /// final byte lengths from body commits, so startup does not need network size
 /// probes. Unknown metadata and every file-like container stay conservative.
 #[must_use]
-pub fn needs_exact_byte_sizes(
+pub const fn needs_exact_byte_sizes(
     codec: Option<AudioCodec>,
     container: Option<ContainerFormat>,
 ) -> bool {
@@ -174,7 +174,7 @@ impl AudioCodec {
     /// `From<AudioCodec>` conversion — `u64` here means "priming
     /// frames", not the codec rewritten as an integer.
     #[must_use]
-    pub fn encoder_priming_frames(codec: Self) -> u64 {
+    pub const fn encoder_priming_frames(codec: Self) -> u64 {
         match codec {
             Self::AacLc | Self::AacHe | Self::AacHeV2 => 1024,
             Self::Mp3 => 576,

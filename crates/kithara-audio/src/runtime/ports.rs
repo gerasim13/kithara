@@ -4,9 +4,14 @@ use ringbuf::{
     traits::{Consumer, Observer, Producer, Split},
 };
 
-/// A signal to wake up a blocked consumer.
+/// Deferred notification from a producer core to its consumer.
+///
+/// [`wake`](WakeSignal::wake) runs inside the real-time produce core and must
+/// remain lock-free, allocation-free, and syscall-free. It only arms a
+/// coalesced request. The scheduler shell delivers that request through
+/// [`flush_deferred`](WakeSignal::flush_deferred) after the produce pass.
 pub(crate) trait WakeSignal: Send + Sync + 'static {
-    /// Flush any wake-side deferred signals from the scheduler shell.
+    /// Deliver wake-side deferred signals from the scheduler shell.
     fn flush_deferred(&self) {}
 
     /// Signal that the ring went from empty to non-empty. Fired only on that
@@ -14,9 +19,8 @@ pub(crate) trait WakeSignal: Send + Sync + 'static {
     /// per drain cycle without flooding the shared event bus. Default no-op.
     fn on_data_available(&self) {}
 
-    /// Wake up the consumer. Fired on every successful ring push so a reader
-    /// parked in a blocking `recv` is unparked whenever new output lands —
-    /// redundant unparks are cheap and close the park/push race.
+    /// Arm a consumer wake. Fired on every successful ring push so a blocking
+    /// reader is notified after the producer leaves the real-time core.
     fn wake(&self);
 }
 
@@ -81,8 +85,8 @@ impl<T> Outlet<T> {
 
     /// Try to push into the ring; on failure, park into the (assumed empty)
     /// overflow slot. Returns `true` when the item reached the ring, `false`
-    /// when it was parked. A successful push always `wake`s a blocking reader;
-    /// the empty-to-non-empty transition additionally fires the
+    /// when it was parked. A successful push always arms a blocking reader
+    /// wake; the empty-to-non-empty transition additionally fires the
     /// `on_data_available` hint for event-driven readers.
     fn push_or_park(&mut self, item: T) -> bool {
         debug_assert!(
@@ -128,14 +132,14 @@ impl<T> Outlet<T> {
         to self.overflow {
             /// Whether an item is currently parked in the overflow slot.
             #[call(is_some)]
-            pub(crate) fn has_pending(&self) -> bool;
+            pub(crate) const fn has_pending(&self) -> bool;
             /// Discard the parked overflow item, returning it to the caller.
             ///
             /// Useful when a producer needs to invalidate previously enqueued data
             /// (e.g. on a seek epoch change) without waiting for the consumer to
             /// drain the ring.
             #[call(take)]
-            pub(crate) fn take_pending(&mut self) -> Option<T>;
+            pub(crate) const fn take_pending(&mut self) -> Option<T>;
         }
     }
 }
@@ -316,7 +320,7 @@ mod tests {
         });
         let (mut out, mut inl) = connect::<i32>(2, Some(wake.clone()));
 
-        // Empty -> non-empty: wake (unpark) AND the data-available hint.
+        // Empty -> non-empty: wake request AND the data-available hint.
         assert_eq!(out.try_push(1), Ok(()));
         assert_eq!(wake.count.load(Ordering::SeqCst), 1);
         assert_eq!(wake.data_available.load(Ordering::SeqCst), 1);

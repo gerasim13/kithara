@@ -44,7 +44,7 @@ impl GainState {
         if diff.abs() < Consts::SMOOTH_CONVERGENCE_THRESHOLD {
             self.current_linear = self.target_linear;
         } else {
-            self.current_linear += coeff * diff;
+            self.current_linear = coeff.mul_add(diff, self.current_linear);
         }
     }
 }
@@ -90,7 +90,7 @@ impl GainBank {
 
     delegate::delegate! {
         to self.gains {
-            pub(crate) fn len(&self) -> usize;
+            pub(crate) const fn len(&self) -> usize;
             #[expr($.map(|state| state.target_db))]
             #[call(get)]
             pub(crate) fn target(&self, band: usize) -> Option<f32>;

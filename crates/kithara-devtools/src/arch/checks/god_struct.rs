@@ -193,7 +193,7 @@ fn stmt_has_control_flow(stmt: &Stmt) -> bool {
     }
 }
 
-fn expr_is_control_flow(e: &Expr) -> bool {
+const fn expr_is_control_flow(e: &Expr) -> bool {
     matches!(
         e,
         Expr::If(_) | Expr::Match(_) | Expr::While(_) | Expr::ForLoop(_) | Expr::Loop(_)

@@ -27,7 +27,7 @@ struct Handover<'a> {
 }
 
 impl<'a> Handover<'a> {
-    fn new(player: &'a PlayerImpl) -> Self {
+    const fn new(player: &'a PlayerImpl) -> Self {
         Self { player }
     }
 }

@@ -15,7 +15,7 @@ pub struct EventReceiver {
 }
 
 impl EventReceiver {
-    pub(crate) fn new(rx: broadcast::Receiver<Envelope>) -> Self {
+    pub(crate) const fn new(rx: broadcast::Receiver<Envelope>) -> Self {
         Self { rx }
     }
 

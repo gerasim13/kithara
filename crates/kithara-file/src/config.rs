@@ -156,7 +156,7 @@ mod tests {
 
         let config = FileConfig::for_src(test_src())
             .store(test_store())
-            .cancel(cancel.clone())
+            .cancel(cancel)
             .events(bus)
             .build();
 
@@ -193,6 +193,7 @@ mod tests {
 
         let cloned = config.clone();
 
+        assert!(config.bus.is_some());
         assert!(cloned.bus.is_some());
     }
 }

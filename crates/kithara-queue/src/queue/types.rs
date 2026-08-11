@@ -80,7 +80,7 @@ impl Transition {
     /// Resolve the transition to an actual crossfade duration in
     /// seconds using `default` for [`Transition::Crossfade`].
     #[must_use]
-    pub fn crossfade_seconds(self, default: f32) -> f32 {
+    pub const fn crossfade_seconds(self, default: f32) -> f32 {
         match self {
             Self::None => 0.0,
             Self::Crossfade => default,
@@ -107,7 +107,7 @@ pub(super) enum CrossfadeArm {
 }
 
 impl CrossfadeArm {
-    pub(super) fn armed(for_track: TrackId) -> Self {
+    pub(super) const fn armed(for_track: TrackId) -> Self {
         Self::Armed { for_track }
     }
 
@@ -137,7 +137,7 @@ pub(super) enum CachedPosition {
 impl CachedPosition {
     /// Build a [`CachedPosition::Known`], canonicalising a `NaN` input to
     /// [`CachedPosition::Unknown`] so the type never carries a `NaN`.
-    pub(super) fn known(seconds: f64) -> Self {
+    pub(super) const fn known(seconds: f64) -> Self {
         if seconds.is_nan() {
             Self::Unknown
         } else {
@@ -181,7 +181,7 @@ impl AtomicTrackId {
             .is_ok()
     }
 
-    fn decode(bits: u64) -> CrossfadeArm {
+    const fn decode(bits: u64) -> CrossfadeArm {
         if bits == Self::NONE_BITS {
             CrossfadeArm::Disarmed
         } else {
@@ -206,11 +206,11 @@ impl AtomicTrackId {
             .is_ok()
     }
 
-    pub(super) fn disarmed() -> Self {
+    pub(super) const fn disarmed() -> Self {
         Self(AtomicU64::new(Self::NONE_BITS))
     }
 
-    fn encode(arm: CrossfadeArm) -> u64 {
+    const fn encode(arm: CrossfadeArm) -> u64 {
         match arm {
             CrossfadeArm::Disarmed => Self::NONE_BITS,
             CrossfadeArm::Armed { for_track } => for_track.as_u64(),
@@ -261,7 +261,7 @@ impl AtomicCachedPosition {
         self.0.store(bits, Ordering::Release);
     }
 
-    pub(super) fn unknown() -> Self {
+    pub(super) const fn unknown() -> Self {
         Self(AtomicU64::new(f64::NAN.to_bits()))
     }
 }

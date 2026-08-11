@@ -45,7 +45,7 @@ struct LiveSnapshot {
 }
 
 impl LiveStats {
-    fn snapshot(&self) -> LiveSnapshot {
+    const fn snapshot(&self) -> LiveSnapshot {
         LiveSnapshot {
             read_progress_events: self.read_progress_events,
             request_started_events: self.request_started_events,

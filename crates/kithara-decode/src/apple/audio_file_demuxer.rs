@@ -65,7 +65,7 @@ impl AppleAudioFileDemuxer {
     /// combination — the factory consults this through [`Self::supports`]
     /// before dispatching, so any new (codec, container) only needs one
     /// match arm here.
-    fn file_type_id(codec: AudioCodec, container: ContainerFormat) -> Option<u32> {
+    const fn file_type_id(codec: AudioCodec, container: ContainerFormat) -> Option<u32> {
         Some(match (codec, container) {
             (AudioCodec::Pcm, ContainerFormat::Wav) => Consts::FILE_WAVE_TYPE,
             (AudioCodec::Mp3, ContainerFormat::MpegAudio) => Consts::FILE_MP3_TYPE,
@@ -219,7 +219,7 @@ impl AppleAudioFileDemuxer {
     /// `AudioFileServices` does not expose Xing/LAME or MP4 edit lists,
     /// so the factory probes the source separately and pipes the
     /// captured trim counts through here.
-    pub(crate) fn set_gapless(&mut self, gapless: Option<GaplessInfo>) {
+    pub(crate) const fn set_gapless(&mut self, gapless: Option<GaplessInfo>) {
         self.track_info.gapless = gapless;
     }
 

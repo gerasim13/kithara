@@ -72,7 +72,7 @@ pub(crate) enum CacheGroup {
 }
 
 impl Lane {
-    pub(crate) fn cache_group(self) -> CacheGroup {
+    pub(crate) const fn cache_group(self) -> CacheGroup {
         match self {
             Self::AppleLint
             | Self::AppleMsrv

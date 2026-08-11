@@ -112,7 +112,7 @@ fn is_pointwise_body(block: &Block) -> bool {
     }
 }
 
-fn is_deref_or_index(e: &Expr) -> bool {
+const fn is_deref_or_index(e: &Expr) -> bool {
     matches!(e, Expr::Unary(u) if matches!(u.op, syn::UnOp::Deref(_)))
         || matches!(e, Expr::Index(_))
 }

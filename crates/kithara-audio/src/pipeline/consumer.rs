@@ -29,7 +29,7 @@ pub(crate) enum ConsumerPhase {
 }
 
 impl ConsumerPhase {
-    pub(crate) fn is_terminal(self) -> bool {
+    pub(crate) const fn is_terminal(self) -> bool {
         matches!(self, Self::AtEof | Self::Failed { .. })
     }
 }

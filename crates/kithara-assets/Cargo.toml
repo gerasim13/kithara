@@ -18,7 +18,7 @@ probe = []
 mock = ["dep:unimock"]
 # HTTP backend forwarding. kithara-assets reaches the single kithara-net
 # package only through kithara-storage -> kithara-test-utils -> kithara-events
-# (downloader event types). These forwards give kithara-net a backend in
+# (network event types). These forwards give kithara-net a backend in
 # standalone builds; workspace-level default-features = false keeps the
 # default off when kithara-assets is a transitive dep (apple/android wreq-only).
 client-reqwest = ["kithara-storage/client-reqwest"]
@@ -38,6 +38,7 @@ bitflags = { workspace = true }
 bon = { workspace = true }
 dashmap = { workspace = true }
 delegate = { workspace = true }
+derive_more = { workspace = true }
 fieldwork = { workspace = true }
 hex = { workspace = true }
 lru = { workspace = true }

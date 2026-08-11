@@ -18,7 +18,7 @@ fn source(value: &str, discriminator: Option<&str>) -> AssetSource {
     }
 }
 
-fn store_with_layout<T: 'static>(layout: QueryIdentityLayout) -> kithara_assets::AssetStore {
+fn store_with_layout<T: 'static>(layout: QueryIdentityLayout) -> AssetStore {
     let layouts = AssetLayoutRegistry::default().with::<T>(Arc::new(layout));
     AssetStore::builder()
         .backend(StorageBackend::Memory)

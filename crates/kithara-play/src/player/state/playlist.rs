@@ -18,7 +18,7 @@ pub(crate) struct Playlist {
 }
 
 impl Playlist {
-    pub(crate) fn advance(&mut self) -> Option<usize> {
+    pub(crate) const fn advance(&mut self) -> Option<usize> {
         let next = self.current + 1;
         if next < self.items.len() {
             self.current = next;
@@ -45,7 +45,7 @@ impl Playlist {
             #[expr($.is_some_and(Option::is_some))]
             #[call(get)]
             pub(crate) fn has_resource(&self, index: usize) -> bool;
-            pub(crate) fn len(&self) -> usize;
+            pub(crate) const fn len(&self) -> usize;
             #[expr($.and_then(Option::take))]
             #[call(get_mut)]
             pub(crate) fn take(&mut self, index: usize) -> Option<QueuedResource>;

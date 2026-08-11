@@ -139,13 +139,13 @@ impl<S> Audio<S> {
 
     #[must_use]
     /// Reports whether non-blocking reads have been enabled.
-    pub fn is_preloaded(&self) -> bool {
+    pub const fn is_preloaded(&self) -> bool {
         self.ring.preloaded
     }
 
     #[must_use]
     /// Returns track metadata.
-    pub fn metadata(&self) -> &TrackMetadata {
+    pub const fn metadata(&self) -> &TrackMetadata {
         &self.session.metadata
     }
 
@@ -228,7 +228,10 @@ impl<S> Audio<S> {
             return;
         }
         self.events.reset_underrun();
-        self.ring.begin_seek_epoch(begun, &mut self.cursor);
+        let popped = self.ring.begin_seek_epoch(begun, &mut self.cursor);
+        if popped {
+            self.ring.wake_worker(self.lease.worker.as_ref());
+        }
     }
 
     #[must_use]
@@ -353,7 +356,7 @@ impl<S: kithara_platform::maybe_send::MaybeSend> PcmControl for Audio<S> {
             .host_sample_rate
             .swap(sample_rate.get(), Ordering::AcqRel);
         if previous != sample_rate.get() {
-            wake_worker(self.lease.worker.as_ref());
+            defer_worker_wake(self.lease.worker.as_ref());
         }
     }
 
@@ -367,11 +370,11 @@ impl<S: kithara_platform::maybe_send::MaybeSend> PcmControl for Audio<S> {
 
     fn set_service_class(&self, class: ServiceClass) {
         self.controls.service_class.store(class);
-        wake_worker(self.lease.worker.as_ref());
+        defer_worker_wake(self.lease.worker.as_ref());
     }
 }
 
-fn recv_ctx<'a>(session: &'a Session, lease: &'a WorkerLease) -> RecvCtx<'a> {
+const fn recv_ctx<'a>(session: &'a Session, lease: &'a WorkerLease) -> RecvCtx<'a> {
     RecvCtx {
         cancel: lease.cancel.as_ref(),
         worker: lease.worker.as_ref(),
@@ -379,9 +382,9 @@ fn recv_ctx<'a>(session: &'a Session, lease: &'a WorkerLease) -> RecvCtx<'a> {
     }
 }
 
-fn wake_worker(worker: Option<&AudioWorkerHandle>) {
+fn defer_worker_wake(worker: Option<&AudioWorkerHandle>) {
     if let Some(worker) = worker {
-        worker.wake();
+        worker.defer_wake();
     }
 }
 
@@ -416,7 +419,10 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::audio::{Fetch, ThreadWake, connect, ring::RingParts};
+    use crate::{
+        ConsumerWakeMode,
+        audio::{Fetch, ThreadWake, connect, ring::RingParts},
+    };
 
     struct AudioFixture {
         audio: Audio<()>,
@@ -433,12 +439,13 @@ mod tests {
                 pcm_rx: data_rx,
                 reader_wake: Arc::new(ThreadWake::default()),
                 block_on_underrun: false,
+                consumer_wake_mode: ConsumerWakeMode::RealtimeDeferred,
             });
             let seek_state = Arc::new(SeekState::new());
             let seek: Arc<dyn SeekControl> = seek_state.clone();
             let seek_obs: Arc<dyn SeekObserve> = seek_state;
             let playhead: Arc<dyn PlayheadWrite> = Arc::new(PlayheadState::new());
-            let pcm_pool = PcmPool::default().clone();
+            let pcm_pool = PcmPool::default();
             let bus = EventBus::default();
             let emit = AudioEvents::deferred(&bus);
             Self {

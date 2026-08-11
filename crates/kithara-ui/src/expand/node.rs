@@ -295,7 +295,7 @@ pub(crate) struct Budget {
 }
 
 impl Budget {
-    pub(crate) fn new(max: usize) -> Self {
+    pub(crate) const fn new(max: usize) -> Self {
         Self { max, nodes: 0 }
     }
 

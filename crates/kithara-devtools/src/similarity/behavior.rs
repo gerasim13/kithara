@@ -53,7 +53,7 @@ impl BehaviorGraph {
             .collect();
         BehaviorComparison {
             shared_labels,
-            score: 0.25 * label_score + 0.15 * edge_score + 0.60 * wl_score,
+            score: 0.60f64.mul_add(wl_score, 0.15f64.mul_add(edge_score, 0.25 * label_score)),
         }
     }
 
@@ -144,7 +144,7 @@ impl BehaviorGraph {
         Self::from_function_with_generics(signature, block, owner_generics)
     }
 
-    pub(super) fn is_substantive(&self) -> bool {
+    pub(super) const fn is_substantive(&self) -> bool {
         self.nodes.len() >= 6
     }
 
@@ -319,7 +319,7 @@ fn expression_label(expression: &Expr) -> Option<String> {
     Some(label)
 }
 
-fn expression_edge(expression: &Expr) -> &'static str {
+const fn expression_edge(expression: &Expr) -> &'static str {
     match expression {
         Expr::Assign(_) => "writes",
         Expr::Await(_) | Expr::Call(_) | Expr::MethodCall(_) => "invokes",

@@ -1,6 +1,9 @@
 use iced::{
     Element,
-    widget::{Row, Text, text},
+    widget::{
+        Row, Text,
+        text::{self, Shaping},
+    },
 };
 
 use crate::{
@@ -10,7 +13,7 @@ use crate::{
 
 /// Creates text with advanced shaping enabled.
 pub fn shaped_text<'a, T: text::IntoFragment<'a>>(content: T) -> Text<'a> {
-    Text::new(content).shaping(text::Shaping::Advanced)
+    Text::new(content).shaping(Shaping::Advanced)
 }
 
 pub(crate) fn styled_text(

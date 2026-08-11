@@ -47,12 +47,12 @@ impl ChunkCursor {
         }
     }
 
-    pub(super) fn begin_chunk(&mut self, chunk: &PcmChunk) {
+    pub(super) const fn begin_chunk(&mut self, chunk: &PcmChunk) {
         self.spec = chunk.spec();
         self.current_chunk_consumed_frames = 0;
     }
 
-    pub(super) fn clear(&mut self) {
+    pub(super) const fn clear(&mut self) {
         self.current_chunk_consumed_frames = 0;
     }
 
@@ -273,7 +273,10 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::audio::{Fetch, ThreadWake, connect, ring::RingParts};
+    use crate::{
+        ConsumerWakeMode,
+        audio::{Fetch, ThreadWake, connect, ring::RingParts},
+    };
 
     #[kithara::test]
     fn partial_resampled_chunk_position_caps_at_duration() {
@@ -293,6 +296,7 @@ mod tests {
             reader_wake: Arc::new(ThreadWake::default()),
             epoch: Arc::new(AtomicU64::new(0)),
             block_on_underrun: false,
+            consumer_wake_mode: ConsumerWakeMode::RealtimeDeferred,
         });
         ring.preloaded = true;
         data_tx
@@ -301,7 +305,7 @@ mod tests {
 
         let playhead = PlayheadState::new();
         playhead.set_duration(Some(duration));
-        let pool = PcmPool::default().clone();
+        let pool = PcmPool::default();
         let mut cursor = ChunkCursor::new(&pool, spec);
         let mut events = AudioEvents::test();
         let mut buf = vec![0.0; 200];
@@ -337,6 +341,7 @@ mod tests {
             reader_wake: Arc::new(ThreadWake::default()),
             epoch: Arc::new(AtomicU64::new(0)),
             block_on_underrun: false,
+            consumer_wake_mode: ConsumerWakeMode::RealtimeDeferred,
         });
         ring.preloaded = true;
         data_tx
@@ -345,7 +350,7 @@ mod tests {
                 0,
             ))
             .expect("chunk reaches test ring");
-        let pool = PcmPool::default().clone();
+        let pool = PcmPool::default();
         let mut cursor = ChunkCursor::new(&pool, spec);
         let mut events = AudioEvents::test();
         let mut output = [0.0];

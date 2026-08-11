@@ -388,7 +388,7 @@ mod tests {
             Cmd::RegisterPlayer {
                 bus: EventBus::default(),
                 eq_layout: Vec::new(),
-                pcm_pool: PcmPool::default().clone(),
+                pcm_pool: PcmPool::default(),
             },
         ) {
             Reply::PlayerRegistered(id) => id,

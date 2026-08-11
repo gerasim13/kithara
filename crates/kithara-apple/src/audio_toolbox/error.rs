@@ -16,7 +16,7 @@ pub enum AudioToolboxError {
 
 impl AudioToolboxError {
     #[must_use]
-    pub fn config(detail: &'static str) -> Self {
+    pub const fn config(detail: &'static str) -> Self {
         Self::Config { detail }
     }
 

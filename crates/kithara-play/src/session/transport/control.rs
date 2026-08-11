@@ -55,7 +55,7 @@ enum TransportPhase {
 
 impl SessionTransportState {
     /// The commit the caller has already asked for, pending or not.
-    pub(crate) fn accepted(&self) -> Option<SessionTransportCommit> {
+    pub(crate) const fn accepted(&self) -> Option<SessionTransportCommit> {
         match self.phase {
             TransportPhase::Unconfigured => None,
             TransportPhase::Stable { active } => Some(active),
@@ -65,7 +65,7 @@ impl SessionTransportState {
     }
 
     /// The commit the graph has actually rendered.
-    pub(crate) fn observed(&self) -> Option<SessionTransportCommit> {
+    pub(crate) const fn observed(&self) -> Option<SessionTransportCommit> {
         match self.phase {
             TransportPhase::Unconfigured => None,
             TransportPhase::Stable { active } => Some(active),

@@ -9,8 +9,10 @@ use kithara::{
     platform::{CancelToken, time::Duration},
     stream::{AudioCodec, Stream},
 };
+#[cfg(any(target_os = "android", target_os = "ios", target_os = "macos"))]
+use kithara_integration_tests::auto;
 use kithara_integration_tests::{
-    HlsFixtureBuilder, TestServerHelper, TestTempDir, auto,
+    HlsFixtureBuilder, TestServerHelper, TestTempDir,
     fixture_protocol::{EncryptionRequest, PackagedSignal},
 };
 use tracing::{info, warn};
@@ -54,6 +56,7 @@ fn e2e(mode: AbrMode) -> Vec<(AbrMode, f64)> {
 }
 
 /// Single seek, no variant change (legacy `*_1seek` coverage).
+#[cfg(any(target_os = "macos", target_os = "ios"))]
 fn one_seek() -> Vec<(AbrMode, f64)> {
     vec![(AbrMode::manual(0), 0.0), (AbrMode::manual(0), 0.5)]
 }
@@ -86,6 +89,7 @@ fn multi_switch() -> Vec<(AbrMode, f64)> {
 
 /// Eight scripted seeks that keep `mode` constant (Auto stays Auto): replaces
 /// the legacy auto `*_10seek` which seeked without switching variants.
+#[cfg(any(target_os = "android", target_os = "macos", target_os = "ios"))]
 fn seeks_no_switch(mode: AbrMode) -> Vec<(AbrMode, f64)> {
     (1..=8).map(|i| (mode, f64::from(i) * 0.11)).collect()
 }

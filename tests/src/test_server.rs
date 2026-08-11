@@ -65,7 +65,7 @@ pub struct CreatedHls {
 }
 
 impl CreatedHls {
-    pub(crate) fn new(base_url: Url, token: String) -> Self {
+    pub(crate) const fn new(base_url: Url, token: String) -> Self {
         Self { token, base_url }
     }
 
@@ -207,7 +207,7 @@ impl HlsFixtureBuilder {
     }
 
     #[must_use]
-    pub fn head_reported_segment_size(mut self, head_reported_segment_size: usize) -> Self {
+    pub const fn head_reported_segment_size(mut self, head_reported_segment_size: usize) -> Self {
         self.spec.head_reported_segment_size = Some(head_reported_segment_size);
         self
     }
@@ -228,7 +228,7 @@ impl HlsFixtureBuilder {
     /// HLS-fMP4 from CDNs) where `sidx` lets the demuxer resolve
     /// `seek_track_by_time` in O(1).
     #[must_use]
-    pub fn include_sidx(self, _include: bool) -> Self {
+    pub const fn include_sidx(self, _include: bool) -> Self {
         self
     }
 
@@ -345,7 +345,7 @@ impl HlsFixtureBuilder {
     /// Must be called AFTER a `packaged_audio_*` builder so `packaged_audio`
     /// is populated.
     #[must_use]
-    pub fn packaged_audio_bit_rate(mut self, bit_rate: Option<u64>) -> Self {
+    pub const fn packaged_audio_bit_rate(mut self, bit_rate: Option<u64>) -> Self {
         let packaged = self.spec.packaged_audio.as_mut().expect(
             "packaged_audio_bit_rate: call packaged_audio_* before packaged_audio_bit_rate",
         );
@@ -488,19 +488,19 @@ impl HlsFixtureBuilder {
     }
 
     #[must_use]
-    pub fn segment_duration_secs(mut self, segment_duration_secs: f64) -> Self {
+    pub const fn segment_duration_secs(mut self, segment_duration_secs: f64) -> Self {
         self.spec.segment_duration_secs = segment_duration_secs;
         self
     }
 
     #[must_use]
-    pub fn segment_size(mut self, segment_size: usize) -> Self {
+    pub const fn segment_size(mut self, segment_size: usize) -> Self {
         self.spec.segment_size = segment_size;
         self
     }
 
     #[must_use]
-    pub fn segments_per_variant(mut self, segments_per_variant: usize) -> Self {
+    pub const fn segments_per_variant(mut self, segments_per_variant: usize) -> Self {
         self.spec.segments_per_variant = segments_per_variant;
         self
     }
@@ -545,7 +545,7 @@ impl HlsFixtureBuilder {
     }
 
     #[must_use]
-    pub fn variant_count(mut self, variant_count: usize) -> Self {
+    pub const fn variant_count(mut self, variant_count: usize) -> Self {
         self.spec.variant_count = variant_count;
         self
     }

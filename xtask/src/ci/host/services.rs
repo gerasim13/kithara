@@ -28,7 +28,7 @@ impl<'a> ServiceInstaller<'a> {
     const HOST_CONFIG_NAME: &'static str = "mac-host.toml";
     const PINS_NAME: &'static str = "pins.toml";
 
-    pub(super) fn new(config: &'a CiConfig, process: &'a Process) -> Self {
+    pub(super) const fn new(config: &'a CiConfig, process: &'a Process) -> Self {
         Self { config, process }
     }
 

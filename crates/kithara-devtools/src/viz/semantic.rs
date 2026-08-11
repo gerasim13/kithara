@@ -30,7 +30,7 @@ pub(crate) enum SemanticState {
 }
 
 impl SemanticState {
-    pub(crate) fn as_str(self) -> &'static str {
+    pub(crate) const fn as_str(self) -> &'static str {
         match self {
             Self::Complete => "complete",
             Self::Truncated => "truncated",
@@ -54,7 +54,7 @@ pub(crate) struct SemanticSummary {
 }
 
 impl SemanticSummary {
-    pub(crate) fn is_incomplete(&self) -> bool {
+    pub(crate) const fn is_incomplete(&self) -> bool {
         matches!(self.state, SemanticState::TimedOut | SemanticState::Failed)
     }
 

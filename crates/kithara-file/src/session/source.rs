@@ -1,24 +1,20 @@
 use std::{num::NonZeroUsize, ops::Range};
 
 use bon::Builder;
-use kithara_assets::{AssetReader, AssetStore, ReadSide, ResourceKey};
+use kithara_assets::{AssetReader, ReadSide};
 use kithara_events::{EventBus, TotalBytesSource};
-use kithara_platform::{
-    CancelToken,
-    sync::{Arc, Mutex},
-    time::Duration,
-};
+use kithara_platform::{CancelToken, sync::Arc, time::Duration};
 use kithara_storage::{ResourceStatus, StorageError, WaitOutcome};
 use kithara_stream::{
     Activity, AudioCodec, MediaInfo, NotReadyCause, PendingReason, PlayheadRead, PlayheadWrite,
     ReadOutcome, SeekControl, SeekObserve, SegmentDescriptor, SourceError as StreamSourceError,
-    SourcePhase, StreamError, WorkerWake, dl::PeerHandle,
+    SourcePhase, StreamError, StreamResult, WorkerWake, dl::PeerHandle,
 };
 use tracing::trace;
 use url::Url;
 
 use super::{
-    inner::{FileAssetCtx, FileInner, FilePhase, FileSourceCtx},
+    inner::{FileAssetCtx, FileInner, FileSourceCtx},
     segments::FileSegmentIndex,
 };
 use crate::{coord::FileCoord, error::SourceError as FileSourceError};
@@ -29,33 +25,54 @@ pub(crate) struct FileLocalConfig {
     reader: AssetReader,
     coord: Arc<FileCoord>,
     bus: EventBus,
-    backend: AssetStore,
-    key: ResourceKey,
     cancel: CancelToken,
     cached_codec: Option<AudioCodec>,
 }
 
 /// Sync `Source` impl over a shared [`FileInner`].
 ///
-/// All async work — HTTP fetch, body streaming, finalization — is owned
+/// All async work - HTTP fetch, body streaming, finalization - is owned
 /// by the Downloader through [`FilePeer`](super::FilePeer); `FileSource`
 /// just exposes the cached bytes synchronously to the audio worker.
 #[derive(Clone)]
 pub struct FileSource {
-    /// Shared coordination — held next to `inner` so the hot read paths
+    /// Shared coordination - held next to `inner` so the hot read paths
     /// don't have to dereference the inner Arc.
     coord: Arc<FileCoord>,
     inner: Arc<FileInner>,
     /// Peer registration handle returned by `Downloader::register`.
     /// Held here (mirroring `HlsSource::set_peer_handle`) so the peer
-    /// stays registered for the source's lifetime — dropping the last
+    /// stays registered for the source's lifetime - dropping the last
     /// handle would trigger `PeerInner::drop` and cancel in-flight
     /// fetches. `None` on the `local()` fast path (no Downloader at all).
     peer_handle: Option<PeerHandle>,
 }
 
 impl FileSource {
+    fn cancelled_error() -> StreamError {
+        StreamError::Source(FileSourceError::Storage(StorageError::Cancelled).into())
+    }
+
+    fn ensure_not_cancelled(&self) -> StreamResult<()> {
+        if self.inner.source.cancel.is_cancelled() {
+            return Err(Self::cancelled_error());
+        }
+        Ok(())
+    }
+
+    fn ensure_storage_not_terminal(&self) -> StreamResult<()> {
+        match self.inner.asset.reader.status() {
+            ResourceStatus::Failed(reason) => Err(StreamError::Source(
+                FileSourceError::Storage(StorageError::Failed(reason)).into(),
+            )),
+            ResourceStatus::Cancelled => Err(Self::cancelled_error()),
+            ResourceStatus::Active | ResourceStatus::Committed { .. } => Ok(()),
+        }
+    }
+
     fn known_len(&self) -> Option<u64> {
+        self.inner.arm_reader_waker();
+        self.inner.observe_committed();
         self.coord
             .total_bytes()
             .or_else(|| self.inner.asset.reader.len())
@@ -64,35 +81,29 @@ impl FileSource {
     /// Create a source for a local/cached file (no downloads needed).
     ///
     /// `cancel` is a child of the file config master so a track drop
-    /// pulse interrupts any in-flight reads — see
+    /// pulse interrupts any in-flight reads - see
     /// `kithara-play/CONTEXT.md` "Cancel Hierarchy".
     pub(crate) fn local(config: FileLocalConfig) -> Self {
         let FileLocalConfig {
             reader,
             coord,
             bus,
-            backend,
-            key,
             cancel,
             cached_codec,
         } = config;
         let inner = Arc::new(FileInner::new(
             FileSourceCtx {
+                coord: Arc::clone(&coord),
                 cancel,
                 bus,
-                coord: Arc::clone(&coord),
             },
             FileAssetCtx {
-                backend,
                 reader,
-                key,
-                writer: Mutex::default(),
-                raw: None,
                 headers: None,
                 url: Url::parse("file:///local")
                     .expect("BUG: hard-coded literal `file:///local` is a valid URL"),
             },
-            FilePhase::Complete,
+            true,
             None,
         ));
         if let Some(codec) = cached_codec {
@@ -130,12 +141,15 @@ impl FileSource {
         self.peer_handle = Some(handle);
     }
 
-    fn update_read_demand(&self, read_pos: u64) {
-        if read_pos > self.coord.read_pos() {
-            self.coord.set_read_pos(read_pos);
-            if let Some(lease) = self.inner.demand_lease.as_ref() {
+    fn update_read_demand(&self, range: &Range<u64>) {
+        if range.start > self.coord.read_pos() {
+            self.coord.set_read_pos(range.start);
+            if let Some(lease) = self.inner.resource_lease.as_ref() {
                 lease.note_progress();
             }
+        }
+        if let Some(lease) = self.inner.resource_lease.as_ref() {
+            lease.request_until(range.end);
         }
     }
 
@@ -143,7 +157,7 @@ impl FileSource {
     /// inner is created up in `stream.rs::Stream<File>::open` and shared
     /// with [`FilePeer`](super::FilePeer); the Downloader owns the fetch
     /// loop, so this constructor does nothing async.
-    pub(crate) fn with_inner(inner: Arc<FileInner>, coord: Arc<FileCoord>) -> Self {
+    pub(crate) const fn with_inner(inner: Arc<FileInner>, coord: Arc<FileCoord>) -> Self {
         Self {
             coord,
             inner,
@@ -151,7 +165,7 @@ impl FileSource {
         }
     }
 
-    fn zero_read_outcome(&self, offset: u64) -> kithara_stream::StreamResult<ReadOutcome> {
+    fn zero_read_outcome(&self, offset: u64) -> StreamResult<ReadOutcome> {
         match self.inner.asset.reader.status() {
             ResourceStatus::Active => Ok(ReadOutcome::Pending(PendingReason::NotReady(
                 NotReadyCause::SourcePending,
@@ -194,12 +208,17 @@ impl kithara_stream::Source for FileSource {
     }
 
     fn phase_at(&self, range: Range<u64>) -> SourcePhase {
+        if self.inner.source.cancel.is_cancelled() {
+            return SourcePhase::Cancelled;
+        }
+        if matches!(self.inner.asset.reader.status(), ResourceStatus::Cancelled) {
+            return SourcePhase::Cancelled;
+        }
         let Some(readable) = self.readable_part(range) else {
             return match self.inner.asset.reader.status() {
                 ResourceStatus::Committed { .. } => SourcePhase::Eof,
-                ResourceStatus::Active | ResourceStatus::Failed(_) | ResourceStatus::Cancelled => {
-                    SourcePhase::Waiting
-                }
+                ResourceStatus::Cancelled => SourcePhase::Cancelled,
+                ResourceStatus::Active | ResourceStatus::Failed(_) => SourcePhase::Waiting,
             };
         };
         let contains = readable.is_empty() || self.inner.asset.reader.contains_range(readable);
@@ -214,11 +233,10 @@ impl kithara_stream::Source for FileSource {
     }
 
     #[cfg_attr(feature = "perf", hotpath::measure)]
-    fn read_at(
-        &mut self,
-        offset: u64,
-        buf: &mut [u8],
-    ) -> kithara_stream::StreamResult<ReadOutcome> {
+    fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> StreamResult<ReadOutcome> {
+        self.ensure_not_cancelled()?;
+        self.inner.arm_reader_waker();
+        self.inner.observe_committed();
         let n = self
             .inner
             .asset
@@ -237,6 +255,7 @@ impl kithara_stream::Source for FileSource {
 
     fn set_worker_wake(&self, wake: Arc<dyn WorkerWake>) {
         self.inner.set_worker_wake(wake);
+        self.inner.arm_reader_waker();
     }
 
     fn take_reader_event_sink(&mut self) -> Option<kithara_stream::BoxedEventSink> {
@@ -253,15 +272,19 @@ impl kithara_stream::Source for FileSource {
         &mut self,
         range: Range<u64>,
         timeout: Option<Duration>,
-    ) -> kithara_stream::StreamResult<WaitOutcome> {
+    ) -> StreamResult<WaitOutcome> {
+        self.ensure_not_cancelled()?;
+        self.inner.arm_reader_waker();
+        self.ensure_storage_not_terminal()?;
         match self.phase_at(range.clone()) {
+            SourcePhase::Cancelled => return Err(Self::cancelled_error()),
             SourcePhase::Seeking => return Ok(WaitOutcome::Interrupted),
             SourcePhase::Eof => return Ok(WaitOutcome::Eof),
             SourcePhase::Ready => return Ok(WaitOutcome::Ready),
             _ => {}
         }
 
-        self.update_read_demand(range.start);
+        self.update_read_demand(&range);
 
         if timeout.is_some() {
             return Err(StreamError::Source(StreamSourceError::WaitBudgetExceeded));
@@ -270,7 +293,7 @@ impl kithara_stream::Source for FileSource {
         self.inner
             .asset
             .reader
-            .wait_range(range)
+            .wait_range_with_cancel(range, &self.inner.source.cancel)
             .map_err(|e| StreamError::Source(FileSourceError::Storage(e).into()))
     }
 

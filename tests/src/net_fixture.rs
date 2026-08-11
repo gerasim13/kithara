@@ -14,7 +14,7 @@ pub struct DelayedNet<N> {
 }
 
 impl<N: Net> DelayedNet<N> {
-    pub fn new(inner: N, delay: Duration) -> Self {
+    pub const fn new(inner: N, delay: Duration) -> Self {
         Self { delay, inner }
     }
 }

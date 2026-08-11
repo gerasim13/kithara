@@ -783,7 +783,7 @@ async fn multi_track_shared_abr_with_cache() {
     let url2 = server2.url("/master.m3u8");
 
     let temp_dir = TestTempDir::new();
-    let store = kithara_integration_tests::disk_asset_store(temp_dir.path());
+    let shared_store = kithara_integration_tests::disk_asset_store(temp_dir.path());
     let wav_info = MediaInfo::builder()
         .maybe_codec(Some(AudioCodec::Pcm))
         .maybe_container(Some(ContainerFormat::Wav))
@@ -794,7 +794,7 @@ async fn multi_track_shared_abr_with_cache() {
     let collector1 = EventCollector::new(&bus1);
 
     let hls1 = HlsConfig::for_url(url1.clone())
-        .store(store.clone())
+        .store(shared_store.clone())
         .cancel(CancelToken::never())
         .events(bus1.clone())
         .initial_abr_mode(auto(0))
@@ -832,7 +832,7 @@ async fn multi_track_shared_abr_with_cache() {
     let collector2 = EventCollector::new(&bus2);
 
     let hls2 = HlsConfig::for_url(url2)
-        .store(store.clone())
+        .store(shared_store.clone())
         .cancel(CancelToken::never())
         .events(bus2.clone())
         .initial_abr_mode(AbrMode::manual(1))
@@ -869,7 +869,7 @@ async fn multi_track_shared_abr_with_cache() {
     let collector3 = EventCollector::new(&bus3);
 
     let hls3 = HlsConfig::for_url(url1)
-        .store(store)
+        .store(shared_store)
         .cancel(CancelToken::never())
         .events(bus3.clone())
         .initial_abr_mode(AbrMode::manual(0))

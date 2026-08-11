@@ -100,7 +100,7 @@ pub mod signal {
             match self.mode {
                 SweepMode::Linear => {
                     let slope = (self.end_hz - self.start_hz) / (2.0 * duration_secs);
-                    2.0 * PI * (self.start_hz * t + slope * t * t)
+                    2.0 * PI * (slope * t).mul_add(t, self.start_hz * t)
                 }
                 SweepMode::Log => {
                     let k = f64::ln(self.end_hz / self.start_hz) / duration_secs;
@@ -267,7 +267,7 @@ impl<S: signal::SignalFn> SignalPcm<S> {
 
     /// Number of audio channels.
     #[must_use]
-    pub fn channels(&self) -> u16 {
+    pub const fn channels(&self) -> u16 {
         self.channels
     }
 
@@ -333,7 +333,7 @@ impl<S: signal::SignalFn> SignalPcm<S> {
 
     /// Sample rate in Hz.
     #[must_use]
-    pub fn sample_rate(&self) -> u32 {
+    pub const fn sample_rate(&self) -> u32 {
         self.sample_rate
     }
 

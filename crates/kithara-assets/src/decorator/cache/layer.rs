@@ -231,7 +231,7 @@ where
         Some(final_len.or_else(|| reader.len()).unwrap_or(u64::MAX))
     }
 
-    fn entry_hits(entry: &CacheEntry<A::ReadyRes, A::IndexRes>) -> usize {
+    const fn entry_hits(entry: &CacheEntry<A::ReadyRes, A::IndexRes>) -> usize {
         match entry {
             CacheEntry::Resource { hits, .. } => *hits,
             CacheEntry::Index(_) => 0,

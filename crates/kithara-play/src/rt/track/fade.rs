@@ -79,7 +79,7 @@ impl TrackFade {
         }
     }
 
-    fn smoother_config(duration: f32) -> SmootherConfig {
+    const fn smoother_config(duration: f32) -> SmootherConfig {
         SmootherConfig {
             smooth_seconds: duration,
             settle_epsilon: DEFAULT_SETTLE_EPSILON,

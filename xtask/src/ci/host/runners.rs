@@ -21,7 +21,7 @@ pub(super) struct RunnerManager<'a> {
 }
 
 impl<'a> RunnerManager<'a> {
-    pub(super) fn new(config: &'a CiConfig, process: &'a Process) -> Self {
+    pub(super) const fn new(config: &'a CiConfig, process: &'a Process) -> Self {
         Self { config, process }
     }
 

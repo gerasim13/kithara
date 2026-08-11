@@ -127,7 +127,7 @@ fn asset_content_type(name: &str) -> Option<&'static str> {
     }
 }
 
-fn delivery_from_spec(spec: DeliverySpec) -> Delivery {
+const fn delivery_from_spec(spec: DeliverySpec) -> Delivery {
     match spec {
         DeliverySpec::Normal => Delivery::Normal,
         DeliverySpec::Range => Delivery::Range,

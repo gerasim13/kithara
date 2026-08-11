@@ -19,7 +19,7 @@ pub fn utc_timestamp() -> String {
 
 /// Convert days since Unix epoch (1970-01-01) to (year, month, day).
 /// Howard Hinnant's civil-from-days algorithm.
-fn epoch_days_to_date(days: u64) -> (u64, u64, u64) {
+const fn epoch_days_to_date(days: u64) -> (u64, u64, u64) {
     let z = days + 719468;
     let era = z / 146097;
     let doe = z - era * 146097;

@@ -94,7 +94,7 @@ pub struct ElasticCursor {
 }
 
 impl ElasticCursor {
-    fn with_integer(continuous: f64, integer: i64) -> Result<Self, ElasticError> {
+    const fn with_integer(continuous: f64, integer: i64) -> Result<Self, ElasticError> {
         if !continuous.is_finite() {
             return Err(ElasticError::InvalidSourceCoordinate(continuous));
         }
@@ -303,8 +303,10 @@ impl PhasePlan {
             .zip(self.output_frames.to_f64())
             .map(|(cumulative, total)| cumulative / total)
             .ok_or(ElasticError::SpanArithmeticOverflow)?;
-        let corrected =
-            self.cursor_origin + (source_end - self.source_origin) + self.correction * progress;
+        let corrected = self.correction.mul_add(
+            progress,
+            self.cursor_origin + (source_end - self.source_origin),
+        );
         if corrected.is_finite() {
             Ok(corrected)
         } else {
@@ -389,8 +391,8 @@ fn constrain_correction(
             return Err(ElasticError::SpanArithmeticOverflow);
         }
         let scale = total_frames / frames;
-        positive_headroom = positive_headroom.min((maximum_rate * frames - nominal) * scale);
-        negative_headroom = negative_headroom.min((nominal - minimum_rate * frames) * scale);
+        positive_headroom = positive_headroom.min(maximum_rate.mul_add(frames, -nominal) * scale);
+        negative_headroom = negative_headroom.min(minimum_rate.mul_add(-frames, nominal) * scale);
     }
     let desired = desired * sign;
     let correction = if desired > 0.0 {

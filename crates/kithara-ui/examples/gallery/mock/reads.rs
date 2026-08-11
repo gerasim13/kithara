@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use kithara_ui::{
+    builtin,
     module::TrackColumn,
     render::{ControlAction, ReadValue, Reads, StereoLevels, TreeRow, WaveBucket, WaveformView},
 };
@@ -316,7 +317,7 @@ impl MockReads {
             return;
         };
         if value.is_finite() {
-            let minimum = f64::from(kithara_ui::builtin::skin().track_list.min_column_width);
+            let minimum = f64::from(builtin::skin().track_list.min_column_width);
             self.tracklist_widths.insert(column, value.max(minimum));
         }
     }
@@ -370,8 +371,14 @@ impl MockReads {
         let right_noise: f32 = (self.vis_rng & 0xffff).as_();
         let scale = f32::from(u16::MAX);
         self.vis_levels = [
-            (0.42 + self.vis_phase.sin().abs() * 0.32 + left_noise / scale * 0.14).clamp(0.0, 1.0),
-            (0.38 + (self.vis_phase * 1.31).sin().abs() * 0.29 + right_noise / scale * 0.12)
+            (left_noise / scale)
+                .mul_add(0.14, self.vis_phase.sin().abs().mul_add(0.32, 0.42))
+                .clamp(0.0, 1.0),
+            (right_noise / scale)
+                .mul_add(
+                    0.12,
+                    (self.vis_phase * 1.31).sin().abs().mul_add(0.29, 0.38),
+                )
                 .clamp(0.0, 1.0),
         ];
     }

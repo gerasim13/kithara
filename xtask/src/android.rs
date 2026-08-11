@@ -311,7 +311,7 @@ enum Screen {
 }
 
 impl Screen {
-    fn args(self) -> &'static [&'static str] {
+    const fn args(self) -> &'static [&'static str] {
         match self {
             Self::Windowed => &[],
             Self::Headless => &["-no-window"],

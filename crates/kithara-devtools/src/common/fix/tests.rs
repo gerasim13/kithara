@@ -159,7 +159,7 @@ fn engine_does_not_reformat_inside_blocks() {
     let blocks = expand_blocks(src, 0..src.len(), &spans).unwrap();
     let original_a = src[blocks[0].bytes.clone()].to_string();
     let mut rw = SourceRewriter::new(src);
-    rw.replace(blocks[0].bytes.clone(), original_a.clone());
+    rw.replace(blocks[0].bytes.clone(), original_a);
     let out = rw.finish().unwrap();
     assert!(
         out.contains("a:   u32  ,  // weird spacing"),

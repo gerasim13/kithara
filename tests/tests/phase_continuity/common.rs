@@ -116,17 +116,17 @@ pub(crate) fn measure_phase_rad_window(mono: &[f64], delta_rad: f64) -> (f64, f6
         let angle = delta_rad * k as f64;
         let sin_k = angle.sin();
         let cos_k = angle.cos();
-        ss += sin_k * sin_k;
-        cc += cos_k * cos_k;
-        sc += sin_k * cos_k;
-        ps += s * sin_k;
-        pc += s * cos_k;
+        ss = sin_k.mul_add(sin_k, ss);
+        cc = cos_k.mul_add(cos_k, cc);
+        sc = sin_k.mul_add(cos_k, sc);
+        ps = s.mul_add(sin_k, ps);
+        pc = s.mul_add(cos_k, pc);
     }
-    let det = ss * cc - sc * sc;
-    let a = (cc * ps - sc * pc) / det;
-    let b = (-sc * ps + ss * pc) / det;
+    let det = sc.mul_add(-sc, ss * cc);
+    let a = sc.mul_add(-pc, cc * ps) / det;
+    let b = ss.mul_add(pc, -sc * ps) / det;
     let phase = b.atan2(a);
-    let amp = (a * a + b * b).sqrt();
+    let amp = a.hypot(b);
     (phase, amp)
 }
 
@@ -257,7 +257,7 @@ fn check_against_previous(
         }
         Some((prev_frame, prev_phase)) => {
             let frame_diff = consumed as i64 - prev_frame as i64;
-            let expected = wrap_pi(prev_phase + delta * frame_diff as f64);
+            let expected = wrap_pi(delta.mul_add(frame_diff as f64, prev_phase));
             let phase_diff = wrap_pi(measured - expected);
             let jump_samples = phase_diff / delta;
             if jump_samples.abs() > TOLERANCE_SAMPLES {
@@ -541,7 +541,7 @@ mod tests {
         s ^= s >> 7;
         s ^= s << 17;
         *state = s;
-        (s as f64 / u64::MAX as f64) * 2.0 - 1.0
+        (s as f64 / u64::MAX as f64).mul_add(2.0, -1.0)
     }
 
     /// Returns Gaussian noise with the requested standard deviation,

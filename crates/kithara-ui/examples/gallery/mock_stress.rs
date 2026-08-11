@@ -81,8 +81,8 @@ impl StressState {
         }
         for (index, levels) in self.levels.iter_mut().enumerate() {
             let offset = u16::try_from(index).map_or(0.0, f32::from);
-            let carrier = (self.phase * 2.3 + offset * 0.47).sin();
-            let noise = (self.phase * 31.7 + offset * 7.13).sin();
+            let carrier = self.phase.mul_add(2.3, offset * 0.47).sin();
+            let noise = self.phase.mul_add(31.7, offset * 7.13).sin();
             levels.l = (carrier.mul_add(0.32, noise * 0.08 + 0.54)).clamp(0.0, 1.0);
             levels.r = ((carrier + 0.63).sin().mul_add(0.3, noise * 0.09 + 0.5)).clamp(0.0, 1.0);
             levels.volume = self.fader.as_();
@@ -113,7 +113,7 @@ impl StressState {
         self.frame_ms_p99 = format!("{p99:.2}");
     }
 
-    pub(super) fn reset_clock(&mut self) {
+    pub(super) const fn reset_clock(&mut self) {
         self.last_tick = None;
     }
 
@@ -178,7 +178,7 @@ fn stress_waveform(index: usize) -> Vec<WaveBucket> {
         .collect()
 }
 
-fn waveform_value(waveform: &[WaveBucket]) -> ReadValue<'_> {
+const fn waveform_value(waveform: &[WaveBucket]) -> ReadValue<'_> {
     ReadValue::Waveform(WaveformView {
         buckets: waveform,
         beats: &[],

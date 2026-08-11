@@ -35,11 +35,11 @@ impl EofDrain {
         pull(effects, &mut self.exhausted, last)
     }
 
-    pub(crate) fn reset(&mut self) {
+    pub(crate) const fn reset(&mut self) {
         self.active = false;
     }
 
-    pub(crate) fn stats(&self) -> (u64, u64) {
+    pub(crate) const fn stats(&self) -> (u64, u64) {
         (self.chunks, self.samples)
     }
 

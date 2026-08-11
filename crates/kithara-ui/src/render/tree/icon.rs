@@ -3,7 +3,7 @@ use crate::{
     render::{Icon, TreeIcon},
 };
 
-pub(super) fn render_icon(icon: IconName) -> Icon {
+pub(super) const fn render_icon(icon: IconName) -> Icon {
     match icon {
         IconName::Activity => Icon::Activity,
         IconName::ChevronDown => Icon::ChevronDown,
@@ -36,7 +36,7 @@ pub(super) fn render_icon(icon: IconName) -> Icon {
     }
 }
 
-pub(super) fn render_tree_icon(icon: TreeIcon) -> Icon {
+pub(super) const fn render_tree_icon(icon: TreeIcon) -> Icon {
     match icon {
         TreeIcon::Collection => Icon::Collection,
         TreeIcon::Playlist => Icon::Playlist,

@@ -15,7 +15,7 @@ pub(super) struct SystemSetup<'a> {
 }
 
 impl<'a> SystemSetup<'a> {
-    pub(super) fn new(config: &'a CiConfig, process: &'a Process) -> Self {
+    pub(super) const fn new(config: &'a CiConfig, process: &'a Process) -> Self {
         Self { config, process }
     }
 

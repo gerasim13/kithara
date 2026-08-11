@@ -16,7 +16,7 @@ pub(super) struct TreeDigest {
 }
 
 impl TreeDigest {
-    pub(super) fn new() -> Self {
+    pub(super) const fn new() -> Self {
         Self {
             entries: 0,
             sums: [0; 4],

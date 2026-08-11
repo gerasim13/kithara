@@ -127,7 +127,7 @@ fn count_significant_stmts(body: &Block) -> usize {
         .count()
 }
 
-fn expr_has_control_flow(expr: &Expr) -> bool {
+const fn expr_has_control_flow(expr: &Expr) -> bool {
     matches!(
         expr,
         Expr::If(_)

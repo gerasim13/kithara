@@ -135,9 +135,11 @@ fn run_loop<N: Node, O: SchedulerObserver>(
     }
 }
 
-/// Reclaim deferred bookkeeping (spent-buffer free/recycle) for every slot
-/// before the checked produce core runs. Lives in the unchecked shell so a
-/// pooled-buffer `free` on a full pool stays off the forbid-blocking path.
+/// Reclaim deferred bookkeeping for every slot from the unchecked shell.
+///
+/// The scheduler calls this before the checked produce core and once more after
+/// the pass. The final recycle delivers work armed by the last tick before a
+/// terminal slot is removed or the worker parks.
 fn recycle_all<N: Node>(slots: &mut [Slot<N>], slots_order: &[usize]) {
     for &idx in slots_order {
         if let Some(slot) = slots.get_mut(idx) {
@@ -309,6 +311,12 @@ fn produce_pass<N: Node, O: SchedulerObserver>(
         };
     }
 
+    // Deliver work armed by the final tick in this pass from the unchecked
+    // shell. This is load-bearing for terminal ticks: run_loop removes those
+    // slots immediately after produce_pass returns, so there is no next-pass
+    // recycle in which to wake a blocked reader or flush terminal events.
+    recycle_all(slots, slots_order);
+
     report.outcome = match best {
         TickResult::Progress => PassOutcome::Produced,
         TickResult::Waiting => PassOutcome::Waiting,
@@ -476,10 +484,7 @@ pub(crate) fn parse_cputime(s: &str) -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        cell::Cell,
-        sync::atomic::{AtomicBool, Ordering},
-    };
+    use std::cell::Cell;
 
     use kithara_platform::thread;
     use kithara_test_utils::kithara;
@@ -553,6 +558,25 @@ mod tests {
     impl Node for FixedNode {
         fn tick(&mut self) -> TickResult {
             self.0
+        }
+    }
+
+    struct TerminalDeferredNode {
+        armed: bool,
+        flushed: mpsc::Sender<()>,
+    }
+
+    impl Node for TerminalDeferredNode {
+        fn recycle(&mut self) {
+            if self.armed {
+                self.armed = false;
+                self.flushed.send(()).expect("record deferred flush");
+            }
+        }
+
+        fn tick(&mut self) -> TickResult {
+            self.armed = true;
+            TickResult::Done
         }
     }
 
@@ -783,6 +807,35 @@ mod tests {
     }
 
     #[kithara::test]
+    fn terminal_tick_flushes_deferred_work_before_slot_removal() {
+        let (flushed_tx, flushed_rx) = mpsc::channel();
+        let mut slots = vec![Slot {
+            id: 1,
+            node: TerminalDeferredNode {
+                armed: false,
+                flushed: flushed_tx,
+            },
+            service_class: ServiceClass::Audible,
+            rt_policy: RtPolicy::Rt,
+            is_terminal: false,
+        }];
+        let order = [0];
+        let mut observer = TestObserver;
+
+        let report = produce_pass(&mut slots, &order, &mut observer);
+        assert_eq!(report.outcome, PassOutcome::Idle);
+        assert!(slots[0].is_terminal);
+
+        slots.retain(|slot| !slot.is_terminal);
+        assert!(slots.is_empty());
+        assert_eq!(flushed_rx.try_recv(), Ok(()));
+        assert!(
+            matches!(flushed_rx.try_recv(), Err(TryRecvError::Disconnected)),
+            "terminal output must be delivered exactly once before retain drops the node"
+        );
+    }
+
+    #[kithara::test]
     fn registration_caches_rt_policy() {
         let mut slots = Vec::new();
         let mut needs_reorder = false;
@@ -969,46 +1022,6 @@ mod tests {
             "the seek-drain burst (cap+2) is absorbed and recycled: high water {}",
             node.trash_high_water
         );
-    }
-
-    struct TerminalDeferredNode {
-        flushed: Arc<AtomicBool>,
-        pending: bool,
-    }
-
-    impl Node for TerminalDeferredNode {
-        fn recycle(&mut self) {
-            if std::mem::take(&mut self.pending) {
-                self.flushed.store(true, Ordering::Release);
-            }
-        }
-
-        fn tick(&mut self) -> TickResult {
-            self.pending = true;
-            TickResult::Done
-        }
-    }
-
-    #[kithara::test]
-    fn terminal_tick_flushes_deferred_work_before_slot_removal() {
-        let flushed = Arc::new(AtomicBool::new(false));
-        let mut slots = vec![Slot {
-            id: 1,
-            node: TerminalDeferredNode {
-                flushed: Arc::clone(&flushed),
-                pending: false,
-            },
-            service_class: ServiceClass::Audible,
-            rt_policy: RtPolicy::Rt,
-            is_terminal: false,
-        }];
-        let mut observer = TestObserver;
-
-        let report = produce_pass(&mut slots, &[0], &mut observer);
-
-        assert_eq!(report.outcome, PassOutcome::Idle);
-        assert!(slots[0].is_terminal);
-        assert!(flushed.load(Ordering::Acquire));
     }
 
     #[kithara::test]

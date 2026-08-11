@@ -300,7 +300,7 @@ fn candidate_markdown(index: usize, candidate: &Candidate) -> String {
     output
 }
 
-fn recommendation_name(recommendation: Recommendation) -> &'static str {
+const fn recommendation_name(recommendation: Recommendation) -> &'static str {
     match recommendation {
         Recommendation::ExtractComponent => "extract component",
         Recommendation::ExtractGenericFunction => "extract generic function",
@@ -311,7 +311,7 @@ fn recommendation_name(recommendation: Recommendation) -> &'static str {
     }
 }
 
-fn substitution_name(substitution: Substitution) -> &'static str {
+const fn substitution_name(substitution: Substitution) -> &'static str {
     match substitution {
         Substitution::Safe => "safe substitution",
         Substitution::Conditional => "conditional substitution",
@@ -319,7 +319,7 @@ fn substitution_name(substitution: Substitution) -> &'static str {
     }
 }
 
-fn direction_name(direction: Direction) -> &'static str {
+const fn direction_name(direction: Direction) -> &'static str {
     match direction {
         Direction::Bidirectional => "bidirectional",
         Direction::LeftToRight => "left-to-right",

@@ -44,7 +44,7 @@ where
     delegate::delegate! {
         to self.0 {
             #[call(is_none)]
-            pub(crate) fn is_empty(&self) -> bool;
+            pub(crate) const fn is_empty(&self) -> bool;
             #[expr($.and_then(|config| config.detector.take()))]
             #[call(as_mut)]
             pub(crate) fn take_detector(&mut self) -> Option<Detector>;
@@ -112,7 +112,7 @@ where
             .and_then(|(analyzer, detector)| analyzer.finish(detector.as_mut()))
     }
 
-    pub(crate) fn is_empty(&self) -> bool {
+    pub(crate) const fn is_empty(&self) -> bool {
         self.0.is_none()
     }
 

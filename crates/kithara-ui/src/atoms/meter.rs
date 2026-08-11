@@ -1,6 +1,6 @@
 use iced::{
     Element, Event, Length, Point, Rectangle, Renderer, Size, Theme,
-    mouse::{self, Cursor},
+    mouse::{Cursor, Interaction},
     widget::{
         Space,
         canvas::{self, Action, Canvas, Frame, Geometry},
@@ -33,7 +33,7 @@ impl<'a> Widget<'a> for StereoMeter<'_, '_, '_, '_> {
             drag: ScalarDrag::builder()
                 .path(self.path)
                 .mode(ScalarDragMode::Horizontal)
-                .hover(HoverState::new(mouse::Interaction::ResizingHorizontally))
+                .hover(HoverState::new(Interaction::ResizingHorizontally))
                 .build(),
             metrics: self.skin.vu_stereo,
             levels: *levels,
@@ -96,7 +96,7 @@ impl canvas::Program<UiEvent> for StereoMeterCanvas {
                 state: &ScalarDragState,
                 bounds: Rectangle,
                 cursor: Cursor,
-            ) -> mouse::Interaction;
+            ) -> Interaction;
         }
     }
 }

@@ -27,7 +27,7 @@ impl Consts {
     const SEEK_ITERATIONS: usize = 1000;
 
     /// Total fixture byte size for a given segment count.
-    fn total_bytes(segment_count: usize) -> usize {
+    const fn total_bytes(segment_count: usize) -> usize {
         segment_count * Self::D.segment_size
     }
 
@@ -51,7 +51,7 @@ enum SeekAudioFixture {
 }
 
 impl SeekAudioFixture {
-    fn media_info(self) -> MediaInfo {
+    const fn media_info(self) -> MediaInfo {
         match self {
             Self::WavFileLike => MediaInfo::builder()
                 .maybe_codec(Some(AudioCodec::Pcm))
@@ -83,14 +83,14 @@ impl SizeProbeCounter {
         }
     }
 
-    fn variant_count(&self) -> usize {
+    const fn variant_count(&self) -> usize {
         match self {
             Self::HlsServer(server) => server.config().variant_count,
             Self::Helper { variants, .. } => *variants,
         }
     }
 
-    fn segment_count(&self) -> usize {
+    const fn segment_count(&self) -> usize {
         match self {
             Self::HlsServer(server) => server.config().segments_per_variant,
             Self::Helper { segments, .. } => *segments,
@@ -151,12 +151,12 @@ struct AssetOpenStats {
 }
 
 impl AssetOpenStats {
-    fn record_acquire(&mut self) {
+    const fn record_acquire(&mut self) {
         self.total += 1;
         self.acquire += 1;
     }
 
-    fn record_open(&mut self) {
+    const fn record_open(&mut self) {
         self.total += 1;
         self.open += 1;
     }

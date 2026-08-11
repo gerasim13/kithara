@@ -27,7 +27,7 @@ impl Ewma {
 
     fn add_sample(&mut self, weight: f64, val: f64) {
         let adj_alpha = self.alpha.powf(weight.max(0.0));
-        self.last_estimate = val * (1.0 - adj_alpha) + adj_alpha * self.last_estimate;
+        self.last_estimate = val.mul_add(1.0 - adj_alpha, adj_alpha * self.last_estimate);
         self.total_weight += weight.max(0.0);
     }
 

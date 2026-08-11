@@ -163,7 +163,7 @@ fn scan_items(items: &[Item], file: &str, info: &mut CrateInfo) {
     }
 }
 
-fn is_pub_or_crate(v: &Visibility) -> bool {
+const fn is_pub_or_crate(v: &Visibility) -> bool {
     matches!(v, Visibility::Public(_) | Visibility::Restricted(_))
 }
 

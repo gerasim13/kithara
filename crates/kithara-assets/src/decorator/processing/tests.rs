@@ -1,3 +1,5 @@
+#[cfg(not(target_arch = "wasm32"))]
+use std::sync::Barrier;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use kithara_bufpool::BytePool;
@@ -236,6 +238,49 @@ fn wait_range_aborts_on_cancellation() {
     );
     // Keep the writer alive so cancellation, rather than drop, aborts the reader.
     drop(writer);
+}
+
+#[kithara::test(native, timeout(Duration::from_secs(5)))]
+fn external_cancel_interrupts_processing_wait_without_cancelling_resource() {
+    let call_count = Arc::new(AtomicUsize::new(0));
+    let process_fn = xor_chunk_processor(0x00, Arc::clone(&call_count));
+    let resource_cancel = CancelToken::never();
+    let resource: MemResource = Resource::open(
+        resource_cancel.clone(),
+        MemOptions::builder().pool(test_pool()).build(),
+    )
+    .expect("open processing test resource");
+    resource.write_at(0, &[1u8; 16]).unwrap();
+    let writer = ProcessedWriter::new(
+        BaseWriter::new(StorageResource::from(resource)),
+        Some(process_fn),
+        test_pool(),
+    );
+    let reader = writer.reader();
+    let wait_cancel = CancelToken::never();
+    let entering_wait = Arc::new(Barrier::new(2));
+
+    let handle = thread::spawn({
+        let entering_wait = Arc::clone(&entering_wait);
+        let wait_cancel = wait_cancel.clone();
+        move || {
+            entering_wait.wait();
+            reader.wait_range_with_cancel(0..16, &wait_cancel)
+        }
+    });
+
+    entering_wait.wait();
+    wait_cancel.cancel();
+
+    assert!(matches!(
+        handle.join().expect("processing waiter must not panic"),
+        Err(StorageError::Cancelled)
+    ));
+    assert!(!resource_cancel.is_cancelled());
+    writer
+        .commit(Some(16))
+        .expect("resource remains committable");
+    assert!(call_count.load(Ordering::SeqCst) > 0);
 }
 
 #[kithara::test]

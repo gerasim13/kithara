@@ -159,7 +159,7 @@ fn icon_label<'a>(
     .into()
 }
 
-fn is_primary(style: ButtonStyle) -> bool {
+const fn is_primary(style: ButtonStyle) -> bool {
     matches!(
         style,
         ButtonStyle::TransportPrimary | ButtonStyle::MicroPrimary

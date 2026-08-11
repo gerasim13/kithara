@@ -92,7 +92,7 @@ pub struct RangeSpec {
 
 impl RangeSpec {
     #[must_use]
-    pub fn new(start: u64, end: Option<u64>) -> Self {
+    pub const fn new(start: u64, end: Option<u64>) -> Self {
         Self { end, start }
     }
 }

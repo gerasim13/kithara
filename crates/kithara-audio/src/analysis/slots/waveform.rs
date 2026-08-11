@@ -14,7 +14,7 @@ pub(crate) fn build(config: &Config, spec: PcmSpec) -> Slot {
         .map(|buckets| WaveformPass::new(spec.sample_rate.get(), *buckets))
 }
 
-pub(crate) fn config_is_empty(config: &Config) -> bool {
+pub(crate) const fn config_is_empty(config: &Config) -> bool {
     config.is_none()
 }
 
@@ -28,6 +28,6 @@ pub(crate) fn push(slot: &mut Slot, chunk: &PcmChunk) {
     }
 }
 
-pub(crate) fn with_buckets(config: &mut Config, buckets: usize) {
+pub(crate) const fn with_buckets(config: &mut Config, buckets: usize) {
     *config = Some(buckets);
 }

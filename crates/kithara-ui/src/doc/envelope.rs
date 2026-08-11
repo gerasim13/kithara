@@ -21,7 +21,7 @@ pub enum DocKind {
 }
 
 impl DocKind {
-    pub(crate) fn name(self) -> &'static str {
+    pub(crate) const fn name(self) -> &'static str {
         match self {
             Self::Layout => "layout",
             Self::Module => "module",

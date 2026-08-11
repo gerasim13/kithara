@@ -68,7 +68,7 @@ impl Skin {
         }
     }
 
-    pub(crate) fn color(&self, role: ColorRole) -> Color {
+    pub(crate) const fn color(&self, role: ColorRole) -> Color {
         match role {
             ColorRole::Bg => self.palette.bg,
             ColorRole::BgDeep => self.palette.bg_deep,

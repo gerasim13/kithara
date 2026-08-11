@@ -257,7 +257,7 @@ pub(super) fn glyph(
         .view()
 }
 
-fn glyph_size(style: GlyphStyle, skin: &Skin) -> f32 {
+const fn glyph_size(style: GlyphStyle, skin: &Skin) -> f32 {
     match style {
         GlyphStyle::Default => skin.nav.header_icon_size,
         GlyphStyle::Vis => skin.vis.icon_size,
@@ -268,7 +268,7 @@ fn glyph_size(style: GlyphStyle, skin: &Skin) -> f32 {
     }
 }
 
-fn glyph_base(style: GlyphStyle, skin: &Skin) -> Color {
+const fn glyph_base(style: GlyphStyle, skin: &Skin) -> Color {
     match style {
         GlyphStyle::Vis => skin.color(skin.vis.icon_color),
         GlyphStyle::Default

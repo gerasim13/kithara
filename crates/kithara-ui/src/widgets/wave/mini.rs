@@ -7,10 +7,10 @@ use iced::{
     Color, Element, Event, Font, Length, Point, Rectangle, Renderer, Size, Theme,
     alignment::Vertical,
     keyboard::{Event as KeyboardEvent, Modifiers},
-    mouse::{self, Cursor},
+    mouse::{Button, Cursor, Event as MouseEvent, Interaction},
     widget::{
-        canvas::{self, Action, Canvas, Frame, Geometry, Path, Stroke},
-        text,
+        canvas::{self, Action, Canvas, Frame, Geometry, Path, Stroke, Text as IcedCanvasText},
+        text::{Alignment as TextAlignment, Shaping},
     },
 };
 use num_traits::cast::AsPrimitive;
@@ -102,9 +102,9 @@ impl<'a> Widget<'a> for MiniWave<'_, '_, '_, '_, '_, '_> {
                     ScalarDragMode::HorizontalClick
                 })
                 .hover(HoverState::new(if show_beats {
-                    mouse::Interaction::Grab
+                    Interaction::Grab
                 } else {
-                    mouse::Interaction::Pointer
+                    Interaction::Pointer
                 }))
                 .build(),
             overlay,
@@ -176,7 +176,7 @@ struct ReadoutData<'a> {
 #[derive(Clone, Copy)]
 struct CanvasText<'a> {
     content: &'a str,
-    align_x: text::Alignment,
+    align_x: TextAlignment,
     color: Color,
     font: Font,
     skin: FontSkin,
@@ -205,7 +205,7 @@ struct OverlayPalette {
 }
 
 impl OverlayPalette {
-    fn new(skin: &Skin) -> Self {
+    const fn new(skin: &Skin) -> Self {
         let overlay = skin.wave.overlay;
         Self {
             background: with_alpha(skin.color(overlay.background), overlay.background_alpha),
@@ -287,11 +287,11 @@ impl canvas::Program<UiEvent> for MiniWaveCanvas {
         state: &MiniWaveState,
         bounds: Rectangle,
         cursor: Cursor,
-    ) -> mouse::Interaction {
+    ) -> Interaction {
         if self.has_waveform() {
             self.drag.mouse_interaction(&state.drag, bounds, cursor)
         } else {
-            mouse::Interaction::default()
+            Interaction::default()
         }
     }
 
@@ -311,18 +311,18 @@ impl canvas::Program<UiEvent> for MiniWaveCanvas {
         }
         if self.hero() {
             match event {
-                Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left))
+                Event::Mouse(MouseEvent::ButtonPressed(Button::Left))
                     if state.modifiers.shift() && cursor.is_over(bounds) =>
                 {
                     let start = self.track_position(bounds, cursor)?;
                     state.loop_start = Some(start);
                     return Some(self.drag.publish_child("loop_start", start));
                 }
-                Event::Mouse(mouse::Event::CursorMoved { .. }) if state.loop_start.is_some() => {
+                Event::Mouse(MouseEvent::CursorMoved { .. }) if state.loop_start.is_some() => {
                     let end = self.track_position(bounds, cursor)?;
                     return Some(self.drag.publish_child("loop_end", end));
                 }
-                Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left))
+                Event::Mouse(MouseEvent::ButtonReleased(Button::Left))
                     if state.loop_start.take().is_some() =>
                 {
                     return Some(Action::capture());
@@ -331,7 +331,7 @@ impl canvas::Program<UiEvent> for MiniWaveCanvas {
             }
         }
         if self.hero()
-            && let Event::Mouse(mouse::Event::WheelScrolled { delta }) = event
+            && let Event::Mouse(MouseEvent::WheelScrolled { delta }) = event
             && cursor.is_over(bounds)
         {
             let zoom = zoom_for_wheel(self.zoom, scroll_y(*delta));
@@ -456,7 +456,7 @@ fn draw_overlay(
             Point::new(summary_x, metrics.padding_y),
             Size::new(
                 (telemetry_x - metrics.gap - summary_x).max(0.0),
-                (height - metrics.padding_y * 2.0).max(0.0),
+                metrics.padding_y.mul_add(-2.0, height).max(0.0),
             ),
         ),
         data,
@@ -492,7 +492,7 @@ fn draw_art(
             color: palette.art_label,
             skin: metrics.art_label,
             font: fonts::mono(metrics.art_label.weight),
-            align_x: text::Alignment::Center,
+            align_x: TextAlignment::Center,
             align_y: Vertical::Center,
         },
     );
@@ -509,7 +509,7 @@ fn draw_telemetry(
 ) -> f32 {
     let readout_height = metrics
         .readout_height
-        .min((height - metrics.padding_y * 2.0).max(0.0));
+        .min(metrics.padding_y.mul_add(-2.0, height).max(0.0));
     let readout_y = (height - readout_height) / 2.0;
     let mut right = width - metrics.padding_x;
     let badge = Rectangle::new(
@@ -535,7 +535,7 @@ fn draw_telemetry(
             color: palette.badge_text,
             skin: metrics.badge_text,
             font: fonts::display(metrics.badge_text.weight),
-            align_x: text::Alignment::Center,
+            align_x: TextAlignment::Center,
             align_y: Vertical::Center,
         },
     );
@@ -616,7 +616,7 @@ fn draw_summary(
                 color: palette.title,
                 skin: metrics.title,
                 font: fonts::display(metrics.title.weight),
-                align_x: text::Alignment::Left,
+                align_x: TextAlignment::Left,
                 align_y: Vertical::Top,
             },
         );
@@ -629,7 +629,7 @@ fn draw_summary(
                 color: palette.artist,
                 skin: metrics.artist,
                 font: fonts::sans(metrics.artist.weight),
-                align_x: text::Alignment::Left,
+                align_x: TextAlignment::Left,
                 align_y: Vertical::Top,
             },
         );
@@ -652,7 +652,10 @@ fn draw_readout(
             palette.readout_border,
         );
     }
-    let inner_height = (bounds.height - metrics.readout_padding_y * 2.0).max(0.0);
+    let inner_height = metrics
+        .readout_padding_y
+        .mul_add(-2.0, bounds.height)
+        .max(0.0);
     let total_height =
         metrics.readout_label.size + metrics.readout_gap + metrics.readout_value.size;
     let label_y = bounds.y + metrics.readout_padding_y + (inner_height - total_height) / 2.0;
@@ -662,11 +665,14 @@ fn draw_readout(
         CanvasText {
             content: data.label,
             position: Point::new(x, label_y),
-            max_width: (bounds.width - metrics.readout_padding_x * 2.0).max(0.0),
+            max_width: metrics
+                .readout_padding_x
+                .mul_add(-2.0, bounds.width)
+                .max(0.0),
             color: palette.readout_label,
             skin: metrics.readout_label,
             font: fonts::mono(metrics.readout_label.weight),
-            align_x: text::Alignment::Right,
+            align_x: TextAlignment::Right,
             align_y: Vertical::Top,
         },
     );
@@ -678,11 +684,14 @@ fn draw_readout(
                 x,
                 label_y + metrics.readout_label.size + metrics.readout_gap,
             ),
-            max_width: (bounds.width - metrics.readout_padding_x * 2.0).max(0.0),
+            max_width: metrics
+                .readout_padding_x
+                .mul_add(-2.0, bounds.width)
+                .max(0.0),
             color: data.value_color,
             skin: metrics.readout_value,
             font: fonts::mono(metrics.readout_value.weight),
-            align_x: text::Alignment::Right,
+            align_x: TextAlignment::Right,
             align_y: Vertical::Top,
         },
     );
@@ -708,7 +717,7 @@ fn draw_box(
 }
 
 fn draw_text(frame: &mut Frame, text: CanvasText<'_>) {
-    frame.fill_text(canvas::Text {
+    frame.fill_text(IcedCanvasText {
         content: text.content.to_owned(),
         position: text.position,
         max_width: text.max_width,
@@ -717,8 +726,8 @@ fn draw_text(frame: &mut Frame, text: CanvasText<'_>) {
         font: text.font,
         align_x: text.align_x,
         align_y: text.align_y,
-        shaping: text::Shaping::Advanced,
-        ..canvas::Text::default()
+        shaping: Shaping::Advanced,
+        ..IcedCanvasText::default()
     });
 }
 
@@ -741,14 +750,14 @@ fn draw_bars(
     palette: RenderPalette,
 ) {
     let step = bars::step(metrics);
-    let content_width = (bounds.width - metrics.content_inset * 2.0).max(0.0);
+    let content_width = metrics.content_inset.mul_add(-2.0, bounds.width).max(0.0);
     let max_columns: usize = ((content_width + metrics.bar_gap) / step).floor().as_();
     let columns = max_columns.min(buckets.len());
     if columns == 0 {
         return;
     }
 
-    let available_height = (bounds.height - metrics.content_inset * 2.0).max(0.0);
+    let available_height = metrics.content_inset.mul_add(-2.0, bounds.height).max(0.0);
     for column in 0..columns {
         let start = column * buckets.len() / columns;
         let end = ((column + 1) * buckets.len() / columns)
@@ -767,7 +776,7 @@ fn draw_bars(
             },
         );
         let column_x: f32 = column.as_();
-        let center_x = metrics.content_inset + column_x * step + metrics.bar_width / 2.0;
+        let center_x = column_x.mul_add(step, metrics.content_inset) + metrics.bar_width / 2.0;
         bars::draw_column(
             frame,
             bounds,
@@ -780,7 +789,7 @@ fn draw_bars(
     }
 }
 
-fn with_alpha(color: Color, alpha: f32) -> Color {
+const fn with_alpha(color: Color, alpha: f32) -> Color {
     Color { a: alpha, ..color }
 }
 

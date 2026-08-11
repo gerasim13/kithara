@@ -21,7 +21,7 @@ impl PlayerImpl {
         to self.core {
             /// Get a reference to the underlying engine.
             #[field(&engine)]
-            pub fn engine(&self) -> &EngineImpl;
+            pub const fn engine(&self) -> &EngineImpl;
         }
         to self.core.params {
             /// Whether the built-in linear auto-advance handler is enabled.
@@ -48,7 +48,7 @@ impl PlayerImpl {
             pub fn eq_band_count(&self) -> usize;
             /// Runtime handle captured by this player's engine.
             #[must_use]
-            pub fn runtime(&self) -> Option<&RuntimeHandle>;
+            pub const fn runtime(&self) -> Option<&RuntimeHandle>;
             /// Shared audio worker handle for this player's engine.
             #[must_use]
             pub fn worker(&self) -> &AudioWorkerHandle;

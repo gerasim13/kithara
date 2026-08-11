@@ -1,10 +1,11 @@
 use iced::{
     Color, Element, Event, Length, Point, Rectangle, Renderer, Size, Theme,
     alignment::{Horizontal, Vertical},
-    mouse::{self, Button, Cursor},
+    mouse::{Button, Cursor, Event as MouseEvent, Interaction},
     widget::{
         Space,
-        canvas::{self, Action, Canvas, Frame, Geometry, Path, Stroke},
+        canvas::{self, Action, Canvas, Frame, Geometry, Path, Stroke, Text},
+        text::Shaping,
     },
 };
 use num_traits::ToPrimitive;
@@ -106,35 +107,30 @@ impl canvas::Program<UiEvent> for SegmentedCanvas<'_> {
             } else {
                 self.colors.inactive_text
             };
-            frame.fill_text(canvas::Text {
+            frame.fill_text(Text {
                 content: (*item).to_owned(),
                 position: Point::new(
                     index_position(index, cell_width) + cell_width / 2.0,
                     bounds.height / 2.0,
                 ),
-                max_width: (cell_width - self.metrics.padding_x * 2.0).max(0.0),
+                max_width: self.metrics.padding_x.mul_add(-2.0, cell_width).max(0.0),
                 color,
                 size: self.metrics.text.size.into(),
                 font: fonts::mono(self.metrics.text.weight),
                 align_x: Horizontal::Center.into(),
                 align_y: Vertical::Center,
-                shaping: iced::widget::text::Shaping::Advanced,
-                ..canvas::Text::default()
+                shaping: Shaping::Advanced,
+                ..Text::default()
             });
         }
         vec![frame.into_geometry()]
     }
 
-    fn mouse_interaction(
-        &self,
-        _state: &(),
-        bounds: Rectangle,
-        cursor: Cursor,
-    ) -> mouse::Interaction {
+    fn mouse_interaction(&self, _state: &(), bounds: Rectangle, cursor: Cursor) -> Interaction {
         if self.items.is_empty() || !cursor.is_over(bounds) {
-            mouse::Interaction::default()
+            Interaction::default()
         } else {
-            mouse::Interaction::Pointer
+            Interaction::Pointer
         }
     }
 
@@ -145,7 +141,7 @@ impl canvas::Program<UiEvent> for SegmentedCanvas<'_> {
         bounds: Rectangle,
         cursor: Cursor,
     ) -> Option<Action<UiEvent>> {
-        let Event::Mouse(mouse::Event::ButtonPressed(Button::Left)) = event else {
+        let Event::Mouse(MouseEvent::ButtonPressed(Button::Left)) = event else {
             return None;
         };
         let position = cursor.position_in(bounds)?;

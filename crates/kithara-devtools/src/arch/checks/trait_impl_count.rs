@@ -93,7 +93,7 @@ fn count_trait_impls(items: &[Item], local_types: &mut BTreeMap<String, usize>) 
     }
 }
 
-fn is_trait_impl(im: &ItemImpl) -> bool {
+const fn is_trait_impl(im: &ItemImpl) -> bool {
     im.trait_.is_some()
 }
 

@@ -63,7 +63,7 @@ fn count_pub_items_top_level(file: &File) -> usize {
     file.items.iter().filter(|i| is_pub_item(i)).count()
 }
 
-fn is_pub_item(item: &Item) -> bool {
+const fn is_pub_item(item: &Item) -> bool {
     match item {
         Item::Struct(s) => is_pub_visibility(&s.vis),
         Item::Enum(e) => is_pub_visibility(&e.vis),

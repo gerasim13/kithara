@@ -28,7 +28,7 @@ pub(crate) enum CrossfadeCurve {
     EqualPower,
 }
 
-fn map_curve(curve: CrossfadeCurve) -> FadeCurve {
+const fn map_curve(curve: CrossfadeCurve) -> FadeCurve {
     match curve {
         CrossfadeCurve::EqualPower => FadeCurve::SquareRoot,
     }
@@ -49,7 +49,7 @@ impl Default for CrossfadeSettings {
 }
 
 impl CrossfadeSettings {
-    pub(crate) fn fade_curve(&self) -> FadeCurve {
+    pub(crate) const fn fade_curve(&self) -> FadeCurve {
         map_curve(self.curve)
     }
 }

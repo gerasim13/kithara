@@ -132,7 +132,7 @@ pub struct OpenedVariantReader {
 impl OpenedVariantReader {
     /// Bind byte capabilities to the exact facts used to prepare the session.
     #[must_use]
-    pub fn new(plan: VariantReaderPlan, reader: OpenedReader) -> Self {
+    pub const fn new(plan: VariantReaderPlan, reader: OpenedReader) -> Self {
         Self { reader, plan }
     }
 

@@ -1,6 +1,6 @@
 use iced::{
     Color, Element, Event, Length, Point, Rectangle, Renderer, Size, Theme,
-    mouse::{self, Cursor},
+    mouse::{Cursor, Interaction},
     widget::{
         Space,
         canvas::{self, Action, Canvas, Frame, Geometry, Path, Stroke},
@@ -79,7 +79,7 @@ impl<'a> Widget<'a> for BinaryControl<'_, '_, '_, '_> {
             active: *active,
             click: ClickActivate::builder()
                 .path(self.path)
-                .hover(HoverState::new(mouse::Interaction::Pointer))
+                .hover(HoverState::new(Interaction::Pointer))
                 .build(),
             palette: self.skin.palette,
             shape: self.shape,
@@ -154,12 +154,7 @@ impl canvas::Program<UiEvent> for BinaryControlCanvas {
         vec![frame.into_geometry()]
     }
 
-    fn mouse_interaction(
-        &self,
-        _state: &(),
-        bounds: Rectangle,
-        cursor: Cursor,
-    ) -> mouse::Interaction {
+    fn mouse_interaction(&self, _state: &(), bounds: Rectangle, cursor: Cursor) -> Interaction {
         self.click.mouse_interaction(bounds, cursor)
     }
 

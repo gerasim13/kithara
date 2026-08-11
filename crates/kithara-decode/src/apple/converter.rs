@@ -19,7 +19,7 @@ pub(crate) fn embedded_target_output_rate(requested: Option<NonZeroU32>) -> Opti
 /// Without the embedded converter the codec decodes at the source rate and
 /// conversion stays with the standalone resampler in `crate::resampled`.
 #[cfg(not(feature = "apple-codec-embedded-resampler"))]
-pub(crate) fn embedded_target_output_rate(_requested: Option<NonZeroU32>) -> Option<u32> {
+pub(crate) const fn embedded_target_output_rate(_requested: Option<NonZeroU32>) -> Option<u32> {
     None
 }
 

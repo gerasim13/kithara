@@ -1,6 +1,6 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use kithara_audio::{AudioWorkerHandle, EqBandConfig};
+use kithara_audio::{AudioWorkerHandle, ConsumerWakeMode, EqBandConfig};
 use kithara_bufpool::PcmPool;
 use kithara_events::EventBus;
 use kithara_platform::{
@@ -84,8 +84,12 @@ impl EngineImpl {
         self.config.cancel.clone()
     }
 
-    pub(crate) fn configured_sample_rate(&self) -> u32 {
+    pub(crate) const fn configured_sample_rate(&self) -> u32 {
         self.config.sample_rate
+    }
+
+    pub(crate) fn consumer_wake_mode(&self) -> ConsumerWakeMode {
+        self.session.consumer_wake_mode()
     }
 
     pub(crate) fn drain_slot_trash(&self, slot: SlotId) -> bool {
@@ -137,7 +141,7 @@ impl EngineImpl {
     /// land on the same runtime the audio engine observes, then pass the
     /// downloader through [`ResourceConfig::with_downloader`](super::config::ResourceConfig::with_downloader).
     #[must_use]
-    pub fn runtime(&self) -> Option<&RuntimeHandle> {
+    pub const fn runtime(&self) -> Option<&RuntimeHandle> {
         self.runtime.as_ref()
     }
 
@@ -301,7 +305,7 @@ impl EngineImpl {
         self.master_volume.load(Ordering::Relaxed)
     }
 
-    pub fn max_slots(&self) -> usize {
+    pub const fn max_slots(&self) -> usize {
         self.config.max_slots
     }
 

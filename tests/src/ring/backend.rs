@@ -213,12 +213,12 @@ impl AudioBackend for RingBackend {
 }
 
 impl RingBackend {
-    pub(crate) fn arm(&mut self) {
+    pub(crate) const fn arm(&mut self) {
         self.armed = true;
     }
 
     #[must_use]
-    pub(crate) fn committed_frames(&self) -> u64 {
+    pub(crate) const fn committed_frames(&self) -> u64 {
         self.committed_frames
     }
 

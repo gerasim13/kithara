@@ -11,7 +11,7 @@ pub(crate) enum ViewName {
 }
 
 impl ViewName {
-    pub(crate) fn as_str(self) -> &'static str {
+    pub(crate) const fn as_str(self) -> &'static str {
         match self {
             Self::Overview => "overview",
             Self::Hierarchy => "hierarchy",
@@ -52,7 +52,7 @@ pub(crate) enum Lod {
 }
 
 impl Lod {
-    pub(crate) fn resolve(self, automatic: u8) -> u8 {
+    pub(crate) const fn resolve(self, automatic: u8) -> u8 {
         match self {
             Self::Auto => automatic,
             Self::Level0 => 0,

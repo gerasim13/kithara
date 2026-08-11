@@ -4297,6 +4297,7 @@ dependencies = [
  "cbc",
  "dashmap",
  "delegate",
+ "derive_more",
  "fieldwork",
  "hex",
  "kithara-assets",

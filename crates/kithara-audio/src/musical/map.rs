@@ -62,7 +62,7 @@ impl TrackBeat {
     /// # Errors
     ///
     /// Returns [`CoordinateError`] when `value` is not finite.
-    pub fn new(value: f64) -> Result<Self, CoordinateError> {
+    pub const fn new(value: f64) -> Result<Self, CoordinateError> {
         if value.is_finite() {
             Ok(Self(value))
         } else {
@@ -187,7 +187,7 @@ impl TrackBeatMap {
         let start = f64::from(*self.source_markers.get(segment)?);
         let end = f64::from(*self.source_markers.get(segment + 1)?);
         let fraction = ordinal - segment.to_f64()?;
-        SourceFrame::new(start + (end - start) * fraction).ok()
+        SourceFrame::new((end - start).mul_add(fraction, start)).ok()
     }
 
     /// Maps a host-rate source frame within the analysed marker domain to a track beat.

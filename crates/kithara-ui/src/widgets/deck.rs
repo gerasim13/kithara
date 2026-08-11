@@ -206,7 +206,7 @@ fn format_bpm(bpm: f64) -> String {
     format!("{bpm:.2}")
 }
 
-fn waveform_value<'data>(value: Option<&ReadValue<'data>>) -> Option<WaveformView<'data>> {
+const fn waveform_value<'data>(value: Option<&ReadValue<'data>>) -> Option<WaveformView<'data>> {
     match value {
         Some(ReadValue::Waveform(analysis)) => Some(*analysis),
         _ => None,

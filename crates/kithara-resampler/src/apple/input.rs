@@ -54,7 +54,7 @@ impl AppleResamplerInputState {
         self.eos = false;
     }
 
-    fn remaining(&self) -> usize {
+    const fn remaining(&self) -> usize {
         self.frames.saturating_sub(self.offset)
     }
 

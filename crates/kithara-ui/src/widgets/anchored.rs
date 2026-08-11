@@ -2,13 +2,16 @@ use iced::{
     Border, Color, Element, Event, Length, Point, Rectangle, Renderer, Shadow, Size, Theme, Vector,
     advanced::{
         Clipboard, Layout, Renderer as _, Shell, Widget,
-        layout::{self, Limits},
-        mouse::{self, Cursor},
-        overlay,
+        layout::{self, Limits, Node as LayoutNode},
+        mouse::{Cursor, Event as MouseEvent, Interaction},
+        overlay::{self, Element as OverlayElement, Group as OverlayGroup},
         renderer::{self, Quad},
-        widget::{Operation, Tree, tree},
+        widget::{
+            Operation, Tree,
+            tree::{self, State as TreeState, Tag as TreeTag},
+        },
     },
-    keyboard::{self, key::Named},
+    keyboard::{self, Key, key::Named},
 };
 
 use crate::{
@@ -95,15 +98,15 @@ impl PopChrome {
         Rectangle {
             x: surface.x + self.border.width,
             y: surface.y + self.border.width,
-            width: (surface.width - self.border.width * 2.0).max(0.0),
+            width: self.border.width.mul_add(-2.0, surface.width).max(0.0),
             height: self.cap_height,
         }
     }
 
     fn expand(self, content: Size) -> Size {
         Size::new(
-            content.width + self.border.width * 2.0,
-            content.height + self.border.width * 2.0 + self.cap_height,
+            self.border.width.mul_add(2.0, content.width),
+            self.border.width.mul_add(2.0, content.height) + self.cap_height,
         )
     }
 
@@ -148,19 +151,19 @@ fn inside(start: f32, length: f32, extent: f32) -> f32 {
     start.clamp(0.0, (extent - length).max(0.0))
 }
 
-fn claims(content: mouse::Interaction, surface: Rectangle, cursor: Cursor) -> mouse::Interaction {
+fn claims(content: Interaction, surface: Rectangle, cursor: Cursor) -> Interaction {
     if cursor.is_over(surface) {
-        content.max(mouse::Interaction::Idle)
+        content.max(Interaction::Idle)
     } else {
-        mouse::Interaction::None
+        Interaction::None
     }
 }
 
 fn dismisses(event: &Event, popover: Rectangle, cursor: Cursor) -> bool {
     match event {
-        Event::Mouse(mouse::Event::ButtonPressed(_)) => !cursor.is_over(popover),
+        Event::Mouse(MouseEvent::ButtonPressed(_)) => !cursor.is_over(popover),
         Event::Keyboard(keyboard::Event::KeyPressed {
-            key: keyboard::Key::Named(Named::Escape),
+            key: Key::Named(Named::Escape),
             ..
         }) => true,
         _ => false,
@@ -175,12 +178,12 @@ struct State {
 }
 
 fn press(state: &mut State, event: &Event, cursor: Cursor) {
-    if matches!(event, Event::Mouse(mouse::Event::ButtonPressed(_))) {
+    if matches!(event, Event::Mouse(MouseEvent::ButtonPressed(_))) {
         state.press = cursor.position();
     }
 }
 
-fn latch(state: &mut State, open: bool) -> bool {
+const fn latch(state: &mut State, open: bool) -> bool {
     let changed = state.open != open;
     state.open = open;
     if changed && open {
@@ -235,7 +238,7 @@ where
         cursor: Cursor,
         viewport: &Rectangle,
         renderer: &Renderer,
-    ) -> mouse::Interaction {
+    ) -> Interaction {
         self.anchor.as_widget().mouse_interaction(
             &tree.children[0],
             layout,
@@ -284,7 +287,7 @@ where
             translation,
         );
         let popover = if self.open {
-            Some(overlay::Element::new(Box::new(Popover {
+            Some(OverlayElement::new(Box::new(Popover {
                 pointer,
                 content: &mut self.content,
                 tree: content_tree,
@@ -297,7 +300,7 @@ where
             None
         };
         (anchor.is_some() || popover.is_some()).then(|| {
-            overlay::Group::with_children(anchor.into_iter().chain(popover).collect()).overlay()
+            OverlayGroup::with_children(anchor.into_iter().chain(popover).collect()).overlay()
         })
     }
 
@@ -309,11 +312,11 @@ where
     }
 
     fn state(&self) -> tree::State {
-        tree::State::new(State::default())
+        TreeState::new(State::default())
     }
 
     fn tag(&self) -> tree::Tag {
-        tree::Tag::of::<State>()
+        TreeTag::of::<State>()
     }
 
     fn update(
@@ -415,7 +418,7 @@ where
             bounds,
             self.align,
         );
-        layout::Node::with_children(surface.size(), vec![content.translate(chrome.offset())])
+        LayoutNode::with_children(surface.size(), vec![content.translate(chrome.offset())])
             .move_to(surface.position())
     }
 
@@ -424,12 +427,12 @@ where
         layout: Layout<'_>,
         cursor: Cursor,
         renderer: &Renderer,
-    ) -> mouse::Interaction {
+    ) -> Interaction {
         let surface = layout.bounds();
         let content = layout
             .children()
             .next()
-            .map_or(mouse::Interaction::None, |content| {
+            .map_or(Interaction::None, |content| {
                 self.content
                     .as_widget()
                     .mouse_interaction(self.tree, content, cursor, &surface, renderer)
@@ -464,7 +467,10 @@ where
 #[cfg(test)]
 mod tests {
     use iced::{
-        keyboard::{Location, Modifiers, key::Physical},
+        keyboard::{
+            Location, Modifiers,
+            key::{Code, Physical},
+        },
         mouse::{Button, ScrollDelta},
         widget::Space,
     };
@@ -706,7 +712,7 @@ mod tests {
     #[kithara::test]
     fn every_open_latches_the_press_that_opened_it() {
         let mut state = State::default();
-        let pressed = Event::Mouse(mouse::Event::ButtonPressed(Button::Right));
+        let pressed = Event::Mouse(MouseEvent::ButtonPressed(Button::Right));
 
         assert_eq!(state.pointer, None);
         press(&mut state, &pressed, at(420.0, 214.0));
@@ -737,7 +743,7 @@ mod tests {
     #[kithara::test]
     fn a_cursor_moving_over_an_open_popover_never_moves_it() {
         let mut state = State::default();
-        let pressed = Event::Mouse(mouse::Event::ButtonPressed(Button::Right));
+        let pressed = Event::Mouse(MouseEvent::ButtonPressed(Button::Right));
 
         press(&mut state, &pressed, at(420.0, 214.0));
         latch(&mut state, true);
@@ -752,7 +758,7 @@ mod tests {
 
         press(
             &mut state,
-            &Event::Mouse(mouse::Event::CursorMoved {
+            &Event::Mouse(MouseEvent::CursorMoved {
                 position: Point::new(420.0, 214.0),
             }),
             at(420.0, 214.0),
@@ -762,7 +768,7 @@ mod tests {
         state.press = Some(Point::new(420.0, 214.0));
         press(
             &mut state,
-            &Event::Mouse(mouse::Event::ButtonPressed(Button::Left)),
+            &Event::Mouse(MouseEvent::ButtonPressed(Button::Left)),
             Cursor::Unavailable,
         );
         assert_eq!(state.press, None, "a press with no cursor clears the point");
@@ -774,9 +780,9 @@ mod tests {
 
     fn escape() -> Event {
         Event::Keyboard(keyboard::Event::KeyPressed {
-            key: keyboard::Key::Named(Named::Escape),
-            modified_key: keyboard::Key::Named(Named::Escape),
-            physical_key: Physical::Code(keyboard::key::Code::Escape),
+            key: Key::Named(Named::Escape),
+            modified_key: Key::Named(Named::Escape),
+            physical_key: Physical::Code(Code::Escape),
             location: Location::Standard,
             modifiers: Modifiers::empty(),
             text: None,
@@ -787,33 +793,25 @@ mod tests {
     #[kithara::test]
     fn the_surface_claims_the_cursor_over_itself_and_nowhere_else() {
         assert_eq!(
-            claims(mouse::Interaction::None, Consts::POPOVER, at(100.0, 100.0)),
-            mouse::Interaction::Idle,
+            claims(Interaction::None, Consts::POPOVER, at(100.0, 100.0)),
+            Interaction::Idle,
             "an inert row still covers what the surface hides"
         );
         assert_eq!(
-            claims(
-                mouse::Interaction::Pointer,
-                Consts::POPOVER,
-                at(100.0, 100.0)
-            ),
-            mouse::Interaction::Pointer,
+            claims(Interaction::Pointer, Consts::POPOVER, at(100.0, 100.0)),
+            Interaction::Pointer,
             "the content keeps the stronger claim"
         );
         assert_eq!(
-            claims(
-                mouse::Interaction::Pointer,
-                Consts::POPOVER,
-                at(600.0, 500.0)
-            ),
-            mouse::Interaction::None,
+            claims(Interaction::Pointer, Consts::POPOVER, at(600.0, 500.0)),
+            Interaction::None,
             "outside the surface the base tree keeps its cursor"
         );
     }
 
     #[kithara::test]
     fn a_press_outside_the_popover_dismisses_it() {
-        let press = Event::Mouse(mouse::Event::ButtonPressed(Button::Left));
+        let press = Event::Mouse(MouseEvent::ButtonPressed(Button::Left));
         assert!(dismisses(&press, Consts::POPOVER, at(600.0, 500.0)));
         assert!(
             !dismisses(&press, Consts::POPOVER, at(100.0, 100.0)),
@@ -827,7 +825,7 @@ mod tests {
 
     #[kithara::test]
     fn a_secondary_press_outside_the_popover_dismisses_it() {
-        let press = Event::Mouse(mouse::Event::ButtonPressed(Button::Right));
+        let press = Event::Mouse(MouseEvent::ButtonPressed(Button::Right));
         assert!(dismisses(&press, Consts::POPOVER, at(600.0, 500.0)));
     }
 
@@ -841,11 +839,11 @@ mod tests {
     fn a_release_a_move_and_a_scroll_never_dismiss() {
         let away = at(600.0, 500.0);
         for event in [
-            Event::Mouse(mouse::Event::ButtonReleased(Button::Left)),
-            Event::Mouse(mouse::Event::CursorMoved {
+            Event::Mouse(MouseEvent::ButtonReleased(Button::Left)),
+            Event::Mouse(MouseEvent::CursorMoved {
                 position: Point::new(600.0, 500.0),
             }),
-            Event::Mouse(mouse::Event::WheelScrolled {
+            Event::Mouse(MouseEvent::WheelScrolled {
                 delta: ScrollDelta::Lines { x: 0.0, y: -1.0 },
             }),
         ] {

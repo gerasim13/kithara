@@ -21,7 +21,7 @@ pub(super) struct GridFitCtx<'a> {
 }
 
 impl<'a> GridFitCtx<'a> {
-    pub(super) fn new(
+    pub(super) const fn new(
         db: &'a [f64],
         outliers: &'a [bool],
         sample_rate: f64,
@@ -43,7 +43,7 @@ struct Segment {
 }
 
 impl Segment {
-    fn new(start: usize, end: usize) -> Self {
+    const fn new(start: usize, end: usize) -> Self {
         Self { end, start }
     }
 }
@@ -172,7 +172,7 @@ pub(super) fn build_segments(
 
     let predict = |span: &(usize, usize, f64, f64), bar: usize| -> f64 {
         let x: f64 = bar.as_();
-        span.2 + span.3 * x
+        span.3.mul_add(x, span.2)
     };
     let mut segments = Vec::with_capacity(spans.len());
     for (k, span) in spans.iter().enumerate() {

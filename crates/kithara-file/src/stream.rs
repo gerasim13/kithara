@@ -1,20 +1,20 @@
 use std::path::PathBuf;
 
 use kithara_assets::{
-    AcquisitionResult, AssetReader, AssetResource, AssetSource, AssetStore, AssetWriter,
-    AssetsError, BytePool, ReadSide, ResourceKey, WriteSide,
+    AcquisitionResult, AssetReader, AssetResource, AssetSource, AssetStore, AssetsError, BytePool,
+    ReadSide, ResourceAttachment, ResourceKey,
 };
 use kithara_events::{EventBus, FileError, FileEvent};
 use kithara_net::{Headers, HttpClient, NetOptions};
 use kithara_platform::{
     CancelScope, CancelToken,
-    sync::{Arc, Mutex},
+    sync::Arc,
     time::{Duration, sleep},
     tokio,
 };
 use kithara_storage::StorageError;
 use kithara_stream::{
-    AudioCodec, PlayheadState, SeekState, SourceError as StreamSourceError, StreamType,
+    PlayheadState, SeekState, SourceError as StreamSourceError, StreamType,
     dl::{Downloader, DownloaderConfig},
 };
 use kithara_test_utils::kithara;
@@ -25,8 +25,7 @@ use crate::{
     coord::FileCoord,
     error::SourceError,
     session::{
-        FileAssetCtx, FileInner, FileLocalConfig, FilePeer, FilePhase, FileSource, FileSourceCtx,
-        FileStreamState,
+        FileAssetCtx, FileInner, FileLocalConfig, FilePeer, FileSource, FileSourceCtx, sniff_codec,
     },
 };
 
@@ -46,7 +45,7 @@ struct TmpClaimProgress {
 }
 
 impl TmpClaimProgress {
-    fn observe(&mut self, len: Option<u64>) -> bool {
+    const fn observe(&mut self, len: Option<u64>) -> bool {
         let stalled = matches!(
             (self.last_len, len),
             (Some(Some(previous)), Some(current)) if previous == current
@@ -57,13 +56,11 @@ impl TmpClaimProgress {
 }
 
 struct RemoteFileOpen {
-    backend: AssetStore,
     cancel: CancelToken,
     downloader: Downloader,
     bus: EventBus,
+    coord: Arc<FileCoord>,
     headers: Option<Headers>,
-    look_ahead_bytes: Option<u64>,
-    key: ResourceKey,
     url: Url,
 }
 
@@ -98,13 +95,7 @@ fn completed_coord(len: Option<u64>) -> Arc<FileCoord> {
     coord
 }
 
-fn cached_source(
-    reader: AssetReader,
-    bus: EventBus,
-    backend: AssetStore,
-    key: ResourceKey,
-    cancel: CancelToken,
-) -> FileSource {
+fn cached_source(reader: AssetReader, bus: EventBus, cancel: CancelToken) -> FileSource {
     let coord = completed_coord(reader.len());
     let cached_codec = sniff_codec(&reader);
     FileSource::local(
@@ -112,8 +103,6 @@ fn cached_source(
             .reader(reader)
             .coord(coord)
             .bus(bus)
-            .backend(backend)
-            .key(key)
             .cancel(cancel)
             .maybe_cached_codec(cached_codec)
             .build(),
@@ -177,47 +166,41 @@ fn default_downloader(cancel: &CancelToken, pool: Option<BytePool>) -> Downloade
 }
 
 impl RemoteFileOpen {
-    fn into_source(self, writer: AssetWriter) -> FileSource {
+    fn into_source(self, attachment: ResourceAttachment) -> FileSource {
         let Self {
-            backend,
             bus,
             cancel,
+            coord,
             downloader,
             headers,
-            key,
-            look_ahead_bytes,
             url,
         } = self;
 
-        let reader = writer.reader();
-        let raw = writer.raw_write_handle();
-        let coord = coord_with_total(reader.len());
-        let (demand_lease, producer) =
-            backend.attach_demand(&key, coord.read_pos_handle(), look_ahead_bytes);
+        let (reader, resource_lease, writer) = attachment.into();
+        if let Some(len) = reader.len() {
+            coord.set_download_pos(len);
+        }
 
         let inner = Arc::new(FileInner::new(
             FileSourceCtx {
-                cancel,
                 coord: Arc::clone(&coord),
+                cancel,
                 bus: bus.clone(),
             },
             FileAssetCtx {
-                url,
                 reader,
                 headers,
-                backend,
-                key,
-                writer: Mutex::new(Some(writer)),
-                raw: Some(raw),
+                url,
             },
-            FilePhase::Init,
-            Some(demand_lease),
+            false,
+            Some(resource_lease),
         ));
 
         let peer_handle = downloader
-            .register(Arc::new(FilePeer::new(Arc::clone(&inner), producer)))
+            .register(Arc::new(FilePeer::new(&inner, writer)))
             .with_bus(bus);
 
+        inner.arm_reader_waker();
         let mut source = FileSource::with_inner(inner, coord);
         source.set_peer_handle(peer_handle);
         source
@@ -264,7 +247,7 @@ impl File {
             source_error
         })?;
 
-        Ok(cached_source(reader, bus, store, key, cancel.child()))
+        Ok(cached_source(reader, bus, cancel.child()))
     }
 
     /// Create a source for a remote file.
@@ -294,34 +277,27 @@ impl File {
         let backend = store;
         let key = remote_key(&backend, &url, discriminator, extension.as_deref())?;
         let publish_bus = bus.clone();
-        let file_state = FileStreamState::create(&backend, key, bus, event_channel_capacity)
+        let bus = bus.unwrap_or_else(|| EventBus::new(event_channel_capacity));
+        let coord = coord_with_total(None);
+        let acq = backend
+            .attach_pending_resource(&key, coord.read_pos_handle(), look_ahead_bytes)
+            .map_err(SourceError::Assets)
             .inspect_err(|error| publish_open_error(publish_bus.as_ref(), error))?;
-        let FileStreamState {
-            backend,
-            acq,
-            bus,
-            key,
-        } = file_state;
 
-        // `Ready` means the file is already committed in the cache — no
-        // download. `Pending` hands the single non-Clone commit owner to the
-        // download path. The phase replaces the old runtime `status()` probe.
         match acq {
             AcquisitionResult::Ready(reader) => {
                 tracing::debug!("file already cached, skipping download");
-                Ok(cached_source(reader, bus, backend, key, cancel.child()))
+                Ok(cached_source(reader, bus, cancel.child()))
             }
-            AcquisitionResult::Pending(writer) => Ok(RemoteFileOpen {
-                backend,
+            AcquisitionResult::Pending(attachment) => Ok(RemoteFileOpen {
                 cancel,
                 downloader,
                 bus,
+                coord,
                 headers,
-                look_ahead_bytes,
-                key,
                 url,
             }
-            .into_source(writer)),
+            .into_source(attachment)),
             _ => Err(SourceError::UnexpectedAcquisitionState),
         }
     }
@@ -329,14 +305,14 @@ impl File {
     /// Wait for a sibling `AssetStore` to release the atomic-chunked
     /// tmp file, then open. The sibling owner signals release either by
     /// committing (canonical appears) or by dropping without commit
-    /// (tmp disappears) — both unblock our next
+    /// (tmp disappears) - both unblock our next
     /// `OpenOptions::create_new` call.
     ///
     /// Wrapped in `#[kithara::hang_watchdog]` so a stale tmp from a
     /// crashed-out previous process (which never releases the
     /// filesystem-level signal) surfaces as a deterministic panic
     /// rather than an indefinite hang. A *live* sibling keeps writing,
-    /// so the tmp grows; only a frozen tmp counts as no-progress —
+    /// so the tmp grows; only a frozen tmp counts as no-progress -
     /// otherwise a second consumer of the same URL (e.g. waveform
     /// analysis alongside the player) would panic on any download
     /// longer than the watchdog timeout.
@@ -379,12 +355,6 @@ impl File {
             }
         }
     }
-}
-
-fn sniff_codec(reader: &AssetReader) -> Option<AudioCodec> {
-    let mut buf = [0u8; 16];
-    let read = reader.read_at(0, &mut buf).ok()?;
-    AudioCodec::try_from(&buf[..read]).ok()
 }
 
 #[cfg(test)]

@@ -28,7 +28,7 @@ pub(crate) struct ReadinessGate {
 }
 
 impl ReadinessGate {
-    pub(crate) fn new(peer_wake: Option<Arc<DeferredWake>>) -> Self {
+    pub(crate) const fn new(peer_wake: Option<Arc<DeferredWake>>) -> Self {
         Self { peer_wake }
     }
 

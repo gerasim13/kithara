@@ -99,10 +99,10 @@ resource, a cache hit, or any `ctx = None` resource yields `Ready`. No runtime `
   waiting reader deadlocks. The reader is `Clone` and read-only; `reactivate(self)` consumes it
   into a writer carrying a **fresh** gate, so clones of a committed reader keep their own
   generation and their readiness is never revoked.
-- `ReadSide::read_inflight_at` is the producer's read-back of the active generation, bypassing the
+- `ReadSide::read_inflight_at` is the writer's read-back of the active generation, bypassing the
   gate and the published committed snapshot; mint it from `WriteSide::reader`. External consumers
   use `read_at`. `WriteSide::raw_write_handle()` yields a clone-able `RawWriteHandle` into the
-  writer's generation, so a `'static` download closure can stream bytes while the non-`Clone`
+  writer's generation, so a `'static` raw-write closure can stream bytes while the non-`Clone`
   writer keeps sole ownership of `commit`.
 
 Decorators carry the split through mutually recursive associated types
@@ -112,7 +112,9 @@ Decorators carry the split through mutually recursive associated types
 non-committed slot calls `reactivate`, re-keys the entry with the new generation's reader view
 (carrying its hit count), and returns the writer. The readiness gate is private to
 `decorator/processing/gate.rs`, the writer↔reader handoff primitive reached through `commit` /
-`wait_range`; lifecycle `status()` is an independent runtime axis.
+`wait_range`; lifecycle `status()` is an independent runtime axis. `ReadSide::wait_range_with_cancel`
+interrupts one caller through both the backing wait and the processing gate without cancelling the
+shared resource.
 
 ## Per-acquire processing (`ProcessCtx`)
 
@@ -185,7 +187,7 @@ All three write through `Atomic<R>` and register with a shared `FlushHub` (`Flus
   write/commit. The files it vouches for are a different matter: each availability flush first
   `sync_data`s the segment files committed since the last one, and only then writes the snapshot.
   That ordering is what lets a segment commit skip its own barrier (`Barrier::Deferred`) — the cost
-  is paid once per flush instead of once per segment, off the download path. Reversing it would let
+  is paid once per flush instead of once per segment, off the resource-write path. Reversing it would let
   the manifest vouch for bytes that never landed.
 - `AssetStore` checkpoints itself when its last handle drops. Every index holds the flush hub
   alive, so waiting for the hub's own teardown would find the sources already gone.
@@ -237,38 +239,58 @@ the hang detector fires.
 
 ## Consumer demand
 
-`DemandIndex` is a sibling of `AvailabilityIndex`: one instance per `build()`, shared across store
-clones via `Arc`. Availability answers "which bytes are present?"; demand answers "how far ahead
-should the single download producer fetch?". It is consumer-driven and protocol-agnostic (byte
-offsets, a refcount, a cancel token — no HTTP), so it needs no storage observer and no decorator
-threading. Each consumer attaches once:
-`let (lease, producer) = store.attach_demand(&key, read_pos, look_ahead);`
+`PendingResourceIndex` is a sibling of `AvailabilityIndex`: one instance per `build()`, shared across store
+clones via `Arc`. Availability answers "which bytes are present?"; the pending-resource index
+owns the one not-yet-ready resource per `ResourceKey`: aggregate consumer demand, writer election
+and epoch, the sole `AssetWriter`, and its shared reader. It remains protocol-agnostic (byte
+offsets and cancellation, no HTTP) and needs no decorator threading. A protocol consumer joins
+through `AssetStore::attach_pending_resource`; an active hit returns a reader and lease from the
+existing pending resource without another cache acquire.
 
-- `read_pos` is an `Arc<AtomicU64>` shared with the consumer, so the producer sees advances
-  directly. `look_ahead = None` means "whole file" and collapses that consumer's watermark to
-  `u64::MAX`.
-- Per-key state is a `DemandCell { entries, refcount, producer_spawned, producer_cancel, notify }`;
-  the aggregate watermark is the **max** of every live consumer's `read_pos + look_ahead` — one
-  mechanism, no "wants-full" flag.
-- `attach_demand` get-or-inserts the slot, pushes the entry, bumps the refcount, and wakes the
-  producer. It always returns a `DemandLease`, plus a `ProducerHandle` to the CAS-winning attacher
-  only. `producer_cancel` is a child of the store cancel.
-- Dropping a lease removes the entry and decrements the refcount; on zero it cancels
-  `producer_cancel` and removes the slot. `note_progress()` wakes the producer on read advance.
-  Attach and detach both serialize through the per-key shard lock, closing the
-  attach-during-last-drop race.
-- The producer driver lives in the protocol crate (kithara-file, kithara-hls), which speaks HTTP;
-  the index hands it only `max_watermark`, `notify`, `producer_cancel`. It belongs to the election,
-  not to the spawning consumer. The election is sticky while the elected `ProducerHandle` lives:
-  dropping it clears `producer_spawned` and wakes the slot, so a survivor's next
-  `try_take_producer()` takes over — one producer at any instant, role migratable.
+- `read_pos` is an `Arc<AtomicU64>` shared with the consumer, so the writer sees advances
+  directly. Each entry also keeps a monotonic immediate requested-end floor. A bounded watermark
+  is the maximum of that floor and `read_pos + look_ahead`, so a blocking read larger than the
+  prefetch window cannot wait on bytes the writer was forbidden to fetch. `look_ahead = None`
+  means "whole file" and collapses the watermark to `u64::MAX`.
+- The cell mutex is the only source of truth for consumers, lifecycle, writer epoch, writer, and
+  reader. The aggregate watermark is the maximum live consumer watermark.
+- Dropping the elected handle invalidates its epoch immediately. A surviving lease can take the
+  writer role without replacing the writer; raw writes and terminal operations validate the
+  exact epoch while mutating the canonical session.
+- The session cancel is a child of the store cancel and is the terminal election gate. Once it
+  fires, current fetch descendants stop and no attachment or surviving lease can elect another
+  writer epoch.
+- The lock order is demand-map shard -> cell mutex -> cache/storage. Cache, availability, pins,
+  writer cleanup, and lease cleanup never call back into `PendingResourceIndex`. No source-local, event, or
+  user callback runs under these locks; the canonical write observer is limited to
+  `AvailabilityIndex`. Audio readers hold only `AssetReader` clones and never take a demand lock.
+- Reader and peer-poll `Waker` registrations are one-shot. A transition takes registered wakers
+  under the cell mutex, releases both the cell and demand-map guard, then invokes them. The peer
+  uses arm-check-recheck around demand and election: register before that check, leave the
+  registration armed when it returns `Pending`, and clear only its exact waker after the recheck
+  confirms readiness. An already in-flight protocol operation instead relies on its completion
+  wake. Clearing a stale waker cannot remove a newer registration. A synchronous reader uses a
+  non-owning `Weak` adapter to its worker wake and rearms after wake. Synchronous cancel callbacks
+  follow the same outside-lock boundary.
+- Last-consumer abandonment and terminal failure keep the exact map entry locked through outer
+  removal, so a successor cannot publish until old bytes and live state are gone. Successful commit
+  instead unpublishes the cell without removing backing bytes, then cancels requests from the old
+  writer epochs; old leases become stale. If outer removal fails, the exact cell remains as a
+  typed tombstone retaining the `ResourceKey` and shared source error; later attachments receive a
+  fresh `PendingResourceCleanupError` carrier through the existing assets/storage error surface.
+- A Pending writer transfers its legacy `LeaseWriter` abandonment hook to the pending-resource cell before
+  publication. From that point the cell's typed outer removal is the sole cleanup owner for
+  abandonment, failure, and commit error; no hidden first remove can precede a tombstone.
+- The writer driver lives in the protocol crate (currently kithara-file), which speaks HTTP;
+  the index hands it only `max_watermark`, the session cancel, and lease-scoped reader/peer wake
+  registration. It belongs to the election, not to the spawning consumer. The election is sticky
+  while the elected `WriterHandle` lives: dropping it clears the matching writer epoch and
+  wakes surviving peer registrations, so a survivor's next `try_take_writer()` takes over - one
+  writer at any instant, role migratable.
 - The key is the `ResourceKey`, matching the granularity at which the store shares a resource.
-  HTTP-response metadata (content length, codec) is **not** in the index: only the CAS winner sees
-  response headers, so other consumers rely on availability, the committed `final_len`, and
-  byte-probe codec detection.
-- Known limitation: the producer observes `producer_cancel` only at its throttle await, not
-  mid-chunk, so a detach immediately followed by an attach can briefly overlap two in-flight GETs.
-  Overlapping writes are idempotent — wasteful, not incorrect.
+  HTTP-response metadata (content length, codec) is **not** in the index: only the elected writer
+  epoch sees response headers, so other consumers rely on availability, the committed `final_len`,
+  and byte-probe codec detection.
 
 ## Resource transactions
 

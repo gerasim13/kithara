@@ -164,12 +164,12 @@ pub enum GaplessEncoding {
 
 impl GaplessEncoding {
     #[must_use]
-    pub fn writes_edts(self) -> bool {
+    pub const fn writes_edts(self) -> bool {
         matches!(self, Self::Edts | Self::Both)
     }
 
     #[must_use]
-    pub fn writes_itunsmpb(self) -> bool {
+    pub const fn writes_itunsmpb(self) -> bool {
         matches!(self, Self::ItunSmpb | Self::Both)
     }
 }
@@ -273,7 +273,7 @@ impl DelayRule {
     /// Evaluate this rule against a given variant and segment index.
     /// Returns `Some(delay_ms)` if the rule matches, `None` otherwise.
     #[must_use]
-    pub fn matches(&self, variant: usize, segment: usize) -> Option<u64> {
+    pub const fn matches(&self, variant: usize, segment: usize) -> Option<u64> {
         if let Some(v) = self.variant
             && v != variant
         {

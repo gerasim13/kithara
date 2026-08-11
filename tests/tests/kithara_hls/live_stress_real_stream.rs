@@ -50,7 +50,7 @@ impl Consts {
     const WASM_SMALL_CACHE_CHUNKS_PER_SEEK: usize = 4;
     const SMALL_CACHE_MAX_SEEK_SECS: f64 = 60.0;
 
-    fn browser_timeout(native_secs: u64, wasm_secs: u64) -> Duration {
+    const fn browser_timeout(native_secs: u64, wasm_secs: u64) -> Duration {
         if cfg!(target_arch = "wasm32") {
             Duration::from_secs(wasm_secs)
         } else {
@@ -58,7 +58,7 @@ impl Consts {
         }
     }
 
-    fn browser_usize(native: usize, wasm: usize) -> usize {
+    const fn browser_usize(native: usize, wasm: usize) -> usize {
         if cfg!(target_arch = "wasm32") {
             wasm
         } else {
@@ -66,7 +66,7 @@ impl Consts {
         }
     }
 
-    fn capped_seek_secs(max_seek_secs: f64, wasm_cap: f64) -> f64 {
+    const fn capped_seek_secs(max_seek_secs: f64, wasm_cap: f64) -> f64 {
         if cfg!(target_arch = "wasm32") {
             max_seek_secs.min(wasm_cap)
         } else {

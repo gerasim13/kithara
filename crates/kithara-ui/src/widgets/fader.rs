@@ -1,7 +1,7 @@
 use iced::{
     Alignment, Background, Color, Element, Event, Length, Point, Rectangle, Renderer, Size, Theme,
     alignment::Vertical,
-    mouse::{self, Cursor},
+    mouse::{Cursor, Interaction},
     widget::{
         Canvas, Row, Space, Stack,
         canvas::{self, Action, Frame, Geometry, Path, Stroke},
@@ -250,7 +250,7 @@ impl canvas::Program<UiEvent> for SegmentedVolumeCanvas {
                 state: &ScalarDragState,
                 bounds: Rectangle,
                 cursor: Cursor,
-            ) -> mouse::Interaction;
+            ) -> Interaction;
         }
     }
 }
@@ -268,7 +268,7 @@ impl<'a> Widget<'a> for VolumeStrip<'_, '_> {
             drag: ScalarDrag::builder()
                 .path(self.path)
                 .mode(ScalarDragMode::Horizontal)
-                .hover(HoverState::new(mouse::Interaction::ResizingHorizontally))
+                .hover(HoverState::new(Interaction::ResizingHorizontally))
                 .wheel(WheelStep {
                     value: self.value.clamp(0.0, 1.0).as_(),
                     step: self.skin.fader.step.as_(),
@@ -294,7 +294,7 @@ fn draw_segments(
 ) {
     let count: f32 = metrics.segment_count.as_();
     let gap_width = metrics.segment_gap * (count - 1.0);
-    let content_width = (bounds.width - metrics.strip_padding * 2.0).max(0.0);
+    let content_width = metrics.strip_padding.mul_add(-2.0, bounds.width).max(0.0);
     let segment_width = ((content_width - gap_width) / count).max(0.0);
     if segment_width <= 0.0 {
         return;
@@ -302,12 +302,12 @@ fn draw_segments(
 
     let segment_height = metrics
         .segment_height
-        .min((bounds.height - metrics.strip_padding * 2.0).max(0.0));
+        .min(metrics.strip_padding.mul_add(-2.0, bounds.height).max(0.0));
     let y = (bounds.height - segment_height) / 2.0;
     let lit = (level.clamp(0.0, 1.0) * count).round();
     for index in 0..metrics.segment_count {
         let index: f32 = index.as_();
-        let x = metrics.strip_padding + index * (segment_width + metrics.segment_gap);
+        let x = index.mul_add(segment_width + metrics.segment_gap, metrics.strip_padding);
         frame.fill_rectangle(
             Point::new(x, y),
             Size::new(segment_width, segment_height),

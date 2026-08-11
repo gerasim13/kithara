@@ -36,7 +36,7 @@ impl GaplessTailCompensation {
     }
 
     #[must_use]
-    pub fn deficit_frames(self, actual_pre_trim_frames: u64) -> u64 {
+    pub const fn deficit_frames(self, actual_pre_trim_frames: u64) -> u64 {
         self.ideal_pre_trim_frames
             .saturating_sub(actual_pre_trim_frames)
     }

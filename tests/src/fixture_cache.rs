@@ -62,7 +62,7 @@ impl FixtureCache {
         Self::from_dir(Some(dir))
     }
 
-    pub(crate) fn from_dir(dir: Option<PathBuf>) -> Self {
+    pub(crate) const fn from_dir(dir: Option<PathBuf>) -> Self {
         Self { dir }
     }
 

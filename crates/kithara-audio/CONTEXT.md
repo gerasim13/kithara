@@ -22,29 +22,39 @@ Transport (`runtime/ports.rs`): SPSC `ringbuf::HeapRb` plus a one-slot overflow
   infallible. Each tick starts with `Outlet::flush()`; if still full the node
   returns `TickResult::Backpressured` *without* ticking the FSM — every internal
   transition, seeks included, pauses until the consumer drains.
-- **Wake.** A ring push arms the consumer wake inside the checked produce core;
-  the scheduler shell delivers the `ThreadWake` after the node visit and before
-  reporting or removing the slot, keeping the syscall off the realtime path.
-  Empty-to-non-empty also fires `on_data_available`.
-  The blocking consumer snapshots `ThreadWake` before re-checking `try_pop`; a
-  signal between the snapshot and park advances the gate sequence, so
-  `wait_timeout` returns immediately while retaining its timed
-  backstop.
+- **Wake.** A producer→reader ring push arms a coalesced atomic wake;
+  empty→non-empty also enqueues `on_data_available`. The produce core never
+  calls `ThreadWake::wake` or enters the kernel. After the pass, the scheduler
+  shell swaps the pending level and signals the blocking reader, then flushes
+  deferred events. The final shell recycle runs before terminal slots are
+  removed, so EOF and failure output cannot strand a blocked reader. The
+  consumer snapshots `ThreadWake` before re-checking `try_pop`; a signal between
+  the snapshot and park advances the gate sequence, so `wait_timeout` returns
+  immediately while retaining its timed backstop. Consumer→worker wakes are an
+  explicit capability: `ConsumerWakeMode::RealtimeDeferred` (the production
+  default) only arms the scheduler's coalesced level after a successful ring
+  pop, while `ImmediateOffRt` signals its `ThreadGate` immediately from a
+  consumer known to run off the real-time thread. A seek-epoch drain coalesces
+  all discarded entries into one wake after the drain rather than signaling per
+  item.
 - **Trash ring.** The RT consumer must never `free`, so spent pooled `PcmChunk`s
   go to a second ring drained by `DecoderNode::recycle` on the worker. Capacity
   `pcm_buffer_chunks + 2` absorbs a full forward-ring seek drain, making the RT
   push infallible.
 - **Off-RT deferral.** Signals the forbid-blocking core must not make are armed
-  on-core and flushed by the shell from `AudioWorkerSource::flush_deferred`: FSM
-  lifecycle events (`DeferredBus<Event>`), the reader→peer wake
-  (`ReadinessGate::flush_peer_wake`), retired state (`Retired::drain`).
-  `StreamAudioSource::drop` flushes once more — `retain` removes a terminal slot
-  without another pass.
+  on-core and flushed by the shell: producer→reader output wake and events
+  (`ReaderOutputWake`), FSM lifecycle events (`DeferredBus<Event>`), the
+  reader→peer wake (`ReadinessGate::flush_peer_wake`), and retired state
+  (`Retired::drain`).
+  `StreamAudioSource::drop` keeps an additional teardown flush after the
+  scheduler's final pass flush.
 
 ### Scheduler
 
 `run_loop` is the unchecked shell (cancel/command drain, slot lifecycle,
-`Node::recycle`, the park). Only node ticks run through `produce_tick_rt`, which
+`Node::recycle`, the park). It recycles before producing, between burst ticks,
+and once after every pass before terminal-slot removal or parking. Only node
+ticks run through `produce_tick_rt`, which
 carries `#[kithara::rtsan_forbid_blocking]`; `RtPolicy::Heavy` nodes tick outside
 it via `produce_tick_heavy`. `Node::rt_policy()` defaults to `Rt`; `AnalysisNode`
 declares `Heavy`. `Node::warm_up` runs once at registration in the shell, before
@@ -56,6 +66,11 @@ instead of parking. Ticks slower than 10 ms raise `SchedulerEvent::SlowTick`.
 `TickResult` separates stalls for the hang watchdog: `Waiting` (watchdog ticks),
 `Backpressured` (watchdog must **not** tick, or an idle `Audio` handle panics),
 `UpstreamPending` (the source's own demand timeout owns the terminal).
+Consumer wake requests set a coalesced atomic level, so the RT path never calls
+`unpark` or enters the kernel. The scheduler consumes the level before parking
+and again after the bounded wait. Downloader readiness, register, unregister,
+shutdown, and rebuild-completion signals remain immediate off-RT `ThreadGate`
+wakes.
 
 ### Preload gate
 
@@ -69,11 +84,14 @@ threshold with an empty overflow slot, EOF, `Failed`, `on_cancel` — from its
 cached runtime epoch, and `rearm()`s it in `sync_seek_epoch` (`Audio::seek`
 rearms consumer-side) so a post-seek wait blocks until that epoch refills.
 
-**`block_on_underrun`.** With `AudioConfig::block_on_underrun(true)` a `read()`
-on an empty ring PARKS the caller until the worker produces, so the consumer must
-live on a thread the async stack does not depend on — audio callback, dedicated
-thread, or `spawn_blocking`. Parking on a tokio runtime thread starves the
-downloader tasks feeding the ring. On wasm32 reads never block.
+**`block_on_underrun`.** The bool remains the independent empty-read policy;
+`ConsumerWakeMode` controls only how a successful drain wakes the worker. With
+`AudioConfig::block_on_underrun(true)` a `read()` on an empty ring PARKS the
+caller until the worker produces and the effective wake mode is always
+`ImmediateOffRt`, regardless of the explicitly configured mode. The consumer
+must therefore live on a dedicated thread or `spawn_blocking`, never the audio
+callback or a tokio runtime thread whose tasks feed the ring. On wasm32 reads
+never block.
 
 ## Ownership map
 

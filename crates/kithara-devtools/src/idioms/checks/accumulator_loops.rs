@@ -86,7 +86,7 @@ impl Pattern {
         cfg.detect.iter().any(|t| t == token)
     }
 
-    fn message(&self) -> &'static str {
+    const fn message(&self) -> &'static str {
         match self {
             Self::Push => {
                 "A1: `for ... { acc.push(...) }` — prefer `xs.iter().map(...).collect::<Vec<_>>()` \
@@ -170,7 +170,7 @@ fn pat_idents(pat: &Pat) -> Vec<String> {
     c.0
 }
 
-fn stmt_expr(s: &Stmt) -> Option<&Expr> {
+const fn stmt_expr(s: &Stmt) -> Option<&Expr> {
     match s {
         Stmt::Expr(e, _) => Some(e),
         _ => None,

@@ -193,7 +193,10 @@ fn ring_capacity(sample_rate: u32) -> BroadcastResult<usize> {
 
 #[cfg(test)]
 mod tests {
-    use kithara::play::{PlayError, Reply, SessionDispatcher, SessionSampleRate};
+    use kithara::{
+        audio::ConsumerWakeMode,
+        play::{PlayError, Reply, SessionDispatcher, SessionSampleRate},
+    };
     use kithara_platform::sync::{
         Arc, Mutex,
         atomic::{AtomicU32, Ordering},
@@ -239,6 +242,10 @@ mod tests {
                 }
                 _ => panic!("unexpected session command"),
             }
+        }
+
+        fn consumer_wake_mode(&self) -> ConsumerWakeMode {
+            ConsumerWakeMode::RealtimeDeferred
         }
     }
 

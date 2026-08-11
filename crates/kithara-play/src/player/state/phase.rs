@@ -26,7 +26,7 @@ pub(crate) enum PendingNextState {
 }
 
 impl PendingNextState {
-    pub(crate) fn activated(self) -> bool {
+    pub(crate) const fn activated(self) -> bool {
         matches!(self, Self::ActivatedReady)
     }
 }
@@ -103,7 +103,7 @@ impl From<&PlayerPhase> for PlayerPhaseKind {
 impl PlayerPhase {
     /// Borrow of the active ABR handle slot. Returning a reference makes this
     /// a true accessor (not a `self -> Other` conversion).
-    fn abr_handle_ref(&self) -> Option<&kithara_abr::AbrHandle> {
+    const fn abr_handle_ref(&self) -> Option<&kithara_abr::AbrHandle> {
         match self {
             Self::Idle => None,
             Self::Loading { abr_handle, .. }
@@ -224,7 +224,7 @@ impl PlayerPhase {
     }
 
     /// Shared read access to the armed-next slot, if any.
-    pub(crate) fn pending(&self) -> Option<&PendingNext> {
+    pub(crate) const fn pending(&self) -> Option<&PendingNext> {
         match self {
             Self::Loading { pending, .. }
             | Self::Playing { pending, .. }
@@ -234,7 +234,7 @@ impl PlayerPhase {
     }
 
     /// Mutable access to the armed-next slot for transition bookkeeping.
-    pub(crate) fn pending_mut(&mut self) -> Option<&mut Option<PendingNext>> {
+    pub(crate) const fn pending_mut(&mut self) -> Option<&mut Option<PendingNext>> {
         match self {
             Self::Loading { pending, .. }
             | Self::Playing { pending, .. }
@@ -256,7 +256,7 @@ impl PlayerPhase {
 
     /// Borrow of the active slot. Returning a reference makes this a true
     /// accessor (not a `self -> Other` conversion).
-    fn slot_ref(&self) -> Option<&SlotId> {
+    const fn slot_ref(&self) -> Option<&SlotId> {
         match self {
             Self::Idle => None,
             Self::Loading { slot, .. } | Self::Playing { slot, .. } | Self::Paused { slot, .. } => {
@@ -277,7 +277,7 @@ impl PlayerPhase {
             /// The active slot, if any phase currently holds one.
             #[expr($.copied())]
             #[call(slot_ref)]
-            pub(crate) fn slot(&self) -> Option<SlotId>;
+            pub(crate) const fn slot(&self) -> Option<SlotId>;
         }
     }
 }

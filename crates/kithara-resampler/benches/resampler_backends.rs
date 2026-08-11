@@ -166,11 +166,11 @@ fn input_buffers(channels: usize, frames: usize) -> Vec<Vec<f32>> {
         .collect()
 }
 
-fn non_zero_u32(value: u32) -> NonZeroU32 {
+const fn non_zero_u32(value: u32) -> NonZeroU32 {
     NonZeroU32::new(value).expect("value must be non-zero")
 }
 
-fn non_zero_usize(value: usize) -> NonZeroUsize {
+const fn non_zero_usize(value: usize) -> NonZeroUsize {
     NonZeroUsize::new(value).expect("value must be non-zero")
 }
 

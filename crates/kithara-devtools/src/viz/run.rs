@@ -136,7 +136,7 @@ pub(crate) fn run(args: &VizArgs, ctx: &Ctx) -> Result<()> {
     Ok(())
 }
 
-fn detail_level(args: &VizArgs) -> DetailLevel {
+const fn detail_level(args: &VizArgs) -> DetailLevel {
     match args.lod {
         Lod::Auto if args.module.is_some() => DetailLevel::Abstractions,
         Lod::Auto if args.krate.is_some() => DetailLevel::Modules,
@@ -149,7 +149,7 @@ fn detail_level(args: &VizArgs) -> DetailLevel {
     }
 }
 
-fn view_kind(view: ViewName) -> ViewKind {
+const fn view_kind(view: ViewName) -> ViewKind {
     match view {
         ViewName::Overview => ViewKind::Overview,
         ViewName::Hierarchy => ViewKind::Hierarchy,

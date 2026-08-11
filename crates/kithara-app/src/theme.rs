@@ -126,7 +126,7 @@ pub(crate) mod gui {
         }
     }
 
-    fn to_iced(rgb: Rgb) -> Color {
+    const fn to_iced(rgb: Rgb) -> Color {
         Color::from_rgb8(rgb.0, rgb.1, rgb.2)
     }
 }

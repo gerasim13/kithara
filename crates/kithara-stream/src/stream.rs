@@ -85,7 +85,7 @@ impl StreamSeekPastEof {
     /// Build the typed payload for a seek target beyond the stream's
     /// known length.
     #[must_use]
-    pub fn new(current_pos: u64, len: u64, new_pos: u64) -> Self {
+    pub const fn new(current_pos: u64, len: u64, new_pos: u64) -> Self {
         Self {
             current_pos,
             len,
@@ -135,7 +135,7 @@ pub struct StreamPending {
 impl StreamPending {
     /// Build the typed payload for a transient "data not ready" read.
     #[must_use]
-    pub fn new(
+    pub const fn new(
         reason: PendingReason,
         pos: u64,
         want: usize,
@@ -157,7 +157,7 @@ impl StreamPending {
 
     /// Typed reason decoders downcast on to classify a transient stall.
     #[must_use]
-    pub fn reason(&self) -> PendingReason {
+    pub const fn reason(&self) -> PendingReason {
         self.reason
     }
 }
@@ -329,7 +329,7 @@ enum WaitMode {
 }
 
 impl WaitMode {
-    fn timeout(self, probe: Duration) -> Option<Duration> {
+    const fn timeout(self, probe: Duration) -> Option<Duration> {
         match self {
             Self::Probe => Some(probe),
             Self::Block => None,

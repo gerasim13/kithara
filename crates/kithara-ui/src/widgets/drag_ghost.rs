@@ -1,10 +1,10 @@
 use iced::{
     Color, Element, Event, Length, Point, Rectangle, Renderer, Size, Theme,
     alignment::Vertical,
-    mouse::{self, Cursor},
+    mouse::{Cursor, Event as MouseEvent, Interaction},
     widget::{
         canvas::{self, Action, Canvas, Frame, Geometry, Path, Stroke, Text as CanvasText},
-        text,
+        text::{Alignment as TextAlignment, Shaping},
     },
 };
 use num_traits::cast::AsPrimitive;
@@ -97,25 +97,20 @@ impl canvas::Program<UiEvent> for DragGhost {
         frame.fill_text(CanvasText {
             content: label.clone(),
             position: Point::new(ghost.x + self.metrics.pad_x, ghost.center_y()),
-            max_width: ghost.width - self.metrics.pad_x * 2.0,
+            max_width: self.metrics.pad_x.mul_add(-2.0, ghost.width),
             color: self.text_color,
             size: self.metrics.text.size.into(),
             font: fonts::family(self.metrics.text.font, self.metrics.text.weight),
-            align_x: text::Alignment::Left,
+            align_x: TextAlignment::Left,
             align_y: Vertical::Center,
-            shaping: text::Shaping::Advanced,
+            shaping: Shaping::Advanced,
             ..CanvasText::default()
         });
         vec![frame.into_geometry()]
     }
 
-    fn mouse_interaction(
-        &self,
-        _state: &(),
-        _bounds: Rectangle,
-        _cursor: Cursor,
-    ) -> mouse::Interaction {
-        mouse::Interaction::None
+    fn mouse_interaction(&self, _state: &(), _bounds: Rectangle, _cursor: Cursor) -> Interaction {
+        Interaction::None
     }
 
     /// The pointer moves without the host's state changing, so a ghost with
@@ -128,14 +123,14 @@ impl canvas::Program<UiEvent> for DragGhost {
         _bounds: Rectangle,
         _cursor: Cursor,
     ) -> Option<Action<UiEvent>> {
-        let moved = matches!(event, Event::Mouse(mouse::Event::CursorMoved { .. }));
+        let moved = matches!(event, Event::Mouse(MouseEvent::CursorMoved { .. }));
         (moved && self.label.is_some()).then(Action::request_redraw)
     }
 }
 
 /// Glyphs the box holds between its paddings.
 fn fitting_chars(metrics: DragSkin) -> usize {
-    let inner = (metrics.width - metrics.pad_x * 2.0).max(0.0);
+    let inner = metrics.pad_x.mul_add(-2.0, metrics.width).max(0.0);
     (inner / (metrics.text.size * DragGhost::MONO_ADVANCE))
         .trunc()
         .as_()

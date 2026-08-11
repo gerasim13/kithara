@@ -117,13 +117,19 @@ pub(crate) fn key_line(key: &str) -> Option<usize> {
 #[must_use]
 pub fn non_test_line_count(src: &str) -> usize {
     let total = src.lines().count();
-    let Ok(file) = syn::parse_file(src) else {
+    let Some(excluded) = cfg_test_lines(src) else {
         return total;
     };
+    total.saturating_sub(excluded.len())
+}
+
+/// Return every source line covered by a `#[cfg(test)]`-predicated item, or
+/// `None` when the source cannot be parsed.
+pub(crate) fn cfg_test_lines(src: &str) -> Option<BTreeSet<usize>> {
+    let file = syn::parse_file(src).ok()?;
     let mut ranges = Vec::new();
     collect_cfg_test_ranges(&file.items, &mut ranges);
-    let excluded: BTreeSet<usize> = ranges.into_iter().flatten().collect();
-    total.saturating_sub(excluded.len())
+    Some(ranges.into_iter().flatten().collect())
 }
 
 /// Walk items recursively, recording the line range of every item whose

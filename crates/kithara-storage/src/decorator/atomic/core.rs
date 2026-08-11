@@ -4,6 +4,7 @@
 use std::{fs, io::Write};
 use std::{ops::Range, path::Path};
 
+use kithara_platform::CancelToken;
 #[cfg(not(target_arch = "wasm32"))]
 use tempfile::NamedTempFile;
 
@@ -28,7 +29,7 @@ pub struct Atomic<D: DriverIo> {
 impl<D: DriverIo> Atomic<D> {
     /// Wrap a writer for crash-safe writes.
     #[must_use]
-    pub fn new(inner: ResourceWriter<D>) -> Self {
+    pub const fn new(inner: ResourceWriter<D>) -> Self {
         Self { inner }
     }
 
@@ -125,6 +126,17 @@ impl<D: DriverIo> Atomic<D> {
             /// Returns error if the range is invalid, the resource is cancelled, or the
             /// resource has failed.
             pub fn wait_range(&self, range: Range<u64>) -> StorageResult<WaitOutcome>;
+            /// Wait until the range is available, interrupting only this wait
+            /// when `cancel` fires.
+            ///
+            /// # Errors
+            /// Returns error if the range is invalid, either cancellation token
+            /// fires, or the resource has failed.
+            pub fn wait_range_with_cancel(
+                &self,
+                range: Range<u64>,
+                cancel: &CancelToken,
+            ) -> StorageResult<WaitOutcome>;
         }
     }
 }

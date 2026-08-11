@@ -62,7 +62,7 @@ pub struct SessionBeat(f64);
 
 impl SessionBeat {
     /// Creates a finite session-beat coordinate. Negative beats are valid.
-    pub fn new(value: f64) -> Result<Self, SessionBeatError> {
+    pub const fn new(value: f64) -> Result<Self, SessionBeatError> {
         if value.is_finite() {
             Ok(Self(value))
         } else {

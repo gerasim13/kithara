@@ -146,7 +146,7 @@ impl FadeInState {
         for (frame_offset, frame_samples) in prefix.chunks_exact_mut(channels).enumerate() {
             let frame = start_frame.saturating_add(u16::try_from(frame_offset).unwrap_or(u16::MAX));
             let position = f32::from(frame) / total;
-            let gain = 0.5 - 0.5 * (std::f32::consts::PI * position).cos();
+            let gain = 0.5f32.mul_add(-(std::f32::consts::PI * position).cos(), 0.5);
             for sample in frame_samples {
                 *sample *= gain;
             }
@@ -165,7 +165,7 @@ impl FadeInState {
     }
 
     /// Returns true once the fade has finished — caller can drop the state.
-    fn is_done(self) -> bool {
+    const fn is_done(self) -> bool {
         self.applied_frames >= self.total_frames
     }
 }
@@ -471,7 +471,7 @@ fn apply_trailing_fade_out(tail_buffer: &mut TailBuffer, sample_rate: u32) {
             let frames_to_end = in_window - 1 - frame_in_chunk + faded_so_far;
             let frame_in_fade = total_frames - 1 - frames_to_end;
             let position = f32::from(u16::try_from(frame_in_fade).unwrap_or(u16::MAX)) / denom;
-            let gain = 0.5 + 0.5 * (std::f32::consts::PI * position).cos();
+            let gain = 0.5f32.mul_add((std::f32::consts::PI * position).cos(), 0.5);
             for sample in frame_samples {
                 *sample *= gain;
             }

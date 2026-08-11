@@ -56,7 +56,7 @@ impl SegmentReadState {
     /// capacity (high-water mark carried over from a previous segment
     /// the pool recycled) is reused; [`Self::sync_buffer_ready`] only
     /// reallocates when this segment is larger than any seen before.
-    pub(crate) fn new(range: Range<u64>, buffer: SegmentBuf) -> Self {
+    pub(crate) const fn new(range: Range<u64>, buffer: SegmentBuf) -> Self {
         Self {
             range,
             buffer,

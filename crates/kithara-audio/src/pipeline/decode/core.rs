@@ -245,7 +245,7 @@ impl ActiveDecode {
             pub(crate) fn set_tail_compensation(&mut self);
         }
         to self.drain {
-            pub(crate) fn stats(&self) -> (u64, u64);
+            pub(crate) const fn stats(&self) -> (u64, u64);
             pub(crate) fn track(
                 &mut self,
                 chunk: &PcmChunk,

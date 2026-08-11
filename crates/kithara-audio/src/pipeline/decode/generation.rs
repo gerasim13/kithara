@@ -91,7 +91,7 @@ impl DecoderGeneration {
         !self.staged.is_empty() || self.gapless.has_output()
     }
 
-    pub(crate) fn media_info(&self) -> Option<&MediaInfo> {
+    pub(crate) const fn media_info(&self) -> Option<&MediaInfo> {
         self.media_info.as_ref()
     }
 
@@ -118,7 +118,7 @@ impl DecoderGeneration {
         }
     }
 
-    pub(crate) fn pending_head_skip_mut(&mut self) -> Option<&mut ResumeState> {
+    pub(crate) const fn pending_head_skip_mut(&mut self) -> Option<&mut ResumeState> {
         self.pending_head_skip.as_mut()
     }
 

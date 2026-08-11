@@ -60,8 +60,8 @@ impl canvas::Program<UiEvent> for MeterCanvas {
 
         let width = self.border_width;
         let track = Size::new(
-            (bounds.width - width * 2.0).max(0.0),
-            (bounds.height - width * 2.0).max(0.0),
+            width.mul_add(-2.0, bounds.width).max(0.0),
+            width.mul_add(-2.0, bounds.height).max(0.0),
         );
         frame.fill_rectangle(
             Point::new(width, width),

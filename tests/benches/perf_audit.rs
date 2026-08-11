@@ -46,7 +46,7 @@ fn make_pcm(frames: usize) -> Vec<f32> {
         state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
         let noise = (state >> 8) as f32 / 16_777_215.0 - 0.5;
         let phase = frame as f32 * 440.0 * std::f32::consts::TAU / Consts::SAMPLE_RATE as f32;
-        let sample = phase.sin() * 0.4 + noise * 0.1;
+        let sample = phase.sin().mul_add(0.4, noise * 0.1);
         pcm.push(sample);
         pcm.push(sample * 0.8);
     }

@@ -3,7 +3,9 @@ use std::num::{NonZeroU32, NonZeroUsize};
 use bon::Builder;
 use kithara_abr::AbrMode;
 use kithara_assets::AssetStore;
-use kithara_audio::{AudioDecoderConfig, AudioWorkerHandle, EngineLoad, StretchControls};
+use kithara_audio::{
+    AudioDecoderConfig, AudioWorkerHandle, ConsumerWakeMode, EngineLoad, StretchControls,
+};
 use kithara_bufpool::{BytePool, PcmPool};
 use kithara_events::EventBus;
 use kithara_hls::{KeyOptions, SizeProbeMethod};
@@ -76,6 +78,11 @@ pub struct ResourceConfig<B: Default = PlaybackResamplerBackend> {
     pub(crate) stretch: Option<Arc<StretchControls>>,
     /// Shared audio worker handle for cooperative multi-track decoding.
     pub(crate) worker: Option<AudioWorkerHandle>,
+    /// Session-owned PCM consumer wake capability. This is populated by
+    /// `PlayerImpl::prepare_config`, not by callers, so resource configuration
+    /// does not become a second public source of session policy.
+    #[builder(skip)]
+    pub(crate) consumer_wake_mode: ConsumerWakeMode,
     /// Shared PCM pool for temporary buffers.
     pub(crate) pcm_pool: PcmPool,
     /// Method used by HLS size estimation to probe segment lengths.

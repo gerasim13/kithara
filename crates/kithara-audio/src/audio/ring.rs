@@ -7,8 +7,8 @@ use kithara_platform::{CancelToken, sync::Arc};
 use kithara_test_utils::kithara;
 
 use super::{
-    AudioWorkerHandle, ConsumerPhase, EpochValidator, FailureSource, Fetch, Inlet, Outlet,
-    ThreadWake, WakeSignal, connect, cursor::ChunkCursor, event::ReaderOutputWake,
+    AudioWorkerHandle, ConsumerPhase, ConsumerWakeMode, EpochValidator, FailureSource, Fetch,
+    Inlet, Outlet, ThreadWake, WakeSignal, connect, cursor::ChunkCursor, event::ReaderOutputWake,
     park::receive_is_nonblocking,
 };
 
@@ -40,6 +40,7 @@ pub(super) struct RingConsumer {
     pcm_rx: Inlet<Fetch<PcmChunk>>,
     trash_tx: Outlet<PcmChunk>,
     block_on_underrun: bool,
+    consumer_wake_mode: ConsumerWakeMode,
 }
 
 pub(super) struct RingParts {
@@ -48,10 +49,16 @@ pub(super) struct RingParts {
     pub(super) pcm_rx: Inlet<Fetch<PcmChunk>>,
     pub(super) trash_tx: Outlet<PcmChunk>,
     pub(super) block_on_underrun: bool,
+    pub(super) consumer_wake_mode: ConsumerWakeMode,
 }
 
 impl RingConsumer {
     pub(super) fn new(parts: RingParts) -> Self {
+        let consumer_wake_mode = if parts.block_on_underrun {
+            ConsumerWakeMode::ImmediateOffRt
+        } else {
+            parts.consumer_wake_mode
+        };
         Self {
             pcm_rx: parts.pcm_rx,
             validator: EpochValidator::default(),
@@ -62,17 +69,21 @@ impl RingConsumer {
             _epoch: parts.epoch,
             preloaded: false,
             block_on_underrun: parts.block_on_underrun,
+            consumer_wake_mode,
         }
     }
 
     #[kithara::hang_watchdog]
-    pub(super) fn begin_seek_epoch(&mut self, epoch: u64, cursor: &mut ChunkCursor) {
+    #[must_use]
+    pub(super) fn begin_seek_epoch(&mut self, epoch: u64, cursor: &mut ChunkCursor) -> bool {
         self.validator.epoch = epoch;
         self.recycle_current();
         cursor.clear();
         self.phase = ConsumerPhase::SeekPending { epoch };
 
+        let mut popped = false;
         while let Some(fetch) = self.pcm_rx.try_pop() {
+            popped = true;
             if fetch.epoch() < epoch {
                 if let Fetch::Data { data, .. } = fetch {
                     self.discard(data);
@@ -83,6 +94,11 @@ impl RingConsumer {
             self.stage_post_seek_fetch(fetch, epoch, cursor);
             break;
         }
+        popped
+    }
+
+    pub(super) fn wake_worker(&self, worker: Option<&AudioWorkerHandle>) {
+        wake_worker(worker, self.consumer_wake_mode);
     }
 
     fn consumer_hang_ctx(&self, ctx: RecvCtx<'_>) -> ConsumerHangCtx {
@@ -143,7 +159,7 @@ impl RingConsumer {
         }
     }
 
-    pub(super) fn promote_playing(&mut self) {
+    pub(super) const fn promote_playing(&mut self) {
         if matches!(
             self.phase,
             ConsumerPhase::Buffering | ConsumerPhase::SeekPending { .. }
@@ -154,8 +170,9 @@ impl RingConsumer {
 
     pub(super) fn recv_outcome(&mut self, ctx: RecvCtx<'_>) -> RecvOutcome {
         if receive_is_nonblocking(self.preloaded, self.block_on_underrun) {
-            if let Some(fetch) = self.pcm_rx.try_pop() {
-                wake_worker(ctx.worker);
+            if let Some(fetch) =
+                try_pop_and_wake(&mut self.pcm_rx, ctx.worker, self.consumer_wake_mode)
+            {
                 return RecvOutcome::Item(fetch);
             }
             return RecvOutcome::Empty;
@@ -167,20 +184,22 @@ impl RingConsumer {
     #[kithara::hang_watchdog(ctx = ConsumerHangCtx)]
     fn recv_outcome_blocking(&mut self, ctx: RecvCtx<'_>) -> RecvOutcome {
         loop {
-            if let Some(fetch) = self.pcm_rx.try_pop() {
+            if let Some(fetch) =
+                try_pop_and_wake(&mut self.pcm_rx, ctx.worker, self.consumer_wake_mode)
+            {
                 hang_reset!();
-                wake_worker(ctx.worker);
                 return RecvOutcome::Item(fetch);
             }
             if ctx.cancel.is_some_and(CancelToken::is_cancelled) {
                 hang_reset!();
                 return RecvOutcome::Closed;
             }
-            wake_worker(ctx.worker);
+            wake_worker(ctx.worker, self.consumer_wake_mode);
             let since = self.reader_wake.current();
-            if let Some(fetch) = self.pcm_rx.try_pop() {
+            if let Some(fetch) =
+                try_pop_and_wake(&mut self.pcm_rx, ctx.worker, self.consumer_wake_mode)
+            {
                 hang_reset!();
-                wake_worker(ctx.worker);
                 return RecvOutcome::Item(fetch);
             }
             if ctx.cancel.is_some_and(CancelToken::is_cancelled) {
@@ -287,9 +306,23 @@ struct ConsumerHangCtx {
     epoch: u64,
 }
 
-fn wake_worker(worker: Option<&AudioWorkerHandle>) {
-    if let Some(worker) = worker {
-        worker.wake();
+fn try_pop_and_wake(
+    pcm_rx: &mut Inlet<Fetch<PcmChunk>>,
+    worker: Option<&AudioWorkerHandle>,
+    mode: ConsumerWakeMode,
+) -> Option<Fetch<PcmChunk>> {
+    let fetch = pcm_rx.try_pop()?;
+    wake_worker(worker, mode);
+    Some(fetch)
+}
+
+fn wake_worker(worker: Option<&AudioWorkerHandle>, mode: ConsumerWakeMode) {
+    let Some(worker) = worker else {
+        return;
+    };
+    match mode {
+        ConsumerWakeMode::RealtimeDeferred => worker.defer_wake(),
+        ConsumerWakeMode::ImmediateOffRt => worker.wake(),
     }
 }
 
@@ -304,7 +337,7 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::audio::ReadOutcome;
+    use crate::{ConsumerWakeMode, audio::ReadOutcome};
 
     struct RingFixture {
         playhead: Arc<PlayheadState>,
@@ -317,15 +350,24 @@ mod tests {
 
     impl RingFixture {
         fn new(preloaded: bool) -> Self {
+            Self::with_wake_mode(preloaded, false, ConsumerWakeMode::RealtimeDeferred)
+        }
+
+        fn with_wake_mode(
+            preloaded: bool,
+            block_on_underrun: bool,
+            consumer_wake_mode: ConsumerWakeMode,
+        ) -> Self {
             let (data_tx, pcm_rx) = connect::<Fetch<PcmChunk>>(4, None);
             let (trash_tx, trash_rx) = connect::<PcmChunk>(8, None);
-            let pool = PcmPool::default().clone();
+            let pool = PcmPool::default();
             let mut ring = RingConsumer::new(RingParts {
                 pcm_rx,
                 trash_tx,
                 reader_wake: Arc::new(ThreadWake::default()),
                 epoch: Arc::new(AtomicU64::new(0)),
-                block_on_underrun: false,
+                block_on_underrun,
+                consumer_wake_mode,
             });
             ring.preloaded = preloaded;
             Self {
@@ -356,6 +398,48 @@ mod tests {
         meta.spec.channels = 1;
         meta.frames = u32::try_from(samples.len()).unwrap_or(u32::MAX);
         PcmChunk::new(meta, PcmPool::default().attach(samples.to_vec()))
+    }
+
+    #[kithara::test]
+    fn block_on_underrun_forces_immediate_off_rt_wakes() {
+        let fixture = RingFixture::with_wake_mode(false, true, ConsumerWakeMode::RealtimeDeferred);
+
+        assert_eq!(
+            fixture.ring.consumer_wake_mode,
+            ConsumerWakeMode::ImmediateOffRt
+        );
+    }
+
+    #[kithara::test]
+    fn explicit_off_rt_mode_is_immediate_without_blocking_reads() {
+        let fixture = RingFixture::with_wake_mode(true, false, ConsumerWakeMode::ImmediateOffRt);
+
+        assert_eq!(
+            fixture.ring.consumer_wake_mode,
+            ConsumerWakeMode::ImmediateOffRt
+        );
+    }
+
+    #[kithara::test]
+    fn seek_drain_reports_whether_it_popped_any_item() {
+        let mut drained = RingFixture::new(true);
+        drained
+            .data_tx
+            .try_push(Fetch::data(make_chunk(&[0.1]), 0))
+            .expect("first stale chunk reaches ring");
+        drained
+            .data_tx
+            .try_push(Fetch::data(make_chunk(&[0.2]), 0))
+            .expect("second stale chunk reaches ring");
+        drained
+            .data_tx
+            .try_push(Fetch::eof(1))
+            .expect("current epoch marker reaches ring");
+
+        assert!(drained.ring.begin_seek_epoch(1, &mut drained.cursor));
+
+        let mut empty = RingFixture::new(true);
+        assert!(!empty.ring.begin_seek_epoch(1, &mut empty.cursor));
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -411,7 +495,7 @@ mod tests {
     #[kithara::test]
     fn consumer_phase_transitions_to_seek_pending() {
         let mut fixture = RingFixture::new(true);
-        fixture.ring.begin_seek_epoch(1, &mut fixture.cursor);
+        let _ = fixture.ring.begin_seek_epoch(1, &mut fixture.cursor);
         assert!(matches!(
             fixture.ring.phase,
             ConsumerPhase::SeekPending { .. }
@@ -421,7 +505,7 @@ mod tests {
     #[kithara::test]
     fn consumer_phase_seek_pending_to_playing_on_chunk() {
         let mut fixture = RingFixture::new(true);
-        fixture.ring.begin_seek_epoch(1, &mut fixture.cursor);
+        let _ = fixture.ring.begin_seek_epoch(1, &mut fixture.cursor);
         fixture
             .data_tx
             .try_push(Fetch::data(make_chunk(&[0.1, 0.2]), 1))
@@ -441,7 +525,7 @@ mod tests {
             .data_tx
             .try_push(Fetch::data(make_chunk(&[0.7, 0.8]), 1))
             .expect("fresh chunk reaches ring");
-        fixture.ring.begin_seek_epoch(1, &mut fixture.cursor);
+        let _ = fixture.ring.begin_seek_epoch(1, &mut fixture.cursor);
         let mut buf = [0.0; 2];
         let read = fixture
             .cursor
@@ -471,7 +555,7 @@ mod tests {
             .data_tx
             .try_push(Fetch::eof(1))
             .expect("eof reaches ring");
-        fixture.ring.begin_seek_epoch(1, &mut fixture.cursor);
+        let _ = fixture.ring.begin_seek_epoch(1, &mut fixture.cursor);
         let mut buf = [0.0; 2];
         let read = fixture
             .cursor

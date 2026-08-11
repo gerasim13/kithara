@@ -5,7 +5,7 @@ use std::{
     path::Path,
 };
 
-use kithara_platform::sync::Arc;
+use kithara_platform::{CancelToken, sync::Arc};
 use kithara_storage::{ResourceStatus, StorageResult, WaitOutcome};
 
 use super::{
@@ -45,6 +45,11 @@ impl<W: WriteSide, L> LeaseWriter<W, L> {
             _lease: lease,
             cleanup: WriterCleanup::new(events, live, remove, resource_key),
         }
+    }
+
+    /// Transfer abandoned-writer cleanup to a higher-level lifecycle owner.
+    pub(crate) const fn transfer_cleanup(&mut self) {
+        self.cleanup.disarm();
     }
 }
 
@@ -241,6 +246,11 @@ where
             fn read_at(&self, offset: u64, buf: &mut [u8]) -> StorageResult<usize>;
             fn read_inflight_at(&self, offset: u64, buf: &mut [u8]) -> StorageResult<usize>;
             fn wait_range(&self, range: Range<u64>) -> StorageResult<WaitOutcome>;
+            fn wait_range_with_cancel(
+                &self,
+                range: Range<u64>,
+                cancel: &CancelToken,
+            ) -> StorageResult<WaitOutcome>;
             fn path(&self) -> Option<&Path>;
             fn len(&self) -> Option<u64>;
             fn status(&self) -> ResourceStatus;

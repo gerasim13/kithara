@@ -1,6 +1,7 @@
 use std::{cell::RefCell, num::NonZeroU32};
 
 use firewheel::{FirewheelCtx, StreamInfo, backend::AudioBackend, processor::FirewheelProcessor};
+use kithara_audio::ConsumerWakeMode;
 use kithara_platform::sync::Arc;
 
 use super::{Cmd, Reply, SessionDispatcher, SessionState, run_cmd};
@@ -90,6 +91,10 @@ impl SessionDispatcher for TestSession {
                 .map_err(|_| PlayError::Internal("test session is already borrowed".into()))?;
             Ok(run_cmd(&mut state, cmd))
         })
+    }
+
+    fn consumer_wake_mode(&self) -> ConsumerWakeMode {
+        ConsumerWakeMode::RealtimeDeferred
     }
 }
 

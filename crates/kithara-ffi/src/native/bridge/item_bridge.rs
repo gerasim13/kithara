@@ -212,7 +212,7 @@ impl ItemEventBridge {
     fn u64_to_f64(value: u64) -> Option<f64> {
         let hi = u32::try_from(value >> Self::U64_HIGH_SHIFT).ok()?;
         let lo = u32::try_from(value & u64::from(u32::MAX)).ok()?;
-        Some(f64::from(hi) * Self::U32_MAX_PLUS_ONE + f64::from(lo))
+        Some(f64::from(hi).mul_add(Self::U32_MAX_PLUS_ONE, f64::from(lo)))
     }
 }
 

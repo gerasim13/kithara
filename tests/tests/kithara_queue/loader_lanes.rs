@@ -80,6 +80,16 @@ fn fast_url(handle: &BehaviorHandle) -> Url {
     handle.child_url("track.mp3")
 }
 
+#[kithara::flash(true)]
+async fn drive_queue_ticks(queue: Arc<Queue>) {
+    loop {
+        sleep(Duration::from_millis(50)).await;
+        if queue.tick().is_err() {
+            break;
+        }
+    }
+}
+
 fn build_queue_with_tick(
     temp_dir: &TestTempDir,
     cap: usize,
@@ -106,14 +116,7 @@ fn build_queue_with_tick(
             .build(),
     ));
     let queue_for_tick = Arc::clone(&queue);
-    let tick_handle = tokio::task::spawn(async move {
-        loop {
-            sleep(Duration::from_millis(50)).await;
-            if queue_for_tick.tick().is_err() {
-                break;
-            }
-        }
-    });
+    let tick_handle = tokio::task::spawn(drive_queue_ticks(queue_for_tick));
     let downloader = Downloader::new(
         DownloaderConfig::for_client(HttpClient::new(NetOptions::default(), CancelToken::never()))
             .build(),
@@ -134,6 +137,7 @@ fn status_of(queue: &Queue, id: TrackId) -> Option<TrackStatus> {
     queue.track(id).map(|e| e.status)
 }
 
+#[kithara::flash(true)]
 async fn wait_for_status_matching(
     queue: &Queue,
     id: TrackId,

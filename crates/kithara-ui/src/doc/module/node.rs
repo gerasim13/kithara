@@ -672,7 +672,7 @@ pub enum ControlNode {
 }
 
 impl ControlNode {
-    pub(crate) fn bindings(&self) -> (Option<&BindingRef>, Option<&BindingRef>) {
+    pub(crate) const fn bindings(&self) -> (Option<&BindingRef>, Option<&BindingRef>) {
         match self {
             Self::Row { write, .. } | Self::Column { write, .. } => (None, write.as_ref()),
             Self::Optional { hidden, .. } => (Some(hidden), None),
@@ -720,7 +720,7 @@ impl ControlNode {
         }
     }
 
-    pub(crate) fn size(&self) -> Option<&SizeSpec> {
+    pub(crate) const fn size(&self) -> Option<&SizeSpec> {
         match self {
             Self::Include { .. }
             | Self::Optional { .. }

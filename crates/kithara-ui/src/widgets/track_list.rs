@@ -2,7 +2,7 @@ use iced::{
     Alignment, Background, Border, Color, Element, Event, Length, Point, Rectangle, Renderer, Size,
     Theme,
     alignment::{Horizontal, Vertical},
-    mouse::{self, Cursor},
+    mouse::{Cursor, Interaction},
     widget::{
         Canvas, Column, Row, Space, Stack, button,
         button::{Status as ButtonStatus, Style as ButtonStyle},
@@ -326,7 +326,7 @@ impl canvas::Program<UiEvent> for RowDrag {
         state: &ItemDragState,
         _bounds: Rectangle,
         _cursor: Cursor,
-    ) -> mouse::Interaction {
+    ) -> Interaction {
         state.interaction()
     }
 
@@ -379,7 +379,7 @@ fn header_cell(
             .path(format!("{path}/width/{}", column.column.endpoint_name()))
             .value(column.width)
             .minimum(style.metrics.min_column_width)
-            .hover(HoverState::new(mouse::Interaction::ResizingHorizontally))
+            .hover(HoverState::new(Interaction::ResizingHorizontally))
             .build(),
     })
     .width(Length::Fixed(style.metrics.divider_hit_width))
@@ -644,7 +644,7 @@ impl canvas::Program<UiEvent> for ColumnDivider {
                 state: &HorizontalPixelDragState,
                 bounds: Rectangle,
                 cursor: Cursor,
-            ) -> mouse::Interaction;
+            ) -> Interaction;
         }
     }
 }
@@ -717,7 +717,7 @@ fn column_layouts(
         .collect()
 }
 
-fn default_column_width(column: TrackColumn, skin: &Skin) -> f32 {
+const fn default_column_width(column: TrackColumn, skin: &Skin) -> f32 {
     match column {
         TrackColumn::Index => skin.track_list.index_width,
         TrackColumn::Deck => skin.track_list.deck_width,

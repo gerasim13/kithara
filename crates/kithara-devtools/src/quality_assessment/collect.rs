@@ -405,7 +405,7 @@ fn scaled_threshold(loc: u64, workspace_loc: u64, kind: &str) -> u64 {
         .max(1)
 }
 
-fn verdict(
+const fn verdict(
     debt_units: u64,
     debt_threshold: u64,
     debt_regressed: bool,

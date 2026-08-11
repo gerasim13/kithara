@@ -206,7 +206,7 @@ fn bare_path_targets(line: &str) -> Vec<String> {
         .collect()
 }
 
-fn is_bare_delimiter(ch: char) -> bool {
+const fn is_bare_delimiter(ch: char) -> bool {
     ch.is_whitespace() || matches!(ch, '"' | '\'' | '(' | ')' | '[' | ']' | ',' | ';' | '|')
 }
 

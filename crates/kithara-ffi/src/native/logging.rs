@@ -20,7 +20,7 @@ pub fn init_logging(level: u8) {
     });
 }
 
-fn level_filter(ordinal: u8) -> LevelFilter {
+const fn level_filter(ordinal: u8) -> LevelFilter {
     const LOG_LEVEL_TRACE: u8 = 0;
     const LOG_LEVEL_DEBUG: u8 = 1;
     const LOG_LEVEL_INFO: u8 = 2;

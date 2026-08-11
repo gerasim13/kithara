@@ -8,6 +8,7 @@ use kithara_platform::{
     tokio,
 };
 use num_traits::{AsPrimitive, ToPrimitive};
+use url::Url;
 
 mod kithara {
     pub(crate) use kithara_test_macros::flash;
@@ -17,6 +18,7 @@ use crate::{
     ByteStream,
     error::{NetError, Retryability},
     observe::Observer,
+    range_response::representation_total,
     types::RetryPolicy,
 };
 
@@ -56,8 +58,11 @@ struct State {
     stall: Duration,
     expected_len: Option<u64>,
     observer: Option<Observer>,
+    partial: bool,
     refetch: Refetch,
     policy: RetryPolicy,
+    resource: Url,
+    representation_total: Option<u64>,
     /// Resume re-fetches already performed, bounded by `policy.max_retries`.
     resumes: u32,
     consumed: u64,
@@ -70,6 +75,13 @@ impl State {
     fn body_complete(&self) -> bool {
         self.expected_len
             .is_some_and(|expected| self.consumed >= expected)
+    }
+
+    fn body_incomplete_at_eof(&self) -> bool {
+        self.to_skip > 0
+            || self
+                .expected_len
+                .map_or(self.partial, |_| !self.body_complete())
     }
 
     /// Heal one transient failure: spend a unit of retry budget, back off
@@ -101,15 +113,53 @@ impl State {
         }
         let delay = self.policy.delay_for_attempt(self.resumes);
         self.resumes += 1;
-        if !delay.is_zero() {
-            sleep(delay).await;
+        tokio::select! {
+            biased;
+            () = self.cancel.cancelled() => return Err(NetError::Cancelled),
+            () = sleep(delay) => {}
         }
-        let resumed = (self.refetch)(self.consumed).await?;
+        let resumed = tokio::select! {
+            biased;
+            () = self.cancel.cancelled() => return Err(NetError::Cancelled),
+            resumed = (self.refetch)(self.consumed) => resumed?,
+        };
+        let resumed_partial = resumed.stream.is_partial();
+        let resumed_total = representation_total(resumed_partial, &resumed.stream.headers);
+        if resumed_total.is_some_and(|total| total < resumed.skip) {
+            return Err(NetError::Decode(format!(
+                "resumed response for {} declared a representation shorter than the consumed prefix {}",
+                self.resource, resumed.skip
+            )));
+        }
+        if let Some(expected) = self.representation_total {
+            match resumed_total {
+                Some(actual) if expected == actual => {}
+                Some(actual) => {
+                    return Err(NetError::Decode(format!(
+                        "resumed response for {} changed representation total from {expected} to {actual}",
+                        self.resource
+                    )));
+                }
+                None => {
+                    return Err(NetError::Decode(format!(
+                        "resumed response for {} dropped the known representation total {expected}",
+                        self.resource
+                    )));
+                }
+            }
+        }
+        if self.representation_total.is_none() {
+            self.representation_total = resumed_total;
+            if self.expected_len.is_none() {
+                self.expected_len = resumed_total;
+            }
+        }
         if let Some(observer) = self.observer.as_ref() {
             observer
                 .0
                 .body_resumed(self.resumes, self.consumed, resumed.skip == 0);
         }
+        self.partial = resumed_partial;
         self.inner = resumed.stream;
         self.to_skip = resumed.skip;
         Ok(())
@@ -124,11 +174,16 @@ impl State {
         // `AsPrimitive` is infallible; `u64 -> usize` can narrow, so it goes
         // through checked `ToPrimitive` — `min` caps the skip at the chunk
         // length, so it always fits and the fallback is a valid split point.
-        let len: u64 = bytes.len().as_();
-        let skip = self.to_skip.min(len);
+        let received: u64 = bytes.len().as_();
+        let skip = self.to_skip.min(received);
         self.to_skip -= skip;
-        self.consumed = self.consumed.saturating_add(len - skip);
-        let rest = bytes.split_off(skip.to_usize().unwrap_or(bytes.len()));
+        let mut rest = bytes.split_off(skip.to_usize().unwrap_or(bytes.len()));
+        let available: u64 = rest.len().as_();
+        let accepted = self.expected_len.map_or(available, |expected| {
+            expected.saturating_sub(self.consumed).min(available)
+        });
+        rest.truncate(accepted.to_usize().unwrap_or(rest.len()));
+        self.consumed = self.consumed.saturating_add(accepted);
         (!rest.is_empty()).then_some(rest)
     }
 }
@@ -148,8 +203,10 @@ async fn next_chunk(st: &mut State) -> Option<Result<Bytes, NetError>> {
         biased;
         res = timeout(st.stall, st.inner.next()) => {
             match res {
-                Ok(None) if st.expected_len.is_some() && !st.body_complete() => {
-                    Some(Err(NetError::Network("HTTP body ended before content-length".to_string())))
+                Ok(None) if st.body_incomplete_at_eof() => {
+                    Some(Err(NetError::Network(
+                        "HTTP body ended before representation completion".to_string(),
+                    )))
                 }
                 Ok(item) => item,
                 Err(_) => Some(Err(NetError::Timeout)),
@@ -173,12 +230,15 @@ async fn next_chunk(st: &mut State) -> Option<Result<Bytes, NetError>> {
 pub(crate) fn resumable_body(
     first: ByteStream,
     refetch: Refetch,
+    resource: Url,
     stall: Duration,
     policy: RetryPolicy,
     cancel: CancelToken,
     observer: Option<Observer>,
 ) -> RawBody {
     let expected_len = content_length(&first);
+    let partial = first.is_partial();
+    let response_total = representation_total(partial, &first.headers);
     let state = State {
         refetch,
         stall,
@@ -186,7 +246,10 @@ pub(crate) fn resumable_body(
         cancel,
         expected_len,
         observer,
+        partial,
         inner: first,
+        resource,
+        representation_total: response_total,
         consumed: 0,
         to_skip: 0,
         resumes: 0,
@@ -234,13 +297,23 @@ fn content_length(stream: &ByteStream) -> Option<u64> {
 mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
 
-    use kithara_platform::sync::Arc;
+    use kithara_platform::sync::{Arc, Mutex};
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::types::Headers;
+    use crate::{observe::NetObserver, types::Headers};
 
     const STALL: Duration = Duration::from_millis(40);
+
+    struct StallSignal(Mutex<Option<tokio::sync::oneshot::Sender<()>>>);
+
+    impl NetObserver for StallSignal {
+        fn body_stalled(&self, _consumed: u64, _expected: Option<u64>, _stall: Duration) {
+            if let Some(sender) = self.0.lock().take() {
+                let _ = sender.send(());
+            }
+        }
+    }
 
     fn policy(max_retries: u32) -> RetryPolicy {
         RetryPolicy::builder()
@@ -248,6 +321,10 @@ mod tests {
             .base_delay(Duration::from_millis(1))
             .max_delay(Duration::from_millis(5))
             .build()
+    }
+
+    fn test_url() -> Url {
+        Url::parse("https://example.com/audio.bin").expect("test URL")
     }
 
     fn byte_stream(chunks: Vec<Result<Bytes, NetError>>) -> ByteStream {
@@ -258,6 +335,35 @@ mod tests {
         let mut headers = Headers::default();
         headers.insert("content-length", len.to_string());
         ByteStream::new(headers, Box::pin(stream::iter(chunks)))
+    }
+
+    fn partial_byte_stream(
+        start: u64,
+        end: u64,
+        total: u64,
+        inner: impl Stream<Item = Result<Bytes, NetError>> + Send + 'static,
+    ) -> ByteStream {
+        let mut headers = Headers::default();
+        headers.insert(
+            "content-length",
+            end.saturating_sub(start).saturating_add(1).to_string(),
+        );
+        headers.insert("content-range", format!("bytes {start}-{end}/{total}"));
+        ByteStream::with_partial(headers, Box::pin(inner), true)
+    }
+
+    fn partial_byte_stream_unknown(
+        start: u64,
+        end: u64,
+        inner: impl Stream<Item = Result<Bytes, NetError>> + Send + 'static,
+    ) -> ByteStream {
+        let mut headers = Headers::default();
+        headers.insert(
+            "content-length",
+            end.saturating_sub(start).saturating_add(1).to_string(),
+        );
+        headers.insert("content-range", format!("bytes {start}-{end}/*"));
+        ByteStream::with_partial(headers, Box::pin(inner), true)
     }
 
     /// A body that never yields (server holds the connection open, no bytes).
@@ -274,8 +380,6 @@ mod tests {
         Ok(out)
     }
 
-    /// Withheld body → bounded terminal `RetryExhausted` (not a hang). Works in
-    /// real time and under `flash` (virtual clock collapses the waits).
     fn resumed(stream: ByteStream, skip: u64) -> Resumed {
         Resumed { stream, skip }
     }
@@ -287,6 +391,7 @@ mod tests {
         let result = collect(resumable_body(
             withheld(),
             refetch,
+            test_url(),
             STALL,
             policy(2),
             CancelToken::never(),
@@ -318,6 +423,7 @@ mod tests {
         let out = collect(resumable_body(
             body,
             refetch,
+            test_url(),
             STALL,
             policy(2),
             CancelToken::never(),
@@ -340,7 +446,12 @@ mod tests {
             seen.store(off, Ordering::SeqCst);
             Box::pin(async move {
                 Ok(resumed(
-                    byte_stream(vec![Ok(Bytes::from_static(b"def"))]),
+                    partial_byte_stream(
+                        3,
+                        5,
+                        6,
+                        stream::once(async { Ok(Bytes::from_static(b"def")) }),
+                    ),
                     0,
                 ))
             })
@@ -355,6 +466,7 @@ mod tests {
         let out = collect(resumable_body(
             first,
             refetch,
+            test_url(),
             STALL,
             policy(2),
             CancelToken::never(),
@@ -370,6 +482,360 @@ mod tests {
         );
     }
 
+    #[kithara::test(tokio, timeout(Duration::from_secs(10)))]
+    async fn resume_rejects_conflicting_representation_total() {
+        let refetch: Refetch = Box::new(|_off| {
+            Box::pin(async {
+                Ok(resumed(
+                    partial_byte_stream(
+                        3,
+                        5,
+                        9,
+                        stream::once(async { Ok(Bytes::from_static(b"def")) }),
+                    ),
+                    0,
+                ))
+            })
+        });
+        let first = partial_byte_stream(
+            0,
+            5,
+            6,
+            stream::once(async { Ok(Bytes::from_static(b"abc")) }).chain(stream::pending()),
+        );
+
+        let result = collect(resumable_body(
+            first,
+            refetch,
+            test_url(),
+            STALL,
+            policy(1),
+            CancelToken::never(),
+            None,
+        ))
+        .await;
+
+        assert!(
+            matches!(result, Err(NetError::Decode(detail)) if detail.contains("6") && detail.contains("9"))
+        );
+    }
+
+    #[kithara::test(tokio, timeout(Duration::from_secs(10)))]
+    async fn resume_rejects_unknown_total_after_known_total() {
+        let refetch: Refetch = Box::new(|_off| {
+            Box::pin(async {
+                Ok(resumed(
+                    partial_byte_stream_unknown(
+                        3,
+                        5,
+                        stream::once(async { Ok(Bytes::from_static(b"def")) }),
+                    ),
+                    0,
+                ))
+            })
+        });
+        let first = partial_byte_stream(
+            0,
+            5,
+            6,
+            stream::once(async { Ok(Bytes::from_static(b"abc")) }).chain(stream::pending()),
+        );
+
+        let result = collect(resumable_body(
+            first,
+            refetch,
+            test_url(),
+            STALL,
+            policy(1),
+            CancelToken::never(),
+            None,
+        ))
+        .await;
+
+        assert!(
+            matches!(result, Err(NetError::Decode(detail)) if detail.contains("known representation total"))
+        );
+    }
+
+    #[kithara::test(tokio, timeout(Duration::from_secs(10)))]
+    async fn resume_adopts_discovered_total_and_continues_after_capped_body() {
+        let refetch: Refetch = Box::new(|off| {
+            Box::pin(async move {
+                let stream = match off {
+                    3 => partial_byte_stream(
+                        3,
+                        4,
+                        6,
+                        stream::once(async { Ok(Bytes::from_static(b"de")) }),
+                    ),
+                    5 => partial_byte_stream(
+                        5,
+                        5,
+                        6,
+                        stream::once(async { Ok(Bytes::from_static(b"f")) }),
+                    ),
+                    _ => panic!("unexpected resume offset {off}"),
+                };
+                Ok(resumed(stream, 0))
+            })
+        });
+        let first = ByteStream::new(
+            Headers::default(),
+            Box::pin(
+                stream::once(async { Ok(Bytes::from_static(b"abc")) }).chain(stream::pending()),
+            ),
+        );
+
+        let out = collect(resumable_body(
+            first,
+            refetch,
+            test_url(),
+            STALL,
+            policy(2),
+            CancelToken::never(),
+            None,
+        ))
+        .await
+        .expect("discovered total must drive the remaining resume");
+
+        assert_eq!(out, b"abcdef");
+    }
+
+    #[kithara::test(tokio, timeout(Duration::from_secs(10)))]
+    async fn resumed_partial_unknown_total_never_proves_completion() {
+        let refetch: Refetch = Box::new(|off| {
+            Box::pin(async move {
+                Ok(resumed(
+                    partial_byte_stream_unknown(
+                        off,
+                        off.saturating_add(1),
+                        stream::once(async { Ok(Bytes::from_static(b"de")) }),
+                    ),
+                    0,
+                ))
+            })
+        });
+        let first = ByteStream::new(
+            Headers::default(),
+            Box::pin(
+                stream::once(async { Ok(Bytes::from_static(b"abc")) }).chain(stream::pending()),
+            ),
+        );
+
+        let result = collect(resumable_body(
+            first,
+            refetch,
+            test_url(),
+            STALL,
+            policy(1),
+            CancelToken::never(),
+            None,
+        ))
+        .await;
+
+        assert!(matches!(result, Err(NetError::RetryExhausted { .. })));
+    }
+
+    #[kithara::test(tokio, timeout(Duration::from_secs(10)))]
+    async fn resumed_full_body_cannot_shrink_below_consumed_prefix() {
+        let refetch: Refetch = Box::new(|off| {
+            Box::pin(async move {
+                Ok(resumed(
+                    byte_stream_with_len(3, vec![Ok(Bytes::from_static(b"abc"))]),
+                    off,
+                ))
+            })
+        });
+        let first = byte_stream(vec![
+            Ok(Bytes::from_static(b"abcdef")),
+            Err(NetError::Network("reset".to_string())),
+        ]);
+
+        let result = collect(resumable_body(
+            first,
+            refetch,
+            test_url(),
+            STALL,
+            policy(1),
+            CancelToken::never(),
+            None,
+        ))
+        .await;
+
+        assert!(
+            matches!(result, Err(NetError::Decode(detail)) if detail.contains("consumed prefix"))
+        );
+    }
+
+    #[kithara::test(tokio, timeout(Duration::from_secs(10)))]
+    async fn resumed_unknown_full_body_shorter_than_prefix_never_proves_completion() {
+        let refetch: Refetch = Box::new(|off| {
+            Box::pin(async move {
+                Ok(resumed(
+                    byte_stream(vec![Ok(Bytes::from_static(b"abc"))]),
+                    off,
+                ))
+            })
+        });
+        let first = byte_stream(vec![
+            Ok(Bytes::from_static(b"abcdef")),
+            Err(NetError::Network("reset".to_string())),
+        ]);
+
+        let result = collect(resumable_body(
+            first,
+            refetch,
+            test_url(),
+            STALL,
+            policy(1),
+            CancelToken::never(),
+            None,
+        ))
+        .await;
+
+        assert!(matches!(result, Err(NetError::RetryExhausted { .. })));
+    }
+
+    #[kithara::test(tokio, multi_thread, flash(false), timeout(Duration::from_secs(1)))]
+    async fn cancellation_interrupts_an_inflight_refetch() {
+        let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+        let entered = Arc::new(Mutex::new(Some(entered_tx)));
+        let refetch: Refetch = Box::new(move |_off| {
+            let entered = Arc::clone(&entered);
+            Box::pin(async move {
+                if let Some(sender) = entered.lock().take() {
+                    let _ = sender.send(());
+                }
+                futures::future::pending::<Result<Resumed, NetError>>().await
+            })
+        });
+        let cancel = CancelToken::root();
+        let trigger = cancel.clone();
+        tokio::task::spawn(async move {
+            entered_rx.await.expect("refetch must start");
+            trigger.cancel();
+        });
+        let first = byte_stream(vec![Err(NetError::Network("reset".to_string()))]);
+
+        let result = collect(resumable_body(
+            first,
+            refetch,
+            test_url(),
+            STALL,
+            policy(1),
+            cancel,
+            None,
+        ))
+        .await;
+
+        assert!(matches!(result, Err(NetError::Cancelled)));
+    }
+
+    #[kithara::test(tokio, multi_thread, flash(false), timeout(Duration::from_secs(1)))]
+    async fn cancellation_interrupts_retry_backoff() {
+        let (stalled_tx, stalled_rx) = tokio::sync::oneshot::channel();
+        let observer = Observer(Arc::new(StallSignal(Mutex::new(Some(stalled_tx)))));
+        let cancel = CancelToken::root();
+        let trigger = cancel.clone();
+        tokio::task::spawn(async move {
+            stalled_rx.await.expect("body must stall");
+            trigger.cancel();
+        });
+        let refetch: Refetch =
+            Box::new(|_off| Box::pin(async { panic!("cancelled backoff must not re-fetch") }));
+        let long_backoff = RetryPolicy::builder()
+            .max_retries(1)
+            .base_delay(Duration::from_secs(60))
+            .max_delay(Duration::from_secs(60))
+            .build();
+
+        let result = collect(resumable_body(
+            withheld(),
+            refetch,
+            test_url(),
+            STALL,
+            long_backoff,
+            cancel,
+            Some(observer),
+        ))
+        .await;
+
+        assert!(matches!(result, Err(NetError::Cancelled)));
+    }
+
+    #[kithara::test(tokio, timeout(Duration::from_secs(10)))]
+    async fn resumed_partial_is_capped_to_original_response_span() {
+        let refetch: Refetch = Box::new(|_off| {
+            Box::pin(async {
+                Ok(resumed(
+                    partial_byte_stream(
+                        3,
+                        15,
+                        100,
+                        stream::once(async { Ok(Bytes::from_static(b"defghijklmnop")) }),
+                    ),
+                    0,
+                ))
+            })
+        });
+        let first = partial_byte_stream(
+            0,
+            5,
+            100,
+            stream::iter([
+                Ok(Bytes::from_static(b"abc")),
+                Err(NetError::Network("reset".to_string())),
+            ]),
+        );
+
+        let out = collect(resumable_body(
+            first,
+            refetch,
+            test_url(),
+            STALL,
+            policy(1),
+            CancelToken::never(),
+            None,
+        ))
+        .await
+        .expect("resume must complete only the original response span");
+
+        assert_eq!(out, b"abcdef");
+    }
+
+    #[kithara::test(tokio, timeout(Duration::from_secs(10)))]
+    async fn ignored_resume_is_capped_to_original_response_length() {
+        let refetch: Refetch = Box::new(|off| {
+            Box::pin(async move {
+                Ok(resumed(
+                    byte_stream_with_len(6, vec![Ok(Bytes::from_static(b"abcdefghi"))]),
+                    off,
+                ))
+            })
+        });
+        let first = byte_stream_with_len(
+            6,
+            vec![
+                Ok(Bytes::from_static(b"abc")),
+                Err(NetError::Network("reset".to_string())),
+            ],
+        );
+
+        let out = collect(resumable_body(
+            first,
+            refetch,
+            test_url(),
+            STALL,
+            policy(1),
+            CancelToken::never(),
+            None,
+        ))
+        .await
+        .expect("ignored resume must complete only the original response length");
+
+        assert_eq!(out, b"abcdef");
+    }
+
     /// A clean EOF before the promised content-length is a broken transfer, not
     /// a complete body. Treat it like a transient body failure and resume from
     /// the consumed offset.
@@ -381,7 +847,12 @@ mod tests {
             seen.store(off, Ordering::SeqCst);
             Box::pin(async move {
                 Ok(resumed(
-                    byte_stream(vec![Ok(Bytes::from_static(b"def"))]),
+                    partial_byte_stream(
+                        3,
+                        5,
+                        6,
+                        stream::once(async { Ok(Bytes::from_static(b"def")) }),
+                    ),
                     0,
                 ))
             })
@@ -389,6 +860,7 @@ mod tests {
         let out = collect(resumable_body(
             byte_stream_with_len(6, vec![Ok(Bytes::from_static(b"abc"))]),
             refetch,
+            test_url(),
             STALL,
             policy(2),
             CancelToken::never(),
@@ -426,6 +898,7 @@ mod tests {
         let out = collect(resumable_body(
             first,
             refetch,
+            test_url(),
             STALL,
             policy(2),
             CancelToken::never(),

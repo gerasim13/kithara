@@ -159,7 +159,7 @@ fn analyze_sources(
                 .sum::<f64>()
                 / count_f64(matching.pairs.len());
             let coverage = count_f64(matching.pairs.len()) / count_f64(largest);
-            type_similarity * (0.5 + 0.5 * coverage)
+            type_similarity * 0.5f64.mul_add(coverage, 0.5)
         };
         let state_candidate = !matching.pairs.is_empty()
             && matching.pairs.len() * 2 >= largest
@@ -182,7 +182,7 @@ fn analyze_sources(
             if state_similarity == 0.0 {
                 behavior
             } else {
-                0.60 * state_similarity + 0.40 * behavior
+                0.40f64.mul_add(behavior, 0.60 * state_similarity)
             }
         });
         let substitutions = matching
@@ -668,7 +668,7 @@ fn compare_behaviors(left: &[Behavior], right: &[Behavior]) -> Option<BehaviorMa
     let coverage = count_f64(matched.len()) / count_f64(left.len().max(right.len()));
     Some(BehaviorMatching {
         shared_labels,
-        score: average * (0.5 + 0.5 * coverage),
+        score: average * 0.5f64.mul_add(coverage, 0.5),
     })
 }
 
@@ -704,7 +704,7 @@ fn matched_fields(
         for (right_index, right_field) in right.fields.iter().enumerate() {
             let comparison = arena.compare(left_field.shape, right_field.shape, catalog, cache);
             let name_similarity = identifier_similarity(&left_field.name, &right_field.name);
-            let score = 0.85 * comparison.score + 0.15 * name_similarity;
+            let score = 0.15f64.mul_add(name_similarity, 0.85 * comparison.score);
             let ambiguous_primitive = arena.is_ambiguous_scalar(left_field.shape)
                 && arena.is_ambiguous_scalar(right_field.shape)
                 && name_similarity < 0.34;

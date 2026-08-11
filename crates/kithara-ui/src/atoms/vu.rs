@@ -1,6 +1,6 @@
 use iced::{
     Color, Element, Event, Length, Point, Rectangle, Renderer, Size, Theme,
-    mouse::{self, Cursor},
+    mouse::{Cursor, Interaction},
     widget::{
         Space,
         canvas::{self, Action, Canvas, Frame, Geometry},
@@ -35,7 +35,7 @@ impl<'a> Widget<'a> for VerticalVu<'_, '_, '_, '_> {
             drag: ScalarDrag::builder()
                 .path(self.path)
                 .mode(ScalarDragMode::Vertical)
-                .hover(HoverState::new(mouse::Interaction::ResizingVertically))
+                .hover(HoverState::new(Interaction::ResizingVertically))
                 .build(),
             metrics: self.skin.vu_vertical,
             ticks: self
@@ -116,7 +116,7 @@ impl canvas::Program<UiEvent> for VerticalVuCanvas {
                 state: &ScalarDragState,
                 bounds: Rectangle,
                 cursor: Cursor,
-            ) -> mouse::Interaction;
+            ) -> Interaction;
         }
     }
 }
@@ -154,7 +154,7 @@ fn draw_segments(
     let count_usize: usize = count.as_();
     let level = (levels.l.max(levels.r) * levels.volume).clamp(0.0, 1.0);
     let lit = (level * count).round();
-    let width = (bounds.width - metrics.segment_inset_x * 2.0).max(0.0);
+    let width = metrics.segment_inset_x.mul_add(-2.0, bounds.width).max(0.0);
     for index in 0..count_usize {
         let index: f32 = index.as_();
         let ratio = index / count;
@@ -167,7 +167,7 @@ fn draw_segments(
         } else {
             palette.success
         };
-        let y = bounds.y + bounds.height - metrics.segment_height - index * step;
+        let y = index.mul_add(-step, bounds.y + bounds.height - metrics.segment_height);
         frame.fill_rectangle(
             Point::new(bounds.x + metrics.segment_inset_x, y),
             Size::new(width, metrics.segment_height),

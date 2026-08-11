@@ -18,7 +18,7 @@ pub(super) struct ToolchainInstaller<'a> {
 }
 
 impl<'a> ToolchainInstaller<'a> {
-    pub(super) fn new(config: &'a CiConfig, process: &'a Process) -> Self {
+    pub(super) const fn new(config: &'a CiConfig, process: &'a Process) -> Self {
         Self { config, process }
     }
 

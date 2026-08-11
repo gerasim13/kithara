@@ -215,7 +215,7 @@ fn seek_backs_up_one_segment_for_aac_preroll() {
 #[kithara::test]
 fn seek_emits_notneeded_for_symphonia_aac_segment_boundary() {
     let (blob, segmented) = build_test_layout(TestLayoutCodec::Aac, 5);
-    let (mut decoder, _reads, _record) = make_decoder(blob, segmented.clone());
+    let (mut decoder, _reads, _record) = make_decoder(blob, segmented);
 
     let target = Duration::from_secs(18);
     let outcome = decoder.seek(target).expect("BUG: seek");
@@ -233,7 +233,7 @@ fn seek_emits_notneeded_for_symphonia_aac_segment_boundary() {
 #[kithara::test]
 fn seek_emits_notneeded_for_symphonia_aac_first_segment() {
     let (blob, segmented) = build_test_layout(TestLayoutCodec::Aac, 5);
-    let (mut decoder, _reads, _record) = make_decoder(blob, segmented.clone());
+    let (mut decoder, _reads, _record) = make_decoder(blob, segmented);
 
     let outcome = decoder.seek(Duration::ZERO).expect("BUG: seek to start");
     let DecoderSeekOutcome::Landed { preroll, .. } = outcome else {

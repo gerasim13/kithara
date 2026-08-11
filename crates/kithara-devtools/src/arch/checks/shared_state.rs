@@ -172,7 +172,7 @@ mod tests {
     fn strip_blanks_string_content_but_preserves_length() {
         let stripped = strip_string_literals("let x = \"Arc<Mutex<u32>>\";");
         assert!(!stripped.contains("Arc<"));
-        assert!(stripped.contains("\""));
+        assert!(stripped.contains('"'));
     }
 
     #[test]

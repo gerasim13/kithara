@@ -77,11 +77,11 @@ impl TrackTriggers {
         }
     }
 
-    pub(crate) fn mark_prefetch_requested(&mut self) {
+    pub(crate) const fn mark_prefetch_requested(&mut self) {
         self.notified_prefetch_requested = true;
     }
 
-    pub(crate) fn reset(&mut self) {
+    pub(crate) const fn reset(&mut self) {
         self.notified_prefetch_requested = false;
         self.notified_track_requested = false;
     }

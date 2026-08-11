@@ -2,7 +2,7 @@ use std::mem;
 
 use iced::{
     Event, Point, Rectangle,
-    mouse::{self, Button, Cursor, ScrollDelta},
+    mouse::{Button, Cursor, Event as MouseEvent, Interaction, ScrollDelta},
     time::Instant,
     widget::canvas::Action,
 };
@@ -11,11 +11,11 @@ use crate::render::{ControlAction, DragPhase, UiEvent};
 
 #[derive(Clone, Copy)]
 pub(crate) struct HoverState {
-    interaction: mouse::Interaction,
+    interaction: Interaction,
 }
 
 impl HoverState {
-    pub(crate) const fn new(interaction: mouse::Interaction) -> Self {
+    pub(crate) const fn new(interaction: Interaction) -> Self {
         Self { interaction }
     }
 
@@ -24,11 +24,11 @@ impl HoverState {
         active: bool,
         bounds: Rectangle,
         cursor: Cursor,
-    ) -> mouse::Interaction {
+    ) -> Interaction {
         if active || cursor.is_over(bounds) {
             self.interaction
         } else {
-            mouse::Interaction::default()
+            Interaction::default()
         }
     }
 }
@@ -49,11 +49,11 @@ pub(crate) struct ItemDragState {
 }
 
 impl ItemDragState {
-    pub(crate) const fn interaction(&self) -> mouse::Interaction {
+    pub(crate) const fn interaction(&self) -> Interaction {
         if self.active {
-            mouse::Interaction::Grabbing
+            Interaction::Grabbing
         } else {
-            mouse::Interaction::None
+            Interaction::None
         }
     }
 }
@@ -82,14 +82,14 @@ impl ItemDrag {
         cursor: Cursor,
     ) -> Option<Action<UiEvent>> {
         match event {
-            Event::Mouse(mouse::Event::ButtonPressed(Button::Left)) if cursor.is_over(bounds) => {
+            Event::Mouse(MouseEvent::ButtonPressed(Button::Left)) if cursor.is_over(bounds) => {
                 *state = ItemDragState {
                     held: true,
                     ..ItemDragState::default()
                 };
                 None
             }
-            Event::Mouse(mouse::Event::CursorMoved { position }) if state.held && !state.active => {
+            Event::Mouse(MouseEvent::CursorMoved { position }) if state.held && !state.active => {
                 let Some(origin) = state.origin else {
                     state.origin = Some(*position);
                     return None;
@@ -100,7 +100,7 @@ impl ItemDrag {
                 state.active = true;
                 Some(self.publish(DragPhase::Start(self.index)))
             }
-            Event::Mouse(mouse::Event::ButtonReleased(Button::Left)) => {
+            Event::Mouse(MouseEvent::ButtonReleased(Button::Left)) => {
                 let dragging = mem::take(state).active;
                 dragging.then(|| self.publish(DragPhase::Drop))
             }
@@ -131,7 +131,7 @@ impl HorizontalPixelDrag {
         state: &HorizontalPixelDragState,
         bounds: Rectangle,
         cursor: Cursor,
-    ) -> mouse::Interaction {
+    ) -> Interaction {
         self.hover.interaction(state.active, bounds, cursor)
     }
 
@@ -151,20 +151,20 @@ impl HorizontalPixelDrag {
         cursor: Cursor,
     ) -> Option<Action<UiEvent>> {
         match event {
-            Event::Mouse(mouse::Event::ButtonPressed(Button::Left)) if cursor.is_over(bounds) => {
+            Event::Mouse(MouseEvent::ButtonPressed(Button::Left)) if cursor.is_over(bounds) => {
                 state.start_position = cursor.position()?.x;
                 state.start_value = self.value;
                 state.active = true;
                 Some(Action::capture())
             }
-            Event::Mouse(mouse::Event::CursorMoved { .. }) if state.active => {
+            Event::Mouse(MouseEvent::CursorMoved { .. }) if state.active => {
                 cursor.position().map(|position| {
                     self.publish(
                         (state.start_value + position.x - state.start_position).max(self.minimum),
                     )
                 })
             }
-            Event::Mouse(mouse::Event::ButtonReleased(Button::Left)) if state.active => {
+            Event::Mouse(MouseEvent::ButtonReleased(Button::Left)) if state.active => {
                 state.active = false;
                 Some(Action::capture())
             }
@@ -181,11 +181,7 @@ pub(crate) struct ClickActivate {
 }
 
 impl ClickActivate {
-    pub(crate) fn mouse_interaction(
-        &self,
-        bounds: Rectangle,
-        cursor: Cursor,
-    ) -> mouse::Interaction {
+    pub(crate) fn mouse_interaction(&self, bounds: Rectangle, cursor: Cursor) -> Interaction {
         self.hover.interaction(false, bounds, cursor)
     }
 
@@ -197,7 +193,7 @@ impl ClickActivate {
         cursor: Cursor,
     ) -> Option<Action<UiEvent>> {
         match event {
-            Event::Mouse(mouse::Event::ButtonPressed(Button::Left)) if cursor.is_over(bounds) => {
+            Event::Mouse(MouseEvent::ButtonPressed(Button::Left)) if cursor.is_over(bounds) => {
                 Some(
                     Action::publish(UiEvent::Control {
                         path: self.path.clone(),
@@ -301,7 +297,7 @@ impl ScalarDrag {
         state: &ScalarDragState,
         bounds: Rectangle,
         cursor: Cursor,
-    ) -> mouse::Interaction {
+    ) -> Interaction {
         self.hover.interaction(state.active, bounds, cursor)
     }
 
@@ -329,7 +325,7 @@ impl ScalarDrag {
         cursor: Cursor,
     ) -> Option<Action<UiEvent>> {
         match event {
-            Event::Mouse(mouse::Event::ButtonPressed(Button::Left)) if cursor.is_over(bounds) => {
+            Event::Mouse(MouseEvent::ButtonPressed(Button::Left)) if cursor.is_over(bounds) => {
                 if let Some(action) = self.double_click_action(state, cursor) {
                     return Some(action);
                 }
@@ -353,12 +349,12 @@ impl ScalarDrag {
                     ScalarDragMode::HorizontalClick => self.absolute_action(bounds, cursor),
                 }
             }
-            Event::Mouse(mouse::Event::CursorMoved { .. }) if state.active => match self.mode {
+            Event::Mouse(MouseEvent::CursorMoved { .. }) if state.active => match self.mode {
                 ScalarDragMode::RelativeHorizontal { scale, .. } if bounds.width > 0.0 => {
                     cursor.position().map(|position| {
                         self.publish(
-                            (state.start_value
-                                - (position.x - state.start_position) / bounds.width * scale)
+                            ((position.x - state.start_position) / bounds.width)
+                                .mul_add(-scale, state.start_value)
                                 .clamp(0.0, 1.0),
                         )
                     })
@@ -376,11 +372,11 @@ impl ScalarDrag {
                 }
                 ScalarDragMode::HorizontalClick | ScalarDragMode::RelativeHorizontal { .. } => None,
             },
-            Event::Mouse(mouse::Event::ButtonReleased(Button::Left)) if state.active => {
+            Event::Mouse(MouseEvent::ButtonReleased(Button::Left)) if state.active => {
                 state.active = false;
                 Some(Action::capture())
             }
-            Event::Mouse(mouse::Event::WheelScrolled { delta }) if cursor.is_over(bounds) => {
+            Event::Mouse(MouseEvent::WheelScrolled { delta }) if cursor.is_over(bounds) => {
                 let wheel = self.wheel?;
                 let steps = wheel_steps(&mut state.wheel_accum, *delta);
                 if steps == 0.0 {
@@ -412,13 +408,13 @@ fn wheel_steps(accum: &mut f32, delta: ScrollDelta) -> f32 {
         ScrollDelta::Pixels { y, .. } => {
             *accum -= y;
             let steps = (*accum / WHEEL_PIXELS_PER_STEP).trunc();
-            *accum -= steps * WHEEL_PIXELS_PER_STEP;
+            *accum = steps.mul_add(-WHEEL_PIXELS_PER_STEP, *accum);
             steps
         }
     }
 }
 
-pub(crate) fn scroll_y(delta: ScrollDelta) -> f32 {
+pub(crate) const fn scroll_y(delta: ScrollDelta) -> f32 {
     match delta {
         ScrollDelta::Lines { y, .. } | ScrollDelta::Pixels { y, .. } => y,
     }
@@ -430,13 +426,14 @@ fn normalized_horizontal(bounds: Rectangle, position: Point) -> Option<f32> {
 
 #[cfg(test)]
 mod tests {
+    use iced::{Size, event::Status};
     use kithara_test_utils::kithara;
 
     use super::*;
 
     #[kithara::test]
     fn horizontal_click_maps_to_normalized_position() {
-        let bounds = Rectangle::new(Point::new(20.0, 4.0), iced::Size::new(200.0, 40.0));
+        let bounds = Rectangle::new(Point::new(20.0, 4.0), Size::new(200.0, 40.0));
 
         for (x, expected) in [
             (0.0, 0.0),
@@ -460,17 +457,17 @@ mod tests {
     };
 
     fn moved(x: f32) -> Event {
-        Event::Mouse(mouse::Event::CursorMoved {
+        Event::Mouse(MouseEvent::CursorMoved {
             position: Point::new(x, 13.0),
         })
     }
 
     fn press() -> Event {
-        Event::Mouse(mouse::Event::ButtonPressed(Button::Left))
+        Event::Mouse(MouseEvent::ButtonPressed(Button::Left))
     }
 
     fn release() -> Event {
-        Event::Mouse(mouse::Event::ButtonReleased(Button::Left))
+        Event::Mouse(MouseEvent::ButtonReleased(Button::Left))
     }
 
     fn dragged(path: &str, phase: DragPhase) -> UiEvent {
@@ -506,7 +503,7 @@ mod tests {
             message,
             Some(dragged("library/tracks", DragPhase::Start(3)))
         );
-        assert_eq!(status, iced::event::Status::Ignored);
+        assert_eq!(status, Status::Ignored);
         assert!(
             drag.update(&mut state, &moved(80.0), ROW, at(80.0))
                 .is_none(),
@@ -595,11 +592,11 @@ mod tests {
         let drag = ScalarDrag::builder()
             .path("volume")
             .mode(ScalarDragMode::Horizontal)
-            .hover(HoverState::new(mouse::Interaction::ResizingHorizontally))
+            .hover(HoverState::new(Interaction::ResizingHorizontally))
             .build();
-        let bounds = Rectangle::new(Point::ORIGIN, iced::Size::new(64.0, 22.0));
+        let bounds = Rectangle::new(Point::ORIGIN, Size::new(64.0, 22.0));
         let cursor = Cursor::Available(Point::new(16.0, 11.0));
-        let press = Event::Mouse(mouse::Event::ButtonPressed(Button::Left));
+        let press = Event::Mouse(MouseEvent::ButtonPressed(Button::Left));
         let mut state = ScalarDragState::default();
 
         let action = drag
@@ -624,13 +621,13 @@ mod tests {
                 value: 0.8,
                 range: 140.0,
             })
-            .hover(HoverState::new(mouse::Interaction::ResizingVertically))
+            .hover(HoverState::new(Interaction::ResizingVertically))
             .double_click_value(0.5)
             .build();
-        let bounds = Rectangle::new(Point::ORIGIN, iced::Size::new(34.0, 34.0));
+        let bounds = Rectangle::new(Point::ORIGIN, Size::new(34.0, 34.0));
         let cursor = Cursor::Available(Point::new(17.0, 17.0));
-        let press = Event::Mouse(mouse::Event::ButtonPressed(Button::Left));
-        let release = Event::Mouse(mouse::Event::ButtonReleased(Button::Left));
+        let press = Event::Mouse(MouseEvent::ButtonPressed(Button::Left));
+        let release = Event::Mouse(MouseEvent::ButtonReleased(Button::Left));
         let mut state = ScalarDragState::default();
 
         assert!(drag.update(&mut state, &press, bounds, cursor).is_some());
@@ -655,11 +652,11 @@ mod tests {
                 value: 0.4,
                 scale: 0.2,
             })
-            .hover(HoverState::new(mouse::Interaction::Grab))
+            .hover(HoverState::new(Interaction::Grab))
             .build();
-        let bounds = Rectangle::new(Point::ORIGIN, iced::Size::new(200.0, 40.0));
-        let press = Event::Mouse(mouse::Event::ButtonPressed(Button::Left));
-        let release = Event::Mouse(mouse::Event::ButtonReleased(Button::Left));
+        let bounds = Rectangle::new(Point::ORIGIN, Size::new(200.0, 40.0));
+        let press = Event::Mouse(MouseEvent::ButtonPressed(Button::Left));
+        let release = Event::Mouse(MouseEvent::ButtonReleased(Button::Left));
         let mut state = ScalarDragState::default();
 
         let pressed = drag
@@ -675,7 +672,7 @@ mod tests {
         let moved = drag
             .update(
                 &mut state,
-                &Event::Mouse(mouse::Event::CursorMoved {
+                &Event::Mouse(MouseEvent::CursorMoved {
                     position: Point::new(150.0, 20.0),
                 }),
                 bounds,
@@ -711,17 +708,17 @@ mod tests {
                 value: 0.5,
                 range: 140.0,
             })
-            .hover(HoverState::new(mouse::Interaction::ResizingVertically))
+            .hover(HoverState::new(Interaction::ResizingVertically))
             .wheel(WheelStep {
                 value: 0.5,
                 step: 0.25,
             })
             .build();
-        let bounds = Rectangle::new(Point::ORIGIN, iced::Size::new(34.0, 34.0));
+        let bounds = Rectangle::new(Point::ORIGIN, Size::new(34.0, 34.0));
         let over = Cursor::Available(Point::new(17.0, 17.0));
         let mut state = ScalarDragState::default();
         let wheel = |y: f32| {
-            Event::Mouse(mouse::Event::WheelScrolled {
+            Event::Mouse(MouseEvent::WheelScrolled {
                 delta: ScrollDelta::Lines { x: 0.0, y },
             })
         };
@@ -761,17 +758,17 @@ mod tests {
                 value: 0.5,
                 range: 140.0,
             })
-            .hover(HoverState::new(mouse::Interaction::ResizingVertically))
+            .hover(HoverState::new(Interaction::ResizingVertically))
             .wheel(WheelStep {
                 value: 0.5,
                 step: 0.25,
             })
             .build();
-        let bounds = Rectangle::new(Point::ORIGIN, iced::Size::new(34.0, 34.0));
+        let bounds = Rectangle::new(Point::ORIGIN, Size::new(34.0, 34.0));
         let over = Cursor::Available(Point::new(17.0, 17.0));
         let mut state = ScalarDragState::default();
         let pixels = |y: f32| {
-            Event::Mouse(mouse::Event::WheelScrolled {
+            Event::Mouse(MouseEvent::WheelScrolled {
                 delta: ScrollDelta::Pixels { x: 0.0, y },
             })
         };
@@ -813,11 +810,11 @@ mod tests {
         let drag = ScalarDrag::builder()
             .path("wave")
             .mode(ScalarDragMode::HorizontalClick)
-            .hover(HoverState::new(mouse::Interaction::Pointer))
+            .hover(HoverState::new(Interaction::Pointer))
             .build();
-        let bounds = Rectangle::new(Point::ORIGIN, iced::Size::new(200.0, 40.0));
+        let bounds = Rectangle::new(Point::ORIGIN, Size::new(200.0, 40.0));
         let mut state = ScalarDragState::default();
-        let wheel = Event::Mouse(mouse::Event::WheelScrolled {
+        let wheel = Event::Mouse(MouseEvent::WheelScrolled {
             delta: ScrollDelta::Lines { x: 0.0, y: 1.0 },
         });
 
@@ -838,10 +835,10 @@ mod tests {
             .path("tracklist/table/width/artist")
             .value(180.0)
             .minimum(28.0)
-            .hover(HoverState::new(mouse::Interaction::ResizingHorizontally))
+            .hover(HoverState::new(Interaction::ResizingHorizontally))
             .build();
-        let bounds = Rectangle::new(Point::ORIGIN, iced::Size::new(7.0, 22.0));
-        let press = Event::Mouse(mouse::Event::ButtonPressed(Button::Left));
+        let bounds = Rectangle::new(Point::ORIGIN, Size::new(7.0, 22.0));
+        let press = Event::Mouse(MouseEvent::ButtonPressed(Button::Left));
         let mut state = HorizontalPixelDragState::default();
 
         assert!(
@@ -856,7 +853,7 @@ mod tests {
         let grown = drag
             .update(
                 &mut state,
-                &Event::Mouse(mouse::Event::CursorMoved {
+                &Event::Mouse(MouseEvent::CursorMoved {
                     position: Point::new(43.0, 11.0),
                 }),
                 bounds,
@@ -874,7 +871,7 @@ mod tests {
         let clamped = drag
             .update(
                 &mut state,
-                &Event::Mouse(mouse::Event::CursorMoved {
+                &Event::Mouse(MouseEvent::CursorMoved {
                     position: Point::new(-300.0, 11.0),
                 }),
                 bounds,

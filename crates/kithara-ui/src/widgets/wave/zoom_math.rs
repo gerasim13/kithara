@@ -10,7 +10,7 @@ pub(crate) const MIN_ZOOM: f32 = 0.015;
 
 const BUTTON_FACTOR: f32 = 0.7;
 
-pub(crate) fn clamp_zoom(zoom: f32) -> f32 {
+pub(crate) const fn clamp_zoom(zoom: f32) -> f32 {
     zoom.clamp(MIN_ZOOM, MAX_ZOOM)
 }
 
@@ -75,7 +75,11 @@ pub(crate) fn norm_to_x(norm: f32, window: &Range<f32>, width: f32) -> f32 {
 }
 
 pub(crate) fn x_to_norm(x: f32, window: &Range<f32>, width: f32) -> Option<f32> {
-    (width > 0.0).then(|| (window.start + x / width * (window.end - window.start)).clamp(0.0, 1.0))
+    (width > 0.0).then(|| {
+        (x / width)
+            .mul_add(window.end - window.start, window.start)
+            .clamp(0.0, 1.0)
+    })
 }
 
 pub(crate) fn visible_marks<'a>(marks: &'a [f32], window: &Range<f32>) -> &'a [f32] {

@@ -33,7 +33,7 @@ pub(super) struct ExtraBindingRefs<'a> {
 }
 
 impl ExtraBindings {
-    pub(super) fn as_refs(&self) -> ExtraBindingRefs<'_> {
+    pub(super) const fn as_refs(&self) -> ExtraBindingRefs<'_> {
         ExtraBindingRefs {
             columns_state: self.columns_state.as_ref(),
             query: self.query.as_ref(),
@@ -83,7 +83,7 @@ impl ExtraBindings {
 }
 
 impl<'a> ControlFields<'a> {
-    pub(super) fn new(
+    pub(super) const fn new(
         id: &'a NodeId,
         size: Option<SizeSpec>,
         read: Option<&'a BindingRef>,

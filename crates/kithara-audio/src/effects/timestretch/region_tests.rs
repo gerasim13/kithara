@@ -101,7 +101,7 @@ fn render(speed: f32, plan: Option<RegionPlan>, source: &[f32]) -> Vec<f32> {
     controls.set_keylock(true);
     controls.set_backend(StretchKind::Signalsmith);
     controls.set_region_plan(plan.map(Arc::new));
-    let mut fx = TimeStretchProcessor::new(controls, spec(), PcmPool::default().clone());
+    let mut fx = TimeStretchProcessor::new(controls, spec(), PcmPool::default());
     let mut out = Vec::new();
     let mut offset = 0_u64;
     for data in source.chunks(4096 * CH) {

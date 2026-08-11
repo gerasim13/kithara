@@ -36,7 +36,7 @@ where
         )
     }
 
-    pub(super) fn wrap(pool: Arc<Pool<SHARDS, T>>, value: T, shard_idx: usize) -> Self {
+    pub(super) const fn wrap(pool: Arc<Pool<SHARDS, T>>, value: T, shard_idx: usize) -> Self {
         Self {
             pool,
             shard_idx,

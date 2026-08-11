@@ -196,7 +196,7 @@ async fn mp3_endpoint(req: Request) -> Response {
     serve_mp3_with_range(req)
 }
 
-fn hls_master_playlist() -> &'static str {
+const fn hls_master_playlist() -> &'static str {
     r#"#EXTM3U
 #EXT-X-VERSION:6
 #EXT-X-STREAM-INF:BANDWIDTH=640000,CODECS="mp4a.40.2"

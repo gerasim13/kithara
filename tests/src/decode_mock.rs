@@ -23,7 +23,7 @@ pub struct MockLog<T> {
 
 impl<T> MockLog<T> {
     #[must_use]
-    pub fn new(value: T) -> Self {
+    pub const fn new(value: T) -> Self {
         Self {
             inner: StdMutex::new(value),
         }

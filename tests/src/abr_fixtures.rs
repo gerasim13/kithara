@@ -47,6 +47,6 @@ pub fn abr_fast() -> AbrSettings {
 /// Default initial ABR mode for test fixtures — Auto starting at variant 0.
 #[must_use]
 #[kithara::fixture]
-pub fn abr_initial_mode() -> AbrMode {
+pub const fn abr_initial_mode() -> AbrMode {
     AbrMode::Auto(None)
 }

@@ -71,7 +71,7 @@ impl std::fmt::Debug for ProbeEvent {
             .copied()
             .filter(|k| !debug_keys::NUMERIC_SERVICE.contains(k))
             .collect();
-        numeric_keys.sort();
+        numeric_keys.sort_unstable();
         for key in numeric_keys {
             if let Some(value) = self.fields.get(key) {
                 s.field(key, value);
@@ -86,7 +86,7 @@ impl std::fmt::Debug for ProbeEvent {
             .copied()
             .filter(|k| !debug_keys::STRING_SERVICE.contains(k))
             .collect();
-        string_keys.sort();
+        string_keys.sort_unstable();
         for key in string_keys {
             if let Some(value) = self.string_fields.get(key) {
                 s.field(key, value);

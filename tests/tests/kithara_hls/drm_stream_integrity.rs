@@ -16,7 +16,7 @@ use kithara::{
 use kithara_integration_tests::{TestServerHelper, TestTempDir, auto, temp_dir};
 use tracing::{debug, error, info, warn};
 
-fn is_known_box(tag: &[u8; 4]) -> bool {
+const fn is_known_box(tag: &[u8; 4]) -> bool {
     matches!(
         tag,
         b"moof" | b"mdat" | b"styp" | b"sidx" | b"free" | b"ftyp" | b"moov" | b"emsg"
@@ -71,9 +71,7 @@ fn next_box(
         debug!("[{label}] scan: EOF at pos={pos} (read {n} bytes)");
         return None;
     }
-    let Some((size, tag)) = parse_box_header(&header[..n]) else {
-        return None;
-    };
+    let (size, tag) = parse_box_header(&header[..n])?;
     if size < 8 && size != 0 {
         let hex = hex_dump(&header[..8]);
         warn!("[{label}] scan: INVALID box at pos={pos} size={size} hex=[{hex}]");

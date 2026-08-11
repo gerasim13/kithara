@@ -35,7 +35,7 @@ impl WriterCleanup {
         }
     }
 
-    pub(super) fn disarm(&mut self) {
+    pub(super) const fn disarm(&mut self) {
         self.armed = false;
     }
 }

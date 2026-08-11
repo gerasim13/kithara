@@ -112,7 +112,7 @@ fn expected_phase_error(sample: f32, base_phase: i32, frame_offset: usize) -> i3
     modular_delta(expected, phase_units(sample))
 }
 
-fn modular_delta(current: i32, next: i32) -> i32 {
+const fn modular_delta(current: i32, next: i32) -> i32 {
     (next - current + SAWTOOTH_HALF_PERIOD_UNITS).rem_euclid(SAWTOOTH_PERIOD_UNITS)
         - SAWTOOTH_HALF_PERIOD_UNITS
 }

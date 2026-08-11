@@ -134,7 +134,7 @@ pub(crate) fn combine_vertical(sizes: impl IntoIterator<Item = SizeSpec>) -> Siz
 /// An icon renders as a text glyph, whose line box is taller than the icon
 /// size; the row it sits in owns the height so the glyph centres against its
 /// siblings.
-fn icon_cell(side: f32) -> SizeSpec {
+const fn icon_cell(side: f32) -> SizeSpec {
     SizeSpec::new(Dim::Fixed(side), Dim::Fill)
 }
 
@@ -157,13 +157,10 @@ pub fn control_size(spec: &ControlSpec, skin: &SkinDoc) -> SizeSpec {
                 gap,
                 padding,
             } => SizeSpec::new(
-                Dim::Fixed(
-                    minus_icon_size
-                        + maximize_icon_size
-                        + close_icon_size
-                        + gap * 2.0
-                        + padding * 2.0,
-                ),
+                Dim::Fixed(padding.mul_add(
+                    2.0,
+                    gap.mul_add(2.0, minus_icon_size + maximize_icon_size + close_icon_size),
+                )),
                 Dim::Fill,
             ),
             WindowControlSkin::Close { cell_size, .. } => {
@@ -381,8 +378,8 @@ impl Pad {
 
 fn inset(size: SizeSpec, extra_w: f32, extra_h: f32, pad: Pad) -> SizeSpec {
     SizeSpec::new(
-        grow(size.w, extra_w + pad.x * 2.0),
-        grow(size.h, extra_h + pad.y * 2.0),
+        grow(size.w, pad.x.mul_add(2.0, extra_w)),
+        grow(size.h, pad.y.mul_add(2.0, extra_h)),
     )
 }
 

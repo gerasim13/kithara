@@ -7,8 +7,9 @@ Contracts and invariants for kithara-file; the README is the overview.
 `FileConfig::for_src(src)` → `File` (StreamType marker) → internal `FileCoord`, which splits by
 source: `FileSrc::Local` reads through `AssetStore` with an absolute `ResourceKey`;
 `FileSrc::Remote` runs an internal pull-driven `FilePeer` emitting `FetchCmd` batches to the
-shared `dl::Downloader`, which writes (writer / `on_complete`) into `AssetStore` under the `File`
-layout scope. `FileSource` (impl `kithara_stream::Source`) wraps `FileCoord`; `Stream<File>`
+shared `dl::Downloader`. The `AssetStore` owns one pending resource per `ResourceKey`: consumer
+demand, the canonical reader/writer, and writer epochs stay in that storage state, while File
+drives HTTP through a writer epoch capability. `FileSource` (impl `kithara_stream::Source`) wraps `FileCoord`; `Stream<File>`
 (`Read + Seek`) wraps `FileSource`. `FileSource` is synchronous: every async concern (HTTP fetch,
 body streaming, finalization) belongs to the `Downloader` through `FilePeer`, and it holds the
 `PeerHandle` from `Downloader::register` for its whole lifetime — dropping the last handle cancels
@@ -21,8 +22,9 @@ in-flight fetches.
 - `wait_range(_, Some(_))` is the audio-worker probe: checks phase once, returns
   `SourceError::WaitBudgetExceeded` for missing in-range bytes instead of blocking.
   `wait_range(_, None)` is the off-RT adapter path, delegating to the storage wait until bytes,
-  EOF, failure, or cancel resolves. A flushing seek short-circuits to `WaitOutcome::Interrupted`
-  before any demand update.
+  EOF, failure, or cancel resolves. The source token is a per-wait cancel authority: it wakes a
+  blocked adapter without cancelling the shared asset or another follower. A flushing seek
+  short-circuits to `WaitOutcome::Interrupted` before any demand update.
 - The probe clamps oversized read-ahead at a known length, so a fully cached file queried with
   `0..read_ahead` where `read_ahead > len` is `Ready`, not need-data.
 - `Eof` requires **both** that the range starts at or past the known length **and** that the
@@ -30,7 +32,11 @@ in-flight fetches.
   not yet written returns `WaitBudgetExceeded` (→ `Pending` / need-data) so the reader holds
   rather than terminating. See `crates/kithara-stream/CONTEXT.md` "End-of-stream contract".
 - Known length blends the announced total (`FileCoord::total_bytes`, seeded from
-  `Content-Length`) with the committed `AssetReader::len()`, announced first. On `206 Partial Content` the total is `resume_from + Content-Length`.
+  response metadata) with the committed `AssetReader::len()`, announced first. When a commit has no
+  explicit final length, the committed reader length is canonical. A ranged response
+  takes its full total from `Content-Range`; its slice `Content-Length` is never treated as the
+  resource total. If a server ignores the initial bounded range and returns a full `200` without
+  `Content-Range`, that full response's `Content-Length` is the resource total.
 
 ## Sources
 
@@ -45,8 +51,9 @@ derived artifacts while the original media file stays untouched. `FileSrc::Remot
 
 - Opening returns as soon as the asset claim succeeds; `Content-Length` / `Content-Type` arrive
   later with the first response, so `len()` is `None` until then. `AcquisitionResult::Ready` means
-  already committed (no download); `Pending` hands over the single non-`Clone` commit-owning
-  `AssetWriter`.
+  already committed (no remote fetch); `Pending` attaches a reader, resource lease, and optional elected
+  writer to the `AssetStore`-owned session. Followers attach to that session and never acquire or
+  reactivate the backing resource themselves.
 - If a sibling `AssetStore` instance holds the atomic-chunked tmp for the same canonical path,
   `create` polls every 10 ms until that sibling commits or drops, or returns cancellation when
   its own work token fires. The loop is wrapped in
@@ -55,16 +62,38 @@ derived artifacts while the original media file stays untouched. `FileSrc::Remot
 - Downloading is pull-driven and gap-driven: `Peer::poll_next` fetches from `next_gap(0, upper)`,
   the first missing byte from the start and never the seek position, so the landed prefix stays
   contiguous and `FileCoord::set_download_pos` is a true cached-prefix cursor. Backpressure runs
-  through the read-demand cell shared between `FileCoord::read_pos_handle()` and the demand lease
-  from `AssetStore::attach_demand`, bounded by `look_ahead_bytes`. Each chunk write wakes the
-  audio worker through `WorkerWake`, so a parked probe re-runs on arrival rather than on the
-  scheduler backstop.
-- Only the **elected producer** issues GETs. A peer with no demand lease (standalone store, single
-  consumer) always drives; with a lease, a non-producer tries `try_take_producer` to claim an
-  abandoned slot, else yields to the next downloader tick. Two consumers of one URL share one GET.
-- A transient error with bytes already received leaves the resource active, so the next
-  `poll_next` issues a Range GET for the remaining gap. A fatal error, or a hard failure with no
-  bytes at offset 0, fails and evicts the resource and publishes `FileEvent::Error`.
+  through the consumer-demand entry shared between `FileCoord::read_pos_handle()` and the resource lease
+  from `AssetStore::attach_pending_resource`, bounded by `look_ahead_bytes`. Before a missing range yields
+  or blocks, File raises that consumer's monotonic requested-end floor; this immediate demand
+  overrides the bounded prefetch frontier, including `look_ahead_bytes = 0`. The lease's one-shot
+  reader Waker uses only `Weak<FileInner>`, rearms before waking the audio worker, and therefore
+  cannot pin a dropped source through the pending-resource state.
+- Only the **elected writer epoch** issues GETs. `poll_next` registers its peer Waker before the
+  readiness/election check, leaves it armed on `Pending`, and clears that exact registration before
+  `Ready`. A stale writer handle is removed and dropped outside the File mutex before the peer
+  attempts promotion. Writer handoff changes only the epoch; the canonical writer and partial
+  bytes stay in the same session, so two consumers of one URL share one GET whenever no handoff is
+  needed.
+- `FilePeer` holds `Weak<FileInner>`; `FileSource` owns the strong lifetime. Inside `FileInner`, the
+  asset reader is declared before the demand lease, so the reader drops first. The last source drop
+  synchronously retires the exact session, while the lease's `AssetStore` clone pins disk-checkpoint
+  ownership through the remote lifetime.
+- Each fetch uses a child of the writer cancel token. Source cancellation cancels only that fetch
+  child; the peer holds non-owning wake guards for both source and session cancellation. Either
+  cancellation wakes a parked peer before its next readiness check. Session cancellation ends the
+  peer and forbids writer re-election, while source cancellation relinquishes only this source's
+  epoch. `NetError::Cancelled` never emits `FileEvent::Error`. A fatal error, or an initial
+  zero-progress error, fails the current epoch. Other transient completions keep partial coverage
+  active, but may commit when every advertised byte already landed. Late stale callbacks cannot
+  write, commit, fail, or publish File events for a successor. The peer clears its in-flight flag
+  only after the completion callback settles the epoch, so a concurrent registry poll cannot issue
+  a replacement GET during terminal cleanup.
+- HTTP range upper bounds are exclusive internally and inclusive on the wire. Ranged responses
+  must identify the requested start, interval, and numeric representation total with a valid
+  `Content-Range`; a full `200` that
+  ignores an initial range is accepted only with `Content-Length`. A resumed response without
+  `Content-Range`, a mismatched interval, an unknown `*` representation total, or an unknown-size
+  bounded full response fails before any byte is written.
 
 Cache identity: naming is owned by the layout registered for the `File` marker in the shared
 `AssetStore`. The stream binds `AssetSource::Remote { url, discriminator }` through

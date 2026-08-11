@@ -25,7 +25,7 @@ use crate::continuity::{
     CONTINUITY_BLOCK_FRAMES, CONTINUITY_SAMPLE_RATE, PlaybackProgressProbe, render_offline_window,
 };
 
-fn forced_downswitch_abr_options() -> AbrMode {
+const fn forced_downswitch_abr_options() -> AbrMode {
     auto(0)
 }
 

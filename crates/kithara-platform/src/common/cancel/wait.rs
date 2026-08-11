@@ -18,7 +18,7 @@ pub struct Cancelled<'a> {
 }
 
 impl<'a> Cancelled<'a> {
-    pub(super) fn new(node: &'a Arc<Node>) -> Self {
+    pub(super) const fn new(node: &'a Arc<Node>) -> Self {
         Self {
             node,
             slot: None,

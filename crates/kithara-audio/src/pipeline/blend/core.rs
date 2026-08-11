@@ -207,11 +207,11 @@ fn recurrence(history: &[f32], channels: usize, channel: usize, start: usize, en
 
 fn recurrence_amplitude(previous: f32, current: f32, coefficient: f32) -> f32 {
     let cosine = coefficient / Consts::MAX_RECURRENCE_COEFF;
-    let sine_squared = 1.0 - cosine * cosine;
+    let sine_squared = cosine.mul_add(-cosine, 1.0);
     if sine_squared <= f32::EPSILON {
         return 0.0;
     }
-    let quadrature = current - previous * cosine;
+    let quadrature = previous.mul_add(-cosine, current);
     previous
         .mul_add(previous, quadrature * quadrature / sine_squared)
         .sqrt()

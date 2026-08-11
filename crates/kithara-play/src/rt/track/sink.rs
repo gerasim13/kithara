@@ -10,7 +10,7 @@ pub struct RtSink<'a> {
 }
 
 impl<'a> RtSink<'a> {
-    pub fn new(
+    pub const fn new(
         notifications: &'a mut HeapProd<PlayerNotification>,
         metrics: &'a RtMetrics,
     ) -> Self {
@@ -20,7 +20,7 @@ impl<'a> RtSink<'a> {
         }
     }
 
-    pub(super) fn reborrow(&mut self) -> RtSink<'_> {
+    pub(super) const fn reborrow(&mut self) -> RtSink<'_> {
         RtSink {
             notifications: self.notifications,
             metrics: self.metrics,

@@ -40,7 +40,7 @@ pub struct SourceRewriter<'src> {
 
 impl<'src> SourceRewriter<'src> {
     #[must_use]
-    pub fn new(src: &'src str) -> Self {
+    pub const fn new(src: &'src str) -> Self {
         Self {
             src,
             edits: Vec::new(),
@@ -94,7 +94,7 @@ impl<'src> SourceRewriter<'src> {
     /// True iff no replacements were staged. Caller can use this to skip
     /// `fs::write` and uphold invariant I3 (no-op safety).
     #[must_use]
-    pub fn is_empty(&self) -> bool {
+    pub const fn is_empty(&self) -> bool {
         self.edits.is_empty()
     }
 

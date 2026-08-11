@@ -253,7 +253,7 @@ impl TypeCatalog {
     }
 }
 
-fn reverse(direction: Direction) -> Direction {
+const fn reverse(direction: Direction) -> Direction {
     match direction {
         Direction::Bidirectional => Direction::Bidirectional,
         Direction::LeftToRight => Direction::RightToLeft,

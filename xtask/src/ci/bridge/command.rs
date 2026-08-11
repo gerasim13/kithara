@@ -128,11 +128,11 @@ impl BridgeConfig {
         Ok(())
     }
 
-    pub(super) fn pipeline_timeout(&self) -> Duration {
+    pub(super) const fn pipeline_timeout(&self) -> Duration {
         Duration::from_secs(self.pipeline_timeout_seconds)
     }
 
-    pub(super) fn pipeline_poll_interval(&self) -> Duration {
+    pub(super) const fn pipeline_poll_interval(&self) -> Duration {
         Duration::from_secs(self.pipeline_poll_seconds)
     }
 
@@ -167,11 +167,11 @@ pub(crate) fn run(args: &BridgeArgs) -> Result<()> {
     }
 }
 
-fn default_pipeline_timeout_seconds() -> u64 {
+const fn default_pipeline_timeout_seconds() -> u64 {
     7_200
 }
 
-fn default_pipeline_poll_seconds() -> u64 {
+const fn default_pipeline_poll_seconds() -> u64 {
     15
 }
 

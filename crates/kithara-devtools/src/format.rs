@@ -110,7 +110,7 @@ pub fn format_path(root: &Path, path: &Path) -> Result<()> {
 }
 
 impl PathFormatTarget {
-    fn name(self) -> &'static str {
+    const fn name(self) -> &'static str {
         match self {
             Self::Rust => "rust",
             Self::Toml => "toml",
@@ -191,7 +191,7 @@ fn run_target(target: FormatTarget, check: bool, ctx: &Ctx) -> Result<()> {
 }
 
 impl FormatTarget {
-    fn name(self) -> &'static str {
+    const fn name(self) -> &'static str {
         match self {
             Self::Rust => "rust",
             Self::Manifest => "manifest",
@@ -435,7 +435,7 @@ fn should_skip_dir(path: &Path) -> bool {
         || path_starts_with(&components, &["tests", "fuzz", "coverage"])
 }
 
-fn component_os_str(component: Component<'_>) -> Option<&OsStr> {
+const fn component_os_str(component: Component<'_>) -> Option<&OsStr> {
     match component {
         Component::Normal(value) => Some(value),
         _ => None,

@@ -104,7 +104,7 @@ impl<T: StreamType> RebuildPort<T> {
         }
     }
 
-    pub(crate) fn cache_replacement(
+    pub(crate) const fn cache_replacement(
         &mut self,
         complete: DecoderBuildComplete,
     ) -> Option<DecoderBuildComplete> {
@@ -125,7 +125,7 @@ impl<T: StreamType> RebuildPort<T> {
         }
     }
 
-    fn next_build(&mut self) -> BuildId {
+    const fn next_build(&mut self) -> BuildId {
         let build = BuildId::new(self.next_build);
         self.next_build = self.next_build.wrapping_add(1);
         build
@@ -218,7 +218,7 @@ impl<T: StreamType> RebuildPort<T> {
     }
 
     #[cfg(test)]
-    pub(crate) fn runtime(&self) -> &RuntimeHandle {
+    pub(crate) const fn runtime(&self) -> &RuntimeHandle {
         &self.runtime
     }
 

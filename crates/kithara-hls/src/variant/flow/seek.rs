@@ -168,7 +168,7 @@ impl HlsVariant {
         (byte < end).then_some((alias.segment, alias.anchor, size))
     }
 
-    pub(super) fn seek_readahead_start_segment(&self, target_segment: u32) -> u32 {
+    pub(super) const fn seek_readahead_start_segment(&self, target_segment: u32) -> u32 {
         if needs_exact_byte_sizes(self.profile.codec, self.profile.container) {
             target_segment
         } else {

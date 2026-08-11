@@ -162,7 +162,7 @@ impl CiHost {
     /// The headroom a job insists on before it starts. The host stops handing
     /// out work once the CI volume passes `reject_bytes`, so the room left at
     /// that point is what the policy already considers too little to start on.
-    pub(crate) fn free_bytes_for_a_job(&self) -> u64 {
+    pub(crate) const fn free_bytes_for_a_job(&self) -> u64 {
         self.quota_bytes.saturating_sub(self.reject_bytes)
     }
 

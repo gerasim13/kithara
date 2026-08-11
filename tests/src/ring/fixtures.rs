@@ -49,7 +49,7 @@ pub struct CountingNode {
 
 impl CountingNode {
     #[must_use]
-    pub fn new(probe: CountingProbe) -> Self {
+    pub const fn new(probe: CountingProbe) -> Self {
         Self { probe }
     }
 }

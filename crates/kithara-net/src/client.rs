@@ -23,6 +23,7 @@ use crate::{
     error::{NetError, NetResult},
     metrics::ConnectionMetrics,
     observe::Observer,
+    range_response::{accepts_response_status, validate_range_response},
     resumable::{Refetch, Resumed, resumable_body},
     retry::{DefaultRetryPolicy, RetryNet},
     traits::Net,
@@ -205,22 +206,31 @@ impl RawHttp {
             .send_checked(
                 req,
                 headers,
-                url,
+                url.clone(),
                 accept_partial,
                 AcceptEncodingPolicy::Identity,
             )
             .await?;
-        Ok(Self::response_to_stream(resp))
+        Self::response_to_stream(resp, range.as_ref(), &url)
     }
 
     /// Body-chunk awaits on this stream happen inside [`resumable_body`]'s
     /// `flash(io)` bracket (`next_chunk`) — every streaming fetch is wrapped
     /// by [`Self::wrap_resumable`] before it reaches a consumer.
-    fn response_to_stream(resp: Response) -> crate::ByteStream {
+    fn response_to_stream(
+        resp: Response,
+        range: Option<&RangeSpec>,
+        url: &Url,
+    ) -> Result<crate::ByteStream, NetError> {
         let headers = extract_headers(&resp);
         let partial = resp.status() == StatusCode::PARTIAL_CONTENT;
+        validate_range_response(resp.status().as_u16(), range, &headers, url)?;
         let stream = resp.bytes_stream().map_err(NetError::from);
-        crate::ByteStream::with_partial(headers, Box::pin(stream), partial)
+        Ok(crate::ByteStream::with_partial(
+            headers,
+            Box::pin(stream),
+            partial,
+        ))
     }
 
     async fn send_checked(
@@ -243,7 +253,7 @@ impl RawHttp {
             );
         }
 
-        let ok = status.is_success() || (accept_partial && status == StatusCode::PARTIAL_CONTENT);
+        let ok = accepts_response_status(status.as_u16(), accept_partial);
         if !ok {
             let body = error_body(resp, self.options.inactivity_timeout).await;
             return Err(status_error(url, status.as_u16(), body));
@@ -289,12 +299,18 @@ impl RawHttp {
         let out_headers = first.headers.clone();
         let partial = first.is_partial();
         let me = self.clone();
+        let resource = url.clone();
+        let (resume_base, resume_end) = if partial {
+            (base_start, end)
+        } else {
+            (0, None)
+        };
         let refetch: Refetch = Box::new(move |consumed| {
             let me = me.clone();
             let url = url.clone();
             let headers = headers.clone();
-            let abs = base_start.saturating_add(consumed);
-            let resume = RangeSpec::new(abs, end);
+            let abs = resume_base.saturating_add(consumed);
+            let resume = RangeSpec::new(abs, resume_end);
             Box::pin(async move {
                 let stream = me.raw_body(url, Some(resume), headers, true).await?;
                 // `206` → body already starts at `abs` (skip 0); `200` → server
@@ -306,6 +322,7 @@ impl RawHttp {
         let body = resumable_body(
             first,
             refetch,
+            resource,
             self.options.inactivity_timeout,
             self.options.retry_policy.clone(),
             self.cancel.clone(),
@@ -601,7 +618,7 @@ mod tests {
         response::Response as AxumResponse,
         routing::{any, get, post},
     };
-    use futures::StreamExt;
+    use futures::{StreamExt, stream};
     use kithara_platform::{
         sync::Arc,
         time::Duration,
@@ -710,10 +727,14 @@ mod tests {
     }
 
     fn stall_options() -> NetOptions {
+        stall_options_with_retries(1)
+    }
+
+    fn stall_options_with_retries(max_retries: u32) -> NetOptions {
         NetOptions::builder()
             .inactivity_timeout(Duration::from_millis(100))
             .retry_policy(RetryPolicy {
-                max_retries: 1,
+                max_retries,
                 base_delay: Duration::from_millis(1),
                 max_delay: Duration::from_millis(10),
             })
@@ -883,6 +904,223 @@ mod tests {
         };
 
         assert!(matches!(error, NetError::Decode(detail) if detail.contains("content-encoding")));
+    }
+
+    #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
+    async fn native_range_rejects_partial_without_content_range() {
+        let app = Router::new().route(
+            "/range",
+            get(|| async {
+                AxumResponse::builder()
+                    .status(StatusCode::PARTIAL_CONTENT)
+                    .header("content-length", "4")
+                    .body(Body::from(Bytes::from_static(b"part")))
+                    .expect("partial response")
+            }),
+        );
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let addr = listener.local_addr().expect("local addr");
+        spawn(async move {
+            axum::serve(listener, app).await.expect("serve");
+        });
+        let url = Url::parse(&format!("http://{addr}/range")).expect("url");
+        let client = HttpClient::new(NetOptions::default(), CancelToken::never());
+
+        let Err(error) = client
+            .get_range(url, RangeSpec::new(0, Some(3)), None)
+            .await
+        else {
+            panic!("partial range without content-range must fail before body delivery");
+        };
+
+        assert!(matches!(error, NetError::Decode(detail) if detail.contains("content-range")));
+    }
+
+    #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
+    async fn native_range_rejects_partial_without_content_length() {
+        let app = Router::new().route(
+            "/range",
+            get(|| async {
+                AxumResponse::builder()
+                    .status(StatusCode::PARTIAL_CONTENT)
+                    .header("content-range", "bytes 0-3/8")
+                    .body(Body::from_stream(stream::iter([Ok::<_, std::io::Error>(
+                        Bytes::from_static(b"abcdefgh"),
+                    )])))
+                    .expect("chunked partial response")
+            }),
+        );
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let addr = listener.local_addr().expect("local addr");
+        spawn(async move {
+            axum::serve(listener, app).await.expect("serve");
+        });
+        let url = Url::parse(&format!("http://{addr}/range")).expect("url");
+        let client = HttpClient::new(NetOptions::default(), CancelToken::never());
+
+        let Err(error) = client
+            .get_range(url, RangeSpec::new(0, Some(3)), None)
+            .await
+        else {
+            panic!("partial range without content-length must fail before body delivery");
+        };
+
+        assert!(matches!(error, NetError::Decode(detail) if detail.contains("content-length")));
+    }
+
+    #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
+    async fn native_resume_rejects_a_different_content_range() {
+        let requests = Arc::new(AtomicU32::new(0));
+        let seen = Arc::clone(&requests);
+        let app = Router::new().route(
+            "/resume",
+            get(move |headers: HeaderMap| {
+                let seen = Arc::clone(&seen);
+                async move {
+                    seen.fetch_add(1, Ordering::SeqCst);
+                    if headers.contains_key("range") {
+                        AxumResponse::builder()
+                            .status(StatusCode::PARTIAL_CONTENT)
+                            .header("content-length", "3")
+                            .header("content-range", "bytes 0-2/6")
+                            .body(Body::from(Bytes::from_static(b"abc")))
+                            .expect("wrong resumed response")
+                    } else {
+                        let body =
+                            stream::iter([Ok::<_, std::io::Error>(Bytes::from_static(b"abc"))])
+                                .chain(stream::pending());
+                        AxumResponse::builder()
+                            .header("content-length", "6")
+                            .body(Body::from_stream(body))
+                            .expect("stalled initial response")
+                    }
+                }
+            }),
+        );
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let addr = listener.local_addr().expect("local addr");
+        spawn(async move {
+            axum::serve(listener, app).await.expect("serve");
+        });
+        let url = Url::parse(&format!("http://{addr}/resume")).expect("url");
+        let client = HttpClient::new(stall_options(), CancelToken::never());
+        let mut body = client.stream(url, None).await.expect("initial stream");
+        let error = loop {
+            match body.next().await {
+                Some(Ok(_)) => {}
+                Some(Err(error)) => break error,
+                None => panic!("wrong resumed range must terminate the stream"),
+            }
+        };
+
+        assert!(
+            matches!(error, NetError::Decode(detail) if detail.contains("bytes=3-") && detail.contains("bytes 0-2/6"))
+        );
+        assert_eq!(requests.load(Ordering::SeqCst), 2);
+    }
+
+    #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
+    async fn native_resume_rejects_a_conflicting_representation_total() {
+        let requests = Arc::new(AtomicU32::new(0));
+        let seen = Arc::clone(&requests);
+        let app = Router::new().route(
+            "/resume",
+            get(move |headers: HeaderMap| {
+                let seen = Arc::clone(&seen);
+                async move {
+                    seen.fetch_add(1, Ordering::SeqCst);
+                    if headers.contains_key("range") {
+                        AxumResponse::builder()
+                            .status(StatusCode::PARTIAL_CONTENT)
+                            .header("content-length", "3")
+                            .header("content-range", "bytes 3-5/9")
+                            .body(Body::from(Bytes::from_static(b"def")))
+                            .expect("conflicting resumed response")
+                    } else {
+                        let body =
+                            stream::iter([Ok::<_, std::io::Error>(Bytes::from_static(b"abc"))])
+                                .chain(stream::pending());
+                        AxumResponse::builder()
+                            .header("content-length", "6")
+                            .body(Body::from_stream(body))
+                            .expect("stalled initial response")
+                    }
+                }
+            }),
+        );
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let addr = listener.local_addr().expect("local addr");
+        spawn(async move {
+            axum::serve(listener, app).await.expect("serve");
+        });
+        let url = Url::parse(&format!("http://{addr}/resume")).expect("url");
+        let client = HttpClient::new(stall_options(), CancelToken::never());
+        let mut body = client.stream(url, None).await.expect("initial stream");
+        let error = loop {
+            match body.next().await {
+                Some(Ok(_)) => {}
+                Some(Err(error)) => break error,
+                None => panic!("conflicting resumed total must terminate the stream"),
+            }
+        };
+
+        assert!(matches!(error, NetError::Decode(detail) if detail.contains("total from 6 to 9")));
+        assert_eq!(requests.load(Ordering::SeqCst), 2);
+    }
+
+    #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
+    async fn native_ignored_range_resume_continues_after_discovering_total() {
+        let requests = Arc::new(AtomicU32::new(0));
+        let seen = Arc::clone(&requests);
+        let app = Router::new().route(
+            "/resume",
+            get(move |_headers: HeaderMap| {
+                let attempt = seen.fetch_add(1, Ordering::SeqCst);
+                async move {
+                    match attempt {
+                        0 => {
+                            let body =
+                                stream::iter([Ok::<_, std::io::Error>(Bytes::from_static(b"abc"))])
+                                    .chain(stream::pending());
+                            AxumResponse::builder()
+                                .body(Body::from_stream(body))
+                                .expect("stalled chunked response")
+                        }
+                        1 => AxumResponse::builder()
+                            .status(StatusCode::PARTIAL_CONTENT)
+                            .header("content-length", "2")
+                            .header("content-range", "bytes 3-4/6")
+                            .body(Body::from(Bytes::from_static(b"de")))
+                            .expect("first capped response"),
+                        2 => AxumResponse::builder()
+                            .status(StatusCode::PARTIAL_CONTENT)
+                            .header("content-length", "1")
+                            .header("content-range", "bytes 5-5/6")
+                            .body(Body::from(Bytes::from_static(b"f")))
+                            .expect("final capped response"),
+                        _ => panic!("unexpected request {attempt}"),
+                    }
+                }
+            }),
+        );
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let addr = listener.local_addr().expect("local addr");
+        spawn(async move {
+            axum::serve(listener, app).await.expect("serve");
+        });
+        let url = Url::parse(&format!("http://{addr}/resume")).expect("url");
+        let client = HttpClient::new(stall_options_with_retries(2), CancelToken::never());
+        let mut body = client
+            .get_range(url, RangeSpec::new(0, Some(1)), None)
+            .await
+            .expect("initial stream");
+        let mut bytes = Vec::new();
+        while let Some(chunk) = body.next().await {
+            bytes.extend_from_slice(&chunk.expect("resumed chunk"));
+        }
+
+        assert_eq!(bytes, b"abcdef");
+        assert_eq!(requests.load(Ordering::SeqCst), 3);
     }
 
     #[kithara::test(tokio, timeout(Duration::from_secs(5)))]

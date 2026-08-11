@@ -66,7 +66,7 @@ pub struct Scope {
 
 impl Scope {
     #[must_use]
-    pub fn new(crates: Vec<String>, paths: Vec<PathBuf>) -> Self {
+    pub const fn new(crates: Vec<String>, paths: Vec<PathBuf>) -> Self {
         Self {
             crates,
             paths,
@@ -196,7 +196,7 @@ impl Scope {
     }
 
     #[must_use]
-    pub fn is_empty(&self) -> bool {
+    pub const fn is_empty(&self) -> bool {
         self.crates.is_empty() && self.paths.is_empty()
     }
 

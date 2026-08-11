@@ -419,7 +419,7 @@ fn discover_package_roots(root: &Path) -> Result<Vec<PathBuf>> {
     Ok(roots)
 }
 
-fn build_profile() -> &'static str {
+const fn build_profile() -> &'static str {
     if cfg!(debug_assertions) {
         "debug"
     } else {

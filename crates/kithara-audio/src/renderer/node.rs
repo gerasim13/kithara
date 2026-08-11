@@ -68,10 +68,11 @@ pub(crate) struct DecoderNode {
     service_class: Arc<AtomicServiceClass>,
     source: Box<dyn AudioWorkerSource<Chunk = PcmChunk>>,
     runtime: DecoderRuntime,
-    /// Spent chunks returned by the real-time consumer. Drained once per pass
-    /// by [`recycle`](DecoderNode::recycle), in the scheduler's unchecked shell
-    /// before the produce core, so the pooled buffers are freed/recycled on
-    /// this worker thread, never on the audio thread.
+    /// Spent chunks returned by the real-time consumer. Drained by
+    /// [`recycle`](DecoderNode::recycle) in the scheduler's unchecked shell
+    /// before and after the produce pass, and between burst ticks, so pooled
+    /// buffers are freed or recycled on this worker thread, never on the audio
+    /// thread.
     trash_inlet: Inlet<PcmChunk>,
     /// Live engine cost meter. When present, each produced chunk records the
     /// tick's decode+effects wall time against the audio it yielded.

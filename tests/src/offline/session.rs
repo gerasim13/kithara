@@ -1,6 +1,7 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use kithara::{
+    audio::ConsumerWakeMode,
     platform::{
         sync::{Arc, Mutex, mpsc},
         thread::{JoinHandle, spawn_named},
@@ -152,6 +153,10 @@ impl Drop for OfflineSession {
 }
 
 impl SessionDispatcher for OfflineSession {
+    fn consumer_wake_mode(&self) -> ConsumerWakeMode {
+        ConsumerWakeMode::ImmediateOffRt
+    }
+
     /// `no_block`: sync command-reply bridge to the dedicated offline render thread; flash coordinates the bridged wait.
     #[kithara::allow_block]
     fn exec(&self, cmd: Cmd) -> Result<Reply, PlayError> {
@@ -236,4 +241,21 @@ fn render_block(state: &mut SessionState<OfflineBackend>, frames: usize) -> Vec<
     }
     ctx.active_backend_mut()
         .map_or_else(Vec::new, |backend| backend.render(frames))
+}
+
+#[cfg(test)]
+mod tests {
+    use kithara::audio::ConsumerWakeMode;
+
+    use super::*;
+
+    #[test]
+    fn offline_session_requests_immediate_off_rt_consumer_wakes() {
+        let session = OfflineSession::new_manual();
+
+        assert_eq!(
+            session.consumer_wake_mode(),
+            ConsumerWakeMode::ImmediateOffRt
+        );
+    }
 }

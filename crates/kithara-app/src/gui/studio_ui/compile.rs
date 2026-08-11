@@ -89,7 +89,7 @@ impl StudioUi {
         })
     }
 
-    fn compiled(&self, layout: DeckLayout) -> &CompiledUi {
+    const fn compiled(&self, layout: DeckLayout) -> &CompiledUi {
         match layout {
             DeckLayout::Single => &self.single,
             DeckLayout::Dual => &self.dual,

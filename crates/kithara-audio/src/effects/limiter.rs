@@ -80,7 +80,7 @@ impl PeakLimiter {
     }
 
     /// Reset the gain envelope to unity.
-    pub fn reset(&mut self) {
+    pub const fn reset(&mut self) {
         self.envelope = 1.0;
     }
 
@@ -93,7 +93,7 @@ impl PeakLimiter {
         };
         // Release before the clamp: the reverse order lets the recovered gain
         // overshoot the ceiling for one frame.
-        self.envelope = 1.0 - (1.0 - self.envelope) * self.release_coeff;
+        self.envelope = (1.0 - self.envelope).mul_add(-self.release_coeff, 1.0);
         if required < self.envelope {
             self.envelope = required;
         }
@@ -183,8 +183,8 @@ mod tests {
         let mut right = [0.1_f32];
         run(&mut lim, &mut left, &mut right);
         let gain = CEILING / 2.0;
-        assert!((left[0] - 2.0 * gain).abs() < 1e-6);
-        assert!((right[0] - 0.1 * gain).abs() < 1e-6);
+        assert!(2.0f32.mul_add(-gain, left[0]).abs() < 1e-6);
+        assert!(0.1f32.mul_add(-gain, right[0]).abs() < 1e-6);
     }
 
     #[test]

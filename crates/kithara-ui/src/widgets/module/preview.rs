@@ -66,8 +66,12 @@ impl<Message> canvas::Program<Message> for Preview {
                 AreaKind::Module => {
                     point.x += self.metrics.module_inset;
                     point.y += self.metrics.module_inset;
-                    size.width = (size.width - self.metrics.module_inset * 2.0).max(0.0);
-                    size.height = (size.height - self.metrics.module_inset * 2.0).max(0.0);
+                    size.width = self.metrics.module_inset.mul_add(-2.0, size.width).max(0.0);
+                    size.height = self
+                        .metrics
+                        .module_inset
+                        .mul_add(-2.0, size.height)
+                        .max(0.0);
                     frame.fill_rectangle(point, size, self.palette.bg_panel);
                     self.palette.line
                 }
@@ -151,12 +155,12 @@ fn collect_areas(node: &CompiledNode, bounds: UnitRect, areas: &mut Vec<PreviewA
                 };
                 let child_bounds = match axis {
                     Axis::Horizontal => UnitRect {
-                        x: bounds.x + bounds.width * cursor,
+                        x: bounds.width.mul_add(cursor, bounds.x),
                         width: bounds.width * fraction,
                         ..bounds
                     },
                     Axis::Vertical => UnitRect {
-                        y: bounds.y + bounds.height * cursor,
+                        y: bounds.height.mul_add(cursor, bounds.y),
                         height: bounds.height * fraction,
                         ..bounds
                     },

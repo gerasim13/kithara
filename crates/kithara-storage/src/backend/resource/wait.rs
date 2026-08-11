@@ -2,7 +2,7 @@
 
 use std::ops::Range;
 
-use kithara_platform::{sync::Arc, time::Duration};
+use kithara_platform::{CancelToken, sync::Arc, time::Duration};
 use kithara_test_utils::kithara;
 
 use crate::{
@@ -21,7 +21,11 @@ const WAIT_HANG_TIMEOUT: Duration = Duration::from_secs(180);
 impl<D: DriverIo> ResourceCore<D> {
     #[cfg_attr(feature = "perf", hotpath::measure)]
     #[kithara::hang_watchdog(timeout = WAIT_HANG_TIMEOUT)]
-    pub(super) fn wait_range_inner(&self, range: Range<u64>) -> StorageResult<WaitOutcome> {
+    pub(super) fn wait_range_inner(
+        &self,
+        range: Range<u64>,
+        wait_cancel: Option<&CancelToken>,
+    ) -> StorageResult<WaitOutcome> {
         if range.start > range.end {
             return Err(StorageError::InvalidRange {
                 start: range.start,
@@ -33,19 +37,20 @@ impl<D: DriverIo> ResourceCore<D> {
             return Ok(WaitOutcome::Ready);
         }
 
-        // Wake the parked condvar on cancellation. Bytes / commit / fail /
-        // reactivate already `notify_all` it (io.rs, lifecycle.rs); cancel is the
-        // ONE readiness transition with no notify, so register a sync cancel-waker
-        // that notifies under the SAME state mutex the wait releases — closing the
-        // lost-wakeup window. Without it the wait could learn of a cancel only by
-        // re-polling on a timer. The guard unregisters when this wait returns.
-        let _cancel_wake = {
+        let _resource_cancel_wake = {
             let inner = Arc::clone(&self.inner);
             self.inner.cancel.on_cancel(move || {
                 let _guard = inner.gate.lock();
                 inner.gate.notify_all();
             })
         };
+        let _wait_cancel_wake = wait_cancel.map(|cancel| {
+            let inner = Arc::clone(&self.inner);
+            cancel.on_cancel(move || {
+                let _guard = inner.gate.lock();
+                inner.gate.notify_all();
+            })
+        });
 
         // How far the available prefix of `range` reaches. Bytes arrive
         // front-to-back for a sequential fetch, so this advancing means the
@@ -60,7 +65,9 @@ impl<D: DriverIo> ResourceCore<D> {
 
             let state = self.inner.gate.lock();
 
-            if self.inner.cancel.is_cancelled() {
+            if self.inner.cancel.is_cancelled()
+                || wait_cancel.is_some_and(CancelToken::is_cancelled)
+            {
                 return Err(StorageError::Cancelled);
             }
 

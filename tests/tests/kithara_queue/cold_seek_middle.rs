@@ -31,6 +31,7 @@ fn install_tracing() {
         .try_init();
 }
 
+#[kithara::flash(true)]
 async fn wait_for_status(
     rx: &mut EventReceiver,
     queue: &Queue,
@@ -65,6 +66,16 @@ async fn wait_for_status(
     Err(format!("timeout waiting for {target:?}"))
 }
 
+#[kithara::flash(true)]
+async fn drive_queue_ticks(queue: Arc<Queue>) {
+    loop {
+        sleep(Duration::from_millis(50)).await;
+        if queue.tick().is_err() {
+            break;
+        }
+    }
+}
+
 fn build_queue_with_tick(
     temp_dir: &TestTempDir,
 ) -> (
@@ -82,14 +93,7 @@ fn build_queue_with_tick(
     ));
     let queue = Arc::new(Queue::new(QueueConfig::builder().player(player).build()));
     let queue_for_tick = Arc::clone(&queue);
-    let tick_handle = tokio::task::spawn(async move {
-        loop {
-            sleep(Duration::from_millis(50)).await;
-            if queue_for_tick.tick().is_err() {
-                break;
-            }
-        }
-    });
+    let tick_handle = tokio::task::spawn(drive_queue_ticks(queue_for_tick));
     let downloader = Downloader::new(
         DownloaderConfig::for_client(HttpClient::new(NetOptions::default(), CancelToken::never()))
             .build(),
@@ -128,6 +132,7 @@ enum PostSeekProgress {
 /// only moves when the decode worker delivers frames and emits
 /// `PlaybackProgress`. A wall-clock `sleep`-poll would burn virtual time
 /// without ever interleaving the worker's progress.
+#[kithara::flash(true)]
 async fn wait_for_post_seek_progress(
     rx: &mut EventReceiver,
     queue: &Queue,
@@ -233,14 +238,7 @@ async fn run_seek_scenario(urls: &[&str], select_index: usize, temp: TestTempDir
     let queue = Arc::new(Queue::new(QueueConfig::builder().player(player).build()));
 
     let queue_for_tick = Arc::clone(&queue);
-    let tick_handle = tokio::task::spawn(async move {
-        loop {
-            sleep(Duration::from_millis(50)).await;
-            if queue_for_tick.tick().is_err() {
-                break;
-            }
-        }
-    });
+    let tick_handle = tokio::task::spawn(drive_queue_ticks(queue_for_tick));
 
     let mut rx = queue.subscribe();
     let ids: Vec<TrackId> = resolved

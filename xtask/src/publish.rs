@@ -385,7 +385,7 @@ fn locate_publishable_workspace_deps(order: &[String]) -> Result<HashMap<String,
             .dependencies
             .iter()
             .filter(|dep| dep.path.is_some() && dep.kind != DependencyKind::Development)
-            .map(|dep| dep.name.to_string())
+            .map(|dep| dep.name.clone())
             .filter(|dep_name| wanted.contains(dep_name.as_str()) && dep_name != pkg.name.as_str())
             .collect();
         out.insert(pkg.name.to_string(), deps.into_iter().collect());
@@ -577,7 +577,7 @@ fn resolve_publish_order() -> Result<Vec<String>> {
             .dependencies
             .iter()
             .filter(|dep| dep.path.is_some() && dep.kind != DependencyKind::Development)
-            .map(|dep| dep.name.to_string())
+            .map(|dep| dep.name.clone())
             .filter(|dep_name| all_publishable.contains(dep_name) && *dep_name != name)
             .collect();
 
@@ -610,7 +610,7 @@ fn topo_sort(graph: &HashMap<String, Vec<String>>) -> Result<Vec<String>> {
             .filter(|(_, deg)| **deg == 0)
             .map(|(name, _)| *name)
             .collect();
-        roots.sort();
+        roots.sort_unstable();
         roots.into()
     };
 
@@ -631,7 +631,7 @@ fn topo_sort(graph: &HashMap<String, Vec<String>>) -> Result<Vec<String>> {
                 })
                 .copied()
                 .collect();
-            ready.sort();
+            ready.sort_unstable();
             queue.extend(ready);
         }
     }
@@ -692,7 +692,7 @@ mod tests {
                 continue;
             }
             for dep in &pkg.dependencies {
-                let dep_name = dep.name.to_string();
+                let dep_name = dep.name.clone();
                 if dep.path.is_none()
                     || dep.kind == DependencyKind::Development
                     || dep_name == name

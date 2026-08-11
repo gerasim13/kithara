@@ -3,7 +3,7 @@
 use std::{fmt, ops::Range, path::Path};
 
 use dashmap::DashSet;
-use kithara_platform::sync::Arc;
+use kithara_platform::{CancelToken, sync::Arc};
 use kithara_storage::{ResourceStatus, StorageResult, WaitOutcome};
 
 use crate::{
@@ -164,6 +164,11 @@ impl<R: ReadSide> ReadSide for CachedReader<R> {
             fn read_at(&self, offset: u64, buf: &mut [u8]) -> StorageResult<usize>;
             fn read_inflight_at(&self, offset: u64, buf: &mut [u8]) -> StorageResult<usize>;
             fn wait_range(&self, range: Range<u64>) -> StorageResult<WaitOutcome>;
+            fn wait_range_with_cancel(
+                &self,
+                range: Range<u64>,
+                cancel: &CancelToken,
+            ) -> StorageResult<WaitOutcome>;
             fn path(&self) -> Option<&Path>;
             fn len(&self) -> Option<u64>;
             fn status(&self) -> ResourceStatus;

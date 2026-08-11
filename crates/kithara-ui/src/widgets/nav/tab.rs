@@ -1,5 +1,5 @@
 use iced::{
-    Background, Border, Element, Length, Theme,
+    Background, Border, Color, Element, Length, Theme,
     widget::{
         Space, button,
         button::{Status as ButtonStatus, Style as ButtonStyle},
@@ -47,7 +47,7 @@ impl<'a> Widget<'a> for TabLarge<'a, '_, '_, '_> {
                 ContainerStyle::default().background(Background::Color(if active {
                     palette.accent
                 } else {
-                    iced::Color::TRANSPARENT
+                    Color::TRANSPARENT
                 }))
             });
 

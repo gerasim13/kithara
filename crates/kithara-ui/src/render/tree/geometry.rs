@@ -19,11 +19,11 @@ pub(super) struct Rendered<'a> {
 }
 
 impl<'a> Rendered<'a> {
-    pub(super) fn new(element: Element<'a, UiEvent>, align: Horizontal) -> Self {
+    pub(super) const fn new(element: Element<'a, UiEvent>, align: Horizontal) -> Self {
         Self { element, align }
     }
 
-    pub(super) fn leading(element: Element<'a, UiEvent>) -> Self {
+    pub(super) const fn leading(element: Element<'a, UiEvent>) -> Self {
         Self::new(element, Horizontal::Left)
     }
 }
@@ -141,7 +141,7 @@ pub(super) fn apply_size<'a>(
         .into()
 }
 
-pub(super) fn length_for(dim: Dim, intrinsic: Length) -> Length {
+pub(super) const fn length_for(dim: Dim, intrinsic: Length) -> Length {
     match dim {
         Dim::Fixed(value) => Length::Fixed(value),
         Dim::Shrink => Length::Shrink,

@@ -15,7 +15,7 @@ pub struct CodecPriming {
 /// PCM frames per coded access unit (AAC 1024, MP3 1152). `0` for codecs
 /// without a fixed AU size. Converts a seek warm-up packet count into a
 /// back-off duration (`packets * access_unit_frames / sample_rate`).
-pub(crate) fn access_unit_frames(codec: AudioCodec) -> u32 {
+pub(crate) const fn access_unit_frames(codec: AudioCodec) -> u32 {
     match codec {
         AudioCodec::Mp3 => 1152,
         AudioCodec::AacLc | AudioCodec::AacHe | AudioCodec::AacHeV2 => 1024,

@@ -38,7 +38,7 @@ pub use kithara_resampler::{
 };
 pub use musical::{BeatMapError, CoordinateError, SourceFrame, TrackBeat, TrackBeatMap};
 pub use pipeline::{
-    config::{AudioConfig, AudioDecoderConfig, DecoderResamplerSettings},
+    config::{AudioConfig, AudioDecoderConfig, ConsumerWakeMode, DecoderResamplerSettings},
     fetch::{EpochValidator, Fetch},
 };
 pub use region::{ActiveRegion, RegionPlan, RegionPlanError};

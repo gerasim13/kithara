@@ -6,14 +6,14 @@ struct SaltSpec {
     len: usize,
 }
 
-fn prod_spec() -> SaltSpec {
+const fn prod_spec() -> SaltSpec {
     SaltSpec {
         alphabet: b"0123456789abcdef",
         len: 8,
     }
 }
 
-fn stage_spec() -> SaltSpec {
+const fn stage_spec() -> SaltSpec {
     SaltSpec {
         alphabet: b"0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ",
         len: 16,

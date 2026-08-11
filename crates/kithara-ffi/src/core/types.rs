@@ -63,7 +63,7 @@ impl From<uniffi::UnexpectedUniFFICallbackError> for FfiError {
 
 /// Convert [`Duration`] to seconds (`f64`).
 #[must_use]
-pub fn duration_to_seconds(d: Duration) -> f64 {
+pub const fn duration_to_seconds(d: Duration) -> f64 {
     d.as_secs_f64()
 }
 

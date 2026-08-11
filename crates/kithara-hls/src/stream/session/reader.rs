@@ -13,7 +13,7 @@ pub(in crate::stream) struct HlsSessionReader {
 }
 
 impl HlsSessionReader {
-    pub(in crate::stream) fn new(session: Arc<HlsSession>) -> Self {
+    pub(in crate::stream) const fn new(session: Arc<HlsSession>) -> Self {
         Self { session }
     }
 

@@ -6,6 +6,7 @@ use std::{
 };
 
 use kithara::{
+    audio::ConsumerWakeMode,
     bufpool::{BytePool, PcmPool},
     decode::PcmSpec,
     platform::{
@@ -66,6 +67,20 @@ impl SessionDispatcher for CountingSession {
         }
         self.inner.exec(cmd)
     }
+
+    fn consumer_wake_mode(&self) -> ConsumerWakeMode {
+        self.inner.consumer_wake_mode()
+    }
+}
+
+#[test]
+fn counting_session_preserves_inner_consumer_wake_mode() {
+    let session = CountingSession::new();
+
+    assert_eq!(
+        session.consumer_wake_mode(),
+        ConsumerWakeMode::ImmediateOffRt
+    );
 }
 
 struct MixHarness {

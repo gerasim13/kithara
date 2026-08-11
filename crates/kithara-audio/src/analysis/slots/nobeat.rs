@@ -18,7 +18,7 @@ where
         Slot(PhantomData)
     }
 
-    pub(crate) fn is_empty(_config: &Self) -> bool {
+    pub(crate) const fn is_empty(_config: &Self) -> bool {
         true
     }
 
@@ -53,7 +53,7 @@ where
         None
     }
 
-    pub(crate) fn is_empty(_slot: &Self) -> bool {
+    pub(crate) const fn is_empty(_slot: &Self) -> bool {
         true
     }
 

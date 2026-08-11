@@ -1,44 +1,92 @@
 #![cfg(not(target_arch = "wasm32"))]
 #![forbid(unsafe_code)]
 
-//! End-to-end proof of the app-wide shared `AssetStore` dedup: two
-//! concurrent consumers of one URL (a whole-file waveform analyzer and a
-//! bounded player) sharing a single store cooperate on a single network
-//! download. The CAS-winning consumer drives one GET; the loser reads the
-//! shared bytes through the same `AssetResource`.
+//! Proves two consumers join one active `AssetStore` download and issue one GET.
 
 use std::{
+    convert::Infallible,
     io::{self, Read},
     sync::atomic::{AtomicUsize, Ordering},
 };
 
-use axum::{Router, body::Body, extract::State, http::header, response::Response, routing::get};
+use axum::{
+    Router,
+    body::Body,
+    extract::State,
+    http::{HeaderMap, StatusCode, header},
+    response::Response,
+    routing::get,
+};
 use bytes::Bytes;
+use futures::stream;
 use kithara::{
     assets::{AssetStore, StorageBackend},
     file::{File, FileConfig},
-    platform::{sync::Arc, time::Duration, tokio::task::spawn_blocking},
+    platform::{
+        sync::Arc,
+        time::Duration,
+        tokio::{sync::watch, task::spawn_blocking},
+    },
     stream::Stream,
 };
 use kithara_integration_tests::TestHttpServer;
 
-/// Deterministic 60-byte body served in one response.
 const BODY: &[u8] = b"0123456789abcdefghijABCDEFGHIJ0123456789abcdefghijABCDEFGHIJ";
 
 #[derive(Clone)]
 struct CountState {
+    arrived: watch::Sender<bool>,
     gets: Arc<AtomicUsize>,
+    released: watch::Sender<bool>,
 }
 
-/// Serve the whole body in a single 200 response, counting GETs.
 async fn serve_full(State(state): State<CountState>) -> Response {
     state.gets.fetch_add(1, Ordering::SeqCst);
+    state.arrived.send_replace(true);
+    let mut released = state.released.subscribe();
+    let body = Body::from_stream(stream::once(async move {
+        released
+            .wait_for(|is_released| *is_released)
+            .await
+            .expect("test release sender remains alive");
+        Ok::<Bytes, Infallible>(Bytes::from_static(BODY))
+    }));
     Response::builder()
         .status(200)
         .header(header::CONTENT_LENGTH, BODY.len().to_string())
         .header(header::CONTENT_TYPE, "audio/mpeg")
-        .body(Body::from(Bytes::from_static(BODY)))
+        .body(body)
         .expect("valid response")
+}
+
+async fn serve_range(State(state): State<CountState>, headers: HeaderMap) -> Response {
+    state.gets.fetch_add(1, Ordering::SeqCst);
+    state.arrived.send_replace(true);
+    let value = headers
+        .get(header::RANGE)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("bytes="))
+        .expect("bounded request carries a byte range");
+    let (start, end) = value.split_once('-').expect("range has start and end");
+    let start = start.parse::<usize>().expect("numeric range start");
+    let end = end.parse::<usize>().expect("numeric range end");
+    let end = end.min(BODY.len() - 1);
+    let mut released = state.released.subscribe();
+    released
+        .wait_for(|is_released| *is_released)
+        .await
+        .expect("test release sender remains alive");
+    let bytes = &BODY[start..=end];
+    Response::builder()
+        .status(StatusCode::PARTIAL_CONTENT)
+        .header(header::CONTENT_LENGTH, bytes.len().to_string())
+        .header(
+            header::CONTENT_RANGE,
+            format!("bytes {start}-{end}/{}", BODY.len()),
+        )
+        .header(header::CONTENT_TYPE, "audio/mpeg")
+        .body(Body::from(Bytes::copy_from_slice(bytes)))
+        .expect("valid range response")
 }
 
 fn read_to_end(mut stream: Stream<File>) -> io::Result<Vec<u8>> {
@@ -56,15 +104,21 @@ fn read_to_end(mut stream: Stream<File>) -> io::Result<Vec<u8>> {
 
 #[kithara::test(
     tokio,
+    multi_thread,
+    flash(false),
     timeout(Duration::from_secs(10)),
     env(KITHARA_HANG_TIMEOUT_SECS = "2")
 )]
-async fn shared_store_one_get() {
+async fn follower_joins_active_download_without_second_get() {
     let gets = Arc::new(AtomicUsize::new(0));
+    let (arrived, mut arrived_rx) = watch::channel(false);
+    let (released, _released_rx) = watch::channel(false);
     let app = Router::new()
         .route("/audio.mp3", get(serve_full))
         .with_state(CountState {
+            arrived,
             gets: Arc::clone(&gets),
+            released: released.clone(),
         });
     let server = TestHttpServer::new(app).await;
     let url = server.url("/audio.mp3");
@@ -73,17 +127,17 @@ async fn shared_store_one_get() {
         .backend(StorageBackend::Memory)
         .build();
 
-    // Whole-file consumer (waveform) attaches first → wins the producer
-    // election and drives the single download.
     let waveform_cfg = FileConfig::for_src(url.clone().into())
         .store(store.clone())
         .build();
     let waveform = Stream::<File>::new(waveform_cfg)
         .await
         .expect("waveform stream");
+    arrived_rx
+        .wait_for(|has_arrived| *has_arrived)
+        .await
+        .expect("request handler remains alive");
 
-    // Bounded consumer (player) of the same URL → loses the election and
-    // reads the shared bytes instead of issuing its own download.
     let player_cfg = FileConfig::for_src(url.into())
         .store(store)
         .look_ahead_bytes(16)
@@ -92,15 +146,17 @@ async fn shared_store_one_get() {
         .await
         .expect("player stream");
 
-    let (waveform_bytes, player_bytes) = spawn_blocking(move || {
-        let waveform_bytes = read_to_end(waveform);
-        let player_bytes = read_to_end(player);
-        (waveform_bytes, player_bytes)
-    })
-    .await
-    .expect("blocking read task");
-    let waveform_bytes = waveform_bytes.expect("whole-file read must complete");
-    let player_bytes = player_bytes.expect("bounded read must complete");
+    let waveform_read = spawn_blocking(move || read_to_end(waveform));
+    let player_read = spawn_blocking(move || read_to_end(player));
+    released.send_replace(true);
+    let waveform_bytes = waveform_read
+        .await
+        .expect("waveform blocking task")
+        .expect("whole-file read must complete");
+    let player_bytes = player_read
+        .await
+        .expect("player blocking task")
+        .expect("bounded read must complete");
 
     assert_eq!(
         waveform_bytes, BODY,
@@ -114,5 +170,45 @@ async fn shared_store_one_get() {
         gets.load(Ordering::SeqCst),
         1,
         "two concurrent consumers of one URL must share a single network GET"
+    );
+}
+
+#[kithara::test(
+    tokio,
+    multi_thread,
+    flash(false),
+    timeout(Duration::from_secs(10)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "2")
+)]
+async fn immediate_read_exceeds_zero_look_ahead_without_stalling() {
+    let gets = Arc::new(AtomicUsize::new(0));
+    let (arrived, _arrived_rx) = watch::channel(false);
+    let (released, _released_rx) = watch::channel(true);
+    let app = Router::new()
+        .route("/audio.mp3", get(serve_range))
+        .with_state(CountState {
+            arrived,
+            gets: Arc::clone(&gets),
+            released,
+        });
+    let server = TestHttpServer::new(app).await;
+    let store = AssetStore::builder()
+        .backend(StorageBackend::Memory)
+        .build();
+    let config = FileConfig::for_src(server.url("/audio.mp3").into())
+        .store(store)
+        .look_ahead_bytes(0)
+        .build();
+    let stream = Stream::<File>::new(config).await.expect("bounded stream");
+
+    let bytes = spawn_blocking(move || read_to_end(stream))
+        .await
+        .expect("bounded read task")
+        .expect("bounded read must complete");
+
+    assert_eq!(bytes, BODY);
+    assert!(
+        gets.load(Ordering::SeqCst) > 1,
+        "zero look-ahead must advance through multiple exact ranges"
     );
 }

@@ -1,67 +1,26 @@
-use std::sync::{
-    OnceLock,
-    atomic::{AtomicU8, Ordering},
+use std::{
+    sync::{
+        OnceLock,
+        atomic::{AtomicBool, Ordering},
+    },
+    task::{Wake, Waker},
 };
 
-use kithara_assets::{
-    AssetReader, AssetStore, AssetWriter, DemandLease, RawWriteHandle, ReadSide,
-    ResourceAcquisition, ResourceKey, WriteSide,
-};
+use kithara_assets::{AssetReader, ReadSide, ResourceLease};
 use kithara_events::{AudioCodecKind, ContainerKind, EventBus, FileEvent, TotalBytesSource};
 use kithara_net::Headers;
 use kithara_platform::{
     CancelToken,
-    sync::{Arc, Mutex},
+    sync::{Arc, Weak},
 };
+use kithara_storage::ResourceStatus;
 use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo, WorkerWake};
 use url::Url;
 
 use super::segments::FileSegmentIndex;
-use crate::{coord::FileCoord, error::SourceError};
+use crate::coord::FileCoord;
 
-/// Creation helper: acquire the asset resource and prepare the event bus
-/// before constructing a remote `FileSource`. The phase-typed acquisition
-/// (`Pending` writer to download / `Ready` reader already cached) is decided
-/// by the caller.
-pub(crate) struct FileStreamState {
-    pub(crate) backend: AssetStore,
-    pub(crate) bus: EventBus,
-    pub(crate) acq: ResourceAcquisition,
-    pub(crate) key: ResourceKey,
-}
-
-impl FileStreamState {
-    pub(crate) fn create(
-        assets: &AssetStore,
-        key: ResourceKey,
-        bus: Option<EventBus>,
-        event_channel_capacity: usize,
-    ) -> Result<Self, SourceError> {
-        let acq = assets
-            .acquire_resource(&key, None)
-            .map_err(SourceError::Assets)?;
-        let bus = bus.unwrap_or_else(|| EventBus::new(event_channel_capacity));
-        Ok(Self {
-            bus,
-            key,
-            acq,
-            backend: assets.clone(),
-        })
-    }
-}
-
-/// File-streaming FSM phases. Stored as `AtomicU8` for lock-free transitions
-/// from the download driver.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(u8)]
-pub(crate) enum FilePhase {
-    /// Ready to start the initial full-file download.
-    Init = 0,
-    /// Download in progress.
-    Downloading = 1,
-    /// File fully downloaded (or local).
-    Complete = 2,
-}
+const CODEC_SNIFF_BYTES: usize = 16;
 
 /// Control-plane handles shared between the source and the download driver.
 pub(crate) struct FileSourceCtx {
@@ -72,22 +31,16 @@ pub(crate) struct FileSourceCtx {
 
 /// Data-plane handles describing where the file lives and how to fetch it.
 ///
-/// The resource is phase-split: `reader` serves the synchronous read path;
-/// `writer` is the single non-`Clone` commit owner (taken on commit/fail),
-/// present only on the download path; `raw` is the clone-able streaming-write
-/// handle a fetch closure uses to land bytes into the writer's generation.
+/// The session-owned writer never leaves `kithara-assets`; File keeps only the
+/// synchronous reader and protocol metadata needed to drive HTTP callbacks.
 pub(crate) struct FileAssetCtx {
     pub(crate) reader: AssetReader,
-    pub(crate) backend: AssetStore,
-    pub(crate) writer: Mutex<Option<AssetWriter>>,
     pub(crate) headers: Option<Headers>,
-    pub(crate) raw: Option<RawWriteHandle>,
-    pub(crate) key: ResourceKey,
     pub(crate) url: Url,
 }
 
 /// Shared inner state for a `FileSource`. All fields are either immutable
-/// (set at construction) or self-synchronizing — there is no `Mutex`.
+/// (set at construction) or self-synchronizing - there is no `Mutex`.
 pub(crate) struct FileInner {
     pub(crate) asset: FileAssetCtx,
     pub(crate) source: FileSourceCtx,
@@ -104,13 +57,12 @@ pub(crate) struct FileInner {
     pub(crate) segment_index: OnceLock<FileSegmentIndex>,
 
     /// Consumer demand lease held for this source's lifetime. `Some` on
-    /// the remote-download path: it keeps the demand slot alive and lets
-    /// [`FilePeer`](super::FilePeer) take over the single-producer
-    /// election if the original producer drops. `None` for local /
+    /// the remote path: it keeps the pending resource alive and lets
+    /// [`FilePeer`](super::FilePeer) take over the single-writer
+    /// election if the original writer drops. `None` for local /
     /// already-cached sources that never download.
-    pub(crate) demand_lease: Option<DemandLease>,
-    /// FSM phase as `FilePhase as u8`. Lock-free transitions.
-    phase: AtomicU8,
+    pub(crate) resource_lease: Option<ResourceLease>,
+    complete: AtomicBool,
 
     opened_emitted: OnceLock<()>,
 
@@ -118,26 +70,28 @@ pub(crate) struct FileInner {
     /// HTTP bytes are still arriving, so each write wakes the worker that
     /// previously parked on a non-blocking readiness probe.
     worker_wake: OnceLock<Arc<dyn WorkerWake>>,
+    reader_waker: OnceLock<Waker>,
 }
 
 impl FileInner {
     pub(crate) fn new(
         source: FileSourceCtx,
         asset: FileAssetCtx,
-        initial_phase: FilePhase,
-        demand_lease: Option<DemandLease>,
+        complete: bool,
+        resource_lease: Option<ResourceLease>,
     ) -> Self {
         let inner = Self {
             source,
             asset,
-            demand_lease,
+            resource_lease,
             opened_emitted: OnceLock::new(),
             content_type_info: OnceLock::new(),
             segment_index: OnceLock::new(),
             worker_wake: OnceLock::new(),
-            phase: AtomicU8::new(initial_phase as u8),
+            reader_waker: OnceLock::new(),
+            complete: AtomicBool::new(complete),
         };
-        if matches!(initial_phase, FilePhase::Complete) {
+        if complete {
             inner.try_build_segment_index();
         }
         inner
@@ -154,21 +108,6 @@ impl FileInner {
         let mut buf: Box<[u8]> = std::iter::repeat_n(0u8, total_usize).collect();
         self.asset.reader.read_at(0, &mut buf).ok()?;
         FileSegmentIndex::try_build(&buf)
-    }
-
-    /// Mark the resource failed and evict the pre-allocated cache file.
-    ///
-    /// Call on any terminal download error so the file is gone from disk
-    /// before the task returns — without this the reader in `FileInner.asset`
-    /// keeps the mmap parked in the cache directory for the full lifetime
-    /// of the holding `Stream<File>`.
-    pub(crate) fn fail_and_evict(&self, reason: &str) {
-        if let Some(writer) = self.take_writer() {
-            writer.fail(reason.to_string());
-        }
-        if let Err(error) = self.asset.backend.remove_resource(&self.asset.key) {
-            tracing::warn!(%error, reason, "kithara-file: failed to remove terminal resource");
-        }
     }
 
     pub(crate) fn publish_opened(
@@ -205,36 +144,67 @@ impl FileInner {
         });
     }
 
-    /// Lock-free FSM transition. The one-shot fragmented-mp4 parse runs
-    /// on the `Complete` edge so the hot-path `byte_map` audit
+    /// Mark the file complete once. The one-shot fragmented-mp4 parse runs
+    /// on this edge so the hot-path `byte_map` audit
     /// can short-circuit on `segment_index.get()` without re-reading the
     /// file each tick.
-    pub(crate) fn set_phase(&self, phase: FilePhase) {
-        let previous = self.phase.load(Ordering::Acquire);
-        self.phase.store(phase as u8, Ordering::Release);
-        if matches!(phase, FilePhase::Complete) && previous != FilePhase::Complete as u8 {
-            if let Some(total_bytes) = self.source.coord.total_bytes() {
-                self.source
-                    .bus
-                    .publish(FileEvent::CacheComplete { total_bytes });
-            }
-            self.try_build_segment_index();
+    pub(crate) fn mark_complete(&self) {
+        if self.complete.swap(true, Ordering::AcqRel) {
+            return;
         }
+        if let Some(total_bytes) = self.source.coord.total_bytes() {
+            self.source
+                .bus
+                .publish(FileEvent::CacheComplete { total_bytes });
+        }
+        self.try_build_segment_index();
     }
 
     pub(crate) fn set_worker_wake(&self, wake: Arc<dyn WorkerWake>) {
         let _ = self.worker_wake.set(wake);
     }
 
-    /// Take the single commit-owning writer, if this is a download path and it
-    /// has not been consumed yet.
-    pub(crate) fn take_writer(&self) -> Option<AssetWriter> {
-        self.asset.writer.lock().take()
+    pub(crate) fn arm_reader_waker(self: &Arc<Self>) {
+        let Some(lease) = self.resource_lease.as_ref() else {
+            return;
+        };
+        let waker = self.reader_waker.get_or_init(|| {
+            Waker::from(Arc::new(FileReaderWake {
+                inner: Arc::downgrade(self),
+            }))
+        });
+        lease.register_reader_waker(waker);
+    }
+
+    pub(crate) fn observe_committed(&self) -> bool {
+        if self.resource_lease.is_none() {
+            return self.complete.load(Ordering::Acquire);
+        }
+        let ResourceStatus::Committed { final_len } = self.asset.reader.status() else {
+            return false;
+        };
+        let total_bytes = final_len.map_or_else(|| self.asset.reader.len(), Some);
+        self.source.coord.set_total_bytes(total_bytes);
+        if let Some(total_bytes) = total_bytes {
+            self.source.coord.set_download_pos(total_bytes);
+        }
+        if self.content_type_info.get().is_none()
+            && let Some(codec) = sniff_codec(&self.asset.reader)
+        {
+            let _ = self.content_type_info.set(MediaInfo::from(codec));
+        }
+        self.publish_opened(
+            total_bytes,
+            false,
+            total_bytes.map(|_| TotalBytesSource::CommittedLen),
+        );
+        self.mark_complete();
+        true
     }
 
     /// One-shot fragmented-mp4 parse from the fully cached file bytes.
     /// Idempotent: a second call is a `OnceLock::get` fast-path no-op.
-    /// Called from `set_phase(Complete)` (and from `new` for files
+    /// Called from `mark_complete` (and from `new` for files
     /// constructed already-complete) so the hot-path `byte_map`
     /// audit only ever reads the cached result.
     fn try_build_segment_index(&self) {
@@ -253,6 +223,29 @@ impl FileInner {
     }
 }
 
+struct FileReaderWake {
+    inner: Weak<FileInner>,
+}
+
+impl Wake for FileReaderWake {
+    fn wake(self: Arc<Self>) {
+        self.wake_by_ref();
+    }
+
+    fn wake_by_ref(self: &Arc<Self>) {
+        if let Some(inner) = self.inner.upgrade() {
+            inner.arm_reader_waker();
+            inner.wake_worker();
+        }
+    }
+}
+
+pub(crate) fn sniff_codec(reader: &AssetReader) -> Option<AudioCodec> {
+    let mut buf = [0u8; CODEC_SNIFF_BYTES];
+    let read = reader.read_at(0, &mut buf).ok()?;
+    AudioCodec::try_from(&buf[..read]).ok()
+}
+
 fn map_media_info(info: &MediaInfo) -> (Option<AudioCodecKind>, Option<ContainerKind>) {
     (
         info.codec.map(map_audio_codec),
@@ -260,7 +253,7 @@ fn map_media_info(info: &MediaInfo) -> (Option<AudioCodecKind>, Option<Container
     )
 }
 
-fn map_audio_codec(codec: AudioCodec) -> AudioCodecKind {
+const fn map_audio_codec(codec: AudioCodec) -> AudioCodecKind {
     match codec {
         AudioCodec::AacLc => AudioCodecKind::AacLc,
         AudioCodec::AacHe => AudioCodecKind::AacHe,
@@ -275,7 +268,7 @@ fn map_audio_codec(codec: AudioCodec) -> AudioCodecKind {
     }
 }
 
-fn map_container(container: ContainerFormat) -> ContainerKind {
+const fn map_container(container: ContainerFormat) -> ContainerKind {
     match container {
         ContainerFormat::Mp4 => ContainerKind::Mp4,
         ContainerFormat::Fmp4 => ContainerKind::Fmp4,

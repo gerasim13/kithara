@@ -21,7 +21,7 @@ impl EmbeddedAudio {
     pub const MP3_EXPECTED_DURATION_SECS: f64 = 187.0;
 
     /// Get the embedded audio data
-    pub fn get() -> Self {
+    pub const fn get() -> Self {
         Self {
             wav: Self::TINY_WAV_BYTES,
             mp3: Self::TEST_MP3_BYTES,
@@ -29,17 +29,17 @@ impl EmbeddedAudio {
     }
 
     /// Get WAV data
-    pub fn wav(&self) -> &'static [u8] {
+    pub const fn wav(&self) -> &'static [u8] {
         self.wav
     }
 
     /// Get MP3 data
-    pub fn mp3(&self) -> &'static [u8] {
+    pub const fn mp3(&self) -> &'static [u8] {
         self.mp3
     }
 
     /// Nominal playback duration for [`Self::mp3`] in seconds.
-    pub fn mp3_expected_duration_secs(&self) -> f64 {
+    pub const fn mp3_expected_duration_secs(&self) -> f64 {
         Self::MP3_EXPECTED_DURATION_SECS
     }
 }

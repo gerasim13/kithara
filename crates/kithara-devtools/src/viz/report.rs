@@ -271,7 +271,7 @@ pub(crate) fn render(model: &DiagramModel) -> String {
     output
 }
 
-fn relation_name(kind: EdgeKind) -> &'static str {
+const fn relation_name(kind: EdgeKind) -> &'static str {
     match kind {
         EdgeKind::Contains => "contains",
         EdgeKind::DependsOn => "depends on",
@@ -288,7 +288,7 @@ fn relation_name(kind: EdgeKind) -> &'static str {
     }
 }
 
-fn style_name(style: EvidenceStyle) -> &'static str {
+const fn style_name(style: EvidenceStyle) -> &'static str {
     match style {
         EvidenceStyle::Resolved => "resolved",
         EvidenceStyle::Conditional => "conditional",

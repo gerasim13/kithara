@@ -31,7 +31,7 @@ pub struct HlsStreamBuilder {
 }
 
 impl HlsStreamBuilder {
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self {
             master_path: "/master.m3u8",
             initial_abr_mode: AbrMode::Manual(VariantIndex::new(0)),
@@ -42,43 +42,43 @@ impl HlsStreamBuilder {
     }
 
     /// Set the ABR variant index (default: `Manual(0)`).
-    pub fn variant(mut self, variant: usize) -> Self {
+    pub const fn variant(mut self, variant: usize) -> Self {
         self.initial_abr_mode = AbrMode::Manual(VariantIndex::new(variant));
         self
     }
 
     /// Override the initial ABR mode entirely.
-    pub fn abr_mode(mut self, mode: AbrMode) -> Self {
+    pub const fn abr_mode(mut self, mode: AbrMode) -> Self {
         self.initial_abr_mode = mode;
         self
     }
 
     /// Use master playlist with init segments (`/master-init.m3u8`).
-    pub fn with_init(mut self) -> Self {
+    pub const fn with_init(mut self) -> Self {
         self.master_path = "/master-init.m3u8";
         self
     }
 
     /// Use encrypted master playlist (`/master-encrypted.m3u8`).
-    pub fn with_encrypted(mut self) -> Self {
+    pub const fn with_encrypted(mut self) -> Self {
         self.master_path = "/master-encrypted.m3u8";
         self
     }
 
     /// Use a subdirectory under `temp_dir` for the asset store.
-    pub fn store_subdir(mut self, subdir: &'static str) -> Self {
+    pub const fn store_subdir(mut self, subdir: &'static str) -> Self {
         self.store_subdir = Some(subdir);
         self
     }
 
     /// Set the maximum number of cached assets in the store.
-    pub fn max_assets(mut self, max_assets: usize) -> Self {
+    pub const fn max_assets(mut self, max_assets: usize) -> Self {
         self.max_assets = Some(max_assets);
         self
     }
 
     /// Set the maximum total bytes for cached assets in the store.
-    pub fn max_bytes(mut self, max_bytes: u64) -> Self {
+    pub const fn max_bytes(mut self, max_bytes: u64) -> Self {
         self.max_bytes = Some(max_bytes);
         self
     }

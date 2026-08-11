@@ -117,7 +117,7 @@ fn activate_dependencies(config: &mut SimilarityConfig, metadata: &Metadata) {
         .workspace_packages()
         .iter()
         .flat_map(|package| package.dependencies.iter())
-        .map(|dependency| dependency.name.to_string())
+        .map(|dependency| dependency.name.clone())
         .collect();
 }
 
@@ -134,7 +134,7 @@ pub enum Profile {
 }
 
 impl Profile {
-    fn as_str(self) -> &'static str {
+    const fn as_str(self) -> &'static str {
         match self {
             Self::Audit => "audit",
             Self::Advisory => "advisory",

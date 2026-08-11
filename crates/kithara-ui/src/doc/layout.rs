@@ -101,11 +101,11 @@ pub struct SplitChild {
     pub weight: f32,
 }
 
-fn default_weight() -> f32 {
+const fn default_weight() -> f32 {
     1.0
 }
 
-fn default_frame_side() -> bool {
+const fn default_frame_side() -> bool {
     true
 }
 

@@ -155,7 +155,7 @@ pub(super) struct VariantSegments {
 }
 
 impl VariantSegments {
-    fn new(
+    const fn new(
         scope: kithara_assets::AssetScope,
         init: Option<Segment>,
         entries: Vec<Segment>,

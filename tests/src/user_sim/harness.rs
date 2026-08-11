@@ -103,7 +103,7 @@ pub struct TrackSpec {
 }
 
 impl TrackSpec {
-    pub fn new(url: Url, backend: DecoderBackend) -> Self {
+    pub const fn new(url: Url, backend: DecoderBackend) -> Self {
         Self {
             url,
             backend,
@@ -111,12 +111,12 @@ impl TrackSpec {
         }
     }
 
-    pub fn with_abr_mode(mut self, mode: AbrMode) -> Self {
+    pub const fn with_abr_mode(mut self, mode: AbrMode) -> Self {
         self.abr_mode = mode;
         self
     }
 
-    pub fn with_backend(mut self, backend: DecoderBackend) -> Self {
+    pub const fn with_backend(mut self, backend: DecoderBackend) -> Self {
         self.backend = backend;
         self
     }
@@ -185,7 +185,7 @@ impl SimHarness {
         }
     }
 
-    pub fn queue(&self) -> &Arc<Queue> {
+    pub const fn queue(&self) -> &Arc<Queue> {
         &self.queue
     }
 

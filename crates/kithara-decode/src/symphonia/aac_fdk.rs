@@ -44,7 +44,7 @@ fn sample_rate_index(rate: u32) -> u8 {
         .unwrap_or(0xF)
 }
 
-fn channel_layout(channels: u8) -> Option<Channels> {
+const fn channel_layout(channels: u8) -> Option<Channels> {
     Some(match channels {
         1 => layouts::CHANNEL_LAYOUT_MONO,
         2 => layouts::CHANNEL_LAYOUT_STEREO,

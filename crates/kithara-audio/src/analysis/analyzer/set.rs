@@ -33,7 +33,7 @@ where
     }
 
     #[must_use]
-    pub fn is_empty(&self) -> bool {
+    pub const fn is_empty(&self) -> bool {
         waveform::config_is_empty(&self.waveform) && Config::is_empty(&self.beat)
     }
 
@@ -89,7 +89,7 @@ where
 
     #[must_use]
     #[cfg(feature = "analysis-waveform")]
-    pub fn with_waveform(self, buckets: usize) -> Self {
+    pub const fn with_waveform(self, buckets: usize) -> Self {
         let mut builder = self;
         waveform::with_buckets(&mut builder.waveform, buckets);
         builder

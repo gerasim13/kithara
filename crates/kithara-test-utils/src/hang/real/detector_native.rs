@@ -53,7 +53,7 @@ pub struct HangDetector<C: HangDump = NoContext> {
 
 impl<C: HangDump> HangDetector<C> {
     #[must_use]
-    pub fn new(label: &'static str, timeout: Duration) -> Self {
+    pub const fn new(label: &'static str, timeout: Duration) -> Self {
         Self {
             label,
             timeout,

@@ -31,7 +31,7 @@ pub(crate) enum ImageCommand {
 }
 
 impl ImageCommand {
-    pub(crate) fn dockerfile(self) -> &'static str {
+    pub(crate) const fn dockerfile(self) -> &'static str {
         match self {
             Self::Toolchain => "docker/ci.Dockerfile",
             // One recipe serves both runners; they differ by the image they

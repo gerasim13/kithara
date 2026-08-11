@@ -75,12 +75,12 @@ pub enum TrackState {
 
 impl TrackState {
     /// Whether the track is the "leading" track (playing or fading in).
-    pub(crate) fn is_leading(self) -> bool {
+    pub(crate) const fn is_leading(self) -> bool {
         matches!(self, Self::Playing | Self::FadingIn)
     }
 
     /// Whether the track is producing audible audio.
-    pub(crate) fn is_playing(self) -> bool {
+    pub(crate) const fn is_playing(self) -> bool {
         matches!(self, Self::Playing | Self::FadingIn | Self::FadingOut)
     }
 }
@@ -151,7 +151,7 @@ impl PlayerNotification {
     /// tracing call-sites that need to discriminate between concurrent
     /// tracks beyond what the variant tag alone can express.
     #[must_use]
-    pub fn src(&self) -> Option<&Arc<str>> {
+    pub const fn src(&self) -> Option<&Arc<str>> {
         match self {
             Self::Loaded { src }
             | Self::Unloaded { src }
@@ -197,6 +197,10 @@ mod tests {
             reason: TrackPlaybackStopReason::Stop,
         };
         let cloned = n.clone();
+        assert!(matches!(
+            &n,
+            PlayerNotification::PlaybackStopped { src, .. } if &**src == "ended.mp3"
+        ));
         assert!(matches!(
             cloned,
             PlayerNotification::PlaybackStopped { ref src, .. } if &**src == "ended.mp3"

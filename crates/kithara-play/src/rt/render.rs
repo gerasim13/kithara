@@ -264,7 +264,7 @@ impl RenderPass {
     }
 }
 
-fn initial_handover(read_outcome: &TrackReadOutcome) -> Option<Handover> {
+const fn initial_handover(read_outcome: &TrackReadOutcome) -> Option<Handover> {
     match read_outcome {
         TrackReadOutcome::Partial { frames, .. } => Some(Handover { offset: *frames }),
         TrackReadOutcome::Eof | TrackReadOutcome::Failed => Some(Handover { offset: 0 }),
@@ -272,7 +272,7 @@ fn initial_handover(read_outcome: &TrackReadOutcome) -> Option<Handover> {
     }
 }
 
-fn next_handover(read_outcome: &TrackReadOutcome, offset: usize) -> Option<Handover> {
+const fn next_handover(read_outcome: &TrackReadOutcome, offset: usize) -> Option<Handover> {
     match read_outcome {
         TrackReadOutcome::Full { .. } => None,
         TrackReadOutcome::Partial { frames, .. } => Some(Handover {
@@ -282,7 +282,7 @@ fn next_handover(read_outcome: &TrackReadOutcome, offset: usize) -> Option<Hando
     }
 }
 
-fn outcome_position_duration(outcome: &TrackReadOutcome) -> Option<(f64, f64)> {
+const fn outcome_position_duration(outcome: &TrackReadOutcome) -> Option<(f64, f64)> {
     match *outcome {
         TrackReadOutcome::Full {
             position, duration, ..
@@ -292,7 +292,7 @@ fn outcome_position_duration(outcome: &TrackReadOutcome) -> Option<(f64, f64)> {
     }
 }
 
-pub(super) fn eviction_priority(state: TrackState) -> u8 {
+pub(super) const fn eviction_priority(state: TrackState) -> u8 {
     const EVICT_PRELOADING: u8 = 2;
     const EVICT_FADING_IN: u8 = 3;
     const EVICT_PLAYING: u8 = 4;

@@ -126,7 +126,7 @@ pub(crate) fn encoded_signal_cache_key(kind: SignalKind, spec_with_ext: &str) ->
     format!("{}::{spec_with_ext}", kind_str(kind))
 }
 
-fn kind_str(kind: SignalKind) -> &'static str {
+const fn kind_str(kind: SignalKind) -> &'static str {
     match kind {
         SignalKind::Sawtooth => "sawtooth",
         SignalKind::SawtoothDescending => "sawtooth-desc",
@@ -444,7 +444,7 @@ fn stream_wav<S: signal::SignalFn>(signal: S, spec: &ResolvedSignalSpec) -> Body
     Body::from_stream(stream)
 }
 
-fn pcm_stream_chunk_size(channels: u16) -> usize {
+const fn pcm_stream_chunk_size(channels: u16) -> usize {
     let bytes_per_frame = channels as usize * size_of::<i16>();
     PCM_STREAM_CHUNK_BYTES - (PCM_STREAM_CHUNK_BYTES % bytes_per_frame)
 }

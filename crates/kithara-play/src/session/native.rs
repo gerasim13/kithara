@@ -1,4 +1,5 @@
 use firewheel::{FirewheelCtx, backend::AudioBackend};
+use kithara_audio::ConsumerWakeMode;
 use kithara_platform::{
     sync::{Arc, Mutex, mpsc},
     thread::spawn_named,
@@ -38,6 +39,10 @@ impl SessionClient {
 impl SessionDispatcher for SessionClient {
     fn exec(&self, cmd: Cmd) -> Result<Reply, PlayError> {
         self.call(cmd)
+    }
+
+    fn consumer_wake_mode(&self) -> ConsumerWakeMode {
+        ConsumerWakeMode::RealtimeDeferred
     }
 }
 

@@ -166,7 +166,7 @@ impl SymphoniaCodec {
     /// the factory routes those through [`Self::open_native`] using the
     /// demuxer's native `AudioCodecParameters` instead.
     #[must_use]
-    pub(crate) fn supports(codec: AudioCodec) -> bool {
+    pub(crate) const fn supports(codec: AudioCodec) -> bool {
         !matches!(codec, AudioCodec::Pcm | AudioCodec::Adpcm)
     }
 }
@@ -283,14 +283,14 @@ impl FrameCodec for SymphoniaCodec {
     }
 }
 
-fn symphonia_decoder_algo_delay(codec: AudioCodec) -> u64 {
+const fn symphonia_decoder_algo_delay(codec: AudioCodec) -> u64 {
     match codec {
         AudioCodec::Mp3 => Consts::MP3_DECODER_DELAY,
         _ => 0,
     }
 }
 
-fn apply_decoder_algo_delay(info: GaplessInfo, algo_delay: u64) -> GaplessInfo {
+const fn apply_decoder_algo_delay(info: GaplessInfo, algo_delay: u64) -> GaplessInfo {
     if algo_delay == 0 {
         return info;
     }
@@ -300,7 +300,7 @@ fn apply_decoder_algo_delay(info: GaplessInfo, algo_delay: u64) -> GaplessInfo {
     }
 }
 
-fn map_codec(codec: AudioCodec) -> DecodeResult<(AudioCodecId, Option<CodecProfile>)> {
+const fn map_codec(codec: AudioCodec) -> DecodeResult<(AudioCodecId, Option<CodecProfile>)> {
     match codec {
         AudioCodec::AacLc => Ok((CODEC_ID_AAC, Some(CODEC_PROFILE_AAC_LC))),
         AudioCodec::AacHe => Ok((CODEC_ID_AAC, Some(CODEC_PROFILE_AAC_HE))),

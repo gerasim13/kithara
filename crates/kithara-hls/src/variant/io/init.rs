@@ -161,12 +161,12 @@ impl HlsVariant {
             /// Whether this variant declares a separately fetched `#EXT-X-MAP` init,
             /// regardless of whether its size is yet known.
             #[call(is_some)]
-            pub(crate) fn has_init(&self) -> bool;
+            pub(crate) const fn has_init(&self) -> bool;
             /// Borrow the init slot — the fetch path matches on it, reading the init
             /// `Segment`'s `url` / `content` / `resource_id` and claiming its state
             /// atom. `None` for a variant with no separate init.
             #[call(as_ref)]
-            pub(super) fn init(&self) -> Option<&Segment>;
+            pub(super) const fn init(&self) -> Option<&Segment>;
             /// Narrow disk handle for the variant's separately fetched init segment,
             /// or `None` for a variant with no `#EXT-X-MAP` init.
             #[expr(Some($?.resource(&self.segments.scope)))]

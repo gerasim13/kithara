@@ -204,7 +204,7 @@ fn parse_header(word: u32) -> Option<FrameHeader> {
     })
 }
 
-fn side_info_len(header: FrameHeader) -> usize {
+const fn side_info_len(header: FrameHeader) -> usize {
     match (header.samples_per_frame, header.side_info_mono) {
         (1152, true) | (576, false) => 17,
         (1152, false) => 32,

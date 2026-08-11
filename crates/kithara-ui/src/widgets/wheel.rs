@@ -1,6 +1,6 @@
 use iced::{
     Element, Event, Length, Rectangle, Renderer, Theme,
-    mouse::{self, Button, Cursor, ScrollDelta},
+    mouse::{Button, Cursor, Event as MouseEvent, Interaction, ScrollDelta},
     time::Instant,
     widget::canvas::{self, Action, Canvas, Geometry},
 };
@@ -76,7 +76,7 @@ fn direction(y: f32) -> f32 {
 }
 
 impl WheelCanvas {
-    const HOVER: HoverState = HoverState::new(mouse::Interaction::ResizingVertically);
+    const HOVER: HoverState = HoverState::new(Interaction::ResizingVertically);
 
     fn publish(&self, action: ControlAction) -> Action<UiEvent> {
         Action::publish(UiEvent::Control {
@@ -106,7 +106,7 @@ impl canvas::Program<UiEvent> for WheelCanvas {
         state: &WheelState,
         bounds: Rectangle,
         cursor: Cursor,
-    ) -> mouse::Interaction {
+    ) -> Interaction {
         Self::HOVER.interaction(state.drag.is_some(), bounds, cursor)
     }
 
@@ -118,14 +118,14 @@ impl canvas::Program<UiEvent> for WheelCanvas {
         cursor: Cursor,
     ) -> Option<Action<UiEvent>> {
         match event {
-            Event::Mouse(mouse::Event::WheelScrolled { delta }) if cursor.is_over(bounds) => {
+            Event::Mouse(MouseEvent::WheelScrolled { delta }) if cursor.is_over(bounds) => {
                 let steps = state.step(*delta);
                 if steps == 0.0 {
                     return Some(Action::capture());
                 }
                 Some(self.publish(ControlAction::StepScalar(steps)))
             }
-            Event::Mouse(mouse::Event::ButtonPressed(Button::Left)) if cursor.is_over(bounds) => {
+            Event::Mouse(MouseEvent::ButtonPressed(Button::Left)) if cursor.is_over(bounds) => {
                 let position = cursor.position()?;
                 if state.double_click.register(position) {
                     state.drag = None;
@@ -134,14 +134,14 @@ impl canvas::Program<UiEvent> for WheelCanvas {
                 state.drag = Some(position.y);
                 None
             }
-            Event::Mouse(mouse::Event::CursorMoved { position }) => {
+            Event::Mouse(MouseEvent::CursorMoved { position }) => {
                 let steps = state.drag_steps(position.y)?;
                 if steps == 0.0 {
                     return Some(Action::capture());
                 }
                 Some(self.publish(ControlAction::StepScalar(steps)))
             }
-            Event::Mouse(mouse::Event::ButtonReleased(Button::Left)) => {
+            Event::Mouse(MouseEvent::ButtonReleased(Button::Left)) => {
                 state.drag.take().is_some().then(Action::capture)
             }
             _ => None,
@@ -175,27 +175,27 @@ mod tests {
     }
 
     fn wheel(y: f32) -> Event {
-        Event::Mouse(mouse::Event::WheelScrolled {
+        Event::Mouse(MouseEvent::WheelScrolled {
             delta: ScrollDelta::Lines { x: 0.0, y },
         })
     }
 
     fn pixels(y: f32) -> Event {
-        Event::Mouse(mouse::Event::WheelScrolled {
+        Event::Mouse(MouseEvent::WheelScrolled {
             delta: ScrollDelta::Pixels { x: 0.0, y },
         })
     }
 
     fn press() -> Event {
-        Event::Mouse(mouse::Event::ButtonPressed(Button::Left))
+        Event::Mouse(MouseEvent::ButtonPressed(Button::Left))
     }
 
     fn release() -> Event {
-        Event::Mouse(mouse::Event::ButtonReleased(Button::Left))
+        Event::Mouse(MouseEvent::ButtonReleased(Button::Left))
     }
 
     fn moved(y: f32) -> Event {
-        Event::Mouse(mouse::Event::CursorMoved {
+        Event::Mouse(MouseEvent::CursorMoved {
             position: Point::new(40.0, y),
         })
     }

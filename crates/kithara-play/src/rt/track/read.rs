@@ -56,7 +56,8 @@ impl PlayerTrack {
     /// from the source to produce it.
     fn advance_media_clock(&mut self, frames: usize) {
         let output_frames: f64 = AsPrimitive::as_(frames);
-        self.served_media_frames += output_frames * f64::from(self.playback_rate);
+        self.served_media_frames =
+            output_frames.mul_add(f64::from(self.playback_rate), self.served_media_frames);
     }
 
     fn check_notifications(

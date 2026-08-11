@@ -33,7 +33,7 @@ enum AbrAudioFixture {
 }
 
 impl AbrAudioFixture {
-    fn media_info(self) -> MediaInfo {
+    const fn media_info(self) -> MediaInfo {
         match self {
             Self::WavFileLike => MediaInfo::builder()
                 .maybe_codec(Some(AudioCodec::Pcm))
@@ -65,14 +65,14 @@ impl SizeProbeCounter {
         }
     }
 
-    fn variant_count(&self) -> usize {
+    const fn variant_count(&self) -> usize {
         match self {
             Self::HlsServer(server) => server.config().variant_count,
             Self::Helper { variants, .. } => *variants,
         }
     }
 
-    fn segment_count(&self) -> usize {
+    const fn segment_count(&self) -> usize {
         match self {
             Self::HlsServer(server) => server.config().segments_per_variant,
             Self::Helper { segments, .. } => *segments,

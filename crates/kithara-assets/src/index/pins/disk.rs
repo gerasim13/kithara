@@ -103,7 +103,7 @@ fn hydrate_existing(
 
 /// Counts for a root read back from `pins.bin`: whoever set that pin is gone,
 /// so the surviving claim is a single durable one.
-fn hydrated_counts() -> PinCounts {
+const fn hydrated_counts() -> PinCounts {
     PinCounts {
         durable: 1,
         local: 0,

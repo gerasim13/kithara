@@ -1,6 +1,6 @@
 use iced::{
     Alignment, Color, Element, Event, Length, Point, Radians, Rectangle, Renderer, Theme,
-    mouse::{self, Cursor},
+    mouse::{Cursor, Interaction},
     widget::{
         Column, Space,
         canvas::{self, Action, Canvas, Frame, Geometry, Path, Stroke, path::Arc},
@@ -44,7 +44,7 @@ impl<'a> Widget<'a> for Knob<'_, '_, '_, '_> {
                     value,
                     range: self.skin.knob.drag_range,
                 })
-                .hover(HoverState::new(mouse::Interaction::ResizingVertically))
+                .hover(HoverState::new(Interaction::ResizingVertically))
                 .double_click_value(0.5)
                 .wheel(WheelStep {
                     value,
@@ -100,7 +100,10 @@ impl canvas::Program<UiEvent> for KnobCanvas {
         let side = bounds.width.min(bounds.height);
         let radius = (side / 2.0 - self.metrics.outer_inset).max(0.0);
         let center = Point::new(bounds.width / 2.0, bounds.height / 2.0);
-        let angle = self.metrics.start_angle + self.metrics.sweep_angle * self.value;
+        let angle = self
+            .metrics
+            .sweep_angle
+            .mul_add(self.value, self.metrics.start_angle);
 
         if radius > 0.0 {
             draw_arc(
@@ -138,8 +141,8 @@ impl canvas::Program<UiEvent> for KnobCanvas {
                 &Path::line(
                     center,
                     Point::new(
-                        center.x + angle.cos() * body_radius,
-                        center.y + angle.sin() * body_radius,
+                        angle.cos().mul_add(body_radius, center.x),
+                        angle.sin().mul_add(body_radius, center.y),
                     ),
                 ),
                 Stroke::default()
@@ -165,7 +168,7 @@ impl canvas::Program<UiEvent> for KnobCanvas {
                 state: &ScalarDragState,
                 bounds: Rectangle,
                 cursor: Cursor,
-            ) -> mouse::Interaction;
+            ) -> Interaction;
         }
     }
 }

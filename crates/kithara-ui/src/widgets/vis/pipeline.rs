@@ -3,7 +3,14 @@ use std::{
     sync::atomic::{AtomicUsize, Ordering},
 };
 
-use iced::{Rectangle, wgpu, widget::shader};
+use iced::{
+    Rectangle,
+    wgpu::{
+        self, BufferBindingType, BufferUsages, ColorWrites, MultisampleState,
+        PipelineCompilationOptions, PrimitiveState, PrimitiveTopology, ShaderSource, ShaderStages,
+    },
+    widget::shader,
+};
 
 #[derive(Debug)]
 pub(super) struct VisPrimitive {
@@ -14,7 +21,7 @@ pub(super) struct VisPrimitive {
 }
 
 impl VisPrimitive {
-    pub(super) fn new(level: f32, preset: u32, time: f32) -> Self {
+    pub(super) const fn new(level: f32, preset: u32, time: f32) -> Self {
         Self {
             level,
             preset,
@@ -81,9 +88,9 @@ impl shader::Pipeline for VisPipeline {
             label: Some("kithara_ui.vis.bind_group_layout"),
             entries: &[wgpu::BindGroupLayoutEntry {
                 binding: 0,
-                visibility: wgpu::ShaderStages::FRAGMENT,
+                visibility: ShaderStages::FRAGMENT,
                 ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
+                    ty: BufferBindingType::Uniform,
                     has_dynamic_offset: false,
                     min_binding_size: None,
                 },
@@ -97,7 +104,7 @@ impl shader::Pipeline for VisPipeline {
         });
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("kithara_ui.vis.shader"),
-            source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(include_str!(
+            source: ShaderSource::Wgsl(Cow::Borrowed(include_str!(
                 "../../../assets/shaders/vis.wgsl"
             ))),
         });
@@ -107,23 +114,23 @@ impl shader::Pipeline for VisPipeline {
             vertex: wgpu::VertexState {
                 module: &shader,
                 entry_point: Some("vs_main"),
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                compilation_options: PipelineCompilationOptions::default(),
                 buffers: &[],
             },
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                ..wgpu::PrimitiveState::default()
+            primitive: PrimitiveState {
+                topology: PrimitiveTopology::TriangleList,
+                ..PrimitiveState::default()
             },
             depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
+            multisample: MultisampleState::default(),
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
                 entry_point: Some("fs_main"),
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                compilation_options: PipelineCompilationOptions::default(),
                 targets: &[Some(wgpu::ColorTargetState {
                     format,
                     blend: None,
-                    write_mask: wgpu::ColorWrites::ALL,
+                    write_mask: ColorWrites::ALL,
                 })],
             }),
             multiview: None,
@@ -154,7 +161,7 @@ impl UniformSlot {
         let buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("kithara_ui.vis.uniforms"),
             size: Self::BUFFER_SIZE,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -204,7 +211,11 @@ impl Uniforms {
 
 #[cfg(all(test, feature = "gpu"))]
 mod tests {
-    use iced::wgpu::util::DeviceExt as _;
+    use iced::wgpu::{
+        BufferUsages, Color, CommandEncoderDescriptor, DeviceDescriptor, Instance, LoadOp, MapMode,
+        PowerPreference, StoreOp, TextureDimension, TextureFormat, TextureUsages,
+        TextureViewDescriptor, util::DeviceExt as _,
+    };
     use kithara_test_utils::kithara;
 
     use super::*;
@@ -216,27 +227,27 @@ mod tests {
     /// tells us the shader reads back what Rust wrote.
     fn render(uniforms: Uniforms) -> Vec<u8> {
         const SIDE: u32 = 64;
-        const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
+        const FORMAT: TextureFormat = TextureFormat::Rgba8Unorm;
         // A row of a mapped texture is padded to 256 bytes, and 64 pixels of
         // four bytes each is exactly that, so the readback needs no unpacking.
         const ROW_BYTES: u32 = SIDE * 4;
 
-        let instance = wgpu::Instance::default();
+        let instance = Instance::default();
         let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-            power_preference: wgpu::PowerPreference::HighPerformance,
+            power_preference: PowerPreference::HighPerformance,
             force_fallback_adapter: false,
             compatible_surface: None,
         }))
         .expect("this lane runs where a graphics device exists");
         let (device, queue) =
-            pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default()))
+            pollster::block_on(adapter.request_device(&DeviceDescriptor::default()))
                 .expect("the adapter must give up a device");
 
         let pipeline = <VisPipeline as shader::Pipeline>::new(&device, &queue, FORMAT);
         let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("kithara_ui.vis.test.uniforms"),
             contents: &uniforms.bytes(),
-            usage: wgpu::BufferUsages::UNIFORM,
+            usage: BufferUsages::UNIFORM,
         });
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("kithara_ui.vis.test.bind_group"),
@@ -256,20 +267,20 @@ mod tests {
             },
             mip_level_count: 1,
             sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
+            dimension: TextureDimension::D2,
             format: FORMAT,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            usage: TextureUsages::RENDER_ATTACHMENT | TextureUsages::COPY_SRC,
             view_formats: &[],
         });
-        let view = target.create_view(&wgpu::TextureViewDescriptor::default());
+        let view = target.create_view(&TextureViewDescriptor::default());
         let readback = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("kithara_ui.vis.test.readback"),
             size: u64::from(ROW_BYTES * SIDE),
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            usage: BufferUsages::COPY_DST | BufferUsages::MAP_READ,
             mapped_at_creation: false,
         });
 
-        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+        let mut encoder = device.create_command_encoder(&CommandEncoderDescriptor::default());
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("kithara_ui.vis.test.pass"),
@@ -278,8 +289,8 @@ mod tests {
                     resolve_target: None,
                     depth_slice: None,
                     ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                        store: wgpu::StoreOp::Store,
+                        load: LoadOp::Clear(Color::BLACK),
+                        store: StoreOp::Store,
                     },
                 })],
                 depth_stencil_attachment: None,
@@ -308,7 +319,7 @@ mod tests {
         );
         queue.submit([encoder.finish()]);
 
-        readback.slice(..).map_async(wgpu::MapMode::Read, |result| {
+        readback.slice(..).map_async(MapMode::Read, |result| {
             result.expect("the readback buffer must map");
         });
         device

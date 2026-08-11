@@ -38,7 +38,7 @@ impl StartupFixture {
         }
     }
 
-    fn media_info(self) -> MediaInfo {
+    const fn media_info(self) -> MediaInfo {
         match self {
             Self::WavFileLike => MediaInfo::builder()
                 .maybe_codec(Some(AudioCodec::Pcm))

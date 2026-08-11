@@ -10,7 +10,7 @@ pub struct MixStrip {
 
 impl MixStrip {
     #[must_use]
-    pub fn new(bus: CrossfaderBus) -> Self {
+    pub const fn new(bus: CrossfaderBus) -> Self {
         Self {
             bus,
             trim: 1.0,
@@ -77,7 +77,7 @@ impl MixState {
     }
 }
 
-fn bus_for(index: usize, count: usize) -> CrossfaderBus {
+const fn bus_for(index: usize, count: usize) -> CrossfaderBus {
     match (count >= 2, index) {
         (true, 0) => CrossfaderBus::A,
         (true, 1) => CrossfaderBus::B,

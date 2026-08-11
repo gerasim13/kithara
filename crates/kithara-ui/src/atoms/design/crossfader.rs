@@ -1,7 +1,7 @@
 use iced::{
     Color, Element, Event, Length, Padding, Point, Rectangle, Renderer, Size, Theme,
     alignment::{Horizontal, Vertical},
-    mouse::{self, Cursor},
+    mouse::{Cursor, Interaction},
     widget::{
         Column, Row, Space,
         canvas::{self, Action, Canvas, Frame, Geometry, Path, Stroke},
@@ -89,7 +89,7 @@ where
             drag: ScalarDrag::builder()
                 .path(self.path)
                 .mode(ScalarDragMode::Horizontal)
-                .hover(HoverState::new(mouse::Interaction::ResizingHorizontally))
+                .hover(HoverState::new(Interaction::ResizingHorizontally))
                 .build(),
             rail_background: self.skin.color(metrics.rail_background),
             rail_color: self.skin.color(metrics.rail_frame.border),
@@ -157,7 +157,7 @@ pub(crate) struct TickRail {
 }
 
 impl TickRail {
-    pub(crate) fn new(axis: TickAxis, metrics: TickSkin, skin: &Skin) -> Self {
+    pub(crate) const fn new(axis: TickAxis, metrics: TickSkin, skin: &Skin) -> Self {
         Self {
             axis,
             metrics,
@@ -175,7 +175,7 @@ impl TickRail {
             TickAxis::Vertical => (rail.height, rail.width),
         };
         let cross = cross.max(0.0);
-        let travel = (span - self.metrics.inset * 2.0 - self.metrics.thickness).max(0.0);
+        let travel = (self.metrics.inset.mul_add(-2.0, span) - self.metrics.thickness).max(0.0);
         let center = last / 2;
         let steps: f32 = last.as_();
         for index in 0..self.metrics.count {
@@ -187,7 +187,7 @@ impl TickRail {
             }
             .min(cross);
             let step: f32 = index.as_();
-            let offset = self.metrics.inset + step / steps * travel;
+            let offset = (step / steps).mul_add(travel, self.metrics.inset);
             let color = if is_center {
                 self.center_color
             } else {
@@ -207,7 +207,7 @@ impl TickRail {
         }
     }
 
-    pub(crate) fn extent(&self) -> f32 {
+    pub(crate) const fn extent(&self) -> f32 {
         self.metrics.center_length.max(self.metrics.length)
     }
 
@@ -296,7 +296,7 @@ impl canvas::Program<UiEvent> for CrossfaderCanvas {
                 state: &ScalarDragState,
                 bounds: Rectangle,
                 cursor: Cursor,
-            ) -> mouse::Interaction;
+            ) -> Interaction;
         }
     }
 }

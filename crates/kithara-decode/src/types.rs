@@ -261,7 +261,7 @@ pub struct PcmChunk {
 impl PcmChunk {
     /// Create a new `PcmChunk` from a pool-backed buffer.
     #[must_use]
-    pub fn new(meta: PcmMeta, samples: PcmBuf) -> Self {
+    pub const fn new(meta: PcmMeta, samples: PcmBuf) -> Self {
         Self { samples, meta }
     }
 
@@ -276,7 +276,7 @@ impl PcmChunk {
 
     /// Audio format specification.
     #[must_use]
-    pub fn spec(&self) -> PcmSpec {
+    pub const fn spec(&self) -> PcmSpec {
         self.meta.spec
     }
 }
@@ -359,7 +359,7 @@ mod tests {
         let debug_str = format!("{:?}", spec);
         assert!(debug_str.contains("PcmSpec"));
         assert!(debug_str.contains("44100"));
-        assert!(debug_str.contains("2"));
+        assert!(debug_str.contains('2'));
     }
 
     #[kithara::test]

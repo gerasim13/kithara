@@ -1,5 +1,7 @@
+#[cfg(feature = "gui")]
+use kithara::audio::EqBandConfig;
 use kithara::{
-    audio::{EqBandConfig, generate_log_spaced_bands},
+    audio::generate_log_spaced_bands,
     play::{PlayError, PlayerConfig, PlayerImpl, SessionHandle, StretchControls, apply_mix},
 };
 use kithara_platform::sync::Arc;
@@ -7,7 +9,11 @@ use kithara_queue::{Queue, QueueConfig};
 
 use crate::{config::AppConfig, mix::MixState};
 
+/// Band count used by the non-interactive player graph.
+const DEFAULT_EQ_BANDS: usize = 3;
+
 /// EQ topology shared by every studio deck and its player graph.
+#[cfg(feature = "gui")]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) enum EqMode {
     #[default]
@@ -15,6 +21,7 @@ pub(crate) enum EqMode {
     FourBand,
 }
 
+#[cfg(feature = "gui")]
 impl EqMode {
     const FOUR_BANDS: [&'static str; 4] = ["low", "low_mid", "high_mid", "high"];
     const THREE_BANDS: [&'static str; 3] = ["low", "mid", "high"];
@@ -81,7 +88,7 @@ impl Deck {
             PlayerConfig::builder()
                 .cancel(config.shutdown.child())
                 .crossfade_duration(config.crossfade_seconds)
-                .eq_layout(generate_log_spaced_bands(EqMode::default().bands().len()))
+                .eq_layout(generate_log_spaced_bands(DEFAULT_EQ_BANDS))
                 .byte_pool(config.byte_pool.clone())
                 .pcm_pool(config.pcm_pool.clone())
                 .session(session.dispatcher())
@@ -172,7 +179,7 @@ impl DeckSet {
     }
 
     /// Id for the next deck; never reuses one that has been handed out.
-    pub fn next_id(&mut self) -> DeckId {
+    pub const fn next_id(&mut self) -> DeckId {
         let id = DeckId(self.next_id);
         self.next_id += 1;
         id
@@ -283,6 +290,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "gui")]
     fn eq_mode_maps_the_middle_band_without_moving_the_outer_bands() {
         let four = EqMode::ThreeBand
             .remap(EqMode::FourBand, &[-6.0, 2.0, 5.0])

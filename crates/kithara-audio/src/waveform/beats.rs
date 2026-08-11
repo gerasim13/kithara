@@ -41,7 +41,12 @@ pub struct BeatGrid {
 impl BeatGrid {
     /// Construct from already-cleaned parts.
     #[must_use]
-    pub fn new(bpm: f64, beats: Vec<u64>, downbeats: Vec<u64>, segments: Vec<GridSegment>) -> Self {
+    pub const fn new(
+        bpm: f64,
+        beats: Vec<u64>,
+        downbeats: Vec<u64>,
+        segments: Vec<GridSegment>,
+    ) -> Self {
         Self {
             beats,
             downbeats,

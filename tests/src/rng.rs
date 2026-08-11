@@ -5,7 +5,7 @@ pub struct Xorshift64(u64);
 
 impl Xorshift64 {
     #[must_use]
-    pub fn new(seed: u64) -> Self {
+    pub const fn new(seed: u64) -> Self {
         Self(seed)
     }
 
@@ -14,7 +14,7 @@ impl Xorshift64 {
         (self.next_u64() >> 11) as f64 / (1u64 << 53) as f64
     }
 
-    pub fn next_u64(&mut self) -> u64 {
+    pub const fn next_u64(&mut self) -> u64 {
         self.0 ^= self.0 << 13;
         self.0 ^= self.0 >> 7;
         self.0 ^= self.0 << 17;
@@ -23,7 +23,7 @@ impl Xorshift64 {
 
     /// Returns `f64` in `[min, max)`.
     pub fn range_f64(&mut self, min: f64, max: f64) -> f64 {
-        min + (max - min) * self.next_f64()
+        (max - min).mul_add(self.next_f64(), min)
     }
 
     /// Returns `u64` in `[min, max)`.

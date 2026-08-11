@@ -60,7 +60,7 @@ impl PlayerResource {
     /// Number of stereo output channels.
     const STEREO_CHANNELS: usize = 2;
 
-    fn scratch_frames(sample_rate: u32) -> Frames {
+    const fn scratch_frames(sample_rate: u32) -> Frames {
         Frames::new(sample_rate as usize / Self::BUFFER_DURATION_DIVISOR)
     }
 

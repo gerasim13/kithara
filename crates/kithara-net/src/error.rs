@@ -63,7 +63,7 @@ impl NetError {
 
     /// Creates a timeout error.
     #[must_use]
-    pub fn timeout() -> Self {
+    pub const fn timeout() -> Self {
         Self::Timeout
     }
 }

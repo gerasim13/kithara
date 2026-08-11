@@ -8,7 +8,7 @@ pub(super) struct CountConnectionsLayer {
 }
 
 impl CountConnectionsLayer {
-    pub(super) fn new(metrics: ConnectionMetrics) -> Self {
+    pub(super) const fn new(metrics: ConnectionMetrics) -> Self {
         Self { metrics }
     }
 }

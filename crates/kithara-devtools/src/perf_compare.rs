@@ -223,8 +223,8 @@ mod tests {
         fs::write(&baseline_path, baseline).ok();
 
         let result = run(&PerfCompareArgs {
-            current: current_path.clone(),
-            baseline: baseline_path.clone(),
+            current: current_path,
+            baseline: baseline_path,
             threshold: 10,
         });
         assert!(result.is_ok());
@@ -249,8 +249,8 @@ mod tests {
         fs::write(&baseline_path, baseline).ok();
 
         let result = run(&PerfCompareArgs {
-            current: current_path.clone(),
-            baseline: baseline_path.clone(),
+            current: current_path,
+            baseline: baseline_path,
             threshold: 10,
         });
         assert!(result.is_err(), "expected regression to be detected");
@@ -278,8 +278,8 @@ mod tests {
         fs::write(&baseline_path, baseline).ok();
 
         let result = run(&PerfCompareArgs {
-            current: current_path.clone(),
-            baseline: baseline_path.clone(),
+            current: current_path,
+            baseline: baseline_path,
             threshold: 10,
         });
         assert!(result.is_err());
@@ -303,8 +303,8 @@ mod tests {
         fs::write(&current_path, content).ok();
 
         let result = run(&PerfCompareArgs {
-            current: current_path.clone(),
-            baseline: baseline_path.clone(),
+            current: current_path,
+            baseline: baseline_path,
             threshold: 10,
         });
         assert!(result.is_ok());

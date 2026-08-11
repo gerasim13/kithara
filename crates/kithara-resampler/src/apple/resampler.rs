@@ -297,7 +297,7 @@ pub(super) fn apple_build_config(detail: &'static str) -> ResamplerBuildError {
     }
 }
 
-fn apple_build_config_owned(detail: String) -> ResamplerBuildError {
+const fn apple_build_config_owned(detail: String) -> ResamplerBuildError {
     ResamplerBuildError::BackendBuild {
         detail,
         backend: BACKEND_APPLE,
@@ -311,11 +311,11 @@ fn apple_build_status(op: &'static str, status: OSStatus) -> ResamplerBuildError
     }
 }
 
-fn apple_buffer(detail: &'static str) -> ResamplerError {
+const fn apple_buffer(detail: &'static str) -> ResamplerError {
     ResamplerError::InvalidBuffer { detail }
 }
 
-fn apple_buffer_owned(detail: String) -> ResamplerError {
+const fn apple_buffer_owned(detail: String) -> ResamplerError {
     ResamplerError::Backend {
         detail,
         op: "apple audio buffer",
@@ -329,7 +329,7 @@ fn apple_error_status(op: &'static str, status: OSStatus) -> ResamplerError {
     }
 }
 
-fn err_status(err: &AudioToolboxError) -> OSStatus {
+const fn err_status(err: &AudioToolboxError) -> OSStatus {
     match err {
         AudioToolboxError::Status { status, .. } => *status,
         AudioToolboxError::Config { .. } => -50,
@@ -565,7 +565,7 @@ mod tests {
             .map(|channel| {
                 let channel = channel.to_f32().expect("test channel index fits f32");
                 let sample_rate = sample_rate.to_f32().expect("test sample rate fits f32");
-                let frequency = 110.0 + channel * 27.5;
+                let frequency = channel.mul_add(27.5, 110.0);
                 (0..frames)
                     .map(|frame| {
                         let frame = frame.to_f32().expect("test frame index fits f32");
@@ -659,7 +659,7 @@ mod tests {
         for (left_channel, right_channel) in left.iter().zip(right.iter()) {
             for (left_sample, right_sample) in left_channel.iter().zip(right_channel.iter()) {
                 let diff = f64::from(*left_sample) - f64::from(*right_sample);
-                sum += diff * diff;
+                sum = diff.mul_add(diff, sum);
                 count += 1;
             }
         }

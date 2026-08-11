@@ -13,7 +13,7 @@ struct Notifier<'a> {
 }
 
 impl<'a> Notifier<'a> {
-    fn new(player: &'a PlayerImpl) -> Self {
+    const fn new(player: &'a PlayerImpl) -> Self {
         Self { player }
     }
 }

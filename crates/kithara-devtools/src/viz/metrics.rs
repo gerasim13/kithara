@@ -105,7 +105,7 @@ struct ContractedGraph {
 }
 
 impl<'a> MetricsAnalyzer<'a> {
-    pub(crate) fn new(
+    pub(crate) const fn new(
         graph: &'a EvidenceGraph,
         filter: &'a ArchitectureFilter,
         contours: &'a ContourIndex,
@@ -411,7 +411,7 @@ fn merge_certainty(left: Certainty, right: Certainty) -> Certainty {
     }
 }
 
-fn is_static_class(class: EvidenceClass) -> bool {
+const fn is_static_class(class: EvidenceClass) -> bool {
     !matches!(class, EvidenceClass::Observed | EvidenceClass::Manual)
 }
 
@@ -597,7 +597,7 @@ fn ownership_profile(
     }
 }
 
-fn is_ownership_edge(kind: EdgeKind) -> bool {
+const fn is_ownership_edge(kind: EdgeKind) -> bool {
     matches!(
         kind,
         EdgeKind::Constructs

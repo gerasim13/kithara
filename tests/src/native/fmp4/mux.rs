@@ -17,7 +17,7 @@ use crate::{
 /// folded into the container's `encoder_delay`/`iTunSMPB` count by the
 /// fmp4 mux so a downstream `probe_mp4_gapless` reports the same trim
 /// total `FFmpeg` would have written.
-fn codec_native_priming_frames(codec: AudioCodec) -> u64 {
+const fn codec_native_priming_frames(codec: AudioCodec) -> u64 {
     match codec {
         AudioCodec::AacLc => 1024,
         _ => 0,

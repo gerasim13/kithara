@@ -4,9 +4,8 @@ use iced::{
     Color, Point, Rectangle, Size,
     alignment::Vertical,
     widget::{
-        canvas,
-        canvas::{Frame, Path, Stroke},
-        text,
+        canvas::{Frame, Path, Stroke, Text as CanvasText},
+        text::{Alignment as TextAlignment, Shaping},
     },
 };
 use num_traits::cast::AsPrimitive;
@@ -83,12 +82,12 @@ fn draw_bars(
     palette: RenderPalette,
 ) {
     let step = bars::step(metrics);
-    let content_width = (bounds.width - metrics.content_inset * 2.0).max(0.0);
+    let content_width = metrics.content_inset.mul_add(-2.0, bounds.width).max(0.0);
     let columns: usize = ((content_width + metrics.bar_gap) / step).floor().as_();
     let Some(grid) = bar_grid(columns, zoom, window) else {
         return;
     };
-    let available_height = (bounds.height - metrics.content_inset * 2.0).max(0.0);
+    let available_height = metrics.content_inset.mul_add(-2.0, bounds.height).max(0.0);
     for bar in grid.first..grid.last {
         let range = bar_bucket_range(bar, grid.norm_width, buckets.len());
         let Some(bucket) = max_bucket(buckets, range) else {
@@ -205,17 +204,17 @@ fn draw_cues(
             Size::new(metrics.cue_badge_size, metrics.cue_badge_size),
         );
         frame.fill_rectangle(badge.position(), badge.size(), palette.cue_badge);
-        frame.fill_text(canvas::Text {
+        frame.fill_text(CanvasText {
             content: (index + 1).to_string(),
             position: badge.center(),
             max_width: badge.width,
             color: palette.cue_text,
             size: metrics.cue_badge_text.size.into(),
             font: fonts::mono(metrics.cue_badge_text.weight),
-            align_x: text::Alignment::Center,
+            align_x: TextAlignment::Center,
             align_y: Vertical::Center,
-            shaping: text::Shaping::Advanced,
-            ..canvas::Text::default()
+            shaping: Shaping::Advanced,
+            ..CanvasText::default()
         });
     }
 }
@@ -251,6 +250,6 @@ fn draw_playhead(
     }
 }
 
-fn with_alpha(color: Color, alpha: f32) -> Color {
+const fn with_alpha(color: Color, alpha: f32) -> Color {
     Color { a: alpha, ..color }
 }

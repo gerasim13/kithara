@@ -559,7 +559,7 @@ fn external_port_node(node: &Node) -> DiagramNode {
     projected
 }
 
-fn node_in_view(node: &Node, kind: ViewKind) -> bool {
+const fn node_in_view(node: &Node, kind: ViewKind) -> bool {
     if matches!(
         node.kind,
         NodeKind::ConcreteType | NodeKind::Trait | NodeKind::ModuleFunctions
@@ -750,7 +750,7 @@ fn evidence_style(
     }
 }
 
-fn merge_style(left: EvidenceStyle, right: EvidenceStyle) -> EvidenceStyle {
+const fn merge_style(left: EvidenceStyle, right: EvidenceStyle) -> EvidenceStyle {
     use EvidenceStyle::{
         Candidate, Conditional, Conflicting, Manual, Observed, Resolved, Unresolved,
     };
@@ -962,7 +962,7 @@ mod tests {
         ));
         graph.merge_edge(Edge::new(
             caller.clone(),
-            core.clone(),
+            core,
             EdgeKind::Calls,
             evidence("incoming"),
         ));

@@ -253,7 +253,7 @@ struct RefAnalyzer<'a> {
 }
 
 impl<'a> RefAnalyzer<'a> {
-    fn new(name: &'a str, const_mod_path: &'a [String]) -> Self {
+    const fn new(name: &'a str, const_mod_path: &'a [String]) -> Self {
         Self {
             name,
             const_mod_path,

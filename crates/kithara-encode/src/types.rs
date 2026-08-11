@@ -59,7 +59,7 @@ impl BytesEncodeTarget {
     }
 
     #[must_use]
-    pub fn media_info(self, sample_rate: u32, channels: u16) -> MediaInfo {
+    pub const fn media_info(self, sample_rate: u32, channels: u16) -> MediaInfo {
         MediaInfo::builder()
             .codec(self.codec())
             .container(self.container())

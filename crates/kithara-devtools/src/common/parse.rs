@@ -146,7 +146,7 @@ pub fn canonical_subject(e: &Expr) -> Option<String> {
 
 /// Whether a method's signature is publicly visible (`pub` or restricted).
 #[must_use]
-pub fn is_pub_visibility(vis: &syn::Visibility) -> bool {
+pub const fn is_pub_visibility(vis: &syn::Visibility) -> bool {
     matches!(
         vis,
         syn::Visibility::Public(_) | syn::Visibility::Restricted(_)
@@ -155,7 +155,7 @@ pub fn is_pub_visibility(vis: &syn::Visibility) -> bool {
 
 /// Strictly bare `pub` visibility.
 #[must_use]
-pub fn is_strict_pub(vis: &syn::Visibility) -> bool {
+pub const fn is_strict_pub(vis: &syn::Visibility) -> bool {
     matches!(vis, syn::Visibility::Public(_))
 }
 

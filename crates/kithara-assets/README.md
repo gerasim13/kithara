@@ -25,7 +25,7 @@ Sits between `kithara-storage` (low-level I/O) and protocol crates (`kithara-fil
 - `AssetLayout` / `AssetLayoutRegistry` — own cache-root and resource-path policy, with optional overrides selected by protocol marker type.
 - `AssetSource` / `AssetResource` — semantic input to the selected layout.
 - `AssetScope` / `ResourceKey` — validated output used by cache operations.
-- `attach_demand(&key, read_pos, look_ahead)` — registers a consumer with the single-producer demand index.
+- `AssetStore::attach_pending_resource(&key, read_pos, look_ahead)` - joins or creates the canonical pending-resource acquisition used by protocol crates.
 - `ResourceAcquisition` — the Pending/Ready `AcquisitionResult<AssetWriter, AssetReader>` surfaced by the facade.
 
 ## Usage

@@ -137,7 +137,7 @@ mod wire {
 
     impl PlayerLevel {
         #[must_use]
-        pub fn new(player_id: PlayerId, level: f32) -> Self {
+        pub const fn new(player_id: PlayerId, level: f32) -> Self {
             Self { player_id, level }
         }
     }
@@ -190,7 +190,7 @@ mod wire {
 }
 
 mod handle {
-    use kithara_audio::EqBandConfig;
+    use kithara_audio::{ConsumerWakeMode, EqBandConfig};
     use kithara_bufpool::PcmPool;
     use kithara_events::EventBus;
     use kithara_platform::sync::Arc;
@@ -200,6 +200,9 @@ mod handle {
 
     pub trait SessionDispatcher: Send + Sync + 'static {
         fn exec(&self, cmd: Cmd) -> Result<Reply, PlayError>;
+
+        /// Describe how PCM consumers hosted by this session may wake workers.
+        fn consumer_wake_mode(&self) -> ConsumerWakeMode;
 
         fn exec_ok(&self, cmd: Cmd) -> Result<Reply, PlayError> {
             match self.exec(cmd)? {
@@ -234,6 +237,8 @@ mod handle {
 
         delegate::delegate! {
             to self.0 {
+                #[must_use]
+                pub fn consumer_wake_mode(&self) -> ConsumerWakeMode;
                 pub fn exec(&self, cmd: Cmd) -> Result<Reply, PlayError>;
                 pub fn exec_ok(&self, cmd: Cmd) -> Result<Reply, PlayError>;
             }
@@ -360,3 +365,35 @@ pub use wire::{
     AllocatedSlot, Cmd, CmdMsg, PlayerId, PlayerLevel, Reply, SessionError, SessionSampleRate,
     StartStreamFn,
 };
+
+#[cfg(test)]
+mod tests {
+    use kithara_audio::ConsumerWakeMode;
+    use kithara_platform::sync::Arc;
+    use kithara_test_utils::kithara;
+
+    use super::{Cmd, Reply, SessionDispatcher, SessionHandle};
+    use crate::PlayError;
+
+    struct DefaultSession;
+
+    impl SessionDispatcher for DefaultSession {
+        fn exec(&self, _cmd: Cmd) -> Result<Reply, PlayError> {
+            Ok(Reply::Ok)
+        }
+
+        fn consumer_wake_mode(&self) -> ConsumerWakeMode {
+            ConsumerWakeMode::RealtimeDeferred
+        }
+    }
+
+    #[kithara::test]
+    fn session_handle_delegates_explicit_consumer_wake_mode() {
+        let handle = SessionHandle::new(Arc::new(DefaultSession));
+
+        assert_eq!(
+            handle.consumer_wake_mode(),
+            ConsumerWakeMode::RealtimeDeferred
+        );
+    }
+}

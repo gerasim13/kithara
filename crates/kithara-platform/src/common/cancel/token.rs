@@ -24,7 +24,7 @@ impl CancelToken {
     /// Future that resolves once this token's subtree is cancelled. Cancel-safe
     /// in `tokio::select!`: dropping it unregisters its slot.
     #[must_use]
-    pub fn cancelled(&self) -> Cancelled<'_> {
+    pub const fn cancelled(&self) -> Cancelled<'_> {
         Cancelled::new(&self.node)
     }
 
