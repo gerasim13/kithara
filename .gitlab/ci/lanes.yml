@@ -1,7 +1,9 @@
 .lane-job:
-  extends:
-    - .linux-job
-    - .rules-weekly
+  extends: .linux-job
+  interruptible: false
+  rules:
+    - !reference [.platform-linux, rules]
+    - !reference [.rules-weekly, rules]
   stage: lanes
   timeout: 180 minutes
   needs: []

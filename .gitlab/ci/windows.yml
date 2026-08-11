@@ -1,7 +1,9 @@
 .windows-lane:
-  extends:
-    - .windows-job
-    - .rules-nightly
+  extends: .windows-job
+  interruptible: false
+  rules:
+    - !reference [.platform-windows, rules]
+    - !reference [.rules-nightly, rules]
   stage: windows
   timeout: 120 minutes
   needs: []

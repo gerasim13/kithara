@@ -1,7 +1,9 @@
 .linux-lane:
-  extends:
-    - .linux-job
-    - .rules-verify
+  extends: .linux-job
+  interruptible: true
+  rules:
+    - !reference [.platform-linux, rules]
+    - !reference [.rules-verify, rules]
   stage: linux
   timeout: 60 minutes
   needs: []

@@ -1,7 +1,9 @@
 .web-job:
-  extends:
-    - .linux-job
-    - .rules-integration
+  extends: .linux-job
+  interruptible: false
+  rules:
+    - !reference [.platform-web, rules]
+    - !reference [.rules-integration, rules]
   stage: web
   timeout: 60 minutes
   needs: []
