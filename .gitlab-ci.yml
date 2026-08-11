@@ -20,7 +20,8 @@ workflow:
     # and a push carries none. This is that door: "Run pipeline" with
     # `KITHARA_PLATFORMS` set. It is deliberately narrow — without the variable
     # the run would only repeat what a push already does.
-    - if: $KITHARA_PLATFORMS && ($CI_PIPELINE_SOURCE == "web" || $CI_PIPELINE_SOURCE == "api")
+    - if: $CI_PIPELINE_SOURCE == "web" && $KITHARA_PLATFORMS
+    - if: $CI_PIPELINE_SOURCE == "api" && $KITHARA_PLATFORMS
     - when: never
 
 .serialized:
@@ -86,7 +87,8 @@ dispatch:platforms:
     KITHARA_PIPELINE_KIND: branch
     KITHARA_PLATFORMS: $KITHARA_PLATFORMS
   rules:
-    - if: $KITHARA_PLATFORMS && ($CI_PIPELINE_SOURCE == "web" || $CI_PIPELINE_SOURCE == "api")
+    - if: $CI_PIPELINE_SOURCE == "web" && $KITHARA_PLATFORMS
+    - if: $CI_PIPELINE_SOURCE == "api" && $KITHARA_PLATFORMS
 
 dispatch:main:
   extends: .serialized
