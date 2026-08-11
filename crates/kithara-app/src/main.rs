@@ -105,6 +105,7 @@ fn main() -> AppResult {
     ]);
     deck_set.commit(deck_set.mix().clone())?;
     let mut frontend = GuiFrontend::new(&config, args.host)?;
+    frontend.attach_broadcast(session, shutdown.clone());
     frontend.start(&deck_set)?;
     frontend.run_loop(deck_set)?;
     frontend.shutdown()?;

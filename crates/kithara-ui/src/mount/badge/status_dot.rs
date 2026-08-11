@@ -1,15 +1,19 @@
 use bon::Builder;
 
-use crate::{ids::InternId, module::Tone, mount::Control, size::SizeSpec, skin::SkinDoc};
+use crate::{
+    expand::Binding, ids::InternId, module::Tone, mount::Control, size::SizeSpec, skin::SkinDoc,
+};
 
 /// A toned dot beside a word.
 #[derive(Builder)]
-pub(crate) struct StatusDot {
+pub(crate) struct StatusDot<'a> {
+    pub(crate) active: Option<&'a Binding>,
+    pub(crate) active_tone: Option<Tone>,
     pub(crate) label: InternId,
     pub(crate) tone: Tone,
 }
 
-impl Control for StatusDot {
+impl Control for StatusDot<'_> {
     fn size(&self, skin: &SkinDoc) -> SizeSpec {
         skin.status_dot.size
     }
@@ -19,22 +23,31 @@ impl Control for StatusDot {
 mod host {
     use super::StatusDot;
     use crate::{
-        atoms::design::status_dot::StatusDot as Face,
+        atoms::design::status_dot::{StatusDot as Face, StatusDotData},
         render::{
-            Skin,
+            ReadValue, Skin,
             controls::{Draws, Reading},
+            document::read::resolve,
         },
     };
 
-    impl Draws for StatusDot {
+    impl Draws for StatusDot<'_> {
         type Painter = Face;
 
         fn painter(&self, skin: &Skin) -> Face {
-            Face::new(self.tone, skin)
+            Face::with_active_tone(self.tone, self.active_tone, skin)
         }
 
-        fn data(&self, read: Reading<'_>) -> Option<String> {
-            Some(read.ui.resolve(self.label).to_owned())
+        fn data(&self, read: Reading<'_>) -> Option<StatusDotData> {
+            Some(StatusDotData {
+                active: self.active.is_some_and(|binding| {
+                    matches!(
+                        resolve(read.reads, binding, read.ui),
+                        Some(ReadValue::Bool(true))
+                    )
+                }),
+                label: read.ui.resolve(self.label).to_owned(),
+            })
         }
     }
 }

@@ -18,7 +18,6 @@ use crate::{
     config::AppConfig,
     deck::{DeckId, DeckSet},
     state::StateController,
-    theme::gui,
 };
 
 /// Error returned by the GUI frontend.
@@ -40,7 +39,7 @@ pub enum Host {
     Retained,
 }
 
-fn immediate(boot: Boot, palette: gui::GuiPalette) -> Result<(), FrontendError> {
+fn immediate(boot: Boot) -> Result<(), FrontendError> {
     let boot = Mutex::new(Some(boot));
     let daemon = iced::daemon(
         move || {
@@ -54,7 +53,7 @@ fn immediate(boot: Boot, palette: gui::GuiPalette) -> Result<(), FrontendError> 
                 boot.catalog,
                 boot.config,
                 boot.studio,
-                palette,
+                boot.broadcast,
             )
         },
         update::update,
@@ -72,14 +71,14 @@ fn immediate(boot: Boot, palette: gui::GuiPalette) -> Result<(), FrontendError> 
 }
 
 #[cfg(feature = "masonry")]
-fn retained(boot: Boot, palette: gui::GuiPalette) -> Result<(), FrontendError> {
+fn retained(boot: Boot) -> Result<(), FrontendError> {
     super::retained::run(super::retained::Studio::new(
         boot.session,
         boot.decks,
         boot.catalog,
         boot.config,
         boot.studio,
-        palette,
+        boot.broadcast,
     ))?;
     Ok(())
 }
@@ -119,6 +118,7 @@ pub(crate) fn window_settings() -> Settings {
 }
 
 struct Boot {
+    broadcast: crate::broadcast::Broadcaster,
     config: AppConfig,
     catalog: Catalog,
     session: DeckSet,
@@ -128,9 +128,9 @@ struct Boot {
 
 /// GUI frontend for the studio.
 pub struct GuiFrontend {
+    broadcast: Option<crate::broadcast::Broadcaster>,
     config: AppConfig,
     host: Host,
-    palette: gui::GuiPalette,
 }
 
 impl GuiFrontend {
@@ -140,10 +140,19 @@ impl GuiFrontend {
     /// Returns an error if GUI initialization fails.
     pub fn new(config: &AppConfig, host: Host) -> Result<Self, FrontendError> {
         Ok(Self {
+            broadcast: None,
             host,
-            palette: config.palette.into(),
             config: config.clone(),
         })
+    }
+
+    /// Gives the bar's REC cell a session to put on air.
+    pub fn attach_broadcast(
+        &mut self,
+        session: kithara::play::SessionHandle,
+        shutdown: kithara_platform::CancelToken,
+    ) {
+        self.broadcast = Some(crate::broadcast::Broadcaster::new(session, shutdown));
     }
 
     /// Runs the GUI event loop until the application exits.
@@ -155,7 +164,6 @@ impl GuiFrontend {
     /// Panics if iced boots the application more than once; the boot
     /// state is handed over exactly once by construction.
     pub fn run_loop(&mut self, session: DeckSet) -> Result<(), FrontendError> {
-        let palette = self.palette;
         let config = self.config.clone();
         let studio = StudioUi::new()?;
 
@@ -184,6 +192,10 @@ impl GuiFrontend {
             .collect();
 
         let boot = Boot {
+            broadcast: self
+                .broadcast
+                .take()
+                .ok_or("broadcast service was not configured")?,
             session,
             studio,
             decks: Decks::new(controllers).ok_or("no decks to render")?,
@@ -191,9 +203,9 @@ impl GuiFrontend {
             config: config.clone(),
         };
         let result = match self.host {
-            Host::Immediate => immediate(boot, palette),
+            Host::Immediate => immediate(boot),
             #[cfg(feature = "masonry")]
-            Host::Retained => retained(boot, palette),
+            Host::Retained => retained(boot),
         };
 
         config.shutdown.cancel();

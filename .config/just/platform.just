@@ -1,7 +1,8 @@
 set shell := ["bash", "-euo", "pipefail", "-c"]
 set working-directory := "../.."
 
-# WASM tasks: check, test, build, or size-check.
+# WASM artifacts: check, build, or size-check. The browser tests are Rust
+# tests and live in `just test wasm`.
 [positional-arguments]
 wasm MODE="check" *ARGS:
     #!/usr/bin/env bash
@@ -16,43 +17,6 @@ wasm MODE="check" *ARGS:
         cargo check -p kithara-decode --target wasm32-unknown-unknown --no-default-features --features symphonia,webcodecs,client-reqwest,tls-rustls
         cargo check -p kithara-ffi --target wasm32-unknown-unknown --features wasm --no-default-features
         ;;
-      test)
-        # The wasm target rebuilds std for shared memory, which only a nightly
-        # honours, and the repository pins one. `wasm-pack` cannot be used
-        # here: it drives Cargo with the default toolchain, which refuses the
-        # flags below, so std keeps its stock features and the linker rejects
-        # `--shared-memory` against it.
-        browser="${1:-chrome}"
-        toolchain="${KITHARA_NIGHTLY_TOOLCHAIN:-nightly}"
-        case "$browser" in
-          chrome)  export CHROMEDRIVER="${CHROMEDRIVER:-chromedriver}" ;;
-          firefox) export GECKODRIVER="${GECKODRIVER:-geckodriver}" ;;
-          safari)  export SAFARIDRIVER="${SAFARIDRIVER:-safaridriver}" ;;
-          *)
-            echo "unknown wasm test browser: $browser (use chrome|firefox|safari)"
-            exit 2
-            ;;
-        esac
-        WASM_BINDGEN_TEST_TIMEOUT=300 \
-        WASM_BINDGEN_USE_BROWSER=1 \
-        # The browser talks to a fixture server that runs on this machine, and
-        # the runner looks for it beside itself. Nothing in a wasm build
-        # produces a host binary, so the lane used to depend on some earlier
-        # native job having left one behind, and failed with "failed to start
-        # test_server ... No such file or directory" whenever it ran first.
-        cargo build -p kithara-integration-tests --bin test_server
-        # Only `suite_heavy` carries browser tests. Building the whole crate
-        # for wasm compiles every native suite too, and those reach for
-        # threads, the filesystem, and a local test server that the browser
-        # has no way to offer.
-        # `optimize_for_size` matches crates/kithara-ffi/.cargo/config.toml, so
-        # the bundle lane and this one rebuild one identical std rather than
-        # two that differ.
-        cargo "+$toolchain" test --target wasm32-unknown-unknown \
-          -Z build-std=std,panic_abort,core,alloc \
-          -Z build-std-features=optimize_for_size \
-          -p kithara-integration-tests --test suite_heavy
-        ;;
       build)
         just _xtask wasm build "$@"
         ;;
@@ -60,7 +24,7 @@ wasm MODE="check" *ARGS:
         just _xtask wasm size-check "$@"
         ;;
       *)
-        echo "unknown wasm mode: $mode (use check|test|build|size-check)"
+        echo "unknown wasm mode: $mode (use check|build|size-check); tests are `just test wasm`"
         exit 2
         ;;
     esac

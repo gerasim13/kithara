@@ -9,22 +9,25 @@ use crate::{
 
 /// A coloured dot with a word beside it.
 pub(crate) struct StatusDot {
+    active_dot: Option<Rgba>,
     dot: Rgba,
     metrics: StatusDotSkin,
     role: TextRoleSkin,
     text: Rgba,
 }
 
+/// The caption and whether the document marks this dot active.
+pub(crate) struct StatusDotData {
+    pub(crate) active: bool,
+    pub(crate) label: String,
+}
+
 impl StatusDot {
-    pub(crate) fn new(tone: Tone, skin: &Skin) -> Self {
+    pub(crate) fn with_active_tone(tone: Tone, active_tone: Option<Tone>, skin: &Skin) -> Self {
         let metrics = skin.status_dot;
         Self {
-            dot: match tone {
-                Tone::Neutral => skin.palette.muted,
-                Tone::Accent => skin.palette.accent,
-                Tone::Success => skin.palette.success,
-                Tone::Danger => skin.palette.danger,
-            },
+            active_dot: active_tone.map(|tone| color(tone, skin)),
+            dot: color(tone, skin),
             metrics,
             role: TextRoleSkin {
                 color: metrics.text_color,
@@ -37,12 +40,13 @@ impl StatusDot {
         }
     }
 
-    pub(crate) fn paint(
+    pub(crate) fn paint_with_state(
         &self,
         list: &mut DrawListBuilder,
         text: &mut TextContext,
         label: &str,
         bounds: Rect,
+        active: bool,
     ) {
         let radius = self.metrics.dot_size / 2.0;
         list.fill_circle(
@@ -51,7 +55,7 @@ impl StatusDot {
                 y: bounds.y + bounds.h / 2.0,
             },
             radius,
-            self.dot,
+            self.active_dot.filter(|_| active).unwrap_or(self.dot),
         );
         let run = text.shape(label, self.role, None);
         list.text(
@@ -63,6 +67,15 @@ impl StatusDot {
             }),
             self.text,
         );
+    }
+}
+
+fn color(tone: Tone, skin: &Skin) -> Rgba {
+    match tone {
+        Tone::Neutral => skin.palette.muted,
+        Tone::Accent => skin.palette.accent,
+        Tone::Success => skin.palette.success,
+        Tone::Danger => skin.palette.danger,
     }
 }
 
@@ -90,7 +103,8 @@ mod tests {
         let draw = |tone| {
             let mut text = TextContext::from(skin.text_resources());
             let mut list = DrawListBuilder::default();
-            StatusDot::new(tone, skin).paint(&mut list, &mut text, "LIVE", bounds);
+            StatusDot::with_active_tone(tone, None, skin)
+                .paint_with_state(&mut list, &mut text, "LIVE", bounds, false);
             list.finish()
         };
 
@@ -121,5 +135,14 @@ mod tests {
             draw(Tone::Success),
             "the tone must reach the dot"
         );
+
+        let active = StatusDot::with_active_tone(Tone::Neutral, Some(Tone::Danger), skin);
+        let mut text = TextContext::from(skin.text_resources());
+        let mut list = DrawListBuilder::default();
+        active.paint_with_state(&mut list, &mut text, "LIVE", bounds, true);
+        assert!(matches!(
+            list.finish().commands(),
+            [DrawCmd::Fill { paint: Paint::Solid(color), .. }, ..] if *color == skin.palette.danger
+        ));
     }
 }

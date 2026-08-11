@@ -15,7 +15,7 @@ use super::{
 use crate::{
     error::UiDocError,
     ids::{InternId, Interner, NodeId, SourceUri},
-    module::{BindingRef, ControlNode, PopoverAlign, PopoverAt, TrackColumn, WaveStyle},
+    module::{BindingRef, ControlNode, PopoverAlign, PopoverAt, Tone, TrackColumn, WaveStyle},
     param::Param,
     resolve::ModuleSet,
     size::SizeSpec,
@@ -214,6 +214,23 @@ fn context_bar_spec(
     Ok(ControlSpec::ContextBar {
         scope_items: intern_texts(context, interner, scope_items, path, &context.origin)?,
         scope: intern_optional_binding(interner, scope, &context.origin)?,
+    })
+}
+
+fn status_dot_spec(
+    context: &Context<'_>,
+    machine: &mut Expander<'_, '_>,
+    label: &str,
+    tone: Tone,
+    active_tone: Option<Tone>,
+    extra: &ExtraBindings,
+    path: &str,
+) -> Result<ControlSpec, UiDocError> {
+    Ok(ControlSpec::StatusDot {
+        label: intern_text(context, machine.interner, label, path, &context.origin)?,
+        tone,
+        active_tone,
+        active: optional_binding(context, machine, extra.active.as_ref())?,
     })
 }
 
@@ -418,10 +435,7 @@ fn control_spec(
             path,
         )?,
         ControlNode::TrackList { columns, .. } => {
-            let columns = context
-                .optional_param(columns.as_ref(), path)?
-                .unwrap_or_default();
-            track_list_spec(context, machine, &columns, extra)?
+            track_list_control_spec(context, machine, columns.as_ref(), extra, path)?
         }
         ControlNode::Tree { .. } => ControlSpec::Tree {
             query: optional_binding(context, machine, extra.query.as_ref())?,
@@ -439,10 +453,12 @@ fn control_spec(
         ControlNode::Select { label, .. } => ControlSpec::Select {
             label: intern_text(context, machine.interner, label, path, &context.origin)?,
         },
-        ControlNode::StatusDot { label, tone, .. } => ControlSpec::StatusDot {
-            label: intern_text(context, machine.interner, label, path, &context.origin)?,
-            tone: *tone,
-        },
+        ControlNode::StatusDot {
+            label,
+            tone,
+            active_tone,
+            ..
+        } => status_dot_spec(context, machine, label, *tone, *active_tone, extra, path)?,
         ControlNode::Swatch { role, label, .. } => ControlSpec::Swatch {
             role: *role,
             label: intern_text(context, machine.interner, label, path, &context.origin)?,
@@ -527,6 +543,17 @@ fn track_list_spec(
             &context.origin,
         )?,
     })
+}
+
+fn track_list_control_spec(
+    context: &Context<'_>,
+    machine: &mut Expander<'_, '_>,
+    columns: Option<&Param<Vec<TrackColumn>>>,
+    extra: &ExtraBindings,
+    path: &str,
+) -> Result<ControlSpec, UiDocError> {
+    let columns = context.optional_param(columns, path)?.unwrap_or_default();
+    track_list_spec(context, machine, &columns, extra)
 }
 
 fn expand_optional(

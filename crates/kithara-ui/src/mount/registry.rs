@@ -141,8 +141,15 @@ macro_rules! controls {
             $crate::expand::ControlSpec::Select { label } => {
                 with.apply(&$crate::mount::Select::builder().label(*label).build())
             }
-            $crate::expand::ControlSpec::StatusDot { label, tone } => with.apply(
+            $crate::expand::ControlSpec::StatusDot {
+                label,
+                tone,
+                active_tone,
+                active,
+            } => with.apply(
                 &$crate::mount::StatusDot::builder()
+                    .maybe_active(active.as_ref())
+                    .maybe_active_tone(*active_tone)
                     .label(*label)
                     .tone(*tone)
                     .build(),

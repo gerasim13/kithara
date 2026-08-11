@@ -342,7 +342,7 @@ impl NodeControl for mount::Swatch {
     }
 }
 
-impl NodeControl for mount::StatusDot {
+impl NodeControl for mount::StatusDot<'_> {
     fn leaf<A>(&self, host: &MasonryHost<'_, A>, cx: &Cx<'_>) -> MasonryNode<A>
     where
         A: std::fmt::Debug + Send + 'static,

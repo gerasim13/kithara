@@ -31,7 +31,7 @@ impl Studio {
         catalog: Catalog,
         config: AppConfig,
         studio: StudioUi,
-        palette: crate::theme::gui::GuiPalette,
+        broadcast: crate::broadcast::Broadcaster,
     ) -> Self {
         Self {
             state: Kithara::mounted(
@@ -40,7 +40,7 @@ impl Studio {
                 catalog,
                 config,
                 studio,
-                palette,
+                broadcast,
                 window::Id::unique(),
             ),
         }

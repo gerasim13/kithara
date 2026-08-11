@@ -246,7 +246,7 @@ impl ViewControl for mount::Select {
     }
 }
 
-impl ViewControl for mount::StatusDot {
+impl ViewControl for mount::StatusDot<'_> {
     fn view<'a>(&self, cx: &Cx<'a, '_, '_>) -> Rendered<'a> {
         painted(self, cx)
     }

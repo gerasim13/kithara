@@ -649,8 +649,12 @@ mod tests {
             bar::preset::{Preset, PresetData},
             button::{Button, ButtonConfig, ButtonLabel},
             design::{
-                cell::Cell, crossfader::Crossfader, fader::Fader, meter::Meter,
-                status_dot::StatusDot, swatch::Swatch,
+                cell::Cell,
+                crossfader::Crossfader,
+                fader::Fader,
+                meter::Meter,
+                status_dot::{StatusDot, StatusDotData},
+                swatch::Swatch,
             },
             icon::glyph::{Glyph, GlyphData},
             knob::Knob,
@@ -969,12 +973,20 @@ mod tests {
             y: 0.0,
         };
         for tone in [Tone::Neutral, Tone::Accent, Tone::Success, Tone::Danger] {
-            let iced = Paint::new(StatusDot::new(tone, skin), "LIVE".to_owned(), skin).draw_list(
-                &PaintState::default(),
-                bounds,
-                VisualState::Idle,
+            let data = StatusDotData {
+                active: false,
+                label: "LIVE".to_owned(),
+            };
+            let iced = Paint::new(StatusDot::with_active_tone(tone, None, skin), data, skin)
+                .draw_list(&PaintState::default(), bounds, VisualState::Idle);
+            let mut masonry = Painted::new(
+                StatusDot::with_active_tone(tone, None, skin),
+                StatusDotData {
+                    active: false,
+                    label: "LIVE".to_owned(),
+                },
+                skin,
             );
-            let mut masonry = Painted::new(StatusDot::new(tone, skin), "LIVE".to_owned(), skin);
 
             assert_eq!(iced, MasonryControl::draw_list(&mut masonry, bounds));
         }

@@ -276,6 +276,12 @@ fn produce_pass<N: Node, O: SchedulerObserver>(
             }
         }
 
+        // Flush work armed by the visit's final checked tick before reporting
+        // its result. A terminal slot is removed below and gets no next pass;
+        // a live slot may park before its next pass. In both cases, deferring
+        // this recycle would strand signals the final tick already promised.
+        slot.node.recycle();
+
         // A burst that produced and then hit its consumer's backpressure still
         // made progress; only a terminal tick overrides that.
         let result = match last {
@@ -470,7 +476,10 @@ pub(crate) fn parse_cputime(s: &str) -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use std::cell::Cell;
+    use std::{
+        cell::Cell,
+        sync::atomic::{AtomicBool, Ordering},
+    };
 
     use kithara_platform::thread;
     use kithara_test_utils::kithara;
@@ -960,6 +969,46 @@ mod tests {
             "the seek-drain burst (cap+2) is absorbed and recycled: high water {}",
             node.trash_high_water
         );
+    }
+
+    struct TerminalDeferredNode {
+        flushed: Arc<AtomicBool>,
+        pending: bool,
+    }
+
+    impl Node for TerminalDeferredNode {
+        fn recycle(&mut self) {
+            if std::mem::take(&mut self.pending) {
+                self.flushed.store(true, Ordering::Release);
+            }
+        }
+
+        fn tick(&mut self) -> TickResult {
+            self.pending = true;
+            TickResult::Done
+        }
+    }
+
+    #[kithara::test]
+    fn terminal_tick_flushes_deferred_work_before_slot_removal() {
+        let flushed = Arc::new(AtomicBool::new(false));
+        let mut slots = vec![Slot {
+            id: 1,
+            node: TerminalDeferredNode {
+                flushed: Arc::clone(&flushed),
+                pending: false,
+            },
+            service_class: ServiceClass::Audible,
+            rt_policy: RtPolicy::Rt,
+            is_terminal: false,
+        }];
+        let mut observer = TestObserver;
+
+        let report = produce_pass(&mut slots, &[0], &mut observer);
+
+        assert_eq!(report.outcome, PassOutcome::Idle);
+        assert!(slots[0].is_terminal);
+        assert!(flushed.load(Ordering::Acquire));
     }
 
     #[kithara::test]

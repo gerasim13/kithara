@@ -22,7 +22,7 @@ use crate::{
             meter::Meter,
             segmented::{Segmented, SegmentedData},
             select::Select,
-            status_dot::StatusDot,
+            status_dot::{StatusDot, StatusDotData},
             swatch::Swatch,
         },
         icon::glyph::{Glyph, GlyphData},
@@ -361,17 +361,17 @@ impl ControlPainter for Meter {
 }
 
 impl ControlPainter for StatusDot {
-    type Data = String;
+    type Data = StatusDotData;
 
     fn draw(
         &self,
         list: &mut DrawListBuilder,
         text: &mut TextContext,
-        data: &Self::Data,
+        data: &StatusDotData,
         bounds: Rect,
         _state: VisualState,
     ) {
-        self.paint(list, text, data, bounds);
+        self.paint_with_state(list, text, &data.label, bounds, data.active);
     }
 }
 

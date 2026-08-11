@@ -17,6 +17,23 @@ pub(crate) fn make_serial_attr(args: &TestArgs) -> TokenStream2 {
     }
 }
 
+/// WASM counterpart of [`make_serial_attr`]: `serial_test` drives native
+/// threads, which a browser test binary does not have, so the body takes an
+/// async lock instead. The lock is declared right here, next to the `await`
+/// that takes it — it has one caller and needs no home of its own.
+pub(crate) fn make_wasm_serial_guard(args: &TestArgs) -> TokenStream2 {
+    if args.is_serial {
+        quote! {
+            static KITHARA_WASM_SERIAL:
+                ::kithara_test_utils::kithara_platform::AsyncMutex<()> =
+                ::kithara_test_utils::kithara_platform::AsyncMutex::new(());
+            let _kithara_wasm_serial_guard = KITHARA_WASM_SERIAL.lock().await;
+        }
+    } else {
+        quote! {}
+    }
+}
+
 /// Test attributes for **sync** tests only (dual-platform: native `#[test]` + WASM).
 ///
 /// Async tests are handled separately via `emit_async_runtime_test` /

@@ -89,6 +89,7 @@ bytes = { workspace = true }
 cbc = { workspace = true }
 futures = { workspace = true }
 hex = { workspace = true }
+num-traits = { workspace = true }
 rkyv = { workspace = true }
 
 # Serialization
@@ -143,6 +144,7 @@ kithara = { workspace = true, features = [
 ] }
 kithara-app = { workspace = true, default-features = false, features = ["analysis-waveform", "lib-only"] }
 
+kithara-broadcast = { workspace = true, features = ["client-reqwest", "tls-rustls"] }
 # Only `architecture_trace` reaches for it, and that module is already native
 # only: the crate's LSP client builds file URLs, which `url` offers everywhere
 # but wasm.
@@ -151,7 +153,7 @@ kithara-devtools = { workspace = true }
 # default-features=false). HE-AAC v2 fMP4 fixtures in rapid-scrub /
 # stress-seek tests decode through the symphonia path, and without fdk-aac
 # they are reported as LC-only, so add it explicitly.
-kithara-encode = { workspace = true }
+kithara-encode = { workspace = true, features = ["client-reqwest", "fdk-aac", "ffmpeg", "tls-rustls"] }
 
 assert_no_alloc = { workspace = true }
 axum = { workspace = true }
@@ -168,7 +170,6 @@ memory-stats = { workspace = true }
 # Storage
 mmap-io = { workspace = true }
 moka = { workspace = true }
-num-traits = { workspace = true }
 
 # Seeded RNG for user-simulation e2e scenarios. Tests in
 # `tests/tests/kithara_queue/user_simulation/` need a deterministic
