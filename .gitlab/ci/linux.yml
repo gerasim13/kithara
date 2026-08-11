@@ -27,6 +27,7 @@ linux:check:
 linux:test:
   extends:
     - .linux-job
+    - .judged
     - .measured
   interruptible: false
   rules:

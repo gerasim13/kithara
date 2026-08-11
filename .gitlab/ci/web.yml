@@ -27,6 +27,7 @@ web:wasm:
 web:chromium:
   extends:
     - .web-job
+    - .judged
     - .measured
   script:
     - just ci run web-chromium
@@ -39,6 +40,7 @@ web:chromium:
 web:firefox:
   extends:
     - .web-job
+    - .judged
     - .measured
   script:
     - just ci run web-firefox

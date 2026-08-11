@@ -207,6 +207,34 @@ with, clear the head so the import runs again:
 /Volumes/KitharaCI/services/bin/kithara-ci ci bridge retry --config /Volumes/KitharaCI/services/bridge/config.toml --github-sha <sha>
 ```
 
+## The verdict
+
+The suite is not green, and gating on it being green holds every change behind
+red it did not cause. The lanes the verdict judges therefore carry
+`allow_failure: true` and one job decides: a run is held for failing something
+the default branch is not.
+
+Each lane leaves what it produced in `target/junit/`, collected by the lane
+dispatcher rather than by the lane itself — the build directory survives between
+jobs, so the report a lane is expected to write is removed before it runs. A
+lane that can name no test leaves a marker carrying its own name, because GitLab
+hands a job no status for the jobs it needed.
+
+The journal lives on the Linux executor, whose cache directory is mounted from
+the host, at `<cache root>/verdict/journal.json`. A macOS job runs in a
+throwaway guest, where nothing written survives it. `main` and the nightly chain
+record; branch, merge-request and quarantine runs check. The window unions the
+last five recorded runs: a test that fails a quarter of the time would otherwise
+read as a regression whenever the run it was compared with happened to be green.
+
+A merge request is told which of the failures it is being let through with were
+already failing at the commit it was branched from, when the journal still
+remembers that commit.
+
+The first check after this lands has no journal to read and says so; a `main`
+run has to record before a regression can be told from what the branch already
+carries.
+
 ## Storage policy
 
 The CI volume has a 300 GB APFS quota. New work stops at 285 GB. Cleanup starts

@@ -29,6 +29,7 @@ apple:msrv:
 apple:test:
   extends:
     - .apple-job
+    - .judged
     - .measured
     - .rules-verify-and-branch
   needs:
@@ -46,6 +47,7 @@ apple:test:
 apple:test-flash-off:
   extends:
     - .macos-job
+    - .judged
     - .rules-integration-and-branch
     - .measured
   stage: apple
@@ -79,7 +81,9 @@ apple:xcframework:
       - apple/KitharaFFIInternal.xcframework
 
 apple:swift-test:
-  extends: .apple-job
+  extends:
+    - .apple-job
+    - .judged
   needs:
     - apple:xcframework
   script:
@@ -108,6 +112,7 @@ apple:ios:
 apple:ios-test:
   extends:
     - .macos-job
+    - .judged
     - .rules-verify-and-branch
     - .measured
   stage: apple

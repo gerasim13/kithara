@@ -56,6 +56,15 @@
 # the Linux jobs. As the first entry in a job's `rules` a `when: never` match
 # ends the evaluation, so the platform check comes before anything the lane's
 # own kind rules would allow.
+# A lane the verdict judges does not gate on its own: it reports, and the
+# verdict decides by comparing what failed here with what the default branch is
+# already failing. Gating on each lane means gating on a suite that is not
+# green, which holds every change behind accumulated red rather than behind its
+# own. A failure here is still not free — it reaches the verdict as a report or,
+# for a lane that can name no test, as a marker carrying the lane's name.
+.judged:
+  allow_failure: true
+
 .platform-linux:
   rules:
     - if: $KITHARA_PLATFORMS !~ /(^|,)\s*linux\s*(,|$)/

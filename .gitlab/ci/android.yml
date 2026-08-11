@@ -20,6 +20,7 @@ android:build:
 android:test:
   extends:
     - .android-job
+    - .judged
     - .measured
   interruptible: false
   rules:
