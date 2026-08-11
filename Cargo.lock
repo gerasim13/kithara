@@ -4329,7 +4329,7 @@ dependencies = [
  "kithara-test-macros",
  "kithara-test-utils",
  "kithara-workspace-hack",
- "lru 0.18.1",
+ "lru 0.18.2",
  "rangemap",
  "rkyv",
  "serial_test",
@@ -5343,9 +5343,9 @@ checksum = "7f66e8d5d03f609abc3a39e6f08e4164ebf1447a732906d39eb9b99b7919ef39"
 
 [[package]]
 name = "lru"
-version = "0.18.1"
+version = "0.18.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0b6180140927ee907000b0aa540091f6ea512ead4447c92b8fc35bc72788a5a6"
+checksum = "5d2f2f9b4ba7e6b24d95e7e899329d35be83bcded72c8540cdd5368932d1d90a"
 dependencies = [
  "hashbrown 0.17.1",
 ]
@@ -11131,7 +11131,7 @@ dependencies = [
  "httparse",
  "ipnet",
  "libc",
- "lru 0.18.1",
+ "lru 0.18.2",
  "percent-encoding",
  "pin-project-lite",
  "socket2",
