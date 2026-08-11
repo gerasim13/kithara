@@ -70,9 +70,13 @@ dispatch:branch:
   rules:
     - if: $CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH != $CI_DEFAULT_BRANCH
 
-# The same subset a branch push runs, started by hand to name platforms a push
-# cannot. It shares the branch queue rather than the main one, so asking for
-# Linux or Windows never puts the default branch behind it.
+# Started by hand to name platforms a push cannot. It runs as the `main` kind
+# rather than `branch`, because that is the kind under which the platform lanes
+# exist at all: `linux:*` hangs off the verify set, the web and Android lanes
+# off the integration set, and neither admits `branch`. Asking for a platform
+# on a branch kind would silently produce the Apple-only pipeline and look like
+# the switch was ignored. The branch queue keeps it out of the default branch's
+# way regardless.
 dispatch:platforms:
   stage: dispatch
   resource_group: kithara-mac-mini-branch
@@ -84,7 +88,7 @@ dispatch:platforms:
     strategy: depend
   variables:
     KITHARA_CACHE_TRUST: review
-    KITHARA_PIPELINE_KIND: branch
+    KITHARA_PIPELINE_KIND: main
     KITHARA_PLATFORMS: $KITHARA_PLATFORMS
   rules:
     - if: $CI_PIPELINE_SOURCE == "web" && $KITHARA_PLATFORMS
