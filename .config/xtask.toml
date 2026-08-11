@@ -222,9 +222,11 @@ default_flash = false
 # on Rubato; inert off Apple), `e2e-glide` the Glide backend (no Rubato in the
 # graph, otherwise the compile-time alias picks Rubato).
 #
-# All three run `suite_e2e`, which reaches nothing outside the runner. The tests
-# that need the zvuk CDN or the corporate VPN live in `suite_network` behind the
-# `network` feature, so no amount of `--run-ignored` can pull them in here.
+# All three need a real output device, so they run on the Apple executor and are
+# absent from the Linux container fleet. `suite_e2e` reaches nothing outside the
+# runner. The tests that need the zvuk CDN or the corporate VPN live in
+# `suite_network` behind the `network` feature, so no amount of `--run-ignored`
+# can pull them in here.
 [test.lanes.e2e]
 program = "cargo"
 prefix_args = [
@@ -326,7 +328,14 @@ prefix_args = [
 default_features = ["integration-regressions"]
 default_flash = true
 
-[test.lanes.selenium]
+# The harness (tests/tests/kithara_ffi_web/selenium.rs) reads
+# KITHARA_SELENIUM_BROWSER to pick a browser and defaults to chrome if unset.
+# Naming the browser in the lane itself, rather than leaving it to whatever
+# the caller happens to export, is what makes `--lane=selenium-firefox` an
+# honest description of what ran. Firefox is the only browser this pins today
+# (geckodriver, below); a `selenium-chrome` lane needs a reviewed chromedriver
+# pin first.
+[test.lanes.selenium-firefox]
 program = "cargo"
 prefix_args = [
   "+nightly",
@@ -516,8 +525,8 @@ hard_invariant = true
 complete_only = true
 
 [[quality.assessment.deep_stages]]
-name = "selenium"
-command = ["just", "test", "run", "--lane=selenium"]
+name = "selenium-firefox"
+command = ["just", "test", "run", "--lane=selenium-firefox"]
 tools = ["selenium-tests"]
 hard_invariant = true
 complete_only = true

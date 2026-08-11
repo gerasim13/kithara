@@ -22,7 +22,6 @@
 
 .linux-job:
   extends: .unix-job
-  image: kithara-ci:linux-20260807b
   tags:
     - kithara-linux
 
@@ -42,6 +41,48 @@
   extends: .unix-job
   tags:
     - kithara-release
+
+# One Mac mini serves every platform: a Linux container under colima, Windows
+# under qemu, Android on the host, the simulator in a throwaway macOS guest.
+# Carrying all of them on every push spends the machine on lanes the GitHub
+# fork already covers, and buries the platform under focus — today iOS — among
+# failures that belong elsewhere. So the others are opt-in: name them in
+# `KITHARA_PLATFORMS`, comma-separated, on a run started for that purpose.
+#
+# These gate the lanes' own rule sets rather than the `include`, because an
+# `include:rules` is resolved before the variables a run carries are visible —
+# a child pipeline that plainly has `KITHARA_PLATFORMS=linux` still saw none of
+# the Linux jobs. As the first entry in a job's `rules` a `when: never` match
+# ends the evaluation, so the platform check comes before anything the lane's
+# own kind rules would allow.
+# A lane the verdict judges does not gate on its own: it reports, and the
+# verdict decides by comparing what failed here with what the default branch is
+# already failing. Gating on each lane means gating on a suite that is not
+# green, which holds every change behind accumulated red rather than behind its
+# own. A failure here is still not free — it reaches the verdict as a report or,
+# for a lane that can name no test, as a marker carrying the lane's name.
+.judged:
+  allow_failure: true
+
+.platform-linux:
+  rules:
+    - if: $KITHARA_PLATFORMS !~ /(^|,)\s*linux\s*(,|$)/
+      when: never
+
+.platform-web:
+  rules:
+    - if: $KITHARA_PLATFORMS !~ /(^|,)\s*web\s*(,|$)/
+      when: never
+
+.platform-android:
+  rules:
+    - if: $KITHARA_PLATFORMS !~ /(^|,)\s*android\s*(,|$)/
+      when: never
+
+.platform-windows:
+  rules:
+    - if: $KITHARA_PLATFORMS !~ /(^|,)\s*windows\s*(,|$)/
+      when: never
 
 # Jobs declare only the dependencies they really have. Ordering on the shared
 # host belongs to the runners — each takes a single build at a time — so a lane
@@ -77,19 +118,21 @@
     - if: $KITHARA_PIPELINE_KIND == "branch"
     - !reference [.rules-verify, rules]
 
-.rules-integration-and-branch:
+.rules-integration-and-review:
   interruptible: false
   rules:
     - if: $KITHARA_PIPELINE_KIND == "branch"
+    - if: $KITHARA_PIPELINE_KIND == "merge-request"
     - !reference [.rules-integration, rules]
 
-# Long lanes a branch asks for on purpose. Keeping them off `main` leaves the
-# merge queue as short as it is today; the nightly channel is where they guard
-# the default branch.
-.rules-branch-or-nightly:
+# Long lanes a review ref asks for on purpose. Keeping them off `main` leaves
+# the merge queue as short as it is today; the nightly channel is where they
+# guard the default branch.
+.rules-review-or-nightly:
   interruptible: false
   rules:
     - if: $KITHARA_PIPELINE_KIND == "branch"
+    - if: $KITHARA_PIPELINE_KIND == "merge-request"
     - if: $KITHARA_PIPELINE_KIND == "nightly"
 
 .rules-nightly:

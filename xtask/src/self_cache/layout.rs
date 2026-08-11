@@ -10,7 +10,7 @@ use anyhow::{Context, Result, bail, ensure};
 
 use super::manifest::CacheManifest;
 
-pub(super) const BINARY: &str = "xtask";
+pub(super) const BINARY: &str = if cfg!(windows) { "xtask.exe" } else { "xtask" };
 pub(super) const CACHE_DIRECTORY: &str = "xtask-cache";
 pub(super) const GENERATION_PREFIX: &str = "generation-";
 pub(super) const LEASE_FILE: &str = "lease.lock";

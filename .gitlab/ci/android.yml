@@ -1,7 +1,9 @@
 android:build:
-  extends:
-    - .android-job
-    - .rules-integration
+  extends: .android-job
+  interruptible: false
+  rules:
+    - !reference [.platform-android, rules]
+    - !reference [.rules-integration, rules]
   stage: android
   timeout: 45 minutes
   needs: []
@@ -18,8 +20,12 @@ android:build:
 android:test:
   extends:
     - .android-job
-    - .rules-integration
+    - .judged
     - .measured
+  interruptible: false
+  rules:
+    - !reference [.platform-android, rules]
+    - !reference [.rules-integration, rules]
   stage: android
   timeout: 90 minutes
   needs:
@@ -36,3 +42,4 @@ android:test:
     paths:
       - android/lib/build/reports/androidTests/
       - android/lib/build/outputs/androidTest-results/
+      - target/junit/

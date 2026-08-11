@@ -124,10 +124,7 @@ fn run_loop<N: Node, O: SchedulerObserver>(
         recycle_all(&mut slots, &slots_order);
 
         let report = produce_pass(&mut slots, &slots_order, &mut observer);
-
-        let before = slots.len();
-        slots.retain(|slot| !slot.is_terminal);
-        needs_reorder |= slots.len() < before;
+        needs_reorder |= remove_terminal(&mut slots);
 
         report_outcome(&mut observer, report);
         observer.on_event(SchedulerEvent::PassEnd);
@@ -146,6 +143,12 @@ fn recycle_all<N: Node>(slots: &mut [Slot<N>], slots_order: &[usize]) {
     }
 }
 
+fn remove_terminal<N: Node>(slots: &mut Vec<Slot<N>>) -> bool {
+    let before = slots.len();
+    slots.retain(|slot| !slot.is_terminal);
+    slots.len() < before
+}
+
 fn cancel_and_drain<N: Node>(
     cancel: &CancelToken,
     cmd_rx: &mpsc::Receiver<SchedulerCmd<N>>,
@@ -154,9 +157,7 @@ fn cancel_and_drain<N: Node>(
 ) -> bool {
     if cancel.is_cancelled() {
         trace!("scheduler cancelled");
-        for slot in slots.iter_mut() {
-            slot.node.on_cancel();
-        }
+        cancel_all(slots);
         return true;
     }
     drain_commands(cmd_rx, slots, needs_reorder)
@@ -408,6 +409,7 @@ fn unregister_slot<N: Node>(slots: &mut Vec<Slot<N>>, needs_reorder: &mut bool, 
     debug!(slot_id = id, "scheduler: unregistering node");
     if let Some(slot) = slots.iter_mut().find(|s| s.id == id) {
         slot.node.on_cancel();
+        slot.node.recycle();
     }
     let before = slots.len();
     slots.retain(|s| s.id != id);
@@ -433,6 +435,7 @@ fn refresh_service_classes<N: Node>(slots: &mut [Slot<N>], needs_reorder: &mut b
 fn cancel_all<N: Node>(slots: &mut [Slot<N>]) {
     for slot in slots.iter_mut() {
         slot.node.on_cancel();
+        slot.node.recycle();
     }
 }
 
@@ -478,6 +481,7 @@ pub(crate) fn parse_cputime(s: &str) -> u64 {
 mod tests {
     use std::{
         cell::Cell,
+        mem,
         sync::atomic::{AtomicBool, Ordering},
     };
 
@@ -553,6 +557,42 @@ mod tests {
     impl Node for FixedNode {
         fn tick(&mut self) -> TickResult {
             self.0
+        }
+    }
+
+    struct LifecycleNode {
+        events: mpsc::Sender<&'static str>,
+    }
+
+    impl Node for LifecycleNode {
+        fn on_cancel(&mut self) {
+            let _ = self.events.send("cancel");
+        }
+
+        fn recycle(&mut self) {
+            let _ = self.events.send("recycle");
+        }
+
+        fn tick(&mut self) -> TickResult {
+            TickResult::Done
+        }
+    }
+
+    struct DeferredWaitingNode {
+        events: mpsc::Sender<&'static str>,
+        pending: bool,
+    }
+
+    impl Node for DeferredWaitingNode {
+        fn recycle(&mut self) {
+            if mem::take(&mut self.pending) {
+                let _ = self.events.send("recycle");
+            }
+        }
+
+        fn tick(&mut self) -> TickResult {
+            self.pending = true;
+            TickResult::Waiting
         }
     }
 
@@ -783,6 +823,89 @@ mod tests {
     }
 
     #[kithara::test]
+    fn terminal_visit_recycles_node_once_before_removal() {
+        let (events, received) = mpsc::channel();
+        let mut slots = vec![Slot {
+            id: 1,
+            node: LifecycleNode { events },
+            service_class: ServiceClass::Audible,
+            rt_policy: RtPolicy::Rt,
+            is_terminal: false,
+        }];
+        let order = [0];
+        let mut observer = TestObserver;
+
+        let _ = produce_pass(&mut slots, &order, &mut observer);
+        assert!(slots[0].is_terminal);
+        assert_eq!(received.try_recv(), Ok("recycle"));
+        assert!(received.try_recv().is_err());
+
+        assert!(remove_terminal(&mut slots));
+
+        assert!(slots.is_empty());
+        assert!(received.try_recv().is_err());
+    }
+
+    #[kithara::test]
+    fn live_visit_flushes_deferred_work_before_reporting_wait() {
+        let (events, received) = mpsc::channel();
+        let mut slots = vec![Slot {
+            id: 1,
+            node: DeferredWaitingNode {
+                events,
+                pending: false,
+            },
+            service_class: ServiceClass::Audible,
+            rt_policy: RtPolicy::Rt,
+            is_terminal: false,
+        }];
+        let mut observer = TestObserver;
+
+        let report = produce_pass(&mut slots, &[0], &mut observer);
+
+        assert_eq!(report.outcome, PassOutcome::Waiting);
+        assert_eq!(received.try_recv(), Ok("recycle"));
+        assert!(received.try_recv().is_err());
+    }
+
+    #[kithara::test]
+    fn unregister_recycles_cancelled_node_before_removal() {
+        let (events, received) = mpsc::channel();
+        let mut slots = vec![Slot {
+            id: 1,
+            node: LifecycleNode { events },
+            service_class: ServiceClass::Audible,
+            rt_policy: RtPolicy::Rt,
+            is_terminal: false,
+        }];
+        let mut needs_reorder = false;
+
+        unregister_slot(&mut slots, &mut needs_reorder, 1);
+
+        assert!(slots.is_empty());
+        assert!(needs_reorder);
+        assert_eq!(received.try_recv(), Ok("cancel"));
+        assert_eq!(received.try_recv(), Ok("recycle"));
+    }
+
+    #[kithara::test]
+    fn shutdown_recycles_cancelled_nodes_before_drop() {
+        let (events, received) = mpsc::channel();
+        let mut slots = vec![Slot {
+            id: 1,
+            node: LifecycleNode { events },
+            service_class: ServiceClass::Audible,
+            rt_policy: RtPolicy::Rt,
+            is_terminal: false,
+        }];
+
+        cancel_all(&mut slots);
+
+        assert_eq!(received.try_recv(), Ok("cancel"));
+        assert_eq!(received.try_recv(), Ok("recycle"));
+    }
+
+    #[kithara::test]
     fn registration_caches_rt_policy() {
         let mut slots = Vec::new();
         let mut needs_reorder = false;
@@ -978,7 +1101,7 @@ mod tests {
 
     impl Node for TerminalDeferredNode {
         fn recycle(&mut self) {
-            if std::mem::take(&mut self.pending) {
+            if mem::take(&mut self.pending) {
                 self.flushed.store(true, Ordering::Release);
             }
         }

@@ -86,7 +86,11 @@ impl TestServerHelper {
         &self,
         spec: HlsSpec,
     ) -> Result<CreatedHls, CreateHlsError> {
+        let variant_count = spec.variant_count;
+        let segments_per_variant = spec.segments_per_variant;
+        let delay_rules = spec.delay_rules.clone();
         let token = self.state.insert_hls_spec(spec)?;
+        self.arm_delay_gates(&token, variant_count, segments_per_variant, &delay_rules);
         Ok(CreatedHls::new(self.base_url().clone(), token))
     }
 
@@ -206,13 +210,8 @@ impl TestServerHelper {
         InitGateHandle { gate }
     }
 
-    /// Arm a virtual-time delay gate for every `(variant, segment)` of `hls_token`
-    /// whose `delay_rules` resolve to a non-zero delay, and spawn its flash-aware
-    /// releaser. Called from the test's flash-ambient setup (`HlsTestServer::new`),
-    /// so each releaser inherits `FLASH_AMBIENT` via the platform async [`spawn`]
-    /// chokepoint and its `sleep` runs on VIRTUAL time — the slow-variant delay
-    /// the client observes is engine-backed, not real wall-clock.
-    pub fn arm_delay_gates(
+    /// Arm the delay gates declared by an HLS fixture at token registration.
+    fn arm_delay_gates(
         &self,
         hls_token: &str,
         variant_count: usize,
@@ -439,7 +438,9 @@ pub(crate) fn router(state: Arc<TestServerState>) -> Router {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use kithara::platform::time::{self, Duration};
+
+    use super::{DelayRule, FixtureBehavior, HlsFixtureBuilder, TestServerHelper};
     use crate::{
         kithara,
         test_server_state::{Content, Delivery},
@@ -466,5 +467,54 @@ mod tests {
         assert_eq!(handle.request_count(), 0);
         let _ = reqwest::get(handle.url()).await.unwrap();
         assert_eq!(handle.request_count(), 1);
+    }
+
+    #[kithara::test(tokio)]
+    async fn raw_hls_helper_arms_matching_delay_gate_on_creation() {
+        const DELAY_MS: u64 = 250;
+
+        let helper = TestServerHelper::new().await;
+        let created = helper
+            .create_hls(
+                HlsFixtureBuilder::new()
+                    .variant_count(2)
+                    .segments_per_variant(2)
+                    .push_delay_rule(DelayRule {
+                        variant: Some(1),
+                        segment_eq: Some(1),
+                        delay_ms: DELAY_MS,
+                        ..DelayRule::default()
+                    }),
+            )
+            .await
+            .expect("invariant: delayed HLS fixture is valid");
+
+        assert!(
+            helper.state.delay_gate(created.token(), 0, 1).is_none(),
+            "non-matching segment must not get a delay gate"
+        );
+        let gate = helper
+            .state
+            .delay_gate(created.token(), 1, 1)
+            .expect("invariant: matching segment has a delay gate");
+
+        let delay = Duration::from_millis(DELAY_MS);
+        time::sleep(delay * 2).await;
+        assert!(
+            time::timeout(Duration::ZERO, gate.wait_until_released())
+                .await
+                .is_err(),
+            "delay gate must remain held before the matching GET"
+        );
+        gate.mark_requested();
+        time::timeout(delay * 2, gate.wait_until_released())
+            .await
+            .expect("delay gate must release after the matching GET");
+        assert!(
+            time::timeout(Duration::ZERO, gate.wait_until_released())
+                .await
+                .is_ok(),
+            "matching delay gate must release after its request marker"
+        );
     }
 }

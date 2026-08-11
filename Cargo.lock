@@ -1030,8 +1030,7 @@ dependencies = [
 [[package]]
 name = "btls-sys"
 version = "0.5.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9b1b8638a2e1c38a5ae4efa90ae57e643baec35a30d03fc5b399b893adc4954b"
+source = "git+https://github.com/0x676e67/btls?rev=ac7fe822bb1a3386c0ef0b44b4784a9429ba9903#ac7fe822bb1a3386c0ef0b44b4784a9429ba9903"
 dependencies = [
  "bindgen 0.72.1",
  "cmake",
@@ -8449,7 +8448,7 @@ checksum = "1758d6c853020a7244de03cc3e0185eaea3f58715122422dd3cc7452e6d4c16a"
 dependencies = [
  "lazy_static",
  "symphonia-bundle-flac",
- "symphonia-bundle-mp3",
+ "symphonia-bundle-mp3 0.6.0",
  "symphonia-codec-aac",
  "symphonia-codec-adpcm",
  "symphonia-codec-alac",
@@ -8479,8 +8478,16 @@ dependencies = [
 [[package]]
 name = "symphonia-bundle-mp3"
 version = "0.6.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "350f1f2f2e19ad4dd315db94304d1eb361b29af070681f94e51b8fdaad769546"
+dependencies = [
+ "log",
+ "symphonia-bundle-mp3 0.6.0 (git+https://github.com/pdeljanov/Symphonia.git?rev=980bf5830a90e069fd64641d9c38f067ab772a24)",
+ "symphonia-core 0.6.0",
+]
+
+[[package]]
+name = "symphonia-bundle-mp3"
+version = "0.6.0"
+source = "git+https://github.com/pdeljanov/Symphonia.git?rev=980bf5830a90e069fd64641d9c38f067ab772a24#980bf5830a90e069fd64641d9c38f067ab772a24"
 dependencies = [
  "lazy_static",
  "log",
@@ -8568,8 +8575,7 @@ dependencies = [
 [[package]]
 name = "symphonia-core"
 version = "0.6.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "95ec293b5f288383b72a7bffcade6b2860b642cf66f28b3bd5967349a49938b1"
+source = "git+https://github.com/pdeljanov/Symphonia.git?rev=980bf5830a90e069fd64641d9c38f067ab772a24#980bf5830a90e069fd64641d9c38f067ab772a24"
 dependencies = [
  "bitflags 2.13.1",
  "bytemuck",
@@ -8750,7 +8756,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.4.3",
+ "getrandom 0.3.4",
  "once_cell",
  "rustix 1.1.4",
  "windows-sys 0.61.2",
@@ -11289,6 +11295,7 @@ dependencies = [
  "rustdoc-types",
  "serde",
  "serde_json",
+ "serde_yaml_ng",
  "sha2",
  "signal-hook",
  "tempfile",

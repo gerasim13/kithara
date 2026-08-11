@@ -1,14 +1,21 @@
+//! Reading a `JUnit` report. Both the perf matrix and the CI verdict need
+//! one, so it belongs to the crate rather than to either of them.
+
 use anyhow::{Context, Result};
 
 #[derive(Clone, Debug, PartialEq)]
-pub(crate) struct CaseTiming {
-    pub(crate) name: String,
-    pub(crate) suite: String,
-    pub(crate) failed: bool,
-    pub(crate) secs: f64,
+pub struct CaseTiming {
+    pub name: String,
+    pub suite: String,
+    pub failed: bool,
+    pub secs: f64,
 }
 
-pub(crate) fn parse_junit(xml: &str) -> Result<Vec<CaseTiming>> {
+/// # Errors
+///
+/// Fails when the document is not XML, or when a `testcase` carries a
+/// `time` attribute that is not a number.
+pub fn parse_junit(xml: &str) -> Result<Vec<CaseTiming>> {
     let doc = roxmltree::Document::parse(xml).context("parse junit xml")?;
     let mut cases = Vec::new();
     for node in doc.descendants().filter(|n| n.has_tag_name("testcase")) {

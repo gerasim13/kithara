@@ -131,6 +131,16 @@ async fn run_delayed_drm_seek(
     run_seek_scenario(&url, backend, abr, temp).await;
 }
 
+#[kithara::flash(true)]
+async fn drive_queue_ticks(queue: Arc<Queue>) {
+    loop {
+        sleep(Duration::from_millis(50)).await;
+        if queue.tick().is_err() {
+            break;
+        }
+    }
+}
+
 async fn run_seek_scenario(url: &Url, backend: DecoderBackend, abr: AbrMode, temp: TestTempDir) {
     let net = NetOptions::builder().is_insecure(true).build();
     let downloader = Downloader::new(
@@ -162,15 +172,7 @@ async fn run_seek_scenario(url: &Url, backend: DecoderBackend, abr: AbrMode, tem
             .build(),
     ));
     let queue = Arc::new(Queue::new(QueueConfig::builder().player(player).build()));
-    let queue_for_tick = Arc::clone(&queue);
-    let tick_handle = tokio::task::spawn(async move {
-        loop {
-            sleep(Duration::from_millis(50)).await;
-            if queue_for_tick.tick().is_err() {
-                break;
-            }
-        }
-    });
+    let tick_handle = tokio::task::spawn(drive_queue_ticks(Arc::clone(&queue)));
 
     let source = super::app_track_source(
         url.as_str(),

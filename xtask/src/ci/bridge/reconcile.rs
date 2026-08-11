@@ -104,7 +104,6 @@ impl Bridge {
                 gitlab_base_sha,
                 ImportState::Rejected,
                 None,
-                None,
                 Some(detail.clone()),
             )?;
             self.gitlab
@@ -112,10 +111,8 @@ impl Bridge {
             bail!("{detail}");
         };
 
-        let check_run_id = match entry.as_ref().and_then(|entry| entry.check_run_id) {
-            Some(id) => id,
-            None => self.github.create_check(github_sha)?,
-        };
+        self.github
+            .report_status(github_sha, "pending", "GitLab verification running")?;
         let control_paths =
             changed_control_paths(self.repo.changed_paths(gitlab_base_sha, github_sha)?);
         if !control_paths.is_empty() {
@@ -128,14 +125,7 @@ impl Bridge {
                 "The merged GitHub pull request changes CI control files. Import stopped; port \
                  these changes through a reviewed GitLab merge request instead:\n\n{paths}"
             );
-            self.reject(
-                github_sha,
-                gitlab_base_sha,
-                None,
-                check_run_id,
-                "action_required",
-                &detail,
-            )?;
+            self.reject(github_sha, gitlab_base_sha, None, "failure", &detail)?;
             self.gitlab
                 .ensure_issue("GitHub import requires CI control review", &detail)?;
             bail!("{detail}");
@@ -153,7 +143,6 @@ impl Bridge {
                 gitlab_base_sha,
                 ImportState::Testing,
                 Some(id),
-                Some(check_run_id),
                 Some(format!("GitHub PR #{pull_number}")),
             )?;
             id
@@ -166,7 +155,6 @@ impl Bridge {
                 github_sha,
                 gitlab_base_sha,
                 Some(pipeline_id),
-                check_run_id,
                 "failure",
                 &detail,
             )?;
@@ -182,8 +170,7 @@ impl Bridge {
                 github_sha,
                 gitlab_base_sha,
                 Some(pipeline_id),
-                check_run_id,
-                "cancelled",
+                "error",
                 detail,
             )?;
             bail!("{detail}");
@@ -196,11 +183,10 @@ impl Bridge {
             gitlab_base_sha,
             ImportState::Promoted,
             Some(pipeline_id),
-            Some(check_run_id),
             Some(format!("promoted from GitHub PR #{pull_number}")),
         )?;
-        self.github.finish_check(
-            check_run_id,
+        self.github.report_status(
+            github_sha,
             "success",
             &format!("GitLab pipeline {pipeline_id} passed; commit promoted."),
         )
@@ -211,8 +197,7 @@ impl Bridge {
         github_sha: &str,
         gitlab_base_sha: &str,
         pipeline_id: Option<u64>,
-        check_run_id: u64,
-        conclusion: &str,
+        state: &str,
         detail: &str,
     ) -> Result<()> {
         self.ledger.put(
@@ -220,10 +205,9 @@ impl Bridge {
             gitlab_base_sha,
             ImportState::Rejected,
             pipeline_id,
-            Some(check_run_id),
             Some(detail.to_string()),
         )?;
-        self.github.finish_check(check_run_id, conclusion, detail)
+        self.github.report_status(github_sha, state, detail)
     }
 
     fn wait_for_pipeline(&self, pipeline_id: u64) -> Result<String> {

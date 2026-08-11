@@ -1,70 +1,29 @@
-use kithara::{
-    self,
-    events::EventBus,
-    play::{EngineConfig, EngineImpl, PlayError},
-};
-use kithara_integration_tests::offline::OfflineSession;
+//! Leaving `EngineConfig::session` unset makes this the hardware half. The
+//! engine falls through to `default_session_handle`, which opens a cpal output
+//! stream, so these tests run only where a real output device exists.
 
-#[derive(Clone, Copy, Debug)]
-enum Backend {
-    Cpal,
-    Offline,
-}
+use kithara::{bufpool::PcmPool, play::EngineConfig};
 
-fn engine_config(backend: Backend) -> EngineConfig {
-    engine_config_with_max_slots(backend, 4)
-}
+use super::engine_session_contract as contract;
 
-fn engine_config_with_max_slots(backend: Backend, max_slots: usize) -> EngineConfig {
-    let builder = EngineConfig::builder()
+fn engine_config(max_slots: usize) -> EngineConfig {
+    EngineConfig::builder()
         .max_slots(max_slots)
-        .pcm_pool(kithara::bufpool::PcmPool::default());
-    if matches!(backend, Backend::Offline) {
-        builder.session(OfflineSession::arc_auto()).build()
-    } else {
-        builder.build()
-    }
+        .pcm_pool(PcmPool::default())
+        .build()
 }
 
 #[kithara::test]
-#[case::cpal(Backend::Cpal)]
-#[case::offline(Backend::Offline)]
-fn engine_start_stop_roundtrip(#[case] backend: Backend) {
-    let engine = EngineImpl::new(engine_config(backend), EventBus::default());
-    engine.start().unwrap();
-    assert!(engine.is_running());
-    engine.stop().unwrap();
-    assert!(!engine.is_running());
+fn engine_start_stop_roundtrip() {
+    contract::start_stop_roundtrip(engine_config(4));
 }
 
 #[kithara::test]
-#[case::cpal(Backend::Cpal)]
-#[case::offline(Backend::Offline)]
-fn engine_allocate_and_release_slot(#[case] backend: Backend) {
-    let engine = EngineImpl::new(engine_config(backend), EventBus::default());
-    engine.start().unwrap();
-
-    let slot_id = engine.allocate_slot().unwrap();
-    assert_eq!(engine.active_slots().len(), 1);
-    assert!(engine.active_slots().contains(&slot_id));
-
-    engine.release_slot(slot_id).unwrap();
-    assert_eq!(engine.active_slots().len(), 0);
-
-    engine.stop().unwrap();
+fn engine_allocate_and_release_slot() {
+    contract::allocate_and_release_slot(engine_config(4));
 }
 
 #[kithara::test]
-#[case::cpal(Backend::Cpal)]
-#[case::offline(Backend::Offline)]
-fn engine_arena_full_error(#[case] backend: Backend) {
-    let config = engine_config_with_max_slots(backend, 1);
-    let engine = EngineImpl::new(config, EventBus::default());
-    engine.start().unwrap();
-
-    let _slot1 = engine.allocate_slot().unwrap();
-    let result = engine.allocate_slot();
-    assert!(matches!(result, Err(PlayError::ArenaFull)));
-
-    engine.stop().unwrap();
+fn engine_arena_full_error() {
+    contract::arena_full_error(engine_config(1));
 }

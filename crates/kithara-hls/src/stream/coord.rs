@@ -133,25 +133,30 @@ impl HlsCoord {
         Arc::clone(&self.seek) as Arc<dyn Activity>
     }
 
-    /// Process one evicted resource key. Marks the lost segment
-    /// `Missing` on every variant that owned it. When the active
-    /// variant is among them, fires a full `rebuild` from the reader's
-    /// current segment so the queue is refilled with the now-Missing
-    /// slot reincluded. Non-active variants stay relaxed — their next
-    /// activation (ABR flip) calls `rebuild` and picks up the Missing
-    /// entries then.
+    /// Mark an evicted segment missing and rebuild each resident reader from
+    /// its own cursor. Variants without a reader rebuild on activation.
     pub(crate) fn broadcast_eviction(&self, ctx: &PlanCtx, key: &ResourceKey, seg_at_reader: u32) {
         let active_idx = self.variant_index();
-        let active_lost = self
-            .variants
-            .iter()
-            .enumerate()
-            .fold(false, |acc, (v_idx, v)| {
-                let hit = v.on_evict(key).is_some() && v_idx == active_idx;
-                acc || hit
-            });
+        let incoming = self.sessions.incoming_session();
+        let incoming_idx = incoming.as_ref().map(|session| session.variant_index());
+        let mut active_lost = false;
+        let mut incoming_lost = false;
+        for (variant_idx, variant) in self.variants.iter().enumerate() {
+            let lost = variant.on_evict(key).is_some();
+            active_lost |= lost && variant_idx == active_idx;
+            incoming_lost |= lost && incoming_idx == Some(variant_idx);
+        }
         if active_lost {
             self.active().rebuild(ctx, seg_at_reader);
+        }
+        if incoming_lost
+            && incoming_idx != Some(active_idx)
+            && let Some(session) = incoming
+            && let Some(segment) = session
+                .variant()
+                .demand_segment_at_offset(session.position())
+        {
+            session.variant().rebuild(ctx, segment);
         }
     }
 
@@ -583,7 +588,8 @@ mod tests {
         time::Instant,
     };
     use kithara_stream::{
-        AudioCodec, ContainerFormat, PlayheadWrite, ReaderInput, ReaderWarmup, SeekControl,
+        AudioCodec, ContainerFormat, OutgoingDisposition, PlayheadWrite, ReaderInput, ReaderWarmup,
+        SeekControl,
     };
 
     use super::*;
@@ -610,6 +616,12 @@ mod tests {
     }
 
     fn switch_coord() -> (Arc<HlsCoord>, EventBus, PlanCtx, Arc<AbrState>) {
+        switch_coord_with_reason(AbrReason::ManualOverride)
+    }
+
+    fn switch_coord_with_reason(
+        reason: AbrReason,
+    ) -> (Arc<HlsCoord>, EventBus, PlanCtx, Arc<AbrState>) {
         let bus = EventBus::new(8);
         let cancel = CancelToken::never();
         let store = Arc::new(
@@ -732,7 +744,7 @@ mod tests {
         });
         let controller = Arc::new(AbrController::new(AbrSettings::default()));
         let handle = controller.register(&peer);
-        abr_state.request_target(VariantIndex::new(1), AbrReason::ManualOverride);
+        abr_state.request_target(VariantIndex::new(1), reason);
         let coord = Arc::new(HlsCoord::new(
             HlsCoordEnv {
                 cancel,
@@ -897,6 +909,103 @@ mod tests {
             1,
             "planning must not open the incoming session"
         );
+    }
+
+    #[kithara::test]
+    fn escape_stalled_plan_and_prepare_abandon_the_exact_outgoing_ticket() {
+        let (coord, _bus, _ctx, _abr_state) = switch_coord_with_reason(AbrReason::EscapeStalled);
+        let plan = coord
+            .plan_variant_reader(None)
+            .expect("plan stalled escape")
+            .expect("pending stalled escape");
+        let planned = plan.transition();
+
+        assert_eq!(
+            planned.outgoing_disposition(),
+            OutgoingDisposition::Abandoned
+        );
+
+        let prepared = coord
+            .prepare_planned_variant_reader(plan, incremental_profile(32))
+            .expect("prepare stalled escape")
+            .expect("exact stalled escape");
+
+        assert_eq!(prepared.id(), planned.id());
+        assert_eq!(
+            prepared.outgoing_disposition(),
+            OutgoingDisposition::Abandoned
+        );
+        assert_eq!(prepared, planned);
+        assert!(coord.abort_variant(prepared));
+    }
+
+    #[kithara::test]
+    #[case::ordinary(AbrReason::UpSwitch)]
+    #[case::urgent(AbrReason::UrgentDownSwitch)]
+    fn non_stalled_switch_retains_the_outgoing_variant(#[case] reason: AbrReason) {
+        let (coord, _bus, _ctx, _abr_state) = switch_coord_with_reason(reason);
+        let plan = coord
+            .plan_variant_reader(None)
+            .expect("plan non-stalled switch")
+            .expect("pending non-stalled switch");
+        let planned = plan.transition();
+
+        assert_eq!(
+            planned.outgoing_disposition(),
+            OutgoingDisposition::Retained
+        );
+
+        let prepared = coord
+            .prepare_planned_variant_reader(plan, incremental_profile(32))
+            .expect("prepare non-stalled switch")
+            .expect("exact non-stalled switch");
+
+        assert_eq!(prepared, planned);
+        assert_eq!(
+            prepared.outgoing_disposition(),
+            OutgoingDisposition::Retained
+        );
+        assert!(coord.abort_variant(prepared));
+    }
+
+    #[kithara::test]
+    fn superseded_escape_ticket_cannot_abandon_a_newer_transition() {
+        let (coord, _bus, _ctx, abr_state) = switch_coord_with_reason(AbrReason::EscapeStalled);
+        let stale = coord
+            .plan_variant_reader(None)
+            .expect("plan stalled escape")
+            .expect("pending stalled escape");
+        assert_eq!(
+            stale.transition().outgoing_disposition(),
+            OutgoingDisposition::Abandoned
+        );
+
+        renew_switch_intent(&abr_state);
+        let current = coord
+            .plan_variant_reader(None)
+            .expect("plan replacement switch")
+            .expect("pending replacement switch");
+
+        assert_ne!(stale.transition().id(), current.transition().id());
+        assert_eq!(
+            current.transition().outgoing_disposition(),
+            OutgoingDisposition::Retained
+        );
+        assert_eq!(
+            coord
+                .prepare_planned_variant_reader(stale, incremental_profile(32))
+                .expect("reject superseded escape"),
+            None
+        );
+        let prepared = coord
+            .prepare_planned_variant_reader(current, incremental_profile(32))
+            .expect("prepare replacement switch")
+            .expect("current replacement switch");
+        assert_eq!(
+            prepared.outgoing_disposition(),
+            OutgoingDisposition::Retained
+        );
+        assert!(coord.abort_variant(prepared));
     }
 
     #[kithara::test]
@@ -1092,6 +1201,45 @@ mod tests {
             second.len()
         );
         assert_eq!(coord.position(), (first.len() + second.len()) as u64);
+    }
+
+    #[kithara::test]
+    fn incoming_reader_eviction_reaims_its_exact_segment() {
+        let (coord, _bus, ctx, _abr_state) = switch_coord();
+        let transition = prepare_incoming(&coord, incremental_profile(32))
+            .expect("prepare incoming")
+            .expect("pending switch");
+        let mut command = coord
+            .dispatch_incoming(&ctx, 1)
+            .pop()
+            .expect("initial incoming fetch");
+        let mut writer = command.take_writer().expect("streaming writer");
+        writer(&[1; 100]).expect("complete incoming segment");
+        command.take_on_complete().expect("completion handler")(100, None, None);
+        assert!(matches!(
+            coord
+                .take_prepared_variant_reader(transition)
+                .expect("take ready incoming"),
+            VariantReaderTake::Ready(_)
+        ));
+
+        let key = ctx
+            .scope
+            .key(&AssetResource::Url(
+                "https://example.com/v1-seg0.m4s".parse().expect("url"),
+            ))
+            .expect("incoming segment key");
+        ctx.scope
+            .store()
+            .remove_resource(&key)
+            .expect("evict incoming segment bytes");
+        coord.broadcast_eviction(&ctx, &key, 0);
+
+        let refetch = coord
+            .dispatch_incoming(&ctx, 1)
+            .pop()
+            .expect("evicted incoming reader segment must be re-planned");
+        assert_eq!(refetch.url().as_str(), "https://example.com/v1-seg0.m4s");
     }
 
     #[kithara::test]

@@ -1,6 +1,5 @@
 mod cli;
 mod gecko;
-mod junit;
 mod lanes;
 mod list;
 mod matrix;

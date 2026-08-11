@@ -112,6 +112,16 @@ fn build_queue_with_tick(
     build_queue_with_tick_cf(temp_dir, 0.0)
 }
 
+#[kithara::flash(true)]
+async fn drive_queue_ticks(queue: Arc<Queue>) {
+    loop {
+        sleep(Duration::from_millis(50)).await;
+        if queue.tick().is_err() {
+            break;
+        }
+    }
+}
+
 fn build_queue_with_tick_cf(
     temp_dir: &TestTempDir,
     crossfade_seconds: f32,
@@ -136,15 +146,7 @@ fn build_queue_with_tick_cf(
             .store(store.clone())
             .build(),
     ));
-    let queue_for_tick = Arc::clone(&queue);
-    let tick_handle = tokio::task::spawn(async move {
-        loop {
-            sleep(Duration::from_millis(50)).await;
-            if queue_for_tick.tick().is_err() {
-                break;
-            }
-        }
-    });
+    let tick_handle = tokio::task::spawn(drive_queue_ticks(Arc::clone(&queue)));
     let downloader = Downloader::new(
         DownloaderConfig::for_client(HttpClient::new(NetOptions::default(), CancelToken::never()))
             .build(),
@@ -152,6 +154,7 @@ fn build_queue_with_tick_cf(
     (queue, downloader, store, tick_handle)
 }
 
+#[kithara::flash(true)]
 async fn wait_for_loader_done(
     queue: &Queue,
     track_id: TrackId,
@@ -185,6 +188,7 @@ async fn wait_for_loader_done(
 /// subscribed *before* the triggering `select(...)` so the event is not
 /// missed. Bounded by a safety deadline so a stuck switch fails fast
 /// instead of hanging.
+#[kithara::flash(true)]
 async fn wait_for_current_track(
     rx: &mut kithara::events::EventReceiver,
     expected: TrackId,
@@ -272,6 +276,7 @@ async fn replay_track_after_switch_does_not_hang_loader(#[case] mode: FixtureMod
 /// is written by the audio thread from the track that is *actually
 /// sounding*, so it discriminates "the UI switched but the audio kept
 /// playing the old track".
+#[kithara::flash(true)]
 async fn wait_for_position(
     queue: &Queue,
     deadline: Duration,
@@ -396,6 +401,7 @@ async fn switch_back_to_mp3_restarts_audio_not_just_ui(
 }
 
 /// Wait until `pred(queue)` holds, panicking past `deadline`.
+#[kithara::flash(true)]
 async fn wait_for(queue: &Queue, deadline: Duration, label: &str, pred: &dyn Fn(&Queue) -> bool) {
     let start = time::Instant::now();
     while !pred(queue) {

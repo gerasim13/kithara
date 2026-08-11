@@ -33,7 +33,10 @@ the shared `target/debug/xtask`. Cache policy is configured under
 
 Refresh builds are supervised and fail closed. Cargo returns an artifact but
 does not publish it; the parent verifies that declared inputs stayed unchanged
-throughout the build before atomically activating the new generation.
+throughout the build before atomically activating the new generation. The
+cancellation half of that supervision is Unix-only: there the build runs in its
+own process group and the parent relays signals and parent death into it, while
+on Windows Cargo shares the console and receives the control event directly.
 
 ## Common Commands
 

@@ -50,10 +50,11 @@ These are suitable for local pre-commit feedback.
   dropping nodes. Optional and target-gated Cargo edges use the distinct
   `conditional` evidence style.
 - Read `manifest.json` before using a result as architecture evidence.
-  `complete` and `runtime-enriched` are successful observations; `truncated`
-  names an evidence-collection limit, never diagram node removal;
-  `static-only` has no runtime evidence; `incomplete` preserves partial files
-  but is not an acceptance result.
+  Every schema-v5 status preserves a reusable static projection. `complete` and
+  `runtime-enriched` include their named overlays; `truncated` names an
+  evidence-collection limit, never diagram node removal; `static-only` has no
+  semantic overlay; `runtime-degraded` names a degraded runtime observation.
+  Overlay diagnostics remain in the manifest and Markdown report.
 - Runtime traces and scenario stdout/stderr stay beside the diagram. Trace
   absence never proves a path is dead, and unresolved calls are never assigned
   a guessed target.

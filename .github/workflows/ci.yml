@@ -19,13 +19,50 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # The single gate every other job depends on. `KITHARA_RUNNER_LABELS` names
-  # the runners to use and is set only where runners are attached, so a copy of
-  # this repository without them skips this job and, with it, the whole
-  # workflow. Neither an owner nor a machine is written into the workflow.
+  # Authorization runs on a GitHub-hosted machine, before any job can reach a
+  # self-hosted runner. Missing or malformed runner configuration is a failed
+  # check, never a skipped workflow that can be mistaken for success.
+  authorize:
+    name: CI authorization
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Validate actor and runner labels
+        env:
+          ACTOR: ${{ github.actor }}
+          OWNER: ${{ github.repository_owner }}
+          RUNNER_LABELS: ${{ vars.KITHARA_RUNNER_LABELS }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import sys
+
+          actor = os.environ["ACTOR"]
+          owner = os.environ["OWNER"]
+          if actor != owner:
+              print(f"CI may only be started by repository owner {owner!r}, got {actor!r}")
+              sys.exit(1)
+
+          raw_labels = os.environ.get("RUNNER_LABELS", "")
+          try:
+              labels = json.loads(raw_labels)
+          except json.JSONDecodeError as error:
+              print(f"KITHARA_RUNNER_LABELS is not valid JSON: {error}")
+              sys.exit(1)
+          if not isinstance(labels, list) or not labels or not all(
+              isinstance(label, str) and label for label in labels
+          ):
+              print("KITHARA_RUNNER_LABELS must be a non-empty JSON array of non-empty strings")
+              sys.exit(1)
+          PY
+
+  # The single self-hosted gate every substantive job depends on. The runner
+  # labels remain repository configuration rather than naming an owner or a
+  # machine in this workflow.
   gate:
     name: Self-hosted gate
-    if: vars.KITHARA_RUNNER_LABELS != '' && github.actor == github.repository_owner
+    needs: authorize
     runs-on: ${{ fromJSON(vars.KITHARA_RUNNER_LABELS) }}
     timeout-minutes: 5
     steps:
@@ -175,9 +212,8 @@ jobs:
         run: just test wasm chrome webcodecs
 
   machete:
-    name: cargo-machete (advisory)
+    name: cargo-machete
     needs: gate
-    continue-on-error: true
     runs-on: ${{ fromJSON(vars.KITHARA_RUNNER_LABELS) }}
     timeout-minutes: 30
 
@@ -189,9 +225,8 @@ jobs:
         run: just deps machete
 
   wasm-size:
-    name: WASM size budget (advisory)
+    name: WASM size budget
     needs: gate
-    continue-on-error: true
     runs-on: ${{ fromJSON(vars.KITHARA_RUNNER_LABELS) }}
     timeout-minutes: 60
 
@@ -210,9 +245,8 @@ jobs:
           path: target/wasm-slim-result.json
 
   hack:
-    name: Feature powerset (advisory)
+    name: Feature powerset
     needs: gate
-    continue-on-error: true
     runs-on: ${{ fromJSON(vars.KITHARA_RUNNER_LABELS) }}
     timeout-minutes: 120
 
@@ -224,9 +258,8 @@ jobs:
         run: just deps hack
 
   semver:
-    name: Semver checks (advisory)
+    name: Semver checks
     needs: gate
-    continue-on-error: true
     runs-on: ${{ fromJSON(vars.KITHARA_RUNNER_LABELS) }}
     timeout-minutes: 60
 
@@ -244,10 +277,8 @@ jobs:
   # on the audio thread is a dropout, not a slow path. It ran nightly, which
   # meant learning about it the morning after the push that caused it.
   #
-  # The fast lane is a tripwire over the mock decoder and blocks. The two
-  # real-decoder soaks stay advisory for now — they carry findings older than
-  # this change, and turning them blocking before those are closed would stop
-  # every push on a defect nobody introduced today.
+  # The fast lane is a tripwire over the mock decoder. The real-decoder lanes
+  # exercise file and HLS playback under the same required sanitizer gate.
   rtsan:
     name: RealtimeSanitizer
     needs: gate
@@ -259,7 +290,6 @@ jobs:
   memory:
     name: Memory budgets
     needs: gate
-    if: vars.KITHARA_RUNNER_LABELS != '' && github.actor == github.repository_owner
     runs-on: ${{ fromJSON(vars.KITHARA_RUNNER_LABELS) }}
     timeout-minutes: 60
 
@@ -269,3 +299,48 @@ jobs:
 
       - name: Run the memory budgets
         run: just perf memory
+
+  # This is the one stable required status. GitHub treats a skipped job as an
+  # acceptable required check, so the aggregate must run unconditionally and
+  # reject every result other than an executed success.
+  required:
+    name: CI required
+    if: ${{ always() }}
+    needs:
+      - authorize
+      - gate
+      - lint
+      - test
+      - test-real-clock
+      - msrv
+      - deny
+      - arch
+      - wasm
+      - machete
+      - wasm-size
+      - hack
+      - semver
+      - rtsan
+      - memory
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require every CI job to have executed successfully
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import sys
+
+          results = json.loads(os.environ["RESULTS"])
+          incomplete = {
+              name: job["result"]
+              for name, job in results.items()
+              if job["result"] != "success"
+          }
+          if incomplete:
+              print(f"required CI jobs did not execute successfully: {incomplete}")
+              sys.exit(1)
+          PY

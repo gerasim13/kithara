@@ -6,7 +6,7 @@ use std::{
 };
 
 use kithara_decode::{
-    ChunkRetire, DecodeError, DecodeResult, Decoder, DecoderChunkOutcome,
+    BlenderProfile, ChunkRetire, DecodeError, DecodeResult, Decoder, DecoderChunkOutcome,
     DecoderFactory as BackendDecoderFactory, DecoderSeekOutcome, GaplessMode, PcmChunk,
 };
 use kithara_events::{DeferredBus, Event};
@@ -17,11 +17,15 @@ use kithara_stream::{
 use kithara_test_utils::kithara;
 use tracing::{debug, warn};
 
+#[cfg(test)]
+use crate::pipeline::decode::transition::OutgoingFrontier;
 use crate::{
     pipeline::{
         blend::PcmBlender,
         decode::{
-            drain::EofDrain, generation::DecoderGeneration, resume::ResumeCursor,
+            drain::EofDrain,
+            generation::{DecoderGeneration, StageFailure, StageOutput, StageResult},
+            resume::ResumeCursor,
             transition::IncomingDecode,
         },
         fetch::Fetch,
@@ -158,6 +162,8 @@ pub(crate) struct ActiveDecode {
     #[field(get, vis = "pub(crate)", copy)]
     gapless_mode: GaplessMode,
     effects: Vec<Box<dyn AudioEffect>>,
+    rejected_chunk: Option<PcmChunk>,
+    stage_error: Option<DecodeError>,
 }
 
 pub(crate) struct DecodeCtx<'a, T: StreamType> {
@@ -173,6 +179,7 @@ pub(crate) struct DecodeCtx<'a, T: StreamType> {
 pub(crate) enum DecodeAction {
     Produced(Fetch<PcmChunk>),
     Pending(WaitingReason),
+    TransitionPending,
     StartRecreate(RecreateState),
     SeekInterrupted,
     Eof,
@@ -194,6 +201,8 @@ impl ActiveDecode {
             effects,
             drain,
             incoming: None,
+            rejected_chunk: None,
+            stage_error: None,
         }
     }
 
@@ -227,22 +236,66 @@ impl ActiveDecode {
         self.drain.next(&mut self.effects)
     }
 
-    pub(crate) fn next_output(&mut self) -> Option<PcmChunk> {
-        while let Some(chunk) = self.active.next() {
+    pub(crate) fn next_output(
+        &mut self,
+        cursor: &mut ResumeCursor,
+        epoch: u64,
+    ) -> DecodeResult<Option<PcmChunk>> {
+        self.next_output_inner(cursor, epoch, true)
+    }
+
+    pub(crate) fn next_output_unheld(
+        &mut self,
+        cursor: &mut ResumeCursor,
+        epoch: u64,
+    ) -> DecodeResult<Option<PcmChunk>> {
+        self.next_output_inner(cursor, epoch, false)
+    }
+
+    fn next_output_inner(
+        &mut self,
+        cursor: &mut ResumeCursor,
+        epoch: u64,
+        allow_holdback: bool,
+    ) -> DecodeResult<Option<PcmChunk>> {
+        if allow_holdback && self.transition_holds_output() {
+            return Ok(None);
+        }
+        let holdback =
+            allow_holdback && !self.active.is_finished() && self.outgoing_holdback_is_active();
+        loop {
+            let next = if holdback {
+                match self.active.next_with_holdback() {
+                    StageOutput::Output(chunk) => chunk,
+                    StageOutput::Invalid(failure) => return Err(self.reject_stage(failure)),
+                }
+            } else {
+                self.active.next()
+            };
+            let Some(chunk) = next else {
+                return Ok(None);
+            };
+            cursor.record(&chunk, epoch);
             let chunk = self.blender.process_active(chunk);
             if let Some(output) = apply_effects(&mut self.effects, chunk) {
-                return Some(output);
+                return Ok(Some(output));
             }
         }
-        None
+    }
+
+    fn outgoing_holdback_is_active(&self) -> bool {
+        let Some(IncomingDecode::Priming { generation, .. }) = self.incoming.as_ref() else {
+            return false;
+        };
+        self.blender.is_steady()
+            && self.active.blender_profile().spec() == generation.blender_profile().spec()
     }
 
     delegate::delegate! {
         to self.active {
-            pub(crate) fn notify_seek(&mut self, retire: &dyn ChunkRetire);
-            pub(crate) fn push(&mut self, chunk: PcmChunk);
             #[call(finish)]
-            pub(crate) fn set_tail_compensation(&mut self);
+            pub(crate) fn finish_active(&mut self);
+            pub(crate) fn notify_seek(&mut self, retire: &dyn ChunkRetire);
         }
         to self.drain {
             pub(crate) fn stats(&self) -> (u64, u64);
@@ -255,12 +308,58 @@ impl ActiveDecode {
         }
     }
 
+    pub(crate) fn push(&mut self, chunk: PcmChunk) -> DecodeResult<()> {
+        if !self.outgoing_holdback_is_active() {
+            self.active.push(chunk);
+            return Ok(());
+        }
+        match self.active.push_holdback(chunk) {
+            StageResult::Ready | StageResult::NeedMore => Ok(()),
+            StageResult::Invalid(failure) => Err(self.reject_stage(failure)),
+        }
+    }
+
+    pub(crate) fn prepare_incoming_profile(&mut self, profile: BlenderProfile) {
+        self.blender.prepare_active(profile);
+        if self.active.blender_profile().spec() != profile.spec() {
+            return;
+        }
+        let result = self
+            .active
+            .prepare_holdback(profile.spec(), self.blender.join_frame_count());
+        if let StageResult::Invalid(failure) = result {
+            let error = self.reject_stage(failure);
+            self.stage_error = Some(error);
+        }
+    }
+
+    pub(crate) fn prepare_replacement_profile(&mut self, profile: BlenderProfile) {
+        self.blender.prepare_active(profile);
+    }
+
+    pub(crate) fn take_rejected_chunk(&mut self) -> Option<PcmChunk> {
+        self.rejected_chunk.take()
+    }
+
+    pub(crate) fn take_stage_error(&mut self) -> Option<DecodeError> {
+        self.stage_error.take()
+    }
+
+    fn reject_stage(&mut self, failure: StageFailure) -> DecodeError {
+        let StageFailure { chunk, error } = failure;
+        debug_assert!(self.rejected_chunk.is_none());
+        self.rejected_chunk = Some(chunk);
+        error
+    }
+
     pub(crate) fn replace_active(&mut self, active: DecoderGeneration) -> DecoderGeneration {
         self.blender.replace_active(active.blender_profile());
         mem::replace(&mut self.active, active)
     }
 
     pub(crate) fn reset(&mut self) {
+        self.stage_error = None;
+        self.blender.reset();
         reset_effects(&mut self.effects);
         self.drain.reset();
     }
@@ -314,9 +413,19 @@ fn panic_message(payload: Box<dyn Any + Send>) -> String {
 
 #[cfg(test)]
 mod tests {
-    use kithara_stream::{AudioCodec, ContainerFormat, ReaderInput};
+    use std::num::NonZeroU32;
+
+    use kithara_abr::{AbrMode, AbrReason, AbrState, VariantIndex};
+    use kithara_bufpool::PcmPool;
+    use kithara_decode::{BlenderProfile, DecoderSeekOutcome, PcmMeta, PcmSpec};
+    use kithara_platform::time::Duration;
+    use kithara_stream::{
+        AudioCodec, ContainerFormat, PendingReason, PrerollHint, ReaderInput, VariantTransition,
+        VariantTransitionId,
+    };
 
     use super::*;
+    use crate::pipeline::decode::transition::IncomingPrime;
 
     #[kithara::test]
     fn configured_container_selects_the_incoming_reader_profile() {
@@ -339,5 +448,535 @@ mod tests {
         let profile = factory.reader_profile(&playlist_info, None);
 
         assert_eq!(profile.input(), ReaderInput::InitOnly);
+    }
+
+    #[kithara::test]
+    fn steady_output_bypasses_transition_staging() {
+        let spec = PcmSpec::new(2, NonZeroU32::new(44_100).expect("test rate"));
+        let mut decode = ActiveDecode::new(generation(spec), GaplessMode::Disabled, Vec::new());
+        let initial_capacity = decode.active().staged_capacity();
+        let mut cursor = ResumeCursor::new(
+            Arc::new(AtomicU32::new(spec.sample_rate.get())),
+            false,
+            spec.sample_rate.get(),
+        );
+        decode
+            .push(PcmChunk::new(
+                PcmMeta {
+                    spec,
+                    frames: 64,
+                    ..Default::default()
+                },
+                PcmPool::default().attach(vec![0.25; 64 * usize::from(spec.channels)]),
+            ))
+            .expect("steady fixture PCM is valid");
+
+        assert_eq!(decode.active().staged_capacity(), initial_capacity);
+        assert!(decode.active().staged_span().is_none());
+        assert!(
+            decode
+                .next_output(&mut cursor, 0)
+                .expect("steady output remains valid")
+                .is_some()
+        );
+        assert_eq!(decode.active().staged_capacity(), initial_capacity);
+    }
+
+    #[kithara::test]
+    fn invalid_holdback_pcm_is_retained_for_shell_retirement() {
+        let spec = PcmSpec::new(2, NonZeroU32::new(44_100).expect("test rate"));
+        let active = generation(spec);
+        let incoming = generation(spec);
+        let abr = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0))));
+        abr.request_target(VariantIndex::new(1), AbrReason::ManualOverride);
+        let claim = abr
+            .claim_pending_decision(VariantIndex::new(0))
+            .expect("test transition claim");
+        let transition = VariantTransition::new(
+            VariantTransitionId::new(claim.ticket(), 0),
+            VariantIndex::new(0),
+            VariantIndex::new(1),
+        );
+        let mut decode = ActiveDecode::new(active, GaplessMode::Disabled, Vec::new());
+        decode.incoming = Some(IncomingDecode::Priming {
+            transition,
+            generation: incoming,
+            frontier: OutgoingFrontier::Awaiting,
+        });
+        decode.prepare_incoming_profile(BlenderProfile::new(spec));
+        let make_chunk = |offset| {
+            PcmChunk::new(
+                PcmMeta {
+                    spec,
+                    frame_offset: offset,
+                    frames: 4,
+                    ..Default::default()
+                },
+                PcmPool::default().attach(vec![0.25; 4 * usize::from(spec.channels)]),
+            )
+        };
+        decode
+            .push(make_chunk(0))
+            .expect("first holdback chunk is valid");
+
+        assert!(decode.push(make_chunk(5)).is_err());
+        let rejected = decode
+            .take_rejected_chunk()
+            .expect("invalid pooled PCM remains owned until the shell retires it");
+        assert_eq!(rejected.meta.frame_offset, 5);
+        assert_eq!(
+            decode.active().staged_span().map(|(_, end, _)| end),
+            Some(4)
+        );
+    }
+
+    #[kithara::test]
+    fn reset_clears_prepare_error_but_retains_rejected_pcm_for_shell_retirement() {
+        let spec = PcmSpec::new(2, NonZeroU32::new(44_100).expect("test rate"));
+        let mut active = generation(spec);
+        active.stage(PcmChunk::new(
+            PcmMeta {
+                spec,
+                frames: 4,
+                ..Default::default()
+            },
+            PcmPool::default().attach(vec![0.25; 4 * usize::from(spec.channels)]),
+        ));
+        let rejected = PcmChunk::new(
+            PcmMeta {
+                spec,
+                frame_offset: 5,
+                frames: 4,
+                ..Default::default()
+            },
+            PcmPool::default().attach(vec![0.5; 4 * usize::from(spec.channels)]),
+        );
+        let rejected_samples = rejected.samples.as_ptr();
+        active.stage(rejected);
+
+        let incoming = generation(spec);
+        let abr = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0))));
+        abr.request_target(VariantIndex::new(1), AbrReason::ManualOverride);
+        let claim = abr
+            .claim_pending_decision(VariantIndex::new(0))
+            .expect("test transition claim");
+        let transition = VariantTransition::new(
+            VariantTransitionId::new(claim.ticket(), 0),
+            VariantIndex::new(0),
+            VariantIndex::new(1),
+        );
+        let mut decode = ActiveDecode::new(active, GaplessMode::Disabled, Vec::new());
+        decode.incoming = Some(IncomingDecode::Priming {
+            transition,
+            generation: incoming,
+            frontier: OutgoingFrontier::Awaiting,
+        });
+
+        decode.prepare_incoming_profile(BlenderProfile::new(spec));
+        assert!(
+            decode.stage_error.is_some(),
+            "pre-existing discontinuous PCM must arm a prepare-time error"
+        );
+
+        decode.reset();
+
+        assert!(
+            decode.take_stage_error().is_none(),
+            "reset must not leak the invalidated transition error into the next lifecycle"
+        );
+        let rejected = decode
+            .take_rejected_chunk()
+            .expect("reset must retain rejected PCM for shell retirement");
+        assert_eq!(rejected.samples.as_ptr(), rejected_samples);
+        assert_eq!(rejected.meta.frame_offset, 5);
+        assert!(decode.take_rejected_chunk().is_none());
+    }
+
+    #[kithara::test]
+    fn unheld_output_drains_pcm_parked_for_a_priming_join() {
+        let spec = PcmSpec::new(2, NonZeroU32::new(44_100).expect("test rate"));
+        let active = generation(spec);
+        let incoming = generation(spec);
+        let abr = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0))));
+        abr.request_target(VariantIndex::new(1), AbrReason::ManualOverride);
+        let claim = abr
+            .claim_pending_decision(VariantIndex::new(0))
+            .expect("test transition claim");
+        let transition = VariantTransition::new(
+            VariantTransitionId::new(claim.ticket(), 0),
+            VariantIndex::new(0),
+            VariantIndex::new(1),
+        );
+        let mut decode = ActiveDecode::new(active, GaplessMode::Disabled, Vec::new());
+        decode.incoming = Some(IncomingDecode::Priming {
+            transition,
+            generation: incoming,
+            frontier: OutgoingFrontier::Awaiting,
+        });
+        decode.prepare_incoming_profile(BlenderProfile::new(spec));
+        let samples = vec![0.25; 128 * usize::from(spec.channels)];
+        decode
+            .push(PcmChunk::new(
+                PcmMeta {
+                    spec,
+                    frames: 128,
+                    ..Default::default()
+                },
+                PcmPool::default().attach(samples),
+            ))
+            .expect("valid fixture PCM enters prepared holdback");
+        let mut cursor = ResumeCursor::new(
+            Arc::new(AtomicU32::new(spec.sample_rate.get())),
+            false,
+            spec.sample_rate.get(),
+        );
+
+        assert!(
+            decode
+                .next_output(&mut cursor, 0)
+                .expect("held output remains valid")
+                .is_none()
+        );
+        let output = decode
+            .next_output_unheld(&mut cursor, 0)
+            .expect("unheld output remains valid")
+            .expect("EOF drain must release the held outgoing tail");
+        assert_eq!(output.meta.frames, 128);
+        assert!(
+            decode
+                .next_output_unheld(&mut cursor, 0)
+                .expect("drained output remains valid")
+                .is_none()
+        );
+    }
+
+    #[kithara::test]
+    fn holdback_coverage_is_measured_from_the_exact_promotion_cut() {
+        const CUT: u64 = 256;
+        const OUTGOING_FRAMES: u32 = 1_000;
+        const INCOMING_FRAMES: u32 = 1_500;
+
+        let spec = PcmSpec::new(2, NonZeroU32::new(44_100).expect("test rate"));
+        let abr = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0))));
+        abr.request_target(VariantIndex::new(1), AbrReason::ManualOverride);
+        let claim = abr
+            .claim_pending_decision(VariantIndex::new(0))
+            .expect("test transition claim");
+        let transition = VariantTransition::new(
+            VariantTransitionId::new(claim.ticket(), 0),
+            VariantIndex::new(0),
+            VariantIndex::new(1),
+        );
+        let mut incoming = generation(spec);
+        incoming.stage(PcmChunk::new(
+            PcmMeta {
+                spec,
+                frames: INCOMING_FRAMES,
+                ..Default::default()
+            },
+            PcmPool::default().attach(vec![
+                0.5;
+                usize::try_from(INCOMING_FRAMES)
+                    .expect("test frames fit usize")
+                    .saturating_mul(usize::from(spec.channels))
+            ]),
+        ));
+        let mut decode = ActiveDecode::new(generation(spec), GaplessMode::Disabled, Vec::new());
+        decode.incoming = Some(IncomingDecode::Priming {
+            transition,
+            generation: incoming,
+            frontier: OutgoingFrontier::Exact {
+                frame: CUT,
+                rate: spec.sample_rate.get(),
+            },
+        });
+        decode.prepare_incoming_profile(BlenderProfile::new(spec));
+        decode
+            .push(PcmChunk::new(
+                PcmMeta {
+                    spec,
+                    frames: OUTGOING_FRAMES,
+                    ..Default::default()
+                },
+                PcmPool::default().attach(vec![
+                    0.25;
+                    usize::try_from(OUTGOING_FRAMES)
+                        .expect("test frames fit usize")
+                        .saturating_mul(usize::from(spec.channels))
+                ]),
+            ))
+            .expect("valid outgoing PCM enters holdback");
+
+        assert!(decode.transition_holds_output());
+        assert!(
+            decode.outgoing_holdback_needs_pcm(),
+            "PCM that covers the join only from queue-front zero does not cover exact cut {CUT}"
+        );
+    }
+
+    #[kithara::test]
+    fn incoming_landed_ahead_retargets_to_the_observed_outgoing_frontier() {
+        const OLD_CUT: u64 = 256;
+        const LANDED: u64 = 512;
+        const FRAMES: u32 = 1_500;
+
+        let spec = PcmSpec::new(2, NonZeroU32::new(44_100).expect("test rate"));
+        let abr = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0))));
+        abr.request_target(VariantIndex::new(1), AbrReason::ManualOverride);
+        let claim = abr
+            .claim_pending_decision(VariantIndex::new(0))
+            .expect("test transition claim");
+        let transition = VariantTransition::new(
+            VariantTransitionId::new(claim.ticket(), 0),
+            VariantIndex::new(0),
+            VariantIndex::new(1),
+        );
+        let make_chunk = |offset| {
+            PcmChunk::new(
+                PcmMeta {
+                    spec,
+                    frame_offset: offset,
+                    frames: FRAMES,
+                    ..Default::default()
+                },
+                PcmPool::default().attach(vec![
+                    0.25;
+                    usize::try_from(FRAMES)
+                        .expect("test frames fit usize")
+                        .saturating_mul(usize::from(spec.channels))
+                ]),
+            )
+        };
+        let mut active = generation(spec);
+        active.stage(make_chunk(0));
+        let mut incoming = generation(spec);
+        incoming.stage(make_chunk(LANDED));
+        let mut decode = ActiveDecode::new(active, GaplessMode::Disabled, Vec::new());
+        decode.incoming = Some(IncomingDecode::Priming {
+            transition,
+            generation: incoming,
+            frontier: OutgoingFrontier::Exact {
+                frame: OLD_CUT,
+                rate: spec.sample_rate.get(),
+            },
+        });
+
+        let outcome = decode.prime_incoming(OutgoingFrontier::Exact {
+            frame: LANDED,
+            rate: spec.sample_rate.get(),
+        });
+
+        assert_eq!(outcome, IncomingPrime::Ready);
+        assert_eq!(
+            decode.incoming_frontier(),
+            Some(OutgoingFrontier::Exact {
+                frame: LANDED,
+                rate: spec.sample_rate.get(),
+            })
+        );
+    }
+
+    #[kithara::test]
+    fn incoming_variant_change_invalidates_the_stale_generation() {
+        let spec = PcmSpec::new(2, NonZeroU32::new(44_100).expect("test rate"));
+        let abr = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0))));
+        abr.request_target(VariantIndex::new(1), AbrReason::ManualOverride);
+        let claim = abr
+            .claim_pending_decision(VariantIndex::new(0))
+            .expect("test transition claim");
+        let transition = VariantTransition::new(
+            VariantTransitionId::new(claim.ticket(), 0),
+            VariantIndex::new(0),
+            VariantIndex::new(1),
+        );
+        let incoming = DecoderGeneration::new(
+            Box::new(TerminalDecoder::new(spec, TerminalOutcome::VariantChange)),
+            None,
+            0,
+            0,
+            None,
+            GaplessMode::Disabled,
+        );
+        let mut decode = ActiveDecode::new(generation(spec), GaplessMode::Disabled, Vec::new());
+        decode.incoming = Some(IncomingDecode::Priming {
+            transition,
+            generation: incoming,
+            frontier: OutgoingFrontier::Awaiting,
+        });
+
+        assert_eq!(
+            decode.prime_incoming(OutgoingFrontier::Awaiting),
+            IncomingPrime::Failed
+        );
+        assert!(matches!(
+            decode.incoming,
+            Some(IncomingDecode::Failed {
+                transition: failed,
+                ..
+            }) if failed == transition
+        ));
+    }
+
+    #[kithara::test]
+    fn active_join_drains_before_a_latched_follow_up_transition_holds_output() {
+        let spec = PcmSpec::new(2, NonZeroU32::new(44_100).expect("test rate"));
+        let incoming = generation(spec);
+        let abr = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0))));
+        abr.request_target(VariantIndex::new(1), AbrReason::ManualOverride);
+        let claim = abr
+            .claim_pending_decision(VariantIndex::new(0))
+            .expect("test transition claim");
+        let transition = VariantTransition::new(
+            VariantTransitionId::new(claim.ticket(), 0),
+            VariantIndex::new(0),
+            VariantIndex::new(1),
+        );
+        let mut decode = ActiveDecode::new(generation(spec), GaplessMode::Disabled, Vec::new());
+        let frames = u32::try_from(decode.blender.join_frame_count()).expect("test join fits u32");
+        let samples = usize::try_from(frames)
+            .expect("test join fits usize")
+            .saturating_mul(usize::from(spec.channels));
+        decode.active.stage(PcmChunk::new(
+            PcmMeta {
+                spec,
+                frames,
+                ..Default::default()
+            },
+            PcmPool::default().attach(vec![0.25; samples]),
+        ));
+        decode.blender.prepare_active(BlenderProfile::new(spec));
+        assert!(decode.blender.prepare_join(|outgoing| {
+            outgoing.fill(-0.25);
+            true
+        }));
+        decode.blender.commit_join();
+        decode.incoming = Some(IncomingDecode::Priming {
+            transition,
+            generation: incoming,
+            frontier: OutgoingFrontier::Exact {
+                frame: 0,
+                rate: spec.sample_rate.get(),
+            },
+        });
+        let mut cursor = ResumeCursor::new(
+            Arc::new(AtomicU32::new(spec.sample_rate.get())),
+            false,
+            spec.sample_rate.get(),
+        );
+
+        assert!(
+            !decode.transition_holds_output(),
+            "the follow-up transition must not freeze an active join"
+        );
+        let output = decode
+            .next_output(&mut cursor, 0)
+            .expect("active join remains decodable");
+
+        assert!(output.is_some(), "the prior join must keep consuming PCM");
+        assert!(decode.blender.is_steady(), "the prior join must finish");
+    }
+
+    #[kithara::test]
+    fn latched_incoming_preparation_keeps_outgoing_pcm_running() {
+        let spec = PcmSpec::new(2, NonZeroU32::new(44_100).expect("test rate"));
+        let abr = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0))));
+        abr.request_target(VariantIndex::new(1), AbrReason::ManualOverride);
+        let claim = abr
+            .claim_pending_decision(VariantIndex::new(0))
+            .expect("test transition claim");
+        let transition = VariantTransition::new(
+            VariantTransitionId::new(claim.ticket(), 0),
+            VariantIndex::new(0),
+            VariantIndex::new(1),
+        );
+        let mut decode = ActiveDecode::new(generation(spec), GaplessMode::Disabled, Vec::new());
+        decode.active.stage(PcmChunk::new(
+            PcmMeta {
+                spec,
+                frames: 64,
+                ..Default::default()
+            },
+            PcmPool::default().attach(vec![0.25; 64 * usize::from(spec.channels)]),
+        ));
+        decode.incoming = Some(IncomingDecode::Preparing {
+            transition,
+            frontier: OutgoingFrontier::Exact {
+                frame: 0,
+                rate: spec.sample_rate.get(),
+            },
+        });
+        let mut cursor = ResumeCursor::new(
+            Arc::new(AtomicU32::new(spec.sample_rate.get())),
+            false,
+            spec.sample_rate.get(),
+        );
+
+        assert!(!decode.transition_holds_output());
+        let output = decode
+            .next_output(&mut cursor, 0)
+            .expect("preparing transition keeps active output valid");
+
+        assert!(
+            output.is_some(),
+            "preparing an incoming reader must not stall playback"
+        );
+    }
+
+    #[derive(Clone, Copy)]
+    enum TerminalOutcome {
+        Eof,
+        VariantChange,
+    }
+
+    struct TerminalDecoder {
+        outcome: TerminalOutcome,
+        spec: PcmSpec,
+    }
+
+    impl TerminalDecoder {
+        const fn new(spec: PcmSpec, outcome: TerminalOutcome) -> Self {
+            Self { outcome, spec }
+        }
+    }
+
+    impl Decoder for TerminalDecoder {
+        fn duration(&self) -> Option<Duration> {
+            None
+        }
+
+        fn next_chunk(&mut self) -> DecodeResult<DecoderChunkOutcome> {
+            Ok(match self.outcome {
+                TerminalOutcome::Eof => DecoderChunkOutcome::Eof,
+                TerminalOutcome::VariantChange => {
+                    DecoderChunkOutcome::Pending(PendingReason::VariantChange)
+                }
+            })
+        }
+
+        fn seek(&mut self, position: Duration) -> DecodeResult<DecoderSeekOutcome> {
+            Ok(DecoderSeekOutcome::Landed {
+                landed_at: position,
+                landed_frame: 0,
+                landed_byte: None,
+                preroll: PrerollHint::NotNeeded,
+            })
+        }
+
+        fn spec(&self) -> PcmSpec {
+            self.spec
+        }
+
+        fn update_byte_len(&self, _len: u64) {}
+    }
+
+    fn generation(spec: PcmSpec) -> DecoderGeneration {
+        DecoderGeneration::new(
+            Box::new(TerminalDecoder::new(spec, TerminalOutcome::Eof)),
+            None,
+            0,
+            0,
+            None,
+            GaplessMode::Disabled,
+        )
     }
 }

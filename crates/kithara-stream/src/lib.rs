@@ -45,5 +45,7 @@ pub use stream::{
     Stream, StreamPending, StreamReadError, StreamReadOutcome, StreamSeekPastEof, StreamType,
     VariantChangeError,
 };
-pub use transition::{VariantPromotion, VariantTransition, VariantTransitionId};
+pub use transition::{
+    OutgoingDisposition, VariantPromotion, VariantTransition, VariantTransitionId,
+};
 pub use wake::{DeferredWake, WorkerWake};

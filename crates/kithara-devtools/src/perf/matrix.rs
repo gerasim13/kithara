@@ -9,10 +9,8 @@ use anyhow::{Context, Result, bail};
 
 use crate::{
     common::project::{PerfConfig, ProjectConfig},
-    perf::{
-        junit::parse_junit,
-        lanes::{Lane, RepeatMeta, RunPaths, sanitize},
-    },
+    junit::parse_junit,
+    perf::lanes::{Lane, RepeatMeta, RunPaths, sanitize},
     test::{LaneToggles, nextest_lane_command},
 };
 

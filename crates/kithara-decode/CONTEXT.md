@@ -129,19 +129,26 @@ half-read packet is discarded but MSS's position stays advanced — those bytes 
 from stream position) then silently skip them.
 
 MSS exposes no per-call rewind through `FormatReader`, so `SymphoniaDemuxer` makes
-the **decoder's timestamp authoritative across a `Pending`**: it tracks
-`resume_ts` (native timebase units — `actual_ts` on seek, `pts + dur` after each
-emitted packet) and stores the pending reason on any interrupted read; the next
-`next_frame` re-seeks to `resume_ts` first so the interrupted packet is re-read
-from its start. The pending reason stays armed when that recovery seek also
-pends; clearing it before a successful seek turns ordinary segment fetch latency
-into a terminal decode error. Symphonia's accurate seek may land one packet
-before the requested timestamp, so recovery discards packets ending at or before
-`resume_ts`; otherwise that packet is decoded twice while the PCM cursor advances
-once. The re-seek is a bare position restore — no pre-roll back-off, no codec
-flush (that is the user-seek path). `resume_ts` stays native: a `Duration`
-round-trip loses sub-frame precision and can move the recovery boundary by
-another packet. The strand never reaches the `Stream` / `wait_range` contract.
+the **decoder's timestamp authoritative across a `Pending`** for non-transactional
+readers: it tracks `resume_ts` (native timebase units — `actual_ts` on seek,
+`pts + dur` after each emitted packet) and stores the pending reason on an
+interrupted read. The next `next_frame` re-seeks to `resume_ts`; if recovery also
+pends, the reason remains armed. An accurate seek may land one packet early, so
+recovery discards packets ending at or before `resume_ts`. The re-seek is a bare
+position restore — no pre-roll back-off and no codec flush — while a native
+`Duration` round-trip is avoided because it loses packet-boundary precision.
+
+Native MPEG-audio readers (`FORMAT_ID_MP1`, `FORMAT_ID_MP2`, `FORMAT_ID_MP3`)
+instead own a byte-exact packet transaction. Each frame read checkpoints the MSS
+cursor, retains `MAX_MPEG_FRAME_SIZE` bytes for seekback, and on `Interrupted` or
+`WouldBlock` returns the original error only after an exact buffered rollback.
+An inexact rollback is a terminal decode error. The checkpoint is per frame, so
+discarded Xing/Info/VBRI frames commit independently, and `next_packet_ts`
+advances only after a complete frame. `SymphoniaDemuxer` detects those native
+formats and does not layer timestamp recovery over their rollback. Pending from
+inside `MpaReader::seek` is not made resumable by this packet-read contract; seek
+transactionality remains a separate concern. The strand never reaches the
+`Stream` / `wait_range` contract.
 
 ## Gapless playback
 
