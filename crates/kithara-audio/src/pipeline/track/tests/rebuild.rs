@@ -181,6 +181,7 @@ struct RouteSignalDecoder {
     sample_rate: u32,
     id: u64,
     next_frame: u64,
+    timeline_gap: u64,
 }
 
 impl RouteSignalDecoder {
@@ -190,7 +191,13 @@ impl RouteSignalDecoder {
             id,
             sample_rate,
             next_frame: 0,
+            timeline_gap: 0,
         }
+    }
+
+    fn with_timeline_gap(mut self, timeline_gap: u64) -> Self {
+        self.timeline_gap = timeline_gap;
+        self
     }
 
     fn pcm_spec(&self) -> PcmSpec {
@@ -262,6 +269,10 @@ impl Decoder for RouteSignalDecoder {
 
     fn spec(&self) -> PcmSpec {
         self.pcm_spec()
+    }
+
+    fn timeline_gap_frames(&self) -> u64 {
+        self.timeline_gap
     }
 
     fn update_byte_len(&self, _len: u64) {}
@@ -680,6 +691,33 @@ async fn test_source(variant: u32) -> RebuildFixture {
     test_source_with_mode(variant, GaplessMode::Disabled).await
 }
 
+#[kithara::test(native, tokio)]
+async fn decoder_readers_have_isolated_construction_gates() {
+    let control = Arc::new(TestControl::new(media_info(0)));
+    let stream = match Stream::<TestStream>::new(TestConfig {
+        source: TestSource::new(control),
+    })
+    .await
+    {
+        Ok(stream) => stream,
+        Err(error) => panic!("test stream construction failed: {error}"),
+    };
+    let shared_stream = SharedStream::new(stream);
+    let initial = shared_stream.open_initial_reader();
+    let rebuild = shared_stream.open_rebuild_reader(0);
+    let Some(initial_gate) = initial.construction_gate() else {
+        panic!("initial reader must carry a construction gate");
+    };
+    let Some(rebuild_gate) = rebuild.construction_gate() else {
+        panic!("rebuild reader must carry a construction gate");
+    };
+
+    initial_gate.arm();
+
+    assert!(initial_gate.is_armed());
+    assert!(!rebuild_gate.is_armed());
+}
+
 async fn test_source_with_mode(variant: u32, gapless_mode: GaplessMode) -> RebuildFixture {
     let control = Arc::new(TestControl::new(media_info(variant)));
     let drops = Arc::new(Mutex::new(Vec::new()));
@@ -735,13 +773,30 @@ async fn test_source_with_mode(variant: u32, gapless_mode: GaplessMode) -> Rebui
 /// source has neither, so no recreate origin other than `base_offset` is
 /// even reachable on it.
 pub(super) struct RouteParams {
+    pub(super) active_timeline_gap: u64,
+    pub(super) incoming_timeline_gap: u64,
     pub(super) segmented: bool,
     pub(super) initial_host_rate: u32,
 }
 
 pub(super) async fn route_signal_source(initial_host_rate: u32) -> RouteFixture {
     route_source(RouteParams {
+        active_timeline_gap: 0,
+        incoming_timeline_gap: 0,
         initial_host_rate,
+        segmented: false,
+    })
+    .await
+}
+
+pub(super) async fn route_signal_source_with_gaps(
+    active_timeline_gap: u64,
+    incoming_timeline_gap: u64,
+) -> RouteFixture {
+    route_source(RouteParams {
+        active_timeline_gap,
+        incoming_timeline_gap,
+        initial_host_rate: Consts::SAMPLE_RATE,
         segmented: false,
     })
     .await
@@ -775,6 +830,7 @@ pub(super) async fn route_source_with_effects(
     let container_byte_len = shared_stream.len();
     let factory_drops = drops.clone();
     let factory_host_rate = host_sample_rate.clone();
+    let incoming_timeline_gap = params.incoming_timeline_gap;
     let decoder_factory = DecoderFactory::new(
         move |reader, _info| {
             if segmented && reader.byte_len() != container_byte_len {
@@ -783,11 +839,10 @@ pub(super) async fn route_source_with_effects(
                 });
             }
             let rate = factory_host_rate.load(Ordering::Acquire);
-            Ok(Box::new(RouteSignalDecoder::new(
-                99,
-                rate,
-                factory_drops.clone(),
-            )))
+            Ok(Box::new(
+                RouteSignalDecoder::new(99, rate, factory_drops.clone())
+                    .with_timeline_gap(incoming_timeline_gap),
+            ))
         },
         None,
     );
@@ -797,11 +852,10 @@ pub(super) async fn route_source_with_effects(
     };
     let decode = DecodeInit {
         decoder_factory,
-        decoder: Box::new(RouteSignalDecoder::new(
-            1,
-            Consts::SAMPLE_RATE,
-            drops.clone(),
-        )),
+        decoder: Box::new(
+            RouteSignalDecoder::new(1, Consts::SAMPLE_RATE, drops.clone())
+                .with_timeline_gap(params.active_timeline_gap),
+        ),
         decoder_backend: kithara_decode::DecoderBackend::default(),
         gapless_mode: GaplessMode::Disabled,
         host_sample_rate: host_sample_rate.clone(),
@@ -1168,6 +1222,8 @@ async fn route_change_recreate_roots_the_demuxer_at_the_container_origin() {
         mut source,
         ..
     } = route_source(RouteParams {
+        active_timeline_gap: 0,
+        incoming_timeline_gap: 0,
         initial_host_rate: Consts::SAMPLE_RATE,
         segmented: true,
     })

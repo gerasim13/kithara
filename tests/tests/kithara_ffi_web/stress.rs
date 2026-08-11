@@ -271,8 +271,6 @@ async fn read_with_yield_limit(
     buf: &mut [f32],
     max_yields: usize,
 ) -> Option<usize> {
-    const YIELD_MS: u32 = 10;
-
     for _ in 0..max_yields {
         match audio.read(buf) {
             Ok(ReadOutcome::Frames { count, .. }) => return Some(count.get()),
@@ -283,7 +281,10 @@ async fn read_with_yield_limit(
                 return None;
             }
         }
-        TimeoutFuture::new(YIELD_MS).await;
+        // A positive timer turn lets fetch and worker queues make progress.
+        // The wait happens only after an observed Pending; 1 ms keeps the
+        // 500/1000-seek stress cases inside their unchanged deadline.
+        TimeoutFuture::new(1).await;
     }
     Some(0)
 }

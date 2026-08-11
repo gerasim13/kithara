@@ -22,10 +22,13 @@ Transport (`runtime/ports.rs`): SPSC `ringbuf::HeapRb` plus a one-slot overflow
   infallible. Each tick starts with `Outlet::flush()`; if still full the node
   returns `TickResult::Backpressured` *without* ticking the FSM — every internal
   transition, seeks included, pauses until the consumer drains.
-- **Wake.** A ring push wakes the consumer; empty→non-empty also fires
-  `on_data_available`. The blocking consumer snapshots `ThreadWake` before
-  re-checking `try_pop`; a signal between the snapshot and park advances the
-  gate sequence, so `wait_timeout` returns immediately while retaining its timed
+- **Wake.** A ring push arms the consumer wake inside the checked produce core;
+  the scheduler shell delivers the `ThreadWake` after the node visit and before
+  reporting or removing the slot, keeping the syscall off the realtime path.
+  Empty-to-non-empty also fires `on_data_available`.
+  The blocking consumer snapshots `ThreadWake` before re-checking `try_pop`; a
+  signal between the snapshot and park advances the gate sequence, so
+  `wait_timeout` returns immediately while retaining its timed
   backstop.
 - **Trash ring.** The RT consumer must never `free`, so spent pooled `PcmChunk`s
   go to a second ring drained by `DecoderNode::recycle` on the worker. Capacity
@@ -276,9 +279,12 @@ and terminal phases abort the transition.
   priming can never fix; the transition waits for the outgoing instead.
 - **Promotion** trims the staged head to the cut frame, requires remaining
   output, tells the source (`VariantControl::promote_variant`), swaps the
-  generation, and joins the blender. `VariantPromotion::Deferred` stops the pass,
-  `Stale` discards the local incoming, and every displaced or aborted generation
-  goes to `Retired` — never dropped on the produce core.
+  generation, and joins the blender. Equal default codec profiles carry the
+  larger observed timeline gap into the promoted generation; this is the same
+  normalization used by the overlap proof, and retaining it prevents a later
+  switch from moving the active timeline origin backward. `VariantPromotion::Deferred`
+  stops the pass, `Stale` discards the local incoming, and every displaced or
+  aborted generation goes to `Retired` — never dropped on the produce core.
 
 **`PcmBlender`** is always on and owns the audible seam. `join_active` starts a
 `Pending` join when the two generations share a `PcmSpec` and ≥3 frames of
@@ -293,17 +299,18 @@ is an exact `f32::from`.
 `Audio::new` builds the initial decoder **exactly once**
 (`create_initial_decoder`, one `spawn_blocking`), with no retry loop and no
 readiness gate. The construction read goes through the **blocking** off-RT
-`Stream::read` adapter: `SharedStream` carries a `ConstructionGate`
-(`set_blocking`) that `Audio::new` arms before the build and disarms before the
-RT worker is registered. `RebuildPort` uses the same gate, carried by
-`OpenedReader`, around each off-RT factory call — armed before, disarmed after a
-normal return *or* a caught panic. Steady-state reads use non-blocking
-`Stream::probe_read`; on-core seeks use `probe_seek` (position math only, no
-`prime_seek_range` spin on the forbid path). Blocking makes a slow-but-arriving
-prefix wait, off the RT worker, up to the stream's blocking-read budget rather
-than error on the first not-ready probe. A construction-range byte that never
-arrives surfaces the **stream layer's** typed terminal verbatim; the audio layer
-mints no construction error type and there is no synthetic `TimedOut`.
+`Stream::read` adapter: every `OpenedReader` carries its own `ConstructionGate`,
+shared only with that reader's `SharedStream` clone. The initial builder and
+`RebuildPort` arm their reader-local gate around each off-RT factory call and
+disarm it after a normal return, join error, or caught panic. A rebuild therefore
+cannot switch an active decoder reader into blocking mode. Steady-state reads
+use non-blocking `Stream::probe_read`; on-core seeks use `probe_seek` (position
+math only, no `prime_seek_range` spin on the forbid path). Blocking makes a
+slow-but-arriving prefix wait, off the RT worker, up to the stream's blocking-read
+budget rather than error on the first not-ready probe. A construction-range byte
+that never arrives surfaces the **stream layer's** typed terminal verbatim; the
+audio layer mints no construction error type and there is no synthetic
+`TimedOut`.
 
 A `VariantChange`/`SeekPending` at construction is **not** a rebuild trigger: the
 variant is settled before the build, construction always probes at offset 0, and

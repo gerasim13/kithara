@@ -1,59 +1,87 @@
 use std::sync::OnceLock;
 
 use ffmpeg::{
-    ChannelLayout, Error as FfmpegError, Rational,
+    ChannelLayout, Error as FfmpegError, Packet, Rational,
     codec::{capabilities::Capabilities, encoder::Audio as AudioEncoder},
+    error::EAGAIN,
     filter::{self, Graph as FilterGraph},
     format as av_format,
+    rescale::Rescale,
 };
 use ffmpeg_next as ffmpeg;
-use kithara_stream::AudioCodec;
 
-use super::{aac::AacFFmpegEncoder, flac::FlacFFmpegEncoder};
-use crate::{
-    BytesEncodeRequest, EncodeError, EncodeResult, EncodedBytes, EncodedTrack, InnerEncoder,
-    PackagedEncodeRequest,
-    fdk::aac_he::{AacHeEncoder, AacHeProfile},
-};
+use crate::{EncodeError, types::EncodedAccessUnit};
 
-/// Source/target time bases for rescaling encoded packets, shared by the
-/// AAC and FLAC `collect_encoded_packets` helpers.
 #[derive(Clone, Copy)]
 pub(crate) struct RebaseRates {
     pub(crate) encoder: Rational,
     pub(crate) target: Rational,
 }
 
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct FfmpegEncoder;
+#[derive(Clone, Copy)]
+pub(crate) enum PacketCodec {
+    Aac,
+    Flac,
+}
 
-impl InnerEncoder for FfmpegEncoder {
-    fn encode_bytes(&self, request: BytesEncodeRequest<'_>) -> EncodeResult<EncodedBytes> {
-        super::bytes::encode_bytes_audio(&request)
-    }
-
-    fn encode_packaged(&self, request: PackagedEncodeRequest<'_>) -> EncodeResult<EncodedTrack> {
-        let codec = request
-            .media_info
-            .codec
-            .ok_or(EncodeError::InvalidMediaInfo("codec"))?;
-        match codec {
-            AudioCodec::AacLc => AacFFmpegEncoder::encode(&request),
-            AudioCodec::AacHe => AacHeEncoder::encode(&request, AacHeProfile::V1),
-            AudioCodec::AacHeV2 => AacHeEncoder::encode(&request, AacHeProfile::V2),
-            AudioCodec::Flac => FlacFFmpegEncoder::encode(&request),
-            codec => Err(EncodeError::UnsupportedCodec(codec)),
+pub(crate) fn collect_encoded_packets(
+    encoder: &mut AudioEncoder,
+    rates: RebaseRates,
+    timestamp_origin: &mut Option<i64>,
+    units: &mut Vec<EncodedAccessUnit>,
+    codec: PacketCodec,
+) -> Result<(), FfmpegError> {
+    let mut encoded = Packet::empty();
+    loop {
+        match encoder.receive_packet(&mut encoded) {
+            Ok(()) => {}
+            Err(FfmpegError::Eof | FfmpegError::Other { errno: EAGAIN }) => return Ok(()),
+            Err(error) => return Err(error),
         }
-    }
-
-    fn packaged_frame_samples(&self, codec: AudioCodec) -> EncodeResult<usize> {
-        match codec {
-            AudioCodec::AacLc => Ok(AacFFmpegEncoder::frame_samples()),
-            AudioCodec::AacHe | AudioCodec::AacHeV2 => Ok(AacHeEncoder::frame_samples()),
-            AudioCodec::Flac => Ok(FlacFFmpegEncoder::frame_samples()),
-            codec => Err(EncodeError::UnsupportedCodec(codec)),
+        if encoded.size() == 0 {
+            continue;
         }
+
+        let raw_pts = encoded.pts().unwrap_or_default();
+        let raw_dts = encoded.dts().unwrap_or_default();
+        let origin = *timestamp_origin.get_or_insert(raw_pts.min(raw_dts));
+        let start = raw_pts.saturating_sub(origin).max(0);
+        let end = start.saturating_add(encoded.duration().max(0));
+        let pts = rescale_timestamp(start, rates);
+
+        units.push(EncodedAccessUnit {
+            bytes: encoded.data().unwrap_or(&[]).to_vec(),
+            pts,
+            dts: rescale_timestamp(raw_dts.saturating_sub(origin).max(0), rates),
+            duration: packet_duration(end, pts, rates, codec),
+            is_sync: encoded.is_key(),
+        });
     }
+}
+
+fn packet_duration(end: i64, pts: u64, rates: RebaseRates, codec: PacketCodec) -> u32 {
+    let duration = rescale_timestamp(end, rates).saturating_sub(pts);
+    u32::try_from(duration).unwrap_or_else(|_| {
+        match codec {
+            PacketCodec::Aac => tracing::error!(
+                packet_duration = duration,
+                "BUG: AAC packet duration exceeds u32::MAX in the target time base"
+            ),
+            PacketCodec::Flac => tracing::error!(
+                packet_duration = duration,
+                "BUG: FLAC packet duration exceeds u32::MAX in the target time base"
+            ),
+        }
+        0
+    })
+}
+
+fn rescale_timestamp(value: i64, rates: RebaseRates) -> u64 {
+    let rescaled = value.rescale(rates.encoder, rates.target).max(0);
+    u64::try_from(rescaled).unwrap_or_else(|_| {
+        tracing::error!(rescaled, "BUG: rescaled timestamp exceeds u64::MAX");
+        0
+    })
 }
 
 pub(crate) fn ensure_ffmpeg_initialized() -> Result<(), EncodeError> {
@@ -69,6 +97,7 @@ pub(crate) fn build_direct_filter(
     encoder: &AudioEncoder,
     sample_rate: u32,
     channels: u16,
+    input_format: av_format::Sample,
 ) -> Result<FilterGraph, FfmpegError> {
     let mut graph = FilterGraph::new();
     let input_channel_layout = ChannelLayout::default(i32::from(channels));
@@ -76,7 +105,7 @@ pub(crate) fn build_direct_filter(
         "time_base=1/{}:sample_rate={}:sample_fmt={}:channel_layout=0x{:x}",
         sample_rate,
         sample_rate,
-        av_format::Sample::I16(av_format::sample::Type::Packed).name(),
+        input_format.name(),
         input_channel_layout.bits()
     );
 

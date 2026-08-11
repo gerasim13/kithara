@@ -175,9 +175,10 @@ are forbidden and enforced by `just lint arch`; kithara-play is not on that allo
 
 ## Real-Time Audio Thread
 
-Three Firewheel processors run on the audio thread and carry
+Four Firewheel processors run on the audio thread and carry
 `#[kithara::rtsan_forbid_blocking]`: `PlayerNodeProcessor::process` (`rt/processor.rs`),
-`MasterEqProcessor::process` (`rt/eq.rs`), `LimiterProcessor::process` (`rt/limiter.rs`). They stay
+`MasterEqProcessor::process` (`rt/eq.rs`), `LimiterProcessor::process` (`rt/limiter.rs`), and
+`TapProcessor::process` (`rt/tap.rs`, present while a mix tap is enabled). They stay
 allocation-, free-, and lock-free: render scratch is sized in `new_stream`
 (`RenderPass::resize`), which Firewheel calls on the main thread, and finished or evicted tracks go
 to the bounded trash ring from `bridge::slot_channels` instead of being freed on the audio thread -
@@ -194,7 +195,7 @@ adopts the transport state rather than fading into it.
 
 `TrackFade::play` snaps only when its mix has settled, so a fade still in flight keeps its ramp.
 
-One block is the whole budget, shared by all three processors.
+One block is the whole budget, shared by every processor in the graph.
 `tests/benches/rt_block_budget.rs` derives it from the host's block and rate, and measures the share
 `PlayerNodeProcessor` takes.
 
@@ -338,6 +339,48 @@ quantum = one bar) and the FFI `AudioPlayer::start_at_beat`, which takes the hos
 host's markers in Kithara's coordinates so nothing is re-derived on the way in. The FFI method is
 native-only: the wasm inner proxies every call through a worker command protocol that has no arm for
 it.
+
+## Session Mix Tap
+
+`Cmd::QuerySampleRate` reports `Option<u32>` from Firewheel's current `stream_info`: `None` means
+the session has not measured an output yet. `sample_rate_hint` remains input to stream creation and
+restart, never an observed-rate reply. Consumers that require the device fact wait for `Some`;
+playback policy may explicitly choose its configured rate while no stream exists.
+
+`Cmd::EnableMixTap` hangs `rt/tap.rs`'s `TapNode` off the session limiter beside `graph_out`:
+stereo in, zero outputs, `ProcessStatus::ClearAllOutputs`. Firewheel's compiler sorts every node
+topologically and keeps a sink with no outgoing edges in the schedule, so the extra
+`limiter -> tap` edge is an addition to the terminal chain: the tap reads the limiter's output
+buffer that `graph_out` interleaves into the device, and writes nothing anywhere.
+
+The processor owns the `MixTapWriter` (`bridge/channels.rs`): a `ringbuf::HeapProd<f32>` carrying
+the mix as interleaved stereo (LRLR) and an `Arc<AtomicU64>` drop counter. The ring's capacity is
+the caller's to choose, and the node keeps it as handed over. Pushes are frame-aligned, because a
+half frame lost to a full ring would swap L and R for the rest of the feed; an even capacity
+therefore accounts for every sample. **The counter is in samples** - frames x 2 - monotonic and
+`Relaxed`, which orders it against nothing in the ring: a delta locates its gap no more precisely
+than the window drained around it, and that is the resolution a consumer may claim.
+
+`SessionState.mix_tap` is the one owner of both states a tap has: `Requested` while it waits for a
+session output to hang off - enabling before the first `start_player` is allowed, and
+`create_session_output` installs it - and `Installed` once it carries a `NodeID`. A second
+`EnableMixTap` while either state holds fails with `SessionError::MixTapActive`, so the live
+consumer keeps its feed.
+
+`DisableMixTap` and idle teardown release the producer, which the consumer observes as
+`Observer::write_is_held() == false` and reads as end of feed. Removed nodes ride the returned
+schedule back to the control thread, so the writer is freed there rather than on the audio thread.
+
+A stream restart keeps the tap running: Firewheel constructs a processor once per node, so
+`stop_stream` / `start_stream` reuse the one holding the writer. **A restart that lands on a
+different device rate ends the feed instead**, because the ring carries bare samples and a consumer
+holding it would read the new rate as the old one. `new_stream` compares rates and releases the
+producer on the control thread; `state.mix_tap` still reads `Installed`, so the consumer's path
+back on air is `DisableMixTap` and a fresh `EnableMixTap`.
+
+The consumer owns the end of the tap's life: dropping its ring half leaves the node feeding a ring
+nobody reads, and the node cannot resign on its own (releasing the producer there would free memory
+on the audio thread). A consumer that stops reading sends `DisableMixTap`.
 
 ## Route Changes
 

@@ -1,0 +1,95 @@
+# kithara-broadcast — Context
+
+Contracts and invariants for the kithara-broadcast crate; the README is the overview.
+
+The crate turns `kithara-encode` access units into HLS media segments and serves them: a packaging core with no clock of its own, and a service that drives it from a PCM feed and publishes it over HTTP.
+
+The encoder it opens is `kithara-encode`'s fdk-aac AAC-LC backend, asked for by name. That backend builds from vendored sources into the binary, so a broadcast needs no FFmpeg on the machine it runs on and none in a shipped application. libfdk's vendored `FDK_archdef.h` has no branch for MSVC on ARM64, so a broadcast cannot be built for `aarch64-pc-windows-msvc`.
+
+## Configuration
+
+`BroadcastConfig` is the single knob surface. `Segmenter`, `LiveWindow`, and `Broadcast::start` all take it, so the sample rate is the media timescale everywhere and no caller can pair a segmenter with a window that disagrees about time.
+
+`validate` rejects zero audio, a zero window, a segment target shorter than one media tick, and — per RFC 8216 §6.2.2 — a window that spans fewer than three target durations. A short window is a typed `PlaylistTooShort`, never a silent adjustment.
+
+That check covers segments the segmenter cut at the target. A window made of segments an intake gap cut short can still span less than three target durations, because the announced `EXT-X-TARGETDURATION` stays what a client was first told: a constant target duration is the rule a reloading client depends on, and the span recovers as full segments slide in.
+
+## ADTS framing
+
+Every access unit gets a 7-byte ADTS header (no CRC): MPEG-4, layer 0, `protection_absent`, AAC-LC profile, `buffer_fullness = 0x7FF` (VBR), one raw data block. Each frame is a sync point, so segments are byte-concatenatable and a client joining at any segment decodes it standalone.
+
+The header's `sampling_frequency_index` and `channel_configuration` fields are fixed at construction, so audio ADTS cannot describe is rejected there: a sample rate outside the 13-entry table (96000 … 7350 Hz) errors, and so does a channel count outside 1..=6 — `channel_configuration` counts channels only up to 6, and its remaining value stands for 7.1, which is a layout rather than a count.
+
+`kithara-decode` builds the same header shape for its fdk-aac transport (`symphonia/aac_fdk.rs`). The two stay separate: neither crate depends on the other, and a shared owner for seven bytes would couple the decode path to the broadcast path.
+
+## Packed-audio timestamp
+
+RFC 8216 §3.4 requires every packed-audio segment to open with an ID3v2 tag whose single PRIV frame is owned by `com.apple.streaming.transportStreamTimestamp` and whose 8-octet big-endian body is the first sample's MPEG-2 timestamp. `TimestampTag` renders that fixed-size tag and `Segmenter` prepends it when it closes a segment, from the stream time the segment started at.
+
+`TimestampTag::mpeg_timestamp` is the only place the media timescale and the 90 kHz MPEG-2 domain meet: it rounds to the nearest 90 kHz tick and wraps at 33 bits. Everything else in the crate counts in the configured sample rate.
+
+The stream clock counts encoded audio only. `mark_drop` closes a segment and marks the next one discontinuous; it does not synthesise a gap in the timestamps, because `EXT-X-DISCONTINUITY` is what tells a client the timeline broke. The encoder runs across the gap and holds its own delay — two access units of priming — when the cut lands, so the discontinuous segment opens with the last of what came ahead of the gap. A gap the last poll of a broadcast reports leaves the whole of that delay there, since `finish` drains it into the discontinuous tail segment.
+
+symphonia's ADTS reader resyncs to the next sync word on every frame, so the prefix costs the in-tree decode path nothing.
+
+## Segment rotation
+
+`Segmenter` runs on the media clock: it sums the `duration` of the access units it framed, in the timescale those durations are expressed in. `kithara-encode` guarantees the durations tile the pts timeline, so the sum is the segment's exact media length.
+
+Rotation is append-then-check: the access unit whose duration carries the accumulated total to the target belongs to the segment it closes. A segment therefore runs slightly past the target rather than short of it, and segment durations sum to the pushed audio exactly.
+
+Sequence numbers count emitted segments from zero. An empty buffer emits nothing, so a close with no framed audio consumes no sequence number.
+
+`mark_drop` is the intake-gap signal: it closes the open segment and marks the next one `EXT-X-DISCONTINUITY`. On an empty buffer it emits nothing and still marks; repeating it is idempotent. `flush` closes the open segment as-is and is how the stream's tail is emitted.
+
+`Segment` is `#[non_exhaustive]` and only `Segmenter` constructs one, so `mark_drop` is the sole path to a discontinuous segment.
+
+## Playlist window
+
+`LiveWindow` is the only mutator of window state. It keeps `window + grace` segments and lists the last `window` of them, so a segment evicted from the playlist stays fetchable for `grace` further segments and then leaves the retention. Cleanup follows the window; clients hold no state here.
+
+`snapshot` returns a value: the playlist text, the retained segments, and whether the stream ended. Both payloads sit behind an `Arc`, so a snapshot is cheap to clone and hand to concurrent readers. `finished` is the authority on end-of-stream; `EXT-X-ENDLIST` is how the playlist renders it, and a reader answers the question from the flag.
+
+The rendered playlist is version 3. `EXT-X-TARGETDURATION` is the configured segment target rounded up to whole seconds and nothing else: a client is told one value for the life of the stream, whatever the window holds. Rotation overshoots the target by at most one access unit, so every `EXTINF` still rounds to within that value, as RFC 8216 §4.3.3.1 requires. `EXT-X-MEDIA-SEQUENCE` is the first listed segment's sequence number and `EXT-X-DISCONTINUITY-SEQUENCE` follows it on every playlist, counting the discontinuous segments that have left the listed window; a client reloading after the window slid past a discontinuity can place it. Each segment carries `EXTINF` with three decimals and the URI `seg/<seq>.aac`, and a discontinuous segment is preceded by `EXT-X-DISCONTINUITY`. `finish` appends `EXT-X-ENDLIST`, which turns the tail into a valid VOD playlist; the owner stops pushing at that point.
+
+## Service lifecycle
+
+`Broadcast::start` binds the origin before it returns, so the URL on the handle is one a client can already reach. Two threads run behind it: a worker that polls the feed and packages it, and a thread with a current-thread runtime that serves axum.
+
+The serving thread is a plain OS thread. `kithara-platform`'s spawns enrol a thread as a dedicated virtual-time pacer, and a pacer holds the quiescence engine until it parks on a wait the engine wrapped; a thread that hosts a tokio runtime parks in the OS event loop instead, so enrolling it freezes the virtual clock for every waiter in the process. The cost is that the serving thread sits outside `active_named_thread_count`, so a leak detector counting named threads does not see it; the origin's shutdown is judged on its socket instead. The worker goes up through the platform spawn: it paces itself on the media clock and parks on waits the engine sees.
+
+The worker is the sole mutator of the segmenter and the window. It publishes each closed segment by swapping a whole `PlaylistSnapshot` into an `ArcSwap`, so no request ever waits on the worker. The handle's join slot is the crate's only mutex and the serving path never touches it; the counters the handle reports are the worker's alone, and the origin does not read them.
+
+Nothing in the pipeline reads a wall clock: rotation is media-driven and the playlist changes only when a segment closes. The worker's poll backoff paces an empty feed and is not part of the contract.
+
+That backoff decides which tests can run on the simulated clock. On the sim path it waits for a clock advance, and the engine advances only once every participant is parked on a wait it wrapped. A test body holds its participant slot through synchronous work — a render loop, a poll loop over `status()`, a `stop()` that blocks on the worker's thread join — because the lexical rewriter reaches a body's `time::sleep` and `park_timeout` and leaves the rest as they are. Whether that matters turns on one thing: the backoff falls through to a plain yield while no timed waiter exists, so a test of the origin alone runs on the simulated clock, and one that also runs a session engine or an HLS client — either of which registers a timed waiter — has to run on the real clock and says so at the test.
+
+`stop` ends the broadcast: the worker closes the feed, swallows the audio that close drew the line under, drains the encoder, flushes the tail segment, and publishes the playlist with `EXT-X-ENDLIST`. The origin keeps serving that VOD tail. The first caller takes the join slot and returns once the tail is published; a caller that finds the slot empty returns straight away, because the broadcast is already ending or ended. A feed that reports its producer gone — the app disabling the tap, a device rate change, session teardown — takes the same graceful path and leaves the stream off air.
+
+The close is what bounds the drain and the feed's end is what terminates it: the worker keeps polling until the feed reports that end, so audio the producer handed over before the stop reaches the playlist however many polls the feed takes to hand it over. The line the close draws is what the producer had already handed over, so `stop` returns against a producer that is still running — the audio it writes past that line belongs to no broadcast.
+
+Cancelling the token is the other axis: it stops the origin and the worker without a tail, including a drain already under way. `CancelScope::new(parent)` derives the broadcast's subtree, so the app cancels the broadcast by cancelling what it owns. Dropping the handle is passive — it cancels nothing, so an owner that starts a broadcast without a parent must keep the handle's token to release the two threads.
+
+## What the origin serves
+
+`GET /master.m3u8` always answers: one `EXT-X-STREAM-INF` with `CODECS="mp4a.40.2"`, a `BANDWIDTH` of the audio bit rate plus the ADTS framing margin, and the URI `v/0/live.m3u8`. The `/v/0/` prefix reserves the variant slot for a later ladder.
+
+`GET /v/0/live.m3u8` answers 404 until the first segment exists: an empty playlist is not a stream a client can start on. Playlists carry `application/vnd.apple.mpegurl` and `Cache-Control: no-store`; segments carry `audio/aac`. A segment past the retention is 404. CORS is permissive so a browser player can join.
+
+## Intake
+
+`LivePcmFeed` is the crate's PCM seam: one `poll` appends interleaved f32 and reports the gap that came behind that audio plus end-of-stream, so the worker cannot see the producer leave while samples are still pending. `close` is the other half of the seam: it draws the line under the feed at what the producer has already handed over, and the feed goes on serving polls until that audio is gone and then reports its end. `FeedChunk` is deliberately not `#[non_exhaustive]` — implementors outside the crate construct it. There is no backpressure on the audio path and no silence injection.
+
+The worker frames a poll's audio first and applies its `dropped` after, so the closed segment carries the audio the gap came behind and `EXT-X-DISCONTINUITY` opens the segment the audio past the gap goes into. `RingFeed` earns that ordering by reading the drop counter after it drains the ring: a ring loses samples only while it is full, so a loss counted by then fell at or past the end of what the poll hands over. A loss the producer takes during the drain is counted the same poll and puts the break one poll early, which costs a client one resynchronisation on a timeline that held.
+
+`RingFeed` implements that seam over a `ringbuf` consumer and an `Arc<AtomicU64>` of samples the producer lost. Those two types are the whole vocabulary between the broadcast and whoever fills the ring, so a real-time producer reaches the packager without either side depending on the other's crate.
+
+The counter is monotonic, so a poll reports the difference since the previous one and never re-reports a debt. It carries no position, so the gap it reports is located to the whole poll that saw it; a segment therefore breaks at a poll boundary near the lost audio.
+
+The producer is read as held before the ring is drained, so one already gone by then can push nothing more and an empty drain is the end of the feed. End of feed is therefore reported only on an empty drain — the remainder a released producer left behind goes out first.
+
+`close` reads what the ring holds at that moment. Only the broadcast side takes samples out, so that count is audio already in hand and the next poll hands over all of it and reports the end.
+
+## Time base
+
+`Segment::duration_ts` is a `u32` in timescale units, so a segment tops out around 24 hours at 48 kHz; the segmenter errors rather than wrapping when an open segment outgrows it.

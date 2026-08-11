@@ -41,6 +41,7 @@ pub mod fixture_protocol;
 pub mod fixtures;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod flash_pace;
+pub mod goertzel;
 pub mod hls_blob_store;
 pub mod hls_fixture;
 pub mod hls_server;
@@ -56,6 +57,7 @@ mod native;
 pub mod net_fixture;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod offline;
+pub mod packed_audio;
 pub mod pcm_provenance;
 pub mod reads;
 pub mod rfc6381;

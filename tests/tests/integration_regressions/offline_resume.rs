@@ -1,5 +1,7 @@
 #![cfg(not(target_arch = "wasm32"))]
 
+use std::{fs, path::PathBuf};
+
 use kithara::{
     events::{AudioEvent, DownloaderEvent, Event},
     hls::AbrMode,
@@ -15,7 +17,7 @@ use kithara::{
     stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_integration_tests::{
-    PrivateTestServer, TestTempDir, kithara,
+    Content, Delivery, FixtureBehavior, PrivateTestServer, TestTempDir, kithara,
     offline::OfflineSession,
     temp_dir,
     waits::{wait_for_event, wait_for_loader_done_event, wait_for_position_event},
@@ -39,6 +41,13 @@ use kithara_integration_tests::{
 /// the cached bytes drain, and draining is paced by real playback. At 256 KiB
 /// the drain outlasted the wait on roughly one run in five.
 const LOOK_AHEAD_BYTES: u64 = 64 * 1024;
+/// Wide enough that an outage catches several fetches mid-body, which is
+/// what a device does and what the narrow window above deliberately avoids.
+const PACED_LOOK_AHEAD_BYTES: u64 = 1024 * 1024;
+/// ~12 KiB/s: the slq variant carries ~50 KiB per 5 s of audio, so the
+/// downloader gains on playback slowly instead of racing to the end.
+const SEGMENT_CHUNK_BYTES: usize = 3 * 1024;
+const SEGMENT_CHUNK_DELAY_MS: u64 = 250;
 const PLAY_BEFORE_OUTAGE_SECS: f64 = 1.0;
 const MIN_RESUME_PROGRESS_SECS: f64 = 1.0;
 
@@ -66,8 +75,91 @@ async fn playback_resumes_after_network_returns(temp_dir: TestTempDir) {
     // A private server: this test takes the network down, and the switch covers
     // every data route on whichever server it runs against.
     let server = PrivateTestServer::start().await;
-    let url = server.helper().asset("hls/master.m3u8");
+    let url = server.helper().asset("hls/master.m3u8").to_string();
+    resumes_after_outage(temp_dir, &server, url, LOOK_AHEAD_BYTES).await;
+}
 
+/// The same contract, with the segments arriving at the rate they are played
+/// and a look-ahead wide enough to keep several of them in flight.
+///
+/// [`playback_resumes_after_network_returns`] serves them from loopback into a
+/// 64 KiB window, so at most one fetch is open when the network goes: it fails,
+/// and the next attempt happens after connectivity is back. On a device the
+/// window is wider and the segments take real time to arrive, so an outage
+/// catches a handful of part-written bodies at once — the case that stranded
+/// the iOS lane, where every one of them was written off permanently and
+/// playback stopped at the first of the gaps they left.
+#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(180)))]
+async fn playback_resumes_after_network_returns_with_paced_segments(temp_dir: TestTempDir) {
+    let server = PrivateTestServer::start().await;
+    let url = paced_master(&server);
+    resumes_after_outage(temp_dir, &server, url, PACED_LOOK_AHEAD_BYTES).await;
+}
+
+/// Re-serve the packaged variant with every media segment throttled to roughly
+/// the rate it is consumed (~50 KiB of audio per 5 s). The playlists stay
+/// immediate: pacing those would only delay the start.
+fn paced_master(server: &PrivateTestServer) -> String {
+    const VARIANT: &str = "index-slq-a1.m3u8";
+    const INITIALIZATION: &str = "init-slq-a1.mp4";
+    const PLAYLIST_TYPE: Option<&'static str> = Some("application/vnd.apple.mpegurl");
+
+    let hls = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("repo root from tests/")
+        .join("assets/hls");
+    let playlist = fs::read_to_string(hls.join(VARIANT)).expect("read the packaged variant");
+
+    let mut rewritten = Vec::new();
+    for line in playlist.split('\n') {
+        if line.starts_with("#EXT-X-MAP:") {
+            let init = server.helper().asset(&format!("hls/{INITIALIZATION}"));
+            rewritten.push(line.replace(INITIALIZATION, init.as_str()));
+        } else if !line.is_empty() && !line.starts_with('#') {
+            let bytes = fs::read(hls.join(line)).expect("read a packaged segment");
+            let handle = server.helper().register_behavior(FixtureBehavior {
+                content: Content::StaticBytes {
+                    bytes: Arc::new(bytes),
+                    content_type: None,
+                },
+                delivery: Delivery::Throttle {
+                    chunk: SEGMENT_CHUNK_BYTES,
+                    delay_ms: SEGMENT_CHUNK_DELAY_MS,
+                },
+            });
+            rewritten.push(handle.child_url(line).to_string());
+        } else {
+            rewritten.push(line.to_string());
+        }
+    }
+
+    let media = server.helper().register_behavior(FixtureBehavior {
+        content: Content::StaticBytes {
+            bytes: Arc::new(rewritten.join("\n").into_bytes()),
+            content_type: PLAYLIST_TYPE,
+        },
+        delivery: Delivery::Normal,
+    });
+    let master = format!(
+        "#EXTM3U\n#EXT-X-STREAM-INF:PROGRAM-ID=1,BANDWIDTH=66005,CODECS=\"mp4a.40.2\"\n{}\n",
+        media.child_url(VARIANT)
+    );
+    let handle = server.helper().register_behavior(FixtureBehavior {
+        content: Content::StaticBytes {
+            bytes: Arc::new(master.into_bytes()),
+            content_type: PLAYLIST_TYPE,
+        },
+        delivery: Delivery::Normal,
+    });
+    handle.child_url("master.m3u8").to_string()
+}
+
+async fn resumes_after_outage(
+    temp_dir: TestTempDir,
+    server: &PrivateTestServer,
+    url: String,
+    look_ahead_bytes: u64,
+) {
     let net = NetOptions::builder()
         .inactivity_timeout(Duration::from_millis(500))
         .retry_policy(
@@ -95,7 +187,7 @@ async fn playback_resumes_after_network_returns(temp_dir: TestTempDir) {
             .pcm_pool(kithara::bufpool::PcmPool::default())
             .downloader(downloader)
             .initial_abr_mode(AbrMode::manual(0))
-            .look_ahead_bytes(LOOK_AHEAD_BYTES)
+            .look_ahead_bytes(look_ahead_bytes)
             .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
             .build();
 

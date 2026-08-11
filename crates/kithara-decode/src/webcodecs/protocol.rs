@@ -1,3 +1,5 @@
+use kithara_bufpool::PcmBuf;
+
 pub(crate) enum HostCmd {
     Open {
         id: u64,
@@ -34,7 +36,7 @@ pub(crate) enum HostCmd {
 #[derive(Debug)]
 pub(crate) enum HostOut {
     Pcm {
-        interleaved: Vec<f32>,
+        interleaved: PcmBuf,
         frames: u32,
         sample_rate: u32,
         channels: u16,

@@ -1,7 +1,8 @@
 set shell := ["bash", "-euo", "pipefail", "-c"]
 set working-directory := "../.."
 
-# WASM tasks: check, test, build, or size-check.
+# WASM artifacts: check, build, or size-check. The browser tests are Rust
+# tests and live in `just test wasm`.
 [positional-arguments]
 wasm MODE="check" *ARGS:
     #!/usr/bin/env bash
@@ -16,43 +17,6 @@ wasm MODE="check" *ARGS:
         cargo check -p kithara-decode --target wasm32-unknown-unknown --no-default-features --features symphonia,webcodecs,client-reqwest,tls-rustls
         cargo check -p kithara-ffi --target wasm32-unknown-unknown --features wasm --no-default-features
         ;;
-      test)
-        # The wasm target rebuilds std for shared memory, which only a nightly
-        # honours, and the repository pins one. `wasm-pack` cannot be used
-        # here: it drives Cargo with the default toolchain, which refuses the
-        # flags below, so std keeps its stock features and the linker rejects
-        # `--shared-memory` against it.
-        browser="${1:-chrome}"
-        toolchain="${KITHARA_NIGHTLY_TOOLCHAIN:-nightly}"
-        case "$browser" in
-          chrome)  export CHROMEDRIVER="${CHROMEDRIVER:-chromedriver}" ;;
-          firefox) export GECKODRIVER="${GECKODRIVER:-geckodriver}" ;;
-          safari)  export SAFARIDRIVER="${SAFARIDRIVER:-safaridriver}" ;;
-          *)
-            echo "unknown wasm test browser: $browser (use chrome|firefox|safari)"
-            exit 2
-            ;;
-        esac
-        WASM_BINDGEN_TEST_TIMEOUT=300 \
-        WASM_BINDGEN_USE_BROWSER=1 \
-        # The browser talks to a fixture server that runs on this machine, and
-        # the runner looks for it beside itself. Nothing in a wasm build
-        # produces a host binary, so the lane used to depend on some earlier
-        # native job having left one behind, and failed with "failed to start
-        # test_server ... No such file or directory" whenever it ran first.
-        cargo build -p kithara-integration-tests --bin test_server
-        # Only `suite_heavy` carries browser tests. Building the whole crate
-        # for wasm compiles every native suite too, and those reach for
-        # threads, the filesystem, and a local test server that the browser
-        # has no way to offer.
-        # `optimize_for_size` matches crates/kithara-ffi/.cargo/config.toml, so
-        # the bundle lane and this one rebuild one identical std rather than
-        # two that differ.
-        cargo "+$toolchain" test --target wasm32-unknown-unknown \
-          -Z build-std=std,panic_abort,core,alloc \
-          -Z build-std-features=optimize_for_size \
-          -p kithara-integration-tests --test suite_heavy
-        ;;
       build)
         just _xtask wasm build "$@"
         ;;
@@ -60,7 +24,7 @@ wasm MODE="check" *ARGS:
         just _xtask wasm size-check "$@"
         ;;
       *)
-        echo "unknown wasm mode: $mode (use check|test|build|size-check)"
+        echo "unknown wasm mode: $mode (use check|build|size-check); tests are `just test wasm`"
         exit 2
         ;;
     esac
@@ -151,12 +115,18 @@ apple MODE="xcframework" *ARGS:
           just platform apple xcframework --profile debug
         fi
         just platform _xcodegen-local
+        # Explicit modules build the SDK's own PCMs into a shared module cache,
+        # and on a cold cache Xcode 26.6 fails that step for this scheme with
+        # `redefinition of module 'SwiftShims'` — every fresh CI guest hit it
+        # before any test ran. A warm cache hides it, which is why it looks
+        # intermittent.
         KITHARA_LOCAL_DEV=1 \
         TEST_RUNNER_KITHARA_TEST_SERVER_URL="$test_server_url" \
           xcodebuild test \
             -project apple/Examples/KitharaDemo/KitharaDemo.xcodeproj \
             -scheme KitharaDemoUnitTests_iOS \
-            -destination "$destination"
+            -destination "$destination" \
+            SWIFT_ENABLE_EXPLICIT_MODULES=NO
         ;;
       integration-regressions)
         # One xcodebuild invocation for the whole suite: the tests share a
@@ -185,7 +155,8 @@ apple MODE="xcframework" *ARGS:
         KITHARA_LOCAL_DEV=1 xcodebuild build-for-testing \
             -project apple/Examples/KitharaDemo/KitharaDemo.xcodeproj \
             -scheme KitharaDemoUnitTests_iOS \
-            -destination "$destination" || exit 1
+            -destination "$destination" \
+            SWIFT_ENABLE_EXPLICIT_MODULES=NO || exit 1
         selection=(-only-testing:KitharaDemoUnitTests_iOS/IntegrationRegressionsIOS)
         log="$TMPDIR/kithara-integration-regressions.log"
         if [[ -n "$only_test" ]]; then

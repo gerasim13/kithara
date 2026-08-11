@@ -48,6 +48,8 @@ async fn route_change_at_non_unity_uses_the_emitted_source_endpoint() {
         ..
     } = route_source_with_effects(
         RouteParams {
+            active_timeline_gap: 0,
+            incoming_timeline_gap: 0,
             initial_host_rate: Consts::SAMPLE_RATE,
             segmented: false,
         },
@@ -109,6 +111,8 @@ async fn capture_unity_route(effects: Vec<Box<dyn AudioEffect>>) -> Vec<(PcmMeta
         ..
     } = route_source_with_effects(
         RouteParams {
+            active_timeline_gap: 0,
+            incoming_timeline_gap: 0,
             initial_host_rate: Consts::SAMPLE_RATE,
             segmented: false,
         },
