@@ -453,7 +453,37 @@ async fn exact_primed_generation_promotes_once_at_outgoing_frontier() {
 }
 
 #[kithara::test(tokio)]
-async fn finite_incoming_waits_for_outgoing_join_pcm_before_decoding_more() {
+async fn retained_reader_plan_latches_cut_before_decoder_build() {
+    let mut fixture = route_signal_source(Consts::SAMPLE_RATE).await;
+    let TrackStep::Produced(first_outgoing) = fixture.source.step_track() else {
+        panic!("the active decoder must establish an exact production frontier");
+    };
+    assert_eq!(produced_data(first_outgoing).meta.frame_offset, 0);
+    let cut = u64::try_from(Consts::ROUTE_CHUNK_FRAMES).unwrap_or(u64::MAX);
+    let plan = incoming_plan_at(cut);
+    let transition = plan.transition();
+    fixture.control.set_exact_plan(plan);
+
+    fixture.source.flush_deferred();
+
+    assert!(fixture.source.decode.incoming_is_preparing(transition));
+    assert_eq!(
+        fixture.source.decode.incoming_frontier(),
+        Some(OutgoingFrontier::Exact {
+            frame: cut,
+            rate: Consts::SAMPLE_RATE,
+        })
+    );
+    assert!(matches!(fixture.source.step_track(), TrackStep::Blocked(_)));
+    assert_eq!(
+        fixture.source.resume.decode_head(0),
+        Some((cut, Consts::SAMPLE_RATE))
+    );
+    assert!(fixture.source.decode.active().staged_span().is_none());
+}
+
+#[kithara::test(tokio)]
+async fn finite_incoming_latches_cut_while_outgoing_fills_the_join_tail() {
     const INCOMING_CHUNKS: usize = 5;
 
     let mut fixture =
@@ -500,10 +530,9 @@ async fn finite_incoming_waits_for_outgoing_join_pcm_before_decoding_more() {
     assert_eq!(fixture.control.promote_calls(), 0);
     assert_eq!(fixture.control.aborted_transition(), None);
 
-    let TrackStep::Produced(outgoing) = fixture.source.step_track() else {
-        panic!("outgoing decode must advance the cut and retain its real join PCM");
+    let TrackStep::Blocked(_) = fixture.source.step_track() else {
+        panic!("outgoing publication must stop at the latched cut while its join tail fills");
     };
-    assert_eq!(produced_data(outgoing).meta.frame_offset, 256);
     assert_eq!(
         fixture
             .source
@@ -511,7 +540,11 @@ async fn finite_incoming_waits_for_outgoing_join_pcm_before_decoding_more() {
             .active()
             .staged_span()
             .map(|span| (span.0, span.1)),
-        Some((512, 1_536))
+        Some((256, 1_280))
+    );
+    assert_eq!(
+        fixture.source.resume.decode_head(0),
+        Some((cut, Consts::SAMPLE_RATE))
     );
 
     fixture.source.flush_deferred();
@@ -831,7 +864,7 @@ async fn stale_incoming_completion_retires_generation_in_shell() {
         fixture
             .source
             .decode
-            .begin_incoming(first_transition)
+            .begin_incoming(first_transition, OutgoingFrontier::Awaiting)
             .is_none()
     );
     assert!(
@@ -844,7 +877,7 @@ async fn stale_incoming_completion_retires_generation_in_shell() {
         fixture
             .source
             .decode
-            .begin_incoming(second_transition)
+            .begin_incoming(second_transition, OutgoingFrontier::Awaiting)
             .is_none()
     );
 

@@ -461,6 +461,27 @@ impl DecoderGeneration {
     }
 }
 
+pub(crate) fn holdback_covers_frontier(generation: &DecoderGeneration) -> bool {
+    let Some(holdback) = generation.holdback else {
+        return false;
+    };
+    let Some(front) = generation.staged.front() else {
+        return false;
+    };
+    let Some((frontier, _)) = chunk_range(front, holdback.spec) else {
+        return false;
+    };
+    let Some(back) = generation.staged.back() else {
+        return false;
+    };
+    let Some((_, staged_end)) = chunk_range(back, holdback.spec) else {
+        return false;
+    };
+    frontier
+        .checked_add(holdback.join_frames)
+        .is_some_and(|join_end| join_end <= staged_end)
+}
+
 fn chunk_range(chunk: &PcmChunk, spec: PcmSpec) -> Option<(u64, u64)> {
     let channels = usize::from(spec.channels);
     if channels == 0 || chunk.spec() != spec || !chunk.samples.len().is_multiple_of(channels) {

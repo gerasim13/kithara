@@ -36,6 +36,7 @@ use crate::{
         decode::{
             DecoderGeneration,
             core::{DecodeInit, DecoderFactory},
+            transition::OutgoingFrontier,
         },
         fetch::Fetch,
         parts::SourceParts,
@@ -1084,7 +1085,12 @@ async fn matching_replacement_aborts_primed_incoming_before_profile_prepare() {
     let transition = plan.transition();
     let incoming_build = BuildId::fixture(9);
     control.set_exact_plan(plan);
-    assert!(source.decode.begin_incoming(transition).is_none());
+    assert!(
+        source
+            .decode
+            .begin_incoming(transition, OutgoingFrontier::Awaiting)
+            .is_none()
+    );
     assert!(
         source
             .decode
@@ -1132,7 +1138,12 @@ async fn replacement_aborts_building_incoming_and_retires_its_late_completion() 
     let transition = plan.transition();
     let incoming_build = BuildId::fixture(9);
     control.set_exact_plan(plan);
-    assert!(source.decode.begin_incoming(transition).is_none());
+    assert!(
+        source
+            .decode
+            .begin_incoming(transition, OutgoingFrontier::Awaiting)
+            .is_none()
+    );
     assert!(
         source
             .decode

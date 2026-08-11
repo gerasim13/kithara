@@ -93,6 +93,17 @@ pub(crate) struct StreamAudioSource<T: StreamType> {
     pub(crate) shared_stream: SharedStream<T>,
 }
 
+fn promotion_frontier_for(
+    transition: VariantTransition,
+    landing_frontier: OutgoingFrontier,
+) -> OutgoingFrontier {
+    if transition.outgoing_disposition() == OutgoingDisposition::Abandoned {
+        OutgoingFrontier::Unavailable
+    } else {
+        landing_frontier
+    }
+}
+
 impl<T: StreamType> StreamAudioSource<T> {
     /// Bounded off-RT retire queue for decode state displaced on the produce core.
     const GENERATION_RETIRE_CAPACITY: usize = 4;
@@ -225,7 +236,10 @@ impl<T: StreamType> StreamAudioSource<T> {
         };
         let transition = plan.transition();
         if self.decode.incoming_transition() != Some(transition)
-            && let Some(generation) = self.decode.begin_incoming(transition)
+            && let Some(generation) = self.decode.begin_incoming(
+                transition,
+                promotion_frontier_for(transition, outgoing_frontier),
+            )
         {
             self.retired.retire_generation(generation);
         }
@@ -297,17 +311,16 @@ impl<T: StreamType> StreamAudioSource<T> {
             None => OutgoingFrontier::Awaiting,
         };
         self.retire_failed_incoming(control.as_ref());
-        let promotion_frontier = if self.decode.incoming_transition().is_some_and(|transition| {
-            transition.outgoing_disposition() == OutgoingDisposition::Abandoned
-        }) {
-            OutgoingFrontier::Unavailable
-        } else {
-            landing_frontier
-        };
+        let observed_frontier = self
+            .decode
+            .incoming_transition()
+            .map_or(landing_frontier, |transition| {
+                promotion_frontier_for(transition, landing_frontier)
+            });
         // Priming is bounded per pass and may mint the overlap proof consumed
         // immediately below. A publication lock leaves both generations intact
         // and the next pass extends the staged range to the newer frontier.
-        let prime = self.decode.prime_incoming(promotion_frontier);
+        let prime = self.decode.prime_incoming(observed_frontier);
         if let Some(incoming) = self.decode.incoming_transition() {
             // The frontier and the prime outcome together are the only thing
             // that separates "the incoming is still staging" from "the splice
@@ -315,7 +328,8 @@ impl<T: StreamType> StreamAudioSource<T> {
             // a switch that simply never commits.
             trace!(
                 ?landing_frontier,
-                ?promotion_frontier,
+                ?observed_frontier,
+                latched_frontier = ?self.decode.incoming_frontier(),
                 ?prime,
                 ?incoming,
                 "variant transition pass"
@@ -324,7 +338,7 @@ impl<T: StreamType> StreamAudioSource<T> {
         if prime == IncomingPrime::Advanced {
             self.rebuild.wake();
         }
-        if !self.promote_ready_incoming(control.as_ref(), promotion_frontier) {
+        if !self.promote_ready_incoming(control.as_ref()) {
             return;
         }
         let Some(transition) = self.prepare_incoming_transition(control.as_ref(), landing_frontier)
@@ -334,12 +348,8 @@ impl<T: StreamType> StreamAudioSource<T> {
         self.take_prepared_incoming(control.as_ref(), transition);
     }
 
-    fn promote_ready_incoming(
-        &mut self,
-        control: &dyn VariantControl,
-        outgoing_frontier: OutgoingFrontier,
-    ) -> bool {
-        let Some(prepared) = self.decode.prepare_promotion(outgoing_frontier) else {
+    fn promote_ready_incoming(&mut self, control: &dyn VariantControl) -> bool {
+        let Some(prepared) = self.decode.prepare_promotion() else {
             return true;
         };
         let transition = prepared.transition();
@@ -361,6 +371,7 @@ impl<T: StreamType> StreamAudioSource<T> {
                     );
                 }
                 self.retired.retire_generation(outgoing);
+                self.rebuild.wake();
                 true
             }
             VariantPromotion::Deferred => {

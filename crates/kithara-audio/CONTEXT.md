@@ -280,12 +280,16 @@ and terminal phases abort the transition.
   disposition replaces a known exact landing. `Awaiting` carries no frame, so
   the source keeps its own seek-derived target.
 - **Priming** is bounded to 8 decode steps per pass and only extends the staged
-  span. Normal active decode keeps the direct `gapless.push` -> `active.next`
-  path. Installing a same-`PcmSpec` incoming prepares a bounded active holdback
-  off-core; while that incoming is `Priming` and the blender is steady, output
-  releases a front chunk only when the continuous span left behind still covers
-  the full 20 ms join. Gap, mixed-spec, malformed, or over-capacity PCM fails the
-  decode and stays owned for shell retirement. `ResumeCursor` records each
+  span. The reader plan's exact or unavailable promotion frontier is latched in
+  `Preparing` and carried through `Building` into the incoming generation;
+  decoder build latency and later `ResumeCursor` movement cannot move that cut.
+  Once latched, outgoing publication stops at the cut. A same-`PcmSpec` active
+  generation may decode only until its bounded holdback covers the real 20 ms
+  outgoing tail, while a cross-spec transition stops immediately. This lets the
+  incoming catch one fixed cut instead of chasing an equal-rate outgoing stream.
+  A finished active generation still uses the unheld EOF drain. Gap, mixed-spec,
+  malformed, or over-capacity PCM fails the decode and stays owned for shell
+  retirement. `ResumeCursor` records each
   post-skip, post-gapless chunk immediately before blending and effects, so a
   buffering or frame-changing effect cannot move the raw cut. A generation marks
   EOF once, disables holdback, and drains staged then gapless PCM without
@@ -297,7 +301,8 @@ and terminal phases abort the transition.
   end. An installed transition with `OutgoingDisposition::Abandoned` maps only
   its priming and promotion proof to `OutgoingFrontier::Unavailable`, an explicit
   hard cut; `WaitingForSource` alone does not. A retained transition still needs
-  real outgoing join PCM. `Awaiting`, a previous active join, a discontinuous
+  real outgoing join PCM. `Deferred` preserves the same latched cut. `Awaiting`,
+  a previous active join, a discontinuous
   span, or a landed-late incoming mints no proof.
 - **Promotion** takes the incoming generation into a non-copy
   `PreparedPromotion`, trims it to the proven cut, and copies exactly the proven

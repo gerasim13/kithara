@@ -19,14 +19,17 @@ impl Consts {
 pub(crate) enum IncomingDecode {
     Preparing {
         transition: VariantTransition,
+        frontier: OutgoingFrontier,
     },
     Building {
         transition: VariantTransition,
         build: BuildId,
+        frontier: OutgoingFrontier,
     },
     Priming {
         transition: VariantTransition,
         generation: DecoderGeneration,
+        frontier: OutgoingFrontier,
     },
     Failed {
         transition: VariantTransition,
@@ -37,7 +40,7 @@ pub(crate) enum IncomingDecode {
 impl IncomingDecode {
     pub(crate) const fn transition(&self) -> VariantTransition {
         match self {
-            Self::Preparing { transition }
+            Self::Preparing { transition, .. }
             | Self::Building { transition, .. }
             | Self::Priming { transition, .. }
             | Self::Failed { transition, .. } => *transition,
@@ -55,7 +58,7 @@ impl From<IncomingDecode> for Option<DecoderGeneration> {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum OutgoingFrontier {
     Awaiting,
     Exact { frame: u64, rate: u32 },
@@ -67,6 +70,7 @@ pub(crate) enum OutgoingFrontier {
 pub(crate) struct PreparedPromotion {
     generation: DecoderGeneration,
     join: PromotionJoin,
+    frontier: OutgoingFrontier,
     #[field(get, vis = "pub(crate)", copy)]
     transition: VariantTransition,
 }
@@ -119,12 +123,16 @@ impl super::core::ActiveDecode {
     pub(crate) fn begin_incoming(
         &mut self,
         transition: VariantTransition,
+        frontier: OutgoingFrontier,
     ) -> Option<DecoderGeneration> {
         if self.incoming_transition() == Some(transition) {
             return None;
         }
         self.incoming
-            .replace(IncomingDecode::Preparing { transition })
+            .replace(IncomingDecode::Preparing {
+                transition,
+                frontier,
+            })
             .and_then(Into::into)
     }
 
@@ -164,7 +172,8 @@ impl super::core::ActiveDecode {
         matches!(
             self.incoming,
             Some(IncomingDecode::Preparing {
-                transition: current
+                transition: current,
+                ..
             }) if current == transition
         )
     }
@@ -188,25 +197,43 @@ impl super::core::ActiveDecode {
         generation.staged_span()
     }
 
+    pub(crate) fn incoming_frontier(&self) -> Option<OutgoingFrontier> {
+        match self.incoming.as_ref()? {
+            IncomingDecode::Preparing { frontier, .. }
+            | IncomingDecode::Building { frontier, .. }
+            | IncomingDecode::Priming { frontier, .. } => Some(*frontier),
+            IncomingDecode::Failed { .. } => None,
+        }
+    }
+
+    pub(crate) fn incoming_cut_is_latched(&self) -> bool {
+        self.incoming_frontier()
+            .is_some_and(|frontier| frontier != OutgoingFrontier::Awaiting)
+    }
+
     pub(crate) fn install_incoming(
         &mut self,
         transition: VariantTransition,
         build: BuildId,
         generation: DecoderGeneration,
     ) -> Option<DecoderGeneration> {
-        if !matches!(
-            self.incoming,
-            Some(IncomingDecode::Building {
-                transition: current,
-                build: current_build,
-            }) if current == transition && current_build == build
-        ) {
+        let Some(IncomingDecode::Building {
+            transition: current,
+            build: current_build,
+            frontier,
+        }) = self.incoming.as_ref()
+        else {
+            return Some(generation);
+        };
+        if *current != transition || *current_build != build {
             return Some(generation);
         }
+        let frontier = *frontier;
         self.prepare_incoming_profile(generation.blender_profile());
         self.incoming = Some(IncomingDecode::Priming {
             transition,
             generation,
+            frontier,
         });
         None
     }
@@ -246,7 +273,15 @@ impl super::core::ActiveDecode {
         if !self.incoming_is_preparing(transition) {
             return false;
         }
-        self.incoming = Some(IncomingDecode::Building { transition, build });
+        let Some(IncomingDecode::Preparing { frontier, .. }) = self.incoming.as_ref() else {
+            return false;
+        };
+        let frontier = *frontier;
+        self.incoming = Some(IncomingDecode::Building {
+            transition,
+            build,
+            frontier,
+        });
         true
     }
 
@@ -258,9 +293,20 @@ impl super::core::ActiveDecode {
         let active_gap = self.active.timeline_gap();
         let active = &self.active;
         let blender = &self.blender;
-        let Some(IncomingDecode::Priming { generation, .. }) = self.incoming.as_mut() else {
+        let Some(IncomingDecode::Priming {
+            frontier,
+            generation,
+            ..
+        }) = self.incoming.as_mut()
+        else {
             return IncomingPrime::Idle;
         };
+        if *frontier == OutgoingFrontier::Awaiting
+            && outgoing_frontier != OutgoingFrontier::Awaiting
+        {
+            *frontier = outgoing_frontier;
+        }
+        let outgoing_frontier = *frontier;
         let incoming_origin =
             incoming_origin_from(active_profile, active_gap, generation, gapless_mode);
         match promotion_readiness(
@@ -344,6 +390,7 @@ impl super::core::ActiveDecode {
             && let Some(IncomingDecode::Priming {
                 transition,
                 generation,
+                ..
             }) = self.incoming.take()
         {
             self.incoming = Some(IncomingDecode::Failed {
@@ -354,14 +401,12 @@ impl super::core::ActiveDecode {
         outcome
     }
 
-    pub(crate) fn prepare_promotion(
-        &mut self,
-        outgoing_frontier: OutgoingFrontier,
-    ) -> Option<PreparedPromotion> {
-        let (transition, span) = {
+    pub(crate) fn prepare_promotion(&mut self) -> Option<PreparedPromotion> {
+        let (transition, frontier, span) = {
             let IncomingDecode::Priming {
                 transition,
                 generation,
+                frontier,
             } = self.incoming.as_ref()?
             else {
                 return None;
@@ -373,13 +418,13 @@ impl super::core::ActiveDecode {
                 &self.active,
                 &self.blender,
                 generation,
-                outgoing_frontier,
+                *frontier,
                 outgoing_origin,
                 incoming_origin,
             ) else {
                 return None;
             };
-            (*transition, span)
+            (*transition, *frontier, span)
         };
         let IncomingDecode::Priming { mut generation, .. } = self.incoming.take()? else {
             return None;
@@ -406,6 +451,7 @@ impl super::core::ActiveDecode {
         Some(PreparedPromotion {
             generation,
             join: span.join,
+            frontier,
             transition,
         })
     }
@@ -414,6 +460,7 @@ impl super::core::ActiveDecode {
         self.incoming = Some(IncomingDecode::Priming {
             transition: prepared.transition,
             generation: prepared.generation,
+            frontier: prepared.frontier,
         });
     }
 

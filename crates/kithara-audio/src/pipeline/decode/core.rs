@@ -17,12 +17,16 @@ use kithara_stream::{
 use kithara_test_utils::kithara;
 use tracing::{debug, warn};
 
+#[cfg(test)]
+use crate::pipeline::decode::transition::OutgoingFrontier;
 use crate::{
     pipeline::{
         blend::PcmBlender,
         decode::{
             drain::EofDrain,
-            generation::{DecoderGeneration, StageFailure, StageOutput, StageResult},
+            generation::{
+                DecoderGeneration, StageFailure, StageOutput, StageResult, holdback_covers_frontier,
+            },
             resume::ResumeCursor,
             transition::IncomingDecode,
         },
@@ -177,6 +181,7 @@ pub(crate) struct DecodeCtx<'a, T: StreamType> {
 pub(crate) enum DecodeAction {
     Produced(Fetch<PcmChunk>),
     Pending(WaitingReason),
+    TransitionPending,
     StartRecreate(RecreateState),
     SeekInterrupted,
     Eof,
@@ -255,6 +260,9 @@ impl ActiveDecode {
         epoch: u64,
         allow_holdback: bool,
     ) -> DecodeResult<Option<PcmChunk>> {
+        if allow_holdback && self.transition_holds_output() {
+            return Ok(None);
+        }
         let holdback =
             allow_holdback && !self.active.is_finished() && self.outgoing_holdback_is_active();
         loop {
@@ -283,6 +291,16 @@ impl ActiveDecode {
         };
         self.blender.is_steady()
             && self.active.blender_profile().spec() == generation.blender_profile().spec()
+    }
+
+    pub(crate) fn transition_holds_output(&self) -> bool {
+        !self.active.is_finished() && self.incoming_cut_is_latched()
+    }
+
+    pub(crate) fn outgoing_holdback_needs_pcm(&self) -> bool {
+        self.transition_holds_output()
+            && self.outgoing_holdback_is_active()
+            && !holdback_covers_frontier(&self.active)
     }
 
     delegate::delegate! {
@@ -494,6 +512,7 @@ mod tests {
         decode.incoming = Some(IncomingDecode::Priming {
             transition,
             generation: incoming,
+            frontier: OutgoingFrontier::Awaiting,
         });
         decode.prepare_incoming_profile(BlenderProfile::new(spec));
         let make_chunk = |offset| {
@@ -561,6 +580,7 @@ mod tests {
         decode.incoming = Some(IncomingDecode::Priming {
             transition,
             generation: incoming,
+            frontier: OutgoingFrontier::Awaiting,
         });
 
         decode.prepare_incoming_profile(BlenderProfile::new(spec));
@@ -602,6 +622,7 @@ mod tests {
         decode.incoming = Some(IncomingDecode::Priming {
             transition,
             generation: incoming,
+            frontier: OutgoingFrontier::Awaiting,
         });
         decode.prepare_incoming_profile(BlenderProfile::new(spec));
         let samples = vec![0.25; 128 * usize::from(spec.channels)];

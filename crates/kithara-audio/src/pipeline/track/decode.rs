@@ -67,6 +67,7 @@ impl Track<Decoding> {
         match decode_step(src) {
             DecodeStep::Produced(fetch) => TrackStep::Produced(fetch),
             DecodeStep::Interrupted => TrackStep::StateChanged,
+            DecodeStep::TransitionPending => TrackStep::Blocked(WaitingReason::Waiting),
             // The decoder read across the current segment boundary into a
             // not-ready (withheld) byte. Park in `WaitingForSource(Playback)`
             // rather than re-running the full decode every tick: the wait
@@ -94,6 +95,7 @@ impl Track<Decoding> {
 pub(super) enum DecodeStep {
     Produced(Fetch<PcmChunk>),
     Interrupted,
+    TransitionPending,
     NotReady(WaitingReason),
     Eof,
     Failed,
@@ -127,6 +129,7 @@ pub(super) fn decode_step<T: StreamType>(src: &mut StreamAudioSource<T>) -> Deco
             DecodeStep::Produced(fetch)
         }
         CoreDecodeAction::Pending(reason) => DecodeStep::NotReady(reason),
+        CoreDecodeAction::TransitionPending => DecodeStep::TransitionPending,
         CoreDecodeAction::StartRecreate(recreate) => {
             start_recreating_decoder(src, recreate);
             DecodeStep::Interrupted

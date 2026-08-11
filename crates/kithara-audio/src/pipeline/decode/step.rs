@@ -46,6 +46,9 @@ pub(crate) fn tick<T: StreamType>(
             Ok(None) => {}
             Err(error) => return decode_failed(core, error, &ctx),
         }
+        if core.transition_holds_output() && !core.outgoing_holdback_needs_pcm() {
+            return DecodeAction::TransitionPending;
+        }
         match core.next_chunk(ctx.stream.position()) {
             Ok(DecoderChunkOutcome::Pending(PendingReason::VariantChange)) => {
                 return variant_change(core, &ctx);
