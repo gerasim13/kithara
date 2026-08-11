@@ -11,6 +11,7 @@ pub mod health;
 #[cfg(feature = "lint")]
 pub mod idioms;
 pub mod init;
+pub mod junit;
 #[cfg(feature = "lint")]
 pub mod lint;
 pub mod manifest;

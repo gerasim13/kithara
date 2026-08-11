@@ -10,6 +10,7 @@ mod linux;
 mod process;
 mod release;
 mod run;
+mod verdict;
 mod xcresult;
 
 pub(crate) use command::{CiArgs, is_standalone, run, run_standalone};
