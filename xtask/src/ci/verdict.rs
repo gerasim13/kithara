@@ -10,6 +10,8 @@ use kithara_devtools::junit::{CaseTiming, parse_junit};
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 
+use super::{config::CiConfig, run::PipelineKind};
+
 /// How many `main` runs the journal keeps. One is not enough: a test that fails
 /// a quarter of the time would otherwise land in a branch's column whenever the
 /// single remembered run happened to be green, and block on its own noise.
@@ -43,9 +45,6 @@ struct Common {
     /// Directory holding this run's `JUnit` reports.
     #[arg(long, default_value = "target/junit")]
     reports: PathBuf,
-    /// Lanes that failed without per-test identity, comma separated.
-    #[arg(long, default_value = "")]
-    failed_jobs: String,
     /// Journal kept on the executor, outliving artifact expiry.
     #[arg(long, env = "KITHARA_VERDICT_JOURNAL")]
     journal: PathBuf,
@@ -120,6 +119,90 @@ impl Journal {
 /// A test's identity across runs and lanes.
 fn case_id(case: &CaseTiming) -> String {
     format!("{}::{}", case.suite, case.name)
+}
+
+/// Where the verdict expects every lane to leave what it produced. Artifacts
+/// travel between runners at their own paths, so one directory is what makes a
+/// report from the simulator and a report from a container comparable.
+pub(crate) const REPORT_DIR: &str = "target/junit";
+
+/// The report a lane writes, before it is collected. A lane that writes none
+/// still leaves a marker when it fails, which is how a browser suite or a
+/// sanitiser run — neither of which can name a test — still holds a merge
+/// request.
+pub(crate) fn produced_report(lane: &str) -> Option<&'static str> {
+    match lane {
+        "apple-test" | "linux-test" | "windows-arm64" | "windows-x64" => {
+            Some("target/nextest/ci/junit.xml")
+        }
+        "apple-test-flash-off" => Some("target-flash-off/nextest/ci/junit.xml"),
+        "apple-ios-test" => Some("target/xcresult/ios-test.junit.xml"),
+        "apple-swift-test" => Some("target/xcresult/swift-test.junit.xml"),
+        _ => None,
+    }
+}
+
+/// The build directory survives between jobs on this executor, so a report left
+/// by an earlier lane would be collected as this one's. Remove it first: a lane
+/// that produces nothing must publish nothing.
+pub(crate) fn clear(root: &Path, lane: &str) -> Result<()> {
+    let Some(report) = produced_report(lane) else {
+        return Ok(());
+    };
+    let path = root.join(report);
+    if path.exists() {
+        fs::remove_file(&path).with_context(|| format!("removing {}", path.display()))?;
+    }
+    Ok(())
+}
+
+/// Collect what this lane produced into the one directory the verdict reads,
+/// and record a bare failure for a lane that cannot name its tests.
+pub(crate) fn gather(root: &Path, lane: &str, failed: bool) -> Result<()> {
+    let directory = root.join(REPORT_DIR);
+    fs::create_dir_all(&directory).with_context(|| format!("creating {}", directory.display()))?;
+    if let Some(report) = produced_report(lane) {
+        let from = root.join(report);
+        if from.exists() {
+            let to = directory.join(format!("{lane}.xml"));
+            fs::copy(&from, &to)
+                .with_context(|| format!("copying {} to {}", from.display(), to.display()))?;
+        }
+    }
+    if failed {
+        let marker = directory.join(format!("{lane}.failed"));
+        fs::write(&marker, "").with_context(|| format!("writing {}", marker.display()))?;
+    }
+    Ok(())
+}
+
+/// The journal lives on the executor that runs this lane. The Linux container
+/// is the one with a path that outlives a job — a macOS job runs in a throwaway
+/// guest, where nothing written survives it.
+fn journal_path(config: &CiConfig) -> PathBuf {
+    config.host.cache_root_linux.join("verdict/journal.json")
+}
+
+/// `main` and the nightly chain describe the default branch, so they record.
+/// Everything else is measured against what they recorded.
+pub(crate) fn lane(root: &Path, config: &CiConfig, kind: PipelineKind) -> Result<()> {
+    let common = Common {
+        reports: root.join(REPORT_DIR),
+        journal: journal_path(config),
+        base: std::env::var("CI_MERGE_REQUEST_DIFF_BASE_SHA").ok(),
+    };
+    match kind {
+        PipelineKind::Main | PipelineKind::Nightly => {
+            let sha = std::env::var("CI_COMMIT_SHA")
+                .context("CI_COMMIT_SHA names the run being recorded")?;
+            record(&common, &sha)
+        }
+        PipelineKind::Branch
+        | PipelineKind::MergeRequest
+        | PipelineKind::Quarantine
+        | PipelineKind::Weekly
+        | PipelineKind::Release => check(&common),
+    }
 }
 
 pub(crate) fn run(args: &VerdictArgs) -> Result<()> {
@@ -265,9 +348,10 @@ struct Observed {
 /// on rather than a silence.
 fn observe(common: &Common) -> Result<Observed> {
     let cases = collect(&common.reports)?;
-    if cases.is_empty() && common.failed_jobs.trim().is_empty() {
+    let jobs = failed_markers(&common.reports)?;
+    if cases.is_empty() && jobs.is_empty() {
         bail!(
-            "no JUnit reports under {} and no failed lanes named — a verdict on nothing is not a \
+            "no `JUnit` reports and no failure markers under {} — a verdict on nothing is not a \
              verdict",
             common.reports.display()
         );
@@ -278,15 +362,29 @@ fn observe(common: &Common) -> Result<Observed> {
             .filter(|case| case.failed)
             .map(case_id)
             .collect(),
-        jobs: common
-            .failed_jobs
-            .split(',')
-            .map(str::trim)
-            .filter(|job| !job.is_empty())
-            .map(str::to_owned)
-            .collect(),
+        jobs,
         cases: cases.len(),
     })
+}
+
+/// A lane that failed leaves its name behind, whether or not it could name a
+/// test. `GitLab` hands a job no status for the jobs it needed, so the marker is
+/// what carries that across.
+fn failed_markers(root: &Path) -> Result<BTreeSet<String>> {
+    if !root.exists() {
+        return Ok(BTreeSet::new());
+    }
+    let mut jobs = BTreeSet::new();
+    let entries = fs::read_dir(root).with_context(|| format!("reading {}", root.display()))?;
+    for entry in entries {
+        let path = entry.context("reading a report directory entry")?.path();
+        if path.extension().is_some_and(|kind| kind == "failed")
+            && let Some(lane) = path.file_stem().and_then(|stem| stem.to_str())
+        {
+            jobs.insert(lane.to_owned());
+        }
+    }
+    Ok(jobs)
 }
 
 fn collect(root: &Path) -> Result<Vec<CaseTiming>> {
@@ -388,6 +486,48 @@ mod tests {
         assert!(attested_at_base(&journal, None).is_empty());
         // The window is untouched by either: it is what the verdict compares to.
         assert_eq!(journal.tests(), BTreeSet::from(["suite::b"]));
+    }
+
+    #[test]
+    fn a_lane_that_produced_nothing_publishes_nothing() {
+        let directory = tempfile::tempdir().unwrap();
+        gather(directory.path(), "apple-lint", false).unwrap();
+        assert!(directory.path().join(REPORT_DIR).exists());
+        assert!(
+            fs::read_dir(directory.path().join(REPORT_DIR))
+                .unwrap()
+                .next()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn a_failing_lane_leaves_its_name_even_without_a_report() {
+        let directory = tempfile::tempdir().unwrap();
+        gather(directory.path(), "web-chromium", true).unwrap();
+        assert_eq!(
+            failed_markers(&directory.path().join(REPORT_DIR)).unwrap(),
+            BTreeSet::from(["web-chromium".to_owned()])
+        );
+    }
+
+    #[test]
+    fn a_report_left_by_an_earlier_job_is_not_collected_as_this_ones() {
+        let directory = tempfile::tempdir().unwrap();
+        let stale = directory.path().join("target/nextest/ci/junit.xml");
+        fs::create_dir_all(stale.parent().unwrap()).unwrap();
+        fs::write(&stale, "<testsuites/>").unwrap();
+
+        clear(directory.path(), "apple-test").unwrap();
+        gather(directory.path(), "apple-test", false).unwrap();
+        assert!(
+            !directory
+                .path()
+                .join(REPORT_DIR)
+                .join("apple-test.xml")
+                .exists(),
+            "the build directory survives between jobs, so a stale report must not travel"
+        );
     }
 
     #[test]

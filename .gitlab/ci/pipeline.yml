@@ -6,6 +6,7 @@ include:
   - local: .gitlab/ci/android.yml
   - local: .gitlab/ci/web.yml
   - local: .gitlab/ci/windows.yml
+  - local: .gitlab/ci/verdict.yml
   - local: .gitlab/ci/deep.yml
   - local: .gitlab/ci/lanes.yml
   - local: .gitlab/ci/release.yml
@@ -16,6 +17,7 @@ stages:
   - android
   - web
   - windows
+  - verdict
   - deep
   - lanes
   - release-build

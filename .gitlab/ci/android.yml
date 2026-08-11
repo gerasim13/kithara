@@ -41,3 +41,4 @@ android:test:
     paths:
       - android/lib/build/reports/androidTests/
       - android/lib/build/outputs/androidTest-results/
+      - target/junit/
