@@ -1171,6 +1171,8 @@ async fn stress_offline_crossfade_no_gaps() {
         }
     }
 
+    worker.shutdown();
+
     info!(
         "\n  Worst across 5 HLS→MP3: silence={worst_silence} slow={worst_slow} \
          max_render={worst_render:?}"
