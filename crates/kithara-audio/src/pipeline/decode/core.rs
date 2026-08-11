@@ -24,9 +24,7 @@ use crate::{
         blend::PcmBlender,
         decode::{
             drain::EofDrain,
-            generation::{
-                DecoderGeneration, StageFailure, StageOutput, StageResult, holdback_covers_frontier,
-            },
+            generation::{DecoderGeneration, StageFailure, StageOutput, StageResult},
             resume::ResumeCursor,
             transition::IncomingDecode,
         },
@@ -293,16 +291,6 @@ impl ActiveDecode {
             && self.active.blender_profile().spec() == generation.blender_profile().spec()
     }
 
-    pub(crate) fn transition_holds_output(&self) -> bool {
-        !self.active.is_finished() && self.blender.is_steady() && self.incoming_cut_is_latched()
-    }
-
-    pub(crate) fn outgoing_holdback_needs_pcm(&self) -> bool {
-        self.transition_holds_output()
-            && self.outgoing_holdback_is_active()
-            && !holdback_covers_frontier(&self.active)
-    }
-
     delegate::delegate! {
         to self.active {
             #[call(finish)]
@@ -432,11 +420,12 @@ mod tests {
     use kithara_decode::{BlenderProfile, DecoderSeekOutcome, PcmMeta, PcmSpec};
     use kithara_platform::time::Duration;
     use kithara_stream::{
-        AudioCodec, ContainerFormat, PrerollHint, ReaderInput, VariantTransition,
+        AudioCodec, ContainerFormat, PendingReason, PrerollHint, ReaderInput, VariantTransition,
         VariantTransitionId,
     };
 
     use super::*;
+    use crate::pipeline::decode::transition::IncomingPrime;
 
     #[kithara::test]
     fn configured_container_selects_the_incoming_reader_profile() {
@@ -662,6 +651,173 @@ mod tests {
     }
 
     #[kithara::test]
+    fn holdback_coverage_is_measured_from_the_exact_promotion_cut() {
+        const CUT: u64 = 256;
+        const OUTGOING_FRAMES: u32 = 1_000;
+        const INCOMING_FRAMES: u32 = 1_500;
+
+        let spec = PcmSpec::new(2, NonZeroU32::new(44_100).expect("test rate"));
+        let abr = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0))));
+        abr.request_target(VariantIndex::new(1), AbrReason::ManualOverride);
+        let claim = abr
+            .claim_pending_decision(VariantIndex::new(0))
+            .expect("test transition claim");
+        let transition = VariantTransition::new(
+            VariantTransitionId::new(claim.ticket(), 0),
+            VariantIndex::new(0),
+            VariantIndex::new(1),
+        );
+        let mut incoming = generation(spec);
+        incoming.stage(PcmChunk::new(
+            PcmMeta {
+                spec,
+                frames: INCOMING_FRAMES,
+                ..Default::default()
+            },
+            PcmPool::default().attach(vec![
+                0.5;
+                usize::try_from(INCOMING_FRAMES)
+                    .expect("test frames fit usize")
+                    .saturating_mul(usize::from(spec.channels))
+            ]),
+        ));
+        let mut decode = ActiveDecode::new(generation(spec), GaplessMode::Disabled, Vec::new());
+        decode.incoming = Some(IncomingDecode::Priming {
+            transition,
+            generation: incoming,
+            frontier: OutgoingFrontier::Exact {
+                frame: CUT,
+                rate: spec.sample_rate.get(),
+            },
+        });
+        decode.prepare_incoming_profile(BlenderProfile::new(spec));
+        decode
+            .push(PcmChunk::new(
+                PcmMeta {
+                    spec,
+                    frames: OUTGOING_FRAMES,
+                    ..Default::default()
+                },
+                PcmPool::default().attach(vec![
+                    0.25;
+                    usize::try_from(OUTGOING_FRAMES)
+                        .expect("test frames fit usize")
+                        .saturating_mul(usize::from(spec.channels))
+                ]),
+            ))
+            .expect("valid outgoing PCM enters holdback");
+
+        assert!(decode.transition_holds_output());
+        assert!(
+            decode.outgoing_holdback_needs_pcm(),
+            "PCM that covers the join only from queue-front zero does not cover exact cut {CUT}"
+        );
+    }
+
+    #[kithara::test]
+    fn incoming_landed_ahead_retargets_to_the_observed_outgoing_frontier() {
+        const OLD_CUT: u64 = 256;
+        const LANDED: u64 = 512;
+        const FRAMES: u32 = 1_500;
+
+        let spec = PcmSpec::new(2, NonZeroU32::new(44_100).expect("test rate"));
+        let abr = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0))));
+        abr.request_target(VariantIndex::new(1), AbrReason::ManualOverride);
+        let claim = abr
+            .claim_pending_decision(VariantIndex::new(0))
+            .expect("test transition claim");
+        let transition = VariantTransition::new(
+            VariantTransitionId::new(claim.ticket(), 0),
+            VariantIndex::new(0),
+            VariantIndex::new(1),
+        );
+        let make_chunk = |offset| {
+            PcmChunk::new(
+                PcmMeta {
+                    spec,
+                    frame_offset: offset,
+                    frames: FRAMES,
+                    ..Default::default()
+                },
+                PcmPool::default().attach(vec![
+                    0.25;
+                    usize::try_from(FRAMES)
+                        .expect("test frames fit usize")
+                        .saturating_mul(usize::from(spec.channels))
+                ]),
+            )
+        };
+        let mut active = generation(spec);
+        active.stage(make_chunk(0));
+        let mut incoming = generation(spec);
+        incoming.stage(make_chunk(LANDED));
+        let mut decode = ActiveDecode::new(active, GaplessMode::Disabled, Vec::new());
+        decode.incoming = Some(IncomingDecode::Priming {
+            transition,
+            generation: incoming,
+            frontier: OutgoingFrontier::Exact {
+                frame: OLD_CUT,
+                rate: spec.sample_rate.get(),
+            },
+        });
+
+        let outcome = decode.prime_incoming(OutgoingFrontier::Exact {
+            frame: LANDED,
+            rate: spec.sample_rate.get(),
+        });
+
+        assert_eq!(outcome, IncomingPrime::Ready);
+        assert_eq!(
+            decode.incoming_frontier(),
+            Some(OutgoingFrontier::Exact {
+                frame: LANDED,
+                rate: spec.sample_rate.get(),
+            })
+        );
+    }
+
+    #[kithara::test]
+    fn incoming_variant_change_invalidates_the_stale_generation() {
+        let spec = PcmSpec::new(2, NonZeroU32::new(44_100).expect("test rate"));
+        let abr = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0))));
+        abr.request_target(VariantIndex::new(1), AbrReason::ManualOverride);
+        let claim = abr
+            .claim_pending_decision(VariantIndex::new(0))
+            .expect("test transition claim");
+        let transition = VariantTransition::new(
+            VariantTransitionId::new(claim.ticket(), 0),
+            VariantIndex::new(0),
+            VariantIndex::new(1),
+        );
+        let incoming = DecoderGeneration::new(
+            Box::new(TerminalDecoder::new(spec, TerminalOutcome::VariantChange)),
+            None,
+            0,
+            0,
+            None,
+            GaplessMode::Disabled,
+        );
+        let mut decode = ActiveDecode::new(generation(spec), GaplessMode::Disabled, Vec::new());
+        decode.incoming = Some(IncomingDecode::Priming {
+            transition,
+            generation: incoming,
+            frontier: OutgoingFrontier::Awaiting,
+        });
+
+        assert_eq!(
+            decode.prime_incoming(OutgoingFrontier::Awaiting),
+            IncomingPrime::Failed
+        );
+        assert!(matches!(
+            decode.incoming,
+            Some(IncomingDecode::Failed {
+                transition: failed,
+                ..
+            }) if failed == transition
+        ));
+    }
+
+    #[kithara::test]
     fn active_join_drains_before_a_latched_follow_up_transition_holds_output() {
         let spec = PcmSpec::new(2, NonZeroU32::new(44_100).expect("test rate"));
         let incoming = generation(spec);
@@ -755,7 +911,7 @@ mod tests {
             spec.sample_rate.get(),
         );
 
-        assert!(decode.transition_holds_output());
+        assert!(!decode.transition_holds_output());
         let output = decode
             .next_output(&mut cursor, 0)
             .expect("preparing transition keeps active output valid");
@@ -766,15 +922,35 @@ mod tests {
         );
     }
 
-    struct EofDecoder(PcmSpec);
+    #[derive(Clone, Copy)]
+    enum TerminalOutcome {
+        Eof,
+        VariantChange,
+    }
 
-    impl Decoder for EofDecoder {
+    struct TerminalDecoder {
+        outcome: TerminalOutcome,
+        spec: PcmSpec,
+    }
+
+    impl TerminalDecoder {
+        const fn new(spec: PcmSpec, outcome: TerminalOutcome) -> Self {
+            Self { outcome, spec }
+        }
+    }
+
+    impl Decoder for TerminalDecoder {
         fn duration(&self) -> Option<Duration> {
             None
         }
 
         fn next_chunk(&mut self) -> DecodeResult<DecoderChunkOutcome> {
-            Ok(DecoderChunkOutcome::Eof)
+            Ok(match self.outcome {
+                TerminalOutcome::Eof => DecoderChunkOutcome::Eof,
+                TerminalOutcome::VariantChange => {
+                    DecoderChunkOutcome::Pending(PendingReason::VariantChange)
+                }
+            })
         }
 
         fn seek(&mut self, position: Duration) -> DecodeResult<DecoderSeekOutcome> {
@@ -787,7 +963,7 @@ mod tests {
         }
 
         fn spec(&self) -> PcmSpec {
-            self.0
+            self.spec
         }
 
         fn update_byte_len(&self, _len: u64) {}
@@ -795,7 +971,7 @@ mod tests {
 
     fn generation(spec: PcmSpec) -> DecoderGeneration {
         DecoderGeneration::new(
-            Box::new(EofDecoder(spec)),
+            Box::new(TerminalDecoder::new(spec, TerminalOutcome::Eof)),
             None,
             0,
             0,

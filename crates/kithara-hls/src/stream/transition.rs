@@ -78,6 +78,14 @@ impl SessionSlots {
         }
     }
 
+    pub(super) fn incoming_session(&self) -> Option<Arc<HlsSession>> {
+        self.transition
+            .lock()
+            .incoming
+            .as_ref()
+            .map(|slot| Arc::clone(&slot.session))
+    }
+
     fn publish_exact_one(&self, session: Arc<HlsSession>) {
         self.publication
             .store(Arc::new(ResidentSessions::one(session)));

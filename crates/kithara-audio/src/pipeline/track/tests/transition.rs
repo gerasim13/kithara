@@ -81,6 +81,10 @@ fn abandoned_incoming_plan_at(frame: u64) -> VariantReaderPlan {
 fn successive_incoming_plans() -> (VariantReaderPlan, VariantReaderPlan) {
     let abr = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0))));
     let first = request_incoming_plan(&abr);
+    assert!(
+        abr.abort_pending(first.transition().id().abr_ticket()),
+        "first transition fixture must release its exact ABR ticket"
+    );
     let second = request_incoming_plan(&abr);
     (first, second)
 }
@@ -454,7 +458,7 @@ async fn exact_primed_generation_promotes_once_at_outgoing_frontier() {
 }
 
 #[kithara::test(tokio)]
-async fn retained_reader_plan_latches_cut_before_decoder_build() {
+async fn retained_reader_plan_keeps_promotion_cut_open_before_decoder_build() {
     let mut fixture = route_signal_source(Consts::SAMPLE_RATE).await;
     let TrackStep::Produced(first_outgoing) = fixture.source.step_track() else {
         panic!("the active decoder must establish an exact production frontier");
@@ -469,16 +473,20 @@ async fn retained_reader_plan_latches_cut_before_decoder_build() {
 
     assert!(fixture.source.decode.incoming_is_preparing(transition));
     assert_eq!(
-        fixture.source.decode.incoming_frontier(),
-        Some(OutgoingFrontier::Exact {
-            frame: cut,
-            rate: Consts::SAMPLE_RATE,
-        })
+        fixture.control.landing(),
+        Some(duration_for_frames(Consts::SAMPLE_RATE, cut))
     );
-    assert!(matches!(fixture.source.step_track(), TrackStep::Blocked(_)));
+    assert_eq!(
+        fixture.source.decode.incoming_frontier(),
+        Some(OutgoingFrontier::Awaiting)
+    );
+    let TrackStep::Produced(next_outgoing) = fixture.source.step_track() else {
+        panic!("the active decoder must keep producing until the incoming cut is latched");
+    };
+    assert_eq!(produced_data(next_outgoing).meta.frame_offset, cut);
     assert_eq!(
         fixture.source.resume.decode_head(0),
-        Some((cut, Consts::SAMPLE_RATE))
+        Some((cut.saturating_mul(2), Consts::SAMPLE_RATE))
     );
     assert!(fixture.source.decode.active().staged_span().is_none());
 }

@@ -104,6 +104,14 @@ fn promotion_frontier_for(
     }
 }
 
+fn initial_promotion_frontier(transition: VariantTransition) -> OutgoingFrontier {
+    if transition.outgoing_disposition() == OutgoingDisposition::Abandoned {
+        OutgoingFrontier::Unavailable
+    } else {
+        OutgoingFrontier::Awaiting
+    }
+}
+
 impl<T: StreamType> StreamAudioSource<T> {
     /// Bounded off-RT retire queue for decode state displaced on the produce core.
     const GENERATION_RETIRE_CAPACITY: usize = 4;
@@ -236,10 +244,9 @@ impl<T: StreamType> StreamAudioSource<T> {
         };
         let transition = plan.transition();
         if self.decode.incoming_transition() != Some(transition)
-            && let Some(generation) = self.decode.begin_incoming(
-                transition,
-                promotion_frontier_for(transition, outgoing_frontier),
-            )
+            && let Some(generation) = self
+                .decode
+                .begin_incoming(transition, initial_promotion_frontier(transition))
         {
             self.retired.retire_generation(generation);
         }
