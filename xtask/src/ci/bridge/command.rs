@@ -8,9 +8,11 @@ use anyhow::{Context, Result, bail};
 use clap::{Args, Subcommand};
 use reqwest::Url;
 use serde::Deserialize;
+use tracing::info;
 
 use super::{
-    model::{regular_file, simple_branch, simple_repository},
+    ledger::Ledger,
+    model::{regular_file, simple_branch, simple_repository, validate_sha},
     reconcile::Bridge,
 };
 
@@ -34,15 +36,22 @@ enum BridgeCommand {
         #[arg(long, env = "KITHARA_BRIDGE_CONFIG")]
         config: PathBuf,
     },
+    /// Forget a GitHub head so a rejected import can be attempted again.
+    Retry {
+        /// Bridge configuration file.
+        #[arg(long, env = "KITHARA_BRIDGE_CONFIG")]
+        config: PathBuf,
+        /// Full commit SHA of the GitHub head to clear.
+        #[arg(long)]
+        github_sha: String,
+    },
 }
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct BridgeConfig {
     pub(super) github_repo: String,
-    pub(super) github_app_id: u64,
-    pub(super) github_installation_id: u64,
-    pub(super) github_private_key: PathBuf,
+    pub(super) github_token_file: PathBuf,
     pub(super) gitlab_url: Url,
     pub(super) gitlab_project_id: u64,
     pub(super) gitlab_project_path: String,
@@ -73,14 +82,11 @@ impl BridgeConfig {
         if !simple_repository(&self.gitlab_project_path) {
             bail!("gitlab_project_path must use a safe group/name form");
         }
-        if self.github_app_id == 0
-            || self.github_installation_id == 0
-            || self.gitlab_project_id == 0
-        {
-            bail!("GitHub App, installation, and GitLab project ids must be positive");
+        if self.gitlab_project_id == 0 {
+            bail!("GitLab project id must be positive");
         }
         for (label, path) in [
-            ("GitHub App private key", &self.github_private_key),
+            ("GitHub token", &self.github_token_file),
             ("GitLab token", &self.gitlab_token_file),
         ] {
             if !regular_file(path) {
@@ -144,6 +150,20 @@ pub(crate) fn run(args: &BridgeArgs) -> Result<()> {
         BridgeCommand::Reconcile { config } => {
             Bridge::new(BridgeConfig::load(config)?)?.reconcile_once()
         }
+        BridgeCommand::Retry { config, github_sha } => {
+            if !validate_sha(github_sha) {
+                bail!("github-sha must be a full 40-character commit SHA");
+            }
+            let config = BridgeConfig::load(config)?;
+            let cleared = Ledger::new(&config.state_dir)?.forget(github_sha)?;
+            if cleared.is_empty() {
+                bail!("no ledger entry recorded for {github_sha}");
+            }
+            for key in cleared {
+                info!(entry = %key, "ledger entry cleared");
+            }
+            Ok(())
+        }
     }
 }
 
@@ -202,6 +222,27 @@ mod tests {
                 "reconcile",
                 "--config",
                 "bridge.toml"
+            ])
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn retry_names_the_head_it_forgets() {
+        assert!(
+            Cli::try_parse_from(["xtask", "ci", "bridge", "retry", "--config", "bridge.toml"])
+                .is_err()
+        );
+        assert!(
+            Cli::try_parse_from([
+                "xtask",
+                "ci",
+                "bridge",
+                "retry",
+                "--config",
+                "bridge.toml",
+                "--github-sha",
+                "0123456789abcdef0123456789abcdef01234567"
             ])
             .is_ok()
         );

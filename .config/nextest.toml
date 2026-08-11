@@ -37,6 +37,11 @@ fail-fast = false
 test-threads = "num-cpus"
 leak-timeout = "2s"
 
+# `path` resolves against the profile's store directory
+# (`target/nextest/ci/`), so it must stay relative: spelling it out from the
+# repository root nests the file under itself and the report never reaches CI.
+# Keep this table last — a `[profile.ci.junit]` header placed above the
+# profile's own keys silently swallows them.
 [profile.ci.junit]
 path = "junit.xml"
 

@@ -3,13 +3,14 @@ use std::{env, path::PathBuf, process::Output};
 use anyhow::{Context, Result, bail};
 use clap::{Args, ValueEnum};
 use kithara_devtools::Ctx;
-use tracing::info;
+use tracing::{info, warn};
 
 use super::{
     config::CiConfig,
     environment::{CiEnvironment, PROVISIONED_LINUX_IMAGE_ENV, is_gitlab},
     lane,
     process::Process,
+    verdict,
 };
 use crate::config::KitharaExt;
 
@@ -59,6 +60,7 @@ pub(crate) enum Lane {
     ReleaseWasm,
     ReleaseAndroid,
     ReleasePublish,
+    Verdict,
 }
 
 /// Which shared cache a lane leases. Lanes sharing an executor share its cache,
@@ -91,7 +93,8 @@ impl Lane {
             | Self::ReleaseXcframework
             | Self::ReleaseDocs
             | Self::ReleaseWasm => CacheGroup::Macos,
-            Self::LinuxSecrets
+            Self::Verdict
+            | Self::LinuxSecrets
             | Self::LinuxCheck
             | Self::LinuxWasm
             | Self::LinuxTest
@@ -287,6 +290,12 @@ pub(crate) fn run(args: &RunArgs, ctx: &Ctx) -> Result<()> {
     // for; the cache on disk is untouched.
     retire_sccache_server(&process)?;
 
+    let lane_name = args
+        .lane
+        .to_possible_value()
+        .map_or_else(|| "lane".to_owned(), |value| value.get_name().to_owned());
+    verdict::clear(&ctx.root, &lane_name)?;
+
     let result = match args.lane {
         Lane::AppleLint => lane::apple::lint(&process, &ci_config),
         Lane::AppleMsrv => lane::apple::msrv(&process, &ci_config),
@@ -331,8 +340,15 @@ pub(crate) fn run(args: &RunArgs, ctx: &Ctx) -> Result<()> {
         Lane::ReleaseWasm => super::release::wasm(&process, ctx, &ext),
         Lane::ReleaseAndroid => super::release::build_android(&process, ctx, &ext),
         Lane::ReleasePublish => super::release::publish(&process, ctx, &ext, args.kind),
+        Lane::Verdict => verdict::lane(&ctx.root, &ci_config, args.kind),
     };
     process.best_effort("sccache", &["--show-stats"], "sccache statistics");
+    // The verdict reads what every lane leaves here, so collection cannot be
+    // conditional on the lane passing — a failing lane is the one whose report
+    // decides whether a merge request is held.
+    if let Err(error) = verdict::gather(&ctx.root, &lane_name, result.is_err()) {
+        warn!(%error, lane = %lane_name, "could not collect this lane's test report");
+    }
     result
 }
 

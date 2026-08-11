@@ -1,0 +1,68 @@
+{
+  "testNodes": [
+    {
+      "children": [
+        {
+          "children": [
+            {
+              "children": [
+                {
+                  "children": [
+                    {
+                      "name": "Laba413CacheCommitGrows.swift:6: Thread running at User-initiated quality-of-service class waiting on a lower QoS thread running at Default quality-of-service class. Investigate ways to avoid priority inversions",
+                      "nodeType": "Runtime Warning"
+                    }
+                  ],
+                  "duration": "1 с",
+                  "durationInSeconds": 1,
+                  "name": "LABA-413 commits played audio into the configured cache",
+                  "nodeIdentifier": "LabaIOSTraps/laba413CacheCommitGrows()",
+                  "nodeIdentifierURL": "test://com.apple.xcode/KitharaDemo/KitharaDemoUnitTests_iOS/LabaIOSTraps/laba413CacheCommitGrows()",
+                  "nodeType": "Test Case",
+                  "result": "Passed"
+                },
+                {
+                  "children": [
+                    {
+                      "name": "Laba415InterruptionResume.swift:11: Thread running at User-initiated quality-of-service class waiting on a lower QoS thread running at Default quality-of-service class. Investigate ways to avoid priority inversions",
+                      "nodeType": "Runtime Warning"
+                    }
+                  ],
+                  "name": "LABA-415 pauses and resumes for an audio-session interruption",
+                  "nodeIdentifier": "LabaIOSTraps/laba415InterruptionResume()",
+                  "nodeIdentifierURL": "test://com.apple.xcode/KitharaDemo/KitharaDemoUnitTests_iOS/LabaIOSTraps/laba415InterruptionResume()",
+                  "nodeType": "Test Case",
+                  "result": "Passed"
+                },
+                {
+                  "children": [
+                    {
+                      "name": "Laba419OfflineResume.swift:68: Expectation failed: resumed: LABA-419: connectivity returned after playback starved at 47.993375s, but media time never reached 48.993375s; current=47.993375s",
+                      "nodeType": "Failure Message"
+                    }
+                  ],
+                  "duration": "1 мин 35 с",
+                  "durationInSeconds": 95,
+                  "name": "LABA-419 resumes playback after connectivity returns",
+                  "nodeIdentifier": "LabaIOSTraps/laba419OfflineResume()",
+                  "nodeIdentifierURL": "test://com.apple.xcode/KitharaDemo/KitharaDemoUnitTests_iOS/LabaIOSTraps/laba419OfflineResume()",
+                  "nodeType": "Test Case",
+                  "result": "Failed"
+                }
+              ],
+              "name": "LABA iOS traps",
+              "nodeType": "Test Suite",
+              "result": "Failed"
+            }
+          ],
+          "name": "KitharaDemoUnitTests_iOS",
+          "nodeType": "Unit test bundle",
+          "result": "Failed"
+        }
+      ],
+      "name": "KitharaDemoUnitTests_iOS",
+      "nodeType": "Test Plan",
+      "result": "Failed"
+    }
+  ]
+}

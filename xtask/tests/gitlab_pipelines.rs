@@ -182,7 +182,7 @@ fn pipeline_kind<'a>(condition: &'a Value, owner: &str) -> &'a str {
         .unwrap_or_else(|| panic!("`{owner}` has an unknown rule condition"))
 }
 
-fn assert_active_review_job(config: &GitlabConfig, job: &str, expected_owner: &str) {
+fn assert_active_review_job(config: &GitlabConfig, job: &str, expected_owner: &str, judged: bool) {
     let owner = config
         .rules_owner(job)
         .unwrap_or_else(|| panic!("`{job}` has no effective rules"));
@@ -199,10 +199,16 @@ fn assert_active_review_job(config: &GitlabConfig, job: &str, expected_owner: &s
             .unwrap_or_else(|| panic!("`{job}` has a non-string effective `when`"))
     });
     assert_automatic_when(effective_when, job);
-    assert!(
-        config.effective_value(job, "allow_failure").is_none(),
-        "`{job}` must remain blocking"
-    );
+    let allow_failure = config.effective_value(job, "allow_failure");
+    if judged {
+        assert_eq!(
+            allow_failure,
+            Some(Value::Bool(true)),
+            "`{job}` must report through the blocking verdict"
+        );
+    } else {
+        assert!(allow_failure.is_none(), "`{job}` must remain blocking");
+    }
 }
 
 fn assert_automatic_when(when: Option<&str>, context: &str) {
@@ -363,6 +369,40 @@ fn an_open_merge_request_runs_the_complete_apple_review_matrix() {
         .collect();
     assert!(includes.contains(".gitlab/ci/common.yml"));
     assert!(includes.contains(".gitlab/ci/apple.yml"));
+    assert!(includes.contains(".gitlab/ci/verdict.yml"));
+
+    let verdict = yaml(root.join(".gitlab/ci/verdict.yml"));
+    let verdict = mapping(&verdict, "the verdict pipeline");
+    let verdict = mapping(
+        verdict
+            .get("verdict")
+            .expect("the verdict pipeline has a job"),
+        "the verdict job",
+    );
+    assert_eq!(verdict.get("when").and_then(Value::as_str), Some("always"));
+    assert!(!verdict.contains_key("allow_failure"));
+    let verdict_needs: BTreeSet<&str> = verdict
+        .get("needs")
+        .and_then(Value::as_sequence)
+        .expect("the verdict declares judged jobs")
+        .iter()
+        .map(|need| {
+            let need = mapping(need, "a verdict dependency");
+            assert_eq!(need.get("artifacts").and_then(Value::as_bool), Some(true));
+            assert_eq!(need.get("optional").and_then(Value::as_bool), Some(true));
+            need.get("job")
+                .and_then(Value::as_str)
+                .expect("a verdict dependency names its job")
+        })
+        .collect();
+    for job in [
+        "apple:test",
+        "apple:test-flash-off",
+        "apple:swift-test",
+        "apple:ios-test",
+    ] {
+        assert!(verdict_needs.contains(job), "verdict must judge `{job}`");
+    }
 
     let config = GitlabConfig::load(root);
     let expected_jobs = BTreeSet::from([
@@ -384,18 +424,22 @@ fn an_open_merge_request_runs_the_complete_apple_review_matrix() {
         .collect();
     assert_eq!(actual_jobs, expected_jobs);
 
-    for (job, owner) in [
-        ("apple:lint", ".rules-verify-and-branch"),
-        ("apple:msrv", ".rules-verify"),
-        ("apple:test", ".rules-verify-and-branch"),
-        ("apple:test-flash-off", ".rules-integration-and-review"),
-        ("apple:xcframework", ".rules-verify-and-branch"),
-        ("apple:swift-test", ".rules-verify"),
-        ("apple:ios", ".rules-verify"),
-        ("apple:ios-test", ".rules-integration-and-review"),
-        ("apple:e2e", ".rules-review-or-nightly"),
+    for (job, owner, judged) in [
+        ("apple:lint", ".rules-verify-and-branch", false),
+        ("apple:msrv", ".rules-verify", false),
+        ("apple:test", ".rules-verify-and-branch", true),
+        (
+            "apple:test-flash-off",
+            ".rules-integration-and-review",
+            true,
+        ),
+        ("apple:xcframework", ".rules-verify-and-branch", false),
+        ("apple:swift-test", ".rules-verify", true),
+        ("apple:ios", ".rules-verify", false),
+        ("apple:ios-test", ".rules-integration-and-review", true),
+        ("apple:e2e", ".rules-review-or-nightly", false),
     ] {
-        assert_active_review_job(&config, job, owner);
+        assert_active_review_job(&config, job, owner, judged);
     }
 
     assert_eq!(

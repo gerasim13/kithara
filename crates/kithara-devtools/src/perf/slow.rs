@@ -10,10 +10,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     common::project::ProjectConfig,
-    perf::{
-        junit::{CaseTiming, parse_junit},
-        lanes::{RunPaths, primary_lane_name},
-    },
+    junit::{CaseTiming, parse_junit},
+    perf::lanes::{RunPaths, primary_lane_name},
 };
 
 type TestKey = (String, String);
@@ -232,7 +230,7 @@ pub(crate) fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::perf::junit::CaseTiming;
+    use crate::junit::CaseTiming;
 
     fn case(suite: &str, name: &str, secs: f64) -> CaseTiming {
         CaseTiming {

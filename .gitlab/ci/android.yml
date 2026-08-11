@@ -20,6 +20,7 @@ android:build:
 android:test:
   extends:
     - .android-job
+    - .judged
     - .measured
   interruptible: false
   rules:
@@ -41,3 +42,4 @@ android:test:
     paths:
       - android/lib/build/reports/androidTests/
       - android/lib/build/outputs/androidTest-results/
+      - target/junit/
