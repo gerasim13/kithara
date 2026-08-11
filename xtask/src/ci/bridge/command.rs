@@ -141,6 +141,18 @@ impl BridgeConfig {
     }
 }
 
+/// The secrets a bridge configuration points at, for the installer that has to
+/// check who owns them before activating the service.
+///
+/// It reads them from here rather than declaring the file's shape a second time:
+/// the copy that did went on asking for the GitHub App private key after the
+/// bridge moved to a token, so activation would have refused every correct
+/// configuration — and only at the last step of the switchover.
+pub(crate) fn secret_files(config: &Path) -> Result<[PathBuf; 2]> {
+    let config = BridgeConfig::load(config)?;
+    Ok([config.github_token_file, config.gitlab_token_file])
+}
+
 pub(crate) fn run(args: &BridgeArgs) -> Result<()> {
     match &args.command {
         BridgeCommand::Validate { config } => {
@@ -198,6 +210,34 @@ mod tests {
             toml::from_str::<BridgeConfig>(&with_ca).is_err(),
             "bridge config must reject a private CA instead of silently ignoring it"
         );
+    }
+
+    /// What the installer checks ownership of before it activates the service.
+    /// It used to read the file through a declaration of its own, which went on
+    /// asking for a GitHub App private key long after the bridge moved to a
+    /// token — so both tokens have to come back from the configuration the
+    /// bridge itself parses, and both have to be there.
+    #[test]
+    fn the_installer_is_handed_both_tokens_from_the_bridge_configuration() {
+        let directory = tempfile::tempdir().unwrap();
+        let github = directory.path().join("github.token");
+        let gitlab = directory.path().join("gitlab.token");
+        std::fs::write(&github, "token\n").unwrap();
+        std::fs::write(&gitlab, "token\n").unwrap();
+        let config = directory.path().join("config.toml");
+        std::fs::write(
+            &config,
+            example()
+                .replace("/path/to/github-token", github.to_str().unwrap())
+                .replace("/path/to/gitlab-token", gitlab.to_str().unwrap())
+                .replace(
+                    "/path/to/bridge-state",
+                    directory.path().join("state").to_str().unwrap(),
+                ),
+        )
+        .unwrap();
+
+        assert_eq!(super::secret_files(&config).unwrap(), [github, gitlab]);
     }
 
     #[test]
