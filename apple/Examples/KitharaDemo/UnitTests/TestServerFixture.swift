@@ -164,6 +164,91 @@ enum TestServerFixture {
         return result
     }
 
+    /// A single-variant HLS master whose media segments arrive at roughly the
+    /// rate they are consumed.
+    ///
+    /// The fixture server answers over loopback, so a player drains the whole
+    /// track into its store within a second of `play()`. A test that then
+    /// takes the network away observes nothing — playback runs on from what is
+    /// already stored. Pacing the segments, while the playlists stay
+    /// immediate, bounds how far ahead the player can get, which is what makes
+    /// an outage observable at all.
+    static func pacedHlsMasterURL(
+        chunk: Int = 3072,
+        delayMilliseconds: UInt64 = 250
+    ) async throws -> URL {
+        let variant = "index-slq-a1.m3u8"
+        let initialization = "init-slq-a1.mp4"
+        let playlist = try await fixtureText(at: asset("hls/\(variant)"))
+
+        var rewritten: [String] = []
+        for substring in playlist.split(separator: "\n", omittingEmptySubsequences: false) {
+            let line = String(substring)
+            if line.hasPrefix("#EXT-X-MAP:") {
+                rewritten.append(
+                    line.replacingOccurrences(
+                        of: initialization,
+                        with: try asset("hls/\(initialization)").absoluteString
+                    )
+                )
+            } else if !line.isEmpty, !line.hasPrefix("#") {
+                let segment = try await registerBehavior(
+                    .init(
+                        content: .asset(name: "hls/\(line)"),
+                        delivery: .throttle(
+                            chunk: chunk,
+                            delayMilliseconds: delayMilliseconds
+                        )
+                    )
+                )
+                rewritten.append(segment.childURL(line).absoluteString)
+            } else {
+                rewritten.append(line)
+            }
+        }
+
+        let media = try await registerBehavior(
+            .init(
+                content: .bytes(
+                    Data(rewritten.joined(separator: "\n").utf8),
+                    contentType: "application/vnd.apple.mpegurl"
+                ),
+                delivery: .normal
+            )
+        )
+        let master = """
+        #EXTM3U
+        #EXT-X-STREAM-INF:PROGRAM-ID=1,BANDWIDTH=66005,CODECS="mp4a.40.2"
+        \(media.childURL(variant).absoluteString)
+
+        """
+        let masterHandle = try await registerBehavior(
+            .init(
+                content: .bytes(
+                    Data(master.utf8),
+                    contentType: "application/vnd.apple.mpegurl"
+                ),
+                delivery: .normal
+            )
+        )
+        return masterHandle.childURL("master.m3u8")
+    }
+
+    private static func fixtureText(at url: URL) async throws -> String {
+        let (data, response) = try await URLSession.shared.data(from: url)
+        guard let http = response as? HTTPURLResponse else {
+            throw FixtureError.invalidResponse(url)
+        }
+        guard http.statusCode == 200 else {
+            let body = String(data: data, encoding: .utf8) ?? "<non-UTF-8 body>"
+            throw FixtureError.unexpectedStatus(url, http.statusCode, body)
+        }
+        guard let text = String(data: data, encoding: .utf8) else {
+            throw FixtureError.invalidResponse(url)
+        }
+        return text
+    }
+
     static func setNetwork(online: Bool) async throws {
         _ = try await post(
             NetworkRequest(online: online),

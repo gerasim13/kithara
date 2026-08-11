@@ -27,7 +27,7 @@ extension IntegrationRegressionsIOS {
 
         let player = KitharaPlayer(config: .init(store: AssetStore(root: cacheURL.path)))
         let item = KitharaPlayerItem(
-            url: try TestServerFixture.asset("hls/master.m3u8").absoluteString
+            url: try await TestServerFixture.pacedHlsMasterURL().absoluteString
         )
         let signals = ResumeSignals()
         let stallCancellable = item.didStall.sink {
