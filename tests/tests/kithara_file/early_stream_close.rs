@@ -190,13 +190,16 @@ async fn file_stream_closes_early_seek_still_works() {
         }
     });
 
-    let result = match time::timeout(Duration::from_secs(5), phase2).await {
-        Ok(Ok(result)) => result,
-        Ok(Err(e)) => panic!("Blocking task panicked: {:?}", e),
-        Err(_) => panic!(
-            "DEADLOCK: seek hung waiting for data beyond {}KB. On-demand mode not working.",
-            Consts::STREAM_CLOSES_AT / 1024
-        ),
+    let result = {
+        let _real_io = real_io();
+        match time::timeout(Duration::from_secs(5), phase2).await {
+            Ok(Ok(result)) => result,
+            Ok(Err(e)) => panic!("Blocking task panicked: {:?}", e),
+            Err(_) => panic!(
+                "DEADLOCK: seek hung waiting for data beyond {}KB. On-demand mode not working.",
+                Consts::STREAM_CLOSES_AT / 1024
+            ),
+        }
     };
 
     result.unwrap();
