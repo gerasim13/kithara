@@ -163,8 +163,17 @@ fn assert_hosted_authorization(job: &Mapping) {
 #[test]
 fn github_ci_is_fail_closed_and_aggregates_every_job() {
     let workflow = github_workflow("ci.yml");
-    assert_no_key(&workflow, "continue-on-error");
     let jobs = workflow_jobs(&workflow);
+
+    let advisory_browser = workflow_job(jobs, "wasm-browser");
+    assert_eq!(
+        mapping_field(advisory_browser, "name").as_str(),
+        Some("Chromium WebCodecs (advisory)")
+    );
+    assert_eq!(
+        mapping_field(advisory_browser, "continue-on-error").as_bool(),
+        Some(true)
+    );
 
     assert_hosted_authorization(workflow_job(jobs, "authorize"));
     let gate = workflow_job(jobs, "gate");
@@ -179,6 +188,9 @@ fn github_ci_is_fail_closed_and_aggregates_every_job() {
             continue;
         }
         let job = workflow_job(jobs, &name);
+        if name != "wasm-browser" {
+            assert_no_key(&Value::Mapping(job.clone()), "continue-on-error");
+        }
         assert_eq!(
             job_needs(job),
             BTreeSet::from(["gate".to_owned()]),
@@ -200,6 +212,7 @@ fn github_ci_is_fail_closed_and_aggregates_every_job() {
     );
     let mut expected = workflow_job_names(jobs);
     expected.remove("required");
+    expected.remove("wasm-browser");
     assert_eq!(job_needs(required), expected);
 
     let step = first_step(required);
