@@ -3,8 +3,8 @@ use kithara_decode::{ChunkRetire, PcmChunk};
 use kithara_events::{AudioEvent, DecoderChangeCause, DeferredBus, Event, TrackFailureKind};
 use kithara_platform::sync::Arc;
 use kithara_stream::{
-    Activity, OpenedVariantReader, PlayheadWrite, SeekControl, SeekObserve, StreamType,
-    VariantControl, VariantPromotion, VariantReaderTake, VariantTransition,
+    Activity, OpenedVariantReader, OutgoingDisposition, PlayheadWrite, SeekControl, SeekObserve,
+    StreamType, VariantControl, VariantPromotion, VariantReaderTake, VariantTransition,
 };
 use tracing::{trace, warn};
 
@@ -181,6 +181,9 @@ impl<T: StreamType> Drop for StreamAudioSource<T> {
         if let Some(ref emit) = self.emit {
             emit.flush();
         }
+        if let Some(chunk) = self.decode.take_rejected_chunk() {
+            ChunkRetire::retire(&self.retired, chunk);
+        }
         self.retired.drain();
     }
 }
@@ -262,18 +265,15 @@ impl<T: StreamType> StreamAudioSource<T> {
     }
 
     fn progress_variant_transition(&mut self) {
-        // A reader starved on a variant that stopped delivering parks in
-        // `WaitingForSource` with the active decoder intact and only source
-        // bytes missing — the exact state an urgent down-switch exists to
-        // leave, so the transition has to keep advancing through it. The seek
-        // and recreate phases stay excluded: they are about to replace the very
-        // decoder a promotion would install into.
-        let outgoing_unavailable = match &self.state {
-            CurrentFsm::Decoding(_) => false,
+        // A reader starved on the outgoing variant keeps advancing an already
+        // requested transition. The transition itself owns whether that source
+        // remains part of the promotion proof. The seek and recreate phases
+        // stay excluded: they are about to replace the decoder a promotion
+        // would install into.
+        match &self.state {
+            CurrentFsm::Decoding(_) => {}
             CurrentFsm::WaitingForSource(track) => {
-                if matches!(track.data().context, WaitContext::Playback) {
-                    true
-                } else {
+                if !matches!(track.data().context, WaitContext::Playback) {
                     return;
                 }
             }
@@ -287,28 +287,35 @@ impl<T: StreamType> StreamAudioSource<T> {
                 return;
             }
             _ => return,
-        };
+        }
         let Some(control) = self.variant_control.clone() else {
             return;
         };
 
-        let outgoing_frontier = match self.resume.decode_head(self.seek_obs.epoch()) {
+        let landing_frontier = match self.resume.decode_head(self.seek_obs.epoch()) {
             Some((frame, rate)) => OutgoingFrontier::Exact { frame, rate },
-            None if outgoing_unavailable => OutgoingFrontier::Unavailable,
             None => OutgoingFrontier::Awaiting,
         };
         self.retire_failed_incoming(control.as_ref());
+        let promotion_frontier = if self.decode.incoming_transition().is_some_and(|transition| {
+            transition.outgoing_disposition() == OutgoingDisposition::Abandoned
+        }) {
+            OutgoingFrontier::Unavailable
+        } else {
+            landing_frontier
+        };
         // Priming is bounded per pass and may mint the overlap proof consumed
         // immediately below. A publication lock leaves both generations intact
         // and the next pass extends the staged range to the newer frontier.
-        let prime = self.decode.prime_incoming(outgoing_frontier);
+        let prime = self.decode.prime_incoming(promotion_frontier);
         if let Some(incoming) = self.decode.incoming_transition() {
             // The frontier and the prime outcome together are the only thing
             // that separates "the incoming is still staging" from "the splice
             // has nothing to land against": both look identical from outside as
             // a switch that simply never commits.
             trace!(
-                ?outgoing_frontier,
+                ?landing_frontier,
+                ?promotion_frontier,
                 ?prime,
                 ?incoming,
                 "variant transition pass"
@@ -317,11 +324,10 @@ impl<T: StreamType> StreamAudioSource<T> {
         if prime == IncomingPrime::Advanced {
             self.rebuild.wake();
         }
-        if !self.promote_ready_incoming(control.as_ref(), outgoing_frontier) {
+        if !self.promote_ready_incoming(control.as_ref(), promotion_frontier) {
             return;
         }
-        let Some(transition) =
-            self.prepare_incoming_transition(control.as_ref(), outgoing_frontier)
+        let Some(transition) = self.prepare_incoming_transition(control.as_ref(), landing_frontier)
         else {
             return;
         };
@@ -333,45 +339,44 @@ impl<T: StreamType> StreamAudioSource<T> {
         control: &dyn VariantControl,
         outgoing_frontier: OutgoingFrontier,
     ) -> bool {
-        let Some(proof) = self.decode.ready_to_promote(outgoing_frontier) else {
+        let Some(prepared) = self.decode.prepare_promotion(outgoing_frontier) else {
             return true;
         };
-        match control.promote_variant(proof.transition()) {
+        let transition = prepared.transition();
+        match control.promote_variant(transition) {
             VariantPromotion::Promoted => {
-                if let Some(outgoing) = self.decode.promote_incoming(proof) {
-                    if let Some(ref emit) = self.emit {
-                        enqueue_generation_installed(
-                            emit,
-                            &GenerationInstalled {
-                                backend: self.decoder_backend,
-                                cause: DecoderChangeCause::VariantSwitch,
-                                epoch: self.seek_obs.epoch(),
-                                generation: self.decode.active(),
-                                host_sample_rate: self.resume.host_rate(),
-                                playback_resampler_backend: self.playback_resampler_backend,
-                                recreates_on_route: self.resume.recreates_on_route(),
-                            },
-                        );
-                    }
-                    self.retired.retire_generation(outgoing);
-                } else {
-                    warn!(
-                        transition = ?proof.transition(),
-                        "source promoted a variant without matching primed audio"
+                let outgoing = self.decode.commit_prepared_promotion(prepared);
+                if let Some(ref emit) = self.emit {
+                    enqueue_generation_installed(
+                        emit,
+                        &GenerationInstalled {
+                            backend: self.decoder_backend,
+                            cause: DecoderChangeCause::VariantSwitch,
+                            epoch: self.seek_obs.epoch(),
+                            generation: self.decode.active(),
+                            host_sample_rate: self.resume.host_rate(),
+                            playback_resampler_backend: self.playback_resampler_backend,
+                            recreates_on_route: self.resume.recreates_on_route(),
+                        },
                     );
                 }
+                self.retired.retire_generation(outgoing);
                 true
             }
-            VariantPromotion::Deferred => false,
+            VariantPromotion::Deferred => {
+                self.decode.restore_prepared_promotion(prepared);
+                false
+            }
             VariantPromotion::Stale => {
-                self.discard_local_incoming();
+                self.retired.retire_generation(prepared.into());
                 true
             }
             _ => {
                 warn!(
-                    transition = ?proof.transition(),
+                    ?transition,
                     "source returned an unsupported variant promotion result"
                 );
+                self.decode.restore_prepared_promotion(prepared);
                 false
             }
         }
@@ -397,6 +402,16 @@ impl<T: StreamType> StreamAudioSource<T> {
                         _ => None,
                     };
                     if expected == Some(complete.build) {
+                        if let Some(transition) = self.decode.incoming_transition() {
+                            self.discard_local_incoming();
+                            if let Some(control) = self.variant_control.as_deref() {
+                                let _ = control.abort_variant(transition);
+                            }
+                        }
+                        if let Ok(generation) = &complete.result {
+                            self.decode
+                                .prepare_replacement_profile(generation.blender_profile());
+                        }
                         if let Some(displaced) = self.rebuild.cache_replacement(complete) {
                             retire_completion(&self.retired, displaced);
                         }
@@ -518,6 +533,9 @@ impl<T: StreamType> AudioWorkerSource for StreamAudioSource<T> {
 
     fn flush_deferred(&mut self) {
         self.decode.flush_reader_signals();
+        if let Some(chunk) = self.decode.take_rejected_chunk() {
+            ChunkRetire::retire(&self.retired, chunk);
+        }
         self.route_build_completions();
         self.progress_variant_transition();
         self.retired.drain();

@@ -33,10 +33,12 @@ variant index and retries when the selector moves under it, so a resolution neve
 `prepare_variant_reader(plan, profile)` opens the incoming session, builds an `OpenedVariantReader`,
 publishes both resident → `take_prepared_variant_reader` → `promote_variant` / `abort_variant`.
 
-`VariantTransition` = `(abr ticket, seek epoch)` + active and incoming variant indices; every step
-re-validates all three, and any mismatch discards the incoming session. Promotion runs inside
-`commit_if_seek_epoch`, so a seek landing mid-promotion rolls the outgoing session back instead of
-half-switching; it is deferred while the reader is untaken or the ABR claim is `Locked`.
+`VariantTransition` = `(abr ticket, seek epoch)` + active and incoming variant indices + the
+outgoing disposition. Ordinary transitions retain the outgoing source. Only the exact
+`UpSwitch { reason: EscapeStalled }` claim marks it abandoned, and prepare re-validates the same
+claim before audio may act on that fact. Any mismatch discards the incoming session. Promotion runs
+inside `commit_if_seek_epoch`, so a seek landing mid-promotion rolls the outgoing session back
+instead of half-switching; it is deferred while the reader is untaken or the ABR claim is `Locked`.
 
 `HlsSession::is_ready` is a pure question under the transition lock and must not wake the peer:
 `wake_peer` takes the peer state lock, and `cancel_incoming_for_seek` takes the transition lock,

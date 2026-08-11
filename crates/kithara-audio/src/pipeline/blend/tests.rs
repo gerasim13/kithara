@@ -64,17 +64,127 @@ fn single_input_blender_is_bit_exact() {
 #[kithara::test]
 fn replacing_active_profile_accepts_the_new_spec() {
     let initial = spec(2, 44_100);
-    let replacement = spec(1, 48_000);
+    let replacement = spec(6, 48_000);
     let mut blender = PcmBlender::new(BlenderProfile::new(initial));
-    let _ = blender.process_active(chunk(initial, vec![-0.1, 0.0, 0.1, 0.2, 0.3, 0.4]));
-    blender.join_active(BlenderProfile::new(initial));
-    let joined = blender.process_active(chunk(initial, vec![0.5, 0.6, 0.7, 0.8]));
-    assert!((joined.samples[0] - 0.5).abs() < 1.0e-4);
-    assert!((joined.samples[2] - joined.samples[0] - 0.2).abs() < 1.0e-3);
 
+    blender.prepare_active(BlenderProfile::new(replacement));
+    let capacities_before = blender.buffer_capacities();
+    let prepared_capacity = blender.buffer_capacities().1;
     blender.replace_active(BlenderProfile::new(replacement));
+    let capacities_after = blender.buffer_capacities();
 
-    let output = blender.process_active(chunk(replacement, vec![0.25, -0.25]));
+    let output = blender.process_active(chunk(replacement, vec![0.25; 12]));
 
     assert_eq!(output.spec(), replacement);
+    assert_eq!(capacities_after.0, prepared_capacity);
+    assert_eq!(
+        [capacities_after.0, capacities_after.1].into_iter().min(),
+        [capacities_before.0, capacities_before.1].into_iter().min()
+    );
+    assert_eq!(
+        [capacities_after.0, capacities_after.1].into_iter().max(),
+        [capacities_before.0, capacities_before.1].into_iter().max()
+    );
+}
+
+#[kithara::test]
+fn high_rate_join_uses_the_full_twenty_milliseconds() {
+    let spec = spec(2, 384_000);
+    let blender = PcmBlender::new(BlenderProfile::new(spec));
+
+    assert_eq!(blender.join_frame_count(), 7_680);
+}
+
+#[kithara::test]
+fn real_outgoing_pcm_is_blended_for_the_full_linear_join() {
+    const CHUNK_FRAMES: usize = 128;
+    const JOIN_FRAMES: usize = 882;
+    const POST_JOIN_FRAMES: usize = 1_024;
+
+    let spec = spec(2, 44_100);
+    let channels = usize::from(spec.channels);
+    let outgoing = (0..JOIN_FRAMES.saturating_mul(channels))
+        .map(|sample| deterministic_sample(sample, 37, 257))
+        .collect::<Vec<_>>();
+    let incoming = (0..(JOIN_FRAMES + POST_JOIN_FRAMES).saturating_mul(channels))
+        .map(|sample| deterministic_sample(sample + 19, 53, 251))
+        .collect::<Vec<_>>();
+    let mut blender = PcmBlender::new(BlenderProfile::new(spec));
+    blender.prepare_active(BlenderProfile::new(spec));
+    assert!(blender.prepare_join(|tail| {
+        tail.copy_from_slice(&outgoing);
+        true
+    }));
+    blender.commit_join();
+
+    let mut output = Vec::with_capacity(incoming.len());
+    for (chunk_index, samples) in incoming.chunks(CHUNK_FRAMES * channels).enumerate() {
+        let mut input = chunk(spec, samples.to_vec());
+        input.meta.frame_offset =
+            u64::try_from(chunk_index.saturating_mul(CHUNK_FRAMES)).unwrap_or(u64::MAX);
+        let input_meta = input.meta;
+
+        let processed = blender.process_active(input);
+
+        assert_eq!(processed.meta, input_meta);
+        output.extend_from_slice(&processed.samples);
+    }
+
+    for frame in 0..JOIN_FRAMES {
+        let incoming_gain = f32::from(u16::try_from(frame).expect("join frame fits u16"))
+            / f32::from(u16::try_from(JOIN_FRAMES).expect("join length fits u16"));
+        let outgoing_gain = 1.0 - incoming_gain;
+        for channel in 0..channels {
+            let sample = frame * channels + channel;
+            let expected =
+                outgoing[sample].mul_add(outgoing_gain, incoming[sample] * incoming_gain);
+            assert_eq!(output[sample].to_bits(), expected.to_bits());
+        }
+    }
+    for sample in JOIN_FRAMES * channels..incoming.len() {
+        assert_eq!(output[sample].to_bits(), incoming[sample].to_bits());
+    }
+}
+
+fn deterministic_sample(index: usize, multiplier: usize, modulus: usize) -> f32 {
+    let value = index.saturating_mul(multiplier) % modulus;
+    let centered =
+        i16::try_from(value).unwrap_or(i16::MAX) - i16::try_from(modulus / 2).unwrap_or(i16::MAX);
+    f32::from(centered) / f32::from(u16::try_from(modulus).unwrap_or(u16::MAX))
+}
+
+#[kithara::test]
+fn reset_cancels_an_active_join() {
+    const JOIN_FRAMES: usize = 882;
+
+    let spec = spec(2, 44_100);
+    let channels = usize::from(spec.channels);
+    let outgoing = vec![-0.75; JOIN_FRAMES * channels];
+    let mut blender = PcmBlender::new(BlenderProfile::new(spec));
+    blender.prepare_active(BlenderProfile::new(spec));
+    assert!(blender.prepare_join(|tail| {
+        tail.copy_from_slice(&outgoing);
+        true
+    }));
+    blender.commit_join();
+    let joined = blender.process_active(chunk(spec, vec![0.25; channels]));
+    assert_eq!(joined.samples[0].to_bits(), (-0.75_f32).to_bits());
+
+    blender.reset();
+    let input = chunk(spec, vec![0.25, -0.25]);
+    let input_bits = input
+        .samples
+        .iter()
+        .map(|sample| sample.to_bits())
+        .collect::<Vec<_>>();
+    let output = blender.process_active(input);
+
+    assert_eq!(
+        output
+            .samples
+            .iter()
+            .map(|sample| sample.to_bits())
+            .collect::<Vec<_>>(),
+        input_bits
+    );
 }

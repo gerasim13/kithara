@@ -583,7 +583,8 @@ mod tests {
         time::Instant,
     };
     use kithara_stream::{
-        AudioCodec, ContainerFormat, PlayheadWrite, ReaderInput, ReaderWarmup, SeekControl,
+        AudioCodec, ContainerFormat, OutgoingDisposition, PlayheadWrite, ReaderInput, ReaderWarmup,
+        SeekControl,
     };
 
     use super::*;
@@ -610,6 +611,12 @@ mod tests {
     }
 
     fn switch_coord() -> (Arc<HlsCoord>, EventBus, PlanCtx, Arc<AbrState>) {
+        switch_coord_with_reason(AbrReason::ManualOverride)
+    }
+
+    fn switch_coord_with_reason(
+        reason: AbrReason,
+    ) -> (Arc<HlsCoord>, EventBus, PlanCtx, Arc<AbrState>) {
         let bus = EventBus::new(8);
         let cancel = CancelToken::never();
         let store = Arc::new(
@@ -732,7 +739,7 @@ mod tests {
         });
         let controller = Arc::new(AbrController::new(AbrSettings::default()));
         let handle = controller.register(&peer);
-        abr_state.request_target(VariantIndex::new(1), AbrReason::ManualOverride);
+        abr_state.request_target(VariantIndex::new(1), reason);
         let coord = Arc::new(HlsCoord::new(
             HlsCoordEnv {
                 cancel,
@@ -897,6 +904,103 @@ mod tests {
             1,
             "planning must not open the incoming session"
         );
+    }
+
+    #[kithara::test]
+    fn escape_stalled_plan_and_prepare_abandon_the_exact_outgoing_ticket() {
+        let (coord, _bus, _ctx, _abr_state) = switch_coord_with_reason(AbrReason::EscapeStalled);
+        let plan = coord
+            .plan_variant_reader(None)
+            .expect("plan stalled escape")
+            .expect("pending stalled escape");
+        let planned = plan.transition();
+
+        assert_eq!(
+            planned.outgoing_disposition(),
+            OutgoingDisposition::Abandoned
+        );
+
+        let prepared = coord
+            .prepare_planned_variant_reader(plan, incremental_profile(32))
+            .expect("prepare stalled escape")
+            .expect("exact stalled escape");
+
+        assert_eq!(prepared.id(), planned.id());
+        assert_eq!(
+            prepared.outgoing_disposition(),
+            OutgoingDisposition::Abandoned
+        );
+        assert_eq!(prepared, planned);
+        assert!(coord.abort_variant(prepared));
+    }
+
+    #[kithara::test]
+    #[case::ordinary(AbrReason::UpSwitch)]
+    #[case::urgent(AbrReason::UrgentDownSwitch)]
+    fn non_stalled_switch_retains_the_outgoing_variant(#[case] reason: AbrReason) {
+        let (coord, _bus, _ctx, _abr_state) = switch_coord_with_reason(reason);
+        let plan = coord
+            .plan_variant_reader(None)
+            .expect("plan non-stalled switch")
+            .expect("pending non-stalled switch");
+        let planned = plan.transition();
+
+        assert_eq!(
+            planned.outgoing_disposition(),
+            OutgoingDisposition::Retained
+        );
+
+        let prepared = coord
+            .prepare_planned_variant_reader(plan, incremental_profile(32))
+            .expect("prepare non-stalled switch")
+            .expect("exact non-stalled switch");
+
+        assert_eq!(prepared, planned);
+        assert_eq!(
+            prepared.outgoing_disposition(),
+            OutgoingDisposition::Retained
+        );
+        assert!(coord.abort_variant(prepared));
+    }
+
+    #[kithara::test]
+    fn superseded_escape_ticket_cannot_abandon_a_newer_transition() {
+        let (coord, _bus, _ctx, abr_state) = switch_coord_with_reason(AbrReason::EscapeStalled);
+        let stale = coord
+            .plan_variant_reader(None)
+            .expect("plan stalled escape")
+            .expect("pending stalled escape");
+        assert_eq!(
+            stale.transition().outgoing_disposition(),
+            OutgoingDisposition::Abandoned
+        );
+
+        renew_switch_intent(&abr_state);
+        let current = coord
+            .plan_variant_reader(None)
+            .expect("plan replacement switch")
+            .expect("pending replacement switch");
+
+        assert_ne!(stale.transition().id(), current.transition().id());
+        assert_eq!(
+            current.transition().outgoing_disposition(),
+            OutgoingDisposition::Retained
+        );
+        assert_eq!(
+            coord
+                .prepare_planned_variant_reader(stale, incremental_profile(32))
+                .expect("reject superseded escape"),
+            None
+        );
+        let prepared = coord
+            .prepare_planned_variant_reader(current, incremental_profile(32))
+            .expect("prepare replacement switch")
+            .expect("current replacement switch");
+        assert_eq!(
+            prepared.outgoing_disposition(),
+            OutgoingDisposition::Retained
+        );
+        assert!(coord.abort_variant(prepared));
     }
 
     #[kithara::test]

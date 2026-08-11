@@ -1,4 +1,4 @@
-use kithara_decode::{DecoderChunkOutcome, ErrorClass, PcmChunk};
+use kithara_decode::{DecodeError, DecoderChunkOutcome, ErrorClass, PcmChunk};
 use kithara_events::{AudioEvent, DecoderEvent, SeekLifecycleStage, SegmentLocation};
 use kithara_stream::{PendingReason, StreamType};
 use kithara_test_utils::kithara;
@@ -38,8 +38,13 @@ pub(crate) fn tick<T: StreamType>(
         if ctx.seek_observe.is_flushing() || ctx.seek_observe.is_pending() {
             return DecodeAction::SeekInterrupted;
         }
-        if let Some(chunk) = core.next_output() {
-            return produced(chunk, epoch, &mut ctx);
+        if let Some(error) = core.take_stage_error() {
+            return decode_failed(core, error, &ctx);
+        }
+        match core.next_output(&mut *ctx.cursor, epoch) {
+            Ok(Some(chunk)) => return produced(chunk, epoch, &mut ctx),
+            Ok(None) => {}
+            Err(error) => return decode_failed(core, error, &ctx),
         }
         match core.next_chunk(ctx.stream.position()) {
             Ok(DecoderChunkOutcome::Pending(PendingReason::VariantChange)) => {
@@ -57,12 +62,16 @@ pub(crate) fn tick<T: StreamType>(
                 }
                 hang_reset!();
                 core.track(&chunk, ctx.playhead, ctx.emit);
-                core.push(chunk);
+                if let Err(error) = core.push(chunk) {
+                    return decode_failed(core, error, &ctx);
+                }
             }
             Ok(DecoderChunkOutcome::Eof) => {
-                core.set_tail_compensation();
-                if let Some(chunk) = core.next_output() {
-                    return produced(chunk, epoch, &mut ctx);
+                core.finish_active();
+                match core.next_output_unheld(&mut *ctx.cursor, epoch) {
+                    Ok(Some(chunk)) => return produced(chunk, epoch, &mut ctx),
+                    Ok(None) => {}
+                    Err(error) => return decode_failed(core, error, &ctx),
                 }
                 if let FormatDecision::Recreate(recreate) =
                     detect(ctx.stream, core.active(), ctx.seek_observe)
@@ -81,26 +90,32 @@ pub(crate) fn tick<T: StreamType>(
                 return variant_change(core, &ctx);
             }
             Err(error) if error.classify() == ErrorClass::Interrupted => {}
-            Err(error) => {
-                if let Some(emit) = ctx.emit {
-                    emit.enqueue(
-                        DecoderEvent::DecodeError {
-                            class: map_decode_error_class(error.classify()),
-                            kind: map_decode_error_kind(&error),
-                            codec: core
-                                .active()
-                                .media_info()
-                                .and_then(|info| info.codec)
-                                .map(map_audio_codec_kind),
-                            detail: decode_error_detail(&error),
-                        }
-                        .into(),
-                    );
-                }
-                return DecodeAction::Failed(TrackFailure::Decode(error));
-            }
+            Err(error) => return decode_failed(core, error, &ctx),
         }
     }
+}
+
+fn decode_failed<T: StreamType>(
+    core: &ActiveDecode,
+    error: DecodeError,
+    ctx: &DecodeCtx<'_, T>,
+) -> DecodeAction {
+    if let Some(emit) = ctx.emit {
+        emit.enqueue(
+            DecoderEvent::DecodeError {
+                class: map_decode_error_class(error.classify()),
+                kind: map_decode_error_kind(&error),
+                codec: core
+                    .active()
+                    .media_info()
+                    .and_then(|info| info.codec)
+                    .map(map_audio_codec_kind),
+                detail: decode_error_detail(&error),
+            }
+            .into(),
+        );
+    }
+    DecodeAction::Failed(TrackFailure::Decode(error))
 }
 
 pub(crate) fn produced<T: StreamType>(
@@ -128,7 +143,6 @@ pub(crate) fn produced<T: StreamType>(
             .into(),
         );
     }
-    ctx.cursor.record(&chunk, epoch);
     DecodeAction::Produced(Fetch::data(chunk, epoch))
 }
 

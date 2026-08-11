@@ -1,3 +1,5 @@
+#[cfg(test)]
+use std::cell::Cell;
 use std::{
     collections::VecDeque,
     panic::{AssertUnwindSafe, catch_unwind},
@@ -5,12 +7,41 @@ use std::{
 
 use kithara_decode::{
     BlenderProfile, ChunkRetire, DecodeError, DecodeResult, Decoder, DecoderChunkOutcome,
-    GaplessMode, GaplessProfile, PcmChunk,
+    GaplessMode, GaplessProfile, PcmChunk, PcmSpec,
 };
 use kithara_stream::MediaInfo;
 use tracing::warn;
 
 use crate::pipeline::{gapless::GaplessStage, seek::ResumeState};
+
+#[derive(Clone, Copy)]
+struct Holdback {
+    join_frames: u64,
+    slots: usize,
+    spec: PcmSpec,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum StageProgress {
+    Ready,
+    NeedMore,
+}
+
+pub(crate) struct StageFailure {
+    pub(crate) chunk: PcmChunk,
+    pub(crate) error: DecodeError,
+}
+
+pub(crate) enum StageResult {
+    Ready,
+    NeedMore,
+    Invalid(StageFailure),
+}
+
+pub(crate) enum StageOutput {
+    Output(Option<PcmChunk>),
+    Invalid(StageFailure),
+}
 
 #[derive(fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
@@ -19,9 +50,14 @@ pub(crate) struct DecoderGeneration {
     #[field(get, vis = "pub(crate)", copy)]
     gapless_profile: GaplessProfile,
     gapless: GaplessStage,
+    #[field(get = is_finished, vis = "pub(crate)", copy)]
+    finished: bool,
+    holdback: Option<Holdback>,
     media_info: Option<MediaInfo>,
     pending_head_skip: Option<ResumeState>,
     staged: VecDeque<PcmChunk>,
+    #[cfg(test)]
+    staged_scan_count: Cell<usize>,
     #[field(get, vis = "pub(crate)")]
     base_offset: u64,
     #[field(get, vis = "pub(crate)")]
@@ -47,8 +83,12 @@ impl DecoderGeneration {
             installed_at_seek_epoch,
             gapless_profile,
             gapless,
+            finished: false,
+            holdback: None,
             pending_head_skip,
             staged: VecDeque::new(),
+            #[cfg(test)]
+            staged_scan_count: Cell::new(0),
         }
     }
 
@@ -63,14 +103,18 @@ impl DecoderGeneration {
             pub(crate) fn timeline_gap(&self) -> u64;
         }
         to self.staged {
-            #[call(pop_front)]
-            pub(crate) fn pop_staged(&mut self) -> Option<PcmChunk>;
-            #[call(push_front)]
-            pub(crate) fn push_staged_front(&mut self, chunk: PcmChunk);
+            #[cfg(test)]
+            #[call(capacity)]
+            pub(crate) fn staged_capacity(&self) -> usize;
         }
     }
 
     pub(crate) fn finish(&mut self) {
+        if self.finished {
+            return;
+        }
+        self.finished = true;
+        self.holdback = None;
         self.gapless.set_tail_compensation(self.gapless_profile());
         self.gapless.flush();
     }
@@ -91,6 +135,7 @@ impl DecoderGeneration {
     }
 
     pub(crate) fn next(&mut self) -> Option<PcmChunk> {
+        self.holdback = None;
         self.staged.pop_front().or_else(|| self.gapless.next())
     }
 
@@ -107,6 +152,8 @@ impl DecoderGeneration {
     }
 
     pub(crate) fn notify_seek(&mut self, retire: &dyn ChunkRetire) {
+        self.finished = false;
+        self.holdback = None;
         self.gapless.notify_seek(retire);
         for chunk in self.staged.drain(..) {
             retire.retire(chunk);
@@ -117,27 +164,284 @@ impl DecoderGeneration {
         self.pending_head_skip.as_mut()
     }
 
-    pub(crate) fn push(&mut self, chunk: PcmChunk) {
-        self.gapless.push(chunk);
-    }
-
     pub(crate) fn stage(&mut self, chunk: PcmChunk) {
+        self.holdback = None;
         self.gapless.push(chunk);
         while let Some(chunk) = self.gapless.next() {
             self.staged.push_back(chunk);
         }
     }
 
-    pub(crate) fn staged_span(&self) -> Option<(u64, u64, u32)> {
+    pub(crate) fn prepare_holdback(&mut self, spec: PcmSpec, join_frames: u64) -> StageResult {
+        self.holdback = None;
+        let Some(slots) = usize::try_from(join_frames)
+            .ok()
+            .and_then(|frames| frames.checked_add(1))
+        else {
+            return StageResult::NeedMore;
+        };
+        if self.staged.capacity() < slots {
+            self.staged.reserve_exact(slots - self.staged.len());
+        }
+        let holdback = Holdback {
+            join_frames,
+            slots,
+            spec,
+        };
+        if let Some(failure) = self.validate_staged_holdback(holdback) {
+            return StageResult::Invalid(failure);
+        }
+        self.holdback = Some(holdback);
+        self.drain_holdback()
+    }
+
+    fn validate_staged_holdback(&mut self, holdback: Holdback) -> Option<StageFailure> {
+        #[cfg(test)]
+        self.record_staged_scan();
+
+        let mut staged_end = None;
+        let mut invalid = None;
+        for (index, chunk) in self.staged.iter().enumerate() {
+            let Some((start, end)) = chunk_range(chunk, holdback.spec) else {
+                let detail = if chunk.spec() == holdback.spec {
+                    "invalid PCM metadata in transition holdback"
+                } else {
+                    "mixed PCM spec in transition holdback"
+                };
+                invalid = Some((index, detail));
+                break;
+            };
+            if index >= holdback.slots {
+                invalid = Some((index, "transition holdback capacity exceeded"));
+                break;
+            }
+            if staged_end.is_some_and(|expected| expected != start) {
+                invalid = Some((index, "discontinuous PCM in transition holdback"));
+                break;
+            }
+            staged_end = Some(end);
+        }
+        if let Some((index, detail)) = invalid {
+            return self
+                .staged
+                .remove(index)
+                .map(|chunk| stage_failure(chunk, detail));
+        }
+        None
+    }
+
+    pub(crate) fn push_holdback(&mut self, chunk: PcmChunk) -> StageResult {
+        if self.gapless.has_output() {
+            return StageResult::Invalid(stage_failure(
+                chunk,
+                "transition holdback has undrained gapless output",
+            ));
+        }
+        if matches!(self.holdback_progress(), StageProgress::Ready) {
+            return StageResult::Invalid(stage_failure(
+                chunk,
+                "transition holdback is already ready",
+            ));
+        }
+        self.gapless.push(chunk);
+        self.drain_holdback()
+    }
+
+    fn drain_holdback(&mut self) -> StageResult {
+        self.pump_holdback()
+    }
+
+    fn pump_holdback(&mut self) -> StageResult {
+        loop {
+            let progress = self.holdback_progress();
+            if matches!(progress, StageProgress::Ready) {
+                return StageResult::Ready;
+            }
+            let Some(chunk) = self.gapless.next() else {
+                return StageResult::NeedMore;
+            };
+            if let Some(failure) = self.push_holdback_chunk(chunk) {
+                return StageResult::Invalid(failure);
+            }
+        }
+    }
+
+    fn holdback_progress(&self) -> StageProgress {
+        let Some(holdback) = self.holdback else {
+            return StageProgress::NeedMore;
+        };
+        let Some(front) = self.staged.front() else {
+            return StageProgress::NeedMore;
+        };
+        let Some((_, frontier)) = chunk_range(front, holdback.spec) else {
+            return StageProgress::NeedMore;
+        };
+        let Some(back) = self.staged.back() else {
+            return StageProgress::NeedMore;
+        };
+        let Some((_, staged_end)) = chunk_range(back, holdback.spec) else {
+            return StageProgress::NeedMore;
+        };
+        let Some(join_end) = frontier.checked_add(holdback.join_frames) else {
+            return StageProgress::NeedMore;
+        };
+        if join_end <= staged_end {
+            StageProgress::Ready
+        } else {
+            StageProgress::NeedMore
+        }
+    }
+
+    fn push_holdback_chunk(&mut self, chunk: PcmChunk) -> Option<StageFailure> {
+        let Some(holdback) = self.holdback else {
+            return Some(stage_failure(chunk, "transition holdback was not prepared"));
+        };
+        let Some((start, _)) = chunk_range(&chunk, holdback.spec) else {
+            let detail = if chunk.spec() == holdback.spec {
+                "invalid PCM metadata in transition holdback"
+            } else {
+                "mixed PCM spec in transition holdback"
+            };
+            return Some(stage_failure(chunk, detail));
+        };
+        if self.staged.len() >= holdback.slots {
+            return Some(stage_failure(
+                chunk,
+                "transition holdback capacity exceeded",
+            ));
+        }
+        if let Some(back) = self.staged.back() {
+            let Some((_, staged_end)) = chunk_range(back, holdback.spec) else {
+                return Some(stage_failure(
+                    chunk,
+                    "invalid retained PCM in transition holdback",
+                ));
+            };
+            if staged_end != start {
+                return Some(stage_failure(
+                    chunk,
+                    "discontinuous PCM in transition holdback",
+                ));
+            }
+        }
+        self.staged.push_back(chunk);
+        None
+    }
+
+    pub(crate) fn push(&mut self, chunk: PcmChunk) {
+        self.holdback = None;
+        self.gapless.push(chunk);
+    }
+
+    pub(crate) fn pop_staged(&mut self) -> Option<PcmChunk> {
+        self.holdback = None;
+        self.staged.pop_front()
+    }
+
+    pub(crate) fn push_staged_front(&mut self, chunk: PcmChunk) {
+        self.holdback = None;
+        self.staged.push_front(chunk);
+    }
+
+    pub(crate) fn staged_span(&self) -> Option<(u64, u64, PcmSpec)> {
+        #[cfg(test)]
+        self.record_staged_scan();
         let first = self.staged.front()?;
-        let last = self.staged.back()?;
-        Some((
-            first.meta.frame_offset,
-            last.meta
-                .frame_offset
-                .saturating_add(u64::from(last.meta.frames)),
-            first.meta.spec.sample_rate.get(),
-        ))
+        let spec = first.spec();
+        let (start, mut end) = chunk_range(first, spec)?;
+        for chunk in self.staged.iter().skip(1) {
+            let (next, next_end) = chunk_range(chunk, spec)?;
+            if next != end {
+                return None;
+            }
+            end = next_end;
+        }
+        Some((start, end, spec))
+    }
+
+    pub(crate) fn staged_covers(&self, spec: PcmSpec, start: u64, frames: u64) -> bool {
+        let Some(end) = start.checked_add(frames) else {
+            return false;
+        };
+        let Some((first, staged_end, staged_spec)) = self.staged_span() else {
+            return false;
+        };
+        staged_spec == spec && first <= start && end <= staged_end
+    }
+
+    pub(crate) fn copy_staged_frames(
+        &self,
+        spec: PcmSpec,
+        start: u64,
+        frames: u64,
+        output: &mut [f32],
+    ) -> bool {
+        let channels = usize::from(spec.channels);
+        let Ok(frame_count) = usize::try_from(frames) else {
+            return false;
+        };
+        let Some(sample_count) = frame_count.checked_mul(channels) else {
+            return false;
+        };
+        if channels == 0 || output.len() != sample_count || !self.staged_covers(spec, start, frames)
+        {
+            return false;
+        }
+        let Some(end) = start.checked_add(frames) else {
+            return false;
+        };
+        let mut written = 0usize;
+        for chunk in &self.staged {
+            let Some((chunk_start, chunk_end)) = chunk_range(chunk, spec) else {
+                return false;
+            };
+            let copy_start = chunk_start.max(start);
+            let copy_end = chunk_end.min(end);
+            if copy_start >= copy_end {
+                continue;
+            }
+            let Some(source_start) = usize::try_from(copy_start - chunk_start)
+                .ok()
+                .and_then(|frame| frame.checked_mul(channels))
+            else {
+                return false;
+            };
+            let Some(copy_samples) = usize::try_from(copy_end - copy_start)
+                .ok()
+                .and_then(|frame| frame.checked_mul(channels))
+            else {
+                return false;
+            };
+            let Some(source_end) = source_start.checked_add(copy_samples) else {
+                return false;
+            };
+            let Some(output_end) = written.checked_add(copy_samples) else {
+                return false;
+            };
+            let (Some(source), Some(destination)) = (
+                chunk.samples.get(source_start..source_end),
+                output.get_mut(written..output_end),
+            ) else {
+                return false;
+            };
+            destination.copy_from_slice(source);
+            written = output_end;
+        }
+        written == output.len()
+    }
+
+    pub(crate) fn next_with_holdback(&mut self) -> StageOutput {
+        match self.pump_holdback() {
+            StageResult::Ready => StageOutput::Output(self.staged.pop_front()),
+            StageResult::NeedMore => StageOutput::Output(None),
+            StageResult::Invalid(failure) => StageOutput::Invalid(failure),
+        }
+    }
+
+    #[cfg(test)]
+    fn record_staged_scan(&self) {
+        self.staged_scan_count
+            .set(self.staged_scan_count.get().saturating_add(1));
     }
 
     pub(crate) fn timeline_origin(&self, mode: GaplessMode) -> u64 {
@@ -157,6 +461,31 @@ impl DecoderGeneration {
     }
 }
 
+fn chunk_range(chunk: &PcmChunk, spec: PcmSpec) -> Option<(u64, u64)> {
+    let channels = usize::from(spec.channels);
+    if channels == 0 || chunk.spec() != spec || !chunk.samples.len().is_multiple_of(channels) {
+        return None;
+    }
+    let frames = chunk.samples.len() / channels;
+    if frames == 0 || u32::try_from(frames).ok()? != chunk.meta.frames {
+        return None;
+    }
+    Some((
+        chunk.meta.frame_offset,
+        chunk
+            .meta
+            .frame_offset
+            .checked_add(u64::from(chunk.meta.frames))?,
+    ))
+}
+
+fn stage_failure(chunk: PcmChunk, detail: &'static str) -> StageFailure {
+    StageFailure {
+        chunk,
+        error: DecodeError::InvalidData { detail },
+    }
+}
+
 fn panic_message(payload: Box<dyn std::any::Any + Send>) -> String {
     match payload.downcast::<String>() {
         Ok(message) => *message,
@@ -164,5 +493,330 @@ fn panic_message(payload: Box<dyn std::any::Any + Send>) -> String {
             |_| "unknown panic payload".to_string(),
             |message| (*message).to_string(),
         ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::num::NonZeroU32;
+
+    use kithara_bufpool::PcmPool;
+    use kithara_decode::{DecoderSeekOutcome, DropChunks, GaplessInfo, PcmMeta};
+    use kithara_platform::time::Duration;
+    use kithara_stream::PrerollHint;
+    use kithara_test_utils::kithara;
+
+    use super::*;
+
+    struct EofDecoder {
+        gapless: Option<GaplessInfo>,
+        spec: PcmSpec,
+    }
+
+    impl Decoder for EofDecoder {
+        fn duration(&self) -> Option<Duration> {
+            None
+        }
+
+        fn next_chunk(&mut self) -> DecodeResult<DecoderChunkOutcome> {
+            Ok(DecoderChunkOutcome::Eof)
+        }
+
+        fn seek(&mut self, position: Duration) -> DecodeResult<DecoderSeekOutcome> {
+            Ok(DecoderSeekOutcome::Landed {
+                landed_at: position,
+                landed_frame: 0,
+                landed_byte: None,
+                preroll: PrerollHint::NotNeeded,
+            })
+        }
+
+        fn spec(&self) -> PcmSpec {
+            self.spec
+        }
+
+        fn gapless_profile(&self, _codec: Option<kithara_stream::AudioCodec>) -> GaplessProfile {
+            GaplessProfile::new(self.spec, self.gapless, None, 0)
+        }
+
+        fn update_byte_len(&self, _len: u64) {}
+    }
+
+    fn spec(channels: u16, rate: u32) -> PcmSpec {
+        PcmSpec::new(
+            channels,
+            NonZeroU32::new(rate).expect("test rate must be non-zero"),
+        )
+    }
+
+    fn generation(spec: PcmSpec) -> DecoderGeneration {
+        DecoderGeneration::new(
+            Box::new(EofDecoder {
+                gapless: None,
+                spec,
+            }),
+            None,
+            0,
+            0,
+            None,
+            GaplessMode::Disabled,
+        )
+    }
+
+    fn media_generation(spec: PcmSpec, trailing_frames: u64) -> DecoderGeneration {
+        DecoderGeneration::new(
+            Box::new(EofDecoder {
+                gapless: Some(GaplessInfo::new(0, trailing_frames)),
+                spec,
+            }),
+            None,
+            0,
+            0,
+            None,
+            GaplessMode::MediaOnly,
+        )
+    }
+
+    fn chunk(spec: PcmSpec, offset: u64, frames: u32, sample_frames: usize) -> PcmChunk {
+        PcmChunk::new(
+            PcmMeta {
+                spec,
+                frame_offset: offset,
+                frames,
+                ..Default::default()
+            },
+            PcmPool::default().attach(vec![0.25; sample_frames * usize::from(spec.channels)]),
+        )
+    }
+
+    #[kithara::test]
+    fn staged_holdback_rejects_gap_mixed_spec_and_bad_metadata() {
+        let active = spec(2, 44_100);
+
+        let mut gap = generation(active);
+        assert!(matches!(
+            gap.prepare_holdback(active, 4),
+            StageResult::NeedMore
+        ));
+        assert!(matches!(
+            gap.push_holdback(chunk(active, 0, 4, 4)),
+            StageResult::NeedMore
+        ));
+        let StageResult::Invalid(gap_failure) = gap.push_holdback(chunk(active, 5, 4, 4)) else {
+            panic!("a discontinuity must return its offending chunk");
+        };
+        assert_eq!(gap_failure.chunk.meta.frame_offset, 5);
+        assert!(matches!(gap_failure.error, DecodeError::InvalidData { .. }));
+        assert_eq!(
+            gap.staged.len(),
+            1,
+            "a discontinuity must not enter holdback"
+        );
+
+        let mut mixed = generation(active);
+        let _ = mixed.prepare_holdback(active, 4);
+        let _ = mixed.push_holdback(chunk(active, 0, 4, 4));
+        let StageResult::Invalid(mixed_failure) =
+            mixed.push_holdback(chunk(spec(2, 48_000), 4, 4, 4))
+        else {
+            panic!("mixed PCM must return its offending chunk");
+        };
+        assert_eq!(mixed_failure.chunk.spec().sample_rate.get(), 48_000);
+        assert_eq!(mixed.staged.len(), 1, "mixed PCM must not enter holdback");
+
+        let mut bad_meta = generation(active);
+        let _ = bad_meta.prepare_holdback(active, 4);
+        let StageResult::Invalid(meta_failure) = bad_meta.push_holdback(chunk(active, 0, 3, 4))
+        else {
+            panic!("bad metadata must return its offending chunk");
+        };
+        assert_eq!(meta_failure.chunk.meta.frames, 3);
+        assert!(bad_meta.staged.is_empty(), "bad metadata must be rejected");
+    }
+
+    #[kithara::test]
+    fn staged_holdback_never_grows_past_prepared_capacity() {
+        let spec = spec(1, 44_100);
+        let mut generation = generation(spec);
+        let _ = generation.prepare_holdback(spec, 3);
+        let capacity = generation.staged.capacity();
+        for frame in 0..capacity {
+            let result = generation.push_holdback(chunk(
+                spec,
+                u64::try_from(frame).unwrap_or(u64::MAX),
+                1,
+                1,
+            ));
+            if frame + 1 == capacity {
+                assert!(matches!(result, StageResult::Ready));
+            }
+        }
+        let StageResult::Invalid(failure) = generation.push_holdback(chunk(
+            spec,
+            u64::try_from(capacity).unwrap_or(u64::MAX),
+            1,
+            1,
+        )) else {
+            panic!("full holdback must return the excess chunk");
+        };
+
+        assert_eq!(generation.staged.capacity(), capacity);
+        assert_eq!(generation.staged.len(), capacity);
+        assert_eq!(
+            failure.chunk.meta.frame_offset,
+            u64::try_from(capacity).unwrap_or(u64::MAX)
+        );
+    }
+
+    #[kithara::test]
+    fn prepare_holdback_reserves_from_staged_len_to_logical_limit() {
+        let spec = spec(1, 44_100);
+        let mut generation = generation(spec);
+        let _ = generation.prepare_holdback(spec, 1);
+        let _ = generation.push_holdback(chunk(spec, 0, 1, 1));
+        let old_capacity = generation.staged.capacity();
+        let slots = old_capacity.checked_add(1).expect("test slot limit");
+        let join_frames = u64::try_from(slots - 1).expect("test join frame count");
+
+        assert!(generation.staged.len() > 0);
+        assert!(generation.staged.len() < old_capacity);
+        assert!(old_capacity < slots);
+
+        let _ = generation.prepare_holdback(spec, join_frames);
+        let reserved_capacity = generation.staged.capacity();
+        assert!(
+            reserved_capacity >= slots,
+            "prepared capacity {reserved_capacity} must cover all {slots} logical slots"
+        );
+
+        for frame in generation.staged.len()..slots {
+            let result = generation.push_holdback(chunk(
+                spec,
+                u64::try_from(frame).expect("test frame offset"),
+                1,
+                1,
+            ));
+            if frame + 1 == slots {
+                assert!(matches!(result, StageResult::Ready));
+            }
+            assert_eq!(
+                generation.staged.capacity(),
+                reserved_capacity,
+                "filling the prepared logical limit must not grow on the checked core"
+            );
+        }
+    }
+
+    #[kithara::test]
+    fn holdback_pumps_surplus_gapless_pending_without_decoder_input() {
+        const TRAILING_FRAMES: u64 = 10;
+        const JOIN_FRAMES: u64 = 2;
+
+        let spec = spec(1, 44_100);
+        let mut generation = media_generation(spec, TRAILING_FRAMES);
+        assert!(matches!(
+            generation.prepare_holdback(spec, JOIN_FRAMES),
+            StageResult::NeedMore
+        ));
+        let capacity = generation.staged.capacity();
+
+        for frame in 0..TRAILING_FRAMES {
+            assert!(matches!(
+                generation.push_holdback(chunk(spec, frame, 1, 1)),
+                StageResult::NeedMore
+            ));
+        }
+        let release = generation.push_holdback(chunk(
+            spec,
+            TRAILING_FRAMES,
+            u32::try_from(TRAILING_FRAMES).expect("test release frame count"),
+            usize::try_from(TRAILING_FRAMES).expect("test release sample frames"),
+        ));
+        assert!(
+            matches!(release, StageResult::Ready),
+            "the first three valid released chunks make holdback ready; surplus stays pending"
+        );
+        assert_eq!(generation.staged.capacity(), capacity);
+
+        let mut offsets = Vec::new();
+        loop {
+            let next = match generation.next_with_holdback() {
+                StageOutput::Output(next) => next,
+                StageOutput::Invalid(failure) => {
+                    panic!("valid pending PCM failed: {}", failure.error);
+                }
+            };
+            let Some(chunk) = next else {
+                break;
+            };
+            offsets.push(chunk.meta.frame_offset);
+            assert_eq!(generation.staged.capacity(), capacity);
+        }
+
+        assert_eq!(offsets, (0..8).collect::<Vec<_>>());
+        assert_eq!(generation.staged.capacity(), capacity);
+    }
+
+    #[kithara::test]
+    fn checked_holdback_scans_the_preexisting_span_once() {
+        const JOIN_FRAMES: u64 = 7_680;
+
+        let spec = spec(1, 384_000);
+        let mut generation = generation(spec);
+        assert!(matches!(
+            generation.prepare_holdback(spec, JOIN_FRAMES),
+            StageResult::NeedMore
+        ));
+        let capacity = generation.staged.capacity();
+
+        for frame in 0..=JOIN_FRAMES {
+            let result = generation.push_holdback(chunk(spec, frame, 1, 1));
+            if frame == JOIN_FRAMES {
+                assert!(matches!(result, StageResult::Ready));
+            } else {
+                assert!(matches!(result, StageResult::NeedMore));
+            }
+            assert_eq!(generation.staged.capacity(), capacity);
+        }
+        assert_eq!(
+            generation.staged_scan_count.get(),
+            1,
+            "the shell validates retained PCM once; checked pushes stay O(1)"
+        );
+
+        for frame in 0..4 {
+            let next = match generation.next_with_holdback() {
+                StageOutput::Output(Some(chunk)) => chunk,
+                StageOutput::Output(None) => panic!("ready holdback must release its front chunk"),
+                StageOutput::Invalid(failure) => {
+                    panic!("valid holdback failed: {}", failure.error)
+                }
+            };
+            assert_eq!(next.meta.frame_offset, frame);
+            assert!(matches!(
+                generation.push_holdback(chunk(spec, JOIN_FRAMES + frame + 1, 1, 1)),
+                StageResult::Ready
+            ));
+            assert_eq!(generation.staged.capacity(), capacity);
+        }
+        assert_eq!(
+            generation.staged_scan_count.get(),
+            1,
+            "ready pops and contiguous pushes must use the validated frontier cache"
+        );
+    }
+
+    #[kithara::test]
+    fn seek_reopens_a_finished_generation() {
+        let spec = spec(2, 44_100);
+        let mut generation = generation(spec);
+
+        generation.finish();
+        generation.finish();
+        assert!(generation.is_finished());
+
+        generation.notify_seek(&DropChunks);
+
+        assert!(!generation.is_finished());
     }
 }
