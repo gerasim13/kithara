@@ -754,7 +754,7 @@ Time enters a recognizer as a parameter rather than being read inside it. That i
 double-click window testable at all, and the window is `[0 ms, 301 ms)` rather than 300 because
 `as_millis` truncates - a `Duration` constant compared with `<=` would silently narrow it.
 
-`widgets::interaction::behavior` is gone entirely, and with it the 0.90 similarity pair
+The old interaction behavior adapter is gone entirely, and with it the 0.90 similarity pair
 `ScalarDragState` formed with `interact::ScalarState`. Six tracks now share one state machine
 instead of two machines sharing a field bag: press, move while active, release, plus the two
 opt-ins. Every pointer gesture in the crate is a recognizer, including the stepping surface: what is left
@@ -801,7 +801,7 @@ and iced dropped. The residual against cosmic-text is zero - both engines agree 
 advance - so the whole delta is tracking.
 
 `render::typography::styled_text` still serves `atoms::design::cell`, `atoms::design::swatch` and
-`widgets::window::title`. Those are unported sites, not a fallback: they take the iced path
+`render::window::title`. Those are unported sites, not a fallback: they take the iced path
 entirely, including losing their tracking, until their own wave moves them. Nothing chooses between
 the two at runtime.
 

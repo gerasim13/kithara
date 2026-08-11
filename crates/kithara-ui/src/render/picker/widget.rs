@@ -400,8 +400,7 @@ mod tests {
     use crate::{
         builtin,
         engine::PickerSnapshot,
-        render::{ControlAction, WindowCommand, fonts::SANS},
-        widgets::{Widget, window::WindowSurface},
+        render::{ControlAction, WindowCommand, WindowSurface, event::Widget, fonts::SANS},
     };
 
     fn key_event(key: Named, code: Code) -> Event {

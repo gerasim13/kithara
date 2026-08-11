@@ -31,9 +31,11 @@ use crate::{
     compile::CompiledUi,
     draw::{Pt, Rect, replay},
     interact::CursorShape,
-    render::{Reads, Skin, UiEvent, WindowCommand, document::read::resolve, vis::VisDeclaration},
+    render::{
+        DragGhost, Reads, Skin, UiEvent, WindowCommand, WindowSurface, document::read::resolve,
+        vis::VisDeclaration,
+    },
     text::TextContext,
-    widgets::{drag_ghost::DragGhost, window::WindowSurface},
 };
 
 type WindowTracker = (Rc<Cell<Option<Pt>>>, Option<WidgetId>, bool);

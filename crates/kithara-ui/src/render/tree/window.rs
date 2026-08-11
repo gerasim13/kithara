@@ -5,8 +5,7 @@ use crate::{
     compile::{CompiledNode, CompiledUi},
     ids::InternId,
     module::WindowControlsStyle,
-    render::{Reads, Skin, UiEvent, document, event::Widget},
-    widgets::window::{TitleBar, WindowControls},
+    render::{Reads, Skin, TitleBar, UiEvent, WindowControls, document, event::Widget},
 };
 
 pub fn render<'a>(

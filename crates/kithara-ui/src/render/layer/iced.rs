@@ -16,9 +16,10 @@ use super::{cursor, handle};
 use crate::{
     backends::replay_ordered,
     interact::{Input, Outcome, PointerPhase, iced as iced_interact},
-    render::{HostLayer, Skin, UiEvent, WindowCommand, window as window_event},
+    render::{
+        DragGhost, HostLayer, Skin, UiEvent, WindowCommand, WindowSurface, window as window_event,
+    },
     text::{TextContext, TextResources},
-    widgets::{drag_ghost::DragGhost, window::WindowSurface},
 };
 
 pub(crate) fn draw_host_layer<A>(

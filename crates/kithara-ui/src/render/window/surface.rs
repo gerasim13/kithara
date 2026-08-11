@@ -4,10 +4,10 @@ use crate::{
     draw::{DrawList, Pt, Rect},
     interact::CursorShape,
     render::{
-        HostLayer, LayerHit, UiEvent, WindowCommand, WindowEdge, WindowLayerProgram, window_layer,
+        HostLayer, LayerHit, UiEvent, WindowCommand, WindowEdge, WindowLayerProgram, event::Widget,
+        window_layer,
     },
     text::TextResources,
-    widgets::Widget,
 };
 
 pub(crate) struct WindowSurface {

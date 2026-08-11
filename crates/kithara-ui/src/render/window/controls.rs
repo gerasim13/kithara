@@ -4,10 +4,12 @@ use crate::{
     draw::{DrawList, DrawListBuilder, Pt, Rect, Rgba},
     interact::{CursorShape, Hit, Input, Outcome, PointerPhase},
     module::WindowControlsStyle,
-    render::{HostLayer, LayerHit, Skin, UiEvent, WindowCommand, WindowLayerProgram, window_layer},
+    render::{
+        HostLayer, LayerHit, Skin, UiEvent, WindowCommand, WindowLayerProgram, event::Widget,
+        window_layer,
+    },
     skin::{FrameSkin, WindowControlSkin},
     text::TextResources,
-    widgets::Widget,
 };
 
 #[derive(bon::Builder)]

@@ -21,6 +21,7 @@ mod track_list_paint;
 pub mod tree;
 pub mod typography;
 pub mod vis;
+mod window;
 
 pub use address::{Node, Scope, Walk};
 pub(crate) use controls::{ChromeLeaf, chrome_leaf, header_chevron, tree_rows};
@@ -56,5 +57,8 @@ pub use skin::Skin;
 pub(crate) use text_input::{search_input, sync_text_input, text_input_layout};
 pub(crate) use track_list::{sync_track_list_scroll, track_list};
 pub use typography::shaped_text;
+#[cfg(feature = "masonry-host")]
+pub(crate) use window::{ControlsProgram, TitleProgram};
+pub(crate) use window::{DragGhost, TitleBar, WindowControls, WindowSurface};
 
 pub use crate::atoms::wave::zoom_math::{DEFAULT_ZOOM, zoom_in, zoom_out};

@@ -26,8 +26,6 @@ pub(crate) mod solve;
 pub mod source;
 #[cfg(any(feature = "render", feature = "vello-backend"))]
 pub mod text;
-#[cfg(feature = "render")]
-pub mod widgets;
 
 pub use doc::{envelope, layout, module, param, skin};
 

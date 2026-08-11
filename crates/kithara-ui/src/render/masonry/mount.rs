@@ -17,14 +17,13 @@ use crate::{
     module::{TextAlign, TextStyle},
     mount,
     render::{
-        HostedControlPlan, InputOwner, ReadValue, Skin,
+        ControlsProgram, HostedControlPlan, InputOwner, ReadValue, Skin, TitleProgram,
         controls::{Draws, Reading},
         document::read::{read_scope, resolve},
     },
     size::{Dim, SizeSpec, control_size},
     skin::{ColorRole, TextRoleSkin},
     solve,
-    widgets::window::{ControlsProgram, TitleProgram},
 };
 
 /// How one built-in control becomes a leaf of the retained tree.

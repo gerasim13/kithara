@@ -5,10 +5,12 @@ use iced::{Element, Length, Size};
 use crate::{
     draw::{DrawList, DrawListBuilder, Pt, Rect, Rgba, Transform},
     interact::CursorShape,
-    render::{HostLayer, LayerHit, Skin, UiEvent, WindowCommand, WindowLayerProgram, window_layer},
+    render::{
+        HostLayer, LayerHit, Skin, UiEvent, WindowCommand, WindowLayerProgram, event::Widget,
+        window_layer,
+    },
     skin::TextRoleSkin,
     text::{TextContext, TextResources},
-    widgets::Widget,
 };
 
 #[derive(bon::Builder)]

@@ -11,11 +11,10 @@ use crate::{
     module::TextAlign,
     mount,
     render::{
-        InputOwner, MiniWave, ReadValue, Reads, Skin, Text,
+        InputOwner, MiniWave, ReadValue, Reads, Skin, Text, WindowSurface,
         controls::{Draws, Gesture, Grip, Paint, Reading},
         event::Widget,
     },
-    widgets::window::WindowSurface,
 };
 
 /// How one built-in control becomes an element of the immediate-mode tree.
