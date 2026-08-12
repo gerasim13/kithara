@@ -169,6 +169,13 @@ impl<'a> RunnerManager<'a> {
     /// gibibytes on its own and the kernel killed it, which Cargo reported
     /// only as "could not compile" with no diagnostic at all.
     ///
+    /// Two jobs at a time, not one. The machine has ten cores and twenty-four
+    /// gigabytes; a full workspace build peaks around six to eight of them, so
+    /// two fit with headroom and three do not. What this does not loosen is
+    /// measurement: `kithara-suite` still admits one suite, browser run or perf
+    /// lane at a time, so what runs beside another job is lint, a scan or a
+    /// framework build — never two things timing themselves.
+    ///
     /// macOS is a shell runner on the host rather than a throwaway guest. The
     /// guest cost more than the isolation was worth: it held twelve of the
     /// machine's twenty-four gigabytes, its build tree started empty after every
@@ -183,7 +190,7 @@ impl<'a> RunnerManager<'a> {
         let image = &self.config.pins.linux_image;
         let provisioned_image = format!("{PROVISIONED_LINUX_IMAGE_ENV}={image}");
         format!(
-            "concurrent = 1\ncheck_interval = 3\nshutdown_timeout = 30\n\n\
+            "concurrent = 2\ncheck_interval = 3\nshutdown_timeout = 30\n\n\
              [[runners]]\n  name = \"kithara-mac-mini-linux\"\n  url = \"{url}\"\n  token = \"{}\"\n  executor = \"docker\"\n  builds_dir = \"{builds}/workspaces/gitlab\"\n  output_limit = 16384\n  environment = [\"KITHARA_CI_CACHE_ROOT={cache}\", \"KITHARA_CI_HOST_CONFIG={lane_config}\", \"{provisioned_image}\", \"RUSTUP_HOME=/usr/local/rustup\"]\n\
              [runners.docker]\n    host = \"{}\"\n    image = \"{image}\"\n    pull_policy = \"never\"\n    allowed_pull_policies = [\"never\"]\n    allowed_images = [\"{image}\"]\n    cpus = \"5\"\n    memory = \"6500m\"\n    privileged = false\n    disable_cache = true\n    shm_size = 1073741824\n    volumes = [\"{root}/cache:{cache}:rw\", \"{root}/cache/gitlab-runner:/cache:rw\", \"{root}/services/mac-host.toml:{lane_config}:ro\"]\n\n\
              [[runners]]\n  name = \"kithara-mac-mini-macos\"\n  url = \"{url}\"\n  token = \"{}\"\n  executor = \"shell\"\n  shell = \"bash\"\n  builds_dir = \"{builds}/workspaces/gitlab\"\n  output_limit = 16384\n  environment = [\"KITHARA_CI_CACHE_ROOT={root}/cache\", \"KITHARA_CI_HOST_CONFIG={lane_config}\"]\n\n\
