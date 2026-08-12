@@ -194,36 +194,26 @@ impl Gitlab {
             .context("GitLab pipeline response has no numeric id")
     }
 
+    /// The status of the work, which is not the status of the pipeline that was
+    /// asked for: this project's pipelines are parents whose lanes run in a
+    /// child, and a parent reports `success` over a child that was cancelled.
+    /// A parent that has succeeded therefore has to be asked about its child
+    /// before its answer means anything.
     pub(super) fn pipeline_status(&self, pipeline_id: u64) -> Result<String> {
         let response = self.request(&Method::GET, &format!("pipelines/{pipeline_id}"), None)?;
-        response["status"]
+        let status = response["status"]
             .as_str()
             .map(str::to_string)
-            .context("GitLab pipeline response has no status")
-    }
-
-    pub(super) fn latest_push_pipeline_status(&self, sha: &str) -> Result<Option<String>> {
-        let mut url = self.project_url("pipelines")?;
-        url.query_pairs_mut()
-            .append_pair("sha", sha)
-            .append_pair("ref", &self.config.branch)
-            .append_pair("source", "push")
-            .append_pair("order_by", "id")
-            .append_pair("sort", "desc")
-            .append_pair("per_page", "1");
-        let pipelines =
-            self.api
-                .request(&Method::GET, &url, ("PRIVATE-TOKEN", &self.token), None)?;
-        let Some((id, status)) = first_pipeline(&pipelines)? else {
-            return Ok(None);
-        };
+            .context("GitLab pipeline response has no status")?;
         if status != "success" {
-            return Ok(Some(status));
+            return Ok(status);
         }
-        let bridges = self.request(&Method::GET, &format!("pipelines/{id}/bridges"), None)?;
-        Ok(Some(
-            blocking_downstream_status(&bridges)?.unwrap_or(status),
-        ))
+        let bridges = self.request(
+            &Method::GET,
+            &format!("pipelines/{pipeline_id}/bridges"),
+            None,
+        )?;
+        Ok(blocking_downstream_status(&bridges)?.unwrap_or(status))
     }
 
     pub(super) fn ensure_issue(&self, title: &str, description: &str) -> Result<()> {
@@ -313,25 +303,6 @@ fn string_field(value: &Value, path: &[&str], label: &str) -> Result<String> {
         .with_context(|| format!("{label} is not a string"))
 }
 
-fn first_pipeline(value: &Value) -> Result<Option<(u64, String)>> {
-    let pipelines = value
-        .as_array()
-        .context("GitLab pipelines response was not an array")?;
-    pipelines
-        .first()
-        .map(|pipeline| {
-            let id = pipeline["id"]
-                .as_u64()
-                .context("GitLab pipeline response has no numeric id")?;
-            let status = pipeline["status"]
-                .as_str()
-                .map(str::to_string)
-                .context("GitLab pipeline response has no status")?;
-            Ok((id, status))
-        })
-        .transpose()
-}
-
 /// Every job that proves anything lives in the child pipeline the dispatch
 /// stage triggers. A cancelled child under a `success` parent is a state this
 /// project has produced, so the parent's own status is not evidence that the
@@ -353,17 +324,6 @@ fn blocking_downstream_status(value: &Value) -> Result<Option<String>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn latest_pipeline_status_is_optional_but_typed() {
-        assert_eq!(
-            first_pipeline(&json!([{"id": 7, "status": "success"}])).unwrap(),
-            Some((7, "success".into()))
-        );
-        assert_eq!(first_pipeline(&json!([])).unwrap(), None);
-        assert!(first_pipeline(&json!([{"id": 7}])).is_err());
-        assert!(first_pipeline(&json!([{"status": "success"}])).is_err());
-    }
 
     #[test]
     fn a_status_description_survives_a_multi_line_rejection() {

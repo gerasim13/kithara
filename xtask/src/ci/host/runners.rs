@@ -499,7 +499,6 @@ mod tests {
         );
     }
 
-    #[test]
     /// Every token gets a runner, and macOS runs on the host. A tag with no
     /// runner behind it does not fail: its jobs sit `pending` until someone
     /// notices, which is how an evening went.

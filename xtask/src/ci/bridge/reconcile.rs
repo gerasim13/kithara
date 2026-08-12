@@ -62,14 +62,16 @@ impl Bridge {
         }
     }
 
+    /// Immediately. Waiting for the default branch's own pipeline gated nothing:
+    /// a red one does not un-merge the commit, so the wait only delayed a
+    /// decision already taken. What it did buy was an hour in which both sides
+    /// could move, and two sides that have both moved cannot be reconciled by a
+    /// fast-forward — the one failure this bridge cannot repair.
+    ///
+    /// Nothing unverified reaches this branch to begin with: merging needs a
+    /// green pipeline, pushing is refused to everyone but this bridge, and the
+    /// only other way onto it is an import that quarantine already judged.
     fn export_gitlab(&self, gitlab_sha: &str) -> Result<()> {
-        let status = self
-            .gitlab
-            .latest_push_pipeline_status(gitlab_sha)?
-            .context("GitLab main commit has no push pipeline yet")?;
-        if status != "success" {
-            bail!("GitLab main pipeline for {gitlab_sha} is {status}; GitHub export is blocked");
-        }
         self.repo.push_github(&self.github, gitlab_sha)
     }
 
