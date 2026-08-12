@@ -129,7 +129,7 @@ Create four project runner authentication tokens in corporate GitLab:
 
 | File under `~/.config/kithara-ci` | Tag | Executor |
 | --- | --- | --- |
-| `runner-macos.token` | `kithara-macos` | throwaway `tart` macOS VM |
+| `runner-macos.token` | `kithara-macos` | macOS shell |
 | `runner-linux.token` | `kithara-linux` | pinned local Docker image |
 | `runner-android.token` | `kithara-android` | macOS shell |
 | `runner-release.token` | `kithara-release` | protected macOS shell |
@@ -138,12 +138,20 @@ Each token file must contain one `glrt-...` token and have mode `0600`. Also
 create `~/.config/kithara-ci/macos-guest.password` with the SSH password of the
 macOS guest account and mode `0600`.
 
-The macOS lane runs each job in a throwaway VM. `xtask ci host run-macos-runner`
-clones the base image named by `macos_vm_bundle`, boots the clone headless
-with Xcode and the Rust toolchain mounted from the host, lets GitLab hand it a
-single build through `gitlab-runner run-single --max-builds 1`, and destroys the
-clone afterwards. Build that base image once, from the Apple restore image
-matching `macos_guest_build`:
+The macOS lane runs on the host. It ran in a throwaway VM until the cost was
+measured: the guest held twelve of the machine's twenty-four gigabytes, started
+every recycle with an empty build tree, and hosted an sccache that died often
+enough that jobs compiled locally — a suite that runs in three minutes took an
+hour to reach.
+
+The guest is still buildable and `xtask ci host run-macos-runner` still drives
+it: it clones the base image named by `macos_vm_bundle`, boots the clone
+headless with Xcode and the Rust toolchain mounted from the host, lets GitLab
+hand it a single build through `gitlab-runner run-single --max-builds 1`, and
+destroys the clone afterwards. Nothing starts it any more, and running it while
+the shell runner holds the same token gives two consumers one queue. It is
+where to put work that must not touch the machine. Build that base image from
+the Apple restore image matching `macos_guest_build`:
 
 ```text
 tart create --from-ipsw <UniversalMac_<version>_<build>_Restore.ipsw> kithara-macos-base

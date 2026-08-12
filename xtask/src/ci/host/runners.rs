@@ -103,13 +103,7 @@ impl<'a> RunnerManager<'a> {
                 self.config.host.ci_user
             );
         }
-        for name in [
-            "cleanup",
-            "health",
-            "colima",
-            "gitlab-runner",
-            "macos-runner",
-        ] {
+        for name in ["cleanup", "health", "colima", "gitlab-runner"] {
             let label = format!("com.zvuk.kithara-ci.{name}");
             let plist = self.agent_root().join(format!("{label}.plist"));
             if !plist.is_file() {
@@ -174,6 +168,12 @@ impl<'a> RunnerManager<'a> {
     /// too low: one `rustc` compiling the largest test crate reached 3.3
     /// gibibytes on its own and the kernel killed it, which Cargo reported
     /// only as "could not compile" with no diagnostic at all.
+    ///
+    /// macOS is a shell runner on the host rather than a throwaway guest. The
+    /// guest cost more than the isolation was worth: it held twelve of the
+    /// machine's twenty-four gigabytes, its build tree started empty after every
+    /// recycle, and sccache died inside it often enough that jobs compiled
+    /// locally — a suite that runs in three minutes took an hour to reach.
     fn runner_config(&self, home: &Path, tokens: &Tokens) -> String {
         let root = self.config.host.host_root.display();
         let url = self.config.host.gitlab_origin();
@@ -185,10 +185,12 @@ impl<'a> RunnerManager<'a> {
             "concurrent = 1\ncheck_interval = 3\nshutdown_timeout = 30\n\n\
              [[runners]]\n  name = \"kithara-mac-mini-linux\"\n  url = \"{url}\"\n  token = \"{}\"\n  executor = \"docker\"\n  builds_dir = \"{root}/workspaces/gitlab\"\n  output_limit = 16384\n  environment = [\"KITHARA_CI_CACHE_ROOT={cache}\", \"KITHARA_CI_HOST_CONFIG={lane_config}\", \"{provisioned_image}\", \"RUSTUP_HOME=/usr/local/rustup\"]\n\
              [runners.docker]\n    host = \"{}\"\n    image = \"{image}\"\n    pull_policy = \"never\"\n    allowed_pull_policies = [\"never\"]\n    allowed_images = [\"{image}\"]\n    cpus = \"5\"\n    memory = \"6500m\"\n    privileged = false\n    disable_cache = true\n    shm_size = 1073741824\n    volumes = [\"{root}/cache:{cache}:rw\", \"{root}/cache/gitlab-runner:/cache:rw\", \"{root}/services/mac-host.toml:{lane_config}:ro\"]\n\n\
+             [[runners]]\n  name = \"kithara-mac-mini-macos\"\n  url = \"{url}\"\n  token = \"{}\"\n  executor = \"shell\"\n  shell = \"bash\"\n  builds_dir = \"{root}/workspaces/gitlab\"\n  output_limit = 16384\n  environment = [\"KITHARA_CI_CACHE_ROOT={root}/cache\", \"KITHARA_CI_HOST_CONFIG={lane_config}\"]\n\n\
              [[runners]]\n  name = \"kithara-mac-mini-android\"\n  url = \"{url}\"\n  token = \"{}\"\n  executor = \"shell\"\n  shell = \"bash\"\n  builds_dir = \"{root}/workspaces/gitlab\"\n  output_limit = 16384\n  environment = [\"KITHARA_CI_CACHE_ROOT={root}/cache\", \"KITHARA_CI_HOST_CONFIG={lane_config}\"]\n\n\
              [[runners]]\n  name = \"kithara-mac-mini-release\"\n  url = \"{url}\"\n  token = \"{}\"\n  executor = \"shell\"\n  shell = \"bash\"\n  builds_dir = \"{root}/workspaces/gitlab\"\n  output_limit = 16384\n  environment = [\"KITHARA_CI_CACHE_ROOT={root}/cache\", \"KITHARA_CI_HOST_CONFIG={lane_config}\"]\n",
             tokens.linux,
             docker_host(home),
+            tokens.macos,
             tokens.android,
             tokens.release,
         )
@@ -292,48 +294,6 @@ impl<'a> RunnerManager<'a> {
                     "<key>KeepAlive</key><true/><key>ProcessType</key><string>Background</string>\
                      <key>SoftResourceLimits</key><dict>\
                      <key>NumberOfFiles</key><integer>65536</integer></dict>",
-                ),
-            ),
-            (
-                "macos-runner",
-                launchd(
-                    "com.zvuk.kithara-ci.macos-runner",
-                    &[
-                        // The copy `configure-runners` installs, not the
-                        // root-owned one. This agent's own plist already lives
-                        // in the CI user's home, so requiring root to replace
-                        // the binary it names protects nothing and blocks every
-                        // routine update of the runner loop.
-                        &self
-                            .config
-                            .host
-                            .host_root
-                            .join("toolchains/shared-bin/kithara-ci")
-                            .display()
-                            .to_string(),
-                        "ci",
-                        "host",
-                        "--config",
-                        &self
-                            .config
-                            .host
-                            .host_root
-                            .join("services/mac-host.toml")
-                            .display()
-                            .to_string(),
-                        "--pins",
-                        &self
-                            .config
-                            .host
-                            .host_root
-                            .join("services/pins.toml")
-                            .display()
-                            .to_string(),
-                        "run-macos-runner",
-                    ],
-                    &logs.join("macos-runner.log"),
-                    &agent_path,
-                    "<key>KeepAlive</key><true/><key>ProcessType</key><string>Interactive</string>",
                 ),
             ),
         ];
@@ -537,6 +497,49 @@ mod tests {
             fs::read(&destination).expect("read the destination"),
             b"new"
         );
+    }
+
+    #[test]
+    /// Every token gets a runner, and macOS runs on the host. A tag with no
+    /// runner behind it does not fail: its jobs sit `pending` until someone
+    /// notices, which is how an evening went.
+    #[test]
+    fn every_token_has_a_runner_and_macos_runs_on_the_host() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .to_path_buf();
+        let config = fixture();
+        let process = Process::new(&root, BTreeMap::new());
+        let manager = RunnerManager::new(&config, &process);
+        let home = config
+            .host
+            .host_root
+            .join("home")
+            .join(&config.host.ci_user);
+        let tokens = Tokens {
+            macos: "glrt-macos".into(),
+            linux: "glrt-linux".into(),
+            android: "glrt-android".into(),
+            release: "glrt-release".into(),
+        };
+
+        let rendered: toml::Value = toml::from_str(&manager.runner_config(&home, &tokens)).unwrap();
+        let runners = rendered["runners"].as_array().unwrap();
+        for token in ["glrt-macos", "glrt-linux", "glrt-android", "glrt-release"] {
+            assert!(
+                runners
+                    .iter()
+                    .any(|runner| runner["token"].as_str() == Some(token)),
+                "{token} has no runner, so its jobs will never be taken"
+            );
+        }
+
+        let macos = runners
+            .iter()
+            .find(|runner| runner["token"].as_str() == Some("glrt-macos"))
+            .unwrap();
+        assert_eq!(macos["executor"].as_str(), Some("shell"));
     }
 
     #[test]
