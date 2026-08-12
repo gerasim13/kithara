@@ -308,7 +308,7 @@ fn execute(args: &RunArgs, ctx: &Ctx) -> Result<()> {
     retire_sccache_server(&process)?;
 
     let result = match args.lane {
-        Lane::AppleLint => lane::apple::lint(&process, &ci_config),
+        Lane::AppleLint => lane::apple::lint(&process, &ci_config, args.kind),
         Lane::AppleMsrv => lane::apple::msrv(&process, &ci_config),
         Lane::AppleTest => lane::apple::test(&process, &ci_config, args.kind),
         Lane::AppleTestFlashOff => lane::apple::test_flash_off(&process, &ci_config),

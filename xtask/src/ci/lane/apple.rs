@@ -43,9 +43,31 @@ fn preflight(process: &Process, config: &CiConfig) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn lint(process: &Process, config: &CiConfig) -> Result<()> {
+/// The gate a change is measured by, and the ratchets the default branch keeps.
+///
+/// Both chains run the checks that answer whether a change is acceptable:
+/// formatting, Clippy over the workspace, ast-grep, typos, the architecture
+/// ratchet and the two idiom checks a review is held to. What only the default
+/// branch pays for is the rest of the ratchet family — the full idiom set,
+/// style, the quality scans and this tool's own tests. They guard a baseline
+/// rather than judge a diff, and on one Apple host every one of them is a
+/// minute a review waits.
+fn lint_command(kind: PipelineKind) -> (&'static [&'static str], &'static str) {
+    match kind {
+        PipelineKind::MergeRequest | PipelineKind::Branch | PipelineKind::Quarantine => {
+            (&["lint", "fast"], "review lint gate")
+        }
+        PipelineKind::Main
+        | PipelineKind::Nightly
+        | PipelineKind::Weekly
+        | PipelineKind::Release => (&["lint", "full"], "full lint gate"),
+    }
+}
+
+pub(crate) fn lint(process: &Process, config: &CiConfig, kind: PipelineKind) -> Result<()> {
     preflight(process, config)?;
-    process.run("just", &["lint", "full"], "full lint gate")
+    let (args, label) = lint_command(kind);
+    process.run("just", args, label)
 }
 
 pub(crate) fn msrv(process: &Process, config: &CiConfig) -> Result<()> {
