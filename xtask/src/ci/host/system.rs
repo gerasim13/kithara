@@ -127,12 +127,12 @@ impl<'a> SystemSetup<'a> {
                 "apfs",
                 "addVolume",
                 container,
-                "APFSX",
+                "APFS",
                 name,
                 "-quota",
                 &quota,
             ],
-            "create case-sensitive CI volume",
+            "create CI volume",
         )?;
         self.process.run(
             "/usr/sbin/diskutil",
@@ -184,7 +184,7 @@ impl<'a> SystemSetup<'a> {
             );
         }
         self.disable_indexing()?;
-        self.verify_case_sensitive()
+        self.verify_case_folding()
     }
 
     /// A mounted volume is indexed by default, and this one holds nothing a
@@ -208,21 +208,31 @@ impl<'a> SystemSetup<'a> {
         )
     }
 
-    fn verify_case_sensitive(&self) -> Result<()> {
+    /// Apple's own tooling assumes the case folding a stock macOS volume has.
+    /// `xcodebuild -create-xcframework` writes `Headers`, and the packaging
+    /// step then removes `headers`; on a case-sensitive volume those are two
+    /// names and the build dies with `No such file or directory`. This host
+    /// was given a case-sensitive volume and `apple:xcframework` never
+    /// succeeded on it once, while the same job passed inside a guest whose
+    /// disk was an ordinary one.
+    fn verify_case_folding(&self) -> Result<()> {
         let probe = self
             .config
             .host
             .host_root
             .join(format!(".case-check.{}", std::process::id()));
         fs::create_dir(&probe)
-            .with_context(|| format!("creating case-sensitivity probe {}", probe.display()))?;
+            .with_context(|| format!("creating case-folding probe {}", probe.display()))?;
         let lower = probe.join("probe");
         let upper = probe.join("PROBE");
         let result = (|| {
             fs::write(&lower, [])?;
             fs::write(&upper, [])?;
-            if fs::read_dir(&probe)?.count() != 2 {
-                bail!("CI volume must use case-sensitive APFS");
+            if fs::read_dir(&probe)?.count() != 1 {
+                bail!(
+                    "CI volume must fold case like a stock macOS volume; a case-sensitive one \
+                     breaks `xcodebuild -create-xcframework` packaging"
+                );
             }
             Ok(())
         })();
