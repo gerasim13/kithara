@@ -183,7 +183,29 @@ impl<'a> SystemSetup<'a> {
                 self.config.host.quota_bytes
             );
         }
+        self.disable_indexing()?;
         self.verify_case_sensitive()
+    }
+
+    /// A mounted volume is indexed by default, and this one holds nothing a
+    /// person searches for: it is where every build writes its artifacts. The
+    /// indexer then queues each of them, so the cost grows with the build
+    /// directory rather than staying constant — the Apple lint job went from
+    /// 419s inside a guest, whose disk the host does not index, to 2156s on
+    /// this volume with an 8.9 GB `target/`. Applied on every run because it is
+    /// the volume's state that matters, not whether this run created it.
+    fn disable_indexing(&self) -> Result<()> {
+        let volume = self
+            .config
+            .host
+            .host_root
+            .to_str()
+            .context("CI volume path is not UTF-8")?;
+        self.process.run(
+            "/usr/bin/mdutil",
+            &["-i", "off", "-d", volume],
+            "disable Spotlight indexing on the CI volume",
+        )
     }
 
     fn verify_case_sensitive(&self) -> Result<()> {
