@@ -182,10 +182,14 @@ impl Gitlab {
     }
 
     pub(super) fn create_pipeline(&self, reference: &str, github_sha: &str) -> Result<u64> {
+        // The empty subscript is what makes this an array of hashes, which is
+        // what the endpoint accepts. Numbering it produces a hash keyed `"0"`
+        // instead, and the request comes back `{"error":"variables is invalid"}`
+        // — as the first import to reach this call discovered.
         let form = vec![
             ("ref".into(), reference.into()),
-            ("variables[0][key]".into(), "KITHARA_QUARANTINE_SHA".into()),
-            ("variables[0][value]".into(), github_sha.into()),
+            ("variables[][key]".into(), "KITHARA_QUARANTINE_SHA".into()),
+            ("variables[][value]".into(), github_sha.into()),
         ];
         let payload = Payload::Form(&form);
         let response = self.request(&Method::POST, "pipeline", Some(&payload))?;
