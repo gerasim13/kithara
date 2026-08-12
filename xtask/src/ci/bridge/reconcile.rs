@@ -121,7 +121,8 @@ impl Bridge {
             let quarantine = format!("quarantine/github/{github_sha}");
             // Judged with this branch's CI, not the one the patch brought.
             let judged = self.repo.judged_commit(gitlab_base_sha, github_sha)?;
-            self.repo.push_gitlab(&self.gitlab, &judged, &quarantine)?;
+            self.repo
+                .force_push_gitlab(&self.gitlab, &judged, &quarantine)?;
             let id = self.gitlab.create_pipeline(&quarantine, github_sha)?;
             self.ledger.put(
                 github_sha,

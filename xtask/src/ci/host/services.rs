@@ -267,8 +267,20 @@ impl<'a> ServiceInstaller<'a> {
         self.write_agent("health", &health)
     }
 
+    /// The daemon runs the copy under `toolchains/shared-bin`, the one the CI
+    /// user can replace, for the same reason the maintenance agents do: every
+    /// fix to the bridge otherwise needs a password, and the bridge is the part
+    /// that gets fixed while it is being brought up. The secrets stay out of
+    /// reach — they belong to the sync user, and the CI user cannot read them.
     fn stage_bridge_agent(&self) -> Result<()> {
-        let binary = self.installed_binary().display().to_string();
+        let binary = self
+            .config
+            .host
+            .host_root
+            .join("toolchains/shared-bin")
+            .join(Self::BINARY_NAME)
+            .display()
+            .to_string();
         let config = self
             .service_root()
             .join("bridge/config.toml")

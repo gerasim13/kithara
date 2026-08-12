@@ -151,7 +151,10 @@ impl GitRepo {
         if git_in(tree, &["diff", "--cached", "--quiet"]).is_ok() {
             return Ok(head.to_owned());
         }
-        git_in(
+        // A fixed identity and date make the synthesis reproducible: the same
+        // import attempted twice produces the same commit rather than a new one
+        // that the quarantine branch would have to be moved to.
+        git_in_with_date(
             tree,
             &[
                 "-c",
@@ -192,13 +195,41 @@ impl GitRepo {
     }
 
     pub(super) fn push_gitlab(&self, gitlab: &Gitlab, sha: &str, destination: &str) -> Result<()> {
+        self.push_gitlab_ref(gitlab, sha, destination, false)
+    }
+
+    /// The quarantine branch is this bridge's scratch space for one import, and
+    /// a second attempt at the same import brings a rebuilt commit. Refusing to
+    /// move the branch would leave the retry pushing at a ref it owns and being
+    /// told the remote is ahead.
+    pub(super) fn force_push_gitlab(
+        &self,
+        gitlab: &Gitlab,
+        sha: &str,
+        destination: &str,
+    ) -> Result<()> {
+        self.push_gitlab_ref(gitlab, sha, destination, true)
+    }
+
+    fn push_gitlab_ref(
+        &self,
+        gitlab: &Gitlab,
+        sha: &str,
+        destination: &str,
+        force: bool,
+    ) -> Result<()> {
         let url = format!(
             "{}/{}.git",
             self.config.gitlab_origin(),
             self.config.gitlab_project_path
         );
+        let lead = if force { "+" } else { "" };
         self.run(
-            &["push", &url, &format!("{sha}:refs/heads/{destination}")],
+            &[
+                "push",
+                &url,
+                &format!("{lead}{sha}:refs/heads/{destination}"),
+            ],
             Some(gitlab.git_header()),
         )?;
         Ok(())
@@ -255,6 +286,23 @@ fn path_text(path: &Path) -> Result<&str> {
 fn git_in(tree: &Path, args: &[&str]) -> Result<Vec<u8>> {
     let output = Command::new("git")
         .current_dir(tree)
+        .args(args)
+        .output()
+        .with_context(|| format!("running git {}", args.first().unwrap_or(&"<unknown>")))?;
+    checked(
+        output,
+        &format!("git {}", args.first().unwrap_or(&"<unknown>")),
+    )
+}
+
+/// Git takes both timestamps from the environment, and leaving them to the clock
+/// is what makes an otherwise identical synthesis a different commit each time.
+fn git_in_with_date(tree: &Path, args: &[&str]) -> Result<Vec<u8>> {
+    const EPOCH: &str = "1970-01-01T00:00:00Z";
+    let output = Command::new("git")
+        .current_dir(tree)
+        .env("GIT_AUTHOR_DATE", EPOCH)
+        .env("GIT_COMMITTER_DATE", EPOCH)
         .args(args)
         .output()
         .with_context(|| format!("running git {}", args.first().unwrap_or(&"<unknown>")))?;
@@ -354,6 +402,18 @@ mod tests {
 
         assert_eq!(blob(&repo, &judged, ".gitlab-ci.yml"), "trusted\n");
         assert_eq!(blob(&repo, &judged, "xtask/src/main.rs"), "// trusted\n");
+    }
+
+    /// A retry rebuilds the synthesis, and one that differs each time pushes a
+    /// new commit at a branch it already owns, which git refuses.
+    #[test]
+    fn the_judged_commit_is_the_same_on_a_second_attempt() {
+        let (_state, repo, base, head) = repository();
+
+        let first = repo.judged_commit(&base, &head).unwrap();
+        let second = repo.judged_commit(&base, &head).unwrap();
+
+        assert_eq!(first, second);
     }
 
     /// And it is still the patch that is being judged.
