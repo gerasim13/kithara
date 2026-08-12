@@ -1,12 +1,26 @@
 stages:
   - dispatch
 
+variables:
+  # `KITHARA_PLATFORMS: $KITHARA_PLATFORMS` below forwards a platform request to
+  # the child. An undefined variable does not expand to nothing there — it stays
+  # the literal `$KITHARA_PLATFORMS`, which `rules:if` then reads as a value.
+  # That is how `dispatch:platforms` matched a quarantine run naming no platform
+  # and put a second Apple matrix on the one host. Declaring it here is what
+  # makes unset mean unset; a run that names platforms overrides it.
+  KITHARA_PLATFORMS: ""
+
 workflow:
   auto_cancel:
     on_new_commit: interruptible
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
     - if: $CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+    # The bridge creates the quarantine pipeline itself and watches that one by
+    # id. The push that places the commit adds a second pipeline nobody reads,
+    # and the two then compete for the single Apple host.
+    - if: $CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH =~ /^quarantine\//
+      when: never
     # A branch with an open merge request is already covered by the
     # merge-request pipeline. A second pipeline on the same commit would take
     # the one Apple host twice to report the same thing.
