@@ -103,6 +103,13 @@ dispatch:platforms:
     KITHARA_PIPELINE_KIND: main
     KITHARA_PLATFORMS: $KITHARA_PLATFORMS
   rules:
+    # A quarantine run is started through the API too, and if the project
+    # carries a `KITHARA_PLATFORMS` value this matched it: one import then took
+    # the host for the platform matrix as well, which is not what verifies the
+    # import and which finished by failing. The quarantine sha says whose run
+    # this is, so it answers first.
+    - if: $KITHARA_QUARANTINE_SHA
+      when: never
     - if: $CI_PIPELINE_SOURCE == "web" && $KITHARA_PLATFORMS
     - if: $CI_PIPELINE_SOURCE == "api" && $KITHARA_PLATFORMS
 
