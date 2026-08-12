@@ -752,6 +752,33 @@ mod tests {
         }
     }
 
+    fn stop(state: &mut SessionState<TestBackend>, player_id: PlayerId) {
+        match run_cmd(state, Cmd::StopPlayer { player_id }) {
+            Reply::Ok => {}
+            Reply::Err(err) => panic!("player {player_id} failed to stop: {err}"),
+            _ => panic!("player stop returned unexpected reply"),
+        }
+    }
+
+    /// Stopping is the verb a host reaches for when playback ends, and it must
+    /// release the output on its own — the existing coverage reaches this only
+    /// through unregister, which a host that stops without dropping its player
+    /// never performs. Naming the two separately is what tells a caller that
+    /// kept its player whether the device is free, which is the difference
+    /// between an audio session that can be deactivated and one that reports
+    /// itself busy.
+    #[kithara::test]
+    fn stopping_the_last_player_releases_the_output() {
+        device(|dev| *dev = AudioDevice::default());
+        let mut state = SessionState::<TestBackend>::new(start_test_stream);
+        let player_id = register(&mut state);
+        start(&mut state, player_id);
+
+        stop(&mut state, player_id);
+
+        assert!(state.ctx.is_none());
+    }
+
     #[kithara::test]
     fn a_running_player_replaces_its_eq_layout_without_releasing_slots() {
         device(|dev| *dev = AudioDevice::default());
