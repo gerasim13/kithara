@@ -19,18 +19,23 @@ style *ARGS:
 idioms *ARGS:
     just _xtask lint idioms "$@"
 
-# Fast local chain: formatting, Clippy, ast-grep, typos, and arch ratchet.
-fast:
+_shared:
     just fmt check
     just check clippy
     just lint ast-grep
     just lint typos
     just lint arch
+
+# Fast local chain: formatting, Clippy, ast-grep, typos, and arch ratchet.
+fast:
+    just lint _shared
     just lint idioms --check derivable_getter --check derivable_delegation
 
 # Full CI chain: fast checks, xtask tests, quality scans, style, and idioms.
+# It runs every idiom check below, so it takes the shared part directly rather
+# than through `fast`, whose two-check pass it would then repeat.
 full:
-    just lint fast
+    just lint _shared
     cargo test -p xtask
     just quality unimock-check
     just quality rstest-audit
