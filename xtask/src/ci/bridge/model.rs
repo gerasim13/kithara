@@ -59,24 +59,6 @@ pub(super) fn direction_for(
     Ok(Direction::Diverged)
 }
 
-pub(super) fn changed_control_paths(paths: impl IntoIterator<Item = String>) -> Vec<String> {
-    let mut changed = paths
-        .into_iter()
-        .filter(|path| {
-            CONTROL_PATHS.iter().any(|protected| {
-                if protected.ends_with('/') {
-                    path.starts_with(protected)
-                } else {
-                    path == protected
-                }
-            })
-        })
-        .collect::<Vec<_>>();
-    changed.sort();
-    changed.dedup();
-    changed
-}
-
 pub(super) fn validate_sha(value: &str) -> bool {
     value.len() == 40 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
@@ -136,35 +118,6 @@ mod tests {
         assert_eq!(
             direction_for("github", "gitlab", |_, _| Ok(false)).unwrap(),
             Direction::Diverged
-        );
-    }
-
-    #[test]
-    fn control_paths_include_rust_ci_owners() {
-        assert_eq!(
-            changed_control_paths([
-                "crates/kithara/src/lib.rs".to_string(),
-                "xtask/src/ci/run.rs".to_string(),
-                ".gitlab-ci.yml".to_string(),
-                ".config/just/ci.just".to_string(),
-            ]),
-            [
-                ".config/just/ci.just",
-                ".gitlab-ci.yml",
-                "xtask/src/ci/run.rs",
-            ]
-        );
-    }
-
-    #[test]
-    fn a_manifest_change_alone_does_not_block_the_import() {
-        assert!(
-            changed_control_paths([
-                "Cargo.toml".to_string(),
-                "Cargo.lock".to_string(),
-                "crates/kithara-net/Cargo.toml".to_string(),
-            ])
-            .is_empty()
         );
     }
 

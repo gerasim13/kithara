@@ -226,13 +226,23 @@ switching it back on would throw away whatever had been merged here since.
 GitHub keeps receiving that history through the bridge below, and pull requests
 opened there come back through quarantine.
 
-GitLab `main` fast-forwards to GitHub only after the exact commit has a
-successful GitLab push pipeline, judged on the child pipeline the dispatch
-stage triggers rather than on its parent. A GitHub `main` update is imported
-only when it belongs to a merged pull request, changes no CI control path, and
-passes the private quarantine pipeline. Manifests are not control paths:
-`deps:deny` runs on quarantine instead. Divergence is fail-closed and opens one
-deduplicated GitLab incident.
+GitLab `main` fast-forwards to GitHub as soon as it moves. It used to wait for
+that commit's own pipeline, which gated nothing — a red one does not un-merge
+anything — while leaving an hour in which both sides could move, and two sides
+that have both moved cannot be reconciled by a fast-forward.
+
+A GitHub `main` update is imported when it belongs to a merged pull request and
+passes the private quarantine pipeline. What quarantine runs is the pull
+request's content with every CI control path taken from this branch, so a patch
+cannot bring the pipeline that judges it; the control paths themselves then land
+on the authority of whoever merged the pull request, and the next pipeline is
+the first to run them. Refusing such a patch was the earlier answer, and its own
+advice — land it here through a merge request instead — produced the same work
+under a second hash, which is precisely the divergence below.
+
+A pipeline is judged on the child the dispatch stage triggers, never on its
+parent: a parent reports `success` over a child that was cancelled. Divergence
+is fail-closed and opens one deduplicated GitLab incident.
 
 A rejection is recorded and refused on sight. Once its reason has been dealt
 with, clear the head so the import runs again:

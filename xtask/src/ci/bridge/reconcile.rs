@@ -11,7 +11,7 @@ use super::{
     command::BridgeConfig,
     git::GitRepo,
     ledger::Ledger,
-    model::{Direction, ImportState, changed_control_paths, direction_for, validate_sha},
+    model::{Direction, ImportState, direction_for, validate_sha},
 };
 
 pub(super) struct Bridge {
@@ -115,30 +115,13 @@ impl Bridge {
 
         self.github
             .report_status(github_sha, "pending", "GitLab verification running")?;
-        let control_paths =
-            changed_control_paths(self.repo.changed_paths(gitlab_base_sha, github_sha)?);
-        if !control_paths.is_empty() {
-            let paths = control_paths
-                .iter()
-                .map(|path| format!("- `{path}`"))
-                .collect::<Vec<_>>()
-                .join("\n");
-            let detail = format!(
-                "The merged GitHub pull request changes CI control files. Import stopped; port \
-                 these changes through a reviewed GitLab merge request instead:\n\n{paths}"
-            );
-            self.reject(github_sha, gitlab_base_sha, None, "failure", &detail)?;
-            self.gitlab
-                .ensure_issue("GitHub import requires CI control review", &detail)?;
-            bail!("{detail}");
-        }
-
         let pipeline_id = if let Some(id) = entry.as_ref().and_then(|entry| entry.pipeline_id) {
             id
         } else {
             let quarantine = format!("quarantine/github/{github_sha}");
-            self.repo
-                .push_gitlab(&self.gitlab, github_sha, &quarantine)?;
+            // Judged with this branch's CI, not the one the patch brought.
+            let judged = self.repo.judged_commit(gitlab_base_sha, github_sha)?;
+            self.repo.push_gitlab(&self.gitlab, &judged, &quarantine)?;
             let id = self.gitlab.create_pipeline(&quarantine, github_sha)?;
             self.ledger.put(
                 github_sha,
