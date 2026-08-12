@@ -195,17 +195,21 @@ impl<'a> SystemSetup<'a> {
     /// this volume with an 8.9 GB `target/`. Applied on every run because it is
     /// the volume's state that matters, not whether this run created it.
     fn disable_indexing(&self) -> Result<()> {
-        let volume = self
-            .config
-            .host
-            .host_root
-            .to_str()
-            .context("CI volume path is not UTF-8")?;
-        self.process.run(
-            "/usr/bin/mdutil",
-            &["-i", "off", "-d", volume],
-            "disable Spotlight indexing on the CI volume",
-        )
+        let host = self.config.host.host_root.as_path();
+        let builds = self.config.host.build_root();
+        let mut volumes = vec![host];
+        if builds != host {
+            volumes.push(builds);
+        }
+        for volume in volumes {
+            let path = volume.to_str().context("CI volume path is not UTF-8")?;
+            self.process.run(
+                "/usr/bin/mdutil",
+                &["-i", "off", "-d", path],
+                "disable Spotlight indexing on a CI volume",
+            )?;
+        }
+        Ok(())
     }
 
     /// Apple's own tooling assumes the case folding a stock macOS volume has.
