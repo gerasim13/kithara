@@ -49,7 +49,7 @@ extension IntegrationRegressionsIOS {
             cacheContainsFile(ofSize: bodyLength, under: cacheURL)
         }
         try await waitForLoadedRangesFact("loadedRanges to publish a non-empty range") {
-            ranges.maximumEnd > 0
+            !ranges.snapshot().isEmpty
         }
         player.pause()
 
@@ -66,13 +66,30 @@ extension IntegrationRegressionsIOS {
             """
         )
 
-        let loadedEnd = ranges.maximumEnd
+        // `ItemLoadedRange` is `[start, start + duration)`, so a reader that
+        // collapses the list to `max(start + duration)` reads the same number
+        // whether `duration` is a length or an absolute end, and cannot see a
+        // window that begins at the playhead instead of at the origin. Both
+        // halves are stated on the published range itself, one per assertion.
+        let published = ranges.snapshot()
+        let covering = try #require(
+            published.min(by: { $0.start < $1.start }),
+            "precondition: loadedRanges published no range to inspect"
+        )
         #expect(
-            loadedEnd >= duration * 0.9,
+            covering.start == 0,
             """
-            a \(bodyLength)-byte fixture is fully cached, but \
-            loadedRanges covers only \(loadedEnd)s of \(duration)s at \
-            playback position \(position)s
+            loadedRanges starts at \(covering.start)s rather than at the item's \
+            origin, so it reports what is reachable from the playhead at \
+            \(position)s instead of what is downloaded
+            """
+        )
+        #expect(
+            covering.duration >= duration * 0.9,
+            """
+            a \(bodyLength)-byte fixture is fully cached, but the range from the \
+            origin spans only \(covering.duration)s of \(duration)s at playback \
+            position \(position)s
             """
         )
     }
@@ -140,10 +157,10 @@ private final class LoadedRangesProbe: @unchecked Sendable {
     private let lock = NSLock()
     private var ranges: [ItemLoadedRange] = []
 
-    var maximumEnd: TimeInterval {
+    func snapshot() -> [ItemLoadedRange] {
         lock.lock()
         defer { lock.unlock() }
-        return ranges.map { $0.start + $0.duration }.max() ?? 0
+        return ranges
     }
 
     func replace(with ranges: [ItemLoadedRange]) {
