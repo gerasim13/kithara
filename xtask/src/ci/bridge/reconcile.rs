@@ -135,6 +135,16 @@ impl Bridge {
         };
 
         let status = self.wait_for_pipeline(pipeline_id)?;
+        // Running out of patience is not a verdict. GitLab bounds each job on
+        // its own, so a pipeline still moving when this deadline passes is
+        // slow, not stuck — and rejecting it there records a failure the tests
+        // never reported, which then needs `bridge retry` to undo. The ledger
+        // already holds the pipeline id, so leaving the entry in `Testing`
+        // resumes this same wait on the next tick.
+        if status == PIPELINE_UNFINISHED {
+            info!(pipeline_id, %github_sha, "quarantine pipeline is still running");
+            return Ok(());
+        }
         if status != "success" {
             let detail = format!("GitLab quarantine pipeline {pipeline_id} finished with {status}");
             self.reject(
@@ -205,6 +215,10 @@ impl Bridge {
     }
 }
 
+/// What this wait reports when the deadline passes with the pipeline still
+/// moving. Deliberately not a `GitLab` status: no verdict was reached.
+pub(super) const PIPELINE_UNFINISHED: &str = "unfinished";
+
 fn wait_for_status(
     timeout: Duration,
     poll_interval: Duration,
@@ -221,7 +235,7 @@ fn wait_for_status(
         }
         thread::sleep(poll_interval);
     }
-    Ok("timeout".into())
+    Ok(PIPELINE_UNFINISHED.into())
 }
 
 fn require_sha(owner: &str, sha: &str) -> Result<()> {
@@ -245,5 +259,23 @@ mod tests {
         .unwrap();
         assert_eq!(status, "success");
         assert_eq!(calls, 1);
+    }
+
+    /// A pipeline still moving when the deadline passes must not be reported
+    /// under a name the caller could mistake for one `GitLab` produced: every
+    /// GitLab status this wait accepts is terminal, and `import_github` turns
+    /// a terminal non-success into a recorded rejection.
+    #[test]
+    fn an_unfinished_pipeline_is_not_reported_as_a_gitlab_status() {
+        let status = wait_for_status(Duration::from_millis(2), Duration::from_millis(1), || {
+            Ok("running".into())
+        })
+        .unwrap();
+        assert_eq!(status, PIPELINE_UNFINISHED);
+    }
+
+    #[test]
+    fn an_unfinished_pipeline_is_not_a_success() {
+        assert_ne!(PIPELINE_UNFINISHED, "success");
     }
 }
