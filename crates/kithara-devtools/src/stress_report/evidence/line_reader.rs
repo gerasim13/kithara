@@ -100,12 +100,11 @@ fn emit_line(
     } else {
         line.as_slice()
     };
-    let result = match std::str::from_utf8(bytes) {
-        Ok(text) => callback(text),
-        Err(_) => {
-            summary.invalid_utf8_lines = summary.invalid_utf8_lines.saturating_add(1);
-            ControlFlow::Continue(())
-        }
+    let result = if let Ok(text) = std::str::from_utf8(bytes) {
+        callback(text)
+    } else {
+        summary.invalid_utf8_lines = summary.invalid_utf8_lines.saturating_add(1);
+        ControlFlow::Continue(())
     };
     line.clear();
     result

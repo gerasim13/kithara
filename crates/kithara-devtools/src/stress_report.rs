@@ -514,6 +514,14 @@ fn render(
         }
     }
 
+    render_failures(&mut out, tests);
+    RenderedReport {
+        markdown: out,
+        complete,
+    }
+}
+
+fn render_failures(out: &mut String, tests: BTreeMap<TestId, TestStats>) {
     let mut failures = tests
         .into_iter()
         .filter(|(_, stats)| !stats.failed_iterations.is_empty())
@@ -525,10 +533,7 @@ fn render(
     });
     if failures.is_empty() {
         out.push_str("\nNo failed attempts were recorded.\n");
-        return RenderedReport {
-            markdown: out,
-            complete,
-        };
+        return;
     }
 
     let _ = writeln!(
@@ -555,10 +560,6 @@ fn render(
             "\nShowing the first {MAX_FAILURE_ROWS} of {} failed tests. The JUnit artifact is exhaustive.",
             failures.len()
         );
-    }
-    RenderedReport {
-        markdown: out,
-        complete,
     }
 }
 

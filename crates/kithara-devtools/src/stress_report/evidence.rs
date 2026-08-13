@@ -5,6 +5,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     fmt::Write as _,
     sync::LazyLock,
+    time::Duration,
 };
 
 use regex::Regex;
@@ -491,7 +492,17 @@ fn normalize_flash(text: &str) -> String {
 }
 
 fn duration_ms(secs: f64) -> u64 {
-    (secs * 1_000.0).ceil().max(1.0) as u64
+    let Ok(duration) = Duration::try_from_secs_f64(secs) else {
+        return if secs.is_finite() && secs.is_sign_positive() {
+            u64::MAX
+        } else {
+            1
+        };
+    };
+    let millis = duration
+        .as_millis()
+        .saturating_add(u128::from(duration.subsec_nanos() % 1_000_000 != 0));
+    u64::try_from(millis).unwrap_or(u64::MAX).max(1)
 }
 
 pub(super) fn parse_timestamp_ms(timestamp: &str) -> Option<u64> {
@@ -521,10 +532,12 @@ pub(super) fn parse_timestamp_ms(timestamp: &str) -> Option<u64> {
         let mut digits = fraction.as_str().chars();
         (0..3).fold(0_i64, |value, _| {
             value * 10
-                + digits
-                    .next()
-                    .and_then(|digit| digit.to_digit(10))
-                    .unwrap_or(0) as i64
+                + i64::from(
+                    digits
+                        .next()
+                        .and_then(|digit| digit.to_digit(10))
+                        .unwrap_or(0),
+                )
         })
     });
     let zone = captures.get(8)?.as_str();
@@ -592,6 +605,17 @@ mod tests {
         );
         assert_eq!(parse_timestamp_ms("2000-02-30T00:00:00Z"), None);
         assert_eq!(parse_timestamp_ms("not-a-timestamp"), None);
+    }
+
+    #[test]
+    fn duration_rounds_up_to_a_positive_millisecond() {
+        assert_eq!(duration_ms(0.0), 1);
+        assert_eq!(duration_ms(0.000_001), 1);
+        assert_eq!(duration_ms(0.001), 1);
+        assert_eq!(duration_ms(0.001_001), 2);
+        assert_eq!(duration_ms(1.0), 1_000);
+        assert_eq!(duration_ms(f64::NAN), 1);
+        assert_eq!(duration_ms(f64::MAX), u64::MAX);
     }
 
     #[test]
