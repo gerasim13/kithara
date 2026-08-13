@@ -26,7 +26,7 @@ use crate::{
     expand::{Binding, ControlSpec, ExpandedNode},
     ids::InternId,
     layout::Axis,
-    module::{ChromeStyle, TextStyle},
+    module::{ChromeStyle, TextAlign, TextStyle},
     mount,
     render::{
         ControlAction, HostedControlPlan, InputOwner, ReadValue, Reads, Skin, UiEvent,
@@ -160,6 +160,7 @@ where
     pub(super) fn text_leaf(
         &self,
         content: String,
+        align: TextAlign,
         style: TextStyle,
         color: Option<ColorRole>,
         active_color: Option<ColorRole>,
@@ -180,6 +181,7 @@ where
         };
         MasonryNode::document(
             NodeLayout::Leaf(Leaf::Text {
+                align,
                 content,
                 role,
                 padding_x,

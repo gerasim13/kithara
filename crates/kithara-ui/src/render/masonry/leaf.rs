@@ -26,6 +26,7 @@ use crate::{
     interact::{
         CursorShape, Hit, Input, MOUSE, Outcome, PointerInput, PointerOwnership, PointerPhase,
     },
+    module::TextAlign,
     render::{HostLayer, ReadValue, Reads, UiEvent, WindowCommand, WindowLayerProgram},
     skin::TextRoleSkin,
     solve::{Length, Size},
@@ -36,6 +37,7 @@ pub(super) enum Leaf {
     Empty,
     Control(Box<dyn MasonryControl>),
     Text {
+        align: TextAlign,
         content: String,
         role: TextRoleSkin,
         padding_x: f32,
@@ -100,7 +102,7 @@ impl Leaf {
                         &run,
                         content,
                         Transform::translate(Pt {
-                            x: *padding_x,
+                            x: text_x(*align, bounds, run.width(), *padding_x),
                             y: (bounds.h - run.height()) / 2.0,
                         }),
                         *color,
@@ -215,6 +217,17 @@ fn wrap_width(width: f32, padding_x: f32) -> Option<f32> {
     width
         .is_finite()
         .then_some((width - padding_x * 2.0).max(0.0))
+}
+
+fn text_x(align: TextAlign, bounds: Rect, width: f32, padding_x: f32) -> f32 {
+    let free = (bounds.w - padding_x * 2.0 - width).max(0.0);
+    bounds.x
+        + padding_x
+        + match align {
+            TextAlign::Start => 0.0,
+            TextAlign::Center => free / 2.0,
+            TextAlign::End => free,
+        }
 }
 
 pub(crate) struct WindowLeafLayer<Program>
@@ -447,9 +460,25 @@ mod tests {
     use crate::{
         atoms::{painter::Labelled, tab::TabLarge, toggle::Binary},
         builtin,
+        draw::Rect,
+        module::TextAlign,
         render::masonry::Painted,
         solve::{Limits, Size},
     };
+
+    #[kithara::test]
+    fn document_text_alignment_uses_the_leaf_width() {
+        let bounds = Rect {
+            h: 40.0,
+            w: 28.0,
+            x: 3.0,
+            y: 5.0,
+        };
+
+        assert_eq!(text_x(TextAlign::Start, bounds, 8.0, 2.0), 5.0);
+        assert_eq!(text_x(TextAlign::Center, bounds, 8.0, 2.0), 13.0);
+        assert_eq!(text_x(TextAlign::End, bounds, 8.0, 2.0), 21.0);
+    }
 
     /// The retained host has to be able to give a control the width it measures
     /// for itself. Only a tab needs it today — every other mounted control is

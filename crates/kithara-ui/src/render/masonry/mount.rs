@@ -276,6 +276,7 @@ impl NodeControl for mount::Text<'_> {
             .unwrap_or_default();
         host.text_leaf(
             content,
+            self.align,
             self.style,
             self.color,
             self.active_color,
