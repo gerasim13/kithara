@@ -42,6 +42,7 @@ struct TestStats {
     attempts: usize,
     failures: usize,
     max_secs: f64,
+    observed_iterations: BTreeSet<usize>,
     failed_iterations: BTreeSet<usize>,
 }
 
@@ -103,6 +104,7 @@ fn render(cases: &[CaseTiming], expected_count: usize) -> String {
         stats.max_secs = stats.max_secs.max(case.secs);
         if let Some(iteration) = case.iteration {
             observed_iterations.insert(iteration);
+            stats.observed_iterations.insert(iteration);
             if case.failed {
                 stats.failed_iterations.insert(iteration);
             }
@@ -113,12 +115,13 @@ fn render(cases: &[CaseTiming], expected_count: usize) -> String {
         }
     }
 
-    let observed_count = observed_iterations
-        .last()
-        .map_or(0, |iteration| iteration + 1);
+    let expected_iterations = (0..expected_count).collect::<BTreeSet<_>>();
+    let observed_count = observed_iterations.len();
     let complete = !cases.is_empty()
-        && observed_count == expected_count
-        && tests.values().all(|stats| stats.attempts == expected_count);
+        && observed_iterations == expected_iterations
+        && tests
+            .values()
+            .all(|stats| stats.observed_iterations == expected_iterations);
     let result = if !complete {
         "INCOMPLETE"
     } else if failed_attempts > 0 {
@@ -260,6 +263,20 @@ mod tests {
 
         assert!(report.contains("Result: **INCOMPLETE**"), "{report}");
         assert!(report.contains("Failed attempts: `1`"), "{report}");
+    }
+
+    #[test]
+    fn duplicate_iterations_do_not_hide_a_gap() {
+        let cases = vec![
+            case("seek", 0, false, 0.1),
+            case("seek", 0, false, 0.1),
+            case("seek", 2, false, 0.1),
+        ];
+
+        let report = render(&cases, 3);
+
+        assert!(report.contains("Result: **INCOMPLETE**"), "{report}");
+        assert!(report.contains("Observed iterations: `2`"), "{report}");
     }
 
     #[test]
