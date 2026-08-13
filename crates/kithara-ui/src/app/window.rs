@@ -3,7 +3,7 @@
 
 use kithara_platform::{
     sync::Arc,
-    time::{Duration, Instant},
+    time::{Duration, Instant, WallInstant},
 };
 use masonry::vello::{
     AaConfig, AaSupport, RenderParams, Renderer, RendererOptions,
@@ -85,19 +85,19 @@ enum SurfaceRecovery {
 }
 
 struct IdleClock {
-    next: Instant,
+    next: WallInstant,
 }
 
 impl IdleClock {
     const PERIOD: Duration = Duration::from_millis(500);
 
-    fn new(now: Instant) -> Self {
+    fn new(now: WallInstant) -> Self {
         Self {
             next: now + Self::PERIOD,
         }
     }
 
-    fn wake(&mut self, now: Instant) -> bool {
+    fn wake(&mut self, now: WallInstant) -> bool {
         if now < self.next {
             return false;
         }
@@ -130,11 +130,11 @@ mod tests {
     use masonry::vello::wgpu::SurfaceError;
     use winit::dpi::PhysicalPosition;
 
-    use super::{Clicks, IdleClock, SurfaceRecovery, surface_recovery};
+    use super::{Clicks, IdleClock, SurfaceRecovery, WallInstant, surface_recovery};
 
     #[kithara::test]
     fn idle_clock_wakes_once_per_period() {
-        let start = Instant::now();
+        let start = WallInstant::now();
         let mut clock = IdleClock::new(start);
 
         assert!(!clock.wake(start));
@@ -292,7 +292,7 @@ where
         let Some(live) = &mut self.live else {
             return;
         };
-        if live.idle.wake(Instant::now()) {
+        if live.idle.wake(WallInstant::now()) {
             live.request_redraw();
         }
         event_loop.set_control_flow(ControlFlow::WaitUntil(live.idle.next));
@@ -365,7 +365,7 @@ where
         let mut live = Live {
             clicks: Clicks::default(),
             context,
-            idle: IdleClock::new(Instant::now()),
+            idle: IdleClock::new(WallInstant::now()),
             modifiers: Modifiers::default(),
             pointer: PhysicalPosition::new(0.0, 0.0),
             recovery_redraw_latched: false,
