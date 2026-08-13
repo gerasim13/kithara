@@ -5,6 +5,7 @@ name: GPU
 # a shader that stopped reading what Rust writes it looks identical from the
 # outside until a frame is rendered and read back.
 on:
+  push:
   workflow_call:
   workflow_dispatch:
 
