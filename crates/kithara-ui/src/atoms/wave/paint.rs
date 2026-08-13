@@ -90,16 +90,21 @@ impl WavePaint<'_> {
                     },
                 );
             } else {
-                draw_bars(list, bounds, waveform.buckets, self.metrics, self.palette);
-                if self.style == WaveStyle::Default {
-                    bars::draw_played(
-                        list,
-                        bounds,
-                        self.progress.clamp(0.0, 1.0) * bounds.w,
+                let played = (self.style == WaveStyle::Default).then(|| {
+                    bars::Played::new(
+                        bounds.x + self.progress.clamp(0.0, 1.0) * bounds.w,
                         self.metrics.overview_played_alpha,
                         self.palette.bg_deep,
-                    );
-                }
+                    )
+                });
+                draw_bars(
+                    list,
+                    bounds,
+                    waveform.buckets,
+                    self.metrics,
+                    self.palette,
+                    played,
+                );
             }
         }
         draw_border(list, bounds, self.metrics.frame, self.border);
@@ -139,6 +144,7 @@ fn draw_bars(
     buckets: &[WaveBucket],
     metrics: WaveSkin,
     palette: WavePalette,
+    played: Option<bars::Played>,
 ) {
     let step = bars::step(metrics);
     let content_width = (bounds.w - metrics.content_inset * 2.0).max(0.0);
@@ -168,6 +174,7 @@ fn draw_bars(
         );
         let column_x: f32 = column.as_();
         let center_x = bounds.x + metrics.content_inset + column_x * step + metrics.bar_width / 2.0;
+        let colors = [palette.wave_low, palette.wave_mid, palette.wave_high];
         bars::draw_column(
             list,
             bounds,
@@ -175,7 +182,7 @@ fn draw_bars(
             peak,
             available_height,
             metrics,
-            [palette.wave_low, palette.wave_mid, palette.wave_high],
+            played.map_or(colors, |played| played.colors(center_x, colors)),
         );
     }
 }
@@ -298,7 +305,7 @@ mod tests {
                 ..palette.accent
             }
         ));
-        assert!(has_fill(
+        assert!(!has_fill(
             commands,
             Rgba {
                 a: paint.metrics.played_alpha,
@@ -401,21 +408,29 @@ mod tests {
 
             let list = list.finish();
             let commands = list.commands();
-            assert!(has_fill(commands, palette.wave_low));
-            assert!(has_fill(commands, palette.wave_mid));
-            assert!(has_fill(commands, palette.wave_high));
+            let colors = [palette.wave_low, palette.wave_mid, palette.wave_high];
+            let expected = if style == WaveStyle::Default {
+                let center_x = bounds.x + metrics.content_inset + metrics.bar_width / 2.0;
+                bars::Played::new(
+                    bounds.x + paint.progress * bounds.w,
+                    metrics.overview_played_alpha,
+                    palette.bg_deep,
+                )
+                .colors(center_x, colors)
+            } else {
+                colors
+            };
+            for color in expected {
+                assert!(has_fill(commands, color));
+            }
             assert!(has_line(commands, palette.accent_strong));
-            assert_eq!(
-                has_fill(
-                    commands,
-                    Rgba {
-                        a: metrics.overview_played_alpha,
-                        ..palette.bg_deep
-                    }
-                ),
-                style == WaveStyle::Default,
-                "only the default overview dims its played region"
-            );
+            assert!(!has_fill(
+                commands,
+                Rgba {
+                    a: metrics.overview_played_alpha,
+                    ..palette.bg_deep
+                }
+            ));
         }
     }
 

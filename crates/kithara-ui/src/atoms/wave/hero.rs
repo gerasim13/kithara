@@ -44,26 +44,11 @@ pub(crate) fn draw(
     palette: HeroPalette,
 ) {
     let window = window_bounds(data.position, data.zoom);
-    draw_bars(
-        list,
-        bounds,
-        data.buckets,
-        data.zoom,
-        &window,
-        metrics,
-        palette.base,
-    );
+    draw_bars(list, bounds, data, &window, metrics, palette.base);
     draw_grid(list, bounds, data, &window, metrics, palette.base);
     if let Some(region) = data.loop_region {
         draw_loop(list, bounds, region, &window, metrics, palette.base);
     }
-    bars::draw_played(
-        list,
-        bounds,
-        norm_to_x(data.position.clamp(0.0, 1.0), &window, bounds.w),
-        metrics.played_alpha,
-        palette.base.bg_deep,
-    );
     draw_cues(list, text, bounds, data.cues, &window, metrics, palette);
     draw_playhead(list, bounds, data.position, &window, metrics, palette.base);
 }
@@ -71,8 +56,7 @@ pub(crate) fn draw(
 fn draw_bars(
     list: &mut DrawListBuilder,
     bounds: Rect,
-    buckets: &[WaveBucket],
-    zoom: f32,
+    data: HeroWave<'_>,
     window: &Range<f32>,
     metrics: WaveSkin,
     palette: WavePalette,
@@ -80,17 +64,23 @@ fn draw_bars(
     let step = bars::step(metrics);
     let content_width = (bounds.w - metrics.content_inset * 2.0).max(0.0);
     let columns: usize = ((content_width + metrics.bar_gap) / step).floor().as_();
-    let Some(grid) = bar_grid(columns, zoom, window) else {
+    let Some(grid) = bar_grid(columns, data.zoom, window) else {
         return;
     };
+    let played = bars::Played::new(
+        bounds.x + norm_to_x(data.position.clamp(0.0, 1.0), window, bounds.w),
+        metrics.played_alpha,
+        palette.bg_deep,
+    );
     let available_height = (bounds.h - metrics.content_inset * 2.0).max(0.0);
     for bar in grid.first..grid.last {
-        let range = bar_bucket_range(bar, grid.norm_width, buckets.len());
-        let Some(bucket) = max_bucket(buckets, range) else {
+        let range = bar_bucket_range(bar, grid.norm_width, data.buckets.len());
+        let Some(bucket) = max_bucket(data.buckets, range) else {
             continue;
         };
         let bar_f: f32 = bar.as_();
         let center_x = bounds.x + norm_to_x((bar_f + 0.5) * grid.norm_width, window, bounds.w);
+        let colors = [palette.wave_low, palette.wave_mid, palette.wave_high];
         bars::draw_column(
             list,
             bounds,
@@ -98,7 +88,7 @@ fn draw_bars(
             bucket,
             available_height,
             metrics,
-            [palette.wave_low, palette.wave_mid, palette.wave_high],
+            played.colors(center_x, colors),
         );
     }
 }
