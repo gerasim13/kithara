@@ -142,6 +142,7 @@ ui:
       cargo test -p kithara-app --lib --no-default-features --features masonry \
         studio_capture_writes_both_hosts -- --nocapture
     KITHARA_GALLERY_COMPARE="$dir/studio/iced:$dir/studio/masonry:$dir/studio/masks" \
+      KITHARA_GALLERY_COMPARE_BUDGET=crates/kithara-app/assets/ui/parity-budget.txt \
       "${gallery[@]}"
 
 # The same pages through a real window, which is the only one of the three
