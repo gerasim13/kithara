@@ -867,16 +867,16 @@ impl<Action> MasonryNode<Action> {
         self.popovers.extend(popovers);
     }
 
-    pub(crate) fn add_engine_control(&mut self, plan: HostedControlPlan) {
-        let descriptors = plan.descriptors();
-        if descriptors.is_empty() {
+    pub(crate) fn add_engine_control(&mut self, plan: HostedControlPlan, prepend: bool) {
+        let Some(target) = EngineTarget::new(self.track_geometry(), plan) else {
             return;
-        }
-        let geometry = self.track_geometry();
-        self.engine_targets.push(EngineTarget {
-            area: geometry,
-            plan,
-        });
+        };
+        let index = if prepend {
+            0
+        } else {
+            self.engine_targets.len()
+        };
+        self.engine_targets.insert(index, target);
     }
 
     pub(crate) fn track_geometry(&mut self) -> Rc<Cell<MasonryRect>> {

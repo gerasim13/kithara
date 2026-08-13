@@ -641,17 +641,19 @@ where
     let value = cx
         .read
         .and_then(|binding| resolve(host.reads, binding, host.ui));
-    let Some(data) = control.data(Reading {
+    let reading = Reading {
         reads: host.reads,
         scope: read_scope(cx.read, host.ui),
         ui: host.ui,
         value: value.as_ref(),
-    }) else {
+    };
+    let Some(data) = control.data(reading) else {
         return host.empty(cx.declared);
     };
     let grip = control.grip(host.skin, &data);
     let index_event = control.index_event();
-    let refresh = control.retained_refresh();
+    let refresh = control.retained_refresh(reading);
+    let refreshes = refresh.is_some();
     let leaf = Painted::new(control.painter(host.skin), data, host.skin);
     let leaf = if let Some(refresh) = refresh {
         leaf.refreshing(refresh)
@@ -662,7 +664,7 @@ where
         leaf.interactive(grip, path, map_event, index_event)
     });
     let mut output = host.control_leaf(leaf, cx.declared);
-    if refresh.is_some() {
+    if refreshes {
         output.watch_snapshot();
     }
     output

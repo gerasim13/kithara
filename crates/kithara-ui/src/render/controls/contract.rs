@@ -30,13 +30,16 @@ pub(crate) trait Draws {
     }
 
     #[cfg(feature = "masonry")]
-    fn retained_refresh(&self) -> Option<DataRefresh<<Self::Painter as ControlPainter>::Data>> {
+    fn retained_refresh(
+        &self,
+        _read: Reading<'_>,
+    ) -> Option<DataRefresh<<Self::Painter as ControlPainter>::Data>> {
         None
     }
 }
 
 #[cfg(feature = "masonry")]
-pub(crate) type DataRefresh<Data> = fn(&mut Data, &dyn Reads) -> bool;
+pub(crate) type DataRefresh<Data> = Box<dyn Fn(&mut Data, &dyn Reads) -> bool>;
 
 /// What a control is handed when it decides what to draw.
 #[derive(Clone, Copy)]

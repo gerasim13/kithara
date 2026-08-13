@@ -17,10 +17,12 @@ impl Control for Summary {
 #[cfg(feature = "render")]
 mod host {
     use super::Summary;
+    #[cfg(feature = "masonry")]
+    use crate::render::controls::DataRefresh;
     use crate::{
         atoms::deck::summary::{Loaded, Summary as Face},
         render::{
-            ReadValue, Skin,
+            ReadValue, Reads, Skin,
             controls::{Draws, Reading},
             model::derived,
         },
@@ -44,24 +46,69 @@ mod host {
         /// A summary always draws: a deck with nothing loaded says so, which
         /// is a headline of its own rather than an empty panel.
         fn data(&self, read: Reading<'_>) -> Option<Loaded> {
-            let title = match read.value {
-                Some(ReadValue::Text(value)) if !value.is_empty() => (*value).to_owned(),
-                _ => word(read, "deck.track.title")
-                    .filter(|title| !title.is_empty())
-                    .unwrap_or_else(|| NO_TRACK.to_owned()),
-            };
-            Some(Loaded {
-                source: word(read, "deck.track.source_kind").unwrap_or_else(unknown),
-                title,
-            })
+            Some(snapshot(read.value, read.reads, read.scope))
+        }
+
+        #[cfg(feature = "masonry")]
+        fn retained_refresh(&self, read: Reading<'_>) -> Option<DataRefresh<Loaded>> {
+            let scope = read.scope.to_owned();
+            Some(Box::new(move |data, reads| {
+                let next = snapshot(None, reads, &scope);
+                std::mem::replace(data, next) != *data
+            }))
+        }
+    }
+
+    fn snapshot(value: Option<&ReadValue<'_>>, reads: &dyn Reads, scope: &str) -> Loaded {
+        let title = match value {
+            Some(ReadValue::Text(value)) if !value.is_empty() => (*value).to_owned(),
+            _ => word(reads, scope, "deck.track.title")
+                .filter(|title| !title.is_empty())
+                .unwrap_or_else(|| NO_TRACK.to_owned()),
+        };
+        Loaded {
+            source: word(reads, scope, "deck.track.source_kind").unwrap_or_else(unknown),
+            title,
         }
     }
 
     /// One of the deck's own scoped words.
-    fn word(read: Reading<'_>, endpoint: &str) -> Option<String> {
-        match read.reads.get(&derived(endpoint, read.scope)) {
+    fn word(reads: &dyn Reads, scope: &str, endpoint: &str) -> Option<String> {
+        match reads.get(&derived(endpoint, scope)) {
             Some(ReadValue::Text(value)) => Some(value.to_owned()),
             _ => None,
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use kithara_test_utils::kithara;
+
+        use super::*;
+
+        struct ScopedReads;
+
+        impl Reads for ScopedReads {
+            fn get(&self, endpoint: &str) -> Option<ReadValue<'_>> {
+                match endpoint {
+                    "deck.track.source_kind@deck=a" => Some(ReadValue::Text("FILE")),
+                    "deck.track.title@deck=a" => Some(ReadValue::Text("Track A")),
+                    "deck.track.source_kind@deck=b" => Some(ReadValue::Text("STREAM")),
+                    "deck.track.title@deck=b" => Some(ReadValue::Text("Track B")),
+                    _ => None,
+                }
+            }
+        }
+
+        #[kithara::test]
+        fn a_summary_snapshot_keeps_its_deck_scope() {
+            let a = snapshot(None, &ScopedReads, "@deck=a");
+            let b = snapshot(None, &ScopedReads, "@deck=b");
+
+            assert_eq!(a.title, "Track A");
+            assert_eq!(a.source, "FILE");
+            assert_eq!(b.title, "Track B");
+            assert_eq!(b.source, "STREAM");
         }
     }
 }

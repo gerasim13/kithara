@@ -152,15 +152,68 @@ impl Drawn {
                 badge: badge.unwrap_or_default().to_owned(),
             }),
             progress,
-            waveform: waveform.map(|view| WaveformData {
-                buckets: view.buckets.to_vec().into_boxed_slice(),
-                beats: view.beats.to_vec().into_boxed_slice(),
-                downbeats: view.downbeats.to_vec().into_boxed_slice(),
-                loop_region: view.r#loop,
-                cues: view.cues.to_vec().into_boxed_slice(),
-            }),
+            waveform: waveform.map(WaveformData::from),
             zoom: clamp_zoom(zoom),
         }
+    }
+
+    #[cfg(any(feature = "masonry", test))]
+    pub(crate) fn set_waveform(&mut self, view: WaveformView<'_>) -> bool {
+        let waveform_changed = self
+            .waveform
+            .as_ref()
+            .is_none_or(|waveform| !waveform.matches(view));
+        if waveform_changed {
+            self.waveform = Some(WaveformData::from(view));
+        }
+        let bpm = view
+            .bpm
+            .map_or_else(|| EM_DASH.to_owned(), |value| format!("{value:.2}"));
+        let bpm_changed = self.overlay.as_mut().is_some_and(|overlay| {
+            bpm != overlay.bpm && {
+                overlay.bpm = bpm;
+                true
+            }
+        });
+        waveform_changed || bpm_changed
+    }
+
+    #[cfg(any(feature = "masonry", test))]
+    pub(crate) fn refresh(&mut self, reads: &dyn Reads, scope: &str, zoom: Option<&str>) -> bool {
+        let progress = match reads.get(&derived("deck.playback.position_normalized", scope)) {
+            Some(ReadValue::Scalar(value)) => value.as_(),
+            _ => 0.0,
+        };
+        let zoom = zoom
+            .and_then(|endpoint| reads.get(endpoint))
+            .and_then(|value| match value {
+                ReadValue::Scalar(value) => Some(value.as_()),
+                _ => None,
+            })
+            .map_or(self.zoom, clamp_zoom);
+        let mut changed = std::mem::replace(&mut self.progress, progress) != progress;
+        changed |= std::mem::replace(&mut self.zoom, zoom) != zoom;
+        if let Some(overlay) = &mut self.overlay {
+            let next = OverlayData {
+                title: read_text(reads, &derived("deck.track.title", scope))
+                    .filter(|title| !title.is_empty())
+                    .unwrap_or("No track loaded")
+                    .to_owned(),
+                artist: read_text(reads, &derived("deck.track.source_kind", scope))
+                    .unwrap_or("no source")
+                    .to_owned(),
+                bpm: overlay.bpm.clone(),
+                key: read_text(reads, &derived("deck.track.key", scope))
+                    .unwrap_or(EM_DASH)
+                    .to_owned(),
+                remain: read_text(reads, &derived("deck.playback.remain", scope))
+                    .unwrap_or(EM_DASH)
+                    .to_owned(),
+                badge: overlay.badge.clone(),
+            };
+            changed |= std::mem::replace(overlay, next) != *overlay;
+        }
+        changed
     }
 
     pub(crate) fn has_waveform(&self) -> bool {
@@ -273,6 +326,83 @@ mod tests {
                 "@deck=a",
             ),
         )
+    }
+
+    struct UpdatedReads;
+
+    impl Reads for UpdatedReads {
+        fn get(&self, endpoint: &str) -> Option<ReadValue<'_>> {
+            match endpoint {
+                "deck.playback.position_normalized@deck=a" => Some(ReadValue::Scalar(0.75)),
+                "deck.playback.remain@deck=a" => Some(ReadValue::Text("-00:15")),
+                "deck.track.key@deck=a" => Some(ReadValue::Text("9A")),
+                "deck.track.source_kind@deck=a" => Some(ReadValue::Text("file")),
+                "deck.track.title@deck=a" => Some(ReadValue::Text("Updated")),
+                "deck.waveform.zoom@deck=a" => Some(ReadValue::Scalar(2.0)),
+                _ => None,
+            }
+        }
+    }
+
+    /// A retained wave owns all scoped words around its primary waveform, so
+    /// analysis and playback updates do not need a document rebuild.
+    #[kithara::test]
+    fn a_retained_wave_refreshes_its_scoped_snapshot() {
+        let skin = builtin::skin();
+        let (_, mut data) = hero(skin);
+
+        assert!(data.refresh(&UpdatedReads, "@deck=a", Some("deck.waveform.zoom@deck=a")));
+
+        let overlay = data
+            .overlay
+            .as_ref()
+            .unwrap_or_else(|| panic!("a hero wave must keep its naming panel"));
+        assert_eq!(overlay.title, "Updated");
+        assert_eq!(overlay.artist, "file");
+        assert_eq!(overlay.key, "9A");
+        assert_eq!(overlay.remain, "-00:15");
+        assert_eq!(data.progress, 0.75);
+        assert_eq!(data.zoom, 0.5);
+    }
+
+    /// The continuously repainted wave keeps its owned sample arrays when the
+    /// borrowed view has not changed, while still taking a new BPM reading.
+    #[kithara::test]
+    fn an_unchanged_waveform_is_not_copied_each_frame() {
+        let skin = builtin::skin();
+        let reads = reads();
+        let (_, mut data) = hero(skin);
+        let buckets = data
+            .waveform
+            .as_ref()
+            .map(|waveform| waveform.buckets.as_ptr())
+            .unwrap_or_else(|| panic!("the fixture must own waveform samples"));
+        let value = reads
+            .get("deck.playback.waveform")
+            .unwrap_or_else(|| panic!("the fixture must report a waveform"));
+        let ReadValue::Waveform(mut view) = value else {
+            panic!("the waveform endpoint must report a waveform");
+        };
+
+        assert!(!data.set_waveform(view));
+        assert_eq!(
+            data.waveform
+                .as_ref()
+                .map(|waveform| waveform.buckets.as_ptr()),
+            Some(buckets)
+        );
+        view.bpm = Some(129.0);
+        assert!(data.set_waveform(view));
+        assert_eq!(
+            data.waveform
+                .as_ref()
+                .map(|waveform| waveform.buckets.as_ptr()),
+            Some(buckets)
+        );
+        assert_eq!(
+            data.overlay.as_ref().map(|overlay| overlay.bpm.as_str()),
+            Some("129.00")
+        );
     }
 
     /// Every layer of the hero wave reaches the draw seam: the frame, the beat

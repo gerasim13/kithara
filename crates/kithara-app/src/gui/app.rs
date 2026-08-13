@@ -108,7 +108,7 @@ impl Kithara {
         window_id: window::Id,
     ) -> Self {
         let palette = config.palette.into();
-        Self {
+        let mut state = Self {
             broadcast,
             session,
             decks,
@@ -119,7 +119,9 @@ impl Kithara {
             palette,
             window_id,
             selected_track: None,
-        }
+        };
+        state.studio.cache.refresh(&state.decks, &state.catalog);
+        state
     }
 
     /// Time-tick subscription for player state sync plus keyboard. Tick

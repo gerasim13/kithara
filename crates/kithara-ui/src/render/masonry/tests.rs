@@ -1154,6 +1154,76 @@ fn hosted_module_retains_its_engine_owned_knob_outside_the_control() {
     assert!(root.take_actions().is_empty());
 }
 
+#[kithara::test]
+fn a_knob_nested_in_a_pressable_popover_keeps_the_engine_gesture() {
+    let mut registry = fixture_registry();
+    registry.insert(
+        EndpointCategory::Model,
+        "ui.menu.open",
+        EndpointDesc::new(ValueKind::Bool),
+    );
+    registry.insert(
+        EndpointCategory::Command,
+        "ui.menu.toggle",
+        EndpointDesc::new(ValueKind::Trigger),
+    );
+    let ui = fixture_ui(
+        "gallery-knobs",
+        r#"Row(size: (w: Fill, h: Fill), gap: 0.0, pad: 0.0, children: [
+            Popover(
+                id: "menu",
+                open: Model(id: "ui.menu.open"),
+                at: Pointer,
+                anchor: Pressable(
+                    id: "menu-anchor",
+                    press: Command(id: "ui.menu.toggle"),
+                    child: Knob(
+                        id: "volume",
+                        size: Some((w: Fixed(40.0), h: Fixed(40.0))),
+                        read: Parameter(id: "player.output.volume"),
+                        write: Parameter(id: "player.output.volume"),
+                    ),
+                ),
+                content: Spacer(id: "content", size: Some((w: Fixed(40.0), h: Fixed(20.0)))),
+            ),
+        ])"#,
+        &registry,
+    );
+    let reads = PopoverReads { open: false };
+    let state = MasonryState::default();
+    let host = MasonryHost::map_actions(&ui, &reads, builtin::skin(), TestAction::Document)
+        .with_state(state.clone());
+    let output = document::render(&ui.root, &ui, &reads, builtin::skin_doc(), host);
+    let mut root = masonry_root(output, 200, 120);
+    let volume = state
+        .widget_id("demo/volume")
+        .unwrap_or_else(|| panic!("the nested knob must stay addressable"));
+    let bounds = root
+        .root()
+        .get_widget(volume)
+        .unwrap_or_else(|| panic!("the nested knob must stay mounted"))
+        .ctx()
+        .bounding_rect();
+    let start = bounds.center();
+
+    assert_eq!(
+        root.handle_pointer_event(pointer_down(start.x, start.y))
+            .unwrap_or_else(|error| panic!("nested knob press must remain typed: {error}")),
+        Handled::Yes,
+    );
+    let actions = root.take_actions();
+    assert!(
+        actions.is_empty(),
+        "the outer pressable must not activate while the knob arms: {actions:?}"
+    );
+    assert_eq!(
+        root.handle_pointer_event(pointer_move(start.x, start.y - 7.0))
+            .unwrap_or_else(|error| panic!("nested knob drag must remain typed: {error}")),
+        Handled::Yes,
+    );
+    assert_scalar_value(&root.take_actions(), "demo/volume", 0.85);
+}
+
 /// The settings button has no endpoint to activate: pressing it says something
 /// to the document instead. The leaf that draws it also says it, so the answer
 /// does not depend on a second wiring the two hosts could disagree about.

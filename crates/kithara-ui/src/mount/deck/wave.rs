@@ -22,6 +22,8 @@ impl Control for Wave<'_> {
 #[cfg(feature = "render")]
 mod host {
     use super::Wave;
+    #[cfg(feature = "masonry")]
+    use crate::render::controls::DataRefresh;
     use crate::{
         atoms::wave::face::{Drawn, Wave as Face},
         render::{
@@ -49,6 +51,17 @@ mod host {
                 read.reads,
                 read.scope,
             ))
+        }
+
+        #[cfg(feature = "masonry")]
+        fn retained_refresh(&self, read: Reading<'_>) -> Option<DataRefresh<Drawn>> {
+            let scope = read.scope.to_owned();
+            let zoom = self
+                .zoom
+                .map(|binding| read.ui.resolve(binding.key).to_owned());
+            Some(Box::new(move |data, reads| {
+                data.refresh(reads, &scope, zoom.as_deref())
+            }))
         }
     }
 }

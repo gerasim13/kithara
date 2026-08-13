@@ -29,7 +29,7 @@ use crate::{
     module::{ChromeStyle, TextStyle},
     mount,
     render::{
-        ControlAction, InputOwner, ReadValue, Reads, Skin, UiEvent,
+        ControlAction, HostedControlPlan, InputOwner, ReadValue, Reads, Skin, UiEvent,
         document::{Group, Host, Module, Popover, read::resolve},
         hosted_control_plan,
     },
@@ -530,8 +530,15 @@ where
         let path = self.ui.resolve(path);
         let mut output =
             MasonryNode::document(NodeLayout::Stack, declared, vec![child], false, None, None);
+        output.add_engine_control(
+            HostedControlPlan::Activation {
+                path: path.to_owned(),
+            },
+            true,
+        );
+        output.host_engine(Rc::clone(&self.map_event));
         output.set_actions(
-            Some(self.control_action(path.to_owned(), ControlAction::Activate)),
+            None,
             Some(self.control_action(path.to_owned(), ControlAction::SecondaryActivate)),
         );
         output
@@ -624,7 +631,7 @@ where
             }
         );
         if let Some(plan) = plan {
-            output.add_engine_control(plan);
+            output.add_engine_control(plan, false);
             if owner == InputOwner::Leaf {
                 output.host_engine(Rc::clone(&self.map_event));
             }

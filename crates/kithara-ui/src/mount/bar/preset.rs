@@ -58,8 +58,8 @@ mod host {
         }
 
         #[cfg(feature = "masonry")]
-        fn retained_refresh(&self) -> Option<DataRefresh<PresetData>> {
-            Some(refresh)
+        fn retained_refresh(&self, _read: Reading<'_>) -> Option<DataRefresh<PresetData>> {
+            Some(Box::new(refresh))
         }
     }
 

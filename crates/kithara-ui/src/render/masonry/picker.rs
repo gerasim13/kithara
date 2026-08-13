@@ -27,6 +27,12 @@ pub(crate) struct EngineTarget {
     pub(super) plan: HostedControlPlan,
 }
 
+impl EngineTarget {
+    pub(super) fn new(area: Rc<Cell<MasonryRect>>, plan: HostedControlPlan) -> Option<Self> {
+        (!plan.descriptors().is_empty()).then_some(Self { area, plan })
+    }
+}
+
 /// What routing one event through the engine produced.
 pub(super) struct Routed {
     pub(super) focused: bool,

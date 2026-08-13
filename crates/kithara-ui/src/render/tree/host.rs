@@ -588,9 +588,12 @@ enum HostedLayout {
         sized: bool,
         children: Vec<Self>,
     },
+    Wrapper {
+        sized: bool,
+        child: Box<Self>,
+    },
     Control(Option<HostedControl>),
     SelfMeasuredControl(Option<HostedControl>),
-    Passive,
 }
 
 impl HostedLayout {
@@ -663,7 +666,14 @@ impl HostedLayout {
                     Self::Control(control)
                 }
             }
-            ExpandedNode::Popover { .. } | ExpandedNode::Pressable { .. } => Self::Passive,
+            ExpandedNode::Popover { anchor, .. } => Self::Wrapper {
+                sized: effective_size(node, skin).is_some(),
+                child: Box::new(Self::new(anchor, ui, reads, skin)),
+            },
+            ExpandedNode::Pressable { child, .. } => Self::Wrapper {
+                sized: effective_size(node, skin).is_some(),
+                child: Box::new(Self::new(child, ui, reads, skin)),
+            },
         }
     }
 
@@ -688,10 +698,11 @@ impl HostedLayout {
                     child.append_descriptors(descriptors);
                 }
             }
+            Self::Wrapper { child, .. } => child.append_descriptors(descriptors),
             Self::Control(Some(control)) | Self::SelfMeasuredControl(Some(control)) => {
                 append_control_descriptors(control, descriptors);
             }
-            Self::Control(None) | Self::SelfMeasuredControl(None) | Self::Passive => {}
+            Self::Control(None) | Self::SelfMeasuredControl(None) => {}
         }
     }
 
@@ -768,15 +779,13 @@ impl HostedLayout {
                     child.append_pickers(pickers);
                 }
             }
+            Self::Wrapper { child, .. } => child.append_pickers(pickers),
             Self::Control(Some(control)) | Self::SelfMeasuredControl(Some(control)) => {
                 if let Some(picker) = control.picker() {
                     pickers.push(picker);
                 }
             }
-            Self::Chrome { .. }
-            | Self::Control(None)
-            | Self::SelfMeasuredControl(None)
-            | Self::Passive => {}
+            Self::Chrome { .. } | Self::Control(None) | Self::SelfMeasuredControl(None) => {}
         }
     }
 
@@ -859,6 +868,17 @@ impl HostedLayout {
                     child.append_targets(layout, cursor, engine, targets);
                 }
             }
+            Self::Wrapper { sized, child } => {
+                let layout = if *sized {
+                    let Some(layout) = first_child(layout) else {
+                        return;
+                    };
+                    layout
+                } else {
+                    layout
+                };
+                child.append_targets(layout, cursor, engine, targets);
+            }
             Self::Control(Some(control)) => {
                 let Some(layout) = first_child(layout) else {
                     return;
@@ -868,7 +888,7 @@ impl HostedLayout {
             Self::SelfMeasuredControl(Some(control)) => {
                 append_control_targets(control, layout, cursor, engine, targets);
             }
-            Self::Control(None) | Self::SelfMeasuredControl(None) | Self::Passive => {}
+            Self::Control(None) | Self::SelfMeasuredControl(None) => {}
         }
     }
 
@@ -881,9 +901,9 @@ impl HostedLayout {
             Self::Chrome { .. }
             | Self::Group { .. }
             | Self::Slot { .. }
+            | Self::Wrapper { .. }
             | Self::Control(_)
-            | Self::SelfMeasuredControl(_)
-            | Self::Passive => None,
+            | Self::SelfMeasuredControl(_) => None,
         }
     }
 }
@@ -1127,6 +1147,7 @@ mod tests {
         text: EndpointDesc,
         track_list: EndpointDesc,
         tree: EndpointDesc,
+        trigger: EndpointDesc,
         waveform: EndpointDesc,
     }
 
@@ -1140,6 +1161,7 @@ mod tests {
                 text: EndpointDesc::new(ValueKind::Text),
                 track_list: EndpointDesc::new(ValueKind::TrackList),
                 tree: EndpointDesc::new(ValueKind::Tree),
+                trigger: EndpointDesc::new(ValueKind::Trigger),
                 waveform: EndpointDesc::new(ValueKind::Waveform).with_scope("deck"),
             }
         }
@@ -1200,6 +1222,7 @@ mod tests {
                 | (EndpointCategory::Telemetry, "deck.playback.position_normalized") => {
                     Some(&self.scoped_scalar)
                 }
+                (EndpointCategory::Command, "eq-menu-toggle") => Some(&self.trigger),
                 _ => None,
             }
         }
@@ -1709,7 +1732,8 @@ mod tests {
                 }
                 _ => {}
             },
-            ExpandedNode::Popover { .. } | ExpandedNode::Pressable { .. } => {}
+            ExpandedNode::Popover { anchor, .. } => claimed_components(anchor, components),
+            ExpandedNode::Pressable { child, .. } => claimed_components(child, components),
         }
     }
 

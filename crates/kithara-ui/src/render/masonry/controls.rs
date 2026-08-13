@@ -28,7 +28,7 @@ use crate::{
         tab::TabLarge,
         toggle::Binary,
         vu::VerticalVu,
-        wave::{face::Wave, snapshot::WaveformData},
+        wave::face::Wave,
     },
     draw::{DrawList, Rect},
     interact::{CursorShape, Hit, Input, Outcome},
@@ -555,21 +555,12 @@ impl Retained for Spacer {}
 /// endpoint.
 impl Retained for Settings {}
 
-/// A wave follows the shape its own endpoint reports; the playhead beside it
-/// is a sibling's reading and lands on rebuild.
 impl Retained for Wave {
     fn set_read(data: &mut Self::Data, value: &ReadValue<'_>) -> bool {
         let ReadValue::Waveform(view) = value else {
             return false;
         };
-        let next = WaveformData {
-            buckets: view.buckets.to_vec().into_boxed_slice(),
-            beats: view.beats.to_vec().into_boxed_slice(),
-            downbeats: view.downbeats.to_vec().into_boxed_slice(),
-            loop_region: view.r#loop,
-            cues: view.cues.to_vec().into_boxed_slice(),
-        };
-        data.waveform.replace(next).as_ref() != data.waveform.as_ref()
+        data.set_waveform(*view)
     }
 }
 
@@ -637,8 +628,6 @@ impl Retained for Segmented {
     }
 }
 
-/// A summary shows the track its own endpoint names; where it came from is a
-/// sibling's reading and lands on rebuild.
 impl Retained for Summary {
     fn set_read(data: &mut Self::Data, value: &ReadValue<'_>) -> bool {
         let ReadValue::Text(title) = value else {

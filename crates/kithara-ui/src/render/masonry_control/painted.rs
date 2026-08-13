@@ -267,7 +267,7 @@ where
     }
 
     fn refresh(&mut self, reads: &dyn Reads) -> bool {
-        let Some(refresh) = self.refresh else {
+        let Some(refresh) = self.refresh.as_ref() else {
             return false;
         };
         self.repaint |= refresh(&mut self.data, reads);
