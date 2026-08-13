@@ -66,6 +66,7 @@ where
 struct Live<'config, Application> {
     clicks: Clicks,
     context: RenderContext,
+    idle: IdleClock,
     modifiers: Modifiers,
     pointer: PhysicalPosition<f64>,
     recovery_redraw_latched: bool,
@@ -81,6 +82,28 @@ enum SurfaceRecovery {
     Retry,
     Reconfigure,
     Stop,
+}
+
+struct IdleClock {
+    next: Instant,
+}
+
+impl IdleClock {
+    const PERIOD: Duration = Duration::from_millis(500);
+
+    fn new(now: Instant) -> Self {
+        Self {
+            next: now + Self::PERIOD,
+        }
+    }
+
+    fn wake(&mut self, now: Instant) -> bool {
+        if now < self.next {
+            return false;
+        }
+        self.next = now + Self::PERIOD;
+        true
+    }
 }
 
 const fn surface_recovery(error: &SurfaceError) -> SurfaceRecovery {
@@ -107,7 +130,19 @@ mod tests {
     use masonry::vello::wgpu::SurfaceError;
     use winit::dpi::PhysicalPosition;
 
-    use super::{Clicks, SurfaceRecovery, surface_recovery};
+    use super::{Clicks, IdleClock, SurfaceRecovery, surface_recovery};
+
+    #[kithara::test]
+    fn idle_clock_wakes_once_per_period() {
+        let start = Instant::now();
+        let mut clock = IdleClock::new(start);
+
+        assert!(!clock.wake(start));
+        assert!(!clock.wake(start + IdleClock::PERIOD / 2));
+        assert!(clock.wake(start + IdleClock::PERIOD));
+        assert!(!clock.wake(start + IdleClock::PERIOD));
+        assert!(clock.wake(start + IdleClock::PERIOD * 2));
+    }
 
     /// A double click is two presses close in time and place. Nothing below the
     /// window sees presses, so if this does not count them no control can.
@@ -252,6 +287,16 @@ where
             event_loop.exit();
         }
     }
+
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        let Some(live) = &mut self.live else {
+            return;
+        };
+        if live.idle.wake(Instant::now()) {
+            live.request_redraw();
+        }
+        event_loop.set_control_flow(ControlFlow::WaitUntil(live.idle.next));
+    }
 }
 
 /// Carries out what the document asked its window to do. With the system frame
@@ -320,6 +365,7 @@ where
         let mut live = Live {
             clicks: Clicks::default(),
             context,
+            idle: IdleClock::new(Instant::now()),
             modifiers: Modifiers::default(),
             pointer: PhysicalPosition::new(0.0, 0.0),
             recovery_redraw_latched: false,

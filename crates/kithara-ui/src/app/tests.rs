@@ -108,6 +108,33 @@ impl App for Dial {
     }
 }
 
+struct TickingDial {
+    value: f64,
+}
+
+impl Reads for TickingDial {
+    fn get(&self, endpoint: &str) -> Option<ReadValue<'_>> {
+        let id = endpoint.split_once('@').map_or(endpoint, |(id, _)| id);
+        (id == "fixture.dial").then_some(ReadValue::Scalar(self.value))
+    }
+}
+
+impl App for TickingDial {
+    fn document(&self) -> &str {
+        "one.klayout.ron"
+    }
+
+    fn reads<R>(&self, with: impl FnOnce(&dyn Reads) -> R) -> R {
+        with(self)
+    }
+
+    fn tick(&mut self) {
+        self.value = 0.75;
+    }
+
+    fn update(&mut self, _event: UiEvent) {}
+}
+
 #[derive(Default)]
 struct Typed {
     query: String,
@@ -601,6 +628,46 @@ fn an_idle_ui_skips_its_following_frame() {
     assert!(
         !ui.needs_frame(),
         "an idle animation tick must not make the host rasterise and present again"
+    );
+}
+
+#[kithara::test]
+fn a_tick_refreshes_non_vis_reads_without_remounting() {
+    let endpoints = Registry("fixture.dial", EndpointDesc::new(ValueKind::Scalar));
+    let resolver = one_control(
+        r#"Knob(id: "dial", size: (w: Fixed(38.0), h: Fixed(49.0)), read: Model(id: "fixture.dial"))"#,
+    );
+    let skin = skin();
+    let config = Config::builder()
+        .endpoints(&endpoints)
+        .resolver(&resolver)
+        .skin(&skin)
+        .skin_doc(builtin::skin_doc())
+        .build();
+    let mut ui = Ui::new(TickingDial { value: 0.25 }, config, (240, 120), 1.0)
+        .unwrap_or_else(|error| panic!("the ticking knob must mount: {error}"));
+    let before = geometry(
+        ui.render()
+            .unwrap_or_else(|error| panic!("the ticking knob must draw: {error}"))
+            .scene(),
+    );
+    let _ = ui.complete_frame();
+    assert!(!ui.needs_frame());
+
+    ui.frame(Duration::from_millis(16));
+
+    assert!(
+        ui.needs_frame(),
+        "a changed ordinary read must request paint on the tick that changed it"
+    );
+    let after = geometry(
+        ui.render()
+            .unwrap_or_else(|error| panic!("the refreshed knob must draw: {error}"))
+            .scene(),
+    );
+    assert_ne!(
+        before, after,
+        "the tick changed the value but not its picture"
     );
 }
 

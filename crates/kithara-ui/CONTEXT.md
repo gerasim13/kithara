@@ -881,7 +881,10 @@ uses `STORAGE_BINDING | RENDER_ATTACHMENT | COPY_SRC`. `Ui::render` returns both
 declarations as one frame, so production and capture call the same `VisPass`. Vis requests
 continuous Masonry animation frames. After a successful present the window satisfies both redraw
 signals from that completed paint and requests another redraw only when an animation frame was
-present, without draining unrelated platform signals or introducing a general idle-frame policy.
+present, without draining unrelated platform signals. With no animation pending, the owned window
+parks until input or a 500 ms state-pump deadline. That deadline advances the application and
+re-reads every watched endpoint; unchanged reads still skip render and present. Embedders that own
+their event loop continue to choose when they call `Ui::frame`.
 
 ## Scoped Read Resolution
 

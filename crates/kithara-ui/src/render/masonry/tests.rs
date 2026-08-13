@@ -1967,7 +1967,7 @@ fn retained_vis_declares_exact_logical_frames_and_continuous_repaint() {
     reads.right.set(0.5);
     reads.volume.set(0.5);
     reads.time.set(9.0);
-    root.refresh_vis(&reads);
+    root.refresh(&ui, &reads);
     root.redraw()
         .unwrap_or_else(|error| panic!("Vis refresh must not remount the tree: {error}"));
     let refreshed = root.vis_declarations();
@@ -1977,14 +1977,14 @@ fn retained_vis_declares_exact_logical_frames_and_continuous_repaint() {
     assert_eq!(refreshed[0].frame().time(), 9.0);
 
     reads.first.set(f64::NAN);
-    root.refresh_vis(&reads);
+    root.refresh(&ui, &reads);
     assert_eq!(
         root.vis_declarations().len(),
         1,
         "an invalid preset suppresses only its own native declaration"
     );
     reads.levels_present.set(false);
-    root.refresh_vis(&reads);
+    root.refresh(&ui, &reads);
     assert!(
         root.vis_declarations().is_empty(),
         "missing levels suppress every Vis declaration"

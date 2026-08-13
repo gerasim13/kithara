@@ -215,8 +215,8 @@ where
     /// Advances one frame's worth of animation.
     pub fn frame(&mut self, elapsed: Duration) {
         self.app.tick();
-        let Self { app, root, .. } = self;
-        app.reads(|reads| root.refresh_vis(reads));
+        let Self { app, root, ui, .. } = self;
+        app.reads(|reads| root.refresh(ui, reads));
         if let Err(error) = self
             .root
             .handle_window_event(WindowEvent::AnimFrame(elapsed))

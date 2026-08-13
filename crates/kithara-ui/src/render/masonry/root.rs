@@ -175,17 +175,6 @@ where
         }
     }
 
-    pub(crate) fn refresh_vis(&mut self, reads: &dyn Reads) {
-        for id in &self.vis {
-            self.root.edit_widget(*id, |mut widget| {
-                let mut node = widget.downcast::<Node>();
-                if node.widget.refresh(reads) {
-                    node.ctx.request_paint_only();
-                }
-            });
-        }
-    }
-
     pub(crate) fn vis_declarations(&self) -> Vec<VisDeclaration> {
         self.vis
             .iter()
