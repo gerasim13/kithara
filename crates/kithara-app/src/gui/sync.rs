@@ -13,11 +13,12 @@ use ::kithara::{
     assets::{AssetStore, StorageBackend},
     audio::analysis::TrackAnalysis,
     bufpool::{BytePool, PcmPool},
+    events::EventReceiver,
     net::{HttpClient, NetOptions},
     play::{SessionDispatcher, SessionHandle, SessionTransportSnapshot},
     stream::dl::{Downloader, DownloaderConfig},
 };
-use cochlea_features::{Audio, ProbeOpts, TempoOpts, TempoReport, estimate_tempo, probe};
+use cochlea_features::{Audio, ProbeOpts, TempoOpts, estimate_tempo, probe};
 use iced::window;
 use kithara_platform::{
     CancelScope,
@@ -28,7 +29,7 @@ use kithara_platform::{
 use kithara_queue::{Queue, TrackId, TrackStatus, Transition};
 use kithara_test_utils::kithara;
 use kithara_ui::render::{ControlAction, UiEvent};
-use num_traits::{ToPrimitive, cast::AsPrimitive};
+use num_traits::ToPrimitive;
 use tempfile::TempDir;
 
 use self::{
@@ -73,7 +74,11 @@ mod fixture {
     pub(super) const WARM_PULL_LIMIT: usize = 4_000;
 }
 
+mod cold;
 mod offline;
+mod phase;
+
+use self::phase::{circular_phase, circular_spread, phase_distance};
 
 #[kithara::test(
     native,
@@ -254,6 +259,8 @@ struct AppTrace {
     app: Kithara,
     a_track: TrackId,
     b_track: TrackId,
+    events_a: EventReceiver,
+    events_b: EventReceiver,
     offline: Arc<OfflineSession>,
     queue_a: Arc<Queue>,
     queue_b: Arc<Queue>,
@@ -271,6 +278,13 @@ struct SyncExpectation {
     primary_bpm: f64,
     secondary_bpm: f64,
     stagger_frames: usize,
+}
+
+struct CochleaObservation {
+    beat_frames: Vec<i64>,
+    bpm: Option<f64>,
+    clean: bool,
+    clear_rhythm: bool,
 }
 
 impl From<(&TrackAnalysis, &TrackAnalysis)> for SyncExpectation {
@@ -293,11 +307,15 @@ impl From<(&TrackAnalysis, &TrackAnalysis)> for SyncExpectation {
 
 impl AppTrace {
     async fn new() -> Self {
+        Self::new_with_a_seconds(TRACK_SECONDS).await
+    }
+
+    async fn new_with_a_seconds(a_seconds: usize) -> Self {
         let temp = TempDir::new().expect("sync fixture temp directory");
         let a_path = temp.path().join("deck-a-120.wav");
         let b_unused_path = temp.path().join("deck-b-unused.wav");
         let b_path = temp.path().join("deck-b-126.wav");
-        write_pulse_wav(&a_path, A_BPM, 330.0, TRACK_SECONDS);
+        write_pulse_wav(&a_path, A_BPM, 330.0, a_seconds);
         write_pulse_wav(&b_unused_path, 105.0, 550.0, B_UNUSED_SECONDS);
         write_pulse_wav(&b_path, B_BPM, 880.0, TRACK_SECONDS);
 
@@ -350,6 +368,8 @@ impl AppTrace {
             .deck(B)
             .map(|deck| deck.queue.clone())
             .expect("deck B queue");
+        let events_a = queue_a.subscribe();
+        let events_b = queue_b.subscribe();
         for deck in session_decks.decks() {
             deck.player
                 .ensure_engine_started()
@@ -403,6 +423,8 @@ impl AppTrace {
             app,
             a_track,
             b_track,
+            events_a,
+            events_b,
             offline,
             queue_a,
             queue_b,
@@ -418,28 +440,9 @@ impl AppTrace {
         index: usize,
         seconds: usize,
     ) -> SelectedAnalysis {
-        let expected_frames = u64::from(SAMPLE_RATE)
-            .checked_mul(u64::try_from(seconds).expect("fixture duration fits u64"))
-            .expect("fixture frame extent");
         let started = time::Instant::now();
         while started.elapsed() < Duration::from_secs(120) {
-            let selected = self.app.decks.get(id).and_then(|deck| {
-                let state = deck.controller.snapshot();
-                let selected_id = state
-                    .current_track_index
-                    .and_then(|selected| state.tracks.get(selected))
-                    .map(|track| track.id);
-                let analysis = state.analysis.as_ref()?;
-                (state.current_track_index == Some(index)
-                    && selected_id == Some(track_id)
-                    && analysis.source_frames() == expected_frames
-                    && beatmatch::deck_bpm(analysis).is_some())
-                .then(|| SelectedAnalysis {
-                    analysis: analysis.clone(),
-                    index,
-                    track_id,
-                })
-            });
+            let selected = self.selected_analysis(id, track_id, index, seconds);
             if let Some(selected) = selected {
                 self.dispatch(Message::Tick);
                 return selected;
@@ -472,6 +475,33 @@ impl AppTrace {
                 .and_then(|state| state.analysis.as_ref())
                 .and_then(beatmatch::deck_bpm),
         );
+    }
+
+    fn selected_analysis(
+        &self,
+        id: DeckId,
+        track_id: TrackId,
+        index: usize,
+        seconds: usize,
+    ) -> Option<SelectedAnalysis> {
+        let expected_frames = u64::from(SAMPLE_RATE).checked_mul(u64::try_from(seconds).ok()?)?;
+        self.app.decks.get(id).and_then(|deck| {
+            let state = deck.controller.snapshot();
+            let selected_id = state
+                .current_track_index
+                .and_then(|selected| state.tracks.get(selected))
+                .map(|track| track.id);
+            let analysis = state.analysis.as_ref()?;
+            (state.current_track_index == Some(index)
+                && selected_id == Some(track_id)
+                && analysis.source_frames() == expected_frames
+                && beatmatch::deck_bpm(analysis).is_some())
+            .then(|| SelectedAnalysis {
+                analysis: analysis.clone(),
+                index,
+                track_id,
+            })
+        })
     }
 
     async fn warm_and_reset(&mut self) -> bool {
@@ -630,12 +660,6 @@ async fn wait_loaded(queue: &Queue, ids: &[TrackId]) {
     panic!("fixture tracks did not load: {states:?}");
 }
 
-fn phase_distance(a: Option<f64>, b: Option<f64>) -> Option<f64> {
-    let stagger = (a? - b?).abs();
-    let phase = stagger.fract();
-    Some(phase.min(1.0 - phase))
-}
-
 fn write_pulse_wav(path: &Path, bpm: f64, tone_hz: f64, seconds: usize) {
     let total_frames = usize::try_from(SAMPLE_RATE).expect("sample rate fits usize") * seconds;
     let beat_frames = (f64::from(SAMPLE_RATE) * 60.0 / bpm)
@@ -709,15 +733,30 @@ struct CochleaPhase {
 }
 
 fn cochlea_report(capture: &PcmCapture, label: &str) -> CochleaPhase {
-    assert_cochlea_clean(capture, label);
+    let observation = observe_cochlea(capture);
+    assert!(observation.clean, "{label} Cochlea capture must not clip");
+    assert!(
+        observation.clear_rhythm && observation.bpm.is_some() && observation.beat_frames.len() >= 3,
+        "{label} Cochlea rhythm is not usable: bpm={:?}, beats={}",
+        observation.bpm,
+        observation.beat_frames.len(),
+    );
+    CochleaPhase {
+        bpm: observation
+            .bpm
+            .expect("rhythmic Cochlea report carries BPM"),
+        beat_frames: observation.beat_frames,
+    }
+}
+
+fn observe_cochlea(capture: &PcmCapture) -> CochleaObservation {
     let audio = Audio {
         samples: capture.samples.clone(),
         channels: CHANNELS,
         sample_rate: SAMPLE_RATE,
     };
+    let probe_report = probe(&audio, &ProbeOpts::default());
     let tempo = estimate_tempo(&audio, &TempoOpts::default());
-    assert_rhythmic(label, &tempo);
-    let bpm = tempo.bpm.expect("rhythmic Cochlea report must carry tempo");
     let beat_frames = tempo
         .beats_ms
         .iter()
@@ -729,7 +768,13 @@ fn cochlea_report(capture: &PcmCapture, label: &str) -> CochleaPhase {
                     .expect("Cochlea beat frame fits i64")
         })
         .collect();
-    CochleaPhase { bpm, beat_frames }
+    CochleaObservation {
+        beat_frames,
+        bpm: tempo.bpm,
+        clean: probe_report.clipping.clipped_samples == 0
+            && !probe_report.clipping.true_peak_over_0dbtp,
+        clear_rhythm: tempo.clear_rhythm,
+    }
 }
 
 fn assert_cochlea_clean(capture: &PcmCapture, label: &str) {
@@ -747,49 +792,6 @@ fn assert_cochlea_clean(capture: &PcmCapture, label: &str) {
         !probe_report.clipping.true_peak_over_0dbtp,
         "{label} Cochlea capture must stay below 0 dBTP"
     );
-}
-
-fn assert_rhythmic(label: &str, report: &TempoReport) {
-    assert!(
-        report.clear_rhythm && report.bpm.is_some() && report.beats_ms.len() >= 3,
-        "{label} Cochlea rhythm is not usable: bpm={:?}, confidence={:.3}, beats={} ",
-        report.bpm,
-        report.confidence,
-        report.beats_ms.len()
-    );
-}
-
-fn circular_phase(frames: &[i64], period: u64) -> Option<(u64, f64)> {
-    if frames.is_empty() || period == 0 {
-        return None;
-    }
-    let period_i64 = i64::try_from(period).ok()?;
-    let period_f64 = period.to_f64()?;
-    let (sin_sum, cos_sum) = frames.iter().fold((0.0_f64, 0.0_f64), |(sin, cos), frame| {
-        let remainder: f64 = frame.rem_euclid(period_i64).as_();
-        let angle = remainder / period_f64 * TAU;
-        (sin + angle.sin(), cos + angle.cos())
-    });
-    let concentration = sin_sum.hypot(cos_sum) / frames.len().to_f64()?;
-    let angle = sin_sum.atan2(cos_sum).rem_euclid(TAU);
-    let phase = (angle / TAU * period_f64).round().to_u64()? % period;
-    Some((phase, concentration))
-}
-
-fn circular_spread(phases: &[u64], period: u64) -> Option<u64> {
-    if phases.len() < 2 || period == 0 {
-        return None;
-    }
-    let mut phases = phases.to_vec();
-    phases.sort_unstable();
-    let largest_gap = phases
-        .windows(2)
-        .map(|window| window[1] - window[0])
-        .chain(std::iter::once(
-            period - phases[phases.len() - 1] + phases[0],
-        ))
-        .max()?;
-    Some(period - largest_gap)
 }
 
 fn write_optional_artifacts(
@@ -836,8 +838,12 @@ fn write_artifact_bundle(
 }
 
 fn create_artifact_directory(root: &Path) -> io::Result<PathBuf> {
+    create_case_artifact_directory(root, ARTIFACT_CASE)
+}
+
+fn create_case_artifact_directory(root: &Path, case: &str) -> io::Result<PathBuf> {
     for attempt in 0..1_000_u16 {
-        let directory = root.join(format!("{ARTIFACT_CASE}-{}-{attempt}", process::id()));
+        let directory = root.join(format!("{case}-{}-{attempt}", process::id()));
         match fs::create_dir(&directory) {
             Ok(()) => return Ok(directory),
             Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
@@ -846,7 +852,7 @@ fn create_artifact_directory(root: &Path) -> io::Result<PathBuf> {
     }
     Err(io::Error::new(
         io::ErrorKind::AlreadyExists,
-        format!("sync artifact directory space exhausted for case '{ARTIFACT_CASE}'"),
+        format!("sync artifact directory space exhausted for case '{case}'"),
     ))
 }
 

@@ -105,6 +105,9 @@ fixture-cache ACTION="path":
       *) echo "usage: just test fixture-cache [path|clear]" >&2; exit 2 ;;
     esac
 
+sync-analysis-fixtures:
+    cargo run -p kithara-integration-tests --bin sync-analysis-fixtures --profile test-release -- write
+
 # All three lanes require a real output device.
 [positional-arguments]
 e2e-resamplers *ARGS:

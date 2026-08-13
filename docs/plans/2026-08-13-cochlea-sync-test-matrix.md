@@ -40,11 +40,17 @@ native typed oracles alongside Cochlea.
 - [ ] Setting `KITHARA_SYNC_LIBRARY` adds a reproducibly selected local-library
       pair, records its exact paths and seed, and reuses content-addressed
       analysis fixtures instead of reanalysing unchanged tracks.
+- [ ] Repository MP3 and HLS rows load checked-in, content-bound complete
+      `TrackAnalysis` sidecars and never run BeatThis during the sync scenario.
+- [ ] A separate cold-analysis acceptance requests SYNC before the final map is
+      ready, preserves uninterrupted free PCM, then converges after publication
+      without reload or seek.
 
 ## Affected Paths
 
 - `docs/plans/2026-08-13-cochlea-sync-test-matrix.md`
 - `assets/sync-silvercomet.mp3`
+- `assets/sync-analysis/*.ksan`
 - `Cargo.lock`
 - `crates/kithara-app/Cargo.toml`
 - `crates/kithara-app/src/gui/mod.rs`
@@ -123,8 +129,10 @@ native typed oracles alongside Cochlea.
   state, Cochlea metrics, and thresholds. Default and CI runs create no audio
   artifact directory.
 - Track analysis is produced by `TrackAnalysisRunner` and cached under a key
-  derived from media content identity plus analyzer configuration. The cache
-  stores analysis data only; it does not copy the local music library.
+  derived from media content identity plus analyzer configuration for opt-in
+  library rows. Repository rows instead load checked-in complete analysis
+  sidecars; missing, stale, corrupt, or mismatched sidecars are hard failures
+  and never fall back to runtime analysis.
 - Missing product capabilities are expressed through current public operations
   (for example successive analysis revisions through Queue) and must fail as a
   behavioral assertion, never through a compile error, private test hook, or
@@ -167,6 +175,8 @@ native typed oracles alongside Cochlea.
   broadens realism without becoming repository content.
 - Real tracks must use production analysis and a durable content/config keyed
   analysis cache.
+- Prepared-map and cold-analysis are separate contracts: the first isolates
+  mixing from NN latency, while the second owns readiness and publication.
 - Random library coverage must be replayable from the recorded seed and paths.
 
 ## Assumptions
@@ -197,6 +207,16 @@ native typed oracles alongside Cochlea.
   unrecorded random choice cannot reproduce a failure.
 - Chosen: content/config-addressed analysis cache. Caching by path or timestamp
   alone can serve a stale BeatMap after bytes or analyzer settings change.
+- Chosen: checked-in repository `TrackAnalysis` sidecars use a stable schema,
+  exact media digest, transport profile/variant, analyzer cache tag, and payload
+  checksum. They do not use the ephemeral fixture-build hash and cannot silently
+  invoke BeatThis when stale.
+- Chosen: persist `TrackAnalysis`, not `TrackBeatMap`. The latter is derived for
+  the host sample rate, so one serialized map would be wrong for the 44.1/48 kHz
+  matrix.
+- Chosen: cold analysis remains a distinct RED app lifecycle. Today an early
+  SYNC receives `BindUnavailable`; the intended contract retains the request,
+  keeps free PCM clean, and binds when the final map arrives without reload.
 - Rejected: the first allocation-free probe. It rendered a direct tone instead
   of a bound Queue/Player deck, and the available allocator guard could either
   abort or become a no-op. Keeping it would create a false green result. A

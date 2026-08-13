@@ -22,6 +22,11 @@ path = "bin/cold-fixture-cache.rs"
 test = false
 
 [[bin]]
+name = "sync-analysis-fixtures"
+path = "bin/sync-analysis-fixtures.rs"
+test = false
+
+[[bin]]
 name = "wasm_test_runner"
 path = "bin/wasm_test_runner.rs"
 test = false

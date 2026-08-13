@@ -8,7 +8,7 @@ use kithara::{
     play::ResourceConfig,
 };
 use kithara_integration_tests::{
-    TestServerHelper, kithara, memory_asset_store, rt_cancel,
+    TestServerHelper, kithara, memory_asset_store,
     sync_fixture::{
         RepositoryMp3, SyncAnalysisFixtures, SyncTrackFixture as AnalysisTrackFixture,
         repository_mp3, repository_mp3_pair, silvercomet_hls,
@@ -51,6 +51,25 @@ const HLS_WITH_MP3: MediaRow = MediaRow {
     id: "media-hls-with-mp3",
     kind: MediaKind::HlsWithMp3,
 };
+
+#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(30)))]
+async fn repository_prepared_analysis_matches_current_media_and_analyzer() -> Result<()> {
+    let server = TestServerHelper::new().await;
+    let fixtures = SyncAnalysisFixtures::production().context("initialize prepared analysis")?;
+    let tracks = [
+        repository_mp3(&server, RepositoryMp3::Test).await?,
+        repository_mp3(&server, RepositoryMp3::Silvercomet).await?,
+        silvercomet_hls(&server).await?,
+    ];
+
+    for track in tracks {
+        fixtures
+            .load_prepared(&track)
+            .await
+            .with_context(|| format!("load prepared analysis for '{}'", track.media()))?;
+    }
+    Ok(())
+}
 
 #[kithara::test(tokio, multi_thread, serial, timeout(Duration::from_secs(900)))]
 #[case::hls_same_play_sync_seek(HLS_SAME, PLAY_SYNC_SEEK)]
@@ -98,7 +117,6 @@ const HLS_WITH_MP3: MediaRow = MediaRow {
 #[case::hls_mp3_tempo_up_120(HLS_WITH_MP3, UP_120)]
 #[case::hls_mp3_tempo_down_30(HLS_WITH_MP3, DOWN_30)]
 async fn media_source_axis_runs_the_full_behavioral_row(
-    rt_cancel: CancelToken,
     #[case] row: MediaRow,
     #[case] case: kithara_integration_tests::sync_matrix::SyncCase,
 ) -> Result<()> {
@@ -106,7 +124,7 @@ async fn media_source_axis_runs_the_full_behavioral_row(
     let analysis = SyncAnalysisFixtures::production()
         .with_context(|| format!("{}: initialize production analysis", row.id))?;
     let inputs = media_inputs(row, &server).await?;
-    let media = analyzed_media(row.id, &analysis, &rt_cancel, inputs).await?;
+    let media = prepared_media(row.id, &analysis, inputs).await?;
     let _report = assert_behavioral_row(case, media)
         .await
         .with_context(|| format!("{}: run full behavioral case {}", row.id, case.id))?;
@@ -153,24 +171,48 @@ pub(super) async fn analyzed_media(
             .analyze(cancel, &input)
             .await
             .with_context(|| format!("{id}: analyze {deck} source '{}'", input.media()))?;
-        let analysis_key = cached.key().to_owned();
-        let playback = ResourceConfig::for_src(input.source().clone())
-            .initial_abr_mode(AbrMode::manual(0))
-            .store(memory_asset_store())
-            .byte_pool(BytePool::default())
-            .pcm_pool(PcmPool::default())
-            .build();
-        let track = SyncTrackFixture::new(
-            format!("{deck}:{}", input.media()),
-            playback,
-            cached.into_analysis(),
-            analysis_key,
-        );
-        tracks.push(if input.is_hls() {
-            track.with_abr_target(1)
-        } else {
-            track
-        });
+        tracks.push(resolved_track(deck, input, cached));
     }
     Ok(SyncMedia::new(id, tracks))
+}
+
+async fn prepared_media(
+    id: &'static str,
+    analysis: &SyncAnalysisFixtures,
+    inputs: Vec<(&'static str, AnalysisTrackFixture)>,
+) -> Result<SyncMedia> {
+    let mut tracks = Vec::with_capacity(inputs.len());
+    for (deck, input) in inputs {
+        let prepared = analysis
+            .load_prepared(&input)
+            .await
+            .with_context(|| format!("{id}: load prepared {deck} source '{}'", input.media()))?;
+        tracks.push(resolved_track(deck, input, prepared));
+    }
+    Ok(SyncMedia::new(id, tracks))
+}
+
+fn resolved_track(
+    deck: &'static str,
+    input: AnalysisTrackFixture,
+    analysis: kithara_integration_tests::sync_fixture::CachedTrackAnalysis,
+) -> SyncTrackFixture {
+    let analysis_key = analysis.key().to_owned();
+    let playback = ResourceConfig::for_src(input.source().clone())
+        .initial_abr_mode(AbrMode::manual(0))
+        .store(memory_asset_store())
+        .byte_pool(BytePool::default())
+        .pcm_pool(PcmPool::default())
+        .build();
+    let track = SyncTrackFixture::new(
+        format!("{deck}:{}", input.media()),
+        playback,
+        analysis.into_analysis(),
+        analysis_key,
+    );
+    if input.is_hls() {
+        track.with_abr_target(1)
+    } else {
+        track
+    }
 }

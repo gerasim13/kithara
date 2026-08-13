@@ -2,7 +2,7 @@ use std::{
     ffi::{OsStr, OsString},
     fmt::Write as _,
     fs::{self, File},
-    io::{self, Read},
+    io::{self, Read, Write as _},
     num::NonZeroU32,
     path::{Path, PathBuf},
 };
@@ -16,6 +16,7 @@ use kithara::{
 };
 use kithara_app::waveform::TrackAnalysisRunner;
 use sha2::{Digest, Sha256};
+use tempfile::NamedTempFile;
 use thiserror::Error;
 use tracing::warn;
 #[cfg(test)]
@@ -40,6 +41,8 @@ const FILE_DIGEST_MAGIC: &[u8] = b"kithara-sync-file\0";
 const HASH_BUFFER_BYTES: usize = 1024 * 1024;
 const HLS_ANALYSIS_VARIANT: u32 = 0;
 const MAX_ANALYSIS_PAYLOAD_BYTES: usize = 128 * 1024 * 1024;
+const PREPARED_ANALYSIS_KEY_MAGIC: &[u8] = b"kithara-prepared-sync-analysis\0";
+const PREPARED_ANALYSIS_VERSION: u32 = 1;
 const TREE_DIGEST_MAGIC: &[u8] = b"kithara-sync-tree\0";
 
 pub type SyncFixtureResult<T> = Result<T, SyncFixtureError>;
@@ -113,6 +116,29 @@ enum ContentSource {
     Tree(PathBuf),
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PreparedAnalysis {
+    SilvercometHlsV0,
+    SilvercometMp3,
+    TestMp3,
+}
+
+impl PreparedAnalysis {
+    const fn file_name(self) -> &'static str {
+        match self {
+            Self::SilvercometHlsV0 => "silvercomet-hls-v0.ksan",
+            Self::SilvercometMp3 => "sync-silvercomet-mp3.ksan",
+            Self::TestMp3 => "test-mp3.ksan",
+        }
+    }
+
+    fn path(self) -> PathBuf {
+        repository_assets_root()
+            .join("sync-analysis")
+            .join(self.file_name())
+    }
+}
+
 impl ContentSource {
     fn digest(&self) -> SyncFixtureResult<[u8; 32]> {
         match self {
@@ -130,6 +156,7 @@ pub struct SyncTrackFixture {
     content_source: ContentSource,
     content_digest: [u8; 32],
     profile: AnalysisProfile,
+    prepared_analysis: Option<PreparedAnalysis>,
 }
 
 impl SyncTrackFixture {
@@ -164,6 +191,7 @@ impl SyncTrackFixture {
             content_source: ContentSource::File(path),
             content_digest: digest,
             profile: AnalysisProfile::Progressive,
+            prepared_analysis: None,
         }
     }
 }
@@ -218,6 +246,7 @@ pub struct SyncAnalysisFixtures {
     cache: FixtureCache,
     beat_config: BeatAnalysisConfig<PlaybackResamplerBackend>,
     fingerprint: String,
+    prepared_fingerprint: String,
 }
 
 impl SyncAnalysisFixtures {
@@ -232,11 +261,75 @@ impl SyncAnalysisFixtures {
             "analysis-build={};wave=native:max{ANALYSIS_BUCKETS};beat={beat};decoder=default",
             env!("KITHARA_SYNC_ANALYSIS_BUILD"),
         );
+        let prepared_fingerprint =
+            format!("wave=native:max{ANALYSIS_BUCKETS};beat={beat};decoder=default");
         Ok(Self {
             cache: FixtureCache::from_env(),
             beat_config,
             fingerprint,
+            prepared_fingerprint,
         })
+    }
+
+    /// Load the checked-in complete analysis for this exact media identity.
+    /// This fails closed without running the analyzer or consulting its cache.
+    pub async fn load_prepared(
+        &self,
+        track: &SyncTrackFixture,
+    ) -> SyncFixtureResult<CachedTrackAnalysis> {
+        let prepared = track.prepared_analysis.ok_or_else(|| {
+            SyncFixtureError::InvalidConfig(format!(
+                "'{}' has no checked-in prepared analysis",
+                track.media(),
+            ))
+        })?;
+        let content_source = track.content_source.clone();
+        let path = prepared.path();
+        let input_path = path.clone();
+        let (content_digest, bytes) = blocking("read prepared sync analysis", move || {
+            let content_digest = content_source.digest()?;
+            let bytes = fs::read(&input_path)
+                .map_err(|error| io_error("read prepared sync analysis", &input_path, error))?;
+            Ok((content_digest, bytes))
+        })
+        .await?;
+        if content_digest != track.content_digest {
+            return Err(SyncFixtureError::InvalidConfig(format!(
+                "'{}' changed after its prepared-analysis identity was resolved",
+                track.media(),
+            )));
+        }
+        let key = prepared_analysis_key(track, &self.prepared_fingerprint);
+        let analysis = decode_analysis(&bytes, &key, track.media())?;
+        Ok(CachedTrackAnalysis {
+            analysis,
+            key: hex_digest(&key),
+        })
+    }
+
+    /// Regenerate and atomically replace one checked-in analysis fixture.
+    pub async fn write_prepared(
+        &self,
+        master: &CancelToken,
+        track: &SyncTrackFixture,
+    ) -> SyncFixtureResult<PathBuf> {
+        let prepared = track.prepared_analysis.ok_or_else(|| {
+            SyncFixtureError::InvalidConfig(format!(
+                "'{}' has no checked-in prepared analysis target",
+                track.media(),
+            ))
+        })?;
+        let cached = self.analyze(master, track).await?;
+        let key = prepared_analysis_key(track, &self.prepared_fingerprint);
+        let bytes = encode_analysis(&cached.analysis, &key)?;
+        decode_analysis(&bytes, &key, track.media())?;
+        let path = prepared.path();
+        let output = path.clone();
+        blocking("write prepared sync analysis", move || {
+            write_prepared_file(&output, &bytes)?;
+            Ok(output)
+        })
+        .await
     }
 
     pub async fn analyze(
@@ -408,6 +501,10 @@ pub async fn repository_mp3(
         content_source: ContentSource::File(path),
         content_digest: digest,
         profile: AnalysisProfile::Progressive,
+        prepared_analysis: Some(match which {
+            RepositoryMp3::Silvercomet => PreparedAnalysis::SilvercometMp3,
+            RepositoryMp3::Test => PreparedAnalysis::TestMp3,
+        }),
     })
 }
 
@@ -441,6 +538,7 @@ pub async fn silvercomet_hls(server: &TestServerHelper) -> SyncFixtureResult<Syn
         profile: AnalysisProfile::Hls {
             variant: HLS_ANALYSIS_VARIANT,
         },
+        prepared_analysis: Some(PreparedAnalysis::SilvercometHlsV0),
     })
 }
 
@@ -608,6 +706,19 @@ fn analysis_key(track: &SyncTrackFixture, fingerprint: &str) -> [u8; 32] {
     hasher.finalize().into()
 }
 
+fn prepared_analysis_key(track: &SyncTrackFixture, fingerprint: &str) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    hasher.update(PREPARED_ANALYSIS_KEY_MAGIC);
+    hasher.update(PREPARED_ANALYSIS_VERSION.to_le_bytes());
+    hasher.update([track.profile.tag()]);
+    hasher.update(track.profile.variant().to_le_bytes());
+    hasher.update(track.content_digest);
+    hasher.update((ANALYSIS_BUCKETS as u64).to_le_bytes());
+    hasher.update((fingerprint.len() as u64).to_le_bytes());
+    hasher.update(fingerprint.as_bytes());
+    hasher.finalize().into()
+}
+
 fn validate_complete_analysis(analysis: &TrackAnalysis, media: &str) -> SyncFixtureResult<()> {
     if analysis.source_frames() == 0 {
         return incomplete(media, "decoded source frame count is zero");
@@ -741,6 +852,36 @@ fn decode_analysis(
         TrackAnalysis::with_source_rate(Some(beat), Some(waveform), source_frames, source_rate);
     validate_complete_analysis(&analysis, media)?;
     Ok(analysis)
+}
+
+fn write_prepared_file(path: &Path, bytes: &[u8]) -> SyncFixtureResult<()> {
+    let parent = path.parent().ok_or_else(|| {
+        SyncFixtureError::InvalidConfig(format!(
+            "prepared analysis path '{}' has no parent",
+            path.display(),
+        ))
+    })?;
+    fs::create_dir_all(parent)
+        .map_err(|error| io_error("create prepared analysis directory", parent, error))?;
+    let mut file = NamedTempFile::new_in(parent)
+        .map_err(|error| io_error("create prepared analysis", parent, error))?;
+    file.write_all(bytes)
+        .map_err(|error| io_error("write prepared analysis", file.path(), error))?;
+    file.as_file()
+        .sync_all()
+        .map_err(|error| io_error("sync prepared analysis", file.path(), error))?;
+    persist_prepared_file(file, path)?;
+    #[cfg(unix)]
+    File::open(parent)
+        .and_then(|directory| directory.sync_all())
+        .map_err(|error| io_error("sync prepared analysis directory", parent, error))?;
+    Ok(())
+}
+
+fn persist_prepared_file(file: NamedTempFile, path: &Path) -> SyncFixtureResult<()> {
+    file.persist(path)
+        .map(|_| ())
+        .map_err(|error| io_error("install prepared analysis", path, error.error))
 }
 
 fn write_section(output: &mut Vec<u8>, section: &[u8]) -> SyncFixtureResult<()> {
@@ -1194,6 +1335,74 @@ mod tests {
     }
 
     #[test]
+    fn prepared_analysis_writer_replaces_one_exact_file() {
+        let root = tempfile::tempdir().expect("prepared analysis temp dir");
+        let path = root.path().join("fixture.ksan");
+
+        write_prepared_file(&path, b"first").expect("write first fixture");
+        write_prepared_file(&path, b"second").expect("replace fixture");
+
+        assert_eq!(fs::read(path).expect("read replaced fixture"), b"second");
+    }
+
+    #[test]
+    fn failed_prepared_analysis_install_preserves_the_current_file() {
+        let root = tempfile::tempdir().expect("prepared analysis temp dir");
+        let path = root.path().join("fixture.ksan");
+        fs::write(&path, b"current").expect("write current fixture");
+        let mut staged = NamedTempFile::new_in(root.path()).expect("create staged fixture");
+        staged
+            .write_all(b"replacement")
+            .expect("write staged fixture");
+        let displaced = root.path().join("displaced.tmp");
+        fs::rename(staged.path(), &displaced).expect("make staged path unavailable");
+
+        persist_prepared_file(staged, &path).expect_err("missing staged inode must fail install");
+
+        assert_eq!(fs::read(path).expect("read current fixture"), b"current");
+    }
+
+    #[kithara::test(tokio)]
+    async fn prepared_analysis_rejects_media_changed_after_identity_resolution() {
+        let root = tempfile::tempdir().expect("prepared analysis temp dir");
+        let path = root.path().join("fixture.mp3");
+        fs::write(&path, b"first").expect("write initial media");
+        let mut track = local_fixture(&path).expect("resolve initial media identity");
+        track.prepared_analysis = Some(PreparedAnalysis::TestMp3);
+        fs::write(&path, b"second").expect("replace media bytes");
+        let fixtures = SyncAnalysisFixtures::production().expect("production analysis config");
+
+        let error = fixtures
+            .load_prepared(&track)
+            .await
+            .expect_err("changed media must fail before sidecar loading");
+
+        assert!(error.to_string().contains("changed after"));
+    }
+
+    #[kithara::test(tokio)]
+    async fn checked_in_test_mp3_has_current_prepared_analysis() {
+        let path = repository_assets_root().join("test.mp3");
+        let track = SyncTrackFixture {
+            media: "repo:test.mp3".to_owned(),
+            source: ResourceSrc::Path(path.clone()),
+            content_source: ContentSource::File(path.clone()),
+            content_digest: digest_file(&path).expect("digest checked-in MP3"),
+            profile: AnalysisProfile::Progressive,
+            prepared_analysis: Some(PreparedAnalysis::TestMp3),
+        };
+        let fixtures = SyncAnalysisFixtures::production().expect("production analysis config");
+
+        let prepared = fixtures
+            .load_prepared(&track)
+            .await
+            .expect("checked-in prepared analysis matches the current MP3 and analyzer");
+
+        validate_complete_analysis(&prepared.analysis, track.media())
+            .expect("prepared analysis remains usable");
+    }
+
+    #[test]
     fn analysis_key_changes_with_content_profile_and_configuration() {
         let root = tempfile::tempdir().expect("key temp dir");
         let path = root.path().join("track.mp3");
@@ -1225,6 +1434,18 @@ mod tests {
         assert_ne!(
             analysis_key(&progressive, "config-a"),
             analysis_key(&hls, "config-a"),
+        );
+        assert_ne!(
+            prepared_analysis_key(&progressive, "config-a"),
+            prepared_analysis_key(&progressive, "config-b"),
+        );
+        assert_ne!(
+            prepared_analysis_key(&progressive, "config-a"),
+            prepared_analysis_key(&other_content, "config-a"),
+        );
+        assert_ne!(
+            prepared_analysis_key(&progressive, "config-a"),
+            prepared_analysis_key(&hls, "config-a"),
         );
     }
 }
