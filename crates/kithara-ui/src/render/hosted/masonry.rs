@@ -289,7 +289,7 @@ impl TablePlan {
         columns: Vec<ColumnLayout>,
         skin: &Skin,
     ) -> Self {
-        let declared = columns.iter().map(|column| column.column).collect();
+        let declared = columns.iter().map(|column| column.column.clone()).collect();
         let plan = Self::new(path, rows, columns, skin);
         plan.bind_source(TableSource::new(declared, None, None));
         plan
