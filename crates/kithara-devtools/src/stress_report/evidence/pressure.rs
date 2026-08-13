@@ -2,12 +2,11 @@ use std::{collections::BTreeMap, fmt::Write as _, ops::ControlFlow, path::Path};
 
 use serde::Deserialize;
 
-use crate::junit::CaseTiming;
-
 use super::{
     AttemptDossier, attempt::AttemptKey, duration_ms,
     line_reader::for_each_bounded_line_with_limit, parse_timestamp_ms,
 };
+use crate::junit::CaseTiming;
 
 const MAX_LINE_BYTES: usize = 1_048_576;
 const MAX_PRESSURE_RECORDS: usize = 100_000;

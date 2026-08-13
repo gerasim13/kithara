@@ -119,8 +119,7 @@ mod tests {
     fn streams_lines_and_bounds_individual_records() {
         let temp = tempfile::tempdir().expect("tempdir");
         let path = temp.path().join("records.log");
-        std::fs::write(&path, b"first\nway-too-long\ninvalid:\xff\nlast\r\n")
-            .expect("write fixture");
+        std::fs::write(&path, b"first\nway-too-long\nbad:\xff\nlast\r\n").expect("write fixture");
         let mut lines = Vec::new();
 
         let summary = for_each_bounded_line(&path, 8, |line| {

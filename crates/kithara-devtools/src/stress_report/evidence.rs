@@ -9,10 +9,9 @@ use std::{
 
 use regex::Regex;
 
-use crate::junit::CaseTiming;
-
 use self::attempt::{AttemptKey, AttemptOutcome, attempt_outcomes};
 use super::{MAX_FAILURE_ROWS, StressReportArgs, markdown_cell, test_id};
+use crate::junit::CaseTiming;
 
 mod attempt;
 mod hang;

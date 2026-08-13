@@ -3,9 +3,8 @@ use std::{
     collections::{BTreeMap, BTreeSet, BinaryHeap},
 };
 
-use crate::junit::CaseTiming;
-
 use super::{MAX_SIGNATURE_EXAMPLES, attempt::AttemptKey, duration_ms, parse_timestamp_ms};
+use crate::junit::CaseTiming;
 
 #[derive(Debug)]
 struct Interval {
