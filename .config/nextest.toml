@@ -14,7 +14,32 @@ experimental = ["setup-scripts"]
 [scripts.setup.cold-fixture-cache]
 command = 'cargo run -q -p kithara-integration-tests --bin cold-fixture-cache'
 
+# Support tests — build tooling and the harness itself — are removed from the
+# product suite here, in the two cases cargo cannot express. Whole support crates
+# leave through `--exclude` in the `workspace` lane, and the harness meta-tests
+# through `required-features` on `suite_harness`; what remains are targets that
+# live inside product crates and cannot be dropped at cargo level without taking
+# product tests with them.
+#
+# This belongs in `default-filter` and NOT in a lane's `suffix_args`: nextest
+# UNIONS several `-E` expressions, so a lane-level `-E` would silently widen
+# `just test run -E 'test(seek)'` back to nearly the whole suite. `default-filter`
+# intersects with a command-line filter instead.
+#
+# The `=` matchers are exact on purpose — a substring match on
+# `kithara-integration-tests` would also swallow `suite_e2e` and `suite_network`.
+#
+# Returning a target to the product suite is one edit: drop its term.
+# `.config/xtask.toml` `[test.lanes.fixtures]` and `[test.lanes.harness]` run
+# these under `profile.support`, which opts back in.
 [profile.default]
+default-filter = """
+not (
+    binary_id(=kithara-platform::flash_attr)
+    + binary_id(=kithara-platform::flash_spawn)
+    + binary_id(=kithara-integration-tests)
+)
+"""
 fail-fast = false
 test-threads = "num-cpus"
 # Wall-clock BACKSTOP only. The real per-test bound is the macro `timeout(...)`
@@ -79,6 +104,26 @@ leak-timeout = "2s"
 [[profile.cold.scripts]]
 filter = 'package(kithara-integration-tests)'
 setup = ['cold-fixture-cache']
+
+# `kithara-platform` has to be built whole to reach its two flash targets, which
+# would drag its product tests into the harness lane. Naming them here rather
+# than as an `-E` in the lane is the same rule as above: a lane-level `-E` unions
+# with whatever the caller passes, so `just test run --lane=harness -E '...'`
+# would widen the lane instead of narrowing it.
+[profile.harness]
+default-filter = """
+binary_id(=kithara-platform::flash_attr)
++ binary_id(=kithara-platform::flash_spawn)
++ package(kithara-test-utils)
++ package(kithara-test-macros)
+"""
+
+# The support lanes (`tooling`, `harness`, `fixtures`) run under this profile.
+# Its whole job is to undo the product suite's `default-filter`: a lane that
+# exists to run the excluded targets must not inherit the exclusion that removed
+# them. Everything else is inherited from `default`.
+[profile.support]
+default-filter = 'all()'
 
 # Perf-measurement profile: behavior identical to default (profiles inherit
 # it); adds JUnit so `just perf suite` gets exact per-test timings.

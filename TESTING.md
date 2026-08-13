@@ -7,13 +7,13 @@ per-crate behavior contracts live in each crate's `CONTEXT.md`.
 
 ## Running tests
 
-The canonical gate is plain `just test` (whole workspace, all backends, `flash`
-ON, `test-release` profile). Backend features (symphonia / apple / android) are
-activated automatically by `tests/Cargo.toml`, so a single run exercises every
-compiled-in decoder.
+The canonical gate is plain `just test` (the product workspace, all backends,
+`flash` ON, `test-release` profile). Backend features (symphonia / apple /
+android) are activated automatically by `tests/Cargo.toml`, so a single run
+exercises every compiled-in decoder.
 
 ```sh
-just test                  # whole workspace, flash ON (default), all backends
+just test                  # the product suite, flash ON (default), all backends
 just test run --flash=off      # real wall clock — the regression baseline
 just test run -p kithara-hls   # one package
 just test run --profile ci     # a specific nextest profile
@@ -22,6 +22,38 @@ just test run --lane=doc       # doc-tests (nextest does not run them)
 just test run --lane=e2e       # gated by the `e2e` feature (suite_e2e); needs a real output device
 just test run --lane=cold      # opt-in cold L2 fixture cache (profile `cold`)
 ```
+
+### What `just test` does not run
+
+Three lanes carry the tests that are not about the product: the build tooling,
+and the harness the product tests are written with. They are not optional
+coverage — they run nightly on the fork's Linux fleet through `lanes.yml`, and
+immediately on any push that touches their own sources (the `support` job in
+`ci.yml`).
+
+```sh
+just test run --lane=tooling   # kithara-devtools, xtask
+just test run --lane=harness   # kithara-test-utils, kithara-test-macros, the flash attribute targets
+just test run --lane=fixtures  # the fixture library, the local test server, the signal oracles, suite_harness
+```
+
+The split is by what a test is about, not by what it costs: `suite_stress` and
+`suite_heavy` are expensive and stay in `just test`, because a stress test of the
+player is a test of the player. `thread_budget` stays for the same reason — a
+thread ceiling is a product contract, whatever helper counts the threads.
+
+Each lane returns to `just test` with a single edit:
+
+- `tooling`, `harness` — drop the crate's `--exclude` pair from
+  `[test.lanes.workspace]` in `.config/xtask.toml`;
+- the harness meta-tests — add `harness` to that lane's `default_features`;
+- the targets inside product crates — drop their term from `default-filter` in
+  `.config/nextest.toml`.
+
+That filter lives in `default-filter` rather than in a lane's `-E` for a reason
+worth keeping: nextest **unions** several `-E` expressions, so a lane-level one
+would quietly widen `just test run -E 'test(seek)'` into nearly the whole suite.
+`default-filter` intersects with the caller's filter instead.
 
 The `--flash=*` token is stripped before reaching nextest; every other argument
 passes through. `--flash=off` (aliases `--no-flash` / `--flash=false`) drops

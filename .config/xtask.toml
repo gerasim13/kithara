@@ -149,6 +149,18 @@ features = []
 [test.net_backends.apple]
 features = ["kithara-integration-tests/apple-net"]
 
+# The product suite. What it excludes is not product: `kithara-devtools` and
+# `xtask` are the build tooling, `kithara-test-utils` and `kithara-test-macros`
+# are the harness the product tests are written with. Excluded at cargo level
+# rather than filtered, so they are not compiled either — a filter would still
+# pay for building and linking them. Neither depends on a product crate, so
+# nothing product-side leaves with them.
+#
+# The remaining support targets live inside product crates and cannot be dropped
+# here without taking product tests along; `default-filter` in
+# `.config/nextest.toml` removes those. The lanes below run all of it.
+#
+# Returning a crate to this suite is one edit: drop its `--exclude` pair.
 [test.lanes.workspace]
 program = "cargo"
 default_features = ["kithara-ui/render"]
@@ -158,6 +170,84 @@ prefix_args = [
   "--workspace",
   "--exclude",
   "kithara-fuzz",
+  "--exclude",
+  "kithara-devtools",
+  "--exclude",
+  "xtask",
+  "--exclude",
+  "kithara-test-utils",
+  "--exclude",
+  "kithara-test-macros",
+  "--cargo-profile",
+  "test-release",
+]
+
+# The build tooling: lint and architecture checks, similarity, viz, quality
+# assessment, release and publish, the platform commands, the xtask self-cache,
+# and the generators that write the CI pipelines. None of it ships.
+[test.lanes.tooling]
+program = "cargo"
+prefix_args = [
+  "nextest",
+  "run",
+  "--profile",
+  "support",
+  "-p",
+  "kithara-devtools",
+  "-p",
+  "xtask",
+  "--cargo-profile",
+  "test-release",
+]
+# Neither crate declares a `flash` feature — the virtual clock is a property of
+# the player, not of the tools that build it — so leaving flash on would fail the
+# lane on `none of the selected packages contains these features`.
+default_flash = false
+
+# The harness itself: the test attribute crate, the shared test helpers, and the
+# two `kithara-platform` targets that pin what `#[kithara::flash]` does to a
+# callstack and across a spawn.
+#
+# Flash stays ON here, unlike the `tooling` lane. Both flash targets are
+# `#![cfg(feature = "flash")]`, so a lane that dropped the feature would compile
+# them empty and report a green suite that ran none of its seven tests.
+[test.lanes.harness]
+program = "cargo"
+prefix_args = [
+  "nextest",
+  "run",
+  "--profile",
+  "harness",
+  "-p",
+  "kithara-test-utils",
+  "-p",
+  "kithara-test-macros",
+  "-p",
+  "kithara-platform",
+  "--cargo-profile",
+  "test-release",
+]
+
+# The fixture library and the harness meta-tests: the local test server, the
+# fixture cache and protocol, the signal oracles (`signal_pcm`, `goertzel`,
+# `wav`, `rfc6381`) — and `suite_harness`, which asserts that a timeout kills a
+# wedged test and that `env(...)` is honoured. If these break quietly, product
+# tests start lying, which is why they keep a lane rather than being dropped.
+[test.lanes.fixtures]
+program = "cargo"
+default_features = ["harness"]
+prefix_args = [
+  "nextest",
+  "run",
+  "--profile",
+  "support",
+  "-p",
+  "kithara-integration-tests",
+  "--lib",
+  "--test",
+  "suite_harness",
+  "--test",
+  "red_env_guard_leak_thread",
   "--cargo-profile",
   "test-release",
 ]
