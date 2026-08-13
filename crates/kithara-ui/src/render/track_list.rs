@@ -6,12 +6,12 @@ use iced::{
 };
 use kithara_platform::time::Instant;
 
-use super::{
-    InputOwner, Skin, UiEvent,
-    controls::RetainedCanvas,
-    drag, index, scalar,
-    track_list_paint::{TrackListConfig, TrackListPaint, TrackListState, hovered_row, local_rect},
-};
+#[path = "track_list_paint.rs"]
+mod paint;
+
+use paint::{TrackListConfig, TrackListPaint, TrackListState, hovered_row, local_rect};
+
+use super::{InputOwner, Skin, UiEvent, controls::RetainedCanvas, drag, index, scalar};
 use crate::{
     atoms::track_list::{
         ColumnLayout, TrackListRowData, track_list_body, track_list_dividers,

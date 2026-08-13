@@ -6,7 +6,7 @@ use iced::{
     widget::canvas::{self, Frame, Geometry},
 };
 
-use super::{Skin, UiEvent, controls::RetainedCanvasState};
+use super::super::{Skin, UiEvent, controls::RetainedCanvasState};
 use crate::{
     atoms::track_list::{
         ColumnLayout, TrackListRowData, column_resizable,

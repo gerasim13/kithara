@@ -14,67 +14,55 @@ pub mod masonry;
 pub mod model;
 mod owner;
 mod picker;
-#[cfg(feature = "iced")]
-mod preview;
 pub mod skin;
 mod text_input;
 pub mod theme;
 #[cfg(feature = "iced")]
 mod track_list;
 #[cfg(feature = "iced")]
-mod track_list_paint;
-#[cfg(feature = "iced")]
 pub mod tree;
-#[cfg(feature = "iced")]
-pub mod typography;
 pub mod vis;
 mod window;
 
 pub use address::{Node, Scope, Walk};
-#[cfg(feature = "iced")]
-pub(crate) use controls::{ChromeLeaf, chrome_leaf, header_chevron, tree_rows};
 pub(crate) use event::control_event;
-#[cfg(feature = "masonry")]
-pub(crate) use event::engine_value;
 pub use event::{ControlAction, DragPhase, UiEvent, WindowCommand, WindowEdge};
-#[cfg(feature = "masonry")]
-pub(crate) use hosted::hosted_control_plan;
 pub(crate) use hosted::{HostedControlPlan, Resolving};
 pub use icons::Icon;
 pub(crate) use icons::{Mark, document_icon, tree_icon};
 #[cfg(feature = "iced")]
-pub(crate) use immediate::{
-    Anchored, DropZone, MiniWave, ModuleChrome, Placement, Text, Tree, WheelSurface, frame_overlay,
-};
+pub use immediate::{LayoutPreview, shaped_text};
 pub(crate) use layer::{HostLayer, LayerHit, WindowLayerProgram, place_popover};
-#[cfg(feature = "iced")]
-pub(crate) use layer::{draw_host_layer, window_layer, window_layers};
 pub use model::{
     ReadValue, Reads, StereoLevels, TrackRow, TreeIcon, TreeRow, WaveBucket, WaveformView,
 };
 pub use owner::InputOwner;
-#[cfg(feature = "iced")]
-pub(crate) use picker::{hosted_picker_overlay, scope_picker, sync_picker};
 pub(crate) use picker::{picker_hits, picker_selected_index};
-#[cfg(feature = "iced")]
-pub use preview::LayoutPreview;
-#[cfg(feature = "iced")]
-pub(crate) use skin::IcedSkin;
 pub use skin::Skin;
 pub(crate) use text_input::text_input_layout;
-#[cfg(feature = "iced")]
-pub(crate) use text_input::{search_input, sync_text_input};
-#[cfg(feature = "iced")]
-pub(crate) use track_list::{sync_track_list_scroll, track_list};
-#[cfg(feature = "iced")]
-pub(crate) use tree::{
-    Widget, activate, command, drag, engine, index, publish, scalar, scalar_child, step,
-    toggle_module, window,
-};
-#[cfg(feature = "iced")]
-pub use typography::shaped_text;
-#[cfg(feature = "masonry")]
-pub(crate) use window::{ControlsProgram, TitleProgram};
 pub(crate) use window::{DragGhost, TitleBar, WindowControls, WindowSurface};
+#[cfg(feature = "iced")]
+pub(crate) use {
+    controls::{ChromeLeaf, chrome_leaf, header_chevron, tree_rows},
+    immediate::{
+        Anchored, DropZone, MiniWave, ModuleChrome, Placement, Text, Tree, WheelSurface,
+        frame_overlay,
+    },
+    layer::{draw_host_layer, window_layer, window_layers},
+    picker::{hosted_picker_overlay, scope_picker, sync_picker},
+    skin::IcedSkin,
+    text_input::{search_input, sync_text_input},
+    track_list::{sync_track_list_scroll, track_list},
+    tree::{
+        Widget, activate, command, drag, engine, index, publish, scalar, scalar_child, step,
+        toggle_module, window,
+    },
+};
+#[cfg(feature = "masonry")]
+pub(crate) use {
+    event::engine_value,
+    hosted::hosted_control_plan,
+    window::{ControlsProgram, TitleProgram},
+};
 
 pub use crate::atoms::wave::zoom_math::{DEFAULT_ZOOM, zoom_in, zoom_out};
