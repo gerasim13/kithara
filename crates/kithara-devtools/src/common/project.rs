@@ -363,6 +363,11 @@ pub struct TestNetBackendConfig {
 #[serde(default, deny_unknown_fields)]
 pub struct TestLaneConfig {
     pub default_flash: Option<bool>,
+    /// Whether the poll-blocking detector is on unless the caller says
+    /// otherwise. A lane that answers a question the detector is part of should
+    /// say so here rather than leave it to whichever CI file invokes it — two
+    /// schedulers running the same lane must run the same lane.
+    pub default_no_block: Option<bool>,
     pub passthrough: String,
     pub program: String,
     pub default_features: Vec<String>,

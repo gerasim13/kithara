@@ -10,7 +10,6 @@ use kithara::{
             Arc,
             atomic::{AtomicU64, Ordering},
         },
-        thread,
         time::Duration,
     },
     stream::{AudioCodec, ContainerFormat, MediaInfo},
@@ -19,6 +18,7 @@ use kithara_broadcast::{Broadcast, BroadcastConfig, BroadcastHandle, FeedChunk, 
 use kithara_integration_tests::{
     goertzel::goertzel_magnitude,
     signal_pcm::signal::{SignalFn, SineWave},
+    waits::wait_until,
 };
 use url::Url;
 
@@ -31,6 +31,10 @@ pub(super) const GRACE: usize = 3;
 pub(super) const SEGMENT_FRAMES: u64 = 24_000;
 
 const CHUNK_FRAMES: u64 = 2_400;
+
+/// Non-progress watchdog for [`Origin::advance_to`]. The wait resolves the
+/// instant the packager reports the segment, so this only bounds a wedged one.
+const PACKAGER_DEADLINE: Duration = Duration::from_secs(20);
 
 const TONE_MARGIN: f64 = 50.0;
 
@@ -204,14 +208,18 @@ impl Origin {
         }
     }
 
-    pub(super) fn advance_to(&self, segments: u64) {
+    pub(super) async fn advance_to(&self, segments: u64) {
         self.released.fetch_max(
             SEGMENT_FRAMES * segments + SEGMENT_FRAMES / 2,
             Ordering::Release,
         );
-        while self.handle.status().segments < segments {
-            thread::paced_backoff(Duration::from_millis(1));
-        }
+        wait_until(
+            PACKAGER_DEADLINE,
+            "the packager reaches the segment",
+            || self.handle.status().segments >= segments,
+        )
+        .await
+        .expect("the packager keeps up with the released frames");
     }
 
     pub(super) fn drop_samples(&self, samples: u64) {

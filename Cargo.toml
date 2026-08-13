@@ -35,13 +35,17 @@ members = [
     "xtask",
 ]
 exclude = ["third-party/symphonia-bundle-mp3"]
+# `kithara-broadcast` is absent on purpose: live HLS packaging is opt-in, and a
+# default build should not carry it. It is reachable by name
+# (`-p kithara-broadcast`) and through `kithara-app`'s `broadcast` feature.
+# Note this alone does not keep it out of the gate — `--workspace` selects every
+# member regardless, so the test lanes exclude it explicitly.
 default-members = [
     "crates/kithara",
     "crates/kithara-abr",
     "crates/kithara-apple",
     "crates/kithara-assets",
     "crates/kithara-audio",
-    "crates/kithara-broadcast",
     "crates/kithara-bufpool",
     "crates/kithara-decode",
     "crates/kithara-drm",

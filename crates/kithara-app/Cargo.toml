@@ -18,10 +18,20 @@ default = ["gui", "analysis-waveform", "beat-nn", "stretch-signalsmith"]
 # HTTP stack lands in each build. The dev-only kithara-net mirrors the same
 # per-target split (see the target `dev-dependencies` below) so test builds
 # stay single-stack too.
-client-reqwest = ["kithara/client-reqwest", "kithara-broadcast/client-reqwest", "kithara-queue/client-reqwest"]
-client-wreq = ["kithara/client-wreq", "kithara-broadcast/client-wreq", "kithara-queue/client-wreq"]
-tls-rustls = ["kithara/tls-rustls", "kithara-broadcast/tls-rustls", "kithara-queue/tls-rustls"]
-tls-native = ["kithara/tls-native", "kithara-broadcast/tls-native", "kithara-queue/tls-native"]
+# The `?` is what keeps the backend choice from dragging the optional
+# `broadcast` dependency in: it forwards to `kithara-broadcast` when something
+# else already enabled it, and does nothing otherwise.
+client-reqwest = ["kithara/client-reqwest", "kithara-broadcast?/client-reqwest", "kithara-queue/client-reqwest"]
+client-wreq = ["kithara/client-wreq", "kithara-broadcast?/client-wreq", "kithara-queue/client-wreq"]
+tls-rustls = ["kithara/tls-rustls", "kithara-broadcast?/tls-rustls", "kithara-queue/tls-rustls"]
+tls-native = ["kithara/tls-native", "kithara-broadcast?/tls-native", "kithara-queue/tls-native"]
+# Put the session mix on air over live HLS. Off by default: the packager is a
+# whole HTTP origin plus an AAC encoder, and neither the shipped desktop build
+# nor any FFI surface has a reason to carry it until someone asks. With it off,
+# the bar's phase machine compiles against a packager whose stream type has no
+# values, so the on-air half is unconstructable — the studio bar keeps its
+# shape and not one call site carries a gate.
+broadcast = ["dep:kithara-broadcast", "dep:ringbuf"]
 gui = ["dep:iced", "dep:kithara-ui"]
 # NN beat/downbeat detection.
 beat-nn = ["kithara/beat-nn"]
@@ -83,8 +93,8 @@ url = { workspace = true }
 # backend at all.
 [target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))'.dependencies]
 kithara = { workspace = true, default-features = false, features = ["symphonia", "client-reqwest", "tls-rustls"] }
-kithara-broadcast = { workspace = true, default-features = false, features = ["client-reqwest", "tls-rustls"] }
-ringbuf = { workspace = true }
+kithara-broadcast = { workspace = true, default-features = false, optional = true, features = ["client-reqwest", "tls-rustls"] }
+ringbuf = { workspace = true, optional = true }
 
 # HE-AAC v1/v2 through libfdk. Its vendored `FDK_archdef.h` has no branch for
 # MSVC on ARM64 and stops at `fatal error C1021: invalid preprocessor command`,
@@ -94,8 +104,8 @@ kithara = { workspace = true, default-features = false, features = ["fdk-aac"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 kithara = { workspace = true, default-features = false, features = ["apple", "client-wreq"] }
-kithara-broadcast = { workspace = true, default-features = false, features = ["client-wreq"] }
-ringbuf = { workspace = true }
+kithara-broadcast = { workspace = true, default-features = false, optional = true, features = ["client-wreq"] }
+ringbuf = { workspace = true, optional = true }
 
 [build-dependencies]
 serde = { workspace = true }

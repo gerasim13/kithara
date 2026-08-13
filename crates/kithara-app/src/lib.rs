@@ -3,6 +3,9 @@ compile_error!("Enable at least one frontend feature: `gui` or `lib-only`");
 
 mod analysis;
 pub mod baked;
+// The studio bar's REC cell is the only caller, so a `lib-only` build has no
+// use for it and does not compile it.
+#[cfg(feature = "gui")]
 mod broadcast;
 pub mod catalog;
 pub mod config;

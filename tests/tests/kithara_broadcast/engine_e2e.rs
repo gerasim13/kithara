@@ -10,7 +10,6 @@ use kithara::{
             Arc,
             atomic::{AtomicU64, Ordering},
         },
-        thread,
         time::Duration,
     },
     play::{Cmd, MixTapWriter, Resource, SessionDispatcher},
@@ -18,6 +17,7 @@ use kithara::{
 use kithara_broadcast::{Broadcast, BroadcastConfig, BroadcastHandle, RingFeed};
 use kithara_integration_tests::{
     audio_mock::TestPcmReader, offline::resource_from_reader, signal_pcm::signal::SineWave,
+    waits::wait_until,
 };
 use ringbuf::{HeapRb, traits::Split};
 use url::Url;
@@ -97,7 +97,9 @@ struct OnAir {
 impl OnAir {
     /// Polls the segment count must repeat before the packager counts as idle.
     const SETTLED_POLLS: usize = 3;
-    const SETTLE_POLL: Duration = Duration::from_millis(20);
+    /// Non-progress watchdog for [`Self::wait_until_drained`]: both waits
+    /// resolve as soon as the packager reports, so this bounds a wedged one.
+    const DRAIN_DEADLINE: Duration = Duration::from_secs(20);
 
     fn start(harness: &OfflinePlayerHarness, ring_samples: usize) -> Self {
         let (pcm, samples) = HeapRb::<f32>::new(ring_samples).split();
@@ -142,20 +144,27 @@ impl OnAir {
     /// stopped, the segment count settles once there is nothing left to
     /// package. Audio pushed after that starts against an empty ring, so a
     /// render that fits the ring cannot break the stream a second time.
-    fn wait_until_drained(&self) {
+    async fn wait_until_drained(&self) {
         let lost = self.tap_drops();
-        while self.handle.status().dropped_samples < lost {
-            thread::paced_backoff(Duration::from_millis(1));
-        }
+        wait_until(Self::DRAIN_DEADLINE, "the packager reads the drops", || {
+            self.handle.status().dropped_samples >= lost
+        })
+        .await
+        .expect("the packager accounts for every dropped sample");
 
+        // `u64::MAX` cannot be a segment count, so the first observation always
+        // resets the counter: the settle window is three *later* polls, which
+        // is what the loop this replaced measured.
         let mut settled = 0;
-        let mut last = self.handle.status().segments;
-        while settled < Self::SETTLED_POLLS {
-            thread::paced_backoff(Self::SETTLE_POLL);
+        let mut last = u64::MAX;
+        wait_until(Self::DRAIN_DEADLINE, "the segment count settles", || {
             let segments = self.handle.status().segments;
             settled = if segments == last { settled + 1 } else { 0 };
             last = segments;
-        }
+            settled >= Self::SETTLED_POLLS
+        })
+        .await
+        .expect("the packager stops producing segments once the ring is empty");
     }
 
     async fn get(&self, path: &str) -> Vec<u8> {
@@ -249,7 +258,7 @@ async fn a_ring_the_render_outruns_breaks_the_served_playlist() {
         "the render must outrun a {TIGHT_RING}-sample ring"
     );
 
-    on_air.wait_until_drained();
+    on_air.wait_until_drained().await;
     render_tone(&harness, TAIL_FRAMES);
     on_air.handle.stop();
 
