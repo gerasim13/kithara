@@ -493,6 +493,32 @@ mod tests {
     }
 
     #[kithara::test]
+    fn keylocked_double_speed_preserves_pitch() {
+        let channels = usize::from(Consts::CH);
+        let in_frames = usize::try_from(Consts::SR).unwrap() * 2;
+        let controls = StretchControls::new(2.0);
+        controls.set_keylock(true);
+        let out = render(&mut processor(controls), &sine(in_frames));
+        let out_frames = out.len() / channels;
+        assert!(
+            out_frames * 10 >= in_frames * 4 && out_frames * 10 <= in_frames * 6,
+            "key-locked 2x should roughly halve duration, got {out_frames} from {in_frames}"
+        );
+
+        let mono: Vec<f32> = out.iter().step_by(channels).copied().collect();
+        assert!(
+            mono.len() >= Consts::N,
+            "not enough key-locked output for the pitch window"
+        );
+        let peak = dominant_bin(&mono);
+        let want = expected_bin(Consts::F0);
+        assert!(
+            peak.abs_diff(want) <= 3,
+            "key-locked playback rate shifted pitch: peak bin {peak}, expected {want}"
+        );
+    }
+
+    #[kithara::test]
     fn output_meta_preserves_decoder_timeline() {
         let channels = usize::from(Consts::CH);
         let mut fx = keylocked(StretchKind::default(), 0.5);

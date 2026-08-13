@@ -4,7 +4,7 @@ use bytes::Bytes;
 use dashmap::DashMap;
 use kithara::{
     abr::AbrMode,
-    audio::generate_log_spaced_bands,
+    audio::{StretchControls, generate_log_spaced_bands},
     bufpool::Region,
     events::ScopeLabel,
     hls::{KeyOptions, KeyProcessorRegistry},
@@ -41,6 +41,17 @@ fn build_processor_closure(
             processor.process_key(key.to_vec(), salt.clone()),
         ))
     })
+}
+
+fn player_timestretch() -> Arc<StretchControls> {
+    let controls = StretchControls::new(1.0);
+    #[cfg(all(
+        feature = "apple",
+        target_vendor = "apple",
+        any(feature = "stretch-signalsmith", feature = "stretch-bungee")
+    ))]
+    controls.set_keylock(true);
+    controls
 }
 
 /// Build the default `NetOptions`. The `dev` feature enables the
@@ -195,6 +206,7 @@ impl NativeInner {
         let region = store.region().clone();
         let player_config = PlayerConfig::builder()
             .eq_layout(generate_log_spaced_bands(eq_band_count as usize))
+            .timestretch(player_timestretch())
             .cancel(cancel.child())
             .byte_pool(region.byte_pool())
             .pcm_pool(region.pcm_pool())
@@ -633,6 +645,25 @@ impl Drop for NativeInner {
 mod tests {
     use super::*;
     use crate::observer::FfiKeyProcessor;
+
+    #[cfg(all(
+        feature = "apple",
+        target_vendor = "apple",
+        any(feature = "stretch-signalsmith", feature = "stretch-bungee")
+    ))]
+    #[kithara::test]
+    fn apple_player_defaults_to_pitch_preserving_rate() {
+        assert!(player_timestretch().keylock());
+    }
+
+    #[cfg(all(
+        any(feature = "stretch-signalsmith", feature = "stretch-bungee"),
+        not(all(feature = "apple", target_vendor = "apple"))
+    ))]
+    #[kithara::test]
+    fn non_apple_player_keeps_vinyl_rate_default() {
+        assert!(!player_timestretch().keylock());
+    }
 
     struct TaggedProcessor(u8);
 

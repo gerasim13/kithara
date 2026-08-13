@@ -20,8 +20,9 @@ sole decoder on-device.
 - `xtask apple` builds frameworks with `uniffi,apple,dev,stretch-signalsmith`. The crate-local
   `apple` feature forwards `kithara/apple-fused-src` (plus `apple-net` and the matching
   `kithara-play` / `kithara-queue` fused-SRC features), so Apple AudioToolbox decodes directly to the
-  host rate through decoder-embedded resampler placement. That set intentionally enables neither
-  `resample-rubato`, `analysis-beat`, nor `analysis-waveform`.
+  host rate through decoder-embedded resampler placement. Native Apple players enable key-lock on
+  their stretch controls, so playback-rate changes preserve pitch. That set intentionally enables
+  neither `resample-rubato`, `analysis-beat`, nor `analysis-waveform`.
 - `xtask android` builds release JNI libraries with `uniffi,android,stretch-signalsmith` (debug adds
   `dev,test`). The facade `android` feature keeps the fixed-ratio rubato stage (`resample-rubato`)
   and `analysis-beat` enabled; Android does not use the Apple fused-SRC path.
