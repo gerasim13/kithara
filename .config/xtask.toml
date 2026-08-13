@@ -213,10 +213,15 @@ default_flash = false
 # them empty and report a green suite that ran none of its seven tests.
 [test.lanes.harness]
 program = "cargo"
-# `kithara-net` refuses to compile without an HTTP backend, and nothing in this
-# package selection turns one on — in the product suite the choice arrives from
-# `kithara`, which is not built here.
-default_features = ["kithara-test-utils/client-reqwest"]
+# `kithara-net` refuses to compile without an HTTP backend, and the backend in
+# turn refuses to compile without a TLS one; nothing in this package selection
+# turns either on, because in the product suite both arrive from `kithara`,
+# which is not built here. This lane names the same pair `kithara-net` takes as
+# its own default.
+default_features = [
+  "kithara-test-utils/client-reqwest",
+  "kithara-test-utils/tls-rustls",
+]
 prefix_args = [
   "nextest",
   "run",
