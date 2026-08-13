@@ -1,5 +1,5 @@
 #[cfg(all(test, feature = "masonry"))]
-mod conformance;
+pub(crate) mod conformance;
 #[cfg(feature = "iced")]
 mod iced_canvas;
 #[cfg(feature = "vello")]

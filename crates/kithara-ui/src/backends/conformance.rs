@@ -22,7 +22,7 @@ use kithara_test_utils::kithara;
 use vello::{
     AaConfig, AaSupport, RenderParams, Renderer, RendererOptions, Scene,
     kurbo::Affine,
-    peniko::color::palette,
+    peniko::{Color as VelloColor, color::palette},
     wgpu::{
         BufferDescriptor, BufferUsages, CommandEncoderDescriptor, Device, DeviceDescriptor,
         Extent3d, Instance, InstanceDescriptor, MapMode, PollType, Queue, RequestAdapterOptions,
@@ -465,7 +465,15 @@ fn through_iced(list: &DrawList) -> Vec<u8> {
 
 /// A wgpu device with no surface, and one scene rasterised through it.
 fn rasterise(scene: &Scene) -> Result<Vec<u8>, String> {
-    let (width, height) = Fixture::SURFACE;
+    rasterise_at(scene, Fixture::SURFACE, palette::css::BLACK)
+}
+
+pub(crate) fn rasterise_at(
+    scene: &Scene,
+    size: (u32, u32),
+    base: VelloColor,
+) -> Result<Vec<u8>, String> {
+    let (width, height) = size;
     let instance = Instance::new(&InstanceDescriptor::default());
     let adapter = block_on(instance.request_adapter(&RequestAdapterOptions::default()))
         .map_err(|error| format!("no wgpu adapter: {error}"))?;
@@ -502,7 +510,7 @@ fn rasterise(scene: &Scene) -> Result<Vec<u8>, String> {
             scene,
             &texture.create_view(&TextureViewDescriptor::default()),
             &RenderParams {
-                base_color: palette::css::BLACK,
+                base_color: base,
                 width,
                 height,
                 antialiasing_method: AaConfig::Area,

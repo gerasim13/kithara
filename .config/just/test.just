@@ -126,10 +126,10 @@ e2e-resamplers *ARGS:
 ui:
     #!/usr/bin/env bash
     set -euo pipefail
-    just test run --lane=ui
-    just test run --lane=ui-doc
     dir="$PWD/target/parity"
-    rm -rf "$dir/iced" "$dir/masonry" "$dir/masks" "$dir/studio"
+    rm -rf "$dir/iced" "$dir/masonry" "$dir/masks" "$dir/scenario" "$dir/studio"
+    KITHARA_UI_SCENARIO_CAPTURE="$dir/scenario" just test run --lane=ui
+    just test run --lane=ui-doc
     gallery=(cargo run -p kithara-ui --example gallery --features kithara-ui/masonry)
     KITHARA_GALLERY_CAPTURE_OFFSCREEN="$dir/iced" "${gallery[@]}"
     KITHARA_GALLERY_CAPTURE_MASONRY="$dir/masonry" "${gallery[@]}"

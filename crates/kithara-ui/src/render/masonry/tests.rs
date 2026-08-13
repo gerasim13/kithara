@@ -1793,7 +1793,7 @@ const CONTROL_CENSUS: &[(&str, Paints, &str)] = &[
     (
         "Table",
         Paints::Yes,
-        r#"Table(id: "control", read: Model(id: "library.visible_tracks"), columns: [Title])"#,
+        r#"Table(id: "control", read: Model(id: "library.visible_tracks"), columns: [(id: "title", label: "TITLE", style: Primary, width: 180.0)])"#,
     ),
     (
         "Tree",
@@ -2258,7 +2258,7 @@ fn a_mounted_table_draws_rows_that_arrive_during_refresh() {
             Table(
                 id: "tracks",
                 read: Model(id: "library.visible_tracks"),
-                columns: [Title],
+                columns: [(id: "title", label: "TITLE", style: Primary, width: 180.0)],
             ),
         ])"#,
         &registry,
@@ -2296,7 +2296,7 @@ fn a_mounted_table_repaints_the_row_under_the_pointer() {
             Table(
                 id: "tracks",
                 read: Model(id: "library.visible_tracks"),
-                columns: [Title],
+                columns: [(id: "title", label: "TITLE", style: Primary, width: 180.0)],
             ),
         ])"#,
         &registry,

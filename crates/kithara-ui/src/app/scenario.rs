@@ -7,7 +7,7 @@ use masonry::vello::Scene;
 
 use super::{App, Config, Ui};
 use crate::{
-    draw::{Pt, Rect},
+    draw::{Pt, Rect, Rgba},
     interact::{Input, MOUSE, PointerInput, PointerPhase, Scroll},
     render::{Reads, UiEvent},
 };
@@ -83,6 +83,10 @@ impl<'config, A: App> Scenario<'config, A> {
         self.ui
             .scene()
             .unwrap_or_else(|error| panic!("the scenario must draw: {error}"))
+    }
+
+    pub(super) const fn background(&self) -> Rgba {
+        self.ui.background()
     }
 
     fn rect(&self, path: &str) -> Rect {

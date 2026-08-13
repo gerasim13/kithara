@@ -1,3 +1,10 @@
+use std::{
+    env,
+    fs::{File, create_dir_all},
+    io::BufWriter,
+    path::{Path, PathBuf},
+};
+
 use kithara_platform::time::Duration;
 use kithara_test_utils::kithara;
 use masonry::vello::Scene;
@@ -184,6 +191,70 @@ impl App for Board {
     fn update(&mut self, _event: UiEvent) {}
 }
 
+struct InteractionRegistry {
+    dial: EndpointDesc,
+    flag: EndpointDesc,
+}
+
+impl Default for InteractionRegistry {
+    fn default() -> Self {
+        Self {
+            dial: EndpointDesc::new(ValueKind::Scalar),
+            flag: EndpointDesc::new(ValueKind::Bool),
+        }
+    }
+}
+
+impl EndpointRegistry for InteractionRegistry {
+    fn endpoint(&self, category: EndpointCategory, id: &EndpointId) -> Option<&EndpointDesc> {
+        if category != EndpointCategory::Model {
+            return None;
+        }
+        match id.0.as_str() {
+            "fixture.dial" => Some(&self.dial),
+            "fixture.flag" => Some(&self.flag),
+            _ => None,
+        }
+    }
+}
+
+struct InteractionBoard {
+    active: bool,
+    value: f64,
+}
+
+impl Reads for InteractionBoard {
+    fn get(&self, endpoint: &str) -> Option<ReadValue<'_>> {
+        let id = endpoint.split_once('@').map_or(endpoint, |(id, _)| id);
+        match id {
+            "fixture.dial" => Some(ReadValue::Scalar(self.value)),
+            "fixture.flag" => Some(ReadValue::Bool(self.active)),
+            _ => None,
+        }
+    }
+}
+
+impl App for InteractionBoard {
+    fn document(&self) -> &str {
+        "interactions.klayout.ron"
+    }
+
+    fn reads<R>(&self, with: impl FnOnce(&dyn Reads) -> R) -> R {
+        with(self)
+    }
+
+    fn update(&mut self, event: UiEvent) {
+        let UiEvent::Control { path, action } = event else {
+            return;
+        };
+        match action {
+            ControlAction::Activate if path == "demo/fire" => self.active = true,
+            ControlAction::SetScalar(value) if path == "demo/dial" => self.value = value,
+            _ => {}
+        }
+    }
+}
+
 /// A document holding one control, so a gesture aimed at the middle of the
 /// window lands on it whatever the control turns out to be.
 ///
@@ -258,6 +329,24 @@ fn board() -> MemResolver {
                 Chip(id: "one", size: Some((w: Fixed(80.0), h: Fixed(40.0))), label: "ONE", read: Model(id: "fixture.flag")),
                 Chip(id: "two", size: Some((w: Fixed(80.0), h: Fixed(40.0))), label: "TWO", read: Model(id: "fixture.flag")),
                 Chip(id: "three", size: Some((w: Fixed(80.0), h: Fixed(40.0))), label: "THREE", read: Model(id: "fixture.flag")),
+            ]))"#,
+    );
+    resolver
+}
+
+fn interaction_board() -> MemResolver {
+    let mut resolver = MemResolver::default();
+    resolver.insert(
+        "interactions.klayout.ron",
+        r#"(schema: "kithara.layout", version: 1, id: "interactions",
+            root: Module(instance: "demo", source: "interactions.kmodule.ron", size: (w: Fill, h: Fill)))"#,
+    );
+    resolver.insert(
+        "interactions.kmodule.ron",
+        r#"(schema: "kithara.module", version: 1, id: "gallery-knobs", chrome: Plain,
+            root: Row(size: (w: Fill, h: Fill), gap: 12.0, pad: 12.0, children: [
+                Chip(id: "fire", size: Some((w: Fixed(80.0), h: Fixed(40.0))), label: "FIRE", read: Model(id: "fixture.flag")),
+                Knob(id: "dial", size: (w: Fixed(38.0), h: Fixed(49.0)), read: Model(id: "fixture.dial")),
             ]))"#,
     );
     resolver
@@ -441,6 +530,88 @@ fn controls_on_one_page_publish_only_their_own_activation() {
     }
 }
 
+#[kithara::test]
+fn named_press_drag_and_wheel_publish_events_and_leave_a_picture() {
+    const SIZE: (u32, u32) = (240, 120);
+
+    let endpoints = InteractionRegistry::default();
+    let resolver = interaction_board();
+    let skin = skin();
+    let mut scenario = Scenario::mount(
+        InteractionBoard {
+            active: false,
+            value: 0.25,
+        },
+        Config::builder()
+            .endpoints(&endpoints)
+            .resolver(&resolver)
+            .skin(&skin)
+            .skin_doc(builtin::skin_doc())
+            .build(),
+        SIZE,
+        1.0,
+    );
+    let capture = scenario_capture_dir();
+
+    let mark = scenario.published().len();
+    scenario.press("demo/fire");
+    assert_eq!(
+        &scenario.published()[mark..],
+        [UiEvent::Control {
+            path: "demo/fire".to_owned(),
+            action: ControlAction::Activate,
+        }]
+    );
+    photograph_scenario(&mut scenario, capture.as_deref(), "01-press", SIZE);
+    let mark = scenario.published().len();
+    scenario.release("demo/fire");
+    assert_eq!(scenario.published().len(), mark);
+
+    let mark = scenario.published().len();
+    scenario.drag(
+        "demo/dial",
+        Pt { x: 0.5, y: 1.0 },
+        Pt { x: 0.5, y: 0.25 },
+        4,
+    );
+    let drag = &scenario.published()[mark..];
+    let values = drag
+        .iter()
+        .filter_map(|event| match event {
+            UiEvent::Control {
+                path,
+                action: ControlAction::SetScalar(value),
+            } if path == "demo/dial" => Some(*value),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert!(values.len() > 1, "the named drag must publish every step");
+    assert!(
+        values.windows(2).all(|pair| pair[1] > pair[0]),
+        "the named upward drag published {values:?}"
+    );
+    photograph_scenario(&mut scenario, capture.as_deref(), "02-drag", SIZE);
+
+    let before = scenario.app().value;
+    let mark = scenario.published().len();
+    scenario.wheel("demo/dial", -1.0);
+    let [
+        UiEvent::Control {
+            path,
+            action: ControlAction::SetScalar(value),
+        },
+    ] = &scenario.published()[mark..]
+    else {
+        panic!("the named wheel must publish one scalar event")
+    };
+    assert_eq!(path, "demo/dial");
+    assert!(
+        *value > before,
+        "the wheel must raise the dial from {before}"
+    );
+    photograph_scenario(&mut scenario, capture.as_deref(), "03-wheel", SIZE);
+}
+
 /// The page behind a document is the skin's, and a host clears its target to it
 /// before the scene lands. The retained window's first answer was black, which
 /// showed through wherever a document left its rectangle bare and read as a
@@ -536,6 +707,41 @@ fn geometry(scene: &Scene) -> u64 {
         })
 }
 
+fn scenario_capture_dir() -> Option<PathBuf> {
+    let dir = env::var_os("KITHARA_UI_SCENARIO_CAPTURE").map(PathBuf::from)?;
+    create_dir_all(&dir)
+        .unwrap_or_else(|error| panic!("create scenario capture {}: {error}", dir.display()));
+    Some(dir)
+}
+
+fn photograph_scenario(
+    scenario: &mut Scenario<'_, InteractionBoard>,
+    dir: Option<&Path>,
+    name: &str,
+    size: (u32, u32),
+) {
+    let Some(dir) = dir else {
+        return;
+    };
+    let background = scenario.background().into();
+    let scene = scenario.scene();
+    let rgba = crate::backends::conformance::rasterise_at(&scene, size, background)
+        .unwrap_or_else(|error| panic!("rasterise scenario {name}: {error}"));
+    let path = dir.join(format!("{name}.png"));
+    write_png(&path, &rgba, size).unwrap_or_else(|error| panic!("write scenario {name}: {error}"));
+}
+
+fn write_png(path: &Path, rgba: &[u8], size: (u32, u32)) -> Result<(), String> {
+    let file = File::create(path).map_err(|error| format!("create {}: {error}", path.display()))?;
+    let mut encoder = png::Encoder::new(BufWriter::new(file), size.0, size.1);
+    encoder.set_color(png::ColorType::Rgba);
+    encoder.set_depth(png::BitDepth::Eight);
+    encoder
+        .write_header()
+        .and_then(|mut writer| writer.write_image_data(rgba))
+        .map_err(|error| format!("encode {}: {error}", path.display()))
+}
+
 fn resolver() -> MemResolver {
     let mut resolver = MemResolver::default();
     for name in ["lit", "dim"] {
@@ -615,6 +821,7 @@ fn an_idle_ui_skips_its_following_frame() {
         .unwrap_or_else(|error| panic!("the idle fixture must mount: {error}"));
 
     assert!(ui.needs_frame(), "the mounted document must paint once");
+    ui.frame(Duration::from_millis(16));
     ui.render()
         .unwrap_or_else(|error| panic!("the idle fixture must draw: {error}"));
     assert!(!ui.complete_frame());
