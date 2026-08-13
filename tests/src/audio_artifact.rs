@@ -13,6 +13,9 @@ const WAV_BUFFER_BYTES: usize = 64 * 1024;
 const WAV_BATCH_SAMPLES: usize = 4 * 1024;
 static ATTEMPT: AtomicU64 = AtomicU64::new(0);
 
+/// Write listening WAV files and a manifest when the artifact directory is set.
+///
+/// Returns `Ok(None)` when unset and errors on invalid input or filesystem I/O.
 pub fn write_audio_artifact<T: Serialize>(
     case: &str,
     sample_rate: u32,

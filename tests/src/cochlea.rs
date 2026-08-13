@@ -3,18 +3,26 @@ use serde::Serialize;
 
 const WINDOW_MS: f64 = 5.0;
 
+/// Cochlea measurements used by final-PCM acceptance tests and manifests.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[non_exhaustive]
 pub struct CochleaReport {
+    /// Number of threshold-silent analysis windows.
     pub silent_segments: usize,
+    /// Detected onset timestamps in milliseconds.
     pub onset_times_ms: Vec<f64>,
+    /// Number of samples at or beyond full scale.
     pub clipped_samples: usize,
+    /// Whether the measured true peak exceeds 0 dBTP.
     pub true_peak_over_0dbtp: bool,
+    /// Leading threshold-silence duration in milliseconds.
     pub leading_silence_ms: f64,
+    /// Trailing threshold-silence duration in milliseconds.
     pub trailing_silence_ms: f64,
 }
 
 impl CochleaReport {
+    /// Measure final interleaved PCM with Cochlea.
     #[must_use]
     pub fn measure(samples: &[f32], channels: u16, sample_rate: u32) -> Self {
         let audio = Audio {
@@ -40,12 +48,14 @@ impl CochleaReport {
         }
     }
 
+    /// Return the number of detected onsets.
     #[must_use]
     pub fn onset_count(&self) -> usize {
         self.onset_times_ms.len()
     }
 }
 
+/// Compare candidate continuity against a time-aligned control report.
 #[must_use]
 pub fn continuity_failures(
     label: &str,
@@ -92,6 +102,9 @@ pub fn continuity_failures(
     failures
 }
 
+/// Prove that the shared comparator rejects an injected dropout and clipped frame.
+///
+/// Panics if the control is invalid or either mutation is not detected.
 pub fn assert_oracle_load_bearing(
     control: &[f32],
     channels: u16,

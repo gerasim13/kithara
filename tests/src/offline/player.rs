@@ -98,7 +98,6 @@ impl OfflinePlayer {
     /// Set the transition duration used by the next load.
     ///
     /// # Panics
-    ///
     /// Panics if the command channel is full.
     pub fn set_fade_duration(&mut self, seconds: f32) {
         self.control
