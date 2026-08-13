@@ -1,7 +1,7 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 use kithara::{
-    audio::{Audio, AudioConfig, PcmRead, ReadOutcome},
+    audio::{Audio, AudioConfig, ReadOutcome},
     events::{AudioEvent, Event, SeekEpoch, SeekLifecycleStage},
     platform::time::{self, Duration, Instant},
     stream::Stream,
