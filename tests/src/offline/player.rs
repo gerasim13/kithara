@@ -6,7 +6,7 @@ use kithara::{
     platform::sync::Arc,
     play::{
         PlayerNode, Resource, SharedEq, TrackTransition,
-        bridge::{PlaybackShared, PlayerCmd, SlotControl, slot_channels},
+        bridge::{PlaybackShared, PlayerCmd, RtMetricsSnapshot, SlotControl, slot_channels},
         rt::track::PlayerResource,
     },
 };
@@ -93,6 +93,24 @@ impl OfflinePlayer {
             .cmd_tx
             .try_push(PlayerCmd::SetPaused(false))
             .expect("BUG: send SetPaused");
+    }
+
+    /// Set the transition duration used by the next load.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the command channel is full.
+    pub fn set_fade_duration(&mut self, seconds: f32) {
+        self.control
+            .cmd_tx
+            .try_push(PlayerCmd::SetFadeDuration(seconds))
+            .expect("BUG: send SetFadeDuration");
+    }
+
+    /// Snapshot the real-time counters owned by this player slot.
+    #[must_use]
+    pub fn metrics(&self) -> RtMetricsSnapshot {
+        self.playback.metrics().snapshot()
     }
 
     /// Current playback position in seconds.
