@@ -5,8 +5,27 @@ name: Stress
 # is more than a shared machine can spare.
 on:
   workflow_call:
+    inputs:
+      revision:
+        description: ref or SHA to test; empty uses the workflow event SHA
+        required: false
+        type: string
+      filter:
+        description: nextest expression selecting the tests to repeat
+        required: false
+        default: all()
+        type: string
+      count:
+        description: how many times to repeat the selection
+        required: false
+        default: "50"
+        type: string
   workflow_dispatch:
     inputs:
+      revision:
+        description: ref or SHA to test; empty uses the workflow event SHA
+        required: false
+        type: string
       filter:
         description: nextest expression selecting the tests to repeat
         required: false
@@ -28,20 +47,65 @@ jobs:
     # `KITHARA_RUNNER_LABELS` is set only where runners are attached, so a
     # copy of this repository without them never starts the job.
     # See .github/workflows/ci.yml.
-    if: vars.KITHARA_RUNNER_LABELS != '' && github.actor == github.repository_owner
+    if: >-
+      github.event.repository.fork == true
+      && github.actor == github.repository_owner
+      && vars.KITHARA_RUNNER_LABELS != ''
     runs-on: ${{ fromJSON(vars.KITHARA_RUNNER_LABELS) }}
     timeout-minutes: 720
 
     steps:
-      - name: Checkout code
+      # The controller owns the current workflow and reporting contract. The
+      # subject may be an older SHA that predates both of them.
+      - name: Checkout controller
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: controller
+          ref: ${{ github.sha }}
+
+      - name: Checkout subject
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: subject
+          ref: ${{ inputs.revision || github.sha }}
 
       # Dispatch inputs reach the command through the environment: interpolating
       # them into the script would let the caller write the script.
       - name: Repeat the selection
-        # A scheduled run carries no inputs at all, so the defaults live here
-        # too rather than only in the dispatch form.
+        working-directory: subject
+        # The fallback also covers event contexts where an optional input is
+        # absent rather than materialized as its declared default.
         env:
           FILTER: ${{ inputs.filter || 'all()' }}
           COUNT: ${{ inputs.count || '50' }}
-        run: just test run -E "$FILTER" --stress-count "$COUNT"
+        run: just test run --profile stress --config-file "$GITHUB_WORKSPACE/controller/.config/nextest.toml" -E "$FILTER" --stress-count "$COUNT"
+
+      - name: Summarize the stress evidence
+        if: always()
+        working-directory: controller
+        env:
+          REVISION: ${{ inputs.revision || github.sha }}
+          FILTER: ${{ inputs.filter || 'all()' }}
+          COUNT: ${{ inputs.count || '50' }}
+        run: |
+          just tooling xtask stress-report --allow-missing --expected-count "$COUNT" \
+            --junit "$GITHUB_WORKSPACE/subject/target/nextest/stress/junit.xml" \
+            --output "$GITHUB_WORKSPACE/subject/target/stress-report.md"
+          {
+            echo
+            echo "## Run context"
+            echo
+            echo "- Revision: \`$REVISION\`"
+            echo "- Filter: \`$FILTER\`"
+            echo "- Expected iterations: \`$COUNT\`"
+          } >> "$GITHUB_WORKSPACE/subject/target/stress-report.md"
+          cat "$GITHUB_WORKSPACE/subject/target/stress-report.md" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload the stress evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: stress-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            subject/target/nextest/stress/junit.xml
+            subject/target/stress-report.md

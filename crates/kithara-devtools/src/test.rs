@@ -3,7 +3,10 @@ use std::{collections::BTreeSet, path::Path, process::Command};
 use anyhow::{Context, Result, bail};
 use clap::Args;
 
-use crate::common::project::{ProjectConfig, TestCommandConfig, TestLaneConfig};
+use crate::{
+    common::project::{ProjectConfig, TestCommandConfig, TestLaneConfig},
+    verdict::ChildFailure,
+};
 
 #[derive(Debug, Args)]
 #[command(trailing_var_arg = true)]
@@ -151,10 +154,10 @@ pub(crate) fn run(args: &TestArgs) -> Result<()> {
         .status()
         .with_context(|| format!("failed to run test lane `{lane_name}`: {}", lane.program))?;
     if !status.success() {
-        bail!(
-            "test lane `{lane_name}` failed (exit code {:?})",
-            status.code()
-        );
+        return Err(ChildFailure::inherited(
+            format!("test lane `{lane_name}`"),
+            status.code(),
+        ));
     }
     Ok(())
 }

@@ -67,6 +67,10 @@ test-threads = "num-cpus"
 slow-timeout = { period = "120s", terminate-after = 1 }
 leak-timeout = "2s"
 
+[profile.stress.junit]
+path = "junit.xml"
+store-failure-output = true
+
 # Opt-in cold fixture-cache profile: same settings as default, plus the setup
 # script that recreates an isolated cold root and exports KITHARA_FIXTURE_CACHE.
 # Use via `cargo nextest run --profile cold` / `just test run --lane=cold`.

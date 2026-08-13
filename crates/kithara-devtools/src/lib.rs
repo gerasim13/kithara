@@ -25,6 +25,7 @@ pub mod quality_lab;
 pub mod scope;
 pub mod similarity;
 mod stages;
+pub mod stress_report;
 #[cfg(feature = "lint")]
 pub mod style;
 pub mod test;
@@ -75,6 +76,8 @@ pub enum CoreCommand {
     Scope(scope::ScopeArgs),
     /// Run workspace tests through `cargo nextest`.
     Test(test::TestArgs),
+    /// Summarize per-iteration evidence from a nextest stress run.
+    StressReport(stress_report::StressReportArgs),
     /// Comprehensive workspace health check with markdown report.
     Health(health::HealthArgs),
     #[cfg(feature = "viz")]
@@ -107,6 +110,7 @@ pub fn run(cmd: &CoreCommand, ctx: &Ctx) -> anyhow::Result<()> {
         CoreCommand::Quality { command } => quality::run(command, ctx),
         CoreCommand::Scope(args) => scope::run(args),
         CoreCommand::Test(args) => test::run(args),
+        CoreCommand::StressReport(args) => stress_report::run(args),
         CoreCommand::Health(args) => health::run(args),
         #[cfg(feature = "viz")]
         CoreCommand::Viz(args) => viz::run(args, ctx),

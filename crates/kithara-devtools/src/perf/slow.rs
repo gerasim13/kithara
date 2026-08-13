@@ -237,6 +237,7 @@ mod tests {
             secs,
             suite: suite.into(),
             name: name.into(),
+            iteration: None,
             failed: false,
         }
     }

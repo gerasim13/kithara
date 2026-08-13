@@ -4,9 +4,11 @@
 use anyhow::{Context, Result};
 
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct CaseTiming {
     pub name: String,
     pub suite: String,
+    pub iteration: Option<usize>,
     pub failed: bool,
     pub secs: f64,
 }
@@ -21,6 +23,11 @@ pub fn parse_junit(xml: &str) -> Result<Vec<CaseTiming>> {
     for node in doc.descendants().filter(|n| n.has_tag_name("testcase")) {
         let name = node.attribute("name").unwrap_or_default().to_owned();
         let suite = node.attribute("classname").unwrap_or_default().to_owned();
+        let iteration = node
+            .ancestors()
+            .find(|ancestor| ancestor.has_tag_name("testsuite"))
+            .and_then(|suite| suite.attribute("name"))
+            .and_then(stress_iteration);
         let secs: f64 = node
             .attribute("time")
             .unwrap_or("0")
@@ -32,11 +39,18 @@ pub fn parse_junit(xml: &str) -> Result<Vec<CaseTiming>> {
         cases.push(CaseTiming {
             name,
             suite,
+            iteration,
             failed,
             secs,
         });
     }
     Ok(cases)
+}
+
+fn stress_iteration(suite: &str) -> Option<usize> {
+    suite
+        .rsplit_once("@stress-")
+        .and_then(|(_, iteration)| iteration.parse().ok())
 }
 
 #[cfg(test)]
@@ -63,6 +77,15 @@ mod tests {
   </testsuite>
 </testsuites>"#;
 
+    const STRESS: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="nextest-run" tests="1" failures="1">
+  <testsuite name="demo-tests::suite_stress@stress-7" tests="1" failures="1">
+    <testcase name="offline::seek" classname="demo-tests::suite_stress" time="0.201">
+      <failure type="test failure">boom</failure>
+    </testcase>
+  </testsuite>
+</testsuites>"#;
+
     /// Retries buy nothing if a passed-on-retry case still reads as failed.
     #[test]
     fn a_test_that_passed_on_a_retry_is_not_a_failure() {
@@ -79,8 +102,18 @@ mod tests {
         assert_eq!(cases.len(), 2);
         assert_eq!(cases[0].suite, "demo-tests::suite_light");
         assert_eq!(cases[0].name, "offline::gapless");
+        assert_eq!(cases[0].iteration, None);
         assert!((cases[0].secs - 1.532).abs() < 1e-9);
         assert!(!cases[0].failed);
         assert!(cases[1].failed);
+    }
+
+    #[test]
+    fn retains_the_zero_based_stress_iteration() {
+        let cases = parse_junit(STRESS).expect("parse stress junit");
+
+        assert_eq!(cases.len(), 1);
+        assert_eq!(cases[0].iteration, Some(7));
+        assert!(cases[0].failed);
     }
 }
