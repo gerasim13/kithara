@@ -1,3 +1,5 @@
+#[cfg(test)]
+use crate::interact::Gestures;
 use crate::{
     atoms::painter::IndexedVisual,
     engine::scalar_value,
@@ -61,6 +63,17 @@ impl Drag {
     /// What this drag publishes for a value the recognizer produced.
     pub(crate) fn published(self, input: Input<'_>, value: f32) -> f64 {
         scalar_value(input, value, self.step)
+    }
+
+    #[cfg(test)]
+    pub(crate) const fn gestures(self) -> Gestures {
+        Gestures {
+            double_click: self.reset.is_some(),
+            drag: true,
+            keyboard: false,
+            press: true,
+            wheel: self.wheel.is_some(),
+        }
     }
 
     /// The same drag counting from the value the control now draws. Only a

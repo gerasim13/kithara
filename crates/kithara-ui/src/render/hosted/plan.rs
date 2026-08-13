@@ -4,6 +4,8 @@ use num_traits::cast::AsPrimitive;
 
 #[cfg(feature = "masonry")]
 use super::masonry::{TableSource, TableState, TreeSource, TreeState};
+#[cfg(test)]
+use crate::interact::Gestures;
 use crate::{
     atoms::{
         bar::context::Context,
@@ -273,6 +275,15 @@ impl HostedControlPlan {
         let mut descriptors = Vec::with_capacity(self.descriptor_count());
         self.append_descriptors(&mut descriptors);
         descriptors
+    }
+
+    #[cfg(test)]
+    pub(crate) fn gestures(&self) -> Gestures {
+        self.descriptors()
+            .iter()
+            .fold(Gestures::NONE, |gestures, descriptor| {
+                gestures.union(descriptor.gestures())
+            })
     }
 
     pub(in crate::render) fn path(&self) -> &str {

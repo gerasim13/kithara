@@ -14,6 +14,8 @@ use iced::{
 };
 use kithara_platform::time::Instant;
 
+#[cfg(test)]
+use crate::interact::Gestures;
 use crate::{
     atoms::{
         button::VisualState,
@@ -27,7 +29,7 @@ use crate::{
     },
     render::{
         Skin, UiEvent, activate, command,
-        controls::{Drag, IndexEvent, IndexPress, Indexing, Press},
+        controls::{Drag, Grip, IndexEvent, IndexPress, Indexing, Press},
         publish, scalar,
     },
     solve,
@@ -392,6 +394,31 @@ where
                 recognizer: drag.recognizer(),
                 spec: drag,
             })),
+        }
+    }
+
+    /// Mounts the gesture described by a control, returning the untouched
+    /// painter when the control does not own input.
+    pub(crate) fn with_grip(
+        path: &str,
+        paint: Paint<'skin, Painter>,
+        grip: Grip,
+        index_event: Option<IndexEvent<Painter::Data>>,
+    ) -> Result<Self, Paint<'skin, Painter>> {
+        match grip {
+            Grip::None => Err(paint),
+            Grip::Press => Ok(Self::press(path, paint)),
+            Grip::Command(event) => Ok(Self::command(path, paint, event)),
+            Grip::Drag(drag) => Ok(Self::drag(path, paint, drag)),
+            Grip::Index { count } => Ok(Self::index(path, paint, count, index_event)),
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn gestures(&self) -> Gestures {
+        match &self.recognize {
+            Recognize::Press | Recognize::Command(_) | Recognize::Index { .. } => Gestures::PRESS,
+            Recognize::Drag(drag) => drag.spec.gestures(),
         }
     }
 

@@ -7,6 +7,8 @@ use super::{
     controls::{MasonryControl, Retained},
     custom::{HostAction, Repaint},
 };
+#[cfg(test)]
+use crate::interact::Gestures;
 use crate::{
     draw::{DrawList, DrawListBuilder, Rect},
     interact::{
@@ -148,6 +150,21 @@ where
     pub(crate) fn refreshing(mut self, refresh: DataRefresh<Painter::Data>) -> Self {
         self.refresh = Some(refresh);
         self
+    }
+
+    #[cfg(test)]
+    pub(crate) fn gestures(&self) -> Gestures {
+        match self
+            .interaction
+            .as_ref()
+            .map(|interaction| &interaction.recognize)
+        {
+            None => Gestures::NONE,
+            Some(Recognize::Press | Recognize::Command(_) | Recognize::Index { .. }) => {
+                Gestures::PRESS
+            }
+            Some(Recognize::Drag(drag)) => drag.spec.gestures(),
+        }
     }
 
     /// The gesture is measured against the part of the box the painter says the

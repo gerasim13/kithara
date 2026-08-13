@@ -1,5 +1,7 @@
 use std::ops::Range;
 
+#[cfg(test)]
+use crate::interact::Gestures;
 use crate::interact::{
     CursorShape, Hit, Hover, Outcome, ScrollAxis, TextInputLayout,
     recognizers::{DragEvent, Scalar, Track, WheelStep},
@@ -304,6 +306,45 @@ impl Descriptor {
             Self::VerticalVu { .. } => Kind::VerticalVu,
             Self::Wave { .. } => Kind::Wave,
             Self::HeroWave { .. } => Kind::HeroWave,
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) const fn gestures(&self) -> Gestures {
+        match self {
+            Self::Activation { .. } | Self::Segmented { .. } | Self::Wave { .. } => Gestures::PRESS,
+            Self::Crossing { .. } => Gestures::NONE,
+            Self::Picker { .. } => Gestures {
+                keyboard: true,
+                ..Gestures::PRESS
+            },
+            Self::TextInput { .. } => Gestures {
+                keyboard: true,
+                ..Gestures::DRAG
+            },
+            Self::Scroll { .. } => Gestures {
+                wheel: true,
+                ..Gestures::NONE
+            },
+            Self::Item { .. }
+            | Self::ColumnDivider { .. }
+            | Self::Crossfader { .. }
+            | Self::StereoMeter { .. }
+            | Self::VerticalVu { .. } => Gestures::DRAG,
+            Self::Fader { scalar, .. } => Gestures {
+                double_click: scalar.accepts_double_click(),
+                wheel: scalar.accepts_wheel(),
+                ..Gestures::DRAG
+            },
+            Self::Knob { .. } => Gestures {
+                double_click: true,
+                wheel: true,
+                ..Gestures::DRAG
+            },
+            Self::HeroWave { .. } => Gestures {
+                wheel: true,
+                ..Gestures::DRAG
+            },
         }
     }
 }

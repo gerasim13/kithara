@@ -40,13 +40,20 @@ use crate::{
     registry::{EndpointCategory, EndpointDesc, EndpointRegistry, ValueKind},
     render::{
         ControlAction, ReadValue, Reads, Skin, StereoLevels, TableCell, TableRow, TreeIcon,
-        TreeRow, UiEvent, WindowCommand, WindowEdge, WindowLayerProgram, document, picker_hits,
+        TreeRow, UiEvent, WaveBucket, WaveformView, WindowCommand, WindowEdge, WindowLayerProgram,
+        document, picker_hits,
     },
     source::{MemResolver, UiConfig},
     text::{FontPolicy, TextContext},
 };
 
 struct FixtureReads;
+
+static CENSUS_WAVE: [WaveBucket; 1] = [WaveBucket {
+    high: 0.8,
+    low: 0.2,
+    mid: 0.5,
+}];
 
 struct VisReads {
     left: Cell<f32>,
@@ -176,6 +183,14 @@ impl Reads for FixtureReads {
             "vis.preset" => Some(ReadValue::Scalar(1.0)),
             "vis.time" => Some(ReadValue::Scalar(0.5)),
             "library.tree" => Some(ReadValue::Tree(&TREE_ROWS)),
+            "mock.wave" => Some(ReadValue::Waveform(WaveformView {
+                beats: &[],
+                buckets: &CENSUS_WAVE,
+                cues: &[],
+                downbeats: &[],
+                bpm: None,
+                r#loop: None,
+            })),
             "player.output.levels" => Some(ReadValue::Stereo(StereoLevels {
                 l: 0.6,
                 r: 0.4,
@@ -1815,7 +1830,11 @@ const CONTROL_CENSUS: &[(&str, Paints, &str)] = &[
         Paints::Yes,
         r#"Scalar(id: "control", read: Model(id: "deck.view.zoom"))"#,
     ),
-    ("Wave", Paints::Yes, r#"Wave(id: "control")"#),
+    (
+        "Wave",
+        Paints::Yes,
+        r#"Wave(id: "control", read: Model(id: "mock.wave"))"#,
+    ),
     (
         "Vis",
         Paints::Native,
@@ -2001,6 +2020,417 @@ fn masonry_draws_every_control_the_census_claims_it_draws() {
         "the census is stale — move a row when its painter lands, and never leave the census \
          describing a host it no longer matches"
     );
+}
+
+/// The mounted input contract, observed from both leaf adapters and the engine
+/// plan they share. Keeping this beside the paint census makes a new
+/// `ControlSpec` incomplete until it names both its picture and its gestures.
+mod gesture_census {
+    use std::rc::Rc;
+
+    use kithara_test_utils::kithara;
+
+    use super::{
+        super::controls::Retained, CONTROL_CENSUS, FixtureReads, fixture_registry, fixture_ui,
+    };
+    use crate::{
+        compile::{CompiledNode, CompiledUi},
+        expand::{Binding, ControlSpec, ExpandedNode},
+        ids::InternId,
+        interact::Gestures,
+        mount,
+        render::{
+            Reads, Skin,
+            controls::{Draws, Gesture, Paint, Reading},
+            document::read::{read_scope, resolve},
+            hosted::hosted_control_plan,
+            masonry::{HostAction, Painted},
+        },
+    };
+
+    #[derive(Clone, Copy)]
+    struct Row {
+        gestures: Gestures,
+        name: &'static str,
+    }
+
+    const PRESS_KEYBOARD: Gestures = Gestures {
+        keyboard: true,
+        ..Gestures::PRESS
+    };
+    const DRAG_WHEEL: Gestures = Gestures {
+        wheel: true,
+        ..Gestures::DRAG
+    };
+    const DRAG_KEYBOARD_WHEEL: Gestures = Gestures {
+        keyboard: true,
+        wheel: true,
+        ..Gestures::DRAG
+    };
+    const KNOB: Gestures = Gestures {
+        double_click: true,
+        wheel: true,
+        ..Gestures::DRAG
+    };
+
+    const ROWS: &[Row] = &[
+        Row {
+            name: "Brand",
+            gestures: Gestures::NONE,
+        },
+        Row {
+            name: "Spacer",
+            gestures: Gestures::NONE,
+        },
+        Row {
+            name: "Divider",
+            gestures: Gestures::NONE,
+        },
+        Row {
+            name: "PresetSelector",
+            gestures: Gestures::PRESS,
+        },
+        Row {
+            name: "SettingsButton",
+            gestures: Gestures::PRESS,
+        },
+        Row {
+            name: "DeckSummary",
+            gestures: Gestures::NONE,
+        },
+        Row {
+            name: "WindowDrag",
+            gestures: Gestures::DRAG,
+        },
+        Row {
+            name: "TitleBar",
+            gestures: Gestures::NONE,
+        },
+        Row {
+            name: "WindowControls",
+            gestures: Gestures::PRESS,
+        },
+        Row {
+            name: "Bpm",
+            gestures: Gestures::NONE,
+        },
+        Row {
+            name: "Time",
+            gestures: Gestures::NONE,
+        },
+        Row {
+            name: "Scalar",
+            gestures: Gestures::NONE,
+        },
+        Row {
+            name: "Wave",
+            gestures: Gestures::PRESS,
+        },
+        Row {
+            name: "Vis",
+            gestures: Gestures::NONE,
+        },
+        Row {
+            name: "Table",
+            gestures: DRAG_WHEEL,
+        },
+        Row {
+            name: "Tree",
+            gestures: DRAG_KEYBOARD_WHEEL,
+        },
+        Row {
+            name: "ContextBar",
+            gestures: PRESS_KEYBOARD,
+        },
+        Row {
+            name: "Text",
+            gestures: Gestures::NONE,
+        },
+        Row {
+            name: "Knob",
+            gestures: KNOB,
+        },
+        Row {
+            name: "Chip",
+            gestures: Gestures::PRESS,
+        },
+        Row {
+            name: "NavItem",
+            gestures: Gestures::PRESS,
+        },
+        Row {
+            name: "Button",
+            gestures: Gestures::PRESS,
+        },
+        Row {
+            name: "Glyph",
+            gestures: Gestures::NONE,
+        },
+        Row {
+            name: "TabLarge",
+            gestures: Gestures::PRESS,
+        },
+        Row {
+            name: "Toggle",
+            gestures: Gestures::PRESS,
+        },
+        Row {
+            name: "Checkbox",
+            gestures: Gestures::PRESS,
+        },
+        Row {
+            name: "Segmented",
+            gestures: Gestures::PRESS,
+        },
+        Row {
+            name: "Select",
+            gestures: Gestures::NONE,
+        },
+        Row {
+            name: "StatusDot",
+            gestures: Gestures::NONE,
+        },
+        Row {
+            name: "Swatch",
+            gestures: Gestures::NONE,
+        },
+        Row {
+            name: "Cell",
+            gestures: Gestures::NONE,
+        },
+        Row {
+            name: "Readout",
+            gestures: Gestures::NONE,
+        },
+        Row {
+            name: "Meter",
+            gestures: Gestures::NONE,
+        },
+        Row {
+            name: "VuVertical",
+            gestures: Gestures::DRAG,
+        },
+        Row {
+            name: "VuStereo",
+            gestures: Gestures::DRAG,
+        },
+        Row {
+            name: "Fader",
+            gestures: Gestures::DRAG,
+        },
+        Row {
+            name: "Crossfader",
+            gestures: Gestures::DRAG,
+        },
+    ];
+
+    #[derive(Clone, Copy, Default)]
+    struct Observed {
+        immediate: Gestures,
+        retained: Gestures,
+        special: Gestures,
+    }
+
+    struct Probe<'a> {
+        reading: Reading<'a>,
+        skin: &'a Skin,
+    }
+
+    trait ProbeControl {
+        fn observe(&self, probe: Probe<'_>) -> Observed;
+    }
+
+    impl<Control> ProbeControl for Control
+    where
+        Control: Draws,
+        Control::Painter: Retained + 'static,
+    {
+        fn observe(&self, probe: Probe<'_>) -> Observed {
+            let immediate = self.data(probe.reading).map_or(Gestures::NONE, |data| {
+                let grip = self.grip(probe.skin, &data);
+                Gesture::with_grip(
+                    "control",
+                    Paint::new(self.painter(probe.skin), data, probe.skin),
+                    grip,
+                    self.index_event(),
+                )
+                .map_or_else(|_| Gestures::NONE, |gesture| gesture.gestures())
+            });
+            let retained = self.data(probe.reading).map_or(Gestures::NONE, |data| {
+                let grip = self.grip(probe.skin, &data);
+                Painted::new(self.painter(probe.skin), data, probe.skin)
+                    .interactive(
+                        grip,
+                        "control".to_owned(),
+                        Rc::new(HostAction::new),
+                        self.index_event(),
+                    )
+                    .gestures()
+            });
+            Observed {
+                immediate,
+                retained,
+                special: Gestures::NONE,
+            }
+        }
+    }
+
+    macro_rules! passive {
+        ($($control:ty),+ $(,)?) => {
+            $(impl ProbeControl for $control {
+                fn observe(&self, _probe: Probe<'_>) -> Observed {
+                    Observed::default()
+                }
+            })+
+        };
+    }
+
+    passive!(
+        mount::TitleBar,
+        mount::Text<'_>,
+        mount::Vis,
+        mount::Table<'_>,
+        mount::Tree<'_>,
+    );
+
+    impl ProbeControl for mount::Drag {
+        fn observe(&self, _probe: Probe<'_>) -> Observed {
+            Observed {
+                special: Gestures::DRAG,
+                ..Observed::default()
+            }
+        }
+    }
+
+    impl ProbeControl for mount::Controls {
+        fn observe(&self, _probe: Probe<'_>) -> Observed {
+            Observed {
+                special: Gestures::PRESS,
+                ..Observed::default()
+            }
+        }
+    }
+
+    struct Apply<'a> {
+        probe: Probe<'a>,
+    }
+
+    impl Apply<'_> {
+        fn apply<Control: ProbeControl>(self, control: &Control) -> Observed {
+            control.observe(self.probe)
+        }
+    }
+
+    fn mounted(
+        path: InternId,
+        spec: &ControlSpec,
+        read: Option<&Binding>,
+        ui: &CompiledUi,
+        reads: &dyn Reads,
+        skin: &Skin,
+    ) -> (Gestures, Gestures) {
+        let value = read.and_then(|binding| resolve(reads, binding, ui));
+        let leaf = mount::controls!(
+            spec,
+            Apply {
+                probe: Probe {
+                    reading: Reading {
+                        reads,
+                        scope: read_scope(read, ui),
+                        ui,
+                        value: value.as_ref(),
+                    },
+                    skin,
+                },
+            }
+        );
+        let engine = hosted_control_plan(path, spec, read, ui, reads, skin)
+            .map_or(Gestures::NONE, |plan| plan.gestures());
+        (
+            leaf.immediate.union(engine).union(leaf.special),
+            leaf.retained.union(engine).union(leaf.special),
+        )
+    }
+
+    fn find_control(node: &ExpandedNode) -> Option<(InternId, &ControlSpec, Option<&Binding>)> {
+        match node {
+            ExpandedNode::Control {
+                path, spec, read, ..
+            } => Some((*path, spec, read.as_ref())),
+            ExpandedNode::Optional { child, .. } | ExpandedNode::Pressable { child, .. } => {
+                find_control(child)
+            }
+            ExpandedNode::Row { children, .. }
+            | ExpandedNode::Column { children, .. }
+            | ExpandedNode::Slot { children, .. } => children.iter().find_map(find_control),
+            ExpandedNode::Popover {
+                anchor, content, ..
+            } => find_control(anchor).or_else(|| find_control(content)),
+        }
+    }
+
+    fn compiled_control(ui: &CompiledUi) -> (InternId, &ControlSpec, Option<&Binding>) {
+        let root = match &ui.root {
+            CompiledNode::Module { root, .. } => root,
+            CompiledNode::Optional { child, .. } => {
+                let CompiledNode::Module { root, .. } = child.as_ref() else {
+                    panic!("the census fixture must compile to one module");
+                };
+                root
+            }
+            CompiledNode::Split { .. } => panic!("the census fixture must contain one module"),
+        };
+        find_control(root).unwrap_or_else(|| panic!("the census fixture must contain a control"))
+    }
+
+    #[kithara::test]
+    fn every_control_names_the_same_mounted_gestures_in_both_hosts() {
+        let painted = CONTROL_CENSUS
+            .iter()
+            .map(|(name, _, _)| *name)
+            .collect::<Vec<_>>();
+        let gestured = ROWS.iter().map(|row| row.name).collect::<Vec<_>>();
+        assert_eq!(
+            gestured, painted,
+            "the paint and gesture censuses must cover the same controls in the same order"
+        );
+
+        let mut registry = fixture_registry();
+        registry.insert(
+            crate::registry::EndpointCategory::Model,
+            "ui.menu.open",
+            crate::registry::EndpointDesc::new(crate::registry::ValueKind::Bool),
+        );
+        let reads = FixtureReads;
+        let skin = Skin::resolve_with_font_policy(
+            crate::builtin::skin_doc().clone(),
+            &crate::ids::SourceUri("fixture:gesture-census".to_owned()),
+            crate::text::FontPolicy::Embedded,
+        )
+        .unwrap_or_else(|error| panic!("the census skin must resolve: {error}"));
+
+        for (row, (_, _, control)) in ROWS.iter().zip(CONTROL_CENSUS) {
+            let ui = fixture_ui(
+                "gesture-census",
+                &format!(
+                    r#"Row(size: (w: Fill, h: Fill), gap: 0.0, pad: 0.0, children: [{control}])"#
+                ),
+                &registry,
+            );
+            let (path, spec, read) = compiled_control(&ui);
+            let (immediate, retained) = mounted(path, spec, read, &ui, &reads, &skin);
+            assert_eq!(
+                immediate, row.gestures,
+                "{} changed its iced gesture contract",
+                row.name
+            );
+            assert_eq!(
+                retained, row.gestures,
+                "{} changed its Masonry gesture contract",
+                row.name
+            );
+        }
+    }
 }
 
 #[kithara::test]
@@ -2936,6 +3366,11 @@ fn fixture_registry() -> FixtureRegistry {
         EndpointCategory::Model,
         "library.tree",
         EndpointDesc::new(ValueKind::Tree),
+    );
+    registry.insert(
+        EndpointCategory::Model,
+        "mock.wave",
+        EndpointDesc::new(ValueKind::Waveform),
     );
     registry.insert(
         EndpointCategory::Model,

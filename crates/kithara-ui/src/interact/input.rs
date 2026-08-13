@@ -1,6 +1,52 @@
 use super::{modifiers::Modifiers, pointer::PointerInput};
 use crate::draw::{Pt, Rect};
 
+/// The input vocabulary observed from a mounted control.
+///
+/// The gesture census keeps this test-only: production truth remains in the
+/// recognizers, and both host adapters report what they actually constructed.
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct Gestures {
+    pub(crate) double_click: bool,
+    pub(crate) drag: bool,
+    pub(crate) keyboard: bool,
+    pub(crate) press: bool,
+    pub(crate) wheel: bool,
+}
+
+#[cfg(test)]
+impl Gestures {
+    pub(crate) const NONE: Self = Self {
+        double_click: false,
+        drag: false,
+        keyboard: false,
+        press: false,
+        wheel: false,
+    };
+
+    pub(crate) const PRESS: Self = Self {
+        press: true,
+        ..Self::NONE
+    };
+
+    pub(crate) const DRAG: Self = Self {
+        drag: true,
+        press: true,
+        ..Self::NONE
+    };
+
+    pub(crate) const fn union(self, other: Self) -> Self {
+        Self {
+            double_click: self.double_click || other.double_click,
+            drag: self.drag || other.drag,
+            keyboard: self.keyboard || other.keyboard,
+            press: self.press || other.press,
+            wheel: self.wheel || other.wheel,
+        }
+    }
+}
+
 /// Toolkit-neutral input delivered to a custom component.
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[non_exhaustive]

@@ -12,7 +12,7 @@ use crate::{
     mount,
     render::{
         InputOwner, MiniWave, ReadValue, Reads, Skin, Text, Widget, WindowSurface,
-        controls::{Draws, Gesture, Grip, Paint, Reading},
+        controls::{Draws, Gesture, Paint, Reading},
     },
 };
 
@@ -311,15 +311,13 @@ where
     let grip = control.grip(cx.skin, &data);
     let index_event = control.index_event();
     let paint = Paint::new(control.painter(cx.skin), data, cx.skin);
-    Rendered::leading(match (cx.owner, grip) {
-        (InputOwner::Leaf, Grip::Press) => Gesture::press(cx.path, paint).view(),
-        (InputOwner::Leaf, Grip::Command(event)) => Gesture::command(cx.path, paint, event).view(),
-        (InputOwner::Leaf, Grip::Drag(drag)) => Gesture::drag(cx.path, paint, drag).view(),
-        (InputOwner::Leaf, Grip::Index { count }) => {
-            Gesture::index(cx.path, paint, count, index_event).view()
-        }
-        (InputOwner::Engine, _) | (_, Grip::None) => paint.view(),
-    })
+    let element = if cx.owner == InputOwner::Leaf {
+        Gesture::with_grip(cx.path, paint, grip, index_event)
+            .map_or_else(Paint::view, Gesture::view)
+    } else {
+        paint.view()
+    };
+    Rendered::leading(element)
 }
 
 /// What a control is handed when it decides what to draw, from what this host

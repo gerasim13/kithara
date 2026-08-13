@@ -88,6 +88,16 @@ impl ScalarState {
 }
 
 impl Scalar {
+    #[cfg(test)]
+    pub(crate) const fn accepts_double_click(&self) -> bool {
+        self.reset.is_some()
+    }
+
+    #[cfg(test)]
+    pub(crate) const fn accepts_wheel(&self) -> bool {
+        self.wheel.is_some()
+    }
+
     pub(crate) fn on_input(
         &self,
         state: &mut ScalarState,
