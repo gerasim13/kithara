@@ -21,7 +21,8 @@
 # pixels but 18.5% of ink, so six points of it are drawn on one side only, in a
 # colour close enough to the page that comparing colours did not see it.
 03-modules-deck.png        19
-03-modules-telemetry.png    9
+# Retained slots now centre fixed content like iced; telemetry fell 7.8 -> 1.2.
+03-modules-telemetry.png    2
 16-stress.png               4
 
 # Table landed 2026-08-09: library2 fell 37.8% -> 3.1%, table to 1.5%.
