@@ -252,7 +252,7 @@ mod tests {
         fn stop(_live: Stream) {}
     }
 
-    #[test]
+    #[kithara::test]
     fn a_request_without_a_measured_rate_keeps_asking() {
         let mut bar = broadcaster::<Unmeasured>();
 
@@ -263,7 +263,7 @@ mod tests {
         assert!(matches!(bar.phase, Phase::Requested));
     }
 
-    #[test]
+    #[kithara::test]
     fn a_request_no_packager_can_serve_returns_the_bar_to_off() {
         let mut bar = broadcaster::<Absent>();
 
@@ -274,7 +274,7 @@ mod tests {
         assert!(!bar.is_on_air());
     }
 
-    #[test]
+    #[kithara::test]
     fn a_served_request_puts_the_bar_on_air_with_the_stream_url() {
         let mut bar = broadcaster::<Ready>();
 
@@ -286,7 +286,7 @@ mod tests {
         assert_eq!(bar.url(), Some(Ready::URL));
     }
 
-    #[test]
+    #[kithara::test]
     fn stopping_hands_over_a_job_and_finishes_only_on_completion() {
         let mut bar = broadcaster::<Ready>();
         bar.toggle();
@@ -306,7 +306,7 @@ mod tests {
         assert!(matches!(bar.phase, Phase::Off));
     }
 
-    #[test]
+    #[kithara::test]
     fn a_stream_that_ends_on_its_own_is_noticed_by_the_next_poll() {
         let mut bar = broadcaster::<Ready>();
         bar.toggle();
@@ -322,7 +322,7 @@ mod tests {
     /// Pressing REC again while the request is still waiting for a device rate
     /// withdraws it. There is no stream yet, so there is no stop job either —
     /// the bar simply goes back to off and stops asking.
-    #[test]
+    #[kithara::test]
     fn toggling_a_pending_request_withdraws_it() {
         let mut bar = broadcaster::<Unmeasured>();
         bar.toggle();

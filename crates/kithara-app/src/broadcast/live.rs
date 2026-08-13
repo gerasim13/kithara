@@ -179,7 +179,7 @@ mod tests {
         (stream, dispatcher, shutdown)
     }
 
-    #[test]
+    #[kithara::test]
     fn configuration_waits_for_the_measured_session_sample_rate() {
         let dispatcher = Arc::new(SampleRateSession::new(0));
         let session = SessionHandle::new(dispatcher.clone());
@@ -200,7 +200,7 @@ mod tests {
         assert_eq!(config.sample_rate, 48_000);
     }
 
-    #[test]
+    #[kithara::test]
     fn starting_takes_the_mix_tap_and_stopping_gives_it_back() {
         let (stream, dispatcher, shutdown) = on_air(48_000);
         assert!(
@@ -217,7 +217,7 @@ mod tests {
         shutdown.cancel();
     }
 
-    #[test]
+    #[kithara::test]
     fn a_dropped_producer_ends_the_stream() {
         let (stream, dispatcher, shutdown) = on_air(48_000);
         dispatcher.tap.lock().take();
@@ -233,7 +233,7 @@ mod tests {
         shutdown.cancel();
     }
 
-    #[test]
+    #[kithara::test]
     fn missing_session_sample_rate_is_rejected_before_ring_creation() {
         assert!(ring_capacity(0).is_err());
     }

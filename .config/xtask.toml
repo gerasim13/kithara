@@ -149,10 +149,6 @@ features = []
 [test.net_backends.apple]
 features = ["kithara-integration-tests/apple-net"]
 
-# `--exclude kithara-broadcast` is what actually keeps the packager out of the
-# gate: dropping it from the workspace's `default-members` does nothing here,
-# because `--workspace` selects every member regardless. Its tests run in the
-# `broadcast` lane below.
 [test.lanes.workspace]
 program = "cargo"
 default_features = ["kithara-ui/render"]
@@ -160,8 +156,6 @@ prefix_args = [
   "nextest",
   "run",
   "--workspace",
-  "--exclude",
-  "kithara-broadcast",
   "--exclude",
   "kithara-fuzz",
   "--cargo-profile",
@@ -177,8 +171,6 @@ prefix_args = [
   "--profile",
   "cold",
   "--workspace",
-  "--exclude",
-  "kithara-broadcast",
   "--exclude",
   "kithara-fuzz",
   "--cargo-profile",
@@ -301,11 +293,11 @@ prefix_args = [
 default_features = ["network-manual", "kithara/resample-rubato"]
 default_flash = false
 
-# Live HLS packaging. Everything the `broadcast` feature turns on runs here and
-# nowhere else: the packager crate the workspace lanes exclude by name, the
-# integration suite behind `required-features`, and `kithara-app`'s REC state
-# machine, whose tests exist only with the feature on. The filter keeps the rest
-# of `kithara-app`'s units out — the gate already runs those.
+# What only the `broadcast` feature turns on: the integration suite behind
+# `required-features`, and `kithara-app`'s REC state machine, whose engine tests
+# exist only with the feature compiled in. `kithara-broadcast`'s own unit tests
+# are not here — they need no feature and the workspace lane already runs them,
+# which is also what keeps the crate compiling under the gate.
 [test.lanes.broadcast]
 program = "cargo"
 prefix_args = [
@@ -313,8 +305,6 @@ prefix_args = [
   "run",
   "-p",
   "kithara-app",
-  "-p",
-  "kithara-broadcast",
   "-p",
   "kithara-integration-tests",
   "--cargo-profile",
@@ -338,7 +328,7 @@ default_no_block = true
 # exists here is `broadcast::engine`.
 suffix_args = [
   "-E",
-  "binary(suite_broadcast) + package(kithara-broadcast) + (package(kithara-app) & test(/^broadcast::engine::/))",
+  "binary(suite_broadcast) + (package(kithara-app) & test(/^broadcast::engine::/))",
 ]
 
 # Integration regression tests are red by design and stay outside the main gate.
