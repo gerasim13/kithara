@@ -1,25 +1,35 @@
-use super::{DrawCmd, Geom, Paint, Path, Pen, Pt, Rect, Rgba, Transform};
+use super::{
+    DrawCmd, DrawPools, Geom, Paint, Path, Pen, PoolText, Pt, Rect, Rgba, Transform, buffer::Buffer,
+};
 use crate::text::GlyphRun;
 
 /// An ordered retained list of drawing commands.
 #[derive(Clone, Debug, Default, PartialEq)]
-pub struct DrawList(Vec<DrawCmd>);
+pub struct DrawList(Buffer<DrawCmd>);
 
 impl DrawList {
     /// Returns the commands in drawing order.
     #[must_use]
     pub fn commands(&self) -> &[DrawCmd] {
-        &self.0
+        self.0.as_slice()
     }
 }
 
 /// Builds a [`DrawList`] in drawing order.
 #[derive(Default)]
 pub struct DrawListBuilder {
-    commands: Vec<DrawCmd>,
+    commands: Buffer<DrawCmd>,
+    pools: Option<DrawPools>,
 }
 
 impl DrawListBuilder {
+    pub(super) fn pooled(pools: &DrawPools) -> Self {
+        Self {
+            commands: pools.commands(),
+            pools: Some(pools.clone()),
+        }
+    }
+
     /// Adds a nested list scoped to a rectangular clip region.
     pub fn clip(&mut self, region: Rect, list: DrawList) {
         self.commands.push(DrawCmd::Clip { region, list });
@@ -107,6 +117,10 @@ impl DrawListBuilder {
     }
 
     pub fn fill_path<P: Into<Paint>>(&mut self, path: Path, paint: P) {
+        let path = match &self.pools {
+            Some(pools) => pools.pooled_path(path),
+            None => path,
+        };
         self.commands.push(DrawCmd::Fill {
             geom: Geom::Path(path),
             paint: paint.into(),
@@ -116,7 +130,10 @@ impl DrawListBuilder {
     pub fn text(&mut self, run: &GlyphRun, content: &str, transform: Transform, color: Rgba) {
         self.commands.push(DrawCmd::Text {
             run: run.clone(),
-            content: content.to_owned(),
+            content: self
+                .pools
+                .as_ref()
+                .map_or_else(|| PoolText::from(content), |pools| pools.text(content)),
             transform,
             color,
         });

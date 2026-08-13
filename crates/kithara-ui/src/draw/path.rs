@@ -1,4 +1,7 @@
-use super::ir::{Pt, Rect};
+use super::{
+    buffer::{Buffer, VecPool},
+    ir::{Pt, Rect},
+};
 
 /// One move a vector outline is made of, in logical pixels.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -41,15 +44,36 @@ pub enum FillRule {
 /// which no fixed set of shapes can express, and which would otherwise have to
 /// leave the draw list and reach a toolkit directly.
 #[derive(Clone, Debug, Default, PartialEq)]
-pub struct Path {
+pub struct PoolPath {
     rule: FillRule,
-    verbs: Vec<Verb>,
+    verbs: Buffer<Verb>,
 }
 
-impl Path {
+impl PoolPath {
     #[must_use]
     pub fn new(rule: FillRule, verbs: Vec<Verb>) -> Self {
-        Self { rule, verbs }
+        Self {
+            rule,
+            verbs: Buffer::owned(verbs),
+        }
+    }
+
+    pub(super) fn pooled(rule: FillRule, pool: &VecPool<Verb>) -> Self {
+        Self {
+            rule,
+            verbs: Buffer::pooled(pool),
+        }
+    }
+
+    pub(super) fn extend(&mut self, verbs: impl IntoIterator<Item = Verb>) {
+        for verb in verbs {
+            self.verbs.push(verb);
+        }
+    }
+
+    pub(super) fn into_pooled(mut self, pool: &VecPool<Verb>) -> Self {
+        self.verbs = self.verbs.into_pooled(pool);
+        self
     }
 
     #[must_use]
@@ -59,9 +83,11 @@ impl Path {
 
     #[must_use]
     pub fn verbs(&self) -> &[Verb] {
-        &self.verbs
+        self.verbs.as_slice()
     }
 }
+
+pub type Path = PoolPath;
 
 /// An outline drawn in the unit square, waiting to be told how big it is.
 ///
@@ -88,7 +114,7 @@ impl Outline {
         Path::new(
             self.0.rule,
             self.0
-                .verbs
+                .verbs()
                 .iter()
                 .map(|verb| match *verb {
                     Verb::Close => Verb::Close,

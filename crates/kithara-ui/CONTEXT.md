@@ -8,9 +8,10 @@ Every string retained by the compiled tree is interned in one bounded `String` a
 `CompiledUi`. `UiConfig.max_arena_bytes` caps it; growth uses `try_reserve`, and either the cap or
 an allocation failure returns `UiDocError::ArenaFull`.
 
-- No kithara-bufpool here: budget-charging `ensure_len` needs `Default + Clone`, which `ExpandedNode`
-  cannot provide, and a pooled string buffer would make `CompiledUi` non-`Clone` while holding a
-  churn-pool slot for the preset lifetime.
+- The compiled string arena is not pooled: budget-charging `ensure_len` needs `Default + Clone`,
+  which `ExpandedNode` cannot provide. `CompiledUi` does carry the separately owned `DrawPools`
+  family configured by `UiConfig`; its short-lived command, path, and paint-text buffers are not
+  compiled document strings.
 - `InternId` is valid only within the `CompiledUi` that produced it; a recompile rebuilds the arena.
   Never persist one in application messages or state - host-facing paths stay owned `String`s.
 - `StrArena::resolve` is total: spans cover whole appended strings, so valid spans land on UTF-8
@@ -90,10 +91,15 @@ rounded rectangle is canonicalised by the builder to the existing rectangle comm
 list is therefore exactly the list callers produced before the rounded shape existed.
 
 The retained list is a cloneable, comparable value. Cross-backend identity is therefore asserted
-against the same list rather than promised by two call-through implementations. Pooling is
-deliberately absent. A kithara-bufpool byte budget would not enforce a retained-command ceiling:
-`Pool::track_byte_delta` runs only inside `Pool::acquire`, never when a caller grows a vector with
-`push`. Any future cap must be a builder-side contract, not a pool property.
+against the same list rather than promised by two call-through implementations. `UiConfig` is the
+only owner of draw-pool limits, and each `CompiledUi` carries the resulting shared `DrawPools` family
+for both hosts. `max_buffers` bounds the number retained by each command, path, and paint-text pool;
+zero means the smallest useful pool of one buffer. A returned buffer above its kind's capacity limit
+is dropped instead of retained. These are reusable-memory limits, not hostile-document ceilings: a
+live builder may grow past them, but the pool never truncates a command or changes a picture. A
+kithara-bufpool byte budget would not enforce that contract because `Pool::track_byte_delta` runs
+only inside `Pool::acquire`, never when a caller grows a vector with `push`.
+`PoolStats::alloc_misses` is the standing measure of reuse.
 
 A viewport is retained as `DrawCmd::Clip { region, list }`: the region and the nested `DrawList`
 travel as one scoped command. The nesting is required by iced, not a convenience chosen by the

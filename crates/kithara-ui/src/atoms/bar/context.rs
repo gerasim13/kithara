@@ -241,7 +241,7 @@ mod tests {
             .filter_map(|command| match command {
                 DrawCmd::Text {
                     content, transform, ..
-                } => Some((content.clone(), transform.dx)),
+                } => Some((content.as_str().to_owned(), transform.dx)),
                 _ => None,
             })
             .collect()

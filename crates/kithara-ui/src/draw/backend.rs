@@ -44,7 +44,7 @@ fn draw<B: Backend>(list: &DrawList, backend: &mut B) {
                 content,
                 transform,
                 color,
-            } => backend.text(run, content, *transform, *color),
+            } => backend.text(run, content.as_str(), *transform, *color),
         }
     }
 }

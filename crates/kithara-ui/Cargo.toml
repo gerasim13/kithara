@@ -19,6 +19,7 @@ default = ["iced"]
 gpu = ["iced", "dep:pollster"]
 masonry = ["dep:futures-lite", "dep:masonry", "dep:winit", "vello"]
 render = [
+    "dep:kithara-bufpool",
     "dep:kithara-platform",
     "dep:lucide-icons",
     "dep:num-traits",
@@ -39,6 +40,7 @@ vello = [
 ]
 
 [dependencies]
+kithara-bufpool = { workspace = true, optional = true }
 kithara-platform = { workspace = true, optional = true }
 kithara-workspace-hack = { version = "0.0.1-alpha4", path = "../kithara-workspace-hack" }
 

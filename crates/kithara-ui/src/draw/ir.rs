@@ -5,6 +5,7 @@ use super::{
     list::DrawList,
     path::Path,
     style::{Paint, Pen},
+    text::PoolText,
 };
 use crate::text::GlyphRun;
 
@@ -159,7 +160,7 @@ pub enum DrawCmd {
     },
     Text {
         run: GlyphRun,
-        content: String,
+        content: PoolText,
         transform: Transform,
         color: Rgba,
     },

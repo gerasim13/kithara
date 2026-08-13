@@ -1,5 +1,7 @@
 use std::collections::BTreeMap;
 
+#[cfg(feature = "render")]
+use crate::draw::DrawPools;
 use crate::{
     error::UiDocError,
     expand::{
@@ -31,6 +33,8 @@ pub struct CompiledUi {
     pub resize_edges: bool,
     arena: StrArena,
     includes: Vec<IncludedModule>,
+    #[cfg(feature = "render")]
+    draw_pools: DrawPools,
 }
 
 impl CompiledUi {
@@ -157,6 +161,8 @@ pub fn compile(
         includes,
         arena,
         resize_edges: document.resize_edges,
+        #[cfg(feature = "render")]
+        draw_pools: DrawPools::new(config.draw_pools),
     })
 }
 

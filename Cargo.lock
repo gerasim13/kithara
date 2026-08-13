@@ -5027,6 +5027,7 @@ dependencies = [
  "iced_runtime",
  "iced_tiny_skia",
  "iced_wgpu",
+ "kithara-bufpool",
  "kithara-platform",
  "kithara-test-utils",
  "kithara-workspace-hack",
