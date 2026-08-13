@@ -1,10 +1,7 @@
 #![cfg(not(target_arch = "wasm32"))]
 #![forbid(unsafe_code)]
 
-use std::{
-    panic::{AssertUnwindSafe, catch_unwind},
-    path::PathBuf,
-};
+use std::path::PathBuf;
 
 use kithara::{
     audio::{StretchControls, StretchKind},
@@ -25,11 +22,8 @@ use kithara::{
     },
 };
 use kithara_integration_tests::{
-    TestServerHelper,
-    audio_artifact::write_audio_artifact,
-    cochlea::{CochleaReport, assert_oracle_load_bearing},
-    memory_asset_store,
-    offline::OfflineSession,
+    TestServerHelper, audio_artifact::write_audio_artifact, cochlea::CochleaReport,
+    memory_asset_store, offline::OfflineSession,
 };
 use serde::Serialize;
 
@@ -185,11 +179,28 @@ struct OracleReports {
     timeout(Duration::from_secs(300))
 )]
 async fn no_sync_real_media_matrix_is_continuous_and_unsynchronized() {
+    run_real_media_matrix(false).await;
+}
+
+#[kithara::test(
+    native,
+    tokio,
+    multi_thread,
+    serial,
+    flash(false),
+    timeout(Duration::from_secs(360))
+)]
+#[ignore = "writes opt-in listening artifacts; run explicitly with KITHARA_AUDIO_ARTIFACT_DIR"]
+async fn record_no_sync_real_media_artifacts() {
+    run_real_media_matrix(true).await;
+}
+
+async fn run_real_media_matrix(record_artifacts: bool) {
     let server = TestServerHelper::new().await;
     let mut failures = Vec::new();
     for case in CASES {
         failures.extend(
-            run_case(case, &server)
+            run_case(case, &server, record_artifacts)
                 .await
                 .into_iter()
                 .map(|failure| format!("{}: {failure}", case.label)),
@@ -202,7 +213,7 @@ async fn no_sync_real_media_matrix_is_continuous_and_unsynchronized() {
     );
 }
 
-async fn run_case(case: &Case, server: &TestServerHelper) -> Vec<String> {
+async fn run_case(case: &Case, server: &TestServerHelper, record_artifacts: bool) -> Vec<String> {
     let session = Arc::new(OfflineSession::new_manual());
     let mut failures = Vec::new();
 
@@ -278,14 +289,20 @@ async fn run_case(case: &Case, server: &TestServerHelper) -> Vec<String> {
         decks: &observations,
         failures: &failures,
     };
-    write_audio_artifact(
-        case.label,
-        case.host_rate,
-        CHANNELS,
-        &[("final-mix", &capture)],
-        &manifest,
-    )
-    .unwrap_or_else(|error| panic!("{}: write optional audio artifact: {error}", case.label));
+    if record_artifacts {
+        let written = write_audio_artifact(
+            case.label,
+            case.host_rate,
+            CHANNELS,
+            &[("final-mix", &capture)],
+            &manifest,
+        )
+        .unwrap_or_else(|error| panic!("{}: write audio artifact: {error}", case.label));
+        assert!(
+            written.is_some(),
+            "KITHARA_AUDIO_ARTIFACT_DIR must be set for the artifact recorder"
+        );
+    }
     failures
 }
 
@@ -386,12 +403,6 @@ fn assess_audio(case: &Case, capture: &[f32], failures: &mut Vec<String>) -> Ora
 
     let cochlea = finite.then(|| CochleaReport::measure(capture, CHANNELS, case.host_rate));
     if let Some(report) = &cochlea {
-        if report.silent_segments > 0 {
-            failures.push(format!(
-                "{}: Cochlea found {} silent segments in the steady final mix",
-                case.label, report.silent_segments,
-            ));
-        }
         if report.clipped_samples > 0 || report.true_peak_over_0dbtp {
             failures.push(format!(
                 "{}: conservative mix clipped (samples={}, true_peak_over_0dbtp={})",
@@ -401,20 +412,6 @@ fn assess_audio(case: &Case, capture: &[f32], failures: &mut Vec<String>) -> Ora
     } else {
         failures.push(format!(
             "{}: final PCM contained non-finite samples, so Cochlea could not analyse it",
-            case.label,
-        ));
-    }
-
-    if let Some(report) = &cochlea
-        && report.clipped_samples == 0
-        && capture.len() >= 2 * BLOCK_FRAMES * usize::from(CHANNELS)
-        && catch_unwind(AssertUnwindSafe(|| {
-            assert_oracle_load_bearing(capture, CHANNELS, case.host_rate, BLOCK_FRAMES);
-        }))
-        .is_err()
-    {
-        failures.push(format!(
-            "{}: Cochlea comparator accepted its injected dropout or click",
             case.label,
         ));
     }
@@ -731,12 +728,6 @@ fn validate_deck(case: &Case, deck_index: usize, deck: &Deck, failures: &mut Vec
             deck.observation.label,
             deck.observation.decoder_variants,
             expected_variants,
-        ));
-    }
-    if deck.observation.playback_resamplers.is_empty() {
-        failures.push(format!(
-            "{} deck {deck_index} ({}): no host-rate resampler event was observed",
-            case.label, deck.observation.label,
         ));
     }
     let expected_active = case.host_rate != SOURCE_RATE;

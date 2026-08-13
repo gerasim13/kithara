@@ -300,11 +300,15 @@ The tests use Cochlea on final PCM and fail on decoder errors, event loss, under
 clipping, non-finite samples, or a p99 render cost above half of the audio period. The timing
 guard measures the player render core, not physical device xruns.
 
-Audio artifacts are disabled by default. To persist float WAV files and JSON manifests for
-listening, set an absolute output directory:
+The active tests keep all PCM in memory; artifact I/O is not part of their timeout or CI path.
+Their deterministic sine input is prepared once before playback through the shared,
+build-fingerprinted fixture cache. Repository MP3/HLS inputs are checked-in assets served locally.
+
+To replay the same scenarios and persist float WAV files plus JSON manifests for listening, run
+the separate opt-in recorder with an absolute output directory:
 
 ```bash
-KITHARA_SYNC_ARTIFACT_DIR=/absolute/output just test
+just test audio-artifacts /absolute/output
 ```
 
 Repository HLS fixtures are served by the local test server; these tests do not use the external

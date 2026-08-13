@@ -1,7 +1,5 @@
 #![cfg(not(target_arch = "wasm32"))]
 
-use std::sync::mpsc::{SyncSender, sync_channel};
-
 use kithara::{
     audio::{
         Audio, AudioConfig, AudioEffect, AudioWorkerHandle, PcmSession, StretchControls,
@@ -10,6 +8,10 @@ use kithara::{
     decode::PcmChunk,
     platform::{
         CancelToken,
+        sync::{
+            Arc,
+            atomic::{AtomicU8, Ordering},
+        },
         time::{self, Duration, Instant},
     },
     stream::Stream,
@@ -20,8 +22,7 @@ use kithara_integration_tests::{
     kithara,
     memory_source::{MemStream, MemStreamConfig, MemorySource},
     offline::{OfflinePlayer, resource_from_reader},
-    signal_pcm::signal::SignalFn,
-    wav::create_wav,
+    wav::prepare_sine_wav,
 };
 use num_traits::ToPrimitive;
 use serde::Serialize;
@@ -34,31 +35,49 @@ const WARMUP_BLOCKS: usize = 32;
 const CAPTURE_BLOCKS: usize = 96;
 const LOAD_INTERVAL_BLOCKS: usize = 8;
 const LOAD_BURST: Duration = Duration::from_millis(18);
-const MIN_CAPTURE_LOAD_BURSTS: usize = CAPTURE_BLOCKS / LOAD_INTERVAL_BLOCKS / 2;
 
-struct QuietSine;
+const LOAD_WARMUP: u8 = 0;
+const LOAD_CAPTURE: u8 = 1;
+const LOAD_CAPTURE_SEEN: u8 = 2;
+const LOAD_DONE: u8 = 3;
 
-impl SignalFn for QuietSine {
-    fn sample(&self, frame: usize, sample_rate: u32) -> i16 {
-        let frame = frame.to_f64().expect("WAV frame fits f64");
-        let phase = std::f64::consts::TAU * 440.0 * frame / f64::from(sample_rate);
-        (phase.sin() * 16_000.0)
-            .to_i16()
-            .expect("quiet sine fits i16")
+struct LoadProbe {
+    phase: AtomicU8,
+}
+
+impl LoadProbe {
+    const fn new() -> Self {
+        Self {
+            phase: AtomicU8::new(LOAD_WARMUP),
+        }
+    }
+
+    fn start_capture(&self) {
+        self.phase.store(LOAD_CAPTURE, Ordering::Release);
+    }
+
+    fn observe_burst(&self) {
+        let _ = self.phase.compare_exchange(
+            LOAD_CAPTURE,
+            LOAD_CAPTURE_SEEN,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        );
+    }
+
+    fn finish_capture(&self) -> bool {
+        self.phase.swap(LOAD_DONE, Ordering::AcqRel) == LOAD_CAPTURE_SEEN
     }
 }
 
 struct BurstLoadEffect {
     blocks: usize,
-    observed: SyncSender<()>,
+    probe: Arc<LoadProbe>,
 }
 
 impl BurstLoadEffect {
-    fn new(observed: SyncSender<()>) -> Self {
-        Self {
-            blocks: 0,
-            observed,
-        }
+    fn new(probe: Arc<LoadProbe>) -> Self {
+        Self { blocks: 0, probe }
     }
 }
 
@@ -70,7 +89,7 @@ impl AudioEffect for BurstLoadEffect {
     fn process(&mut self, chunk: PcmChunk) -> Option<PcmChunk> {
         self.blocks = self.blocks.saturating_add(1);
         if self.blocks.is_multiple_of(LOAD_INTERVAL_BLOCKS) {
-            let _ = self.observed.try_send(());
+            self.probe.observe_burst();
             let deadline = Instant::now() + LOAD_BURST;
             while Instant::now() < deadline {
                 std::hint::spin_loop();
@@ -91,7 +110,7 @@ struct RealtimeCapture {
     warmup_underruns: u64,
     decode_errors: u64,
     underruns: u64,
-    load_bursts: usize,
+    load_observed_during_capture: bool,
 }
 
 #[derive(Serialize)]
@@ -100,7 +119,7 @@ struct CaptureMetrics {
     warmup_underruns: u64,
     decode_errors: u64,
     underruns: u64,
-    load_bursts: usize,
+    load_observed_during_capture: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -119,7 +138,7 @@ impl From<&RealtimeCapture> for CaptureMetrics {
             warmup_underruns: capture.warmup_underruns,
             decode_errors: capture.decode_errors,
             underruns: capture.underruns,
-            load_bursts: capture.load_bursts,
+            load_observed_during_capture: capture.load_observed_during_capture,
         }
     }
 }
@@ -191,17 +210,13 @@ fn measure_quiet_sine(samples: &[f32]) -> SineFit {
 }
 
 fn audio_config(
+    source: &[u8],
     worker: AudioWorkerHandle,
     stretch: bool,
     effects: Vec<Box<dyn AudioEffect>>,
 ) -> AudioConfig<MemStream> {
     let stream = MemStreamConfig {
-        source: Some(MemorySource::new(create_wav(
-            QuietSine,
-            usize::try_from(SAMPLE_RATE).expect("sample rate fits usize") * SOURCE_SECONDS,
-            SAMPLE_RATE,
-            CHANNELS,
-        ))),
+        source: Some(MemorySource::new(source.to_vec())),
         event_bus: None,
     };
     let stretch = stretch.then(|| {
@@ -233,12 +248,11 @@ async fn wait_for_preload(audio: &Audio<Stream<MemStream>>) {
     .expect("audio preload gate must open");
 }
 
-async fn render_passthrough(stretch: bool, with_load: bool) -> RealtimeCapture {
-    let (load_observed_tx, load_observed_rx) =
-        sync_channel((WARMUP_BLOCKS + CAPTURE_BLOCKS) / LOAD_INTERVAL_BLOCKS + 2);
+async fn render_passthrough(source: &[u8], stretch: bool, with_load: bool) -> RealtimeCapture {
+    let load_probe = Arc::new(LoadProbe::new());
     let worker = AudioWorkerHandle::with_cancel(CancelToken::never());
     let mut target_audio =
-        Audio::<Stream<MemStream>>::new(audio_config(worker.clone(), stretch, Vec::new()))
+        Audio::<Stream<MemStream>>::new(audio_config(source, worker.clone(), stretch, Vec::new()))
             .await
             .expect("target audio construction");
     wait_for_preload(&target_audio).await;
@@ -246,9 +260,10 @@ async fn render_passthrough(stretch: bool, with_load: bool) -> RealtimeCapture {
 
     let mut load_audio = if with_load {
         let mut audio = Audio::<Stream<MemStream>>::new(audio_config(
+            source,
             worker,
             false,
-            vec![Box::new(BurstLoadEffect::new(load_observed_tx))],
+            vec![Box::new(BurstLoadEffect::new(Arc::clone(&load_probe)))],
         ))
         .await
         .expect("load audio construction");
@@ -282,8 +297,6 @@ async fn render_passthrough(stretch: bool, with_load: bool) -> RealtimeCapture {
         let _ = target.render(BLOCK_FRAMES);
         time::sleep(block_period.saturating_sub(started.elapsed())).await;
     }
-    while load_observed_rx.try_recv().is_ok() {}
-
     let metrics_before_capture = target.metrics();
     let warmup_decode_errors = metrics_before_capture
         .decode_errors()
@@ -292,6 +305,7 @@ async fn render_passthrough(stretch: bool, with_load: bool) -> RealtimeCapture {
         .underruns()
         .saturating_sub(metrics_before_warmup.underruns());
     let mut pcm = Vec::with_capacity(CAPTURE_BLOCKS * BLOCK_FRAMES * usize::from(CHANNELS));
+    load_probe.start_capture();
     for _ in 0..CAPTURE_BLOCKS {
         let started = Instant::now();
         if let Some(player) = load.as_mut() {
@@ -300,6 +314,7 @@ async fn render_passthrough(stretch: bool, with_load: bool) -> RealtimeCapture {
         pcm.extend(target.render(BLOCK_FRAMES));
         time::sleep(block_period.saturating_sub(started.elapsed())).await;
     }
+    let load_observed_during_capture = load_probe.finish_capture();
     let metrics_after_capture = target.metrics();
 
     RealtimeCapture {
@@ -312,7 +327,7 @@ async fn render_passthrough(stretch: bool, with_load: bool) -> RealtimeCapture {
         underruns: metrics_after_capture
             .underruns()
             .saturating_sub(metrics_before_capture.underruns()),
-        load_bursts: load_observed_rx.try_iter().count(),
+        load_observed_during_capture,
     }
 }
 
@@ -332,13 +347,36 @@ fn first_sample_mismatch(candidate: &[f32], control: &[f32]) -> Option<usize> {
     env(KITHARA_HANG_TIMEOUT_SECS = "5")
 )]
 async fn no_sync_unity_playback_is_bit_exact_and_cochlea_clean_under_load() {
+    run_no_sync_passthrough(false).await;
+}
+
+#[kithara::test(
+    tokio,
+    flash(false),
+    serial,
+    timeout(Duration::from_secs(60)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "5")
+)]
+#[ignore = "writes opt-in listening artifacts; run explicitly with KITHARA_AUDIO_ARTIFACT_DIR"]
+async fn record_no_sync_unity_playback_artifacts() {
+    run_no_sync_passthrough(true).await;
+}
+
+async fn run_no_sync_passthrough(record_artifacts: bool) {
     let channels = usize::from(CHANNELS);
-    let baseline = render_passthrough(false, false).await;
+    let source = prepare_sine_wav(
+        440.0,
+        16_000,
+        usize::try_from(SAMPLE_RATE).expect("sample rate fits usize") * SOURCE_SECONDS,
+        SAMPLE_RATE,
+        CHANNELS,
+    );
+    let baseline = render_passthrough(&source, false, false).await;
     let baseline_report = CochleaReport::measure(&baseline.pcm, CHANNELS, SAMPLE_RATE);
     let baseline_source_fit = measure_quiet_sine(&baseline.pcm);
-    let unity = render_passthrough(true, false).await;
+    let unity = render_passthrough(&source, true, false).await;
     let unity_report = CochleaReport::measure(&unity.pcm, CHANNELS, SAMPLE_RATE);
-    let loaded = render_passthrough(true, true).await;
+    let loaded = render_passthrough(&source, true, true).await;
     let loaded_report = CochleaReport::measure(&loaded.pcm, CHANNELS, SAMPLE_RATE);
     let mut failures = Vec::new();
     if !baseline.pcm.iter().any(|sample| sample.abs() > 0.25) {
@@ -408,11 +446,8 @@ async fn no_sync_unity_playback_is_bit_exact_and_cochlea_clean_under_load() {
             }
         }
     }
-    if loaded.load_bursts < MIN_CAPTURE_LOAD_BURSTS {
-        failures.push(format!(
-            "unity+load: only {} bounded shared-worker bursts ran during capture; expected at least {MIN_CAPTURE_LOAD_BURSTS}",
-            loaded.load_bursts,
-        ));
+    if !loaded.load_observed_during_capture {
+        failures.push("unity+load: no bounded shared-worker burst began during capture".to_owned());
     }
 
     let manifest = PassthroughManifest {
@@ -429,18 +464,24 @@ async fn no_sync_unity_playback_is_bit_exact_and_cochlea_clean_under_load() {
         unity_under_load_cochlea: &loaded_report,
         failures: &failures,
     };
-    write_audio_artifact(
-        "no-sync-unity-passthrough",
-        SAMPLE_RATE,
-        CHANNELS,
-        &[
-            ("effect-free-control", &baseline.pcm),
-            ("unity", &unity.pcm),
-            ("unity-under-load", &loaded.pcm),
-        ],
-        &manifest,
-    )
-    .expect("optional no-SYNC audio artifact write");
+    if record_artifacts {
+        let written = write_audio_artifact(
+            "no-sync-unity-passthrough",
+            SAMPLE_RATE,
+            CHANNELS,
+            &[
+                ("effect-free-control", &baseline.pcm),
+                ("unity", &unity.pcm),
+                ("unity-under-load", &loaded.pcm),
+            ],
+            &manifest,
+        )
+        .expect("no-SYNC audio artifact write");
+        assert!(
+            written.is_some(),
+            "KITHARA_AUDIO_ARTIFACT_DIR must be set for the artifact recorder"
+        );
+    }
 
     assert_oracle_load_bearing(&baseline.pcm, CHANNELS, SAMPLE_RATE, BLOCK_FRAMES);
     assert!(

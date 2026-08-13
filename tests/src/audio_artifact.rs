@@ -1,13 +1,16 @@
 use std::{
     env, fs,
-    io::{self, Write},
+    io::{self, BufWriter, Write},
+    mem::size_of_val,
     path::{Path, PathBuf},
     sync::atomic::{AtomicU64, Ordering},
 };
 
 use serde::Serialize;
 
-const ARTIFACT_DIR_ENV: &str = "KITHARA_SYNC_ARTIFACT_DIR";
+const ARTIFACT_DIR_ENV: &str = "KITHARA_AUDIO_ARTIFACT_DIR";
+const WAV_BUFFER_BYTES: usize = 64 * 1024;
+const WAV_BATCH_SAMPLES: usize = 4 * 1024;
 static ATTEMPT: AtomicU64 = AtomicU64::new(0);
 
 pub fn write_audio_artifact<T: Serialize>(
@@ -49,7 +52,9 @@ pub fn write_audio_artifact<T: Serialize>(
     }
 
     let manifest_file = fs::File::create(directory.join("manifest.json"))?;
-    serde_json::to_writer_pretty(manifest_file, manifest).map_err(io::Error::other)?;
+    let mut manifest_writer = BufWriter::new(manifest_file);
+    serde_json::to_writer_pretty(&mut manifest_writer, manifest).map_err(io::Error::other)?;
+    manifest_writer.flush()?;
     Ok(Some(directory))
 }
 
@@ -104,7 +109,7 @@ fn write_float_wav(
         .checked_mul(bytes_per_sample)
         .ok_or_else(|| io::Error::other("WAV block alignment overflow"))?;
 
-    let mut file = fs::File::create(path)?;
+    let mut file = BufWriter::with_capacity(WAV_BUFFER_BYTES, fs::File::create(path)?);
     file.write_all(b"RIFF")?;
     file.write_all(&riff_size.to_le_bytes())?;
     file.write_all(b"WAVEfmt ")?;
@@ -117,10 +122,14 @@ fn write_float_wav(
     file.write_all(&32u16.to_le_bytes())?;
     file.write_all(b"data")?;
     file.write_all(&data_bytes.to_le_bytes())?;
-    for sample in samples {
-        file.write_all(&sample.to_le_bytes())?;
+    let mut encoded = vec![0u8; WAV_BATCH_SAMPLES * size_of::<f32>()];
+    for batch in samples.chunks(WAV_BATCH_SAMPLES) {
+        for (sample, bytes) in batch.iter().zip(encoded.chunks_exact_mut(size_of::<f32>())) {
+            bytes.copy_from_slice(&sample.to_le_bytes());
+        }
+        file.write_all(&encoded[..size_of_val(batch)])?;
     }
-    file.sync_all()
+    file.flush()
 }
 
 #[cfg(test)]
@@ -140,5 +149,24 @@ mod tests {
         assert_eq!(&bytes[8..12], b"WAVE");
         assert_eq!(u16::from_le_bytes([bytes[20], bytes[21]]), 3);
         assert_eq!(bytes.len(), 44 + 4 * size_of::<f32>());
+    }
+
+    #[test]
+    fn float_wav_preserves_payload_across_batch_boundary() {
+        let temp = tempdir().expect("temporary artifact directory");
+        let path = temp.path().join("batched.wav");
+        let samples = (0..WAV_BATCH_SAMPLES + 2)
+            .map(|index| {
+                f32::from_bits(0x3e80_0000 + u32::try_from(index).expect("sample index fits u32"))
+            })
+            .collect::<Vec<_>>();
+        write_float_wav(&path, &samples, 48_000, 1).expect("write batched float WAV");
+
+        let bytes = fs::read(path).expect("read batched float WAV");
+        let expected = samples
+            .iter()
+            .flat_map(|sample| sample.to_le_bytes())
+            .collect::<Vec<_>>();
+        assert_eq!(&bytes[44..], expected);
     }
 }

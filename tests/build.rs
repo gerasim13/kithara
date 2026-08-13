@@ -88,6 +88,7 @@ fn main() {
         "src/native/hls_stream.rs",
         "src/native/routes/signal.rs",
         "src/signal_pcm.rs",
+        "src/wav.rs",
     ] {
         if let Ok(bytes) = fs::read(file) {
             bytes.hash(&mut hasher);
