@@ -389,6 +389,36 @@ mod tests {
         );
     }
 
+    /// Every installed profile predates the guest, and a mac that serves no
+    /// Windows lane never grows the section. Refusing to load without it would
+    /// take cleanup down on hosts that have nothing to do with Windows.
+    #[test]
+    fn ci_host_load_accepts_a_profile_with_no_windows_guest() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("host.toml");
+        super::super::fixture().host.write(&path).unwrap();
+
+        assert!(CiHost::load(&path).unwrap().windows.is_none());
+    }
+
+    #[test]
+    fn a_profile_that_declares_a_windows_guest_carries_its_data_disk() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("host.toml");
+        let mut host = super::super::fixture().host;
+        host.windows = Some(WindowsGuest {
+            vcpus: 4,
+            memory_mib: 8192,
+            data_disk_gib: 80,
+        });
+        host.write(&path).unwrap();
+
+        assert_eq!(
+            CiHost::load(&path).unwrap().windows.unwrap().data_disk_gib,
+            80
+        );
+    }
+
     #[test]
     fn ci_host_load_rejects_garbage_build_cache_size() {
         let directory = tempfile::tempdir().unwrap();
