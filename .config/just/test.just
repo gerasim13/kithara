@@ -115,7 +115,7 @@ e2e-resamplers *ARGS:
     just test run --lane=e2e-glide "$@"
 
 # Every UI test target, followed by both hosts drawing the same gallery and
-# shipped studio pages. This is the GPU pipeline's single entrypoint; the
+# shipped studio pages. This is the UI pipeline's single entrypoint; the
 # general workspace lane deliberately excludes the same tests.
 #
 # One binary takes both sets, so a difference between them is a difference
