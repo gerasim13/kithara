@@ -170,6 +170,29 @@ as SKIP instead of a false FAIL. Two stages needed a different answer:
   tweak. Until that lands, `.strict()` keeps a missing lockbud reading as FAIL
   rather than a harmless SKIP.
 
+## Stress campaign ownership
+
+`stress run` is the sole portable lifecycle owner for repeated-test evidence. It
+records a typed schema-v2 manifest, exact nextest inventory and JUnit, a live and
+durable combined log, Linux pressure samples, and optional hang/no-block artifacts
+under one fresh raw directory. Reproduction mode removes timing-perturbing probes;
+diagnostic mode explicitly enables Flash tracing and requested diagnostic features
+only on child commands. The inventory-by-iteration contract, not nextest's last
+stress iteration status, owns the primary verdict.
+
+Pressure schema `kithara.pressure.v2` names its end-marker status
+`primary_exit_code`: sampling ends after the test/evidence phase so the reporter can
+consume a closed stream. The manifest's `timing.exit_code` is the later combined
+campaign verdict and can additionally reflect staging or supplemental-evidence errors.
+The pressure value is null when a coordinator failure prevents primary execution.
+
+`stress report` independently consumes an uploaded raw directory. It compares the
+manifest with trusted checkout and workflow inputs, checks that pressure sampling
+ended healthy, renders bounded correlated evidence, and returns nonzero for failed,
+missing, partial, duplicate, malformed, or mismatched evidence. GitHub Actions owns
+only authorization, immutable checkout selection, job isolation, artifact transfer,
+and publishing the already-rendered Markdown summary.
+
 ## Quality assessment contract
 
 `quality assess` is an artifact federation layer. Existing linters, architecture,

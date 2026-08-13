@@ -26,6 +26,16 @@ linux *ARGS:
 bridge *ARGS:
     just _xtask ci bridge "$@"
 
+# Run a complete repeated-test evidence campaign.
+[positional-arguments]
+stress *ARGS:
+    just _xtask stress run "$@"
+
+# Independently verify and render a downloaded stress artifact.
+[positional-arguments]
+stress-report *ARGS:
+    just _xtask stress report "$@"
+
 # Run all linters scoped to a crate, path, or workspace.
 [positional-arguments]
 audit *ARGS:

@@ -6,43 +6,33 @@ use std::{
     process::{Command, Stdio},
 };
 
-use anyhow::{Context, Result, ensure};
-use clap::{ArgAction, Args};
-
 use crate::{
-    Ctx,
-    stress_report::{MAX_INVENTORY_BYTES, read_bounded_utf8, validate_inventory},
+    stress::{run_output, run_stderr_output},
+    stress_report::{
+        MAX_INVENTORY_BYTES, read_bounded_utf8, validate_inventory, validate_primary_evidence,
+    },
     test::{LaneToggles, NextestAction, nextest_lane_command_for},
     verdict::ChildFailure,
 };
+use anyhow::{Context, Result, ensure};
 
-const MAX_STRESS_COUNT: usize = 100;
-const MAX_TEST_THREADS: usize = 256;
+struct Consts;
 
-#[derive(Debug, Args)]
-#[non_exhaustive]
-pub struct StressRunArgs {
-    /// Machine-readable inventory to write before executing the selection.
-    #[arg(long)]
-    inventory: PathBuf,
-    /// Reviewed nextest configuration used for listing and running the subject.
-    #[arg(long)]
-    config_file: PathBuf,
-    /// Nextest filterset selecting the tests to repeat.
-    #[arg(long)]
-    filter: String,
-    /// Number of times to execute every selected test.
-    #[arg(long)]
-    count: usize,
-    /// Nextest runner concurrency (`num-cpus` or a positive integer).
-    #[arg(long, default_value = "num-cpus")]
-    test_threads: String,
-    /// Compile and run the subject with Flash enabled.
-    #[arg(long, action = ArgAction::Set)]
-    flash: bool,
-    /// Compile and run the subject with no-block instrumentation enabled.
-    #[arg(long, action = ArgAction::Set)]
-    no_block: bool,
+impl Consts {
+    const MAX_STRESS_COUNT: usize = 100;
+    const MAX_TEST_THREADS: usize = 256;
+}
+
+#[derive(Debug)]
+pub(crate) struct StressRunSpec {
+    pub(crate) inventory: PathBuf,
+    pub(crate) junit: PathBuf,
+    pub(crate) config_file: PathBuf,
+    pub(crate) filter: String,
+    pub(crate) count: usize,
+    pub(crate) test_threads: String,
+    pub(crate) flash: bool,
+    pub(crate) no_block: bool,
 }
 
 /// Lists the exact selection, validates it, then runs every selected test.
@@ -50,16 +40,16 @@ pub struct StressRunArgs {
 /// # Errors
 ///
 /// Returns an error when the campaign inputs are invalid, listing does not
-/// produce a usable inventory, or nextest cannot complete the stress run.
-pub(crate) fn run(args: &StressRunArgs, ctx: &Ctx) -> Result<()> {
-    validate_stress_count(args.count)?;
-    ensure!(!args.filter.trim().is_empty(), "stress filter is empty");
-    validate_test_threads(&args.test_threads)?;
-    ensure!(
-        args.config_file.is_file(),
-        "nextest config does not exist: {}",
-        args.config_file.display()
-    );
+/// produce a usable inventory, the `JUnit` destination is not fresh, nextest
+/// cannot complete the stress run, or any recorded attempt failed.
+pub(crate) fn run(
+    args: &StressRunSpec,
+    config: &crate::common::project::ProjectConfig,
+    subject_root: &Path,
+    log_path: &Path,
+    configure: &dyn Fn(&mut Command),
+) -> Result<()> {
+    validate(args)?;
     let config_file = args
         .config_file
         .to_str()
@@ -68,7 +58,7 @@ pub(crate) fn run(args: &StressRunArgs, ctx: &Ctx) -> Result<()> {
         flash: args.flash,
         no_block: args.no_block,
     };
-    let backend = &ctx.config.test.default_backend;
+    let backend = &config.test.default_backend;
 
     let inventory_args = vec![
         "--profile".to_owned(),
@@ -81,7 +71,7 @@ pub(crate) fn run(args: &StressRunArgs, ctx: &Ctx) -> Result<()> {
         "json".to_owned(),
     ];
     let (_, mut inventory) = nextest_lane_command_for(
-        &ctx.config,
+        config,
         toggles,
         backend,
         &inventory_args,
@@ -89,10 +79,10 @@ pub(crate) fn run(args: &StressRunArgs, ctx: &Ctx) -> Result<()> {
     )?;
     let output = create_inventory(&args.inventory)?;
     inventory
-        .current_dir(&ctx.root)
-        .stdout(Stdio::from(output))
-        .stderr(Stdio::inherit());
-    let status = inventory.status().context("start nextest inventory")?;
+        .current_dir(subject_root)
+        .stdout(Stdio::from(output));
+    configure(&mut inventory);
+    let status = run_stderr_output(&mut inventory, log_path)?;
     if !status.success() {
         return Err(ChildFailure::inherited(
             "nextest inventory".to_owned(),
@@ -115,9 +105,36 @@ pub(crate) fn run(args: &StressRunArgs, ctx: &Ctx) -> Result<()> {
         args.test_threads.clone(),
     ];
     let (_, mut run) =
-        nextest_lane_command_for(&ctx.config, toggles, backend, &run_args, NextestAction::Run)?;
-    run.current_dir(&ctx.root);
-    run_child(&mut run)
+        nextest_lane_command_for(config, toggles, backend, &run_args, NextestAction::Run)?;
+    run.current_dir(subject_root);
+    configure(&mut run);
+    run_child(&mut run, log_path)?;
+    validate_primary_evidence(&args.inventory, &args.junit, args.count)
+}
+
+pub(crate) fn validate(args: &StressRunSpec) -> Result<()> {
+    validate_stress_count(args.count)?;
+    ensure!(!args.filter.trim().is_empty(), "stress filter is empty");
+    validate_test_threads(&args.test_threads)?;
+    ensure!(
+        args.junit.is_absolute(),
+        "stress JUnit path must be absolute: {}",
+        args.junit.display()
+    );
+    ensure!(
+        !args
+            .junit
+            .try_exists()
+            .with_context(|| format!("inspect stress JUnit path {}", args.junit.display()))?,
+        "stress JUnit already exists: {}; remove it before starting a new campaign",
+        args.junit.display()
+    );
+    ensure!(
+        args.config_file.is_file(),
+        "nextest config does not exist: {}",
+        args.config_file.display()
+    );
+    Ok(())
 }
 
 fn validate_test_threads(value: &str) -> Result<()> {
@@ -129,8 +146,9 @@ fn validate_test_threads(value: &str) -> Result<()> {
         .with_context(|| format!("invalid test-threads value `{value}`"))?;
     ensure!(count > 0, "test-threads must be greater than zero");
     ensure!(
-        count <= MAX_TEST_THREADS,
-        "test-threads must not exceed {MAX_TEST_THREADS}"
+        count <= Consts::MAX_TEST_THREADS,
+        "test-threads must not exceed {}",
+        Consts::MAX_TEST_THREADS,
     );
     Ok(())
 }
@@ -138,8 +156,9 @@ fn validate_test_threads(value: &str) -> Result<()> {
 fn validate_stress_count(count: usize) -> Result<()> {
     ensure!(count > 0, "stress count must be greater than zero");
     ensure!(
-        count <= MAX_STRESS_COUNT,
-        "stress count must not exceed {MAX_STRESS_COUNT}"
+        count <= Consts::MAX_STRESS_COUNT,
+        "stress count must not exceed {}",
+        Consts::MAX_STRESS_COUNT,
     );
     Ok(())
 }
@@ -154,8 +173,8 @@ fn create_inventory(path: &Path) -> Result<File> {
     File::create(path).with_context(|| format!("create stress inventory {}", path.display()))
 }
 
-fn run_child(command: &mut Command) -> Result<()> {
-    let status = command.status().context("start nextest stress run")?;
+fn run_child(command: &mut Command, log_path: &Path) -> Result<()> {
+    let status = run_output(command, log_path)?;
     if status.success() {
         return Ok(());
     }
@@ -168,6 +187,43 @@ fn run_child(command: &mut Command) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const INVENTORY: &str = r#"{
+  "rust-suites": {
+    "demo::tests": {
+      "binary-id": "demo::tests",
+      "status": "listed",
+      "testcases": {
+        "seek": {"ignored": false, "filter-match": {"status": "matches"}}
+      }
+    }
+  }
+}"#;
+
+    const PASSED_JUNIT: &str = r#"<testsuites uuid="run" timestamp="2026-08-13T12:00:00Z">
+  <testsuite name="demo::tests@stress-0">
+    <testcase name="seek" classname="demo::tests" time="0.1" timestamp="2026-08-13T12:00:00Z"/>
+  </testsuite>
+</testsuites>"#;
+
+    const EARLY_FAILED_JUNIT: &str = r#"<testsuites uuid="run" timestamp="2026-08-13T12:00:00Z">
+  <testsuite name="demo::tests@stress-0">
+    <testcase name="seek" classname="demo::tests" time="0.1" timestamp="2026-08-13T12:00:00Z">
+      <failure type="test failure">boom</failure>
+    </testcase>
+  </testsuite>
+  <testsuite name="demo::tests@stress-1">
+    <testcase name="seek" classname="demo::tests" time="0.1" timestamp="2026-08-13T12:00:01Z"/>
+  </testsuite>
+</testsuites>"#;
+
+    fn evidence_paths(temp: &tempfile::TempDir, junit: &str) -> (PathBuf, PathBuf) {
+        let inventory = temp.path().join("inventory.json");
+        let junit_path = temp.path().join("junit.xml");
+        fs::write(&inventory, INVENTORY).expect("write inventory fixture");
+        fs::write(&junit_path, junit).expect("write JUnit fixture");
+        (inventory, junit_path)
+    }
 
     #[test]
     fn test_threads_accepts_nextest_concurrency_values() {
@@ -191,5 +247,58 @@ mod tests {
         for count in [0, 101, usize::MAX] {
             assert!(validate_stress_count(count).is_err(), "{count}");
         }
+    }
+
+    #[test]
+    fn passed_junit_is_a_clean_stress_outcome() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let (inventory, junit) = evidence_paths(&temp, PASSED_JUNIT);
+
+        validate_primary_evidence(&inventory, &junit, 1).expect("passed JUnit must be clean");
+    }
+
+    #[test]
+    fn failed_attempt_before_passing_last_attempt_is_not_clean() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let (inventory, junit) = evidence_paths(&temp, EARLY_FAILED_JUNIT);
+
+        let error = validate_primary_evidence(&inventory, &junit, 2)
+            .expect_err("failed attempt must fail closed");
+
+        assert!(
+            error.downcast_ref::<crate::verdict::NotClean>().is_some(),
+            "{error:?}"
+        );
+    }
+
+    #[test]
+    fn empty_or_partial_junit_is_not_clean() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let (inventory, empty) = evidence_paths(
+            &temp,
+            r#"<testsuites uuid="run" timestamp="2026-08-13T12:00:00Z"/>"#,
+        );
+
+        let empty_error = validate_primary_evidence(&inventory, &empty, 2)
+            .expect_err("empty JUnit must fail closed");
+
+        assert!(
+            empty_error
+                .downcast_ref::<crate::verdict::NotClean>()
+                .is_some(),
+            "{empty_error:?}"
+        );
+
+        let partial = temp.path().join("partial.xml");
+        fs::write(&partial, PASSED_JUNIT).expect("write partial JUnit fixture");
+        let partial_error = validate_primary_evidence(&inventory, &partial, 2)
+            .expect_err("partial JUnit must fail closed");
+
+        assert!(
+            partial_error
+                .downcast_ref::<crate::verdict::NotClean>()
+                .is_some(),
+            "{partial_error:?}"
+        );
     }
 }

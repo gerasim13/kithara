@@ -47,7 +47,7 @@ impl ChildFailure {
         })
     }
 
-    fn report_code(&self) -> i32 {
+    pub(crate) fn exit_code(&self) -> i32 {
         self.exit_code
             .filter(|code| (1..=i32::from(u8::MAX)).contains(code))
             .unwrap_or(1)
@@ -131,7 +131,7 @@ impl NotClean {
         }
 
         if let Some(failure) = error.downcast_ref::<ChildFailure>() {
-            return (failure.to_string(), failure.report_code());
+            return (failure.to_string(), failure.exit_code());
         }
 
         (format!("Error: {error:?}"), 1)

@@ -31,11 +31,10 @@ const PERCENT_HUNDREDTHS: usize = PERCENT_SCALE * PERCENT_SCALE;
 const MAX_EXPECTED_COUNT: usize = 100;
 const MAX_INVENTORY_CASES: usize = 100_000;
 pub(crate) const MAX_INVENTORY_BYTES: u64 = 64 * 1_024 * 1_024;
-const MAX_JUNIT_BYTES: u64 = 512 * 1_024 * 1_024;
+pub(crate) const MAX_JUNIT_BYTES: u64 = 512 * 1_024 * 1_024;
 
 #[derive(Debug, Args)]
-#[non_exhaustive]
-pub struct StressReportArgs {
+pub(crate) struct StressReportArgs {
     /// `JUnit` emitted by the nextest stress profile.
     #[arg(long, default_value = DEFAULT_JUNIT)]
     junit: PathBuf,
@@ -60,6 +59,51 @@ pub struct StressReportArgs {
     /// Explain an absent `JUnit` as fallout from the primary nextest step.
     #[arg(long)]
     allow_missing: bool,
+}
+
+impl StressReportArgs {
+    #[must_use]
+    pub(crate) fn new(
+        junit: PathBuf,
+        inventory: PathBuf,
+        output: PathBuf,
+        expected_count: usize,
+    ) -> Self {
+        Self {
+            junit,
+            inventory,
+            no_block_log: None,
+            hang_dir: None,
+            pressure_log: None,
+            output,
+            expected_count,
+            allow_missing: false,
+        }
+    }
+
+    #[must_use]
+    pub(crate) fn with_allow_missing(mut self, allow_missing: bool) -> Self {
+        self.allow_missing = allow_missing;
+        self
+    }
+
+    #[must_use]
+    pub(crate) fn with_pressure(mut self, path: PathBuf) -> Self {
+        self.pressure_log = Some(path);
+        self
+    }
+
+    #[must_use]
+    pub(crate) fn with_optional_hang(mut self, path: Option<PathBuf>) -> Self {
+        self.hang_dir = path;
+        self
+    }
+
+    #[must_use]
+    pub(crate) fn with_optional_no_block(mut self, path: Option<PathBuf>) -> Self {
+        self.no_block_log = path;
+        self
+    }
 }
 
 #[derive(Debug, Default)]
@@ -124,8 +168,9 @@ impl EvidenceProblems {
 ///
 /// # Errors
 ///
-/// Returns an error when the evidence is absent, incomplete, or invalid, the
-/// expected count is zero, or the output cannot be written.
+/// Returns an error when the evidence is absent, incomplete, invalid, or
+/// contains a failed attempt, the expected count is zero, or the output cannot
+/// be written.
 pub(crate) fn run(args: &StressReportArgs) -> Result<()> {
     validate_expected_count(args.expected_count)?;
     let inventory = match read_inventory(&args.inventory) {
@@ -171,6 +216,7 @@ pub(crate) fn run(args: &StressReportArgs) -> Result<()> {
             return Err(NotClean::reported("stress evidence"));
         }
     };
+    let has_failures = junit.cases.iter().any(|case| case.failed);
     if let Err(error) = validate_correlation_metadata(&junit) {
         let markdown =
             render_invalid_artifact("INVALID JUNIT", args.expected_count, &args.junit, &error);
@@ -195,10 +241,45 @@ pub(crate) fn run(args: &StressReportArgs) -> Result<()> {
         mark_incomplete(&mut report.markdown);
     }
     write_report(&args.output, &report.markdown)?;
-    if report.complete {
+    if report.complete && !has_failures {
         Ok(())
     } else {
         Err(NotClean::reported("stress evidence"))
+    }
+}
+
+/// Check the inventory-by-iteration contract before the campaign records its
+/// primary exit status. The full reporter later writes the actionable detail;
+/// this narrow verdict prevents a missing or partial `JUnit` from being
+/// mistaken for a successful nextest stress run.
+///
+/// # Errors
+///
+/// Returns a concise stress verdict when either artifact is unavailable or
+/// invalid, any selected attempt is absent, or any recorded attempt failed.
+pub(crate) fn validate_primary_evidence(
+    inventory_path: &Path,
+    junit_path: &Path,
+    expected_count: usize,
+) -> Result<()> {
+    validate_expected_count(expected_count)?;
+    let inventory =
+        read_inventory(inventory_path).map_err(|_| NotClean::reported("stress run evidence"))?;
+    let xml = read_bounded_utf8(junit_path, MAX_JUNIT_BYTES, "stress JUnit")
+        .map_err(|_| NotClean::reported("stress run evidence"))?;
+    let junit = parse_junit_report(&xml).map_err(|_| NotClean::reported("stress run evidence"))?;
+    validate_correlation_metadata(&junit).map_err(|_| NotClean::reported("stress run evidence"))?;
+    let report = render(
+        &junit.cases,
+        &inventory,
+        expected_count,
+        junit.run_id.as_deref(),
+        junit.timestamp.as_deref(),
+    );
+    if report.complete && !junit.cases.iter().any(|case| case.failed) {
+        Ok(())
+    } else {
+        Err(NotClean::reported("stress run evidence"))
     }
 }
 
@@ -353,7 +434,7 @@ fn validate_expected_count(expected_count: usize) -> Result<()> {
     Ok(())
 }
 
-fn write_report(path: &Path, markdown: &str) -> Result<()> {
+pub(crate) fn write_report(path: &Path, markdown: &str) -> Result<()> {
     if let Some(parent) = path.parent()
         && !parent.as_os_str().is_empty()
     {
@@ -878,6 +959,58 @@ mod tests {
             assert!(error.downcast_ref::<NotClean>().is_some(), "{error:?}");
             assert!(markdown.contains(marker), "{markdown}");
         }
+    }
+
+    #[test]
+    fn complete_failed_input_writes_report_and_returns_a_verdict() {
+        const FAILED: &str = r#"<testsuites uuid="run" timestamp="2026-08-13T12:00:00Z">
+  <testsuite name="demo::tests@stress-0">
+    <testcase name="seek" classname="demo::tests" time="0.1" timestamp="2026-08-13T12:00:00Z">
+      <failure type="test failure">boom</failure>
+    </testcase>
+  </testsuite>
+  <testsuite name="demo::tests@stress-1">
+    <testcase name="seek" classname="demo::tests" time="0.1" timestamp="2026-08-13T12:00:01Z"/>
+  </testsuite>
+</testsuites>"#;
+        let temp = tempfile::tempdir().expect("tempdir");
+        let inventory = temp.path().join("inventory.json");
+        let junit = temp.path().join("junit.xml");
+        let output = temp.path().join("report.md");
+        fs::write(
+            &inventory,
+            r#"{
+  "rust-suites": {
+    "demo::tests": {
+      "binary-id": "demo::tests",
+      "status": "listed",
+      "testcases": {
+        "seek": {"ignored": false, "filter-match": {"status": "matches"}}
+      }
+    }
+  }
+}"#,
+        )
+        .expect("write inventory");
+        fs::write(&junit, FAILED).expect("write junit");
+        let args = StressReportArgs {
+            junit,
+            inventory,
+            no_block_log: None,
+            hang_dir: None,
+            pressure_log: None,
+            output: output.clone(),
+            expected_count: 2,
+            allow_missing: false,
+        };
+
+        let error = run(&args).expect_err("failed attempt must fail closed");
+        let markdown = fs::read_to_string(output).expect("read report");
+
+        assert!(error.downcast_ref::<NotClean>().is_some(), "{error:?}");
+        assert!(markdown.contains("Result: **FAILED**"), "{markdown}");
+        assert!(markdown.contains("Observed iterations: `2`"), "{markdown}");
+        assert!(markdown.contains("Failed attempts: `1`"), "{markdown}");
     }
 
     #[test]

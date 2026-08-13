@@ -1,8 +1,7 @@
 name: Stress
 
-# Repeat an exact selection on the fork's dedicated Linux runner and retain
-# attempt-correlated evidence. Reproduction and diagnostic campaigns stay
-# separate because tracing itself changes scheduling.
+# GitHub owns authorization, immutable checkout identity, artifact transport,
+# and the trusted reporting boundary. The Rust campaign owns portable work.
 on:
   workflow_call:
     inputs:
@@ -94,15 +93,12 @@ permissions:
   contents: read
 
 jobs:
-  # Authorization runs on GitHub-hosted infrastructure. A fork copy with
-  # missing or malformed runner configuration fails before any job can reach a
-  # self-hosted runner.
   authorize:
     name: Stress authorization
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Validate fork owner and runner labels
+      - name: Validate fork owner and runner configuration
         env:
           ACTOR: ${{ github.actor }}
           COUNT: ${{ inputs.count || vars.KITHARA_STRESS_COUNT || '50' }}
@@ -115,107 +111,49 @@ jobs:
           RUNNER_LABELS: ${{ vars.KITHARA_STRESS_RUNNER_LABELS }}
           TEST_THREADS: ${{ inputs.test_threads || 'num-cpus' }}
           TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+        shell: bash
         run: |
-          python3 - <<'PY'
-          import json
-          import os
-          import re
-          import sys
-
-          if os.environ.get("ENABLED") != "true":
-              print("stress runs are disabled by KITHARA_STRESS_ENABLED")
-              sys.exit(1)
-
-          if os.environ.get("IS_FORK") != "true":
-              print("stress runs are restricted to repository forks")
-              sys.exit(1)
-
-          actor = os.environ["ACTOR"]
-          owner = os.environ["OWNER"]
-          if actor != owner:
-              print(f"stress may only be started by repository owner {owner!r}, got {actor!r}")
-              sys.exit(1)
-          triggering_actor = os.environ["TRIGGERING_ACTOR"]
-          if triggering_actor != owner:
-              print(
-                  "stress may only be started or re-run by repository owner "
-                  f"{owner!r}, got {triggering_actor!r}"
-              )
-              sys.exit(1)
-
-          raw_labels = os.environ.get("RUNNER_LABELS", "")
-          try:
-              labels = json.loads(raw_labels)
-          except json.JSONDecodeError as error:
-              print(f"KITHARA_STRESS_RUNNER_LABELS is not valid JSON: {error}")
-              sys.exit(1)
-          if not isinstance(labels, list) or not labels or not all(
-              isinstance(label, str) and label.strip() for label in labels
-          ):
-              print("KITHARA_STRESS_RUNNER_LABELS must be a non-empty JSON array of non-empty strings")
-              sys.exit(1)
-          required_labels = {"self-hosted", "linux", "x64", "kithara"}
-          missing_labels = sorted(required_labels.difference(labels))
-          if missing_labels:
-              print(
-                  "KITHARA_STRESS_RUNNER_LABELS is missing required labels: "
-                  + ", ".join(missing_labels)
-              )
-              sys.exit(1)
-
-          revision = os.environ["REVISION"]
-          if re.fullmatch(r"[0-9a-fA-F]{40}", revision) is None:
-              print("revision must be a full 40-character commit SHA")
-              sys.exit(1)
-
-          try:
-              max_count = int(os.environ["MAX_COUNT"])
-          except ValueError:
-              print("KITHARA_STRESS_MAX_COUNT must be an integer from 1 through 100")
-              sys.exit(1)
-          if not 1 <= max_count <= 100:
-              print("KITHARA_STRESS_MAX_COUNT must be an integer from 1 through 100")
-              sys.exit(1)
-
-          try:
-              count = int(os.environ["COUNT"])
-          except ValueError:
-              print(f"count must be an integer from 1 through {max_count}")
-              sys.exit(1)
-          if not 1 <= count <= max_count:
-              print(f"count must be an integer from 1 through {max_count}")
-              sys.exit(1)
-
-          if not os.environ["FILTER"].strip():
-              print("filter must not be empty")
-              sys.exit(1)
-
-          test_threads = os.environ["TEST_THREADS"]
-          if test_threads != "num-cpus":
-              try:
-                  test_thread_count = int(test_threads)
-              except ValueError:
-                  print("test_threads must be num-cpus or an integer from 1 through 256")
-                  sys.exit(1)
-              if not 1 <= test_thread_count <= 256:
-                  print("test_threads must be num-cpus or an integer from 1 through 256")
-                  sys.exit(1)
-          PY
+          set -euo pipefail
+          [[ "$ENABLED" == true ]] || { echo "stress runs are disabled"; exit 1; }
+          [[ "$IS_FORK" == true ]] || { echo "stress runs require a fork"; exit 1; }
+          [[ "$ACTOR" == "$OWNER" ]] || { echo "only the fork owner may start stress"; exit 1; }
+          [[ "$TRIGGERING_ACTOR" == "$OWNER" ]] || { echo "only the fork owner may re-run stress"; exit 1; }
+          [[ "$REVISION" =~ ^[0-9a-fA-F]{40}$ ]] || { echo "revision must be a full SHA"; exit 1; }
+          [[ -n "${FILTER//[[:space:]]/}" ]] || { echo "filter must not be empty"; exit 1; }
+          [[ "$MAX_COUNT" =~ ^([1-9]|[1-9][0-9]|100)$ ]] || { echo "invalid maximum count"; exit 1; }
+          [[ "$COUNT" =~ ^([1-9]|[1-9][0-9]|100)$ ]] || { echo "invalid count"; exit 1; }
+          (( 10#$COUNT <= 10#$MAX_COUNT )) || { echo "count exceeds repository maximum"; exit 1; }
+          if [[ "$TEST_THREADS" != num-cpus ]]; then
+            [[ "$TEST_THREADS" =~ ^[0-9]+$ ]] || { echo "invalid test thread count"; exit 1; }
+            (( 10#$TEST_THREADS >= 1 && 10#$TEST_THREADS <= 256 )) || { echo "invalid test thread count"; exit 1; }
+          fi
+          jq -e '
+            type == "array"
+            and length > 0
+            and all(.[]; type == "string" and length > 0)
+            and (["self-hosted", "linux", "x64", "kithara"] - . | length == 0)
+          ' <<< "$RUNNER_LABELS" >/dev/null || {
+            echo "runner labels must include self-hosted, linux, x64, and kithara"
+            exit 1
+          }
 
   execute:
     name: Repeated run
     needs: authorize
+    if: >-
+      ${{ github.event.repository.fork == true &&
+          github.actor == github.repository_owner &&
+          github.triggering_actor == github.repository_owner &&
+          vars.KITHARA_STRESS_ENABLED == 'true' &&
+          contains(fromJSON(vars.KITHARA_STRESS_RUNNER_LABELS), 'self-hosted') &&
+          contains(fromJSON(vars.KITHARA_STRESS_RUNNER_LABELS), 'linux') &&
+          contains(fromJSON(vars.KITHARA_STRESS_RUNNER_LABELS), 'x64') &&
+          contains(fromJSON(vars.KITHARA_STRESS_RUNNER_LABELS), 'kithara') }}
     runs-on: ${{ fromJSON(vars.KITHARA_STRESS_RUNNER_LABELS) }}
-    # Keep artifact upload inside the 24-hour GITHUB_TOKEN lifetime. Measure a
-    # count=2 projection before starting 50/100 iterations; shard a campaign
-    # whose measured projection cannot fit this budget.
     timeout-minutes: 1380
     outputs:
-      subject-sha: ${{ steps.subject-commit.outputs.sha }}
-
+      artifact-name: ${{ steps.artifact-name.outputs.name }}
     steps:
-      # The controller provides the reviewed stress configuration. Selecting
-      # the immutable subject commit is an explicit owner-only trust decision.
       - name: Checkout controller
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -223,15 +161,6 @@ jobs:
           persist-credentials: false
           repository: ${{ job.workflow_repository }}
           ref: ${{ job.workflow_sha }}
-
-      - name: Validate immutable revision
-        env:
-          REQUESTED_REVISION: ${{ inputs.revision || github.sha }}
-        run: |
-          if [[ ! "$REQUESTED_REVISION" =~ ^[0-9a-fA-F]{40}$ ]]; then
-            echo "revision must be a full 40-character commit SHA"
-            exit 1
-          fi
 
       - name: Checkout subject
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -241,417 +170,68 @@ jobs:
           repository: ${{ github.repository }}
           ref: ${{ inputs.revision || github.sha }}
 
-      - name: Capture subject commit
-        id: subject-commit
-        working-directory: subject
-        env:
-          REQUESTED_REVISION: ${{ inputs.revision || github.sha }}
-        run: |
-          subject_sha="$(git rev-parse HEAD)"
-          if [[ "${subject_sha,,}" != "${REQUESTED_REVISION,,}" ]]; then
-            echo "checked out $subject_sha instead of requested commit $REQUESTED_REVISION"
-            exit 1
-          fi
-          printf 'sha=%s\n' "$subject_sha" >> "$GITHUB_OUTPUT"
+      - name: Install just
+        uses: taiki-e/install-action@b20dedce73af6905cdc30d6611090c9b67557c8d # v2.85.12
+        with:
+          tool: just
 
-      - name: Prepare raw stress evidence
-        working-directory: subject
+      - name: Run the stress campaign
+        working-directory: controller
         env:
-          RAW_DIR: ${{ runner.temp }}/stress-raw-${{ github.run_id }}-${{ github.run_attempt }}
-        run: |
-          rm -f target/nextest/stress/junit.xml
-          mkdir -p "$RAW_DIR/hang"
-          : > "$RAW_DIR/nextest.log"
-          : > "$RAW_DIR/pressure.jsonl"
-
-      # Dispatch inputs reach the command through the environment: interpolating
-      # them into the script would let the caller write the script.
-      - name: Repeat the selection
-        working-directory: subject
-        # The fallback also covers event contexts where an optional input is
-        # absent rather than materialized as its declared default.
-        env:
-          FILTER: ${{ inputs.filter || 'all()' }}
-          COUNT: ${{ inputs.count || vars.KITHARA_STRESS_COUNT || '50' }}
-          TEST_THREADS: ${{ inputs.test_threads || 'num-cpus' }}
-          FLASH: ${{ inputs.flash && 'true' || 'false' }}
-          DIAGNOSTICS: ${{ inputs.diagnostics && 'true' || 'false' }}
-          NO_BLOCK_REQUESTED: ${{ inputs.no_block && 'true' || 'false' }}
-          NO_BLOCK: ${{ inputs.diagnostics && inputs.no_block && 'true' || 'false' }}
-          DUMP_THREAD_BACKTRACE_REQUESTED: ${{ inputs.dump_thread_backtrace && 'true' || 'false' }}
-          DUMP_THREAD_BACKTRACE: ${{ inputs.diagnostics && inputs.dump_thread_backtrace && 'true' || 'false' }}
-          RAW_DIR: ${{ runner.temp }}/stress-raw-${{ github.run_id }}-${{ github.run_attempt }}
           CONTROLLER_SHA: ${{ job.workflow_sha }}
-          JOB_TIMEOUT_MINUTES: "1380"
-          SUBJECT_SHA: ${{ steps.subject-commit.outputs.sha }}
-          RUST_BACKTRACE: "1"
-          REPRO_RUST_LOG: warn
-          DIAGNOSTIC_RUST_LOG: warn,flash::hang=debug,kithara_platform::no_block=debug,kithara_queue=debug,kithara_hls=debug,kithara_stream=debug,kithara_net=debug,kithara_audio=debug
-          KITHARA_HANG_DUMP_DIR: ${{ runner.temp }}/stress-raw-${{ github.run_id }}-${{ github.run_attempt }}/hang
-          KITHARA_HANG_PREKILL_SECS: "630"
-          NEXTEST_STATUS_LEVEL: fail
-          NEXTEST_FINAL_STATUS_LEVEL: fail
-          NEXTEST_SHOW_PROGRESS: counter
+          COUNT: ${{ inputs.count || vars.KITHARA_STRESS_COUNT || '50' }}
+          DIAGNOSTICS: ${{ inputs.diagnostics && 'true' || 'false' }}
+          DUMP_THREAD_BACKTRACE: ${{ inputs.dump_thread_backtrace && 'true' || 'false' }}
+          FILTER: ${{ inputs.filter || 'all()' }}
+          FLASH: ${{ inputs.flash && 'true' || 'false' }}
+          NO_BLOCK: ${{ inputs.no_block && 'true' || 'false' }}
+          SUBJECT_SHA: ${{ inputs.revision || github.sha }}
+          TEST_THREADS: ${{ inputs.test_threads || 'num-cpus' }}
         run: |
-          set -o pipefail
-
-          read_value() {
-            if [[ -r "$1" ]]; then
-              tr '\n' ' ' < "$1"
-            fi
-          }
-
-          cgroup_rel="$(awk -F: '$1 == "0" { print $3; exit }' /proc/self/cgroup)"
-          CGROUP_DIR="/sys/fs/cgroup${cgroup_rel:-/}"
-          if [[ ! -d "$CGROUP_DIR" ]]; then
-            CGROUP_DIR=/sys/fs/cgroup
-          fi
-          if [[ -r "$CGROUP_DIR/cgroup.controllers" ]]; then
-            CGROUP_SCOPE=current_process_cgroup
-          else
-            CGROUP_SCOPE=unavailable
-          fi
-          export CGROUP_DIR
-          export CGROUP_SCOPE
-          export STARTED_AT="$(date --iso-8601=ns)"
-          export KERNEL="$(uname -srvmo)"
-          export CGROUP_CPUSET="$(read_value "$CGROUP_DIR/cpuset.cpus.effective")"
-          export PROC_CPUSET="$(awk -F: '$1 == "Cpus_allowed_list" { gsub(/^[[:space:]]+/, "", $2); print $2 }' /proc/self/status)"
-          export CGROUP_CPU_MAX="$(read_value "$CGROUP_DIR/cpu.max")"
-          export CGROUP_MEMORY_MAX="$(read_value "$CGROUP_DIR/memory.max")"
-          export CGROUP_PIDS_MAX="$(read_value "$CGROUP_DIR/pids.max")"
-          export ULIMIT_NOFILE="$(ulimit -n 2>/dev/null || true)"
-          export ULIMIT_NPROC="$(ulimit -u 2>/dev/null || true)"
-
-          if [[ "$DIAGNOSTICS" == 'true' ]]; then
-            export RUST_LOG="$DIAGNOSTIC_RUST_LOG"
-            export KITHARA_FLASH_SYNC_TRACE=1
-            if [[ "$DUMP_THREAD_BACKTRACE" == 'true' ]]; then
-              export KITHARA_FLASH_SYNC_BT=1
-            else
-              unset KITHARA_FLASH_SYNC_BT
-            fi
-            if [[ "$NO_BLOCK" == 'true' ]]; then
-              : > "$RAW_DIR/no-block.log"
-              export KITHARA_NO_BLOCK=census
-              export KITHARA_NO_BLOCK_BUDGET_MS=100
-              export KITHARA_NO_BLOCK_LOG="$RAW_DIR/no-block.log"
-            else
-              unset KITHARA_NO_BLOCK KITHARA_NO_BLOCK_BUDGET_MS KITHARA_NO_BLOCK_LOG
-            fi
-          else
-            export RUST_LOG="$REPRO_RUST_LOG"
-            unset KITHARA_FLASH_SYNC_TRACE KITHARA_FLASH_SYNC_BT
-            unset KITHARA_NO_BLOCK KITHARA_NO_BLOCK_BUDGET_MS KITHARA_NO_BLOCK_LOG
-          fi
-
-          write_manifest() {
-            MANIFEST_ENDED_AT="$1" MANIFEST_EXIT_CODE="$2" python3 - <<'PY'
-          import json
-          import os
-          from pathlib import Path
-
-          def optional(name):
-              value = os.environ.get(name, "").strip()
-              return value or None
-
-          def enabled(name):
-              return os.environ.get(name) == "true"
-
-          exit_code = optional("MANIFEST_EXIT_CODE")
-          manifest = {
-              "schema": 1,
-              "mode": "diagnostic" if enabled("DIAGNOSTICS") else "reproduction",
-              "config": {
-                  "profile": "stress",
-                  "nextest": "controller/.config/nextest.toml",
-                  "pressure_schema": "kithara.pressure.v1",
-                  "workflow_job_timeout_minutes": int(os.environ["JOB_TIMEOUT_MINUTES"]),
-              },
-              "controller": {"sha": os.environ["CONTROLLER_SHA"]},
-              "subject": {"sha": os.environ["SUBJECT_SHA"]},
-              "run": {
-                  "repository": optional("GITHUB_REPOSITORY"),
-                  "workflow": optional("GITHUB_WORKFLOW"),
-                  "job": optional("GITHUB_JOB"),
-                  "event": optional("GITHUB_EVENT_NAME"),
-                  "run_id": optional("GITHUB_RUN_ID"),
-                  "run_attempt": optional("GITHUB_RUN_ATTEMPT"),
-              },
-              "selection": {
-                  "filter": os.environ["FILTER"],
-                  "count": os.environ["COUNT"],
-                  "test_threads": os.environ["TEST_THREADS"],
-              },
-              "features": {
-                  "flash": enabled("FLASH"),
-                  "diagnostics": enabled("DIAGNOSTICS"),
-                  "no_block_requested": enabled("NO_BLOCK_REQUESTED"),
-                  "no_block": enabled("NO_BLOCK"),
-                  "dump_thread_backtrace_requested": enabled("DUMP_THREAD_BACKTRACE_REQUESTED"),
-                  "dump_thread_backtrace": enabled("DUMP_THREAD_BACKTRACE"),
-              },
-              "logging": {
-                  "rust_backtrace": os.environ["RUST_BACKTRACE"],
-                  "rust_log": os.environ["RUST_LOG"],
-                  "flash_sync_trace": os.environ.get("KITHARA_FLASH_SYNC_TRACE") == "1",
-                  "flash_dump_thread_backtrace": os.environ.get("KITHARA_FLASH_SYNC_BT") == "1",
-                  "no_block_mode": optional("KITHARA_NO_BLOCK") or "off",
-                  "no_block_budget_ms": optional("KITHARA_NO_BLOCK_BUDGET_MS"),
-                  "no_block_log": "raw/no-block.log" if optional("KITHARA_NO_BLOCK_LOG") else None,
-                  "hang_dump_dir": "raw/hang",
-                  "hang_prekill_secs": optional("KITHARA_HANG_PREKILL_SECS"),
-                  "nextest_status_level": os.environ["NEXTEST_STATUS_LEVEL"],
-                  "nextest_final_status_level": os.environ["NEXTEST_FINAL_STATUS_LEVEL"],
-                  "nextest_show_progress": os.environ["NEXTEST_SHOW_PROGRESS"],
-              },
-              "timing": {
-                  "started_at": os.environ["STARTED_AT"],
-                  "ended_at": optional("MANIFEST_ENDED_AT"),
-                  "exit_code": int(exit_code) if exit_code is not None else None,
-              },
-              "pressure": {
-                  "sampler_healthy": optional("PRESSURE_SAMPLER_HEALTHY"),
-              },
-              "system": {
-                  "kernel": os.environ["KERNEL"],
-                  "cgroup_v2": {
-                      "scope": os.environ["CGROUP_SCOPE"],
-                      "path": os.environ["CGROUP_DIR"] if os.environ["CGROUP_SCOPE"] != "unavailable" else None,
-                  },
-                  "cpuset": {
-                      "cgroup_effective": optional("CGROUP_CPUSET"),
-                      "proc_allowed": optional("PROC_CPUSET"),
-                  },
-                  "limits": {
-                      "cgroup_cpu_max": optional("CGROUP_CPU_MAX"),
-                      "cgroup_memory_max": optional("CGROUP_MEMORY_MAX"),
-                      "cgroup_pids_max": optional("CGROUP_PIDS_MAX"),
-                      "ulimit_open_files": optional("ULIMIT_NOFILE"),
-                      "ulimit_processes": optional("ULIMIT_NPROC"),
-                  },
-              },
-          }
-          path = Path(os.environ["RAW_DIR"]) / "manifest.json"
-          path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-          PY
-          }
-
-          sample_pressure() {
-            exec python3 - "$RAW_DIR/pressure.jsonl" "$CGROUP_DIR" "$CGROUP_SCOPE" <<'PY'
-          import json
-          import signal
-          import sys
-          import time
-          from pathlib import Path
-
-          output = Path(sys.argv[1])
-          cgroup = Path(sys.argv[2])
-          cgroup_scope = sys.argv[3]
-          running = True
-
-          def stop(_signal, _frame):
-              global running
-              running = False
-
-          signal.signal(signal.SIGTERM, stop)
-
-          def read(path):
-              try:
-                  return path.read_text(encoding="utf-8").strip()
-              except (OSError, UnicodeError):
-                  return None
-
-          def present(values):
-              return {key: value for key, value in values.items() if value is not None}
-
-          def load_one(raw):
-              try:
-                  return float((raw or "").split()[0])
-              except (IndexError, ValueError):
-                  return None
-
-          first = True
-          with output.open("a", encoding="utf-8", buffering=1) as stream:
-              while running:
-                  loadavg = read(Path("/proc/loadavg"))
-                  meminfo = {}
-                  raw_meminfo = read(Path("/proc/meminfo")) or ""
-                  for line in raw_meminfo.splitlines():
-                      name, _, value = line.partition(":")
-                      if name in {"MemTotal", "MemFree", "MemAvailable", "Buffers", "Cached", "SwapTotal", "SwapFree"}:
-                          meminfo[name] = value.strip()
-                  raw_stat = read(Path("/proc/stat")) or ""
-                  metrics = present({
-                      "proc.loadavg": loadavg,
-                      "proc.pressure.cpu": read(Path("/proc/pressure/cpu")),
-                      "proc.pressure.memory": read(Path("/proc/pressure/memory")),
-                      "proc.pressure.io": read(Path("/proc/pressure/io")),
-                      "proc.stat": "\n".join(raw_stat.splitlines()[:5]),
-                      "cgroup.cpu.stat": read(cgroup / "cpu.stat"),
-                      "cgroup.cpu.pressure": read(cgroup / "cpu.pressure"),
-                      "cgroup.memory.current": read(cgroup / "memory.current"),
-                      "cgroup.memory.peak": read(cgroup / "memory.peak"),
-                      "cgroup.memory.events": read(cgroup / "memory.events"),
-                      "cgroup.memory.pressure": read(cgroup / "memory.pressure"),
-                      "cgroup.io.stat": read(cgroup / "io.stat"),
-                      "cgroup.io.pressure": read(cgroup / "io.pressure"),
-                      "cgroup.pids.current": read(cgroup / "pids.current"),
-                      "cgroup.pids.events": read(cgroup / "pids.events"),
-                      "cgroup.cpuset.cpus.effective": read(cgroup / "cpuset.cpus.effective"),
-                  })
-                  metrics.update({f"proc.meminfo.{key}": value for key, value in meminfo.items()})
-                  record = {
-                      "schema": "kithara.pressure.v1",
-                      "marker": "start" if first else "sample",
-                      "timestamp_ms": time.time_ns() // 1_000_000,
-                      "load1": load_one(loadavg),
-                      "scope": {
-                          "proc_pressure": "host",
-                          "cgroup_v2": cgroup_scope,
-                      },
-                      "cgroup_path": str(cgroup) if cgroup_scope != "unavailable" else None,
-                      "metrics": metrics,
-                  }
-                  stream.write(json.dumps(record, separators=(",", ":")) + "\n")
-                  stream.flush()
-                  first = False
-                  if running:
-                      time.sleep(1)
-          PY
-          }
-
-          pressure_pid=''
-          stop_pressure() {
-            if [[ -n "$pressure_pid" ]]; then
-              if ! kill -0 "$pressure_pid" 2>/dev/null; then
-                export PRESSURE_SAMPLER_HEALTHY=false
-                wait "$pressure_pid" 2>/dev/null || true
-                return
-              fi
-              if ! kill "$pressure_pid" 2>/dev/null; then
-                export PRESSURE_SAMPLER_HEALTHY=false
-              fi
-              pressure_status=0
-              wait "$pressure_pid" 2>/dev/null || pressure_status=$?
-              if [[ "$pressure_status" -ne 0 ]]; then
-                export PRESSURE_SAMPLER_HEALTHY=false
-              fi
-            fi
-          }
-          write_pressure_end() {
-            PRESSURE_EXIT_CODE="$1" python3 - <<'PY'
-          import json
-          import os
-          import time
-          from pathlib import Path
-
-          record = {
-              "schema": "kithara.pressure.v1",
-              "marker": "end",
-              "timestamp_ms": time.time_ns() // 1_000_000,
-              "load1": None,
-              "metrics": {},
-              "sampler_healthy": os.environ["PRESSURE_SAMPLER_HEALTHY"] == "true",
-              "exit_code": int(os.environ["PRESSURE_EXIT_CODE"]),
-          }
-          path = Path(os.environ["RAW_DIR"]) / "pressure.jsonl"
-          with path.open("a", encoding="utf-8") as stream:
-              stream.write(json.dumps(record, separators=(",", ":")) + "\n")
-          PY
-          }
-          finish() {
-            status=$?
-            trap - EXIT
-            stop_pressure
-            if [[ "$PRESSURE_SAMPLER_HEALTHY" != 'true' && "$status" -eq 0 ]]; then
-              status=1
-            fi
-            if ! write_pressure_end "$status"; then
-              status=1
-            fi
-            if ! write_manifest "$(date --iso-8601=ns)" "$status"; then
-              status=1
-            fi
-            exit "$status"
-          }
-          trap finish EXIT
-          trap 'exit 130' INT
-          trap 'exit 143' TERM
-          export PRESSURE_SAMPLER_HEALTHY=pending
-          write_manifest '' ''
-          sample_pressure &
-          pressure_pid=$!
-          pressure_ready=false
-          for _ in {1..50}; do
-            if kill -0 "$pressure_pid" 2>/dev/null \
-              && grep -q '"marker":"start"' "$RAW_DIR/pressure.jsonl"; then
-              pressure_ready=true
-              break
-            fi
-            sleep 0.1
-          done
-          if [[ "$pressure_ready" != 'true' ]]; then
-            export PRESSURE_SAMPLER_HEALTHY=false
-            echo "pressure sampler did not produce its start marker"
-            exit 1
-          fi
-          export PRESSURE_SAMPLER_HEALTHY=true
-
-          set +e
-          cargo run --locked --manifest-path "$GITHUB_WORKSPACE/controller/Cargo.toml" \
-            -p xtask --bin xtask -- stress-run \
-            --inventory "$RAW_DIR/inventory.json" \
-            --config-file "$GITHUB_WORKSPACE/controller/.config/nextest.toml" \
+          just ci stress \
+            --subject-root "$GITHUB_WORKSPACE/subject" \
+            --output "$RUNNER_TEMP/kithara-stress/raw" \
             --filter "$FILTER" \
             --count "$COUNT" \
             --test-threads "$TEST_THREADS" \
             --flash "$FLASH" \
+            --diagnostics "$DIAGNOSTICS" \
             --no-block "$NO_BLOCK" \
-            2>&1 | tee "$RAW_DIR/nextest.log"
-          primary_status=${PIPESTATUS[0]}
-          set -e
-          if ! kill -0 "$pressure_pid" 2>/dev/null; then
-            export PRESSURE_SAMPLER_HEALTHY=false
-            echo "pressure sampler stopped before the stress command completed"
-            if [[ "$primary_status" -eq 0 ]]; then
-              primary_status=1
-            fi
-          fi
-          exit "$primary_status"
-
-      - name: Stage the raw stress evidence
-        if: always()
-        env:
-          RAW_DIR: ${{ runner.temp }}/stress-raw-${{ github.run_id }}-${{ github.run_attempt }}
-          SUBJECT_SHA: ${{ steps.subject-commit.outputs.sha || 'unresolved' }}
-        run: |
-          mkdir -p "$RAW_DIR/hang"
-          [[ -f "$RAW_DIR/nextest.log" ]] || : > "$RAW_DIR/nextest.log"
-          [[ -f "$RAW_DIR/pressure.jsonl" ]] || : > "$RAW_DIR/pressure.jsonl"
-          printf '%s\n' "$SUBJECT_SHA" > "$RAW_DIR/subject-sha.txt"
-          if [[ -f "$GITHUB_WORKSPACE/subject/target/nextest/stress/junit.xml" ]]; then
-            cp "$GITHUB_WORKSPACE/subject/target/nextest/stress/junit.xml" "$RAW_DIR/junit.xml"
-          fi
+            --dump-thread-backtrace "$DUMP_THREAD_BACKTRACE" \
+            --expected-controller-sha "$CONTROLLER_SHA" \
+            --expected-subject-sha "$SUBJECT_SHA" \
+            --job-timeout-minutes 1380
 
       - name: Upload the raw stress evidence
         if: always()
+        id: raw-upload
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: stress-raw-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/stress-raw-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/kithara-stress/raw
+          if-no-files-found: error
           retention-days: 14
+
+      - name: Export artifact identity
+        if: always()
+        id: artifact-name
+        env:
+          UPLOAD_OUTCOME: ${{ steps.raw-upload.outcome }}
+        run: |
+          [[ "$UPLOAD_OUTCOME" == success ]] || exit 1
+          echo "name=stress-raw-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_OUTPUT"
 
   report:
     name: Report evidence
     needs: execute
     if: ${{ always() && needs.execute.result != 'skipped' }}
     runs-on: ubuntu-latest
-
+    timeout-minutes: 30
     steps:
       - name: Checkout controller
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          path: controller
           persist-credentials: false
           repository: ${{ job.workflow_repository }}
           ref: ${{ job.workflow_sha }}
@@ -659,151 +239,8 @@ jobs:
       - name: Download the raw stress evidence
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: stress-raw-${{ github.run_id }}-${{ github.run_attempt }}
+          name: ${{ needs.execute.outputs.artifact-name }}
           path: raw
-
-      - name: Validate stress provenance
-        if: always()
-        env:
-          CONTROLLER_SHA: ${{ job.workflow_sha }}
-          COUNT: ${{ inputs.count || vars.KITHARA_STRESS_COUNT || '50' }}
-          EXECUTE_RESULT: ${{ needs.execute.result }}
-          FILTER: ${{ inputs.filter || 'all()' }}
-          JOB_TIMEOUT_MINUTES: "1380"
-          MODE: ${{ inputs.diagnostics && 'diagnostic' || 'reproduction' }}
-          SUBJECT_SHA: ${{ needs.execute.outputs.subject-sha || 'unresolved' }}
-          TEST_THREADS: ${{ inputs.test_threads || 'num-cpus' }}
-        run: |
-          python3 - <<'PY'
-          import json
-          import os
-          import sys
-          from pathlib import Path
-
-          raw = Path(os.environ["GITHUB_WORKSPACE"]) / "raw"
-          manifest_path = raw / "manifest.json"
-          if not manifest_path.is_file() or manifest_path.stat().st_size == 0:
-              print("stress manifest is missing or empty")
-              sys.exit(1)
-          try:
-              manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-          except (OSError, UnicodeError, json.JSONDecodeError) as error:
-              print(f"stress manifest is unreadable: {error}")
-              sys.exit(1)
-
-          expected = {
-              ("controller", "sha"): os.environ["CONTROLLER_SHA"],
-              ("subject", "sha"): os.environ["SUBJECT_SHA"],
-              ("selection", "filter"): os.environ["FILTER"],
-              ("selection", "count"): os.environ["COUNT"],
-              ("selection", "test_threads"): os.environ["TEST_THREADS"],
-              ("config", "workflow_job_timeout_minutes"): int(os.environ["JOB_TIMEOUT_MINUTES"]),
-          }
-          problems = []
-          if manifest.get("schema") != 1:
-              problems.append(f"schema={manifest.get('schema')!r}, expected 1")
-          for path, value in expected.items():
-              actual = manifest
-              for key in path:
-                  actual = actual.get(key) if isinstance(actual, dict) else None
-              if path[-1] == "sha" and isinstance(actual, str):
-                  matches = actual.lower() == value.lower()
-              else:
-                  matches = actual == value
-              if not matches:
-                  problems.append(f"{'.'.join(path)}={actual!r}, expected {value!r}")
-          if manifest.get("mode") != os.environ["MODE"]:
-              problems.append(
-                  f"mode={manifest.get('mode')!r}, expected {os.environ['MODE']!r}"
-              )
-
-          timing = manifest.get("timing")
-          ended_at = timing.get("ended_at") if isinstance(timing, dict) else None
-          exit_code = timing.get("exit_code") if isinstance(timing, dict) else None
-          if not isinstance(ended_at, str) or not ended_at.strip():
-              problems.append("timing.ended_at is not finalized")
-          if isinstance(exit_code, bool) or not isinstance(exit_code, int):
-              problems.append(f"timing.exit_code={exit_code!r} is not finalized")
-          else:
-              result = os.environ["EXECUTE_RESULT"]
-              if result == "success" and exit_code != 0:
-                  problems.append(f"execute succeeded but manifest exit code is {exit_code}")
-              elif result in {"failure", "cancelled"} and exit_code == 0:
-                  problems.append(f"execute ended as {result} but manifest exit code is zero")
-              elif result not in {"success", "failure", "cancelled"}:
-                  problems.append(f"unsupported execute result {result!r}")
-
-          subject_file = raw / "subject-sha.txt"
-          try:
-              staged_subject = subject_file.read_text(encoding="utf-8").strip()
-          except (OSError, UnicodeError) as error:
-              problems.append(f"subject-sha.txt is unreadable: {error}")
-          else:
-              if staged_subject.lower() != os.environ["SUBJECT_SHA"].lower():
-                  problems.append(
-                      f"subject-sha.txt={staged_subject!r}, expected {os.environ['SUBJECT_SHA']!r}"
-                  )
-
-          pressure_path = raw / "pressure.jsonl"
-          pressure_count = 0
-          pressure_first = None
-          pressure_last = None
-          pressure_malformed = 0
-          pressure_first_error = None
-          pressure_schema_valid = True
-          try:
-              with pressure_path.open("r", encoding="utf-8") as stream:
-                  for number, line in enumerate(stream, start=1):
-                      if not line.strip():
-                          continue
-                      try:
-                          record = json.loads(line)
-                      except json.JSONDecodeError as error:
-                          pressure_malformed += 1
-                          if pressure_first_error is None:
-                              pressure_first_error = f"line {number}: {error}"
-                          continue
-                      if not isinstance(record, dict):
-                          pressure_malformed += 1
-                          if pressure_first_error is None:
-                              pressure_first_error = f"line {number}: record is not an object"
-                          continue
-                      pressure_count += 1
-                      if pressure_first is None:
-                          pressure_first = record
-                      pressure_last = record
-                      if record.get("schema") != "kithara.pressure.v1":
-                          pressure_schema_valid = False
-          except (OSError, UnicodeError) as error:
-              problems.append(f"pressure log is unreadable: {error}")
-
-          if pressure_malformed:
-              problems.append(
-                  f"pressure log has {pressure_malformed} malformed records; first: {pressure_first_error}"
-              )
-          if pressure_count < 2:
-              problems.append("pressure log has no complete start/end capture")
-          else:
-              if not pressure_schema_valid:
-                  problems.append("pressure log contains an unexpected schema")
-              if pressure_first.get("marker") != "start":
-                  problems.append("pressure log does not start with a health marker")
-              if pressure_last.get("marker") != "end":
-                  problems.append("pressure log does not end with a completion marker")
-              if pressure_last.get("sampler_healthy") is not True:
-                  problems.append("pressure sampler did not remain healthy")
-              if isinstance(exit_code, int) and pressure_last.get("exit_code") != exit_code:
-                  problems.append("pressure end marker and manifest exit codes differ")
-          pressure = manifest.get("pressure")
-          if not isinstance(pressure, dict) or pressure.get("sampler_healthy") != "true":
-              problems.append("manifest does not record a healthy pressure sampler")
-
-          if problems:
-              print("stress provenance validation failed:")
-              for problem in problems:
-                  print(f"- {problem}")
-              sys.exit(1)
-          PY
 
       - name: Install just
         if: always()
@@ -811,56 +248,44 @@ jobs:
         with:
           tool: just
 
-      - name: Summarize the stress evidence
+      - name: Verify and render the stress evidence
         if: always()
+        working-directory: controller
         env:
-          SUBJECT_SHA: ${{ needs.execute.outputs.subject-sha || 'unresolved' }}
-          FILTER: ${{ inputs.filter || 'all()' }}
+          CONTROLLER_SHA: ${{ job.workflow_sha }}
           COUNT: ${{ inputs.count || vars.KITHARA_STRESS_COUNT || '50' }}
+          EXECUTE_RESULT: ${{ needs.execute.result }}
+          FILTER: ${{ inputs.filter || 'all()' }}
+          FLASH: ${{ inputs.flash && 'true' || 'false' }}
           MODE: ${{ inputs.diagnostics && 'diagnostic' || 'reproduction' }}
+          NO_BLOCK: ${{ inputs.no_block && 'true' || 'false' }}
+          DUMP_THREAD_BACKTRACE: ${{ inputs.dump_thread_backtrace && 'true' || 'false' }}
+          SUBJECT_SHA: ${{ inputs.revision || github.sha }}
           TEST_THREADS: ${{ inputs.test_threads || 'num-cpus' }}
         run: |
-          report_path="$GITHUB_WORKSPACE/target/stress-report.md"
-          report_status=0
-          report_args=(
-            stress-report
-            --allow-missing
-            --inventory "$GITHUB_WORKSPACE/raw/inventory.json"
-            --expected-count "$COUNT"
-            --junit "$GITHUB_WORKSPACE/raw/junit.xml"
-            --pressure-log "$GITHUB_WORKSPACE/raw/pressure.jsonl"
-            --output "$report_path"
-          )
-          if [[ -d "$GITHUB_WORKSPACE/raw/hang" ]]; then
-            report_args+=(--hang-dir "$GITHUB_WORKSPACE/raw/hang")
+          just ci stress-report \
+            --raw "$GITHUB_WORKSPACE/raw" \
+            --output "$GITHUB_WORKSPACE/target/stress-report.md" \
+            --expected-controller-sha "$CONTROLLER_SHA" \
+            --expected-subject-sha "$SUBJECT_SHA" \
+            --expected-filter "$FILTER" \
+            --expected-count "$COUNT" \
+            --expected-test-threads "$TEST_THREADS" \
+            --expected-mode "$MODE" \
+            --expected-flash "$FLASH" \
+            --expected-no-block "$NO_BLOCK" \
+            --expected-dump-thread-backtrace "$DUMP_THREAD_BACKTRACE" \
+            --expected-job-timeout-minutes 1380 \
+            --execute-result "$EXECUTE_RESULT"
+
+      - name: Add the stress summary
+        if: always()
+        run: |
+          if [[ -s "$GITHUB_WORKSPACE/target/stress-report.md" ]]; then
+            cat "$GITHUB_WORKSPACE/target/stress-report.md" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "Stress report was not produced." >> "$GITHUB_STEP_SUMMARY"
           fi
-          if [[ -f "$GITHUB_WORKSPACE/raw/no-block.log" ]]; then
-            report_args+=(--no-block-log "$GITHUB_WORKSPACE/raw/no-block.log")
-          fi
-          just tooling xtask "${report_args[@]}" || report_status=$?
-          if [[ ! -s "$report_path" ]]; then
-            if [[ "$report_status" -eq 0 ]]; then
-              report_status=1
-            fi
-            mkdir -p "$(dirname "$report_path")"
-            {
-              echo "# Stress evidence"
-              echo
-              echo "The reporter produced no non-empty report (status \`$report_status\`)."
-            } > "$report_path"
-          fi
-          {
-            echo
-            echo "## Run context"
-            echo
-            echo "- Resolved subject commit: \`$SUBJECT_SHA\`"
-            echo "- Filter: \`$FILTER\`"
-            echo "- Expected iterations: \`$COUNT\`"
-            echo "- Mode: \`$MODE\`"
-            echo "- Test threads: \`$TEST_THREADS\`"
-          } >> "$report_path"
-          cat "$report_path" >> "$GITHUB_STEP_SUMMARY"
-          exit "$report_status"
 
       - name: Upload the stress evidence
         if: always()

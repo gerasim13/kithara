@@ -6,7 +6,7 @@ use super::{
     AttemptDossier, attempt::AttemptKey, duration_ms,
     line_reader::for_each_bounded_line_with_limit, parse_timestamp_ms,
 };
-use crate::junit::CaseTiming;
+use crate::{junit::CaseTiming, stress::pressure::SCHEMA};
 
 const MAX_LINE_BYTES: usize = 1_048_576;
 const MAX_PRESSURE_RECORDS: usize = 100_000;
@@ -19,7 +19,7 @@ struct PressureSample {
     load1: Option<f64>,
     metrics: BTreeMap<String, String>,
     sampler_healthy: Option<bool>,
-    exit_code: Option<i32>,
+    primary_exit_code: Option<i32>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
@@ -72,7 +72,7 @@ pub(super) fn append(out: &mut String, path: &Path) -> (Vec<PressurePoint>, bool
                 summary.malformed = summary.malformed.saturating_add(1);
                 return ControlFlow::Continue(());
             };
-            if sample.schema != "kithara.pressure.v1"
+            if sample.schema != SCHEMA
                 || sample
                     .load1
                     .is_some_and(|load| !load.is_finite() || load < 0.0)
@@ -106,7 +106,7 @@ pub(super) fn append(out: &mut String, path: &Path) -> (Vec<PressurePoint>, bool
                     if starts != 1
                         || ends != 1
                         || !healthy_end
-                        || sample.exit_code.is_none()
+                        || sample.primary_exit_code.is_none()
                         || sample.load1.is_some()
                         || !sample.metrics.is_empty()
                     {
@@ -167,7 +167,7 @@ pub(super) fn append(out: &mut String, path: &Path) -> (Vec<PressurePoint>, bool
     if summary.samples == 0 {
         let _ = writeln!(
             out,
-            "\n## Linux pressure context\n\nNo valid `kithara.pressure.v1` samples were available (`{}` malformed, `{}` nonmonotonic, `{}` capture-structure errors).",
+            "\n## Linux pressure context\n\nNo valid `kithara.pressure.v2` samples were available (`{}` malformed, `{}` nonmonotonic, `{}` capture-structure errors).",
             summary.malformed, summary.nonmonotonic, summary.structure_errors,
         );
         return (Vec::new(), false);
@@ -335,9 +335,9 @@ mod tests {
         let log = temp.path().join("pressure.jsonl");
         std::fs::write(
             &log,
-            r#"{"schema":"kithara.pressure.v1","marker":"start","timestamp_ms":1000,"load1":4.5,"metrics":{"proc.pressure.cpu":"some avg10=12.50 avg60=1.0 avg300=0.1 total=10","cgroup.cpu.stat":"nr_throttled 7\nthrottled_usec 42"}}
-{"schema":"kithara.pressure.v1","marker":"sample","timestamp_ms":2000,"load1":6.5,"metrics":{"proc.pressure.cpu":"some avg10=20.00 avg60=1.0 avg300=0.1 total=20","cgroup.cpu.stat":"nr_throttled 10\nthrottled_usec 50"}}
-{"schema":"kithara.pressure.v1","marker":"end","timestamp_ms":3000,"load1":null,"metrics":{},"sampler_healthy":true,"exit_code":0}
+            r#"{"schema":"kithara.pressure.v2","marker":"start","timestamp_ms":1000,"load1":4.5,"metrics":{"proc.pressure.cpu":"some avg10=12.50 avg60=1.0 avg300=0.1 total=10","cgroup.cpu.stat":"nr_throttled 7\nthrottled_usec 42"}}
+{"schema":"kithara.pressure.v2","marker":"sample","timestamp_ms":2000,"load1":6.5,"metrics":{"proc.pressure.cpu":"some avg10=20.00 avg60=1.0 avg300=0.1 total=20","cgroup.cpu.stat":"nr_throttled 10\nthrottled_usec 50"}}
+{"schema":"kithara.pressure.v2","marker":"end","timestamp_ms":3000,"load1":null,"metrics":{},"sampler_healthy":true,"primary_exit_code":0}
 "#,
         )
         .expect("write pressure fixture");
@@ -360,10 +360,10 @@ mod tests {
         let log = temp.path().join("pressure.jsonl");
         std::fs::write(
             &log,
-            "{\"schema\":\"kithara.pressure.v1\",\"marker\":\"start\",\"timestamp_ms\":2000,\"load1\":1.0,\"metrics\":{}}\n\
+            "{\"schema\":\"kithara.pressure.v2\",\"marker\":\"start\",\"timestamp_ms\":2000,\"load1\":1.0,\"metrics\":{}}\n\
 {not-json}\n\
-{\"schema\":\"kithara.pressure.v1\",\"marker\":\"sample\",\"timestamp_ms\":1000,\"load1\":2.0,\"metrics\":{}}\n\
-{\"schema\":\"kithara.pressure.v1\",\"marker\":\"end\",\"timestamp_ms\":3000,\"load1\":null,\"metrics\":{},\"sampler_healthy\":true,\"exit_code\":0}\n",
+{\"schema\":\"kithara.pressure.v2\",\"marker\":\"sample\",\"timestamp_ms\":1000,\"load1\":2.0,\"metrics\":{}}\n\
+{\"schema\":\"kithara.pressure.v2\",\"marker\":\"end\",\"timestamp_ms\":3000,\"load1\":null,\"metrics\":{},\"sampler_healthy\":true,\"primary_exit_code\":0}\n",
         )
         .expect("write pressure fixture");
         let mut markdown = String::new();
@@ -382,9 +382,9 @@ mod tests {
         let log = temp.path().join("pressure.jsonl");
         std::fs::write(
             &log,
-            "{\"schema\":\"kithara.pressure.v1\",\"marker\":\"start\",\"timestamp_ms\":1000,\"load1\":1.0,\"metrics\":{\"cgroup.memory.events\":\"oom 4\"}}\n\
-{\"schema\":\"kithara.pressure.v1\",\"marker\":\"sample\",\"timestamp_ms\":2000,\"load1\":1.0,\"metrics\":{\"cgroup.memory.events\":\"oom 3\"}}\n\
-{\"schema\":\"kithara.pressure.v1\",\"marker\":\"end\",\"timestamp_ms\":3000,\"load1\":null,\"metrics\":{},\"sampler_healthy\":true,\"exit_code\":0}\n",
+            "{\"schema\":\"kithara.pressure.v2\",\"marker\":\"start\",\"timestamp_ms\":1000,\"load1\":1.0,\"metrics\":{\"cgroup.memory.events\":\"oom 4\"}}\n\
+{\"schema\":\"kithara.pressure.v2\",\"marker\":\"sample\",\"timestamp_ms\":2000,\"load1\":1.0,\"metrics\":{\"cgroup.memory.events\":\"oom 3\"}}\n\
+{\"schema\":\"kithara.pressure.v2\",\"marker\":\"end\",\"timestamp_ms\":3000,\"load1\":null,\"metrics\":{},\"sampler_healthy\":true,\"primary_exit_code\":0}\n",
         )
         .expect("write pressure fixture");
         let mut markdown = String::new();

@@ -36,8 +36,8 @@ Exposed through the `CoreCommand` subcommand enum:
 - `manifest`, `orphans` — Cargo manifest hygiene and per-package orphan checks.
 - `test` — workspace tests through `cargo nextest` with lane / backend / feature
   selection.
-- `stress-run`, `stress-report` - record the exact selected test inventory,
-  repeat it through nextest, and build a fail-closed evidence summary.
+- `stress run`, `stress report` - run the complete repeated-test evidence
+  campaign or independently verify and render its downloaded artifact.
 - `health` — aggregated workspace health report.
 - `quality` — deterministic workspace/crate/module assessment, rstest / unimock
   / trait-mock audits, and the opt-in Quality Lab for heavyweight external
