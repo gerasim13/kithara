@@ -16,9 +16,8 @@ on:
         default: all()
         type: string
       count:
-        description: how many times to repeat the selection
+        description: repetitions; empty uses KITHARA_STRESS_COUNT
         required: false
-        default: "50"
         type: string
       flash:
         description: enable Flash hang diagnostics in the subject build
@@ -57,9 +56,8 @@ on:
         default: all()
         type: string
       count:
-        description: how many times to repeat the selection
+        description: repetitions; empty uses KITHARA_STRESS_COUNT
         required: false
-        default: "50"
         type: string
       flash:
         description: enable Flash hang diagnostics in the subject build
@@ -107,19 +105,26 @@ jobs:
       - name: Validate fork owner and runner labels
         env:
           ACTOR: ${{ github.actor }}
-          COUNT: ${{ inputs.count || '50' }}
+          COUNT: ${{ inputs.count || vars.KITHARA_STRESS_COUNT || '50' }}
+          ENABLED: ${{ vars.KITHARA_STRESS_ENABLED }}
           FILTER: ${{ inputs.filter || 'all()' }}
           IS_FORK: ${{ github.event.repository.fork }}
+          MAX_COUNT: ${{ vars.KITHARA_STRESS_MAX_COUNT }}
           OWNER: ${{ github.repository_owner }}
           REVISION: ${{ inputs.revision || github.sha }}
-          RUNNER_LABELS: ${{ vars.KITHARA_RUNNER_LABELS }}
+          RUNNER_LABELS: ${{ vars.KITHARA_STRESS_RUNNER_LABELS }}
           TEST_THREADS: ${{ inputs.test_threads || 'num-cpus' }}
+          TRIGGERING_ACTOR: ${{ github.triggering_actor }}
         run: |
           python3 - <<'PY'
           import json
           import os
           import re
           import sys
+
+          if os.environ.get("ENABLED") != "true":
+              print("stress runs are disabled by KITHARA_STRESS_ENABLED")
+              sys.exit(1)
 
           if os.environ.get("IS_FORK") != "true":
               print("stress runs are restricted to repository forks")
@@ -130,17 +135,32 @@ jobs:
           if actor != owner:
               print(f"stress may only be started by repository owner {owner!r}, got {actor!r}")
               sys.exit(1)
+          triggering_actor = os.environ["TRIGGERING_ACTOR"]
+          if triggering_actor != owner:
+              print(
+                  "stress may only be started or re-run by repository owner "
+                  f"{owner!r}, got {triggering_actor!r}"
+              )
+              sys.exit(1)
 
           raw_labels = os.environ.get("RUNNER_LABELS", "")
           try:
               labels = json.loads(raw_labels)
           except json.JSONDecodeError as error:
-              print(f"KITHARA_RUNNER_LABELS is not valid JSON: {error}")
+              print(f"KITHARA_STRESS_RUNNER_LABELS is not valid JSON: {error}")
               sys.exit(1)
           if not isinstance(labels, list) or not labels or not all(
               isinstance(label, str) and label.strip() for label in labels
           ):
-              print("KITHARA_RUNNER_LABELS must be a non-empty JSON array of non-empty strings")
+              print("KITHARA_STRESS_RUNNER_LABELS must be a non-empty JSON array of non-empty strings")
+              sys.exit(1)
+          required_labels = {"self-hosted", "linux", "x64", "kithara"}
+          missing_labels = sorted(required_labels.difference(labels))
+          if missing_labels:
+              print(
+                  "KITHARA_STRESS_RUNNER_LABELS is missing required labels: "
+                  + ", ".join(missing_labels)
+              )
               sys.exit(1)
 
           revision = os.environ["REVISION"]
@@ -149,12 +169,21 @@ jobs:
               sys.exit(1)
 
           try:
+              max_count = int(os.environ["MAX_COUNT"])
+          except ValueError:
+              print("KITHARA_STRESS_MAX_COUNT must be an integer from 1 through 100")
+              sys.exit(1)
+          if not 1 <= max_count <= 100:
+              print("KITHARA_STRESS_MAX_COUNT must be an integer from 1 through 100")
+              sys.exit(1)
+
+          try:
               count = int(os.environ["COUNT"])
           except ValueError:
-              print("count must be an integer from 1 through 100")
+              print(f"count must be an integer from 1 through {max_count}")
               sys.exit(1)
-          if not 1 <= count <= 100:
-              print("count must be an integer from 1 through 100")
+          if not 1 <= count <= max_count:
+              print(f"count must be an integer from 1 through {max_count}")
               sys.exit(1)
 
           if not os.environ["FILTER"].strip():
@@ -176,7 +205,7 @@ jobs:
   execute:
     name: Repeated run
     needs: authorize
-    runs-on: ${{ fromJSON(vars.KITHARA_RUNNER_LABELS) }}
+    runs-on: ${{ fromJSON(vars.KITHARA_STRESS_RUNNER_LABELS) }}
     # Keep artifact upload inside the 24-hour GITHUB_TOKEN lifetime. Measure a
     # count=2 projection before starting 50/100 iterations; shard a campaign
     # whose measured projection cannot fit this budget.
@@ -243,7 +272,7 @@ jobs:
         # absent rather than materialized as its declared default.
         env:
           FILTER: ${{ inputs.filter || 'all()' }}
-          COUNT: ${{ inputs.count || '50' }}
+          COUNT: ${{ inputs.count || vars.KITHARA_STRESS_COUNT || '50' }}
           TEST_THREADS: ${{ inputs.test_threads || 'num-cpus' }}
           FLASH: ${{ inputs.flash && 'true' || 'false' }}
           DIAGNOSTICS: ${{ inputs.diagnostics && 'true' || 'false' }}
@@ -637,7 +666,7 @@ jobs:
         if: always()
         env:
           CONTROLLER_SHA: ${{ job.workflow_sha }}
-          COUNT: ${{ inputs.count || '50' }}
+          COUNT: ${{ inputs.count || vars.KITHARA_STRESS_COUNT || '50' }}
           EXECUTE_RESULT: ${{ needs.execute.result }}
           FILTER: ${{ inputs.filter || 'all()' }}
           JOB_TIMEOUT_MINUTES: "1380"
@@ -787,7 +816,7 @@ jobs:
         env:
           SUBJECT_SHA: ${{ needs.execute.outputs.subject-sha || 'unresolved' }}
           FILTER: ${{ inputs.filter || 'all()' }}
-          COUNT: ${{ inputs.count || '50' }}
+          COUNT: ${{ inputs.count || vars.KITHARA_STRESS_COUNT || '50' }}
           MODE: ${{ inputs.diagnostics && 'diagnostic' || 'reproduction' }}
           TEST_THREADS: ${{ inputs.test_threads || 'num-cpus' }}
         run: |

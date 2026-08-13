@@ -75,6 +75,10 @@ import os
 import re
 import sys
 
+if os.environ.get("ENABLED") != "true":
+    print("stress runs are disabled by KITHARA_STRESS_ENABLED")
+    sys.exit(1)
+
 if os.environ.get("IS_FORK") != "true":
     print("stress runs are restricted to repository forks")
     sys.exit(1)
@@ -84,17 +88,32 @@ owner = os.environ["OWNER"]
 if actor != owner:
     print(f"stress may only be started by repository owner {owner!r}, got {actor!r}")
     sys.exit(1)
+triggering_actor = os.environ["TRIGGERING_ACTOR"]
+if triggering_actor != owner:
+    print(
+        "stress may only be started or re-run by repository owner "
+        f"{owner!r}, got {triggering_actor!r}"
+    )
+    sys.exit(1)
 
 raw_labels = os.environ.get("RUNNER_LABELS", "")
 try:
     labels = json.loads(raw_labels)
 except json.JSONDecodeError as error:
-    print(f"KITHARA_RUNNER_LABELS is not valid JSON: {error}")
+    print(f"KITHARA_STRESS_RUNNER_LABELS is not valid JSON: {error}")
     sys.exit(1)
 if not isinstance(labels, list) or not labels or not all(
     isinstance(label, str) and label.strip() for label in labels
 ):
-    print("KITHARA_RUNNER_LABELS must be a non-empty JSON array of non-empty strings")
+    print("KITHARA_STRESS_RUNNER_LABELS must be a non-empty JSON array of non-empty strings")
+    sys.exit(1)
+required_labels = {"self-hosted", "linux", "x64", "kithara"}
+missing_labels = sorted(required_labels.difference(labels))
+if missing_labels:
+    print(
+        "KITHARA_STRESS_RUNNER_LABELS is missing required labels: "
+        + ", ".join(missing_labels)
+    )
     sys.exit(1)
 
 revision = os.environ["REVISION"]
@@ -103,12 +122,21 @@ if re.fullmatch(r"[0-9a-fA-F]{40}", revision) is None:
     sys.exit(1)
 
 try:
+    max_count = int(os.environ["MAX_COUNT"])
+except ValueError:
+    print("KITHARA_STRESS_MAX_COUNT must be an integer from 1 through 100")
+    sys.exit(1)
+if not 1 <= max_count <= 100:
+    print("KITHARA_STRESS_MAX_COUNT must be an integer from 1 through 100")
+    sys.exit(1)
+
+try:
     count = int(os.environ["COUNT"])
 except ValueError:
-    print("count must be an integer from 1 through 100")
+    print(f"count must be an integer from 1 through {max_count}")
     sys.exit(1)
-if not 1 <= count <= 100:
-    print("count must be an integer from 1 through 100")
+if not 1 <= count <= max_count:
+    print(f"count must be an integer from 1 through {max_count}")
     sys.exit(1)
 
 if not os.environ["FILTER"].strip():
@@ -501,15 +529,13 @@ fn stress_workflow_keeps_the_first_failure_and_collects_its_evidence() {
             .as_str(),
             Some("all()")
         );
+        let count_input = mapping_field(inputs, "count")
+            .as_mapping()
+            .expect("count input is a mapping");
+        assert!(!count_input.contains_key("default"));
         assert_eq!(
-            mapping_field(
-                mapping_field(inputs, "count")
-                    .as_mapping()
-                    .expect("count input is a mapping"),
-                "default",
-            )
-            .as_str(),
-            Some("50")
+            mapping_field(count_input, "description").as_str(),
+            Some("repetitions; empty uses KITHARA_STRESS_COUNT")
         );
         assert_eq!(
             mapping_field(
@@ -568,13 +594,19 @@ fn stress_workflow_keeps_the_first_failure_and_collects_its_evidence() {
         .expect("stress authorization environment is a mapping");
     for (name, expected) in [
         ("ACTOR", "${{ github.actor }}"),
-        ("COUNT", "${{ inputs.count || '50' }}"),
+        (
+            "COUNT",
+            "${{ inputs.count || vars.KITHARA_STRESS_COUNT || '50' }}",
+        ),
+        ("ENABLED", "${{ vars.KITHARA_STRESS_ENABLED }}"),
         ("FILTER", "${{ inputs.filter || 'all()' }}"),
         ("IS_FORK", "${{ github.event.repository.fork }}"),
+        ("MAX_COUNT", "${{ vars.KITHARA_STRESS_MAX_COUNT }}"),
         ("OWNER", "${{ github.repository_owner }}"),
         ("REVISION", "${{ inputs.revision || github.sha }}"),
-        ("RUNNER_LABELS", "${{ vars.KITHARA_RUNNER_LABELS }}"),
+        ("RUNNER_LABELS", "${{ vars.KITHARA_STRESS_RUNNER_LABELS }}"),
         ("TEST_THREADS", "${{ inputs.test_threads || 'num-cpus' }}"),
+        ("TRIGGERING_ACTOR", "${{ github.triggering_actor }}"),
     ] {
         assert_eq!(
             mapping_field(authorization_env, name).as_str(),
@@ -594,7 +626,7 @@ fn stress_workflow_keeps_the_first_failure_and_collects_its_evidence() {
     assert!(!execute.contains_key("if"));
     assert_eq!(
         mapping_field(execute, "runs-on").as_str(),
-        Some("${{ fromJSON(vars.KITHARA_RUNNER_LABELS) }}")
+        Some("${{ fromJSON(vars.KITHARA_STRESS_RUNNER_LABELS) }}")
     );
     assert_eq!(
         mapping_field(execute, "timeout-minutes").as_u64(),
@@ -774,7 +806,10 @@ fn stress_workflow_keeps_the_first_failure_and_collects_its_evidence() {
     );
     for (name, expected) in [
         ("FILTER", "${{ inputs.filter || 'all()' }}"),
-        ("COUNT", "${{ inputs.count || '50' }}"),
+        (
+            "COUNT",
+            "${{ inputs.count || vars.KITHARA_STRESS_COUNT || '50' }}",
+        ),
         ("TEST_THREADS", "${{ inputs.test_threads || 'num-cpus' }}"),
         ("FLASH", "${{ inputs.flash && 'true' || 'false' }}"),
         (
@@ -1068,7 +1103,10 @@ fn stress_workflow_keeps_the_first_failure_and_collects_its_evidence() {
         .expect("provenance environment is a mapping");
     for (name, expected) in [
         ("CONTROLLER_SHA", "${{ job.workflow_sha }}"),
-        ("COUNT", "${{ inputs.count || '50' }}"),
+        (
+            "COUNT",
+            "${{ inputs.count || vars.KITHARA_STRESS_COUNT || '50' }}",
+        ),
         ("EXECUTE_RESULT", "${{ needs.execute.result }}"),
         ("FILTER", "${{ inputs.filter || 'all()' }}"),
         ("JOB_TIMEOUT_MINUTES", "1380"),
@@ -1158,7 +1196,7 @@ fn stress_workflow_keeps_the_first_failure_and_collects_its_evidence() {
     );
     assert_eq!(
         mapping_field(report_env, "COUNT").as_str(),
-        Some("${{ inputs.count || '50' }}")
+        Some("${{ inputs.count || vars.KITHARA_STRESS_COUNT || '50' }}")
     );
     assert_eq!(
         mapping_field(report_env, "MODE").as_str(),
@@ -1211,6 +1249,29 @@ fn stress_workflow_keeps_the_first_failure_and_collects_its_evidence() {
         .as_u64(),
         Some(14)
     );
+}
+
+#[test]
+fn scheduled_stress_respects_the_repository_switch_and_runner_pool() {
+    let workflow = github_workflow("schedule.yml");
+    let stress = workflow_job(workflow_jobs(&workflow), "stress");
+    assert_eq!(
+        mapping_field(stress, "uses").as_str(),
+        Some("./.github/workflows/stress.yml")
+    );
+    let condition = mapping_field(stress, "if")
+        .as_str()
+        .expect("scheduled stress condition is a string");
+    for contract in [
+        "vars.KITHARA_STRESS_ENABLED == 'true'",
+        "vars.KITHARA_STRESS_RUNNER_LABELS != ''",
+        "github.event.schedule == '0 3 * * *'",
+    ] {
+        assert!(
+            condition.contains(contract),
+            "scheduled stress omits `{contract}`"
+        );
+    }
 }
 
 #[test]
