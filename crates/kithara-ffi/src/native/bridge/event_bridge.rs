@@ -238,25 +238,14 @@ impl EventBridge {
         item_obs.on_event(ffi_event);
     }
 
-    /// Translate a queue-level `TrackStatus` into per-item callbacks so
-    /// Swift `KitharaPlayerItem.eventPublisher` sees `StatusChanged` +
-    /// `Error` without having to subscribe to the player-level stream.
+    /// Forward queue readiness to the item observer. Terminal item callbacks
+    /// are owned by [`crate::native::item_bridge::ItemEventBridge`] from the
+    /// protocol-specific HLS/File error event that caused queue settlement.
     fn route_track_status_to_item(observer: &Arc<dyn ItemObserver>, status: &TrackStatus) {
-        match status {
-            TrackStatus::Loaded => {
-                observer.on_event(FfiItemEvent::StatusChanged {
-                    status: FfiItemStatus::ReadyToPlay,
-                });
-            }
-            TrackStatus::Failed(reason) => {
-                observer.on_event(FfiItemEvent::StatusChanged {
-                    status: FfiItemStatus::Failed,
-                });
-                observer.on_event(FfiItemEvent::Error {
-                    error: reason.clone(),
-                });
-            }
-            _ => {}
+        if matches!(status, TrackStatus::Loaded) {
+            observer.on_event(FfiItemEvent::StatusChanged {
+                status: FfiItemStatus::ReadyToPlay,
+            });
         }
     }
 
@@ -368,11 +357,20 @@ impl Drop for EventBridge {
 
 #[cfg(test)]
 mod tests {
-    use kithara_events::{AdvanceReason, QueueEvent, QueueRepeatMode, TrackId};
+    use std::sync::{Condvar, Mutex as StdMutex, PoisonError};
+
+    use kithara_events::{
+        AdvanceReason, Event, EventBus, FileError, FileEvent, HlsError, HlsEvent, QueueEvent,
+        QueueRepeatMode, TrackId, TrackStatus,
+    };
     use kithara_platform::sync::{Arc, Mutex};
 
     use super::*;
-    use crate::{item::AudioPlayerItem, types::FfiItemConfig};
+    use crate::{
+        item::AudioPlayerItem,
+        observer::ItemObserver,
+        types::{FfiItemConfig, FfiItemEvent},
+    };
 
     #[derive(Default)]
     struct CollectingPlayerObserver {
@@ -391,6 +389,43 @@ mod tests {
         }
     }
 
+    #[derive(Default)]
+    struct CollectingItemObserver {
+        changed: Condvar,
+        events: StdMutex<Vec<FfiItemEvent>>,
+    }
+
+    impl CollectingItemObserver {
+        fn take_events(&self) -> Vec<FfiItemEvent> {
+            let mut events = self.events.lock().unwrap_or_else(PoisonError::into_inner);
+            std::mem::take(&mut *events)
+        }
+
+        fn wait_for_events(&self, count: usize) {
+            let events = self.events.lock().unwrap_or_else(PoisonError::into_inner);
+            let (events, _) = self
+                .changed
+                .wait_timeout_while(events, Duration::from_secs(2), |events| {
+                    events.len() < count
+                })
+                .unwrap_or_else(PoisonError::into_inner);
+            assert!(
+                events.len() >= count,
+                "timed out waiting for {count} item events, received {events:?}"
+            );
+        }
+    }
+
+    impl ItemObserver for CollectingItemObserver {
+        fn on_event(&self, event: FfiItemEvent) {
+            self.events
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .push(event);
+            self.changed.notify_all();
+        }
+    }
+
     fn assert_send<T: Send>() {}
 
     fn item_config() -> FfiItemConfig {
@@ -406,9 +441,86 @@ mod tests {
         }
     }
 
+    fn assert_protocol_failure_is_not_duplicated(event: Event, expected_error: &str) {
+        let root = EventBus::new(16);
+        let scoped = root.scoped();
+        let item = AudioPlayerItem::new(item_config());
+        *item.inserted.lock() = true;
+        item.state.lock().resolve_duration(42.0);
+
+        let item_observer_impl = Arc::new(CollectingItemObserver::default());
+        let item_observer: Arc<dyn ItemObserver> = item_observer_impl.clone();
+        *item.bus.lock() = Some(scoped.clone());
+        item.set_observer(item_observer);
+
+        let items = Arc::new(Mutex::new(ItemRegistry::default()));
+        items.lock().insert(item.track_id(), item.clone());
+        let player_observer_impl = Arc::new(CollectingPlayerObserver::default());
+        let player_observer: Arc<dyn PlayerObserver> = player_observer_impl.clone();
+
+        scoped.publish(event);
+        item_observer_impl.wait_for_events(2);
+        EventBridge::dispatch_queue_event(
+            &player_observer,
+            &items,
+            &QueueEvent::TrackStatusChanged {
+                id: item.track_id(),
+                status: TrackStatus::Failed("queue load failed".to_string()),
+            },
+        );
+
+        let item_events = item_observer_impl.take_events();
+        assert_eq!(
+            item_events.len(),
+            2,
+            "protocol failure must emit one item status/error pair, received {item_events:?}"
+        );
+        assert!(matches!(
+            item_events.as_slice(),
+            [
+                FfiItemEvent::StatusChanged {
+                    status: FfiItemStatus::Failed,
+                },
+                FfiItemEvent::Error { error },
+            ] if error == expected_error
+        ));
+        assert_eq!(
+            item.duration_sec(),
+            0.0,
+            "protocol failure must mark item failed"
+        );
+        assert!(matches!(
+            player_observer_impl.take_events().as_slice(),
+            [FfiPlayerEvent::TrackStatusChanged {
+                item_id,
+                status: FfiTrackStatus::Failed { reason },
+            }] if *item_id == item.track_id() && reason == "queue load failed"
+        ));
+    }
+
     #[kithara::test]
     fn event_bridge_is_send() {
         assert_send::<EventBridge>();
+    }
+
+    #[kithara::test]
+    fn hls_protocol_failure_is_not_duplicated_by_queue_status() {
+        assert_protocol_failure_is_not_duplicated(
+            Event::Hls(HlsEvent::Error {
+                error: HlsError::Playlist("boom".into()),
+            }),
+            "item failed: playlist: boom",
+        );
+    }
+
+    #[kithara::test]
+    fn file_protocol_failure_is_not_duplicated_by_queue_status() {
+        assert_protocol_failure_is_not_duplicated(
+            Event::File(FileEvent::Error {
+                error: FileError::Io("boom".into()),
+            }),
+            "item failed: io: boom",
+        );
     }
 
     /// The available window covers the playhead, so loaded ranges built from
