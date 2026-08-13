@@ -111,7 +111,7 @@ pub(crate) const fn entry(layout: DeckLayout) -> &'static str {
     }
 }
 
-pub(super) fn compile_studio(layout: DeckLayout) -> Result<CompiledUi, UiDocError> {
+pub(in crate::gui) fn compile_studio(layout: DeckLayout) -> Result<CompiledUi, UiDocError> {
     let resolver = resolver();
     compile(
         entry(layout),

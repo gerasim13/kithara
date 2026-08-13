@@ -9,6 +9,8 @@ mod tests;
 
 pub(super) use shortcut::deletes_focused_track;
 
+#[cfg(all(test, feature = "masonry"))]
+pub(in crate::gui) use self::compile::compile_studio;
 #[cfg(feature = "masonry")]
 pub(crate) use self::compile::{entry, resolver};
 pub(crate) use self::{
