@@ -190,10 +190,7 @@ fn bounded_context(payload: String) -> Value {
         return Value::String(bounded_excerpt(&payload, MAX_CONTEXT_BYTES));
     }
 
-    match serde_json::from_str(&payload) {
-        Ok(context) => context,
-        Err(_) => Value::String(payload),
-    }
+    serde_json::from_str(&payload).map_or_else(|_| Value::String(payload), |context| context)
 }
 
 fn serialize_envelope(mut envelope: DumpEnvelope<'_>) -> serde_json::Result<Option<String>> {
@@ -237,7 +234,6 @@ pub struct PreKillGuard {
 impl PreKillGuard {
     /// Start the pre-kill evidence timer when `KITHARA_HANG_PREKILL_SECS` is a
     /// positive integer. The timer is inert otherwise.
-    #[must_use]
     pub fn new(test_name: &str) -> Self {
         let Some(timeout) = env::var(Consts::ENV_PREKILL_SECS)
             .ok()
