@@ -172,7 +172,7 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::builtin;
+    use crate::{builtin, engine::TextInputSnapshot};
 
     #[kithara::test]
     fn caret_and_selection_snapshots_produce_distinct_paint() {

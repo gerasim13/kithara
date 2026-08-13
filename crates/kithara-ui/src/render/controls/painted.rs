@@ -618,7 +618,8 @@ mod tests {
         module::{ButtonStyle, FaderStyle, Tone},
         mount,
         render::{
-            Icon, StereoLevels,
+            Icon, ReadValue, Reads, StereoLevels,
+            controls::{Draws, Grip},
             masonry::{HostAction, MasonryControl, Painted},
         },
         skin::ColorRole,
@@ -1216,7 +1217,7 @@ mod indexed {
         builtin,
         interact::{PointerOwnership, PointerPhase},
         mount,
-        render::ControlAction,
+        render::{ControlAction, ReadValue, Reads, controls::Draws},
     };
 
     #[derive(Clone, Copy)]
@@ -1782,7 +1783,10 @@ mod dragged {
         interact::recognizers::Track,
         module::FaderStyle,
         mount,
-        render::ControlAction,
+        render::{
+            ControlAction,
+            controls::{Draws, Grip},
+        },
     };
 
     const RANGE: f32 = 100.0;

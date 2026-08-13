@@ -186,7 +186,7 @@ mod tests {
     use crate::{
         draw::{Pt, Rect},
         interact::{CursorShape, Input, Outcome, PointerPhase, mouse as mouse_input},
-        render::{WindowCommand, WindowEdge, window},
+        render::{UiEvent, WindowCommand, WindowEdge, window},
     };
 
     fn pointer_down() -> Input<'static> {
