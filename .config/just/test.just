@@ -125,7 +125,7 @@ e2e-resamplers *ARGS:
 ui:
     #!/usr/bin/env bash
     set -euo pipefail
-    dir=target/parity
+    dir="$PWD/target/parity"
     rm -rf "$dir/iced" "$dir/masonry" "$dir/masks" "$dir/studio"
     gallery=(cargo run -p kithara-ui --example gallery --features kithara-ui/masonry)
     KITHARA_GALLERY_CAPTURE_OFFSCREEN="$dir/iced" "${gallery[@]}"
