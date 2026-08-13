@@ -6,6 +6,8 @@ use std::{
     process::{Command, Stdio},
 };
 
+use anyhow::{Context, Result, ensure};
+
 use crate::{
     stress::{run_output, run_stderr_output},
     stress_report::{
@@ -14,7 +16,6 @@ use crate::{
     test::{LaneToggles, NextestAction, nextest_lane_command_for},
     verdict::ChildFailure,
 };
-use anyhow::{Context, Result, ensure};
 
 struct Consts;
 
