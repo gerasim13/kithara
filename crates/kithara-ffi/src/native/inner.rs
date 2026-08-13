@@ -149,6 +149,8 @@ pub(crate) type Inner = NativeInner;
 /// `AudioPlayer` facade delegates every public method here so the
 /// `UniFFI` surface stays a thin shell over this engine.
 pub(crate) struct NativeInner {
+    /// Serializes queue and item-registry mutations as one FFI transaction.
+    mutations: Mutex<()>,
     /// Swift-owned items indexed by `TrackId`. Populated by `insert`,
     /// drained by `remove` / `remove_all_items`. Lets `items` return
     /// the same `AudioPlayerItem` instances that Swift handed in (preserves
@@ -214,6 +216,7 @@ impl NativeInner {
         let (key_options, player_headers) = build_initial_key_state(key_options);
         let player_headers_map: DashMap<String, String> = player_headers.into_iter().collect();
         Self {
+            mutations: Mutex::default(),
             downloader,
             region,
             store,
@@ -242,6 +245,7 @@ impl NativeInner {
     }
 
     pub(crate) fn append(&self, item: &Arc<AudioPlayerItem>) -> Result<(), FfiError> {
+        let _mutation = self.mutations.lock();
         let _rt = crate::FFI_RUNTIME.enter();
         let source = build_source_for_item(self, item)?;
         let id = item.track_id();
@@ -274,6 +278,7 @@ impl NativeInner {
         item: &Arc<AudioPlayerItem>,
         after: Option<&Arc<AudioPlayerItem>>,
     ) -> Result<(), FfiError> {
+        let _mutation = self.mutations.lock();
         let _rt = crate::FFI_RUNTIME.enter();
         let source = build_source_for_item(self, item)?;
         let id = item.track_id();
@@ -320,6 +325,7 @@ impl NativeInner {
     }
 
     pub(crate) fn remove(&self, item: &AudioPlayerItem) -> Result<(), FfiError> {
+        let _mutation = self.mutations.lock();
         if !*item.inserted.lock() {
             return Err(FfiError::InvalidArgument {
                 reason: format!("item {} not in queue", item.audio_id()),
@@ -337,6 +343,7 @@ impl NativeInner {
     }
 
     pub(crate) fn remove_all_items(&self) {
+        let _mutation = self.mutations.lock();
         self.queue.clear();
         let mut items = self.items.lock();
         for (_, item) in items.drain() {
@@ -349,6 +356,7 @@ impl NativeInner {
         index: u32,
         item: &Arc<AudioPlayerItem>,
     ) -> Result<(), FfiError> {
+        let _mutation = self.mutations.lock();
         let _rt = crate::FFI_RUNTIME.enter();
         let idx = index as usize;
         let tracks = self.queue.tracks();
@@ -516,8 +524,7 @@ impl NativeInner {
     }
 
     pub(crate) fn stop(&self) {
-        self.queue.pause();
-        let _ = self.queue.seek(0.0);
+        self.remove_all_items();
     }
 
     pub(crate) fn update_peak_bitrate(&self, wifi_bps: f64, cellular_bps: f64) {
@@ -631,8 +638,12 @@ impl Drop for NativeInner {
 
 #[cfg(test)]
 mod tests {
+    use std::{sync::mpsc, thread};
+
+    use kithara_platform::time::Duration;
+
     use super::*;
-    use crate::observer::FfiKeyProcessor;
+    use crate::{observer::FfiKeyProcessor, types::FfiItemConfig};
 
     struct TaggedProcessor(u8);
 
@@ -650,6 +661,72 @@ mod tests {
             domains: domains.iter().map(ToString::to_string).collect(),
             salt: Some(salt.to_string()),
         }
+    }
+
+    fn test_item(url: &str) -> Arc<AudioPlayerItem> {
+        AudioPlayerItem::new(FfiItemConfig {
+            abr_mode: None,
+            audio_id: None,
+            headers: None,
+            uuid_i64: None,
+            url: url.to_string(),
+            is_live_stream: false,
+            preferred_peak_bitrate: 0.0,
+            preferred_peak_bitrate_expensive: 0.0,
+        })
+    }
+
+    #[kithara::test]
+    fn concurrent_append_and_stop_cannot_split_queue_and_registry() {
+        let inner = Arc::new(NativeInner::new(FfiPlayerConfig::default()));
+        let item = test_item("https://example.com/blocked-append.mp3");
+        let inserted = item.inserted.lock();
+
+        let appending_inner = Arc::clone(&inner);
+        let appending_item = Arc::clone(&item);
+        let append_thread = thread::spawn(move || appending_inner.append(&appending_item));
+        while inner.queue.is_empty() {
+            assert!(
+                !append_thread.is_finished(),
+                "append must reach the queue before waiting on inserted state"
+            );
+            thread::yield_now();
+        }
+
+        let (stop_started, stop_observer) = mpsc::channel();
+        let (stop_finished, stop_completion) = mpsc::channel();
+        let stopping_inner = Arc::clone(&inner);
+        let stop_thread = thread::spawn(move || {
+            stop_started.send(()).expect("stop observer must be alive");
+            stopping_inner.stop();
+            stop_finished
+                .send(())
+                .expect("stop completion observer must be alive");
+        });
+        stop_observer
+            .recv_timeout(Duration::from_secs(1))
+            .expect("stop thread must start");
+        let stop_overtook_append = stop_completion
+            .recv_timeout(Duration::from_millis(250))
+            .is_ok();
+
+        drop(inserted);
+        append_thread
+            .join()
+            .expect("append thread must finish")
+            .expect("append must succeed");
+        stop_thread.join().expect("stop thread must finish");
+
+        assert!(
+            !stop_overtook_append,
+            "stop must wait for the append transaction that already owns the queue"
+        );
+        assert_eq!(inner.queue.len(), 0, "stop must leave the queue empty");
+        assert!(
+            inner.items.lock().is_empty(),
+            "stop must drain the registry"
+        );
+        assert!(!*item.inserted.lock(), "stop must reset inserted state");
     }
 
     #[kithara::test]

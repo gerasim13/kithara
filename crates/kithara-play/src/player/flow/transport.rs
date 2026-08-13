@@ -75,6 +75,7 @@ impl PlayerImpl {
 
     /// Pause playback (sets rate to 0.0).
     pub fn pause(&self) {
+        let _lifecycle = self.core.lifecycle.lock();
         self.core.params.set_paused_rate();
         let _ = self.send_to_slot(PlayerCmd::SetPaused(true));
         self.enter_paused();
@@ -87,6 +88,7 @@ impl PlayerImpl {
 
     /// Start playback at the configured default rate.
     pub fn play(&self) {
+        let _lifecycle = self.core.lifecycle.lock();
         let rate = self.default_rate().max(Self::MIN_PLAYBACK_RATE);
         self.core.params.set_rate_value(rate);
         self.core.timestretch.set_speed(rate);
@@ -197,6 +199,7 @@ impl PlayerImpl {
         index: usize,
         transition: SelectTransition,
     ) -> Result<(), PlayError> {
+        let _lifecycle = self.core.lifecycle.lock();
         let SelectTransition {
             autoplay,
             crossfade_seconds,

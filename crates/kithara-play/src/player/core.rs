@@ -7,7 +7,7 @@ use kithara_platform::{
     CancelScope,
     sync::{Arc, Mutex},
 };
-use tracing::debug;
+use tracing::{debug, warn};
 
 use super::{
     config::PlayerConfig,
@@ -27,6 +27,8 @@ use crate::{
 /// carry worker references) drops before `engine`, and `engine` (whose
 /// `Drop` shuts the worker down) drops last.
 pub(crate) struct PlayerCore {
+    /// Serializes phase/slot transitions that may start or stop the engine.
+    pub(crate) lifecycle: Mutex<()>,
     /// Live shared cost meter of the audio engine (decode + effects).
     /// Constructed once and kept address-stable for the player's lifetime.
     pub(crate) engine_load: Arc<EngineLoad>,
@@ -96,6 +98,7 @@ impl PlayerImpl {
         // Seed the single speed source with the configured default rate.
         config.timestretch.set_speed(config.default_rate);
         let core = PlayerCore {
+            lifecycle: Mutex::default(),
             engine,
             engine_load: Arc::new(EngineLoad::default()),
             params: PlayerParams::from(&config),
@@ -174,13 +177,32 @@ impl PlayerImpl {
         self.core.engine.pcm_pool()
     }
 
-    /// Remove all items from the queue.
+    /// Remove all items, release the active slot, and stop the engine.
     pub fn remove_all_items(&self) {
+        let _lifecycle = self.core.lifecycle.lock();
         self.unarm_next();
         self.core.items.clear_all();
         self.set_status(PlayerStatus::Unknown);
+        self.core.params.set_paused_rate();
+        let slot = self.slot();
         let _ = self.send_to_slot(PlayerCmd::Clear);
+
+        if self.core.engine.is_running() {
+            if let Some(slot) = slot
+                && let Err(error) = self.core.engine.release_slot(slot)
+            {
+                warn!(?slot, ?error, "failed to release player slot during stop");
+            }
+            if let Err(error) = self.core.engine.stop() {
+                warn!(?error, "failed to stop player engine");
+            }
+        }
+
         self.enter_stopped();
+        self.core
+            .engine
+            .bus()
+            .publish(PlayerEvent::RateChanged { rate: 0.0 });
         debug!("all items removed");
     }
 
@@ -240,16 +262,86 @@ impl crate::api::Equalizer for PlayerImpl {
 
 #[cfg(test)]
 mod tests {
+    use std::{sync::mpsc, thread};
+
     use kithara_assets::AssetStore;
-    use kithara_audio::{StretchControls, generate_log_spaced_bands};
+    use kithara_audio::{ConsumerWakeMode, StretchControls, generate_log_spaced_bands};
     use kithara_bufpool::{BytePool, PcmPool};
     use kithara_decode::GaplessMode;
     use kithara_events::{Envelope, Event};
-    use kithara_platform::CancelToken;
+    use kithara_platform::{CancelToken, time::Duration};
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::{api::SlotId, bridge::PlayerCmd, session::testing};
+    use crate::{
+        api::SlotId,
+        bridge::PlayerCmd,
+        session::{Cmd, Reply, SessionDispatcher, testing},
+    };
+
+    type SessionReply = Result<Reply, PlayError>;
+    type SessionCommand = (Cmd, mpsc::Sender<SessionReply>);
+
+    struct ThreadedTestSession {
+        commands: mpsc::Sender<SessionCommand>,
+    }
+
+    impl Default for ThreadedTestSession {
+        fn default() -> Self {
+            let (commands, receiver) = mpsc::channel::<SessionCommand>();
+            thread::spawn(move || {
+                let session = testing::test_session();
+                for (command, reply) in receiver {
+                    let _ = reply.send(session.exec(command));
+                }
+            });
+            Self { commands }
+        }
+    }
+
+    impl SessionDispatcher for ThreadedTestSession {
+        fn exec(&self, command: Cmd) -> SessionReply {
+            let (reply, receiver) = mpsc::channel();
+            self.commands
+                .send((command, reply))
+                .map_err(|_| PlayError::Internal("test session stopped".into()))?;
+            receiver
+                .recv()
+                .map_err(|_| PlayError::Internal("test session dropped its reply".into()))?
+        }
+
+        fn consumer_wake_mode(&self) -> ConsumerWakeMode {
+            ConsumerWakeMode::RealtimeDeferred
+        }
+    }
+
+    struct BlockingStopSession {
+        inner: ThreadedTestSession,
+        stop_entered: Mutex<Option<mpsc::Sender<()>>>,
+        resume_stop: Mutex<Option<mpsc::Receiver<()>>>,
+    }
+
+    impl SessionDispatcher for BlockingStopSession {
+        fn exec(&self, command: Cmd) -> SessionReply {
+            if matches!(&command, Cmd::StopPlayer { .. }) {
+                if let Some(entered) = self.stop_entered.lock().take() {
+                    entered
+                        .send(())
+                        .map_err(|_| PlayError::Internal("stop observer dropped".into()))?;
+                }
+                if let Some(release) = self.resume_stop.lock().take() {
+                    release
+                        .recv()
+                        .map_err(|_| PlayError::Internal("stop release dropped".into()))?;
+                }
+            }
+            self.inner.exec(command)
+        }
+
+        fn consumer_wake_mode(&self) -> ConsumerWakeMode {
+            self.inner.consumer_wake_mode()
+        }
+    }
 
     #[derive(Clone, Copy)]
     enum PlayerBasicScenario {
@@ -539,6 +631,98 @@ mod tests {
             ptr_before, ptr_after,
             "timestretch controls must stay address-stable across transitions"
         );
+        player.worker().shutdown();
+    }
+
+    #[kithara::test]
+    fn remove_all_items_stops_engine_and_restart_allocates_fresh_slot() {
+        let player = PlayerImpl::new(
+            PlayerConfig::test_builder()
+                .session(testing::test_session())
+                .build(),
+        );
+        player.play();
+        let first_slot = player.slot().expect("play must allocate a slot");
+        assert!(player.engine().is_running(), "setup must start the engine");
+
+        player.remove_all_items();
+
+        assert!(
+            !player.engine().is_running(),
+            "clearing must stop the engine"
+        );
+        assert!(
+            player.slot().is_none(),
+            "clearing must release slot ownership"
+        );
+
+        player.remove_all_items();
+        player.play();
+        let restarted_slot = player.slot().expect("restart must allocate a slot");
+        assert_ne!(
+            restarted_slot, first_slot,
+            "restart must not reuse the slot invalidated by engine stop"
+        );
+        player.remove_all_items();
+        player.worker().shutdown();
+    }
+
+    #[kithara::test]
+    fn play_waits_for_stop_and_restarts_with_a_fresh_slot() {
+        let (stop_entered, stop_observer) = mpsc::channel();
+        let (resume_stop, stop_release) = mpsc::channel();
+        let session: Arc<dyn SessionDispatcher> = Arc::new(BlockingStopSession {
+            inner: ThreadedTestSession::default(),
+            stop_entered: Mutex::new(Some(stop_entered)),
+            resume_stop: Mutex::new(Some(stop_release)),
+        });
+        let player = Arc::new(PlayerImpl::new(
+            PlayerConfig::test_builder().session(session).build(),
+        ));
+        player.play();
+        let first_slot = player.slot().expect("play must allocate a slot");
+
+        let stopping_player = Arc::clone(&player);
+        let stop_thread = thread::spawn(move || stopping_player.remove_all_items());
+        stop_observer
+            .recv_timeout(Duration::from_secs(1))
+            .expect("stop must reach the session boundary");
+
+        let (play_started, play_observer) = mpsc::channel();
+        let (play_finished, play_completion) = mpsc::channel();
+        let restarting_player = Arc::clone(&player);
+        let play_thread = thread::spawn(move || {
+            play_started.send(()).expect("play observer must be alive");
+            restarting_player.play();
+            play_finished
+                .send(())
+                .expect("play completion observer must be alive");
+        });
+        play_observer
+            .recv_timeout(Duration::from_secs(1))
+            .expect("play thread must start");
+        let completed_before_stop = play_completion
+            .recv_timeout(Duration::from_millis(250))
+            .is_ok();
+
+        resume_stop.send(()).expect("stop thread must be waiting");
+        stop_thread.join().expect("stop thread must finish");
+        play_thread.join().expect("play thread must finish");
+
+        assert!(
+            !completed_before_stop,
+            "play must wait until stop finishes invalidating its slot"
+        );
+        assert!(
+            player.engine().is_running(),
+            "serialized play must restart the engine"
+        );
+        assert_ne!(
+            player.slot(),
+            Some(first_slot),
+            "serialized play must allocate a fresh slot"
+        );
+        player.remove_all_items();
         player.worker().shutdown();
     }
 

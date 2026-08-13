@@ -60,11 +60,10 @@ pub(crate) enum PlayerPhaseKind {
 /// `current_slot` / `current_abr_handle` / `pending_next` mutexes into a
 /// single typed phase guarded by one `Mutex<PlayerPhase>`.
 ///
-/// A slot, once allocated, is reused for the player's lifetime: both
-/// `Playing` and `Paused` carry the same `slot`. `Loading` is the transient
-/// state between slot allocation and the first track being driven; `Idle` is
-/// the freshly-constructed state with no slot; `Stopped` follows
-/// `remove_all_items` (cleared queue, slot may still exist).
+/// A slot is reused across ordinary play/pause transitions. `Loading` is the
+/// transient state between slot allocation and the first track being driven;
+/// `Idle` is the freshly-constructed state with no slot; `Stopped` follows a
+/// full teardown and owns neither a slot nor track-local state.
 pub(crate) enum PlayerPhase {
     Idle,
     Loading {
@@ -82,10 +81,7 @@ pub(crate) enum PlayerPhase {
         abr_handle: Option<kithara_abr::AbrHandle>,
         pending: Option<PendingNext>,
     },
-    Stopped {
-        slot: Option<SlotId>,
-        abr_handle: Option<kithara_abr::AbrHandle>,
-    },
+    Stopped,
 }
 
 impl From<&PlayerPhase> for PlayerPhaseKind {
@@ -95,7 +91,7 @@ impl From<&PlayerPhase> for PlayerPhaseKind {
             PlayerPhase::Loading { .. } => Self::Loading,
             PlayerPhase::Playing { .. } => Self::Playing,
             PlayerPhase::Paused { .. } => Self::Paused,
-            PlayerPhase::Stopped { .. } => Self::Stopped,
+            PlayerPhase::Stopped => Self::Stopped,
         }
     }
 }
@@ -105,11 +101,10 @@ impl PlayerPhase {
     /// a true accessor (not a `self -> Other` conversion).
     const fn abr_handle_ref(&self) -> Option<&kithara_abr::AbrHandle> {
         match self {
-            Self::Idle => None,
+            Self::Idle | Self::Stopped => None,
             Self::Loading { abr_handle, .. }
             | Self::Playing { abr_handle, .. }
-            | Self::Paused { abr_handle, .. }
-            | Self::Stopped { abr_handle, .. } => abr_handle.as_ref(),
+            | Self::Paused { abr_handle, .. } => abr_handle.as_ref(),
         }
     }
 
@@ -130,8 +125,7 @@ impl PlayerPhase {
                 pending,
                 ..
             } => (abr_handle, pending),
-            Self::Stopped { abr_handle, .. } => (abr_handle, None),
-            Self::Idle => (None, None),
+            Self::Idle | Self::Stopped => (None, None),
         };
         *self = Self::Loading {
             slot,
@@ -161,14 +155,6 @@ impl PlayerPhase {
                 abr_handle,
                 pending,
             },
-            Self::Stopped {
-                slot: Some(slot),
-                abr_handle,
-            } => Self::Paused {
-                slot,
-                abr_handle,
-                pending: None,
-            },
             phase => phase,
         };
     }
@@ -194,33 +180,12 @@ impl PlayerPhase {
                 abr_handle,
                 pending,
             },
-            Self::Stopped {
-                slot: Some(slot),
-                abr_handle,
-            } => Self::Playing {
-                slot,
-                abr_handle,
-                pending: None,
-            },
             phase => phase,
         };
     }
 
     pub(crate) fn enter_stopped(&mut self) {
-        let (slot, abr_handle) = match std::mem::replace(self, Self::Idle) {
-            Self::Loading {
-                slot, abr_handle, ..
-            }
-            | Self::Playing {
-                slot, abr_handle, ..
-            }
-            | Self::Paused {
-                slot, abr_handle, ..
-            } => (Some(slot), abr_handle),
-            Self::Stopped { slot, abr_handle } => (slot, abr_handle),
-            Self::Idle => (None, None),
-        };
-        *self = Self::Stopped { slot, abr_handle };
+        *self = Self::Stopped;
     }
 
     /// Shared read access to the armed-next slot, if any.
@@ -229,7 +194,7 @@ impl PlayerPhase {
             Self::Loading { pending, .. }
             | Self::Playing { pending, .. }
             | Self::Paused { pending, .. } => pending.as_ref(),
-            Self::Idle | Self::Stopped { .. } => None,
+            Self::Idle | Self::Stopped => None,
         }
     }
 
@@ -239,7 +204,7 @@ impl PlayerPhase {
             Self::Loading { pending, .. }
             | Self::Playing { pending, .. }
             | Self::Paused { pending, .. } => Some(pending),
-            Self::Idle | Self::Stopped { .. } => None,
+            Self::Idle | Self::Stopped => None,
         }
     }
 
@@ -248,9 +213,8 @@ impl PlayerPhase {
         match self {
             Self::Loading { abr_handle, .. }
             | Self::Playing { abr_handle, .. }
-            | Self::Paused { abr_handle, .. }
-            | Self::Stopped { abr_handle, .. } => *abr_handle = handle,
-            Self::Idle => {}
+            | Self::Paused { abr_handle, .. } => *abr_handle = handle,
+            Self::Idle | Self::Stopped => {}
         }
     }
 
@@ -258,11 +222,10 @@ impl PlayerPhase {
     /// accessor (not a `self -> Other` conversion).
     const fn slot_ref(&self) -> Option<&SlotId> {
         match self {
-            Self::Idle => None,
+            Self::Idle | Self::Stopped => None,
             Self::Loading { slot, .. } | Self::Playing { slot, .. } | Self::Paused { slot, .. } => {
                 Some(slot)
             }
-            Self::Stopped { slot, .. } => slot.as_ref(),
         }
     }
 
@@ -303,7 +266,7 @@ impl PlayerImpl {
         self.publish_time_control_status(TimeControlStatus::Playing, None);
     }
 
-    /// Move the player into `Stopped`, preserving the slot/ABR handle.
+    /// Move the player into `Stopped`, dropping slot and track-local state.
     pub(crate) fn enter_stopped(&self) {
         self.phase.lock().enter_stopped();
         self.publish_time_control_status(TimeControlStatus::Paused, None);
@@ -392,14 +355,7 @@ mod tests {
             .kind(),
             PlayerPhaseKind::Paused
         );
-        assert_eq!(
-            PlayerPhase::Stopped {
-                slot: None,
-                abr_handle: None,
-            }
-            .kind(),
-            PlayerPhaseKind::Stopped
-        );
+        assert_eq!(PlayerPhase::Stopped.kind(), PlayerPhaseKind::Stopped);
     }
 
     #[kithara::test]

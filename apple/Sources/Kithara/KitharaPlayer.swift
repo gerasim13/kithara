@@ -6,6 +6,94 @@ import KitharaFFI
 import AVFoundation
 #endif
 
+final class KitharaPlayerIdentityState: @unchecked Sendable {
+    struct Emission {
+        fileprivate let revision: UInt64
+        fileprivate let item: KitharaPlayerItem?
+    }
+
+    private let lock = NSRecursiveLock()
+    private let publicationLock = NSRecursiveLock()
+    private var items: [KitharaFFI.TrackId: KitharaPlayerItem] = [:]
+    private var representations: [KitharaFFI.TrackId: AnyObject] = [:]
+    private var current: KitharaPlayerItem?
+    private var revision: UInt64 = 0
+
+    func withTransaction<R>(_ body: () throws -> R) rethrows -> R {
+        lock.lock()
+        defer { lock.unlock() }
+        return try body()
+    }
+
+    func register(_ item: KitharaPlayerItem) {
+        withTransaction { items[item.ffiTrackId] = item }
+    }
+
+    func remove(trackId: KitharaFFI.TrackId) {
+        withTransaction {
+            items.removeValue(forKey: trackId)
+            representations.removeValue(forKey: trackId)
+        }
+    }
+
+    func setRepresentation(_ representation: AnyObject, for trackId: KitharaFFI.TrackId) {
+        withTransaction { representations[trackId] = representation }
+    }
+
+    @discardableResult
+    func removeRepresentation(for trackId: KitharaFFI.TrackId) -> AnyObject? {
+        withTransaction { representations.removeValue(forKey: trackId) }
+    }
+
+    func item(for trackId: KitharaFFI.TrackId) -> KitharaPlayerItem? {
+        withTransaction { items[trackId] }
+    }
+
+    func representation(for trackId: KitharaFFI.TrackId) -> AnyObject? {
+        withTransaction { representations[trackId] }
+    }
+
+    func orderedItems(for trackIds: [KitharaFFI.TrackId]) -> [KitharaPlayerItem] {
+        withTransaction { trackIds.compactMap { items[$0] } }
+    }
+
+    func currentItem() -> KitharaPlayerItem? {
+        withTransaction { current }
+    }
+
+    func setCurrent(_ item: KitharaPlayerItem?) -> Emission? {
+        withTransaction { updateCurrent(item) }
+    }
+
+    func resolveCurrent(trackId: KitharaFFI.TrackId?) -> Emission? {
+        withTransaction { updateCurrent(trackId.flatMap { items[$0] }) }
+    }
+
+    func clear() -> Emission? {
+        withTransaction {
+            items.removeAll()
+            representations.removeAll()
+            return updateCurrent(nil)
+        }
+    }
+
+    func publish(_ emission: Emission?, using send: (KitharaPlayerItem?) -> Void) {
+        guard let emission else { return }
+        publicationLock.lock()
+        defer { publicationLock.unlock() }
+        let isLatest = withTransaction { revision == emission.revision }
+        guard isLatest else { return }
+        send(emission.item)
+    }
+
+    private func updateCurrent(_ item: KitharaPlayerItem?) -> Emission? {
+        guard current?.ffiTrackId != item?.ffiTrackId else { return nil }
+        current = item
+        revision &+= 1
+        return Emission(revision: revision, item: item)
+    }
+}
+
 /// A queue-based audio player with Combine-driven observation.
 ///
 /// Thin wrapper over the Rust `AudioPlayer`. All state lives in Rust —
@@ -28,6 +116,7 @@ open class KitharaPlayer: KitharaPlayerProtocol, @unchecked Sendable {
     public typealias Item = KitharaPlayerItem
 
     private let _inner: AudioPlayer
+    private let _identity = KitharaPlayerIdentityState()
     private let _eventSubject = PassthroughSubject<FfiPlayerEvent, Never>()
     private let _commandErrorSubject = PassthroughSubject<KitharaPlayerError, Never>()
     private let _currentItemSubject = CurrentValueSubject<KitharaPlayerItem?, Never>(nil)
@@ -105,7 +194,7 @@ open class KitharaPlayer: KitharaPlayerProtocol, @unchecked Sendable {
     }
 
     private func audioId(for ffiTrackId: KitharaFFI.TrackId) -> TrackId? {
-        _knownItems[ffiTrackId]?.audioId
+        _identity.item(for: ffiTrackId)?.audioId
     }
 
     // MARK: - Discrete publishers (KitharaPlayerProtocol)
@@ -204,7 +293,7 @@ open class KitharaPlayer: KitharaPlayerProtocol, @unchecked Sendable {
     /// Current queue item visible to iOS-style clients, or `nil` when
     /// the queue is empty.
     public var currentAudioItem: KitharaPlayerItem? {
-        _currentItemSubject.value
+        _identity.currentItem()
     }
 
     // MARK: - Repeat
@@ -479,23 +568,16 @@ open class KitharaPlayer: KitharaPlayerProtocol, @unchecked Sendable {
 
     // MARK: - Queue management (delegated to Rust)
 
-    /// Items inserted via ``insert(_:after:)``, preserving Swift identity.
-    private var _knownItems: [KitharaFFI.TrackId: KitharaPlayerItem] = [:]
-    private var _knownRepresentations: [KitharaFFI.TrackId: AnyObject] = [:]
-
     private func syncCurrentItem(with event: FfiPlayerEvent) {
         guard case let .currentItemChanged(itemId) = event else { return }
-        publishCurrentItem(itemId.flatMap { _knownItems[$0] })
-    }
-
-    private func publishCurrentItem(_ item: KitharaPlayerItem?) {
-        if _currentItemSubject.value?.ffiTrackId != item?.ffiTrackId {
-            _currentItemSubject.send(item)
+        let emission = _identity.withTransaction {
+            _identity.resolveCurrent(trackId: itemId)
         }
+        publishCurrentEmission(emission)
     }
 
-    private func publishQueueHeadAsCurrent() {
-        publishCurrentItem(items().first)
+    private func publishCurrentEmission(_ emission: KitharaPlayerIdentityState.Emission?) {
+        _identity.publish(emission) { _currentItemSubject.send($0) }
     }
 
     private func publishCommandError(_ error: KitharaError, itemId: TrackId?) {
@@ -508,17 +590,18 @@ open class KitharaPlayer: KitharaPlayerProtocol, @unchecked Sendable {
     /// preserving identity and active event publishers. Mirrors the iOS
     /// Player queue as a function, not a property.
     public func items() -> [KitharaPlayerItem] {
-        let ffiItems = _inner.items()
-        return ffiItems.compactMap { ffiItem in
-            let id = ffiItem.queueId()
-            return _knownItems[id]
+        _identity.withTransaction {
+            let trackIds = _inner.items().map { $0.queueId() }
+            return _identity.orderedItems(for: trackIds)
         }
     }
 
     /// Current item represented as a caller-owned wrapper type, when the item
     /// was inserted through ``insert(_:representing:after:)``.
     public func currentItemRepresentation<T: AnyObject>(as type: T.Type = T.self) -> T? {
-        currentAudioItem.flatMap { _knownRepresentations[$0.ffiTrackId] as? T }
+        _identity.withTransaction {
+            currentAudioItem.flatMap { _identity.representation(for: $0.ffiTrackId) as? T }
+        }
     }
 
     /// Current item representation publisher. Emits the caller-owned wrapper
@@ -529,7 +612,7 @@ open class KitharaPlayer: KitharaPlayerProtocol, @unchecked Sendable {
         _currentItemSubject
             .map { [weak self] item -> T? in
                 guard let self, let item else { return nil }
-                return self._knownRepresentations[item.ffiTrackId] as? T
+                return self._identity.representation(for: item.ffiTrackId) as? T
             }
             .eraseToAnyPublisher()
     }
@@ -537,7 +620,9 @@ open class KitharaPlayer: KitharaPlayerProtocol, @unchecked Sendable {
     /// Queue represented as caller-owned wrapper objects, preserving Rust queue
     /// order.
     public func itemRepresentations<T: AnyObject>(as type: T.Type = T.self) -> [T] {
-        items().compactMap { _knownRepresentations[$0.ffiTrackId] as? T }
+        _identity.withTransaction {
+            items().compactMap { _identity.representation(for: $0.ffiTrackId) as? T }
+        }
     }
 
     /// Insert an item into the queue.
@@ -550,19 +635,31 @@ open class KitharaPlayer: KitharaPlayerProtocol, @unchecked Sendable {
     ///     ``append(_:)`` for AVQueuePlayer-style append.
     /// - Throws: ``KitharaError`` if `after` is not in the queue.
     public func insert(_ item: KitharaPlayerItem, after: KitharaPlayerItem? = nil) throws {
-        let wasEmpty = itemCount == 0
-        _knownItems[item.ffiTrackId] = item
-        do {
-            try _inner.insert(item: item._inner, after: after?._inner)
-            if wasEmpty {
-                publishCurrentItem(item)
+        try insert(item, representation: nil, after: after)
+    }
+
+    private func insert(
+        _ item: KitharaPlayerItem,
+        representation: AnyObject?,
+        after: KitharaPlayerItem?
+    ) throws {
+        let emission = try _identity.withTransaction {
+            let wasEmpty = itemCount == 0
+            _identity.register(item)
+            if let representation {
+                _identity.setRepresentation(representation, for: item.ffiTrackId)
             }
-        } catch let ffiError as FfiError {
-            _knownItems.removeValue(forKey: item.ffiTrackId)
-            let error = KitharaError(ffi: ffiError)
-            publishCommandError(error, itemId: item.audioId)
-            throw error
+            do {
+                try _inner.insert(item: item._inner, after: after?._inner)
+                return wasEmpty ? _identity.setCurrent(item) : nil
+            } catch let ffiError as FfiError {
+                _identity.remove(trackId: item.ffiTrackId)
+                let error = KitharaError(ffi: ffiError)
+                publishCommandError(error, itemId: item.audioId)
+                throw error
+            }
         }
+        publishCurrentEmission(emission)
     }
 
     /// Insert an item while registering a caller-owned wrapper object for UI /
@@ -573,32 +670,27 @@ open class KitharaPlayer: KitharaPlayerProtocol, @unchecked Sendable {
         representing representation: T,
         after: KitharaPlayerItem? = nil
     ) throws {
-        _knownRepresentations[item.ffiTrackId] = representation
-        do {
-            try insert(item, after: after)
-        } catch {
-            _knownRepresentations.removeValue(forKey: item.ffiTrackId)
-            throw error
-        }
+        try insert(item, representation: representation, after: after)
     }
 
     /// Append an item to the tail of the queue (AVQueuePlayer-style).
     /// Counterpart of ``insert(_:after:)``, which inserts at the head
     /// when `after == nil` per the iOS protocol contract.
     public func append(_ item: KitharaPlayerItem) throws {
-        let wasEmpty = itemCount == 0
-        _knownItems[item.ffiTrackId] = item
-        do {
-            try _inner.append(item: item._inner)
-            if wasEmpty {
-                publishCurrentItem(item)
+        let emission = try _identity.withTransaction {
+            let wasEmpty = itemCount == 0
+            _identity.register(item)
+            do {
+                try _inner.append(item: item._inner)
+                return wasEmpty ? _identity.setCurrent(item) : nil
+            } catch let ffiError as FfiError {
+                _identity.remove(trackId: item.ffiTrackId)
+                let error = KitharaError(ffi: ffiError)
+                publishCommandError(error, itemId: item.audioId)
+                throw error
             }
-        } catch let ffiError as FfiError {
-            _knownItems.removeValue(forKey: item.ffiTrackId)
-            let error = KitharaError(ffi: ffiError)
-            publishCommandError(error, itemId: item.audioId)
-            throw error
         }
+        publishCurrentEmission(emission)
     }
 
     /// Remove an item from the queue.
@@ -606,26 +698,28 @@ open class KitharaPlayer: KitharaPlayerProtocol, @unchecked Sendable {
     /// - Parameter item: The item to remove.
     /// - Throws: ``KitharaError`` if the item is not in the queue.
     public func remove(_ item: KitharaPlayerItem) throws {
-        do {
-            try _inner.remove(item: item._inner)
-            _knownItems.removeValue(forKey: item.ffiTrackId)
-            _knownRepresentations.removeValue(forKey: item.ffiTrackId)
-            if _currentItemSubject.value?.ffiTrackId == item.ffiTrackId {
-                publishQueueHeadAsCurrent()
+        let emission = try _identity.withTransaction {
+            do {
+                try _inner.remove(item: item._inner)
+                let wasCurrent = currentAudioItem?.ffiTrackId == item.ffiTrackId
+                _identity.remove(trackId: item.ffiTrackId)
+                return wasCurrent ? _identity.setCurrent(items().first) : nil
+            } catch let ffiError as FfiError {
+                let error = KitharaError(ffi: ffiError)
+                publishCommandError(error, itemId: item.audioId)
+                throw error
             }
-        } catch let ffiError as FfiError {
-            let error = KitharaError(ffi: ffiError)
-            publishCommandError(error, itemId: item.audioId)
-            throw error
         }
+        publishCurrentEmission(emission)
     }
 
     /// Remove all items from the queue.
     public func removeAllItems() {
-        _inner.removeAllItems()
-        _knownItems.removeAll()
-        _knownRepresentations.removeAll()
-        publishCurrentItem(nil)
+        let emission = _identity.withTransaction {
+            _inner.removeAllItems()
+            return _identity.clear()
+        }
+        publishCurrentEmission(emission)
     }
 
     /// Number of items currently in the queue.
@@ -640,29 +734,33 @@ open class KitharaPlayer: KitharaPlayerProtocol, @unchecked Sendable {
     /// must already have a loaded resource (``KitharaPlayerItem/load()``
     /// finished).
     public func replaceItem(at index: Int, with item: KitharaPlayerItem) throws {
-        let oldItems = items()
-        let replacesCurrent = oldItems.indices.contains(index)
-            && oldItems[index].ffiTrackId == _currentItemSubject.value?.ffiTrackId
-        let oldItemId = oldItems.indices.contains(index) ? oldItems[index].ffiTrackId : nil
-        let oldRepresentation = oldItemId.flatMap { _knownRepresentations[$0] }
-        _knownItems[item.ffiTrackId] = item
-        if let oldItemId {
-            _knownRepresentations.removeValue(forKey: oldItemId)
-        }
-        do {
-            try _inner.replaceItem(index: UInt32(index), item: item._inner)
-            if replacesCurrent {
-                publishCurrentItem(item)
+        let emission = try _identity.withTransaction {
+            let oldItems = items()
+            let replacesCurrent = oldItems.indices.contains(index)
+                && oldItems[index].ffiTrackId == currentAudioItem?.ffiTrackId
+            let oldItemId = oldItems.indices.contains(index) ? oldItems[index].ffiTrackId : nil
+            let oldRepresentation = oldItemId.flatMap { _identity.representation(for: $0) }
+            _identity.register(item)
+            if let oldItemId {
+                _identity.removeRepresentation(for: oldItemId)
             }
-        } catch let ffiError as FfiError {
-            _knownItems.removeValue(forKey: item.ffiTrackId)
-            if let oldItemId, let oldRepresentation {
-                _knownRepresentations[oldItemId] = oldRepresentation
+            do {
+                try _inner.replaceItem(index: UInt32(index), item: item._inner)
+                if let oldItemId, oldItemId != item.ffiTrackId {
+                    _identity.remove(trackId: oldItemId)
+                }
+                return replacesCurrent ? _identity.setCurrent(item) : nil
+            } catch let ffiError as FfiError {
+                _identity.remove(trackId: item.ffiTrackId)
+                if let oldItemId, let oldRepresentation {
+                    _identity.setRepresentation(oldRepresentation, for: oldItemId)
+                }
+                let error = KitharaError(ffi: ffiError)
+                publishCommandError(error, itemId: item.audioId)
+                throw error
             }
-            let error = KitharaError(ffi: ffiError)
-            publishCommandError(error, itemId: item.audioId)
-            throw error
         }
+        publishCurrentEmission(emission)
     }
 
     /// Select an item at the given queue index.
@@ -727,9 +825,11 @@ open class KitharaPlayer: KitharaPlayerProtocol, @unchecked Sendable {
     /// slot. Mirrors `AVPlayer.stop` semantics — after `stop()`, the
     /// player is ready to accept a fresh queue via ``insert(_:after:)``.
     public func stop() {
-        _inner.stop()
-        _knownItems.removeAll()
-        publishCurrentItem(nil)
+        let emission = _identity.withTransaction {
+            _inner.stop()
+            return _identity.clear()
+        }
+        publishCurrentEmission(emission)
     }
 
     // MARK: - Network / DRM hooks

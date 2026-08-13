@@ -331,10 +331,8 @@ impl AudioPlayer {
         self.inner.snapshot()
     }
 
-    /// Stop playback: pause the engine and reset the current item's
-    /// position to the start. The queue is preserved, so a subsequent
-    /// [`play`](Self::play) resumes the same item from the beginning.
-    /// To empty the queue instead, use [`remove_all_items`](Self::remove_all_items).
+    /// Stop playback, release the output, and clear the queue. A subsequent
+    /// [`play`](Self::play) starts only after a fresh item is inserted.
     pub fn stop(&self) {
         self.inner.stop();
     }

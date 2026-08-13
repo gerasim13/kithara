@@ -1,4 +1,6 @@
-use crate::{config::FfiPlayerConfig, player::AudioPlayer};
+use crate::{
+    config::FfiPlayerConfig, item::AudioPlayerItem, player::AudioPlayer, types::FfiItemConfig,
+};
 
 #[kithara::test]
 fn create_player() {
@@ -24,6 +26,45 @@ fn remove_all_items_on_empty_queue() {
     let player = AudioPlayer::new(FfiPlayerConfig::default());
     player.remove_all_items();
     assert!(player.items().is_empty());
+}
+
+#[kithara::test]
+fn stop_clears_queue_and_releases_inserted_items() {
+    let player = AudioPlayer::new(FfiPlayerConfig::default());
+    let item = AudioPlayerItem::new(FfiItemConfig {
+        abr_mode: None,
+        audio_id: None,
+        headers: None,
+        uuid_i64: None,
+        url: "https://example.com/song.mp3".to_string(),
+        is_live_stream: false,
+        preferred_peak_bitrate: 0.0,
+        preferred_peak_bitrate_expensive: 0.0,
+    });
+    player
+        .append(item.clone())
+        .expect("valid item must enter the queue");
+    assert_eq!(player.item_count(), 1, "setup must populate the queue");
+    assert!(*item.inserted.lock(), "setup must mark the item inserted");
+
+    player.stop();
+
+    assert_eq!(player.item_count(), 0, "stop must clear the queue");
+    assert!(
+        player.items().is_empty(),
+        "stop must drain the item registry"
+    );
+    assert!(
+        !*item.inserted.lock(),
+        "stop must release the old item for a later insertion"
+    );
+
+    player
+        .append(item.clone())
+        .expect("a stopped item must be insertable again");
+    assert_eq!(player.item_count(), 1, "restart queue must accept the item");
+    player.stop();
+    assert_eq!(player.item_count(), 0, "repeated stop must stay idempotent");
 }
 
 #[kithara::test]
