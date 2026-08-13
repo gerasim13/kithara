@@ -167,7 +167,7 @@ pub(super) fn append(out: &mut String, path: &Path) -> (Vec<PressurePoint>, bool
     if summary.samples == 0 {
         let _ = writeln!(
             out,
-            "\n## Linux pressure context\n\nNo valid `kithara.pressure.v2` samples were available (`{}` malformed, `{}` nonmonotonic, `{}` capture-structure errors).",
+            "\n## Linux pressure context\n\nNo valid `devtools.pressure.v2` samples were available (`{}` malformed, `{}` nonmonotonic, `{}` capture-structure errors).",
             summary.malformed, summary.nonmonotonic, summary.structure_errors,
         );
         return (Vec::new(), false);
@@ -335,9 +335,9 @@ mod tests {
         let log = temp.path().join("pressure.jsonl");
         std::fs::write(
             &log,
-            r#"{"schema":"kithara.pressure.v2","marker":"start","timestamp_ms":1000,"load1":4.5,"metrics":{"proc.pressure.cpu":"some avg10=12.50 avg60=1.0 avg300=0.1 total=10","cgroup.cpu.stat":"nr_throttled 7\nthrottled_usec 42"}}
-{"schema":"kithara.pressure.v2","marker":"sample","timestamp_ms":2000,"load1":6.5,"metrics":{"proc.pressure.cpu":"some avg10=20.00 avg60=1.0 avg300=0.1 total=20","cgroup.cpu.stat":"nr_throttled 10\nthrottled_usec 50"}}
-{"schema":"kithara.pressure.v2","marker":"end","timestamp_ms":3000,"load1":null,"metrics":{},"sampler_healthy":true,"primary_exit_code":0}
+            r#"{"schema":"devtools.pressure.v2","marker":"start","timestamp_ms":1000,"load1":4.5,"metrics":{"proc.pressure.cpu":"some avg10=12.50 avg60=1.0 avg300=0.1 total=10","cgroup.cpu.stat":"nr_throttled 7\nthrottled_usec 42"}}
+{"schema":"devtools.pressure.v2","marker":"sample","timestamp_ms":2000,"load1":6.5,"metrics":{"proc.pressure.cpu":"some avg10=20.00 avg60=1.0 avg300=0.1 total=20","cgroup.cpu.stat":"nr_throttled 10\nthrottled_usec 50"}}
+{"schema":"devtools.pressure.v2","marker":"end","timestamp_ms":3000,"load1":null,"metrics":{},"sampler_healthy":true,"primary_exit_code":0}
 "#,
         )
         .expect("write pressure fixture");
@@ -360,10 +360,10 @@ mod tests {
         let log = temp.path().join("pressure.jsonl");
         std::fs::write(
             &log,
-            "{\"schema\":\"kithara.pressure.v2\",\"marker\":\"start\",\"timestamp_ms\":2000,\"load1\":1.0,\"metrics\":{}}\n\
+            "{\"schema\":\"devtools.pressure.v2\",\"marker\":\"start\",\"timestamp_ms\":2000,\"load1\":1.0,\"metrics\":{}}\n\
 {not-json}\n\
-{\"schema\":\"kithara.pressure.v2\",\"marker\":\"sample\",\"timestamp_ms\":1000,\"load1\":2.0,\"metrics\":{}}\n\
-{\"schema\":\"kithara.pressure.v2\",\"marker\":\"end\",\"timestamp_ms\":3000,\"load1\":null,\"metrics\":{},\"sampler_healthy\":true,\"primary_exit_code\":0}\n",
+{\"schema\":\"devtools.pressure.v2\",\"marker\":\"sample\",\"timestamp_ms\":1000,\"load1\":2.0,\"metrics\":{}}\n\
+{\"schema\":\"devtools.pressure.v2\",\"marker\":\"end\",\"timestamp_ms\":3000,\"load1\":null,\"metrics\":{},\"sampler_healthy\":true,\"primary_exit_code\":0}\n",
         )
         .expect("write pressure fixture");
         let mut markdown = String::new();
@@ -382,9 +382,9 @@ mod tests {
         let log = temp.path().join("pressure.jsonl");
         std::fs::write(
             &log,
-            "{\"schema\":\"kithara.pressure.v2\",\"marker\":\"start\",\"timestamp_ms\":1000,\"load1\":1.0,\"metrics\":{\"cgroup.memory.events\":\"oom 4\"}}\n\
-{\"schema\":\"kithara.pressure.v2\",\"marker\":\"sample\",\"timestamp_ms\":2000,\"load1\":1.0,\"metrics\":{\"cgroup.memory.events\":\"oom 3\"}}\n\
-{\"schema\":\"kithara.pressure.v2\",\"marker\":\"end\",\"timestamp_ms\":3000,\"load1\":null,\"metrics\":{},\"sampler_healthy\":true,\"primary_exit_code\":0}\n",
+            "{\"schema\":\"devtools.pressure.v2\",\"marker\":\"start\",\"timestamp_ms\":1000,\"load1\":1.0,\"metrics\":{\"cgroup.memory.events\":\"oom 4\"}}\n\
+{\"schema\":\"devtools.pressure.v2\",\"marker\":\"sample\",\"timestamp_ms\":2000,\"load1\":1.0,\"metrics\":{\"cgroup.memory.events\":\"oom 3\"}}\n\
+{\"schema\":\"devtools.pressure.v2\",\"marker\":\"end\",\"timestamp_ms\":3000,\"load1\":null,\"metrics\":{},\"sampler_healthy\":true,\"primary_exit_code\":0}\n",
         )
         .expect("write pressure fixture");
         let mut markdown = String::new();

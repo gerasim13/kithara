@@ -1,7 +1,10 @@
-use std::{collections::BTreeMap, path::Path};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::{Component, Path},
+};
 
 use anyhow::{Context, Result, bail};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use toml::Table;
 
 const CONFIG_REL: &str = ".config/xtask.toml";
@@ -21,6 +24,7 @@ pub struct ProjectConfig {
     pub perf: PerfConfig,
     pub project: ProjectIdentity,
     pub quality: QualityConfig,
+    pub stress: StressConfig,
     #[serde(default)]
     pub ext: Table,
     pub test: TestCommandConfig,
@@ -370,6 +374,294 @@ pub struct TestLaneConfig {
     pub suffix_args: Vec<String>,
 }
 
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq)]
+#[non_exhaustive]
+#[serde(default, deny_unknown_fields)]
+pub struct StressConfig {
+    pub default_mode: String,
+    pub lane: String,
+    pub backend: String,
+    pub nextest_config: String,
+    pub nextest_profile: String,
+    pub default_filter: String,
+    pub default_count: usize,
+    pub max_count: usize,
+    pub test_threads: String,
+    pub max_test_threads: usize,
+    pub raw_output: String,
+    pub report_output: String,
+    pub workflow_job_timeout_minutes: u64,
+    pub artifacts: StressArtifactConfig,
+    pub environment: StressEnvironmentConfig,
+    pub modes: BTreeMap<String, StressModeConfig>,
+    pub evidence: StressEvidenceConfig,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq)]
+#[non_exhaustive]
+#[serde(default, deny_unknown_fields)]
+pub struct StressArtifactConfig {
+    pub subject_junit: String,
+    pub inventory: String,
+    pub junit: String,
+    pub log: String,
+    pub manifest: String,
+    pub pressure: String,
+    pub report: String,
+    pub envelope_dir: Option<String>,
+    pub line_log: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq)]
+#[non_exhaustive]
+#[serde(default, deny_unknown_fields)]
+pub struct StressEnvironmentConfig {
+    pub remove: Vec<String>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq)]
+#[non_exhaustive]
+#[serde(default, deny_unknown_fields)]
+pub struct StressModeConfig {
+    pub features: Vec<String>,
+    pub set_env: BTreeMap<String, String>,
+    pub raw_path_env: BTreeMap<String, String>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[non_exhaustive]
+#[serde(default, deny_unknown_fields)]
+pub struct StressEvidenceConfig {
+    pub envelope_schema: Option<String>,
+    pub envelope_marker: Option<String>,
+    pub envelope_text_field: Option<String>,
+    pub envelope_suffix_markers: Vec<String>,
+    pub line_marker: Option<String>,
+    pub dump_marker: Option<String>,
+    pub primitive_marker: Option<String>,
+    pub holder_marker: Option<String>,
+    pub wait_marker: Option<String>,
+    pub direct_markers: Vec<String>,
+    pub source_excludes: Vec<String>,
+}
+
+impl StressConfig {
+    #[must_use]
+    pub fn is_configured(&self) -> bool {
+        self != &Self::default()
+    }
+
+    /// Resolve one configured campaign mode.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `name` is not configured.
+    pub fn mode(&self, name: &str) -> Result<&StressModeConfig> {
+        self.modes
+            .get(name)
+            .with_context(|| format!("stress mode `{name}` is not configured"))
+    }
+
+    pub(crate) fn validate(&self) -> Result<()> {
+        require_value("stress.default_mode", &self.default_mode)?;
+        require_value("stress.lane", &self.lane)?;
+        require_value("stress.backend", &self.backend)?;
+        require_value("stress.nextest_config", &self.nextest_config)?;
+        require_value("stress.nextest_profile", &self.nextest_profile)?;
+        require_value("stress.default_filter", &self.default_filter)?;
+        require_value("stress.test_threads", &self.test_threads)?;
+        validate_relative_path("stress.nextest_config", &self.nextest_config)?;
+        validate_relative_path("stress.raw_output", &self.raw_output)?;
+        validate_relative_path("stress.report_output", &self.report_output)?;
+        ensure_positive("stress.default_count", self.default_count)?;
+        ensure_positive("stress.max_count", self.max_count)?;
+        ensure_positive("stress.max_test_threads", self.max_test_threads)?;
+        if self.workflow_job_timeout_minutes == 0 {
+            bail!("stress.workflow_job_timeout_minutes must be positive");
+        }
+        if self.default_count > self.max_count {
+            bail!("stress.default_count cannot exceed stress.max_count");
+        }
+        if self.test_threads != "num-cpus" {
+            let test_threads = self
+                .test_threads
+                .parse::<usize>()
+                .with_context(|| "stress.test_threads must be `num-cpus` or a positive integer")?;
+            ensure_positive("stress.test_threads", test_threads)?;
+            if test_threads > self.max_test_threads {
+                bail!("stress.test_threads cannot exceed stress.max_test_threads");
+            }
+        }
+
+        self.validate_artifacts()?;
+        self.validate_evidence()?;
+        let mut removed = BTreeSet::new();
+        for key in &self.environment.remove {
+            require_env_key("stress.environment.remove", key)?;
+            if !removed.insert(key) {
+                bail!("stress.environment.remove contains duplicate key `{key}`");
+            }
+        }
+        for (name, mode) in &self.modes {
+            require_value("stress mode name", name)?;
+            self.validate_mode(name, mode)?;
+        }
+        if !self.modes.contains_key(&self.default_mode) {
+            bail!(
+                "stress.default_mode `{}` is not configured",
+                self.default_mode
+            );
+        }
+        Ok(())
+    }
+
+    fn validate_artifacts(&self) -> Result<()> {
+        for (name, path) in [
+            ("subject_junit", self.artifacts.subject_junit.as_str()),
+            ("inventory", self.artifacts.inventory.as_str()),
+            ("junit", self.artifacts.junit.as_str()),
+            ("log", self.artifacts.log.as_str()),
+            ("manifest", self.artifacts.manifest.as_str()),
+            ("pressure", self.artifacts.pressure.as_str()),
+            ("report", self.artifacts.report.as_str()),
+        ] {
+            validate_relative_path(&format!("stress.artifacts.{name}"), path)?;
+        }
+        if let Some(path) = &self.artifacts.envelope_dir {
+            validate_relative_path("stress.artifacts.envelope_dir", path)?;
+        }
+        if let Some(path) = &self.artifacts.line_log {
+            validate_relative_path("stress.artifacts.line_log", path)?;
+        }
+        Ok(())
+    }
+
+    fn validate_evidence(&self) -> Result<()> {
+        match self.artifacts.envelope_dir.as_deref() {
+            Some(_) => {
+                require_value(
+                    "stress.evidence.envelope_schema",
+                    self.evidence
+                        .envelope_schema
+                        .as_deref()
+                        .context("stress.evidence.envelope_schema is not configured")?,
+                )?;
+                require_value(
+                    "stress.evidence.envelope_marker",
+                    self.evidence
+                        .envelope_marker
+                        .as_deref()
+                        .context("stress.evidence.envelope_marker is not configured")?,
+                )?;
+                if let Some(field) = &self.evidence.envelope_text_field {
+                    require_value("stress.evidence.envelope_text_field", field)?;
+                }
+            }
+            None => {
+                if self.evidence.envelope_schema.is_some()
+                    || self.evidence.envelope_marker.is_some()
+                    || self.evidence.envelope_text_field.is_some()
+                    || !self.evidence.envelope_suffix_markers.is_empty()
+                {
+                    bail!(
+                        "stress.artifacts.envelope_dir, stress.evidence.envelope_schema, and stress.evidence.envelope_marker must be configured together"
+                    );
+                }
+            }
+        }
+        match (
+            self.artifacts.line_log.as_deref(),
+            self.evidence.line_marker.as_deref(),
+        ) {
+            (Some(_), Some(marker)) => require_value("stress.evidence.line_marker", marker)?,
+            (None, None) => {}
+            _ => bail!(
+                "stress.artifacts.line_log and stress.evidence.line_marker must be configured together"
+            ),
+        }
+        for (name, marker) in [
+            ("dump_marker", self.evidence.dump_marker.as_deref()),
+            (
+                "primitive_marker",
+                self.evidence.primitive_marker.as_deref(),
+            ),
+            ("holder_marker", self.evidence.holder_marker.as_deref()),
+            ("wait_marker", self.evidence.wait_marker.as_deref()),
+        ] {
+            if let Some(marker) = marker {
+                require_value(&format!("stress.evidence.{name}"), marker)?;
+            }
+        }
+        for marker in self
+            .evidence
+            .direct_markers
+            .iter()
+            .chain(&self.evidence.envelope_suffix_markers)
+            .chain(&self.evidence.source_excludes)
+        {
+            require_value("stress evidence marker", marker)?;
+        }
+        Ok(())
+    }
+
+    fn validate_mode(&self, name: &str, mode: &StressModeConfig) -> Result<()> {
+        let mut features = BTreeSet::new();
+        for feature in &mode.features {
+            require_value(&format!("stress.modes.{name}.features"), feature)?;
+            if !features.insert(feature) {
+                bail!("stress mode `{name}` contains duplicate feature `{feature}`");
+            }
+        }
+        for key in mode.set_env.keys() {
+            require_env_key(&format!("stress.modes.{name}.set_env"), key)?;
+            if mode.raw_path_env.contains_key(key) {
+                bail!(
+                    "stress mode `{name}` environment key `{key}` cannot be set as both a value and a raw path"
+                );
+            }
+        }
+        for (key, path) in &mode.raw_path_env {
+            require_env_key(&format!("stress.modes.{name}.raw_path_env"), key)?;
+            validate_relative_path(&format!("stress.modes.{name}.raw_path_env.{key}"), path)?;
+        }
+        Ok(())
+    }
+}
+
+fn require_value(name: &str, value: &str) -> Result<()> {
+    if value.trim().is_empty() {
+        bail!("{name} must not be empty");
+    }
+    Ok(())
+}
+
+fn require_env_key(owner: &str, key: &str) -> Result<()> {
+    if key.trim().is_empty() {
+        bail!("{owner} contains an empty environment key");
+    }
+    Ok(())
+}
+
+fn ensure_positive(name: &str, value: usize) -> Result<()> {
+    if value == 0 {
+        bail!("{name} must be positive");
+    }
+    Ok(())
+}
+
+fn validate_relative_path(name: &str, value: &str) -> Result<()> {
+    require_value(name, value)?;
+    let path = Path::new(value);
+    if path.is_absolute()
+        || path
+            .components()
+            .any(|component| !matches!(component, Component::Normal(_)))
+    {
+        bail!("{name} must be a safe relative path");
+    }
+    Ok(())
+}
+
 impl ProjectConfig {
     /// Load project-specific xtask settings from `.config/xtask.toml`.
     ///
@@ -468,6 +760,21 @@ impl ProjectConfig {
                 bail!(
                     "quality assessment tool `{}` cannot be both configured and not applicable",
                     policy.tool
+                );
+            }
+        }
+        if self.stress.is_configured() {
+            self.stress.validate()?;
+            if !self.test.lanes.contains_key(&self.stress.lane) {
+                bail!(
+                    "stress.lane `{}` is not configured under test.lanes",
+                    self.stress.lane
+                );
+            }
+            if !self.test.net_backends.contains_key(&self.stress.backend) {
+                bail!(
+                    "stress.backend `{}` is not configured under test.net_backends",
+                    self.stress.backend
                 );
             }
         }

@@ -1,20 +1,18 @@
 use std::{
+    collections::{BTreeMap, BTreeSet},
     fmt,
     fs::{self, File, OpenOptions},
     io::{Read, Write},
-    path::{Path, PathBuf},
+    path::{Component, Path, PathBuf},
     time::SystemTime,
 };
 
-use anyhow::{Context, Result, ensure};
+use anyhow::{Context, Result, bail, ensure};
 use clap::ValueEnum;
 use serde::{Deserialize, Serialize};
 
-use super::{
-    environment::{log_filter, no_block_budget_ms, prekill_secs},
-    pressure::SCHEMA as PRESSURE_SCHEMA,
-    system::SystemSnapshot,
-};
+use super::{pressure::SCHEMA as PRESSURE_SCHEMA, system::SystemSnapshot};
+use crate::{common::project::StressEvidenceConfig, test::ConfiguredLane};
 
 mod time;
 
@@ -23,7 +21,7 @@ use time::format_timestamp;
 struct Consts;
 
 impl Consts {
-    const MANIFEST_SCHEMA: u32 = 2;
+    const MANIFEST_SCHEMA: u32 = 3;
     const MAX_MANIFEST_BYTES: usize = 1_048_576;
     const MANIFEST_READ_LIMIT: u64 = 1_048_577;
 }
@@ -32,14 +30,13 @@ impl Consts {
 #[serde(deny_unknown_fields)]
 pub(super) struct Manifest {
     pub(super) schema: u32,
-    pub(super) mode: Mode,
+    pub(super) mode: String,
     pub(super) config: ManifestConfig,
     pub(super) controller: Revision,
     pub(super) subject: Revision,
-    pub(super) run: RunMetadata,
+    pub(super) runner: ConfiguredLane,
     pub(super) selection: Selection,
-    pub(super) features: Features,
-    pub(super) logging: Logging,
+    pub(super) policy: PolicySnapshot,
     pub(super) timing: Timing,
     pub(super) pressure: Pressure,
     pub(super) system: SystemSnapshot,
@@ -47,40 +44,13 @@ pub(super) struct Manifest {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct ManifestSpec {
-    pub(super) mode: Mode,
+    pub(super) mode: String,
     pub(super) config: ManifestConfig,
     pub(super) controller_sha: String,
     pub(super) subject_sha: String,
-    pub(super) run: RunMetadata,
+    pub(super) runner: ConfiguredLane,
     pub(super) selection: Selection,
-    pub(super) features: Features,
-    pub(super) logging: Logging,
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, ValueEnum)]
-#[serde(rename_all = "snake_case")]
-pub(super) enum Mode {
-    Reproduction,
-    Diagnostic,
-}
-
-impl Mode {
-    #[must_use]
-    pub(super) const fn from_diagnostics(enabled: bool) -> Self {
-        if enabled {
-            Self::Diagnostic
-        } else {
-            Self::Reproduction
-        }
-    }
-
-    #[must_use]
-    pub(super) const fn as_str(self) -> &'static str {
-        match self {
-            Self::Reproduction => "reproduction",
-            Self::Diagnostic => "diagnostic",
-        }
-    }
+    pub(super) policy: PolicySnapshot,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -94,9 +64,13 @@ pub(super) struct ManifestConfig {
 
 impl ManifestConfig {
     #[must_use]
-    pub(super) fn stress(nextest: impl Into<String>, workflow_job_timeout_minutes: u64) -> Self {
+    pub(super) fn new(
+        nextest_profile: impl Into<String>,
+        nextest: impl Into<String>,
+        workflow_job_timeout_minutes: u64,
+    ) -> Self {
         Self {
-            profile: "stress".to_owned(),
+            profile: nextest_profile.into(),
             nextest: nextest.into(),
             pressure_schema: PRESSURE_SCHEMA.to_owned(),
             workflow_job_timeout_minutes,
@@ -110,17 +84,6 @@ pub(super) struct Revision {
     pub(super) sha: String,
 }
 
-#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub(super) struct RunMetadata {
-    pub(super) repository: Option<String>,
-    pub(super) workflow: Option<String>,
-    pub(super) job: Option<String>,
-    pub(super) event: Option<String>,
-    pub(super) run_id: Option<String>,
-    pub(super) run_attempt: Option<String>,
-}
-
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct Selection {
@@ -131,30 +94,12 @@ pub(super) struct Selection {
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
-pub(super) struct Features {
-    pub(super) flash: bool,
-    pub(super) diagnostics: bool,
-    pub(super) no_block_requested: bool,
-    pub(super) no_block: bool,
-    pub(super) dump_thread_backtrace_requested: bool,
-    pub(super) dump_thread_backtrace: bool,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub(super) struct Logging {
-    pub(super) rust_backtrace: String,
-    pub(super) rust_log: String,
-    pub(super) flash_sync_trace: bool,
-    pub(super) flash_dump_thread_backtrace: bool,
-    pub(super) no_block_mode: String,
-    pub(super) no_block_budget_ms: Option<u64>,
-    pub(super) no_block_log: Option<String>,
-    pub(super) hang_dump_dir: String,
-    pub(super) hang_prekill_secs: Option<u64>,
-    pub(super) nextest_status_level: String,
-    pub(super) nextest_final_status_level: String,
-    pub(super) nextest_show_progress: String,
+pub(super) struct PolicySnapshot {
+    pub(super) features: Vec<String>,
+    pub(super) remove_env: Vec<String>,
+    pub(super) set_env: BTreeMap<String, String>,
+    pub(super) raw_path_env: BTreeMap<String, String>,
+    pub(super) evidence: StressEvidenceConfig,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -178,11 +123,10 @@ pub(super) struct ExpectedProvenance {
     pub(super) filter: String,
     pub(super) count: usize,
     pub(super) test_threads: String,
-    pub(super) mode: Mode,
-    pub(super) flash: bool,
-    pub(super) no_block_requested: bool,
-    pub(super) dump_thread_backtrace_requested: bool,
-    pub(super) workflow_job_timeout_minutes: u64,
+    pub(super) mode: String,
+    pub(super) config: ManifestConfig,
+    pub(super) runner: ConfiguredLane,
+    pub(super) policy: PolicySnapshot,
     pub(super) execute_result: ExecuteResult,
     pub(super) sampler_healthy: bool,
 }
@@ -244,10 +188,9 @@ impl Manifest {
             subject: Revision {
                 sha: spec.subject_sha,
             },
-            run: spec.run,
+            runner: spec.runner,
             selection: spec.selection,
-            features: spec.features,
-            logging: spec.logging,
+            policy: spec.policy,
             timing: Timing {
                 started_at,
                 ended_at: None,
@@ -274,6 +217,7 @@ impl Manifest {
     }
 
     pub(super) fn write_atomic(&self, path: &Path) -> Result<()> {
+        self.validate_invariants()?;
         let mut contents = serde_json::to_vec_pretty(self).context("serialize stress manifest")?;
         contents.push(b'\n');
         ensure!(
@@ -336,8 +280,10 @@ impl Manifest {
     ) -> Vec<ProvenanceMismatch> {
         let mut mismatches = Vec::new();
         self.validate_identity(expected, &mut mismatches);
+        self.validate_config(expected, &mut mismatches);
+        compare_debug("runner", &self.runner, &expected.runner, &mut mismatches);
         self.validate_selection(expected, &mut mismatches);
-        self.validate_features(expected, &mut mismatches);
+        self.validate_policy(expected, &mut mismatches);
         self.validate_timing(expected, &mut mismatches);
         self.validate_pressure(expected, &mut mismatches);
         mismatches
@@ -370,8 +316,41 @@ impl Manifest {
         if self.mode != expected.mode {
             mismatches.push(ProvenanceMismatch::new(
                 "mode",
-                quoted(self.mode.as_str()),
-                quoted(expected.mode.as_str()),
+                quoted(&self.mode),
+                quoted(&expected.mode),
+            ));
+        }
+    }
+
+    fn validate_config(
+        &self,
+        expected: &ExpectedProvenance,
+        mismatches: &mut Vec<ProvenanceMismatch>,
+    ) {
+        compare_string(
+            "config.profile",
+            &self.config.profile,
+            &expected.config.profile,
+            mismatches,
+        );
+        compare_string(
+            "config.nextest",
+            &self.config.nextest,
+            &expected.config.nextest,
+            mismatches,
+        );
+        compare_string(
+            "config.pressure_schema",
+            &self.config.pressure_schema,
+            &expected.config.pressure_schema,
+            mismatches,
+        );
+        if self.config.workflow_job_timeout_minutes != expected.config.workflow_job_timeout_minutes
+        {
+            mismatches.push(ProvenanceMismatch::new(
+                "config.workflow_job_timeout_minutes",
+                self.config.workflow_job_timeout_minutes.to_string(),
+                expected.config.workflow_job_timeout_minutes.to_string(),
             ));
         }
     }
@@ -400,13 +379,6 @@ impl Manifest {
             &expected.test_threads,
             mismatches,
         );
-        if self.config.workflow_job_timeout_minutes != expected.workflow_job_timeout_minutes {
-            mismatches.push(ProvenanceMismatch::new(
-                "config.workflow_job_timeout_minutes",
-                self.config.workflow_job_timeout_minutes.to_string(),
-                expected.workflow_job_timeout_minutes.to_string(),
-            ));
-        }
     }
 
     fn validate_timing(
@@ -458,46 +430,39 @@ impl Manifest {
         }
     }
 
-    fn validate_features(
+    fn validate_policy(
         &self,
         expected: &ExpectedProvenance,
         mismatches: &mut Vec<ProvenanceMismatch>,
     ) {
-        compare_bool(
-            "features.flash",
-            self.features.flash,
-            expected.flash,
+        compare_debug(
+            "policy.features",
+            &self.policy.features,
+            &expected.policy.features,
             mismatches,
         );
-        compare_bool(
-            "features.no_block_requested",
-            self.features.no_block_requested,
-            expected.no_block_requested,
+        compare_debug(
+            "policy.remove_env",
+            &self.policy.remove_env,
+            &expected.policy.remove_env,
             mismatches,
         );
-        compare_bool(
-            "features.dump_thread_backtrace_requested",
-            self.features.dump_thread_backtrace_requested,
-            expected.dump_thread_backtrace_requested,
+        compare_debug(
+            "policy.set_env",
+            &self.policy.set_env,
+            &expected.policy.set_env,
             mismatches,
         );
-        let diagnostic = expected.mode == Mode::Diagnostic;
-        compare_bool(
-            "features.diagnostics",
-            self.features.diagnostics,
-            diagnostic,
+        compare_debug(
+            "policy.raw_path_env",
+            &self.policy.raw_path_env,
+            &expected.policy.raw_path_env,
             mismatches,
         );
-        compare_bool(
-            "features.no_block",
-            self.features.no_block,
-            diagnostic && expected.no_block_requested,
-            mismatches,
-        );
-        compare_bool(
-            "features.dump_thread_backtrace",
-            self.features.dump_thread_backtrace,
-            diagnostic && expected.dump_thread_backtrace_requested,
+        compare_debug(
+            "policy.evidence",
+            &self.policy.evidence,
+            &expected.policy.evidence,
             mismatches,
         );
     }
@@ -511,18 +476,10 @@ impl Manifest {
             valid_sha(&self.subject.sha),
             "manifest subject SHA is invalid"
         );
+        ensure!(!self.mode.trim().is_empty(), "manifest mode is empty");
         ensure!(
-            !self.selection.filter.trim().is_empty(),
-            "manifest filter is empty"
-        );
-        ensure!(self.selection.count > 0, "manifest count is zero");
-        ensure!(
-            !self.selection.test_threads.trim().is_empty(),
-            "manifest test-threads value is empty"
-        );
-        ensure!(
-            self.config.profile == "stress",
-            "manifest profile is not `stress`"
+            !self.config.profile.trim().is_empty(),
+            "manifest nextest profile is empty"
         );
         ensure!(
             !self.config.nextest.trim().is_empty(),
@@ -536,69 +493,18 @@ impl Manifest {
             self.config.workflow_job_timeout_minutes > 0,
             "manifest job timeout is zero"
         );
-        let diagnostic = self.mode == Mode::Diagnostic;
         ensure!(
-            self.features.diagnostics == diagnostic,
-            "manifest mode and diagnostics disagree"
+            !self.selection.filter.trim().is_empty(),
+            "manifest filter is empty"
         );
+        ensure!(self.selection.count > 0, "manifest count is zero");
         ensure!(
-            self.features.no_block == (diagnostic && self.features.no_block_requested),
-            "manifest no-block request and effective value disagree"
+            !self.selection.test_threads.trim().is_empty(),
+            "manifest test-threads value is empty"
         );
-        ensure!(
-            self.features.dump_thread_backtrace
-                == (diagnostic && self.features.dump_thread_backtrace_requested),
-            "manifest dump-backtrace request and effective value disagree"
-        );
-        ensure!(
-            self.logging.flash_sync_trace == diagnostic,
-            "manifest Flash trace setting contradicts diagnostic mode"
-        );
-        ensure!(
-            self.logging.flash_dump_thread_backtrace == self.features.dump_thread_backtrace,
-            "manifest Flash dump-backtrace setting contradicts effective features"
-        );
-        ensure!(
-            self.logging.rust_backtrace == "1",
-            "manifest Rust backtrace setting is invalid"
-        );
-        ensure!(
-            self.logging.rust_log == log_filter(diagnostic),
-            "manifest Rust log setting contradicts diagnostic mode"
-        );
-        let no_block = self.features.no_block;
-        let expected_no_block_mode = if no_block { "census" } else { "off" };
-        ensure!(
-            self.logging.no_block_mode == expected_no_block_mode,
-            "manifest no-block mode contradicts effective features"
-        );
-        let expected_no_block_budget = no_block.then_some(no_block_budget_ms());
-        ensure!(
-            self.logging.no_block_budget_ms == expected_no_block_budget,
-            "manifest no-block budget contradicts effective features"
-        );
-        ensure!(
-            self.logging
-                .no_block_log
-                .as_deref()
-                .is_some_and(|path| !path.is_empty())
-                == no_block,
-            "manifest no-block log contradicts effective features"
-        );
-        ensure!(
-            !self.logging.hang_dump_dir.is_empty(),
-            "manifest hang dump directory is empty"
-        );
-        ensure!(
-            self.logging.hang_prekill_secs == Some(prekill_secs()),
-            "manifest hang pre-kill setting is invalid"
-        );
-        ensure!(
-            self.logging.nextest_status_level == "fail"
-                && self.logging.nextest_final_status_level == "fail"
-                && self.logging.nextest_show_progress == "counter",
-            "manifest nextest output settings are invalid"
-        );
+        self.runner.validate()?;
+        validate_policy(&self.policy)?;
+        validate_timing_state(&self.timing, &self.pressure)?;
         Ok(())
     }
 
@@ -615,6 +521,128 @@ impl Manifest {
             ));
         }
     }
+}
+
+fn validate_policy(policy: &PolicySnapshot) -> Result<()> {
+    let mut features = BTreeSet::new();
+    for feature in &policy.features {
+        ensure!(
+            !feature.trim().is_empty(),
+            "manifest policy contains an empty feature"
+        );
+        ensure!(
+            features.insert(feature.as_str()),
+            "manifest policy contains duplicate feature {feature:?}"
+        );
+    }
+    let mut removed = BTreeSet::new();
+    for key in &policy.remove_env {
+        validate_env_key(key)?;
+        ensure!(
+            removed.insert(key.as_str()),
+            "manifest policy environment key {key:?} is removed more than once"
+        );
+    }
+    let mut assigned = BTreeSet::new();
+    for key in policy.set_env.keys() {
+        validate_env_key(key)?;
+        assigned.insert(key.as_str());
+    }
+    for (key, path) in &policy.raw_path_env {
+        validate_env_key(key)?;
+        ensure!(
+            assigned.insert(key.as_str()),
+            "manifest policy environment key {key:?} has conflicting assignments"
+        );
+        ensure!(
+            safe_relative_path(path),
+            "manifest policy raw path for {key:?} is not a safe relative path"
+        );
+    }
+    for (field, value) in [
+        (
+            "envelope_schema",
+            policy.evidence.envelope_schema.as_deref(),
+        ),
+        (
+            "envelope_marker",
+            policy.evidence.envelope_marker.as_deref(),
+        ),
+        (
+            "envelope_text_field",
+            policy.evidence.envelope_text_field.as_deref(),
+        ),
+        ("line_marker", policy.evidence.line_marker.as_deref()),
+        ("dump_marker", policy.evidence.dump_marker.as_deref()),
+        (
+            "primitive_marker",
+            policy.evidence.primitive_marker.as_deref(),
+        ),
+        ("holder_marker", policy.evidence.holder_marker.as_deref()),
+        ("wait_marker", policy.evidence.wait_marker.as_deref()),
+    ] {
+        validate_optional_text(field, value)?;
+    }
+    for marker in policy
+        .evidence
+        .envelope_suffix_markers
+        .iter()
+        .chain(&policy.evidence.direct_markers)
+        .chain(&policy.evidence.source_excludes)
+    {
+        ensure!(
+            !marker.trim().is_empty(),
+            "manifest policy contains an empty evidence marker"
+        );
+    }
+    Ok(())
+}
+
+fn validate_env_key(key: &str) -> Result<()> {
+    ensure!(
+        !key.trim().is_empty(),
+        "manifest policy environment key is empty"
+    );
+    Ok(())
+}
+
+fn validate_optional_text(field: &str, value: Option<&str>) -> Result<()> {
+    if let Some(value) = value {
+        ensure!(
+            !value.trim().is_empty(),
+            "manifest policy field {field} is empty"
+        );
+    }
+    Ok(())
+}
+
+fn validate_timing_state(timing: &Timing, pressure: &Pressure) -> Result<()> {
+    ensure!(
+        !timing.started_at.trim().is_empty(),
+        "manifest start timestamp is empty"
+    );
+    match (
+        timing.ended_at.as_deref(),
+        timing.exit_code,
+        pressure.sampler_healthy,
+    ) {
+        (None, None, None) => Ok(()),
+        (Some(ended_at), Some(_), Some(_)) => {
+            ensure!(
+                !ended_at.trim().is_empty(),
+                "manifest end timestamp is empty"
+            );
+            Ok(())
+        }
+        _ => bail!("manifest finalization fields are inconsistent"),
+    }
+}
+
+fn safe_relative_path(value: &str) -> bool {
+    !value.trim().is_empty()
+        && Path::new(value)
+            .components()
+            .all(|component| matches!(component, Component::Normal(_)))
 }
 
 fn write_and_publish(temporary: &Path, destination: &Path, contents: &[u8]) -> Result<()> {
@@ -676,17 +704,17 @@ fn compare_string(
     }
 }
 
-fn compare_bool(
+fn compare_debug<T: fmt::Debug + PartialEq>(
     field: &'static str,
-    actual: bool,
-    expected: bool,
+    actual: &T,
+    expected: &T,
     mismatches: &mut Vec<ProvenanceMismatch>,
 ) {
     if actual != expected {
         mismatches.push(ProvenanceMismatch::new(
             field,
-            actual.to_string(),
-            expected.to_string(),
+            format!("{actual:?}"),
+            format!("{expected:?}"),
         ));
     }
 }
@@ -736,37 +764,52 @@ mod tests {
         }
     }
 
-    fn logging() -> Logging {
-        Logging {
-            rust_backtrace: "1".to_owned(),
-            rust_log: "warn".to_owned(),
-            flash_sync_trace: false,
-            flash_dump_thread_backtrace: false,
-            no_block_mode: "off".to_owned(),
-            no_block_budget_ms: None,
-            no_block_log: None,
-            hang_dump_dir: "raw/hang".to_owned(),
-            hang_prekill_secs: Some(630),
-            nextest_status_level: "fail".to_owned(),
-            nextest_final_status_level: "fail".to_owned(),
-            nextest_show_progress: "counter".to_owned(),
+    fn policy() -> PolicySnapshot {
+        PolicySnapshot {
+            features: vec!["snapshot-clock".to_owned()],
+            remove_env: vec!["LEGACY_SETTING".to_owned()],
+            set_env: BTreeMap::from([
+                ("OUTPUT_STYLE".to_owned(), "compact".to_owned()),
+                ("TRACE_LEVEL".to_owned(), "verbose".to_owned()),
+            ]),
+            raw_path_env: BTreeMap::from([(
+                "CAPTURE_PATH".to_owned(),
+                "captures/events.jsonl".to_owned(),
+            )]),
+            evidence: StressEvidenceConfig {
+                envelope_schema: Some("thread-snapshot-v2".to_owned()),
+                envelope_text_field: Some("wait_graph".to_owned()),
+                line_marker: Some("blocking-observation-v2".to_owned()),
+                ..StressEvidenceConfig::default()
+            },
+        }
+    }
+
+    fn runner() -> ConfiguredLane {
+        ConfiguredLane {
+            lane: "workspace".to_owned(),
+            backend: "http".to_owned(),
+            program: "cargo".to_owned(),
+            prefix_args: vec!["nextest".to_owned(), "run".to_owned()],
+            suffix_args: vec!["--locked".to_owned()],
+            feature_arg: "--features".to_owned(),
+            features: vec!["snapshot-clock".to_owned()],
         }
     }
 
     fn spec() -> ManifestSpec {
         ManifestSpec {
-            mode: Mode::Reproduction,
-            config: ManifestConfig::stress("controller/.config/nextest.toml", 1_380),
+            mode: "baseline".to_owned(),
+            config: ManifestConfig::new("campaign", "controller/settings/runner.toml", 90),
             controller_sha: CONTROLLER_SHA.to_owned(),
             subject_sha: SUBJECT_SHA.to_owned(),
-            run: RunMetadata::default(),
+            runner: runner(),
             selection: Selection {
                 filter: "all()".to_owned(),
                 count: 50,
                 test_threads: "num-cpus".to_owned(),
             },
-            features: Features::default(),
-            logging: logging(),
+            policy: policy(),
         }
     }
 
@@ -777,11 +820,10 @@ mod tests {
             filter: "all()".to_owned(),
             count: 50,
             test_threads: "num-cpus".to_owned(),
-            mode: Mode::Reproduction,
-            flash: false,
-            no_block_requested: false,
-            dump_thread_backtrace_requested: false,
-            workflow_job_timeout_minutes: 1_380,
+            mode: "baseline".to_owned(),
+            config: ManifestConfig::new("campaign", "controller/settings/runner.toml", 90),
+            runner: runner(),
+            policy: policy(),
             execute_result: ExecuteResult::Success,
             sampler_healthy: true,
         }
@@ -813,12 +855,25 @@ mod tests {
         expected.subject_sha = "cccccccccccccccccccccccccccccccccccccccc".to_owned();
         expected.filter = "package(foo)".to_owned();
         expected.count = 100;
-        expected.test_threads = "1".to_owned();
-        expected.mode = Mode::Diagnostic;
-        expected.flash = true;
-        expected.no_block_requested = true;
-        expected.dump_thread_backtrace_requested = true;
-        expected.workflow_job_timeout_minutes = 60;
+        expected.test_threads = "single".to_owned();
+        expected.mode = "instrumented".to_owned();
+        expected.config = ManifestConfig::new("alternate", "other/runner.toml", 60);
+        expected.config.pressure_schema = "pressure-vNext".to_owned();
+        expected.runner.features = vec!["alternate".to_owned()];
+        expected.policy = PolicySnapshot {
+            features: vec!["blocking-census".to_owned()],
+            remove_env: vec!["DEPRECATED_SETTING".to_owned()],
+            set_env: BTreeMap::from([("TRACE_LEVEL".to_owned(), "quiet".to_owned())]),
+            raw_path_env: BTreeMap::from([(
+                "EVENT_PATH".to_owned(),
+                "observations/events.jsonl".to_owned(),
+            )]),
+            evidence: StressEvidenceConfig {
+                envelope_schema: Some("thread-snapshot-v3".to_owned()),
+                envelope_text_field: Some("edges".to_owned()),
+                ..StressEvidenceConfig::default()
+            },
+        };
 
         let mismatches = manifest.validate_provenance(&expected);
         let fields = mismatches
@@ -830,16 +885,19 @@ mod tests {
         for field in [
             "subject.sha",
             "mode",
-            "features.flash",
-            "features.diagnostics",
-            "features.no_block_requested",
-            "features.no_block",
-            "features.dump_thread_backtrace_requested",
-            "features.dump_thread_backtrace",
+            "config.profile",
+            "config.nextest",
+            "config.pressure_schema",
+            "config.workflow_job_timeout_minutes",
+            "runner",
+            "policy.features",
+            "policy.remove_env",
+            "policy.set_env",
+            "policy.raw_path_env",
+            "policy.evidence",
             "selection.filter",
             "selection.count",
             "selection.test_threads",
-            "config.workflow_job_timeout_minutes",
             "timing.ended_at",
             "timing.exit_code",
             "pressure.sampler_healthy",
@@ -901,18 +959,35 @@ mod tests {
     }
 
     #[test]
-    fn reader_rejects_logging_that_contradicts_reproduction_mode() {
+    fn reader_rejects_conflicting_policy_assignments() {
         let temp = tempfile::tempdir().expect("tempdir");
         let path = temp.path().join("manifest.json");
         let manifest = Manifest::start(spec(), system()).expect("start manifest");
         let mut json = serde_json::to_value(manifest).expect("serialize manifest");
-        json["logging"]["flash_sync_trace"] = serde_json::Value::Bool(true);
+        json["policy"]["raw_path_env"]["TRACE_LEVEL"] =
+            serde_json::Value::String("captures/trace.log".to_owned());
         fs::write(&path, serde_json::to_vec(&json).expect("encode manifest"))
             .expect("write manifest");
 
-        let error = Manifest::read(&path).expect_err("contradictory logging must fail");
+        let error = Manifest::read(&path).expect_err("conflicting policy must be rejected");
 
-        assert!(error.to_string().contains("contradicts diagnostic mode"));
+        assert!(error.to_string().contains("conflicting assignments"));
+    }
+
+    #[test]
+    fn reader_rejects_unsafe_raw_policy_path() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let path = temp.path().join("manifest.json");
+        let manifest = Manifest::start(spec(), system()).expect("start manifest");
+        let mut json = serde_json::to_value(manifest).expect("serialize manifest");
+        json["policy"]["raw_path_env"]["CAPTURE_PATH"] =
+            serde_json::Value::String("../outside.jsonl".to_owned());
+        fs::write(&path, serde_json::to_vec(&json).expect("encode manifest"))
+            .expect("write manifest");
+
+        let error = Manifest::read(&path).expect_err("unsafe raw path must be rejected");
+
+        assert!(error.to_string().contains("safe relative path"));
     }
 
     #[test]

@@ -10,38 +10,16 @@ on:
         required: false
         type: string
       filter:
-        description: nextest expression selecting the tests to repeat
+        description: nextest expression; empty uses the project configuration
         required: false
-        default: all()
         type: string
       count:
-        description: repetitions; empty uses KITHARA_STRESS_COUNT
+        description: repetitions; empty uses the repository variable, then project configuration
         required: false
         type: string
-      flash:
-        description: enable Flash hang diagnostics in the subject build
+      mode:
+        description: configured campaign mode; empty uses the project configuration
         required: false
-        default: true
-        type: boolean
-      no_block:
-        description: enable no-block census in diagnostic mode
-        required: false
-        default: false
-        type: boolean
-      dump_thread_backtrace:
-        description: include the Flash dump caller backtrace in diagnostic mode
-        required: false
-        default: false
-        type: boolean
-      diagnostics:
-        description: enable timing-perturbing diagnostic instrumentation
-        required: false
-        default: false
-        type: boolean
-      test_threads:
-        description: nextest test thread count or num-cpus
-        required: false
-        default: num-cpus
         type: string
   workflow_dispatch:
     inputs:
@@ -50,38 +28,16 @@ on:
         required: false
         type: string
       filter:
-        description: nextest expression selecting the tests to repeat
+        description: nextest expression; empty uses the project configuration
         required: false
-        default: all()
         type: string
       count:
-        description: repetitions; empty uses KITHARA_STRESS_COUNT
+        description: repetitions; empty uses the repository variable, then project configuration
         required: false
         type: string
-      flash:
-        description: enable Flash hang diagnostics in the subject build
+      mode:
+        description: configured campaign mode; empty uses the project configuration
         required: false
-        default: true
-        type: boolean
-      no_block:
-        description: enable no-block census in diagnostic mode
-        required: false
-        default: false
-        type: boolean
-      dump_thread_backtrace:
-        description: include the Flash dump caller backtrace in diagnostic mode
-        required: false
-        default: false
-        type: boolean
-      diagnostics:
-        description: enable timing-perturbing diagnostic instrumentation
-        required: false
-        default: false
-        type: boolean
-      test_threads:
-        description: nextest test thread count or num-cpus
-        required: false
-        default: num-cpus
         type: string
 
 concurrency:
@@ -101,15 +57,13 @@ jobs:
       - name: Validate fork owner and runner configuration
         env:
           ACTOR: ${{ github.actor }}
-          COUNT: ${{ inputs.count || vars.KITHARA_STRESS_COUNT || '50' }}
+          COUNT: ${{ inputs.count || vars.KITHARA_STRESS_COUNT }}
           ENABLED: ${{ vars.KITHARA_STRESS_ENABLED }}
-          FILTER: ${{ inputs.filter || 'all()' }}
           IS_FORK: ${{ github.event.repository.fork }}
           MAX_COUNT: ${{ vars.KITHARA_STRESS_MAX_COUNT }}
           OWNER: ${{ github.repository_owner }}
           REVISION: ${{ inputs.revision || github.sha }}
           RUNNER_LABELS: ${{ vars.KITHARA_STRESS_RUNNER_LABELS }}
-          TEST_THREADS: ${{ inputs.test_threads || 'num-cpus' }}
           TRIGGERING_ACTOR: ${{ github.triggering_actor }}
         shell: bash
         run: |
@@ -119,13 +73,14 @@ jobs:
           [[ "$ACTOR" == "$OWNER" ]] || { echo "only the fork owner may start stress"; exit 1; }
           [[ "$TRIGGERING_ACTOR" == "$OWNER" ]] || { echo "only the fork owner may re-run stress"; exit 1; }
           [[ "$REVISION" =~ ^[0-9a-fA-F]{40}$ ]] || { echo "revision must be a full SHA"; exit 1; }
-          [[ -n "${FILTER//[[:space:]]/}" ]] || { echo "filter must not be empty"; exit 1; }
-          [[ "$MAX_COUNT" =~ ^([1-9]|[1-9][0-9]|100)$ ]] || { echo "invalid maximum count"; exit 1; }
-          [[ "$COUNT" =~ ^([1-9]|[1-9][0-9]|100)$ ]] || { echo "invalid count"; exit 1; }
-          (( 10#$COUNT <= 10#$MAX_COUNT )) || { echo "count exceeds repository maximum"; exit 1; }
-          if [[ "$TEST_THREADS" != num-cpus ]]; then
-            [[ "$TEST_THREADS" =~ ^[0-9]+$ ]] || { echo "invalid test thread count"; exit 1; }
-            (( 10#$TEST_THREADS >= 1 && 10#$TEST_THREADS <= 256 )) || { echo "invalid test thread count"; exit 1; }
+          if [[ -n "$COUNT" ]]; then
+            [[ "$COUNT" =~ ^[1-9][0-9]*$ ]] || { echo "invalid count"; exit 1; }
+          fi
+          if [[ -n "$MAX_COUNT" ]]; then
+            [[ "$MAX_COUNT" =~ ^[1-9][0-9]*$ ]] || { echo "invalid repository maximum"; exit 1; }
+            if [[ -n "$COUNT" ]]; then
+              (( 10#$COUNT <= 10#$MAX_COUNT )) || { echo "count exceeds repository maximum"; exit 1; }
+            fi
           fi
           jq -e '
             type == "array"
@@ -179,28 +134,21 @@ jobs:
         working-directory: controller
         env:
           CONTROLLER_SHA: ${{ job.workflow_sha }}
-          COUNT: ${{ inputs.count || vars.KITHARA_STRESS_COUNT || '50' }}
-          DIAGNOSTICS: ${{ inputs.diagnostics && 'true' || 'false' }}
-          DUMP_THREAD_BACKTRACE: ${{ inputs.dump_thread_backtrace && 'true' || 'false' }}
-          FILTER: ${{ inputs.filter || 'all()' }}
-          FLASH: ${{ inputs.flash && 'true' || 'false' }}
-          NO_BLOCK: ${{ inputs.no_block && 'true' || 'false' }}
+          COUNT: ${{ inputs.count || vars.KITHARA_STRESS_COUNT }}
+          FILTER: ${{ inputs.filter }}
+          MODE: ${{ inputs.mode }}
           SUBJECT_SHA: ${{ inputs.revision || github.sha }}
-          TEST_THREADS: ${{ inputs.test_threads || 'num-cpus' }}
         run: |
-          just ci stress \
-            --subject-root "$GITHUB_WORKSPACE/subject" \
-            --output "$RUNNER_TEMP/kithara-stress/raw" \
-            --filter "$FILTER" \
-            --count "$COUNT" \
-            --test-threads "$TEST_THREADS" \
-            --flash "$FLASH" \
-            --diagnostics "$DIAGNOSTICS" \
-            --no-block "$NO_BLOCK" \
-            --dump-thread-backtrace "$DUMP_THREAD_BACKTRACE" \
-            --expected-controller-sha "$CONTROLLER_SHA" \
-            --expected-subject-sha "$SUBJECT_SHA" \
-            --job-timeout-minutes 1380
+          args=(
+            --subject-root "$GITHUB_WORKSPACE/subject"
+            --output "$RUNNER_TEMP/kithara-stress/raw"
+            --expected-controller-sha "$CONTROLLER_SHA"
+            --expected-subject-sha "$SUBJECT_SHA"
+          )
+          [[ -z "$FILTER" ]] || args+=(--filter "$FILTER")
+          [[ -z "$COUNT" ]] || args+=(--count "$COUNT")
+          [[ -z "$MODE" ]] || args+=(--mode "$MODE")
+          just ci stress "${args[@]}"
 
       - name: Upload the raw stress evidence
         if: always()
@@ -253,30 +201,23 @@ jobs:
         working-directory: controller
         env:
           CONTROLLER_SHA: ${{ job.workflow_sha }}
-          COUNT: ${{ inputs.count || vars.KITHARA_STRESS_COUNT || '50' }}
+          COUNT: ${{ inputs.count || vars.KITHARA_STRESS_COUNT }}
           EXECUTE_RESULT: ${{ needs.execute.result }}
-          FILTER: ${{ inputs.filter || 'all()' }}
-          FLASH: ${{ inputs.flash && 'true' || 'false' }}
-          MODE: ${{ inputs.diagnostics && 'diagnostic' || 'reproduction' }}
-          NO_BLOCK: ${{ inputs.no_block && 'true' || 'false' }}
-          DUMP_THREAD_BACKTRACE: ${{ inputs.dump_thread_backtrace && 'true' || 'false' }}
+          FILTER: ${{ inputs.filter }}
+          MODE: ${{ inputs.mode }}
           SUBJECT_SHA: ${{ inputs.revision || github.sha }}
-          TEST_THREADS: ${{ inputs.test_threads || 'num-cpus' }}
         run: |
-          just ci stress-report \
-            --raw "$GITHUB_WORKSPACE/raw" \
-            --output "$GITHUB_WORKSPACE/target/stress-report.md" \
-            --expected-controller-sha "$CONTROLLER_SHA" \
-            --expected-subject-sha "$SUBJECT_SHA" \
-            --expected-filter "$FILTER" \
-            --expected-count "$COUNT" \
-            --expected-test-threads "$TEST_THREADS" \
-            --expected-mode "$MODE" \
-            --expected-flash "$FLASH" \
-            --expected-no-block "$NO_BLOCK" \
-            --expected-dump-thread-backtrace "$DUMP_THREAD_BACKTRACE" \
-            --expected-job-timeout-minutes 1380 \
+          args=(
+            --raw "$GITHUB_WORKSPACE/raw"
+            --output "$GITHUB_WORKSPACE/target/stress-report.md"
+            --expected-controller-sha "$CONTROLLER_SHA"
+            --expected-subject-sha "$SUBJECT_SHA"
             --execute-result "$EXECUTE_RESULT"
+          )
+          [[ -z "$FILTER" ]] || args+=(--filter "$FILTER")
+          [[ -z "$COUNT" ]] || args+=(--count "$COUNT")
+          [[ -z "$MODE" ]] || args+=(--mode "$MODE")
+          just ci stress-report "${args[@]}"
 
       - name: Add the stress summary
         if: always()

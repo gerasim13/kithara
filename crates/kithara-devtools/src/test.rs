@@ -2,6 +2,7 @@ use std::{collections::BTreeSet, path::Path, process::Command};
 
 use anyhow::{Context, Result, bail};
 use clap::Args;
+use serde::{Deserialize, Serialize};
 
 use crate::{
     common::project::{ProjectConfig, TestCommandConfig, TestLaneConfig},
@@ -303,6 +304,18 @@ pub(crate) enum NextestAction {
     List,
 }
 
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ConfiguredLane {
+    pub(crate) lane: String,
+    pub(crate) backend: String,
+    pub(crate) program: String,
+    pub(crate) prefix_args: Vec<String>,
+    pub(crate) suffix_args: Vec<String>,
+    pub(crate) feature_arg: String,
+    pub(crate) features: Vec<String>,
+}
+
 pub(crate) fn nextest_lane_command_for(
     project: &ProjectConfig,
     toggles: LaneToggles,
@@ -317,13 +330,117 @@ pub(crate) fn nextest_lane_command_for(
         bail!("test.default_lane `{lane_name}` is not defined in test.lanes");
     };
     let features = lane_features(test, lane, toggles, backend)?;
-    let mut cmd = Command::new(&lane.program);
+    nextest_command(test, lane, features, extra, action)
+}
+
+pub(crate) fn nextest_configured_lane_command(
+    resolved: &ConfiguredLane,
+    extra: &[String],
+    action: NextestAction,
+) -> Result<(Vec<String>, Command)> {
+    resolved.validate()?;
+    build_nextest_command(
+        &resolved.program,
+        &resolved.prefix_args,
+        &resolved.suffix_args,
+        &resolved.feature_arg,
+        resolved.features.iter().cloned().collect(),
+        extra,
+        action,
+    )
+}
+
+pub(crate) fn configured_lane(
+    project: &ProjectConfig,
+    lane_name: &str,
+    backend_name: &str,
+    additional_features: &[String],
+) -> Result<ConfiguredLane> {
+    let test = &project.test;
+    validate_config(test)?;
+    let lane = test
+        .lanes
+        .get(lane_name)
+        .with_context(|| format!("stress lane `{lane_name}` is not configured"))?;
+    let mut features = BTreeSet::new();
+    features.extend(test.features.iter().cloned());
+    features.extend(lane.default_features.iter().cloned());
+    features.extend(additional_features.iter().cloned());
+    let backend = test
+        .net_backends
+        .get(backend_name)
+        .with_context(|| format!("stress backend `{backend_name}` is not configured"))?;
+    features.extend(backend.features.iter().cloned());
+    Ok(ConfiguredLane {
+        lane: lane_name.to_owned(),
+        backend: backend_name.to_owned(),
+        program: lane.program.clone(),
+        prefix_args: lane.prefix_args.clone(),
+        suffix_args: lane.suffix_args.clone(),
+        feature_arg: test.feature_arg.clone(),
+        features: features.into_iter().collect(),
+    })
+}
+
+impl ConfiguredLane {
+    pub(crate) fn validate(&self) -> Result<()> {
+        for (field, value) in [
+            ("lane", self.lane.as_str()),
+            ("backend", self.backend.as_str()),
+            ("program", self.program.as_str()),
+            ("feature argument", self.feature_arg.as_str()),
+        ] {
+            if value.trim().is_empty() {
+                bail!("configured test runner {field} is empty");
+            }
+        }
+        let mut features = BTreeSet::new();
+        for feature in &self.features {
+            if feature.trim().is_empty() {
+                bail!("configured test runner contains an empty feature");
+            }
+            if !features.insert(feature) {
+                bail!("configured test runner contains duplicate feature `{feature}`");
+            }
+        }
+        Ok(())
+    }
+}
+
+fn nextest_command(
+    test: &TestCommandConfig,
+    lane: &TestLaneConfig,
+    features: BTreeSet<String>,
+    extra: &[String],
+    action: NextestAction,
+) -> Result<(Vec<String>, Command)> {
+    build_nextest_command(
+        &lane.program,
+        &lane.prefix_args,
+        &lane.suffix_args,
+        &test.feature_arg,
+        features,
+        extra,
+        action,
+    )
+}
+
+fn build_nextest_command(
+    program: &str,
+    prefix_args: &[String],
+    suffix_args: &[String],
+    feature_arg: &str,
+    features: BTreeSet<String>,
+    extra: &[String],
+    action: NextestAction,
+) -> Result<(Vec<String>, Command)> {
+    let mut cmd = Command::new(program);
     match action {
         NextestAction::Run => {
-            cmd.args(&lane.prefix_args);
+            cmd.args(prefix_args);
         }
         NextestAction::List => {
-            let mut prefix_args = lane.prefix_args.clone();
+            let mut prefix_args = prefix_args.to_vec();
             let nextest_index = prefix_args
                 .iter()
                 .position(|arg| arg == "nextest")
@@ -339,11 +456,11 @@ pub(crate) fn nextest_lane_command_for(
         }
     }
     if !features.is_empty() {
-        cmd.arg(&test.feature_arg)
+        cmd.arg(feature_arg)
             .arg(features.iter().cloned().collect::<Vec<_>>().join(","));
     }
     cmd.args(extra);
-    cmd.args(&lane.suffix_args);
+    cmd.args(suffix_args);
     Ok((features.into_iter().collect(), cmd))
 }
 
@@ -375,8 +492,8 @@ mod tests {
     use super::*;
     use crate::common::project::{
         AuditClippyConfig, HealthConfig, LintExcludeConfig, OrphansConfig, PerfConfig,
-        ProjectIdentity, QualityConfig, TestFlashConfig, TestNetBackendConfig, TestNoBlockConfig,
-        WorkspaceScan,
+        ProjectIdentity, QualityConfig, StressConfig, TestFlashConfig, TestNetBackendConfig,
+        TestNoBlockConfig, WorkspaceScan,
     };
 
     fn args_of(cmd: &Command) -> Vec<String> {
@@ -459,6 +576,7 @@ mod tests {
             orphans: OrphansConfig::default(),
             quality: QualityConfig::default(),
             perf: PerfConfig::default(),
+            stress: StressConfig::default(),
             ext: toml::Table::default(),
         }
     }

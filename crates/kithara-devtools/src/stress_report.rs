@@ -14,21 +14,19 @@ use clap::Args;
 use serde::Deserialize;
 
 use crate::{
+    common::project::StressEvidenceConfig,
     junit::{CaseTiming, parse_junit_report},
     verdict::NotClean,
 };
 
 mod evidence;
 
-const DEFAULT_JUNIT: &str = "target/nextest/stress/junit.xml";
-const DEFAULT_OUTPUT: &str = "target/stress-report.md";
 const MAX_FAILURE_ROWS: usize = 100;
 const MAX_PROBLEM_ROWS: usize = 100;
 const MAX_ITERATIONS_PER_TEST: usize = 20;
 const MAX_CELL_CHARS: usize = 240;
 const PERCENT_SCALE: usize = 100;
 const PERCENT_HUNDREDTHS: usize = PERCENT_SCALE * PERCENT_SCALE;
-const MAX_EXPECTED_COUNT: usize = 100;
 const MAX_INVENTORY_CASES: usize = 100_000;
 pub(crate) const MAX_INVENTORY_BYTES: u64 = 64 * 1_024 * 1_024;
 pub(crate) const MAX_JUNIT_BYTES: u64 = 512 * 1_024 * 1_024;
@@ -36,22 +34,22 @@ pub(crate) const MAX_JUNIT_BYTES: u64 = 512 * 1_024 * 1_024;
 #[derive(Debug, Args)]
 pub(crate) struct StressReportArgs {
     /// `JUnit` emitted by the nextest stress profile.
-    #[arg(long, default_value = DEFAULT_JUNIT)]
+    #[arg(long)]
     junit: PathBuf,
     /// Machine-readable output from `cargo nextest list` for the same selection.
     #[arg(long)]
     inventory: PathBuf,
-    /// Optional no-block census whose lines carry nextest attempt identifiers.
+    /// Optional line evidence whose records carry nextest attempt identifiers.
     #[arg(long)]
-    no_block_log: Option<PathBuf>,
-    /// Optional directory containing structured hang-detector envelopes.
+    line_log: Option<PathBuf>,
+    /// Optional directory containing structured attempt envelopes.
     #[arg(long)]
-    hang_dir: Option<PathBuf>,
+    envelope_dir: Option<PathBuf>,
     /// Optional one-second Linux host and cgroup pressure samples.
     #[arg(long)]
     pressure_log: Option<PathBuf>,
     /// Markdown summary destination.
-    #[arg(long, default_value = DEFAULT_OUTPUT)]
+    #[arg(long)]
     output: PathBuf,
     /// Number of stress iterations requested from nextest.
     #[arg(long)]
@@ -59,6 +57,8 @@ pub(crate) struct StressReportArgs {
     /// Explain an absent `JUnit` as fallout from the primary nextest step.
     #[arg(long)]
     allow_missing: bool,
+    #[arg(skip)]
+    evidence: StressEvidenceConfig,
 }
 
 impl StressReportArgs {
@@ -72,12 +72,13 @@ impl StressReportArgs {
         Self {
             junit,
             inventory,
-            no_block_log: None,
-            hang_dir: None,
+            line_log: None,
+            envelope_dir: None,
             pressure_log: None,
             output,
             expected_count,
             allow_missing: false,
+            evidence: StressEvidenceConfig::default(),
         }
     }
 
@@ -94,14 +95,20 @@ impl StressReportArgs {
     }
 
     #[must_use]
-    pub(crate) fn with_optional_hang(mut self, path: Option<PathBuf>) -> Self {
-        self.hang_dir = path;
+    pub(crate) fn with_optional_envelopes(mut self, path: Option<PathBuf>) -> Self {
+        self.envelope_dir = path;
         self
     }
 
     #[must_use]
-    pub(crate) fn with_optional_no_block(mut self, path: Option<PathBuf>) -> Self {
-        self.no_block_log = path;
+    pub(crate) fn with_optional_lines(mut self, path: Option<PathBuf>) -> Self {
+        self.line_log = path;
+        self
+    }
+
+    #[must_use]
+    pub(crate) fn with_evidence(mut self, evidence: StressEvidenceConfig) -> Self {
+        self.evidence = evidence;
         self
     }
 }
@@ -427,9 +434,6 @@ fn validate_inventory_case_count(count: usize) -> Result<()> {
 fn validate_expected_count(expected_count: usize) -> Result<()> {
     if expected_count == 0 {
         bail!("expected-count must be greater than zero");
-    }
-    if expected_count > MAX_EXPECTED_COUNT {
-        bail!("expected-count must not exceed {MAX_EXPECTED_COUNT}");
     }
     Ok(())
 }
@@ -945,12 +949,13 @@ mod tests {
             let args = StressReportArgs {
                 junit,
                 inventory: inventory.clone(),
-                no_block_log: None,
-                hang_dir: None,
+                line_log: None,
+                envelope_dir: None,
                 pressure_log: None,
                 output: output.clone(),
                 expected_count: 2,
                 allow_missing: true,
+                evidence: StressEvidenceConfig::default(),
             };
 
             let error = run(&args).expect_err("incomplete evidence must fail closed");
@@ -996,12 +1001,13 @@ mod tests {
         let args = StressReportArgs {
             junit,
             inventory,
-            no_block_log: None,
-            hang_dir: None,
+            line_log: None,
+            envelope_dir: None,
             pressure_log: None,
             output: output.clone(),
             expected_count: 2,
             allow_missing: false,
+            evidence: StressEvidenceConfig::default(),
         };
 
         let error = run(&args).expect_err("failed attempt must fail closed");
@@ -1052,13 +1058,11 @@ mod tests {
     }
 
     #[test]
-    fn campaign_and_inventory_case_limits_are_explicit() {
-        for count in [1, 50, MAX_EXPECTED_COUNT] {
+    fn positive_campaign_counts_and_inventory_case_limits_are_explicit() {
+        for count in [1, 50, usize::MAX] {
             validate_expected_count(count).expect("valid expected count");
         }
-        for count in [0, MAX_EXPECTED_COUNT + 1] {
-            assert!(validate_expected_count(count).is_err(), "{count}");
-        }
+        assert!(validate_expected_count(0).is_err());
         validate_inventory_case_count(MAX_INVENTORY_CASES).expect("case limit is inclusive");
         assert!(validate_inventory_case_count(MAX_INVENTORY_CASES + 1).is_err());
     }

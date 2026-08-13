@@ -12,12 +12,12 @@ use regex::Regex;
 
 use self::attempt::{AttemptKey, AttemptOutcome, attempt_outcomes};
 use super::{MAX_FAILURE_ROWS, StressReportArgs, markdown_cell, test_id};
-use crate::junit::CaseTiming;
+use crate::{common::project::StressEvidenceConfig, junit::CaseTiming};
 
 mod attempt;
-mod hang;
+mod envelope;
+mod line;
 mod line_reader;
-mod no_block;
 mod overlap;
 mod pressure;
 
@@ -39,9 +39,9 @@ struct AttemptDossier {
     test: String,
     symptom: String,
     backtrace: String,
-    flash: BTreeSet<String>,
-    no_block: BTreeSet<String>,
-    hang: BTreeSet<String>,
+    wait_graph: BTreeSet<String>,
+    lines: BTreeSet<String>,
+    envelopes: BTreeSet<String>,
     pressure: String,
     co_runners: BTreeSet<String>,
 }
@@ -62,9 +62,9 @@ pub(super) fn append_correlated_evidence(
     args: &StressReportArgs,
 ) -> bool {
     let failed = cases.iter().filter(|case| case.failed).collect::<Vec<_>>();
-    let expected_hang = failed
+    let expected_envelopes = failed
         .iter()
-        .filter(|case| requires_hang_envelope(&case.output))
+        .filter(|case| requires_envelope(&case.output, &args.evidence))
         .filter_map(|case| attempt_key(case))
         .collect::<BTreeSet<_>>();
     let outcomes = attempt_outcomes(cases);
@@ -84,9 +84,11 @@ pub(super) fn append_correlated_evidence(
             let dossier = AttemptDossier {
                 display: attempt_id(case, run_id),
                 test: test_id(case),
-                symptom: failure_signature(case),
-                backtrace: backtrace_signature(&case.output).unwrap_or_default(),
-                flash: flash_signatures(&case.output).into_iter().collect(),
+                symptom: failure_signature(case, &args.evidence),
+                backtrace: backtrace_signature(&case.output, &args.evidence).unwrap_or_default(),
+                wait_graph: wait_signatures(&case.output, &args.evidence)
+                    .into_iter()
+                    .collect(),
                 co_runners: overlaps.remove(&key).unwrap_or_default(),
                 ..AttemptDossier::default()
             };
@@ -95,20 +97,20 @@ pub(super) fn append_correlated_evidence(
         .collect::<BTreeMap<_, _>>();
     let mut symptoms = BTreeMap::new();
     let mut backtraces = BTreeMap::new();
-    let mut flash = BTreeMap::new();
+    let mut waits = BTreeMap::new();
     let mut complete = true;
     for case in &failed {
         let attempt = attempt_id(case, run_id);
         let test = test_id(case);
         add_signature(
             &mut symptoms,
-            failure_signature(case),
+            failure_signature(case, &args.evidence),
             &attempt,
             &test,
             AttemptOutcome::Failed,
             None,
         );
-        if let Some(signature) = backtrace_signature(&case.output) {
+        if let Some(signature) = backtrace_signature(&case.output, &args.evidence) {
             add_signature(
                 &mut backtraces,
                 signature,
@@ -118,9 +120,9 @@ pub(super) fn append_correlated_evidence(
                 None,
             );
         }
-        for signature in flash_signatures(&case.output) {
+        for signature in wait_signatures(&case.output, &args.evidence) {
             add_signature(
-                &mut flash,
+                &mut waits,
                 signature,
                 &attempt,
                 &test,
@@ -142,32 +144,37 @@ pub(super) fn append_correlated_evidence(
         &backtraces,
         "The first project frames shared by failing attempts. Wrapper and address noise is removed.",
     );
-    if let Some(path) = &args.no_block_log {
-        complete &= no_block::append(out, path, &outcomes, run_id, &mut dossiers);
-    }
-    if let Some(path) = &args.hang_dir {
-        complete &= hang::append(
+    if let Some(path) = &args.line_log {
+        complete &= line::append(
             out,
             path,
+            args.evidence.line_marker.as_deref(),
             &outcomes,
-            &expected_hang,
             run_id,
-            &mut flash,
             &mut dossiers,
         );
-    } else if !expected_hang.is_empty() {
+    }
+    if let Some(path) = &args.envelope_dir {
+        complete &= envelope::append(
+            out,
+            path,
+            envelope::Input::new(&outcomes, &expected_envelopes, run_id, &args.evidence),
+            &mut waits,
+            &mut dossiers,
+        );
+    } else if !expected_envelopes.is_empty() {
         let _ = writeln!(
             out,
-            "\nEvidence problem: `{}` timeout-class failed attempts require exact same-run hang envelopes, but no hang directory was provided.",
-            expected_hang.len(),
+            "\nEvidence problem: `{}` timeout-class failed attempts require exact same-run attempt envelopes, but no envelope directory was provided.",
+            expected_envelopes.len(),
         );
         complete = false;
     }
     render_clusters(
         out,
-        "Flash wait signatures",
-        &flash,
-        "Repeated holders, waiters, or quiescence pins are causal candidates. Task IDs and timing counters are removed. An optional backtrace belongs to the dump caller, not necessarily to a holder or waiter.",
+        "Wait-graph signatures",
+        &waits,
+        "Repeated holders, waiters, or quiescence pins are causal candidates. Task IDs and timing counters are removed. An optional backtrace belongs to the snapshot caller, not necessarily to a holder or waiter.",
     );
     if let Some(path) = &args.pressure_log {
         let (points, pressure_complete) = pressure::append(out, path);
@@ -277,17 +284,20 @@ fn attempt_id(case: &CaseTiming, run_id: Option<&str>) -> String {
     )
 }
 
-fn failure_signature(case: &CaseTiming) -> String {
+fn failure_signature(case: &CaseTiming, evidence: &StressEvidenceConfig) -> String {
     let lines = clean_lines(&case.output);
     for (index, line) in lines.iter().enumerate() {
-        if line.contains("[kithara_hang_detector]") {
-            let summary = line
-                .split(" payload=")
-                .next()
-                .unwrap_or(line.as_str())
-                .split(" \u{2014} ")
-                .next()
-                .unwrap_or(line.as_str());
+        if evidence
+            .envelope_marker
+            .as_deref()
+            .is_some_and(|marker| line.contains(marker))
+        {
+            let summary = evidence
+                .envelope_suffix_markers
+                .iter()
+                .filter_map(|marker| line.find(marker))
+                .min()
+                .map_or(line.as_str(), |index| &line[..index]);
             return normalize_signature(summary);
         }
         if is_timeout_line(line) {
@@ -312,11 +322,14 @@ fn failure_signature(case: &CaseTiming) -> String {
     )
 }
 
-fn requires_hang_envelope(output: &str) -> bool {
+fn requires_envelope(output: &str, evidence: &StressEvidenceConfig) -> bool {
     let lines = clean_lines(output);
     lines.first().is_some_and(|line| is_junit_timeout(line))
         || lines.iter().any(|line| {
-            line.contains("[kithara_hang_detector]")
+            evidence
+                .envelope_marker
+                .as_deref()
+                .is_some_and(|marker| line.contains(marker))
                 || line.to_ascii_lowercase().contains("hard timeout")
         })
 }
@@ -330,9 +343,9 @@ fn is_junit_timeout(line: &str) -> bool {
     line == "test timeout" || line.starts_with("test timeout:")
 }
 
-fn backtrace_signature(output: &str) -> Option<String> {
+fn backtrace_signature(output: &str, evidence: &StressEvidenceConfig) -> Option<String> {
     static SOURCE: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(r"(?:crates|tests|xtask)/[A-Za-z0-9_./-]+\.rs:\d+(?::\d+)?")
+        Regex::new(r"(?:[A-Za-z0-9_.-]+/)+[A-Za-z0-9_./-]+\.rs:\d+(?::\d+)?")
             .expect("source-location regex")
     });
     let clean = strip_ansi(output);
@@ -340,8 +353,10 @@ fn backtrace_signature(output: &str) -> Option<String> {
         .find_iter(&clean)
         .map(|matched| matched.as_str().to_owned())
         .filter(|frame| {
-            !frame.contains("kithara-test-macros/")
-                && !frame.contains("kithara-test-utils/src/test/")
+            !evidence
+                .source_excludes
+                .iter()
+                .any(|excluded| frame.contains(excluded))
         })
         .fold(Vec::<String>::new(), |mut frames, frame| {
             if frames.len() < MAX_SIGNATURE_EXAMPLES && !frames.contains(&frame) {
@@ -352,27 +367,44 @@ fn backtrace_signature(output: &str) -> Option<String> {
     (!frames.is_empty()).then(|| frames.join(" -> "))
 }
 
-fn flash_signatures(output: &str) -> Vec<String> {
+fn wait_signatures(output: &str, evidence: &StressEvidenceConfig) -> Vec<String> {
     let mut signatures = BTreeSet::new();
-    let mut context = "flash hang".to_owned();
+    let mut context = "wait graph".to_owned();
     let mut primitive = None::<String>;
     let mut holder = None::<String>;
     for line in clean_lines(output) {
         let trimmed = line.trim();
-        if let Some(value) = trimmed.split("[flash hang dump]").nth(1) {
+        if let Some(value) = evidence
+            .dump_marker
+            .as_deref()
+            .and_then(|marker| trimmed.split(marker).nth(1))
+        {
             context = normalize_signature(value);
             continue;
         }
-        if trimmed.starts_with('#') && trimmed.contains("created_at=") {
-            primitive = Some(normalize_flash(trimmed));
+        if trimmed.starts_with('#')
+            && evidence
+                .primitive_marker
+                .as_deref()
+                .is_some_and(|marker| trimmed.contains(marker))
+        {
+            primitive = Some(normalize_wait(trimmed));
             holder = None;
             continue;
         }
-        if trimmed.contains("held by") {
-            holder = Some(normalize_flash(trimmed));
+        if evidence
+            .holder_marker
+            .as_deref()
+            .is_some_and(|marker| trimmed.contains(marker))
+        {
+            holder = Some(normalize_wait(trimmed));
             continue;
         }
-        if trimmed.contains("WAITING:") {
+        if evidence
+            .wait_marker
+            .as_deref()
+            .is_some_and(|marker| trimmed.contains(marker))
+        {
             let edge = [
                 Some(context.as_str()),
                 primitive.as_deref(),
@@ -381,23 +413,18 @@ fn flash_signatures(output: &str) -> Vec<String> {
             ]
             .into_iter()
             .flatten()
-            .map(normalize_flash)
+            .map(normalize_wait)
             .collect::<Vec<_>>()
             .join(" | ");
             signatures.insert(edge);
             continue;
         }
-        if [
-            "active_async holder",
-            "active holder thread=",
-            "engine core lock held",
-            "BRIDGED sync wait",
-            "state lock held",
-        ]
-        .iter()
-        .any(|needle| trimmed.contains(needle))
+        if evidence
+            .direct_markers
+            .iter()
+            .any(|needle| trimmed.contains(needle))
         {
-            signatures.insert(format!("{} | {}", context, normalize_flash(trimmed)));
+            signatures.insert(format!("{} | {}", context, normalize_wait(trimmed)));
         }
     }
     signatures.into_iter().collect()
@@ -412,7 +439,7 @@ fn render_attempt_dossiers(
         return;
     }
     out.push_str(
-        "\n## Failed-attempt evidence overlay\n\nEach bounded example row joins the terminal symptom with same-attempt runtime evidence; raw artifacts remain exhaustive. Empty cells mean that source emitted no attributable record. Co-runners and pressure are correlation candidates, not causes.\n\n| attempt | symptom | project frames | Flash | no-block | hang | pressure | co-running tests |\n|---|---|---|---|---|---|---|---|\n",
+        "\n## Failed-attempt evidence overlay\n\nEach bounded example row joins the terminal symptom with same-attempt runtime evidence; raw artifacts remain exhaustive. Empty cells mean that source emitted no attributable record. Co-runners and pressure are correlation candidates, not causes.\n\n| attempt | symptom | project frames | wait graph | line evidence | envelope | pressure | co-running tests |\n|---|---|---|---|---|---|---|---|\n",
     );
     for dossier in dossiers.values().take(MAX_FAILURE_ROWS) {
         let _ = writeln!(
@@ -422,9 +449,9 @@ fn render_attempt_dossiers(
             markdown_cell(&dossier.test),
             markdown_cell(&dossier.symptom),
             markdown_cell(&dossier.backtrace),
-            render_set(&dossier.flash),
-            render_set(&dossier.no_block),
-            render_set(&dossier.hang),
+            render_set(&dossier.wait_graph),
+            render_set(&dossier.lines),
+            render_set(&dossier.envelopes),
             markdown_cell(&dossier.pressure),
             render_set(&dossier.co_runners),
         );
@@ -469,10 +496,8 @@ fn strip_ansi(text: &str) -> String {
 
 fn normalize_signature(text: &str) -> String {
     static VOLATILE: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(
-            r"\b(ts_ms|pid|task|thread|id|dump|running_for_ns|deadline_in_ns|virtual_now_ns)=[^\s,;]+",
-        )
-        .expect("volatile diagnostic regex")
+        Regex::new(r"\b([A-Za-z_][A-Za-z0-9_]*(?:_ns|_ms)|pid|task|thread|id|dump)=[^\s,;]+")
+            .expect("volatile diagnostic regex")
     });
     static HEX: LazyLock<Regex> =
         LazyLock::new(|| Regex::new(r"0x[0-9a-fA-F]+").expect("address regex"));
@@ -482,10 +507,12 @@ fn normalize_signature(text: &str) -> String {
     markdown_cell(text.trim())
 }
 
-fn normalize_flash(text: &str) -> String {
+fn normalize_wait(text: &str) -> String {
     static IDS: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(r"(?:#\d+|\bcvid=\d+|\btask=\d+|\bid=[^\s]+|ThreadKey\([^)]*\))")
-            .expect("Flash identity regex")
+        Regex::new(
+            r"(?:#\d+|\b[A-Za-z_][A-Za-z0-9_]*id=[^\s]+|\b[A-Za-z_][A-Za-z0-9_:]*Key\([^)]*\))",
+        )
+        .expect("wait-graph identity regex")
     });
     let normalized = IDS.replace_all(text, "<id>");
     normalize_signature(&normalized)
@@ -584,6 +611,20 @@ fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
 mod tests {
     use super::*;
 
+    fn evidence() -> StressEvidenceConfig {
+        StressEvidenceConfig {
+            envelope_schema: Some("demo.hang.v1".to_owned()),
+            envelope_marker: Some("[hang]".to_owned()),
+            envelope_suffix_markers: vec![" payload=".to_owned(), " \u{2014} ".to_owned()],
+            dump_marker: Some("[wait dump]".to_owned()),
+            primitive_marker: Some("created_at=".to_owned()),
+            holder_marker: Some("held by".to_owned()),
+            wait_marker: Some("WAITING:".to_owned()),
+            direct_markers: vec!["active holder".to_owned()],
+            ..StressEvidenceConfig::default()
+        }
+    }
+
     fn case(name: &str, iteration: usize, failed: bool, secs: f64) -> CaseTiming {
         CaseTiming {
             name: name.to_owned(),
@@ -630,13 +671,13 @@ mod tests {
     #[test]
     fn hang_symptom_ignores_embedded_envelope_and_dump_filename() {
         let mut failed = case("seek", 0, true, 1.0);
-        failed.output = "[kithara_hang_detector] hang detected: pre-kill ts_ms=42 pid=7 dump=/tmp/kithara-hang-42.json [still running] \u{2014} {\"nextest\":{\"attempt_id\":\"run:a\"}}".to_owned();
+        failed.output = "[hang] detected: pre-kill ts_ms=42 pid=7 dump=/tmp/hang-42.json [still running] \u{2014} {\"nextest\":{\"attempt_id\":\"run:a\"}}".to_owned();
 
-        let signature = failure_signature(&failed);
+        let signature = failure_signature(&failed, &evidence());
 
         assert_eq!(
             signature,
-            "[kithara_hang_detector] hang detected: pre-kill ts_ms=<volatile> pid=<volatile> dump=<volatile> [still running]"
+            "[hang] detected: pre-kill ts_ms=<volatile> pid=<volatile> dump=<volatile> [still running]"
         );
         assert!(!signature.contains("attempt_id"));
     }
@@ -644,27 +685,34 @@ mod tests {
     #[test]
     fn hang_symptom_ignores_ascii_embedded_envelope() {
         let mut failed = case("seek", 0, true, 1.0);
-        failed.output = "[kithara_hang_detector] hang detected: pre-kill ts_ms=42 payload={\"nextest\":{\"attempt_id\":\"run:a\"}}".to_owned();
+        failed.output =
+            "[hang] detected: pre-kill ts_ms=42 payload={\"nextest\":{\"attempt_id\":\"run:a\"}}"
+                .to_owned();
 
         assert_eq!(
-            failure_signature(&failed),
-            "[kithara_hang_detector] hang detected: pre-kill ts_ms=<volatile>"
+            failure_signature(&failed, &evidence()),
+            "[hang] detected: pre-kill ts_ms=<volatile>"
         );
     }
 
     #[test]
-    fn nextest_timeout_class_requires_a_hang_envelope_without_marker() {
-        assert!(requires_hang_envelope(
-            "test timeout: after 120s: process did not exit"
+    fn nextest_timeout_class_requires_an_envelope_without_marker() {
+        let evidence = evidence();
+        assert!(requires_envelope(
+            "test timeout: after 120s: process did not exit",
+            &evidence,
         ));
-        assert!(requires_hang_envelope(
-            "assertion failed\nHARD TIMEOUT after 30s"
+        assert!(requires_envelope(
+            "assertion failed\nHARD TIMEOUT after 30s",
+            &evidence,
         ));
-        assert!(!requires_hang_envelope(
-            "test failure: timeout setting wrong"
+        assert!(!requires_envelope(
+            "test failure: timeout setting wrong",
+            &evidence,
         ));
-        assert!(!requires_hang_envelope(
-            "test failure: assertion timed out after 120ms"
+        assert!(!requires_envelope(
+            "test failure: assertion timed out after 120ms",
+            &evidence,
         ));
     }
 }

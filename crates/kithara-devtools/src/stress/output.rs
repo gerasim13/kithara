@@ -13,7 +13,7 @@ use anyhow::{Context, Error, Result, anyhow};
 struct Consts;
 
 impl Consts {
-    /// Caps queued output at 128 KiB; full queues apply backpressure to readers.
+    /// Caps queued output at 128 `KiB`; full queues apply backpressure to readers.
     const CHANNEL_DEPTH: usize = 8;
     /// Amortizes reads without accumulating a complete stress log in memory.
     const READ_BUFFER_BYTES: usize = 16 * 1024;
@@ -120,9 +120,9 @@ pub(super) fn run(command: &mut Command, log_path: &Path) -> Result<ExitStatus> 
         let (sender, receiver) = mpsc::sync_channel(Consts::CHANNEL_DEPTH);
         let stdout_sender = sender.clone();
         let mut stdout_reader =
-            Some(scope.spawn(move || read_stream(stdout, Stream::Stdout, stdout_sender)));
+            Some(scope.spawn(move || read_stream(stdout, Stream::Stdout, &stdout_sender)));
         let mut stderr_reader =
-            Some(scope.spawn(move || read_stream(stderr, Stream::Stderr, sender)));
+            Some(scope.spawn(move || read_stream(stderr, Stream::Stderr, &sender)));
         let mut failure = None;
         let mut log_available = true;
         let mut stderr_available = true;
@@ -179,10 +179,10 @@ pub(super) fn run(command: &mut Command, log_path: &Path) -> Result<ExitStatus> 
             record_failure(&mut failure, &mut child, error);
         }
 
-        match failure {
-            Some(error) => Err(error),
-            None => child.wait().context("wait for captured stress command"),
-        }
+        failure.map_or_else(
+            || child.wait().context("wait for captured stress command"),
+            Err,
+        )
     })
 }
 
@@ -260,7 +260,7 @@ fn create_log(path: &Path) -> Result<File> {
         .with_context(|| format!("open stress log {}", path.display()))
 }
 
-fn read_stream<R: Read>(mut reader: R, stream: Stream, sender: SyncSender<Chunk>) -> Result<()> {
+fn read_stream<R: Read>(mut reader: R, stream: Stream, sender: &SyncSender<Chunk>) -> Result<()> {
     let mut buffer = [0_u8; Consts::READ_BUFFER_BYTES];
     loop {
         let count = reader
@@ -351,8 +351,8 @@ mod tests {
 
     use super::*;
 
-    const CHILD_ENV: &str = "KITHARA_DEVTOOLS_STRESS_OUTPUT_CHILD";
-    const CHILD_COMPLETION_FILE: &str = "KITHARA_DEVTOOLS_STRESS_OUTPUT_COMPLETION_FILE";
+    const CHILD_ENV: &str = "DEVTOOLS_STRESS_OUTPUT_CHILD";
+    const CHILD_COMPLETION_FILE: &str = "DEVTOOLS_STRESS_OUTPUT_COMPLETION_FILE";
     const CHILD_ENV_VALUE: &str = "emit";
     const BLOCK_CHILD_ENV_VALUE: &str = "emit-then-block";
     const CHILD_EXIT_CODE: i32 = 23;

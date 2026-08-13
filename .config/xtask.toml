@@ -127,6 +127,149 @@ always = ["symphonia"]
 when_feature = "backend-cpal"
 always = ["backend-cpal"]
 
+[stress]
+default_mode = "reproduction"
+lane = "workspace"
+backend = "wreq"
+nextest_config = ".config/nextest.toml"
+nextest_profile = "stress"
+default_filter = "all()"
+default_count = 50
+max_count = 100
+test_threads = "num-cpus"
+max_test_threads = 256
+raw_output = "target/stress"
+report_output = "target/stress-report.md"
+workflow_job_timeout_minutes = 1380
+
+[stress.artifacts]
+subject_junit = "target/nextest/stress/junit.xml"
+inventory = "inventory.json"
+junit = "junit.xml"
+log = "nextest.log"
+manifest = "manifest.json"
+pressure = "pressure.jsonl"
+report = "stress-report.md"
+envelope_dir = "hang"
+line_log = "no-block.log"
+
+[stress.environment]
+remove = [
+  "KITHARA_FLASH_SYNC_BT",
+  "KITHARA_FLASH_SYNC_TRACE",
+  "KITHARA_HANG_DUMP_DIR",
+  "KITHARA_HANG_PREKILL_SECS",
+  "KITHARA_NO_BLOCK",
+  "KITHARA_NO_BLOCK_BUDGET_MS",
+  "KITHARA_NO_BLOCK_LOG",
+  "NEXTEST_FINAL_STATUS_LEVEL",
+  "NEXTEST_SHOW_PROGRESS",
+  "NEXTEST_STATUS_LEVEL",
+  "RUST_BACKTRACE",
+  "RUST_LOG",
+]
+
+[stress.evidence]
+envelope_schema = "kithara.hang.v1"
+envelope_marker = "[kithara_hang_detector]"
+envelope_text_field = "flash"
+envelope_suffix_markers = [" payload=", " \u2014 "]
+line_marker = "[no_block]"
+dump_marker = "[flash hang dump]"
+primitive_marker = "created_at="
+holder_marker = "held by"
+wait_marker = "WAITING:"
+direct_markers = [
+  "active_async holder",
+  "active holder thread=",
+  "engine core lock held",
+  "BRIDGED sync wait",
+  "state lock held",
+]
+source_excludes = ["kithara-test-macros/", "kithara-test-utils/src/test/"]
+
+[stress.modes.reproduction]
+features = ["flash"]
+
+[stress.modes.reproduction.set_env]
+KITHARA_HANG_PREKILL_SECS = "630"
+NEXTEST_FINAL_STATUS_LEVEL = "fail"
+NEXTEST_SHOW_PROGRESS = "counter"
+NEXTEST_STATUS_LEVEL = "fail"
+RUST_BACKTRACE = "1"
+RUST_LOG = "warn"
+
+[stress.modes.reproduction.raw_path_env]
+KITHARA_HANG_DUMP_DIR = "hang"
+
+[stress.modes.diagnostic]
+features = ["flash"]
+
+[stress.modes.diagnostic.set_env]
+KITHARA_FLASH_SYNC_TRACE = "1"
+KITHARA_HANG_PREKILL_SECS = "630"
+NEXTEST_FINAL_STATUS_LEVEL = "fail"
+NEXTEST_SHOW_PROGRESS = "counter"
+NEXTEST_STATUS_LEVEL = "fail"
+RUST_BACKTRACE = "1"
+RUST_LOG = "warn,flash::hang=debug,kithara_platform::no_block=debug,kithara_queue=debug,kithara_hls=debug,kithara_stream=debug,kithara_net=debug,kithara_audio=debug"
+
+[stress.modes.diagnostic.raw_path_env]
+KITHARA_HANG_DUMP_DIR = "hang"
+
+[stress.modes.diagnostic-no-block]
+features = ["flash", "no-block"]
+
+[stress.modes.diagnostic-no-block.set_env]
+KITHARA_FLASH_SYNC_TRACE = "1"
+KITHARA_HANG_PREKILL_SECS = "630"
+KITHARA_NO_BLOCK = "census"
+KITHARA_NO_BLOCK_BUDGET_MS = "100"
+NEXTEST_FINAL_STATUS_LEVEL = "fail"
+NEXTEST_SHOW_PROGRESS = "counter"
+NEXTEST_STATUS_LEVEL = "fail"
+RUST_BACKTRACE = "1"
+RUST_LOG = "warn,flash::hang=debug,kithara_platform::no_block=debug,kithara_queue=debug,kithara_hls=debug,kithara_stream=debug,kithara_net=debug,kithara_audio=debug"
+
+[stress.modes.diagnostic-no-block.raw_path_env]
+KITHARA_HANG_DUMP_DIR = "hang"
+KITHARA_NO_BLOCK_LOG = "no-block.log"
+
+[stress.modes.diagnostic-backtrace]
+features = ["flash"]
+
+[stress.modes.diagnostic-backtrace.set_env]
+KITHARA_FLASH_SYNC_BT = "1"
+KITHARA_FLASH_SYNC_TRACE = "1"
+KITHARA_HANG_PREKILL_SECS = "630"
+NEXTEST_FINAL_STATUS_LEVEL = "fail"
+NEXTEST_SHOW_PROGRESS = "counter"
+NEXTEST_STATUS_LEVEL = "fail"
+RUST_BACKTRACE = "1"
+RUST_LOG = "warn,flash::hang=debug,kithara_platform::no_block=debug,kithara_queue=debug,kithara_hls=debug,kithara_stream=debug,kithara_net=debug,kithara_audio=debug"
+
+[stress.modes.diagnostic-backtrace.raw_path_env]
+KITHARA_HANG_DUMP_DIR = "hang"
+
+[stress.modes.diagnostic-full]
+features = ["flash", "no-block"]
+
+[stress.modes.diagnostic-full.set_env]
+KITHARA_FLASH_SYNC_BT = "1"
+KITHARA_FLASH_SYNC_TRACE = "1"
+KITHARA_HANG_PREKILL_SECS = "630"
+KITHARA_NO_BLOCK = "census"
+KITHARA_NO_BLOCK_BUDGET_MS = "100"
+NEXTEST_FINAL_STATUS_LEVEL = "fail"
+NEXTEST_SHOW_PROGRESS = "counter"
+NEXTEST_STATUS_LEVEL = "fail"
+RUST_BACKTRACE = "1"
+RUST_LOG = "warn,flash::hang=debug,kithara_platform::no_block=debug,kithara_queue=debug,kithara_hls=debug,kithara_stream=debug,kithara_net=debug,kithara_audio=debug"
+
+[stress.modes.diagnostic-full.raw_path_env]
+KITHARA_HANG_DUMP_DIR = "hang"
+KITHARA_NO_BLOCK_LOG = "no-block.log"
+
 [test]
 default_lane = "workspace"
 default_backend = "wreq"

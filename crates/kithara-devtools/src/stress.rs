@@ -8,12 +8,14 @@ use std::{
 };
 
 use anyhow::{Context, Error, Result, ensure};
-use clap::{ArgAction, Args, Subcommand};
+use clap::{Args, Subcommand};
 
 use crate::{
     Ctx,
+    common::project::{StressArtifactConfig, StressConfig, StressModeConfig},
     stress_report::{self, StressReportArgs},
     stress_run::{self, StressRunSpec},
+    test::{ConfiguredLane, configured_lane},
     verdict::{ChildFailure, NotClean},
 };
 
@@ -23,23 +25,12 @@ mod output;
 pub(crate) mod pressure;
 mod system;
 
-use environment::{CampaignEnvironment, DiagnosticPolicy};
+use environment::CampaignEnvironment;
 use manifest::{
-    ExecuteResult, ExpectedProvenance, Features, Logging, Manifest, ManifestConfig, ManifestSpec,
-    Mode, RunMetadata, Selection,
+    ExecuteResult, ExpectedProvenance, Manifest, ManifestConfig, ManifestSpec, PolicySnapshot,
+    Selection,
 };
 use pressure::Sampler;
-
-struct Consts;
-
-impl Consts {
-    const DEFAULT_CONFIG: &str = ".config/nextest.toml";
-    const DEFAULT_FILTER: &str = "all()";
-    const DEFAULT_OUTPUT: &str = "target/stress";
-    const DEFAULT_REPORT: &str = "target/stress-report.md";
-    const DEFAULT_TEST_THREADS: &str = "num-cpus";
-    const DEFAULT_JOB_TIMEOUT_MINUTES: u64 = 1_380;
-}
 
 #[derive(Debug, Subcommand)]
 #[non_exhaustive]
@@ -57,41 +48,23 @@ pub struct RunArgs {
     #[arg(long, default_value = ".")]
     subject_root: PathBuf,
     /// Fresh raw evidence directory owned by this campaign.
-    #[arg(long, default_value = Consts::DEFAULT_OUTPUT)]
-    output: PathBuf,
-    /// Controller-owned nextest configuration.
-    #[arg(long, default_value = Consts::DEFAULT_CONFIG)]
-    config_file: PathBuf,
+    #[arg(long)]
+    output: Option<PathBuf>,
     /// Nextest filterset selecting tests to repeat.
-    #[arg(long, default_value = Consts::DEFAULT_FILTER)]
-    filter: String,
+    #[arg(long)]
+    filter: Option<String>,
     /// Number of times to run every selected test.
-    #[arg(long, default_value_t = 50)]
-    count: usize,
-    /// Nextest concurrency (`num-cpus` or a positive integer).
-    #[arg(long, default_value = Consts::DEFAULT_TEST_THREADS)]
-    test_threads: String,
-    /// Build and run the subject with Flash enabled.
-    #[arg(long, default_value_t = true, action = ArgAction::Set)]
-    flash: bool,
-    /// Enable timing-perturbing diagnostic instrumentation.
-    #[arg(long, default_value_t = false, action = ArgAction::Set)]
-    diagnostics: bool,
-    /// Enable no-block census in diagnostic mode.
-    #[arg(long, default_value_t = false, action = ArgAction::Set)]
-    no_block: bool,
-    /// Include the Flash dump caller backtrace in diagnostic mode.
-    #[arg(long, default_value_t = false, action = ArgAction::Set)]
-    dump_thread_backtrace: bool,
+    #[arg(long)]
+    count: Option<usize>,
+    /// Configured campaign mode.
+    #[arg(long)]
+    mode: Option<String>,
     /// Trusted controller revision to compare with the checkout.
     #[arg(long)]
     expected_controller_sha: Option<String>,
     /// Trusted subject revision to compare with the checkout.
     #[arg(long)]
     expected_subject_sha: Option<String>,
-    /// Outer job budget recorded in artifact provenance.
-    #[arg(long, default_value_t = Consts::DEFAULT_JOB_TIMEOUT_MINUTES)]
-    job_timeout_minutes: u64,
 }
 
 #[derive(Debug, Args)]
@@ -101,28 +74,18 @@ pub struct ReportArgs {
     #[arg(long)]
     raw: PathBuf,
     /// Markdown report destination.
-    #[arg(long, default_value = Consts::DEFAULT_REPORT)]
-    output: PathBuf,
+    #[arg(long)]
+    output: Option<PathBuf>,
     #[arg(long)]
     expected_controller_sha: String,
     #[arg(long)]
     expected_subject_sha: String,
     #[arg(long)]
-    expected_filter: String,
+    filter: Option<String>,
     #[arg(long)]
-    expected_count: usize,
+    count: Option<usize>,
     #[arg(long)]
-    expected_test_threads: String,
-    #[arg(long)]
-    expected_mode: Mode,
-    #[arg(long, action = ArgAction::Set)]
-    expected_flash: bool,
-    #[arg(long, action = ArgAction::Set)]
-    expected_no_block: bool,
-    #[arg(long, action = ArgAction::Set)]
-    expected_dump_thread_backtrace: bool,
-    #[arg(long, default_value_t = Consts::DEFAULT_JOB_TIMEOUT_MINUTES)]
-    expected_job_timeout_minutes: u64,
+    mode: Option<String>,
     #[arg(long)]
     execute_result: ExecuteResult,
 }
@@ -135,7 +98,7 @@ pub struct ReportArgs {
 pub(crate) fn run(command: &StressCommand, ctx: &Ctx) -> Result<()> {
     match command {
         StressCommand::Run(args) => run_campaign(args, ctx),
-        StressCommand::Report(args) => run_report(args),
+        StressCommand::Report(args) => run_report(args, ctx),
     }
 }
 
@@ -150,37 +113,68 @@ pub(crate) fn run_stderr_output(command: &mut Command, path: &Path) -> Result<Ex
 #[derive(Debug)]
 struct Paths {
     raw: PathBuf,
-    hang: PathBuf,
+    envelopes: Option<PathBuf>,
     inventory: PathBuf,
     junit: PathBuf,
     log: PathBuf,
     manifest: PathBuf,
-    no_block: PathBuf,
+    lines: Option<PathBuf>,
     pressure: PathBuf,
     report: PathBuf,
 }
 
+struct ReportExpectation<'a> {
+    config: &'a StressConfig,
+    mode_name: &'a str,
+    mode: &'a StressModeConfig,
+    filter: &'a str,
+    count: usize,
+    runner: ConfiguredLane,
+}
+
 impl Paths {
-    fn new(raw: PathBuf) -> Self {
+    fn new(raw: PathBuf, artifacts: &StressArtifactConfig) -> Self {
         Self {
-            hang: raw.join("hang"),
-            inventory: raw.join("inventory.json"),
-            junit: raw.join("junit.xml"),
-            log: raw.join("nextest.log"),
-            manifest: raw.join("manifest.json"),
-            no_block: raw.join("no-block.log"),
-            pressure: raw.join("pressure.jsonl"),
-            report: raw.join("stress-report.md"),
+            envelopes: artifacts.envelope_dir.as_deref().map(|path| raw.join(path)),
+            inventory: raw.join(&artifacts.inventory),
+            junit: raw.join(&artifacts.junit),
+            log: raw.join(&artifacts.log),
+            manifest: raw.join(&artifacts.manifest),
+            lines: artifacts.line_log.as_deref().map(|path| raw.join(path)),
+            pressure: raw.join(&artifacts.pressure),
+            report: raw.join(&artifacts.report),
             raw,
         }
     }
 }
 
 fn run_campaign(args: &RunArgs, ctx: &Ctx) -> Result<()> {
+    let config = &ctx.config.stress;
+    ensure!(config.is_configured(), "stress campaign is not configured");
+    let mode_name = args
+        .mode
+        .clone()
+        .unwrap_or_else(|| config.default_mode.clone());
+    let mode = config.mode(&mode_name)?;
+    let filter = args
+        .filter
+        .clone()
+        .unwrap_or_else(|| config.default_filter.clone());
+    let count = args.count.unwrap_or(config.default_count);
+    validate_count(count, config.max_count)?;
     let subject_root = absolute_existing_directory(&ctx.root, &args.subject_root, "subject")?;
-    let output = absolute_from(&ctx.root, &args.output);
-    let paths = Paths::new(output);
-    let config_file = absolute_existing_file(&ctx.root, &args.config_file, "nextest config")?;
+    let output = absolute_from(
+        &ctx.root,
+        args.output
+            .as_deref()
+            .unwrap_or_else(|| Path::new(&config.raw_output)),
+    );
+    let paths = Paths::new(output, &config.artifacts);
+    let config_file = absolute_existing_file(
+        &ctx.root,
+        Path::new(&config.nextest_config),
+        "nextest config",
+    )?;
     let controller_sha = revision(
         &ctx.root,
         args.expected_controller_sha.as_deref(),
@@ -191,40 +185,45 @@ fn run_campaign(args: &RunArgs, ctx: &Ctx) -> Result<()> {
         args.expected_subject_sha.as_deref(),
         "subject",
     )?;
-    let subject_junit = subject_root.join("target/nextest/stress/junit.xml");
+    let subject_junit = subject_root.join(&config.artifacts.subject_junit);
+    let runner = configured_lane(&ctx.config, &config.lane, &config.backend, &mode.features)?;
     let spec = StressRunSpec {
         inventory: paths.inventory.clone(),
         junit: subject_junit.clone(),
         config_file: config_file.clone(),
-        filter: args.filter.clone(),
-        count: args.count,
-        test_threads: args.test_threads.clone(),
-        flash: args.flash,
-        no_block: args.diagnostics && args.no_block,
+        filter: filter.clone(),
+        count,
+        test_threads: config.test_threads.clone(),
+        profile: config.nextest_profile.clone(),
+        max_count: config.max_count,
+        max_test_threads: config.max_test_threads,
+        runner: runner.clone(),
     };
     stress_run::validate(&spec)?;
     ensure_raw_outside_subject_evidence(&paths.raw, &subject_junit)?;
     let system = system::capture()?;
-    let mode = Mode::from_diagnostics(args.diagnostics);
-    let policy = DiagnosticPolicy {
-        diagnostics: args.diagnostics,
-        dump_thread_backtrace: args.dump_thread_backtrace,
-        no_block: args.no_block,
-    };
-    let environment = CampaignEnvironment::new(&paths.raw, policy);
+    let environment = CampaignEnvironment::new(&paths.raw, config, mode)?;
     let mut manifest = Manifest::start(
-        manifest_spec(
-            args,
-            &paths,
-            &config_file,
+        ManifestSpec {
+            mode: mode_name.clone(),
+            config: ManifestConfig::new(
+                config.nextest_profile.clone(),
+                config.nextest_config.clone(),
+                config.workflow_job_timeout_minutes,
+            ),
             controller_sha,
             subject_sha,
-            mode,
-            &environment,
-        ),
+            runner,
+            selection: Selection {
+                filter: filter.clone(),
+                count,
+                test_threads: config.test_threads.clone(),
+            },
+            policy: policy_snapshot(config, mode),
+        },
         system.clone(),
     )?;
-    prepare_raw_directory(&paths, args.diagnostics && args.no_block)?;
+    prepare_raw_directory(&paths)?;
     let manifest_start = manifest.write_atomic(&paths.manifest);
     let sampler = Sampler::start(
         &paths.pressure,
@@ -234,10 +233,9 @@ fn run_campaign(args: &RunArgs, ctx: &Ctx) -> Result<()> {
 
     let (primary, sampler_result) = match (manifest_start, sampler) {
         (Ok(()), Ok(sampler)) => {
-            let primary =
-                stress_run::run(&spec, &ctx.config, &subject_root, &paths.log, &|command| {
-                    environment.apply(command)
-                });
+            let primary = stress_run::run(&spec, &subject_root, &paths.log, &|command| {
+                environment.apply(command);
+            });
             let primary_code = result_code(&primary);
             let sampler_result = sampler.finish(Some(primary_code));
             (primary, sampler_result)
@@ -252,7 +250,7 @@ fn run_campaign(args: &RunArgs, ctx: &Ctx) -> Result<()> {
     };
     let sampler_healthy = sampler_result.is_ok();
     let stage_result = stage_junit(&subject_junit, &paths.junit);
-    let report_result = render_raw_report(&paths, args.count, args.diagnostics && args.no_block);
+    let report_result = render_raw_report(&paths, count, config);
     let final_error = choose_failure(
         primary,
         sampler_result.map(|_| ()),
@@ -262,115 +260,99 @@ fn run_campaign(args: &RunArgs, ctx: &Ctx) -> Result<()> {
     let final_code = final_error.as_ref().map_or(0, error_code);
     manifest.finalize(final_code, sampler_healthy)?;
     manifest.write_atomic(&paths.manifest)?;
-    match final_error {
-        Some(error) => Err(error),
-        None => Ok(()),
+    final_error.map_or(Ok(()), Err)
+}
+
+fn policy_snapshot(config: &StressConfig, mode: &StressModeConfig) -> PolicySnapshot {
+    PolicySnapshot {
+        features: mode.features.clone(),
+        remove_env: config.environment.remove.clone(),
+        set_env: mode.set_env.clone(),
+        raw_path_env: mode.raw_path_env.clone(),
+        evidence: config.evidence.clone(),
     }
 }
 
-fn manifest_spec(
-    args: &RunArgs,
-    paths: &Paths,
-    config_file: &Path,
-    controller_sha: String,
-    subject_sha: String,
-    mode: Mode,
-    environment: &CampaignEnvironment,
-) -> ManifestSpec {
-    let no_block = args.diagnostics && args.no_block;
-    let dump_thread_backtrace = args.diagnostics && args.dump_thread_backtrace;
-    ManifestSpec {
-        mode,
-        config: ManifestConfig::stress(config_file.display().to_string(), args.job_timeout_minutes),
-        controller_sha,
-        subject_sha,
-        run: github_run_metadata(),
-        selection: Selection {
-            filter: args.filter.clone(),
-            count: args.count,
-            test_threads: args.test_threads.clone(),
-        },
-        features: Features {
-            flash: args.flash,
-            diagnostics: args.diagnostics,
-            no_block_requested: args.no_block,
-            no_block,
-            dump_thread_backtrace_requested: args.dump_thread_backtrace,
-            dump_thread_backtrace,
-        },
-        logging: Logging {
-            rust_backtrace: env_value(environment, "RUST_BACKTRACE"),
-            rust_log: env_value(environment, "RUST_LOG"),
-            flash_sync_trace: environment.value("KITHARA_FLASH_SYNC_TRACE").is_some(),
-            flash_dump_thread_backtrace: environment.value("KITHARA_FLASH_SYNC_BT").is_some(),
-            no_block_mode: environment
-                .value("KITHARA_NO_BLOCK")
-                .unwrap_or("off")
-                .to_owned(),
-            no_block_budget_ms: environment
-                .value("KITHARA_NO_BLOCK_BUDGET_MS")
-                .and_then(|value| value.parse().ok()),
-            no_block_log: no_block.then(|| paths.no_block.display().to_string()),
-            hang_dump_dir: paths.hang.display().to_string(),
-            hang_prekill_secs: environment
-                .value("KITHARA_HANG_PREKILL_SECS")
-                .and_then(|value| value.parse().ok()),
-            nextest_status_level: env_value(environment, "NEXTEST_STATUS_LEVEL"),
-            nextest_final_status_level: env_value(environment, "NEXTEST_FINAL_STATUS_LEVEL"),
-            nextest_show_progress: env_value(environment, "NEXTEST_SHOW_PROGRESS"),
-        },
-    }
-}
-
-fn github_run_metadata() -> RunMetadata {
-    RunMetadata {
-        repository: optional_env("GITHUB_REPOSITORY"),
-        workflow: optional_env("GITHUB_WORKFLOW"),
-        job: optional_env("GITHUB_JOB"),
-        event: optional_env("GITHUB_EVENT_NAME"),
-        run_id: optional_env("GITHUB_RUN_ID"),
-        run_attempt: optional_env("GITHUB_RUN_ATTEMPT"),
-    }
-}
-
-fn render_raw_report(paths: &Paths, count: usize, no_block: bool) -> Result<()> {
+fn render_raw_report(paths: &Paths, count: usize, config: &StressConfig) -> Result<()> {
     let args = StressReportArgs::new(
         paths.junit.clone(),
         paths.inventory.clone(),
         paths.report.clone(),
         count,
     )
+    .with_evidence(config.evidence.clone())
     .with_pressure(paths.pressure.clone())
-    .with_optional_hang(paths.hang.is_dir().then(|| paths.hang.clone()))
-    .with_optional_no_block(no_block.then(|| paths.no_block.clone()));
+    .with_optional_envelopes(
+        paths
+            .envelopes
+            .as_ref()
+            .filter(|path| path.is_dir())
+            .cloned(),
+    )
+    .with_optional_lines(paths.lines.clone());
     stress_report::run(&args)
 }
 
-fn run_report(args: &ReportArgs) -> Result<()> {
+fn run_report(args: &ReportArgs, ctx: &Ctx) -> Result<()> {
+    let config = &ctx.config.stress;
+    ensure!(config.is_configured(), "stress campaign is not configured");
+    let mode_name = args
+        .mode
+        .clone()
+        .unwrap_or_else(|| config.default_mode.clone());
+    let mode = config.mode(&mode_name)?;
+    let filter = args
+        .filter
+        .clone()
+        .unwrap_or_else(|| config.default_filter.clone());
+    let count = args.count.unwrap_or(config.default_count);
+    validate_count(count, config.max_count)?;
+    let runner = configured_lane(&ctx.config, &config.lane, &config.backend, &mode.features)?;
     let raw = absolute_from_current(&args.raw)?;
-    let paths = Paths::new(raw);
-    let output = absolute_from_current(&args.output)?;
+    let paths = Paths::new(raw, &config.artifacts);
+    let output = absolute_from(
+        &ctx.root,
+        args.output
+            .as_deref()
+            .unwrap_or_else(|| Path::new(&config.report_output)),
+    );
     ensure_report_outside_raw(&paths.raw, &output)?;
     let report_args = StressReportArgs::new(
         paths.junit.clone(),
         paths.inventory.clone(),
         output.clone(),
-        args.expected_count,
+        count,
     )
     .with_allow_missing(true)
+    .with_evidence(config.evidence.clone())
     .with_pressure(paths.pressure.clone())
-    .with_optional_hang(paths.hang.is_dir().then(|| paths.hang.clone()))
-    .with_optional_no_block(
-        (args.expected_mode == Mode::Diagnostic && args.expected_no_block)
-            .then(|| paths.no_block.clone()),
-    );
+    .with_optional_envelopes(
+        paths
+            .envelopes
+            .as_ref()
+            .filter(|path| path.is_dir())
+            .cloned(),
+    )
+    .with_optional_lines(paths.lines.clone());
     let evidence = stress_report::run(&report_args);
-    let (provenance, details) = verify_manifest(args, &paths.manifest);
+    let expectation = ReportExpectation {
+        config,
+        mode_name: &mode_name,
+        mode,
+        filter: &filter,
+        count,
+        runner,
+    };
+    let (provenance, details) = verify_manifest(args, &expectation, &paths.manifest);
     append_provenance(&output, &provenance, &details)?;
     choose_failure(evidence, provenance, Ok(()), Ok(())).map_or(Ok(()), Err)
 }
 
-fn verify_manifest(args: &ReportArgs, path: &Path) -> (Result<()>, Vec<String>) {
+fn verify_manifest(
+    args: &ReportArgs,
+    expected: &ReportExpectation<'_>,
+    path: &Path,
+) -> (Result<()>, Vec<String>) {
     let manifest = match Manifest::read(path) {
         Ok(manifest) => manifest,
         Err(error) => {
@@ -381,14 +363,17 @@ fn verify_manifest(args: &ReportArgs, path: &Path) -> (Result<()>, Vec<String>) 
     let expected = ExpectedProvenance {
         controller_sha: args.expected_controller_sha.clone(),
         subject_sha: args.expected_subject_sha.clone(),
-        filter: args.expected_filter.clone(),
-        count: args.expected_count,
-        test_threads: args.expected_test_threads.clone(),
-        mode: args.expected_mode,
-        flash: args.expected_flash,
-        no_block_requested: args.expected_no_block,
-        dump_thread_backtrace_requested: args.expected_dump_thread_backtrace,
-        workflow_job_timeout_minutes: args.expected_job_timeout_minutes,
+        filter: expected.filter.to_owned(),
+        count: expected.count,
+        test_threads: expected.config.test_threads.clone(),
+        mode: expected.mode_name.to_owned(),
+        config: ManifestConfig::new(
+            expected.config.nextest_profile.clone(),
+            expected.config.nextest_config.clone(),
+            expected.config.workflow_job_timeout_minutes,
+        ),
+        runner: expected.runner.clone(),
+        policy: policy_snapshot(expected.config, expected.mode),
         execute_result: args.execute_result,
         sampler_healthy: true,
     };
@@ -443,7 +428,7 @@ fn invalidate_result(markdown: &mut String) {
     markdown.push_str("\n- Result: **INVALID PROVENANCE**\n");
 }
 
-fn prepare_raw_directory(paths: &Paths, no_block: bool) -> Result<()> {
+fn prepare_raw_directory(paths: &Paths) -> Result<()> {
     ensure!(
         !paths
             .raw
@@ -452,14 +437,17 @@ fn prepare_raw_directory(paths: &Paths, no_block: bool) -> Result<()> {
         "stress output already exists: {}; choose a fresh directory",
         paths.raw.display()
     );
-    fs::create_dir_all(&paths.hang)
-        .with_context(|| format!("create stress output {}", paths.hang.display()))?;
+    fs::create_dir_all(&paths.raw)
+        .with_context(|| format!("create stress output {}", paths.raw.display()))?;
+    if let Some(envelopes) = &paths.envelopes {
+        fs::create_dir_all(envelopes)
+            .with_context(|| format!("create evidence directory {}", envelopes.display()))?;
+    }
     fs::File::create(&paths.log)
         .with_context(|| format!("create stress command log {}", paths.log.display()))?;
-    if no_block {
-        fs::File::create(&paths.no_block).with_context(|| {
-            format!("create no-block evidence sink {}", paths.no_block.display())
-        })?;
+    if let Some(lines) = &paths.lines {
+        fs::File::create(lines)
+            .with_context(|| format!("create line evidence sink {}", lines.display()))?;
     }
     Ok(())
 }
@@ -653,16 +641,14 @@ fn absolute_existing_file(root: &Path, path: &Path, label: &str) -> Result<PathB
     Ok(path)
 }
 
-fn env_value(environment: &CampaignEnvironment, key: &str) -> String {
-    environment.value(key).unwrap_or_default().to_owned()
-}
-
-fn optional_env(key: &str) -> Option<String> {
-    std::env::var(key).ok().filter(|value| !value.is_empty())
-}
-
 fn valid_sha(value: &str) -> bool {
     value.len() == 40 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+fn validate_count(count: usize, max: usize) -> Result<()> {
+    ensure!(count > 0, "stress count must be greater than zero");
+    ensure!(count <= max, "stress count must not exceed {max}");
+    Ok(())
 }
 
 fn markdown_cell(value: &str) -> String {

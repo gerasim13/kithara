@@ -16,36 +16,27 @@ const DOWNLOAD_ARTIFACT: &str =
 const INSTALL_ACTION: &str = "taiki-e/install-action@b20dedce73af6905cdc30d6611090c9b67557c8d";
 const UPLOAD_ARTIFACT: &str = "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a";
 const STRESS_RAW_DIR: &str = "${{ runner.temp }}/kithara-stress/raw";
-const STRESS_MAX_DECLARED_TIMEOUT_SECS: u64 = 600;
-const STRESS_PREKILL_SECS: &str = "630";
-const STRESS_OUTER_SIGTERM_SECS: u64 = 660;
-const STRESS_EXECUTE_COMMAND: &str = r#"just ci stress \
-  --subject-root "$GITHUB_WORKSPACE/subject" \
-  --output "$RUNNER_TEMP/kithara-stress/raw" \
-  --filter "$FILTER" \
-  --count "$COUNT" \
-  --test-threads "$TEST_THREADS" \
-  --flash "$FLASH" \
-  --diagnostics "$DIAGNOSTICS" \
-  --no-block "$NO_BLOCK" \
-  --dump-thread-backtrace "$DUMP_THREAD_BACKTRACE" \
-  --expected-controller-sha "$CONTROLLER_SHA" \
-  --expected-subject-sha "$SUBJECT_SHA" \
-  --job-timeout-minutes 1380"#;
-const STRESS_REPORT_COMMAND: &str = r#"just ci stress-report \
-  --raw "$GITHUB_WORKSPACE/raw" \
-  --output "$GITHUB_WORKSPACE/target/stress-report.md" \
-  --expected-controller-sha "$CONTROLLER_SHA" \
-  --expected-subject-sha "$SUBJECT_SHA" \
-  --expected-filter "$FILTER" \
-  --expected-count "$COUNT" \
-  --expected-test-threads "$TEST_THREADS" \
-  --expected-mode "$MODE" \
-  --expected-flash "$FLASH" \
-  --expected-no-block "$NO_BLOCK" \
-  --expected-dump-thread-backtrace "$DUMP_THREAD_BACKTRACE" \
-  --expected-job-timeout-minutes 1380 \
-  --execute-result "$EXECUTE_RESULT""#;
+const STRESS_EXECUTE_COMMAND: &str = r#"args=(
+  --subject-root "$GITHUB_WORKSPACE/subject"
+  --output "$RUNNER_TEMP/kithara-stress/raw"
+  --expected-controller-sha "$CONTROLLER_SHA"
+  --expected-subject-sha "$SUBJECT_SHA"
+)
+[[ -z "$FILTER" ]] || args+=(--filter "$FILTER")
+[[ -z "$COUNT" ]] || args+=(--count "$COUNT")
+[[ -z "$MODE" ]] || args+=(--mode "$MODE")
+just ci stress "${args[@]}""#;
+const STRESS_REPORT_COMMAND: &str = r#"args=(
+  --raw "$GITHUB_WORKSPACE/raw"
+  --output "$GITHUB_WORKSPACE/target/stress-report.md"
+  --expected-controller-sha "$CONTROLLER_SHA"
+  --expected-subject-sha "$SUBJECT_SHA"
+  --execute-result "$EXECUTE_RESULT"
+)
+[[ -z "$FILTER" ]] || args+=(--filter "$FILTER")
+[[ -z "$COUNT" ]] || args+=(--count "$COUNT")
+[[ -z "$MODE" ]] || args+=(--mode "$MODE")
+just ci stress-report "${args[@]}""#;
 
 const AUTHORIZATION_SCRIPT: &str = r#"python3 - <<'PY'
 import json
@@ -97,6 +88,29 @@ fn github_workflow_text(name: &str) -> String {
         .parent()
         .expect("xtask has a workspace root");
     fs::read_to_string(root.join(".github/workflows").join(name)).expect("workflow is readable")
+}
+
+fn configured_stress_prekill_secs(root: &Path) -> u64 {
+    let config: toml::Value = toml::from_str(
+        &fs::read_to_string(root.join(".config/xtask.toml")).expect("xtask config is readable"),
+    )
+    .expect("xtask config is valid TOML");
+    let modes = config["stress"]["modes"]
+        .as_table()
+        .expect("stress modes are configured");
+    let values = modes
+        .values()
+        .filter_map(|mode| mode.get("set_env"))
+        .filter_map(toml::Value::as_table)
+        .filter_map(|environment| environment.get("KITHARA_HANG_PREKILL_SECS"))
+        .filter_map(toml::Value::as_str)
+        .map(|value| value.parse::<u64>().expect("pre-kill value is seconds"))
+        .collect::<BTreeSet<_>>();
+    assert_eq!(values.len(), 1, "stress modes disagree on pre-kill timing");
+    values
+        .into_iter()
+        .next()
+        .expect("pre-kill timing is configured")
 }
 
 fn mapping_field<'a>(mapping: &'a Mapping, name: &str) -> &'a Value {
@@ -420,6 +434,20 @@ fn stress_workflow_is_a_thin_fork_adapter() {
         "cargo run",
         "stress-run",
         "just tooling",
+        "--test-threads",
+        "--flash",
+        "--diagnostics",
+        "--no-block",
+        "--dump-thread-backtrace",
+        "--job-timeout-minutes",
+        "--expected-filter",
+        "--expected-count",
+        "--expected-mode",
+        "--expected-test-threads",
+        "--expected-flash",
+        "--expected-no-block",
+        "--expected-dump-thread-backtrace",
+        "--expected-job-timeout-minutes",
     ] {
         assert!(
             !text.contains(forbidden),
@@ -467,17 +495,17 @@ fn stress_workflow_is_a_thin_fork_adapter() {
                 .keys()
                 .map(|name| name.as_str().expect("input name is a string"))
                 .collect::<BTreeSet<_>>(),
-            BTreeSet::from([
-                "count",
-                "diagnostics",
-                "dump_thread_backtrace",
-                "filter",
-                "flash",
-                "no_block",
-                "revision",
-                "test_threads",
-            ])
+            BTreeSet::from(["count", "filter", "mode", "revision",])
         );
+        for name in ["count", "filter", "mode", "revision"] {
+            let input = mapping_field(inputs, name)
+                .as_mapping()
+                .unwrap_or_else(|| panic!("{trigger} input `{name}` is a mapping"));
+            assert!(
+                !input.contains_key("default"),
+                "{trigger} input `{name}` must not own a workflow-local default"
+            );
+        }
     }
 
     let jobs = workflow_jobs(&workflow);
@@ -501,20 +529,16 @@ fn stress_workflow_is_a_thin_fork_adapter() {
     let authorization_env = mapping_field(authorization, "env")
         .as_mapping()
         .expect("stress authorization environment is a mapping");
+    assert_eq!(authorization_env.len(), 9);
     for (name, expected) in [
         ("ACTOR", "${{ github.actor }}"),
-        (
-            "COUNT",
-            "${{ inputs.count || vars.KITHARA_STRESS_COUNT || '50' }}",
-        ),
+        ("COUNT", "${{ inputs.count || vars.KITHARA_STRESS_COUNT }}"),
         ("ENABLED", "${{ vars.KITHARA_STRESS_ENABLED }}"),
-        ("FILTER", "${{ inputs.filter || 'all()' }}"),
         ("IS_FORK", "${{ github.event.repository.fork }}"),
         ("MAX_COUNT", "${{ vars.KITHARA_STRESS_MAX_COUNT }}"),
         ("OWNER", "${{ github.repository_owner }}"),
         ("REVISION", "${{ inputs.revision || github.sha }}"),
         ("RUNNER_LABELS", "${{ vars.KITHARA_STRESS_RUNNER_LABELS }}"),
-        ("TEST_THREADS", "${{ inputs.test_threads || 'num-cpus' }}"),
         ("TRIGGERING_ACTOR", "${{ github.triggering_actor }}"),
     ] {
         assert_eq!(
@@ -531,6 +555,8 @@ fn stress_workflow_is_a_thin_fork_adapter() {
         "[[ \"$ACTOR\" == \"$OWNER\" ]]",
         "[[ \"$TRIGGERING_ACTOR\" == \"$OWNER\" ]]",
         "[[ \"$REVISION\" =~ ^[0-9a-fA-F]{40}$ ]]",
+        "[[ \"$COUNT\" =~ ^[1-9][0-9]*$ ]]",
+        "[[ \"$MAX_COUNT\" =~ ^[1-9][0-9]*$ ]]",
         "10#$COUNT <= 10#$MAX_COUNT",
         "\"self-hosted\", \"linux\", \"x64\", \"kithara\"",
         "<<< \"$RUNNER_LABELS\"",
@@ -565,9 +591,20 @@ fn stress_workflow_is_a_thin_fork_adapter() {
         mapping_field(execute, "runs-on").as_str(),
         Some("${{ fromJSON(vars.KITHARA_STRESS_RUNNER_LABELS) }}")
     );
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("xtask has a workspace root");
+    let config: toml::Value = toml::from_str(
+        &fs::read_to_string(root.join(".config/xtask.toml")).expect("xtask config is readable"),
+    )
+    .expect("xtask config is valid TOML");
+    let configured_timeout = config["stress"]["workflow_job_timeout_minutes"]
+        .as_integer()
+        .and_then(|value| u64::try_from(value).ok())
+        .expect("stress job timeout is configured");
     assert_eq!(
         mapping_field(execute, "timeout-minutes").as_u64(),
-        Some(1380)
+        Some(configured_timeout)
     );
     let execute_outputs = mapping_field(execute, "outputs")
         .as_mapping()
@@ -619,25 +656,13 @@ fn stress_workflow_is_a_thin_fork_adapter() {
     let campaign_env = mapping_field(campaign, "env")
         .as_mapping()
         .expect("campaign environment is a mapping");
+    assert_eq!(campaign_env.len(), 5);
     for (name, expected) in [
         ("CONTROLLER_SHA", "${{ job.workflow_sha }}"),
-        (
-            "COUNT",
-            "${{ inputs.count || vars.KITHARA_STRESS_COUNT || '50' }}",
-        ),
-        (
-            "DIAGNOSTICS",
-            "${{ inputs.diagnostics && 'true' || 'false' }}",
-        ),
-        (
-            "DUMP_THREAD_BACKTRACE",
-            "${{ inputs.dump_thread_backtrace && 'true' || 'false' }}",
-        ),
-        ("FILTER", "${{ inputs.filter || 'all()' }}"),
-        ("FLASH", "${{ inputs.flash && 'true' || 'false' }}"),
-        ("NO_BLOCK", "${{ inputs.no_block && 'true' || 'false' }}"),
+        ("COUNT", "${{ inputs.count || vars.KITHARA_STRESS_COUNT }}"),
+        ("FILTER", "${{ inputs.filter }}"),
+        ("MODE", "${{ inputs.mode }}"),
         ("SUBJECT_SHA", "${{ inputs.revision || github.sha }}"),
-        ("TEST_THREADS", "${{ inputs.test_threads || 'num-cpus' }}"),
     ] {
         assert_eq!(mapping_field(campaign_env, name).as_str(), Some(expected));
     }
@@ -735,26 +760,14 @@ fn stress_workflow_is_a_thin_fork_adapter() {
     let verifier_env = mapping_field(verifier, "env")
         .as_mapping()
         .expect("verifier environment is a mapping");
+    assert_eq!(verifier_env.len(), 6);
     for (name, expected) in [
         ("CONTROLLER_SHA", "${{ job.workflow_sha }}"),
-        (
-            "COUNT",
-            "${{ inputs.count || vars.KITHARA_STRESS_COUNT || '50' }}",
-        ),
+        ("COUNT", "${{ inputs.count || vars.KITHARA_STRESS_COUNT }}"),
         ("EXECUTE_RESULT", "${{ needs.execute.result }}"),
-        ("FILTER", "${{ inputs.filter || 'all()' }}"),
-        ("FLASH", "${{ inputs.flash && 'true' || 'false' }}"),
-        (
-            "MODE",
-            "${{ inputs.diagnostics && 'diagnostic' || 'reproduction' }}",
-        ),
-        ("NO_BLOCK", "${{ inputs.no_block && 'true' || 'false' }}"),
-        (
-            "DUMP_THREAD_BACKTRACE",
-            "${{ inputs.dump_thread_backtrace && 'true' || 'false' }}",
-        ),
+        ("FILTER", "${{ inputs.filter }}"),
+        ("MODE", "${{ inputs.mode }}"),
         ("SUBJECT_SHA", "${{ inputs.revision || github.sha }}"),
-        ("TEST_THREADS", "${{ inputs.test_threads || 'num-cpus' }}"),
     ] {
         assert_eq!(mapping_field(verifier_env, name).as_str(), Some(expected));
     }
@@ -842,11 +855,7 @@ fn stress_profile_records_failures_with_a_dump_aware_outer_backstop() {
         .and_then(|count| u64::try_from(count).ok())
         .expect("stress termination count is positive");
     let outer = period * terminate_after;
-    let prekill = STRESS_PREKILL_SECS
-        .parse::<u64>()
-        .expect("stress pre-kill deadline is seconds");
-    assert_eq!(outer, STRESS_OUTER_SIGTERM_SECS);
-    assert!(prekill >= STRESS_MAX_DECLARED_TIMEOUT_SECS + 30);
+    let prekill = configured_stress_prekill_secs(root);
     assert!(outer >= prekill + 30);
 
     let junit = stress["junit"].as_table().expect("stress JUnit is a table");
@@ -860,6 +869,7 @@ fn stress_backstop_covers_every_kithara_test_timeout() {
         .parent()
         .expect("xtask has a workspace root");
     let mut observed_max = 0_u64;
+    let prekill = configured_stress_prekill_secs(root);
     let mut excessive = Vec::new();
     let mut unsupported = Vec::new();
     let mut observed = 0_usize;
@@ -903,7 +913,7 @@ fn stress_backstop_covers_every_kithara_test_timeout() {
                     continue;
                 };
                 observed_max = observed_max.max(seconds);
-                if seconds > STRESS_MAX_DECLARED_TIMEOUT_SECS {
+                if seconds.saturating_add(30) > prekill {
                     excessive.push(format!("{}: {seconds}s", path.display()));
                 }
             }
@@ -917,9 +927,9 @@ fn stress_backstop_covers_every_kithara_test_timeout() {
     );
     assert!(
         excessive.is_empty(),
-        "declared test timeouts exceed the stress evidence model: {excessive:?}"
+        "declared test timeouts leave less than 30s before the configured pre-kill snapshot: {excessive:?}"
     );
-    assert_eq!(observed_max, STRESS_MAX_DECLARED_TIMEOUT_SECS);
+    assert!(prekill >= observed_max + 30);
 }
 
 #[derive(Default)]

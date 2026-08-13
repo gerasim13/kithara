@@ -13,7 +13,7 @@ use std::{
 use anyhow::{Context, Error, Result, anyhow, ensure};
 use serde::Serialize;
 
-pub(crate) const SCHEMA: &str = "kithara.pressure.v2";
+pub(crate) const SCHEMA: &str = "devtools.pressure.v2";
 
 struct Consts;
 
@@ -156,7 +156,7 @@ impl Sampler {
         let worker_path = path.clone();
         let worker = match thread::Builder::new()
             .name("stress-pressure".to_owned())
-            .spawn(move || worker_entry(&worker_path, receiver, start_timestamp_ms, &context))
+            .spawn(move || worker_entry(&worker_path, &receiver, start_timestamp_ms, &context))
         {
             Ok(worker) => worker,
             Err(spawn_error) => {
@@ -235,7 +235,7 @@ fn fail_start<T>(path: &Path, error: Error) -> Result<T> {
 
 fn worker_entry(
     path: &Path,
-    receiver: Receiver<()>,
+    receiver: &Receiver<()>,
     start_timestamp_ms: u64,
     context: &SampleContext,
 ) -> WorkerOutcome {
@@ -254,7 +254,7 @@ fn worker_entry(
     };
     let mut writer = BufWriter::new(file);
     let run = panic::catch_unwind(AssertUnwindSafe(|| {
-        worker_loop(&mut writer, &receiver, &mut last_timestamp_ms, context)
+        worker_loop(&mut writer, receiver, &mut last_timestamp_ms, context)
     }));
     let mut failure = match run {
         Ok(Ok(())) => None,
@@ -459,7 +459,7 @@ fn needs_record_delimiter(path: &Path) -> Result<bool> {
     let mut final_byte = [0_u8; 1];
     file.read_exact(&mut final_byte)
         .with_context(|| format!("read pressure artifact delimiter {}", path.display()))?;
-    Ok(final_byte != [b'\n'])
+    Ok(final_byte != *b"\n")
 }
 
 fn write_record(writer: &mut BufWriter<File>, record: &impl Serialize) -> Result<()> {

@@ -15,6 +15,7 @@ const MAX_RECORDS: usize = 250_000;
 pub(super) fn append(
     out: &mut String,
     path: &Path,
+    marker: Option<&str>,
     outcomes: &BTreeMap<AttemptKey, AttemptOutcome>,
     run_id: Option<&str>,
     dossiers: &mut BTreeMap<AttemptKey, AttemptDossier>,
@@ -24,7 +25,7 @@ pub(super) fn append(
     let mut invalid = 0usize;
     let mut records = 0usize;
     let read = for_each_bounded_line(path, MAX_LINE_BYTES, |line| {
-        if !line.contains("[no_block]") {
+        if !marker.is_some_and(|marker| line.contains(marker)) {
             return ControlFlow::Continue(());
         }
         if records == MAX_RECORDS {
@@ -45,7 +46,7 @@ pub(super) fn append(
         if outcome == AttemptOutcome::Failed
             && let Some(dossier) = dossiers.get_mut(&attempt.key)
         {
-            dossier.no_block.insert(signature.clone());
+            dossier.lines.insert(signature.clone());
         }
         add_signature(
             &mut clusters,
@@ -60,21 +61,21 @@ pub(super) fn append(
     let Ok(read) = read else {
         let _ = writeln!(
             out,
-            "\n## No-block cause signatures\n\nThe requested no-block artifact could not be read."
+            "\n## Line-evidence cause signatures\n\nThe requested line artifact could not be read."
         );
         return false;
     };
 
     render_clusters(
         out,
-        "No-block cause signatures",
+        "Line-evidence cause signatures",
         &clusters,
-        "A repeated CPU-spin poll is strong runtime evidence. A low-CPU blocked-wait signature remains a candidate until a Flash edge or same-SHA low-pressure A/B confirms it. Durations are normalized so scheduling jitter does not split a cluster.",
+        "A repeated CPU-spin poll is strong runtime evidence. A low-CPU blocked-wait signature remains a candidate until a wait-graph edge or same-revision low-pressure A/B confirms it. Durations are normalized so scheduling jitter does not split a cluster.",
     );
     if foreign > 0 {
         let _ = writeln!(
             out,
-            "\nIgnored `{foreign}` no-block records from a different nextest run."
+            "\nIgnored `{foreign}` line records from a different nextest run."
         );
     }
     let unreadable = read
@@ -84,13 +85,13 @@ pub(super) fn append(
     if unreadable > 0 {
         let _ = writeln!(
             out,
-            "\nEvidence problem: `{unreadable}` no-block records were malformed, oversized, invalid UTF-8, or carried invalid nextest metadata."
+            "\nEvidence problem: `{unreadable}` line records were malformed, oversized, invalid UTF-8, or carried invalid nextest metadata."
         );
     }
     if read.stopped_early {
         let _ = writeln!(
             out,
-            "\nEvidence problem: no-block parsing stopped at the bounded limit of `{MAX_RECORDS}` records."
+            "\nEvidence problem: line parsing stopped at the bounded limit of `{MAX_RECORDS}` records."
         );
     }
     unreadable == 0 && !read.stopped_early
@@ -152,6 +153,7 @@ mod tests {
         assert!(append(
             &mut markdown,
             &log,
+            Some("[no_block]"),
             &outcomes,
             Some("run"),
             &mut dossiers,
@@ -163,11 +165,8 @@ mod tests {
             "{markdown}"
         );
         assert!(markdown.contains("opaque/retry#2"), "{markdown}");
-        assert!(
-            markdown.contains("Ignored `2` no-block records"),
-            "{markdown}"
-        );
-        assert_eq!(dossiers.values().next().expect("dossier").no_block.len(), 1);
+        assert!(markdown.contains("Ignored `2` line records"), "{markdown}");
+        assert_eq!(dossiers.values().next().expect("dossier").lines.len(), 1);
     }
 
     #[test]
@@ -184,6 +183,7 @@ mod tests {
         assert!(!append(
             &mut markdown,
             &log,
+            Some("[no_block]"),
             &BTreeMap::new(),
             Some("run"),
             &mut BTreeMap::new(),

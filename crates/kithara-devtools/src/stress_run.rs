@@ -13,16 +13,9 @@ use crate::{
     stress_report::{
         MAX_INVENTORY_BYTES, read_bounded_utf8, validate_inventory, validate_primary_evidence,
     },
-    test::{LaneToggles, NextestAction, nextest_lane_command_for},
+    test::{ConfiguredLane, NextestAction, nextest_configured_lane_command},
     verdict::ChildFailure,
 };
-
-struct Consts;
-
-impl Consts {
-    const MAX_STRESS_COUNT: usize = 100;
-    const MAX_TEST_THREADS: usize = 256;
-}
 
 #[derive(Debug)]
 pub(crate) struct StressRunSpec {
@@ -32,8 +25,10 @@ pub(crate) struct StressRunSpec {
     pub(crate) filter: String,
     pub(crate) count: usize,
     pub(crate) test_threads: String,
-    pub(crate) flash: bool,
-    pub(crate) no_block: bool,
+    pub(crate) profile: String,
+    pub(crate) max_count: usize,
+    pub(crate) max_test_threads: usize,
+    pub(crate) runner: ConfiguredLane,
 }
 
 /// Lists the exact selection, validates it, then runs every selected test.
@@ -45,7 +40,6 @@ pub(crate) struct StressRunSpec {
 /// cannot complete the stress run, or any recorded attempt failed.
 pub(crate) fn run(
     args: &StressRunSpec,
-    config: &crate::common::project::ProjectConfig,
     subject_root: &Path,
     log_path: &Path,
     configure: &dyn Fn(&mut Command),
@@ -55,15 +49,9 @@ pub(crate) fn run(
         .config_file
         .to_str()
         .context("nextest config path is not UTF-8")?;
-    let toggles = LaneToggles {
-        flash: args.flash,
-        no_block: args.no_block,
-    };
-    let backend = &config.test.default_backend;
-
     let inventory_args = vec![
         "--profile".to_owned(),
-        "stress".to_owned(),
+        args.profile.clone(),
         "--config-file".to_owned(),
         config_file.to_owned(),
         "-E".to_owned(),
@@ -71,13 +59,8 @@ pub(crate) fn run(
         "--message-format".to_owned(),
         "json".to_owned(),
     ];
-    let (_, mut inventory) = nextest_lane_command_for(
-        config,
-        toggles,
-        backend,
-        &inventory_args,
-        NextestAction::List,
-    )?;
+    let (_, mut inventory) =
+        nextest_configured_lane_command(&args.runner, &inventory_args, NextestAction::List)?;
     let output = create_inventory(&args.inventory)?;
     inventory
         .current_dir(subject_root)
@@ -95,7 +78,7 @@ pub(crate) fn run(
 
     let run_args = vec![
         "--profile".to_owned(),
-        "stress".to_owned(),
+        args.profile.clone(),
         "--config-file".to_owned(),
         config_file.to_owned(),
         "-E".to_owned(),
@@ -106,7 +89,7 @@ pub(crate) fn run(
         args.test_threads.clone(),
     ];
     let (_, mut run) =
-        nextest_lane_command_for(config, toggles, backend, &run_args, NextestAction::Run)?;
+        nextest_configured_lane_command(&args.runner, &run_args, NextestAction::Run)?;
     run.current_dir(subject_root);
     configure(&mut run);
     run_child(&mut run, log_path)?;
@@ -114,9 +97,11 @@ pub(crate) fn run(
 }
 
 pub(crate) fn validate(args: &StressRunSpec) -> Result<()> {
-    validate_stress_count(args.count)?;
+    validate_stress_count(args.count, args.max_count)?;
     ensure!(!args.filter.trim().is_empty(), "stress filter is empty");
-    validate_test_threads(&args.test_threads)?;
+    ensure!(!args.profile.trim().is_empty(), "stress profile is empty");
+    args.runner.validate()?;
+    validate_test_threads(&args.test_threads, args.max_test_threads)?;
     ensure!(
         args.junit.is_absolute(),
         "stress JUnit path must be absolute: {}",
@@ -138,7 +123,8 @@ pub(crate) fn validate(args: &StressRunSpec) -> Result<()> {
     Ok(())
 }
 
-fn validate_test_threads(value: &str) -> Result<()> {
+fn validate_test_threads(value: &str, max: usize) -> Result<()> {
+    ensure!(max > 0, "maximum test-threads must be greater than zero");
     if value == "num-cpus" {
         return Ok(());
     }
@@ -146,21 +132,14 @@ fn validate_test_threads(value: &str) -> Result<()> {
         .parse::<usize>()
         .with_context(|| format!("invalid test-threads value `{value}`"))?;
     ensure!(count > 0, "test-threads must be greater than zero");
-    ensure!(
-        count <= Consts::MAX_TEST_THREADS,
-        "test-threads must not exceed {}",
-        Consts::MAX_TEST_THREADS,
-    );
+    ensure!(count <= max, "test-threads must not exceed {max}",);
     Ok(())
 }
 
-fn validate_stress_count(count: usize) -> Result<()> {
+fn validate_stress_count(count: usize, max: usize) -> Result<()> {
+    ensure!(max > 0, "maximum stress count must be greater than zero");
     ensure!(count > 0, "stress count must be greater than zero");
-    ensure!(
-        count <= Consts::MAX_STRESS_COUNT,
-        "stress count must not exceed {}",
-        Consts::MAX_STRESS_COUNT,
-    );
+    ensure!(count <= max, "stress count must not exceed {max}",);
     Ok(())
 }
 
@@ -229,24 +208,24 @@ mod tests {
     #[test]
     fn test_threads_accepts_nextest_concurrency_values() {
         for value in ["num-cpus", "1", "32"] {
-            validate_test_threads(value).expect("valid test thread count");
+            validate_test_threads(value, 256).expect("valid test thread count");
         }
     }
 
     #[test]
     fn test_threads_rejects_invalid_or_unsupported_values() {
         for value in ["", "0", "257", "all"] {
-            assert!(validate_test_threads(value).is_err(), "{value}");
+            assert!(validate_test_threads(value, 256).is_err(), "{value}");
         }
     }
 
     #[test]
     fn stress_count_is_limited_to_supported_campaign_sizes() {
         for count in [1, 50, 100] {
-            validate_stress_count(count).expect("valid stress count");
+            validate_stress_count(count, 100).expect("valid stress count");
         }
         for count in [0, 101, usize::MAX] {
-            assert!(validate_stress_count(count).is_err(), "{count}");
+            assert!(validate_stress_count(count, 100).is_err(), "{count}");
         }
     }
 
