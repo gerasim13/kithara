@@ -44,6 +44,7 @@ impl ColdScenario {
     flash(false),
     timeout(Duration::from_secs(180))
 )]
+#[ignore = "manual cold-analysis Cochlea acceptance; run through the sync-acceptance workflow"]
 async fn one_sync_request_survives_cold_analysis_and_converges_when_the_map_arrives() {
     let mut trace = AppTrace::new_cold_analysis().await;
     let warm_pcm = trace.warm_and_reset().await;

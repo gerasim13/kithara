@@ -6,7 +6,8 @@ use std::{
 };
 
 use kithara::{
-    audio::{Audio, AudioBlockMut, AudioConfig, AudioEffect, DecodeResult, PcmSession},
+    audio::{Audio, AudioConfig, AudioEffect, DecodeResult, PcmSession},
+    decode::PcmChunk,
     platform::time::{self, Duration},
     stream::Stream,
 };
@@ -47,7 +48,15 @@ impl BurstLoadEffect {
 }
 
 impl AudioEffect for BurstLoadEffect {
-    fn process(&mut self, _block: AudioBlockMut<'_>) -> DecodeResult<()> {
+    fn flush(&mut self) -> Option<PcmChunk> {
+        None
+    }
+
+    fn held_source_frames(&self) -> u64 {
+        0
+    }
+
+    fn process(&mut self, chunk: PcmChunk) -> DecodeResult<Option<PcmChunk>> {
         self.blocks = self.blocks.saturating_add(1);
         if self.blocks.is_multiple_of(LOAD_INTERVAL_BLOCKS) {
             let _ = self.observed.try_send(());
@@ -56,7 +65,7 @@ impl AudioEffect for BurstLoadEffect {
                 std::hint::spin_loop();
             }
         }
-        Ok(())
+        Ok(Some(chunk))
     }
 
     fn reset(&mut self) {

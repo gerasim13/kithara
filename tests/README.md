@@ -130,6 +130,21 @@ just test run --lane=doc                               # doc tests only
 just test all                                          # both unit and doc tests
 ```
 
+### Manual SYNC audio acceptance
+
+The long-running SYNC/no-SYNC matrix is feature-gated out of the default
+workspace test graph. It renders the real player path, evaluates final PCM with
+Cochlea, and writes no audio unless an artifact directory is requested:
+
+```bash
+KITHARA_SYNC_ARTIFACT_DIR=/absolute/output just test sync-acceptance
+```
+
+To include the ignored machine-library rows, also set
+`KITHARA_SYNC_LIBRARY=/absolute/music/library`. The workflow runs these cases
+sequentially so several real decoders do not turn host contention into a test
+oracle.
+
 ## WASM Tests
 
 WASM tests run via `wasm-bindgen-test` in headless Chrome. The `wasm_test_runner` binary auto-starts `test_server` before delegating to `wasm-bindgen-test-runner`.

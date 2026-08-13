@@ -67,11 +67,12 @@ native typed oracles alongside Cochlea.
 - `tests/tests/kithara_queue/sync_library.rs`
 - `tests/tests/kithara_queue/sync_media.rs`
 - `tests/tests/kithara_queue/sync_rt.rs`
-- `tests/tests/suite_heavy.rs`
+- `tests/tests/suite_sync_acceptance.rs`
 - `tests/benches/sync_plan.rs`
 - `tests/Cargo.toml`
 - `tests/build.rs`
 - `.config/just/test.just`
+- `.config/xtask.toml`
 - `.github/workflows/rtsan.yml`
 
 ## Required Reads
@@ -93,8 +94,9 @@ native typed oracles alongside Cochlea.
 - Run the synthetic correctness cases before MP3 and local HLS cases.
 - Run the focused latency and plan benchmark probes separately; do not use a
   shared-CI wall-clock result as a hard correctness gate.
-- Run the complete local matrix only when the focused cases compile and the
-  production WIP is capable of reaching the public sync state.
+- Run the complete local matrix only through the feature-gated
+  `sync-acceptance` lane when the focused cases compile and the production WIP
+  is capable of reaching the public sync state.
 - Leave the full workspace/CI gate to the fork after the focused matrix is
   locally healthy, as requested.
 
@@ -152,14 +154,14 @@ native typed oracles alongside Cochlea.
 
 - Known risks: current production WIP contains unrelated source-test compile
   blockers; focused test execution may be blocked before a new acceptance case
-  runs. Local HLS and four-deck cases are intentionally heavy and belong in the
-  heavy/stress suite rather than every fast gate. Current public APIs do not yet
-  expose a SyncGroup snapshot or a streaming BeatMap trait, so the test layer
-  cannot manufacture private state to simulate them.
+  runs. Local HLS and four-deck cases are intentionally heavy and live in the
+  manual `sync-acceptance` suite rather than any default gate. Current public
+  APIs do not yet expose a SyncGroup snapshot or a streaming BeatMap trait, so
+  the test layer cannot manufacture private state to simulate them.
 - Non-goals: no production fix, public API addition, external Silvercomet
   network access, device-dependent assertion in the deterministic suite, lint
-  suppression, ignored test, giant 300-second nested-loop test, or weakening of
-  existing PCM/frame thresholds. Local music is not copied into Git or the
+  suppression, default-gate regression, giant nested-loop test, or weakening
+  of existing PCM/frame thresholds. Local music is not copied into Git or the
   fixture cache.
 
 ## Understanding Summary

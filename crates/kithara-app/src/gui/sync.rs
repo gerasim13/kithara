@@ -87,6 +87,7 @@ use self::phase::{circular_phase, circular_spread, phase_distance};
     flash(false),
     timeout(Duration::from_secs(180))
 )]
+#[ignore = "manual Cochlea acceptance; run through the sync-acceptance workflow"]
 async fn raw_sync_controls_adopt_one_grid_and_bind_the_actual_tracks() {
     let mut trace = AppTrace::new().await;
     let a_selected = trace

@@ -15,22 +15,6 @@ mod kithara_audio {
     mod alloc_free_hotpath;
 }
 
-#[cfg(not(target_arch = "wasm32"))]
-#[path = "kithara_queue/sync_behavioral_matrix.rs"]
-mod sync_behavioral_matrix;
-#[cfg(not(target_arch = "wasm32"))]
-#[path = "kithara_queue/sync_latency.rs"]
-mod sync_latency;
-#[cfg(not(target_arch = "wasm32"))]
-#[path = "kithara_queue/sync_library.rs"]
-mod sync_library;
-#[cfg(not(target_arch = "wasm32"))]
-#[path = "kithara_queue/sync_media.rs"]
-mod sync_media;
-#[cfg(not(target_arch = "wasm32"))]
-#[path = "kithara_queue/sync_rt.rs"]
-mod sync_rt;
-
 mod kithara_decode {
     #[cfg(not(target_arch = "wasm32"))]
     mod fixture_integration;

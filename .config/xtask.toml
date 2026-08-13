@@ -309,6 +309,25 @@ prefix_args = [
 default_features = ["integration-regressions"]
 default_flash = true
 
+# Long-running final-PCM acceptance contracts. This lane is feature-gated so
+# intentionally red SYNC rows and optional listening artifacts cannot affect
+# the default workspace gate.
+[test.lanes.sync-acceptance]
+program = "cargo"
+prefix_args = [
+  "nextest",
+  "run",
+  "-p",
+  "kithara-integration-tests",
+  "--cargo-profile",
+  "test-release",
+  "--test",
+  "suite_sync_acceptance",
+]
+default_features = ["sync-acceptance"]
+default_flash = true
+suffix_args = ["--test-threads=1"]
+
 # The harness (tests/tests/kithara_ffi_web/selenium.rs) reads
 # KITHARA_SELENIUM_BROWSER to pick a browser and defaults to chrome if unset.
 # Naming the browser in the lane itself, rather than leaving it to whatever

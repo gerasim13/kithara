@@ -48,6 +48,10 @@ e2e = []
 # known red does not turn the baseline into noise. A fixed regression test
 # moves to `suite_light.rs` and leaves this lane.
 integration-regressions = []
+# Manual Cochlea acceptance matrix. The suite contains intentionally red
+# contracts and long-running listening artifacts, so the default gate neither
+# builds nor runs it.
+sync-acceptance = []
 # Tests that reach a host this workspace does not own, and that a runner can
 # reach: the zvuk production CDN and silvercomet, both on the public internet.
 # The CDN is auth-gated, so the lane needs `KITHARA_DRM_PROD_*` in the build
@@ -272,6 +276,11 @@ path = "tests/suite_light.rs"
 [[test]]
 name = "suite_heavy"
 path = "tests/suite_heavy.rs"
+
+[[test]]
+name = "suite_sync_acceptance"
+path = "tests/suite_sync_acceptance.rs"
+required-features = ["sync-acceptance"]
 
 [[test]]
 name = "suite_stress"

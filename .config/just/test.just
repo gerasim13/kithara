@@ -108,6 +108,20 @@ fixture-cache ACTION="path":
 sync-analysis-fixtures:
     cargo run -p kithara-integration-tests --bin sync-analysis-fixtures --profile test-release -- write
 
+# Manual final-PCM acceptance workflow. The feature-gated integration binary
+# owns the matrix; the two crate-private GUI cases stay ignored in their owning
+# crate and are collected here.
+sync-acceptance:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [[ -n "${KITHARA_SYNC_LIBRARY:-}" ]]; then
+      just test run --lane=sync-acceptance --run-ignored=all
+    else
+      just test run --lane=sync-acceptance
+    fi
+    just test run -p kithara-app --run-ignored=only \
+      -E 'test(/gui::sync(::cold)?::/)'
+
 # All three lanes require a real output device.
 [positional-arguments]
 e2e-resamplers *ARGS:
@@ -224,7 +238,7 @@ miri *ARGS:
 # The sanitizer needs `-Zbuild-std`, which needs the `rust-src` component. The
 # repository pins a nightly and installs the component into that one; plain
 # `nightly` is whatever the host last downloaded and usually has no `rust-src`.
-_rtsan SUITE FILTER:
+_rtsan SUITE FILTER FEATURES="apple-fused-src":
     #!/usr/bin/env bash
     set -euo pipefail
     target="$(rustc -vV | sed -n 's/^host: //p')"
@@ -232,7 +246,7 @@ _rtsan SUITE FILTER:
     RUSTFLAGS="-Zsanitizer=realtime --cfg rtsan" \
     RUSTDOCFLAGS="-Zsanitizer=realtime --cfg rtsan" \
         cargo "+$toolchain" test -p kithara-integration-tests --test {{ SUITE }} \
-        --features apple-fused-src \
+        --features {{ FEATURES }} \
         --target "$target" -- --nocapture {{ FILTER }}
 
 rtsan-async FILTER="no_block":
@@ -254,4 +268,4 @@ rtsan-file FILTER="phase_continuity::file": (_rtsan "suite_stress" FILTER)
 
 rtsan-hls FILTER="phase_continuity::hls": (_rtsan "suite_stress" FILTER)
 
-rtsan-sync FILTER="sync_rt::bound_sync_render_is_rtsan_clean": (_rtsan "suite_heavy" FILTER)
+rtsan-sync FILTER="sync_rt::bound_sync_render_is_rtsan_clean": (_rtsan "suite_sync_acceptance" FILTER "apple-fused-src,sync-acceptance")
