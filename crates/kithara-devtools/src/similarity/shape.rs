@@ -167,7 +167,7 @@ impl ShapeArena {
         let argument_factor = if left_arguments.is_empty() && right_arguments.is_empty() {
             1.0
         } else {
-            0.45 + 0.55 * arguments.score
+            0.55f64.mul_add(arguments.score, 0.45)
         };
         let mut substitutions = substitution(left_name, right_name, &relation);
         substitutions.extend(arguments.substitutions);
@@ -368,7 +368,7 @@ impl ShapeArena {
         }
     }
 
-    pub(super) fn len(&self) -> usize {
+    pub(super) const fn len(&self) -> usize {
         self.shapes.len()
     }
 }

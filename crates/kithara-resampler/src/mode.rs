@@ -16,7 +16,7 @@ pub enum ResamplerMode {
 
 impl ResamplerMode {
     #[must_use]
-    pub fn label(self) -> &'static str {
+    pub const fn label(self) -> &'static str {
         match self {
             Self::FixedRatio { .. } => "fixed-ratio",
             Self::VariableRatio { .. } => "variable-ratio",

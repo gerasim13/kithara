@@ -84,7 +84,7 @@ mod tests {
 
     fn make_node() -> (PlayerNode, crate::bridge::SlotControl) {
         let (inputs, control) = slot_channels(SharedEq::new(0));
-        let node = PlayerNode::new(inputs, PcmPool::default().clone());
+        let node = PlayerNode::new(inputs, PcmPool::default());
         (node, control)
     }
 

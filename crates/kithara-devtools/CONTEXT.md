@@ -53,6 +53,16 @@ one sanctioned exception is `common::walker`: the scoped walkers reload
 `run(&CoreCommand, &Ctx)`. Command names, flags, and help text are the public surface —
 treat changes as API changes covered by the consuming project.
 
+`audit-clippy` reports every configured advisory lint across all targets. It selects the
+workspace unless explicit package selection (`-p` / `--package`, `--manifest-path`,
+`--workspace`, or `--all`) replaces that default; Cargo modifiers such as
+`--all-features` and `--exclude` retain workspace selection. `--fix` first applies
+Clippy's machine-applicable suggestions over the exact same scope, guarded by a
+clean-tree check unless `--allow-dirty` is explicit, and then reruns the report. A
+failed fix stops before reporting and preserves Cargo's exit status in the command
+error. Both passes disable the workstation sccache wrapper and retain incremental
+Clippy builds, matching the repository's Clippy cache contract.
+
 `Baseline` (`.config/<namespace>/baseline.toml`) compares on a line-insensitive
 canonical key: a leading `path:line[:col]` prefix is stripped only when a symbolic tail
 follows, so reformatting that shifts lines never re-fingerprints an unchanged

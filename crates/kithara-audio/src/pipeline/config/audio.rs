@@ -28,6 +28,17 @@ impl Consts {
     const PRELOAD_CHUNKS: usize = 3;
 }
 
+/// How a PCM consumer wakes the decode worker after draining its ring.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum ConsumerWakeMode {
+    /// Arm a coalesced scheduler pass without signaling a thread gate.
+    #[default]
+    RealtimeDeferred,
+    /// Signal the worker immediately from a consumer known to run off-RT.
+    ImmediateOffRt,
+}
+
 /// Configuration for audio pipeline with stream config.
 ///
 /// Generic over `StreamType` to include stream-specific configuration.
@@ -95,6 +106,13 @@ pub struct AudioConfig<T: StreamType, B = NoResamplerBackend> {
     #[builder(default)]
     #[field(get)]
     pub(crate) block_on_underrun: bool,
+    /// Worker wake policy for successful consumer ring pops. The default is
+    /// safe for real-time callbacks; known off-RT consumers may request an
+    /// immediate worker signal. `block_on_underrun` remains independent and
+    /// always resolves the effective mode to [`ConsumerWakeMode::ImmediateOffRt`].
+    #[builder(default)]
+    #[field(get, copy)]
+    pub(crate) consumer_wake_mode: ConsumerWakeMode,
     /// PCM buffer size in chunks (~100ms per chunk = 10 chunks ≈ 1s).
     /// Default: 10 on native, 32 on wasm32.
     #[builder(default = Consts::PCM_BUFFER_CHUNKS)]
@@ -109,19 +127,19 @@ where
 {
     /// Return the configured event bus.
     #[must_use]
-    pub fn bus(&self) -> Option<&EventBus> {
+    pub const fn bus(&self) -> Option<&EventBus> {
         self.bus.as_ref()
     }
 
     /// Return the configured cancellation token.
     #[must_use]
-    pub fn cancel(&self) -> Option<&CancelToken> {
+    pub const fn cancel(&self) -> Option<&CancelToken> {
         self.cancel.as_ref()
     }
 
     /// Return the configured engine-load meter.
     #[must_use]
-    pub fn engine_load(&self) -> Option<&Arc<EngineLoad>> {
+    pub const fn engine_load(&self) -> Option<&Arc<EngineLoad>> {
         self.engine_load.as_ref()
     }
 
@@ -133,25 +151,25 @@ where
 
     /// Return the media information hint.
     #[must_use]
-    pub fn media_info(&self) -> Option<&MediaInfo> {
+    pub const fn media_info(&self) -> Option<&MediaInfo> {
         self.media_info.as_ref()
     }
 
     /// Return the legacy playback-rate state.
     #[must_use]
-    pub fn playback_rate(&self) -> Option<&Arc<AtomicF32>> {
+    pub const fn playback_rate(&self) -> Option<&Arc<AtomicF32>> {
         self.playback_rate.as_ref()
     }
 
     /// Return the live stretch controls.
     #[must_use]
-    pub fn stretch(&self) -> Option<&Arc<StretchControls>> {
+    pub const fn stretch(&self) -> Option<&Arc<StretchControls>> {
         self.stretch.as_ref()
     }
 
     /// Return the configured audio worker.
     #[must_use]
-    pub fn worker(&self) -> Option<&AudioWorkerHandle> {
+    pub const fn worker(&self) -> Option<&AudioWorkerHandle> {
         self.worker.as_ref()
     }
 }

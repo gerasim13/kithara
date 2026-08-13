@@ -22,7 +22,7 @@ pub struct Baseline {
     pub(crate) schema_version: u32,
 }
 
-fn default_schema_version() -> u32 {
+const fn default_schema_version() -> u32 {
     SCHEMA_VERSION
 }
 
@@ -208,7 +208,7 @@ pub struct RatchetDiff<'a> {
 
 impl RatchetDiff<'_> {
     #[must_use]
-    pub fn has_failures(&self) -> bool {
+    pub const fn has_failures(&self) -> bool {
         !self.regressions.is_empty() || !self.new_violations.is_empty()
     }
 }

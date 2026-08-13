@@ -19,7 +19,7 @@ pub fn aes128_key_bytes() -> Vec<u8> {
 }
 
 /// AES-128 initialization vector for testing
-pub fn aes128_iv() -> [u8; 16] {
+pub const fn aes128_iv() -> [u8; 16] {
     [0u8; 16]
 }
 

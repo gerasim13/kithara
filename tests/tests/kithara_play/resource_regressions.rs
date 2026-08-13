@@ -10,7 +10,7 @@ use kithara::{
     file::{File as FileSource, FileConfig, FileSrc},
     hls::{Hls, HlsConfig},
     platform::{
-        CancelToken,
+        CancelScope, CancelToken,
         sync::Arc,
         time::{Duration, Instant, sleep, timeout},
     },
@@ -1052,20 +1052,26 @@ async fn stress_offline_crossfade_no_gaps() {
     let store = asset_store(&temp_dir(), true);
     let hls_url = hls_server.url("/master.m3u8");
 
-    let worker = AudioWorkerHandle::with_cancel(CancelToken::never());
+    let master_scope = CancelScope::new(None);
+    let master_cancel = master_scope.token();
+    let worker = AudioWorkerHandle::with_cancel(master_cancel.child());
     let mut player = OfflinePlayer::new(SR);
 
     let local_mp3 = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../assets/test.mp3");
 
-    let make_mp3 = |w: AudioWorkerHandle, s: AssetStore| {
+    let make_mp3 = |w: AudioWorkerHandle, s: AssetStore, cancel: CancelToken| {
         let p = local_mp3.clone();
         async move {
-            let file_cfg = FileConfig::for_src(FileSrc::Local(p)).store(s).build();
+            let file_cfg = FileConfig::for_src(FileSrc::Local(p))
+                .store(s)
+                .cancel(cancel.clone())
+                .build();
             let audio_cfg = AudioConfig::<FileSource>::for_stream(file_cfg)
                 .byte_pool(kithara::bufpool::BytePool::default())
                 .pcm_pool(kithara::bufpool::PcmPool::default())
                 .hint("mp3".to_string())
                 .worker(w)
+                .cancel(cancel)
                 .build();
             let audio = Audio::<Stream<FileSource>>::new(audio_cfg)
                 .await
@@ -1074,19 +1080,23 @@ async fn stress_offline_crossfade_no_gaps() {
         }
     };
 
-    let make_hls = |w: AudioWorkerHandle, s: AssetStore| {
+    let make_hls = |w: AudioWorkerHandle, s: AssetStore, cancel: CancelToken| {
         let u = hls_url.clone();
         async move {
             let wav_info = MediaInfo::builder()
                 .maybe_codec(Some(AudioCodec::Pcm))
                 .maybe_container(Some(ContainerFormat::Wav))
                 .build();
-            let cfg = HlsConfig::for_url(u).store(s).build();
+            let cfg = HlsConfig::for_url(u)
+                .store(s)
+                .cancel(cancel.clone())
+                .build();
             let audio_config = AudioConfig::<Hls>::for_stream(cfg)
                 .byte_pool(kithara::bufpool::BytePool::default())
                 .pcm_pool(kithara::bufpool::PcmPool::default())
                 .media_info(wav_info)
                 .worker(w)
+                .cancel(cancel)
                 .build();
             let audio = Audio::<Stream<Hls>>::new(audio_config)
                 .await
@@ -1100,7 +1110,7 @@ async fn stress_offline_crossfade_no_gaps() {
         }
     };
 
-    let mut mp3_1 = make_mp3(worker.clone(), store.clone()).await;
+    let mut mp3_1 = make_mp3(worker.clone(), store.clone(), master_cancel.child()).await;
     time::timeout(Consts::READ_TIMEOUT, mp3_1.preload())
         .await
         .expect("mp3_1 preload deadline")
@@ -1108,7 +1118,7 @@ async fn stress_offline_crossfade_no_gaps() {
     player.load_and_fadein(mp3_1, "mp3_1");
     let s1a = render_offline_window(&mut player, 40, "MP3 solo", BLOCK, SR);
 
-    let mut hls_1 = make_hls(worker.clone(), store.clone()).await;
+    let mut hls_1 = make_hls(worker.clone(), store.clone(), master_cancel.child()).await;
     time::timeout(Consts::READ_TIMEOUT, hls_1.preload())
         .await
         .expect("hls_1 preload deadline")
@@ -1116,7 +1126,7 @@ async fn stress_offline_crossfade_no_gaps() {
     player.load_and_fadein(hls_1, "hls_1");
     let s1b = render_offline_window(&mut player, 80, "MP3→HLS fade", BLOCK, SR);
 
-    let mut mp3_2 = make_mp3(worker.clone(), store.clone()).await;
+    let mut mp3_2 = make_mp3(worker.clone(), store.clone(), master_cancel.child()).await;
     time::timeout(Consts::READ_TIMEOUT, mp3_2.preload())
         .await
         .expect("mp3_2 preload deadline")
@@ -1124,7 +1134,7 @@ async fn stress_offline_crossfade_no_gaps() {
     player.load_and_fadein(mp3_2, "mp3_2");
     let s2 = render_offline_window(&mut player, 80, "HLS→MP3 fade", BLOCK, SR);
 
-    let mut mp3_3 = make_mp3(worker.clone(), store.clone()).await;
+    let mut mp3_3 = make_mp3(worker.clone(), store.clone(), master_cancel.child()).await;
     time::timeout(Consts::READ_TIMEOUT, mp3_3.preload())
         .await
         .expect("mp3_3 preload deadline")
@@ -1143,7 +1153,7 @@ async fn stress_offline_crossfade_no_gaps() {
     let mut worst_render = Duration::ZERO;
 
     for iter in 0..5 {
-        let mut hls_n = make_hls(worker.clone(), store.clone()).await;
+        let mut hls_n = make_hls(worker.clone(), store.clone(), master_cancel.child()).await;
         time::timeout(Consts::READ_TIMEOUT, hls_n.preload())
             .await
             .expect("hls_n preload deadline")
@@ -1151,7 +1161,7 @@ async fn stress_offline_crossfade_no_gaps() {
         player.load_and_fadein(hls_n, &format!("hls_iter{iter}"));
         let _sh = render_offline_window(&mut player, 40, &format!("HLS solo #{iter}"), BLOCK, SR);
 
-        let mut mp3_n = make_mp3(worker.clone(), store.clone()).await;
+        let mut mp3_n = make_mp3(worker.clone(), store.clone(), master_cancel.child()).await;
         time::timeout(Consts::READ_TIMEOUT, mp3_n.preload())
             .await
             .expect("mp3_n preload deadline")
@@ -1170,6 +1180,9 @@ async fn stress_offline_crossfade_no_gaps() {
             worst_render = sm.max_render;
         }
     }
+
+    master_scope.cancel();
+    worker.shutdown();
 
     info!(
         "\n  Worst across 5 HLS→MP3: silence={worst_silence} slow={worst_slow} \

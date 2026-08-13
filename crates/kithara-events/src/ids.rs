@@ -7,12 +7,12 @@ pub struct SlotId(u64);
 
 impl SlotId {
     #[must_use]
-    pub fn new(value: u64) -> Self {
+    pub const fn new(value: u64) -> Self {
         Self(value)
     }
 
     #[must_use]
-    pub fn value(self) -> u64 {
+    pub const fn value(self) -> u64 {
         self.0
     }
 }
@@ -60,7 +60,7 @@ impl TrackId {
 
     /// Raw id value.
     #[must_use]
-    pub fn as_u64(self) -> u64 {
+    pub const fn as_u64(self) -> u64 {
         self.0
     }
 }

@@ -35,13 +35,13 @@ impl<B: Default> ResourceConfig<B> {
 
     /// Event bus attached to this resource, when one was configured.
     #[must_use]
-    pub fn bus(&self) -> Option<&EventBus> {
+    pub const fn bus(&self) -> Option<&EventBus> {
         self.bus.as_ref()
     }
 
     /// Per-track parent cancel token, when one was configured.
     #[must_use]
-    pub fn cancel(&self) -> Option<&CancelToken> {
+    pub const fn cancel(&self) -> Option<&CancelToken> {
         self.cancel.as_ref()
     }
 
@@ -53,7 +53,7 @@ impl<B: Default> ResourceConfig<B> {
 
     /// Preferred peak bitrate cap for normal networks.
     #[must_use]
-    pub fn preferred_peak_bitrate(&self) -> f64 {
+    pub const fn preferred_peak_bitrate(&self) -> f64 {
         self.preferred_peak_bitrate
     }
 
@@ -69,13 +69,13 @@ impl<B: Default> ResourceConfig<B> {
 
     /// Source parsed for this resource.
     #[must_use]
-    pub fn source(&self) -> &ResourceSrc {
+    pub const fn source(&self) -> &ResourceSrc {
         &self.src
     }
 
     /// Shared asset store for this resource.
     #[must_use]
-    pub fn store(&self) -> &AssetStore {
+    pub const fn store(&self) -> &AssetStore {
         &self.store
     }
 }

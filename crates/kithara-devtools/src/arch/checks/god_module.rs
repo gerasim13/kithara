@@ -5,7 +5,7 @@ use syn::{File, Item};
 
 use super::{Check, Context};
 use crate::common::{
-    parse::{is_pub_visibility, parse_file},
+    parse::is_pub_visibility,
     violation::Violation,
     walker::{relative_to, workspace_rs_files_scoped},
 };
@@ -24,7 +24,7 @@ impl Check for GodModule {
         let mut violations = Vec::new();
 
         for path in workspace_rs_files_scoped(ctx.workspace_root, ctx.scope)? {
-            let Ok(file) = parse_file(&path) else {
+            let Some(file) = ctx.parsed_file(&path)? else {
                 continue;
             };
             let rel = relative_to(ctx.workspace_root, &path);
@@ -36,7 +36,7 @@ impl Check for GodModule {
                 .copied()
                 .unwrap_or(cfg.warn);
 
-            let count = count_pub_items_top_level(&file);
+            let count = count_pub_items_top_level(file);
             if count >= warn {
                 violations.push(Violation::warn(
                     ID,
@@ -63,7 +63,7 @@ fn count_pub_items_top_level(file: &File) -> usize {
     file.items.iter().filter(|i| is_pub_item(i)).count()
 }
 
-fn is_pub_item(item: &Item) -> bool {
+const fn is_pub_item(item: &Item) -> bool {
     match item {
         Item::Struct(s) => is_pub_visibility(&s.vis),
         Item::Enum(e) => is_pub_visibility(&e.vis),

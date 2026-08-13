@@ -2,11 +2,11 @@
 
 use std::{fmt, fmt::Debug, ops::Range, path::Path};
 
-use kithara_platform::sync::Arc;
+use kithara_platform::{CancelToken, sync::Arc};
 use kithara_storage::{ResourceStatus, StorageResult, WaitOutcome};
 
 /// A clone-able raw-byte write handle, decoupled from the non-`Clone` commit
-/// owner. A streaming download closure holds one to write *pre-processing*
+/// owner. A streaming raw-write closure holds one to write *pre-processing*
 /// (e.g. ciphertext) bytes into the backing storage while the [`WriteSide`]
 /// writer retains sole ownership of [`commit`](WriteSide::commit). Writes land
 /// on the same generation the writer will commit.
@@ -49,7 +49,7 @@ impl Debug for RawWriteHandle {
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum AcquisitionResult<A, R> {
-    /// Resource is being produced — the writer must `commit` to make it readable.
+    /// Resource is pending — the writer must `commit` to make it readable.
     Pending(A),
     /// Resource is readable now.
     Ready(R),
@@ -58,7 +58,7 @@ pub enum AcquisitionResult<A, R> {
 impl<A, R> AcquisitionResult<A, R> {
     /// `true` when the resource is already readable.
     #[must_use]
-    pub fn is_ready(&self) -> bool {
+    pub const fn is_ready(&self) -> bool {
         matches!(self, Self::Ready(_))
     }
 }
@@ -116,8 +116,8 @@ pub trait ReadSide: Clone + Send + Sync + Debug + 'static {
     fn read_at(&self, offset: u64, buf: &mut [u8]) -> StorageResult<usize>;
 
     /// Read **raw** bytes from the active working storage, bypassing both the
-    /// processing gate and any committed snapshot. This is the producer's own
-    /// in-flight read-back: a re-download keeps the prior generation's snapshot
+    /// processing gate and any committed snapshot. This is the writer's own
+    /// in-flight read-back: a replacement pending generation keeps the prior snapshot
     /// published for concurrent [`read_at`](Self::read_at) callers, so on-commit
     /// processing (decrypt) reads here to transform the freshly-written
     /// generation rather than the stale snapshot. Mint it from the writer via
@@ -156,11 +156,22 @@ pub trait ReadSide: Clone + Send + Sync + Debug + 'static {
     /// # Errors
     /// Propagates the backing wait error.
     fn wait_range(&self, range: Range<u64>) -> StorageResult<WaitOutcome>;
+
+    /// Wait until `range` is available, interrupting only this wait when
+    /// `cancel` fires.
+    ///
+    /// # Errors
+    /// Propagates the backing wait error, including per-wait cancellation.
+    fn wait_range_with_cancel(
+        &self,
+        range: Range<u64>,
+        cancel: &CancelToken,
+    ) -> StorageResult<WaitOutcome>;
 }
 
 /// Write capability of a resource handle — the `Pending` phase.
 ///
-/// **Not `Clone`**: a single producer owns it and consumes it on
+/// **Not `Clone`**: a single writer owns it and consumes it on
 /// [`commit`](Self::commit) / [`fail`](Self::fail). Has **no read methods**, so
 /// reading a not-yet-committed handle is a compile error, not a runtime
 /// `NotReadable`:
@@ -187,7 +198,7 @@ pub trait WriteSide: Send + Sync + Debug + 'static {
 
     /// A clone-able raw-write handle for streaming pre-processing bytes into
     /// this writer's generation (see [`RawWriteHandle`]). Lets a `'static`
-    /// download closure write while the writer keeps sole ownership of
+    /// raw-write closure write while the writer keeps sole ownership of
     /// `commit`.
     fn raw_write_handle(&self) -> RawWriteHandle;
 

@@ -44,7 +44,7 @@ pub struct HlsSource {
 }
 
 impl HlsSource {
-    pub(crate) fn new(
+    pub(crate) const fn new(
         coord: Arc<HlsCoord>,
         emit: Arc<DeferredBus<HlsEvent>>,
         stream_scope: CancelScope,

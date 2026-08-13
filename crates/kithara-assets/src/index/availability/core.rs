@@ -218,7 +218,7 @@ impl AvailabilityIndex {
 
     /// Enqueue a committed file for the durability barrier. The manifest
     /// flush pays one barrier per queued file and only then names them, so
-    /// the download path never waits on the medium itself.
+    /// the resource-write path never waits on the medium itself.
     pub(crate) fn record_pending_durability(&self, path: PathBuf) {
         self.inner.pending_durability.insert(path);
     }

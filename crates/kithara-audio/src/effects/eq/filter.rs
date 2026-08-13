@@ -17,7 +17,7 @@ impl Consts {
 struct Section(DirectForm1<f32>);
 
 impl Section {
-    fn new(coefficients: Coefficients<f32>) -> Self {
+    const fn new(coefficients: Coefficients<f32>) -> Self {
         Self(DirectForm1::new(coefficients))
     }
 
@@ -38,7 +38,7 @@ struct Lr4 {
 }
 
 impl Lr4 {
-    fn new(coefficients: Coefficients<f32>) -> Self {
+    const fn new(coefficients: Coefficients<f32>) -> Self {
         Self {
             first: Section::new(coefficients),
             second: Section::new(coefficients),
@@ -116,9 +116,9 @@ impl CrossoverFilters {
             {
                 band = filter.run(band);
             }
-            output += band * gains(index);
+            output = band.mul_add(gains(index), output);
         }
-        output + high * gains(self.lowpass.len())
+        high.mul_add(gains(self.lowpass.len()), output)
     }
 
     fn rebuild(&mut self) {

@@ -27,7 +27,7 @@ pub(crate) enum ScenarioState {
 }
 
 impl ScenarioState {
-    pub(crate) fn as_str(self) -> &'static str {
+    pub(crate) const fn as_str(self) -> &'static str {
         match self {
             Self::Complete => "complete",
             Self::Empty => "empty",
@@ -68,7 +68,7 @@ pub(crate) struct RuntimeSummary {
 }
 
 impl RuntimeSummary {
-    pub(crate) fn has_runtime(&self) -> bool {
+    pub(crate) const fn has_runtime(&self) -> bool {
         !self.scenarios.is_empty()
     }
 
@@ -322,7 +322,7 @@ fn add_features(args: &mut Vec<String>, features: &[String]) {
     }
 }
 
-fn scenario_state(state: TraceState) -> ScenarioState {
+const fn scenario_state(state: TraceState) -> ScenarioState {
     match state {
         TraceState::Complete => ScenarioState::Complete,
         TraceState::Empty => ScenarioState::Empty,

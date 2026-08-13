@@ -13,7 +13,7 @@ pub struct GridSegment {
 impl GridSegment {
     /// Construct a segment.
     #[must_use]
-    pub fn new(start_frame: u64, end_frame: u64, ratio_correction: f64) -> Self {
+    pub const fn new(start_frame: u64, end_frame: u64, ratio_correction: f64) -> Self {
         Self {
             ratio_correction,
             end_frame,
@@ -113,7 +113,7 @@ impl ActiveRegion {
     };
 
     #[must_use]
-    pub fn new(start: u64, end: u64, correction: f64) -> Self {
+    pub const fn new(start: u64, end: u64, correction: f64) -> Self {
         Self {
             correction,
             end,
@@ -122,7 +122,7 @@ impl ActiveRegion {
     }
 
     #[must_use]
-    pub fn contains(&self, frame: u64) -> bool {
+    pub const fn contains(&self, frame: u64) -> bool {
         self.start <= frame && frame < self.end
     }
 }

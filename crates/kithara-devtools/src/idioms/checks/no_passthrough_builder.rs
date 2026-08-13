@@ -199,7 +199,7 @@ fn analyse_body(stmts: &[Stmt], param: &str) -> Option<Usage> {
 }
 
 impl Usage {
-    fn has_only_unique_uses(&self) -> bool {
+    const fn has_only_unique_uses(&self) -> bool {
         !self.disqualified
     }
 

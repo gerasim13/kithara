@@ -108,7 +108,7 @@ fn scan_file(
         .filter(|c| !inside_any(c.byte_range.start, &macro_spans))
         .collect();
 
-    detect_category(cfg, rel, &visible, out);
+    detect_category(cfg, rel, src, &visible, out);
     detect_size(cfg, rel, &visible, out);
     detect_density(cfg, rel, &visible, &fn_spans, out);
 }
@@ -187,7 +187,7 @@ fn at_token_start(bytes: &[u8], pos: usize) -> bool {
     !is_ident_continue(bytes[pos - 1])
 }
 
-fn is_ident_continue(b: u8) -> bool {
+const fn is_ident_continue(b: u8) -> bool {
     b.is_ascii_alphanumeric() || b == b'_'
 }
 
@@ -466,10 +466,20 @@ fn fn_span_from_block(name: &str, block: &syn::Block) -> FnSpan {
 fn detect_category(
     cfg: &CommentHygieneConfig,
     rel: &str,
+    src: &str,
     comments: &[&Comment],
     out: &mut Vec<Violation>,
 ) {
-    for c in comments {
+    let mut comments = comments.iter().copied().peekable();
+    while let Some(c) = comments.next() {
+        if is_standalone_plain_line(src, c) {
+            let mut previous_line = c.line_end;
+            while let Some(continuation) = comments.next_if(|next| {
+                is_standalone_plain_line(src, next) && next.line_start == previous_line + 1
+            }) {
+                previous_line = continuation.line_end;
+            }
+        }
         if c.doc_style != DocStyle::None {
             continue;
         }
@@ -489,6 +499,12 @@ fn detect_category(
         );
         out.push(Violation::warn(ID, key, msg));
     }
+}
+
+fn is_standalone_plain_line(src: &str, comment: &Comment) -> bool {
+    comment.kind == CommentKind::Line
+        && comment.doc_style == DocStyle::None
+        && is_standalone_line(src, comment.byte_range.start)
 }
 
 fn has_allowed_marker(body: &str, markers: &[String]) -> bool {
@@ -614,7 +630,7 @@ fn detect_density(
     }
 }
 
-fn range_overlaps(a: &Range<usize>, b: &Range<usize>) -> bool {
+const fn range_overlaps(a: &Range<usize>, b: &Range<usize>) -> bool {
     a.start < b.end && b.start < a.end
 }
 
@@ -846,6 +862,32 @@ mod tests {
         let src = "fn f() {\n    // foo\n}\n";
         let vs = run_all(src);
         assert_eq!(keys(&vs), vec!["fixture.rs:2:category"]);
+    }
+
+    #[test]
+    fn category_standalone_prose_block_emits_one_finding() {
+        let src = "fn f() {\n    // first line\n    // continuation\n}\n";
+        let vs = run_all(src);
+        assert_eq!(keys(&vs), vec!["fixture.rs:2:category"]);
+    }
+
+    #[test]
+    fn category_marker_on_first_standalone_line_covers_continuations() {
+        for marker in ["WHY: the state is shared", "SAFETY: the guard is held"] {
+            let src = format!("fn f() {{\n    // {marker}\n    // continuation\n}}\n");
+            let vs = run_all(&src);
+            assert!(vs.is_empty(), "marker {marker}: {vs:?}");
+        }
+    }
+
+    #[test]
+    fn category_adjacent_trailing_comments_remain_independent() {
+        let src = "fn f() {\n    let x = 1; // first\n    let y = 2; // second\n}\n";
+        let vs = run_all(src);
+        assert_eq!(
+            keys(&vs),
+            vec!["fixture.rs:2:category", "fixture.rs:3:category"]
+        );
     }
 
     #[test]

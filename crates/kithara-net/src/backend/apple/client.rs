@@ -19,6 +19,7 @@ use crate::{
     error::{NetError, NetResult},
     metrics::ConnectionMetrics,
     observe::Observer,
+    range_response::{accepts_response_status, validate_range_response},
     resumable::{Refetch, Resumed, resumable_body},
     retry::{DefaultRetryPolicy, RetryNet},
     traits::Net,
@@ -98,7 +99,7 @@ impl RawAppleNet {
             let request = AppleRequest::new(
                 &url,
                 Method::Get,
-                range,
+                range.clone(),
                 headers,
                 None,
                 AcceptEncodingPolicy::Identity,
@@ -115,7 +116,16 @@ impl RawAppleNet {
                 .0
                 .first_byte(started.elapsed(), status, status == HTTP_PARTIAL_CONTENT);
         }
-        if let Err(error) = check_status(url, response.status, &Bytes::new(), accept_partial) {
+        let status = match check_status(url.clone(), response.status, &Bytes::new(), accept_partial)
+        {
+            Ok(status) => status,
+            Err(error) => {
+                response.cancel();
+                return Err(error);
+            }
+        };
+        if let Err(error) = validate_range_response(status, range.as_ref(), &response.headers, &url)
+        {
             response.cancel();
             return Err(error);
         }
@@ -133,12 +143,18 @@ impl RawAppleNet {
         let out_headers = first.headers.clone();
         let partial = first.is_partial();
         let me = self.clone();
+        let resource = url.clone();
+        let (resume_base, resume_end) = if partial {
+            (base_start, end)
+        } else {
+            (0, None)
+        };
         let refetch: Refetch = Box::new(move |consumed| {
             let me = me.clone();
             let url = url.clone();
             let headers = headers.clone();
-            let abs = base_start.saturating_add(consumed);
-            let resume = RangeSpec::new(abs, end);
+            let abs = resume_base.saturating_add(consumed);
+            let resume = RangeSpec::new(abs, resume_end);
             Box::pin(async move {
                 let stream = me.raw_body(url, Some(resume), headers, true).await?;
                 let skip = if stream.is_partial() { 0 } else { abs };
@@ -148,6 +164,7 @@ impl RawAppleNet {
         let body = resumable_body(
             first,
             refetch,
+            resource,
             self.options.inactivity_timeout,
             self.options.retry_policy.clone(),
             self.cancel.clone(),
@@ -185,9 +202,9 @@ impl AppleNet {
             options.observer.clone(),
         ));
         Self {
-            cancel,
             session,
             net,
+            cancel,
             connection_metrics,
             options,
         }
@@ -353,20 +370,20 @@ fn check_status(
     status: Option<u16>,
     body: &Bytes,
     accept_partial: bool,
-) -> Result<(), NetError> {
+) -> Result<u16, NetError> {
     let Some(status) = status else {
         return Err(NetError::Network(format!(
             "NSURLSession returned a non-HTTP response for {url}"
         )));
     };
-    let ok = (200..300).contains(&status) || (accept_partial && status == HTTP_PARTIAL_CONTENT);
+    let ok = accepts_response_status(status, accept_partial);
     if ok {
-        return Ok(());
+        return Ok(status);
     }
-    status_error(url, status, body)
+    Err(status_error(url, status, body))
 }
 
-fn status_error(url: Url, status: u16, body: &Bytes) -> Result<(), NetError> {
+fn status_error(url: Url, status: u16, body: &Bytes) -> NetError {
     let body = if body.is_empty() {
         None
     } else {
@@ -375,14 +392,12 @@ fn status_error(url: Url, status: u16, body: &Bytes) -> Result<(), NetError> {
         ))
     };
     match NonZeroU16::new(status) {
-        Some(status) => Err(NetError::Status {
+        Some(status) => NetError::Status {
             status,
             body,
             url: Some(url),
-        }),
-        None => Err(NetError::Network(format!(
-            "unexpected zero HTTP status for {url}"
-        ))),
+        },
+        None => NetError::Network(format!("unexpected zero HTTP status for {url}")),
     }
 }
 

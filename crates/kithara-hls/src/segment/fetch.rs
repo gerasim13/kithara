@@ -96,7 +96,7 @@ impl FetchClaim<Downloading> {
     /// wins the `Missing -> Downloading` CAS. `slot` shares the just-flipped
     /// CAS cell so a terminal transition can settle it; `variant` is the
     /// `Weak` back-reference for the post-commit size apply.
-    pub(crate) fn claim(
+    pub(crate) const fn claim(
         planned: PlannedFetch,
         variant: Weak<HlsVariant>,
         slot: Arc<SegmentSlotState>,
@@ -174,7 +174,7 @@ impl FetchClaim<Downloading> {
         }
     }
 
-    pub(crate) fn planned(&self) -> PlannedFetch {
+    pub(crate) const fn planned(&self) -> PlannedFetch {
         self.data.planned
     }
 
@@ -194,9 +194,9 @@ impl FetchClaim<Loaded> {
     delegate::delegate! {
         to self.data {
             #[field]
-            pub(crate) fn final_len(&self) -> u64;
+            pub(crate) const fn final_len(&self) -> u64;
             #[field]
-            pub(crate) fn planned(&self) -> PlannedFetch;
+            pub(crate) const fn planned(&self) -> PlannedFetch;
         }
     }
 }

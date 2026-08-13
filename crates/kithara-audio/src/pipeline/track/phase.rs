@@ -28,7 +28,7 @@ pub(crate) struct Track<S: TrackPhase> {
 }
 
 impl<S: TrackPhase> Track<S> {
-    pub(crate) fn new(data: S::Data) -> Self {
+    pub(crate) const fn new(data: S::Data) -> Self {
         Self {
             data,
             _phase: PhantomData,

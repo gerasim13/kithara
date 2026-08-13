@@ -22,7 +22,7 @@ use crate::{
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PinDurability {
     /// Outlives the process: an unfinished write whose bytes a later run
-    /// must not evict before the download completes. Persisted.
+    /// must not evict before the pending resource becomes ready. Persisted.
     Durable,
     /// Bounded by the process: a reader holding committed bytes open.
     /// In-memory only — a pin that cannot survive a restart has nothing
@@ -41,12 +41,12 @@ pub(super) struct PinCounts {
 }
 
 impl PinCounts {
-    fn is_pinned(self) -> bool {
+    const fn is_pinned(self) -> bool {
         self.durable > 0 || self.local > 0
     }
 
     /// Add one pin; `true` when the durable count went 0→1.
-    fn pin(&mut self, durability: PinDurability) -> bool {
+    const fn pin(&mut self, durability: PinDurability) -> bool {
         match durability {
             PinDurability::Durable => {
                 self.durable = self.durable.saturating_add(1);
@@ -60,7 +60,7 @@ impl PinCounts {
     }
 
     /// Drop one pin; `true` when the durable count went 1→0.
-    fn unpin(&mut self, durability: PinDurability) -> bool {
+    const fn unpin(&mut self, durability: PinDurability) -> bool {
         match durability {
             PinDurability::Durable => {
                 let held = self.durable;

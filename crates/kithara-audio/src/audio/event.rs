@@ -34,7 +34,7 @@ pub(super) struct AudioEvents {
 }
 
 impl AudioEvents {
-    pub(super) fn new(bus: EventBus) -> Self {
+    pub(super) const fn new(bus: EventBus) -> Self {
         Self {
             bus,
             last_progress_emit: None,
@@ -146,7 +146,7 @@ impl AudioEvents {
         self.bus.publish(event);
     }
 
-    pub(super) fn reset_underrun(&mut self) {
+    pub(super) const fn reset_underrun(&mut self) {
         self.underrun_active = false;
     }
 
@@ -193,7 +193,7 @@ fn clamp_millis(duration: Duration) -> u64 {
     ToPrimitive::to_u64(&duration.as_millis()).unwrap_or(u64::MAX)
 }
 
-pub(crate) fn map_audio_codec_kind(codec: AudioCodec) -> AudioCodecKind {
+pub(crate) const fn map_audio_codec_kind(codec: AudioCodec) -> AudioCodecKind {
     match codec {
         AudioCodec::AacLc => AudioCodecKind::AacLc,
         AudioCodec::AacHe => AudioCodecKind::AacHe,
@@ -208,7 +208,7 @@ pub(crate) fn map_audio_codec_kind(codec: AudioCodec) -> AudioCodecKind {
     }
 }
 
-pub(crate) fn map_container_kind(container: ContainerFormat) -> ContainerKind {
+pub(crate) const fn map_container_kind(container: ContainerFormat) -> ContainerKind {
     match container {
         ContainerFormat::Mp4 => ContainerKind::Mp4,
         ContainerFormat::Fmp4 => ContainerKind::Fmp4,
@@ -223,7 +223,7 @@ pub(crate) fn map_container_kind(container: ContainerFormat) -> ContainerKind {
     }
 }
 
-pub(crate) fn map_decoder_backend(backend: DecodeBackend) -> EventDecoderBackend {
+pub(crate) const fn map_decoder_backend(backend: DecodeBackend) -> EventDecoderBackend {
     match backend {
         #[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
         kithara_decode::DecoderBackend::Apple => EventDecoderBackend::Apple,
@@ -252,7 +252,7 @@ pub(crate) fn map_playback_resampler_kind(name: &'static str) -> PlaybackResampl
     }
 }
 
-pub(crate) fn map_decode_error_kind(error: &DecodeError) -> DecodeErrorKind {
+pub(crate) const fn map_decode_error_kind(error: &DecodeError) -> DecodeErrorKind {
     match error {
         DecodeError::Io { .. } => DecodeErrorKind::Io,
         DecodeError::UnsupportedCodec { .. } => DecodeErrorKind::UnsupportedCodec,
@@ -270,7 +270,7 @@ pub(crate) fn map_decode_error_kind(error: &DecodeError) -> DecodeErrorKind {
     }
 }
 
-pub(crate) fn map_decode_error_class(class: ErrorClass) -> DecodeErrorClass {
+pub(crate) const fn map_decode_error_class(class: ErrorClass) -> DecodeErrorClass {
     match class {
         ErrorClass::Interrupted => DecodeErrorClass::Interrupted,
         ErrorClass::VariantChange => DecodeErrorClass::VariantChange,
@@ -278,7 +278,7 @@ pub(crate) fn map_decode_error_class(class: ErrorClass) -> DecodeErrorClass {
     }
 }
 
-pub(crate) fn decode_error_detail(error: &DecodeError) -> &'static str {
+pub(crate) const fn decode_error_detail(error: &DecodeError) -> &'static str {
     match error {
         DecodeError::Io { .. } => "io",
         DecodeError::UnsupportedCodec { .. } => "unsupported codec",
@@ -412,7 +412,7 @@ mod tests {
     fn post_seek_output_publishes_without_worker_flush() {
         let bus = EventBus::new(8);
         let mut receiver = bus.subscribe();
-        let events = AudioEvents::new(bus.clone());
+        let events = AudioEvents::new(bus);
         let seek = SeekState::new();
         let position = Duration::from_millis(500);
         let epoch = seek.begin(position);
@@ -490,10 +490,37 @@ mod tests {
     }
 
     #[kithara::test]
+    fn reader_output_wake_is_deferred_and_coalesced() {
+        let bus = EventBus::new(8);
+        let thread = Arc::new(ThreadWake::default());
+        let wake = ReaderOutputWake::new(Arc::clone(&thread), AudioEvents::deferred(&bus));
+        let gate_epoch = thread.current();
+
+        wake.wake();
+        wake.wake();
+
+        assert_eq!(
+            thread.current(),
+            gate_epoch,
+            "producer-core wakes must not signal the blocking reader directly"
+        );
+
+        wake.flush_deferred();
+        assert_eq!(thread.current(), gate_epoch + 1);
+
+        wake.flush_deferred();
+        assert_eq!(
+            thread.current(),
+            gate_epoch + 1,
+            "a second flush without another wake request must be a no-op"
+        );
+    }
+
+    #[kithara::test]
     fn underrun_edges_emit_once_per_starvation_window() {
         let bus = EventBus::new(8);
         let mut receiver = bus.subscribe();
-        let mut events = AudioEvents::new(bus.clone());
+        let mut events = AudioEvents::new(bus);
         let position = Duration::from_millis(321);
 
         events.fill_result(false, true, false, position, 0);

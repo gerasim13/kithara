@@ -172,7 +172,7 @@ impl PlayerTrack {
     }
 
     /// Update the prefetch lead time used for the preload trigger.
-    pub fn set_prefetch_duration(&mut self, prefetch_duration: f32) {
+    pub const fn set_prefetch_duration(&mut self, prefetch_duration: f32) {
         self.prefetch_duration = prefetch_duration.max(0.0);
     }
 
@@ -232,7 +232,7 @@ fn seek_frame_index(seconds: f64, sample_rate: u32, duration: f64) -> u64 {
     ToPrimitive::to_u64(&frames).unwrap_or(0)
 }
 
-fn service_class_for_state(state: TrackState) -> ServiceClass {
+const fn service_class_for_state(state: TrackState) -> ServiceClass {
     match state {
         TrackState::Playing | TrackState::FadingIn | TrackState::FadingOut => ServiceClass::Audible,
         TrackState::Preloading => ServiceClass::Warm,

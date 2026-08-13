@@ -134,13 +134,14 @@ fn expand_leading(src: &str, item_start: usize, lower_bound: usize) -> usize {
         }
 
         let line = preceding_line(bytes, after_ws, lower_bound);
-        let line_text = std::str::from_utf8(&bytes[line.start..line.end]).unwrap_or("");
+        let line_start = line.start;
+        let line_text = std::str::from_utf8(&bytes[line]).unwrap_or("");
         let trimmed = line_text.trim_start();
         if trimmed.starts_with("///") || trimmed.starts_with("//!") {
             return cursor;
         }
         if trimmed.starts_with("//") || is_block_comment_only(trimmed) {
-            cursor = line.start;
+            cursor = line_start;
             continue;
         }
         return cursor;

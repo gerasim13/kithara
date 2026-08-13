@@ -6,6 +6,7 @@ mod client;
 mod error;
 mod metrics;
 mod observe;
+mod range_response;
 mod resumable;
 mod retry;
 mod timeout;

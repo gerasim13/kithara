@@ -77,7 +77,7 @@ impl OwnedAudioBufferList {
         Ok(())
     }
 
-    pub fn writer(&mut self) -> AudioBufferListWriter<'_> {
+    pub const fn writer(&mut self) -> AudioBufferListWriter<'_> {
         AudioBufferListWriter {
             ptr: self.ptr,
             capacity: self.capacity,
@@ -260,7 +260,7 @@ pub fn f32_byte_len(samples: usize) -> Result<UInt32, AudioToolboxError> {
         .map_err(|_| AudioToolboxError::config("f32 byte length exceeds CoreAudio limit"))
 }
 
-unsafe fn buffer_ptr(list: *mut AudioBufferList, channel: usize) -> *mut AudioBuffer {
+const unsafe fn buffer_ptr(list: *mut AudioBufferList, channel: usize) -> *mut AudioBuffer {
     // SAFETY: caller guarantees enough AudioBufferList tail storage for channel.
     unsafe {
         list.cast::<u8>()

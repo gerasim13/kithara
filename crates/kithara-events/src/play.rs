@@ -81,17 +81,17 @@ impl MediaTime {
     };
 
     #[must_use]
-    pub fn new(value: i64, timescale: i32) -> Self {
+    pub const fn new(value: i64, timescale: i32) -> Self {
         Self { timescale, value }
     }
 
     #[must_use]
-    pub fn is_indefinite(&self) -> bool {
+    pub const fn is_indefinite(&self) -> bool {
         self.value == Self::INDEFINITE_VALUE
     }
 
     #[must_use]
-    pub fn is_valid(&self) -> bool {
+    pub const fn is_valid(&self) -> bool {
         self.timescale > 0
     }
 
@@ -191,7 +191,7 @@ pub struct TimeRange {
 
 impl TimeRange {
     #[must_use]
-    pub fn new(start: Duration, duration: Duration) -> Self {
+    pub const fn new(start: Duration, duration: Duration) -> Self {
         Self { duration, start }
     }
 
@@ -266,7 +266,7 @@ pub struct BpmInfo {
 
 impl BpmInfo {
     #[must_use]
-    pub fn new(bpm: f64, confidence: Option<f32>, first_beat_offset: Duration) -> Self {
+    pub const fn new(bpm: f64, confidence: Option<f32>, first_beat_offset: Duration) -> Self {
         Self {
             first_beat_offset,
             confidence,

@@ -1438,7 +1438,7 @@ fn delegated_call_range(
     }
     let call_range = call.span().byte_range();
     let mut collector = AwaitCollector {
-        call_range: call_range.clone(),
+        call_range,
         ranges: Vec::new(),
     };
     collector.visit_expr(expr);

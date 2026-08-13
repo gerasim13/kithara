@@ -99,7 +99,7 @@ impl IntoProbeArg for RequestId {
     }
 }
 
-fn request_priority_wire(p: RequestPriority) -> u64 {
+const fn request_priority_wire(p: RequestPriority) -> u64 {
     match p {
         RequestPriority::High => 0,
         RequestPriority::Low => 1,
@@ -112,7 +112,7 @@ impl IntoProbeArg for RequestPriority {
     }
 }
 
-fn cancel_reason_wire(r: CancelReason) -> u64 {
+const fn cancel_reason_wire(r: CancelReason) -> u64 {
     const EPOCH_CANCEL: u64 = 0;
     const PEER_CANCEL: u64 = 1;
     const DOWNLOADER_SHUTDOWN: u64 = 2;

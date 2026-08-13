@@ -29,7 +29,7 @@ impl IsolatorEq {
         to self.gains {
             #[must_use]
             #[call(len)]
-            pub fn band_count(&self) -> usize;
+            pub const fn band_count(&self) -> usize;
             #[must_use]
             #[call(target)]
             pub fn target_gain(&self, band: usize) -> Option<f32>;

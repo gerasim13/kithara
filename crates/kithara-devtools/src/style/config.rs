@@ -132,7 +132,7 @@ impl Default for StructInitOrderConfig {
     }
 }
 
-fn default_shorthand_first() -> bool {
+const fn default_shorthand_first() -> bool {
     true
 }
 
@@ -182,19 +182,19 @@ impl Default for CommentHygieneConfig {
     }
 }
 
-fn default_inline_max_lines() -> usize {
+const fn default_inline_max_lines() -> usize {
     3
 }
 
-fn default_doc_block_max_lines() -> usize {
+const fn default_doc_block_max_lines() -> usize {
     20
 }
 
-fn default_fn_density_threshold_pct() -> u32 {
+const fn default_fn_density_threshold_pct() -> u32 {
     30
 }
 
-fn default_fn_density_min_body_lines() -> usize {
+const fn default_fn_density_min_body_lines() -> usize {
     6
 }
 

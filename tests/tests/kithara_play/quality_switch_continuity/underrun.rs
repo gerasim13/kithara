@@ -1,6 +1,6 @@
 use cochlea_features::{Audio as ProbeAudio, SegmentOpts, segment_timeline};
 use kithara::{
-    audio::{Audio, AudioConfig},
+    audio::{Audio, AudioConfig, ConsumerWakeMode},
     hls::{Hls, HlsConfig},
     stream::Stream,
 };
@@ -87,6 +87,7 @@ async fn prepare_tiny_ring_player(
         )
         .events(bus)
         .pcm_buffer_chunks(OUTPUT_RING_CHUNKS)
+        .consumer_wake_mode(ConsumerWakeMode::ImmediateOffRt)
         .build();
     let audio = Audio::<Stream<Hls>>::new(config)
         .await

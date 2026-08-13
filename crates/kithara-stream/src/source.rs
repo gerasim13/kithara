@@ -40,7 +40,7 @@ pub struct SegmentDescriptor {
 
 impl SegmentDescriptor {
     #[must_use]
-    pub fn new(
+    pub const fn new(
         byte_range: Range<u64>,
         decode_time: Duration,
         duration: Duration,

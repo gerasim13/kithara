@@ -55,21 +55,8 @@ impl HlsVariant {
             }
         }
 
-        // An `#EXT-X-MAP` init occupies the virtual prefix `[0, init_size)`.
-        // While the init is declared (`has_init`) but not yet sized
-        // (`init_size() == 0` — before lazy probe or body commit resolves it),
-        // the offset table transiently seeds segment 0 at
-        // offset 0. Serving media here would hand the demuxer segment 0's
-        // container where the init's `ftyp`/`moov` belongs
-        // ("re_mp4: ftyp not found"), or wedge the reader. Hold the read
-        // pending: `needs_init_fetch` keeps the init enqueued and its commit
-        // sizes the prefix, after which `init_descriptor_at` routes offset 0
-        // to the init. Only the fresh-activation frame (`served_from() == 0`)
-        // places the init at offset 0; a switched-in variant's init is
-        // orphaned in natural space (see `init_descriptor_at`), so its reads
-        // continue past offset 0 and must not be gated here. A terminally
-        // failed init (`init_failed`) stops reserving the prefix so the read
-        // surfaces an error instead of waiting forever.
+        // WHY: A fresh unsized `#EXT-X-MAP` still reserves offset zero; serving
+        // media there would replace the required container header.
         if self.has_init()
             && self.init_size() == 0
             && self.served_from() == 0
@@ -145,8 +132,6 @@ impl HlsVariant {
         if stable_pending && self.range_has_failed(&range) {
             return Err(StreamError::Source(HlsError::SegmentUnavailable.into()));
         }
-        // The reader driver wakes the peer for this range. An unstable layout
-        // publication remains pending and is retried on the next probe.
         trace!(
             variant = self.variant,
             start = range.start,

@@ -41,7 +41,7 @@ pub enum AbrDecision {
 impl AbrDecision {
     /// `true` when the decision moves off the current variant.
     #[must_use]
-    pub fn changed(&self) -> bool {
+    pub const fn changed(&self) -> bool {
         !matches!(self, Self::Stay { .. })
     }
 

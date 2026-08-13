@@ -113,7 +113,7 @@ impl Queue {
     }
 }
 
-fn map_repeat_mode(mode: RepeatMode) -> QueueRepeatMode {
+const fn map_repeat_mode(mode: RepeatMode) -> QueueRepeatMode {
     match mode {
         RepeatMode::Off => QueueRepeatMode::Off,
         RepeatMode::One => QueueRepeatMode::One,

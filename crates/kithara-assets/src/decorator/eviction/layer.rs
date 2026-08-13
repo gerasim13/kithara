@@ -25,7 +25,7 @@ pub(crate) struct EvictionEvents {
 }
 
 impl EvictionEvents {
-    pub(crate) fn new(bus: Option<EventBus>) -> Self {
+    pub(crate) const fn new(bus: Option<EventBus>) -> Self {
         Self { bus }
     }
 

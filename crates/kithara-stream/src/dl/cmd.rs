@@ -95,25 +95,25 @@ impl FetchCmd {
     /// Escalate an already-built command's scheduling priority (e.g. a
     /// decoder-blocking init/segment fetch promoted after the peer decides
     /// it is owed urgent service).
-    pub fn set_priority(&mut self, priority: RequestPriority) {
+    pub const fn set_priority(&mut self, priority: RequestPriority) {
         self.priority = Some(priority);
     }
 
     /// Scheduling priority for proactive peer fetches.
     #[must_use]
-    pub fn priority(&self) -> Option<RequestPriority> {
+    pub const fn priority(&self) -> Option<RequestPriority> {
         self.priority
     }
 
     /// URL this command fetches.
     #[must_use]
-    pub fn url(&self) -> &Url {
+    pub const fn url(&self) -> &Url {
         &self.url
     }
 
     /// Epoch cancel token carried by this command, if any.
     #[must_use]
-    pub fn cancel(&self) -> Option<&CancelToken> {
+    pub const fn cancel(&self) -> Option<&CancelToken> {
         self.cancel.as_ref()
     }
 

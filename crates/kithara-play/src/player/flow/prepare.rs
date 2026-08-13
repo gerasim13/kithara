@@ -32,6 +32,7 @@ impl ConfigPrep<'_> {
             cancel,
             pcm_pool: self.player.core.engine.pcm_pool().clone(),
             worker: Some(self.player.core.engine.worker().clone()),
+            consumer_wake_mode: self.player.core.engine.consumer_wake_mode(),
             host_sample_rate,
             decoder,
             stretch,
@@ -53,5 +54,61 @@ impl PlayerImpl {
     #[must_use]
     pub fn prepare_config(&self, config: ResourceConfig) -> ResourceConfig {
         ConfigPrep { player: self }.prepare(config)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use kithara_assets::AssetStore;
+    use kithara_audio::ConsumerWakeMode;
+    use kithara_bufpool::{BytePool, PcmPool};
+    use kithara_platform::sync::Arc;
+    use kithara_test_utils::kithara;
+
+    use super::*;
+    use crate::{
+        PlayError,
+        player::PlayerConfig,
+        session::{Cmd, Reply, SessionDispatcher, testing},
+    };
+
+    struct ImmediateSession(Arc<dyn SessionDispatcher>);
+
+    impl SessionDispatcher for ImmediateSession {
+        fn exec(&self, cmd: Cmd) -> Result<Reply, PlayError> {
+            self.0.exec(cmd)
+        }
+
+        fn consumer_wake_mode(&self) -> ConsumerWakeMode {
+            ConsumerWakeMode::ImmediateOffRt
+        }
+    }
+
+    fn resource_config(source: &str) -> ResourceConfig {
+        let src = ResourceConfig::parse_src(source).expect("valid test source");
+        ResourceConfig::for_src(src)
+            .store(AssetStore::builder().build())
+            .byte_pool(BytePool::default())
+            .pcm_pool(PcmPool::default())
+            .build()
+    }
+
+    #[kithara::test]
+    fn prepare_config_propagates_session_consumer_wake_mode_to_audio() {
+        let session: Arc<dyn SessionDispatcher> =
+            Arc::new(ImmediateSession(testing::test_session()));
+        let player = PlayerImpl::new(PlayerConfig::test_builder().session(session).build());
+
+        let prepared = player.prepare_config(resource_config("https://example.com/song.mp3"));
+        assert_eq!(
+            prepared.consumer_wake_mode,
+            ConsumerWakeMode::ImmediateOffRt
+        );
+        let audio = prepared.build_file_config();
+        assert_eq!(audio.consumer_wake_mode(), ConsumerWakeMode::ImmediateOffRt);
+
+        let prepared = player.prepare_config(resource_config("https://example.com/live.m3u8"));
+        let audio = prepared.build_hls_config().expect("valid HLS config");
+        assert_eq!(audio.consumer_wake_mode(), ConsumerWakeMode::ImmediateOffRt);
     }
 }

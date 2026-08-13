@@ -5,7 +5,7 @@ use super::AbrDecision;
 pub struct AbrTicket(u64);
 
 impl AbrTicket {
-    pub(super) fn new(value: u64) -> Self {
+    pub(super) const fn new(value: u64) -> Self {
         Self(value)
     }
 }
@@ -31,19 +31,19 @@ pub struct PendingAbrDecision {
 }
 
 impl PendingAbrDecision {
-    pub(super) fn new(ticket: AbrTicket, decision: AbrDecision) -> Self {
+    pub(super) const fn new(ticket: AbrTicket, decision: AbrDecision) -> Self {
         Self { decision, ticket }
     }
 
     /// Return the decision captured by this claim.
     #[must_use]
-    pub fn decision(self) -> AbrDecision {
+    pub const fn decision(self) -> AbrDecision {
         self.decision
     }
 
     /// Return the identity of the claimed request.
     #[must_use]
-    pub fn ticket(self) -> AbrTicket {
+    pub const fn ticket(self) -> AbrTicket {
         self.ticket
     }
 }

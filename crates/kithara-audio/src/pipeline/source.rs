@@ -192,11 +192,11 @@ impl<T: StreamType> Drop for StreamAudioSource<T> {
         if matches!(self.state, CurrentFsm::AtEof(_) | CurrentFsm::Failed(_)) {
             self.progress_variant_transition();
         }
-        // Publish any lifecycle event enqueued on the final produce pass before
-        // the terminal node is dropped — `scheduler::run_loop` removes a
-        // removable slot via `retain` without another `flush_deferred`, so a
-        // terminal `EndOfStream` would otherwise be lost. Runs in the unchecked
-        // shell (retain is outside `produce_pass`), off the forbid path.
+        // The scheduler's post-pass recycle normally publishes lifecycle events
+        // before terminal-slot removal. Keep a teardown flush for cancellation,
+        // unregistration, or partial setup that drops the source without a
+        // completed produce pass. Drop runs in the unchecked shell, off the
+        // forbid path.
         if let Some(ref emit) = self.emit {
             emit.flush();
         }
@@ -610,11 +610,11 @@ impl<T: StreamType> AudioWorkerSource for StreamAudioSource<T> {
 /// progress, and decoder recreation are all transient windows inside
 /// an otherwise-active track. Only `AtEof` (natural end) and `Failed`
 /// (terminal error) clear the flag.
-pub(crate) fn playing_for_state(state: &CurrentFsm) -> bool {
+pub(crate) const fn playing_for_state(state: &CurrentFsm) -> bool {
     !matches!(state, CurrentFsm::AtEof(_) | CurrentFsm::Failed(_))
 }
 
-fn map_track_failure_kind(failure: &TrackFailure) -> TrackFailureKind {
+const fn map_track_failure_kind(failure: &TrackFailure) -> TrackFailureKind {
     match failure {
         TrackFailure::Decode(_) => TrackFailureKind::Decode,
         TrackFailure::RecreateFailed { offset } => {

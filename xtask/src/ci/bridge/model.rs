@@ -3,15 +3,8 @@ use std::path::Path;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
-/// Paths that define the pipeline judging an imported commit. A merged pull
-/// request touching one of these would rewrite its own judge, so the import
-/// stops and the change is ported through a reviewed merge request instead.
-///
-/// Manifests are deliberately absent. `Cargo.toml` and `Cargo.lock` do not
-/// touch the judge — the trusted pipeline runs the real suite against them —
-/// and refusing them outright turned every dependency bump into a manual port.
-/// Their risk is a build script running on the runner, which is what
-/// `deps:deny` covers on the quarantine pipeline.
+/// Paths that define the trusted `GitLab` judge. Pull-request product content is
+/// tested with these paths restored from the synchronized default branch.
 pub(super) const CONTROL_PATHS: &[&str] = &[
     ".gitlab-ci.yml",
     ".gitlab/",
@@ -36,10 +29,57 @@ pub(super) enum Direction {
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
-pub(super) enum ImportState {
+pub(super) enum VerificationState {
     Testing,
-    Promoted,
+    Verified,
     Rejected,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct PullRequest {
+    pub(super) number: u64,
+    pub(super) head_sha: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) enum PipelineObservation {
+    Running,
+    Succeeded,
+    Failed(String),
+    Invalid(String),
+}
+
+pub(super) fn pipeline_observation(
+    parent: &str,
+    children: &[(&str, Option<&str>)],
+) -> PipelineObservation {
+    if !matches!(
+        parent,
+        "success" | "failed" | "canceled" | "skipped" | "manual"
+    ) {
+        return PipelineObservation::Running;
+    }
+    if parent != "success" {
+        return PipelineObservation::Failed(parent.to_owned());
+    }
+    let [(name, Some(child))] = children else {
+        return PipelineObservation::Invalid(format!(
+            "successful quarantine parent must have exactly one downstream child; observed {}",
+            children.len()
+        ));
+    };
+    if *name != "dispatch:quarantine" {
+        return PipelineObservation::Invalid(format!(
+            "successful quarantine parent produced unexpected child {name:?}"
+        ));
+    }
+    match *child {
+        "success" => PipelineObservation::Succeeded,
+        "failed" | "canceled" | "skipped" | "manual" => {
+            PipelineObservation::Failed((*child).to_owned())
+        }
+        _ => PipelineObservation::Running,
+    }
 }
 
 pub(super) fn direction_for(
@@ -57,24 +97,6 @@ pub(super) fn direction_for(
         return Ok(Direction::GitlabAhead);
     }
     Ok(Direction::Diverged)
-}
-
-pub(super) fn changed_control_paths(paths: impl IntoIterator<Item = String>) -> Vec<String> {
-    let mut changed = paths
-        .into_iter()
-        .filter(|path| {
-            CONTROL_PATHS.iter().any(|protected| {
-                if protected.ends_with('/') {
-                    path.starts_with(protected)
-                } else {
-                    path == protected
-                }
-            })
-        })
-        .collect::<Vec<_>>();
-    changed.sort();
-    changed.dedup();
-    changed
 }
 
 pub(super) fn validate_sha(value: &str) -> bool {
@@ -140,40 +162,57 @@ mod tests {
     }
 
     #[test]
-    fn control_paths_include_rust_ci_owners() {
-        assert_eq!(
-            changed_control_paths([
-                "crates/kithara/src/lib.rs".to_string(),
-                "xtask/src/ci/run.rs".to_string(),
-                ".gitlab-ci.yml".to_string(),
-                ".config/just/ci.just".to_string(),
-            ]),
-            [
-                ".config/just/ci.just",
-                ".gitlab-ci.yml",
-                "xtask/src/ci/run.rs",
-            ]
-        );
-    }
-
-    #[test]
-    fn a_manifest_change_alone_does_not_block_the_import() {
-        assert!(
-            changed_control_paths([
-                "Cargo.toml".to_string(),
-                "Cargo.lock".to_string(),
-                "crates/kithara-net/Cargo.toml".to_string(),
-            ])
-            .is_empty()
-        );
-    }
-
-    #[test]
     fn repository_and_branch_values_are_bounded() {
         assert!(simple_repository("zvuk/kithara"));
         assert!(!simple_repository("zvuk/kithara/extra"));
         assert!(!simple_repository("zvuk/kithara?token=secret"));
         assert!(simple_branch("main"));
         assert!(!simple_branch("heads/main"));
+    }
+
+    #[test]
+    fn successful_parent_requires_exactly_one_successful_child() {
+        assert_eq!(
+            pipeline_observation("success", &[("dispatch:quarantine", Some("success"))]),
+            PipelineObservation::Succeeded
+        );
+        assert!(matches!(
+            pipeline_observation("success", &[]),
+            PipelineObservation::Invalid(_)
+        ));
+        assert!(matches!(
+            pipeline_observation(
+                "success",
+                &[
+                    ("dispatch:quarantine", Some("success")),
+                    ("dispatch:quarantine", Some("success")),
+                ]
+            ),
+            PipelineObservation::Invalid(_)
+        ));
+        assert!(matches!(
+            pipeline_observation("success", &[("dispatch:quarantine", None)]),
+            PipelineObservation::Invalid(_)
+        ));
+        assert!(matches!(
+            pipeline_observation("success", &[("dispatch:main", Some("success"))]),
+            PipelineObservation::Invalid(_)
+        ));
+    }
+
+    #[test]
+    fn running_and_terminal_child_observations_are_distinct() {
+        assert_eq!(
+            pipeline_observation("running", &[]),
+            PipelineObservation::Running
+        );
+        assert_eq!(
+            pipeline_observation("success", &[("dispatch:quarantine", Some("running"))]),
+            PipelineObservation::Running
+        );
+        assert_eq!(
+            pipeline_observation("success", &[("dispatch:quarantine", Some("failed"))]),
+            PipelineObservation::Failed("failed".into())
+        );
     }
 }

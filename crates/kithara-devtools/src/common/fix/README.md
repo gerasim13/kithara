@@ -152,4 +152,9 @@ The Phase 2 style autofixes that originally drove this engine are now in `xtask/
 - `comment_hygiene` — strip non-conforming inline comments
 - `const_locality` — move `const` declarations closer to their first use
 
+For `comment_hygiene` category diagnostics, consecutive standalone plain
+`//` lines form one prose block. An allowed marker on the first line covers
+its continuations. Same-line trailing comments remain independent findings;
+size and density continue to count their original physical lines.
+
 All of them go through the engine described above, so the four invariants (I1–I4) apply uniformly.

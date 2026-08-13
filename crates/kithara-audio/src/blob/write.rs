@@ -2,7 +2,7 @@
 pub(crate) struct Writer<'a>(&'a mut Vec<u8>);
 
 impl<'a> Writer<'a> {
-    pub(crate) fn new(bytes: &'a mut Vec<u8>) -> Self {
+    pub(crate) const fn new(bytes: &'a mut Vec<u8>) -> Self {
         Self(bytes)
     }
 

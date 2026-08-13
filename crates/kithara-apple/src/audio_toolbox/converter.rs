@@ -59,14 +59,14 @@ pub struct AudioConverterPacketInput {
 unsafe impl Send for AudioConverterPacketInput {}
 
 impl AudioConverterPacketInput {
-    pub fn clear(&mut self) {
+    pub const fn clear(&mut self) {
         self.packet_ptr = ptr::null();
         self.packet_len = 0;
         self.has_packet = false;
         self.reached_eof = false;
     }
 
-    pub fn finish(&mut self) {
+    pub const fn finish(&mut self) {
         self.packet_ptr = ptr::null();
         self.packet_len = 0;
         self.has_packet = false;
@@ -145,7 +145,7 @@ impl AudioConverter {
     }
 
     #[must_use]
-    pub fn as_raw(&self) -> AudioConverterRef {
+    pub const fn as_raw(&self) -> AudioConverterRef {
         self.raw.as_ptr()
     }
 

@@ -72,6 +72,8 @@ so only the reader's consumption can make it stale and only that consumption may
 Popped-but-undispatchable non-terminal entries are pushed back to the queue front, so an orphaned
 `Downloading` slot is re-claimed, never dropped.
 
+When the downloader's `soft_timeout` marks an in-flight slot stalled, it wakes the peer immediately
+so `reconcile_escape` can move away from that variant; a stalled reader produces no progress wake.
 Reader progress reaches the downloader peer through one forwarding task. It delivers at most one
 wake before an ambient-aware cooperative yield: a producer may publish another edge while the task
 is still being polled, and draining that stream continuously would keep a Flash async participant

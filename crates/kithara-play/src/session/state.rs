@@ -128,7 +128,7 @@ impl<B: AudioBackend> SessionState<B> {
         }
     }
 
-    pub fn ctx_mut(&mut self) -> Option<&mut FirewheelCtx<B>> {
+    pub const fn ctx_mut(&mut self) -> Option<&mut FirewheelCtx<B>> {
         self.ctx.as_mut()
     }
 }

@@ -1,173 +1,295 @@
+mod response;
+
 use std::{
     io,
-    io::Error,
     sync::atomic::{AtomicBool, AtomicU64, Ordering},
     task::{Context, Poll},
 };
 
 use kithara_abr::Abr;
-use kithara_assets::{ProducerHandle, ReadSide, WriteSide};
-use kithara_events::{FileError, FileEvent, TotalBytesSource};
-use kithara_net::{Headers, NetError, RangeSpec, Retryability};
-use kithara_platform::sync::{Arc, Mutex};
-use kithara_storage::ResourceStatus;
-use kithara_stream::{
-    MediaInfo,
-    dl::{FetchCmd, Peer, RequestPriority, reject_html_response},
+use kithara_assets::{ReadSide, ResourceLease, WriterEpoch, WriterHandle};
+use kithara_net::{Headers, NetError, RangeSpec};
+use kithara_platform::{
+    CancelToken, CancelWakerGuard,
+    sync::{Arc, Mutex, Weak},
 };
+use kithara_storage::ResourceStatus;
+use kithara_stream::dl::{FetchCmd, Peer, RequestPriority, reject_html_response};
 
-use crate::session::inner::{FileInner, FilePhase};
+use self::response::{FetchCompletion, FetchWriter, response_contract};
+use crate::session::inner::FileInner;
 
-/// File-track Peer: gap-driven downloader over a single remote file.
-///
-/// Each `poll_next` issues at most one fetch and remains pending until
-/// the previous fetch finalises. On finalise the peer re-polls,
-/// inspects the resource's remaining gap and emits a Range GET for the
-/// next missing range — so partial / truncated transfers resume
-/// transparently. Returns `Ready(None)` only once the resource has no
-/// gaps left.
+/// Gap-driven downloader for one remote file session.
+/// It emits at most one fetch and waits when finite demand is already present.
 pub(crate) struct FilePeer {
-    /// `true` while a fetch issued by this peer is still in flight.
-    /// Cleared from the `on_complete` callback before the Downloader
-    /// re-polls.
+    _session_cancel_wake: CancelWakerGuard,
+    _source_cancel_wake: CancelWakerGuard,
+    /// Whether this peer has an in-flight fetch.
     inflight: Arc<AtomicBool>,
-    inner: Arc<FileInner>,
-    /// Single-producer election handle. `Some` only while this peer is
-    /// the elected producer for the shared resource. Starts as the
-    /// attach-time winner (or `None` for a loser); a loser promotes
-    /// itself via [`DemandLease::try_take_producer`] once the previous
-    /// producer drops. When no demand lease was attached (standalone,
-    /// no shared store) the peer always drives - see `poll_next`.
-    producer: Mutex<Option<ProducerHandle>>,
+    inner: Weak<FileInner>,
+    /// Current single-writer election handle, if this consumer owns it.
+    writer: Mutex<Option<WriterHandle>>,
+    session_cancel: CancelToken,
+}
+
+struct WriterSnapshot {
+    cancel: CancelToken,
+    epoch: WriterEpoch,
+    watermark: u64,
+}
+
+struct FetchPlan {
+    cancel: CancelToken,
+    end_exclusive: Option<u64>,
+    epoch: WriterEpoch,
+    start: u64,
+}
+
+enum PeerAction {
+    Done,
+    Fetch(FetchPlan),
+    Pending,
 }
 
 impl FilePeer {
-    pub(crate) fn new(inner: Arc<FileInner>, producer: Option<ProducerHandle>) -> Self {
+    /// Build the remote session's download peer.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `inner` has no resource lease. Local and already-cached files
+    /// do not create peers.
+    pub(crate) fn new(inner: &Arc<FileInner>, writer: Option<WriterHandle>) -> Self {
+        let Some(lease) = inner.resource_lease.as_ref() else {
+            panic!("BUG: FilePeer requires a resource lease");
+        };
+        let session_cancel = lease.session_cancel();
+        let source_cancel_wake = wake_peer_on_cancel(&inner.source.cancel, inner);
+        let session_cancel_wake = wake_peer_on_cancel(&session_cancel, inner);
         Self {
-            inner,
+            _session_cancel_wake: session_cancel_wake,
+            _source_cancel_wake: source_cancel_wake,
             inflight: Arc::new(AtomicBool::new(false)),
-            producer: Mutex::new(producer),
+            inner: Arc::downgrade(inner),
+            writer: Mutex::new(writer),
+            session_cancel,
         }
     }
 
-    fn build_fetch_cmd(&self, resume_from: u64) -> FetchCmd {
-        let url = self.inner.asset.url.clone();
-        let headers = self.inner.asset.headers.clone();
-        let cancel = self.inner.source.cancel.clone();
+    fn build_fetch_cmd(&self, inner: &Arc<FileInner>, plan: FetchPlan) -> FetchCmd {
+        let FetchPlan {
+            cancel: writer_cancel,
+            end_exclusive,
+            epoch,
+            start,
+        } = plan;
+        let url = inner.asset.url.clone();
+        let headers = inner.asset.headers.clone();
+        let source_cancel = inner.source.cancel.clone();
+        let fetch_cancel = writer_cancel.child();
+        let cancel_from_source = fetch_cancel.clone();
+        let source_cancel_guard = source_cancel.on_cancel(move || cancel_from_source.cancel());
 
-        let raw = self.inner.asset.raw.clone();
-        let coord_writer = Arc::clone(&self.inner.source.coord);
-        let inner_for_write = Arc::clone(&self.inner);
-        let offset = Arc::new(AtomicU64::new(resume_from));
-        let writer_offset = Arc::clone(&offset);
-        let writer = Box::new(move |chunk: &[u8]| -> io::Result<()> {
-            let chunk_len = u64::try_from(chunk.len()).map_err(|err| {
-                Error::other(format!("file chunk length does not fit u64: {err}"))
-            })?;
-            let pos = writer_offset.fetch_add(chunk_len, Ordering::Relaxed);
-            let end = pos
-                .checked_add(chunk_len)
-                .ok_or_else(|| Error::other("file download offset overflow"))?;
-            let Some(raw) = raw.as_ref() else {
-                return Err(Error::other(
-                    "file resource has no writer (already committed or read-only)",
-                ));
-            };
-            raw.write_at(pos, chunk).map_err(Error::other)?;
-            coord_writer.set_download_pos(end);
-            inner_for_write.wake_worker();
-            Ok(())
-        });
+        let invalid_response = Arc::new(AtomicBool::new(false));
+        let offset = Arc::new(AtomicU64::new(start));
+        let writer_state = FetchWriter {
+            cancel: fetch_cancel.clone(),
+            epoch: epoch.clone(),
+            inner: Arc::downgrade(inner),
+            invalid_response: Arc::clone(&invalid_response),
+            offset: Arc::clone(&offset),
+        };
+        let writer = Box::new(move |chunk: &[u8]| -> io::Result<()> { writer_state.write(chunk) });
 
-        let inner_for_resp = Arc::clone(&self.inner);
+        let weak_for_response = Arc::downgrade(inner);
+        let response_epoch = epoch.clone();
+        let invalid_for_response = Arc::clone(&invalid_response);
         let on_response = Box::new(move |headers: &Headers| {
-            inner_for_resp.capture_content_metadata(headers, resume_from);
+            if response_epoch.is_current() {
+                let invalid = weak_for_response.upgrade().map_or_else(
+                    || response_contract(headers, start, end_exclusive).invalid,
+                    |inner| !inner.capture_content_metadata(headers, start, end_exclusive),
+                );
+                invalid_for_response.store(invalid, Ordering::Release);
+            }
         });
 
-        let inner = Arc::clone(&self.inner);
+        let weak_for_complete = Arc::downgrade(inner);
+        let invalid_for_complete = Arc::clone(&invalid_response);
         let inflight = Arc::clone(&self.inflight);
         let cb_offset = Arc::clone(&offset);
         let on_complete = Box::new(
             move |_reported_total: u64, _headers: Option<&Headers>, err: Option<&NetError>| {
-                let written = cb_offset
-                    .load(Ordering::Relaxed)
-                    .saturating_sub(resume_from);
-                inner.finalize_fetch(resume_from, written, err);
+                drop(source_cancel_guard);
+                let written = cb_offset.load(Ordering::Acquire).saturating_sub(start);
+                if let Some(inner) = weak_for_complete.upgrade() {
+                    inner.complete_fetch(
+                        &epoch,
+                        FetchCompletion {
+                            bytes_written: written,
+                            end_exclusive,
+                            error: err,
+                            invalid_response: invalid_for_complete.load(Ordering::Acquire),
+                            resume_from: start,
+                        },
+                    );
+                }
                 inflight.store(false, Ordering::Release);
             },
         );
 
         FetchCmd::get(url)
-            .cancel(cancel)
+            .cancel(fetch_cancel)
             .writer(writer)
             .validator(reject_html_response)
             .on_response(on_response)
-            .maybe_range((resume_from > 0).then(|| RangeSpec::new(resume_from, None)))
+            .maybe_range(fetch_range(start, end_exclusive))
             .maybe_headers(headers)
             .on_complete(on_complete)
             .build()
     }
 
-    /// Whether this peer may issue GETs for the shared resource.
-    ///
-    /// Resources with no demand lease (standalone store, single
-    /// consumer) always drive. With a lease, only the elected producer
-    /// drives; a non-producer first tries to take over an abandoned slot
-    /// (`try_take_producer`) and otherwise yields to the live producer.
-    fn ensure_producer(&self) -> bool {
-        let Some(lease) = self.inner.demand_lease.as_ref() else {
-            return true;
+    /// Snapshot the current writer without dropping election state under File's lock.
+    fn writer_snapshot(&self, lease: &ResourceLease) -> Option<WriterSnapshot> {
+        let stale = {
+            let mut writer = self.writer.lock();
+            if writer.as_ref().is_some_and(|handle| !handle.is_current()) {
+                writer.take()
+            } else {
+                None
+            }
         };
-        let mut producer = self.producer.lock();
-        if producer.is_some() {
-            return true;
-        }
-        if let Some(handle) = lease.try_take_producer() {
-            *producer = Some(handle);
-            return true;
-        }
-        drop(producer);
-        false
+        drop(stale);
+
+        let needs_writer = self.writer.lock().is_none();
+        let candidate = if needs_writer {
+            lease.try_take_writer()
+        } else {
+            None
+        };
+        let rejected = candidate.and_then(|candidate| {
+            let mut writer = self.writer.lock();
+            let rejected = if writer.is_none() {
+                *writer = Some(candidate);
+                None
+            } else {
+                Some(candidate)
+            };
+            drop(writer);
+            rejected
+        });
+        drop(rejected);
+
+        let (snapshot, stale) = {
+            let mut writer = self.writer.lock();
+            match writer.as_ref() {
+                Some(handle) if handle.is_current() => (
+                    Some(WriterSnapshot {
+                        cancel: handle.writer_cancel(),
+                        epoch: handle.epoch(),
+                        watermark: handle.max_watermark(),
+                    }),
+                    None,
+                ),
+                Some(_) => (None, writer.take()),
+                None => (None, None),
+            }
+        };
+        drop(stale);
+        snapshot
     }
 
-    /// Start of the next byte range worth fetching, or `None` when the
-    /// resource is terminal (neither `Active` nor `Committed`) or already
-    /// fully covered. The gap walk only runs once the status check passes.
-    fn next_fetchable_gap(&self) -> Option<u64> {
-        matches!(
-            self.inner.asset.reader.status(),
-            ResourceStatus::Active | ResourceStatus::Committed { .. }
-        )
-        .then(|| self.inner.next_gap_start())
-        .flatten()
+    fn drop_writer(&self) {
+        let writer = self.writer.lock().take();
+        drop(writer);
     }
+
+    fn next_action(&self, inner: &Arc<FileInner>, lease: &ResourceLease) -> PeerAction {
+        if inner.source.cancel.is_cancelled() || self.session_cancel.is_cancelled() {
+            self.drop_writer();
+            return PeerAction::Done;
+        }
+        if inner.observe_committed() {
+            return PeerAction::Done;
+        }
+        if !matches!(inner.asset.reader.status(), ResourceStatus::Active) {
+            return PeerAction::Done;
+        }
+
+        let Some(writer) = self.writer_snapshot(lease) else {
+            return PeerAction::Pending;
+        };
+        let total = inner.source.coord.total_bytes();
+        let upper = total.map_or(writer.watermark, |total| total.min(writer.watermark));
+        let Some(gap) = inner.asset.reader.next_gap(0, upper) else {
+            return PeerAction::Pending;
+        };
+        let end_exclusive = (total.is_some() || writer.watermark != u64::MAX).then_some(gap.end);
+        PeerAction::Fetch(FetchPlan {
+            cancel: writer.cancel,
+            end_exclusive,
+            epoch: writer.epoch,
+            start: gap.start,
+        })
+    }
+}
+
+fn wake_peer_on_cancel(cancel: &CancelToken, inner: &Arc<FileInner>) -> CancelWakerGuard {
+    let weak = Arc::downgrade(inner);
+    cancel.on_cancel(move || {
+        if let Some(inner) = weak.upgrade()
+            && let Some(lease) = inner.resource_lease.as_ref()
+        {
+            lease.wake_peer();
+        }
+    })
+}
+
+fn fetch_range(start: u64, end_exclusive: Option<u64>) -> Option<RangeSpec> {
+    end_exclusive.map_or_else(
+        || (start > 0).then(|| RangeSpec::new(start, None)),
+        |end| {
+            end.checked_sub(1)
+                .filter(|end| *end >= start)
+                .map(|end| RangeSpec::new(start, Some(end)))
+        },
+    )
 }
 
 impl Abr for FilePeer {}
 
 impl Peer for FilePeer {
-    fn poll_next(&self, _cx: &mut Context<'_>) -> Poll<Option<Vec<FetchCmd>>> {
+    fn poll_next(&self, cx: &mut Context<'_>) -> Poll<Option<Vec<FetchCmd>>> {
         if self.inflight.load(Ordering::Acquire) {
             return Poll::Pending;
         }
-        let Some(gap_start) = self.next_fetchable_gap() else {
+        let Some(inner) = self.inner.upgrade() else {
             return Poll::Ready(None);
         };
-        // A gap remains. Only the elected producer issues GETs so two
-        // consumers of one shared resource (e.g. player + waveform) share
-        // a single download. A non-producer yields and re-polls on the
-        // next downloader tick (a sibling fetch completing), which also
-        // covers producer handoff after the original producer drops.
-        if !self.ensure_producer() {
-            return Poll::Pending;
+        let Some(lease) = inner.resource_lease.as_ref() else {
+            return Poll::Ready(None);
+        };
+
+        lease.register_peer_waker(cx.waker());
+        match self.next_action(&inner, lease) {
+            PeerAction::Pending => Poll::Pending,
+            PeerAction::Done => {
+                lease.clear_peer_waker(cx.waker());
+                Poll::Ready(None)
+            }
+            PeerAction::Fetch(plan) => {
+                lease.clear_peer_waker(cx.waker());
+                self.inflight.store(true, Ordering::Release);
+                Poll::Ready(Some(vec![self.build_fetch_cmd(&inner, plan)]))
+            }
         }
-        self.inflight.store(true, Ordering::Release);
-        self.inner.set_phase(FilePhase::Downloading);
-        Poll::Ready(Some(vec![self.build_fetch_cmd(gap_start)]))
     }
 
     fn priority(&self) -> RequestPriority {
-        if self.inner.source.coord.activity().is_playing() {
+        if self
+            .inner
+            .upgrade()
+            .is_some_and(|inner| inner.source.coord.activity().is_playing())
+        {
             RequestPriority::High
         } else {
             RequestPriority::Low
@@ -175,236 +297,5 @@ impl Peer for FilePeer {
     }
 }
 
-impl FileInner {
-    /// Pull `Content-Length` and `Content-Type` out of the response
-    /// headers and seed the coord / codec hint. Both lookups try the
-    /// lower-cased header first (per HTTP/2 RFC) and fall back to the
-    /// title-cased form from older HTTP/1.1 servers.
-    ///
-    /// `resume_from` is the byte offset our Range request started at:
-    /// on a `206 Partial Content` response, `Content-Length` describes
-    /// the partial body length, so the resource's full size is
-    /// `resume_from + content_length`.
-    fn capture_content_metadata(&self, headers: &Headers, resume_from: u64) {
-        let previous_total = self.source.coord.total_bytes();
-        let content_length = headers
-            .get("content-length")
-            .or_else(|| headers.get("Content-Length"))
-            .and_then(|v| v.parse::<u64>().ok());
-        if let Some(len) = content_length {
-            let total_bytes = resume_from + len;
-            self.source.coord.set_total_bytes(Some(total_bytes));
-            if previous_total != Some(total_bytes) {
-                self.publish_total_bytes_resolved(total_bytes, TotalBytesSource::ContentLength);
-            }
-        }
-        let info = headers
-            .get("content-type")
-            .or_else(|| headers.get("Content-Type"))
-            .and_then(MediaInfo::parse_mime);
-        if let Some(i) = info {
-            let _ = self.content_type_info.set(i);
-        }
-        self.publish_opened(self.source.coord.total_bytes(), false, None);
-    }
-
-    /// Apply the result of a streaming fetch to the resource.
-    ///
-    /// * commits the resource once the full byte space is covered
-    /// * on a transient error with bytes already received, leaves the
-    ///   resource active so the peer's next `poll_next` issues a
-    ///   Range GET for the remaining gap
-    /// * on a terminal error (non-retryable, or hard failure with no
-    ///   bytes received), fails+evicts the resource and publishes a
-    ///   `FileEvent::Error`
-    ///
-    /// Header capture (`Content-Length` / `Content-Type`) happens
-    /// eagerly in `on_response`, not here, so a reader blocked on the
-    /// first byte sees the seeded coord the instant `write_at` fires.
-    fn finalize_fetch(&self, resume_from: u64, bytes_written: u64, err: Option<&NetError>) {
-        if let Some(e) = err {
-            let terminal =
-                e.retryability() == Retryability::Fatal || (resume_from == 0 && bytes_written == 0);
-            if terminal {
-                let msg = e.to_string();
-                self.fail_and_evict(&msg);
-                self.source.bus.publish(FileEvent::Error {
-                    error: FileError::Io(msg),
-                });
-            }
-            return;
-        }
-
-        if self.next_gap_start().is_some() {
-            return;
-        }
-
-        let final_len = self
-            .source
-            .coord
-            .total_bytes()
-            .unwrap_or(resume_from + bytes_written);
-        let Some(writer) = self.take_writer() else {
-            // Writer already consumed (committed by a sibling/race) — the
-            // resource is final; just advance the FSM.
-            self.set_phase(FilePhase::Complete);
-            return;
-        };
-        match writer.commit(Some(final_len)) {
-            Ok(_reader) => self.set_phase(FilePhase::Complete),
-            Err(e) => {
-                let msg = e.to_string();
-                self.fail_and_evict(&msg);
-                self.source.bus.publish(FileEvent::Error {
-                    error: FileError::Io(msg),
-                });
-            }
-        }
-    }
-
-    /// Start of the next missing byte range on this resource, or
-    /// `None` when the resource is fully covered. Upper bound is the
-    /// known total — committed length (when reactivating a partial)
-    /// or the discovered `Content-Length` (after the first response
-    /// headers seed `coord.total_bytes`). Without either, falls back
-    /// to `u64::MAX` so the gap walker scans the whole space.
-    fn next_gap_start(&self) -> Option<u64> {
-        let upper = self
-            .asset
-            .reader
-            .len()
-            .or_else(|| self.source.coord.total_bytes())
-            .unwrap_or(u64::MAX);
-        self.asset.reader.next_gap(0, upper).map(|gap| gap.start)
-    }
-}
-
 #[cfg(test)]
-mod tests {
-    use kithara_assets::{
-        AcquisitionResult, AssetResource, AssetResourceState, AssetSource, AssetStore, ResourceKey,
-        StorageBackend,
-    };
-    use kithara_events::{Envelope, Event, EventBus};
-    use kithara_platform::{CancelToken, sync::Arc};
-    use kithara_stream::{PlayheadState, SeekState};
-    use kithara_test_utils::kithara;
-    use url::Url;
-
-    use super::*;
-    use crate::{File, coord::FileCoord};
-
-    fn test_key(store: &AssetStore) -> ResourceKey {
-        let source = AssetSource::Remote {
-            url: Url::parse("https://example.com/remote.dat").expect("test URL"),
-            discriminator: Some("peer-test".to_string()),
-        };
-        let scope = store.scope::<File>(&source).expect("test scope");
-        scope
-            .key(&AssetResource::Source {
-                extension: "dat".to_string(),
-            })
-            .expect("test resource key")
-    }
-
-    fn make_inner() -> Arc<FileInner> {
-        let store = AssetStore::builder()
-            .backend(StorageBackend::Memory)
-            .cancel(CancelToken::never())
-            .build();
-        let key = test_key(&store);
-        let AcquisitionResult::Pending(writer) = store.acquire_resource(&key, None).unwrap() else {
-            panic!("fresh acquire must be Pending");
-        };
-        let coord = Arc::new(FileCoord::new(
-            Arc::new(PlayheadState::new()),
-            Arc::new(SeekState::new()),
-        ));
-        let bus = EventBus::new(16);
-        Arc::new(FileInner::new(
-            crate::session::inner::FileSourceCtx {
-                coord,
-                bus,
-                cancel: CancelToken::never(),
-            },
-            crate::session::inner::FileAssetCtx {
-                key,
-                backend: store,
-                reader: writer.reader(),
-                writer: Mutex::new(Some(writer)),
-                headers: None,
-                raw: None,
-                url: Url::parse("http://127.0.0.1/test.mp3").expect("test url"),
-            },
-            FilePhase::Init,
-            None,
-        ))
-    }
-
-    #[kithara::test]
-    fn remote_capture_metadata_publishes_opened() {
-        let inner = make_inner();
-        let mut rx = inner.source.bus.subscribe();
-        let mut headers = Headers::default();
-        headers.insert("content-type", "audio/mpeg");
-        headers.insert("content-length", "12");
-
-        inner.capture_content_metadata(&headers, 0);
-
-        assert!(matches!(
-            rx.try_recv(),
-            Ok(Envelope {
-                event: Event::File(FileEvent::TotalBytesResolved { .. }),
-                ..
-            })
-        ));
-        assert!(matches!(
-            rx.try_recv(),
-            Ok(Envelope {
-                event: Event::File(FileEvent::Opened {
-                    cached: false,
-                    total_bytes: Some(12),
-                    ..
-                }),
-                ..
-            })
-        ));
-    }
-
-    #[kithara::test]
-    fn complete_phase_publishes_cache_complete() {
-        let inner = make_inner();
-        let mut rx = inner.source.bus.subscribe();
-        inner.source.coord.set_total_bytes(Some(12));
-
-        inner.set_phase(FilePhase::Complete);
-
-        assert!(matches!(
-            rx.try_recv(),
-            Ok(Envelope {
-                event: Event::File(FileEvent::CacheComplete { total_bytes: 12 }),
-                ..
-            })
-        ));
-    }
-
-    #[kithara::test]
-    fn terminal_failure_does_not_publish_cache_complete() {
-        let inner = make_inner();
-        let mut rx = inner.source.bus.subscribe();
-        inner.source.coord.set_total_bytes(Some(12));
-        inner.set_phase(FilePhase::Downloading);
-
-        inner.fail_and_evict("fixture terminal failure");
-
-        assert!(rx.try_recv().is_err());
-        assert!(matches!(
-            inner
-                .asset
-                .backend
-                .resource_state(&inner.asset.key)
-                .expect("resource state"),
-            AssetResourceState::Missing
-        ));
-    }
-}
+mod tests;

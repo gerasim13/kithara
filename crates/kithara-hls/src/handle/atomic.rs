@@ -59,7 +59,11 @@ pub(crate) type PlaylistPeer = AtomicFetch<Playlist>;
 pub(crate) type KeyPeer = AtomicFetch<Key>;
 
 impl<R: AtomicResource> AtomicFetch<R> {
-    pub(crate) fn new(downloader: PeerHandle, scope: AssetScope, byte_pool: BytePool) -> Self {
+    pub(crate) const fn new(
+        downloader: PeerHandle,
+        scope: AssetScope,
+        byte_pool: BytePool,
+    ) -> Self {
         Self {
             downloader,
             scope,

@@ -11,10 +11,7 @@ use crate::{
 };
 
 impl HlsVariant {
-    /// Common assembly for init and segment fetches. Both go through the
-    /// same `FetchSlot`: writer streams to the asset resource, `on_complete`
-    /// runs `settle` which observes `cancel.is_cancelled()` as the epoch
-    /// gate.
+    /// Builds a fetch command whose completion settles the claim under its cancellation epoch.
     pub(super) fn build_cmd(
         self: &Arc<Self>,
         url: Url,
@@ -25,9 +22,7 @@ impl HlsVariant {
     ) -> Option<FetchCmd> {
         let writer = match acq {
             AcquisitionResult::Pending(writer) => writer,
-            // Committed between the skip-fetch probe and acquire — no download.
-            // Mirror `settle_success`: mark the segment loaded at its on-disk
-            // length so announced/estimated sizes match the bytes on disk.
+            // WHY: A concurrent cache commit supplies the authoritative on-disk length.
             AcquisitionResult::Ready(reader) => {
                 match reader.status() {
                     ResourceStatus::Committed { final_len: Some(n) } => {
@@ -54,25 +49,16 @@ impl HlsVariant {
             signal: signal.clone(),
             bus: self.profile.bus.clone(),
         };
-        // Capture the slot's CAS cell before the claim moves into `on_complete`
-        // so the slow hook can flag this in-flight fetch when it crosses the
-        // downloader's `soft_timeout`. The ABR stalled-escape gate reads it.
+        // WHY: The timeout hook needs the slot cell after the claim moves into `on_complete`.
         let slow_slot = slot.handle.slot_state();
         let slow_signal = signal.clone();
         let on_slow: OnSlowFn = Box::new(move || {
             slow_slot.mark_slow();
-            // Wake the peer's `poll_next` so `reconcile_escape` runs against the
-            // now-stalled slot. Without this the escape waited on an incidental
-            // reader-progress wake the stalled variant can never produce.
+            // WHY: Stalled-escape reconciliation has no reader progress to wake it.
             slow_signal.wake_peer();
         });
         let mut inner_writer = slot.writer();
-        // Per-chunk write signal: wake a reader parked in `wait_range(_, None)`
-        // the moment bytes land (not only on commit), so a sub-segment range
-        // resolves without waiting for settle. Also re-ticks the RT decoder's
-        // audio worker (off the 10 ms scheduler poll) the instant plaintext
-        // bytes land. Runs on the downloader thread (off-RT) — taking the
-        // gate's condvar mutex and the wait-free worker unpark are allowed here.
+        // WHY: Readers and the audio worker need byte-arrival wakes before terminal settle.
         let writer_fn: WriterFn = Box::new(move |chunk: &[u8]| {
             let result = inner_writer(chunk);
             if result.is_ok() {

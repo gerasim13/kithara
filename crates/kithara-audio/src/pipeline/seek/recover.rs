@@ -22,7 +22,7 @@ pub(crate) struct SeekRecovery {
 }
 
 impl SeekRecovery {
-    pub(crate) fn new(
+    pub(crate) const fn new(
         request: SeekRequest,
         position: Duration,
         offset: u64,

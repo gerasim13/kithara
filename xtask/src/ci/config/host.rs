@@ -42,6 +42,13 @@ pub(crate) struct CiHost {
     pub(crate) macos_guest_xcode_developer_dir: PathBuf,
     pub(crate) gitlab_url: Url,
     pub(crate) host_root: PathBuf,
+    /// Where runners check work out. Separate from `host_root` because Apple's
+    /// packaging cannot run on a case-sensitive volume — `xcodebuild` writes
+    /// `Headers` and `cargo swift package` then removes `headers` — while the
+    /// rest of the host root is happy either way. Defaults to `host_root` for
+    /// a machine whose volume already folds case.
+    #[serde(default)]
+    pub(crate) build_root: Option<PathBuf>,
     pub(crate) host_xcode_developer_dir: PathBuf,
     pub(crate) quota_bytes: u64,
     pub(crate) reject_bytes: u64,
@@ -147,11 +154,22 @@ impl CiHost {
         if self.host_root.parent() != Some(Path::new("/Volumes")) {
             bail!("host_root must name a dedicated volume directly below /Volumes");
         }
+        if self
+            .build_root
+            .as_ref()
+            .is_some_and(|build_root| !build_root.is_absolute())
+        {
+            bail!("CI host profile build_root must be an absolute macOS path");
+        }
         Ok(())
     }
 
     pub(crate) fn gitlab_origin(&self) -> String {
         self.gitlab_url.as_str().trim_end_matches('/').to_string()
+    }
+
+    pub(crate) fn build_root(&self) -> &Path {
+        self.build_root.as_deref().unwrap_or(&self.host_root)
     }
 
     pub(crate) fn build_cache_budget_bytes(&self) -> Result<u64> {
@@ -162,7 +180,7 @@ impl CiHost {
     /// The headroom a job insists on before it starts. The host stops handing
     /// out work once the CI volume passes `reject_bytes`, so the room left at
     /// that point is what the policy already considers too little to start on.
-    pub(crate) fn free_bytes_for_a_job(&self) -> u64 {
+    pub(crate) const fn free_bytes_for_a_job(&self) -> u64 {
         self.quota_bytes.saturating_sub(self.reject_bytes)
     }
 
@@ -310,6 +328,16 @@ mod tests {
         let error = CiHost::load(&path).unwrap_err();
 
         assert!(format!("{error:#}").contains("positive whole number followed by GB"));
+    }
+
+    #[test]
+    fn macos_build_root_must_be_absolute() {
+        let mut host = super::super::fixture().host;
+        host.build_root = Some(PathBuf::from("case-folding-build-root"));
+
+        let error = host.validate_macos_layout().unwrap_err();
+
+        assert!(format!("{error:#}").contains("build_root must be an absolute macOS path"));
     }
 
     #[test]

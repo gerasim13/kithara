@@ -230,7 +230,7 @@ fn tracklist_width_write_is_host_owned_and_clamped() {
     assert_eq!(
         reads.get(endpoint),
         Some(ReadValue::Scalar(f64::from(
-            kithara_ui::builtin::skin().track_list.min_column_width
+            builtin::skin().track_list.min_column_width
         )))
     );
 }

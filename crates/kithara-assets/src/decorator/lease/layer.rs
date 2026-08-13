@@ -30,7 +30,7 @@ pub(crate) struct LeaseEvents {
 }
 
 impl LeaseEvents {
-    pub(crate) fn new(bus: Option<EventBus>) -> Self {
+    pub(crate) const fn new(bus: Option<EventBus>) -> Self {
         Self { bus }
     }
 
@@ -455,6 +455,7 @@ mod tests {
 
         let lease = make_lease(dir.path());
         let lease_clone = lease.clone();
+        drop(lease);
         let _res = lease_clone.acquire_resource(&key, None).unwrap();
 
         assert!(

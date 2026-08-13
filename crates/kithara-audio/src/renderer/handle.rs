@@ -13,7 +13,7 @@ pub(crate) struct TrackIdGen(AtomicU64);
 
 impl TrackIdGen {
     // ast-grep-ignore: style.prefer-default-derive
-    pub(crate) fn new() -> Self {
+    pub(crate) const fn new() -> Self {
         Self(AtomicU64::new(1))
     }
 
@@ -78,13 +78,13 @@ impl AudioWorkerHandle {
             /// Remove a track by ID.
             #[call(unregister)]
             pub(crate) fn unregister_track(&self, track_id: TrackId);
-            /// Wake the worker so it re-ticks the decoder now. Called by the RT
-            /// consumer after it drains a chunk (ring-space freed) and — via
-            /// [`WorkerWakeBridge`] — by the HLS readiness gate from the downloader
-            /// thread when segment bytes are written/committed, so an underran worker
-            /// re-ticks on data arrival instead of on its 10 ms scheduler poll.
-            /// Wait-free: an atomic bump + `unpark`, safe from any thread.
+            /// Wake the worker immediately from an off-RT control or downloader
+            /// thread. Uses `ThreadGate` unpark and must not run on an audio callback.
             pub fn wake(&self);
+            /// Publish a coalesced worker pass from an RT consumer without a
+            /// syscall or thread unpark. The scheduler consumes the level before
+            /// parking, or after its bounded park when it races with that park.
+            pub(crate) fn defer_wake(&self);
         }
     }
 }
@@ -93,7 +93,8 @@ impl AudioWorkerHandle {
 /// trait so kithara-hls (which does not depend on kithara-audio) can re-tick
 /// the worker on segment data arrival. Installed via `Stream::set_worker_wake`
 /// after the worker exists; the HLS readiness gate calls [`wake`](Self::wake)
-/// from its off-RT downloader write/settle path. Wait-free.
+/// from its off-RT downloader write/settle path and immediately unparks the
+/// scheduler.
 pub(crate) struct WorkerWakeBridge(pub(crate) AudioWorkerHandle);
 
 impl kithara_stream::WorkerWake for WorkerWakeBridge {
@@ -168,7 +169,7 @@ mod tests {
         S: AudioWorkerSource<Chunk = PcmChunk> + 'static,
     {
         let wake = Arc::new(ThreadWake::default());
-        let (outlet, inlet) = connect::<Fetch<PcmChunk>>(ringbuf_capacity, Some(wake.clone()));
+        let (outlet, inlet) = connect::<Fetch<PcmChunk>>(ringbuf_capacity, Some(wake));
         let (_trash_outlet, trash_inlet) = connect::<PcmChunk>(ringbuf_capacity + 2, None);
         let preload_gate = Arc::new(PreloadGate::default());
 

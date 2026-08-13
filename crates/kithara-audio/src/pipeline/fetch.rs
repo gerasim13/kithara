@@ -12,13 +12,13 @@ pub enum Fetch<C> {
 impl<C> Fetch<C> {
     /// Create a data fetch.
     #[must_use]
-    pub fn data(data: C, epoch: u64) -> Self {
+    pub const fn data(data: C, epoch: u64) -> Self {
         Self::Data { data, epoch }
     }
 
     /// Create a natural end-of-stream marker.
     #[must_use]
-    pub fn eof(epoch: u64) -> Self {
+    pub const fn eof(epoch: u64) -> Self {
         Self::NaturalEof { epoch }
     }
 
@@ -33,7 +33,7 @@ impl<C> Fetch<C> {
 
     /// Create a failure marker distinct from natural end-of-stream.
     #[must_use]
-    pub fn failure(epoch: u64) -> Self {
+    pub const fn failure(epoch: u64) -> Self {
         Self::Failure { epoch }
     }
 }
@@ -49,7 +49,7 @@ pub struct EpochValidator {
 
 impl EpochValidator {
     /// Check if a fetch result matches the current epoch.
-    pub fn is_valid<C>(&self, item: &Fetch<C>) -> bool {
+    pub const fn is_valid<C>(&self, item: &Fetch<C>) -> bool {
         item.epoch() == self.epoch
     }
 }

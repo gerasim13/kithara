@@ -57,7 +57,7 @@ pub(crate) struct DiskAssetDeleter {
 }
 
 impl DiskAssetDeleter {
-    pub(crate) fn new(
+    pub(crate) const fn new(
         root_dir: PathBuf,
         availability: AvailabilityIndex,
         pins: crate::index::PinsIndex,
@@ -161,7 +161,7 @@ impl DiskAssetStore {
     /// Open a fresh segment as an `AtomicChunked<MmapResource>`. The
     /// inner mmap is bound to `<path>.tmp`; on `commit()` the tmp file is
     /// renamed atomically to `path`, and the durability barrier is deferred
-    /// to the manifest flush rather than paid on the download path. The
+    /// to the manifest flush rather than paid on the resource-write path. The
     /// availability observer is attached to the inner mmap so
     /// `record_write` / `record_commit` fire as bytes arrive — same
     /// contract as the non-atomic path.

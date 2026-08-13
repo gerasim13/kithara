@@ -311,7 +311,7 @@ mod tests {
         .expect("BUG: open cancel-test resource with hard-coded params must succeed");
 
         let handle = thread::spawn({
-            let cancel = cancel.clone();
+            let cancel = cancel;
             move || {
                 thread::sleep(Duration::from_millis(50));
                 cancel.cancel();

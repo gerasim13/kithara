@@ -41,7 +41,7 @@ pub(crate) struct ItemView {
 }
 
 impl ItemView {
-    fn new(is_live_stream: bool) -> Self {
+    const fn new(is_live_stream: bool) -> Self {
         Self {
             is_live_stream,
             loading: LoadingState::Pending,
@@ -51,7 +51,7 @@ impl ItemView {
 
     /// Resolved duration in seconds, or `0.0` when not yet `Ready`
     /// (pending or failed).
-    fn duration_sec(&self) -> f64 {
+    const fn duration_sec(&self) -> f64 {
         match self.loading {
             LoadingState::Ready { duration_sec } => duration_sec,
             LoadingState::Pending | LoadingState::Failed => 0.0,
@@ -61,19 +61,19 @@ impl ItemView {
     /// Whether the item resolved metadata and is playable. False while
     /// pending or after a failure — `Ready` and `Failed` are exclusive,
     /// so this is the typed replacement for `is_ready_to_play && !is_failed`.
-    fn is_ready(&self) -> bool {
+    const fn is_ready(&self) -> bool {
         matches!(self.loading, LoadingState::Ready { .. })
     }
 
     /// Terminal failure transition from any state.
-    pub(crate) fn mark_failed(&mut self) {
+    pub(crate) const fn mark_failed(&mut self) {
         self.loading = LoadingState::Failed;
     }
 
     /// Metadata resolved with `duration_sec`. A no-op once `Failed`
     /// (failure is sticky), mirroring the old `is_failed` flag never
     /// being cleared.
-    pub(crate) fn resolve_duration(&mut self, duration_sec: f64) {
+    pub(crate) const fn resolve_duration(&mut self, duration_sec: f64) {
         if !matches!(self.loading, LoadingState::Failed) {
             self.loading = LoadingState::Ready { duration_sec };
         }
@@ -162,7 +162,7 @@ impl AudioPlayerItem {
 
     /// Caller-facing content id. Mirrors the iOS
     /// `AudioPlayerItemProtocol.audioId: TrackId`.
-    pub fn audio_id(&self) -> TrackId {
+    pub const fn audio_id(&self) -> TrackId {
         self.audio_id
     }
 
@@ -232,18 +232,18 @@ impl AudioPlayerItem {
         callback.on_complete(result);
     }
 
-    pub fn preferred_peak_bitrate(&self) -> f64 {
+    pub const fn preferred_peak_bitrate(&self) -> f64 {
         self.config.preferred_peak_bitrate
     }
 
-    pub fn preferred_peak_bitrate_for_expensive_networks(&self) -> f64 {
+    pub const fn preferred_peak_bitrate_for_expensive_networks(&self) -> f64 {
         self.config.preferred_peak_bitrate_expensive
     }
 
     /// Private queue id used by player-level events to route back to the
     /// Swift-owned item instance. High-level Swift maps it back to
     /// [`Self::audio_id`] before publishing public events.
-    pub fn queue_id(&self) -> TrackId {
+    pub const fn queue_id(&self) -> TrackId {
         self.queue_id
     }
 
@@ -262,7 +262,7 @@ impl AudioPlayerItem {
 
     /// Caller-facing queue-item uuid. Maps to
     /// `AudioPlayerItemProtocol.uuid: Int64` on iOS.
-    pub fn uuid_i64(&self) -> i64 {
+    pub const fn uuid_i64(&self) -> i64 {
         self.uuid_i64
     }
 }
@@ -270,7 +270,7 @@ impl AudioPlayerItem {
 /// Internal methods not exported across FFI.
 impl AudioPlayerItem {
     #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) fn abr_mode(&self) -> Option<FfiAbrMode> {
+    pub(crate) const fn abr_mode(&self) -> Option<FfiAbrMode> {
         self.config.abr_mode
     }
 

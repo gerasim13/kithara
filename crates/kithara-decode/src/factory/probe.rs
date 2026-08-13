@@ -166,7 +166,7 @@ pub(super) fn container_from_mime(mime: &str) -> Option<ContainerFormat> {
 /// extension only narrows the container to MP4; the codec lives in the
 /// sample entry, so a sniffed tag disambiguates AAC vs ALAC vs FLAC.
 /// `mp4a` covers every AAC profile (AOT lives in the `esds`).
-pub(super) fn codec_from_mp4_fourcc(fourcc: [u8; 4]) -> Option<AudioCodec> {
+pub(super) const fn codec_from_mp4_fourcc(fourcc: [u8; 4]) -> Option<AudioCodec> {
     match &fourcc {
         b"mp4a" => Some(AudioCodec::AacLc),
         b"fLaC" => Some(AudioCodec::Flac),
@@ -176,7 +176,7 @@ pub(super) fn codec_from_mp4_fourcc(fourcc: [u8; 4]) -> Option<AudioCodec> {
 }
 
 /// Infer likely codec from container format.
-pub(super) fn codec_from_container(container: ContainerFormat) -> Option<AudioCodec> {
+pub(super) const fn codec_from_container(container: ContainerFormat) -> Option<AudioCodec> {
     match container {
         ContainerFormat::MpegAudio => Some(AudioCodec::Mp3),
         ContainerFormat::Adts

@@ -43,7 +43,7 @@ enum Status {
 }
 
 impl Status {
-    fn label(self) -> &'static str {
+    const fn label(self) -> &'static str {
         match self {
             Self::Pass => "PASS",
             Self::Warn => "WARN",
@@ -72,7 +72,7 @@ impl Stage {
         }
     }
 
-    fn advisory(mut self) -> Self {
+    const fn advisory(mut self) -> Self {
         self.advisory = true;
         self
     }
@@ -83,7 +83,7 @@ impl Stage {
     /// tools the fleet does provision; a stage marked strict never gets that
     /// pass, because a missing tool here is missing coverage the fleet
     /// never signed up to give, not a fluke worth hiding behind SKIP.
-    fn strict(mut self) -> Self {
+    const fn strict(mut self) -> Self {
         self.strict = true;
         self
     }

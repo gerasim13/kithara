@@ -77,6 +77,6 @@ pub struct Permit;
 /// No-op when `RealtimeSanitizer` is not compiled in.
 #[cfg(not(rtsan))]
 #[inline(always)]
-pub fn permit() -> Permit {
+pub const fn permit() -> Permit {
     Permit
 }

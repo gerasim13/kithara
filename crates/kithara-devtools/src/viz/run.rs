@@ -262,7 +262,7 @@ fn detail_level(args: &VizArgs) -> DetailLevel {
     }
 }
 
-fn view_kind(view: ViewName) -> ViewKind {
+const fn view_kind(view: ViewName) -> ViewKind {
     match view {
         ViewName::Overview => ViewKind::Overview,
         ViewName::Hierarchy => ViewKind::Hierarchy,

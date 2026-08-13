@@ -92,7 +92,7 @@ enum Slot {
 
 /// Map (`peer_priority`, `cmd_priority`) → slot index.
 /// Processing order: 0 → 1 → 2 → 3.
-fn slot_index(peer_prio: RequestPriority, cmd_prio: RequestPriority) -> usize {
+const fn slot_index(peer_prio: RequestPriority, cmd_prio: RequestPriority) -> usize {
     match (peer_prio, cmd_prio) {
         (RequestPriority::High, RequestPriority::High) => Slot::HighHigh as usize,
         (RequestPriority::High, RequestPriority::Low) => Slot::HighLow as usize,
@@ -434,7 +434,7 @@ impl Drop for Registry {
 ///
 /// Pure function of its inputs so the invariant can be exhaustively
 /// tested without constructing a live Downloader.
-fn classify_progress(
+const fn classify_progress(
     inflight_enter: usize,
     inflight_exit: usize,
     poll_stats: PollStats,

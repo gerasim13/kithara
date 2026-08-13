@@ -1,6 +1,5 @@
 use std::{
     convert::Infallible,
-    future::Future,
     net::SocketAddr,
     sync::atomic::{AtomicUsize, Ordering},
     task::{Context, Poll},
@@ -13,7 +12,7 @@ use axum::{
     routing::{get, head},
 };
 use bytes::Bytes;
-use futures::{StreamExt, stream::iter as stream_iter, task::AtomicWaker};
+use futures::{StreamExt, stream::iter as stream_iter};
 use kithara_abr::Abr;
 use kithara_events::{DownloaderEvent, Envelope, Event, EventBus};
 use kithara_net::{Headers as ResponseHeaders, HttpClient, NetError as FetchError, NetOptions};
@@ -26,10 +25,7 @@ use kithara_platform::{
 use kithara_test_utils::kithara;
 use url::Url;
 
-use super::{
-    BodyStream, Downloader, DownloaderConfig, FetchCmd, Peer, PeerHandle as RegisteredHandle,
-    RequestPriority,
-};
+use super::{BodyStream, Downloader, DownloaderConfig, FetchCmd, Peer, RequestPriority};
 use crate::{Activity, SeekState};
 
 const CONCURRENCY_TEST_TIMEOUT_SECS: u64 = 30;

@@ -32,7 +32,7 @@ impl DecryptContext {
 
     /// Create a new decryption context.
     #[must_use]
-    pub fn new(key: [u8; Self::KEY_LEN_128], iv: [u8; Self::IV_LEN]) -> Self {
+    pub const fn new(key: [u8; Self::KEY_LEN_128], iv: [u8; Self::IV_LEN]) -> Self {
         Self { iv, key }
     }
 }

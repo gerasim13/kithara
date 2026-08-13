@@ -111,9 +111,8 @@ fn stream_options(inactivity_ms: u64) -> NetOptions {
 }
 
 fn range_start(request: &str) -> Option<usize> {
-    request
-        .lines()
-        .find_map(|line| line.strip_prefix("Range: bytes="))
+    request_header(request, "range")
+        .and_then(|range| range.strip_prefix("bytes="))
         .and_then(|range| range.split_once('-').map(|(start, _)| start))
         .and_then(|start| start.parse().ok())
 }
@@ -305,6 +304,213 @@ async fn apple_head_backfills_content_length_from_content_range() {
     let headers = client.head(url, None).await.expect("head");
 
     assert_eq!(headers.get("content-length"), Some("1234"));
+}
+
+#[kithara::test(tokio, timeout(Duration::from_secs(5)))]
+async fn apple_range_rejects_partial_without_content_range() {
+    let url = spawn_server(|socket, _request| async move {
+        write_response(socket, "206 Partial Content", &[], b"part").await;
+    })
+    .await;
+    let client = AppleNet::new(fast_options(0), CancelToken::never());
+
+    let Err(error) = client
+        .get_range(url, RangeSpec::new(0, Some(3)), None)
+        .await
+    else {
+        panic!("partial range without content-range must fail before body delivery");
+    };
+
+    assert!(matches!(error, NetError::Decode(detail) if detail.contains("content-range")));
+}
+
+#[kithara::test(tokio, timeout(Duration::from_secs(5)))]
+async fn apple_range_rejects_partial_without_content_length() {
+    let url = spawn_server(|socket, _request| async move {
+        write_raw(
+            socket,
+            b"HTTP/1.1 206 Partial Content\r\nContent-Range: bytes 0-3/8\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n8\r\nabcdefgh\r\n0\r\n\r\n",
+        )
+        .await;
+    })
+    .await;
+    let client = AppleNet::new(fast_options(0), CancelToken::never());
+
+    let Err(error) = client
+        .get_range(url, RangeSpec::new(0, Some(3)), None)
+        .await
+    else {
+        panic!("partial range without content-length must fail before body delivery");
+    };
+
+    assert!(matches!(error, NetError::Decode(detail) if detail.contains("content-length")));
+}
+
+#[kithara::test(tokio, timeout(Duration::from_secs(5)))]
+async fn apple_resume_rejects_a_different_content_range() {
+    const BODY_LEN: usize = 2 * 1024 * 1024;
+    const FIRST_WRITE_LEN: usize = 1024 * 1024;
+
+    let body = Arc::new(vec![0x5a; BODY_LEN]);
+    let requests = Arc::new(AtomicU32::new(0));
+    let seen = Arc::clone(&requests);
+    let served_body = Arc::clone(&body);
+    let url = spawn_server(move |mut socket, request| {
+        let seen = Arc::clone(&seen);
+        let body = Arc::clone(&served_body);
+        async move {
+            seen.fetch_add(1, Ordering::SeqCst);
+            if range_start(&request).is_some() {
+                let content_range = format!("bytes 0-0/{}", body.len());
+                write_response(
+                    socket,
+                    "206 Partial Content",
+                    &[("Content-Range", &content_range)],
+                    b"x",
+                )
+                .await;
+            } else {
+                let head = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                );
+                socket.write_all(head.as_bytes()).await.expect("write head");
+                socket
+                    .write_all(&body[..FIRST_WRITE_LEN])
+                    .await
+                    .expect("write short body");
+                kithara_platform::time::sleep(Duration::from_millis(20)).await;
+            }
+        }
+    })
+    .await;
+    let client = AppleNet::new(fast_options(1), CancelToken::never());
+    let stream = client.stream(url, None).await.expect("initial stream");
+
+    let error = collect(stream)
+        .await
+        .expect_err("wrong resumed range must terminate the stream");
+
+    assert!(
+        matches!(error, NetError::Decode(detail) if detail.contains("bytes=") && detail.contains("bytes 0-0/"))
+    );
+    assert_eq!(requests.load(Ordering::SeqCst), 2);
+}
+
+#[kithara::test(tokio, timeout(Duration::from_secs(5)))]
+async fn apple_resume_rejects_a_conflicting_representation_total() {
+    const BODY_LEN: usize = 2 * 1024 * 1024;
+    const FIRST_WRITE_LEN: usize = 1024 * 1024;
+
+    let body = Arc::new(vec![0x5a; BODY_LEN]);
+    let requests = Arc::new(AtomicU32::new(0));
+    let seen = Arc::clone(&requests);
+    let served_body = Arc::clone(&body);
+    let url = spawn_server(move |mut socket, request| {
+        let seen = Arc::clone(&seen);
+        let body = Arc::clone(&served_body);
+        async move {
+            seen.fetch_add(1, Ordering::SeqCst);
+            if let Some(start) = range_start(&request) {
+                let end = body.len().saturating_sub(1);
+                let conflicting_total = body.len().saturating_add(1);
+                let content_range = format!("bytes {start}-{end}/{conflicting_total}");
+                write_response(
+                    socket,
+                    "206 Partial Content",
+                    &[("Content-Range", &content_range)],
+                    &body[start..],
+                )
+                .await;
+            } else {
+                let head = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                );
+                socket.write_all(head.as_bytes()).await.expect("write head");
+                socket
+                    .write_all(&body[..FIRST_WRITE_LEN])
+                    .await
+                    .expect("write short body");
+                kithara_platform::time::sleep(Duration::from_millis(20)).await;
+            }
+        }
+    })
+    .await;
+    let client = AppleNet::new(fast_options(1), CancelToken::never());
+    let stream = client.stream(url, None).await.expect("initial stream");
+
+    let error = collect(stream)
+        .await
+        .expect_err("conflicting resumed total must terminate the stream");
+
+    assert!(
+        matches!(error, NetError::Decode(detail) if detail.contains("changed representation total"))
+    );
+    assert_eq!(requests.load(Ordering::SeqCst), 2);
+}
+
+#[kithara::test(tokio, timeout(Duration::from_secs(5)))]
+async fn apple_ignored_range_resume_continues_after_discovering_total() {
+    const BODY_BYTE: u8 = 0x5a;
+    const BODY_LEN: usize = 2 * 1024 * 1024;
+    const FIRST_WRITE_LEN: usize = 1024 * 1024;
+    const REQUEST_END: u64 = 1023;
+
+    let body = Arc::new(vec![BODY_BYTE; BODY_LEN]);
+    let requests = Arc::new(AtomicU32::new(0));
+    let seen = Arc::clone(&requests);
+    let served_body = Arc::clone(&body);
+    let url = spawn_server(move |mut socket, request| {
+        let body = Arc::clone(&served_body);
+        let attempt = seen.fetch_add(1, Ordering::SeqCst);
+        async move {
+            if attempt > 0 {
+                let start = range_start(&request).expect("resumed range start");
+                let range = request_header(&request, "range").expect("range header");
+                assert_eq!(range, format!("bytes={start}-"));
+                let end_exclusive = BODY_LEN;
+                let end = end_exclusive.saturating_sub(1);
+                let content_range = format!("bytes {start}-{end}/{BODY_LEN}");
+                write_response(
+                    socket,
+                    "206 Partial Content",
+                    &[("Content-Range", &content_range)],
+                    &body[start..end_exclusive],
+                )
+                .await;
+            } else {
+                socket
+                    .write_all(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n")
+                    .await
+                    .expect("write head");
+                socket
+                    .write_all(format!("{FIRST_WRITE_LEN:x}\r\n").as_bytes())
+                    .await
+                    .expect("write chunk head");
+                socket
+                    .write_all(&body[..FIRST_WRITE_LEN])
+                    .await
+                    .expect("write stalled chunk");
+                socket.write_all(b"\r\n").await.expect("write chunk tail");
+                kithara_platform::time::sleep(Duration::from_millis(60)).await;
+            }
+        }
+    })
+    .await;
+    let client = AppleNet::new(fast_options(2), CancelToken::never());
+    let stream = client
+        .get_range(url, RangeSpec::new(0, Some(REQUEST_END)), None)
+        .await
+        .expect("initial stream");
+
+    let body = collect(stream)
+        .await
+        .expect("discovered total must drive the remaining resume");
+
+    assert_eq!(body.len(), BODY_LEN);
+    assert!(body.iter().all(|byte| *byte == BODY_BYTE));
+    assert_eq!(requests.load(Ordering::SeqCst), 2);
 }
 
 #[kithara::test(tokio, timeout(Duration::from_secs(5)))]

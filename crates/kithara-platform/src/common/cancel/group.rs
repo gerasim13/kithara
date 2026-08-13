@@ -346,7 +346,7 @@ mod tests {
     fn token_bitor_token() {
         let a = CancelToken::never();
         let b = CancelToken::never();
-        let group = CancelGroup::from(a.clone()) | b.clone();
+        let group = CancelGroup::from(a.clone()) | b;
 
         assert!(!group.is_cancelled());
         a.cancel();
@@ -357,7 +357,7 @@ mod tests {
     fn group_bitor_token() {
         let a = CancelToken::never();
         let b = CancelToken::never();
-        let group = CancelGroup::from(a.clone()) | b.clone();
+        let group = CancelGroup::from(a) | b.clone();
 
         assert!(!group.is_cancelled());
         b.cancel();
@@ -368,7 +368,7 @@ mod tests {
     fn token_bitor_group() {
         let a = CancelToken::never();
         let b = CancelToken::never();
-        let group = a.clone() | CancelGroup::from(b.clone());
+        let group = a.clone() | CancelGroup::from(b);
 
         assert!(!group.is_cancelled());
         a.cancel();
@@ -379,7 +379,7 @@ mod tests {
     fn group_bitor_group() {
         let a = CancelToken::never();
         let b = CancelToken::never();
-        let g1 = CancelGroup::from(a.clone());
+        let g1 = CancelGroup::from(a);
         let g2 = CancelGroup::from(b.clone());
         let merged = g1 | g2;
 
@@ -393,7 +393,7 @@ mod tests {
         let a = CancelToken::never();
         let b = CancelToken::never();
         let c = CancelToken::never();
-        let group = CancelGroup::from(a.clone()) | b.clone() | c.clone();
+        let group = CancelGroup::from(a) | b | c.clone();
 
         assert!(!group.is_cancelled());
         c.cancel();

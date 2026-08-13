@@ -6,7 +6,6 @@ use syn::{Field, Fields, GenericArgument, Item, ItemStruct, PathArguments, Type,
 
 use super::{Check, Context};
 use crate::common::{
-    parse::parse_file,
     suppress::Suppressions,
     violation::Violation,
     walker::{compile_globs, matches_any, relative_to, workspace_rs_files_scoped},
@@ -60,12 +59,11 @@ impl Check for FieldPassthrough {
             if matches_any(&exempt, rel) {
                 continue;
             }
-            let Ok(file) = parse_file(&path) else {
+            let Some((src, file)) = ctx.parsed_source(&path)? else {
                 continue;
             };
-            let src = std::fs::read_to_string(&path)?;
             let rel_str = rel.to_string_lossy().replace('\\', "/");
-            suppressions.insert(rel_str.clone(), Suppressions::parse(&src));
+            suppressions.insert(rel_str.clone(), Suppressions::parse(src));
             collect_structs(&rel_str, &file.items, &mut all);
         }
         let mut out = Vec::new();

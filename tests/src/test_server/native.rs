@@ -41,7 +41,7 @@ impl TestServerHelper {
         }
     }
 
-    pub(crate) fn for_server(state: Arc<TestServerState>, base_url: Url) -> Self {
+    pub(crate) const fn for_server(state: Arc<TestServerState>, base_url: Url) -> Self {
         Self { state, base_url }
     }
 
@@ -64,7 +64,7 @@ impl TestServerHelper {
 
     /// Base URL of this server.
     #[must_use]
-    pub fn base_url(&self) -> &Url {
+    pub const fn base_url(&self) -> &Url {
         &self.base_url
     }
 

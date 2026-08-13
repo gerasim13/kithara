@@ -7,12 +7,12 @@ pub(crate) struct Reader<'a> {
 }
 
 impl<'a> Reader<'a> {
-    pub(crate) fn new(bytes: &'a [u8]) -> Self {
+    pub(crate) const fn new(bytes: &'a [u8]) -> Self {
         Self { bytes, cursor: 0 }
     }
 
     /// Succeed only if the whole blob was consumed.
-    pub(crate) fn finish(&self) -> Result<(), BlobError> {
+    pub(crate) const fn finish(&self) -> Result<(), BlobError> {
         if self.cursor == self.bytes.len() {
             Ok(())
         } else {
@@ -61,7 +61,7 @@ impl<'a> Reader<'a> {
     }
 
     /// Bytes not yet consumed.
-    pub(crate) fn remaining(&self) -> usize {
+    pub(crate) const fn remaining(&self) -> usize {
         self.bytes.len() - self.cursor
     }
 }

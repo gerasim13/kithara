@@ -1,16 +1,17 @@
 #![forbid(unsafe_code)]
 
 mod availability;
-mod demand;
 mod lru;
+mod pending;
+pub(crate) mod pending_resource;
 pub(crate) mod persistence;
 mod pins;
 mod transaction;
 
 pub(crate) use availability::{AvailabilityIndex, ScopedAvailabilityObserver};
-pub(crate) use demand::{DemandEntry, DemandIndex};
-pub use demand::{DemandLease, ProducerHandle};
 pub(crate) use lru::{EvictConfig, LruIndex};
+pub(crate) use pending::{DemandEntry, PendingResourceIndex};
+pub(crate) use pending_resource::RemoveResource;
 pub use persistence::schema;
 pub(crate) use persistence::{FlushHub, FlushPolicy};
 pub use pins::{PinDurability, PinsIndex};

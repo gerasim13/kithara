@@ -30,7 +30,7 @@ pub struct WasmSend<T>(
 
 impl<T> WasmSend<T> {
     /// Wrap a value.
-    pub fn new(value: T) -> Self {
+    pub const fn new(value: T) -> Self {
         Self(value)
     }
 }

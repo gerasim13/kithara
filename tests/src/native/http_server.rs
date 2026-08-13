@@ -33,7 +33,7 @@ impl TestHttpServer {
 
     /// Base URL of this server.
     #[must_use]
-    pub fn base_url(&self) -> &Url {
+    pub const fn base_url(&self) -> &Url {
         &self.base_url
     }
 

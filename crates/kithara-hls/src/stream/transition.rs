@@ -39,14 +39,14 @@ impl ResidentSessions {
             .filter(|session| session.variant_index() == variant_index)
     }
 
-    fn one(session: Arc<HlsSession>) -> Self {
+    const fn one(session: Arc<HlsSession>) -> Self {
         Self {
             first: session,
             second: None,
         }
     }
 
-    fn two(first: Arc<HlsSession>, second: Arc<HlsSession>) -> Self {
+    const fn two(first: Arc<HlsSession>, second: Arc<HlsSession>) -> Self {
         Self {
             first,
             second: Some(second),

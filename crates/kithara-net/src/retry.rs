@@ -26,7 +26,7 @@ pub struct DefaultRetryPolicy {
 }
 
 impl DefaultRetryPolicy {
-    pub fn new(policy: RetryPolicy) -> Self {
+    pub const fn new(policy: RetryPolicy) -> Self {
         Self { policy }
     }
 
@@ -52,7 +52,12 @@ pub struct RetryNet<N, P> {
 }
 
 impl<N: Net, P: RetryPolicyTrait> RetryNet<N, P> {
-    pub fn new(inner: N, retry_policy: P, cancel: CancelToken, observer: Option<Observer>) -> Self {
+    pub const fn new(
+        inner: N,
+        retry_policy: P,
+        cancel: CancelToken,
+        observer: Option<Observer>,
+    ) -> Self {
         Self {
             cancel,
             inner,

@@ -55,7 +55,7 @@ pub struct PlaybackShared {
 impl PlaybackShared {
     /// Lock-free counters the audio thread bumps instead of emitting `tracing` events.
     #[must_use]
-    pub fn metrics(&self) -> &RtMetrics {
+    pub const fn metrics(&self) -> &RtMetrics {
         &self.metrics
     }
 

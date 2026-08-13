@@ -92,7 +92,7 @@ impl PlayheadState {
 
     #[must_use]
     // ast-grep-ignore: style.prefer-default-derive
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self {
             position_ns: AtomicU64::new(0),
             total_duration_ns: AtomicU64::new(Self::NO_DURATION),

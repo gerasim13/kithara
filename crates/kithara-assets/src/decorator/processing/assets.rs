@@ -25,7 +25,7 @@ impl<A> ProcessingAssets<A>
 where
     A: Assets,
 {
-    pub fn new(inner: Arc<A>, pool: BytePool) -> Self {
+    pub const fn new(inner: Arc<A>, pool: BytePool) -> Self {
         Self { inner, pool }
     }
 

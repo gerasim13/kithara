@@ -18,7 +18,7 @@ pub(crate) struct ResourceHandle<'a> {
 }
 
 impl<'a> ResourceHandle<'a> {
-    pub(crate) fn new(scope: &'a AssetScope, key: &'a ResourceKey, url: &'a Url) -> Self {
+    pub(crate) const fn new(scope: &'a AssetScope, key: &'a ResourceKey, url: &'a Url) -> Self {
         Self { scope, key, url }
     }
 

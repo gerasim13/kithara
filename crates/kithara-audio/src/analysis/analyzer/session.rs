@@ -39,7 +39,7 @@ where
         waveform::finish(std::mem::take(&mut self.waveform))
     }
 
-    pub(crate) fn has_beat(&self) -> bool {
+    pub(crate) const fn has_beat(&self) -> bool {
         !Slot::is_empty(&self.beat)
     }
 

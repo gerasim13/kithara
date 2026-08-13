@@ -637,7 +637,7 @@ impl DefScan<'_> {
     }
 }
 
-fn head<'a>(vis: &'a Visibility, attrs: &'a [Attribute], ident: &'a Ident) -> Head<'a> {
+const fn head<'a>(vis: &'a Visibility, attrs: &'a [Attribute], ident: &'a Ident) -> Head<'a> {
     Head { ident, vis, attrs }
 }
 

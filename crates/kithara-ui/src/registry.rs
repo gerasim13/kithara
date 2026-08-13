@@ -33,7 +33,7 @@ pub struct EndpointDesc {
 
 impl EndpointDesc {
     #[must_use]
-    pub fn new(value: ValueKind) -> Self {
+    pub const fn new(value: ValueKind) -> Self {
         Self {
             value,
             scopes: Vec::new(),

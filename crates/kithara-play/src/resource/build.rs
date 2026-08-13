@@ -75,6 +75,7 @@ where
             .maybe_stretch(self.stretch)
             .maybe_engine_load(self.engine_load)
             .maybe_worker(self.worker)
+            .consumer_wake_mode(self.consumer_wake_mode)
             .build()
     }
 
@@ -115,6 +116,7 @@ where
             .maybe_stretch(self.stretch)
             .maybe_engine_load(self.engine_load)
             .maybe_worker(self.worker)
+            .consumer_wake_mode(self.consumer_wake_mode)
             .build())
     }
 }

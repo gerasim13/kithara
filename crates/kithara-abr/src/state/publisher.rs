@@ -12,7 +12,7 @@ pub struct AbrPublisher {
 }
 
 impl AbrPublisher {
-    pub(super) fn new(state: Arc<AbrState>) -> Self {
+    pub(super) const fn new(state: Arc<AbrState>) -> Self {
         Self { state }
     }
 

@@ -77,7 +77,7 @@ impl<B> AudioDecoderConfig<B> {
             /// Return the explicitly configured decoder-side resampler settings.
             #[must_use]
             #[call(as_ref)]
-            pub fn resampler(&self) -> Option<&DecoderResamplerSettings<B>>;
+            pub const fn resampler(&self) -> Option<&DecoderResamplerSettings<B>>;
         }
     }
 }

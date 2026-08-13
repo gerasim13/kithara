@@ -108,7 +108,7 @@ enum Pattern {
 }
 
 impl Pattern {
-    fn message(self) -> &'static str {
+    const fn message(self) -> &'static str {
         match self {
             Self::Bubble => "Q1: `match x { Ok(v) => v, Err(e) => return Err(e) }` — use `x?`",
             Self::BubbleInto => {
@@ -239,7 +239,7 @@ fn pattern_is_none(pat: &Pat) -> bool {
     }
 }
 
-fn pat_ident(p: &Pat) -> Option<&syn::Ident> {
+const fn pat_ident(p: &Pat) -> Option<&syn::Ident> {
     if let Pat::Ident(PatIdent {
         ident,
         subpat: None,

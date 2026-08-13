@@ -23,7 +23,7 @@ use crate::pipeline::{
     source::StreamAudioSource,
 };
 
-fn decoder_change_cause(cause: RecreateCause) -> DecoderChangeCause {
+const fn decoder_change_cause(cause: RecreateCause) -> DecoderChangeCause {
     match cause {
         RecreateCause::FormatBoundary => DecoderChangeCause::FormatBoundary,
         RecreateCause::RouteChange => DecoderChangeCause::HostRateChange,

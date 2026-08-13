@@ -97,7 +97,7 @@ impl TestPcmReader {
         }
     }
 
-    fn at_natural_end(&self) -> bool {
+    const fn at_natural_end(&self) -> bool {
         self.position_frames >= self.total_frames
     }
 
@@ -129,7 +129,7 @@ impl TestPcmReader {
 
     /// Get a reference to the event bus for publishing mock events.
     #[must_use]
-    pub fn event_bus(&self) -> &EventBus {
+    pub const fn event_bus(&self) -> &EventBus {
         &self.bus
     }
 

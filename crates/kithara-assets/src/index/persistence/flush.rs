@@ -267,7 +267,7 @@ impl FlushHub {
     }
 
     /// Lazily spawn the background flush worker (idempotent). Called on
-    /// the first source registration, mirroring the downloader / audio
+    /// the first source registration, mirroring other long-lived runtime
     /// worker lazy-start. The thread is torn down by [`FlushHub`]'s
     /// `Drop`.
     pub(crate) fn start_worker(self: &Arc<Self>) {

@@ -129,38 +129,27 @@ Create four project runner authentication tokens in corporate GitLab:
 
 | File under `~/.config/kithara-ci` | Tag | Executor |
 | --- | --- | --- |
-| `runner-macos.token` | `kithara-macos` | throwaway `tart` macOS VM |
+| `runner-macos.token` | `kithara-macos` | macOS shell |
 | `runner-linux.token` | `kithara-linux` | pinned local Docker image |
 | `runner-android.token` | `kithara-android` | macOS shell |
 | `runner-release.token` | `kithara-release` | protected macOS shell |
 
-Each token file must contain one `glrt-...` token and have mode `0600`. Also
-create `~/.config/kithara-ci/macos-guest.password` with the SSH password of the
-macOS guest account and mode `0600`.
+Each token file must contain one `glrt-...` token and have mode `0600`. The
+macOS and Android shell executors run directly on the host. The Apple lane
+therefore uses the host filesystem and cache roots across jobs instead of
+booting an ephemeral machine for each build.
 
-The macOS lane runs each job in a throwaway VM. `xtask ci host run-macos-runner`
-clones the base image named by `macos_vm_bundle`, boots the clone headless
-with Xcode and the Rust toolchain mounted from the host, lets GitLab hand it a
-single build through `gitlab-runner run-single --max-builds 1`, and destroys the
-clone afterwards. Build that base image once, from the Apple restore image
-matching `macos_guest_build`:
+Apple packaging requires a case-folding checkout filesystem: Xcode creates a
+`Headers` directory and `cargo-swift` addresses it as `headers`. When
+`host_root` is case-sensitive, set `build_root` in the host profile to a
+case-folding APFS location with enough build space. Bootstrap validates that
+selected checkout root, and every runner uses it for `builds_dir`.
 
-```text
-tart create --from-ipsw <UniversalMac_<version>_<build>_Restore.ipsw> kithara-macos-base
-tart run kithara-macos-base
-```
-
-Complete Setup Assistant in the guest, create the `macos_guest_user` account
-with the password above, enable Remote Login, authorise the CI account's SSH
-key, grant that account passwordless `sudo`, and accept the Xcode licence once
-with the host Xcode mounted. The image carries no Xcode of its own, so it stays
-small and always matches `expected_xcode_version` on the host.
-
-GitLab is reached over its public certificate chain, so runners, macOS
-guests, and the bridge all validate `gitlab_url` against the platform trust
-store. No private CA is installed or configured anywhere. A host that cannot
-build that chain is a network fault to fix upstream, never a certificate to
-add here and never a reason to relax TLS verification.
+GitLab is reached over its public certificate chain, so runners and the bridge
+validate `gitlab_url` against the platform trust store. No private CA is
+installed or configured anywhere. A host that cannot build that chain is a
+network fault to fix upstream, never a certificate to add here and never a
+reason to relax TLS verification.
 
 Then run:
 
@@ -169,9 +158,17 @@ Then run:
 /Volumes/KitharaCI/services/bin/kithara-ci ci host activate
 ```
 
-The generated runner configuration has `concurrent = 1`. The parent pipeline
-also holds one GitLab `resource_group` until its child pipeline finishes, so
-product pipelines cannot overlap even when a Windows runner is online.
+The generated runner configuration has `concurrent = 2`. Every runner exports
+`CARGO_BUILD_JOBS=4`, so two Rust jobs use at most eight Cargo workers on the
+ten-core host and leave capacity for the runner, sccache, linkers, and platform
+tools. GitLab resource groups still serialize jobs that measure performance or
+otherwise require exclusive ownership.
+
+The GitLab Runner launch agent uses launchd's `Interactive` process type. Host
+shell jobs inherit the runner's scheduling policy; marking that parent as
+`Background` throttles both Cargo and the single-threaded source linters. Colima
+remains a background service because Linux work receives its own container CPU
+limit.
 
 ## Windows
 
@@ -198,8 +195,8 @@ Copy `ci/bridge/config.example.toml` to
 `/Volumes/KitharaCI/services/bridge/config.toml`. The config and the two
 tokens must belong to UID 504 (`kithara-sync`) and have mode `0600`. The GitHub
 token needs `Contents: write` to publish `main`, `Pull requests: read` to
-recognise a merged pull request, and `Commit statuses: write` to report the
-verdict — check runs are a GitHub App API and the bridge does not use one.
+inspect open and merged pull requests, and `Commit statuses: write` to report
+the verdict — check runs are a GitHub App API and the bridge does not use one.
 Validate without network mutation:
 
 ```text
@@ -212,19 +209,39 @@ Activate the staged launch daemon only after validation:
 sudo -E /Volumes/KitharaCI/services/bin/kithara-ci ci host activate-bridge
 ```
 
-GitLab `main` fast-forwards to GitHub only after the exact commit has a
-successful GitLab push pipeline, judged on the child pipeline the dispatch
-stage triggers rather than on its parent. A GitHub `main` update is imported
-only when it belongs to a merged pull request, changes no CI control path, and
-passes the private quarantine pipeline. Manifests are not control paths:
-`deps:deny` runs on quarantine instead. Divergence is fail-closed and opens one
-deduplicated GitLab incident.
+The old GitLab pull mirror is disabled because it force-updated `main` and
+could discard work already merged here. The bridge now moves `main` only by
+fast-forward. When GitLab is ahead, it fast-forwards GitHub to the same commit;
+when GitHub is ahead through a merged pull request, it refreshes both heads and
+fast-forwards GitLab. Neither direction synthesizes a replacement commit or
+force-pushes a diverged branch.
 
-A rejection is recorded and refused on sight. Once its reason has been dealt
-with, clear the head so the import runs again:
+GitHub pull requests are verified before merge. While both `main` refs are
+equal, the bridge reserves the exact pull-request head and base pair, publishes
+one quarantine ref for that attempt, and starts its GitLab pipeline. The result
+is written to the exact head commit under the status context
+`kithara/gitlab-verification`. GitHub branch protection must require that
+context on `main` and prevent direct pushes or bypasses; otherwise the verifier
+is advisory and an unverified commit can still reach `main`.
+
+A pull request that changes a CI control path is rejected before a pipeline is
+created. Port that change through a GitLab merge request instead, so the code
+that judges GitHub pull requests changes under GitLab review. Once a protected
+GitHub pull request is merged, importing it is only the ordinary fast-forward
+described above; there is no post-merge quarantine that can strand an already
+accepted commit between the two forges.
+
+A pipeline is judged on the child the dispatch stage triggers, never on its
+parent: a parent reports `success` over a child that was cancelled. Divergence
+is fail-closed and opens one deduplicated GitLab incident.
+
+A rejection is recorded for the exact head and base pair and refused on sight.
+Once its reason has been dealt with, clear that reservation so a new attempt
+can run:
 
 ```text
-/Volumes/KitharaCI/services/bin/kithara-ci ci bridge retry --config /Volumes/KitharaCI/services/bridge/config.toml --github-sha <sha>
+/Volumes/KitharaCI/services/bin/kithara-ci ci bridge retry --config /Volumes/KitharaCI/services/bridge/config.toml \
+  --github-sha <head-sha> --base-sha <base-sha>
 ```
 
 ## The verdict
@@ -234,18 +251,20 @@ red it did not cause. The lanes the verdict judges therefore carry
 `allow_failure: true` and one job decides: a run is held for failing something
 the default branch is not.
 
-Each lane leaves what it produced in `target/junit/`, collected by the lane
+Each lane leaves what it produced in `.ci-artifacts/junit/`, collected by the lane
 dispatcher rather than by the lane itself — the build directory survives between
 jobs, so the report a lane is expected to write is removed before it runs. A
 lane that can name no test leaves a marker carrying its own name, because GitLab
 hands a job no status for the jobs it needed.
 
-The journal lives on the Linux executor, whose cache directory is mounted from
-the host, at `<cache root>/verdict/journal.json`. A macOS job runs in a
-throwaway guest, where nothing written survives it. `main` and the nightly chain
-record; branch, merge-request and quarantine runs check. The window unions the
-last five recorded runs: a test that fails a quarter of the time would otherwise
-read as a regression whenever the run it was compared with happened to be green.
+The journal lives at `<shared cache root>/verdict/journal.json`, above the
+trust- and platform-specific compiler caches. Each executor resolves that root
+from its runner environment, so Linux containers and macOS shell jobs reach one
+baseline rather than creating independent journals. `main` and the nightly
+chain record; branch, merge-request and quarantine runs check. The window
+unions the last five recorded runs: a test that fails a quarter of the time
+would otherwise read as a regression whenever the run it was compared with
+happened to be green.
 
 A merge request is told which of the failures it is being let through with were
 already failing at the commit it was branched from, when the journal still
@@ -256,6 +275,22 @@ run has to record before a regression can be told from what the branch already
 carries.
 
 ## Storage policy
+
+Pressure is read from what is left, not from what was spent. The thresholds
+below are written as bytes used against the quota, and cleanup takes each one
+as the free space it intends to keep — a volume at the reject threshold is one
+with 15 GB to spare, which is exactly what a job's preflight requires. On an
+APFS container the volume shares with others the two are different questions,
+and reading them the old way left a 279 GB volume with 24 GB free reported as
+`Normal` while jobs were already being refused.
+
+The Linux guest keeps its root filesystem mounted `discard`, so that image stays
+at about a gigabyte. Its data disk — the one carrying `/var/lib/docker` — is not,
+so every layer Docker deletes stays allocated in a sparse file this volume pays
+for. Every cleanup therefore trims it, whatever the pressure: the trim costs
+seconds, and one on a machine that had drifted to 44 GB free returned 63 of them.
+Recycling the guest outright reaches only what Docker still holds and the prune
+window will not take, which is why refusal is the one thing that does it.
 
 The CI volume has a 300 GB APFS quota. New work stops at 285 GB. Cleanup starts
 at 240 GB and becomes aggressive at 270 GB. Workspaces, VM overlays, logs, and
@@ -273,12 +308,6 @@ rather than against a list of names:
   named steps alone left six gigabytes of `cargo-reapi` stores behind after
   that tool came off the CI path: a namespace that stops being written to goes
   invisible rather than stale.
-- The macOS guest grows on this volume for as long as it lives and returns the
-  space only when it is thrown away — one recycle gave back 38 GiB, against
-  three and a half for every other step together. A guest serves six jobs
-  (`JobVm::MAX_BUILDS`) before it is replaced, and cleanup restarts the agent
-  outright once the volume is above the refusal threshold. That costs the job
-  in flight, which is why nothing below that threshold does it.
 
 Health and cleanup run through launchd. They can also be checked directly:
 
@@ -286,6 +315,13 @@ Health and cleanup run through launchd. They can also be checked directly:
 /Volumes/KitharaCI/services/bin/kithara-ci ci host health
 /Volumes/KitharaCI/services/bin/kithara-ci ci host cleanup
 ```
+
+Health reports every agent that has to hold a process for work to arrive —
+`colima` and `gitlab-runner` — and fails when one of them does not. An agent
+under `KeepAlive` that dies on startup stays loaded and keeps being restarted,
+so health checks for the process rather than treating a loaded launchd service
+as proof that it can take work. From the outside a missing runner looks like
+nothing at all: its jobs simply sit `pending`, and the pipeline reads as hung.
 
 ## GitLab project settings
 

@@ -36,6 +36,10 @@ leak-timeout = "2s"
 fail-fast = false
 test-threads = "num-cpus"
 leak-timeout = "2s"
+# The verdict reads a single failure as a regression, so one bad throw blocks
+# whichever change is under it. One retry removes that class; a test that
+# survives two attempts is a bug to look at, not a number to raise.
+retries = 1
 
 # `path` resolves against the profile's store directory
 # (`target/nextest/ci/`), so it must stay relative: spelling it out from the

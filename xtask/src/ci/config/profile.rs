@@ -95,6 +95,22 @@ mod tests {
         }
     }
 
+    /// Without retries a single flaky failure reads as a regression: the first
+    /// merge request judged was held by two tests it had not touched.
+    #[test]
+    fn the_judged_profile_does_not_take_one_failure_as_evidence() {
+        let nextest: toml::Value = toml::from_str(
+            &fs::read_to_string(workspace_root().join(".config/nextest.toml")).unwrap(),
+        )
+        .unwrap();
+
+        let retries = nextest["profile"]["ci"].get("retries");
+        assert!(
+            retries.is_some_and(|value| value.as_integer().is_some_and(|count| count > 0)),
+            "the CI profile must retry, or every flake reads as a regression"
+        );
+    }
+
     #[test]
     fn tracked_pins_are_valid_on_every_build_platform() {
         CiPins::load(&workspace_root().join(".config/ci-pins.toml")).unwrap();

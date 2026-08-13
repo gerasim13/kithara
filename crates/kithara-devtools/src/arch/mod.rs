@@ -35,12 +35,7 @@ pub(crate) fn redundant_accessor_keys(
     scope: &Scope,
 ) -> Result<BTreeSet<String>> {
     let config = ArchConfig::load(&workspace_root.join(".config/arch"))?;
-    let ctx = Context {
-        metadata,
-        workspace_root,
-        scope,
-        config: &config,
-    };
+    let ctx = Context::new(&config, metadata, workspace_root, scope);
     let violations = checks::Check::run(&checks::redundant_accessors::RedundantAccessors, &ctx)?;
     Ok(violations
         .into_iter()
@@ -88,12 +83,7 @@ pub(crate) fn run(args: &ArchArgs) -> Result<()> {
     let config = ArchConfig::load(&args.config_dir)?;
     let scope = Scope::new(args.crates.clone(), args.paths.clone());
 
-    let ctx = Context {
-        workspace_root: &workspace_root,
-        metadata: &metadata,
-        config: &config,
-        scope: &scope,
-    };
+    let ctx = Context::new(&config, &metadata, &workspace_root, &scope);
 
     let registry = registry();
     let known_ids: HashSet<&str> = registry.iter().map(|c| c.id()).collect();

@@ -51,7 +51,7 @@ impl Segment {
     /// The media arm, or `None` for the init slot — the seam for the
     /// media-only `decode_time` / `duration` accessors. `segments()` only ever
     /// holds `Media` arms, so callers iterating it always get `Some`.
-    pub(crate) fn as_media(&self) -> Option<&MediaSegment> {
+    pub(crate) const fn as_media(&self) -> Option<&MediaSegment> {
         match self {
             Self::Init(_) => None,
             Self::Media(s) => Some(s),
@@ -64,7 +64,7 @@ impl Segment {
     }
 
     /// Decryption disposition — the acquire path branches on it.
-    pub(crate) fn content(&self) -> &SegmentContent {
+    pub(crate) const fn content(&self) -> &SegmentContent {
         match self {
             Self::Init(s) => &s.content,
             Self::Media(s) => &s.content,
@@ -83,12 +83,12 @@ impl Segment {
         self.resource(scope).read_at(range, dst)
     }
 
-    pub(crate) fn resource<'a>(&'a self, scope: &'a AssetScope) -> ResourceHandle<'a> {
+    pub(crate) const fn resource<'a>(&'a self, scope: &'a AssetScope) -> ResourceHandle<'a> {
         ResourceHandle::new(scope, self.resource_id(), self.url())
     }
 
     /// The segment's resource key.
-    pub(crate) fn resource_id(&self) -> &ResourceKey {
+    pub(crate) const fn resource_id(&self) -> &ResourceKey {
         match self {
             Self::Init(s) => &s.resource_id,
             Self::Media(s) => &s.resource_id,
@@ -96,7 +96,7 @@ impl Segment {
     }
 
     /// The segment's byte-length atom (seed or committed). `len()` reads it.
-    pub(crate) fn size(&self) -> &SegmentSize {
+    pub(crate) const fn size(&self) -> &SegmentSize {
         match self {
             Self::Init(s) => &s.size,
             Self::Media(s) => &s.size,
@@ -105,7 +105,7 @@ impl Segment {
 
     /// Cache state. Shared with the slot's `FetchSlot` handle (see
     /// [`MediaSegment::state`]).
-    pub(crate) fn state(&self) -> &Arc<SegmentSlotState> {
+    pub(crate) const fn state(&self) -> &Arc<SegmentSlotState> {
         match self {
             Self::Init(s) => &s.state,
             Self::Media(s) => &s.state,
@@ -113,7 +113,7 @@ impl Segment {
     }
 
     /// The segment's fetch URL.
-    pub(crate) fn url(&self) -> &Url {
+    pub(crate) const fn url(&self) -> &Url {
         match self {
             Self::Init(s) => &s.url,
             Self::Media(s) => &s.url,

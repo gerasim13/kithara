@@ -89,8 +89,13 @@ impl<N: Node> SchedulerHandle<N> {
         self.inner.wake.wake();
     }
 
-    pub(crate) fn wake(&self) {
-        self.inner.wake.wake();
+    delegate::delegate! {
+        to self.inner.wake {
+            pub(crate) fn wake(&self);
+            /// Publish a coalesced worker pass without unparking from the caller.
+            #[call(defer)]
+            pub(crate) fn defer_wake(&self);
+        }
     }
 }
 

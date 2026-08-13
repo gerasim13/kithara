@@ -1,11 +1,10 @@
-use std::{collections::HashSet, fs};
+use std::collections::HashSet;
 
 use anyhow::Result;
 use syn::{File, Item, ItemMod, spanned::Spanned};
 
 use super::{Check, Context};
 use crate::common::{
-    parse::parse_file,
     violation::Violation,
     walker::{relative_to, workspace_rs_files_scoped},
 };
@@ -24,10 +23,10 @@ impl Check for SharedState {
         let mut violations = Vec::new();
 
         for path in workspace_rs_files_scoped(ctx.workspace_root, ctx.scope)? {
-            let content = fs::read_to_string(&path)?;
-            let test_lines = parse_file(&path)
-                .map(|file| collect_cfg_test_lines(&file))
-                .unwrap_or_default();
+            let Some((content, file)) = ctx.source_file(&path)? else {
+                continue;
+            };
+            let test_lines = file.map(collect_cfg_test_lines).unwrap_or_default();
             let mut count = 0usize;
             for (idx, line) in content.lines().enumerate() {
                 let line_no = idx + 1;
@@ -172,7 +171,7 @@ mod tests {
     fn strip_blanks_string_content_but_preserves_length() {
         let stripped = strip_string_literals("let x = \"Arc<Mutex<u32>>\";");
         assert!(!stripped.contains("Arc<"));
-        assert!(stripped.contains("\""));
+        assert!(stripped.contains('"'));
     }
 
     #[test]

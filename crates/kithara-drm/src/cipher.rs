@@ -71,7 +71,7 @@ impl UniqueBinaryCipher {
     }
 
     #[inline]
-    fn xorshift64_star(mut x: u64) -> u64 {
+    const fn xorshift64_star(mut x: u64) -> u64 {
         x ^= x >> Self::XORSHIFT_SHIFT_A;
         x ^= x << Self::XORSHIFT_SHIFT_B;
         x ^= x >> Self::XORSHIFT_SHIFT_C;

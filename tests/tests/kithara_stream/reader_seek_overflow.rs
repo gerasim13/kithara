@@ -39,18 +39,6 @@ impl MockSource {
             data: vec![0xAA; len],
         }
     }
-
-    /// Source with reported length independent of actual buffer size.
-    /// Avoids allocating huge buffers when only testing seek bounds.
-    fn with_reported_len(reported_len: u64) -> Self {
-        Self {
-            seek: Arc::new(SeekState::new()),
-            playhead: Arc::new(PlayheadState::new()),
-            position: Arc::new(AtomicU64::new(0)),
-            data: Vec::new(),
-            reported_len,
-        }
-    }
 }
 
 impl Source for MockSource {

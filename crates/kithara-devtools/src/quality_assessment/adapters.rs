@@ -260,7 +260,7 @@ fn string_array(value: &serde_json::Value) -> Vec<String> {
         .collect()
 }
 
-fn evidence_status(current: bool, reusable: bool) -> CoverageStatus {
+const fn evidence_status(current: bool, reusable: bool) -> CoverageStatus {
     if current {
         CoverageStatus::Executed
     } else if reusable {

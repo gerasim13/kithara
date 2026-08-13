@@ -5,27 +5,27 @@ use crate::fixture_protocol::{
     DataMode, DelayRule, EncryptionRequest, HttpErrorRule, InitMode, PackagedAudioRequest,
 };
 
-fn default_variant_count() -> usize {
+const fn default_variant_count() -> usize {
     1
 }
 
-fn default_segments_per_variant() -> usize {
+const fn default_segments_per_variant() -> usize {
     3
 }
 
-fn default_segment_size() -> usize {
+const fn default_segment_size() -> usize {
     200_000
 }
 
-fn default_segment_duration_secs() -> f64 {
+const fn default_segment_duration_secs() -> f64 {
     4.0
 }
 
-fn default_data_mode() -> DataMode {
+const fn default_data_mode() -> DataMode {
     DataMode::TestPattern
 }
 
-fn default_init_mode() -> InitMode {
+const fn default_init_mode() -> InitMode {
     InitMode::None
 }
 
@@ -33,7 +33,7 @@ fn default_init_mode() -> InitMode {
     clippy::trivially_copy_pass_by_ref,
     reason = "serde skip_serializing_if requires fn(&T)"
 )]
-fn is_default_variant_count(value: &usize) -> bool {
+const fn is_default_variant_count(value: &usize) -> bool {
     *value == default_variant_count()
 }
 
@@ -41,7 +41,7 @@ fn is_default_variant_count(value: &usize) -> bool {
     clippy::trivially_copy_pass_by_ref,
     reason = "serde skip_serializing_if requires fn(&T)"
 )]
-fn is_default_segments_per_variant(value: &usize) -> bool {
+const fn is_default_segments_per_variant(value: &usize) -> bool {
     *value == default_segments_per_variant()
 }
 
@@ -49,7 +49,7 @@ fn is_default_segments_per_variant(value: &usize) -> bool {
     clippy::trivially_copy_pass_by_ref,
     reason = "serde skip_serializing_if requires fn(&T)"
 )]
-fn is_default_segment_size(value: &usize) -> bool {
+const fn is_default_segment_size(value: &usize) -> bool {
     *value == default_segment_size()
 }
 
@@ -61,11 +61,11 @@ fn is_default_segment_duration_secs(value: &f64) -> bool {
     (*value - default_segment_duration_secs()).abs() < f64::EPSILON
 }
 
-fn is_default_data_mode(value: &DataMode) -> bool {
+const fn is_default_data_mode(value: &DataMode) -> bool {
     matches!(value, DataMode::TestPattern)
 }
 
-fn is_default_init_mode(value: &InitMode) -> bool {
+const fn is_default_init_mode(value: &InitMode) -> bool {
     matches!(value, InitMode::None)
 }
 

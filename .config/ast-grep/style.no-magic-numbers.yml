@@ -15,9 +15,9 @@ rule:
     - all:
         - kind: integer_literal
         - not:
-            regex: "^(?:0|1|-1)(?:[iu](?:8|16|32|64|128|size))?$"
+            regex: "^(?:(?:0|0x0+)|(?:1|0x0*1)|-1)(?:_?[iu](?:8|16|32|64|128|size))?$"
         - not:
-            regex: "^0b[01]+$"
+            regex: "^0b[01_]+$"
         - not:
             inside:
               kind: const_item
@@ -48,13 +48,13 @@ rule:
                 - kind: mod_item
                 - follows:
                     kind: attribute_item
-                    regex: 'cfg\(test\)'
+                    regex: 'cfg(?:_attr)?\([^\n]*test'
                     stopBy: end
               stopBy: end
     - all:
         - kind: float_literal
         - not:
-            regex: '^(?:-?1(?:\.0+)?|0(?:\.0+)?)(?:f(?:32|64))?$'
+            regex: '^(?:-?1(?:\.0+)?|0(?:\.0+)?)(?:_?f(?:32|64))?$'
         - not:
             inside:
               kind: const_item
@@ -69,6 +69,6 @@ rule:
                 - kind: mod_item
                 - follows:
                     kind: attribute_item
-                    regex: 'cfg\(test\)'
+                    regex: 'cfg(?:_attr)?\([^\n]*test'
                     stopBy: end
               stopBy: end

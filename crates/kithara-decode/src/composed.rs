@@ -38,7 +38,7 @@ impl HeadStrip {
     /// Stops once a packet comes back whole: from there on the decoder is
     /// through its delay, and a short packet is the stream's own tail
     /// rather than more strip.
-    fn record(&mut self, supplied: u64, emitted: u64) {
+    const fn record(&mut self, supplied: u64, emitted: u64) {
         if self.settled || supplied == 0 {
             return;
         }

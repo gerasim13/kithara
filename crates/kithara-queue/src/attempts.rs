@@ -29,7 +29,7 @@ pub(crate) struct AttemptGuard {
 }
 
 impl AttemptGuard {
-    pub(crate) fn new(generation: u64, cancel: CancelToken) -> Self {
+    pub(crate) const fn new(generation: u64, cancel: CancelToken) -> Self {
         Self {
             generation,
             waiting: true,

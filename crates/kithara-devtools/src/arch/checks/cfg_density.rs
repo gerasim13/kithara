@@ -4,6 +4,7 @@ use anyhow::Result;
 
 use super::{Check, Context};
 use crate::common::{
+    exclude::cfg_test_lines,
     violation::Violation,
     walker::{compile_globs, matches_any, relative_to, workspace_rs_files_scoped},
 };
@@ -82,15 +83,24 @@ Good:
     #[cfg(target_arch = \"wasm32\")]
     mod wasm;
 
-Suppress: add the file to `[cfg_density] exclude_globs` in
-`.config/arch/thresholds.toml`, or the crate to `exempt_crates`.";
+Resolve: move gated production items into dedicated platform or feature
+modules and gate each module once. Test-only item ranges are excluded
+automatically.";
 
 fn count_cfg_attributes(source: &str) -> usize {
+    let test_lines = cfg_test_lines(source);
+
     source
         .lines()
-        .filter(|line| {
+        .enumerate()
+        .filter(|(index, line)| {
             let trimmed = line.trim_start();
-            trimmed.starts_with("#[cfg(") || trimmed.starts_with("#[cfg_attr(")
+            let is_cfg = trimmed.starts_with("#[cfg(") || trimmed.starts_with("#[cfg_attr(");
+            let line_number = index + 1;
+            is_cfg
+                && test_lines
+                    .as_ref()
+                    .is_none_or(|excluded| !excluded.contains(&line_number))
         })
         .count()
 }
@@ -104,4 +114,51 @@ fn is_exempt_crate(rel: &std::path::Path, exempt: &[&str]) -> bool {
         return false;
     };
     exempt.contains(&crate_dir)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::count_cfg_attributes;
+
+    #[test]
+    fn cfg_density_ignores_test_only_item_ranges() {
+        let source = r#"
+#[cfg(target_arch = "wasm32")]
+fn production() {}
+
+#[cfg(test)]
+mod tests {
+    #[cfg(feature = "fixture-a")]
+    fn fixture_a() {}
+
+    #[cfg_attr(feature = "fixture-b", ignore)]
+    fn fixture_b() {}
+}
+"#;
+
+        assert_eq!(count_cfg_attributes(source), 1);
+    }
+
+    #[test]
+    fn cfg_density_keeps_non_test_predicates() {
+        let source = r#"
+#[cfg(not(test))]
+fn non_test_build() {}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn native() {}
+
+#[cfg_attr(feature = "trace", derive(Debug))]
+struct Trace;
+"#;
+
+        assert_eq!(count_cfg_attributes(source), 3);
+    }
+
+    #[test]
+    fn cfg_density_falls_back_to_raw_count_for_invalid_rust() {
+        let source = "#[cfg(unix)]\nfn broken( {\n#[cfg_attr(test, ignore)]\n";
+
+        assert_eq!(count_cfg_attributes(source), 2);
+    }
 }

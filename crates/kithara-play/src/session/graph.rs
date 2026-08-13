@@ -15,7 +15,7 @@ use crate::{
     bridge::{MixTapWriter, slot_channels},
     rt::{MasterEqNode, PlayerNode, TapNode},
 };
-pub(super) fn ducking_gain(mode: SessionDuckingMode) -> f32 {
+pub(super) const fn ducking_gain(mode: SessionDuckingMode) -> f32 {
     match mode {
         SessionDuckingMode::Off => 1.0,
         SessionDuckingMode::Soft => 0.4,
@@ -720,7 +720,7 @@ mod tests {
             Cmd::RegisterPlayer {
                 bus: EventBus::default(),
                 eq_layout: generate_log_spaced_bands(5),
-                pcm_pool: PcmPool::default().clone(),
+                pcm_pool: PcmPool::default(),
             },
         ) {
             Reply::PlayerRegistered(id) => id,

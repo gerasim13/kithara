@@ -4,19 +4,13 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail};
-use serde::Deserialize;
 use tracing::info;
 
 use crate::ci::{
+    bridge,
     config::{CiConfig, LANE_CONFIG_DIR, MAC_CONFIG_PATH},
     process::Process,
 };
-
-#[derive(Deserialize)]
-struct BridgeSecrets {
-    github_private_key: PathBuf,
-    gitlab_token_file: PathBuf,
-}
 
 pub(super) struct ServiceInstaller<'a> {
     config: &'a CiConfig,
@@ -28,7 +22,7 @@ impl<'a> ServiceInstaller<'a> {
     const HOST_CONFIG_NAME: &'static str = "mac-host.toml";
     const PINS_NAME: &'static str = "pins.toml";
 
-    pub(super) fn new(config: &'a CiConfig, process: &'a Process) -> Self {
+    pub(super) const fn new(config: &'a CiConfig, process: &'a Process) -> Self {
         Self { config, process }
     }
 
@@ -61,13 +55,9 @@ impl<'a> ServiceInstaller<'a> {
             bail!("missing staged bridge service: {}", pending.display());
         }
         self.require_private_sync_file(&config)?;
-        let secrets: BridgeSecrets = toml::from_str(
-            &fs::read_to_string(&config)
-                .with_context(|| format!("reading {}", config.display()))?,
-        )
-        .with_context(|| format!("parsing {}", config.display()))?;
-        self.require_private_sync_file(&secrets.github_private_key)?;
-        self.require_private_sync_file(&secrets.gitlab_token_file)?;
+        for secret in bridge::secret_files(&config)? {
+            self.require_private_sync_file(&secret)?;
+        }
         let binary = self.installed_binary();
         self.process.run(
             path_text(&binary)?,
@@ -277,24 +267,32 @@ impl<'a> ServiceInstaller<'a> {
         self.write_agent("health", &health)
     }
 
+    /// The daemon runs the copy under `toolchains/shared-bin`, the one the CI
+    /// user can replace, for the same reason the maintenance agents do: every
+    /// fix to the bridge otherwise needs a password, and the bridge is the part
+    /// that gets fixed while it is being brought up. The secrets stay out of
+    /// reach — they belong to the sync user, and the CI user cannot read them.
     fn stage_bridge_agent(&self) -> Result<()> {
-        let binary = self.installed_binary().display().to_string();
+        let binary = self
+            .config
+            .host
+            .host_root
+            .join("toolchains/shared-bin")
+            .join(Self::BINARY_NAME)
+            .display()
+            .to_string();
         let config = self
             .service_root()
             .join("bridge/config.toml")
             .display()
             .to_string();
         let log = self.config.host.host_root.join("logs/bridge.log");
-        let extra = format!(
-            "<key>StartInterval</key><integer>60</integer><key>UserName</key><string>{}</string>",
-            xml(&self.config.host.sync_user)
-        );
-        let plist = launchd(
-            "com.zvuk.kithara-ci.bridge",
-            &[&binary, "ci", "bridge", "reconcile", "--config", &config],
+        let plist = bridge_launchd(
+            &binary,
+            &config,
             &log,
             &self.config.host.agent_path(&self.sync_home()),
-            &extra,
+            &self.config.host.sync_user,
         );
         let pending = self
             .service_root()
@@ -481,6 +479,28 @@ pub(super) fn launchd(
     )
 }
 
+fn bridge_launchd(binary: &str, config: &str, log: &Path, path: &str, user: &str) -> String {
+    let extra = format!(
+        "<key>StartInterval</key><integer>60</integer><key>UserName</key><string>{}</string>",
+        xml(user)
+    );
+    launchd(
+        "com.zvuk.kithara-ci.bridge",
+        &[
+            "/usr/bin/env",
+            binary,
+            "ci",
+            "bridge",
+            "reconcile",
+            "--config",
+            config,
+        ],
+        log,
+        path,
+        &extra,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -513,5 +533,27 @@ mod tests {
         assert!(plist.contains(
             "<key>PATH</key><string>/opt/homebrew/bin:/opt/homebrew/sbin:/usr/bin:/bin</string>"
         ));
+    }
+
+    #[test]
+    fn bridge_agent_execs_mutable_binary_through_stable_env() {
+        let plist = bridge_launchd(
+            "/Volumes/CI/toolchains/shared-bin/kithara-ci",
+            "/Volumes/CI/services/bridge/config.toml",
+            Path::new("/Volumes/CI/logs/bridge.log"),
+            "/opt/homebrew/bin:/usr/bin:/bin",
+            "kithara-sync",
+        );
+
+        assert!(plist.contains(
+            "<key>ProgramArguments</key><array>\
+             <string>/usr/bin/env</string>\
+             <string>/Volumes/CI/toolchains/shared-bin/kithara-ci</string>\
+             <string>ci</string><string>bridge</string><string>reconcile</string>\
+             <string>--config</string>\
+             <string>/Volumes/CI/services/bridge/config.toml</string></array>"
+        ));
+        assert!(!plist.contains("<string>/bin/sh</string>"));
+        assert!(!plist.contains("<string>-c</string>"));
     }
 }

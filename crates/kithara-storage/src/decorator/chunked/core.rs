@@ -8,7 +8,10 @@ use std::{
 };
 
 use arc_swap::ArcSwap;
-use kithara_platform::sync::{Arc, Mutex};
+use kithara_platform::{
+    CancelToken,
+    sync::{Arc, Mutex},
+};
 
 use crate::{
     ResourceRead, ResourceReader, ResourceStatus, ResourceWriter, StorageError, StorageResult,
@@ -306,6 +309,20 @@ impl<D: DriverIo> AtomicChunked<D> {
     /// resource has failed.
     pub fn wait_range(&self, range: Range<u64>) -> StorageResult<WaitOutcome> {
         self.read_view().wait_range(range)
+    }
+
+    /// Wait until the given byte range is available, interrupting only this
+    /// wait when `cancel` fires.
+    ///
+    /// # Errors
+    /// Returns error if the range is invalid, either cancellation token fires,
+    /// or the resource has failed.
+    pub fn wait_range_with_cancel(
+        &self,
+        range: Range<u64>,
+        cancel: &CancelToken,
+    ) -> StorageResult<WaitOutcome> {
+        self.read_view().wait_range_with_cancel(range, cancel)
     }
 
     delegate::delegate! {

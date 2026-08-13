@@ -5,7 +5,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use kithara_platform::sync::Arc;
+use kithara_platform::{CancelToken, sync::Arc};
 
 use crate::{
     AtomicChunked, MemDriver, MemResource, StorageResult,
@@ -201,6 +201,24 @@ impl StorageResource {
             #[cfg(not(target_arch = "wasm32"))]
             Self::Mmap(r) => r.wait_range(range),
             Self::Mem(r) => r.wait_range(range),
+        }
+    }
+
+    /// Wait until the given byte range is available, interrupting only this
+    /// wait when `cancel` fires.
+    ///
+    /// # Errors
+    /// Returns error if the range is invalid, either cancellation token fires,
+    /// or the resource has failed.
+    pub fn wait_range_with_cancel(
+        &self,
+        range: Range<u64>,
+        cancel: &CancelToken,
+    ) -> StorageResult<WaitOutcome> {
+        match self {
+            #[cfg(not(target_arch = "wasm32"))]
+            Self::Mmap(r) => r.wait_range_with_cancel(range, cancel),
+            Self::Mem(r) => r.wait_range_with_cancel(range, cancel),
         }
     }
 

@@ -12,7 +12,7 @@ pub(crate) fn build(_config: &Config, _spec: PcmSpec) -> Slot {
     Slot
 }
 
-pub(crate) fn config_is_empty(_config: &Config) -> bool {
+pub(crate) const fn config_is_empty(_config: &Config) -> bool {
     true
 }
 

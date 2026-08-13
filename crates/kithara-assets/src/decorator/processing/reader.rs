@@ -1,7 +1,7 @@
 use std::{fmt, ops::Range, path::Path};
 
 use kithara_bufpool::BytePool;
-use kithara_platform::sync::Arc;
+use kithara_platform::{CancelToken, sync::Arc};
 use kithara_storage::{ResourceStatus, StorageError, StorageResult, WaitOutcome};
 
 use super::{contract::ProcessCtx, gate::ReadinessGate, writer::ProcessedWriter};
@@ -79,6 +79,30 @@ where
             readiness: Arc::new(ReadinessGate::new(ready)),
         }
     }
+
+    fn finish_wait(
+        &self,
+        outcome: WaitOutcome,
+        cancel: Option<&CancelToken>,
+    ) -> StorageResult<WaitOutcome> {
+        if self.processor.is_none() || outcome != WaitOutcome::Ready {
+            return Ok(outcome);
+        }
+        let ready = cancel.map_or_else(
+            || self.readiness.wait_until_ready(&|| self.inner_terminal()),
+            |cancel| {
+                self.readiness
+                    .wait_until_ready_with_cancel(cancel, &|| self.inner_terminal())
+            },
+        );
+        if ready {
+            Ok(WaitOutcome::Ready)
+        } else if cancel.is_some_and(CancelToken::is_cancelled) {
+            Err(StorageError::Cancelled)
+        } else {
+            Ok(WaitOutcome::Interrupted)
+        }
+    }
 }
 
 impl<R> ReadSide for ProcessedReader<R>
@@ -105,14 +129,16 @@ where
 
     fn wait_range(&self, range: Range<u64>) -> StorageResult<WaitOutcome> {
         let outcome = self.inner.wait_range(range)?;
-        if self.processor.is_none() || outcome != WaitOutcome::Ready {
-            return Ok(outcome);
-        }
-        if self.readiness.wait_until_ready(&|| self.inner_terminal()) {
-            Ok(WaitOutcome::Ready)
-        } else {
-            Ok(WaitOutcome::Interrupted)
-        }
+        self.finish_wait(outcome, None)
+    }
+
+    fn wait_range_with_cancel(
+        &self,
+        range: Range<u64>,
+        cancel: &CancelToken,
+    ) -> StorageResult<WaitOutcome> {
+        let outcome = self.inner.wait_range_with_cancel(range, cancel)?;
+        self.finish_wait(outcome, Some(cancel))
     }
 
     delegate::delegate! {

@@ -168,6 +168,7 @@ where
             decoder,
             preload_chunks,
             block_on_underrun,
+            consumer_wake_mode,
             stream: stream_config,
             bus: config_bus,
             effects: custom_effects,
@@ -260,6 +261,7 @@ where
 
         let ring = RingConsumer::new(RingParts {
             block_on_underrun,
+            consumer_wake_mode,
             pcm_rx: registered.data_rx,
             trash_tx: registered.trash_tx,
             reader_wake: registered.reader_wake,
@@ -604,7 +606,7 @@ fn log_pipeline_ready(spec: PcmSpec, host_sample_rate: &Arc<AtomicU32>) {
 /// Fill the caller's unset fields from what the source reports. The caller's
 /// declaration wins: they know the bytes, the source only knows what its
 /// container or playlist claims about them.
-fn merge_media_info(mut user: MediaInfo, stream: &MediaInfo) -> MediaInfo {
+const fn merge_media_info(mut user: MediaInfo, stream: &MediaInfo) -> MediaInfo {
     if user.codec.is_none() {
         user.codec = stream.codec;
     }
@@ -623,7 +625,7 @@ fn merge_media_info(mut user: MediaInfo, stream: &MediaInfo) -> MediaInfo {
     user
 }
 
-fn merge_user_and_stream_media_info(
+const fn merge_user_and_stream_media_info(
     user: Option<MediaInfo>,
     stream: Option<MediaInfo>,
 ) -> Option<MediaInfo> {

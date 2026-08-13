@@ -79,7 +79,7 @@ pub async fn test_server() -> TestServer {
 }
 
 #[must_use]
-pub fn test_master_playlist() -> &'static str {
+pub const fn test_master_playlist() -> &'static str {
     r#"#EXTM3U
 #EXT-X-VERSION:6
 #EXT-X-STREAM-INF:BANDWIDTH=1280000,RESOLUTION=854x480,CODECS="avc1.42c01e,mp4a.40.2"
@@ -92,7 +92,7 @@ v2.m3u8
 }
 
 #[must_use]
-pub fn test_master_playlist_with_init() -> &'static str {
+pub const fn test_master_playlist_with_init() -> &'static str {
     r#"#EXTM3U
 #EXT-X-VERSION:6
 #EXT-X-STREAM-INF:BANDWIDTH=1280000,RESOLUTION=854x480,CODECS="avc1.42c01e,mp4a.40.2"
@@ -157,7 +157,7 @@ pub fn test_segment_data(variant: usize, segment: usize) -> Vec<u8> {
 }
 
 #[must_use]
-pub fn test_master_playlist_encrypted() -> &'static str {
+pub const fn test_master_playlist_encrypted() -> &'static str {
     r#"#EXTM3U
 #EXT-X-VERSION:6
 #EXT-X-STREAM-INF:BANDWIDTH=1280000,RESOLUTION=854x480,CODECS="avc1.42c01e,mp4a.40.2"
@@ -276,7 +276,7 @@ impl HlsTestServer {
     }
 
     #[must_use]
-    pub fn config(&self) -> &HlsTestServerConfig {
+    pub const fn config(&self) -> &HlsTestServerConfig {
         &self.config
     }
 
@@ -944,7 +944,7 @@ fn aes128_key_bytes() -> Vec<u8> {
     b"0123456789abcdef".to_vec()
 }
 
-fn aes128_iv() -> [u8; 16] {
+const fn aes128_iv() -> [u8; 16] {
     [0u8; 16]
 }
 

@@ -42,7 +42,7 @@ fn test_ctx(prefetch_budget: usize) -> PlanCtx {
     let backend = Arc::new(
         AssetStore::builder()
             .backend(StorageBackend::Memory)
-            .cancel(cancel.clone())
+            .cancel(cancel)
             .build(),
     );
     PlanCtx {
@@ -1049,7 +1049,7 @@ fn incoming_session_leads_with_the_landing_and_skips_everything_before_it() {
         CancelToken::never(),
         profile,
         Arc::new(SeekState::new()),
-        ctx.signal.clone(),
+        ctx.signal,
         transition,
         Arc::clone(&v),
         Duration::from_secs(8),
@@ -1353,7 +1353,7 @@ fn exact_seek_session() -> (Arc<HlsVariant>, HlsSession, u64) {
     let session = HlsSession::active(
         CancelToken::never(),
         seek,
-        ctx.signal.clone(),
+        ctx.signal,
         0,
         Arc::clone(&v),
         stale_anchor,
@@ -1738,7 +1738,7 @@ fn exact_session_seek_uses_the_session_cursor_to_detect_movement() {
     let session = HlsSession::active(
         CancelToken::never(),
         seek,
-        ctx.signal.clone(),
+        ctx.signal,
         0,
         Arc::clone(&v),
         stale_projection,
@@ -1829,7 +1829,7 @@ fn on_evict_returns_none_for_foreign_asset() {
     let foreign: Url = "https://other.example.com/x.m4s".parse().expect("url");
     let foreign_key = ctx
         .scope
-        .key(&AssetResource::Url(foreign.clone()))
+        .key(&AssetResource::Url(foreign))
         .expect("foreign key");
     let res = v.on_evict(&foreign_key);
     assert_eq!(res, None);

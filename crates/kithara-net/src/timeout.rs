@@ -23,7 +23,7 @@ pub struct TimeoutNet<N> {
 }
 
 impl<N: Net> TimeoutNet<N> {
-    pub fn new(inner: N, timeout: Duration) -> Self {
+    pub const fn new(inner: N, timeout: Duration) -> Self {
         Self { timeout, inner }
     }
 }

@@ -413,7 +413,7 @@ where
         .expect("decoder builds")
 }
 
-fn marker_samples() -> &'static [f32] {
+const fn marker_samples() -> &'static [f32] {
     &[1.0, 10.0, 2.0, 20.0, 3.0, 30.0, 4.0, 40.0]
 }
 

@@ -58,7 +58,7 @@ pub struct EqBandConfig {
 }
 
 impl EqBandConfig {
-    pub fn set_gain_db(&mut self, gain_db: f32) {
+    pub const fn set_gain_db(&mut self, gain_db: f32) {
         self.gain_db = gain_db.clamp(MIN_GAIN_DB, MAX_GAIN_DB);
     }
 }
@@ -105,7 +105,7 @@ pub fn generate_log_spaced_bands(count: usize) -> Vec<EqBandConfig> {
             let index_f32: f32 = index.as_();
             EqBandConfig::builder()
                 .kind(kind)
-                .frequency(Consts::LOG_FREQ_BASE.powf(log_min + index_f32 * log_step))
+                .frequency(Consts::LOG_FREQ_BASE.powf(index_f32.mul_add(log_step, log_min)))
                 .q_factor(q_factor)
                 .build()
         })

@@ -166,7 +166,7 @@ impl ThreadGate {
         }
     }
 
-    fn sequence(state: u64) -> u64 {
+    const fn sequence(state: u64) -> u64 {
         state & Self::SEQUENCE_MASK
     }
 }

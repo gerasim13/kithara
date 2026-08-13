@@ -31,7 +31,7 @@ fn collect_instances(ui: &CompiledUi, node: &CompiledNode, instances: &mut Vec<S
     }
 }
 
-fn binding_scopes(binding: &Binding) -> &BTreeMap<InternId, InternId> {
+const fn binding_scopes(binding: &Binding) -> &BTreeMap<InternId, InternId> {
     &binding.with
 }
 

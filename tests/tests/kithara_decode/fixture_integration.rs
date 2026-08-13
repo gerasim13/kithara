@@ -571,7 +571,7 @@ fn test_embedded_audio_contains_data() {
     assert!(mp3_data.len() > wav_data.len());
 }
 
-fn wav_spec() -> SignalSpec {
+const fn wav_spec() -> SignalSpec {
     SignalSpec {
         sample_rate: 44_100,
         channels: 2,

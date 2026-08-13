@@ -50,6 +50,21 @@ The request-level header is authoritative even under wreq emulation: disabling a
 enough, because an emulation preset may already have installed its own header. Apple preserves Foundation's auto-decode of
 whole-body responses by dropping the now-stale `content-encoding` and encoded `content-length` response headers.
 
+## Range response contract
+
+Every streaming response validates its status and range headers before exposing the body. A `206 Partial Content`
+response must carry a parseable `content-range` whose start matches the request, whose inclusive end does not exceed the
+requested bound, and whose numeric total exceeds that end. Unknown `*` totals are rejected because neither the network
+stream nor its caller can prove representation completion. A partial response must also carry a parseable
+`content-length` exactly matching the declared range span, so a chunked or overlong body cannot escape its interval. A `200 OK` may
+represent a server that ignored `Range`, but it must not carry `content-range`; other successful statuses are invalid for
+a range request. Any mismatch is a fatal `NetError::Decode` with the request URL and range, so a resumed body cannot append
+bytes from a different interval or commit a truncated asset. Streaming calls that did not request a range reject
+unsolicited `206` responses. The same validation owns initial requests and resumable re-fetches on every backend.
+The resumable stream pins the first known representation total and rejects a re-fetch whose known total conflicts, even
+when the resumed byte interval itself is valid. It also preserves the first response envelope: recovery may fill missing
+bytes in that response, but cannot expose bytes beyond its declared length.
+
 ## Apple backend
 
 - **No unsafe.** The crate root is `#![forbid(unsafe_code)]`. All Objective-C glue (delegate class, blocks, selectors)

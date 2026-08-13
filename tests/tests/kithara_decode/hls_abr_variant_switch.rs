@@ -272,7 +272,7 @@ async fn test_abr_variant_switch_with_seek_backward(
 
         let data_str = String::from_utf8_lossy(&buffer2[..n2]);
         assert!(
-            data_str.starts_with("V"),
+            data_str.starts_with('V'),
             "Should read segment data after seek, got: {}",
             &data_str[..20.min(data_str.len())]
         );

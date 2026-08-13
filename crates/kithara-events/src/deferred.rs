@@ -97,7 +97,7 @@ mod tests {
     use super::*;
     use crate::{BusEvent, EventMeta, FileEvent};
 
-    fn progress(position: u64) -> FileEvent {
+    const fn progress(position: u64) -> FileEvent {
         FileEvent::ReadProgress {
             position,
             total: None,
@@ -137,7 +137,7 @@ mod tests {
     fn enqueue_drops_when_full_without_blocking() {
         let bus = EventBus::new(16);
         let mut rx = bus.subscribe();
-        let deferred = DeferredBus::new(bus.clone(), 2);
+        let deferred = DeferredBus::new(bus, 2);
 
         deferred.enqueue(progress(1));
         deferred.enqueue(progress(2));

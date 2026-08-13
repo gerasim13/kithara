@@ -11,7 +11,7 @@ pub(crate) fn view(state: &Kithara, _window: iced::window::Id) -> Element<'_, Me
 }
 
 /// The playhead the UI shows: while the user drags, that is the seek target.
-pub(crate) fn playhead(ui: &UiState) -> f64 {
+pub(crate) const fn playhead(ui: &UiState) -> f64 {
     if ui.is_seeking {
         ui.seek_position
     } else {

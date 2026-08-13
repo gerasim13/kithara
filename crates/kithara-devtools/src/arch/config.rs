@@ -173,11 +173,11 @@ impl Default for ArgsWrapperStructThreshold {
     }
 }
 
-fn default_args_wrapper_min_fields() -> usize {
+const fn default_args_wrapper_min_fields() -> usize {
     5
 }
 
-fn default_args_wrapper_min_call_sites() -> usize {
+const fn default_args_wrapper_min_call_sites() -> usize {
     2
 }
 
@@ -217,7 +217,7 @@ impl Default for FieldAlwaysEqualsOtherFieldThreshold {
     }
 }
 
-fn default_field_always_min_call_sites() -> usize {
+const fn default_field_always_min_call_sites() -> usize {
     3
 }
 

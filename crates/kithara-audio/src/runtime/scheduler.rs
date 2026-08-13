@@ -132,9 +132,11 @@ fn run_loop<N: Node, O: SchedulerObserver>(
     }
 }
 
-/// Reclaim deferred bookkeeping (spent-buffer free/recycle) for every slot
-/// before the checked produce core runs. Lives in the unchecked shell so a
-/// pooled-buffer `free` on a full pool stays off the forbid-blocking path.
+/// Reclaim deferred bookkeeping for every slot from the unchecked shell.
+///
+/// The scheduler calls this before the checked produce core and once more after
+/// the pass. The final recycle delivers work armed by the last tick before a
+/// terminal slot is removed or the worker parks.
 fn recycle_all<N: Node>(slots: &mut [Slot<N>], slots_order: &[usize]) {
     for &idx in slots_order {
         if let Some(slot) = slots.get_mut(idx) {
@@ -309,6 +311,12 @@ fn produce_pass<N: Node, O: SchedulerObserver>(
             _ => TickResult::Done,
         };
     }
+
+    // Deliver work armed by the final tick in this pass from the unchecked
+    // shell. This is load-bearing for terminal ticks: run_loop removes those
+    // slots immediately after produce_pass returns, so there is no next-pass
+    // recycle in which to wake a blocked reader or flush terminal events.
+    recycle_all(slots, slots_order);
 
     report.outcome = match best {
         TickResult::Progress => PassOutcome::Produced,
@@ -823,7 +831,7 @@ mod tests {
     }
 
     #[kithara::test]
-    fn terminal_visit_recycles_node_once_before_removal() {
+    fn terminal_visit_recycles_before_and_after_tick() {
         let (events, received) = mpsc::channel();
         let mut slots = vec![Slot {
             id: 1,
@@ -838,7 +846,7 @@ mod tests {
         let _ = produce_pass(&mut slots, &order, &mut observer);
         assert!(slots[0].is_terminal);
         assert_eq!(received.try_recv(), Ok("recycle"));
-        assert!(received.try_recv().is_err());
+        assert_eq!(received.try_recv(), Ok("recycle"));
 
         assert!(remove_terminal(&mut slots));
 

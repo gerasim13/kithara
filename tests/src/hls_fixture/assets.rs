@@ -54,7 +54,7 @@ fn test_layouts() -> AssetLayoutRegistry {
 }
 
 impl TestAssets {
-    pub fn assets(&self) -> &AssetStore {
+    pub const fn assets(&self) -> &AssetStore {
         &self.assets
     }
 

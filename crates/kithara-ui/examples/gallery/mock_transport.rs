@@ -99,7 +99,7 @@ impl DeckTransport {
         self.loop_region = None;
     }
 
-    pub(super) fn set_zoom(&mut self, zoom: f64) {
+    pub(super) const fn set_zoom(&mut self, zoom: f64) {
         self.zoom = zoom.clamp(Self::MIN_ZOOM, Self::MAX_ZOOM);
     }
 
@@ -115,7 +115,7 @@ impl DeckTransport {
         self.loop_region = Some([start.as_(), end.as_()]);
     }
 
-    pub(super) fn toggle_play(&mut self) {
+    pub(super) const fn toggle_play(&mut self) {
         self.playing = !self.playing;
     }
 }

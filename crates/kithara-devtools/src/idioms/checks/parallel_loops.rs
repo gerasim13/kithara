@@ -88,7 +88,7 @@ fn scan_block(rel: &str, b: &Block, out: &mut Vec<Violation>) {
     }
 }
 
-fn top_level_for_loop(s: &Stmt) -> Option<&ExprForLoop> {
+const fn top_level_for_loop(s: &Stmt) -> Option<&ExprForLoop> {
     match s {
         Stmt::Expr(syn::Expr::ForLoop(f), _) => Some(f),
         _ => None,

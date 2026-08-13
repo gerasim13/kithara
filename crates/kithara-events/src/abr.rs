@@ -34,7 +34,7 @@ impl VariantIndex {
     ///
     /// # Errors
     /// Returns [`BoundsError`] when `idx >= available`.
-    pub fn try_new(idx: usize, available: usize) -> Result<Self, BoundsError> {
+    pub const fn try_new(idx: usize, available: usize) -> Result<Self, BoundsError> {
         if idx < available {
             Ok(Self(idx))
         } else {

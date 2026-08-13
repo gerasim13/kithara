@@ -46,7 +46,7 @@ impl OfflinePlayer {
         let (inputs, control) = slot_channels(SharedEq::new(0));
         let playback = Arc::clone(&control.playback);
 
-        let player_node = PlayerNode::new(inputs, kithara::bufpool::PcmPool::default().clone());
+        let player_node = PlayerNode::new(inputs, kithara::bufpool::PcmPool::default());
         let node_id = ctx.add_node(player_node, None);
         let graph_out = ctx.graph_out_node_id();
         ctx.connect(node_id, graph_out, &[(0, 0), (1, 1)], false)

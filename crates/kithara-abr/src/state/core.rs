@@ -82,7 +82,7 @@ struct PendingApply {
 /// estimate — the ones that go stale across a position jump and must
 /// not survive a seek into the post-unlock boundary commit. Manual or
 /// first-pick reasons stay valid through a seek and are preserved.
-fn is_throughput_driven(reason: AbrReason) -> bool {
+const fn is_throughput_driven(reason: AbrReason) -> bool {
     matches!(
         reason,
         AbrReason::UpSwitch
@@ -97,7 +97,7 @@ fn is_throughput_driven(reason: AbrReason) -> bool {
 /// no amount of throughput evidence speaks to that: an estimate recovers as
 /// soon as some *other* variant's segment lands, while the stalled one is
 /// still stalled.
-pub(super) fn is_rescue(reason: AbrReason) -> bool {
+pub(super) const fn is_rescue(reason: AbrReason) -> bool {
     matches!(
         reason,
         AbrReason::EscapeStalled | AbrReason::UrgentDownSwitch
@@ -109,7 +109,7 @@ pub(super) fn is_rescue(reason: AbrReason) -> bool {
 /// only reasons that reach a pending slot are switch-class (a `Stay` never
 /// requests a target), so a non-down, non-manual reason classifies as an
 /// up-switch.
-fn pending_decision(from: VariantIndex, to: VariantIndex, reason: AbrReason) -> AbrDecision {
+const fn pending_decision(from: VariantIndex, to: VariantIndex, reason: AbrReason) -> AbrDecision {
     match reason {
         AbrReason::ManualOverride => AbrDecision::Manual { from, to },
         AbrReason::DownSwitch | AbrReason::UrgentDownSwitch => {

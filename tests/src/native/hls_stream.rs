@@ -201,7 +201,7 @@ impl GeneratedHls {
         Some(self.encrypt_if_needed(plaintext, 0))
     }
 
-    pub(crate) fn init_content_type(&self) -> Option<&'static str> {
+    pub(crate) const fn init_content_type(&self) -> Option<&'static str> {
         match self.body {
             MaterializedHlsBody::Legacy { .. } => None,
             MaterializedHlsBody::Packaged { .. } => Some("audio/mp4"),
@@ -243,7 +243,7 @@ impl GeneratedHls {
         Some(self.encrypt_if_needed(&plaintext, segment))
     }
 
-    pub(crate) fn segment_content_type(&self) -> Option<&'static str> {
+    pub(crate) const fn segment_content_type(&self) -> Option<&'static str> {
         match self.body {
             MaterializedHlsBody::Legacy { .. } => None,
             MaterializedHlsBody::Packaged { .. } => Some("audio/mp4"),

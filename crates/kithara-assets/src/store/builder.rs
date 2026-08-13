@@ -25,7 +25,7 @@ use crate::{
         LeaseEvents, ProcessingAssets,
     },
     index::{
-        AvailabilityIndex, DemandIndex, EvictConfig, FlushHub, FlushPolicy,
+        AvailabilityIndex, EvictConfig, FlushHub, FlushPolicy, PendingResourceIndex,
         ResourceTransactionIndex,
     },
     layout::{AssetLayoutRegistry, ResourceKey},
@@ -88,10 +88,10 @@ impl AssetStore {
         #[builder(default = BytePool::default())] pool: BytePool,
     ) -> Self {
         let availability = AvailabilityIndex::new();
-        // The demand index is a consumer-driven sibling of `availability`:
+        // The pending-resource index is a consumer-driven sibling of `availability`:
         // no observer / decorator threading, just a shared field. Each
-        // slot's `producer_cancel` is a child of this store cancel.
-        let demand = DemandIndex::new(CancelScope::new(cancel.clone()).token());
+        // slot's `writer_cancel` is a child of this store cancel.
+        let pending_resources = PendingResourceIndex::new(CancelScope::new(cancel.clone()).token());
         let transactions = ResourceTransactionIndex::default();
         // The eviction router is the third consumer-driven sibling: the
         // memory cache's `on_invalidated` hook routes evicted keys into
@@ -172,7 +172,7 @@ impl AssetStore {
 
             return Self::new_handle(AssetStoreInner {
                 availability,
-                demand,
+                pending_resources,
                 transactions,
                 eviction,
                 layouts,
@@ -248,7 +248,7 @@ impl AssetStore {
 
         Self::new_handle(AssetStoreInner {
             availability,
-            demand,
+            pending_resources,
             transactions,
             eviction,
             layouts,
@@ -355,7 +355,7 @@ mod tests {
         let mut events = bus.subscribe();
         let store = AssetStore::builder()
             .backend(StorageBackend::Memory)
-            .event_bus(bus.clone())
+            .event_bus(bus)
             .build();
         let key = ResourceKey::relative(ROOT, "seg.m4s");
 
@@ -413,7 +413,7 @@ mod tests {
         let mut events = bus.subscribe();
         let store = AssetStore::builder()
             .backend(StorageBackend::Memory)
-            .event_bus(bus.clone())
+            .event_bus(bus)
             .build();
         let key = ResourceKey::relative(ROOT, "seg.m4s");
         let writer = pending(store.acquire_resource(&key, None).unwrap());
@@ -442,7 +442,7 @@ mod tests {
                 root: dir.path().into(),
             })
             .max_assets(1)
-            .event_bus(bus.clone())
+            .event_bus(bus)
             .build();
 
         let key_a = ResourceKey::relative("asset-a", "seg0.m4s");

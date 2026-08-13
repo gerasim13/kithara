@@ -23,7 +23,7 @@ impl Rfc6381Ext for MediaInfo {
     }
 }
 
-fn rfc6381_for_codec_and_container(
+const fn rfc6381_for_codec_and_container(
     codec: AudioCodec,
     container: ContainerFormat,
 ) -> Option<Cow<'static, str>> {

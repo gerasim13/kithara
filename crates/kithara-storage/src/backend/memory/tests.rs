@@ -4,6 +4,9 @@ mod kithara {
     pub(crate) use kithara_test_macros::test;
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+use std::sync::{Arc, Barrier};
+
 use kithara_bufpool::{BytePool, Region, RegionConfig};
 #[cfg(not(target_arch = "wasm32"))]
 use kithara_platform::thread;
@@ -153,7 +156,7 @@ fn test_cancel_wakes_waiters() {
     let res = MemResource::new(cancel.clone(), BytePool::default());
 
     let handle = thread::spawn({
-        let cancel = cancel.clone();
+        let cancel = cancel;
         move || {
             thread::sleep(Duration::from_millis(50));
             cancel.cancel();
@@ -163,6 +166,40 @@ fn test_cancel_wakes_waiters() {
     let result = res.wait_range(0..100);
     assert!(matches!(result, Err(StorageError::Cancelled)));
     handle.join().unwrap();
+}
+
+#[kithara::test(native)]
+fn external_cancel_wakes_waiter_without_cancelling_resource() {
+    let resource_cancel = CancelToken::never();
+    let writer = MemResource::new(resource_cancel.clone(), BytePool::default());
+    let reader = writer.reader();
+    let wait_cancel = CancelToken::never();
+    let entering_wait = Arc::new(Barrier::new(2));
+
+    let handle = thread::spawn({
+        let entering_wait = Arc::clone(&entering_wait);
+        let wait_cancel = wait_cancel.clone();
+        move || {
+            entering_wait.wait();
+            reader.wait_range_with_cancel(0..4, &wait_cancel)
+        }
+    });
+
+    entering_wait.wait();
+    wait_cancel.cancel();
+
+    assert!(matches!(
+        handle.join().expect("waiter thread must not panic"),
+        Err(StorageError::Cancelled)
+    ));
+    assert!(!resource_cancel.is_cancelled());
+    assert_eq!(writer.status(), ResourceStatus::Active);
+
+    writer.write_at(0, b"done").unwrap();
+    let committed = writer.commit(Some(4)).unwrap();
+    let mut bytes = [0; 4];
+    assert_eq!(committed.read_at(0, &mut bytes).unwrap(), 4);
+    assert_eq!(&bytes, b"done");
 }
 
 #[kithara::test(timeout(Duration::from_secs(1)))]

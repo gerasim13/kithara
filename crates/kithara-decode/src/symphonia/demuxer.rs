@@ -407,7 +407,7 @@ impl SymphoniaDemuxer {
     /// The factory layer probes the underlying source separately
     /// (e.g. `probe_mp4_gapless` for AAC fMP4) and pipes the result
     /// through this setter so the codec sees the captured trim counts.
-    pub(crate) fn set_gapless(&mut self, gapless: Option<crate::GaplessInfo>) {
+    pub(crate) const fn set_gapless(&mut self, gapless: Option<crate::GaplessInfo>) {
         self.track_info.gapless = gapless;
     }
 }
@@ -463,7 +463,7 @@ fn time_to_duration(time: Time) -> Duration {
 /// inside the corresponding well-known range so PCM/ADPCM tracks still
 /// surface a usable [`TrackInfo`]. The matching codec wiring uses
 /// [`SymphoniaDemuxer::native_params`] for the actual decoder build.
-fn map_codec_id(id: AudioCodecId) -> AudioCodec {
+const fn map_codec_id(id: AudioCodecId) -> AudioCodec {
     match id {
         CODEC_ID_AAC => AudioCodec::AacLc,
         CODEC_ID_FLAC => AudioCodec::Flac,
@@ -477,7 +477,7 @@ fn map_codec_id(id: AudioCodecId) -> AudioCodec {
     }
 }
 
-fn is_pcm_codec_id(id: AudioCodecId) -> bool {
+const fn is_pcm_codec_id(id: AudioCodecId) -> bool {
     matches!(
         id,
         CODEC_ID_PCM_S32LE
@@ -521,7 +521,7 @@ fn is_pcm_codec_id(id: AudioCodecId) -> bool {
     )
 }
 
-fn is_adpcm_codec_id(id: AudioCodecId) -> bool {
+const fn is_adpcm_codec_id(id: AudioCodecId) -> bool {
     matches!(
         id,
         CODEC_ID_ADPCM_G722
@@ -589,7 +589,7 @@ fn pending_reason(error: &SymphoniaError) -> Option<PendingReason> {
     )
 }
 
-fn mdct_packet_frames(codec: AudioCodec) -> u32 {
+const fn mdct_packet_frames(codec: AudioCodec) -> u32 {
     match codec {
         AudioCodec::Mp3 => 1152,
         AudioCodec::AacLc | AudioCodec::AacHe | AudioCodec::AacHeV2 => 1024,

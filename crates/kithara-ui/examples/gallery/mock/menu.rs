@@ -71,7 +71,7 @@ struct MenuWindow {
 }
 
 impl MenuWindow {
-    fn new(display: usize, layout: usize, modules: [bool; 11]) -> Self {
+    const fn new(display: usize, layout: usize, modules: [bool; 11]) -> Self {
         Self {
             display,
             layout,

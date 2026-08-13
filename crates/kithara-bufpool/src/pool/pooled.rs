@@ -43,7 +43,7 @@ where
             .expect("BUG: Pooled inner value taken twice (Option::None implies prior into_inner)")
     }
 
-    pub(super) fn wrap(pool: &'a Pool<SHARDS, T>, value: T, shard_idx: usize) -> Self {
+    pub(super) const fn wrap(pool: &'a Pool<SHARDS, T>, value: T, shard_idx: usize) -> Self {
         Self {
             pool,
             shard_idx,

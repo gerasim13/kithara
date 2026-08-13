@@ -5,7 +5,7 @@ use syn::{Fields, Item, ItemStruct};
 
 use super::{Check, Context};
 use crate::common::{
-    parse::{is_strict_pub, parse_file},
+    parse::is_strict_pub,
     violation::Violation,
     walker::{relative_to, workspace_rs_files_scoped},
 };
@@ -24,7 +24,7 @@ impl Check for PubStructOpenFields {
         let mut violations = Vec::new();
 
         for path in workspace_rs_files_scoped(ctx.workspace_root, ctx.scope)? {
-            let Ok(file) = parse_file(&path) else {
+            let Some(file) = ctx.parsed_file(&path)? else {
                 continue;
             };
             let rel = relative_to(ctx.workspace_root, &path)

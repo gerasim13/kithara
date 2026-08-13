@@ -811,7 +811,7 @@ fn should_use_segment_aware(
 /// [`should_use_segment_aware`] so [`DecoderFactory::reader_profile`] can
 /// ask the same question without a [`DecoderConfig`]. AAC / FLAC in fMP4 is
 /// the only segment-aware path; everything else reads incrementally.
-fn segment_aware_container(codec: AudioCodec, container: Option<ContainerFormat>) -> bool {
+const fn segment_aware_container(codec: AudioCodec, container: Option<ContainerFormat>) -> bool {
     !needs_exact_byte_sizes(Some(codec), container)
 }
 
@@ -1051,7 +1051,7 @@ mod apple_factory_tests {
         Ok(frames)
     }
 
-    fn aac_track(sample_rate: u32, gapless: Option<GaplessInfo>) -> TrackInfo {
+    const fn aac_track(sample_rate: u32, gapless: Option<GaplessInfo>) -> TrackInfo {
         TrackInfo {
             sample_rate,
             gapless,

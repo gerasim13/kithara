@@ -75,7 +75,7 @@ pub(crate) enum CacheGroup {
 }
 
 impl Lane {
-    pub(crate) fn cache_group(self) -> CacheGroup {
+    pub(crate) const fn cache_group(self) -> CacheGroup {
         match self {
             Self::AppleLint
             | Self::AppleMsrv
@@ -92,9 +92,9 @@ impl Lane {
             | Self::DeepBench
             | Self::ReleaseXcframework
             | Self::ReleaseDocs
-            | Self::ReleaseWasm => CacheGroup::Macos,
-            Self::Verdict
-            | Self::LinuxSecrets
+            | Self::ReleaseWasm
+            | Self::Verdict => CacheGroup::Macos,
+            Self::LinuxSecrets
             | Self::LinuxCheck
             | Self::LinuxWasm
             | Self::LinuxTest
@@ -122,6 +122,7 @@ impl Lane {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
 pub(crate) enum PipelineKind {
     Branch,
+    Platforms,
     MergeRequest,
     Quarantine,
     Main,
@@ -261,6 +262,23 @@ fn retire_sccache_server(process: &Process) -> Result<()> {
 }
 
 pub(crate) fn run(args: &RunArgs, ctx: &Ctx) -> Result<()> {
+    let lane_name = args
+        .lane
+        .to_possible_value()
+        .map_or_else(|| "lane".to_owned(), |value| value.get_name().to_owned());
+    verdict::clear(&ctx.root, &lane_name)?;
+    let outcome = execute(args, ctx);
+    // A lane that fell over before it reached its own work — no host profile,
+    // no room on the cache volume — is still a lane that failed, and the
+    // verdict has to hear about it. Collecting only after a dispatched lane
+    // let exactly that go unrecorded on the first live run.
+    if let Err(error) = verdict::gather(&ctx.root, &lane_name, outcome.is_err()) {
+        warn!(%error, lane = %lane_name, "could not collect this lane's test report");
+    }
+    outcome
+}
+
+fn execute(args: &RunArgs, ctx: &Ctx) -> Result<()> {
     let ext = KitharaExt::from_ctx(ctx)?;
     ext.ci.validate()?;
     let host_config = env::var_os("KITHARA_CI_HOST_CONFIG")
@@ -290,14 +308,8 @@ pub(crate) fn run(args: &RunArgs, ctx: &Ctx) -> Result<()> {
     // for; the cache on disk is untouched.
     retire_sccache_server(&process)?;
 
-    let lane_name = args
-        .lane
-        .to_possible_value()
-        .map_or_else(|| "lane".to_owned(), |value| value.get_name().to_owned());
-    verdict::clear(&ctx.root, &lane_name)?;
-
     let result = match args.lane {
-        Lane::AppleLint => lane::apple::lint(&process, &ci_config),
+        Lane::AppleLint => lane::apple::lint(&process, &ci_config, args.kind),
         Lane::AppleMsrv => lane::apple::msrv(&process, &ci_config),
         Lane::AppleTest => lane::apple::test(&process, &ci_config, args.kind),
         Lane::AppleTestFlashOff => lane::apple::test_flash_off(&process, &ci_config),
@@ -340,15 +352,9 @@ pub(crate) fn run(args: &RunArgs, ctx: &Ctx) -> Result<()> {
         Lane::ReleaseWasm => super::release::wasm(&process, ctx, &ext),
         Lane::ReleaseAndroid => super::release::build_android(&process, ctx, &ext),
         Lane::ReleasePublish => super::release::publish(&process, ctx, &ext, args.kind),
-        Lane::Verdict => verdict::lane(&ctx.root, &ci_config, args.kind),
+        Lane::Verdict => verdict::lane(&ctx.root, environment.shared_root(), args.kind),
     };
     process.best_effort("sccache", &["--show-stats"], "sccache statistics");
-    // The verdict reads what every lane leaves here, so collection cannot be
-    // conditional on the lane passing — a failing lane is the one whose report
-    // decides whether a merge request is held.
-    if let Err(error) = verdict::gather(&ctx.root, &lane_name, result.is_err()) {
-        warn!(%error, lane = %lane_name, "could not collect this lane's test report");
-    }
     result
 }
 
@@ -405,6 +411,52 @@ mod tests {
                 .all(|line| !line.trim().starts_with("image:")),
             "the pipeline must not override the local image provisioned in runner config"
         );
+    }
+
+    #[test]
+    fn verdict_uses_the_macos_cache_group() {
+        assert_eq!(Lane::Verdict.cache_group(), CacheGroup::Macos);
+    }
+
+    #[test]
+    fn manual_platform_dispatch_has_its_own_pipeline_kind() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("xtask has a workspace root");
+        let pipeline = fs::read_to_string(root.join(".gitlab-ci.yml"))
+            .expect("the parent pipeline definition is readable");
+        let (_, after_platforms) = pipeline
+            .split_once("dispatch:platforms:")
+            .expect("the platform dispatcher exists");
+        let (platforms, _) = after_platforms
+            .split_once("dispatch:main:")
+            .expect("the main dispatcher follows the platform dispatcher");
+
+        assert!(platforms.contains("KITHARA_PIPELINE_KIND: platforms"));
+        assert!(!platforms.contains("KITHARA_PIPELINE_KIND: main"));
+    }
+
+    #[test]
+    fn platform_runs_schedule_verification_and_integration_lanes() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("xtask has a workspace root");
+        let common = fs::read_to_string(root.join(".gitlab/ci/common.yml"))
+            .expect("the shared pipeline definition is readable");
+
+        for (name, next) in [
+            (".rules-verify:", ".rules-integration:"),
+            (".rules-integration:", ".rules-verify-and-branch:"),
+        ] {
+            let (_, after_rules) = common.split_once(name).expect("the rule set exists");
+            let (rules, _) = after_rules
+                .split_once(next)
+                .expect("the next rule set exists");
+            assert!(
+                rules.contains("$KITHARA_PIPELINE_KIND == \"platforms\""),
+                "{name} does not schedule a platform run"
+            );
+        }
     }
 
     #[test]

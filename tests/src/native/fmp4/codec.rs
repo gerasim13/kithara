@@ -7,7 +7,7 @@ pub(crate) struct CodecDescriptor {
 }
 
 impl CodecDescriptor {
-    pub(crate) fn for_codec(codec: AudioCodec) -> Option<Self> {
+    pub(crate) const fn for_codec(codec: AudioCodec) -> Option<Self> {
         match codec {
             AudioCodec::AacLc => Some(Self {
                 codec: AudioCodec::AacLc,

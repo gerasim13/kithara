@@ -8,7 +8,6 @@ use std::{
     path::Path,
 };
 
-#[cfg(not(target_arch = "wasm32"))]
 use kithara_platform::CancelToken;
 #[cfg(not(target_arch = "wasm32"))]
 use kithara_storage::{MmapOptions, MmapResource, OpenMode, Resource};
@@ -22,7 +21,7 @@ use super::{RawWriteHandle, ReadSide, WriteSide};
 /// `ProcessedReader`). This newtype is the **storage** seam: it carries the
 /// write capability of a freshly-acquired (uncommitted) resource and consumes
 /// itself on [`commit`](WriteSide::commit) into a [`BaseReader`]. It is not
-/// `Clone` — a single producer owns the write side.
+/// `Clone` — a single writer owns the write side.
 #[derive(Debug)]
 pub struct BaseWriter(StorageResource);
 
@@ -39,14 +38,14 @@ pub struct BaseReader {
 
 impl BaseWriter {
     /// Wrap a freshly-acquired (uncommitted) storage resource.
-    pub(crate) fn new(inner: StorageResource) -> Self {
+    pub(crate) const fn new(inner: StorageResource) -> Self {
         Self(inner)
     }
 }
 
 impl BaseReader {
     /// Wrap a committed (or in-flight shared) storage resource for reading.
-    pub(crate) fn new(inner: StorageResource) -> Self {
+    pub(crate) const fn new(inner: StorageResource) -> Self {
         Self {
             inner,
             read_only: false,
@@ -118,6 +117,11 @@ impl ReadSide for BaseReader {
             fn read_inflight_at(&self, offset: u64, buf: &mut [u8]) -> StorageResult<usize>;
             fn status(&self) -> ResourceStatus;
             fn wait_range(&self, range: Range<u64>) -> StorageResult<WaitOutcome>;
+            fn wait_range_with_cancel(
+                &self,
+                range: Range<u64>,
+                cancel: &CancelToken,
+            ) -> StorageResult<WaitOutcome>;
         }
     }
 }

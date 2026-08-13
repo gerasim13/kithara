@@ -23,14 +23,14 @@ impl LeaseGuard {
         }
     }
 
-    pub(super) fn inactive() -> Self {
+    pub(super) const fn inactive() -> Self {
         Self { inner: None }
     }
 
     /// `true` while at least one clone of this guard still pins the lease.
     /// `false` for no-op guards constructed when the lease is bypassed.
     #[must_use]
-    pub fn is_active(&self) -> bool {
+    pub const fn is_active(&self) -> bool {
         self.inner.is_some()
     }
 }

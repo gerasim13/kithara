@@ -297,7 +297,7 @@ fn walk_module(
     }
 }
 
-fn control_id(node: &ControlNode) -> Option<&NodeId> {
+const fn control_id(node: &ControlNode) -> Option<&NodeId> {
     match node {
         ControlNode::Row { .. }
         | ControlNode::Column { .. }
@@ -601,7 +601,7 @@ enum BindingSide {
     ModelWrite,
 }
 
-pub(crate) fn value_kinds(control: &ControlNode) -> (Option<ValueKind>, Option<ValueKind>) {
+pub(crate) const fn value_kinds(control: &ControlNode) -> (Option<ValueKind>, Option<ValueKind>) {
     match control {
         ControlNode::Bpm { .. } => (Some(ValueKind::Waveform), None),
         ControlNode::DeckSummary { .. }
@@ -650,7 +650,7 @@ pub(crate) fn value_kinds(control: &ControlNode) -> (Option<ValueKind>, Option<V
     }
 }
 
-fn binding_parts(
+const fn binding_parts(
     binding: &BindingRef,
 ) -> (EndpointCategory, &EndpointId, &BTreeMap<String, String>) {
     match binding {

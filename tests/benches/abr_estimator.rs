@@ -20,7 +20,7 @@ fn settings() -> AbrSettings {
         .build()
 }
 
-fn variant(idx: usize, bps: u64) -> VariantInfo {
+const fn variant(idx: usize, bps: u64) -> VariantInfo {
     VariantInfo {
         variant_index: VariantIndex::new(idx),
         bandwidth_bps: Some(bps),

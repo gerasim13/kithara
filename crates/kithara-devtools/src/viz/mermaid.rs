@@ -25,7 +25,7 @@ pub(crate) enum DiagramSetState {
 }
 
 impl DiagramSetState {
-    pub(crate) fn as_str(self) -> &'static str {
+    pub(crate) const fn as_str(self) -> &'static str {
         match self {
             Self::Single => "single",
             Self::Hierarchical => "hierarchical",
@@ -376,7 +376,7 @@ fn contour_label(model: &DiagramModel, id: &NodeId) -> String {
     labels.join(" / ")
 }
 
-fn merge_style(left: EvidenceStyle, right: EvidenceStyle) -> EvidenceStyle {
+const fn merge_style(left: EvidenceStyle, right: EvidenceStyle) -> EvidenceStyle {
     use EvidenceStyle::{
         Candidate, Conditional, Conflicting, Manual, Observed, Resolved, Unresolved,
     };
@@ -562,7 +562,7 @@ fn edge_label(edge: &DiagramEdge) -> String {
     }
 }
 
-fn style_name(style: EvidenceStyle) -> &'static str {
+const fn style_name(style: EvidenceStyle) -> &'static str {
     match style {
         EvidenceStyle::Resolved => "resolved",
         EvidenceStyle::Conditional => "conditional",

@@ -124,8 +124,9 @@ fn work() -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use clap::Parser;
+    use kithara_devtools::CoreCommand;
 
-    use super::Cli;
+    use super::{Cli, Command};
 
     #[test]
     fn agent_hook_uses_payload_without_cli_discriminator() {
@@ -143,5 +144,25 @@ mod tests {
         assert!(Cli::try_parse_from(["xtask", "quality", "lab", "list"]).is_ok());
         assert!(Cli::try_parse_from(["xtask", "quality", "lab", "run", "scheduled"]).is_ok());
         assert!(Cli::try_parse_from(["xtask", "quality-lab", "list"]).is_err());
+    }
+
+    #[test]
+    fn audit_clippy_fix_accepts_dirty_override_and_scope() {
+        let cli = Cli::try_parse_from([
+            "xtask",
+            "audit-clippy",
+            "--fix",
+            "--allow-dirty",
+            "-p",
+            "kithara-ui",
+        ])
+        .expect("audit-clippy fix CLI");
+        let Command::Core(CoreCommand::AuditClippy(args)) = cli.command else {
+            panic!("expected audit-clippy command");
+        };
+
+        assert!(args.fix);
+        assert!(args.allow_dirty);
+        assert_eq!(args.paths, ["-p", "kithara-ui"]);
     }
 }

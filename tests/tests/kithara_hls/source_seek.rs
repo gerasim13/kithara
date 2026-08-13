@@ -8,9 +8,6 @@ use kithara_integration_tests::{
 };
 use tracing::info;
 
-/// Segment size in bytes (test fixture pads to 200KB).
-const SEGMENT_SIZE: u64 = 200_000;
-
 #[kithara::test(
     tokio,
     native,

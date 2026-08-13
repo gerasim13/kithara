@@ -27,12 +27,12 @@ pub struct Bucket {
 
 impl Bucket {
     #[must_use]
-    pub fn new(low: f32, mid: f32, high: f32) -> Self {
+    pub const fn new(low: f32, mid: f32, high: f32) -> Self {
         Self { high, low, mid }
     }
 
     /// Height of one band — the order the analyzer and the wire both use.
-    pub(crate) fn band(self, band: Band) -> f32 {
+    pub(crate) const fn band(self, band: Band) -> f32 {
         match band {
             Band::Low => self.low,
             Band::Mid => self.mid,

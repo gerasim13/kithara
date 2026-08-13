@@ -130,7 +130,7 @@ impl AppleCodec {
         Ok(frames)
     }
 
-    fn needs_src_eof_drain(&self) -> bool {
+    const fn needs_src_eof_drain(&self) -> bool {
         self.spec.sample_rate.get() != self.source_sample_rate
     }
 
@@ -265,7 +265,7 @@ impl AppleCodec {
     /// 40-byte blob in `TrackInfo.extra_data`; ALAC requires the magic
     /// cookie in the same field.
     #[must_use]
-    pub(crate) fn supports(codec: AudioCodec) -> bool {
+    pub(crate) const fn supports(codec: AudioCodec) -> bool {
         matches!(
             codec,
             AudioCodec::AacLc
@@ -615,7 +615,7 @@ fn esds_wrap_asc(asc: &[u8]) -> DecodeResult<Vec<u8>> {
         .collect())
 }
 
-fn resolve_output_sample_rate(source_rate: u32, target_output_rate: Option<u32>) -> u32 {
+const fn resolve_output_sample_rate(source_rate: u32, target_output_rate: Option<u32>) -> u32 {
     match target_output_rate {
         Some(rate) if rate != source_rate => rate,
         _ => source_rate,
@@ -689,7 +689,7 @@ fn build_pcm_output_format(
     }
 }
 
-fn audio_toolbox_status(err: &AudioToolboxError) -> i32 {
+const fn audio_toolbox_status(err: &AudioToolboxError) -> i32 {
     match err {
         AudioToolboxError::Status { status, .. } => *status,
         AudioToolboxError::Config { .. } => -50,
@@ -737,7 +737,7 @@ pub(crate) fn apple_codec_priming(codec: AudioCodec) -> CodecPriming {
 /// backends. Non-MP3 codecs default to 0 — AAC priming is captured
 /// via `AudioConverterPrimeInfo` in the gapless capture path.
 #[must_use]
-pub(crate) fn apple_decoder_algo_delay(codec: AudioCodec) -> u64 {
+pub(crate) const fn apple_decoder_algo_delay(codec: AudioCodec) -> u64 {
     match codec {
         AudioCodec::Mp3 => 529,
         _ => 0,

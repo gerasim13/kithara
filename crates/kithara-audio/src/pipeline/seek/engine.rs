@@ -79,7 +79,7 @@ impl Consts {
 }
 
 impl SeekEngine {
-    pub(crate) fn new(epoch: Arc<AtomicU64>) -> Self {
+    pub(crate) const fn new(epoch: Arc<AtomicU64>) -> Self {
         Self {
             epoch,
             resume_target: None,
@@ -265,7 +265,7 @@ impl SeekEngine {
         self.epoch.load(Ordering::Acquire)
     }
 
-    pub(crate) fn record_resume_target(&mut self, epoch: u64, target: Duration) {
+    pub(crate) const fn record_resume_target(&mut self, epoch: u64, target: Duration) {
         self.resume_target = Some((epoch, target));
     }
 }

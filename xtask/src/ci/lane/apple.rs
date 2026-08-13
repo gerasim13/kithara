@@ -43,9 +43,32 @@ fn preflight(process: &Process, config: &CiConfig) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn lint(process: &Process, config: &CiConfig) -> Result<()> {
+/// The gate a change is measured by, and the ratchets the default branch keeps.
+///
+/// Both chains run the checks that answer whether a change is acceptable:
+/// formatting, Clippy over the workspace, ast-grep, typos, the architecture
+/// ratchet and the two idiom checks a review is held to. What only the default
+/// branch pays for is the rest of the ratchet family — the full idiom set,
+/// style, the quality scans and this tool's own tests. They guard a baseline
+/// rather than judge a diff, and on one Apple host every one of them is a
+/// minute a review waits.
+fn lint_command(kind: PipelineKind) -> (&'static [&'static str], &'static str) {
+    match kind {
+        PipelineKind::MergeRequest | PipelineKind::Branch | PipelineKind::Quarantine => {
+            (&["lint", "fast"], "review lint gate")
+        }
+        PipelineKind::Main
+        | PipelineKind::Platforms
+        | PipelineKind::Nightly
+        | PipelineKind::Weekly
+        | PipelineKind::Release => (&["lint", "full"], "full lint gate"),
+    }
+}
+
+pub(crate) fn lint(process: &Process, config: &CiConfig, kind: PipelineKind) -> Result<()> {
     preflight(process, config)?;
-    process.run("just", &["lint", "full"], "full lint gate")
+    let (args, label) = lint_command(kind);
+    process.run("just", args, label)
 }
 
 pub(crate) fn msrv(process: &Process, config: &CiConfig) -> Result<()> {
@@ -68,6 +91,7 @@ fn test_command(kind: PipelineKind) -> Result<(&'static [&'static str], &'static
         PipelineKind::MergeRequest
         | PipelineKind::Branch
         | PipelineKind::Main
+        | PipelineKind::Platforms
         | PipelineKind::Nightly
         | PipelineKind::Release => Ok((
             &[
@@ -194,8 +218,8 @@ struct Consts;
 
 impl Consts {
     /// The simulator shares the host network stack, so it reaches the server
-    /// over loopback. The port is fixed because the lane runs alone in an
-    /// ephemeral guest and nothing else on that machine competes for it.
+    /// over loopback. The port is fixed because Apple simulator suites are
+    /// serialized on the host, so another CI lane cannot bind it concurrently.
     const TEST_SERVER_PORT: u16 = 3444;
     const TEST_SERVER_POLL: Duration = Duration::from_millis(200);
     const TEST_SERVER_READY: Duration = Duration::from_secs(60);
@@ -302,12 +326,21 @@ mod tests {
             PipelineKind::MergeRequest,
             PipelineKind::Branch,
             PipelineKind::Main,
+            PipelineKind::Platforms,
             PipelineKind::Nightly,
             PipelineKind::Release,
         ] {
             let (args, _) = test_command(kind).unwrap();
             assert_eq!(args, expected);
         }
+    }
+
+    #[test]
+    fn platform_runs_use_the_default_branch_apple_lint_gate() {
+        let (args, label) = lint_command(PipelineKind::Platforms);
+
+        assert_eq!(args, ["lint", "full"]);
+        assert_eq!(label, "full lint gate");
     }
 
     #[test]

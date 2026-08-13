@@ -331,7 +331,7 @@ impl<'ast> Visit<'ast> for WriteScanner<'_> {
     }
 }
 
-fn is_false_lit(e: &Expr) -> bool {
+const fn is_false_lit(e: &Expr) -> bool {
     matches!(e, Expr::Lit(l) if matches!(&l.lit, Lit::Bool(b) if !b.value))
 }
 

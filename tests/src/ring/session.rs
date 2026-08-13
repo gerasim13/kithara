@@ -2,6 +2,7 @@ use std::{any::Any, num::NonZeroU32};
 
 use firewheel::FirewheelCtx;
 use kithara::{
+    audio::ConsumerWakeMode,
     bufpool::PcmPool,
     events::EventBus,
     platform::{
@@ -31,7 +32,7 @@ pub struct ManualRingConfig {
 
 impl ManualRingConfig {
     #[must_use]
-    pub fn new(session_rate: NonZeroU32, block_frames: u32, capacity_blocks: usize) -> Self {
+    pub const fn new(session_rate: NonZeroU32, block_frames: u32, capacity_blocks: usize) -> Self {
         Self {
             session_rate,
             block_frames,
@@ -305,6 +306,10 @@ impl ManualRingSession {
 impl SessionDispatcher for ManualRingSession {
     fn exec(&self, cmd: Cmd) -> Result<Reply, PlayError> {
         Self::exec(self, cmd).map_err(|error| PlayError::Internal(error.to_string()))
+    }
+
+    fn consumer_wake_mode(&self) -> ConsumerWakeMode {
+        ConsumerWakeMode::ImmediateOffRt
     }
 }
 

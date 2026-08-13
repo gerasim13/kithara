@@ -11,7 +11,7 @@ pub(crate) struct SegmentPeer {
 }
 
 impl SegmentPeer {
-    pub(crate) fn new(headers: Option<Headers>) -> Self {
+    pub(crate) const fn new(headers: Option<Headers>) -> Self {
         Self { headers }
     }
 

@@ -62,12 +62,12 @@ pub(crate) enum TrackFailure {
 
 impl CurrentFsm {
     /// Returns true only for phases that can never transition.
-    pub(crate) fn is_terminal(&self) -> bool {
+    pub(crate) const fn is_terminal(&self) -> bool {
         matches!(self, Self::Failed(_))
     }
 }
 
-pub(crate) fn map_source_phase(phase: SourcePhase) -> Option<WaitingReason> {
+pub(crate) const fn map_source_phase(phase: SourcePhase) -> Option<WaitingReason> {
     match phase {
         SourcePhase::Waiting => Some(WaitingReason::Waiting),
         SourcePhase::WaitingDemand => Some(WaitingReason::WaitingDemand),

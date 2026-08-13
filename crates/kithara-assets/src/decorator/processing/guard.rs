@@ -8,14 +8,14 @@ pub(super) struct GateGuard {
 }
 
 impl GateGuard {
-    pub(super) fn new(readiness: Arc<ReadinessGate>) -> Self {
+    pub(super) const fn new(readiness: Arc<ReadinessGate>) -> Self {
         Self {
             readiness,
             armed: true,
         }
     }
 
-    pub(super) fn disarm(&mut self) {
+    pub(super) const fn disarm(&mut self) {
         self.armed = false;
     }
 

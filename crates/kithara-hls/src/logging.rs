@@ -6,7 +6,7 @@ use url::{Host, Url};
 pub(crate) struct RedactedUrl<'a>(&'a Url);
 
 impl<'a> RedactedUrl<'a> {
-    pub(crate) fn new(url: &'a Url) -> Self {
+    pub(crate) const fn new(url: &'a Url) -> Self {
         Self(url)
     }
 }
@@ -32,7 +32,7 @@ impl fmt::Display for RedactedUrl<'_> {
 pub(crate) struct RedactedNetError<'a>(&'a NetError);
 
 impl<'a> RedactedNetError<'a> {
-    pub(crate) fn new(error: &'a NetError) -> Self {
+    pub(crate) const fn new(error: &'a NetError) -> Self {
         Self(error)
     }
 }

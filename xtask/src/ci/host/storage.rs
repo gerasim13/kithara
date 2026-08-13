@@ -1,4 +1,5 @@
 use std::{
+    collections::BTreeMap,
     fs::{self, OpenOptions},
     io::{self, Write},
     path::{Component, Path, PathBuf},
@@ -23,34 +24,58 @@ pub(super) enum Pressure {
 }
 
 pub(super) struct HostStorage<'a> {
-    root: PathBuf,
+    host_root: PathBuf,
+    build_root: PathBuf,
     config: &'a CiConfig,
     process: &'a Process,
 }
 
+struct Agents;
+
+impl Agents {
+    const LAUNCHCTL: &'static str = "/bin/launchctl";
+    const RUNNING: &'static str = "running";
+    /// A host with no launchd has no agents to be wrong about, and the Linux
+    /// executor runs this same command.
+    const ABSENT: &'static str = "not-applicable";
+    /// The agents that must hold a process for work to reach this host.
+    ///
+    /// `cleanup` and `health` are periodic and spend nearly all their life
+    /// loaded with nothing running, so a missing process says nothing about
+    /// them. These three are `KeepAlive`, and a missing process means work has
+    /// stopped.
+    const ALWAYS_ON: &'static [&'static str] = &["colima", "gitlab-runner", "macos-runner"];
+}
+
 #[derive(Serialize)]
 struct Health<'a> {
-    volume_used_bytes: u64,
+    /// What is left where there is least of it. The thresholds are free-space
+    /// floors, so this is the number `pressure` was read from — reporting bytes
+    /// spent instead described a quantity no decision uses.
+    free_bytes: u64,
     pressure: Pressure,
     /// Named so an operator can see which volume is under pressure without
     /// running `df` by hand.
     volumes: Vec<VolumeHealth>,
-    runner: &'a str,
+    /// Every agent that has to be running for work to reach this host, by label
+    /// suffix. Watching only the `gitlab-runner` agent missed the one whose death
+    /// stops the work without stopping anything else.
+    agents: BTreeMap<&'a str, &'static str>,
     timestamp: u64,
 }
 
 #[derive(Serialize)]
 struct VolumeHealth {
     path: String,
-    used_bytes: u64,
+    free_bytes: u64,
     total_bytes: u64,
     pressure: Pressure,
 }
 
 struct Volume {
     path: PathBuf,
-    used: u64,
     total: u64,
+    available: u64,
 }
 
 impl Volume {
@@ -61,8 +86,8 @@ impl Volume {
             .with_context(|| format!("reading available space for {}", path.display()))?;
         Ok(Self {
             path: path.to_path_buf(),
-            used: total.saturating_sub(available),
             total,
+            available,
         })
     }
 }
@@ -89,27 +114,34 @@ impl<'a> HostStorage<'a> {
     ];
 
     pub(super) fn new(config: &'a CiConfig, process: &'a Process) -> Result<Self> {
-        let root = config.host.host_root.clone();
-        validate_root(&root)?;
+        let host_root = config.host.host_root.clone();
+        let build_root = config.host.build_root().to_path_buf();
+        validate_root(&host_root)?;
+        validate_root(&build_root)?;
         Ok(Self {
-            root,
+            host_root,
+            build_root,
             config,
             process,
         })
     }
 
     #[cfg(test)]
-    fn for_test(root: PathBuf, config: &'a CiConfig, process: &'a Process) -> Result<Self> {
-        validate_root(&root)?;
+    fn for_test(config: &'a CiConfig, process: &'a Process) -> Result<Self> {
+        let host_root = config.host.host_root.clone();
+        let build_root = config.host.build_root().to_path_buf();
+        validate_root(&host_root)?;
+        validate_root(&build_root)?;
         Ok(Self {
-            root,
+            host_root,
+            build_root,
             config,
             process,
         })
     }
 
     pub(super) fn preflight(&self) -> Result<()> {
-        let used = self.used_bytes()?;
+        let free = self.free_bytes()?;
         let (pressure, volume) = self.worst_pressure()?;
         match pressure {
             Pressure::Reject => bail!("{} is full; new jobs stop here", volume.display()),
@@ -120,58 +152,73 @@ impl<'a> HostStorage<'a> {
         }
 
         for name in ["cache", "logs", "toolchains", "vm", "workspaces"] {
-            let directory = self.root.join(name);
+            let directory = self.host_root.join(name);
             if !directory.is_dir() {
                 bail!("missing CI directory: {}", directory.display());
             }
             writable_probe(&directory)?;
         }
+        let workspaces = self.build_root.join("workspaces");
+        if !workspaces.is_dir() {
+            bail!("missing CI directory: {}", workspaces.display());
+        }
+        writable_probe(&workspaces)?;
         self.process.require_tools(&["git", "sccache"])?;
-        info!(used_bytes = used, ?pressure, "host preflight passed");
+        info!(free_bytes = free, ?pressure, "host preflight passed");
         Ok(())
     }
 
     pub(super) fn cleanup(&self) -> Result<()> {
-        let initial = self.used_bytes()?;
+        let initial = self.free_bytes()?;
         // The worst single volume, not the sum: adding a second volume's bytes
         // to the first and comparing that against thresholds calibrated for the
         // first reads every machine with a guest volume as full, and the branch
         // it reaches for throws away the compiler caches that were never the
         // problem. `preflight` already decides this way.
         let (pressure, volume) = self.worst_pressure()?;
-        info!(used_bytes = initial, ?pressure, volume = %volume.display(), "cleanup started");
+        info!(free_bytes = initial, ?pressure, volume = %volume.display(), "cleanup started");
 
-        self.prune_old_trees("workspaces/tmp", Self::DAY)?;
-        self.prune_old_trees("workspaces/builds", Self::DAY)?;
-        self.prune_old_trees("workspaces/gitlab", Self::DAY)?;
-        self.prune_old_trees("vm/overlays", Self::DAY)?;
-        self.prune_old_trees("vm/android/avd", Self::DAY)?;
-        self.prune_old_files("logs", 14 * Self::DAY)?;
+        self.prune_host_trees("workspaces/tmp", Self::DAY)?;
+        self.prune_host_trees("workspaces/builds", Self::DAY)?;
+        self.prune_build_trees("workspaces/gitlab", Self::DAY)?;
+        self.prune_host_trees("vm/overlays", Self::DAY)?;
+        self.prune_host_trees("vm/android/avd", Self::DAY)?;
+        self.prune_host_files("logs", 14 * Self::DAY)?;
         self.rotate_logs()?;
         self.prune_retired_caches(7 * Self::DAY)?;
 
         match pressure {
             Pressure::Soft => {
-                self.prune_old_trees("cache/quarantine", 7 * Self::DAY)?;
-                self.prune_old_trees("cache/review", 30 * Self::DAY)?;
-                self.prune_old_trees("cache/bootstrap/quarantine", 7 * Self::DAY)?;
-                self.prune_old_trees("cache/bootstrap/review", 30 * Self::DAY)?;
+                self.prune_host_trees("cache/quarantine", 7 * Self::DAY)?;
+                self.prune_host_trees("cache/review", 30 * Self::DAY)?;
+                self.prune_host_trees("cache/bootstrap/quarantine", 7 * Self::DAY)?;
+                self.prune_host_trees("cache/bootstrap/review", 30 * Self::DAY)?;
                 self.prune_docker_cache("720h");
             }
             Pressure::Aggressive | Pressure::Reject => {
-                self.prune_old_trees("cache/quarantine", Duration::ZERO)?;
-                self.prune_old_trees("cache/review", Duration::ZERO)?;
-                self.prune_old_trees("cache/bootstrap/quarantine", Duration::ZERO)?;
-                self.prune_old_trees("cache/bootstrap/review", Duration::ZERO)?;
-                self.prune_old_trees("cache/trusted", 7 * Self::DAY)?;
-                self.prune_old_trees("cache/bootstrap/trusted", 7 * Self::DAY)?;
-                self.prune_old_trees("vm/tart/cache", 7 * Self::DAY)?;
+                self.prune_host_trees("cache/quarantine", Duration::ZERO)?;
+                self.prune_host_trees("cache/review", Duration::ZERO)?;
+                self.prune_host_trees("cache/bootstrap/quarantine", Duration::ZERO)?;
+                self.prune_host_trees("cache/bootstrap/review", Duration::ZERO)?;
+                self.prune_host_trees("cache/trusted", 7 * Self::DAY)?;
+                self.prune_host_trees("cache/bootstrap/trusted", 7 * Self::DAY)?;
+                self.prune_host_trees("vm/tart/cache", 7 * Self::DAY)?;
                 self.prune_docker_cache("168h");
             }
             Pressure::Normal => {}
         }
 
-        let target_dirs = persistent_target_dirs(&self.root.join("workspaces/gitlab"))?;
+        // Unconditional, and after the pruning above, because the guest frees
+        // blocks on its own schedule and holds them until asked. Its root
+        // filesystem is mounted `discard` and stays at a gigabyte, but the data
+        // disk carrying `/var/lib/docker` is not, so every layer Docker deletes
+        // stays allocated in a file this volume pays for. One trim on a machine
+        // that had drifted to 44 GB free returned 63 of them in seconds — too
+        // cheap to hold back for a threshold, and holding it back is what let
+        // the drift reach refusal five times.
+        self.trim_linux_guest();
+
+        let target_dirs = persistent_target_dirs(&self.build_root.join("workspaces/gitlab"))?;
         build_cache::enforce_budget(&target_dirs, self.config.host.build_cache_budget_bytes()?)?;
 
         let (mut final_pressure, _) = self.worst_pressure()?;
@@ -179,25 +226,26 @@ impl<'a> HostStorage<'a> {
             // The guests are where the space is, and the caches are what the
             // steps above can reach — so taking the caches first pays for the
             // guests with the compiler output the machine exists to keep warm.
-            // Both guests only give their space back when they are thrown
-            // away: the macOS one measured 38 gibibytes in a recycle against
-            // three and a half for everything else together, and the Linux
-            // one's disk is allocated once and never deflates, so pruning
-            // inside it returns nothing to this volume. Recycling costs the
-            // job in flight and a cold image build, which is a trade worth
-            // making only once jobs are being refused anyway — this branch.
+            // The macOS one gives its space back only when it is thrown away:
+            // 38 gibibytes in a recycle against three and a half for
+            // everything else together. The Linux one has already been
+            // trimmed, so what is left in it is what Docker still holds and
+            // the prune window would not take — layers younger than a week.
+            // Only recycling reaches those, and it costs the job in flight and
+            // a cold image build, which is a trade worth making once jobs are
+            // being refused anyway — this branch.
             self.recycle_linux_guest();
             self.recycle_macos_guest();
             final_pressure = self.worst_pressure()?.0;
         }
         if final_pressure == Pressure::Reject {
-            self.prune_old_trees("cache/trusted", Duration::ZERO)?;
-            self.prune_old_trees("cache/bootstrap/trusted", Duration::ZERO)?;
+            self.prune_host_trees("cache/trusted", Duration::ZERO)?;
+            self.prune_host_trees("cache/bootstrap/trusted", Duration::ZERO)?;
             self.prune_retired_caches(Duration::ZERO)?;
             final_pressure = self.worst_pressure()?.0;
         }
         info!(
-            used_bytes = self.used_bytes()?,
+            free_bytes = self.free_bytes()?,
             ?final_pressure,
             "cleanup completed"
         );
@@ -208,26 +256,31 @@ impl<'a> HostStorage<'a> {
     }
 
     pub(super) fn health(&self) -> Result<()> {
-        let used = self.used_bytes()?;
+        let free = self.free_bytes()?;
         let volumes: Vec<VolumeHealth> = self
             .volumes()?
             .into_iter()
             .map(|volume| VolumeHealth {
                 path: volume.path.display().to_string(),
-                used_bytes: volume.used,
+                free_bytes: volume.available,
                 total_bytes: volume.total,
                 pressure: self.pressure_of(&volume),
             })
             .collect();
         let (pressure, worst) = self.worst_pressure()?;
-        let runner = self.runner_state();
+        let agents = self.agent_states();
+        let down: Vec<&str> = agents
+            .iter()
+            .filter(|(_, state)| ![Agents::RUNNING, Agents::ABSENT].contains(*state))
+            .map(|(name, _)| *name)
+            .collect();
         serde_json::to_writer(
             io::stdout().lock(),
             &Health {
-                volume_used_bytes: used,
+                free_bytes: free,
                 pressure,
                 volumes,
-                runner,
+                agents,
                 timestamp: unix_time()?,
             },
         )
@@ -238,14 +291,43 @@ impl<'a> HostStorage<'a> {
         if pressure == Pressure::Reject {
             bail!("{} is above the new-job threshold", worst.display());
         }
-        if runner == "stopped" {
-            bail!("GitLab runner service is stopped");
+        if !down.is_empty() {
+            bail!("CI agents are not running: {}", down.join(", "));
         }
         Ok(())
     }
 
-    fn used_bytes(&self) -> Result<u64> {
-        Ok(self.volumes()?.into_iter().map(|volume| volume.used).sum())
+    /// What launchd says about each agent work depends on.
+    ///
+    /// On a host with no launchd there is nothing to say, and this must not
+    /// invent a fault: the Linux executor runs the same command.
+    fn agent_states(&self) -> BTreeMap<&'static str, &'static str> {
+        if !Path::new(Agents::LAUNCHCTL).is_file() {
+            return Agents::ALWAYS_ON
+                .iter()
+                .map(|name| (*name, Agents::ABSENT))
+                .collect();
+        }
+        let listing = self
+            .process
+            .capture(Agents::LAUNCHCTL, &["list"], "launchd agent listing")
+            .unwrap_or_default();
+        agent_states_from(&listing)
+    }
+
+    /// What is left on the volume with the least to spare — the one the pressure
+    /// verdict comes from, since every volume is judged against the same floors.
+    ///
+    /// Summing bytes spent across volumes measured neither: on a shared APFS
+    /// container a volume's used space counts what its neighbours hold, so the
+    /// total ran past the quota it was being compared with. This host reported
+    /// 470 GB spent on a 300 GB quota while it had 44 GB free.
+    fn free_bytes(&self) -> Result<u64> {
+        self.volumes()?
+            .into_iter()
+            .map(|volume| volume.available)
+            .min()
+            .context("no CI volume to measure")
     }
 
     /// Every volume CI storage sits on, in the order they should be reported.
@@ -257,11 +339,20 @@ impl<'a> HostStorage<'a> {
     /// shared volume. Anything reached through `vm` that turns out to live on
     /// another filesystem is measured as well.
     fn volumes(&self) -> Result<Vec<Volume>> {
-        let mut volumes = vec![Volume::read(&self.root)?];
-        let guests = self.root.join("vm");
+        let mut volumes = vec![Volume::read(&self.host_root)?];
+        if self.build_root != self.host_root
+            && let Ok(build_root) = self.build_root.canonicalize()
+            && !build_root.starts_with(&self.host_root)
+        {
+            volumes.push(Volume::read(&build_root)?);
+        }
+        let guests = self.host_root.join("vm");
         if guests.is_dir()
             && let Ok(guests) = guests.canonicalize()
-            && !guests.starts_with(&self.root)
+            && !guests.starts_with(&self.host_root)
+            && !volumes
+                .iter()
+                .any(|volume| guests.starts_with(&volume.path))
         {
             volumes.push(Volume::read(&guests)?);
         }
@@ -274,7 +365,7 @@ impl<'a> HostStorage<'a> {
     /// failure this split exists to prevent.
     fn worst_pressure(&self) -> Result<(Pressure, PathBuf)> {
         let volumes = self.volumes()?;
-        let mut worst = (Pressure::Normal, self.root.clone());
+        let mut worst = (Pressure::Normal, self.host_root.clone());
         for volume in volumes {
             let pressure = self.pressure_of(&volume);
             if pressure > worst.0 {
@@ -284,40 +375,37 @@ impl<'a> HostStorage<'a> {
         Ok(worst)
     }
 
-    /// Thresholds are configured against the main volume. Any other volume is
-    /// held to the same proportions of its own capacity, so a second volume
-    /// needs no second set of numbers to go stale.
+    /// Pressure is what is left, not what was spent.
+    ///
+    /// The thresholds are written as bytes used against `quota_bytes`, and this
+    /// reads them as the free space each one intends to keep: a volume at the
+    /// reject threshold is one with `quota - reject` bytes to spare. On an APFS
+    /// container the volume shares, the two are not the same question. This one
+    /// measured 279 GB with 170 used — never within 100 GB of a 285 GB reject
+    /// threshold, so cleanup stayed `Normal` and never recycled the guest —
+    /// while jobs were already being refused for having 10 GB free where the
+    /// preflight wants 15.
+    ///
+    /// Read this way the ladder and the refusal agree by construction:
+    /// `quota - reject` is exactly the free space a job is required to find.
     fn pressure_of(&self, volume: &Volume) -> Pressure {
-        let quota = self.config.host.quota_bytes;
-        if volume.path == self.root || volume.total == 0 || quota == 0 {
-            return self.pressure(volume.used);
-        }
-        let scale = |bytes: u64| -> u64 {
-            (u128::from(bytes) * u128::from(volume.total) / u128::from(quota))
-                .try_into()
-                .unwrap_or(u64::MAX)
-        };
         pressure_for(
-            volume.used,
-            scale(self.config.host.soft_cleanup_bytes),
-            scale(self.config.host.aggressive_cleanup_bytes),
-            scale(self.config.host.reject_bytes),
+            volume.available,
+            self.floor(self.config.host.soft_cleanup_bytes),
+            self.floor(self.config.host.aggressive_cleanup_bytes),
+            self.floor(self.config.host.reject_bytes),
         )
     }
 
-    fn pressure(&self, used: u64) -> Pressure {
-        pressure_for(
-            used,
-            self.config.host.soft_cleanup_bytes,
-            self.config.host.aggressive_cleanup_bytes,
-            self.config.host.reject_bytes,
-        )
+    /// The free space a used-bytes threshold was asking for.
+    fn floor(&self, threshold: u64) -> u64 {
+        self.config.host.quota_bytes.saturating_sub(threshold)
     }
 
     /// Cache namespaces nothing writes to any more, once they have gone quiet
     /// for a week.
     fn prune_retired_caches(&self, age: Duration) -> Result<()> {
-        let directory = self.root.join("cache");
+        let directory = self.host_root.join("cache");
         if !directory.is_dir() {
             return Ok(());
         }
@@ -345,8 +433,16 @@ impl<'a> HostStorage<'a> {
         Ok(())
     }
 
-    fn prune_old_trees(&self, relative: &str, age: Duration) -> Result<()> {
-        let directory = self.root.join(relative);
+    fn prune_host_trees(&self, relative: &str, age: Duration) -> Result<()> {
+        self.prune_old_trees(&self.host_root, relative, age)
+    }
+
+    fn prune_build_trees(&self, relative: &str, age: Duration) -> Result<()> {
+        self.prune_old_trees(&self.build_root, relative, age)
+    }
+
+    fn prune_old_trees(&self, root: &Path, relative: &str, age: Duration) -> Result<()> {
+        let directory = root.join(relative);
         if !directory.is_dir() {
             return Ok(());
         }
@@ -368,8 +464,8 @@ impl<'a> HostStorage<'a> {
         Ok(())
     }
 
-    fn prune_old_files(&self, relative: &str, age: Duration) -> Result<()> {
-        let directory = self.root.join(relative);
+    fn prune_host_files(&self, relative: &str, age: Duration) -> Result<()> {
+        let directory = self.host_root.join(relative);
         if !directory.is_dir() {
             return Ok(());
         }
@@ -404,7 +500,7 @@ impl<'a> HostStorage<'a> {
     }
 
     fn rotate_logs(&self) -> Result<()> {
-        let directory = self.root.join("logs");
+        let directory = self.host_root.join("logs");
         if !directory.is_dir() {
             return Ok(());
         }
@@ -455,7 +551,7 @@ impl<'a> HostStorage<'a> {
     }
 
     fn remove_path(&self, path: &Path) -> Result<()> {
-        if !Self::is_removable(&self.root, path) {
+        if !self.is_removable(path) {
             bail!("refusing to remove unsafe CI path: {}", path.display());
         }
         let metadata = match fs::symlink_metadata(path) {
@@ -473,7 +569,7 @@ impl<'a> HostStorage<'a> {
     }
 
     fn prune_docker_cache(&self, age: &str) {
-        let home = self.root.join("home").join(&self.config.host.ci_user);
+        let home = self.host_root.join("home").join(&self.config.host.ci_user);
         let socket = home.join(".colima/kithara/docker.sock");
         let docker = self.config.host.brew_tool("docker");
         if !socket.exists() || !docker.is_file() {
@@ -489,6 +585,39 @@ impl<'a> HostStorage<'a> {
             .run_command(&mut command, "Docker build cache cleanup")
         {
             warn!(%error, "Docker cache cleanup failed");
+        }
+    }
+
+    /// Hand the guest's freed blocks back to the volume.
+    ///
+    /// Pruning inside the guest returns nothing here on its own: the data disk
+    /// is a sparse file that grows to its high-water mark and keeps every block
+    /// it has ever written. Measured on 2026-08-11 it held 77 GB for 25 GB of
+    /// images and build cache — fifty gigabytes of blocks the guest had already
+    /// released. A discard is what tells the host they are free, and it is the
+    /// step between pruning, which frees nothing here, and recycling, which
+    /// costs a cold image build.
+    fn trim_linux_guest(&self) {
+        let colima = self.config.host.brew_tool("colima");
+        if !colima.is_file() {
+            return;
+        }
+        let home = self.host_root.join("home").join(&self.config.host.ci_user);
+        let mut command = self.process.command(colima);
+        command.env("COLIMA_HOME", home.join(".colima")).args([
+            "ssh",
+            "--profile",
+            Self::COLIMA_PROFILE,
+            "--",
+            "sudo",
+            "fstrim",
+            "-a",
+        ]);
+        if let Err(error) = self
+            .process
+            .run_command(&mut command, "return the Linux guest's freed blocks")
+        {
+            warn!(%error, "could not trim the Linux guest's disk");
         }
     }
 
@@ -526,7 +655,7 @@ impl<'a> HostStorage<'a> {
             warn!("limactl is absent, so the guest's data disk stays allocated");
             return;
         }
-        let home = self.root.join("home").join(&self.config.host.ci_user);
+        let home = self.host_root.join("home").join(&self.config.host.ci_user);
         let mut command = self.process.command(limactl);
         command.env("LIMA_HOME", home.join(".colima/_lima")).args([
             "disk",
@@ -562,59 +691,72 @@ impl<'a> HostStorage<'a> {
         }
     }
 
-    fn runner_state(&self) -> &'static str {
-        if !self.config.host.brew_tool("gitlab-runner").is_file() {
-            return "not-installed";
-        }
-        let uid = self
-            .process
-            .capture("id", &["-u"], "current user id")
-            .unwrap_or_default();
-        let label = format!("gui/{uid}/com.zvuk.kithara-ci.gitlab-runner");
-        if self
-            .process
-            .command("launchctl")
-            .args(["print", &label])
-            .output()
-            .is_ok_and(|output| output.status.success())
-        {
-            "running"
-        } else {
-            "stopped"
-        }
-    }
-
-    fn is_removable(root: &Path, target: &Path) -> bool {
-        if !root.is_absolute() || !target.is_absolute() {
-            return false;
-        }
-        let Ok(relative) = target.strip_prefix(root) else {
-            return false;
-        };
-        let mut components = relative.components();
-        let Some(Component::Normal(first)) = components.next() else {
-            return false;
-        };
-        Self::REMOVABLE_ROOTS
-            .iter()
-            .any(|allowed| first == std::ffi::OsStr::new(allowed))
-            && components.next().is_some()
-            && relative
-                .components()
-                .all(|component| matches!(component, Component::Normal(_)))
+    fn is_removable(&self, target: &Path) -> bool {
+        is_removable_under(&self.host_root, target, Self::REMOVABLE_ROOTS)
+            || is_removable_under(&self.build_root, target, &["workspaces"])
     }
 }
 
-pub(super) fn pressure_for(used: u64, soft: u64, aggressive: u64, reject: u64) -> Pressure {
-    if used >= reject {
+fn is_removable_under(root: &Path, target: &Path, removable_roots: &[&str]) -> bool {
+    if !root.is_absolute() || !target.is_absolute() {
+        return false;
+    }
+    let Ok(relative) = target.strip_prefix(root) else {
+        return false;
+    };
+    let mut components = relative.components();
+    let Some(Component::Normal(first)) = components.next() else {
+        return false;
+    };
+    removable_roots
+        .iter()
+        .any(|allowed| first == std::ffi::OsStr::new(allowed))
+        && components.next().is_some()
+        && relative
+            .components()
+            .all(|component| matches!(component, Component::Normal(_)))
+}
+
+/// Floors are free-space limits, so a smaller number is a tighter one: at or
+/// below `reject` the volume refuses work.
+pub(super) fn pressure_for(available: u64, soft: u64, aggressive: u64, reject: u64) -> Pressure {
+    if available <= reject {
         Pressure::Reject
-    } else if used >= aggressive {
+    } else if available <= aggressive {
         Pressure::Aggressive
-    } else if used >= soft {
+    } else if available <= soft {
         Pressure::Soft
     } else {
         Pressure::Normal
     }
+}
+
+/// `launchctl list` prints `PID  status  label`, and the dash in the PID column
+/// is the point: an agent restarted by `KeepAlive` stays loaded while holding no
+/// process, which is what a crash loop looks like from outside.
+fn agent_states_from(listing: &str) -> BTreeMap<&'static str, &'static str> {
+    Agents::ALWAYS_ON
+        .iter()
+        .map(|name| {
+            let label = format!("com.zvuk.kithara-ci.{name}");
+            let state = listing
+                .lines()
+                .find_map(|line| {
+                    let mut columns = line.split_whitespace();
+                    let pid = columns.next()?;
+                    columns.next()?;
+                    (columns.next()? == label).then(|| {
+                        if pid == "-" {
+                            "stopped"
+                        } else {
+                            Agents::RUNNING
+                        }
+                    })
+                })
+                .unwrap_or("not-loaded");
+            (*name, state)
+        })
+        .collect()
 }
 
 fn persistent_target_dirs(root: &Path) -> Result<Vec<PathBuf>> {
@@ -722,37 +864,129 @@ mod tests {
 
     #[test]
     fn pressure_thresholds_are_exact() {
-        assert_eq!(pressure_for(239, 240, 270, 285), Pressure::Normal);
-        assert_eq!(pressure_for(240, 240, 270, 285), Pressure::Soft);
-        assert_eq!(pressure_for(270, 240, 270, 285), Pressure::Aggressive);
-        assert_eq!(pressure_for(285, 240, 270, 285), Pressure::Reject);
+        // 300 GB quota with 240/270/285 used-byte thresholds keeps 60/30/15
+        // free.
+        assert_eq!(pressure_for(61, 60, 30, 15), Pressure::Normal);
+        assert_eq!(pressure_for(60, 60, 30, 15), Pressure::Soft);
+        assert_eq!(pressure_for(30, 60, 30, 15), Pressure::Aggressive);
+        assert_eq!(pressure_for(15, 60, 30, 15), Pressure::Reject);
     }
 
     #[test]
-    fn a_second_volume_is_held_to_the_same_proportions_of_its_own_size() {
+    fn a_volume_smaller_than_the_quota_still_reaches_reject() {
         let directory = tempfile::tempdir().unwrap();
         let cfg = config(directory.path());
         let process = Process::new(directory.path(), BTreeMap::new());
-        let storage =
-            HostStorage::for_test(directory.path().to_path_buf(), &cfg, &process).unwrap();
-        // Thresholds are 240/270/285 against a 300-byte main volume, so a
-        // volume half that size refuses at 142 and is content at 119.
-        let half = |used| Volume {
+        let storage = HostStorage::for_test(&cfg, &process).unwrap();
+        // The volume this replaces a proportional rule for: 279 GB total with
+        // 170 used never came within a hundred of a 285 reject threshold, so
+        // cleanup stayed `Normal` and never recycled the guest, while jobs were
+        // already being refused for free space. Judged by what is left, a
+        // volume half the quota's size reaches every step.
+        let half = |available| Volume {
             path: PathBuf::from("/elsewhere"),
-            used,
             total: 150,
+            available,
         };
 
-        assert_eq!(storage.pressure_of(&half(119)), Pressure::Normal);
-        assert_eq!(storage.pressure_of(&half(120)), Pressure::Soft);
-        assert_eq!(storage.pressure_of(&half(135)), Pressure::Aggressive);
-        assert_eq!(storage.pressure_of(&half(143)), Pressure::Reject);
+        assert_eq!(storage.pressure_of(&half(61)), Pressure::Normal);
+        assert_eq!(storage.pressure_of(&half(60)), Pressure::Soft);
+        assert_eq!(storage.pressure_of(&half(30)), Pressure::Aggressive);
+        assert_eq!(storage.pressure_of(&half(15)), Pressure::Reject);
+    }
+
+    /// A tempdir has more than the sixty bytes this config calls a floor, so the
+    /// run below is `Normal` — the pressure that used to skip the trim entirely.
+    #[cfg(unix)]
+    #[test]
+    fn the_guest_is_trimmed_even_with_nothing_under_pressure() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = tempfile::tempdir().unwrap();
+        let mut cfg = config(directory.path());
+        cfg.host.brew_root = directory.path().join("brew");
+        let bin = cfg.host.brew_root.join("bin");
+        fs::create_dir_all(&bin).unwrap();
+        let asked = directory.path().join("asked");
+        fs::write(
+            bin.join("colima"),
+            format!("#!/bin/sh\necho \"$@\" > {}\n", asked.display()),
+        )
+        .unwrap();
+        fs::set_permissions(bin.join("colima"), fs::Permissions::from_mode(0o755)).unwrap();
+
+        let process = Process::new(directory.path(), BTreeMap::new());
+        let storage = HostStorage::for_test(&cfg, &process).unwrap();
+        assert_eq!(storage.worst_pressure().unwrap().0, Pressure::Normal);
+        storage.cleanup().unwrap();
+
+        let arguments = fs::read_to_string(&asked).expect("the guest was never asked for anything");
+        assert!(
+            arguments.contains("fstrim"),
+            "cleanup asked the guest for {arguments} instead of a trim"
+        );
+    }
+
+    /// Verbatim from the host while the macOS runner was crash-looping.
+    const CRASH_LOOP_LISTING: &str = "\
+82778\t0\tcom.zvuk.kithara-ci.gitlab-runner
+-\t0\tcom.zvuk.kithara-ci.health
+-\t1\tcom.zvuk.kithara-ci.macos-runner
+-\t0\tcom.zvuk.kithara-ci.cleanup
+54543\t0\tcom.zvuk.kithara-ci.colima
+";
+
+    #[test]
+    fn an_agent_restarting_into_nothing_reads_as_stopped() {
+        assert_eq!(
+            agent_states_from(CRASH_LOOP_LISTING).get("macos-runner"),
+            Some(&"stopped")
+        );
+    }
+
+    #[test]
+    fn the_agents_still_holding_a_process_read_as_running() {
+        let states = agent_states_from(CRASH_LOOP_LISTING);
+        assert_eq!(states.get("gitlab-runner"), Some(&"running"));
+        assert_eq!(states.get("colima"), Some(&"running"));
+    }
+
+    /// An agent nobody ever loaded is as unable to take work as one that keeps
+    /// dying, and reads differently so an operator knows which to fix.
+    #[test]
+    fn an_agent_missing_from_the_listing_reads_as_not_loaded() {
+        assert_eq!(
+            agent_states_from("82778\t0\tcom.zvuk.kithara-ci.gitlab-runner\n").get("macos-runner"),
+            Some(&"not-loaded")
+        );
     }
 
     #[test]
     fn a_full_volume_is_not_hidden_by_a_roomy_one() {
         assert!(Pressure::Reject > Pressure::Normal);
         assert!(Pressure::Aggressive > Pressure::Soft);
+    }
+
+    #[test]
+    fn a_distinct_checkout_volume_is_monitored() {
+        let directory = tempfile::tempdir().unwrap();
+        let host_root = directory.path().join("host");
+        let build_root = directory.path().join("builds");
+        fs::create_dir_all(&host_root).unwrap();
+        fs::create_dir_all(&build_root).unwrap();
+        let mut cfg = config(&host_root);
+        cfg.host.build_root = Some(build_root.clone());
+        let process = Process::new(directory.path(), BTreeMap::new());
+        let storage = HostStorage::for_test(&cfg, &process).unwrap();
+
+        let volumes = storage.volumes().unwrap();
+
+        assert!(volumes.iter().any(|volume| volume.path == host_root));
+        assert!(
+            volumes
+                .iter()
+                .any(|volume| volume.path == build_root.canonicalize().unwrap())
+        );
     }
 
     #[test]
@@ -770,8 +1004,7 @@ mod tests {
         }
         let cfg = config(directory.path());
         let process = Process::new(directory.path(), BTreeMap::new());
-        let storage =
-            HostStorage::for_test(directory.path().to_path_buf(), &cfg, &process).unwrap();
+        let storage = HostStorage::for_test(&cfg, &process).unwrap();
 
         storage.prune_retired_caches(Duration::ZERO).unwrap();
 
@@ -790,8 +1023,7 @@ mod tests {
         fs::create_dir_all(cache.join("reapi")).unwrap();
         let cfg = config(directory.path());
         let process = Process::new(directory.path(), BTreeMap::new());
-        let storage =
-            HostStorage::for_test(directory.path().to_path_buf(), &cfg, &process).unwrap();
+        let storage = HostStorage::for_test(&cfg, &process).unwrap();
 
         storage.prune_retired_caches(HostStorage::DAY).unwrap();
 
@@ -806,8 +1038,7 @@ mod tests {
         }
         let cfg = config(directory.path());
         let process = Process::new(directory.path(), BTreeMap::new());
-        let storage =
-            HostStorage::for_test(directory.path().to_path_buf(), &cfg, &process).unwrap();
+        let storage = HostStorage::for_test(&cfg, &process).unwrap();
         let safe = directory.path().join("workspaces/tmp/old");
         fs::create_dir_all(&safe).unwrap();
         storage.remove_path(&safe).unwrap();
@@ -818,6 +1049,73 @@ mod tests {
     }
 
     #[test]
+    fn cleanup_allows_only_workspace_descendants_on_the_checkout_root() {
+        let directory = tempfile::tempdir().unwrap();
+        let host_root = directory.path().join("host");
+        let build_root = directory.path().join("builds");
+        fs::create_dir_all(&host_root).unwrap();
+        fs::create_dir_all(&build_root).unwrap();
+        let mut cfg = config(&host_root);
+        cfg.host.build_root = Some(build_root.clone());
+        let process = Process::new(directory.path(), BTreeMap::new());
+        let storage = HostStorage::for_test(&cfg, &process).unwrap();
+
+        let workspace = build_root.join("workspaces/gitlab/old");
+        fs::create_dir_all(&workspace).unwrap();
+        storage.remove_path(&workspace).unwrap();
+        assert!(!workspace.exists());
+
+        assert!(storage.remove_path(&build_root).is_err());
+        let cache = build_root.join("cache/old");
+        fs::create_dir_all(&cache).unwrap();
+        assert!(storage.remove_path(&cache).is_err());
+    }
+
+    #[test]
+    fn persistent_targets_are_discovered_under_the_checkout_root() {
+        let directory = tempfile::tempdir().unwrap();
+        let host_root = directory.path().join("host");
+        let build_root = directory.path().join("builds");
+        let checkout = build_root.join("workspaces/gitlab/project");
+        fs::create_dir_all(checkout.join("target/debug")).unwrap();
+        fs::write(checkout.join("Cargo.toml"), "[workspace]\n").unwrap();
+        fs::create_dir_all(host_root.join("workspaces/gitlab/stale/target/debug")).unwrap();
+        fs::write(
+            host_root.join("workspaces/gitlab/stale/Cargo.toml"),
+            "[workspace]\n",
+        )
+        .unwrap();
+
+        let targets = persistent_target_dirs(&build_root.join("workspaces/gitlab")).unwrap();
+
+        assert_eq!(targets, [checkout.join("target")]);
+    }
+
+    #[test]
+    fn gitlab_workspace_pruning_uses_the_checkout_root() {
+        let directory = tempfile::tempdir().unwrap();
+        let host_root = directory.path().join("host");
+        let build_root = directory.path().join("builds");
+        fs::create_dir_all(&host_root).unwrap();
+        fs::create_dir_all(&build_root).unwrap();
+        let mut cfg = config(&host_root);
+        cfg.host.build_root = Some(build_root.clone());
+        let process = Process::new(directory.path(), BTreeMap::new());
+        let storage = HostStorage::for_test(&cfg, &process).unwrap();
+        let selected = build_root.join("workspaces/gitlab/old");
+        let stale = host_root.join("workspaces/gitlab/old");
+        fs::create_dir_all(&selected).unwrap();
+        fs::create_dir_all(&stale).unwrap();
+
+        storage
+            .prune_build_trees("workspaces/gitlab", Duration::ZERO)
+            .unwrap();
+
+        assert!(!selected.exists());
+        assert!(stale.exists());
+    }
+
+    #[test]
     fn active_marker_pins_a_workspace() {
         let directory = tempfile::tempdir().unwrap();
         for name in HostStorage::REMOVABLE_ROOTS {
@@ -825,8 +1123,7 @@ mod tests {
         }
         let cfg = config(directory.path());
         let process = Process::new(directory.path(), BTreeMap::new());
-        let storage =
-            HostStorage::for_test(directory.path().to_path_buf(), &cfg, &process).unwrap();
+        let storage = HostStorage::for_test(&cfg, &process).unwrap();
         let workspace = directory.path().join("workspaces/tmp/current");
         fs::create_dir_all(&workspace).unwrap();
         fs::write(workspace.join(".kithara-ci-active"), b"").unwrap();

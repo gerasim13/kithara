@@ -15,7 +15,7 @@ pub(super) struct SystemSetup<'a> {
 }
 
 impl<'a> SystemSetup<'a> {
-    pub(super) fn new(config: &'a CiConfig, process: &'a Process) -> Self {
+    pub(super) const fn new(config: &'a CiConfig, process: &'a Process) -> Self {
         Self { config, process }
     }
 
@@ -103,7 +103,7 @@ impl<'a> SystemSetup<'a> {
 
     fn ensure_volume(&self) -> Result<()> {
         if self.config.host.host_root.is_dir() {
-            return self.verify_volume();
+            return Ok(());
         }
         let info = self.process.capture(
             "/usr/sbin/diskutil",
@@ -127,12 +127,12 @@ impl<'a> SystemSetup<'a> {
                 "apfs",
                 "addVolume",
                 container,
-                "APFSX",
+                "APFS",
                 name,
                 "-quota",
                 &quota,
             ],
-            "create case-sensitive CI volume",
+            "create CI volume",
         )?;
         self.process.run(
             "/usr/sbin/diskutil",
@@ -183,24 +183,57 @@ impl<'a> SystemSetup<'a> {
                 self.config.host.quota_bytes
             );
         }
-        self.verify_case_sensitive()
+        self.disable_indexing()?;
+        self.verify_case_folding()
     }
 
-    fn verify_case_sensitive(&self) -> Result<()> {
-        let probe = self
-            .config
-            .host
-            .host_root
-            .join(format!(".case-check.{}", std::process::id()));
+    /// A mounted volume is indexed by default, and this one holds nothing a
+    /// person searches for: it is where every build writes its artifacts. The
+    /// indexer then queues each of them, so the cost grows with the build
+    /// directory rather than staying constant — the Apple lint job went from
+    /// 419s inside a guest, whose disk the host does not index, to 2156s on
+    /// this volume with an 8.9 GB `target/`. Applied on every run because it is
+    /// the volume's state that matters, not whether this run created it.
+    fn disable_indexing(&self) -> Result<()> {
+        let host = self.config.host.host_root.as_path();
+        let builds = self.config.host.build_root();
+        let mut volumes = vec![host];
+        if builds != host {
+            volumes.push(builds);
+        }
+        for volume in volumes {
+            let path = volume.to_str().context("CI volume path is not UTF-8")?;
+            self.process.run(
+                "/usr/bin/mdutil",
+                &["-i", "off", "-d", path],
+                "disable Spotlight indexing on a CI volume",
+            )?;
+        }
+        Ok(())
+    }
+
+    /// Apple's own tooling assumes the case folding a stock macOS volume has.
+    /// `xcodebuild -create-xcframework` writes `Headers`, and the packaging
+    /// step then removes `headers`; on a case-sensitive volume those are two
+    /// names and the build dies with `No such file or directory`. This host
+    /// was given a case-sensitive volume and `apple:xcframework` never
+    /// succeeded on it once, while the same job passed inside a guest whose
+    /// disk was an ordinary one.
+    fn verify_case_folding(&self) -> Result<()> {
+        let probe =
+            case_folding_root(self.config).join(format!(".case-check.{}", std::process::id()));
         fs::create_dir(&probe)
-            .with_context(|| format!("creating case-sensitivity probe {}", probe.display()))?;
+            .with_context(|| format!("creating case-folding probe {}", probe.display()))?;
         let lower = probe.join("probe");
         let upper = probe.join("PROBE");
         let result = (|| {
             fs::write(&lower, [])?;
             fs::write(&upper, [])?;
-            if fs::read_dir(&probe)?.count() != 2 {
-                bail!("CI volume must use case-sensitive APFS");
+            if fs::read_dir(&probe)?.count() != 1 {
+                bail!(
+                    "CI volume must fold case like a stock macOS volume; a case-sensitive one \
+                     breaks `xcodebuild -create-xcframework` packaging"
+                );
             }
             Ok(())
         })();
@@ -308,6 +341,9 @@ impl<'a> SystemSetup<'a> {
                 "0750",
                 &self.config.host.ci_user,
             )?;
+        }
+        for directory in checkout_directories(self.config) {
+            self.install_directory(&directory, "0750", &self.config.host.ci_user)?;
         }
         self.install_directory(&self.config.host.host_root.join("services"), "0755", "root")?;
         self.install_directory(
@@ -443,6 +479,21 @@ impl<'a> SystemSetup<'a> {
     }
 }
 
+fn case_folding_root(config: &CiConfig) -> &Path {
+    config.host.build_root()
+}
+
+fn checkout_directories(config: &CiConfig) -> Vec<PathBuf> {
+    let build_root = config.host.build_root();
+    let mut directories = Vec::with_capacity(3);
+    if build_root != config.host.host_root {
+        directories.push(build_root.to_path_buf());
+    }
+    directories.push(build_root.join("workspaces"));
+    directories.push(build_root.join("workspaces/gitlab"));
+    directories
+}
+
 fn require_macos() -> Result<()> {
     if std::env::consts::OS != "macos" {
         bail!("this host command supports macOS only");
@@ -540,5 +591,34 @@ mod tests {
     fn quota_parser_is_scoped_to_device() {
         assert_eq!(parse_volume_quota(APFS_LIST, "disk3s6"), None);
         assert_eq!(parse_volume_quota(APFS_LIST, "disk9s1"), None);
+    }
+
+    #[test]
+    fn case_folding_belongs_to_the_checkout_root() {
+        let mut config = crate::ci::config::fixture();
+        config.host.host_root = PathBuf::from("/case-sensitive-ci-root");
+        config.host.build_root = Some(PathBuf::from("/case-folding-build-root"));
+
+        assert_eq!(
+            case_folding_root(&config),
+            Path::new("/case-folding-build-root")
+        );
+    }
+
+    #[test]
+    fn layout_prepares_the_selected_checkout_root() {
+        let mut config = crate::ci::config::fixture();
+        config.host.host_root = PathBuf::from("/host-root");
+        config.host.build_root = Some(PathBuf::from("/build-root"));
+
+        assert_eq!(
+            checkout_directories(&config),
+            [
+                "/build-root",
+                "/build-root/workspaces",
+                "/build-root/workspaces/gitlab",
+            ]
+            .map(PathBuf::from)
+        );
     }
 }

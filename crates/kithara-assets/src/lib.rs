@@ -22,10 +22,12 @@ pub use decorator::{
     ProcessedWriter, ProcessingAssets, ResourceProcessor,
 };
 pub use error::{AssetsError, AssetsResult};
-pub use index::{
-    DemandLease, ProducerHandle,
-    persistence::{FlushHub, FlushPolicy},
+#[doc(hidden)]
+pub use index::pending_resource::{
+    PendingResourceCleanupError, ResourceAttachment, ResourceLease, WriterEpoch, WriterHandle,
+    WriterOutcome,
 };
+pub use index::persistence::{FlushHub, FlushPolicy};
 #[doc(hidden)]
 pub use kithara_bufpool::BytePool;
 pub use layout::{

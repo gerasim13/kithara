@@ -53,6 +53,25 @@ mod tests {
   </testsuite>
 </testsuites>"#;
 
+    /// What nextest writes for a test that failed an attempt and passed a later one.
+    const RETRIED: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="nextest-run" tests="1" failures="0">
+  <testsuite name="demo-tests::suite_stress" tests="1" failures="0">
+    <testcase name="abr::switch" classname="demo-tests::suite_stress" time="2.100">
+      <flakyFailure type="test failure" message="boom"/>
+    </testcase>
+  </testsuite>
+</testsuites>"#;
+
+    /// Retries buy nothing if a passed-on-retry case still reads as failed.
+    #[test]
+    fn a_test_that_passed_on_a_retry_is_not_a_failure() {
+        let cases = parse_junit(RETRIED).expect("parse junit");
+
+        assert_eq!(cases.len(), 1);
+        assert!(!cases[0].failed);
+    }
+
     #[test]
     fn parses_cases_and_failures() {
         let cases = parse_junit(XML).expect("parse junit");

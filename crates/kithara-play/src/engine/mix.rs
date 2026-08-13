@@ -74,6 +74,7 @@ where
 
 #[cfg(test)]
 mod tests {
+    use kithara_audio::ConsumerWakeMode;
     use kithara_test_utils::kithara;
 
     use super::*;
@@ -87,6 +88,10 @@ mod tests {
     impl SessionDispatcher for ForeignSession {
         fn exec(&self, _cmd: Cmd) -> Result<Reply, PlayError> {
             Ok(Reply::Ok)
+        }
+
+        fn consumer_wake_mode(&self) -> ConsumerWakeMode {
+            ConsumerWakeMode::RealtimeDeferred
         }
     }
 

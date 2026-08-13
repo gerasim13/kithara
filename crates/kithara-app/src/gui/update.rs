@@ -219,7 +219,7 @@ fn rollback_eq_mode(changes: &[EqModeChange<'_>]) {
 
 /// Clicking a row highlights it; a deck gets the row by dragging it there, so
 /// the target deck is always the one the pointer chose.
-fn handle_select_catalog(state: &mut Kithara, index: usize) {
+const fn handle_select_catalog(state: &mut Kithara, index: usize) {
     state.selected_track = Some(index);
 }
 

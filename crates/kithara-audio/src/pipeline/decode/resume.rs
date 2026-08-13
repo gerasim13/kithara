@@ -30,7 +30,7 @@ pub(crate) struct RouteCtx<'a, T: StreamType> {
 }
 
 impl ResumeCursor {
-    pub(crate) fn new(
+    pub(crate) const fn new(
         host_rate: Arc<AtomicU32>,
         recreate_on_route: bool,
         decoder_rate: u32,
@@ -50,7 +50,7 @@ impl ResumeCursor {
     }
 
     #[cfg(test)]
-    pub(crate) fn decoder_rate(&self) -> u32 {
+    pub(crate) const fn decoder_rate(&self) -> u32 {
         self.decoder_rate
     }
 

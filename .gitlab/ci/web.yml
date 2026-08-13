@@ -35,7 +35,7 @@ web:chromium:
     when: always
     expire_in: 30 days
     paths:
-      - target/junit/
+      - .ci-artifacts/junit/
 
 web:firefox:
   extends:
@@ -48,7 +48,7 @@ web:firefox:
     when: always
     expire_in: 30 days
     paths:
-      - target/junit/
+      - .ci-artifacts/junit/
 
 web:size:
   extends: .web-job

@@ -5,7 +5,6 @@ use syn::{Item, ItemMacro, Type};
 
 use super::{Check, Context};
 use crate::common::{
-    parse::parse_file,
     violation::Violation,
     walker::{relative_to, workspace_rs_files_scoped},
 };
@@ -30,7 +29,7 @@ impl Check for NoLibStatics {
             if is_main_or_bin(rel) || crate_is_exempt(rel, &exempt) {
                 continue;
             }
-            let Ok(file) = parse_file(&path) else {
+            let Some(file) = ctx.parsed_file(&path)? else {
                 continue;
             };
             let mut hits: Vec<String> = Vec::new();

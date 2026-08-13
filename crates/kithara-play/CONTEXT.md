@@ -250,6 +250,16 @@ cross-platform core (`session/{state,dispatch,protocol,graph}.rs`) carries zero 
 structural gates are the cfg lines around `mod native`, `mod web`, and their re-exports in
 `session/mod.rs`.
 
+`SessionDispatcher::consumer_wake_mode` is the session's required, object-safe
+consumer capability. Real-time session implementations explicitly return
+`RealtimeDeferred`, preserving the audio callback's no-syscall drain path;
+off-RT sessions return `ImmediateOffRt`, and dispatcher wrappers must forward
+their inner capability. Requiring the method keeps wrappers from silently
+erasing an off-RT capability through a trait default. `ConfigPrep` copies the
+capability through an internal, builder-skipped `ResourceConfig` field into
+`AudioConfig`. There is no public resource setter and therefore no second
+source of session wake policy.
+
 ## Session Mixing
 
 Session-input gain has two distinct owners. Each `EngineImpl` owns its *desired* input level

@@ -438,7 +438,7 @@ fn resolve_packaged_audio(
     })
 }
 
-fn apply_variant_override(
+const fn apply_variant_override(
     override_spec: &PackagedAudioVariantOverride,
     bit_rate: &mut u64,
     signal: &mut ResolvedPackagedSignal,
@@ -599,7 +599,7 @@ mod tests {
         blobs.insert(key.clone(), Arc::new(b"key".to_vec()));
         let spec = HlsSpec {
             variant_count: 2,
-            data_mode: DataMode::BlobRef(media.clone()),
+            data_mode: DataMode::BlobRef(media),
             init_mode: InitMode::BlobRefs(vec![init.clone(), init]),
             key_blob_ref: Some(key),
             ..HlsSpec::default()

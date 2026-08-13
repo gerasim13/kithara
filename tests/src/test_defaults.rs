@@ -43,7 +43,7 @@ impl SawWav {
     }
 
     /// Byte count for `segments` consecutive segments of `segment_size`.
-    pub fn total_bytes(&self, segments: usize) -> usize {
+    pub const fn total_bytes(&self, segments: usize) -> usize {
         segments * self.segment_size
     }
 

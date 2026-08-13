@@ -3,6 +3,7 @@
 use std::{future::Future, num::NonZeroUsize, ops::Range, path::Path, sync::atomic::AtomicU64};
 
 use kithara_platform::{sync::Arc, tokio::sync::mpsc};
+use kithara_storage::StorageError;
 use rangemap::RangeSet;
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -16,11 +17,11 @@ use crate::{
     decorator::{Assets, EvictionRouter, EvictionSubscription, ProcessCtx},
     error::{AssetsError, AssetsResult},
     index::{
-        AvailabilityIndex, DemandEntry, DemandIndex, DemandLease, ProducerHandle,
-        ResourceTransactionIndex,
+        AvailabilityIndex, DemandEntry, PendingResourceIndex, RemoveResource,
+        ResourceTransactionIndex, pending_resource::ResourceAttachment,
     },
     layout::{AssetLayoutRegistry, AssetScope, AssetSource, ResourceKey},
-    resource::{AssetResourceState, RequestIdentity},
+    resource::{AcquisitionResult, AssetResourceState, RequestIdentity},
 };
 
 /// Forward a method call to the active store variant. Keeps the
@@ -46,7 +47,7 @@ pub struct AssetStore {
 pub(super) struct AssetStoreInner {
     pub(super) layouts: AssetLayoutRegistry,
     pub(super) availability: AvailabilityIndex,
-    pub(super) demand: DemandIndex,
+    pub(super) pending_resources: PendingResourceIndex,
     pub(super) eviction: EvictionRouter,
     pub(super) transactions: ResourceTransactionIndex,
     pub(super) backend: StoreBackendInner,
@@ -95,23 +96,34 @@ impl AssetStore {
         delegate_to_store!(self, acquire_resource_with_ctx, key, identity, ctx)
     }
 
-    /// Attach a consumer's download demand for `key`.
+    /// Join or create the canonical pending resource acquisition for `key`.
     ///
-    /// `read_pos` is shared with the consumer (the producer reads its
-    /// advances directly); `look_ahead` of `None` requests the whole
-    /// file as fast as possible. Returns a [`DemandLease`] the consumer
-    /// must hold for the lifetime of its demand, plus a
-    /// [`ProducerHandle`] to the single CAS-winning attacher only -- the
-    /// winner drives the shared download task. See `CONTEXT.md`
-    /// "Consumer Demand".
-    pub fn attach_demand(
+    /// # Errors
+    ///
+    /// Returns an error when the resource cannot be acquired or a retired
+    /// session could not finish removing its backing resource.
+    #[doc(hidden)]
+    pub fn attach_pending_resource(
         &self,
         key: &ResourceKey,
         read_pos: Arc<AtomicU64>,
         look_ahead: Option<u64>,
-    ) -> (DemandLease, Option<ProducerHandle>) {
+    ) -> AssetsResult<AcquisitionResult<ResourceAttachment, AssetReader>> {
         let entry = Arc::new(DemandEntry::new(read_pos, look_ahead));
-        self.demand().attach_demand(key, entry)
+        let weak = Arc::downgrade(&self.inner);
+        let remove: RemoveResource = Arc::new(move |key| {
+            let Some(inner) = weak.upgrade() else {
+                return Err(AssetsError::Storage(StorageError::Failed(
+                    "asset store closed before session cleanup".to_string(),
+                )));
+            };
+            let store = Self { inner };
+            store.remove_resource(key)
+        });
+        self.pending_resources()
+            .attach_pending_resource(key, entry, self.clone(), remove, || {
+                self.acquire_resource(key, None)
+            })
     }
 
     delegate::delegate! {
@@ -120,8 +132,8 @@ impl AssetStore {
             #[field(&availability)]
             pub(crate) fn availability(&self) -> &AvailabilityIndex;
             /// Return the crate-private aggregate demand handle.
-            #[field(&demand)]
-            fn demand(&self) -> &DemandIndex;
+            #[field(&pending_resources)]
+            fn pending_resources(&self) -> &PendingResourceIndex;
             /// Return the crate-private eviction-router handle.
             #[field(&eviction)]
             fn eviction(&self) -> &EvictionRouter;

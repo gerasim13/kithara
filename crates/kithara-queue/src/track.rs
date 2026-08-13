@@ -125,7 +125,7 @@ pub(crate) struct Tracks {
 }
 
 impl Tracks {
-    pub(crate) fn new(bus: EventBus) -> Self {
+    pub(crate) const fn new(bus: EventBus) -> Self {
         Self {
             bus,
             inner: Mutex::new(Vec::new()),
@@ -382,7 +382,7 @@ mod tests {
         let tracks = tracks_with(TrackId(1));
         let first_cancel = token();
         let old = tracks
-            .begin_attempt(TrackId(1), first_cancel.clone())
+            .begin_attempt(TrackId(1), first_cancel)
             .expect("BUG: vacant record must accept an attempt");
         let new = tracks
             .promote_attempt(TrackId(1), token())

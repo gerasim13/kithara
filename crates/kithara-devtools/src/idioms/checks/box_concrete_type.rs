@@ -282,7 +282,7 @@ fn is_box_new_concrete(c: &ExprCall) -> bool {
     is_struct_literal(&c.args[0])
 }
 
-fn is_struct_literal(e: &Expr) -> bool {
+const fn is_struct_literal(e: &Expr) -> bool {
     matches!(e, Expr::Struct(_))
 }
 

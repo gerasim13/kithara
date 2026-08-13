@@ -208,7 +208,7 @@ fn hann_window(size: usize) -> Vec<f32> {
     (0..size)
         .map(|n| {
             let phase = scale * n.to_f32().unwrap_or(0.0);
-            Consts::HANN_A0 - Consts::HANN_A0 * phase.cos()
+            Consts::HANN_A0.mul_add(-phase.cos(), Consts::HANN_A0)
         })
         .collect()
 }

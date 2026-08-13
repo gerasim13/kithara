@@ -15,6 +15,7 @@
 use std::{fs, path::PathBuf};
 
 use kithara::{
+    audio::ConsumerWakeMode,
     events::{Event, QueueEvent},
     platform::{
         sync::{Arc, Mutex, mpsc},
@@ -60,6 +61,10 @@ impl SessionDispatcher for StartGatedSession {
             release.recv().expect("test holds the release sender");
         }
         self.inner.exec(cmd)
+    }
+
+    fn consumer_wake_mode(&self) -> ConsumerWakeMode {
+        self.inner.consumer_wake_mode()
     }
 }
 

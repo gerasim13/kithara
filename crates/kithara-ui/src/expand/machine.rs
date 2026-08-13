@@ -191,7 +191,7 @@ pub(super) fn expand_at(
             return Err(UiDocError::UnknownParam {
                 origin: uri.clone(),
                 name: name.clone(),
-                path: prefix.clone(),
+                path: prefix,
             });
         }
     }

@@ -273,7 +273,7 @@ mod tests {
         let store = Arc::new(
             AssetStore::builder()
                 .backend(StorageBackend::Memory)
-                .cancel(cancel.clone())
+                .cancel(cancel)
                 .build(),
         );
         PlanCtx {
@@ -367,7 +367,7 @@ mod tests {
                 cancel: CancelToken::never(),
                 headers: None,
                 emit: Arc::new(DeferredBus::new(bus.clone(), 8)),
-                signal: ctx.signal.clone(),
+                signal: ctx.signal,
             },
             Arc::new(PlayheadState::new()),
             Arc::new(SeekState::new()),

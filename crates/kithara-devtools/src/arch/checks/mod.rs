@@ -3,13 +3,22 @@
 //! Each check implements `Check`. The runner iterates the registry and
 //! aggregates `Violation`s into a `Report`.
 
-use std::path::Path;
+#[cfg(test)]
+use std::cell::Cell;
+use std::{
+    cell::OnceCell,
+    collections::BTreeMap,
+    fs,
+    path::{Path, PathBuf},
+};
 
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use cargo_metadata::Metadata;
 
 use super::config::ArchConfig;
-use crate::common::{fix::FixOutcome, scope::Scope, violation::Violation};
+use crate::common::{
+    fix::FixOutcome, scope::Scope, violation::Violation, walker::workspace_rs_files_scoped,
+};
 
 pub(crate) mod arc_clone_hotspots;
 pub(crate) mod args_wrapper_struct;
@@ -49,11 +58,133 @@ pub(crate) mod struct_index;
 pub(crate) mod tokio_dep_quarantine;
 pub(crate) mod trait_impl_count;
 
+struct ParsedSource {
+    source: String,
+    syntax: Option<syn::File>,
+}
+
+enum FileSnapshot {
+    Loaded(ParsedSource),
+    Unreadable(std::io::Error),
+}
+
+struct ParsedFiles<'a> {
+    files: OnceCell<BTreeMap<PathBuf, FileSnapshot>>,
+    scope: &'a Scope,
+    workspace_root: &'a Path,
+    #[cfg(test)]
+    parse_count: Cell<usize>,
+}
+
+impl<'a> ParsedFiles<'a> {
+    fn new(workspace_root: &'a Path, scope: &'a Scope) -> Self {
+        Self {
+            files: OnceCell::new(),
+            scope,
+            workspace_root,
+            #[cfg(test)]
+            parse_count: Cell::new(0),
+        }
+    }
+
+    fn get(&self, path: &Path) -> Result<Option<&FileSnapshot>> {
+        Ok(self.all()?.get(path))
+    }
+
+    fn parsed_file(&self, path: &Path) -> Result<Option<&syn::File>> {
+        Ok(self.get(path)?.and_then(|snapshot| match snapshot {
+            FileSnapshot::Loaded(parsed) => parsed.syntax.as_ref(),
+            FileSnapshot::Unreadable(_) => None,
+        }))
+    }
+
+    fn parsed_source(&self, path: &Path) -> Result<Option<(&str, &syn::File)>> {
+        Ok(self.get(path)?.and_then(|snapshot| match snapshot {
+            FileSnapshot::Loaded(parsed) => parsed
+                .syntax
+                .as_ref()
+                .map(|syntax| (parsed.source.as_str(), syntax)),
+            FileSnapshot::Unreadable(_) => None,
+        }))
+    }
+
+    fn source_file(&self, path: &Path) -> Result<Option<(&str, Option<&syn::File>)>> {
+        match self.get(path)? {
+            Some(FileSnapshot::Loaded(parsed)) => {
+                Ok(Some((parsed.source.as_str(), parsed.syntax.as_ref())))
+            }
+            Some(FileSnapshot::Unreadable(error)) => {
+                Err(anyhow!("read {}: {error}", path.display()))
+            }
+            None => Ok(None),
+        }
+    }
+
+    fn all(&self) -> Result<&BTreeMap<PathBuf, FileSnapshot>> {
+        if let Some(files) = self.files.get() {
+            return Ok(files);
+        }
+        let paths = workspace_rs_files_scoped(self.workspace_root, self.scope)?;
+        Ok(self.files.get_or_init(|| {
+            paths
+                .into_iter()
+                .map(|path| {
+                    let snapshot = match fs::read_to_string(&path) {
+                        Ok(source) => {
+                            #[cfg(test)]
+                            self.parse_count.set(self.parse_count.get() + 1);
+                            let syntax = syn::parse_file(&source).ok();
+                            FileSnapshot::Loaded(ParsedSource { source, syntax })
+                        }
+                        Err(error) => FileSnapshot::Unreadable(error),
+                    };
+                    (path, snapshot)
+                })
+                .collect()
+        }))
+    }
+
+    #[cfg(test)]
+    fn parse_count(&self) -> usize {
+        self.parse_count.get()
+    }
+}
+
 pub(crate) struct Context<'a> {
     pub(crate) config: &'a ArchConfig,
     pub(crate) metadata: &'a Metadata,
     pub(crate) workspace_root: &'a Path,
     pub(crate) scope: &'a Scope,
+    parsed_files: ParsedFiles<'a>,
+}
+
+impl<'a> Context<'a> {
+    pub(super) fn new(
+        config: &'a ArchConfig,
+        metadata: &'a Metadata,
+        workspace_root: &'a Path,
+        scope: &'a Scope,
+    ) -> Self {
+        Self {
+            config,
+            metadata,
+            workspace_root,
+            scope,
+            parsed_files: ParsedFiles::new(workspace_root, scope),
+        }
+    }
+
+    fn parsed_file(&self, path: &Path) -> Result<Option<&syn::File>> {
+        self.parsed_files.parsed_file(path)
+    }
+
+    fn parsed_source(&self, path: &Path) -> Result<Option<(&str, &syn::File)>> {
+        self.parsed_files.parsed_source(path)
+    }
+
+    fn source_file(&self, path: &Path) -> Result<Option<(&str, Option<&syn::File>)>> {
+        self.parsed_files.source_file(path)
+    }
 }
 
 pub(crate) trait Check {
@@ -106,4 +237,61 @@ pub(crate) fn registry() -> Vec<Box<dyn Check>> {
         Box::new(single_word_filenames::SingleWordFilenames),
         Box::new(module_layers::ModuleLayers),
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+
+    use super::*;
+
+    #[test]
+    fn parsed_files_parse_each_path_once() {
+        let dir = tempfile::tempdir().expect("temporary directory");
+        let path = dir.path().join("crates/fixture/src/lib.rs");
+        fs::create_dir_all(path.parent().expect("fixture source directory"))
+            .expect("create fixture source directory");
+        fs::write(&path, "pub struct Fixture;\n").expect("write fixture");
+        let scope = Scope::default();
+        let files = ParsedFiles::new(dir.path(), &scope);
+
+        assert!(files.parsed_file(&path).expect("first lookup").is_some());
+        assert!(files.parsed_file(&path).expect("second lookup").is_some());
+        assert_eq!(files.parse_count(), 1);
+    }
+
+    #[test]
+    fn parsed_files_keep_source_and_syntax_in_one_snapshot() {
+        let dir = tempfile::tempdir().expect("temporary directory");
+        let path = dir.path().join("crates/fixture/src/lib.rs");
+        fs::create_dir_all(path.parent().expect("fixture source directory"))
+            .expect("create fixture source directory");
+        fs::write(&path, "pub struct Before;\n").expect("write initial fixture");
+        let scope = Scope::default();
+        let files = ParsedFiles::new(dir.path(), &scope);
+
+        let (source, syntax) = files
+            .parsed_source(&path)
+            .expect("first lookup")
+            .expect("parsed fixture");
+        assert!(source.contains("Before"));
+        assert!(matches!(
+            syntax.items.first(),
+            Some(syn::Item::Struct(item)) if item.ident == "Before"
+        ));
+
+        fs::write(&path, "pub struct After;\n").expect("mutate fixture");
+        let (source, syntax) = files
+            .parsed_source(&path)
+            .expect("second lookup")
+            .expect("cached fixture");
+
+        assert!(source.contains("Before"));
+        assert!(!source.contains("After"));
+        assert!(matches!(
+            syntax.items.first(),
+            Some(syn::Item::Struct(item)) if item.ident == "Before"
+        ));
+        assert_eq!(files.parse_count(), 1);
+    }
 }

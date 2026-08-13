@@ -1,5 +1,6 @@
 use std::cell::RefCell;
 
+use kithara_audio::ConsumerWakeMode;
 use kithara_platform::sync::{Arc, mpsc};
 
 use super::bridge::{init_bridge_state, start_stream_web_audio};
@@ -48,6 +49,10 @@ impl SessionClient {
 impl SessionDispatcher for SessionClient {
     fn exec(&self, cmd: Cmd) -> Result<Reply, PlayError> {
         self.call(cmd)
+    }
+
+    fn consumer_wake_mode(&self) -> ConsumerWakeMode {
+        ConsumerWakeMode::RealtimeDeferred
     }
 }
 

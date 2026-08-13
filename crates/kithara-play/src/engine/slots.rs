@@ -13,7 +13,7 @@ impl SlotTable {
     delegate::delegate! {
         to self.slots {
             pub(super) fn clear(&mut self);
-            pub(super) fn len(&self) -> usize;
+            pub(super) const fn len(&self) -> usize;
         }
         to self {
             #[expr($.map(|control| Arc::clone(&control.playback)))]

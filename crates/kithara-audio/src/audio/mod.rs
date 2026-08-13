@@ -11,9 +11,9 @@ pub use core::Audio;
 pub use seek::SeekHandle;
 
 pub(crate) use crate::{
-    AudioConfig, AudioDecoderConfig, AudioEffect, AudioWorkerHandle, ChunkOutcome, DecodeError,
-    EngineLoad, Fetch, PcmControl, PcmRead, PcmSession, PendingReason, PreloadGate, ReadOutcome,
-    SeekOutcome, ServiceClass, StretchControls,
+    AudioConfig, AudioDecoderConfig, AudioEffect, AudioWorkerHandle, ChunkOutcome,
+    ConsumerWakeMode, DecodeError, EngineLoad, Fetch, PcmControl, PcmRead, PcmSession,
+    PendingReason, PreloadGate, ReadOutcome, SeekOutcome, ServiceClass, StretchControls,
     pipeline::{
         config::create_effects,
         consumer::{ConsumerPhase, FailureSource},

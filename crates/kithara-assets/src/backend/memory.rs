@@ -71,7 +71,7 @@ pub(crate) struct MemAssetDeleter {
 }
 
 impl MemAssetDeleter {
-    pub(crate) fn new(
+    pub(crate) const fn new(
         availability: AvailabilityIndex,
         pins: crate::index::PinsIndex,
         lru: crate::index::LruIndex,

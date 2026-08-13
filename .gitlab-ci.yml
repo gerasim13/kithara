@@ -1,12 +1,26 @@
 stages:
   - dispatch
 
+variables:
+  # `KITHARA_PLATFORMS: $KITHARA_PLATFORMS` below forwards a platform request to
+  # the child. An undefined variable does not expand to nothing there — it stays
+  # the literal `$KITHARA_PLATFORMS`, which `rules:if` then reads as a value.
+  # That is how `dispatch:platforms` matched a PR-head quarantine run naming no
+  # platform and put a second Apple matrix on the one host. Declaring it here
+  # is what makes unset mean unset; a run that names platforms overrides it.
+  KITHARA_PLATFORMS: ""
+
 workflow:
   auto_cancel:
     on_new_commit: interruptible
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
     - if: $CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+    # The bridge creates the quarantine pipeline itself and watches that one by
+    # id. The push that places the commit adds a second pipeline nobody reads,
+    # and the two then compete for the single Apple host.
+    - if: $CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH =~ /^quarantine\//
+      when: never
     # A branch with an open merge request is already covered by the
     # merge-request pipeline. A second pipeline on the same commit would take
     # the one Apple host twice to report the same thing.
@@ -68,13 +82,10 @@ dispatch:branch:
   rules:
     - if: $CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH != $CI_DEFAULT_BRANCH
 
-# Started by hand to name platforms a push cannot. It runs as the `main` kind
-# rather than `branch`, because that is the kind under which the platform lanes
-# exist at all: `linux:*` hangs off the verify set, the web and Android lanes
-# off the integration set, and neither admits `branch`. Asking for a platform
-# on a branch kind would silently produce the Apple-only pipeline and look like
-# the switch was ignored. The branch queue keeps it out of the default branch's
-# way regardless.
+# Started by hand to name platforms a push cannot. Its own kind admits the
+# verify and integration sets so the requested platform lanes exist, while the
+# verdict checks the default-branch journal instead of recording this branch as
+# a new baseline. The branch queue keeps it out of the default branch's way.
 dispatch:platforms:
   stage: dispatch
   resource_group: kithara-mac-mini-branch
@@ -86,9 +97,15 @@ dispatch:platforms:
     strategy: depend
   variables:
     KITHARA_CACHE_TRUST: review
-    KITHARA_PIPELINE_KIND: main
+    KITHARA_PIPELINE_KIND: platforms
     KITHARA_PLATFORMS: $KITHARA_PLATFORMS
   rules:
+    # A PR-head quarantine run is started through the API too, and if the
+    # project carries a `KITHARA_PLATFORMS` value this matched it: one verifier
+    # attempt then took the host for an unrelated platform matrix as well. The
+    # quarantine sha identifies the verifier run, so it answers first.
+    - if: $KITHARA_QUARANTINE_SHA
+      when: never
     - if: $CI_PIPELINE_SOURCE == "web" && $KITHARA_PLATFORMS
     - if: $CI_PIPELINE_SOURCE == "api" && $KITHARA_PLATFORMS
 

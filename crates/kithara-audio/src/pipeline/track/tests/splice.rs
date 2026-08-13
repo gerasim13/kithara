@@ -432,7 +432,7 @@ async fn splice_source(variants: Vec<VariantLayout>) -> SpliceFixture {
     .expect("create initial slq fMP4 decoder");
     let initial_spec = initial_decoder.spec();
     let host_sample_rate = Arc::new(AtomicU32::new(Consts::SAMPLE_RATE));
-    let pcm_pool = PcmPool::default().clone();
+    let pcm_pool = PcmPool::default();
     let effects =
         crate::pipeline::config::create_effects(initial_spec, None, &pcm_pool, Vec::new());
     let factory_byte_len = Arc::new(AtomicU64::new(0));

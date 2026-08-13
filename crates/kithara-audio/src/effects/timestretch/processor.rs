@@ -384,7 +384,7 @@ mod tests {
     }
 
     fn processor(controls: Arc<StretchControls>) -> TimeStretchProcessor {
-        TimeStretchProcessor::new(controls, spec(), PcmPool::default().clone())
+        TimeStretchProcessor::new(controls, spec(), PcmPool::default())
     }
 
     fn keylocked(kind: StretchKind, speed: f32) -> TimeStretchProcessor {

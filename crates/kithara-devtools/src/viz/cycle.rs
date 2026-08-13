@@ -197,7 +197,7 @@ fn visit_component(
     }
 }
 
-fn merge_style(left: EvidenceStyle, right: EvidenceStyle) -> EvidenceStyle {
+const fn merge_style(left: EvidenceStyle, right: EvidenceStyle) -> EvidenceStyle {
     use EvidenceStyle::{
         Candidate, Conditional, Conflicting, Manual, Observed, Resolved, Unresolved,
     };

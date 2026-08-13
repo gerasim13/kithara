@@ -29,7 +29,7 @@ enum CiCommand {
     Verdict(VerdictArgs),
 }
 
-pub(crate) fn is_standalone(args: &CiArgs) -> bool {
+pub(crate) const fn is_standalone(args: &CiArgs) -> bool {
     matches!(
         args.command,
         CiCommand::Bridge(_)

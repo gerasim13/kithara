@@ -1,7 +1,8 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use kithara_platform::{
-    sync::CondvarGate,
+    CancelToken,
+    sync::{Arc, CondvarGate},
     time::{Duration, Instant},
 };
 
@@ -48,6 +49,9 @@ impl ReadinessGate {
                 if *guard {
                     return !self.is_failed();
                 }
+                if self.is_failed() || should_abort() {
+                    return false;
+                }
                 let deadline = Instant::now() + Duration::from_millis(COND_WAIT_MS);
                 let next = self.gate.wait_until(guard, deadline);
                 *next
@@ -59,5 +63,18 @@ impl ReadinessGate {
                 return false;
             }
         }
+    }
+
+    pub(super) fn wait_until_ready_with_cancel(
+        self: &Arc<Self>,
+        cancel: &CancelToken,
+        should_abort: &dyn Fn() -> bool,
+    ) -> bool {
+        let gate = Arc::clone(self);
+        let _cancel_wake = cancel.on_cancel(move || {
+            let _guard = gate.gate.lock();
+            gate.gate.notify_all();
+        });
+        self.wait_until_ready(&|| cancel.is_cancelled() || should_abort())
     }
 }

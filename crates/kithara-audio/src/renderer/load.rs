@@ -25,7 +25,7 @@ fn ewma(prev: f32, sample: f32) -> f32 {
     if prev <= 0.0 {
         sample
     } else {
-        prev * (1.0 - Consts::LOAD_ALPHA) + sample * Consts::LOAD_ALPHA
+        sample.mul_add(Consts::LOAD_ALPHA, prev * (1.0 - Consts::LOAD_ALPHA))
     }
 }
 

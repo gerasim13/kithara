@@ -1,14 +1,18 @@
 use std::num::NonZeroUsize;
+#[cfg(not(target_arch = "wasm32"))]
+use std::{sync::Barrier, thread};
 
 use kithara_assets::{
-    AcquisitionResult, AssetReader, AssetResource, AssetSource, AssetStore, ResourceKey,
+    AcquisitionResult, AssetReader, AssetResource, AssetSource, AssetStore, ReadSide, ResourceKey,
     StorageBackend, WriteSide,
 };
 use kithara_events::{
     AudioCodecKind, ContainerKind, Envelope, Event, EventBus, FileEvent, TotalBytesSource,
 };
+#[cfg(not(target_arch = "wasm32"))]
+use kithara_platform::CancelScope;
 use kithara_platform::{CancelToken, sync::Arc, time::Duration};
-use kithara_storage::WaitOutcome;
+use kithara_storage::{StorageError, WaitOutcome};
 use kithara_stream::{
     AudioCodec, NotReadyCause, PendingReason, PlayheadState, ReadOutcome, SeekState, Source,
     SourceError as StreamSourceError, SourcePhase, StreamError,
@@ -44,16 +48,21 @@ fn make_coord() -> Arc<FileCoord> {
 }
 
 fn make_source(reader: AssetReader, coord: Arc<FileCoord>, bus: EventBus) -> FileSource {
-    let backend = AssetStore::builder().cancel(CancelToken::never()).build();
-    let key = test_key(&backend, "test-source");
+    make_source_with_cancel(reader, coord, bus, CancelToken::never())
+}
+
+fn make_source_with_cancel(
+    reader: AssetReader,
+    coord: Arc<FileCoord>,
+    bus: EventBus,
+    cancel: CancelToken,
+) -> FileSource {
     FileSource::local(
         FileLocalConfig::builder()
             .reader(reader)
             .coord(coord)
             .bus(bus)
-            .backend(backend)
-            .key(key)
-            .cancel(CancelToken::never())
+            .cancel(cancel)
             .cached_codec(AudioCodec::Mp3)
             .build(),
     )
@@ -143,9 +152,16 @@ fn create_committed_resource(data: &[u8]) -> AssetReader {
 }
 
 fn create_active_resource(data: &[u8]) -> (AssetReader, kithara_assets::AssetWriter) {
+    create_active_resource_with_cancel(data, CancelToken::never())
+}
+
+fn create_active_resource_with_cancel(
+    data: &[u8],
+    cancel: CancelToken,
+) -> (AssetReader, kithara_assets::AssetWriter) {
     let store = AssetStore::builder()
         .backend(StorageBackend::Memory)
-        .cancel(CancelToken::never())
+        .cancel(cancel)
         .build();
 
     let key = test_key(&store, "active.dat");
@@ -320,6 +336,57 @@ fn file_source_probe_wait_range_does_not_block_on_missing_bytes() {
 }
 
 #[kithara::test]
+fn file_source_probe_waits_for_commit_even_when_active_bytes_are_present() {
+    let (reader, _writer) = create_active_resource(b"hello");
+    let coord = make_coord();
+    coord.set_total_bytes(Some(5));
+    let mut source = make_source(reader, coord, EventBus::new(16));
+
+    let result = Source::wait_range(&mut source, 0..5, Some(Duration::from_millis(1)));
+
+    assert!(matches!(
+        result,
+        Err(StreamError::Source(StreamSourceError::WaitBudgetExceeded))
+    ));
+}
+
+#[kithara::test]
+fn file_source_probe_wait_range_surfaces_terminal_storage_failure() {
+    let (reader, writer) = create_active_resource(b"");
+    writer.fail("network failed".to_string());
+    let coord = make_coord();
+    coord.set_total_bytes(Some(4));
+    let mut source = make_source(reader, coord, EventBus::new(16));
+
+    let result = Source::wait_range(&mut source, 0..4, Some(Duration::from_millis(1)));
+
+    assert!(matches!(
+        result,
+        Err(StreamError::Source(StreamSourceError::SegmentUnavailable))
+    ));
+}
+
+#[kithara::test]
+fn file_source_probe_wait_range_surfaces_terminal_storage_cancellation() {
+    let resource_cancel = CancelToken::never();
+    let (reader, _writer) = create_active_resource_with_cancel(b"", resource_cancel.clone());
+    let coord = make_coord();
+    coord.set_total_bytes(Some(4));
+    let mut source = make_source(reader, coord, EventBus::new(16));
+    resource_cancel.cancel();
+
+    assert_eq!(Source::phase_at(&source, 0..4), SourcePhase::Cancelled);
+    let result = Source::wait_range(&mut source, 0..4, Some(Duration::from_millis(1)));
+
+    assert!(matches!(
+        result,
+        Err(StreamError::Source(StreamSourceError::Storage(
+            StorageError::Cancelled
+        )))
+    ));
+}
+
+#[kithara::test]
 fn file_source_probe_wait_range_clamps_read_ahead_at_known_eof() {
     let data = b"hello";
     let res = create_committed_resource(data);
@@ -332,6 +399,104 @@ fn file_source_probe_wait_range_clamps_read_ahead_at_known_eof() {
     let result = Source::wait_range(&mut source, 0..1024, Some(Duration::from_secs(1)));
 
     assert_eq!(result.unwrap(), WaitOutcome::Ready);
+}
+
+#[kithara::test(native, timeout(Duration::from_secs(2)))]
+fn source_cancel_interrupts_blocked_wait_without_poisoning_asset() {
+    let (reader, writer) = create_active_resource(b"");
+    let coord = make_coord();
+    coord.set_total_bytes(Some(4));
+    let scope = CancelScope::new(None);
+    let mut source = FileSource::local(
+        FileLocalConfig::builder()
+            .reader(reader)
+            .coord(coord)
+            .bus(EventBus::new(16))
+            .cancel(scope.token())
+            .cached_codec(AudioCodec::Mp3)
+            .build(),
+    );
+    let entering_wait = Arc::new(Barrier::new(2));
+
+    let handle = thread::spawn({
+        let entering_wait = Arc::clone(&entering_wait);
+        move || {
+            entering_wait.wait();
+            Source::wait_range(&mut source, 0..4, None)
+        }
+    });
+
+    entering_wait.wait();
+    scope.cancel();
+
+    assert!(matches!(
+        handle.join().expect("source waiter must not panic"),
+        Err(StreamError::Source(StreamSourceError::Storage(
+            StorageError::Cancelled
+        )))
+    ));
+
+    writer.write_at(0, b"done").unwrap();
+    let committed = writer.commit(Some(4)).unwrap();
+    let mut bytes = [0; 4];
+    assert_eq!(committed.read_at(0, &mut bytes).unwrap(), 4);
+    assert_eq!(&bytes, b"done");
+}
+
+#[kithara::test]
+fn pre_cancelled_source_is_terminal_for_ready_eof_and_probe_wait() {
+    let cancel = CancelToken::never();
+    cancel.cancel();
+
+    let ready_coord = make_coord();
+    ready_coord.set_total_bytes(Some(4));
+    let mut ready = make_source_with_cancel(
+        create_committed_resource(b"done"),
+        ready_coord,
+        EventBus::new(16),
+        cancel.clone(),
+    );
+    assert_eq!(Source::phase_at(&ready, 0..1), SourcePhase::Cancelled);
+    assert!(matches!(
+        Source::wait_range(&mut ready, 0..1, Some(Duration::from_millis(1))),
+        Err(StreamError::Source(StreamSourceError::Storage(
+            StorageError::Cancelled
+        )))
+    ));
+    let mut byte = [0];
+    assert!(matches!(
+        Source::read_at(&mut ready, 0, &mut byte),
+        Err(StreamError::Source(StreamSourceError::Storage(
+            StorageError::Cancelled
+        )))
+    ));
+
+    let eof_coord = make_coord();
+    eof_coord.set_total_bytes(Some(4));
+    let mut eof = make_source_with_cancel(
+        create_committed_resource(b"done"),
+        eof_coord,
+        EventBus::new(16),
+        cancel.clone(),
+    );
+    assert_eq!(Source::phase_at(&eof, 4..5), SourcePhase::Cancelled);
+    assert!(matches!(
+        Source::wait_range(&mut eof, 4..5, None),
+        Err(StreamError::Source(StreamSourceError::Storage(
+            StorageError::Cancelled
+        )))
+    ));
+
+    let (reader, _writer) = create_active_resource(b"");
+    let waiting_coord = make_coord();
+    waiting_coord.set_total_bytes(Some(4));
+    let mut waiting = make_source_with_cancel(reader, waiting_coord, EventBus::new(16), cancel);
+    assert!(matches!(
+        Source::wait_range(&mut waiting, 0..4, Some(Duration::from_millis(1))),
+        Err(StreamError::Source(StreamSourceError::Storage(
+            StorageError::Cancelled
+        )))
+    ));
 }
 
 #[kithara::test]

@@ -51,7 +51,7 @@ pub(crate) struct PassReport {
 }
 
 impl PassReport {
-    pub(crate) fn new(active_slots: usize) -> Self {
+    pub(crate) const fn new(active_slots: usize) -> Self {
         Self {
             active_slots,
             outcome: PassOutcome::Idle,

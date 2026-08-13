@@ -1,7 +1,4 @@
-use std::{
-    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
-    path::Path,
-};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use anyhow::Result;
 use glob::Pattern;
@@ -11,8 +8,8 @@ use syn::{
     ImplItem, Item, ItemImpl, Member, Pat, Stmt, Type, Visibility, visit::Visit,
 };
 
+use super::Context;
 use crate::common::{
-    parse::parse_file,
     suppress::Suppressions,
     walker::{matches_any, relative_to, workspace_rs_files_scoped},
 };
@@ -63,24 +60,22 @@ pub(crate) struct WorkspaceStructIndex {
 }
 
 pub(crate) fn build_index(
-    workspace_root: &Path,
-    scope: &crate::common::scope::Scope,
+    ctx: &Context<'_>,
     exempt_globs: &[Pattern],
 ) -> Result<WorkspaceStructIndex> {
     let mut idx = WorkspaceStructIndex::default();
-    for path in workspace_rs_files_scoped(workspace_root, scope)? {
-        let rel = relative_to(workspace_root, &path);
+    for path in workspace_rs_files_scoped(ctx.workspace_root, ctx.scope)? {
+        let rel = relative_to(ctx.workspace_root, &path);
         if matches_any(exempt_globs, rel) {
             continue;
         }
-        let Ok(file) = parse_file(&path) else {
+        let Some((src, file)) = ctx.parsed_source(&path)? else {
             continue;
         };
-        let src = std::fs::read_to_string(&path)?;
         let rel_str = rel.to_string_lossy().replace('\\', "/");
         idx.suppressions
-            .insert(rel_str.clone(), Suppressions::parse(&src));
-        collect_assigned_fields(&file, &rel_str, &mut idx);
+            .insert(rel_str.clone(), Suppressions::parse(src));
+        collect_assigned_fields(file, &rel_str, &mut idx);
         collect_in_items(&file.items, &rel_str, &mut idx);
     }
     Ok(idx)

@@ -3,7 +3,7 @@ pub(crate) struct Mp4Bytes {
 }
 
 impl Mp4Bytes {
-    pub(crate) fn new() -> Self {
+    pub(crate) const fn new() -> Self {
         Self { buf: Vec::new() }
     }
 
@@ -11,7 +11,7 @@ impl Mp4Bytes {
         self.buf
     }
 
-    pub(crate) fn len(&self) -> usize {
+    pub(crate) const fn len(&self) -> usize {
         self.buf.len()
     }
 

@@ -307,7 +307,7 @@ fn crash_between_per_store_flushes_keeps_each_store_independently_consistent() {
             .backend(StorageBackend::Disk {
                 root: (&dir_b).into(),
             })
-            .flush_hub(hub.clone())
+            .flush_hub(hub)
             .build();
 
         let scope_a = store_a.scope::<Test>(&source("track-a")).unwrap();

@@ -143,15 +143,15 @@ pub(crate) struct DerivableDelegationConfig {
     pub(crate) trait_min_methods: usize,
 }
 
-fn default_delegation_enabled() -> bool {
+const fn default_delegation_enabled() -> bool {
     true
 }
 
-fn default_trait_delegation_methods() -> usize {
+const fn default_trait_delegation_methods() -> usize {
     2
 }
 
-fn default_inherent_delegation_methods() -> usize {
+const fn default_inherent_delegation_methods() -> usize {
     2
 }
 
@@ -163,7 +163,7 @@ fn default_blocking_impl_attrs() -> Vec<String> {
     ]
 }
 
-fn default_keep_manual_method_attrs() -> Vec<String> {
+const fn default_keep_manual_method_attrs() -> Vec<String> {
     Vec::new()
 }
 
@@ -210,16 +210,16 @@ pub(crate) struct FatLoopBodyConfig {
     pub(crate) while_stmt_threshold: usize,
 }
 
-fn default_for_stmt_threshold() -> usize {
+const fn default_for_stmt_threshold() -> usize {
     6
 }
-fn default_while_stmt_threshold() -> usize {
+const fn default_while_stmt_threshold() -> usize {
     6
 }
-fn default_loop_stmt_threshold() -> usize {
+const fn default_loop_stmt_threshold() -> usize {
     4
 }
-fn default_nested_ctrl_threshold() -> usize {
+const fn default_nested_ctrl_threshold() -> usize {
     1
 }
 
@@ -261,10 +261,10 @@ pub(crate) struct ConstGroupEnumShapeConfig {
     pub(crate) min_prefix_chars: usize,
 }
 
-fn default_min_group_size() -> usize {
+const fn default_min_group_size() -> usize {
     3
 }
-fn default_min_prefix_chars() -> usize {
+const fn default_min_prefix_chars() -> usize {
     3
 }
 
@@ -287,7 +287,7 @@ pub(crate) struct NestedIfLetPyramidConfig {
     pub(crate) min_depth: usize,
 }
 
-fn default_pyramid_min_depth() -> usize {
+const fn default_pyramid_min_depth() -> usize {
     2
 }
 
@@ -336,13 +336,13 @@ impl Default for BranchChainsConfig {
     }
 }
 
-fn default_homogeneous_arms() -> usize {
+const fn default_homogeneous_arms() -> usize {
     3
 }
-fn default_heterogeneous_arms() -> usize {
+const fn default_heterogeneous_arms() -> usize {
     4
 }
-fn default_general_arms() -> usize {
+const fn default_general_arms() -> usize {
     5
 }
 fn default_exempt_files() -> Vec<String> {
@@ -377,7 +377,7 @@ impl Default for GuardCascadeConfig {
     }
 }
 
-fn default_cascade_warn_streak() -> usize {
+const fn default_cascade_warn_streak() -> usize {
     4
 }
 
@@ -420,7 +420,7 @@ impl Default for FunctionBranchDensityConfig {
     }
 }
 
-fn default_density_warn_own() -> usize {
+const fn default_density_warn_own() -> usize {
     12
 }
 
@@ -478,11 +478,11 @@ impl Default for NoPassthroughBuilderConfig {
     }
 }
 
-fn default_min_passthrough_fields() -> usize {
+const fn default_min_passthrough_fields() -> usize {
     4
 }
 
-fn default_true() -> bool {
+const fn default_true() -> bool {
     true
 }
 

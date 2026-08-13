@@ -95,14 +95,7 @@ impl HlsVariant {
         })
     }
 
-    /// Whether any init/media segment covering `range` settled terminally
-    /// (`Failed`): the downloader exhausted its retry budget, so the range
-    /// will never load. [`wait_range`](Self::wait_range) consults this when
-    /// a range is not ready to tell "still downloading" (spin) from
-    /// "permanently failed" (terminal error). Walks the same descriptors as
-    /// `range_ready_published_with`, checking slot state rather than
-    /// on-disk bytes; the per-byte `contains_range` walk stays out so this
-    /// only fires on a real terminal settle, never on a transient gap.
+    /// Returns whether a resource covering `range` settled terminally.
     pub(super) fn range_has_failed(&self, range: &Range<u64>) -> bool {
         let total = self.total_bytes();
         let uses_seek_alias = self.seek_alias_at(range.start).is_some();
@@ -112,10 +105,7 @@ impl HlsVariant {
             range.end
         };
         let mut cursor = range.start;
-        // The init prefix is not a media segment, so `find_at_offset` returns
-        // `None` for a byte inside it — skip past it (jumping to media space)
-        // after checking the init's own terminal state, exactly as
-        // `range_ready` walks init then media.
+        // WHY: Check the init before advancing into media descriptor space.
         if let Some(init_range) = self.init_descriptor_at(cursor) {
             if self.init_failed() {
                 return true;
@@ -146,11 +136,8 @@ impl HlsVariant {
         let clamp_alias_to_eof = uses_seek_alias
             && !needs_exact_byte_sizes(self.profile.codec, self.profile.container)
             && self.eof_ready();
-        // When a served segment's size is still unknown, `total` is a lower
-        // bound, not the stream end. An offset at/past it is NOT "ready"
-        // (clamping `end` to the under-count would falsely report a zero-width
-        // ready range and let the reader spin past a real, not-yet-sized
-        // segment) — treat it as not-ready so the gate holds Waiting.
+        // WHY: An incomplete total is only a lower bound; treating it as EOF would
+        // admit a zero-width ready range before the unsized segment arrives.
         if !uses_seek_alias && total > 0 && range.start >= total && !self.sizes_complete() {
             return false;
         }
