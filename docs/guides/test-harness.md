@@ -7,6 +7,9 @@ validation scope.
 
 - `just test` is the acceptance entrypoint. Pass harness arguments through
   `just test run <args>`.
+- `just test ui` is the complete UI acceptance entrypoint: unit and integration
+  tests in both clock modes, GPU renderer tests, and host-parity captures. The
+  general workspace lane excludes these tests because CI runs them separately.
 - Raw `cargo test` or `cargo nextest` is a scoped probe, not a final claim.
 - If a probe is reported, name the package, filter, lane, and why it is enough
   for that local question.

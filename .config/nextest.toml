@@ -17,6 +17,10 @@ command = 'cargo run -q -p kithara-integration-tests --bin cold-fixture-cache'
 [profile.default]
 fail-fast = false
 test-threads = "num-cpus"
+# UI owns a graphics-backed pipeline of its own. Keep its crate targets and the
+# application's GUI modules out of the general workspace run; the `ui` lane
+# opts out of this filter and runs this exact set on the GPU runner.
+default-filter = 'not (package(kithara-ui) | (package(kithara-app) & test(/^gui::/)))'
 # Wall-clock BACKSTOP only. The real per-test bound is the macro `timeout(...)`
 # on each test — its abort watchdog kills a hung test at its own budget+3s, so
 # this backstop only matters for tests with NO per-test timeout. It must sit

@@ -11,7 +11,6 @@ run *ARGS:
 
 all:
     just test
-    just test run --lane=masonry
     just test run --lane=doc
 
 # These are workspace tests like any other, but `wasm32` has no host binary for
@@ -115,7 +114,9 @@ e2e-resamplers *ARGS:
     just test run --lane=e2e-fused "$@"
     just test run --lane=e2e-glide "$@"
 
-# Both UI hosts drawing the same gallery pages, compared page by page.
+# Every UI test target, followed by both hosts drawing the same gallery and
+# shipped studio pages. This is the GPU pipeline's single entrypoint; the
+# general workspace lane deliberately excludes the same tests.
 #
 # One binary takes both sets, so a difference between them is a difference
 # between the hosts rather than between two builds of the same documents. Both
@@ -125,6 +126,10 @@ e2e-resamplers *ARGS:
 ui:
     #!/usr/bin/env bash
     set -euo pipefail
+    just test run --lane=ui --flash=on
+    CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-target}/ui-flash-off" \
+      just test run --lane=ui --flash=off
+    just test run --lane=ui-doc
     dir="$PWD/target/parity"
     rm -rf "$dir/iced" "$dir/masonry" "$dir/masks" "$dir/studio"
     gallery=(cargo run -p kithara-ui --example gallery --features kithara-ui/masonry)
