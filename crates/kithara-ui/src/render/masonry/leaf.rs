@@ -89,6 +89,7 @@ impl Leaf {
         match self {
             Self::Empty | Self::Control(_) | Self::Vis(_) => {}
             Self::Text {
+                align,
                 content,
                 role,
                 padding_x,
