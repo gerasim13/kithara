@@ -71,6 +71,7 @@ jobs:
           - rtsan        # mock decoder (suite_light, fast tripwire)
           - rtsan-file   # real-decoder file-offline (suite_stress)
           - rtsan-hls    # real-decoder HLS-offline (suite_stress)
+          - rtsan-sync   # bound Queue/Player sync render (suite_heavy)
 
     steps:
       - name: Checkout code

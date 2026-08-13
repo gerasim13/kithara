@@ -6,7 +6,7 @@ use kithara::{
     platform::sync::Arc,
     play::{
         PlayerNode, Resource, SharedEq, TrackTransition,
-        bridge::{PlaybackShared, PlayerCmd, SlotControl, slot_channels},
+        bridge::{PlaybackShared, PlayerCmd, RtMetricsSnapshot, SlotControl, slot_channels},
         rt::track::PlayerResource,
     },
 };
@@ -95,14 +95,24 @@ impl OfflinePlayer {
             .expect("BUG: send SetPaused");
     }
 
+    /// Set the transition fade used by subsequent track commands.
+    /// Panics if the command channel is full.
+    pub fn set_fade_duration(&mut self, seconds: f32) {
+        self.control
+            .cmd_tx
+            .try_push(PlayerCmd::SetFadeDuration(seconds))
+            .expect("BUG: send SetFadeDuration");
+    }
+
     /// Current playback position in seconds.
     pub fn position(&self) -> f64 {
         self.playback.position.load(Ordering::Relaxed)
     }
 
-    /// Number of times `process()` was called.
-    pub fn process_count(&self) -> u64 {
-        self.playback.process_count.load(Ordering::Relaxed)
+    /// Snapshot of real-time playback counters.
+    #[must_use]
+    pub fn metrics(&self) -> RtMetricsSnapshot {
+        self.playback.metrics().snapshot()
     }
 
     /// Render `frames` of audio. Returns interleaved stereo output.

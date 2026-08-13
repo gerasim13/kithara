@@ -250,3 +250,5 @@ rtsan FILTER="offline_harness kithara_play::rt_metrics kithara_play::mix_tap": (
 rtsan-file FILTER="phase_continuity::file": (_rtsan "suite_stress" FILTER)
 
 rtsan-hls FILTER="phase_continuity::hls": (_rtsan "suite_stress" FILTER)
+
+rtsan-sync FILTER="sync_rt::bound_sync_render_is_rtsan_clean": (_rtsan "suite_heavy" FILTER)

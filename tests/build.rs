@@ -43,6 +43,14 @@ fn hash_rs_tree(dir: &Path, hasher: &mut DefaultHasher) {
     }
 }
 
+fn hash_file(path: &Path, hasher: &mut DefaultHasher) {
+    if let Ok(bytes) = fs::read(path) {
+        path.to_string_lossy().hash(hasher);
+        bytes.hash(hasher);
+    }
+    println!("cargo:rerun-if-changed={}", path.display());
+}
+
 const LOCKFILE: &str = "../Cargo.lock";
 
 fn hash_encoder_versions(hasher: &mut DefaultHasher) {
@@ -100,5 +108,36 @@ fn main() {
     println!(
         "cargo:rustc-env=KITHARA_FIXTURE_BUILD={:016x}",
         hasher.finish()
+    );
+
+    // Analysis fixtures cache the final production TrackAnalysis for real
+    // records. Keep their invalidation independent from encoded-signal
+    // fixtures: a decoder/analyzer change must rebuild the analysis entry,
+    // while an unrelated test-server edit must not make every long record cold.
+    let mut analysis_hasher = DefaultHasher::new();
+    for dir in [
+        "../crates/kithara-audio/src/analysis",
+        "../crates/kithara-audio/src/waveform",
+        "../crates/kithara-decode/src",
+        "../crates/kithara-file/src",
+        "../crates/kithara-hls/src",
+        "../crates/kithara-play/src/resource",
+        "../crates/kithara-resampler/src",
+    ] {
+        println!("cargo:rerun-if-changed={dir}");
+        hash_rs_tree(Path::new(dir), &mut analysis_hasher);
+    }
+    for file in [
+        "../crates/kithara-app/src/waveform.rs",
+        "../crates/kithara-audio/src/blob.rs",
+        "../crates/kithara-audio/src/region.rs",
+        "src/sync_fixture.rs",
+        LOCKFILE,
+    ] {
+        hash_file(Path::new(file), &mut analysis_hasher);
+    }
+    println!(
+        "cargo:rustc-env=KITHARA_SYNC_ANALYSIS_BUILD={:016x}",
+        analysis_hasher.finish()
     );
 }
