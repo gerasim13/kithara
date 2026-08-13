@@ -3,7 +3,7 @@ use serde::Serialize;
 
 use super::{
     BLOCK_FRAMES, BOUNDARY_OUTLIER_RATIO, CHANNELS, EXACT_ZERO_RUN_LIMIT_FRAMES,
-    MAX_MATCHED_RESIDUAL_RATIO, MAX_MATCHED_RMS_DELTA_DB, MIN_BOUNDARY_JUMP,
+    MAX_DECK_GAIN_DELTA, MAX_MATCHED_RMS_DELTA_DB, MIN_BOUNDARY_JUMP, MIN_DECK_CONTRIBUTION_RATIO,
     MIN_FIXED_STEM_RMS_DBFS, MIX_HEADROOM,
 };
 
@@ -48,8 +48,8 @@ pub(super) struct MatchedMixReport {
     pub(super) reference_rms_dbfs: Option<f64>,
     pub(super) rms_delta_db: Option<f64>,
     pub(super) residual_ratio: f64,
-    pub(super) residual_limit: f64,
     pub(super) deck_contribution_ratios: Vec<f64>,
+    pub(super) deck_gain_estimates: Vec<f64>,
 }
 
 pub(super) struct MatchedMixAudio {
@@ -172,7 +172,7 @@ pub(super) fn assess_matched_mix(
         .collect::<Vec<_>>();
     if deck_contribution_ratios
         .iter()
-        .any(|ratio| !ratio.is_finite() || *ratio <= MAX_MATCHED_RESIDUAL_RATIO * 2.0)
+        .any(|ratio| !ratio.is_finite() || *ratio <= MIN_DECK_CONTRIBUTION_RATIO)
     {
         failures.push(format!(
             "{label}: fixed capture window cannot prove every deck contribution: {deck_contribution_ratios:?}",
@@ -191,7 +191,7 @@ pub(super) fn assess_matched_mix(
         .sum::<f64>()
         .sqrt();
     let residual_ratio = residual_norm / reference_norm;
-    let residual_limit = MAX_MATCHED_RESIDUAL_RATIO;
+    let deck_gain_estimates = estimate_deck_gains(candidate, &contributions).unwrap_or_default();
     let candidate_rms = rms(candidate);
     let reference_rms = rms(&reference);
     let rms_delta_db = (candidate_rms > 0.0 && reference_rms > 0.0)
@@ -201,15 +201,18 @@ pub(super) fn assess_matched_mix(
         reference_rms_dbfs: dbfs(reference_rms),
         rms_delta_db,
         residual_ratio,
-        residual_limit,
         deck_contribution_ratios,
+        deck_gain_estimates,
     };
-    if !residual_ratio.is_finite() || residual_ratio >= residual_limit {
+    if report.deck_gain_estimates.len() != contributions.len()
+        || report
+            .deck_gain_estimates
+            .iter()
+            .any(|gain| !gain.is_finite() || (*gain - 1.0).abs() > MAX_DECK_GAIN_DELTA)
+    {
         failures.push(format!(
-            "{label}: final mix differs from its time-aligned deck reference: residual={residual_ratio:.6}, limit={residual_limit:.6}, candidate_rms={:.3}dBFS, reference_rms={:.3}dBFS, deck_contributions={:?}",
-            report.candidate_rms_dbfs.unwrap_or(f64::NEG_INFINITY),
-            report.reference_rms_dbfs.unwrap_or(f64::NEG_INFINITY),
-            report.deck_contribution_ratios,
+            "{label}: final mix deck gains differ from their independent references: estimates={:?}, limit=1.0+/-{MAX_DECK_GAIN_DELTA:.3}, residual={residual_ratio:.6}, deck_contributions={:?}",
+            report.deck_gain_estimates, report.deck_contribution_ratios,
         ));
     }
     if rms_delta_db.is_none_or(|delta| delta.abs() > MAX_MATCHED_RMS_DELTA_DB) {
@@ -302,6 +305,60 @@ fn l2_norm_scaled(samples: &[f32], scale: f32) -> f64 {
         .map(|sample| f64::from(*sample * scale).powi(2))
         .sum::<f64>()
         .sqrt()
+}
+
+fn estimate_deck_gains(candidate: &[f32], contributions: &[Vec<f32>]) -> Option<Vec<f64>> {
+    let count = contributions.len();
+    if count == 0
+        || contributions
+            .iter()
+            .any(|values| values.len() != candidate.len())
+    {
+        return None;
+    }
+
+    let mut system = vec![vec![0.0; count + 1]; count];
+    for row in 0..count {
+        for column in 0..count {
+            system[row][column] = contributions[row]
+                .iter()
+                .zip(&contributions[column])
+                .map(|(left, right)| f64::from(*left) * f64::from(*right))
+                .sum();
+        }
+        system[row][count] = contributions[row]
+            .iter()
+            .zip(candidate)
+            .map(|(reference, actual)| f64::from(*reference) * f64::from(*actual))
+            .sum();
+    }
+
+    for pivot in 0..count {
+        let resolved = (pivot..count).max_by(|left, right| {
+            system[*left][pivot]
+                .abs()
+                .total_cmp(&system[*right][pivot].abs())
+        })?;
+        if system[resolved][pivot].abs() <= f64::EPSILON {
+            return None;
+        }
+        system.swap(pivot, resolved);
+        let divisor = system[pivot][pivot];
+        for column in pivot..=count {
+            system[pivot][column] /= divisor;
+        }
+        for row in 0..count {
+            if row == pivot {
+                continue;
+            }
+            let factor = system[row][pivot];
+            for column in pivot..=count {
+                system[row][column] -= factor * system[pivot][column];
+            }
+        }
+    }
+
+    Some(system.into_iter().map(|row| row[count]).collect())
 }
 
 fn dbfs(amplitude: f64) -> Option<f64> {
@@ -432,7 +489,7 @@ mod tests {
         let dropout_samples = BLOCK_FRAMES * channels;
         dropout[dropout_start..dropout_start + dropout_samples].fill(0.0);
         let mut dropout_failures = Vec::new();
-        let _ = assess_matched_mix("dropout", &dropout, &stems, &mut dropout_failures);
+        let _ = assess_audio("dropout", 44_100, &dropout, &mut dropout_failures);
         assert!(
             !dropout_failures.is_empty(),
             "matched oracle accepted a zeroed callback quantum"

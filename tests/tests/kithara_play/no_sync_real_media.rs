@@ -43,7 +43,8 @@ const MAX_SEEK_SECS: u32 = 8;
 const CONTROL_SETTLE_BLOCKS: usize = 4;
 const MIX_HEADROOM: f32 = 0.5;
 const MIN_FIXED_STEM_RMS_DBFS: f64 = -50.0;
-const MAX_MATCHED_RESIDUAL_RATIO: f64 = 0.01;
+const MIN_DECK_CONTRIBUTION_RATIO: f64 = 0.02;
+const MAX_DECK_GAIN_DELTA: f64 = 0.02;
 const MAX_MATCHED_RMS_DELTA_DB: f64 = 0.1;
 const POSITION_TOLERANCE_SECS: f64 = 0.15;
 const SEEK_POSITION_TOLERANCE_SECS: f64 = 513.0 / 44_100.0;
@@ -550,17 +551,20 @@ async fn reset_for_capture(
             failures,
         );
         for deck in &*decks {
-            if deck.seek_complete_epoch == deck.seek_request_epoch && deck.player.is_playing() {
+            if deck.seek_complete_epoch == deck.seek_request_epoch
+                && deck.muted_seek_underrun_epoch.is_none()
+                && deck.player.is_playing()
+            {
                 deck.player.pause();
             }
         }
         if decks.iter().any(|deck| deck.seek_terminal) {
             break;
         }
-        if decks
-            .iter()
-            .all(|deck| deck.seek_complete_epoch == deck.seek_request_epoch)
-        {
+        if decks.iter().all(|deck| {
+            deck.seek_complete_epoch == deck.seek_request_epoch
+                && deck.muted_seek_underrun_epoch.is_none()
+        }) {
             completed = true;
             break;
         }
