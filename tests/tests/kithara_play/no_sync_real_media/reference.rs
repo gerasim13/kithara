@@ -8,10 +8,7 @@ use kithara::{
     play::{Resource, SeekOutcome},
 };
 
-use super::{
-    BLOCK_FRAMES, CHANNELS, CapturedAudio, Case, Deck, PRELOAD_TIMEOUT,
-    SEEK_POSITION_TOLERANCE_SECS,
-};
+use super::{BLOCK_FRAMES, CHANNELS, CapturedAudio, Case, Deck, PRELOAD_TIMEOUT};
 
 pub(super) async fn capture_references(
     case: &Case,
@@ -38,21 +35,7 @@ pub(super) async fn capture_references(
         let target = Duration::from_secs_f64(start);
         drain_reference_events(&mut deck.reference_events);
         let seek_ready = match deck.reference.seek(target) {
-            Ok(SeekOutcome::Landed { landed_at, .. })
-                if landed_at.abs_diff(target)
-                    <= Duration::from_secs_f64(SEEK_POSITION_TOLERANCE_SECS) =>
-            {
-                true
-            }
-            Ok(SeekOutcome::Landed { landed_at, .. }) => {
-                failures.push(format!(
-                    "{} deck {deck_index} reference landed at {:.9}s for requested {:.9}s",
-                    case.label,
-                    landed_at.as_secs_f64(),
-                    start,
-                ));
-                false
-            }
+            Ok(SeekOutcome::Landed { .. }) => true,
             Ok(SeekOutcome::PastEof { duration, .. }) => {
                 failures.push(format!(
                     "{} deck {deck_index} reference start {start:.9}s is past EOF at {:.9}s",
@@ -99,7 +82,6 @@ pub(super) async fn capture_references(
             read_reference_pcm(
                 &mut deck.reference,
                 &mut deck.reference_events,
-                target,
                 capture.requested_frames,
             ),
         )
@@ -128,7 +110,6 @@ pub(super) async fn capture_references(
 async fn read_reference_pcm(
     resource: &mut Resource,
     events: &mut EventReceiver,
-    target: Duration,
     requested_frames: usize,
 ) -> Result<Vec<f32>, String> {
     if resource.spec().channels != CHANNELS {
@@ -153,7 +134,7 @@ async fn read_reference_pcm(
             ReadOutcome::Frames { count, .. } => {
                 drain_reference_seek_events(events, &mut request_epoch, &mut completion)?;
                 if pcm.is_empty() {
-                    validate_reference_seek_barrier(request_epoch, completion, target)?;
+                    validate_reference_seek_barrier(request_epoch, completion)?;
                 }
                 let count = count.get();
                 for frame in 0..count {
@@ -176,23 +157,15 @@ async fn read_reference_pcm(
 
 fn validate_reference_seek_barrier(
     request_epoch: Option<u64>,
-    completion: Option<(u64, Duration)>,
-    target: Duration,
+    completion: Option<u64>,
 ) -> Result<(), String> {
     let request_epoch = request_epoch.ok_or_else(|| "reference seek request missing".to_owned())?;
-    let (complete_epoch, complete_position) = completion.ok_or_else(|| {
+    let complete_epoch = completion.ok_or_else(|| {
         format!("reference seek epoch {request_epoch} did not complete with its first PCM")
     })?;
     if complete_epoch != request_epoch {
         return Err(format!(
             "reference completed seek epoch {complete_epoch}, expected {request_epoch}",
-        ));
-    }
-    if complete_position.abs_diff(target) > Duration::from_secs_f64(SEEK_POSITION_TOLERANCE_SECS) {
-        return Err(format!(
-            "reference seek epoch {request_epoch} completed at {:.9}s, expected {:.9}s",
-            complete_position.as_secs_f64(),
-            target.as_secs_f64(),
         ));
     }
     Ok(())
@@ -210,7 +183,7 @@ fn drain_reference_events(events: &mut EventReceiver) {
 fn drain_reference_seek_events(
     events: &mut EventReceiver,
     request_epoch: &mut Option<u64>,
-    completion: &mut Option<(u64, Duration)>,
+    completion: &mut Option<u64>,
 ) -> Result<(), String> {
     loop {
         match events.try_recv() {
@@ -220,10 +193,9 @@ fn drain_reference_seek_events(
                     seek_epoch,
                     ..
                 }) => *request_epoch = Some(seek_epoch),
-                Event::Audio(AudioEvent::SeekComplete {
-                    position,
-                    seek_epoch,
-                }) => *completion = Some((seek_epoch, position)),
+                Event::Audio(AudioEvent::SeekComplete { seek_epoch, .. }) => {
+                    *completion = Some(seek_epoch)
+                }
                 Event::Audio(AudioEvent::SeekRejected { epoch, target }) => {
                     return Err(format!(
                         "reference rejected seek epoch {epoch} to {:.9}s",

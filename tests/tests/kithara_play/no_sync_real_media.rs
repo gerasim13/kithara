@@ -30,7 +30,7 @@ use kithara_integration_tests::{
 };
 use oracle::{AudioLevelReport, AudioRole, MatchedMixReport, SampleContinuityReport};
 use reference::capture_references;
-use runtime::{Deck, DeckObservation};
+use runtime::{Deck, DeckObservation, EventPolicy};
 use serde::Serialize;
 
 const CHANNELS: u16 = 2;
@@ -209,7 +209,12 @@ async fn run_case(case: &Case, server: &TestServerHelper, record_artifacts: bool
 
     load_decks(case, &decks, &mut failures);
     runtime::record_transport_state(&session, "before first render", &mut failures);
-    runtime::drain_all_events(&mut decks, "startup", &mut failures);
+    runtime::drain_all_events(
+        &mut decks,
+        "startup",
+        EventPolicy::AudiblePlayback,
+        &mut failures,
+    );
 
     let deck_count = u16::try_from(decks.len()).expect("matrix deck count fits u16");
     let mix_level = MIX_HEADROOM / f32::from(deck_count);
@@ -384,12 +389,17 @@ async fn capture_pass(
             failures,
         );
         pcm.extend_from_slice(&block);
-        runtime::drain_all_events(decks, label, failures);
+        runtime::drain_all_events(decks, label, EventPolicy::AudiblePlayback, failures);
     }
     for deck in &*decks {
         deck.player.process_notifications();
     }
-    runtime::drain_all_events(decks, &format!("{label} final drain"), failures);
+    runtime::drain_all_events(
+        decks,
+        &format!("{label} final drain"),
+        EventPolicy::AudiblePlayback,
+        failures,
+    );
 
     let tapped = tap.drain();
     let tap_drops = tap.drops();
@@ -444,7 +454,15 @@ async fn reset_for_capture(
     for deck in &*decks {
         deck.player.pause();
     }
-    settle_controls(case, session, decks, "pause", failures).await;
+    settle_controls(
+        case,
+        session,
+        decks,
+        "pause",
+        EventPolicy::AudiblePlayback,
+        failures,
+    )
+    .await;
     if let Err(error) = apply_mix(decks.iter().map(|deck| (deck.player.as_ref(), 0.0))) {
         failures.push(format!(
             "{} {label}: mute before seek failed: {error}",
@@ -452,11 +470,20 @@ async fn reset_for_capture(
         ));
         return false;
     }
-    settle_controls(case, session, decks, "mute", failures).await;
+    settle_controls(
+        case,
+        session,
+        decks,
+        "mute",
+        EventPolicy::AudiblePlayback,
+        failures,
+    )
+    .await;
 
     for deck in &mut *decks {
         deck.seek_request_epoch = None;
         deck.seek_complete_epoch = None;
+        deck.muted_seek_underrun_epoch = None;
         deck.seek_terminal = false;
     }
     let mut requested = true;
@@ -485,7 +512,12 @@ async fn reset_for_capture(
     if !requested {
         return false;
     }
-    runtime::drain_all_events(decks, &format!("{label} seek request"), failures);
+    runtime::drain_all_events(
+        decks,
+        &format!("{label} seek request"),
+        EventPolicy::AudiblePlayback,
+        failures,
+    );
     if decks.iter().any(|deck| deck.seek_request_epoch.is_none()) {
         failures.push(format!(
             "{} {label}: seek request epochs were not observed for every deck: {:?}",
@@ -511,7 +543,12 @@ async fn reset_for_capture(
                 block.len(),
             ));
         }
-        runtime::drain_all_events(decks, &format!("{label} seek"), failures);
+        runtime::drain_all_events(
+            decks,
+            &format!("{label} seek"),
+            EventPolicy::MutedSeekSetup,
+            failures,
+        );
         for deck in &*decks {
             if deck.seek_complete_epoch == deck.seek_request_epoch && deck.player.is_playing() {
                 deck.player.pause();
@@ -547,7 +584,30 @@ async fn reset_for_capture(
         return false;
     }
 
-    settle_controls(case, session, decks, "post-seek pause", failures).await;
+    settle_controls(
+        case,
+        session,
+        decks,
+        "post-seek pause",
+        EventPolicy::MutedSeekSetup,
+        failures,
+    )
+    .await;
+    let active_muted_underruns = decks
+        .iter()
+        .enumerate()
+        .filter_map(|(deck_index, deck)| {
+            deck.muted_seek_underrun_epoch
+                .map(|seek_epoch| (deck_index, seek_epoch))
+        })
+        .collect::<Vec<_>>();
+    if !active_muted_underruns.is_empty() {
+        failures.push(format!(
+            "{} {label}: muted seek underruns remained active before gain restore: {active_muted_underruns:?}",
+            case.label,
+        ));
+        return false;
+    }
     if let Err(error) = apply_mix(
         decks
             .iter()
@@ -563,7 +623,15 @@ async fn reset_for_capture(
     for deck in &*decks {
         deck.player.play();
     }
-    settle_controls(case, session, decks, "gain settle", failures).await;
+    settle_controls(
+        case,
+        session,
+        decks,
+        "gain settle",
+        EventPolicy::AudiblePlayback,
+        failures,
+    )
+    .await;
     true
 }
 
@@ -572,6 +640,7 @@ async fn settle_controls(
     session: &OfflineSession,
     decks: &mut [Deck],
     phase: &str,
+    policy: EventPolicy,
     failures: &mut Vec<String>,
 ) {
     for block_index in 0..CONTROL_SETTLE_BLOCKS {
@@ -583,7 +652,7 @@ async fn settle_controls(
                 block.len(),
             ));
         }
-        runtime::drain_all_events(decks, phase, failures);
+        runtime::drain_all_events(decks, phase, policy, failures);
     }
 }
 
@@ -761,6 +830,7 @@ async fn prepare_deck(
         events,
         seek_request_epoch: None,
         seek_complete_epoch: None,
+        muted_seek_underrun_epoch: None,
         seek_terminal: false,
         capture_target_secs: CAPTURE_START_SECS + deck_index as f64 * CAPTURE_START_STEP_SECS,
         observation: DeckObservation {

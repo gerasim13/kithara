@@ -21,6 +21,7 @@ pub(super) struct Deck {
     pub(super) observation: DeckObservation,
     pub(super) seek_request_epoch: Option<u64>,
     pub(super) seek_complete_epoch: Option<u64>,
+    pub(super) muted_seek_underrun_epoch: Option<u64>,
     pub(super) seek_terminal: bool,
     pub(super) capture_target_secs: f64,
 }
@@ -33,10 +34,17 @@ pub(super) struct DeckObservation {
     pub(super) decoder_variants: Vec<Option<u32>>,
     pub(super) playback_resamplers: Vec<ResamplerObservation>,
     pub(super) seek_positions_secs: Vec<f64>,
+    pub(super) muted_seek_underruns: usize,
     pub(super) final_position_secs: f64,
     pub(super) capture_target_secs: f64,
     pub(super) hls: bool,
     pub(super) label: &'static str,
+}
+
+#[derive(Clone, Copy)]
+pub(super) enum EventPolicy {
+    AudiblePlayback,
+    MutedSeekSetup,
 }
 
 #[derive(Serialize)]
@@ -47,7 +55,12 @@ pub(super) struct ResamplerObservation {
     pub(super) source_sample_rate: u32,
 }
 
-pub(super) fn drain_all_events(decks: &mut [Deck], phase: &str, failures: &mut Vec<String>) {
+pub(super) fn drain_all_events(
+    decks: &mut [Deck],
+    phase: &str,
+    policy: EventPolicy,
+    failures: &mut Vec<String>,
+) {
     for (deck_index, deck) in decks.iter_mut().enumerate() {
         loop {
             match deck.events.try_recv() {
@@ -106,10 +119,39 @@ pub(super) fn drain_all_events(decks: &mut [Deck], phase: &str, failures: &mut V
                             ));
                         }
                     }
-                    Event::Audio(AudioEvent::UnderrunStarted { .. }) => failures.push(format!(
-                        "deck {deck_index} ({}) reported an underrun during {phase}",
-                        deck.observation.label,
-                    )),
+                    Event::Audio(AudioEvent::UnderrunStarted { seek_epoch, .. }) => {
+                        if matches!(policy, EventPolicy::MutedSeekSetup)
+                            && deck.seek_request_epoch == Some(seek_epoch)
+                        {
+                            if deck
+                                .muted_seek_underrun_epoch
+                                .replace(seek_epoch)
+                                .is_some()
+                            {
+                                failures.push(format!(
+                                    "deck {deck_index} ({}) reported duplicate muted seek underrun during {phase}",
+                                    deck.observation.label,
+                                ));
+                            }
+                            deck.observation.muted_seek_underruns += 1;
+                        } else {
+                            failures.push(format!(
+                                "deck {deck_index} ({}) reported an underrun during {phase}",
+                                deck.observation.label,
+                            ));
+                        }
+                    }
+                    Event::Audio(AudioEvent::UnderrunEnded { seek_epoch, .. }) => {
+                        if deck.muted_seek_underrun_epoch == Some(seek_epoch) {
+                            deck.muted_seek_underrun_epoch = None;
+                            if !matches!(policy, EventPolicy::MutedSeekSetup) {
+                                failures.push(format!(
+                                    "deck {deck_index} ({}) muted seek underrun recovered only after audible playback resumed during {phase}",
+                                    deck.observation.label,
+                                ));
+                            }
+                        }
+                    }
                     Event::Audio(AudioEvent::TrackFailed { failure, .. }) => {
                         deck.seek_terminal = true;
                         failures.push(format!(
