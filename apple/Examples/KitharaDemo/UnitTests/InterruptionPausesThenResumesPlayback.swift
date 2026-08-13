@@ -8,7 +8,7 @@ import Testing
 struct IntegrationRegressionsIOS {}
 
 extension IntegrationRegressionsIOS {
-    @Test("An audio-session interruption pauses and then resumes playback")
+    @Test("An audio-session interruption leaves playback controls responsive")
     func interruptionPausesThenResumesPlayback() async throws {
         let audioSession = AVAudioSession.sharedInstance()
         try audioSession.setCategory(.playback)
@@ -69,6 +69,55 @@ extension IntegrationRegressionsIOS {
             playback did not resume after AVAudioSession ended the \
             interruption with .shouldResume; rate=\(player.currentRate), \
             published=\(rates.snapshot())
+            """
+        )
+
+        rates.reset()
+        postInterruption(.began)
+        let pausedWithoutAutomaticResume = await reachedInterruptionFact {
+            player.currentRate == 0
+        }
+        #expect(
+            pausedWithoutAutomaticResume,
+            """
+            playback did not pause before the no-resume interruption ended; \
+            rate=\(player.currentRate), published=\(rates.snapshot())
+            """
+        )
+
+        rates.reset()
+        postInterruption(.ended)
+        #expect(
+            player.currentRate == 0,
+            """
+            playback resumed after AVAudioSession ended the interruption \
+            without .shouldResume; rate=\(player.currentRate), \
+            published=\(rates.snapshot())
+            """
+        )
+
+        player.play()
+        let resumedByControl = await reachedInterruptionFact {
+            player.currentRate > 0
+        }
+        #expect(
+            resumedByControl,
+            """
+            play() did not resume playback after the no-resume interruption; \
+            rate=\(player.currentRate), published=\(rates.snapshot())
+            """
+        )
+
+        rates.reset()
+        player.pause()
+        let pausedByControl = await reachedInterruptionFact {
+            player.currentRate == 0
+        }
+        #expect(
+            pausedByControl,
+            """
+            pause() did not pause playback after the no-resume interruption; \
+            rate=\(player.currentRate), published=\(rates.snapshot())
             """
         )
     }
