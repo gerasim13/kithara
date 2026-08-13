@@ -504,7 +504,7 @@ impl StressConfig {
         }
         for (name, mode) in &self.modes {
             require_value("stress mode name", name)?;
-            self.validate_mode(name, mode)?;
+            Self::validate_mode(name, mode)?;
         }
         if !self.modes.contains_key(&self.default_mode) {
             bail!(
@@ -604,7 +604,7 @@ impl StressConfig {
         Ok(())
     }
 
-    fn validate_mode(&self, name: &str, mode: &StressModeConfig) -> Result<()> {
+    fn validate_mode(name: &str, mode: &StressModeConfig) -> Result<()> {
         let mut features = BTreeSet::new();
         for feature in &mode.features {
             require_value(&format!("stress.modes.{name}.features"), feature)?;
@@ -695,7 +695,7 @@ impl ProjectConfig {
             glob::Pattern::new(pattern)
                 .with_context(|| format!("invalid architecture exclusion glob `{pattern}`"))?;
         }
-        let mut names = std::collections::BTreeSet::new();
+        let mut names = BTreeSet::new();
         for scenario in &self.architecture.runtime.scenarios {
             scenario.validate()?;
             if !names.insert(scenario.name()) {
@@ -705,8 +705,8 @@ impl ProjectConfig {
                 );
             }
         }
-        let mut stage_names = std::collections::BTreeSet::new();
-        let mut stage_tools = std::collections::BTreeSet::new();
+        let mut stage_names = BTreeSet::new();
+        let mut stage_tools = BTreeSet::new();
         for stage in &self.quality.assessment.deep_stages {
             if stage.name.is_empty()
                 || !stage.name.chars().all(|character| {
@@ -735,7 +735,7 @@ impl ProjectConfig {
             }
             stage_tools.extend(stage.tools.iter().map(String::as_str));
         }
-        let mut policy_tools = std::collections::BTreeSet::new();
+        let mut policy_tools = BTreeSet::new();
         for policy in &self.quality.assessment.not_applicable_tools {
             if policy.tool.is_empty()
                 || !policy.tool.chars().all(|character| {
