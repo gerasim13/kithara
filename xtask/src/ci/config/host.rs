@@ -59,6 +59,35 @@ pub(crate) struct CiHost {
     pub(crate) soft_cleanup_bytes: u64,
     pub(crate) sync_uid: u32,
     pub(crate) sync_user: String,
+    /// The Windows guest this machine serves its Windows lane from. Defaulted:
+    /// installed profiles predate it, and refusing to load would kill cleanup
+    /// on every host that has no Windows guest at all.
+    #[serde(default)]
+    pub(crate) windows: Option<WindowsGuest>,
+}
+
+/// The Windows guest a mac starts directly.
+///
+/// The Linux host's guest is described to libvirt, which owns its shape from
+/// then on. This one is a `qemu` process the host launches itself, so the
+/// shape belongs here rather than in a shell script beside the disk image.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+#[non_exhaustive]
+pub(crate) struct WindowsGuest {
+    pub(crate) vcpus: u32,
+    pub(crate) memory_mib: u32,
+    /// The disk carrying everything the guest writes: the page file, `TEMP`,
+    /// and build trees.
+    ///
+    /// Kept apart from the system image because Windows sizes its page file to
+    /// memory, and a `qcow2` grows to hold that and never returns the room on
+    /// its own. Eight gigabytes of RAM cost this host eight to twelve inside
+    /// the image it can neither shrink in place nor copy — the copy needs as
+    /// much free space as the image is large. Trimming the memory instead only
+    /// moves the growth: Windows 11 on ARM wants four gigabytes to begin with,
+    /// and a Rust build under that swaps, which grows the page file back.
+    pub(crate) data_disk_gib: u32,
 }
 
 impl CiHost {
