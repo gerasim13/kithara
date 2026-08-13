@@ -1,41 +1,52 @@
 #![cfg(not(target_arch = "wasm32"))]
 #![forbid(unsafe_code)]
 
-use std::path::PathBuf;
+#[path = "no_sync_real_media/oracle.rs"]
+mod oracle;
+#[path = "no_sync_real_media/reference.rs"]
+mod reference;
+#[path = "no_sync_real_media/runtime.rs"]
+mod runtime;
+
+use std::{num::NonZeroU32, path::PathBuf};
 
 use kithara::{
     audio::{StretchControls, StretchKind},
     bufpool::{BytePool, PcmPool},
-    events::{
-        AudioEvent, BusEvent, DecoderEvent, DownloaderEvent, Event, EventBus, EventReceiver,
-        FileEvent, HlsEvent, ItemEvent, PlaybackResamplerKind, PlayerEvent,
-    },
+    events::EventBus,
     hls::AbrMode,
     platform::{
         sync::Arc,
         time::{self, Duration},
-        tokio::sync::broadcast::error::TryRecvError,
     },
     play::{
-        Cmd, PlayerConfig, PlayerImpl, Reply, Resource, ResourceConfig, SelectTransition,
-        SessionDispatcher, SessionError, apply_mix,
+        Cmd, PlayerConfig, PlayerImpl, Reply, Resource, ResourceConfig, SeekOutcome,
+        SelectTransition, SessionDispatcher, apply_mix,
     },
 };
 use kithara_integration_tests::{
     TestServerHelper, audio_artifact::write_audio_artifact, cochlea::CochleaReport,
     memory_asset_store, offline::OfflineSession,
 };
+use oracle::{AudioLevelReport, AudioRole, MatchedMixReport, SampleContinuityReport};
+use reference::capture_references;
+use runtime::{Deck, DeckObservation};
 use serde::Serialize;
 
 const CHANNELS: u16 = 2;
 const SOURCE_RATE: u32 = 44_100;
 const BLOCK_FRAMES: usize = 512;
 const CAPTURE_SECS: u32 = 2;
-const MAX_WARMUP_SECS: u32 = 8;
-const MIN_WARMUP_POSITION_SECS: f64 = 0.5;
-const MIX_HEADROOM: f32 = 0.2;
-const ACTIVE_RMS: f64 = 1.0e-5;
+const CAPTURE_START_SECS: f64 = 10.0;
+const CAPTURE_START_STEP_SECS: f64 = 4.0;
+const MAX_SEEK_SECS: u32 = 8;
+const CONTROL_SETTLE_BLOCKS: usize = 4;
+const MIX_HEADROOM: f32 = 0.5;
+const MIN_FIXED_STEM_RMS_DBFS: f64 = -50.0;
+const MAX_MATCHED_RESIDUAL_RATIO: f64 = 0.01;
+const MAX_MATCHED_RMS_DELTA_DB: f64 = 0.1;
 const POSITION_TOLERANCE_SECS: f64 = 0.15;
+const SEEK_POSITION_TOLERANCE_SECS: f64 = 513.0 / 44_100.0;
 const EXACT_ZERO_RUN_LIMIT_FRAMES: usize = 8;
 const MIN_BOUNDARY_JUMP: f32 = 0.05;
 const BOUNDARY_OUTLIER_RATIO: f32 = 6.0;
@@ -112,33 +123,6 @@ const CASES: &[Case] = &[
     },
 ];
 
-struct Deck {
-    player: Arc<PlayerImpl>,
-    controls: Arc<StretchControls>,
-    events: EventReceiver,
-    observation: DeckObservation,
-}
-
-#[derive(Default, Serialize)]
-struct DeckObservation {
-    decoder_changes: usize,
-    decoder_sample_rates: Vec<u32>,
-    decoder_channels: Vec<u16>,
-    decoder_variants: Vec<Option<u32>>,
-    playback_resamplers: Vec<ResamplerObservation>,
-    final_position_secs: f64,
-    hls: bool,
-    label: &'static str,
-}
-
-#[derive(Serialize)]
-struct ResamplerObservation {
-    active: bool,
-    backend: &'static str,
-    host_sample_rate: u32,
-    source_sample_rate: u32,
-}
-
 #[derive(Serialize)]
 struct ArtifactManifest<'a> {
     case: &'a str,
@@ -148,26 +132,27 @@ struct ArtifactManifest<'a> {
     channels: u16,
     requested_frames: usize,
     captured_frames: usize,
+    capture_start_positions_secs: &'a [f64],
+    reference_path: &'static str,
+    direct_reference_gain: f32,
+    runtime_deck_gain: f32,
     mix_tap_drops: u64,
     mix_tap_matches_output: bool,
     sample_continuity: Option<&'a SampleContinuityReport>,
     cochlea: Option<&'a CochleaReport>,
+    audio_levels: &'a [AudioLevelReport],
+    matched_mix: Option<&'a MatchedMixReport>,
     decks: &'a [DeckObservation],
     failures: &'a [String],
 }
 
-#[derive(Serialize)]
-struct SampleContinuityReport {
-    discontinuity_boundaries: Vec<usize>,
-    longest_exact_zero_run_frames: usize,
-    max_boundary_jump: f32,
-    p99_adjacent_jump: f32,
-    repeated_block_boundaries: Vec<usize>,
-}
-
-struct OracleReports {
-    cochlea: Option<CochleaReport>,
-    sample_continuity: Option<SampleContinuityReport>,
+struct CapturedAudio {
+    label: String,
+    pcm: Vec<f32>,
+    requested_frames: usize,
+    tap_drops: u64,
+    tap_matches_output: bool,
+    start_positions_secs: Vec<f64>,
 }
 
 #[kithara::test(
@@ -222,55 +207,76 @@ async fn run_case(case: &Case, server: &TestServerHelper, record_artifacts: bool
         decks.push(prepare_deck(case, deck_index, media, server, &session).await);
     }
 
-    start_decks(case, &decks, &mut failures);
-    record_transport_state(&session, "before first render", &mut failures);
-    drain_all_events(&mut decks, "startup", &mut failures);
-    warm_to_steady_state(case, &session, &mut decks, &mut failures).await;
+    load_decks(case, &decks, &mut failures);
+    runtime::record_transport_state(&session, "before first render", &mut failures);
+    runtime::drain_all_events(&mut decks, "startup", &mut failures);
 
-    let capture_blocks = blocks_for_secs(case.host_rate, CAPTURE_SECS);
-    let requested_frames = capture_blocks * BLOCK_FRAMES;
-    let mut tap = session
-        .enable_mix_tap(requested_frames * usize::from(CHANNELS) + BLOCK_FRAMES)
-        .unwrap_or_else(|error| panic!("{}: enable final-mix tap: {error}", case.label));
-    let positions_before: Vec<f64> = decks
-        .iter()
-        .map(|deck| deck.player.position_seconds().unwrap_or(0.0))
-        .collect();
-
-    let mut capture = Vec::with_capacity(requested_frames * usize::from(CHANNELS));
-    let mut silent_blocks = Vec::new();
-    for block_index in 0..capture_blocks {
-        let block = render_paced(&session, &decks, case.host_rate).await;
-        inspect_block(case, block_index, &block, &mut silent_blocks, &mut failures);
-        capture.extend_from_slice(&block);
-        drain_all_events(&mut decks, "capture", &mut failures);
-    }
-    for deck in &decks {
-        deck.player.process_notifications();
-    }
-    drain_all_events(&mut decks, "capture final drain", &mut failures);
-
-    let tapped = tap.drain();
-    let tap_drops = tap.drops();
-    let captured_frames = capture.len() / usize::from(CHANNELS);
-    let tap_matches = assess_capture(
+    let deck_count = u16::try_from(decks.len()).expect("matrix deck count fits u16");
+    let mix_level = MIX_HEADROOM / f32::from(deck_count);
+    let mix_levels = vec![mix_level; decks.len()];
+    let final_mix = capture_pass(
         case,
-        &capture,
-        &tapped,
-        tap_drops,
-        requested_frames,
-        &silent_blocks,
-        &mut failures,
-    );
-    assess_decks(
-        case,
+        &session,
         &mut decks,
-        &positions_before,
-        requested_frames,
+        "final-mix",
+        &mix_levels,
+        &mut failures,
+    )
+    .await;
+    let direct_references = capture_references(case, &mut decks, &final_mix, &mut failures).await;
+    let direct_reference_pcm = direct_references
+        .iter()
+        .map(Vec::as_slice)
+        .collect::<Vec<_>>();
+    let matched_mix = oracle::assess_matched_mix(
+        case.label,
+        &final_mix.pcm,
+        &direct_reference_pcm,
         &mut failures,
     );
-    record_transport_state(&session, "after capture", &mut failures);
-    let oracles = assess_audio(case, &capture, &mut failures);
+
+    for (deck_index, deck) in decks.iter().enumerate() {
+        runtime::validate_deck(case, deck_index, deck, &mut failures);
+        runtime::record_control_state(case, deck_index, deck, "after capture", &mut failures);
+    }
+    runtime::record_transport_state(&session, "after capture", &mut failures);
+    let oracles = oracle::assess_audio(case.label, case.host_rate, &final_mix.pcm, &mut failures);
+
+    let mut audio_levels = direct_references
+        .iter()
+        .enumerate()
+        .map(|(deck_index, reference)| {
+            oracle::measure_audio_level(
+                &format!("direct-reference-{deck_index}"),
+                AudioRole::DirectReference,
+                case.host_rate,
+                reference,
+            )
+        })
+        .collect::<Vec<_>>();
+    audio_levels.extend(matched_mix.contributions.iter().enumerate().map(
+        |(deck_index, contribution)| {
+            oracle::measure_audio_level(
+                &format!("contribution-{deck_index}"),
+                AudioRole::Contribution,
+                case.host_rate,
+                contribution,
+            )
+        },
+    ));
+    audio_levels.push(oracle::measure_audio_level(
+        "reference-mix",
+        AudioRole::ReferenceMix,
+        case.host_rate,
+        &matched_mix.reference,
+    ));
+    audio_levels.push(oracle::measure_audio_level(
+        &final_mix.label,
+        AudioRole::FinalMix,
+        case.host_rate,
+        &final_mix.pcm,
+    ));
+    oracle::assess_listening_levels(case.label, &audio_levels, &mut failures);
 
     let observations: Vec<DeckObservation> =
         decks.into_iter().map(|deck| deck.observation).collect();
@@ -280,21 +286,51 @@ async fn run_case(case: &Case, server: &TestServerHelper, record_artifacts: bool
         deck_count: case.media.len(),
         host_sample_rate: case.host_rate,
         channels: CHANNELS,
-        requested_frames,
-        captured_frames,
-        mix_tap_drops: tap_drops,
-        mix_tap_matches_output: tap_matches,
+        requested_frames: final_mix.requested_frames,
+        captured_frames: final_mix.pcm.len() / usize::from(CHANNELS),
+        capture_start_positions_secs: &final_mix.start_positions_secs,
+        reference_path: "independent resource decoder and host resampler",
+        direct_reference_gain: 1.0,
+        runtime_deck_gain: mix_level,
+        mix_tap_drops: final_mix.tap_drops,
+        mix_tap_matches_output: final_mix.tap_matches_output,
         sample_continuity: oracles.sample_continuity.as_ref(),
         cochlea: oracles.cochlea.as_ref(),
+        audio_levels: &audio_levels,
+        matched_mix: matched_mix.report.as_ref(),
         decks: &observations,
         failures: &failures,
     };
     if record_artifacts {
+        let mut audio = direct_references
+            .iter()
+            .enumerate()
+            .map(|(deck_index, reference)| {
+                (
+                    format!("direct-reference-{deck_index}"),
+                    reference.as_slice(),
+                )
+            })
+            .collect::<Vec<_>>();
+        audio.extend(matched_mix.contributions.iter().enumerate().map(
+            |(deck_index, contribution)| {
+                (
+                    format!("contribution-{deck_index}"),
+                    contribution.as_slice(),
+                )
+            },
+        ));
+        audio.push(("reference-mix".to_owned(), &matched_mix.reference));
+        audio.push((final_mix.label.clone(), &final_mix.pcm));
+        let audio_slices = audio
+            .iter()
+            .map(|(label, pcm)| (label.as_str(), *pcm))
+            .collect::<Vec<_>>();
         let written = write_audio_artifact(
             case.label,
             case.host_rate,
             CHANNELS,
-            &[("final-mix", &capture)],
+            &audio_slices,
             &manifest,
         )
         .unwrap_or_else(|error| panic!("{}: write audio artifact: {error}", case.label));
@@ -306,40 +342,297 @@ async fn run_case(case: &Case, server: &TestServerHelper, record_artifacts: bool
     failures
 }
 
-fn assess_capture(
+async fn capture_pass(
     case: &Case,
+    session: &OfflineSession,
+    decks: &mut [Deck],
+    label: &str,
+    levels: &[f32],
+    failures: &mut Vec<String>,
+) -> CapturedAudio {
+    let ready = reset_for_capture(case, session, decks, label, levels, failures).await;
+    let capture_blocks = oracle::blocks_for_secs(case.host_rate, CAPTURE_SECS);
+    let requested_frames = capture_blocks * BLOCK_FRAMES;
+    if !ready {
+        return CapturedAudio {
+            label: label.to_owned(),
+            pcm: Vec::new(),
+            requested_frames,
+            tap_drops: 0,
+            tap_matches_output: false,
+            start_positions_secs: Vec::new(),
+        };
+    }
+
+    let mut tap = session
+        .enable_mix_tap(requested_frames * usize::from(CHANNELS) + BLOCK_FRAMES)
+        .unwrap_or_else(|error| panic!("{} {label}: enable mix tap: {error}", case.label));
+    let positions_before = decks
+        .iter()
+        .map(|deck| deck.player.position_seconds().unwrap_or(0.0))
+        .collect::<Vec<_>>();
+    let mut pcm = Vec::with_capacity(requested_frames * usize::from(CHANNELS));
+    let mut zero_blocks = Vec::new();
+    for block_index in 0..capture_blocks {
+        let block = render_paced(session, decks, case.host_rate).await;
+        inspect_block(
+            case.label,
+            label,
+            block_index,
+            &block,
+            &mut zero_blocks,
+            failures,
+        );
+        pcm.extend_from_slice(&block);
+        runtime::drain_all_events(decks, label, failures);
+    }
+    for deck in &*decks {
+        deck.player.process_notifications();
+    }
+    runtime::drain_all_events(decks, &format!("{label} final drain"), failures);
+
+    let tapped = tap.drain();
+    let tap_drops = tap.drops();
+    let tap_matches_output = assess_capture(
+        case.label,
+        label,
+        &pcm,
+        &tapped,
+        tap_drops,
+        requested_frames,
+        &zero_blocks,
+        failures,
+    );
+    disable_mix_tap(case.label, label, session, failures);
+    assess_position_advance(
+        case,
+        label,
+        decks,
+        &positions_before,
+        requested_frames,
+        failures,
+    );
+
+    CapturedAudio {
+        label: label.to_owned(),
+        pcm,
+        requested_frames,
+        tap_drops,
+        tap_matches_output,
+        start_positions_secs: positions_before,
+    }
+}
+
+async fn reset_for_capture(
+    case: &Case,
+    session: &OfflineSession,
+    decks: &mut [Deck],
+    label: &str,
+    levels: &[f32],
+    failures: &mut Vec<String>,
+) -> bool {
+    if levels.len() != decks.len() {
+        failures.push(format!(
+            "{} {label}: {} levels for {} decks",
+            case.label,
+            levels.len(),
+            decks.len(),
+        ));
+        return false;
+    }
+
+    for deck in &*decks {
+        deck.player.pause();
+    }
+    settle_controls(case, session, decks, "pause", failures).await;
+    if let Err(error) = apply_mix(decks.iter().map(|deck| (deck.player.as_ref(), 0.0))) {
+        failures.push(format!(
+            "{} {label}: mute before seek failed: {error}",
+            case.label,
+        ));
+        return false;
+    }
+    settle_controls(case, session, decks, "mute", failures).await;
+
+    for deck in &mut *decks {
+        deck.seek_request_epoch = None;
+        deck.seek_complete_epoch = None;
+        deck.seek_terminal = false;
+    }
+    let mut requested = true;
+    for (deck_index, deck) in decks.iter().enumerate() {
+        match deck.player.seek_seconds(deck.capture_target_secs) {
+            Ok(SeekOutcome::Landed { .. }) => {}
+            Ok(SeekOutcome::PastEof { duration, .. }) => {
+                requested = false;
+                failures.push(format!(
+                    "{} {label} deck {deck_index} ({}): capture start {:.3}s is past EOF at {:.3}s",
+                    case.label,
+                    deck.observation.label,
+                    deck.capture_target_secs,
+                    duration.as_secs_f64(),
+                ));
+            }
+            Err(error) => {
+                requested = false;
+                failures.push(format!(
+                    "{} {label} deck {deck_index} ({}): seek failed: {error}",
+                    case.label, deck.observation.label,
+                ));
+            }
+        }
+    }
+    if !requested {
+        return false;
+    }
+    runtime::drain_all_events(decks, &format!("{label} seek request"), failures);
+    if decks.iter().any(|deck| deck.seek_request_epoch.is_none()) {
+        failures.push(format!(
+            "{} {label}: seek request epochs were not observed for every deck: {:?}",
+            case.label,
+            decks
+                .iter()
+                .map(|deck| deck.seek_request_epoch)
+                .collect::<Vec<_>>(),
+        ));
+        return false;
+    }
+
+    for deck in &*decks {
+        deck.player.play();
+    }
+    let mut completed = false;
+    for _ in 0..oracle::blocks_for_secs(case.host_rate, MAX_SEEK_SECS) {
+        let block = render_paced(session, decks, case.host_rate).await;
+        if block.len() != BLOCK_FRAMES * usize::from(CHANNELS) {
+            failures.push(format!(
+                "{} {label}: seek render produced {} samples",
+                case.label,
+                block.len(),
+            ));
+        }
+        runtime::drain_all_events(decks, &format!("{label} seek"), failures);
+        for deck in &*decks {
+            if deck.seek_complete_epoch == deck.seek_request_epoch && deck.player.is_playing() {
+                deck.player.pause();
+            }
+        }
+        if decks.iter().any(|deck| deck.seek_terminal) {
+            break;
+        }
+        if decks
+            .iter()
+            .all(|deck| deck.seek_complete_epoch == deck.seek_request_epoch)
+        {
+            completed = true;
+            break;
+        }
+    }
+    for deck in &*decks {
+        deck.player.pause();
+    }
+    if !completed {
+        failures.push(format!(
+            "{} {label}: not every deck committed seek output within {MAX_SEEK_SECS}s; completions={:?}",
+            case.label,
+            decks
+                .iter()
+                .map(|deck| (
+                    deck.seek_request_epoch,
+                    deck.seek_complete_epoch,
+                    deck.seek_terminal,
+                ))
+                .collect::<Vec<_>>(),
+        ));
+        return false;
+    }
+
+    settle_controls(case, session, decks, "post-seek pause", failures).await;
+    if let Err(error) = apply_mix(
+        decks
+            .iter()
+            .zip(levels.iter().copied())
+            .map(|(deck, level)| (deck.player.as_ref(), level)),
+    ) {
+        failures.push(format!(
+            "{} {label}: apply capture levels failed: {error}",
+            case.label,
+        ));
+        return false;
+    }
+    for deck in &*decks {
+        deck.player.play();
+    }
+    settle_controls(case, session, decks, "gain settle", failures).await;
+    true
+}
+
+async fn settle_controls(
+    case: &Case,
+    session: &OfflineSession,
+    decks: &mut [Deck],
+    phase: &str,
+    failures: &mut Vec<String>,
+) {
+    for block_index in 0..CONTROL_SETTLE_BLOCKS {
+        let block = render_paced(session, decks, case.host_rate).await;
+        if block.len() != BLOCK_FRAMES * usize::from(CHANNELS) {
+            failures.push(format!(
+                "{} {phase} block {block_index}: produced {} samples",
+                case.label,
+                block.len(),
+            ));
+        }
+        runtime::drain_all_events(decks, phase, failures);
+    }
+}
+
+fn disable_mix_tap(case: &str, label: &str, session: &OfflineSession, failures: &mut Vec<String>) {
+    match session.exec(Cmd::DisableMixTap) {
+        Ok(Reply::Ok) => {}
+        Ok(Reply::Err(error)) => {
+            failures.push(format!("{case} {label}: disable mix tap returned {error}",))
+        }
+        Ok(_) => failures.push(format!(
+            "{case} {label}: disable mix tap returned an unexpected reply",
+        )),
+        Err(error) => failures.push(format!(
+            "{case} {label}: disable mix tap dispatch failed: {error}",
+        )),
+    }
+}
+
+fn assess_capture(
+    case: &str,
+    label: &str,
     capture: &[f32],
     tapped: &[f32],
     tap_drops: u64,
     requested_frames: usize,
-    silent_blocks: &[usize],
+    zero_blocks: &[usize],
     failures: &mut Vec<String>,
 ) -> bool {
     let expected_samples = requested_frames * usize::from(CHANNELS);
     if capture.len() != expected_samples {
         failures.push(format!(
-            "{}: final PCM shape was {} samples, expected {expected_samples}",
-            case.label,
+            "{case} {label}: PCM shape was {} samples, expected {expected_samples}",
             capture.len(),
         ));
     }
-    if !silent_blocks.is_empty() {
+    if !zero_blocks.is_empty() {
         failures.push(format!(
-            "{}: capture contained silent/near-silent callback blocks at {silent_blocks:?}",
-            case.label,
+            "{case} {label}: capture contained exact-zero callback blocks at {zero_blocks:?}",
         ));
     }
     if tap_drops != 0 {
         failures.push(format!(
-            "{}: final-mix tap dropped {tap_drops} samples",
-            case.label,
+            "{case} {label}: mix tap dropped {tap_drops} samples",
         ));
     }
     let tap_matches = tapped == capture;
     if !tap_matches {
         failures.push(format!(
-            "{}: final-mix tap did not match graph output bit-exactly (tap={}, output={})",
-            case.label,
+            "{case} {label}: mix tap did not match graph output bit-exactly (tap={}, output={})",
             tapped.len(),
             capture.len(),
         ));
@@ -347,8 +640,9 @@ fn assess_capture(
     tap_matches
 }
 
-fn assess_decks(
+fn assess_position_advance(
     case: &Case,
+    label: &str,
     decks: &mut [Deck],
     positions_before: &[f64],
     requested_frames: usize,
@@ -366,75 +660,21 @@ fn assess_decks(
         let advance = after - before;
         if (advance - duration).abs() > POSITION_TOLERANCE_SECS {
             failures.push(format!(
-                "{} deck {deck_index} ({}): media position advanced {advance:.6}s over {duration:.6}s of output",
+                "{} {label} deck {deck_index} ({}): media position advanced {advance:.6}s over {duration:.6}s of output",
                 case.label, deck.observation.label,
             ));
         }
-        validate_deck(case, deck_index, deck, failures);
     }
 }
 
-fn assess_audio(case: &Case, capture: &[f32], failures: &mut Vec<String>) -> OracleReports {
-    let finite = capture.iter().all(|sample| sample.is_finite());
-    let sample_continuity = finite.then(|| measure_sample_continuity(capture));
-    if let Some(report) = &sample_continuity {
-        if report.longest_exact_zero_run_frames >= EXACT_ZERO_RUN_LIMIT_FRAMES {
-            failures.push(format!(
-                "{}: final mix contained an exact-zero run of {} frames",
-                case.label, report.longest_exact_zero_run_frames,
-            ));
-        }
-        if !report.repeated_block_boundaries.is_empty() {
-            failures.push(format!(
-                "{}: final mix repeated callback blocks at frame boundaries {:?}",
-                case.label, report.repeated_block_boundaries,
-            ));
-        }
-        if !report.discontinuity_boundaries.is_empty() {
-            failures.push(format!(
-                "{}: final mix had callback-boundary jump outliers at frames {:?} (max={:.6}, adjacent_p99={:.6})",
-                case.label,
-                report.discontinuity_boundaries,
-                report.max_boundary_jump,
-                report.p99_adjacent_jump,
-            ));
-        }
-    }
-
-    let cochlea = finite.then(|| CochleaReport::measure(capture, CHANNELS, case.host_rate));
-    if let Some(report) = &cochlea {
-        if report.clipped_samples > 0 || report.true_peak_over_0dbtp {
-            failures.push(format!(
-                "{}: conservative mix clipped (samples={}, true_peak_over_0dbtp={})",
-                case.label, report.clipped_samples, report.true_peak_over_0dbtp,
-            ));
-        }
-    } else {
-        failures.push(format!(
-            "{}: final PCM contained non-finite samples, so Cochlea could not analyse it",
-            case.label,
-        ));
-    }
-
-    OracleReports {
-        cochlea,
-        sample_continuity,
-    }
-}
-
-fn start_decks(case: &Case, decks: &[Deck], failures: &mut Vec<String>) {
-    let deck_count = u16::try_from(case.media.len()).expect("matrix deck count fits u16");
-    let level = MIX_HEADROOM / f32::from(deck_count);
-    apply_mix(decks.iter().map(|deck| (deck.player.as_ref(), level)))
-        .unwrap_or_else(|error| panic!("{}: apply conservative deck mix: {error}", case.label));
-
+fn load_decks(case: &Case, decks: &[Deck], failures: &mut Vec<String>) {
     for (deck_index, deck) in decks.iter().enumerate() {
-        record_control_state(case, deck_index, deck, "before playback", failures);
+        runtime::record_control_state(case, deck_index, deck, "before playback", failures);
         deck.player
             .select_item_with_crossfade(
                 0,
                 SelectTransition {
-                    autoplay: true,
+                    autoplay: false,
                     crossfade_seconds: 0.0,
                 },
             )
@@ -475,7 +715,7 @@ async fn prepare_deck(
             .to_owned(),
         Media::Hls => server.asset("hls/master.m3u8").to_string(),
     };
-    let config =
+    let playback_config =
         ResourceConfig::for_src(ResourceConfig::parse_src(&src).unwrap_or_else(|error| {
             panic!("{} deck {deck_index}: parse {src}: {error}", case.label)
         }))
@@ -483,24 +723,30 @@ async fn prepare_deck(
         .byte_pool(player.byte_pool().clone())
         .pcm_pool(player.pcm_pool().clone())
         .initial_abr_mode(AbrMode::manual(0))
-        .discriminator(format!("{}-deck-{deck_index}", case.label))
+        .discriminator(format!("{}-deck-{deck_index}-playback", case.label))
         .build();
-    let mut resource = time::timeout(
-        PRELOAD_TIMEOUT,
-        Resource::new(player.prepare_config(config)),
+    let resource = open_resource(
+        case,
+        deck_index,
+        "playback",
+        player.prepare_config(playback_config),
     )
-    .await
-    .unwrap_or_else(|_| panic!("{} deck {deck_index}: resource open timed out", case.label))
-    .unwrap_or_else(|error| panic!("{} deck {deck_index}: open resource: {error}", case.label));
-    time::timeout(PRELOAD_TIMEOUT, resource.preload())
-        .await
-        .unwrap_or_else(|_| panic!("{} deck {deck_index}: preload timed out", case.label))
-        .unwrap_or_else(|error| {
-            panic!(
-                "{} deck {deck_index}: preload resource: {error}",
-                case.label
-            )
-        });
+    .await;
+
+    let reference_config =
+        ResourceConfig::for_src(ResourceConfig::parse_src(&src).unwrap_or_else(|error| {
+            panic!("{} deck {deck_index}: parse {src}: {error}", case.label)
+        }))
+        .store(memory_asset_store())
+        .byte_pool(player.byte_pool().clone())
+        .pcm_pool(player.pcm_pool().clone())
+        .initial_abr_mode(AbrMode::manual(0))
+        .host_sample_rate(NonZeroU32::new(case.host_rate).expect("host rate is non-zero"))
+        .events(EventBus::new(16_384))
+        .discriminator(format!("{}-deck-{deck_index}-reference", case.label))
+        .build();
+    let reference = open_resource(case, deck_index, "reference", reference_config).await;
+    let reference_events = reference.subscribe();
     player.insert(
         resource,
         Some(Arc::from(format!("{}-deck-{deck_index}", case.label))),
@@ -509,50 +755,53 @@ async fn prepare_deck(
 
     Deck {
         player,
+        reference,
+        reference_events,
         controls,
         events,
+        seek_request_epoch: None,
+        seek_complete_epoch: None,
+        seek_terminal: false,
+        capture_target_secs: CAPTURE_START_SECS + deck_index as f64 * CAPTURE_START_STEP_SECS,
         observation: DeckObservation {
             hls: matches!(media, Media::Hls),
             label: media.label(),
+            capture_target_secs: CAPTURE_START_SECS + deck_index as f64 * CAPTURE_START_STEP_SECS,
             ..DeckObservation::default()
         },
     }
 }
 
-async fn warm_to_steady_state(
+async fn open_resource(
     case: &Case,
-    session: &OfflineSession,
-    decks: &mut [Deck],
-    failures: &mut Vec<String>,
-) {
-    let max_blocks = blocks_for_secs(case.host_rate, MAX_WARMUP_SECS);
-    let mut active_streak = 0usize;
-    for _ in 0..max_blocks {
-        let block = render_paced(session, decks, case.host_rate).await;
-        drain_all_events(decks, "warmup", failures);
-        if block.len() == BLOCK_FRAMES * usize::from(CHANNELS)
-            && block.iter().all(|sample| sample.is_finite())
-            && rms(&block) >= ACTIVE_RMS
-            && decks.iter().all(|deck| {
-                deck.player.position_seconds().unwrap_or(0.0) >= MIN_WARMUP_POSITION_SECS
-            })
-        {
-            active_streak += 1;
-            if active_streak >= 2 {
-                return;
-            }
-        } else {
-            active_streak = 0;
-        }
-    }
-    failures.push(format!(
-        "{}: playback did not reach two consecutive active callback blocks within {MAX_WARMUP_SECS}s; positions={:?}",
-        case.label,
-        decks
-            .iter()
-            .map(|deck| deck.player.position_seconds())
-            .collect::<Vec<_>>(),
-    ));
+    deck_index: usize,
+    role: &str,
+    config: ResourceConfig,
+) -> Resource {
+    let mut resource = time::timeout(PRELOAD_TIMEOUT, Resource::new(config))
+        .await
+        .unwrap_or_else(|_| {
+            panic!(
+                "{} deck {deck_index}: {role} resource open timed out",
+                case.label
+            )
+        })
+        .unwrap_or_else(|error| {
+            panic!(
+                "{} deck {deck_index}: open {role} resource: {error}",
+                case.label
+            )
+        });
+    time::timeout(PRELOAD_TIMEOUT, resource.preload())
+        .await
+        .unwrap_or_else(|_| panic!("{} deck {deck_index}: {role} preload timed out", case.label))
+        .unwrap_or_else(|error| {
+            panic!(
+                "{} deck {deck_index}: preload {role} resource: {error}",
+                case.label
+            )
+        });
+    resource
 }
 
 async fn render_paced(session: &OfflineSession, decks: &[Deck], sample_rate: u32) -> Vec<f32> {
@@ -569,315 +818,27 @@ async fn render_paced(session: &OfflineSession, decks: &[Deck], sample_rate: u32
 }
 
 fn inspect_block(
-    case: &Case,
+    case: &str,
+    label: &str,
     block_index: usize,
     block: &[f32],
-    silent_blocks: &mut Vec<usize>,
+    zero_blocks: &mut Vec<usize>,
     failures: &mut Vec<String>,
 ) {
     let expected = BLOCK_FRAMES * usize::from(CHANNELS);
     if block.len() != expected {
         failures.push(format!(
-            "{} callback {block_index}: produced {} samples, expected {expected}",
-            case.label,
+            "{case} {label} callback {block_index}: produced {} samples, expected {expected}",
             block.len(),
         ));
     }
     if block.iter().any(|sample| !sample.is_finite()) {
         failures.push(format!(
-            "{} callback {block_index}: contained non-finite PCM",
-            case.label,
+            "{case} {label} callback {block_index}: contained non-finite PCM",
         ));
-    } else if rms(block) < ACTIVE_RMS {
-        silent_blocks.push(block_index);
+    } else if block.iter().all(|sample| *sample == 0.0) {
+        zero_blocks.push(block_index);
     }
-}
-
-fn drain_all_events(decks: &mut [Deck], phase: &str, failures: &mut Vec<String>) {
-    for (deck_index, deck) in decks.iter_mut().enumerate() {
-        loop {
-            match deck.events.try_recv() {
-                Ok(envelope) => match envelope.event {
-                    Event::Audio(AudioEvent::UnderrunStarted { .. }) => failures.push(format!(
-                        "deck {deck_index} ({}) reported an underrun during {phase}",
-                        deck.observation.label,
-                    )),
-                    Event::Audio(AudioEvent::TrackFailed { failure, .. }) => failures.push(format!(
-                        "deck {deck_index} ({}) reported track failure {failure:?} during {phase}",
-                        deck.observation.label,
-                    )),
-                    Event::Audio(AudioEvent::PlaybackResamplerConfigured {
-                        backend,
-                        host_sample_rate,
-                        source_sample_rate,
-                        active,
-                    }) => deck.observation.playback_resamplers.push(ResamplerObservation {
-                        active,
-                        backend: resampler_name(backend),
-                        host_sample_rate,
-                        source_sample_rate,
-                    }),
-                    Event::Decoder(DecoderEvent::DecoderChanged {
-                        sample_rate,
-                        channels,
-                        variant,
-                        ..
-                    }) => {
-                        deck.observation.decoder_changes += 1;
-                        deck.observation.decoder_sample_rates.push(sample_rate);
-                        deck.observation.decoder_channels.push(channels);
-                        deck.observation.decoder_variants.push(variant);
-                    }
-                    Event::Decoder(DecoderEvent::DecodeError {
-                        class,
-                        kind,
-                        detail,
-                        ..
-                    }) => failures.push(format!(
-                        "deck {deck_index} ({}) decode error {class:?}/{kind:?} ({detail}) during {phase}",
-                        deck.observation.label,
-                    )),
-                    Event::Player(PlayerEvent::ItemDidPlayToEnd { src, .. }) => failures.push(
-                        format!("deck {deck_index} ({src}) reached player EOF during {phase}"),
-                    ),
-                    Event::Player(PlayerEvent::ItemDidFail { src, .. }) => failures.push(format!(
-                        "deck {deck_index} ({src}) reported player track failure during {phase}",
-                    )),
-                    Event::Bus(BusEvent::Overflow { dropped, .. }) => failures.push(format!(
-                        "deck {deck_index} ({}) event bus dropped {dropped} events during {phase}",
-                        deck.observation.label,
-                    )),
-                    Event::Hls(HlsEvent::Error { error }) => failures.push(format!(
-                        "deck {deck_index} ({}) HLS error {error:?} during {phase}",
-                        deck.observation.label,
-                    )),
-                    Event::File(FileEvent::Error { error }) => failures.push(format!(
-                        "deck {deck_index} ({}) file error {error:?} during {phase}",
-                        deck.observation.label,
-                    )),
-                    Event::Downloader(DownloaderEvent::RequestFailed { error, .. }) => {
-                        failures.push(format!(
-                            "deck {deck_index} ({}) downloader request failed with {error:?} during {phase}",
-                            deck.observation.label,
-                        ));
-                    }
-                    Event::Downloader(DownloaderEvent::RetryExhausted { error, .. }) => {
-                        failures.push(format!(
-                            "deck {deck_index} ({}) downloader exhausted retries with {error:?} during {phase}",
-                            deck.observation.label,
-                        ));
-                    }
-                    Event::Item(ItemEvent::PlaybackStalled) => failures.push(format!(
-                        "deck {deck_index} ({}) playback stalled during {phase}",
-                        deck.observation.label,
-                    )),
-                    Event::Transport(event) => failures.push(format!(
-                        "deck {deck_index} ({}) emitted unexpected no-SYNC transport event {event:?} during {phase}",
-                        deck.observation.label,
-                    )),
-                    _ => {}
-                },
-                Err(TryRecvError::Empty) => break,
-                Err(TryRecvError::Lagged(count)) => failures.push(format!(
-                    "deck {deck_index} ({}) event receiver lost {count} events during {phase}",
-                    deck.observation.label,
-                )),
-                Err(TryRecvError::Closed) => {
-                    failures.push(format!(
-                        "deck {deck_index} ({}) event receiver closed during {phase}",
-                        deck.observation.label,
-                    ));
-                    break;
-                }
-            }
-        }
-    }
-}
-
-fn validate_deck(case: &Case, deck_index: usize, deck: &Deck, failures: &mut Vec<String>) {
-    if deck.observation.decoder_changes != 1 {
-        failures.push(format!(
-            "{} deck {deck_index} ({}): observed {} decoder changes, expected one initial decoder",
-            case.label, deck.observation.label, deck.observation.decoder_changes,
-        ));
-    }
-    if deck.observation.decoder_sample_rates != [case.host_rate] {
-        failures.push(format!(
-            "{} deck {deck_index} ({}): decoder output rates {:?}, expected [{}]",
-            case.label,
-            deck.observation.label,
-            deck.observation.decoder_sample_rates,
-            case.host_rate,
-        ));
-    }
-    if deck.observation.decoder_channels != [CHANNELS] {
-        failures.push(format!(
-            "{} deck {deck_index} ({}): decoder channels {:?}, expected [{CHANNELS}]",
-            case.label, deck.observation.label, deck.observation.decoder_channels,
-        ));
-    }
-    let expected_variants = if deck.observation.hls {
-        vec![Some(0)]
-    } else {
-        vec![None]
-    };
-    if deck.observation.decoder_variants != expected_variants {
-        failures.push(format!(
-            "{} deck {deck_index} ({}): decoder variants {:?}, expected {:?}",
-            case.label,
-            deck.observation.label,
-            deck.observation.decoder_variants,
-            expected_variants,
-        ));
-    }
-    let expected_active = case.host_rate != SOURCE_RATE;
-    for resampler in &deck.observation.playback_resamplers {
-        if resampler.host_sample_rate != case.host_rate
-            || resampler.source_sample_rate != SOURCE_RATE
-            || resampler.active != expected_active
-        {
-            failures.push(format!(
-                "{} deck {deck_index} ({}): resampler {} reported source={} host={} active={}, expected source={SOURCE_RATE} host={} active={expected_active}",
-                case.label,
-                deck.observation.label,
-                resampler.backend,
-                resampler.source_sample_rate,
-                resampler.host_sample_rate,
-                resampler.active,
-                case.host_rate,
-            ));
-        }
-    }
-    record_control_state(case, deck_index, deck, "after capture", failures);
-}
-
-fn record_control_state(
-    case: &Case,
-    deck_index: usize,
-    deck: &Deck,
-    phase: &str,
-    failures: &mut Vec<String>,
-) {
-    if deck.controls.speed() != 1.0
-        || deck.controls.region_plan().is_some()
-        || deck.controls.backend() != StretchKind::Signalsmith
-        || !deck.controls.keylock()
-    {
-        failures.push(format!(
-            "{} deck {deck_index} ({}): invalid no-SYNC controls {phase} (speed={}, plan={}, backend={:?}, keylock={})",
-            case.label,
-            deck.observation.label,
-            deck.controls.speed(),
-            deck.controls.region_plan().is_some(),
-            deck.controls.backend(),
-            deck.controls.keylock(),
-        ));
-    }
-}
-
-fn record_transport_state(session: &OfflineSession, phase: &str, failures: &mut Vec<String>) {
-    match session.exec(Cmd::QuerySessionTransport) {
-        Ok(Reply::Err(SessionError::TransportNotProcessed)) => {}
-        Ok(Reply::Err(error)) => failures.push(format!(
-            "session transport returned {error} {phase}, expected unconfigured",
-        )),
-        Ok(_) => failures.push(format!(
-            "session transport was configured {phase}, but this is a no-SYNC matrix",
-        )),
-        Err(error) => failures.push(format!("session transport query failed {phase}: {error}")),
-    }
-}
-
-const fn resampler_name(kind: PlaybackResamplerKind) -> &'static str {
-    match kind {
-        PlaybackResamplerKind::Rubato => "rubato",
-        PlaybackResamplerKind::Glide => "glide",
-        PlaybackResamplerKind::None => "none",
-        _ => "unknown",
-    }
-}
-
-fn blocks_for_secs(sample_rate: u32, seconds: u32) -> usize {
-    let frames = u64::from(sample_rate) * u64::from(seconds);
-    usize::try_from(frames)
-        .expect("matrix duration fits usize")
-        .div_ceil(BLOCK_FRAMES)
-}
-
-// Music has no time-aligned clean replay in this matrix, so this cannot prove
-// arbitrary in-band fidelity. It detects exact dropout/repeated buffers and
-// callback-boundary jumps; the synthetic byte-exact test owns wider distortion.
-fn measure_sample_continuity(samples: &[f32]) -> SampleContinuityReport {
-    let channels = usize::from(CHANNELS);
-    let frames = samples.len() / channels;
-    let mut longest_zero = 0usize;
-    let mut zero_run = 0usize;
-    for frame in samples[..frames * channels].chunks_exact(channels) {
-        if frame.iter().all(|sample| *sample == 0.0) {
-            zero_run += 1;
-            longest_zero = longest_zero.max(zero_run);
-        } else {
-            zero_run = 0;
-        }
-    }
-
-    let mut adjacent = Vec::with_capacity(frames.saturating_sub(1) * channels);
-    for frame in 1..frames {
-        for channel in 0..channels {
-            let before = samples[(frame - 1) * channels + channel];
-            let after = samples[frame * channels + channel];
-            adjacent.push((after - before).abs());
-        }
-    }
-    adjacent.sort_by(f32::total_cmp);
-    let p99_adjacent_jump = adjacent
-        .get(adjacent.len().saturating_sub(1) * 99 / 100)
-        .copied()
-        .unwrap_or(0.0);
-    let boundary_limit = MIN_BOUNDARY_JUMP.max(p99_adjacent_jump * BOUNDARY_OUTLIER_RATIO);
-
-    let mut discontinuities = Vec::new();
-    let mut repeated = Vec::new();
-    let mut max_boundary_jump = 0.0_f32;
-    for boundary in (BLOCK_FRAMES..frames).step_by(BLOCK_FRAMES) {
-        let jump = (0..channels)
-            .map(|channel| {
-                let before = samples[(boundary - 1) * channels + channel];
-                let after = samples[boundary * channels + channel];
-                (after - before).abs()
-            })
-            .fold(0.0_f32, f32::max);
-        max_boundary_jump = max_boundary_jump.max(jump);
-        if jump > boundary_limit {
-            discontinuities.push(boundary);
-        }
-
-        let previous = (boundary - BLOCK_FRAMES) * channels..boundary * channels;
-        let current = boundary * channels..(boundary + BLOCK_FRAMES).min(frames) * channels;
-        if current.len() == previous.len() && samples[previous] == samples[current] {
-            repeated.push(boundary);
-        }
-    }
-
-    SampleContinuityReport {
-        discontinuity_boundaries: discontinuities,
-        longest_exact_zero_run_frames: longest_zero,
-        max_boundary_jump,
-        p99_adjacent_jump,
-        repeated_block_boundaries: repeated,
-    }
-}
-
-fn rms(samples: &[f32]) -> f64 {
-    if samples.is_empty() {
-        return 0.0;
-    }
-    let power = samples
-        .iter()
-        .map(|sample| f64::from(*sample).powi(2))
-        .sum::<f64>()
-        / f64::from(u32::try_from(samples.len()).expect("callback samples fit u32"));
-    power.sqrt()
 }
 
 fn media_path(name: &str) -> PathBuf {

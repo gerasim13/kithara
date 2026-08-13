@@ -7,6 +7,14 @@ const WINDOW_MS: f64 = 5.0;
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[non_exhaustive]
 pub struct CochleaReport {
+    /// Integrated program loudness in LUFS, when defined.
+    pub integrated_lufs: Option<f64>,
+    /// Maximum momentary loudness in LUFS, when defined.
+    pub momentary_max_lufs: Option<f64>,
+    /// Sample peak in dBFS, when defined.
+    pub sample_peak_dbfs: Option<f64>,
+    /// True peak in dBTP, when defined.
+    pub true_peak_dbtp: Option<f64>,
     /// Number of threshold-silent analysis windows.
     pub silent_segments: usize,
     /// Detected onset timestamps in milliseconds.
@@ -39,6 +47,10 @@ impl CochleaReport {
                 .count();
 
         Self {
+            integrated_lufs: report.loudness.integrated_lufs,
+            momentary_max_lufs: report.loudness.momentary_max_lufs,
+            sample_peak_dbfs: report.loudness.sample_peak_dbfs,
+            true_peak_dbtp: report.loudness.true_peak_dbtp,
             silent_segments,
             onset_times_ms: report.onsets.times_ms,
             clipped_samples: report.clipping.clipped_samples,
@@ -164,5 +176,35 @@ mod tests {
         }
 
         assert_oracle_load_bearing(&control, channels, sample_rate, 512);
+    }
+
+    #[test]
+    fn loudness_fields_match_the_cochlea_probe() {
+        let sample_rate = 48_000;
+        let channels = 2;
+        let frames = sample_rate as usize;
+        let mut samples = Vec::with_capacity(frames * usize::from(channels));
+        for frame in 0..frames {
+            let phase = std::f32::consts::TAU * 997.0 * frame as f32 / sample_rate as f32;
+            let sample = phase.sin() * 0.25;
+            samples.extend(std::iter::repeat_n(sample, usize::from(channels)));
+        }
+        let actual = CochleaReport::measure(&samples, channels, sample_rate);
+        let expected = probe(
+            &Audio {
+                samples,
+                channels,
+                sample_rate,
+            },
+            &ProbeOpts::default(),
+        );
+
+        assert_eq!(actual.integrated_lufs, expected.loudness.integrated_lufs);
+        assert_eq!(
+            actual.momentary_max_lufs,
+            expected.loudness.momentary_max_lufs
+        );
+        assert_eq!(actual.sample_peak_dbfs, expected.loudness.sample_peak_dbfs);
+        assert_eq!(actual.true_peak_dbtp, expected.loudness.true_peak_dbtp);
     }
 }
