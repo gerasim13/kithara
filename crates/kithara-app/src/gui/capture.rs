@@ -22,8 +22,13 @@ use kithara_test_utils::kithara;
 use kithara_ui::{
     app::{App, Config, Frame as UiFrame, Ui},
     builtin,
-    render::{ReadValue, Reads, UiEvent, fonts, tree, vis::VisPass},
+    registry::ValueKind,
+    render::{
+        ReadValue, Reads, StereoLevels, TableCell, TableRow, UiEvent, WaveBucket, WaveformView,
+        fonts, tree, vis::VisPass,
+    },
 };
+use num_traits::cast::AsPrimitive;
 use png::{BitDepth, ColorType, Encoder};
 use vello::{
     AaConfig, AaSupport, RenderParams, Renderer, RendererOptions,
@@ -38,7 +43,11 @@ use vello::{
 
 use super::{
     frontend::studio_size,
-    studio_ui::{self, cache::DeckLayout, endpoints::StudioRegistry},
+    studio_ui::{
+        self,
+        cache::DeckLayout,
+        endpoints::{StudioRegistry, readable_kind},
+    },
     theme,
 };
 use crate::theme::Palette;
@@ -65,17 +74,129 @@ impl Geometry {
     }
 }
 
-struct Empty {
+struct Fixture {
     layout: DeckLayout,
+    rows: Vec<TableRow<'static>>,
 }
 
-impl Reads for Empty {
-    fn get(&self, _endpoint: &str) -> Option<ReadValue<'_>> {
-        None
+impl Fixture {
+    const BPM: f32 = 124.0;
+    const LEVELS: StereoLevels = StereoLevels {
+        l: 0.58,
+        r: 0.46,
+        volume: 0.72,
+    };
+    const SCALAR: f64 = 0.5;
+
+    fn new(layout: DeckLayout) -> Self {
+        Self {
+            layout,
+            rows: vec![
+                TableRow::new(
+                    vec![
+                        TableCell::text("deck", "A"),
+                        TableCell::text("title", "Midnight Signal"),
+                        TableCell::text("artist", "Kithara"),
+                    ],
+                    true,
+                ),
+                TableRow::new(
+                    vec![
+                        TableCell::text("deck", "B"),
+                        TableCell::text("title", "Parallel Lines"),
+                        TableCell::text("artist", "Studio Fixture"),
+                    ],
+                    false,
+                ),
+            ],
+        }
     }
 }
 
-impl App for Empty {
+impl Reads for Fixture {
+    fn get(&self, endpoint: &str) -> Option<ReadValue<'_>> {
+        const WAVE: [WaveBucket; 8] = [
+            WaveBucket {
+                high: 0.3,
+                low: -0.2,
+                mid: 0.05,
+            },
+            WaveBucket {
+                high: 0.6,
+                low: -0.4,
+                mid: 0.1,
+            },
+            WaveBucket {
+                high: 0.4,
+                low: -0.3,
+                mid: 0.0,
+            },
+            WaveBucket {
+                high: 0.8,
+                low: -0.7,
+                mid: 0.08,
+            },
+            WaveBucket {
+                high: 0.5,
+                low: -0.4,
+                mid: -0.04,
+            },
+            WaveBucket {
+                high: 0.7,
+                low: -0.5,
+                mid: 0.03,
+            },
+            WaveBucket {
+                high: 0.35,
+                low: -0.25,
+                mid: 0.0,
+            },
+            WaveBucket {
+                high: 0.55,
+                low: -0.45,
+                mid: 0.05,
+            },
+        ];
+
+        let base = endpoint.split_once('@').map_or(endpoint, |(base, _)| base);
+        let value = match readable_kind(base)? {
+            ValueKind::Bool => ReadValue::Bool(base == "deck.eq.three_band"),
+            ValueKind::Scalar => ReadValue::Scalar(if base == "ui.layout.decks" {
+                self.layout.index().as_()
+            } else {
+                Self::SCALAR
+            }),
+            ValueKind::Stereo => ReadValue::Stereo(Self::LEVELS),
+            ValueKind::Text => ReadValue::Text(text(base)),
+            ValueKind::Waveform => ReadValue::Waveform(WaveformView {
+                buckets: &WAVE,
+                beats: &[],
+                cues: &[],
+                downbeats: &[],
+                bpm: Some(Self::BPM),
+                r#loop: None,
+            }),
+            ValueKind::Table => ReadValue::Table(&self.rows),
+            ValueKind::Tree => ReadValue::Tree(&[]),
+            _ => return None,
+        };
+        Some(value)
+    }
+}
+
+fn text(endpoint: &str) -> &'static str {
+    match endpoint {
+        "deck.playback.bpm" => "124.0",
+        "deck.playback.remain" => "-03:42",
+        "deck.playback.tempo" => "+0.0%",
+        "deck.stream.quality" => "320 kbps",
+        "broadcast.url" => "OFF AIR",
+        "ui.drag.track" => "",
+        _ => "Fixture",
+    }
+}
+
+impl App for Fixture {
     fn document(&self) -> &str {
         studio_ui::entry(self.layout)
     }
@@ -222,7 +343,7 @@ fn iced(
 ) -> Result<Vec<u8>, String> {
     let compiled = studio_ui::compile_studio(layout)
         .map_err(|error| format!("compile {}: {error}", studio_ui::entry(layout)))?;
-    let reads = Empty { layout };
+    let reads = Fixture::new(layout);
     let skin = builtin::skin();
     let theme = theme::kithara_theme(&Palette::default().into());
     let mut ui = UserInterface::build(
@@ -262,7 +383,7 @@ fn masonry(
     let resolver = studio_ui::resolver();
     let endpoints = StudioRegistry::default();
     let mut ui = Ui::new(
-        Empty { layout },
+        Fixture::new(layout),
         Config::builder()
             .endpoints(&endpoints)
             .resolver(&resolver)

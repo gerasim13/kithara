@@ -328,6 +328,14 @@ pub(in crate::gui) fn readable_endpoints()
         .map(|endpoint| (endpoint.id, endpoint.scopes))
 }
 
+#[cfg(test)]
+pub(in crate::gui) fn readable_kind(id: &str) -> Option<ValueKind> {
+    ENDPOINTS
+        .iter()
+        .find(|endpoint| endpoint.category != EndpointCategory::Command && endpoint.id == id)
+        .map(|endpoint| endpoint.value)
+}
+
 struct Registration {
     endpoint: &'static Endpoint,
     desc: EndpointDesc,
