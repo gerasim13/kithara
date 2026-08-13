@@ -84,7 +84,7 @@ impl SyncHarness {
         Ok(self.finish_pcm_capture("free-control-lifecycle-mix", start_session_frame, &mut tap))
     }
 
-    fn start_pcm_capture(&mut self) -> Result<(i64, MixTapProbe)> {
+    pub(super) fn start_pcm_capture(&mut self) -> Result<(i64, MixTapProbe)> {
         let start_session_frame = self.current_session_frame()?;
         let capacity = self
             .case
@@ -99,7 +99,7 @@ impl SyncHarness {
         Ok((start_session_frame, tap))
     }
 
-    fn finish_pcm_capture(
+    pub(super) fn finish_pcm_capture(
         &mut self,
         label: impl Into<String>,
         start_session_frame: i64,
@@ -186,7 +186,7 @@ impl SyncHarness {
             .context("map session beat to session frame")
     }
 
-    fn current_session_bpm(&self) -> Result<f64> {
+    pub(super) fn current_session_bpm(&self) -> Result<f64> {
         match self.session.exec(Cmd::QuerySessionTransport)? {
             Reply::SessionTransport(snapshot) => Ok(snapshot.tempo().beats_per_minute()),
             Reply::Err(error) => bail!("{}: session tempo query failed: {error}", self.case),
@@ -279,13 +279,13 @@ impl SyncHarness {
         Ok(captures)
     }
 
-    fn apply_uniform_gain(&self) -> Result<()> {
+    pub(super) fn apply_uniform_gain(&self) -> Result<()> {
         let gain = self.deck_gain();
         apply_mix(self.decks.iter().map(|deck| (deck.player.as_ref(), gain)))
             .with_context(|| format!("{}: apply conservative shared gain", self.case))
     }
 
-    fn apply_gain_mask(&self, audible_deck: usize) -> Result<()> {
+    pub(super) fn apply_gain_mask(&self, audible_deck: usize) -> Result<()> {
         if audible_deck >= self.decks.len() {
             bail!("{}: no deck {audible_deck} to solo", self.case);
         }

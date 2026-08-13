@@ -13,7 +13,10 @@ use kithara_integration_tests::{
         RepositoryMp3, SyncAnalysisFixtures, SyncTrackFixture as AnalysisTrackFixture,
         repository_mp3, repository_mp3_pair, silvercomet_hls,
     },
-    sync_matrix::{SyncMedia, SyncTrackFixture, assert_behavioral_row},
+    sync_matrix::{
+        PassthroughProfile, SyncCase, SyncMedia, SyncTrackFixture, assert_behavioral_row,
+        assert_passthrough_row,
+    },
 };
 
 use super::sync_behavioral_matrix::{
@@ -71,6 +74,63 @@ async fn repository_prepared_analysis_matches_current_media_and_analyzer() -> Re
     Ok(())
 }
 
+#[kithara::test(
+    tokio,
+    multi_thread,
+    serial,
+    flash(false),
+    timeout(Duration::from_secs(900))
+)]
+#[case::hls_same_steady_two_decks_44k(
+    HLS_SAME,
+    SyncCase::passthrough(
+        "media-hls-same-passthrough-steady-two-decks-44k",
+        2,
+        44_100,
+        PassthroughProfile::Steady,
+    )
+)]
+#[case::mp3_same_lifecycle_two_decks_48k(
+    MP3_SAME,
+    SyncCase::passthrough(
+        "media-mp3-same-passthrough-lifecycle-two-decks-48k",
+        2,
+        48_000,
+        PassthroughProfile::Lifecycle,
+    )
+)]
+#[case::mp3_distinct_shared_worker_four_decks_44k(
+    MP3_DISTINCT,
+    SyncCase::passthrough(
+        "media-mp3-distinct-passthrough-shared-worker-four-decks-44k",
+        4,
+        44_100,
+        PassthroughProfile::SharedWorker,
+    )
+)]
+#[case::hls_with_mp3_steady_four_decks_48k(
+    HLS_WITH_MP3,
+    SyncCase::passthrough(
+        "media-hls-with-mp3-passthrough-steady-four-decks-48k",
+        4,
+        48_000,
+        PassthroughProfile::Steady,
+    )
+)]
+async fn prepared_media_passthrough_matches_control(
+    #[case] row: MediaRow,
+    #[case] case: SyncCase,
+) -> Result<()> {
+    let server = TestServerHelper::new().await;
+    let analysis = SyncAnalysisFixtures::production()
+        .with_context(|| format!("{}: initialize production analysis", row.id))?;
+    let inputs = media_inputs(row, &server).await?;
+    let media = prepared_media(row.id, &analysis, inputs).await?;
+    assert_passthrough_row(case, media)
+        .await
+        .with_context(|| format!("{}: run passthrough case {}", row.id, case.id))
+}
+
 #[kithara::test(tokio, multi_thread, serial, timeout(Duration::from_secs(900)))]
 #[case::hls_same_play_sync_seek(HLS_SAME, PLAY_SYNC_SEEK)]
 #[case::hls_same_play_seek_sync(HLS_SAME, PLAY_SEEK_SYNC)]
@@ -118,7 +178,7 @@ async fn repository_prepared_analysis_matches_current_media_and_analyzer() -> Re
 #[case::hls_mp3_tempo_down_30(HLS_WITH_MP3, DOWN_30)]
 async fn media_source_axis_runs_the_full_behavioral_row(
     #[case] row: MediaRow,
-    #[case] case: kithara_integration_tests::sync_matrix::SyncCase,
+    #[case] case: SyncCase,
 ) -> Result<()> {
     let server = TestServerHelper::new().await;
     let analysis = SyncAnalysisFixtures::production()

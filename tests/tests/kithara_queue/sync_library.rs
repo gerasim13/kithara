@@ -5,7 +5,9 @@ use kithara::platform::{CancelToken, time::Duration};
 use kithara_integration_tests::{
     kithara, rt_cancel,
     sync_fixture::{SyncAnalysisFixtures, library_pair_from_env},
-    sync_matrix::assert_behavioral_row,
+    sync_matrix::{
+        PassthroughProfile, SyncCase, SyncMedia, assert_behavioral_row, assert_passthrough_row,
+    },
 };
 
 use super::{
@@ -17,6 +19,18 @@ use super::{
 };
 
 const LIBRARY_ROW_ID: &str = "media-library-distinct-opt-in";
+const LIBRARY_PASSTHROUGH_STEADY: SyncCase = SyncCase::passthrough(
+    "library-passthrough-steady-44k",
+    2,
+    44_100,
+    PassthroughProfile::Steady,
+);
+const LIBRARY_PASSTHROUGH_LIFECYCLE: SyncCase = SyncCase::passthrough(
+    "library-passthrough-lifecycle-48k",
+    2,
+    48_000,
+    PassthroughProfile::Lifecycle,
+);
 
 #[kithara::test(tokio, multi_thread, serial, timeout(Duration::from_secs(1_800)))]
 #[ignore = "requires KITHARA_SYNC_LIBRARY; run explicitly with --run-ignored"]
@@ -33,8 +47,31 @@ const LIBRARY_ROW_ID: &str = "media-library-distinct-opt-in";
 #[case::tempo_down_30(DOWN_30)]
 async fn opt_in_library_pair_runs_the_full_behavioral_row(
     rt_cancel: CancelToken,
-    #[case] case: kithara_integration_tests::sync_matrix::SyncCase,
+    #[case] case: SyncCase,
 ) -> Result<()> {
+    let media = analyzed_library_media(&rt_cancel).await?;
+
+    let _report = assert_behavioral_row(case, media)
+        .await
+        .with_context(|| format!("run opt-in library behavioral case {}", case.id))?;
+    Ok(())
+}
+
+#[kithara::test(tokio, multi_thread, serial, timeout(Duration::from_secs(1_800)))]
+#[ignore = "requires KITHARA_SYNC_LIBRARY; run explicitly with --run-ignored"]
+#[case::steady_44k(LIBRARY_PASSTHROUGH_STEADY)]
+#[case::lifecycle_48k(LIBRARY_PASSTHROUGH_LIFECYCLE)]
+async fn opt_in_library_pair_passthrough_stays_unity_and_cochlea_clean(
+    rt_cancel: CancelToken,
+    #[case] case: SyncCase,
+) -> Result<()> {
+    let media = analyzed_library_media(&rt_cancel).await?;
+    assert_passthrough_row(case, media)
+        .await
+        .with_context(|| format!("run opt-in library passthrough case {}", case.id))
+}
+
+async fn analyzed_library_media(cancel: &CancelToken) -> Result<SyncMedia> {
     let pair = library_pair_from_env()
         .await
         .context("resolve explicitly configured sync music library")?
@@ -44,7 +81,7 @@ async fn opt_in_library_pair_runs_the_full_behavioral_row(
     let mut media = analyzed_media(
         LIBRARY_ROW_ID,
         &analysis,
-        &rt_cancel,
+        cancel,
         vec![
             ("deck-a", pair.deck_a().clone()),
             ("deck-b", pair.deck_b().clone()),
@@ -54,9 +91,5 @@ async fn opt_in_library_pair_runs_the_full_behavioral_row(
     if let Some(seed) = pair.library_seed() {
         media = media.with_library_seed(seed);
     }
-
-    let _report = assert_behavioral_row(case, media)
-        .await
-        .with_context(|| format!("run opt-in library behavioral case {}", case.id))?;
-    Ok(())
+    Ok(media)
 }

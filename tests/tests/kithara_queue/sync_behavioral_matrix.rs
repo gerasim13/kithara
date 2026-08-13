@@ -5,8 +5,8 @@ use kithara::platform::time::Duration;
 use kithara_integration_tests::{
     kithara,
     sync_matrix::{
-        OperationOrder, SyncCase, SyncOracle, TempoRide, persist_then_assert,
-        run_synthetic_behavioral_row,
+        OperationOrder, PassthroughProfile, SyncCase, SyncOracle, TempoRide,
+        assert_synthetic_passthrough_row, persist_then_assert, run_synthetic_behavioral_row,
     },
 };
 
@@ -87,6 +87,45 @@ pub(super) const DOWN_30: SyncCase = SyncCase::running(
     OperationOrder::PlaySyncSeek,
 )
 .with_tempo_ride(TempoRide::Down, 30);
+pub(super) const PASSTHROUGH_STEADY_44K: SyncCase = SyncCase::passthrough(
+    "synthetic-passthrough-steady-44k",
+    2,
+    44_100,
+    PassthroughProfile::Steady,
+);
+pub(super) const PASSTHROUGH_LIFECYCLE_48K: SyncCase = SyncCase::passthrough(
+    "synthetic-passthrough-lifecycle-48k",
+    2,
+    48_000,
+    PassthroughProfile::Lifecycle,
+);
+pub(super) const PASSTHROUGH_SHARED_WORKER_48K: SyncCase = SyncCase::passthrough(
+    "synthetic-passthrough-shared-worker-48k",
+    2,
+    48_000,
+    PassthroughProfile::SharedWorker,
+);
+
+#[kithara::test(tokio, multi_thread, serial, timeout(Duration::from_secs(180)))]
+async fn synthetic_passthrough_stays_unity_and_cochlea_clean() -> Result<()> {
+    assert_synthetic_passthrough_row(PASSTHROUGH_STEADY_44K).await
+}
+
+#[kithara::test(tokio, multi_thread, serial, timeout(Duration::from_secs(180)))]
+async fn synthetic_passthrough_lifecycle_stays_unity_and_cochlea_clean() -> Result<()> {
+    assert_synthetic_passthrough_row(PASSTHROUGH_LIFECYCLE_48K).await
+}
+
+#[kithara::test(
+    tokio,
+    multi_thread,
+    serial,
+    flash(false),
+    timeout(Duration::from_secs(240))
+)]
+async fn synthetic_passthrough_survives_shared_worker_contention() -> Result<()> {
+    assert_synthetic_passthrough_row(PASSTHROUGH_SHARED_WORKER_48K).await
+}
 
 #[kithara::test(tokio, multi_thread, serial, timeout(Duration::from_secs(900)))]
 #[case::play_sync_seek(PLAY_SYNC_SEEK)]

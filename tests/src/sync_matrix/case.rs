@@ -77,6 +77,31 @@ pub enum TempoRide {
     Up,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum PassthroughProfile {
+    Lifecycle,
+    SharedWorker,
+    Steady,
+}
+
+impl PassthroughProfile {
+    #[must_use]
+    pub(super) const fn label(self) -> &'static str {
+        match self {
+            Self::Lifecycle => "lifecycle",
+            Self::SharedWorker => "shared-worker",
+            Self::Steady => "steady",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum PlaybackMode {
+    Passthrough(PassthroughProfile),
+    Sync,
+}
+
 impl TempoRide {
     #[must_use]
     pub(super) const fn points(self) -> &'static [f64] {
@@ -115,6 +140,7 @@ pub struct SyncCase {
     pub id: &'static str,
     pub(super) initial: InitialDeckState,
     pub(super) order: OperationOrder,
+    pub(super) playback: PlaybackMode,
     pub(super) sample_rate: u32,
     pub(super) seek_seconds: f64,
     pub(super) session_bpm: f64,
@@ -137,6 +163,7 @@ impl SyncCase {
             id,
             initial: InitialDeckState::RunningStaggered,
             order,
+            playback: PlaybackMode::Sync,
             sample_rate,
             seek_seconds: 5.25,
             session_bpm: 120.0,
@@ -159,6 +186,33 @@ impl SyncCase {
             id,
             initial: InitialDeckState::Paused,
             order,
+            playback: PlaybackMode::Sync,
+            sample_rate,
+            seek_seconds: 5.25,
+            session_bpm: 120.0,
+            stagger_beats: 3.0 / 8.0,
+            tempo_ride: TempoRide::Triangle,
+            tempo_updates_hz: 60,
+        }
+    }
+
+    #[must_use]
+    pub const fn passthrough(
+        id: &'static str,
+        decks: usize,
+        sample_rate: u32,
+        profile: PassthroughProfile,
+    ) -> Self {
+        Self {
+            capture_beats: match profile {
+                PassthroughProfile::SharedWorker => 2,
+                PassthroughProfile::Lifecycle | PassthroughProfile::Steady => 6,
+            },
+            decks,
+            id,
+            initial: InitialDeckState::RunningStaggered,
+            order: OperationOrder::PlaySyncSeek,
+            playback: PlaybackMode::Passthrough(profile),
             sample_rate,
             seek_seconds: 5.25,
             session_bpm: 120.0,
@@ -184,13 +238,23 @@ impl SyncCase {
 
 impl fmt::Display for SyncCase {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            formatter,
-            "{} ({} decks, {} Hz, {})",
-            self.id,
-            self.decks,
-            self.sample_rate,
-            self.order.label(),
-        )
+        match self.playback {
+            PlaybackMode::Sync => write!(
+                formatter,
+                "{} ({} decks, {} Hz, {})",
+                self.id,
+                self.decks,
+                self.sample_rate,
+                self.order.label(),
+            ),
+            PlaybackMode::Passthrough(profile) => write!(
+                formatter,
+                "{} ({} decks, {} Hz, passthrough {})",
+                self.id,
+                self.decks,
+                self.sample_rate,
+                profile.label(),
+            ),
+        }
     }
 }

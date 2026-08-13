@@ -27,8 +27,8 @@ const ONSET_THRESHOLD: f32 = 0.015;
 
 pub(super) struct SyncDeck {
     pub(super) abr_target: Option<usize>,
-    abr_applied_target: Option<usize>,
-    abr_wait_target: Option<usize>,
+    pub(super) abr_applied_target: Option<usize>,
+    pub(super) abr_wait_target: Option<usize>,
     pub(super) analysis: TrackAnalysis,
     pub(super) bpm: f64,
     pub(super) event_lagged: u64,
@@ -36,7 +36,7 @@ pub(super) struct SyncDeck {
     pub(super) player: Arc<PlayerImpl>,
     pub(super) queue: Arc<Queue>,
     events: Mutex<EventReceiver>,
-    reload_id: TrackId,
+    pub(super) reload_id: TrackId,
     pub(super) sync_index: Option<usize>,
     pub(super) underruns: usize,
 }
@@ -749,7 +749,7 @@ impl SyncHarness {
         Ok(rendered)
     }
 
-    fn render_block(&mut self, frames: usize) -> Result<Vec<f32>> {
+    pub(super) fn render_block(&mut self, frames: usize) -> Result<Vec<f32>> {
         let block = self.session.render(frames);
         if let Some(capture) = &mut self.backend_capture {
             capture.extend_from_slice(&block);
