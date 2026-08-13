@@ -117,6 +117,10 @@ impl Lane {
             | Self::ReleasePublish => CacheGroup::Host,
         }
     }
+
+    pub(crate) const fn uses_sccache(self) -> bool {
+        !matches!(self.cache_group(), CacheGroup::Windows)
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
@@ -166,6 +170,11 @@ impl Consts {
     };
     const SCCACHE_COMMAND_ERROR: i32 = 2;
     const SCCACHE_CONNECT_ERROR: &str = "sccache: error: couldn't connect to server";
+    const SCCACHE_MISSING_UDS_CODE: Option<&str> = if cfg!(unix) {
+        Some("(os error 2)")
+    } else {
+        None
+    };
     const SCCACHE_STOP_MESSAGE: &str = "Stopping sccache server...";
 }
 
@@ -245,7 +254,8 @@ fn sccache_server_is_stopped(code: Option<i32>, stdout: &[u8], stderr: &[u8]) ->
     code == Some(Consts::SCCACHE_COMMAND_ERROR)
         && stdout.trim() == Consts::SCCACHE_STOP_MESSAGE
         && stderr.contains(Consts::SCCACHE_CONNECT_ERROR)
-        && Consts::CONNECTION_REFUSED_CODE.is_some_and(|code| stderr.contains(code))
+        && (Consts::CONNECTION_REFUSED_CODE.is_some_and(|code| stderr.contains(code))
+            || Consts::SCCACHE_MISSING_UDS_CODE.is_some_and(|code| stderr.contains(code)))
 }
 
 fn sccache_server_already_stopped(output: &Output) -> bool {
@@ -298,6 +308,7 @@ fn execute(args: &RunArgs, ctx: &Ctx) -> Result<()> {
     );
     let swiftpm_cache = environment.swiftpm_cache.clone();
     let temp = environment.temp.clone();
+    let uses_sccache = environment.uses_sccache();
     let process = Process::new(&ctx.root, environment.vars());
     // sccache is a daemon, and a running one keeps the cache directory it was
     // started with — a client inherits the server's configuration, not its
@@ -306,7 +317,9 @@ fn execute(args: &RunArgs, ctx: &Ctx) -> Result<()> {
     // exists fails every compilation while reporting only that a C compiler
     // exited 254. Retire the server so it restarts with what this job asked
     // for; the cache on disk is untouched.
-    retire_sccache_server(&process)?;
+    if uses_sccache {
+        retire_sccache_server(&process)?;
+    }
 
     let result = match args.lane {
         Lane::AppleLint => lane::apple::lint(&process, &ci_config, args.kind),
@@ -354,7 +367,9 @@ fn execute(args: &RunArgs, ctx: &Ctx) -> Result<()> {
         Lane::ReleasePublish => super::release::publish(&process, ctx, &ext, args.kind),
         Lane::Verdict => verdict::lane(&ctx.root, environment.shared_root(), args.kind),
     };
-    process.best_effort("sccache", &["--show-stats"], "sccache statistics");
+    if uses_sccache {
+        process.best_effort("sccache", &["--show-stats"], "sccache statistics");
+    }
     result
 }
 
@@ -416,6 +431,12 @@ mod tests {
     #[test]
     fn verdict_uses_the_macos_cache_group() {
         assert_eq!(Lane::Verdict.cache_group(), CacheGroup::Macos);
+    }
+
+    #[test]
+    fn windows_lanes_disable_sccache() {
+        assert!(!Lane::WindowsX64.uses_sccache());
+        assert!(Lane::LinuxCheck.uses_sccache());
     }
 
     #[test]
@@ -622,6 +643,17 @@ mod tests {
             Some(Consts::SCCACHE_COMMAND_ERROR),
             b"Stopping sccache server...\n",
             stderr.as_bytes(),
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_missing_sccache_uds_is_an_already_stopped_state() {
+        assert!(sccache_server_is_stopped(
+            Some(Consts::SCCACHE_COMMAND_ERROR),
+            b"Stopping sccache server...\n",
+            b"sccache: error: couldn't connect to server\n\
+              sccache: caused by: No such file or directory (os error 2)",
         ));
     }
 

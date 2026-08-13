@@ -2,19 +2,62 @@ use std::{
     collections::BTreeMap,
     env,
     ffi::{OsStr, OsString},
-    fs,
+    fs::{self, File, OpenOptions},
     path::{Path, PathBuf},
 };
 
 use anyhow::{Context, Result, bail};
+use fs4::{FileExt, TryLockError};
 use kithara_devtools::Ctx;
 
 use super::{
+    HOST_JOB_CONCURRENCY, SCCACHE_SLOT_CACHE_NAMESPACE, SCCACHE_SLOT_CONTROL_NAMESPACE,
     config::CiConfig,
     run::{CacheGroup, Lane},
 };
 
 pub(crate) const PROVISIONED_LINUX_IMAGE_ENV: &str = "KITHARA_CI_PROVISIONED_LINUX_IMAGE";
+
+struct SccacheSlot {
+    index: usize,
+    /// Keeping the file alive preserves exclusive ownership for the whole job.
+    _lock: File,
+}
+
+impl SccacheSlot {
+    fn acquire_shared(shared_root: &Path) -> Result<Self> {
+        let lock_root = shared_root.join(SCCACHE_SLOT_CONTROL_NAMESPACE);
+        fs::create_dir_all(&lock_root).with_context(|| {
+            format!(
+                "creating sccache slot lock directory {}",
+                lock_root.display()
+            )
+        })?;
+        for index in 0..HOST_JOB_CONCURRENCY {
+            let path = lock_root.join(format!("slot-{index}.lock"));
+            let lock = OpenOptions::new()
+                .create(true)
+                .truncate(false)
+                .read(true)
+                .write(true)
+                .open(&path)
+                .with_context(|| format!("opening sccache slot lock {}", path.display()))?;
+            match FileExt::try_lock(&lock) {
+                Ok(()) => return Ok(Self { index, _lock: lock }),
+                Err(TryLockError::WouldBlock) => {}
+                Err(TryLockError::Error(error)) => {
+                    return Err(error)
+                        .with_context(|| format!("locking sccache slot {}", path.display()));
+                }
+            }
+        }
+        bail!("all {HOST_JOB_CONCURRENCY} host sccache slots are already in use")
+    }
+
+    const fn index(&self) -> usize {
+        self.index
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum CacheTrust {
@@ -45,12 +88,152 @@ impl CacheTrust {
     }
 }
 
+fn parse_decimal_id(name: &str, value: &str) -> Result<u64> {
+    if value.is_empty() || !value.bytes().all(|byte| byte.is_ascii_digit()) {
+        bail!("{name} must be a decimal integer");
+    }
+    value
+        .parse()
+        .with_context(|| format!("{name} must be a decimal integer"))
+}
+
+fn disposable_slot(value: Option<&str>) -> Result<usize> {
+    let value = value.context("CI_CONCURRENT_ID must identify the disposable runner slot")?;
+    if value.is_empty() || !value.bytes().all(|byte| byte.is_ascii_digit()) {
+        bail!("CI_CONCURRENT_ID must be a decimal slot in 0..{HOST_JOB_CONCURRENCY}");
+    }
+    let slot = value
+        .parse::<usize>()
+        .context("CI_CONCURRENT_ID must fit in usize")?;
+    if slot >= HOST_JOB_CONCURRENCY {
+        bail!("CI_CONCURRENT_ID must be a decimal slot in 0..{HOST_JOB_CONCURRENCY}");
+    }
+    Ok(slot)
+}
+
+fn lease_owner(job_id: Option<&str>, pid: u32) -> Result<String> {
+    if let Some(job_id) = job_id {
+        Ok(format!("job-{}", parse_decimal_id("CI_JOB_ID", job_id)?))
+    } else {
+        Ok(format!("pid-{pid}"))
+    }
+}
+
+fn cache_lease(cache_root: &Path) -> Result<PathBuf> {
+    let job_id = if is_gitlab() {
+        Some(env::var("CI_JOB_ID").context("CI_JOB_ID must identify the GitLab job")?)
+    } else {
+        None
+    };
+    let owner = lease_owner(job_id.as_deref(), std::process::id())?;
+    Ok(cache_root.join(".kithara-ci-leases").join(owner))
+}
+
+struct SccachePaths {
+    directory: PathBuf,
+    server_uds: Option<PathBuf>,
+    cache_size: String,
+}
+
+impl SccachePaths {
+    fn shared(cache_root: &Path, slot: usize, cache_size: &str) -> Self {
+        Self {
+            directory: cache_root
+                .join(SCCACHE_SLOT_CACHE_NAMESPACE)
+                .join(format!("slot-{slot}")),
+            server_uds: cfg!(unix).then(|| {
+                scratch_root()
+                    .join("sccache")
+                    .join(format!("slot-{slot}.sock"))
+            }),
+            cache_size: cache_size.to_owned(),
+        }
+    }
+
+    fn disposable(cache_root: &Path, slot: usize, cache_size: &str) -> Self {
+        Self {
+            directory: cache_root
+                .join(SCCACHE_SLOT_CACHE_NAMESPACE)
+                .join(format!("slot-{slot}")),
+            server_uds: None,
+            cache_size: cache_size.to_owned(),
+        }
+    }
+
+    fn local(cache_root: &Path, cache_size: &str) -> Self {
+        Self {
+            directory: cache_root.join("sccache"),
+            server_uds: None,
+            cache_size: cache_size.to_owned(),
+        }
+    }
+}
+
+struct PreparedSccache {
+    paths: SccachePaths,
+    _slot: Option<SccacheSlot>,
+}
+
+impl PreparedSccache {
+    fn for_environment(
+        shared_root: &Path,
+        cache_root: &Path,
+        config: &CiConfig,
+        lane: Lane,
+    ) -> Result<Option<Self>> {
+        Self::for_target(cfg!(windows), shared_root, cache_root, config, lane)
+    }
+
+    fn for_target(
+        target_is_windows: bool,
+        shared_root: &Path,
+        cache_root: &Path,
+        config: &CiConfig,
+        lane: Lane,
+    ) -> Result<Option<Self>> {
+        if target_is_windows {
+            return Ok(None);
+        }
+        if !lane.uses_sccache() {
+            return Ok(None);
+        }
+        if !is_gitlab() {
+            return Ok(Some(Self {
+                paths: SccachePaths::local(cache_root, &config.host.sccache_size),
+                _slot: None,
+            }));
+        }
+        let cache_size = config.host.sccache_slot_size()?;
+        match lane.cache_group() {
+            CacheGroup::Linux => {
+                let concurrent_id = env::var("CI_CONCURRENT_ID")
+                    .context("CI_CONCURRENT_ID must identify the disposable runner slot")?;
+                let slot = disposable_slot(Some(&concurrent_id))?;
+                Ok(Some(Self {
+                    paths: SccachePaths::disposable(cache_root, slot, &cache_size),
+                    _slot: None,
+                }))
+            }
+            CacheGroup::Macos | CacheGroup::Host => {
+                let slot = SccacheSlot::acquire_shared(shared_root)?;
+                let paths = SccachePaths::shared(cache_root, slot.index(), &cache_size);
+                Ok(Some(Self {
+                    paths,
+                    _slot: Some(slot),
+                }))
+            }
+            CacheGroup::Windows => Ok(None),
+        }
+    }
+}
+
 pub(crate) struct CiEnvironment {
     shared_root: PathBuf,
     pub(crate) cache_root: PathBuf,
     pub(crate) swiftpm_cache: PathBuf,
     pub(crate) temp: PathBuf,
-    active_marker: PathBuf,
+    lease: PathBuf,
+    sccache: Option<PreparedSccache>,
     vars: BTreeMap<OsString, OsString>,
 }
 
@@ -85,12 +268,12 @@ impl CiEnvironment {
         let trust = CacheTrust::from_environment()?;
         let platform = format!("{}-{}", env::consts::OS, env::consts::ARCH);
         let cache_root = shared_root.join(trust.as_str()).join(platform);
-        let active_marker = cache_root.join(".kithara-ci-active");
+        let sccache = PreparedSccache::for_environment(&shared_root, &cache_root, config, lane)?;
+        let lease = cache_lease(&cache_root)?;
         let cargo_home = cache_root.join("cargo");
         let gradle_home = cache_root.join("gradle");
         let fixture_cache = cache_root.join("fixtures");
         let npm_cache = cache_root.join("npm");
-        let sccache_dir = cache_root.join("sccache");
         let swiftpm_cache = cache_root.join("swiftpm");
         let project_root =
             env::var_os("CI_PROJECT_DIR").map_or_else(|| ctx.root.clone(), PathBuf::from);
@@ -103,23 +286,37 @@ impl CiEnvironment {
             &gradle_home,
             &fixture_cache,
             &npm_cache,
-            &sccache_dir,
             &swiftpm_cache,
             &temp,
         ] {
             fs::create_dir_all(directory)
                 .with_context(|| format!("creating CI directory {}", directory.display()))?;
         }
-        fs::write(
-            &active_marker,
-            format!(
-                "pid={}\njob={}\n",
-                std::process::id(),
-                env::var("CI_JOB_ID").unwrap_or_else(|_| "local".into())
-            ),
-        )
-        .with_context(|| format!("creating CI cache lease {}", active_marker.display()))?;
-
+        if let Some(sccache) = &sccache {
+            fs::create_dir_all(&sccache.paths.directory).with_context(|| {
+                format!(
+                    "creating CI directory {}",
+                    sccache.paths.directory.display()
+                )
+            })?;
+        }
+        let lease_root = lease
+            .parent()
+            .context("CI cache lease must have a parent directory")?;
+        fs::create_dir_all(lease_root)
+            .with_context(|| format!("creating CI lease directory {}", lease_root.display()))?;
+        if let Some(socket_root) = sccache
+            .as_ref()
+            .and_then(|sccache| sccache.paths.server_uds.as_deref())
+            .and_then(Path::parent)
+        {
+            fs::create_dir_all(socket_root).with_context(|| {
+                format!(
+                    "creating sccache socket directory {}",
+                    socket_root.display()
+                )
+            })?;
+        }
         let mut vars = BTreeMap::new();
         set_path(&mut vars, &home, config)?;
         insert(&mut vars, "CARGO_HOME", cargo_home);
@@ -140,7 +337,7 @@ impl CiEnvironment {
         // spawns the compiler with the arguments themselves, which does not
         // fit: `failed to spawn rustc.exe: The filename or extension is too
         // long. (os error 206)`. The cache is worth less than the lane.
-        if !cfg!(windows) {
+        if sccache.is_some() {
             insert(&mut vars, "RUSTC_WRAPPER", "sccache");
         }
         insert(
@@ -148,9 +345,14 @@ impl CiEnvironment {
             "RUSTUP_HOME",
             env::var_os("RUSTUP_HOME").unwrap_or_else(|| home.join(".rustup").into_os_string()),
         );
-        insert(&mut vars, "SCCACHE_BASEDIRS", &project_root);
-        insert(&mut vars, "SCCACHE_CACHE_SIZE", &config.host.sccache_size);
-        insert(&mut vars, "SCCACHE_DIR", sccache_dir);
+        if let Some(sccache) = &sccache {
+            insert(&mut vars, "SCCACHE_BASEDIRS", &project_root);
+            insert(&mut vars, "SCCACHE_CACHE_SIZE", &sccache.paths.cache_size);
+            insert(&mut vars, "SCCACHE_DIR", &sccache.paths.directory);
+            if let Some(server_uds) = &sccache.paths.server_uds {
+                insert(&mut vars, "SCCACHE_SERVER_UDS", server_uds);
+            }
+        }
         insert(&mut vars, "SWIFTPM_CACHE_PATH", &swiftpm_cache);
         insert(&mut vars, "TMPDIR", &temp);
         insert(
@@ -183,12 +385,16 @@ impl CiEnvironment {
             }
         }
 
+        fs::write(&lease, format!("pid={}\n", std::process::id()))
+            .with_context(|| format!("creating CI cache lease {}", lease.display()))?;
+
         Ok(Self {
             shared_root,
             cache_root,
             swiftpm_cache,
             temp,
-            active_marker,
+            lease,
+            sccache,
             vars,
         })
     }
@@ -200,11 +406,15 @@ impl CiEnvironment {
     pub(crate) fn shared_root(&self) -> &Path {
         &self.shared_root
     }
+
+    pub(crate) const fn uses_sccache(&self) -> bool {
+        self.sccache.is_some()
+    }
 }
 
 impl Drop for CiEnvironment {
     fn drop(&mut self) {
-        let _ = fs::remove_file(&self.active_marker);
+        let _ = fs::remove_file(&self.lease);
     }
 }
 
@@ -307,7 +517,261 @@ fn insert(
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
+    use std::process::Command;
+
+    #[cfg(unix)]
+    use kithara_devtools::common::project::ProjectConfig;
+
     use super::*;
+
+    #[cfg(unix)]
+    struct ChildEnv;
+
+    #[cfg(unix)]
+    impl ChildEnv {
+        const CACHE_ROOT: &str = "KITHARA_TEST_CACHE_ROOT";
+        const FAILED_PREPARE: &str = "KITHARA_TEST_FAILED_ENV_CHILD";
+        const PREPARED: &str = "KITHARA_TEST_PREPARED_ENV_CHILD";
+    }
+
+    #[test]
+    fn shared_shell_slots_are_exclusive_and_reusable() {
+        let directory = tempfile::tempdir().unwrap();
+
+        let first = SccacheSlot::acquire_shared(directory.path()).unwrap();
+        let second = SccacheSlot::acquire_shared(directory.path()).unwrap();
+
+        assert_eq!(first.index(), 0);
+        assert_eq!(second.index(), 1);
+        assert!(SccacheSlot::acquire_shared(directory.path()).is_err());
+        drop(first);
+        assert_eq!(
+            SccacheSlot::acquire_shared(directory.path())
+                .unwrap()
+                .index(),
+            0
+        );
+    }
+
+    #[test]
+    fn shared_shell_slot_paths_do_not_contain_runner_identity() {
+        let root = Path::new("/cache/review/macos-aarch64");
+
+        let paths = SccachePaths::shared(root, 1, "25G");
+
+        let local = SccachePaths::local(root, "50G");
+        assert_eq!(paths.directory, root.join("sccache-slots/slot-1"));
+        assert!(!paths.directory.starts_with(&local.directory));
+        assert!(!local.directory.starts_with(&paths.directory));
+        #[cfg(unix)]
+        assert_eq!(
+            paths.server_uds,
+            Some(PathBuf::from("/tmp/kithara-ci/sccache/slot-1.sock"))
+        );
+        #[cfg(not(unix))]
+        assert_eq!(paths.server_uds, None);
+        assert_eq!(paths.cache_size, "25G");
+    }
+
+    #[test]
+    fn disposable_slot_rejects_the_concurrency_boundary() {
+        assert!(disposable_slot(Some("2")).is_err());
+        assert!(disposable_slot(None).is_err());
+        assert!(disposable_slot(Some("slot-1")).is_err());
+    }
+
+    #[test]
+    fn disposable_slots_use_concurrent_id_for_disk_only() {
+        let root = Path::new("/cache/review/linux-aarch64");
+
+        assert_eq!(disposable_slot(Some("0")).unwrap(), 0);
+        assert_eq!(disposable_slot(Some("1")).unwrap(), 1);
+        let paths = SccachePaths::disposable(root, 1, "25G");
+        assert_eq!(paths.directory, root.join("sccache-slots/slot-1"));
+        assert_eq!(paths.server_uds, None);
+    }
+
+    #[test]
+    fn windows_prepared_environment_disables_sccache() {
+        let config = super::super::config::fixture();
+        let root = Path::new("/cache");
+
+        let prepared =
+            PreparedSccache::for_environment(root, root, &config, Lane::WindowsX64).unwrap();
+
+        assert!(prepared.is_none());
+    }
+
+    #[test]
+    fn windows_target_disables_sccache_independently_of_lane() {
+        let config = super::super::config::fixture();
+        let root = Path::new("/cache");
+
+        let prepared =
+            PreparedSccache::for_target(true, root, root, &config, Lane::AppleTest).unwrap();
+
+        assert!(prepared.is_none());
+    }
+
+    #[test]
+    fn lease_names_use_the_job_or_local_process() {
+        assert_eq!(lease_owner(Some("29"), 41).unwrap(), "job-29");
+        assert_eq!(lease_owner(None, 41).unwrap(), "pid-41");
+        assert!(lease_owner(Some("../29"), 41).is_err());
+    }
+
+    #[test]
+    fn shared_slot_endpoint_is_trust_independent_and_disks_are_separate() {
+        let review_root = Path::new("/cache/review/macos-aarch64");
+        let trusted_root = Path::new("/cache/trusted/macos-aarch64");
+        let linux_root = Path::new("/cache/review/linux-aarch64");
+        let review = SccachePaths::shared(review_root, 1, "25G");
+        let same = SccachePaths::shared(review_root, 1, "25G");
+        let trusted = SccachePaths::shared(trusted_root, 1, "25G");
+        let linux = SccachePaths::shared(linux_root, 1, "25G");
+        let other_slot = SccachePaths::shared(review_root, 0, "25G");
+
+        assert_eq!(review.directory, same.directory);
+        assert_eq!(review.server_uds, same.server_uds);
+        assert_eq!(review.server_uds, trusted.server_uds);
+        assert_ne!(review.directory, trusted.directory);
+        assert_ne!(review.directory, linux.directory);
+        #[cfg(unix)]
+        assert_ne!(review.server_uds, other_slot.server_uds);
+        assert_ne!(review.directory, other_slot.directory);
+        assert_eq!(review.cache_size, "25G");
+        assert_eq!(other_slot.cache_size, "25G");
+    }
+
+    #[test]
+    fn local_sccache_paths_keep_the_shared_layout_and_configured_budget() {
+        let root = Path::new("/cache/review/macos-aarch64");
+
+        let paths = SccachePaths::local(root, "50G");
+
+        assert_eq!(paths.directory, root.join("sccache"));
+        assert_eq!(paths.server_uds, None);
+        assert_eq!(paths.cache_size, "50G");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn gitlab_shell_environment_holds_a_host_slot_and_job_lease() {
+        if env::var_os(ChildEnv::PREPARED).is_some() {
+            let root = PathBuf::from(env::var_os(ChildEnv::CACHE_ROOT).unwrap());
+            let project = root.join("project");
+            fs::create_dir_all(&project).unwrap();
+            let ctx = Ctx::new(project, ProjectConfig::default());
+            let config = super::super::config::fixture();
+
+            let environment = CiEnvironment::prepare(&ctx, &config, Lane::AppleTest).unwrap();
+            let vars = environment.vars();
+            let cache_root =
+                root.join("review")
+                    .join(format!("{}-{}", env::consts::OS, env::consts::ARCH));
+
+            assert_eq!(
+                vars.get(OsStr::new("SCCACHE_DIR")).map(OsString::as_os_str),
+                Some(cache_root.join("sccache-slots/slot-0").as_os_str())
+            );
+            assert_eq!(
+                vars.get(OsStr::new("SCCACHE_SERVER_UDS"))
+                    .map(OsString::as_os_str),
+                Some(OsStr::new("/tmp/kithara-ci/sccache/slot-0.sock"))
+            );
+            assert_eq!(
+                vars.get(OsStr::new("SCCACHE_CACHE_SIZE"))
+                    .map(OsString::as_os_str),
+                Some(OsStr::new("25G"))
+            );
+            let lease = cache_root.join(".kithara-ci-leases/job-29");
+            assert!(lease.is_file());
+            let lock_path = root.join(".kithara-ci-sccache-slots/slot-0.lock");
+            let contender = OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(lock_path)
+                .unwrap();
+            assert!(matches!(
+                FileExt::try_lock(&contender),
+                Err(TryLockError::WouldBlock)
+            ));
+            drop(environment);
+            assert!(!lease.exists());
+            FileExt::try_lock(&contender).unwrap();
+            return;
+        }
+
+        let directory = tempfile::tempdir().unwrap();
+        let output = Command::new(env::current_exe().unwrap())
+            .arg("gitlab_shell_environment_holds_a_host_slot_and_job_lease")
+            .arg("--nocapture")
+            .env(ChildEnv::PREPARED, "1")
+            .env(ChildEnv::CACHE_ROOT, directory.path())
+            .env("KITHARA_CI_CACHE_ROOT", directory.path())
+            .env("KITHARA_CACHE_TRUST", "review")
+            .env("GITLAB_CI", "true")
+            .env("CI_RUNNER_ID", "999")
+            .env("CI_CONCURRENT_ID", "1")
+            .env("CI_JOB_ID", "29")
+            .env("HOME", directory.path().join("home"))
+            .env_remove("CI")
+            .output()
+            .unwrap();
+
+        assert!(
+            output.status.success(),
+            "child failed:\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn failed_prepare_never_publishes_a_cache_lease() {
+        if env::var_os(ChildEnv::FAILED_PREPARE).is_some() {
+            let root = PathBuf::from(env::var_os(ChildEnv::CACHE_ROOT).unwrap());
+            let project = root.join("project");
+            fs::create_dir_all(&project).unwrap();
+            let ctx = Ctx::new(project, ProjectConfig::default());
+            let config = super::super::config::fixture();
+
+            let Err(error) = CiEnvironment::prepare(&ctx, &config, Lane::AppleTest) else {
+                panic!("prepare unexpectedly succeeded");
+            };
+            assert!(error.to_string().contains("joining CI PATH"));
+            let cache_root =
+                root.join("review")
+                    .join(format!("{}-{}", env::consts::OS, env::consts::ARCH));
+            assert!(!cache_root.join(".kithara-ci-leases/job-30").exists());
+            return;
+        }
+
+        let directory = tempfile::tempdir().unwrap();
+        let output = Command::new(env::current_exe().unwrap())
+            .arg("failed_prepare_never_publishes_a_cache_lease")
+            .arg("--nocapture")
+            .env(ChildEnv::FAILED_PREPARE, "1")
+            .env(ChildEnv::CACHE_ROOT, directory.path())
+            .env("KITHARA_CI_CACHE_ROOT", directory.path())
+            .env("KITHARA_CACHE_TRUST", "review")
+            .env("GITLAB_CI", "true")
+            .env("CI_CONCURRENT_ID", "0")
+            .env("CI_JOB_ID", "30")
+            .env("HOME", directory.path().join("invalid:home"))
+            .env_remove("CI")
+            .output()
+            .unwrap();
+
+        assert!(
+            output.status.success(),
+            "child failed:\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
 
     #[test]
     fn cache_trust_is_strict() {

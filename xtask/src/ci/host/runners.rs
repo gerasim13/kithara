@@ -11,6 +11,7 @@ use tracing::info;
 
 use super::services::launchd;
 use crate::ci::{
+    HOST_JOB_CONCURRENCY,
     config::{CiConfig, MAC_CONFIG_PATH},
     environment::PROVISIONED_LINUX_IMAGE_ENV,
     process::Process,
@@ -21,11 +22,17 @@ pub(super) struct RunnerManager<'a> {
     pub(super) process: &'a Process,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum LaunchdServiceState {
+    Loaded,
+    Absent,
+}
+
 impl<'a> RunnerManager<'a> {
-    const CONCURRENCY: i64 = 2;
     /// Two simultaneous jobs may each occupy four Cargo workers. The remaining
     /// two cores stay available to the runner, sccache, linkers, and platform tools.
     const CARGO_BUILD_JOBS_ENV: &'static str = "CARGO_BUILD_JOBS=4";
+    const LEGACY_MACOS_RUNNER_LABEL: &'static str = "com.zvuk.kithara-ci.macos-runner";
 
     pub(super) const fn new(config: &'a CiConfig, process: &'a Process) -> Self {
         Self { config, process }
@@ -93,8 +100,68 @@ impl<'a> RunnerManager<'a> {
             ],
             "verify GitLab runners",
         )?;
+        let uid = self.process.capture("/usr/bin/id", &["-u"], "CI user id")?;
+        self.retire_legacy_macos_runner(&format!("gui/{uid}"), Path::new("/bin/launchctl"))?;
         info!("GitLab runner configuration installed");
         Ok(())
+    }
+
+    fn retire_legacy_macos_runner(&self, domain: &str, launchctl: &Path) -> Result<()> {
+        let service = format!("{domain}/{}", Self::LEGACY_MACOS_RUNNER_LABEL);
+        let status = self
+            .process
+            .command(launchctl)
+            .args(["bootout", &service])
+            .status()
+            .context("starting legacy macOS runner retirement")?;
+        if !status.success() {
+            match self.legacy_runner_state(launchctl, &service)? {
+                LaunchdServiceState::Absent => {}
+                LaunchdServiceState::Loaded => {
+                    bail!(
+                        "retiring legacy macOS runner failed with exit code {}",
+                        status.code().unwrap_or(-1)
+                    );
+                }
+            }
+        }
+        let plist = self
+            .agent_root()
+            .join(format!("{}.plist", Self::LEGACY_MACOS_RUNNER_LABEL));
+        match fs::remove_file(&plist) {
+            Ok(()) => info!(path = %plist.display(), "removed legacy macOS runner agent"),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(error)
+                    .with_context(|| format!("removing legacy runner agent {}", plist.display()));
+            }
+        }
+        Ok(())
+    }
+
+    fn legacy_runner_state(&self, launchctl: &Path, service: &str) -> Result<LaunchdServiceState> {
+        let output = self
+            .process
+            .command(launchctl)
+            .args(["print", service])
+            .output()
+            .context("starting probe for legacy macOS runner")?;
+        if output.status.success() {
+            return Ok(LaunchdServiceState::Loaded);
+        }
+        if launchctl_reports_absent(
+            service,
+            output.status.code(),
+            &output.stdout,
+            &output.stderr,
+        ) {
+            return Ok(LaunchdServiceState::Absent);
+        }
+        bail!(
+            "probe legacy macOS runner failed with exit code {}: {}",
+            output.status.code().unwrap_or(-1),
+            String::from_utf8_lossy(&output.stderr).trim()
+        )
     }
 
     pub(super) fn activate(&self) -> Result<()> {
@@ -187,7 +254,7 @@ impl<'a> RunnerManager<'a> {
     /// recycle, and sccache died inside it often enough that jobs compiled
     /// locally — a suite that runs in three minutes took an hour to reach.
     fn runner_config(&self, home: &Path, tokens: &Tokens) -> String {
-        let concurrency = Self::CONCURRENCY;
+        let concurrency = HOST_JOB_CONCURRENCY;
         let cargo_build_jobs = Self::CARGO_BUILD_JOBS_ENV;
         let root = self.config.host.host_root.display();
         let builds = self.config.host.build_root().display();
@@ -471,6 +538,25 @@ pub(super) fn replace_file(source: &Path, destination: &Path) -> Result<()> {
         .with_context(|| format!("installing {}", destination.display()))
 }
 
+fn launchctl_reports_absent(
+    service: &str,
+    code: Option<i32>,
+    stdout: &[u8],
+    stderr: &[u8],
+) -> bool {
+    // Observed `launchctl print` result for a missing GUI-domain service.
+    const NOT_FOUND_EXIT: i32 = 113;
+    let Some((domain, label)) = service.rsplit_once('/') else {
+        return false;
+    };
+    let Some(uid) = domain.strip_prefix("gui/") else {
+        return false;
+    };
+    let expected =
+        format!("Bad request.\nCould not find service \"{label}\" in domain for user gui: {uid}\n");
+    code == Some(NOT_FOUND_EXIT) && stdout.is_empty() && stderr == expected.as_bytes()
+}
+
 pub(super) fn require_macos() -> Result<()> {
     if std::env::consts::OS != "macos" {
         bail!("runner host command supports macOS only");
@@ -480,10 +566,10 @@ pub(super) fn require_macos() -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::BTreeMap, os::unix::fs::PermissionsExt};
+    use std::{collections::BTreeMap, ffi::OsString, os::unix::fs::PermissionsExt};
 
     use super::*;
-    use crate::ci::config::fixture;
+    use crate::ci::{HOST_JOB_CONCURRENCY, config::fixture};
 
     #[test]
     fn installing_an_executable_over_itself_keeps_it() {
@@ -534,6 +620,124 @@ mod tests {
         assert!(colima.contains("<key>ProcessType</key><string>Background</string>"));
         assert!(runner.contains("<key>ProcessType</key><string>Interactive</string>"));
         assert!(!runner.contains("<key>ProcessType</key><string>Background</string>"));
+    }
+
+    #[test]
+    fn upgrade_boots_out_and_removes_the_legacy_macos_runner() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let mut config = fixture();
+        config.host.host_root = directory.path().join("ci");
+        let asked = directory.path().join("launchctl-arguments");
+        let mut vars = BTreeMap::new();
+        vars.insert(
+            OsString::from("KITHARA_TEST_LAUNCHCTL_ARGS"),
+            asked.clone().into_os_string(),
+        );
+        let process = Process::new(directory.path(), vars);
+        let manager = RunnerManager::new(&config, &process);
+        fs::create_dir_all(manager.agent_root()).expect("create launch agent directory");
+        let legacy = manager
+            .agent_root()
+            .join("com.zvuk.kithara-ci.macos-runner.plist");
+        fs::write(&legacy, "legacy").expect("seed legacy launch agent");
+        let launchctl = directory.path().join("launchctl");
+        fs::write(
+            &launchctl,
+            "#!/bin/sh\nprintf '%s\\n' \"$*\" > \"$KITHARA_TEST_LAUNCHCTL_ARGS\"\n",
+        )
+        .expect("write launchctl fixture");
+        fs::set_permissions(&launchctl, PermissionsExt::from_mode(0o755))
+            .expect("make launchctl fixture executable");
+
+        manager
+            .retire_legacy_macos_runner("gui/501", &launchctl)
+            .expect("retire legacy runner");
+
+        assert!(!legacy.exists());
+        assert_eq!(
+            fs::read_to_string(asked).expect("read launchctl arguments"),
+            "bootout gui/501/com.zvuk.kithara-ci.macos-runner\n"
+        );
+    }
+
+    fn legacy_runner_fixture(
+        script: &str,
+    ) -> (tempfile::TempDir, CiConfig, Process, PathBuf, PathBuf) {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let mut config = fixture();
+        config.host.host_root = directory.path().join("ci");
+        let process = Process::new(directory.path(), BTreeMap::new());
+        let manager = RunnerManager::new(&config, &process);
+        fs::create_dir_all(manager.agent_root()).expect("create launch agent directory");
+        let legacy = manager
+            .agent_root()
+            .join("com.zvuk.kithara-ci.macos-runner.plist");
+        fs::write(&legacy, "legacy").expect("seed legacy launch agent");
+        let launchctl = directory.path().join("launchctl");
+        fs::write(&launchctl, script).expect("write launchctl fixture");
+        fs::set_permissions(&launchctl, PermissionsExt::from_mode(0o755))
+            .expect("make launchctl fixture executable");
+        (directory, config, process, legacy, launchctl)
+    }
+
+    #[test]
+    fn failed_legacy_bootout_preserves_a_loaded_service_plist() {
+        let (_directory, config, process, legacy, launchctl) = legacy_runner_fixture(
+            "#!/bin/sh\n\
+             if [ \"$1\" = bootout ]; then exit 7; fi\n\
+             if [ \"$1\" = print ]; then exit 0; fi\n\
+             exit 64\n",
+        );
+        let manager = RunnerManager::new(&config, &process);
+
+        let error = manager
+            .retire_legacy_macos_runner("gui/501", &launchctl)
+            .expect_err("a loaded service must make the failed bootout fatal");
+
+        assert!(error.to_string().contains("retiring legacy macOS runner"));
+        assert!(legacy.is_file());
+    }
+
+    #[test]
+    fn failed_legacy_bootout_removes_a_confirmed_absent_service_plist() {
+        let (_directory, config, process, legacy, launchctl) = legacy_runner_fixture(
+            "#!/bin/sh\n\
+             if [ \"$1\" = bootout ]; then exit 7; fi\n\
+             if [ \"$1\" = print ]; then\n\
+               printf '%s\\n' 'Bad request.' >&2\n\
+               printf '%s\\n' 'Could not find service \"com.zvuk.kithara-ci.macos-runner\" in domain for user gui: 501' >&2\n\
+               exit 113\n\
+             fi\n\
+             exit 64\n",
+        );
+        let manager = RunnerManager::new(&config, &process);
+
+        manager
+            .retire_legacy_macos_runner("gui/501", &launchctl)
+            .expect("a confirmed absent service completes the migration");
+
+        assert!(!legacy.exists());
+    }
+
+    #[test]
+    fn legacy_runner_probe_failure_preserves_the_plist() {
+        let (_directory, config, process, legacy, launchctl) = legacy_runner_fixture(
+            "#!/bin/sh\n\
+             if [ \"$1\" = bootout ]; then exit 7; fi\n\
+             if [ \"$1\" = print ]; then\n\
+               printf '%s\\n' 'launchctl probe failed' >&2\n\
+               exit 42\n\
+             fi\n\
+             exit 64\n",
+        );
+        let manager = RunnerManager::new(&config, &process);
+
+        let error = manager
+            .retire_legacy_macos_runner("gui/501", &launchctl)
+            .expect_err("an unclassified probe failure must stop migration");
+
+        assert!(error.to_string().contains("probe legacy macOS runner"));
+        assert!(legacy.is_file());
     }
 
     #[test]
@@ -637,10 +841,40 @@ mod tests {
         let rendered: toml::Value = toml::from_str(&manager.runner_config(&home, &tokens)).unwrap();
         assert_eq!(
             rendered["concurrent"].as_integer(),
-            Some(RunnerManager::CONCURRENCY)
+            Some(HOST_JOB_CONCURRENCY as i64)
         );
         let runners = rendered["runners"].as_array().unwrap();
         assert_eq!(runners.len(), 4, "one registration per runner token");
+        assert_eq!(
+            runners
+                .iter()
+                .filter(|runner| runner["executor"].as_str() == Some("docker"))
+                .count(),
+            1,
+            "the disposable Linux platform has one registration"
+        );
+        assert_eq!(
+            runners
+                .iter()
+                .filter(|runner| runner["executor"].as_str() == Some("shell"))
+                .count(),
+            3,
+            "the host registrations share the global job limit"
+        );
+        let shell_cache_roots: Vec<&str> = runners
+            .iter()
+            .filter(|runner| runner["executor"].as_str() == Some("shell"))
+            .flat_map(|runner| runner["environment"].as_array().into_iter().flatten())
+            .filter_map(toml::Value::as_str)
+            .filter(|entry| entry.starts_with("KITHARA_CI_CACHE_ROOT="))
+            .collect();
+        assert_eq!(shell_cache_roots.len(), 3);
+        assert!(
+            shell_cache_roots
+                .windows(2)
+                .all(|roots| roots[0] == roots[1]),
+            "all shell registrations must contend on one host-global slot root"
+        );
         for runner in runners {
             assert!(
                 runner["environment"]

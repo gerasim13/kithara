@@ -8,6 +8,8 @@ use anyhow::{Context, Result, bail};
 use reqwest::Url;
 use serde::{Deserialize, Serialize};
 
+use crate::ci::HOST_JOB_CONCURRENCY;
+
 /// Directory every Unix executor reads the installed host profile from.
 pub(crate) const LANE_CONFIG_DIR: &str = "/etc/kithara-ci";
 
@@ -52,6 +54,7 @@ pub(crate) struct CiHost {
     pub(crate) host_xcode_developer_dir: PathBuf,
     pub(crate) quota_bytes: u64,
     pub(crate) reject_bytes: u64,
+    /// Aggregate whole-gigabyte sccache budget, divided between host jobs.
     pub(crate) sccache_size: String,
     pub(crate) soft_cleanup_bytes: u64,
     pub(crate) sync_uid: u32,
@@ -93,9 +96,7 @@ impl CiHost {
                 bail!("CI host profile {name} must not be empty");
             }
         }
-        if self.sccache_size.trim().is_empty() {
-            bail!("CI host profile sccache_size must not be empty");
-        }
+        self.sccache_slot_size()?;
         if self.build_cache_size.trim().is_empty() {
             bail!("CI host profile build_cache_size must not be empty");
         }
@@ -175,6 +176,24 @@ impl CiHost {
     pub(crate) fn build_cache_budget_bytes(&self) -> Result<u64> {
         parse_build_cache_size(&self.build_cache_size)
             .context("CI host profile build_cache_size is invalid")
+    }
+
+    pub(crate) fn sccache_slot_size(&self) -> Result<String> {
+        let Some(digits) = self.sccache_size.strip_suffix('G') else {
+            bail!("CI host profile sccache_size must be a positive whole number followed by G");
+        };
+        if digits.is_empty() || !digits.bytes().all(|byte| byte.is_ascii_digit()) {
+            bail!("CI host profile sccache_size must be a positive whole number followed by G");
+        }
+        let gigabytes = digits
+            .parse::<usize>()
+            .context("CI host profile sccache_size must fit in usize gigabytes")?;
+        if gigabytes == 0 || !gigabytes.is_multiple_of(HOST_JOB_CONCURRENCY) {
+            bail!(
+                "CI host profile sccache_size must divide evenly across {HOST_JOB_CONCURRENCY} jobs"
+            );
+        }
+        Ok(format!("{}G", gigabytes / HOST_JOB_CONCURRENCY))
     }
 
     /// The headroom a job insists on before it starts. The host stops handing
@@ -293,6 +312,30 @@ mod tests {
     fn ci_host_rejects_an_empty_build_cache_size() {
         let mut host = super::super::fixture().host;
         host.build_cache_size.clear();
+
+        assert!(host.validate().is_err());
+    }
+
+    #[test]
+    fn sccache_budget_is_split_across_host_jobs() {
+        let mut host = super::super::fixture().host;
+        host.sccache_size = "50G".to_owned();
+
+        assert_eq!(host.sccache_slot_size().unwrap(), "25G");
+    }
+
+    #[test]
+    fn ci_host_rejects_an_indivisible_sccache_budget() {
+        let mut host = super::super::fixture().host;
+        host.sccache_size = "51G".to_owned();
+
+        assert!(host.validate().is_err());
+    }
+
+    #[test]
+    fn ci_host_rejects_a_non_whole_g_sccache_budget() {
+        let mut host = super::super::fixture().host;
+        host.sccache_size = "50GB".to_owned();
 
         assert!(host.validate().is_err());
     }
