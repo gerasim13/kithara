@@ -335,6 +335,7 @@ impl EventBridge {
         cancel: CancelToken,
     ) -> JoinHandle<()> {
         spawn(move || {
+            let _rt = crate::FFI_RUNTIME.enter();
             let interval = Duration::from_millis(Self::TIME_POLL_INTERVAL_MS);
             let mut last_time: Option<f64> = None;
             let mut last_duration: Option<f64> = None;
