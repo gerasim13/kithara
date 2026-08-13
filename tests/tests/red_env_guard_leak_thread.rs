@@ -15,18 +15,21 @@ use kithara::{
     test as kithara_test,
 };
 
-/// Locate the compiled `suite_light` binary next to our own test binary.
+/// Locate the compiled `suite_harness` binary next to our own test binary.
 ///
 /// `std::env::current_exe()` returns path to *this* red test binary, which
-/// lives in the same `target/<profile>/deps/` directory as `suite_light`.
-fn locate_suite_light() -> PathBuf {
+/// lives in the same `target/<profile>/deps/` directory as `suite_harness`.
+/// The subject test moved there with the rest of the harness meta-tests, and
+/// both targets are gated on the same `harness` feature, so either both exist
+/// or neither does.
+fn locate_suite_harness() -> PathBuf {
     let me = std::env::current_exe().expect("current_exe");
     let deps_dir = me.parent().expect("deps dir").to_path_buf();
     let entries = std::fs::read_dir(&deps_dir).expect("read deps");
     for entry in entries.flatten() {
         let name = entry.file_name();
         let Some(name) = name.to_str() else { continue };
-        if name.starts_with("suite_light-")
+        if name.starts_with("suite_harness-")
             && !name.contains('.')
             && entry.file_type().is_ok_and(|t| t.is_file())
         {
@@ -34,7 +37,7 @@ fn locate_suite_light() -> PathBuf {
         }
     }
     panic!(
-        "could not find suite_light-<hash> binary next to {}",
+        "could not find suite_harness-<hash> binary next to {}",
         deps_dir.display()
     );
 }
@@ -43,7 +46,7 @@ fn locate_suite_light() -> PathBuf {
 /// its stdout to EOF, then measure the gap between EOF and actual process
 /// exit.  This is nextest's LEAK heuristic.
 fn spawn_and_measure_leak_gap() -> Duration {
-    let bin = locate_suite_light();
+    let bin = locate_suite_harness();
     let mut child = Command::new(&bin)
         .arg("--exact")
         .arg("env_guard::no_proxy_env_keeps_explicit_proxy_override")
@@ -52,7 +55,7 @@ fn spawn_and_measure_leak_gap() -> Duration {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .expect("spawn suite_light");
+        .expect("spawn suite_harness");
 
     let mut out = child.stdout.take().expect("stdout piped");
     let mut err = child.stderr.take().expect("stderr piped");
