@@ -457,7 +457,7 @@ pub(super) const fn cursor_icon(shape: CursorShape) -> CursorIcon {
 mod tests {
     use kithara_test_utils::kithara;
 
-    use super::Leaf;
+    use super::{Leaf, text_x};
     use crate::{
         atoms::{painter::Labelled, tab::TabLarge, toggle::Binary},
         builtin,
