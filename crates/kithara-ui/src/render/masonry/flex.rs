@@ -17,6 +17,7 @@ pub(crate) struct Flex {
     padding: solve::Padding,
     spacing: f32,
     alignment: solve::Alignment,
+    main_alignment: solve::Alignment,
     children: Vec<ChildLayout>,
 }
 
@@ -72,8 +73,14 @@ impl Flex {
             padding,
             spacing,
             alignment,
+            main_alignment: solve::Alignment::Start,
             children,
         }
+    }
+
+    pub(crate) const fn align_main(mut self, alignment: solve::Alignment) -> Self {
+        self.main_alignment = alignment;
+        self
     }
 
     pub(crate) fn layout(
@@ -100,7 +107,7 @@ impl Flex {
             layouts: &self.children,
             ctx,
         };
-        let Distribution { size, items } = solve::resolve(
+        let Distribution { size, mut items } = solve::resolve(
             Input {
                 axis: self.axis,
                 limits: &inner_limits,
@@ -113,6 +120,26 @@ impl Flex {
             },
             &mut measure,
         );
+        let content_main = items.last().map_or(0.0, |item| match self.axis {
+            Axis::Horizontal => item.offset.x + item.size.width,
+            Axis::Vertical => item.offset.y + item.size.height,
+        });
+        let available_main = match self.axis {
+            Axis::Horizontal => size.width,
+            Axis::Vertical => size.height,
+        };
+        let free = (available_main - content_main).max(0.0);
+        let offset = match self.main_alignment {
+            solve::Alignment::Start => 0.0,
+            solve::Alignment::Center => free / 2.0,
+            solve::Alignment::End => free,
+        };
+        for item in &mut items {
+            match self.axis {
+                Axis::Horizontal => item.offset.x += offset,
+                Axis::Vertical => item.offset.y += offset,
+            }
+        }
         let fitted = fit_padding(self.padding, size, outer_limits.max());
 
         for (child, item) in measure.children.iter_mut().zip(items) {

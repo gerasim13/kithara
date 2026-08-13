@@ -625,6 +625,37 @@ fn masonry_layout_rects_equal_snapped_neutral_rects() {
 }
 
 #[kithara::test]
+fn a_fill_slot_centers_its_fixed_content_like_the_immediate_host() {
+    let registry = fixture_registry();
+    let ui = fixture_ui(
+        "centered-slot",
+        r#"Slot(id: "content", size: (w: Fill, h: Fill), default: [
+            Spacer(id: "fixed", size: Some((w: Fixed(40.0), h: Fixed(20.0)))),
+        ])"#,
+        &registry,
+    );
+    let reads = FixtureReads;
+    let state = MasonryState::default();
+    let host = MasonryHost::new(&ui, &reads, builtin::skin()).with_state(state.clone());
+    let output = document::render(&ui.root, &ui, &reads, builtin::skin_doc(), host);
+    let root = masonry_root(output, 200, 120);
+    let fixed = state
+        .widget_id("demo/fixed")
+        .unwrap_or_else(|| panic!("the slot child must remain addressable"));
+    let bounds = root
+        .root()
+        .get_widget(fixed)
+        .unwrap_or_else(|| panic!("the slot child must remain mounted"))
+        .ctx()
+        .bounding_rect();
+
+    assert_eq!(
+        [bounds.x0, bounds.y0, bounds.width(), bounds.height()],
+        [0.0, 50.0, 40.0, 20.0],
+    );
+}
+
+#[kithara::test]
 fn wheel_actions_round_trip_through_the_public_custom_contract() {
     let expected = wheel_actions();
     let recognized = Rc::new(RefCell::new(Vec::new()));

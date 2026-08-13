@@ -554,15 +554,18 @@ where
             .map(|child| ChildLayout::natural(child.declared(), None))
             .collect();
         MasonryNode::document(
-            NodeLayout::Flex(Flex::new(
-                Axis::Vertical,
-                solve::Length::Fill,
-                declared.height,
-                solve::Padding::default(),
-                self.skin.layout.grid_gap,
-                solve::Alignment::Start,
-                layouts,
-            )),
+            NodeLayout::Flex(
+                Flex::new(
+                    Axis::Vertical,
+                    solve::Length::Fill,
+                    declared.height,
+                    solve::Padding::default(),
+                    self.skin.layout.grid_gap,
+                    solve::Alignment::Start,
+                    layouts,
+                )
+                .align_main(solve::Alignment::Center),
+            ),
             declared,
             children,
             true,
