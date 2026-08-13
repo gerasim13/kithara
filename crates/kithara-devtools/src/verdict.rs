@@ -211,6 +211,20 @@ mod tests {
     }
 
     #[test]
+    fn a_context_wrapped_child_failure_remains_concise_and_typed() {
+        let error = ChildFailure::inherited("`cargo fmt --all`".to_owned(), Some(7))
+            .context("format target `rust`");
+        let (message, code) = NotClean::render(&error);
+
+        assert!(error.downcast_ref::<ChildFailure>().is_some());
+        assert_eq!(code, 7);
+        assert_eq!(message, "`cargo fmt --all` failed (exit code 7)");
+        assert_eq!(message.lines().count(), 1);
+        assert!(!message.contains("format target"));
+        assert!(!message.contains("Stack backtrace"));
+    }
+
+    #[test]
     fn a_child_without_an_exit_code_uses_the_generic_failure_code() {
         let error = ChildFailure::inherited("test lane `workspace`".to_owned(), None);
         let (message, code) = NotClean::render(&error);

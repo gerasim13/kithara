@@ -12,6 +12,7 @@ use crate::{
     Ctx, manifest,
     manifest::{DependencyOrderArgs, ManifestArgs, ManifestCommand},
     util::{check_tool, ensure_clean_tree},
+    verdict::ChildFailure,
 };
 
 const CHUNK_SIZE: usize = 128;
@@ -100,11 +101,10 @@ pub fn format_path(root: &Path, path: &Path) -> Result<()> {
         .status()
         .with_context(|| format!("run path formatter for {}", target.name()))?;
     if !status.success() {
-        bail!(
-            "path formatter for {} failed (exit code {:?})",
-            target.name(),
-            status.code()
-        );
+        return Err(ChildFailure::inherited(
+            format!("path formatter for {}", target.name()),
+            status.code(),
+        ));
     }
     Ok(())
 }
@@ -326,11 +326,10 @@ fn run_status(program: &str, args: &[&str]) -> Result<()> {
         .status()
         .with_context(|| format!("failed to run `{}`", command_line(program, args)))?;
     if !status.success() {
-        bail!(
-            "`{}` failed (exit code {:?})",
-            command_line(program, args),
-            status.code()
-        );
+        return Err(ChildFailure::inherited(
+            format!("`{}`", command_line(program, args)),
+            status.code(),
+        ));
     }
     Ok(())
 }
@@ -347,12 +346,14 @@ fn run_path_status(program: &str, args: &[&str], files: &[PathBuf]) -> Result<()
             .status()
             .with_context(|| format!("failed to run `{program}`"))?;
         if !status.success() {
-            bail!(
-                "`{}` failed on {} file(s) (exit code {:?})",
-                command_line(program, args),
-                chunk.len(),
-                status.code()
-            );
+            return Err(ChildFailure::inherited(
+                format!(
+                    "`{}` on {} file(s)",
+                    command_line(program, args),
+                    chunk.len()
+                ),
+                status.code(),
+            ));
         }
     }
     Ok(())
