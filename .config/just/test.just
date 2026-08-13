@@ -126,12 +126,17 @@ ui:
     #!/usr/bin/env bash
     set -euo pipefail
     dir=target/parity
-    rm -rf "$dir/iced" "$dir/masonry" "$dir/masks"
+    rm -rf "$dir/iced" "$dir/masonry" "$dir/masks" "$dir/studio"
     gallery=(cargo run -p kithara-ui --example gallery --features kithara-ui/masonry)
     KITHARA_GALLERY_CAPTURE_OFFSCREEN="$dir/iced" "${gallery[@]}"
     KITHARA_GALLERY_CAPTURE_MASONRY="$dir/masonry" "${gallery[@]}"
     KITHARA_GALLERY_COMPARE="$dir/iced:$dir/masonry:$dir/masks" \
       KITHARA_GALLERY_COMPARE_BUDGET=crates/kithara-ui/examples/gallery/parity-budget.txt \
+      "${gallery[@]}"
+    KITHARA_STUDIO_CAPTURE="$dir/studio" \
+      cargo test -p kithara-app --lib --no-default-features --features masonry \
+        studio_capture_writes_both_hosts -- --nocapture
+    KITHARA_GALLERY_COMPARE="$dir/studio/iced:$dir/studio/masonry:$dir/studio/masks" \
       "${gallery[@]}"
 
 # The same pages through a real window, which is the only one of the three

@@ -4271,6 +4271,7 @@ dependencies = [
  "fieldwork",
  "futures",
  "iced",
+ "iced_runtime",
  "kithara",
  "kithara-broadcast",
  "kithara-drm",
@@ -4283,6 +4284,7 @@ dependencies = [
  "kithara-workspace-hack",
  "num-traits",
  "obfstr",
+ "png",
  "rand 0.10.2",
  "ringbuf 0.5.1",
  "serde",
@@ -4292,6 +4294,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "url",
+ "vello",
 ]
 
 [[package]]

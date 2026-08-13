@@ -1,4 +1,6 @@
 mod app;
+#[cfg(all(test, feature = "masonry"))]
+mod capture;
 mod deck;
 mod frontend;
 mod message;
