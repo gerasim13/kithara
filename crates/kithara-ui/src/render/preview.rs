@@ -197,7 +197,7 @@ mod tests {
         scoped_trigger: EndpointDesc,
         scoped_waveform: EndpointDesc,
         stereo: EndpointDesc,
-        track_list: EndpointDesc,
+        table: EndpointDesc,
         variant_bool: EndpointDesc,
         variant_text: EndpointDesc,
         variant_trigger: EndpointDesc,
@@ -222,7 +222,7 @@ mod tests {
                 variant_trigger: EndpointDesc::new(ValueKind::Trigger)
                     .with_scope("deck")
                     .with_scope("variant"),
-                track_list: EndpointDesc::new(ValueKind::TrackList),
+                table: EndpointDesc::new(ValueKind::Table),
             }
         }
     }
@@ -277,7 +277,7 @@ mod tests {
                 (EndpointCategory::Parameter, "player.output.volume")
                 | (EndpointCategory::Model, "deck.view.zoom") => Some(&self.scalar),
                 (EndpointCategory::Telemetry, "player.output.levels") => Some(&self.stereo),
-                (EndpointCategory::Model, "library.visible_tracks") => Some(&self.track_list),
+                (EndpointCategory::Model, "library.visible_tracks") => Some(&self.table),
                 _ => None,
             }
         }

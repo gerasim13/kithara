@@ -6,7 +6,7 @@ use super::{
     binding::{AdaptivePolicy, BindingRef},
     style::{
         ButtonStyle, ChipStyle, DeckSummaryStyle, FaderStyle, GlyphStyle, IconName, PopoverAlign,
-        PopoverAt, ScalarFormat, TextAlign, TextStyle, Tone, TrackColumn, WaveStyle,
+        PopoverAt, ScalarFormat, TableColumn, TextAlign, TextStyle, Tone, WaveStyle,
         WindowControlsStyle,
     },
 };
@@ -415,7 +415,7 @@ pub enum ControlNode {
         #[serde(default)]
         adaptive: AdaptivePolicy,
     },
-    TrackList {
+    Table {
         id: NodeId,
         #[serde(default)]
         size: Option<SizeSpec>,
@@ -426,7 +426,7 @@ pub enum ControlNode {
         #[serde(default)]
         adaptive: AdaptivePolicy,
         #[serde(default)]
-        columns: Option<Param<Vec<TrackColumn>>>,
+        columns: Option<Param<Vec<TableColumn>>>,
         #[serde(default)]
         columns_state: Option<BindingRef>,
     },
@@ -649,7 +649,7 @@ impl ControlNode {
             | Self::Fader { read, write, .. }
             | Self::Wave { read, write, .. }
             | Self::Vis { read, write, .. }
-            | Self::TrackList { read, write, .. }
+            | Self::Table { read, write, .. }
             | Self::Tree { read, write, .. }
             | Self::ContextBar { read, write, .. }
             | Self::Toggle { read, write, .. }
@@ -697,7 +697,7 @@ impl ControlNode {
             | Self::Fader { size, .. }
             | Self::Wave { size, .. }
             | Self::Vis { size, .. }
-            | Self::TrackList { size, .. }
+            | Self::Table { size, .. }
             | Self::Tree { size, .. }
             | Self::ContextBar { size, .. }
             | Self::Toggle { size, .. }

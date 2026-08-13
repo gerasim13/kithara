@@ -1,16 +1,16 @@
 use super::{controls::MasonryControl, custom::HostAction};
 use crate::{
-    atoms::{track_list::face::TrackTable, tree::face::Tree as TreeFace},
+    atoms::{table::face::TableFace, tree::face::Tree as TreeFace},
     draw::{DrawList, Rect},
     interact::{Hit, Input, Outcome},
     render::{
         Reads, Skin,
-        hosted::{TrackListPlan, TreePlan},
+        hosted::{TablePlan, TreePlan},
     },
     text::TextContext,
 };
 
-pub(crate) type TrackListLeaf = ProjectedLeaf<TrackListPlan>;
+pub(crate) type TableLeaf = ProjectedLeaf<TablePlan>;
 pub(crate) type TreeLeaf = ProjectedLeaf<TreePlan>;
 
 pub(crate) struct ProjectedLeaf<P> {
@@ -56,12 +56,12 @@ where
     }
 }
 
-impl Projected for TrackListPlan {
+impl Projected for TablePlan {
     fn draw_list(&self, text: &mut TextContext, bounds: Rect) -> DrawList {
         let Some(drawn) = self.drawn() else {
             return DrawList::default();
         };
-        TrackTable::commands(&self.picture(), text, bounds, &drawn)
+        TableFace::commands(&self.picture(), text, bounds, &drawn)
     }
 
     fn refresh(&self, reads: &dyn Reads) -> bool {

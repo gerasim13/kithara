@@ -4,13 +4,13 @@ use super::{mount::Cx, read_scope, resolve};
 use crate::{
     atoms::{
         bar::context::{Context, Viewed},
-        track_list::{TrackListRowData, column_layouts},
+        table::{TableRowData, column_layouts},
     },
     compile::CompiledUi,
     draw::Rect,
     expand::Binding,
     ids::InternId,
-    module::TrackColumn,
+    module::TableColumn,
     render::{
         InputOwner, ReadValue, Reads, Skin, Tree, UiEvent, Widget, controls::Paint, scope_picker,
         vis,
@@ -54,11 +54,11 @@ pub(super) fn vis<'a>(value: Option<&ReadValue<'_>>, reads: &dyn Reads) -> Eleme
     vis::view(value, reads)
 }
 
-pub(super) fn track_list<'a>(
+pub(super) fn table<'a>(
     cx: &Cx<'a, '_, '_>,
-    columns: (&[TrackColumn], Option<&Binding>),
+    columns: (&[TableColumn], Option<&Binding>),
 ) -> Element<'a, UiEvent> {
-    let Some(ReadValue::TrackList(tracks)) = cx.value else {
+    let Some(ReadValue::Table(rows)) = cx.value else {
         return Space::new().into();
     };
     let (columns, columns_state) = columns;
@@ -66,8 +66,8 @@ pub(super) fn track_list<'a>(
     let columns_state = columns_state.map(|binding| cx.ui.resolve(binding.id));
     let state = columns_state.map(|prefix| (prefix, columns_scope));
     let columns = column_layouts(columns, cx.reads, state, cx.skin);
-    let rows = tracks.iter().map(TrackListRowData::from).collect();
-    crate::render::track_list(cx.path, rows, columns, cx.skin, cx.owner)
+    let rows = rows.iter().map(TableRowData::from).collect();
+    crate::render::table(cx.path, rows, columns, cx.skin, cx.owner)
 }
 
 pub(super) fn tree<'a>(

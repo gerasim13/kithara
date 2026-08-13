@@ -49,7 +49,7 @@ impl ExtraBindings {
         path: &str,
     ) -> Result<Self, UiDocError> {
         let columns_state = match control {
-            ControlNode::TrackList { columns_state, .. } => {
+            ControlNode::Table { columns_state, .. } => {
                 substituted(columns_state.as_ref(), context, path)?
             }
             _ => None,

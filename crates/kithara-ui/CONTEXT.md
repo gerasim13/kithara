@@ -521,7 +521,7 @@ The retained interaction boundary explicitly names nineteen documents: `studio-d
 `studio-strip`, `studio-mixer`, `studio-mixer-single`, `studio-overview`,
 `studio-overview-row`, `studio-overview-single`, `gallery-knobs`, `gallery-meters`,
 `gallery-toggles`, `gallery-chips`, `gallery-buttons-tab`, `gallery-cells-tab`,
-`gallery-faders-tab`, `gallery-library2-tab`, `gallery-tracklist-tab`, `gallery-tree-tab`,
+`gallery-faders-tab`, `gallery-library2-tab`, `gallery-table-tab`, `gallery-tree-tab`,
 `gallery-module-tabs`, and `gallery-nav`. A direct layout module is selected by its compiled module
 ID. Expansion records each nested include root by structural address and module ID without adding a
 node wrapper, so the existing render-tree shape and layout stay unchanged. The iced host at each
@@ -564,7 +564,7 @@ and refreshes row count, row height, and viewport extent without notifying the d
 `HeroWaveComponent` owns modifier and loop state while reusing `Scalar` for the plain drag. A narrow
 `Component` trait gives the router only path, kind, event handling, cursor, capture-slot state, and
 whether the component accepts keyboard focus.
-For a retained TrackList, `Reads` owns rows, selection, column visibility, and declared widths. The
+For a retained Table, `Reads` owns rows, selection, column visibility, and declared widths. The
 engine is the only writer of scroll offsets, the pressed row, and divider drag state; paint receives
 a read-only projection of that state. The retained leaf owns one derived picture snapshot containing
 the resolved rows and columns, and refresh replaces that snapshot whole so sibling column reads
@@ -895,7 +895,7 @@ built by `expand::scoped_key`, interned once at compile time, and carried by `Bi
 `Reads::get`; hosts key their read maps by the same form. A `Command` binding reads as `None`.
 Widgets reading derived endpoints beyond their binding (`DeckSummary`, `Bpm`, `Time`, `MiniWave`)
 take the read binding's scope suffix (`@deck=a` or empty) from `read::read_scope` and append it to
-each derived endpoint, so `deck.track.title@deck=b` stays addressable per deck. `TrackList` column
+each derived endpoint, so `deck.track.title@deck=b` stays addressable per deck. `Table` column
 state takes the suffix of the `columns_state` binding instead. Host-global endpoints
 (`player.output.levels`, `ui.preset`, `vis.time`) stay unscoped.
 
@@ -1266,8 +1266,8 @@ presentation, never native window state.
 
 ## Track List Column Ownership
 
-`TrackList` owns an ordered typed column list and requires `Title` during compilation. Its optional
-document field is a `Param<Vec<TrackColumn>>`, so an including document may pass it as an argument
+`Table` owns an ordered typed column list and requires `Title` during compilation. Its optional
+document field is a `Param<Vec<TableColumn>>`, so an including document may pass it as an argument
 (`columns: "$columns"` against `with: { "columns": "[Deck, Title, Artist]" }`); `Param` is untagged,
 so a literal `columns: [Title, Artist, Time]` parses as before. Validation reads the resolved list:
 `ControlSite` carries it already substituted beside the substituted `read` and `write`, so routing

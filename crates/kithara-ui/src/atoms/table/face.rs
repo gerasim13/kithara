@@ -1,18 +1,14 @@
 use num_traits::ToPrimitive;
 
 use crate::{
-    atoms::{
-        table::{Table, TableCell, TableRow},
-        track_list::{
-            ColumnLayout, TrackListRowData, column_label, track_list_body,
-            track_list_content_height, track_list_content_width, track_list_dividers,
-            track_list_overflows, track_list_row_pitch, track_list_row_rect,
-            track_list_vertical_scrollbar_rect,
-        },
+    atoms::table::{
+        ColumnLayout, Table, TableCell, TableRow, TableRowData, table_body, table_content_height,
+        table_content_width, table_dividers, table_overflows, table_row_pitch, table_row_rect,
+        table_vertical_scrollbar_rect,
     },
     draw::{DrawList, DrawListBuilder, Pt, Rect, Rgba, Transform},
     interact::ScrollAxis,
-    module::TrackColumn,
+    module::TableColumnStyle,
     render::Skin,
     skin::{ColorRole, FontFamily, FontSkin, FrameSkin, TextRoleSkin},
     text::TextContext,
@@ -20,7 +16,7 @@ use crate::{
 
 #[derive(Clone, Debug, PartialEq, fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
-pub(crate) struct TrackTable {
+pub(crate) struct TableFace {
     table: Table<ColumnLayout>,
     #[field(get, vis = "pub(crate)")]
     skin: Skin,
@@ -35,19 +31,15 @@ pub(crate) struct Drawn {
     pub(crate) vertical: f32,
 }
 
-impl TrackTable {
-    pub(crate) fn new(
-        rows: Vec<TrackListRowData>,
-        columns: Vec<ColumnLayout>,
-        skin: &Skin,
-    ) -> Self {
+impl TableFace {
+    pub(crate) fn new(rows: Vec<TableRowData>, columns: Vec<ColumnLayout>, skin: &Skin) -> Self {
         let rows = rows
             .into_iter()
             .map(|row| {
                 TableRow::new(
                     columns
                         .iter()
-                        .map(|column| row.cell(column.column))
+                        .map(|column| row.cell(column.column.id()))
                         .collect(),
                     row.selected,
                 )
@@ -67,9 +59,9 @@ impl TrackTable {
     }
 
     pub(crate) fn commands(&self, text: &mut TextContext, bounds: Rect, drawn: &Drawn) -> DrawList {
-        let overflowing = track_list_overflows(&drawn.columns, bounds.w);
+        let overflowing = table_overflows(&drawn.columns, bounds.w);
         let horizontal = if overflowing { drawn.horizontal } else { 0.0 };
-        let content_width = track_list_content_width(&drawn.columns, bounds.w);
+        let content_width = table_content_width(&drawn.columns, bounds.w);
         let mut content = DrawListBuilder::default();
         content.fill_rect(
             Rect {
@@ -115,14 +107,14 @@ impl TrackTable {
         columns: &[ColumnLayout],
     ) {
         let header = Rect {
-            h: self.skin.track_list.header_height,
-            w: track_list_content_width(columns, bounds.w),
+            h: self.skin.table.header_height,
+            w: table_content_width(columns, bounds.w),
             x: -horizontal,
             y: bounds.y,
         };
         list.fill_rect(header, self.skin.palette.bg_panel);
         for (column, cell) in column_cells(bounds, columns, horizontal) {
-            let align = if column.column == TrackColumn::Index {
+            let align = if column.column.style() == TableColumnStyle::Index {
                 TextAlign::Right
             } else {
                 TextAlign::Left
@@ -130,25 +122,22 @@ impl TrackTable {
             paint_text(
                 list,
                 text,
-                column_label(column.column, &self.skin.track_list),
+                column.column.label(),
                 Rect {
                     h: header.h,
                     ..cell
                 },
                 (
-                    self.skin.track_list.header_text,
+                    self.skin.table.header_text,
                     FontFamily::Mono,
                     self.skin.palette.muted,
-                    self.skin.track_list.cell_padding_x,
+                    self.skin.table.cell_padding_x,
                     align,
                 ),
             );
         }
-        for divider in track_list_dividers(bounds, columns, horizontal, &self.skin) {
-            list.fill_rect(
-                divider.paint,
-                self.skin.rgba(self.skin.track_list.divider_color),
-            );
+        for divider in table_dividers(bounds, columns, horizontal, &self.skin) {
+            list.fill_rect(divider.paint, self.skin.rgba(self.skin.table.divider_color));
         }
     }
 
@@ -162,13 +151,13 @@ impl TrackTable {
         columns: &[ColumnLayout],
     ) {
         let (horizontal, vertical) = offsets;
-        let body = track_list_body(bounds, &self.skin);
-        let pitch = track_list_row_pitch(&self.skin);
+        let body = table_body(bounds, &self.skin);
+        let pitch = table_row_pitch(&self.skin);
         let visible = visible_rows(self.rows().len(), pitch, body.h, vertical);
         let mut rows = DrawListBuilder::default();
         for index in visible {
             let row_bounds =
-                track_list_row_rect(bounds, columns, index, horizontal, vertical, &self.skin);
+                table_row_rect(bounds, columns, index, horizontal, vertical, &self.skin);
             self.paint_row(&mut rows, text, index, row_bounds, interaction, columns);
         }
         list.clip(body, rows.finish());
@@ -185,7 +174,7 @@ impl TrackTable {
     ) {
         let (hovered, pressed) = (interaction.0 == Some(index), interaction.1 == Some(index));
         let row = &self.rows()[index];
-        let frame = self.skin.track_list.row_frame;
+        let frame = self.skin.table.row_frame;
         let fill = if pressed {
             self.skin.palette.accent_soft
         } else if row.selected() {
@@ -208,11 +197,17 @@ impl TrackTable {
         )
         .enumerate()
         {
-            self.paint_cell(list, text, index, row, (column.column, column_index, cell));
+            self.paint_cell(
+                list,
+                text,
+                index,
+                row,
+                (column.column.style(), column_index, cell),
+            );
         }
-        for divider in track_list_dividers(
+        for divider in table_dividers(
             Rect {
-                h: self.skin.track_list.header_height,
+                h: self.skin.table.header_height,
                 w: bounds.w,
                 x: bounds.x,
                 y: 0.0,
@@ -227,7 +222,7 @@ impl TrackTable {
                     y: bounds.y,
                     ..divider.paint
                 },
-                self.skin.rgba(self.skin.track_list.divider_color),
+                self.skin.rgba(self.skin.table.divider_color),
             );
         }
     }
@@ -238,97 +233,97 @@ impl TrackTable {
         text: &mut TextContext,
         index: usize,
         row: &TableRow,
-        cell: (TrackColumn, usize, Rect),
+        cell: (TableColumnStyle, usize, Rect),
     ) {
         let (column, column_index, bounds) = cell;
         match column {
-            TrackColumn::Index => paint_text(
+            TableColumnStyle::Index => paint_text(
                 list,
                 text,
                 &format!("{:02}", index + 1),
                 bounds,
                 (
-                    self.skin.track_list.index_text,
+                    self.skin.table.index_text,
                     FontFamily::Mono,
                     self.skin.palette.muted,
-                    self.skin.track_list.cell_padding_x,
+                    self.skin.table.cell_padding_x,
                     TextAlign::Right,
                 ),
             ),
-            TrackColumn::Deck => paint_deck(
+            TableColumnStyle::Badge => paint_badge(
                 self,
                 list,
                 text,
                 row.cell(column_index).and_then(TableCell::text),
                 bounds,
             ),
-            TrackColumn::Title => paint_text(
+            TableColumnStyle::Primary => paint_text(
                 list,
                 text,
                 optional_or_dash(row.cell(column_index).and_then(TableCell::text)),
                 bounds,
                 (
-                    self.skin.track_list.title_text,
+                    self.skin.table.primary_text,
                     FontFamily::Display,
                     self.skin.palette.text,
-                    self.skin.track_list.cell_padding_x,
+                    self.skin.table.cell_padding_x,
                     TextAlign::Left,
                 ),
             ),
-            TrackColumn::Artist => paint_text(
+            TableColumnStyle::Secondary => paint_text(
                 list,
                 text,
                 optional_or_dash(row.cell(column_index).and_then(TableCell::text)),
                 bounds,
                 (
-                    self.skin.track_list.artist_text,
+                    self.skin.table.secondary_text,
                     FontFamily::Sans,
                     self.skin.palette.text_dim,
-                    self.skin.track_list.cell_padding_x,
+                    self.skin.table.cell_padding_x,
                     TextAlign::Left,
                 ),
             ),
-            TrackColumn::Bpm => paint_bpm(
+            TableColumnStyle::Metric => paint_metric(
                 self,
                 list,
                 text,
                 row.cell(column_index).and_then(TableCell::text),
                 bounds,
             ),
-            TrackColumn::Key => paint_text(
+            TableColumnStyle::Mono => paint_text(
                 list,
                 text,
                 optional_or_dash(row.cell(column_index).and_then(TableCell::text)),
                 bounds,
                 (
-                    self.skin.track_list.key_text,
+                    self.skin.table.mono_text,
                     FontFamily::Mono,
                     self.skin.palette.accent,
-                    self.skin.track_list.cell_padding_x,
+                    self.skin.table.cell_padding_x,
                     TextAlign::Left,
                 ),
             ),
-            TrackColumn::Time => paint_text(
+            TableColumnStyle::Time => paint_text(
                 list,
                 text,
                 optional_or_dash(row.cell(column_index).and_then(TableCell::text)),
                 bounds,
                 (
-                    self.skin.track_list.time_text,
+                    self.skin.table.time_text,
                     FontFamily::Mono,
                     self.skin.palette.text_dim,
-                    self.skin.track_list.cell_padding_x,
+                    self.skin.table.cell_padding_x,
                     TextAlign::Right,
                 ),
             ),
-            TrackColumn::Energy => paint_energy(
+            TableColumnStyle::Meter => paint_meter(
                 self,
                 list,
                 text,
                 row.cell(column_index).and_then(TableCell::number),
                 bounds,
             ),
-            TrackColumn::Transition => {
+            TableColumnStyle::Transition => {
                 let transition = row
                     .cell(column_index)
                     .and_then(TableCell::text)
@@ -339,10 +334,10 @@ impl TrackTable {
                     &transition,
                     bounds,
                     (
-                        self.skin.track_list.transition_text,
+                        self.skin.table.transition_text,
                         FontFamily::Mono,
                         self.skin.palette.muted,
-                        self.skin.track_list.cell_padding_x,
+                        self.skin.table.cell_padding_x,
                         TextAlign::Left,
                     ),
                 );
@@ -351,8 +346,8 @@ impl TrackTable {
     }
 }
 
-fn paint_deck(
-    paint: &TrackTable,
+fn paint_badge(
+    paint: &TableFace,
     list: &mut DrawListBuilder,
     text: &mut TextContext,
     marks: Option<&str>,
@@ -362,12 +357,12 @@ fn paint_deck(
         return;
     };
     let chip = Rect {
-        h: paint.skin.track_list.deck_chip_height,
-        w: paint.skin.track_list.deck_chip_width,
-        x: bounds.x + (bounds.w - paint.skin.track_list.deck_chip_width) / 2.0,
-        y: bounds.y + (bounds.h - paint.skin.track_list.deck_chip_height) / 2.0,
+        h: paint.skin.table.badge_height,
+        w: paint.skin.table.badge_width,
+        x: bounds.x + (bounds.w - paint.skin.table.badge_width) / 2.0,
+        y: bounds.y + (bounds.h - paint.skin.table.badge_height) / 2.0,
     };
-    let frame = paint.skin.track_list.deck_chip_frame;
+    let frame = paint.skin.table.badge_frame;
     list.fill_rounded_rect(chip, frame.radius, paint.skin.palette.accent);
     paint_frame(list, chip, frame, &paint.skin);
     paint_text(
@@ -376,7 +371,7 @@ fn paint_deck(
         marks,
         chip,
         (
-            paint.skin.track_list.deck_text,
+            paint.skin.table.badge_text,
             FontFamily::Mono,
             paint.skin.palette.bg_deep,
             0.0,
@@ -385,8 +380,8 @@ fn paint_deck(
     );
 }
 
-fn paint_bpm(
-    paint: &TrackTable,
+fn paint_metric(
+    paint: &TableFace,
     list: &mut DrawListBuilder,
     text: &mut TextContext,
     value: Option<&str>,
@@ -396,36 +391,36 @@ fn paint_bpm(
     let run = shape(
         text,
         content,
-        paint.skin.track_list.bpm_text,
+        paint.skin.table.metric_text,
         FontFamily::Mono,
         None,
     );
     let badge = Rect {
-        h: paint.skin.track_list.bpm_badge_height,
-        w: run.width() + paint.skin.track_list.bpm_badge_padding_x * 2.0,
-        x: bounds.x + paint.skin.track_list.cell_padding_x,
-        y: bounds.y + (bounds.h - paint.skin.track_list.bpm_badge_height) / 2.0,
+        h: paint.skin.table.metric_badge_height,
+        w: run.width() + paint.skin.table.metric_badge_padding_x * 2.0,
+        x: bounds.x + paint.skin.table.cell_padding_x,
+        y: bounds.y + (bounds.h - paint.skin.table.metric_badge_height) / 2.0,
     };
-    let frame = paint.skin.track_list.bpm_badge_frame;
+    let frame = paint.skin.table.metric_badge_frame;
     list.fill_rounded_rect(
         badge,
         frame.radius,
-        paint.skin.rgba(paint.skin.track_list.bpm_badge_background),
+        paint.skin.rgba(paint.skin.table.metric_badge_background),
     );
     paint_frame(list, badge, frame, &paint.skin);
     list.text(
         &run,
         content,
         Transform::translate(Pt {
-            x: badge.x + paint.skin.track_list.bpm_badge_padding_x,
+            x: badge.x + paint.skin.table.metric_badge_padding_x,
             y: badge.y + (badge.h - run.height()) / 2.0,
         }),
         paint.skin.palette.text,
     );
 }
 
-fn paint_energy(
-    paint: &TrackTable,
+fn paint_meter(
+    paint: &TableFace,
     list: &mut DrawListBuilder,
     text: &mut TextContext,
     value: Option<u8>,
@@ -434,15 +429,12 @@ fn paint_energy(
     let value = value.map(|value| value.min(100));
     let ratio = value.map_or(0.0, |value| f32::from(value) / 100.0);
     let bar = Rect {
-        h: paint.skin.track_list.energy_bar_height,
-        w: paint.skin.track_list.energy_bar_width,
-        x: bounds.x + paint.skin.track_list.cell_padding_x,
-        y: bounds.y + (bounds.h - paint.skin.track_list.energy_bar_height) / 2.0,
+        h: paint.skin.table.meter_bar_height,
+        w: paint.skin.table.meter_bar_width,
+        x: bounds.x + paint.skin.table.cell_padding_x,
+        y: bounds.y + (bounds.h - paint.skin.table.meter_bar_height) / 2.0,
     };
-    list.fill_rect(
-        bar,
-        paint.skin.rgba(paint.skin.track_list.energy_bar_background),
-    );
+    list.fill_rect(bar, paint.skin.rgba(paint.skin.table.meter_bar_background));
     list.fill_rect(
         Rect {
             w: bar.w * ratio,
@@ -451,10 +443,10 @@ fn paint_energy(
         paint.skin.palette.accent,
     );
     let label = value.map_or_else(|| "\u{2014}".to_owned(), |value| value.to_string());
-    let label_x = bar.x + bar.w + paint.skin.track_list.energy_bar_gap;
+    let label_x = bar.x + bar.w + paint.skin.table.meter_bar_gap;
     let label_bounds = Rect {
         h: bounds.h,
-        w: (bounds.x + bounds.w - label_x - paint.skin.track_list.cell_padding_x).max(0.0),
+        w: (bounds.x + bounds.w - label_x - paint.skin.table.cell_padding_x).max(0.0),
         x: label_x,
         y: bounds.y,
     };
@@ -464,7 +456,7 @@ fn paint_energy(
         &label,
         label_bounds,
         (
-            paint.skin.track_list.energy_text,
+            paint.skin.table.meter_text,
             FontFamily::Mono,
             paint.skin.palette.accent,
             0.0,
@@ -474,7 +466,7 @@ fn paint_energy(
 }
 
 fn paint_footer(
-    paint: &TrackTable,
+    paint: &TableFace,
     list: &mut DrawListBuilder,
     text: &mut TextContext,
     bounds: Rect,
@@ -482,49 +474,41 @@ fn paint_footer(
     columns: &[ColumnLayout],
 ) {
     let footer = Rect {
-        h: paint.skin.track_list.footer_height,
-        w: track_list_content_width(columns, bounds.w),
+        h: paint.skin.table.footer_height,
+        w: table_content_width(columns, bounds.w),
         x: -horizontal,
-        y: bounds.y + bounds.h - paint.skin.track_list.footer_height,
+        y: bounds.y + bounds.h - paint.skin.table.footer_height,
     };
     list.fill_rect(footer, paint.skin.palette.bg_footer);
-    let label = format!(
-        "{} {}",
-        paint.rows().len(),
-        paint.skin.track_list.labels.footer_tracks
-    );
+    let label = format!("{} {}", paint.rows().len(), paint.skin.table.footer_rows);
     paint_text(
         list,
         text,
         &label,
         footer,
         (
-            paint.skin.track_list.footer_text,
+            paint.skin.table.footer_text,
             FontFamily::Mono,
             paint.skin.palette.muted,
-            paint.skin.track_list.footer_padding_x,
+            paint.skin.table.footer_padding_x,
             TextAlign::Left,
         ),
     );
 }
 
 fn paint_vertical_scrollbar(
-    paint: &TrackTable,
+    paint: &TableFace,
     list: &mut DrawListBuilder,
     bounds: Rect,
     horizontal: f32,
     offset: f32,
     columns: &[ColumnLayout],
 ) {
-    let body = track_list_body(bounds, &paint.skin);
-    let content = track_list_content_height(paint.rows().len(), &paint.skin);
-    let Some(rail) = track_list_vertical_scrollbar_rect(
-        bounds,
-        columns,
-        paint.rows().len(),
-        horizontal,
-        &paint.skin,
-    ) else {
+    let body = table_body(bounds, &paint.skin);
+    let content = table_content_height(paint.rows().len(), &paint.skin);
+    let Some(rail) =
+        table_vertical_scrollbar_rect(bounds, columns, paint.rows().len(), horizontal, &paint.skin)
+    else {
         return;
     };
     paint_scrollbar(
@@ -539,7 +523,7 @@ fn paint_vertical_scrollbar(
 }
 
 fn paint_horizontal_scrollbar(
-    paint: &TrackTable,
+    paint: &TableFace,
     list: &mut DrawListBuilder,
     bounds: Rect,
     offset: f32,
@@ -548,14 +532,14 @@ fn paint_horizontal_scrollbar(
     paint_scrollbar(
         list,
         Rect {
-            h: paint.skin.track_list.scrollbar_width,
+            h: paint.skin.table.scrollbar_width,
             w: bounds.w,
             x: bounds.x,
             y: bounds.y + bounds.h
-                - paint.skin.track_list.scrollbar_margin
-                - paint.skin.track_list.scrollbar_width,
+                - paint.skin.table.scrollbar_margin
+                - paint.skin.table.scrollbar_width,
         },
-        track_list_content_width(columns, bounds.w),
+        table_content_width(columns, bounds.w),
         bounds.w,
         offset,
         ScrollAxis::Horizontal,
@@ -576,12 +560,21 @@ fn column_cells(
     horizontal: f32,
 ) -> impl Iterator<Item = (ColumnLayout, Rect)> + '_ {
     let minimum = columns.iter().map(|column| column.width).sum::<f32>();
-    let title_extra = (bounds.w - minimum).max(0.0);
+    let flexible = columns
+        .iter()
+        .filter(|column| column.column.flexible())
+        .count();
+    let extra = (bounds.w - minimum).max(0.0);
+    let flexible_extra = if flexible == 0 {
+        0.0
+    } else {
+        extra / flexible.to_f32().unwrap_or(f32::MAX)
+    };
     let mut x = bounds.x - horizontal;
-    columns.iter().copied().map(move |column| {
+    columns.iter().cloned().map(move |column| {
         let width = column.width
-            + if column.column == TrackColumn::Title {
-                title_extra
+            + if column.column.flexible() {
+                flexible_extra
             } else {
                 0.0
             };
@@ -698,7 +691,7 @@ fn paint_scrollbar(
         ScrollAxis::Vertical => rail.h,
     };
     let thumb_extent = (track_extent * viewport_extent / content_extent)
-        .max(skin.track_list.scrollbar_width)
+        .max(skin.table.scrollbar_width)
         .min(track_extent);
     let thumb_offset = offset.clamp(0.0, maximum) / maximum * (track_extent - thumb_extent);
     let thumb = match axis {
@@ -713,8 +706,8 @@ fn paint_scrollbar(
             ..rail
         },
     };
-    list.fill_rect(rail, skin.rgba(skin.track_list.scrollbar_background));
-    list.fill_rect(thumb, skin.rgba(skin.track_list.scroller_color));
+    list.fill_rect(rail, skin.rgba(skin.table.scrollbar_background));
+    list.fill_rect(thumb, skin.rgba(skin.table.scroller_color));
 }
 
 fn value_or_dash(value: &str) -> &str {
@@ -731,7 +724,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        atoms::track_list::track_list_body,
+        atoms::table::table_body,
         builtin,
         draw::{DrawCmd, Geom},
     };
@@ -744,7 +737,7 @@ mod tests {
             &mut text,
             bounds,
             &Drawn {
-                vertical: picture.skin.track_list.row_height,
+                vertical: picture.skin.table.row_height,
                 ..drawn
             },
         );
@@ -771,11 +764,11 @@ mod tests {
     #[kithara::test]
     fn a_partial_bottom_row_stays_inside_the_body_clip() {
         let (picture, mut text, mut bounds, drawn) = fixture();
-        bounds.h = picture.skin.track_list.header_height
-            + picture.skin.track_list.footer_height
-            + picture.skin.track_list.grid_gap * 2.0
-            + picture.skin.track_list.row_height / 2.0;
-        let body = track_list_body(bounds, &picture.skin);
+        bounds.h = picture.skin.table.header_height
+            + picture.skin.table.footer_height
+            + picture.skin.table.grid_gap * 2.0
+            + picture.skin.table.row_height / 2.0;
+        let body = table_body(bounds, &picture.skin);
         let commands = picture.commands(&mut text, bounds, &drawn);
         let clipped = commands
             .commands()
@@ -784,7 +777,7 @@ mod tests {
                 DrawCmd::Clip { region, list } if *region == body => Some(list),
                 _ => None,
             })
-            .unwrap_or_else(|| panic!("TrackList rows must be scoped to the body clip"));
+            .unwrap_or_else(|| panic!("Table rows must be scoped to the body clip"));
         let row_bottom = clipped.commands().iter().find_map(|command| match command {
             DrawCmd::Fill {
                 geom: Geom::Rect(rect) | Geom::RoundedRect { rect, .. },
@@ -793,33 +786,31 @@ mod tests {
             _ => None,
         });
 
-        assert_eq!(
-            row_bottom,
-            Some(body.y + picture.skin.track_list.row_height)
-        );
+        assert_eq!(row_bottom, Some(body.y + picture.skin.table.row_height));
         assert!(row_bottom.is_some_and(|bottom| bottom > body.y + body.h));
     }
 
-    fn fixture() -> (TrackTable, TextContext, Rect, Drawn) {
+    fn fixture() -> (TableFace, TextContext, Rect, Drawn) {
         let skin = builtin::skin();
         let columns = vec![ColumnLayout {
-            column: TrackColumn::Title,
+            column: crate::module::TableColumn::new(
+                "title",
+                "TITLE",
+                TableColumnStyle::Primary,
+                180.0,
+                true,
+            ),
             width: 180.0,
         }];
         let rows = (0..4)
-            .map(|index| TrackListRowData {
-                artist: Some("Artist".to_owned()),
-                bpm: Some("128".to_owned()),
-                deck: None,
-                energy: Some(7),
-                key: Some("Am".to_owned()),
-                time: Some("03:24".to_owned()),
-                transition: None,
-                title: format!("Track {index}"),
-                selected: false,
+            .map(|index| {
+                TableRowData::new(
+                    vec![("title".to_owned(), TableCell::Text(format!("Row {index}")))],
+                    false,
+                )
             })
             .collect();
-        let picture = TrackTable::new(rows, columns.clone(), skin);
+        let picture = TableFace::new(rows, columns.clone(), skin);
         (
             picture,
             TextContext::from(skin.text_resources()),

@@ -113,11 +113,11 @@ macro_rules! controls {
                     .build(),
             ),
             $crate::expand::ControlSpec::Vis => with.apply(&$crate::mount::Vis),
-            $crate::expand::ControlSpec::TrackList {
+            $crate::expand::ControlSpec::Table {
                 columns,
                 columns_state,
             } => with.apply(
-                &$crate::mount::TrackList::builder()
+                &$crate::mount::Table::builder()
                     .columns(columns)
                     .maybe_columns_state(columns_state.as_ref())
                     .build(),

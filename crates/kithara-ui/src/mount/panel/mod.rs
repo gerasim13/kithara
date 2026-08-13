@@ -1,7 +1,7 @@
 pub(crate) use context_bar::ContextBar;
-pub(crate) use track_list::TrackList;
+pub(crate) use table::Table;
 pub(crate) use tree::Tree;
 
 mod context_bar;
-mod track_list;
+mod table;
 mod tree;

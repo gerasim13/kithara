@@ -34,7 +34,7 @@ const HOSTED_MODULES: [&str; 21] = [
     "gallery-cells-tab",
     "gallery-faders-tab",
     "gallery-library2-tab",
-    "gallery-tracklist-tab",
+    "gallery-table-tab",
     "gallery-tree-tab",
     "gallery-module-tabs",
     "gallery-nav",

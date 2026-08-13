@@ -5,7 +5,7 @@ use crate::{
     expand::ControlSite,
     ids::{EndpointId, NodeId, SourceUri},
     layout::{LayoutDoc, LayoutNode},
-    module::{BindingRef, ControlNode, ModuleDoc, TrackColumn},
+    module::{BindingRef, ControlNode, ModuleDoc, TableColumn},
     registry::{EndpointCategory, EndpointRegistry, ValueKind},
 };
 
@@ -327,7 +327,7 @@ const fn control_id(node: &ControlNode) -> Option<&NodeId> {
         | ControlNode::Fader { id, .. }
         | ControlNode::Wave { id, .. }
         | ControlNode::Vis { id, .. }
-        | ControlNode::TrackList { id, .. }
+        | ControlNode::Table { id, .. }
         | ControlNode::Tree { id, .. }
         | ControlNode::ContextBar { id, .. }
         | ControlNode::Toggle { id, .. }
@@ -352,8 +352,8 @@ pub(crate) fn check_controls(
     endpoints: &dyn EndpointRegistry,
 ) -> Result<(), UiDocError> {
     check_context_scope(site, origin)?;
-    if matches!(site.control, ControlNode::TrackList { .. }) {
-        check_track_list(
+    if matches!(site.control, ControlNode::Table { .. }) {
+        check_table(
             site.columns,
             site.columns_state,
             site.path,
@@ -437,19 +437,13 @@ fn check_context_scope(site: ControlSite<'_>, origin: &SourceUri) -> Result<(), 
     })
 }
 
-fn check_track_list(
-    columns: &[TrackColumn],
+fn check_table(
+    columns: &[TableColumn],
     columns_state: Option<&BindingRef>,
     path: &str,
     origin: &SourceUri,
     endpoints: &dyn EndpointRegistry,
 ) -> Result<(), UiDocError> {
-    if !columns.contains(&TrackColumn::Title) {
-        return Err(UiDocError::MissingTrackTitleColumn {
-            origin: origin.clone(),
-            path: path.to_owned(),
-        });
-    }
     let Some(binding) = columns_state else {
         return Ok(());
     };
@@ -466,7 +460,7 @@ fn check_track_list(
         });
     }
     for column in columns {
-        let derived = EndpointId(format!("{}.{}", id.0, column.endpoint_name()));
+        let derived = EndpointId(format!("{}.{}", id.0, column.id()));
         let Some(endpoint) = endpoints.endpoint(category, &derived) else {
             continue;
         };
@@ -626,7 +620,7 @@ pub(crate) const fn value_kinds(control: &ControlNode) -> (Option<ValueKind>, Op
         | ControlNode::Segmented { .. }
         | ControlNode::Vis { .. } => (Some(ValueKind::Scalar), Some(ValueKind::Scalar)),
         ControlNode::Wave { .. } => (Some(ValueKind::Waveform), Some(ValueKind::Scalar)),
-        ControlNode::TrackList { .. } => (Some(ValueKind::TrackList), None),
+        ControlNode::Table { .. } => (Some(ValueKind::Table), None),
         ControlNode::Tree { .. } => (Some(ValueKind::Tree), None),
         ControlNode::VuStereo { .. } | ControlNode::VuVertical { .. } => {
             (Some(ValueKind::Stereo), Some(ValueKind::Scalar))

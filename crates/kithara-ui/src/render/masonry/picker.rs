@@ -11,13 +11,13 @@ use num_traits::cast::AsPrimitive;
 
 use super::{custom::HostAction, node::pointer_button};
 use crate::{
-    atoms::{track_list::face::Drawn, tree::retained::Drawn as TreeDrawn},
+    atoms::{table::face::Drawn, tree::retained::Drawn as TreeDrawn},
     draw::{Pt, Rect},
     engine::{Engine, Target},
     interact::{CursorShape, Input, MOUSE, Outcome, PointerInput, PointerPhase},
     render::{
         HostedControlPlan, UiEvent, engine_value,
-        hosted::{TrackListPlan, TrackListProjection, TreePlan, TreeProjection},
+        hosted::{TablePlan, TableProjection, TreePlan, TreeProjection},
     },
 };
 
@@ -48,7 +48,7 @@ pub(crate) struct HostedEngine {
     #[field(get(copy), vis = "pub(super)")]
     owner: WidgetId,
     pointer: Rc<Cell<Option<Pt>>>,
-    _projections: Vec<Rc<dyn TrackListProjection>>,
+    _projections: Vec<Rc<dyn TableProjection>>,
     _tree_projections: Vec<Rc<dyn TreeProjection>>,
     targets: Vec<EngineTarget>,
     #[field(get(copy), vis = "pub(super)", rename = "accepts_text_input")]
@@ -72,10 +72,10 @@ impl HostedEngine {
             let projections = targets
                 .iter()
                 .filter_map(|target| {
-                    let HostedControlPlan::TrackList(plan) = &target.plan else {
+                    let HostedControlPlan::Table(plan) = &target.plan else {
                         return None;
                     };
-                    let projection: Rc<dyn TrackListProjection> = Rc::new(EngineProjection {
+                    let projection: Rc<dyn TableProjection> = Rc::new(EngineProjection {
                         area: Rc::clone(&target.area),
                         engine: Rc::clone(&engine),
                         host: host.clone(),
@@ -116,7 +116,7 @@ impl HostedEngine {
 
     pub(super) fn route(&self, input: Input<'_>, point: Option<Pt>) -> Routed {
         let mut engine = self.engine.borrow_mut();
-        let before = self.track_list_views(&engine, self.pointer.get());
+        let before = self.table_views(&engine, self.pointer.get());
         let tree_before = self.tree_views(&engine, self.pointer.get());
         if matches!(input, Input::Pointer(_) | Input::Wheel(_)) {
             self.pointer.set(point);
@@ -133,7 +133,7 @@ impl HostedEngine {
         }
         let emission = engine.handle(input, &targets, kithara_platform::time::Instant::now());
         let focused = engine.focused_path().is_some();
-        let repaint = before != self.track_list_views(&engine, self.pointer.get())
+        let repaint = before != self.table_views(&engine, self.pointer.get())
             || tree_before != self.tree_views(&engine, self.pointer.get());
         let Some(emission) = emission else {
             return Routed {
@@ -217,11 +217,11 @@ impl HostedEngine {
         targets
     }
 
-    fn track_list_views(&self, engine: &Engine, point: Option<Pt>) -> Vec<Drawn> {
+    fn table_views(&self, engine: &Engine, point: Option<Pt>) -> Vec<Drawn> {
         self.targets
             .iter()
             .filter_map(|target| {
-                let HostedControlPlan::TrackList(plan) = &target.plan else {
+                let HostedControlPlan::Table(plan) = &target.plan else {
                     return None;
                 };
                 plan.view(engine, point, target_bounds(target))
@@ -249,8 +249,8 @@ struct EngineProjection {
     pointer: Rc<Cell<Option<Pt>>>,
 }
 
-impl TrackListProjection for EngineProjection {
-    fn project(&self, plan: &TrackListPlan) -> Option<Drawn> {
+impl TableProjection for EngineProjection {
+    fn project(&self, plan: &TablePlan) -> Option<Drawn> {
         let engine = self.engine.borrow();
         plan.view(&engine, self.pointer.get(), bounds(self.area.get()))
     }

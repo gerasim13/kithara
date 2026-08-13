@@ -8,7 +8,7 @@ use super::{
     },
     panels::{
         DeckSkin, DividerSkin, DragSkin, GlobalBarSkin, LayoutPreviewSkin, MeterSkin, PopSkin,
-        TelemetrySkin, TrackListSkin, TreeSkin, WaveSkin,
+        TableSkin, TelemetrySkin, TreeSkin, WaveSkin,
     },
     primitives::{ChromeSkin, LayoutSkin, WindowSkin},
 };
@@ -54,7 +54,7 @@ pub struct SkinDoc {
     pub text_input: TextInputSkin,
     pub text: TextSkin,
     pub toggle: ToggleSkin,
-    pub track_list: TrackListSkin,
+    pub table: TableSkin,
     pub tree: TreeSkin,
     pub vis: VisSkin,
     pub vu_stereo: VuStereoSkin,

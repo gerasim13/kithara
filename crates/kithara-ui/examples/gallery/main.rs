@@ -109,8 +109,8 @@ const ASSETS: &[(&str, &str)] = &[
         include_str!("assets/gallery-tokens.klayout.ron"),
     ),
     (
-        "gallery-tracklist.klayout.ron",
-        include_str!("assets/gallery-tracklist.klayout.ron"),
+        "gallery-table.klayout.ron",
+        include_str!("assets/gallery-table.klayout.ron"),
     ),
     (
         "gallery-tree.klayout.ron",
@@ -313,8 +313,8 @@ const ASSETS: &[(&str, &str)] = &[
         include_str!("assets/modules/tabs/tokens.kmodule.ron"),
     ),
     (
-        "modules/tabs/tracklist.kmodule.ron",
-        include_str!("assets/modules/tabs/tracklist.kmodule.ron"),
+        "modules/tabs/table.kmodule.ron",
+        include_str!("assets/modules/tabs/table.kmodule.ron"),
     ),
     (
         "modules/tabs/tree.kmodule.ron",
@@ -809,24 +809,24 @@ mod tests {
     }
 
     #[kithara::test]
-    fn the_hosted_track_list_keeps_its_descriptor_backed_controls() {
+    fn the_hosted_table_keeps_its_descriptor_backed_controls() {
         assert_hosted_page_claims(
-            Tab::Tracklist,
+            Tab::Table,
             "track-list",
-            |path| path.starts_with("tracklist/"),
+            |path| path.starts_with("table/"),
             &[
-                ("tracklist/column-artist", "activation"),
-                ("tracklist/column-bpm", "activation"),
-                ("tracklist/column-deck", "activation"),
-                ("tracklist/column-energy", "activation"),
-                ("tracklist/column-index", "activation"),
-                ("tracklist/column-key", "activation"),
-                ("tracklist/column-preset", "segmented"),
-                ("tracklist/column-time", "activation"),
-                ("tracklist/column-title", "activation"),
-                ("tracklist/column-transition", "activation"),
-                ("tracklist/reset-columns", "activation"),
-                ("tracklist/table", "track-list"),
+                ("table/column-artist", "activation"),
+                ("table/column-bpm", "activation"),
+                ("table/column-deck", "activation"),
+                ("table/column-energy", "activation"),
+                ("table/column-index", "activation"),
+                ("table/column-key", "activation"),
+                ("table/column-preset", "segmented"),
+                ("table/column-time", "activation"),
+                ("table/column-title", "activation"),
+                ("table/column-transition", "activation"),
+                ("table/reset-columns", "activation"),
+                ("table/table", "track-list"),
             ],
         );
     }
@@ -868,7 +868,7 @@ mod tests {
                 ("gallery/stress/item", "activation"),
                 ("gallery/titlebars/item", "activation"),
                 ("gallery/tokens/item", "activation"),
-                ("gallery/tracklist/item", "activation"),
+                ("gallery/table/item", "activation"),
                 ("gallery/tree/item", "activation"),
                 ("gallery/typography/item", "activation"),
                 ("gallery/vis/item", "activation"),
@@ -898,7 +898,7 @@ mod tests {
             ControlSpec::Fader { .. } => &["fader"],
             ControlSpec::Knob { .. } => &["knob"],
             ControlSpec::Segmented { .. } => &["segmented"],
-            ControlSpec::TrackList { .. } => &["track-list"],
+            ControlSpec::Table { .. } => &["track-list"],
             ControlSpec::VuStereo => &["stereo-meter"],
             ControlSpec::VuVertical { .. } => &["vertical-vu"],
             ControlSpec::Tree { .. } => &["scroll", "text-input"],

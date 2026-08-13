@@ -3,7 +3,7 @@ use num_traits::cast::AsPrimitive;
 use super::custom::{HostAction, Repaint};
 pub(crate) use super::{
     painted::Painted,
-    projected::{TrackListLeaf, TreeLeaf},
+    projected::{TableLeaf, TreeLeaf},
 };
 use crate::{
     atoms::{
@@ -81,19 +81,19 @@ pub(crate) trait MasonryControl {
 }
 
 #[cfg(test)]
-mod track_list_projection {
+mod table_projection {
     use std::rc::Rc;
 
     use kithara_test_utils::kithara;
 
-    use super::{MasonryControl, TrackListLeaf};
+    use super::{MasonryControl, TableLeaf};
     use crate::{
-        atoms::track_list::{ColumnLayout, face::Drawn},
+        atoms::table::{ColumnLayout, face::Drawn},
         builtin,
         draw::Rect,
         engine::Engine,
-        module::TrackColumn,
-        render::hosted::{TrackListPlan, TrackListProjection},
+        module::TableColumn,
+        render::hosted::{TablePlan, TableProjection},
     };
 
     struct MissingEngineProjection {
@@ -101,8 +101,8 @@ mod track_list_projection {
         engine: Engine,
     }
 
-    impl TrackListProjection for MissingEngineProjection {
-        fn project(&self, plan: &TrackListPlan) -> Option<Drawn> {
+    impl TableProjection for MissingEngineProjection {
+        fn project(&self, plan: &TablePlan) -> Option<Drawn> {
             plan.view(&self.engine, None, self.bounds)
         }
 
@@ -110,7 +110,7 @@ mod track_list_projection {
     }
 
     #[kithara::test]
-    fn track_list_with_a_missing_engine_entry_draws_nothing() {
+    fn table_with_a_missing_engine_entry_draws_nothing() {
         let skin = builtin::skin();
         let bounds = Rect {
             h: 120.0,
@@ -118,27 +118,39 @@ mod track_list_projection {
             x: 0.0,
             y: 0.0,
         };
-        let plan = TrackListPlan::fixture(
+        let plan = TablePlan::fixture(
             "library/tracks",
             Vec::new(),
             vec![
                 ColumnLayout {
-                    column: TrackColumn::Index,
+                    column: TableColumn::new(
+                        "index",
+                        "#",
+                        crate::module::TableColumnStyle::Index,
+                        48.0,
+                        false,
+                    ),
                     width: 48.0,
                 },
                 ColumnLayout {
-                    column: TrackColumn::Title,
+                    column: TableColumn::new(
+                        "name",
+                        "NAME",
+                        crate::module::TableColumnStyle::Primary,
+                        192.0,
+                        true,
+                    ),
                     width: 192.0,
                 },
             ],
             skin,
         );
-        let projection: Rc<dyn TrackListProjection> = Rc::new(MissingEngineProjection {
+        let projection: Rc<dyn TableProjection> = Rc::new(MissingEngineProjection {
             bounds,
             engine: Engine::default(),
         });
         plan.bind_projection(Rc::downgrade(&projection));
-        let mut leaf = TrackListLeaf::new(plan, skin);
+        let mut leaf = TableLeaf::new(plan, skin);
 
         assert!(leaf.draw_list(bounds).commands().is_empty());
     }

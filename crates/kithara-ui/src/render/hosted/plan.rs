@@ -3,13 +3,13 @@ use std::{cell::RefCell, ops::Range, rc::Rc};
 use num_traits::cast::AsPrimitive;
 
 #[cfg(feature = "masonry")]
-use super::masonry::{TrackListSource, TrackListState, TreeSource, TreeState};
+use super::masonry::{TableSource, TableState, TreeSource, TreeState};
 use crate::{
     atoms::{
         bar::context::Context,
-        track_list::{
-            ColumnLayout, TrackListRowData, column_layouts, column_resizable, face::TrackTable,
-            minimum_table_width, track_list_content_height,
+        table::{
+            ColumnLayout, TableRowData, column_layouts, column_resizable, face::TableFace,
+            minimum_table_width, table_content_height,
         },
         tree::face::Tree,
         wave::zoom_math::{clamp_zoom, window_bounds, zoom_for_wheel},
@@ -20,9 +20,9 @@ use crate::{
     expand::{Binding, ControlSpec},
     ids::InternId,
     interact::{CursorShape, Hover, ScrollAxis, recognizers::WheelStep},
-    module::{FaderStyle, TrackColumn, WaveStyle},
+    module::{FaderStyle, TableColumn, WaveStyle},
     render::{
-        ReadValue, Reads, Skin, TrackRow, TreeRow,
+        ReadValue, Reads, Skin, TableRow, TreeRow,
         document::read::{read_scope, resolve, wave_zoom},
         model::derived,
         picker_selected_index, text_input_layout,
@@ -58,7 +58,7 @@ pub(crate) enum HostedControlPlan {
         face: Rect,
     },
     Tree(Box<TreePlan>),
-    TrackList(Box<TrackListPlan>),
+    Table(Box<TablePlan>),
     Fader {
         path: String,
         style: FaderStyle,
@@ -105,58 +105,41 @@ pub(crate) struct TreePlan {
 }
 
 #[derive(Clone)]
-pub(crate) struct TrackListPlan {
+pub(crate) struct TablePlan {
     divider_paths: DividerPaths,
     pub(crate) horizontal_path: String,
     pub(crate) path: String,
     pub(crate) row_target: String,
     min_column_width: f32,
-    pub(super) picture: Rc<RefCell<TrackTable>>,
+    pub(super) picture: Rc<RefCell<TableFace>>,
     #[cfg(feature = "masonry")]
-    pub(super) state: TrackListState,
+    pub(super) state: TableState,
 }
 
 #[derive(Clone)]
-struct DividerPaths {
-    artist: String,
-    bpm: String,
-    deck: String,
-    energy: String,
-    index: String,
-    key: String,
-    time: String,
-    title: String,
-    transition: String,
-}
+struct DividerPaths(Vec<(String, String)>);
 
 impl DividerPaths {
-    fn new(path: &str) -> Self {
-        let path = |column: TrackColumn| format!("{path}/width/{}", column.endpoint_name());
-        Self {
-            artist: path(TrackColumn::Artist),
-            bpm: path(TrackColumn::Bpm),
-            deck: path(TrackColumn::Deck),
-            energy: path(TrackColumn::Energy),
-            index: path(TrackColumn::Index),
-            key: path(TrackColumn::Key),
-            time: path(TrackColumn::Time),
-            title: path(TrackColumn::Title),
-            transition: path(TrackColumn::Transition),
-        }
+    fn new(path: &str, columns: &[ColumnLayout]) -> Self {
+        Self(
+            columns
+                .iter()
+                .map(|column| {
+                    (
+                        column.column.id().to_owned(),
+                        format!("{path}/width/{}", column.column.id()),
+                    )
+                })
+                .collect(),
+        )
     }
 
-    fn get(&self, column: TrackColumn) -> &str {
-        match column {
-            TrackColumn::Index => &self.index,
-            TrackColumn::Deck => &self.deck,
-            TrackColumn::Title => &self.title,
-            TrackColumn::Artist => &self.artist,
-            TrackColumn::Bpm => &self.bpm,
-            TrackColumn::Key => &self.key,
-            TrackColumn::Time => &self.time,
-            TrackColumn::Energy => &self.energy,
-            TrackColumn::Transition => &self.transition,
-        }
+    fn get(&self, column: &TableColumn) -> &str {
+        self.0
+            .iter()
+            .find(|(id, _)| id == column.id())
+            .map(|(_, path)| path.as_str())
+            .expect("BUG: every laid-out table column owns a divider path")
     }
 }
 
@@ -211,12 +194,12 @@ impl HostedControlPlan {
                 cx,
             )))),
             (
-                ControlSpec::TrackList {
+                ControlSpec::Table {
                     columns,
                     columns_state,
                 },
-                Some(ReadValue::TrackList(rows)),
-            ) => Some(Self::TrackList(Box::new(TrackListPlan::resolved(
+                Some(ReadValue::Table(rows)),
+            ) => Some(Self::Table(Box::new(TablePlan::resolved(
                 path,
                 columns,
                 columns_state.as_ref(),
@@ -225,12 +208,12 @@ impl HostedControlPlan {
                 cx,
             )))),
             (
-                ControlSpec::TrackList {
+                ControlSpec::Table {
                     columns,
                     columns_state,
                 },
                 _,
-            ) => Some(Self::TrackList(Box::new(TrackListPlan::resolved(
+            ) => Some(Self::Table(Box::new(TablePlan::resolved(
                 path,
                 columns,
                 columns_state.as_ref(),
@@ -305,7 +288,7 @@ impl HostedControlPlan {
             | Self::Wave { path }
             | Self::HeroWave { path, .. } => path,
             Self::Tree(plan) => &plan.path,
-            Self::TrackList(plan) => &plan.path,
+            Self::Table(plan) => &plan.path,
         }
     }
 
@@ -313,7 +296,7 @@ impl HostedControlPlan {
         if matches!(self, Self::Tree(_)) {
             return TreePlan::DESCRIPTORS;
         }
-        if let Self::TrackList(plan) = self {
+        if let Self::Table(plan) = self {
             return plan.descriptor_count();
         }
         1
@@ -332,7 +315,7 @@ impl HostedControlPlan {
                 ..
             } => descriptors.push(Descriptor::picker(path.clone(), *item_count, *selected)),
             Self::Tree(plan) => plan.append_descriptors(descriptors),
-            Self::TrackList(plan) => plan.append_descriptors(descriptors),
+            Self::Table(plan) => plan.append_descriptors(descriptors),
             Self::Fader {
                 path,
                 style,
@@ -493,23 +476,23 @@ impl TreePlan {
     }
 }
 
-impl TrackListPlan {
+impl TablePlan {
     fn resolved(
         path: &str,
-        declared_columns: &[TrackColumn],
+        declared_columns: &[TableColumn],
         columns_state: Option<&Binding>,
         _read: Option<&Binding>,
-        rows: &[TrackRow<'_>],
+        rows: &[TableRow<'_>],
         cx: Resolving<'_>,
     ) -> Self {
         let Resolving { reads, skin, ui } = cx;
         let state =
             columns_state.map(|binding| (ui.resolve(binding.id), read_scope(Some(binding), ui)));
         let columns = column_layouts(declared_columns, reads, state, skin);
-        let rows = rows.iter().map(TrackListRowData::from).collect();
+        let rows = rows.iter().map(TableRowData::from).collect();
         let plan = Self::new(path, rows, columns, skin);
         #[cfg(feature = "masonry")]
-        plan.bind_source(TrackListSource::new(
+        plan.bind_source(TableSource::new(
             declared_columns.to_vec(),
             columns_state.map(|binding| {
                 (
@@ -524,19 +507,19 @@ impl TrackListPlan {
 
     pub(super) fn new(
         path: &str,
-        rows: Vec<TrackListRowData>,
+        rows: Vec<TableRowData>,
         columns: Vec<ColumnLayout>,
         skin: &Skin,
     ) -> Self {
         Self {
-            divider_paths: DividerPaths::new(path),
+            divider_paths: DividerPaths::new(path, &columns),
             horizontal_path: format!("{path}/scroll-x"),
             path: path.to_owned(),
             row_target: format!("{path}/rows"),
-            min_column_width: skin.track_list.min_column_width,
-            picture: Rc::new(RefCell::new(TrackTable::new(rows, columns, skin))),
+            min_column_width: skin.table.min_column_width,
+            picture: Rc::new(RefCell::new(TableFace::new(rows, columns, skin))),
             #[cfg(feature = "masonry")]
-            state: TrackListState::default(),
+            state: TableState::default(),
         }
     }
 
@@ -571,7 +554,7 @@ impl TrackListPlan {
             self.path.clone(),
             ScrollConfig::plain(
                 ScrollAxis::Vertical,
-                track_list_content_height(row_count, picture.skin()),
+                table_content_height(row_count, picture.skin()),
             ),
         ));
         descriptors.push(Descriptor::item(
@@ -584,7 +567,7 @@ impl TrackListPlan {
             .enumerate()
             .filter(|(index, _)| column_resizable(columns, *index));
         for (_, column) in resizable {
-            let divider_path = self.divider_path(column.column);
+            let divider_path = self.divider_path(&column.column);
             descriptors.push(Descriptor::column_divider(
                 divider_path.to_owned(),
                 column.width,
@@ -593,7 +576,7 @@ impl TrackListPlan {
         }
     }
 
-    pub(crate) fn divider_path(&self, column: TrackColumn) -> &str {
+    pub(crate) fn divider_path(&self, column: &TableColumn) -> &str {
         self.divider_paths.get(column)
     }
 }

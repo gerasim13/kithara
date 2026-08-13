@@ -133,7 +133,7 @@ fn walk_includes(
         | ControlNode::Fader { .. }
         | ControlNode::Wave { .. }
         | ControlNode::Vis { .. }
-        | ControlNode::TrackList { .. }
+        | ControlNode::Table { .. }
         | ControlNode::Tree { .. }
         | ControlNode::ContextBar { .. }
         | ControlNode::Toggle { .. }

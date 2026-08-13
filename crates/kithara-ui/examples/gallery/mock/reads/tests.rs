@@ -165,72 +165,66 @@ fn vis_previous_and_next_cycle_the_preset() {
 }
 
 #[kithara::test]
-fn tracklist_presets_replace_host_owned_column_visibility() {
+fn table_presets_replace_host_owned_column_visibility() {
     let mut reads = MockReads::default();
 
     assert_eq!(
-        reads.get("gallery.tracklist.columns.energy"),
+        reads.get("gallery.table.columns.energy"),
         Some(ReadValue::Bool(true))
     );
     assert_eq!(
-        reads.get("gallery.tracklist.columns.artist"),
+        reads.get("gallery.table.columns.artist"),
         Some(ReadValue::Bool(false))
     );
 
-    reads.apply("tracklist/column-preset", &ControlAction::SelectIndex(0));
+    reads.apply("table/column-preset", &ControlAction::SelectIndex(0));
 
     assert_eq!(
-        reads.get("gallery.tracklist.columns.energy"),
+        reads.get("gallery.table.columns.energy"),
         Some(ReadValue::Bool(false))
     );
     assert_eq!(
-        reads.get("gallery.tracklist.columns.artist"),
+        reads.get("gallery.table.columns.artist"),
         Some(ReadValue::Bool(true))
     );
 }
 
 #[kithara::test]
-fn tracklist_reset_restores_current_preset_defaults() {
+fn table_reset_restores_current_preset_defaults() {
     let mut reads = MockReads::default();
 
-    reads.apply("tracklist/column-energy", &ControlAction::Activate);
+    reads.apply("table/column-energy", &ControlAction::Activate);
     assert_eq!(
-        reads.get("gallery.tracklist.columns.energy"),
+        reads.get("gallery.table.columns.energy"),
         Some(ReadValue::Bool(false))
     );
 
-    reads.apply("tracklist/reset-columns", &ControlAction::Activate);
+    reads.apply("table/reset-columns", &ControlAction::Activate);
 
     assert_eq!(
-        reads.get("gallery.tracklist.columns.energy"),
+        reads.get("gallery.table.columns.energy"),
         Some(ReadValue::Bool(true))
     );
     assert_eq!(
-        reads.get("gallery.tracklist.preset"),
+        reads.get("gallery.table.preset"),
         Some(ReadValue::Scalar(1.0))
     );
 }
 
 #[kithara::test]
-fn tracklist_width_write_is_host_owned_and_clamped() {
+fn table_width_write_is_host_owned_and_clamped() {
     let mut reads = MockReads::default();
-    let endpoint = "gallery.tracklist.columns.width.artist";
+    let endpoint = "gallery.table.columns.width.artist";
 
     assert_eq!(reads.get(endpoint), None);
-    reads.apply(
-        "tracklist/table/width/artist",
-        &ControlAction::SetScalar(240.0),
-    );
+    reads.apply("table/table/width/artist", &ControlAction::SetScalar(240.0));
     assert_eq!(reads.get(endpoint), Some(ReadValue::Scalar(240.0)));
 
-    reads.apply(
-        "tracklist/table/width/artist",
-        &ControlAction::SetScalar(1.0),
-    );
+    reads.apply("table/table/width/artist", &ControlAction::SetScalar(1.0));
     assert_eq!(
         reads.get(endpoint),
         Some(ReadValue::Scalar(f64::from(
-            builtin::skin().track_list.min_column_width
+            builtin::skin().table.min_column_width
         )))
     );
 }

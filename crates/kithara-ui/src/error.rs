@@ -145,8 +145,6 @@ pub enum UiDocError {
         path: String,
         detail: String,
     },
-    #[error("{origin}: track list at {path} must contain the Title column")]
-    MissingTrackTitleColumn { origin: SourceUri, path: String },
     #[error("{origin}: ContextBar at {path} requires scope_items, scope, and write together")]
     InvalidContextScope { origin: SourceUri, path: String },
     #[error("{origin}: container at {path} declares write but has no id to address it by")]

@@ -15,10 +15,10 @@ pub mod model;
 mod owner;
 mod picker;
 pub mod skin;
+#[cfg(feature = "iced")]
+mod table;
 mod text_input;
 pub mod theme;
-#[cfg(feature = "iced")]
-mod track_list;
 #[cfg(feature = "iced")]
 pub mod tree;
 pub mod vis;
@@ -34,7 +34,8 @@ pub(crate) use icons::{Mark, document_icon, tree_icon};
 pub use immediate::{LayoutPreview, shaped_text};
 pub(crate) use layer::{HostLayer, LayerHit, WindowLayerProgram, place_popover};
 pub use model::{
-    ReadValue, Reads, StereoLevels, TrackRow, TreeIcon, TreeRow, WaveBucket, WaveformView,
+    ReadValue, Reads, StereoLevels, TableCell, TableRow, TableValue, TreeIcon, TreeRow, WaveBucket,
+    WaveformView,
 };
 pub use owner::InputOwner;
 pub(crate) use picker::{picker_hits, picker_selected_index};
@@ -51,8 +52,8 @@ pub(crate) use {
     layer::{draw_host_layer, window_layer, window_layers},
     picker::{hosted_picker_overlay, scope_picker, sync_picker},
     skin::IcedSkin,
+    table::{sync_table_scroll, table},
     text_input::{search_input, sync_text_input},
-    track_list::{sync_track_list_scroll, track_list},
     tree::{
         Widget, activate, command, drag, engine, index, publish, scalar, scalar_child, step,
         toggle_module, window,

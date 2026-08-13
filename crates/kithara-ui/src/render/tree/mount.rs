@@ -2,7 +2,7 @@ use iced::{alignment::Horizontal, widget::Space};
 
 use super::{
     geometry::Rendered,
-    panel::{context_bar, track_list, tree, vis},
+    panel::{context_bar, table, tree, vis},
     read_flag,
     window::{titlebar, window_controls},
 };
@@ -193,9 +193,9 @@ impl ViewControl for mount::Vis {
     }
 }
 
-impl ViewControl for mount::TrackList<'_> {
+impl ViewControl for mount::Table<'_> {
     fn view<'a>(&self, cx: &Cx<'a, '_, '_>) -> Rendered<'a> {
-        Rendered::leading(track_list(cx, (self.columns, self.columns_state)))
+        Rendered::leading(table(cx, (self.columns, self.columns_state)))
     }
 }
 

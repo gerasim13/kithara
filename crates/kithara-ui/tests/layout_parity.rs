@@ -22,7 +22,7 @@ use kithara_ui::{
     ids::SourceUri,
     module::ChromeStyle,
     render::{
-        ReadValue, Reads, Skin, StereoLevels, TrackRow, WaveBucket, WaveformView,
+        ReadValue, Reads, Skin, StereoLevels, TableCell, TableRow, WaveBucket, WaveformView,
         fonts::{FONT_BYTES, SANS},
         tree,
     },
@@ -35,7 +35,7 @@ struct FixtureReads {
     buckets: [WaveBucket; 6],
     cues: [f32; 2],
     downbeats: [f32; 2],
-    tracks: [TrackRow<'static>; 3],
+    tracks: [TableRow<'static>; 3],
 }
 
 impl Default for FixtureReads {
@@ -77,45 +77,72 @@ impl Default for FixtureReads {
             cues: [0.25, 0.75],
             downbeats: [0.0, 0.5],
             tracks: [
-                TrackRow {
-                    title: "Midnight Circuit",
-                    artist: Some("Neon Lines"),
-                    time: Some("04:12"),
-                    search: Some("midnight circuit neon lines"),
-                    deck: Some("A"),
-                    bpm: Some("128.0"),
-                    key: Some("8A"),
-                    energy: Some(82),
-                    transition: Some("Blend"),
-                    selected: true,
-                },
-                TrackRow {
-                    title: "Signal Path",
-                    artist: Some("Static Motion"),
-                    time: Some("03:47"),
-                    search: Some("signal path static motion"),
-                    deck: None,
-                    bpm: Some("124.5"),
-                    key: Some("10B"),
-                    energy: Some(68),
-                    transition: Some("Cut"),
-                    selected: false,
-                },
-                TrackRow {
-                    title: "Afterimage",
-                    artist: Some("Glass Avenue"),
-                    time: Some("05:03"),
-                    search: Some("afterimage glass avenue"),
-                    deck: Some("B"),
-                    bpm: Some("126.0"),
-                    key: Some("7A"),
-                    energy: Some(74),
-                    transition: Some("Echo"),
-                    selected: false,
-                },
+                table_row((
+                    "Midnight Circuit",
+                    "Neon Lines",
+                    "04:12",
+                    Some("A"),
+                    "128.0",
+                    "8A",
+                    82,
+                    "Blend",
+                    true,
+                )),
+                table_row((
+                    "Signal Path",
+                    "Static Motion",
+                    "03:47",
+                    None,
+                    "124.5",
+                    "10B",
+                    68,
+                    "Cut",
+                    false,
+                )),
+                table_row((
+                    "Afterimage",
+                    "Glass Avenue",
+                    "05:03",
+                    Some("B"),
+                    "126.0",
+                    "7A",
+                    74,
+                    "Echo",
+                    false,
+                )),
             ],
         }
     }
+}
+
+type RowFixture = (
+    &'static str,
+    &'static str,
+    &'static str,
+    Option<&'static str>,
+    &'static str,
+    &'static str,
+    u8,
+    &'static str,
+    bool,
+);
+
+fn table_row(
+    (title, artist, time, deck, bpm, key, energy, transition, selected): RowFixture,
+) -> TableRow<'static> {
+    let mut cells = vec![
+        TableCell::text("title", title),
+        TableCell::text("artist", artist),
+        TableCell::text("time", time),
+        TableCell::text("bpm", bpm),
+        TableCell::text("key", key),
+        TableCell::number("energy", energy),
+        TableCell::text("transition", transition),
+    ];
+    if let Some(deck) = deck {
+        cells.push(TableCell::text("deck", deck));
+    }
+    TableRow::new(cells, selected)
 }
 
 impl Reads for FixtureReads {
@@ -144,7 +171,7 @@ impl Reads for FixtureReads {
                 r#loop: Some([0.25, 0.5]),
                 cues: &self.cues,
             })),
-            "library.visible_tracks" => Some(ReadValue::TrackList(&self.tracks)),
+            "library.visible_tracks" => Some(ReadValue::Table(&self.tracks)),
             _ => None,
         }
     }

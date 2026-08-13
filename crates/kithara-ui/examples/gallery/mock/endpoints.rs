@@ -200,7 +200,7 @@ pub(crate) fn registry() -> impl EndpointRegistry {
         "gallery.tab.vis",
         "gallery.tab.chrome",
         "gallery.tab.titlebars",
-        "gallery.tab.tracklist",
+        "gallery.tab.table",
         "gallery.tab.tree",
         "gallery.tab.library2",
         "gallery.tab.stress",
@@ -243,7 +243,7 @@ pub(crate) fn registry() -> impl EndpointRegistry {
             EndpointDesc::new(ValueKind::Scalar),
         );
     }
-    insert_tracklist_endpoints(&mut registry);
+    insert_table_endpoints(&mut registry);
     registry.insert(
         EndpointCategory::Model,
         "mock.levels",
@@ -252,21 +252,21 @@ pub(crate) fn registry() -> impl EndpointRegistry {
     registry
 }
 
-fn insert_tracklist_endpoints(registry: &mut MockRegistry) {
+fn insert_table_endpoints(registry: &mut MockRegistry) {
     registry.insert(
         EndpointCategory::Model,
-        "gallery.tracklist.preset",
+        "gallery.table.preset",
         EndpointDesc::new(ValueKind::Scalar),
     );
-    for column in Consts::TRACK_COLUMNS {
+    for column in Consts::table_columns() {
         registry.insert(
             EndpointCategory::Model,
-            &format!("gallery.tracklist.columns.{}", column.endpoint_name()),
+            &format!("gallery.table.columns.{}", column.id()),
             EndpointDesc::new(ValueKind::Bool),
         );
         registry.insert(
             EndpointCategory::Model,
-            &format!("gallery.tracklist.columns.width.{}", column.endpoint_name()),
+            &format!("gallery.table.columns.width.{}", column.id()),
             EndpointDesc::new(ValueKind::Scalar),
         );
     }
@@ -359,7 +359,7 @@ fn insert_menu_endpoints(registry: &mut MockRegistry) {
 
 fn insert_library_endpoints(registry: &mut MockRegistry) {
     for (id, kind) in [
-        ("library.visible_tracks", ValueKind::TrackList),
+        ("library.visible_tracks", ValueKind::Table),
         ("library.tree", ValueKind::Tree),
         ("library.breadcrumb", ValueKind::Text),
         ("library.query", ValueKind::Text),

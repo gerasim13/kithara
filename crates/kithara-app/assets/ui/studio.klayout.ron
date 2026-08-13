@@ -47,7 +47,7 @@
                 source: "modules/library.kmodule.ron",
                 with: {
                     "read": "library.tracks",
-                    "columns": "[Deck, Title, Artist]",
+                    "columns": "[(id: \"deck\", label: \"DECK\", style: Badge, width: 64.0), (id: \"title\", label: \"TITLE\", style: Primary, width: 180.0, flexible: true), (id: \"artist\", label: \"ARTIST\", style: Secondary, width: 200.0)]",
                 },
                 frame: (top: false, right: false, bottom: false, left: false),
             )),

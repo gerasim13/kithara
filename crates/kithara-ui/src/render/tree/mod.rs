@@ -7,7 +7,7 @@ mod mount;
 mod node;
 mod panel;
 mod size;
-mod track_list;
+mod table;
 mod window;
 
 pub(crate) use event::{

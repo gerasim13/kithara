@@ -5,7 +5,7 @@ use super::{
     host::{tree_input_layout, tree_search_input_layout},
     mount::{Cx, ViewControl},
     read_scope, resolve,
-    track_list::TrackListHost,
+    table::TableHost,
 };
 use crate::{
     atoms::{bar::context::Context, design::fader::rail_bounds},
@@ -54,7 +54,7 @@ impl<'a> Mount<'_, 'a, '_, '_> {
 
 pub(super) struct HostedControl {
     plan: HostedControlPlan,
-    track_list: Option<Box<TrackListHost>>,
+    table: Option<Box<TableHost>>,
 }
 
 impl HostedControl {
@@ -71,8 +71,8 @@ impl HostedControl {
     }
 
     pub(super) fn mounted(plan: HostedControlPlan, skin: &Skin) -> Self {
-        let track_list = match &plan {
-            HostedControlPlan::TrackList(plan) => Some(Box::new(TrackListHost::new(
+        let table = match &plan {
+            HostedControlPlan::Table(plan) => Some(Box::new(TableHost::new(
                 &plan.path,
                 plan.columns(),
                 plan.row_count(),
@@ -80,7 +80,7 @@ impl HostedControl {
             ))),
             _ => None,
         };
-        Self { plan, track_list }
+        Self { plan, table }
     }
 
     delegate::delegate! {
@@ -139,8 +139,8 @@ pub(super) fn append_control_targets<'a>(
         }
         return;
     }
-    if let Some(track_list) = &control.track_list {
-        track_list.append_targets(layout, cursor, engine, targets);
+    if let Some(table) = &control.table {
+        table.append_targets(layout, cursor, engine, targets);
     } else {
         targets.push(Target::new(
             control.path(),

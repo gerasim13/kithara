@@ -1,9 +1,9 @@
 use iced::advanced::{layout::Layout, mouse};
 
 use crate::{
-    atoms::track_list::{
-        ColumnLayout, column_resizable, track_list_body, track_list_dividers, track_list_overflows,
-        track_list_row_at, track_list_visible_divider_hit, track_list_visible_row_rect,
+    atoms::table::{
+        ColumnLayout, column_resizable, table_body, table_dividers, table_overflows, table_row_at,
+        table_visible_divider_hit, table_visible_row_rect,
     },
     draw::Rect,
     engine::{Engine, Target},
@@ -12,12 +12,12 @@ use crate::{
 };
 #[cfg(test)]
 use crate::{
-    atoms::track_list::{minimum_table_width, track_list_content_height},
+    atoms::table::{minimum_table_width, table_content_height},
     engine::{Descriptor, ScrollConfig},
     interact::ScrollAxis,
 };
 
-pub(super) struct TrackListHost {
+pub(super) struct TableHost {
     columns: Vec<ColumnLayout>,
     divider_paths: Vec<String>,
     horizontal_path: String,
@@ -27,7 +27,7 @@ pub(super) struct TrackListHost {
     skin: Skin,
 }
 
-impl TrackListHost {
+impl TableHost {
     pub(super) fn new(
         path: &str,
         columns: Vec<ColumnLayout>,
@@ -38,7 +38,7 @@ impl TrackListHost {
             .iter()
             .enumerate()
             .filter(|(index, _)| column_resizable(&columns, *index))
-            .map(|(_, column)| format!("{path}/width/{}", column.column.endpoint_name()))
+            .map(|(_, column)| format!("{path}/width/{}", column.column.id()))
             .collect();
         Self {
             columns,
@@ -66,14 +66,14 @@ impl TrackListHost {
         let vertical = engine
             .and_then(|engine| engine.scroll_offset(&self.path))
             .unwrap_or(0.0);
-        if track_list_overflows(&self.columns, bounds.w) {
+        if table_overflows(&self.columns, bounds.w) {
             targets.push(Target::new(&self.horizontal_path, Hit::new(point, bounds)));
         }
         targets.push(Target::new(
             &self.path,
-            Hit::new(point, track_list_body(bounds, &self.skin)),
+            Hit::new(point, table_body(bounds, &self.skin)),
         ));
-        let row_index = track_list_row_at(
+        let row_index = table_row_at(
             point,
             bounds,
             &self.columns,
@@ -83,7 +83,7 @@ impl TrackListHost {
             &self.skin,
         );
         let row = row_index.and_then(|index| {
-            track_list_visible_row_rect(
+            table_visible_row_rect(
                 bounds,
                 &self.columns,
                 self.row_count,
@@ -110,13 +110,13 @@ impl TrackListHost {
                 ),
             )),
         }
-        for (divider_path, divider) in self.divider_paths.iter().zip(track_list_dividers(
+        for (divider_path, divider) in self.divider_paths.iter().zip(table_dividers(
             bounds,
             &self.columns,
             horizontal,
             &self.skin,
         )) {
-            let hit = track_list_visible_divider_hit(bounds, divider.hit).or_else(|| {
+            let hit = table_visible_divider_hit(bounds, divider.hit).or_else(|| {
                 engine
                     .filter(|engine| engine.captures(divider_path))
                     .map(|_| Rect {
@@ -142,7 +142,7 @@ impl TrackListHost {
             self.path.clone(),
             ScrollConfig::plain(
                 ScrollAxis::Vertical,
-                track_list_content_height(self.row_count, &self.skin),
+                table_content_height(self.row_count, &self.skin),
             ),
         ));
         descriptors.push(Descriptor::item(
@@ -159,7 +159,7 @@ impl TrackListHost {
             descriptors.push(Descriptor::column_divider(
                 divider_path.clone(),
                 column.width,
-                self.skin.track_list.min_column_width,
+                self.skin.table.min_column_width,
             ));
         }
     }
@@ -179,7 +179,7 @@ mod tests {
         builtin,
         draw::Pt,
         interact::{Input, PointerPhase, mouse as mouse_input},
-        module::TrackColumn,
+        module::{TableColumn, TableColumnStyle},
     };
 
     fn pointer_input(phase: PointerPhase, at: Option<Pt>) -> Input<'static> {
@@ -189,19 +189,31 @@ mod tests {
     fn divider_columns(index_width: f32) -> Vec<ColumnLayout> {
         vec![
             ColumnLayout {
-                column: TrackColumn::Index,
+                column: TableColumn::new("index", "#", TableColumnStyle::Index, 28.0, false),
                 width: index_width,
             },
             ColumnLayout {
-                column: TrackColumn::Title,
+                column: TableColumn::new("name", "NAME", TableColumnStyle::Primary, 180.0, true),
                 width: 180.0,
             },
             ColumnLayout {
-                column: TrackColumn::Artist,
+                column: TableColumn::new(
+                    "detail",
+                    "DETAIL",
+                    TableColumnStyle::Secondary,
+                    200.0,
+                    false,
+                ),
                 width: 200.0,
             },
             ColumnLayout {
-                column: TrackColumn::Transition,
+                column: TableColumn::new(
+                    "action",
+                    "ACTION",
+                    TableColumnStyle::Transition,
+                    130.0,
+                    false,
+                ),
                 width: 130.0,
             },
         ]
@@ -209,7 +221,7 @@ mod tests {
 
     #[kithara::test]
     fn hosted_dividers_clip_partial_hits_and_omit_offscreen_hits() {
-        let host = TrackListHost::new("library/tracks", divider_columns(98.0), 8, builtin::skin());
+        let host = TableHost::new("library/tracks", divider_columns(98.0), 8, builtin::skin());
         let node = Node::new(Size::new(100.0, 120.0));
         let mut targets = Vec::new();
         host.append_targets(Layout::new(&node), Cursor::Unavailable, None, &mut targets);
@@ -231,7 +243,7 @@ mod tests {
     fn captured_divider_keeps_a_release_watcher_after_resize_moves_it_offscreen() {
         let path = "library/tracks/width/index";
         let node = Node::new(Size::new(100.0, 120.0));
-        let host = TrackListHost::new("library/tracks", divider_columns(98.0), 8, builtin::skin());
+        let host = TableHost::new("library/tracks", divider_columns(98.0), 8, builtin::skin());
         let mut engine = Engine::default();
         let mut descriptors = Vec::new();
         host.append_descriptors(&mut descriptors);
@@ -253,8 +265,7 @@ mod tests {
         );
         assert!(moved.is_some(), "the resize must publish its wider value");
 
-        let resized =
-            TrackListHost::new("library/tracks", divider_columns(300.0), 8, builtin::skin());
+        let resized = TableHost::new("library/tracks", divider_columns(300.0), 8, builtin::skin());
         let mut descriptors = Vec::new();
         resized.append_descriptors(&mut descriptors);
         engine.reconcile(descriptors);

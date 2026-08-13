@@ -6,16 +6,15 @@ use iced::{
 };
 use kithara_platform::time::Instant;
 
-#[path = "track_list_paint.rs"]
+#[path = "table_paint.rs"]
 mod paint;
 
-use paint::{TrackListConfig, TrackListPaint, TrackListState, hovered_row, local_rect};
+use paint::{TableConfig, TablePaint, TableState, hovered_row, local_rect};
 
 use super::{InputOwner, Skin, UiEvent, controls::RetainedCanvas, drag, index, scalar};
 use crate::{
-    atoms::track_list::{
-        ColumnLayout, TrackListRowData, track_list_body, track_list_dividers,
-        track_list_visible_row_rect,
+    atoms::table::{
+        ColumnLayout, TableRowData, table_body, table_dividers, table_visible_row_rect,
     },
     draw::{Pt, Rect},
     interact::{
@@ -24,18 +23,18 @@ use crate::{
     },
 };
 
-pub(crate) fn track_list<'skin>(
+pub(crate) fn table<'skin>(
     path: &str,
-    rows: Vec<TrackListRowData>,
+    rows: Vec<TableRowData>,
     columns: Vec<ColumnLayout>,
     skin: &'skin Skin,
     owner: InputOwner,
 ) -> Element<'skin, UiEvent> {
-    let paint = TrackListPaint::new(path, rows, columns, skin);
+    let paint = TablePaint::new(path, rows, columns, skin);
     let config = paint.config();
     match owner {
         InputOwner::Leaf => RetainedCanvas::new(
-            TrackListProgram {
+            TableProgram {
                 paint,
                 config: config.clone(),
             },
@@ -47,7 +46,7 @@ pub(crate) fn track_list<'skin>(
     }
 }
 
-pub(crate) fn sync_track_list_scroll(
+pub(crate) fn sync_table_scroll(
     path: &str,
     horizontal: f32,
     pressed: Option<usize>,
@@ -71,7 +70,7 @@ pub(crate) fn sync_track_list_scroll(
             _bounds: Rectangle,
             state: &mut dyn std::any::Any,
         ) {
-            if let Some(state) = state.downcast_mut::<TrackListState>() {
+            if let Some(state) = state.downcast_mut::<TableState>() {
                 state.sync(self.path, self.horizontal, self.pressed, self.vertical);
             }
         }
@@ -85,17 +84,17 @@ pub(crate) fn sync_track_list_scroll(
     }
 }
 
-struct TrackListProgram {
-    config: TrackListConfig,
-    paint: TrackListPaint,
+struct TableProgram {
+    config: TableConfig,
+    paint: TablePaint,
 }
 
-impl canvas::Program<UiEvent> for TrackListProgram {
-    type State = TrackListState;
+impl canvas::Program<UiEvent> for TableProgram {
+    type State = TableState;
 
     fn update(
         &self,
-        state: &mut TrackListState,
+        state: &mut TableState,
         event: &Event,
         bounds: Rectangle,
         cursor: Cursor,
@@ -119,7 +118,7 @@ impl canvas::Program<UiEvent> for TrackListProgram {
             return Some(action);
         }
 
-        let body = track_list_body(bounds, self.paint.face.skin());
+        let body = table_body(bounds, self.paint.face.skin());
         let vertical_hit = Hit::new(point, body);
         let before = state.vertical.offset();
         let outcome = state.vertical.handle(input, &vertical_hit);
@@ -142,7 +141,7 @@ impl canvas::Program<UiEvent> for TrackListProgram {
 
     fn draw(
         &self,
-        state: &TrackListState,
+        state: &TableState,
         renderer: &Renderer,
         theme: &Theme,
         bounds: Rectangle,
@@ -153,13 +152,13 @@ impl canvas::Program<UiEvent> for TrackListProgram {
 
     fn mouse_interaction(
         &self,
-        state: &TrackListState,
+        state: &TableState,
         bounds: Rectangle,
         cursor: Cursor,
     ) -> Interaction {
         let point = cursor.position_in(bounds).map(Into::into);
         let bounds = local_rect(bounds);
-        let dividers = track_list_dividers(
+        let dividers = table_dividers(
             bounds,
             self.paint.face.columns(),
             state.horizontal.offset(),
@@ -173,10 +172,7 @@ impl canvas::Program<UiEvent> for TrackListProgram {
             else {
                 continue;
             };
-            let drag = divider_drag(
-                divider.value,
-                self.paint.face.skin().track_list.min_column_width,
-            );
+            let drag = divider_drag(divider.value, self.paint.face.skin().table.min_column_width);
             let hit = Hit::new(point, divider.hit);
             let cursor = drag.cursor(drag_state, &hit);
             if cursor != CursorShape::None {
@@ -204,16 +200,16 @@ impl canvas::Program<UiEvent> for TrackListProgram {
     }
 }
 
-impl TrackListProgram {
+impl TableProgram {
     fn divider_input(
         &self,
-        state: &mut TrackListState,
+        state: &mut TableState,
         input: Input<'_>,
         bounds: Rect,
         point: Option<Pt>,
         origin: Pt,
     ) -> Option<Action<UiEvent>> {
-        let dividers = track_list_dividers(
+        let dividers = table_dividers(
             bounds,
             self.paint.face.columns(),
             state.horizontal.offset(),
@@ -227,10 +223,7 @@ impl TrackListProgram {
             else {
                 continue;
             };
-            let drag = divider_drag(
-                divider.value,
-                self.paint.face.skin().track_list.min_column_width,
-            );
+            let drag = divider_drag(divider.value, self.paint.face.skin().table.min_column_width);
             let hit = Rect {
                 x: divider.hit.x + origin.x,
                 y: divider.hit.y + origin.y,
@@ -238,11 +231,7 @@ impl TrackListProgram {
             };
             let outcome = drag.on_input(drag_state, input, &Hit::new(point, hit), Instant::now());
             if outcome.is_captured() || outcome.value().is_some() {
-                let path = format!(
-                    "{}/width/{}",
-                    self.paint.path,
-                    divider.column.endpoint_name()
-                );
+                let path = format!("{}/width/{}", self.paint.path, divider.column.id());
                 return scalar(&path, outcome.map(f64::from));
             }
         }
@@ -251,7 +240,7 @@ impl TrackListProgram {
 
     fn row_drag_input(
         &self,
-        state: &mut TrackListState,
+        state: &mut TableState,
         input: Input<'_>,
         bounds: Rect,
         point: Option<Pt>,
@@ -272,7 +261,7 @@ impl TrackListProgram {
             state.pressed_index = state.drag_index;
         }
         let row_index = state.drag_index?;
-        let visible = track_list_visible_row_rect(
+        let visible = table_visible_row_rect(
             bounds,
             self.paint.face.columns(),
             self.paint.face.rows().len(),
@@ -360,10 +349,10 @@ mod tests {
 
     use super::*;
     use crate::{
-        atoms::track_list::{face::Drawn, track_list_body, track_list_row_rect},
+        atoms::table::{TableCell, face::Drawn, table_body, table_row_rect},
         builtin,
         draw::{DrawCmd, Geom},
-        module::TrackColumn,
+        module::{TableColumn, TableColumnStyle},
         render::{
             ControlAction, DragPhase,
             fonts::{FONT_BYTES, SANS},
@@ -371,46 +360,49 @@ mod tests {
         text::TextContext,
     };
 
-    fn rows() -> Vec<TrackListRowData> {
+    fn rows() -> Vec<TableRowData> {
         (0..5)
-            .map(|index| TrackListRowData {
-                artist: Some("Artist".to_owned()),
-                bpm: Some("128".to_owned()),
-                deck: (index == 0).then(|| "A".to_owned()),
-                energy: Some(75),
-                key: Some("8A".to_owned()),
-                selected: index == 1,
-                time: Some("03:42".to_owned()),
-                title: format!("Track {index}"),
-                transition: None,
+            .map(|index| {
+                TableRowData::new(
+                    vec![
+                        ("index".to_owned(), TableCell::Text((index + 1).to_string())),
+                        ("title".to_owned(), TableCell::Text(format!("Row {index}"))),
+                        ("artist".to_owned(), TableCell::Text("Detail".to_owned())),
+                    ],
+                    index == 1,
+                )
             })
             .collect()
     }
 
     fn columns() -> Vec<ColumnLayout> {
-        let skin = builtin::skin();
-        [TrackColumn::Index, TrackColumn::Title, TrackColumn::Artist]
-            .into_iter()
-            .map(|column| ColumnLayout {
-                column,
-                width: match column {
-                    TrackColumn::Index => skin.track_list.index_width,
-                    TrackColumn::Title => skin.track_list.title_min_width,
-                    TrackColumn::Artist => skin.track_list.artist_width,
-                    _ => 0.0,
-                },
-            })
-            .collect()
+        [
+            TableColumn::new("index", "#", TableColumnStyle::Index, 28.0, false),
+            TableColumn::new("title", "NAME", TableColumnStyle::Primary, 180.0, true),
+            TableColumn::new(
+                "artist",
+                "DETAIL",
+                TableColumnStyle::Secondary,
+                200.0,
+                false,
+            ),
+        ]
+        .into_iter()
+        .map(|column| ColumnLayout {
+            width: column.width(),
+            column,
+        })
+        .collect()
     }
 
-    fn paint() -> TrackListPaint {
-        TrackListPaint::new("library/tracks", rows(), columns(), builtin::skin())
+    fn paint() -> TablePaint {
+        TablePaint::new("library/tracks", rows(), columns(), builtin::skin())
     }
 
-    fn program() -> TrackListProgram {
+    fn program() -> TableProgram {
         let paint = paint();
         let config = paint.config();
-        TrackListProgram { config, paint }
+        TableProgram { config, paint }
     }
 
     fn headless_renderer() -> Renderer {
@@ -451,7 +443,7 @@ mod tests {
         };
         assert_eq!(*region, bounds);
         assert!(list.commands().iter().any(|command| {
-            matches!(command, DrawCmd::Clip { region, .. } if *region == track_list_body(bounds, paint.face.skin()))
+            matches!(command, DrawCmd::Clip { region, .. } if *region == table_body(bounds, paint.face.skin()))
         }));
     }
 
@@ -487,18 +479,19 @@ mod tests {
     fn divider_drag_at_nonzero_origin_uses_the_full_hit_width_and_exact_travel() {
         let program = program();
         let bounds = Rectangle::new(Point::new(37.0, 23.0), Size::new(180.0, 120.0));
-        let divider = track_list_dividers(
+        let dividers = table_dividers(
             local_rect(bounds),
             program.paint.face.columns(),
             0.0,
             program.paint.face.skin(),
-        )[0];
+        );
+        let divider = &dividers[0];
         assert!(divider.hit.w > divider.paint.w);
         let point = Point::new(
             bounds.x + divider.hit.x + 0.5,
             bounds.y + divider.hit.y + divider.hit.h / 2.0,
         );
-        let mut state = TrackListState::default();
+        let mut state = TableState::default();
         let press = Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left));
         let action = canvas::Program::update(
             &program,
@@ -532,15 +525,16 @@ mod tests {
     fn leaf_divider_state_follows_its_column_across_reorder_and_removal() {
         let program = program();
         let bounds = Rectangle::new(Point::ORIGIN, Size::new(180.0, 120.0));
-        let divider = track_list_dividers(
+        let dividers = table_dividers(
             bounds.into(),
             program.paint.face.columns(),
             0.0,
             program.paint.face.skin(),
-        )[0];
-        assert_eq!(divider.column, TrackColumn::Index);
+        );
+        let divider = &dividers[0];
+        assert_eq!(divider.column.id(), "index");
         let point = Point::new(divider.hit.x + 0.5, divider.hit.y + divider.hit.h / 2.0);
-        let mut state = TrackListState::default();
+        let mut state = TableState::default();
         canvas::Program::update(
             &program,
             &mut state,
@@ -552,13 +546,19 @@ mod tests {
 
         let mut reordered = columns();
         reordered.push(ColumnLayout {
-            column: TrackColumn::Transition,
-            width: builtin::skin().track_list.transition_width,
+            column: TableColumn::new(
+                "transition",
+                "ACTION",
+                TableColumnStyle::Transition,
+                130.0,
+                false,
+            ),
+            width: 130.0,
         });
         reordered.swap(0, 2);
-        let paint = TrackListPaint::new("library/tracks", rows(), reordered, builtin::skin());
+        let paint = TablePaint::new("library/tracks", rows(), reordered, builtin::skin());
         let config = paint.config();
-        let reordered = TrackListProgram { config, paint };
+        let reordered = TableProgram { config, paint };
         let moved = Point::new(point.x + 20.0, point.y);
         let action = canvas::Program::update(
             &reordered,
@@ -573,12 +573,12 @@ mod tests {
             Some(UiEvent::Control { path, .. }) if path == "library/tracks/width/index"
         ));
 
-        let paint = TrackListPaint::new(
+        let paint = TablePaint::new(
             "library/tracks",
             rows(),
             columns()
                 .into_iter()
-                .filter(|column| column.column != TrackColumn::Index)
+                .filter(|column| column.column.id() != "index")
                 .collect(),
             builtin::skin(),
         );
@@ -587,7 +587,7 @@ mod tests {
             state
                 .dividers
                 .iter()
-                .all(|(column, _)| *column != TrackColumn::Index)
+                .all(|(column, _)| column.id() != "index")
         );
     }
 
@@ -595,7 +595,7 @@ mod tests {
     fn leaf_row_drag_keeps_the_start_index_binder() {
         let program = program();
         let bounds = Rectangle::new(Point::ORIGIN, Size::new(900.0, 220.0));
-        let row = track_list_row_rect(
+        let row = table_row_rect(
             bounds.into(),
             program.paint.face.columns(),
             3,
@@ -609,7 +609,7 @@ mod tests {
                 position: Point::new(x, row.y + row.h / 2.0),
             })
         };
-        let mut state = TrackListState::default();
+        let mut state = TableState::default();
 
         canvas::Program::update(
             &program,
@@ -639,7 +639,7 @@ mod tests {
     fn leaf_plain_release_selects_the_armed_row_index() {
         let program = program();
         let bounds = Rectangle::new(Point::ORIGIN, Size::new(900.0, 220.0));
-        let row = track_list_row_rect(
+        let row = table_row_rect(
             bounds.into(),
             program.paint.face.columns(),
             2,
@@ -648,7 +648,7 @@ mod tests {
             program.paint.face.skin(),
         );
         let cursor = Cursor::Available(Point::new(20.0, row.y + row.h / 2.0));
-        let mut state = TrackListState::default();
+        let mut state = TableState::default();
         let pressed = canvas::Program::update(
             &program,
             &mut state,
@@ -690,7 +690,7 @@ mod tests {
     fn leaf_row_release_outside_only_clears_and_repaints_the_press() {
         let program = program();
         let bounds = Rectangle::new(Point::ORIGIN, Size::new(900.0, 220.0));
-        let row = track_list_row_rect(
+        let row = table_row_rect(
             bounds.into(),
             program.paint.face.columns(),
             2,
@@ -699,7 +699,7 @@ mod tests {
             program.paint.face.skin(),
         );
         let cursor = Cursor::Available(Point::new(20.0, row.y + row.h / 2.0));
-        let mut state = TrackListState::default();
+        let mut state = TableState::default();
         let _ = canvas::Program::update(
             &program,
             &mut state,
@@ -728,7 +728,7 @@ mod tests {
         let program = program();
         let bounds = Rectangle::new(Point::ORIGIN, Size::new(180.0, 120.0));
         let cursor = Cursor::Available(Point::new(90.0, 60.0));
-        let mut state = TrackListState::default();
+        let mut state = TableState::default();
         let action = canvas::Program::update(
             &program,
             &mut state,
@@ -771,7 +771,7 @@ mod tests {
                 DrawCmd::Fill {
                     geom: Geom::Rect(Rect { w, .. }),
                     ..
-                } if *w == paint.face.skin().track_list.divider_width
+                } if *w == paint.face.skin().table.divider_width
             )
         }));
     }
@@ -784,7 +784,7 @@ mod tests {
         let mut tree = Tree::new(&widget as &dyn IcedWidget<UiEvent, Theme, Renderer>);
         let node = Node::new(Size::new(180.0, 120.0));
         let renderer = headless_renderer();
-        let mut other = sync_track_list_scroll("library/history", 40.0, None, 60.0);
+        let mut other = sync_table_scroll("library/history", 40.0, None, 60.0);
         IcedWidget::operate(
             &mut widget,
             &mut tree,
@@ -792,13 +792,13 @@ mod tests {
             &renderer,
             &mut other,
         );
-        let state = tree.state.downcast_ref::<TrackListState>();
+        let state = tree.state.downcast_ref::<TableState>();
         assert_eq!(
             (state.horizontal.offset(), state.vertical.offset()),
             (0.0, 0.0)
         );
 
-        let mut matching = sync_track_list_scroll("library/tracks", 14.0, Some(2), 26.0);
+        let mut matching = sync_table_scroll("library/tracks", 14.0, Some(2), 26.0);
         IcedWidget::operate(
             &mut widget,
             &mut tree,
@@ -806,18 +806,18 @@ mod tests {
             &renderer,
             &mut matching,
         );
-        let state = tree.state.downcast_ref::<TrackListState>();
+        let state = tree.state.downcast_ref::<TableState>();
         assert_eq!(
             (state.horizontal.offset(), state.vertical.offset()),
             (14.0, 26.0)
         );
         assert_eq!(state.pressed_index, Some(2));
 
-        let next_paint = TrackListPaint::new("library/history", rows(), columns(), builtin::skin());
+        let next_paint = TablePaint::new("library/history", rows(), columns(), builtin::skin());
         let next_config = next_paint.config();
         let next = RetainedCanvas::new(next_paint, "library/history", next_config);
         IcedWidget::diff(&next, &mut tree);
-        let state = tree.state.downcast_ref::<TrackListState>();
+        let state = tree.state.downcast_ref::<TableState>();
         assert_eq!(
             (state.horizontal.offset(), state.vertical.offset()),
             (0.0, 0.0)
@@ -829,7 +829,7 @@ mod tests {
         let paint = paint();
         let config = paint.config();
         let mut widget = RetainedCanvas::new(
-            TrackListProgram {
+            TableProgram {
                 paint,
                 config: config.clone(),
             },
@@ -846,14 +846,14 @@ mod tests {
             &Limits::new(narrow, narrow),
         );
         {
-            let state = tree.state.downcast_mut::<TrackListState>();
+            let state = tree.state.downcast_mut::<TableState>();
             state.horizontal.sync_offset(500.0);
             state.vertical.sync_offset(500.0);
             assert!(state.horizontal.offset() > 0.0);
             assert!(state.vertical.offset() > 0.0);
         }
 
-        let next_paint = TrackListPaint::new(
+        let next_paint = TablePaint::new(
             "library/tracks",
             rows().into_iter().take(1).collect(),
             columns(),
@@ -861,7 +861,7 @@ mod tests {
         );
         let next_config = next_paint.config();
         let next = RetainedCanvas::new(
-            TrackListProgram {
+            TableProgram {
                 paint: next_paint,
                 config: next_config.clone(),
             },
@@ -873,7 +873,7 @@ mod tests {
         let wide = Size::new(900.0, 300.0);
         IcedWidget::layout(&mut widget, &mut tree, &renderer, &Limits::new(wide, wide));
 
-        let state = tree.state.downcast_ref::<TrackListState>();
+        let state = tree.state.downcast_ref::<TableState>();
         assert_eq!(
             (state.horizontal.offset(), state.vertical.offset()),
             (0.0, 0.0)

@@ -9,7 +9,7 @@ pub use self::{
     node::ControlNode,
     style::{
         ButtonStyle, ChipStyle, DeckSummaryStyle, FaderStyle, GlyphStyle, IconName, PopoverAlign,
-        PopoverAt, ScalarFormat, TextAlign, TextStyle, Tone, TrackColumn, WaveStyle,
-        WindowControlsStyle,
+        PopoverAt, ScalarFormat, TableColumn, TableColumnStyle, TextAlign, TextStyle, Tone,
+        WaveStyle, WindowControlsStyle,
     },
 };

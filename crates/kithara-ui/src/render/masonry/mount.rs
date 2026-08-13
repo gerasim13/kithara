@@ -6,7 +6,7 @@ use num_traits::cast::AsPrimitive;
 
 use super::{
     MasonryHost, MasonryNode, Painted,
-    controls::{Retained, TrackListLeaf, TreeLeaf},
+    controls::{Retained, TableLeaf, TreeLeaf},
     flex::{box_constraints, normalized},
     leaf::{DragProgram, Leaf},
     node::Node,
@@ -195,20 +195,20 @@ impl NodeControl for mount::Vis {
         host.vis_leaf(preset, value, cx.declared)
     }
 }
-impl NodeControl for mount::TrackList<'_> {
+impl NodeControl for mount::Table<'_> {
     fn leaf<A>(&self, host: &MasonryHost<'_, A>, cx: &Cx<'_>) -> MasonryNode<A>
     where
         A: std::fmt::Debug + Send + 'static,
     {
-        let Some(HostedControlPlan::TrackList(plan)) = cx.plan else {
+        let Some(HostedControlPlan::Table(plan)) = cx.plan else {
             tracing::error!(
                 control_path = cx.path,
                 engine_entry = "hosted plan",
-                "TrackList mount is incomplete"
+                "Table mount is incomplete"
             );
             return host.empty(cx.declared);
         };
-        host.control_leaf(TrackListLeaf::new((**plan).clone(), host.skin), cx.declared)
+        host.control_leaf(TableLeaf::new((**plan).clone(), host.skin), cx.declared)
     }
 }
 impl NodeControl for mount::Tree<'_> {

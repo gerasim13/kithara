@@ -1,6 +1,6 @@
 use std::sync::LazyLock;
 
-use kithara_ui::render::{TrackRow, TreeIcon, TreeRow};
+use kithara_ui::render::{TableCell, TableRow, TreeIcon, TreeRow};
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -82,7 +82,7 @@ struct MockTrack {
 }
 
 pub(crate) struct Catalog {
-    pub(crate) rows: &'static [TrackRow<'static>],
+    pub(crate) rows: &'static [TableRow<'static>],
     pub(crate) tree: &'static [TreeRow<'static>],
     pub(crate) artist: &'static str,
     pub(crate) breadcrumb: &'static str,
@@ -98,21 +98,25 @@ fn load_catalog() -> Catalog {
     let data: MockData = ron::from_str(include_str!("assets/mock-data.ron"))
         .expect("embedded gallery mock data must parse");
     let data: &'static MockData = Box::leak(Box::new(data));
-    let rows: Vec<TrackRow<'static>> = data
+    let rows: Vec<TableRow<'static>> = data
         .tracks
         .iter()
         .enumerate()
-        .map(|(index, track)| TrackRow {
-            title: &track.title,
-            artist: Some(&track.artist),
-            time: Some(&track.time),
-            search: Some(&track.search),
-            deck: Some(&track.deck),
-            bpm: Some(&track.bpm),
-            key: Some(&track.key),
-            energy: Some(track.energy),
-            transition: Some(&track.transition),
-            selected: index == 0,
+        .map(|(index, track)| {
+            TableRow::new(
+                vec![
+                    TableCell::text("title", &track.title),
+                    TableCell::text("artist", &track.artist),
+                    TableCell::text("time", &track.time),
+                    TableCell::text("search", &track.search),
+                    TableCell::text("deck", &track.deck),
+                    TableCell::text("bpm", &track.bpm),
+                    TableCell::text("key", &track.key),
+                    TableCell::number("energy", track.energy),
+                    TableCell::text("transition", &track.transition),
+                ],
+                index == 0,
+            )
         })
         .collect();
     let tree: Vec<TreeRow<'static>> = data

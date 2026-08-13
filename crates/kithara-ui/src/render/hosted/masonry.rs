@@ -3,18 +3,18 @@ use std::{
     rc::{Rc, Weak},
 };
 
-use super::plan::{HostedControlPlan, Resolving, TrackListPlan, TreePlan};
+use super::plan::{HostedControlPlan, Resolving, TablePlan, TreePlan};
 #[cfg(test)]
-use crate::atoms::track_list::ColumnLayout;
+use crate::atoms::table::ColumnLayout;
 use crate::{
     atoms::{
         bar::context::Context,
         design::fader::rail_bounds as fader_bounds,
-        track_list::{
-            TrackListRowData, column_layouts, column_resizable,
-            face::{Drawn, TrackTable},
-            track_list_body, track_list_dividers, track_list_overflows, track_list_row_at,
-            track_list_visible_divider_hit, track_list_visible_row_rect,
+        table::{
+            TableRowData, column_layouts, column_resizable,
+            face::{Drawn, TableFace},
+            table_body, table_dividers, table_overflows, table_row_at, table_visible_divider_hit,
+            table_visible_row_rect,
         },
         tree::{face::Tree, retained::Drawn as TreeDrawn},
     },
@@ -24,7 +24,7 @@ use crate::{
     expand::{Binding, ControlSpec},
     ids::InternId,
     interact::{Hit, ScrollAxis},
-    module::TrackColumn,
+    module::TableColumn,
     render::{
         ReadValue, Reads, Skin,
         document::read::{read_scope, resolve},
@@ -50,8 +50,8 @@ pub(crate) fn hosted_control_plan(
     )
 }
 
-pub(crate) trait TrackListProjection {
-    fn project(&self, plan: &TrackListPlan) -> Option<Drawn>;
+pub(crate) trait TableProjection {
+    fn project(&self, plan: &TablePlan) -> Option<Drawn>;
     fn reconcile(&self);
 }
 
@@ -61,14 +61,14 @@ pub(crate) trait TreeProjection {
 }
 
 #[derive(Clone, Default)]
-pub(super) struct TrackListState {
-    projection: Rc<OnceCell<Weak<dyn TrackListProjection>>>,
+pub(super) struct TableState {
+    projection: Rc<OnceCell<Weak<dyn TableProjection>>>,
     reported_missing: Rc<RefCell<Vec<String>>>,
-    source: Rc<OnceCell<TrackListSource>>,
+    source: Rc<OnceCell<TableSource>>,
 }
 
-pub(super) struct TrackListSource {
-    columns: Vec<TrackColumn>,
+pub(super) struct TableSource {
+    columns: Vec<TableColumn>,
     columns_state: Option<(String, String)>,
     rows: Option<String>,
 }
@@ -135,7 +135,7 @@ impl HostedControlPlan {
                 };
                 plan.append_targets(bounds, point, engine, targets);
             }
-            Self::TrackList(plan) => {
+            Self::Table(plan) => {
                 let Some(engine) = engine else {
                     plan.report_missing("retained engine");
                     return;
@@ -281,17 +281,17 @@ impl TreePlan {
     }
 }
 
-impl TrackListPlan {
+impl TablePlan {
     #[cfg(test)]
     pub(crate) fn fixture(
         path: &str,
-        rows: Vec<TrackListRowData>,
+        rows: Vec<TableRowData>,
         columns: Vec<ColumnLayout>,
         skin: &Skin,
     ) -> Self {
         let declared = columns.iter().map(|column| column.column).collect();
         let plan = Self::new(path, rows, columns, skin);
-        plan.bind_source(TrackListSource::new(declared, None, None));
+        plan.bind_source(TableSource::new(declared, None, None));
         plan
     }
 
@@ -305,11 +305,11 @@ impl TrackListPlan {
         true
     }
 
-    pub(crate) fn bind_projection(&self, projection: Weak<dyn TrackListProjection>) {
+    pub(crate) fn bind_projection(&self, projection: Weak<dyn TableProjection>) {
         let _ = self.state.projection.get_or_init(|| projection);
     }
 
-    pub(super) fn bind_source(&self, source: TrackListSource) {
+    pub(super) fn bind_source(&self, source: TableSource) {
         let _ = self.state.source.get_or_init(|| source);
     }
 
@@ -332,11 +332,11 @@ impl TrackListPlan {
             .and_then(|projection| projection.project(self))
     }
 
-    pub(crate) fn picture(&self) -> Ref<'_, TrackTable> {
+    pub(crate) fn picture(&self) -> Ref<'_, TableFace> {
         self.picture.borrow()
     }
 
-    fn projection(&self) -> Option<Rc<dyn TrackListProjection>> {
+    fn projection(&self) -> Option<Rc<dyn TableProjection>> {
         let projection = self.state.projection.get().and_then(Weak::upgrade);
         if projection.is_none() {
             self.report_missing("retained projection");
@@ -353,7 +353,7 @@ impl TrackListPlan {
         tracing::error!(
             control_path = self.path,
             engine_entry = entry,
-            "TrackList projection is incomplete"
+            "Table projection is incomplete"
         );
     }
 
@@ -379,7 +379,7 @@ impl TrackListPlan {
             .iter()
             .enumerate()
             .filter(|(index, _)| column_resizable(&columns, *index))
-            .map(|(index, column)| (index, self.divider_path(column.column)))
+            .map(|(index, column)| (index, self.divider_path(&column.column)))
             .collect::<Vec<_>>();
         for (index, path) in resizable {
             let width = engine
@@ -387,7 +387,7 @@ impl TrackListPlan {
                 .ok_or(MissingEntry { entry: path })?;
             columns[index].width = width;
         }
-        let overflows = track_list_overflows(&columns, bounds.w);
+        let overflows = table_overflows(&columns, bounds.w);
         let horizontal = if overflows {
             engine
                 .scroll_offset(&self.horizontal_path)
@@ -403,7 +403,7 @@ impl TrackListPlan {
         let pressed = engine.item_pressed(&self.path).ok_or(MissingEntry {
             entry: &self.row_target,
         })?;
-        let hovered = track_list_row_at(
+        let hovered = table_row_at(
             point,
             bounds,
             &columns,
@@ -432,16 +432,16 @@ impl TrackListPlan {
             return;
         };
         let picture = self.picture();
-        let overflows = track_list_overflows(&view.columns, bounds.w);
+        let overflows = table_overflows(&view.columns, bounds.w);
         if overflows {
             targets.push(Target::new(&self.horizontal_path, Hit::new(point, bounds)));
         }
         targets.push(Target::new(
             &self.path,
-            Hit::new(point, track_list_body(bounds, picture.skin())),
+            Hit::new(point, table_body(bounds, picture.skin())),
         ));
         let row = view.hovered.and_then(|index| {
-            track_list_visible_row_rect(
+            table_visible_row_rect(
                 bounds,
                 &view.columns,
                 picture.rows().len(),
@@ -460,9 +460,9 @@ impl TrackListPlan {
                 Hit::new(point, empty_bounds(bounds)),
             )),
         }
-        for divider in track_list_dividers(bounds, &view.columns, view.horizontal, picture.skin()) {
-            let divider_path = self.divider_path(divider.column);
-            let hit = track_list_visible_divider_hit(bounds, divider.hit)
+        for divider in table_dividers(bounds, &view.columns, view.horizontal, picture.skin()) {
+            let divider_path = self.divider_path(&divider.column);
+            let hit = table_visible_divider_hit(bounds, divider.hit)
                 .or_else(|| engine.captures(divider_path).then(|| empty_bounds(bounds)));
             if let Some(hit) = hit {
                 targets.push(Target::new(divider_path, Hit::new(point, hit)));
@@ -471,9 +471,9 @@ impl TrackListPlan {
     }
 }
 
-impl TrackListSource {
+impl TableSource {
     pub(super) fn new(
-        columns: Vec<TrackColumn>,
+        columns: Vec<TableColumn>,
         columns_state: Option<(String, String)>,
         rows: Option<String>,
     ) -> Self {
@@ -484,24 +484,24 @@ impl TrackListSource {
         }
     }
 
-    fn picture(&self, reads: &dyn Reads, skin: &Skin) -> TrackTable {
+    fn picture(&self, reads: &dyn Reads, skin: &Skin) -> TableFace {
         let rows = self
             .rows
             .as_deref()
             .and_then(|endpoint| reads.get(endpoint))
             .and_then(|value| match value {
-                ReadValue::TrackList(rows) => Some(rows),
+                ReadValue::Table(rows) => Some(rows),
                 _ => None,
             })
             .map_or_else(Vec::new, |rows| {
-                rows.iter().map(TrackListRowData::from).collect()
+                rows.iter().map(TableRowData::from).collect()
             });
         let state = self
             .columns_state
             .as_ref()
             .map(|(prefix, scope)| (prefix.as_str(), scope.as_str()));
         let columns = column_layouts(&self.columns, reads, state, skin);
-        TrackTable::new(rows, columns, skin)
+        TableFace::new(rows, columns, skin)
     }
 }
 
@@ -552,10 +552,10 @@ mod tests {
 
     use super::*;
     use crate::{
-        atoms::track_list::{ColumnLayout, TrackListRowData},
+        atoms::table::{ColumnLayout, TableRowData},
         builtin,
         interact::{Input, PointerPhase, Scroll, mouse as mouse_input},
-        module::TrackColumn,
+        module::TableColumn,
     };
 
     #[kithara::test]
@@ -641,32 +641,44 @@ mod tests {
     }
 
     #[kithara::test]
-    fn track_list_plan_keeps_scroll_rows_and_dividers_distinct() {
+    fn table_plan_keeps_scroll_rows_and_dividers_distinct() {
         let skin = builtin::skin();
         let columns = vec![
             ColumnLayout {
-                column: TrackColumn::Index,
+                column: TableColumn::new(
+                    "index",
+                    "#",
+                    crate::module::TableColumnStyle::Index,
+                    28.0,
+                    false,
+                ),
                 width: 98.0,
             },
             ColumnLayout {
-                column: TrackColumn::Title,
+                column: TableColumn::new(
+                    "name",
+                    "NAME",
+                    crate::module::TableColumnStyle::Primary,
+                    180.0,
+                    true,
+                ),
                 width: 180.0,
             },
         ];
-        let plan = TrackListPlan::fixture("tracks", track_rows(8), columns, skin);
+        let plan = TablePlan::fixture("tracks", table_rows(8), columns, skin);
         let bounds = Rect {
             x: 0.0,
             y: 0.0,
             w: 140.0,
             h: 180.0,
         };
-        let body = track_list_body(bounds, skin);
+        let body = table_body(bounds, skin);
         let point = Pt {
             x: 20.0,
-            y: body.y + skin.track_list.row_height / 2.0,
+            y: body.y + skin.table.row_height / 2.0,
         };
         let mut engine = Engine::default();
-        engine.reconcile(HostedControlPlan::TrackList(Box::new(plan.clone())).descriptors());
+        engine.reconcile(HostedControlPlan::Table(Box::new(plan.clone())).descriptors());
         let mut targets = Vec::new();
         plan.append_targets(bounds, Some(point), &engine, &mut targets);
 
@@ -683,21 +695,33 @@ mod tests {
     }
 
     #[kithara::test]
-    fn track_list_drops_horizontal_state_when_overflow_ends() {
+    fn table_drops_horizontal_state_when_overflow_ends() {
         let skin = builtin::skin();
         let columns = vec![
             ColumnLayout {
-                column: TrackColumn::Index,
+                column: TableColumn::new(
+                    "index",
+                    "#",
+                    crate::module::TableColumnStyle::Index,
+                    28.0,
+                    false,
+                ),
                 width: 98.0,
             },
             ColumnLayout {
-                column: TrackColumn::Title,
+                column: TableColumn::new(
+                    "name",
+                    "NAME",
+                    crate::module::TableColumnStyle::Primary,
+                    180.0,
+                    true,
+                ),
                 width: 180.0,
             },
         ];
-        let plan = HostedControlPlan::TrackList(Box::new(TrackListPlan::fixture(
+        let plan = HostedControlPlan::Table(Box::new(TablePlan::fixture(
             "tracks",
-            track_rows(8),
+            table_rows(8),
             columns,
             skin,
         )));
@@ -750,18 +774,16 @@ mod tests {
         assert_eq!(engine.scroll_offset("tracks/scroll-x"), None);
     }
 
-    fn track_rows(count: usize) -> Vec<TrackListRowData> {
+    fn table_rows(count: usize) -> Vec<TableRowData> {
         (0..count)
-            .map(|index| TrackListRowData {
-                artist: Some("Artist".to_owned()),
-                bpm: Some("128".to_owned()),
-                deck: None,
-                energy: Some(7),
-                key: Some("Am".to_owned()),
-                time: Some("03:24".to_owned()),
-                transition: None,
-                title: format!("Track {index}"),
-                selected: false,
+            .map(|index| {
+                TableRowData::new(
+                    vec![(
+                        "name".to_owned(),
+                        crate::atoms::table::TableCell::Text(format!("Row {index}")),
+                    )],
+                    false,
+                )
             })
             .collect()
     }

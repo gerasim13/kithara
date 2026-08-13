@@ -20,8 +20,8 @@ use crate::{
     render::{
         Reads, Resolving, Skin, UiEvent,
         controls::sync_tree_scroll,
-        engine as engine_event, hosted_picker_overlay, picker_hits, sync_picker, sync_text_input,
-        sync_track_list_scroll, toggle_module,
+        engine as engine_event, hosted_picker_overlay, picker_hits, sync_picker, sync_table_scroll,
+        sync_text_input, toggle_module,
         tree::control::{HostedControl, append_control_descriptors, append_control_targets},
     },
     size::{Hidden, is_hidden},
@@ -473,7 +473,7 @@ fn sync_scrolls(
         let horizontal_path = format!("{}/scroll-x", target.path);
         let horizontal = engine.scroll_offset(&horizontal_path).unwrap_or(0.0);
         let pressed = engine.pressed_item_index(target.path);
-        let mut sync = sync_track_list_scroll(target.path, horizontal, pressed, offset);
+        let mut sync = sync_table_scroll(target.path, horizontal, pressed, offset);
         child
             .as_widget_mut()
             .operate(tree, layout, renderer, &mut sync);
@@ -950,7 +950,7 @@ pub(super) fn first_child(layout: Layout<'_>) -> Option<Layout<'_>> {
 
 #[cfg(test)]
 mod tests {
-    use std::{borrow::Cow, cell::Cell, rc::Rc};
+    use std::{borrow::Cow, cell::Cell, rc::Rc, sync::LazyLock};
 
     use iced::{
         Pixels, Point, Rectangle, Size,
@@ -989,8 +989,8 @@ mod tests {
         registry::{EndpointCategory, EndpointDesc, EndpointRegistry, ValueKind},
         render::{
             ControlAction, DragPhase, DropZone, HostLayer, InputOwner, LayerHit, ModuleChrome,
-            ReadValue, StereoLevels, TrackRow, TreeIcon, TreeRow, WaveBucket, WaveformView,
-            WheelSurface, Widget, WindowCommand, WindowLayerProgram,
+            ReadValue, StereoLevels, TableCell, TableRow, TreeIcon, TreeRow, WaveBucket,
+            WaveformView, WheelSurface, Widget, WindowCommand, WindowLayerProgram,
             fonts::{FONT_BYTES, SANS},
             window_layer,
         },
@@ -1098,24 +1098,28 @@ mod tests {
     }
 
     struct Fixtures {
-        track_rows: [TrackRow<'static>; 9],
+        table_rows: Vec<TableRow<'static>>,
         tree_rows: [TreeRow<'static>; 8],
         wave_buckets: [WaveBucket; 2],
     }
 
-    const FIXTURES: Fixtures = Fixtures {
-        track_rows: [TrackRow {
-            title: "Track",
-            artist: Some("Artist"),
-            time: Some("04:12"),
-            search: None,
-            deck: Some("A"),
-            bpm: Some("124.0"),
-            key: Some("8A"),
-            energy: Some(7),
-            transition: Some("blend"),
-            selected: false,
-        }; 9],
+    static FIXTURES: LazyLock<Fixtures> = LazyLock::new(|| Fixtures {
+        table_rows: vec![
+            TableRow::new(
+                vec![
+                    TableCell::text("title", "Row"),
+                    TableCell::text("artist", "Detail"),
+                    TableCell::text("time", "04:12"),
+                    TableCell::text("deck", "A"),
+                    TableCell::text("bpm", "124.0"),
+                    TableCell::text("key", "8A"),
+                    TableCell::number("energy", 7),
+                    TableCell::text("transition", "blend"),
+                ],
+                false,
+            );
+            9
+        ],
         tree_rows: [TreeRow {
             depth: 1,
             label: "Row",
@@ -1137,7 +1141,7 @@ mod tests {
                 high: 0.7,
             },
         ],
-    };
+    });
 
     struct Registry {
         boolean: EndpointDesc,
@@ -1145,7 +1149,7 @@ mod tests {
         scoped_scalar: EndpointDesc,
         stereo: EndpointDesc,
         text: EndpointDesc,
-        track_list: EndpointDesc,
+        table: EndpointDesc,
         tree: EndpointDesc,
         trigger: EndpointDesc,
         waveform: EndpointDesc,
@@ -1159,7 +1163,7 @@ mod tests {
                 scoped_scalar: EndpointDesc::new(ValueKind::Scalar).with_scope("deck"),
                 stereo: EndpointDesc::new(ValueKind::Stereo),
                 text: EndpointDesc::new(ValueKind::Text),
-                track_list: EndpointDesc::new(ValueKind::TrackList),
+                table: EndpointDesc::new(ValueKind::Table),
                 tree: EndpointDesc::new(ValueKind::Tree),
                 trigger: EndpointDesc::new(ValueKind::Trigger),
                 waveform: EndpointDesc::new(ValueKind::Waveform).with_scope("deck"),
@@ -1201,18 +1205,18 @@ mod tests {
                     Some(&self.boolean)
                 }
                 (EndpointCategory::Model, "mock.wave") => Some(&self.waveform),
-                (EndpointCategory::Model, "gallery.tracklist.preset" | "library.scope") => {
+                (EndpointCategory::Model, "gallery.table.preset" | "library.scope") => {
                     Some(&self.scalar)
                 }
                 (EndpointCategory::Model, "library.breadcrumb" | "library.query") => {
                     Some(&self.text)
                 }
-                (EndpointCategory::Model, "library.visible_tracks") => Some(&self.track_list),
+                (EndpointCategory::Model, "library.visible_tracks") => Some(&self.table),
                 (EndpointCategory::Model, "library.tree") => Some(&self.tree),
                 (EndpointCategory::Model, endpoint)
-                    if endpoint.starts_with("gallery.tracklist.columns.") =>
+                    if endpoint.starts_with("gallery.table.columns.") =>
                 {
-                    if endpoint.starts_with("gallery.tracklist.columns.width.") {
+                    if endpoint.starts_with("gallery.table.columns.width.") {
                         Some(&self.scalar)
                     } else {
                         Some(&self.boolean)
@@ -1262,10 +1266,10 @@ mod tests {
                 "mock.chip.active" => Some(ReadValue::Bool(true)),
                 "mock.chip.inactive" => Some(ReadValue::Bool(false)),
                 "mock.cells.segmented" => Some(ReadValue::Scalar(2.0)),
-                "gallery.tracklist.preset" | "library.scope" => Some(ReadValue::Scalar(0.0)),
+                "gallery.table.preset" | "library.scope" => Some(ReadValue::Scalar(0.0)),
                 "library.breadcrumb" => Some(ReadValue::Text("All Tracks")),
                 "library.query" => Some(ReadValue::Text(&self.query)),
-                "library.visible_tracks" => Some(ReadValue::TrackList(&FIXTURES.track_rows)),
+                "library.visible_tracks" => Some(ReadValue::Table(&FIXTURES.table_rows)),
                 "library.tree" => Some(ReadValue::Tree(&FIXTURES.tree_rows)),
                 "gallery.label.meters" => Some(ReadValue::Text("VU / STEREO / VERTICAL")),
                 "gallery.label.toggles" => Some(ReadValue::Text("TOGGLES / CHECKBOXES")),
@@ -1283,8 +1287,8 @@ mod tests {
                 endpoint if endpoint.starts_with("gallery.module.") => {
                     Some(ReadValue::Bool(endpoint == "gallery.module.deck"))
                 }
-                endpoint if endpoint.starts_with("gallery.tracklist.columns.width.") => None,
-                endpoint if endpoint.starts_with("gallery.tracklist.columns.") => {
+                endpoint if endpoint.starts_with("gallery.table.columns.width.") => None,
+                endpoint if endpoint.starts_with("gallery.table.columns.") => {
                     Some(ReadValue::Bool(true))
                 }
                 "mock.wave@deck=a" => Some(ReadValue::Waveform(WaveformView {
@@ -1465,16 +1469,16 @@ mod tests {
         .unwrap_or_else(|error| panic!("gallery cells fixture must compile: {error}"))
     }
 
-    fn compiled_gallery_track_list() -> CompiledUi {
+    fn compiled_gallery_table() -> CompiledUi {
         let mut resolver = MemResolver::default();
         resolver.insert(
             "gallery.klayout.ron",
             r#"(schema: "kithara.layout", version: 1, id: "gallery-track-list-host",
-                root: Module(instance: "tracklist", source: "tracklist.kmodule.ron"))"#,
+                root: Module(instance: "table", source: "table.kmodule.ron"))"#,
         );
         resolver.insert(
-            "tracklist.kmodule.ron",
-            include_str!("../../../examples/gallery/assets/modules/tabs/tracklist.kmodule.ron"),
+            "table.kmodule.ron",
+            include_str!("../../../examples/gallery/assets/modules/tabs/table.kmodule.ron"),
         );
         compile(
             "gallery.klayout.ron",
@@ -1701,7 +1705,7 @@ mod tests {
                 ControlSpec::ContextBar { .. } => {
                     components.push("picker");
                 }
-                ControlSpec::TrackList { .. } => {
+                ControlSpec::Table { .. } => {
                     components.push("track-list");
                 }
                 ControlSpec::Fader { .. } => {
@@ -3048,8 +3052,8 @@ mod tests {
     }
 
     #[kithara::test]
-    fn gallery_track_list_hosts_its_exact_conditional_inventory() {
-        let ui = compiled_gallery_track_list();
+    fn gallery_table_hosts_its_exact_conditional_inventory() {
+        let ui = compiled_gallery_table();
         let reads = FixtureReads::default();
         let CompiledNode::Module {
             instance,
@@ -3061,7 +3065,7 @@ mod tests {
             panic!("gallery track-list fixture root must be a module");
         };
 
-        assert_eq!(ui.resolve(*module), "gallery-tracklist-tab");
+        assert_eq!(ui.resolve(*module), "gallery-table-tab");
         let mut components = Vec::new();
         claimed_components(root, &mut components);
         assert_eq!(
@@ -3111,46 +3115,46 @@ mod tests {
         assert_eq!(
             targets
                 .iter()
-                .filter(|target| target.path.starts_with("tracklist/table"))
+                .filter(|target| target.path.starts_with("table/table"))
                 .map(|target| target.path)
                 .collect::<Vec<_>>(),
             [
-                "tracklist/table/scroll-x",
-                "tracklist/table",
-                "tracklist/table/rows",
-                "tracklist/table/width/index",
-                "tracklist/table/width/deck",
-                "tracklist/table/width/artist",
-                "tracklist/table/width/bpm",
-                "tracklist/table/width/key",
-                "tracklist/table/width/time",
+                "table/table/scroll-x",
+                "table/table",
+                "table/table/rows",
+                "table/table/width/index",
+                "table/table/width/deck",
+                "table/table/width/artist",
+                "table/table/width/bpm",
+                "table/table/width/key",
+                "table/table/width/time",
             ]
         );
         let descriptors = active_descriptors(&hosted, &targets);
         assert_eq!(
             descriptors.iter().map(descriptor_path).collect::<Vec<_>>(),
             [
-                "tracklist/column-preset",
-                "tracklist/table/scroll-x",
-                "tracklist/table",
-                "tracklist/table/rows",
-                "tracklist/table/width/index",
-                "tracklist/table/width/deck",
-                "tracklist/table/width/artist",
-                "tracklist/table/width/bpm",
-                "tracklist/table/width/key",
-                "tracklist/table/width/time",
-                "tracklist/table/width/energy",
-                "tracklist/column-index",
-                "tracklist/column-deck",
-                "tracklist/column-title",
-                "tracklist/column-artist",
-                "tracklist/column-bpm",
-                "tracklist/column-key",
-                "tracklist/column-time",
-                "tracklist/column-energy",
-                "tracklist/column-transition",
-                "tracklist/reset-columns",
+                "table/column-preset",
+                "table/table/scroll-x",
+                "table/table",
+                "table/table/rows",
+                "table/table/width/index",
+                "table/table/width/deck",
+                "table/table/width/artist",
+                "table/table/width/bpm",
+                "table/table/width/key",
+                "table/table/width/time",
+                "table/table/width/energy",
+                "table/column-index",
+                "table/column-deck",
+                "table/column-title",
+                "table/column-artist",
+                "table/column-bpm",
+                "table/column-key",
+                "table/column-time",
+                "table/column-energy",
+                "table/column-transition",
+                "table/reset-columns",
             ]
         );
         assert!(matches!(
@@ -3186,13 +3190,13 @@ mod tests {
             .collect();
         assert_eq!(divider_targets.len(), 6);
         assert!(
-            divider_targets.iter().all(|target| {
-                target.hit.area().w == builtin::skin().track_list.divider_hit_width
-            })
+            divider_targets
+                .iter()
+                .all(|target| { target.hit.area().w == builtin::skin().table.divider_hit_width })
         );
         let viewport = targets
             .iter()
-            .find(|target| target.path == "tracklist/table/scroll-x")
+            .find(|target| target.path == "table/table/scroll-x")
             .map_or_else(
                 || panic!("the narrow table must expose its horizontal viewport"),
                 |target| target.hit.area(),
@@ -3221,30 +3225,30 @@ mod tests {
         assert_eq!(
             wide_targets
                 .iter()
-                .filter(|target| target.path.starts_with("tracklist/table"))
+                .filter(|target| target.path.starts_with("table/table"))
                 .map(|target| target.path)
                 .collect::<Vec<_>>(),
             [
-                "tracklist/table",
-                "tracklist/table/rows",
-                "tracklist/table/width/index",
-                "tracklist/table/width/deck",
-                "tracklist/table/width/artist",
-                "tracklist/table/width/bpm",
-                "tracklist/table/width/key",
-                "tracklist/table/width/time",
-                "tracklist/table/width/energy",
+                "table/table",
+                "table/table/rows",
+                "table/table/width/index",
+                "table/table/width/deck",
+                "table/table/width/artist",
+                "table/table/width/bpm",
+                "table/table/width/key",
+                "table/table/width/time",
+                "table/table/width/energy",
             ]
         );
         assert!(
             wide_targets
                 .iter()
-                .all(|target| target.path != "tracklist/table/scroll-x")
+                .all(|target| target.path != "table/table/scroll-x")
         );
         assert!(
             active_descriptors(&hosted, &wide_targets)
                 .iter()
-                .all(|descriptor| descriptor_path(descriptor) != "tracklist/table/scroll-x")
+                .all(|descriptor| descriptor_path(descriptor) != "table/table/scroll-x")
         );
     }
 
@@ -4238,7 +4242,7 @@ mod tests {
                 "gallery/vis/item",
                 "gallery/chrome/item",
                 "gallery/titlebars/item",
-                "gallery/tracklist/item",
+                "gallery/table/item",
                 "gallery/tree/item",
                 "gallery/library2/item",
                 "gallery/stress/item",

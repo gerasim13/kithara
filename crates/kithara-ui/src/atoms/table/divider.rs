@@ -1,27 +1,37 @@
-use super::{ColumnLayout, layout::intersect};
-use crate::{draw::Rect, module::TrackColumn, render::Skin};
+use num_traits::ToPrimitive;
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+use super::{ColumnLayout, layout::intersect};
+use crate::{draw::Rect, module::TableColumn, render::Skin};
+
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) struct ColumnDividerLayout {
-    pub(crate) column: TrackColumn,
+    pub(crate) column: TableColumn,
     pub(crate) hit: Rect,
     pub(crate) paint: Rect,
     pub(crate) value: f32,
 }
 
-pub(crate) fn track_list_dividers(
+pub(crate) fn table_dividers(
     bounds: Rect,
     columns: &[ColumnLayout],
     horizontal_offset: f32,
     skin: &Skin,
 ) -> Vec<ColumnDividerLayout> {
-    let flexible_title = !super::track_list_overflows(columns, bounds.w);
     let extra = (bounds.w - super::minimum_table_width(columns)).max(0.0);
+    let flexible = columns
+        .iter()
+        .filter(|column| column.column.flexible())
+        .count();
+    let flexible_extra = if flexible == 0 {
+        0.0
+    } else {
+        extra / flexible.to_f32().unwrap_or(f32::MAX)
+    };
     let mut edge = bounds.x - horizontal_offset;
     let mut dividers = Vec::new();
-    for (index, column) in columns.iter().copied().enumerate() {
-        let width = if flexible_title && column.column == TrackColumn::Title {
-            column.width + extra
+    for (index, column) in columns.iter().cloned().enumerate() {
+        let width = if column.column.flexible() {
+            column.width + flexible_extra
         } else {
             column.width
         };
@@ -30,17 +40,17 @@ pub(crate) fn track_list_dividers(
             continue;
         }
         dividers.push(ColumnDividerLayout {
-            column: column.column,
+            column: column.column.clone(),
             hit: Rect {
-                h: skin.track_list.header_height,
-                w: skin.track_list.divider_hit_width,
-                x: edge - skin.track_list.divider_hit_width / 2.0,
+                h: skin.table.header_height,
+                w: skin.table.divider_hit_width,
+                x: edge - skin.table.divider_hit_width / 2.0,
                 y: bounds.y,
             },
             paint: Rect {
-                h: skin.track_list.header_height,
-                w: skin.track_list.divider_width,
-                x: edge - skin.track_list.divider_width / 2.0,
+                h: skin.table.header_height,
+                w: skin.table.divider_width,
+                x: edge - skin.table.divider_width / 2.0,
                 y: bounds.y,
             },
             value: column.width,
@@ -49,7 +59,7 @@ pub(crate) fn track_list_dividers(
     dividers
 }
 
-pub(crate) fn track_list_visible_divider_hit(bounds: Rect, hit: Rect) -> Option<Rect> {
+pub(crate) fn table_visible_divider_hit(bounds: Rect, hit: Rect) -> Option<Rect> {
     intersect(hit, bounds)
 }
 
@@ -59,11 +69,22 @@ mod tests {
 
     use super::*;
     use crate::{
-        atoms::track_list::column_layouts,
+        atoms::table::column_layouts,
+        module::{TableColumn, TableColumnStyle},
         render::{ReadValue, Reads},
     };
 
     struct ColumnReads(Option<bool>);
+
+    fn column(id: &str, width: f32, flexible: bool) -> TableColumn {
+        TableColumn::new(
+            id,
+            id.to_uppercase(),
+            TableColumnStyle::Secondary,
+            width,
+            flexible,
+        )
+    }
 
     impl Reads for ColumnReads {
         fn get(&self, endpoint: &str) -> Option<ReadValue<'_>> {
@@ -78,12 +99,16 @@ mod tests {
     fn divider_hit_rect_is_wider_than_the_centered_paint_rect() {
         let skin = crate::builtin::skin();
         let columns = column_layouts(
-            &[TrackColumn::Index, TrackColumn::Title, TrackColumn::Artist],
+            &[
+                column("index", 28.0, false),
+                column("title", 180.0, true),
+                column("artist", 200.0, false),
+            ],
             &ColumnReads(None),
             None,
             skin,
         );
-        let divider = track_list_dividers(
+        let dividers = table_dividers(
             Rect {
                 h: 160.0,
                 w: 800.0,
@@ -93,10 +118,11 @@ mod tests {
             &columns,
             0.0,
             skin,
-        )[0];
+        );
+        let divider = &dividers[0];
 
-        assert_eq!(divider.hit.w, skin.track_list.divider_hit_width);
-        assert_eq!(divider.paint.w, skin.track_list.divider_width);
+        assert_eq!(divider.hit.w, skin.table.divider_hit_width);
+        assert_eq!(divider.paint.w, skin.table.divider_width);
         assert_eq!(divider.hit.w, 7.0);
         assert_eq!(divider.paint.w, 1.0);
         assert!(divider.hit.w > divider.paint.w);
@@ -121,18 +147,15 @@ mod tests {
             y: 0.0,
         };
 
-        assert_eq!(track_list_visible_divider_hit(bounds, hit(-8.0, 4.0)), None);
+        assert_eq!(table_visible_divider_hit(bounds, hit(-8.0, 4.0)), None);
         assert_eq!(
-            track_list_visible_divider_hit(bounds, hit(-2.0, 7.0)),
+            table_visible_divider_hit(bounds, hit(-2.0, 7.0)),
             Some(hit(0.0, 5.0))
         );
         assert_eq!(
-            track_list_visible_divider_hit(bounds, hit(98.0, 7.0)),
+            table_visible_divider_hit(bounds, hit(98.0, 7.0)),
             Some(hit(98.0, 2.0))
         );
-        assert_eq!(
-            track_list_visible_divider_hit(bounds, hit(101.0, 7.0)),
-            None
-        );
+        assert_eq!(table_visible_divider_hit(bounds, hit(101.0, 7.0)), None);
     }
 }

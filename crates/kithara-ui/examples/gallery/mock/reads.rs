@@ -2,7 +2,6 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use kithara_ui::{
     builtin,
-    module::TrackColumn,
     render::{ControlAction, ReadValue, Reads, StereoLevels, TreeRow, WaveBucket, WaveformView},
 };
 use num_traits::cast::AsPrimitive;
@@ -23,7 +22,7 @@ use crate::{
 #[derive(fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
 pub(crate) struct MockReads {
-    tracklist_widths: BTreeMap<TrackColumn, f64>,
+    table_widths: BTreeMap<String, f64>,
     collapsed: BTreeSet<String>,
     context: ContextState,
     transport: DeckTransport,
@@ -43,7 +42,7 @@ pub(crate) struct MockReads {
     wave_beats: Vec<f32>,
     wave_downbeats: Vec<f32>,
     waveform: Vec<WaveBucket>,
-    tracklist_columns: [bool; 9],
+    table_columns: [bool; 9],
     vis_levels: [f32; 2],
     knobs: [f64; 4],
     button_cue: bool,
@@ -62,7 +61,7 @@ pub(crate) struct MockReads {
     volume: f64,
     vis_rng: u32,
     library_scope: usize,
-    tracklist_preset: usize,
+    table_preset: usize,
     tree_selected: usize,
     vis_preset: usize,
 }
@@ -117,9 +116,9 @@ impl Default for MockReads {
                 Consts::POSITION_SECS,
                 Consts::ZOOM,
             ),
-            tracklist_columns: Consts::TRACKLIST_QUEUE,
-            tracklist_preset: Consts::TRACKLIST_QUEUE_PRESET,
-            tracklist_widths: BTreeMap::new(),
+            table_columns: Consts::TABLE_QUEUE,
+            table_preset: Consts::TABLE_QUEUE_PRESET,
+            table_widths: BTreeMap::new(),
             tree_rows: Vec::with_capacity(CATALOG.tree.len()),
             tree_visible_indices: Vec::with_capacity(CATALOG.tree.len()),
             vis_levels: [0.66, 0.52],
@@ -169,14 +168,14 @@ impl MockReads {
             "buttons/play" => self.button_play = !self.button_play,
             "buttons/cue" => self.button_cue = !self.button_cue,
             "buttons/sync" => self.button_sync = !self.button_sync,
-            "tracklist/reset-columns" => self.reset_tracklist_columns(),
+            "table/reset-columns" => self.reset_table_columns(),
             "vis/next" => self.vis_preset = (self.vis_preset + 1) % CATALOG.vis_presets.len(),
             "vis/previous" => {
                 self.vis_preset =
                     (self.vis_preset + CATALOG.vis_presets.len() - 1) % CATALOG.vis_presets.len();
             }
-            path if path.starts_with("tracklist/column-") => {
-                self.toggle_tracklist_column(&path["tracklist/column-".len()..]);
+            path if path.starts_with("table/column-") => {
+                self.toggle_table_column(&path["table/column-".len()..]);
             }
             path if path.ends_with("/transport/sync") => {
                 self.button_sync = !self.button_sync;
@@ -218,15 +217,15 @@ impl MockReads {
         }
     }
 
-    fn reset_tracklist_columns(&mut self) {
-        self.set_tracklist_preset(self.tracklist_preset);
+    fn reset_table_columns(&mut self) {
+        self.set_table_preset(self.table_preset);
     }
 
     fn select_index(&mut self, path: &str, index: usize) {
         if path == "cells/beat" {
             self.segmented_index = index.as_();
-        } else if path == "tracklist/column-preset" {
-            self.set_tracklist_preset(index);
+        } else if path == "table/column-preset" {
+            self.set_table_preset(index);
         } else if path == "library2/context" {
             self.library_scope = index;
         } else if matches!(path, "tree/browser" | "library2/browser") {
@@ -271,7 +270,7 @@ impl MockReads {
             return;
         }
         if let Some((_, name)) = path.rsplit_once("/width/") {
-            self.set_tracklist_width(name, value);
+            self.set_table_width(name, value);
             return;
         }
         let value = value.clamp(0.0, 1.0);
@@ -298,31 +297,31 @@ impl MockReads {
         }
     }
 
-    fn set_tracklist_preset(&mut self, index: usize) {
+    fn set_table_preset(&mut self, index: usize) {
         let Some(columns) = [
-            Consts::TRACKLIST_LIBRARY,
-            Consts::TRACKLIST_QUEUE,
-            Consts::TRACKLIST_MICRO,
+            Consts::TABLE_LIBRARY,
+            Consts::TABLE_QUEUE,
+            Consts::TABLE_MICRO,
         ]
         .get(index)
         .copied() else {
             return;
         };
-        self.tracklist_preset = index;
-        self.tracklist_columns = columns;
+        self.table_preset = index;
+        self.table_columns = columns;
     }
 
-    fn set_tracklist_width(&mut self, name: &str, value: f64) {
-        let Some(column) = Consts::TRACK_COLUMNS
+    fn set_table_width(&mut self, name: &str, value: f64) {
+        if !Consts::table_columns()
             .iter()
-            .find(|column| column.endpoint_name() == name)
-            .copied()
-        else {
+            .any(|column| column.id() == name)
+        {
             return;
-        };
+        }
         if value.is_finite() {
-            let minimum = f64::from(builtin::skin().track_list.min_column_width);
-            self.tracklist_widths.insert(column, value.max(minimum));
+            let minimum = f64::from(builtin::skin().table.min_column_width);
+            self.table_widths
+                .insert(name.to_owned(), value.max(minimum));
         }
     }
 
@@ -341,7 +340,7 @@ impl MockReads {
             "gallery.tab.vis" => self.active_tab == Tab::Vis,
             "gallery.tab.chrome" => self.active_tab == Tab::Chrome,
             "gallery.tab.titlebars" => self.active_tab == Tab::Titlebars,
-            "gallery.tab.tracklist" => self.active_tab == Tab::Tracklist,
+            "gallery.tab.table" => self.active_tab == Tab::Table,
             "gallery.tab.tree" => self.active_tab == Tab::Tree,
             "gallery.tab.library2" => self.active_tab == Tab::Library2,
             "gallery.tab.stress" => self.active_tab == Tab::Stress,
@@ -393,14 +392,14 @@ impl MockReads {
         }
     }
 
-    fn toggle_tracklist_column(&mut self, name: &str) {
-        let Some(index) = Consts::TRACK_COLUMNS
+    fn toggle_table_column(&mut self, name: &str) {
+        let Some(index) = Consts::table_columns()
             .iter()
-            .position(|column| column.endpoint_name() == name)
+            .position(|column| column.id() == name)
         else {
             return;
         };
-        self.tracklist_columns[index] = !self.tracklist_columns[index];
+        self.table_columns[index] = !self.table_columns[index];
     }
 }
 
@@ -435,21 +434,17 @@ impl Reads for MockReads {
         {
             return Some(ReadValue::Bool(self.collapsed.contains(module)));
         }
-        if let Some(name) = endpoint.strip_prefix("gallery.tracklist.columns.width.") {
-            let column = Consts::TRACK_COLUMNS
+        if let Some(name) = endpoint.strip_prefix("gallery.table.columns.width.") {
+            Consts::table_columns()
                 .iter()
-                .find(|column| column.endpoint_name() == name)?;
-            return self
-                .tracklist_widths
-                .get(column)
-                .copied()
-                .map(ReadValue::Scalar);
+                .find(|column| column.id() == name)?;
+            return self.table_widths.get(name).copied().map(ReadValue::Scalar);
         }
-        if let Some(name) = endpoint.strip_prefix("gallery.tracklist.columns.") {
-            let index = Consts::TRACK_COLUMNS
+        if let Some(name) = endpoint.strip_prefix("gallery.table.columns.") {
+            let index = Consts::table_columns()
                 .iter()
-                .position(|column| column.endpoint_name() == name)?;
-            return Some(ReadValue::Bool(self.tracklist_columns[index]));
+                .position(|column| column.id() == name)?;
+            return Some(ReadValue::Bool(self.table_columns[index]));
         }
         let value = match endpoint {
             "gallery.label.knobs" => ReadValue::Text("KNOB · 26 / 28 / 34 / 38"),
@@ -512,7 +507,7 @@ impl Reads for MockReads {
                 volume: self.volume.as_(),
             }),
             "player.output.volume" | "mock.volume" => ReadValue::Scalar(self.volume),
-            "library.visible_tracks" => ReadValue::TrackList(CATALOG.rows),
+            "library.visible_tracks" => ReadValue::Table(CATALOG.rows),
             "library.tree" => ReadValue::Tree(&self.tree_rows),
             "library.breadcrumb" => ReadValue::Text(CATALOG.breadcrumb),
             "library.query" => ReadValue::Text(&self.library_query),
@@ -538,7 +533,7 @@ impl Reads for MockReads {
             "mock.button.play" => ReadValue::Bool(self.button_play),
             "mock.button.cue" => ReadValue::Bool(self.button_cue),
             "mock.cells.segmented" => ReadValue::Scalar(self.segmented_index),
-            "gallery.tracklist.preset" => ReadValue::Scalar(self.tracklist_preset.as_()),
+            "gallery.table.preset" => ReadValue::Scalar(self.table_preset.as_()),
             _ => return None,
         };
         Some(value)

@@ -56,19 +56,81 @@ pub struct TreeRow<'a> {
     pub depth: u8,
 }
 
-/// Borrowed track-list row exposed to renderers.
+/// Borrowed value in one renderer-facing table cell.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct TrackRow<'a> {
-    pub title: &'a str,
-    pub artist: Option<&'a str>,
-    pub bpm: Option<&'a str>,
-    pub deck: Option<&'a str>,
-    pub energy: Option<u8>,
-    pub key: Option<&'a str>,
-    pub search: Option<&'a str>,
-    pub time: Option<&'a str>,
-    pub transition: Option<&'a str>,
-    pub selected: bool,
+#[non_exhaustive]
+pub enum TableValue<'a> {
+    Empty,
+    Number(u8),
+    Text(&'a str),
+}
+
+/// A table cell addressed by the document column id.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct TableCell<'a> {
+    id: &'a str,
+    value: TableValue<'a>,
+}
+
+impl<'a> TableCell<'a> {
+    #[must_use]
+    pub const fn empty(id: &'a str) -> Self {
+        Self {
+            id,
+            value: TableValue::Empty,
+        }
+    }
+
+    #[must_use]
+    pub const fn number(id: &'a str, value: u8) -> Self {
+        Self {
+            id,
+            value: TableValue::Number(value),
+        }
+    }
+
+    #[must_use]
+    pub const fn text(id: &'a str, value: &'a str) -> Self {
+        Self {
+            id,
+            value: TableValue::Text(value),
+        }
+    }
+
+    #[must_use]
+    pub const fn id(&self) -> &'a str {
+        self.id
+    }
+
+    #[must_use]
+    pub const fn value(&self) -> TableValue<'a> {
+        self.value
+    }
+}
+
+/// One renderer-facing table row. Cells carry document column ids, so the
+/// same model can serve any declared order or subset.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TableRow<'a> {
+    cells: Vec<TableCell<'a>>,
+    selected: bool,
+}
+
+impl<'a> TableRow<'a> {
+    #[must_use]
+    pub fn new(cells: Vec<TableCell<'a>>, selected: bool) -> Self {
+        Self { cells, selected }
+    }
+
+    #[must_use]
+    pub fn cells(&self) -> &[TableCell<'a>] {
+        &self.cells
+    }
+
+    #[must_use]
+    pub fn selected(&self) -> bool {
+        self.selected
+    }
 }
 
 /// Value resolved from a renderer-facing read endpoint.
@@ -80,7 +142,7 @@ pub enum ReadValue<'a> {
     Scalar(f64),
     Stereo(StereoLevels),
     Waveform(WaveformView<'a>),
-    TrackList(&'a [TrackRow<'a>]),
+    Table(&'a [TableRow<'a>]),
     Tree(&'a [TreeRow<'a>]),
 }
 

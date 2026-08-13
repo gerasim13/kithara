@@ -2,7 +2,7 @@ use std::{
     cell::{Cell, RefCell},
     collections::{BTreeMap, VecDeque},
     rc::Rc,
-    sync::Arc,
+    sync::{Arc, LazyLock},
 };
 
 use kithara_platform::time::Duration;
@@ -39,8 +39,8 @@ use crate::{
     interact::{Hit, Input, Key as NeutralKey, Outcome, PointerOwnership, PointerPhase, Scroll},
     registry::{EndpointCategory, EndpointDesc, EndpointRegistry, ValueKind},
     render::{
-        ControlAction, ReadValue, Reads, Skin, StereoLevels, TrackRow, TreeIcon, TreeRow, UiEvent,
-        WindowCommand, WindowEdge, WindowLayerProgram, document, picker_hits,
+        ControlAction, ReadValue, Reads, Skin, StereoLevels, TableCell, TableRow, TreeIcon,
+        TreeRow, UiEvent, WindowCommand, WindowEdge, WindowLayerProgram, document, picker_hits,
     },
     source::{MemResolver, UiConfig},
     text::{FontPolicy, TextContext},
@@ -86,18 +86,22 @@ impl Reads for PresetReads {
     }
 }
 
-static LATE_TRACK_ROWS: [TrackRow<'static>; 8] = [TrackRow {
-    title: "Late Arrival",
-    artist: Some("New Artist"),
-    bpm: Some("128"),
-    deck: None,
-    energy: Some(7),
-    key: Some("Am"),
-    search: None,
-    time: Some("03:24"),
-    transition: None,
-    selected: false,
-}; 8];
+static LATE_TABLE_ROWS: LazyLock<Vec<TableRow<'static>>> = LazyLock::new(|| {
+    vec![
+        TableRow::new(
+            vec![
+                TableCell::text("title", "Late Arrival"),
+                TableCell::text("artist", "New Artist"),
+                TableCell::text("bpm", "128"),
+                TableCell::number("energy", 7),
+                TableCell::text("key", "Am"),
+                TableCell::text("time", "03:24"),
+            ],
+            false,
+        );
+        8
+    ]
+});
 
 static TREE_ROWS: [TreeRow<'static>; 8] = [TreeRow {
     label: "Late Folder",
@@ -118,11 +122,11 @@ impl Reads for LateTrackReads {
         let id = endpoint.split_once('@').map_or(endpoint, |(id, _scope)| id);
         if id == "library.visible_tracks" {
             let rows = if self.loaded.get() {
-                &LATE_TRACK_ROWS[..]
+                &LATE_TABLE_ROWS[..]
             } else {
                 &[]
             };
-            Some(ReadValue::TrackList(rows))
+            Some(ReadValue::Table(rows))
         } else {
             FixtureReads.get(endpoint)
         }
@@ -1787,9 +1791,9 @@ const CONTROL_CENSUS: &[(&str, Paints, &str)] = &[
         r#"Vis(id: "control", read: Model(id: "vis.preset"))"#,
     ),
     (
-        "TrackList",
+        "Table",
         Paints::Yes,
-        r#"TrackList(id: "control", read: Model(id: "library.visible_tracks"), columns: Some([Title]))"#,
+        r#"Table(id: "control", read: Model(id: "library.visible_tracks"), columns: Some([Title]))"#,
     ),
     (
         "Tree",
@@ -2246,12 +2250,12 @@ fn retained_refresh_changes_the_active_preset_without_remounting_the_leaf() {
 }
 
 #[kithara::test]
-fn a_mounted_track_list_draws_rows_that_arrive_during_refresh() {
+fn a_mounted_table_draws_rows_that_arrive_during_refresh() {
     let registry = fixture_registry();
     let ui = fixture_ui(
         "late-track-list",
         r#"Row(size: (w: Fill, h: Fill), gap: 0.0, pad: 0.0, children: [
-            TrackList(
+            Table(
                 id: "tracks",
                 read: Model(id: "library.visible_tracks"),
                 columns: Some([Title]),
@@ -2272,24 +2276,24 @@ fn a_mounted_track_list_draws_rows_that_arrive_during_refresh() {
     let mut root = masonry_root(output, 240, 160);
     let (before, _) = root
         .redraw()
-        .unwrap_or_else(|error| panic!("empty TrackList must draw its frame: {error}"));
+        .unwrap_or_else(|error| panic!("empty Table must draw its frame: {error}"));
     let before_glyphs = before.encoding().resources.glyphs.len();
     reads.loaded.set(true);
     root.refresh(&ui, &reads);
     let (after, _) = root
         .redraw()
-        .unwrap_or_else(|error| panic!("refreshed TrackList must draw its rows: {error}"));
+        .unwrap_or_else(|error| panic!("refreshed Table must draw its rows: {error}"));
 
     assert!(after.encoding().resources.glyphs.len() > before_glyphs);
 }
 
 #[kithara::test]
-fn a_mounted_track_list_repaints_the_row_under_the_pointer() {
+fn a_mounted_table_repaints_the_row_under_the_pointer() {
     let registry = fixture_registry();
     let ui = fixture_ui(
         "hovered-track-list",
         r#"Row(size: (w: Fill, h: Fill), gap: 0.0, pad: 0.0, children: [
-            TrackList(
+            Table(
                 id: "tracks",
                 read: Model(id: "library.visible_tracks"),
                 columns: Some([Title]),
@@ -2310,16 +2314,15 @@ fn a_mounted_track_list_repaints_the_row_under_the_pointer() {
     let mut root = masonry_root(output, 240, 160);
     let (idle, _) = root
         .redraw()
-        .unwrap_or_else(|error| panic!("idle TrackList must draw: {error}"));
+        .unwrap_or_else(|error| panic!("idle Table must draw: {error}"));
     let idle_draw_data = idle.encoding().draw_data.clone();
     let skin = builtin::skin();
-    let row_y =
-        skin.track_list.header_height + skin.track_list.grid_gap + skin.track_list.row_height / 2.0;
+    let row_y = skin.table.header_height + skin.table.grid_gap + skin.table.row_height / 2.0;
     root.handle_pointer_event(pointer_hover(20.0, row_y.into()))
-        .unwrap_or_else(|error| panic!("TrackList hover must route: {error}"));
+        .unwrap_or_else(|error| panic!("Table hover must route: {error}"));
     let (hovered, _) = root
         .redraw()
-        .unwrap_or_else(|error| panic!("hovered TrackList must repaint: {error}"));
+        .unwrap_or_else(|error| panic!("hovered Table must repaint: {error}"));
 
     assert_ne!(hovered.encoding().draw_data, idle_draw_data);
 }
@@ -2881,7 +2884,7 @@ fn fixture_registry() -> FixtureRegistry {
     registry.insert(
         EndpointCategory::Model,
         "library.visible_tracks",
-        EndpointDesc::new(ValueKind::TrackList),
+        EndpointDesc::new(ValueKind::Table),
     );
     registry.insert(
         EndpointCategory::Model,

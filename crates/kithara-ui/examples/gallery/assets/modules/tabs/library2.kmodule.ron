@@ -25,11 +25,18 @@
                         scope: Model(id: "library.scope"),
                         adaptive: (priority: Required),
                     ),
-                    TrackList(
+                    Table(
                         id: "table",
                         size: (w: Fill, h: Fill),
                         read: Model(id: "library.visible_tracks"),
-                        columns: [Index, Title, Artist, Bpm, Key, Time],
+                        columns: [
+                            (id: "index", label: "#", style: Index, width: 28.0),
+                            (id: "title", label: "TITLE", style: Primary, width: 180.0, flexible: true),
+                            (id: "artist", label: "ARTIST", style: Secondary, width: 200.0),
+                            (id: "bpm", label: "BPM", style: Metric, width: 70.0),
+                            (id: "key", label: "KEY", style: Mono, width: 56.0),
+                            (id: "time", label: "TIME", style: Time, width: 70.0),
+                        ],
                         adaptive: (priority: Required),
                     ),
                 ],

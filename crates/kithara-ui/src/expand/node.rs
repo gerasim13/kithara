@@ -7,7 +7,7 @@ use crate::{
     module::{
         AdaptivePolicy, BindingRef, ButtonStyle, ChipStyle, ChromeStyle, ControlNode,
         DeckSummaryStyle, FaderStyle, GlyphStyle, IconName, PopoverAlign, PopoverAt, ScalarFormat,
-        TextAlign, TextStyle, Tone, TrackColumn, WaveStyle, WindowControlsStyle,
+        TableColumn, TextAlign, TextStyle, Tone, WaveStyle, WindowControlsStyle,
     },
     size::{BlockNode, SizeSpec},
     skin::ColorRole,
@@ -151,8 +151,8 @@ pub enum ControlSpec {
         zoom: Option<Binding>,
     },
     Vis,
-    TrackList {
-        columns: Vec<TrackColumn>,
+    Table {
+        columns: Vec<TableColumn>,
         columns_state: Option<Binding>,
     },
     Tree {
@@ -284,7 +284,7 @@ pub struct DropSpec {
 pub(crate) struct ControlSite<'a> {
     pub(crate) control: &'a ControlNode,
     /// Already resolved, so a parameterised list is validated like a literal one.
-    pub(crate) columns: &'a [TrackColumn],
+    pub(crate) columns: &'a [TableColumn],
     pub(crate) path: &'a str,
     pub(crate) active: Option<&'a BindingRef>,
     pub(crate) columns_state: Option<&'a BindingRef>,

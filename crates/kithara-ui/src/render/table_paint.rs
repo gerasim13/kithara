@@ -8,10 +8,10 @@ use iced::{
 
 use super::super::{Skin, UiEvent, controls::RetainedCanvasState};
 use crate::{
-    atoms::track_list::{
-        ColumnLayout, TrackListRowData, column_resizable,
-        face::{Drawn, TrackTable},
-        minimum_table_width, track_list_content_height, track_list_row_at,
+    atoms::table::{
+        ColumnLayout, TableRowData, column_resizable,
+        face::{Drawn, TableFace},
+        minimum_table_width, table_content_height, table_row_at,
     },
     backends::replay_ordered,
     draw::{Pt, Rect},
@@ -20,31 +20,31 @@ use crate::{
         ScrollAxis,
         recognizers::{ItemDrag, ScalarState},
     },
-    module::TrackColumn,
+    module::TableColumn,
     text::TextContext,
 };
 
-pub(super) struct TrackListPaint {
-    pub(super) face: TrackTable,
+pub(super) struct TablePaint {
+    pub(super) face: TableFace,
     pub(super) path: String,
 }
 
-impl TrackListPaint {
+impl TablePaint {
     pub(super) fn new(
         path: &str,
-        rows: Vec<TrackListRowData>,
+        rows: Vec<TableRowData>,
         columns: Vec<ColumnLayout>,
         skin: &Skin,
     ) -> Self {
         Self {
-            face: TrackTable::new(rows, columns, skin),
+            face: TableFace::new(rows, columns, skin),
             path: path.to_owned(),
         }
     }
 
     pub(super) fn geometry(
         &self,
-        state: &TrackListState,
+        state: &TableState,
         renderer: &Renderer,
         _theme: &Theme,
         bounds: Rectangle,
@@ -79,13 +79,13 @@ impl TrackListPaint {
         vec![frame.into_geometry()]
     }
 
-    pub(super) fn config(&self) -> TrackListConfig {
+    pub(super) fn config(&self) -> TableConfig {
         let skin = self.face.skin();
-        TrackListConfig {
-            body_inset: skin.track_list.header_height
-                + skin.track_list.footer_height
-                + skin.track_list.grid_gap * 2.0,
-            content_height: track_list_content_height(self.face.rows().len(), skin),
+        TableConfig {
+            body_inset: skin.table.header_height
+                + skin.table.footer_height
+                + skin.table.grid_gap * 2.0,
+            content_height: table_content_height(self.face.rows().len(), skin),
             content_width: minimum_table_width(self.face.columns()),
             divider_columns: self
                 .face
@@ -93,19 +93,19 @@ impl TrackListPaint {
                 .iter()
                 .enumerate()
                 .filter(|(index, _)| column_resizable(self.face.columns(), *index))
-                .map(|(_, column)| column.column)
+                .map(|(_, column)| column.column.clone())
                 .collect(),
             row_count: self.face.rows().len(),
         }
     }
 }
 
-impl canvas::Program<UiEvent> for TrackListPaint {
-    type State = TrackListState;
+impl canvas::Program<UiEvent> for TablePaint {
+    type State = TableState;
 
     fn draw(
         &self,
-        state: &TrackListState,
+        state: &TableState,
         renderer: &Renderer,
         theme: &Theme,
         bounds: Rectangle,
@@ -116,9 +116,9 @@ impl canvas::Program<UiEvent> for TrackListPaint {
 }
 
 #[derive(Default)]
-pub(super) struct TrackListState {
+pub(super) struct TableState {
     configured: bool,
-    pub(super) dividers: Vec<(TrackColumn, ScalarState)>,
+    pub(super) dividers: Vec<(TableColumn, ScalarState)>,
     pub(super) horizontal: ScrollState,
     path: String,
     pub(super) drag_index: Option<usize>,
@@ -129,16 +129,16 @@ pub(super) struct TrackListState {
 }
 
 #[derive(Clone)]
-pub(super) struct TrackListConfig {
+pub(super) struct TableConfig {
     body_inset: f32,
     content_height: f32,
     content_width: f32,
-    divider_columns: Vec<TrackColumn>,
+    divider_columns: Vec<TableColumn>,
     row_count: usize,
 }
 
-impl TrackListState {
-    pub(super) fn reconcile(&mut self, path: &str, config: &TrackListConfig) {
+impl TableState {
+    pub(super) fn reconcile(&mut self, path: &str, config: &TableConfig) {
         self.rebind(path);
         let horizontal = ScrollConfig::plain(ScrollAxis::Horizontal, config.content_width);
         let vertical = ScrollConfig::plain(ScrollAxis::Vertical, config.content_height);
@@ -150,7 +150,7 @@ impl TrackListState {
             self.dividers = config
                 .divider_columns
                 .iter()
-                .copied()
+                .cloned()
                 .map(|column| (column, ScalarState::default()))
                 .collect();
             self.configured = true;
@@ -161,13 +161,12 @@ impl TrackListState {
             self.dividers = config
                 .divider_columns
                 .iter()
-                .copied()
                 .map(|column| {
                     retained
                         .iter()
-                        .position(|(candidate, _)| *candidate == column)
+                        .position(|(candidate, _)| candidate == column)
                         .map_or_else(
-                            || (column, ScalarState::default()),
+                            || (column.clone(), ScalarState::default()),
                             |index| retained.remove(index),
                         )
                 })
@@ -189,7 +188,7 @@ impl TrackListState {
         }
     }
 
-    pub(super) fn set_viewport(&mut self, size: iced::Size, config: &TrackListConfig) {
+    pub(super) fn set_viewport(&mut self, size: iced::Size, config: &TableConfig) {
         self.horizontal.set_viewport(size.width);
         self.vertical
             .set_viewport((size.height - config.body_inset).max(0.0));
@@ -227,8 +226,8 @@ impl TrackListState {
     }
 }
 
-impl RetainedCanvasState for TrackListState {
-    type Config = TrackListConfig;
+impl RetainedCanvasState for TableState {
+    type Config = TableConfig;
 
     delegate::delegate! {
         to self {
@@ -255,9 +254,9 @@ pub(super) fn hovered_row(
     row_count: usize,
     horizontal: f32,
     vertical: f32,
-    face: &TrackTable,
+    face: &TableFace,
 ) -> Option<usize> {
-    track_list_row_at(
+    table_row_at(
         point,
         bounds,
         face.columns(),

@@ -15,7 +15,7 @@ use super::{
 use crate::{
     error::UiDocError,
     ids::{InternId, Interner, NodeId, SourceUri},
-    module::{BindingRef, ControlNode, PopoverAlign, PopoverAt, Tone, TrackColumn, WaveStyle},
+    module::{BindingRef, ControlNode, PopoverAlign, PopoverAt, TableColumn, Tone, WaveStyle},
     param::Param,
     resolve::ModuleSet,
     size::SizeSpec,
@@ -279,8 +279,8 @@ fn finish_control(
         .write
         .map(|binding| context.substitute(binding, path))
         .transpose()?;
-    let columns: &[TrackColumn] = match &spec {
-        ControlSpec::TrackList { columns, .. } => columns,
+    let columns: &[TableColumn] = match &spec {
+        ControlSpec::Table { columns, .. } => columns,
         _ => &[],
     };
     (machine.visitor)(
@@ -434,8 +434,8 @@ fn control_spec(
             extra.zoom.as_ref(),
             path,
         )?,
-        ControlNode::TrackList { columns, .. } => {
-            track_list_control_spec(context, machine, columns.as_ref(), extra, path)?
+        ControlNode::Table { columns, .. } => {
+            table_control_spec(context, machine, columns.as_ref(), extra, path)?
         }
         ControlNode::Tree { .. } => ControlSpec::Tree {
             query: optional_binding(context, machine, extra.query.as_ref())?,
@@ -529,13 +529,13 @@ fn wave_spec(
     })
 }
 
-fn track_list_spec(
+fn table_spec(
     context: &Context<'_>,
     machine: &mut Expander<'_, '_>,
-    columns: &[TrackColumn],
+    columns: &[TableColumn],
     extra: &ExtraBindings,
 ) -> Result<ControlSpec, UiDocError> {
-    Ok(ControlSpec::TrackList {
+    Ok(ControlSpec::Table {
         columns: columns.to_vec(),
         columns_state: intern_optional_binding(
             machine.interner,
@@ -545,15 +545,15 @@ fn track_list_spec(
     })
 }
 
-fn track_list_control_spec(
+fn table_control_spec(
     context: &Context<'_>,
     machine: &mut Expander<'_, '_>,
-    columns: Option<&Param<Vec<TrackColumn>>>,
+    columns: Option<&Param<Vec<TableColumn>>>,
     extra: &ExtraBindings,
     path: &str,
 ) -> Result<ControlSpec, UiDocError> {
     let columns = context.optional_param(columns, path)?.unwrap_or_default();
-    track_list_spec(context, machine, &columns, extra)
+    table_spec(context, machine, &columns, extra)
 }
 
 fn expand_optional(
@@ -879,7 +879,7 @@ pub(super) fn walk(
         | ControlNode::Fader { id, adaptive, .. }
         | ControlNode::Wave { id, adaptive, .. }
         | ControlNode::Vis { id, adaptive, .. }
-        | ControlNode::TrackList { id, adaptive, .. }
+        | ControlNode::Table { id, adaptive, .. }
         | ControlNode::Tree { id, adaptive, .. }
         | ControlNode::ContextBar { id, adaptive, .. }
         | ControlNode::Toggle { id, adaptive, .. }

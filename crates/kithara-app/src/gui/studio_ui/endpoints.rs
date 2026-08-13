@@ -230,7 +230,7 @@ static ENDPOINTS: &[Endpoint] = &[
     Endpoint {
         category: EndpointCategory::Model,
         id: "library.tracks",
-        value: ValueKind::TrackList,
+        value: ValueKind::Table,
         scopes: Endpoint::GLOBAL,
     },
     Endpoint {

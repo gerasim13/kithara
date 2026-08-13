@@ -14,7 +14,7 @@
                 default: [
                     Include(id: "layout", source: "library.kmodule.ron", with: {
                         "read": "library.visible_tracks",
-                        "columns": "[Title, Artist, Time]",
+                        "columns": "[(id: \"title\", label: \"TITLE\", style: Primary, width: 180.0, flexible: true), (id: \"artist\", label: \"ARTIST\", style: Secondary, width: 200.0), (id: \"time\", label: \"TIME\", style: Time, width: 70.0)]",
                     }),
                 ],
             ),

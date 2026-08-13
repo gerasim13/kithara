@@ -5,7 +5,7 @@
     parameters: ["read", "columns"],
     root: Column(
         children: [
-            TrackList(
+            Table(
                 id: "tracks",
                 read: Model(id: "$read"),
                 columns: "$columns",

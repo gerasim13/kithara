@@ -35,7 +35,7 @@
             Include(id: "vis", source: "nav/item.kmodule.ron", with: { "icon": "Waveform", "label": "VIS", "tab": "gallery.tab.vis" }),
             Include(id: "chrome", source: "nav/item.kmodule.ron", with: { "icon": "Disc", "label": "CHROME", "tab": "gallery.tab.chrome" }),
             Include(id: "titlebars", source: "nav/item.kmodule.ron", with: { "icon": "Disc", "label": "TITLE BARS", "tab": "gallery.tab.titlebars" }),
-            Include(id: "tracklist", source: "nav/item.kmodule.ron", with: { "icon": "Playlist", "label": "TRACKLIST", "tab": "gallery.tab.tracklist" }),
+            Include(id: "table", source: "nav/item.kmodule.ron", with: { "icon": "Playlist", "label": "TABLE", "tab": "gallery.tab.table" }),
             Include(id: "tree", source: "nav/item.kmodule.ron", with: { "icon": "Playlist", "label": "TREE", "tab": "gallery.tab.tree" }),
             Include(id: "library2", source: "nav/item.kmodule.ron", with: { "icon": "Playlist", "label": "LIBRARY V2", "tab": "gallery.tab.library2" }),
             Include(id: "stress", source: "nav/item.kmodule.ron", with: { "icon": "SpeakerHigh", "label": "STRESS", "tab": "gallery.tab.stress" }),

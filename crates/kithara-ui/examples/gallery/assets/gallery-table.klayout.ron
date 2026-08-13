@@ -1,7 +1,7 @@
 (
     schema: "kithara.layout",
     version: 1,
-    id: "gallery-tracklist",
+    id: "gallery-table",
     root: Split(
         axis: Vertical,
         children: [
@@ -21,8 +21,8 @@
                         size: (w: Fixed(198.0), h: Fill),
                     )),
                     (weight: 1.0, node: Module(
-                        instance: "tracklist",
-                        source: "modules/tabs/tracklist.kmodule.ron",
+                        instance: "table",
+                        source: "modules/tabs/table.kmodule.ron",
                         corners: true,
                         frame: (left: false),
                         size: (w: Fill, h: Fill),
