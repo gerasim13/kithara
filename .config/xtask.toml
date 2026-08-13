@@ -172,6 +172,7 @@ default_features = [
   "kithara-ui/masonry",
   "kithara-app/masonry",
 ]
+default_flash = false
 prefix_args = [
   "nextest",
   "run",

@@ -54,8 +54,8 @@ routine work:
   explainable candidates, and `report.json` for exhaustive evidence.
 - `just test`; parameterized harness: `just test run <args>`; tests plus
   doc-tests: `just test all`.
-- Complete isolated UI suite: `just test ui` (unit and integration tests in
-  both clock modes, GPU renderer tests, and host-parity captures).
+- Complete isolated UI suite: `just test ui` (unit and integration tests,
+  GPU renderer tests, and host-parity captures).
 - `just ci gate`; scoped audit: `just ci audit <scope>`; broad report:
   `just ci health`.
 - Architecture diagram, linked contour reports, and complexity profile:

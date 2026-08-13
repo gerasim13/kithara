@@ -1,9 +1,9 @@
 name: UI
 
 # UI tests are isolated from the general workspace suite: unit and integration
-# targets, both clock modes, real GPU rendering, and host screenshots all run
-# here. A fork push is safe because only the repository owner may reach the
-# self-hosted graphics runner.
+# targets, real GPU rendering, and host screenshots all run here. A fork push
+# is safe because only the repository owner may reach the self-hosted graphics
+# runner.
 on:
   push:
   workflow_call:

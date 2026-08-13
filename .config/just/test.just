@@ -126,9 +126,7 @@ e2e-resamplers *ARGS:
 ui:
     #!/usr/bin/env bash
     set -euo pipefail
-    just test run --lane=ui --flash=on
-    CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-target}/ui-flash-off" \
-      just test run --lane=ui --flash=off
+    just test run --lane=ui
     just test run --lane=ui-doc
     dir="$PWD/target/parity"
     rm -rf "$dir/iced" "$dir/masonry" "$dir/masks" "$dir/studio"
