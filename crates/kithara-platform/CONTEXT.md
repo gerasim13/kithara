@@ -224,9 +224,11 @@ advance past): **virtual time must never outrun real time while real I/O is in f
 `flash::hang_dump(context)` renders the dumping thread's context, the engine snapshot (parked
 participants, deadlines, pending signals), and the sync-primitive registry (live `Mutex`/`RwLock`
 with holder and waiters, plus engine-backed kinds); it is pure, so the caller routes it anywhere.
-`flash::log_hang_dump` emits it via `tracing` at ERROR and the `#[kithara::test]` harness calls it
-from both hang exits. The registry is gated at runtime by `KITHARA_FLASH_SYNC_TRACE` (default off —
-a wrapped primitive then pays only a null check); `KITHARA_FLASH_SYNC_BT=1` adds the backtrace.
+`flash::log_hang_dump` emits it via `tracing` at ERROR. The test harness records the same dump in
+its hang artifact before timeout panic/abort. The registry is gated at runtime by
+`KITHARA_FLASH_SYNC_TRACE` (default off - a wrapped primitive then pays only a null check);
+`KITHARA_FLASH_SYNC_BT=1` adds only the dump caller's backtrace. Holder and waiter evidence comes
+from their registered identities and static source locations, not from their live stacks.
 
 Ground truth is two runs compared: the default real-time run (catches concurrency/timing bugs) and
 the `flash` run (fast). Divergence in sample-count positions or PCM flags that virtualization
@@ -259,7 +261,9 @@ Two levels, both scoped by the `Watched` per-poll combinator (installed automati
   every over-budget class.
 
 Modes via `KITHARA_NO_BLOCK`: `panic` (default), `census` (log-only; `KITHARA_NO_BLOCK_LOG=<file>`
-adds an append-mode sink, since nextest swallows passing-test stderr), `off` (skips timing).
+adds an append-mode sink, since nextest swallows passing-test stderr), `off` (skips timing). A
+configured census sink is evidence: an open or write failure panics the attempt instead of silently
+dropping a record.
 
 Escape: `#[kithara::allow_block]` — RAII `Permit` on sync fns, per-poll `PermitPoll` combinator on
 async fns. Guards are `!Send`: they mutate thread-local state in `Drop` and must not cross

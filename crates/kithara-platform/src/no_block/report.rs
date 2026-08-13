@@ -1,4 +1,4 @@
-use std::{fs::OpenOptions, io::Write, panic::Location, time::Duration};
+use std::{env, fmt::Write as _, fs::OpenOptions, io::Write, panic::Location, time::Duration};
 
 use super::{
     mode::{Mode, log_path, mode},
@@ -6,6 +6,9 @@ use super::{
 };
 
 const SPIN_CPU_FRACTION: f64 = 0.8;
+const MAX_RUN_ID_BYTES: usize = 1_024;
+const MAX_ATTEMPT_ID_BYTES: usize = 1_024;
+const MAX_CANONICAL_FIELD_BYTES: usize = 512;
 
 enum OverBudgetAction {
     Ignore,
@@ -99,16 +102,114 @@ pub(super) fn over_budget(
 }
 
 fn census_emit(line: &str) {
+    let line = format!("{}{line}", nextest_prefix());
     tracing::warn!(target: "kithara_platform::no_block", "{line}");
 
     if let Some(path) = log_path() {
         let line = format!("{line}\n");
-        let _ = OpenOptions::new()
+        if let Err(error) = OpenOptions::new()
             .create(true)
             .append(true)
-            .open(path)
-            .and_then(|mut file| file.write_all(line.as_bytes()));
+            .open(&path)
+            .and_then(|mut file| file.write_all(line.as_bytes()))
+        {
+            panic!(
+                "[no_block] failed to write census log `{}`: {error}",
+                path.display()
+            );
+        }
     }
+}
+
+pub(super) fn nextest_prefix() -> String {
+    let read = |key| env::var(key).ok().filter(|value| !value.is_empty());
+    let run_id = read("NEXTEST_RUN_ID");
+    let attempt_id = read("NEXTEST_ATTEMPT_ID");
+    let binary_id = read("NEXTEST_BINARY_ID");
+    let test_name = read("NEXTEST_TEST_NAME");
+    let stress_current = read("NEXTEST_STRESS_CURRENT");
+    nextest_prefix_from(
+        run_id.as_deref(),
+        attempt_id.as_deref(),
+        binary_id.as_deref(),
+        test_name.as_deref(),
+        stress_current.as_deref(),
+    )
+}
+
+fn nextest_prefix_from(
+    run_id: Option<&str>,
+    attempt_id: Option<&str>,
+    binary_id: Option<&str>,
+    test_name: Option<&str>,
+    stress_current: Option<&str>,
+) -> String {
+    let mut fields = Vec::with_capacity(5);
+    if let Some(run_id) = run_id.filter(|value| !value.is_empty()) {
+        fields.push(format!(
+            "run_id={}",
+            encode_metadata(run_id, MAX_RUN_ID_BYTES)
+        ));
+    }
+    if let Some(attempt_id) = attempt_id.filter(|value| !value.is_empty()) {
+        fields.push(format!(
+            "attempt_id={}",
+            encode_metadata(attempt_id, MAX_ATTEMPT_ID_BYTES)
+        ));
+    }
+    if let Some(binary_id) = binary_id.filter(|value| !value.is_empty()) {
+        fields.push(format!(
+            "binary_id={}",
+            encode_metadata(binary_id, MAX_CANONICAL_FIELD_BYTES)
+        ));
+    }
+    if let Some(test_name) = test_name.filter(|value| !value.is_empty()) {
+        fields.push(format!(
+            "test_name={}",
+            encode_metadata(test_name, MAX_CANONICAL_FIELD_BYTES)
+        ));
+    }
+    if let Some(stress_current) = stress_current.filter(|value| !value.is_empty()) {
+        fields.push(format!(
+            "stress_current={}",
+            encode_metadata(stress_current, MAX_CANONICAL_FIELD_BYTES)
+        ));
+    }
+
+    if fields.is_empty() {
+        String::new()
+    } else {
+        format!("[nextest {}] ", fields.join(" "))
+    }
+}
+
+fn encode_metadata(value: &str, max_bytes: usize) -> String {
+    let mut encoded = String::with_capacity(value.len().min(max_bytes));
+    for character in value.chars() {
+        let piece = if character.is_ascii_alphanumeric()
+            || matches!(character, '-' | '_' | '.' | ':' | '@' | '$' | '#' | '/')
+        {
+            character.to_string()
+        } else {
+            let mut utf8 = [0; 4];
+            character.encode_utf8(&mut utf8).as_bytes().iter().fold(
+                String::new(),
+                |mut bytes, byte| {
+                    let _ = write!(bytes, "%{byte:02X}");
+                    bytes
+                },
+            )
+        };
+        if encoded.len().saturating_add(piece.len()) > max_bytes {
+            if encoded.len() == max_bytes {
+                encoded.pop();
+            }
+            encoded.push('~');
+            break;
+        }
+        encoded.push_str(&piece);
+    }
+    encoded
 }
 
 fn classify(wall: Duration, cpu: Option<Duration>) -> &'static str {
@@ -133,5 +234,69 @@ mod tests {
             "blocked wait (lock/sleep/IO)"
         );
         assert_eq!(classify(WALL, None), "unclassified (no thread CPU clock)");
+    }
+
+    #[test]
+    fn nextest_prefix_includes_run_attempt_and_canonical_test_identity() {
+        let prefix = nextest_prefix_from(
+            Some("run-id"),
+            Some("run-id:binary@stress-17$module::test_name#2"),
+            Some("crate::integration"),
+            Some("module::test_name"),
+            Some("17"),
+        );
+
+        assert_eq!(
+            prefix,
+            "[nextest run_id=run-id \
+             attempt_id=run-id:binary@stress-17$module::test_name#2 \
+             binary_id=crate::integration test_name=module::test_name stress_current=17] "
+        );
+    }
+
+    #[test]
+    fn nextest_prefix_falls_back_to_test_and_stress_identity() {
+        assert_eq!(
+            nextest_prefix_from(
+                Some("run-id"),
+                None,
+                Some("crate::integration"),
+                Some("module::test_name"),
+                Some("17")
+            ),
+            "[nextest run_id=run-id binary_id=crate::integration \
+             test_name=module::test_name stress_current=17] "
+        );
+    }
+
+    #[test]
+    fn nextest_prefix_is_empty_without_nextest_metadata() {
+        assert_eq!(nextest_prefix_from(None, None, None, None, None), "");
+    }
+
+    #[test]
+    fn nextest_prefix_encodes_and_bounds_untrusted_metadata() {
+        assert_eq!(
+            nextest_prefix_from(Some("run\n:id]"), None, None, None, None),
+            "[nextest run_id=run%0A:id%5D] "
+        );
+
+        let oversized_run = "x".repeat(MAX_RUN_ID_BYTES + 1);
+        let prefix = nextest_prefix_from(Some(&oversized_run), None, None, None, None);
+        let value = prefix
+            .strip_prefix("[nextest run_id=")
+            .and_then(|value| value.strip_suffix("] "))
+            .expect("run prefix shape");
+        assert_eq!(value.len(), MAX_RUN_ID_BYTES);
+        assert!(value.ends_with('~'));
+
+        let oversized = "x".repeat(MAX_ATTEMPT_ID_BYTES + 1);
+        let prefix = nextest_prefix_from(None, Some(&oversized), None, None, None);
+        let value = prefix
+            .strip_prefix("[nextest attempt_id=")
+            .and_then(|value| value.strip_suffix("] "))
+            .expect("attempt prefix shape");
+        assert_eq!(value.len(), MAX_ATTEMPT_ID_BYTES);
+        assert!(value.ends_with('~'));
     }
 }

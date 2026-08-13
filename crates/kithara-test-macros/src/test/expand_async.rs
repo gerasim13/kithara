@@ -6,8 +6,9 @@ use super::{
     parse::TestArgs,
     shared::{
         finalize_body, make_ambient_stmt, make_dedicated_worker_config, make_env_setup,
-        make_runtime_builder, make_selenium_attrs, make_serial_attr, make_tracing_init,
-        make_wasm_serial_guard, wrap_with_model, wrap_with_soft_fail, wrap_with_timeout,
+        make_prekill_guard, make_runtime_builder, make_selenium_attrs, make_serial_attr,
+        make_tracing_init, make_wasm_serial_guard, wrap_with_model, wrap_with_soft_fail,
+        wrap_with_timeout,
     },
 };
 
@@ -28,6 +29,7 @@ pub(crate) fn emit_async_runtime_test(
     serial_attr: &TokenStream2,
 ) -> TokenStream2 {
     let env_setup = make_env_setup(&args.env_vars);
+    let prekill_guard = make_prekill_guard(fn_name);
     let selenium_attr = make_selenium_attrs(args);
     let runtime_builder = make_runtime_builder(args);
     let flash = args.flash.unwrap_or(true);
@@ -83,6 +85,7 @@ pub(crate) fn emit_async_runtime_test(
         #[test]
         #vis fn #fn_name() #ret_type {
             #env_setup
+            #prekill_guard
             #runtime_body
         }
     }
@@ -197,13 +200,15 @@ pub(crate) fn emit_async_timeout_test(
                                     )
                                     .await
                                     .unwrap_or_else(|_| {
-                                        ::kithara_test_utils::kithara_platform::flash::log_hang_dump(
-                                            "virtual-timeout",
-                                        );
-                                        panic!(
+                                        let __timeout_diagnostic = format!(
                                             "test `{}` timed out after {:?}",
                                             #fn_name_str, __timeout_dur,
-                                        )
+                                        );
+                                        ::kithara_test_utils::hang::record_test_hang(
+                                            "wall-timeout",
+                                            &__timeout_diagnostic,
+                                        );
+                                        panic!("{}", __timeout_diagnostic)
                                     })
                                 },
                             ),
@@ -245,12 +250,18 @@ pub(crate) fn emit_async_timeout_test(
                         __timeout_dur + ::std::time::Duration::from_secs(3),
                     );
                     if !__done_w.load(::std::sync::atomic::Ordering::SeqCst) {
-                        eprintln!(
-                            "\n\x1b[1;31mHARD TIMEOUT\x1b[0m: test `{}` exceeded {:?} \
-                             (runtime shutdown blocked). Aborting process.\n",
+                        let __timeout_diagnostic = format!(
+                            "test `{}` exceeded {:?} (runtime shutdown blocked)",
                             __fn, __timeout_dur,
                         );
-                        ::kithara_test_utils::kithara_platform::flash::log_hang_dump("hard-timeout");
+                        eprintln!(
+                            "\n\x1b[1;31mHARD TIMEOUT\x1b[0m: {}. Aborting process.\n",
+                            __timeout_diagnostic,
+                        );
+                        ::kithara_test_utils::hang::record_test_hang(
+                            "hard-timeout",
+                            &__timeout_diagnostic,
+                        );
                         ::std::process::abort();
                     }
                 });
@@ -357,4 +368,42 @@ pub(crate) fn emit_browser_test(
     }
 
     output
+}
+
+#[cfg(test)]
+mod tests {
+    use proc_macro2::TokenStream as TokenStream2;
+    use quote::quote;
+    use syn::{Ident, ReturnType, Visibility, parse_quote};
+
+    use super::{TestArgs, emit_async_timeout_test};
+
+    #[test]
+    fn native_timeout_emitter_records_wall_and_hard_hangs() -> syn::Result<()> {
+        let args =
+            syn::parse_str::<TestArgs>("tokio, timeout(::std::time::Duration::from_secs(5))")?;
+        let name: Ident = parse_quote!(stress_case);
+        let visibility = Visibility::Inherited;
+        let return_type = ReturnType::Default;
+        let attributes = [];
+        let body = quote!({});
+        let serial = TokenStream2::new();
+
+        let expanded = emit_async_timeout_test(
+            &name,
+            &visibility,
+            &return_type,
+            &attributes,
+            &body,
+            &args,
+            &serial,
+        )
+        .to_string();
+
+        assert!(!expanded.contains("PreKillGuard"));
+        assert!(expanded.contains("record_test_hang"));
+        assert!(expanded.contains("wall-timeout"));
+        assert!(expanded.contains("hard-timeout"));
+        Ok(())
+    }
 }

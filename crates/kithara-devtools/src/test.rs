@@ -294,6 +294,22 @@ pub(crate) fn nextest_lane_command(
     backend: &str,
     extra: &[String],
 ) -> Result<(Vec<String>, Command)> {
+    nextest_lane_command_for(project, toggles, backend, extra, NextestAction::Run)
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum NextestAction {
+    Run,
+    List,
+}
+
+pub(crate) fn nextest_lane_command_for(
+    project: &ProjectConfig,
+    toggles: LaneToggles,
+    backend: &str,
+    extra: &[String],
+    action: NextestAction,
+) -> Result<(Vec<String>, Command)> {
     let test = &project.test;
     validate_config(test)?;
     let lane_name = &test.default_lane;
@@ -302,7 +318,26 @@ pub(crate) fn nextest_lane_command(
     };
     let features = lane_features(test, lane, toggles, backend)?;
     let mut cmd = Command::new(&lane.program);
-    cmd.args(&lane.prefix_args);
+    match action {
+        NextestAction::Run => {
+            cmd.args(&lane.prefix_args);
+        }
+        NextestAction::List => {
+            let mut prefix_args = lane.prefix_args.clone();
+            let nextest_index = prefix_args
+                .iter()
+                .position(|arg| arg == "nextest")
+                .context("default test lane must contain `nextest` for list inventory")?;
+            let action_index = prefix_args
+                .iter()
+                .enumerate()
+                .skip(nextest_index + 1)
+                .find_map(|(index, arg)| (arg == "run").then_some(index))
+                .context("default test lane must contain a `run` action after `nextest`")?;
+            prefix_args[action_index] = "list".to_owned();
+            cmd.args(prefix_args);
+        }
+    }
     if !features.is_empty() {
         cmd.arg(&test.feature_arg)
             .arg(features.iter().cloned().collect::<Vec<_>>().join(","));
@@ -551,9 +586,80 @@ mod tests {
         );
         let args = args_of(&cmd);
         assert_eq!(cmd.get_program().to_string_lossy(), "cargo");
+        assert!(args.windows(2).any(|w| w == ["nextest", "run"]));
         assert!(args.windows(2).any(|w| w == ["--profile", "perf"]));
         assert!(args.contains(&"--workspace".to_owned()));
         assert_eq!(args.last().map(String::as_str), Some("--locked"));
+    }
+
+    #[test]
+    fn nextest_run_preserves_prefix_with_global_args() {
+        let mut project = synthetic_project();
+        let prefix_args = vec![
+            "nextest".to_owned(),
+            "--color".to_owned(),
+            "always".to_owned(),
+            "run".to_owned(),
+            "--workspace".to_owned(),
+        ];
+        let lane = project
+            .test
+            .lanes
+            .get_mut("workspace")
+            .expect("default lane");
+        lane.prefix_args.clone_from(&prefix_args);
+
+        let (_, cmd) = nextest_lane_command(
+            &project,
+            LaneToggles {
+                flash: true,
+                no_block: false,
+            },
+            "http",
+            &[],
+        )
+        .expect("nextest run command");
+        let args = args_of(&cmd);
+
+        assert_eq!(&args[..prefix_args.len()], prefix_args.as_slice());
+    }
+
+    #[test]
+    fn nextest_inventory_replaces_run_after_global_args() {
+        let mut project = synthetic_project();
+        let lane = project
+            .test
+            .lanes
+            .get_mut("workspace")
+            .expect("default lane");
+        lane.prefix_args = vec![
+            "nextest".to_owned(),
+            "--color".to_owned(),
+            "always".to_owned(),
+            "run".to_owned(),
+            "--workspace".to_owned(),
+        ];
+
+        let (_, cmd) = nextest_lane_command_for(
+            &project,
+            LaneToggles {
+                flash: true,
+                no_block: true,
+            },
+            "http",
+            &["--message-format".to_owned(), "json".to_owned()],
+            NextestAction::List,
+        )
+        .expect("nextest list command");
+        let args = args_of(&cmd);
+
+        let expected = ["nextest", "--color", "always", "list", "--workspace"].map(str::to_owned);
+        assert_eq!(&args[..expected.len()], expected.as_slice());
+        assert!(args.windows(2).any(|w| w == ["--message-format", "json"]));
+        assert!(
+            args.iter()
+                .any(|arg| arg.split(',').any(|feature| feature == "nb-detect"))
+        );
     }
 
     #[test]

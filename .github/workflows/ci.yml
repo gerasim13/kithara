@@ -12,11 +12,11 @@ env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
 
-# One runner serves one job at a time, so a new push should not leave the queue
-# holding work for a commit nobody is waiting on any more.
+# Fork CI and stress share the same Linux runner pool, so they must not overlap.
+# Production keeps the per-ref cancellation used for superseded pushes.
 concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  group: ${{ github.event.repository.fork && format('fork-linux-{0}', github.repository) || format('ci-{0}', github.ref) }}
+  cancel-in-progress: ${{ !github.event.repository.fork }}
 
 jobs:
   # Authorization runs on a GitHub-hosted machine, before any job can reach a

@@ -93,6 +93,15 @@ pub(crate) fn make_tracing_init(args: &TestArgs) -> TokenStream2 {
     }
 }
 
+pub(crate) fn make_prekill_guard(fn_name: &Ident) -> TokenStream2 {
+    let fn_name = fn_name.to_string();
+    quote! {
+        #[cfg(not(target_arch = "wasm32"))]
+        let _kithara_prekill_guard =
+            ::kithara_test_utils::hang::PreKillGuard::new(#fn_name);
+    }
+}
+
 pub(crate) fn wrap_with_model(body: &TokenStream2, args: &TestArgs) -> TokenStream2 {
     if !args.is_loom {
         return body.clone();
@@ -132,11 +141,11 @@ pub(crate) fn wrap_with_timeout(
     is_async: bool,
     fn_name: &Ident,
 ) -> TokenStream2 {
-    let Some(dur) = timeout else {
-        return quote! { { #body } };
-    };
-
     let fn_name_str = fn_name.to_string();
+    let Some(dur) = timeout else {
+        let prekill_guard = make_prekill_guard(fn_name);
+        return quote! { { #prekill_guard #body } };
+    };
 
     if is_async {
         quote! {
@@ -147,10 +156,17 @@ pub(crate) fn wrap_with_timeout(
                 // `flash` (a hung test hangs real time too).
                 ::kithara_test_utils::kithara_platform::time::timeout(__timeout_dur, __body)
                     .await
-                    .unwrap_or_else(|_| panic!(
-                        "test `{}` timed out after {:?}",
-                        #fn_name_str, __timeout_dur,
-                    ))
+                    .unwrap_or_else(|_| {
+                        let __timeout_diagnostic = format!(
+                            "test `{}` timed out after {:?}",
+                            #fn_name_str, __timeout_dur,
+                        );
+                        ::kithara_test_utils::hang::record_test_hang(
+                            "wall-timeout",
+                            &__timeout_diagnostic,
+                        );
+                        panic!("{}", __timeout_diagnostic)
+                    })
             }
         }
     } else {
@@ -170,10 +186,15 @@ pub(crate) fn wrap_with_timeout(
                             v
                         }
                         Err(::std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                            panic!(
+                            let __timeout_diagnostic = format!(
                                 "test `{}` timed out after {:?}",
                                 #fn_name_str, __timeout_dur,
-                            )
+                            );
+                            ::kithara_test_utils::hang::record_test_hang(
+                                "sync-timeout",
+                                &__timeout_diagnostic,
+                            );
+                            panic!("{}", __timeout_diagnostic)
                         }
                         Err(::std::sync::mpsc::RecvTimeoutError::Disconnected) => {
                             match handle.join() {
@@ -360,5 +381,47 @@ pub(crate) fn finalize_body(
         quote! { { #env_setup #inner } }
     } else {
         inner.clone()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use quote::quote;
+    use syn::{Expr, Ident, parse_quote};
+
+    use super::wrap_with_timeout;
+
+    #[test]
+    fn no_timeout_native_body_installs_prekill_guard() {
+        let name: Ident = parse_quote!(stress_case);
+
+        let expanded = wrap_with_timeout(&quote!({}), &None, false, &name).to_string();
+
+        assert!(expanded.contains("PreKillGuard"));
+        assert!(expanded.contains("stress_case"));
+    }
+
+    #[test]
+    fn sync_timeout_records_durable_evidence_before_panicking() {
+        let name: Ident = parse_quote!(stress_case);
+        let timeout: Option<Expr> = Some(parse_quote!(::std::time::Duration::from_secs(5)));
+
+        let expanded = wrap_with_timeout(&quote!({}), &timeout, false, &name).to_string();
+
+        assert!(expanded.contains("record_test_hang"));
+        assert!(expanded.contains("sync-timeout"));
+        assert!(expanded.contains("timed out after"));
+    }
+
+    #[test]
+    fn async_timeout_records_durable_evidence_before_panicking() {
+        let name: Ident = parse_quote!(stress_case);
+        let timeout: Option<Expr> = Some(parse_quote!(::std::time::Duration::from_secs(5)));
+
+        let expanded = wrap_with_timeout(&quote!({}), &timeout, true, &name).to_string();
+
+        assert!(expanded.contains("record_test_hang"));
+        assert!(expanded.contains("wall-timeout"));
+        assert!(expanded.contains("timed out after"));
     }
 }

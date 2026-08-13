@@ -54,11 +54,11 @@ impl ChildFailure {
     }
 }
 
-/// A check ran to completion and the code did not pass it.
+/// A check ran to completion and did not pass.
 ///
 /// This is not an error: nothing went wrong with the tool, and there is no
 /// state to inspect. Carried as one so it can travel the same `Result` as a
-/// real failure, and recognised at the top so the two print differently — a
+/// real failure, and recognised at the top so the two print differently - a
 /// failure earns a backtrace, a verdict earns a sentence. Twenty-three frames
 /// of runtime internals under "the code has ten style violations" says the
 /// program broke, which is the one thing that did not happen.
@@ -67,7 +67,7 @@ pub struct NotClean {
     /// The check that reached the verdict, as the user invoked it.
     pub check: &'static str,
     /// What it found, already printed above in full. `None` when the check
-    /// reports only that the code did not pass, without a count.
+    /// reports only that the check did not pass, without a count.
     pub findings: Option<usize>,
 }
 
@@ -77,13 +77,13 @@ impl fmt::Display for NotClean {
             Some(findings) => write!(
                 f,
                 "{check}: {findings} finding{plural} above. The check ran; the \
-                 code did not pass it.",
+                 check did not pass.",
                 check = self.check,
                 plural = if findings == 1 { "" } else { "s" },
             ),
             None => write!(
                 f,
-                "{check}: the check ran and the code did not pass it. Its \
+                "{check}: the check ran and did not pass. Its \
                  findings are above.",
                 check = self.check,
             ),
@@ -127,12 +127,14 @@ impl NotClean {
 
     fn render(error: &anyhow::Error) -> (String, i32) {
         if let Some(verdict) = error.downcast_ref::<Self>() {
-            (verdict.to_string(), 1)
-        } else if let Some(failure) = error.downcast_ref::<ChildFailure>() {
-            (failure.to_string(), failure.report_code())
-        } else {
-            (format!("Error: {error:?}"), 1)
+            return (verdict.to_string(), 1);
         }
+
+        if let Some(failure) = error.downcast_ref::<ChildFailure>() {
+            return (failure.to_string(), failure.report_code());
+        }
+
+        (format!("Error: {error:?}"), 1)
     }
 }
 

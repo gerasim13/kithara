@@ -178,8 +178,40 @@ fn census_writes_to_forced_log_path() {
     let _ = poll_once(fut);
 
     let contents = fs::read_to_string(&path).expect("read census log");
+    assert!(
+        contents.starts_with(&super::report::nextest_prefix()),
+        "census line must carry current nextest correlation: {contents}"
+    );
     assert!(contents.contains("census_file_task"), "got: {contents}");
     let _ = fs::remove_file(path);
+}
+
+#[test]
+fn census_panics_when_configured_log_cannot_be_written() {
+    force_mode(Mode::Census);
+
+    let missing_parent = temp_log_path("missing-parent");
+    let _ = fs::remove_dir_all(&missing_parent);
+    let path = missing_parent.join("census.log");
+    force_log_path(path.clone());
+
+    let caught = std::panic::catch_unwind(|| {
+        let fut = watch_budget("unwritable_census_task", CENSUS_LOG_BUDGET_MS, async {
+            crate::thread::sleep(Duration::from_millis(CENSUS_LOG_SLEEP_MS));
+        });
+        let _ = poll_once(fut);
+    });
+
+    let err = caught.expect_err("configured census write failure must panic");
+    let msg = err.downcast_ref::<String>().expect("panic payload");
+    assert!(
+        msg.contains("failed to write census log"),
+        "unexpected panic: {msg}"
+    );
+    assert!(
+        msg.contains(&path.display().to_string()),
+        "panic must identify the configured path: {msg}"
+    );
 }
 
 #[test]

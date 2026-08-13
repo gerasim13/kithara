@@ -223,9 +223,8 @@ pub fn hang_dump(context: &str) -> String {
 }
 
 /// Emit [`hang_dump`] via `tracing` at ERROR. The `#[kithara::test]` harness
-/// calls this from both hang exits (the virtual-timeout panic and the HARD
-/// TIMEOUT abort thread) so a wedged run self-reports the full wait-for picture
-/// instead of dying opaque.
+/// also uses [`hang_dump`] as the rendering owner for durable timeout evidence,
+/// so a wedged run can retain the same wait-for picture outside captured logs.
 pub fn log_hang_dump(context: &str) {
     tracing::error!(target: "flash::hang", "{}", hang_dump(context));
 }

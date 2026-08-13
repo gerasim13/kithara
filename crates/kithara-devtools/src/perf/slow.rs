@@ -239,6 +239,8 @@ mod tests {
             name: name.into(),
             iteration: None,
             failed: false,
+            timestamp: None,
+            output: String::new(),
         }
     }
 
