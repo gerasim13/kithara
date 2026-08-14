@@ -93,8 +93,6 @@ bon = { workspace = true }
 # Channels/buffers
 bytes = { workspace = true }
 cbc = { workspace = true }
-delegate = { workspace = true }
-fieldwork = { workspace = true }
 futures = { workspace = true }
 hex = { workspace = true }
 num-traits = { workspace = true }

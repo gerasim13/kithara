@@ -4682,8 +4682,6 @@ dependencies = [
  "cochlea-features",
  "console_error_panic_hook",
  "criterion",
- "delegate",
- "fieldwork",
  "firewheel",
  "futures",
  "gloo-timers",
