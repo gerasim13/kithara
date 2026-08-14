@@ -31,4 +31,5 @@ pub use doc::{envelope, layout, module, param, skin};
 
 mod doc;
 mod resolve;
+mod shader;
 mod validate;

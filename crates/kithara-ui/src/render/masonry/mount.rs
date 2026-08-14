@@ -195,6 +195,7 @@ impl NodeControl for mount::Vis {
         host.vis_leaf(preset, value, cx.declared)
     }
 }
+impl NodeControl for mount::Shader {}
 impl NodeControl for mount::Table<'_> {
     fn leaf<A>(&self, host: &MasonryHost<'_, A>, cx: &Cx<'_>) -> MasonryNode<A>
     where

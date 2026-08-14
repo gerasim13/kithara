@@ -13,6 +13,7 @@ use crate::{
     module::ChromeStyle,
     registry::EndpointRegistry,
     resolve::load_module_graph,
+    shader::ShaderCache,
     size::{
         BlockNode, Hidden, SizeSpec, VISIBLE, combine_horizontal, combine_vertical, compute_size,
         has_blocks, with_module_chrome,
@@ -150,6 +151,7 @@ pub fn compile(
     let mut budget = Budget::new(config.limits.max_nodes);
     let mut interner = Interner::new(config.max_arena_bytes);
     let mut includes = Vec::new();
+    let mut shaders = ShaderCache::default();
     let root = Compiler {
         resolver,
         endpoints,
@@ -158,6 +160,7 @@ pub fn compile(
         budget: &mut budget,
         interner: &mut interner,
         includes: &mut includes,
+        shaders: &mut shaders,
     }
     .build(&document.root, &loaded.uri)?;
     let size = compiled_node_size(&root);
@@ -185,6 +188,7 @@ struct Compiler<'a> {
     skin: &'a SkinDoc,
     config: &'a UiConfig,
     includes: &'a mut Vec<IncludedModule>,
+    shaders: &'a mut ShaderCache,
     endpoints: &'a dyn EndpointRegistry,
     resolver: &'a dyn SourceResolver,
 }
@@ -258,6 +262,8 @@ impl Compiler<'_> {
                     self.config.limits.max_depth,
                     self.budget,
                     self.interner,
+                    self.endpoints,
+                    self.shaders,
                     &mut visitor,
                 )
                 .expand_module(&set, &module_uri, &args, &instance.0)?;

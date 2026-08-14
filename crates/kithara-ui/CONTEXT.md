@@ -900,6 +900,17 @@ parks until input or a 500 ms state-pump deadline. That deadline advances the ap
 re-reads every watched endpoint; unchanged reads still skip render and present. Embedders that own
 their event loop continue to choose when they call `Ui::frame`.
 
+`Shader` is the generic document-owned shader contract, distinct from the fixed `Vis` control. Its
+WGSL source is loaded relative to the declaring module through the same root-confined
+`SourceResolver` and byte limit as module documents. The compiler generates one standard uniform
+block with `viewport` plus the document's sorted named fields, validates the combined WGSL with the
+render stack's Naga generation, and retains the validated source with immutable endpoint metadata.
+Uniform bindings are read-only and initially accept Bool, Scalar and Stereo values; commands,
+collections, text and waveforms fail compilation with a typed `UiDocError::Shader`. A compiled
+document is the sole owner of this metadata, so hosts never build a parallel shader registry. Until
+the image-pass wave lands, both hosts mount the control as an empty box of its declared size; there
+is no fallback shader or backend-specific document path.
+
 ## Scoped Read Resolution
 
 A read binding with a non-empty `with` map resolves through the canonical scoped key

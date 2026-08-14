@@ -327,6 +327,7 @@ const fn control_id(node: &ControlNode) -> Option<&NodeId> {
         | ControlNode::Fader { id, .. }
         | ControlNode::Wave { id, .. }
         | ControlNode::Vis { id, .. }
+        | ControlNode::Shader { id, .. }
         | ControlNode::Table { id, .. }
         | ControlNode::Tree { id, .. }
         | ControlNode::ContextBar { id, .. }
@@ -421,6 +422,51 @@ pub(crate) fn check_controls(
         check_binding(binding, side, write_kind, site.path, origin, endpoints)?;
     }
     Ok(())
+}
+
+pub(crate) fn shader_uniform_kind(
+    name: &str,
+    binding: &BindingRef,
+    path: &str,
+    origin: &SourceUri,
+    endpoints: &dyn EndpointRegistry,
+) -> Result<ValueKind, UiDocError> {
+    let (category, id, with) = binding_parts(binding);
+    if !matches!(
+        category,
+        EndpointCategory::Parameter | EndpointCategory::Telemetry | EndpointCategory::Model
+    ) {
+        return Err(UiDocError::BindingDirection {
+            origin: origin.clone(),
+            id: id.0.clone(),
+            path: path.to_owned(),
+            detail: format!("{category} endpoint is not allowed on this side"),
+        });
+    }
+    let Some(endpoint) = endpoints.endpoint(category, id) else {
+        return Err(UiDocError::UnknownEndpoint {
+            origin: origin.clone(),
+            category: category.to_string(),
+            id: id.0.clone(),
+            path: path.to_owned(),
+        });
+    };
+    if !matches!(
+        endpoint.value,
+        ValueKind::Bool | ValueKind::Scalar | ValueKind::Stereo
+    ) {
+        return Err(UiDocError::Shader {
+            origin: origin.clone(),
+            path: path.to_owned(),
+            detail: format!(
+                "uniform {name:?} binds {kind} endpoint {id:?}; expected Bool, Scalar, or Stereo",
+                kind = endpoint.value,
+                id = id.0,
+            ),
+        });
+    }
+    check_scopes(id, with, endpoint, path, origin)?;
+    Ok(endpoint.value)
 }
 
 fn check_context_scope(site: ControlSite<'_>, origin: &SourceUri) -> Result<(), UiDocError> {
@@ -640,7 +686,8 @@ pub(crate) const fn value_kinds(control: &ControlNode) -> (Option<ValueKind>, Op
         | ControlNode::Select { .. }
         | ControlNode::StatusDot { .. }
         | ControlNode::Swatch { .. }
-        | ControlNode::Cell { .. } => (None, None),
+        | ControlNode::Cell { .. }
+        | ControlNode::Shader { .. } => (None, None),
     }
 }
 

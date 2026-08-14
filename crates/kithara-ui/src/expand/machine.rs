@@ -17,7 +17,9 @@ use crate::{
     ids::{InternId, Interner, NodeId, SourceUri},
     module::{BindingRef, ControlNode, PopoverAlign, PopoverAt, TableColumn, Tone, WaveStyle},
     param::Param,
+    registry::EndpointRegistry,
     resolve::ModuleSet,
+    shader::{self, ShaderCache, ShaderUniform},
     size::SizeSpec,
     validate,
 };
@@ -62,6 +64,8 @@ pub(crate) struct Expander<'m, 'v> {
     pub(super) address: Vec<usize>,
     pub(super) includes: Vec<ExpandedInclude>,
     budget: &'m mut Budget,
+    endpoints: &'m dyn EndpointRegistry,
+    shaders: &'m mut ShaderCache,
     visitor: &'m mut ControlVisitor<'v>,
     in_popover: bool,
     max_depth: usize,
@@ -72,11 +76,15 @@ impl<'m, 'v> Expander<'m, 'v> {
         max_depth: usize,
         budget: &'m mut Budget,
         interner: &'m mut Interner,
+        endpoints: &'m dyn EndpointRegistry,
+        shaders: &'m mut ShaderCache,
         visitor: &'m mut ControlVisitor<'v>,
     ) -> Self {
         Self {
             max_depth,
             budget,
+            endpoints,
+            shaders,
             interner,
             visitor,
             in_popover: false,
@@ -234,6 +242,53 @@ fn status_dot_spec(
     })
 }
 
+fn shader_spec(
+    context: &Context<'_>,
+    machine: &mut Expander<'_, '_>,
+    source: &str,
+    extra: &ExtraBindings,
+    path: &str,
+) -> Result<ControlSpec, UiDocError> {
+    let loaded =
+        context
+            .set
+            .shader(&context.origin, source)
+            .ok_or_else(|| UiDocError::NotFound {
+                origin: context.origin.clone(),
+                rel: source.to_owned(),
+            })?;
+    let fields = extra
+        .uniforms
+        .iter()
+        .map(|(name, _)| name.clone())
+        .collect::<Vec<_>>();
+    let uniforms = extra
+        .uniforms
+        .iter()
+        .map(|(name, binding)| {
+            Ok(ShaderUniform {
+                kind: validate::shader_uniform_kind(
+                    name,
+                    binding,
+                    path,
+                    &context.origin,
+                    machine.endpoints,
+                )?,
+                name: machine.interner.intern(name, &context.origin)?,
+                read: intern_binding(machine.interner, binding, &context.origin)?,
+            })
+        })
+        .collect::<Result<Vec<_>, UiDocError>>()?;
+    Ok(ControlSpec::Shader(shader::compile(
+        machine.shaders,
+        &loaded.text,
+        &loaded.uri,
+        path,
+        uniforms,
+        &fields,
+    )?))
+}
+
 fn title_bar_spec(
     context: &Context<'_>,
     machine: &mut Expander<'_, '_>,
@@ -377,6 +432,7 @@ fn control_spec(
         },
         ControlNode::Crossfader { ticks, .. } => ControlSpec::Crossfader { ticks: *ticks },
         ControlNode::Vis { .. } => ControlSpec::Vis,
+        ControlNode::Shader { source, .. } => shader_spec(context, machine, source, extra, path)?,
         ControlNode::Toggle { .. } => ControlSpec::Toggle,
         ControlNode::Checkbox { .. } => ControlSpec::Checkbox,
         ControlNode::Meter { .. } => ControlSpec::Meter,
@@ -879,6 +935,7 @@ pub(super) fn walk(
         | ControlNode::Fader { id, adaptive, .. }
         | ControlNode::Wave { id, adaptive, .. }
         | ControlNode::Vis { id, adaptive, .. }
+        | ControlNode::Shader { id, adaptive, .. }
         | ControlNode::Table { id, adaptive, .. }
         | ControlNode::Tree { id, adaptive, .. }
         | ControlNode::ContextBar { id, adaptive, .. }
@@ -915,10 +972,20 @@ mod tests {
     use super::*;
     use crate::{
         expand::{Binding, BindingKind},
-        ids::StrArena,
+        ids::{EndpointId, StrArena},
+        registry::{EndpointCategory, EndpointDesc},
         resolve::load_module_graph,
+        shader::ShaderCache,
         source::{Limits, MemResolver},
     };
+
+    struct EmptyRegistry;
+
+    impl EndpointRegistry for EmptyRegistry {
+        fn endpoint(&self, _category: EndpointCategory, _id: &EndpointId) -> Option<&EndpointDesc> {
+            None
+        }
+    }
 
     fn args(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
         pairs
@@ -954,11 +1021,14 @@ mod tests {
     ) -> Result<(ExpandedNode, StrArena), UiDocError> {
         let mut budget = Budget::new(Limits::default().max_nodes);
         let mut interner = Interner::new(64 * 1024);
+        let mut shaders = ShaderCache::default();
         let mut visitor = |_: ControlSite<'_>, _: &SourceUri| Ok(());
         let module = Expander::new(
             Limits::default().max_depth,
             &mut budget,
             &mut interner,
+            &EmptyRegistry,
+            &mut shaders,
             &mut visitor,
         )
         .expand_module(set, uri, args, "")?;
@@ -972,9 +1042,17 @@ mod tests {
     ) -> Result<(ExpandedNode, StrArena), UiDocError> {
         let mut budget = Budget::new(Limits::default().max_nodes);
         let mut interner = Interner::new(64 * 1024);
+        let mut shaders = ShaderCache::default();
         let mut visitor = |_: ControlSite<'_>, _: &SourceUri| Ok(());
-        let module = Expander::new(max_depth, &mut budget, &mut interner, &mut visitor)
-            .expand_module(set, uri, &BTreeMap::new(), "")?;
+        let module = Expander::new(
+            max_depth,
+            &mut budget,
+            &mut interner,
+            &EmptyRegistry,
+            &mut shaders,
+            &mut visitor,
+        )
+        .expand_module(set, uri, &BTreeMap::new(), "")?;
         Ok((module.root, interner.finish()))
     }
 
@@ -1089,11 +1167,19 @@ mod tests {
         let limits = Limits::default();
         let mut budget = Budget::new(limits.max_nodes);
         let mut interner = Interner::new(64 * 1024);
+        let mut shaders = ShaderCache::default();
         let mut visitor = |_: ControlSite<'_>, _: &SourceUri| Ok(());
 
-        let error = Expander::new(limits.max_depth, &mut budget, &mut interner, &mut visitor)
-            .expand_module(&set, &uri, &args(&[("deck", "a")]), "deck-a")
-            .unwrap_err();
+        let error = Expander::new(
+            limits.max_depth,
+            &mut budget,
+            &mut interner,
+            &EmptyRegistry,
+            &mut shaders,
+            &mut visitor,
+        )
+        .expand_module(&set, &uri, &args(&[("deck", "a")]), "deck-a")
+        .unwrap_err();
         let message = error.to_string();
         assert!(matches!(
             error,

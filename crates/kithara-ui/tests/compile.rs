@@ -121,6 +121,113 @@ fn crossfader_compiles_with_scalar_read_and_write_bindings() {
     };
 }
 
+fn shader_resolver(source: &str) -> MemResolver {
+    let mut resolver = MemResolver::default();
+    resolver.insert(
+        "shader.klayout.ron",
+        r#"(schema: "kithara.layout", version: 1, id: "shader",
+            root: Module(instance: "meter", source: "panels/meter.kmodule.ron"))"#,
+    );
+    resolver.insert(
+        "panels/meter.kmodule.ron",
+        r#"(schema: "kithara.module", version: 1, id: "meter",
+            root: Shader(
+                id: "meter",
+                source: "../shaders/meter.wgsl",
+                uniforms: { "level": Telemetry(id: "player.output.levels") },
+            ))"#,
+    );
+    resolver.insert("shaders/meter.wgsl", source);
+    resolver
+}
+
+#[kithara::test]
+fn shader_source_and_uniforms_compile_through_the_document_pipeline() {
+    let resolver = shader_resolver(
+        r#"
+@fragment
+fn fs_main(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
+    return vec4<f32>(position.xy / kithara.viewport.xy, kithara.level.x, 1.0);
+}
+"#,
+    );
+
+    let ui = compile(
+        "shader.klayout.ron",
+        &resolver,
+        &common::player_registry(),
+        builtin::skin_doc(),
+        &UiConfig::default(),
+    )
+    .unwrap();
+    let CompiledNode::Module { root, .. } = &ui.root else {
+        panic!("expected module root");
+    };
+    assert!(matches!(
+        &**root,
+        ExpandedNode::Control {
+            spec: ControlSpec::Shader(_),
+            read: None,
+            write: None,
+            ..
+        }
+    ));
+}
+
+#[kithara::test]
+fn malformed_shader_reports_the_resolved_source() {
+    let resolver = shader_resolver("@fragment fn fs_main(");
+
+    let error = compile(
+        "shader.klayout.ron",
+        &resolver,
+        &common::player_registry(),
+        builtin::skin_doc(),
+        &UiConfig::default(),
+    )
+    .unwrap_err();
+
+    assert!(matches!(
+        error,
+        UiDocError::Shader { origin, path, .. }
+            if origin.0 == "shaders/meter.wgsl" && path == "meter/meter"
+    ));
+}
+
+#[kithara::test]
+fn shader_uniforms_reject_non_numeric_endpoint_values() {
+    let resolver = shader_resolver(
+        r#"
+@fragment
+fn fs_main() -> @location(0) vec4<f32> {
+    return vec4<f32>(kithara.level.x);
+}
+"#,
+    );
+    let mut registry = common::player_registry();
+    registry.insert(
+        EndpointCategory::Telemetry,
+        "player.output.levels",
+        EndpointDesc::new(ValueKind::Text),
+    );
+
+    let error = compile(
+        "shader.klayout.ron",
+        &resolver,
+        &registry,
+        builtin::skin_doc(),
+        &UiConfig::default(),
+    )
+    .unwrap_err();
+
+    assert!(matches!(error, UiDocError::Shader { .. }));
+    assert!(
+        error
+            .to_string()
+            .contains("expected Bool, Scalar, or Stereo")
+    );
+}
+
 #[kithara::test]
 fn meter_reads_a_scalar_and_refuses_any_other_kind() {
     let module = |endpoint| {

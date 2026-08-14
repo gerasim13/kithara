@@ -67,6 +67,12 @@ pub enum UiDocError {
     NotFound { origin: SourceUri, rel: String },
     #[error("{origin}: source {rel:?} escapes configured root")]
     RootEscape { origin: SourceUri, rel: String },
+    #[error("{origin}: shader at {path}: {detail}")]
+    Shader {
+        origin: SourceUri,
+        path: String,
+        detail: String,
+    },
     #[error(
         "include cycle: {}",
         chain

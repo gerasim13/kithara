@@ -9,6 +9,7 @@ use crate::{
         DeckSummaryStyle, FaderStyle, GlyphStyle, IconName, PopoverAlign, PopoverAt, ScalarFormat,
         TableColumn, TextAlign, TextStyle, Tone, WaveStyle, WindowControlsStyle,
     },
+    shader::ShaderSpec,
     size::{BlockNode, SizeSpec},
     skin::ColorRole,
 };
@@ -151,6 +152,7 @@ pub enum ControlSpec {
         zoom: Option<Binding>,
     },
     Vis,
+    Shader(ShaderSpec),
     Table {
         columns: Vec<TableColumn>,
         columns_state: Option<Binding>,

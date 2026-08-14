@@ -193,6 +193,12 @@ impl ViewControl for mount::Vis {
     }
 }
 
+impl ViewControl for mount::Shader {
+    fn view<'a>(&self, _cx: &Cx<'a, '_, '_>) -> Rendered<'a> {
+        Rendered::leading(Space::new().into())
+    }
+}
+
 impl ViewControl for mount::Table<'_> {
     fn view<'a>(&self, cx: &Cx<'a, '_, '_>) -> Rendered<'a> {
         Rendered::leading(table(cx, (self.columns, self.columns_state)))

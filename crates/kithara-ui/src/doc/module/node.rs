@@ -415,6 +415,17 @@ pub enum ControlNode {
         #[serde(default)]
         adaptive: AdaptivePolicy,
     },
+    /// A WGSL fragment fed by named read-only endpoint uniforms.
+    Shader {
+        id: NodeId,
+        #[serde(default)]
+        size: Option<SizeSpec>,
+        source: String,
+        #[serde(default)]
+        uniforms: BTreeMap<String, BindingRef>,
+        #[serde(default)]
+        adaptive: AdaptivePolicy,
+    },
     Table {
         id: NodeId,
         #[serde(default)]
@@ -629,7 +640,8 @@ impl ControlNode {
             | Self::WindowDrag { .. }
             | Self::TitleBar { .. }
             | Self::WindowControls { .. }
-            | Self::Swatch { .. } => (None, None),
+            | Self::Swatch { .. }
+            | Self::Shader { .. } => (None, None),
             Self::DeckSummary { read, write, .. }
             | Self::Brand { read, write, .. }
             | Self::Spacer { read, write, .. }
@@ -697,6 +709,7 @@ impl ControlNode {
             | Self::Fader { size, .. }
             | Self::Wave { size, .. }
             | Self::Vis { size, .. }
+            | Self::Shader { size, .. }
             | Self::Table { size, .. }
             | Self::Tree { size, .. }
             | Self::ContextBar { size, .. }

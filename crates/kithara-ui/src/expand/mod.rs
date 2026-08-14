@@ -9,3 +9,5 @@ pub(crate) use binding_subst::{intern_binding, substitute_binding, substitute_ma
 pub(crate) use machine::Expander;
 pub use node::{Binding, BindingKind, BlockSpec, ControlSpec, DropSpec, ExpandedNode, SurfaceSpec};
 pub(crate) use node::{Budget, ControlSite, ControlVisitor, ExpandedInclude, ExpandedModule};
+
+pub use crate::shader::ShaderSpec;

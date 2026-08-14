@@ -1,16 +1,23 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, btree_map::Entry};
 
 use crate::{
     error::UiDocError,
     ids::SourceUri,
     module::{ControlNode, ModuleDoc, parse_module},
-    source::{Limits, SourceResolver},
+    source::{Limits, LoadedSource, SourceResolver},
     validate,
 };
 
 #[derive(Debug, Default)]
 pub(crate) struct ModuleSet {
     pub(crate) defs: BTreeMap<SourceUri, ModuleDoc>,
+    shaders: BTreeMap<(SourceUri, String), LoadedSource>,
+}
+
+impl ModuleSet {
+    pub(crate) fn shader(&self, origin: &SourceUri, source: &str) -> Option<&LoadedSource> {
+        self.shaders.get(&(origin.clone(), source.to_owned()))
+    }
 }
 
 pub(crate) fn load_module_graph(
@@ -34,15 +41,7 @@ fn load_rec(
     stack: &mut Vec<SourceUri>,
     depth: usize,
 ) -> Result<SourceUri, UiDocError> {
-    let loaded = resolver.load(base, rel)?;
-    let bytes = loaded.text.len();
-    if bytes > limits.max_bytes {
-        return Err(UiDocError::TooLarge {
-            bytes,
-            origin: loaded.uri,
-            max: limits.max_bytes,
-        });
-    }
+    let loaded = load_source(resolver, base, rel, limits)?;
     if stack.contains(&loaded.uri) {
         let mut chain = stack.clone();
         chain.push(loaded.uri);
@@ -67,6 +66,24 @@ fn load_rec(
     debug_assert_eq!(popped.as_ref(), Some(&loaded.uri));
     set.defs.insert(loaded.uri.clone(), doc);
     Ok(loaded.uri)
+}
+
+fn load_source(
+    resolver: &dyn SourceResolver,
+    base: Option<&SourceUri>,
+    rel: &str,
+    limits: &Limits,
+) -> Result<LoadedSource, UiDocError> {
+    let loaded = resolver.load(base, rel)?;
+    let bytes = loaded.text.len();
+    if bytes > limits.max_bytes {
+        return Err(UiDocError::TooLarge {
+            bytes,
+            origin: loaded.uri,
+            max: limits.max_bytes,
+        });
+    }
+    Ok(loaded)
 }
 
 fn walk_includes(
@@ -110,6 +127,14 @@ fn walk_includes(
                 stack,
                 depth + 1,
             )?;
+            Ok(())
+        }
+        ControlNode::Shader { source, .. } => {
+            let key = (origin.clone(), source.clone());
+            if let Entry::Vacant(slot) = set.shaders.entry(key) {
+                let loaded = load_source(resolver, Some(origin), source, limits)?;
+                slot.insert(loaded);
+            }
             Ok(())
         }
         ControlNode::DeckSummary { .. }

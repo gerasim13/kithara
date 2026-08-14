@@ -113,6 +113,7 @@ macro_rules! controls {
                     .build(),
             ),
             $crate::expand::ControlSpec::Vis => with.apply(&$crate::mount::Vis),
+            $crate::expand::ControlSpec::Shader(_) => with.apply(&$crate::mount::Shader),
             $crate::expand::ControlSpec::Table {
                 columns,
                 columns_state,
