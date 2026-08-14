@@ -109,6 +109,13 @@ An iced geometry cache keeps an owned snapshot of its last list for equality ins
 the pool guards. The transient list therefore returns its buffers after the frame, while the
 snapshot remains a plain immutable value and cannot consume the next frame's reusable storage.
 
+An externally produced image crosses the draw seam as `ImageId` plus its logical destination
+rectangle. The producer owns its pixels or GPU texture, and each backend resolves that identity in
+its own resource registry; no wgpu, toolkit image handle, or CPU readback enters `DrawCmd`. Image
+support is a backend capability, so a list containing an image is refused whole until the backend
+has a registry that can resolve it. Nested `Clip` retains the image and its rectangle together,
+preserving list order and clipping without a separate native-effect overlay.
+
 A viewport is retained as `DrawCmd::Clip { region, list }`: the region and the nested `DrawList`
 travel as one scoped command. The nesting is required by iced, not a convenience chosen by the
 builder. `Frame::with_clip` is iced's only public clipping route and receives a closure that draws

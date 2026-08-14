@@ -11,8 +11,8 @@ use vello::{
 
 use crate::{
     draw::{
-        Backend, Caps, DrawCmd, DrawList, FillRule, Geom, LineCap, LineJoin, Paint, Path, Pen, Pt,
-        Rect, Rgba, Stops, Transform, Verb, replay,
+        Backend, Caps, DrawCmd, DrawList, FillRule, Geom, ImageId, LineCap, LineJoin, Paint, Path,
+        Pen, Pt, Rect, Rgba, Stops, Transform, Verb, replay,
     },
     text::{GlyphFace, GlyphRun},
 };
@@ -55,12 +55,15 @@ fn has_system_text(list: &DrawList) -> bool {
             .segments()
             .iter()
             .any(|segment| matches!(segment.face(), GlyphFace::System(_))),
-        DrawCmd::Fill { .. } | DrawCmd::Stroke { .. } => false,
+        DrawCmd::Fill { .. } | DrawCmd::Image { .. } | DrawCmd::Stroke { .. } => false,
     })
 }
 
 impl Backend for VelloBackend<'_> {
-    const CAPS: Caps = Caps::EVERYTHING;
+    const CAPS: Caps = Caps {
+        can_draw_images: false,
+        ..Caps::EVERYTHING
+    };
 
     fn clip(&mut self, region: Rect, list: &DrawList) {
         if has_system_text(list) {
@@ -131,6 +134,10 @@ impl Backend for VelloBackend<'_> {
                 paint,
             ),
         }
+    }
+
+    fn image(&mut self, _image: &ImageId, _rect: Rect) {
+        tracing::error!("an image reached the Vello backend past the capability door");
     }
 
     fn stroke(&mut self, geom: &Geom, color: Rgba, pen: Pen) {

@@ -1,6 +1,6 @@
 use super::{
-    DrawCmd, DrawPools, FillRule, Geom, Paint, Path, Pen, PoolText, Pt, Rect, Rgba, Transform,
-    Verb, buffer::Buffer,
+    DrawCmd, DrawPools, FillRule, Geom, ImageId, Paint, Path, Pen, PoolText, Pt, Rect, Rgba,
+    Transform, Verb, buffer::Buffer,
 };
 use crate::text::GlyphRun;
 
@@ -117,6 +117,11 @@ impl DrawListBuilder {
             },
             paint: paint.into(),
         });
+    }
+
+    /// Adds an externally owned image at its destination rectangle.
+    pub fn image(&mut self, image: ImageId, rect: Rect) {
+        self.commands.push(DrawCmd::Image { image, rect });
     }
 
     pub fn stroke_rounded_rect<P: Into<Pen>>(

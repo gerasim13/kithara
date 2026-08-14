@@ -1,4 +1,4 @@
-use super::{Caps, DrawCmd, DrawList, Geom, Needs, Paint, Pen, Rect, Rgba, Transform};
+use super::{Caps, DrawCmd, DrawList, Geom, ImageId, Needs, Paint, Pen, Rect, Rgba, Transform};
 use crate::text::GlyphRun;
 
 /// Consumes toolkit-neutral retained drawing commands.
@@ -12,6 +12,9 @@ pub trait Backend {
     fn clip(&mut self, region: Rect, list: &DrawList);
 
     fn fill(&mut self, geom: &Geom, paint: Paint);
+
+    /// Draws an image resolved by this backend into `rect`.
+    fn image(&mut self, image: &ImageId, rect: Rect);
 
     fn stroke(&mut self, geom: &Geom, color: Rgba, pen: Pen);
 
@@ -38,6 +41,7 @@ fn draw<B: Backend>(list: &DrawList, backend: &mut B) {
         match command {
             DrawCmd::Clip { region, list } => backend.clip(*region, list),
             DrawCmd::Fill { geom, paint } => backend.fill(geom, *paint),
+            DrawCmd::Image { image, rect } => backend.image(image, *rect),
             DrawCmd::Stroke { geom, color, pen } => backend.stroke(geom, *color, *pen),
             DrawCmd::Text {
                 run,
@@ -54,7 +58,7 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::{
-        Backend, Caps, DrawCmd, DrawList, Geom, Paint, Pen, Rect, Rgba, Transform, replay,
+        Backend, Caps, DrawCmd, DrawList, Geom, ImageId, Paint, Pen, Rect, Rgba, Transform, replay,
     };
     use crate::{
         draw::{DrawListBuilder, FillRule, Path, Pt, Verb},
@@ -78,6 +82,10 @@ mod tests {
         }
 
         fn fill(&mut self, _geom: &Geom, _paint: Paint) {
+            self.drawn += 1;
+        }
+
+        fn image(&mut self, _image: &ImageId, _rect: Rect) {
             self.drawn += 1;
         }
 
@@ -165,12 +173,20 @@ mod tests {
     fn every_command_reaches_the_backend_in_order() {
         let mut list = DrawListBuilder::default();
         list.fill_rect(unit_box(), ink());
+        list.image(ImageId::new("shader/test"), unit_box());
         list.stroke_line(Pt { x: 0.0, y: 0.0 }, Pt { x: 1.0, y: 1.0 }, ink(), 1.0);
         let list = list.finish();
 
         assert!(matches!(
             list.commands(),
-            [DrawCmd::Fill { .. }, DrawCmd::Stroke { .. }]
+            [
+                DrawCmd::Fill { .. },
+                DrawCmd::Image { .. },
+                DrawCmd::Stroke { .. }
+            ]
         ));
+        let mut recorder = Recorder::default();
+        replay(&list, &mut recorder);
+        assert_eq!(recorder.drawn, 3);
     }
 }

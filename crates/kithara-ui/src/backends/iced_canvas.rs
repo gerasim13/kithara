@@ -16,8 +16,8 @@ use skrifa::{
 
 use crate::{
     draw::{
-        Backend, Caps, DrawCmd, DrawList, FillRule, Geom, LineCap, LineJoin, Needs, Paint, Pen, Pt,
-        Rect, Rgba, Transform, Verb,
+        Backend, Caps, DrawCmd, DrawList, FillRule, Geom, ImageId, LineCap, LineJoin, Needs, Paint,
+        Pen, Pt, Rect, Rgba, Transform, Verb,
     },
     skin::{FontFamily, FontWeight},
     text::{GlyphFace, GlyphRun, GlyphSegment, TextResources, select},
@@ -85,6 +85,7 @@ fn flush(run: &mut Vec<&DrawCmd>, frame: &mut Frame, resources: &TextResources, 
             match command {
                 DrawCmd::Clip { region, list } => backend.clip(*region, list),
                 DrawCmd::Fill { geom, paint } => backend.fill(geom, *paint),
+                DrawCmd::Image { image, rect } => backend.image(image, *rect),
                 DrawCmd::Stroke { geom, color, pen } => backend.stroke(geom, *color, *pen),
                 DrawCmd::Text {
                     run,
@@ -113,6 +114,7 @@ impl Backend for IcedBackend<'_> {
     /// ramp is refused rather than approximated with a flat colour.
     const CAPS: Caps = Caps {
         radial_gradient: false,
+        can_draw_images: false,
         ..Caps::EVERYTHING
     };
 
@@ -138,6 +140,10 @@ impl Backend for IcedBackend<'_> {
         } else {
             tracing::error!("a paint iced cannot spell reached it past the door");
         }
+    }
+
+    fn image(&mut self, _image: &ImageId, _rect: Rect) {
+        tracing::error!("an image reached the iced canvas backend past the capability door");
     }
 
     fn stroke(&mut self, geom: &Geom, color: Rgba, pen: Pen) {

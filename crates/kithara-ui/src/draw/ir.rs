@@ -2,6 +2,7 @@
 use num_traits::ToPrimitive;
 
 use super::{
+    image::ImageId,
     list::DrawList,
     path::Path,
     style::{Paint, Pen},
@@ -152,6 +153,11 @@ pub enum DrawCmd {
     Fill {
         geom: Geom,
         paint: Paint,
+    },
+    /// Draws an externally owned image into `rect`.
+    Image {
+        image: ImageId,
+        rect: Rect,
     },
     Stroke {
         geom: Geom,
