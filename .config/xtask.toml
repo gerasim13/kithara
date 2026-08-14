@@ -404,6 +404,50 @@ handler = "format-edited-paths"
 [ext.ci]
 pins = ".config/ci-pins.toml"
 
+# Lanes that are nothing but the work they ask the executor for. A lane needs a
+# function only when a parameter cannot say what it does.
+[ext.ci.lanes.deps-deny]
+cache_group = "linux"
+label = "dependency audit"
+os = "linux"
+tools = ["cargo", "just"]
+program = "just"
+steps = [{ args = ["deps", "deny"], label = "licence and advisory gate" }]
+
+[ext.ci.lanes.deps-unused]
+cache_group = "linux"
+label = "dependency audit"
+os = "linux"
+tools = ["cargo", "just"]
+program = "just"
+steps = [
+  { args = [
+    "deps",
+    "machete",
+  ], label = "unused manifest entries" },
+  { args = [
+    "deps",
+    "shear",
+  ], label = "unused crate dependencies" },
+]
+
+[ext.ci.lanes.deps-features]
+cache_group = "linux"
+label = "dependency audit"
+os = "linux"
+tools = ["cargo", "just"]
+program = "just"
+steps = [{ args = ["deps", "hack"], label = "feature powerset check" }]
+
+[ext.ci.lanes.deps-semver]
+cache_group = "linux"
+label = "dependency audit"
+os = "linux"
+tools = ["cargo", "just"]
+program = "just"
+steps = [{ args = ["deps", "semver"], label = "public API compatibility" }]
+
+
 [ext.publish]
 workspace_hack_crate = "kithara-workspace-hack"
 delay_secs = 20

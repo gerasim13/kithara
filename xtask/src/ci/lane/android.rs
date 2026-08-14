@@ -1,12 +1,9 @@
 use anyhow::{Result, bail};
 
-use crate::ci::{
-    config::CiConfig,
-    process::{Process, require_os},
-};
+use crate::ci::{config::CiConfig, process::Process};
 
 pub(crate) fn build(process: &Process) -> Result<()> {
-    require_os("macos", "Android")?;
+    process.require_os("macos", "Android")?;
     process.require_tools(&["cargo", "java", "just", "sccache"])?;
     native_build(process)
 }

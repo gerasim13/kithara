@@ -1,9 +1,6 @@
 use anyhow::{Result, bail};
 
-use crate::ci::{
-    config::CiPins,
-    process::{Process, require_os},
-};
+use crate::ci::{config::CiPins, process::Process};
 
 /// One browser per job. The two engines fail for unrelated reasons, and a
 /// Firefox regression should not hide whether Chromium still passes.
@@ -13,7 +10,7 @@ use crate::ci::{
 /// Firefox retains the full integration suite, whose shared-memory standard
 /// library build needs the pinned nightly.
 pub(crate) fn chromium(process: &Process, pins: &CiPins) -> Result<()> {
-    require_os("linux", "Web browser")?;
+    process.require_os("linux", "Web browser")?;
     process.require_tools(&["chromium", "chromedriver", "just"])?;
     require_version(process, "chromium", &pins.chrome_for_testing_version)?;
     require_version(process, "chromedriver", &pins.chrome_for_testing_version)?;
@@ -34,13 +31,13 @@ fn require_version(process: &Process, tool: &str, expected: &str) -> Result<()> 
 }
 
 pub(crate) fn firefox(process: &Process) -> Result<()> {
-    require_os("linux", "Web browser")?;
+    process.require_os("linux", "Web browser")?;
     process.require_tools(&["firefox", "geckodriver", "just"])?;
     process.run("just", &["test", "wasm", "firefox"], "Firefox WASM tests")
 }
 
 pub(crate) fn size(process: &Process) -> Result<()> {
-    require_os("linux", "WASM size")?;
+    process.require_os("linux", "WASM size")?;
     process.require_tools(&["cargo", "just"])?;
     process.run(
         "just",

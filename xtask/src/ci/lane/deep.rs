@@ -1,9 +1,9 @@
 use anyhow::Result;
 
-use crate::ci::process::{Process, require_os};
+use crate::ci::process::Process;
 
 fn preflight(process: &Process) -> Result<()> {
-    require_os("macos", "deep Apple")?;
+    process.require_os("macos", "deep Apple")?;
     process.require_tools(&["cargo", "just"])
 }
 

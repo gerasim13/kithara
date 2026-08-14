@@ -1,9 +1,9 @@
 use anyhow::Result;
 
-use crate::ci::process::{Process, require_os};
+use crate::ci::process::Process;
 
 fn preflight(process: &Process) -> Result<()> {
-    require_os("linux", "Linux")?;
+    process.require_os("linux", "Linux")?;
     process.require_tools(&["cargo", "just", "sccache"])
 }
 
@@ -12,7 +12,7 @@ fn preflight(process: &Process) -> Result<()> {
 /// nobody can act on. Values stay redacted, so the log and the report name the
 /// rule, file, and commit without repeating the secret.
 pub(crate) fn secrets(process: &Process) -> Result<()> {
-    require_os("linux", "Linux")?;
+    process.require_os("linux", "Linux")?;
     process.require_tools(&["gitleaks"])?;
     process.run(
         "gitleaks",
