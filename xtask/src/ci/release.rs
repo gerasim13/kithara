@@ -61,7 +61,57 @@ pub(crate) fn xcframework(
     for name in &names {
         write_checksum(&ctx.root.join(name))?;
     }
-    Ok(())
+    write_provenance(&ctx.root, package, &Provenance::from_env(), &names)
+}
+
+/// What a downloaded archive has to say about itself: the commit it was built
+/// from, the ref it was built on, and the profile that built it. A reviewer
+/// holding several archives at once cannot tell them apart otherwise, and the
+/// job that produced one is not always still at hand.
+struct Provenance {
+    sha: String,
+    branch: String,
+    merge_request: Option<String>,
+}
+
+impl Provenance {
+    fn from_env() -> Self {
+        Self {
+            sha: env::var("CI_COMMIT_SHA").unwrap_or_default(),
+            branch: env::var("CI_COMMIT_REF_NAME").unwrap_or_default(),
+            merge_request: env::var("CI_MERGE_REQUEST_IID").ok(),
+        }
+    }
+}
+
+fn write_provenance(
+    root: &Path,
+    package: &str,
+    provenance: &Provenance,
+    assets: &[&str],
+) -> Result<()> {
+    let mut entries = String::new();
+    for name in assets {
+        let digest = sha256(&root.join(name))?;
+        if !entries.is_empty() {
+            entries.push_str(",\n");
+        }
+        entries.push_str(&format!(
+            "    {{ \"name\": \"{name}\", \"sha256\": \"{digest}\" }}"
+        ));
+    }
+    let merge_request = provenance
+        .merge_request
+        .as_deref()
+        .map_or_else(|| "null".to_string(), |iid| format!("\"{iid}\""));
+    let body = format!(
+        "{{\n  \"package\": \"{package}\",\n  \"sha\": \"{sha}\",\n  \"branch\": \"{branch}\",\n  \
+         \"merge_request\": {merge_request},\n  \"assets\": [\n{entries}\n  ]\n}}\n",
+        sha = provenance.sha,
+        branch = provenance.branch,
+    );
+    let path = root.join("provenance.json");
+    fs::write(&path, body).with_context(|| format!("writing {}", path.display()))
 }
 
 /// The checksum the built framework has to match, or `None` when the profile
@@ -356,6 +406,53 @@ fn required_env(name: &str) -> Result<String> {
 mod tests {
     use super::*;
     use crate::config::AssetKey;
+
+    #[test]
+    fn provenance_names_the_commit_and_every_asset() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        fs::write(root.join("Kithara.xcframework.zip"), b"bytes").unwrap();
+
+        write_provenance(
+            root,
+            "snapshot",
+            &Provenance {
+                sha: "1575b93875fe".into(),
+                branch: "laba/420-repeat-one-behavior".into(),
+                merge_request: Some("14".into()),
+            },
+            &["Kithara.xcframework.zip"],
+        )
+        .unwrap();
+
+        let written = fs::read_to_string(root.join("provenance.json")).unwrap();
+        assert!(written.contains("1575b93875fe"));
+        assert!(written.contains("laba/420-repeat-one-behavior"));
+        assert!(written.contains("Kithara.xcframework.zip"));
+        assert!(written.contains("\"merge_request\": \"14\""));
+    }
+
+    #[test]
+    fn provenance_outside_a_pipeline_names_no_merge_request() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        fs::write(root.join("Kithara.xcframework.zip"), b"bytes").unwrap();
+
+        write_provenance(
+            root,
+            "snapshot",
+            &Provenance {
+                sha: String::new(),
+                branch: String::new(),
+                merge_request: None,
+            },
+            &["Kithara.xcframework.zip"],
+        )
+        .unwrap();
+
+        let written = fs::read_to_string(root.join("provenance.json")).unwrap();
+        assert!(written.contains("\"merge_request\": null"));
+    }
 
     #[test]
     fn a_gate_free_profile_asks_for_no_version() {
