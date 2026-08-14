@@ -19,6 +19,30 @@ release:xcframework:
       - Kithara.xcframework.zip
       - Kithara.xcframework.zip.sha256
 
+# The framework a reviewer installs to check a change by hand. It waits only on
+# lint: the archive is wanted exactly when the suite is red for reasons outside
+# the change under review, and a manual job that is never pressed must not
+# block the merge request, which is what `allow_failure` buys under
+# `only_allow_merge_if_pipeline_succeeds`.
+release:framework-snapshot:
+  extends:
+    - .macos-job
+    - .rules-package
+  stage: release-build
+  timeout: 90 minutes
+  needs:
+    - apple:lint
+  when: manual
+  allow_failure: true
+  script:
+    - just ci run release-xcframework --package snapshot
+  artifacts:
+    expire_in: 30 days
+    paths:
+      - Kithara.xcframework.zip
+      - Kithara.xcframework.zip.sha256
+      - provenance.json
+
 release:docs:
   extends: .release-build
   timeout: 90 minutes
