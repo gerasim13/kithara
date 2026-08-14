@@ -224,7 +224,6 @@ impl Presentation {
             .emitted(0)
             .map(|source_end| (source_end.frame, source_end.rate));
         self.reset_effects();
-        self.window.clear();
         self.epoch = epoch;
         self.publisher.restart(epoch, source_end);
         PresentResult::Advanced

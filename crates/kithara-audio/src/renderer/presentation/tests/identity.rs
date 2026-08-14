@@ -247,6 +247,116 @@ fn final_payload_carries_the_exact_committed_presentation_point() {
 }
 
 #[kithara::test]
+fn source_progress_ignores_decoder_timestamp_gaps_after_the_first_chunk() {
+    let (output, mut input) = connect_strict(1, None);
+    let (publisher, _) = presentation_cell(0);
+    let mut presentation = Presentation::new(
+        2,
+        PresentationChain::identity(Vec::new()),
+        PcmPool::default(),
+        spec(44_100),
+        output,
+        publisher,
+        0,
+    );
+    admit(
+        &mut presentation,
+        Fetch::data(chunk(1.0, 0), 0),
+        "first raw chunk fits",
+    );
+    admit(
+        &mut presentation,
+        Fetch::data(chunk(2.0, 1_173), 0),
+        "timestamp-gapped raw chunk fits",
+    );
+
+    assert!(matches!(
+        step(&mut presentation),
+        PresentResult::Produced(_)
+    ));
+    let Fetch::Data { data: first, .. } = input.try_pop().expect("first output") else {
+        panic!("expected first output data");
+    };
+    assert_eq!(first.point().source_frame(), 512);
+    presentation.recycle_output(first.into());
+
+    assert!(matches!(
+        step(&mut presentation),
+        PresentResult::Produced(_)
+    ));
+    let Fetch::Data { data: second, .. } = input.try_pop().expect("second output") else {
+        panic!("expected second output data");
+    };
+    assert_eq!(
+        second.point().source_frame(),
+        1_024,
+        "presentation source progress follows admitted PCM, not decoder head-strip gaps"
+    );
+    presentation.recycle_output(second.into());
+}
+
+#[kithara::test]
+fn same_rate_decoder_barrier_preserves_cumulative_admitted_source_end() {
+    let (output, mut input) = connect_strict(1, None);
+    let (publisher, _) = presentation_cell(0);
+    let mut presentation = Presentation::new(
+        3,
+        PresentationChain::identity(Vec::new()),
+        PcmPool::default(),
+        spec(44_100),
+        output,
+        publisher,
+        0,
+    );
+    admit(
+        &mut presentation,
+        Fetch::data(chunk(1.0, 0), 0),
+        "old decoder chunk fits",
+    );
+    presentation
+        .admit_barrier(PresentationBarrier::DecoderReplaced {
+            epoch: 0,
+            spec: spec(44_100),
+        })
+        .expect("same-rate decoder barrier fits");
+    admit(
+        &mut presentation,
+        Fetch::data(chunk(2.0, 1_173), 0),
+        "replacement decoder chunk fits",
+    );
+
+    assert!(matches!(
+        step(&mut presentation),
+        PresentResult::Produced(_)
+    ));
+    let Fetch::Data { data: old, .. } = input.try_pop().expect("old decoder output") else {
+        panic!("expected old decoder data");
+    };
+    assert_eq!(old.point().generation(), 0);
+    assert_eq!(old.point().source_frame(), 512);
+    presentation.recycle_output(old.into());
+
+    assert_eq!(step(&mut presentation), PresentResult::Advanced);
+    assert!(matches!(
+        step(&mut presentation),
+        PresentResult::Produced(_)
+    ));
+    let Fetch::Data {
+        data: replacement, ..
+    } = input.try_pop().expect("replacement decoder output")
+    else {
+        panic!("expected replacement decoder data");
+    };
+    assert_eq!(replacement.point().generation(), 1);
+    assert_eq!(
+        replacement.point().source_frame(),
+        1_024,
+        "same-rate replacement continues from admitted source end instead of decoder timestamps"
+    );
+    presentation.recycle_output(replacement.into());
+}
+
+#[kithara::test]
 fn custom_effect_receives_fixed_shape_block() {
     let seen = Arc::new(AtomicUsize::new(0));
     let (mut presentation, mut input) = identity_presentation(vec![Box::new(StampEffect {
