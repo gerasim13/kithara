@@ -10,7 +10,7 @@ use super::{
 #[cfg(test)]
 use crate::interact::Gestures;
 use crate::{
-    draw::{DrawList, DrawListBuilder, Rect},
+    draw::{DrawList, DrawListBuilder, DrawPools, Rect},
     interact::{
         CursorShape, Hit, Hover, Input, Outcome, PointerOwnership, PointerPhase,
         recognizers::{Scalar, ScalarState, click},
@@ -32,6 +32,7 @@ where
     interaction: Option<Interaction<Painter::Data>>,
     index: IndexPress,
     painter: Painter,
+    pools: Option<DrawPools>,
     press: Press,
     refresh: Option<DataRefresh<Painter::Data>>,
     repaint: bool,
@@ -109,12 +110,33 @@ impl<Painter> Painted<Painter>
 where
     Painter: Retained,
 {
+    #[cfg(test)]
     pub(crate) fn new(painter: Painter, data: Painter::Data, skin: &Skin) -> Self {
         Self {
             data,
             interaction: None,
             index: IndexPress::default(),
             painter,
+            pools: None,
+            press: Press::default(),
+            refresh: None,
+            repaint: false,
+            text: TextContext::from(skin.text_resources()),
+        }
+    }
+
+    pub(crate) fn pooled(
+        painter: Painter,
+        data: Painter::Data,
+        skin: &Skin,
+        pools: &DrawPools,
+    ) -> Self {
+        Self {
+            data,
+            interaction: None,
+            index: IndexPress::default(),
+            painter,
+            pools: Some(pools.clone()),
             press: Press::default(),
             refresh: None,
             repaint: false,
@@ -190,7 +212,10 @@ where
 {
     fn draw_list(&mut self, bounds: Rect) -> DrawList {
         self.repaint = false;
-        let mut list = DrawListBuilder::default();
+        let mut list = self
+            .pools
+            .as_ref()
+            .map_or_else(DrawListBuilder::default, DrawPools::list);
         match self
             .interaction
             .as_ref()

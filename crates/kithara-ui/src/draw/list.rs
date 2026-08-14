@@ -1,5 +1,6 @@
 use super::{
-    DrawCmd, DrawPools, Geom, Paint, Path, Pen, PoolText, Pt, Rect, Rgba, Transform, buffer::Buffer,
+    DrawCmd, DrawPools, FillRule, Geom, Paint, Path, Pen, PoolText, Pt, Rect, Rgba, Transform,
+    Verb, buffer::Buffer,
 };
 use crate::text::GlyphRun;
 
@@ -27,6 +28,26 @@ impl DrawListBuilder {
         Self {
             commands: pools.commands(),
             pools: Some(pools.clone()),
+        }
+    }
+
+    /// Starts a nested list with the same allocation owner as this one.
+    #[must_use]
+    pub fn child(&self) -> Self {
+        self.pools
+            .as_ref()
+            .map_or_else(Self::default, DrawPools::list)
+    }
+
+    /// Builds a path with the same allocation owner as this list.
+    #[must_use]
+    pub fn path<Verbs>(&self, rule: FillRule, verbs: Verbs) -> Path
+    where
+        Verbs: IntoIterator<Item = Verb>,
+    {
+        match &self.pools {
+            Some(pools) => pools.path(rule, verbs),
+            None => Path::new(rule, verbs.into_iter().collect()),
         }
     }
 

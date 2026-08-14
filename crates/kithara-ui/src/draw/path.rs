@@ -107,30 +107,32 @@ impl Outline {
     /// The same outline drawn to fill `into`.
     #[must_use]
     pub fn placed(&self, into: Rect) -> Path {
+        self.placed_with(&crate::draw::DrawListBuilder::default(), into)
+    }
+
+    /// The same outline placed through the allocation owner of `list`.
+    #[must_use]
+    pub fn placed_with(&self, list: &crate::draw::DrawListBuilder, into: Rect) -> Path {
         let place = |point: Pt| Pt {
             x: into.x + point.x * into.w,
             y: into.y + point.y * into.h,
         };
-        Path::new(
+        list.path(
             self.0.rule,
-            self.0
-                .verbs()
-                .iter()
-                .map(|verb| match *verb {
-                    Verb::Close => Verb::Close,
-                    Verb::CurveTo { first, second, to } => Verb::CurveTo {
-                        first: place(first),
-                        second: place(second),
-                        to: place(to),
-                    },
-                    Verb::LineTo(to) => Verb::LineTo(place(to)),
-                    Verb::MoveTo(to) => Verb::MoveTo(place(to)),
-                    Verb::QuadTo { control, to } => Verb::QuadTo {
-                        control: place(control),
-                        to: place(to),
-                    },
-                })
-                .collect(),
+            self.0.verbs().iter().map(|verb| match *verb {
+                Verb::Close => Verb::Close,
+                Verb::CurveTo { first, second, to } => Verb::CurveTo {
+                    first: place(first),
+                    second: place(second),
+                    to: place(to),
+                },
+                Verb::LineTo(to) => Verb::LineTo(place(to)),
+                Verb::MoveTo(to) => Verb::MoveTo(place(to)),
+                Verb::QuadTo { control, to } => Verb::QuadTo {
+                    control: place(control),
+                    to: place(to),
+                },
+            }),
         )
     }
 }

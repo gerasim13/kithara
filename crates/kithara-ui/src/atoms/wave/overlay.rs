@@ -190,7 +190,7 @@ fn draw_summary(
 ) {
     let total_text_height = metrics.title.size + metrics.summary_gap + metrics.artist.size;
     let title_y = header.y + (header.h - total_text_height) / 2.0;
-    let mut clipped = DrawListBuilder::default();
+    let mut clipped = list.child();
     draw_left(
         &mut clipped,
         text,

@@ -188,7 +188,7 @@ impl Preset {
             x: face.bounds.x + self.metrics.chip_padding_x,
             y: face.bounds.y + self.metrics.chip_padding_y,
         };
-        let mut word = DrawListBuilder::default();
+        let mut word = list.child();
         word.text(
             &run,
             item.label,

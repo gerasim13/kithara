@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 #[cfg(feature = "render")]
-use crate::draw::DrawPools;
+use crate::draw::{DrawPools, PoolStats};
 use crate::{
     error::UiDocError,
     expand::{
@@ -38,6 +38,19 @@ pub struct CompiledUi {
 }
 
 impl CompiledUi {
+    #[cfg(feature = "render")]
+    #[must_use]
+    pub(crate) const fn draw_pools(&self) -> &DrawPools {
+        &self.draw_pools
+    }
+
+    /// Current allocation-reuse counters for this compiled document.
+    #[cfg(feature = "render")]
+    #[must_use]
+    pub fn draw_pool_stats(&self) -> PoolStats {
+        self.draw_pools.stats()
+    }
+
     #[cfg(feature = "render")]
     pub(crate) fn includes_module(&self, owner: InternId, address: &[usize], module: &str) -> bool {
         self.includes

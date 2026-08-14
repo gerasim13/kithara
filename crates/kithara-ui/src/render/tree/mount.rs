@@ -310,7 +310,7 @@ where
     };
     let grip = control.grip(cx.skin, &data);
     let index_event = control.index_event();
-    let paint = Paint::new(control.painter(cx.skin), data, cx.skin);
+    let paint = Paint::pooled(control.painter(cx.skin), data, cx.skin, cx.ui.draw_pools());
     let element = if cx.owner == InputOwner::Leaf {
         Gesture::with_grip(cx.path, paint, grip, index_event)
             .map_or_else(Paint::view, Gesture::view)

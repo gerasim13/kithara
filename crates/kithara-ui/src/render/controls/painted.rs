@@ -22,7 +22,7 @@ use crate::{
         painter::{ControlPainter, IndexedVisual},
     },
     backends::replay_ordered,
-    draw::{DrawList, DrawListBuilder, Rect},
+    draw::{DrawList, DrawListBuilder, DrawPools, Rect},
     interact::{
         CursorShape, Hit, Hover, Input, Outcome, iced as iced_interact,
         recognizers::{Crossing, Scalar, ScalarState, click},
@@ -47,6 +47,7 @@ where
 {
     data: Painter::Data,
     painter: Painter,
+    pools: Option<DrawPools>,
     text_resources: &'skin TextResources,
 }
 
@@ -86,10 +87,26 @@ impl<'skin, Painter> Paint<'skin, Painter>
 where
     Painter: ControlPainter + 'skin,
 {
+    #[cfg(test)]
     pub(crate) fn new(painter: Painter, data: Painter::Data, skin: &'skin Skin) -> Self {
         Self {
             data,
             painter,
+            pools: None,
+            text_resources: skin.text_resources(),
+        }
+    }
+
+    pub(crate) fn pooled(
+        painter: Painter,
+        data: Painter::Data,
+        skin: &'skin Skin,
+        pools: &DrawPools,
+    ) -> Self {
+        Self {
+            data,
+            painter,
+            pools: Some(pools.clone()),
             text_resources: skin.text_resources(),
         }
     }
@@ -142,7 +159,10 @@ where
     ) -> DrawList {
         let mut text = state.text.borrow_mut();
         let text = text.get_or_insert_with(|| self.text_resources.into());
-        let mut builder = DrawListBuilder::default();
+        let mut builder = self
+            .pools
+            .as_ref()
+            .map_or_else(DrawListBuilder::default, DrawPools::list);
         self.painter
             .draw(&mut builder, text, &self.data, bounds, visual);
         builder.finish()
@@ -156,7 +176,10 @@ where
     ) -> DrawList {
         let mut text = state.text.borrow_mut();
         let text = text.get_or_insert_with(|| self.text_resources.into());
-        let mut builder = DrawListBuilder::default();
+        let mut builder = self
+            .pools
+            .as_ref()
+            .map_or_else(DrawListBuilder::default, DrawPools::list);
         self.painter
             .draw_indexed(&mut builder, text, &self.data, bounds, visual);
         builder.finish()

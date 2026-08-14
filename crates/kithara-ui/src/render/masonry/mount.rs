@@ -655,7 +655,12 @@ where
     let index_event = control.index_event();
     let refresh = control.retained_refresh(reading);
     let refreshes = refresh.is_some();
-    let leaf = Painted::new(control.painter(host.skin), data, host.skin);
+    let leaf = Painted::pooled(
+        control.painter(host.skin),
+        data,
+        host.skin,
+        host.ui.draw_pools(),
+    );
     let leaf = if let Some(refresh) = refresh {
         leaf.refreshing(refresh)
     } else {

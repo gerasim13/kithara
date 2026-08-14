@@ -41,11 +41,12 @@ impl Marked {
     ) -> f32 {
         match self.mark {
             Mark::Glyph(ch) => {
-                let content = ch.to_string();
-                let run = text.shape_lucide(&content, self.size);
+                let mut encoded = [0_u8; 4];
+                let content = ch.encode_utf8(&mut encoded);
+                let run = text.shape_lucide(content, self.size);
                 list.text(
                     &run,
-                    &content,
+                    content,
                     Transform::translate(Pt {
                         x,
                         y: bounds.y + (bounds.h - run.height()) / 2.0,
@@ -55,15 +56,16 @@ impl Marked {
                 run.width()
             }
             Mark::Outline(outline) => {
-                list.fill_path(
-                    outline.placed(Rect {
+                let path = outline.placed_with(
+                    list,
+                    Rect {
                         h: self.size,
                         w: self.size,
                         x,
                         y: bounds.y + (bounds.h - self.size) / 2.0,
-                    }),
-                    color,
+                    },
                 );
+                list.fill_path(path, color);
                 self.size
             }
         }

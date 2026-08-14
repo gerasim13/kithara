@@ -99,7 +99,12 @@ is dropped instead of retained. These are reusable-memory limits, not hostile-do
 live builder may grow past them, but the pool never truncates a command or changes a picture. A
 kithara-bufpool byte budget would not enforce that contract because `Pool::track_byte_delta` runs
 only inside `Pool::acquire`, never when a caller grows a vector with `push`.
-`PoolStats::alloc_misses` is the standing measure of reuse.
+The shared control adapters in both hosts start their lists from that compiled owner, and every
+nested clip and authored outline inherits it through the parent builder. `PoolStats::alloc_misses`
+is the standing measure of reuse. The Studio parity capture draws the shipped single- and dual-deck
+documents twice, rejects a second-frame miss or rejected return, and writes each host's counters
+beside its screenshots as `draw-pools.txt`; those observed pages, rather than `Limits::max_nodes`,
+size the defaults.
 
 A viewport is retained as `DrawCmd::Clip { region, list }`: the region and the nested `DrawList`
 travel as one scoped command. The nesting is required by iced, not a convenience chosen by the

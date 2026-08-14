@@ -120,7 +120,7 @@ impl Segmented {
             self.inactive_text
         };
         let run = text.shape(word, self.role, None);
-        let mut word_list = DrawListBuilder::default();
+        let mut word_list = list.child();
         word_list.text(
             &run,
             word,

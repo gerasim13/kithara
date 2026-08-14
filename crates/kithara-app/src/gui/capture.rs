@@ -22,6 +22,7 @@ use kithara_test_utils::kithara;
 use kithara_ui::{
     app::{App, Config, Frame as UiFrame, Ui},
     builtin,
+    draw::PoolStats,
     registry::ValueKind,
     render::{
         ReadValue, Reads, StereoLevels, TableCell, TableRow, UiEvent, WaveBucket, WaveformView,
@@ -57,6 +58,32 @@ struct Geometry {
     height: u32,
     scale: f32,
     width: u32,
+}
+
+struct PoolSample {
+    first: PoolStats,
+    second: PoolStats,
+}
+
+impl PoolSample {
+    fn line(&self, page: &str) -> String {
+        format!(
+            "{page} first_misses={} second_misses={} first_home_hits={} second_home_hits={} \
+             first_drops={} second_drops={}\n",
+            self.first.alloc_misses,
+            self.second.alloc_misses,
+            self.first.home_hits,
+            self.second.home_hits,
+            self.first.put_drops,
+            self.second.put_drops,
+        )
+    }
+
+    fn stable(&self) -> bool {
+        self.first.alloc_misses == self.second.alloc_misses
+            && self.first.put_drops == self.second.put_drops
+            && self.second.home_hits > self.first.home_hits
+    }
 }
 
 impl Geometry {
@@ -317,22 +344,31 @@ fn capture(dir: &Path) -> Result<(), String> {
     ))
     .ok_or_else(|| "iced did not provide a headless wgpu renderer".to_owned())?;
     let mut offscreen = Offscreen::new(geometry)?;
+    let mut iced_stats = String::new();
+    let mut masonry_stats = String::new();
 
     for (layout, name) in [
         (DeckLayout::Single, "studio-single.png"),
         (DeckLayout::Dual, "studio-dual.png"),
     ] {
-        write_png(
-            &iced_dir.join(name),
-            &iced(layout, &mut renderer, geometry)?,
-            geometry,
-        )?;
-        write_png(
-            &masonry_dir.join(name),
-            &masonry(layout, &mut offscreen, geometry)?,
-            geometry,
-        )?;
+        let (iced_rgba, iced_sample) = iced(layout, &mut renderer, geometry)?;
+        let (masonry_rgba, masonry_sample) = masonry(layout, &mut offscreen, geometry)?;
+        if !iced_sample.stable() || !masonry_sample.stable() {
+            return Err(format!(
+                "draw pools allocated again on the second {name} frame: iced={} masonry={}",
+                iced_sample.line(name).trim(),
+                masonry_sample.line(name).trim(),
+            ));
+        }
+        write_png(&iced_dir.join(name), &iced_rgba, geometry)?;
+        write_png(&masonry_dir.join(name), &masonry_rgba, geometry)?;
+        iced_stats.push_str(&iced_sample.line(name));
+        masonry_stats.push_str(&masonry_sample.line(name));
     }
+    write(iced_dir.join("draw-pools.txt"), iced_stats)
+        .map_err(|error| format!("write iced draw-pools.txt: {error}"))?;
+    write(masonry_dir.join("draw-pools.txt"), masonry_stats)
+        .map_err(|error| format!("write masonry draw-pools.txt: {error}"))?;
     Ok(())
 }
 
@@ -340,7 +376,7 @@ fn iced(
     layout: DeckLayout,
     renderer: &mut iced::Renderer,
     geometry: Geometry,
-) -> Result<Vec<u8>, String> {
+) -> Result<(Vec<u8>, PoolSample), String> {
     let compiled = studio_ui::compile_studio(layout)
         .map_err(|error| format!("compile {}: {error}", studio_ui::entry(layout)))?;
     let reads = Fixture::new(layout);
@@ -368,10 +404,26 @@ fn iced(
         },
         Cursor::Unavailable,
     );
-    Ok(renderer.screenshot(
+    let rgba = renderer.screenshot(
         Size::new(geometry.width, geometry.height),
         geometry.scale,
         base.background_color,
+    );
+    let first = compiled.draw_pool_stats();
+    ui.draw(
+        renderer,
+        &theme,
+        &Style {
+            text_color: base.text_color,
+        },
+        Cursor::Unavailable,
+    );
+    Ok((
+        rgba,
+        PoolSample {
+            first,
+            second: compiled.draw_pool_stats(),
+        },
     ))
 }
 
@@ -379,7 +431,7 @@ fn masonry(
     layout: DeckLayout,
     offscreen: &mut Offscreen,
     geometry: Geometry,
-) -> Result<Vec<u8>, String> {
+) -> Result<(Vec<u8>, PoolSample), String> {
     let resolver = studio_ui::resolver();
     let endpoints = StudioRegistry::default();
     let mut ui = Ui::new(
@@ -397,7 +449,19 @@ fn masonry(
     let frame = ui
         .render()
         .map_err(|error| format!("draw {}: {error}", studio_ui::entry(layout)))?;
-    offscreen.rasterise(&frame, ui.background().into())
+    let rgba = offscreen.rasterise(&frame, ui.background().into())?;
+    let first = ui.draw_pool_stats();
+    drop(
+        ui.render()
+            .map_err(|error| format!("second draw {}: {error}", studio_ui::entry(layout)))?,
+    );
+    Ok((
+        rgba,
+        PoolSample {
+            first,
+            second: ui.draw_pool_stats(),
+        },
+    ))
 }
 
 fn load_fonts() -> Result<(), String> {

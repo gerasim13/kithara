@@ -33,7 +33,7 @@ use super::{
 use crate::draw::Rect;
 use crate::{
     compile::{CompiledUi, compile},
-    draw::Rgba,
+    draw::{PoolStats, Rgba},
     interact::{Input, PointerPhase, ScrollAxis, masonry::masonry_text_event},
     render::{
         UiEvent, WindowCommand, document,
@@ -99,6 +99,12 @@ where
     /// document does not reach, and the other host does not have that seam.
     pub const fn background(&self) -> Rgba {
         self.config.skin.palette.bg
+    }
+
+    /// Current allocation-reuse counters for this mounted document.
+    #[must_use]
+    pub fn draw_pool_stats(&self) -> PoolStats {
+        self.ui.draw_pool_stats()
     }
 
     /// Resolves one control's document path to the rect its layout gave it, in

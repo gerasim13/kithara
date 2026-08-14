@@ -105,7 +105,7 @@ impl Summary {
         };
         let title = text.shape(&data.title, self.title_role, None);
         let source = text.shape(&data.source, self.source_role, None);
-        let mut content = DrawListBuilder::default();
+        let mut content = list.child();
         if self.style == DeckSummaryStyle::Micro {
             content.text(
                 &title,
