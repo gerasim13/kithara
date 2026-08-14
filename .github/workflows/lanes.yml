@@ -53,7 +53,7 @@ jobs:
           # written with. A push that touches their sources runs them straight
           # away (the `support` job in ci.yml); this is the unattended sweep that
           # catches a product change breaking them from the other side.
-          configured='["integration-regressions","network","loom","selenium-firefox","tooling","harness","fixtures"]'
+          configured='["broadcast","integration-regressions","network","loom","selenium-firefox","tooling","harness","fixtures"]'
           if [ -z "$REQUESTED" ] || [ "$REQUESTED" = all ]; then
             echo "lanes=$configured" >> "$GITHUB_OUTPUT"
             exit 0
