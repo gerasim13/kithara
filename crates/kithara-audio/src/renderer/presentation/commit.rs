@@ -60,7 +60,7 @@ impl Presentation {
         // of this tick therefore reserves this one slot.
         if let Err(rejected) = self.output.try_push(fetch) {
             if let Fetch::Data { data, .. } = rejected {
-                self.recycle_output(data.into());
+                self.recycle_output(data.into_inner());
             }
             return Err(DecodeError::InvalidData {
                 detail: "strict presentation reservation was lost",

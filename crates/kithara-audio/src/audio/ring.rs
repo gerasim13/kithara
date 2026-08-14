@@ -12,7 +12,7 @@ use super::{
     park::receive_is_nonblocking,
 };
 use crate::{
-    renderer::PresentedPcm,
+    renderer::{OutputDisposition, PresentedPcm},
     runtime::{StrictOutlet, connect_strict},
     traits::{PresentationAdvance, PresentationPoint},
 };
@@ -44,7 +44,9 @@ pub(super) struct RingConsumer {
     _epoch: Arc<AtomicU64>,
     reader_wake: Arc<ThreadWake>,
     pcm_rx: Inlet<Fetch<PresentedPcm>>,
-    trash_tx: Outlet<PcmChunk>,
+    trash_tx: Outlet<OutputDisposition>,
+    trash_rejected: Option<OutputDisposition>,
+    worker_progress_pending: bool,
     block_on_underrun: bool,
     consumer_wake_mode: ConsumerWakeMode,
 }
@@ -53,7 +55,7 @@ pub(super) struct RingParts {
     pub(super) epoch: Arc<AtomicU64>,
     pub(super) reader_wake: Arc<ThreadWake>,
     pub(super) pcm_rx: Inlet<Fetch<PresentedPcm>>,
-    pub(super) trash_tx: Outlet<PcmChunk>,
+    pub(super) trash_tx: Outlet<OutputDisposition>,
     pub(super) block_on_underrun: bool,
     pub(super) consumer_wake_mode: ConsumerWakeMode,
 }
@@ -72,6 +74,8 @@ impl RingConsumer {
             current_chunk: None,
             presentation_advance: None,
             trash_tx: parts.trash_tx,
+            trash_rejected: None,
+            worker_progress_pending: false,
             reader_wake: parts.reader_wake,
             _epoch: parts.epoch,
             preloaded: false,
@@ -80,13 +84,18 @@ impl RingConsumer {
         }
     }
 
+    /// Returns whether the worker can progress after the complete seek drain.
     #[kithara::hang_watchdog]
     #[must_use]
     pub(super) fn begin_seek_epoch(&mut self, epoch: u64, cursor: &mut ChunkCursor) -> bool {
         self.validator.epoch = epoch;
         self.presentation_advance = None;
-        self.recycle_current();
+        let mut published = self.recycle_current();
         cursor.clear();
+        if self.trash_rejected.is_some() {
+            let pending = self.take_worker_progress();
+            return published || pending;
+        }
         self.phase = ConsumerPhase::SeekPending { epoch };
 
         let mut popped = false;
@@ -94,15 +103,20 @@ impl RingConsumer {
             popped = true;
             if fetch.epoch() < epoch {
                 if let Fetch::Data { data, .. } = fetch {
-                    self.discard(data);
+                    let discarded = self.discard(data);
+                    published |= discarded;
+                    if !discarded {
+                        break;
+                    }
                 }
                 hang_tick!();
                 continue;
             }
-            self.stage_post_seek_fetch(fetch, epoch, cursor);
+            published |= self.stage_post_seek_fetch(fetch, epoch, cursor);
             break;
         }
-        popped
+        let pending = self.take_worker_progress();
+        popped || published || pending
     }
 
     pub(super) fn wake_worker(&self, worker: Option<&AudioWorkerHandle>) {
@@ -125,13 +139,57 @@ impl RingConsumer {
         }
     }
 
-    pub(super) fn discard(&mut self, presented: PresentedPcm) {
-        if let Err(_overflow) = self.trash_tx.try_push(presented.into()) {
-            debug_assert!(
-                false,
-                "PCM trash ring overflow - spent buffer freed on the audio thread"
-            );
+    fn discard(&mut self, presented: PresentedPcm) -> bool {
+        if self.trash_rejected.is_some() {
+            debug_assert!(self.current_chunk.is_none());
+            self.current_chunk = Some(presented);
+            self.fail_output_return();
+            return false;
         }
+        if let Some(rejected) = self.push_output(presented.returned()) {
+            self.trash_rejected = Some(rejected);
+            self.fail_output_return();
+            return false;
+        }
+        self.worker_progress_pending = true;
+        true
+    }
+
+    pub(super) fn detach(
+        &mut self,
+        presented: PresentedPcm,
+    ) -> Result<PcmChunk, super::DecodeError> {
+        if self.trash_rejected.is_some() {
+            self.current_chunk = Some(presented);
+            self.fail_output_return();
+            return Err(output_return_error());
+        }
+        let point = presented.point();
+        let (chunk, disposition) = presented.detach();
+        if self.push_output(disposition).is_some() {
+            self.current_chunk = Some(PresentedPcm::new(chunk, point));
+            self.fail_output_return();
+            return Err(output_return_error());
+        }
+        self.worker_progress_pending = true;
+        Ok(chunk)
+    }
+
+    fn push_output(&mut self, disposition: OutputDisposition) -> Option<OutputDisposition> {
+        self.trash_tx.try_push(disposition).err()
+    }
+
+    fn fail_output_return(&mut self) {
+        self.phase = ConsumerPhase::Failed {
+            source: FailureSource::Producer,
+        };
+    }
+
+    /// Takes the coalesced final-output publication signal.
+    pub(super) fn take_worker_progress(&mut self) -> bool {
+        let pending = self.worker_progress_pending;
+        self.worker_progress_pending = false;
+        pending
     }
 
     pub(super) fn fill(&mut self, cursor: &mut ChunkCursor, ctx: RecvCtx<'_>) -> bool {
@@ -146,8 +204,10 @@ impl RingConsumer {
 
     fn process_fetch(&mut self, fetch: Fetch<PresentedPcm>) -> FetchOutcome {
         if !self.validator.is_valid(&fetch) {
-            if let Fetch::Data { data, .. } = fetch {
-                self.discard(data);
+            if let Fetch::Data { data, .. } = fetch
+                && !self.discard(data)
+            {
+                return FetchOutcome::Return(None);
             }
             return FetchOutcome::Continue;
         }
@@ -262,10 +322,12 @@ impl RingConsumer {
         }
     }
 
-    pub(super) fn recycle_current(&mut self) {
+    #[must_use]
+    pub(super) fn recycle_current(&mut self) -> bool {
         if let Some(chunk) = self.current_chunk.take() {
-            self.discard(chunk);
+            return self.discard(chunk);
         }
+        false
     }
 
     pub(super) fn record_presentation_advance(
@@ -285,7 +347,7 @@ impl RingConsumer {
         fetch: Fetch<PresentedPcm>,
         epoch: u64,
         cursor: &mut ChunkCursor,
-    ) {
+    ) -> bool {
         debug_assert_eq!(
             fetch.epoch(),
             epoch,
@@ -294,23 +356,27 @@ impl RingConsumer {
         match fetch {
             Fetch::Data { data, .. } => {
                 if data.point().seek_epoch() != epoch {
-                    self.discard(data);
+                    let published = self.discard(data);
                     self.phase = ConsumerPhase::Failed {
                         source: FailureSource::ProducerAfterSeek,
                     };
+                    published
                 } else {
                     cursor.begin_chunk(data.chunk());
                     self.current_chunk = Some(data);
                     self.phase = ConsumerPhase::Playing;
+                    false
                 }
             }
             Fetch::NaturalEof { .. } => {
                 self.phase = ConsumerPhase::AtEof;
+                false
             }
             Fetch::Failure { .. } => {
                 self.phase = ConsumerPhase::Failed {
                     source: FailureSource::ProducerAfterSeek,
                 };
+                false
             }
         }
     }
@@ -330,8 +396,8 @@ pub(super) fn create_channels(
 
 pub(super) fn create_trash_channel(
     pcm_buffer_chunks: usize,
-) -> (Outlet<PcmChunk>, Inlet<PcmChunk>) {
-    connect::<PcmChunk>(pcm_buffer_chunks.max(1) + 2, None)
+) -> (Outlet<OutputDisposition>, Inlet<OutputDisposition>) {
+    connect::<OutputDisposition>(pcm_buffer_chunks.max(1) + 2, None)
 }
 
 #[derive(serde::Serialize)]
@@ -366,6 +432,12 @@ fn wake_worker(worker: Option<&AudioWorkerHandle>, mode: ConsumerWakeMode) {
     }
 }
 
+const fn output_return_error() -> super::DecodeError {
+    super::DecodeError::InvalidData {
+        detail: "bounded presentation output return ring is full",
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::atomic::AtomicU64;
@@ -383,7 +455,7 @@ mod tests {
         playhead: Arc<PlayheadState>,
         events: crate::audio::event::AudioEvents,
         cursor: ChunkCursor,
-        _trash_rx: Inlet<PcmChunk>,
+        _trash_rx: Inlet<OutputDisposition>,
         data_tx: Outlet<Fetch<PresentedPcm>>,
         ring: RingConsumer,
     }
@@ -399,7 +471,7 @@ mod tests {
             consumer_wake_mode: ConsumerWakeMode,
         ) -> Self {
             let (data_tx, pcm_rx) = connect::<Fetch<PresentedPcm>>(4, None);
-            let (trash_tx, trash_rx) = connect::<PcmChunk>(8, None);
+            let (trash_tx, trash_rx) = connect::<OutputDisposition>(8, None);
             let pool = PcmPool::default();
             let mut ring = RingConsumer::new(RingParts {
                 pcm_rx,
@@ -471,6 +543,41 @@ mod tests {
     }
 
     #[kithara::test]
+    fn saturated_return_ring_retains_every_output() {
+        let mut fixture = RingFixture::new(true);
+        let (trash_tx, trash_rx) = connect::<OutputDisposition>(1, None);
+        fixture.ring.trash_tx = trash_tx;
+        fixture._trash_rx = trash_rx;
+
+        assert!(fixture.ring.discard(make_presented(&[0.1], 0)));
+        assert!(fixture.ring.discard(make_presented(&[0.2], 0)));
+        assert!(!fixture.ring.discard(make_presented(&[0.3], 0)));
+        assert!(!fixture.ring.discard(make_presented(&[0.4], 0)));
+
+        assert!(matches!(
+            fixture._trash_rx.try_pop(),
+            Some(OutputDisposition::Returned(_))
+        ));
+        assert!(fixture.ring.trash_tx.flush());
+        assert!(matches!(
+            fixture._trash_rx.try_pop(),
+            Some(OutputDisposition::Returned(_))
+        ));
+        assert!(fixture._trash_rx.try_pop().is_none());
+        assert!(matches!(
+            fixture.ring.trash_rejected.as_ref(),
+            Some(OutputDisposition::Returned(_))
+        ));
+        assert!(fixture.ring.current_chunk.is_some());
+        assert!(matches!(
+            fixture.ring.phase,
+            ConsumerPhase::Failed {
+                source: FailureSource::Producer
+            }
+        ));
+    }
+
+    #[kithara::test]
     fn seek_drain_reports_whether_it_popped_any_item() {
         let mut drained = RingFixture::new(true);
         drained
@@ -490,6 +597,19 @@ mod tests {
 
         let mut empty = RingFixture::new(true);
         assert!(!empty.ring.begin_seek_epoch(1, &mut empty.cursor));
+    }
+
+    #[kithara::test]
+    fn current_only_seek_reports_return_progress() {
+        let mut fixture = RingFixture::new(true);
+        fixture.ring.current_chunk = Some(make_presented(&[0.1, 0.2], 0));
+
+        assert!(fixture.ring.begin_seek_epoch(1, &mut fixture.cursor));
+        assert!(fixture.ring.current_chunk.is_none());
+        assert!(matches!(
+            fixture._trash_rx.try_pop(),
+            Some(OutputDisposition::Returned(_))
+        ));
     }
 
     #[cfg(not(target_arch = "wasm32"))]

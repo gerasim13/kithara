@@ -1,6 +1,7 @@
 use kithara_bufpool::{PcmBuf, PcmPool};
 use kithara_decode::{DecodeError, DecodeResult, PcmChunk, PcmMeta, PcmSpec, duration_for_frames};
 
+use super::coordinator::Presentation;
 use crate::traits::PresentationPoint;
 
 /// Fixed output quantum produced by the late presentation stage.
@@ -39,12 +40,32 @@ impl PresentedPcm {
     pub(crate) fn new(chunk: PcmChunk, point: PresentationPoint) -> Self {
         Self { chunk, point }
     }
+
+    pub(crate) fn returned(self) -> OutputDisposition {
+        OutputDisposition::Returned(self.chunk)
+    }
+
+    pub(crate) fn detach(self) -> (PcmChunk, OutputDisposition) {
+        let spec = self.chunk.spec();
+        (self.chunk, OutputDisposition::Detached(spec))
+    }
+
+    pub(crate) fn into_inner(self) -> PcmChunk {
+        self.chunk
+    }
 }
 
+#[cfg(test)]
 impl From<PresentedPcm> for PcmChunk {
     fn from(presented: PresentedPcm) -> Self {
-        presented.chunk
+        presented.into_inner()
     }
+}
+
+#[derive(Debug)]
+pub(crate) enum OutputDisposition {
+    Returned(PcmChunk),
+    Detached(PcmSpec),
 }
 
 pub(super) struct OutputBuffers {
@@ -62,6 +83,17 @@ pub(super) struct RecycleFailure {
 pub(super) enum RecycleOutcome {
     Recycled,
     Rejected(RecycleFailure),
+}
+
+pub(super) struct RestoreFailure {
+    pub(super) disposition: OutputDisposition,
+    pub(super) error: DecodeError,
+}
+
+#[must_use]
+pub(super) enum RestoreOutcome {
+    Restored,
+    Rejected(RestoreFailure),
 }
 
 impl OutputBuffers {
@@ -155,6 +187,64 @@ impl OutputBuffers {
         buffer.clear();
         self.free.push(buffer);
         RecycleOutcome::Recycled
+    }
+
+    pub(super) fn restore(&mut self, disposition: OutputDisposition) -> RestoreOutcome {
+        match disposition {
+            OutputDisposition::Returned(chunk) => match self.recycle(chunk) {
+                RecycleOutcome::Recycled => RestoreOutcome::Restored,
+                RecycleOutcome::Rejected(RecycleFailure { chunk, error }) => {
+                    RestoreOutcome::Rejected(RestoreFailure {
+                        disposition: OutputDisposition::Returned(chunk),
+                        error,
+                    })
+                }
+            },
+            OutputDisposition::Detached(spec) => self.replace_detached(spec).map_or_else(
+                |error| {
+                    RestoreOutcome::Rejected(RestoreFailure {
+                        disposition: OutputDisposition::Detached(spec),
+                        error,
+                    })
+                },
+                |()| RestoreOutcome::Restored,
+            ),
+        }
+    }
+
+    fn replace_detached(&mut self, spec: PcmSpec) -> DecodeResult<()> {
+        if self.free.len() >= PRESENTATION_OUTPUT_BUFFERS {
+            return Err(DecodeError::InvalidData {
+                detail: "presentation output reserve received an extra detachment",
+            });
+        }
+        if self.spec != Some(spec) {
+            return Err(DecodeError::InvalidData {
+                detail: "presentation output reserve received a stale detached PCM shape",
+            });
+        }
+        let samples = output_samples(spec)?;
+        let mut buffer = self.pool.get();
+        buffer
+            .ensure_len(samples)
+            .map_err(|error| DecodeError::pcm_stream("detached presentation replacement", error))?;
+        buffer.clear();
+        self.free.push(buffer);
+        Ok(())
+    }
+}
+
+impl Presentation {
+    pub(crate) fn restore_output(&mut self, disposition: OutputDisposition) {
+        let RestoreOutcome::Rejected(failure) = self.buffers.restore(disposition) else {
+            return;
+        };
+        let RestoreFailure { disposition, error } = failure;
+        if let OutputDisposition::Returned(chunk) = disposition {
+            debug_assert!(self.rejected_output.is_none());
+            self.rejected_output = Some(chunk);
+        }
+        self.buffer_error = Some(error);
     }
 }
 
@@ -294,4 +384,104 @@ pub(super) fn split_meta(
         };
     }
     Ok(split)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::num::NonZeroU32;
+
+    use kithara_test_utils::kithara;
+
+    use super::*;
+
+    fn test_spec() -> PcmSpec {
+        PcmSpec::new(
+            2,
+            NonZeroU32::new(48_000).expect("test sample rate is non-zero"),
+        )
+    }
+
+    fn output_chunk(spec: PcmSpec, samples: PcmBuf) -> PcmChunk {
+        PcmChunk::new(
+            PcmMeta {
+                spec,
+                frames: u32::try_from(PRESENTATION_FRAMES)
+                    .expect("presentation frame count fits u32"),
+                ..Default::default()
+            },
+            samples,
+        )
+    }
+
+    #[kithara::test]
+    fn mixed_returned_and_detached_outputs_restore_the_bounded_reserve() {
+        let spec = test_spec();
+        let mut buffers = OutputBuffers::new(PcmPool::default());
+        assert!(
+            buffers
+                .prepare(spec)
+                .expect("initial output reserve prepares")
+        );
+        let returned_first = buffers
+            .take(spec)
+            .expect("prepared reserve is valid")
+            .expect("first resident buffer is available");
+        let detached = buffers
+            .take(spec)
+            .expect("prepared reserve is valid")
+            .expect("second resident buffer is available");
+        let returned_last = buffers
+            .take(spec)
+            .expect("prepared reserve is valid")
+            .expect("third resident buffer is available");
+        assert!(
+            buffers
+                .prepare(spec)
+                .expect("same-spec preparation remains valid")
+        );
+        assert!(
+            buffers
+                .take(spec)
+                .expect("same-spec reserve remains valid")
+                .is_none(),
+            "same-spec preparation must not top up in-flight outputs"
+        );
+
+        assert!(matches!(
+            buffers.restore(OutputDisposition::Returned(output_chunk(
+                spec,
+                returned_first
+            ))),
+            RestoreOutcome::Restored
+        ));
+        assert!(matches!(
+            buffers.restore(OutputDisposition::Detached(spec)),
+            RestoreOutcome::Restored
+        ));
+        assert!(matches!(
+            buffers.restore(OutputDisposition::Returned(output_chunk(
+                spec,
+                returned_last
+            ))),
+            RestoreOutcome::Restored
+        ));
+
+        for _ in 0..PRESENTATION_OUTPUT_BUFFERS {
+            assert!(
+                buffers
+                    .take(spec)
+                    .expect("restored reserve is valid")
+                    .is_some(),
+                "each disposition must restore one resident output"
+            );
+        }
+        assert!(
+            buffers
+                .take(spec)
+                .expect("restored reserve remains valid")
+                .is_none(),
+            "the output reserve remains bounded"
+        );
+        drop(detached);
+    }
 }

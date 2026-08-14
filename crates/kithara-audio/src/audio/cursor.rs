@@ -152,7 +152,7 @@ impl ChunkCursor {
                 }
                 if copied.finished {
                     ring.record_presentation_advance(point, written_frames);
-                    ring.recycle_current();
+                    let _ = ring.recycle_current();
                 } else if copied.samples == 0 {
                     break;
                 }
@@ -297,7 +297,7 @@ mod tests {
     use crate::{
         ConsumerWakeMode,
         audio::{Fetch, ThreadWake, connect, ring::RingParts},
-        renderer::PresentedPcm,
+        renderer::{OutputDisposition, PresentedPcm},
         traits::PresentationPoint,
     };
 
@@ -312,7 +312,7 @@ mod tests {
             duration.saturating_add(Duration::from_millis(2)),
         );
         let (mut data_tx, data_rx) = connect::<Fetch<PresentedPcm>>(4, None);
-        let (trash_tx, _trash_rx) = connect::<PcmChunk>(8, None);
+        let (trash_tx, _trash_rx) = connect::<OutputDisposition>(8, None);
         let mut ring = RingConsumer::new(RingParts {
             trash_tx,
             pcm_rx: data_rx,
@@ -357,7 +357,7 @@ mod tests {
     fn read_buffer_shorter_than_frame_preserves_current_chunk() {
         let spec = PcmSpec::new(2, NonZeroU32::new(48_000).expect("test rate"));
         let (mut data_tx, data_rx) = connect::<Fetch<PresentedPcm>>(1, None);
-        let (trash_tx, mut trash_rx) = connect::<PcmChunk>(3, None);
+        let (trash_tx, mut trash_rx) = connect::<OutputDisposition>(3, None);
         let mut ring = RingConsumer::new(RingParts {
             trash_tx,
             pcm_rx: data_rx,
@@ -398,6 +398,60 @@ mod tests {
         assert!(matches!(read.outcome, ReadOutcome::Pending { .. }));
         assert!(ring.current_chunk.is_some());
         assert!(trash_rx.try_pop().is_none());
+    }
+
+    #[kithara::test]
+    fn exact_boundary_old_spec_return_arms_worker_progress() {
+        let old_spec = PcmSpec::new(1, NonZeroU32::new(44_100).expect("test old rate"));
+        let new_spec = PcmSpec::new(2, NonZeroU32::new(48_000).expect("test new rate"));
+        let (mut data_tx, data_rx) = connect::<Fetch<PresentedPcm>>(1, None);
+        let (trash_tx, mut trash_rx) = connect::<OutputDisposition>(3, None);
+        let mut ring = RingConsumer::new(RingParts {
+            trash_tx,
+            pcm_rx: data_rx,
+            reader_wake: Arc::new(ThreadWake::default()),
+            epoch: Arc::new(AtomicU64::new(0)),
+            block_on_underrun: false,
+            consumer_wake_mode: ConsumerWakeMode::RealtimeDeferred,
+        });
+        ring.preloaded = true;
+        data_tx
+            .try_push(Fetch::data(
+                presented(
+                    timed_chunk(old_spec, 4, Duration::ZERO, Duration::from_millis(1)),
+                    0,
+                ),
+                0,
+            ))
+            .expect("old-spec chunk reaches test ring");
+
+        let mut cursor = ChunkCursor::new(&PcmPool::default(), new_spec);
+        let mut events = AudioEvents::test();
+        let mut output = [0.0; 4];
+        let read = cursor
+            .read(
+                &mut ring,
+                &mut events,
+                &PlayheadState::new(),
+                RecvCtx {
+                    cancel: None,
+                    worker: None,
+                    abr: None,
+                },
+                &mut output,
+            )
+            .expect("exact-boundary read succeeds");
+
+        assert!(matches!(
+            read.outcome,
+            ReadOutcome::Frames { count, .. } if count.get() == output.len()
+        ));
+        assert!(ring.take_worker_progress());
+        assert!(!ring.take_worker_progress());
+        let Some(OutputDisposition::Returned(returned)) = trash_rx.try_pop() else {
+            panic!("old-spec output must be returned to the worker");
+        };
+        assert_eq!(returned.spec(), old_spec);
     }
 
     fn timed_chunk(spec: PcmSpec, frames: u32, start: Duration, end: Duration) -> PcmChunk {

@@ -15,7 +15,7 @@ pub(crate) use handle::{TrackId, WorkerWakeBridge};
 pub use load::{EngineLoad, EngineLoadSnapshot};
 pub(crate) use node::{DecoderNode, TrackRegistration};
 pub(crate) use presentation::{
-    PRESENTATION_RING_BLOCKS, PresentResult, Presentation, PresentationBarrier,
+    OutputDisposition, PRESENTATION_RING_BLOCKS, PresentResult, Presentation, PresentationBarrier,
     PresentationFrontier, PresentationPublisher, PresentedBlock, PresentedPcm, presentation_cell,
 };
 pub use source::AudioWorkerSource;
