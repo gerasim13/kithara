@@ -129,8 +129,8 @@ mod tests {
             track::{TrackStep, WaitingReason},
         },
         renderer::{
-            AudioWorkerSource, MockSource, PreloadGate, PresentedPcm, ServiceClass, ThreadWake,
-            presentation_cell,
+            AudioWorkerSource, MockSource, OutputDisposition, PreloadGate, PresentedPcm,
+            ServiceClass, ThreadWake, presentation_cell,
         },
         runtime::{AtomicServiceClass, connect, connect_strict},
     };
@@ -184,7 +184,7 @@ mod tests {
     {
         let wake = Arc::new(ThreadWake::default());
         let (outlet, inlet) = connect_strict::<Fetch<PresentedPcm>>(ringbuf_capacity, Some(wake));
-        let (trash_outlet, trash_inlet) = connect::<PcmChunk>(ringbuf_capacity + 2, None);
+        let (trash_outlet, trash_inlet) = connect::<OutputDisposition>(ringbuf_capacity + 2, None);
         let preload_gate = Arc::new(PreloadGate::default());
         let (presentation, _frontier) = presentation_cell(0);
 
@@ -219,7 +219,7 @@ mod tests {
 
     struct TestConsumer {
         inlet: crate::runtime::Inlet<Fetch<PresentedPcm>>,
-        trash_outlet: crate::runtime::Outlet<PcmChunk>,
+        trash_outlet: crate::runtime::Outlet<OutputDisposition>,
     }
 
     impl TestConsumer {
@@ -227,7 +227,7 @@ mod tests {
             let fetch = self.inlet.try_pop()?;
             if let Fetch::Data { data, .. } = fetch {
                 assert!(
-                    self.trash_outlet.try_push(data.into()).is_ok(),
+                    self.trash_outlet.try_push(data.returned()).is_ok(),
                     "fixture PCM trash ring must accept every consumed final block"
                 );
             }

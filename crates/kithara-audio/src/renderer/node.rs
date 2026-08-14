@@ -8,8 +8,8 @@ use kithara_platform::{
 use kithara_stream::{PlayheadRead, SeekObserve};
 
 use super::{
-    AudioWorkerSource, EngineLoad, PreloadGate, PresentResult, Presentation, PresentationPublisher,
-    PresentedBlock, PresentedPcm, ServiceClass,
+    AudioWorkerSource, EngineLoad, OutputDisposition, PreloadGate, PresentResult, Presentation,
+    PresentationPublisher, PresentedBlock, PresentedPcm, ServiceClass,
 };
 use crate::{
     pipeline::{
@@ -29,11 +29,10 @@ pub(crate) struct TrackRegistration {
     /// (`Audio::set_service_class`); the worker scheduler reads it each pass.
     pub(crate) service_class: Arc<AtomicServiceClass>,
     pub(crate) source: Box<dyn AudioWorkerSource<Chunk = PcmChunk>>,
-    /// Spent-chunk return ring: the real-time consumer ([`crate::Audio`])
-    /// hands every consumed `PcmChunk` here instead of dropping it, so the
-    /// pooled buffer is freed/recycled on the worker thread rather than on
-    /// the audio thread. See `crates/kithara-audio/CONTEXT.md`.
-    pub(crate) trash_inlet: Inlet<PcmChunk>,
+    /// Final-output return ring: the real-time consumer ([`crate::Audio`])
+    /// reports whether each output was returned or detached, so replacement
+    /// allocation and pooled-buffer recycling stay on the worker thread.
+    pub(crate) trash_inlet: Inlet<OutputDisposition>,
     pub(crate) engine_load: Option<Arc<EngineLoad>>,
     pub(crate) chain: PresentationChain,
     pub(crate) initial_spec: kithara_decode::PcmSpec,
@@ -72,11 +71,10 @@ pub(crate) struct DecoderNode {
     service_class: Arc<AtomicServiceClass>,
     source: Box<dyn AudioWorkerSource<Chunk = PcmChunk>>,
     runtime: DecoderRuntime,
-    /// Spent chunks returned by the real-time consumer. Drained once per pass
-    /// by [`recycle`](DecoderNode::recycle), in the scheduler's unchecked shell
-    /// before the produce core, so the pooled buffers are freed/recycled on
-    /// this worker thread, never on the audio thread.
-    trash_inlet: Inlet<PcmChunk>,
+    /// Final-output dispositions from the real-time consumer. Drained once per
+    /// pass by [`recycle`](DecoderNode::recycle), in the scheduler's unchecked
+    /// shell before the produce core.
+    trash_inlet: Inlet<OutputDisposition>,
     /// Live engine cost meter. When present, each produced chunk records the
     /// tick's decode+effects wall time against the audio it yielded.
     engine_load: Option<Arc<EngineLoad>>,
@@ -322,8 +320,8 @@ impl Node for DecoderNode {
 
     fn recycle(&mut self) {
         self.presentation.release_rejected_off_rt();
-        while let Some(chunk) = self.trash_inlet.try_pop() {
-            self.presentation.recycle_output(chunk);
+        while let Some(disposition) = self.trash_inlet.try_pop() {
+            self.presentation.restore_output(disposition);
             self.presentation.release_rejected_off_rt();
         }
         self.presentation.release_retired_off_rt();
@@ -539,7 +537,7 @@ mod tests {
         raw_buffer_chunks: usize,
         preload_chunks: usize,
     ) -> DecoderNode {
-        let (_trash_outlet, trash_inlet) = connect::<PcmChunk>(4, None);
+        let (_trash_outlet, trash_inlet) = connect::<OutputDisposition>(4, None);
         let seek_epoch = seek_obs.epoch();
         let presentation = Presentation::new(
             raw_buffer_chunks,

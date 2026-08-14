@@ -13,7 +13,8 @@ pub(crate) use frontier::{
     PresentationBarrier, PresentationFrontier, PresentationPublisher, presentation_cell,
 };
 pub(crate) use output::{
-    PRESENTATION_FRAMES, PRESENTATION_RING_BLOCKS, PresentResult, PresentedBlock, PresentedPcm,
+    OutputDisposition, PRESENTATION_FRAMES, PRESENTATION_RING_BLOCKS, PresentResult,
+    PresentedBlock, PresentedPcm,
 };
 
 #[cfg(test)]

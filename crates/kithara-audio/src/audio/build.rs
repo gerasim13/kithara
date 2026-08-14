@@ -7,7 +7,7 @@ use std::{
 
 use kithara_bufpool::{BytePool, PcmPool};
 use kithara_decode::{
-    Decoder, DecoderConfig, DecoderFactory, DecoderResamplerConfig, GaplessMode, PcmChunk, PcmSpec,
+    Decoder, DecoderConfig, DecoderFactory, DecoderResamplerConfig, GaplessMode, PcmSpec,
 };
 use kithara_events::{DecoderChangeCause, Event, EventBus, FrameDomain};
 use kithara_platform::{
@@ -36,7 +36,10 @@ use super::{
 };
 use crate::{
     pipeline::config::{PresentationChain, create_presentation_chain},
-    renderer::{PRESENTATION_RING_BLOCKS, PresentationFrontier, PresentedPcm, presentation_cell},
+    renderer::{
+        OutputDisposition, PRESENTATION_RING_BLOCKS, PresentationFrontier, PresentedPcm,
+        presentation_cell,
+    },
 };
 
 const WARM_DECODE_FRAMES: usize = 4608;
@@ -142,7 +145,7 @@ struct RegisteredStreamSource {
     service_class: Arc<AtomicServiceClass>,
     worker: AudioWorkerHandle,
     data_rx: super::Inlet<Fetch<PresentedPcm>>,
-    trash_tx: super::Outlet<PcmChunk>,
+    trash_tx: super::Outlet<OutputDisposition>,
     track_id: super::TrackId,
     is_standalone_worker: bool,
     presentation_frontier: PresentationFrontier,
