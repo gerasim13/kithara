@@ -80,9 +80,9 @@ impl PoolSample {
     }
 
     fn stable(&self) -> bool {
-        self.first.alloc_misses == self.second.alloc_misses
+        self.first.alloc_misses > 0
+            && self.first.alloc_misses == self.second.alloc_misses
             && self.first.put_drops == self.second.put_drops
-            && self.second.home_hits > self.first.home_hits
     }
 }
 
