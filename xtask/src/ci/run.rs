@@ -465,18 +465,6 @@ fn command_lane(
         Lane::AppleIos => super::lane::apple::ios(process, ci_config),
         Lane::AppleIosTest => super::lane::apple::ios_test(process, ci_config),
         Lane::AppleSafari => super::lane::apple::safari(process),
-        Lane::LinuxSecrets => super::lane::linux::secrets(process),
-        Lane::LinuxCheck => super::lane::linux::check(process),
-        Lane::LinuxWasm => super::lane::linux::wasm(process),
-        Lane::LinuxTest => super::lane::linux::test(process),
-        Lane::LinuxDoc => super::lane::linux::configured(process, "doc"),
-        Lane::LinuxLoom => super::lane::linux::configured(process, "loom"),
-        Lane::LinuxBroadcast => super::lane::linux::configured(process, "broadcast"),
-        Lane::LinuxIntegrationRegressions => {
-            super::lane::linux::configured(process, "integration-regressions")
-        }
-        Lane::LinuxSeleniumFirefox => super::lane::linux::selenium(process, "firefox"),
-        Lane::LinuxCoverage => super::lane::linux::coverage(process),
         Lane::AndroidBuild => super::lane::android::build(process),
         Lane::AndroidTest => super::lane::android::test(process, ci_config),
         Lane::WindowsArm64 => super::lane::windows::tests(process, "aarch64-pc-windows-msvc"),
@@ -491,7 +479,17 @@ fn command_lane(
         | Lane::WebSize
         | Lane::DeepRtsan
         | Lane::DeepPerf
-        | Lane::DeepBench => declared_lane(lane, process, ci_config, lanes),
+        | Lane::DeepBench
+        | Lane::LinuxSecrets
+        | Lane::LinuxCheck
+        | Lane::LinuxWasm
+        | Lane::LinuxTest
+        | Lane::LinuxDoc
+        | Lane::LinuxLoom
+        | Lane::LinuxBroadcast
+        | Lane::LinuxIntegrationRegressions
+        | Lane::LinuxSeleniumFirefox
+        | Lane::LinuxCoverage => declared_lane(lane, process, ci_config, lanes),
     }
 }
 
@@ -1027,6 +1025,27 @@ exit 19
         assert_eq!(Lane::WebFirefox.cache_group(), CacheGroup::Linux);
         assert_eq!(Lane::ReleaseAndroid.cache_group(), CacheGroup::Host);
         assert_eq!(Lane::WindowsX64Build.cache_group(), CacheGroup::Windows);
+    }
+
+    /// A declared lane names its cache group twice while the enum still exists,
+    /// and the configured half is the one nothing runs - so a wrong value there
+    /// would surface only once the enum is deleted and it becomes the answer.
+    #[test]
+    fn a_declared_lane_leases_the_cache_its_variant_does() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("xtask has a workspace root");
+        let ext = KitharaExt::load(root).expect("the project config parses");
+
+        for (name, declared) in &ext.ci.lanes {
+            let lane = Lane::from_str(name, false)
+                .unwrap_or_else(|_| panic!("ext.ci.lanes.{name} is not a lane"));
+            assert_eq!(
+                declared.cache_group,
+                format!("{:?}", lane.cache_group()).to_lowercase(),
+                "ext.ci.lanes.{name} leases a different cache than its variant"
+            );
+        }
     }
 
     #[test]
