@@ -691,7 +691,7 @@ mod tests {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    #[kithara::test(hang_timeout_secs(1))]
+    #[kithara::test(flash(false), hang_timeout_secs(1))]
     fn next_chunk_replenishes_detached_presentation_buffers() {
         let mut audio = blocking_audio(8);
         let mut retained = Vec::with_capacity(8);
