@@ -1,5 +1,5 @@
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     path::{Component, Path, PathBuf},
 };
 
@@ -288,6 +288,45 @@ pub(crate) struct ReleaseConfig {
     pub(crate) http_timeout_secs: Option<u64>,
     /// Seconds before `GitLab` package upload curl requests time out.
     pub(crate) upload_timeout_secs: Option<u64>,
+    /// Named packaging profiles. A lane names one; nothing infers it.
+    pub(crate) packages: BTreeMap<String, PackageProfile>,
+}
+
+impl ReleaseConfig {
+    pub(crate) fn package(&self, name: &str) -> Result<&PackageProfile> {
+        self.packages
+            .get(name)
+            .with_context(|| format!("ext.release.packages.{name} is not defined"))
+    }
+
+    pub(crate) fn asset_name(&self, key: AssetKey) -> &str {
+        match key {
+            AssetKey::Core => &self.core_asset,
+            AssetKey::Merged => &self.merged_asset,
+            AssetKey::Docs => &self.docs_asset,
+            AssetKey::Wasm => &self.wasm_asset,
+        }
+    }
+}
+
+/// One packaged artifact, named by what it carries rather than by file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum AssetKey {
+    Core,
+    Merged,
+    Docs,
+    Wasm,
+}
+
+/// What a packaging run collects, and whether the built framework has to match
+/// the version the Swift manifest records. Publishing a version asks that
+/// question; taking a snapshot of a commit does not.
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub(crate) struct PackageProfile {
+    pub(crate) version_gate: bool,
+    pub(crate) assets: Vec<AssetKey>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -358,7 +397,7 @@ mod tests {
     use kithara_devtools::Ctx;
     use tempfile::TempDir;
 
-    use super::{KitharaExt, XtaskCacheConfig};
+    use super::{AssetKey, KitharaExt, XtaskCacheConfig};
 
     fn config_root(body: &str) -> (TempDir, PathBuf) {
         let temp = tempfile::tempdir().expect("create fixture root");
@@ -389,6 +428,54 @@ merged_asset = "Kithara.xcframework.zip"
 
         assert_eq!(ext.release.core_asset, "KitharaFFIInternal.xcframework.zip");
         assert_eq!(ext.release.merged_asset, "Kithara.xcframework.zip");
+    }
+
+    #[test]
+    fn a_packaging_profile_names_its_assets_and_gate() {
+        let ctx = ctx_from_config(
+            r#"
+[ext.release]
+core_asset = "KitharaFFIInternal.xcframework.zip"
+merged_asset = "Kithara.xcframework.zip"
+
+[ext.release.packages.snapshot]
+version_gate = false
+assets = ["merged"]
+"#,
+        );
+
+        let ext = KitharaExt::from_ctx(&ctx).expect("parse kithara extension");
+
+        let profile = ext.release.package("snapshot").expect("snapshot profile");
+        assert!(!profile.version_gate);
+        assert_eq!(profile.assets, vec![AssetKey::Merged]);
+    }
+
+    #[test]
+    fn an_unknown_asset_key_fails_the_config() {
+        let ctx = ctx_from_config(
+            r#"
+[ext.release.packages.snapshot]
+assets = ["mergd"]
+"#,
+        );
+
+        assert!(KitharaExt::from_ctx(&ctx).is_err());
+    }
+
+    #[test]
+    fn an_unknown_profile_name_is_an_error_not_a_default() {
+        let ctx = ctx_from_config(
+            r#"
+[ext.release.packages.release]
+version_gate = true
+assets = ["core", "merged"]
+"#,
+        );
+
+        let ext = KitharaExt::from_ctx(&ctx).expect("parse kithara extension");
+
+        assert!(ext.release.package("snapshot").is_err());
     }
 
     #[test]

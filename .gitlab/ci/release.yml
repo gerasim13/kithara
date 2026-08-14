@@ -10,7 +10,7 @@
 release:xcframework:
   extends: .release-build
   script:
-    - just ci run release-xcframework
+    - just ci run release-xcframework --package release
   artifacts:
     expire_in: never
     paths:

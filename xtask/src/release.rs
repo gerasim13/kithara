@@ -1628,6 +1628,8 @@ fn run_step(cmd: &mut Command, description: &str) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use super::*;
 
     const MANIFEST_SAMPLE: &str =
@@ -1711,6 +1713,7 @@ mod tests {
             pages_branch: "gh-pages".into(),
             http_timeout_secs: Some(60),
             upload_timeout_secs: Some(600),
+            packages: BTreeMap::new(),
         };
         let notes = render_release_notes(
             &cfg,
@@ -1755,6 +1758,7 @@ mod tests {
             pages_branch: "gh-pages".into(),
             http_timeout_secs: Some(60),
             upload_timeout_secs: Some(600),
+            packages: BTreeMap::new(),
         };
 
         let links = gitlab_release_links(&cfg, "v0.0.2");
@@ -1797,6 +1801,7 @@ mod tests {
             pages_branch: String::new(),
             http_timeout_secs: None,
             upload_timeout_secs: None,
+            packages: BTreeMap::new(),
         }
     }
 

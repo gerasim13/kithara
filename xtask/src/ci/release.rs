@@ -12,7 +12,7 @@ use super::{
     run::PipelineKind,
 };
 use crate::{
-    config::{KitharaExt, ReleaseConfig},
+    config::{KitharaExt, PackageProfile, ReleaseConfig},
     publish, release,
 };
 
@@ -25,40 +25,25 @@ pub(crate) fn xcframework(
     ctx: &Ctx,
     ext: &KitharaExt,
     temp: &Path,
-    kind: PipelineKind,
+    package: &str,
 ) -> Result<()> {
     require_os("macos", "Apple release")?;
-    // The manifest pins the checksum of the framework a released version
-    // resolves to, so the two have to agree before that version is published.
-    // A nightly answers a different question — what the branch builds into
-    // today — and the framework it produces is not the one the manifest names.
-    let expected = if kind == PipelineKind::Nightly {
-        None
-    } else {
-        let version = required_env("KITHARA_RELEASE_VERSION")?;
-        let manifest = fs::read_to_string(ctx.root.join(&ext.release.manifest))
-            .with_context(|| format!("reading {}", ext.release.manifest))?;
-        let manifest_version = manifest_field(&manifest, "version")?;
-        if manifest_version != version {
-            bail!(
-                "{} version is {manifest_version}, requested {version}",
-                ext.release.manifest
-            );
-        }
-        Some(manifest_field(&manifest, "checksum")?)
-    };
+    let profile = ext.release.package(package)?;
+    let expected = expected_checksum(profile, &ctx.root.join(&ext.release.manifest))?;
 
     process.run(
         "just",
         &["platform", "apple", "release"],
         "Apple release artifacts",
     )?;
-    for name in [&ext.release.core_asset, &ext.release.merged_asset] {
-        if name.is_empty() {
-            continue;
-        }
-        let source = temp.join(name);
-        copy_required(&source, &ctx.root.join(name))?;
+    let names: Vec<&str> = profile
+        .assets
+        .iter()
+        .map(|key| ext.release.asset_name(*key))
+        .filter(|name| !name.is_empty())
+        .collect();
+    for name in &names {
+        copy_required(&temp.join(name), &ctx.root.join(name))?;
     }
 
     if let Some(manifest_checksum) = expected {
@@ -73,12 +58,32 @@ pub(crate) fn xcframework(
         }
     }
 
-    for name in [&ext.release.core_asset, &ext.release.merged_asset] {
-        if !name.is_empty() {
-            write_checksum(&ctx.root.join(name))?;
-        }
+    for name in &names {
+        write_checksum(&ctx.root.join(name))?;
     }
     Ok(())
+}
+
+/// The checksum the built framework has to match, or `None` when the profile
+/// carries no version. The manifest pins what a released version resolves to,
+/// so the two must agree before that version is published; packaging a commit
+/// for someone to install by hand answers a different question and names no
+/// version to check against.
+fn expected_checksum(profile: &PackageProfile, manifest_path: &Path) -> Result<Option<String>> {
+    if !profile.version_gate {
+        return Ok(None);
+    }
+    let version = required_env("KITHARA_RELEASE_VERSION")?;
+    let manifest = fs::read_to_string(manifest_path)
+        .with_context(|| format!("reading {}", manifest_path.display()))?;
+    let manifest_version = manifest_field(&manifest, "version")?;
+    if manifest_version != version {
+        bail!(
+            "{} version is {manifest_version}, requested {version}",
+            manifest_path.display()
+        );
+    }
+    Ok(Some(manifest_field(&manifest, "checksum")?))
 }
 
 pub(crate) fn docs(process: &Process, ctx: &Ctx, ext: &KitharaExt) -> Result<()> {
@@ -350,6 +355,20 @@ fn required_env(name: &str) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::AssetKey;
+
+    #[test]
+    fn a_gate_free_profile_asks_for_no_version() {
+        let profile = PackageProfile {
+            version_gate: false,
+            assets: vec![AssetKey::Merged],
+        };
+
+        let expected = expected_checksum(&profile, Path::new("Package.swift"))
+            .expect("a gate-free profile reads no manifest");
+
+        assert!(expected.is_none());
+    }
 
     #[test]
     fn checksum_round_trip_detects_changed_bytes() {

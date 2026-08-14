@@ -436,6 +436,16 @@ wasm_asset = "kithara-wasm-pages.zip"
 wasm_dist = "crates/kithara-ffi/dist"
 pages_branch = "gh-pages"
 
+# What each packaging run collects. The version gate belongs to publishing a
+# version, so a snapshot taken of a commit under review does not ask for one.
+[ext.release.packages.release]
+version_gate = true
+assets = ["core", "merged"]
+
+[ext.release.packages.snapshot]
+version_gate = false
+assets = ["merged"]
+
 [orphans]
 # Packages the sweep cannot say anything useful about: a generated crate, two
 # test harnesses, the fuzz targets, and the build tool.

@@ -149,6 +149,10 @@ pub(crate) struct RunArgs {
         default_value = "merge-request"
     )]
     kind: PipelineKind,
+    /// Packaging profile from `ext.release.packages`. Defaults to the strict
+    /// release path, so a caller that forgets one is not silently weakened.
+    #[arg(long, default_value = "release")]
+    package: String,
 }
 
 #[derive(Debug)]
@@ -380,7 +384,7 @@ fn execute(args: &RunArgs, ctx: &Ctx) -> Result<()> {
         Lane::DepsFeatures => lane::deps::features(&process),
         Lane::DepsSemver => lane::deps::semver(&process),
         Lane::ReleaseXcframework => {
-            super::release::xcframework(&process, ctx, &ext, &temp, args.kind)
+            super::release::xcframework(&process, ctx, &ext, &temp, &args.package)
         }
         Lane::ReleaseDocs => super::release::docs(&process, ctx, &ext),
         Lane::ReleaseWasm => super::release::wasm(&process, ctx, &ext),
