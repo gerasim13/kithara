@@ -3,7 +3,7 @@ use std::{
     env,
     ffi::{OsStr, OsString},
     path::{Path, PathBuf},
-    process::{Command, Output},
+    process::{Child, Command, Output},
     sync::Mutex,
 };
 
@@ -171,6 +171,36 @@ impl Process {
             return Ok(());
         }
         require_os(expected, label)
+    }
+
+    /// What a predecessor job has to have left behind. Recorded rather than
+    /// checked while recording, for the same reason the platform is: whether
+    /// this checkout happens to hold the file says nothing about the lane.
+    pub(crate) fn require_left_behind(&self, paths: &[String], by: &str) -> Result<()> {
+        if self.record(Step::requirement(by, "left behind", paths)) {
+            return Ok(());
+        }
+        for relative in paths {
+            let path = self.root.join(relative);
+            if !path.exists() {
+                bail!("the {by} job did not leave {}", path.display());
+            }
+        }
+        Ok(())
+    }
+
+    /// Start a long-running child the lane owns for its duration. Recorded
+    /// rather than spawned while recording: a server that binds a port is a
+    /// side effect, and whether the binary happens to be built is not part of
+    /// what the lane asks for.
+    pub(crate) fn spawn(&self, command: &mut Command, label: &str) -> Result<Option<Child>> {
+        if self.record(Step::of(command, label, &self.root)) {
+            return Ok(None);
+        }
+        let child = command
+            .spawn()
+            .with_context(|| format!("starting {label}"))?;
+        Ok(Some(child))
     }
 
     pub(crate) fn best_effort(&self, program: &str, args: &[&str], label: &str) {
