@@ -200,7 +200,8 @@ impl<'a> HostStorage<'a> {
         self.rotate_logs()?;
         self.prune_retired_caches(7 * Self::DAY)?;
 
-        let target_dirs = persistent_target_dirs(&self.build_root.join("workspaces/gitlab"))?;
+        let target_dirs =
+            build_cache::persistent_target_dirs(&self.build_root.join("workspaces/gitlab"))?;
         build_cache::enforce_budget(&target_dirs, self.config.host.build_cache_budget_bytes()?)?;
 
         // Cargo targets are the largest reproducible caches and already have a
@@ -856,55 +857,6 @@ fn agent_states_from(listing: &str) -> BTreeMap<&'static str, &'static str> {
         .collect()
 }
 
-fn persistent_target_dirs(root: &Path) -> Result<Vec<PathBuf>> {
-    if !root.is_dir() {
-        return Ok(Vec::new());
-    }
-
-    let mut pending = vec![root.to_path_buf()];
-    let mut targets = Vec::new();
-    while let Some(directory) = pending.pop() {
-        if directory.join("Cargo.toml").is_file() {
-            for name in ["target", "target-flash-off"] {
-                let path = directory.join(name);
-                let metadata = match fs::symlink_metadata(&path) {
-                    Ok(metadata) => metadata,
-                    Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
-                    Err(error) => {
-                        return Err(error).with_context(|| format!("reading {}", path.display()));
-                    }
-                };
-                if metadata.file_type().is_dir() {
-                    targets.push(path);
-                }
-            }
-            continue;
-        }
-
-        let entries = fs::read_dir(&directory)
-            .with_context(|| format!("reading CI workspace directory {}", directory.display()))?;
-        for entry in entries {
-            let entry = entry.with_context(|| {
-                format!(
-                    "reading an entry in CI workspace directory {}",
-                    directory.display()
-                )
-            })?;
-            if entry.file_name().to_string_lossy().starts_with('.') {
-                continue;
-            }
-            let path = entry.path();
-            let metadata = fs::symlink_metadata(&path)
-                .with_context(|| format!("reading CI workspace metadata for {}", path.display()))?;
-            if metadata.file_type().is_dir() {
-                pending.push(path);
-            }
-        }
-    }
-    targets.sort();
-    Ok(targets)
-}
-
 fn validate_root(root: &Path) -> Result<()> {
     if !root.is_absolute() || !root.is_dir() {
         bail!("CI root is not mounted: {}", root.display());
@@ -1220,7 +1172,8 @@ mod tests {
         )
         .unwrap();
 
-        let targets = persistent_target_dirs(&build_root.join("workspaces/gitlab")).unwrap();
+        let targets =
+            build_cache::persistent_target_dirs(&build_root.join("workspaces/gitlab")).unwrap();
 
         assert_eq!(targets, [checkout.join("target")]);
     }
