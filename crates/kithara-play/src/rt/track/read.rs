@@ -7,6 +7,7 @@ use ringbuf::{HeapProd, traits::Producer};
 
 use super::{
     PlayerTrack, ReadOutcome, RtSink,
+    core::MediaPresentationAnchor,
     triggers::{TrackTriggers, TriggerInput},
 };
 use crate::bridge::{PlayerNotification, RtMetrics, TrackPlaybackStopReason, TrackState};
@@ -57,17 +58,20 @@ pub enum TrackReadOutcome {
 impl PlayerTrack {
     /// Advance the media clock after one read of real output frames.
     ///
-    /// A proven consumed presentation boundary replaces accumulated scalar
-    /// drift with its exact source coordinate. Playback rate advances the
-    /// whole read only when no proof was consumed.
-    fn advance_media_clock(&mut self, frames: usize, consumed: Option<PresentationPoint>) {
-        self.served_media_frames = media_frames_after_read(
+    /// The first consumed presentation boundary anchors the decoder's absolute
+    /// source origin to the audible clock. Later compatible boundaries replace
+    /// accumulated scalar drift with exact source progress.
+    fn advance_media_clock(&mut self, frames: usize, advance: Option<PresentationAdvance>) {
+        let (served, anchor) = media_frames_after_read(
             self.served_media_frames,
             frames,
             self.playback_rate,
             self.sample_rate,
-            consumed,
+            advance,
+            self.media_presentation,
         );
+        self.served_media_frames = served;
+        self.media_presentation = anchor;
     }
 
     fn check_notifications(
@@ -347,8 +351,7 @@ impl PlayerTrack {
                     self.invalidate_presentation();
                     None
                 };
-                let consumed = consumed_point(presentation_advance, frames);
-                self.advance_media_clock(frames, consumed);
+                self.advance_media_clock(frames, presentation_advance);
                 TrackReadOutcome::Full {
                     frames,
                     duration,
@@ -370,8 +373,7 @@ impl PlayerTrack {
                     self.invalidate_presentation();
                     None
                 };
-                let consumed = consumed_point(presentation_advance, frames);
-                self.advance_media_clock(frames, consumed);
+                self.advance_media_clock(frames, presentation_advance);
                 TrackReadOutcome::Partial {
                     frames,
                     duration,
@@ -420,29 +422,57 @@ impl PlayerTrack {
     }
 }
 
-fn consumed_point(
-    advance: Option<PresentationAdvance>,
-    frames: usize,
-) -> Option<PresentationPoint> {
-    let advance = advance?;
-    (advance.read_offset_frames() <= frames).then_some(advance.point())
-}
-
 fn media_frames_after_read(
     current: f64,
     frames: usize,
     playback_rate: f32,
     host_rate: u32,
-    consumed: Option<PresentationPoint>,
-) -> f64 {
-    let Some(consumed) = consumed else {
+    advance: Option<PresentationAdvance>,
+    previous: Option<MediaPresentationAnchor>,
+) -> (f64, Option<MediaPresentationAnchor>) {
+    let scalar = |frames: usize, current: f64| {
         let output_frames: f64 = AsPrimitive::as_(frames);
-        return output_frames.mul_add(f64::from(playback_rate), current);
+        output_frames.mul_add(f64::from(playback_rate), current)
     };
-    let source_frames: f64 = AsPrimitive::as_(consumed.source_frame());
-    let source_rate = f64::from(consumed.sample_rate().get());
+    let Some(advance) = advance else {
+        return (scalar(frames, current), previous);
+    };
+    let Some(suffix_frames) = frames.checked_sub(advance.read_offset_frames()) else {
+        return (scalar(frames, current), None);
+    };
+    let consumed = advance.point();
     let host_rate = f64::from(host_rate.max(1));
-    source_frames / source_rate * host_rate
+    let prefix_boundary = scalar(advance.read_offset_frames(), current);
+    let boundary = previous
+        .filter(|previous| compatible_media_points(previous.point, consumed))
+        .and_then(|previous| {
+            consumed
+                .source_frame()
+                .checked_sub(previous.point.source_frame())
+                .map(|delta| {
+                    let source_frames: f64 = AsPrimitive::as_(delta);
+                    source_frames.mul_add(
+                        host_rate / f64::from(consumed.sample_rate().get()),
+                        previous.frames,
+                    )
+                })
+        })
+        .unwrap_or(prefix_boundary);
+    let suffix_frames: f64 = AsPrimitive::as_(suffix_frames);
+    (
+        suffix_frames.mul_add(f64::from(playback_rate), boundary),
+        Some(MediaPresentationAnchor {
+            frames: boundary,
+            point: consumed,
+        }),
+    )
+}
+
+fn compatible_media_points(previous: PresentationPoint, current: PresentationPoint) -> bool {
+    previous.seek_epoch() == current.seek_epoch()
+        && previous.generation() == current.generation()
+        && previous.sample_rate() == current.sample_rate()
+        && previous.output_end() <= current.output_end()
 }
 
 #[cfg(test)]
@@ -452,24 +482,53 @@ mod tests {
     use kithara_audio::{PresentationAdvance, PresentationPoint};
     use kithara_test_utils::kithara;
 
-    use super::{consumed_point, media_frames_after_read};
+    use super::media_frames_after_read;
 
     #[kithara::test]
-    fn consumed_presentation_replaces_scalar_media_clock_advance() {
+    fn consumed_presentation_rebases_then_advances_the_read_suffix() {
         let source_rate = NonZeroU32::new(48_000).expect("test source rate is non-zero");
         let point = PresentationPoint::new(0, 48_000, 0, 4_096, source_rate);
         let advance = PresentationAdvance::new(point, 256);
-        let consumed = consumed_point(Some(advance), 512)
-            .expect("consumed boundary inside the read is valid proof");
 
-        let corrected = media_frames_after_read(44_000.0, 512, 1.5, 44_100, Some(consumed));
-        let scalar_only = media_frames_after_read(44_000.0, 512, 1.5, 44_100, None);
+        let (corrected, anchor) =
+            media_frames_after_read(44_000.0, 512, 1.5, 44_100, Some(advance), None);
+        let (scalar_only, _) = media_frames_after_read(44_000.0, 512, 1.5, 44_100, None, None);
 
-        assert_eq!(corrected, 44_100.0);
+        assert_eq!(corrected, 44_768.0);
         assert_eq!(scalar_only, 44_768.0);
-        assert_ne!(
+        assert_eq!(
             corrected, scalar_only,
-            "source proof must replace scalar drift"
+            "the first source proof must anchor without importing its codec-specific origin"
         );
+
+        let later = PresentationAdvance::new(
+            PresentationPoint::new(0, 48_240, 0, 4_608, source_rate),
+            128,
+        );
+        let (corrected, later_anchor) =
+            media_frames_after_read(corrected, 512, 1.5, 44_100, Some(later), anchor);
+        assert_eq!(corrected, 45_180.5);
+
+        let changed_rate = NonZeroU32::new(44_100).expect("test source rate is non-zero");
+        let rate_change = PresentationAdvance::new(
+            PresentationPoint::new(0, 48_480, 0, 5_120, changed_rate),
+            64,
+        );
+        let (rate_reanchored, rate_anchor) =
+            media_frames_after_read(corrected, 512, 1.5, 44_100, Some(rate_change), later_anchor);
+        assert_eq!(
+            rate_anchor
+                .expect("rate change establishes an anchor")
+                .frames,
+            45_276.5,
+            "a sample-rate change reanchors at the scalar prefix boundary"
+        );
+        assert_eq!(rate_reanchored, 45_948.5);
+
+        let replacement =
+            PresentationAdvance::new(PresentationPoint::new(0, 96_000, 1, 512, source_rate), 64);
+        let (reanchored, _) =
+            media_frames_after_read(corrected, 512, 1.5, 44_100, Some(replacement), later_anchor);
+        assert_eq!(reanchored, 45_948.5);
     }
 }

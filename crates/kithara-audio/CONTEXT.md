@@ -417,6 +417,11 @@ the exact offset in per-channel frames. Seek clears pending proof, and a
 same-epoch decoder replacement starts a new presentation generation only after
 the ordered barrier reaches the late stage.
 
+Within one seek epoch and sample rate, the source endpoint advances by admitted
+PCM frames after its first decoder anchor. Decoder timestamp or head-strip gaps
+and same-rate replacement cannot jump it; seek/reset or a sample-rate change
+establishes a new decoder anchor.
+
 **Sample guard.** `sanitize_sample` (`kithara-decode`, which owns it) runs on the
 *input* of every stage taking untrusted samples: `IsolatorEq::process_sample`
 before it branches, `PeakLimiter::process_planar` before it takes the frame peak.

@@ -22,12 +22,14 @@ pub(super) struct SourceWindow {
 
 impl SourceWindow {
     pub(super) fn admit(&mut self, chunk: PcmChunk) -> PcmChunk {
+        let rate = chunk.meta.spec.sample_rate.get();
+        let start = self
+            .admitted
+            .filter(|admitted| admitted.rate == rate)
+            .map_or(chunk.meta.frame_offset, |admitted| admitted.frame);
         self.admitted = Some(SourceEnd {
-            frame: chunk
-                .meta
-                .frame_offset
-                .saturating_add(u64::from(chunk.meta.frames)),
-            rate: chunk.meta.spec.sample_rate.get(),
+            frame: start.saturating_add(u64::from(chunk.meta.frames)),
+            rate,
         });
         chunk
     }

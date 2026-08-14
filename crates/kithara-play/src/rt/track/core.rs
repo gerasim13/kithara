@@ -11,6 +11,12 @@ use num_traits::cast::{AsPrimitive, ToPrimitive};
 use super::{PlayerResource, fade::TrackFade, triggers::TrackTriggers};
 use crate::bridge::TrackState;
 
+#[derive(Clone, Copy)]
+pub(super) struct MediaPresentationAnchor {
+    pub(super) frames: f64,
+    pub(super) point: PresentationPoint,
+}
+
 /// Per-track state in the processor arena.
 ///
 /// Manages the `MixDSP` fade, track state, cached position/duration,
@@ -50,12 +56,14 @@ pub struct PlayerTrack {
     pub(super) observed_duration: f64,
     /// Canonical media clock expressed on the host sample-rate axis.
     ///
-    /// Exact consumed presentation boundaries rebase this from their source
-    /// frame and source rate. Reads without such proof advance it from output
-    /// frames scaled by [`Self::playback_rate`]. Near-end triggers and position
-    /// consumers therefore follow audible source progress without reading the
-    /// decoder's pre-buffered position.
+    /// Exact consumed presentation boundaries advance this from source-frame
+    /// deltas after the first boundary anchors the decoder's codec-specific
+    /// origin to the audible clock. Reads without such proof advance it from
+    /// output frames scaled by [`Self::playback_rate`]. Near-end triggers and
+    /// position consumers therefore follow audible source progress without
+    /// importing decoder pre-roll into the public position.
     pub(super) served_media_frames: f64,
+    pub(super) media_presentation: Option<MediaPresentationAnchor>,
     pub(super) sample_rate: u32,
     /// Slot seek epoch this track has been re-based onto.
     ///
@@ -104,6 +112,7 @@ impl PlayerTrack {
             prefetch_duration: prefetch_duration.max(0.0),
             sample_rate: sample_rate.get(),
             served_media_frames: 0.0,
+            media_presentation: None,
             ended_at_eof: false,
             consumed_presentation: None,
         };
@@ -231,6 +240,7 @@ impl PlayerTrack {
     pub fn seek(&mut self, seconds: f64) {
         self.resource.reset_for_seek();
         self.invalidate_presentation();
+        self.media_presentation = None;
         let frames = seek_frame_index(seconds, self.sample_rate, self.observed_duration);
         self.served_media_frames = AsPrimitive::as_(frames);
         self.triggers.reset();
