@@ -700,6 +700,99 @@ steps = [
   ], label = "Linux coverage", env = { CARGO_BUILD_JOBS = "2", COVERAGE_MIN = "80", COVERAGE_OUTPUT_DIR = "coverage" } },
 ]
 
+# Every Windows lane sets the same two variables. `bungee-sys` builds through
+# the `cmake` crate, which asks for the Visual Studio generator and hard-codes
+# `-Thost=x64` for every MSVC target; on an ARM64 host that picks the emulated
+# x64 tools, MSBuild loses the tracker log it writes beside each object, and the
+# job fails with `MSB6003: link.exe could not be run`. Ninja is the one
+# generator the crate leaves alone. The same dependency builds its C++ against
+# the static CRT and says so twice, neither of which an environment variable can
+# reach, so Rust's dynamic default met it in the linker as `LNK2038: mismatch
+# detected for 'RuntimeLibrary'`. Windows here builds test binaries and ships no
+# artifact, so the whole lane takes the CRT the dependency insists on and `cc`
+# compiles every other C crate to match.
+#
+# `CFLAGS_*`/`CXXFLAGS_*` force-include a shim that libfdk-aac needs on ARM64:
+# the crate vendors a snapshot from before the library learned `_M_ARM64` and
+# before one GCC attribute became portable. The fixes live in the header rather
+# than in defines here, because a flag for a target reaches every crate built
+# for it and the header can ask which compiler is reading it - `aws-lc-sys`
+# picks `clang-cl` and needs none of this. The x64 chain has recognised
+# `_M_X64` all along, so its lanes carry neither.
+[ext.ci.lanes.windows-arm64]
+cache_group = "windows"
+label = "Windows"
+os = "windows"
+tools = ["cargo", "rustup", "sccache", "cmake", "ninja"]
+program = "<xtask>"
+steps = [
+  { args = [
+    "target",
+    "add",
+    "aarch64-pc-windows-msvc",
+  ], label = "install Windows target", program = "rustup" },
+  { args = [
+    "test",
+    "--profile",
+    "ci",
+    "--target",
+    "aarch64-pc-windows-msvc",
+  ], label = "Windows tests", env = { CMAKE_GENERATOR = "Ninja", RUSTFLAGS = "-C target-feature=+crt-static", CFLAGS_aarch64_pc_windows_msvc = "-FI{root}/.config/windows/fdk-msvc-shim.h", CXXFLAGS_aarch64_pc_windows_msvc = "-FI{root}/.config/windows/fdk-msvc-shim.h" } },
+]
+
+[ext.ci.lanes.windows-x64]
+cache_group = "windows"
+label = "Windows"
+os = "windows"
+tools = ["cargo", "rustup", "sccache", "cmake", "ninja"]
+program = "<xtask>"
+steps = [
+  { args = [
+    "target",
+    "add",
+    "x86_64-pc-windows-msvc",
+  ], label = "install Windows target", program = "rustup" },
+  { args = [
+    "test",
+    "--profile",
+    "ci",
+    "--target",
+    "x86_64-pc-windows-msvc",
+  ], label = "Windows tests", env = { CMAKE_GENERATOR = "Ninja", RUSTFLAGS = "-C target-feature=+crt-static" } },
+]
+
+# The x86_64 suite used to run here too, on a host with no x86_64 in it: every
+# test reported on the emulator as much as on the commit, and took the time to
+# say so. An x86 executor runs that lane on hardware. What this host still
+# answers for is whether the target compiles at all - the native dependencies
+# break per target, not per instruction executed - so it builds the workspace
+# and everything it tests with, and runs none of it. `xtask` is excluded because
+# it runs on the executor, never on the target, and its own tests reach for
+# `std::os::unix`.
+[ext.ci.lanes.windows-x64-build]
+cache_group = "windows"
+label = "Windows"
+os = "windows"
+tools = ["cargo", "rustup", "sccache", "cmake", "ninja"]
+program = "cargo"
+steps = [
+  { args = [
+    "target",
+    "add",
+    "x86_64-pc-windows-msvc",
+  ], label = "install Windows target", program = "rustup" },
+  { args = [
+    "check",
+    "--locked",
+    "--workspace",
+    "--exclude",
+    "xtask",
+    "--all-targets",
+    "--target",
+    "x86_64-pc-windows-msvc",
+  ], label = "Windows build", env = { CMAKE_GENERATOR = "Ninja", RUSTFLAGS = "-C target-feature=+crt-static" } },
+]
+
 
 [ext.publish]
 workspace_hack_crate = "kithara-workspace-hack"

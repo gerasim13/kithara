@@ -1,9 +1,11 @@
-use anyhow::{Result, bail};
+use std::env;
+
+use anyhow::{Context, Result, bail};
 use toml::Value;
 
 use crate::{
     ci::{config::CiPins, process::Process},
-    config::{CiLaneConfig, CiLanePin},
+    config::{CiLaneConfig, CiLanePin, ROOT_PLACEHOLDER, SELF_PROGRAM},
 };
 
 /// Run a lane the way `.config/xtask.toml` declares it: the platform it refuses
@@ -24,8 +26,19 @@ pub(crate) fn run(process: &Process, lane: &CiLaneConfig, pins: &CiPins) -> Resu
         require_pinned_version(process, check, pins)?;
     }
     for step in &lane.steps {
-        let mut command = process.command(&lane.program);
-        command.args(&step.args).envs(&step.env);
+        let program = step.program.as_deref().unwrap_or(&lane.program);
+        let mut command = if program == SELF_PROGRAM {
+            process.command(&env::current_exe().context("locating the running xtask executable")?)
+        } else {
+            process.command(program)
+        };
+        command.args(&step.args);
+        for (key, value) in &step.env {
+            command.env(
+                key,
+                value.replace(ROOT_PLACEHOLDER, &process.root().display().to_string()),
+            );
+        }
         process.run_command(&mut command, &step.label)?;
     }
     Ok(())
