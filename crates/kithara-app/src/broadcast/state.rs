@@ -9,34 +9,29 @@ use kithara_platform::{
 
 pub(crate) type BroadcastResult<T> = Result<T, Box<dyn Error + Send + Sync>>;
 
-/// What the studio bar needs from a packager.
-///
-/// `Live` is a running stream. Where the `broadcast` feature is off it has no
-/// values at all, which makes [`Phase::Running`] a variant nothing can build:
-/// the on-air half of this state machine is then unreachable by construction
-/// rather than by a branch, and the compiler drops it.
+/// What the bar needs from a packager. `Live` has no values where the
+/// `broadcast` feature is off, which makes [`Phase::Running`] unconstructable.
 pub(crate) trait Packager: 'static {
     type Live: Send + 'static;
 
-    /// `Ok(None)` means the session has not measured a device rate yet — the
-    /// request stands and the next frame asks again.
+    fn is_live(live: &Self::Live) -> bool;
+
+    /// `Ok(None)`: no device rate measured yet, so the request stands.
     fn start(
         session: &SessionHandle,
         shutdown: &CancelToken,
     ) -> BroadcastResult<Option<Self::Live>>;
 
-    fn is_live(live: &Self::Live) -> bool;
-
-    fn url(live: &Self::Live) -> &str;
-
     /// Drains the stream and shuts it down. Blocking.
     fn stop(live: Self::Live);
+
+    fn url(live: &Self::Live) -> &str;
 }
 
 pub(crate) struct Broadcaster<P: Packager> {
-    session: SessionHandle,
     shutdown: CancelToken,
     phase: Phase<P>,
+    session: SessionHandle,
 }
 
 enum Phase<P: Packager> {
@@ -46,8 +41,7 @@ enum Phase<P: Packager> {
     Stopping,
 }
 
-/// A stream handed over for shutdown. The bar is already `Stopping` by then, so
-/// the drain runs off the frame loop and reports back through a message.
+/// A stream handed over for shutdown; the drain runs off the frame loop.
 pub(crate) struct BroadcastStop<P: Packager>(P::Live);
 
 impl<P: Packager> Broadcaster<P> {
@@ -57,6 +51,17 @@ impl<P: Packager> Broadcaster<P> {
             shutdown,
             phase: Phase::Off,
         }
+    }
+
+    pub(crate) fn complete_stop(&mut self) {
+        if matches!(self.phase, Phase::Stopping) {
+            self.phase = Phase::Off;
+        }
+    }
+
+    /// Serving. A pending request and a draining stop are both off air.
+    pub(crate) const fn is_on_air(&self) -> bool {
+        matches!(self.phase, Phase::Running { .. })
     }
 
     pub(crate) fn poll(&mut self) {
@@ -91,18 +96,6 @@ impl<P: Packager> Broadcaster<P> {
             Phase::Stopping => self.phase = Phase::Stopping,
         }
         None
-    }
-
-    pub(crate) fn complete_stop(&mut self) {
-        if matches!(self.phase, Phase::Stopping) {
-            self.phase = Phase::Off;
-        }
-    }
-
-    /// The stream is serving. A request waiting for the device rate is not yet
-    /// on air, and neither is a stop that has not finished draining.
-    pub(crate) const fn is_on_air(&self) -> bool {
-        matches!(self.phase, Phase::Running { .. })
     }
 
     pub(crate) fn url(&self) -> Option<&str> {
@@ -143,18 +136,16 @@ mod tests {
 
     use super::*;
 
-    /// The phases carry no session work — only a packager reaches the session —
-    /// so a dispatcher that answers nothing is the honest stand-in, and a
-    /// machine that did reach it fails here instead of silently passing.
+    /// Fails loudly: only a packager may reach the session, never the phases.
     struct NoSession;
 
     impl SessionDispatcher for NoSession {
-        fn exec(&self, _cmd: Cmd) -> Result<Reply, PlayError> {
-            panic!("the state machine must not reach the session")
-        }
-
         fn consumer_wake_mode(&self) -> ConsumerWakeMode {
             ConsumerWakeMode::RealtimeDeferred
+        }
+
+        fn exec(&self, _cmd: Cmd) -> Result<Reply, PlayError> {
+            panic!("the state machine must not reach the session")
         }
     }
 
@@ -162,21 +153,16 @@ mod tests {
         Broadcaster::new(SessionHandle::new(Arc::new(NoSession)), CancelToken::root())
     }
 
-    /// Owned and not `Copy`, the way a real stream handle is.
     struct Stream(String);
 
-    /// Liveness of [`Ready`]'s stream. `start` raises it, so a test that lowers
-    /// it does not leak into one that runs after.
+    /// Raised by `start`, so lowering it in one test cannot leak into the next.
     static LIVE: AtomicBool = AtomicBool::new(true);
 
-    /// Goes live on the first poll and stays live until [`LIVE`] is lowered.
     struct Ready;
 
     impl Ready {
         const URL: &str = "http://packager.test/master.m3u8";
 
-        /// The one place this fake builds its stream, so what the packager
-        /// answers and what a test asserts cannot drift apart.
         fn stream() -> Stream {
             Stream(Self::URL.to_owned())
         }
@@ -184,6 +170,10 @@ mod tests {
 
     impl Packager for Ready {
         type Live = Stream;
+
+        fn is_live(_live: &Stream) -> bool {
+            LIVE.load(Ordering::Relaxed)
+        }
 
         fn start(
             _session: &SessionHandle,
@@ -193,22 +183,21 @@ mod tests {
             Ok(Some(Self::stream()))
         }
 
-        fn is_live(_live: &Stream) -> bool {
-            LIVE.load(Ordering::Relaxed)
-        }
+        fn stop(_live: Stream) {}
 
         fn url(live: &Stream) -> &str {
             &live.0
         }
-
-        fn stop(_live: Stream) {}
     }
 
-    /// A session that has not reported a device rate yet.
     struct Unmeasured;
 
     impl Packager for Unmeasured {
         type Live = Stream;
+
+        fn is_live(_live: &Stream) -> bool {
+            true
+        }
 
         fn start(
             _session: &SessionHandle,
@@ -217,22 +206,21 @@ mod tests {
             Ok(None)
         }
 
-        fn is_live(_live: &Stream) -> bool {
-            true
-        }
+        fn stop(_live: Stream) {}
 
         fn url(live: &Stream) -> &str {
             &live.0
         }
-
-        fn stop(_live: Stream) {}
     }
 
-    /// A packager that refuses — the shape a build without the feature has.
     struct Absent;
 
     impl Packager for Absent {
         type Live = Stream;
+
+        fn is_live(_live: &Stream) -> bool {
+            true
+        }
 
         fn start(
             _session: &SessionHandle,
@@ -241,15 +229,11 @@ mod tests {
             Err("no packager in this build".into())
         }
 
-        fn is_live(_live: &Stream) -> bool {
-            true
-        }
+        fn stop(_live: Stream) {}
 
         fn url(live: &Stream) -> &str {
             &live.0
         }
-
-        fn stop(_live: Stream) {}
     }
 
     #[kithara::test]
@@ -319,9 +303,6 @@ mod tests {
         assert!(matches!(bar.phase, Phase::Off));
     }
 
-    /// Pressing REC again while the request is still waiting for a device rate
-    /// withdraws it. There is no stream yet, so there is no stop job either —
-    /// the bar simply goes back to off and stops asking.
     #[kithara::test]
     fn toggling_a_pending_request_withdraws_it() {
         let mut bar = broadcaster::<Unmeasured>();

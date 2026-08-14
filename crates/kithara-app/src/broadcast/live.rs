@@ -1,5 +1,7 @@
-use kithara::play::{Cmd, MixTapWriter, SessionHandle};
-use kithara_broadcast::{Broadcast, BroadcastConfig, BroadcastHandle, RingFeed};
+use kithara::{
+    broadcast::{Broadcast, BroadcastConfig, BroadcastHandle, RingFeed},
+    play::{Cmd, MixTapWriter, SessionHandle},
+};
 use kithara_platform::{
     CancelToken,
     sync::{Arc, atomic::AtomicU64},
@@ -10,8 +12,7 @@ use super::state::{BroadcastResult, Packager};
 
 pub(crate) struct Backend;
 
-/// The running stream together with the session whose mix tap feeds it.
-/// Releasing the tap is a `Drop`, so no exit path has to remember to.
+/// The running stream and the session feeding it; `Drop` releases the mix tap.
 pub(crate) struct Stream {
     handle: BroadcastHandle,
     session: SessionHandle,
@@ -20,6 +21,10 @@ pub(crate) struct Stream {
 impl Packager for Backend {
     type Live = Stream;
 
+    fn is_live(live: &Stream) -> bool {
+        live.handle.status().is_live
+    }
+
     fn start(session: &SessionHandle, shutdown: &CancelToken) -> BroadcastResult<Option<Stream>> {
         let Some(config) = measured_config(session)? else {
             return Ok(None);
@@ -27,16 +32,12 @@ impl Packager for Backend {
         start(session, shutdown, &config).map(Some)
     }
 
-    fn is_live(live: &Stream) -> bool {
-        live.handle.status().is_live
+    fn stop(live: Stream) {
+        live.handle.stop();
     }
 
     fn url(live: &Stream) -> &str {
         live.handle.url()
-    }
-
-    fn stop(live: Stream) {
-        live.handle.stop();
     }
 }
 
@@ -130,8 +131,7 @@ mod tests {
     }
 
     impl SampleRateSession {
-        /// What the mock session asked the device for; the broadcast reads only
-        /// the measured rate, so this stands apart from it.
+        /// Requested, not measured: the broadcast reads only the measured rate.
         const REQUESTED_RATE: u32 = 44_100;
 
         fn new(sample_rate: u32) -> Self {
@@ -143,6 +143,10 @@ mod tests {
     }
 
     impl SessionDispatcher for SampleRateSession {
+        fn consumer_wake_mode(&self) -> ConsumerWakeMode {
+            ConsumerWakeMode::RealtimeDeferred
+        }
+
         fn exec(&self, cmd: Cmd) -> Result<Reply, PlayError> {
             match cmd {
                 Cmd::QuerySampleRate => {
@@ -162,10 +166,6 @@ mod tests {
                 }
                 _ => panic!("unexpected session command"),
             }
-        }
-
-        fn consumer_wake_mode(&self) -> ConsumerWakeMode {
-            ConsumerWakeMode::RealtimeDeferred
         }
     }
 

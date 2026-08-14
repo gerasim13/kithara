@@ -524,9 +524,6 @@ mod tests {
         assert!(feats.contains("virtual-time"));
     }
 
-    /// A lane whose question includes the detector must not depend on the
-    /// caller passing a flag: two schedulers invoking the same lane by name
-    /// would otherwise run different lanes.
     #[test]
     fn a_lane_that_asks_for_the_detector_gets_it_without_a_flag() {
         let project = synthetic_project();

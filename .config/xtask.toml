@@ -293,11 +293,8 @@ prefix_args = [
 default_features = ["network-manual", "kithara/resample-rubato"]
 default_flash = false
 
-# What only the `broadcast` feature turns on: the integration suite behind
-# `required-features`, and `kithara-app`'s REC state machine, whose engine tests
-# exist only with the feature compiled in. `kithara-broadcast`'s own unit tests
-# are not here — they need no feature and the workspace lane already runs them,
-# which is also what keeps the crate compiling under the gate.
+# What only the `broadcast` feature turns on. `kithara-broadcast`'s own unit
+# tests need no feature and stay in the workspace lane.
 [test.lanes.broadcast]
 program = "cargo"
 prefix_args = [
@@ -318,14 +315,11 @@ default_features = [
   "kithara-integration-tests/broadcast",
 ]
 default_flash = true
-# The detector this lane's tests were failing when they still sat in
-# `suite_light`. It belongs to the lane rather than to whichever scheduler
-# invokes it, so the GitLab job and the GitHub workflow cannot drift into
-# running the same lane under different rules.
+# The detector these tests were failing under. Declared here so two schedulers
+# cannot run the same lane under different rules.
 default_no_block = true
-# `broadcast::state` is the bar's phase machine, tested against stand-in
-# packagers and therefore already in the gate with the feature off. What only
-# exists here is `broadcast::engine`.
+# `broadcast::state` runs in the gate against stand-in packagers; only
+# `broadcast::engine` needs the feature.
 suffix_args = [
   "-E",
   "binary(suite_broadcast) + (package(kithara-app) & test(/^broadcast::engine::/))",

@@ -10,8 +10,7 @@ use super::origin::{
 
 const PRIMING_SKIP_FRAMES: usize = 4_800;
 const NOT_FOUND: u16 = 404;
-/// Non-progress watchdog for the listener teardown: a cancelled token closes
-/// the socket at once, so this only bounds one that never closes.
+/// Non-progress watchdog: a cancelled token closes the socket at once.
 const TEARDOWN_DEADLINE: Duration = Duration::from_secs(10);
 
 fn assert_tone(pcm: &[f32], label: &str) {

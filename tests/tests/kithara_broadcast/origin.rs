@@ -2,6 +2,7 @@ use std::io::Cursor;
 
 use bytes::Bytes;
 use kithara::{
+    broadcast::{Broadcast, BroadcastConfig, BroadcastHandle, FeedChunk, LivePcmFeed},
     decode::{DecoderChunkOutcome, DecoderConfig, DecoderFactory},
     net::{HttpClient, NetError, NetOptions},
     platform::{
@@ -14,7 +15,6 @@ use kithara::{
     },
     stream::{AudioCodec, ContainerFormat, MediaInfo},
 };
-use kithara_broadcast::{Broadcast, BroadcastConfig, BroadcastHandle, FeedChunk, LivePcmFeed};
 use kithara_integration_tests::{
     goertzel::goertzel_magnitude,
     signal_pcm::signal::{SignalFn, SineWave},
@@ -32,8 +32,7 @@ pub(super) const SEGMENT_FRAMES: u64 = 24_000;
 
 const CHUNK_FRAMES: u64 = 2_400;
 
-/// Non-progress watchdog for [`Origin::advance_to`]. The wait resolves the
-/// instant the packager reports the segment, so this only bounds a wedged one.
+/// Non-progress watchdog: the wait resolves as soon as the segment is reported.
 const PACKAGER_DEADLINE: Duration = Duration::from_secs(20);
 
 const TONE_MARGIN: f64 = 50.0;
@@ -42,18 +41,18 @@ const TONE_MARGIN: f64 = 50.0;
 pub(super) struct PlaylistEntry {
     pub(super) extinf: String,
     pub(super) uri: String,
-    pub(super) seconds: f64,
     pub(super) discontinuity: bool,
+    pub(super) seconds: f64,
 }
 
 #[derive(Debug, Clone)]
 pub(super) struct Playlist {
-    pub(super) text: String,
-    pub(super) target: f64,
     pub(super) target_text: String,
-    pub(super) media_sequence: u64,
-    pub(super) discontinuity_sequence: u64,
+    pub(super) text: String,
     pub(super) entries: Vec<PlaylistEntry>,
+    pub(super) target: f64,
+    pub(super) discontinuity_sequence: u64,
+    pub(super) media_sequence: u64,
 }
 
 impl Playlist {
@@ -74,9 +73,9 @@ impl Playlist {
                 let (extinf, seconds) = extinf.take().expect("a segment URI follows its EXTINF");
                 entries.push(PlaylistEntry {
                     extinf,
-                    uri: line.to_owned(),
                     seconds,
                     discontinuity,
+                    uri: line.to_owned(),
                 });
                 discontinuity = false;
             }
@@ -97,10 +96,6 @@ impl Playlist {
         }
     }
 
-    pub(super) fn spans(&self) -> f64 {
-        self.entries.iter().map(|entry| entry.seconds).sum()
-    }
-
     pub(super) fn sequences(&self) -> Vec<u64> {
         self.entries
             .iter()
@@ -114,6 +109,10 @@ impl Playlist {
                     .expect("a segment sequence number")
             })
             .collect()
+    }
+
+    pub(super) fn spans(&self) -> f64 {
+        self.entries.iter().map(|entry| entry.seconds).sum()
     }
 
     pub(super) fn uris_after_last_discontinuity(&self) -> Option<Vec<&str>> {
@@ -169,45 +168,14 @@ pub(super) fn assert_carries_the_tone(pcm: &[f32], tone_hz: f64, sample_rate: u3
 
 pub(super) struct Origin {
     pub(super) handle: BroadcastHandle,
-    released: Arc<AtomicU64>,
     dropped: Arc<AtomicU64>,
+    released: Arc<AtomicU64>,
     scope: CancelScope,
     client: HttpClient,
     base: Url,
 }
 
 impl Origin {
-    pub(super) fn start() -> Self {
-        let released = Arc::new(AtomicU64::new(0));
-        let dropped = Arc::new(AtomicU64::new(0));
-        let scope = CancelScope::new(None);
-        let config = BroadcastConfig::builder()
-            .sample_rate(SAMPLE_RATE)
-            .channels(CHANNELS)
-            .segment_target(TARGET)
-            .window(WINDOW)
-            .grace(GRACE)
-            .build();
-        let feed = PacedSine {
-            released: Arc::clone(&released),
-            dropped: Arc::clone(&dropped),
-            produced: 0,
-            closed: false,
-        };
-        let handle = Broadcast::start(&config, feed, Some(scope.token())).expect("go on air");
-        let base = Url::parse(handle.url()).expect("the handle reports a URL");
-        let client = HttpClient::new(NetOptions::default(), scope.token());
-
-        Self {
-            handle,
-            released,
-            dropped,
-            scope,
-            client,
-            base,
-        }
-    }
-
     pub(super) async fn advance_to(&self, segments: u64) {
         self.released.fetch_max(
             SEGMENT_FRAMES * segments + SEGMENT_FRAMES / 2,
@@ -243,6 +211,37 @@ impl Origin {
     pub(super) fn shutdown(&self) {
         self.scope.cancel();
     }
+
+    pub(super) fn start() -> Self {
+        let released = Arc::new(AtomicU64::new(0));
+        let dropped = Arc::new(AtomicU64::new(0));
+        let scope = CancelScope::new(None);
+        let config = BroadcastConfig::builder()
+            .sample_rate(SAMPLE_RATE)
+            .channels(CHANNELS)
+            .segment_target(TARGET)
+            .window(WINDOW)
+            .grace(GRACE)
+            .build();
+        let feed = PacedSine {
+            released: Arc::clone(&released),
+            dropped: Arc::clone(&dropped),
+            produced: 0,
+            closed: false,
+        };
+        let handle = Broadcast::start(&config, feed, Some(scope.token())).expect("go on air");
+        let base = Url::parse(handle.url()).expect("the handle reports a URL");
+        let client = HttpClient::new(NetOptions::default(), scope.token());
+
+        Self {
+            handle,
+            released,
+            dropped,
+            scope,
+            client,
+            base,
+        }
+    }
 }
 
 impl Drop for Origin {
@@ -252,13 +251,17 @@ impl Drop for Origin {
 }
 
 struct PacedSine {
-    released: Arc<AtomicU64>,
     dropped: Arc<AtomicU64>,
-    produced: u64,
+    released: Arc<AtomicU64>,
     closed: bool,
+    produced: u64,
 }
 
 impl LivePcmFeed for PacedSine {
+    fn close(&mut self) {
+        self.closed = true;
+    }
+
     fn poll(&mut self, out: &mut Vec<f32>) -> FeedChunk {
         let dropped = self.dropped.swap(0, Ordering::AcqRel);
         let pending = self
@@ -281,9 +284,5 @@ impl LivePcmFeed for PacedSine {
             dropped,
             has_ended: self.closed && pending == frames,
         }
-    }
-
-    fn close(&mut self) {
-        self.closed = true;
     }
 }
