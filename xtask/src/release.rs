@@ -129,15 +129,15 @@ fn publish_nightly(cfg: &ReleaseConfig, git_ref: &str, artifacts: &Path) -> Resu
 /// without it the channel publishes nothing anyone asked for — and the rest
 /// ships when it was built, so one lane failing does not withhold the others.
 fn nightly_assets(cfg: &ReleaseConfig, artifacts: &Path) -> Result<Vec<PathBuf>> {
-    let primary = artifacts.join(&cfg.asset);
+    let primary = artifacts.join(&cfg.core_asset);
     if !primary.is_file() {
         bail!(
             "the nightly channel needs {}, which the release build jobs did not leave at {}",
-            cfg.asset,
+            cfg.core_asset,
             primary.display()
         );
     }
-    let optional = [&cfg.single_asset, &cfg.docs_asset, &cfg.wasm_asset]
+    let optional = [&cfg.merged_asset, &cfg.docs_asset, &cfg.wasm_asset]
         .into_iter()
         .chain(cfg.platform_assets.iter());
     let mut assets = vec![primary];
@@ -351,7 +351,7 @@ fn prepare(cfg: &ReleaseConfig, version: &str, zip: Option<&Path>) -> Result<()>
             Command::new("just").args(["platform", "apple", "release"]),
             "just platform apple release",
         )?;
-        built = env::temp_dir().join(&cfg.asset);
+        built = env::temp_dir().join(&cfg.core_asset);
         built.as_path()
     };
     if !zip.is_file() {
@@ -376,19 +376,19 @@ fn prepare(cfg: &ReleaseConfig, version: &str, zip: Option<&Path>) -> Result<()>
     println!("Cached artifact: {}", cached.display());
 
     let tag = tag_of(version);
-    if !cfg.single_asset.is_empty() {
-        let built = env::temp_dir().join(&cfg.single_asset);
+    if !cfg.merged_asset.is_empty() {
+        let built = env::temp_dir().join(&cfg.merged_asset);
         if built.is_file() {
-            let dest = cache_named(&tag, &cfg.single_asset)?;
+            let dest = cache_named(&tag, &cfg.merged_asset)?;
             fs::copy(&built, &dest)
-                .with_context(|| format!("cache {} to {}", cfg.single_asset, dest.display()))?;
+                .with_context(|| format!("cache {} to {}", cfg.merged_asset, dest.display()))?;
             println!("Cached artifact: {}", dest.display());
             let checksum = sha256(&built)?;
-            println!("Checksum {}: {}", cfg.single_asset, checksum);
+            println!("Checksum {}: {}", cfg.merged_asset, checksum);
         } else {
             println!(
                 "Note: {} not at {} — single-framework channel skipped (omit --zip to build it)",
-                cfg.single_asset,
+                cfg.merged_asset,
                 built.display()
             );
         }
@@ -468,7 +468,7 @@ fn publish(cfg: &ReleaseConfig, git_ref: &str, artifacts: Option<&Path>) -> Resu
     let tag = tag_of(&version);
     println!("Release {tag} from {git_ref} ({short})", short = &sha[..12]);
 
-    let zip = artifact_path(&tag, &cfg.asset, artifacts)?;
+    let zip = artifact_path(&tag, &cfg.core_asset, artifacts)?;
     let zip = match zip.is_file() {
         true => {
             let actual = sha256(&zip)?;
@@ -560,7 +560,7 @@ fn publish_github(
             ]),
             "gh release create",
         )?;
-        verify_github_asset(repo, tag, &cfg.asset, checksum)?;
+        verify_github_asset(repo, tag, &cfg.core_asset, checksum)?;
         return Ok(());
     }
 
@@ -599,8 +599,8 @@ fn publish_gitlab(
         other => bail!("gitlab tag lookup failed (HTTP {other})"),
     }
 
-    let pkg_path = gitlab_package_path(cfg, tag, &cfg.asset);
-    match api.package_file_sha(tag, &cfg.asset)? {
+    let pkg_path = gitlab_package_path(cfg, tag, &cfg.core_asset);
+    match api.package_file_sha(tag, &cfg.core_asset)? {
         Some(sha256) if sha256 == checksum => {
             println!("[gitlab] package {tag} already in registry");
         }
@@ -610,7 +610,10 @@ fn publish_gitlab(
         ),
         None => {
             let zip = zip_required(zip, cfg, tag)?;
-            println!("[gitlab] uploading {} to package registry...", cfg.asset);
+            println!(
+                "[gitlab] uploading {} to package registry...",
+                cfg.core_asset
+            );
             let (code, body) = api.upload(&pkg_path, zip)?;
             if code != 201 {
                 bail!("gitlab package upload failed (HTTP {code}): {body}");
@@ -618,7 +621,7 @@ fn publish_gitlab(
         }
     }
 
-    let links = vec![gitlab_release_link(cfg, tag, &cfg.asset)];
+    let links = vec![gitlab_release_link(cfg, tag, &cfg.core_asset)];
     let (code, _) = api.get(&format!("releases/{tag}"))?;
     match code {
         200 => {
@@ -656,7 +659,7 @@ fn publish_gitlab(
 /// and the documentation archive — to the GitHub release and the `GitLab`
 /// generic registry so manual integrations download the same bytes.
 fn publish_extras(cfg: &ReleaseConfig, tag: &str, artifacts: Option<&Path>) -> Result<()> {
-    upload_extra_asset(cfg, tag, &cfg.single_asset, true, artifacts)?;
+    upload_extra_asset(cfg, tag, &cfg.merged_asset, true, artifacts)?;
     for name in &cfg.platform_assets {
         upload_extra_asset(cfg, tag, name, true, artifacts)?;
     }
@@ -1151,9 +1154,9 @@ impl GitlabReleaseLink {
 }
 
 fn gitlab_release_links(cfg: &ReleaseConfig, tag: &str) -> Vec<GitlabReleaseLink> {
-    let mut links = vec![gitlab_release_link(cfg, tag, &cfg.asset)];
-    if !cfg.single_asset.is_empty() {
-        links.push(gitlab_release_link(cfg, tag, &cfg.single_asset));
+    let mut links = vec![gitlab_release_link(cfg, tag, &cfg.core_asset)];
+    if !cfg.merged_asset.is_empty() {
+        links.push(gitlab_release_link(cfg, tag, &cfg.merged_asset));
     }
     links.extend(
         cfg.platform_assets
@@ -1285,8 +1288,8 @@ fn release_notes(
         .unwrap_or_else(|| {
             "This release contains the changes merged since the previous published tag.".to_string()
         });
-    let single_checksum = if !cfg.single_asset.is_empty() {
-        let single = artifact_path(tag, &cfg.single_asset, artifacts)?;
+    let single_checksum = if !cfg.merged_asset.is_empty() {
+        let single = artifact_path(tag, &cfg.merged_asset, artifacts)?;
         if single.is_file() {
             Some(sha256(&single)?)
         } else {
@@ -1313,20 +1316,20 @@ fn render_release_notes(
 ) -> String {
     let mut notes = format!("## {}\n\n{}", release_title(cfg, tag), body.trim());
     notes.push_str("\n\n## Artifacts\n\n");
-    let _ = writeln!(notes, "- `{}` for Swift Package Manager.", cfg.asset);
-    if !cfg.single_asset.is_empty() {
+    let _ = writeln!(notes, "- `{}` for Swift Package Manager.", cfg.core_asset);
+    if !cfg.merged_asset.is_empty() {
         let _ = writeln!(
             notes,
             "- `{}` for manual Apple integration.",
-            cfg.single_asset
+            cfg.merged_asset
         );
     }
     notes.push_str("- Rust crates are versioned and published in dependency order.\n");
 
     notes.push_str("\n## Checksums\n\n```text\n");
-    let _ = write!(notes, "{}\n{}\n", cfg.asset, checksum);
+    let _ = write!(notes, "{}\n{}\n", cfg.core_asset, checksum);
     if let Some(single_checksum) = single_checksum {
-        let _ = write!(notes, "\n{}\n{}\n", cfg.single_asset, single_checksum);
+        let _ = write!(notes, "\n{}\n{}\n", cfg.merged_asset, single_checksum);
     }
     notes.push_str("```\n");
 
@@ -1435,7 +1438,7 @@ fn require_config(cfg: &ReleaseConfig) -> Result<()> {
         ("gitlab_host", &cfg.gitlab_host),
         ("gitlab_project", &cfg.gitlab_project),
         ("gitlab_package", &cfg.gitlab_package),
-        ("asset", &cfg.asset),
+        ("asset", &cfg.core_asset),
     ];
     for (name, value) in fields {
         if value.trim().is_empty() {
@@ -1444,8 +1447,8 @@ fn require_config(cfg: &ReleaseConfig) -> Result<()> {
             );
         }
     }
-    for name in std::iter::once(&cfg.asset)
-        .chain(std::iter::once(&cfg.single_asset))
+    for name in std::iter::once(&cfg.core_asset)
+        .chain(std::iter::once(&cfg.merged_asset))
         .chain(std::iter::once(&cfg.docs_asset))
         .chain(cfg.platform_assets.iter())
         .filter(|name| !name.is_empty())
@@ -1475,7 +1478,7 @@ fn tag_of(version: &str) -> String {
 }
 
 fn cache_path(cfg: &ReleaseConfig, tag: &str) -> Result<PathBuf> {
-    cache_named(tag, &cfg.asset)
+    cache_named(tag, &cfg.core_asset)
 }
 
 fn artifact_path(tag: &str, name: &str, artifacts: Option<&Path>) -> Result<PathBuf> {
@@ -1510,7 +1513,8 @@ fn zip_required<'a>(zip: Option<&'a Path>, cfg: &ReleaseConfig, tag: &str) -> Re
         format!(
             "artifact for {tag} not found at {}; run `just release artifacts <version>` \
              on the machine that built the release zip",
-            cache_path(cfg, tag).map_or_else(|_| cfg.asset.clone(), |p| p.display().to_string()),
+            cache_path(cfg, tag)
+                .map_or_else(|_| cfg.core_asset.clone(), |p| p.display().to_string()),
         )
     })
 }
@@ -1624,6 +1628,8 @@ fn run_step(cmd: &mut Command, description: &str) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use super::*;
 
     const MANIFEST_SAMPLE: &str =
@@ -1697,8 +1703,8 @@ mod tests {
             gitlab_project: "disrupt/kithara".into(),
             gitlab_package: "kithara".into(),
             nightly_tag: "nightly".into(),
-            asset: "KitharaFFIInternal.xcframework.zip".into(),
-            single_asset: "Kithara.xcframework.zip".into(),
+            core_asset: "KitharaFFIInternal.xcframework.zip".into(),
+            merged_asset: "Kithara.xcframework.zip".into(),
             platform_assets: vec!["kithara.aar".into(), "rust-tls.aar".into()],
             docs_asset: "Kithara-docs.zip".into(),
             docs_archive: "docs-build/Kithara.doccarchive".into(),
@@ -1707,6 +1713,8 @@ mod tests {
             pages_branch: "gh-pages".into(),
             http_timeout_secs: Some(60),
             upload_timeout_secs: Some(600),
+            packages: BTreeMap::new(),
+            channels: BTreeMap::new(),
         };
         let notes = render_release_notes(
             &cfg,
@@ -1741,8 +1749,8 @@ mod tests {
             gitlab_project: "disrupt/kithara".into(),
             gitlab_package: "kithara".into(),
             nightly_tag: "nightly".into(),
-            asset: "KitharaFFIInternal.xcframework.zip".into(),
-            single_asset: "Kithara.xcframework.zip".into(),
+            core_asset: "KitharaFFIInternal.xcframework.zip".into(),
+            merged_asset: "Kithara.xcframework.zip".into(),
             platform_assets: vec!["kithara.aar".into(), "rust-tls.aar".into()],
             docs_asset: "Kithara-docs.zip".into(),
             docs_archive: "docs-build/Kithara.doccarchive".into(),
@@ -1751,6 +1759,8 @@ mod tests {
             pages_branch: "gh-pages".into(),
             http_timeout_secs: Some(60),
             upload_timeout_secs: Some(600),
+            packages: BTreeMap::new(),
+            channels: BTreeMap::new(),
         };
 
         let links = gitlab_release_links(&cfg, "v0.0.2");
@@ -1783,8 +1793,8 @@ mod tests {
             gitlab_project: String::new(),
             gitlab_package: String::new(),
             nightly_tag: String::new(),
-            asset: String::new(),
-            single_asset: String::new(),
+            core_asset: String::new(),
+            merged_asset: String::new(),
             platform_assets: Vec::new(),
             docs_asset: String::new(),
             docs_archive: String::new(),
@@ -1793,6 +1803,8 @@ mod tests {
             pages_branch: String::new(),
             http_timeout_secs: None,
             upload_timeout_secs: None,
+            packages: BTreeMap::new(),
+            channels: BTreeMap::new(),
         }
     }
 
@@ -1803,8 +1815,8 @@ mod tests {
     fn the_nightly_channel_ships_what_was_built() {
         let dir = tempfile::tempdir().expect("temp dir");
         let cfg = ReleaseConfig {
-            asset: "primary.zip".into(),
-            single_asset: "single.zip".into(),
+            core_asset: "primary.zip".into(),
+            merged_asset: "single.zip".into(),
             platform_assets: vec!["kithara.aar".into()],
             docs_asset: "docs.zip".into(),
             wasm_asset: String::new(),

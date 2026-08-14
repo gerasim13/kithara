@@ -23,7 +23,7 @@ use kithara::{
         sync::Arc,
         time::{self, Duration, Instant},
     },
-    play::{PlayerEvent, Resource, ResourceConfig},
+    play::{PlayerEvent, Resource, ResourceConfig, apply_mix},
     stream::AudioCodec,
 };
 use kithara_integration_tests::{
@@ -51,6 +51,7 @@ const FUSED_FIXTURE_SOURCE_FRAMES: u64 = 44_100;
 const FUSED_FIXTURE_IDEAL_DEVICE_FRAMES: usize = 48_000;
 const FUSED_FIXTURE_SEAM_OMEGA: f64 = 0.23925;
 const FUSED_FIXTURE_SEAM_PHASE: f64 = -1.365_523_678_408_751_2;
+const FUSED_FIXTURE_MASTER_LEVEL: f32 = 0.32;
 #[cfg(all(
     feature = "apple-fused-src",
     any(target_os = "macos", target_os = "ios")
@@ -942,6 +943,8 @@ async fn render_synthetic_fused_deficit_seam(tail_compensation: bool) -> Synthet
             .build(),
         FUSED_FIXTURE_DEVICE_RATE,
     );
+    apply_mix([(harness.player().as_ref(), FUSED_FIXTURE_MASTER_LEVEL)])
+        .expect("apply fused seam fixture headroom");
     let first_frames = synthetic_tail_trimmed_first_frames(tail_compensation);
     let first_frame_count = first_frames.len();
     let first = Resource::from_reader(
@@ -965,8 +968,14 @@ async fn render_synthetic_fused_deficit_seam(tail_compensation: bool) -> Synthet
     );
 
     let (rendered, events) = render_until_item_end(&harness, "fused-deficit-2").await;
+    let left = deinterleave_left(&rendered, usize::from(GAPLESS_CHANNELS));
+    let peak = left.iter().map(|sample| sample.abs()).fold(0.0, f32::max);
+    assert!(
+        (peak - FUSED_FIXTURE_MASTER_LEVEL).abs() <= 1.0e-3,
+        "fused seam fixture must preserve its explicit headroom; peak={peak}"
+    );
     SyntheticSeamRender {
-        left: deinterleave_left(&rendered, usize::from(GAPLESS_CHANNELS)),
+        left,
         events,
         first_frames: first_frame_count,
     }

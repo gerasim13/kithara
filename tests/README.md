@@ -288,6 +288,32 @@ Integration tests:
 9. Use `#[kithara::test(selenium, ...)]` for Selenium E2E tests (auto-ignored, multi-thread runtime).
 10. Use `#[case::name(value)]` for parameterized test cases.
 
+### No-SYNC audio safety
+
+The default test run includes three independent guards for playback with SYNC disabled:
+
+- unity time-stretch transparency, including bounded shared-worker load;
+- real MP3 and local HLS playback through the shared session graph at 44.1/48 kHz with 1/2/4 decks;
+- the player render hot-path budget at 128/256/512/1024 frames with 1/2/4 tracks.
+
+The tests use Cochlea on final PCM and fail on decoder errors, event loss, underruns, silence,
+clipping, non-finite samples, or a p99 render cost above half of the audio period. The timing
+guard measures the player render core, not physical device xruns.
+
+The active tests keep all PCM in memory; artifact I/O is not part of their timeout or CI path.
+Their deterministic sine input is prepared once before playback through the shared,
+build-fingerprinted fixture cache. Repository MP3/HLS inputs are checked-in assets served locally.
+
+To replay the same scenarios and persist float WAV files plus JSON manifests for listening, run
+the separate opt-in recorder with an absolute output directory:
+
+```bash
+just test audio-artifacts /absolute/output
+```
+
+Repository HLS fixtures are served by the local test server; these tests do not use the external
+network.
+
 Performance tests:
 
 1. Add file in `tests/perf/`.

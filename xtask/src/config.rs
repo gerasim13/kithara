@@ -1,5 +1,5 @@
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     path::{Component, Path, PathBuf},
 };
 
@@ -260,11 +260,12 @@ pub(crate) struct ReleaseConfig {
     /// Tag the rolling build channel replaces on every nightly run. Empty
     /// disables that channel.
     pub(crate) nightly_tag: String,
-    /// Primary release asset: the SPM Rust `XCFramework` zip.
-    pub(crate) asset: String,
-    /// Optional single self-contained framework zip for manual drag-in. Empty
-    /// disables that channel.
-    pub(crate) single_asset: String,
+    /// Rust core plus its `UniFFI` binding, consumed as the Swift package's
+    /// binary target.
+    pub(crate) core_asset: String,
+    /// Swift layer merged into the framework for manual drag-in consumers.
+    /// Empty disables that channel.
+    pub(crate) merged_asset: String,
     /// Additional required CI-built artifacts published with the Apple
     /// frameworks, such as Android AARs.
     pub(crate) platform_assets: Vec<String>,
@@ -287,6 +288,77 @@ pub(crate) struct ReleaseConfig {
     pub(crate) http_timeout_secs: Option<u64>,
     /// Seconds before `GitLab` package upload curl requests time out.
     pub(crate) upload_timeout_secs: Option<u64>,
+    /// Named packaging profiles. A lane names one; nothing infers it.
+    pub(crate) packages: BTreeMap<String, PackageProfile>,
+    /// Named delivery channels. A lane names one; nothing infers it.
+    pub(crate) channels: BTreeMap<String, ChannelProfile>,
+}
+
+impl ReleaseConfig {
+    pub(crate) fn package(&self, name: &str) -> Result<&PackageProfile> {
+        self.packages
+            .get(name)
+            .with_context(|| format!("ext.release.packages.{name} is not defined"))
+    }
+
+    pub(crate) fn channel(&self, name: &str) -> Result<&ChannelProfile> {
+        self.channels
+            .get(name)
+            .with_context(|| format!("ext.release.channels.{name} is not defined"))
+    }
+
+    pub(crate) fn asset_name(&self, key: AssetKey) -> &str {
+        match key {
+            AssetKey::Core => &self.core_asset,
+            AssetKey::Merged => &self.merged_asset,
+            AssetKey::Docs => &self.docs_asset,
+            AssetKey::Wasm => &self.wasm_asset,
+        }
+    }
+}
+
+/// One packaged artifact, named by what it carries rather than by file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum AssetKey {
+    Core,
+    Merged,
+    Docs,
+    Wasm,
+}
+
+/// What a packaging run collects, and whether the built framework has to match
+/// the version the Swift manifest records. Publishing a version asks that
+/// question; taking a snapshot of a commit does not.
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub(crate) struct PackageProfile {
+    pub(crate) version_gate: bool,
+    pub(crate) assets: Vec<AssetKey>,
+}
+
+/// One step of delivery. Naming the steps individually is what lets a channel
+/// be data the config carries rather than a branch the code takes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum PublishStep {
+    Retained,
+    NightlyRetained,
+    Pages,
+    Crates,
+}
+
+/// What a delivery channel requires before it runs and what it then performs.
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub(crate) struct ChannelProfile {
+    /// Whether `KITHARA_RELEASE_VERSION` must be set and agree with the
+    /// manifest at the published commit.
+    pub(crate) requires_version: bool,
+    /// Whether every retained asset must be present, or only those that are.
+    pub(crate) require_all_assets: bool,
+    pub(crate) tokens: Vec<String>,
+    pub(crate) steps: Vec<PublishStep>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -357,7 +429,7 @@ mod tests {
     use kithara_devtools::Ctx;
     use tempfile::TempDir;
 
-    use super::{KitharaExt, XtaskCacheConfig};
+    use super::{AssetKey, KitharaExt, PublishStep, XtaskCacheConfig};
 
     fn config_root(body: &str) -> (TempDir, PathBuf) {
         let temp = tempfile::tempdir().expect("create fixture root");
@@ -372,6 +444,125 @@ mod tests {
             PathBuf::new(),
             toml::from_str(text).expect("parse project config"),
         )
+    }
+
+    #[test]
+    fn release_assets_are_named_by_layer() {
+        let ctx = ctx_from_config(
+            r#"
+[ext.release]
+core_asset = "KitharaFFIInternal.xcframework.zip"
+merged_asset = "Kithara.xcframework.zip"
+"#,
+        );
+
+        let ext = KitharaExt::from_ctx(&ctx).expect("parse kithara extension");
+
+        assert_eq!(ext.release.core_asset, "KitharaFFIInternal.xcframework.zip");
+        assert_eq!(ext.release.merged_asset, "Kithara.xcframework.zip");
+    }
+
+    #[test]
+    fn a_packaging_profile_names_its_assets_and_gate() {
+        let ctx = ctx_from_config(
+            r#"
+[ext.release]
+core_asset = "KitharaFFIInternal.xcframework.zip"
+merged_asset = "Kithara.xcframework.zip"
+
+[ext.release.packages.snapshot]
+version_gate = false
+assets = ["merged"]
+"#,
+        );
+
+        let ext = KitharaExt::from_ctx(&ctx).expect("parse kithara extension");
+
+        let profile = ext.release.package("snapshot").expect("snapshot profile");
+        assert!(!profile.version_gate);
+        assert_eq!(profile.assets, vec![AssetKey::Merged]);
+    }
+
+    #[test]
+    fn the_release_channel_resolves_to_todays_hard_coded_behaviour() {
+        let ctx = ctx_from_config(
+            r#"
+[ext.release.channels.release]
+requires_version = true
+require_all_assets = true
+tokens = ["CARGO_REGISTRY_TOKEN", "GH_TOKEN", "GITLAB_TOKEN"]
+steps = ["retained", "pages", "crates"]
+
+[ext.release.channels.nightly]
+requires_version = false
+require_all_assets = false
+tokens = ["GH_TOKEN", "GITLAB_TOKEN"]
+steps = ["nightly_retained"]
+"#,
+        );
+
+        let ext = KitharaExt::from_ctx(&ctx).expect("parse kithara extension");
+
+        let release = ext.release.channel("release").expect("release channel");
+        assert!(release.requires_version);
+        assert!(release.require_all_assets);
+        assert_eq!(
+            release.tokens,
+            ["CARGO_REGISTRY_TOKEN", "GH_TOKEN", "GITLAB_TOKEN"]
+        );
+        assert_eq!(
+            release.steps,
+            vec![
+                PublishStep::Retained,
+                PublishStep::Pages,
+                PublishStep::Crates
+            ]
+        );
+
+        let nightly = ext.release.channel("nightly").expect("nightly channel");
+        assert!(!nightly.requires_version);
+        assert!(!nightly.require_all_assets);
+        assert_eq!(nightly.tokens, ["GH_TOKEN", "GITLAB_TOKEN"]);
+        assert_eq!(nightly.steps, vec![PublishStep::NightlyRetained]);
+    }
+
+    #[test]
+    fn an_unknown_publish_step_fails_the_config() {
+        let ctx = ctx_from_config(
+            r#"
+[ext.release.channels.release]
+steps = ["retaind"]
+"#,
+        );
+
+        assert!(KitharaExt::from_ctx(&ctx).is_err());
+    }
+
+    #[test]
+    fn an_unknown_asset_key_fails_the_config() {
+        let ctx = ctx_from_config(
+            r#"
+[ext.release.packages.snapshot]
+assets = ["mergd"]
+"#,
+        );
+
+        assert!(KitharaExt::from_ctx(&ctx).is_err());
+    }
+
+    #[test]
+    fn an_unknown_profile_name_is_an_error_not_a_default() {
+        let ctx = ctx_from_config(
+            r#"
+[ext.release.packages.release]
+version_gate = true
+assets = ["core", "merged"]
+"#,
+        );
+
+        let ext = KitharaExt::from_ctx(&ctx).expect("parse kithara extension");
+
+        assert!(ext.release.package("snapshot").is_err());
     }
 
     #[test]
@@ -427,7 +618,7 @@ github_repo = "zvuk/kithara"
 gitlab_host = "gitlab.zvq.me"
 gitlab_project = "disrupt/kithara"
 gitlab_package = "kithara"
-asset = "KitharaFFIInternal.xcframework.zip"
+core_asset = "KitharaFFIInternal.xcframework.zip"
 http_timeout_secs = 60
 upload_timeout_secs = 600
 

@@ -7,3 +7,12 @@ gitlab_token_file = "/path/to/gitlab-token"
 gitlab_url = "https://gitlab.example.com"
 gitlab_username = "kithara-sync"
 state_dir = "/path/to/bridge-state"
+
+# GitHub logins whose pull requests may change the CI control paths directly:
+# they are judged with their own CI configuration instead of the default
+# branch's. Everyone else keeps the rule, so a contributor without GitLab access
+# is never asked to port a change through a merge request they cannot open.
+#
+# Deliberately here and not in the repository: a list a pull request can edit is
+# a list that adds its own author.
+# trusted_authors = ["gerasim13"]

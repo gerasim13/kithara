@@ -21,9 +21,13 @@ pub mod architecture_trace;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod asset_fixture;
 pub mod assets_ext;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod audio_artifact;
 pub mod audio_fixture;
 pub mod audio_mock;
 pub mod bufpool_ext;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod cochlea;
 pub mod consts;
 pub mod decode_ext;
 #[cfg(not(target_arch = "wasm32"))]

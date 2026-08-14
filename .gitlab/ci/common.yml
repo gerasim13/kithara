@@ -172,6 +172,18 @@
     # leaves this machine.
     - if: $KITHARA_VERIFY_RELEASE_LANES == "1" && $CI_COMMIT_REF_PROTECTED == "true"
 
+# Packaging a commit for someone to install by hand is a question a review
+# asks, not a release. It stays off the release rule because opening that one
+# to review refs would also expose the lanes tagged for protected runners, and
+# a job no runner may take holds the pipeline's resource group until it times
+# out.
+.rules-package:
+  interruptible: false
+  rules:
+    - if: $KITHARA_PIPELINE_KIND == "merge-request"
+    - if: $KITHARA_PIPELINE_KIND == "branch"
+    - if: $KITHARA_PIPELINE_KIND == "main"
+
 # Dropping the serial chain let two runners work at once, which is the point —
 # but a full suite, a browser run, and every perf measurement report on how
 # loaded the host was, not only on the commit. Those take this group, so one of
