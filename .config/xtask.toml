@@ -447,6 +447,104 @@ tools = ["cargo", "just"]
 program = "just"
 steps = [{ args = ["deps", "semver"], label = "public API compatibility" }]
 
+# One browser per job: the two engines fail for unrelated reasons, and Chromium
+# owns the WebCodecs target while Firefox keeps the full integration suite. Both
+# go through the repository's wasm recipe rather than `wasm-pack`, because the
+# target rebuilds std for shared memory and only the pinned nightly honours it.
+[ext.ci.lanes.web-chromium]
+cache_group = "linux"
+label = "Web browser"
+os = "linux"
+tools = ["chromium", "chromedriver", "just"]
+pinned = [
+  { tool = "chromium", args = [
+    "--version",
+  ], pin = "chrome_for_testing_version" },
+  { tool = "chromedriver", args = [
+    "--version",
+  ], pin = "chrome_for_testing_version" },
+]
+program = "just"
+steps = [
+  { args = [
+    "test",
+    "wasm",
+    "chrome",
+    "webcodecs",
+  ], label = "Chromium WebCodecs tests" },
+]
+
+[ext.ci.lanes.web-firefox]
+cache_group = "linux"
+label = "Web browser"
+os = "linux"
+tools = ["firefox", "geckodriver", "just"]
+program = "just"
+steps = [{ args = ["test", "wasm", "firefox"], label = "Firefox WASM tests" }]
+
+[ext.ci.lanes.web-size]
+cache_group = "linux"
+label = "WASM size"
+os = "linux"
+tools = ["cargo", "just"]
+program = "just"
+steps = [
+  { args = [
+    "platform",
+    "wasm",
+    "size-check",
+  ], label = "WASM size check" },
+]
+
+[ext.ci.lanes.deep-rtsan]
+cache_group = "macos"
+label = "deep Apple"
+os = "macos"
+tools = ["cargo", "just"]
+program = "just"
+steps = [
+  { args = [
+    "test",
+    "rtsan",
+  ], label = "real-time sanitizer suite" },
+  { args = [
+    "test",
+    "rtsan-async",
+  ], label = "real-time sanitizer suite" },
+  { args = [
+    "test",
+    "rtsan-file",
+  ], label = "real-time sanitizer suite" },
+  { args = [
+    "test",
+    "rtsan-hls",
+  ], label = "real-time sanitizer suite" },
+]
+
+[ext.ci.lanes.deep-perf]
+cache_group = "macos"
+label = "deep Apple"
+os = "macos"
+tools = ["cargo", "just"]
+program = "just"
+steps = [
+  { args = [
+    "perf",
+    "memory",
+  ], label = "memory profile" },
+  { args = [
+    "perf",
+  ], label = "performance profile" },
+]
+
+[ext.ci.lanes.deep-bench]
+cache_group = "macos"
+label = "deep Apple"
+os = "macos"
+tools = ["cargo", "just"]
+program = "just"
+steps = [{ args = ["perf", "bench", "ci"], label = "benchmark suite" }]
+
 
 [ext.publish]
 workspace_hack_crate = "kithara-workspace-hack"

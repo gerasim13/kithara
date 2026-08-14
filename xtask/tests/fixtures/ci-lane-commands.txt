@@ -43,41 +43,49 @@
   <require tools> cargo just sccache swift xcodebuild xcodegen
   xcodebuild -version
   just check workspace
+    RUSTUP_TOOLCHAIN=1.92.0
 # apple-msrv / platforms
   <require os> macos
   <require tools> cargo just sccache swift xcodebuild xcodegen
   xcodebuild -version
   just check workspace
+    RUSTUP_TOOLCHAIN=1.92.0
 # apple-msrv / merge-request
   <require os> macos
   <require tools> cargo just sccache swift xcodebuild xcodegen
   xcodebuild -version
   just check workspace
+    RUSTUP_TOOLCHAIN=1.92.0
 # apple-msrv / quarantine
   <require os> macos
   <require tools> cargo just sccache swift xcodebuild xcodegen
   xcodebuild -version
   just check workspace
+    RUSTUP_TOOLCHAIN=1.92.0
 # apple-msrv / main
   <require os> macos
   <require tools> cargo just sccache swift xcodebuild xcodegen
   xcodebuild -version
   just check workspace
+    RUSTUP_TOOLCHAIN=1.92.0
 # apple-msrv / nightly
   <require os> macos
   <require tools> cargo just sccache swift xcodebuild xcodegen
   xcodebuild -version
   just check workspace
+    RUSTUP_TOOLCHAIN=1.92.0
 # apple-msrv / weekly
   <require os> macos
   <require tools> cargo just sccache swift xcodebuild xcodegen
   xcodebuild -version
   just check workspace
+    RUSTUP_TOOLCHAIN=1.92.0
 # apple-msrv / release
   <require os> macos
   <require tools> cargo just sccache swift xcodebuild xcodegen
   xcodebuild -version
   just check workspace
+    RUSTUP_TOOLCHAIN=1.92.0
 # apple-test / branch
   <require os> macos
   <require tools> cargo just sccache swift xcodebuild xcodegen
@@ -123,41 +131,49 @@
   <require tools> cargo just sccache swift xcodebuild xcodegen
   xcodebuild -version
   just test run --flash=off --profile ci
+    CARGO_TARGET_DIR=target-flash-off
 # apple-test-flash-off / platforms
   <require os> macos
   <require tools> cargo just sccache swift xcodebuild xcodegen
   xcodebuild -version
   just test run --flash=off --profile ci
+    CARGO_TARGET_DIR=target-flash-off
 # apple-test-flash-off / merge-request
   <require os> macos
   <require tools> cargo just sccache swift xcodebuild xcodegen
   xcodebuild -version
   just test run --flash=off --profile ci
+    CARGO_TARGET_DIR=target-flash-off
 # apple-test-flash-off / quarantine
   <require os> macos
   <require tools> cargo just sccache swift xcodebuild xcodegen
   xcodebuild -version
   just test run --flash=off --profile ci
+    CARGO_TARGET_DIR=target-flash-off
 # apple-test-flash-off / main
   <require os> macos
   <require tools> cargo just sccache swift xcodebuild xcodegen
   xcodebuild -version
   just test run --flash=off --profile ci
+    CARGO_TARGET_DIR=target-flash-off
 # apple-test-flash-off / nightly
   <require os> macos
   <require tools> cargo just sccache swift xcodebuild xcodegen
   xcodebuild -version
   just test run --flash=off --profile ci
+    CARGO_TARGET_DIR=target-flash-off
 # apple-test-flash-off / weekly
   <require os> macos
   <require tools> cargo just sccache swift xcodebuild xcodegen
   xcodebuild -version
   just test run --flash=off --profile ci
+    CARGO_TARGET_DIR=target-flash-off
 # apple-test-flash-off / release
   <require os> macos
   <require tools> cargo just sccache swift xcodebuild xcodegen
   xcodebuild -version
   just test run --flash=off --profile ci
+    CARGO_TARGET_DIR=target-flash-off
 # apple-e2e / branch
   <require os> macos
   <require tools> cargo just sccache swift xcodebuild xcodegen
@@ -259,133 +275,149 @@
   <require tools> cargo just sccache swift xcodebuild xcodegen
   xcodebuild -version
   just platform apple xcframework --profile debug
-  swift test --cache-path /Volumes/Render/dev/worktrees/kithara/broadcast-feature-flag-0ac718/target/swiftpm --xunit-output /Volumes/Render/dev/worktrees/kithara/broadcast-feature-flag-0ac718/target/xcresult/swift-test.junit.xml
+  swift test --cache-path <root>/target/swiftpm --xunit-output <root>/target/xcresult/swift-test.junit.xml
+    KITHARA_LOCAL_DEV=1
 # apple-swift-test / platforms
   <require os> macos
   <require tools> cargo just sccache swift xcodebuild xcodegen
   xcodebuild -version
   just platform apple xcframework --profile debug
-  swift test --cache-path /Volumes/Render/dev/worktrees/kithara/broadcast-feature-flag-0ac718/target/swiftpm --xunit-output /Volumes/Render/dev/worktrees/kithara/broadcast-feature-flag-0ac718/target/xcresult/swift-test.junit.xml
+  swift test --cache-path <root>/target/swiftpm --xunit-output <root>/target/xcresult/swift-test.junit.xml
+    KITHARA_LOCAL_DEV=1
 # apple-swift-test / merge-request
   <require os> macos
   <require tools> cargo just sccache swift xcodebuild xcodegen
   xcodebuild -version
   just platform apple xcframework --profile debug
-  swift test --cache-path /Volumes/Render/dev/worktrees/kithara/broadcast-feature-flag-0ac718/target/swiftpm --xunit-output /Volumes/Render/dev/worktrees/kithara/broadcast-feature-flag-0ac718/target/xcresult/swift-test.junit.xml
+  swift test --cache-path <root>/target/swiftpm --xunit-output <root>/target/xcresult/swift-test.junit.xml
+    KITHARA_LOCAL_DEV=1
 # apple-swift-test / quarantine
   <require os> macos
   <require tools> cargo just sccache swift xcodebuild xcodegen
   xcodebuild -version
   just platform apple xcframework --profile debug
-  swift test --cache-path /Volumes/Render/dev/worktrees/kithara/broadcast-feature-flag-0ac718/target/swiftpm --xunit-output /Volumes/Render/dev/worktrees/kithara/broadcast-feature-flag-0ac718/target/xcresult/swift-test.junit.xml
+  swift test --cache-path <root>/target/swiftpm --xunit-output <root>/target/xcresult/swift-test.junit.xml
+    KITHARA_LOCAL_DEV=1
 # apple-swift-test / main
   <require os> macos
   <require tools> cargo just sccache swift xcodebuild xcodegen
   xcodebuild -version
   just platform apple xcframework --profile debug
-  swift test --cache-path /Volumes/Render/dev/worktrees/kithara/broadcast-feature-flag-0ac718/target/swiftpm --xunit-output /Volumes/Render/dev/worktrees/kithara/broadcast-feature-flag-0ac718/target/xcresult/swift-test.junit.xml
+  swift test --cache-path <root>/target/swiftpm --xunit-output <root>/target/xcresult/swift-test.junit.xml
+    KITHARA_LOCAL_DEV=1
 # apple-swift-test / nightly
   <require os> macos
   <require tools> cargo just sccache swift xcodebuild xcodegen
   xcodebuild -version
   just platform apple xcframework --profile debug
-  swift test --cache-path /Volumes/Render/dev/worktrees/kithara/broadcast-feature-flag-0ac718/target/swiftpm --xunit-output /Volumes/Render/dev/worktrees/kithara/broadcast-feature-flag-0ac718/target/xcresult/swift-test.junit.xml
+  swift test --cache-path <root>/target/swiftpm --xunit-output <root>/target/xcresult/swift-test.junit.xml
+    KITHARA_LOCAL_DEV=1
 # apple-swift-test / weekly
   <require os> macos
   <require tools> cargo just sccache swift xcodebuild xcodegen
   xcodebuild -version
   just platform apple xcframework --profile debug
-  swift test --cache-path /Volumes/Render/dev/worktrees/kithara/broadcast-feature-flag-0ac718/target/swiftpm --xunit-output /Volumes/Render/dev/worktrees/kithara/broadcast-feature-flag-0ac718/target/xcresult/swift-test.junit.xml
+  swift test --cache-path <root>/target/swiftpm --xunit-output <root>/target/xcresult/swift-test.junit.xml
+    KITHARA_LOCAL_DEV=1
 # apple-swift-test / release
   <require os> macos
   <require tools> cargo just sccache swift xcodebuild xcodegen
   xcodebuild -version
   just platform apple xcframework --profile debug
-  swift test --cache-path /Volumes/Render/dev/worktrees/kithara/broadcast-feature-flag-0ac718/target/swiftpm --xunit-output /Volumes/Render/dev/worktrees/kithara/broadcast-feature-flag-0ac718/target/xcresult/swift-test.junit.xml
+  swift test --cache-path <root>/target/swiftpm --xunit-output <root>/target/xcresult/swift-test.junit.xml
+    KITHARA_LOCAL_DEV=1
 # apple-ios / branch
   <require os> macos
   <require tools> cargo just sccache swift xcodebuild xcodegen
   xcodebuild -version
   just platform apple ios
+    KITHARA_LOCAL_DEV=1
 # apple-ios / platforms
   <require os> macos
   <require tools> cargo just sccache swift xcodebuild xcodegen
   xcodebuild -version
   just platform apple ios
+    KITHARA_LOCAL_DEV=1
 # apple-ios / merge-request
   <require os> macos
   <require tools> cargo just sccache swift xcodebuild xcodegen
   xcodebuild -version
   just platform apple ios
+    KITHARA_LOCAL_DEV=1
 # apple-ios / quarantine
   <require os> macos
   <require tools> cargo just sccache swift xcodebuild xcodegen
   xcodebuild -version
   just platform apple ios
+    KITHARA_LOCAL_DEV=1
 # apple-ios / main
   <require os> macos
   <require tools> cargo just sccache swift xcodebuild xcodegen
   xcodebuild -version
   just platform apple ios
+    KITHARA_LOCAL_DEV=1
 # apple-ios / nightly
   <require os> macos
   <require tools> cargo just sccache swift xcodebuild xcodegen
   xcodebuild -version
   just platform apple ios
+    KITHARA_LOCAL_DEV=1
 # apple-ios / weekly
   <require os> macos
   <require tools> cargo just sccache swift xcodebuild xcodegen
   xcodebuild -version
   just platform apple ios
+    KITHARA_LOCAL_DEV=1
 # apple-ios / release
   <require os> macos
   <require tools> cargo just sccache swift xcodebuild xcodegen
   xcodebuild -version
   just platform apple ios
+    KITHARA_LOCAL_DEV=1
 # apple-ios-test / branch
-  refused: starting /Volumes/Render/dev/worktrees/kithara/broadcast-feature-flag-0ac718/target/debug/test_server
+  refused: starting <root>/target/debug/test_server
   <require os> macos
   <require tools> cargo just sccache swift xcodebuild xcodegen
   xcodebuild -version
   cargo build -p kithara-integration-tests --bin test_server
 # apple-ios-test / platforms
-  refused: starting /Volumes/Render/dev/worktrees/kithara/broadcast-feature-flag-0ac718/target/debug/test_server
+  refused: starting <root>/target/debug/test_server
   <require os> macos
   <require tools> cargo just sccache swift xcodebuild xcodegen
   xcodebuild -version
   cargo build -p kithara-integration-tests --bin test_server
 # apple-ios-test / merge-request
-  refused: starting /Volumes/Render/dev/worktrees/kithara/broadcast-feature-flag-0ac718/target/debug/test_server
+  refused: starting <root>/target/debug/test_server
   <require os> macos
   <require tools> cargo just sccache swift xcodebuild xcodegen
   xcodebuild -version
   cargo build -p kithara-integration-tests --bin test_server
 # apple-ios-test / quarantine
-  refused: starting /Volumes/Render/dev/worktrees/kithara/broadcast-feature-flag-0ac718/target/debug/test_server
+  refused: starting <root>/target/debug/test_server
   <require os> macos
   <require tools> cargo just sccache swift xcodebuild xcodegen
   xcodebuild -version
   cargo build -p kithara-integration-tests --bin test_server
 # apple-ios-test / main
-  refused: starting /Volumes/Render/dev/worktrees/kithara/broadcast-feature-flag-0ac718/target/debug/test_server
+  refused: starting <root>/target/debug/test_server
   <require os> macos
   <require tools> cargo just sccache swift xcodebuild xcodegen
   xcodebuild -version
   cargo build -p kithara-integration-tests --bin test_server
 # apple-ios-test / nightly
-  refused: starting /Volumes/Render/dev/worktrees/kithara/broadcast-feature-flag-0ac718/target/debug/test_server
+  refused: starting <root>/target/debug/test_server
   <require os> macos
   <require tools> cargo just sccache swift xcodebuild xcodegen
   xcodebuild -version
   cargo build -p kithara-integration-tests --bin test_server
 # apple-ios-test / weekly
-  refused: starting /Volumes/Render/dev/worktrees/kithara/broadcast-feature-flag-0ac718/target/debug/test_server
+  refused: starting <root>/target/debug/test_server
   <require os> macos
   <require tools> cargo just sccache swift xcodebuild xcodegen
   xcodebuild -version
   cargo build -p kithara-integration-tests --bin test_server
 # apple-ios-test / release
-  refused: starting /Volumes/Render/dev/worktrees/kithara/broadcast-feature-flag-0ac718/target/debug/test_server
+  refused: starting <root>/target/debug/test_server
   <require os> macos
   <require tools> cargo just sccache swift xcodebuild xcodegen
   xcodebuild -version
@@ -522,226 +554,306 @@
   <require os> linux
   <require tools> cargo just sccache
   just test run --profile ci
+    CARGO_BUILD_JOBS=2
 # linux-test / platforms
   <require os> linux
   <require tools> cargo just sccache
   just test run --profile ci
+    CARGO_BUILD_JOBS=2
 # linux-test / merge-request
   <require os> linux
   <require tools> cargo just sccache
   just test run --profile ci
+    CARGO_BUILD_JOBS=2
 # linux-test / quarantine
   <require os> linux
   <require tools> cargo just sccache
   just test run --profile ci
+    CARGO_BUILD_JOBS=2
 # linux-test / main
   <require os> linux
   <require tools> cargo just sccache
   just test run --profile ci
+    CARGO_BUILD_JOBS=2
 # linux-test / nightly
   <require os> linux
   <require tools> cargo just sccache
   just test run --profile ci
+    CARGO_BUILD_JOBS=2
 # linux-test / weekly
   <require os> linux
   <require tools> cargo just sccache
   just test run --profile ci
+    CARGO_BUILD_JOBS=2
 # linux-test / release
   <require os> linux
   <require tools> cargo just sccache
   just test run --profile ci
+    CARGO_BUILD_JOBS=2
 # linux-doc / branch
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=doc
+    CARGO_BUILD_JOBS=2
 # linux-doc / platforms
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=doc
+    CARGO_BUILD_JOBS=2
 # linux-doc / merge-request
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=doc
+    CARGO_BUILD_JOBS=2
 # linux-doc / quarantine
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=doc
+    CARGO_BUILD_JOBS=2
 # linux-doc / main
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=doc
+    CARGO_BUILD_JOBS=2
 # linux-doc / nightly
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=doc
+    CARGO_BUILD_JOBS=2
 # linux-doc / weekly
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=doc
+    CARGO_BUILD_JOBS=2
 # linux-doc / release
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=doc
+    CARGO_BUILD_JOBS=2
 # linux-loom / branch
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=loom
+    CARGO_BUILD_JOBS=2
 # linux-loom / platforms
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=loom
+    CARGO_BUILD_JOBS=2
 # linux-loom / merge-request
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=loom
+    CARGO_BUILD_JOBS=2
 # linux-loom / quarantine
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=loom
+    CARGO_BUILD_JOBS=2
 # linux-loom / main
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=loom
+    CARGO_BUILD_JOBS=2
 # linux-loom / nightly
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=loom
+    CARGO_BUILD_JOBS=2
 # linux-loom / weekly
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=loom
+    CARGO_BUILD_JOBS=2
 # linux-loom / release
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=loom
+    CARGO_BUILD_JOBS=2
 # linux-broadcast / branch
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=broadcast
+    CARGO_BUILD_JOBS=2
 # linux-broadcast / platforms
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=broadcast
+    CARGO_BUILD_JOBS=2
 # linux-broadcast / merge-request
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=broadcast
+    CARGO_BUILD_JOBS=2
 # linux-broadcast / quarantine
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=broadcast
+    CARGO_BUILD_JOBS=2
 # linux-broadcast / main
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=broadcast
+    CARGO_BUILD_JOBS=2
 # linux-broadcast / nightly
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=broadcast
+    CARGO_BUILD_JOBS=2
 # linux-broadcast / weekly
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=broadcast
+    CARGO_BUILD_JOBS=2
 # linux-broadcast / release
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=broadcast
+    CARGO_BUILD_JOBS=2
 # linux-integration-regressions / branch
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=integration-regressions
+    CARGO_BUILD_JOBS=2
 # linux-integration-regressions / platforms
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=integration-regressions
+    CARGO_BUILD_JOBS=2
 # linux-integration-regressions / merge-request
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=integration-regressions
+    CARGO_BUILD_JOBS=2
 # linux-integration-regressions / quarantine
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=integration-regressions
+    CARGO_BUILD_JOBS=2
 # linux-integration-regressions / main
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=integration-regressions
+    CARGO_BUILD_JOBS=2
 # linux-integration-regressions / nightly
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=integration-regressions
+    CARGO_BUILD_JOBS=2
 # linux-integration-regressions / weekly
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=integration-regressions
+    CARGO_BUILD_JOBS=2
 # linux-integration-regressions / release
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=integration-regressions
+    CARGO_BUILD_JOBS=2
 # linux-selenium-firefox / branch
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=selenium-firefox
+    CARGO_BUILD_JOBS=2
+    KITHARA_SELENIUM_BROWSER=firefox
 # linux-selenium-firefox / platforms
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=selenium-firefox
+    CARGO_BUILD_JOBS=2
+    KITHARA_SELENIUM_BROWSER=firefox
 # linux-selenium-firefox / merge-request
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=selenium-firefox
+    CARGO_BUILD_JOBS=2
+    KITHARA_SELENIUM_BROWSER=firefox
 # linux-selenium-firefox / quarantine
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=selenium-firefox
+    CARGO_BUILD_JOBS=2
+    KITHARA_SELENIUM_BROWSER=firefox
 # linux-selenium-firefox / main
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=selenium-firefox
+    CARGO_BUILD_JOBS=2
+    KITHARA_SELENIUM_BROWSER=firefox
 # linux-selenium-firefox / nightly
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=selenium-firefox
+    CARGO_BUILD_JOBS=2
+    KITHARA_SELENIUM_BROWSER=firefox
 # linux-selenium-firefox / weekly
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=selenium-firefox
+    CARGO_BUILD_JOBS=2
+    KITHARA_SELENIUM_BROWSER=firefox
 # linux-selenium-firefox / release
   <require os> linux
   <require tools> cargo just sccache
   just test run --lane=selenium-firefox
+    CARGO_BUILD_JOBS=2
+    KITHARA_SELENIUM_BROWSER=firefox
 # linux-coverage / branch
   <require os> linux
   <require tools> cargo just sccache
   just test coverage
+    CARGO_BUILD_JOBS=2
+    COVERAGE_MIN=80
+    COVERAGE_OUTPUT_DIR=coverage
 # linux-coverage / platforms
   <require os> linux
   <require tools> cargo just sccache
   just test coverage
+    CARGO_BUILD_JOBS=2
+    COVERAGE_MIN=80
+    COVERAGE_OUTPUT_DIR=coverage
 # linux-coverage / merge-request
   <require os> linux
   <require tools> cargo just sccache
   just test coverage
+    CARGO_BUILD_JOBS=2
+    COVERAGE_MIN=80
+    COVERAGE_OUTPUT_DIR=coverage
 # linux-coverage / quarantine
   <require os> linux
   <require tools> cargo just sccache
   just test coverage
+    CARGO_BUILD_JOBS=2
+    COVERAGE_MIN=80
+    COVERAGE_OUTPUT_DIR=coverage
 # linux-coverage / main
   <require os> linux
   <require tools> cargo just sccache
   just test coverage
+    CARGO_BUILD_JOBS=2
+    COVERAGE_MIN=80
+    COVERAGE_OUTPUT_DIR=coverage
 # linux-coverage / nightly
   <require os> linux
   <require tools> cargo just sccache
   just test coverage
+    CARGO_BUILD_JOBS=2
+    COVERAGE_MIN=80
+    COVERAGE_OUTPUT_DIR=coverage
 # linux-coverage / weekly
   <require os> linux
   <require tools> cargo just sccache
   just test coverage
+    CARGO_BUILD_JOBS=2
+    COVERAGE_MIN=80
+    COVERAGE_OUTPUT_DIR=coverage
 # linux-coverage / release
   <require os> linux
   <require tools> cargo just sccache
   just test coverage
+    CARGO_BUILD_JOBS=2
+    COVERAGE_MIN=80
+    COVERAGE_OUTPUT_DIR=coverage
 # android-build / branch
   <require os> macos
   <require tools> cargo java just sccache
@@ -775,28 +887,28 @@
   <require tools> cargo java just sccache
   just platform android build
 # android-test / branch
-  refused: the Android build job did not leave /Volumes/Render/dev/worktrees/kithara/broadcast-feature-flag-0ac718/android/lib/build/generated/jniLibs/arm64-v8a/libkithara_ffi.so
+  refused: the Android build job did not leave <root>/android/lib/build/generated/jniLibs/arm64-v8a/libkithara_ffi.so
   <require tools> adb cargo emulator java just sccache
 # android-test / platforms
-  refused: the Android build job did not leave /Volumes/Render/dev/worktrees/kithara/broadcast-feature-flag-0ac718/android/lib/build/generated/jniLibs/arm64-v8a/libkithara_ffi.so
+  refused: the Android build job did not leave <root>/android/lib/build/generated/jniLibs/arm64-v8a/libkithara_ffi.so
   <require tools> adb cargo emulator java just sccache
 # android-test / merge-request
-  refused: the Android build job did not leave /Volumes/Render/dev/worktrees/kithara/broadcast-feature-flag-0ac718/android/lib/build/generated/jniLibs/arm64-v8a/libkithara_ffi.so
+  refused: the Android build job did not leave <root>/android/lib/build/generated/jniLibs/arm64-v8a/libkithara_ffi.so
   <require tools> adb cargo emulator java just sccache
 # android-test / quarantine
-  refused: the Android build job did not leave /Volumes/Render/dev/worktrees/kithara/broadcast-feature-flag-0ac718/android/lib/build/generated/jniLibs/arm64-v8a/libkithara_ffi.so
+  refused: the Android build job did not leave <root>/android/lib/build/generated/jniLibs/arm64-v8a/libkithara_ffi.so
   <require tools> adb cargo emulator java just sccache
 # android-test / main
-  refused: the Android build job did not leave /Volumes/Render/dev/worktrees/kithara/broadcast-feature-flag-0ac718/android/lib/build/generated/jniLibs/arm64-v8a/libkithara_ffi.so
+  refused: the Android build job did not leave <root>/android/lib/build/generated/jniLibs/arm64-v8a/libkithara_ffi.so
   <require tools> adb cargo emulator java just sccache
 # android-test / nightly
-  refused: the Android build job did not leave /Volumes/Render/dev/worktrees/kithara/broadcast-feature-flag-0ac718/android/lib/build/generated/jniLibs/arm64-v8a/libkithara_ffi.so
+  refused: the Android build job did not leave <root>/android/lib/build/generated/jniLibs/arm64-v8a/libkithara_ffi.so
   <require tools> adb cargo emulator java just sccache
 # android-test / weekly
-  refused: the Android build job did not leave /Volumes/Render/dev/worktrees/kithara/broadcast-feature-flag-0ac718/android/lib/build/generated/jniLibs/arm64-v8a/libkithara_ffi.so
+  refused: the Android build job did not leave <root>/android/lib/build/generated/jniLibs/arm64-v8a/libkithara_ffi.so
   <require tools> adb cargo emulator java just sccache
 # android-test / release
-  refused: the Android build job did not leave /Volumes/Render/dev/worktrees/kithara/broadcast-feature-flag-0ac718/android/lib/build/generated/jniLibs/arm64-v8a/libkithara_ffi.so
+  refused: the Android build job did not leave <root>/android/lib/build/generated/jniLibs/arm64-v8a/libkithara_ffi.so
   <require tools> adb cargo emulator java just sccache
 # web-chromium / branch
   <require os> linux
@@ -914,122 +1026,186 @@
   <require os> windows
   <require tools> cargo rustup sccache cmake ninja
   rustup target add aarch64-pc-windows-msvc
-  /Volumes/Render/dev/worktrees/kithara/broadcast-feature-flag-0ac718/target/debug/deps/xtask-f642255b7bd1d1dd test --profile ci --target aarch64-pc-windows-msvc
+  <xtask> test --profile ci --target aarch64-pc-windows-msvc
+    CFLAGS_aarch64_pc_windows_msvc=-FI<root>/.config/windows/fdk-msvc-shim.h
+    CMAKE_GENERATOR=Ninja
+    CXXFLAGS_aarch64_pc_windows_msvc=-FI<root>/.config/windows/fdk-msvc-shim.h
+    RUSTFLAGS=-C target-feature=+crt-static
 # windows-arm64 / platforms
   <require os> windows
   <require tools> cargo rustup sccache cmake ninja
   rustup target add aarch64-pc-windows-msvc
-  /Volumes/Render/dev/worktrees/kithara/broadcast-feature-flag-0ac718/target/debug/deps/xtask-f642255b7bd1d1dd test --profile ci --target aarch64-pc-windows-msvc
+  <xtask> test --profile ci --target aarch64-pc-windows-msvc
+    CFLAGS_aarch64_pc_windows_msvc=-FI<root>/.config/windows/fdk-msvc-shim.h
+    CMAKE_GENERATOR=Ninja
+    CXXFLAGS_aarch64_pc_windows_msvc=-FI<root>/.config/windows/fdk-msvc-shim.h
+    RUSTFLAGS=-C target-feature=+crt-static
 # windows-arm64 / merge-request
   <require os> windows
   <require tools> cargo rustup sccache cmake ninja
   rustup target add aarch64-pc-windows-msvc
-  /Volumes/Render/dev/worktrees/kithara/broadcast-feature-flag-0ac718/target/debug/deps/xtask-f642255b7bd1d1dd test --profile ci --target aarch64-pc-windows-msvc
+  <xtask> test --profile ci --target aarch64-pc-windows-msvc
+    CFLAGS_aarch64_pc_windows_msvc=-FI<root>/.config/windows/fdk-msvc-shim.h
+    CMAKE_GENERATOR=Ninja
+    CXXFLAGS_aarch64_pc_windows_msvc=-FI<root>/.config/windows/fdk-msvc-shim.h
+    RUSTFLAGS=-C target-feature=+crt-static
 # windows-arm64 / quarantine
   <require os> windows
   <require tools> cargo rustup sccache cmake ninja
   rustup target add aarch64-pc-windows-msvc
-  /Volumes/Render/dev/worktrees/kithara/broadcast-feature-flag-0ac718/target/debug/deps/xtask-f642255b7bd1d1dd test --profile ci --target aarch64-pc-windows-msvc
+  <xtask> test --profile ci --target aarch64-pc-windows-msvc
+    CFLAGS_aarch64_pc_windows_msvc=-FI<root>/.config/windows/fdk-msvc-shim.h
+    CMAKE_GENERATOR=Ninja
+    CXXFLAGS_aarch64_pc_windows_msvc=-FI<root>/.config/windows/fdk-msvc-shim.h
+    RUSTFLAGS=-C target-feature=+crt-static
 # windows-arm64 / main
   <require os> windows
   <require tools> cargo rustup sccache cmake ninja
   rustup target add aarch64-pc-windows-msvc
-  /Volumes/Render/dev/worktrees/kithara/broadcast-feature-flag-0ac718/target/debug/deps/xtask-f642255b7bd1d1dd test --profile ci --target aarch64-pc-windows-msvc
+  <xtask> test --profile ci --target aarch64-pc-windows-msvc
+    CFLAGS_aarch64_pc_windows_msvc=-FI<root>/.config/windows/fdk-msvc-shim.h
+    CMAKE_GENERATOR=Ninja
+    CXXFLAGS_aarch64_pc_windows_msvc=-FI<root>/.config/windows/fdk-msvc-shim.h
+    RUSTFLAGS=-C target-feature=+crt-static
 # windows-arm64 / nightly
   <require os> windows
   <require tools> cargo rustup sccache cmake ninja
   rustup target add aarch64-pc-windows-msvc
-  /Volumes/Render/dev/worktrees/kithara/broadcast-feature-flag-0ac718/target/debug/deps/xtask-f642255b7bd1d1dd test --profile ci --target aarch64-pc-windows-msvc
+  <xtask> test --profile ci --target aarch64-pc-windows-msvc
+    CFLAGS_aarch64_pc_windows_msvc=-FI<root>/.config/windows/fdk-msvc-shim.h
+    CMAKE_GENERATOR=Ninja
+    CXXFLAGS_aarch64_pc_windows_msvc=-FI<root>/.config/windows/fdk-msvc-shim.h
+    RUSTFLAGS=-C target-feature=+crt-static
 # windows-arm64 / weekly
   <require os> windows
   <require tools> cargo rustup sccache cmake ninja
   rustup target add aarch64-pc-windows-msvc
-  /Volumes/Render/dev/worktrees/kithara/broadcast-feature-flag-0ac718/target/debug/deps/xtask-f642255b7bd1d1dd test --profile ci --target aarch64-pc-windows-msvc
+  <xtask> test --profile ci --target aarch64-pc-windows-msvc
+    CFLAGS_aarch64_pc_windows_msvc=-FI<root>/.config/windows/fdk-msvc-shim.h
+    CMAKE_GENERATOR=Ninja
+    CXXFLAGS_aarch64_pc_windows_msvc=-FI<root>/.config/windows/fdk-msvc-shim.h
+    RUSTFLAGS=-C target-feature=+crt-static
 # windows-arm64 / release
   <require os> windows
   <require tools> cargo rustup sccache cmake ninja
   rustup target add aarch64-pc-windows-msvc
-  /Volumes/Render/dev/worktrees/kithara/broadcast-feature-flag-0ac718/target/debug/deps/xtask-f642255b7bd1d1dd test --profile ci --target aarch64-pc-windows-msvc
+  <xtask> test --profile ci --target aarch64-pc-windows-msvc
+    CFLAGS_aarch64_pc_windows_msvc=-FI<root>/.config/windows/fdk-msvc-shim.h
+    CMAKE_GENERATOR=Ninja
+    CXXFLAGS_aarch64_pc_windows_msvc=-FI<root>/.config/windows/fdk-msvc-shim.h
+    RUSTFLAGS=-C target-feature=+crt-static
 # windows-x64 / branch
   <require os> windows
   <require tools> cargo rustup sccache cmake ninja
   rustup target add x86_64-pc-windows-msvc
-  /Volumes/Render/dev/worktrees/kithara/broadcast-feature-flag-0ac718/target/debug/deps/xtask-f642255b7bd1d1dd test --profile ci --target x86_64-pc-windows-msvc
+  <xtask> test --profile ci --target x86_64-pc-windows-msvc
+    CMAKE_GENERATOR=Ninja
+    RUSTFLAGS=-C target-feature=+crt-static
 # windows-x64 / platforms
   <require os> windows
   <require tools> cargo rustup sccache cmake ninja
   rustup target add x86_64-pc-windows-msvc
-  /Volumes/Render/dev/worktrees/kithara/broadcast-feature-flag-0ac718/target/debug/deps/xtask-f642255b7bd1d1dd test --profile ci --target x86_64-pc-windows-msvc
+  <xtask> test --profile ci --target x86_64-pc-windows-msvc
+    CMAKE_GENERATOR=Ninja
+    RUSTFLAGS=-C target-feature=+crt-static
 # windows-x64 / merge-request
   <require os> windows
   <require tools> cargo rustup sccache cmake ninja
   rustup target add x86_64-pc-windows-msvc
-  /Volumes/Render/dev/worktrees/kithara/broadcast-feature-flag-0ac718/target/debug/deps/xtask-f642255b7bd1d1dd test --profile ci --target x86_64-pc-windows-msvc
+  <xtask> test --profile ci --target x86_64-pc-windows-msvc
+    CMAKE_GENERATOR=Ninja
+    RUSTFLAGS=-C target-feature=+crt-static
 # windows-x64 / quarantine
   <require os> windows
   <require tools> cargo rustup sccache cmake ninja
   rustup target add x86_64-pc-windows-msvc
-  /Volumes/Render/dev/worktrees/kithara/broadcast-feature-flag-0ac718/target/debug/deps/xtask-f642255b7bd1d1dd test --profile ci --target x86_64-pc-windows-msvc
+  <xtask> test --profile ci --target x86_64-pc-windows-msvc
+    CMAKE_GENERATOR=Ninja
+    RUSTFLAGS=-C target-feature=+crt-static
 # windows-x64 / main
   <require os> windows
   <require tools> cargo rustup sccache cmake ninja
   rustup target add x86_64-pc-windows-msvc
-  /Volumes/Render/dev/worktrees/kithara/broadcast-feature-flag-0ac718/target/debug/deps/xtask-f642255b7bd1d1dd test --profile ci --target x86_64-pc-windows-msvc
+  <xtask> test --profile ci --target x86_64-pc-windows-msvc
+    CMAKE_GENERATOR=Ninja
+    RUSTFLAGS=-C target-feature=+crt-static
 # windows-x64 / nightly
   <require os> windows
   <require tools> cargo rustup sccache cmake ninja
   rustup target add x86_64-pc-windows-msvc
-  /Volumes/Render/dev/worktrees/kithara/broadcast-feature-flag-0ac718/target/debug/deps/xtask-f642255b7bd1d1dd test --profile ci --target x86_64-pc-windows-msvc
+  <xtask> test --profile ci --target x86_64-pc-windows-msvc
+    CMAKE_GENERATOR=Ninja
+    RUSTFLAGS=-C target-feature=+crt-static
 # windows-x64 / weekly
   <require os> windows
   <require tools> cargo rustup sccache cmake ninja
   rustup target add x86_64-pc-windows-msvc
-  /Volumes/Render/dev/worktrees/kithara/broadcast-feature-flag-0ac718/target/debug/deps/xtask-f642255b7bd1d1dd test --profile ci --target x86_64-pc-windows-msvc
+  <xtask> test --profile ci --target x86_64-pc-windows-msvc
+    CMAKE_GENERATOR=Ninja
+    RUSTFLAGS=-C target-feature=+crt-static
 # windows-x64 / release
   <require os> windows
   <require tools> cargo rustup sccache cmake ninja
   rustup target add x86_64-pc-windows-msvc
-  /Volumes/Render/dev/worktrees/kithara/broadcast-feature-flag-0ac718/target/debug/deps/xtask-f642255b7bd1d1dd test --profile ci --target x86_64-pc-windows-msvc
+  <xtask> test --profile ci --target x86_64-pc-windows-msvc
+    CMAKE_GENERATOR=Ninja
+    RUSTFLAGS=-C target-feature=+crt-static
 # windows-x64-build / branch
   <require os> windows
   <require tools> cargo rustup sccache cmake ninja
   rustup target add x86_64-pc-windows-msvc
   cargo check --locked --workspace --exclude xtask --all-targets --target x86_64-pc-windows-msvc
+    CMAKE_GENERATOR=Ninja
+    RUSTFLAGS=-C target-feature=+crt-static
 # windows-x64-build / platforms
   <require os> windows
   <require tools> cargo rustup sccache cmake ninja
   rustup target add x86_64-pc-windows-msvc
   cargo check --locked --workspace --exclude xtask --all-targets --target x86_64-pc-windows-msvc
+    CMAKE_GENERATOR=Ninja
+    RUSTFLAGS=-C target-feature=+crt-static
 # windows-x64-build / merge-request
   <require os> windows
   <require tools> cargo rustup sccache cmake ninja
   rustup target add x86_64-pc-windows-msvc
   cargo check --locked --workspace --exclude xtask --all-targets --target x86_64-pc-windows-msvc
+    CMAKE_GENERATOR=Ninja
+    RUSTFLAGS=-C target-feature=+crt-static
 # windows-x64-build / quarantine
   <require os> windows
   <require tools> cargo rustup sccache cmake ninja
   rustup target add x86_64-pc-windows-msvc
   cargo check --locked --workspace --exclude xtask --all-targets --target x86_64-pc-windows-msvc
+    CMAKE_GENERATOR=Ninja
+    RUSTFLAGS=-C target-feature=+crt-static
 # windows-x64-build / main
   <require os> windows
   <require tools> cargo rustup sccache cmake ninja
   rustup target add x86_64-pc-windows-msvc
   cargo check --locked --workspace --exclude xtask --all-targets --target x86_64-pc-windows-msvc
+    CMAKE_GENERATOR=Ninja
+    RUSTFLAGS=-C target-feature=+crt-static
 # windows-x64-build / nightly
   <require os> windows
   <require tools> cargo rustup sccache cmake ninja
   rustup target add x86_64-pc-windows-msvc
   cargo check --locked --workspace --exclude xtask --all-targets --target x86_64-pc-windows-msvc
+    CMAKE_GENERATOR=Ninja
+    RUSTFLAGS=-C target-feature=+crt-static
 # windows-x64-build / weekly
   <require os> windows
   <require tools> cargo rustup sccache cmake ninja
   rustup target add x86_64-pc-windows-msvc
   cargo check --locked --workspace --exclude xtask --all-targets --target x86_64-pc-windows-msvc
+    CMAKE_GENERATOR=Ninja
+    RUSTFLAGS=-C target-feature=+crt-static
 # windows-x64-build / release
   <require os> windows
   <require tools> cargo rustup sccache cmake ninja
   rustup target add x86_64-pc-windows-msvc
   cargo check --locked --workspace --exclude xtask --all-targets --target x86_64-pc-windows-msvc
+    CMAKE_GENERATOR=Ninja
+    RUSTFLAGS=-C target-feature=+crt-static
 # deep-rtsan / branch
   <require os> macos
   <require tools> cargo just

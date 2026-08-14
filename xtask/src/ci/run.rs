@@ -415,6 +415,7 @@ fn report_lane(
 fn declared_lane(
     lane: Lane,
     process: &Process,
+    ci_config: &CiConfig,
     lanes: &BTreeMap<String, CiLaneConfig>,
 ) -> Result<()> {
     let name = lane
@@ -423,7 +424,7 @@ fn declared_lane(
     let declared = lanes
         .get(&name)
         .with_context(|| format!("ext.ci.lanes.{name} is not declared in .config/xtask.toml"))?;
-    super::lane::declared::run(process, declared)
+    super::lane::declared::run(process, declared, &ci_config.pins)
 }
 
 /// Every lane that resolves to commands on the executor.
@@ -471,18 +472,19 @@ fn command_lane(
         Lane::LinuxCoverage => super::lane::linux::coverage(process),
         Lane::AndroidBuild => super::lane::android::build(process),
         Lane::AndroidTest => super::lane::android::test(process, ci_config),
-        Lane::WebChromium => super::lane::web::chromium(process, &ci_config.pins),
-        Lane::WebFirefox => super::lane::web::firefox(process),
-        Lane::WebSize => super::lane::web::size(process),
         Lane::WindowsArm64 => super::lane::windows::tests(process, "aarch64-pc-windows-msvc"),
         Lane::WindowsX64 => super::lane::windows::tests(process, "x86_64-pc-windows-msvc"),
         Lane::WindowsX64Build => super::lane::windows::build(process, "x86_64-pc-windows-msvc"),
-        Lane::DeepRtsan => super::lane::deep::rtsan(process),
-        Lane::DeepPerf => super::lane::deep::perf(process),
-        Lane::DeepBench => super::lane::deep::bench(process),
-        Lane::DepsDeny | Lane::DepsUnused | Lane::DepsFeatures | Lane::DepsSemver => {
-            declared_lane(lane, process, lanes)
-        }
+        Lane::DepsDeny
+        | Lane::DepsUnused
+        | Lane::DepsFeatures
+        | Lane::DepsSemver
+        | Lane::WebChromium
+        | Lane::WebFirefox
+        | Lane::WebSize
+        | Lane::DeepRtsan
+        | Lane::DeepPerf
+        | Lane::DeepBench => declared_lane(lane, process, ci_config, lanes),
     }
 }
 
@@ -553,10 +555,21 @@ mod tests {
                 }
                 for step in steps.steps() {
                     report.push_str(&format!("  {} {}\n", step.program, step.args.join(" ")));
+                    // Several lanes differ from each other by nothing but their
+                    // environment - a build-job cap, a target directory, a
+                    // toolchain - so a snapshot that recorded only the command
+                    // would let exactly those differences drift unseen.
+                    for (key, value) in &step.env {
+                        report.push_str(&format!("    {key}={value}\n"));
+                    }
+                    if !step.relative_dir.is_empty() {
+                        report.push_str(&format!("    <in> {}\n", step.relative_dir));
+                    }
                 }
             }
         }
 
+        let report = portable(&report, root);
         let snapshot =
             Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/ci-lane-commands.txt");
         if env::var_os("KITHARA_UPDATE_SNAPSHOT").is_some() {
@@ -568,6 +581,18 @@ mod tests {
             "a lane resolves to a different command than the snapshot records; \
              re-record with KITHARA_UPDATE_SNAPSHOT=1 only when the change is intended"
         );
+    }
+
+    /// Two things a lane resolves to are true only of the machine that resolved
+    /// them: the checkout it sits in, and the test binary Cargo happened to
+    /// build. Both are named rather than spelled out, so the snapshot says the
+    /// same thing on a runner as it does on a laptop.
+    fn portable(report: &str, root: &Path) -> String {
+        let report = env::current_exe().map_or_else(
+            |_| report.to_owned(),
+            |exe| report.replace(&exe.display().to_string(), "<xtask>"),
+        );
+        report.replace(&root.display().to_string(), "<root>")
     }
 
     /// Lane names cross a language boundary: the enum is Rust, the schedule is

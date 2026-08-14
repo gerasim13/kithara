@@ -37,6 +37,9 @@ pub(crate) struct CiLaneConfig {
     pub(crate) label: String,
     pub(crate) os: Option<String>,
     pub(crate) tools: Vec<String>,
+    /// Tools whose reported version has to match a reviewed pin before the lane
+    /// spends a runner on a build it would have to throw away.
+    pub(crate) pinned: Vec<CiLanePin>,
     pub(crate) program: String,
     pub(crate) steps: Vec<CiLaneStep>,
 }
@@ -46,6 +49,16 @@ pub(crate) struct CiLaneConfig {
 pub(crate) struct CiLaneStep {
     pub(crate) args: Vec<String>,
     pub(crate) label: String,
+}
+
+/// A version check: ask `tool` how old it is, and require the answer to carry
+/// the value `pin` names in `.config/ci-pins.toml`.
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub(crate) struct CiLanePin {
+    pub(crate) tool: String,
+    pub(crate) args: Vec<String>,
+    pub(crate) pin: String,
 }
 
 impl CiProjectConfig {
@@ -68,6 +81,11 @@ impl CiProjectConfig {
             }
             if lane.os.is_some() && lane.label.is_empty() {
                 bail!("ext.ci.lanes.{name} pins an OS, so it must carry a label to refuse under");
+            }
+            for check in &lane.pinned {
+                if check.tool.is_empty() || check.pin.is_empty() {
+                    bail!("ext.ci.lanes.{name}.pinned must name both a tool and a pin");
+                }
             }
         }
         Ok(())
