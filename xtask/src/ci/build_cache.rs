@@ -227,9 +227,33 @@ fn allocated_bytes(metadata: &fs::Metadata) -> u64 {
     metadata.len()
 }
 
-/// Every `target` directory under `root` that belongs to a checkout, so a
-/// caller can hand them to [`enforce_budget`]. Shared with the environment gate:
-/// refusing a job is only honest once these have been reclaimed.
+/// The file a running job holds a lock on for as long as it lives, so a
+/// reclaim from another job can tell "in use" from "left behind".
+pub(crate) const JOB_LEASE: &str = ".kithara-job-lease";
+
+/// Whether a job is running in this checkout right now.
+///
+/// `.cargo-lock` cannot answer that: Cargo holds it only while it compiles, so
+/// a checkout whose tests are already running looks abandoned. A reclaim that
+/// believed it deleted a live `target` out from under a sibling job, and the
+/// 1869 tests that then failed to exec their own binaries looked like the
+/// product breaking rather than the CI eating itself.
+fn checkout_is_leased(directory: &Path) -> bool {
+    let path = directory.join(JOB_LEASE);
+    let Ok(file) = OpenOptions::new().read(true).write(true).open(&path) else {
+        return false;
+    };
+    match FileExt::try_lock(&file) {
+        Ok(()) => false,
+        // Held by a live job, or unreadable — either way, not ours to remove.
+        Err(_) => true,
+    }
+}
+
+/// Every `target` directory under `root` that belongs to a checkout no job is
+/// using, so a caller can hand them to [`enforce_budget`]. Shared with the
+/// environment gate: refusing a job is only honest once these have been
+/// reclaimed.
 pub(crate) fn persistent_target_dirs(root: &Path) -> Result<Vec<PathBuf>> {
     if !root.is_dir() {
         return Ok(Vec::new());
@@ -239,6 +263,9 @@ pub(crate) fn persistent_target_dirs(root: &Path) -> Result<Vec<PathBuf>> {
     let mut targets = Vec::new();
     while let Some(directory) = pending.pop() {
         if directory.join("Cargo.toml").is_file() {
+            if checkout_is_leased(&directory) {
+                continue;
+            }
             for name in ["target", "target-flash-off"] {
                 let path = directory.join(name);
                 let metadata = match fs::symlink_metadata(&path) {

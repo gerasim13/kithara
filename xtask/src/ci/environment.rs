@@ -236,13 +236,44 @@ pub(crate) struct CiEnvironment {
     pub(crate) temp: PathBuf,
     lease: PathBuf,
     sccache: Option<PreparedSccache>,
+    /// Held for the life of the job so a reclaim running in a sibling job
+    /// leaves this checkout alone.
+    _checkout: Option<CheckoutLease>,
     vars: BTreeMap<OsString, OsString>,
+}
+
+/// A job's claim on the checkout it works in.
+///
+/// Taken before anything is reclaimed, including by this job itself: the
+/// `target` a job is about to build into is exactly the one it must not hand
+/// to the budget.
+struct CheckoutLease {
+    _file: File,
+}
+
+impl CheckoutLease {
+    fn acquire(checkout: &Path) -> Option<Self> {
+        let path = checkout.join(build_cache::JOB_LEASE);
+        let file = OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .open(&path)
+            .ok()?;
+        // A lease that cannot be taken is not a reason to refuse work: the
+        // worst case is the reclaim treating this checkout as idle, which is
+        // the behaviour that existed before the lease.
+        FileExt::try_lock(&file).ok()?;
+        Some(Self { _file: file })
+    }
 }
 
 impl CiEnvironment {
     pub(crate) fn prepare(ctx: &Ctx, config: &CiConfig, lane: Lane) -> Result<Self> {
         config.validate()?;
         raise_open_file_limit()?;
+        let checkout = CheckoutLease::acquire(&ctx.root);
         let home = env::var_os("HOME")
             .or_else(|| env::var_os("USERPROFILE"))
             .map(PathBuf::from)
@@ -393,6 +424,7 @@ impl CiEnvironment {
             temp,
             lease,
             sccache,
+            _checkout: checkout,
             vars,
         })
     }
@@ -602,12 +634,16 @@ mod tests {
     fn shared_shell_slots_are_exclusive_and_reusable() {
         let directory = tempfile::tempdir().unwrap();
 
-        let first = SccacheSlot::acquire_shared(directory.path()).unwrap();
-        let second = SccacheSlot::acquire_shared(directory.path()).unwrap();
+        let held: Vec<SccacheSlot> = (0..HOST_JOB_CONCURRENCY)
+            .map(|_| SccacheSlot::acquire_shared(directory.path()).unwrap())
+            .collect();
 
-        assert_eq!(first.index(), 0);
-        assert_eq!(second.index(), 1);
+        for (expected, slot) in held.iter().enumerate() {
+            assert_eq!(slot.index(), expected);
+        }
         assert!(SccacheSlot::acquire_shared(directory.path()).is_err());
+        let mut held = held;
+        let first = held.remove(0);
         drop(first);
         assert_eq!(
             SccacheSlot::acquire_shared(directory.path())
@@ -639,7 +675,8 @@ mod tests {
 
     #[test]
     fn disposable_slot_rejects_the_concurrency_boundary() {
-        assert!(disposable_slot(Some("2")).is_err());
+        assert!(disposable_slot(Some(&HOST_JOB_CONCURRENCY.to_string())).is_err());
+        assert!(disposable_slot(Some(&(HOST_JOB_CONCURRENCY - 1).to_string())).is_ok());
         assert!(disposable_slot(None).is_err());
         assert!(disposable_slot(Some("slot-1")).is_err());
     }
@@ -746,7 +783,7 @@ mod tests {
             assert_eq!(
                 vars.get(OsStr::new("SCCACHE_CACHE_SIZE"))
                     .map(OsString::as_os_str),
-                Some(OsStr::new("25G"))
+                Some(config.host.sccache_slot_size().unwrap().as_str().as_ref())
             );
             let lease = cache_root.join(".kithara-ci-leases/job-29");
             assert!(lease.is_file());
@@ -863,6 +900,39 @@ mod tests {
         assert!(
             !target.join("artifact").exists(),
             "an evictable build cache must be reclaimed, not left for the timer"
+        );
+    }
+
+    /// A sibling job holds the checkout while its tests run. Cargo has long
+    /// released `.cargo-lock` by then, so without the lease the reclaim reads
+    /// the checkout as abandoned and deletes the binaries the tests are still
+    /// executing — 1869 of them failed to exec that way before this existed.
+    #[test]
+    fn a_leased_checkout_is_left_alone_by_a_sibling_job() {
+        let root = tempfile::tempdir().unwrap();
+        let checkout = root
+            .path()
+            .join("workspaces/gitlab/runner-a/0/disrupt/kithara");
+        let target = checkout.join("target/debug");
+        fs::create_dir_all(&target).unwrap();
+        fs::write(checkout.join("Cargo.toml"), "[package]\n").unwrap();
+        fs::write(target.join("artifact"), vec![0_u8; 400_000]).unwrap();
+
+        let held = CheckoutLease::acquire(&checkout).expect("the running job takes its lease");
+
+        reclaim_build_caches(root.path(), 0, 0, u64::MAX).unwrap();
+
+        assert!(
+            target.join("artifact").exists(),
+            "a checkout a job is working in must survive another job's reclaim"
+        );
+        drop(held);
+
+        reclaim_build_caches(root.path(), 0, 0, u64::MAX).unwrap();
+
+        assert!(
+            !target.join("artifact").exists(),
+            "once the job is gone its cache is evictable again"
         );
     }
 }

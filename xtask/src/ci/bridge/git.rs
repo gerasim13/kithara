@@ -387,6 +387,7 @@ mod tests {
             gitlab_token_file: state.join("gitlab.token"),
             branch: "main".into(),
             state_dir: state.to_path_buf(),
+            trusted_authors: Vec::new(),
         }
     }
 

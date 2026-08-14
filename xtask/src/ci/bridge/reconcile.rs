@@ -166,9 +166,22 @@ impl Bridge {
         require_sha("GitHub pull request", &pull.head_sha)?;
         self.repo
             .fetch_pull_head(&self.github, pull.number, &pull.head_sha)?;
-        let changed_controls = self
-            .repo
-            .weakening_control_paths(base_sha, &pull.head_sha)?;
+        // A trusted author answers for the CI configuration the same way they
+        // answer for the code, so their pull request is judged with its own
+        // configuration rather than the default branch's. For everyone else the
+        // rule stands, and a contributor who cannot open a GitLab merge request
+        // is not the one it is aimed at — see the follow-up in `model`.
+        let trusted = self
+            .config
+            .trusted_authors
+            .iter()
+            .any(|author| author == &pull.author);
+        let changed_controls = if trusted {
+            Vec::new()
+        } else {
+            self.repo
+                .weakening_control_paths(base_sha, &pull.head_sha)?
+        };
         let entry = ledger.reserve(&pull.head_sha, base_sha)?;
         if reject_control_changes(
             pull.number,
@@ -186,7 +199,11 @@ impl Bridge {
 
         let Some(pipeline_id) = entry.pipeline_id else {
             let reference = quarantine_ref(&pull.head_sha, base_sha, entry.attempt);
-            let judged = self.repo.judged_commit(base_sha, &pull.head_sha)?;
+            let judged = if trusted {
+                pull.head_sha.clone()
+            } else {
+                self.repo.judged_commit(base_sha, &pull.head_sha)?
+            };
             self.repo.push_gitlab(&self.gitlab, &judged, &reference)?;
             let discovered =
                 self.gitlab

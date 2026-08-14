@@ -45,6 +45,9 @@ pub(super) enum VerificationState {
 pub(super) struct PullRequest {
     pub(super) number: u64,
     pub(super) head_sha: String,
+    /// GitHub login of whoever opened it, matched against the trusted authors
+    /// the host configured.
+    pub(super) author: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

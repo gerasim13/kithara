@@ -252,12 +252,16 @@ impl<'a> ServiceInstaller<'a> {
             ],
             &logs.join("cleanup.log"),
             &path,
-            // Hourly is slower than the host spends. Under a build this volume
-            // loses about 2.7 GB a minute — measured dropping from 53 to 31 GB
-            // free in eight minutes — so the 45 GB between the first cleanup
-            // step and refusing jobs is a quarter of an hour. A pass that comes
-            // once an hour arrives after the refusals it exists to prevent.
-            "<key>StartInterval</key><integer>900</integer>",
+            // Every five minutes, because the host spends faster than that.
+            // Under a build this volume loses about 2.7 GB a minute — measured
+            // dropping from 53 to 31 GB free in eight minutes — so a quarter of
+            // an hour is enough to fall from a healthy 45 GB to the refusal
+            // threshold. At fifteen minutes the pass was measured *starting* at
+            // 12.5 GB, already refusing work: it arrived at the wreck instead
+            // of preventing it. A pass over a volume already inside its budget
+            // costs nothing (`freed_bytes=0`, well under a second), so the
+            // frequency is only paid for when it is needed.
+            "<key>StartInterval</key><integer>300</integer>",
         );
         let health = launchd(
             "com.zvuk.kithara-ci.health",
