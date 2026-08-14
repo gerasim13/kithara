@@ -457,12 +457,17 @@ mod tests {
 
     #[kithara::test]
     fn explicit_off_rt_mode_is_immediate_without_blocking_reads() {
-        let fixture = RingFixture::with_wake_mode(true, false, ConsumerWakeMode::ImmediateOffRt);
+        let mut fixture =
+            RingFixture::with_wake_mode(true, false, ConsumerWakeMode::ImmediateOffRt);
 
         assert_eq!(
             fixture.ring.consumer_wake_mode,
             ConsumerWakeMode::ImmediateOffRt
         );
+        assert!(matches!(
+            fixture.ring.recv_outcome(empty_ctx()),
+            RecvOutcome::Empty
+        ));
     }
 
     #[kithara::test]

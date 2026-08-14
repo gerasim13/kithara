@@ -220,6 +220,12 @@ impl DecoderNode {
         self.presentation.finish_failed(epoch);
     }
 
+    fn should_present(&self) -> bool {
+        self.runtime.preloaded
+            || self.presentation.raw_ready_for_preload(self.preload_chunks)
+            || self.presentation.is_raw_full()
+    }
+
     fn pump_source(&mut self) -> TickResult {
         if let Some((epoch, spec)) = self.source.take_presentation_barrier() {
             let barrier = super::PresentationBarrier::DecoderReplaced { epoch, spec };
@@ -344,7 +350,7 @@ impl Node for DecoderNode {
         let mut present_result = PresentResult::Idle;
         let mut presented = false;
 
-        if self.runtime.preloaded || self.presentation.raw_ready_for_preload(self.preload_chunks) {
+        if self.should_present() {
             present_result = self.present_once(start);
             presented = true;
             made_progress |= matches!(
@@ -364,10 +370,7 @@ impl Node for DecoderNode {
             }
         }
 
-        if !presented
-            && (self.runtime.preloaded
-                || self.presentation.raw_ready_for_preload(self.preload_chunks))
-        {
+        if !presented && self.should_present() {
             present_result = self.present_once(start);
             made_progress |= matches!(
                 present_result,
@@ -524,10 +527,22 @@ mod tests {
         seek_obs: Arc<dyn SeekObserve>,
         initial_spec: PcmSpec,
     ) -> DecoderNode {
+        test_node_with_limits(source, outlet, preload_gate, seek_obs, initial_spec, 4, 1)
+    }
+
+    fn test_node_with_limits(
+        source: Box<dyn AudioWorkerSource<Chunk = PcmChunk>>,
+        outlet: StrictOutlet<Fetch<PresentedPcm>>,
+        preload_gate: Arc<PreloadGate>,
+        seek_obs: Arc<dyn SeekObserve>,
+        initial_spec: PcmSpec,
+        raw_buffer_chunks: usize,
+        preload_chunks: usize,
+    ) -> DecoderNode {
         let (_trash_outlet, trash_inlet) = connect::<PcmChunk>(4, None);
         let seek_epoch = seek_obs.epoch();
         let presentation = Presentation::new(
-            4,
+            raw_buffer_chunks,
             PresentationChain::identity(Vec::new()),
             PcmPool::default(),
             initial_spec,
@@ -544,13 +559,60 @@ mod tests {
             playhead: Arc::new(PlayheadState::new()) as Arc<dyn PlayheadRead>,
             emit: Arc::new(DeferredBus::new(EventBus::new(8), 8)),
             service_class: Arc::new(AtomicServiceClass::new(ServiceClass::default())),
-            preload_chunks: 1,
+            preload_chunks,
             engine_load: None,
             pending_failure: None,
             runtime: DecoderRuntime {
                 seek_epoch,
                 ..Default::default()
             },
+        }
+    }
+
+    #[kithara::test]
+    fn decoder_node_preload_progresses_when_raw_capacity_is_below_target() {
+        let gate = Arc::new(PreloadGate::default());
+        let (outlet, mut inlet) = connect_strict::<Fetch<PresentedPcm>>(3, None);
+        let source = Box::new(Unimock::new((
+            MockAudioWorkerSource::step_track
+                .next_call(matching!())
+                .returns(TrackStep::Produced(Fetch::data(
+                    presentation_block_chunk(),
+                    0,
+                ))),
+            MockAudioWorkerSource::step_track
+                .next_call(matching!())
+                .returns(TrackStep::Produced(Fetch::data(
+                    presentation_block_chunk(),
+                    0,
+                ))),
+            MockAudioWorkerSource::step_track
+                .next_call(matching!())
+                .returns(TrackStep::Produced(Fetch::data(
+                    presentation_block_chunk(),
+                    0,
+                ))),
+        )));
+        let mut node = test_node_with_limits(
+            source,
+            outlet,
+            Arc::clone(&gate),
+            Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
+            default_test_spec(),
+            1,
+            3,
+        );
+
+        for admitted in 1..=3 {
+            assert_eq!(node.tick(), TickResult::Progress);
+            assert_eq!(node.runtime.chunks_sent, admitted);
+            assert!(matches!(
+                inlet.try_pop(),
+                Some(Fetch::Data { data, epoch: 0 })
+                    if data.chunk().frames() == PRESENTATION_FRAMES
+            ));
+            assert_eq!(node.runtime.preloaded, admitted == 3);
+            assert_eq!(gate.is_ready(), admitted == 3);
         }
     }
 
