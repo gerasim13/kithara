@@ -414,6 +414,7 @@ fn report_lane(
 /// A lane whose whole content is declared in `.config/xtask.toml`.
 fn declared_lane(
     lane: Lane,
+    kind: PipelineKind,
     process: &Process,
     ci_config: &CiConfig,
     lanes: &BTreeMap<String, CiLaneConfig>,
@@ -424,7 +425,7 @@ fn declared_lane(
     let declared = lanes
         .get(&name)
         .with_context(|| format!("ext.ci.lanes.{name} is not declared in .config/xtask.toml"))?;
-    super::lane::declared::run(process, declared, &ci_config.pins)
+    super::lane::declared::run(process, declared, &ci_config.pins, kind)
 }
 
 /// Every lane that resolves to commands on the executor.
@@ -448,18 +449,8 @@ fn command_lane(
         | Lane::ReleaseAndroid
         | Lane::ReleasePublish
         | Lane::Verdict => bail!("{lane:?} produces artifacts and is not a command lane"),
-        Lane::AppleLint => super::lane::apple::lint(process, ci_config, kind),
-        Lane::AppleMsrv => super::lane::apple::msrv(process, ci_config),
-        Lane::AppleTest => super::lane::apple::test(process, ci_config, kind),
-        Lane::AppleTestFlashOff => super::lane::apple::test_flash_off(process, ci_config),
-        Lane::AppleE2e => super::lane::apple::e2e(process, ci_config),
-        Lane::AppleXcframework => super::lane::apple::xcframework(process, ci_config),
         Lane::AppleSwiftTest => super::lane::apple::swift_test(process, ci_config, swiftpm_cache),
-        Lane::AppleIos => super::lane::apple::ios(process, ci_config),
         Lane::AppleIosTest => super::lane::apple::ios_test(process, ci_config),
-        Lane::AppleSafari => super::lane::apple::safari(process),
-        Lane::AndroidBuild => super::lane::android::build(process),
-        Lane::AndroidTest => super::lane::android::test(process, ci_config),
         Lane::DepsDeny
         | Lane::DepsUnused
         | Lane::DepsFeatures
@@ -482,7 +473,17 @@ fn command_lane(
         | Lane::LinuxCoverage
         | Lane::WindowsArm64
         | Lane::WindowsX64
-        | Lane::WindowsX64Build => declared_lane(lane, process, ci_config, lanes),
+        | Lane::WindowsX64Build
+        | Lane::AndroidBuild
+        | Lane::AndroidTest
+        | Lane::AppleLint
+        | Lane::AppleMsrv
+        | Lane::AppleTest
+        | Lane::AppleTestFlashOff
+        | Lane::AppleE2e
+        | Lane::AppleXcframework
+        | Lane::AppleIos
+        | Lane::AppleSafari => declared_lane(lane, kind, process, ci_config, lanes),
     }
 }
 
@@ -552,7 +553,11 @@ mod tests {
                     report.push_str(&format!("  refused: {error}\n"));
                 }
                 for step in steps.steps() {
-                    report.push_str(&format!("  {} {}\n", step.program, step.args.join(" ")));
+                    report.push_str(&format!("  {}", step.program));
+                    if !step.args.is_empty() {
+                        report.push_str(&format!(" {}", step.args.join(" ")));
+                    }
+                    report.push('\n');
                     // Several lanes differ from each other by nothing but their
                     // environment - a build-job cap, a target directory, a
                     // toolchain - so a snapshot that recorded only the command

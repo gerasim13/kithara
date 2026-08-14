@@ -793,6 +793,259 @@ steps = [
   ], label = "Windows build", env = { CMAKE_GENERATOR = "Ninja", RUSTFLAGS = "-C target-feature=+crt-static" } },
 ]
 
+[ext.ci.lanes.android-build]
+cache_group = "host"
+label = "Android"
+os = "macos"
+tools = ["cargo", "java", "just", "sccache"]
+program = "just"
+steps = [
+  { args = [
+    "platform",
+    "android",
+    "build",
+  ], label = "Android native build" },
+]
+
+# The emulator, the connected suite, and the shutdown are one job: the tests
+# only mean anything while the device this job booted is still alive, and a
+# device left running would poison the next Android job on the host. The
+# emulator runs wherever the machine's own architecture matches the guest's, so
+# the lane pins tools rather than a platform.
+#
+# The libraries and the bindings come from the job that builds them, and Gradle
+# is told to skip generating them: a job that arrives without them builds an
+# archive with no library in it and fails on the device with
+# `UnsatisfiedLinkError`, minutes after the emulator came up.
+[ext.ci.lanes.android-test]
+cache_group = "host"
+label = "Android"
+tools = ["adb", "cargo", "emulator", "java", "just", "sccache"]
+left_behind_by = "Android build"
+left_behind = [
+  "android/lib/build/generated/jniLibs/arm64-v8a/libkithara_ffi.so",
+  "android/lib/build/generated/uniffi/kotlin",
+]
+program = "just"
+steps = [
+  { args = [
+    "platform",
+    "android",
+    "test",
+    "--avd",
+    "{pin.android_avd}",
+    "--skip-build",
+  ], label = "Android connected tests" },
+]
+
+# Every Apple job repeats the preflight instead of inheriting it from a
+# predecessor. Each one is scheduled on its own and can be retried alone, so the
+# wrong Xcode has to fail in the job that would have used it.
+[ext.ci.lanes.apple-lint]
+cache_group = "macos"
+label = "Apple"
+os = "macos"
+tools = ["cargo", "just", "sccache", "swift", "xcodebuild", "xcodegen"]
+pinned = [
+  { tool = "xcodebuild", args = [
+    "-version",
+  ], pin = "expected_xcode_version", line_prefix = "Xcode " },
+]
+program = "just"
+# Both chains run the checks that answer whether a change is acceptable:
+# formatting, Clippy over the workspace, ast-grep, typos, the architecture
+# ratchet and the two idiom checks a review is held to. What only the default
+# branch pays for is the rest of the ratchet family - the full idiom set, style,
+# the quality scans and this tool's own tests. They guard a baseline rather than
+# judge a diff, and on one Apple host every one of them is a minute a review
+# waits.
+steps = [
+  { args = [
+    "lint",
+    "full",
+  ], label = "full lint gate", args_by_kind = { branch = [
+    "lint",
+    "fast",
+  ], merge-request = [
+    "lint",
+    "fast",
+  ], quarantine = [
+    "lint",
+    "fast",
+  ] } },
+]
+
+[ext.ci.lanes.apple-msrv]
+cache_group = "macos"
+label = "Apple"
+os = "macos"
+tools = ["cargo", "just", "sccache", "swift", "xcodebuild", "xcodegen"]
+pinned = [
+  { tool = "xcodebuild", args = [
+    "-version",
+  ], pin = "expected_xcode_version", line_prefix = "Xcode " },
+]
+program = "just"
+steps = [
+  { args = [
+    "check",
+    "workspace",
+  ], label = "MSRV workspace check", env = { RUSTUP_TOOLCHAIN = "{pin.msrv_toolchain}" } },
+]
+
+# A review ref asks the same question the default branch asks: what a reviewer
+# would have to fix anyway is cheaper to learn before merge. Quarantine keeps
+# its plain profile probe.
+[ext.ci.lanes.apple-test]
+cache_group = "macos"
+label = "Apple"
+os = "macos"
+tools = ["cargo", "just", "sccache", "swift", "xcodebuild", "xcodegen"]
+pinned = [
+  { tool = "xcodebuild", args = [
+    "-version",
+  ], pin = "expected_xcode_version", line_prefix = "Xcode " },
+]
+kinds_refused = { weekly = "weekly pipelines do not run the Apple suite" }
+program = "just"
+steps = [
+  { args = [
+    "test",
+    "run",
+    "--flash=on",
+    "--no-block=on",
+    "--profile",
+    "ci",
+  ], label = "Apple flash and no-block gate", args_by_kind = { quarantine = [
+    "test",
+    "run",
+    "--profile",
+    "ci",
+  ] } },
+]
+
+# The off-flash suite owns its own target directory: the two gates differ by
+# feature, and sharing one directory makes each run rebuild what the other just
+# replaced.
+[ext.ci.lanes.apple-test-flash-off]
+cache_group = "macos"
+label = "Apple"
+os = "macos"
+tools = ["cargo", "just", "sccache", "swift", "xcodebuild", "xcodegen"]
+pinned = [
+  { tool = "xcodebuild", args = [
+    "-version",
+  ], pin = "expected_xcode_version", line_prefix = "Xcode " },
+]
+program = "just"
+steps = [
+  { args = [
+    "test",
+    "run",
+    "--flash=off",
+    "--profile",
+    "ci",
+  ], label = "Apple flash-off gate", env = { CARGO_TARGET_DIR = "target-flash-off" } },
+]
+
+# End-to-end playback across the resampler axis. Each lane pins one source-rate
+# conversion shape, and a change to decode, blending or output can break one of
+# them while every unit test still passes - so the three run together or the
+# axis is not covered. They share a target directory: the lanes differ by
+# feature, and the executor keeps the tree warm between them.
+[ext.ci.lanes.apple-e2e]
+cache_group = "macos"
+label = "Apple"
+os = "macos"
+tools = ["cargo", "just", "sccache", "swift", "xcodebuild", "xcodegen"]
+pinned = [
+  { tool = "xcodebuild", args = [
+    "-version",
+  ], pin = "expected_xcode_version", line_prefix = "Xcode " },
+]
+program = "just"
+steps = [
+  { args = [
+    "test",
+    "run",
+    "--lane=e2e",
+    "--profile",
+    "ci",
+  ], label = "Apple end-to-end suite" },
+  { args = [
+    "test",
+    "run",
+    "--lane=e2e-fused",
+    "--profile",
+    "ci",
+  ], label = "Apple end-to-end suite" },
+  { args = [
+    "test",
+    "run",
+    "--lane=e2e-glide",
+    "--profile",
+    "ci",
+  ], label = "Apple end-to-end suite" },
+]
+
+[ext.ci.lanes.apple-xcframework]
+cache_group = "macos"
+label = "Apple"
+os = "macos"
+tools = ["cargo", "just", "sccache", "swift", "xcodebuild", "xcodegen"]
+pinned = [
+  { tool = "xcodebuild", args = [
+    "-version",
+  ], pin = "expected_xcode_version", line_prefix = "Xcode " },
+]
+program = "just"
+steps = [
+  { args = [
+    "platform",
+    "apple",
+    "xcframework",
+    "--profile",
+    "debug",
+  ], label = "Apple XCFramework" },
+]
+
+[ext.ci.lanes.apple-ios]
+cache_group = "macos"
+label = "Apple"
+os = "macos"
+tools = ["cargo", "just", "sccache", "swift", "xcodebuild", "xcodegen"]
+pinned = [
+  { tool = "xcodebuild", args = [
+    "-version",
+  ], pin = "expected_xcode_version", line_prefix = "Xcode " },
+]
+program = "just"
+steps = [
+  { args = [
+    "platform",
+    "apple",
+    "ios",
+  ], label = "iOS Simulator build", env = { KITHARA_LOCAL_DEV = "1" } },
+]
+
+# Safari goes through the repository's own wasm recipe for the same reason the
+# other browsers do: the target rebuilds std for shared memory, and only the
+# pinned nightly honours that. It needs no Xcode of its own.
+[ext.ci.lanes.apple-safari]
+cache_group = "macos"
+label = "Safari WASM"
+os = "macos"
+tools = ["cargo", "just"]
+program = "just"
+steps = [
+  { args = [
+    "platform",
+    "wasm",
+    "test",
+    "safari",
+  ], label = "Safari WASM tests" },
+]
+
 
 [ext.publish]
 workspace_hack_crate = "kithara-workspace-hack"

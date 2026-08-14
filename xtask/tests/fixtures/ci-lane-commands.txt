@@ -118,9 +118,6 @@
   just test run --flash=on --no-block=on --profile ci
 # apple-test / weekly
   refused: weekly pipelines do not run the Apple suite
-  <require os> macos
-  <require tools> cargo just sccache swift xcodebuild xcodegen
-  xcodebuild -version
 # apple-test / release
   <require os> macos
   <require tools> cargo just sccache swift xcodebuild xcodegen
@@ -375,53 +372,85 @@
   just platform apple ios
     KITHARA_LOCAL_DEV=1
 # apple-ios-test / branch
-  refused: starting <root>/target/debug/test_server
   <require os> macos
   <require tools> cargo just sccache swift xcodebuild xcodegen
   xcodebuild -version
   cargo build -p kithara-integration-tests --bin test_server
+  <root>/target/debug/test_server
+    TEST_SERVER_PORT=3444
+  just platform apple test --skip-build
+    KITHARA_LOCAL_DEV=1
+    KITHARA_TEST_SERVER_URL=http://127.0.0.1:3444
 # apple-ios-test / platforms
-  refused: starting <root>/target/debug/test_server
   <require os> macos
   <require tools> cargo just sccache swift xcodebuild xcodegen
   xcodebuild -version
   cargo build -p kithara-integration-tests --bin test_server
+  <root>/target/debug/test_server
+    TEST_SERVER_PORT=3444
+  just platform apple test --skip-build
+    KITHARA_LOCAL_DEV=1
+    KITHARA_TEST_SERVER_URL=http://127.0.0.1:3444
 # apple-ios-test / merge-request
-  refused: starting <root>/target/debug/test_server
   <require os> macos
   <require tools> cargo just sccache swift xcodebuild xcodegen
   xcodebuild -version
   cargo build -p kithara-integration-tests --bin test_server
+  <root>/target/debug/test_server
+    TEST_SERVER_PORT=3444
+  just platform apple test --skip-build
+    KITHARA_LOCAL_DEV=1
+    KITHARA_TEST_SERVER_URL=http://127.0.0.1:3444
 # apple-ios-test / quarantine
-  refused: starting <root>/target/debug/test_server
   <require os> macos
   <require tools> cargo just sccache swift xcodebuild xcodegen
   xcodebuild -version
   cargo build -p kithara-integration-tests --bin test_server
+  <root>/target/debug/test_server
+    TEST_SERVER_PORT=3444
+  just platform apple test --skip-build
+    KITHARA_LOCAL_DEV=1
+    KITHARA_TEST_SERVER_URL=http://127.0.0.1:3444
 # apple-ios-test / main
-  refused: starting <root>/target/debug/test_server
   <require os> macos
   <require tools> cargo just sccache swift xcodebuild xcodegen
   xcodebuild -version
   cargo build -p kithara-integration-tests --bin test_server
+  <root>/target/debug/test_server
+    TEST_SERVER_PORT=3444
+  just platform apple test --skip-build
+    KITHARA_LOCAL_DEV=1
+    KITHARA_TEST_SERVER_URL=http://127.0.0.1:3444
 # apple-ios-test / nightly
-  refused: starting <root>/target/debug/test_server
   <require os> macos
   <require tools> cargo just sccache swift xcodebuild xcodegen
   xcodebuild -version
   cargo build -p kithara-integration-tests --bin test_server
+  <root>/target/debug/test_server
+    TEST_SERVER_PORT=3444
+  just platform apple test --skip-build
+    KITHARA_LOCAL_DEV=1
+    KITHARA_TEST_SERVER_URL=http://127.0.0.1:3444
 # apple-ios-test / weekly
-  refused: starting <root>/target/debug/test_server
   <require os> macos
   <require tools> cargo just sccache swift xcodebuild xcodegen
   xcodebuild -version
   cargo build -p kithara-integration-tests --bin test_server
+  <root>/target/debug/test_server
+    TEST_SERVER_PORT=3444
+  just platform apple test --skip-build
+    KITHARA_LOCAL_DEV=1
+    KITHARA_TEST_SERVER_URL=http://127.0.0.1:3444
 # apple-ios-test / release
-  refused: starting <root>/target/debug/test_server
   <require os> macos
   <require tools> cargo just sccache swift xcodebuild xcodegen
   xcodebuild -version
   cargo build -p kithara-integration-tests --bin test_server
+  <root>/target/debug/test_server
+    TEST_SERVER_PORT=3444
+  just platform apple test --skip-build
+    KITHARA_LOCAL_DEV=1
+    KITHARA_TEST_SERVER_URL=http://127.0.0.1:3444
 # apple-safari / branch
   <require os> macos
   <require tools> cargo just
@@ -887,29 +916,37 @@
   <require tools> cargo java just sccache
   just platform android build
 # android-test / branch
-  refused: the Android build job did not leave <root>/android/lib/build/generated/jniLibs/arm64-v8a/libkithara_ffi.so
   <require tools> adb cargo emulator java just sccache
+  <require left behind> android/lib/build/generated/jniLibs/arm64-v8a/libkithara_ffi.so android/lib/build/generated/uniffi/kotlin
+  just platform android test --avd Kithara_CI_API_36 --skip-build
 # android-test / platforms
-  refused: the Android build job did not leave <root>/android/lib/build/generated/jniLibs/arm64-v8a/libkithara_ffi.so
   <require tools> adb cargo emulator java just sccache
+  <require left behind> android/lib/build/generated/jniLibs/arm64-v8a/libkithara_ffi.so android/lib/build/generated/uniffi/kotlin
+  just platform android test --avd Kithara_CI_API_36 --skip-build
 # android-test / merge-request
-  refused: the Android build job did not leave <root>/android/lib/build/generated/jniLibs/arm64-v8a/libkithara_ffi.so
   <require tools> adb cargo emulator java just sccache
+  <require left behind> android/lib/build/generated/jniLibs/arm64-v8a/libkithara_ffi.so android/lib/build/generated/uniffi/kotlin
+  just platform android test --avd Kithara_CI_API_36 --skip-build
 # android-test / quarantine
-  refused: the Android build job did not leave <root>/android/lib/build/generated/jniLibs/arm64-v8a/libkithara_ffi.so
   <require tools> adb cargo emulator java just sccache
+  <require left behind> android/lib/build/generated/jniLibs/arm64-v8a/libkithara_ffi.so android/lib/build/generated/uniffi/kotlin
+  just platform android test --avd Kithara_CI_API_36 --skip-build
 # android-test / main
-  refused: the Android build job did not leave <root>/android/lib/build/generated/jniLibs/arm64-v8a/libkithara_ffi.so
   <require tools> adb cargo emulator java just sccache
+  <require left behind> android/lib/build/generated/jniLibs/arm64-v8a/libkithara_ffi.so android/lib/build/generated/uniffi/kotlin
+  just platform android test --avd Kithara_CI_API_36 --skip-build
 # android-test / nightly
-  refused: the Android build job did not leave <root>/android/lib/build/generated/jniLibs/arm64-v8a/libkithara_ffi.so
   <require tools> adb cargo emulator java just sccache
+  <require left behind> android/lib/build/generated/jniLibs/arm64-v8a/libkithara_ffi.so android/lib/build/generated/uniffi/kotlin
+  just platform android test --avd Kithara_CI_API_36 --skip-build
 # android-test / weekly
-  refused: the Android build job did not leave <root>/android/lib/build/generated/jniLibs/arm64-v8a/libkithara_ffi.so
   <require tools> adb cargo emulator java just sccache
+  <require left behind> android/lib/build/generated/jniLibs/arm64-v8a/libkithara_ffi.so android/lib/build/generated/uniffi/kotlin
+  just platform android test --avd Kithara_CI_API_36 --skip-build
 # android-test / release
-  refused: the Android build job did not leave <root>/android/lib/build/generated/jniLibs/arm64-v8a/libkithara_ffi.so
   <require tools> adb cargo emulator java just sccache
+  <require left behind> android/lib/build/generated/jniLibs/arm64-v8a/libkithara_ffi.so android/lib/build/generated/uniffi/kotlin
+  just platform android test --avd Kithara_CI_API_36 --skip-build
 # web-chromium / branch
   <require os> linux
   <require tools> chromium chromedriver just
