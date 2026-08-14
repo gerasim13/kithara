@@ -1,5 +1,6 @@
 use std::ops::Range;
 
+use kithara_audio::{PresentationAdvance, PresentationCursor, PresentationPoint, SessionFrame};
 use kithara_platform::sync::Arc;
 use num_traits::cast::AsPrimitive;
 use ringbuf::{HeapProd, traits::Producer};
@@ -19,6 +20,7 @@ struct TrackReadContext<'a> {
 struct PartialRead {
     duration: f64,
     frames: usize,
+    presentation: Option<PresentationCursor>,
 }
 
 /// Result of a single track render attempt.
@@ -34,6 +36,8 @@ pub enum TrackReadOutcome {
         duration: f64,
         /// Exact remaining buffered frames after EOF has been observed.
         frames_until_eof: Option<usize>,
+        /// Producer point mapped from an exactly consumed final boundary.
+        presentation: Option<PresentationCursor>,
     },
     /// Only the first `frames` samples were written; EOF was reached in-block.
     Partial {
@@ -41,6 +45,8 @@ pub enum TrackReadOutcome {
         frames: usize,
         /// Visible duration snapshot in seconds.
         duration: f64,
+        /// Producer point mapped from an exactly consumed final boundary.
+        presentation: Option<PresentationCursor>,
     },
     /// No frames were written because the track is already finished.
     Eof,
@@ -49,15 +55,19 @@ pub enum TrackReadOutcome {
 }
 
 impl PlayerTrack {
-    /// Advance the media clock by `frames` of mixed output.
+    /// Advance the media clock after one read of real output frames.
     ///
-    /// The mix output runs on the output clock; one output frame carries
-    /// `playback_rate` media frames, which is what the stretch slot consumed
-    /// from the source to produce it.
-    fn advance_media_clock(&mut self, frames: usize) {
-        let output_frames: f64 = AsPrimitive::as_(frames);
-        self.served_media_frames =
-            output_frames.mul_add(f64::from(self.playback_rate), self.served_media_frames);
+    /// A proven consumed presentation boundary replaces accumulated scalar
+    /// drift with its exact source coordinate. Playback rate advances the
+    /// whole read only when no proof was consumed.
+    fn advance_media_clock(&mut self, frames: usize, consumed: Option<PresentationPoint>) {
+        self.served_media_frames = media_frames_after_read(
+            self.served_media_frames,
+            frames,
+            self.playback_rate,
+            self.sample_rate,
+            consumed,
+        );
     }
 
     fn check_notifications(
@@ -94,13 +104,13 @@ impl PlayerTrack {
             duration,
             frames,
             frames_until_eof,
+            presentation,
             ..
         } = outcome
         else {
             return outcome;
         };
 
-        self.advance_media_clock(frames);
         self.observed_duration = duration;
         self.update_observed_eof(frames_until_eof);
         let position = self.position();
@@ -130,6 +140,7 @@ impl PlayerTrack {
             duration,
             frames,
             frames_until_eof,
+            presentation,
         }
     }
 
@@ -178,8 +189,11 @@ impl PlayerTrack {
         let TrackReadContext { sink, range } = ctx;
         let published_seek_epoch = sink.seek_epoch;
         let notification_tx = sink.notifications;
-        let PartialRead { frames, duration } = partial;
-        self.advance_media_clock(frames);
+        let PartialRead {
+            frames,
+            duration,
+            presentation,
+        } = partial;
         let position = self.position();
         self.observed_duration = if position > 0.0 { position } else { duration };
         let duration = self.observed_duration;
@@ -203,7 +217,11 @@ impl PlayerTrack {
         );
         self.handle_natural_end(notification_tx, published_seek_epoch);
 
-        TrackReadOutcome::Partial { frames, duration }
+        TrackReadOutcome::Partial {
+            frames,
+            duration,
+            presentation,
+        }
     }
 
     fn notify_state_change(&mut self, notification_tx: &mut HeapProd<PlayerNotification>) {
@@ -242,13 +260,15 @@ impl PlayerTrack {
         scratch_bufs: &mut [&mut [f32]],
         mix_bufs: &mut [&mut [f32]],
         range: Range<usize>,
+        block_frame: Option<SessionFrame>,
         sink: &mut RtSink<'_>,
     ) -> TrackReadOutcome {
         if self.state == TrackState::Finished {
             return TrackReadOutcome::Eof;
         }
 
-        let read_outcome = self.read_resource(scratch_bufs, range.clone(), sink.metrics);
+        let read_outcome =
+            self.read_resource(scratch_bufs, range.clone(), block_frame, sink.metrics);
         match read_outcome {
             TrackReadOutcome::Full { .. } => self.handle_full_read(
                 scratch_bufs,
@@ -259,14 +279,22 @@ impl PlayerTrack {
                 },
                 read_outcome,
             ),
-            TrackReadOutcome::Partial { frames, duration } => self.handle_partial_read(
+            TrackReadOutcome::Partial {
+                frames,
+                duration,
+                presentation,
+            } => self.handle_partial_read(
                 scratch_bufs,
                 mix_bufs,
                 TrackReadContext {
                     sink: sink.reborrow(),
                     range,
                 },
-                PartialRead { duration, frames },
+                PartialRead {
+                    duration,
+                    frames,
+                    presentation,
+                },
             ),
             TrackReadOutcome::Eof => {
                 self.handle_natural_end(sink.notifications, sink.seek_epoch);
@@ -283,28 +311,81 @@ impl PlayerTrack {
         &mut self,
         scratch_bufs: &mut [&mut [f32]],
         range: Range<usize>,
+        block_frame: Option<SessionFrame>,
         metrics: &RtMetrics,
     ) -> TrackReadOutcome {
-        let resource = &mut self.resource;
         let (scratch_left, scratch_right) = scratch_bufs.split_at_mut(1);
         let mut scratch_window = [
             &mut scratch_left[0][range.clone()],
             &mut scratch_right[0][range.clone()],
         ];
 
-        match resource.read(&mut scratch_window, 0..range.len(), metrics) {
-            ReadOutcome::Full { frames } => TrackReadOutcome::Full {
-                frames,
-                duration: resource.duration(),
-                frames_until_eof: resource.frames_until_eof(),
-                position: 0.0,
-            },
-            ReadOutcome::Partial { frames } => TrackReadOutcome::Partial {
-                frames,
-                duration: resource.duration(),
-            },
-            ReadOutcome::Eof => TrackReadOutcome::Eof,
-            ReadOutcome::Failed => TrackReadOutcome::Failed,
+        let (read_outcome, point, duration, frames_until_eof, presentation_advance) = {
+            let resource = &mut self.resource;
+            let read_outcome = resource.read(&mut scratch_window, 0..range.len(), metrics);
+            let presentation_advance = resource.take_presentation_advance();
+            (
+                read_outcome,
+                resource.presentation_point(),
+                resource.duration(),
+                resource.frames_until_eof(),
+                presentation_advance,
+            )
+        };
+
+        match read_outcome {
+            ReadOutcome::Full { frames } => {
+                let presentation = if frames == range.len() && frames > 0 {
+                    self.update_presentation(
+                        point,
+                        presentation_advance,
+                        block_frame,
+                        &range,
+                        frames,
+                    )
+                } else {
+                    self.invalidate_presentation();
+                    None
+                };
+                let consumed = consumed_point(presentation_advance, frames);
+                self.advance_media_clock(frames, consumed);
+                TrackReadOutcome::Full {
+                    frames,
+                    duration,
+                    frames_until_eof,
+                    position: 0.0,
+                    presentation,
+                }
+            }
+            ReadOutcome::Partial { frames } => {
+                let presentation = if frames > 0 {
+                    self.update_presentation(
+                        point,
+                        presentation_advance,
+                        block_frame,
+                        &range,
+                        frames,
+                    )
+                } else {
+                    self.invalidate_presentation();
+                    None
+                };
+                let consumed = consumed_point(presentation_advance, frames);
+                self.advance_media_clock(frames, consumed);
+                TrackReadOutcome::Partial {
+                    frames,
+                    duration,
+                    presentation,
+                }
+            }
+            ReadOutcome::Eof => {
+                self.invalidate_presentation();
+                TrackReadOutcome::Eof
+            }
+            ReadOutcome::Failed => {
+                self.invalidate_presentation();
+                TrackReadOutcome::Failed
+            }
         }
     }
 
@@ -336,5 +417,59 @@ impl PlayerTrack {
             current => current,
         };
         self.set_state(new_state);
+    }
+}
+
+fn consumed_point(
+    advance: Option<PresentationAdvance>,
+    frames: usize,
+) -> Option<PresentationPoint> {
+    let advance = advance?;
+    (advance.read_offset_frames() <= frames).then_some(advance.point())
+}
+
+fn media_frames_after_read(
+    current: f64,
+    frames: usize,
+    playback_rate: f32,
+    host_rate: u32,
+    consumed: Option<PresentationPoint>,
+) -> f64 {
+    let Some(consumed) = consumed else {
+        let output_frames: f64 = AsPrimitive::as_(frames);
+        return output_frames.mul_add(f64::from(playback_rate), current);
+    };
+    let source_frames: f64 = AsPrimitive::as_(consumed.source_frame());
+    let source_rate = f64::from(consumed.sample_rate().get());
+    let host_rate = f64::from(host_rate.max(1));
+    source_frames / source_rate * host_rate
+}
+
+#[cfg(test)]
+mod tests {
+    use std::num::NonZeroU32;
+
+    use kithara_audio::{PresentationAdvance, PresentationPoint};
+    use kithara_test_utils::kithara;
+
+    use super::{consumed_point, media_frames_after_read};
+
+    #[kithara::test]
+    fn consumed_presentation_replaces_scalar_media_clock_advance() {
+        let source_rate = NonZeroU32::new(48_000).expect("test source rate is non-zero");
+        let point = PresentationPoint::new(0, 48_000, 0, 4_096, source_rate);
+        let advance = PresentationAdvance::new(point, 256);
+        let consumed = consumed_point(Some(advance), 512)
+            .expect("consumed boundary inside the read is valid proof");
+
+        let corrected = media_frames_after_read(44_000.0, 512, 1.5, 44_100, Some(consumed));
+        let scalar_only = media_frames_after_read(44_000.0, 512, 1.5, 44_100, None);
+
+        assert_eq!(corrected, 44_100.0);
+        assert_eq!(scalar_only, 44_768.0);
+        assert_ne!(
+            corrected, scalar_only,
+            "source proof must replace scalar drift"
+        );
     }
 }

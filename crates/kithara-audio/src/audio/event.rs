@@ -396,6 +396,8 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::num::NonZeroU32;
+
     use kithara_bufpool::PcmPool;
     use kithara_decode::{PcmChunk, PcmMeta};
     use kithara_events::{AudioEvent, Event, EventBus};
@@ -404,10 +406,22 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::audio::{Fetch, ring::create_channels};
+    use crate::{
+        PresentationPoint,
+        audio::{Fetch, ring::create_channels},
+        renderer::PresentedPcm,
+    };
 
-    fn empty_chunk() -> PcmChunk {
-        PcmChunk::new(PcmMeta::default(), PcmPool::default().attach(Vec::new()))
+    fn empty_presented() -> PresentedPcm {
+        let chunk = PcmChunk::new(PcmMeta::default(), PcmPool::default().attach(Vec::new()));
+        let point = PresentationPoint::new(
+            0,
+            0,
+            0,
+            0,
+            NonZeroU32::new(48_000).expect("fixture rate is non-zero"),
+        );
+        PresentedPcm::new(chunk, point)
     }
 
     #[kithara::test]
@@ -465,7 +479,7 @@ mod tests {
         let emit = AudioEvents::deferred(&bus);
         let (mut tx, mut rx) = create_channels(2, emit, &reader_wake);
 
-        tx.try_push(Fetch::data(empty_chunk(), 0))
+        tx.try_push(Fetch::data(empty_presented(), 0))
             .expect("first push reaches ring");
         assert!(events.try_recv().is_err());
         tx.flush_wake_signals();
@@ -474,7 +488,7 @@ mod tests {
             Ok(Event::Audio(AudioEvent::OutputAvailable))
         ));
 
-        tx.try_push(Fetch::data(empty_chunk(), 0))
+        tx.try_push(Fetch::data(empty_presented(), 0))
             .expect("second push reaches ring");
         tx.flush_wake_signals();
         assert!(events.try_recv().is_err());
@@ -482,7 +496,7 @@ mod tests {
         assert!(rx.try_pop().is_some());
         assert!(rx.try_pop().is_some());
 
-        tx.try_push(Fetch::data(empty_chunk(), 0))
+        tx.try_push(Fetch::data(empty_presented(), 0))
             .expect("third push reaches empty ring");
         tx.flush_wake_signals();
         assert!(matches!(

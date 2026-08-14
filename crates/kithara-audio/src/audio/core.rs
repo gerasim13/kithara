@@ -5,7 +5,7 @@ use std::{
 };
 
 use kithara_bufpool::PcmPool;
-use kithara_decode::{PcmSpec, TrackMetadata};
+use kithara_decode::{PcmChunk, PcmSpec, TrackMetadata};
 use kithara_events::EventBus;
 use kithara_platform::{CancelToken, sync::Arc, time::Duration};
 use kithara_stream::{
@@ -22,7 +22,10 @@ use super::{
     ring::{RecvCtx, RingConsumer},
     seek::{SeekHandle, SeekHandleParts},
 };
-use crate::traits::SeekBegin;
+use crate::{
+    renderer::PresentationFrontier,
+    traits::{PresentationAdvance, PresentationPoint, SeekBegin},
+};
 
 /// Pull-based PCM facade backed by a shared renderer worker.
 pub struct Audio<S> {
@@ -55,6 +58,7 @@ pub(super) struct Session {
     pub(super) peer_wake: Option<Arc<DeferredWake>>,
     pub(super) seek_prepare: Option<Arc<dyn SeekPrepare>>,
     pub(super) metadata: TrackMetadata,
+    pub(super) presentation_frontier: PresentationFrontier,
 }
 
 pub(super) struct Controls {
@@ -250,6 +254,17 @@ impl<S: kithara_platform::maybe_send::MaybeSend> PcmRead for Audio<S> {
         }
     }
 
+    fn presentation_point(&self) -> Option<PresentationPoint> {
+        self.session
+            .presentation_frontier
+            .point(self.session.seek_obs.epoch())
+    }
+
+    fn take_presentation_advance(&mut self) -> Option<PresentationAdvance> {
+        self.sync_seek();
+        self.ring.take_presentation_advance()
+    }
+
     fn next_chunk(&mut self) -> Result<ChunkOutcome, DecodeError> {
         self.sync_seek();
         self.ring.preloaded = true;
@@ -269,14 +284,17 @@ impl<S: kithara_platform::maybe_send::MaybeSend> PcmRead for Audio<S> {
             );
             chunk
         };
-        let Some(chunk) = chunk else {
+        let Some(presented) = chunk else {
             return chunk_outcome(self.ring.phase, self.position());
         };
+        let point = presented.point();
+        let chunk: PcmChunk = presented.into();
         self.cursor.begin_chunk(&chunk);
         self.ring.promote_playing();
         self.session
             .playhead
             .advance(&ChunkPosition::from(&chunk.meta));
+        self.ring.record_presentation_advance(point, chunk.frames());
         Ok(ChunkOutcome::Chunk(chunk))
     }
 
@@ -363,6 +381,7 @@ impl<S: kithara_platform::maybe_send::MaybeSend> PcmControl for Audio<S> {
     fn set_playback_rate(&self, rate: f32) {
         if let Some(controls) = &self.controls.stretch {
             controls.set_speed(rate);
+            defer_worker_wake(self.lease.worker.as_ref());
         } else {
             self.controls.playback_rate.store(rate, Ordering::Relaxed);
         }
@@ -410,10 +429,13 @@ fn chunk_outcome(
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::{AtomicU32, AtomicU64};
+    use std::{
+        num::NonZeroU32,
+        sync::atomic::{AtomicU32, AtomicU64},
+    };
 
     use kithara_bufpool::PcmPool;
-    use kithara_decode::{PcmChunk, PcmMeta};
+    use kithara_decode::{PcmChunk, PcmMeta, PcmSpec};
     use kithara_platform::sync::Arc;
     use kithara_stream::{PlayheadState, SeekState};
     use kithara_test_utils::kithara;
@@ -422,16 +444,21 @@ mod tests {
     use crate::{
         ConsumerWakeMode,
         audio::{Fetch, ThreadWake, connect, ring::RingParts},
+        renderer::{PresentedPcm, presentation_cell},
+        runtime::Outlet,
+        traits::PresentationPoint,
     };
 
     struct AudioFixture {
         audio: Audio<()>,
+        data_tx: Outlet<Fetch<PresentedPcm>>,
+        _trash_rx: crate::runtime::Inlet<PcmChunk>,
     }
 
     impl Default for AudioFixture {
         fn default() -> Self {
-            let (_data_tx, data_rx) = connect::<Fetch<PcmChunk>>(1, None);
-            let (trash_tx, _trash_rx) = connect::<PcmChunk>(8, None);
+            let (data_tx, data_rx) = connect::<Fetch<PresentedPcm>>(4, None);
+            let (trash_tx, trash_rx) = connect::<PcmChunk>(8, None);
             let epoch = Arc::new(AtomicU64::new(0));
             let ring = RingConsumer::new(RingParts {
                 trash_tx,
@@ -448,6 +475,7 @@ mod tests {
             let pcm_pool = PcmPool::default();
             let bus = EventBus::default();
             let emit = AudioEvents::deferred(&bus);
+            let spec = PcmSpec::new(2, NonZeroU32::new(48_000).expect("test sample rate"));
             Self {
                 audio: Audio::from(AudioParts {
                     ring,
@@ -468,6 +496,7 @@ mod tests {
                         abr_handle: None,
                         peer_wake: None,
                         seek_prepare: None,
+                        presentation_frontier: presentation_cell(0).1,
                     },
                     controls: Controls {
                         host_sample_rate: Arc::new(AtomicU32::new(0)),
@@ -475,11 +504,45 @@ mod tests {
                         stretch: None,
                         service_class: Arc::new(AtomicServiceClass::new(ServiceClass::default())),
                     },
-                    spec: PcmMeta::default().spec,
+                    spec,
                     marker: PhantomData,
                 }),
+                data_tx,
+                _trash_rx: trash_rx,
             }
         }
+    }
+
+    impl AudioFixture {
+        fn push(&mut self, frames: u32, point: PresentationPoint) {
+            let spec = self.audio.spec();
+            let channels = usize::from(spec.channels);
+            let frame_count = usize::try_from(frames).expect("test frame count fits usize");
+            let chunk = PcmChunk::new(
+                PcmMeta {
+                    spec,
+                    frames,
+                    ..Default::default()
+                },
+                PcmPool::default().attach(vec![0.5; frame_count * channels]),
+            );
+            self.data_tx
+                .try_push(Fetch::data(
+                    PresentedPcm::new(chunk, point),
+                    point.seek_epoch(),
+                ))
+                .expect("presented PCM reaches the final ring");
+        }
+    }
+
+    fn point(source_frame: u64, generation: u64, output_end: u64) -> PresentationPoint {
+        PresentationPoint::new(
+            0,
+            source_frame,
+            generation,
+            output_end,
+            NonZeroU32::new(48_000).expect("test sample rate"),
+        )
     }
 
     #[kithara::test]
@@ -492,5 +555,48 @@ mod tests {
             .seek(Duration::from_millis(250))
             .expect("seek should arm epoch");
         assert!(!fixture.audio.session.preload_gate.is_ready());
+    }
+
+    #[kithara::test]
+    fn presentation_advance_is_hidden_until_chunk_boundary_is_consumed() {
+        let mut fixture = AudioFixture::default();
+        let expected = point(4, 2, 4);
+        fixture.push(4, expected);
+        fixture.audio.preload().expect("test PCM preloads");
+
+        assert!(fixture.audio.take_presentation_advance().is_none());
+        let mut first_half = [0.0; 4];
+        let _ = fixture
+            .audio
+            .read(&mut first_half)
+            .expect("partial PCM read succeeds");
+        assert!(fixture.audio.take_presentation_advance().is_none());
+
+        let mut second_half = [0.0; 4];
+        let _ = fixture
+            .audio
+            .read(&mut second_half)
+            .expect("boundary PCM read succeeds");
+        let advance = fixture
+            .audio
+            .take_presentation_advance()
+            .expect("completed boundary becomes observable");
+        assert_eq!(advance.point(), expected);
+        assert_eq!(advance.read_offset_frames(), 2);
+    }
+
+    #[kithara::test]
+    fn seek_clears_unclaimed_presentation_advance() {
+        let mut fixture = AudioFixture::default();
+        fixture.push(2, point(2, 4, 2));
+        fixture.audio.preload().expect("test PCM preloads");
+        let mut output = [0.0; 4];
+        let _ = fixture
+            .audio
+            .read(&mut output)
+            .expect("boundary PCM read succeeds");
+
+        let _ = fixture.audio.seek_handle().begin(Duration::from_millis(10));
+        assert!(fixture.audio.take_presentation_advance().is_none());
     }
 }

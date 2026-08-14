@@ -178,6 +178,7 @@ async fn eof_playback_stopped_notification_carries_item_id() {
             &mut scratch_bufs,
             &mut mix_bufs,
             0..512,
+            None,
             &mut RtSink::new(&mut notification_tx, &RtMetrics::default(), NO_SEEK_PENDING),
         );
 
@@ -237,6 +238,7 @@ fn read_past_the_end(
             &mut scratch_bufs,
             &mut mix_bufs,
             0..512,
+            None,
             &mut RtSink::new(tx, &RtMetrics::default(), sink_seek_epoch),
         );
     }
@@ -302,6 +304,7 @@ async fn read_outcome_full_on_normal_read() {
         &mut scratch_bufs,
         &mut mix_bufs,
         0..512,
+        None,
         &mut RtSink::new(&mut notification_tx, &RtMetrics::default(), NO_SEEK_PENDING),
     );
 
@@ -360,6 +363,7 @@ async fn read_outcome_partial_then_eof() {
             &mut scratch_bufs,
             &mut mix_bufs,
             0..512,
+            None,
             &mut RtSink::new(&mut notification_tx, &RtMetrics::default(), NO_SEEK_PENDING),
         );
 
@@ -417,6 +421,7 @@ async fn handover_emits_once_when_position_crosses_fade_threshold() {
             &mut scratch_bufs,
             &mut mix_bufs,
             0..512,
+            None,
             &mut RtSink::new(&mut notification_tx, &RtMetrics::default(), NO_SEEK_PENDING),
         );
         for notification in collect_notifications(&mut rx) {
@@ -450,6 +455,7 @@ async fn handover_emits_once_when_position_crosses_fade_threshold() {
         &mut scratch_bufs,
         &mut mix_bufs,
         0..512,
+        None,
         &mut RtSink::new(&mut notification_tx, &RtMetrics::default(), NO_SEEK_PENDING),
     );
     let notifications = collect_notifications(&mut rx);
@@ -486,6 +492,7 @@ async fn handover_uses_buffered_eof_when_duration_is_overestimated() {
         &mut scratch_bufs,
         &mut mix_bufs,
         0..512,
+        None,
         &mut RtSink::new(&mut notification_tx, &RtMetrics::default(), NO_SEEK_PENDING),
     );
 
@@ -538,6 +545,7 @@ async fn handover_backstops_eof_when_threshold_was_not_reached_earlier() {
         &mut scratch_bufs,
         &mut mix_bufs,
         0..512,
+        None,
         &mut RtSink::new(&mut notification_tx, &RtMetrics::default(), NO_SEEK_PENDING),
     );
     assert!(matches!(outcome, TrackReadOutcome::Partial { .. }));
@@ -591,6 +599,7 @@ async fn handover_is_not_duplicated_at_eof_after_early_trigger() {
             &mut scratch_bufs,
             &mut mix_bufs,
             0..512,
+            None,
             &mut RtSink::new(&mut notification_tx, &RtMetrics::default(), NO_SEEK_PENDING),
         );
 
@@ -643,6 +652,7 @@ async fn prefetch_fires_before_handover_when_prefetch_exceeds_fade() {
         &mut scratch_bufs,
         &mut mix_bufs,
         0..512,
+        None,
         &mut RtSink::new(&mut notification_tx, &RtMetrics::default(), NO_SEEK_PENDING),
     );
 
@@ -685,6 +695,7 @@ async fn handover_fires_after_prefetch_when_position_reaches_fade_threshold() {
         &mut scratch_bufs,
         &mut mix_bufs,
         0..512,
+        None,
         &mut RtSink::new(&mut notification_tx, &RtMetrics::default(), NO_SEEK_PENDING),
     );
     let after_prefetch = collect_notifications(&mut rx);
@@ -707,6 +718,7 @@ async fn handover_fires_after_prefetch_when_position_reaches_fade_threshold() {
             &mut scratch_bufs,
             &mut mix_bufs,
             0..512,
+            None,
             &mut RtSink::new(&mut notification_tx, &RtMetrics::default(), NO_SEEK_PENDING),
         );
         for notification in collect_notifications(&mut rx) {
@@ -744,6 +756,7 @@ async fn prefetch_fires_immediately_when_track_shorter_than_prefetch_duration() 
         &mut scratch_bufs,
         &mut mix_bufs,
         0..512,
+        None,
         &mut RtSink::new(&mut notification_tx, &RtMetrics::default(), NO_SEEK_PENDING),
     );
 
@@ -776,6 +789,7 @@ async fn prefetch_and_handover_both_fire_when_thresholds_coincide() {
         &mut scratch_bufs,
         &mut mix_bufs,
         0..512,
+        None,
         &mut RtSink::new(&mut notification_tx, &RtMetrics::default(), NO_SEEK_PENDING),
     );
     let mid = collect_notifications(&mut rx);
@@ -792,6 +806,7 @@ async fn prefetch_and_handover_both_fire_when_thresholds_coincide() {
             &mut scratch_bufs,
             &mut mix_bufs,
             0..512,
+            None,
             &mut RtSink::new(&mut notification_tx, &RtMetrics::default(), NO_SEEK_PENDING),
         );
         for notification in collect_notifications(&mut rx) {
@@ -831,6 +846,7 @@ async fn read_outcome_eof_when_track_finished() {
         &mut scratch_bufs,
         &mut mix_bufs,
         0..512,
+        None,
         &mut RtSink::new(&mut notification_tx, &RtMetrics::default(), NO_SEEK_PENDING),
     );
 
