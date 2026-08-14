@@ -1,21 +1,16 @@
 name: Nightly report
 
-# A lane nobody hears about is a lane nobody runs. `stress`, `android` and
-# `windows` were red for two days before anyone noticed, because the scheduled
-# chain finishes quietly whichever way it goes.
-#
-# This keeps one issue open while anything is failing and closes it when
-# everything passes, so the repository carries the current answer rather than a
-# pile of notifications about old ones. It needs no secret and no service: the
-# token every workflow already has is enough to write an issue.
+# The source scheduled run keeps its own verdict. This GitHub-hosted collector
+# only makes that result visible without depending on repository Issues or the
+# self-hosted runner fleet being healthy.
 on:
   workflow_run:
     workflows: ["Scheduled runs"]
     types: [completed]
 
 permissions:
+  actions: read
   contents: read
-  issues: write
 
 concurrency:
   group: nightly-report
@@ -23,48 +18,48 @@ concurrency:
 
 jobs:
   report:
-    name: Report the nightly result
-    # GitHub-hosted: this reads an API and writes an issue. Putting it on the
-    # self-hosted fleet would mean a red fleet cannot report that it is red.
+    name: Summarize the nightly result
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
     steps:
-      - name: Collect the failing jobs and open, update, or close the report
+      - name: Collect the source run jobs
         env:
           GH_TOKEN: ${{ github.token }}
           RUN_ID: ${{ github.event.workflow_run.id }}
           RUN_URL: ${{ github.event.workflow_run.html_url }}
+          RUN_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
           REPOSITORY: ${{ github.repository }}
-          TITLE: Nightly lanes are failing
         run: |
           set -euo pipefail
+          mkdir -p target
 
-          # `skipped` is the normal state here: one scheduled trigger fires the
-          # chain and only the lane whose cron matched runs. Only a conclusion
-          # of `failure` says something about the code.
+          {
+            echo "# Nightly result"
+            echo
+            echo "- Source run: [$RUN_ID]($RUN_URL)"
+            echo "- Source conclusion: \`$RUN_CONCLUSION\`"
+          } > target/nightly-report.md
+
           failing=$(gh api "repos/$REPOSITORY/actions/runs/$RUN_ID/jobs" --paginate \
-            --jq '.jobs[] | select(.conclusion == "failure") | "- \(.name) — \(.html_url)"')
+            --jq '.jobs[] | select(.conclusion != "success" and .conclusion != "skipped") | "- [\(.name)](\(.html_url)) (`\(.conclusion)`)"')
 
-          existing=$(gh issue list --repo "$REPOSITORY" --state open --search "$TITLE in:title" \
-            --json number,title --jq "[.[] | select(.title == \"$TITLE\")][0].number // empty")
-
-          if [ -z "$failing" ]; then
-            if [ -n "$existing" ]; then
-              gh issue close "$existing" --repo "$REPOSITORY" \
-                --comment "Green again: $RUN_URL"
+          {
+            echo
+            echo "## Unsuccessful jobs"
+            echo
+            if [[ -n "$failing" ]]; then
+              echo "$failing"
+            else
+              echo "No source jobs failed."
             fi
-            echo "nothing failed in $RUN_URL"
-            exit 0
-          fi
+          } >> target/nightly-report.md
 
-          body=$(printf '%s\n\n%s\n\nRun: %s' \
-            'These lanes finished red. The scheduled chain does not block anything, so this issue is where the result lives until it is green.' \
-            "$failing" "$RUN_URL")
+          cat target/nightly-report.md >> "$GITHUB_STEP_SUMMARY"
 
-          if [ -n "$existing" ]; then
-            gh issue edit "$existing" --repo "$REPOSITORY" --body "$body"
-            gh issue comment "$existing" --repo "$REPOSITORY" --body "Still failing: $RUN_URL"
-          else
-            gh issue create --repo "$REPOSITORY" --title "$TITLE" --body "$body"
-          fi
+      - name: Upload the nightly report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: nightly-report-${{ github.event.workflow_run.id }}
+          path: target/nightly-report.md

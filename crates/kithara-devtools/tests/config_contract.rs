@@ -159,6 +159,125 @@ features = ["no-block-detector"]
 }
 
 #[test]
+fn stress_config_owns_generic_modes_environment_and_artifacts() {
+    let temp = tempdir().expect("tempdir");
+    write_config(
+        temp.path(),
+        r#"
+[stress]
+default_mode = "baseline"
+lane = "workspace"
+backend = "http"
+nextest_config = "config/runner.toml"
+nextest_profile = "campaign"
+default_filter = "all()"
+default_count = 3
+max_count = 10
+test_threads = "4"
+max_test_threads = 8
+raw_output = "target/evidence"
+report_output = "target/report.md"
+workflow_job_timeout_minutes = 60
+
+[stress.artifacts]
+subject_junit = "target/runner/junit.xml"
+inventory = "inventory.json"
+junit = "junit.xml"
+log = "runner.log"
+manifest = "manifest.json"
+pressure = "pressure.jsonl"
+report = "report.md"
+
+[stress.environment]
+remove = ["OLD_TRACE"]
+
+[stress.modes.baseline]
+features = ["snapshot-clock"]
+
+[stress.modes.baseline.set_env]
+TRACE_LEVEL = "warn"
+
+[stress.modes.baseline.raw_path_env]
+CAPTURE_DIR = "captures"
+
+[test]
+default_lane = "workspace"
+default_backend = "http"
+feature_arg = "--features"
+
+[test.lanes.workspace]
+program = "cargo"
+prefix_args = ["nextest", "run"]
+
+[test.net_backends.http]
+features = []
+"#,
+    );
+
+    let config = ProjectConfig::load(temp.path()).expect("load stress config");
+    let mode = config.stress.mode("baseline").expect("configured mode");
+
+    assert_eq!(config.stress.nextest_profile, "campaign");
+    assert_eq!(config.stress.max_count, 10);
+    assert_eq!(mode.features, ["snapshot-clock"]);
+    assert_eq!(mode.set_env["TRACE_LEVEL"], "warn");
+    assert_eq!(mode.raw_path_env["CAPTURE_DIR"], "captures");
+}
+
+#[test]
+fn stress_envelope_policy_requires_an_envelope_artifact() {
+    let temp = tempdir().expect("tempdir");
+    write_config(
+        temp.path(),
+        r#"
+[stress]
+default_mode = "baseline"
+lane = "workspace"
+backend = "http"
+nextest_config = "config/runner.toml"
+nextest_profile = "campaign"
+default_filter = "all()"
+default_count = 1
+max_count = 1
+test_threads = "1"
+max_test_threads = 1
+raw_output = "target/evidence"
+report_output = "target/report.md"
+workflow_job_timeout_minutes = 60
+
+[stress.artifacts]
+subject_junit = "target/runner/junit.xml"
+inventory = "inventory.json"
+junit = "junit.xml"
+log = "runner.log"
+manifest = "manifest.json"
+pressure = "pressure.jsonl"
+report = "report.md"
+
+[stress.evidence]
+envelope_suffix_markers = [" payload="]
+
+[stress.modes.baseline]
+
+[test]
+default_lane = "workspace"
+default_backend = "http"
+
+[test.lanes.workspace]
+program = "cargo"
+prefix_args = ["nextest", "run"]
+
+[test.net_backends.http]
+features = []
+"#,
+    );
+
+    let error = ProjectConfig::load(temp.path()).expect_err("orphan envelope policy fails");
+
+    assert!(format!("{error:#}").contains("stress.artifacts.envelope_dir"));
+}
+
+#[test]
 fn workspace_scan_excludes_walked_files() {
     let temp = tempdir().expect("tempdir");
     write_config(

@@ -8,6 +8,12 @@ fn no_context_serializes_to_null() {
     assert_eq!(super::NoContext.dump_json(), "null");
 }
 
+#[kithara::test]
+fn timeout_evidence_api_shape_is_stable() {
+    let _write: fn(&str, &str) = super::record_test_hang;
+    let _guard: fn(&str) -> super::PreKillGuard = super::PreKillGuard::new;
+}
+
 mod detector_tests {
     use kithara_platform::{thread::sleep, time::Duration};
 
@@ -87,7 +93,11 @@ mod native_detector_tests {
             phase: u32,
         }
 
-        let dir: PathBuf = env::temp_dir().join("kithara-hang-tick-with-test");
+        let dir: PathBuf = env::temp_dir().join(format!(
+            "kithara-hang-tick-with-test-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
         let _ = std::fs::create_dir_all(&dir);
         let dir_for_closure = dir.clone();
 
@@ -113,7 +123,13 @@ mod native_detector_tests {
             .expect("no dump file produced");
         let body = std::fs::read_to_string(newest.path()).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&body).unwrap();
-        assert_eq!(parsed["phase"], 7, "last tick_with wins");
+        assert_eq!(parsed["schema"], "kithara.hang.v1");
+        assert_eq!(parsed["label"], "tests.tick_with");
+        assert!(parsed["diagnostic"].as_str().is_some());
+        assert!(parsed["timestamp_ms"].as_u64().is_some());
+        assert_eq!(parsed["pid"], std::process::id());
+        assert_eq!(parsed["context"]["phase"], 7, "last tick_with wins");
+        assert!(parsed["nextest"].is_object());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -184,7 +200,7 @@ fn blanket_impl_serializes_serde_type() {
 mod dump_tests {
     use std::path::PathBuf;
 
-    use super::super::{resolve_dump_dir, sanitize_label, write_dump};
+    use super::super::{HangDump, resolve_dump_dir, sanitize_label, write_dump};
     use crate::kithara;
 
     #[kithara::test]
@@ -199,6 +215,13 @@ mod dump_tests {
             "kithara_audio..audio..read"
         );
         assert_eq!(sanitize_label("/etc/passwd"), ".etc.passwd");
+    }
+
+    #[kithara::test]
+    fn sanitize_label_bounds_filename_component() {
+        let sanitized = sanitize_label(&"x".repeat(1_000));
+        assert_eq!(sanitized.len(), 96);
+        assert_eq!(sanitize_label(""), "unknown");
     }
 
     #[kithara::test]
@@ -222,6 +245,7 @@ mod dump_tests {
             "kithara-hang-detector-dump-test-{}",
             std::process::id()
         ));
+        let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
 
         write_dump(
@@ -247,8 +271,90 @@ mod dump_tests {
 
         let body = std::fs::read_to_string(newest.path()).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&body).unwrap();
-        assert_eq!(parsed["kind"], "sample");
-        assert_eq!(parsed["value"], 42);
+        assert_eq!(parsed["schema"], "kithara.hang.v1");
+        assert_eq!(parsed["label"], "tests::round::trip");
+        assert_eq!(parsed["diagnostic"], "stuck at x.rs:1");
+        assert!(parsed.get("flash").is_some());
+        if let Some(flash) = parsed["flash"].as_str() {
+            assert!(flash.contains("[flash hang dump]"));
+            assert!(flash.contains("tests::round::trip"));
+        }
+        assert!(parsed["timestamp_ms"].as_u64().is_some());
+        assert_eq!(parsed["pid"], std::process::id());
+        assert_eq!(parsed["context"]["kind"], "sample");
+        assert_eq!(parsed["context"]["value"], 42);
+        assert!(parsed["nextest"].is_object());
+        for (field, env_name) in [
+            ("run_id", "NEXTEST_RUN_ID"),
+            ("attempt_id", "NEXTEST_ATTEMPT_ID"),
+            ("test_name", "NEXTEST_TEST_NAME"),
+            ("stress_current", "NEXTEST_STRESS_CURRENT"),
+            ("stress_total", "NEXTEST_STRESS_TOTAL"),
+        ] {
+            let expected = std::env::var(env_name)
+                .ok()
+                .filter(|value| !value.is_empty());
+            assert_eq!(
+                parsed["nextest"][field].as_str(),
+                expected.as_deref(),
+                "nextest field {field} must match {env_name}"
+            );
+        }
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[kithara::test]
+    fn write_dump_uses_collision_resistant_names() {
+        let dir: PathBuf = std::env::temp_dir().join(format!(
+            "kithara-hang-detector-collision-test-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        write_dump("same", &serde_json::json!({"call": 1}), Some(&dir), "one");
+        write_dump("same", &serde_json::json!({"call": 2}), Some(&dir), "two");
+
+        let mut names = std::fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(Result::ok)
+            .map(|entry| entry.file_name())
+            .collect::<Vec<_>>();
+        names.sort();
+        names.dedup();
+        assert_eq!(names.len(), 2);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[kithara::test]
+    fn write_dump_preserves_non_json_context_as_a_string() {
+        struct InvalidJson;
+
+        impl HangDump for InvalidJson {
+            fn dump_json(&self) -> String {
+                "not-json".to_owned()
+            }
+        }
+
+        let dir: PathBuf = std::env::temp_dir().join(format!(
+            "kithara-hang-detector-invalid-json-test-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        write_dump("invalid", &InvalidJson, Some(&dir), "diagnostic");
+
+        let dump = std::fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(Result::ok)
+            .next()
+            .expect("no dump file produced");
+        let body = std::fs::read_to_string(dump.path()).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(parsed["context"], "not-json");
 
         let _ = std::fs::remove_dir_all(&dir);
     }

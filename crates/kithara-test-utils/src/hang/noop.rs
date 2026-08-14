@@ -20,6 +20,28 @@ pub struct NoContext;
 
 pub struct HangDetector<C: HangDump = NoContext>(PhantomData<C>);
 
+/// Stress-only pre-kill timer used by `#[kithara::test]` expansions.
+#[doc(hidden)]
+#[must_use]
+#[derive(Debug)]
+pub struct PreKillGuard {
+    _private: (),
+}
+
+impl PreKillGuard {
+    /// Construct the inert no-`hang` counterpart of the stress timer.
+    #[must_use]
+    pub const fn new(_test_name: &str) -> Self {
+        Self { _private: () }
+    }
+}
+
+/// Preserve the pre-existing tracing-only Flash report when `hang` is off.
+#[doc(hidden)]
+pub fn record_test_hang(label: &str, _diagnostic: &str) {
+    kithara_platform::flash::log_hang_dump(label);
+}
+
 impl<C: HangDump> HangDetector<C> {
     #[inline(always)]
     #[must_use]

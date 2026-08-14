@@ -147,6 +147,49 @@ mod tests {
     }
 
     #[test]
+    fn stress_campaign_commands_are_nested_under_stress() {
+        assert!(
+            Cli::try_parse_from([
+                "xtask",
+                "stress",
+                "run",
+                "--subject-root",
+                "/subject",
+                "--output",
+                "/raw",
+                "--count",
+                "2",
+                "--mode",
+                "reproduction",
+            ])
+            .is_ok()
+        );
+        assert!(
+            Cli::try_parse_from([
+                "xtask",
+                "stress",
+                "report",
+                "--raw",
+                "/raw",
+                "--expected-controller-sha",
+                "0123456789abcdef0123456789abcdef01234567",
+                "--expected-subject-sha",
+                "0123456789abcdef0123456789abcdef01234567",
+                "--filter",
+                "all()",
+                "--count",
+                "2",
+                "--mode",
+                "reproduction",
+                "--execute-result",
+                "failure",
+            ])
+            .is_ok()
+        );
+        assert!(Cli::try_parse_from(["xtask", "stress-run"]).is_err());
+    }
+
+    #[test]
     fn audit_clippy_fix_accepts_dirty_override_and_scope() {
         let cli = Cli::try_parse_from([
             "xtask",

@@ -56,6 +56,8 @@ routine work:
   doc-tests: `just test all`.
 - `just ci gate`; scoped audit: `just ci audit <scope>`; broad report:
   `just ci health`.
+- Repeated-test evidence campaign: `just ci stress <args>`; independent artifact
+  verification: `just ci stress-report <args>`.
 - Architecture diagram, linked contour reports, and complexity profile:
   `just arch viz` (workspace, automatic LOD 0 plus crate/hotspot-subsystem pages);
   crate subsystems: `just arch viz --crate <package>` (automatic LOD 1);

@@ -1,37 +1,293 @@
 use std::{
     env,
-    fs::File,
+    fs::{self, OpenOptions},
     io::Write,
     path::{Path, PathBuf},
-    sync::OnceLock,
+    sync::{
+        OnceLock,
+        atomic::{AtomicU64, Ordering},
+        mpsc::{self, Receiver, RecvTimeoutError, Sender},
+    },
+    thread::{self, JoinHandle},
 };
 
 use kithara_platform::time::{Duration, SystemTime};
+use serde::Serialize;
+use serde_json::Value;
 
-use super::shared::HangDump;
+use super::shared::{HangDump, NoContext};
 
-/// Sanitize a label for use in a dump filename.
+const MAX_FILENAME_LABEL_CHARS: usize = 96;
+const MAX_ENVELOPE_BYTES: usize = 4 * 1024 * 1024;
+const MAX_NEXTEST_FIELD_BYTES: usize = 8 * 1024;
+const MAX_LABEL_BYTES: usize = 8 * 1024;
+const MAX_DIAGNOSTIC_BYTES: usize = 32 * 1024;
+const MAX_CONTEXT_BYTES: usize = 192 * 1024;
+const MAX_FLASH_BYTES: usize = 256 * 1024;
+const MAX_FALLBACK_LOG_BYTES: usize = 64 * 1024;
+const MAX_JSON_EXPANSION: usize = 6;
+const ENVELOPE_OVERHEAD_BYTES: usize = 16 * 1024;
+const MAX_BOUNDED_INPUT_BYTES: usize = 12 * MAX_NEXTEST_FIELD_BYTES
+    + MAX_LABEL_BYTES
+    + MAX_DIAGNOSTIC_BYTES
+    + MAX_CONTEXT_BYTES
+    + MAX_FLASH_BYTES;
+
+const _: () = assert!(
+    MAX_BOUNDED_INPUT_BYTES * MAX_JSON_EXPANSION + ENVELOPE_OVERHEAD_BYTES < MAX_ENVELOPE_BYTES
+);
+
+static NEXT_DUMP_ID: AtomicU64 = AtomicU64::new(0);
+
+/// Sanitize and bound a label for use in a dump filename.
 #[must_use]
 pub(crate) fn sanitize_label(label: &str) -> String {
-    label
+    let sanitized: String = label
         .chars()
+        .take(MAX_FILENAME_LABEL_CHARS)
         .map(|c| match c {
             'a'..='z' | 'A'..='Z' | '0'..='9' | '-' | '_' => c,
             _ => '.',
         })
-        .collect()
+        .collect();
+    if sanitized.is_empty() {
+        "unknown".to_owned()
+    } else {
+        sanitized
+    }
 }
 
 struct Consts;
 impl Consts {
     const ENV_DUMP_DIR: &str = "KITHARA_HANG_DUMP_DIR";
+    const ENV_PREKILL_SECS: &str = "KITHARA_HANG_PREKILL_SECS";
     const ENV_TIMEOUT_SECS: &str = "KITHARA_HANG_TIMEOUT_SECS";
+    const NEXTEST_ATTEMPT: &str = "NEXTEST_ATTEMPT";
+    const NEXTEST_ATTEMPT_ID: &str = "NEXTEST_ATTEMPT_ID";
+    const NEXTEST_BINARY_ID: &str = "NEXTEST_BINARY_ID";
+    const NEXTEST_RUN_ID: &str = "NEXTEST_RUN_ID";
+    const NEXTEST_STRESS_CURRENT: &str = "NEXTEST_STRESS_CURRENT";
+    const NEXTEST_STRESS_TOTAL: &str = "NEXTEST_STRESS_TOTAL";
+    const NEXTEST_TEST_GLOBAL_SLOT: &str = "NEXTEST_TEST_GLOBAL_SLOT";
+    const NEXTEST_TEST_GROUP: &str = "NEXTEST_TEST_GROUP";
+    const NEXTEST_TEST_GROUP_SLOT: &str = "NEXTEST_TEST_GROUP_SLOT";
+    const NEXTEST_TEST_NAME: &str = "NEXTEST_TEST_NAME";
+    const NEXTEST_TEST_THREADS: &str = "NEXTEST_TEST_THREADS";
+    const NEXTEST_TOTAL_ATTEMPTS: &str = "NEXTEST_TOTAL_ATTEMPTS";
+}
+
+#[derive(Debug, Serialize)]
+struct NextestContext {
+    run_id: Option<String>,
+    binary_id: Option<String>,
+    attempt_id: Option<String>,
+    attempt: Option<String>,
+    total_attempts: Option<String>,
+    test_name: Option<String>,
+    stress_current: Option<String>,
+    stress_total: Option<String>,
+    test_group: Option<String>,
+    test_global_slot: Option<String>,
+    test_group_slot: Option<String>,
+    test_threads: Option<String>,
+}
+
+impl NextestContext {
+    fn capture() -> Self {
+        Self::from_lookup(|key| env::var(key).ok())
+    }
+
+    fn from_lookup(mut lookup: impl FnMut(&str) -> Option<String>) -> Self {
+        let mut read = |key| {
+            lookup(key)
+                .filter(|value| !value.is_empty())
+                .map(|value| bounded_owned(value, MAX_NEXTEST_FIELD_BYTES))
+        };
+        Self {
+            run_id: read(Consts::NEXTEST_RUN_ID),
+            binary_id: read(Consts::NEXTEST_BINARY_ID),
+            attempt_id: read(Consts::NEXTEST_ATTEMPT_ID),
+            attempt: read(Consts::NEXTEST_ATTEMPT),
+            total_attempts: read(Consts::NEXTEST_TOTAL_ATTEMPTS),
+            test_name: read(Consts::NEXTEST_TEST_NAME),
+            stress_current: read(Consts::NEXTEST_STRESS_CURRENT),
+            stress_total: read(Consts::NEXTEST_STRESS_TOTAL),
+            test_group: read(Consts::NEXTEST_TEST_GROUP),
+            test_global_slot: read(Consts::NEXTEST_TEST_GLOBAL_SLOT),
+            test_group_slot: read(Consts::NEXTEST_TEST_GROUP_SLOT),
+            test_threads: read(Consts::NEXTEST_TEST_THREADS),
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+struct DumpEnvelope<'a> {
+    schema: &'static str,
+    label: &'a str,
+    diagnostic: &'a str,
+    flash: Option<String>,
+    timestamp_ms: u128,
+    pid: u32,
+    nextest: NextestContext,
+    context: Value,
+}
+
+fn flash_dump(label: &str) -> Option<String> {
+    nonempty_flash_dump(kithara_platform::flash::hang_dump(label))
+}
+
+fn nonempty_flash_dump(dump: String) -> Option<String> {
+    if dump.trim().is_empty() {
+        None
+    } else {
+        Some(bounded_owned(dump, MAX_FLASH_BYTES))
+    }
+}
+
+fn omission_marker(bytes: usize) -> String {
+    format!("\n...[kithara omitted_bytes={bytes}]...\n")
+}
+
+fn bounded_excerpt(value: &str, max_bytes: usize) -> String {
+    if value.len() <= max_bytes {
+        return value.to_owned();
+    }
+
+    let marker_budget = omission_marker(value.len()).len();
+    debug_assert!(marker_budget < max_bytes);
+    let retained = max_bytes - marker_budget;
+    let head_target = retained.div_ceil(2);
+    let tail_target = retained / 2;
+
+    let mut head_end = head_target;
+    while !value.is_char_boundary(head_end) {
+        head_end -= 1;
+    }
+    let mut tail_start = value.len() - tail_target;
+    while !value.is_char_boundary(tail_start) {
+        tail_start += 1;
+    }
+
+    let marker = omission_marker(tail_start - head_end);
+    let mut excerpt = String::with_capacity(max_bytes);
+    excerpt.push_str(&value[..head_end]);
+    excerpt.push_str(&marker);
+    excerpt.push_str(&value[tail_start..]);
+    debug_assert!(excerpt.len() <= max_bytes);
+    excerpt
+}
+
+fn bounded_owned(value: String, max_bytes: usize) -> String {
+    if value.len() <= max_bytes {
+        value
+    } else {
+        bounded_excerpt(&value, max_bytes)
+    }
+}
+
+fn bounded_context(payload: String) -> Value {
+    if payload.len() > MAX_CONTEXT_BYTES {
+        return Value::String(bounded_excerpt(&payload, MAX_CONTEXT_BYTES));
+    }
+
+    serde_json::from_str(&payload).unwrap_or_else(|_| Value::String(payload))
+}
+
+fn serialize_envelope(mut envelope: DumpEnvelope<'_>) -> serde_json::Result<Option<String>> {
+    let payload = serde_json::to_string(&envelope)?;
+    if payload.len() < MAX_ENVELOPE_BYTES {
+        return Ok(Some(payload));
+    }
+
+    let encoded_bytes = payload.len();
+    envelope.flash = None;
+    envelope.context = Value::String(format!(
+        "[kithara context and Flash omitted: encoded_bytes={encoded_bytes}]"
+    ));
+    let fallback = serde_json::to_string(&envelope)?;
+    Ok((fallback.len() < MAX_ENVELOPE_BYTES).then_some(fallback))
 }
 
 fn now_ms() -> u128 {
     SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
         .map_or(0, |d| d.as_millis())
+}
+
+fn prekill_elapsed(cancelled: &Receiver<()>, timeout: Duration) -> bool {
+    matches!(
+        cancelled.recv_timeout(timeout),
+        Err(RecvTimeoutError::Timeout)
+    )
+}
+
+/// Stress-only guard that records evidence shortly before the outer runner
+/// terminates a test. It never aborts the process.
+#[doc(hidden)]
+#[must_use]
+#[derive(Debug)]
+pub struct PreKillGuard {
+    cancel: Option<Sender<()>>,
+    worker: Option<JoinHandle<()>>,
+}
+
+impl PreKillGuard {
+    /// Start the pre-kill evidence timer when `KITHARA_HANG_PREKILL_SECS` is a
+    /// positive integer. The timer is inert otherwise.
+    pub fn new(test_name: &str) -> Self {
+        let Some(timeout) = env::var(Consts::ENV_PREKILL_SECS)
+            .ok()
+            .and_then(|value| parse_timeout_secs(&value))
+        else {
+            return Self {
+                cancel: None,
+                worker: None,
+            };
+        };
+
+        let (cancel, cancelled) = mpsc::channel();
+        let test_name = test_name.to_owned();
+        let error_name = test_name.clone();
+        let spawn = thread::Builder::new()
+            .name("kithara-prekill".to_owned())
+            .spawn(move || {
+                if prekill_elapsed(&cancelled, timeout) {
+                    let diagnostic = format!(
+                        "test `{test_name}` still running after {timeout:?}; outer termination is imminent"
+                    );
+                    record_test_hang("pre-kill", &diagnostic);
+                }
+            });
+
+        let worker = match spawn {
+            Ok(worker) => worker,
+            Err(err) => {
+                kithara_platform::logging::log_error(&format!(
+                    "[kithara_hang_detector] failed to start pre-kill timer for {error_name}: {err}"
+                ));
+                return Self {
+                    cancel: None,
+                    worker: None,
+                };
+            }
+        };
+
+        Self {
+            cancel: Some(cancel),
+            worker: Some(worker),
+        }
+    }
+}
+
+impl Drop for PreKillGuard {
+    fn drop(&mut self) {
+        if let Some(cancel) = self.cancel.take() {
+            let _ = cancel.send(());
+        }
+        if let Some(worker) = self.worker.take() {
+            let _ = worker.join();
+        }
+    }
 }
 
 #[must_use]
@@ -46,21 +302,75 @@ pub(crate) fn resolve_dump_dir(explicit: Option<&Path>) -> PathBuf {
 }
 
 pub(crate) fn write_dump<C: HangDump>(label: &str, ctx: &C, dir: Option<&Path>, diag: &str) {
-    let payload = ctx.dump_json();
+    let label = bounded_excerpt(label, MAX_LABEL_BYTES);
+    let diagnostic = bounded_excerpt(diag, MAX_DIAGNOSTIC_BYTES);
+    let context = bounded_context(ctx.dump_json());
     let ts = now_ms();
     let pid = std::process::id();
-    let dir = resolve_dump_dir(dir);
-    let file = dir.join(format!(
-        "kithara-hang-{label}-{ts}-{pid}.json",
-        label = sanitize_label(label),
-    ));
-    let dump = match File::create(&file).and_then(|mut f| f.write_all(payload.as_bytes())) {
-        Ok(()) => format!("dump={}", file.display()),
-        Err(err) => format!("dump-write-failed={err}"),
+    let envelope = DumpEnvelope {
+        schema: "kithara.hang.v1",
+        label: &label,
+        diagnostic: &diagnostic,
+        flash: flash_dump(&label),
+        timestamp_ms: ts,
+        pid,
+        nextest: NextestContext::capture(),
+        context,
     };
-    kithara_platform::logging::log_error(&format!(
-        "[kithara_hang_detector] hang detected: {label} ts_ms={ts} pid={pid} {dump} [{diag}] — {payload}"
-    ));
+    let payload = match serialize_envelope(envelope) {
+        Ok(Some(payload)) => payload,
+        Ok(None) => {
+            kithara_platform::logging::log_error(&format!(
+                "[kithara_hang_detector] bounded hang dump exceeded {MAX_ENVELOPE_BYTES} bytes for {label}"
+            ));
+            return;
+        }
+        Err(err) => {
+            kithara_platform::logging::log_error(&format!(
+                "[kithara_hang_detector] failed to serialize hang dump for {label}: {err}"
+            ));
+            return;
+        }
+    };
+    let dir = resolve_dump_dir(dir);
+    let dump_id = NEXT_DUMP_ID.fetch_add(1, Ordering::Relaxed);
+    let filename = format!(
+        "kithara-hang-{label}-{ts}-{pid}-{dump_id}.json",
+        label = sanitize_label(&label),
+    );
+    let file = dir.join(&filename);
+    let temp = dir.join(format!(".{filename}.tmp"));
+    let write = (|| {
+        let mut output = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temp)?;
+        output.write_all(payload.as_bytes())?;
+        output.sync_data()?;
+        drop(output);
+        fs::hard_link(&temp, &file)?;
+        let _ = fs::remove_file(&temp);
+        Ok::<(), std::io::Error>(())
+    })();
+    match write {
+        Ok(()) => kithara_platform::logging::log_error(&format!(
+            "[kithara_hang_detector] hang detected: {label} ts_ms={ts} pid={pid} dump={} [{diagnostic}]",
+            file.display()
+        )),
+        Err(err) => {
+            let _ = fs::remove_file(&temp);
+            let fallback = bounded_excerpt(&payload, MAX_FALLBACK_LOG_BYTES);
+            kithara_platform::logging::log_error(&format!(
+                "[kithara_hang_detector] hang detected: {label} ts_ms={ts} pid={pid} dump-write-failed={err} [{diagnostic}] payload={fallback}"
+            ));
+        }
+    }
+}
+
+/// Record attempt-correlated hang evidence for `#[kithara::test]` expansions.
+#[doc(hidden)]
+pub fn record_test_hang(label: &str, diagnostic: &str) {
+    write_dump(label, &NoContext, None, diagnostic);
 }
 
 #[must_use]
@@ -76,4 +386,206 @@ pub(crate) fn env_timeout() -> Option<Duration> {
 pub(crate) fn parse_timeout_secs(value: &str) -> Option<Duration> {
     let secs = value.parse::<u64>().ok()?;
     (secs > 0).then_some(Duration::from_secs(secs))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn nextest_context_captures_attempt_correlation() {
+        let nextest = NextestContext::from_lookup(|key| match key {
+            Consts::NEXTEST_RUN_ID => Some("run-id".to_owned()),
+            Consts::NEXTEST_BINARY_ID => Some("binary".to_owned()),
+            Consts::NEXTEST_ATTEMPT_ID => Some("run-id:binary@stress-7$module::test#2".to_owned()),
+            Consts::NEXTEST_ATTEMPT => Some("2".to_owned()),
+            Consts::NEXTEST_TOTAL_ATTEMPTS => Some("3".to_owned()),
+            Consts::NEXTEST_TEST_NAME => Some("module::test".to_owned()),
+            Consts::NEXTEST_STRESS_CURRENT => Some("7".to_owned()),
+            Consts::NEXTEST_STRESS_TOTAL => Some("100".to_owned()),
+            Consts::NEXTEST_TEST_THREADS => Some("12".to_owned()),
+            _ => None,
+        });
+
+        let value = serde_json::to_value(nextest).expect("serialize nextest context");
+        assert_eq!(value["run_id"], "run-id");
+        assert_eq!(value["binary_id"], "binary");
+        assert_eq!(value["attempt_id"], "run-id:binary@stress-7$module::test#2");
+        assert_eq!(value["attempt"], "2");
+        assert_eq!(value["total_attempts"], "3");
+        assert_eq!(value["test_name"], "module::test");
+        assert_eq!(value["stress_current"], "7");
+        assert_eq!(value["stress_total"], "100");
+        assert_eq!(value["test_threads"], "12");
+    }
+
+    #[test]
+    fn nextest_context_is_null_without_nextest_environment() {
+        let value = serde_json::to_value(NextestContext::from_lookup(|_| None))
+            .expect("serialize absent nextest context");
+
+        assert!(
+            value.as_object().is_some_and(|fields| {
+                !fields.is_empty() && fields.values().all(Value::is_null)
+            })
+        );
+    }
+
+    #[test]
+    fn oversized_nextest_metadata_is_visibly_bounded() {
+        let raw = format!("run-head{}run-tail", "x".repeat(MAX_NEXTEST_FIELD_BYTES));
+        let nextest =
+            NextestContext::from_lookup(|key| (key == Consts::NEXTEST_RUN_ID).then(|| raw.clone()));
+        let run_id = nextest.run_id.expect("captured run id");
+
+        assert!(run_id.len() <= MAX_NEXTEST_FIELD_BYTES);
+        assert!(run_id.starts_with("run-head"));
+        assert!(run_id.ends_with("run-tail"));
+        assert!(run_id.contains("[kithara omitted_bytes="));
+    }
+
+    #[test]
+    fn empty_flash_dump_is_absent() {
+        assert_eq!(nonempty_flash_dump(String::new()), None);
+        assert_eq!(nonempty_flash_dump(" \n\t".to_owned()), None);
+    }
+
+    #[test]
+    fn nonempty_flash_dump_is_preserved() {
+        let dump = "[flash hang dump] context".to_owned();
+
+        assert_eq!(nonempty_flash_dump(dump.clone()), Some(dump));
+    }
+
+    #[test]
+    fn bounded_excerpt_preserves_unicode_head_tail_and_marks_omission() {
+        let value = format!("HEAD-{}-TAIL", "\u{1f980}".repeat(100));
+
+        let excerpt = bounded_excerpt(&value, 96);
+
+        assert!(excerpt.len() <= 96);
+        assert!(excerpt.starts_with("HEAD-"));
+        assert!(excerpt.ends_with("-TAIL"));
+        assert!(excerpt.contains("[kithara omitted_bytes="));
+
+        let prefix = "\n...[kithara omitted_bytes=";
+        let suffix = "]...\n";
+        let marker_start = excerpt.find(prefix).expect("omission marker");
+        let digits_start = marker_start + prefix.len();
+        let digits_end = digits_start
+            + excerpt[digits_start..]
+                .find(suffix)
+                .expect("omission marker suffix");
+        let marker_end = digits_end + suffix.len();
+        let omitted = excerpt[digits_start..digits_end]
+            .parse::<usize>()
+            .expect("omitted byte count");
+        let retained = marker_start + excerpt.len() - marker_end;
+        assert_eq!(omitted, value.len() - retained);
+    }
+
+    #[test]
+    fn oversized_context_and_flash_keep_bounded_head_and_tail() {
+        let context = format!("context-head{}context-tail", "x".repeat(MAX_CONTEXT_BYTES));
+        let flash = format!("flash-head{}flash-tail", "y".repeat(MAX_FLASH_BYTES));
+
+        let context = bounded_context(context);
+        let flash = nonempty_flash_dump(flash).expect("non-empty Flash dump");
+
+        let context = context
+            .as_str()
+            .expect("oversized context degrades to text");
+        assert!(context.len() <= MAX_CONTEXT_BYTES);
+        assert!(context.starts_with("context-head"));
+        assert!(context.ends_with("context-tail"));
+        assert!(context.contains("[kithara omitted_bytes="));
+        assert!(flash.len() <= MAX_FLASH_BYTES);
+        assert!(flash.starts_with("flash-head"));
+        assert!(flash.ends_with("flash-tail"));
+        assert!(flash.contains("[kithara omitted_bytes="));
+    }
+
+    #[test]
+    fn prekill_wait_distinguishes_cancel_from_deadline() {
+        let (cancel, cancelled) = mpsc::channel();
+        cancel.send(()).expect("send cancellation");
+        assert!(!prekill_elapsed(&cancelled, Duration::ZERO));
+
+        let (_keepalive, elapsed) = mpsc::channel();
+        assert!(prekill_elapsed(&elapsed, Duration::ZERO));
+    }
+
+    #[test]
+    fn envelope_serializes_flash_evidence() {
+        let envelope = DumpEnvelope {
+            schema: "kithara.hang.v1",
+            label: "pre-kill",
+            diagnostic: "still running",
+            flash: Some("[flash hang dump] still running".to_owned()),
+            timestamp_ms: 1,
+            pid: 2,
+            nextest: NextestContext::from_lookup(|_| None),
+            context: Value::Null,
+        };
+
+        let value = serde_json::to_value(envelope).expect("serialize hang envelope");
+
+        assert_eq!(value["flash"], "[flash hang dump] still running");
+    }
+
+    #[test]
+    fn bounded_fields_keep_worst_case_json_below_consumer_limit() {
+        let hostile_nextest = "\0".repeat(MAX_NEXTEST_FIELD_BYTES + 1);
+        let nextest = NextestContext::from_lookup(|_| Some(hostile_nextest.clone()));
+        let label = bounded_excerpt(&"\0".repeat(MAX_LABEL_BYTES + 1), MAX_LABEL_BYTES);
+        let diagnostic =
+            bounded_excerpt(&"\0".repeat(MAX_DIAGNOSTIC_BYTES + 1), MAX_DIAGNOSTIC_BYTES);
+        let envelope = DumpEnvelope {
+            schema: "kithara.hang.v1",
+            label: &label,
+            diagnostic: &diagnostic,
+            flash: nonempty_flash_dump("\0".repeat(MAX_FLASH_BYTES + 1)),
+            timestamp_ms: u128::MAX,
+            pid: u32::MAX,
+            nextest,
+            context: bounded_context("\0".repeat(MAX_CONTEXT_BYTES + 1)),
+        };
+
+        let payload = serialize_envelope(envelope)
+            .expect("serialize bounded envelope")
+            .expect("bounded envelope fits consumer limit");
+
+        assert!(payload.len() < MAX_ENVELOPE_BYTES);
+    }
+
+    #[test]
+    fn size_fallback_preserves_exact_attempt_identity() {
+        let attempt_id = "run-id:binary@stress-7$module::test#2";
+        let envelope = DumpEnvelope {
+            schema: "kithara.hang.v1",
+            label: "pre-kill",
+            diagnostic: "still running",
+            flash: Some("x".repeat(MAX_ENVELOPE_BYTES)),
+            timestamp_ms: 1,
+            pid: 2,
+            nextest: NextestContext::from_lookup(|key| {
+                (key == Consts::NEXTEST_ATTEMPT_ID).then(|| attempt_id.to_owned())
+            }),
+            context: Value::Null,
+        };
+
+        let payload = serialize_envelope(envelope)
+            .expect("serialize fallback envelope")
+            .expect("fallback fits consumer limit");
+        let value: Value = serde_json::from_str(&payload).expect("parse fallback envelope");
+
+        assert!(payload.len() < MAX_ENVELOPE_BYTES);
+        assert_eq!(value["nextest"]["attempt_id"], attempt_id);
+        assert!(value["flash"].is_null());
+        assert!(
+            value["context"]
+                .as_str()
+                .is_some_and(|context| { context.contains("context and Flash omitted") })
+        );
+    }
 }
