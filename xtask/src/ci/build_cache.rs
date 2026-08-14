@@ -3,6 +3,7 @@ use std::os::unix::fs::MetadataExt;
 use std::{
     ffi::OsStr,
     fs::{self, File, OpenOptions},
+    io,
     path::{Path, PathBuf},
     time::SystemTime,
 };
@@ -224,6 +225,58 @@ fn allocated_bytes(metadata: &fs::Metadata) -> u64 {
 #[cfg(not(unix))]
 fn allocated_bytes(metadata: &fs::Metadata) -> u64 {
     metadata.len()
+}
+
+/// Every `target` directory under `root` that belongs to a checkout, so a
+/// caller can hand them to [`enforce_budget`]. Shared with the environment gate:
+/// refusing a job is only honest once these have been reclaimed.
+pub(crate) fn persistent_target_dirs(root: &Path) -> Result<Vec<PathBuf>> {
+    if !root.is_dir() {
+        return Ok(Vec::new());
+    }
+
+    let mut pending = vec![root.to_path_buf()];
+    let mut targets = Vec::new();
+    while let Some(directory) = pending.pop() {
+        if directory.join("Cargo.toml").is_file() {
+            for name in ["target", "target-flash-off"] {
+                let path = directory.join(name);
+                let metadata = match fs::symlink_metadata(&path) {
+                    Ok(metadata) => metadata,
+                    Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+                    Err(error) => {
+                        return Err(error).with_context(|| format!("reading {}", path.display()));
+                    }
+                };
+                if metadata.file_type().is_dir() {
+                    targets.push(path);
+                }
+            }
+            continue;
+        }
+
+        let entries = fs::read_dir(&directory)
+            .with_context(|| format!("reading CI workspace directory {}", directory.display()))?;
+        for entry in entries {
+            let entry = entry.with_context(|| {
+                format!(
+                    "reading an entry in CI workspace directory {}",
+                    directory.display()
+                )
+            })?;
+            if entry.file_name().to_string_lossy().starts_with('.') {
+                continue;
+            }
+            let path = entry.path();
+            let metadata = fs::symlink_metadata(&path)
+                .with_context(|| format!("reading CI workspace metadata for {}", path.display()))?;
+            if metadata.file_type().is_dir() {
+                pending.push(path);
+            }
+        }
+    }
+    targets.sort();
+    Ok(targets)
 }
 
 #[cfg(test)]

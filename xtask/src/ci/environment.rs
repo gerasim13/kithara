@@ -9,9 +9,11 @@ use std::{
 use anyhow::{Context, Result, bail};
 use fs4::{FileExt, TryLockError};
 use kithara_devtools::Ctx;
+use tracing::warn;
 
 use super::{
     HOST_JOB_CONCURRENCY, SCCACHE_SLOT_CACHE_NAMESPACE, SCCACHE_SLOT_CONTROL_NAMESPACE,
+    build_cache,
     config::CiConfig,
     run::{CacheGroup, Lane},
 };
@@ -259,11 +261,7 @@ impl CiEnvironment {
         fs::create_dir_all(&shared_root)
             .with_context(|| format!("creating CI cache root {}", shared_root.display()))?;
 
-        let free_bytes = free_bytes(&shared_root)?;
-        let required_free = config.host.free_bytes_for_a_job();
-        if is_ci() && free_bytes < required_free {
-            bail!("the CI cache has {free_bytes} bytes free; a job needs {required_free} bytes");
-        }
+        ensure_room_for_a_job(config, &shared_root)?;
 
         let trust = CacheTrust::from_environment()?;
         let platform = format!("{}-{}", env::consts::OS, env::consts::ARCH);
@@ -470,6 +468,71 @@ fn shared_root(config: &CiConfig, lane: Lane) -> PathBuf {
 
 fn is_ci() -> bool {
     env::var_os("CI").is_some_and(|value| !value.is_empty())
+}
+
+/// Refuse a job only once there is nothing left to reclaim.
+///
+/// The gate and the periodic cleanup never spoke: cleanup ran on a timer and
+/// the job arrived when it arrived, so whether a job started came down to how
+/// long ago the timer fired. A host under a build loses gigabytes a minute,
+/// enough to spend a whole pass's worth of reclaimed space before the next one,
+/// and the job landing in that window was refused while tens of gigabytes of
+/// evictable compiler cache sat beside it. Growing the disk only moves the
+/// window; asking for the space back closes it.
+fn ensure_room_for_a_job(config: &CiConfig, shared_root: &Path) -> Result<()> {
+    let required = config.host.free_bytes_for_a_job();
+    let free = free_bytes(shared_root)?;
+    if !is_ci() || free >= required {
+        return Ok(());
+    }
+    reclaim_build_caches(
+        config.host.build_root(),
+        config.host.build_cache_budget_bytes()?,
+        free,
+        required,
+    )?;
+    let free = free_bytes(shared_root)?;
+    if free < required {
+        bail!(
+            "the CI cache has {free} bytes free after reclaiming build caches; a job needs \
+             {required} bytes"
+        );
+    }
+    Ok(())
+}
+
+/// Return what this host accumulated for itself, before deciding there is no
+/// room for the job.
+///
+/// The gate and the periodic cleanup never spoke: cleanup ran on a timer and
+/// the job arrived when it arrived, so whether a job started depended on how
+/// long ago the timer fired. A host under a build loses gigabytes a minute,
+/// which is enough to spend a whole pass's worth of reclaimed space before the
+/// next one — and the job that lands in that window is refused while tens of
+/// gigabytes of evictable compiler cache sit beside it. Reclaiming here makes
+/// the refusal mean what it says: the space is held by live work, not by
+/// leftovers.
+///
+/// Failing to reclaim is not itself a refusal — the gate re-reads free space
+/// and answers on that.
+fn reclaim_build_caches(
+    build_root: &Path,
+    budget_bytes: u64,
+    free: u64,
+    required: u64,
+) -> Result<()> {
+    let workspaces = build_root.join("workspaces/gitlab");
+    let targets = build_cache::persistent_target_dirs(&workspaces)?;
+    if targets.is_empty() {
+        return Ok(());
+    }
+    warn!(
+        free_bytes = free,
+        required_bytes = required,
+        targets = targets.len(),
+        "reclaiming build caches before refusing the job"
+    );
+    build_cache::enforce_budget(&targets, budget_bytes)
 }
 
 pub(crate) fn is_gitlab() -> bool {
@@ -778,5 +841,28 @@ mod tests {
         assert_eq!(CacheTrust::Review.as_str(), "review");
         assert_eq!(CacheTrust::Quarantine.as_str(), "quarantine");
         assert_eq!(CacheTrust::Trusted.as_str(), "trusted");
+    }
+
+    /// A host under a build spends a whole cleanup pass's worth of space before
+    /// the next pass fires, so a job arriving in that window used to be refused
+    /// while evictable caches sat beside it. The gate reclaims them itself now;
+    /// what it must not do is refuse first.
+    #[test]
+    fn the_gate_reclaims_caches_before_deciding_there_is_no_room() {
+        let root = tempfile::tempdir().unwrap();
+        let checkout = root
+            .path()
+            .join("workspaces/gitlab/runner-a/0/disrupt/kithara");
+        let target = checkout.join("target/debug");
+        fs::create_dir_all(&target).unwrap();
+        fs::write(checkout.join("Cargo.toml"), "[package]\n").unwrap();
+        fs::write(target.join("artifact"), vec![0_u8; 400_000]).unwrap();
+
+        reclaim_build_caches(root.path(), 0, 0, u64::MAX).unwrap();
+
+        assert!(
+            !target.join("artifact").exists(),
+            "an evictable build cache must be reclaimed, not left for the timer"
+        );
     }
 }

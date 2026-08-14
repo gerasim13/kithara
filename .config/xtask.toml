@@ -436,6 +436,38 @@ prefix_args = [
 default_features = ["network-manual", "kithara/resample-rubato"]
 default_flash = false
 
+# What only the `broadcast` feature turns on. `kithara-broadcast`'s own unit
+# tests need no feature and stay in the workspace lane.
+[test.lanes.broadcast]
+program = "cargo"
+prefix_args = [
+  "nextest",
+  "run",
+  "-p",
+  "kithara-app",
+  "-p",
+  "kithara-integration-tests",
+  "--cargo-profile",
+  "test-release",
+  "--lib",
+  "--test",
+  "suite_broadcast",
+]
+default_features = [
+  "kithara-app/broadcast",
+  "kithara-integration-tests/broadcast",
+]
+default_flash = true
+# The detector these tests were failing under. Declared here so two schedulers
+# cannot run the same lane under different rules.
+default_no_block = true
+# `broadcast::state` runs in the gate against stand-in packagers; only
+# `broadcast::engine` needs the feature.
+suffix_args = [
+  "-E",
+  "binary(suite_broadcast) + (package(kithara-app) & test(/^broadcast::engine::/))",
+]
+
 # Integration regression tests are red by design and stay outside the main gate.
 [test.lanes.integration-regressions]
 program = "cargo"
@@ -532,8 +564,8 @@ gitlab_package = "kithara"
 # Rolling build channel: the nightly pipeline replaces this tag, its release,
 # and its package files on every run, so a consumer pins the tag once.
 nightly_tag = "nightly"
-asset = "KitharaFFIInternal.xcframework.zip"
-single_asset = "Kithara.xcframework.zip"
+core_asset = "KitharaFFIInternal.xcframework.zip"
+merged_asset = "Kithara.xcframework.zip"
 platform_assets = ["kithara.aar", "rust-tls.aar"]
 http_timeout_secs = 60
 upload_timeout_secs = 600
@@ -546,6 +578,30 @@ docs_archive = "docs-build/Kithara.doccarchive"
 wasm_asset = "kithara-wasm-pages.zip"
 wasm_dist = "crates/kithara-ffi/dist"
 pages_branch = "gh-pages"
+
+# What each packaging run collects. The version gate belongs to publishing a
+# version, so a snapshot taken of a commit under review does not ask for one.
+[ext.release.packages.release]
+version_gate = true
+assets = ["core", "merged"]
+
+[ext.release.packages.snapshot]
+version_gate = false
+assets = ["merged"]
+
+# What delivery requires before it runs and what it then performs. The nightly
+# channel is the only reader of `nightly_tag` above.
+[ext.release.channels.release]
+requires_version = true
+require_all_assets = true
+tokens = ["CARGO_REGISTRY_TOKEN", "GH_TOKEN", "GITLAB_TOKEN"]
+steps = ["retained", "pages", "crates"]
+
+[ext.release.channels.nightly]
+requires_version = false
+require_all_assets = false
+tokens = ["GH_TOKEN", "GITLAB_TOKEN"]
+steps = ["nightly_retained"]
 
 [orphans]
 # Packages the sweep cannot say anything useful about: a generated crate, two

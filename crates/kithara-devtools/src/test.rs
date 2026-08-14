@@ -120,7 +120,9 @@ pub(crate) fn run(args: &TestArgs) -> Result<()> {
                 flash: request
                     .flash
                     .unwrap_or_else(|| lane.default_flash.unwrap_or(test.flash.default)),
-                no_block: request.no_block.unwrap_or(test.no_block.default),
+                no_block: request
+                    .no_block
+                    .unwrap_or_else(|| lane.default_no_block.unwrap_or(test.no_block.default)),
             };
             let backend = request
                 .net_backend
@@ -253,7 +255,9 @@ fn features_for(
     let flash = request
         .flash
         .unwrap_or_else(|| lane.default_flash.unwrap_or(config.flash.default));
-    let no_block = request.no_block.unwrap_or(config.no_block.default);
+    let no_block = request
+        .no_block
+        .unwrap_or_else(|| lane.default_no_block.unwrap_or(config.no_block.default));
     let backend_name = request
         .net_backend
         .clone()
@@ -516,6 +520,7 @@ mod tests {
                 suffix_args: vec!["--locked".to_owned()],
                 default_features: Vec::new(),
                 default_flash: None,
+                default_no_block: None,
                 passthrough: String::new(),
             },
         );
@@ -531,6 +536,19 @@ mod tests {
                 suffix_args: vec!["-E".to_owned(), "test(loom_model_)".to_owned()],
                 default_features: vec!["demo/loom".to_owned()],
                 default_flash: Some(false),
+                default_no_block: None,
+                passthrough: String::new(),
+            },
+        );
+        lanes.insert(
+            "detector".to_owned(),
+            TestLaneConfig {
+                program: "cargo".to_owned(),
+                prefix_args: vec!["nextest".to_owned(), "run".to_owned()],
+                suffix_args: Vec::new(),
+                default_features: Vec::new(),
+                default_flash: None,
+                default_no_block: Some(true),
                 passthrough: String::new(),
             },
         );
@@ -660,6 +678,30 @@ mod tests {
         let feats = features_for(test, lane, &request).expect("features");
         assert!(!feats.contains("nb-detect"));
         assert!(feats.contains("virtual-time"));
+    }
+
+    #[test]
+    fn a_lane_that_asks_for_the_detector_gets_it_without_a_flag() {
+        let project = synthetic_project();
+        let test = &project.test;
+        let lane = &test.lanes["detector"];
+        let request = TestRequest::parse(&[]).expect("parse request");
+
+        let feats = features_for(test, lane, &request).expect("features");
+
+        assert!(feats.contains("nb-detect"));
+    }
+
+    #[test]
+    fn an_explicit_off_overrides_the_lane_detector_default() {
+        let project = synthetic_project();
+        let test = &project.test;
+        let lane = &test.lanes["detector"];
+        let request = TestRequest::parse(&["--no-block=off".to_owned()]).expect("parse request");
+
+        let feats = features_for(test, lane, &request).expect("features");
+
+        assert!(!feats.contains("nb-detect"));
     }
 
     #[test]
