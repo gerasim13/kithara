@@ -51,9 +51,23 @@ pub(crate) struct CiLaneStep {
     pub(crate) label: String,
     /// What the step needs the executor to be, rather than to run: a build-job
     /// cap the container cannot exceed, a target directory a gate owns, the
-    /// browser a harness would otherwise guess.
+    /// browser a harness would otherwise guess. A value may name the checkout
+    /// with `{root}`, which is the only thing a lane cannot spell for itself.
     pub(crate) env: BTreeMap<String, String>,
+    /// The program for this step alone. A lane that installs a target before
+    /// using it runs two, so the lane's own `program` is only the default.
+    pub(crate) program: Option<String>,
 }
+
+/// The lane's own executable. A Windows job runs the binary it started as
+/// rather than `cargo xtask`, which would rebuild it - and Windows refuses to
+/// replace a running image, so Cargo reported that as a failure to remove
+/// `xtask.exe`.
+pub(crate) const SELF_PROGRAM: &str = "<xtask>";
+
+/// The checkout a lane resolves in. A compiler flag that has to name a file in
+/// the repository needs an absolute path, and only the runner knows it.
+pub(crate) const ROOT_PLACEHOLDER: &str = "{root}";
 
 /// A version check: ask `tool` how old it is, and require the answer to carry
 /// the value `pin` names in `.config/ci-pins.toml`.
@@ -89,6 +103,19 @@ impl CiProjectConfig {
             for check in &lane.pinned {
                 if check.tool.is_empty() || check.pin.is_empty() {
                     bail!("ext.ci.lanes.{name}.pinned must name both a tool and a pin");
+                }
+            }
+            for step in &lane.steps {
+                for (key, value) in &step.env {
+                    // `{root}` is the whole substitution vocabulary. A typo
+                    // that reached the runner would export a literal brace and
+                    // fail as a missing header rather than as a bad config.
+                    if value.replace(ROOT_PLACEHOLDER, "").contains('{') {
+                        bail!(
+                            "ext.ci.lanes.{name} sets {key} to `{value}`, which names something \
+                             other than {ROOT_PLACEHOLDER}"
+                        );
+                    }
                 }
             }
         }

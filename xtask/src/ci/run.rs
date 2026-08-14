@@ -467,9 +467,6 @@ fn command_lane(
         Lane::AppleSafari => super::lane::apple::safari(process),
         Lane::AndroidBuild => super::lane::android::build(process),
         Lane::AndroidTest => super::lane::android::test(process, ci_config),
-        Lane::WindowsArm64 => super::lane::windows::tests(process, "aarch64-pc-windows-msvc"),
-        Lane::WindowsX64 => super::lane::windows::tests(process, "x86_64-pc-windows-msvc"),
-        Lane::WindowsX64Build => super::lane::windows::build(process, "x86_64-pc-windows-msvc"),
         Lane::DepsDeny
         | Lane::DepsUnused
         | Lane::DepsFeatures
@@ -489,7 +486,10 @@ fn command_lane(
         | Lane::LinuxBroadcast
         | Lane::LinuxIntegrationRegressions
         | Lane::LinuxSeleniumFirefox
-        | Lane::LinuxCoverage => declared_lane(lane, process, ci_config, lanes),
+        | Lane::LinuxCoverage
+        | Lane::WindowsArm64
+        | Lane::WindowsX64
+        | Lane::WindowsX64Build => declared_lane(lane, process, ci_config, lanes),
     }
 }
 
