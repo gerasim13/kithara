@@ -619,7 +619,6 @@ fn stress_workflow_is_a_thin_fork_adapter() {
             "Checkout controller".to_owned(),
             "Checkout subject".to_owned(),
             "Export artifact identity".to_owned(),
-            "Install just".to_owned(),
             "Run the stress campaign".to_owned(),
             "Upload the raw stress evidence".to_owned(),
         ])
@@ -638,14 +637,9 @@ fn stress_workflow_is_a_thin_fork_adapter() {
         "${{ inputs.revision || github.sha }}",
     );
 
-    let execute_install = named_step(execute, "Install just");
-    assert_eq!(
-        mapping_field(execute_install, "uses").as_str(),
-        Some(INSTALL_ACTION)
-    );
-    assert!(step_position(execute, "Checkout subject") < step_position(execute, "Install just"));
     assert!(
-        step_position(execute, "Install just") < step_position(execute, "Run the stress campaign")
+        step_position(execute, "Checkout subject")
+            < step_position(execute, "Run the stress campaign")
     );
 
     let campaign = named_step(execute, "Run the stress campaign");

@@ -125,11 +125,6 @@ jobs:
           repository: ${{ github.repository }}
           ref: ${{ inputs.revision || github.sha }}
 
-      - name: Install just
-        uses: taiki-e/install-action@b20dedce73af6905cdc30d6611090c9b67557c8d # v2.85.12
-        with:
-          tool: just
-
       - name: Run the stress campaign
         working-directory: controller
         env:
