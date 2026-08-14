@@ -11,6 +11,7 @@ use kithara_platform::{
 use kithara_queue::Queue;
 
 use crate::{
+    item::AudioPlayerItem,
     observer::{ItemObserver, PlayerObserver},
     registry::ItemRegistry,
     types::{
@@ -89,7 +90,7 @@ impl EventBridge {
                     return;
                 };
                 if let Some(item_obs) = item.observer() {
-                    Self::route_track_status_to_item(&item_obs, status);
+                    Self::route_track_status_to_item(&item, &item_obs, status);
                 }
                 observer.on_event(FfiPlayerEvent::TrackStatusChanged {
                     item_id: *id,
@@ -238,15 +239,36 @@ impl EventBridge {
         item_obs.on_event(ffi_event);
     }
 
-    /// Forward queue readiness to the item observer. Terminal item callbacks
-    /// are owned by [`crate::native::item_bridge::ItemEventBridge`] from the
-    /// protocol-specific HLS/File error event that caused queue settlement.
-    fn route_track_status_to_item(observer: &Arc<dyn ItemObserver>, status: &TrackStatus) {
+    /// Forward queue settlement to the item observer. An item reports its
+    /// terminal pair once: whichever source settles it first emits, and the
+    /// other finds it already failed and stays silent. A protocol failure
+    /// reaches the item through [`crate::native::item_bridge::ItemEventBridge`]
+    /// carrying the exact reason, and usually arrives first; a queue failure
+    /// with no protocol event behind it — a decode, DRM, or storage refusal —
+    /// still reaches the item from here.
+    fn route_track_status_to_item(
+        item: &AudioPlayerItem,
+        observer: &Arc<dyn ItemObserver>,
+        status: &TrackStatus,
+    ) {
         if matches!(status, TrackStatus::Loaded) {
             observer.on_event(FfiItemEvent::StatusChanged {
                 status: FfiItemStatus::ReadyToPlay,
             });
+            return;
         }
+        let TrackStatus::Failed(reason) = status else {
+            return;
+        };
+        if !item.state.lock().mark_failed() {
+            return;
+        }
+        observer.on_event(FfiItemEvent::StatusChanged {
+            status: FfiItemStatus::Failed,
+        });
+        observer.on_event(FfiItemEvent::Error {
+            error: reason.clone(),
+        });
     }
 
     /// Spawn background tasks that translate queue/player events into
@@ -367,7 +389,6 @@ mod tests {
 
     use super::*;
     use crate::{
-        item::AudioPlayerItem,
         observer::ItemObserver,
         types::{FfiItemConfig, FfiItemEvent},
     };
@@ -402,12 +423,13 @@ mod tests {
         }
 
         fn wait_for_events(&self, count: usize) {
-            let events = self.events.lock().unwrap_or_else(PoisonError::into_inner);
             let (events, _) = self
                 .changed
-                .wait_timeout_while(events, Duration::from_secs(2), |events| {
-                    events.len() < count
-                })
+                .wait_timeout_while(
+                    self.events.lock().unwrap_or_else(PoisonError::into_inner),
+                    Duration::from_secs(2),
+                    |events| events.len() < count,
+                )
                 .unwrap_or_else(PoisonError::into_inner);
             assert!(
                 events.len() >= count,
@@ -520,6 +542,71 @@ mod tests {
                 error: FileError::Io("boom".into()),
             }),
             "item failed: io: boom",
+        );
+    }
+
+    /// Only HLS, File and Downloader errors convert to an item error, so a
+    /// failure settled without one — a decode, DRM or storage refusal — has no
+    /// protocol bridge behind it. The queue is then the only source the item
+    /// has, and silence here is the item never learning it failed.
+    #[kithara::test]
+    fn queue_failure_without_a_protocol_event_still_reaches_the_item() {
+        let item = AudioPlayerItem::new(item_config());
+        *item.inserted.lock() = true;
+        let item_observer_impl = Arc::new(CollectingItemObserver::default());
+        let item_observer: Arc<dyn ItemObserver> = item_observer_impl.clone();
+        item.set_observer(item_observer);
+        let items = Arc::new(Mutex::new(ItemRegistry::default()));
+        items.lock().insert(item.track_id(), item.clone());
+        let player_observer: Arc<dyn PlayerObserver> =
+            Arc::new(CollectingPlayerObserver::default());
+
+        EventBridge::dispatch_queue_event(
+            &player_observer,
+            &items,
+            &QueueEvent::TrackStatusChanged {
+                id: item.track_id(),
+                status: TrackStatus::Failed("decoder refused the stream".to_string()),
+            },
+        );
+
+        assert!(matches!(
+            item_observer_impl.take_events().as_slice(),
+            [
+                FfiItemEvent::StatusChanged {
+                    status: FfiItemStatus::Failed,
+                },
+                FfiItemEvent::Error { error },
+            ] if error == "decoder refused the stream"
+        ));
+    }
+
+    /// The queue can settle a track before the protocol bridge delivers its
+    /// own error, so the pair must be owned by whoever arrives first rather
+    /// than by a fixed source.
+    #[kithara::test]
+    fn a_second_queue_failure_does_not_repeat_the_pair() {
+        let item = AudioPlayerItem::new(item_config());
+        *item.inserted.lock() = true;
+        let item_observer_impl = Arc::new(CollectingItemObserver::default());
+        let item_observer: Arc<dyn ItemObserver> = item_observer_impl.clone();
+        item.set_observer(item_observer);
+        let items = Arc::new(Mutex::new(ItemRegistry::default()));
+        items.lock().insert(item.track_id(), item.clone());
+        let player_observer: Arc<dyn PlayerObserver> =
+            Arc::new(CollectingPlayerObserver::default());
+        let failed = QueueEvent::TrackStatusChanged {
+            id: item.track_id(),
+            status: TrackStatus::Failed("decoder refused the stream".to_string()),
+        };
+
+        EventBridge::dispatch_queue_event(&player_observer, &items, &failed);
+        let _first_pair = item_observer_impl.take_events();
+        EventBridge::dispatch_queue_event(&player_observer, &items, &failed);
+
+        assert!(
+            item_observer_impl.take_events().is_empty(),
+            "a settled item must report its terminal pair once"
         );
     }
 
