@@ -8,10 +8,14 @@ gitlab_url = "https://gitlab.example.com"
 gitlab_username = "kithara-sync"
 state_dir = "/path/to/bridge-state"
 
-# GitHub logins whose pull requests may change the CI control paths directly:
-# they are judged with their own CI configuration instead of the default
-# branch's. Everyone else keeps the rule, so a contributor without GitLab access
-# is never asked to port a change through a merge request they cannot open.
+# GitHub logins whose pull requests may change the CI control paths directly.
+# Everyone else keeps the rule, so a contributor without GitLab access is never
+# asked to port a change through a merge request they cannot open.
+#
+# Listing an author does not change which CI configuration their pull requests
+# run: the default branch's control paths are still restored unless the pull
+# request changes them itself. That restoration is also what keeps a branch
+# older than the host runnable.
 #
 # Deliberately here and not in the repository: a list a pull request can edit is
 # a list that adds its own author.
