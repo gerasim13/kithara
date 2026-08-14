@@ -200,7 +200,8 @@ impl<'a> HostStorage<'a> {
         self.rotate_logs()?;
         self.prune_retired_caches(7 * Self::DAY)?;
 
-        let target_dirs = persistent_target_dirs(&self.build_root.join("workspaces/gitlab"))?;
+        let target_dirs =
+            build_cache::persistent_target_dirs(&self.build_root.join("workspaces/gitlab"))?;
         build_cache::enforce_budget(&target_dirs, self.config.host.build_cache_budget_bytes()?)?;
 
         // Cargo targets are the largest reproducible caches and already have a
@@ -253,13 +254,30 @@ impl<'a> HostStorage<'a> {
             self.prune_retired_caches(Duration::ZERO)?;
             final_pressure = self.worst_pressure()?.0;
         }
+        let free = self.free_bytes()?;
         info!(
-            free_bytes = self.free_bytes()?,
+            free_bytes = free,
+            freed_bytes = free.saturating_sub(initial),
             ?final_pressure,
             "cleanup completed"
         );
         if final_pressure == Pressure::Reject {
             bail!("CI volume remains above the new-job threshold after cleanup");
+        }
+        // A pass that runs every step and moves nothing is the failure this
+        // host spent hours in: `Aggressive` in, `Aggressive` out, `bytes_freed=0`
+        // from each budget, and `cleanup completed` in the log every hour while
+        // jobs were already being refused. Reporting success there is what made
+        // it invisible — the steps ran, so nothing looked broken, and the space
+        // was held by things no step owns. Relief is the result this is for;
+        // performing the steps is not.
+        if final_pressure >= Pressure::Aggressive && final_pressure >= pressure {
+            bail!(
+                "cleanup left {} at {final_pressure:?} with {free} bytes free, unchanged from \
+                 {pressure:?}: every step this owns is already at its floor, so what is holding \
+                 the space is not build caches",
+                volume.display()
+            );
         }
         Ok(())
     }
@@ -839,55 +857,6 @@ fn agent_states_from(listing: &str) -> BTreeMap<&'static str, &'static str> {
         .collect()
 }
 
-fn persistent_target_dirs(root: &Path) -> Result<Vec<PathBuf>> {
-    if !root.is_dir() {
-        return Ok(Vec::new());
-    }
-
-    let mut pending = vec![root.to_path_buf()];
-    let mut targets = Vec::new();
-    while let Some(directory) = pending.pop() {
-        if directory.join("Cargo.toml").is_file() {
-            for name in ["target", "target-flash-off"] {
-                let path = directory.join(name);
-                let metadata = match fs::symlink_metadata(&path) {
-                    Ok(metadata) => metadata,
-                    Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
-                    Err(error) => {
-                        return Err(error).with_context(|| format!("reading {}", path.display()));
-                    }
-                };
-                if metadata.file_type().is_dir() {
-                    targets.push(path);
-                }
-            }
-            continue;
-        }
-
-        let entries = fs::read_dir(&directory)
-            .with_context(|| format!("reading CI workspace directory {}", directory.display()))?;
-        for entry in entries {
-            let entry = entry.with_context(|| {
-                format!(
-                    "reading an entry in CI workspace directory {}",
-                    directory.display()
-                )
-            })?;
-            if entry.file_name().to_string_lossy().starts_with('.') {
-                continue;
-            }
-            let path = entry.path();
-            let metadata = fs::symlink_metadata(&path)
-                .with_context(|| format!("reading CI workspace metadata for {}", path.display()))?;
-            if metadata.file_type().is_dir() {
-                pending.push(path);
-            }
-        }
-    }
-    targets.sort();
-    Ok(targets)
-}
-
 fn validate_root(root: &Path) -> Result<()> {
     if !root.is_absolute() || !root.is_dir() {
         bail!("CI root is not mounted: {}", root.display());
@@ -1203,7 +1172,8 @@ mod tests {
         )
         .unwrap();
 
-        let targets = persistent_target_dirs(&build_root.join("workspaces/gitlab")).unwrap();
+        let targets =
+            build_cache::persistent_target_dirs(&build_root.join("workspaces/gitlab")).unwrap();
 
         assert_eq!(targets, [checkout.join("target")]);
     }
@@ -1295,6 +1265,25 @@ mod tests {
         storage.cleanup().unwrap();
 
         assert!(review.is_dir());
+    }
+
+    /// The hourly pass this host actually ran: in at `Aggressive`, every step
+    /// executed, out at `Aggressive`, logged as completed. Reported as success
+    /// it hid a machine that was already refusing jobs.
+    #[test]
+    fn a_pass_that_leaves_the_pressure_where_it_found_it_is_a_failure() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut cfg = config(directory.path());
+        cfg.host.brew_root = directory.path().join("brew");
+        let process = Process::new(directory.path(), BTreeMap::new());
+        let mut storage = HostStorage::for_test(&cfg, &process).unwrap();
+        storage.set_pressure_sequence([
+            Pressure::Aggressive,
+            Pressure::Aggressive,
+            Pressure::Aggressive,
+        ]);
+
+        assert!(storage.cleanup().is_err());
     }
 
     #[test]
