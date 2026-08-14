@@ -446,6 +446,20 @@ assets = ["core", "merged"]
 version_gate = false
 assets = ["merged"]
 
+# What delivery requires before it runs and what it then performs. The nightly
+# channel is the only reader of `nightly_tag` above.
+[ext.release.channels.release]
+requires_version = true
+require_all_assets = true
+tokens = ["CARGO_REGISTRY_TOKEN", "GH_TOKEN", "GITLAB_TOKEN"]
+steps = ["retained", "pages", "crates"]
+
+[ext.release.channels.nightly]
+requires_version = false
+require_all_assets = false
+tokens = ["GH_TOKEN", "GITLAB_TOKEN"]
+steps = ["nightly_retained"]
+
 [orphans]
 # Packages the sweep cannot say anything useful about: a generated crate, two
 # test harnesses, the fuzz targets, and the build tool.

@@ -77,7 +77,9 @@ release:publish:
   environment:
     name: release
   script:
-    - just ci run release-publish
+    # The pipeline kind names the channel, and both live in the config. A kind
+    # that names none fails here rather than delivering the wrong thing.
+    - just ci run release-publish --channel "$KITHARA_PIPELINE_KIND"
   rules:
     # A release is a decision, so someone presses the button. A nightly is not:
     # it replaces one rolling tag with what the branch builds into today, and

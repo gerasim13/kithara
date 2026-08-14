@@ -1714,6 +1714,7 @@ mod tests {
             http_timeout_secs: Some(60),
             upload_timeout_secs: Some(600),
             packages: BTreeMap::new(),
+            channels: BTreeMap::new(),
         };
         let notes = render_release_notes(
             &cfg,
@@ -1759,6 +1760,7 @@ mod tests {
             http_timeout_secs: Some(60),
             upload_timeout_secs: Some(600),
             packages: BTreeMap::new(),
+            channels: BTreeMap::new(),
         };
 
         let links = gitlab_release_links(&cfg, "v0.0.2");
@@ -1802,6 +1804,7 @@ mod tests {
             http_timeout_secs: None,
             upload_timeout_secs: None,
             packages: BTreeMap::new(),
+            channels: BTreeMap::new(),
         }
     }
 

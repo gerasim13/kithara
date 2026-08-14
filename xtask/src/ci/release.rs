@@ -7,12 +7,9 @@ use anyhow::{Context, Result, bail};
 use kithara_devtools::Ctx;
 use sha2::{Digest, Sha256};
 
-use super::{
-    process::{Process, require_os},
-    run::PipelineKind,
-};
+use super::process::{Process, require_os};
 use crate::{
-    config::{KitharaExt, PackageProfile, ReleaseConfig},
+    config::{KitharaExt, PackageProfile, PublishStep, ReleaseConfig},
     publish, release,
 };
 
@@ -191,55 +188,47 @@ pub(crate) fn build_android(process: &Process, ctx: &Ctx, ext: &KitharaExt) -> R
     Ok(())
 }
 
-pub(crate) fn publish(
-    process: &Process,
-    ctx: &Ctx,
-    ext: &KitharaExt,
-    kind: PipelineKind,
-) -> Result<()> {
+pub(crate) fn publish(process: &Process, ctx: &Ctx, ext: &KitharaExt, channel: &str) -> Result<()> {
     // The jobs this one waits for take hours, and these tools are reached deep
     // inside the publish steps. Ask for them first, so a host that lacks one
     // says so before a release is built rather than after.
     process.require_tools(&["cargo", "gh", "git", "unzip"])?;
-    if kind == PipelineKind::Nightly {
-        return publish_nightly(ctx, ext);
-    }
-    for variable in ["CARGO_REGISTRY_TOKEN", "GH_TOKEN", "GITLAB_TOKEN"] {
-        required_env(variable)?;
-    }
-    let version = required_env("KITHARA_RELEASE_VERSION")?;
-    let source_sha = required_env("CI_COMMIT_SHA")?;
-    for name in retained_assets(&ext.release) {
-        verify_checksum(&ctx.root.join(name))?;
-    }
-
-    let manifest = git_show(ctx, &source_sha, &ext.release.manifest)?;
-    let manifest_version = manifest_field(&manifest, "version")?;
-    if manifest_version != version {
-        bail!("source manifest version is {manifest_version}, requested {version}");
-    }
-
-    release::publish_retained(ctx, &source_sha, &ctx.root)?;
-    release::publish_pages_retained(ctx, &source_sha, &ctx.root)?;
-    publish::publish_release(ctx)
-}
-
-/// The rolling channel publishes the same artifacts to one replaceable tag. It
-/// reaches no crate registry — a nightly carries no version to publish under —
-/// and leaves the pages branch to releases, which is what a documentation site
-/// should follow.
-fn publish_nightly(ctx: &Ctx, ext: &KitharaExt) -> Result<()> {
-    for variable in ["GH_TOKEN", "GITLAB_TOKEN"] {
+    let profile = ext.release.channel(channel)?;
+    for variable in &profile.tokens {
         required_env(variable)?;
     }
     let source_sha = required_env("CI_COMMIT_SHA")?;
+
+    if profile.requires_version {
+        let version = required_env("KITHARA_RELEASE_VERSION")?;
+        let manifest = git_show(ctx, &source_sha, &ext.release.manifest)?;
+        let manifest_version = manifest_field(&manifest, "version")?;
+        if manifest_version != version {
+            bail!("source manifest version is {manifest_version}, requested {version}");
+        }
+    }
+
+    // A channel that carries no version replaces one rolling tag with whatever
+    // the branch built today, so an asset it never built is absent rather than
+    // wrong.
     for name in retained_assets(&ext.release) {
         let path = ctx.root.join(name);
-        if path.is_file() {
+        if profile.require_all_assets || path.is_file() {
             verify_checksum(&path)?;
         }
     }
-    release::publish_nightly_retained(ctx, &source_sha, &ctx.root)
+
+    for step in &profile.steps {
+        match step {
+            PublishStep::Retained => release::publish_retained(ctx, &source_sha, &ctx.root)?,
+            PublishStep::NightlyRetained => {
+                release::publish_nightly_retained(ctx, &source_sha, &ctx.root)?;
+            }
+            PublishStep::Pages => release::publish_pages_retained(ctx, &source_sha, &ctx.root)?,
+            PublishStep::Crates => publish::publish_release(ctx)?,
+        }
+    }
+    Ok(())
 }
 
 fn retained_assets(config: &ReleaseConfig) -> impl Iterator<Item = &str> {

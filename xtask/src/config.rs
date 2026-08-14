@@ -290,6 +290,8 @@ pub(crate) struct ReleaseConfig {
     pub(crate) upload_timeout_secs: Option<u64>,
     /// Named packaging profiles. A lane names one; nothing infers it.
     pub(crate) packages: BTreeMap<String, PackageProfile>,
+    /// Named delivery channels. A lane names one; nothing infers it.
+    pub(crate) channels: BTreeMap<String, ChannelProfile>,
 }
 
 impl ReleaseConfig {
@@ -297,6 +299,12 @@ impl ReleaseConfig {
         self.packages
             .get(name)
             .with_context(|| format!("ext.release.packages.{name} is not defined"))
+    }
+
+    pub(crate) fn channel(&self, name: &str) -> Result<&ChannelProfile> {
+        self.channels
+            .get(name)
+            .with_context(|| format!("ext.release.channels.{name} is not defined"))
     }
 
     pub(crate) fn asset_name(&self, key: AssetKey) -> &str {
@@ -327,6 +335,30 @@ pub(crate) enum AssetKey {
 pub(crate) struct PackageProfile {
     pub(crate) version_gate: bool,
     pub(crate) assets: Vec<AssetKey>,
+}
+
+/// One step of delivery. Naming the steps individually is what lets a channel
+/// be data the config carries rather than a branch the code takes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum PublishStep {
+    Retained,
+    NightlyRetained,
+    Pages,
+    Crates,
+}
+
+/// What a delivery channel requires before it runs and what it then performs.
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub(crate) struct ChannelProfile {
+    /// Whether `KITHARA_RELEASE_VERSION` must be set and agree with the
+    /// manifest at the published commit.
+    pub(crate) requires_version: bool,
+    /// Whether every retained asset must be present, or only those that are.
+    pub(crate) require_all_assets: bool,
+    pub(crate) tokens: Vec<String>,
+    pub(crate) steps: Vec<PublishStep>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -397,7 +429,7 @@ mod tests {
     use kithara_devtools::Ctx;
     use tempfile::TempDir;
 
-    use super::{AssetKey, KitharaExt, XtaskCacheConfig};
+    use super::{AssetKey, KitharaExt, PublishStep, XtaskCacheConfig};
 
     fn config_root(body: &str) -> (TempDir, PathBuf) {
         let temp = tempfile::tempdir().expect("create fixture root");
@@ -449,6 +481,61 @@ assets = ["merged"]
         let profile = ext.release.package("snapshot").expect("snapshot profile");
         assert!(!profile.version_gate);
         assert_eq!(profile.assets, vec![AssetKey::Merged]);
+    }
+
+    #[test]
+    fn the_release_channel_resolves_to_todays_hard_coded_behaviour() {
+        let ctx = ctx_from_config(
+            r#"
+[ext.release.channels.release]
+requires_version = true
+require_all_assets = true
+tokens = ["CARGO_REGISTRY_TOKEN", "GH_TOKEN", "GITLAB_TOKEN"]
+steps = ["retained", "pages", "crates"]
+
+[ext.release.channels.nightly]
+requires_version = false
+require_all_assets = false
+tokens = ["GH_TOKEN", "GITLAB_TOKEN"]
+steps = ["nightly_retained"]
+"#,
+        );
+
+        let ext = KitharaExt::from_ctx(&ctx).expect("parse kithara extension");
+
+        let release = ext.release.channel("release").expect("release channel");
+        assert!(release.requires_version);
+        assert!(release.require_all_assets);
+        assert_eq!(
+            release.tokens,
+            ["CARGO_REGISTRY_TOKEN", "GH_TOKEN", "GITLAB_TOKEN"]
+        );
+        assert_eq!(
+            release.steps,
+            vec![
+                PublishStep::Retained,
+                PublishStep::Pages,
+                PublishStep::Crates
+            ]
+        );
+
+        let nightly = ext.release.channel("nightly").expect("nightly channel");
+        assert!(!nightly.requires_version);
+        assert!(!nightly.require_all_assets);
+        assert_eq!(nightly.tokens, ["GH_TOKEN", "GITLAB_TOKEN"]);
+        assert_eq!(nightly.steps, vec![PublishStep::NightlyRetained]);
+    }
+
+    #[test]
+    fn an_unknown_publish_step_fails_the_config() {
+        let ctx = ctx_from_config(
+            r#"
+[ext.release.channels.release]
+steps = ["retaind"]
+"#,
+        );
+
+        assert!(KitharaExt::from_ctx(&ctx).is_err());
     }
 
     #[test]
