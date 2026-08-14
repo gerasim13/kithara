@@ -49,6 +49,10 @@ pub(crate) struct CiLaneConfig {
 pub(crate) struct CiLaneStep {
     pub(crate) args: Vec<String>,
     pub(crate) label: String,
+    /// What the step needs the executor to be, rather than to run: a build-job
+    /// cap the container cannot exceed, a target directory a gate owns, the
+    /// browser a harness would otherwise guess.
+    pub(crate) env: BTreeMap<String, String>,
 }
 
 /// A version check: ask `tool` how old it is, and require the answer to carry

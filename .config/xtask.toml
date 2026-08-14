@@ -545,6 +545,161 @@ tools = ["cargo", "just"]
 program = "just"
 steps = [{ args = ["perf", "bench", "ci"], label = "benchmark suite" }]
 
+# The scan reports where it found something, not merely how many: without the
+# findings it announced "leaks found: 5" and stopped, which is a number nobody
+# can act on. Values stay redacted, so neither the log nor the report repeats a
+# secret while naming the rule, the file and the commit.
+[ext.ci.lanes.linux-secrets]
+cache_group = "linux"
+label = "Linux"
+os = "linux"
+tools = ["gitleaks"]
+program = "gitleaks"
+steps = [
+  { args = [
+    "git",
+    ".",
+    "--config",
+    ".gitleaks.toml",
+    "--log-opts=--all",
+    "--no-banner",
+    "--redact=100",
+    "--verbose",
+    "--report-format",
+    "json",
+    "--report-path",
+    "gitleaks-report.json",
+  ], label = "repository secret scan" },
+]
+
+[ext.ci.lanes.linux-check]
+cache_group = "linux"
+label = "Linux"
+os = "linux"
+tools = ["cargo", "just", "sccache"]
+program = "just"
+steps = [{ args = ["check", "workspace"], label = "Linux workspace check" }]
+
+[ext.ci.lanes.linux-wasm]
+cache_group = "linux"
+label = "Linux"
+os = "linux"
+tools = ["cargo", "just", "sccache"]
+program = "just"
+steps = [{ args = ["platform", "wasm"], label = "WASM portability check" }]
+
+# Every Linux test lane caps Cargo at two build jobs. The container has five
+# CPUs and under eight gigabytes, so five compilations at once put the peak past
+# the cgroup limit: the kernel logged `Killed process (rustc) anon-rss:1727320kB`
+# twice in one second, and Cargo reported only "could not compile" with no
+# diagnostic, because the compiler never reached one.
+[ext.ci.lanes.linux-test]
+cache_group = "linux"
+label = "Linux"
+os = "linux"
+tools = ["cargo", "just", "sccache"]
+program = "just"
+steps = [
+  { args = [
+    "test",
+    "run",
+    "--profile",
+    "ci",
+  ], label = "Linux tests", env = { CARGO_BUILD_JOBS = "2" } },
+]
+
+[ext.ci.lanes.linux-doc]
+cache_group = "linux"
+label = "Linux"
+os = "linux"
+tools = ["cargo", "just", "sccache"]
+program = "just"
+steps = [
+  { args = [
+    "test",
+    "run",
+    "--lane=doc",
+  ], label = "Linux doc lane", env = { CARGO_BUILD_JOBS = "2" } },
+]
+
+[ext.ci.lanes.linux-loom]
+cache_group = "linux"
+label = "Linux"
+os = "linux"
+tools = ["cargo", "just", "sccache"]
+program = "just"
+steps = [
+  { args = [
+    "test",
+    "run",
+    "--lane=loom",
+  ], label = "Linux loom lane", env = { CARGO_BUILD_JOBS = "2" } },
+]
+
+[ext.ci.lanes.linux-broadcast]
+cache_group = "linux"
+label = "Linux"
+os = "linux"
+tools = ["cargo", "just", "sccache"]
+program = "just"
+steps = [
+  { args = [
+    "test",
+    "run",
+    "--lane=broadcast",
+  ], label = "Linux broadcast lane", env = { CARGO_BUILD_JOBS = "2" } },
+]
+
+[ext.ci.lanes.linux-integration-regressions]
+cache_group = "linux"
+label = "Linux"
+os = "linux"
+tools = ["cargo", "just", "sccache"]
+program = "just"
+steps = [
+  { args = [
+    "test",
+    "run",
+    "--lane=integration-regressions",
+  ], label = "Linux integration-regressions lane", env = { CARGO_BUILD_JOBS = "2" } },
+]
+
+# The lane name is the only place the browser is decided, and
+# `KITHARA_SELENIUM_BROWSER` carries it into the harness
+# (`tests/tests/kithara_ffi_web/selenium.rs`), which otherwise defaults to chrome
+# regardless of what the image actually pins.
+[ext.ci.lanes.linux-selenium-firefox]
+cache_group = "linux"
+label = "Linux"
+os = "linux"
+tools = ["cargo", "just", "sccache"]
+program = "just"
+steps = [
+  { args = [
+    "test",
+    "run",
+    "--lane=selenium-firefox",
+  ], label = "Linux selenium-firefox lane", env = { CARGO_BUILD_JOBS = "2", KITHARA_SELENIUM_BROWSER = "firefox" } },
+]
+
+# Instrumented test binaries are large and the workspace has twenty of them, so
+# Cargo reaches the link step with several `ld` processes at once. In a
+# five-gigabyte VM the kernel picks one and kills it, leaving no trace but
+# `ld terminated with signal 9`; the lane runs nightly and can afford the
+# wall-clock two units at a time costs.
+[ext.ci.lanes.linux-coverage]
+cache_group = "linux"
+label = "Linux"
+os = "linux"
+tools = ["cargo", "just", "sccache"]
+program = "just"
+steps = [
+  { args = [
+    "test",
+    "coverage",
+  ], label = "Linux coverage", env = { CARGO_BUILD_JOBS = "2", COVERAGE_MIN = "80", COVERAGE_OUTPUT_DIR = "coverage" } },
+]
+
 
 [ext.publish]
 workspace_hack_crate = "kithara-workspace-hack"

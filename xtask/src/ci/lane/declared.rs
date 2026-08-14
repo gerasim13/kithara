@@ -24,8 +24,9 @@ pub(crate) fn run(process: &Process, lane: &CiLaneConfig, pins: &CiPins) -> Resu
         require_pinned_version(process, check, pins)?;
     }
     for step in &lane.steps {
-        let args: Vec<&str> = step.args.iter().map(String::as_str).collect();
-        process.run(&lane.program, &args, &step.label)?;
+        let mut command = process.command(&lane.program);
+        command.args(&step.args).envs(&step.env);
+        process.run_command(&mut command, &step.label)?;
     }
     Ok(())
 }
