@@ -2288,6 +2288,7 @@ mod gesture_census {
     passive!(
         mount::TitleBar,
         mount::Text<'_>,
+        mount::Shader,
         mount::Vis,
         mount::Table<'_>,
         mount::Tree<'_>,
