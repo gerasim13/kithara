@@ -105,6 +105,27 @@ fixture-cache ACTION="path":
       *) echo "usage: just test fixture-cache [path|clear]" >&2; exit 2 ;;
     esac
 
+# Render the same active no-SYNC scenarios into listening artifacts. The
+# recorders are ignored in ordinary CI so filesystem work cannot consume their
+# behavioral-test deadlines.
+[positional-arguments]
+audio-artifacts OUTPUT:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    output="{{ OUTPUT }}"
+    if [[ "$output" != /* ]]; then
+      echo "audio artifact output must be an absolute path" >&2
+      exit 2
+    fi
+    KITHARA_AUDIO_ARTIFACT_DIR="$output" \
+      just test run -p kithara-integration-tests --test suite_light \
+        --run-ignored=only \
+        -E 'test(=kithara_audio::no_sync_passthrough::record_no_sync_unity_playback_artifacts)'
+    KITHARA_AUDIO_ARTIFACT_DIR="$output" \
+      just test run -p kithara-integration-tests --test suite_heavy \
+        --run-ignored=only \
+        -E 'test(=no_sync_real_media::record_no_sync_real_media_artifacts)'
+
 # All three lanes require a real output device.
 [positional-arguments]
 e2e-resamplers *ARGS:

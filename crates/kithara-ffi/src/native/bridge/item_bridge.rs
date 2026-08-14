@@ -52,8 +52,9 @@ impl ItemEventBridge {
             observer.on_event(event);
         }
 
-        if let Ok(error) = FfiError::try_from(event) {
-            state.lock().mark_failed();
+        if let Ok(error) = FfiError::try_from(event)
+            && state.lock().mark_failed()
+        {
             observer.on_event(FfiItemEvent::StatusChanged {
                 status: FfiItemStatus::Failed,
             });
@@ -225,8 +226,59 @@ impl Drop for ItemEventBridge {
 #[cfg(test)]
 mod tests {
     use kithara_events::{Event, FileError, FileEvent};
+    use kithara_platform::sync::{Arc, Mutex};
 
-    use crate::types::FfiError;
+    use super::ItemEventBridge;
+    use crate::{
+        item::{AudioPlayerItem, ItemView},
+        observer::ItemObserver,
+        types::{FfiError, FfiItemConfig, FfiItemEvent},
+    };
+
+    #[derive(Default)]
+    struct CollectingItemObserver {
+        events: Mutex<Vec<FfiItemEvent>>,
+    }
+
+    impl CollectingItemObserver {
+        fn take_events(&self) -> Vec<FfiItemEvent> {
+            std::mem::take(&mut *self.events.lock())
+        }
+    }
+
+    impl ItemObserver for CollectingItemObserver {
+        fn on_event(&self, event: FfiItemEvent) {
+            self.events.lock().push(event);
+        }
+    }
+
+    fn item_state() -> Arc<Mutex<ItemView>> {
+        Arc::clone(
+            &AudioPlayerItem::new(FfiItemConfig {
+                abr_mode: None,
+                audio_id: None,
+                headers: None,
+                uuid_i64: None,
+                url: "https://example.com/quiet-intro.flac".to_string(),
+                is_live_stream: false,
+                preferred_peak_bitrate: 0.0,
+                preferred_peak_bitrate_expensive: 0.0,
+            })
+            .state,
+        )
+    }
+
+    fn dispatch_file_error(observer: &Arc<dyn ItemObserver>, state: &Arc<Mutex<ItemView>>) {
+        ItemEventBridge::dispatch(
+            observer,
+            &Event::File(FileEvent::Error {
+                error: FileError::Io("boom".into()),
+            }),
+            &mut None,
+            &mut Vec::new(),
+            state,
+        );
+    }
 
     #[kithara::test]
     fn file_error_maps_to_item_failed() {
@@ -238,5 +290,34 @@ mod tests {
             error,
             Some(FfiError::ItemFailed { reason }) if reason == "io: boom"
         ));
+    }
+
+    /// The queue settles a failed track too, and reaches the same observer.
+    /// Whichever source gets there first owns the pair; a protocol error
+    /// arriving after it must not repeat what the item already reported.
+    #[kithara::test]
+    fn a_protocol_error_after_settlement_does_not_repeat_the_pair() {
+        let observer_impl = Arc::new(CollectingItemObserver::default());
+        let observer: Arc<dyn ItemObserver> = observer_impl.clone();
+        let state = item_state();
+        assert!(state.lock().mark_failed(), "the item settles first");
+
+        dispatch_file_error(&observer, &state);
+
+        assert!(
+            observer_impl.take_events().is_empty(),
+            "a settled item must report its terminal pair once"
+        );
+    }
+
+    #[kithara::test]
+    fn a_protocol_error_on_a_live_item_emits_the_pair() {
+        let observer_impl = Arc::new(CollectingItemObserver::default());
+        let observer: Arc<dyn ItemObserver> = observer_impl.clone();
+        let state = item_state();
+
+        dispatch_file_error(&observer, &state);
+
+        assert_eq!(observer_impl.take_events().len(), 2);
     }
 }

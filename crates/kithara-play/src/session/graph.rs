@@ -1,6 +1,6 @@
 use firewheel::{
     FirewheelCtx, Volume, backend::AudioBackend, diff::Memo,
-    dsp::volume::amp_to_linear_volume_clamped, node::NodeID, nodes::volume_pan::VolumePanNode,
+    dsp::volume::amp_to_linear_volume_clamped, node::NodeID, nodes::volume::VolumeNode,
 };
 use kithara_audio::EqBandConfig;
 use tracing::{debug, warn};
@@ -146,25 +146,33 @@ pub(super) mod lifecycle {
         let master_eq_memo = Memo::new(master_eq.clone());
         let master_eq_id = fw_ctx.add_node(master_eq, None);
         player.master_volume = master_volume.clamp(0.0, 1.0);
-        let master_vol = VolumePanNode::from_volume(master_gain(player.master_volume));
-        let master_vol_memo = Memo::new(master_vol);
-        let master_vol_id = fw_ctx.add_node(master_vol, None);
+        let master_volume = VolumeNode {
+            volume: master_gain(player.master_volume),
+            ..VolumeNode::default()
+        };
+        let master_volume_memo = Memo::new(master_volume);
+        let master_volume_id = fw_ctx.add_node(master_volume, None);
         let eq_to_volume = "connect player master_eq->master_vol";
-        connect_stereo(fw_ctx, master_eq_id, master_vol_id, eq_to_volume)?;
+        connect_stereo(fw_ctx, master_eq_id, master_volume_id, eq_to_volume)?;
         let volume_to_output = "connect player master_vol->session_output";
-        connect_stereo(fw_ctx, master_vol_id, session_output_id, volume_to_output)?;
+        connect_stereo(
+            fw_ctx,
+            master_volume_id,
+            session_output_id,
+            volume_to_output,
+        )?;
         if let Err(err) = fw_ctx.update() {
             warn!(player_id, "graph update after player start failed: {err:?}");
         }
         player.master_eq_node_id = Some(master_eq_id);
         player.master_eq_memo = Some(master_eq_memo);
-        player.master_vol_pan_node_id = Some(master_vol_id);
-        player.master_vol_pan_memo = Some(master_vol_memo);
+        player.master_volume_node_id = Some(master_volume_id);
+        player.master_volume_memo = Some(master_volume_memo);
         player.started = true;
         debug!(
             player_id,
             ?master_eq_id,
-            ?master_vol_id,
+            ?master_volume_id,
             "[KITHARA-ROUTE] player graph started"
         );
         Ok(())
@@ -230,14 +238,14 @@ pub(super) mod lifecycle {
     ) {
         let player_id = player.player_id;
         for slot in player.slots.drain(..) {
-            if let Err(err) = fw_ctx.remove_node(slot.vol_pan_node_id) {
-                warn!(player_id, ?err, "failed to remove slot vol_pan node");
+            if let Err(err) = fw_ctx.remove_node(slot.volume_node_id) {
+                warn!(player_id, ?err, "failed to remove slot volume node");
             }
             if let Err(err) = fw_ctx.remove_node(slot.player_node_id) {
                 warn!(player_id, ?err, "failed to remove slot player node");
             }
         }
-        if let Some(master_id) = player.master_vol_pan_node_id.take()
+        if let Some(master_id) = player.master_volume_node_id.take()
             && let Err(err) = fw_ctx.remove_node(master_id)
         {
             warn!(player_id, ?err, "failed to remove player master vol node");
@@ -251,7 +259,7 @@ pub(super) mod lifecycle {
     }
     pub(super) fn clear_player_graph_state(player: &mut PlayerState) {
         player.master_eq_memo = None;
-        player.master_vol_pan_memo = None;
+        player.master_volume_memo = None;
     }
 }
 
@@ -278,13 +286,13 @@ pub(super) mod slots {
         let (inputs, control) = slot_channels(shared_eq);
         let player_node = PlayerNode::new(inputs, state.players[idx].pcm_pool.clone());
         let player_node_id = fw_ctx.add_node(player_node, None);
-        let slot_vol_pan = VolumePanNode::from_volume(Volume::Linear(1.0));
-        let slot_vol_pan_memo = Memo::new(slot_vol_pan);
-        let slot_vol_pan_id = fw_ctx.add_node(slot_vol_pan, None);
-        let player_to_slot = "connect player->slot_vol_pan";
-        connect_stereo(fw_ctx, player_node_id, slot_vol_pan_id, player_to_slot)?;
-        let slot_to_master = "connect slot_vol_pan->player_master_eq";
-        connect_stereo(fw_ctx, slot_vol_pan_id, master_eq_id, slot_to_master)?;
+        let slot_volume = VolumeNode::from_linear(1.0);
+        let slot_volume_memo = Memo::new(slot_volume);
+        let slot_volume_id = fw_ctx.add_node(slot_volume, None);
+        let player_to_slot = "connect player->slot_volume";
+        connect_stereo(fw_ctx, player_node_id, slot_volume_id, player_to_slot)?;
+        let slot_to_master = "connect slot_volume->player_master_eq";
+        connect_stereo(fw_ctx, slot_volume_id, master_eq_id, slot_to_master)?;
         if let Err(err) = fw_ctx.update() {
             warn!(
                 player_id,
@@ -295,14 +303,14 @@ pub(super) mod slots {
         state.players[idx].slots.push(SlotNodes {
             slot_id,
             player_node_id,
-            vol_pan_memo: slot_vol_pan_memo,
-            vol_pan_node_id: slot_vol_pan_id,
+            volume_memo: slot_volume_memo,
+            volume_node_id: slot_volume_id,
         });
         debug!(
             player_id,
             ?slot_id,
             ?player_node_id,
-            ?slot_vol_pan_id,
+            ?slot_volume_id,
             slots = state.players[idx].slots.len(),
             "[KITHARA-ROUTE] player slot allocated"
         );
@@ -349,8 +357,8 @@ pub(super) mod slots {
         player_id: PlayerId,
         slot: &SlotNodes,
     ) {
-        if let Err(err) = fw_ctx.remove_node(slot.vol_pan_node_id) {
-            warn!(player_id, ?err, "failed to remove slot vol_pan node");
+        if let Err(err) = fw_ctx.remove_node(slot.volume_node_id) {
+            warn!(player_id, ?err, "failed to remove slot volume node");
         }
         if let Err(err) = fw_ctx.remove_node(slot.player_node_id) {
             warn!(player_id, ?err, "failed to remove slot player node");
@@ -384,8 +392,8 @@ pub(super) mod controls {
             let player = &state.players[idx];
             if player.started
                 && (state.ctx.is_none()
-                    || player.master_vol_pan_node_id.is_none()
-                    || player.master_vol_pan_memo.is_none())
+                    || player.master_volume_node_id.is_none()
+                    || player.master_volume_memo.is_none())
             {
                 return Err(graph_state("player master vol graph is not initialised"));
             }
@@ -402,8 +410,8 @@ pub(super) mod controls {
         let player = &mut state.players[idx];
         if let (Some(fw_ctx), Some(master_id), Some(memo)) = (
             &mut state.ctx,
-            player.master_vol_pan_node_id,
-            &mut player.master_vol_pan_memo,
+            player.master_volume_node_id,
+            &mut player.master_volume_memo,
         ) {
             memo.volume = master_gain(volume);
             let mut queue = fw_ctx.event_queue(master_id);
@@ -428,9 +436,9 @@ pub(super) mod controls {
             return Err(SessionError::SlotNotFound(slot));
         };
         let fw_ctx = state.ctx.as_mut().ok_or(SessionError::NoContext)?;
-        slot_nodes.vol_pan_memo.volume = Volume::Linear(volume.clamp(0.0, 1.0));
-        let mut queue = fw_ctx.event_queue(slot_nodes.vol_pan_node_id);
-        slot_nodes.vol_pan_memo.update_memo(&mut queue);
+        slot_nodes.volume_memo.volume = Volume::Linear(volume.clamp(0.0, 1.0));
+        let mut queue = fw_ctx.event_queue(slot_nodes.volume_node_id);
+        slot_nodes.volume_memo.update_memo(&mut queue);
         Ok(())
     }
     pub(in crate::session) fn set_player_eq_gain<B: AudioBackend>(
@@ -482,12 +490,12 @@ pub(super) mod controls {
                 .master_eq_node_id
                 .ok_or_else(|| graph_state("player master eq node is not initialised"))?;
             let master_volume_id = player
-                .master_vol_pan_node_id
+                .master_volume_node_id
                 .ok_or_else(|| graph_state("player master vol node is not initialised"))?;
             let slot_volume_ids = player
                 .slots
                 .iter()
-                .map(|slot| slot.vol_pan_node_id)
+                .map(|slot| slot.volume_node_id)
                 .collect::<Vec<_>>();
             (old_eq_id, master_volume_id, slot_volume_ids)
         };
@@ -503,7 +511,7 @@ pub(super) mod controls {
                     fw_ctx,
                     slot_id,
                     master_eq_id,
-                    "connect slot_vol_pan->replacement master_eq",
+                    "connect slot_volume->replacement master_eq",
                 )
             })
             .and_then(|()| {
@@ -764,7 +772,7 @@ mod tests {
             _ => panic!("slot allocation returned unexpected reply"),
         };
         let previous_eq = state.players[0].master_eq_node_id;
-        let previous_volume = state.players[0].master_vol_pan_node_id;
+        let previous_volume = state.players[0].master_volume_node_id;
         let mut layout = generate_log_spaced_bands(4);
         for (band, gain) in layout.iter_mut().zip([-6.0, -3.0, 1.5, 4.0]) {
             band.set_gain_db(gain);
@@ -787,7 +795,7 @@ mod tests {
         assert_eq!(player.slots.len(), 1);
         assert_eq!(player.slots[0].slot_id, slot);
         assert_ne!(player.master_eq_node_id, previous_eq);
-        assert_eq!(player.master_vol_pan_node_id, previous_volume);
+        assert_eq!(player.master_volume_node_id, previous_volume);
         assert_eq!(
             player.master_eq_memo.as_ref().map(|memo| memo.bands.len()),
             Some(4)

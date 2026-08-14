@@ -11,7 +11,7 @@ use kithara::{
         time::{self, Duration},
         tokio::sync::broadcast::error::TryRecvError,
     },
-    play::{PlayerImpl, Resource, ResourceConfig, StretchControls},
+    play::{PlayerImpl, Resource, ResourceConfig, StretchControls, apply_mix},
     queue::{Queue, QueueConfig, Transition},
 };
 use kithara_integration_tests::{
@@ -58,9 +58,26 @@ const TONE_A_FREQ_HZ: f64 = 440.0;
 const TONE_B_FREQ_HZ: f64 = 880.0;
 const TONE_WINDOW_FRAMES: usize = 1_024;
 const TONE_MAG_FLOOR: f64 = 1.0;
+const PROVENANCE_LEVEL: f32 = 0.5;
+const LINEAR_PATH_MAX_PEAK: f32 = 0.9;
 
 type ClassRun = (FrameClass, usize, usize);
 type ToneRun = (ToneClass, usize, usize);
+
+fn with_provenance_headroom(harness: OfflinePlayerHarness) -> OfflinePlayerHarness {
+    apply_mix([(harness.player().as_ref(), PROVENANCE_LEVEL)])
+        .expect("apply provenance fixture headroom");
+    harness
+}
+
+fn assert_provenance_headroom(rendered: &[f32], label: &str) {
+    let left = deinterleave_left(rendered, usize::from(CHANNELS));
+    let peak = max_abs(&left);
+    assert!(
+        peak >= PROVENANCE_LEVEL * 0.9 && peak < LINEAR_PATH_MAX_PEAK,
+        "{label} must stay audible and below the session limiter; peak={peak}"
+    );
+}
 
 struct ProvenanceDumpContext<'a> {
     replays: &'a [Replay],
@@ -171,6 +188,7 @@ async fn natural_eof_advance_emits_only_b_after_a_flac(temp_dir: TestTempDir) {
     let (rendered, expected_a_frames) =
         render_until_b_with_postroll(&setup.queue, &setup.harness, ASCENDING_TOL, SAMPLE_RATE)
             .await;
+    assert_provenance_headroom(&rendered, "FLAC natural EOF");
     let left_raw = deinterleave_left(&rendered, usize::from(CHANNELS));
     let left = normalized_left(&left_raw, setup.queue.current_index());
     let classes = classify_windows(&left, WINDOW_FRAMES, ASCENDING_TOL);
@@ -265,6 +283,7 @@ async fn natural_eof_advance_with_late_variant_switch_flac(temp_dir: TestTempDir
 
     let (rendered, expected_a_frames, switch_issue_frame, committed_variant) =
         render_until_b_with_late_variant_switch(&setup.queue, &setup.harness).await;
+    assert_provenance_headroom(&rendered, "FLAC late variant switch");
     let left_raw = deinterleave_left(&rendered, usize::from(CHANNELS));
     let left = normalized_left(&left_raw, setup.queue.current_index());
     let classes = classify_windows(&left, WINDOW_FRAMES, ASCENDING_TOL);
@@ -389,6 +408,7 @@ async fn natural_eof_advance_app_layer_crossfade_advance_flac_resampled_48k(temp
         CROSSFADE_SEGMENTS,
         crossfade_eq_stretch_player_config(&timestretch),
         true,
+        true,
     )
     .await;
 
@@ -398,6 +418,7 @@ async fn natural_eof_advance_app_layer_crossfade_advance_flac_resampled_48k(temp
         RESAMPLED_RENDER_RATE,
     )
     .await;
+    assert_provenance_headroom(&rendered, "app-layer crossfade resampled FLAC");
     let analysis = assert_crossfade_contract(
         &rendered,
         &setup.queue,
@@ -436,6 +457,7 @@ async fn natural_eof_advance_app_layer_crossfade_advance_flac_resampled_48k_real
         REAL_GEOMETRY_SEGMENT_SECS,
         crossfade_eq_stretch_player_config(&timestretch),
         true,
+        true,
     )
     .await;
 
@@ -447,6 +469,10 @@ async fn natural_eof_advance_app_layer_crossfade_advance_flac_resampled_48k_real
         REAL_GEOMETRY_DURATION_WAIT_SECS,
     )
     .await;
+    assert_provenance_headroom(
+        &rendered,
+        "app-layer crossfade resampled FLAC real geometry",
+    );
     let analysis = assert_crossfade_contract(
         &rendered,
         &setup.queue,
@@ -486,6 +512,7 @@ async fn natural_eof_advance_emits_only_b_flac_resampled_48k(temp_dir: TestTempD
         RESAMPLED_RENDER_RATE,
     )
     .await;
+    assert_provenance_headroom(&rendered, "resampled FLAC natural EOF");
     let left_raw = deinterleave_left(&rendered, usize::from(CHANNELS));
     let left = normalized_left(&left_raw, setup.queue.current_index());
     let classes = classify_windows(&left, WINDOW_FRAMES, ASCENDING_TOL);
@@ -617,6 +644,7 @@ async fn natural_eof_advance_emits_only_b_flac_crossfade_5s(temp_dir: TestTempDi
         SAMPLE_RATE,
         collapse_short_unknown_islands,
         "crossfade FLAC",
+        false,
         crossfade_player_config,
     )
     .await;
@@ -636,6 +664,7 @@ async fn natural_eof_advance_emits_only_b_flac_crossfade_5s_eq(temp_dir: TestTem
         SAMPLE_RATE,
         collapse_short_unknown_islands,
         "crossfade FLAC eq",
+        false,
         crossfade_eq_player_config,
     )
     .await;
@@ -657,6 +686,7 @@ async fn natural_eof_advance_emits_only_b_flac_crossfade_5s_eq_stretch(temp_dir:
         SAMPLE_RATE,
         collapse_short_unknown_islands,
         "crossfade FLAC eq stretch",
+        false,
         || crossfade_eq_stretch_player_config(&timestretch),
     )
     .await;
@@ -678,6 +708,7 @@ async fn natural_eof_advance_app_layer_crossfade_advance_flac(temp_dir: TestTemp
         CROSSFADE_SEGMENTS,
         crossfade_eq_stretch_player_config(&timestretch),
         true,
+        false,
     )
     .await;
 
@@ -717,6 +748,7 @@ async fn natural_eof_advance_emits_only_b_flac_crossfade_5s_resampled_48k(temp_d
         RESAMPLED_RENDER_RATE,
         collapse_resampled_noise_islands,
         "crossfade resampled FLAC",
+        true,
         crossfade_player_config,
     )
     .await;
@@ -734,6 +766,7 @@ async fn seek_near_end_then_eof_advance_emits_only_b_flac(temp_dir: TestTempDir)
 
     let (rendered, seek_issue_frame, duration) =
         render_seek_near_end_until_b_with_postroll(&setup.queue, &setup.harness, SAMPLE_RATE).await;
+    assert_provenance_headroom(&rendered, "FLAC seek near EOF");
     let left_raw = deinterleave_left(&rendered, usize::from(CHANNELS));
     let left = normalized_left(&left_raw, setup.queue.current_index());
     let classes = classify_windows(&left, WINDOW_FRAMES, ASCENDING_TOL);
@@ -957,6 +990,7 @@ async fn run_crossfade_flac_case(
     render_sample_rate: u32,
     collapse_runs: fn(&[ClassRun]) -> Vec<ClassRun>,
     label: &str,
+    provenance_headroom: bool,
     build_player_config: impl FnOnce() -> OfflinePlayerOptions,
 ) {
     let setup = setup_flac_queue_with_player_config(
@@ -965,12 +999,16 @@ async fn run_crossfade_flac_case(
         render_sample_rate,
         CROSSFADE_SEGMENTS,
         build_player_config(),
+        provenance_headroom,
     )
     .await;
 
     let (rendered, expected_a_end_frame) =
         render_crossfade_until_b_with_postroll(&setup.queue, &setup.harness, render_sample_rate)
             .await;
+    if provenance_headroom {
+        assert_provenance_headroom(&rendered, label);
+    }
 
     assert_crossfade_contract(
         &rendered,
@@ -1013,12 +1051,12 @@ async fn setup_queue_with_sample_rate(
     flac: bool,
     render_sample_rate: u32,
 ) -> QueueSetup {
-    let harness = OfflinePlayerHarness::with_sample_rate(
+    let harness = with_provenance_headroom(OfflinePlayerHarness::with_sample_rate(
         OfflinePlayerOptions::builder()
             .crossfade_duration(0.0)
             .build(),
         render_sample_rate,
-    );
+    ));
     let queue = Queue::new(with_autoplay(
         QueueConfig::builder()
             .player(Arc::clone(harness.player()))
@@ -1056,12 +1094,12 @@ async fn setup_multivariant_flac_queue(
     server: &TestServerHelper,
     temp_dir: &TestTempDir,
 ) -> QueueSetup {
-    let harness = OfflinePlayerHarness::with_sample_rate(
+    let harness = with_provenance_headroom(OfflinePlayerHarness::with_sample_rate(
         OfflinePlayerOptions::builder()
             .crossfade_duration(0.0)
             .build(),
         SAMPLE_RATE,
-    );
+    ));
     let queue = Queue::new(with_autoplay(
         QueueConfig::builder()
             .player(Arc::clone(harness.player()))
@@ -1099,6 +1137,7 @@ async fn setup_flac_queue_with_player_config(
     render_sample_rate: u32,
     segments: usize,
     player_config: OfflinePlayerOptions,
+    provenance_headroom: bool,
 ) -> QueueSetup {
     setup_flac_queue_with_player_config_autoplay(
         server,
@@ -1107,6 +1146,7 @@ async fn setup_flac_queue_with_player_config(
         segments,
         player_config,
         false,
+        provenance_headroom,
     )
     .await
 }
@@ -1118,6 +1158,7 @@ async fn setup_flac_queue_with_player_config_autoplay(
     segments: usize,
     player_config: OfflinePlayerOptions,
     should_autoplay: bool,
+    provenance_headroom: bool,
 ) -> QueueSetup {
     setup_flac_queue_with_player_config_autoplay_geometry(
         server,
@@ -1127,6 +1168,7 @@ async fn setup_flac_queue_with_player_config_autoplay(
         SEGMENT_SECS,
         player_config,
         should_autoplay,
+        provenance_headroom,
     )
     .await
 }
@@ -1139,8 +1181,14 @@ async fn setup_flac_queue_with_player_config_autoplay_geometry(
     segment_duration_secs: f64,
     player_config: OfflinePlayerOptions,
     should_autoplay: bool,
+    provenance_headroom: bool,
 ) -> QueueSetup {
     let harness = OfflinePlayerHarness::with_sample_rate(player_config, render_sample_rate);
+    let harness = if provenance_headroom {
+        with_provenance_headroom(harness)
+    } else {
+        harness
+    };
     let queue = Queue::new(with_autoplay(
         QueueConfig::builder()
             .player(Arc::clone(harness.player()))

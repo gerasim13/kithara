@@ -1,6 +1,26 @@
+#[cfg(not(target_arch = "wasm32"))]
+use crate::fixture_cache::FixtureCache;
 use crate::signal_pcm::{Finite, SignalPcm, signal};
 
 const WAV_HEADER_SIZE: usize = 44;
+
+#[cfg(not(target_arch = "wasm32"))]
+const SINE_WAV_CACHE_DOMAIN: &str = "sine-wav";
+
+#[cfg(not(target_arch = "wasm32"))]
+struct ScaledSine {
+    frequency_hz: f64,
+    peak: i16,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl signal::SignalFn for ScaledSine {
+    fn sample(&self, frame: usize, sample_rate: u32) -> i16 {
+        let phase =
+            std::f64::consts::TAU * self.frequency_hz * frame as f64 / f64::from(sample_rate);
+        (phase.sin() * f64::from(self.peak)) as i16
+    }
+}
 
 /// Create WAV with `signal` pattern, sized exactly to `total_bytes`.
 pub fn create_wav_exact_bytes<S: signal::SignalFn>(
@@ -43,6 +63,50 @@ pub fn create_wav<S: signal::SignalFn>(
         channels,
         Finite::new(total_frames),
     ))
+}
+
+/// Prepare a finite sine WAV through the shared, build-fingerprinted fixture cache.
+#[cfg(not(target_arch = "wasm32"))]
+#[must_use]
+pub fn prepare_sine_wav(
+    frequency_hz: f64,
+    peak: i16,
+    total_frames: usize,
+    sample_rate: u32,
+    channels: u16,
+) -> Vec<u8> {
+    assert!(frequency_hz.is_finite() && frequency_hz > 0.0);
+    assert!(peak > 0);
+    assert!(total_frames > 0 && sample_rate > 0 && channels > 0);
+
+    let mut spec = Vec::with_capacity(32);
+    spec.extend_from_slice(&frequency_hz.to_bits().to_le_bytes());
+    spec.extend_from_slice(&peak.to_le_bytes());
+    spec.extend_from_slice(
+        &u64::try_from(total_frames)
+            .expect("WAV fixture frame count fits u64")
+            .to_le_bytes(),
+    );
+    spec.extend_from_slice(&sample_rate.to_le_bytes());
+    spec.extend_from_slice(&channels.to_le_bytes());
+
+    let cache = FixtureCache::from_env();
+    if let Some(bytes) = cache.get(SINE_WAV_CACHE_DOMAIN, &spec) {
+        return bytes;
+    }
+    let _lock = cache.lock_entry(SINE_WAV_CACHE_DOMAIN, &spec);
+    if let Some(bytes) = cache.get(SINE_WAV_CACHE_DOMAIN, &spec) {
+        return bytes;
+    }
+
+    let bytes = create_wav(
+        ScaledSine { frequency_hz, peak },
+        total_frames,
+        sample_rate,
+        channels,
+    );
+    cache.store(SINE_WAV_CACHE_DOMAIN, &spec, &bytes);
+    bytes
 }
 
 /// Create a complete WAV file from a finite [`SignalPcm`].
