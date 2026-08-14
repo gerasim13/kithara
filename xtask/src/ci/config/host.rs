@@ -8,6 +8,8 @@ use anyhow::{Context, Result, bail};
 use reqwest::Url;
 use serde::{Deserialize, Serialize};
 
+use crate::ci::HOST_JOB_CONCURRENCY;
+
 /// Directory every Unix executor reads the installed host profile from.
 pub(crate) const LANE_CONFIG_DIR: &str = "/etc/kithara-ci";
 
@@ -42,13 +44,50 @@ pub(crate) struct CiHost {
     pub(crate) macos_guest_xcode_developer_dir: PathBuf,
     pub(crate) gitlab_url: Url,
     pub(crate) host_root: PathBuf,
+    /// Where runners check work out. Separate from `host_root` because Apple's
+    /// packaging cannot run on a case-sensitive volume — `xcodebuild` writes
+    /// `Headers` and `cargo swift package` then removes `headers` — while the
+    /// rest of the host root is happy either way. Defaults to `host_root` for
+    /// a machine whose volume already folds case.
+    #[serde(default)]
+    pub(crate) build_root: Option<PathBuf>,
     pub(crate) host_xcode_developer_dir: PathBuf,
     pub(crate) quota_bytes: u64,
     pub(crate) reject_bytes: u64,
+    /// Aggregate whole-gigabyte sccache budget, divided between host jobs.
     pub(crate) sccache_size: String,
     pub(crate) soft_cleanup_bytes: u64,
     pub(crate) sync_uid: u32,
     pub(crate) sync_user: String,
+    /// The Windows guest this machine serves its Windows lane from. Defaulted:
+    /// installed profiles predate it, and refusing to load would kill cleanup
+    /// on every host that has no Windows guest at all.
+    #[serde(default)]
+    pub(crate) windows: Option<WindowsGuest>,
+}
+
+/// The Windows guest a mac starts directly.
+///
+/// The Linux host's guest is described to libvirt, which owns its shape from
+/// then on. This one is a `qemu` process the host launches itself, so the
+/// shape belongs here rather than in a shell script beside the disk image.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+#[non_exhaustive]
+pub(crate) struct WindowsGuest {
+    pub(crate) vcpus: u32,
+    pub(crate) memory_mib: u32,
+    /// The disk carrying everything the guest writes: the page file, `TEMP`,
+    /// and build trees.
+    ///
+    /// Kept apart from the system image because Windows sizes its page file to
+    /// memory, and a `qcow2` grows to hold that and never returns the room on
+    /// its own. Eight gigabytes of RAM cost this host eight to twelve inside
+    /// the image it can neither shrink in place nor copy — the copy needs as
+    /// much free space as the image is large. Trimming the memory instead only
+    /// moves the growth: Windows 11 on ARM wants four gigabytes to begin with,
+    /// and a Rust build under that swaps, which grows the page file back.
+    pub(crate) data_disk_gib: u32,
 }
 
 impl CiHost {
@@ -86,9 +125,7 @@ impl CiHost {
                 bail!("CI host profile {name} must not be empty");
             }
         }
-        if self.sccache_size.trim().is_empty() {
-            bail!("CI host profile sccache_size must not be empty");
-        }
+        self.sccache_slot_size()?;
         if self.build_cache_size.trim().is_empty() {
             bail!("CI host profile build_cache_size must not be empty");
         }
@@ -147,6 +184,13 @@ impl CiHost {
         if self.host_root.parent() != Some(Path::new("/Volumes")) {
             bail!("host_root must name a dedicated volume directly below /Volumes");
         }
+        if self
+            .build_root
+            .as_ref()
+            .is_some_and(|build_root| !build_root.is_absolute())
+        {
+            bail!("CI host profile build_root must be an absolute macOS path");
+        }
         Ok(())
     }
 
@@ -154,9 +198,31 @@ impl CiHost {
         self.gitlab_url.as_str().trim_end_matches('/').to_string()
     }
 
+    pub(crate) fn build_root(&self) -> &Path {
+        self.build_root.as_deref().unwrap_or(&self.host_root)
+    }
+
     pub(crate) fn build_cache_budget_bytes(&self) -> Result<u64> {
         parse_build_cache_size(&self.build_cache_size)
             .context("CI host profile build_cache_size is invalid")
+    }
+
+    pub(crate) fn sccache_slot_size(&self) -> Result<String> {
+        let Some(digits) = self.sccache_size.strip_suffix('G') else {
+            bail!("CI host profile sccache_size must be a positive whole number followed by G");
+        };
+        if digits.is_empty() || !digits.bytes().all(|byte| byte.is_ascii_digit()) {
+            bail!("CI host profile sccache_size must be a positive whole number followed by G");
+        }
+        let gigabytes = digits
+            .parse::<usize>()
+            .context("CI host profile sccache_size must fit in usize gigabytes")?;
+        if gigabytes == 0 || !gigabytes.is_multiple_of(HOST_JOB_CONCURRENCY) {
+            bail!(
+                "CI host profile sccache_size must divide evenly across {HOST_JOB_CONCURRENCY} jobs"
+            );
+        }
+        Ok(format!("{}G", gigabytes / HOST_JOB_CONCURRENCY))
     }
 
     /// The headroom a job insists on before it starts. The host stops handing
@@ -280,6 +346,30 @@ mod tests {
     }
 
     #[test]
+    fn sccache_budget_is_split_across_host_jobs() {
+        let mut host = super::super::fixture().host;
+        host.sccache_size = "50G".to_owned();
+
+        assert_eq!(host.sccache_slot_size().unwrap(), "25G");
+    }
+
+    #[test]
+    fn ci_host_rejects_an_indivisible_sccache_budget() {
+        let mut host = super::super::fixture().host;
+        host.sccache_size = "51G".to_owned();
+
+        assert!(host.validate().is_err());
+    }
+
+    #[test]
+    fn ci_host_rejects_a_non_whole_g_sccache_budget() {
+        let mut host = super::super::fixture().host;
+        host.sccache_size = "50GB".to_owned();
+
+        assert!(host.validate().is_err());
+    }
+
+    #[test]
     fn ci_host_load_accepts_a_profile_without_a_build_cache_size() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("host.toml");
@@ -299,6 +389,36 @@ mod tests {
         );
     }
 
+    /// Every installed profile predates the guest, and a mac that serves no
+    /// Windows lane never grows the section. Refusing to load without it would
+    /// take cleanup down on hosts that have nothing to do with Windows.
+    #[test]
+    fn ci_host_load_accepts_a_profile_with_no_windows_guest() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("host.toml");
+        super::super::fixture().host.write(&path).unwrap();
+
+        assert!(CiHost::load(&path).unwrap().windows.is_none());
+    }
+
+    #[test]
+    fn a_profile_that_declares_a_windows_guest_carries_its_data_disk() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("host.toml");
+        let mut host = super::super::fixture().host;
+        host.windows = Some(WindowsGuest {
+            vcpus: 4,
+            memory_mib: 8192,
+            data_disk_gib: 80,
+        });
+        host.write(&path).unwrap();
+
+        assert_eq!(
+            CiHost::load(&path).unwrap().windows.unwrap().data_disk_gib,
+            80
+        );
+    }
+
     #[test]
     fn ci_host_load_rejects_garbage_build_cache_size() {
         let directory = tempfile::tempdir().unwrap();
@@ -310,6 +430,16 @@ mod tests {
         let error = CiHost::load(&path).unwrap_err();
 
         assert!(format!("{error:#}").contains("positive whole number followed by GB"));
+    }
+
+    #[test]
+    fn macos_build_root_must_be_absolute() {
+        let mut host = super::super::fixture().host;
+        host.build_root = Some(PathBuf::from("case-folding-build-root"));
+
+        let error = host.validate_macos_layout().unwrap_err();
+
+        assert!(format!("{error:#}").contains("build_root must be an absolute macOS path"));
     }
 
     #[test]

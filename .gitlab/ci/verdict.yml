@@ -3,13 +3,14 @@
 # but nothing may be red here that the default branch has not already been
 # failing.
 #
-# It runs on the Linux executor because that is the one whose cache directory is
-# mounted from the host: the journal has to outlive the job that writes it, and
-# a macOS job runs in a throwaway guest. It carries no platform rule for the
-# same reason a lint gate carries none.
+# It runs on macOS because the journal has to outlive the job that writes it and
+# that lane is the host itself, so its cache directory is the host's. It used to
+# run on Linux for that reason, back when a macOS job meant a throwaway guest —
+# and the Linux guest is no longer up between nightly runs. It carries no
+# platform rule for the same reason a lint gate carries none.
 verdict:
   extends:
-    - .linux-job
+    - .macos-job
     - .rules-verify-and-branch
   stage: verdict
   interruptible: true
@@ -48,4 +49,4 @@ verdict:
   artifacts:
     when: always
     paths:
-      - target/junit/
+      - .ci-artifacts/junit/

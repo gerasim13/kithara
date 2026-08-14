@@ -6,7 +6,6 @@ use syn::{Block, Expr, Fields, ImplItem, Item, ItemImpl, ItemStruct, Stmt, Type}
 use super::{Check, Context};
 use crate::common::{
     exclude::attrs_have_cfg_test,
-    parse::parse_file,
     violation::Violation,
     walker::{relative_to, workspace_rs_files_scoped},
 };
@@ -26,7 +25,7 @@ impl Check for GodStruct {
 
         let mut scans: Vec<FileScan> = Vec::new();
         for path in workspace_rs_files_scoped(ctx.workspace_root, ctx.scope)? {
-            let Ok(file) = parse_file(&path) else {
+            let Some(file) = ctx.parsed_file(&path)? else {
                 continue;
             };
             let rel = relative_to(ctx.workspace_root, &path)

@@ -18,7 +18,7 @@ impl Check for ArgsWrapperStruct {
     fn run(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
         let cfg = &ctx.config.thresholds.args_wrapper_struct;
         let exempt = compile_globs(&cfg.exempt_files);
-        let idx = build_index(ctx.workspace_root, ctx.scope, &exempt)?;
+        let idx = build_index(ctx, &exempt)?;
         let mut out = Vec::new();
         emit(&idx, cfg.min_fields, cfg.min_call_sites, &mut out);
         out.sort_by(|a, b| a.key.cmp(&b.key));

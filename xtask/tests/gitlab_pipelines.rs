@@ -3,6 +3,7 @@ use std::{collections::BTreeSet, fs, path::Path};
 use serde_yaml_ng::{Mapping, Value};
 
 const MERGE_REQUEST_KIND: &str = "merge-request";
+const VERDICT_REPORT_DIR: &str = ".ci-artifacts/junit/";
 
 struct GitlabConfig {
     common: Value,
@@ -233,13 +234,15 @@ fn assert_exact_rule(rule: &Mapping, condition: &str, when: Option<&str>) {
     assert_eq!(rule.get("when").and_then(Value::as_str), when);
 }
 
-#[test]
-fn an_open_merge_request_runs_the_complete_apple_review_matrix() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+fn workspace_root() -> &'static Path {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
-        .expect("xtask has a workspace root");
+        .expect("xtask has a workspace root")
+}
 
-    let dispatch = yaml(root.join(".gitlab-ci.yml"));
+#[test]
+fn merge_request_dispatch_is_admitted_without_duplicate_push_pipelines() {
+    let dispatch = yaml(workspace_root().join(".gitlab-ci.yml"));
     let dispatch = mapping(&dispatch, "the dispatch pipeline");
     let workflow = mapping(
         dispatch.get("workflow").expect("dispatch has a workflow"),
@@ -249,7 +252,7 @@ fn an_open_merge_request_runs_the_complete_apple_review_matrix() {
         .get("rules")
         .and_then(Value::as_sequence)
         .expect("dispatch workflow rules are a sequence");
-    assert!(workflow_rules.len() >= 4);
+    assert!(workflow_rules.len() >= 5);
     assert_exact_rule(
         mapping(&workflow_rules[0], "the merge-request admission rule"),
         "$CI_PIPELINE_SOURCE == \"merge_request_event\"",
@@ -261,15 +264,20 @@ fn an_open_merge_request_runs_the_complete_apple_review_matrix() {
         None,
     );
     assert_exact_rule(
+        mapping(&workflow_rules[2], "the quarantine-push suppression rule"),
+        "$CI_PIPELINE_SOURCE == \"push\" && $CI_COMMIT_BRANCH =~ /^quarantine\\//",
+        Some("never"),
+    );
+    assert_exact_rule(
         mapping(
-            &workflow_rules[2],
+            &workflow_rules[3],
             "the open-merge-request suppression rule",
         ),
         "$CI_PIPELINE_SOURCE == \"push\" && $CI_OPEN_MERGE_REQUESTS",
         Some("never"),
     );
     assert_exact_rule(
-        mapping(&workflow_rules[3], "the branch push rule"),
+        mapping(&workflow_rules[4], "the branch push rule"),
         "$CI_PIPELINE_SOURCE == \"push\"",
         None,
     );
@@ -351,8 +359,11 @@ fn an_open_merge_request_runs_the_complete_apple_review_matrix() {
             .and_then(Value::as_str)
             == Some(".gitlab/ci/pipeline.yml")
     }));
+}
 
-    let pipeline = yaml(root.join(".gitlab/ci/pipeline.yml"));
+#[test]
+fn child_pipeline_includes_apple_lanes_and_the_blocking_verdict() {
+    let pipeline = yaml(workspace_root().join(".gitlab/ci/pipeline.yml"));
     let pipeline = mapping(&pipeline, "the child pipeline");
     let includes: BTreeSet<&str> = pipeline
         .get("include")
@@ -371,7 +382,7 @@ fn an_open_merge_request_runs_the_complete_apple_review_matrix() {
     assert!(includes.contains(".gitlab/ci/apple.yml"));
     assert!(includes.contains(".gitlab/ci/verdict.yml"));
 
-    let verdict = yaml(root.join(".gitlab/ci/verdict.yml"));
+    let verdict = yaml(workspace_root().join(".gitlab/ci/verdict.yml"));
     let verdict = mapping(&verdict, "the verdict pipeline");
     let verdict = mapping(
         verdict
@@ -381,6 +392,69 @@ fn an_open_merge_request_runs_the_complete_apple_review_matrix() {
     );
     assert_eq!(verdict.get("when").and_then(Value::as_str), Some("always"));
     assert!(!verdict.contains_key("allow_failure"));
+}
+
+#[test]
+fn judged_jobs_stage_only_checkout_cleaned_verdict_evidence() {
+    let root = workspace_root();
+    for file in [
+        "apple.yml",
+        "android.yml",
+        "linux.yml",
+        "web.yml",
+        "verdict.yml",
+    ] {
+        let document = yaml(root.join(".gitlab/ci").join(file));
+        let jobs = mapping(&document, "a CI lane document");
+        for (name, definition) in jobs {
+            let Some(name) = name.as_str() else {
+                continue;
+            };
+            let Some(paths) = definition
+                .as_mapping()
+                .and_then(|definition| definition.get("artifacts"))
+                .and_then(Value::as_mapping)
+                .and_then(|artifacts| artifacts.get("paths"))
+                .and_then(Value::as_sequence)
+            else {
+                continue;
+            };
+            let verdict_paths = paths
+                .iter()
+                .filter_map(Value::as_str)
+                .filter(|path| path.ends_with("junit/"))
+                .collect::<Vec<_>>();
+            assert!(
+                verdict_paths.iter().all(|path| *path == VERDICT_REPORT_DIR),
+                "`{name}` stages verdict evidence outside the checkout-cleaned owner"
+            );
+        }
+    }
+
+    let pipeline = yaml(root.join(".gitlab/ci/pipeline.yml"));
+    let variables = mapping(
+        mapping(&pipeline, "the child pipeline")
+            .get("variables")
+            .expect("child pipeline has variables"),
+        "the child pipeline variables",
+    );
+    let clean = variables
+        .get("GIT_CLEAN_FLAGS")
+        .and_then(Value::as_str)
+        .expect("child pipeline defines checkout cleanup");
+    assert!(!clean.contains(".ci-artifacts"));
+}
+
+#[test]
+fn verdict_downloads_every_judged_apple_report() {
+    let verdict = yaml(workspace_root().join(".gitlab/ci/verdict.yml"));
+    let verdict = mapping(&verdict, "the verdict pipeline");
+    let verdict = mapping(
+        verdict
+            .get("verdict")
+            .expect("the verdict pipeline has a job"),
+        "the verdict job",
+    );
     let verdict_needs: BTreeSet<&str> = verdict
         .get("needs")
         .and_then(Value::as_sequence)
@@ -403,8 +477,11 @@ fn an_open_merge_request_runs_the_complete_apple_review_matrix() {
     ] {
         assert!(verdict_needs.contains(job), "verdict must judge `{job}`");
     }
+}
 
-    let config = GitlabConfig::load(root);
+#[test]
+fn an_open_merge_request_runs_the_complete_apple_review_matrix() {
+    let config = GitlabConfig::load(workspace_root());
     let expected_jobs = BTreeSet::from([
         "apple:e2e",
         "apple:ios",
@@ -426,22 +503,19 @@ fn an_open_merge_request_runs_the_complete_apple_review_matrix() {
 
     for (job, owner, judged) in [
         ("apple:lint", ".rules-verify-and-branch", false),
-        ("apple:msrv", ".rules-verify", false),
         ("apple:test", ".rules-verify-and-branch", true),
-        (
-            "apple:test-flash-off",
-            ".rules-integration-and-review",
-            true,
-        ),
         ("apple:xcframework", ".rules-verify-and-branch", false),
-        ("apple:swift-test", ".rules-verify", true),
         ("apple:ios", ".rules-verify", false),
         ("apple:ios-test", ".rules-integration-and-review", true),
         ("apple:e2e", ".rules-review-or-nightly", false),
     ] {
         assert_active_review_job(&config, job, owner, judged);
     }
+}
 
+#[test]
+fn safari_stays_out_of_merge_requests_and_runs_nightly() {
+    let config = GitlabConfig::load(workspace_root());
     assert_eq!(
         config.rules_owner("apple:safari").as_deref(),
         Some(".rules-nightly")

@@ -321,3 +321,55 @@ fn emit_r2(
 fn display_workspace_path(_workspace_root: &std::path::Path, crate_name: &str) -> String {
     format!("crates/{}", crate_name.replace('_', "-"))
 }
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+
+    use cargo_metadata::MetadataCommand;
+
+    use super::*;
+    use crate::{arch::config::ArchConfig, common::scope::Scope};
+
+    #[test]
+    fn checks_workspace_member_outside_crates_directory() {
+        let dir = tempfile::tempdir().expect("temporary workspace");
+        let crate_root = dir.path().join("tools/fixture");
+        let src = crate_root.join("src");
+        fs::create_dir_all(&src).expect("create fixture source directory");
+        fs::write(
+            dir.path().join("Cargo.toml"),
+            "[workspace]\nmembers = [\"tools/fixture\"]\nresolver = \"2\"\n",
+        )
+        .expect("write workspace manifest");
+        fs::write(
+            crate_root.join("Cargo.toml"),
+            "[package]\nname = \"fixture\"\nversion = \"0.0.0\"\nedition = \"2024\"\n",
+        )
+        .expect("write package manifest");
+        fs::write(
+            src.join("lib.rs"),
+            "pub mod facade;\npub mod model;\npub use crate::model::Thing;\n",
+        )
+        .expect("write crate root");
+        fs::write(src.join("facade.rs"), "pub use crate::model::Thing;\n")
+            .expect("write facade module");
+        fs::write(src.join("model.rs"), "pub struct Thing;\n").expect("write model module");
+
+        let metadata = MetadataCommand::new()
+            .manifest_path(dir.path().join("Cargo.toml"))
+            .no_deps()
+            .exec()
+            .expect("fixture cargo metadata");
+        let config = ArchConfig::default();
+        let scope = Scope::default();
+        let ctx = Context::new(&config, &metadata, dir.path(), &scope);
+
+        let violations = RedundantReexport
+            .run(&ctx)
+            .expect("run redundant re-export check");
+
+        assert_eq!(violations.len(), 1);
+        assert!(violations[0].message.contains("different files"));
+    }
+}

@@ -7,7 +7,7 @@ use super::{Check, Context};
 use crate::{
     arch::config::MultiConstructorThreshold,
     common::{
-        parse::{parse_file, self_ty_name},
+        parse::self_ty_name,
         suppress::Suppressions,
         violation::Violation,
         walker::{compile_globs, matches_any, relative_to, workspace_rs_files_scoped},
@@ -32,11 +32,10 @@ impl Check for MultiConstructor {
             if matches_any(&exempt, rel) {
                 continue;
             }
-            let Ok(file) = parse_file(&path) else {
+            let Some((src, file)) = ctx.parsed_source(&path)? else {
                 continue;
             };
-            let src = std::fs::read_to_string(&path)?;
-            let suppress = Suppressions::parse(&src);
+            let suppress = Suppressions::parse(src);
             let rel_str = rel.to_string_lossy().replace('\\', "/");
             analyze_file(&rel_str, &file.items, cfg, &suppress, &mut violations);
         }

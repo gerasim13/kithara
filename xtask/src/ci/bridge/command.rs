@@ -1,7 +1,6 @@
 use std::{
     fs,
     path::{Path, PathBuf},
-    time::Duration,
 };
 
 use anyhow::{Context, Result, bail};
@@ -36,14 +35,17 @@ enum BridgeCommand {
         #[arg(long, env = "KITHARA_BRIDGE_CONFIG")]
         config: PathBuf,
     },
-    /// Forget a GitHub head so a rejected import can be attempted again.
+    /// Retry one terminal verification identified by its exact head and base.
     Retry {
         /// Bridge configuration file.
         #[arg(long, env = "KITHARA_BRIDGE_CONFIG")]
         config: PathBuf,
-        /// Full commit SHA of the GitHub head to clear.
+        /// Exact GitHub pull-request head SHA.
         #[arg(long)]
         github_sha: String,
+        /// Exact synchronized base SHA used by the verification.
+        #[arg(long)]
+        base_sha: String,
     },
 }
 
@@ -59,10 +61,6 @@ pub(super) struct BridgeConfig {
     pub(super) gitlab_token_file: PathBuf,
     pub(super) branch: String,
     pub(super) state_dir: PathBuf,
-    #[serde(default = "default_pipeline_timeout_seconds")]
-    pub(super) pipeline_timeout_seconds: u64,
-    #[serde(default = "default_pipeline_poll_seconds")]
-    pub(super) pipeline_poll_seconds: u64,
 }
 
 impl BridgeConfig {
@@ -119,21 +117,7 @@ impl BridgeConfig {
         {
             bail!("state_dir must be an absolute path below a dedicated directory");
         }
-        if self.pipeline_timeout_seconds == 0 || self.pipeline_poll_seconds == 0 {
-            bail!("pipeline timeout and poll interval must be positive");
-        }
-        if self.pipeline_poll_seconds >= self.pipeline_timeout_seconds {
-            bail!("pipeline poll interval must be shorter than its timeout");
-        }
         Ok(())
-    }
-
-    pub(super) const fn pipeline_timeout(&self) -> Duration {
-        Duration::from_secs(self.pipeline_timeout_seconds)
-    }
-
-    pub(super) const fn pipeline_poll_interval(&self) -> Duration {
-        Duration::from_secs(self.pipeline_poll_seconds)
     }
 
     pub(super) fn gitlab_origin(&self) -> String {
@@ -162,29 +146,26 @@ pub(crate) fn run(args: &BridgeArgs) -> Result<()> {
         BridgeCommand::Reconcile { config } => {
             Bridge::new(BridgeConfig::load(config)?)?.reconcile_once()
         }
-        BridgeCommand::Retry { config, github_sha } => {
-            if !validate_sha(github_sha) {
-                bail!("github-sha must be a full 40-character commit SHA");
+        BridgeCommand::Retry {
+            config,
+            github_sha,
+            base_sha,
+        } => {
+            if !validate_sha(github_sha) || !validate_sha(base_sha) {
+                bail!("github-sha and base-sha must be full 40-character commit SHAs");
             }
             let config = BridgeConfig::load(config)?;
-            let cleared = Ledger::new(&config.state_dir)?.forget(github_sha)?;
-            if cleared.is_empty() {
-                bail!("no ledger entry recorded for {github_sha}");
-            }
-            for key in cleared {
-                info!(entry = %key, "ledger entry cleared");
-            }
+            let entry = Ledger::new(&config.state_dir)?.retry(github_sha, base_sha)?;
+            info!(
+                %github_sha,
+                %base_sha,
+                attempt = entry.attempt,
+                pipeline_id = ?entry.pipeline_id,
+                "terminal verification reserved for exact-key retry"
+            );
             Ok(())
         }
     }
-}
-
-const fn default_pipeline_timeout_seconds() -> u64 {
-    7_200
-}
-
-const fn default_pipeline_poll_seconds() -> u64 {
-    15
 }
 
 #[cfg(test)]
@@ -268,10 +249,19 @@ mod tests {
     }
 
     #[test]
-    fn retry_names_the_head_it_forgets() {
+    fn retry_requires_both_exact_key_components() {
         assert!(
-            Cli::try_parse_from(["xtask", "ci", "bridge", "retry", "--config", "bridge.toml"])
-                .is_err()
+            Cli::try_parse_from([
+                "xtask",
+                "ci",
+                "bridge",
+                "retry",
+                "--config",
+                "bridge.toml",
+                "--github-sha",
+                "0123456789abcdef0123456789abcdef01234567",
+            ])
+            .is_err()
         );
         assert!(
             Cli::try_parse_from([
@@ -282,7 +272,9 @@ mod tests {
                 "--config",
                 "bridge.toml",
                 "--github-sha",
-                "0123456789abcdef0123456789abcdef01234567"
+                "0123456789abcdef0123456789abcdef01234567",
+                "--base-sha",
+                "89abcdef0123456789abcdef0123456789abcdef",
             ])
             .is_ok()
         );

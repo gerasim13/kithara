@@ -240,7 +240,7 @@ impl<'a> ServiceInstaller<'a> {
     }
 
     fn install_maintenance_agents(&self) -> Result<()> {
-        let binary = self.installed_binary().display().to_string();
+        let binary = self.replaceable_binary().display().to_string();
         let config = self.installed_config().display().to_string();
         let pins = self.installed_pins().display().to_string();
         let logs = &self.config.host.host_root.join("logs");
@@ -252,7 +252,12 @@ impl<'a> ServiceInstaller<'a> {
             ],
             &logs.join("cleanup.log"),
             &path,
-            "<key>StartCalendarInterval</key><dict><key>Minute</key><integer>17</integer></dict>",
+            // Hourly is slower than the host spends. Under a build this volume
+            // loses about 2.7 GB a minute — measured dropping from 53 to 31 GB
+            // free in eight minutes — so the 45 GB between the first cleanup
+            // step and refusing jobs is a quarter of an hour. A pass that comes
+            // once an hour arrives after the refusals it exists to prevent.
+            "<key>StartInterval</key><integer>900</integer>",
         );
         let health = launchd(
             "com.zvuk.kithara-ci.health",
@@ -267,24 +272,32 @@ impl<'a> ServiceInstaller<'a> {
         self.write_agent("health", &health)
     }
 
+    /// The daemon runs the copy under `toolchains/shared-bin`, the one the CI
+    /// user can replace, for the same reason the maintenance agents do: every
+    /// fix to the bridge otherwise needs a password, and the bridge is the part
+    /// that gets fixed while it is being brought up. The secrets stay out of
+    /// reach — they belong to the sync user, and the CI user cannot read them.
     fn stage_bridge_agent(&self) -> Result<()> {
-        let binary = self.installed_binary().display().to_string();
+        let binary = self
+            .config
+            .host
+            .host_root
+            .join("toolchains/shared-bin")
+            .join(Self::BINARY_NAME)
+            .display()
+            .to_string();
         let config = self
             .service_root()
             .join("bridge/config.toml")
             .display()
             .to_string();
         let log = self.config.host.host_root.join("logs/bridge.log");
-        let extra = format!(
-            "<key>StartInterval</key><integer>60</integer><key>UserName</key><string>{}</string>",
-            xml(&self.config.host.sync_user)
-        );
-        let plist = launchd(
-            "com.zvuk.kithara-ci.bridge",
-            &[&binary, "ci", "bridge", "reconcile", "--config", &config],
+        let plist = bridge_launchd(
+            &binary,
+            &config,
             &log,
             &self.config.host.agent_path(&self.sync_home()),
-            &extra,
+            &self.config.host.sync_user,
         );
         let pending = self
             .service_root()
@@ -391,6 +404,21 @@ impl<'a> ServiceInstaller<'a> {
         self.service_root().join("bin").join(Self::BINARY_NAME)
     }
 
+    /// The copy the CI user can replace, which is what the periodic agents run.
+    ///
+    /// `services/bin` is `root:wheel`, so a fix to cleanup or health reaches
+    /// the host only through an operator with a password. That is how a broken
+    /// cleanup stayed broken: the repository had the fix and the mac kept
+    /// running the binary from before it. The bridge daemon already runs from
+    /// here for exactly this reason.
+    fn replaceable_binary(&self) -> PathBuf {
+        self.config
+            .host
+            .host_root
+            .join("toolchains/shared-bin")
+            .join(Self::BINARY_NAME)
+    }
+
     fn installed_config(&self) -> PathBuf {
         self.service_root().join(Self::HOST_CONFIG_NAME)
     }
@@ -471,9 +499,34 @@ pub(super) fn launchd(
     )
 }
 
+fn bridge_launchd(binary: &str, config: &str, log: &Path, path: &str, user: &str) -> String {
+    let extra = format!(
+        "<key>StartInterval</key><integer>60</integer><key>UserName</key><string>{}</string>",
+        xml(user)
+    );
+    launchd(
+        "com.zvuk.kithara-ci.bridge",
+        &[
+            "/usr/bin/env",
+            binary,
+            "ci",
+            "bridge",
+            "reconcile",
+            "--config",
+            config,
+        ],
+        log,
+        path,
+        &extra,
+    )
+}
+
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use super::*;
+    use crate::ci::config::fixture;
 
     #[test]
     fn generated_agent_escapes_paths() {
@@ -503,5 +556,43 @@ mod tests {
         assert!(plist.contains(
             "<key>PATH</key><string>/opt/homebrew/bin:/opt/homebrew/sbin:/usr/bin:/bin</string>"
         ));
+    }
+
+    /// The periodic agents ran `services/bin`, which is `root:wheel`. Every
+    /// fix to cleanup then needed an operator with a password, and the one
+    /// that did not arrive is why this host refused jobs for a week.
+    #[test]
+    fn the_periodic_agents_run_the_binary_the_ci_user_can_replace() {
+        let mut config = fixture();
+        config.host.host_root = PathBuf::from("/Volumes/CI");
+        let process = Process::new(Path::new("/Volumes/CI"), BTreeMap::new());
+        let services = ServiceInstaller::new(&config, &process);
+
+        assert_eq!(
+            services.replaceable_binary(),
+            PathBuf::from("/Volumes/CI/toolchains/shared-bin/kithara-ci")
+        );
+    }
+
+    #[test]
+    fn bridge_agent_execs_mutable_binary_through_stable_env() {
+        let plist = bridge_launchd(
+            "/Volumes/CI/toolchains/shared-bin/kithara-ci",
+            "/Volumes/CI/services/bridge/config.toml",
+            Path::new("/Volumes/CI/logs/bridge.log"),
+            "/opt/homebrew/bin:/usr/bin:/bin",
+            "kithara-sync",
+        );
+
+        assert!(plist.contains(
+            "<key>ProgramArguments</key><array>\
+             <string>/usr/bin/env</string>\
+             <string>/Volumes/CI/toolchains/shared-bin/kithara-ci</string>\
+             <string>ci</string><string>bridge</string><string>reconcile</string>\
+             <string>--config</string>\
+             <string>/Volumes/CI/services/bridge/config.toml</string></array>"
+        ));
+        assert!(!plist.contains("<string>/bin/sh</string>"));
+        assert!(!plist.contains("<string>-c</string>"));
     }
 }

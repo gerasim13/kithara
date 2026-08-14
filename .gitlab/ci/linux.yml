@@ -44,7 +44,7 @@ linux:test:
     reports:
       junit: target/nextest/ci/junit.xml
     paths:
-      - target/junit/
+      - .ci-artifacts/junit/
 
 linux:coverage:
   extends:

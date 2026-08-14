@@ -2,7 +2,7 @@ use anyhow::Result;
 
 use super::{Check, Context};
 use crate::common::{
-    parse::{parse_file, type_weights},
+    parse::type_weights,
     violation::Violation,
     walker::{relative_to, workspace_rs_files_scoped},
 };
@@ -21,10 +21,10 @@ impl Check for MixedEntities {
         let mut violations = Vec::new();
 
         for path in workspace_rs_files_scoped(ctx.workspace_root, ctx.scope)? {
-            let Ok(file) = parse_file(&path) else {
+            let Some(file) = ctx.parsed_file(&path)? else {
                 continue;
             };
-            let weights = type_weights(&file);
+            let weights = type_weights(file);
             let mut sizable: Vec<(String, usize, usize)> = weights
                 .into_iter()
                 .filter_map(|(name, w)| {

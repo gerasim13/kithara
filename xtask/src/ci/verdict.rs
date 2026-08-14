@@ -1,16 +1,19 @@
 use std::{
     collections::BTreeSet,
-    fs,
+    fs::{self, OpenOptions},
+    io::Write,
     path::{Path, PathBuf},
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 use anyhow::{Context, Result, bail};
 use clap::{Args, Subcommand};
+use fs4::FileExt;
 use kithara_devtools::junit::{CaseTiming, parse_junit};
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 
-use super::{config::CiConfig, run::PipelineKind};
+use super::run::PipelineKind;
 
 /// How many `main` runs the journal keeps. One is not enough: a test that fails
 /// a quarter of the time would otherwise land in a branch's column whenever the
@@ -43,7 +46,7 @@ enum VerdictCommand {
 #[derive(Debug, Args)]
 struct Common {
     /// Directory holding this run's `JUnit` reports.
-    #[arg(long, default_value = "target/junit")]
+    #[arg(long, default_value = ".ci-artifacts/junit")]
     reports: PathBuf,
     /// Journal kept on the executor, outliving artifact expiry.
     #[arg(long, env = "KITHARA_VERDICT_JOURNAL")]
@@ -70,6 +73,74 @@ struct Journal {
     runs: Vec<Run>,
 }
 
+struct JournalFile {
+    path: PathBuf,
+    lock_path: PathBuf,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum JournalAction {
+    Record,
+    Check,
+}
+
+const fn journal_action(kind: PipelineKind) -> JournalAction {
+    match kind {
+        PipelineKind::Main | PipelineKind::Nightly => JournalAction::Record,
+        PipelineKind::Branch
+        | PipelineKind::Platforms
+        | PipelineKind::MergeRequest
+        | PipelineKind::Quarantine
+        | PipelineKind::Weekly
+        | PipelineKind::Release => JournalAction::Check,
+    }
+}
+
+impl JournalFile {
+    fn new(path: PathBuf) -> Self {
+        let lock_path = path.with_extension("json.lock");
+        Self { path, lock_path }
+    }
+
+    fn load(&self) -> Result<Journal> {
+        let lock = self.open_lock()?;
+        FileExt::lock_shared(&lock).with_context(|| {
+            format!(
+                "locking verdict journal {} for reading",
+                self.path.display()
+            )
+        })?;
+        Journal::load(&self.path)
+    }
+
+    fn update<T>(&self, operation: impl FnOnce(&mut Journal) -> Result<T>) -> Result<T> {
+        let lock = self.open_lock()?;
+        FileExt::lock(&lock).with_context(|| {
+            format!("locking verdict journal {} for update", self.path.display())
+        })?;
+        let mut journal = Journal::load(&self.path)?;
+        let output = operation(&mut journal)?;
+        journal.store(&self.path)?;
+        Ok(output)
+    }
+
+    fn open_lock(&self) -> Result<fs::File> {
+        let parent = self
+            .lock_path
+            .parent()
+            .context("verdict journal lock has no parent directory")?;
+        fs::create_dir_all(parent)
+            .with_context(|| format!("creating verdict directory {}", parent.display()))?;
+        OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .open(&self.lock_path)
+            .with_context(|| format!("opening verdict lock {}", self.lock_path.display()))
+    }
+}
+
 impl Journal {
     fn load(path: &Path) -> Result<Self> {
         if !path.exists() {
@@ -84,8 +155,38 @@ impl Journal {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
         }
-        let text = serde_json::to_string_pretty(self).context("serializing the verdict journal")?;
-        fs::write(path, text + "\n").with_context(|| format!("writing {}", path.display()))
+        let mut bytes =
+            serde_json::to_vec_pretty(self).context("serializing the verdict journal")?;
+        bytes.push(b'\n');
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .context("system clock is before Unix epoch")?
+            .as_nanos();
+        let temporary = path.with_extension(format!("json.{}.{}.tmp", std::process::id(), suffix));
+        let result = (|| {
+            let mut file = OpenOptions::new()
+                .create_new(true)
+                .write(true)
+                .open(&temporary)
+                .with_context(|| format!("creating temporary journal {}", temporary.display()))?;
+            file.write_all(&bytes)
+                .with_context(|| format!("writing temporary journal {}", temporary.display()))?;
+            file.sync_all()
+                .with_context(|| format!("syncing temporary journal {}", temporary.display()))?;
+            drop(file);
+            fs::rename(&temporary, path).with_context(|| {
+                format!(
+                    "publishing verdict journal {} as {}",
+                    temporary.display(),
+                    path.display()
+                )
+            })?;
+            sync_directory(path)
+        })();
+        if result.is_err() {
+            let _ = fs::remove_file(&temporary);
+        }
+        result
     }
 
     /// A run replaces its own earlier entry rather than stacking beside it, so
@@ -116,6 +217,22 @@ impl Journal {
     }
 }
 
+#[cfg(unix)]
+fn sync_directory(path: &Path) -> Result<()> {
+    let parent = path
+        .parent()
+        .context("verdict journal has no parent directory")?;
+    fs::File::open(parent)
+        .with_context(|| format!("opening verdict directory {}", parent.display()))?
+        .sync_all()
+        .with_context(|| format!("syncing verdict directory {}", parent.display()))
+}
+
+#[cfg(not(unix))]
+fn sync_directory(_path: &Path) -> Result<()> {
+    Ok(())
+}
+
 /// A test's identity across runs and lanes.
 fn case_id(case: &CaseTiming) -> String {
     format!("{}::{}", case.suite, case.name)
@@ -124,7 +241,7 @@ fn case_id(case: &CaseTiming) -> String {
 /// Where the verdict expects every lane to leave what it produced. Artifacts
 /// travel between runners at their own paths, so one directory is what makes a
 /// report from the simulator and a report from a container comparable.
-pub(crate) const REPORT_DIR: &str = "target/junit";
+pub(crate) const REPORT_DIR: &str = ".ci-artifacts/junit";
 
 /// The report a lane writes, before it is collected. A lane that writes none
 /// still leaves a marker when it fails, which is how a browser suite or a
@@ -142,10 +259,23 @@ pub(crate) fn produced_report(lane: &str) -> Option<&'static str> {
     }
 }
 
-/// The build directory survives between jobs on this executor, so a report left
-/// by an earlier lane would be collected as this one's. Remove it first: a lane
-/// that produces nothing must publish nothing.
+/// The build directory survives between jobs on this executor. Producers empty
+/// the artifact staging directory as well as their raw report. The staging path
+/// is outside the persistent Cargo targets, so checkout cleanup removes absent
+/// evidence before `GitLab` downloads a verdict's needs.
 pub(crate) fn clear(root: &Path, lane: &str) -> Result<()> {
+    let directory = root.join(REPORT_DIR);
+    if lane != "verdict" && directory.exists() {
+        fs::remove_dir_all(&directory)
+            .with_context(|| format!("removing {}", directory.display()))?;
+    }
+    for extension in ["xml", "failed"] {
+        let evidence = directory.join(format!("{lane}.{extension}"));
+        if evidence.exists() {
+            fs::remove_file(&evidence)
+                .with_context(|| format!("removing {}", evidence.display()))?;
+        }
+    }
     let Some(report) = produced_report(lane) else {
         return Ok(());
     };
@@ -176,32 +306,27 @@ pub(crate) fn gather(root: &Path, lane: &str, failed: bool) -> Result<()> {
     Ok(())
 }
 
-/// The journal lives on the executor that runs this lane. The Linux container
-/// is the one with a path that outlives a job — a macOS job runs in a throwaway
-/// guest, where nothing written survives it.
-fn journal_path(config: &CiConfig) -> PathBuf {
-    config.host.cache_root_linux.join("verdict/journal.json")
+/// The journal lives below the shared cache root resolved for this executor,
+/// outside the trust- and platform-specific compiler caches.
+fn journal_path(shared_root: &Path) -> PathBuf {
+    shared_root.join("verdict/journal.json")
 }
 
 /// `main` and the nightly chain describe the default branch, so they record.
 /// Everything else is measured against what they recorded.
-pub(crate) fn lane(root: &Path, config: &CiConfig, kind: PipelineKind) -> Result<()> {
+pub(crate) fn lane(root: &Path, shared_root: &Path, kind: PipelineKind) -> Result<()> {
     let common = Common {
         reports: root.join(REPORT_DIR),
-        journal: journal_path(config),
+        journal: journal_path(shared_root),
         base: std::env::var("CI_MERGE_REQUEST_DIFF_BASE_SHA").ok(),
     };
-    match kind {
-        PipelineKind::Main | PipelineKind::Nightly => {
+    match journal_action(kind) {
+        JournalAction::Record => {
             let sha = std::env::var("CI_COMMIT_SHA")
                 .context("CI_COMMIT_SHA names the run being recorded")?;
             record(&common, &sha)
         }
-        PipelineKind::Branch
-        | PipelineKind::MergeRequest
-        | PipelineKind::Quarantine
-        | PipelineKind::Weekly
-        | PipelineKind::Release => check(&common),
+        JournalAction::Check => check(&common),
     }
 }
 
@@ -214,17 +339,18 @@ pub(crate) fn run(args: &VerdictArgs) -> Result<()> {
 
 fn record(common: &Common, sha: &str) -> Result<()> {
     let observed = observe(common)?;
-    let mut journal = Journal::load(&common.journal)?;
-    journal.record(Run {
-        sha: sha.to_owned(),
-        tests: observed.tests.clone(),
-        jobs: observed.jobs.clone(),
-    });
-    journal.store(&common.journal)?;
+    let remembered = JournalFile::new(common.journal.clone()).update(|journal| {
+        journal.record(Run {
+            sha: sha.to_owned(),
+            tests: observed.tests.clone(),
+            jobs: observed.jobs.clone(),
+        });
+        Ok(journal.runs.len())
+    })?;
     info!(
         tests = observed.tests.len(),
         jobs = observed.jobs.len(),
-        remembered = journal.runs.len(),
+        remembered,
         "recorded what the default branch is failing"
     );
     Ok(())
@@ -232,7 +358,7 @@ fn record(common: &Common, sha: &str) -> Result<()> {
 
 fn check(common: &Common) -> Result<()> {
     let observed = observe(common)?;
-    let journal = Journal::load(&common.journal)?;
+    let journal = JournalFile::new(common.journal.clone()).load()?;
     if journal.runs.is_empty() {
         bail!(
             "the journal at {} is empty; the default branch has to record a run before a \
@@ -412,6 +538,8 @@ fn collect(root: &Path) -> Result<Vec<CaseTiming>> {
 
 #[cfg(test)]
 mod tests {
+    use std::{io::Read, sync::mpsc, thread};
+
     use super::*;
 
     fn run_of(sha: &str, tests: &[&str], jobs: &[&str]) -> Run {
@@ -429,6 +557,14 @@ mod tests {
         journal.record(run_of("two", &["suite::b"], &["web:firefox"]));
         assert_eq!(journal.tests(), BTreeSet::from(["suite::a", "suite::b"]));
         assert_eq!(journal.jobs(), BTreeSet::from(["web:firefox"]));
+    }
+
+    #[test]
+    fn platform_runs_check_without_recording_a_default_branch_baseline() {
+        assert_eq!(
+            journal_action(PipelineKind::Platforms),
+            JournalAction::Check
+        );
     }
 
     #[test]
@@ -531,6 +667,67 @@ mod tests {
     }
 
     #[test]
+    fn a_retried_lane_publishes_only_its_current_evidence() {
+        let directory = tempfile::tempdir().unwrap();
+        let reports = directory.path().join(REPORT_DIR);
+        fs::create_dir_all(&reports).unwrap();
+        fs::write(reports.join("apple-ios-test.failed"), "").unwrap();
+        fs::write(reports.join("apple-lint.failed"), "").unwrap();
+        fs::write(reports.join("apple-test.xml"), "<testsuites/>").unwrap();
+
+        clear(directory.path(), "apple-ios-test").unwrap();
+        let fresh = directory.path().join("target/xcresult/ios-test.junit.xml");
+        fs::create_dir_all(fresh.parent().unwrap()).unwrap();
+        fs::write(&fresh, "<testsuites tests=\"1\"/>").unwrap();
+        gather(directory.path(), "apple-ios-test", false).unwrap();
+
+        let mut entries = fs::read_dir(&reports)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect::<Vec<_>>();
+        entries.sort();
+        assert_eq!(entries, ["apple-ios-test.xml"]);
+    }
+
+    #[test]
+    fn a_retried_verdict_keeps_downloaded_evidence_but_drops_its_own_marker() {
+        let directory = tempfile::tempdir().unwrap();
+        let reports = directory.path().join(REPORT_DIR);
+        fs::create_dir_all(&reports).unwrap();
+        fs::write(reports.join("apple-test.xml"), "<testsuites/>").unwrap();
+        fs::write(reports.join("apple-ios-test.failed"), "").unwrap();
+        fs::write(reports.join("verdict.failed"), "").unwrap();
+
+        clear(directory.path(), "verdict").unwrap();
+
+        let mut entries = fs::read_dir(&reports)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect::<Vec<_>>();
+        entries.sort();
+        assert_eq!(entries, ["apple-ios-test.failed", "apple-test.xml"]);
+    }
+
+    #[test]
+    fn checkout_cleanup_removes_stale_evidence_before_needs_are_downloaded() {
+        let directory = tempfile::tempdir().unwrap();
+        let reports = directory.path().join(REPORT_DIR);
+        fs::create_dir_all(&reports).unwrap();
+        fs::write(reports.join("apple-ios-test.failed"), "").unwrap();
+
+        fs::remove_dir_all(directory.path().join(".ci-artifacts")).unwrap();
+        fs::create_dir_all(&reports).unwrap();
+        fs::write(reports.join("apple-ios-test.xml"), "<testsuites/>").unwrap();
+        clear(directory.path(), "verdict").unwrap();
+
+        let entries = fs::read_dir(&reports)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect::<Vec<_>>();
+        assert_eq!(entries, ["apple-ios-test.xml"]);
+    }
+
+    #[test]
     fn a_journal_round_trips_through_the_executor() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("state/regressions.json");
@@ -541,6 +738,82 @@ mod tests {
         let loaded = Journal::load(&path).unwrap();
         assert_eq!(loaded.tests(), BTreeSet::from(["suite::a"]));
         assert_eq!(loaded.jobs(), BTreeSet::from(["deep:rtsan"]));
+    }
+
+    #[test]
+    fn publishing_a_journal_replaces_the_file_atomically() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("state/regressions.json");
+        let mut old = Journal::default();
+        old.record(run_of("old", &["suite::old"], &[]));
+        old.store(&path).unwrap();
+        let mut reader = fs::File::open(&path).unwrap();
+
+        let mut new = Journal::default();
+        new.record(run_of("new", &["suite::new"], &[]));
+        new.store(&path).unwrap();
+
+        let mut old_bytes = String::new();
+        reader.read_to_string(&mut old_bytes).unwrap();
+        let observed_old: Journal = serde_json::from_str(&old_bytes).unwrap();
+        let observed_new = Journal::load(&path).unwrap();
+        assert_eq!(observed_old.tests(), BTreeSet::from(["suite::old"]));
+        assert_eq!(observed_new.tests(), BTreeSet::from(["suite::new"]));
+    }
+
+    #[test]
+    fn concurrent_journal_transactions_keep_both_updates() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("state/regressions.json");
+        let first_store = JournalFile::new(path.clone());
+        let second_store = JournalFile::new(path.clone());
+        let (first_entered_tx, first_entered_rx) = mpsc::channel();
+        let (release_first_tx, release_first_rx) = mpsc::channel();
+        let first = thread::spawn(move || {
+            first_store
+                .update(|journal| {
+                    first_entered_tx.send(()).unwrap();
+                    release_first_rx.recv().unwrap();
+                    journal.record(run_of("one", &["suite::one"], &[]));
+                    Ok(())
+                })
+                .unwrap();
+        });
+        first_entered_rx.recv().unwrap();
+
+        let contender = JournalFile::new(path.clone()).open_lock().unwrap();
+        assert!(matches!(
+            FileExt::try_lock(&contender),
+            Err(fs4::TryLockError::WouldBlock)
+        ));
+        drop(contender);
+
+        let second = thread::spawn(move || {
+            second_store
+                .update(|journal| {
+                    journal.record(run_of("two", &["suite::two"], &[]));
+                    Ok(())
+                })
+                .unwrap();
+        });
+
+        release_first_tx.send(()).unwrap();
+        first.join().unwrap();
+        second.join().unwrap();
+
+        let journal = JournalFile::new(path).load().unwrap();
+        assert_eq!(
+            journal.tests(),
+            BTreeSet::from(["suite::one", "suite::two"])
+        );
+    }
+
+    #[test]
+    fn journal_lives_under_the_executors_shared_cache_root() {
+        assert_eq!(
+            journal_path(Path::new("/shared-cache")),
+            Path::new("/shared-cache/verdict/journal.json")
+        );
     }
 
     #[test]

@@ -2,7 +2,7 @@ use anyhow::{Context as _, Result};
 
 use super::{Check, Context};
 use crate::common::{
-    parse::{count_items, parse_file},
+    parse::count_items,
     violation::Violation,
     walker::{relative_to, workspace_rs_files_scoped},
 };
@@ -21,10 +21,10 @@ impl Check for FileDensity {
         let mut violations = Vec::new();
 
         for path in workspace_rs_files_scoped(ctx.workspace_root, ctx.scope)? {
-            let Ok(file) = parse_file(&path) else {
+            let Some(file) = ctx.parsed_file(&path)? else {
                 continue;
             };
-            let stats = count_items(&file);
+            let stats = count_items(file);
             if stats.fns < cfg.min_fns_to_evaluate {
                 continue;
             }

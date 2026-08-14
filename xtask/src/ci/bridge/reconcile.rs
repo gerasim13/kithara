@@ -1,25 +1,65 @@
 use std::{
-    fs, thread,
-    time::{Duration, Instant},
+    fs::{self, File, OpenOptions},
+    path::Path,
 };
 
 use anyhow::{Context, Result, bail};
-use tracing::info;
+use fs4::FileExt;
+use tracing::{info, warn};
 
 use super::{
     api::{Github, Gitlab},
     command::BridgeConfig,
     git::GitRepo,
-    ledger::Ledger,
-    model::{Direction, ImportState, changed_control_paths, direction_for, validate_sha},
+    ledger::{Ledger, LedgerEntry},
+    model::{
+        Direction, PipelineObservation, PullRequest, VerificationState, direction_for, validate_sha,
+    },
 };
 
 pub(super) struct Bridge {
     config: BridgeConfig,
-    ledger: Ledger,
     github: Github,
     gitlab: Gitlab,
     repo: GitRepo,
+}
+
+struct ReconcileLock {
+    _file: File,
+}
+
+impl ReconcileLock {
+    fn acquire(state_dir: &Path) -> Result<Self> {
+        let file = open_reconcile_lock(state_dir)?;
+        FileExt::lock(&file)
+            .with_context(|| format!("locking bridge state {}", state_dir.display()))?;
+        Ok(Self { _file: file })
+    }
+
+    #[cfg(test)]
+    fn try_acquire(state_dir: &Path) -> Result<Option<Self>> {
+        let file = open_reconcile_lock(state_dir)?;
+        match FileExt::try_lock(&file) {
+            Ok(()) => Ok(Some(Self { _file: file })),
+            Err(fs4::TryLockError::WouldBlock) => Ok(None),
+            Err(fs4::TryLockError::Error(error)) => {
+                Err(error).with_context(|| format!("locking bridge state {}", state_dir.display()))
+            }
+        }
+    }
+}
+
+fn open_reconcile_lock(state_dir: &Path) -> Result<File> {
+    fs::create_dir_all(state_dir)
+        .with_context(|| format!("creating bridge state {}", state_dir.display()))?;
+    let path = state_dir.join("reconcile.lock");
+    OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(&path)
+        .with_context(|| format!("opening bridge lock {}", path.display()))
 }
 
 impl Bridge {
@@ -27,7 +67,6 @@ impl Bridge {
         fs::create_dir_all(&config.state_dir)
             .with_context(|| format!("creating bridge state {}", config.state_dir.display()))?;
         Ok(Self {
-            ledger: Ledger::new(&config.state_dir)?,
             github: Github::new(&config)?,
             gitlab: Gitlab::new(&config)?,
             repo: GitRepo::new(&config.state_dir, &config)?,
@@ -36,6 +75,14 @@ impl Bridge {
     }
 
     pub(super) fn reconcile_once(&self) -> Result<()> {
+        let _lock = ReconcileLock::acquire(&self.config.state_dir)?;
+        reconcile_main_first(
+            || self.reconcile_main(),
+            |base_sha| self.verify_open_pulls(base_sha),
+        )
+    }
+
+    fn reconcile_main(&self) -> Result<Option<String>> {
         self.repo.fetch(&self.github, &self.gitlab)?;
         let github_sha = self.github.head()?;
         let gitlab_sha = self.gitlab.head()?;
@@ -47,9 +94,15 @@ impl Bridge {
         info!(?direction, %github_sha, %gitlab_sha, "repository direction observed");
 
         match direction {
-            Direction::Equal => Ok(()),
-            Direction::GitlabAhead => self.export_gitlab(&gitlab_sha),
-            Direction::GithubAhead => self.import_github(&github_sha, &gitlab_sha),
+            Direction::Equal => Ok(Some(github_sha)),
+            Direction::GitlabAhead => {
+                self.export_gitlab(&gitlab_sha)?;
+                Ok(None)
+            }
+            Direction::GithubAhead => {
+                self.import_github(&github_sha, &gitlab_sha)?;
+                Ok(None)
+            }
             Direction::Diverged => {
                 let detail = format!(
                     "GitHub `{github_sha}` and GitLab `{gitlab_sha}` are not ancestors of each \
@@ -57,185 +110,254 @@ impl Bridge {
                 );
                 self.gitlab
                     .ensure_issue("GitHub and GitLab main branches diverged", &detail)?;
-                bail!("GitHub and GitLab histories diverged")
+                bail!("GitHub and GitLab histories diverged");
             }
         }
     }
 
+    /// Immediately. Waiting for the default branch's own pipeline gated nothing:
+    /// a red one does not un-merge the commit, so the wait only delayed a
+    /// decision already taken. What it did buy was an hour in which both sides
+    /// could move, and two sides that have both moved cannot be reconciled by a
+    /// fast-forward — the one failure this bridge cannot repair.
+    ///
+    /// `GitLab` changes are judged before merge. GitHub changes are imported only
+    /// when the exact head belongs to a merged pull request; trying to judge one
+    /// after merge cannot protect either branch and can only split them.
     fn export_gitlab(&self, gitlab_sha: &str) -> Result<()> {
-        let status = self
-            .gitlab
-            .latest_push_pipeline_status(gitlab_sha)?
-            .context("GitLab main commit has no push pipeline yet")?;
-        if status != "success" {
-            bail!("GitLab main pipeline for {gitlab_sha} is {status}; GitHub export is blocked");
-        }
         self.repo.push_github(&self.github, gitlab_sha)
     }
 
     fn import_github(&self, github_sha: &str, gitlab_base_sha: &str) -> Result<()> {
-        let entry = self.ledger.get(github_sha, gitlab_base_sha)?;
-        if entry
-            .as_ref()
-            .is_some_and(|entry| entry.state == ImportState::Promoted)
-        {
-            return Ok(());
-        }
-        if let Some(entry) = entry
-            .as_ref()
-            .filter(|entry| entry.state == ImportState::Rejected)
-        {
-            bail!(
-                "{}",
-                entry
-                    .detail
-                    .as_deref()
-                    .unwrap_or("GitHub import was rejected")
-            );
-        }
-
-        let Some(pull_number) = self.github.merged_pull_request(github_sha)? else {
-            let detail = format!(
-                "GitHub head {github_sha} is not associated with a merged pull request targeting {}",
-                self.config.branch
-            );
-            self.ledger.put(
-                github_sha,
-                gitlab_base_sha,
-                ImportState::Rejected,
-                None,
-                Some(detail.clone()),
-            )?;
-            self.gitlab
-                .ensure_issue("Untrusted direct GitHub main update", &detail)?;
-            bail!("{detail}");
-        };
-
-        self.github
-            .report_status(github_sha, "pending", "GitLab verification running")?;
-        let control_paths =
-            changed_control_paths(self.repo.changed_paths(gitlab_base_sha, github_sha)?);
-        if !control_paths.is_empty() {
-            let paths = control_paths
-                .iter()
-                .map(|path| format!("- `{path}`"))
-                .collect::<Vec<_>>()
-                .join("\n");
-            let detail = format!(
-                "The merged GitHub pull request changes CI control files. Import stopped; port \
-                 these changes through a reviewed GitLab merge request instead:\n\n{paths}"
-            );
-            self.reject(github_sha, gitlab_base_sha, None, "failure", &detail)?;
-            self.gitlab
-                .ensure_issue("GitHub import requires CI control review", &detail)?;
-            bail!("{detail}");
-        }
-
-        let pipeline_id = if let Some(id) = entry.as_ref().and_then(|entry| entry.pipeline_id) {
-            id
-        } else {
-            let quarantine = format!("quarantine/github/{github_sha}");
-            self.repo
-                .push_gitlab(&self.gitlab, github_sha, &quarantine)?;
-            let id = self.gitlab.create_pipeline(&quarantine, github_sha)?;
-            self.ledger.put(
-                github_sha,
-                gitlab_base_sha,
-                ImportState::Testing,
-                Some(id),
-                Some(format!("GitHub PR #{pull_number}")),
-            )?;
-            id
-        };
-
-        let status = self.wait_for_pipeline(pipeline_id)?;
-        if status != "success" {
-            let detail = format!("GitLab quarantine pipeline {pipeline_id} finished with {status}");
-            self.reject(
-                github_sha,
-                gitlab_base_sha,
-                Some(pipeline_id),
-                "failure",
-                &detail,
-            )?;
-            bail!("{detail}");
-        }
-
-        let current_github = self.github.head()?;
-        let current_gitlab = self.gitlab.head()?;
-        if current_github != github_sha || current_gitlab != gitlab_base_sha {
-            let detail = "repository heads changed during quarantine verification; promotion was \
-                          not attempted";
-            self.reject(
-                github_sha,
-                gitlab_base_sha,
-                Some(pipeline_id),
-                "error",
-                detail,
-            )?;
-            bail!("{detail}");
-        }
-
-        self.repo
-            .push_gitlab(&self.gitlab, github_sha, &self.config.branch)?;
-        self.ledger.put(
+        fast_forward_github_import(
             github_sha,
             gitlab_base_sha,
-            ImportState::Promoted,
-            Some(pipeline_id),
-            Some(format!("promoted from GitHub PR #{pull_number}")),
-        )?;
-        self.github.report_status(
-            github_sha,
-            "success",
-            &format!("GitLab pipeline {pipeline_id} passed; commit promoted."),
+            &self.config.branch,
+            |sha| self.github.merged_pull_request(sha),
+            || {
+                self.repo.fetch(&self.github, &self.gitlab)?;
+                Ok((self.github.head()?, self.gitlab.head()?))
+            },
+            |detail| {
+                self.gitlab
+                    .ensure_issue("Untrusted direct GitHub main update", detail)
+            },
+            |sha, branch| self.repo.push_gitlab(&self.gitlab, sha, branch),
         )
     }
 
-    fn reject(
-        &self,
-        github_sha: &str,
-        gitlab_base_sha: &str,
-        pipeline_id: Option<u64>,
-        state: &str,
-        detail: &str,
-    ) -> Result<()> {
-        self.ledger.put(
-            github_sha,
-            gitlab_base_sha,
-            ImportState::Rejected,
-            pipeline_id,
-            Some(detail.to_string()),
-        )?;
-        self.github.report_status(github_sha, state, detail)
+    fn verify_open_pulls(&self, base_sha: &str) -> Result<()> {
+        let ledger = Ledger::new(&self.config.state_dir)?;
+        for pull in self.github.open_pull_requests()? {
+            if let Err(error) = self.verify_pull(&ledger, &pull, base_sha) {
+                warn!(
+                    pull_number = pull.number,
+                    head_sha = %pull.head_sha,
+                    %base_sha,
+                    %error,
+                    "GitLab verification tick failed without changing its verdict"
+                );
+            }
+        }
+        Ok(())
     }
 
-    fn wait_for_pipeline(&self, pipeline_id: u64) -> Result<String> {
-        wait_for_status(
-            self.config.pipeline_timeout(),
-            self.config.pipeline_poll_interval(),
-            || self.gitlab.pipeline_status(pipeline_id),
+    fn verify_pull(&self, ledger: &Ledger, pull: &PullRequest, base_sha: &str) -> Result<()> {
+        require_sha("GitHub pull request", &pull.head_sha)?;
+        self.repo
+            .fetch_pull_head(&self.github, pull.number, &pull.head_sha)?;
+        let changed_controls = self.repo.changed_control_paths(base_sha, &pull.head_sha)?;
+        let entry = ledger.reserve(&pull.head_sha, base_sha)?;
+        if reject_control_changes(
+            pull.number,
+            &pull.head_sha,
+            &entry,
+            &changed_controls,
+            |sha, state, detail| self.github.report_status(sha, state, detail),
+            |attempt, detail| ledger.reject(&pull.head_sha, base_sha, attempt, detail),
+        )? {
+            return Ok(());
+        }
+        if entry.state != VerificationState::Testing {
+            return Ok(());
+        }
+
+        let Some(pipeline_id) = entry.pipeline_id else {
+            let reference = quarantine_ref(&pull.head_sha, base_sha, entry.attempt);
+            let judged = self.repo.judged_commit(base_sha, &pull.head_sha)?;
+            self.repo.push_gitlab(&self.gitlab, &judged, &reference)?;
+            let discovered =
+                self.gitlab
+                    .verification_pipelines(&reference, &pull.head_sha, base_sha)?;
+            start_verification(
+                &pull.head_sha,
+                entry.attempt,
+                &discovered,
+                || {
+                    self.gitlab
+                        .create_pipeline(&reference, &pull.head_sha, base_sha)
+                },
+                |attempt, pipeline_id| {
+                    ledger.attach(&pull.head_sha, base_sha, attempt, pipeline_id)
+                },
+                |sha, state, detail| self.github.report_status(sha, state, detail),
+                |attempt, pipeline_id| {
+                    ledger.announce(&pull.head_sha, base_sha, attempt, pipeline_id)
+                },
+            )?;
+            return Ok(());
+        };
+
+        if !entry.announced {
+            self.github
+                .report_status(&pull.head_sha, "pending", "GitLab verification running")?;
+            ledger.announce(&pull.head_sha, base_sha, entry.attempt, pipeline_id)?;
+            return Ok(());
+        }
+
+        observe_verification(
+            &pull.head_sha,
+            pipeline_id,
+            |id| self.gitlab.pipeline_observation(id),
+            |sha, state, detail| self.github.report_status(sha, state, detail),
+            |id, state, detail| {
+                ledger.finish(&pull.head_sha, base_sha, entry.attempt, id, state, detail)
+            },
         )
     }
 }
 
-fn wait_for_status(
-    timeout: Duration,
-    poll_interval: Duration,
-    mut status: impl FnMut() -> Result<String>,
-) -> Result<String> {
-    let deadline = Instant::now() + timeout;
-    while Instant::now() < deadline {
-        let current = status()?;
-        if matches!(
-            current.as_str(),
-            "success" | "failed" | "canceled" | "skipped" | "manual"
-        ) {
-            return Ok(current);
-        }
-        thread::sleep(poll_interval);
+fn reconcile_main_first(
+    reconcile_main: impl FnOnce() -> Result<Option<String>>,
+    verify_pulls: impl FnOnce(&str) -> Result<()>,
+) -> Result<()> {
+    if let Some(base) = reconcile_main()?
+        && let Err(error) = verify_pulls(&base)
+    {
+        warn!(%error, %base, "pull-request verification tick failed");
     }
-    Ok("timeout".into())
+    Ok(())
+}
+
+fn quarantine_ref(head_sha: &str, base_sha: &str, attempt: u64) -> String {
+    format!("quarantine/github/{head_sha}/{base_sha}/attempt-{attempt}")
+}
+
+fn resolve_pipeline(pipeline_ids: &[u64]) -> Result<Option<u64>> {
+    match pipeline_ids {
+        [] => Ok(None),
+        [pipeline_id] => Ok(Some(*pipeline_id)),
+        _ => bail!("multiple pipelines exist for one exact verification attempt: {pipeline_ids:?}"),
+    }
+}
+
+fn recover_or_create(pipeline_ids: &[u64], create: impl FnOnce() -> Result<u64>) -> Result<u64> {
+    resolve_pipeline(pipeline_ids)?.map_or_else(create, Ok)
+}
+
+fn start_verification(
+    head_sha: &str,
+    attempt: u64,
+    pipeline_ids: &[u64],
+    create: impl FnOnce() -> Result<u64>,
+    attach: impl FnOnce(u64, u64) -> Result<()>,
+    report: impl FnOnce(&str, &str, &str) -> Result<()>,
+    announce: impl FnOnce(u64, u64) -> Result<()>,
+) -> Result<()> {
+    let pipeline_id = recover_or_create(pipeline_ids, create)?;
+    attach(attempt, pipeline_id)?;
+    report(head_sha, "pending", "GitLab verification running")?;
+    announce(attempt, pipeline_id)
+}
+
+fn reject_control_changes(
+    pull_number: u64,
+    head_sha: &str,
+    entry: &LedgerEntry,
+    paths: &[String],
+    report: impl FnOnce(&str, &str, &str) -> Result<()>,
+    reject: impl FnOnce(u64, String) -> Result<()>,
+) -> Result<bool> {
+    if paths.is_empty() {
+        return Ok(false);
+    }
+    if entry.state == VerificationState::Rejected {
+        return Ok(true);
+    }
+
+    let detail = format!(
+        "GitHub PR #{pull_number} changes protected CI control paths: {}. Port these changes through a reviewed GitLab merge request",
+        paths.join(", ")
+    );
+    report(head_sha, "failure", &detail)?;
+    if entry.state == VerificationState::Verified {
+        bail!(
+            "verification {head_sha} attempt {} was already verified before its protected control-path change was rejected",
+            entry.attempt
+        );
+    }
+    reject(entry.attempt, detail)?;
+    Ok(true)
+}
+
+fn observe_verification(
+    head_sha: &str,
+    pipeline_id: u64,
+    mut observe: impl FnMut(u64) -> Result<PipelineObservation>,
+    mut report: impl FnMut(&str, &str, &str) -> Result<()>,
+    mut finish: impl FnMut(u64, VerificationState, Option<String>) -> Result<()>,
+) -> Result<()> {
+    match observe(pipeline_id)? {
+        PipelineObservation::Running => Ok(()),
+        PipelineObservation::Succeeded => {
+            let detail = format!("GitLab pipeline {pipeline_id} passed");
+            report(head_sha, "success", &detail)?;
+            finish(pipeline_id, VerificationState::Verified, Some(detail))
+        }
+        PipelineObservation::Failed(status) => {
+            let detail = format!("GitLab pipeline {pipeline_id} finished with {status}");
+            let github_state = if status == "failed" {
+                "failure"
+            } else {
+                "error"
+            };
+            report(head_sha, github_state, &detail)?;
+            finish(pipeline_id, VerificationState::Rejected, Some(detail))
+        }
+        PipelineObservation::Invalid(detail) => {
+            report(head_sha, "error", &detail)?;
+            finish(pipeline_id, VerificationState::Rejected, Some(detail))
+        }
+    }
+}
+
+fn fast_forward_github_import(
+    github_sha: &str,
+    gitlab_base_sha: &str,
+    branch: &str,
+    merged_pull_request: impl FnOnce(&str) -> Result<Option<u64>>,
+    refresh_heads: impl FnOnce() -> Result<(String, String)>,
+    report_untrusted: impl FnOnce(&str) -> Result<()>,
+    push_gitlab: impl FnOnce(&str, &str) -> Result<()>,
+) -> Result<()> {
+    let Some(pull_number) = merged_pull_request(github_sha)? else {
+        let detail = format!(
+            "GitHub head {github_sha} is not associated with a merged pull request targeting \
+             {branch}"
+        );
+        report_untrusted(&detail)?;
+        bail!("{detail}");
+    };
+
+    let (current_github, current_gitlab) = refresh_heads()?;
+    if current_github != github_sha || current_gitlab != gitlab_base_sha {
+        bail!(
+            "repository heads changed before GitHub PR #{pull_number} import; fast-forward was \
+             not attempted"
+        );
+    }
+
+    push_gitlab(github_sha, branch)
 }
 
 fn require_sha(owner: &str, sha: &str) -> Result<()> {
@@ -246,18 +368,5 @@ fn require_sha(owner: &str, sha: &str) -> Result<()> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn terminal_pipeline_status_returns_without_an_extra_poll() {
-        let mut calls = 0;
-        let status = wait_for_status(Duration::from_secs(1), Duration::from_millis(1), || {
-            calls += 1;
-            Ok("success".into())
-        })
-        .unwrap();
-        assert_eq!(status, "success");
-        assert_eq!(calls, 1);
-    }
-}
+#[path = "reconcile_tests.rs"]
+mod tests;

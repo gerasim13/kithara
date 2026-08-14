@@ -8,7 +8,7 @@ use crate::{
     common::{
         parse::{
             AccessKind, AccessPath, PassthroughOpts, collect_scopes, collect_self_field_writes,
-            extract_passthrough_with, is_strict_pub, parse_file, pub_methods, returns_handle_type,
+            extract_passthrough_with, is_strict_pub, pub_methods, returns_handle_type,
             self_ty_name,
         },
         violation::Violation,
@@ -60,9 +60,9 @@ impl Check for RedundantAccessors {
             expose_methods: cfg.expose_methods.clone(),
         };
 
-        let mut parsed: Vec<(String, syn::File)> = Vec::new();
+        let mut parsed: Vec<(String, &syn::File)> = Vec::new();
         for path in workspace_rs_files_scoped(ctx.workspace_root, ctx.scope)? {
-            let Ok(file) = parse_file(&path) else {
+            let Some(file) = ctx.parsed_file(&path)? else {
                 continue;
             };
             let rel = relative_to(ctx.workspace_root, &path)

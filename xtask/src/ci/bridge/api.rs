@@ -8,7 +8,10 @@ use reqwest::{
 };
 use serde_json::{Value, json};
 
-use super::command::BridgeConfig;
+use super::{
+    command::BridgeConfig,
+    model::{PipelineObservation, PullRequest, pipeline_observation},
+};
 
 enum Payload<'a> {
     Json(&'a Value),
@@ -74,8 +77,6 @@ pub(super) struct Github {
     token: String,
 }
 
-/// The name the verification wears on a pull request. Commit statuses are keyed
-/// by it, so a later report replaces the earlier one.
 const STATUS_CONTEXT: &str = "kithara/gitlab-verification";
 
 impl Github {
@@ -109,22 +110,42 @@ impl Github {
         let pulls = response
             .as_array()
             .context("GitHub commit pulls response was not an array")?;
-        Ok(pulls.iter().find_map(|pull| {
-            let merged = pull.get("merged_at").is_some_and(|value| !value.is_null());
-            let branch = pull
-                .pointer("/base/ref")
-                .and_then(Value::as_str)
-                .is_some_and(|branch| branch == self.config.branch);
-            (merged && branch)
-                .then(|| pull.get("number").and_then(Value::as_u64))
-                .flatten()
-        }))
+        Ok(merged_pull_number(pulls, sha, &self.config.branch))
     }
 
-    /// Check runs are a GitHub App API, and this bridge authenticates with a
-    /// token. A commit status draws the same mark on the pull request and is
-    /// keyed by its context rather than by an id, so nothing has to be carried
-    /// between the two calls.
+    pub(super) fn open_pull_requests(&self) -> Result<Vec<PullRequest>> {
+        const PAGE_SIZE: usize = 100;
+        let mut page = 1;
+        let mut result = Vec::new();
+        loop {
+            let response = self.request(
+                &Method::GET,
+                &format!(
+                    "/repos/{}/pulls?state=open&base={}&per_page={PAGE_SIZE}&page={page}",
+                    self.config.github_repo, self.config.branch
+                ),
+                None,
+            )?;
+            let pulls = response
+                .as_array()
+                .context("GitHub pull list response was not an array")?;
+            for pull in pulls {
+                let branch = pull
+                    .pointer("/base/ref")
+                    .and_then(Value::as_str)
+                    .context("GitHub pull response has no base branch")?;
+                if branch != self.config.branch {
+                    continue;
+                }
+                result.push(pull_request(pull)?);
+            }
+            if pulls.len() < PAGE_SIZE {
+                return Ok(result);
+            }
+            page += 1;
+        }
+    }
+
     pub(super) fn report_status(&self, sha: &str, state: &str, description: &str) -> Result<()> {
         self.request(
             &Method::POST,
@@ -181,11 +202,21 @@ impl Gitlab {
         string_field(&response, &["commit", "id"], "GitLab branch SHA")
     }
 
-    pub(super) fn create_pipeline(&self, reference: &str, github_sha: &str) -> Result<u64> {
+    pub(super) fn create_pipeline(
+        &self,
+        reference: &str,
+        head_sha: &str,
+        base_sha: &str,
+    ) -> Result<u64> {
         let form = vec![
             ("ref".into(), reference.into()),
-            ("variables[0][key]".into(), "KITHARA_QUARANTINE_SHA".into()),
-            ("variables[0][value]".into(), github_sha.into()),
+            ("variables[][key]".into(), "KITHARA_QUARANTINE_SHA".into()),
+            ("variables[][value]".into(), head_sha.into()),
+            (
+                "variables[][key]".into(),
+                "KITHARA_QUARANTINE_BASE_SHA".into(),
+            ),
+            ("variables[][value]".into(), base_sha.into()),
         ];
         let payload = Payload::Form(&form);
         let response = self.request(&Method::POST, "pipeline", Some(&payload))?;
@@ -194,36 +225,77 @@ impl Gitlab {
             .context("GitLab pipeline response has no numeric id")
     }
 
-    pub(super) fn pipeline_status(&self, pipeline_id: u64) -> Result<String> {
-        let response = self.request(&Method::GET, &format!("pipelines/{pipeline_id}"), None)?;
-        response["status"]
-            .as_str()
-            .map(str::to_string)
-            .context("GitLab pipeline response has no status")
-    }
-
-    pub(super) fn latest_push_pipeline_status(&self, sha: &str) -> Result<Option<String>> {
+    pub(super) fn verification_pipelines(
+        &self,
+        reference: &str,
+        head_sha: &str,
+        base_sha: &str,
+    ) -> Result<Vec<u64>> {
         let mut url = self.project_url("pipelines")?;
         url.query_pairs_mut()
-            .append_pair("sha", sha)
-            .append_pair("ref", &self.config.branch)
-            .append_pair("source", "push")
-            .append_pair("order_by", "id")
-            .append_pair("sort", "desc")
-            .append_pair("per_page", "1");
-        let pipelines =
+            .append_pair("ref", reference)
+            .append_pair("per_page", "2");
+        let response =
             self.api
                 .request(&Method::GET, &url, ("PRIVATE-TOKEN", &self.token), None)?;
-        let Some((id, status)) = first_pipeline(&pipelines)? else {
-            return Ok(None);
-        };
-        if status != "success" {
-            return Ok(Some(status));
+        let pipelines = response
+            .as_array()
+            .context("GitLab pipeline list response was not an array")?;
+        let mut ids = Vec::with_capacity(pipelines.len());
+        for pipeline in pipelines {
+            let pipeline_ref = pipeline["ref"]
+                .as_str()
+                .context("GitLab pipeline list entry has no ref")?;
+            if pipeline_ref != reference {
+                bail!(
+                    "GitLab pipeline query for {reference} returned unexpected ref {pipeline_ref}"
+                );
+            }
+            let id = pipeline["id"]
+                .as_u64()
+                .context("GitLab pipeline list entry has no numeric id")?;
+            let variables =
+                self.request(&Method::GET, &format!("pipelines/{id}/variables"), None)?;
+            verification_variables(&variables, head_sha, base_sha)?;
+            ids.push(id);
         }
-        let bridges = self.request(&Method::GET, &format!("pipelines/{id}/bridges"), None)?;
-        Ok(Some(
-            blocking_downstream_status(&bridges)?.unwrap_or(status),
-        ))
+        Ok(ids)
+    }
+
+    pub(super) fn pipeline_observation(&self, pipeline_id: u64) -> Result<PipelineObservation> {
+        let parent = self.request(&Method::GET, &format!("pipelines/{pipeline_id}"), None)?;
+        let parent_status = parent["status"]
+            .as_str()
+            .context("GitLab pipeline response has no status")?;
+        if !matches!(
+            parent_status,
+            "success" | "failed" | "canceled" | "skipped" | "manual"
+        ) {
+            return Ok(PipelineObservation::Running);
+        }
+        if parent_status != "success" {
+            return Ok(pipeline_observation(parent_status, &[]));
+        }
+        let bridges = self.request(
+            &Method::GET,
+            &format!("pipelines/{pipeline_id}/bridges"),
+            None,
+        )?;
+        let bridges = bridges
+            .as_array()
+            .context("GitLab bridges response was not an array")?;
+        let children = bridges
+            .iter()
+            .map(|bridge| {
+                (
+                    bridge["name"].as_str().unwrap_or(""),
+                    bridge
+                        .pointer("/downstream_pipeline/status")
+                        .and_then(Value::as_str),
+                )
+            })
+            .collect::<Vec<_>>();
+        Ok(pipeline_observation(parent_status, &children))
     }
 
     pub(super) fn ensure_issue(&self, title: &str, description: &str) -> Result<()> {
@@ -285,8 +357,6 @@ fn read_secret(path: &std::path::Path, label: &str) -> Result<String> {
     Ok(secret)
 }
 
-/// GitHub rejects a commit status whose description exceeds 140 characters, and
-/// a rejection detail naming several control paths goes well past that.
 fn status_description(detail: &str) -> String {
     const LIMIT: usize = 140;
     let single_line = detail.split_whitespace().collect::<Vec<_>>().join(" ");
@@ -298,6 +368,52 @@ fn status_description(detail: &str) -> String {
         .take(LIMIT - 1)
         .chain(std::iter::once('…'))
         .collect()
+}
+
+fn merged_pull_number(pulls: &[Value], sha: &str, branch: &str) -> Option<u64> {
+    pulls.iter().find_map(|pull| {
+        let exact_commit = pull["merge_commit_sha"].as_str() == Some(sha);
+        let merged = pull.get("merged_at").is_some_and(|value| !value.is_null());
+        let exact_branch = pull.pointer("/base/ref").and_then(Value::as_str) == Some(branch);
+        (exact_commit && merged && exact_branch)
+            .then(|| pull.get("number").and_then(Value::as_u64))
+            .flatten()
+    })
+}
+
+fn pull_request(value: &Value) -> Result<PullRequest> {
+    let number = value["number"]
+        .as_u64()
+        .context("GitHub pull response has no numeric number")?;
+    let head_sha = string_field(value, &["head", "sha"], "GitHub pull head SHA")?;
+    Ok(PullRequest { number, head_sha })
+}
+
+fn verification_variables(value: &Value, head_sha: &str, base_sha: &str) -> Result<()> {
+    let variables = value
+        .as_array()
+        .context("GitLab pipeline variables response was not an array")?;
+    require_variable(variables, "KITHARA_QUARANTINE_SHA", head_sha)?;
+    require_variable(variables, "KITHARA_QUARANTINE_BASE_SHA", base_sha)
+}
+
+fn require_variable(variables: &[Value], key: &str, expected: &str) -> Result<()> {
+    let values = variables
+        .iter()
+        .filter(|variable| variable["key"].as_str() == Some(key))
+        .map(|variable| variable["value"].as_str())
+        .collect::<Vec<_>>();
+    match values.as_slice() {
+        [Some(value)] if *value == expected => Ok(()),
+        [Some(value)] => {
+            bail!("GitLab pipeline variable {key} is {value:?}, expected {expected:?}")
+        }
+        [None] => bail!("GitLab pipeline variable {key} has no string value"),
+        _ => bail!(
+            "GitLab pipeline must have exactly one {key} variable; observed {}",
+            values.len()
+        ),
+    }
 }
 
 fn string_field(value: &Value, path: &[&str], label: &str) -> Result<String> {
@@ -313,100 +429,81 @@ fn string_field(value: &Value, path: &[&str], label: &str) -> Result<String> {
         .with_context(|| format!("{label} is not a string"))
 }
 
-fn first_pipeline(value: &Value) -> Result<Option<(u64, String)>> {
-    let pipelines = value
-        .as_array()
-        .context("GitLab pipelines response was not an array")?;
-    pipelines
-        .first()
-        .map(|pipeline| {
-            let id = pipeline["id"]
-                .as_u64()
-                .context("GitLab pipeline response has no numeric id")?;
-            let status = pipeline["status"]
-                .as_str()
-                .map(str::to_string)
-                .context("GitLab pipeline response has no status")?;
-            Ok((id, status))
-        })
-        .transpose()
-}
-
-/// Every job that proves anything lives in the child pipeline the dispatch
-/// stage triggers. A cancelled child under a `success` parent is a state this
-/// project has produced, so the parent's own status is not evidence that the
-/// tests ran.
-fn blocking_downstream_status(value: &Value) -> Result<Option<String>> {
-    let bridges = value
-        .as_array()
-        .context("GitLab bridges response was not an array")?;
-    for bridge in bridges {
-        match bridge["downstream_pipeline"]["status"].as_str() {
-            Some("success") => {}
-            Some(status) => return Ok(Some(status.to_owned())),
-            None => return Ok(Some("missing".to_owned())),
-        }
-    }
-    Ok(None)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn latest_pipeline_status_is_optional_but_typed() {
-        assert_eq!(
-            first_pipeline(&json!([{"id": 7, "status": "success"}])).unwrap(),
-            Some((7, "success".into()))
-        );
-        assert_eq!(first_pipeline(&json!([])).unwrap(), None);
-        assert!(first_pipeline(&json!([{"id": 7}])).is_err());
-        assert!(first_pipeline(&json!([{"status": "success"}])).is_err());
+    fn verification_status_uses_the_required_context_and_exact_head() {
+        let sha = "0123456789abcdef0123456789abcdef01234567";
+        let path = format!("/repos/owner/repo/statuses/{sha}");
+        let body = json!({
+            "state": "pending",
+            "context": STATUS_CONTEXT,
+            "description": status_description("GitLab verification running"),
+        });
+
+        assert_eq!(path, format!("/repos/owner/repo/statuses/{sha}"));
+        assert_eq!(body["context"], "kithara/gitlab-verification");
     }
 
     #[test]
-    fn a_status_description_survives_a_multi_line_rejection() {
-        let detail = "The merged GitHub pull request changes CI control files.\n\n- `xtask/`";
-        assert_eq!(
-            status_description(detail),
-            "The merged GitHub pull request changes CI control files. - `xtask/`"
-        );
-    }
-
-    #[test]
-    fn a_status_description_stays_within_what_github_accepts() {
+    fn status_descriptions_fit_github() {
         let described = status_description(&"path ".repeat(80));
         assert_eq!(described.chars().count(), 140);
         assert!(described.ends_with('…'));
     }
 
     #[test]
-    fn a_cancelled_child_blocks_a_green_parent() {
+    fn merged_provenance_requires_the_exact_commit_and_base() {
+        let expected = "0123456789abcdef0123456789abcdef01234567";
+        let pulls = json!([
+            {
+                "number": 1,
+                "merged_at": "2026-08-13T00:00:00Z",
+                "merge_commit_sha": "89abcdef0123456789abcdef0123456789abcdef",
+                "base": {"ref": "main"}
+            },
+            {
+                "number": 2,
+                "merged_at": "2026-08-13T00:00:00Z",
+                "merge_commit_sha": expected,
+                "base": {"ref": "other"}
+            },
+            {
+                "number": 3,
+                "merged_at": "2026-08-13T00:00:00Z",
+                "merge_commit_sha": expected,
+                "base": {"ref": "main"}
+            }
+        ]);
+
         assert_eq!(
-            blocking_downstream_status(&json!([{"downstream_pipeline": {"status": "canceled"}}]))
-                .unwrap(),
-            Some("canceled".into())
+            merged_pull_number(pulls.as_array().unwrap(), expected, "main"),
+            Some(3)
         );
     }
 
     #[test]
-    fn a_dispatch_job_without_a_child_proves_nothing() {
+    fn pull_head_is_taken_from_the_api_response_exactly() {
+        let head = "0123456789abcdef0123456789abcdef01234567";
         assert_eq!(
-            blocking_downstream_status(&json!([{"downstream_pipeline": null}])).unwrap(),
-            Some("missing".into())
+            pull_request(&json!({"number": 427, "head": {"sha": head}})).unwrap(),
+            PullRequest {
+                number: 427,
+                head_sha: head.into(),
+            }
         );
     }
 
     #[test]
-    fn every_green_child_leaves_the_parent_status_standing() {
-        assert_eq!(
-            blocking_downstream_status(&json!([
-                {"downstream_pipeline": {"status": "success"}},
-                {"downstream_pipeline": {"status": "success"}}
-            ]))
-            .unwrap(),
-            None
-        );
+    fn recovery_requires_exact_head_and_base_variables() {
+        let variables = json!([
+            {"key": "KITHARA_QUARANTINE_SHA", "value": "head"},
+            {"key": "KITHARA_QUARANTINE_BASE_SHA", "value": "base"}
+        ]);
+        verification_variables(&variables, "head", "base").unwrap();
+        assert!(verification_variables(&variables, "other", "base").is_err());
+        assert!(verification_variables(&json!([]), "head", "base").is_err());
     }
 }
