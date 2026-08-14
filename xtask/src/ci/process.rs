@@ -4,15 +4,53 @@ use std::{
     ffi::{OsStr, OsString},
     path::{Path, PathBuf},
     process::{Command, Output},
+    sync::Mutex,
 };
 
 use anyhow::{Context, Result, bail};
 use kithara_devtools::verdict::ChildFailure;
 use tracing::{debug, info, warn};
 
+/// One thing a lane asked the executor to do, captured instead of done. The
+/// snapshot built from these is what says a lane still resolves to the command
+/// it resolved to before, without spending a CI run to find out.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Step {
+    pub(crate) label: String,
+    pub(crate) program: String,
+    pub(crate) args: Vec<String>,
+    pub(crate) env: BTreeMap<String, String>,
+    pub(crate) relative_dir: String,
+}
+
+#[derive(Debug, Default)]
+pub(crate) struct Recording {
+    steps: Vec<Step>,
+    /// What `capture` answers, by program. A lane that reads a tool's version
+    /// and compares it to a pin needs an answer to get past that check.
+    replies: BTreeMap<String, String>,
+}
+
+impl Recording {
+    pub(crate) fn with_reply(mut self, program: &str, reply: &str) -> Self {
+        self.replies.insert(program.to_owned(), reply.to_owned());
+        self
+    }
+
+    pub(crate) fn steps(&self) -> &[Step] {
+        &self.steps
+    }
+}
+
+enum Mode {
+    Run,
+    Record(Mutex<Recording>),
+}
+
 pub(crate) struct Process {
     root: PathBuf,
     vars: BTreeMap<OsString, OsString>,
+    mode: Mode,
 }
 
 impl Process {
@@ -20,7 +58,44 @@ impl Process {
         Self {
             root: root.to_path_buf(),
             vars,
+            mode: Mode::Run,
         }
+    }
+
+    /// A process that captures what a lane asks for instead of running it.
+    /// Requirement checks answer yes: the point is the shape of the work, and a
+    /// machine that lacks the executor's toolchain still has to record it.
+    pub(crate) fn recording(root: &Path, recording: Recording) -> Self {
+        Self {
+            root: root.to_path_buf(),
+            vars: BTreeMap::new(),
+            mode: Mode::Record(Mutex::new(recording)),
+        }
+    }
+
+    pub(crate) fn recorded(self) -> Option<Recording> {
+        match self.mode {
+            Mode::Run => None,
+            Mode::Record(recording) => recording.into_inner().ok(),
+        }
+    }
+
+    fn record(&self, step: Step) -> bool {
+        let Mode::Record(recording) = &self.mode else {
+            return false;
+        };
+        if let Ok(mut recording) = recording.lock() {
+            recording.steps.push(step);
+        }
+        true
+    }
+
+    fn reply(&self, program: &str) -> Option<String> {
+        let Mode::Record(recording) = &self.mode else {
+            return None;
+        };
+        let recording = recording.lock().ok()?;
+        Some(recording.replies.get(program).cloned().unwrap_or_default())
     }
 
     pub(crate) fn command(&self, program: impl AsRef<OsStr>) -> Command {
@@ -60,6 +135,9 @@ impl Process {
     }
 
     pub(crate) fn run_command(&self, command: &mut Command, label: &str) -> Result<()> {
+        if self.record(Step::of(command, label, &self.root)) {
+            return Ok(());
+        }
         info!(step = label, root = %self.root.display(), "starting");
         let status = command
             .status()
@@ -71,12 +149,28 @@ impl Process {
     }
 
     pub(crate) fn capture(&self, program: &str, args: &[&str], label: &str) -> Result<String> {
+        if let Some(reply) = self.reply(program) {
+            let mut command = self.command(program);
+            command.args(args);
+            self.record(Step::of(&command, label, &self.root));
+            return Ok(reply);
+        }
         let output = self
             .command(program)
             .args(args)
             .output()
             .with_context(|| format!("failed to start {label}"))?;
         output_text(output, label)
+    }
+
+    /// The platform a lane refuses to run anywhere but on. Recorded rather than
+    /// enforced while recording: the shape of a macOS lane is worth capturing
+    /// from a Linux runner too.
+    pub(crate) fn require_os(&self, expected: &str, label: &str) -> Result<()> {
+        if self.record(Step::requirement(label, "os", &[expected.to_owned()])) {
+            return Ok(());
+        }
+        require_os(expected, label)
     }
 
     pub(crate) fn best_effort(&self, program: &str, args: &[&str], label: &str) {
@@ -111,6 +205,10 @@ impl Process {
     }
 
     pub(crate) fn require_tools(&self, tools: &[&str]) -> Result<()> {
+        let owned: Vec<String> = tools.iter().map(|tool| (*tool).to_owned()).collect();
+        if self.record(Step::requirement("required tools", "tools", &owned)) {
+            return Ok(());
+        }
         for tool in tools {
             if self.find_executable(tool).is_none() {
                 bail!("required CI command is missing: {tool}");
@@ -137,6 +235,45 @@ impl Process {
                 candidate.is_file().then_some(candidate)
             })
         })
+    }
+}
+
+impl Step {
+    fn of(command: &Command, label: &str, root: &Path) -> Self {
+        Self {
+            label: label.to_owned(),
+            program: command.get_program().to_string_lossy().into_owned(),
+            args: command
+                .get_args()
+                .map(|arg| arg.to_string_lossy().into_owned())
+                .collect(),
+            env: command
+                .get_envs()
+                .filter_map(|(key, value)| {
+                    value.map(|value| {
+                        (
+                            key.to_string_lossy().into_owned(),
+                            value.to_string_lossy().into_owned(),
+                        )
+                    })
+                })
+                .collect(),
+            relative_dir: command
+                .get_current_dir()
+                .and_then(|dir| dir.strip_prefix(root).ok())
+                .map(|dir| dir.to_string_lossy().into_owned())
+                .unwrap_or_default(),
+        }
+    }
+
+    fn requirement(label: &str, kind: &str, values: &[String]) -> Self {
+        Self {
+            label: label.to_owned(),
+            program: format!("<require {kind}>"),
+            args: values.to_vec(),
+            env: BTreeMap::new(),
+            relative_dir: String::new(),
+        }
     }
 }
 

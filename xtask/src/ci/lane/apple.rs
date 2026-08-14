@@ -8,18 +8,13 @@ use std::{
 
 use anyhow::{Context, Result, bail};
 
-use crate::ci::{
-    config::CiConfig,
-    process::{Process, require_os},
-    run::PipelineKind,
-    xcresult,
-};
+use crate::ci::{config::CiConfig, process::Process, run::PipelineKind, xcresult};
 
 /// Every Apple job repeats this preflight instead of inheriting it from a
 /// predecessor. Each one is scheduled on its own and can be retried alone, so
 /// the wrong Xcode has to fail in the job that would have used it.
 fn preflight(process: &Process, config: &CiConfig) -> Result<()> {
-    require_os("macos", "Apple")?;
+    process.require_os("macos", "Apple")?;
     process.require_tools(&[
         "cargo",
         "just",
@@ -290,7 +285,7 @@ impl Drop for TestServer {
 /// other browsers do: the target rebuilds std for shared memory, and only the
 /// pinned nightly honours that.
 pub(crate) fn safari(process: &Process) -> Result<()> {
-    require_os("macos", "Safari WASM")?;
+    process.require_os("macos", "Safari WASM")?;
     process.require_tools(&["cargo", "just"])?;
     process.run(
         "just",

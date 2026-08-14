@@ -23,10 +23,76 @@ pub(crate) struct KitharaExt {
 #[serde(default, deny_unknown_fields)]
 pub(crate) struct CiProjectConfig {
     pub(crate) pins: PathBuf,
+    pub(crate) lanes: BTreeMap<String, CiLaneConfig>,
+}
+
+/// A CI lane that is nothing but the work it asks the executor for. Lanes that
+/// need more than parameters keep a function; this is what the rest are.
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub(crate) struct CiLaneConfig {
+    /// The shared cache the lane leases, named the way the runner tags are.
+    pub(crate) cache_group: String,
+    /// How the lane names itself when it refuses a platform.
+    pub(crate) label: String,
+    pub(crate) os: Option<String>,
+    pub(crate) tools: Vec<String>,
+    /// Tools whose reported version has to match a reviewed pin before the lane
+    /// spends a runner on a build it would have to throw away.
+    pub(crate) pinned: Vec<CiLanePin>,
+    pub(crate) program: String,
+    pub(crate) steps: Vec<CiLaneStep>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub(crate) struct CiLaneStep {
+    pub(crate) args: Vec<String>,
+    pub(crate) label: String,
+}
+
+/// A version check: ask `tool` how old it is, and require the answer to carry
+/// the value `pin` names in `.config/ci-pins.toml`.
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub(crate) struct CiLanePin {
+    pub(crate) tool: String,
+    pub(crate) args: Vec<String>,
+    pub(crate) pin: String,
 }
 
 impl CiProjectConfig {
+    fn validate_lanes(&self) -> Result<()> {
+        for (name, lane) in &self.lanes {
+            if !matches!(
+                lane.cache_group.as_str(),
+                "macos" | "linux" | "windows" | "host"
+            ) {
+                bail!(
+                    "ext.ci.lanes.{name}.cache_group must be macos, linux, windows or host, got `{}`",
+                    lane.cache_group
+                );
+            }
+            if lane.program.is_empty() {
+                bail!("ext.ci.lanes.{name} must name a program");
+            }
+            if lane.steps.is_empty() {
+                bail!("ext.ci.lanes.{name} must declare at least one step");
+            }
+            if lane.os.is_some() && lane.label.is_empty() {
+                bail!("ext.ci.lanes.{name} pins an OS, so it must carry a label to refuse under");
+            }
+            for check in &lane.pinned {
+                if check.tool.is_empty() || check.pin.is_empty() {
+                    bail!("ext.ci.lanes.{name}.pinned must name both a tool and a pin");
+                }
+            }
+        }
+        Ok(())
+    }
+
     pub(crate) fn validate(&self) -> Result<()> {
+        self.validate_lanes()?;
         if self.pins.as_os_str().is_empty()
             || self.pins.is_absolute()
             || self

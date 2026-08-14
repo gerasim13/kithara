@@ -2,7 +2,7 @@ use std::{env, process::Command};
 
 use anyhow::{Context, Result};
 
-use crate::ci::process::{Process, require_os};
+use crate::ci::process::Process;
 
 pub(crate) fn tests(process: &Process, target: &str) -> Result<()> {
     prepare(process, target)?;
@@ -45,7 +45,7 @@ pub(crate) fn build(process: &Process, target: &str) -> Result<()> {
 }
 
 fn prepare(process: &Process, target: &str) -> Result<()> {
-    require_os("windows", "Windows")?;
+    process.require_os("windows", "Windows")?;
     process.require_tools(&["cargo", "rustup", "sccache", "cmake", "ninja"])?;
     process.run(
         "rustup",

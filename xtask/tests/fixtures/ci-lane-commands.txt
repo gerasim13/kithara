@@ -1,0 +1,1560 @@
+# apple-lint / branch
+  <require os> macos
+  <require tools> cargo just sccache swift xcodebuild xcodegen
+  xcodebuild -version
+  just lint fast
+# apple-lint / platforms
+  <require os> macos
+  <require tools> cargo just sccache swift xcodebuild xcodegen
+  xcodebuild -version
+  just lint full
+# apple-lint / merge-request
+  <require os> macos
+  <require tools> cargo just sccache swift xcodebuild xcodegen
+  xcodebuild -version
+  just lint fast
+# apple-lint / quarantine
+  <require os> macos
+  <require tools> cargo just sccache swift xcodebuild xcodegen
+  xcodebuild -version
+  just lint fast
+# apple-lint / main
+  <require os> macos
+  <require tools> cargo just sccache swift xcodebuild xcodegen
+  xcodebuild -version
+  just lint full
+# apple-lint / nightly
+  <require os> macos
+  <require tools> cargo just sccache swift xcodebuild xcodegen
+  xcodebuild -version
+  just lint full
+# apple-lint / weekly
+  <require os> macos
+  <require tools> cargo just sccache swift xcodebuild xcodegen
+  xcodebuild -version
+  just lint full
+# apple-lint / release
+  <require os> macos
+  <require tools> cargo just sccache swift xcodebuild xcodegen
+  xcodebuild -version
+  just lint full
+# apple-msrv / branch
+  <require os> macos
+  <require tools> cargo just sccache swift xcodebuild xcodegen
+  xcodebuild -version
+  just check workspace
+    RUSTUP_TOOLCHAIN=1.92.0
+# apple-msrv / platforms
+  <require os> macos
+  <require tools> cargo just sccache swift xcodebuild xcodegen
+  xcodebuild -version
+  just check workspace
+    RUSTUP_TOOLCHAIN=1.92.0
+# apple-msrv / merge-request
+  <require os> macos
+  <require tools> cargo just sccache swift xcodebuild xcodegen
+  xcodebuild -version
+  just check workspace
+    RUSTUP_TOOLCHAIN=1.92.0
+# apple-msrv / quarantine
+  <require os> macos
+  <require tools> cargo just sccache swift xcodebuild xcodegen
+  xcodebuild -version
+  just check workspace
+    RUSTUP_TOOLCHAIN=1.92.0
+# apple-msrv / main
+  <require os> macos
+  <require tools> cargo just sccache swift xcodebuild xcodegen
+  xcodebuild -version
+  just check workspace
+    RUSTUP_TOOLCHAIN=1.92.0
+# apple-msrv / nightly
+  <require os> macos
+  <require tools> cargo just sccache swift xcodebuild xcodegen
+  xcodebuild -version
+  just check workspace
+    RUSTUP_TOOLCHAIN=1.92.0
+# apple-msrv / weekly
+  <require os> macos
+  <require tools> cargo just sccache swift xcodebuild xcodegen
+  xcodebuild -version
+  just check workspace
+    RUSTUP_TOOLCHAIN=1.92.0
+# apple-msrv / release
+  <require os> macos
+  <require tools> cargo just sccache swift xcodebuild xcodegen
+  xcodebuild -version
+  just check workspace
+    RUSTUP_TOOLCHAIN=1.92.0
+# apple-test / branch
+  <require os> macos
+  <require tools> cargo just sccache swift xcodebuild xcodegen
+  xcodebuild -version
+  just test run --flash=on --no-block=on --profile ci
+# apple-test / platforms
+  <require os> macos
+  <require tools> cargo just sccache swift xcodebuild xcodegen
+  xcodebuild -version
+  just test run --flash=on --no-block=on --profile ci
+# apple-test / merge-request
+  <require os> macos
+  <require tools> cargo just sccache swift xcodebuild xcodegen
+  xcodebuild -version
+  just test run --flash=on --no-block=on --profile ci
+# apple-test / quarantine
+  <require os> macos
+  <require tools> cargo just sccache swift xcodebuild xcodegen
+  xcodebuild -version
+  just test run --profile ci
+# apple-test / main
+  <require os> macos
+  <require tools> cargo just sccache swift xcodebuild xcodegen
+  xcodebuild -version
+  just test run --flash=on --no-block=on --profile ci
+# apple-test / nightly
+  <require os> macos
+  <require tools> cargo just sccache swift xcodebuild xcodegen
+  xcodebuild -version
+  just test run --flash=on --no-block=on --profile ci
+# apple-test / weekly
+  refused: weekly pipelines do not run the Apple suite
+  <require os> macos
+  <require tools> cargo just sccache swift xcodebuild xcodegen
+  xcodebuild -version
+# apple-test / release
+  <require os> macos
+  <require tools> cargo just sccache swift xcodebuild xcodegen
+  xcodebuild -version
+  just test run --flash=on --no-block=on --profile ci
+# apple-test-flash-off / branch
+  <require os> macos
+  <require tools> cargo just sccache swift xcodebuild xcodegen
+  xcodebuild -version
+  just test run --flash=off --profile ci
+    CARGO_TARGET_DIR=target-flash-off
+# apple-test-flash-off / platforms
+  <require os> macos
+  <require tools> cargo just sccache swift xcodebuild xcodegen
+  xcodebuild -version
+  just test run --flash=off --profile ci
+    CARGO_TARGET_DIR=target-flash-off
+# apple-test-flash-off / merge-request
+  <require os> macos
+  <require tools> cargo just sccache swift xcodebuild xcodegen
+  xcodebuild -version
+  just test run --flash=off --profile ci
+    CARGO_TARGET_DIR=target-flash-off
+# apple-test-flash-off / quarantine
+  <require os> macos
+  <require tools> cargo just sccache swift xcodebuild xcodegen
+  xcodebuild -version
+  just test run --flash=off --profile ci
+    CARGO_TARGET_DIR=target-flash-off
+# apple-test-flash-off / main
+  <require os> macos
+  <require tools> cargo just sccache swift xcodebuild xcodegen
+  xcodebuild -version
+  just test run --flash=off --profile ci
+    CARGO_TARGET_DIR=target-flash-off
+# apple-test-flash-off / nightly
+  <require os> macos
+  <require tools> cargo just sccache swift xcodebuild xcodegen
+  xcodebuild -version
+  just test run --flash=off --profile ci
+    CARGO_TARGET_DIR=target-flash-off
+# apple-test-flash-off / weekly
+  <require os> macos
+  <require tools> cargo just sccache swift xcodebuild xcodegen
+  xcodebuild -version
+  just test run --flash=off --profile ci
+    CARGO_TARGET_DIR=target-flash-off
+# apple-test-flash-off / release
+  <require os> macos
+  <require tools> cargo just sccache swift xcodebuild xcodegen
+  xcodebuild -version
+  just test run --flash=off --profile ci
+    CARGO_TARGET_DIR=target-flash-off
+# apple-e2e / branch
+  <require os> macos
+  <require tools> cargo just sccache swift xcodebuild xcodegen
+  xcodebuild -version
+  just test run --lane=e2e --profile ci
+  just test run --lane=e2e-fused --profile ci
+  just test run --lane=e2e-glide --profile ci
+# apple-e2e / platforms
+  <require os> macos
+  <require tools> cargo just sccache swift xcodebuild xcodegen
+  xcodebuild -version
+  just test run --lane=e2e --profile ci
+  just test run --lane=e2e-fused --profile ci
+  just test run --lane=e2e-glide --profile ci
+# apple-e2e / merge-request
+  <require os> macos
+  <require tools> cargo just sccache swift xcodebuild xcodegen
+  xcodebuild -version
+  just test run --lane=e2e --profile ci
+  just test run --lane=e2e-fused --profile ci
+  just test run --lane=e2e-glide --profile ci
+# apple-e2e / quarantine
+  <require os> macos
+  <require tools> cargo just sccache swift xcodebuild xcodegen
+  xcodebuild -version
+  just test run --lane=e2e --profile ci
+  just test run --lane=e2e-fused --profile ci
+  just test run --lane=e2e-glide --profile ci
+# apple-e2e / main
+  <require os> macos
+  <require tools> cargo just sccache swift xcodebuild xcodegen
+  xcodebuild -version
+  just test run --lane=e2e --profile ci
+  just test run --lane=e2e-fused --profile ci
+  just test run --lane=e2e-glide --profile ci
+# apple-e2e / nightly
+  <require os> macos
+  <require tools> cargo just sccache swift xcodebuild xcodegen
+  xcodebuild -version
+  just test run --lane=e2e --profile ci
+  just test run --lane=e2e-fused --profile ci
+  just test run --lane=e2e-glide --profile ci
+# apple-e2e / weekly
+  <require os> macos
+  <require tools> cargo just sccache swift xcodebuild xcodegen
+  xcodebuild -version
+  just test run --lane=e2e --profile ci
+  just test run --lane=e2e-fused --profile ci
+  just test run --lane=e2e-glide --profile ci
+# apple-e2e / release
+  <require os> macos
+  <require tools> cargo just sccache swift xcodebuild xcodegen
+  xcodebuild -version
+  just test run --lane=e2e --profile ci
+  just test run --lane=e2e-fused --profile ci
+  just test run --lane=e2e-glide --profile ci
+# apple-xcframework / branch
+  <require os> macos
+  <require tools> cargo just sccache swift xcodebuild xcodegen
+  xcodebuild -version
+  just platform apple xcframework --profile debug
+# apple-xcframework / platforms
+  <require os> macos
+  <require tools> cargo just sccache swift xcodebuild xcodegen
+  xcodebuild -version
+  just platform apple xcframework --profile debug
+# apple-xcframework / merge-request
+  <require os> macos
+  <require tools> cargo just sccache swift xcodebuild xcodegen
+  xcodebuild -version
+  just platform apple xcframework --profile debug
+# apple-xcframework / quarantine
+  <require os> macos
+  <require tools> cargo just sccache swift xcodebuild xcodegen
+  xcodebuild -version
+  just platform apple xcframework --profile debug
+# apple-xcframework / main
+  <require os> macos
+  <require tools> cargo just sccache swift xcodebuild xcodegen
+  xcodebuild -version
+  just platform apple xcframework --profile debug
+# apple-xcframework / nightly
+  <require os> macos
+  <require tools> cargo just sccache swift xcodebuild xcodegen
+  xcodebuild -version
+  just platform apple xcframework --profile debug
+# apple-xcframework / weekly
+  <require os> macos
+  <require tools> cargo just sccache swift xcodebuild xcodegen
+  xcodebuild -version
+  just platform apple xcframework --profile debug
+# apple-xcframework / release
+  <require os> macos
+  <require tools> cargo just sccache swift xcodebuild xcodegen
+  xcodebuild -version
+  just platform apple xcframework --profile debug
+# apple-swift-test / branch
+  <require os> macos
+  <require tools> cargo just sccache swift xcodebuild xcodegen
+  xcodebuild -version
+  just platform apple xcframework --profile debug
+  swift test --cache-path <root>/target/swiftpm --xunit-output <root>/target/xcresult/swift-test.junit.xml
+    KITHARA_LOCAL_DEV=1
+# apple-swift-test / platforms
+  <require os> macos
+  <require tools> cargo just sccache swift xcodebuild xcodegen
+  xcodebuild -version
+  just platform apple xcframework --profile debug
+  swift test --cache-path <root>/target/swiftpm --xunit-output <root>/target/xcresult/swift-test.junit.xml
+    KITHARA_LOCAL_DEV=1
+# apple-swift-test / merge-request
+  <require os> macos
+  <require tools> cargo just sccache swift xcodebuild xcodegen
+  xcodebuild -version
+  just platform apple xcframework --profile debug
+  swift test --cache-path <root>/target/swiftpm --xunit-output <root>/target/xcresult/swift-test.junit.xml
+    KITHARA_LOCAL_DEV=1
+# apple-swift-test / quarantine
+  <require os> macos
+  <require tools> cargo just sccache swift xcodebuild xcodegen
+  xcodebuild -version
+  just platform apple xcframework --profile debug
+  swift test --cache-path <root>/target/swiftpm --xunit-output <root>/target/xcresult/swift-test.junit.xml
+    KITHARA_LOCAL_DEV=1
+# apple-swift-test / main
+  <require os> macos
+  <require tools> cargo just sccache swift xcodebuild xcodegen
+  xcodebuild -version
+  just platform apple xcframework --profile debug
+  swift test --cache-path <root>/target/swiftpm --xunit-output <root>/target/xcresult/swift-test.junit.xml
+    KITHARA_LOCAL_DEV=1
+# apple-swift-test / nightly
+  <require os> macos
+  <require tools> cargo just sccache swift xcodebuild xcodegen
+  xcodebuild -version
+  just platform apple xcframework --profile debug
+  swift test --cache-path <root>/target/swiftpm --xunit-output <root>/target/xcresult/swift-test.junit.xml
+    KITHARA_LOCAL_DEV=1
+# apple-swift-test / weekly
+  <require os> macos
+  <require tools> cargo just sccache swift xcodebuild xcodegen
+  xcodebuild -version
+  just platform apple xcframework --profile debug
+  swift test --cache-path <root>/target/swiftpm --xunit-output <root>/target/xcresult/swift-test.junit.xml
+    KITHARA_LOCAL_DEV=1
+# apple-swift-test / release
+  <require os> macos
+  <require tools> cargo just sccache swift xcodebuild xcodegen
+  xcodebuild -version
+  just platform apple xcframework --profile debug
+  swift test --cache-path <root>/target/swiftpm --xunit-output <root>/target/xcresult/swift-test.junit.xml
+    KITHARA_LOCAL_DEV=1
+# apple-ios / branch
+  <require os> macos
+  <require tools> cargo just sccache swift xcodebuild xcodegen
+  xcodebuild -version
+  just platform apple ios
+    KITHARA_LOCAL_DEV=1
+# apple-ios / platforms
+  <require os> macos
+  <require tools> cargo just sccache swift xcodebuild xcodegen
+  xcodebuild -version
+  just platform apple ios
+    KITHARA_LOCAL_DEV=1
+# apple-ios / merge-request
+  <require os> macos
+  <require tools> cargo just sccache swift xcodebuild xcodegen
+  xcodebuild -version
+  just platform apple ios
+    KITHARA_LOCAL_DEV=1
+# apple-ios / quarantine
+  <require os> macos
+  <require tools> cargo just sccache swift xcodebuild xcodegen
+  xcodebuild -version
+  just platform apple ios
+    KITHARA_LOCAL_DEV=1
+# apple-ios / main
+  <require os> macos
+  <require tools> cargo just sccache swift xcodebuild xcodegen
+  xcodebuild -version
+  just platform apple ios
+    KITHARA_LOCAL_DEV=1
+# apple-ios / nightly
+  <require os> macos
+  <require tools> cargo just sccache swift xcodebuild xcodegen
+  xcodebuild -version
+  just platform apple ios
+    KITHARA_LOCAL_DEV=1
+# apple-ios / weekly
+  <require os> macos
+  <require tools> cargo just sccache swift xcodebuild xcodegen
+  xcodebuild -version
+  just platform apple ios
+    KITHARA_LOCAL_DEV=1
+# apple-ios / release
+  <require os> macos
+  <require tools> cargo just sccache swift xcodebuild xcodegen
+  xcodebuild -version
+  just platform apple ios
+    KITHARA_LOCAL_DEV=1
+# apple-ios-test / branch
+  refused: starting <root>/target/debug/test_server
+  <require os> macos
+  <require tools> cargo just sccache swift xcodebuild xcodegen
+  xcodebuild -version
+  cargo build -p kithara-integration-tests --bin test_server
+# apple-ios-test / platforms
+  refused: starting <root>/target/debug/test_server
+  <require os> macos
+  <require tools> cargo just sccache swift xcodebuild xcodegen
+  xcodebuild -version
+  cargo build -p kithara-integration-tests --bin test_server
+# apple-ios-test / merge-request
+  refused: starting <root>/target/debug/test_server
+  <require os> macos
+  <require tools> cargo just sccache swift xcodebuild xcodegen
+  xcodebuild -version
+  cargo build -p kithara-integration-tests --bin test_server
+# apple-ios-test / quarantine
+  refused: starting <root>/target/debug/test_server
+  <require os> macos
+  <require tools> cargo just sccache swift xcodebuild xcodegen
+  xcodebuild -version
+  cargo build -p kithara-integration-tests --bin test_server
+# apple-ios-test / main
+  refused: starting <root>/target/debug/test_server
+  <require os> macos
+  <require tools> cargo just sccache swift xcodebuild xcodegen
+  xcodebuild -version
+  cargo build -p kithara-integration-tests --bin test_server
+# apple-ios-test / nightly
+  refused: starting <root>/target/debug/test_server
+  <require os> macos
+  <require tools> cargo just sccache swift xcodebuild xcodegen
+  xcodebuild -version
+  cargo build -p kithara-integration-tests --bin test_server
+# apple-ios-test / weekly
+  refused: starting <root>/target/debug/test_server
+  <require os> macos
+  <require tools> cargo just sccache swift xcodebuild xcodegen
+  xcodebuild -version
+  cargo build -p kithara-integration-tests --bin test_server
+# apple-ios-test / release
+  refused: starting <root>/target/debug/test_server
+  <require os> macos
+  <require tools> cargo just sccache swift xcodebuild xcodegen
+  xcodebuild -version
+  cargo build -p kithara-integration-tests --bin test_server
+# apple-safari / branch
+  <require os> macos
+  <require tools> cargo just
+  just platform wasm test safari
+# apple-safari / platforms
+  <require os> macos
+  <require tools> cargo just
+  just platform wasm test safari
+# apple-safari / merge-request
+  <require os> macos
+  <require tools> cargo just
+  just platform wasm test safari
+# apple-safari / quarantine
+  <require os> macos
+  <require tools> cargo just
+  just platform wasm test safari
+# apple-safari / main
+  <require os> macos
+  <require tools> cargo just
+  just platform wasm test safari
+# apple-safari / nightly
+  <require os> macos
+  <require tools> cargo just
+  just platform wasm test safari
+# apple-safari / weekly
+  <require os> macos
+  <require tools> cargo just
+  just platform wasm test safari
+# apple-safari / release
+  <require os> macos
+  <require tools> cargo just
+  just platform wasm test safari
+# linux-secrets / branch
+  <require os> linux
+  <require tools> gitleaks
+  gitleaks git . --config .gitleaks.toml --log-opts=--all --no-banner --redact=100 --verbose --report-format json --report-path gitleaks-report.json
+# linux-secrets / platforms
+  <require os> linux
+  <require tools> gitleaks
+  gitleaks git . --config .gitleaks.toml --log-opts=--all --no-banner --redact=100 --verbose --report-format json --report-path gitleaks-report.json
+# linux-secrets / merge-request
+  <require os> linux
+  <require tools> gitleaks
+  gitleaks git . --config .gitleaks.toml --log-opts=--all --no-banner --redact=100 --verbose --report-format json --report-path gitleaks-report.json
+# linux-secrets / quarantine
+  <require os> linux
+  <require tools> gitleaks
+  gitleaks git . --config .gitleaks.toml --log-opts=--all --no-banner --redact=100 --verbose --report-format json --report-path gitleaks-report.json
+# linux-secrets / main
+  <require os> linux
+  <require tools> gitleaks
+  gitleaks git . --config .gitleaks.toml --log-opts=--all --no-banner --redact=100 --verbose --report-format json --report-path gitleaks-report.json
+# linux-secrets / nightly
+  <require os> linux
+  <require tools> gitleaks
+  gitleaks git . --config .gitleaks.toml --log-opts=--all --no-banner --redact=100 --verbose --report-format json --report-path gitleaks-report.json
+# linux-secrets / weekly
+  <require os> linux
+  <require tools> gitleaks
+  gitleaks git . --config .gitleaks.toml --log-opts=--all --no-banner --redact=100 --verbose --report-format json --report-path gitleaks-report.json
+# linux-secrets / release
+  <require os> linux
+  <require tools> gitleaks
+  gitleaks git . --config .gitleaks.toml --log-opts=--all --no-banner --redact=100 --verbose --report-format json --report-path gitleaks-report.json
+# linux-check / branch
+  <require os> linux
+  <require tools> cargo just sccache
+  just check workspace
+# linux-check / platforms
+  <require os> linux
+  <require tools> cargo just sccache
+  just check workspace
+# linux-check / merge-request
+  <require os> linux
+  <require tools> cargo just sccache
+  just check workspace
+# linux-check / quarantine
+  <require os> linux
+  <require tools> cargo just sccache
+  just check workspace
+# linux-check / main
+  <require os> linux
+  <require tools> cargo just sccache
+  just check workspace
+# linux-check / nightly
+  <require os> linux
+  <require tools> cargo just sccache
+  just check workspace
+# linux-check / weekly
+  <require os> linux
+  <require tools> cargo just sccache
+  just check workspace
+# linux-check / release
+  <require os> linux
+  <require tools> cargo just sccache
+  just check workspace
+# linux-wasm / branch
+  <require os> linux
+  <require tools> cargo just sccache
+  just platform wasm
+# linux-wasm / platforms
+  <require os> linux
+  <require tools> cargo just sccache
+  just platform wasm
+# linux-wasm / merge-request
+  <require os> linux
+  <require tools> cargo just sccache
+  just platform wasm
+# linux-wasm / quarantine
+  <require os> linux
+  <require tools> cargo just sccache
+  just platform wasm
+# linux-wasm / main
+  <require os> linux
+  <require tools> cargo just sccache
+  just platform wasm
+# linux-wasm / nightly
+  <require os> linux
+  <require tools> cargo just sccache
+  just platform wasm
+# linux-wasm / weekly
+  <require os> linux
+  <require tools> cargo just sccache
+  just platform wasm
+# linux-wasm / release
+  <require os> linux
+  <require tools> cargo just sccache
+  just platform wasm
+# linux-test / branch
+  <require os> linux
+  <require tools> cargo just sccache
+  just test run --profile ci
+    CARGO_BUILD_JOBS=2
+# linux-test / platforms
+  <require os> linux
+  <require tools> cargo just sccache
+  just test run --profile ci
+    CARGO_BUILD_JOBS=2
+# linux-test / merge-request
+  <require os> linux
+  <require tools> cargo just sccache
+  just test run --profile ci
+    CARGO_BUILD_JOBS=2
+# linux-test / quarantine
+  <require os> linux
+  <require tools> cargo just sccache
+  just test run --profile ci
+    CARGO_BUILD_JOBS=2
+# linux-test / main
+  <require os> linux
+  <require tools> cargo just sccache
+  just test run --profile ci
+    CARGO_BUILD_JOBS=2
+# linux-test / nightly
+  <require os> linux
+  <require tools> cargo just sccache
+  just test run --profile ci
+    CARGO_BUILD_JOBS=2
+# linux-test / weekly
+  <require os> linux
+  <require tools> cargo just sccache
+  just test run --profile ci
+    CARGO_BUILD_JOBS=2
+# linux-test / release
+  <require os> linux
+  <require tools> cargo just sccache
+  just test run --profile ci
+    CARGO_BUILD_JOBS=2
+# linux-doc / branch
+  <require os> linux
+  <require tools> cargo just sccache
+  just test run --lane=doc
+    CARGO_BUILD_JOBS=2
+# linux-doc / platforms
+  <require os> linux
+  <require tools> cargo just sccache
+  just test run --lane=doc
+    CARGO_BUILD_JOBS=2
+# linux-doc / merge-request
+  <require os> linux
+  <require tools> cargo just sccache
+  just test run --lane=doc
+    CARGO_BUILD_JOBS=2
+# linux-doc / quarantine
+  <require os> linux
+  <require tools> cargo just sccache
+  just test run --lane=doc
+    CARGO_BUILD_JOBS=2
+# linux-doc / main
+  <require os> linux
+  <require tools> cargo just sccache
+  just test run --lane=doc
+    CARGO_BUILD_JOBS=2
+# linux-doc / nightly
+  <require os> linux
+  <require tools> cargo just sccache
+  just test run --lane=doc
+    CARGO_BUILD_JOBS=2
+# linux-doc / weekly
+  <require os> linux
+  <require tools> cargo just sccache
+  just test run --lane=doc
+    CARGO_BUILD_JOBS=2
+# linux-doc / release
+  <require os> linux
+  <require tools> cargo just sccache
+  just test run --lane=doc
+    CARGO_BUILD_JOBS=2
+# linux-loom / branch
+  <require os> linux
+  <require tools> cargo just sccache
+  just test run --lane=loom
+    CARGO_BUILD_JOBS=2
+# linux-loom / platforms
+  <require os> linux
+  <require tools> cargo just sccache
+  just test run --lane=loom
+    CARGO_BUILD_JOBS=2
+# linux-loom / merge-request
+  <require os> linux
+  <require tools> cargo just sccache
+  just test run --lane=loom
+    CARGO_BUILD_JOBS=2
+# linux-loom / quarantine
+  <require os> linux
+  <require tools> cargo just sccache
+  just test run --lane=loom
+    CARGO_BUILD_JOBS=2
+# linux-loom / main
+  <require os> linux
+  <require tools> cargo just sccache
+  just test run --lane=loom
+    CARGO_BUILD_JOBS=2
+# linux-loom / nightly
+  <require os> linux
+  <require tools> cargo just sccache
+  just test run --lane=loom
+    CARGO_BUILD_JOBS=2
+# linux-loom / weekly
+  <require os> linux
+  <require tools> cargo just sccache
+  just test run --lane=loom
+    CARGO_BUILD_JOBS=2
+# linux-loom / release
+  <require os> linux
+  <require tools> cargo just sccache
+  just test run --lane=loom
+    CARGO_BUILD_JOBS=2
+# linux-broadcast / branch
+  <require os> linux
+  <require tools> cargo just sccache
+  just test run --lane=broadcast
+    CARGO_BUILD_JOBS=2
+# linux-broadcast / platforms
+  <require os> linux
+  <require tools> cargo just sccache
+  just test run --lane=broadcast
+    CARGO_BUILD_JOBS=2
+# linux-broadcast / merge-request
+  <require os> linux
+  <require tools> cargo just sccache
+  just test run --lane=broadcast
+    CARGO_BUILD_JOBS=2
+# linux-broadcast / quarantine
+  <require os> linux
+  <require tools> cargo just sccache
+  just test run --lane=broadcast
+    CARGO_BUILD_JOBS=2
+# linux-broadcast / main
+  <require os> linux
+  <require tools> cargo just sccache
+  just test run --lane=broadcast
+    CARGO_BUILD_JOBS=2
+# linux-broadcast / nightly
+  <require os> linux
+  <require tools> cargo just sccache
+  just test run --lane=broadcast
+    CARGO_BUILD_JOBS=2
+# linux-broadcast / weekly
+  <require os> linux
+  <require tools> cargo just sccache
+  just test run --lane=broadcast
+    CARGO_BUILD_JOBS=2
+# linux-broadcast / release
+  <require os> linux
+  <require tools> cargo just sccache
+  just test run --lane=broadcast
+    CARGO_BUILD_JOBS=2
+# linux-integration-regressions / branch
+  <require os> linux
+  <require tools> cargo just sccache
+  just test run --lane=integration-regressions
+    CARGO_BUILD_JOBS=2
+# linux-integration-regressions / platforms
+  <require os> linux
+  <require tools> cargo just sccache
+  just test run --lane=integration-regressions
+    CARGO_BUILD_JOBS=2
+# linux-integration-regressions / merge-request
+  <require os> linux
+  <require tools> cargo just sccache
+  just test run --lane=integration-regressions
+    CARGO_BUILD_JOBS=2
+# linux-integration-regressions / quarantine
+  <require os> linux
+  <require tools> cargo just sccache
+  just test run --lane=integration-regressions
+    CARGO_BUILD_JOBS=2
+# linux-integration-regressions / main
+  <require os> linux
+  <require tools> cargo just sccache
+  just test run --lane=integration-regressions
+    CARGO_BUILD_JOBS=2
+# linux-integration-regressions / nightly
+  <require os> linux
+  <require tools> cargo just sccache
+  just test run --lane=integration-regressions
+    CARGO_BUILD_JOBS=2
+# linux-integration-regressions / weekly
+  <require os> linux
+  <require tools> cargo just sccache
+  just test run --lane=integration-regressions
+    CARGO_BUILD_JOBS=2
+# linux-integration-regressions / release
+  <require os> linux
+  <require tools> cargo just sccache
+  just test run --lane=integration-regressions
+    CARGO_BUILD_JOBS=2
+# linux-selenium-firefox / branch
+  <require os> linux
+  <require tools> cargo just sccache
+  just test run --lane=selenium-firefox
+    CARGO_BUILD_JOBS=2
+# linux-selenium-firefox / platforms
+  <require os> linux
+  <require tools> cargo just sccache
+  just test run --lane=selenium-firefox
+    CARGO_BUILD_JOBS=2
+# linux-selenium-firefox / merge-request
+  <require os> linux
+  <require tools> cargo just sccache
+  just test run --lane=selenium-firefox
+    CARGO_BUILD_JOBS=2
+# linux-selenium-firefox / quarantine
+  <require os> linux
+  <require tools> cargo just sccache
+  just test run --lane=selenium-firefox
+    CARGO_BUILD_JOBS=2
+# linux-selenium-firefox / main
+  <require os> linux
+  <require tools> cargo just sccache
+  just test run --lane=selenium-firefox
+    CARGO_BUILD_JOBS=2
+# linux-selenium-firefox / nightly
+  <require os> linux
+  <require tools> cargo just sccache
+  just test run --lane=selenium-firefox
+    CARGO_BUILD_JOBS=2
+# linux-selenium-firefox / weekly
+  <require os> linux
+  <require tools> cargo just sccache
+  just test run --lane=selenium-firefox
+    CARGO_BUILD_JOBS=2
+# linux-selenium-firefox / release
+  <require os> linux
+  <require tools> cargo just sccache
+  just test run --lane=selenium-firefox
+    CARGO_BUILD_JOBS=2
+# linux-coverage / branch
+  <require os> linux
+  <require tools> cargo just sccache
+  just test coverage
+    CARGO_BUILD_JOBS=2
+    COVERAGE_MIN=80
+    COVERAGE_OUTPUT_DIR=coverage
+# linux-coverage / platforms
+  <require os> linux
+  <require tools> cargo just sccache
+  just test coverage
+    CARGO_BUILD_JOBS=2
+    COVERAGE_MIN=80
+    COVERAGE_OUTPUT_DIR=coverage
+# linux-coverage / merge-request
+  <require os> linux
+  <require tools> cargo just sccache
+  just test coverage
+    CARGO_BUILD_JOBS=2
+    COVERAGE_MIN=80
+    COVERAGE_OUTPUT_DIR=coverage
+# linux-coverage / quarantine
+  <require os> linux
+  <require tools> cargo just sccache
+  just test coverage
+    CARGO_BUILD_JOBS=2
+    COVERAGE_MIN=80
+    COVERAGE_OUTPUT_DIR=coverage
+# linux-coverage / main
+  <require os> linux
+  <require tools> cargo just sccache
+  just test coverage
+    CARGO_BUILD_JOBS=2
+    COVERAGE_MIN=80
+    COVERAGE_OUTPUT_DIR=coverage
+# linux-coverage / nightly
+  <require os> linux
+  <require tools> cargo just sccache
+  just test coverage
+    CARGO_BUILD_JOBS=2
+    COVERAGE_MIN=80
+    COVERAGE_OUTPUT_DIR=coverage
+# linux-coverage / weekly
+  <require os> linux
+  <require tools> cargo just sccache
+  just test coverage
+    CARGO_BUILD_JOBS=2
+    COVERAGE_MIN=80
+    COVERAGE_OUTPUT_DIR=coverage
+# linux-coverage / release
+  <require os> linux
+  <require tools> cargo just sccache
+  just test coverage
+    CARGO_BUILD_JOBS=2
+    COVERAGE_MIN=80
+    COVERAGE_OUTPUT_DIR=coverage
+# android-build / branch
+  <require os> macos
+  <require tools> cargo java just sccache
+  just platform android build
+# android-build / platforms
+  <require os> macos
+  <require tools> cargo java just sccache
+  just platform android build
+# android-build / merge-request
+  <require os> macos
+  <require tools> cargo java just sccache
+  just platform android build
+# android-build / quarantine
+  <require os> macos
+  <require tools> cargo java just sccache
+  just platform android build
+# android-build / main
+  <require os> macos
+  <require tools> cargo java just sccache
+  just platform android build
+# android-build / nightly
+  <require os> macos
+  <require tools> cargo java just sccache
+  just platform android build
+# android-build / weekly
+  <require os> macos
+  <require tools> cargo java just sccache
+  just platform android build
+# android-build / release
+  <require os> macos
+  <require tools> cargo java just sccache
+  just platform android build
+# android-test / branch
+  refused: the Android build job did not leave <root>/android/lib/build/generated/jniLibs/arm64-v8a/libkithara_ffi.so
+  <require tools> adb cargo emulator java just sccache
+# android-test / platforms
+  refused: the Android build job did not leave <root>/android/lib/build/generated/jniLibs/arm64-v8a/libkithara_ffi.so
+  <require tools> adb cargo emulator java just sccache
+# android-test / merge-request
+  refused: the Android build job did not leave <root>/android/lib/build/generated/jniLibs/arm64-v8a/libkithara_ffi.so
+  <require tools> adb cargo emulator java just sccache
+# android-test / quarantine
+  refused: the Android build job did not leave <root>/android/lib/build/generated/jniLibs/arm64-v8a/libkithara_ffi.so
+  <require tools> adb cargo emulator java just sccache
+# android-test / main
+  refused: the Android build job did not leave <root>/android/lib/build/generated/jniLibs/arm64-v8a/libkithara_ffi.so
+  <require tools> adb cargo emulator java just sccache
+# android-test / nightly
+  refused: the Android build job did not leave <root>/android/lib/build/generated/jniLibs/arm64-v8a/libkithara_ffi.so
+  <require tools> adb cargo emulator java just sccache
+# android-test / weekly
+  refused: the Android build job did not leave <root>/android/lib/build/generated/jniLibs/arm64-v8a/libkithara_ffi.so
+  <require tools> adb cargo emulator java just sccache
+# android-test / release
+  refused: the Android build job did not leave <root>/android/lib/build/generated/jniLibs/arm64-v8a/libkithara_ffi.so
+  <require tools> adb cargo emulator java just sccache
+# web-chromium / branch
+  <require os> linux
+  <require tools> chromium chromedriver just
+  chromium --version
+  chromedriver --version
+  just test wasm chrome webcodecs
+# web-chromium / platforms
+  <require os> linux
+  <require tools> chromium chromedriver just
+  chromium --version
+  chromedriver --version
+  just test wasm chrome webcodecs
+# web-chromium / merge-request
+  <require os> linux
+  <require tools> chromium chromedriver just
+  chromium --version
+  chromedriver --version
+  just test wasm chrome webcodecs
+# web-chromium / quarantine
+  <require os> linux
+  <require tools> chromium chromedriver just
+  chromium --version
+  chromedriver --version
+  just test wasm chrome webcodecs
+# web-chromium / main
+  <require os> linux
+  <require tools> chromium chromedriver just
+  chromium --version
+  chromedriver --version
+  just test wasm chrome webcodecs
+# web-chromium / nightly
+  <require os> linux
+  <require tools> chromium chromedriver just
+  chromium --version
+  chromedriver --version
+  just test wasm chrome webcodecs
+# web-chromium / weekly
+  <require os> linux
+  <require tools> chromium chromedriver just
+  chromium --version
+  chromedriver --version
+  just test wasm chrome webcodecs
+# web-chromium / release
+  <require os> linux
+  <require tools> chromium chromedriver just
+  chromium --version
+  chromedriver --version
+  just test wasm chrome webcodecs
+# web-firefox / branch
+  <require os> linux
+  <require tools> firefox geckodriver just
+  just test wasm firefox
+# web-firefox / platforms
+  <require os> linux
+  <require tools> firefox geckodriver just
+  just test wasm firefox
+# web-firefox / merge-request
+  <require os> linux
+  <require tools> firefox geckodriver just
+  just test wasm firefox
+# web-firefox / quarantine
+  <require os> linux
+  <require tools> firefox geckodriver just
+  just test wasm firefox
+# web-firefox / main
+  <require os> linux
+  <require tools> firefox geckodriver just
+  just test wasm firefox
+# web-firefox / nightly
+  <require os> linux
+  <require tools> firefox geckodriver just
+  just test wasm firefox
+# web-firefox / weekly
+  <require os> linux
+  <require tools> firefox geckodriver just
+  just test wasm firefox
+# web-firefox / release
+  <require os> linux
+  <require tools> firefox geckodriver just
+  just test wasm firefox
+# web-size / branch
+  <require os> linux
+  <require tools> cargo just
+  just platform wasm size-check
+# web-size / platforms
+  <require os> linux
+  <require tools> cargo just
+  just platform wasm size-check
+# web-size / merge-request
+  <require os> linux
+  <require tools> cargo just
+  just platform wasm size-check
+# web-size / quarantine
+  <require os> linux
+  <require tools> cargo just
+  just platform wasm size-check
+# web-size / main
+  <require os> linux
+  <require tools> cargo just
+  just platform wasm size-check
+# web-size / nightly
+  <require os> linux
+  <require tools> cargo just
+  just platform wasm size-check
+# web-size / weekly
+  <require os> linux
+  <require tools> cargo just
+  just platform wasm size-check
+# web-size / release
+  <require os> linux
+  <require tools> cargo just
+  just platform wasm size-check
+# windows-arm64 / branch
+  <require os> windows
+  <require tools> cargo rustup sccache cmake ninja
+  rustup target add aarch64-pc-windows-msvc
+  <xtask> test --profile ci --target aarch64-pc-windows-msvc
+    CFLAGS_aarch64_pc_windows_msvc=-FI<root>/.config/windows/fdk-msvc-shim.h
+    CMAKE_GENERATOR=Ninja
+    CXXFLAGS_aarch64_pc_windows_msvc=-FI<root>/.config/windows/fdk-msvc-shim.h
+    RUSTFLAGS=-C target-feature=+crt-static
+# windows-arm64 / platforms
+  <require os> windows
+  <require tools> cargo rustup sccache cmake ninja
+  rustup target add aarch64-pc-windows-msvc
+  <xtask> test --profile ci --target aarch64-pc-windows-msvc
+    CFLAGS_aarch64_pc_windows_msvc=-FI<root>/.config/windows/fdk-msvc-shim.h
+    CMAKE_GENERATOR=Ninja
+    CXXFLAGS_aarch64_pc_windows_msvc=-FI<root>/.config/windows/fdk-msvc-shim.h
+    RUSTFLAGS=-C target-feature=+crt-static
+# windows-arm64 / merge-request
+  <require os> windows
+  <require tools> cargo rustup sccache cmake ninja
+  rustup target add aarch64-pc-windows-msvc
+  <xtask> test --profile ci --target aarch64-pc-windows-msvc
+    CFLAGS_aarch64_pc_windows_msvc=-FI<root>/.config/windows/fdk-msvc-shim.h
+    CMAKE_GENERATOR=Ninja
+    CXXFLAGS_aarch64_pc_windows_msvc=-FI<root>/.config/windows/fdk-msvc-shim.h
+    RUSTFLAGS=-C target-feature=+crt-static
+# windows-arm64 / quarantine
+  <require os> windows
+  <require tools> cargo rustup sccache cmake ninja
+  rustup target add aarch64-pc-windows-msvc
+  <xtask> test --profile ci --target aarch64-pc-windows-msvc
+    CFLAGS_aarch64_pc_windows_msvc=-FI<root>/.config/windows/fdk-msvc-shim.h
+    CMAKE_GENERATOR=Ninja
+    CXXFLAGS_aarch64_pc_windows_msvc=-FI<root>/.config/windows/fdk-msvc-shim.h
+    RUSTFLAGS=-C target-feature=+crt-static
+# windows-arm64 / main
+  <require os> windows
+  <require tools> cargo rustup sccache cmake ninja
+  rustup target add aarch64-pc-windows-msvc
+  <xtask> test --profile ci --target aarch64-pc-windows-msvc
+    CFLAGS_aarch64_pc_windows_msvc=-FI<root>/.config/windows/fdk-msvc-shim.h
+    CMAKE_GENERATOR=Ninja
+    CXXFLAGS_aarch64_pc_windows_msvc=-FI<root>/.config/windows/fdk-msvc-shim.h
+    RUSTFLAGS=-C target-feature=+crt-static
+# windows-arm64 / nightly
+  <require os> windows
+  <require tools> cargo rustup sccache cmake ninja
+  rustup target add aarch64-pc-windows-msvc
+  <xtask> test --profile ci --target aarch64-pc-windows-msvc
+    CFLAGS_aarch64_pc_windows_msvc=-FI<root>/.config/windows/fdk-msvc-shim.h
+    CMAKE_GENERATOR=Ninja
+    CXXFLAGS_aarch64_pc_windows_msvc=-FI<root>/.config/windows/fdk-msvc-shim.h
+    RUSTFLAGS=-C target-feature=+crt-static
+# windows-arm64 / weekly
+  <require os> windows
+  <require tools> cargo rustup sccache cmake ninja
+  rustup target add aarch64-pc-windows-msvc
+  <xtask> test --profile ci --target aarch64-pc-windows-msvc
+    CFLAGS_aarch64_pc_windows_msvc=-FI<root>/.config/windows/fdk-msvc-shim.h
+    CMAKE_GENERATOR=Ninja
+    CXXFLAGS_aarch64_pc_windows_msvc=-FI<root>/.config/windows/fdk-msvc-shim.h
+    RUSTFLAGS=-C target-feature=+crt-static
+# windows-arm64 / release
+  <require os> windows
+  <require tools> cargo rustup sccache cmake ninja
+  rustup target add aarch64-pc-windows-msvc
+  <xtask> test --profile ci --target aarch64-pc-windows-msvc
+    CFLAGS_aarch64_pc_windows_msvc=-FI<root>/.config/windows/fdk-msvc-shim.h
+    CMAKE_GENERATOR=Ninja
+    CXXFLAGS_aarch64_pc_windows_msvc=-FI<root>/.config/windows/fdk-msvc-shim.h
+    RUSTFLAGS=-C target-feature=+crt-static
+# windows-x64 / branch
+  <require os> windows
+  <require tools> cargo rustup sccache cmake ninja
+  rustup target add x86_64-pc-windows-msvc
+  <xtask> test --profile ci --target x86_64-pc-windows-msvc
+    CMAKE_GENERATOR=Ninja
+    RUSTFLAGS=-C target-feature=+crt-static
+# windows-x64 / platforms
+  <require os> windows
+  <require tools> cargo rustup sccache cmake ninja
+  rustup target add x86_64-pc-windows-msvc
+  <xtask> test --profile ci --target x86_64-pc-windows-msvc
+    CMAKE_GENERATOR=Ninja
+    RUSTFLAGS=-C target-feature=+crt-static
+# windows-x64 / merge-request
+  <require os> windows
+  <require tools> cargo rustup sccache cmake ninja
+  rustup target add x86_64-pc-windows-msvc
+  <xtask> test --profile ci --target x86_64-pc-windows-msvc
+    CMAKE_GENERATOR=Ninja
+    RUSTFLAGS=-C target-feature=+crt-static
+# windows-x64 / quarantine
+  <require os> windows
+  <require tools> cargo rustup sccache cmake ninja
+  rustup target add x86_64-pc-windows-msvc
+  <xtask> test --profile ci --target x86_64-pc-windows-msvc
+    CMAKE_GENERATOR=Ninja
+    RUSTFLAGS=-C target-feature=+crt-static
+# windows-x64 / main
+  <require os> windows
+  <require tools> cargo rustup sccache cmake ninja
+  rustup target add x86_64-pc-windows-msvc
+  <xtask> test --profile ci --target x86_64-pc-windows-msvc
+    CMAKE_GENERATOR=Ninja
+    RUSTFLAGS=-C target-feature=+crt-static
+# windows-x64 / nightly
+  <require os> windows
+  <require tools> cargo rustup sccache cmake ninja
+  rustup target add x86_64-pc-windows-msvc
+  <xtask> test --profile ci --target x86_64-pc-windows-msvc
+    CMAKE_GENERATOR=Ninja
+    RUSTFLAGS=-C target-feature=+crt-static
+# windows-x64 / weekly
+  <require os> windows
+  <require tools> cargo rustup sccache cmake ninja
+  rustup target add x86_64-pc-windows-msvc
+  <xtask> test --profile ci --target x86_64-pc-windows-msvc
+    CMAKE_GENERATOR=Ninja
+    RUSTFLAGS=-C target-feature=+crt-static
+# windows-x64 / release
+  <require os> windows
+  <require tools> cargo rustup sccache cmake ninja
+  rustup target add x86_64-pc-windows-msvc
+  <xtask> test --profile ci --target x86_64-pc-windows-msvc
+    CMAKE_GENERATOR=Ninja
+    RUSTFLAGS=-C target-feature=+crt-static
+# windows-x64-build / branch
+  <require os> windows
+  <require tools> cargo rustup sccache cmake ninja
+  rustup target add x86_64-pc-windows-msvc
+  cargo check --locked --workspace --exclude xtask --all-targets --target x86_64-pc-windows-msvc
+    CMAKE_GENERATOR=Ninja
+    RUSTFLAGS=-C target-feature=+crt-static
+# windows-x64-build / platforms
+  <require os> windows
+  <require tools> cargo rustup sccache cmake ninja
+  rustup target add x86_64-pc-windows-msvc
+  cargo check --locked --workspace --exclude xtask --all-targets --target x86_64-pc-windows-msvc
+    CMAKE_GENERATOR=Ninja
+    RUSTFLAGS=-C target-feature=+crt-static
+# windows-x64-build / merge-request
+  <require os> windows
+  <require tools> cargo rustup sccache cmake ninja
+  rustup target add x86_64-pc-windows-msvc
+  cargo check --locked --workspace --exclude xtask --all-targets --target x86_64-pc-windows-msvc
+    CMAKE_GENERATOR=Ninja
+    RUSTFLAGS=-C target-feature=+crt-static
+# windows-x64-build / quarantine
+  <require os> windows
+  <require tools> cargo rustup sccache cmake ninja
+  rustup target add x86_64-pc-windows-msvc
+  cargo check --locked --workspace --exclude xtask --all-targets --target x86_64-pc-windows-msvc
+    CMAKE_GENERATOR=Ninja
+    RUSTFLAGS=-C target-feature=+crt-static
+# windows-x64-build / main
+  <require os> windows
+  <require tools> cargo rustup sccache cmake ninja
+  rustup target add x86_64-pc-windows-msvc
+  cargo check --locked --workspace --exclude xtask --all-targets --target x86_64-pc-windows-msvc
+    CMAKE_GENERATOR=Ninja
+    RUSTFLAGS=-C target-feature=+crt-static
+# windows-x64-build / nightly
+  <require os> windows
+  <require tools> cargo rustup sccache cmake ninja
+  rustup target add x86_64-pc-windows-msvc
+  cargo check --locked --workspace --exclude xtask --all-targets --target x86_64-pc-windows-msvc
+    CMAKE_GENERATOR=Ninja
+    RUSTFLAGS=-C target-feature=+crt-static
+# windows-x64-build / weekly
+  <require os> windows
+  <require tools> cargo rustup sccache cmake ninja
+  rustup target add x86_64-pc-windows-msvc
+  cargo check --locked --workspace --exclude xtask --all-targets --target x86_64-pc-windows-msvc
+    CMAKE_GENERATOR=Ninja
+    RUSTFLAGS=-C target-feature=+crt-static
+# windows-x64-build / release
+  <require os> windows
+  <require tools> cargo rustup sccache cmake ninja
+  rustup target add x86_64-pc-windows-msvc
+  cargo check --locked --workspace --exclude xtask --all-targets --target x86_64-pc-windows-msvc
+    CMAKE_GENERATOR=Ninja
+    RUSTFLAGS=-C target-feature=+crt-static
+# deep-rtsan / branch
+  <require os> macos
+  <require tools> cargo just
+  just test rtsan
+  just test rtsan-async
+  just test rtsan-file
+  just test rtsan-hls
+# deep-rtsan / platforms
+  <require os> macos
+  <require tools> cargo just
+  just test rtsan
+  just test rtsan-async
+  just test rtsan-file
+  just test rtsan-hls
+# deep-rtsan / merge-request
+  <require os> macos
+  <require tools> cargo just
+  just test rtsan
+  just test rtsan-async
+  just test rtsan-file
+  just test rtsan-hls
+# deep-rtsan / quarantine
+  <require os> macos
+  <require tools> cargo just
+  just test rtsan
+  just test rtsan-async
+  just test rtsan-file
+  just test rtsan-hls
+# deep-rtsan / main
+  <require os> macos
+  <require tools> cargo just
+  just test rtsan
+  just test rtsan-async
+  just test rtsan-file
+  just test rtsan-hls
+# deep-rtsan / nightly
+  <require os> macos
+  <require tools> cargo just
+  just test rtsan
+  just test rtsan-async
+  just test rtsan-file
+  just test rtsan-hls
+# deep-rtsan / weekly
+  <require os> macos
+  <require tools> cargo just
+  just test rtsan
+  just test rtsan-async
+  just test rtsan-file
+  just test rtsan-hls
+# deep-rtsan / release
+  <require os> macos
+  <require tools> cargo just
+  just test rtsan
+  just test rtsan-async
+  just test rtsan-file
+  just test rtsan-hls
+# deep-perf / branch
+  <require os> macos
+  <require tools> cargo just
+  just perf memory
+  just perf
+# deep-perf / platforms
+  <require os> macos
+  <require tools> cargo just
+  just perf memory
+  just perf
+# deep-perf / merge-request
+  <require os> macos
+  <require tools> cargo just
+  just perf memory
+  just perf
+# deep-perf / quarantine
+  <require os> macos
+  <require tools> cargo just
+  just perf memory
+  just perf
+# deep-perf / main
+  <require os> macos
+  <require tools> cargo just
+  just perf memory
+  just perf
+# deep-perf / nightly
+  <require os> macos
+  <require tools> cargo just
+  just perf memory
+  just perf
+# deep-perf / weekly
+  <require os> macos
+  <require tools> cargo just
+  just perf memory
+  just perf
+# deep-perf / release
+  <require os> macos
+  <require tools> cargo just
+  just perf memory
+  just perf
+# deep-bench / branch
+  <require os> macos
+  <require tools> cargo just
+  just perf bench ci
+# deep-bench / platforms
+  <require os> macos
+  <require tools> cargo just
+  just perf bench ci
+# deep-bench / merge-request
+  <require os> macos
+  <require tools> cargo just
+  just perf bench ci
+# deep-bench / quarantine
+  <require os> macos
+  <require tools> cargo just
+  just perf bench ci
+# deep-bench / main
+  <require os> macos
+  <require tools> cargo just
+  just perf bench ci
+# deep-bench / nightly
+  <require os> macos
+  <require tools> cargo just
+  just perf bench ci
+# deep-bench / weekly
+  <require os> macos
+  <require tools> cargo just
+  just perf bench ci
+# deep-bench / release
+  <require os> macos
+  <require tools> cargo just
+  just perf bench ci
+# deps-deny / branch
+  <require os> linux
+  <require tools> cargo just
+  just deps deny
+# deps-deny / platforms
+  <require os> linux
+  <require tools> cargo just
+  just deps deny
+# deps-deny / merge-request
+  <require os> linux
+  <require tools> cargo just
+  just deps deny
+# deps-deny / quarantine
+  <require os> linux
+  <require tools> cargo just
+  just deps deny
+# deps-deny / main
+  <require os> linux
+  <require tools> cargo just
+  just deps deny
+# deps-deny / nightly
+  <require os> linux
+  <require tools> cargo just
+  just deps deny
+# deps-deny / weekly
+  <require os> linux
+  <require tools> cargo just
+  just deps deny
+# deps-deny / release
+  <require os> linux
+  <require tools> cargo just
+  just deps deny
+# deps-unused / branch
+  <require os> linux
+  <require tools> cargo just
+  just deps machete
+  just deps shear
+# deps-unused / platforms
+  <require os> linux
+  <require tools> cargo just
+  just deps machete
+  just deps shear
+# deps-unused / merge-request
+  <require os> linux
+  <require tools> cargo just
+  just deps machete
+  just deps shear
+# deps-unused / quarantine
+  <require os> linux
+  <require tools> cargo just
+  just deps machete
+  just deps shear
+# deps-unused / main
+  <require os> linux
+  <require tools> cargo just
+  just deps machete
+  just deps shear
+# deps-unused / nightly
+  <require os> linux
+  <require tools> cargo just
+  just deps machete
+  just deps shear
+# deps-unused / weekly
+  <require os> linux
+  <require tools> cargo just
+  just deps machete
+  just deps shear
+# deps-unused / release
+  <require os> linux
+  <require tools> cargo just
+  just deps machete
+  just deps shear
+# deps-features / branch
+  <require os> linux
+  <require tools> cargo just
+  just deps hack
+# deps-features / platforms
+  <require os> linux
+  <require tools> cargo just
+  just deps hack
+# deps-features / merge-request
+  <require os> linux
+  <require tools> cargo just
+  just deps hack
+# deps-features / quarantine
+  <require os> linux
+  <require tools> cargo just
+  just deps hack
+# deps-features / main
+  <require os> linux
+  <require tools> cargo just
+  just deps hack
+# deps-features / nightly
+  <require os> linux
+  <require tools> cargo just
+  just deps hack
+# deps-features / weekly
+  <require os> linux
+  <require tools> cargo just
+  just deps hack
+# deps-features / release
+  <require os> linux
+  <require tools> cargo just
+  just deps hack
+# deps-semver / branch
+  <require os> linux
+  <require tools> cargo just
+  just deps semver
+# deps-semver / platforms
+  <require os> linux
+  <require tools> cargo just
+  just deps semver
+# deps-semver / merge-request
+  <require os> linux
+  <require tools> cargo just
+  just deps semver
+# deps-semver / quarantine
+  <require os> linux
+  <require tools> cargo just
+  just deps semver
+# deps-semver / main
+  <require os> linux
+  <require tools> cargo just
+  just deps semver
+# deps-semver / nightly
+  <require os> linux
+  <require tools> cargo just
+  just deps semver
+# deps-semver / weekly
+  <require os> linux
+  <require tools> cargo just
+  just deps semver
+# deps-semver / release
+  <require os> linux
+  <require tools> cargo just
+  just deps semver
+# release-xcframework / branch
+  refused: ReleaseXcframework produces artifacts and is not a command lane
+# release-xcframework / platforms
+  refused: ReleaseXcframework produces artifacts and is not a command lane
+# release-xcframework / merge-request
+  refused: ReleaseXcframework produces artifacts and is not a command lane
+# release-xcframework / quarantine
+  refused: ReleaseXcframework produces artifacts and is not a command lane
+# release-xcframework / main
+  refused: ReleaseXcframework produces artifacts and is not a command lane
+# release-xcframework / nightly
+  refused: ReleaseXcframework produces artifacts and is not a command lane
+# release-xcframework / weekly
+  refused: ReleaseXcframework produces artifacts and is not a command lane
+# release-xcframework / release
+  refused: ReleaseXcframework produces artifacts and is not a command lane
+# release-docs / branch
+  refused: ReleaseDocs produces artifacts and is not a command lane
+# release-docs / platforms
+  refused: ReleaseDocs produces artifacts and is not a command lane
+# release-docs / merge-request
+  refused: ReleaseDocs produces artifacts and is not a command lane
+# release-docs / quarantine
+  refused: ReleaseDocs produces artifacts and is not a command lane
+# release-docs / main
+  refused: ReleaseDocs produces artifacts and is not a command lane
+# release-docs / nightly
+  refused: ReleaseDocs produces artifacts and is not a command lane
+# release-docs / weekly
+  refused: ReleaseDocs produces artifacts and is not a command lane
+# release-docs / release
+  refused: ReleaseDocs produces artifacts and is not a command lane
+# release-wasm / branch
+  refused: ReleaseWasm produces artifacts and is not a command lane
+# release-wasm / platforms
+  refused: ReleaseWasm produces artifacts and is not a command lane
+# release-wasm / merge-request
+  refused: ReleaseWasm produces artifacts and is not a command lane
+# release-wasm / quarantine
+  refused: ReleaseWasm produces artifacts and is not a command lane
+# release-wasm / main
+  refused: ReleaseWasm produces artifacts and is not a command lane
+# release-wasm / nightly
+  refused: ReleaseWasm produces artifacts and is not a command lane
+# release-wasm / weekly
+  refused: ReleaseWasm produces artifacts and is not a command lane
+# release-wasm / release
+  refused: ReleaseWasm produces artifacts and is not a command lane
+# release-android / branch
+  refused: ReleaseAndroid produces artifacts and is not a command lane
+# release-android / platforms
+  refused: ReleaseAndroid produces artifacts and is not a command lane
+# release-android / merge-request
+  refused: ReleaseAndroid produces artifacts and is not a command lane
+# release-android / quarantine
+  refused: ReleaseAndroid produces artifacts and is not a command lane
+# release-android / main
+  refused: ReleaseAndroid produces artifacts and is not a command lane
+# release-android / nightly
+  refused: ReleaseAndroid produces artifacts and is not a command lane
+# release-android / weekly
+  refused: ReleaseAndroid produces artifacts and is not a command lane
+# release-android / release
+  refused: ReleaseAndroid produces artifacts and is not a command lane
+# release-publish / branch
+  refused: ReleasePublish produces artifacts and is not a command lane
+# release-publish / platforms
+  refused: ReleasePublish produces artifacts and is not a command lane
+# release-publish / merge-request
+  refused: ReleasePublish produces artifacts and is not a command lane
+# release-publish / quarantine
+  refused: ReleasePublish produces artifacts and is not a command lane
+# release-publish / main
+  refused: ReleasePublish produces artifacts and is not a command lane
+# release-publish / nightly
+  refused: ReleasePublish produces artifacts and is not a command lane
+# release-publish / weekly
+  refused: ReleasePublish produces artifacts and is not a command lane
+# release-publish / release
+  refused: ReleasePublish produces artifacts and is not a command lane
+# verdict / branch
+  refused: Verdict produces artifacts and is not a command lane
+# verdict / platforms
+  refused: Verdict produces artifacts and is not a command lane
+# verdict / merge-request
+  refused: Verdict produces artifacts and is not a command lane
+# verdict / quarantine
+  refused: Verdict produces artifacts and is not a command lane
+# verdict / main
+  refused: Verdict produces artifacts and is not a command lane
+# verdict / nightly
+  refused: Verdict produces artifacts and is not a command lane
+# verdict / weekly
+  refused: Verdict produces artifacts and is not a command lane
+# verdict / release
+  refused: Verdict produces artifacts and is not a command lane
