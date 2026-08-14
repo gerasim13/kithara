@@ -421,8 +421,8 @@ gitlab_package = "kithara"
 # Rolling build channel: the nightly pipeline replaces this tag, its release,
 # and its package files on every run, so a consumer pins the tag once.
 nightly_tag = "nightly"
-asset = "KitharaFFIInternal.xcframework.zip"
-single_asset = "Kithara.xcframework.zip"
+core_asset = "KitharaFFIInternal.xcframework.zip"
+merged_asset = "Kithara.xcframework.zip"
 platform_assets = ["kithara.aar", "rust-tls.aar"]
 http_timeout_secs = 60
 upload_timeout_secs = 600

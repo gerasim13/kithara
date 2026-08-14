@@ -53,7 +53,7 @@ pub(crate) fn xcframework(
         &["platform", "apple", "release"],
         "Apple release artifacts",
     )?;
-    for name in [&ext.release.asset, &ext.release.single_asset] {
+    for name in [&ext.release.core_asset, &ext.release.merged_asset] {
         if name.is_empty() {
             continue;
         }
@@ -62,7 +62,7 @@ pub(crate) fn xcframework(
     }
 
     if let Some(manifest_checksum) = expected {
-        let primary = ctx.root.join(&ext.release.asset);
+        let primary = ctx.root.join(&ext.release.core_asset);
         let actual_checksum = swift_checksum(process, &primary)?;
         if actual_checksum != manifest_checksum {
             bail!(
@@ -73,7 +73,7 @@ pub(crate) fn xcframework(
         }
     }
 
-    for name in [&ext.release.asset, &ext.release.single_asset] {
+    for name in [&ext.release.core_asset, &ext.release.merged_asset] {
         if !name.is_empty() {
             write_checksum(&ctx.root.join(name))?;
         }
@@ -189,8 +189,8 @@ fn publish_nightly(ctx: &Ctx, ext: &KitharaExt) -> Result<()> {
 
 fn retained_assets(config: &ReleaseConfig) -> impl Iterator<Item = &str> {
     [
-        config.asset.as_str(),
-        config.single_asset.as_str(),
+        config.core_asset.as_str(),
+        config.merged_asset.as_str(),
         config.docs_asset.as_str(),
         config.wasm_asset.as_str(),
     ]

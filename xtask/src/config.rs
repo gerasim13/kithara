@@ -260,11 +260,12 @@ pub(crate) struct ReleaseConfig {
     /// Tag the rolling build channel replaces on every nightly run. Empty
     /// disables that channel.
     pub(crate) nightly_tag: String,
-    /// Primary release asset: the SPM Rust `XCFramework` zip.
-    pub(crate) asset: String,
-    /// Optional single self-contained framework zip for manual drag-in. Empty
-    /// disables that channel.
-    pub(crate) single_asset: String,
+    /// Rust core plus its `UniFFI` binding, consumed as the Swift package's
+    /// binary target.
+    pub(crate) core_asset: String,
+    /// Swift layer merged into the framework for manual drag-in consumers.
+    /// Empty disables that channel.
+    pub(crate) merged_asset: String,
     /// Additional required CI-built artifacts published with the Apple
     /// frameworks, such as Android AARs.
     pub(crate) platform_assets: Vec<String>,
@@ -375,6 +376,22 @@ mod tests {
     }
 
     #[test]
+    fn release_assets_are_named_by_layer() {
+        let ctx = ctx_from_config(
+            r#"
+[ext.release]
+core_asset = "KitharaFFIInternal.xcframework.zip"
+merged_asset = "Kithara.xcframework.zip"
+"#,
+        );
+
+        let ext = KitharaExt::from_ctx(&ctx).expect("parse kithara extension");
+
+        assert_eq!(ext.release.core_asset, "KitharaFFIInternal.xcframework.zip");
+        assert_eq!(ext.release.merged_asset, "Kithara.xcframework.zip");
+    }
+
+    #[test]
     fn unknown_ext_sibling_sections_are_passthrough() {
         let ctx = ctx_from_config(
             r#"
@@ -427,7 +444,7 @@ github_repo = "zvuk/kithara"
 gitlab_host = "gitlab.zvq.me"
 gitlab_project = "disrupt/kithara"
 gitlab_package = "kithara"
-asset = "KitharaFFIInternal.xcframework.zip"
+core_asset = "KitharaFFIInternal.xcframework.zip"
 http_timeout_secs = 60
 upload_timeout_secs = 600
 
