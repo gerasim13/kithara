@@ -1,8 +1,6 @@
-#[rustfmt::skip]
-use firewheel::nodes::volume_pan::VolumePanNode;
 use firewheel::{
-    FirewheelConfig, FirewheelCtx, Volume, backend::AudioBackend, channel_config::ChannelCount,
-    diff::Memo, node::NodeID,
+    FirewheelConfig, FirewheelCtx, backend::AudioBackend, channel_config::ChannelCount, diff::Memo,
+    node::NodeID, nodes::volume::VolumeNode,
 };
 use kithara_audio::EqBandConfig;
 use kithara_bufpool::PcmPool;
@@ -23,9 +21,9 @@ use crate::{
 
 #[derive(Debug)]
 pub(super) struct SlotNodes {
-    pub(super) vol_pan_memo: Memo<VolumePanNode>,
+    pub(super) volume_memo: Memo<VolumeNode>,
     pub(super) player_node_id: NodeID,
-    pub(super) vol_pan_node_id: NodeID,
+    pub(super) volume_node_id: NodeID,
     pub(super) slot_id: SlotId,
 }
 
@@ -33,8 +31,8 @@ pub(super) struct PlayerState {
     pub(super) bus: EventBus,
     pub(super) master_eq_memo: Option<Memo<MasterEqNode>>,
     pub(super) master_eq_node_id: Option<NodeID>,
-    pub(super) master_vol_pan_memo: Option<Memo<VolumePanNode>>,
-    pub(super) master_vol_pan_node_id: Option<NodeID>,
+    pub(super) master_volume_memo: Option<Memo<VolumeNode>>,
+    pub(super) master_volume_node_id: Option<NodeID>,
     pub(super) pcm_pool: PcmPool,
     pub(super) player_id: PlayerId,
     pub(super) shared_eq: SharedEq,
@@ -64,8 +62,8 @@ impl PlayerState {
             master_eq_memo: None,
             master_eq_node_id: None,
             master_volume: 1.0,
-            master_vol_pan_memo: None,
-            master_vol_pan_node_id: None,
+            master_volume_memo: None,
+            master_volume_node_id: None,
             next_slot_id: 1,
             shared_eq,
             slots: Vec::new(),
@@ -92,7 +90,7 @@ pub struct SessionState<B: AudioBackend> {
     pub(super) transport_control: Option<TransportControl>,
     pub(super) mix_tap: Option<MixTap>,
     pub(super) session_limiter_node_id: Option<NodeID>,
-    pub(super) session_output_memo: Option<Memo<VolumePanNode>>,
+    pub(super) session_output_memo: Option<Memo<VolumeNode>>,
     pub(super) session_output_node_id: Option<NodeID>,
     pub(super) next_player_id: PlayerId,
     pub(super) session_ducking: SessionDuckingMode,
@@ -213,8 +211,7 @@ fn create_session_output<B: AudioBackend>(state: &mut SessionState<B>) -> Result
     let Some(ref mut fw_ctx) = state.ctx else {
         return Err(SessionError::NoContext);
     };
-    let session_node =
-        VolumePanNode::from_volume(Volume::Linear(ducking_gain(state.session_ducking)));
+    let session_node = VolumeNode::from_linear(ducking_gain(state.session_ducking));
     let session_memo = Memo::new(session_node);
     let session_id = fw_ctx.add_node(session_node, None);
     let limiter_id = fw_ctx.add_node(LimiterNode, None);
