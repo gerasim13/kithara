@@ -36,7 +36,10 @@ pub use exports::*;
 pub use kithara_resampler::{
     NoResamplerBackend, ResamplerBackend, ResamplerOptions, ResamplerQuality,
 };
-pub use musical::{BeatMapError, CoordinateError, SourceFrame, TrackBeat, TrackBeatMap};
+pub use musical::{
+    BeatMapError, CoordinateError, SessionAnchor, SessionBeat, SessionFrame, SourceFrame,
+    TrackBeat, TrackBeatMap,
+};
 pub use pipeline::{
     config::{AudioConfig, AudioDecoderConfig, ConsumerWakeMode, DecoderResamplerSettings},
     fetch::{EpochValidator, Fetch},

@@ -1,5 +1,7 @@
 use std::num::NonZeroU64;
 
+use kithara_audio::{SessionAnchor, SessionBeat};
+
 const SECONDS_PER_MINUTE: f64 = 60.0;
 
 /// A musical tempo in beats per minute, inside the range the session clock can
@@ -56,37 +58,6 @@ pub struct TempoError {
     beats_per_minute: f64,
 }
 
-/// A continuous beat coordinate on the session transport.
-#[derive(Clone, Copy, Debug, Default, PartialEq, PartialOrd, derive_more::Into)]
-pub struct SessionBeat(f64);
-
-impl SessionBeat {
-    /// Creates a finite session-beat coordinate. Negative beats are valid.
-    pub const fn new(value: f64) -> Result<Self, SessionBeatError> {
-        if value.is_finite() {
-            Ok(Self(value))
-        } else {
-            Err(SessionBeatError { value })
-        }
-    }
-}
-
-impl TryFrom<f64> for SessionBeat {
-    type Error = SessionBeatError;
-
-    fn try_from(value: f64) -> Result<Self, Self::Error> {
-        Self::new(value)
-    }
-}
-
-/// The value supplied for a session-beat coordinate was invalid.
-#[derive(Clone, Copy, Debug, PartialEq, thiserror::Error)]
-#[error("session beat must be finite, got {value}")]
-#[non_exhaustive]
-pub struct SessionBeatError {
-    value: f64,
-}
-
 /// Monotonic generation of a committed session transport configuration.
 #[derive(
     Clone,
@@ -122,6 +93,9 @@ impl TransportRevision {
 #[fieldwork(get)]
 #[non_exhaustive]
 pub struct SessionTransportSnapshot {
+    /// Returns the session-clock relation used by this observation.
+    #[field(get, copy)]
+    anchor: SessionAnchor,
     /// Returns the processed position on the session beat grid.
     #[field(get, copy)]
     position: SessionBeat,
@@ -142,8 +116,10 @@ impl SessionTransportSnapshot {
         playing: bool,
         tempo: Tempo,
         revision: TransportRevision,
+        anchor: SessionAnchor,
     ) -> Self {
         Self {
+            anchor,
             position,
             tempo,
             revision,
@@ -154,9 +130,39 @@ impl SessionTransportSnapshot {
 
 #[cfg(test)]
 mod tests {
+    use std::num::NonZeroU32;
+
+    use kithara_audio::{SessionAnchor, SessionBeat, SessionFrame};
     use kithara_test_utils::kithara;
 
-    use super::SessionBeat;
+    use super::{SessionTransportSnapshot, Tempo, TransportRevision};
+
+    #[kithara::test]
+    fn snapshot_carries_the_anchor_that_places_a_target_on_the_session_clock() {
+        let anchor = SessionAnchor::new(
+            SessionFrame::new(192_000),
+            SessionBeat::new(8.0).expect("invariant: fixture beat is finite"),
+            2.0,
+            NonZeroU32::new(48_000).expect("invariant: fixture rate is non-zero"),
+        )
+        .expect("invariant: fixture anchor is valid");
+        let snapshot = SessionTransportSnapshot::new(
+            SessionBeat::new(8.0).expect("invariant: fixture position is finite"),
+            true,
+            Tempo::new(120.0).expect("invariant: fixture tempo is in range"),
+            TransportRevision::FIRST,
+            anchor,
+        );
+        let target = SessionBeat::new(11.0).expect("invariant: fixture target is finite");
+
+        assert_eq!(
+            snapshot
+                .anchor()
+                .frame_at(target)
+                .expect("invariant: fixture target is representable"),
+            SessionFrame::new(264_000)
+        );
+    }
 
     #[kithara::test]
     fn accepts_negative_and_zero_coordinates() {

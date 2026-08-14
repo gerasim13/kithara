@@ -1,11 +1,12 @@
 use std::num::NonZeroU32;
 
 use firewheel::{FirewheelCtx, backend::AudioBackend, error::UpdateError};
+use kithara_audio::SessionFrame;
 use kithara_events::TransportEvent;
 
 use super::commit::{
-    RenderFrame, SessionTransportCommit, TransportBoundary, TransportCommitResult,
-    TransportCommitStamp, TransportObservation,
+    SessionTransportCommit, TransportBoundary, TransportCommitResult, TransportCommitStamp,
+    TransportObservation,
 };
 use crate::{
     api::{SessionBeat, SessionTransportSnapshot, Tempo, TransportRevision},
@@ -200,7 +201,7 @@ fn schedule_commit<B: AudioBackend>(
 
 fn commit_boundary<B: AudioBackend>(
     state: &SessionState<B>,
-) -> Result<(RenderFrame, NonZeroU32), SessionError> {
+) -> Result<(SessionFrame, NonZeroU32), SessionError> {
     let ctx = state.ctx.as_ref().ok_or(SessionError::NoContext)?;
     let stream_info = ctx.stream_info().ok_or(SessionError::NoContext)?;
     let lead_frames = state
@@ -213,7 +214,7 @@ fn commit_boundary<B: AudioBackend>(
         .0
         .checked_add(lead_frames)
         .ok_or(SessionError::TransportFrameExhausted)?;
-    Ok((RenderFrame::new(target_frame), stream_info.sample_rate))
+    Ok((SessionFrame::new(target_frame), stream_info.sample_rate))
 }
 
 fn queue_stamp<B: AudioBackend>(

@@ -4,13 +4,16 @@ use num_traits::cast::ToPrimitive;
 
 use crate::{analysis::TrackAnalysis, waveform::BeatGrid};
 
-/// An invalid musical or source-frame coordinate.
+/// An invalid musical coordinate, source-frame coordinate, or coordinate rate.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
 #[non_exhaustive]
 pub enum CoordinateError {
     /// The supplied coordinate is `NaN` or infinite.
     #[error("coordinate must be finite")]
     NonFinite,
+    /// A coordinate rate cannot define an invertible frame relation.
+    #[error("coordinate rate must advance by a finite, positive amount per frame")]
+    NonInvertibleRate,
     /// A source-frame coordinate was below the start of the source.
     #[error("source-frame coordinate must not be negative")]
     NegativeSourceFrame,
