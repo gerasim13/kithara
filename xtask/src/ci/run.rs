@@ -37,6 +37,7 @@ pub(crate) enum Lane {
     LinuxTest,
     LinuxDoc,
     LinuxLoom,
+    LinuxBroadcast,
     LinuxIntegrationRegressions,
     LinuxSeleniumFirefox,
     LinuxCoverage,
@@ -100,6 +101,7 @@ impl Lane {
             | Self::LinuxTest
             | Self::LinuxDoc
             | Self::LinuxLoom
+            | Self::LinuxBroadcast
             | Self::LinuxIntegrationRegressions
             | Self::LinuxSeleniumFirefox
             | Self::LinuxCoverage
@@ -356,6 +358,7 @@ fn execute(args: &RunArgs, ctx: &Ctx) -> Result<()> {
         Lane::LinuxTest => lane::linux::test(&process),
         Lane::LinuxDoc => lane::linux::configured(&process, "doc"),
         Lane::LinuxLoom => lane::linux::configured(&process, "loom"),
+        Lane::LinuxBroadcast => lane::linux::configured(&process, "broadcast"),
         Lane::LinuxIntegrationRegressions => {
             lane::linux::configured(&process, "integration-regressions")
         }
