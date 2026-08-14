@@ -12,8 +12,7 @@ use kithara_devtools::Ctx;
 
 use super::{
     HOST_JOB_CONCURRENCY, SCCACHE_SLOT_CACHE_NAMESPACE, SCCACHE_SLOT_CONTROL_NAMESPACE,
-    config::CiConfig,
-    run::{CacheGroup, Lane},
+    config::CiConfig, run::CacheGroup,
 };
 
 pub(crate) const PROVISIONED_LINUX_IMAGE_ENV: &str = "KITHARA_CI_PROVISIONED_LINUX_IMAGE";
@@ -179,9 +178,9 @@ impl PreparedSccache {
         shared_root: &Path,
         cache_root: &Path,
         config: &CiConfig,
-        lane: Lane,
+        cache_group: CacheGroup,
     ) -> Result<Option<Self>> {
-        Self::for_target(cfg!(windows), shared_root, cache_root, config, lane)
+        Self::for_target(cfg!(windows), shared_root, cache_root, config, cache_group)
     }
 
     fn for_target(
@@ -189,12 +188,12 @@ impl PreparedSccache {
         shared_root: &Path,
         cache_root: &Path,
         config: &CiConfig,
-        lane: Lane,
+        cache_group: CacheGroup,
     ) -> Result<Option<Self>> {
         if target_is_windows {
             return Ok(None);
         }
-        if !lane.uses_sccache() {
+        if !cache_group.uses_sccache() {
             return Ok(None);
         }
         if !is_gitlab() {
@@ -204,7 +203,7 @@ impl PreparedSccache {
             }));
         }
         let cache_size = config.host.sccache_slot_size()?;
-        match lane.cache_group() {
+        match cache_group {
             CacheGroup::Linux => {
                 let concurrent_id = env::var("CI_CONCURRENT_ID")
                     .context("CI_CONCURRENT_ID must identify the disposable runner slot")?;
@@ -238,14 +237,14 @@ pub(crate) struct CiEnvironment {
 }
 
 impl CiEnvironment {
-    pub(crate) fn prepare(ctx: &Ctx, config: &CiConfig, lane: Lane) -> Result<Self> {
+    pub(crate) fn prepare(ctx: &Ctx, config: &CiConfig, cache_group: CacheGroup) -> Result<Self> {
         config.validate()?;
         raise_open_file_limit()?;
         let home = env::var_os("HOME")
             .or_else(|| env::var_os("USERPROFILE"))
             .map(PathBuf::from)
             .context("HOME or USERPROFILE must be set")?;
-        let shared_root = shared_root(config, lane);
+        let shared_root = shared_root(config, cache_group);
         let shared_root = if shared_root.is_dir() {
             shared_root
         } else if is_ci() {
@@ -268,7 +267,8 @@ impl CiEnvironment {
         let trust = CacheTrust::from_environment()?;
         let platform = format!("{}-{}", env::consts::OS, env::consts::ARCH);
         let cache_root = shared_root.join(trust.as_str()).join(platform);
-        let sccache = PreparedSccache::for_environment(&shared_root, &cache_root, config, lane)?;
+        let sccache =
+            PreparedSccache::for_environment(&shared_root, &cache_root, config, cache_group)?;
         let lease = cache_lease(&cache_root)?;
         let cargo_home = cache_root.join("cargo");
         let gradle_home = cache_root.join("gradle");
@@ -456,11 +456,11 @@ fn raise_open_file_limit() -> Result<()> {
     Ok(())
 }
 
-fn shared_root(config: &CiConfig, lane: Lane) -> PathBuf {
+fn shared_root(config: &CiConfig, cache_group: CacheGroup) -> PathBuf {
     if let Some(root) = env::var_os("KITHARA_CI_CACHE_ROOT") {
         return PathBuf::from(root);
     }
-    match lane.cache_group() {
+    match cache_group {
         CacheGroup::Macos => config.host.cache_root_macos.clone(),
         CacheGroup::Linux => config.host.cache_root_linux.clone(),
         CacheGroup::Windows => config.host.cache_root_windows.clone(),
@@ -598,7 +598,7 @@ mod tests {
         let root = Path::new("/cache");
 
         let prepared =
-            PreparedSccache::for_environment(root, root, &config, Lane::WindowsX64).unwrap();
+            PreparedSccache::for_environment(root, root, &config, CacheGroup::Windows).unwrap();
 
         assert!(prepared.is_none());
     }
@@ -609,7 +609,7 @@ mod tests {
         let root = Path::new("/cache");
 
         let prepared =
-            PreparedSccache::for_target(true, root, root, &config, Lane::AppleTest).unwrap();
+            PreparedSccache::for_target(true, root, root, &config, CacheGroup::Macos).unwrap();
 
         assert!(prepared.is_none());
     }
@@ -665,7 +665,7 @@ mod tests {
             let ctx = Ctx::new(project, ProjectConfig::default());
             let config = super::super::config::fixture();
 
-            let environment = CiEnvironment::prepare(&ctx, &config, Lane::AppleTest).unwrap();
+            let environment = CiEnvironment::prepare(&ctx, &config, CacheGroup::Macos).unwrap();
             let vars = environment.vars();
             let cache_root =
                 root.join("review")
@@ -738,7 +738,7 @@ mod tests {
             let ctx = Ctx::new(project, ProjectConfig::default());
             let config = super::super::config::fixture();
 
-            let Err(error) = CiEnvironment::prepare(&ctx, &config, Lane::AppleTest) else {
+            let Err(error) = CiEnvironment::prepare(&ctx, &config, CacheGroup::Macos) else {
                 panic!("prepare unexpectedly succeeded");
             };
             assert!(error.to_string().contains("joining CI PATH"));
