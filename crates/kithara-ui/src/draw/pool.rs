@@ -171,6 +171,38 @@ mod tests {
     }
 
     #[kithara::test]
+    fn retained_snapshots_do_not_sequester_reusable_buffers() {
+        let pools = DrawPools::new(
+            DrawPoolLimits::builder()
+                .max_buffers(4)
+                .command_capacity(8)
+                .path_capacity(8)
+                .text_capacity(16)
+                .build(),
+        );
+        let text = pools.text("cached");
+        let mut list = pools.list();
+        list.fill_path(
+            pools.path(FillRule::NonZero, [Verb::Close]),
+            Rgba {
+                a: 1.0,
+                b: 1.0,
+                g: 1.0,
+                r: 1.0,
+            },
+        );
+        let list = list.finish();
+        let before = pools.stats().alloc_misses;
+
+        let snapshot = list.clone();
+        let text_snapshot = text.clone();
+
+        assert_eq!(pools.stats().alloc_misses, before);
+        assert_eq!(snapshot, list);
+        assert_eq!(text_snapshot, text);
+    }
+
+    #[kithara::test]
     fn oversized_buffers_are_dropped_without_truncating_live_values() {
         let pools = DrawPools::new(
             DrawPoolLimits::builder()

@@ -28,7 +28,7 @@ pub struct PoolText {
 
 enum TextStorage {
     Owned(String),
-    Pooled { guard: TextGuard, pool: TextPool },
+    Pooled(TextGuard),
 }
 
 impl PoolText {
@@ -36,10 +36,7 @@ impl PoolText {
         let mut guard = pool.get();
         guard.0.push_str(content);
         Self {
-            storage: TextStorage::Pooled {
-                guard,
-                pool: pool.clone(),
-            },
+            storage: TextStorage::Pooled(guard),
         }
     }
 
@@ -48,7 +45,7 @@ impl PoolText {
     pub fn as_str(&self) -> &str {
         match &self.storage {
             TextStorage::Owned(content) => content,
-            TextStorage::Pooled { guard, .. } => &guard.0,
+            TextStorage::Pooled(guard) => &guard.0,
         }
     }
 }
@@ -69,10 +66,7 @@ impl From<&str> for PoolText {
 
 impl Clone for PoolText {
     fn clone(&self) -> Self {
-        match &self.storage {
-            TextStorage::Owned(content) => content.clone().into(),
-            TextStorage::Pooled { pool, .. } => Self::pooled(self.as_str(), pool),
-        }
+        self.as_str().to_owned().into()
     }
 }
 

@@ -29,10 +29,7 @@ type VecGuard<T> = PooledOwned<SHARDS, DrawBuffer<T>>;
 
 pub(super) enum Buffer<T> {
     Owned(Vec<T>),
-    Pooled {
-        guard: VecGuard<T>,
-        pool: VecPool<T>,
-    },
+    Pooled(VecGuard<T>),
 }
 
 impl<T> Buffer<T> {
@@ -41,32 +38,29 @@ impl<T> Buffer<T> {
     }
 
     pub(super) fn pooled(pool: &VecPool<T>) -> Self {
-        Self::Pooled {
-            guard: pool.get(),
-            pool: pool.clone(),
-        }
+        Self::Pooled(pool.get())
     }
 
     pub(super) fn push(&mut self, value: T) {
         match self {
             Self::Owned(values) => values.push(value),
-            Self::Pooled { guard, .. } => guard.0.push(value),
+            Self::Pooled(guard) => guard.0.push(value),
         }
     }
 
     pub(super) fn as_slice(&self) -> &[T] {
         match self {
             Self::Owned(values) => values,
-            Self::Pooled { guard, .. } => &guard.0,
+            Self::Pooled(guard) => &guard.0,
         }
     }
 
     pub(super) fn into_pooled(self, pool: &VecPool<T>) -> Self {
         match self {
-            pooled @ Self::Pooled { .. } => pooled,
+            pooled @ Self::Pooled(_) => pooled,
             Self::Owned(mut values) => {
                 let mut pooled = Self::pooled(pool);
-                if let Self::Pooled { guard, .. } = &mut pooled {
+                if let Self::Pooled(guard) = &mut pooled {
                     guard.0.append(&mut values);
                 }
                 pooled
@@ -83,16 +77,7 @@ impl<T> Default for Buffer<T> {
 
 impl<T: Clone> Clone for Buffer<T> {
     fn clone(&self) -> Self {
-        match self {
-            Self::Owned(values) => Self::Owned(values.clone()),
-            Self::Pooled { pool, .. } => {
-                let mut clone = Self::pooled(pool);
-                if let Self::Pooled { guard, .. } = &mut clone {
-                    guard.0.extend_from_slice(self.as_slice());
-                }
-                clone
-            }
-        }
+        Self::Owned(self.as_slice().to_vec())
     }
 }
 

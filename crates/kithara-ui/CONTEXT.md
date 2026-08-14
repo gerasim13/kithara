@@ -105,6 +105,9 @@ is the standing measure of reuse. The Studio parity capture draws the shipped si
 documents twice, rejects a second-frame miss or rejected return, and writes each host's counters
 beside its screenshots as `draw-pools.txt`; those observed pages, rather than `Limits::max_nodes`,
 size the defaults.
+An iced geometry cache keeps an owned snapshot of its last list for equality instead of cloning
+the pool guards. The transient list therefore returns its buffers after the frame, while the
+snapshot remains a plain immutable value and cannot consume the next frame's reusable storage.
 
 A viewport is retained as `DrawCmd::Clip { region, list }`: the region and the nested `DrawList`
 travel as one scoped command. The nesting is required by iced, not a convenience chosen by the
