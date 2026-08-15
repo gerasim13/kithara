@@ -1787,8 +1787,10 @@ enum Paints {
     /// There is no picture to draw. A window-drag region is a place the hand
     /// grabs the window by, and the immediate host draws nothing for it either,
     /// so an empty scene here is the control working rather than a gap. That
-    /// claim is checked by `a_window_drag_region_has_no_picture_on_either_host`
-    /// rather than taken on trust.
+    /// claim is checked on both hosts rather than taken on trust, by
+    /// `the_retained_window_drag_region_carries_the_drag_and_draws_nothing` here
+    /// and `a_drag_surface_carries_the_window_and_draws_nothing` in
+    /// `render::window::surface`.
     Nothing,
 }
 
