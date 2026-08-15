@@ -10,7 +10,7 @@ use tracing::{info, warn};
 use super::{
     api::{Github, Gitlab},
     command::BridgeConfig,
-    git::GitRepo,
+    git::{GitRepo, Judged},
     ledger::{Ledger, LedgerEntry},
     model::{
         Direction, PipelineObservation, PullRequest, VerificationState, direction_for, validate_sha,
@@ -182,22 +182,6 @@ impl Bridge {
             self.repo
                 .weakening_control_paths(base_sha, &pull.head_sha)?
         };
-        // Trust decides whether a pull request may change the CI configuration.
-        // It does not decide which configuration the run uses: the host is one
-        // machine on one version, and a branch that predates it carries an
-        // `xtask` that cannot parse the host profile and a pipeline that still
-        // names jobs the default branch dropped. Both fail before reaching a
-        // single test. So the base's control paths are restored for every pull
-        // request that does not touch them itself — trusted or not — and only a
-        // pull request that changes them is judged with its own, because there
-        // is no other way to test that change.
-        let owns_controls = judged_with_own_controls(
-            trusted,
-            !self
-                .repo
-                .changed_control_paths(base_sha, &pull.head_sha)?
-                .is_empty(),
-        );
         let entry = ledger.reserve(&pull.head_sha, base_sha)?;
         if reject_control_changes(
             pull.number,
@@ -215,10 +199,23 @@ impl Bridge {
 
         let Some(pipeline_id) = entry.pipeline_id else {
             let reference = quarantine_ref(&pull.head_sha, base_sha, entry.attempt);
-            let judged = if owns_controls {
-                pull.head_sha.clone()
-            } else {
-                self.repo.judged_commit(base_sha, &pull.head_sha)?
+            // The base is merged in either way; trust decides only whether the
+            // pull request keeps its own CI configuration on top of it.
+            let judged = match self
+                .repo
+                .judged_commit(base_sha, &pull.head_sha, !trusted)?
+            {
+                Judged::Commit(judged) => judged,
+                Judged::Conflict => {
+                    return reject_unmergeable(
+                        pull.number,
+                        &pull.head_sha,
+                        base_sha,
+                        &entry,
+                        |sha, state, detail| self.github.report_status(sha, state, detail),
+                        |attempt, detail| ledger.reject(&pull.head_sha, base_sha, attempt, detail),
+                    );
+                }
             };
             self.repo.push_gitlab(&self.gitlab, &judged, &reference)?;
             let discovered =
@@ -326,15 +323,24 @@ fn start_verification(
     announce(attempt, pipeline_id)
 }
 
-/// Whether the verification runs the pull request's own control paths instead
-/// of the base branch's.
-///
-/// Only when the author may change them *and* actually did. Trust alone is not
-/// enough: restoring the base's control paths is also what keeps a branch that
-/// predates the host runnable, and a trusted author's stale branch needs that
-/// as much as anyone's.
-const fn judged_with_own_controls(trusted: bool, changes_controls: bool) -> bool {
-    trusted && changes_controls
+/// A branch that will not merge into the base cannot be verified against it,
+/// and guessing at the conflict is not the bridge's to do. The author gets a
+/// verdict they can act on instead of a run of whatever their branch was built
+/// against months ago.
+fn reject_unmergeable(
+    pull_number: u64,
+    head_sha: &str,
+    base_sha: &str,
+    entry: &LedgerEntry,
+    report: impl FnOnce(&str, &str, &str) -> Result<()>,
+    reject: impl FnOnce(u64, String) -> Result<()>,
+) -> Result<()> {
+    let detail = format!(
+        "GitHub PR #{pull_number} does not merge into the verified base {base_sha}. Merge the \
+         default branch into it and push; the verification runs the merge, not the head alone"
+    );
+    report(head_sha, "failure", &detail)?;
+    reject(entry.attempt, detail)
 }
 
 fn reject_control_changes(

@@ -18,6 +18,18 @@ pub(super) struct GitRepo {
     config: BridgeConfig,
 }
 
+/// What came of preparing a verification commit.
+///
+/// A branch that will not merge cannot be verified, and the bridge has no
+/// standing to guess what the author meant by a conflict. It says so and stops
+/// there, which is a verdict the author can act on — unlike a green run of a
+/// pipeline the default branch stopped using.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) enum Judged {
+    Commit(String),
+    Conflict,
+}
+
 impl GitRepo {
     pub(super) fn new(state_dir: &Path, config: &BridgeConfig) -> Result<Self> {
         let root = state_dir.join("repository.git");
@@ -179,7 +191,26 @@ impl GitRepo {
         Ok(String::from_utf8(bytes).ok())
     }
 
-    pub(super) fn judged_commit(&self, base: &str, head: &str) -> Result<String> {
+    /// The commit a verification runs: the pull request with the synchronized
+    /// base merged into it.
+    ///
+    /// Judging the head alone holds only while the branch keeps up with the
+    /// host. The host tracks the default branch, so a head that predates it
+    /// arrives with an `xtask` that cannot parse the current host profile and a
+    /// pipeline still naming jobs the default branch has dropped. Both die
+    /// before a single test, and neither failure says anything about the pull
+    /// request. Merging answers it: what the branch changed survives, what it
+    /// never touched comes from the base.
+    ///
+    /// `restore_controls` then takes the CI configuration back from the base,
+    /// for authors who may not change what judges them. A trusted author keeps
+    /// their own — a change to the judge has nowhere else to be tested.
+    pub(super) fn judged_commit(
+        &self,
+        base: &str,
+        head: &str,
+        restore_controls: bool,
+    ) -> Result<Judged> {
         let tree = self.root.join("quarantine-worktree");
         self.discard_worktree(&tree)?;
         self.run(
@@ -193,10 +224,25 @@ impl GitRepo {
             ],
             None,
         )?;
-        let outcome = self.restore_control_paths(&tree, base);
-        let commit = outcome.and_then(|()| Self::commit_worktree(&tree, head));
+        let judged = self.judge_in(&tree, base, head, restore_controls);
         self.discard_worktree(&tree)?;
-        commit
+        judged
+    }
+
+    fn judge_in(
+        &self,
+        tree: &Path,
+        base: &str,
+        head: &str,
+        restore_controls: bool,
+    ) -> Result<Judged> {
+        if !merge_base_into(tree, base)? {
+            return Ok(Judged::Conflict);
+        }
+        if restore_controls {
+            self.restore_control_paths(tree, base)?;
+        }
+        Self::commit_worktree(tree, head).map(Judged::Commit)
     }
 
     fn restore_control_paths(&self, tree: &Path, base: &str) -> Result<()> {
@@ -217,7 +263,10 @@ impl GitRepo {
     fn commit_worktree(tree: &Path, head: &str) -> Result<String> {
         git_in(tree, &["add", "--all"])?;
         if git_in(tree, &["diff", "--cached", "--quiet"]).is_ok() {
-            return Ok(head.to_owned());
+            // Nothing was restored, but a merge may still have moved the tree,
+            // so the answer is where the worktree stands — not the head it
+            // started from.
+            return head_of(tree);
         }
         let message = format!("quarantine: {head} judged with trusted CI");
         git_in_with_date(
@@ -233,11 +282,7 @@ impl GitRepo {
                 &message,
             ],
         )?;
-        let sha = git_in(tree, &["rev-parse", "HEAD"])?;
-        Ok(String::from_utf8(sha)
-            .context("git rev-parse returned invalid UTF-8")?
-            .trim()
-            .to_owned())
+        head_of(tree)
     }
 
     fn discard_worktree(&self, tree: &Path) -> Result<()> {
@@ -341,8 +386,65 @@ fn git_in(tree: &Path, args: &[&str]) -> Result<Vec<u8>> {
     )
 }
 
+fn head_of(tree: &Path) -> Result<String> {
+    let sha = git_in(tree, &["rev-parse", "HEAD"])?;
+    Ok(String::from_utf8(sha)
+        .context("git rev-parse returned invalid UTF-8")?
+        .trim()
+        .to_owned())
+}
+
+/// Merge `base` into the checked-out head. `false` means the two conflict.
+///
+/// A branch that already contains the base is left exactly as it is: merging
+/// then would add an empty commit and change the verified sha for no reason,
+/// and the sha is the key the whole ledger is written against.
+///
+/// Only exit code 1 is a conflict. Anything else is git failing at its job, and
+/// reporting that to an author as "resolve your conflict" would send them
+/// looking for one that is not there.
+fn merge_base_into(tree: &Path, base: &str) -> Result<bool> {
+    if git_in(tree, &["merge-base", "--is-ancestor", base, "HEAD"]).is_ok() {
+        return Ok(true);
+    }
+    let message = format!("quarantine: merge {base} to verify against it");
+    let output = Command::new("git")
+        .current_dir(tree)
+        .env("GIT_AUTHOR_DATE", EPOCH)
+        .env("GIT_COMMITTER_DATE", EPOCH)
+        .args([
+            "-c",
+            "user.name=kithara-bridge",
+            "-c",
+            "user.email=kithara-bridge@localhost",
+            "merge",
+            "--quiet",
+            "--no-ff",
+            "--message",
+            &message,
+            base,
+        ])
+        .output()
+        .context("running git merge for the verification commit")?;
+    match output.status.code() {
+        Some(0) => Ok(true),
+        Some(1) => {
+            // The worktree is discarded either way; aborting keeps the failure
+            // from leaving index state behind if that ever stops being true.
+            let _ = git_in(tree, &["merge", "--abort"]);
+            Ok(false)
+        }
+        code => bail!(
+            "git merge failed with exit code {}: {}",
+            code.unwrap_or(-1),
+            String::from_utf8_lossy(&output.stderr).trim()
+        ),
+    }
+}
+
+const EPOCH: &str = "1970-01-01T00:00:00Z";
+
 fn git_in_with_date(tree: &Path, args: &[&str]) -> Result<Vec<u8>> {
-    const EPOCH: &str = "1970-01-01T00:00:00Z";
     let output = Command::new("git")
         .current_dir(tree)
         .env("GIT_AUTHOR_DATE", EPOCH)
@@ -470,22 +572,41 @@ mod tests {
         .unwrap()
     }
 
+    fn judged(repo: &GitRepo, base: &str, head: &str, restore_controls: bool) -> String {
+        match repo.judged_commit(base, head, restore_controls).unwrap() {
+            Judged::Commit(sha) => sha,
+            Judged::Conflict => panic!("these branches merge"),
+        }
+    }
+
     #[test]
     fn judged_commit_combines_product_head_with_trusted_base_controls() {
         let (_state, repo, base, _product, head, _additive) = repository();
-        let judged = repo.judged_commit(&base, &head).unwrap();
+        let judged = judged(&repo, &base, &head, true);
 
         assert_eq!(blob(&repo, &judged, "src.rs"), "product\n");
         assert_eq!(blob(&repo, &judged, ".gitlab-ci.yml"), "trusted\n");
         assert_eq!(blob(&repo, &judged, "xtask/src/main.rs"), "// trusted\n");
     }
 
+    /// A trusted author's change to the judge is what their run has to exercise,
+    /// so it survives — while everything they did not touch still comes from the
+    /// base.
+    #[test]
+    fn a_trusted_head_keeps_its_own_controls() {
+        let (_state, repo, base, _product, head, _additive) = repository();
+        let judged = judged(&repo, &base, &head, false);
+
+        assert_eq!(blob(&repo, &judged, ".gitlab-ci.yml"), "from patch\n");
+        assert_eq!(blob(&repo, &judged, "xtask/src/main.rs"), "// from patch\n");
+    }
+
     #[test]
     fn judged_commit_is_deterministic_for_the_exact_key() {
         let (_state, repo, base, _product, head, _additive) = repository();
         assert_eq!(
-            repo.judged_commit(&base, &head).unwrap(),
-            repo.judged_commit(&base, &head).unwrap()
+            judged(&repo, &base, &head, true),
+            judged(&repo, &base, &head, true)
         );
     }
 
@@ -498,7 +619,60 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
-        assert_eq!(repo.judged_commit(&base, &product).unwrap(), product);
+        assert_eq!(judged(&repo, &base, &product, true), product);
+    }
+
+    /// The failure this replaced: a branch cut before the host moved on. Judged
+    /// as it stands, it arrives with its own months-old CI and dies on the host
+    /// profile before a test runs. The base has to come to it.
+    #[test]
+    fn a_branch_behind_the_base_is_judged_with_the_base_merged_in() {
+        let (_state, repo, _base, _product, head, additive) = repository();
+        let judged = judged(&repo, &head, &additive, false);
+
+        assert_eq!(
+            blob(&repo, &judged, ".gitlab-ci.yml"),
+            "from patch\n",
+            "the base's CI configuration must reach a branch that predates it"
+        );
+        assert_eq!(
+            blob(&repo, &judged, "src.rs"),
+            "product\n",
+            "and so must everything else the base moved on to"
+        );
+        assert!(
+            blob(&repo, &judged, ".config/xtask.toml").contains("broadcast"),
+            "while what the branch itself changed survives the merge"
+        );
+    }
+
+    /// Nothing is guessed at. A branch the base will not merge into cannot be
+    /// verified against it, and saying so is a verdict its author can act on.
+    #[test]
+    fn a_branch_that_conflicts_with_the_base_is_reported_not_resolved() {
+        let (state, repo, base, _product, head, _additive) = repository();
+        let work = state.path().join("work");
+        git(&work, &["checkout", "--quiet", "-b", "conflicting", &base]);
+        fs::write(work.join("src.rs"), "conflicting\n").unwrap();
+        git(&work, &["add", "--all"]);
+        git(&work, &["commit", "--quiet", "-m", "conflicting product"]);
+        let conflicting = String::from_utf8(git_in(&work, &["rev-parse", "HEAD"]).unwrap())
+            .unwrap()
+            .trim()
+            .to_owned();
+        git(
+            &work,
+            &[
+                "push",
+                "--quiet",
+                repo.root.to_str().unwrap(),
+                "conflicting",
+            ],
+        );
+        assert_eq!(
+            repo.judged_commit(&head, &conflicting, false).unwrap(),
+            Judged::Conflict
+        );
     }
 
     #[test]
