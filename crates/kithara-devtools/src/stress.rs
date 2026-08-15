@@ -13,7 +13,7 @@ use clap::{Args, Subcommand};
 
 use crate::{
     Ctx,
-    common::project::{StressArtifactConfig, StressConfig, StressModeConfig},
+    common::project::{ProjectConfig, StressArtifactConfig, StressConfig, StressModeConfig},
     stress_report::{self, StressReportArgs},
     stress_run::{self, StressRunSpec},
     test::{ConfiguredLane, configured_lane},
@@ -136,6 +136,34 @@ struct ReportExpectation<'a> {
     runner: ConfiguredLane,
 }
 
+impl<'a> ReportExpectation<'a> {
+    /// Derives what the lane should have been from the same place the lane
+    /// itself did.
+    ///
+    /// The runner is not passed in. A lane records the runner `lane_runner`
+    /// gave it, so anything else the report expects is a second opinion about
+    /// the same question, and the two disagree exactly where the lanes differ
+    /// most — a command lane runs its own command and would read as evidence
+    /// of unknown origin against the test runner's identity.
+    fn new(
+        project: &ProjectConfig,
+        config: &'a StressConfig,
+        mode_name: &'a str,
+        mode: &'a StressModeConfig,
+        filter: &'a str,
+        count: usize,
+    ) -> Result<Self> {
+        Ok(Self {
+            config,
+            mode_name,
+            mode,
+            filter,
+            count,
+            runner: lane_runner(project, config, mode)?,
+        })
+    }
+}
+
 impl Paths {
     fn new(raw: PathBuf, artifacts: &StressArtifactConfig) -> Self {
         Self {
@@ -228,12 +256,12 @@ fn validate_lane_directory(lane: &str) -> Result<()> {
 /// test runner, so that its manifest names what really ran and the reporter
 /// can verify it the same way it verifies any other lane.
 fn lane_runner(
-    ctx: &Ctx,
+    project: &ProjectConfig,
     config: &StressConfig,
     mode: &StressModeConfig,
 ) -> Result<ConfiguredLane> {
     let Some((program, arguments)) = mode.command.split_first() else {
-        return configured_lane(&ctx.config, &config.lane, &config.backend, &mode.features);
+        return configured_lane(project, &config.lane, &config.backend, &mode.features);
     };
     Ok(ConfiguredLane {
         lane: config.lane.clone(),
@@ -309,7 +337,7 @@ fn run_lane(args: &RunArgs, ctx: &Ctx, mode_name: &str, raw: &Path) -> Result<()
         "subject",
     )?;
     let subject_junit = subject_root.join(&config.artifacts.subject_junit);
-    let runner = lane_runner(ctx, config, mode)?;
+    let runner = lane_runner(&ctx.config, config, mode)?;
     let commanded = !mode.command.is_empty();
     let spec = StressRunSpec {
         inventory: paths.inventory.clone(),
@@ -472,11 +500,11 @@ fn run_report(args: &ReportArgs, ctx: &Ctx) -> Result<()> {
 
     let mut sections = String::new();
     let mut measured = Vec::new();
+    let mut commanded = Vec::new();
     let mut exit_codes = Vec::new();
     let mut failure = None;
     for lane_name in &lanes {
         let mode = config.mode(lane_name)?;
-        let runner = configured_lane(&ctx.config, &config.lane, &config.backend, &mode.features)?;
         let paths = Paths::new(raw_root.join(lane_name), &config.artifacts);
         let report_args = StressReportArgs::new(
             paths.junit.clone(),
@@ -500,14 +528,8 @@ fn run_report(args: &ReportArgs, ctx: &Ctx) -> Result<()> {
         } else {
             command_lane_report(&paths.attempts, count)
         };
-        let expectation = ReportExpectation {
-            config,
-            mode_name: lane_name,
-            mode,
-            filter: &filter,
-            count,
-            runner,
-        };
+        let expectation =
+            ReportExpectation::new(&ctx.config, config, lane_name, mode, &filter, count)?;
         let checked = verify_manifest(args, &expectation, &paths.manifest);
         let trusted = checked.verdict.is_ok();
         exit_codes.push(checked.exit_code);
@@ -519,7 +541,10 @@ fn run_report(args: &ReportArgs, ctx: &Ctx) -> Result<()> {
         // and putting them beside trustworthy ones is how a campaign reports a
         // difference between lanes that is really a difference between runs.
         if trusted {
-            measured.push((lane_name.clone(), lane.rates));
+            match lane.attempts {
+                Some(rate) => commanded.push((lane_name.clone(), rate)),
+                None => measured.push((lane_name.clone(), lane.rates)),
+            }
         }
         let lane_failure = choose_failure(lane.verdict, checked.verdict, Ok(()), Ok(()));
         if let Some(error) = lane_failure
@@ -530,7 +555,7 @@ fn run_report(args: &ReportArgs, ctx: &Ctx) -> Result<()> {
     }
 
     let campaign = verify_campaign_result(args.execute_result, &exit_codes);
-    let mut document = stress_report::render_lane_comparison(&measured, lanes.len());
+    let mut document = stress_report::render_lane_comparison(&measured, &commanded, lanes.len());
     if let Err(error) = &campaign {
         let _ = writeln!(
             document,
@@ -566,6 +591,7 @@ fn command_lane_report(attempts: &Path, expected: usize) -> stress_report::LaneR
             return stress_report::LaneReport {
                 markdown,
                 rates: BTreeMap::new(),
+                attempts: None,
                 verdict: Err(NotClean::reported("stress evidence")),
             };
         }
@@ -610,6 +636,10 @@ fn command_lane_report(attempts: &Path, expected: usize) -> stress_report::LaneR
     stress_report::LaneReport {
         markdown,
         rates: BTreeMap::new(),
+        attempts: Some(stress_report::LaneRate {
+            failed,
+            attempts: observed,
+        }),
         verdict,
     }
 }
@@ -1003,6 +1033,42 @@ mod tests {
     use std::os::unix::fs::symlink;
 
     use super::*;
+
+    fn command_lane_config() -> (StressConfig, StressModeConfig) {
+        let config = StressConfig {
+            lane: "workspace".to_owned(),
+            backend: "wreq".to_owned(),
+            ..StressConfig::default()
+        };
+        let mode = StressModeConfig {
+            command: vec!["just".to_owned(), "test".to_owned(), "rtsan".to_owned()],
+            ..StressModeConfig::default()
+        };
+        (config, mode)
+    }
+
+    /// The report has to expect the command the lane was told to run. Expecting
+    /// the test runner instead condemns a lane that did exactly what the
+    /// project asked, and a condemned lane leaves the comparison — which is how
+    /// a campaign can run its sanitizer lanes and still report nothing about
+    /// them.
+    #[test]
+    fn a_command_lane_is_expected_to_have_run_its_own_command() {
+        let (config, mode) = command_lane_config();
+
+        let expectation = ReportExpectation::new(
+            &ProjectConfig::default(),
+            &config,
+            "rtsan",
+            &mode,
+            "all()",
+            2,
+        )
+        .expect("a command lane needs no configured test runner");
+
+        assert_eq!(expectation.runner.program, "just");
+        assert_eq!(expectation.runner.prefix_args, ["test", "rtsan"]);
+    }
 
     /// A sanitizer that fires on one attempt in two is green half the time. The
     /// campaign's job is to state that as a rate rather than as a verdict.

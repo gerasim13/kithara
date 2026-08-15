@@ -196,6 +196,9 @@ pub(crate) fn run(args: &StressReportArgs) -> Result<()> {
 pub(crate) struct LaneReport {
     pub(crate) markdown: String,
     pub(crate) rates: BTreeMap<TestId, LaneRate>,
+    /// How many of this lane's attempts the command rejected, for a lane whose
+    /// verdict is an exit code rather than a set of test results.
+    pub(crate) attempts: Option<LaneRate>,
     pub(crate) verdict: Result<()>,
 }
 
@@ -212,6 +215,7 @@ pub(crate) fn lane_report(args: &StressReportArgs) -> Result<LaneReport> {
         Ok(LaneReport {
             markdown,
             rates: BTreeMap::new(),
+            attempts: None,
             verdict: Err(NotClean::reported("stress evidence")),
         })
     };
@@ -296,6 +300,7 @@ pub(crate) fn lane_report(args: &StressReportArgs) -> Result<LaneReport> {
     Ok(LaneReport {
         markdown: report.markdown,
         rates: report.rates,
+        attempts: None,
         verdict,
     })
 }
@@ -499,18 +504,49 @@ fn validate_expected_count(expected_count: usize) -> Result<()> {
 /// rather than as zero: the lanes do not select the same tests, because targets
 /// behind a feature exist in one and not the other, and calling that a rate of
 /// zero would invent a passing result for a test that never ran.
+/// Lanes measured by attempts are reported separately. Their verdict is one
+/// exit code per attempt, so they have no per-test rate to place in the table
+/// above and would otherwise be a column of tests that were never selected.
 pub(crate) fn render_lane_comparison(
     lanes: &[(String, BTreeMap<TestId, LaneRate>)],
+    commanded: &[(String, LaneRate)],
     requested: usize,
 ) -> String {
     let mut out = String::from("# Stress campaign\n");
     let _ = writeln!(out, "\n- Lanes requested: `{requested}`");
-    let _ = writeln!(out, "- Lanes with trustworthy evidence: `{}`", lanes.len());
+    let _ = writeln!(
+        out,
+        "- Lanes with trustworthy evidence: `{}`",
+        lanes.len() + commanded.len()
+    );
+    render_per_test_comparison(&mut out, lanes);
+    render_attempt_comparison(&mut out, commanded);
+    out
+}
+
+fn render_attempt_comparison(out: &mut String, commanded: &[(String, LaneRate)]) {
+    if commanded.is_empty() {
+        return;
+    }
+    out.push_str("\n## Failure rate by attempt\n\n| lane | rate |\n|---|---:|\n");
+    for (name, rate) in commanded {
+        let _ = writeln!(
+            out,
+            "| `{}` | {} ({}/{}) |",
+            markdown_cell(name),
+            rate_percent(rate.failed, rate.attempts),
+            rate.failed,
+            rate.attempts
+        );
+    }
+}
+
+fn render_per_test_comparison(out: &mut String, lanes: &[(String, BTreeMap<TestId, LaneRate>)]) {
     if lanes.len() < 2 {
         out.push_str(
             "\nA comparison needs two verified lanes. The lane sections below stand on their own.\n",
         );
-        return out;
+        return;
     }
 
     let mut rows = BTreeMap::<TestId, Vec<Option<LaneRate>>>::new();
@@ -530,7 +566,7 @@ pub(crate) fn render_lane_comparison(
         .collect::<Vec<_>>();
     if ranked.is_empty() {
         out.push_str("\nNo test failed in any lane.\n");
-        return out;
+        return;
     }
     ranked.sort_by(|left, right| {
         right
@@ -539,7 +575,7 @@ pub(crate) fn render_lane_comparison(
             .then_with(|| left.1.cmp(&right.1))
     });
 
-    out.push_str("\n## Failure rate by lane\n\n| test |");
+    out.push_str("\n## Failure rate by test\n\n| test |");
     for (name, _) in lanes {
         let _ = write!(out, " {} |", markdown_cell(name));
     }
@@ -573,7 +609,6 @@ pub(crate) fn render_lane_comparison(
             ranked.len()
         );
     }
-    out
 }
 
 /// How far apart the lanes are on one test, as a fraction.
@@ -1327,6 +1362,7 @@ mod tests {
                 lane("on", &[("agreed", 5, 10), ("disputed", 0, 10)]),
                 lane("off", &[("agreed", 5, 10), ("disputed", 9, 10)]),
             ],
+            &[],
             2,
         );
 
@@ -1342,6 +1378,7 @@ mod tests {
                 lane("on", &[("flash_only", 3, 10)]),
                 lane("off", &[("shared", 1, 10)]),
             ],
+            &[],
             2,
         );
 
@@ -1350,9 +1387,41 @@ mod tests {
 
     #[test]
     fn a_campaign_with_one_trustworthy_lane_refuses_to_compare() {
-        let table = render_lane_comparison(&[lane("on", &[("solo", 1, 10)])], 2);
+        let table = render_lane_comparison(&[lane("on", &[("solo", 1, 10)])], &[], 2);
 
         assert!(table.contains("needs two verified lanes"), "{table}");
+    }
+
+    fn attempted(name: &str, failed: usize, attempts: usize) -> (String, LaneRate) {
+        (name.to_owned(), LaneRate { failed, attempts })
+    }
+
+    /// A lane whose verdict is one exit code per attempt has no per-test rate to
+    /// put in the table above. Dropping it from the campaign for that reason is
+    /// how a sanitizer lane runs and reports nothing.
+    #[test]
+    fn a_lane_measured_by_attempts_is_reported_beside_the_per_test_lanes() {
+        let table = render_lane_comparison(
+            &[
+                lane("on", &[("solo", 1, 10)]),
+                lane("off", &[("solo", 0, 10)]),
+            ],
+            &[attempted("rtsan", 1, 4)],
+            3,
+        );
+
+        assert!(table.contains("rtsan"), "{table}");
+        assert!(table.contains("25.00% (1/4)"), "{table}");
+    }
+
+    #[test]
+    fn a_lane_measured_by_attempts_counts_as_trustworthy_evidence() {
+        let table = render_lane_comparison(&[], &[attempted("rtsan", 0, 2)], 1);
+
+        assert!(
+            table.contains("Lanes with trustworthy evidence: `1`"),
+            "{table}"
+        );
     }
 
     #[test]
