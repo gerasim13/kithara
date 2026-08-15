@@ -13,8 +13,8 @@ use super::{
     flex::{ChildLayout, Flex},
     leaf::{Leaf, WindowLeafLayer},
     mount::{
-        Cx, NodeControl, NodeLayout, activates, alignment, control_declared, declared, length,
-        main_length, pointer_owner, text_role,
+        Cx, NodeControl, NodeLayout, Viewport, activates, alignment, control_declared, declared,
+        length, main_length, pointer_owner,
     },
     node::LayerParts,
     popover::{PopoverLayer, PopoverState},
@@ -167,7 +167,7 @@ where
         active: bool,
         declared: solve::Size<solve::Length>,
     ) -> MasonryNode<Action> {
-        let role = text_role(style, color, active_color, active, self.skin);
+        let role = self.skin.text_role(style, color, active_color, active);
         let padding_x = match style {
             TextStyle::VisFooter => self.skin.vis.footer_padding_x,
             TextStyle::VisMeta => self.skin.vis.index_padding_x,
@@ -544,6 +544,25 @@ where
             Some(self.control_action(path.to_owned(), ControlAction::SecondaryActivate)),
         );
         output
+    }
+
+    /// The window is the declared box and the child keeps its own height, so
+    /// the retained viewport has something to travel over.
+    fn scroll(
+        &mut self,
+        _id: InternId,
+        child: Self::Output,
+        size: Option<SizeSpec>,
+    ) -> Self::Output {
+        let declared = size.map_or_else(|| child.declared(), declared);
+        MasonryNode::document(
+            NodeLayout::Scroll(Viewport::default()),
+            declared,
+            vec![child],
+            false,
+            None,
+            None,
+        )
     }
 
     fn slot(&mut self, children: Vec<Self::Output>, size: Option<SizeSpec>) -> Self::Output {

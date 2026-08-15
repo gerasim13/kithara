@@ -9,6 +9,7 @@ use crate::{
 pub(crate) struct StatusDot<'a> {
     pub(crate) active: Option<&'a Binding>,
     pub(crate) active_tone: Option<Tone>,
+    pub(crate) dot_size: Option<f32>,
     pub(crate) label: InternId,
     pub(crate) tone: Tone,
 }
@@ -35,7 +36,7 @@ mod host {
         type Painter = Face;
 
         fn painter(&self, skin: &Skin) -> Face {
-            Face::with_active_tone(self.tone, self.active_tone, skin)
+            Face::with_active_tone(self.tone, self.active_tone, self.dot_size, skin)
         }
 
         fn data(&self, read: Reading<'_>) -> Option<StatusDotData> {

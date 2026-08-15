@@ -30,6 +30,10 @@ use crate::{
         label::telemetry::Telemetry,
         meter::StereoMeter,
         nav_item::NavItem,
+        pivot::{
+            map::{PortalMap, PortalMapData},
+            range::Range,
+        },
         readout::{Readout, ReadoutData},
         tab::TabLarge,
         toggle::Binary,
@@ -38,7 +42,7 @@ use crate::{
     },
     draw::{DrawListBuilder, Rect},
     interact::Hit,
-    render::{Mark, StereoLevels},
+    render::{Mark, ScalarRange, StereoLevels},
     solve::{Length, Size},
     text::TextContext,
 };
@@ -347,6 +351,36 @@ impl ControlPainter for Binary {
 
 impl ControlPainter for Meter {
     type Data = f32;
+
+    fn draw(
+        &self,
+        list: &mut DrawListBuilder,
+        _text: &mut TextContext,
+        data: &Self::Data,
+        bounds: Rect,
+        _state: VisualState,
+    ) {
+        self.paint(list, *data, bounds);
+    }
+}
+
+impl ControlPainter for PortalMap {
+    type Data = PortalMapData;
+
+    fn draw(
+        &self,
+        list: &mut DrawListBuilder,
+        text: &mut TextContext,
+        data: &Self::Data,
+        bounds: Rect,
+        _state: VisualState,
+    ) {
+        self.paint(list, text, data, bounds);
+    }
+}
+
+impl ControlPainter for Range {
+    type Data = ScalarRange;
 
     fn draw(
         &self,

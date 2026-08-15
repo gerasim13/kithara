@@ -274,6 +274,11 @@ fn walk_module(
             record(&id.0, &here, origin, seen)?;
             walk_module(child, &here, origin, seen, Sibling::Only)
         }
+        ControlNode::Scroll { id, child, .. } => {
+            let here = path.push(format!("Scroll({id})"));
+            record(&id.0, &here, origin, seen)?;
+            walk_module(child, &here, origin, seen, Sibling::Only)
+        }
         ControlNode::Slot { id, default, .. } => {
             let here = path.push(format!("Slot({id})"));
             record(&id.0, &here, origin, seen)?;
@@ -305,6 +310,7 @@ const fn control_id(node: &ControlNode) -> Option<&NodeId> {
         | ControlNode::Optional { .. }
         | ControlNode::Popover { .. }
         | ControlNode::Pressable { .. }
+        | ControlNode::Scroll { .. }
         | ControlNode::Slot { .. } => None,
         ControlNode::DeckSummary { id, .. }
         | ControlNode::Brand { id, .. }
@@ -328,6 +334,8 @@ const fn control_id(node: &ControlNode) -> Option<&NodeId> {
         | ControlNode::Wave { id, .. }
         | ControlNode::Vis { id, .. }
         | ControlNode::Shader { id, .. }
+        | ControlNode::PortalMap { id, .. }
+        | ControlNode::Range { id, .. }
         | ControlNode::Table { id, .. }
         | ControlNode::Tree { id, .. }
         | ControlNode::ContextBar { id, .. }
@@ -666,6 +674,8 @@ pub(crate) const fn value_kinds(control: &ControlNode) -> (Option<ValueKind>, Op
         | ControlNode::Segmented { .. }
         | ControlNode::Vis { .. } => (Some(ValueKind::Scalar), Some(ValueKind::Scalar)),
         ControlNode::Wave { .. } => (Some(ValueKind::Waveform), Some(ValueKind::Scalar)),
+        ControlNode::PortalMap { .. } => (Some(ValueKind::PortalMap), None),
+        ControlNode::Range { .. } => (Some(ValueKind::Range), Some(ValueKind::Scalar)),
         ControlNode::Table { .. } => (Some(ValueKind::Table), None),
         ControlNode::Tree { .. } => (Some(ValueKind::Tree), None),
         ControlNode::VuStereo { .. } | ControlNode::VuVertical { .. } => {
@@ -673,6 +683,7 @@ pub(crate) const fn value_kinds(control: &ControlNode) -> (Option<ValueKind>, Op
         }
         ControlNode::Row { .. } | ControlNode::Column { .. } => (None, Some(ValueKind::Scalar)),
         ControlNode::Include { .. }
+        | ControlNode::Scroll { .. }
         | ControlNode::Slot { .. }
         | ControlNode::Brand { .. }
         | ControlNode::Spacer { .. }

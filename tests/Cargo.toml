@@ -58,6 +58,9 @@ network-manual = []
 # doesn't try to spin up trunk + a webdriver. Run via
 # `just test run --lane=selenium-firefox`.
 selenium = []
+# Live HLS packaging. `suite_broadcast` requires it, so `just test` never runs
+# it; `just test run --lane=broadcast` does.
+broadcast = ["kithara/broadcast"]
 # Deterministic virtual-clock test mode. Routes the platform's blocking waits
 # (`thread::park_timeout`, `sync::Condvar`) onto the quiescence engine so timed
 # waits collapse to virtual time. Off by default; enabling it compiles every
@@ -128,7 +131,6 @@ kithara = { workspace = true, features = ["fdk-aac"] }
 [target.'cfg(all(not(target_arch = "wasm32"), not(all(target_os = "windows", target_env = "msvc"))))'.dependencies]
 kithara = { workspace = true, features = ["stretch-bungee"] }
 
-kithara-broadcast = { workspace = true, features = ["client-reqwest", "tls-rustls"] }
 # Only `architecture_trace` reaches for it, and that module is already native
 # only: the crate's LSP client builds file URLs, which `url` offers everywhere
 # but wasm.
@@ -271,6 +273,11 @@ path = "tests/suite_heavy.rs"
 [[test]]
 name = "suite_stress"
 path = "tests/suite_stress.rs"
+
+[[test]]
+name = "suite_broadcast"
+path = "tests/suite_broadcast.rs"
+required-features = ["broadcast"]
 
 [[test]]
 name = "suite_e2e"

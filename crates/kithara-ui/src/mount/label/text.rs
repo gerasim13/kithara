@@ -27,9 +27,19 @@ impl Control for Text<'_> {
             TextStyle::VisMeta | TextStyle::VisTitle => {
                 SizeSpec::new(Dim::Fill, Dim::Fixed(skin.vis.header_height))
             }
-            TextStyle::BrandSmall | TextStyle::Mono | TextStyle::Caption => {
-                SizeSpec::new(Dim::Shrink, Dim::Fill)
-            }
+            TextStyle::BrandSmall
+            | TextStyle::Caption
+            | TextStyle::Mono
+            | TextStyle::PivotArrow
+            | TextStyle::PivotDuration
+            | TextStyle::PivotFooter
+            | TextStyle::PivotLabel
+            | TextStyle::PivotRatio
+            | TextStyle::PivotSmall
+            | TextStyle::PivotTitle
+            | TextStyle::PivotTrackArtist
+            | TextStyle::PivotTrackTitle
+            | TextStyle::PivotValue => SizeSpec::new(Dim::Shrink, Dim::Fill),
             TextStyle::Body
             | TextStyle::Brand
             | TextStyle::DeckLetter

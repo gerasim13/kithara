@@ -9,6 +9,7 @@ pub(crate) mod label;
 pub(crate) mod meter;
 pub(crate) mod nav_item;
 pub(crate) mod painter;
+pub(crate) mod pivot;
 pub(crate) mod readout;
 pub(crate) mod tab;
 pub(crate) mod table;

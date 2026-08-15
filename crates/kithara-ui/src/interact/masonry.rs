@@ -1,14 +1,19 @@
-//! Translates keyboard, IME, and modifier events between Masonry and the
-//! neutral input contract, so no widget has to speak the toolkit's dialect.
+//! Translates pointer, keyboard, IME, and modifier events between Masonry and
+//! the neutral input contract, so no widget has to speak the toolkit's dialect.
 
 use masonry::{
     core::{Ime, TextEvent},
-    ui_events::keyboard::{
-        Key as MasonryKey, KeyState, KeyboardEvent, Modifiers as MasonryModifiers, NamedKey,
+    dpi::PhysicalPosition,
+    ui_events::{
+        ScrollDelta,
+        keyboard::{
+            Key as MasonryKey, KeyState, KeyboardEvent, Modifiers as MasonryModifiers, NamedKey,
+        },
+        pointer::{PointerButton as MasonryPointerButton, PointerEvent},
     },
 };
 
-use super::{Input, InputMethod, Key, Modifiers};
+use super::{Input, InputMethod, Key, Modifiers, PointerButton, Scroll};
 
 const NAMED_KEYS: [(NamedKey, Key<'static>); 10] = [
     (NamedKey::ArrowDown, Key::ArrowDown),
@@ -143,4 +148,45 @@ fn masonry_modifiers(modifiers: Modifiers) -> MasonryModifiers {
         out |= MasonryModifiers::SHIFT;
     }
     out
+}
+
+/// Where a pointer event happened, in the window's own pixels.
+///
+/// Enter, leave and cancel carry no position: a widget being told the pointer
+/// left says nothing about where it went, and answering with a stale point
+/// would put the gesture somewhere the hand is not.
+pub(crate) const fn pointer_position(event: &PointerEvent) -> Option<PhysicalPosition<f64>> {
+    match event {
+        PointerEvent::Down(button) | PointerEvent::Up(button) => Some(button.state.position),
+        PointerEvent::Move(update) => Some(update.current.position),
+        PointerEvent::Scroll(scroll) => Some(scroll.state.position),
+        PointerEvent::Gesture(gesture) => Some(gesture.state.position),
+        PointerEvent::Cancel(_) | PointerEvent::Enter(_) | PointerEvent::Leave(_) => None,
+    }
+}
+
+/// One wheel delta in the neutral vocabulary, at the host's logical scale.
+///
+/// A page delta has no neutral spelling — the recognizers count lines and
+/// pixels — so it is declined rather than guessed at.
+pub(crate) fn portable_scroll(delta: ScrollDelta, scale: f64) -> Option<Scroll> {
+    match delta {
+        ScrollDelta::LineDelta(x, y) => Some(Scroll::Lines { x, y }),
+        ScrollDelta::PixelDelta(delta) => Some(Scroll::Pixels {
+            x: num_traits::cast::AsPrimitive::<f32>::as_(delta.x / scale),
+            y: num_traits::cast::AsPrimitive::<f32>::as_(delta.y / scale),
+        }),
+        ScrollDelta::PageDelta(_, _) => None,
+    }
+}
+
+pub(crate) fn pointer_button(button: MasonryPointerButton) -> PointerButton {
+    match button {
+        MasonryPointerButton::Primary => PointerButton::Primary,
+        MasonryPointerButton::Secondary => PointerButton::Secondary,
+        MasonryPointerButton::Auxiliary => PointerButton::Auxiliary,
+        MasonryPointerButton::X1 => PointerButton::Back,
+        MasonryPointerButton::X2 => PointerButton::Forward,
+        button => PointerButton::Other(button as u32),
+    }
 }

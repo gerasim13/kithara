@@ -17,7 +17,6 @@ use tracing::{Span, trace_span};
 use super::{
     MasonryControl, Repaint, Size2, SizeLimits, TextMeasurer,
     custom::{HostAction, MountedCustom},
-    node::pointer_button,
     vis::VisLeaf,
 };
 use crate::{
@@ -25,6 +24,7 @@ use crate::{
     draw::{DrawList, DrawListBuilder, Pt, Rect, Rgba, Transform, replay},
     interact::{
         CursorShape, Hit, Input, MOUSE, Outcome, PointerInput, PointerOwnership, PointerPhase,
+        masonry::pointer_button,
     },
     module::TextAlign,
     render::{HostLayer, ReadValue, Reads, UiEvent, WindowCommand, WindowLayerProgram},

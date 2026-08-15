@@ -39,15 +39,26 @@ use crate::{
     interact::{Hit, Input, Key as NeutralKey, Outcome, PointerOwnership, PointerPhase, Scroll},
     registry::{EndpointCategory, EndpointDesc, EndpointRegistry, ValueKind},
     render::{
-        ControlAction, ReadValue, Reads, Skin, StereoLevels, TableCell, TableRow, TreeIcon,
-        TreeRow, UiEvent, WaveBucket, WaveformView, WindowCommand, WindowEdge, WindowLayerProgram,
-        document, picker_hits,
+        ControlAction, PortalMapView, PortalTarget, ReadValue, Reads, ScalarRange, Skin,
+        StereoLevels, TableCell, TableRow, TreeIcon, TreeRow, UiEvent, WaveBucket, WaveformView,
+        WindowCommand, WindowEdge, WindowLayerProgram, document, picker_hits,
     },
     source::{MemResolver, UiConfig},
     text::{FontPolicy, TextContext},
 };
 
 struct FixtureReads;
+
+static CENSUS_PORTALS: [PortalTarget; 2] = [
+    PortalTarget {
+        bpm: 93.0,
+        is_selected: true,
+    },
+    PortalTarget {
+        bpm: 165.33,
+        is_selected: false,
+    },
+];
 
 static CENSUS_WAVE: [WaveBucket; 1] = [WaveBucket {
     high: 0.8,
@@ -197,6 +208,13 @@ impl Reads for FixtureReads {
                 volume: 0.8,
             })),
             "player.output.volume" => Some(ReadValue::Scalar(0.8)),
+            "pivot.map" => Some(ReadValue::PortalMap(PortalMapView {
+                master: 124.0,
+                min: 88.0,
+                max: 176.0,
+                targets: &CENSUS_PORTALS,
+            })),
+            "pivot.range" => Some(ReadValue::Range(ScalarRange { min: 0.2, max: 0.8 })),
             _ => None,
         }
     }
@@ -1958,6 +1976,16 @@ const CONTROL_CENSUS: &[(&str, Paints, &str)] = &[
         Paints::Yes,
         r#"Crossfader(id: "control", read: Parameter(id: "player.output.volume"), write: Parameter(id: "player.output.volume"))"#,
     ),
+    (
+        "PortalMap",
+        Paints::Yes,
+        r#"PortalMap(id: "control", read: Model(id: "pivot.map"))"#,
+    ),
+    (
+        "Range",
+        Paints::Yes,
+        r#"Range(id: "control", read: Parameter(id: "pivot.range"), write: Parameter(id: "pivot.range"))"#,
+    ),
 ];
 
 /// Mounts one control on its own and asks Masonry to draw it. A document that
@@ -2222,6 +2250,14 @@ mod gesture_census {
             name: "Crossfader",
             gestures: Gestures::DRAG,
         },
+        Row {
+            name: "PortalMap",
+            gestures: Gestures::NONE,
+        },
+        Row {
+            name: "Range",
+            gestures: Gestures::DRAG,
+        },
     ];
 
     #[derive(Clone, Copy, Default)]
@@ -2358,9 +2394,9 @@ mod gesture_census {
             ExpandedNode::Control {
                 path, spec, read, ..
             } => Some((*path, spec, read.as_ref())),
-            ExpandedNode::Optional { child, .. } | ExpandedNode::Pressable { child, .. } => {
-                find_control(child)
-            }
+            ExpandedNode::Optional { child, .. }
+            | ExpandedNode::Pressable { child, .. }
+            | ExpandedNode::Scroll { child, .. } => find_control(child),
             ExpandedNode::Row { children, .. }
             | ExpandedNode::Column { children, .. }
             | ExpandedNode::Slot { children, .. } => children.iter().find_map(find_control),
@@ -3377,6 +3413,16 @@ fn fixture_registry() -> FixtureRegistry {
         EndpointCategory::Model,
         "vis.preset",
         EndpointDesc::new(ValueKind::Scalar),
+    );
+    registry.insert(
+        EndpointCategory::Model,
+        "pivot.map",
+        EndpointDesc::new(ValueKind::PortalMap),
+    );
+    registry.insert(
+        EndpointCategory::Parameter,
+        "pivot.range",
+        EndpointDesc::new(ValueKind::Range),
     );
     insert_stream_endpoints(&mut registry);
     registry

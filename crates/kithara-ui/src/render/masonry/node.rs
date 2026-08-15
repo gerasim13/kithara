@@ -27,9 +27,11 @@ use crate::{
     draw::{DrawListBuilder, Pt, Rect, Rgba, replay},
     expand::Binding,
     interact::{
-        CursorShape, Hit, Input, MOUSE, PointerButton, PointerInput, PointerOwnership,
-        PointerPhase,
-        masonry::{portable_modifiers, portable_text_input},
+        CursorShape, Hit, Input, MOUSE, PointerInput, PointerOwnership, PointerPhase,
+        masonry::{
+            pointer_button, pointer_position, portable_modifiers, portable_scroll,
+            portable_text_input,
+        },
     },
     layout::FrameSides,
     render::{HostedControlPlan, ReadValue, Reads, UiEvent, vis::VisFrame},
@@ -222,6 +224,7 @@ impl Node {
                 Leaf::Empty | Leaf::Control(_) | Leaf::Text { .. } | Leaf::Custom { .. },
             )
             | NodeLayout::Flex(_)
+            | NodeLayout::Scroll(_)
             | NodeLayout::Stack => None,
         }
     }
@@ -340,14 +343,7 @@ impl Node {
         ctx: &EventCtx<'_>,
         event: &PointerEvent,
     ) -> Option<(Input<'static>, Hit, Option<Pt>)> {
-        let position = match event {
-            PointerEvent::Down(button) | PointerEvent::Up(button) => Some(button.state.position),
-            PointerEvent::Move(update) => Some(update.current.position),
-            PointerEvent::Scroll(scroll) => Some(scroll.state.position),
-            PointerEvent::Gesture(gesture) => Some(gesture.state.position),
-            PointerEvent::Cancel(_) | PointerEvent::Enter(_) | PointerEvent::Leave(_) => None,
-        };
-        if let Some(position) = position {
+        if let Some(position) = pointer_position(event) {
             let scale = ctx.get_scale_factor();
             let local = ctx.local_position(position);
             self.pointer = Some((
@@ -403,20 +399,7 @@ impl Node {
                 Input::Pointer(PointerInput::new(MOUSE, button, phase, window, clicks))
             }
             (None, PointerEvent::Scroll(scroll)) => {
-                let scale = ctx.get_scale_factor();
-                let scroll = match scroll.delta {
-                    masonry::ui_events::ScrollDelta::LineDelta(x, y) => {
-                        crate::interact::Scroll::Lines { x, y }
-                    }
-                    masonry::ui_events::ScrollDelta::PixelDelta(delta) => {
-                        crate::interact::Scroll::Pixels {
-                            x: (delta.x / scale).as_(),
-                            y: (delta.y / scale).as_(),
-                        }
-                    }
-                    masonry::ui_events::ScrollDelta::PageDelta(_, _) => return None,
-                };
-                Input::Wheel(scroll)
+                Input::Wheel(portable_scroll(scroll.delta, ctx.get_scale_factor())?)
             }
             (None, _) => return None,
         };
@@ -506,6 +489,13 @@ impl Widget for Node {
             self.queue_pointer(ctx, event);
             return;
         };
+        // A window under the pointer takes the wheel before anything below it,
+        // and only while it still has somewhere to go.
+        if self.layout.wheel(input) {
+            ctx.set_handled();
+            ctx.request_layout();
+            return;
+        }
         match self.pointer_owner {
             Some(NodePointerOwner::Leaf) => {
                 self.leaf_input(ctx, event, input, hit);
@@ -698,7 +688,7 @@ impl Widget for Node {
         );
         let leaf = match &self.layout {
             NodeLayout::Leaf(leaf) => leaf.cursor(&hit),
-            NodeLayout::Flex(_) | NodeLayout::Stack => CursorShape::None,
+            NodeLayout::Flex(_) | NodeLayout::Scroll(_) | NodeLayout::Stack => CursorShape::None,
         };
         let engine = self.engine.as_ref().map_or(CursorShape::None, |engine| {
             engine.cursor(Pt {
@@ -736,17 +726,6 @@ fn local_ime_area(engine: &HostedEngine, transform: Affine) -> Option<MasonryRec
             f64::from(area.y + area.h),
         ))
     })
-}
-
-pub(crate) fn pointer_button(button: MasonryPointerButton) -> PointerButton {
-    match button {
-        MasonryPointerButton::Primary => PointerButton::Primary,
-        MasonryPointerButton::Secondary => PointerButton::Secondary,
-        MasonryPointerButton::Auxiliary => PointerButton::Auxiliary,
-        MasonryPointerButton::X1 => PointerButton::Back,
-        MasonryPointerButton::X2 => PointerButton::Forward,
-        button => PointerButton::Other(button as u32),
-    }
 }
 
 impl<Action> MasonryNode<Action> {

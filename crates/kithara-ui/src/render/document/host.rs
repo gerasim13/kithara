@@ -45,6 +45,14 @@ pub trait Host {
         size: Option<SizeSpec>,
     ) -> Self::Output;
 
+    /// Mounts a bounded viewport over one taller subtree.
+    ///
+    /// The document declares the window, not the travel: how far the content
+    /// may move, and what a wheel is worth, belong to the host that laid the
+    /// child out, because only it knows how tall the child turned out to be.
+    fn scroll(&mut self, id: InternId, child: Self::Output, size: Option<SizeSpec>)
+    -> Self::Output;
+
     /// Mounts a vertical slot of visible children.
     fn slot(&mut self, children: Vec<Self::Output>, size: Option<SizeSpec>) -> Self::Output;
 

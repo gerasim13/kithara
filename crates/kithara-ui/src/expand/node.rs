@@ -43,10 +43,16 @@ pub enum ExpandedNode {
         pad_x: Option<f32>,
         pad_y: Option<f32>,
         frame: Option<FrameSides>,
+        frame_color: Option<ColorRole>,
         background: Option<ColorRole>,
         background_alpha: Option<f32>,
         surface: Option<SurfaceSpec>,
         children: Vec<Self>,
+    },
+    Scroll {
+        id: InternId,
+        size: Option<SizeSpec>,
+        child: Box<Self>,
     },
     Optional {
         block: BlockSpec,
@@ -153,6 +159,8 @@ pub enum ControlSpec {
     },
     Vis,
     Shader(ShaderSpec),
+    PortalMap,
+    Range,
     Table {
         columns: Vec<TableColumn>,
         columns_state: Option<Binding>,
@@ -174,6 +182,7 @@ pub enum ControlSpec {
     },
     StatusDot {
         label: InternId,
+        dot_size: Option<f32>,
         tone: Tone,
         active_tone: Option<Tone>,
         active: Option<Binding>,

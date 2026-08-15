@@ -73,6 +73,8 @@ pub enum ControlNode {
         /// Hairlines on the requested sides; absent means no border.
         #[serde(default)]
         frame: Option<FrameSides>,
+        #[serde(default)]
+        frame_color: Option<ColorRole>,
         /// Fill behind the children; absent means transparent.
         #[serde(default)]
         background: Option<ColorRole>,
@@ -81,6 +83,12 @@ pub enum ControlNode {
         #[serde(default)]
         write: Option<BindingRef>,
         children: Vec<Self>,
+    },
+    Scroll {
+        id: NodeId,
+        #[serde(default)]
+        size: Option<SizeSpec>,
+        child: Box<Self>,
     },
     Include {
         id: NodeId,
@@ -426,6 +434,26 @@ pub enum ControlNode {
         #[serde(default)]
         adaptive: AdaptivePolicy,
     },
+    PortalMap {
+        id: NodeId,
+        #[serde(default)]
+        size: Option<SizeSpec>,
+        #[serde(default)]
+        read: Option<BindingRef>,
+        #[serde(default)]
+        adaptive: AdaptivePolicy,
+    },
+    Range {
+        id: NodeId,
+        #[serde(default)]
+        size: Option<SizeSpec>,
+        #[serde(default)]
+        read: Option<BindingRef>,
+        #[serde(default)]
+        write: Option<BindingRef>,
+        #[serde(default)]
+        adaptive: AdaptivePolicy,
+    },
     Table {
         id: NodeId,
         #[serde(default)]
@@ -526,6 +554,8 @@ pub enum ControlNode {
         #[serde(default)]
         adaptive: AdaptivePolicy,
         label: String,
+        #[serde(default)]
+        dot_size: Option<f32>,
         #[serde(default)]
         tone: Tone,
         #[serde(default)]
@@ -636,6 +666,7 @@ impl ControlNode {
             Self::Popover { open, .. } => (Some(open), None),
             Self::Pressable { press, .. } => (None, Some(press)),
             Self::Include { .. }
+            | Self::Scroll { .. }
             | Self::Slot { .. }
             | Self::WindowDrag { .. }
             | Self::TitleBar { .. }
@@ -661,6 +692,7 @@ impl ControlNode {
             | Self::Fader { read, write, .. }
             | Self::Wave { read, write, .. }
             | Self::Vis { read, write, .. }
+            | Self::Range { read, write, .. }
             | Self::Table { read, write, .. }
             | Self::Tree { read, write, .. }
             | Self::ContextBar { read, write, .. }
@@ -675,6 +707,7 @@ impl ControlNode {
             | Self::Knob { read, write, .. }
             | Self::VuStereo { read, write, .. }
             | Self::VuVertical { read, write, .. } => (read.as_ref(), write.as_ref()),
+            Self::PortalMap { read, .. } => (read.as_ref(), None),
         }
     }
 
@@ -684,7 +717,8 @@ impl ControlNode {
             | Self::Optional { .. }
             | Self::Popover { .. }
             | Self::Pressable { .. } => None,
-            Self::Row { size, .. }
+            Self::Scroll { size, .. }
+            | Self::Row { size, .. }
             | Self::Column { size, .. }
             | Self::Slot { size, .. }
             | Self::DeckSummary { size, .. }
@@ -710,6 +744,8 @@ impl ControlNode {
             | Self::Wave { size, .. }
             | Self::Vis { size, .. }
             | Self::Shader { size, .. }
+            | Self::PortalMap { size, .. }
+            | Self::Range { size, .. }
             | Self::Table { size, .. }
             | Self::Tree { size, .. }
             | Self::ContextBar { size, .. }

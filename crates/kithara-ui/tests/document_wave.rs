@@ -112,6 +112,15 @@ impl Host for WaveHost<'_> {
         child
     }
 
+    fn scroll(
+        &mut self,
+        _id: InternId,
+        child: Self::Output,
+        _size: Option<SizeSpec>,
+    ) -> Self::Output {
+        child
+    }
+
     fn slot(&mut self, children: Vec<Self::Output>, _size: Option<SizeSpec>) -> Self::Output {
         Self::flatten(children)
     }

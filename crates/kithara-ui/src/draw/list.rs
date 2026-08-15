@@ -153,6 +153,20 @@ impl DrawListBuilder {
         });
     }
 
+    /// Strokes an outline no named shape covers: a curve open at both ends,
+    /// which a fill would close behind the pen.
+    pub fn stroke_path<P: Into<Pen>>(&mut self, path: Path, color: Rgba, pen: P) {
+        let path = match &self.pools {
+            Some(pools) => pools.pooled_path(path),
+            None => path,
+        };
+        self.commands.push(DrawCmd::Stroke {
+            geom: Geom::Path(path),
+            color,
+            pen: pen.into(),
+        });
+    }
+
     pub fn text(&mut self, run: &GlyphRun, content: &str, transform: Transform, color: Rgba) {
         self.commands.push(DrawCmd::Text {
             run: run.clone(),

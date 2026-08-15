@@ -26,39 +26,71 @@ struct Face {
 
 impl Chip {
     pub(crate) fn new(style: ChipStyle, skin: &Skin) -> Self {
-        let font: FontSkin = match style {
-            ChipStyle::Deck => skin.chip.deck_text,
-            ChipStyle::Routing => skin.chip.routing_text,
+        let (role, padding, active_frame, idle_frame, active_border) = match style {
+            ChipStyle::Deck | ChipStyle::Routing => {
+                let font: FontSkin = if style == ChipStyle::Deck {
+                    skin.chip.deck_text
+                } else {
+                    skin.chip.routing_text
+                };
+                (
+                    TextRoleSkin {
+                        color: ColorRole::Text,
+                        font: FontFamily::Mono,
+                        size: font.size,
+                        spacing: 0.0,
+                        weight: font.weight,
+                    },
+                    Pt {
+                        x: skin.chip.padding_x,
+                        y: skin.chip.padding_y,
+                    },
+                    skin.chip.active_frame,
+                    skin.chip.inactive_frame,
+                    skin.rgba(skin.chip.active_frame.border),
+                )
+            }
+            ChipStyle::PivotFamily => (
+                skin.chip.pivot_family_text,
+                Pt {
+                    x: skin.chip.pivot_family_padding_x,
+                    y: skin.chip.pivot_family_padding_y,
+                },
+                skin.chip.pivot_frame,
+                skin.chip.pivot_frame,
+                skin.palette.accent,
+            ),
+            ChipStyle::PivotMultiplier => (
+                skin.chip.pivot_multiplier_text,
+                Pt {
+                    x: skin.chip.pivot_multiplier_padding_x,
+                    y: skin.chip.pivot_multiplier_padding_y,
+                },
+                skin.chip.pivot_frame,
+                skin.chip.pivot_frame,
+                skin.palette.accent,
+            ),
         };
         Self {
             active: Face {
-                border: skin.rgba(skin.chip.active_frame.border),
+                border: active_border,
                 fill: skin.palette.accent,
-                frame: skin.chip.active_frame,
+                frame: active_frame,
                 text: skin.palette.bg_deep,
             },
             idle: Face {
-                border: skin.rgba(skin.chip.inactive_frame.border),
+                border: skin.rgba(idle_frame.border),
                 fill: Rgba {
                     a: 0.0,
                     b: 0.0,
                     g: 0.0,
                     r: 0.0,
                 },
-                frame: skin.chip.inactive_frame,
+                frame: idle_frame,
                 text: skin.palette.text_dim,
             },
-            padding: Pt {
-                x: skin.chip.padding_x,
-                y: skin.chip.padding_y,
-            },
-            role: TextRoleSkin {
-                color: ColorRole::Text,
-                font: FontFamily::Mono,
-                size: font.size,
-                spacing: 0.0,
-                weight: font.weight,
-            },
+            padding,
+            role,
         }
     }
 

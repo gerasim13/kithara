@@ -24,6 +24,7 @@ use crate::{
         meter::StereoMeter,
         nav_item::NavItem,
         painter::{ControlPainter, Labelled},
+        pivot::{map::PortalMap, range::Range},
         readout::Readout,
         tab::TabLarge,
         toggle::Binary,
@@ -584,6 +585,28 @@ impl Retained for Context {
             return false;
         };
         std::mem::replace(&mut data.breadcrumb, (*breadcrumb).to_owned()) != data.breadcrumb
+    }
+}
+
+/// The map is redrawn from the whole snapshot the host reports, because a
+/// target list is not a value that can be moved one field at a time: a portal
+/// leaving the set and another arriving is one read.
+impl Retained for PortalMap {
+    fn set_read(data: &mut Self::Data, value: &ReadValue<'_>) -> bool {
+        let ReadValue::PortalMap(view) = value else {
+            return false;
+        };
+        let next = Self::Data::from(*view);
+        std::mem::replace(data, next) != *data
+    }
+}
+
+impl Retained for Range {
+    fn set_read(data: &mut Self::Data, value: &ReadValue<'_>) -> bool {
+        let ReadValue::Range(next) = value else {
+            return false;
+        };
+        std::mem::replace(data, *next) != *next
     }
 }
 

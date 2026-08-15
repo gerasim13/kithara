@@ -592,6 +592,13 @@ enum HostedLayout {
         sized: bool,
         child: Box<Self>,
     },
+    /// A viewport whose content is one level further down than a plain
+    /// wrapper's: iced's `scrollable` keeps a layout node of its own so it has
+    /// somewhere to put the offset content.
+    Scroll {
+        sized: bool,
+        child: Box<Self>,
+    },
     Control(Option<HostedControl>),
     SelfMeasuredControl(Option<HostedControl>),
 }
@@ -674,6 +681,10 @@ impl HostedLayout {
                 sized: effective_size(node, skin).is_some(),
                 child: Box::new(Self::new(child, ui, reads, skin)),
             },
+            ExpandedNode::Scroll { child, .. } => Self::Scroll {
+                sized: effective_size(node, skin).is_some(),
+                child: Box::new(Self::new(child, ui, reads, skin)),
+            },
         }
     }
 
@@ -698,7 +709,9 @@ impl HostedLayout {
                     child.append_descriptors(descriptors);
                 }
             }
-            Self::Wrapper { child, .. } => child.append_descriptors(descriptors),
+            Self::Scroll { child, .. } | Self::Wrapper { child, .. } => {
+                child.append_descriptors(descriptors);
+            }
             Self::Control(Some(control)) | Self::SelfMeasuredControl(Some(control)) => {
                 append_control_descriptors(control, descriptors);
             }
@@ -779,7 +792,9 @@ impl HostedLayout {
                     child.append_pickers(pickers);
                 }
             }
-            Self::Wrapper { child, .. } => child.append_pickers(pickers),
+            Self::Scroll { child, .. } | Self::Wrapper { child, .. } => {
+                child.append_pickers(pickers);
+            }
             Self::Control(Some(control)) | Self::SelfMeasuredControl(Some(control)) => {
                 if let Some(picker) = control.picker() {
                     pickers.push(picker);
@@ -879,6 +894,16 @@ impl HostedLayout {
                 };
                 child.append_targets(layout, cursor, engine, targets);
             }
+            Self::Scroll { sized, child } => {
+                let mut layout = layout;
+                for _ in 0..usize::from(*sized) + 1 {
+                    let Some(inner) = first_child(layout) else {
+                        return;
+                    };
+                    layout = inner;
+                }
+                child.append_targets(layout, cursor, engine, targets);
+            }
             Self::Control(Some(control)) => {
                 let Some(layout) = first_child(layout) else {
                     return;
@@ -900,6 +925,7 @@ impl HostedLayout {
             } if header == path => Some(module),
             Self::Chrome { .. }
             | Self::Group { .. }
+            | Self::Scroll { .. }
             | Self::Slot { .. }
             | Self::Wrapper { .. }
             | Self::Control(_)
@@ -1689,7 +1715,9 @@ mod tests {
                     claimed_components(child, components);
                 }
             }
-            ExpandedNode::Optional { child, .. } => claimed_components(child, components),
+            ExpandedNode::Optional { child, .. } | ExpandedNode::Scroll { child, .. } => {
+                claimed_components(child, components);
+            }
             ExpandedNode::Control { spec, .. } => match spec {
                 ControlSpec::Button { .. }
                 | ControlSpec::NavItem { .. }

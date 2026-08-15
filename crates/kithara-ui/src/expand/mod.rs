@@ -2,6 +2,7 @@ mod binding_subst;
 mod machine;
 mod node;
 mod site;
+mod spec;
 mod structural;
 
 pub use binding_subst::scoped_key;

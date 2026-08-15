@@ -114,6 +114,8 @@ macro_rules! controls {
             ),
             $crate::expand::ControlSpec::Vis => with.apply(&$crate::mount::Vis),
             $crate::expand::ControlSpec::Shader(_) => with.apply(&$crate::mount::Shader),
+            $crate::expand::ControlSpec::PortalMap => with.apply(&$crate::mount::PortalMap),
+            $crate::expand::ControlSpec::Range => with.apply(&$crate::mount::Range),
             $crate::expand::ControlSpec::Table {
                 columns,
                 columns_state,
@@ -144,6 +146,7 @@ macro_rules! controls {
             }
             $crate::expand::ControlSpec::StatusDot {
                 label,
+                dot_size,
                 tone,
                 active_tone,
                 active,
@@ -151,6 +154,7 @@ macro_rules! controls {
                 &$crate::mount::StatusDot::builder()
                     .maybe_active(active.as_ref())
                     .maybe_active_tone(*active_tone)
+                    .maybe_dot_size(*dot_size)
                     .label(*label)
                     .tone(*tone)
                     .build(),

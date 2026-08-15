@@ -1,6 +1,6 @@
 use iced::{
     Alignment, Element, Length, Size,
-    widget::{Space, Stack, container, mouse_area},
+    widget::{Space, Stack, container, mouse_area, scrollable},
 };
 
 use super::{
@@ -208,6 +208,17 @@ impl<'a> DocumentHost for IcedHost<'a, '_> {
             ))
             .into();
         apply_size(Rendered::leading(element), size)
+    }
+
+    /// The viewport is the declared box; the child keeps whatever height it
+    /// asked for and iced moves it under that window.
+    fn scroll(
+        &mut self,
+        _id: InternId,
+        child: Self::Output,
+        size: Option<SizeSpec>,
+    ) -> Self::Output {
+        apply_size(Rendered::leading(scrollable(child).into()), size)
     }
 
     fn slot(&mut self, children: Vec<Self::Output>, size: Option<SizeSpec>) -> Self::Output {

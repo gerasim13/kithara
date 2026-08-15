@@ -161,7 +161,9 @@ pub(crate) fn has_blocks(node: &ExpandedNode) -> bool {
         | ExpandedNode::Column { children, .. }
         | ExpandedNode::Slot { children, .. } => children.iter().any(has_blocks),
         ExpandedNode::Popover { anchor, .. } => has_blocks(anchor),
-        ExpandedNode::Pressable { child, .. } => has_blocks(child),
+        ExpandedNode::Pressable { child, .. } | ExpandedNode::Scroll { child, .. } => {
+            has_blocks(child)
+        }
         ExpandedNode::Control { .. } => false,
     }
 }
@@ -223,6 +225,7 @@ pub(crate) fn effective_size(node: &ExpandedNode, skin: &SkinDoc) -> Option<Size
         ExpandedNode::Popover { anchor, .. } => return effective_size(anchor, skin),
         ExpandedNode::Row { size, .. }
         | ExpandedNode::Column { size, .. }
+        | ExpandedNode::Scroll { size, .. }
         | ExpandedNode::Slot { size, .. }
         | ExpandedNode::Control { size, .. } => *size,
     };
@@ -251,7 +254,8 @@ pub(crate) fn compute_size(node: &ExpandedNode, skin: &SkinDoc, hidden: Hidden<'
         ExpandedNode::Optional { .. }
         | ExpandedNode::Popover { .. }
         | ExpandedNode::Pressable { .. } => None,
-        ExpandedNode::Row { size, .. }
+        ExpandedNode::Scroll { size, .. }
+        | ExpandedNode::Row { size, .. }
         | ExpandedNode::Column { size, .. }
         | ExpandedNode::Slot { size, .. }
         | ExpandedNode::Control { size, .. } => *size,
@@ -265,6 +269,7 @@ pub(crate) fn compute_size(node: &ExpandedNode, skin: &SkinDoc, hidden: Hidden<'
             compute_size(child, skin, hidden)
         }
         ExpandedNode::Popover { anchor, .. } => compute_size(anchor, skin, hidden),
+        ExpandedNode::Scroll { child, .. } => compute_size(child, skin, hidden),
         ExpandedNode::Row {
             children,
             gap,
@@ -438,6 +443,7 @@ mod tests {
             pad_x: None,
             pad_y: None,
             frame: None,
+            frame_color: None,
             background: None,
             background_alpha: None,
             surface: None,

@@ -870,7 +870,7 @@ id-less container as its own module, its `ControlSite` path being the enclosing 
 every id-less sibling. That sharing holds only while the visitor body stays validation-only -
 `check_controls` keys nothing by the path, and a container without `write` yields no `SurfaceSpec`.
 A visitor keeping state per `ControlSite.path` needs the id rule widened first.
-Joins live one place each: `text_role` in `render/immediate/text.rs`, `glyph_tone` in `render/tree/atom.rs`,
+Joins live one place each: `text_role` in `render/immediate/text.rs`, the glyph tone in `mount/label/glyph.rs`,
 `frame_tone` beside `active_tone` in `render/tree/geometry.rs`, both called from
 `render/tree/node.rs`. `render/tree/mod.rs` keeps `geometry` private and re-exports only
 `active_tone`, so a join under `widgets` would duplicate the rule. Each is pinned by a
@@ -1135,8 +1135,8 @@ Sizing with blocks:
 
 ## Icon Identity
 
-A document names an `IconName`; `render/tree/icon.rs::render_icon` joins it to `render::Icon`
-(`render_tree_icon` joins the host-facing `TreeIcon` the same way), and `render/icons.rs::source`
+A document names an `IconName`; `render/icons.rs::document_icon` joins it to `render::Icon`
+(`tree_icon` joins the host-facing `TreeIcon` the same way), and `render/icons.rs::source`
 joins `Icon` to a lucide glyph or an embedded SVG. The legs are guarded differently: coverage by an
 exhaustive match with no wildcard, so a new `IconName` does not build until given an arm; which
 glyph an arm names by a runtime table in that file's test module, compared by codepoint because
@@ -1259,6 +1259,46 @@ The window row, module-grid cell, saved-layout row, preference toggle and hint-r
 one template each (`window-row`, `module-cell`, `layout-row`, `toggle-row`, `hint-row`), taken as
 often as the menu needs through `Include`. Each instance's control paths are
 `app-menu/<include id>/<node id>`, so the template's own ids stay plain.
+
+## Clock And Pivot Ownership
+
+`assets/modules/master-clock.kmodule.ron`, the deck key-lock and overview row, and
+`assets/modules/pivot-portals.kmodule.ron` are shipped component documents over host-owned timing
+state. They are not builtin studio presets: the Gallery embeds them explicitly and supplies mock
+endpoints, while a production host must supply its measured clock sources, transport state and
+portal policy. The documents retain no tempo, source, range, Link or MIDI state.
+
+`PortalMap` and `Range` are the dedicated renderer primitives in this group, and both are neutral
+painters mounted once through the registry, so the two hosts draw one picture. `PortalMapData` owns
+the `PortalMapView` snapshot rather than borrowing it, because a retained leaf outlives the frame
+that built the slice; a target list is replaced whole on refresh, since a portal leaving the set and
+another arriving is one read rather than a field that moved. The map draws the declared master,
+range and target arcs with `SkinDoc.portal_map` geometry, and its arcs reach the seam as
+`DrawListBuilder::stroke_path` over `Verb::QuadTo` — a curve open at both ends, which a fill would
+close behind the pen.
+
+`Range` reads normalized bounds and emits a scalar at `<control-path>/min` or `<control-path>/max`;
+the host owns snapping and the minimum gap. Its gesture is `Grip::Span`, one shared
+`recognizers::Span` used by both adapters rather than two host-specific widgets or mutable state in
+the painter. The press picks the nearer handle and the gesture keeps it until release: re-deciding
+on every move would hand the drag to the other handle the moment the pointer crossed it, and the
+interval would fold through itself instead of being pushed. A tie goes to the lower handle. The
+control draws the end it just authored so the hand sees the rail move, and the host's snapped answer
+lands a frame later; neither end is ordered against the other locally, because a control that closed
+the gap itself would fight that answer. Selection, portal enumeration and timing decisions remain
+host-owned.
+
+The generic `Scroll` document container provides the bounded portal table, and is the one document
+node whose travel neither the document nor the base can settle: the document declares the window,
+and how far the content may move is only known once a host has laid the child out. `Host::scroll`
+therefore hands each host the folded child and the declared box and nothing else. iced mounts it as
+a `scrollable`, which keeps a layout node of its own — the retained descriptor walk descends one
+extra level for that, which is why `HostedLayout::Scroll` exists beside `Wrapper` rather than
+reusing it. The retained host owns `masonry::viewport::Viewport`: it measures the child against the
+window's width and the child's own height, clips to the window, places the child at the negated
+offset, and answers the wheel. The offset lives with the geometry that bounds it rather than in
+`Node`, and a wheel at either end of the travel is left unconsumed so it continues outward instead
+of being swallowed by a window with nowhere to go.
 
 ## Stream Quality Ownership
 

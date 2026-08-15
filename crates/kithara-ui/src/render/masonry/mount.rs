@@ -1,6 +1,6 @@
 use masonry::{
     core::{BoxConstraints, LayoutCtx, WidgetPod},
-    kurbo::{Point, Size as MasonrySize},
+    kurbo::{Point, Rect, Size as MasonrySize},
 };
 use num_traits::cast::AsPrimitive;
 
@@ -14,7 +14,8 @@ use super::{
 use crate::{
     atoms::{button::declared_width, deck::summary::Summary, tab::TabLarge},
     expand::{Binding, BindingKind, ControlSpec},
-    module::{TextAlign, TextStyle},
+    interact::{Input, recognizers::wheel},
+    module::TextAlign,
     mount,
     render::{
         ControlsProgram, HostedControlPlan, InputOwner, ReadValue, Skin, TitleProgram,
@@ -22,7 +23,6 @@ use crate::{
         document::read::{read_scope, resolve},
     },
     size::{Dim, SizeSpec, control_size},
-    skin::{ColorRole, TextRoleSkin},
     solve,
 };
 
@@ -196,6 +196,22 @@ impl NodeControl for mount::Vis {
     }
 }
 impl NodeControl for mount::Shader {}
+impl NodeControl for mount::PortalMap {
+    fn leaf<A>(&self, host: &MasonryHost<'_, A>, cx: &Cx<'_>) -> MasonryNode<A>
+    where
+        A: std::fmt::Debug + Send + 'static,
+    {
+        painted(self, host, cx)
+    }
+}
+impl NodeControl for mount::Range {
+    fn leaf<A>(&self, host: &MasonryHost<'_, A>, cx: &Cx<'_>) -> MasonryNode<A>
+    where
+        A: std::fmt::Debug + Send + 'static,
+    {
+        painted(self, host, cx)
+    }
+}
 impl NodeControl for mount::Table<'_> {
     fn leaf<A>(&self, host: &MasonryHost<'_, A>, cx: &Cx<'_>) -> MasonryNode<A>
     where
@@ -424,9 +440,89 @@ impl NodeControl for mount::Button {
     }
 }
 
+/// A bounded window over a subtree taller than itself.
+///
+/// The offset is the retained host's, not the document's: the document declares
+/// the window, and how far the content may travel is only known once the child
+/// has been laid out. Keeping it here rather than in `Node` puts the one
+/// mutable number beside the geometry that bounds it, and keeps the widget's
+/// own impl about being a widget.
+#[derive(Default)]
+pub(super) struct Viewport {
+    accum: f32,
+    content: f32,
+    extent: f32,
+    offset: f32,
+}
+
+/// How far one wheel detent moves the content. A viewport of rows is read by
+/// the row, so a detent is worth about one of them rather than a page.
+const STEP: f32 = 40.0;
+
+impl Viewport {
+    pub(super) fn layout(
+        &mut self,
+        ctx: &mut LayoutCtx<'_>,
+        children: &mut [WidgetPod<Node>],
+        limits: solve::Limits,
+        declared: solve::Size<solve::Length>,
+    ) -> solve::Size {
+        let size = limits.resolve(declared.width, declared.height, limits.max());
+        // The child is measured against the window's width and its own height.
+        // The scrolled axis is compressed, which is what makes a `Fill` child
+        // report the content it has rather than claim the window: an uncompressed
+        // limit would make the content exactly as tall as the window, and there
+        // would be nothing to scroll to.
+        let inner = normalized(solve::Limits::with_compression(
+            solve::Size::ZERO,
+            solve::Size::new(size.width, f32::MAX),
+            solve::Size::new(false, true),
+        ));
+        let content = children.first_mut().map_or(0.0, |child| {
+            Node::set_child_limits(ctx, child, inner);
+            let measured = ctx.run_layout(child, &box_constraints(inner));
+            AsPrimitive::<f32>::as_(measured.height)
+        });
+        self.content = content;
+        self.extent = size.height;
+        self.offset = self.offset.clamp(0.0, self.travel());
+        if let Some(child) = children.first_mut() {
+            ctx.place_child(child, Point::new(0.0, f64::from(-self.offset)));
+        }
+        ctx.set_clip_path(Rect::from_origin_size(
+            Point::ORIGIN,
+            MasonrySize::new(f64::from(size.width), f64::from(size.height)),
+        ));
+        size
+    }
+
+    /// Moves the window, answering whether it actually moved.
+    ///
+    /// A wheel at either end of the travel is not consumed, so it continues to
+    /// whatever encloses this viewport instead of being swallowed by a window
+    /// that has nowhere left to go.
+    pub(super) fn wheel(&mut self, input: Input<'_>) -> bool {
+        let Input::Wheel(scroll) = input else {
+            return false;
+        };
+        let steps = wheel::steps(&mut self.accum, scroll);
+        if steps == 0.0 {
+            return false;
+        }
+        let next = steps.mul_add(STEP, self.offset).clamp(0.0, self.travel());
+        std::mem::replace(&mut self.offset, next) != next
+    }
+
+    const fn travel(&self) -> f32 {
+        let travel = self.content - self.extent;
+        if travel > 0.0 { travel } else { 0.0 }
+    }
+}
+
 pub(super) enum NodeLayout {
     Leaf(Leaf),
     Flex(super::flex::Flex),
+    Scroll(Viewport),
     Stack,
 }
 
@@ -447,6 +543,7 @@ impl NodeLayout {
                 let intrinsic = flex.layout(ctx, children, limits);
                 limits.resolve(declared.width, declared.height, intrinsic)
             }
+            Self::Scroll(viewport) => viewport.layout(ctx, children, limits, declared),
             Self::Stack => stack(ctx, children, limits, declared),
         }
     }
@@ -454,12 +551,22 @@ impl NodeLayout {
     pub(super) const fn leaf(&mut self) -> Option<&mut Leaf> {
         match self {
             Self::Leaf(leaf) => Some(leaf),
-            Self::Flex(_) | Self::Stack => None,
+            Self::Flex(_) | Self::Scroll(_) | Self::Stack => None,
         }
     }
 
+    /// Moves a bounded window under the pointer, answering whether it did.
+    pub(super) fn wheel(&mut self, input: Input<'_>) -> bool {
+        match self {
+            Self::Scroll(viewport) => viewport.wheel(input),
+            Self::Flex(_) | Self::Leaf(_) | Self::Stack => false,
+        }
+    }
+
+    /// A window always answers, because the wheel over it is its own; a leaf
+    /// answers only what it says it does.
     pub(super) fn accepts_input(&self) -> bool {
-        matches!(self, Self::Leaf(leaf) if leaf.accepts_input())
+        matches!(self, Self::Scroll(_)) || matches!(self, Self::Leaf(leaf) if leaf.accepts_input())
     }
 
     pub(super) fn accepts_text_input(&self) -> bool {
@@ -558,37 +665,6 @@ pub(crate) const fn alignment(value: TextAlign) -> solve::Alignment {
         TextAlign::Start => solve::Alignment::Start,
         TextAlign::Center => solve::Alignment::Center,
         TextAlign::End => solve::Alignment::End,
-    }
-}
-
-pub(crate) fn text_role(
-    style: TextStyle,
-    color: Option<ColorRole>,
-    active_color: Option<ColorRole>,
-    active: bool,
-    skin: &Skin,
-) -> TextRoleSkin {
-    let (role, skin_active) = match style {
-        TextStyle::Body => (skin.text.body, None),
-        TextStyle::Brand => (skin.text.brand, None),
-        TextStyle::BrandSmall => (skin.text.brand_small, None),
-        TextStyle::DeckLetter => (skin.text.deck_letter, Some(skin.text.deck_letter_active)),
-        TextStyle::TrackTitle => (skin.text.track_title, None),
-        TextStyle::Telemetry => (skin.text.telemetry, None),
-        TextStyle::MicroLabel => (skin.text.micro_label, None),
-        TextStyle::Section => (skin.text.section, None),
-        TextStyle::Mono => (skin.text.mono, None),
-        TextStyle::Caption => (skin.text.caption, None),
-        TextStyle::VisFooter | TextStyle::VisMeta => (skin.vis.meta, None),
-        TextStyle::VisTitle => (skin.vis.title, None),
-    };
-    TextRoleSkin {
-        color: active
-            .then_some(active_color.or(skin_active))
-            .flatten()
-            .or(color)
-            .unwrap_or(role.color),
-        ..role
     }
 }
 
@@ -715,5 +791,65 @@ mod owns {
             pointer_owner(InputOwner::Engine, &ControlSpec::Knob { label: None }),
             InputOwner::Engine
         );
+    }
+}
+
+#[cfg(test)]
+mod viewport {
+    use kithara_test_utils::kithara;
+
+    use super::*;
+    use crate::interact::Scroll;
+
+    fn viewport(content: f32, extent: f32) -> Viewport {
+        Viewport {
+            content,
+            extent,
+            ..Viewport::default()
+        }
+    }
+
+    fn lines(y: f32) -> Input<'static> {
+        Input::Wheel(Scroll::Lines { x: 0.0, y })
+    }
+
+    /// The window walks the content and stops at its end rather than running
+    /// past it into blank space.
+    #[kithara::test]
+    fn the_window_travels_the_overflow_and_clamps_at_both_ends() {
+        let mut view = viewport(300.0, 100.0);
+
+        assert!(view.wheel(lines(-1.0)));
+        assert_eq!(view.offset, STEP);
+        for _ in 0..20 {
+            view.wheel(lines(-1.0));
+        }
+        assert_eq!(view.offset, 200.0, "the last row is the end of the travel");
+
+        for _ in 0..20 {
+            view.wheel(lines(1.0));
+        }
+        assert_eq!(view.offset, 0.0);
+    }
+
+    /// A window with nothing hidden below it has no travel, so the wheel is
+    /// left for whatever encloses it.
+    #[kithara::test]
+    fn a_window_taller_than_its_content_answers_no_wheel() {
+        let mut view = viewport(80.0, 100.0);
+
+        assert!(!view.wheel(lines(-1.0)));
+        assert_eq!(view.offset, 0.0);
+    }
+
+    /// At the end of the travel a further wheel the same way is not consumed,
+    /// while one back the other way still is.
+    #[kithara::test]
+    fn the_end_of_travel_releases_the_wheel_in_one_direction_only() {
+        let mut view = viewport(140.0, 100.0);
+        assert!(view.wheel(lines(-1.0)));
+
+        assert!(!view.wheel(lines(-1.0)), "there is nowhere further to go");
+        assert!(view.wheel(lines(1.0)));
     }
 }

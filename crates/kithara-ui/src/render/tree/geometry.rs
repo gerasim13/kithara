@@ -4,6 +4,8 @@ use iced::{
     widget::{Container, container, container::Style as ContainerStyle},
 };
 
+#[cfg(test)]
+use crate::render::skin::active_tone;
 use crate::{
     expand::ExpandedNode,
     layout::FrameSides,
@@ -65,14 +67,6 @@ pub(super) fn bordered<'a>(
         Some(sides) => frame_overlay(element, sides, size, skin.color(role), width),
         None => element,
     }
-}
-
-pub(crate) fn active_tone(
-    base: Option<ColorRole>,
-    active: Option<ColorRole>,
-    on: bool,
-) -> Option<ColorRole> {
-    on.then_some(active).flatten().or(base)
 }
 
 #[cfg(test)]

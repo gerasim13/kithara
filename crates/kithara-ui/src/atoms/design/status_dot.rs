@@ -11,6 +11,7 @@ use crate::{
 pub(crate) struct StatusDot {
     active_dot: Option<Rgba>,
     dot: Rgba,
+    dot_size: f32,
     metrics: StatusDotSkin,
     role: TextRoleSkin,
     text: Rgba,
@@ -23,11 +24,17 @@ pub(crate) struct StatusDotData {
 }
 
 impl StatusDot {
-    pub(crate) fn with_active_tone(tone: Tone, active_tone: Option<Tone>, skin: &Skin) -> Self {
+    pub(crate) fn with_active_tone(
+        tone: Tone,
+        active_tone: Option<Tone>,
+        dot_size: Option<f32>,
+        skin: &Skin,
+    ) -> Self {
         let metrics = skin.status_dot;
         Self {
             active_dot: active_tone.map(|tone| color(tone, skin)),
             dot: color(tone, skin),
+            dot_size: dot_size.unwrap_or(metrics.dot_size),
             metrics,
             role: TextRoleSkin {
                 color: metrics.text_color,
@@ -48,7 +55,7 @@ impl StatusDot {
         bounds: Rect,
         active: bool,
     ) {
-        let radius = self.metrics.dot_size / 2.0;
+        let radius = self.dot_size / 2.0;
         list.fill_circle(
             Pt {
                 x: bounds.x + radius,
@@ -57,12 +64,15 @@ impl StatusDot {
             radius,
             self.active_dot.filter(|_| active).unwrap_or(self.dot),
         );
+        if label.is_empty() {
+            return;
+        }
         let run = text.shape(label, self.role, None);
         list.text(
             &run,
             label,
             Transform::translate(Pt {
-                x: bounds.x + self.metrics.dot_size + self.metrics.gap,
+                x: bounds.x + self.dot_size + self.metrics.gap,
                 y: center_y(bounds, &run),
             }),
             self.text,
@@ -103,7 +113,7 @@ mod tests {
         let draw = |tone| {
             let mut text = TextContext::from(skin.text_resources());
             let mut list = DrawListBuilder::default();
-            StatusDot::with_active_tone(tone, None, skin)
+            StatusDot::with_active_tone(tone, None, None, skin)
                 .paint_with_state(&mut list, &mut text, "LIVE", bounds, false);
             list.finish()
         };
@@ -136,7 +146,7 @@ mod tests {
             "the tone must reach the dot"
         );
 
-        let active = StatusDot::with_active_tone(Tone::Neutral, Some(Tone::Danger), skin);
+        let active = StatusDot::with_active_tone(Tone::Neutral, Some(Tone::Danger), None, skin);
         let mut text = TextContext::from(skin.text_resources());
         let mut list = DrawListBuilder::default();
         active.paint_with_state(&mut list, &mut text, "LIVE", bounds, true);

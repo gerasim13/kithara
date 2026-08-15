@@ -1,3 +1,4 @@
+use crate::interact::recognizers::Edge;
 #[cfg(feature = "masonry")]
 use crate::{engine::EngineEvent, interact::recognizers::DragEvent};
 
@@ -9,6 +10,22 @@ pub(crate) fn control_event(path: &str, action: ControlAction) -> UiEvent {
         action,
         path: path.to_owned(),
     }
+}
+
+/// Where one end of a two-handled interval publishes.
+///
+/// Both ends are host-owned scalars under the control's own path, so the
+/// control needs no second document node and the host needs no rule for
+/// turning an index back into a name.
+pub(crate) fn span_event(path: &str, edge: Edge, value: f32) -> UiEvent {
+    let child = match edge {
+        Edge::Min => "min",
+        Edge::Max => "max",
+    };
+    control_event(
+        &format!("{path}/{child}"),
+        ControlAction::SetScalar(f64::from(value)),
+    )
 }
 
 #[cfg(feature = "masonry")]

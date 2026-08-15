@@ -25,12 +25,12 @@ use crate::{
     draw::{DrawList, DrawListBuilder, DrawPools, Rect},
     interact::{
         CursorShape, Hit, Hover, Input, Outcome, iced as iced_interact,
-        recognizers::{Crossing, Scalar, ScalarState, click},
+        recognizers::{Crossing, Scalar, ScalarState, Span as SpanRecognizer, SpanState, click},
     },
     render::{
         Skin, UiEvent, activate, command,
-        controls::{Drag, Grip, IndexEvent, IndexPress, Indexing, Press},
-        publish, scalar,
+        controls::{Drag, Grip, IndexEvent, IndexPress, Indexing, Press, Span},
+        publish, scalar, span_event,
     },
     solve,
     text::{TextContext, TextResources},
@@ -352,6 +352,9 @@ enum Recognize<Data> {
         count: usize,
         map: Option<IndexEvent<Data>>,
     },
+    /// An interval drag, which publishes under whichever of its two ends the
+    /// press took rather than under the control's own path.
+    Span(Box<SpanRecognizer>),
 }
 
 /// A mounted scalar drag: the recognizer, and the description it was built from
@@ -370,6 +373,7 @@ pub(crate) struct GestureState {
     paint: PaintState,
     press: Press,
     index: IndexPress,
+    span: SpanState,
 }
 
 impl<'skin, Painter> Gesture<'skin, Painter>
@@ -420,6 +424,14 @@ where
         }
     }
 
+    pub(crate) fn span(path: &str, paint: Paint<'skin, Painter>, span: Span) -> Self {
+        Self {
+            paint,
+            path: path.to_owned(),
+            recognize: Recognize::Span(Box::new(span.recognizer())),
+        }
+    }
+
     /// Mounts the gesture described by a control, returning the untouched
     /// painter when the control does not own input.
     pub(crate) fn with_grip(
@@ -434,6 +446,7 @@ where
             Grip::Command(event) => Ok(Self::command(path, paint, event)),
             Grip::Drag(drag) => Ok(Self::drag(path, paint, drag)),
             Grip::Index { count } => Ok(Self::index(path, paint, count, index_event)),
+            Grip::Span(span) => Ok(Self::span(path, paint, span)),
         }
     }
 
@@ -442,6 +455,7 @@ where
         match &self.recognize {
             Recognize::Press | Recognize::Command(_) | Recognize::Index { .. } => Gestures::PRESS,
             Recognize::Drag(drag) => drag.spec.gestures(),
+            Recognize::Span(_) => Gestures::DRAG,
         }
     }
 
@@ -480,6 +494,10 @@ where
                 repaint = Painter::READS_POINTER && changed;
                 publish(outcome)
             }
+            Recognize::Span(span) => publish(
+                span.on_input(&mut state.span, input, &self.gripped(hit))
+                    .map(|(edge, value)| span_event(&self.path, edge, value)),
+            ),
         };
         action.or_else(|| repaint.then(Action::request_redraw))
     }
@@ -581,6 +599,7 @@ where
                 .cursor(&state.drag, &self.gripped(hit))
                 .into(),
             Recognize::Index { count, .. } => self.indexed_cursor(&hit, *count).into(),
+            Recognize::Span(span) => span.cursor(&state.span, &self.gripped(hit)).into(),
         }
     }
 
@@ -975,10 +994,14 @@ mod tests {
                 active: false,
                 label: "LIVE".to_owned(),
             };
-            let iced = Paint::new(StatusDot::with_active_tone(tone, None, skin), data, skin)
-                .draw_list(&PaintState::default(), bounds, VisualState::Idle);
+            let iced = Paint::new(
+                StatusDot::with_active_tone(tone, None, None, skin),
+                data,
+                skin,
+            )
+            .draw_list(&PaintState::default(), bounds, VisualState::Idle);
             let mut masonry = Painted::new(
-                StatusDot::with_active_tone(tone, None, skin),
+                StatusDot::with_active_tone(tone, None, None, skin),
                 StatusDotData {
                     active: false,
                     label: "LIVE".to_owned(),

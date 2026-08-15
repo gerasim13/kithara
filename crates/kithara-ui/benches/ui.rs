@@ -387,6 +387,7 @@ fn column(id: Option<String>, children: Vec<ControlNode>) -> ControlNode {
         pad_x: None,
         pad_y: None,
         frame: None,
+        frame_color: None,
         background: None,
         background_alpha: None,
         write: None,

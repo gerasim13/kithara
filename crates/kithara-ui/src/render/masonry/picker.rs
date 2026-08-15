@@ -9,12 +9,14 @@ use masonry::{
 };
 use num_traits::cast::AsPrimitive;
 
-use super::{custom::HostAction, node::pointer_button};
+use super::custom::HostAction;
 use crate::{
     atoms::{table::face::Drawn, tree::retained::Drawn as TreeDrawn},
     draw::{Pt, Rect},
     engine::{Engine, Target},
-    interact::{CursorShape, Input, MOUSE, Outcome, PointerInput, PointerPhase},
+    interact::{
+        CursorShape, Input, MOUSE, Outcome, PointerInput, PointerPhase, masonry::pointer_button,
+    },
     render::{
         HostedControlPlan, UiEvent, engine_value,
         hosted::{TablePlan, TableProjection, TreePlan, TreeProjection},

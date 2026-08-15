@@ -3,10 +3,10 @@ pub(crate) use bar::{Brand, Divider, Preset, Spacer};
 pub(crate) use contract::Control;
 pub(crate) use deck::{Bpm, Summary, Time, Vis, Wave};
 pub(crate) use label::{Glyph, Readout, Select, Telemetry, Text};
-pub(crate) use panel::{ContextBar, Shader, Table, Tree};
+pub(crate) use panel::{ContextBar, PortalMap, Shader, Table, Tree};
 pub(crate) use press::{Button, Chip, NavItem, Segmented, Settings, Tab};
 pub(crate) use registry::controls;
-pub(crate) use scalar::{Crossfader, Fader, Knob, Meter, VuStereo, VuVertical};
+pub(crate) use scalar::{Crossfader, Fader, Knob, Meter, Range, VuStereo, VuVertical};
 pub(crate) use switch::{Checkbox, Toggle};
 pub(crate) use window::{Controls, Drag, TitleBar};
 

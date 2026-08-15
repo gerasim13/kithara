@@ -13,11 +13,12 @@ use crate::{
     draw::{DrawList, DrawListBuilder, DrawPools, Rect},
     interact::{
         CursorShape, Hit, Hover, Input, Outcome, PointerOwnership, PointerPhase,
-        recognizers::{Scalar, ScalarState, click},
+        recognizers::{Edge, Scalar, ScalarState, Span as SpanRecognizer, SpanState, click},
     },
     render::{
-        ControlAction, ReadValue, Reads, Skin, UiEvent, control_event,
-        controls::{DataRefresh, Drag, Grip, IndexEvent, IndexPress, Indexing, Press},
+        ControlAction, ReadValue, Reads, ScalarRange, Skin, UiEvent, control_event,
+        controls::{DataRefresh, Drag, Grip, IndexEvent, IndexPress, Indexing, Press, Span},
+        span_event,
     },
     text::TextContext,
 };
@@ -54,6 +55,7 @@ enum Recognize<Data> {
         count: usize,
         map: Option<IndexEvent<Data>>,
     },
+    Span(Box<Spanned>),
 }
 
 /// A scalar drag in flight: what it was described as, the recognizer made from
@@ -90,6 +92,49 @@ impl Dragged {
         let outcome = self
             .recognizer
             .on_input(&mut self.state, input, hit, Instant::now());
+        if matches!(
+            input,
+            Input::Pointer(pointer)
+                if matches!(pointer.phase, PointerPhase::Cancel | PointerPhase::DoubleClick)
+        ) {
+            self.state.cancel_pointer();
+        }
+        let ownership = match (had_pointer, self.state.captures_pointer()) {
+            (false, true) => PointerOwnership::Claim,
+            (true, false) => PointerOwnership::Release,
+            _ => PointerOwnership::Unchanged,
+        };
+        outcome.with_ownership(ownership)
+    }
+}
+
+/// An interval drag in flight. Kept for the same reason a scalar drag is: the
+/// press picks a handle by measuring against the interval the recognizer was
+/// built with, so a new interval re-makes it while the gesture's own state
+/// survives the hand's answer arriving back from the application.
+struct Spanned {
+    recognizer: SpanRecognizer,
+    spec: Span,
+    state: SpanState,
+}
+
+impl Spanned {
+    fn new(spec: Span) -> Self {
+        Self {
+            recognizer: spec.recognizer(),
+            spec,
+            state: SpanState::default(),
+        }
+    }
+
+    fn at(&mut self, value: ScalarRange) {
+        self.spec = self.spec.at(value);
+        self.recognizer = self.spec.recognizer();
+    }
+
+    fn follow(&mut self, input: Input<'_>, hit: &Hit) -> Outcome<(Edge, f32)> {
+        let had_pointer = self.state.captures_pointer();
+        let outcome = self.recognizer.on_input(&mut self.state, input, hit);
         if matches!(
             input,
             Input::Pointer(pointer)
@@ -160,6 +205,7 @@ where
                 count,
                 map: index_event,
             },
+            Grip::Span(span) => Recognize::Span(Box::new(Spanned::new(span))),
         };
         self.interaction = Some(Interaction {
             map_event,
@@ -186,6 +232,7 @@ where
                 Gestures::PRESS
             }
             Some(Recognize::Drag(drag)) => drag.spec.gestures(),
+            Some(Recognize::Span(_)) => Gestures::DRAG,
         }
     }
 
@@ -197,11 +244,15 @@ where
 
     /// Takes the value the control now draws into whatever counts from it.
     fn moved_to(&mut self, value: &ReadValue<'_>) {
-        let (Some(interaction), ReadValue::Scalar(value)) = (&mut self.interaction, value) else {
+        let Some(interaction) = &mut self.interaction else {
             return;
         };
-        if let Recognize::Drag(drag) = &mut interaction.recognize {
-            drag.at(AsPrimitive::<f32>::as_(value.clamp(0.0, 1.0)));
+        match (&mut interaction.recognize, value) {
+            (Recognize::Drag(drag), ReadValue::Scalar(value)) => {
+                drag.at(AsPrimitive::<f32>::as_(value.clamp(0.0, 1.0)));
+            }
+            (Recognize::Span(span), ReadValue::Range(value)) => span.at(*value),
+            _ => {}
         }
     }
 }
@@ -280,6 +331,19 @@ where
                 self.repaint |= Painter::READS_POINTER && changed;
                 return outcome.map(|event| (interaction.map_event)(event));
             }
+            Recognize::Span(span) => {
+                let outcome = span.follow(input, &gripped);
+                if let Some((edge, value)) = outcome.value() {
+                    // The control draws the end it just authored; the host's
+                    // own answer, snapped and gapped, lands a frame later.
+                    let next = span.spec.moved(edge, value);
+                    span.at(next);
+                    self.repaint |= Painter::set_read(&mut self.data, &ReadValue::Range(next));
+                }
+                return outcome.map(|(edge, value)| {
+                    (interaction.map_event)(span_event(&interaction.path, edge, value))
+                });
+            }
             Recognize::Drag(drag) => (drag.follow(input, &gripped), drag.spec),
         };
         // The control draws the value it just authored: the application is told
@@ -331,6 +395,9 @@ where
                         .painter
                         .index_at(&self.data, hit, *count)
                         .map_or(CursorShape::None, |_| CursorShape::Pointer),
+                    Recognize::Span(span) => {
+                        span.recognizer.cursor(&span.state, &self.gripped(hit))
+                    }
                 }
             })
     }

@@ -199,6 +199,18 @@ impl ViewControl for mount::Shader {
     }
 }
 
+impl ViewControl for mount::PortalMap {
+    fn view<'a>(&self, cx: &Cx<'a, '_, '_>) -> Rendered<'a> {
+        painted(self, cx)
+    }
+}
+
+impl ViewControl for mount::Range {
+    fn view<'a>(&self, cx: &Cx<'a, '_, '_>) -> Rendered<'a> {
+        painted(self, cx)
+    }
+}
+
 impl ViewControl for mount::Table<'_> {
     fn view<'a>(&self, cx: &Cx<'a, '_, '_>) -> Rendered<'a> {
         Rendered::leading(table(cx, (self.columns, self.columns_state)))

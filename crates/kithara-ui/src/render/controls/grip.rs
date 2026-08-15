@@ -1,13 +1,15 @@
 #[cfg(test)]
 use crate::interact::Gestures;
+#[cfg(feature = "masonry")]
+use crate::interact::recognizers::Edge;
 use crate::{
     atoms::painter::IndexedVisual,
     engine::scalar_value,
     interact::{
-        CursorShape, Hover, Input, Outcome, PointerOwnership, PointerPhase,
+        CursorShape, Hover, Input, Outcome, PointerOwnership, PointerPhase, recognizers,
         recognizers::{Scalar, Track, WheelStep},
     },
-    render::{ControlAction, UiEvent, control_event},
+    render::{ControlAction, ScalarRange, UiEvent, control_event},
 };
 
 /// What the pointer means to a control.
@@ -30,6 +32,52 @@ pub(crate) enum Grip {
     /// A press that picks one indexed cell. Painters use equal horizontal cells
     /// by default and may narrow the hit geometry to what they actually draw.
     Index { count: usize },
+    /// A drag over an interval, setting whichever of its two ends the press
+    /// landed nearer to.
+    Span(Span),
+}
+
+/// A two-handled interval drag, described rather than built.
+///
+/// The description carries the interval itself because the press has to know
+/// where the two handles currently are to pick one. A host that rebuilds its
+/// tree every frame gets that for free; a host that keeps its widgets is told
+/// the new interval through [`Self::at`].
+#[derive(Clone, Copy, bon::Builder)]
+pub(crate) struct Span {
+    cursor: CursorShape,
+    value: ScalarRange,
+}
+
+impl Span {
+    pub(crate) const fn recognizer(self) -> recognizers::Span {
+        recognizers::Span::new(Hover::new(self.cursor), self.value.min, self.value.max)
+    }
+
+    /// The interval that results from moving one of its ends.
+    ///
+    /// The other end is left exactly where it was, and the two are not ordered:
+    /// snapping and the minimum gap between them belong to the host, and a
+    /// control that closed the gap itself would fight the answer coming back.
+    #[cfg(feature = "masonry")]
+    pub(crate) const fn moved(self, edge: Edge, value: f32) -> ScalarRange {
+        match edge {
+            Edge::Min => ScalarRange {
+                min: value,
+                max: self.value.max,
+            },
+            Edge::Max => ScalarRange {
+                min: self.value.min,
+                max: value,
+            },
+        }
+    }
+
+    /// The same drag measured against the interval the control now draws.
+    #[cfg(feature = "masonry")]
+    pub(crate) const fn at(self, value: ScalarRange) -> Self {
+        Self { value, ..self }
+    }
 }
 
 /// A scalar drag, described rather than built.

@@ -373,6 +373,10 @@ where
             let child = expanded(child, &child_address(address, 0), context, walk, host);
             host.pressable(*path, child, effective_size(node, walk.skin))
         }
+        ExpandedNode::Scroll { id, child, .. } => {
+            let child = expanded(child, &child_address(address, 0), context, walk, host);
+            host.scroll(*id, child, effective_size(node, walk.skin))
+        }
         ExpandedNode::Slot { children, .. } => {
             let children = expanded_children(children, address, context, hidden, walk, host);
             host.slot(children, effective_size(node, walk.skin))

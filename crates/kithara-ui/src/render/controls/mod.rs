@@ -15,7 +15,7 @@ pub(crate) use chrome::{ChromeLeaf, chrome_leaf, header_chevron};
 #[cfg(feature = "masonry")]
 pub(crate) use contract::DataRefresh;
 pub(crate) use contract::{Draws, Reading};
-pub(crate) use grip::{Drag, Grip, IndexEvent, IndexPress, Indexing};
+pub(crate) use grip::{Drag, Grip, IndexEvent, IndexPress, Indexing, Span};
 #[cfg(feature = "iced")]
 pub(crate) use painted::{Gesture, Paint};
 pub(crate) use press::Press;
