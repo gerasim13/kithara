@@ -110,7 +110,7 @@ pub(crate) struct Catalog {
 pub(crate) static CATALOG: LazyLock<Catalog> = LazyLock::new(load_catalog);
 
 fn load_catalog() -> Catalog {
-    let data: MockData = ron::from_str(include_str!("assets/mock-data.ron"))
+    let data: MockData = ron::from_str(include_str!("../assets/mock-data.ron"))
         .expect("embedded gallery mock data must parse");
     let data: &'static MockData = Box::leak(Box::new(data));
     let rows: Vec<TableRow<'static>> = data

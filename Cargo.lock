@@ -5021,6 +5021,7 @@ dependencies = [
  "derive_more",
  "fieldwork",
  "futures-lite",
+ "hotpath",
  "iced",
  "iced_renderer",
  "iced_runtime",

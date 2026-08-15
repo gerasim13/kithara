@@ -2,7 +2,7 @@ use kithara_ui::render::{
     PortalMapView, PortalTarget, ReadValue, ScalarRange, TableRow, TableValue,
 };
 
-use crate::mock_data::CATALOG;
+use super::data::CATALOG;
 
 struct PivotConsts;
 

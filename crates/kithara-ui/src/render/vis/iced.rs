@@ -53,6 +53,7 @@ impl Primitive {
 impl shader::Primitive for Primitive {
     type Pipeline = Pipeline;
 
+    #[cfg_attr(feature = "perf", hotpath::measure(label = "iced.vis.encode"))]
     fn draw(&self, pipeline: &Self::Pipeline, render_pass: &mut wgpu::RenderPass<'_>) -> bool {
         let Some(slot) = pipeline.slots.get(self.slot.load(Ordering::Relaxed)) else {
             return true;
@@ -63,6 +64,7 @@ impl shader::Primitive for Primitive {
         true
     }
 
+    #[cfg_attr(feature = "perf", hotpath::measure(label = "iced.vis.prepare"))]
     fn prepare(
         &self,
         pipeline: &mut Self::Pipeline,

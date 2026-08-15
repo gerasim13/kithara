@@ -18,6 +18,7 @@ default = ["iced"]
 # would fail them for having no hardware rather than for a defect.
 gpu = ["iced", "dep:pollster"]
 masonry = ["dep:futures-lite", "dep:masonry", "dep:winit", "vello"]
+perf = ["dep:hotpath", "hotpath/hotpath"]
 render = [
     "dep:kithara-bufpool",
     "dep:kithara-platform",
@@ -68,6 +69,10 @@ unicode-segmentation = { workspace = true, optional = true }
 vello = { workspace = true, optional = true }
 winit = { workspace = true, optional = true }
 
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+# hotpath (perf/memprof profiling) does not build on wasm32; keep it off the wasm closure.
+hotpath = { workspace = true, optional = true }
+
 [dev-dependencies]
 kithara-platform = { path = "../kithara-platform" }
 kithara-test-utils = { path = "../kithara-test-utils", features = [
@@ -97,6 +102,16 @@ test = true
 name = "masonry_host"
 required-features = ["masonry"]
 test = true
+
+[[test]]
+name = "frame_perf"
+path = "tests/frame_perf.rs"
+required-features = ["perf", "iced", "masonry"]
+
+[[test]]
+name = "page_perf"
+path = "tests/page_perf.rs"
+required-features = ["perf", "iced", "masonry"]
 
 [[bench]]
 name = "ui"

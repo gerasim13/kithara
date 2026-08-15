@@ -163,6 +163,11 @@ impl VisPass {
 
     /// Converts logical declarations at `scale`, clips their scissors to the
     /// physical target size, and draws them after Vello.
+    ///
+    /// Everything here is CPU work: filtering, preparing, writing uniforms and
+    /// recording the pass. The submitted commands are timed by whoever fences
+    /// the queue, which is a different measurement and a different scenario.
+    #[cfg_attr(feature = "perf", hotpath::measure(label = "vis.pass.cpu"))]
     pub fn render(
         &mut self,
         device: &wgpu::Device,

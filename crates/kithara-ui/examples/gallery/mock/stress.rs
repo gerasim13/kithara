@@ -7,7 +7,7 @@ use kithara_ui::{
 };
 use num_traits::cast::AsPrimitive;
 
-use crate::mock::MockRegistry;
+use super::MockRegistry;
 
 struct Consts;
 
@@ -31,6 +31,17 @@ pub(super) struct StressState {
 
 impl Default for StressState {
     fn default() -> Self {
+        Self::new(Consts::WAVE_BUCKETS)
+    }
+}
+
+impl StressState {
+    /// The stress page carrying waveforms of `buckets` samples each.
+    ///
+    /// The count is a parameter because it is the page's own weight: a
+    /// measurement that sweeps it separates a frame slow from drawing from a
+    /// frame slow from folding buckets into the same columns.
+    pub(super) fn new(buckets: u16) -> Self {
         Self {
             fader: 0.7,
             frame_ms: VecDeque::with_capacity(Consts::FRAME_WINDOW),
@@ -41,12 +52,10 @@ impl Default for StressState {
             last_tick: None,
             levels: [StereoLevels::default(); 8],
             phase: 0.0,
-            waveforms: std::array::from_fn(stress_waveform),
+            waveforms: std::array::from_fn(|index| stress_waveform(index, buckets)),
         }
     }
-}
 
-impl StressState {
     pub(super) fn get(&self, endpoint: &str) -> Option<ReadValue<'_>> {
         let value = match endpoint {
             "bench.fps" => ReadValue::Text(&self.fps),
@@ -171,9 +180,9 @@ fn stress_bucket(phase: f32) -> WaveBucket {
     }
 }
 
-fn stress_waveform(index: usize) -> Vec<WaveBucket> {
+fn stress_waveform(index: usize, buckets: u16) -> Vec<WaveBucket> {
     let offset = u16::try_from(index).map_or(0.0, f32::from);
-    (0..Consts::WAVE_BUCKETS)
+    (0..buckets)
         .map(|bucket| stress_bucket(f32::from(bucket).mul_add(0.013, offset)))
         .collect()
 }

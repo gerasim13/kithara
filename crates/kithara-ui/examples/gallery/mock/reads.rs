@@ -9,17 +9,15 @@ use num_traits::cast::AsPrimitive;
 use super::{
     clock::ClockState,
     consts::Consts,
+    data::CATALOG,
     menu::{ContextState, MenuState},
+    mixer::MixerState,
     pivot::PivotState,
     quality::QualityState,
+    stress::StressState,
+    transport::DeckTransport,
 };
-use crate::{
-    mock_data::CATALOG,
-    mock_mixer::MixerState,
-    mock_stress::StressState,
-    mock_transport::DeckTransport,
-    sections::{ModuleDemo, Tab},
-};
+use crate::sections::{ModuleDemo, Tab};
 
 #[derive(fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
@@ -259,6 +257,14 @@ impl MockReads {
 
     pub(crate) const fn select_module(&mut self, module: ModuleDemo) {
         self.active_module = module;
+    }
+
+    /// Rebuilds the stress page's waveforms at a different bucket count, which
+    /// is the one weight of that page a measurement can vary. The gallery shows
+    /// the page at its own count; only a harness sweeps it.
+    #[cfg(test)]
+    pub(crate) fn set_wave_buckets(&mut self, buckets: u16) {
+        self.stress = StressState::new(buckets);
     }
 
     fn select_tree_row(&mut self, index: usize) {

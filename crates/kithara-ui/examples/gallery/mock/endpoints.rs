@@ -5,8 +5,7 @@ use kithara_ui::{
     registry::{EndpointCategory, EndpointDesc, EndpointRegistry, ValueKind},
 };
 
-use super::consts::Consts;
-use crate::{mock_mixer, mock_stress};
+use super::{consts::Consts, mixer, stress};
 
 #[derive(Default)]
 pub(crate) struct MockRegistry {
@@ -296,8 +295,8 @@ pub(crate) fn registry() -> impl EndpointRegistry {
     insert_deck_endpoints(&mut registry);
     insert_clock_endpoints(&mut registry);
     insert_pivot_endpoints(&mut registry);
-    mock_mixer::insert_endpoints(&mut registry);
-    mock_stress::insert_endpoints(&mut registry);
+    mixer::insert_endpoints(&mut registry);
+    stress::insert_endpoints(&mut registry);
     insert_output_levels(&mut registry);
     for id in ["player.output.volume", "mock.cells.segmented", "vis.preset"] {
         registry.insert(

@@ -48,6 +48,10 @@ impl ShaderPass {
     /// Renders every declaration and installs its GPU texture into the Vello
     /// renderer's image registry. The following Vello render consumes those
     /// images at their scene-authored clip and z-order positions.
+    ///
+    /// Everything here is CPU work up to the submit; the shader programs
+    /// themselves are timed by whoever fences the queue.
+    #[cfg_attr(feature = "perf", hotpath::measure(label = "shader.pass.cpu"))]
     pub fn render(
         &mut self,
         device: &wgpu::Device,

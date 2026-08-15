@@ -81,6 +81,11 @@ struct Primitive(ShaderFrame);
 impl shader::Primitive for Primitive {
     type Pipeline = Pipeline;
 
+    /// The immediate host draws the document shader in two passes: this one
+    /// pastes the offscreen image [`Self::prepare`] filled. The retained host
+    /// has no counterpart - it hands Vello the same image and Vello composites
+    /// it - so this cost belongs to the split, not to either host being slower.
+    #[cfg_attr(feature = "perf", hotpath::measure(label = "iced.shader.composite"))]
     fn draw(&self, pipeline: &Self::Pipeline, render_pass: &mut wgpu::RenderPass<'_>) -> bool {
         let Some(slot) = pipeline.slots.get(self.0.image()) else {
             return true;
@@ -91,6 +96,15 @@ impl shader::Primitive for Primitive {
         true
     }
 
+    /// Resolves the program, the image slot and the uniforms for this frame,
+    /// then runs the document's own fragment into that image.
+    ///
+    /// The two halves are timed apart: everything up to the uniform write is
+    /// bookkeeping this host does per frame, and [`offscreen`] is the shader
+    /// itself. Folding them together would report a slow shader for a slow
+    /// lookup. The outer label encloses the inner one, so the bookkeeping is
+    /// their difference, not the outer number.
+    #[cfg_attr(feature = "perf", hotpath::measure(label = "iced.shader.prepare"))]
     fn prepare(
         &self,
         pipeline: &mut Self::Pipeline,
@@ -143,32 +157,42 @@ impl shader::Primitive for Primitive {
         let viewport: [f32; 2] = [size[0].as_(), size[1].as_()];
         self.0.write_uniforms(viewport, &mut slot.uniform_bytes);
         queue.write_buffer(&slot.uniform_buffer, 0, &slot.uniform_bytes);
-
-        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("kithara_ui.shader.iced.encoder"),
-        });
-        {
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("kithara_ui.shader.iced.pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &slot.texture_view,
-                    resolve_target: None,
-                    depth_slice: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-            });
-            pass.set_pipeline(program);
-            pass.set_bind_group(0, &slot.uniform_bind_group, &[]);
-            pass.draw(0..3, 0..1);
-        }
-        queue.submit([encoder.finish()]);
+        offscreen(device, queue, program, slot);
     }
+}
+
+/// Runs one document fragment into the slot's own texture, on its own submit.
+#[cfg_attr(feature = "perf", hotpath::measure(label = "iced.shader.offscreen"))]
+fn offscreen(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    program: &wgpu::RenderPipeline,
+    slot: &Slot,
+) {
+    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+        label: Some("kithara_ui.shader.iced.encoder"),
+    });
+    {
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("kithara_ui.shader.iced.pass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: &slot.texture_view,
+                resolve_target: None,
+                depth_slice: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+        });
+        pass.set_pipeline(program);
+        pass.set_bind_group(0, &slot.uniform_bind_group, &[]);
+        pass.draw(0..3, 0..1);
+    }
+    queue.submit([encoder.finish()]);
 }
 
 struct Pipeline {

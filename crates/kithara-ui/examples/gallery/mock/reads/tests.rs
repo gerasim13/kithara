@@ -715,3 +715,18 @@ fn pivot_controls_follow_the_handoff_ratio_range_and_loop_contract() {
     reads.apply("pivot/loops/mul-4", &ControlAction::Activate);
     assert_eq!(reads.get("pivot.multiplier.4"), Some(ReadValue::Bool(true)));
 }
+
+/// The stress page's waveform length is the one weight of that page a
+/// measurement can vary, so it has to follow the count it was built with rather
+/// than a constant baked into the mock.
+#[kithara::test]
+fn the_stress_waveform_carries_the_bucket_count_it_was_built_with() {
+    let mut reads = MockReads::default();
+    for buckets in [8_192_u16, 256] {
+        reads.set_wave_buckets(buckets);
+        let Some(ReadValue::Waveform(view)) = reads.get("bench.wave.0") else {
+            panic!("the stress page must answer a waveform");
+        };
+        assert_eq!(view.buckets.len(), usize::from(buckets));
+    }
+}
