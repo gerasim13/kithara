@@ -20,6 +20,9 @@ use crate::{
 };
 
 mod evidence;
+mod sanitizer;
+
+pub(crate) use sanitizer::{ATTEMPT_MARKER, findings as sanitizer_findings};
 
 const MAX_FAILURE_ROWS: usize = 100;
 const MAX_PROBLEM_ROWS: usize = 100;
@@ -30,6 +33,8 @@ const PERCENT_HUNDREDTHS: usize = PERCENT_SCALE * PERCENT_SCALE;
 const MAX_INVENTORY_CASES: usize = 100_000;
 pub(crate) const MAX_INVENTORY_BYTES: u64 = 64 * 1_024 * 1_024;
 pub(crate) const MAX_JUNIT_BYTES: u64 = 512 * 1_024 * 1_024;
+/// Bounds a lane log, which a campaign appends to once per attempt.
+pub(crate) const MAX_LANE_LOG_BYTES: u64 = 512 * 1_024 * 1_024;
 
 #[derive(Debug, Args)]
 pub(crate) struct StressReportArgs {
@@ -888,7 +893,7 @@ fn test_id(case: &CaseTiming) -> String {
     markdown_cell(&format!("{} {}", case.suite, case.name))
 }
 
-fn rate_percent(failures: usize, attempts: usize) -> String {
+pub(crate) fn rate_percent(failures: usize, attempts: usize) -> String {
     if attempts == 0 {
         return "0.00%".to_owned();
     }

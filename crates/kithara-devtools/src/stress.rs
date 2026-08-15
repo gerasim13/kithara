@@ -4,6 +4,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     fmt::Write as _,
     fs,
+    io::Write as _,
     path::{Component, Path, PathBuf},
     process::{Command, ExitStatus},
 };
@@ -11,9 +12,14 @@ use std::{
 use anyhow::{Context, Error, Result, ensure};
 use clap::{Args, Subcommand};
 
+/// Bounds the distinct sanitizer findings one lane section lists.
+const MAX_FINDING_ROWS: usize = 100;
+
 use crate::{
     Ctx,
-    common::project::{ProjectConfig, StressArtifactConfig, StressConfig, StressModeConfig},
+    common::project::{
+        ProjectConfig, StressArtifactConfig, StressConfig, StressEvidenceConfig, StressModeConfig,
+    },
     stress_report::{self, StressReportArgs},
     stress_run::{self, StressRunSpec},
     test::{ConfiguredLane, configured_lane},
@@ -275,6 +281,21 @@ fn lane_runner(
 }
 
 /// Records one exit code per attempt, in order.
+/// Separates one attempt's output from the next in the lane's shared log.
+///
+/// The attempts append to one file, so without a boundary a finding cannot be
+/// told apart from the same finding on a later attempt — and a violation that
+/// fires once in fifty would be indistinguishable from one that fires always.
+fn mark_attempt(log: &Path, attempt: usize) -> Result<()> {
+    let mut file = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(log)
+        .with_context(|| format!("open stress log {}", log.display()))?;
+    writeln!(file, "{}{attempt}", stress_report::ATTEMPT_MARKER)
+        .with_context(|| format!("write stress log {}", log.display()))
+}
+
 fn write_attempts(path: &Path, codes: &[i32]) -> Result<()> {
     let json = serde_json::to_string(codes).context("serialize command lane attempts")?;
     fs::write(path, json).with_context(|| format!("write command lane attempts {}", path.display()))
@@ -299,7 +320,8 @@ fn run_command_lane(
         .split_first()
         .context("a command lane needs a program to run")?;
     let mut codes = Vec::with_capacity(count);
-    for _ in 0..count {
+    for attempt in 0..count {
+        mark_attempt(&paths.log, attempt)?;
         let mut command = Command::new(program);
         command.args(arguments).current_dir(&ctx.root);
         environment.apply(&mut command);
@@ -526,7 +548,7 @@ fn run_report(args: &ReportArgs, ctx: &Ctx) -> Result<()> {
         let lane = if mode.command.is_empty() {
             stress_report::lane_report(&report_args)?
         } else {
-            command_lane_report(&paths.attempts, count)
+            command_lane_report(&paths, count, &config.evidence)
         };
         let expectation =
             ReportExpectation::new(&ctx.config, config, lane_name, mode, &filter, count)?;
@@ -574,7 +596,13 @@ fn run_report(args: &ReportArgs, ctx: &Ctx) -> Result<()> {
 /// rejected. That is exactly the number a one-shot gate cannot produce: a
 /// sanitizer that aborts on one attempt in two is green half the time, and
 /// half the time is what has kept its defect open.
-fn command_lane_report(attempts: &Path, expected: usize) -> stress_report::LaneReport {
+fn command_lane_report(
+    paths: &Paths,
+    expected: usize,
+    evidence: &StressEvidenceConfig,
+) -> stress_report::LaneReport {
+    let attempts = &paths.attempts;
+    let log = &paths.log;
     let mut markdown = String::from("# Stress evidence\n");
     let codes = match fs::read_to_string(attempts)
         .with_context(|| format!("read command lane attempts {}", attempts.display()))
@@ -622,12 +650,8 @@ fn command_lane_report(attempts: &Path, expected: usize) -> stress_report::LaneR
             "- Rejected attempt:code — `{}`",
             markdown_cell(&codes)
         );
-        let _ = writeln!(
-            markdown,
-            "\nThe command's own output is in this lane's log; a sanitizer names \
-             the offending call there."
-        );
     }
+    append_findings(&mut markdown, log, evidence, failed, observed);
     let verdict = if result == "PASSED" {
         Ok(())
     } else {
@@ -641,6 +665,74 @@ fn command_lane_report(attempts: &Path, expected: usize) -> stress_report::LaneR
             attempts: observed,
         }),
         verdict,
+    }
+}
+
+/// Reports what the sanitizer itself said, and says so when it said nothing.
+///
+/// A rejected attempt with no finding is not a smaller version of a finding: it
+/// means the command failed for a reason this report cannot name, and printing
+/// only a count there would read as though the cause had been located.
+fn append_findings(
+    markdown: &mut String,
+    log: &Path,
+    evidence: &StressEvidenceConfig,
+    failed: usize,
+    observed: usize,
+) {
+    let text = match stress_report::read_bounded_utf8(
+        log,
+        stress_report::MAX_LANE_LOG_BYTES,
+        "stress lane log",
+    ) {
+        Ok(text) => text,
+        Err(error) => {
+            let _ = writeln!(
+                markdown,
+                "\nEvidence problem: this lane's log could not be read, so its findings are \
+                 unknown — `{}`",
+                markdown_cell(&format!("{error:#}"))
+            );
+            return;
+        }
+    };
+    let findings = stress_report::sanitizer_findings(&text, evidence);
+    if findings.is_empty() {
+        if failed > 0 {
+            let _ = writeln!(
+                markdown,
+                "\nNo sanitizer report was found in this lane's log. The rejected attempts failed \
+                 for a reason this report cannot name; the command's own output is in the log."
+            );
+        }
+        return;
+    }
+    let _ = writeln!(
+        markdown,
+        "\n## Sanitizer findings\n\nEach names the violated contract, the call that violated it, \
+         and the first project frames that reached it.\n\n\
+         | finding | attempts | rate |\n|---|---|---:|"
+    );
+    for (signature, attempts) in findings.iter().take(MAX_FINDING_ROWS) {
+        let listed = attempts
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(", ");
+        let _ = writeln!(
+            markdown,
+            "| `{}` | {} | {} |",
+            markdown_cell(signature),
+            markdown_cell(&listed),
+            stress_report::rate_percent(attempts.len(), observed)
+        );
+    }
+    if findings.len() > MAX_FINDING_ROWS {
+        let _ = writeln!(
+            markdown,
+            "\nShowing the first {MAX_FINDING_ROWS} of {} distinct findings.",
+            findings.len()
+        );
     }
 }
 
@@ -1070,15 +1162,35 @@ mod tests {
         assert_eq!(expectation.runner.prefix_args, ["test", "rtsan"]);
     }
 
+    const VIOLATION: &str = "\
+==2534==ERROR: RealtimeSanitizer: unsafe-library-call
+Intercepted call to real-time unsafe function `malloc` in real-time context!
+    #0 0x5628d3a1b2c0 in malloc (/opt/bin/suite_stress+0x1042c0)
+    #1 0x5628d3c11f30 in kithara_audio::renderer::mix crates/kithara-audio/src/renderer/mix.rs:214:23
+";
+
+    fn command_lane(temp: &tempfile::TempDir, attempts: &str, log: &str) -> Paths {
+        let paths = Paths::new(
+            temp.path().to_path_buf(),
+            &StressArtifactConfig {
+                attempts: "attempts.json".to_owned(),
+                log: "lane.log".to_owned(),
+                ..StressArtifactConfig::default()
+            },
+        );
+        fs::write(&paths.attempts, attempts).expect("write attempts fixture");
+        fs::write(&paths.log, log).expect("write log fixture");
+        paths
+    }
+
     /// A sanitizer that fires on one attempt in two is green half the time. The
     /// campaign's job is to state that as a rate rather than as a verdict.
     #[test]
     fn a_command_lane_reports_how_many_attempts_the_command_rejected() {
         let temp = tempfile::tempdir().expect("tempdir");
-        let attempts = temp.path().join("attempts.json");
-        fs::write(&attempts, "[0,134,0,0]").expect("write fixture");
+        let paths = command_lane(&temp, "[0,134,0,0]", "");
 
-        let report = command_lane_report(&attempts, 4);
+        let report = command_lane_report(&paths, 4, &StressEvidenceConfig::default());
 
         assert!(
             report.markdown.contains("Rejected attempts: `1`"),
@@ -1088,11 +1200,62 @@ mod tests {
         assert!(report.verdict.is_err());
     }
 
+    /// An exit code says a lane is red. It does not say which contract broke,
+    /// where, or on which attempts — and without that the reader is back to
+    /// opening the log and guessing.
+    #[test]
+    fn a_command_lane_names_the_violation_the_sanitizer_reported() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let log = format!("{}0\n{VIOLATION}", stress_report::ATTEMPT_MARKER);
+        let paths = command_lane(&temp, "[134,0]", &log);
+
+        let report = command_lane_report(&paths, 2, &StressEvidenceConfig::default());
+
+        assert!(
+            report.markdown.contains("unsafe-library-call"),
+            "{}",
+            report.markdown
+        );
+        assert!(report.markdown.contains("malloc"), "{}", report.markdown);
+        assert!(
+            report
+                .markdown
+                .contains("crates/kithara-audio/src/renderer/mix.rs:214:23"),
+            "{}",
+            report.markdown
+        );
+        assert!(report.markdown.contains("50.00%"), "{}", report.markdown);
+    }
+
+    /// A rejected attempt the report cannot explain must say so. Printing only
+    /// a count there reads as though the cause had been located.
+    #[test]
+    fn a_rejection_without_a_sanitizer_report_is_declared_unexplained() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let paths = command_lane(&temp, "[1,0]", "error: could not compile `kithara-audio`\n");
+
+        let report = command_lane_report(&paths, 2, &StressEvidenceConfig::default());
+
+        assert!(
+            report.markdown.contains("cannot name"),
+            "{}",
+            report.markdown
+        );
+    }
+
     #[test]
     fn a_command_lane_missing_its_attempts_does_not_read_as_a_clean_run() {
         let temp = tempfile::tempdir().expect("tempdir");
+        let paths = Paths::new(
+            temp.path().to_path_buf(),
+            &StressArtifactConfig {
+                attempts: "absent.json".to_owned(),
+                log: "lane.log".to_owned(),
+                ..StressArtifactConfig::default()
+            },
+        );
 
-        let report = command_lane_report(&temp.path().join("absent.json"), 2);
+        let report = command_lane_report(&paths, 2, &StressEvidenceConfig::default());
 
         assert!(
             report.markdown.contains("NO ATTEMPTS"),

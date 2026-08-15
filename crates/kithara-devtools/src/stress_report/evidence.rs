@@ -343,7 +343,7 @@ fn is_junit_timeout(line: &str) -> bool {
     line == "test timeout" || line.starts_with("test timeout:")
 }
 
-fn backtrace_signature(output: &str, evidence: &StressEvidenceConfig) -> Option<String> {
+pub(super) fn backtrace_signature(output: &str, evidence: &StressEvidenceConfig) -> Option<String> {
     static SOURCE: LazyLock<Regex> = LazyLock::new(|| {
         Regex::new(r"(?:[A-Za-z0-9_.-]+/)+[A-Za-z0-9_./-]+\.rs:\d+(?::\d+)?")
             .expect("source-location regex")
@@ -488,7 +488,7 @@ fn clean_lines(text: &str) -> Vec<String> {
         .collect()
 }
 
-fn strip_ansi(text: &str) -> String {
+pub(super) fn strip_ansi(text: &str) -> String {
     static ANSI: LazyLock<Regex> =
         LazyLock::new(|| Regex::new(r"\x1b\[[0-9;?]*[ -/]*[@-~]").expect("ANSI escape regex"));
     ANSI.replace_all(text, "").into_owned()
