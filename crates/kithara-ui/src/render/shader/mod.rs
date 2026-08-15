@@ -5,6 +5,8 @@ mod frame;
 mod iced;
 #[cfg(feature = "masonry")]
 mod masonry;
+#[cfg(test)]
+mod tests;
 
 #[cfg(feature = "masonry")]
 pub(crate) use frame::ShaderFrameError;

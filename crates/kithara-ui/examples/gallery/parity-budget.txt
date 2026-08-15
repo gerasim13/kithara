@@ -23,9 +23,19 @@
 03-modules-deck.png        19
 # Retained slots now centre fixed content like iced; telemetry fell 7.8 -> 1.2.
 03-modules-telemetry.png    2
-16-stress.png               4
+# Raised 4 -> 5 on 2026-08-15: the nav gained CLOCK and PIVOT rows with
+# production PR #188, and every page carries that sidebar, so each page picked
+# up two more rows of the nav's own text disagreement. Stress sat closest to its
+# line and was the only page to cross it; measured 4.1% over three runs.
+16-stress.png               5
 
 # Table landed 2026-08-09: library2 fell 37.8% -> 3.1%, table to 1.5%.
+# The two pages production PR #188 added, priced here for the first time.
+# Measured 2026-08-15 at the same geometry as the rest: clock 2.0%, pivot 2.5%.
+# Both are ordinary text-and-chip pages; neither hides a missing control.
+18-clock.png                3
+19-pivot.png                3
+
 15-library2.png             4
 08-micro.png                3
 13-table.png            2
