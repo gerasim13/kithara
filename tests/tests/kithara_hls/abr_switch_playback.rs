@@ -206,7 +206,8 @@ async fn abr_switch_real_assets_does_not_hang(temp_dir: TestTempDir) {
     native,
     serial,
     timeout(Duration::from_secs(30)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "3")
+    env(KITHARA_HANG_TIMEOUT_SECS = "3"),
+    tracing("kithara_abr=debug,kithara_audio=debug,kithara_hls=debug,kithara_stream=debug")
 )]
 async fn packaged_abr_switch_keeps_player_continuity(temp_dir: TestTempDir) {
     let (_server, url) = create_packaged_abr_fixture().await;

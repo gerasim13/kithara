@@ -63,7 +63,7 @@ fn create_pcm_segments() -> Vec<u8> {
     serial,
     timeout(Duration::from_secs(30)),
     env(KITHARA_HANG_TIMEOUT_SECS = "3"),
-    tracing("kithara_abr=debug,kithara_hls=debug")
+    tracing("kithara_abr=debug,kithara_audio=debug,kithara_hls=debug,kithara_stream=debug")
 )]
 async fn abr_auto_switch_during_playback(
     temp_dir: TestTempDir,

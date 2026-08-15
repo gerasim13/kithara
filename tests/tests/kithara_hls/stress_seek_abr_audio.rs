@@ -139,7 +139,8 @@ fn assert_abr_size_probes(fixture: AbrAudioFixture, counter: &SizeProbeCounter) 
     tokio,
     serial,
     timeout(Duration::from_secs(30)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "3")
+    env(KITHARA_HANG_TIMEOUT_SECS = "3"),
+    tracing("kithara_abr=debug,kithara_audio=debug,kithara_hls=debug,kithara_stream=debug")
 )]
 #[case::wav_file_like(AbrAudioFixture::WavFileLike)]
 #[case::flac_fmp4(AbrAudioFixture::FlacFmp4)]

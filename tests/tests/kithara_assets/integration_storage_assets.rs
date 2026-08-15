@@ -487,7 +487,8 @@ fn delete_asset_only_removes_own_directory(temp_dir: kithara_integration_tests::
 #[kithara::test(
     native,
     timeout(Duration::from_secs(5)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+    env(KITHARA_HANG_TIMEOUT_SECS = "1"),
+    tracing("kithara_assets=debug,kithara_storage=debug")
 )]
 fn delete_assets_sequentially(temp_dir: kithara_integration_tests::TestTempDir) {
     let root_path = temp_dir.path();

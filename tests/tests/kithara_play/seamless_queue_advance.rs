@@ -31,7 +31,8 @@ const SILENCE_THRESHOLD: f32 = 1.0e-3;
     native,
     tokio,
     timeout(Duration::from_secs(30)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+    env(KITHARA_HANG_TIMEOUT_SECS = "1"),
+    tracing("kithara_audio=debug,kithara_decode=debug,kithara_play=debug,kithara_stream=debug")
 )]
 async fn seamless_queue_advance_gapless_when_crossfade_is_zero(temp_dir: TestTempDir) {
     let server = TestServerHelper::new().await;

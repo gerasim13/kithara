@@ -163,7 +163,8 @@ async fn single_track_silence_trim_strips_leading_priming(temp_dir: TestTempDir)
     native,
     tokio,
     timeout(Duration::from_secs(30)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+    env(KITHARA_HANG_TIMEOUT_SECS = "1"),
+    tracing("kithara_audio=debug,kithara_decode=debug,kithara_play=debug,kithara_stream=debug")
 )]
 async fn two_tracks_gapless_no_click_with_silence_trim_zero_crossfade(temp_dir: TestTempDir) {
     let server = TestServerHelper::new().await;

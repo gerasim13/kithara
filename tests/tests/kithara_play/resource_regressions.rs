@@ -1039,7 +1039,8 @@ async fn player_worker_hls_then_mp3_reopen_keeps_backward_seek(
 #[kithara::test(
     tokio,
     timeout(Duration::from_secs(60)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "10")
+    env(KITHARA_HANG_TIMEOUT_SECS = "10"),
+    tracing("kithara_audio=debug,kithara_decode=debug,kithara_play=debug,kithara_stream=debug")
 )]
 async fn stress_offline_crossfade_no_gaps() {
     use kithara_integration_tests::offline::OfflinePlayer;

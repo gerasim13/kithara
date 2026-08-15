@@ -93,7 +93,11 @@ async fn basic_decode_to_eof() {
     );
 }
 
-#[kithara::test(tokio, timeout(Duration::from_secs(10)))]
+#[kithara::test(
+    tokio,
+    timeout(Duration::from_secs(10)),
+    tracing("kithara_audio=debug,kithara_decode=debug,kithara_stream=debug")
+)]
 async fn seek_during_active_decode_completes_without_hang() {
     let config = wav_stream(44_100 * 3);
     let audio = Audio::<Stream<MemStream>>::new(config)
@@ -155,7 +159,11 @@ async fn seek_during_active_decode_completes_without_hang() {
     );
 }
 
-#[kithara::test(tokio, timeout(Duration::from_secs(15)))]
+#[kithara::test(
+    tokio,
+    timeout(Duration::from_secs(15)),
+    tracing("kithara_audio=debug,kithara_decode=debug,kithara_stream=debug")
+)]
 async fn rapid_seeks_via_timeline_all_complete() {
     const SEEK_COUNT: usize = 6;
 

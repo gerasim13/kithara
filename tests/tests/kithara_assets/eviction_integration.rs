@@ -47,7 +47,8 @@ fn asset_scope_with_root(
 #[kithara::test(
     native,
     timeout(Duration::from_secs(5)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+    env(KITHARA_HANG_TIMEOUT_SECS = "1"),
+    tracing("kithara_assets=debug,kithara_storage=debug")
 )]
 #[case(2, 3)]
 #[case(3, 4)]
@@ -202,7 +203,8 @@ fn eviction_with_zero_byte_assets(temp_dir: kithara_integration_tests::TestTempD
 #[kithara::test(
     native,
     timeout(Duration::from_secs(5)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+    env(KITHARA_HANG_TIMEOUT_SECS = "1"),
+    tracing("kithara_assets=debug,kithara_storage=debug")
 )]
 #[case(1, 3, 1)]
 #[case(2, 4, 1)]
