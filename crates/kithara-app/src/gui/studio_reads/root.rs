@@ -5,9 +5,10 @@ use super::{
     deck::{DeckNode, DecksNode, EngineNode},
     library::LibraryNode,
     mix::{MixNode, PlayerNode, StripsNode},
+    stage::{DeckTempo, TempoNode, VisNode},
     ui::{DragNode, UiNode},
 };
-use crate::gui::app::Kithara;
+use crate::gui::{app::Kithara, studio_ui::cache::analysis_bpm, view::playhead};
 
 pub(in crate::gui) struct StudioRoot<'a> {
     broadcast: BroadcastNode<'a>,
@@ -16,6 +17,8 @@ pub(in crate::gui) struct StudioRoot<'a> {
     mix: MixNode<'a>,
     mixer: StripsNode<'a>,
     player: PlayerNode<'a>,
+    tempo: TempoNode<'a>,
+    vis: VisNode<'a>,
     ui: UiNode<'a>,
     decks: Vec<DeckNode<'a>>,
 }
@@ -40,6 +43,16 @@ impl<'a> StudioRoot<'a> {
             })
             .collect();
         let engine = EngineNode::new(&decks);
+        let tempos: Vec<DeckTempo> = state
+            .decks
+            .iter()
+            .enumerate()
+            .map(|(at, deck)| DeckTempo {
+                bpm: analysis_bpm(&deck.ui),
+                focused: at == focus,
+                position: playhead(&deck.ui).max(0.0),
+            })
+            .collect();
         let drag = DragNode::new(
             cache.drag.and_then(|row| library.title(row)),
             cache.drag_target(),
@@ -57,6 +70,8 @@ impl<'a> StudioRoot<'a> {
             mix: MixNode::new(state.session.mix()),
             mixer: StripsNode::new(state.session.mix()),
             player: PlayerNode::new(state.session.mix()),
+            tempo: TempoNode::new(&cache.stage, &tempos),
+            vis: VisNode::new(&cache.stage, &tempos),
             ui: UiNode::new(drag, cache.layout(), &cache.collapsed, &cache.settings),
         }
     }
@@ -72,6 +87,8 @@ impl<'a, 'b: 'a> Node<'a> for &'a StudioRoot<'b> {
             "mix" => Box::new(self.mix),
             "mixer" => Box::new(self.mixer),
             "player" => Box::new(self.player),
+            "tempo" => Box::new(&self.tempo),
+            "vis" => Box::new(self.vis),
             "ui" => Box::new(self.ui),
             _ => return None,
         };
@@ -93,7 +110,7 @@ mod tests {
             studio_ui::{
                 cache::{
                     CatalogRowMarks, CollapsedModules, DeckCache, DeckLayout, LibraryView,
-                    SettingsView,
+                    SettingsView, StageView,
                 },
                 endpoints::readable_endpoints,
             },
@@ -111,6 +128,7 @@ mod tests {
         library: LibraryView,
         mix: MixState,
         settings: SettingsView,
+        stage: StageView,
         eq_mode: EqMode,
         decks: Vec<(UiState, DeckCache)>,
     }
@@ -124,6 +142,7 @@ mod tests {
                 library: LibraryView::default(),
                 mix: MixState::new(tempos.len()),
                 settings: SettingsView::default(),
+                stage: StageView::default(),
                 eq_mode: EqMode::default(),
                 decks: tempos.into_iter().map(deck).collect(),
             }
@@ -140,6 +159,16 @@ mod tests {
                 })
                 .collect();
             let engine = EngineNode::new(&decks);
+            let tempos: Vec<DeckTempo> = self
+                .decks
+                .iter()
+                .enumerate()
+                .map(|(at, (ui, _))| DeckTempo {
+                    bpm: analysis_bpm(ui),
+                    focused: at == 0,
+                    position: playhead(ui).max(0.0),
+                })
+                .collect();
             let drag = DragNode::new(library.title(0), Some(1), decks.len());
 
             StudioRoot {
@@ -150,6 +179,8 @@ mod tests {
                 mix: MixNode::new(&self.mix),
                 mixer: StripsNode::new(&self.mix),
                 player: PlayerNode::new(&self.mix),
+                tempo: TempoNode::new(&self.stage, &tempos),
+                vis: VisNode::new(&self.stage, &tempos),
                 ui: UiNode::new(drag, DeckLayout::Dual, &self.collapsed, &self.settings),
             }
         }

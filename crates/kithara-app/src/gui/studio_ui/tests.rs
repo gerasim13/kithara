@@ -1,3 +1,5 @@
+use std::collections::BTreeSet;
+
 use kithara_test_utils::kithara;
 use kithara_ui::{
     compile::{CompiledNode, CompiledUi},
@@ -248,6 +250,34 @@ fn studio_documents_compile_against_the_registry() {
     for layout in LAYOUTS {
         compile_studio(layout).unwrap();
     }
+}
+
+/// The base draws forty controls and the gallery proves each one. A control the
+/// application never places is proven on a page nobody ships, so this counts
+/// what the shipped documents actually mount.
+#[kithara::test]
+fn the_studio_places_every_control_the_base_provides() {
+    let mut placed = BTreeSet::new();
+    for layout in LAYOUTS {
+        let ui = compile_studio(layout).unwrap();
+        each_node(&ui, &mut |node| {
+            if let ExpandedNode::Control { spec, .. } = node {
+                placed.insert(spec.kind());
+            }
+        });
+    }
+
+    let absent: Vec<&str> = ControlSpec::KINDS
+        .iter()
+        .copied()
+        .filter(|kind| !placed.contains(kind))
+        .collect();
+    assert!(
+        absent.is_empty(),
+        "the studio documents place {}/{} controls; missing {absent:?}",
+        placed.len(),
+        ControlSpec::KINDS.len(),
+    );
 }
 
 #[kithara::test]

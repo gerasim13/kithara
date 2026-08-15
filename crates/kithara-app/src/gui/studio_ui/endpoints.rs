@@ -342,6 +342,42 @@ static ENDPOINTS: &[Endpoint] = &[
         scopes: Endpoint::GLOBAL,
     },
     Endpoint {
+        category: EndpointCategory::Model,
+        id: "tempo.map",
+        value: ValueKind::PortalMap,
+        scopes: Endpoint::GLOBAL,
+    },
+    Endpoint {
+        category: EndpointCategory::Model,
+        id: "tempo.window",
+        value: ValueKind::Range,
+        scopes: Endpoint::GLOBAL,
+    },
+    Endpoint {
+        category: EndpointCategory::Command,
+        id: "tempo.window_edge",
+        value: ValueKind::Scalar,
+        scopes: Endpoint::GLOBAL,
+    },
+    Endpoint {
+        category: EndpointCategory::Model,
+        id: "vis.preset",
+        value: ValueKind::Scalar,
+        scopes: Endpoint::GLOBAL,
+    },
+    Endpoint {
+        category: EndpointCategory::Model,
+        id: "vis.time",
+        value: ValueKind::Scalar,
+        scopes: Endpoint::GLOBAL,
+    },
+    Endpoint {
+        category: EndpointCategory::Command,
+        id: "ui.vis.next",
+        value: ValueKind::Trigger,
+        scopes: Endpoint::GLOBAL,
+    },
+    Endpoint {
         category: EndpointCategory::Command,
         id: "ui.eq.toggle_bands",
         value: ValueKind::Trigger,

@@ -28,6 +28,7 @@ pub(crate) struct StudioCache {
     /// it has one owner here and no second copy.
     pub(in crate::gui) library: LibraryView,
     pub(in crate::gui) settings: SettingsView,
+    pub(in crate::gui) stage: StageView,
     #[field(get, vis = "pub(in crate::gui)", copy)]
     layout: DeckLayout,
 
@@ -37,6 +38,61 @@ pub(crate) struct StudioCache {
 
     #[field(get, vis = "pub(crate)")]
     focus_deck: usize,
+}
+
+/// The visualiser preset in force, and the BPM window the tempo map is drawn
+/// against. Both are the host's alone: no engine value moves them.
+#[derive(Debug, PartialEq)]
+pub(in crate::gui) struct StageView {
+    pub(in crate::gui) preset: u32,
+    pub(in crate::gui) window: (f32, f32),
+}
+
+impl Default for StageView {
+    fn default() -> Self {
+        Self {
+            preset: 0,
+            window: (0.0, 1.0),
+        }
+    }
+}
+
+impl StageView {
+    /// The base draws three presets and reads the index as a scalar; a fourth
+    /// would be a preset the shader has no branch for.
+    pub(in crate::gui) const PRESETS: u32 = 3;
+    /// The BPM span the window is a fraction of.
+    pub(in crate::gui) const BPM_FLOOR: f32 = 60.0;
+    pub(in crate::gui) const BPM_CEILING: f32 = 200.0;
+
+    pub(in crate::gui) fn next_preset(&mut self) {
+        self.preset = (self.preset + 1) % Self::PRESETS;
+    }
+
+    /// The window's lower and upper edge in BPM.
+    pub(in crate::gui) fn bpm_window(&self) -> (f32, f32) {
+        let span = Self::BPM_CEILING - Self::BPM_FLOOR;
+        (
+            Self::BPM_FLOOR + self.window.0 * span,
+            Self::BPM_FLOOR + self.window.1 * span,
+        )
+    }
+
+    /// Move one edge, keeping the pair ordered so the map is never asked to
+    /// draw an axis that runs backwards.
+    pub(in crate::gui) fn set_edge(&mut self, edge: WindowEdge, at: f32) {
+        let at = at.clamp(0.0, 1.0);
+        match edge {
+            WindowEdge::Min => self.window.0 = at.min(self.window.1),
+            WindowEdge::Max => self.window.1 = at.max(self.window.0),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(in crate::gui) enum WindowEdge {
+    Min,
+    Max,
 }
 
 /// The settings sheet the top bar opens, and which of its sections is showing.

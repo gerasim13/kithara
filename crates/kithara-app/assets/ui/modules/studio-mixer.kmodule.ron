@@ -31,6 +31,26 @@
                 read: Parameter(id: "mix.crossfader"),
                 write: Parameter(id: "mix.crossfader"),
             ),
+            Column(
+                id: "tempo",
+                gap: 4.0,
+                pad: 8.0,
+                size: (w: Fill, h: Shrink),
+                frame: (top: false, right: false, bottom: true, left: false),
+                children: [
+                    PortalMap(
+                        id: "map",
+                        size: (w: Fill, h: Fixed(46.0)),
+                        read: Model(id: "tempo.map"),
+                    ),
+                    Range(
+                        id: "window",
+                        size: (w: Fill, h: Fixed(18.0)),
+                        read: Model(id: "tempo.window"),
+                        write: Command(id: "tempo.window_edge"),
+                    ),
+                ],
+            ),
             Fader(
                 id: "master",
                 size: (w: Fill, h: Fixed(34.0)),

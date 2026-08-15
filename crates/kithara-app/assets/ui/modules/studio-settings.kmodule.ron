@@ -93,6 +93,13 @@
                                                     Swatch(id: "rec", role: Danger, label: "REC"),
                                                 ],
                                             ),
+                                            Text(id: "load-label", style: MicroLabel, label: "ENGINE LOAD"),
+                                            Shader(
+                                                id: "load",
+                                                source: "shaders/load.wgsl",
+                                                uniforms: { "load": Telemetry(id: "engine.load") },
+                                                size: (w: Fill, h: Fixed(40.0)),
+                                            ),
                                             Text(id: "decks-label", style: MicroLabel, label: "DECKS"),
                                             Row(
                                                 id: "decks",

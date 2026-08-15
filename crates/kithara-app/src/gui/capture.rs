@@ -25,8 +25,9 @@ use kithara_ui::{
     draw::PoolStats,
     registry::ValueKind,
     render::{
-        ReadValue, Reads, StereoLevels, TableCell, TableRow, TreeIcon, TreeRow, UiEvent,
-        WaveBucket, WaveformView, fonts, shader::ShaderPass, tree, vis::VisPass,
+        PortalMapView, PortalTarget, ReadValue, Reads, ScalarRange, StereoLevels, TableCell,
+        TableRow, TreeIcon, TreeRow, UiEvent, WaveBucket, WaveformView, fonts, shader::ShaderPass,
+        tree, vis::VisPass,
     },
 };
 use num_traits::cast::AsPrimitive;
@@ -186,6 +187,18 @@ impl Reads for Fixture {
                 depth: 0,
             },
         ];
+        /// Two decks on the tempo axis. An empty target list would draw an
+        /// axis with nothing on it and still pass the page's budget.
+        const TEMPOS: [PortalTarget; 2] = [
+            PortalTarget {
+                bpm: Fixture::BPM,
+                is_selected: true,
+            },
+            PortalTarget {
+                bpm: 128.0,
+                is_selected: false,
+            },
+        ];
         const WAVE: [WaveBucket; 8] = [
             WaveBucket {
                 high: 0.3,
@@ -246,6 +259,16 @@ impl Reads for Fixture {
                 downbeats: &[],
                 bpm: Some(Self::BPM),
                 r#loop: None,
+            }),
+            ValueKind::PortalMap => ReadValue::PortalMap(PortalMapView {
+                master: Self::BPM,
+                min: 60.0,
+                max: 200.0,
+                targets: &TEMPOS,
+            }),
+            ValueKind::Range => ReadValue::Range(ScalarRange {
+                min: 0.25,
+                max: 0.8,
             }),
             ValueKind::Table => ReadValue::Table(&self.rows),
             ValueKind::Tree => ReadValue::Tree(&TREE),

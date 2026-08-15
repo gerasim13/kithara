@@ -39,6 +39,15 @@
                         size: (w: Fixed(72.0), h: Fixed(20.0)),
                         read: Telemetry(id: "player.output.levels"),
                     ),
+                    Pressable(
+                        id: "vis",
+                        press: Command(id: "ui.vis.next"),
+                        child: Vis(
+                            id: "vis-face",
+                            size: (w: Fixed(64.0), h: Fixed(20.0)),
+                            read: Model(id: "vis.preset"),
+                        ),
+                    ),
                 ],
             ),
             Divider(id: "before-cpu"),

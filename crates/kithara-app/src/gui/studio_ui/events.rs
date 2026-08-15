@@ -2,7 +2,7 @@ use kithara_ui::render::{ControlAction, DEFAULT_ZOOM, DragPhase, UiEvent, zoom_i
 use num_traits::cast::AsPrimitive;
 
 use super::{
-    cache::{DeckLayout, SettingsSection, StudioCache},
+    cache::{DeckLayout, SettingsSection, StudioCache, WindowEdge},
     endpoints::db_from_knob,
     scope::{deck_index, eq_band},
 };
@@ -150,6 +150,10 @@ fn bar_control(state: &mut Kithara, control: &str, action: &ControlAction) -> Op
     }
     match (control, action) {
         ("broadcast", ControlAction::Activate) => Some(Message::BroadcastToggle),
+        ("vis", ControlAction::Activate) => {
+            state.studio.cache.stage.next_preset();
+            None
+        }
         _ => layout_control(&mut state.studio.cache, control, action),
     }
 }
@@ -212,6 +216,15 @@ fn mixer_control(state: &mut Kithara, control: &str, action: &ControlAction) -> 
         ))),
         ("master", ControlAction::SetScalar(gain)) => {
             Some(Message::Mix(MixMsg::Master(gain.clamp(0.0, 1.0).as_())))
+        }
+        ("window/min" | "window/max", ControlAction::SetScalar(at)) => {
+            let edge = if control.ends_with("min") {
+                WindowEdge::Min
+            } else {
+                WindowEdge::Max
+            };
+            state.studio.cache.stage.set_edge(edge, at.as_());
+            None
         }
         _ => strip_control(state, control, action),
     }
