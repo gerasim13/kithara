@@ -54,6 +54,13 @@ fn composite(over: Rgba, under: Rgba) -> Rgba {
 
 /// One column of the waveform: the three bands share a width and nest by
 /// level, each drawn from the vertical centre over the previous one.
+///
+/// The column's horizontal edges are snapped to whole pixels, because they are
+/// a grid rather than a measurement. A bar landing on a half pixel costs an
+/// area-sampling backend the gap after it: each of the three bands covers that
+/// column about half, and three of those composite to `1-(1-0.5)^3`, which is
+/// opaque enough to read as bar. The height is deliberately left alone — it
+/// carries the level, and rounding it would quantise the signal.
 pub(crate) fn draw_column(
     list: &mut DrawListBuilder,
     bounds: Rect,
@@ -63,6 +70,8 @@ pub(crate) fn draw_column(
     metrics: WaveSkin,
     colors: [Rgba; 3],
 ) {
+    let left = (center_x - metrics.bar_width / 2.0).round();
+    let width = (center_x + metrics.bar_width / 2.0).round() - left;
     for (level, color) in [bucket.low, bucket.mid, bucket.high]
         .into_iter()
         .zip(colors)
@@ -74,8 +83,8 @@ pub(crate) fn draw_column(
         list.fill_rect(
             Rect {
                 h: height,
-                w: metrics.bar_width,
-                x: center_x - metrics.bar_width / 2.0,
+                w: width,
+                x: left,
                 y: bounds.y + (bounds.h - height) / 2.0,
             },
             color,
@@ -88,6 +97,91 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
+    use crate::{
+        builtin,
+        draw::{DrawCmd, Geom},
+    };
+
+    fn column_at(center_x: f32) -> Vec<Rect> {
+        let mut list = DrawListBuilder::default();
+        draw_column(
+            &mut list,
+            Rect {
+                h: 40.0,
+                w: 200.0,
+                x: 0.0,
+                y: 0.0,
+            },
+            center_x,
+            // Levels chosen to land off whole pixels at this height, so a band
+            // that started snapping vertically would show up rather than hide
+            // behind a fixture that happened to divide evenly.
+            WaveBucket {
+                high: 0.31,
+                low: 0.87,
+                mid: 0.62,
+            },
+            40.0,
+            builtin::skin().wave,
+            [Rgba {
+                a: 1.0,
+                b: 1.0,
+                g: 1.0,
+                r: 1.0,
+            }; 3],
+        );
+        list.finish()
+            .commands()
+            .iter()
+            .filter_map(|command| match command {
+                DrawCmd::Fill {
+                    geom: Geom::Rect(rect),
+                    ..
+                } => Some(*rect),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// A bar landing off the pixel grid costs an area-sampling backend the gap
+    /// after it, because the three bands composite their part-covered edge into
+    /// something that reads as bar. Snapping is what keeps the comb a comb.
+    #[kithara::test]
+    fn a_column_off_the_pixel_grid_still_draws_on_it() {
+        let rects = column_at(10.5);
+
+        for rect in rects {
+            assert_eq!(rect.x, rect.x.round(), "the left edge left the pixel grid");
+        }
+    }
+
+    /// The gap is the whole point of snapping, so it is measured rather than
+    /// assumed: two neighbouring columns must not end up touching.
+    #[kithara::test]
+    fn neighbouring_columns_keep_a_whole_pixel_between_them() {
+        let step = step(builtin::skin().wave);
+        let left = column_at(10.5);
+        let right = column_at(10.5 + step);
+
+        let first = left.first().unwrap_or_else(|| panic!("a band must draw"));
+        let second = right.first().unwrap_or_else(|| panic!("a band must draw"));
+        assert!(
+            second.x - (first.x + first.w) >= 1.0,
+            "columns {first:?} and {second:?} left no gap"
+        );
+    }
+
+    /// The level is a measurement, not a grid: quantising it would round the
+    /// quiet part of a track to the same height as the loud part beside it.
+    #[kithara::test]
+    fn the_height_is_left_off_the_grid() {
+        let rects = column_at(10.5);
+
+        assert!(
+            rects.iter().any(|rect| rect.h != rect.h.round()),
+            "a band height was snapped, which quantises the signal"
+        );
+    }
 
     #[kithara::test]
     fn played_colors_are_resolved_before_a_backend_sees_them() {

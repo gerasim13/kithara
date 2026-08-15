@@ -16,11 +16,13 @@
 # Tree is thin ink on a wide panel, which is why its number is small even when
 # a regression removes much of it.
 14-tree.png                 3
-# Not accounted for by a missing control — read the masks before lowering.
-# Raised 13 -> 19 when the ink measure landed: this page differs by 12.2% of
-# pixels but 18.5% of ink, so six points of it are drawn on one side only, in a
-# colour close enough to the page that comparing colours did not see it.
-03-modules-deck.png        19
+# Lowered 19 -> 3 on 2026-08-15, when the waveform stopped smearing. The old
+# number priced a defect rather than noise: the bar columns landed off the pixel
+# grid, and each column's three bands composited their part-covered edge into
+# `1-(1-0.5)^3`, which reads as bar — so the retained host drew a waveform with
+# no gaps at all while the immediate host drew a clean comb. Snapping the
+# columns took this page from 12.0% of pixels and 5.2% of ink to 2.7% and 2.5%.
+03-modules-deck.png         3
 # Retained slots now centre fixed content like iced; telemetry fell 7.8 -> 1.2.
 03-modules-telemetry.png    2
 # Raised 4 -> 5 on 2026-08-15: the nav gained CLOCK and PIVOT rows with
