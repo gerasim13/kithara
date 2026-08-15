@@ -48,7 +48,12 @@ jobs:
           # `apple:e2e` serves them on hardware. A lane this fleet cannot run is
           # left out entirely, producing no job at all rather than a red one or
           # a skipped-but-green one.
-          configured='["broadcast","integration-regressions","network","loom","selenium-firefox"]'
+          # `tooling`, `harness` and `fixtures` carry the tests `just test` no
+          # longer runs: the build tooling and the harness the product tests are
+          # written with. A push that touches their sources runs them straight
+          # away (the `support` job in ci.yml); this is the unattended sweep that
+          # catches a product change breaking them from the other side.
+          configured='["broadcast","integration-regressions","network","loom","selenium-firefox","tooling","harness","fixtures"]'
           if [ -z "$REQUESTED" ] || [ "$REQUESTED" = all ]; then
             echo "lanes=$configured" >> "$GITHUB_OUTPUT"
             exit 0

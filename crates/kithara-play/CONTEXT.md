@@ -260,6 +260,15 @@ capability through an internal, builder-skipped `ResourceConfig` field into
 `AudioConfig`. There is no public resource setter and therefore no second
 source of session wake policy.
 
+### Session transport anchor
+
+`TransportCommitState` is the only owner of when the session beat-to-frame
+relation changes. Every applied transport commit creates one `SessionAnchor`
+at that exact render boundary and stores it in `SessionTransportSnapshot`. A
+stream restart removes the snapshot because the session frame axis restarted;
+the first block on the new axis reanchors the preserved beat before publishing
+another snapshot.
+
 ## Session Mixing
 
 Session-input gain has two distinct owners. Each `EngineImpl` owns its *desired* input level

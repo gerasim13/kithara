@@ -36,6 +36,16 @@ perf = ["dep:hotpath", "hotpath/hotpath", "kithara/perf"]
 # Apple executor does, a container does not, so no container lane carries them.
 # The engine-lifecycle tests that need no device moved to `suite_light`.
 e2e = []
+# Tests of the harness rather than of the product: that `timeout(...)` actually
+# kills a wedged test, that `env(...)` sets and restores the environment, that
+# `flash` rewrites the test body and not its callees. They answer questions about
+# the machinery every other test stands on, so they belong to the machinery's own
+# lane (`just test run --lane=fixtures`) rather than to every product run.
+# `thread_budget` deliberately stayed in `suite_light`: a thread ceiling is a
+# product contract, whatever helper reads the count.
+# Returning them is one edit: add `harness` to `[test.lanes.workspace]`
+# `default_features` in `.config/xtask.toml`.
+harness = []
 # Regression tests for the player bugs QA filed against the zvooq-ios
 # integration. Some reproduce an open bug and are red on purpose; the rest
 # passed and stay as the contract that keeps them passing, and as the alibi
@@ -257,6 +267,12 @@ workspace = true
 [[test]]
 name = "red_env_guard_leak_thread"
 path = "tests/red_env_guard_leak_thread.rs"
+required-features = ["harness"]
+
+[[test]]
+name = "suite_harness"
+path = "tests/suite_harness.rs"
+required-features = ["harness"]
 
 [[test]]
 name = "loom"

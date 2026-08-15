@@ -12,9 +12,7 @@ pub(crate) mod continuity;
 mod gapless_common;
 
 mod browser_runner_smoke;
-mod env_guard;
 mod events;
-mod flash_lexical;
 mod kithara_assets;
 mod kithara_audio;
 mod kithara_bufpool;
@@ -98,4 +96,3 @@ mod kithara_stream;
 #[cfg(all(not(target_arch = "wasm32"), feature = "no-block"))]
 mod no_block;
 mod thread_budget;
-mod timeout_guard;

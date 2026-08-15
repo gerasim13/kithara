@@ -14,6 +14,13 @@ calls inside the node's step, never separate nodes with rings between them.
 handle captured in `Audio::new`. **Downloader** — owned by `kithara-stream`; this
 crate never spawns it and never reconstructs HLS/file protocol policy.
 
+### Session coordinates
+
+`SessionAnchor` is the canonical relation between a continuous `SessionBeat`
+and an absolute `SessionFrame`. It carries the committed beat-rate slope and
+sample rate, and owns both `beat_at` and its inverse `frame_at`; consumers do
+not rebuild that arithmetic from a tempo scalar.
+
 Transport (`runtime/ports.rs`): SPSC `ringbuf::HeapRb` plus a one-slot overflow
 (`Outlet`/`Inlet`).
 

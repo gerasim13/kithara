@@ -264,11 +264,47 @@ fn ambiguous_recovery_fails_closed_without_creating() {
 fn an_attempt_ref_changes_only_when_retry_advances_the_generation() {
     assert_eq!(
         quarantine_ref("head", "base", 1),
-        "quarantine/github/head/base/attempt-1"
+        "quarantine/gh/head-base/attempt-1"
     );
     assert_eq!(
         quarantine_ref("head", "base", 2),
-        "quarantine/github/head/base/attempt-2"
+        "quarantine/gh/head-base/attempt-2"
+    );
+}
+
+/// The name is read in GitLab's interface, where two full shas came to 101
+/// characters and broke the layout of every list the branch appeared in.
+#[test]
+fn an_attempt_ref_abbreviates_both_shas() {
+    let reference = quarantine_ref(
+        "1dba4b9b0689ca0e12a88093f7321fb4c432636e",
+        "fe3c9e2d92564790b24d9d9d27f6f08d2f39af29",
+        1,
+    );
+
+    assert_eq!(
+        reference,
+        "quarantine/gh/1dba4b9b0689-fe3c9e2d9256/attempt-1"
+    );
+}
+
+/// Shortening must not merge two runs into one branch. Both sides of the pair
+/// have to keep separating them — a pull request rebased onto a newer base is
+/// a different verification, not the same one again.
+#[test]
+fn each_side_of_the_pair_separates_one_run_from_another() {
+    let head = "1dba4b9b0689ca0e12a88093f7321fb4c432636e";
+    let base = "fe3c9e2d92564790b24d9d9d27f6f08d2f39af29";
+    let other_head = "1dba4b9b0000ca0e12a88093f7321fb4c432636e";
+    let other_base = "fe3c9e2d00004790b24d9d9d27f6f08d2f39af29";
+
+    assert_ne!(
+        quarantine_ref(head, base, 1),
+        quarantine_ref(other_head, base, 1)
+    );
+    assert_ne!(
+        quarantine_ref(head, base, 1),
+        quarantine_ref(head, other_base, 1)
     );
 }
 

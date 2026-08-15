@@ -22,7 +22,7 @@ pub mod mock;
 
 pub use api::{
     CrossfaderBus, DjEvent, EngineEvent, Equalizer, InterruptionKind, ItemEvent, ItemStatus,
-    PlaybackDirection, PlayerEvent, PlayerStatus, RouteChangeReason, SessionBeat, SessionBeatError,
+    PlaybackDirection, PlayerEvent, PlayerStatus, RouteChangeReason, SessionBeat,
     SessionDuckingMode, SessionEvent, SessionTransportSnapshot, SlotId, SyncUnavailable, Tempo,
     TempoError, TimeControlStatus, TimeRange, TrackBinding, TransportEvent, TransportRevision,
     WaitingReason, crossfader_gain,
@@ -37,7 +37,8 @@ pub use engine::{EngineConfig, EngineImpl, apply_mix};
 pub use error::PlayError;
 pub use kithara_assets::{AssetLayout, DefaultLayout};
 pub use kithara_audio::{
-    AudioWorkerHandle, EngineLoadSnapshot, EqBandConfig, SeekOutcome, ServiceClass, StretchControls,
+    AudioWorkerHandle, CoordinateError, EngineLoadSnapshot, EqBandConfig, SeekOutcome,
+    ServiceClass, StretchControls,
 };
 pub use kithara_net::Headers;
 pub use player::{PlayerConfig, PlayerImpl, SelectTransition};

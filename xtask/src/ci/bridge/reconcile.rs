@@ -274,8 +274,29 @@ fn reconcile_main_first(
     Ok(())
 }
 
+/// Branch a verification runs on.
+///
+/// Abbreviated, because this name is read by people in `GitLab`'s own interface,
+/// and two full shas in it came to 101 characters — enough to break the layout
+/// of every list the branch appears in. The pair is not what identifies the run
+/// anyway: the pipeline carries `KITHARA_QUARANTINE_HEAD_SHA` and
+/// `KITHARA_QUARANTINE_BASE_SHA` in full, and `verification_pipelines` refuses
+/// any pipeline whose variables disagree. The name only has to address one
+/// branch, and the rule that starts these runs matches the `quarantine/`
+/// prefix alone.
 fn quarantine_ref(head_sha: &str, base_sha: &str, attempt: u64) -> String {
-    format!("quarantine/github/{head_sha}/{base_sha}/attempt-{attempt}")
+    format!(
+        "quarantine/gh/{}-{}/attempt-{attempt}",
+        abbreviate(head_sha),
+        abbreviate(base_sha)
+    )
+}
+
+/// Twelve hex digits, the width git itself grows to on a repository this size.
+/// Shorter reads better and collides sooner; a collision here would have to
+/// land between two pull-request heads verified against the same base.
+fn abbreviate(sha: &str) -> &str {
+    &sha[..sha.len().min(12)]
 }
 
 fn resolve_pipeline(pipeline_ids: &[u64]) -> Result<Option<u64>> {

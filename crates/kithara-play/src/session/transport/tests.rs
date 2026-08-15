@@ -11,14 +11,15 @@ use firewheel::{
         ProcStore, ProcStreamCtx, ProcessStatus, StreamStatus,
     },
 };
+use kithara_audio::SessionFrame;
 use kithara_platform::time::Duration;
 use kithara_test_utils::kithara;
 use triple_buffer::{Output, triple_buffer};
 
 use super::{
     commit::{
-        RenderFrame, SessionTransportCommit, TransportCommitEvent, TransportCommitResult,
-        TransportCommitStamp, TransportObservation, TransportProcessError,
+        SessionTransportCommit, TransportCommitEvent, TransportCommitResult, TransportCommitStamp,
+        TransportObservation, TransportProcessError,
     },
     node::SessionTransportProcessor,
     process::{TransportCommitState, TransportObservationInput, process_transport},
@@ -175,7 +176,7 @@ fn active_harness() -> (
     let (mut extra, mut output) = proc_extra();
     let mut processor = SessionTransportProcessor;
     let active = commit(120.0, true, TransportRevision::FIRST);
-    let stamp = TransportCommitStamp::new(None, active, RenderFrame::new(0), sample_rate());
+    let stamp = TransportCommitStamp::new(None, active, SessionFrame::new(0), sample_rate());
     process_node(
         &mut processor,
         &proc_info_at(0),
@@ -197,7 +198,7 @@ fn tempo_commit_waits_for_the_matching_render_boundary() {
     let stamp = TransportCommitStamp::new(
         Some(active),
         next,
-        RenderFrame::new(block_frame(2)),
+        SessionFrame::new(block_frame(2)),
         sample_rate(),
     );
 
@@ -231,6 +232,14 @@ fn tempo_commit_waits_for_the_matching_render_boundary() {
     assert_eq!(applied.revision(), second_revision());
     assert_eq!(applied.tempo(), next.tempo());
     assert!((f64::from(applied.position()) - 0.05).abs() <= f64::EPSILON);
+    let transition = SessionBeat::new(0.04).expect("invariant: transition beat is finite");
+    assert_eq!(
+        applied
+            .anchor()
+            .frame_at(transition)
+            .expect("invariant: transition beat is representable on its observed anchor"),
+        SessionFrame::new(block_frame(2))
+    );
 }
 
 #[kithara::test]
@@ -241,7 +250,7 @@ fn relocation_commit_reanchors_the_exact_target_beat() {
     let stamp = TransportCommitStamp::new(
         Some(active),
         next,
-        RenderFrame::new(block_frame(2)),
+        SessionFrame::new(block_frame(2)),
         sample_rate(),
     );
     process_node(
@@ -262,6 +271,13 @@ fn relocation_commit_reanchors_the_exact_target_beat() {
     let relocated = snapshot(&mut output);
     assert_eq!(relocated.revision(), second_revision());
     assert!((f64::from(relocated.position()) - 3.27).abs() <= f64::EPSILON);
+    assert_eq!(
+        relocated
+            .anchor()
+            .frame_at(target)
+            .expect("invariant: relocation target is representable on its observed anchor"),
+        SessionFrame::new(block_frame(2))
+    );
 }
 
 #[kithara::test]
@@ -271,7 +287,7 @@ fn inactive_transport_publishes_a_frozen_position() {
     let stamp = TransportCommitStamp::new(
         Some(active),
         paused,
-        RenderFrame::new(block_frame(2)),
+        SessionFrame::new(block_frame(2)),
         sample_rate(),
     );
     process_node(
@@ -307,7 +323,7 @@ fn late_transport_commit_is_rejected_without_changing_the_active_commit() {
     let stamp = TransportCommitStamp::new(
         Some(active),
         next,
-        RenderFrame::new(block_frame(2)),
+        SessionFrame::new(block_frame(2)),
         sample_rate(),
     );
     process_node(
@@ -352,7 +368,7 @@ fn stale_transport_commit_is_rejected_without_breaking_the_clock() {
     let stamp = TransportCommitStamp::new(
         Some(stale),
         next,
-        RenderFrame::new(block_frame(2)),
+        SessionFrame::new(block_frame(2)),
         sample_rate(),
     );
     process_node(
@@ -387,7 +403,7 @@ fn transport_abort_is_idempotent() {
     let stamp = TransportCommitStamp::new(
         Some(active),
         next,
-        RenderFrame::new(block_frame(2)),
+        SessionFrame::new(block_frame(2)),
         sample_rate(),
     );
     process_node(
@@ -426,7 +442,7 @@ fn route_reset_rejects_pending_commit_and_reanchors_the_active_beat() {
     let stamp = TransportCommitStamp::new(
         Some(active),
         next,
-        RenderFrame::new(block_frame(2)),
+        SessionFrame::new(block_frame(2)),
         sample_rate(),
     );
     process_node(
@@ -452,10 +468,73 @@ fn route_reset_rejects_pending_commit_and_reanchors_the_active_beat() {
 }
 
 #[kithara::test]
+fn route_reset_withdraws_snapshot_until_new_axis_is_reanchored() {
+    let (mut processor, mut extra, mut output, _active) = active_harness();
+    process_node(
+        &mut processor,
+        &proc_info_at(block_frame(1)),
+        &mut extra,
+        None,
+        None,
+    );
+    let before_restart = snapshot(&mut output);
+    let preserved = before_restart.position();
+    assert!((f64::from(preserved) - 0.04).abs() <= f64::EPSILON);
+
+    processor.stream_stopped(&mut ProcStreamCtx {
+        store: &mut extra.store,
+        logger: &mut extra.logger,
+    });
+    assert_eq!(observation(&mut output).snapshot(), None);
+
+    process_node(&mut processor, &proc_info_at(0), &mut extra, None, None);
+    let restarted = snapshot(&mut output);
+    assert_eq!(
+        restarted
+            .anchor()
+            .frame_at(preserved)
+            .expect("invariant: preserved beat is representable on the new axis"),
+        SessionFrame::new(0)
+    );
+    assert!((f64::from(restarted.position()) - 0.06).abs() <= f64::EPSILON);
+}
+
+#[kithara::test]
+fn repeated_route_reset_preserves_the_beat_until_the_new_axis_renders() {
+    let (mut processor, mut extra, mut output, _active) = active_harness();
+    process_node(
+        &mut processor,
+        &proc_info_at(block_frame(1)),
+        &mut extra,
+        None,
+        None,
+    );
+    let preserved = snapshot(&mut output).position();
+
+    for _ in 0..2 {
+        processor.stream_stopped(&mut ProcStreamCtx {
+            store: &mut extra.store,
+            logger: &mut extra.logger,
+        });
+        assert_eq!(observation(&mut output).snapshot(), None);
+    }
+
+    process_node(&mut processor, &proc_info_at(0), &mut extra, None, None);
+    let restarted = snapshot(&mut output);
+    assert_eq!(
+        restarted
+            .anchor()
+            .frame_at(preserved)
+            .expect("invariant: preserved beat is representable on the new axis"),
+        SessionFrame::new(0)
+    );
+}
+
+#[kithara::test]
 fn duplicate_stage_in_one_block_is_rejected() {
     let (mut extra, _output) = proc_extra();
     let active = commit(120.0, true, TransportRevision::FIRST);
-    let stamp = TransportCommitStamp::new(None, active, RenderFrame::new(0), sample_rate());
+    let stamp = TransportCommitStamp::new(None, active, SessionFrame::new(0), sample_rate());
     assert_eq!(
         process_result(
             &proc_info_at(0),
@@ -498,7 +577,7 @@ fn stage_for_another_sample_rate_is_rejected() {
     let stamp = TransportCommitStamp::new(
         Some(active),
         commit(60.0, true, second_revision()),
-        RenderFrame::new(block_frame(2)),
+        SessionFrame::new(block_frame(2)),
         foreign_rate,
     );
 
@@ -526,7 +605,7 @@ fn apply_for_another_sample_rate_is_rejected() {
     let stamp = TransportCommitStamp::new(
         Some(active),
         next,
-        RenderFrame::new(block_frame(2)),
+        SessionFrame::new(block_frame(2)),
         sample_rate(),
     );
     process_node(
@@ -562,7 +641,7 @@ fn a_failing_block_rejects_the_pending_stamp_and_still_publishes() {
     let stamp = TransportCommitStamp::new(
         Some(active),
         commit(60.0, true, second_revision()),
-        RenderFrame::new(block_frame(2)),
+        SessionFrame::new(block_frame(2)),
         sample_rate(),
     );
     process_node(
