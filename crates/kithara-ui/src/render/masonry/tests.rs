@@ -2106,66 +2106,6 @@ mod gesture_census {
         name: &'static str,
     }
 
-    /// Names every `ControlSpec` variant once, beside the name the censuses know
-    /// it by. Both censuses check each other, so a control missing from both at
-    /// once agrees with itself and reports nothing; this is the half that
-    /// answers to the document contract instead. A new variant stops compiling
-    /// here, and the name it adds keeps failing until a row describes it.
-    macro_rules! census_names {
-        ($($variant:ident),+ $(,)?) => {
-            const CENSUS_NAMES: &[&str] = &[$(stringify!($variant)),+];
-
-            fn census_name(spec: &ControlSpec) -> &'static str {
-                match spec {
-                    $(ControlSpec::$variant { .. } => stringify!($variant),)+
-                }
-            }
-        };
-    }
-
-    census_names!(
-        Bpm,
-        Brand,
-        Button,
-        Cell,
-        Checkbox,
-        Chip,
-        ContextBar,
-        Crossfader,
-        DeckSummary,
-        Divider,
-        Fader,
-        Glyph,
-        Knob,
-        Meter,
-        NavItem,
-        PortalMap,
-        PresetSelector,
-        Range,
-        Readout,
-        Scalar,
-        Segmented,
-        Select,
-        SettingsButton,
-        Shader,
-        Spacer,
-        StatusDot,
-        Swatch,
-        TabLarge,
-        Table,
-        Text,
-        Time,
-        TitleBar,
-        Toggle,
-        Tree,
-        Vis,
-        VuStereo,
-        VuVertical,
-        Wave,
-        WindowControls,
-        WindowDrag,
-    );
-
     const PRESS_KEYBOARD: Gestures = Gestures {
         keyboard: true,
         ..Gestures::PRESS
@@ -2517,7 +2457,7 @@ mod gesture_census {
             .iter()
             .map(|(name, _, _)| *name)
             .collect::<Vec<_>>();
-        let mut declared = CENSUS_NAMES.to_vec();
+        let mut declared = ControlSpec::KINDS.to_vec();
         censused.sort_unstable();
         declared.sort_unstable();
 
@@ -2564,7 +2504,7 @@ mod gesture_census {
             );
             let (path, spec, read) = compiled_control(&ui);
             assert_eq!(
-                census_name(spec),
+                spec.kind(),
                 row.name,
                 "the census row for {} mounts a different control than it names",
                 row.name

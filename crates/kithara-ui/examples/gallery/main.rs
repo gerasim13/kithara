@@ -668,6 +668,8 @@ fn theme(skin: &Skin) -> Theme {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
+
     use kithara_test_utils::kithara;
     use kithara_ui::{
         compile::CompiledNode,
@@ -742,6 +744,44 @@ mod tests {
             )
             .unwrap_or_else(|error| panic!("{} must compile: {error}", tab.entry()));
         }
+    }
+
+    /// The gallery is what proves a control draws the same picture in both
+    /// hosts, so a control absent from every page is unproven no matter how
+    /// complete the mount registry looks.
+    #[kithara::test]
+    fn every_control_appears_on_a_gallery_page() {
+        let resolver = resolver();
+        let endpoints = mock::registry();
+        let entries = Tab::ALL
+            .iter()
+            .map(|tab| tab.entry())
+            .chain(ModuleDemo::ALL.iter().map(|demo| demo.entry()));
+
+        let mut drawn = BTreeSet::new();
+        for entry in entries {
+            let ui = compile(
+                entry,
+                &resolver,
+                &endpoints,
+                builtin::skin_doc(),
+                &UiConfig::default(),
+            )
+            .unwrap_or_else(|error| panic!("{entry} must compile: {error}"));
+            each_control(&ui, &mut |_, spec| {
+                drawn.insert(spec.kind());
+            });
+        }
+
+        let absent: Vec<&str> = ControlSpec::KINDS
+            .iter()
+            .copied()
+            .filter(|kind| !drawn.contains(kind))
+            .collect();
+        assert!(
+            absent.is_empty(),
+            "no gallery page names {absent:?}, so nothing compares them across the two hosts"
+        );
     }
 
     #[kithara::test]
@@ -1017,7 +1057,9 @@ mod tests {
                         walk(child, ui, visit);
                     }
                 }
-                ExpandedNode::Optional { child, .. } | ExpandedNode::Pressable { child, .. } => {
+                ExpandedNode::Optional { child, .. }
+                | ExpandedNode::Pressable { child, .. }
+                | ExpandedNode::Scroll { child, .. } => {
                     walk(child, ui, visit);
                 }
                 ExpandedNode::Popover {

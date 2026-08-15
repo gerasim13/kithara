@@ -1,4 +1,5 @@
 mod binding_subst;
+mod kind;
 mod machine;
 mod node;
 mod site;
