@@ -153,7 +153,10 @@ jobs:
           )
           [[ -z "$FILTER" ]] || args+=(--filter "$FILTER")
           [[ -z "$COUNT" ]] || args+=(--count "$COUNT")
-          [[ -z "$MODE" ]] || args+=(--mode "$MODE")
+          # `--mode` repeats per lane; the input is a space-separated list, so
+          # one flag carrying the whole string would name a lane that does not
+          # exist and fail the campaign at argument parsing.
+          for mode in $MODE; do args+=(--mode "$mode"); done
           just ci stress "${args[@]}"
 
       - name: Upload the raw stress evidence
@@ -222,7 +225,7 @@ jobs:
           )
           [[ -z "$FILTER" ]] || args+=(--filter "$FILTER")
           [[ -z "$COUNT" ]] || args+=(--count "$COUNT")
-          [[ -z "$MODE" ]] || args+=(--mode "$MODE")
+          for mode in $MODE; do args+=(--mode "$mode"); done
           just ci stress-report "${args[@]}"
 
       - name: Add the stress summary

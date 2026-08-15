@@ -24,7 +24,10 @@ const STRESS_EXECUTE_COMMAND: &str = r#"args=(
 )
 [[ -z "$FILTER" ]] || args+=(--filter "$FILTER")
 [[ -z "$COUNT" ]] || args+=(--count "$COUNT")
-[[ -z "$MODE" ]] || args+=(--mode "$MODE")
+# `--mode` repeats per lane; the input is a space-separated list, so
+# one flag carrying the whole string would name a lane that does not
+# exist and fail the campaign at argument parsing.
+for mode in $MODE; do args+=(--mode "$mode"); done
 just ci stress "${args[@]}""#;
 const STRESS_REPORT_COMMAND: &str = r#"args=(
   --raw "$GITHUB_WORKSPACE/raw"
@@ -35,7 +38,7 @@ const STRESS_REPORT_COMMAND: &str = r#"args=(
 )
 [[ -z "$FILTER" ]] || args+=(--filter "$FILTER")
 [[ -z "$COUNT" ]] || args+=(--count "$COUNT")
-[[ -z "$MODE" ]] || args+=(--mode "$MODE")
+for mode in $MODE; do args+=(--mode "$mode"); done
 just ci stress-report "${args[@]}""#;
 
 const AUTHORIZATION_SCRIPT: &str = r#"python3 - <<'PY'
