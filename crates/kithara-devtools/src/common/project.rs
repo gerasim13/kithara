@@ -417,6 +417,10 @@ pub struct StressArtifactConfig {
     pub report: String,
     pub envelope_dir: Option<String>,
     pub line_log: Option<String>,
+    /// Per-attempt exit codes of a lane that repeats a command. A sanitizer
+    /// leaves no per-test verdict, so this is the whole of what such a lane
+    /// can be counted by.
+    pub attempts: String,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq)]
@@ -433,6 +437,16 @@ pub struct StressModeConfig {
     pub features: Vec<String>,
     pub set_env: BTreeMap<String, String>,
     pub raw_path_env: BTreeMap<String, String>,
+    /// A command this lane repeats instead of running the test suite.
+    ///
+    /// Some contracts are not observable through a test runner. A sanitizer
+    /// aborts the process on the violating call, so there is no per-test
+    /// verdict to collect and no report to parse — what the lane produces is a
+    /// log and an exit code. Such a violation can still be intermittent, and a
+    /// campaign is the only thing that turns "it happened once" into a rate,
+    /// so these lanes belong in it rather than beside it. Empty means the lane
+    /// runs the configured test runner and is measured per test.
+    pub command: Vec<String>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -540,6 +554,7 @@ impl StressConfig {
             ("manifest", self.artifacts.manifest.as_str()),
             ("pressure", self.artifacts.pressure.as_str()),
             ("report", self.artifacts.report.as_str()),
+            ("attempts", self.artifacts.attempts.as_str()),
         ] {
             validate_relative_path(&format!("stress.artifacts.{name}"), path)?;
         }
@@ -639,6 +654,15 @@ impl StressConfig {
         for (key, path) in &mode.raw_path_env {
             require_env_key(&format!("stress.modes.{name}.raw_path_env"), key)?;
             validate_relative_path(&format!("stress.modes.{name}.raw_path_env.{key}"), path)?;
+        }
+        for word in &mode.command {
+            require_value(&format!("stress.modes.{name}.command"), word)?;
+        }
+        // A command lane selects nothing through the test runner, so features
+        // meant for that runner would be read by no one. Saying so here beats
+        // a lane that silently ignores half of what it was configured with.
+        if !mode.command.is_empty() && !mode.features.is_empty() {
+            bail!("stress mode `{name}` runs a command, so its features reach nothing");
         }
         Ok(())
     }

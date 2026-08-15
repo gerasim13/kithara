@@ -1,7 +1,7 @@
 //! Portable repeated-test campaign and independent evidence verification.
 
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     fmt::Write as _,
     fs,
     path::{Component, Path, PathBuf},
@@ -116,6 +116,7 @@ pub(crate) fn run_stderr_output(command: &mut Command, path: &Path) -> Result<Ex
 #[derive(Debug)]
 struct Paths {
     raw: PathBuf,
+    attempts: PathBuf,
     envelopes: Option<PathBuf>,
     inventory: PathBuf,
     junit: PathBuf,
@@ -138,6 +139,7 @@ struct ReportExpectation<'a> {
 impl Paths {
     fn new(raw: PathBuf, artifacts: &StressArtifactConfig) -> Self {
         Self {
+            attempts: raw.join(&artifacts.attempts),
             envelopes: artifacts.envelope_dir.as_deref().map(|path| raw.join(path)),
             inventory: raw.join(&artifacts.inventory),
             junit: raw.join(&artifacts.junit),
@@ -220,6 +222,66 @@ fn validate_lane_directory(lane: &str) -> Result<()> {
     Ok(())
 }
 
+/// What a lane actually invokes, in the shape the manifest records.
+///
+/// A command lane is described by its own words rather than by the project's
+/// test runner, so that its manifest names what really ran and the reporter
+/// can verify it the same way it verifies any other lane.
+fn lane_runner(
+    ctx: &Ctx,
+    config: &StressConfig,
+    mode: &StressModeConfig,
+) -> Result<ConfiguredLane> {
+    let Some((program, arguments)) = mode.command.split_first() else {
+        return configured_lane(&ctx.config, &config.lane, &config.backend, &mode.features);
+    };
+    Ok(ConfiguredLane {
+        lane: config.lane.clone(),
+        backend: config.backend.clone(),
+        program: program.clone(),
+        prefix_args: arguments.to_vec(),
+        suffix_args: Vec::new(),
+        feature_arg: "--features".to_owned(),
+        features: Vec::new(),
+    })
+}
+
+/// Records one exit code per attempt, in order.
+fn write_attempts(path: &Path, codes: &[i32]) -> Result<()> {
+    let json = serde_json::to_string(codes).context("serialize command lane attempts")?;
+    fs::write(path, json).with_context(|| format!("write command lane attempts {}", path.display()))
+}
+
+/// Repeats a lane's own command and records what each attempt did.
+///
+/// A sanitizer aborts the process at the offending call, so there is no
+/// per-test verdict to collect — the evidence is an exit code per attempt and
+/// the log the attempt wrote. Repetition is the point: a violation that fires
+/// on one attempt in two is a defect with a rate, and a single green run has
+/// never been evidence that it is gone.
+fn run_command_lane(
+    ctx: &Ctx,
+    mode: &StressModeConfig,
+    paths: &Paths,
+    count: usize,
+    environment: &CampaignEnvironment,
+) -> Result<Vec<i32>> {
+    let (program, arguments) = mode
+        .command
+        .split_first()
+        .context("a command lane needs a program to run")?;
+    let mut codes = Vec::with_capacity(count);
+    for _ in 0..count {
+        let mut command = Command::new(program);
+        command.args(arguments).current_dir(&ctx.root);
+        environment.apply(&mut command);
+        let status = run_output(&mut command, &paths.log)?;
+        let code = status.code().unwrap_or_else(|| i32::from(u8::MAX));
+        codes.push(code);
+    }
+    Ok(codes)
+}
+
 fn run_lane(args: &RunArgs, ctx: &Ctx, mode_name: &str, raw: &Path) -> Result<()> {
     let config = &ctx.config.stress;
     let mode = config.mode(mode_name)?;
@@ -247,7 +309,8 @@ fn run_lane(args: &RunArgs, ctx: &Ctx, mode_name: &str, raw: &Path) -> Result<()
         "subject",
     )?;
     let subject_junit = subject_root.join(&config.artifacts.subject_junit);
-    let runner = configured_lane(&ctx.config, &config.lane, &config.backend, &mode.features)?;
+    let runner = lane_runner(ctx, config, mode)?;
+    let commanded = !mode.command.is_empty();
     let spec = StressRunSpec {
         inventory: paths.inventory.clone(),
         junit: subject_junit.clone(),
@@ -260,9 +323,11 @@ fn run_lane(args: &RunArgs, ctx: &Ctx, mode_name: &str, raw: &Path) -> Result<()
         max_test_threads: config.max_test_threads,
         runner: runner.clone(),
     };
-    stress_run::validate(&spec)?;
+    if !commanded {
+        stress_run::validate(&spec)?;
+        clear_previous_lane_junit(&subject_junit)?;
+    }
     ensure_raw_outside_subject_evidence(&paths.raw, &subject_junit)?;
-    clear_previous_lane_junit(&subject_junit)?;
     let system = system::capture()?;
     let environment = CampaignEnvironment::new(&paths.raw, config, mode)?;
     let mut manifest = Manifest::start(
@@ -295,9 +360,24 @@ fn run_lane(args: &RunArgs, ctx: &Ctx, mode_name: &str, raw: &Path) -> Result<()
 
     let (primary, sampler_result) = match (manifest_start, sampler) {
         (Ok(()), Ok(sampler)) => {
-            let primary = stress_run::run(&spec, &subject_root, &paths.log, &|command| {
-                environment.apply(command);
-            });
+            let primary = if commanded {
+                run_command_lane(ctx, mode, &paths, count, &environment).and_then(|codes| {
+                    write_attempts(&paths.attempts, &codes)?;
+                    let failed = codes.iter().filter(|code| **code != 0).count();
+                    if failed == 0 {
+                        Ok(())
+                    } else {
+                        Err(ChildFailure::inherited(
+                            format!("{failed} of {count} attempts"),
+                            codes.iter().copied().find(|code| *code != 0),
+                        ))
+                    }
+                })
+            } else {
+                stress_run::run(&spec, &subject_root, &paths.log, &|command| {
+                    environment.apply(command);
+                })
+            };
             let primary_code = result_code(&primary);
             let sampler_result = sampler.finish(Some(primary_code));
             (primary, sampler_result)
@@ -311,8 +391,17 @@ fn run_lane(args: &RunArgs, ctx: &Ctx, mode_name: &str, raw: &Path) -> Result<()
         (Err(manifest_error), Err(sampler_error)) => (Err(manifest_error), Err(sampler_error)),
     };
     let sampler_healthy = sampler_result.is_ok();
-    let stage_result = stage_junit(&subject_junit, &paths.junit);
-    let report_result = render_raw_report(&paths, count, config);
+    // A command lane produces no per-test evidence, so there is nothing to
+    // stage and nothing for the per-test reporter to read. Its verdict is the
+    // attempts it recorded.
+    let (stage_result, report_result) = if commanded {
+        (Ok(()), Ok(()))
+    } else {
+        (
+            stage_junit(&subject_junit, &paths.junit),
+            render_raw_report(&paths, count, config),
+        )
+    };
     let final_error = choose_failure(
         primary,
         sampler_result.map(|_| ()),
@@ -406,7 +495,11 @@ fn run_report(args: &ReportArgs, ctx: &Ctx) -> Result<()> {
                 .cloned(),
         )
         .with_optional_lines(paths.lines.clone());
-        let lane = stress_report::lane_report(&report_args)?;
+        let lane = if mode.command.is_empty() {
+            stress_report::lane_report(&report_args)?
+        } else {
+            command_lane_report(&paths.attempts, count)
+        };
         let expectation = ReportExpectation {
             config,
             mode_name: lane_name,
@@ -448,6 +541,77 @@ fn run_report(args: &ReportArgs, ctx: &Ctx) -> Result<()> {
     document.push_str(&sections);
     stress_report::write_report(&output, &document)?;
     choose_failure(failure.map_or(Ok(()), Err), campaign, Ok(()), Ok(())).map_or(Ok(()), Err)
+}
+
+/// Reads what a command lane recorded and states it as a rate.
+///
+/// The only thing such a lane can say is how many of its attempts the command
+/// rejected. That is exactly the number a one-shot gate cannot produce: a
+/// sanitizer that aborts on one attempt in two is green half the time, and
+/// half the time is what has kept its defect open.
+fn command_lane_report(attempts: &Path, expected: usize) -> stress_report::LaneReport {
+    let mut markdown = String::from("# Stress evidence\n");
+    let codes = match fs::read_to_string(attempts)
+        .with_context(|| format!("read command lane attempts {}", attempts.display()))
+        .and_then(|text| {
+            serde_json::from_str::<Vec<i32>>(&text).context("parse command lane attempts")
+        }) {
+        Ok(codes) => codes,
+        Err(error) => {
+            let _ = writeln!(
+                markdown,
+                "\n- Result: **NO ATTEMPTS**\n\n`{}`\n",
+                markdown_cell(&format!("{error:#}"))
+            );
+            return stress_report::LaneReport {
+                markdown,
+                rates: BTreeMap::new(),
+                verdict: Err(NotClean::reported("stress evidence")),
+            };
+        }
+    };
+    let failed = codes.iter().filter(|code| **code != 0).count();
+    let observed = codes.len();
+    let result = if observed != expected {
+        "INCOMPLETE"
+    } else if failed > 0 {
+        "FAILED"
+    } else {
+        "PASSED"
+    };
+    let _ = writeln!(markdown, "\n- Result: **{result}**");
+    let _ = writeln!(markdown, "- Requested attempts: `{expected}`");
+    let _ = writeln!(markdown, "- Observed attempts: `{observed}`");
+    let _ = writeln!(markdown, "- Rejected attempts: `{failed}`");
+    if failed > 0 {
+        let codes = codes
+            .iter()
+            .enumerate()
+            .filter(|(_, code)| **code != 0)
+            .map(|(attempt, code)| format!("{attempt}:{code}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let _ = writeln!(
+            markdown,
+            "- Rejected attempt:code — `{}`",
+            markdown_cell(&codes)
+        );
+        let _ = writeln!(
+            markdown,
+            "\nThe command's own output is in this lane's log; a sanitizer names \
+             the offending call there."
+        );
+    }
+    let verdict = if result == "PASSED" {
+        Ok(())
+    } else {
+        Err(NotClean::reported("stress evidence"))
+    };
+    stress_report::LaneReport {
+        markdown,
+        rates: BTreeMap::new(),
+        verdict,
+    }
 }
 
 /// Checks the job's own result against the campaign as a whole.
@@ -839,6 +1003,38 @@ mod tests {
     use std::os::unix::fs::symlink;
 
     use super::*;
+
+    /// A sanitizer that fires on one attempt in two is green half the time. The
+    /// campaign's job is to state that as a rate rather than as a verdict.
+    #[test]
+    fn a_command_lane_reports_how_many_attempts_the_command_rejected() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let attempts = temp.path().join("attempts.json");
+        fs::write(&attempts, "[0,134,0,0]").expect("write fixture");
+
+        let report = command_lane_report(&attempts, 4);
+
+        assert!(
+            report.markdown.contains("Rejected attempts: `1`"),
+            "{}",
+            report.markdown
+        );
+        assert!(report.verdict.is_err());
+    }
+
+    #[test]
+    fn a_command_lane_missing_its_attempts_does_not_read_as_a_clean_run() {
+        let temp = tempfile::tempdir().expect("tempdir");
+
+        let report = command_lane_report(&temp.path().join("absent.json"), 2);
+
+        assert!(
+            report.markdown.contains("NO ATTEMPTS"),
+            "{}",
+            report.markdown
+        );
+        assert!(report.verdict.is_err());
+    }
 
     #[test]
     fn a_failed_job_whose_lanes_all_passed_is_reported_as_unexplained() {

@@ -180,6 +180,7 @@ report_output = "target/report.md"
 workflow_job_timeout_minutes = 60
 
 [stress.artifacts]
+attempts = "attempts.json"
 subject_junit = "target/runner/junit.xml"
 inventory = "inventory.json"
 junit = "junit.xml"
@@ -246,6 +247,7 @@ report_output = "target/report.md"
 workflow_job_timeout_minutes = 60
 
 [stress.artifacts]
+attempts = "attempts.json"
 subject_junit = "target/runner/junit.xml"
 inventory = "inventory.json"
 junit = "junit.xml"

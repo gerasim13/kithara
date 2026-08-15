@@ -131,7 +131,14 @@ always = ["backend-cpal"]
 # One campaign, both clocks. The first collapses the fixtures' artificial
 # delays and is fast; the second keeps them and is the only one where a defect
 # decided by the order requests are served in can reproduce at all.
-default_modes = ["reproduction-flash-on", "reproduction-flash-off"]
+default_modes = [
+  "reproduction-flash-on",
+  "reproduction-flash-off",
+  "reproduction-no-block",
+  "rtsan",
+  "rtsan-file",
+  "rtsan-hls",
+]
 lane = "workspace"
 backend = "wreq"
 nextest_config = ".config/nextest.toml"
@@ -146,6 +153,7 @@ report_output = "target/stress-report.md"
 workflow_job_timeout_minutes = 1380
 
 [stress.artifacts]
+attempts = "attempts.json"
 subject_junit = "target/nextest/stress/junit.xml"
 inventory = "inventory.json"
 junit = "junit.xml"
@@ -224,6 +232,45 @@ RUST_LOG = "warn"
 
 [stress.modes.reproduction-flash-off.raw_path_env]
 KITHARA_HANG_DUMP_DIR = "hang"
+
+# The async contract, measured with the same repetition as the flakes. The
+# blocking census reports a call that parks inside an async poll, which is a
+# defect whether or not a test fails on the attempt that carried it — and a
+# campaign that repeats every test fifty times is exactly what walks the paths
+# where such a call hides. It rides the virtual clock because the census
+# measures poll duration, and a real clock's scheduling noise would report the
+# machine's load as the code's fault.
+[stress.modes.reproduction-no-block]
+features = ["flash", "no-block"]
+
+[stress.modes.reproduction-no-block.set_env]
+KITHARA_HANG_PREKILL_SECS = "630"
+KITHARA_NO_BLOCK = "census"
+KITHARA_NO_BLOCK_BUDGET_MS = "100"
+NEXTEST_FINAL_STATUS_LEVEL = "fail"
+NEXTEST_SHOW_PROGRESS = "counter"
+NEXTEST_STATUS_LEVEL = "fail"
+RUST_BACKTRACE = "1"
+RUST_LOG = "warn"
+
+[stress.modes.reproduction-no-block.raw_path_env]
+KITHARA_HANG_DUMP_DIR = "hang"
+KITHARA_NO_BLOCK_LOG = "no-block.log"
+
+# The real-time contract, measured the same way. RealtimeSanitizer aborts the
+# process at the offending call, so these lanes are counted by attempts rather
+# than by tests. They belong in the campaign because the violation is
+# intermittent: one was seen firing on a single attempt out of two, which a
+# gate that runs each lane once reports as green half the time. Their own
+# recipes own the sanitizer flags, the pinned nightly and `-Zbuild-std`.
+[stress.modes.rtsan]
+command = ["just", "test", "rtsan"]
+
+[stress.modes.rtsan-file]
+command = ["just", "test", "rtsan-file"]
+
+[stress.modes.rtsan-hls]
+command = ["just", "test", "rtsan-hls"]
 
 [stress.modes.diagnostic]
 features = ["flash"]
