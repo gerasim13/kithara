@@ -15,8 +15,9 @@ use num_traits::cast::AsPrimitive;
 use tracing::{Span, trace_span};
 
 use super::{
-    MasonryControl, Repaint, Size2, SizeLimits, TextMeasurer,
+    MasonryControl, MasonryNode, Repaint, Size2, SizeLimits, TextMeasurer,
     custom::{HostAction, MountedCustom},
+    mount::NodeLayout,
     shader::ShaderLeaf,
     vis::VisLeaf,
 };
@@ -55,6 +56,36 @@ pub(super) enum Leaf {
     },
     Shader(ShaderLeaf),
     Vis(VisLeaf),
+}
+
+/// The two leaves that need nothing but the size they were declared at.
+impl<Action> MasonryNode<Action> {
+    /// A leaf that occupies its declared size and paints nothing.
+    pub(super) fn empty(declared: Size<Length>) -> Self {
+        Self::document(
+            NodeLayout::Leaf(Leaf::Empty),
+            declared,
+            Vec::new(),
+            false,
+            None,
+            None,
+        )
+    }
+
+    /// A leaf that paints and handles the pointer itself.
+    pub(super) fn control_leaf(
+        control: impl MasonryControl + 'static,
+        declared: Size<Length>,
+    ) -> Self {
+        Self::document(
+            NodeLayout::Leaf(Leaf::Control(Box::new(control))),
+            declared,
+            Vec::new(),
+            false,
+            None,
+            None,
+        )
+    }
 }
 
 impl Leaf {

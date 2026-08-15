@@ -33,11 +33,11 @@ use crate::{
 /// place. Which controls are still waiting is the census in `tests`, not a
 /// silent arm in a match.
 pub(super) trait NodeControl {
-    fn leaf<A>(&self, host: &MasonryHost<'_, A>, cx: &Cx<'_>) -> MasonryNode<A>
+    fn leaf<A>(&self, _host: &MasonryHost<'_, A>, cx: &Cx<'_>) -> MasonryNode<A>
     where
         A: std::fmt::Debug + Send + 'static,
     {
-        host.empty(cx.declared)
+        MasonryNode::empty(cx.declared)
     }
 
     /// Anything the host must still attach once the leaf exists: a window layer
@@ -232,9 +232,9 @@ impl NodeControl for mount::Table<'_> {
                 engine_entry = "hosted plan",
                 "Table mount is incomplete"
             );
-            return host.empty(cx.declared);
+            return MasonryNode::empty(cx.declared);
         };
-        host.control_leaf(TableLeaf::new((**plan).clone(), host.skin), cx.declared)
+        MasonryNode::control_leaf(TableLeaf::new((**plan).clone(), host.skin), cx.declared)
     }
 }
 impl NodeControl for mount::Tree<'_> {
@@ -248,9 +248,9 @@ impl NodeControl for mount::Tree<'_> {
                 engine_entry = "hosted plan",
                 "Tree mount is incomplete"
             );
-            return host.empty(cx.declared);
+            return MasonryNode::empty(cx.declared);
         };
-        host.control_leaf(TreeLeaf::new((**plan).clone(), host.skin), cx.declared)
+        MasonryNode::control_leaf(TreeLeaf::new((**plan).clone(), host.skin), cx.declared)
     }
 }
 impl NodeControl for mount::ContextBar<'_> {
@@ -300,15 +300,7 @@ impl NodeControl for mount::Text<'_> {
             })
             .or_else(|| self.label.map(|label| host.ui.resolve(label).to_owned()))
             .unwrap_or_default();
-        host.text_leaf(
-            content,
-            self.align,
-            self.style,
-            self.color,
-            self.active_color,
-            host.reads_true(self.active),
-            cx.declared,
-        )
+        host.text_leaf(self, content, host.reads_true(self.active), cx.declared)
     }
 }
 
@@ -693,17 +685,17 @@ pub(crate) fn pointer_owner(owner: InputOwner, spec: &ControlSpec) -> InputOwner
 
 /// Whether this control reaches Vello as a painted leaf that can own the
 /// pointer itself, rather than as an empty box the engine drives.
-fn leaf_paints(spec: &ControlSpec) -> bool {
-    match spec {
+const fn leaf_paints(spec: &ControlSpec) -> bool {
+    matches!(
+        spec,
         ControlSpec::Button { .. }
-        | ControlSpec::Chip { .. }
-        | ControlSpec::Knob { .. }
-        | ControlSpec::NavItem { .. }
-        | ControlSpec::PresetSelector
-        | ControlSpec::SettingsButton
-        | ControlSpec::TabLarge { .. } => true,
-        _ => false,
-    }
+            | ControlSpec::Chip { .. }
+            | ControlSpec::Knob { .. }
+            | ControlSpec::NavItem { .. }
+            | ControlSpec::PresetSelector
+            | ControlSpec::SettingsButton
+            | ControlSpec::TabLarge { .. }
+    )
 }
 
 pub(crate) const fn activates(spec: &ControlSpec) -> bool {
@@ -735,7 +727,7 @@ where
         value: value.as_ref(),
     };
     let Some(data) = control.data(reading) else {
-        return host.empty(cx.declared);
+        return MasonryNode::empty(cx.declared);
     };
     let grip = control.grip(host.skin, &data);
     let index_event = control.index_event();
@@ -755,7 +747,7 @@ where
     let leaf = host.owned(leaf, cx.owner, cx.path, |leaf, path, map_event| {
         leaf.interactive(grip, path, map_event, index_event)
     });
-    let mut output = host.control_leaf(leaf, cx.declared);
+    let mut output = MasonryNode::control_leaf(leaf, cx.declared);
     if refreshes {
         output.watch_snapshot();
     }

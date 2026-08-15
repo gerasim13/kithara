@@ -8,7 +8,7 @@ use std::{
 use masonry::core::WidgetId;
 
 use super::{
-    CustomWidget, MasonryControl, MasonryNode,
+    CustomWidget, MasonryNode,
     custom::{HostAction, MappedCustom, MountedCustom},
     flex::{ChildLayout, Flex},
     leaf::{Leaf, WindowLeafLayer},
@@ -27,7 +27,7 @@ use crate::{
     expand::{Binding, ControlSpec, ExpandedNode},
     ids::InternId,
     layout::Axis,
-    module::{ChromeStyle, TextAlign, TextStyle},
+    module::{ChromeStyle, TextStyle},
     mount,
     render::{
         ControlAction, HostedControlPlan, InputOwner, ReadValue, Reads, Skin, UiEvent,
@@ -35,7 +35,6 @@ use crate::{
         hosted_control_plan,
     },
     size::SizeSpec,
-    skin::ColorRole,
     solve,
     text::TextContext,
 };
@@ -147,28 +146,20 @@ impl<Action> MasonryHost<'_, Action>
 where
     Action: std::fmt::Debug + Send + 'static,
 {
-    pub(super) fn empty(&self, declared: solve::Size<solve::Length>) -> MasonryNode<Action> {
-        MasonryNode::document(
-            NodeLayout::Leaf(Leaf::Empty),
-            declared,
-            Vec::new(),
-            false,
-            None,
-            None,
-        )
-    }
-
+    /// The text leaf `spec` describes, carrying `content` and whether the
+    /// control reads as active right now. Both are resolved by the caller,
+    /// which is the only thing that can reach the readings.
     pub(super) fn text_leaf(
         &self,
+        spec: &mount::Text<'_>,
         content: String,
-        align: TextAlign,
-        style: TextStyle,
-        color: Option<ColorRole>,
-        active_color: Option<ColorRole>,
         active: bool,
         declared: solve::Size<solve::Length>,
     ) -> MasonryNode<Action> {
-        let role = self.skin.text_role(style, color, active_color, active);
+        let style = spec.style;
+        let role = self
+            .skin
+            .text_role(style, spec.color, spec.active_color, active);
         let padding_x = match style {
             TextStyle::VisFooter => self.skin.vis.footer_padding_x,
             TextStyle::VisMeta => self.skin.vis.index_padding_x,
@@ -182,7 +173,7 @@ where
         };
         MasonryNode::document(
             NodeLayout::Leaf(Leaf::Text {
-                align,
+                align: spec.align,
                 content,
                 role,
                 padding_x,
@@ -207,21 +198,6 @@ where
                 widget,
                 text: Box::new(TextContext::from(self.skin.text_resources())),
             }),
-            declared,
-            Vec::new(),
-            false,
-            None,
-            None,
-        )
-    }
-
-    pub(super) fn control_leaf(
-        &self,
-        control: impl MasonryControl + 'static,
-        declared: solve::Size<solve::Length>,
-    ) -> MasonryNode<Action> {
-        MasonryNode::document(
-            NodeLayout::Leaf(Leaf::Control(Box::new(control))),
             declared,
             Vec::new(),
             false,
@@ -398,7 +374,8 @@ where
                     self.skin.chrome.inner_line_width,
                     Some(self.skin.rgba(self.skin.chrome.inner_line)),
                 );
-                let content = content.unwrap_or_else(|| self.empty(declared(SizeSpec::FILL)));
+                let content =
+                    content.unwrap_or_else(|| MasonryNode::empty(declared(SizeSpec::FILL)));
                 let second_line = furniture(
                     self.skin.chrome.inner_line_width,
                     Some(self.skin.rgba(self.skin.chrome.inner_line)),
@@ -430,7 +407,7 @@ where
                 )
             }
             ChromeStyle::Frame | ChromeStyle::Plain => {
-                let child = content.unwrap_or_else(|| self.empty(declared(SizeSpec::FILL)));
+                let child = content.unwrap_or_else(|| MasonryNode::empty(declared(SizeSpec::FILL)));
                 MasonryNode::document(
                     NodeLayout::Stack,
                     solve::Size::new(solve::Length::Fill, solve::Length::Fill),

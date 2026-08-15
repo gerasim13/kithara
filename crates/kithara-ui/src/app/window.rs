@@ -434,8 +434,8 @@ where
         target::replace(&mut self.surface, &handle.device, size.width, size.height);
     }
 
-    fn recover_surface(&mut self, error: SurfaceError) {
-        match surface_recovery(&error) {
+    fn recover_surface(&mut self, error: &SurfaceError) {
+        match surface_recovery(error) {
             SurfaceRecovery::Retry => {
                 let redraw_requested = self.request_recovery_redraw();
                 tracing::warn!(%error, redraw_requested, "surface frame timed out");
@@ -598,7 +598,7 @@ where
         let frame = match self.surface.surface.get_current_texture() {
             Ok(frame) => frame,
             Err(error) => {
-                self.recover_surface(error);
+                self.recover_surface(&error);
                 return false;
             }
         };
