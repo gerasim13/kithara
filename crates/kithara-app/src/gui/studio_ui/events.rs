@@ -2,7 +2,7 @@ use kithara_ui::render::{ControlAction, DEFAULT_ZOOM, DragPhase, UiEvent, zoom_i
 use num_traits::cast::AsPrimitive;
 
 use super::{
-    cache::{DeckLayout, StudioCache},
+    cache::{DeckLayout, SettingsSection, StudioCache},
     endpoints::db_from_knob,
     scope::{deck_index, eq_band},
 };
@@ -38,7 +38,7 @@ pub(crate) fn translate(state: &mut Kithara, event: UiEvent) -> Option<Message> 
 fn control(state: &mut Kithara, path: &str, action: &ControlAction) -> Option<Message> {
     let (instance, rest) = path.split_once('/')?;
     match instance {
-        "bar" => bar_control(&mut state.studio.cache, rest, action),
+        "bar" => bar_control(state, rest, action),
         "mixer" => mixer_control(state, rest, action),
         "library" => library_control(state, rest, action),
         "overview" => {
@@ -144,15 +144,65 @@ fn zoom_control(
 /// The top bar owns the studio's own view state. Narrowing the layout also
 /// silences the decks it stops laying out: a deck the user cannot see must
 /// not keep playing.
-fn bar_control(cache: &mut StudioCache, control: &str, action: &ControlAction) -> Option<Message> {
+fn bar_control(state: &mut Kithara, control: &str, action: &ControlAction) -> Option<Message> {
+    if let Some(rest) = control.strip_prefix("settings/") {
+        return settings_control(state, rest, action);
+    }
     match (control, action) {
         ("broadcast", ControlAction::Activate) => Some(Message::BroadcastToggle),
+        _ => layout_control(&mut state.studio.cache, control, action),
+    }
+}
+
+/// Narrowing the layout also silences the decks it stops laying out: a deck the
+/// user cannot see must not keep playing.
+fn layout_control(
+    cache: &mut StudioCache,
+    control: &str,
+    action: &ControlAction,
+) -> Option<Message> {
+    match (control, action) {
         ("decks", ControlAction::SelectIndex(index)) => {
             cache.set_layout(DeckLayout::from_index(*index)?);
             Some(Message::PauseHiddenDecks)
         }
         _ => None,
     }
+}
+
+/// The sheet the settings button opens. Both the tab strip and the section
+/// list address the same section, so either one moves the single owner.
+fn settings_control(state: &mut Kithara, control: &str, action: &ControlAction) -> Option<Message> {
+    if !matches!(action, ControlAction::Activate) {
+        return None;
+    }
+    match control {
+        "on-air" => return Some(Message::BroadcastToggle),
+        "eq-bands" => {
+            return Some(Message::SetEqMode(match state.eq_mode {
+                EqMode::FourBand => EqMode::ThreeBand,
+                EqMode::ThreeBand => EqMode::FourBand,
+            }));
+        }
+        _ => {}
+    }
+    if let Some(layout) = match control {
+        "one-deck" => Some(DeckLayout::Single),
+        "two-decks" => Some(DeckLayout::Dual),
+        _ => None,
+    } {
+        state.studio.cache.set_layout(layout);
+        return Some(Message::PauseHiddenDecks);
+    }
+    let settings = &mut state.studio.cache.settings;
+    match control {
+        "button" => settings.open = !settings.open,
+        "sheet" => settings.open = false,
+        "tab-view" | "nav-view" => settings.section = SettingsSection::View,
+        "tab-audio" | "nav-audio" => settings.section = SettingsSection::Audio,
+        _ => return None,
+    }
+    None
 }
 
 fn mixer_control(state: &mut Kithara, control: &str, action: &ControlAction) -> Option<Message> {
@@ -244,7 +294,7 @@ mod tests {
     use super::*;
 
     fn select_layout(cache: &mut StudioCache, layout: DeckLayout) -> Option<Message> {
-        bar_control(cache, "decks", &ControlAction::SelectIndex(layout.index()))
+        layout_control(cache, "decks", &ControlAction::SelectIndex(layout.index()))
     }
 
     fn press_zoom(cache: &mut StudioCache, control: &str) -> f64 {

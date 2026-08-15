@@ -89,7 +89,7 @@
                 children: [
                     PresetSelector(id: "preset"),
                     Spacer(id: "preset-gap", size: (w: Fixed(8.0), h: Fill)),
-                    SettingsButton(id: "settings"),
+                    Include(id: "settings", source: "studio-settings.kmodule.ron"),
                 ],
             ),
             Divider(id: "before-window"),

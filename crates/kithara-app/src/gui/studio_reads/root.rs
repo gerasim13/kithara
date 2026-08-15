@@ -57,7 +57,7 @@ impl<'a> StudioRoot<'a> {
             mix: MixNode::new(state.session.mix()),
             mixer: StripsNode::new(state.session.mix()),
             player: PlayerNode::new(state.session.mix()),
-            ui: UiNode::new(drag, cache.layout(), &cache.collapsed),
+            ui: UiNode::new(drag, cache.layout(), &cache.collapsed, &cache.settings),
         }
     }
 }
@@ -91,7 +91,10 @@ mod tests {
         gui::{
             deck::DeckView,
             studio_ui::{
-                cache::{CatalogRowMarks, CollapsedModules, DeckCache, DeckLayout, LibraryView},
+                cache::{
+                    CatalogRowMarks, CollapsedModules, DeckCache, DeckLayout, LibraryView,
+                    SettingsView,
+                },
                 endpoints::readable_endpoints,
             },
         },
@@ -107,6 +110,7 @@ mod tests {
         collapsed: CollapsedModules,
         library: LibraryView,
         mix: MixState,
+        settings: SettingsView,
         eq_mode: EqMode,
         decks: Vec<(UiState, DeckCache)>,
     }
@@ -119,6 +123,7 @@ mod tests {
                 collapsed: CollapsedModules::default(),
                 library: LibraryView::default(),
                 mix: MixState::new(tempos.len()),
+                settings: SettingsView::default(),
                 eq_mode: EqMode::default(),
                 decks: tempos.into_iter().map(deck).collect(),
             }
@@ -145,7 +150,7 @@ mod tests {
                 mix: MixNode::new(&self.mix),
                 mixer: StripsNode::new(&self.mix),
                 player: PlayerNode::new(&self.mix),
-                ui: UiNode::new(drag, DeckLayout::Dual, &self.collapsed),
+                ui: UiNode::new(drag, DeckLayout::Dual, &self.collapsed, &self.settings),
             }
         }
     }

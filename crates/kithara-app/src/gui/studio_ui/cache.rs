@@ -27,6 +27,7 @@ pub(crate) struct StudioCache {
     /// narrows the tree to. The tree and the context bar both select the group;
     /// it has one owner here and no second copy.
     pub(in crate::gui) library: LibraryView,
+    pub(in crate::gui) settings: SettingsView,
     #[field(get, vis = "pub(in crate::gui)", copy)]
     layout: DeckLayout,
 
@@ -36,6 +37,20 @@ pub(crate) struct StudioCache {
 
     #[field(get, vis = "pub(crate)")]
     focus_deck: usize,
+}
+
+/// The settings sheet the top bar opens, and which of its sections is showing.
+#[derive(Default)]
+pub(in crate::gui) struct SettingsView {
+    pub(in crate::gui) open: bool,
+    pub(in crate::gui) section: SettingsSection,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(in crate::gui) enum SettingsSection {
+    #[default]
+    View,
+    Audio,
 }
 
 /// What the library browser is showing.

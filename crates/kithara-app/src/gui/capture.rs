@@ -115,6 +115,18 @@ impl Fixture {
     };
     const SCALAR: f64 = 0.5;
 
+    /// The settings sheet is open in both captures, because a control only the
+    /// sheet carries is compared across the hosts on no page otherwise. Its two
+    /// sections cannot show at once, so each layout photographs one of them.
+    fn on(&self, endpoint: &str) -> bool {
+        match endpoint {
+            "deck.eq.three_band" | "ui.settings.open" => true,
+            "ui.settings.on_view" => self.layout == DeckLayout::Dual,
+            "ui.settings.on_audio" => self.layout == DeckLayout::Single,
+            _ => false,
+        }
+    }
+
     fn new(layout: DeckLayout) -> Self {
         Self {
             layout,
@@ -219,7 +231,7 @@ impl Reads for Fixture {
 
         let base = endpoint.split_once('@').map_or(endpoint, |(base, _)| base);
         let value = match readable_kind(base)? {
-            ValueKind::Bool => ReadValue::Bool(base == "deck.eq.three_band"),
+            ValueKind::Bool => ReadValue::Bool(self.on(base)),
             ValueKind::Scalar => ReadValue::Scalar(if base == "ui.layout.decks" {
                 self.layout.index().as_()
             } else {

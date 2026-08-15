@@ -3,7 +3,7 @@ use num_traits::cast::AsPrimitive;
 
 use super::value::Value;
 use crate::gui::studio_ui::{
-    cache::{CollapsedModules, DeckLayout},
+    cache::{CollapsedModules, DeckLayout, SettingsSection, SettingsView},
     scope::deck_index,
 };
 
@@ -11,6 +11,7 @@ use crate::gui::studio_ui::{
 pub(super) struct UiNode<'a> {
     collapsed: &'a CollapsedModules,
     layout: DeckLayout,
+    settings: &'a SettingsView,
     drag: DragNode<'a>,
 }
 
@@ -19,10 +20,12 @@ impl<'a> UiNode<'a> {
         drag: DragNode<'a>,
         layout: DeckLayout,
         collapsed: &'a CollapsedModules,
+        settings: &'a SettingsView,
     ) -> Self {
         Self {
             collapsed,
             layout,
+            settings,
             drag,
         }
     }
@@ -38,9 +41,30 @@ impl<'a> Node<'a> for UiNode<'a> {
             "module" => Box::new(ModulesNode {
                 collapsed: self.collapsed,
             }),
+            "settings" => Box::new(SettingsNode {
+                settings: self.settings,
+            }),
             _ => return None,
         };
         Some(node)
+    }
+}
+
+#[derive(Clone, Copy)]
+struct SettingsNode<'a> {
+    settings: &'a SettingsView,
+}
+
+impl<'a> Node<'a> for SettingsNode<'a> {
+    fn child(&self, segment: &str, _scope: Scope<'_>) -> Option<Box<dyn Node<'a> + 'a>> {
+        let section = self.settings.section;
+        let value = match segment {
+            "open" => ReadValue::Bool(self.settings.open),
+            "on_view" => ReadValue::Bool(section == SettingsSection::View),
+            "on_audio" => ReadValue::Bool(section == SettingsSection::Audio),
+            _ => return None,
+        };
+        Some(Box::new(Value(value)))
     }
 }
 

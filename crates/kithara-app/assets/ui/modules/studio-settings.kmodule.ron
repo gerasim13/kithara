@@ -1,0 +1,168 @@
+(
+    schema: "kithara.module",
+    version: 1,
+    id: "studio-settings",
+    chrome: Plain,
+    root: Popover(
+        id: "sheet",
+        open: Model(id: "ui.settings.open"),
+        align: End,
+        anchor: Pressable(
+            id: "button",
+            press: Command(id: "ui.settings.toggle"),
+            child: SettingsButton(id: "settings"),
+        ),
+        content: Column(
+            id: "surface",
+            gap: 0.0,
+            size: (w: Fixed(320.0), h: Shrink),
+            children: [
+                Row(
+                    id: "tabs",
+                    gap: 0.0,
+                    size: (w: Fill, h: Fixed(34.0)),
+                    frame: (top: false, right: false, bottom: true, left: false),
+                    frame_color: LinePop,
+                    children: [
+                        TabLarge(
+                            id: "tab-view",
+                            size: (w: Fill, h: Fill),
+                            label: "VIEW",
+                            read: Model(id: "ui.settings.on_view"),
+                            write: Command(id: "ui.settings.show_view"),
+                        ),
+                        TabLarge(
+                            id: "tab-audio",
+                            size: (w: Fill, h: Fill),
+                            label: "AUDIO",
+                            read: Model(id: "ui.settings.on_audio"),
+                            write: Command(id: "ui.settings.show_audio"),
+                        ),
+                    ],
+                ),
+                Row(
+                    id: "body",
+                    gap: 0.0,
+                    size: (w: Fill, h: Shrink),
+                    children: [
+                        Column(
+                            id: "sections",
+                            gap: 0.0,
+                            size: (w: Fixed(112.0), h: Fill),
+                            frame: (top: false, right: true, bottom: false, left: false),
+                            frame_color: LinePop,
+                            children: [
+                                NavItem(
+                                    id: "nav-view",
+                                    label: "VIEW",
+                                    icon: Playlist,
+                                    read: Model(id: "ui.settings.on_view"),
+                                    write: Command(id: "ui.settings.show_view"),
+                                ),
+                                NavItem(
+                                    id: "nav-audio",
+                                    label: "AUDIO",
+                                    icon: SpeakerHigh,
+                                    read: Model(id: "ui.settings.on_audio"),
+                                    write: Command(id: "ui.settings.show_audio"),
+                                ),
+                            ],
+                        ),
+                        Column(
+                            id: "pane",
+                            gap: 10.0,
+                            pad: 12.0,
+                            size: (w: Fill, h: Shrink),
+                            children: [
+                                Optional(
+                                    id: "view-pane",
+                                    hidden: Model(id: "ui.settings.on_audio"),
+                                    child: Column(
+                                        id: "view-body",
+                                        gap: 10.0,
+                                        size: (w: Fill, h: Shrink),
+                                        children: [
+                                            Text(id: "palette-label", style: MicroLabel, label: "PALETTE"),
+                                            Row(
+                                                id: "palette",
+                                                gap: 8.0,
+                                                size: (w: Fill, h: Shrink),
+                                                children: [
+                                                    Swatch(id: "accent", role: Accent, label: "ACCENT"),
+                                                    Swatch(id: "ok", role: Success, label: "OK"),
+                                                    Swatch(id: "rec", role: Danger, label: "REC"),
+                                                ],
+                                            ),
+                                            Text(id: "decks-label", style: MicroLabel, label: "DECKS"),
+                                            Row(
+                                                id: "decks",
+                                                gap: 8.0,
+                                                size: (w: Fill, h: Shrink),
+                                                children: [
+                                                    Pressable(
+                                                        id: "one-deck",
+                                                        press: Command(id: "ui.layout.single"),
+                                                        child: Cell(
+                                                            id: "one",
+                                                            label: Some("1"),
+                                                            size: (w: Fixed(44.0), h: Fixed(30.0)),
+                                                        ),
+                                                    ),
+                                                    Pressable(
+                                                        id: "two-decks",
+                                                        press: Command(id: "ui.layout.dual"),
+                                                        child: Cell(
+                                                            id: "two",
+                                                            label: Some("2"),
+                                                            highlighted: true,
+                                                            size: (w: Fixed(44.0), h: Fixed(30.0)),
+                                                        ),
+                                                    ),
+                                                ],
+                                            ),
+                                        ],
+                                    ),
+                                ),
+                                Optional(
+                                    id: "audio-pane",
+                                    hidden: Model(id: "ui.settings.on_view"),
+                                    child: Column(
+                                        id: "audio-body",
+                                        gap: 10.0,
+                                        size: (w: Fill, h: Shrink),
+                                        children: [
+                                            Text(id: "air-label", style: MicroLabel, label: "BROADCAST"),
+                                            Row(
+                                                id: "air-row",
+                                                gap: 10.0,
+                                                size: (w: Fill, h: Shrink),
+                                                children: [
+                                                    Checkbox(
+                                                        id: "on-air",
+                                                        read: Telemetry(id: "broadcast.on_air"),
+                                                        write: Command(id: "broadcast.toggle"),
+                                                    ),
+                                                    Text(id: "on-air-label", style: Mono, label: "ON AIR"),
+                                                ],
+                                            ),
+                                            Text(id: "eq-label", style: MicroLabel, label: "EQUALISER"),
+                                            Pressable(
+                                                id: "eq-bands",
+                                                press: Command(id: "ui.eq.toggle_bands"),
+                                                child: Select(
+                                                    id: "eq-face",
+                                                    label: "BAND COUNT",
+                                                    size: (w: Fill, h: Fixed(26.0)),
+                                                ),
+                                            ),
+                                        ],
+                                    ),
+                                ),
+                            ],
+                        ),
+                    ],
+                ),
+            ],
+        ),
+    ),
+)
