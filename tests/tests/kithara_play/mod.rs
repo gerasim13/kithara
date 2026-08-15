@@ -17,6 +17,8 @@ mod local_seek_hang_iters;
 #[cfg(not(target_arch = "wasm32"))]
 mod mix_tap;
 mod mixing;
+#[cfg(not(target_arch = "wasm32"))]
+mod no_sync_deadline;
 mod offline_harness_smoke;
 mod player_internal;
 mod player_processor_internal;

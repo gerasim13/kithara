@@ -65,9 +65,15 @@ impl ItemView {
         matches!(self.loading, LoadingState::Ready { .. })
     }
 
-    /// Terminal failure transition from any state.
-    pub(crate) const fn mark_failed(&mut self) {
+    /// Terminal failure transition from any state. Reports whether this call
+    /// performed it, so the second source of a terminal event sees `false` and
+    /// stays silent instead of repeating the status/error pair.
+    pub(crate) const fn mark_failed(&mut self) -> bool {
+        if matches!(self.loading, LoadingState::Failed) {
+            return false;
+        }
         self.loading = LoadingState::Failed;
+        true
     }
 
     /// Metadata resolved with `duration_sec`. A no-op once `Failed`
@@ -525,6 +531,16 @@ mod tests {
         view.mark_failed();
         assert!(!view.is_ready());
         assert_eq!(view.duration_sec(), 0.0);
+    }
+
+    /// Two independent sources settle a failed item — the protocol bridge and
+    /// the queue — and each asks the view whether the pair is still its to
+    /// emit. Only the transition itself may answer yes.
+    #[kithara::test]
+    fn item_view_mark_failed_reports_only_the_first_transition() {
+        let mut view = ItemView::new(false);
+        assert!(view.mark_failed());
+        assert!(!view.mark_failed());
     }
 
     #[kithara::test]

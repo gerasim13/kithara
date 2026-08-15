@@ -50,7 +50,10 @@ jobs:
     uses: ./.github/workflows/ci.yml
 
   stress:
-    if: vars.KITHARA_RUNNER_LABELS != '' && github.event.schedule == '0 3 * * *'
+    if: >-
+      vars.KITHARA_STRESS_ENABLED == 'true'
+      && vars.KITHARA_STRESS_RUNNER_LABELS != ''
+      && github.event.schedule == '0 3 * * *'
     uses: ./.github/workflows/stress.yml
 
   rtsan:

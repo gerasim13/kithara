@@ -7,12 +7,9 @@ use anyhow::{Context, Result, bail};
 use kithara_devtools::Ctx;
 use sha2::{Digest, Sha256};
 
-use super::{
-    process::{Process, require_os},
-    run::PipelineKind,
-};
+use super::process::{Process, require_os};
 use crate::{
-    config::{KitharaExt, ReleaseConfig},
+    config::{KitharaExt, PackageProfile, PublishStep, ReleaseConfig},
     publish, release,
 };
 
@@ -25,44 +22,29 @@ pub(crate) fn xcframework(
     ctx: &Ctx,
     ext: &KitharaExt,
     temp: &Path,
-    kind: PipelineKind,
+    package: &str,
 ) -> Result<()> {
     require_os("macos", "Apple release")?;
-    // The manifest pins the checksum of the framework a released version
-    // resolves to, so the two have to agree before that version is published.
-    // A nightly answers a different question — what the branch builds into
-    // today — and the framework it produces is not the one the manifest names.
-    let expected = if kind == PipelineKind::Nightly {
-        None
-    } else {
-        let version = required_env("KITHARA_RELEASE_VERSION")?;
-        let manifest = fs::read_to_string(ctx.root.join(&ext.release.manifest))
-            .with_context(|| format!("reading {}", ext.release.manifest))?;
-        let manifest_version = manifest_field(&manifest, "version")?;
-        if manifest_version != version {
-            bail!(
-                "{} version is {manifest_version}, requested {version}",
-                ext.release.manifest
-            );
-        }
-        Some(manifest_field(&manifest, "checksum")?)
-    };
+    let profile = ext.release.package(package)?;
+    let expected = expected_checksum(profile, &ctx.root.join(&ext.release.manifest))?;
 
     process.run(
         "just",
         &["platform", "apple", "release"],
         "Apple release artifacts",
     )?;
-    for name in [&ext.release.asset, &ext.release.single_asset] {
-        if name.is_empty() {
-            continue;
-        }
-        let source = temp.join(name);
-        copy_required(&source, &ctx.root.join(name))?;
+    let names: Vec<&str> = profile
+        .assets
+        .iter()
+        .map(|key| ext.release.asset_name(*key))
+        .filter(|name| !name.is_empty())
+        .collect();
+    for name in &names {
+        copy_required(&temp.join(name), &ctx.root.join(name))?;
     }
 
     if let Some(manifest_checksum) = expected {
-        let primary = ctx.root.join(&ext.release.asset);
+        let primary = ctx.root.join(&ext.release.core_asset);
         let actual_checksum = swift_checksum(process, &primary)?;
         if actual_checksum != manifest_checksum {
             bail!(
@@ -73,12 +55,82 @@ pub(crate) fn xcframework(
         }
     }
 
-    for name in [&ext.release.asset, &ext.release.single_asset] {
-        if !name.is_empty() {
-            write_checksum(&ctx.root.join(name))?;
+    for name in &names {
+        write_checksum(&ctx.root.join(name))?;
+    }
+    write_provenance(&ctx.root, package, &Provenance::from_env(), &names)
+}
+
+/// What a downloaded archive has to say about itself: the commit it was built
+/// from, the ref it was built on, and the profile that built it. A reviewer
+/// holding several archives at once cannot tell them apart otherwise, and the
+/// job that produced one is not always still at hand.
+struct Provenance {
+    sha: String,
+    branch: String,
+    merge_request: Option<String>,
+}
+
+impl Provenance {
+    fn from_env() -> Self {
+        Self {
+            sha: env::var("CI_COMMIT_SHA").unwrap_or_default(),
+            branch: env::var("CI_COMMIT_REF_NAME").unwrap_or_default(),
+            merge_request: env::var("CI_MERGE_REQUEST_IID").ok(),
         }
     }
-    Ok(())
+}
+
+fn write_provenance(
+    root: &Path,
+    package: &str,
+    provenance: &Provenance,
+    assets: &[&str],
+) -> Result<()> {
+    let mut entries = String::new();
+    for name in assets {
+        let digest = sha256(&root.join(name))?;
+        if !entries.is_empty() {
+            entries.push_str(",\n");
+        }
+        entries.push_str(&format!(
+            "    {{ \"name\": \"{name}\", \"sha256\": \"{digest}\" }}"
+        ));
+    }
+    let merge_request = provenance
+        .merge_request
+        .as_deref()
+        .map_or_else(|| "null".to_string(), |iid| format!("\"{iid}\""));
+    let body = format!(
+        "{{\n  \"package\": \"{package}\",\n  \"sha\": \"{sha}\",\n  \"branch\": \"{branch}\",\n  \
+         \"merge_request\": {merge_request},\n  \"assets\": [\n{entries}\n  ]\n}}\n",
+        sha = provenance.sha,
+        branch = provenance.branch,
+    );
+    let path = root.join("provenance.json");
+    fs::write(&path, body).with_context(|| format!("writing {}", path.display()))
+}
+
+/// The checksum the built framework has to match, or `None` when the profile
+/// carries no version. The manifest pins what a released version resolves to,
+/// so the two must agree before that version is published; packaging a commit
+/// for someone to install by hand answers a different question and names no
+/// version to check against.
+fn expected_checksum(profile: &PackageProfile, manifest_path: &Path) -> Result<Option<String>> {
+    if !profile.version_gate {
+        return Ok(None);
+    }
+    let version = required_env("KITHARA_RELEASE_VERSION")?;
+    let manifest = fs::read_to_string(manifest_path)
+        .with_context(|| format!("reading {}", manifest_path.display()))?;
+    let manifest_version = manifest_field(&manifest, "version")?;
+    if manifest_version != version {
+        bail!(
+            "{} version is {manifest_version}, requested {version}",
+            manifest_path.display()
+        );
+    }
+    Ok(Some(manifest_field(&manifest, "checksum")?))
 }
 
 pub(crate) fn docs(process: &Process, ctx: &Ctx, ext: &KitharaExt) -> Result<()> {
@@ -136,61 +188,53 @@ pub(crate) fn build_android(process: &Process, ctx: &Ctx, ext: &KitharaExt) -> R
     Ok(())
 }
 
-pub(crate) fn publish(
-    process: &Process,
-    ctx: &Ctx,
-    ext: &KitharaExt,
-    kind: PipelineKind,
-) -> Result<()> {
+pub(crate) fn publish(process: &Process, ctx: &Ctx, ext: &KitharaExt, channel: &str) -> Result<()> {
     // The jobs this one waits for take hours, and these tools are reached deep
     // inside the publish steps. Ask for them first, so a host that lacks one
     // says so before a release is built rather than after.
     process.require_tools(&["cargo", "gh", "git", "unzip"])?;
-    if kind == PipelineKind::Nightly {
-        return publish_nightly(ctx, ext);
-    }
-    for variable in ["CARGO_REGISTRY_TOKEN", "GH_TOKEN", "GITLAB_TOKEN"] {
-        required_env(variable)?;
-    }
-    let version = required_env("KITHARA_RELEASE_VERSION")?;
-    let source_sha = required_env("CI_COMMIT_SHA")?;
-    for name in retained_assets(&ext.release) {
-        verify_checksum(&ctx.root.join(name))?;
-    }
-
-    let manifest = git_show(ctx, &source_sha, &ext.release.manifest)?;
-    let manifest_version = manifest_field(&manifest, "version")?;
-    if manifest_version != version {
-        bail!("source manifest version is {manifest_version}, requested {version}");
-    }
-
-    release::publish_retained(ctx, &source_sha, &ctx.root)?;
-    release::publish_pages_retained(ctx, &source_sha, &ctx.root)?;
-    publish::publish_release(ctx)
-}
-
-/// The rolling channel publishes the same artifacts to one replaceable tag. It
-/// reaches no crate registry — a nightly carries no version to publish under —
-/// and leaves the pages branch to releases, which is what a documentation site
-/// should follow.
-fn publish_nightly(ctx: &Ctx, ext: &KitharaExt) -> Result<()> {
-    for variable in ["GH_TOKEN", "GITLAB_TOKEN"] {
+    let profile = ext.release.channel(channel)?;
+    for variable in &profile.tokens {
         required_env(variable)?;
     }
     let source_sha = required_env("CI_COMMIT_SHA")?;
+
+    if profile.requires_version {
+        let version = required_env("KITHARA_RELEASE_VERSION")?;
+        let manifest = git_show(ctx, &source_sha, &ext.release.manifest)?;
+        let manifest_version = manifest_field(&manifest, "version")?;
+        if manifest_version != version {
+            bail!("source manifest version is {manifest_version}, requested {version}");
+        }
+    }
+
+    // A channel that carries no version replaces one rolling tag with whatever
+    // the branch built today, so an asset it never built is absent rather than
+    // wrong.
     for name in retained_assets(&ext.release) {
         let path = ctx.root.join(name);
-        if path.is_file() {
+        if profile.require_all_assets || path.is_file() {
             verify_checksum(&path)?;
         }
     }
-    release::publish_nightly_retained(ctx, &source_sha, &ctx.root)
+
+    for step in &profile.steps {
+        match step {
+            PublishStep::Retained => release::publish_retained(ctx, &source_sha, &ctx.root)?,
+            PublishStep::NightlyRetained => {
+                release::publish_nightly_retained(ctx, &source_sha, &ctx.root)?;
+            }
+            PublishStep::Pages => release::publish_pages_retained(ctx, &source_sha, &ctx.root)?,
+            PublishStep::Crates => publish::publish_release(ctx)?,
+        }
+    }
+    Ok(())
 }
 
 fn retained_assets(config: &ReleaseConfig) -> impl Iterator<Item = &str> {
     [
-        config.asset.as_str(),
-        config.single_asset.as_str(),
+        config.core_asset.as_str(),
+        config.merged_asset.as_str(),
         config.docs_asset.as_str(),
         config.wasm_asset.as_str(),
     ]
@@ -350,6 +394,67 @@ fn required_env(name: &str) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::AssetKey;
+
+    #[test]
+    fn provenance_names_the_commit_and_every_asset() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        fs::write(root.join("Kithara.xcframework.zip"), b"bytes").unwrap();
+
+        write_provenance(
+            root,
+            "snapshot",
+            &Provenance {
+                sha: "1575b93875fe".into(),
+                branch: "laba/420-repeat-one-behavior".into(),
+                merge_request: Some("14".into()),
+            },
+            &["Kithara.xcframework.zip"],
+        )
+        .unwrap();
+
+        let written = fs::read_to_string(root.join("provenance.json")).unwrap();
+        assert!(written.contains("1575b93875fe"));
+        assert!(written.contains("laba/420-repeat-one-behavior"));
+        assert!(written.contains("Kithara.xcframework.zip"));
+        assert!(written.contains("\"merge_request\": \"14\""));
+    }
+
+    #[test]
+    fn provenance_outside_a_pipeline_names_no_merge_request() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        fs::write(root.join("Kithara.xcframework.zip"), b"bytes").unwrap();
+
+        write_provenance(
+            root,
+            "snapshot",
+            &Provenance {
+                sha: String::new(),
+                branch: String::new(),
+                merge_request: None,
+            },
+            &["Kithara.xcframework.zip"],
+        )
+        .unwrap();
+
+        let written = fs::read_to_string(root.join("provenance.json")).unwrap();
+        assert!(written.contains("\"merge_request\": null"));
+    }
+
+    #[test]
+    fn a_gate_free_profile_asks_for_no_version() {
+        let profile = PackageProfile {
+            version_gate: false,
+            assets: vec![AssetKey::Merged],
+        };
+
+        let expected = expected_checksum(&profile, Path::new("Package.swift"))
+            .expect("a gate-free profile reads no manifest");
+
+        assert!(expected.is_none());
+    }
 
     #[test]
     fn checksum_round_trip_detects_changed_bytes() {

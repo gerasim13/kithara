@@ -7,6 +7,7 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail};
+use kithara_devtools::verdict::ChildFailure;
 use tracing::{debug, info, warn};
 
 pub(crate) struct Process {
@@ -64,10 +65,7 @@ impl Process {
             .status()
             .with_context(|| format!("failed to start {label}"))?;
         if !status.success() {
-            bail!(
-                "{label} failed with exit code {}",
-                status.code().unwrap_or(-1)
-            );
+            return Err(ChildFailure::inherited(label.to_owned(), status.code()));
         }
         Ok(())
     }
@@ -174,11 +172,11 @@ fn executable_extensions(vars: &BTreeMap<OsString, OsString>) -> Vec<String> {
 
 fn output_text(output: Output, label: &str) -> Result<String> {
     if !output.status.success() {
-        bail!(
-            "{label} failed with exit code {}: {}",
-            output.status.code().unwrap_or(-1),
-            String::from_utf8_lossy(&output.stderr).trim()
-        );
+        return Err(ChildFailure::captured(
+            label.to_owned(),
+            output.status.code(),
+            String::from_utf8_lossy(&output.stderr).trim().to_owned(),
+        ));
     }
     String::from_utf8(output.stdout)
         .with_context(|| format!("{label} produced non-UTF-8 standard output"))
@@ -214,8 +212,30 @@ mod tests {
             Command::new("sh").args(["-c", "exit 7"]).output().unwrap()
         };
         let error = output_text(output, "fixture command").unwrap_err();
+        assert!(error.downcast_ref::<ChildFailure>().is_some());
         assert!(error.to_string().contains("fixture command"));
         assert!(error.to_string().contains('7'));
+    }
+
+    #[test]
+    fn inherited_failure_is_typed() {
+        let process = Process::new(Path::new("."), BTreeMap::new());
+        let mut command = if cfg!(windows) {
+            let mut command = Command::new("cmd");
+            command.args(["/C", "exit", "7"]);
+            command
+        } else {
+            let mut command = Command::new("sh");
+            command.args(["-c", "exit 7"]);
+            command
+        };
+
+        let error = process
+            .run_command(&mut command, "fixture command")
+            .unwrap_err();
+
+        assert!(error.downcast_ref::<ChildFailure>().is_some());
+        assert_eq!(error.to_string(), "fixture command failed (exit code 7)");
     }
 
     #[test]
@@ -252,6 +272,7 @@ mod tests {
 
         let error = fixture_ensure(&process, script, |_| false).unwrap_err();
 
+        assert!(error.downcast_ref::<ChildFailure>().is_some());
         assert!(error.to_string().contains("fixture state"));
         assert!(error.to_string().contains('7'));
         assert!(error.to_string().contains("unexpected"));

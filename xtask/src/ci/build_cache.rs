@@ -3,6 +3,7 @@ use std::os::unix::fs::MetadataExt;
 use std::{
     ffi::OsStr,
     fs::{self, File, OpenOptions},
+    io,
     path::{Path, PathBuf},
     time::SystemTime,
 };
@@ -66,6 +67,29 @@ pub(crate) fn select_evictions(mut entries: Vec<CacheEntry>, budget_bytes: u64) 
 /// job holds cannot be evicted, but the room it occupies is still spent, so it
 /// is charged against the ceiling rather than excused from it.
 pub(crate) fn enforce_budget(target_dirs: &[PathBuf], budget_bytes: u64) -> Result<()> {
+    let (candidates, held_bytes, _locks) = collect(target_dirs, budget_bytes)?;
+    evict_to_budget(candidates, held_bytes, budget_bytes)
+}
+
+/// Evict until at least `bytes_needed` is gone, whatever the ceiling says.
+///
+/// A job that cannot fit asks a different question than the hourly pass does.
+/// The ceiling answers "may the host keep this much"; caches under it are left
+/// alone, which is right for a scheduled sweep and useless for a job standing
+/// in front of a full volume — 15.7 GB of caches under a 25 GB ceiling freed
+/// nothing while the job needed one more gigabyte and was refused. Here the
+/// shortfall is the budget: the oldest entries go until it is covered, or until
+/// nothing evictable is left and the caller reports the volume as it is.
+pub(crate) fn reclaim_at_least(target_dirs: &[PathBuf], bytes_needed: u64) -> Result<()> {
+    let (candidates, held_bytes, _locks) = collect(target_dirs, bytes_needed)?;
+    let keep = total_bytes(&candidates).saturating_sub(bytes_needed);
+    evict_to_budget(candidates, held_bytes, keep.saturating_add(held_bytes))
+}
+
+fn collect(
+    target_dirs: &[PathBuf],
+    budget_bytes: u64,
+) -> Result<(Vec<CacheEntry>, u64, Vec<File>)> {
     let mut target_dirs = target_dirs.to_vec();
     target_dirs.sort();
     let mut candidates = Vec::new();
@@ -88,7 +112,7 @@ pub(crate) fn enforce_budget(target_dirs: &[PathBuf], budget_bytes: u64) -> Resu
         }
         candidates.extend(contents.entries);
     }
-    evict_to_budget(candidates, held_bytes, budget_bytes)
+    Ok((candidates, held_bytes, locks))
 }
 
 fn total_bytes(entries: &[CacheEntry]) -> u64 {
@@ -226,6 +250,85 @@ fn allocated_bytes(metadata: &fs::Metadata) -> u64 {
     metadata.len()
 }
 
+/// The file a running job holds a lock on for as long as it lives, so a
+/// reclaim from another job can tell "in use" from "left behind".
+pub(crate) const JOB_LEASE: &str = ".kithara-job-lease";
+
+/// Whether a job is running in this checkout right now.
+///
+/// `.cargo-lock` cannot answer that: Cargo holds it only while it compiles, so
+/// a checkout whose tests are already running looks abandoned. A reclaim that
+/// believed it deleted a live `target` out from under a sibling job, and the
+/// 1869 tests that then failed to exec their own binaries looked like the
+/// product breaking rather than the CI eating itself.
+fn checkout_is_leased(directory: &Path) -> bool {
+    let path = directory.join(JOB_LEASE);
+    let Ok(file) = OpenOptions::new().read(true).write(true).open(&path) else {
+        return false;
+    };
+    match FileExt::try_lock(&file) {
+        Ok(()) => false,
+        // Held by a live job, or unreadable — either way, not ours to remove.
+        Err(_) => true,
+    }
+}
+
+/// Every `target` directory under `root` that belongs to a checkout no job is
+/// using, so a caller can hand them to [`enforce_budget`]. Shared with the
+/// environment gate: refusing a job is only honest once these have been
+/// reclaimed.
+pub(crate) fn persistent_target_dirs(root: &Path) -> Result<Vec<PathBuf>> {
+    if !root.is_dir() {
+        return Ok(Vec::new());
+    }
+
+    let mut pending = vec![root.to_path_buf()];
+    let mut targets = Vec::new();
+    while let Some(directory) = pending.pop() {
+        if directory.join("Cargo.toml").is_file() {
+            if checkout_is_leased(&directory) {
+                continue;
+            }
+            for name in ["target", "target-flash-off"] {
+                let path = directory.join(name);
+                let metadata = match fs::symlink_metadata(&path) {
+                    Ok(metadata) => metadata,
+                    Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+                    Err(error) => {
+                        return Err(error).with_context(|| format!("reading {}", path.display()));
+                    }
+                };
+                if metadata.file_type().is_dir() {
+                    targets.push(path);
+                }
+            }
+            continue;
+        }
+
+        let entries = fs::read_dir(&directory)
+            .with_context(|| format!("reading CI workspace directory {}", directory.display()))?;
+        for entry in entries {
+            let entry = entry.with_context(|| {
+                format!(
+                    "reading an entry in CI workspace directory {}",
+                    directory.display()
+                )
+            })?;
+            if entry.file_name().to_string_lossy().starts_with('.') {
+                continue;
+            }
+            let path = entry.path();
+            let metadata = fs::symlink_metadata(&path)
+                .with_context(|| format!("reading CI workspace metadata for {}", path.display()))?;
+            if metadata.file_type().is_dir() {
+                pending.push(path);
+            }
+        }
+    }
+    targets.sort();
+    Ok(targets)
+}
+
 #[cfg(test)]
 mod tests {
     use std::{
@@ -301,6 +404,39 @@ mod tests {
         enforce_budget(&[first.clone(), second.clone()], budget).unwrap();
 
         assert!(occupied(&first) + occupied(&second) <= budget);
+    }
+
+    /// The refused job's state, which the ceiling cannot see: caches sit under
+    /// it, so an `enforce_budget` pass frees nothing, while the volume is short
+    /// of what one job needs because the rest of it is spent on checkouts,
+    /// toolchains and guests. That is how a job was refused over one missing
+    /// gigabyte with 15.7 GB of evictable cache beside it.
+    #[test]
+    fn a_shortfall_is_reclaimed_even_though_the_caches_are_under_the_ceiling() {
+        let root = tempfile::tempdir().unwrap();
+        let first = checkout_target(root.path(), "one", 100_000);
+        let second = checkout_target(root.path(), "two", 100_000);
+        let targets = [first.clone(), second.clone()];
+        let before = occupied(&first) + occupied(&second);
+        enforce_budget(&targets, before * 2).unwrap();
+        assert_eq!(
+            occupied(&first) + occupied(&second),
+            before,
+            "under the ceiling the hourly pass has nothing to do"
+        );
+        let shortfall = before / 4;
+
+        reclaim_at_least(&targets, shortfall).unwrap();
+
+        let left = occupied(&first) + occupied(&second);
+        assert!(
+            before - left >= shortfall,
+            "the shortfall of {shortfall} must be freed, {left} bytes left of {before}"
+        );
+        assert!(
+            left > 0,
+            "only the shortfall is owed; the rest of the cache is worth keeping"
+        );
     }
 
     fn checkout_target(root: &Path, name: &str, bytes: usize) -> PathBuf {

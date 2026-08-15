@@ -32,3 +32,33 @@ Isolation is by **install id**, not by serializing tests:
 `Recorder::wait_for_probe` / `wait_for_probe_async` are the sanctioned way to advance a test: they block until a recorded event matches the predicate or the budget elapses, including events that arrived before the call. Tests should use probe arrival as their clock instead of polling `Audio::read` / `Stream::len()` on wall time, and should fail when the budget elapses rather than relaxing it. Use the async variant on a `current_thread` runtime — the blocking one starves the tasks the test is waiting on.
 
 Decode packed probe arguments with `T::from_probe_arg(event.u64("field")?)` rather than hand-written decoders next to the `IntoProbeArg` impls.
+
+## Hang evidence
+
+The native `hang` implementation owns the versioned `kithara.hang.v1` artifact.
+Each JSON envelope carries its exact nextest attempt identity, diagnostic and
+last-progress context, plus an optional Flash wait snapshot. Publication is
+no-clobber: a unique temporary file is flushed before it is linked to its final
+name, so an interrupted write cannot replace earlier evidence.
+After a successful publish, stderr contains only the artifact path. If publish
+fails, stderr retains a bounded 64 KiB envelope excerpt for degraded diagnosis;
+the reporter still treats the missing durable envelope as incomplete evidence.
+The encoded envelope is always below 4 MiB. Each nextest value and the label is
+bounded to 8 KiB, the diagnostic to 32 KiB, the context payload to 192 KiB, and
+the Flash snapshot to 256 KiB before JSON escaping. Oversized context and Flash
+values retain UTF-8-safe head and tail excerpts with an explicit omitted-byte
+marker. Canonical nextest identity remains byte-for-byte exact within its 8 KiB
+field budget; an oversized value is visibly marked rather than silently joined
+to another attempt. A final size guard can discard context and Flash, but never
+the captured nextest identity.
+If a context producer returns malformed JSON, the envelope preserves those
+bytes as a JSON string. This is an intentional degraded diagnostic: losing the
+typed context must not prevent publication of the attempt identity and Flash
+snapshot that can still explain the hang.
+
+`PreKillGuard` is installed only for native `#[kithara::test]` expansions that
+do not declare their own timeout. When `KITHARA_HANG_PREKILL_SECS` is set, its
+real-clock worker records evidence shortly before the outer nextest deadline;
+dropping the guard cancels and joins that worker. Explicit wall-clock, hard and
+sync timeout paths call the same artifact owner directly before panic or abort.
+The hook records evidence but never terminates the process.

@@ -119,6 +119,14 @@ impl GitRepo {
         Ok(())
     }
 
+    /// What the pull request itself changed, measured from where it forked.
+    ///
+    /// `--merge-base` and not a plain two-dot diff: a branch that has not
+    /// caught up with the default branch differs from it by everything merged
+    /// since, so a two-dot diff reads those merges as the branch deleting them.
+    /// Every open pull request would be accused of rewriting the judge the
+    /// moment anything lands, and the accusation would name files its author
+    /// never opened.
     pub(super) fn changed_control_paths(&self, base: &str, head: &str) -> Result<Vec<String>> {
         let output = Command::new("git")
             .current_dir(&self.root)
@@ -127,6 +135,7 @@ impl GitRepo {
                 "--name-only",
                 "--no-renames",
                 "-z",
+                "--merge-base",
                 base,
                 head,
                 "--",
@@ -378,6 +387,7 @@ mod tests {
             gitlab_token_file: state.join("gitlab.token"),
             branch: "main".into(),
             state_dir: state.to_path_buf(),
+            trusted_authors: Vec::new(),
         }
     }
 
@@ -512,6 +522,26 @@ mod tests {
         );
         assert!(
             repo.weakening_control_paths(&base, &additive)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    /// `additive` forked before the control rewrite that later landed on the
+    /// default branch, so it differs from that branch by the rewrite as well as
+    /// by its own lane. Only the lane is its doing, and only the lane may be
+    /// held against it — otherwise every open pull request is accused of
+    /// rewriting the judge the moment anything merges.
+    #[test]
+    fn a_branch_behind_the_default_is_judged_by_what_it_changed() {
+        let (_state, repo, _base, _product, head, additive) = repository();
+
+        assert_eq!(
+            repo.changed_control_paths(&head, &additive).unwrap(),
+            [".config/xtask.toml"]
+        );
+        assert!(
+            repo.weakening_control_paths(&head, &additive)
                 .unwrap()
                 .is_empty()
         );

@@ -1,10 +1,64 @@
 use std::fmt;
 
-/// A check ran to completion and the code did not pass it.
+/// A child-command failure that should be reported without a wrapper backtrace.
+#[derive(Debug)]
+#[non_exhaustive]
+pub struct ChildFailure {
+    label: String,
+    exit_code: Option<i32>,
+    stderr: Option<String>,
+}
+
+impl fmt::Display for ChildFailure {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{} failed", self.label)?;
+        match self.exit_code {
+            Some(code) => write!(f, " (exit code {code})")?,
+            None => write!(f, " (terminated without an exit code)")?,
+        }
+        if let Some(stderr) = &self.stderr {
+            write!(f, ": {stderr}")?;
+        }
+        Ok(())
+    }
+}
+
+impl std::error::Error for ChildFailure {}
+
+impl ChildFailure {
+    /// Report a child whose output was inherited by the current process.
+    #[must_use]
+    pub fn inherited(label: String, exit_code: Option<i32>) -> anyhow::Error {
+        anyhow::Error::new(Self {
+            label,
+            exit_code,
+            stderr: None,
+        })
+    }
+
+    /// Report a child whose standard error was captured by the current process.
+    #[must_use]
+    pub fn captured(label: String, exit_code: Option<i32>, stderr: String) -> anyhow::Error {
+        let stderr = (!stderr.is_empty()).then_some(stderr);
+        anyhow::Error::new(Self {
+            label,
+            exit_code,
+            stderr,
+        })
+    }
+
+    pub(crate) fn exit_code(&self) -> i32 {
+        self.exit_code
+            .filter(|code| (1..=i32::from(u8::MAX)).contains(code))
+            .unwrap_or(1)
+    }
+}
+
+/// A check ran to completion and did not pass.
 ///
 /// This is not an error: nothing went wrong with the tool, and there is no
 /// state to inspect. Carried as one so it can travel the same `Result` as a
-/// real failure, and recognised at the top so the two print differently — a
+/// real failure, and recognised at the top so the two print differently - a
 /// failure earns a backtrace, a verdict earns a sentence. Twenty-three frames
 /// of runtime internals under "the code has ten style violations" says the
 /// program broke, which is the one thing that did not happen.
@@ -13,7 +67,7 @@ pub struct NotClean {
     /// The check that reached the verdict, as the user invoked it.
     pub check: &'static str,
     /// What it found, already printed above in full. `None` when the check
-    /// reports only that the code did not pass, without a count.
+    /// reports only that the check did not pass, without a count.
     pub findings: Option<usize>,
 }
 
@@ -23,13 +77,13 @@ impl fmt::Display for NotClean {
             Some(findings) => write!(
                 f,
                 "{check}: {findings} finding{plural} above. The check ran; the \
-                 code did not pass it.",
+                 check did not pass.",
                 check = self.check,
                 plural = if findings == 1 { "" } else { "s" },
             ),
             None => write!(
                 f,
-                "{check}: the check ran and the code did not pass it. Its \
+                "{check}: the check ran and did not pass. Its \
                  findings are above.",
                 check = self.check,
             ),
@@ -62,16 +116,25 @@ impl NotClean {
 
     /// Print `error` the way it deserves and give the exit code to leave with.
     ///
-    /// A verdict prints its sentence. Anything else is a genuine failure and
-    /// keeps the full chain and backtrace it would have had.
+    /// Verdicts and reported child failures print their sentence. Anything
+    /// else is a genuine tool failure and keeps its chain and backtrace.
     #[must_use]
     pub fn report(error: &anyhow::Error) -> i32 {
+        let (message, code) = Self::render(error);
+        eprintln!("{message}");
+        code
+    }
+
+    fn render(error: &anyhow::Error) -> (String, i32) {
         if let Some(verdict) = error.downcast_ref::<Self>() {
-            eprintln!("{verdict}");
-        } else {
-            eprintln!("Error: {error:?}");
+            return (verdict.to_string(), 1);
         }
-        1
+
+        if let Some(failure) = error.downcast_ref::<ChildFailure>() {
+            return (failure.to_string(), failure.exit_code());
+        }
+
+        (format!("Error: {error:?}"), 1)
     }
 }
 
@@ -104,9 +167,11 @@ mod tests {
 
     #[test]
     fn a_check_without_a_count_still_reads_as_a_verdict() {
-        let text = NotClean::reported("typos").to_string();
+        let error = NotClean::reported("typos");
+        let text = error.to_string();
         assert!(text.starts_with("typos: the check ran"), "{text}");
         assert!(!text.contains("failed"), "{text}");
+        assert_eq!(NotClean::render(&error), (text, 1));
     }
 
     /// The distinction is the whole point: a verdict is recognised through the
@@ -118,5 +183,90 @@ mod tests {
 
         let failure = anyhow::anyhow!("ast-grep is not installed");
         assert!(failure.downcast_ref::<NotClean>().is_none());
+        assert!(failure.downcast_ref::<ChildFailure>().is_none());
+    }
+
+    #[test]
+    fn a_child_failure_is_classified_separately() {
+        let error = ChildFailure::inherited("test lane `workspace`".to_owned(), Some(100));
+
+        assert!(error.downcast_ref::<ChildFailure>().is_some());
+        assert!(error.downcast_ref::<NotClean>().is_none());
+        assert_eq!(
+            error.to_string(),
+            "test lane `workspace` failed (exit code 100)"
+        );
+    }
+
+    #[test]
+    fn a_child_failure_preserves_a_representable_exit_code() {
+        let error = ChildFailure::inherited("test lane `workspace`".to_owned(), Some(100));
+        let (message, code) = NotClean::render(&error);
+
+        assert_eq!(code, 100);
+        assert_eq!(message, "test lane `workspace` failed (exit code 100)");
+        assert!(!message.contains("Stack backtrace"));
+        assert!(!message.contains("kithara_devtools::test"));
+        assert_eq!(message.lines().count(), 1);
+    }
+
+    #[test]
+    fn a_context_wrapped_child_failure_remains_concise_and_typed() {
+        let error = ChildFailure::inherited("`cargo fmt --all`".to_owned(), Some(7))
+            .context("format target `rust`");
+        let (message, code) = NotClean::render(&error);
+
+        assert!(error.downcast_ref::<ChildFailure>().is_some());
+        assert_eq!(code, 7);
+        assert_eq!(message, "`cargo fmt --all` failed (exit code 7)");
+        assert_eq!(message.lines().count(), 1);
+        assert!(!message.contains("format target"));
+        assert!(!message.contains("Stack backtrace"));
+    }
+
+    #[test]
+    fn a_child_without_an_exit_code_uses_the_generic_failure_code() {
+        let error = ChildFailure::inherited("test lane `workspace`".to_owned(), None);
+        let (message, code) = NotClean::render(&error);
+
+        assert_eq!(code, 1);
+        assert_eq!(
+            message,
+            "test lane `workspace` failed (terminated without an exit code)"
+        );
+    }
+
+    #[test]
+    fn an_unrepresentable_child_exit_code_uses_the_generic_failure_code() {
+        for exit_code in [0, i32::from(u8::MAX) + 1, -1] {
+            let error = ChildFailure::inherited("fixture command".to_owned(), Some(exit_code));
+
+            assert_eq!(NotClean::render(&error).1, 1);
+        }
+    }
+
+    #[test]
+    fn a_captured_child_failure_keeps_its_detail() {
+        let error = ChildFailure::captured(
+            "git status".to_owned(),
+            Some(7),
+            "repository unavailable".to_owned(),
+        );
+        let failure = error
+            .downcast_ref::<ChildFailure>()
+            .expect("typed child failure");
+
+        assert_eq!(
+            failure.to_string(),
+            "git status failed (exit code 7): repository unavailable"
+        );
+    }
+
+    #[test]
+    fn a_genuine_failure_keeps_debug_rendering() {
+        let error = anyhow::anyhow!("invalid internal state").context("tool failed");
+        let expected = format!("Error: {error:?}");
+
+        assert_eq!(NotClean::render(&error), (expected, 1));
     }
 }

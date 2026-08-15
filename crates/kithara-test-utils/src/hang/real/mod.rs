@@ -17,6 +17,8 @@ mod detector;
 mod detector;
 
 pub use detector::HangDetector;
+#[doc(hidden)]
+pub use platform::{PreKillGuard, record_test_hang};
 #[cfg(all(test, not(target_arch = "wasm32")))]
 pub(crate) use platform::{parse_timeout_secs, resolve_dump_dir, sanitize_label, write_dump};
 pub use shared::{HangDump, NoContext, default_timeout};

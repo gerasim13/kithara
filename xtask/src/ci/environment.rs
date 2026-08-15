@@ -9,9 +9,11 @@ use std::{
 use anyhow::{Context, Result, bail};
 use fs4::{FileExt, TryLockError};
 use kithara_devtools::Ctx;
+use tracing::warn;
 
 use super::{
     HOST_JOB_CONCURRENCY, SCCACHE_SLOT_CACHE_NAMESPACE, SCCACHE_SLOT_CONTROL_NAMESPACE,
+    build_cache,
     config::CiConfig,
     run::{CacheGroup, Lane},
 };
@@ -234,13 +236,44 @@ pub(crate) struct CiEnvironment {
     pub(crate) temp: PathBuf,
     lease: PathBuf,
     sccache: Option<PreparedSccache>,
+    /// Held for the life of the job so a reclaim running in a sibling job
+    /// leaves this checkout alone.
+    _checkout: Option<CheckoutLease>,
     vars: BTreeMap<OsString, OsString>,
+}
+
+/// A job's claim on the checkout it works in.
+///
+/// Taken before anything is reclaimed, including by this job itself: the
+/// `target` a job is about to build into is exactly the one it must not hand
+/// to the budget.
+struct CheckoutLease {
+    _file: File,
+}
+
+impl CheckoutLease {
+    fn acquire(checkout: &Path) -> Option<Self> {
+        let path = checkout.join(build_cache::JOB_LEASE);
+        let file = OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .open(&path)
+            .ok()?;
+        // A lease that cannot be taken is not a reason to refuse work: the
+        // worst case is the reclaim treating this checkout as idle, which is
+        // the behaviour that existed before the lease.
+        FileExt::try_lock(&file).ok()?;
+        Some(Self { _file: file })
+    }
 }
 
 impl CiEnvironment {
     pub(crate) fn prepare(ctx: &Ctx, config: &CiConfig, lane: Lane) -> Result<Self> {
         config.validate()?;
         raise_open_file_limit()?;
+        let checkout = CheckoutLease::acquire(&ctx.root);
         let home = env::var_os("HOME")
             .or_else(|| env::var_os("USERPROFILE"))
             .map(PathBuf::from)
@@ -259,11 +292,7 @@ impl CiEnvironment {
         fs::create_dir_all(&shared_root)
             .with_context(|| format!("creating CI cache root {}", shared_root.display()))?;
 
-        let free_bytes = free_bytes(&shared_root)?;
-        let required_free = config.host.free_bytes_for_a_job();
-        if is_ci() && free_bytes < required_free {
-            bail!("the CI cache has {free_bytes} bytes free; a job needs {required_free} bytes");
-        }
+        ensure_room_for_a_job(config, &shared_root)?;
 
         let trust = CacheTrust::from_environment()?;
         let platform = format!("{}-{}", env::consts::OS, env::consts::ARCH);
@@ -395,6 +424,7 @@ impl CiEnvironment {
             temp,
             lease,
             sccache,
+            _checkout: checkout,
             vars,
         })
     }
@@ -472,6 +502,68 @@ fn is_ci() -> bool {
     env::var_os("CI").is_some_and(|value| !value.is_empty())
 }
 
+/// Refuse a job only once there is nothing left to reclaim.
+///
+/// The gate and the periodic cleanup never spoke: cleanup ran on a timer and
+/// the job arrived when it arrived, so whether a job started came down to how
+/// long ago the timer fired. A host under a build loses gigabytes a minute,
+/// enough to spend a whole pass's worth of reclaimed space before the next one,
+/// and the job landing in that window was refused while tens of gigabytes of
+/// evictable compiler cache sat beside it. Growing the disk only moves the
+/// window; asking for the space back closes it.
+fn ensure_room_for_a_job(config: &CiConfig, shared_root: &Path) -> Result<()> {
+    let required = config.host.free_bytes_for_a_job();
+    let free = free_bytes(shared_root)?;
+    if !is_ci() || free >= required {
+        return Ok(());
+    }
+    reclaim_build_caches(config.host.build_root(), free, required)?;
+    let free = free_bytes(shared_root)?;
+    if free < required {
+        bail!(
+            "the CI cache has {free} bytes free after reclaiming build caches; a job needs \
+             {required} bytes"
+        );
+    }
+    Ok(())
+}
+
+/// Return what this host accumulated for itself, before deciding there is no
+/// room for the job.
+///
+/// The gate and the periodic cleanup never spoke: cleanup ran on a timer and
+/// the job arrived when it arrived, so whether a job started depended on how
+/// long ago the timer fired. A host under a build loses gigabytes a minute,
+/// which is enough to spend a whole pass's worth of reclaimed space before the
+/// next one — and the job that lands in that window is refused while tens of
+/// gigabytes of evictable compiler cache sit beside it. Reclaiming here makes
+/// the refusal mean what it says: the space is held by live work, not by
+/// leftovers.
+///
+/// What is reclaimed is the shortfall, not the host's ceiling. The ceiling is
+/// the hourly pass's question and it answers "nothing to do" whenever the caches
+/// happen to sit under it — which is exactly the state a refused job finds
+/// itself in, since a full volume is rarely full of build caches alone.
+///
+/// Failing to reclaim is not itself a refusal — the gate re-reads free space
+/// and answers on that.
+fn reclaim_build_caches(build_root: &Path, free: u64, required: u64) -> Result<()> {
+    let workspaces = build_root.join("workspaces/gitlab");
+    let targets = build_cache::persistent_target_dirs(&workspaces)?;
+    if targets.is_empty() {
+        return Ok(());
+    }
+    let shortfall = required.saturating_sub(free);
+    warn!(
+        free_bytes = free,
+        required_bytes = required,
+        shortfall_bytes = shortfall,
+        targets = targets.len(),
+        "reclaiming build caches before refusing the job"
+    );
+    build_cache::reclaim_at_least(&targets, shortfall)
+}
+
 pub(crate) fn is_gitlab() -> bool {
     env::var_os("GITLAB_CI").is_some_and(|value| !value.is_empty())
 }
@@ -539,12 +631,16 @@ mod tests {
     fn shared_shell_slots_are_exclusive_and_reusable() {
         let directory = tempfile::tempdir().unwrap();
 
-        let first = SccacheSlot::acquire_shared(directory.path()).unwrap();
-        let second = SccacheSlot::acquire_shared(directory.path()).unwrap();
+        let held: Vec<SccacheSlot> = (0..HOST_JOB_CONCURRENCY)
+            .map(|_| SccacheSlot::acquire_shared(directory.path()).unwrap())
+            .collect();
 
-        assert_eq!(first.index(), 0);
-        assert_eq!(second.index(), 1);
+        for (expected, slot) in held.iter().enumerate() {
+            assert_eq!(slot.index(), expected);
+        }
         assert!(SccacheSlot::acquire_shared(directory.path()).is_err());
+        let mut held = held;
+        let first = held.remove(0);
         drop(first);
         assert_eq!(
             SccacheSlot::acquire_shared(directory.path())
@@ -576,7 +672,8 @@ mod tests {
 
     #[test]
     fn disposable_slot_rejects_the_concurrency_boundary() {
-        assert!(disposable_slot(Some("2")).is_err());
+        assert!(disposable_slot(Some(&HOST_JOB_CONCURRENCY.to_string())).is_err());
+        assert!(disposable_slot(Some(&(HOST_JOB_CONCURRENCY - 1).to_string())).is_ok());
         assert!(disposable_slot(None).is_err());
         assert!(disposable_slot(Some("slot-1")).is_err());
     }
@@ -683,7 +780,7 @@ mod tests {
             assert_eq!(
                 vars.get(OsStr::new("SCCACHE_CACHE_SIZE"))
                     .map(OsString::as_os_str),
-                Some(OsStr::new("25G"))
+                Some(config.host.sccache_slot_size().unwrap().as_str().as_ref())
             );
             let lease = cache_root.join(".kithara-ci-leases/job-29");
             assert!(lease.is_file());
@@ -778,5 +875,61 @@ mod tests {
         assert_eq!(CacheTrust::Review.as_str(), "review");
         assert_eq!(CacheTrust::Quarantine.as_str(), "quarantine");
         assert_eq!(CacheTrust::Trusted.as_str(), "trusted");
+    }
+
+    /// A host under a build spends a whole cleanup pass's worth of space before
+    /// the next pass fires, so a job arriving in that window used to be refused
+    /// while evictable caches sat beside it. The gate reclaims them itself now;
+    /// what it must not do is refuse first.
+    #[test]
+    fn the_gate_reclaims_caches_before_deciding_there_is_no_room() {
+        let root = tempfile::tempdir().unwrap();
+        let checkout = root
+            .path()
+            .join("workspaces/gitlab/runner-a/0/disrupt/kithara");
+        let target = checkout.join("target/debug");
+        fs::create_dir_all(&target).unwrap();
+        fs::write(checkout.join("Cargo.toml"), "[package]\n").unwrap();
+        fs::write(target.join("artifact"), vec![0_u8; 400_000]).unwrap();
+
+        reclaim_build_caches(root.path(), 0, u64::MAX).unwrap();
+
+        assert!(
+            !target.join("artifact").exists(),
+            "an evictable build cache must be reclaimed, not left for the timer"
+        );
+    }
+
+    /// A sibling job holds the checkout while its tests run. Cargo has long
+    /// released `.cargo-lock` by then, so without the lease the reclaim reads
+    /// the checkout as abandoned and deletes the binaries the tests are still
+    /// executing — 1869 of them failed to exec that way before this existed.
+    #[test]
+    fn a_leased_checkout_is_left_alone_by_a_sibling_job() {
+        let root = tempfile::tempdir().unwrap();
+        let checkout = root
+            .path()
+            .join("workspaces/gitlab/runner-a/0/disrupt/kithara");
+        let target = checkout.join("target/debug");
+        fs::create_dir_all(&target).unwrap();
+        fs::write(checkout.join("Cargo.toml"), "[package]\n").unwrap();
+        fs::write(target.join("artifact"), vec![0_u8; 400_000]).unwrap();
+
+        let held = CheckoutLease::acquire(&checkout).expect("the running job takes its lease");
+
+        reclaim_build_caches(root.path(), 0, u64::MAX).unwrap();
+
+        assert!(
+            target.join("artifact").exists(),
+            "a checkout a job is working in must survive another job's reclaim"
+        );
+        drop(held);
+
+        reclaim_build_caches(root.path(), 0, u64::MAX).unwrap();
+
+        assert!(
+            !target.join("artifact").exists(),
+            "once the job is gone its cache is evictable again"
+        );
     }
 }

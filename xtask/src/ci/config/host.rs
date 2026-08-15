@@ -217,12 +217,20 @@ impl CiHost {
         let gigabytes = digits
             .parse::<usize>()
             .context("CI host profile sccache_size must fit in usize gigabytes")?;
-        if gigabytes == 0 || !gigabytes.is_multiple_of(HOST_JOB_CONCURRENCY) {
+        // Divided down, not required to divide evenly. Demanding a multiple
+        // made the slot count a property of a hand-written file on the host:
+        // raising `HOST_JOB_CONCURRENCY` would fail every job on a machine
+        // whose budget no longer divided, until somebody edited a file that
+        // lives nowhere in this repository. A gigabyte lost to rounding is the
+        // cheaper trade.
+        let slot = gigabytes / HOST_JOB_CONCURRENCY;
+        if slot == 0 {
             bail!(
-                "CI host profile sccache_size must divide evenly across {HOST_JOB_CONCURRENCY} jobs"
+                "CI host profile sccache_size must leave a whole gigabyte to each of \
+                 {HOST_JOB_CONCURRENCY} jobs"
             );
         }
-        Ok(format!("{}G", gigabytes / HOST_JOB_CONCURRENCY))
+        Ok(format!("{slot}G"))
     }
 
     /// The headroom a job insists on before it starts. The host stops handing
@@ -348,15 +356,33 @@ mod tests {
     #[test]
     fn sccache_budget_is_split_across_host_jobs() {
         let mut host = super::super::fixture().host;
+        host.sccache_size = "60G".to_owned();
+
+        assert_eq!(
+            host.sccache_slot_size().unwrap(),
+            format!("{}G", 60 / HOST_JOB_CONCURRENCY)
+        );
+    }
+
+    /// A budget that does not divide evenly is rounded down, not rejected: the
+    /// slot count belongs to this repository, and a host profile written by
+    /// hand must not be able to veto a change to it.
+    #[test]
+    fn an_indivisible_sccache_budget_is_rounded_down() {
+        let mut host = super::super::fixture().host;
         host.sccache_size = "50G".to_owned();
 
-        assert_eq!(host.sccache_slot_size().unwrap(), "25G");
+        assert_eq!(
+            host.sccache_slot_size().unwrap(),
+            format!("{}G", 50 / HOST_JOB_CONCURRENCY)
+        );
+        assert!(host.validate().is_ok());
     }
 
     #[test]
-    fn ci_host_rejects_an_indivisible_sccache_budget() {
+    fn ci_host_rejects_a_budget_too_small_to_share() {
         let mut host = super::super::fixture().host;
-        host.sccache_size = "51G".to_owned();
+        host.sccache_size = format!("{}G", HOST_JOB_CONCURRENCY - 1);
 
         assert!(host.validate().is_err());
     }

@@ -59,17 +59,22 @@ fail-fast = false
 test-threads = "num-cpus"
 leak-timeout = "2s"
 
-# Stress-only profile: run only the heavy test binary.
+# Stress-evidence profile: repeat the exact inventory selected by the caller.
 # No thread limit — a real audio player shares the machine with many
 # other processes. Tests must pass under CPU contention.
 [profile.stress]
 fail-fast = false
 test-threads = "num-cpus"
-# Wall-clock backstop above the slowest actual runtime (~57s under contention),
-# NOT above the per-test budget — the macro `timeout(...)` abort watchdog is the
-# real per-test bound. A wedge fails in 120s, not 300s.
-slow-timeout = { period = "120s", terminate-after = 1 }
+# Selected tests declare macro budgets up to 600s. The pre-kill snapshot runs
+# at 630s and this outer backstop reaches its SIGTERM threshold at 660s;
+# nextest's termination grace follows. The test-owned watchdog should write its
+# attempt-correlated dump first.
+slow-timeout = { period = "60s", terminate-after = 11 }
 leak-timeout = "2s"
+
+[profile.stress.junit]
+path = "junit.xml"
+store-failure-output = true
 
 # Opt-in cold fixture-cache profile: same settings as default, plus the setup
 # script that recreates an isolated cold root and exports KITHARA_FIXTURE_CACHE.

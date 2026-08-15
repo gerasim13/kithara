@@ -437,3 +437,23 @@ fn a_direct_github_update_opens_an_incident_without_a_push() {
         )
     );
 }
+
+/// Trust says who may change the CI configuration. It does not say which
+/// configuration the verification runs, and conflating the two took the
+/// normalization away from every trusted branch at once: a June branch went to
+/// the host with its own `xtask`, which could not parse the host profile, and
+/// its own pipeline, which still named a job the default branch had dropped.
+/// Both died before a single test.
+#[test]
+fn only_a_pull_request_that_changes_the_controls_is_judged_with_its_own() {
+    assert!(
+        judged_with_own_controls(true, true),
+        "a trusted author's control-path change has nowhere else to be tested"
+    );
+    assert!(
+        !judged_with_own_controls(true, false),
+        "a trusted author's stale branch needs the base's controls like any other"
+    );
+    assert!(!judged_with_own_controls(false, true));
+    assert!(!judged_with_own_controls(false, false));
+}

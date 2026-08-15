@@ -35,6 +35,8 @@ tracing-subscriber = { workspace = true }
 nix = { workspace = true }
 
 [dev-dependencies]
+proc-macro2 = { workspace = true }
+syn = { workspace = true, features = ["visit"] }
 tempfile = { workspace = true }
 
 [lints]

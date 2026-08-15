@@ -28,7 +28,8 @@ one sanctioned exception is `common::walker`: the scoped walkers reload
   a core section is a typed parse error naming the offending token.
 - **`[ext]` ownership rule.** The core schema names only generic concerns
   (`architecture`, `audit_clippy`, `health`, `lint_exclude`, `orphans`, `perf`,
-  `project`, `quality`, `test`, `workspace-scan`). Anything project-specific lives
+  `project`, `quality`, `stress`, `test`, `workspace-scan`). Project values may fill
+  these generic shapes; a concern that requires project-specific schema keys lives
   under `[ext.*]`, exposed as the raw `ext: toml::Table` passthrough. The core never
   interprets it; the consuming bin deserializes its own typed view (kithara:
   `xtask/src/config.rs`).
@@ -40,6 +41,10 @@ one sanctioned exception is `common::walker`: the scoped walkers reload
   `[profile.<name>.junit] path = "junit.xml"` because `perf matrix` copies
   `target/nextest/<name>/junit.xml` into the run data; a lane without junit is skipped
   and fails the command.
+- `[stress]`: generic repeated-run policy. It owns the configured lane/backend,
+  nextest profile, selection limits, artifact paths, named modes, child environment,
+  and line/envelope/wait-graph evidence adapters. Product feature and environment
+  names appear only in project TOML values, never in the DevTools implementation.
 - `[quality]` owns `unimock_traits_dir` plus `[quality.assessment]`, which declares only
   project-specific deep-stage execution: argv, owned tool names, expected artifacts,
   optional platforms, `hard_invariant`, `complete_only`. No source relationships, no
@@ -169,6 +174,33 @@ as SKIP instead of a false FAIL. Two stages needed a different answer:
   second nightly in the image just for it — an infra decision, not a stage
   tweak. Until that lands, `.strict()` keeps a missing lockbud reading as FAIL
   rather than a harmless SKIP.
+
+## Stress campaign ownership
+
+`stress run` is the sole portable lifecycle owner for repeated-test evidence. It
+records a typed schema-v3 manifest, exact nextest inventory and JUnit, a live and
+durable combined log, Linux pressure samples, and configured line/envelope artifacts
+under one fresh raw directory. The project-owned `[stress]` section in
+`.config/xtask.toml` is the sole owner of modes, test features, child environment,
+paths, limits, and evidence markers. DevTools applies that policy without embedding
+product feature or environment names. The manifest also freezes the resolved test
+runner, its arguments, and effective features so the independent reporter can reject
+controller/config drift. The inventory-by-iteration contract, not nextest's last
+stress iteration status, owns the primary verdict.
+
+Pressure schema `devtools.pressure.v2` names its end-marker status
+`primary_exit_code`: sampling ends after the test/evidence phase so the reporter can
+consume a closed stream. The manifest's `timing.exit_code` is the later combined
+campaign verdict and can additionally reflect staging or supplemental-evidence errors.
+The pressure value is null when a coordinator failure prevents primary execution.
+
+`stress report` independently consumes an uploaded raw directory. It compares the
+manifest with trusted checkout and workflow inputs, checks that pressure sampling
+ended healthy, correlates configured wait-graph, line, and envelope evidence by exact
+nextest attempt, and returns nonzero for failed, missing, partial, duplicate,
+malformed, or mismatched evidence. GitHub Actions owns only authorization, immutable
+checkout selection, job isolation, artifact transfer, and publishing the
+already-rendered Markdown summary.
 
 ## Quality assessment contract
 

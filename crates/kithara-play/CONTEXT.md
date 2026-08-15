@@ -264,7 +264,7 @@ source of session wake policy.
 
 Session-input gain has two distinct owners. Each `EngineImpl` owns its *desired* input level
 (`master_volume`, read by `start`). The session `SessionState` owns the *applied* graph gain (each
-`PlayerState.master_volume` and its `VolumePanNode` memo). The only transition between them is one
+`PlayerState.master_volume` and its `VolumeNode` memo). The only transition between them is one
 batch command, `Cmd::SetPlayerMasterVolumes`, which validates the whole vector - every level finite
 and in `0.0..=1.0`, every player present, no player repeated, graph initialised for started players
 
@@ -275,8 +275,9 @@ and in `0.0..=1.0`, every player present, no player repeated, graph initialised 
 Session-input levels are linear **amplitudes**: `0.5` halves the player's amplitude, and the
 sub-ceiling session output is the exact weighted sum `Σ levelᵢ · signalᵢ`. Firewheel's
 `Volume::Linear` is a fader taper (it squares its argument), so `master_gain` converts a level to
-that taper before it reaches the player's `VolumePanNode`; feeding a level in directly would land
-`0.5` at `0.25` amplitude and square the equal-power crossfader's `cos`/`sin` coefficients.
+that taper before it reaches the player's `VolumeNode`; feeding a level in directly would land
+`0.5` at `0.25` amplitude. Pure stereo gain stages never use a pan node because a centered
+equal-power pan attenuates both channels.
 Slot/content volume and session ducking keep their own taper; they are separate controls.
 
 `apply_mix` (`engine/mix.rs`) is a free function actuating the final levels of a set of players in

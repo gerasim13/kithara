@@ -50,3 +50,7 @@ mod kithara_ffi_web;
 
 #[cfg(not(target_arch = "wasm32"))]
 mod multi_instance;
+
+#[cfg(not(target_arch = "wasm32"))]
+#[path = "kithara_play/no_sync_real_media.rs"]
+mod no_sync_real_media;

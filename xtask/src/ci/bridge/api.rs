@@ -386,7 +386,12 @@ fn pull_request(value: &Value) -> Result<PullRequest> {
         .as_u64()
         .context("GitHub pull response has no numeric number")?;
     let head_sha = string_field(value, &["head", "sha"], "GitHub pull head SHA")?;
-    Ok(PullRequest { number, head_sha })
+    let author = string_field(value, &["user", "login"], "GitHub pull author login")?;
+    Ok(PullRequest {
+        number,
+        head_sha,
+        author,
+    })
 }
 
 fn verification_variables(value: &Value, head_sha: &str, base_sha: &str) -> Result<()> {
@@ -488,10 +493,14 @@ mod tests {
     fn pull_head_is_taken_from_the_api_response_exactly() {
         let head = "0123456789abcdef0123456789abcdef01234567";
         assert_eq!(
-            pull_request(&json!({"number": 427, "head": {"sha": head}})).unwrap(),
+            pull_request(
+                &json!({"number": 427, "head": {"sha": head}, "user": {"login": "octocat"}})
+            )
+            .unwrap(),
             PullRequest {
                 number: 427,
                 head_sha: head.into(),
+                author: "octocat".into(),
             }
         );
     }

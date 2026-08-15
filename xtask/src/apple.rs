@@ -578,11 +578,11 @@ fn run_release(release: &ReleaseConfig, apple: &AppleConfig) -> Result<()> {
         .exec()
         .context("failed to read cargo metadata")?;
     let root = metadata.workspace_root.as_std_path().to_path_buf();
-    if release.asset.trim().is_empty() {
-        bail!("ext.release.asset is not set in .config/xtask.toml");
+    if release.core_asset.trim().is_empty() {
+        bail!("ext.release.core_asset is not set in .config/xtask.toml");
     }
-    if release.single_asset.trim().is_empty() {
-        bail!("ext.release.single_asset is not set in .config/xtask.toml");
+    if release.merged_asset.trim().is_empty() {
+        bail!("ext.release.merged_asset is not set in .config/xtask.toml");
     }
 
     let apple_dir = root.join("apple");
@@ -593,18 +593,18 @@ fn run_release(release: &ReleaseConfig, apple: &AppleConfig) -> Result<()> {
     run_single(crate::BuildProfile::Release)?;
 
     let tmp = env::temp_dir();
-    let internal_zip = tmp.join(&release.asset);
-    let single_zip = tmp.join(&release.single_asset);
+    let internal_zip = tmp.join(&release.core_asset);
+    let single_zip = tmp.join(&release.merged_asset);
     zip_dir(&apple_dir, "KitharaFFIInternal.xcframework", &internal_zip)?;
 
     let single_dir = release
-        .single_asset
+        .merged_asset
         .strip_suffix(".zip")
-        .context("release.single_asset must end with .zip")?;
+        .context("release.merged_asset must end with .zip")?;
     zip_dir(&apple_dir.join("dist"), single_dir, &single_zip)?;
 
     let checksum = swift_checksum(&internal_zip)?;
-    let checksum_file = tmp.join(format!("{}.sha256", release.asset));
+    let checksum_file = tmp.join(format!("{}.sha256", release.core_asset));
     fs::write(&checksum_file, format!("{checksum}\n"))
         .with_context(|| format!("write {}", checksum_file.display()))?;
 

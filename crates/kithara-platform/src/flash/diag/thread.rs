@@ -25,7 +25,8 @@ impl ThreadDesc {
 }
 
 /// Context of the thread taking the dump: its identity plus, when
-/// `KITHARA_FLASH_SYNC_BT=1`, its full backtrace (where this thread is stuck).
+/// `KITHARA_FLASH_SYNC_BT=1`, the dump caller's full backtrace. A watchdog
+/// caller is not necessarily the thread holding or waiting on a primitive.
 pub(in crate::flash) fn current_thread_context() -> String {
     let desc = ThreadDesc::current();
     if super::bt_enabled() {

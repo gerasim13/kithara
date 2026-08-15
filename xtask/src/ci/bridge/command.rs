@@ -61,6 +61,15 @@ pub(super) struct BridgeConfig {
     pub(super) gitlab_token_file: PathBuf,
     pub(super) branch: String,
     pub(super) state_dir: PathBuf,
+    /// GitHub logins whose pull requests may change the CI control paths
+    /// directly.
+    ///
+    /// Declared here, in the host's own configuration, and never in the
+    /// repository: a list a pull request could edit would be a list that adds
+    /// its own author. Empty by default, which is the behaviour every other
+    /// contributor gets.
+    #[serde(default)]
+    pub(super) trusted_authors: Vec<String>,
 }
 
 impl BridgeConfig {
@@ -181,6 +190,24 @@ mod tests {
             .unwrap()
             .join("ci/bridge/config.example.toml");
         std::fs::read_to_string(path).unwrap()
+    }
+
+    /// The list lives in the host's configuration and nowhere else. A pull
+    /// request cannot reach it, which is the whole point: a repository-side
+    /// list would be one a pull request can add its own author to. Absent by
+    /// default, so every contributor gets the rule until the host says
+    /// otherwise.
+    #[test]
+    fn trusted_authors_come_from_the_host_configuration_and_default_to_none() {
+        let none = toml::from_str::<BridgeConfig>(&example()).unwrap();
+        assert!(none.trusted_authors.is_empty());
+
+        let listed = toml::from_str::<BridgeConfig>(&format!(
+            "{}trusted_authors = [\"gerasim13\"]\n",
+            example()
+        ))
+        .unwrap();
+        assert_eq!(listed.trusted_authors, ["gerasim13"]);
     }
 
     #[test]
