@@ -517,12 +517,7 @@ fn ensure_room_for_a_job(config: &CiConfig, shared_root: &Path) -> Result<()> {
     if !is_ci() || free >= required {
         return Ok(());
     }
-    reclaim_build_caches(
-        config.host.build_root(),
-        config.host.build_cache_budget_bytes()?,
-        free,
-        required,
-    )?;
+    reclaim_build_caches(config.host.build_root(), free, required)?;
     let free = free_bytes(shared_root)?;
     if free < required {
         bail!(
@@ -545,26 +540,28 @@ fn ensure_room_for_a_job(config: &CiConfig, shared_root: &Path) -> Result<()> {
 /// the refusal mean what it says: the space is held by live work, not by
 /// leftovers.
 ///
+/// What is reclaimed is the shortfall, not the host's ceiling. The ceiling is
+/// the hourly pass's question and it answers "nothing to do" whenever the caches
+/// happen to sit under it — which is exactly the state a refused job finds
+/// itself in, since a full volume is rarely full of build caches alone.
+///
 /// Failing to reclaim is not itself a refusal — the gate re-reads free space
 /// and answers on that.
-fn reclaim_build_caches(
-    build_root: &Path,
-    budget_bytes: u64,
-    free: u64,
-    required: u64,
-) -> Result<()> {
+fn reclaim_build_caches(build_root: &Path, free: u64, required: u64) -> Result<()> {
     let workspaces = build_root.join("workspaces/gitlab");
     let targets = build_cache::persistent_target_dirs(&workspaces)?;
     if targets.is_empty() {
         return Ok(());
     }
+    let shortfall = required.saturating_sub(free);
     warn!(
         free_bytes = free,
         required_bytes = required,
+        shortfall_bytes = shortfall,
         targets = targets.len(),
         "reclaiming build caches before refusing the job"
     );
-    build_cache::enforce_budget(&targets, budget_bytes)
+    build_cache::reclaim_at_least(&targets, shortfall)
 }
 
 pub(crate) fn is_gitlab() -> bool {
@@ -895,7 +892,7 @@ mod tests {
         fs::write(checkout.join("Cargo.toml"), "[package]\n").unwrap();
         fs::write(target.join("artifact"), vec![0_u8; 400_000]).unwrap();
 
-        reclaim_build_caches(root.path(), 0, 0, u64::MAX).unwrap();
+        reclaim_build_caches(root.path(), 0, u64::MAX).unwrap();
 
         assert!(
             !target.join("artifact").exists(),
@@ -920,7 +917,7 @@ mod tests {
 
         let held = CheckoutLease::acquire(&checkout).expect("the running job takes its lease");
 
-        reclaim_build_caches(root.path(), 0, 0, u64::MAX).unwrap();
+        reclaim_build_caches(root.path(), 0, u64::MAX).unwrap();
 
         assert!(
             target.join("artifact").exists(),
@@ -928,7 +925,7 @@ mod tests {
         );
         drop(held);
 
-        reclaim_build_caches(root.path(), 0, 0, u64::MAX).unwrap();
+        reclaim_build_caches(root.path(), 0, u64::MAX).unwrap();
 
         assert!(
             !target.join("artifact").exists(),

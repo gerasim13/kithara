@@ -11,7 +11,7 @@ use tracing::info;
 
 use super::services::launchd;
 use crate::ci::{
-    HOST_JOB_CONCURRENCY,
+    HOST_CORES, HOST_JOB_CONCURRENCY,
     config::{CiConfig, MAC_CONFIG_PATH},
     environment::PROVISIONED_LINUX_IMAGE_ENV,
     process::Process,
@@ -29,10 +29,18 @@ enum LaunchdServiceState {
 }
 
 impl<'a> RunnerManager<'a> {
-    /// Two simultaneous jobs may each occupy four Cargo workers. The remaining
-    /// two cores stay available to the runner, sccache, linkers, and platform tools.
-    const CARGO_BUILD_JOBS_ENV: &'static str = "CARGO_BUILD_JOBS=4";
+    /// Cargo workers one admitted job may occupy.
+    ///
+    /// Derived rather than written down, because the two numbers drifted apart
+    /// the one time they were: admission went from two jobs to three while this
+    /// stayed at four, and twelve compilers on ten cores left nothing for the
+    /// runner, sccache, and the linkers. The spare core is that remainder.
+    const CARGO_BUILD_JOBS: usize = (HOST_CORES - 1) / HOST_JOB_CONCURRENCY;
     const LEGACY_MACOS_RUNNER_LABEL: &'static str = "com.zvuk.kithara-ci.macos-runner";
+
+    fn cargo_build_jobs_env() -> String {
+        format!("CARGO_BUILD_JOBS={}", Self::CARGO_BUILD_JOBS)
+    }
 
     pub(super) const fn new(config: &'a CiConfig, process: &'a Process) -> Self {
         Self { config, process }
@@ -255,7 +263,7 @@ impl<'a> RunnerManager<'a> {
     /// locally — a suite that runs in three minutes took an hour to reach.
     fn runner_config(&self, home: &Path, tokens: &Tokens) -> String {
         let concurrency = HOST_JOB_CONCURRENCY;
-        let cargo_build_jobs = Self::CARGO_BUILD_JOBS_ENV;
+        let cargo_build_jobs = Self::cargo_build_jobs_env();
         let root = self.config.host.host_root.display();
         let builds = self.config.host.build_root().display();
         let url = self.config.host.gitlab_origin();
@@ -569,7 +577,53 @@ mod tests {
     use std::{collections::BTreeMap, ffi::OsString, os::unix::fs::PermissionsExt};
 
     use super::*;
-    use crate::ci::{HOST_JOB_CONCURRENCY, config::fixture};
+    use crate::ci::config::fixture;
+
+    /// What the runner is actually handed has to fit the machine. Admission and
+    /// the per-job Cargo budget are rendered into the same file from two
+    /// different constants, and the machine is what pays when they disagree:
+    /// raising admission from two jobs to three while the budget stayed at four
+    /// put twelve compilers on ten cores, leaving the runner, sccache, and the
+    /// linkers nothing to run on.
+    #[test]
+    fn the_rendered_runner_config_fits_its_jobs_on_the_host() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .to_path_buf();
+        let config = fixture();
+        let process = Process::new(&root, BTreeMap::new());
+        let manager = RunnerManager::new(&config, &process);
+        let home = config
+            .host
+            .host_root
+            .join("home")
+            .join(&config.host.ci_user);
+        let tokens = Tokens {
+            macos: "glrt-macos".into(),
+            linux: "glrt-linux".into(),
+            android: "glrt-android".into(),
+            release: "glrt-release".into(),
+        };
+
+        let rendered: toml::Value = toml::from_str(&manager.runner_config(&home, &tokens)).unwrap();
+        let admitted = usize::try_from(rendered["concurrent"].as_integer().unwrap()).unwrap();
+        let workers: usize = rendered["runners"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .flat_map(|runner| runner["environment"].as_array().into_iter().flatten())
+            .filter_map(toml::Value::as_str)
+            .find_map(|entry| entry.strip_prefix("CARGO_BUILD_JOBS="))
+            .expect("every runner carries a per-job Cargo budget")
+            .parse()
+            .expect("the Cargo budget is a worker count");
+
+        assert!(
+            admitted * workers < HOST_CORES,
+            "{admitted} jobs of {workers} workers claim every one of the host's {HOST_CORES} cores"
+        );
+    }
 
     #[test]
     fn installing_an_executable_over_itself_keeps_it() {
@@ -881,7 +935,9 @@ mod tests {
                     .as_array()
                     .unwrap()
                     .iter()
-                    .any(|value| value.as_str() == Some(RunnerManager::CARGO_BUILD_JOBS_ENV)),
+                    .any(|value| {
+                        value.as_str() == Some(RunnerManager::cargo_build_jobs_env().as_str())
+                    }),
                 "{} has no per-job Cargo CPU budget",
                 runner["name"]
             );

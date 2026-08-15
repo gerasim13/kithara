@@ -6,6 +6,13 @@ use serde::{Deserialize, Serialize};
 /// Paths that define the trusted `GitLab` judge. Pull-request product content is
 /// tested with these paths restored from the synchronized default branch.
 ///
+/// Restoring them does two jobs at once. It keeps a pull request from grading
+/// itself, and it keeps a branch runnable after the host moves on: these paths
+/// are what agrees with the machine, and a branch old enough to disagree fails
+/// on the host profile or on a job name before it reaches a test. Only a pull
+/// request that changes them is judged with its own, because a change to the
+/// judge has nowhere else to be tested.
+///
 /// Being listed here is not by itself a reason to reject a pull request. What a
 /// change does to the judge decides that, and `control::classify` is where it is
 /// decided: an entry added beside the existing ones promises nothing new about
