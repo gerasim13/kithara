@@ -31,6 +31,13 @@
                 read: Parameter(id: "mix.crossfader"),
                 write: Parameter(id: "mix.crossfader"),
             ),
+            Fader(
+                id: "master",
+                size: (w: Fill, h: Fixed(34.0)),
+                style: Volume,
+                read: Parameter(id: "player.output.volume"),
+                write: Parameter(id: "player.output.volume"),
+            ),
         ],
     ),
 )

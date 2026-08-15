@@ -111,6 +111,12 @@
                             ),
                         ],
                     ),
+                    Toggle(
+                        id: "mute",
+                        size: (w: Fixed(44.0), h: Fixed(20.0)),
+                        read: Parameter(id: "mixer.muted", with: { "deck": "$deck" }),
+                        write: Command(id: "mixer.toggle_mute", with: { "deck": "$deck" }),
+                    ),
                 ],
             ),
         ],

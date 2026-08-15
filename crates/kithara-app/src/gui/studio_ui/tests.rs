@@ -8,7 +8,7 @@ use kithara_ui::{
 use super::{cache::DeckLayout, compile::compile_studio};
 const LAYOUTS: [DeckLayout; 2] = [DeckLayout::Single, DeckLayout::Dual];
 
-const SINGLE_HOSTED_CLAIMS: [(&str, &str); 15] = [
+const SINGLE_HOSTED_CLAIMS: [(&str, &str); 16] = [
     ("deck-a/next", "activation"),
     ("deck-a/play", "activation"),
     ("deck-a/prev", "activation"),
@@ -19,6 +19,7 @@ const SINGLE_HOSTED_CLAIMS: [(&str, &str); 15] = [
     ("mixer/a/four-band/high-mid-4", "knob"),
     ("mixer/a/four-band/low-4", "knob"),
     ("mixer/a/four-band/low-mid-4", "knob"),
+    ("mixer/a/mute", "activation"),
     ("mixer/a/three-band/high-3", "knob"),
     ("mixer/a/three-band/low-3", "knob"),
     ("mixer/a/three-band/mid-3", "knob"),
@@ -26,7 +27,7 @@ const SINGLE_HOSTED_CLAIMS: [(&str, &str); 15] = [
     ("overview/a/wave", "wave"),
 ];
 
-const DUAL_HOSTED_CLAIMS: [(&str, &str); 31] = [
+const DUAL_HOSTED_CLAIMS: [(&str, &str); 33] = [
     ("deck-a/next", "activation"),
     ("deck-a/play", "activation"),
     ("deck-a/prev", "activation"),
@@ -43,6 +44,7 @@ const DUAL_HOSTED_CLAIMS: [(&str, &str); 31] = [
     ("mixer/a/four-band/high-mid-4", "knob"),
     ("mixer/a/four-band/low-4", "knob"),
     ("mixer/a/four-band/low-mid-4", "knob"),
+    ("mixer/a/mute", "activation"),
     ("mixer/a/three-band/high-3", "knob"),
     ("mixer/a/three-band/low-3", "knob"),
     ("mixer/a/three-band/mid-3", "knob"),
@@ -51,6 +53,7 @@ const DUAL_HOSTED_CLAIMS: [(&str, &str); 31] = [
     ("mixer/b/four-band/high-mid-4", "knob"),
     ("mixer/b/four-band/low-4", "knob"),
     ("mixer/b/four-band/low-mid-4", "knob"),
+    ("mixer/b/mute", "activation"),
     ("mixer/b/three-band/high-3", "knob"),
     ("mixer/b/three-band/low-3", "knob"),
     ("mixer/b/three-band/mid-3", "knob"),
@@ -71,7 +74,9 @@ fn each_node(ui: &CompiledUi, visit: &mut impl FnMut(&ExpandedNode)) {
                     walk(child, visit);
                 }
             }
-            ExpandedNode::Optional { child, .. } | ExpandedNode::Pressable { child, .. } => {
+            ExpandedNode::Optional { child, .. }
+            | ExpandedNode::Pressable { child, .. }
+            | ExpandedNode::Scroll { child, .. } => {
                 walk(child, visit);
             }
             ExpandedNode::Popover {
@@ -456,19 +461,14 @@ fn every_eq_bank_centers_its_knobs() {
     assert_eq!(centered, 4, "two banks on each of two decks");
 }
 
+/// Key lock is pitch-independent stretching, and no part of the engine offers
+/// it: `TimestretchState` moves tempo and pitch together. A control for it
+/// could only ever write to nothing, so the documents must not carry one.
 #[kithara::test]
 fn studio_hides_controls_outside_the_supported_playback_contract() {
     let ui = compile_studio(DeckLayout::Dual).unwrap();
     let paths = control_paths(&ui);
-    for path in [
-        "deck-a/time",
-        "deck-a/keylock",
-        "deck-b/time",
-        "deck-b/keylock",
-        "mixer/a/mute",
-        "mixer/b/mute",
-        "mixer/master",
-    ] {
+    for path in ["deck-a/keylock", "deck-b/keylock"] {
         assert!(!paths.contains(&path), "unexpected control `{path}`");
     }
 }

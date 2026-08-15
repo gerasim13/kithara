@@ -227,6 +227,16 @@ impl DeckSet {
         self.commit(next)
     }
 
+    /// The master gain every deck's level is folded through.
+    ///
+    /// # Errors
+    /// See [`DeckSet::commit`].
+    pub fn set_group_master(&mut self, gain: f32) -> Result<(), PlayError> {
+        let mut next = self.mix.clone();
+        next.group_master = gain;
+        self.commit(next)
+    }
+
     /// Mute or unmute one deck.
     ///
     /// # Errors

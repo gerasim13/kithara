@@ -156,6 +156,9 @@ fn mixer_control(state: &mut Kithara, control: &str, action: &ControlAction) -> 
         ("xfade", ControlAction::SetScalar(position)) => Some(Message::Mix(MixMsg::Crossfader(
             position.clamp(0.0, 1.0).as_(),
         ))),
+        ("master", ControlAction::SetScalar(gain)) => {
+            Some(Message::Mix(MixMsg::Master(gain.clamp(0.0, 1.0).as_())))
+        }
         _ => strip_control(state, control, action),
     }
 }
@@ -182,6 +185,10 @@ fn strip_control(state: &mut Kithara, control: &str, action: &ControlAction) -> 
         ("eq-4", ControlAction::Activate) => {
             state.studio.cache.close_eq_menus();
             Some(Message::SetEqMode(EqMode::FourBand))
+        }
+        ("mute", ControlAction::Activate) => {
+            let muted = state.session.mix().strips.get(index)?.muted;
+            Some(Message::Mix(MixMsg::Muted(deck_id(state, index)?, !muted)))
         }
         ("volume", ControlAction::SetScalar(trim)) => Some(Message::Mix(MixMsg::Trim(
             deck_id(state, index)?,

@@ -73,6 +73,24 @@ static ENDPOINTS: &[Endpoint] = &[
     },
     Endpoint {
         category: EndpointCategory::Telemetry,
+        id: "deck.playback.duration_secs",
+        value: ValueKind::Scalar,
+        scopes: Endpoint::DECK,
+    },
+    Endpoint {
+        category: EndpointCategory::Telemetry,
+        id: "deck.track.title",
+        value: ValueKind::Text,
+        scopes: Endpoint::DECK,
+    },
+    Endpoint {
+        category: EndpointCategory::Telemetry,
+        id: "deck.track.source_kind",
+        value: ValueKind::Text,
+        scopes: Endpoint::DECK,
+    },
+    Endpoint {
+        category: EndpointCategory::Telemetry,
         id: "deck.playback.tempo",
         value: ValueKind::Text,
         scopes: Endpoint::DECK,
@@ -223,7 +241,31 @@ static ENDPOINTS: &[Endpoint] = &[
     },
     Endpoint {
         category: EndpointCategory::Parameter,
+        id: "mixer.muted",
+        value: ValueKind::Bool,
+        scopes: Endpoint::DECK,
+    },
+    Endpoint {
+        category: EndpointCategory::Command,
+        id: "mixer.toggle_mute",
+        value: ValueKind::Trigger,
+        scopes: Endpoint::DECK,
+    },
+    Endpoint {
+        category: EndpointCategory::Parameter,
         id: "mix.crossfader",
+        value: ValueKind::Scalar,
+        scopes: Endpoint::GLOBAL,
+    },
+    Endpoint {
+        category: EndpointCategory::Telemetry,
+        id: "player.output.levels",
+        value: ValueKind::Stereo,
+        scopes: Endpoint::GLOBAL,
+    },
+    Endpoint {
+        category: EndpointCategory::Parameter,
+        id: "player.output.volume",
         value: ValueKind::Scalar,
         scopes: Endpoint::GLOBAL,
     },

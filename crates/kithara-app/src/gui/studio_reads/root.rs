@@ -4,7 +4,7 @@ use super::{
     broadcast::BroadcastNode,
     deck::{DeckNode, DecksNode, EngineNode},
     library::LibraryNode,
-    mix::{MixNode, StripsNode},
+    mix::{MixNode, PlayerNode, StripsNode},
     ui::{DragNode, UiNode},
 };
 use crate::gui::app::Kithara;
@@ -15,6 +15,7 @@ pub(in crate::gui) struct StudioRoot<'a> {
     library: LibraryNode<'a>,
     mix: MixNode<'a>,
     mixer: StripsNode<'a>,
+    player: PlayerNode<'a>,
     ui: UiNode<'a>,
     decks: Vec<DeckNode<'a>>,
 }
@@ -50,6 +51,7 @@ impl<'a> StudioRoot<'a> {
             engine,
             mix: MixNode::new(state.session.mix()),
             mixer: StripsNode::new(state.session.mix()),
+            player: PlayerNode::new(state.session.mix()),
             ui: UiNode::new(drag, cache.layout(), &cache.collapsed),
         }
     }
@@ -64,6 +66,7 @@ impl<'a, 'b: 'a> Node<'a> for &'a StudioRoot<'b> {
             "engine" => Box::new(self.engine),
             "mix" => Box::new(self.mix),
             "mixer" => Box::new(self.mixer),
+            "player" => Box::new(self.player),
             "ui" => Box::new(self.ui),
             _ => return None,
         };
@@ -91,13 +94,7 @@ mod tests {
         state::{AbrVariant, UiState},
     };
 
-    const DERIVED: [&str; 5] = [
-        "deck.track.title",
-        "deck.track.source_kind",
-        "deck.playback.position_secs",
-        "deck.playback.duration_secs",
-        "deck.playback.position_normalized",
-    ];
+    const DERIVED: [&str; 1] = ["deck.playback.position_normalized"];
 
     struct Studio {
         catalog: Catalog,
@@ -140,6 +137,7 @@ mod tests {
                 engine,
                 mix: MixNode::new(&self.mix),
                 mixer: StripsNode::new(&self.mix),
+                player: PlayerNode::new(&self.mix),
                 ui: UiNode::new(drag, DeckLayout::Dual, &self.collapsed),
             }
         }
