@@ -113,7 +113,9 @@ macro_rules! controls {
                     .build(),
             ),
             $crate::expand::ControlSpec::Vis => with.apply(&$crate::mount::Vis),
-            $crate::expand::ControlSpec::Shader(_) => with.apply(&$crate::mount::Shader),
+            $crate::expand::ControlSpec::Shader(spec) => {
+                with.apply(&$crate::mount::Shader::new(spec))
+            }
             $crate::expand::ControlSpec::PortalMap => with.apply(&$crate::mount::PortalMap),
             $crate::expand::ControlSpec::Range => with.apply(&$crate::mount::Range),
             $crate::expand::ControlSpec::Table {

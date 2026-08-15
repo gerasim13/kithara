@@ -14,6 +14,7 @@ pub mod masonry;
 pub mod model;
 mod owner;
 mod picker;
+pub mod shader;
 pub mod skin;
 #[cfg(feature = "iced")]
 mod table;

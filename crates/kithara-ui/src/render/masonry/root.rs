@@ -33,7 +33,7 @@ use crate::{
     interact::CursorShape,
     render::{
         DragGhost, Reads, Skin, UiEvent, WindowCommand, WindowSurface, document::read::resolve,
-        vis::VisDeclaration,
+        shader::ShaderDeclaration, vis::VisDeclaration,
     },
     text::TextContext,
 };
@@ -50,7 +50,7 @@ pub struct MasonryRoot<Action> {
     engines: Vec<Rc<HostedEngine>>,
     popovers: Vec<PopoverRegistration>,
     watched: Vec<Watched>,
-    vis: Vec<WidgetId>,
+    native: Vec<WidgetId>,
     window: Option<WindowTracker>,
     #[field(get, vis = "pub")]
     root: RenderRoot,
@@ -84,7 +84,7 @@ where
         node: MasonryNode<Action>,
         options: RenderRootOptions,
     ) -> Result<Self, MasonryRootError> {
-        let (base, layers, popovers, engines, vis, window, watched) = RootParts::from(node);
+        let (base, layers, popovers, engines, native, window, watched) = RootParts::from(node);
         let signals = Rc::new(RefCell::new(VecDeque::new()));
         let sink = Rc::clone(&signals);
         let root = RenderRoot::new(
@@ -98,7 +98,7 @@ where
             engines,
             popovers,
             watched,
-            vis,
+            native,
             window,
             root,
             signals,
@@ -166,7 +166,7 @@ where
                 Watched::Snapshot { id } => {
                     self.root.edit_widget(*id, |mut widget| {
                         let mut node = widget.downcast::<Node>();
-                        if node.widget.refresh(reads) {
+                        if node.widget.refresh(ui, reads) {
                             node.ctx.request_paint_only();
                         }
                     });
@@ -176,7 +176,7 @@ where
     }
 
     pub(crate) fn vis_declarations(&self) -> Vec<VisDeclaration> {
-        self.vis
+        self.native
             .iter()
             .filter_map(|id| {
                 let widget = self.root.get_widget(*id)?.downcast::<Node>()?;
@@ -186,6 +186,19 @@ where
                 let frame = widget.vis_frame()?;
                 let bounds = widget.ctx().bounding_rect();
                 VisDeclaration::logical(frame, [bounds.x0, bounds.y0, bounds.x1, bounds.y1])
+            })
+            .collect()
+    }
+
+    pub(crate) fn shader_declarations(&self) -> Vec<ShaderDeclaration> {
+        self.native
+            .iter()
+            .filter_map(|id| {
+                let widget = self.root.get_widget(*id)?.downcast::<Node>()?;
+                if widget.ctx().is_stashed() {
+                    return None;
+                }
+                widget.shader_declaration()
             })
             .collect()
     }

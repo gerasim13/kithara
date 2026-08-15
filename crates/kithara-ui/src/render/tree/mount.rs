@@ -13,6 +13,7 @@ use crate::{
     render::{
         InputOwner, MiniWave, ReadValue, Reads, Skin, Text, Widget, WindowSurface,
         controls::{Draws, Gesture, Paint, Reading},
+        shader,
     },
 };
 
@@ -193,9 +194,9 @@ impl ViewControl for mount::Vis {
     }
 }
 
-impl ViewControl for mount::Shader {
-    fn view<'a>(&self, _cx: &Cx<'a, '_, '_>) -> Rendered<'a> {
-        Rendered::leading(Space::new().into())
+impl ViewControl for mount::Shader<'_> {
+    fn view<'a>(&self, cx: &Cx<'a, '_, '_>) -> Rendered<'a> {
+        Rendered::leading(shader::view(self.spec, cx.path, cx.reads, cx.ui))
     }
 }
 

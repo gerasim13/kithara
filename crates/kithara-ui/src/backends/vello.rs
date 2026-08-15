@@ -48,7 +48,7 @@ impl<'scene> VelloBackend<'scene> {
     }
 }
 
-fn has_system_text(list: &DrawList) -> bool {
+pub(super) fn has_system_text(list: &DrawList) -> bool {
     list.commands().iter().any(|command| match command {
         DrawCmd::Clip { list, .. } => has_system_text(list),
         DrawCmd::Text { run, .. } => run

@@ -32,7 +32,7 @@ use super::{
 use crate::{
     draw::Pt,
     interact::{Input, InputMethod, Key, MOUSE, Modifiers, PointerInput, PointerPhase, Scroll},
-    render::{WindowCommand, WindowEdge, vis::VisPass},
+    render::{WindowCommand, WindowEdge, shader::ShaderPass, vis::VisPass},
 };
 
 /// Opens a window of `size` logical points and runs `app` in it until the
@@ -71,6 +71,7 @@ struct Live<'config, Application> {
     pointer: PhysicalPosition<f64>,
     recovery_redraw_latched: bool,
     renderer: Renderer,
+    shaders: ShaderPass,
     surface: RenderSurface<'static>,
     ui: Ui<'config, Application>,
     vis: VisPass,
@@ -358,6 +359,7 @@ where
             },
         )
         .map_err(|error| RunError::Host(format!("vello renderer: {error}")))?;
+        let shaders = ShaderPass::new(&handle.device);
         let vis = VisPass::new(&handle.device, target::FORMAT);
 
         let scale = window.scale_factor();
@@ -370,6 +372,7 @@ where
             pointer: PhysicalPosition::new(0.0, 0.0),
             recovery_redraw_latched: false,
             renderer,
+            shaders,
             surface,
             ui,
             vis,
@@ -563,6 +566,12 @@ where
     fn present(&mut self, frame: &Frame) -> bool {
         let size = self.window.inner_size();
         let handle = &self.context.devices[self.surface.dev_id];
+        self.shaders.render(
+            &handle.device,
+            &handle.queue,
+            &mut self.renderer,
+            frame.shaders(),
+        );
         if let Err(error) = self.renderer.render_to_texture(
             &handle.device,
             &handle.queue,

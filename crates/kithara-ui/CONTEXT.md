@@ -914,9 +914,18 @@ block with `viewport` plus the document's sorted named fields, validates the com
 render stack's Naga generation, and retains the validated source with immutable endpoint metadata.
 Uniform bindings are read-only and initially accept Bool, Scalar and Stereo values; commands,
 collections, text and waveforms fail compilation with a typed `UiDocError::Shader`. A compiled
-document is the sole owner of this metadata, so hosts never build a parallel shader registry. Until
-the image-pass wave lands, both hosts mount the control as an empty box of its declared size; there
-is no fallback shader or backend-specific document path.
+document is the sole owner of this metadata, so hosts never build a parallel binding registry.
+Each frame packs the viewport followed by the sorted named `vec4` values. A missing, wrongly typed
+or non-finite live value produces a logged frame error and no image; the previous image is not a
+fallback. A Shader with bindings requests continuous retained frames so telemetry can advance.
+
+Both hosts execute the same validated WGSL into a reusable logical-pixel `Rgba8Unorm` texture.
+The iced wgpu 27 adapter composites that texture in the primitive's existing viewport and scissor.
+The Masonry wgpu 26 pass installs its `COPY_SRC` texture as the `ImageData` already encoded at the
+leaf's exact Vello scene position, so surrounding clips, transforms and draw order remain scene
+semantics instead of becoming a topmost native overlay. Resize replaces only the affected texture;
+uniform buffers and unchanged textures are reused. No CPU readback, fallback shader or
+backend-specific document syntax participates in production drawing.
 
 ## Scoped Read Resolution
 

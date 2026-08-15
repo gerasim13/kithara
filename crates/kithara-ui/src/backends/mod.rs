@@ -3,9 +3,13 @@ pub(crate) mod conformance;
 #[cfg(feature = "iced")]
 mod iced_canvas;
 #[cfg(feature = "vello")]
+mod image;
+#[cfg(feature = "vello")]
 mod vello;
 
 #[cfg(feature = "iced")]
 pub(crate) use iced_canvas::{font, replay_ordered};
+#[cfg(feature = "vello")]
+pub(crate) use image::VelloImageBackend;
 #[cfg(feature = "vello")]
 pub use vello::VelloBackend;

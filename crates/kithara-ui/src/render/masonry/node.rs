@@ -1,5 +1,6 @@
 use std::{cell::Cell, marker::PhantomData, rc::Rc};
 
+use kithara_platform::time::Duration;
 use masonry::{
     accesskit::{Node as AccessNode, Role},
     core::{
@@ -8,7 +9,7 @@ use masonry::{
         PropertiesMut, PropertiesRef, QueryCtx, RegisterCtx, TextEvent, Update, UpdateCtx, Widget,
         WidgetId, WidgetPod,
     },
-    kurbo::{Affine, Point, Rect as MasonryRect, Size as MasonrySize},
+    kurbo::{Point, Rect as MasonryRect, Size as MasonrySize},
     vello::Scene,
 };
 use num_traits::cast::AsPrimitive;
@@ -19,7 +20,7 @@ use super::{
     custom::HostAction,
     leaf::{Leaf, cursor_icon},
     mount::NodeLayout,
-    picker::{EngineTarget, HostedEngine},
+    picker::{EngineTarget, HostedEngine, local_ime_area, sync_ime_area},
     popover::PopoverState,
 };
 use crate::{
@@ -34,7 +35,9 @@ use crate::{
         },
     },
     layout::FrameSides,
-    render::{HostedControlPlan, ReadValue, Reads, UiEvent, vis::VisFrame},
+    render::{
+        HostedControlPlan, ReadValue, Reads, UiEvent, shader::ShaderDeclaration, vis::VisFrame,
+    },
     solve,
 };
 
@@ -101,7 +104,7 @@ pub struct MasonryNode<Action> {
     engine_targets: Vec<EngineTarget>,
     engines: Vec<Rc<HostedEngine>>,
     watched: Vec<Watched>,
-    vis: Vec<WidgetId>,
+    native: Vec<WidgetId>,
     window: Option<WindowTracker>,
     #[cfg(test)]
     document_ids: Vec<WidgetId>,
@@ -213,15 +216,28 @@ impl Node {
         self.layout.leaf().is_some_and(|leaf| leaf.set_read(value))
     }
 
-    pub(crate) fn refresh(&mut self, reads: &dyn Reads) -> bool {
-        self.layout.leaf().is_some_and(|leaf| leaf.refresh(reads))
+    pub(crate) fn refresh(&mut self, ui: &crate::compile::CompiledUi, reads: &dyn Reads) -> bool {
+        self.layout
+            .leaf()
+            .is_some_and(|leaf| leaf.refresh(ui, reads))
+    }
+
+    pub(crate) fn shader_declaration(&self) -> Option<ShaderDeclaration> {
+        match &self.layout {
+            NodeLayout::Leaf(leaf) => leaf.shader_declaration(),
+            NodeLayout::Flex(_) | NodeLayout::Scroll(_) | NodeLayout::Stack => None,
+        }
     }
 
     pub(crate) fn vis_frame(&self) -> Option<VisFrame> {
         match &self.layout {
             NodeLayout::Leaf(Leaf::Vis(vis)) => vis.frame(),
             NodeLayout::Leaf(
-                Leaf::Empty | Leaf::Control(_) | Leaf::Text { .. } | Leaf::Custom { .. },
+                Leaf::Empty
+                | Leaf::Control(_)
+                | Leaf::Text { .. }
+                | Leaf::Custom { .. }
+                | Leaf::Shader(_),
             )
             | NodeLayout::Flex(_)
             | NodeLayout::Scroll(_)
@@ -575,8 +591,7 @@ impl Widget for Node {
         }
         if let Some(leaf) = self.layout.leaf() {
             let repaint = leaf.repaint();
-            if let Some(action) = leaf.frame(kithara_platform::time::Duration::from_nanos(interval))
-            {
+            if let Some(action) = leaf.frame(Duration::from_nanos(interval)) {
                 ctx.submit_action::<HostAction>(action);
             }
             leaf.animate(ctx, repaint);
@@ -709,25 +724,6 @@ impl Widget for Node {
     }
 }
 
-fn sync_ime_area(ctx: &mut EventCtx<'_>, engine: &HostedEngine) {
-    if let Some(area) = local_ime_area(engine, ctx.window_transform()) {
-        ctx.set_ime_area(area);
-    } else {
-        ctx.clear_ime_area();
-    }
-}
-
-fn local_ime_area(engine: &HostedEngine, transform: Affine) -> Option<MasonryRect> {
-    engine.input_method_area().map(|area| {
-        transform.inverse().transform_rect_bbox(MasonryRect::new(
-            f64::from(area.x),
-            f64::from(area.y),
-            f64::from(area.x + area.w),
-            f64::from(area.y + area.h),
-        ))
-    })
-}
-
 impl<Action> MasonryNode<Action> {
     pub(super) fn document(
         layout: NodeLayout,
@@ -743,7 +739,7 @@ impl<Action> MasonryNode<Action> {
         let mut engine_targets = Vec::new();
         let mut engines = Vec::new();
         let mut watched = Vec::new();
-        let mut vis = Vec::new();
+        let mut native = Vec::new();
         let mut window = None;
         #[cfg(test)]
         let mut child_ids = Vec::new();
@@ -753,7 +749,7 @@ impl<Action> MasonryNode<Action> {
             engine_targets.extend(child.engine_targets);
             engines.extend(child.engines);
             watched.extend(child.watched);
-            vis.extend(child.vis);
+            native.extend(child.native);
             window = merge_window(window, child.window);
             #[cfg(test)]
             if _expose_children {
@@ -768,8 +764,11 @@ impl<Action> MasonryNode<Action> {
             background,
             frame,
         ));
-        if matches!(&widget.widget.layout, NodeLayout::Leaf(Leaf::Vis(_))) {
-            vis.push(widget.id());
+        if matches!(
+            &widget.widget.layout,
+            NodeLayout::Leaf(Leaf::Shader(_) | Leaf::Vis(_))
+        ) {
+            native.push(widget.id());
         }
         #[cfg(test)]
         let document_ids = {
@@ -787,7 +786,7 @@ impl<Action> MasonryNode<Action> {
             engine_targets,
             engines,
             watched,
-            vis,
+            native,
             window,
             #[cfg(test)]
             document_ids,
@@ -809,7 +808,7 @@ impl<Action> MasonryNode<Action> {
             engine_targets: Vec::new(),
             engines: Vec::new(),
             watched: Vec::new(),
-            vis: Vec::new(),
+            native: Vec::new(),
             window: None,
             #[cfg(test)]
             document_ids: Vec::new(),
@@ -879,8 +878,8 @@ impl<Action> MasonryNode<Action> {
         self.watched.extend(watched);
     }
 
-    pub(crate) fn append_vis(&mut self, vis: Vec<WidgetId>) {
-        self.vis.extend(vis);
+    pub(crate) fn append_native(&mut self, native: Vec<WidgetId>) {
+        self.native.extend(native);
     }
 
     /// Remembers that this node's leaf shows one endpoint, so its value can be
@@ -961,7 +960,7 @@ impl<Action> From<MasonryNode<Action>> for LayerParts {
             node.popovers,
             node.engine_targets,
             node.engines,
-            node.vis,
+            node.native,
             node.window,
             node.watched,
         )
@@ -975,7 +974,7 @@ impl<Action> From<MasonryNode<Action>> for RootParts {
             node.layers,
             node.popovers,
             node.engines,
-            node.vis,
+            node.native,
             node.window,
             node.watched,
         )

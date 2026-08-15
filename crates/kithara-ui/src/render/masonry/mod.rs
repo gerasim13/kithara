@@ -12,6 +12,8 @@ mod popover;
 #[path = "../masonry_control/projected.rs"]
 mod projected;
 mod root;
+#[path = "../masonry_control/shader.rs"]
+mod shader;
 #[cfg(test)]
 mod tests;
 #[path = "../masonry_control/vis.rs"]

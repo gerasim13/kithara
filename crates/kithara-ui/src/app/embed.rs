@@ -2,7 +2,8 @@
 //!
 //! A host that already has both — bevy, a plug-in shell, someone else's winit
 //! loop - drives this directly: hand it a size, hand it input, take the complete
-//! frame, draw its Vello scene and then its native effects. [`super::run`] is a
+//! frame, prepare its shader images, draw its Vello scene and then its native
+//! effects. [`super::run`] is a
 //! thin window of its own built on top of this, for an application that has no
 //! host to live in.
 
@@ -233,8 +234,9 @@ where
     }
 
     /// Draws the current document, in the physical pixels the caller sized it
-    /// with. The caller rasterises the Vello scene, then sends the native
-    /// declarations through [`crate::render::vis::VisPass`] on the same target.
+    /// with. The caller prepares [`crate::render::shader::ShaderPass`],
+    /// rasterises the Vello scene, then sends native declarations through
+    /// [`crate::render::vis::VisPass`] on the same target.
     ///
     /// The document is laid out and painted in logical units. This method scales
     /// the Vello scene; the host gives that same scale and its physical target
@@ -247,6 +249,7 @@ where
             .root
             .redraw()
             .map_err(|error| RunError::Host(error.to_string()))?;
+        let shaders = self.root.shader_declarations();
         let vis = self.root.vis_declarations();
         let scene = if (self.scale - 1.0).abs() < f64::EPSILON {
             scene
@@ -255,7 +258,7 @@ where
             scaled.append(&scene, Some(Affine::scale(self.scale)));
             scaled
         };
-        Ok(Frame::new(scene, vis))
+        Ok(Frame::new(scene, shaders, vis))
     }
 
     /// Draws the current document through the same single paint path as

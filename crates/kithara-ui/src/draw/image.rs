@@ -5,7 +5,7 @@ use kithara_platform::sync::Arc;
 /// The producer owns the pixels or GPU texture. The list carries only this
 /// identity and the destination rectangle, so no backend resource type crosses
 /// the draw seam.
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct ImageId(Arc<str>);
 
 impl ImageId {

@@ -195,7 +195,16 @@ impl NodeControl for mount::Vis {
         host.vis_leaf(preset, value, cx.declared)
     }
 }
-impl NodeControl for mount::Shader {}
+impl NodeControl for mount::Shader<'_> {
+    fn leaf<A>(&self, host: &MasonryHost<'_, A>, cx: &Cx<'_>) -> MasonryNode<A>
+    where
+        A: std::fmt::Debug + Send + 'static,
+    {
+        let mut output = host.shader_leaf(self.spec.clone(), cx.path.to_owned(), cx.declared);
+        output.watch_snapshot();
+        output
+    }
+}
 impl NodeControl for mount::PortalMap {
     fn leaf<A>(&self, host: &MasonryHost<'_, A>, cx: &Cx<'_>) -> MasonryNode<A>
     where

@@ -17,17 +17,22 @@ use tracing::{Span, trace_span};
 use super::{
     MasonryControl, Repaint, Size2, SizeLimits, TextMeasurer,
     custom::{HostAction, MountedCustom},
+    shader::ShaderLeaf,
     vis::VisLeaf,
 };
 use crate::{
     backends::VelloBackend,
+    compile::CompiledUi,
     draw::{DrawList, DrawListBuilder, Pt, Rect, Rgba, Transform, replay},
     interact::{
         CursorShape, Hit, Input, MOUSE, Outcome, PointerInput, PointerOwnership, PointerPhase,
         masonry::pointer_button,
     },
     module::TextAlign,
-    render::{HostLayer, ReadValue, Reads, UiEvent, WindowCommand, WindowLayerProgram},
+    render::{
+        HostLayer, ReadValue, Reads, UiEvent, WindowCommand, WindowLayerProgram,
+        shader::ShaderDeclaration,
+    },
     skin::TextRoleSkin,
     solve::{Length, Size},
     text::{TextContext, TextResources},
@@ -48,13 +53,14 @@ pub(super) enum Leaf {
         widget: Box<dyn MountedCustom>,
         text: Box<TextContext>,
     },
+    Shader(ShaderLeaf),
     Vis(VisLeaf),
 }
 
 impl Leaf {
     pub(crate) fn measure(&mut self, limits: crate::solve::Limits) -> Size {
         match self {
-            Self::Empty | Self::Vis(_) => Size::ZERO,
+            Self::Empty | Self::Shader(_) | Self::Vis(_) => Size::ZERO,
             Self::Control(control) => control.measure(),
             Self::Text {
                 content,
@@ -88,6 +94,7 @@ impl Leaf {
         let mut list = DrawListBuilder::default();
         match self {
             Self::Empty | Self::Control(_) | Self::Vis(_) => {}
+            Self::Shader(shader) => shader.paint(bounds, scene),
             Self::Text {
                 align,
                 content,
@@ -136,19 +143,23 @@ impl Leaf {
         match self {
             Self::Control(control) => control.input(input, &hit),
             Self::Custom { widget, .. } => widget.input(input, hit),
-            Self::Empty | Self::Text { .. } | Self::Vis(_) => Outcome::IGNORED,
+            Self::Empty | Self::Text { .. } | Self::Shader(_) | Self::Vis(_) => Outcome::IGNORED,
         }
     }
 
     pub(crate) fn frame(&mut self, elapsed: Duration) -> Option<HostAction> {
         match self {
             Self::Custom { widget, .. } => widget.frame(elapsed),
-            Self::Empty | Self::Control(_) | Self::Text { .. } | Self::Vis(_) => None,
+            Self::Empty | Self::Control(_) | Self::Text { .. } | Self::Shader(_) | Self::Vis(_) => {
+                None
+            }
         }
     }
 
     pub(crate) fn repaint(&self) -> Repaint {
-        if matches!(self, Self::Vis(_)) {
+        if matches!(self, Self::Vis(_))
+            || matches!(self, Self::Shader(shader) if shader.is_continuous())
+        {
             return Repaint::Continuous;
         }
         if let Self::Control(control) = self {
@@ -163,7 +174,11 @@ impl Leaf {
     pub(crate) fn hover(&mut self, hovered: bool) -> bool {
         match self {
             Self::Control(control) => control.hover(hovered),
-            Self::Custom { .. } | Self::Empty | Self::Text { .. } | Self::Vis(_) => false,
+            Self::Custom { .. }
+            | Self::Empty
+            | Self::Text { .. }
+            | Self::Shader(_)
+            | Self::Vis(_) => false,
         }
     }
 
@@ -181,13 +196,14 @@ impl Leaf {
                 }
                 _ => false,
             },
-            Self::Custom { .. } | Self::Empty | Self::Vis(_) => false,
+            Self::Custom { .. } | Self::Empty | Self::Shader(_) | Self::Vis(_) => false,
         }
     }
 
-    pub(crate) fn refresh(&mut self, reads: &dyn Reads) -> bool {
+    pub(crate) fn refresh(&mut self, ui: &CompiledUi, reads: &dyn Reads) -> bool {
         match self {
             Self::Control(control) => control.refresh(reads),
+            Self::Shader(shader) => shader.refresh(reads, ui),
             Self::Vis(vis) => vis.refresh(reads),
             Self::Custom { .. } | Self::Empty | Self::Text { .. } => false,
         }
@@ -207,10 +223,19 @@ impl Leaf {
     pub(crate) fn cursor(&self, hit: &Hit) -> CursorShape {
         match self {
             Self::Control(control) => control.cursor(hit),
-            Self::Empty | Self::Text { .. } | Self::Custom { .. } | Self::Vis(_) => {
-                CursorShape::None
-            }
+            Self::Empty
+            | Self::Text { .. }
+            | Self::Custom { .. }
+            | Self::Shader(_)
+            | Self::Vis(_) => CursorShape::None,
         }
+    }
+
+    pub(crate) fn shader_declaration(&self) -> Option<ShaderDeclaration> {
+        let Self::Shader(shader) = self else {
+            return None;
+        };
+        shader.declaration()
     }
 }
 

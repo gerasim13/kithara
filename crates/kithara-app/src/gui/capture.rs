@@ -26,7 +26,7 @@ use kithara_ui::{
     registry::ValueKind,
     render::{
         ReadValue, Reads, StereoLevels, TableCell, TableRow, UiEvent, WaveBucket, WaveformView,
-        fonts, tree, vis::VisPass,
+        fonts, shader::ShaderPass, tree, vis::VisPass,
     },
 };
 use num_traits::cast::AsPrimitive;
@@ -239,6 +239,7 @@ struct Offscreen {
     device: Device,
     queue: Queue,
     renderer: Renderer,
+    shaders: ShaderPass,
     texture: Texture,
     vis: VisPass,
     geometry: Geometry,
@@ -280,11 +281,13 @@ impl Offscreen {
                 | TextureUsages::COPY_SRC,
             view_formats: &[],
         });
+        let shaders = ShaderPass::new(&device);
         let vis = VisPass::new(&device, TextureFormat::Rgba8Unorm);
         Ok(Self {
             device,
             queue,
             renderer,
+            shaders,
             texture,
             vis,
             geometry,
@@ -293,6 +296,12 @@ impl Offscreen {
 
     fn rasterise(&mut self, frame: &UiFrame, base: Color) -> Result<Vec<u8>, String> {
         let view = self.texture.create_view(&TextureViewDescriptor::default());
+        self.shaders.render(
+            &self.device,
+            &self.queue,
+            &mut self.renderer,
+            frame.shaders(),
+        );
         self.renderer
             .render_to_texture(
                 &self.device,

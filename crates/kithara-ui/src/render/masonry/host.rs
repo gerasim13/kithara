@@ -19,6 +19,7 @@ use super::{
     node::LayerParts,
     popover::{PopoverLayer, PopoverState},
     root::WindowLayer,
+    shader::ShaderLeaf,
     vis::VisLeaf,
 };
 use crate::{
@@ -237,6 +238,24 @@ where
     ) -> MasonryNode<Action> {
         MasonryNode::document(
             NodeLayout::Leaf(Leaf::Vis(VisLeaf::new(preset, value, self.reads))),
+            declared,
+            Vec::new(),
+            false,
+            None,
+            None,
+        )
+    }
+
+    pub(super) fn shader_leaf(
+        &self,
+        spec: crate::shader::ShaderSpec,
+        path: String,
+        declared: solve::Size<solve::Length>,
+    ) -> MasonryNode<Action> {
+        MasonryNode::document(
+            NodeLayout::Leaf(Leaf::Shader(ShaderLeaf::new(
+                spec, path, self.reads, self.ui,
+            ))),
             declared,
             Vec::new(),
             false,
@@ -492,7 +511,7 @@ where
                 popovers,
                 engine_targets,
                 engines,
-                vis,
+                native,
                 window,
                 watched,
             ) = LayerParts::from(content);
@@ -508,7 +527,7 @@ where
             output.append_popovers(popovers);
             output.append_engine_targets(engine_targets);
             output.append_engines(engines);
-            output.append_vis(vis);
+            output.append_native(native);
             output.append_watched(watched);
             if let Some(window) = window {
                 output.set_window_tracker(window);

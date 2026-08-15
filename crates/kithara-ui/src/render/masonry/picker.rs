@@ -4,8 +4,8 @@ use std::{
 };
 
 use masonry::{
-    core::{PointerEvent, WidgetId},
-    kurbo::Rect as MasonryRect,
+    core::{EventCtx, PointerEvent, WidgetId},
+    kurbo::{Affine, Rect as MasonryRect},
 };
 use num_traits::cast::AsPrimitive;
 
@@ -296,6 +296,25 @@ fn bounds(area: MasonryRect) -> Rect {
         w: area.width().as_(),
         h: area.height().as_(),
     }
+}
+
+pub(super) fn sync_ime_area(ctx: &mut EventCtx<'_>, engine: &HostedEngine) {
+    if let Some(area) = local_ime_area(engine, ctx.window_transform()) {
+        ctx.set_ime_area(area);
+    } else {
+        ctx.clear_ime_area();
+    }
+}
+
+pub(super) fn local_ime_area(engine: &HostedEngine, transform: Affine) -> Option<MasonryRect> {
+    engine.input_method_area().map(|area| {
+        transform.inverse().transform_rect_bbox(MasonryRect::new(
+            f64::from(area.x),
+            f64::from(area.y),
+            f64::from(area.x + area.w),
+            f64::from(area.y + area.h),
+        ))
+    })
 }
 
 pub(super) fn input(event: &PointerEvent) -> Option<(Input<'static>, Pt)> {

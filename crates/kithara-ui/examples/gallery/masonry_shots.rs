@@ -14,7 +14,7 @@ use futures_lite::future::block_on;
 use kithara_ui::{
     app::{Config, Frame as UiFrame, Ui},
     builtin,
-    render::vis::VisPass,
+    render::{shader::ShaderPass, vis::VisPass},
 };
 use masonry::vello::{
     AaConfig, AaSupport, RenderParams, Renderer, RendererOptions,
@@ -40,6 +40,7 @@ pub(super) struct Offscreen {
     device: Device,
     queue: Queue,
     renderer: Renderer,
+    shaders: ShaderPass,
     texture: Texture,
     vis: VisPass,
     width: u32,
@@ -79,11 +80,13 @@ impl Offscreen {
                 | TextureUsages::COPY_SRC,
             view_formats: &[],
         });
+        let shaders = ShaderPass::new(&device);
         let vis = VisPass::new(&device, TextureFormat::Rgba8Unorm);
         Ok(Self {
             device,
             queue,
             renderer,
+            shaders,
             texture,
             vis,
             width,
@@ -103,6 +106,12 @@ impl Offscreen {
         base: Color,
     ) -> Result<Vec<u8>, String> {
         let view = self.texture.create_view(&TextureViewDescriptor::default());
+        self.shaders.render(
+            &self.device,
+            &self.queue,
+            &mut self.renderer,
+            frame.shaders(),
+        );
         self.renderer
             .render_to_texture(
                 &self.device,
