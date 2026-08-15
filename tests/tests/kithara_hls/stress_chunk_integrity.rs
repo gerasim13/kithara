@@ -103,7 +103,7 @@ async fn next_chunk_with_timeout(
     native,
     timeout(Duration::from_secs(60)),
     env(KITHARA_HANG_TIMEOUT_SECS = "1"),
-    tracing("kithara_audio=debug,kithara_decode=debug,kithara_hls=trace,kithara_stream=trace")
+    tracing("kithara_audio=debug,kithara_decode=debug,kithara_hls=debug,kithara_stream=debug")
 )]
 #[case::mmap(false)]
 #[case::ephemeral(true)]

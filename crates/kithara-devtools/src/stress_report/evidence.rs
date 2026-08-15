@@ -15,6 +15,7 @@ use super::{MAX_FAILURE_ROWS, StressReportArgs, markdown_cell, test_id};
 use crate::{common::project::StressEvidenceConfig, junit::CaseTiming};
 
 mod attempt;
+mod divergence;
 mod envelope;
 mod line;
 mod line_reader;
@@ -147,6 +148,7 @@ pub(super) fn append_correlated_evidence(
         &backtraces,
         "The first project frames shared by failing attempts. Wrapper and address noise is removed.",
     );
+    complete &= divergence::append(out, cases);
     if let Some(path) = &args.line_log {
         complete &= line::append(
             out,

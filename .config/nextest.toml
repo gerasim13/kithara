@@ -103,6 +103,12 @@ failure-output = "never"
 [profile.stress.junit]
 path = "junit.xml"
 store-failure-output = true
+# Divergence analysis diffs the runtime lines of failing attempts against
+# passing attempts of the same test. Without stored green output the passing
+# side is invisible and "greens never emit this line" is an unsupported guess;
+# the reporter declares that gap instead of computing divergence. Volume stays
+# bounded because only annotated tests emit runtime lines, at debug level.
+store-success-output = true
 
 # Opt-in cold fixture-cache profile: same settings as default, plus the setup
 # script that recreates an isolated cold root and exports KITHARA_FIXTURE_CACHE.
