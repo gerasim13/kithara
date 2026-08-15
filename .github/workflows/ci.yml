@@ -12,7 +12,9 @@ env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
 
-# Fork CI and stress share the same Linux runner pool, so they must not overlap.
+# A fork's branches share one pool of Linux runners, so their pushes queue
+# rather than overlap. The stress campaign no longer queues here: it has a
+# runner of its own and a group of its own.
 # Production keeps the per-ref cancellation used for superseded pushes.
 concurrency:
   group: ${{ github.event.repository.fork && format('fork-linux-{0}', github.repository) || format('ci-{0}', github.ref) }}

@@ -46,8 +46,13 @@ on:
         required: false
         type: string
 
+# The campaign queues against itself, not against fork CI. Sharing CI's group
+# was right while both drew on one pool of runners; now that the campaign has a
+# runner of its own it is a way to lose runs, because a group admits one queued
+# entry and a campaign arriving behind a queued lane is cancelled outright
+# rather than held.
 concurrency:
-  group: fork-linux-${{ github.repository }}
+  group: stress-${{ github.repository }}
   cancel-in-progress: false
   queue: max
 
