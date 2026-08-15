@@ -53,6 +53,7 @@ struct Block {
     kind: String,
     call: Option<String>,
     body: String,
+    stack: bool,
 }
 
 impl Block {
@@ -61,6 +62,7 @@ impl Block {
             kind,
             call: None,
             body: String::new(),
+            stack: false,
         }
     }
 
@@ -76,6 +78,7 @@ impl Block {
         if self.call.is_none() {
             self.call = quoted(line);
         }
+        self.stack |= is_frame(line);
         self.body.push_str(line);
         self.body.push('\n');
         true
@@ -83,11 +86,21 @@ impl Block {
 
     fn signature(&self, evidence: &StressEvidenceConfig) -> String {
         let call = self.call.as_deref().unwrap_or("unnamed call");
-        backtrace_signature(&self.body, evidence).map_or_else(
-            || format!("{} `{call}`", self.kind),
-            |frames| format!("{} `{call}` at {frames}", self.kind),
-        )
+        match backtrace_signature(&self.body, evidence) {
+            Some(frames) => format!("{} `{call}` at {frames}", self.kind),
+            None if self.stack => format!("{} `{call}` — stack not symbolized", self.kind),
+            None => format!("{} `{call}`", self.kind),
+        }
     }
+}
+
+/// A frame line of a sanitizer stack: `#<n> 0x<address> …`.
+fn is_frame(line: &str) -> bool {
+    let Some(rest) = line.trim_start().strip_prefix('#') else {
+        return false;
+    };
+    let digits = rest.chars().take_while(char::is_ascii_digit).count();
+    digits > 0 && rest[digits..].trim_start().starts_with("0x")
 }
 
 fn finish(
@@ -148,6 +161,15 @@ Call to blocking function `pthread_mutex_lock` in real-time context!
     #1 0x5628d3c11f30 in kithara_audio::renderer::slot crates/kithara-audio/src/renderer/slot.rs:88:9
 ";
 
+    /// What the campaign of 2026-08-15 actually collected: a stack the
+    /// sanitizer printed without a symbolizer, so every frame is an address.
+    const UNSYMBOLIZED: &str = "\
+==2837838==ERROR: RealtimeSanitizer: unsafe-library-call
+Intercepted call to real-time unsafe function `sched_yield` in real-time context!
+    #0 0x574f04be26bc  (/cache/x86_64-unknown-linux-gnu/debug/deps/suite_stress+0xd3e6bc) (BuildId: 159d3193)
+    #1 0x574f0780dd06  (/cache/x86_64-unknown-linux-gnu/debug/deps/suite_stress+0x3969d06) (BuildId: 159d3193)
+";
+
     fn evidence() -> StressEvidenceConfig {
         StressEvidenceConfig::default()
     }
@@ -196,6 +218,33 @@ Call to blocking function `pthread_mutex_lock` in real-time context!
 
         let signature = found.keys().next().expect("one finding");
         assert!(!signature.contains("rt_metrics"), "{signature}");
+    }
+
+    /// A finding whose stack is addresses names the contract and the call but
+    /// cannot name a place. Rendering it like any other finding would read as
+    /// "this violation has no project frames", which is a claim about the code
+    /// rather than about the run — and it is the claim that sends a reader
+    /// looking in the wrong place.
+    #[test]
+    fn a_stack_the_symbolizer_never_resolved_is_declared_unsymbolized() {
+        let found = findings(UNSYMBOLIZED, &evidence());
+
+        let signature = found.keys().next().expect("one finding");
+        assert!(signature.contains("`sched_yield`"), "{signature}");
+        assert!(signature.contains("stack not symbolized"), "{signature}");
+    }
+
+    /// The header alone carries no stack at all, which is a different thing
+    /// from a stack that arrived unreadable and must not borrow its wording.
+    #[test]
+    fn a_report_without_any_stack_is_not_called_unsymbolized() {
+        let log = "==1==ERROR: RealtimeSanitizer: unsafe-library-call\n\
+                   Intercepted call to real-time unsafe function `malloc` in real-time context!\n";
+
+        let found = findings(log, &evidence());
+
+        let signature = found.keys().next().expect("one finding");
+        assert!(!signature.contains("symbolized"), "{signature}");
     }
 
     #[test]

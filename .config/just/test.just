@@ -242,32 +242,47 @@ miri *ARGS:
 # The sanitizer needs `-Zbuild-std`, which needs the `rust-src` component. The
 # repository pins a nightly and installs the component into that one; plain
 # `nightly` is whatever the host last downloaded and usually has no `rust-src`.
-_rtsan SUITE FILTER:
+#
+# It also needs a symbolizer, and one is required rather than hoped for: a
+# stack of bare addresses is the one part of a sanitizer report nobody can
+# reconstruct afterwards, because the binary goes with the container. The
+# campaign of 2026-08-15 found a real violation fifty times over and could not
+# say where any of them was.
+#
+# `llvm-symbolizer` is a system package, not a rustup component —
+# `llvm-tools-preview` does not ship it. On Darwin the sanitizer runtime falls
+# back to `atos` from the command line tools, so there it needs nothing else.
+_rtsan SUITE FEATURES FILTER SUPPRESSIONS="":
     #!/usr/bin/env bash
     set -euo pipefail
     target="$(rustc -vV | sed -n 's/^host: //p')"
     toolchain="${KITHARA_NIGHTLY_TOOLCHAIN:-nightly}"
+    options="symbolize=1"
+    if symbolizer="$(command -v llvm-symbolizer)"; then
+        options="$options:external_symbolizer_path=$symbolizer"
+    elif ! { [ "$(uname -s)" = Darwin ] && command -v atos >/dev/null; }; then
+        echo "rtsan: no symbolizer, so a violation would be reported against a" >&2
+        echo "rtsan: binary that no longer exists by the time anyone reads it." >&2
+        echo "rtsan:   Debian/Ubuntu: apt-get install -y llvm" >&2
+        echo "rtsan:   macOS:         install the Xcode command line tools" >&2
+        exit 1
+    fi
+    if [ -n "{{ SUPPRESSIONS }}" ]; then
+        options="$options:suppressions=$(pwd)/{{ SUPPRESSIONS }}"
+    fi
+    RTSAN_OPTIONS="$options" \
     RUSTFLAGS="-Zsanitizer=realtime --cfg rtsan" \
     RUSTDOCFLAGS="-Zsanitizer=realtime --cfg rtsan" \
         cargo "+$toolchain" test -p kithara-integration-tests --test {{ SUITE }} \
-        --features apple-fused-src \
+        --features {{ FEATURES }} \
         --target "$target" -- --nocapture {{ FILTER }}
 
-rtsan-async FILTER="no_block":
-    #!/usr/bin/env bash
-    set -euo pipefail
-    target="$(rustc -vV | sed -n 's/^host: //p')"
-    toolchain="${KITHARA_NIGHTLY_TOOLCHAIN:-nightly}"
-    RTSAN_OPTIONS="suppressions=$(pwd)/.config/rtsan/async-suppressions.txt" \
-    RUSTFLAGS="-Zsanitizer=realtime --cfg rtsan" \
-    RUSTDOCFLAGS="-Zsanitizer=realtime --cfg rtsan" \
-        cargo "+$toolchain" test -p kithara-integration-tests --test suite_light \
-        --features no-block --target "$target" -- --nocapture {{ FILTER }}
+rtsan-async FILTER="no_block": (_rtsan "suite_light" "no-block" FILTER ".config/rtsan/async-suppressions.txt")
 
 # `rt_metrics` drives `process()` directly: decode error, underrun, eviction,
 # and the on-core seek re-base. `mix_tap` drives the post-limiter PCM sink.
-rtsan FILTER="offline_harness kithara_play::rt_metrics kithara_play::mix_tap": (_rtsan "suite_light" FILTER)
+rtsan FILTER="offline_harness kithara_play::rt_metrics kithara_play::mix_tap": (_rtsan "suite_light" "apple-fused-src" FILTER)
 
-rtsan-file FILTER="phase_continuity::file": (_rtsan "suite_stress" FILTER)
+rtsan-file FILTER="phase_continuity::file": (_rtsan "suite_stress" "apple-fused-src" FILTER)
 
-rtsan-hls FILTER="phase_continuity::hls": (_rtsan "suite_stress" FILTER)
+rtsan-hls FILTER="phase_continuity::hls": (_rtsan "suite_stress" "apple-fused-src" FILTER)

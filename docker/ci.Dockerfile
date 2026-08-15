@@ -53,7 +53,7 @@ ENV WASM_SLIM_TOOLCHAIN=${NIGHTLY_TOOLCHAIN}
 RUN apt-get update && apt-get install -y --no-install-recommends \
     -o Acquire::Retries=5 -o Acquire::http::Timeout=600 \
     ca-certificates chromium chromium-driver curl ffmpeg firefox-esr git \
-    clang libclang-dev lld pkg-config \
+    clang libclang-dev lld llvm pkg-config \
     bubblewrap socat ripgrep nodejs npm \
     mesa-vulkan-drivers \
     libasound2-dev libdbus-1-dev libssl-dev \
