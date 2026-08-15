@@ -165,7 +165,7 @@ fn stress_config_owns_generic_modes_environment_and_artifacts() {
         temp.path(),
         r#"
 [stress]
-default_mode = "baseline"
+default_modes = ["baseline"]
 lane = "workspace"
 backend = "http"
 nextest_config = "config/runner.toml"
@@ -231,7 +231,7 @@ fn stress_envelope_policy_requires_an_envelope_artifact() {
         temp.path(),
         r#"
 [stress]
-default_mode = "baseline"
+default_modes = ["baseline"]
 lane = "workspace"
 backend = "http"
 nextest_config = "config/runner.toml"

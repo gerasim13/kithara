@@ -128,7 +128,10 @@ when_feature = "backend-cpal"
 always = ["backend-cpal"]
 
 [stress]
-default_mode = "reproduction"
+# One campaign, both clocks. The first collapses the fixtures' artificial
+# delays and is fast; the second keeps them and is the only one where a defect
+# decided by the order requests are served in can reproduce at all.
+default_modes = ["reproduction-flash-on", "reproduction-flash-off"]
 lane = "workspace"
 backend = "wreq"
 nextest_config = ".config/nextest.toml"
@@ -188,10 +191,10 @@ direct_markers = [
 ]
 source_excludes = ["kithara-test-macros/", "kithara-test-utils/src/test/"]
 
-[stress.modes.reproduction]
+[stress.modes.reproduction-flash-on]
 features = ["flash"]
 
-[stress.modes.reproduction.set_env]
+[stress.modes.reproduction-flash-on.set_env]
 KITHARA_HANG_PREKILL_SECS = "630"
 NEXTEST_FINAL_STATUS_LEVEL = "fail"
 NEXTEST_SHOW_PROGRESS = "counter"
@@ -199,7 +202,7 @@ NEXTEST_STATUS_LEVEL = "fail"
 RUST_BACKTRACE = "1"
 RUST_LOG = "warn"
 
-[stress.modes.reproduction.raw_path_env]
+[stress.modes.reproduction-flash-on.raw_path_env]
 KITHARA_HANG_DUMP_DIR = "hang"
 
 # The same campaign on real clocks. Flash collapses the fixtures' artificial

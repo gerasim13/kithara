@@ -24,7 +24,7 @@ on:
         required: false
         type: string
       mode:
-        description: one configured campaign mode; empty runs both clock lanes
+        description: configured campaign mode; empty uses the project configuration
         required: false
         type: string
   workflow_dispatch:
@@ -42,7 +42,7 @@ on:
         required: false
         type: string
       mode:
-        description: one configured campaign mode; empty runs both clock lanes
+        description: configured campaign mode; empty uses the project configuration
         required: false
         type: string
 
@@ -64,18 +64,14 @@ jobs:
     name: Stress authorization
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    outputs:
-      modes: ${{ steps.plan.outputs.modes }}
     steps:
       - name: Validate fork owner and runner configuration
-        id: plan
         env:
           ACTOR: ${{ github.actor }}
           COUNT: ${{ inputs.count || vars.KITHARA_STRESS_COUNT }}
           ENABLED: ${{ vars.KITHARA_STRESS_ENABLED }}
           IS_FORK: ${{ github.event.repository.fork }}
           MAX_COUNT: ${{ vars.KITHARA_STRESS_MAX_COUNT }}
-          MODE: ${{ inputs.mode }}
           OWNER: ${{ github.repository_owner }}
           REVISION: ${{ inputs.revision || github.sha }}
           RUNNER_LABELS: ${{ vars.KITHARA_STRESS_RUNNER_LABELS }}
@@ -106,21 +102,9 @@ jobs:
             echo "runner labels must include self-hosted, linux, x64, and kithara-stress"
             exit 1
           }
-          # A campaign asked for nothing in particular runs both clocks. The
-          # virtual one collapses the fixtures' delays, which is what makes it
-          # fast and what makes it blind to every defect decided by the order
-          # requests are served in; the real one is the only place those show.
-          # Naming a mode narrows the run to it, so the diagnostic passes stay
-          # a single lane.
-          if [[ -n "$MODE" ]]; then
-            [[ "$MODE" =~ ^[a-z0-9-]+$ ]] || { echo "invalid mode"; exit 1; }
-            printf 'modes=["%s"]\n' "$MODE" >> "$GITHUB_OUTPUT"
-          else
-            echo 'modes=["reproduction","reproduction-flash-off"]' >> "$GITHUB_OUTPUT"
-          fi
 
   execute:
-    name: Repeated run (${{ matrix.mode }})
+    name: Repeated run
     needs: authorize
     if: >-
       ${{ github.event.repository.fork == true &&
@@ -133,15 +117,8 @@ jobs:
           contains(fromJSON(vars.KITHARA_STRESS_RUNNER_LABELS), 'kithara-stress') }}
     runs-on: ${{ fromJSON(vars.KITHARA_STRESS_RUNNER_LABELS) }}
     timeout-minutes: 1380
-    # One runner serves the campaign, so the lanes run one after another
-    # whatever this says; `max-parallel` states it rather than leaving it to
-    # the fleet's shape. A lane that fails is evidence about that lane, so the
-    # other one still runs.
-    strategy:
-      fail-fast: false
-      max-parallel: 1
-      matrix:
-        mode: ${{ fromJSON(needs.authorize.outputs.modes) }}
+    outputs:
+      artifact-name: ${{ steps.artifact-name.outputs.name }}
     steps:
       - name: Checkout controller
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -165,7 +142,7 @@ jobs:
           CONTROLLER_SHA: ${{ job.workflow_sha }}
           COUNT: ${{ inputs.count || vars.KITHARA_STRESS_COUNT }}
           FILTER: ${{ inputs.filter }}
-          MODE: ${{ matrix.mode }}
+          MODE: ${{ inputs.mode }}
           SUBJECT_SHA: ${{ inputs.revision || github.sha }}
         run: |
           args=(
@@ -184,30 +161,26 @@ jobs:
         id: raw-upload
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: stress-raw-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.mode }}
+          name: stress-raw-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/kithara-stress/raw
           if-no-files-found: error
           retention-days: 14
 
-      # The artifact name is derived from the run and the lane rather than
-      # passed on as a job output: a matrix collapses outputs to whichever leg
-      # finished last, and the reporting leg needs the name of its own.
-      - name: Fail if the evidence did not reach the artifact store
+      - name: Export artifact identity
         if: always()
+        id: artifact-name
         env:
           UPLOAD_OUTCOME: ${{ steps.raw-upload.outcome }}
-        run: '[[ "$UPLOAD_OUTCOME" == success ]] || exit 1'
+        run: |
+          [[ "$UPLOAD_OUTCOME" == success ]] || exit 1
+          echo "name=stress-raw-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_OUTPUT"
 
   report:
-    name: Report evidence (${{ matrix.mode }})
-    needs: [authorize, execute]
+    name: Report evidence
+    needs: execute
     if: ${{ always() && needs.execute.result != 'skipped' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    strategy:
-      fail-fast: false
-      matrix:
-        mode: ${{ fromJSON(needs.authorize.outputs.modes) }}
     steps:
       - name: Checkout controller
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -220,7 +193,7 @@ jobs:
       - name: Download the raw stress evidence
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: stress-raw-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.mode }}
+          name: ${{ needs.execute.outputs.artifact-name }}
           path: raw
 
       - name: Install just
@@ -237,7 +210,7 @@ jobs:
           COUNT: ${{ inputs.count || vars.KITHARA_STRESS_COUNT }}
           EXECUTE_RESULT: ${{ needs.execute.result }}
           FILTER: ${{ inputs.filter }}
-          MODE: ${{ matrix.mode }}
+          MODE: ${{ inputs.mode }}
           SUBJECT_SHA: ${{ inputs.revision || github.sha }}
         run: |
           args=(
@@ -254,10 +227,7 @@ jobs:
 
       - name: Add the stress summary
         if: always()
-        env:
-          MODE: ${{ matrix.mode }}
         run: |
-          echo "## $MODE" >> "$GITHUB_STEP_SUMMARY"
           if [[ -s "$GITHUB_WORKSPACE/target/stress-report.md" ]]; then
             cat "$GITHUB_WORKSPACE/target/stress-report.md" >> "$GITHUB_STEP_SUMMARY"
           else
@@ -268,7 +238,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: stress-evidence-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.mode }}
+          name: stress-evidence-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             raw
             target/stress-report.md

@@ -1,6 +1,7 @@
 //! Portable repeated-test campaign and independent evidence verification.
 
 use std::{
+    collections::BTreeSet,
     fmt::Write as _,
     fs,
     path::{Component, Path, PathBuf},
@@ -56,9 +57,10 @@ pub struct RunArgs {
     /// Number of times to run every selected test.
     #[arg(long)]
     count: Option<usize>,
-    /// Configured campaign mode.
-    #[arg(long)]
-    mode: Option<String>,
+    /// Configured campaign mode; repeat to run several, empty for the
+    /// project's own list. Each becomes one lane of the same campaign.
+    #[arg(long = "mode")]
+    modes: Vec<String>,
     /// Trusted controller revision to compare with the checkout.
     #[arg(long)]
     expected_controller_sha: Option<String>,
@@ -84,8 +86,9 @@ pub struct ReportArgs {
     filter: Option<String>,
     #[arg(long)]
     count: Option<usize>,
-    #[arg(long)]
-    mode: Option<String>,
+    /// Lane to verify; repeat to verify several, empty for the project's list.
+    #[arg(long = "mode")]
+    modes: Vec<String>,
     #[arg(long)]
     execute_result: ExecuteResult,
 }
@@ -148,14 +151,69 @@ impl Paths {
     }
 }
 
+/// Runs every lane of one campaign, in order, into one evidence directory.
+///
+/// A lane that fails does not stop the ones after it. A campaign exists to
+/// find out which lane a flake belongs to, and a run that stopped at the first
+/// red lane would answer that question only when the answer was already known.
+/// The first failure is what the campaign returns, after all of them have run.
 fn run_campaign(args: &RunArgs, ctx: &Ctx) -> Result<()> {
     let config = &ctx.config.stress;
     ensure!(config.is_configured(), "stress campaign is not configured");
-    let mode_name = args
-        .mode
-        .clone()
-        .unwrap_or_else(|| config.default_mode.clone());
-    let mode = config.mode(&mode_name)?;
+    let lanes = campaign_lanes(&args.modes, config)?;
+    let root = absolute_from(
+        &ctx.root,
+        args.output
+            .as_deref()
+            .unwrap_or_else(|| Path::new(&config.raw_output)),
+    );
+    prepare_campaign_root(&root)?;
+    let mut failure = None;
+    for lane in &lanes {
+        let outcome = run_lane(args, ctx, lane, &root.join(lane));
+        if let Err(error) = outcome
+            && failure.is_none()
+        {
+            failure = Some(error);
+        }
+    }
+    failure.map_or(Ok(()), Err)
+}
+
+/// The lanes this invocation is made of: what was asked for, or what the
+/// project says a campaign is.
+fn campaign_lanes(requested: &[String], config: &StressConfig) -> Result<Vec<String>> {
+    let lanes = if requested.is_empty() {
+        config.default_modes.clone()
+    } else {
+        requested.to_vec()
+    };
+    ensure!(!lanes.is_empty(), "a campaign must name at least one mode");
+    let mut seen = BTreeSet::new();
+    for lane in &lanes {
+        config.mode(lane)?;
+        validate_lane_directory(lane)?;
+        ensure!(seen.insert(lane), "campaign mode `{lane}` is named twice");
+    }
+    Ok(lanes)
+}
+
+/// A lane names the directory its evidence lands in, so it has to be a plain
+/// directory name rather than anything that could climb out of the campaign.
+fn validate_lane_directory(lane: &str) -> Result<()> {
+    let mut components = Path::new(lane).components();
+    let single =
+        matches!(components.next(), Some(Component::Normal(_))) && components.next().is_none();
+    ensure!(
+        single && !lane.is_empty(),
+        "campaign mode `{lane}` is not usable as a directory name"
+    );
+    Ok(())
+}
+
+fn run_lane(args: &RunArgs, ctx: &Ctx, mode_name: &str, raw: &Path) -> Result<()> {
+    let config = &ctx.config.stress;
+    let mode = config.mode(mode_name)?;
     let filter = args
         .filter
         .clone()
@@ -163,13 +221,7 @@ fn run_campaign(args: &RunArgs, ctx: &Ctx) -> Result<()> {
     let count = args.count.unwrap_or(config.default_count);
     validate_count(count, config.max_count)?;
     let subject_root = absolute_existing_directory(&ctx.root, &args.subject_root, "subject")?;
-    let output = absolute_from(
-        &ctx.root,
-        args.output
-            .as_deref()
-            .unwrap_or_else(|| Path::new(&config.raw_output)),
-    );
-    let paths = Paths::new(output, &config.artifacts);
+    let paths = Paths::new(raw.to_path_buf(), &config.artifacts);
     let config_file = absolute_existing_file(
         &ctx.root,
         Path::new(&config.nextest_config),
@@ -205,7 +257,7 @@ fn run_campaign(args: &RunArgs, ctx: &Ctx) -> Result<()> {
     let environment = CampaignEnvironment::new(&paths.raw, config, mode)?;
     let mut manifest = Manifest::start(
         ManifestSpec {
-            mode: mode_name.clone(),
+            mode: mode_name.to_owned(),
             config: ManifestConfig::new(
                 config.nextest_profile.clone(),
                 config.nextest_config.clone(),
@@ -293,59 +345,89 @@ fn render_raw_report(paths: &Paths, count: usize, config: &StressConfig) -> Resu
     stress_report::run(&args)
 }
 
+/// Verifies every lane of a downloaded campaign and renders them as one report.
+///
+/// The lanes are read independently — each carries its own manifest, inventory
+/// and `JUnit`, and each is checked against what the project says it should have
+/// been. They are rendered together because the question a multi-lane campaign
+/// answers is a comparison, and a comparison split across two documents is one
+/// the reader has to make by hand.
 fn run_report(args: &ReportArgs, ctx: &Ctx) -> Result<()> {
     let config = &ctx.config.stress;
     ensure!(config.is_configured(), "stress campaign is not configured");
-    let mode_name = args
-        .mode
-        .clone()
-        .unwrap_or_else(|| config.default_mode.clone());
-    let mode = config.mode(&mode_name)?;
+    let lanes = campaign_lanes(&args.modes, config)?;
     let filter = args
         .filter
         .clone()
         .unwrap_or_else(|| config.default_filter.clone());
     let count = args.count.unwrap_or(config.default_count);
     validate_count(count, config.max_count)?;
-    let runner = configured_lane(&ctx.config, &config.lane, &config.backend, &mode.features)?;
-    let raw = absolute_from_current(&args.raw)?;
-    let paths = Paths::new(raw, &config.artifacts);
+    let raw_root = absolute_from_current(&args.raw)?;
     let output = absolute_from(
         &ctx.root,
         args.output
             .as_deref()
             .unwrap_or_else(|| Path::new(&config.report_output)),
     );
-    ensure_report_outside_raw(&paths.raw, &output)?;
-    let report_args = StressReportArgs::new(
-        paths.junit.clone(),
-        paths.inventory.clone(),
-        output.clone(),
-        count,
-    )
-    .with_allow_missing(true)
-    .with_evidence(config.evidence.clone())
-    .with_pressure(paths.pressure.clone())
-    .with_optional_envelopes(
-        paths
-            .envelopes
-            .as_ref()
-            .filter(|path| path.is_dir())
-            .cloned(),
-    )
-    .with_optional_lines(paths.lines.clone());
-    let evidence = stress_report::run(&report_args);
-    let expectation = ReportExpectation {
-        config,
-        mode_name: &mode_name,
-        mode,
-        filter: &filter,
-        count,
-        runner,
-    };
-    let (provenance, details) = verify_manifest(args, &expectation, &paths.manifest);
-    append_provenance(&output, &provenance, &details)?;
-    choose_failure(evidence, provenance, Ok(()), Ok(())).map_or(Ok(()), Err)
+    ensure_report_outside_raw(&raw_root, &output)?;
+
+    let mut sections = String::new();
+    let mut measured = Vec::new();
+    let mut failure = None;
+    for lane_name in &lanes {
+        let mode = config.mode(lane_name)?;
+        let runner = configured_lane(&ctx.config, &config.lane, &config.backend, &mode.features)?;
+        let paths = Paths::new(raw_root.join(lane_name), &config.artifacts);
+        let report_args = StressReportArgs::new(
+            paths.junit.clone(),
+            paths.inventory.clone(),
+            output.clone(),
+            count,
+        )
+        .with_allow_missing(true)
+        .with_evidence(config.evidence.clone())
+        .with_pressure(paths.pressure.clone())
+        .with_optional_envelopes(
+            paths
+                .envelopes
+                .as_ref()
+                .filter(|path| path.is_dir())
+                .cloned(),
+        )
+        .with_optional_lines(paths.lines.clone());
+        let lane = stress_report::lane_report(&report_args)?;
+        let expectation = ReportExpectation {
+            config,
+            mode_name: lane_name,
+            mode,
+            filter: &filter,
+            count,
+            runner,
+        };
+        let (provenance, details) = verify_manifest(args, &expectation, &paths.manifest);
+        let trusted = provenance.is_ok();
+        let body = with_provenance(lane.markdown, &provenance, &details)?;
+        writeln!(sections, "\n# Lane `{}`\n", markdown_cell(lane_name))?;
+        sections.push_str(&body);
+        // Only a lane that verified against its expected identity may stand in
+        // a comparison. Numbers from one that did not are of unknown origin,
+        // and putting them beside trustworthy ones is how a campaign reports a
+        // difference between lanes that is really a difference between runs.
+        if trusted {
+            measured.push((lane_name.clone(), lane.rates));
+        }
+        let lane_failure = choose_failure(lane.verdict, provenance, Ok(()), Ok(()));
+        if let Some(error) = lane_failure
+            && failure.is_none()
+        {
+            failure = Some(error);
+        }
+    }
+
+    let mut document = stress_report::render_lane_comparison(&measured, lanes.len());
+    document.push_str(&sections);
+    stress_report::write_report(&output, &document)?;
+    failure.map_or(Ok(()), Err)
 }
 
 fn verify_manifest(
@@ -388,9 +470,11 @@ fn verify_manifest(
     )
 }
 
-fn append_provenance(path: &Path, result: &Result<()>, details: &[String]) -> Result<()> {
-    let mut markdown = fs::read_to_string(path)
-        .unwrap_or_else(|_| "# Stress evidence\n\nStatus: **INVALID REPORT**\n".to_owned());
+fn with_provenance(
+    mut markdown: String,
+    result: &Result<()>,
+    details: &[String],
+) -> Result<String> {
     if result.is_err() {
         invalidate_result(&mut markdown);
     }
@@ -411,7 +495,7 @@ fn append_provenance(path: &Path, result: &Result<()>, details: &[String]) -> Re
             }
         }
     }
-    stress_report::write_report(path, &markdown)
+    Ok(markdown)
 }
 
 fn invalidate_result(markdown: &mut String) {
@@ -426,6 +510,23 @@ fn invalidate_result(markdown: &mut String) {
         }
     }
     markdown.push_str("\n- Result: **INVALID PROVENANCE**\n");
+}
+
+/// The directory the whole campaign writes into, one level above its lanes.
+///
+/// Freshness is demanded here rather than per lane: the lanes are created
+/// inside it as they run, so asking each of them for a directory that does not
+/// exist yet would fail on the second one.
+fn prepare_campaign_root(root: &Path) -> Result<()> {
+    ensure!(
+        !root
+            .try_exists()
+            .with_context(|| format!("inspect stress output {}", root.display()))?,
+        "stress output already exists: {}; choose a fresh directory",
+        root.display()
+    );
+    fs::create_dir_all(root).with_context(|| format!("create stress output {}", root.display()))?;
+    Ok(())
 }
 
 fn prepare_raw_directory(paths: &Paths) -> Result<()> {
@@ -661,6 +762,17 @@ mod tests {
     use std::os::unix::fs::symlink;
 
     use super::*;
+
+    #[test]
+    fn a_lane_that_is_not_a_plain_directory_name_is_refused() {
+        for lane in ["../escape", "nested/lane", "", "/absolute"] {
+            assert!(
+                validate_lane_directory(lane).is_err(),
+                "accepted `{lane}` as a lane"
+            );
+        }
+        validate_lane_directory("reproduction-flash-off").expect("a plain name is a lane");
+    }
 
     #[test]
     fn genuine_coordinator_error_has_failure_precedence() {

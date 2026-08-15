@@ -381,7 +381,11 @@ pub struct TestLaneConfig {
 #[non_exhaustive]
 #[serde(default, deny_unknown_fields)]
 pub struct StressConfig {
-    pub default_mode: String,
+    /// The lanes one campaign is made of, run in order. More than one is the
+    /// normal case: a clock the fixtures' delays collapse under answers a
+    /// different question than a clock they survive, and a campaign that runs
+    /// only one of them cannot say which of the two a flake belongs to.
+    pub default_modes: Vec<String>,
     pub lane: String,
     pub backend: String,
     pub nextest_config: String,
@@ -466,7 +470,6 @@ impl StressConfig {
     }
 
     pub(crate) fn validate(&self) -> Result<()> {
-        require_value("stress.default_mode", &self.default_mode)?;
         require_value("stress.lane", &self.lane)?;
         require_value("stress.backend", &self.backend)?;
         require_value("stress.nextest_config", &self.nextest_config)?;
@@ -509,11 +512,21 @@ impl StressConfig {
             require_value("stress mode name", name)?;
             Self::validate_mode(name, mode)?;
         }
-        if !self.modes.contains_key(&self.default_mode) {
-            bail!(
-                "stress.default_mode `{}` is not configured",
-                self.default_mode
-            );
+        if self.default_modes.is_empty() {
+            bail!("stress.default_modes must name at least one mode");
+        }
+        let mut seen = BTreeSet::new();
+        for name in &self.default_modes {
+            require_value("stress.default_modes entry", name)?;
+            if !self.modes.contains_key(name) {
+                bail!("stress.default_modes names `{name}`, which is not configured");
+            }
+            // A lane names the directory its evidence lands in, so a campaign
+            // that listed one twice would have its second run overwrite the
+            // first and report half of what it did.
+            if !seen.insert(name) {
+                bail!("stress.default_modes names `{name}` twice");
+            }
         }
         Ok(())
     }

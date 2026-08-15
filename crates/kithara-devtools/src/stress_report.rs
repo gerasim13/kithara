@@ -124,6 +124,8 @@ struct TestStats {
 struct RenderedReport {
     markdown: String,
     complete: bool,
+    /// What each test did in this lane, kept so lanes can be put side by side.
+    rates: BTreeMap<TestId, LaneRate>,
 }
 
 #[derive(Debug, Default)]
@@ -179,19 +181,50 @@ impl EvidenceProblems {
 /// contains a failed attempt, the expected count is zero, or the output cannot
 /// be written.
 pub(crate) fn run(args: &StressReportArgs) -> Result<()> {
+    let lane = lane_report(args)?;
+    write_report(&args.output, &lane.markdown)?;
+    lane.verdict
+}
+
+/// One lane's evidence: what it reads out of the artifact, and the verdict that
+/// reading carries.
+///
+/// Rendering is separated from writing so that a campaign of several lanes can
+/// put them all in one document. A file per lane would leave the question the
+/// campaign exists to answer — which lane does this flake belong to — spread
+/// across two documents for the reader to join by hand.
+pub(crate) struct LaneReport {
+    pub(crate) markdown: String,
+    pub(crate) rates: BTreeMap<TestId, LaneRate>,
+    pub(crate) verdict: Result<()>,
+}
+
+/// How often one test failed in one lane.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct LaneRate {
+    pub(crate) failed: usize,
+    pub(crate) attempts: usize,
+}
+
+pub(crate) fn lane_report(args: &StressReportArgs) -> Result<LaneReport> {
     validate_expected_count(args.expected_count)?;
+    let unreadable = |markdown: String| {
+        Ok(LaneReport {
+            markdown,
+            rates: BTreeMap::new(),
+            verdict: Err(NotClean::reported("stress evidence")),
+        })
+    };
     let inventory = match read_inventory(&args.inventory) {
         Ok(inventory) => inventory,
         Err(error) => {
             let detail = format!("{error:#}");
-            let markdown = render_invalid_artifact(
+            return unreadable(render_invalid_artifact(
                 "INVALID INVENTORY",
                 args.expected_count,
                 &args.inventory,
                 &detail,
-            );
-            write_report(&args.output, &markdown)?;
-            return Err(NotClean::reported("stress evidence"));
+            ));
         }
     };
     let xml = match read_bounded_utf8(&args.junit, MAX_JUNIT_BYTES, "stress JUnit") {
@@ -201,34 +234,42 @@ pub(crate) fn run(args: &StressReportArgs) -> Result<()> {
                 .downcast_ref::<std::io::Error>()
                 .is_some_and(|error| error.kind() == std::io::ErrorKind::NotFound) =>
         {
-            let markdown = render_missing(args.expected_count, &args.junit, args.allow_missing);
-            write_report(&args.output, &markdown)?;
-            return Err(NotClean::reported("stress evidence"));
+            return unreadable(render_missing(
+                args.expected_count,
+                &args.junit,
+                args.allow_missing,
+            ));
         }
         Err(error) => {
             let detail = format!("{error:#}");
-            let markdown =
-                render_invalid_artifact("INVALID JUNIT", args.expected_count, &args.junit, &detail);
-            write_report(&args.output, &markdown)?;
-            return Err(NotClean::reported("stress evidence"));
+            return unreadable(render_invalid_artifact(
+                "INVALID JUNIT",
+                args.expected_count,
+                &args.junit,
+                &detail,
+            ));
         }
     };
     let junit = match parse_junit_report(&xml) {
         Ok(junit) => junit,
         Err(error) => {
             let detail = format!("{error:#}");
-            let markdown =
-                render_invalid_artifact("INVALID JUNIT", args.expected_count, &args.junit, &detail);
-            write_report(&args.output, &markdown)?;
-            return Err(NotClean::reported("stress evidence"));
+            return unreadable(render_invalid_artifact(
+                "INVALID JUNIT",
+                args.expected_count,
+                &args.junit,
+                &detail,
+            ));
         }
     };
     let has_failures = junit.cases.iter().any(|case| case.failed);
     if let Err(error) = validate_correlation_metadata(&junit) {
-        let markdown =
-            render_invalid_artifact("INVALID JUNIT", args.expected_count, &args.junit, &error);
-        write_report(&args.output, &markdown)?;
-        return Err(NotClean::reported("stress evidence"));
+        return unreadable(render_invalid_artifact(
+            "INVALID JUNIT",
+            args.expected_count,
+            &args.junit,
+            &error,
+        ));
     }
     let mut report = render(
         &junit.cases,
@@ -247,12 +288,16 @@ pub(crate) fn run(args: &StressReportArgs) -> Result<()> {
         report.complete = false;
         mark_incomplete(&mut report.markdown);
     }
-    write_report(&args.output, &report.markdown)?;
-    if report.complete && !has_failures {
+    let verdict = if report.complete && !has_failures {
         Ok(())
     } else {
         Err(NotClean::reported("stress evidence"))
-    }
+    };
+    Ok(LaneReport {
+        markdown: report.markdown,
+        rates: report.rates,
+        verdict,
+    })
 }
 
 /// Check the inventory-by-iteration contract before the campaign records its
@@ -443,6 +488,119 @@ fn validate_expected_count(expected_count: usize) -> Result<()> {
     Ok(())
 }
 
+/// The lanes of one campaign, side by side, ordered by how much they disagree.
+///
+/// Disagreement is what the table is for. A test that fails at the same rate on
+/// both clocks is a flake that owes nothing to either of them; a test that
+/// fails on one and not the other is the campaign's whole point, and it must
+/// not be buried under a hundred rows of the first kind.
+///
+/// A test present in one lane and absent from the other is reported as absent
+/// rather than as zero: the lanes do not select the same tests, because targets
+/// behind a feature exist in one and not the other, and calling that a rate of
+/// zero would invent a passing result for a test that never ran.
+pub(crate) fn render_lane_comparison(
+    lanes: &[(String, BTreeMap<TestId, LaneRate>)],
+    requested: usize,
+) -> String {
+    let mut out = String::from("# Stress campaign\n");
+    let _ = writeln!(out, "\n- Lanes requested: `{requested}`");
+    let _ = writeln!(out, "- Lanes with trustworthy evidence: `{}`", lanes.len());
+    if lanes.len() < 2 {
+        out.push_str(
+            "\nA comparison needs two verified lanes. The lane sections below stand on their own.\n",
+        );
+        return out;
+    }
+
+    let mut rows = BTreeMap::<TestId, Vec<Option<LaneRate>>>::new();
+    for (index, (_, rates)) in lanes.iter().enumerate() {
+        for (id, rate) in rates {
+            rows.entry(id.clone())
+                .or_insert_with(|| vec![None; lanes.len()])[index] = Some(*rate);
+        }
+    }
+    let mut ranked = rows
+        .into_iter()
+        .filter(|(_, cells)| cells.iter().flatten().any(|rate| rate.failed > 0))
+        .map(|(id, cells)| {
+            let spread = disagreement(&cells);
+            (spread, id, cells)
+        })
+        .collect::<Vec<_>>();
+    if ranked.is_empty() {
+        out.push_str("\nNo test failed in any lane.\n");
+        return out;
+    }
+    ranked.sort_by(|left, right| {
+        right
+            .0
+            .total_cmp(&left.0)
+            .then_with(|| left.1.cmp(&right.1))
+    });
+
+    out.push_str("\n## Failure rate by lane\n\n| test |");
+    for (name, _) in lanes {
+        let _ = write!(out, " {} |", markdown_cell(name));
+    }
+    out.push_str("\n|---|");
+    for _ in lanes {
+        out.push_str("---:|");
+    }
+    out.push('\n');
+    for (_, (suite, name), cells) in ranked.iter().take(MAX_FAILURE_ROWS) {
+        let _ = write!(out, "| `{}` |", markdown_cell(&format!("{suite} {name}")));
+        for cell in cells {
+            match cell {
+                Some(rate) => {
+                    let _ = write!(
+                        out,
+                        " {} ({}/{}) |",
+                        rate_percent(rate.failed, rate.attempts),
+                        rate.failed,
+                        rate.attempts
+                    );
+                }
+                None => out.push_str(" not selected |"),
+            }
+        }
+        out.push('\n');
+    }
+    if ranked.len() > MAX_FAILURE_ROWS {
+        let _ = writeln!(
+            out,
+            "\nShowing the first {MAX_FAILURE_ROWS} of {} tests that failed somewhere.",
+            ranked.len()
+        );
+    }
+    out
+}
+
+/// How far apart the lanes are on one test, as a fraction.
+///
+/// A test selected by only some of the lanes is maximally interesting: the
+/// lanes cannot even be compared on it, and the reader should see it first.
+fn disagreement(cells: &[Option<LaneRate>]) -> f64 {
+    if cells.iter().any(Option::is_none) {
+        return f64::INFINITY;
+    }
+    let rates = cells
+        .iter()
+        .flatten()
+        .map(|rate| {
+            if rate.attempts == 0 {
+                0.0
+            } else {
+                f64::from(u32::try_from(rate.failed).unwrap_or(u32::MAX))
+                    / f64::from(u32::try_from(rate.attempts).unwrap_or(u32::MAX))
+            }
+        })
+        .collect::<Vec<_>>();
+    let high = rates.iter().copied().fold(f64::MIN, f64::max);
+    let low = rates.iter().copied().fold(f64::MAX, f64::min);
+    high - low
+}
+
 pub(crate) fn write_report(path: &Path, markdown: &str) -> Result<()> {
     if let Some(parent) = path.parent()
         && !parent.as_os_str().is_empty()
@@ -554,6 +712,18 @@ fn render(
         );
     }
 
+    let rates = tests
+        .iter()
+        .map(|(id, stats)| {
+            (
+                id.clone(),
+                LaneRate {
+                    failed: stats.failed_iterations.len(),
+                    attempts: stats.observed_iterations.len(),
+                },
+            )
+        })
+        .collect();
     let observed_count = observed_iterations.len();
     let complete = problems.total == 0;
     let failed_attempts = tests
@@ -608,6 +778,7 @@ fn render(
     RenderedReport {
         markdown: out,
         complete,
+        rates,
     }
 }
 
@@ -1130,6 +1301,58 @@ mod tests {
                 .to_string()
                 .contains("no runnable selected tests")
         );
+    }
+
+    fn lane(name: &str, rows: &[(&str, usize, usize)]) -> (String, BTreeMap<TestId, LaneRate>) {
+        (
+            name.to_owned(),
+            rows.iter()
+                .map(|(test, failed, attempts)| {
+                    (
+                        ("demo::tests".to_owned(), (*test).to_owned()),
+                        LaneRate {
+                            failed: *failed,
+                            attempts: *attempts,
+                        },
+                    )
+                })
+                .collect(),
+        )
+    }
+
+    #[test]
+    fn a_test_the_lanes_disagree_about_is_ranked_above_one_they_agree_on() {
+        let table = render_lane_comparison(
+            &[
+                lane("on", &[("agreed", 5, 10), ("disputed", 0, 10)]),
+                lane("off", &[("agreed", 5, 10), ("disputed", 9, 10)]),
+            ],
+            2,
+        );
+
+        let disputed = table.find("disputed").expect("disputed row");
+        let agreed = table.find("agreed").expect("agreed row");
+        assert!(disputed < agreed, "{table}");
+    }
+
+    #[test]
+    fn a_test_absent_from_one_lane_is_reported_absent_rather_than_passing() {
+        let table = render_lane_comparison(
+            &[
+                lane("on", &[("flash_only", 3, 10)]),
+                lane("off", &[("shared", 1, 10)]),
+            ],
+            2,
+        );
+
+        assert!(table.contains("not selected"), "{table}");
+    }
+
+    #[test]
+    fn a_campaign_with_one_trustworthy_lane_refuses_to_compare() {
+        let table = render_lane_comparison(&[lane("on", &[("solo", 1, 10)])], 2);
+
+        assert!(table.contains("needs two verified lanes"), "{table}");
     }
 
     #[test]
