@@ -1859,6 +1859,14 @@ const CONTROL_CENSUS: &[(&str, Paints, &str)] = &[
         r#"Vis(id: "control", read: Model(id: "vis.preset"))"#,
     ),
     (
+        // Unlike `Vis`, a shader is not a second pass beside the scene: the
+        // retained host encodes the image draw into the Vello scene itself, and
+        // the GPU pass fills the very image that draw points at.
+        "Shader",
+        Paints::Yes,
+        r#"Shader(id: "control", source: "census.wgsl", uniforms: { "level": Model(id: "deck.view.zoom") })"#,
+    ),
+    (
         "Table",
         Paints::Yes,
         r#"Table(id: "control", read: Model(id: "library.visible_tracks"), columns: [(id: "title", label: "TITLE", style: Primary, width: 180.0)])"#,
@@ -1988,6 +1996,18 @@ const CONTROL_CENSUS: &[(&str, Paints, &str)] = &[
     ),
 ];
 
+/// The sources the census table names beside the controls themselves. Only the
+/// shader row needs one; an entry nobody asks for costs the other rows nothing.
+const CENSUS_SOURCES: &[(&str, &str)] = &[(
+    "census.wgsl",
+    r"
+@fragment
+fn fs_main(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
+    return vec4<f32>(kithara.level.x, position.x / kithara.viewport.x, 0.0, 1.0);
+}
+",
+)];
+
 /// Mounts one control on its own and asks Masonry to draw it. A document that
 /// holds nothing else has nothing else to contribute, so an empty scene means
 /// that control drew nothing.
@@ -2009,12 +2029,13 @@ fn masonry_draws_every_control_the_census_claims_it_draws() {
     let observed = CONTROL_CENSUS
         .iter()
         .map(|(name, _, control)| {
-            let ui = fixture_ui(
+            let ui = fixture_ui_with_sources(
                 "census",
                 &format!(
                     r#"Row(size: (w: Fill, h: Fill), gap: 0.0, pad: 0.0, children: [{control}])"#
                 ),
                 &registry,
+                CENSUS_SOURCES,
             );
             let output = document::render(
                 &ui.root,
@@ -2059,7 +2080,8 @@ mod gesture_census {
     use kithara_test_utils::kithara;
 
     use super::{
-        super::controls::Retained, CONTROL_CENSUS, FixtureReads, fixture_registry, fixture_ui,
+        super::controls::Retained, CENSUS_SOURCES, CONTROL_CENSUS, FixtureReads, fixture_registry,
+        fixture_ui_with_sources,
     };
     use crate::{
         compile::{CompiledNode, CompiledUi},
@@ -2081,6 +2103,66 @@ mod gesture_census {
         gestures: Gestures,
         name: &'static str,
     }
+
+    /// Names every `ControlSpec` variant once, beside the name the censuses know
+    /// it by. Both censuses check each other, so a control missing from both at
+    /// once agrees with itself and reports nothing; this is the half that
+    /// answers to the document contract instead. A new variant stops compiling
+    /// here, and the name it adds keeps failing until a row describes it.
+    macro_rules! census_names {
+        ($($variant:ident),+ $(,)?) => {
+            const CENSUS_NAMES: &[&str] = &[$(stringify!($variant)),+];
+
+            fn census_name(spec: &ControlSpec) -> &'static str {
+                match spec {
+                    $(ControlSpec::$variant { .. } => stringify!($variant),)+
+                }
+            }
+        };
+    }
+
+    census_names!(
+        Bpm,
+        Brand,
+        Button,
+        Cell,
+        Checkbox,
+        Chip,
+        ContextBar,
+        Crossfader,
+        DeckSummary,
+        Divider,
+        Fader,
+        Glyph,
+        Knob,
+        Meter,
+        NavItem,
+        PortalMap,
+        PresetSelector,
+        Range,
+        Readout,
+        Scalar,
+        Segmented,
+        Select,
+        SettingsButton,
+        Shader,
+        Spacer,
+        StatusDot,
+        Swatch,
+        TabLarge,
+        Table,
+        Text,
+        Time,
+        TitleBar,
+        Toggle,
+        Tree,
+        Vis,
+        VuStereo,
+        VuVertical,
+        Wave,
+        WindowControls,
+        WindowDrag,
+    );
 
     const PRESS_KEYBOARD: Gestures = Gestures {
         keyboard: true,
@@ -2156,6 +2238,10 @@ mod gesture_census {
         },
         Row {
             name: "Vis",
+            gestures: Gestures::NONE,
+        },
+        Row {
+            name: "Shader",
             gestures: Gestures::NONE,
         },
         Row {
@@ -2420,6 +2506,25 @@ mod gesture_census {
         find_control(root).unwrap_or_else(|| panic!("the census fixture must contain a control"))
     }
 
+    /// A census short by a control agrees with the other census, which is short
+    /// by the same one, and neither reports a gap. Only the document contract
+    /// can say what the full set is.
+    #[kithara::test]
+    fn the_census_covers_every_control_the_document_can_name() {
+        let mut censused = CONTROL_CENSUS
+            .iter()
+            .map(|(name, _, _)| *name)
+            .collect::<Vec<_>>();
+        let mut declared = CENSUS_NAMES.to_vec();
+        censused.sort_unstable();
+        declared.sort_unstable();
+
+        assert_eq!(
+            censused, declared,
+            "every `ControlSpec` variant needs a census row saying what it draws"
+        );
+    }
+
     #[kithara::test]
     fn every_control_names_the_same_mounted_gestures_in_both_hosts() {
         let painted = CONTROL_CENSUS
@@ -2447,14 +2552,21 @@ mod gesture_census {
         .unwrap_or_else(|error| panic!("the census skin must resolve: {error}"));
 
         for (row, (_, _, control)) in ROWS.iter().zip(CONTROL_CENSUS) {
-            let ui = fixture_ui(
+            let ui = fixture_ui_with_sources(
                 "gesture-census",
                 &format!(
                     r#"Row(size: (w: Fill, h: Fill), gap: 0.0, pad: 0.0, children: [{control}])"#
                 ),
                 &registry,
+                CENSUS_SOURCES,
             );
             let (path, spec, read) = compiled_control(&ui);
+            assert_eq!(
+                census_name(spec),
+                row.name,
+                "the census row for {} mounts a different control than it names",
+                row.name
+            );
             let (immediate, retained) = mounted(path, spec, read, &ui, &reads, &skin);
             assert_eq!(
                 immediate, row.gestures,
@@ -3107,7 +3219,7 @@ fn the_retained_window_drag_region_carries_the_drag_and_draws_nothing() {
 }
 
 fn fixture_ui(module_id: &str, root: &str, registry: &dyn EndpointRegistry) -> CompiledUi {
-    fixture_ui_with_options(module_id, root, registry, false)
+    fixture_ui_with_options(module_id, root, registry, false, &[])
 }
 
 fn fixture_ui_with_resize(
@@ -3115,7 +3227,19 @@ fn fixture_ui_with_resize(
     root: &str,
     registry: &dyn EndpointRegistry,
 ) -> CompiledUi {
-    fixture_ui_with_options(module_id, root, registry, true)
+    fixture_ui_with_options(module_id, root, registry, true, &[])
+}
+
+/// A fixture whose document names sources of its own. A shader is a file the
+/// resolver has to answer rather than a node written inline, so a census row
+/// that mounts one needs its module beside the layout.
+fn fixture_ui_with_sources(
+    module_id: &str,
+    root: &str,
+    registry: &dyn EndpointRegistry,
+    sources: &[(&str, &str)],
+) -> CompiledUi {
+    fixture_ui_with_options(module_id, root, registry, false, sources)
 }
 
 fn fixture_ui_with_options(
@@ -3123,6 +3247,7 @@ fn fixture_ui_with_options(
     root: &str,
     registry: &dyn EndpointRegistry,
     resize_edges: bool,
+    sources: &[(&str, &str)],
 ) -> CompiledUi {
     let mut resolver = MemResolver::default();
     let resize_edges = if resize_edges {
@@ -3151,6 +3276,9 @@ fn fixture_ui_with_options(
     ]
     .concat();
     resolver.insert("fixture.kmodule.ron", &module);
+    for (name, body) in sources {
+        resolver.insert(name, body);
+    }
     compile(
         "fixture.klayout.ron",
         &resolver,
