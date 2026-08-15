@@ -167,6 +167,15 @@ fn run_campaign(args: &RunArgs, ctx: &Ctx) -> Result<()> {
             .as_deref()
             .unwrap_or_else(|| Path::new(&config.raw_output)),
     );
+    let subject_root = absolute_existing_directory(&ctx.root, &args.subject_root, "subject")?;
+    let subject_junit = subject_root.join(&config.artifacts.subject_junit);
+    ensure!(
+        !subject_junit
+            .try_exists()
+            .with_context(|| format!("inspect stress JUnit path {}", subject_junit.display()))?,
+        "stress JUnit already exists: {}; remove it before starting a new campaign",
+        subject_junit.display()
+    );
     prepare_campaign_root(&root)?;
     let mut failure = None;
     for lane in &lanes {
@@ -253,6 +262,7 @@ fn run_lane(args: &RunArgs, ctx: &Ctx, mode_name: &str, raw: &Path) -> Result<()
     };
     stress_run::validate(&spec)?;
     ensure_raw_outside_subject_evidence(&paths.raw, &subject_junit)?;
+    clear_previous_lane_junit(&subject_junit)?;
     let system = system::capture()?;
     let environment = CampaignEnvironment::new(&paths.raw, config, mode)?;
     let mut manifest = Manifest::start(
@@ -373,6 +383,7 @@ fn run_report(args: &ReportArgs, ctx: &Ctx) -> Result<()> {
 
     let mut sections = String::new();
     let mut measured = Vec::new();
+    let mut exit_codes = Vec::new();
     let mut failure = None;
     for lane_name in &lanes {
         let mode = config.mode(lane_name)?;
@@ -404,9 +415,10 @@ fn run_report(args: &ReportArgs, ctx: &Ctx) -> Result<()> {
             count,
             runner,
         };
-        let (provenance, details) = verify_manifest(args, &expectation, &paths.manifest);
-        let trusted = provenance.is_ok();
-        let body = with_provenance(lane.markdown, &provenance, &details)?;
+        let checked = verify_manifest(args, &expectation, &paths.manifest);
+        let trusted = checked.verdict.is_ok();
+        exit_codes.push(checked.exit_code);
+        let body = with_provenance(lane.markdown, &checked.verdict, &checked.details)?;
         writeln!(sections, "\n# Lane `{}`\n", markdown_cell(lane_name))?;
         sections.push_str(&body);
         // Only a lane that verified against its expected identity may stand in
@@ -416,7 +428,7 @@ fn run_report(args: &ReportArgs, ctx: &Ctx) -> Result<()> {
         if trusted {
             measured.push((lane_name.clone(), lane.rates));
         }
-        let lane_failure = choose_failure(lane.verdict, provenance, Ok(()), Ok(()));
+        let lane_failure = choose_failure(lane.verdict, checked.verdict, Ok(()), Ok(()));
         if let Some(error) = lane_failure
             && failure.is_none()
         {
@@ -424,24 +436,68 @@ fn run_report(args: &ReportArgs, ctx: &Ctx) -> Result<()> {
         }
     }
 
+    let campaign = verify_campaign_result(args.execute_result, &exit_codes);
     let mut document = stress_report::render_lane_comparison(&measured, lanes.len());
+    if let Err(error) = &campaign {
+        let _ = writeln!(
+            document,
+            "\n- Campaign provenance: `{}`",
+            markdown_cell(&format!("{error:#}"))
+        );
+    }
     document.push_str(&sections);
     stress_report::write_report(&output, &document)?;
-    failure.map_or(Ok(()), Err)
+    choose_failure(failure.map_or(Ok(()), Err), campaign, Ok(()), Ok(())).map_or(Ok(()), Err)
+}
+
+/// Checks the job's own result against the campaign as a whole.
+///
+/// A red job means some lane failed, and which one is a fact about the
+/// campaign rather than about any single manifest. Checking it per lane would
+/// call every lane that passed a liar; checking it here catches the case that
+/// actually matters — a job reported as failed whose lanes all say they
+/// succeeded, which means the failure came from somewhere the evidence does
+/// not cover.
+fn verify_campaign_result(execute_result: ExecuteResult, exit_codes: &[Option<i32>]) -> Result<()> {
+    if matches!(execute_result, ExecuteResult::Success) {
+        return Ok(());
+    }
+    ensure!(
+        exit_codes
+            .iter()
+            .any(|code| code.is_none_or(|code| code != 0)),
+        "execute reported {} while every lane finished cleanly",
+        execute_result.as_str()
+    );
+    Ok(())
+}
+
+/// What one lane's manifest says about itself, and whether it is believable.
+struct LaneProvenance {
+    verdict: Result<()>,
+    details: Vec<String>,
+    /// The lane's own exit code, kept so the campaign can check the job's
+    /// result against all of its lanes rather than against each one alone.
+    exit_code: Option<i32>,
 }
 
 fn verify_manifest(
     args: &ReportArgs,
     expected: &ReportExpectation<'_>,
     path: &Path,
-) -> (Result<()>, Vec<String>) {
+) -> LaneProvenance {
     let manifest = match Manifest::read(path) {
         Ok(manifest) => manifest,
         Err(error) => {
             let detail = format!("{error:#}");
-            return (Err(error), vec![detail]);
+            return LaneProvenance {
+                verdict: Err(error),
+                details: vec![detail],
+                exit_code: None,
+            };
         }
     };
+    let exit_code = manifest.timing.exit_code;
     let expected = ExpectedProvenance {
         controller_sha: args.expected_controller_sha.clone(),
         subject_sha: args.expected_subject_sha.clone(),
@@ -461,13 +517,18 @@ fn verify_manifest(
     };
     let mismatches = manifest.validate_provenance(&expected);
     if mismatches.is_empty() {
-        return (Ok(()), Vec::new());
+        return LaneProvenance {
+            verdict: Ok(()),
+            details: Vec::new(),
+            exit_code,
+        };
     }
     let details = mismatches.iter().map(ToString::to_string).collect();
-    (
-        Err(NotClean::raised("stress provenance", mismatches.len())),
+    LaneProvenance {
+        verdict: Err(NotClean::raised("stress provenance", mismatches.len())),
         details,
-    )
+        exit_code,
+    }
 }
 
 fn with_provenance(
@@ -551,6 +612,22 @@ fn prepare_raw_directory(paths: &Paths) -> Result<()> {
             .with_context(|| format!("create line evidence sink {}", lines.display()))?;
     }
     Ok(())
+}
+
+/// Removes what the previous lane left at the subject's one `JUnit` path.
+///
+/// Staging is a copy with no proof of freshness, so the proof has to come from
+/// the path being empty when the lane starts. Without this, a lane whose
+/// nextest died before writing evidence would have its predecessor's `JUnit`
+/// staged under its own name, and the report would attribute one lane's
+/// failures to the other — the exact confusion a multi-lane campaign exists to
+/// resolve.
+fn clear_previous_lane_junit(junit: &Path) -> Result<()> {
+    match fs::remove_file(junit) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error).with_context(|| format!("clear stress JUnit {}", junit.display())),
+    }
 }
 
 fn stage_junit(source: &Path, destination: &Path) -> Result<()> {
@@ -762,6 +839,38 @@ mod tests {
     use std::os::unix::fs::symlink;
 
     use super::*;
+
+    #[test]
+    fn a_failed_job_whose_lanes_all_passed_is_reported_as_unexplained() {
+        let error = verify_campaign_result(ExecuteResult::Failure, &[Some(0), Some(0)])
+            .expect_err("a red job with only clean lanes is not explained by its evidence");
+
+        assert!(format!("{error:#}").contains("every lane finished cleanly"));
+    }
+
+    #[test]
+    fn a_failed_job_is_explained_by_a_single_failing_lane() {
+        verify_campaign_result(ExecuteResult::Failure, &[Some(0), Some(101)])
+            .expect("one failing lane explains a failed job");
+    }
+
+    #[test]
+    fn a_successful_job_says_nothing_about_lanes_beyond_their_own_manifests() {
+        verify_campaign_result(ExecuteResult::Success, &[Some(0), Some(0)])
+            .expect("a green job needs no campaign-level explanation");
+    }
+
+    #[test]
+    fn clearing_the_previous_lane_junit_tolerates_a_path_that_is_already_empty() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let junit = temp.path().join("junit.xml");
+
+        clear_previous_lane_junit(&junit).expect("an absent file is nothing to clear");
+        fs::write(&junit, "stale").expect("write fixture");
+        clear_previous_lane_junit(&junit).expect("a stale file is cleared");
+
+        assert!(!junit.exists());
+    }
 
     #[test]
     fn a_lane_that_is_not_a_plain_directory_name_is_refused() {

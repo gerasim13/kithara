@@ -107,14 +107,12 @@ pub(crate) fn validate(args: &StressRunSpec) -> Result<()> {
         "stress JUnit path must be absolute: {}",
         args.junit.display()
     );
-    ensure!(
-        !args
-            .junit
-            .try_exists()
-            .with_context(|| format!("inspect stress JUnit path {}", args.junit.display()))?,
-        "stress JUnit already exists: {}; remove it before starting a new campaign",
-        args.junit.display()
-    );
+    // Whether the subject's JUnit path is clear is the campaign's business,
+    // not one run's: a campaign of several lanes writes that one path once per
+    // lane, and a rule enforced here would stop its second lane before a
+    // single test ran. The campaign demands an untouched path before it starts
+    // and clears the previous lane's file before each run, which is also what
+    // makes staging honest — a file found afterwards can only be this run's.
     ensure!(
         args.config_file.is_file(),
         "nextest config does not exist: {}",

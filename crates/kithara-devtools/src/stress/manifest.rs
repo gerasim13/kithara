@@ -139,7 +139,7 @@ pub(super) enum ExecuteResult {
 }
 
 impl ExecuteResult {
-    const fn as_str(self) -> &'static str {
+    pub(super) const fn as_str(self) -> &'static str {
         match self {
             Self::Success => "success",
             Self::Failure => "failure",
@@ -409,23 +409,21 @@ impl Manifest {
             ));
             return;
         };
-        let result_matches = match expected.execute_result {
-            ExecuteResult::Success => exit_code == 0,
-            ExecuteResult::Failure | ExecuteResult::Cancelled => exit_code != 0,
-        };
-        if !result_matches {
-            let expectation = match expected.execute_result {
-                ExecuteResult::Success => "zero for a successful execute job",
-                ExecuteResult::Failure => "nonzero for a failed execute job",
-                ExecuteResult::Cancelled => "nonzero for a cancelled execute job",
-            };
+        // Only success is a claim about every lane. The job's result covers all
+        // of them at once, so a red job says one lane failed, not this one: a
+        // lane that passed inside a failed job has a zero exit code and is
+        // telling the truth. Demanding nonzero here would mark exactly the
+        // clean lanes untrustworthy, and a campaign comparing two clocks would
+        // lose the half that worked. That a failed job had a failing lane
+        // somewhere is checked once, across the campaign, by the reporter.
+        if matches!(expected.execute_result, ExecuteResult::Success) && exit_code != 0 {
             mismatches.push(ProvenanceMismatch::new(
                 "timing.exit_code",
                 format!(
                     "{exit_code} with execute result {}",
                     expected.execute_result.as_str()
                 ),
-                expectation,
+                "zero for a successful execute job",
             ));
         }
     }
@@ -922,6 +920,21 @@ mod tests {
                 .iter()
                 .any(|mismatch| mismatch.field == "timing.exit_code")
         );
+
+        for execute_result in [ExecuteResult::Failure, ExecuteResult::Cancelled] {
+            let mut expected = expected();
+            expected.execute_result = execute_result;
+            assert_eq!(manifest.validate_provenance(&expected), Vec::new());
+        }
+    }
+
+    /// A campaign runs several lanes in one job, so a red job means one of
+    /// them failed rather than this one. Marking a lane that passed as
+    /// untrustworthy would drop exactly the clean half of a comparison.
+    #[test]
+    fn a_lane_that_passed_inside_a_failed_job_keeps_its_provenance() {
+        let mut manifest = Manifest::start(spec(), system()).expect("start manifest");
+        manifest.finalize(0, true).expect("finalize manifest");
 
         for execute_result in [ExecuteResult::Failure, ExecuteResult::Cancelled] {
             let mut expected = expected();
