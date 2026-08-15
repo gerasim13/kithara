@@ -561,6 +561,12 @@ fn classify_seek_err(err: &SymphoniaError) -> DecodeError {
                     .is_some_and(|reason| matches!(reason, PendingReason::SeekPending))
             }) =>
         {
+            // The typed payload (`StreamPending`: pos/phase/epoch/flushing)
+            // dies here — `Interrupted` is a unit variant, and the seek
+            // recovery above can only log the name. A retry loop measured at
+            // hundreds of attempts per millisecond was undiagnosable because
+            // every attempt said "Interrupted" and nothing said by what.
+            tracing::debug!(error = ?io_err, "demuxer seek interrupted");
             DecodeError::Interrupted
         }
         _ => DecodeError::SeekFailed {
