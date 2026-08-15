@@ -60,11 +60,7 @@ impl Span {
                     return Outcome::IGNORED;
                 };
                 let Some(value) = across(position, hit.area()) else {
-                    // The press arms the gesture even where a degenerate box
-                    // has no position to report, so the moves that follow are
-                    // still this control's.
-                    state.held = Some(self.nearest(0.0));
-                    return Outcome::captured();
+                    return Outcome::IGNORED;
                 };
                 let edge = self.nearest(value);
                 state.held = Some(edge);
@@ -207,10 +203,12 @@ mod tests {
         );
     }
 
-    /// A box laid out to nothing has no position to publish, and the press
-    /// still arms so the drag that follows is not handed to a sibling.
+    /// A control laid out to nothing has no position under the pointer at all —
+    /// `Rect::contains` is half-open, so a zero-width box holds no point. The
+    /// press is therefore not this control's to take, and leaving it uncaptured
+    /// is what lets whatever is behind it answer.
     #[kithara::test]
-    fn a_degenerate_box_arms_without_publishing() {
+    fn a_degenerate_box_takes_no_press() {
         let span = span();
         let mut state = SpanState::default();
         let flat = Hit::new(Some(Pt { x: 10.0, y: 10.0 }), Rect { w: 0.0, ..AREA });
@@ -218,6 +216,7 @@ mod tests {
         let outcome = span.on_input(&mut state, Input::Pointer(press(10.0)), &flat);
 
         assert_eq!(outcome.value(), None);
-        assert!(state.captures_pointer());
+        assert!(!outcome.is_captured());
+        assert!(!state.captures_pointer());
     }
 }

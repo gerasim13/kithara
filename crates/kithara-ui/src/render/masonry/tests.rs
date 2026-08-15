@@ -1984,7 +1984,7 @@ const CONTROL_CENSUS: &[(&str, Paints, &str)] = &[
     (
         "Range",
         Paints::Yes,
-        r#"Range(id: "control", read: Parameter(id: "pivot.range"), write: Parameter(id: "pivot.range"))"#,
+        r#"Range(id: "control", read: Model(id: "pivot.range"), write: Parameter(id: "pivot.range"))"#,
     ),
 ];
 
@@ -3419,10 +3419,17 @@ fn fixture_registry() -> FixtureRegistry {
         "pivot.map",
         EndpointDesc::new(ValueKind::PortalMap),
     );
+    // A range reads the whole interval and writes one end of it, so the two
+    // halves of its contract are two kinds under one name.
+    registry.insert(
+        EndpointCategory::Model,
+        "pivot.range",
+        EndpointDesc::new(ValueKind::Range),
+    );
     registry.insert(
         EndpointCategory::Parameter,
         "pivot.range",
-        EndpointDesc::new(ValueKind::Range),
+        EndpointDesc::new(ValueKind::Scalar),
     );
     insert_stream_endpoints(&mut registry);
     registry
