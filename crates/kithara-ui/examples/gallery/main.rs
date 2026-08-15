@@ -73,6 +73,18 @@ const ASSETS: &[(&str, &str)] = &[
         include_str!("assets/gallery-pivot.klayout.ron"),
     ),
     (
+        "gallery-shader.klayout.ron",
+        include_str!("assets/gallery-shader.klayout.ron"),
+    ),
+    (
+        "modules/tabs/shader.kmodule.ron",
+        include_str!("assets/modules/tabs/shader.kmodule.ron"),
+    ),
+    (
+        "modules/tabs/field.wgsl",
+        include_str!("assets/modules/tabs/field.wgsl"),
+    ),
+    (
         "gallery-micro.klayout.ron",
         include_str!("assets/gallery-micro.klayout.ron"),
     ),

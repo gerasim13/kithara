@@ -365,6 +365,7 @@ impl MockReads {
             "gallery.tab.menu" => self.active_tab == Tab::Menu,
             "gallery.tab.clock" => self.active_tab == Tab::Clock,
             "gallery.tab.pivot" => self.active_tab == Tab::Pivot,
+            "gallery.tab.shader" => self.active_tab == Tab::Shader,
             "gallery.module.deck" => self.active_module == ModuleDemo::Deck,
             "gallery.module.deck_micro" => self.active_module == ModuleDemo::DeckMicro,
             "gallery.module.global_bar" => self.active_module == ModuleDemo::GlobalBar,
@@ -483,6 +484,11 @@ impl Reads for MockReads {
             "gallery.label.text" => ReadValue::Text("TEXT STYLES"),
             "gallery.label.faders" => ReadValue::Text("HORIZONTAL FADERS"),
             "gallery.label.scalar" => ReadValue::Text("SCALAR TELEMETRY"),
+            // Held still: a value that moved between the two captures would make
+            // the comparison measure the clock instead of the two hosts. That
+            // the uniforms reach the shader at all is proved by the frame tests.
+            "shader.energy" => ReadValue::Scalar(0.62),
+            "shader.level" => ReadValue::Scalar(0.28),
             "vis.badge" => ReadValue::Bool(true),
             "vis.preset" => ReadValue::Scalar(self.vis_preset.as_()),
             "vis.time" => ReadValue::Scalar(self.vis_time_secs),

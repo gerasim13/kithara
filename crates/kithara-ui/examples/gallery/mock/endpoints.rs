@@ -306,6 +306,15 @@ pub(crate) fn registry() -> impl EndpointRegistry {
             EndpointDesc::new(ValueKind::Scalar),
         );
     }
+    // The document shader binds these by name; the page is a capture fixture, so
+    // they hold still rather than animating.
+    for id in ["shader.energy", "shader.level"] {
+        registry.insert(
+            EndpointCategory::Model,
+            id,
+            EndpointDesc::new(ValueKind::Scalar),
+        );
+    }
     for id in ["vis.next", "vis.previous"] {
         registry.insert(
             EndpointCategory::Command,
@@ -368,6 +377,7 @@ pub(crate) fn registry() -> impl EndpointRegistry {
         "gallery.tab.menu",
         "gallery.tab.clock",
         "gallery.tab.pivot",
+        "gallery.tab.shader",
         "gallery.module.deck",
         "gallery.module.deck_micro",
         "gallery.module.global_bar",

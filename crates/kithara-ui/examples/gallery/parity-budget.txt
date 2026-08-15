@@ -30,6 +30,14 @@
 16-stress.png               5
 
 # Table landed 2026-08-09: library2 fell 37.8% -> 3.1%, table to 1.5%.
+# The generic document shader, landed 2026-08-15. Its first capture differed by
+# 33.5% of pixels at 0.9% of ink: both hosts drew the same box, and iced showed
+# the top-left quarter of the texture stretched over it, because the composite's
+# full-screen triangle halved its own UV span. With that corrected the page sits
+# on the noise floor, which is what a shader running the same way in both hosts
+# is supposed to look like.
+20-shader.png                2
+
 # The two pages production PR #188 added, priced here for the first time.
 # Measured 2026-08-15 at the same geometry as the rest: clock 2.0%, pivot 2.5%.
 # Both are ordinary text-and-chip pages; neither hides a missing control.

@@ -29,7 +29,7 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {
     let y = f32(vertex_index & 2u);
     var output: VertexOutput;
     output.position = vec4<f32>(x * 2.0 - 1.0, 1.0 - y * 2.0, 0.0, 1.0);
-    output.uv = vec2<f32>(x, y) * 0.5;
+    output.uv = vec2<f32>(x, y);
     return output;
 }
 
