@@ -361,8 +361,14 @@ default_flash = false
 # Flash stays ON here, unlike the `tooling` lane. Both flash targets are
 # `#![cfg(feature = "flash")]`, so a lane that dropped the feature would compile
 # them empty and report a green suite that ran none of its seven tests.
+#
+# It is spelled per package rather than taken from `[test.flash]`, whose
+# `kithara/flash` reaches the two crates below through the facade. This lane does
+# not build the facade, so the shared spelling fails the lane outright on `none
+# of the selected packages contains this feature`.
 [test.lanes.harness]
 program = "cargo"
+default_flash = false
 # `kithara-net` refuses to compile without an HTTP backend, and the backend in
 # turn refuses to compile without a TLS one; nothing in this package selection
 # turns either on, because in the product suite both arrive from `kithara`,
@@ -371,6 +377,8 @@ program = "cargo"
 default_features = [
   "kithara-test-utils/client-reqwest",
   "kithara-test-utils/tls-rustls",
+  "kithara-platform/flash",
+  "kithara-test-utils/flash",
 ]
 prefix_args = [
   "nextest",
