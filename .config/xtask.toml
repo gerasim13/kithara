@@ -202,6 +202,26 @@ RUST_LOG = "warn"
 [stress.modes.reproduction.raw_path_env]
 KITHARA_HANG_DUMP_DIR = "hang"
 
+# The same campaign on real clocks. Flash collapses the fixtures' artificial
+# delays, so a defect that shows itself as "the needed request queued behind an
+# unneeded one" cannot reproduce under it: at zero real delay the order of
+# service does not change the outcome. Loader priorities, stale-fetch
+# cancellation, and everything else decided by ORDER are invisible to the lane
+# above, however many times it repeats.
+[stress.modes.reproduction-flash-off]
+features = []
+
+[stress.modes.reproduction-flash-off.set_env]
+KITHARA_HANG_PREKILL_SECS = "630"
+NEXTEST_FINAL_STATUS_LEVEL = "fail"
+NEXTEST_SHOW_PROGRESS = "counter"
+NEXTEST_STATUS_LEVEL = "fail"
+RUST_BACKTRACE = "1"
+RUST_LOG = "warn"
+
+[stress.modes.reproduction-flash-off.raw_path_env]
+KITHARA_HANG_DUMP_DIR = "hang"
+
 [stress.modes.diagnostic]
 features = ["flash"]
 
