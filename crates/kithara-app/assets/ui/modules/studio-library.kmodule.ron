@@ -1,0 +1,38 @@
+(
+    schema: "kithara.module",
+    version: 1,
+    id: "studio-library",
+    parameters: ["read", "columns"],
+    root: Row(
+        gap: 1.0,
+        children: [
+            Tree(
+                id: "browser",
+                size: (w: Fixed(200.0), h: Fill),
+                read: Model(id: "library.tree"),
+                query: Model(id: "library.query"),
+                adaptive: (priority: Required),
+            ),
+            Column(
+                size: (w: Fill, h: Fill),
+                children: [
+                    ContextBar(
+                        id: "context",
+                        size: (w: Fill, h: Fixed(26.0)),
+                        read: Model(id: "library.breadcrumb"),
+                        write: Model(id: "library.scope"),
+                        scope_items: ["ALL", "LOCAL", "STREAM"],
+                        scope: Model(id: "library.scope"),
+                    ),
+                    Table(
+                        id: "tracks",
+                        size: (w: Fill, h: Fill),
+                        read: Model(id: "$read"),
+                        columns: "$columns",
+                        adaptive: (priority: Required),
+                    ),
+                ],
+            ),
+        ],
+    ),
+)

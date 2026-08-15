@@ -25,8 +25,8 @@ use kithara_ui::{
     draw::PoolStats,
     registry::ValueKind,
     render::{
-        ReadValue, Reads, StereoLevels, TableCell, TableRow, UiEvent, WaveBucket, WaveformView,
-        fonts, shader::ShaderPass, tree, vis::VisPass,
+        ReadValue, Reads, StereoLevels, TableCell, TableRow, TreeIcon, TreeRow, UiEvent,
+        WaveBucket, WaveformView, fonts, shader::ShaderPass, tree, vis::VisPass,
     },
 };
 use num_traits::cast::AsPrimitive;
@@ -142,6 +142,38 @@ impl Fixture {
 
 impl Reads for Fixture {
     fn get(&self, endpoint: &str) -> Option<ReadValue<'_>> {
+        /// The browser's source groups, in the order `LibraryView::groups`
+        /// lists them. An empty tree would let the page pass its budget while
+        /// neither host drew a single row.
+        const TREE: [TreeRow<'static>; 3] = [
+            TreeRow {
+                label: "ALL",
+                count: Some(2),
+                expanded: None,
+                icon: TreeIcon::Collection,
+                muted: false,
+                selected: false,
+                depth: 0,
+            },
+            TreeRow {
+                label: "LOCAL",
+                count: Some(2),
+                expanded: None,
+                icon: TreeIcon::Folder,
+                muted: false,
+                selected: true,
+                depth: 0,
+            },
+            TreeRow {
+                label: "STREAM",
+                count: Some(0),
+                expanded: None,
+                icon: TreeIcon::Playlist,
+                muted: false,
+                selected: false,
+                depth: 0,
+            },
+        ];
         const WAVE: [WaveBucket; 8] = [
             WaveBucket {
                 high: 0.3,
@@ -204,7 +236,7 @@ impl Reads for Fixture {
                 r#loop: None,
             }),
             ValueKind::Table => ReadValue::Table(&self.rows),
-            ValueKind::Tree => ReadValue::Tree(&[]),
+            ValueKind::Tree => ReadValue::Tree(&TREE),
             _ => return None,
         };
         Some(value)
@@ -214,6 +246,8 @@ impl Reads for Fixture {
 fn text(endpoint: &str) -> &'static str {
     match endpoint {
         "deck.playback.bpm" => "124.0",
+        "library.breadcrumb" => "LOCAL \u{b7} 2",
+        "library.query" => "",
         "deck.playback.remain" => "-03:42",
         "deck.playback.tempo" => "+0.0%",
         "deck.stream.quality" => "320 kbps",

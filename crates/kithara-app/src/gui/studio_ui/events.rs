@@ -26,6 +26,10 @@ pub(crate) fn translate(state: &mut Kithara, event: UiEvent) -> Option<Message> 
             state.studio.cache.toggle_module(module);
             None
         }
+        UiEvent::LibraryQuery(query) => {
+            state.studio.cache.library.query = query;
+            None
+        }
         UiEvent::Window(command) => Some(Message::Window(command)),
         _ => None,
     }
@@ -207,6 +211,11 @@ fn strip_control(state: &mut Kithara, control: &str, action: &ControlAction) -> 
 /// deck reports the pointer crossing it, and the host joins them here.
 fn library_control(state: &mut Kithara, control: &str, action: &ControlAction) -> Option<Message> {
     match (control, action) {
+        ("browser" | "context", ControlAction::SelectIndex(row)) => {
+            let picked = state.studio.cache.library.groups().nth(*row)?;
+            state.studio.cache.library.scope = picked;
+            None
+        }
         ("tracks", ControlAction::SelectIndex(index)) => Some(Message::SelectCatalogTrack(*index)),
         ("tracks", ControlAction::Drag(DragPhase::Start(row))) => {
             state.studio.cache.drag = Some(*row);

@@ -43,6 +43,10 @@ const DOCS: &[(&str, &str)] = &[
         include_str!("../../../assets/ui/modules/studio-overview-row.kmodule.ron"),
     ),
     (
+        "modules/studio-library.kmodule.ron",
+        include_str!("../../../assets/ui/modules/studio-library.kmodule.ron"),
+    ),
+    (
         "modules/studio-mixer.kmodule.ron",
         include_str!("../../../assets/ui/modules/studio-mixer.kmodule.ron"),
     ),

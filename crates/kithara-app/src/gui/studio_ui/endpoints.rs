@@ -276,6 +276,30 @@ static ENDPOINTS: &[Endpoint] = &[
         scopes: Endpoint::GLOBAL,
     },
     Endpoint {
+        category: EndpointCategory::Model,
+        id: "library.tree",
+        value: ValueKind::Tree,
+        scopes: Endpoint::GLOBAL,
+    },
+    Endpoint {
+        category: EndpointCategory::Model,
+        id: "library.query",
+        value: ValueKind::Text,
+        scopes: Endpoint::GLOBAL,
+    },
+    Endpoint {
+        category: EndpointCategory::Model,
+        id: "library.breadcrumb",
+        value: ValueKind::Text,
+        scopes: Endpoint::GLOBAL,
+    },
+    Endpoint {
+        category: EndpointCategory::Model,
+        id: "library.scope",
+        value: ValueKind::Scalar,
+        scopes: Endpoint::GLOBAL,
+    },
+    Endpoint {
         category: EndpointCategory::Parameter,
         id: "ui.layout.decks",
         value: ValueKind::Scalar,

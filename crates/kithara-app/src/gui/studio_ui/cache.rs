@@ -23,6 +23,10 @@ pub(crate) struct StudioCache {
     pub(in crate::gui) deck_marks: CatalogRowMarks,
     pub(in crate::gui) collapsed: CollapsedModules,
     pub(in crate::gui) drag: Option<usize>,
+    /// Which source group the library lists and what its browser search box
+    /// narrows the tree to. The tree and the context bar both select the group;
+    /// it has one owner here and no second copy.
+    pub(in crate::gui) library: LibraryView,
     #[field(get, vis = "pub(in crate::gui)", copy)]
     layout: DeckLayout,
 
@@ -32,6 +36,66 @@ pub(crate) struct StudioCache {
 
     #[field(get, vis = "pub(crate)")]
     focus_deck: usize,
+}
+
+/// What the library browser is showing.
+#[derive(Default)]
+pub(in crate::gui) struct LibraryView {
+    pub(in crate::gui) query: String,
+    pub(in crate::gui) scope: LibraryScope,
+}
+
+impl LibraryView {
+    /// The groups the browser is listing, in the order it lists them. The tree
+    /// draws these and the host resolves a row the user picked back through the
+    /// same order, so a search can never make the two disagree.
+    pub(in crate::gui) fn groups(&self) -> impl Iterator<Item = LibraryScope> + '_ {
+        let query = self.query.trim().to_lowercase();
+        LibraryScope::ALL
+            .into_iter()
+            .filter(move |group| query.is_empty() || group.label().to_lowercase().contains(&query))
+    }
+}
+
+/// The source groups the catalog can be listed by. `Local` is anything the
+/// catalog resolved to a path rather than to a network source, which is the
+/// only division the entries themselves carry.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(in crate::gui) enum LibraryScope {
+    #[default]
+    All,
+    Local,
+    Stream,
+}
+
+impl LibraryScope {
+    pub(in crate::gui) const ALL: [Self; 3] = [Self::All, Self::Local, Self::Stream];
+
+    pub(in crate::gui) const fn label(self) -> &'static str {
+        match self {
+            Self::All => "ALL",
+            Self::Local => "LOCAL",
+            Self::Stream => "STREAM",
+        }
+    }
+
+    pub(in crate::gui) const fn index(self) -> usize {
+        match self {
+            Self::All => 0,
+            Self::Local => 1,
+            Self::Stream => 2,
+        }
+    }
+
+    /// A catalog entry belongs to this group.
+    pub(in crate::gui) fn holds(self, entry: &CatalogEntry) -> bool {
+        let streamed = entry.source.contains("://") && !entry.source.starts_with("file://");
+        match self {
+            Self::All => true,
+            Self::Local => !streamed,
+            Self::Stream => streamed,
+        }
+    }
 }
 
 /// Deck bodies the studio lays out; the session keeps every deck either way.

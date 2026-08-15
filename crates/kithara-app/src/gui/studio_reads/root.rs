@@ -23,7 +23,12 @@ pub(in crate::gui) struct StudioRoot<'a> {
 impl<'a> StudioRoot<'a> {
     pub(in crate::gui) fn new(state: &'a Kithara) -> Self {
         let cache = &state.studio.cache;
-        let library = LibraryNode::new(&state.catalog, &cache.deck_marks, state.selected_track);
+        let library = LibraryNode::new(
+            &state.catalog,
+            &cache.deck_marks,
+            state.selected_track,
+            &cache.library,
+        );
         let focus = cache.focus_deck();
         let decks: Vec<DeckNode<'a>> = state
             .decks
@@ -86,7 +91,7 @@ mod tests {
         gui::{
             deck::DeckView,
             studio_ui::{
-                cache::{CatalogRowMarks, CollapsedModules, DeckCache, DeckLayout},
+                cache::{CatalogRowMarks, CollapsedModules, DeckCache, DeckLayout, LibraryView},
                 endpoints::readable_endpoints,
             },
         },
@@ -100,6 +105,7 @@ mod tests {
         catalog: Catalog,
         marks: CatalogRowMarks,
         collapsed: CollapsedModules,
+        library: LibraryView,
         mix: MixState,
         eq_mode: EqMode,
         decks: Vec<(UiState, DeckCache)>,
@@ -111,6 +117,7 @@ mod tests {
                 catalog: Catalog::new(vec!["dropped.mp3".to_string()]),
                 marks: CatalogRowMarks::default(),
                 collapsed: CollapsedModules::default(),
+                library: LibraryView::default(),
                 mix: MixState::new(tempos.len()),
                 eq_mode: EqMode::default(),
                 decks: tempos.into_iter().map(deck).collect(),
@@ -118,7 +125,7 @@ mod tests {
         }
 
         fn root(&self) -> StudioRoot<'_> {
-            let library = LibraryNode::new(&self.catalog, &self.marks, Some(0));
+            let library = LibraryNode::new(&self.catalog, &self.marks, Some(0), &self.library);
             let decks: Vec<DeckNode<'_>> = self
                 .decks
                 .iter()
