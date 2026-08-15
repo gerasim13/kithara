@@ -187,6 +187,16 @@ fn studio_registry() -> common::TestRegistry {
         ),
         (EndpointCategory::Telemetry, "deck.focused", ValueKind::Bool),
         (
+            EndpointCategory::Telemetry,
+            "deck.playback.position_secs",
+            ValueKind::Scalar,
+        ),
+        (
+            EndpointCategory::Telemetry,
+            "deck.track.title",
+            ValueKind::Text,
+        ),
+        (
             EndpointCategory::Parameter,
             "deck.tempo.rate",
             ValueKind::Scalar,
