@@ -61,9 +61,7 @@ fn draw_bars(
     metrics: WaveSkin,
     palette: WavePalette,
 ) {
-    let step = bars::step(metrics);
-    let content_width = (bounds.w - metrics.content_inset * 2.0).max(0.0);
-    let columns: usize = ((content_width + metrics.bar_gap) / step).floor().as_();
+    let columns = bars::columns(bounds, metrics);
     let Some(grid) = bar_grid(columns, data.zoom, window) else {
         return;
     };

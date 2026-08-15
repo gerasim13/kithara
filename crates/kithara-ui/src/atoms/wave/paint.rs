@@ -147,9 +147,7 @@ fn draw_bars(
     played: Option<bars::Played>,
 ) {
     let step = bars::step(metrics);
-    let content_width = (bounds.w - metrics.content_inset * 2.0).max(0.0);
-    let max_columns: usize = ((content_width + metrics.bar_gap) / step).floor().as_();
-    let columns = max_columns.min(buckets.len());
+    let columns = bars::columns(bounds, metrics).min(buckets.len());
     if columns == 0 {
         return;
     }

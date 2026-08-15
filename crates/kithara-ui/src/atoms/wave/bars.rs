@@ -1,3 +1,5 @@
+use num_traits::cast::AsPrimitive;
+
 use crate::{
     draw::{DrawListBuilder, Rect, Rgba},
     render::WaveBucket,
@@ -7,6 +9,20 @@ use crate::{
 /// Column pitch: one bar plus the gap after it.
 pub(crate) fn step(metrics: WaveSkin) -> f32 {
     metrics.bar_width + metrics.bar_gap
+}
+
+/// How many columns fit across the box, counted from its whole-pixel width.
+///
+/// The count decides which buckets each column summarises, so a hair of layout
+/// must not change it: two hosts that lay the same box out as 264.4 and 264.6
+/// rasterise the same 264 pixels, but a `floor` taken before that rounding
+/// gives them column counts one apart — and every column after the first then
+/// summarises a different slice of the track.
+pub(crate) fn columns(bounds: Rect, metrics: WaveSkin) -> usize {
+    let content_width = (bounds.w.round() - metrics.content_inset * 2.0).max(0.0);
+    ((content_width + metrics.bar_gap) / step(metrics))
+        .floor()
+        .as_()
 }
 
 #[derive(Clone, Copy)]
@@ -169,6 +185,25 @@ mod tests {
             second.x - (first.x + first.w) >= 1.0,
             "columns {first:?} and {second:?} left no gap"
         );
+    }
+
+    /// The count picks which slice of the track each column summarises, so two
+    /// hosts laying the same box out a hair apart must still draw the same
+    /// waveform rather than two resamplings of it.
+    #[kithara::test]
+    fn a_sub_pixel_wider_box_holds_the_same_columns() {
+        let metrics = builtin::skin().wave;
+        let box_of = |w| Rect {
+            h: 60.0,
+            w,
+            x: 0.0,
+            y: 0.0,
+        };
+
+        let narrow = columns(box_of(264.4), metrics);
+
+        assert_eq!(narrow, columns(box_of(264.6), metrics));
+        assert_eq!(narrow, columns(box_of(264.0), metrics));
     }
 
     /// The level is a measurement, not a grid: quantising it would round the
