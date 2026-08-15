@@ -1,7 +1,7 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
-    path::{Path, PathBuf},
+    path::Path,
 };
 
 use proc_macro2::{Delimiter, TokenStream, TokenTree};
@@ -458,9 +458,12 @@ fn stress_workflow_is_a_thin_fork_adapter() {
     let workflow: Value = serde_yaml_ng::from_str(&text).expect("stress workflow is valid YAML");
     assert_no_key(&workflow, "continue-on-error");
     let concurrency = workflow_concurrency(&workflow);
+    // The campaign queues in a group of its own: it runs on a dedicated
+    // runner, and sharing fork CI's group meant a campaign dispatched behind
+    // an already-queued lane was cancelled outright rather than queued.
     assert_eq!(
         mapping_field(concurrency, "group").as_str(),
-        Some("fork-linux-${{ github.repository }}")
+        Some("stress-${{ github.repository }}")
     );
     assert_eq!(
         mapping_field(concurrency, "cancel-in-progress").as_bool(),
@@ -558,7 +561,7 @@ fn stress_workflow_is_a_thin_fork_adapter() {
         "[[ \"$COUNT\" =~ ^[1-9][0-9]*$ ]]",
         "[[ \"$MAX_COUNT\" =~ ^[1-9][0-9]*$ ]]",
         "10#$COUNT <= 10#$MAX_COUNT",
-        "\"self-hosted\", \"linux\", \"x64\", \"kithara\"",
+        "\"self-hosted\", \"linux\", \"x64\", \"kithara-stress\"",
         "<<< \"$RUNNER_LABELS\"",
     ] {
         assert!(
@@ -580,7 +583,7 @@ fn stress_workflow_is_a_thin_fork_adapter() {
         "contains(fromJSON(vars.KITHARA_STRESS_RUNNER_LABELS), 'self-hosted')",
         "contains(fromJSON(vars.KITHARA_STRESS_RUNNER_LABELS), 'linux')",
         "contains(fromJSON(vars.KITHARA_STRESS_RUNNER_LABELS), 'x64')",
-        "contains(fromJSON(vars.KITHARA_STRESS_RUNNER_LABELS), 'kithara')",
+        "contains(fromJSON(vars.KITHARA_STRESS_RUNNER_LABELS), 'kithara-stress')",
     ] {
         assert!(
             execute_guard.contains(contract),
