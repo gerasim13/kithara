@@ -4292,6 +4292,7 @@ name = "kithara-assets"
 version = "0.0.1-alpha4"
 dependencies = [
  "aes",
+ "arc-swap",
  "bitflags 2.13.0",
  "bon",
  "cbc",

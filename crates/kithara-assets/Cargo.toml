@@ -34,6 +34,7 @@ kithara-storage = { workspace = true }
 kithara-test-macros = { workspace = true }
 kithara-test-utils = { workspace = true }
 
+arc-swap = { workspace = true }
 bitflags = { workspace = true }
 bon = { workspace = true }
 dashmap = { workspace = true }

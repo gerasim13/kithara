@@ -3,6 +3,7 @@
 #[cfg(not(target_arch = "wasm32"))]
 use std::sync::Weak;
 use std::{
+    collections::HashMap,
     ops::Range,
     path::PathBuf,
     sync::{
@@ -11,8 +12,9 @@ use std::{
     },
 };
 
-use dashmap::{DashMap, DashSet};
-use kithara_platform::sync::{Arc, Mutex};
+use arc_swap::ArcSwap;
+use dashmap::DashSet;
+use kithara_platform::sync::Arc;
 use kithara_storage::AvailabilityObserver;
 use rangemap::RangeSet;
 
@@ -66,11 +68,27 @@ pub(crate) struct AvailabilityIndex {
     pub(super) inner: Arc<InnerIndex>,
 }
 
-pub(super) type AssetMap = DashMap<String, Arc<DashMap<String, Arc<Mutex<Availability>>>>>;
+/// One resource's availability, readable without blocking.
+///
+/// The decode produce path asks `contains_range` from the audio thread (the
+/// `phase_at` cascade), where taking a lock is a real-time violation: under
+/// write contention `parking_lot` parks or yields, and the audio thread stalls
+/// on the downloader. Readers therefore get a snapshot; writers publish a new
+/// one. A reader racing a writer sees the state from a moment ago, which for
+/// "is this byte on disk yet" is indistinguishable from having asked a moment
+/// ago.
+pub(super) type Entry = Arc<ArcSwap<Availability>>;
+
+/// Immutable snapshot tree: `asset_root` -> `RelativePath` -> [`Entry`].
+///
+/// Structural changes (a new resource, a deletion) publish a rebuilt tree;
+/// range updates swap only the resource's own [`Entry`]. Both happen on
+/// download and deletion paths, never on the audio thread.
+pub(super) type AssetTree = HashMap<String, Arc<HashMap<String, Entry>>>;
 
 pub(super) struct InnerIndex {
     /// Maps `asset_root` -> `RelativePath` -> `Availability`
-    pub(super) assets: AssetMap,
+    pub(super) assets: ArcSwap<AssetTree>,
     /// `true` when the in-memory aggregate has uncommitted writes
     /// since the last successful flush.
     pub(super) dirty: AtomicBool,
@@ -96,7 +114,7 @@ impl AvailabilityIndex {
     pub(crate) fn new() -> Self {
         Self {
             inner: Arc::new(InnerIndex {
-                assets: DashMap::new(),
+                assets: ArcSwap::from_pointee(AssetTree::new()),
                 #[cfg(not(target_arch = "wasm32"))]
                 persist: OnceLock::new(),
                 hub: OnceLock::new(),
@@ -118,12 +136,8 @@ impl AvailabilityIndex {
 
     pub(crate) fn available_ranges(&self, key: &ResourceKey) -> RangeSet<u64> {
         let (root, path) = Self::resolve_refs(key);
-        if let Some(asset) = self.inner.assets.get(root)
-            && let Some(arc) = asset.get(path)
-        {
-            return arc.lock().ranges.clone();
-        }
-        RangeSet::new()
+        self.entry(root, path)
+            .map_or_else(RangeSet::new, |entry| entry.load().ranges.clone())
     }
 
     /// Drop every per-resource entry recorded under `asset_root`.
@@ -136,7 +150,9 @@ impl AvailabilityIndex {
     /// on disk — producing the HLS hang pinned by
     /// `red_test_delete_asset_strands_availability_index`.
     pub(crate) fn clear_root(&self, asset_root: &str) {
-        if self.inner.assets.remove(asset_root).is_some() {
+        let mut removed = false;
+        self.edit_tree(|tree| removed = tree.remove(asset_root).is_some());
+        if removed {
             self.mark_dirty();
         }
     }
@@ -146,22 +162,14 @@ impl AvailabilityIndex {
             return true;
         }
         let (root, path) = Self::resolve_refs(key);
-        if let Some(asset) = self.inner.assets.get(root)
-            && let Some(arc) = asset.get(path)
-        {
-            return arc.lock().contains(&range);
-        }
-        false
+        self.entry(root, path)
+            .is_some_and(|entry| entry.load().contains(&range))
     }
 
     pub(crate) fn final_len(&self, key: &ResourceKey) -> Option<u64> {
         let (root, path) = Self::resolve_refs(key);
-        if let Some(asset) = self.inner.assets.get(root)
-            && let Some(arc) = asset.get(path)
-        {
-            return arc.lock().final_len;
-        }
-        None
+        self.entry(root, path)
+            .and_then(|entry| entry.load().final_len)
     }
 
     /// Force a synchronous flush. Routes through [`FlushHub::flush_now`]
@@ -186,27 +194,45 @@ impl AvailabilityIndex {
         result
     }
 
-    fn insert_or_get_entry(&self, asset_root: &str, path: &str) -> Arc<Mutex<Availability>> {
-        let asset_map = self.inner.assets.get(asset_root).map_or_else(
-            || {
-                self.inner
-                    .assets
-                    .entry(asset_root.to_string())
-                    .or_insert_with(|| Arc::new(DashMap::new()))
-                    .clone()
-            },
-            |map| map.clone(),
-        );
+    fn entry(&self, asset_root: &str, path: &str) -> Option<Entry> {
+        self.inner
+            .assets
+            .load()
+            .get(asset_root)
+            .and_then(|asset| asset.get(path))
+            .cloned()
+    }
 
-        asset_map.get(path).map_or_else(
-            || {
-                asset_map
-                    .entry(path.to_string())
-                    .or_insert_with(|| Arc::new(Mutex::default()))
-                    .clone()
-            },
-            |arc| arc.clone(),
-        )
+    fn insert_or_get_entry(&self, asset_root: &str, path: &str) -> Entry {
+        if let Some(entry) = self.entry(asset_root, path) {
+            return entry;
+        }
+        let fresh = Entry::default();
+        let mut winner = Arc::clone(&fresh);
+        self.edit_tree(|tree| {
+            let asset = tree.entry(asset_root.to_owned()).or_default();
+            winner = asset.get(path).cloned().unwrap_or_else(|| {
+                let mut next = HashMap::clone(asset);
+                next.insert(path.to_owned(), Arc::clone(&fresh));
+                *asset = Arc::new(next);
+                Arc::clone(&fresh)
+            });
+        });
+        winner
+    }
+
+    /// Publish a structural change to the snapshot tree.
+    ///
+    /// Rebuilds under [`ArcSwap::rcu`]: readers keep loading complete trees
+    /// throughout, and a racing edit re-runs against the tree that won. The
+    /// closure must therefore be idempotent — every caller here is (map
+    /// insert-if-absent and removals).
+    fn edit_tree(&self, mut edit: impl FnMut(&mut AssetTree)) {
+        self.inner.assets.rcu(|tree| {
+            let mut next = AssetTree::clone(tree);
+            edit(&mut next);
+            next
+        });
     }
 
     fn mark_dirty(&self) {
@@ -225,8 +251,8 @@ impl AvailabilityIndex {
 
     pub(crate) fn record_commit(&self, key: &ResourceKey, final_len: u64) {
         let (root, path) = Self::resolve_refs(key);
-        let arc = self.insert_or_get_entry(root, path);
-        if arc.lock().mark_committed(final_len) {
+        let entry = self.insert_or_get_entry(root, path);
+        if update(&entry, |next| next.mark_committed(final_len)) {
             self.mark_dirty();
         }
     }
@@ -236,19 +262,26 @@ impl AvailabilityIndex {
             return;
         }
         let (root, path) = Self::resolve_refs(key);
-        let arc = self.insert_or_get_entry(root, path);
-        if arc.lock().insert(range) {
+        let entry = self.insert_or_get_entry(root, path);
+        if update(&entry, |next| next.insert(range.clone())) {
             self.mark_dirty();
         }
     }
 
     pub(crate) fn remove(&self, key: &ResourceKey) {
         let (root, path) = Self::resolve_refs(key);
-        let removed = self
-            .inner
-            .assets
-            .get(root)
-            .is_some_and(|asset| asset.remove(path).is_some());
+        let mut removed = false;
+        self.edit_tree(|tree| {
+            removed = false;
+            if let Some(asset) = tree.get_mut(root)
+                && asset.contains_key(path)
+            {
+                let mut next = HashMap::clone(asset);
+                next.remove(path);
+                *asset = Arc::new(next);
+                removed = true;
+            }
+        });
         if removed {
             self.mark_dirty();
         }
@@ -263,6 +296,22 @@ impl AvailabilityIndex {
             ResourceKeyKind::Absolute(path) => ("__absolute__", path.to_str().unwrap_or("")),
         }
     }
+}
+
+/// Apply a mutation to one resource's availability and publish the result.
+///
+/// Clone-update-swap under [`ArcSwap::rcu`]: a racing writer makes the loser
+/// re-run against the winner's state, so no update is lost — the same
+/// guarantee the mutex gave, now without a lock for readers to block on.
+/// Returns what the mutation returned on its winning run.
+fn update(entry: &Entry, mut mutate: impl FnMut(&mut Availability) -> bool) -> bool {
+    let mut changed = false;
+    entry.rcu(|current| {
+        let mut next = Availability::clone(current);
+        changed = mutate(&mut next);
+        next
+    });
+    changed
 }
 
 impl Flushable for InnerIndex {
@@ -299,7 +348,7 @@ impl Default for AvailabilityIndex {
 impl std::fmt::Debug for AvailabilityIndex {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("AvailabilityIndex")
-            .field("tracked_assets", &self.inner.assets.len())
+            .field("tracked_assets", &self.inner.assets.load().len())
             .finish()
     }
 }
@@ -564,7 +613,7 @@ mod tests {
 
         let idx = AvailabilityIndex::new();
         idx.load_from(&atomic).unwrap();
-        assert!(idx.inner.assets.is_empty());
+        assert!(idx.inner.assets.load().is_empty());
     }
 
     #[kithara::test(timeout(Duration::from_secs(1)))]
@@ -583,6 +632,6 @@ mod tests {
 
         let idx = AvailabilityIndex::new();
         idx.load_from(&atomic).unwrap();
-        assert!(idx.inner.assets.is_empty());
+        assert!(idx.inner.assets.load().is_empty());
     }
 }
