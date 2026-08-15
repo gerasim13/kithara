@@ -21,6 +21,9 @@ mod line_reader;
 mod overlap;
 mod pressure;
 
+/// Payload lines kept after a panic header: the assertion's message and, for
+/// `assert_eq!`, its `left` and `right`.
+const PANIC_DETAIL_LINES: usize = 4;
 const MAX_SIGNATURE_ROWS: usize = 100;
 const MAX_SIGNATURE_EXAMPLES: usize = 5;
 
@@ -303,23 +306,41 @@ fn failure_signature(case: &CaseTiming, evidence: &StressEvidenceConfig) -> Stri
         if is_timeout_line(line) {
             return normalize_signature(line);
         }
-        if line.contains("panicked at") {
-            let detail = lines
+        if is_panic_header(line) {
+            // The header arrives twice — nextest puts it in the failure
+            // `message` attribute and the body repeats it — so the first line
+            // after it is the duplicate, not the payload. Taking that one line
+            // as the detail spent the whole signature on saying the same thing
+            // twice and dropped what distinguishes one failure from another:
+            // the assertion's own message and its values.
+            let detail: Vec<&str> = lines
                 .iter()
                 .skip(index + 1)
-                .find(|candidate| {
-                    !candidate.is_empty()
-                        && !candidate.starts_with("stack backtrace")
+                .map(String::as_str)
+                .filter(|candidate| !is_panic_header(candidate))
+                .take_while(|candidate| {
+                    !candidate.starts_with("stack backtrace")
                         && !candidate.starts_with("note: run with")
                 })
-                .map_or(String::new(), |detail| format!(": {detail}"));
-            return normalize_signature(&format!("{line}{detail}"));
+                .take(PANIC_DETAIL_LINES)
+                .collect();
+            let head = line.trim_end_matches(':');
+            let detail = if detail.is_empty() {
+                String::new()
+            } else {
+                format!(": {}", detail.join(" "))
+            };
+            return normalize_signature(&format!("{head}{detail}"));
         }
     }
     lines.first().map_or_else(
         || "failure output unavailable".to_owned(),
         |line| normalize_signature(line),
     )
+}
+
+fn is_panic_header(line: &str) -> bool {
+    line.contains("panicked at")
 }
 
 fn requires_envelope(output: &str, evidence: &StressEvidenceConfig) -> bool {
@@ -499,10 +520,20 @@ fn normalize_signature(text: &str) -> String {
         Regex::new(r"\b([A-Za-z_][A-Za-z0-9_]*(?:_ns|_ms)|pid|task|thread|id|dump)=[^\s,;]+")
             .expect("volatile diagnostic regex")
     });
+    // A Rust panic header names the thread and its id before the location.
+    // The id changes on every attempt, which made each failure its own
+    // cluster — the one section whose purpose is to say "these are one cause"
+    // reported each of them separately. The thread NAME is the test's own,
+    // already carried by the examples column, and spending the row's width on
+    // it is what pushed the assertion's values off the end.
+    static PANIC_THREAD: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"thread '[^']*' \(\d+\) panicked at").expect("panic thread identity regex")
+    });
     static HEX: LazyLock<Regex> =
         LazyLock::new(|| Regex::new(r"0x[0-9a-fA-F]+").expect("address regex"));
     let text = strip_ansi(text).replace(['\r', '\n'], " ");
     let text = VOLATILE.replace_all(&text, "$1=<volatile>");
+    let text = PANIC_THREAD.replace_all(&text, "panicked at");
     let text = HEX.replace_all(&text, "0x<address>");
     markdown_cell(text.trim())
 }
@@ -666,6 +697,80 @@ mod tests {
             normalized,
             "pid=<volatile> task=<volatile> address=0x<address>"
         );
+    }
+
+    /// Shaped like the retained output of a failed `assert_eq!`: the kind, the
+    /// panic header, then the assertion's message and its values.
+    fn panic_output(thread_id: &str) -> String {
+        format!(
+            "test failure with exit code 101: thread 'demo::warms_pool' ({thread_id}) panicked at tests/demo.rs:166:5:\n\
+             assertion `left == right` failed: a warmed pool must serve decode-sized buffers without allocating\n\
+             \x20 left: 0\n\
+             \x20right: 1\n\
+             stack backtrace:\n\
+             \x20  0: __rustc::rust_begin_unwind\n"
+        )
+    }
+
+    /// The values are the whole diagnosis: one miss out of eight is a
+    /// different defect from eight out of eight, and a signature that stops at
+    /// "an assertion failed" cannot tell a reader which they have.
+    #[test]
+    fn a_panic_signature_carries_the_assertion_that_failed() {
+        let mut failed = case("warms_pool", 0, true, 1.0);
+        failed.output = panic_output("971370");
+
+        let signature = failure_signature(&failed, &evidence());
+
+        assert!(
+            signature.contains("a warmed pool must serve"),
+            "{signature}"
+        );
+        assert!(signature.contains("left: 0"), "{signature}");
+        assert!(signature.contains("right: 1"), "{signature}");
+    }
+
+    /// The thread's name is the test's own, and the examples column already
+    /// carries it. In a symptom cluster it is width spent on what the row
+    /// does not ask.
+    #[test]
+    fn a_panic_signature_drops_the_thread_the_examples_already_name() {
+        let mut failed = case("warms_pool", 0, true, 1.0);
+        failed.output = panic_output("971370");
+
+        let signature = failure_signature(&failed, &evidence());
+
+        assert!(!signature.contains("demo::warms_pool"), "{signature}");
+        assert!(signature.contains("tests/demo.rs:166:5"), "{signature}");
+    }
+
+    /// The point of a symptom cluster is that one cause is one row. The thread
+    /// id changes on every attempt, so leaving it in the signature turned
+    /// thirteen failures of one assertion into thirteen clusters of one — the
+    /// section grouped nothing exactly where it was needed.
+    #[test]
+    fn two_attempts_of_one_assertion_share_a_signature() {
+        let mut first = case("warms_pool", 0, true, 1.0);
+        first.output = panic_output("971370");
+        let mut second = case("warms_pool", 7, true, 1.0);
+        second.output = panic_output("208442");
+
+        assert_eq!(
+            failure_signature(&first, &evidence()),
+            failure_signature(&second, &evidence())
+        );
+    }
+
+    /// The header arrives twice; spending the signature's width on saying it
+    /// twice is what pushed the payload past the cell bound.
+    #[test]
+    fn a_panic_signature_does_not_repeat_its_own_header() {
+        let mut failed = case("warms_pool", 0, true, 1.0);
+        failed.output = panic_output("971370");
+
+        let signature = failure_signature(&failed, &evidence());
+
+        assert_eq!(signature.matches("panicked at").count(), 1, "{signature}");
     }
 
     #[test]
