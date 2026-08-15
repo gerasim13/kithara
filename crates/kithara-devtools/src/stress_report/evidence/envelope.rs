@@ -4,8 +4,10 @@ use std::{
     fs::{self, File},
     io::Read,
     path::{Path, PathBuf},
+    sync::LazyLock,
 };
 
+use regex::Regex;
 use serde::Deserialize;
 use serde_json::Value;
 
@@ -138,7 +140,7 @@ pub(super) fn append(
         let outcome = outcome_for(&attempt, input.outcomes);
         let context = envelope.context.to_string();
         let signature =
-            normalize_signature(&format!("{}: {}", envelope.label, envelope.diagnostic));
+            normalize_diagnostic(&format!("{}: {}", envelope.label, envelope.diagnostic));
         if outcome == AttemptOutcome::Failed
             && let Some(dossier) = dossiers.get_mut(&attempt.key)
         {
@@ -241,6 +243,15 @@ fn envelope_files(dir: &Path) -> Option<EnvelopeFiles> {
     })
 }
 
+/// The tick counter measures how long the watchdog watched, not what stalled.
+/// Left in the signature it split one stall into a cluster per attempt — the
+/// section grouped nothing exactly where grouping was its purpose.
+fn normalize_diagnostic(text: &str) -> String {
+    static TICKS: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"\b\d+ tick\(s\)").expect("tick counter regex"));
+    normalize_signature(&TICKS.replace_all(text, "<n> tick(s)"))
+}
+
 fn read_envelope(path: &Path) -> Option<String> {
     let file = File::open(path).ok()?;
     let length = file.metadata().ok()?.len();
@@ -291,6 +302,22 @@ mod tests {
                 ..AttemptDossier::default()
             },
         )])
+    }
+
+    /// One stall is one row: the watchdog's tick counter differs on every
+    /// attempt and must not split a cluster.
+    #[test]
+    fn tick_counts_do_not_split_a_diagnostic_signature() {
+        let first = normalize_diagnostic(
+            "audio_worker_loop: stuck at observer.rs:173 | last progress at observer.rs:166 | 118 tick(s) since progress | timeout 1s",
+        );
+        let second = normalize_diagnostic(
+            "audio_worker_loop: stuck at observer.rs:173 | last progress at observer.rs:166 | 183 tick(s) since progress | timeout 1s",
+        );
+
+        assert_eq!(first, second);
+        assert!(first.contains("<n> tick(s)"), "{first}");
+        assert!(first.contains("timeout 1s"), "{first}");
     }
 
     #[test]
