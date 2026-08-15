@@ -508,7 +508,8 @@ async fn wait_v0_fully_cached(collector: &EventCollector, segment_count: usize) 
     tokio,
     serial,
     timeout(Duration::from_secs(30)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "5")
+    env(KITHARA_HANG_TIMEOUT_SECS = "5"),
+    tracing("kithara_abr=debug,kithara_hls=debug")
 )]
 async fn vod_manual_switch_affects_future_segments() {
     let segment_count = 30;
@@ -652,7 +653,8 @@ async fn vod_manual_switch_affects_future_segments() {
     tokio,
     serial,
     timeout(Duration::from_secs(30)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "5")
+    env(KITHARA_HANG_TIMEOUT_SECS = "5"),
+    tracing("kithara_abr=debug,kithara_hls=debug")
 )]
 async fn stalled_boundary_escape_rescues_reader_blocked_on_slow_variant() {
     const STALLED_VARIANT: usize = 0;
@@ -824,7 +826,8 @@ async fn stalled_boundary_escape_rescues_reader_blocked_on_slow_variant() {
     tokio,
     serial,
     timeout(Duration::from_secs(45)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "5")
+    env(KITHARA_HANG_TIMEOUT_SECS = "5"),
+    tracing("kithara_abr=debug,kithara_hls=debug")
 )]
 async fn multi_track_shared_abr_with_cache() {
     let segment_count = 15;
@@ -1004,7 +1007,8 @@ async fn multi_track_shared_abr_with_cache() {
     tokio,
     serial,
     timeout(Duration::from_secs(30)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "5")
+    env(KITHARA_HANG_TIMEOUT_SECS = "5"),
+    tracing("kithara_abr=debug,kithara_hls=debug")
 )]
 async fn abr_switch_must_not_redownload_covered_segments() {
     let segment_count = 20;
@@ -1098,7 +1102,8 @@ async fn abr_switch_must_not_redownload_covered_segments() {
     tokio,
     serial,
     timeout(Duration::from_secs(30)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "5")
+    env(KITHARA_HANG_TIMEOUT_SECS = "5"),
+    tracing("kithara_abr=debug,kithara_hls=debug")
 )]
 async fn runtime_manual_switch_via_handle_changes_playing_variant() {
     let segment_count = 30;
@@ -1237,7 +1242,8 @@ async fn runtime_manual_switch_via_handle_changes_playing_variant() {
     tokio,
     serial,
     timeout(Duration::from_secs(45)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "5")
+    env(KITHARA_HANG_TIMEOUT_SECS = "5"),
+    tracing("kithara_abr=debug,kithara_hls=debug")
 )]
 async fn runtime_cross_codec_manual_switch_no_hang() {
     let server = TestServerHelper::new().await;
@@ -1333,7 +1339,8 @@ async fn runtime_cross_codec_manual_switch_no_hang() {
     tokio,
     serial,
     timeout(Duration::from_secs(30)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "5")
+    env(KITHARA_HANG_TIMEOUT_SECS = "5"),
+    tracing("kithara_abr=debug,kithara_hls=debug")
 )]
 async fn runtime_manual_switch_works_when_all_segments_cached() {
     let segment_count: usize = 6;
@@ -1472,7 +1479,8 @@ async fn runtime_manual_switch_works_when_all_segments_cached() {
     tokio,
     serial,
     timeout(Duration::from_secs(30)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "5")
+    env(KITHARA_HANG_TIMEOUT_SECS = "5"),
+    tracing("kithara_abr=debug,kithara_hls=debug")
 )]
 async fn runtime_manual_switch_works_after_cache_and_seek() {
     let segment_count: usize = 8;
@@ -1638,7 +1646,8 @@ async fn runtime_manual_switch_works_after_cache_and_seek() {
     tokio,
     serial,
     timeout(Duration::from_secs(30)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "5")
+    env(KITHARA_HANG_TIMEOUT_SECS = "5"),
+    tracing("kithara_abr=debug,kithara_hls=debug")
 )]
 async fn auto_does_not_up_switch_on_first_boundary_with_defaults() {
     let segment_count: usize = 6;
@@ -1762,7 +1771,8 @@ async fn auto_does_not_up_switch_on_first_boundary_with_defaults() {
     tokio,
     serial,
     timeout(Duration::from_secs(45)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "5")
+    env(KITHARA_HANG_TIMEOUT_SECS = "5"),
+    tracing("kithara_abr=debug,kithara_hls=debug")
 )]
 #[ignore = "current implementation hits a separate same-codec byte_shift mismatch; needs deterministic timing setup to repro the cross→same race"]
 async fn rapid_cross_codec_then_same_codec_switch_no_false_eof() {
@@ -1882,7 +1892,8 @@ async fn rapid_cross_codec_then_same_codec_switch_no_false_eof() {
     tokio,
     serial,
     timeout(Duration::from_secs(90)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "15")
+    env(KITHARA_HANG_TIMEOUT_SECS = "15"),
+    tracing("kithara_abr=debug,kithara_hls=debug")
 )]
 #[case::sw(DecoderBackend::Symphonia)]
 #[cfg_attr(
@@ -2098,7 +2109,8 @@ async fn play_seek_back_then_same_codec_downswitch_no_premature_eof(
     tokio,
     serial,
     timeout(Duration::from_secs(60)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "5")
+    env(KITHARA_HANG_TIMEOUT_SECS = "5"),
+    tracing("kithara_abr=debug,kithara_hls=debug")
 )]
 #[case::sw_same_codec_aac_low_to_high(DecoderBackend::Symphonia, 2usize)]
 #[case::sw_cross_codec_aac_to_flac(DecoderBackend::Symphonia, 3usize)]
