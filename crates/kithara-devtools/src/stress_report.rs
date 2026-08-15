@@ -395,11 +395,16 @@ fn parse_inventory(json: &str) -> Result<BTreeSet<TestId>> {
         if suite != inventory.binary_id {
             bail!("stress inventory suite key does not match its binary-id");
         }
-        if inventory.status != "listed" {
-            bail!(
-                "stress inventory suite `{suite}` has unsupported status `{}`",
-                inventory.status
-            );
+        match inventory.status.as_str() {
+            "listed" => {}
+            // A target the project's `default-filter` excludes is inventoried
+            // with this status and none of its cases. It owes the campaign
+            // nothing, and reading the exclusion as a malformed inventory is
+            // how a campaign ends before its first test. The suite is dropped
+            // whole rather than filtered case by case, so a future nextest
+            // that does list them still cannot contribute any.
+            "skipped-default-filter" => continue,
+            status => bail!("stress inventory suite `{suite}` has unsupported status `{status}`"),
         }
         for (name, case) in inventory.testcases {
             inventory_cases = inventory_cases.saturating_add(1);
@@ -1054,6 +1059,76 @@ mod tests {
         assert_eq!(
             parse_inventory(json).expect("parse inventory"),
             inventory(&["selected"])
+        );
+    }
+
+    /// A target the project's `default-filter` excludes is listed by nextest
+    /// with this status and no testcases. Reading it as a malformed inventory
+    /// stopped the campaign before it ran a single test.
+    #[test]
+    fn a_suite_skipped_by_the_default_filter_contributes_no_tests() {
+        let json = r#"{
+  "rust-suites": {
+    "demo::tests": {
+      "binary-id": "demo::tests",
+      "status": "listed",
+      "testcases": {
+        "selected": {"ignored": false, "filter-match": {"status": "matches"}}
+      }
+    },
+    "excluded::tests": {
+      "binary-id": "excluded::tests",
+      "status": "skipped-default-filter",
+      "testcases": {
+        "unreachable": {"ignored": false, "filter-match": {"status": "matches"}}
+      }
+    }
+  }
+}"#;
+
+        assert_eq!(
+            parse_inventory(json).expect("parse inventory"),
+            inventory(&["selected"])
+        );
+    }
+
+    #[test]
+    fn a_suite_status_the_parser_does_not_know_is_rejected() {
+        let json = r#"{
+  "rust-suites": {
+    "demo::tests": {
+      "binary-id": "demo::tests",
+      "status": "invented",
+      "testcases": {}
+    }
+  }
+}"#;
+
+        assert!(
+            parse_inventory(json)
+                .expect_err("unknown suite status must fail")
+                .to_string()
+                .contains("unsupported status `invented`")
+        );
+    }
+
+    #[test]
+    fn an_inventory_of_nothing_but_skipped_suites_is_rejected() {
+        let json = r#"{
+  "rust-suites": {
+    "excluded::tests": {
+      "binary-id": "excluded::tests",
+      "status": "skipped-default-filter",
+      "testcases": {}
+    }
+  }
+}"#;
+
+        assert!(
+            parse_inventory(json)
+                .expect_err("an empty selection must fail")
+                .to_string()
+                .contains("no runnable selected tests")
         );
     }
 
