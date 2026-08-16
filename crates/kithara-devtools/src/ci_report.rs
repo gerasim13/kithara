@@ -8,20 +8,19 @@ use anyhow::{Context, Result};
 use clap::Args;
 use serde_json::Value;
 
+use crate::{Ctx, common::project::CiReportConfig};
+
+/// Names the producing tools own. They are contracts with those tools rather
+/// than policy, so they stay here while how much of each to carry lives in
+/// `.config/xtask.toml` under `[ci_report]`.
 struct Consts;
 impl Consts {
-    /// Rows of the CRAP table inlined before the reader is sent to the
-    /// artifact. The full table runs to five figures of lines, and a step
-    /// summary is capped at a megabyte.
-    const CRAP_ROWS: usize = 120;
-
     const CRAP_DIRECTORY: &'static str = "cargo-crap";
     const CRAP_REPORT: &'static str = "report.md";
     const HEALTH_REPORT: &'static str = "health-report.md";
     const METRICS: &'static str = "metrics.json";
     /// Where the health report stops being a verdict and starts being logs.
     const STAGE_DETAILS: &'static str = "## Stage details";
-    const TOP_CONTOURS: usize = 10;
 }
 
 #[derive(Debug, Args)]
@@ -29,21 +28,18 @@ pub struct CiReportArgs {
     /// Directory holding the quality artifacts of one run.
     #[arg(long, value_name = "DIR")]
     pub artifacts: PathBuf,
-    /// Rows of the CRAP table to inline before pointing at the artifact.
-    #[arg(long, default_value_t = Consts::CRAP_ROWS)]
-    pub crap_rows: usize,
 }
 
-pub(crate) fn run(args: &CiReportArgs) -> Result<()> {
-    print!("{}", render(&args.artifacts, args.crap_rows)?);
+pub(crate) fn run(args: &CiReportArgs, ctx: &Ctx) -> Result<()> {
+    print!("{}", render(&args.artifacts, &ctx.config.ci_report)?);
     Ok(())
 }
 
-fn render(artifacts: &Path, crap_rows: usize) -> Result<String> {
+fn render(artifacts: &Path, config: &CiReportConfig) -> Result<String> {
     let mut out = String::new();
     out.push_str(&health(artifacts)?);
-    out.push_str(&coverage_risk(artifacts, crap_rows)?);
-    out.push_str(&architecture(artifacts)?);
+    out.push_str(&coverage_risk(artifacts, config.crap_rows)?);
+    out.push_str(&architecture(artifacts, config.top_contours)?);
     Ok(out)
 }
 
@@ -77,7 +73,7 @@ fn coverage_risk(artifacts: &Path, rows: usize) -> Result<String> {
     Ok(out)
 }
 
-fn architecture(artifacts: &Path) -> Result<String> {
+fn architecture(artifacts: &Path, top_contours: usize) -> Result<String> {
     let Some(metrics) = find(artifacts, &|path| named(path, Consts::METRICS))? else {
         return Ok(missing("Architecture complexity", "architecture"));
     };
@@ -112,7 +108,7 @@ fn architecture(artifacts: &Path) -> Result<String> {
     // reader lands on; ties keep the file's own order.
     contours.sort_by(|left, right| right.1.total_cmp(&left.1));
     out.push_str("\n| Contour | ACI |\n|---|---:|\n");
-    for (name, score) in contours.iter().take(Consts::TOP_CONTOURS) {
+    for (name, score) in contours.iter().take(top_contours) {
         let _ = writeln!(out, "| `{name}` | {score} |");
     }
     Ok(out)
@@ -271,7 +267,7 @@ mod tests {
             }"#,
         );
 
-        let report = architecture(temp.path()).expect("architecture section");
+        let report = architecture(temp.path(), 10).expect("architecture section");
         let rows: Vec<&str> = report
             .lines()
             .filter(|line| line.starts_with("| `crates/"))
@@ -288,7 +284,7 @@ mod tests {
             r#"{"architecture_complexity_index": 15.6, "contours": {}}"#,
         );
 
-        let report = architecture(temp.path()).expect("architecture section");
+        let report = architecture(temp.path(), 10).expect("architecture section");
 
         assert!(report.contains("- Architecture complexity index: 15.6"));
     }
@@ -297,8 +293,20 @@ mod tests {
     fn a_missing_artifact_is_stated_rather_than_dropped() {
         let temp = tempdir().expect("tempdir");
 
-        let report = render(temp.path(), 10).expect("report");
+        let report = render(temp.path(), &CiReportConfig::default()).expect("report");
 
         assert!(report.contains("No `health-report` artifact in this run."));
+    }
+
+    /// Deriving `Default` on the config would zero both knobs, and a report
+    /// that inlines nothing still looks like a report.
+    #[test]
+    fn the_default_configuration_carries_crap_rows() {
+        assert!(CiReportConfig::default().crap_rows > 0);
+    }
+
+    #[test]
+    fn the_default_configuration_carries_contours() {
+        assert!(CiReportConfig::default().top_contours > 0);
     }
 }

@@ -18,6 +18,7 @@ const CONFIG_REL: &str = ".config/xtask.toml";
 pub struct ProjectConfig {
     pub architecture: ArchitectureConfig,
     pub audit_clippy: AuditClippyConfig,
+    pub ci_report: CiReportConfig,
     pub health: HealthConfig,
     pub lint_exclude: LintExcludeConfig,
     pub orphans: OrphansConfig,
@@ -162,6 +163,28 @@ impl RuntimeScenarioConfig {
 #[serde(default, deny_unknown_fields)]
 pub struct AuditClippyConfig {
     pub lints: Vec<String>,
+}
+
+/// How much of each measurement the consolidated CI report inlines before it
+/// sends the reader to the artifact it was rendered from.
+#[derive(Debug, Deserialize)]
+#[non_exhaustive]
+#[serde(default, deny_unknown_fields)]
+pub struct CiReportConfig {
+    /// Rows of the CRAP table carried into the report. The whole table runs to
+    /// five figures of lines and a step summary is capped at a megabyte.
+    pub crap_rows: usize,
+    /// Contours listed under the architecture complexity index, worst first.
+    pub top_contours: usize,
+}
+
+impl Default for CiReportConfig {
+    fn default() -> Self {
+        Self {
+            crap_rows: 120,
+            top_contours: 10,
+        }
+    }
 }
 
 /// Workspace-wide Rust file scan exclusions.

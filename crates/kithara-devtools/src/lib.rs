@@ -120,7 +120,7 @@ pub fn run(cmd: &CoreCommand, ctx: &Ctx) -> anyhow::Result<()> {
         CoreCommand::Test(args) => test::run(args),
         CoreCommand::Stress { command } => stress::run(command, ctx),
         CoreCommand::Health(args) => health::run(args),
-        CoreCommand::CiReport(args) => ci_report::run(args),
+        CoreCommand::CiReport(args) => ci_report::run(args, ctx),
         #[cfg(feature = "viz")]
         CoreCommand::Viz(args) => viz::run(args, ctx),
     }

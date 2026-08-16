@@ -571,6 +571,7 @@ mod tests {
                 name: "demo".to_owned(),
             },
             audit_clippy: AuditClippyConfig::default(),
+            ci_report: crate::common::project::CiReportConfig::default(),
             health: HealthConfig::default(),
             test: TestCommandConfig {
                 lanes,
