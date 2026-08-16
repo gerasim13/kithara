@@ -10,8 +10,9 @@ use kurbo::{Arc, Circle, PathEl, Point, RoundedRect, Shape};
 use num_traits::cast::AsPrimitive;
 
 use super::{
-    ir::{Pt, Rect, Transform},
-    path::Verb,
+    ir::{DrawCmd, Geom, Pt, Rect, Transform},
+    list::DrawList,
+    path::{Path, Verb},
 };
 
 /// How closely a flattened curve follows the one it replaces, in logical
@@ -52,6 +53,107 @@ pub(super) fn bounds(rect: Rect, by: Transform) -> Rect {
     };
     let (left, right) = (fold(f32::min, |at| at.x), fold(f32::max, |at| at.x));
     let (top, bottom) = (fold(f32::min, |at| at.y), fold(f32::max, |at| at.y));
+    Rect {
+        h: bottom - top,
+        w: right - left,
+        x: left,
+        y: top,
+    }
+}
+
+/// The upright rectangle every command in `list` draws inside, if it draws.
+///
+/// A painter is asked to draw inside the box it was handed, so this is the
+/// answer for a control nobody moved. It stops being the answer the moment a
+/// pose carries the drawing somewhere else, which is the one case a caller
+/// needs it for: a host that clipped to the box would drop what left it.
+pub(crate) fn ink(list: &DrawList) -> Option<Rect> {
+    list.commands().iter().filter_map(command_ink).reduce(union)
+}
+
+fn command_ink(command: &DrawCmd) -> Option<Rect> {
+    match command {
+        DrawCmd::Clip { region, .. } => Some(*region),
+        DrawCmd::Fill { geom, .. } => geom_ink(geom),
+        DrawCmd::Image { rect, .. } => Some(*rect),
+        DrawCmd::Stroke { geom, pen, .. } => {
+            geom_ink(geom).map(|geom| grown(geom, pen.width / 2.0))
+        }
+        // The run's own box, which the transform then carries wherever the text
+        // went. Ascenders and descenders past the measured height are covered by
+        // taking the height on both sides of the baseline.
+        DrawCmd::Text { run, transform, .. } => Some(bounds(
+            Rect {
+                h: run.height() * 2.0,
+                w: run.width(),
+                x: 0.0,
+                y: -run.height(),
+            },
+            *transform,
+        )),
+    }
+}
+
+fn geom_ink(geom: &Geom) -> Option<Rect> {
+    let rect = match geom {
+        Geom::Arc { center, radius, .. } | Geom::Circle { center, radius } => Rect {
+            h: radius * 2.0,
+            w: radius * 2.0,
+            x: center.x - radius,
+            y: center.y - radius,
+        },
+        Geom::Line { from, to } => span(*from, *to),
+        Geom::Path(path) => return path_ink(path),
+        Geom::Rect(rect) | Geom::RoundedRect { rect, .. } => *rect,
+    };
+    Some(rect)
+}
+
+/// An outline covers the points it names, and a path that names none — which a
+/// painter emits for an icon it has no art for — covers nothing rather than
+/// everything.
+fn path_ink(path: &Path) -> Option<Rect> {
+    path.verbs()
+        .iter()
+        .flat_map(|verb| points(*verb))
+        .flatten()
+        .map(|at| span(at, at))
+        .reduce(union)
+}
+
+/// The points a verb names, in the order it draws them.
+fn points(verb: Verb) -> [Option<Pt>; 3] {
+    match verb {
+        Verb::Close => [None, None, None],
+        Verb::CurveTo { first, second, to } => [Some(first), Some(second), Some(to)],
+        Verb::LineTo(to) | Verb::MoveTo(to) => [Some(to), None, None],
+        Verb::QuadTo { control, to } => [Some(control), Some(to), None],
+    }
+}
+
+fn span(first: Pt, second: Pt) -> Rect {
+    Rect {
+        h: (second.y - first.y).abs(),
+        w: (second.x - first.x).abs(),
+        x: first.x.min(second.x),
+        y: first.y.min(second.y),
+    }
+}
+
+fn grown(rect: Rect, by: f32) -> Rect {
+    Rect {
+        h: rect.h + by * 2.0,
+        w: rect.w + by * 2.0,
+        x: rect.x - by,
+        y: rect.y - by,
+    }
+}
+
+pub(crate) fn union(first: Rect, second: Rect) -> Rect {
+    let left = first.x.min(second.x);
+    let top = first.y.min(second.y);
+    let right = (first.x + first.w).max(second.x + second.w);
+    let bottom = (first.y + first.h).max(second.y + second.h);
     Rect {
         h: bottom - top,
         w: right - left,
@@ -169,8 +271,8 @@ fn element_verb(element: PathEl, by: Transform) -> Verb {
 mod tests {
     use kithara_test_utils::kithara;
 
-    use super::{Transform, bounds, rect_verbs};
-    use crate::draw::{Pt, Rect, Verb};
+    use super::{Transform, bounds, ink, rect_verbs};
+    use crate::draw::{DrawListBuilder, Pt, Rect, Rgba, Verb};
 
     const BOX: Rect = Rect {
         h: 20.0,
@@ -235,5 +337,70 @@ mod tests {
             },
             Pt { x: -5.0, y: 10.0 }
         );
+    }
+
+    #[kithara::test]
+    fn a_list_that_draws_nothing_inks_nothing() {
+        assert_eq!(ink(&DrawListBuilder::default().finish()), None);
+    }
+
+    #[kithara::test]
+    fn a_filled_rectangle_inks_itself() {
+        let mut list = DrawListBuilder::default();
+        list.fill_rect(BOX, paint());
+
+        assert_eq!(ink(&list.finish()), Some(BOX));
+    }
+
+    /// Half a pen sits either side of the line it draws, so a stroked shape
+    /// covers more than the shape does.
+    #[kithara::test]
+    fn a_stroke_inks_half_its_pen_past_the_shape() {
+        let mut list = DrawListBuilder::default();
+        list.stroke_rounded_rect(BOX, 0.0, paint(), 4.0);
+
+        let Some(inked) = ink(&list.finish()) else {
+            panic!("a stroked rectangle inks something");
+        };
+        assert_eq!(inked.x, BOX.x - 2.0);
+    }
+
+    /// The one case the caller needs: a pose carried the drawing out of the box
+    /// it was handed, and the answer has to follow it rather than stop at the
+    /// box.
+    #[kithara::test]
+    fn a_transformed_list_inks_where_the_transform_put_it() {
+        let mut list = DrawListBuilder::default();
+        list.transformed(Transform::translate(Pt { x: 100.0, y: 0.0 }), |list| {
+            list.fill_rect(BOX, paint());
+        });
+
+        let Some(inked) = ink(&list.finish()) else {
+            panic!("a moved rectangle inks something");
+        };
+        assert_eq!(inked.x, BOX.x + 100.0);
+    }
+
+    #[kithara::test]
+    fn a_list_of_two_shapes_inks_both() {
+        let mut list = DrawListBuilder::default();
+        list.fill_rect(BOX, paint());
+        list.fill_circle(Pt { x: 0.0, y: 0.0 }, 5.0, paint());
+
+        let Some(inked) = ink(&list.finish()) else {
+            panic!("two shapes ink something");
+        };
+        assert_eq!(inked.x, -5.0);
+    }
+
+    /// One opaque colour, because these tests are about where ink lands and
+    /// never about what colour it is.
+    const fn paint() -> Rgba {
+        Rgba {
+            a: 1.0,
+            b: 1.0,
+            g: 1.0,
+            r: 1.0,
+        }
     }
 }

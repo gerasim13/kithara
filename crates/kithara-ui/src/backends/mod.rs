@@ -8,7 +8,7 @@ mod image;
 mod vello;
 
 #[cfg(feature = "iced")]
-pub(crate) use iced_canvas::{font, replay_ordered};
+pub(crate) use iced_canvas::{font, replay_ordered, replay_ordered_in};
 #[cfg(feature = "vello")]
 pub(crate) use image::VelloImageBackend;
 #[cfg(feature = "vello")]

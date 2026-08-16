@@ -17,6 +17,7 @@ pub use image::ImageId;
 pub use ir::{DrawCmd, Geom, Pt, Rect, Rgba, Transform};
 pub use list::{DrawList, DrawListBuilder};
 pub use path::{FillRule, Outline, Path, PoolPath, Verb};
+pub(crate) use place::{ink, union};
 pub use pool::{DrawPools, PoolStats};
 pub use style::{LineCap, LineJoin, MAX_STOPS, Paint, Pen, Stop, Stops, StopsError};
 pub use svg::{SvgError, outline};

@@ -46,17 +46,32 @@ impl<'frame> IcedBackend<'frame> {
 /// directly here: every run of commands goes through a sub-frame too, and the
 /// pastes then land in list order.
 pub(crate) fn replay_ordered(list: &DrawList, frame: &mut Frame, resources: &TextResources) {
-    if let Err(error) = <IcedBackend<'_> as Backend>::CAPS.accepts(Needs::from(list)) {
-        tracing::error!(%error, "the iced backend refused a draw list it cannot draw");
-        return;
-    }
-    let bounds = Rect {
+    let whole = Rect {
         h: frame.height(),
         w: frame.width(),
         x: 0.0,
         y: 0.0,
     };
-    ordered(list, frame, resources, bounds);
+    replay_ordered_in(list, frame, resources, whole);
+}
+
+/// The same, for a frame whose clip does not start at the frame's own origin.
+///
+/// A sub-frame is opened on a region rather than a size, so this backend has to
+/// be told the one its caller opened: read back off the frame it would say
+/// `0, 0`, and a posed control — one whose drawing the pose carried above or
+/// left of its box — would lose exactly the part that left.
+pub(crate) fn replay_ordered_in(
+    list: &DrawList,
+    frame: &mut Frame,
+    resources: &TextResources,
+    region: Rect,
+) {
+    if let Err(error) = <IcedBackend<'_> as Backend>::CAPS.accepts(Needs::from(list)) {
+        tracing::error!(%error, "the iced backend refused a draw list it cannot draw");
+        return;
+    }
+    ordered(list, frame, resources, region);
 }
 
 fn ordered(list: &DrawList, frame: &mut Frame, resources: &TextResources, bounds: Rect) {

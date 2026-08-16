@@ -21,8 +21,8 @@ use crate::{
         button::VisualState,
         painter::{ControlPainter, IndexedVisual},
     },
-    backends::replay_ordered,
-    draw::{DrawList, DrawListBuilder, DrawPools, Rect, Transform},
+    backends::replay_ordered_in,
+    draw::{DrawList, DrawListBuilder, DrawPools, Rect, Transform, ink, union},
     interact::{
         CursorShape, Hit, Hover, Input, Outcome, iced as iced_interact,
         recognizers::{Crossing, Scalar, ScalarState, Span as SpanRecognizer, SpanState, click},
@@ -259,12 +259,45 @@ where
         list: &DrawList,
     ) {
         state.refresh(list);
+        let region = self.region(bounds.size(), list);
+        let inner = Rect {
+            h: region.height,
+            w: region.width,
+            x: region.x,
+            y: region.y,
+        };
         renderer.with_translation(Vector::new(bounds.x, bounds.y), |renderer| {
-            let geometry = state.geometry.draw(renderer, bounds.size(), |frame| {
-                replay_ordered(list, frame, self.text_resources);
+            let geometry = state.geometry.draw_with_bounds(renderer, region, |frame| {
+                replay_ordered_in(list, frame, self.text_resources, inner);
             });
             renderer.draw_geometry(geometry);
         });
+    }
+
+    /// Where this control may put ink, in the coordinates its box was handed.
+    ///
+    /// A painter draws inside its box, so a control no object moved is clipped
+    /// to that box exactly as it always was. A control an object moved, turned
+    /// or scaled is clipped to the box the pose carried that rectangle to,
+    /// which is what the retained host already lets it do: cropping it here
+    /// would drop a travelling control from one host and keep it in the other.
+    fn region(&self, size: IcedSize, list: &DrawList) -> Rectangle {
+        let box_local = Rect {
+            h: size.height,
+            w: size.width,
+            x: 0.0,
+            y: 0.0,
+        };
+        if self.transform.is_identity() {
+            return Rectangle::with_size(size);
+        }
+        let region = ink(list).map_or(box_local, |ink| union(box_local, ink));
+        Rectangle {
+            height: region.h,
+            width: region.w,
+            x: region.x,
+            y: region.y,
+        }
     }
 }
 
