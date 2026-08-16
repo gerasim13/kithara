@@ -7,7 +7,7 @@ mod style;
 pub use self::{
     binding::{AdaptivePolicy, BindingRef, Priority},
     doc::{ChromeStyle, ModuleDoc, ModuleDrop, parse_module},
-    motion::Pose,
+    motion::{Easing, Motion, Pose, Repeat},
     node::ControlNode,
     style::{
         ButtonStyle, ChipStyle, DeckSummaryStyle, FaderStyle, GlyphStyle, IconName, PopoverAlign,

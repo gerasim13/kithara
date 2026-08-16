@@ -6,7 +6,7 @@ use crate::{
     layout::FrameSides,
     module::{
         AdaptivePolicy, BindingRef, ButtonStyle, ChipStyle, ChromeStyle, ControlNode,
-        DeckSummaryStyle, FaderStyle, GlyphStyle, IconName, PopoverAlign, PopoverAt, Pose,
+        DeckSummaryStyle, FaderStyle, GlyphStyle, IconName, Motion, PopoverAlign, PopoverAt, Pose,
         ScalarFormat, TableColumn, TextAlign, TextStyle, Tone, WaveStyle, WindowControlsStyle,
     },
     shader::ShaderSpec,
@@ -56,13 +56,14 @@ pub enum ExpandedNode {
     },
     /// Offsets what its subtree draws, and nothing else.
     ///
-    /// The pose is resolved per frame rather than at compile time, because a
-    /// `phase` endpoint may move it between one frame and the next. Layout,
+    /// The pose is resolved per frame rather than at compile time, because the
+    /// endpoint behind it may move it between one frame and the next. Layout,
     /// addresses, and pointer regions are the child's alone.
     Object {
         pose: Pose,
         to: Option<Pose>,
         phase: Option<Binding>,
+        motion: Option<Motion<Binding>>,
         child: Box<Self>,
     },
     Optional {

@@ -10,7 +10,7 @@ use crate::{
     expand::{Binding, ExpandedNode, SurfaceSpec},
     ids::InternId,
     layout::{Axis, FrameSides},
-    module::{ChromeStyle, PopoverAlign, PopoverAt, Pose, TextAlign},
+    module::{ChromeStyle, Motion, PopoverAlign, PopoverAt, Pose, TextAlign},
     render::{InputOwner, ReadValue, Reads},
     size::{
         Dim, Hidden, SizeSpec, compiled_node_size_with_hidden, effective_size, is_hidden,
@@ -415,9 +415,15 @@ where
             pose,
             to,
             phase,
+            motion,
             child,
         } => {
-            let track = Track(*pose, to.as_ref(), phase.as_ref());
+            let track = Track {
+                from: *pose,
+                to: to.as_ref(),
+                phase: phase.as_ref(),
+                motion: motion.as_ref(),
+            };
             mount_object(track, child, address, context, walk, host)
         }
         ExpandedNode::Control {
@@ -527,9 +533,44 @@ where
         .collect()
 }
 
-/// Where an object starts, where it ends, and what says how far along it is.
+/// Where an object starts, where it ends, and what carries it between them.
 #[derive(Clone, Copy)]
-struct Track<'a>(Pose, Option<&'a Pose>, Option<&'a Binding>);
+struct Track<'a> {
+    from: Pose,
+    to: Option<&'a Pose>,
+    phase: Option<&'a Binding>,
+    motion: Option<&'a Motion<Binding>>,
+}
+
+impl Track<'_> {
+    /// The pose to draw this object at, this frame.
+    ///
+    /// A phase an endpoint answers moves the object between one frame and the
+    /// next; a motion works the same scalar out from the seconds its clock
+    /// hands over. An object with no track, or one nobody drives, sits at the
+    /// pose the document wrote down and stays there.
+    fn resolve(self, walk: Walk<'_>) -> Pose {
+        // Validation refuses an object carrying both, so nothing is chosen
+        // between here; one that somehow held both would sit still.
+        let along = match (self.phase, self.motion) {
+            (Some(phase), None) => scalar(walk, phase),
+            (None, Some(motion)) => scalar(walk, &motion.clock).map(|at| motion.phase_at(at)),
+            (None, None) | (Some(_), Some(_)) => None,
+        };
+        match (self.to, along) {
+            (Some(to), Some(along)) => self.from.between(to, along),
+            _ => self.from,
+        }
+    }
+}
+
+/// One scalar an endpoint answers with, or nothing when it answers otherwise.
+fn scalar(walk: Walk<'_>, binding: &Binding) -> Option<f32> {
+    match resolve(walk.reads, binding, walk.ui)? {
+        ReadValue::Scalar(value) => Some(value.as_()),
+        _ => None,
+    }
+}
 
 /// Composes an object's pose onto whatever its subtree draws.
 ///
@@ -546,20 +587,7 @@ fn mount_object<H>(
 where
     H: Host,
 {
-    let Track(pose, to, phase) = track;
-    // A `phase` an endpoint answers moves the object along its track between
-    // one frame and the next; an object with no track, or one nobody drives,
-    // sits at the pose the document wrote down.
-    let along = phase
-        .and_then(|binding| resolve(walk.reads, binding, walk.ui))
-        .and_then(|value| match value {
-            ReadValue::Scalar(along) => Some(along.as_()),
-            _ => None,
-        });
-    let here = match (to, along) {
-        (Some(to), Some(along)) => pose.between(to, along),
-        _ => pose,
-    };
+    let here = track.resolve(walk);
     expanded(
         child,
         &child_address(address, 0),

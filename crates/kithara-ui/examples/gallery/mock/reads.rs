@@ -57,6 +57,7 @@ pub(crate) struct MockReads {
     toggle_off: bool,
     toggle_on: bool,
     motion_phase: f32,
+    motion_clock: f32,
     vis_phase: f32,
     levels_volume: f64,
     segmented_index: f64,
@@ -127,6 +128,7 @@ impl Default for MockReads {
             tree_rows: Vec::with_capacity(CATALOG.tree.len()),
             tree_visible_indices: Vec::with_capacity(CATALOG.tree.len()),
             motion_phase: Consts::MOTION_START,
+            motion_clock: Consts::MOTION_CLOCK_START,
             vis_levels: [0.66, 0.52],
             vis_phase: 0.0,
             vis_preset: 0,
@@ -374,6 +376,7 @@ impl MockReads {
             "gallery.tab.clock" => self.active_tab == Tab::Clock,
             "gallery.tab.pivot" => self.active_tab == Tab::Pivot,
             "gallery.tab.shader" => self.active_tab == Tab::Shader,
+            "gallery.tab.objects" => self.active_tab == Tab::Objects,
             "gallery.tab.motion" => self.active_tab == Tab::Motion,
             "gallery.module.deck" => self.active_module == ModuleDemo::Deck,
             "gallery.module.deck_micro" => self.active_module == ModuleDemo::DeckMicro,
@@ -389,15 +392,24 @@ impl MockReads {
         match self.active_tab {
             Tab::Stress => self.stress.tick(),
             Tab::Vis => self.tick_vis(),
-            Tab::Motion => self.tick_motion(),
+            Tab::Objects => self.tick_phase(),
+            Tab::Motion => self.tick_clock(),
             _ => {}
         }
     }
 
-    /// One sawtooth from 0 to 1, which is every track on the motion page: the
-    /// objects read the same scalar and each spends it on its own axis.
-    fn tick_motion(&mut self) {
+    /// One sawtooth from 0 to 1, which is every track on the objects page: an
+    /// application that already knows how far along each object is hands the
+    /// number over and the document spends it.
+    fn tick_phase(&mut self) {
         self.motion_phase = (self.motion_phase + Consts::MOTION_STEP).fract();
+    }
+
+    /// Plain seconds, which is all the motion page's application knows: how far
+    /// along that puts each object is the document's business, not its own.
+    fn tick_clock(&mut self) {
+        self.motion_clock =
+            (self.motion_clock + Consts::MOTION_TICK_SECS) % Consts::MOTION_CLOCK_PERIOD;
     }
 
     fn tick_vis(&mut self) {
@@ -506,6 +518,7 @@ impl Reads for MockReads {
             "shader.energy" => ReadValue::Scalar(0.62),
             "shader.level" => ReadValue::Scalar(0.28),
             "gallery.motion.phase" => ReadValue::Scalar(f64::from(self.motion_phase)),
+            "gallery.motion.clock" => ReadValue::Scalar(f64::from(self.motion_clock)),
             "vis.badge" => ReadValue::Bool(true),
             "vis.preset" => ReadValue::Scalar(self.vis_preset.as_()),
             "vis.time" => ReadValue::Scalar(self.vis_time_secs),

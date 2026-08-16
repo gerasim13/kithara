@@ -16,7 +16,7 @@ use super::{
 use crate::{
     error::UiDocError,
     ids::{InternId, Interner, NodeId, SourceUri},
-    module::{BindingRef, ControlNode, PopoverAlign, PopoverAt, Pose, TableColumn},
+    module::{BindingRef, ControlNode, Motion, PopoverAlign, PopoverAt, Pose, TableColumn},
     param::Param,
     registry::EndpointRegistry,
     resolve::ModuleSet,
@@ -426,28 +426,44 @@ fn expand_pressable(
     })
 }
 
+/// Where an object starts, where it ends, and what carries it between them.
+#[derive(Clone, Copy)]
+struct Track<'a> {
+    pose: &'a Pose,
+    to: Option<&'a Pose>,
+    phase: Option<&'a BindingRef>,
+    motion: Option<&'a Motion<BindingRef>>,
+}
+
 /// The pose survives expansion rather than being folded into the control, so
-/// the render pass can move it between frames from whatever `phase` reads.
+/// the render pass can move it between frames from whatever drives it.
 fn expand_object(
     context: &Context<'_>,
     node: &ControlNode,
     id: &NodeId,
-    track: (&Pose, Option<&Pose>, Option<&BindingRef>),
+    track: Track<'_>,
     child: &ControlNode,
     depth: usize,
     machine: &mut Expander<'_, '_>,
 ) -> Result<ExpandedNode, UiDocError> {
     machine.budget.charge(&context.origin)?;
-    let (pose, to, phase) = track;
     let path = child_path(&context.prefix, id);
-    let phase = phase
+    // One endpoint drives an object however it was written: a phase hands the
+    // scalar over, a motion hands over the seconds one is computed from. An
+    // object declaring both is refused before it reaches here.
+    let driver = match (track.phase, track.motion) {
+        (Some(phase), None) => Some(phase),
+        (None, Some(motion)) => Some(&motion.clock),
+        (None, None) | (Some(_), Some(_)) => None,
+    };
+    let driver = driver
         .map(|binding| context.substitute(binding, &path))
         .transpose()?;
     (machine.visitor)(
         ControlSite {
             path: &path,
             control: node,
-            read: phase.as_ref(),
+            read: driver.as_ref(),
             write: None,
             columns: &[],
             columns_state: None,
@@ -458,13 +474,19 @@ fn expand_object(
         },
         &context.origin,
     )?;
+    let driver = driver
+        .as_ref()
+        .map(|binding| intern_binding(machine.interner, binding, &context.origin))
+        .transpose()?;
+    let (phase, motion) = match track.motion {
+        Some(motion) => (None, driver.map(|clock| motion.with_clock(clock))),
+        None => (driver, None),
+    };
     Ok(ExpandedNode::Object {
-        pose: *pose,
-        to: to.copied(),
-        phase: phase
-            .as_ref()
-            .map(|binding| intern_binding(machine.interner, binding, &context.origin))
-            .transpose()?,
+        pose: *track.pose,
+        to: track.to.copied(),
+        phase,
+        motion,
         child: Box::new(walk_child(context, child, 0, depth, machine)?),
     })
 }
@@ -565,44 +587,7 @@ pub(super) fn walk(
     machine: &mut Expander<'_, '_>,
 ) -> Result<ExpandedNode, UiDocError> {
     match node {
-        ControlNode::Row {
-            id,
-            size,
-            gap,
-            pad,
-            pad_x,
-            pad_y,
-            frame,
-            background,
-            background_alpha,
-            active,
-            active_background,
-            frame_color,
-            active_frame_color,
-            write,
-            children,
-        } => {
-            machine.budget.charge(&context.origin)?;
-            let declared = (id.as_ref(), write.as_ref(), active.as_ref());
-            let (surface, active) = container_bindings(context, node, declared, machine)?;
-            Ok(ExpandedNode::Row {
-                active,
-                surface,
-                id: intern_node_id(id.as_ref(), context, machine)?,
-                size: *size,
-                gap: *gap,
-                pad: *pad,
-                pad_x: *pad_x,
-                pad_y: *pad_y,
-                frame: *frame,
-                background: *background,
-                background_alpha: *background_alpha,
-                active_background: *active_background,
-                frame_color: *frame_color,
-                active_frame_color: *active_frame_color,
-                children: walk_children(context, children, depth, machine)?,
-            })
-        }
+        row @ ControlNode::Row { .. } => expand_row(context, row, depth, machine),
         column @ ControlNode::Column { .. } => expand_column(context, column, depth, machine),
         ControlNode::Scroll { id, size, child } => {
             machine.budget.charge(&context.origin)?;
@@ -648,12 +633,18 @@ pub(super) fn walk(
             transform,
             to,
             phase,
+            motion,
             child,
         } => expand_object(
             context,
             node,
             id,
-            (transform, to.as_ref(), phase.as_ref()),
+            Track {
+                pose: transform,
+                to: to.as_ref(),
+                phase: phase.as_ref(),
+                motion: motion.as_ref(),
+            },
             child,
             depth,
             machine,
@@ -711,6 +702,54 @@ pub(super) fn walk(
             )
         }
     }
+}
+
+fn expand_row(
+    context: &Context<'_>,
+    node: &ControlNode,
+    depth: usize,
+    machine: &mut Expander<'_, '_>,
+) -> Result<ExpandedNode, UiDocError> {
+    let ControlNode::Row {
+        id,
+        size,
+        gap,
+        pad,
+        pad_x,
+        pad_y,
+        frame,
+        background,
+        background_alpha,
+        active,
+        active_background,
+        frame_color,
+        active_frame_color,
+        write,
+        children,
+    } = node
+    else {
+        unreachable!("expand_row is called only for a row")
+    };
+    machine.budget.charge(&context.origin)?;
+    let declared = (id.as_ref(), write.as_ref(), active.as_ref());
+    let (surface, active) = container_bindings(context, node, declared, machine)?;
+    Ok(ExpandedNode::Row {
+        active,
+        surface,
+        id: intern_node_id(id.as_ref(), context, machine)?,
+        size: *size,
+        gap: *gap,
+        pad: *pad,
+        pad_x: *pad_x,
+        pad_y: *pad_y,
+        frame: *frame,
+        background: *background,
+        background_alpha: *background_alpha,
+        active_background: *active_background,
+        frame_color: *frame_color,
+        active_frame_color: *active_frame_color,
+        children: walk_children(context, children, depth, machine)?,
+    })
 }
 
 fn expand_column(

@@ -253,7 +253,7 @@ fn subscription(state: &Gallery) -> Subscription<Message> {
     if state.capture.is_none()
         && matches!(
             state.reads.active_tab(),
-            Tab::Stress | Tab::Vis | Tab::Motion
+            Tab::Stress | Tab::Vis | Tab::Objects | Tab::Motion
         )
     {
         Subscription::batch([
@@ -309,7 +309,7 @@ mod tests {
     use kithara_ui::{
         compile::CompiledNode,
         expand::{Binding, BindingKind, ControlSpec, ExpandedNode},
-        module::{ButtonStyle, ChromeStyle, IconName, Pose, WaveStyle},
+        module::{ButtonStyle, ChromeStyle, IconName, Motion, Pose, WaveStyle},
         render::{ControlAction, ReadValue, Reads},
     };
     use num_traits::cast::AsPrimitive;
@@ -594,6 +594,7 @@ mod tests {
                 ("gallery/mixer/item", "activation"),
                 ("gallery/modules/item", "activation"),
                 ("gallery/motion/item", "activation"),
+                ("gallery/objects/item", "activation"),
                 ("gallery/pivot/item", "activation"),
                 ("gallery/shader/item", "activation"),
                 ("gallery/sizes/item", "activation"),
@@ -850,6 +851,7 @@ mod tests {
         pose: Pose,
         to: Option<Pose>,
         phase: Option<&'a str>,
+        motion: Option<Motion<&'a str>>,
     }
 
     fn motion_objects(ui: &CompiledUi) -> Vec<Travel<'_>> {
@@ -859,12 +861,16 @@ mod tests {
                     pose,
                     to,
                     phase,
+                    motion,
                     child,
                 } => {
                     found.push(Travel {
                         pose: *pose,
                         to: *to,
                         phase: phase.as_ref().map(|binding| ui.resolve(binding.key)),
+                        motion: motion
+                            .as_ref()
+                            .map(|motion| motion.with_clock(ui.resolve(motion.clock.key))),
                     });
                     walk(child, ui, found);
                 }
@@ -898,15 +904,25 @@ mod tests {
         found
     }
 
-    fn motion_page() -> CompiledUi {
+    fn page(tab: Tab) -> CompiledUi {
         compile(
-            Tab::Motion.entry(),
+            tab.entry(),
             &resolver(),
             &mock::registry(),
             builtin::skin_doc(),
             &UiConfig::default(),
         )
-        .unwrap_or_else(|error| panic!("the motion page must compile: {error}"))
+        .unwrap_or_else(|error| panic!("the {tab:?} page must compile: {error}"))
+    }
+
+    /// Poses, tracks and the stage that holds them.
+    fn objects_page() -> CompiledUi {
+        page(Tab::Objects)
+    }
+
+    /// The same journey a track makes, declared as a duration and a curve.
+    fn motion_page() -> CompiledUi {
+        page(Tab::Motion)
     }
 
     /// Every stage the page declares, as the number of children sharing its box.
@@ -952,8 +968,8 @@ mod tests {
     /// A stage holding one child says nothing: one child fills its own box in
     /// any container. Overlap is the whole claim, so the page has to make it.
     #[kithara::test]
-    fn the_motion_page_puts_several_children_in_one_box() {
-        let ui = motion_page();
+    fn the_objects_page_puts_several_children_in_one_box() {
+        let ui = objects_page();
 
         let sharing = motion_stages(&ui);
 
@@ -963,8 +979,8 @@ mod tests {
     /// The page exists to show a control being moved, so a version of it with
     /// nothing that travels would capture cleanly and prove nothing.
     #[kithara::test]
-    fn the_motion_page_declares_objects_that_travel() {
-        let ui = motion_page();
+    fn the_objects_page_declares_objects_that_travel() {
+        let ui = objects_page();
 
         let travelling = motion_objects(&ui)
             .iter()
@@ -975,8 +991,8 @@ mod tests {
     }
 
     #[kithara::test]
-    fn the_mock_answers_the_phase_every_motion_track_reads() {
-        let ui = motion_page();
+    fn the_mock_answers_the_phase_every_track_reads() {
+        let ui = objects_page();
         let reads = MockReads::default();
 
         let unanswered: Vec<&str> = motion_objects(&ui)
@@ -993,8 +1009,8 @@ mod tests {
     /// two written poses, and the picture would say nothing about the travel
     /// between them.
     #[kithara::test]
-    fn every_motion_track_is_off_its_written_pose_when_captured() {
-        let ui = motion_page();
+    fn every_track_is_off_its_written_pose_when_captured() {
+        let ui = objects_page();
         let reads = MockReads::default();
 
         let still: Vec<&str> = motion_objects(&ui)
@@ -1009,6 +1025,111 @@ mod tests {
             .collect();
 
         assert_eq!(still, [""; 0]);
+    }
+
+    /// A motion is the other half of the page: an object whose document knows
+    /// how long it takes and which way it turns, rather than being told where
+    /// it is. Without one the page shows only the half that was already there.
+    #[kithara::test]
+    fn the_motion_page_declares_objects_that_move_off_a_clock() {
+        let ui = motion_page();
+
+        let running = motion_objects(&ui)
+            .iter()
+            .filter(|object| object.motion.is_some())
+            .count();
+
+        assert!(running >= 4, "{running} object(s) run off a clock");
+    }
+
+    /// Clockwise and anticlockwise are one field with a sign, not two kinds of
+    /// motion, and the page has to carry both for that to be worth saying.
+    #[kithara::test]
+    fn the_motion_page_turns_one_object_each_way() {
+        let ui = motion_page();
+
+        let turns: Vec<f32> = motion_objects(&ui)
+            .iter()
+            .filter(|object| object.motion.is_some())
+            .filter_map(|object| Some(object.to.as_ref()?.rotation))
+            .filter(|rotation| *rotation != 0.0)
+            .collect();
+
+        assert!(
+            turns.iter().any(|rotation| *rotation > 0.0)
+                && turns.iter().any(|rotation| *rotation < 0.0),
+            "turns are {turns:?}"
+        );
+    }
+
+    #[kithara::test]
+    fn the_mock_answers_the_clock_every_motion_reads() {
+        let ui = motion_page();
+        let reads = MockReads::default();
+
+        let unanswered: Vec<&str> = motion_objects(&ui)
+            .iter()
+            .filter_map(|object| object.motion.as_ref())
+            .map(|motion| motion.clock)
+            .filter(|key| !matches!(reads.get(key), Some(ReadValue::Scalar(_))))
+            .collect();
+
+        assert_eq!(unanswered, [""; 0]);
+    }
+
+    /// A capture never ticks, so every motion is photographed at the one second
+    /// the mock starts from. One still on its near pose would draw exactly what
+    /// an object with no motion draws, and the page would prove nothing by it.
+    /// Arriving is allowed and shown on purpose: that is what `Once` means.
+    #[kithara::test]
+    fn every_motion_has_left_its_near_pose_when_captured() {
+        let ui = motion_page();
+        let reads = MockReads::default();
+
+        let unmoved: Vec<&str> = motion_objects(&ui)
+            .iter()
+            .filter_map(|object| Some((object, object.to.as_ref()?, object.motion.as_ref()?)))
+            .filter_map(|(object, to, motion)| {
+                let ReadValue::Scalar(seconds) = reads.get(motion.clock)? else {
+                    return None;
+                };
+                let here = object.pose.between(to, motion.phase_at(seconds.as_()));
+                (here == object.pose).then_some(motion.clock)
+            })
+            .collect();
+
+        assert_eq!(unmoved, [""; 0]);
+    }
+
+    /// The three repeats exist to be told apart, and they only are because the
+    /// page runs them short enough that one and a half seconds lands each in a
+    /// different place. Equal durations would draw one picture three times.
+    #[kithara::test]
+    fn the_three_repeats_stand_in_three_different_places_when_captured() {
+        let ui = motion_page();
+        let reads = MockReads::default();
+
+        let mut places: Vec<f32> = motion_objects(&ui)
+            .iter()
+            .filter_map(|object| Some((object, object.to.as_ref()?, object.motion.as_ref()?)))
+            .filter(|(_, _, motion)| motion.duration < 2.0)
+            .filter_map(|(object, to, motion)| {
+                let ReadValue::Scalar(seconds) = reads.get(motion.clock)? else {
+                    return None;
+                };
+                Some(
+                    object
+                        .pose
+                        .between(to, motion.phase_at(seconds.as_()))
+                        .position
+                        .0,
+                )
+            })
+            .collect();
+        places.sort_unstable_by(f32::total_cmp);
+        places.dedup();
+
+        assert_eq!(places.len(), 3, "the repeats stand at {places:?}");
     }
 
     #[kithara::test]

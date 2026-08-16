@@ -171,6 +171,10 @@ pub enum UiDocError {
         path: String,
         child: &'static str,
     },
+    #[error(
+        "{origin}: Object at {path} declares both phase and motion; a motion computes the phase, so one pose cannot carry both"
+    )]
+    ObjectDrivenTwice { origin: SourceUri, path: String },
     #[error("{origin}: compiled node count {count} exceeds limit {max}")]
     NodesExceeded {
         origin: SourceUri,

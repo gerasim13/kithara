@@ -4256,7 +4256,7 @@ mod tests {
         assert_eq!(ui.resolve(*module), "gallery-nav");
         let mut components = Vec::new();
         claimed_components(root, &mut components);
-        assert_eq!(components, ["activation"; 22]);
+        assert_eq!(components, ["activation"; 23]);
 
         let full = super::super::node::render_compiled(&ui.root, &ui, &reads, builtin::skin());
         let full_tree = Tree::new(full.as_widget());
@@ -4305,6 +4305,7 @@ mod tests {
                 "gallery/clock/item",
                 "gallery/pivot/item",
                 "gallery/shader/item",
+                "gallery/objects/item",
                 "gallery/motion/item",
             ]
         );

@@ -21,11 +21,12 @@ pub(super) enum Tab {
     Clock,
     Pivot,
     Shader,
+    Objects,
     Motion,
 }
 
 impl Tab {
-    pub(super) const ALL: [Self; 22] = [
+    pub(super) const ALL: [Self; 23] = [
         Self::Atoms,
         Self::Buttons,
         Self::Faders,
@@ -47,6 +48,7 @@ impl Tab {
         Self::Clock,
         Self::Pivot,
         Self::Shader,
+        Self::Objects,
         Self::Motion,
     ];
 
@@ -73,6 +75,7 @@ impl Tab {
             Self::Clock => "gallery-clock.klayout.ron",
             Self::Pivot => "gallery-pivot.klayout.ron",
             Self::Shader => "gallery-shader.klayout.ron",
+            Self::Objects => "gallery-objects.klayout.ron",
             Self::Motion => "gallery-motion.klayout.ron",
         }
     }
@@ -100,7 +103,8 @@ impl Tab {
             Self::Clock => 18,
             Self::Pivot => 19,
             Self::Shader => 20,
-            Self::Motion => 21,
+            Self::Objects => 21,
+            Self::Motion => 22,
         }
     }
 }
@@ -135,6 +139,7 @@ impl TryFrom<&str> for Tab {
             "clock" => Ok(Self::Clock),
             "pivot" => Ok(Self::Pivot),
             "shader" => Ok(Self::Shader),
+            "objects" => Ok(Self::Objects),
             "motion" => Ok(Self::Motion),
             _ => Err(()),
         }

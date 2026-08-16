@@ -11,6 +11,16 @@ impl Consts {
     /// phase both hosts are photographed at. Away from either end, so the page
     /// compares turned, scaled and moved ink rather than four identities.
     pub(super) const MOTION_START: f32 = 0.35;
+    /// Seconds the motion clock advances per 16 ms tick.
+    pub(super) const MOTION_TICK_SECS: f32 = 0.016;
+    /// The second a capture photographs the motion row at. The row's tracks all
+    /// run four seconds, so this is the same 0.35 of the way along as
+    /// [`Self::MOTION_START`]: the page shows one journey said two ways.
+    pub(super) const MOTION_CLOCK_START: f32 = 1.4;
+    /// Where the mock clock turns over, being the common period of every motion
+    /// on the page, so a gallery left running keeps its seconds exact in `f32`.
+    /// A real application hands over its own monotonic time and never wraps.
+    pub(super) const MOTION_CLOCK_PERIOD: f32 = 8.0;
     pub(super) const BPM_VALUE: f32 = 70.0;
     pub(super) const CUES: &[f32] = &[0.27, 0.31];
     pub(super) const DURATION_SECS: f64 = 360.0;

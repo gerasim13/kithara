@@ -88,4 +88,23 @@
 # it to 107 — two plainly different pictures, both inside this budget. The band
 # is identical now because both hosts resolve the box the same way, not because
 # the share went down.
-21-motion.png               2
+#
+# That page is 21-objects.png as of 2026-08-16, having been 21-motion.png until
+# motion earned a page of its own. Trying to add a motion row to it is what
+# forced the split: the column ran past 720 logical pixels, the immediate host
+# dropped its last note and the retained one kept it, and the whole page still
+# measured 1.4% — the third time in this campaign that the share stayed inside
+# budget while the two pictures plainly differed.
+21-objects.png              2
+
+# Motion, 2026-08-16, at 1.5% of pixels and 1.4% of ink. Ten objects off one
+# clock: two chips turning opposite ways, one ping-ponging down, four travelling
+# one distance along four curves, and three showing what each repeat has done by
+# a second and a half. The phases are worked out in the neutral facade, so both
+# hosts are handed the same numbers and place the same geometry; the two turned
+# chips were read off the captures as mirror images at the same slant before
+# this number was written down, because a share this size has twice hidden a
+# page the two hosts drew differently. What is left is rasteriser noise on chip
+# outlines and text, and turned text has more edge per glyph than upright text,
+# which is why this page sits a little above the 1.2% the objects page reads.
+22-motion.png               2

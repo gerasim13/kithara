@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{
     binding::{AdaptivePolicy, BindingRef},
-    motion::Pose,
+    motion::{Motion, Pose},
     style::{
         ButtonStyle, ChipStyle, DeckSummaryStyle, FaderStyle, GlyphStyle, IconName, PopoverAlign,
         PopoverAt, ScalarFormat, TableColumn, TextAlign, TextStyle, Tone, WaveStyle,
@@ -142,6 +142,12 @@ pub enum ControlNode {
         /// Lottie reads its progress from.
         #[serde(default)]
         phase: Option<BindingRef>,
+        /// A duration, a curve and a repeat, run off a clock endpoint, for an
+        /// object whose document knows how it moves rather than being told
+        /// where it is. This resolves to the same scalar `phase` carries, so an
+        /// object declaring both is refused rather than ranked.
+        #[serde(default)]
+        motion: Option<Motion<BindingRef>>,
         child: Box<Self>,
     },
     /// Gives every child the whole box, in document order.

@@ -43,7 +43,8 @@
             Include(id: "clock", source: "nav/item.kmodule.ron", with: { "icon": "Clock", "label": "CLOCK", "tab": "gallery.tab.clock" }),
             Include(id: "pivot", source: "nav/item.kmodule.ron", with: { "icon": "Activity", "label": "PIVOT", "tab": "gallery.tab.pivot" }),
             Include(id: "shader", source: "nav/item.kmodule.ron", with: { "icon": "Waveform", "label": "SHADER", "tab": "gallery.tab.shader" }),
-            Include(id: "motion", source: "nav/item.kmodule.ron", with: { "icon": "Activity", "label": "MOTION", "tab": "gallery.tab.motion" }),
+            Include(id: "objects", source: "nav/item.kmodule.ron", with: { "icon": "Activity", "label": "OBJECTS", "tab": "gallery.tab.objects" }),
+            Include(id: "motion", source: "nav/item.kmodule.ron", with: { "icon": "Clock", "label": "MOTION", "tab": "gallery.tab.motion" }),
         ],
     ),
 )

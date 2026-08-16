@@ -283,11 +283,13 @@ fn walk_module(
             id,
             transform,
             to,
+            phase,
+            motion,
             child,
-            ..
         } => {
             let here = path.push(format!("Object({id})"));
             record(&id.0, &here, origin, seen)?;
+            one_driver(phase.is_some(), motion.is_some(), &here, origin)?;
             single_box(transform, to.as_ref(), child, &here, origin)?;
             walk_module(child, &here, origin, seen, Sibling::Only)
         }
@@ -326,6 +328,27 @@ fn walk_module(
             Ok(())
         }
     }
+}
+
+/// One pose, one thing driving it.
+///
+/// A motion is not an alternative to a phase, it is a way of computing one, so
+/// an object carrying both would leave two answers for a single scalar with no
+/// honest rule for choosing between them. Refusing here is what keeps the
+/// render pass from having to invent one.
+fn one_driver(
+    phase: bool,
+    motion: bool,
+    path: &NodePath,
+    origin: &SourceUri,
+) -> Result<(), UiDocError> {
+    if phase && motion {
+        return Err(UiDocError::ObjectDrivenTwice {
+            origin: origin.clone(),
+            path: path.render(),
+        });
+    }
+    Ok(())
 }
 
 /// What a pose can reach.
@@ -1097,6 +1120,34 @@ mod tests {
         let text = r#"(schema: "kithara.module", version: 1, id: "m",
             root: Object(id: "shift", transform: (position: (8.0, 0.0)),
                 child: Stage(id: "scene", children: [Button(id: "play", label: "PLAY")])))"#;
+        let doc = parse_module(text, &origin()).unwrap();
+
+        assert!(check_module_node_ids(&doc, &origin()).is_ok());
+    }
+
+    /// A motion computes the phase, so an object carrying both leaves one pose
+    /// with two answers. There is no honest rule for ranking them, and inventing
+    /// one is what refusing here avoids.
+    #[kithara::test]
+    fn an_object_may_not_be_driven_twice() {
+        let text = r#"(schema: "kithara.module", version: 1, id: "m",
+            root: Object(id: "spin", to: (rotation: 360.0),
+                phase: Model(id: "app.phase"),
+                motion: (clock: Model(id: "app.time"), duration: 4.0),
+                child: Button(id: "play", label: "PLAY")))"#;
+        let doc = parse_module(text, &origin()).unwrap();
+
+        let error = check_module_node_ids(&doc, &origin()).unwrap_err();
+
+        assert!(matches!(error, UiDocError::ObjectDrivenTwice { .. }));
+    }
+
+    #[kithara::test]
+    fn an_object_may_be_driven_by_a_motion_alone() {
+        let text = r#"(schema: "kithara.module", version: 1, id: "m",
+            root: Object(id: "spin", to: (rotation: 360.0),
+                motion: (clock: Model(id: "app.time"), duration: 4.0, repeat: Loop),
+                child: Button(id: "play", label: "PLAY")))"#;
         let doc = parse_module(text, &origin()).unwrap();
 
         assert!(check_module_node_ids(&doc, &origin()).is_ok());
