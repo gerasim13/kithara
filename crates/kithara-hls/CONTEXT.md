@@ -173,6 +173,12 @@ retirement is generation-checked (`retire_seek_projection`) or position-checked
 (`variant/map/media.rs`, bisect over the segment decode-time table) is the sole `time → segment`
 mapping, so a variant switch and a plain seek to the same time cannot diverge.
 
+The fetch plan (`variant/flow/plan_queue.rs`) follows the same produce-core split: the deque is
+mutated under its mutex by planner sites only, every mutation updates a lock-free membership
+mirror (atomics) while still holding the lock, and `fetch_is_planned` — reached from `phase_at` on
+the produce core — reads only the mirror, never the lock. A membership answer may be a mutation
+early or late relative to the deque, the same temporal slack a racing lock acquisition always had.
+
 ## Seek and wait_range Contract
 
 `Source::wait_range(start..end, timeout)` has two modes selected by `timeout`:

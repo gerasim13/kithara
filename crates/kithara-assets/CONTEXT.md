@@ -157,7 +157,12 @@ aggregate `AvailabilityIndex` keyed by the `asset_root` and relative path alread
   the audio worker's produce path asks `contains_range` from inside its forbid-blocking region (the
   HLS `phase_at` cascade), so readers load `arc-swap` snapshots and writers publish new ones. A
   reader racing a writer sees the state from a moment ago, which for "is this byte on disk yet" is
-  indistinguishable from having asked a moment ago. A resource the aggregate does not know is
+  indistinguishable from having asked a moment ago. Reclamation follows the same split: a reader
+  racing a writer can end up the last owner of a replaced snapshot generation, so produce-path
+  reads never drop the snapshots they load — they park them in a bounded retire bin and the write
+  side (download and deletion paths) drains it and pays the frees; overflow leaks instead of
+  freeing on the reader, and only happens while writers are idle, i.e. while generations are not
+  being replaced. A resource the aggregate does not know is
   absent and gets refetched — the same verdict `is_confirmed` gives the acquire path.
   `resource_state` is the control-side inspection API and may block.
 - **Persisted** in two tiers (below), and it is the **authority on what survives a restart**. A
