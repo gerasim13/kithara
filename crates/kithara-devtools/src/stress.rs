@@ -523,6 +523,7 @@ fn run_report(args: &ReportArgs, ctx: &Ctx) -> Result<()> {
     let mut sections = String::new();
     let mut measured = Vec::new();
     let mut commanded = Vec::new();
+    let mut excluded = Vec::new();
     let mut exit_codes = Vec::new();
     let mut failure = None;
     for lane_name in &lanes {
@@ -554,20 +555,24 @@ fn run_report(args: &ReportArgs, ctx: &Ctx) -> Result<()> {
             ReportExpectation::new(&ctx.config, config, lane_name, mode, &filter, count)?;
         let checked = verify_manifest(args, &expectation, &paths.manifest);
         let trusted = checked.verdict.is_ok();
+        let excluded_because = exclusion_reason(trusted, &lane);
         exit_codes.push(checked.exit_code);
         let body = with_provenance(lane.markdown, &checked.verdict, &checked.details)?;
         writeln!(sections, "\n# Lane `{}`\n", markdown_cell(lane_name))?;
         sections.push_str(&body);
-        // Only a lane that verified against its expected identity AND read
-        // valid evidence may stand in a comparison. Numbers from one that did
-        // not are of unknown origin, and putting them beside trustworthy ones
-        // is how a campaign reports a difference between lanes that is really
-        // a difference between runs — or counts an invalid lane as evidence.
-        if trusted && lane.readable {
-            match lane.attempts {
+        // Only a lane that verified against its expected identity, read valid
+        // evidence, AND accounted for every requested iteration may stand in a
+        // comparison. Numbers from one that did not are of unknown origin, and
+        // putting them beside trustworthy ones is how a campaign reports a
+        // difference between lanes that is really a difference between runs.
+        // A lane short of its own request measures a smaller campaign than the
+        // one that was asked for, so its rate belongs to a different question.
+        match excluded_because {
+            Some(reason) => excluded.push((lane_name.clone(), reason)),
+            None => match lane.attempts {
                 Some(rate) => commanded.push((lane_name.clone(), rate)),
                 None => measured.push((lane_name.clone(), lane.rates)),
-            }
+            },
         }
         let lane_failure = choose_failure(lane.verdict, checked.verdict, Ok(()), Ok(()));
         if let Some(error) = lane_failure
@@ -578,7 +583,8 @@ fn run_report(args: &ReportArgs, ctx: &Ctx) -> Result<()> {
     }
 
     let campaign = verify_campaign_result(args.execute_result, &exit_codes);
-    let mut document = stress_report::render_lane_comparison(&measured, &commanded, lanes.len());
+    let mut document =
+        stress_report::render_lane_comparison(&measured, &commanded, &excluded, lanes.len());
     if let Err(error) = &campaign {
         let _ = writeln!(
             document,
@@ -597,6 +603,24 @@ fn run_report(args: &ReportArgs, ctx: &Ctx) -> Result<()> {
 /// rejected. That is exactly the number a one-shot gate cannot produce: a
 /// sanitizer that aborts on one attempt in two is green half the time, and
 /// half the time is what has kept its defect open.
+/// Why this lane may not stand beside the others, or `None` when it may.
+///
+/// Named rather than counted: "one lane was dropped" sends the reader back to
+/// the per-lane sections to work out which one and why, and that is the join
+/// the campaign document exists to spare them.
+fn exclusion_reason(trusted: bool, lane: &stress_report::LaneReport) -> Option<String> {
+    if !trusted {
+        return Some("failed provenance against its expected identity".to_owned());
+    }
+    if !lane.readable {
+        return Some("evidence artifact missing or invalid".to_owned());
+    }
+    if !lane.complete {
+        return Some("incomplete evidence: fewer iterations than requested".to_owned());
+    }
+    None
+}
+
 fn command_lane_report(
     paths: &Paths,
     expected: usize,
@@ -623,6 +647,7 @@ fn command_lane_report(
                 attempts: None,
                 verdict: Err(NotClean::reported("stress evidence")),
                 readable: false,
+                complete: false,
             };
         }
     };
@@ -668,6 +693,7 @@ fn command_lane_report(
         }),
         verdict,
         readable: true,
+        complete: observed == expected,
     }
 }
 

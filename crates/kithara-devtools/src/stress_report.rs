@@ -222,6 +222,11 @@ pub(crate) struct LaneReport {
     /// comparison — counting it as trustworthy is how a campaign summary
     /// contradicts its own per-lane verdicts.
     pub(crate) readable: bool,
+    /// Whether every requested iteration is accounted for. A readable lane can
+    /// still fall short of its own request — quarantined repeats, truncated
+    /// output, a run that stopped early — and a rate measured over the
+    /// survivors answers a different question than the campaign asked.
+    pub(crate) complete: bool,
 }
 
 /// How often one test failed in one lane.
@@ -240,6 +245,7 @@ pub(crate) fn lane_report(args: &StressReportArgs) -> Result<LaneReport> {
             attempts: None,
             verdict: Err(NotClean::reported("stress evidence")),
             readable: false,
+            complete: false,
         })
     };
     let inventory = match read_inventory(&args.inventory) {
@@ -351,6 +357,7 @@ pub(crate) fn lane_report(args: &StressReportArgs) -> Result<LaneReport> {
         attempts: None,
         verdict,
         readable: true,
+        complete: report.complete,
     })
 }
 
@@ -556,9 +563,13 @@ fn validate_expected_count(expected_count: usize) -> Result<()> {
 /// Lanes measured by attempts are reported separately. Their verdict is one
 /// exit code per attempt, so they have no per-test rate to place in the table
 /// above and would otherwise be a column of tests that were never selected.
+/// Lanes kept out of the comparison are named with the reason that kept them
+/// out. A campaign that silently drops a lane reads as though it covered every
+/// lane it requested, which is the one thing the summary must never imply.
 pub(crate) fn render_lane_comparison(
     lanes: &[(String, BTreeMap<TestId, LaneRate>)],
     commanded: &[(String, LaneRate)],
+    excluded: &[(String, String)],
     requested: usize,
 ) -> String {
     let mut out = String::from("# Stress campaign\n");
@@ -568,9 +579,30 @@ pub(crate) fn render_lane_comparison(
         "- Lanes with trustworthy evidence: `{}`",
         lanes.len() + commanded.len()
     );
+    render_excluded_lanes(&mut out, excluded);
     render_per_test_comparison(&mut out, lanes);
     render_attempt_comparison(&mut out, commanded);
     out
+}
+
+fn render_excluded_lanes(out: &mut String, excluded: &[(String, String)]) {
+    if excluded.is_empty() {
+        return;
+    }
+    let _ = writeln!(
+        out,
+        "- Lanes excluded from comparison: `{}`",
+        excluded.len()
+    );
+    out.push_str("\n## Lanes excluded from comparison\n\n| lane | reason |\n|---|---|\n");
+    for (name, reason) in excluded {
+        let _ = writeln!(
+            out,
+            "| `{}` | {} |",
+            markdown_cell(name),
+            markdown_cell(reason)
+        );
+    }
 }
 
 fn render_attempt_comparison(out: &mut String, commanded: &[(String, LaneRate)]) {
@@ -1650,6 +1682,7 @@ mod tests {
                 lane("off", &[("agreed", 5, 10), ("disputed", 9, 10)]),
             ],
             &[],
+            &[],
             2,
         );
 
@@ -1666,6 +1699,7 @@ mod tests {
                 lane("off", &[("shared", 1, 10)]),
             ],
             &[],
+            &[],
             2,
         );
 
@@ -1674,7 +1708,7 @@ mod tests {
 
     #[test]
     fn a_campaign_with_one_trustworthy_lane_refuses_to_compare() {
-        let table = render_lane_comparison(&[lane("on", &[("solo", 1, 10)])], &[], 2);
+        let table = render_lane_comparison(&[lane("on", &[("solo", 1, 10)])], &[], &[], 2);
 
         assert!(table.contains("needs two verified lanes"), "{table}");
     }
@@ -1694,6 +1728,7 @@ mod tests {
                 lane("off", &[("solo", 0, 10)]),
             ],
             &[attempted("rtsan", 1, 4)],
+            &[],
             3,
         );
 
@@ -1703,12 +1738,54 @@ mod tests {
 
     #[test]
     fn a_lane_measured_by_attempts_counts_as_trustworthy_evidence() {
-        let table = render_lane_comparison(&[], &[attempted("rtsan", 0, 2)], 1);
+        let table = render_lane_comparison(&[], &[attempted("rtsan", 0, 2)], &[], 1);
 
         assert!(
             table.contains("Lanes with trustworthy evidence: `1`"),
             "{table}"
         );
+    }
+
+    /// The campaign of 2026-08-16 quarantined thirty-three of one lane's fifty
+    /// repeats as environment poisoning, reported that lane `INCOMPLETE`, and
+    /// still counted it among the six lanes with trustworthy evidence.
+    #[test]
+    fn an_excluded_lane_is_kept_out_of_the_trustworthy_count() {
+        let table = render_lane_comparison(
+            &[
+                lane("on", &[("solo", 1, 10)]),
+                lane("off", &[("solo", 0, 10)]),
+            ],
+            &[],
+            &[(
+                "flash-off".to_owned(),
+                "incomplete evidence: fewer iterations than requested".to_owned(),
+            )],
+            3,
+        );
+
+        assert!(
+            table.contains("Lanes with trustworthy evidence: `2`"),
+            "{table}"
+        );
+    }
+
+    #[test]
+    fn an_excluded_lane_is_named_with_its_reason() {
+        let table = render_lane_comparison(
+            &[
+                lane("on", &[("solo", 1, 10)]),
+                lane("off", &[("solo", 0, 10)]),
+            ],
+            &[],
+            &[(
+                "flash-off".to_owned(),
+                "incomplete evidence: fewer iterations than requested".to_owned(),
+            )],
+            3,
+        );
+
+        assert!(table.contains("flash-off"), "{table}");
     }
 
     #[test]
