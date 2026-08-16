@@ -399,6 +399,7 @@ uuid = { version = "1", features = ["v5"] }
 # against the host dependency.
 # The feature is off because the painter encodes a scene and rasterises nothing; enabling it
 # would add a second wgpu major beside the 27 that iced already brings.
+velato = { version = "0.8", default-features = false }
 vello = { version = "0.6", default-features = false }
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"

@@ -140,6 +140,36 @@ impl DrawListBuilder {
         pen
     }
 
+    /// The paint a fill is drawn with once the transform in force is resolved
+    /// into it.
+    ///
+    /// A ramp's geometry is in the same pixels as the shape it fills — that is
+    /// what lets every backend resolve the same colour at the same place — so a
+    /// transform that moves the shape has to move the ramp with it. A radial's
+    /// radius scales the way a pen's width does, because there is one number
+    /// and nowhere to put a second.
+    fn painted<P: Into<Paint>>(&self, paint: P) -> Paint {
+        let by = self.transform;
+        match paint.into() {
+            paint if by.is_identity() => paint,
+            Paint::Solid(color) => Paint::Solid(color),
+            Paint::Linear { from, stops, to } => Paint::Linear {
+                from: by.apply(from),
+                stops,
+                to: by.apply(to),
+            },
+            Paint::Radial {
+                center,
+                radius,
+                stops,
+            } => Paint::Radial {
+                center: by.apply(center),
+                radius: radius * by.length_scale(),
+                stops,
+            },
+        }
+    }
+
     /// Builds a path with the same allocation owner as this list.
     #[must_use]
     pub fn path<Verbs>(&self, rule: FillRule, verbs: Verbs) -> Path
@@ -169,10 +199,8 @@ impl DrawListBuilder {
 
     pub fn fill_circle<P: Into<Paint>>(&mut self, center: Pt, radius: f32, paint: P) {
         let geom = self.placed(Geom::Circle { center, radius });
-        self.commands.push(DrawCmd::Fill {
-            geom,
-            paint: paint.into(),
-        });
+        let paint = self.painted(paint);
+        self.commands.push(DrawCmd::Fill { geom, paint });
     }
 
     pub fn stroke_circle<P: Into<Pen>>(&mut self, center: Pt, radius: f32, color: Rgba, pen: P) {
@@ -209,10 +237,8 @@ impl DrawListBuilder {
 
     pub fn fill_rect<P: Into<Paint>>(&mut self, rect: Rect, paint: P) {
         let geom = self.placed(Geom::Rect(rect));
-        self.commands.push(DrawCmd::Fill {
-            geom,
-            paint: paint.into(),
-        });
+        let paint = self.painted(paint);
+        self.commands.push(DrawCmd::Fill { geom, paint });
     }
 
     pub fn fill_rounded_rect<P: Into<Paint>>(&mut self, rect: Rect, radius: f32, paint: P) {
@@ -221,10 +247,8 @@ impl DrawListBuilder {
         } else {
             Geom::RoundedRect { rect, radius }
         });
-        self.commands.push(DrawCmd::Fill {
-            geom,
-            paint: paint.into(),
-        });
+        let paint = self.painted(paint);
+        self.commands.push(DrawCmd::Fill { geom, paint });
     }
 
     /// Adds a picture at its destination rectangle.
@@ -263,10 +287,8 @@ impl DrawListBuilder {
             None => path,
         };
         let geom = self.placed(Geom::Path(path));
-        self.commands.push(DrawCmd::Fill {
-            geom,
-            paint: paint.into(),
-        });
+        let paint = self.painted(paint);
+        self.commands.push(DrawCmd::Fill { geom, paint });
     }
 
     /// Strokes an outline no named shape covers: a curve open at both ends,
@@ -306,7 +328,7 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::draw::{LineCap, LineJoin};
+    use crate::draw::{LineCap, LineJoin, Stop, Stops};
 
     const fn ink() -> Rgba {
         Rgba {
@@ -323,6 +345,30 @@ mod tests {
             w: 20.0,
             x: 4.0,
             y: 8.0,
+        }
+    }
+
+    fn ramp() -> Paint {
+        let stop = |offset| Stop {
+            color: ink(),
+            offset,
+        };
+        Paint::Linear {
+            from: Pt { x: 0.0, y: 0.0 },
+            stops: Stops::new(&[stop(0.0), stop(1.0)])
+                .unwrap_or_else(|error| panic!("two stops in order are a ramp: {error}")),
+            to: Pt { x: 10.0, y: 0.0 },
+        }
+    }
+
+    /// Where a ramp starts and ends, once a list has drawn it.
+    fn ramp_ends(list: &DrawList) -> (Pt, Pt) {
+        match only(list) {
+            DrawCmd::Fill {
+                paint: Paint::Linear { from, to, .. },
+                ..
+            } => (*from, *to),
+            other => panic!("a ramp was drawn, not {other:?}"),
         }
     }
 
@@ -483,6 +529,38 @@ mod tests {
         rounded.fill_rounded_rect(rect, 0.0, color);
 
         assert_eq!(rounded.finish(), expected.finish());
+    }
+
+    /// A ramp's geometry is in the same pixels as the shape it fills, which is
+    /// what lets every backend resolve the same colour at the same place. A
+    /// transform that moves the shape has to move the ramp with it, or the
+    /// shape lands one place and its colours another — which is what a Lottie
+    /// artwork drew before this: a two-colour ramp painted flat, because the
+    /// ramp stayed at the origin while its rectangle moved 150 across.
+    #[kithara::test]
+    fn a_ramp_moves_with_the_shape_it_fills() {
+        let mut list = DrawListBuilder::default();
+        list.transformed(Transform::translate(Pt { x: 30.0, y: 4.0 }), |list| {
+            list.fill_rect(shape(), ramp());
+        });
+
+        assert_eq!(
+            ramp_ends(&list.finish()),
+            (Pt { x: 30.0, y: 4.0 }, Pt { x: 40.0, y: 4.0 })
+        );
+    }
+
+    /// The list resolves a transform into the points it draws, so a ramp under
+    /// no transform is the one the caller wrote.
+    #[kithara::test]
+    fn a_ramp_under_no_transform_is_left_alone() {
+        let mut list = DrawListBuilder::default();
+        list.fill_rect(shape(), ramp());
+
+        assert_eq!(
+            ramp_ends(&list.finish()),
+            (Pt { x: 0.0, y: 0.0 }, Pt { x: 10.0, y: 0.0 })
+        );
     }
 
     #[kithara::test]

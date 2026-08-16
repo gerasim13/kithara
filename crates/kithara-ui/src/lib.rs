@@ -17,6 +17,8 @@ pub mod geom;
 pub mod ids;
 #[cfg(feature = "render")]
 pub mod interact;
+#[cfg(feature = "lottie")]
+pub mod lottie;
 pub(crate) mod mount;
 pub mod registry;
 #[cfg(feature = "render")]

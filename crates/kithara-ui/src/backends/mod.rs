@@ -4,6 +4,8 @@ pub(crate) mod conformance;
 mod iced_canvas;
 #[cfg(feature = "vello")]
 mod image;
+#[cfg(all(test, feature = "lottie", feature = "masonry"))]
+mod lottie;
 #[cfg(feature = "vello")]
 mod vello;
 

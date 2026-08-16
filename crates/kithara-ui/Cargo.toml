@@ -32,6 +32,9 @@ render = [
     "dep:unicode-segmentation",
 ]
 iced = ["render", "dep:iced", "iced/advanced"]
+# Lottie artwork. Opt-in because velato pulls vello's encoder in with it, which
+# the default set has no use for.
+lottie = ["render", "dep:serde_json", "dep:velato"]
 vello = [
     "render",
     "dep:kithara-platform",
@@ -64,10 +67,12 @@ pollster = { workspace = true, optional = true }
 ron = { workspace = true }
 roxmltree = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true, optional = true }
 skrifa = { workspace = true, optional = true }
 thiserror = { workspace = true }
 tracing = { workspace = true, optional = true }
 unicode-segmentation = { workspace = true, optional = true }
+velato = { workspace = true, optional = true }
 vello = { workspace = true, optional = true }
 winit = { workspace = true, optional = true }
 

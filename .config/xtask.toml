@@ -423,6 +423,7 @@ prefix_args = [
 program = "cargo"
 default_features = [
   "kithara-ui/gpu",
+  "kithara-ui/lottie",
   "kithara-ui/masonry",
   "kithara-app/masonry",
 ]
@@ -445,7 +446,7 @@ suffix_args = [
 
 [test.lanes.ui-doc]
 program = "cargo"
-default_features = ["kithara-ui/gpu", "kithara-ui/masonry"]
+default_features = ["kithara-ui/gpu", "kithara-ui/lottie", "kithara-ui/masonry"]
 default_flash = false
 prefix_args = ["test", "--doc", "-p", "kithara-ui"]
 

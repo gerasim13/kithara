@@ -5259,10 +5259,12 @@ dependencies = [
  "ron",
  "roxmltree",
  "serde",
+ "serde_json",
  "skrifa 0.37.0",
  "thiserror 2.0.19",
  "tracing",
  "unicode-segmentation",
+ "velato",
  "vello",
  "winit",
 ]
@@ -9186,7 +9188,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "once_cell",
  "rustix 1.1.4",
  "windows-sys 0.61.2",
@@ -10381,6 +10383,20 @@ name = "vcpkg"
 version = "0.2.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "accd4ea62f7bb7a82fe23066fb0957d48ef677f6eeb8215f372f52e48bb32426"
+
+[[package]]
+name = "velato"
+version = "0.8.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6ee24c08a599d19676b69377f7d233792ce853d10db1fc3f55a44826342e0911"
+dependencies = [
+ "once_cell",
+ "serde",
+ "serde_json",
+ "serde_repr",
+ "thiserror 2.0.19",
+ "vello",
+]
 
 [[package]]
 name = "vello"
