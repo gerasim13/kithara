@@ -139,8 +139,9 @@ impl HlsVariant {
         if !deferred.is_empty() {
             let mut queue = self.flow.queue.lock();
             for planned in deferred.into_iter().rev() {
-                // An emit failure drops the claim, whose own Drop already
-                // requeues the entry — never double-plan it.
+                // A concurrent claim's Drop may have requeued this entry
+                // between the pop above and this write-back (a downloader
+                // teardown racing the dispatch) — never double-plan it.
                 if !queue.contains(&planned) {
                     queue.push_front(planned);
                 }
