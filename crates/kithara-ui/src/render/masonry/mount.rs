@@ -525,6 +525,7 @@ pub(super) enum NodeLayout {
     Flex(super::flex::Flex),
     Scroll(Viewport),
     Stack,
+    Stage,
 }
 
 impl NodeLayout {
@@ -546,13 +547,14 @@ impl NodeLayout {
             }
             Self::Scroll(viewport) => viewport.layout(ctx, children, limits, declared),
             Self::Stack => stack(ctx, children, limits, declared),
+            Self::Stage => stage(ctx, children, limits, declared),
         }
     }
 
     pub(super) const fn leaf(&mut self) -> Option<&mut Leaf> {
         match self {
             Self::Leaf(leaf) => Some(leaf),
-            Self::Flex(_) | Self::Scroll(_) | Self::Stack => None,
+            Self::Flex(_) | Self::Scroll(_) | Self::Stack | Self::Stage => None,
         }
     }
 
@@ -560,7 +562,7 @@ impl NodeLayout {
     pub(super) fn wheel(&mut self, input: Input<'_>) -> bool {
         match self {
             Self::Scroll(viewport) => viewport.wheel(input),
-            Self::Flex(_) | Self::Leaf(_) | Self::Stack => false,
+            Self::Flex(_) | Self::Leaf(_) | Self::Stack | Self::Stage => false,
         }
     }
 
@@ -573,6 +575,39 @@ impl NodeLayout {
     pub(super) fn accepts_text_input(&self) -> bool {
         matches!(self, Self::Leaf(leaf) if leaf.accepts_text_input())
     }
+}
+
+/// A stage sizes itself off its first child, like a stack, and then offers
+/// every child that box **loosely**: a child keeps whatever size it declared
+/// and sits at the box's origin, which is where an object then offsets it from.
+///
+/// This is the whole difference from `stack`, and it is not a detail. A stack
+/// hands its children a tight box because its one child is a popover or a
+/// viewport that must fill it. Handing a stage's children the same tight box
+/// stretches every one of them to the full width and throws away the placement
+/// the document asked for — measured on the gallery's motion page, where the
+/// immediate host drew three sized children and the retained host drew one
+/// stretched chip.
+fn stage(
+    ctx: &mut LayoutCtx<'_>,
+    children: &mut [WidgetPod<Node>],
+    limits: solve::Limits,
+    declared: solve::Size<solve::Length>,
+) -> solve::Size {
+    let inner = normalized(limits.width(declared.width).height(declared.height).loose());
+    let intrinsic = children.first_mut().map_or(solve::Size::ZERO, |first| {
+        Node::set_child_limits(ctx, first, inner);
+        let size = ctx.run_layout(first, &box_constraints(inner));
+        solve::Size::new(size.width.as_(), size.height.as_())
+    });
+    let size = limits.resolve(declared.width, declared.height, intrinsic);
+    let loose = solve::Limits::new(solve::Size::ZERO, size);
+    for child in children {
+        Node::set_child_limits(ctx, child, loose);
+        ctx.run_layout(child, &box_constraints(loose));
+        ctx.place_child(child, Point::ORIGIN);
+    }
+    size
 }
 
 fn stack(

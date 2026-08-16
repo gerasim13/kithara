@@ -227,7 +227,9 @@ impl Node {
     pub(crate) fn shader_declaration(&self) -> Option<ShaderDeclaration> {
         match &self.layout {
             NodeLayout::Leaf(leaf) => leaf.shader_declaration(),
-            NodeLayout::Flex(_) | NodeLayout::Scroll(_) | NodeLayout::Stack => None,
+            NodeLayout::Flex(_) | NodeLayout::Scroll(_) | NodeLayout::Stack | NodeLayout::Stage => {
+                None
+            }
         }
     }
 
@@ -243,7 +245,8 @@ impl Node {
             )
             | NodeLayout::Flex(_)
             | NodeLayout::Scroll(_)
-            | NodeLayout::Stack => None,
+            | NodeLayout::Stack
+            | NodeLayout::Stage => None,
         }
     }
 
@@ -705,7 +708,9 @@ impl Widget for Node {
         );
         let leaf = match &self.layout {
             NodeLayout::Leaf(leaf) => leaf.cursor(&hit),
-            NodeLayout::Flex(_) | NodeLayout::Scroll(_) | NodeLayout::Stack => CursorShape::None,
+            NodeLayout::Flex(_) | NodeLayout::Scroll(_) | NodeLayout::Stack | NodeLayout::Stage => {
+                CursorShape::None
+            }
         };
         let engine = self.engine.as_ref().map_or(CursorShape::None, |engine| {
             engine.cursor(Pt {

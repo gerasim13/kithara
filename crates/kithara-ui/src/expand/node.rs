@@ -84,6 +84,12 @@ pub enum ExpandedNode {
         press: Binding,
         child: Box<Self>,
     },
+    /// Offers every child the same box, in document order.
+    Stage {
+        id: InternId,
+        size: Option<SizeSpec>,
+        children: Vec<Self>,
+    },
     Slot {
         id: InternId,
         size: Option<SizeSpec>,

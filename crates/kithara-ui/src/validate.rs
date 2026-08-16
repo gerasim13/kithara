@@ -291,6 +291,20 @@ fn walk_module(
             single_box(transform, to.as_ref(), child, &here, origin)?;
             walk_module(child, &here, origin, seen, Sibling::Only)
         }
+        ControlNode::Stage { id, children, .. } => {
+            let here = path.push(format!("Stage({id})"));
+            record(&id.0, &here, origin, seen)?;
+            for (index, child) in children.iter().enumerate() {
+                walk_module(
+                    child,
+                    &here.push(format!("[{index}]")),
+                    origin,
+                    seen,
+                    Sibling::Among,
+                )?;
+            }
+            Ok(())
+        }
         ControlNode::Slot { id, default, .. } => {
             let here = path.push(format!("Slot({id})"));
             record(&id.0, &here, origin, seen)?;
@@ -347,6 +361,7 @@ fn single_box(
         _ if !turns => return Ok(()),
         ControlNode::Row { .. } => "Row",
         ControlNode::Column { .. } => "Column",
+        ControlNode::Stage { .. } => "Stage",
         ControlNode::Slot { .. } => "Slot",
         ControlNode::Scroll { .. } => "Scroll",
         ControlNode::Popover { .. } => "Popover",
@@ -380,6 +395,7 @@ const fn control_id(node: &ControlNode) -> Option<&NodeId> {
         | ControlNode::Popover { .. }
         | ControlNode::Pressable { .. }
         | ControlNode::Scroll { .. }
+        | ControlNode::Stage { .. }
         | ControlNode::Slot { .. } => None,
         ControlNode::DeckSummary { id, .. }
         | ControlNode::Brand { id, .. }
@@ -755,6 +771,7 @@ pub(crate) const fn value_kinds(control: &ControlNode) -> (Option<ValueKind>, Op
         ControlNode::Object { .. } => (Some(ValueKind::Scalar), None),
         ControlNode::Include { .. }
         | ControlNode::Scroll { .. }
+        | ControlNode::Stage { .. }
         | ControlNode::Slot { .. }
         | ControlNode::Brand { .. }
         | ControlNode::Spacer { .. }
@@ -1031,6 +1048,55 @@ mod tests {
     fn a_still_object_may_wrap_anything() {
         let text = r#"(schema: "kithara.module", version: 1, id: "m",
             root: Object(id: "still", child: Vis(id: "scope")))"#;
+        let doc = parse_module(text, &origin()).unwrap();
+
+        assert!(check_module_node_ids(&doc, &origin()).is_ok());
+    }
+
+    /// The walk ends in a catch-all that records an id and stops, so a
+    /// container the walk does not name is validated as a leaf and its children
+    /// are never looked at. This test fails the moment `Stage` falls into it.
+    #[kithara::test]
+    fn a_stage_walks_its_children() {
+        let text = r#"(schema: "kithara.module", version: 1, id: "m",
+            root: Stage(id: "scene", children: [
+                Button(id: "play", label: "PLAY"),
+                Button(id: "play", label: "AGAIN"),
+            ]))"#;
+        let doc = parse_module(text, &origin()).unwrap();
+
+        let error = check_module_node_ids(&doc, &origin()).unwrap_err();
+
+        assert!(matches!(
+            error,
+            UiDocError::DuplicateId { id, .. } if id == "play"
+        ));
+    }
+
+    /// Every child of a stage gets the whole box, so a stage is several boxes,
+    /// and a turn about one origin would take them apart.
+    #[kithara::test]
+    fn an_object_may_not_turn_a_stage() {
+        let text = r#"(schema: "kithara.module", version: 1, id: "m",
+            root: Object(id: "spin", transform: (rotation: 30.0),
+                child: Stage(id: "scene", children: [Button(id: "play", label: "PLAY")])))"#;
+        let doc = parse_module(text, &origin()).unwrap();
+
+        let error = check_module_node_ids(&doc, &origin()).unwrap_err();
+
+        assert!(matches!(
+            error,
+            UiDocError::ObjectGroup { child: "Stage", .. }
+        ));
+    }
+
+    /// A move carries every box by the same vector, so it reaches a stage the
+    /// way it reaches a row.
+    #[kithara::test]
+    fn an_object_may_move_a_whole_stage() {
+        let text = r#"(schema: "kithara.module", version: 1, id: "m",
+            root: Object(id: "shift", transform: (position: (8.0, 0.0)),
+                child: Stage(id: "scene", children: [Button(id: "play", label: "PLAY")])))"#;
         let doc = parse_module(text, &origin()).unwrap();
 
         assert!(check_module_node_ids(&doc, &origin()).is_ok());

@@ -2428,7 +2428,8 @@ mod gesture_census {
             | ExpandedNode::Scroll { child, .. } => find_control(child),
             ExpandedNode::Row { children, .. }
             | ExpandedNode::Column { children, .. }
-            | ExpandedNode::Slot { children, .. } => children.iter().find_map(find_control),
+            | ExpandedNode::Slot { children, .. }
+            | ExpandedNode::Stage { children, .. } => children.iter().find_map(find_control),
             ExpandedNode::Popover {
                 anchor, content, ..
             } => find_control(anchor).or_else(|| find_control(content)),

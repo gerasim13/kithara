@@ -873,7 +873,8 @@ mod tests {
                 | ExpandedNode::Scroll { child, .. } => walk(child, ui, found),
                 ExpandedNode::Row { children, .. }
                 | ExpandedNode::Column { children, .. }
-                | ExpandedNode::Slot { children, .. } => {
+                | ExpandedNode::Slot { children, .. }
+                | ExpandedNode::Stage { children, .. } => {
                     for child in children {
                         walk(child, ui, found);
                     }
@@ -906,6 +907,57 @@ mod tests {
             &UiConfig::default(),
         )
         .unwrap_or_else(|error| panic!("the motion page must compile: {error}"))
+    }
+
+    /// Every stage the page declares, as the number of children sharing its box.
+    fn motion_stages(ui: &CompiledUi) -> Vec<usize> {
+        fn walk(node: &ExpandedNode, found: &mut Vec<usize>) {
+            match node {
+                ExpandedNode::Stage { children, .. } => {
+                    found.push(children.len());
+                    for child in children {
+                        walk(child, found);
+                    }
+                }
+                ExpandedNode::Object { child, .. }
+                | ExpandedNode::Optional { child, .. }
+                | ExpandedNode::Pressable { child, .. }
+                | ExpandedNode::Scroll { child, .. } => walk(child, found),
+                ExpandedNode::Row { children, .. }
+                | ExpandedNode::Column { children, .. }
+                | ExpandedNode::Slot { children, .. } => {
+                    for child in children {
+                        walk(child, found);
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        let mut found = Vec::new();
+        let mut stack = vec![&ui.root];
+        while let Some(node) = stack.pop() {
+            match node {
+                CompiledNode::Split { children, .. } => {
+                    stack.extend(children.iter().map(|(_, child)| child));
+                }
+                CompiledNode::Optional { child, .. } => stack.push(child),
+                CompiledNode::Module { root, .. } => walk(root, &mut found),
+                _ => {}
+            }
+        }
+        found
+    }
+
+    /// A stage holding one child says nothing: one child fills its own box in
+    /// any container. Overlap is the whole claim, so the page has to make it.
+    #[kithara::test]
+    fn the_motion_page_puts_several_children_in_one_box() {
+        let ui = motion_page();
+
+        let sharing = motion_stages(&ui);
+
+        assert_eq!(sharing, vec![3]);
     }
 
     /// The page exists to show a control being moved, so a version of it with

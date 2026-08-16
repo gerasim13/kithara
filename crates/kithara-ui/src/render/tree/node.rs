@@ -233,6 +233,24 @@ impl<'a> DocumentHost for IcedHost<'a, '_> {
         apply_size(Rendered::leading(element), size)
     }
 
+    /// The declared box goes to the stack itself rather than to a container
+    /// around it. `Stack::layout` resolves its own size from its width, height
+    /// and first layer, then offers every other layer that size loosely — which
+    /// is the same arithmetic `NodeLayout::Stage` runs on the retained host.
+    /// Wrapping it instead leaves the stack the width of its first layer inside
+    /// a filled container, and a wider child is then clipped to the first one:
+    /// measured on the motion page, where a 120-wide chip came out 107.
+    fn stage(&mut self, children: Vec<Self::Output>, size: Option<SizeSpec>) -> Self::Output {
+        let stack = Stack::with_children(children);
+        let Some(size) = size else {
+            return stack.into();
+        };
+        stack
+            .width(length_for(size.w, Length::Shrink))
+            .height(length_for(size.h, Length::Shrink))
+            .into()
+    }
+
     fn control(
         &mut self,
         path: InternId,

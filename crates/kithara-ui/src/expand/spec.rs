@@ -304,6 +304,7 @@ fn fixed_control_spec(control: &ControlNode) -> Option<ControlSpec> {
         | ControlNode::Optional { .. }
         | ControlNode::Popover { .. }
         | ControlNode::Pressable { .. }
+        | ControlNode::Stage { .. }
         | ControlNode::Slot { .. }
         | ControlNode::Glyph { .. }
         | ControlNode::TitleBar { .. }

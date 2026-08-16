@@ -57,6 +57,13 @@ pub trait Host {
     /// Mounts a vertical slot of visible children.
     fn slot(&mut self, children: Vec<Self::Output>, size: Option<SizeSpec>) -> Self::Output;
 
+    /// Mounts children that all share one box, in document order.
+    ///
+    /// The host decides nothing about where they land: that is the business of
+    /// whatever object wraps each of them, and a stage with no objects in it
+    /// simply draws its children on top of one another.
+    fn stage(&mut self, children: Vec<Self::Output>, size: Option<SizeSpec>) -> Self::Output;
+
     /// Mounts one compiled control leaf.
     ///
     /// `transform` is every enclosing object's pose folded into one offset,

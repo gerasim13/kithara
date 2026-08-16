@@ -91,6 +91,31 @@
                     Slot(id: "track-space", size: (w: Fill, h: Fill)),
                 ],
             ),
+            Text(id: "stage-title", style: Section, label: "STAGE", size: (w: Fill, h: Fixed(22.0))),
+            Text(
+                id: "stage-note",
+                style: Body,
+                color: TextDim,
+                label: "A STAGE HANDS EVERY CHILD THE SAME BOX, IN DOCUMENT ORDER. AN OBJECT SAYS WHERE INSIDE IT EACH ONE LANDS.",
+                size: (w: Fill, h: Fixed(18.0)),
+            ),
+            Stage(
+                id: "scene",
+                size: (w: Fill, h: Fixed(108.0)),
+                children: [
+                    Glyph(id: "ground", icon: Disc, size: (w: Fixed(108.0), h: Fixed(108.0))),
+                    Object(
+                        id: "over",
+                        transform: (position: (72.0, 18.0)),
+                        child: Glyph(id: "mid", icon: Gear, size: (w: Fixed(72.0), h: Fixed(72.0))),
+                    ),
+                    Object(
+                        id: "above",
+                        transform: (position: (168.0, 30.0)),
+                        child: Chip(id: "top", label: "STAGE", size: (w: Fixed(120.0), h: Fixed(48.0))),
+                    ),
+                ],
+            ),
             Text(
                 id: "limit",
                 style: Body,

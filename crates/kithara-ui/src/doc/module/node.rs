@@ -144,6 +144,19 @@ pub enum ControlNode {
         phase: Option<BindingRef>,
         child: Box<Self>,
     },
+    /// Gives every child the whole box, in document order.
+    ///
+    /// Where a row or column decides *where* a child goes, this decides
+    /// nothing: each child is offered the same box and an `Object` around it
+    /// says where inside that box it actually lands. Free placement is the two
+    /// together, which is why neither of them needs to know about the other.
+    Stage {
+        id: NodeId,
+        #[serde(default)]
+        size: Option<SizeSpec>,
+        #[serde(default)]
+        children: Vec<Self>,
+    },
     Slot {
         id: NodeId,
         #[serde(default)]
@@ -691,6 +704,7 @@ impl ControlNode {
             Self::Include { .. }
             | Self::Object { .. }
             | Self::Scroll { .. }
+            | Self::Stage { .. }
             | Self::Slot { .. }
             | Self::WindowDrag { .. }
             | Self::TitleBar { .. }
@@ -745,6 +759,7 @@ impl ControlNode {
             Self::Scroll { size, .. }
             | Self::Row { size, .. }
             | Self::Column { size, .. }
+            | Self::Stage { size, .. }
             | Self::Slot { size, .. }
             | Self::DeckSummary { size, .. }
             | Self::Brand { size, .. }

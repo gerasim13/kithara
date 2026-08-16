@@ -588,6 +588,11 @@ enum HostedLayout {
         sized: bool,
         children: Vec<Self>,
     },
+    /// A stack takes its declared box directly, with no container around it,
+    /// so its children sit exactly one level down whether it was sized or not.
+    Stage {
+        children: Vec<Self>,
+    },
     Wrapper {
         sized: bool,
         child: Box<Self>,
@@ -657,6 +662,13 @@ impl HostedLayout {
                     .map(|child| Self::new(child, ui, reads, skin))
                     .collect(),
             },
+            ExpandedNode::Stage { children, .. } => Self::Stage {
+                children: children
+                    .iter()
+                    .filter(|child| !is_hidden(*child, hidden))
+                    .map(|child| Self::new(child, ui, reads, skin))
+                    .collect(),
+            },
             ExpandedNode::Control {
                 path, spec, read, ..
             } => {
@@ -706,7 +718,9 @@ impl HostedLayout {
                     descriptors.push(Descriptor::activation(path.clone()));
                 }
             }
-            Self::Group { children, .. } | Self::Slot { children, .. } => {
+            Self::Group { children, .. }
+            | Self::Slot { children, .. }
+            | Self::Stage { children, .. } => {
                 for child in children {
                     child.append_descriptors(descriptors);
                 }
@@ -789,7 +803,9 @@ impl HostedLayout {
 
     fn append_pickers<'a>(&'a self, pickers: &mut Vec<(&'a str, usize, f32)>) {
         match self {
-            Self::Group { children, .. } | Self::Slot { children, .. } => {
+            Self::Group { children, .. }
+            | Self::Slot { children, .. }
+            | Self::Stage { children, .. } => {
                 for child in children {
                     child.append_pickers(pickers);
                 }
@@ -885,6 +901,11 @@ impl HostedLayout {
                     child.append_targets(layout, cursor, engine, targets);
                 }
             }
+            Self::Stage { children } => {
+                for (child, layout) in children.iter().zip(layout.children()) {
+                    child.append_targets(layout, cursor, engine, targets);
+                }
+            }
             Self::Wrapper { sized, child } => {
                 let layout = if *sized {
                     let Some(layout) = first_child(layout) else {
@@ -929,6 +950,7 @@ impl HostedLayout {
             | Self::Group { .. }
             | Self::Scroll { .. }
             | Self::Slot { .. }
+            | Self::Stage { .. }
             | Self::Wrapper { .. }
             | Self::Control(_)
             | Self::SelfMeasuredControl(_) => None,
@@ -1712,7 +1734,8 @@ mod tests {
         match node {
             ExpandedNode::Row { children, .. }
             | ExpandedNode::Column { children, .. }
-            | ExpandedNode::Slot { children, .. } => {
+            | ExpandedNode::Slot { children, .. }
+            | ExpandedNode::Stage { children, .. } => {
                 for child in children {
                     claimed_components(child, components);
                 }

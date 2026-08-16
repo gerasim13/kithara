@@ -80,4 +80,12 @@
 # to cost more, because it puts ink on edges that are no longer axis-aligned and
 # the two rasterisers round those differently; it did not, because the pose is
 # resolved in the neutral list and both hosts flatten the same placed geometry.
+#
+# The stage row landed the same day and reads 1.2% of both, the rise being ink
+# it added rather than disagreement about it. Read that number with the picture
+# beside it: this page's first stage measured 1.4% while the retained host
+# stretched a 120-wide chip across the whole row and the immediate host clipped
+# it to 107 — two plainly different pictures, both inside this budget. The band
+# is identical now because both hosts resolve the box the same way, not because
+# the share went down.
 21-motion.png               2

@@ -91,6 +91,10 @@ impl Host for Spy<'_> {
         Self::flatten(children)
     }
 
+    fn stage(&mut self, children: Vec<Self::Output>, _size: Option<SizeSpec>) -> Self::Output {
+        Self::flatten(children)
+    }
+
     fn control(
         &mut self,
         path: InternId,

@@ -223,6 +223,86 @@ where
         )
     }
 
+    /// One module's chrome around the content the walk already produced.
+    fn mount_module(
+        &self,
+        module: &Module<'_>,
+        content: Option<MasonryNode<Action>>,
+    ) -> MasonryNode<Action> {
+        let chrome = module.chrome();
+        let frame = Some((
+            module.frame(),
+            self.skin.rgba(self.skin.chrome.frame.border),
+            self.skin.chrome.frame.border_width,
+        ));
+        let panel = Some(self.skin.rgba(self.skin.chrome.panel_background));
+        match chrome {
+            ChromeStyle::Full if module.collapsed() => MasonryNode::document(
+                NodeLayout::Leaf(Leaf::Empty),
+                solve::Size::new(
+                    solve::Length::Fill,
+                    solve::Length::Fixed(self.skin.chrome.header_height),
+                ),
+                Vec::new(),
+                false,
+                Some(self.skin.rgba(self.skin.chrome.header_background)),
+                frame,
+            ),
+            ChromeStyle::Full => {
+                let header = furniture(
+                    self.skin.chrome.header_height,
+                    Some(self.skin.rgba(self.skin.chrome.header_background)),
+                );
+                let first_line = furniture(
+                    self.skin.chrome.inner_line_width,
+                    Some(self.skin.rgba(self.skin.chrome.inner_line)),
+                );
+                let content =
+                    content.unwrap_or_else(|| MasonryNode::empty(declared(SizeSpec::FILL)));
+                let second_line = furniture(
+                    self.skin.chrome.inner_line_width,
+                    Some(self.skin.rgba(self.skin.chrome.inner_line)),
+                );
+                let footer = furniture(
+                    self.skin.chrome.footer_height,
+                    Some(self.skin.rgba(self.skin.chrome.footer_background)),
+                );
+                let children = vec![header, first_line, content, second_line, footer];
+                let layouts = children
+                    .iter()
+                    .map(|child| ChildLayout::natural(child.declared(), None))
+                    .collect();
+                MasonryNode::document(
+                    NodeLayout::Flex(Flex::new(
+                        Axis::Vertical,
+                        solve::Length::Fill,
+                        solve::Length::Fill,
+                        solve::Padding::default(),
+                        0.0,
+                        solve::Alignment::Start,
+                        layouts,
+                    )),
+                    solve::Size::new(solve::Length::Fill, solve::Length::Fill),
+                    children,
+                    true,
+                    panel,
+                    frame,
+                )
+            }
+            ChromeStyle::Frame | ChromeStyle::Plain => {
+                let child = content.unwrap_or_else(|| MasonryNode::empty(declared(SizeSpec::FILL)));
+                MasonryNode::document(
+                    NodeLayout::Stack,
+                    solve::Size::new(solve::Length::Fill, solve::Length::Fill),
+                    vec![child],
+                    true,
+                    (chrome == ChromeStyle::Frame).then_some(panel).flatten(),
+                    (chrome == ChromeStyle::Frame).then_some(frame).flatten(),
+                )
+            }
+        }
+    }
+
     pub(super) fn shader_leaf(
         &self,
         spec: crate::shader::ShaderSpec,
@@ -347,78 +427,7 @@ where
     }
 
     fn module(&mut self, module: Module<'_>, content: Option<Self::Output>) -> Self::Output {
-        let chrome = module.chrome();
-        let frame = Some((
-            module.frame(),
-            self.skin.rgba(self.skin.chrome.frame.border),
-            self.skin.chrome.frame.border_width,
-        ));
-        let panel = Some(self.skin.rgba(self.skin.chrome.panel_background));
-        match chrome {
-            ChromeStyle::Full if module.collapsed() => MasonryNode::document(
-                NodeLayout::Leaf(Leaf::Empty),
-                solve::Size::new(
-                    solve::Length::Fill,
-                    solve::Length::Fixed(self.skin.chrome.header_height),
-                ),
-                Vec::new(),
-                false,
-                Some(self.skin.rgba(self.skin.chrome.header_background)),
-                frame,
-            ),
-            ChromeStyle::Full => {
-                let header = furniture(
-                    self.skin.chrome.header_height,
-                    Some(self.skin.rgba(self.skin.chrome.header_background)),
-                );
-                let first_line = furniture(
-                    self.skin.chrome.inner_line_width,
-                    Some(self.skin.rgba(self.skin.chrome.inner_line)),
-                );
-                let content =
-                    content.unwrap_or_else(|| MasonryNode::empty(declared(SizeSpec::FILL)));
-                let second_line = furniture(
-                    self.skin.chrome.inner_line_width,
-                    Some(self.skin.rgba(self.skin.chrome.inner_line)),
-                );
-                let footer = furniture(
-                    self.skin.chrome.footer_height,
-                    Some(self.skin.rgba(self.skin.chrome.footer_background)),
-                );
-                let children = vec![header, first_line, content, second_line, footer];
-                let layouts = children
-                    .iter()
-                    .map(|child| ChildLayout::natural(child.declared(), None))
-                    .collect();
-                MasonryNode::document(
-                    NodeLayout::Flex(Flex::new(
-                        Axis::Vertical,
-                        solve::Length::Fill,
-                        solve::Length::Fill,
-                        solve::Padding::default(),
-                        0.0,
-                        solve::Alignment::Start,
-                        layouts,
-                    )),
-                    solve::Size::new(solve::Length::Fill, solve::Length::Fill),
-                    children,
-                    true,
-                    panel,
-                    frame,
-                )
-            }
-            ChromeStyle::Frame | ChromeStyle::Plain => {
-                let child = content.unwrap_or_else(|| MasonryNode::empty(declared(SizeSpec::FILL)));
-                MasonryNode::document(
-                    NodeLayout::Stack,
-                    solve::Size::new(solve::Length::Fill, solve::Length::Fill),
-                    vec![child],
-                    true,
-                    (chrome == ChromeStyle::Frame).then_some(panel).flatten(),
-                    (chrome == ChromeStyle::Frame).then_some(frame).flatten(),
-                )
-            }
-        }
+        self.mount_module(&module, content)
     }
 
     fn group(
@@ -560,6 +569,21 @@ where
             None,
             None,
         )
+    }
+
+    /// The stack measures its first child and hands every child that box, so
+    /// the document's own size rule and the immediate host's `Stack` agree with
+    /// it without either of them being told about the other.
+    fn stage(&mut self, children: Vec<Self::Output>, size: Option<SizeSpec>) -> Self::Output {
+        let declared = size.map_or_else(
+            || {
+                children
+                    .first()
+                    .map_or_else(|| declared(SizeSpec::FILL), MasonryNode::declared)
+            },
+            declared,
+        );
+        MasonryNode::document(NodeLayout::Stage, declared, children, true, None, None)
     }
 
     fn slot(&mut self, children: Vec<Self::Output>, size: Option<SizeSpec>) -> Self::Output {

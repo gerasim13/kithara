@@ -159,6 +159,7 @@ pub(crate) fn has_blocks(node: &ExpandedNode) -> bool {
         ExpandedNode::Optional { .. } => true,
         ExpandedNode::Row { children, .. }
         | ExpandedNode::Column { children, .. }
+        | ExpandedNode::Stage { children, .. }
         | ExpandedNode::Slot { children, .. } => children.iter().any(has_blocks),
         ExpandedNode::Popover { anchor, .. } => has_blocks(anchor),
         ExpandedNode::Object { child, .. }
@@ -228,6 +229,7 @@ pub(crate) fn effective_size(node: &ExpandedNode, skin: &SkinDoc) -> Option<Size
         ExpandedNode::Row { size, .. }
         | ExpandedNode::Column { size, .. }
         | ExpandedNode::Scroll { size, .. }
+        | ExpandedNode::Stage { size, .. }
         | ExpandedNode::Slot { size, .. }
         | ExpandedNode::Control { size, .. } => *size,
     };
@@ -260,6 +262,7 @@ pub(crate) fn compute_size(node: &ExpandedNode, skin: &SkinDoc, hidden: Hidden<'
         ExpandedNode::Scroll { size, .. }
         | ExpandedNode::Row { size, .. }
         | ExpandedNode::Column { size, .. }
+        | ExpandedNode::Stage { size, .. }
         | ExpandedNode::Slot { size, .. }
         | ExpandedNode::Control { size, .. } => *size,
     };
@@ -313,6 +316,14 @@ pub(crate) fn compute_size(node: &ExpandedNode, skin: &SkinDoc, hidden: Hidden<'
                 Pad::new(*pad, *pad_x, *pad_y, skin.layout.grid_pad),
             )
         }
+        // The first child sets the box and the rest are handed it, which is
+        // what both hosts do — `Stack` in iced and `NodeLayout::Stack` on
+        // masonry each measure the first layer and give every layer that size.
+        // A stack whose children disagree is therefore the first child's size,
+        // not the largest, and saying so here keeps the two hosts honest.
+        ExpandedNode::Stage { children, .. } => visible(children, hidden)
+            .next()
+            .map_or(SizeSpec::FILL, |first| compute_size(first, skin, hidden)),
         ExpandedNode::Slot { children, .. } => {
             let laid_out: Vec<_> = visible(children, hidden).collect();
             if laid_out.is_empty() {

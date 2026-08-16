@@ -469,6 +469,22 @@ fn expand_object(
     })
 }
 
+fn expand_stage(
+    context: &Context<'_>,
+    id: &NodeId,
+    size: Option<SizeSpec>,
+    children: &[ControlNode],
+    depth: usize,
+    machine: &mut Expander<'_, '_>,
+) -> Result<ExpandedNode, UiDocError> {
+    machine.budget.charge(&context.origin)?;
+    Ok(ExpandedNode::Stage {
+        size,
+        id: machine.interner.intern(&id.0, &context.origin)?,
+        children: walk_children(context, children, depth, machine)?,
+    })
+}
+
 fn expand_slot(
     context: &Context<'_>,
     id: &NodeId,
@@ -595,6 +611,9 @@ pub(super) fn walk(
                 size: *size,
                 child: Box::new(walk(context, child, depth, machine)?),
             })
+        }
+        ControlNode::Stage { id, size, children } => {
+            expand_stage(context, id, *size, children, depth, machine)
         }
         ControlNode::Slot { id, size, default } => {
             expand_slot(context, id, *size, default, depth, machine)

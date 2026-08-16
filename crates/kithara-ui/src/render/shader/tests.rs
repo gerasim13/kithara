@@ -111,7 +111,8 @@ fn spec(ui: &CompiledUi) -> ShaderSpec {
             ExpandedNode::Popover { anchor, .. } => find(anchor),
             ExpandedNode::Row { children, .. }
             | ExpandedNode::Column { children, .. }
-            | ExpandedNode::Slot { children, .. } => children.iter().find_map(find),
+            | ExpandedNode::Slot { children, .. }
+            | ExpandedNode::Stage { children, .. } => children.iter().find_map(find),
             ExpandedNode::Control { .. } => None,
         }
     }

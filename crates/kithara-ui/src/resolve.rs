@@ -96,7 +96,9 @@ fn walk_includes(
     depth: usize,
 ) -> Result<(), UiDocError> {
     match node {
-        ControlNode::Row { children, .. } | ControlNode::Column { children, .. } => {
+        ControlNode::Row { children, .. }
+        | ControlNode::Column { children, .. }
+        | ControlNode::Stage { children, .. } => {
             for child in children {
                 walk_includes(resolver, origin, child, limits, set, stack, depth)?;
             }

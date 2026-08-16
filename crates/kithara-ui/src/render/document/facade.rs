@@ -252,6 +252,10 @@ fn row_group<'a>(node: RowNode<'a>, walk: Walk<'_>) -> Group<'a> {
     }
 }
 
+/// Whether this node hands its input to a retained engine before it mounts.
+///
+/// The subtree under an engine is mounted the same way either way, so the
+/// question is asked once here and the answer never reaches [`mounted`].
 fn expanded<H>(
     node: &ExpandedNode,
     address: &[usize],
@@ -275,7 +279,20 @@ where
         );
         return host.hosted(node, child);
     }
+    mounted(node, address, context, walk, host)
+}
 
+/// How one node becomes host output, once the engine question is settled.
+fn mounted<H>(
+    node: &ExpandedNode,
+    address: &[usize],
+    context: Context,
+    walk: Walk<'_>,
+    host: &mut H,
+) -> H::Output
+where
+    H: Host,
+{
     let hidden: Hidden<'_> = &|block| read_flag(Some(&block.hidden), walk.reads, walk.ui);
     match node {
         ExpandedNode::Optional { child, .. } => {
@@ -387,8 +404,12 @@ where
             host.scroll(*id, child, effective_size(node, walk.skin))
         }
         ExpandedNode::Slot { children, .. } => {
-            let children = expanded_children(children, address, context, hidden, walk, host);
-            host.slot(children, effective_size(node, walk.skin))
+            let mounted = expanded_children(children, address, context, hidden, walk, host);
+            host.slot(mounted, effective_size(node, walk.skin))
+        }
+        ExpandedNode::Stage { children, .. } => {
+            let mounted = expanded_children(children, address, context, hidden, walk, host);
+            host.stage(mounted, effective_size(node, walk.skin))
         }
         ExpandedNode::Object {
             pose,

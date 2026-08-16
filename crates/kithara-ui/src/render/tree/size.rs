@@ -121,6 +121,48 @@ mod tests {
         assert_ne!(size_of(&full, VISIBLE), size_of(&empty, VISIBLE));
     }
 
+    /// Both hosts measure a stack's first layer and hand every layer that box:
+    /// `Stack` in iced, and `NodeLayout::Stack` on masonry. The document has to
+    /// say the same thing, or a stage would ask for a box neither host gives it.
+    #[kithara::test]
+    fn a_stage_is_the_size_of_its_first_child() {
+        let stage = compiled(
+            r#"(schema: "kithara.module", version: 1, id: "mixer",
+                root: Stage(id: "scene", children: [
+                    Knob(id: "volume"),
+                    Knob(id: "trim"),
+                ]))"#,
+        );
+        let alone = compiled(
+            r#"(schema: "kithara.module", version: 1, id: "mixer",
+                root: Stage(id: "scene", children: [Knob(id: "volume")]))"#,
+        );
+
+        assert_eq!(size_of(&stage, VISIBLE), size_of(&alone, VISIBLE));
+    }
+
+    /// The same two knobs in a column do add up, which is what makes the
+    /// previous assertion a statement about stacking rather than about knobs.
+    #[kithara::test]
+    fn a_column_of_the_same_two_children_is_taller_than_the_stage() {
+        let stage = compiled(
+            r#"(schema: "kithara.module", version: 1, id: "mixer",
+                root: Stage(id: "scene", children: [
+                    Knob(id: "volume"),
+                    Knob(id: "trim"),
+                ]))"#,
+        );
+        let column = compiled(
+            r#"(schema: "kithara.module", version: 1, id: "mixer",
+                root: Column(gap: 0.0, pad: 0.0, children: [
+                    Knob(id: "volume"),
+                    Knob(id: "trim"),
+                ]))"#,
+        );
+
+        assert_ne!(size_of(&stage, VISIBLE), size_of(&column, VISIBLE));
+    }
+
     #[kithara::test]
     fn a_split_whose_children_are_all_hidden_folds_to_nothing() {
         let mut resolver = MemResolver::default();
