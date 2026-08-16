@@ -4,6 +4,7 @@ pub mod ast_grep;
 #[cfg(feature = "lint")]
 pub mod audit;
 pub mod audit_clippy;
+pub mod ci_report;
 pub mod common;
 pub mod ctx;
 pub mod format;
@@ -85,6 +86,8 @@ pub enum CoreCommand {
     },
     /// Comprehensive workspace health check with markdown report.
     Health(health::HealthArgs),
+    /// Render one consolidated report from a run's quality artifacts.
+    CiReport(ci_report::CiReportArgs),
     #[cfg(feature = "viz")]
     /// Build architecture views from shared source and runtime evidence.
     Viz(viz::VizArgs),
@@ -117,6 +120,7 @@ pub fn run(cmd: &CoreCommand, ctx: &Ctx) -> anyhow::Result<()> {
         CoreCommand::Test(args) => test::run(args),
         CoreCommand::Stress { command } => stress::run(command, ctx),
         CoreCommand::Health(args) => health::run(args),
+        CoreCommand::CiReport(args) => ci_report::run(args),
         #[cfg(feature = "viz")]
         CoreCommand::Viz(args) => viz::run(args, ctx),
     }

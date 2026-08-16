@@ -1,6 +1,6 @@
 use std::{fs, path::Path};
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result, anyhow, ensure};
 use serde_json::Value;
 
 use super::adapter::{InvocationSpec, ReportKind};
@@ -15,6 +15,13 @@ pub(super) fn validate_report(path: &Path, invocation: &InvocationSpec) -> Resul
             Ok(false)
         }
         ReportKind::JsonStream => cargo_dupes_findings(&text),
+        // A rendering of a report another invocation already judged: it carries
+        // no verdict of its own, but an empty one means the render died quietly
+        // and the run would publish a blank page.
+        ReportKind::Markdown => {
+            ensure!(!text.trim().is_empty(), "markdown report is empty");
+            Ok(false)
+        }
         ReportKind::RustqualJson => rustqual_findings(&text),
     }
 }

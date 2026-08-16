@@ -39,6 +39,8 @@ Exposed through the `CoreCommand` subcommand enum:
 - `stress run`, `stress report` - run the complete repeated-test evidence
   campaign or independently verify and render its downloaded artifact.
 - `health` — aggregated workspace health report.
+- `ci-report` — consolidate one CI run's archived quality artifacts (health,
+  coverage risk, architecture metrics) into a single markdown report.
 - `quality` — deterministic workspace/crate/module assessment, rstest / unimock
   / trait-mock audits, and the opt-in Quality Lab for heavyweight external
   analyzers.

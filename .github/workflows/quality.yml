@@ -139,6 +139,36 @@ jobs:
           name: architecture
           path: target/architecture/
 
+  # The CRAP metric: complexity weighted by how little of it the tests execute.
+  # cargo-crap is pinned in `.config/ci-pins.toml` and installed in the CI
+  # image, and until now nothing ran it — the one number that ranks "risky and
+  # untested" was available to every local checkout and to no report.
+  #
+  # `just quality coverage-risk` writes the LCOV even when the suite is red and
+  # scores it anyway, so the ranking survives a failing product; without a
+  # baseline the run states the picture rather than gating on it.
+  coverage-risk:
+    name: Coverage risk
+    if: vars.KITHARA_RUNNER_LABELS != '' && github.actor == github.repository_owner
+    runs-on: ${{ fromJSON(vars.KITHARA_RUNNER_LABELS) }}
+    timeout-minutes: 240
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Measure coverage risk
+        run: just quality coverage-risk
+
+      - name: Upload the coverage-risk report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: coverage-risk
+          path: |
+            target/quality-lab/
+            coverage/
+
   health:
     name: Workspace health
     if: vars.KITHARA_RUNNER_LABELS != '' && github.actor == github.repository_owner
@@ -152,18 +182,6 @@ jobs:
       - name: Report workspace health
         run: just ci health
 
-      # The report is the job's whole product, and a red stage is its normal
-      # reason to exist: publish it especially when the recipe fails, or the
-      # run leaves nothing but a log to scroll.
-      - name: Publish the health report
-        if: always()
-        run: |
-          if [[ -f target/health-report.md ]]; then
-            cat target/health-report.md >> "$GITHUB_STEP_SUMMARY"
-          else
-            echo "The health run produced no report." >> "$GITHUB_STEP_SUMMARY"
-          fi
-
       - name: Upload the health report
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -172,3 +190,35 @@ jobs:
           path: |
             target/health-report.md
             target/health-logs/
+
+  # One report for the whole run. Every job above archives what it measured and
+  # stops; a red stage is the normal reason those measurements exist, so the
+  # collector runs whatever they concluded (`always()`) and states a missing
+  # input rather than omitting the section.
+  report:
+    name: Quality report
+    needs: [architecture, coverage-risk, health]
+    if: always() && vars.KITHARA_RUNNER_LABELS != '' && github.actor == github.repository_owner
+    runs-on: ${{ fromJSON(vars.KITHARA_RUNNER_LABELS) }}
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Collect the run's artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          path: target/quality-artifacts
+
+      - name: Assemble the report
+        run: |
+          just ci report --artifacts target/quality-artifacts \
+            | tee target/quality-report.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload the report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: quality-report
+          path: target/quality-report.md

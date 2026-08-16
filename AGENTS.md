@@ -55,7 +55,8 @@ routine work:
 - `just test`; parameterized harness: `just test run <args>`; tests plus
   doc-tests: `just test all`.
 - `just ci gate`; scoped audit: `just ci audit <scope>`; broad report:
-  `just ci health`.
+  `just ci health`; one run's archived quality artifacts consolidated into a
+  single markdown report: `just ci report --artifacts <dir>`.
 - Repeated-test evidence campaign: `just ci stress <args>`; independent artifact
   verification: `just ci stress-report <args>`.
 - Architecture diagram, linked contour reports, and complexity profile:

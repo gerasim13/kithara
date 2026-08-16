@@ -283,7 +283,11 @@ timeout per tool.
   The wrapper checks delta JSON because cargo-crap's `--fail-regression` exit code does
   not include new functions. A failing instrumented test run still writes Cobertura and
   LCOV and runs cargo-crap; the combined stage preserves the test exit as findings
-  instead of losing the risk evidence.
+  instead of losing the risk evidence. The same scoring is rendered twice: the JSON
+  artifact the gate judges, and a `report.md` a reader opens. The rendering carries no
+  verdict of its own — only an empty one is an error — and it never takes the baseline,
+  because a delta narrows what the gate accepts while the report states the whole
+  picture. Inside GitHub Actions cargo-crap turns its own locations into source links.
 - `scheduled` runs Cha history/layers/smells, rustqual test-quality checks, and
   cargo-dupes sub-function duplication. Findings are advisory; missing tools, invalid
   reports, version mismatches, and timeouts are tool errors.
@@ -296,6 +300,16 @@ timeout per tool.
 - Cha runs only from a clean, non-shallow source worktree and analyzes a disposable
   local clone whose revision is verified against HEAD. The clone is deleted after the
   run so Cha cache state cannot leak into the source checkout.
+
+## CI report ownership
+
+`ci-report` consolidates one CI run's archived quality artifacts into a single markdown
+document: the health stage table (log tails stay in the artifact), the CRAP ranking
+capped to a readable prefix, and the architecture complexity index with its worst
+contours. It reads artifacts, never tools, so it cannot disagree with what a job
+measured, and it locates inputs by file name rather than by an upload's directory
+layout. A section whose input never arrived says so — an omitted section would read as
+"nothing to report" from a run that reported nothing.
 
 KISS is never executed: it overlaps the existing stack and writes hidden user-level
 state. Promoting a unique external check into `syn`, Cargo metadata, Git, or ast-grep

@@ -55,6 +55,11 @@ gate *ARGS:
 health:
     just _xtask health
 
+# Consolidate one run's quality artifacts into a single markdown report.
+[positional-arguments]
+report *ARGS:
+    just _xtask ci-report "$@"
+
 # Full CI cycle with independent stage logs.
 full OUTPUT:
     #!/usr/bin/env bash
