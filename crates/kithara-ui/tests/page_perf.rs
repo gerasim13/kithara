@@ -45,7 +45,7 @@ use iced::{
         mouse::Cursor,
         renderer::Style,
     },
-    mouse::{Event as MouseEvent, ScrollDelta},
+    mouse::{Button as MouseButton, Event as MouseEvent, ScrollDelta},
     theme::{Base as _, Palette},
     window::RedrawRequest,
 };
@@ -71,7 +71,7 @@ use kithara_ui::{
     compile::{CompiledNode, CompiledUi, compile},
     draw::{PoolStats, Pt},
     expand::ExpandedNode,
-    interact::{Input, MOUSE, PointerInput, PointerPhase, Scroll},
+    interact::{Input, MOUSE, PointerButton, PointerInput, PointerPhase, Scroll},
     registry::EndpointRegistry,
     render::{
         ReadValue, Reads, Skin, UiEvent,
@@ -104,10 +104,16 @@ const RETAINED_FORMAT: vello_wgpu::TextureFormat = vello_wgpu::TextureFormat::Rg
 /// the shaping caches and every pipeline either host compiles lazily.
 const WARMUP: usize = 3;
 
-/// How many frames one wheel direction lasts. A viewport clamps and stops
-/// consuming at either end, which is a different code path: a monotonic scroll
-/// measures a clamped no-op after about six frames.
-const WHEEL_REVERSAL: usize = 20;
+/// How many frames one direction lasts, for a wheel and for a drag alike. Both
+/// run into an end and stop consuming there, which is a different code path: a
+/// monotonic scroll measures a clamped no-op after about six frames, and a
+/// monotonic drag measures a fader pinned at one end of its rail.
+const REVERSAL: usize = 20;
+
+/// How far one pointer move carries a drag, in page points. Small enough that a
+/// frame's worth of moves stays on the rail at every sweep step, and large
+/// enough that each one lands on a different pixel of it.
+const DRAG_STEP: f32 = 1.5;
 
 /// The harness's own page, mounting the one scrolling module the gallery has
 /// together with the visualiser, so a scroll slope measured with a visualiser on
@@ -133,6 +139,10 @@ enum Program {
     Tick,
     /// `n` wheel events per frame, at a sweep of `n`.
     Wheels(&'static [usize]),
+    /// A button held down for the whole run and `n` pointer moves per frame, at
+    /// a sweep of `n`. This is the program the eye complains about: a fader
+    /// under the hand, redrawn as fast as the host can.
+    Drag(&'static [usize]),
 }
 
 impl Program {
@@ -142,6 +152,7 @@ impl Program {
             Self::Idle | Self::Tick => vec![Run::Plain],
             Self::Buckets(counts) => counts.iter().copied().map(Run::Buckets).collect(),
             Self::Wheels(counts) => counts.iter().copied().map(Run::Wheels).collect(),
+            Self::Drag(counts) => counts.iter().copied().map(Run::Moves).collect(),
         }
     }
 }
@@ -151,6 +162,7 @@ enum Run {
     Plain,
     Buckets(u16),
     Wheels(usize),
+    Moves(usize),
 }
 
 impl Run {
@@ -159,13 +171,21 @@ impl Run {
             Self::Plain => "-".to_owned(),
             Self::Buckets(count) => format!("buckets={count}"),
             Self::Wheels(count) => format!("wheels={count}"),
+            Self::Moves(count) => format!("moves={count}"),
         }
     }
 
     const fn wheels(self) -> usize {
         match self {
-            Self::Plain | Self::Buckets(_) => 0,
+            Self::Plain | Self::Buckets(_) | Self::Moves(_) => 0,
             Self::Wheels(count) => count,
+        }
+    }
+
+    const fn moves(self) -> usize {
+        match self {
+            Self::Plain | Self::Buckets(_) | Self::Wheels(_) => 0,
+            Self::Moves(count) => count,
         }
     }
 }
@@ -180,6 +200,8 @@ enum Group {
     Native,
     /// The wheel sweeps.
     Scroll,
+    /// The drag sweeps: a control held under the pointer and moved.
+    Drag,
 }
 
 /// One page, the program that drives it, and everything the harness has to know
@@ -199,7 +221,7 @@ struct Page {
     moving: Option<&'static str>,
     /// Where a wheel is delivered, in logical page points. A wheel outside the
     /// viewport measures a page that was never scrolled.
-    wheel_at: Pt,
+    pointer_at: Pt,
     /// Whether this page also runs a fenced variant, which serialises the queue
     /// and whose totals may never be added to an unfenced frame total.
     fenced: bool,
@@ -218,7 +240,7 @@ const PAGES: &[Page] = &[
         frames: 120,
         program: Program::Idle,
         moving: None,
-        wheel_at: Pt { x: 700.0, y: 400.0 },
+        pointer_at: Pt { x: 700.0, y: 400.0 },
         fenced: false,
         immediate_guard: "iced.gallery-buttons",
         retained_guard: "vello.gallery-buttons",
@@ -231,7 +253,7 @@ const PAGES: &[Page] = &[
         frames: 120,
         program: Program::Buckets(&[8_192, 4_096, 1_024, 256]),
         moving: Some("bench.wave.0"),
-        wheel_at: Pt { x: 700.0, y: 400.0 },
+        pointer_at: Pt { x: 700.0, y: 400.0 },
         fenced: false,
         immediate_guard: "iced.gallery-stress",
         retained_guard: "vello.gallery-stress",
@@ -244,7 +266,7 @@ const PAGES: &[Page] = &[
         frames: 120,
         program: Program::Tick,
         moving: Some("vis.time"),
-        wheel_at: Pt { x: 700.0, y: 400.0 },
+        pointer_at: Pt { x: 700.0, y: 400.0 },
         fenced: true,
         immediate_guard: "iced.gallery-vis",
         retained_guard: "vello.gallery-vis",
@@ -260,7 +282,7 @@ const PAGES: &[Page] = &[
         frames: 120,
         program: Program::Tick,
         moving: None,
-        wheel_at: Pt { x: 700.0, y: 400.0 },
+        pointer_at: Pt { x: 700.0, y: 400.0 },
         fenced: true,
         immediate_guard: "iced.gallery-shader",
         retained_guard: "vello.gallery-shader",
@@ -273,7 +295,7 @@ const PAGES: &[Page] = &[
         frames: 60,
         program: Program::Wheels(&[0, 1, 4, 8]),
         moving: None,
-        wheel_at: Pt { x: 400.0, y: 180.0 },
+        pointer_at: Pt { x: 400.0, y: 180.0 },
         fenced: false,
         immediate_guard: "iced.gallery-pivot",
         retained_guard: "vello.gallery-pivot",
@@ -286,7 +308,7 @@ const PAGES: &[Page] = &[
         frames: 60,
         program: Program::Wheels(&[0, 1, 4, 8]),
         moving: None,
-        wheel_at: Pt { x: 700.0, y: 400.0 },
+        pointer_at: Pt { x: 700.0, y: 400.0 },
         fenced: false,
         immediate_guard: "iced.gallery-library2",
         retained_guard: "vello.gallery-library2",
@@ -299,10 +321,27 @@ const PAGES: &[Page] = &[
         frames: 60,
         program: Program::Wheels(&[0, 1, 4, 8]),
         moving: None,
-        wheel_at: Pt { x: 700.0, y: 400.0 },
+        pointer_at: Pt { x: 700.0, y: 400.0 },
         fenced: false,
         immediate_guard: "iced.gallery-tree",
         retained_guard: "vello.gallery-tree",
+    },
+    Page {
+        // The horizontal fader's rail, which the gallery lays out from x=250 to
+        // x=422 at y=198. The point is a constant, so the run proves it landed:
+        // `mock.volume` is the fader's own reading, and a drag that missed the
+        // rail leaves it where it was.
+        name: "gallery-faders",
+        group: Group::Drag,
+        entry: "gallery-faders.klayout.ron",
+        tab: Tab::Faders,
+        frames: 60,
+        program: Program::Drag(&[0, 1, 4, 8]),
+        moving: Some("mock.volume"),
+        pointer_at: Pt { x: 320.0, y: 198.0 },
+        fenced: false,
+        immediate_guard: "iced.gallery-faders",
+        retained_guard: "vello.gallery-faders",
     },
     Page {
         name: "perf-scroll-vis",
@@ -312,7 +351,7 @@ const PAGES: &[Page] = &[
         frames: 60,
         program: Program::Wheels(&[0, 1, 4, 8]),
         moving: Some("vis.time"),
-        wheel_at: Pt { x: 200.0, y: 150.0 },
+        pointer_at: Pt { x: 200.0, y: 150.0 },
         fenced: false,
         immediate_guard: "iced.perf-scroll-vis",
         retained_guard: "vello.perf-scroll-vis",
@@ -327,6 +366,15 @@ struct PageApp {
     entry: &'static str,
     published: usize,
     reads: MockReads,
+    /// Whether what the document publishes is fed back into the mock.
+    ///
+    /// A drag is a closed loop: the pointer moves, the fader publishes a value,
+    /// and the next frame draws the fader at it. Left open, the run measures a
+    /// still page under a moving pointer. A wheel is not a loop - the viewport
+    /// holds its own offset inside the host - and closing it there would change
+    /// what the scroll runs measure: the retained library page publishes a
+    /// selection with its scroll, and applying that scrolls the list back to it.
+    closes_loop: bool,
 }
 
 impl PageApp {
@@ -337,6 +385,7 @@ impl PageApp {
             reads.set_wave_buckets(count);
         }
         Self {
+            closes_loop: matches!(run, Run::Moves(_)),
             entry: page.entry,
             published: 0,
             reads,
@@ -377,8 +426,16 @@ impl App for PageApp {
         self.reads.tick();
     }
 
-    fn update(&mut self, _event: UiEvent) {
+    fn update(&mut self, event: UiEvent) {
         self.published += 1;
+        // A nav path would turn the page mid-run, which is the one thing the
+        // harness fixes; everything else the document publishes is applied.
+        if self.closes_loop
+            && let UiEvent::Control { path, action } = event
+            && Tab::try_from(path.as_str()).is_err()
+        {
+            self.reads.apply(&path, &action);
+        }
     }
 }
 
@@ -499,8 +556,20 @@ trait PageHost {
     /// pointer, so a host never told scrolls the wrong thing, or nothing.
     fn place_pointer(&mut self);
 
-    /// Delivers one wheel detent at the page's wheel point.
+    /// Delivers one wheel detent at the page's pointer point.
     fn wheel(&mut self, lines: f32);
+
+    /// Puts the button down where the pointer is, for the whole run. A fader
+    /// only tracks the pointer while it is held, so a drag measured without
+    /// this measures a page that ignored every move.
+    fn press(&mut self);
+
+    /// Moves the pointer along the rail and reports where it landed, so the
+    /// caller can turn it around at the ends rather than measure a clamp.
+    fn move_by(&mut self, dx: f32) -> f32;
+
+    /// Lets the button go, once, after the last measured frame.
+    fn release(&mut self);
 
     /// Produces and rasterises one frame.
     fn frame(&mut self) -> Census;
@@ -534,7 +603,7 @@ struct Immediate {
     texture: Texture,
     theme: Theme,
     ui: CompiledUi,
-    wheel_at: Pt,
+    pointer_at: Pt,
 }
 
 impl Immediate {
@@ -542,7 +611,7 @@ impl Immediate {
         Self {
             app,
             cache: Cache::default(),
-            cursor: Cursor::Available(Point::new(page.wheel_at.x, page.wheel_at.y)),
+            cursor: Cursor::Available(Point::new(page.pointer_at.x, page.pointer_at.y)),
             device: gpu.device.clone(),
             pending: Vec::new(),
             queue: gpu.queue.clone(),
@@ -555,7 +624,7 @@ impl Immediate {
             texture: gpu.texture(),
             theme: theme(builtin::skin()),
             ui,
-            wheel_at: page.wheel_at,
+            pointer_at: page.pointer_at,
         }
     }
 
@@ -636,7 +705,7 @@ impl Immediate {
 
 impl PageHost for Immediate {
     fn place_pointer(&mut self) {
-        let position = Point::new(self.wheel_at.x, self.wheel_at.y);
+        let position = Point::new(self.pointer_at.x, self.pointer_at.y);
         self.cursor = Cursor::Available(position);
         self.pending
             .push(Event::Mouse(MouseEvent::CursorMoved { position }));
@@ -646,6 +715,25 @@ impl PageHost for Immediate {
         self.pending.push(Event::Mouse(MouseEvent::WheelScrolled {
             delta: ScrollDelta::Lines { x: 0.0, y: lines },
         }));
+    }
+
+    fn press(&mut self) {
+        self.pending
+            .push(Event::Mouse(MouseEvent::ButtonPressed(MouseButton::Left)));
+    }
+
+    fn move_by(&mut self, dx: f32) -> f32 {
+        self.pointer_at.x += dx;
+        let position = Point::new(self.pointer_at.x, self.pointer_at.y);
+        self.cursor = Cursor::Available(position);
+        self.pending
+            .push(Event::Mouse(MouseEvent::CursorMoved { position }));
+        self.pointer_at.x
+    }
+
+    fn release(&mut self) {
+        self.pending
+            .push(Event::Mouse(MouseEvent::ButtonReleased(MouseButton::Left)));
     }
 
     fn frame(&mut self) -> Census {
@@ -699,7 +787,7 @@ struct Retained<'a> {
     gpu: &'a mut RetainedGpu,
     scheduled: bool,
     ui: Ui<'a, PageApp>,
-    wheel_at: Pt,
+    pointer_at: Pt,
 }
 
 impl<'a> Retained<'a> {
@@ -710,7 +798,7 @@ impl<'a> Retained<'a> {
             gpu,
             scheduled: false,
             ui,
-            wheel_at: page.wheel_at,
+            pointer_at: page.pointer_at,
         }
     }
 
@@ -759,7 +847,7 @@ impl<'a> Retained<'a> {
 
 impl PageHost for Retained<'_> {
     fn place_pointer(&mut self) {
-        let at = self.wheel_at;
+        let at = self.pointer_at;
         self.ui.input(Input::Pointer(PointerInput::new(
             MOUSE,
             None,
@@ -772,6 +860,41 @@ impl PageHost for Retained<'_> {
     fn wheel(&mut self, lines: f32) {
         self.ui
             .input(Input::Wheel(Scroll::Lines { x: 0.0, y: lines }));
+    }
+
+    fn press(&mut self) {
+        let at = self.pointer_at;
+        self.ui.input(Input::Pointer(PointerInput::new(
+            MOUSE,
+            Some(PointerButton::Primary),
+            PointerPhase::Down,
+            Some(at),
+            1,
+        )));
+    }
+
+    fn move_by(&mut self, dx: f32) -> f32 {
+        self.pointer_at.x += dx;
+        let at = self.pointer_at;
+        self.ui.input(Input::Pointer(PointerInput::new(
+            MOUSE,
+            None,
+            PointerPhase::Move,
+            Some(at),
+            1,
+        )));
+        at.x
+    }
+
+    fn release(&mut self) {
+        let at = self.pointer_at;
+        self.ui.input(Input::Pointer(PointerInput::new(
+            MOUSE,
+            Some(PointerButton::Primary),
+            PointerPhase::Up,
+            Some(at),
+            1,
+        )));
     }
 
     fn frame(&mut self) -> Census {
@@ -1286,6 +1409,18 @@ fn ui_scroll_perf(#[case] label: &'static str, #[case] host: Host, #[case] page:
     measure_one(label, host, Group::Scroll, page);
 }
 
+/// The drag sweeps, and the first measurement of the symptom this campaign
+/// started from: a fader that is said to move smoothly on the retained host and
+/// to catch on the immediate one. Both hosts are measured at the same boundary
+/// here - input applied, frame drawn, pixels rasterised - so the two columns can
+/// be read against each other, which the per-widget harness cannot claim.
+#[kithara::test]
+#[case("iced", Host::Immediate, "gallery-faders")]
+#[case("vello", Host::Retained, "gallery-faders")]
+fn ui_drag_perf(#[case] label: &'static str, #[case] host: Host, #[case] page: &'static str) {
+    measure_one(label, host, Group::Drag, page);
+}
+
 /// One page on one host, under one hotpath guard.
 ///
 /// One guard per case, not per run: hotpath records nothing from a second guard
@@ -1328,12 +1463,12 @@ fn measure_one(label: &'static str, host: Host, group: Group, name: &'static str
             }
         }
     }
-    // The wheel-less run of the same page, run for the same number of frames.
+    // The undriven run of the same page, run for the same number of frames.
     // Whatever the page animates on its own has reached the same point in it, so
-    // a picture that differs from this one differs by the wheel.
+    // a picture that differs from this one differs by the wheel or the drag.
     let baseline = outcomes
         .iter()
-        .find(|outcome| matches!(outcome.run, Run::Wheels(0)))
+        .find(|outcome| matches!(outcome.run, Run::Wheels(0) | Run::Moves(0)))
         .map(|outcome| outcome.picture[1]);
     for outcome in &outcomes {
         report(label, outcome);
@@ -1405,14 +1540,19 @@ fn measure<'run>(
 
 fn frames(driver: &mut dyn PageHost, page: &Page, run: Run, fence: bool) -> Tally {
     let mut tally = Tally::default();
+    let dragging = run.moves() > 0;
+    if dragging {
+        driver.press();
+    }
     for index in 0..page.frames {
-        let lines = if (index / WHEEL_REVERSAL).is_multiple_of(2) {
-            -1.0
-        } else {
-            1.0
-        };
+        let forward = (index / REVERSAL).is_multiple_of(2);
+        let lines = if forward { -1.0 } else { 1.0 };
         for _ in 0..run.wheels() {
             driver.wheel(lines);
+        }
+        let step = if forward { DRAG_STEP } else { -DRAG_STEP };
+        for _ in 0..run.moves() {
+            driver.move_by(step);
         }
         let started = WallClock::now();
         let census = if fence {
@@ -1421,6 +1561,9 @@ fn frames(driver: &mut dyn PageHost, page: &Page, run: Run, fence: bool) -> Tall
             driver.frame()
         };
         tally.push(census, started.elapsed());
+    }
+    if dragging {
+        driver.release();
     }
     tally
 }
@@ -1511,12 +1654,21 @@ fn prove(label: &str, outcome: &Outcome<'_>, baseline: Option<u64>) {
             page.name, natives.vis, natives.shaders, outcome.expected.vis, outcome.expected.shaders
         );
     }
-    if page.moving.is_some() {
+    // A dragged page's reading is still until a hand is on it, so its undriven
+    // run is a baseline rather than a failed animation.
+    let driven = matches!(page.program, Program::Drag(_));
+    if page.moving.is_some() && (!driven || outcome.run.moves() > 0) {
         assert_ne!(
-            outcome.reading[0], outcome.reading[1],
-            "{label} {} {run}: the reading this page animates never moved, so the run measured a \
-             still picture",
-            page.name
+            outcome.reading[0],
+            outcome.reading[1],
+            "{label} {} {run}: the reading this run is supposed to move never moved, so what was \
+             measured is a still picture{}",
+            page.name,
+            if driven {
+                " - the pointer point missed the control"
+            } else {
+                ""
+            }
         );
     }
     match outcome.run {
@@ -1543,6 +1695,31 @@ fn prove(label: &str, outcome: &Outcome<'_>, baseline: Option<u64>) {
                 outcome.picture[1], baseline,
                 "{label} {} {run}: after the same number of frames the page looks exactly as it \
                  does with no wheel at all, so nothing scrolled",
+                page.name
+            );
+        }
+        // Same shape as the wheel: the undriven run is the control, and whether
+        // it moved on its own is evidence rather than a failure.
+        Run::Moves(0) => println!(
+            "{label} {}: with no drag the page's picture {}",
+            page.name,
+            if outcome.picture[0] == outcome.picture[1] {
+                "stood still"
+            } else {
+                "moved anyway, so it animates without input"
+            }
+        ),
+        Run::Moves(count) => {
+            let Some(baseline) = baseline else {
+                panic!(
+                    "{label} {}: no undriven run to read {count} moves against",
+                    page.name
+                )
+            };
+            assert_ne!(
+                outcome.picture[1], baseline,
+                "{label} {} {run}: after the same number of frames the page looks exactly as it \
+                 does with no drag at all, so nothing was dragged",
                 page.name
             );
         }

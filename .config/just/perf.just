@@ -28,6 +28,12 @@ scroll:
       cargo test -p kithara-ui --test page_perf --features perf,iced,masonry --release \
       -- ui_scroll_perf --test-threads=1 --nocapture 2>&1 | tee ui-scroll-perf.txt
 
+# Cost per pointer move against cost per frame, with a fader held under the hand.
+drag:
+    HOTPATH_METRICS_SERVER_OFF=1 \
+      cargo test -p kithara-ui --test page_perf --features perf,iced,masonry --release \
+      -- ui_drag_perf --test-threads=1 --nocapture 2>&1 | tee ui-drag-perf.txt
+
 # The visualiser and document-shader passes, free and fenced (own scenario).
 native:
     HOTPATH_METRICS_SERVER_OFF=1 \
