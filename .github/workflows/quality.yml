@@ -151,3 +151,24 @@ jobs:
 
       - name: Report workspace health
         run: just ci health
+
+      # The report is the job's whole product, and a red stage is its normal
+      # reason to exist: publish it especially when the recipe fails, or the
+      # run leaves nothing but a log to scroll.
+      - name: Publish the health report
+        if: always()
+        run: |
+          if [[ -f target/health-report.md ]]; then
+            cat target/health-report.md >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "The health run produced no report." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload the health report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: health-report
+          path: |
+            target/health-report.md
+            target/health-logs/

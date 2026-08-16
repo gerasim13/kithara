@@ -55,6 +55,24 @@ jobs:
             fi
           } >> target/nightly-report.md
 
+          # The health job publishes its report artifact even when red; the
+          # stage table inlined here is what makes a `failure` conclusion
+          # readable without clicking through. Stage log tails stay in the
+          # artifact. Only the quality cron produces one, so absence is a
+          # normal state for the other crons, not an error.
+          if gh run download "$RUN_ID" --repo "$REPOSITORY" --name health-report --dir health \
+              && [[ -f health/health-report.md ]]; then
+            {
+              echo
+              sed '/^## Stage details$/,$d' health/health-report.md
+            } >> target/nightly-report.md
+          else
+            {
+              echo
+              echo "No health report artifact in this run."
+            } >> target/nightly-report.md
+          fi
+
           cat target/nightly-report.md >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload the nightly report
