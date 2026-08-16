@@ -628,8 +628,13 @@ mod indexed {
         }
     }
 
+    /// The one-pixel seam the chips are painted apart used to be listed here.
+    /// It is not padding: on a two-chip selector it is the exact middle of the
+    /// control, which is where a hand aims and where the crate's own
+    /// `Scenario::press` presses. This test named that a contract; it was the
+    /// defect, written down.
     #[kithara::test]
-    fn retained_preset_padding_and_gap_are_not_interactive() {
+    fn retained_preset_padding_and_the_outside_are_not_interactive() {
         let skin = skin();
         let mut control = preset(&skin, mount::Preset.index_event());
         let points = points(&skin);
@@ -643,7 +648,6 @@ mod indexed {
         for point in [
             points.x_padding,
             points.y_padding,
-            points.gap,
             Pt {
                 x: -1.0,
                 y: points.first.y,
@@ -674,6 +678,18 @@ mod indexed {
                 (None, Propagation::Captured, PointerOwnership::Release,)
             );
         }
+    }
+
+    /// The seam is a target on this host too. Which of the two chips a boundary
+    /// belongs to is a convention the atom pins; what matters here is that the
+    /// middle of the control offers a pointer at all.
+    #[kithara::test]
+    fn the_retained_seam_between_two_preset_chips_is_a_target() {
+        let skin = skin();
+        let control = preset(&skin, mount::Preset.index_event());
+        let hit = Hit::new(Some(points(&skin).gap), bounds());
+
+        assert_eq!(control.cursor(&hit), CursorShape::Pointer);
     }
 
     fn no_event(_data: &PresetData, _index: usize) -> Option<UiEvent> {

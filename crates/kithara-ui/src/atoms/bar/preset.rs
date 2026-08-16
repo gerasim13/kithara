@@ -138,17 +138,17 @@ impl Preset {
         (count > 0.0 && width > gaps).then_some((width - gaps) / count)
     }
 
+    /// The chip a point selects: the selector split into equal cells, not the
+    /// painted chips walked.
+    ///
+    /// The gap the chips are painted with is a seam, not a target. Walking the
+    /// painted rects left it owned by nobody, and on a two-chip selector it
+    /// lands exactly on the middle - the point a hand aims at, and the point
+    /// `center(rect)` presses. Every other indexed control already resolves its
+    /// cell this way, through the same `Rect` method.
     pub(crate) fn hit_index(&self, data: &PresetData, bounds: Rect, point: Pt) -> Option<usize> {
-        let selector = self.selector(bounds);
-        let width = self.chip_width(selector.w, data.items.len())?;
-        let mut x = selector.x;
-        for index in 0..data.items.len() {
-            if Self::chip(selector, width, x).contains(point) {
-                return Some(index);
-            }
-            x += width + self.metrics.chip_gap;
-        }
-        None
+        self.selector(bounds)
+            .uniform_horizontal_index(point, data.items.len())
     }
 
     const fn chip(selector: Rect, width: f32, x: f32) -> Rect {
@@ -223,7 +223,7 @@ mod tests {
     use super::{IndexedVisual, Preset, PresetData};
     use crate::{
         builtin,
-        draw::{DrawCmd, DrawList, DrawListBuilder, Geom, Paint, Rect},
+        draw::{DrawCmd, DrawList, DrawListBuilder, Geom, Paint, Pt, Rect},
         mount,
         render::{ReadValue, Reads},
         skin::{ColorRole, FontFamily, TextRoleSkin},
@@ -414,5 +414,91 @@ mod tests {
         assert_eq!(text[1].0, "PLAYER");
         assert_eq!(text[1].1, shaper.shape("PLAYER", role, None));
         assert_eq!(text[1].2, skin.palette.text_dim);
+    }
+
+    /// The point a hand aims at, and the point the crate's own `Scenario::press`
+    /// presses. With two chips the painted gap is one pixel wide and sits on the
+    /// middle, so a hit test that walked the painted rects answered nothing
+    /// here - the control was dead at the only coordinate every generic driver
+    /// uses.
+    #[kithara::test]
+    fn the_middle_of_the_control_is_not_dead() {
+        let painter = Preset::new(builtin::skin());
+        let middle = Pt {
+            x: BOUNDS.x + BOUNDS.w / 2.0,
+            y: BOUNDS.y + BOUNDS.h / 2.0,
+        };
+
+        assert!(
+            painter.hit_index(&data(Some(0)), BOUNDS, middle).is_some(),
+            "the centre of the control at x={} selected no chip",
+            middle.x
+        );
+    }
+
+    /// No column anywhere inside the selector belongs to nobody. Sampling on the
+    /// half pixel because the chip boundary falls on one: the selector is 106
+    /// wide over two chips.
+    #[kithara::test]
+    fn every_column_of_the_selector_belongs_to_a_chip() {
+        let painter = Preset::new(builtin::skin());
+        let data = data(Some(0));
+        let selector = painter.selector(BOUNDS);
+        let y = selector.y + selector.h / 2.0;
+
+        let dead: Vec<f32> = (0_u16..)
+            .map(|step| selector.x + f32::from(step) * 0.5)
+            .take_while(|x| *x < selector.x + selector.w)
+            .filter(|x| painter.hit_index(&data, BOUNDS, Pt { x: *x, y }).is_none())
+            .collect();
+
+        assert_eq!(dead, [] as [f32; 0]);
+    }
+
+    /// A boundary has to belong to exactly one side or it is a seam again.
+    /// Half a pixel left of the split is the first chip.
+    #[kithara::test]
+    fn the_column_left_of_a_cell_boundary_is_the_chip_before_it() {
+        let painter = Preset::new(builtin::skin());
+        let data = data(Some(0));
+        let selector = painter.selector(BOUNDS);
+        let y = selector.y + selector.h / 2.0;
+        let last_left = Pt {
+            x: selector.x + selector.w / 2.0 - 0.5,
+            y,
+        };
+
+        assert_eq!(painter.hit_index(&data, BOUNDS, last_left), Some(0));
+    }
+
+    /// And the boundary itself is the chip after it.
+    #[kithara::test]
+    fn a_cell_boundary_is_the_chip_after_it() {
+        let painter = Preset::new(builtin::skin());
+        let data = data(Some(0));
+        let selector = painter.selector(BOUNDS);
+        let y = selector.y + selector.h / 2.0;
+        let first_right = Pt {
+            x: selector.x + selector.w / 2.0,
+            y,
+        };
+
+        assert_eq!(painter.hit_index(&data, BOUNDS, first_right), Some(1));
+    }
+
+    /// The padding the selector is inset by is still nobody's: a press outside
+    /// the selector must not reach the chip nearest to it.
+    #[kithara::test]
+    fn the_padding_outside_the_selector_selects_nothing() {
+        let painter = Preset::new(builtin::skin());
+        let inside_bounds_left_of_selector = Pt {
+            x: BOUNDS.x,
+            y: BOUNDS.y + BOUNDS.h / 2.0,
+        };
+
+        assert_eq!(
+            painter.hit_index(&data(Some(0)), BOUNDS, inside_bounds_left_of_selector),
+            None
+        );
     }
 }
