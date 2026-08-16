@@ -256,17 +256,18 @@ fn view(state: &Gallery, _window: window::Id) -> Element<'_, Message> {
     .map(Message::Ui)
 }
 
+/// Time runs on the pages that say they move, which the document answers for
+/// itself. Naming the pages here instead is a second account of the same fact,
+/// and it drifts: a page that gained something moving kept its picture frozen
+/// until an unrelated event redrew it, and one that lost it went on waking the
+/// host every tick for nothing.
+///
 /// A capture never ticks: the offscreen host photographs one frame of a freshly
 /// mounted page, so a clock running here would put the two hosts at different
 /// moments and the comparison would measure the difference between them.
 fn subscription(state: &Gallery) -> Subscription<Message> {
     let close = window::close_requests().map(Message::Close);
-    if state.capture.is_none()
-        && matches!(
-            state.reads.active_tab(),
-            Tab::Stress | Tab::Vis | Tab::Objects | Tab::Motion | Tab::Sprites
-        )
-    {
+    if state.capture.is_none() && state.compiled().animates {
         Subscription::batch([
             close,
             iced_time::every(Duration::from_millis(Consts::STRESS_TICK_MS)).map(|_| Message::Tick),
