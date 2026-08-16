@@ -1362,7 +1362,7 @@ mod indexed {
     fn event<Painter>(
         gesture: &Gesture<'_, Painter>,
         state: &mut GestureState,
-        event: Event,
+        event: &Event,
         point: Option<Point>,
     ) -> (Option<UiEvent>, Status)
     where
@@ -1371,7 +1371,7 @@ mod indexed {
         gesture
             .on_input(
                 state,
-                &event,
+                event,
                 bounds(),
                 point.map_or(Cursor::Unavailable, Cursor::Available),
             )
@@ -1402,7 +1402,7 @@ mod indexed {
             event(
                 &gesture,
                 &mut GestureState::default(),
-                Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)),
+                &Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)),
                 Some(Point::new(94.0, 21.0)),
             ),
             (
@@ -1432,7 +1432,7 @@ mod indexed {
                 event(
                     &gesture,
                     &mut state,
-                    Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)),
+                    &Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)),
                     Some(point),
                 ),
                 (None, Status::Captured),
@@ -1441,7 +1441,7 @@ mod indexed {
                 event(
                     &gesture,
                     &mut state,
-                    Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)),
+                    &Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)),
                     Some(point),
                 ),
                 (
@@ -1463,13 +1463,13 @@ mod indexed {
         let _ = event(
             &gesture,
             &mut state,
-            Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)),
+            &Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)),
             Some(points.first),
         );
         let _ = event(
             &gesture,
             &mut state,
-            Event::Mouse(mouse::Event::CursorMoved {
+            &Event::Mouse(mouse::Event::CursorMoved {
                 position: points.second,
             }),
             Some(points.second),
@@ -1480,7 +1480,7 @@ mod indexed {
             event(
                 &gesture,
                 &mut state,
-                Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)),
+                &Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)),
                 Some(points.second),
             )
             .0,
@@ -1490,7 +1490,7 @@ mod indexed {
         let _ = event(
             &gesture,
             &mut state,
-            Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)),
+            &Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)),
             Some(points.first),
         );
         let cancel = Input::Pointer(crate::interact::mouse(PointerPhase::Cancel, None));
@@ -1507,14 +1507,14 @@ mod indexed {
         let _ = event(
             &gesture,
             &mut state,
-            Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)),
+            &Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)),
             Some(points.first),
         );
         assert_eq!(
             event(
                 &gesture,
                 &mut state,
-                Event::Mouse(mouse::Event::CursorLeft),
+                &Event::Mouse(mouse::Event::CursorLeft),
                 None,
             ),
             (None, Status::Captured)
@@ -1546,7 +1546,7 @@ mod indexed {
                 event(
                     &gesture,
                     &mut state,
-                    Event::Mouse(mouse::Event::CursorMoved { position: point }),
+                    &Event::Mouse(mouse::Event::CursorMoved { position: point }),
                     Some(point),
                 ),
                 (None, Status::Ignored),
@@ -1556,7 +1556,7 @@ mod indexed {
                 event(
                     &gesture,
                     &mut state,
-                    Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)),
+                    &Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)),
                     Some(point),
                 ),
                 (None, Status::Ignored),
@@ -1566,7 +1566,7 @@ mod indexed {
                 event(
                     &gesture,
                     &mut state,
-                    Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)),
+                    &Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)),
                     Some(point),
                 ),
                 (None, Status::Ignored),
@@ -1575,13 +1575,13 @@ mod indexed {
             let _ = event(
                 &gesture,
                 &mut state,
-                Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)),
+                &Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)),
                 Some(points.first),
             );
             let _ = event(
                 &gesture,
                 &mut state,
-                Event::Mouse(mouse::Event::CursorMoved { position: point }),
+                &Event::Mouse(mouse::Event::CursorMoved { position: point }),
                 Some(point),
             );
             assert_eq!(state.index.visual().hovered, None);
@@ -1589,7 +1589,7 @@ mod indexed {
                 event(
                     &gesture,
                     &mut state,
-                    Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)),
+                    &Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)),
                     Some(point),
                 ),
                 (None, Status::Captured),
@@ -1617,7 +1617,7 @@ mod indexed {
             event(
                 &gesture,
                 &mut state,
-                Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)),
+                &Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)),
                 Some(points.first),
             ),
             (None, Status::Captured)
@@ -1626,7 +1626,7 @@ mod indexed {
             event(
                 &gesture,
                 &mut state,
-                Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)),
+                &Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)),
                 Some(points.first),
             ),
             (None, Status::Captured)
@@ -1656,7 +1656,7 @@ mod indexed {
                 event(
                     &out_of_range,
                     &mut state,
-                    Event::Mouse(event_kind),
+                    &Event::Mouse(event_kind),
                     Some(Point::new(105.0, 21.0)),
                 ),
                 (None, Status::Captured)

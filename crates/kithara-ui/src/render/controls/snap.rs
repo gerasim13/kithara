@@ -35,15 +35,13 @@ mod tests {
     /// over four columns and three gaps, so two of the four start on a half
     /// pixel. This is the case the two hosts drew differently.
     fn wave_row() -> Vec<Rectangle> {
-        (0..4)
-            .map(|index| {
-                let index: f32 = index as f32;
-                Rectangle {
-                    height: 120.0,
-                    width: 262.5,
-                    x: 212.0 + index * (262.5 + 8.0),
-                    y: 85.0,
-                }
+        [0.0_f32, 1.0, 2.0, 3.0]
+            .into_iter()
+            .map(|index| Rectangle {
+                height: 120.0,
+                width: 262.5,
+                x: 212.0 + index * (262.5 + 8.0),
+                y: 85.0,
             })
             .collect()
     }

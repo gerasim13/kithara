@@ -467,61 +467,6 @@ fn complete_frame_signals(signals: &mut Vec<RenderRootSignal>) -> bool {
     animation
 }
 
-#[cfg(test)]
-mod frame_signal_tests {
-    use kithara_test_utils::kithara;
-
-    use super::*;
-
-    #[kithara::test]
-    fn ordinary_redraw_does_not_schedule_another_frame() {
-        let mut signals = vec![RenderRootSignal::RequestRedraw];
-
-        assert!(!complete_frame_signals(&mut signals));
-        assert!(signals.is_empty());
-    }
-
-    #[kithara::test]
-    fn animation_request_schedules_another_frame() {
-        let mut signals = vec![RenderRootSignal::RequestAnimFrame];
-
-        assert!(complete_frame_signals(&mut signals));
-        assert!(signals.is_empty());
-    }
-
-    #[kithara::test]
-    fn only_redraw_and_animation_signals_need_a_frame() {
-        let no_frame = [RenderRootSignal::StartIme, RenderRootSignal::EndIme];
-        let redraw = [RenderRootSignal::RequestRedraw];
-        let animation = [RenderRootSignal::RequestAnimFrame];
-
-        assert!(!frame_requested(&no_frame));
-        assert!(frame_requested(&redraw));
-        assert!(frame_requested(&animation));
-    }
-
-    #[kithara::test]
-    fn satisfied_signals_are_removed_and_unrelated_signals_keep_their_order() {
-        let mut signals = vec![
-            RenderRootSignal::StartIme,
-            RenderRootSignal::RequestRedraw,
-            RenderRootSignal::EndIme,
-            RenderRootSignal::RequestAnimFrame,
-            RenderRootSignal::TakeFocus,
-        ];
-
-        assert!(complete_frame_signals(&mut signals));
-        assert!(matches!(
-            signals.as_slice(),
-            [
-                RenderRootSignal::StartIme,
-                RenderRootSignal::EndIme,
-                RenderRootSignal::TakeFocus
-            ]
-        ));
-    }
-}
-
 fn frame_requested(signals: &[RenderRootSignal]) -> bool {
     signals.iter().any(|signal| {
         matches!(
@@ -719,5 +664,60 @@ const fn command_cursor(command: WindowCommand) -> CursorShape {
         | WindowCommand::ToggleMaximize
         | WindowCommand::Fullscreen
         | WindowCommand::Close => CursorShape::None,
+    }
+}
+
+#[cfg(test)]
+mod frame_signal_tests {
+    use kithara_test_utils::kithara;
+
+    use super::*;
+
+    #[kithara::test]
+    fn ordinary_redraw_does_not_schedule_another_frame() {
+        let mut signals = vec![RenderRootSignal::RequestRedraw];
+
+        assert!(!complete_frame_signals(&mut signals));
+        assert!(signals.is_empty());
+    }
+
+    #[kithara::test]
+    fn animation_request_schedules_another_frame() {
+        let mut signals = vec![RenderRootSignal::RequestAnimFrame];
+
+        assert!(complete_frame_signals(&mut signals));
+        assert!(signals.is_empty());
+    }
+
+    #[kithara::test]
+    fn only_redraw_and_animation_signals_need_a_frame() {
+        let no_frame = [RenderRootSignal::StartIme, RenderRootSignal::EndIme];
+        let redraw = [RenderRootSignal::RequestRedraw];
+        let animation = [RenderRootSignal::RequestAnimFrame];
+
+        assert!(!frame_requested(&no_frame));
+        assert!(frame_requested(&redraw));
+        assert!(frame_requested(&animation));
+    }
+
+    #[kithara::test]
+    fn satisfied_signals_are_removed_and_unrelated_signals_keep_their_order() {
+        let mut signals = vec![
+            RenderRootSignal::StartIme,
+            RenderRootSignal::RequestRedraw,
+            RenderRootSignal::EndIme,
+            RenderRootSignal::RequestAnimFrame,
+            RenderRootSignal::TakeFocus,
+        ];
+
+        assert!(complete_frame_signals(&mut signals));
+        assert!(matches!(
+            signals.as_slice(),
+            [
+                RenderRootSignal::StartIme,
+                RenderRootSignal::EndIme,
+                RenderRootSignal::TakeFocus
+            ]
+        ));
     }
 }

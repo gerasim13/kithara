@@ -375,8 +375,9 @@ mod tests {
         let buckets = data
             .waveform
             .as_ref()
-            .map(|waveform| waveform.buckets.as_ptr())
-            .unwrap_or_else(|| panic!("the fixture must own waveform samples"));
+            .unwrap_or_else(|| panic!("the fixture must own waveform samples"))
+            .buckets
+            .as_ptr();
         let value = reads
             .get("deck.playback.waveform")
             .unwrap_or_else(|| panic!("the fixture must report a waveform"));

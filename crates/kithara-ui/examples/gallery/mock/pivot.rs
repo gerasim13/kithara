@@ -1,6 +1,7 @@
 use kithara_ui::render::{
     PortalMapView, PortalTarget, ReadValue, ScalarRange, TableRow, TableValue,
 };
+use num_traits::cast::AsPrimitive;
 
 use super::data::CATALOG;
 
@@ -138,8 +139,9 @@ impl PivotState {
         if !path.contains("pivot") || !value.is_finite() {
             return false;
         }
-        let bpm = PivotConsts::RANGE_LOW
-            + value.clamp(0.0, 1.0) as f32 * (PivotConsts::RANGE_HIGH - PivotConsts::RANGE_LOW);
+        let norm: f32 = value.clamp(0.0, 1.0).as_();
+        let bpm =
+            PivotConsts::RANGE_LOW + norm * (PivotConsts::RANGE_HIGH - PivotConsts::RANGE_LOW);
         let bpm = (bpm / 2.0).round() * 2.0;
         match path.rsplit('/').next() {
             Some("min") => self.min = bpm.min(self.max - PivotConsts::RANGE_GAP),

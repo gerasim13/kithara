@@ -752,8 +752,8 @@ impl FrameHost for Immediate {
 /// Whether a widget asked iced's runtime to come back with another frame.
 fn redraw_asked(state: &State) -> bool {
     match state {
-        State::Outdated => true,
-        State::Updated {
+        State::Outdated
+        | State::Updated {
             redraw_request: RedrawRequest::NextFrame | RedrawRequest::At(_),
             ..
         } => true,
@@ -924,14 +924,17 @@ impl Host {
     /// scene and needs nothing.
     fn backend(self) -> Result<Backend, String> {
         match self {
-            Self::Immediate => engine().map(Backend::Immediate),
+            Self::Immediate => engine().map(Box::new).map(Backend::Immediate),
             Self::Retained => Ok(Backend::Retained),
         }
     }
 }
 
+/// The device is boxed because the other variant carries nothing: a wgpu
+/// `Engine` is a few hundred bytes, and every `Backend` the retained cases
+/// build would otherwise be sized for a device it never opens.
 enum Backend {
-    Immediate(Engine),
+    Immediate(Box<Engine>),
     Retained,
 }
 
@@ -943,9 +946,11 @@ impl Backend {
     /// all, measures through the software one.
     fn geometry(&self) -> iced::Renderer {
         match self {
-            Self::Immediate(engine) => {
-                FallbackRenderer::Primary(WgpuRenderer::new(engine.clone(), SANS, Pixels(14.0)))
-            }
+            Self::Immediate(engine) => FallbackRenderer::Primary(WgpuRenderer::new(
+                Engine::clone(engine),
+                SANS,
+                Pixels(14.0),
+            )),
             Self::Retained => {
                 FallbackRenderer::Secondary(TinySkiaRenderer::new(SANS, Pixels(14.0)))
             }

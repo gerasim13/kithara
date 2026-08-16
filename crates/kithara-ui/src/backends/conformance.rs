@@ -19,6 +19,7 @@ use iced::{
     widget::canvas::Frame,
 };
 use kithara_test_utils::kithara;
+use num_traits::cast::cast;
 use vello::{
     AaConfig, AaSupport, RenderParams, Renderer, RendererOptions, Scene,
     kurbo::Affine,
@@ -45,8 +46,9 @@ use crate::{
 struct Fixture;
 
 impl Fixture {
-    /// The surface they paint into.
-    const SURFACE: (u32, u32) = (96, 96);
+    /// The surface they paint into. Narrow enough that every width the two
+    /// rasterisers and the sampler ask for converts exactly.
+    const SURFACE: (u16, u16) = (96, 96);
 
     /// Where the control sits on it. A widget almost never starts at the
     /// window's origin, and the defect this module exists for only appears when
@@ -276,11 +278,19 @@ fn surface_is_untouched(rgba: &[u8]) -> bool {
 
 /// The green channel where the surface was asked about, or zero off-surface.
 fn sample(rgba: &[u8], x: f32, y: f32) -> u8 {
-    let x = (Fixture::ORIGIN.0 + x) as usize;
-    let y = (Fixture::ORIGIN.1 + y) as usize;
-    rgba.get((y * Fixture::SURFACE.0 as usize + x) * 4 + 1)
+    let x = pixel_index(Fixture::ORIGIN.0 + x);
+    let y = pixel_index(Fixture::ORIGIN.1 + y);
+    rgba.get((y * usize::from(Fixture::SURFACE.0) + x) * 4 + 1)
         .copied()
         .unwrap_or_default()
+}
+
+/// The pixel a fixture coordinate lands in. Every coordinate the module samples
+/// is built from the constants above, so one that will not convert means the
+/// fixture is wrong rather than the sample being off the surface.
+fn pixel_index(coordinate: f32) -> usize {
+    cast(coordinate)
+        .unwrap_or_else(|| panic!("the fixture must sample the surface, not at {coordinate}"))
 }
 
 /// Ink on the ring itself, and nothing in the hole.
@@ -294,10 +304,11 @@ fn ring_has_a_hole(rgba: &[u8]) -> bool {
 /// red and the clipped one is white, so a high green channel means the clipped
 /// rectangle is on top — which is the order the list asked for.
 fn clip_is_on_top(rgba: &[u8]) -> bool {
-    let x = (Fixture::ORIGIN.0 + Fixture::INSIDE.x + Fixture::INSIDE.w / 2.0) as usize;
-    let y = (Fixture::ORIGIN.1 + Fixture::INSIDE.y + Fixture::INSIDE.h / 2.0) as usize;
-    let pixel = (y * Fixture::SURFACE.0 as usize + x) * 4;
-    rgba.get(pixel + 1).is_some_and(|green| *green > 128)
+    sample(
+        rgba,
+        Fixture::INSIDE.x + Fixture::INSIDE.w / 2.0,
+        Fixture::INSIDE.y + Fixture::INSIDE.h / 2.0,
+    ) > 128
 }
 
 fn through_vello(list: &DrawList) -> Vec<u8> {
@@ -446,7 +457,7 @@ fn through_iced(list: &DrawList) -> Vec<u8> {
     .unwrap_or_else(|| panic!("iced must give a wgpu renderer without a window"));
     let mut frame = Frame::new(
         &renderer,
-        Size::new(Fixture::SURFACE.0 as f32, Fixture::SURFACE.1 as f32),
+        Size::new(f32::from(Fixture::SURFACE.0), f32::from(Fixture::SURFACE.1)),
     );
     replay_ordered(list, &mut frame, skin.text_resources());
     let geometry = frame.into_geometry();
@@ -457,7 +468,7 @@ fn through_iced(list: &DrawList) -> Vec<u8> {
         },
     );
     renderer.screenshot(
-        Size::new(Fixture::SURFACE.0, Fixture::SURFACE.1),
+        Size::new(u32::from(Fixture::SURFACE.0), u32::from(Fixture::SURFACE.1)),
         1.0,
         Color::from_rgb(0.0, 0.0, 0.0),
     )
@@ -465,7 +476,11 @@ fn through_iced(list: &DrawList) -> Vec<u8> {
 
 /// A wgpu device with no surface, and one scene rasterised through it.
 fn rasterise(scene: &Scene) -> Result<Vec<u8>, String> {
-    rasterise_at(scene, Fixture::SURFACE, palette::css::BLACK)
+    rasterise_at(
+        scene,
+        (u32::from(Fixture::SURFACE.0), u32::from(Fixture::SURFACE.1)),
+        palette::css::BLACK,
+    )
 }
 
 pub(crate) fn rasterise_at(
