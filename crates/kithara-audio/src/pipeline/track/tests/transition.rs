@@ -572,6 +572,37 @@ async fn finite_incoming_latches_cut_while_outgoing_fills_the_join_tail() {
 }
 
 #[kithara::test(tokio)]
+async fn live_same_spec_promotion_arms_the_crossfade_ramp() {
+    const INCOMING_CHUNKS: usize = 5;
+
+    let mut fixture =
+        route_signal_source_with_finite_incoming(Consts::SAMPLE_RATE, INCOMING_CHUNKS).await;
+    let TrackStep::Produced(_) = fixture.source.step_track() else {
+        panic!("the active decoder must establish an exact production frontier");
+    };
+    let cut = u64::try_from(Consts::ROUTE_CHUNK_FRAMES).unwrap_or(u64::MAX);
+    let plan = incoming_plan_at(cut);
+    let transition = plan.transition();
+    fixture.control.set_exact_plan(plan);
+    fixture.control.set_exact_reader_ready();
+    fixture.control.set_promotion(VariantPromotion::Promoted);
+
+    fixture.source.flush_deferred();
+    wait_for_incoming_priming(&mut fixture, transition).await;
+    fixture.source.flush_deferred();
+    let TrackStep::Blocked(_) = fixture.source.step_track() else {
+        panic!("outgoing publication must stop at the latched cut while its join tail fills");
+    };
+    fixture.source.flush_deferred();
+    assert_eq!(fixture.control.promote_calls(), 1);
+
+    assert!(
+        !fixture.source.decode.blender_is_steady(),
+        "a live same-spec promotion must commit through the blender join ramp"
+    );
+}
+
+#[kithara::test(tokio)]
 async fn abandoned_incoming_hard_cuts_without_outgoing_join_pcm() {
     const INCOMING_CHUNKS: usize = 5;
 

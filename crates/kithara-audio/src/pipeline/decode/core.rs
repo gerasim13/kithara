@@ -312,6 +312,13 @@ impl ActiveDecode {
                 emit: Option<&DeferredBus<Event>>,
             );
         }
+        to self.blender {
+            #[call(prepare_active)]
+            pub(crate) fn prepare_replacement_profile(&mut self, profile: BlenderProfile);
+            #[cfg(test)]
+            #[call(is_steady)]
+            pub(crate) fn blender_is_steady(&self) -> bool;
+        }
     }
 
     pub(crate) fn push(&mut self, chunk: PcmChunk) -> DecodeResult<()> {
@@ -337,10 +344,6 @@ impl ActiveDecode {
             let error = self.reject_stage(failure);
             self.stage_error = Some(error);
         }
-    }
-
-    pub(crate) fn prepare_replacement_profile(&mut self, profile: BlenderProfile) {
-        self.blender.prepare_active(profile);
     }
 
     pub(crate) fn take_rejected_chunk(&mut self) -> Option<PcmChunk> {
