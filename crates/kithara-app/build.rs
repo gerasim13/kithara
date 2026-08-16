@@ -12,8 +12,9 @@
 //!    becomes an empty string, headers referencing the variable are
 //!    omitted. The binary still compiles, but the key server will
 //!    reject the request. Lanes that build against a real key server
-//!    set `KITHARA_DRM_REQUIRE` (any non-empty value), which turns a
-//!    missing variable into a build error naming that variable.
+//!    set `KITHARA_DRM_REQUIRE` (any non-empty value): an upfront pass
+//!    then validates every env reference in `app.yaml` and fails the
+//!    build listing all missing variables.
 //!
 //! `app.yaml` and `.env` are both `rerun-if-changed`.
 
@@ -176,18 +177,25 @@ fn main() {
 
     let env_map = load_env(&dotenv_path);
     println!("cargo:rerun-if-env-changed=KITHARA_DRM_REQUIRE");
-    let require = env_map
-        .get("KITHARA_DRM_REQUIRE")
-        .is_some_and(|v| !v.is_empty());
 
-    for provider in &app.drm.providers {
-        if let Some(name) = provider.cipher_env.as_deref().and_then(parse_env_ref) {
-            println!("cargo:rerun-if-env-changed={name}");
-        }
-        for value in provider.headers.values() {
-            if let Some(name) = parse_env_ref(value) {
-                println!("cargo:rerun-if-env-changed={name}");
-            }
+    let env_refs = collect_env_refs(&app.drm.providers);
+    for (_, name) in &env_refs {
+        println!("cargo:rerun-if-env-changed={name}");
+    }
+    if env_map
+        .get("KITHARA_DRM_REQUIRE")
+        .is_some_and(|v| !v.is_empty())
+    {
+        let missing: Vec<String> = env_refs
+            .iter()
+            .filter(|(_, name)| env_map.get(name).is_none_or(String::is_empty))
+            .map(|(label, name)| format!("{label}: `{name}`"))
+            .collect();
+        if !missing.is_empty() {
+            panic!(
+                "KITHARA_DRM_REQUIRE is set but these env vars are unset or empty:\n  {}",
+                missing.join("\n  ")
+            );
         }
     }
 
@@ -195,7 +203,7 @@ fn main() {
     emit_scalars(&mut code, &app);
     emit_tracks(&mut code, &app.playlist.tracks);
     emit_asset_layouts(&mut code, &app.assets.cache_identity);
-    emit_drm_policy(&mut code, &app.drm.providers, &env_map, require);
+    emit_drm_policy(&mut code, &app.drm.providers, &env_map);
 
     let out_dir = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR is set by cargo"));
     let out_path = out_dir.join("app_config_baked.rs");
@@ -309,7 +317,6 @@ fn emit_drm_policy(
     code: &mut String,
     providers: &[DrmProvider],
     env_map: &HashMap<String, String>,
-    require: bool,
 ) {
     // Each provider emits its own `KeyRequestFactory` closure that
     // rebuilds the X-Encrypted-Key salt on EVERY key request, using
@@ -330,23 +337,17 @@ fn emit_drm_policy(
          let mut rules = Vec::new();\n",
     );
     for provider in providers {
-        emit_provider(code, provider, env_map, require);
+        emit_provider(code, provider, env_map);
     }
     code.push_str("    DomainKeyPolicy::new(rules)\n}\n");
 }
 
-fn emit_provider(
-    code: &mut String,
-    p: &DrmProvider,
-    env_map: &HashMap<String, String>,
-    require: bool,
-) {
+fn emit_provider(code: &mut String, p: &DrmProvider, env_map: &HashMap<String, String>) {
     let cipher_expr = resolve_secret(
         p.cipher_key.as_deref(),
         p.cipher_env.as_deref(),
         env_map,
         &format!("provider `{}` cipher", p.name),
-        require,
     );
     let domains = p
         .domains
@@ -363,7 +364,7 @@ fn emit_provider(
             );
         }
         let label = format!("provider `{}` header `{name}`", p.name);
-        let Some(value_expr) = render_template(value, env_map, &label, require) else {
+        let Some(value_expr) = render_template(value, env_map, &label) else {
             continue;
         };
         writeln!(
@@ -402,6 +403,35 @@ fn parse_env_ref(value: &str) -> Option<&str> {
     value.strip_prefix('$')
 }
 
+/// Every env reference in the DRM provider config as `(label, name)`
+/// pairs: cipher references plus whole-string `$VAR` and embedded
+/// `${VAR}` header placeholders. One walk serves both the
+/// `rerun-if-env-changed` directives and the `KITHARA_DRM_REQUIRE`
+/// validation pass.
+fn collect_env_refs(providers: &[DrmProvider]) -> Vec<(String, String)> {
+    let mut refs = Vec::new();
+    for p in providers {
+        if let Some(name) = p.cipher_env.as_deref().and_then(parse_env_ref) {
+            refs.push((format!("provider `{}` cipher", p.name), name.to_string()));
+        }
+        for (header, value) in &p.headers {
+            let label = format!("provider `{}` header `{header}`", p.name);
+            if let Some(name) = parse_env_ref(value) {
+                refs.push((label, name.to_string()));
+                continue;
+            }
+            let mut rest = value.as_str();
+            while let Some(start) = rest.find("${") {
+                let tail = &rest[start + 2..];
+                let Some(end) = tail.find('}') else { break };
+                refs.push((label.clone(), tail[..end].to_string()));
+                rest = &tail[end + 1..];
+            }
+        }
+    }
+    refs
+}
+
 /// Required secret: must come from either `inline` (non-secret literal)
 /// or `env_ref` (`$KITHARA_...` looked up in `env_map` and wrapped with
 /// `obfstr!()`). Panics if both or neither are set.
@@ -410,7 +440,6 @@ fn resolve_secret(
     env_ref: Option<&str>,
     env_map: &HashMap<String, String>,
     label: &str,
-    require: bool,
 ) -> String {
     match (inline, env_ref) {
         (Some(_), Some(_)) => {
@@ -421,15 +450,10 @@ fn resolve_secret(
             let name = parse_env_ref(reference).unwrap_or_else(|| {
                 panic!("{label}: env reference must start with `$` (got `{reference}`)")
             });
-            env_map.get(name).filter(|v| !v.is_empty()).map_or_else(
-                || {
-                    if require {
-                        panic!("{label}: env `{name}` is not set and KITHARA_DRM_REQUIRE is set");
-                    }
-                    literal_expr("", false)
-                },
-                |v| literal_expr(v, true),
-            )
+            env_map
+                .get(name)
+                .filter(|v| !v.is_empty())
+                .map_or_else(|| literal_expr("", false), |v| literal_expr(v, true))
         }
         (None, None) => panic!("{label}: neither inline value nor env reference provided"),
     }
@@ -449,23 +473,13 @@ fn literal_expr(value: &str, obfuscate: bool) -> String {
 /// Literal values pass through unchanged. Env-resolved values are
 /// wrapped with `obfstr!()`. `None` means the value referenced a
 /// missing env var — the caller should drop the header entirely.
-fn render_template(
-    value: &str,
-    env_map: &HashMap<String, String>,
-    label: &str,
-    require: bool,
-) -> Option<String> {
+fn render_template(value: &str, env_map: &HashMap<String, String>, label: &str) -> Option<String> {
     if !value.contains("${") {
         if let Some(name) = parse_env_ref(value) {
-            return env_map.get(name).filter(|v| !v.is_empty()).map_or_else(
-                || {
-                    if require {
-                        panic!("{label}: env `{name}` is not set and KITHARA_DRM_REQUIRE is set");
-                    }
-                    None
-                },
-                |v| Some(literal_expr(v, true)),
-            );
+            return env_map
+                .get(name)
+                .filter(|v| !v.is_empty())
+                .map(|v| literal_expr(v, true));
         }
         return Some(literal_expr(value, false));
     }
@@ -478,17 +492,11 @@ fn render_template(
         let tail = &tail[2..];
         let end = tail
             .find('}')
-            .expect("{label}: unterminated `${{...` in `{value}`");
+            .unwrap_or_else(|| panic!("{label}: unterminated `${{...` in `{value}`"));
         let name = &tail[..end];
-        if let Some(v) = env_map.get(name).filter(|v| !v.is_empty()) {
-            fmt_str.push_str("{}");
-            args.push(literal_expr(v, true));
-        } else {
-            if require {
-                panic!("{label}: env `{name}` is not set and KITHARA_DRM_REQUIRE is set");
-            }
-            return None;
-        }
+        let v = env_map.get(name).filter(|v| !v.is_empty())?;
+        fmt_str.push_str("{}");
+        args.push(literal_expr(v, true));
         rest = &tail[end + 1..];
     }
     fmt_str.push_str(&rest.replace('{', "{{").replace('}', "}}"));
