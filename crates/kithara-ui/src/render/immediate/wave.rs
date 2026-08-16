@@ -20,7 +20,7 @@ use crate::{
         recognizers::{Scalar, ScalarState, Track},
     },
     module::WaveStyle,
-    render::{Skin, UiEvent, Widget, scalar, scalar_child},
+    render::{Skin, UiEvent, Widget, controls::snapped, scalar, scalar_child},
     text::TextContext,
 };
 
@@ -94,6 +94,7 @@ impl canvas::Program<UiEvent> for MiniWaveCanvas<'_> {
         bounds: Rectangle,
         cursor: Cursor,
     ) -> Vec<Geometry> {
+        let bounds = snapped(bounds);
         let show_overlay = !cursor.is_over(iced_bounds(self.painter.overlay_bounds(
             &self.data,
             Rect {

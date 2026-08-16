@@ -18,7 +18,7 @@ use crate::{
     backends::replay_ordered,
     draw::{DrawListBuilder, Rect},
     interact::{CursorShape, Hover, iced as iced_interact, recognizers::click},
-    render::{IcedSkin, InputOwner, Skin, UiEvent, toggle_module},
+    render::{IcedSkin, InputOwner, Skin, UiEvent, controls::snapped, toggle_module},
     skin::{ColorRole, FontFamily, FontWeight, FrameSkin, TextRoleSkin},
     text::TextContext,
 };
@@ -177,6 +177,7 @@ impl IcedWidget<UiEvent, Theme, Renderer> for LeafPaint<'_, '_> {
         if bounds.width < 1.0 || bounds.height < 1.0 {
             return;
         }
+        let bounds = snapped(bounds);
         let state = tree.state.downcast_ref::<LeafState>();
         let mut text = state.text.borrow_mut();
         let text = text.get_or_insert_with(|| self.skin.text_resources().into());

@@ -29,7 +29,18 @@
 # production PR #188, and every page carries that sidebar, so each page picked
 # up two more rows of the nav's own text disagreement. Stress sat closest to its
 # line and was the only page to cross it; measured 4.1% over three runs.
-16-stress.png               5
+#
+# Lowered 5 -> 4 on 2026-08-16, when the immediate host started snapping a
+# control's box to the pixel grid the way Masonry already snaps a node's. Two of
+# this page's four waves start on a half pixel, and the two hosts were counting
+# their bar columns from different widths there - 262.5 rounded to 263 against
+# the 262 pixels the box really covers - so each host summarised a different
+# slice of the track into every column and drew a different waveform of the same
+# data. 4.0% -> 3.5% over two runs. What is left is a one-pixel offset on those
+# same two boxes: a Canvas is placed by the toolkit at the float box, and the
+# clip each replayed run opens discards the parent transform, so the program
+# cannot carry its own geometry back onto the grid.
+16-stress.png               4
 
 # Table landed 2026-08-09: library2 fell 37.8% -> 3.1%, table to 1.5%.
 # The generic document shader, landed 2026-08-15. Its first capture differed by

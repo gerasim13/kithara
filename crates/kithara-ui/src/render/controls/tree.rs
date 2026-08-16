@@ -8,7 +8,7 @@ use iced::{
 };
 use num_traits::ToPrimitive;
 
-use super::{RetainedCanvas, RetainedCanvasState};
+use super::{RetainedCanvas, RetainedCanvasState, snapped};
 use crate::{
     atoms::tree::face::Tree,
     backends::replay_ordered,
@@ -162,6 +162,7 @@ fn geometry(
     bounds: Rectangle,
     cursor: Cursor,
 ) -> Vec<Geometry> {
+    let bounds = snapped(bounds);
     let mut frame = Frame::new(renderer, bounds.size());
     let mut text = state.text.borrow_mut();
     let text = text.get_or_insert_with(|| picture.skin().text_resources().into());

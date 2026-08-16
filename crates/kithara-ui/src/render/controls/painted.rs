@@ -29,7 +29,7 @@ use crate::{
     },
     render::{
         Skin, UiEvent, activate, command,
-        controls::{Drag, Grip, IndexEvent, IndexPress, Indexing, Press, Span},
+        controls::{Drag, Grip, IndexEvent, IndexPress, Indexing, Press, Span, snapped},
         publish, scalar, span_event,
     },
     solve,
@@ -199,6 +199,7 @@ where
         if bounds.width < 1.0 || bounds.height < 1.0 {
             return;
         }
+        let bounds = snapped(bounds);
         let list = self.draw_list(
             state,
             Rect {
@@ -222,6 +223,7 @@ where
         if bounds.width < 1.0 || bounds.height < 1.0 {
             return;
         }
+        let bounds = snapped(bounds);
         let list = self.indexed_draw_list(
             state,
             Rect {
