@@ -104,6 +104,10 @@ struct EventCollector {
     audio_trace: Mutex<Vec<String>>,
     event_tail: Mutex<Vec<String>>,
     switch_count: AtomicUsize,
+    /// Events the broadcast ring overwrote before a drain reached them. A
+    /// missing transition means one of two different bugs — never published,
+    /// or published and lost — and only this counter tells them apart.
+    dropped_events: AtomicUsize,
 }
 
 impl EventCollector {
@@ -117,7 +121,14 @@ impl EventCollector {
             audio_trace: Mutex::new(Vec::new()),
             event_tail: Mutex::new(Vec::new()),
             switch_count: AtomicUsize::new(0),
+            dropped_events: AtomicUsize::new(0),
         }
+    }
+
+    /// How many events the ring dropped before this collector read them.
+    fn dropped_events(&self) -> usize {
+        self.drain();
+        self.dropped_events.load(Ordering::Relaxed)
     }
 
     fn push_audio_trace(&self, entry: String) {
@@ -136,8 +147,9 @@ impl EventCollector {
     }
 
     /// Fold every event published since the last drain into the accumulators.
-    /// `Lagged` is tolerated (mirrors the old task's `continue`); `Empty`/
-    /// `Closed` end the drain. No `.await`, so it never pins the virtual clock.
+    /// `Lagged` keeps the drain going but is counted, because the events it
+    /// names are gone; `Empty`/`Closed` end the drain. No `.await`, so it never
+    /// pins the virtual clock.
     fn drain(&self) {
         self.drain_locked(self.rx.lock());
     }
@@ -152,7 +164,13 @@ impl EventCollector {
         loop {
             let ev = match rx.try_recv().map(|env| env.event) {
                 Ok(ev) => ev,
-                Err(TryRecvError::Lagged(_)) => continue,
+                Err(TryRecvError::Lagged(lost)) => {
+                    self.dropped_events.fetch_add(
+                        usize::try_from(lost).unwrap_or(usize::MAX),
+                        Ordering::Relaxed,
+                    );
+                    continue;
+                }
                 Err(TryRecvError::Empty | TryRecvError::Closed) => break,
             };
             self.push_event_tail(format!("{ev:?}"));
@@ -1103,7 +1121,9 @@ async fn abr_switch_must_not_redownload_covered_segments() {
     serial,
     timeout(Duration::from_secs(30)),
     env(KITHARA_HANG_TIMEOUT_SECS = "5"),
-    tracing("kithara_abr=debug,kithara_hls=debug,kithara_play=debug,kithara_audio=debug")
+    tracing(
+        "kithara_abr=debug,kithara_hls=debug,kithara_play=debug,kithara_audio=debug,suite_stress=info"
+    )
 )]
 async fn runtime_manual_switch_via_handle_changes_playing_variant() {
     let segment_count = 30;
@@ -1209,9 +1229,17 @@ async fn runtime_manual_switch_via_handle_changes_playing_variant() {
         "L1: runtime Manual switch result"
     );
 
+    // A bare `saw_eof` says the switch never arrived but not why. The mode the
+    // handle ended in separates "ABR refused the target" from "ABR took it and
+    // the promotion never landed", and the drop count separates a promotion
+    // that never published from one whose event the ring overwrote.
     assert!(
         !transition.saw_eof,
-        "Manual(2) must promote before outgoing EOF: {transition:?}"
+        "Manual(2) must promote before outgoing EOF: {transition:?}; \
+         mode={:?}; transitions={transitions:?}; dropped_events={}; tail={:?}",
+        handle.mode(),
+        collector.dropped_events(),
+        collector.event_tail(),
     );
     assert!(
         manual_applied,
