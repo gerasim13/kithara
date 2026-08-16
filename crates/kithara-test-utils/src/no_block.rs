@@ -31,8 +31,9 @@ mod rtsan_gate {
     impl<F: Future> Future for RtsanChecked<F> {
         type Output = F::Output;
 
-        #[sanitize(realtime = "nonblocking")]
+        #[cfg_attr(not(rtsan_standalone), sanitize(realtime = "nonblocking"))]
         fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+            let _realtime = crate::rtsan::realtime_scope();
             self.project().fut.poll(cx)
         }
     }

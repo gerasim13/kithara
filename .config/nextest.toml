@@ -147,3 +147,20 @@ default-filter = 'all()'
 # it); adds JUnit so `just perf suite` gets exact per-test timings.
 [profile.perf.junit]
 path = "junit.xml"
+
+# RealtimeSanitizer lanes. A violation aborts the process, so the point of
+# running them here rather than under `cargo test` is nextest's process per
+# test: the abort takes one test down and JUnit names it, instead of the whole
+# suite dying with a bare exit code. No retries — a violation is a fact, not a
+# flake, and re-running one only hides which attempt saw it. `default-filter`
+# is opened because the lanes select integration suites the product filter
+# excludes.
+[profile.rtsan]
+default-filter = 'all()'
+fail-fast = false
+slow-timeout = { period = "120s", terminate-after = 2 }
+leak-timeout = "2s"
+
+[profile.rtsan.junit]
+path = "junit.xml"
+store-failure-output = true

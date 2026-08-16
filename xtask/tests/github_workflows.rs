@@ -425,6 +425,51 @@ fn standalone_rtsan_is_fail_closed_before_expanding_every_lane() {
         .map(|lane| lane.as_str().expect("RTSan lane is a string"))
         .collect();
     assert_eq!(lanes, ["rtsan", "rtsan-file", "rtsan-hls"]);
+
+    let backends: Vec<&str> = mapping_field(matrix, "backend")
+        .as_sequence()
+        .expect("RTSan backends are a sequence")
+        .iter()
+        .map(|backend| backend.as_str().expect("RTSan backend is a string"))
+        .collect();
+    assert_eq!(backends, ["instrumented", "standalone"]);
+
+    let lane_step = named_step(rtsan, "Run RTSan lane");
+    let lane_env = mapping_field(lane_step, "env")
+        .as_mapping()
+        .expect("RTSan lane environment is a mapping");
+    assert_eq!(
+        mapping_field(lane_env, "KITHARA_RTSAN_BACKEND").as_str(),
+        Some("${{ matrix.backend }}")
+    );
+    assert_eq!(
+        mapping_field(lane_env, "LANE").as_str(),
+        Some("${{ matrix.lane }}")
+    );
+
+    let upload = named_step(rtsan, "Upload the RTSan report");
+    assert_uploads(upload, &["target/nextest/rtsan/junit.xml"]);
+    let upload_inputs = mapping_field(upload, "with")
+        .as_mapping()
+        .expect("RTSan upload inputs are a mapping");
+    let artifact = mapping_field(upload_inputs, "name")
+        .as_str()
+        .expect("RTSan artifact name is a string");
+    for coordinate in [
+        "${{ matrix.backend }}",
+        "${{ matrix.lane }}",
+        "${{ github.run_id }}",
+        "${{ github.run_attempt }}",
+    ] {
+        assert!(
+            artifact.contains(coordinate),
+            "RTSan artifact name omits {coordinate:?} and collides across cells"
+        );
+    }
+    assert_eq!(
+        mapping_field(upload_inputs, "if-no-files-found").as_str(),
+        Some("error")
+    );
 }
 
 #[test]

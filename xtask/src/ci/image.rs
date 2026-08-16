@@ -128,6 +128,9 @@ pub(crate) fn linux_build_args(pins: &CiPins) -> Result<Vec<(&'static str, Strin
             "GITLEAKS_ARM64_SHA256",
             pins.gitleaks_linux_arm64_sha256.clone(),
         ),
+        ("RTSAN_VERSION", pins.rtsan_version.clone()),
+        ("RTSAN_AMD64_SHA256", pins.rtsan_linux_amd64_sha256.clone()),
+        ("RTSAN_ARM64_SHA256", pins.rtsan_linux_arm64_sha256.clone()),
     ];
     for (name, tool) in [
         ("AST_GREP_VERSION", "ast-grep"),

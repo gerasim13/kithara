@@ -239,24 +239,35 @@ miri *ARGS:
         -p kithara-stream \
         "$@"
 
-# The sanitizer needs `-Zbuild-std`, which needs the `rust-src` component. The
-# repository pins a nightly and installs the component into that one; plain
-# `nightly` is whatever the host last downloaded and usually has no `rust-src`.
+# Two backends answer to the same annotations, chosen by KITHARA_RTSAN_BACKEND:
 #
-# It also needs a symbolizer, and one is required rather than hoped for: a
-# stack of bare addresses is the one part of a sanitizer report nobody can
-# reconstruct afterwards, because the binary goes with the container. The
-# campaign of 2026-08-15 found a real violation fifty times over and could not
-# say where any of them was.
+#   instrumented (default) — the pinned nightly marks the checked entry points
+#     through `sanitize(realtime = "nonblocking")` and links the runtime from
+#     `-Zsanitizer=realtime`. Plain `nightly` is whatever the host last
+#     downloaded, so the pin is what the image names.
+#   standalone — stable Rust; the mark is a runtime guard and the runtime comes
+#     from the `rtsan-standalone` crate. Its build script gates on the presence
+#     of RTSAN_ENABLE (the value is never read, so `0` also enables it) and
+#     downloads the library with curl unless RTSAN_LIB_PATH names a staged one.
+#     That path must keep the library's canonical file name or the link fails.
 #
-# `llvm-symbolizer` is a system package, not a rustup component —
-# `llvm-tools-preview` does not ship it. On Darwin the sanitizer runtime falls
-# back to `atos` from the command line tools, so there it needs nothing else.
+# Either way a symbolizer is required rather than hoped for: a stack of bare
+# addresses is the one part of a sanitizer report nobody can reconstruct
+# afterwards, because the binary goes with the container. The campaign of
+# 2026-08-15 found a real violation fifty times over and could not say where
+# any of them was. `llvm-symbolizer` is a system package, not a rustup
+# component — `llvm-tools-preview` does not ship it. On Darwin the sanitizer
+# runtime falls back to `atos` from the command line tools, so there it needs
+# nothing else.
+#
+# Both run under nextest: a violation aborts the process, and one process per
+# test is what turns that abort into a named failure plus JUnit instead of a
+# bare exit code for the whole suite.
 _rtsan SUITE FEATURES FILTER SUPPRESSIONS="":
     #!/usr/bin/env bash
     set -euo pipefail
     target="$(rustc -vV | sed -n 's/^host: //p')"
-    toolchain="${KITHARA_NIGHTLY_TOOLCHAIN:-nightly}"
+    backend="${KITHARA_RTSAN_BACKEND:-instrumented}"
     options="symbolize=1"
     if symbolizer="$(command -v llvm-symbolizer)"; then
         options="$options:external_symbolizer_path=$symbolizer"
@@ -270,12 +281,49 @@ _rtsan SUITE FEATURES FILTER SUPPRESSIONS="":
     if [ -n "{{ SUPPRESSIONS }}" ]; then
         options="$options:suppressions=$(pwd)/{{ SUPPRESSIONS }}"
     fi
+    case "$backend" in
+    instrumented)
+        toolchain="+${KITHARA_NIGHTLY_TOOLCHAIN:-nightly}"
+        flags="-Zsanitizer=realtime --cfg rtsan"
+        ;;
+    standalone)
+        toolchain="+${KITHARA_STABLE_TOOLCHAIN:-stable}"
+        flags="--cfg rtsan --cfg rtsan_standalone"
+        export RTSAN_ENABLE=1
+        # The image stages the runtime and names its directory; the file keeps
+        # the name the linker asks for, so derive it from the target rather
+        # than storing a second copy of that name in the image. With neither
+        # variable set the crate fetches its own — right for a developer host,
+        # and what staging exists to avoid in CI.
+        if [ -z "${RTSAN_LIB_PATH:-}" ] && [ -n "${KITHARA_RTSAN_LIB_DIR:-}" ]; then
+            case "$target" in
+            x86_64-unknown-linux-gnu) library=libclang_rt.rtsan_linux_x86_64.a ;;
+            aarch64-unknown-linux-gnu) library=libclang_rt.rtsan_linux_aarch64.a ;;
+            *-apple-darwin) library=libclang_rt.rtsan_osx_dynamic.dylib ;;
+            *)
+                echo "rtsan: no staged runtime name for target '$target'" >&2
+                exit 1
+                ;;
+            esac
+            export RTSAN_LIB_PATH="$KITHARA_RTSAN_LIB_DIR/$library"
+            if [ ! -f "$RTSAN_LIB_PATH" ]; then
+                echo "rtsan: staged runtime missing at $RTSAN_LIB_PATH" >&2
+                exit 1
+            fi
+        fi
+        ;;
+    *)
+        echo "rtsan: unknown backend '$backend' (instrumented | standalone)" >&2
+        exit 1
+        ;;
+    esac
     RTSAN_OPTIONS="$options" \
-    RUSTFLAGS="-Zsanitizer=realtime --cfg rtsan" \
-    RUSTDOCFLAGS="-Zsanitizer=realtime --cfg rtsan" \
-        cargo "+$toolchain" test -p kithara-integration-tests --test {{ SUITE }} \
+    RUSTFLAGS="$flags" \
+    RUSTDOCFLAGS="$flags" \
+        cargo "$toolchain" nextest run --profile rtsan \
+        -p kithara-integration-tests --test {{ SUITE }} \
         --features {{ FEATURES }} \
-        --target "$target" -- --nocapture {{ FILTER }}
+        --target "$target" {{ FILTER }}
 
 rtsan-async FILTER="no_block": (_rtsan "suite_light" "no-block" FILTER ".config/rtsan/async-suppressions.txt")
 

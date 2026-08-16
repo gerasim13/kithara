@@ -29,6 +29,9 @@ ARG JUST_VERSION
 ARG MD_FORMATTER_VERSION
 ARG MSRV_TOOLCHAIN
 ARG NIGHTLY_TOOLCHAIN
+ARG RTSAN_AMD64_SHA256
+ARG RTSAN_ARM64_SHA256
+ARG RTSAN_VERSION
 ARG SCCACHE_VERSION
 ARG SIMILARITY_RS_VERSION
 ARG TAPLO_CLI_VERSION
@@ -102,6 +105,25 @@ RUN case "$(dpkg --print-architecture)" in \
  && echo "${sum}  /tmp/gitleaks.tar.gz" | sha256sum -c - \
  && tar -xzf /tmp/gitleaks.tar.gz -C /usr/local/bin gitleaks \
  && rm /tmp/gitleaks.tar.gz
+
+# The stable RTSan lane links this runtime through `rtsan-standalone`, whose
+# build script downloads it itself when nothing stages it — a build script that
+# reaches the network is a lane that fails on the first mirror hiccup. The
+# linker asks for the library by the name upstream ships it under, so the file
+# keeps that name and only the directory is ours to name.
+RUN case "$(dpkg --print-architecture)" in \
+      amd64) slice=x86_64; sum="${RTSAN_AMD64_SHA256}" ;; \
+      arm64) slice=aarch64; sum="${RTSAN_ARM64_SHA256}" ;; \
+      *) echo "unsupported architecture: $(dpkg --print-architecture)" >&2; exit 1 ;; \
+    esac \
+ && library="libclang_rt.rtsan_linux_${slice}.a" \
+ && mkdir -p /opt/rtsan \
+ && curl -fsSL \
+      -o "/opt/rtsan/${library}" \
+      "https://github.com/realtime-sanitizer/rtsan-libs/releases/download/v${RTSAN_VERSION}/${library}" \
+ && echo "${sum}  /opt/rtsan/${library}" | sha256sum -c -
+
+ENV KITHARA_RTSAN_LIB_DIR=/opt/rtsan
 
 # `rust-src` on the default toolchain too: the workspace builds the standard
 # library from source for some targets, and `cargo-semver-checks` inherits that

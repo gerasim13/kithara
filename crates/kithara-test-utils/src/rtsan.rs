@@ -1,24 +1,65 @@
-//! `RealtimeSanitizer` escape hatch for intentionally-blocking regions.
+//! `RealtimeSanitizer` context marking and escape hatches.
 //!
-//! Under `--cfg rtsan` the audio worker / RT paths carry
-//! `#[sanitize(realtime = "nonblocking")]` (via `#[kithara::rtsan_forbid_blocking]`),
-//! so `RTSan` aborts on any `malloc` / `free` / lock / syscall reached from them.
-//! A function annotated `#[kithara::rtsan_allow_blocking]` opens a [`permit`]
-//! guard for its whole body, suspending those checks via the `__rtsan_disable`
-//! / `__rtsan_enable` C entry points exported by the linked sanitizer runtime —
-//! used to *inventory* genuinely-unavoidable blocking points one at a time
-//! while the surrounding coordination stays checked.
+//! Under `--cfg rtsan` the audio worker / RT paths are checked entry points
+//! (via `#[kithara::rtsan_forbid_blocking]`), so `RTSan` aborts on any
+//! `malloc` / `free` / lock / syscall reached from them. A function annotated
+//! `#[kithara::rtsan_allow_blocking]` opens a [`permit`] guard for its whole
+//! body — used to *inventory* genuinely-unavoidable blocking points one at a
+//! time while the surrounding coordination stays checked.
 //!
-//! The guard is **reentrant**: a thread-local depth counter toggles the runtime
-//! only at the outermost permit, so annotating both a caller and a callee (or
-//! re-entering through recursion) stays correct regardless of whether the
-//! runtime's own `disable` is refcounted. Off `rtsan` the guard is a zero-cost
-//! ZST.
+//! Two backends answer to the same annotations, selected by `--cfg
+//! rtsan_standalone` alongside `--cfg rtsan`:
+//!
+//! - *instrumented* (nightly): the compiler marks the entry point through
+//!   `#[sanitize(realtime = "nonblocking")]` and links the runtime from
+//!   `-Zsanitizer=realtime`; this module reaches the runtime's `__rtsan_disable`
+//!   / `__rtsan_enable` C entry points directly.
+//! - *standalone* (stable): the entry point is marked at runtime by a
+//!   [`realtime_scope`] guard around the body, and the runtime comes from the
+//!   `rtsan-standalone` crate, whose own entry points are no-ops unless its
+//!   build saw `RTSAN_ENABLE`.
+//!
+//! Detection is identical either way — it is the runtime's libc interceptors
+//! that report, not the compiler.
+//!
+//! [`permit`] is **reentrant**: a thread-local depth counter toggles the
+//! runtime only at the outermost guard, so annotating both a caller and a
+//! callee (or re-entering through recursion) stays correct regardless of
+//! whether the runtime's own `disable` is refcounted. Off `rtsan` every guard
+//! here is a zero-cost ZST.
 
-#[cfg(rtsan)]
+#[cfg(all(rtsan, not(rtsan_standalone)))]
 unsafe extern "C" {
     fn __rtsan_disable();
     fn __rtsan_enable();
+}
+
+#[cfg(all(rtsan, not(rtsan_standalone)))]
+#[inline]
+fn suspend_checks() {
+    // SAFETY: `__rtsan_disable` is a no-arg C entry point from the runtime
+    // linked by `-Zsanitizer=realtime`; `resume_checks` pairs with it.
+    unsafe { __rtsan_disable() }
+}
+
+#[cfg(all(rtsan, not(rtsan_standalone)))]
+#[inline]
+fn resume_checks() {
+    // SAFETY: paired with `suspend_checks`; `__rtsan_enable` is a no-arg C
+    // entry point from the linked runtime.
+    unsafe { __rtsan_enable() }
+}
+
+#[cfg(all(rtsan, rtsan_standalone))]
+#[inline]
+fn suspend_checks() {
+    rtsan_standalone::disable();
+}
+
+#[cfg(all(rtsan, rtsan_standalone))]
+#[inline]
+fn resume_checks() {
+    rtsan_standalone::enable();
 }
 
 #[cfg(rtsan)]
@@ -41,10 +82,7 @@ impl Drop for Permit {
             let outer = depth.get().saturating_sub(1);
             depth.set(outer);
             if outer == 0 {
-                // SAFETY: paired with the outermost `__rtsan_disable` in
-                // `permit`; `__rtsan_enable` is a no-arg C entry point from the
-                // linked RTSan runtime.
-                unsafe { __rtsan_enable() }
+                resume_checks();
             }
         });
     }
@@ -60,10 +98,7 @@ pub fn permit() -> Permit {
         let prev = depth.get();
         depth.set(prev + 1);
         if prev == 0 {
-            // SAFETY: `__rtsan_disable` is a no-arg C entry point from the
-            // linked RTSan runtime; `Permit::drop` re-enables at depth 0
-            // (panic-safe).
-            unsafe { __rtsan_disable() }
+            suspend_checks();
         }
     });
     Permit
@@ -79,4 +114,34 @@ pub struct Permit;
 #[inline(always)]
 pub const fn permit() -> Permit {
     Permit
+}
+
+/// RAII guard that marks its scope a checked realtime context for the
+/// standalone backend, which has no compiler attribute to carry that mark.
+///
+/// Emitted by `#[kithara::rtsan_forbid_blocking]` around the whole body. Under
+/// the instrumented backend the mark comes from the compiler instead and this
+/// guard is a zero-cost ZST, so the annotation expands to one shape for both.
+#[cfg(all(rtsan, rtsan_standalone))]
+#[must_use = "the scope only marks a realtime context while the guard is alive"]
+pub struct RealtimeScope(rtsan_standalone::ScopedSanitizeRealtime);
+
+/// Mark this scope a checked realtime context.
+#[cfg(all(rtsan, rtsan_standalone))]
+#[inline]
+pub fn realtime_scope() -> RealtimeScope {
+    RealtimeScope(rtsan_standalone::ScopedSanitizeRealtime::default())
+}
+
+/// Zero-cost no-op: the instrumented backend marks the context at the
+/// compiler's `sanitize` attribute, and off `rtsan` nothing is checked.
+#[cfg(not(all(rtsan, rtsan_standalone)))]
+#[must_use]
+pub struct RealtimeScope;
+
+/// No-op — see [`RealtimeScope`].
+#[cfg(not(all(rtsan, rtsan_standalone)))]
+#[inline(always)]
+pub const fn realtime_scope() -> RealtimeScope {
+    RealtimeScope
 }

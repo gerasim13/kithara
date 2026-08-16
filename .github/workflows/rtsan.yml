@@ -2,11 +2,18 @@ name: RTSan
 
 # RealtimeSanitizer gate for the audio produce-core.
 #
-# Compiles the player RT path under `-Zsanitizer=realtime --cfg rtsan` and runs
-# the offline-render produce-core lanes without an audio device. Any malloc /
-# lock / syscall reached inside a `#[kithara::rtsan_forbid_blocking]` region
-# (the worker produce-core, kithara-play `process()`) aborts the run unless
-# wrapped by a documented `#[kithara::rtsan_allow_blocking]`.
+# Runs the offline-render produce-core lanes without an audio device under both
+# sanitizer backends, so neither can rot behind the other:
+#
+#   instrumented — the pinned nightly compiles the RT path with
+#     `-Zsanitizer=realtime --cfg rtsan`.
+#   standalone — stable Rust with `--cfg rtsan --cfg rtsan_standalone`, guarding
+#     at runtime against the library the image stages.
+#
+# Either way, any malloc / lock / syscall reached inside a
+# `#[kithara::rtsan_forbid_blocking]` region (the worker produce-core,
+# kithara-play `process()`) aborts the run unless wrapped by a documented
+# `#[kithara::rtsan_allow_blocking]`.
 #
 # The read/seek path is verified kevent/yield-free (wake, on-core seek, and FSM
 # AudioEvent emission are all deferred off the forbid path); see
@@ -60,13 +67,16 @@ jobs:
           PY
 
   rtsan:
-    name: RTSan ${{ matrix.lane }}
+    name: RTSan ${{ matrix.backend }} ${{ matrix.lane }}
     needs: authorize
     runs-on: ${{ fromJSON(vars.KITHARA_RUNNER_LABELS) }}
     timeout-minutes: 120
     strategy:
       fail-fast: false
       matrix:
+        backend:
+          - instrumented # pinned nightly, -Zsanitizer=realtime
+          - standalone   # stable toolchain, runtime guard plus staged library
         lane:
           - rtsan        # mock decoder (suite_light, fast tripwire)
           - rtsan-file   # real-decoder file-offline (suite_stress)
@@ -76,9 +86,22 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      # The sanitizer needs the pinned nightly, which the image already carries
-      # and names, so the toolchain stays owned by the reviewed pins.
+      # Each backend needs a toolchain the image already carries and names, so
+      # the toolchain stays owned by the reviewed pins.
       - name: Run RTSan lane
         env:
+          KITHARA_RTSAN_BACKEND: ${{ matrix.backend }}
           LANE: ${{ matrix.lane }}
         run: just test "$LANE"
+
+      # A violation aborts the process, so the lane log alone never names the
+      # test that tripped. The JUnit report does, and it is only evidence if it
+      # survives the failure that produced it.
+      - name: Upload the RTSan report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: rtsan-junit-${{ matrix.backend }}-${{ matrix.lane }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: target/nextest/rtsan/junit.xml
+          if-no-files-found: error
+          retention-days: 14

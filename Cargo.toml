@@ -65,7 +65,7 @@ default-members = [
 [workspace.lints.rust]
 unreachable_pub = "warn"
 unused_qualifications = "warn"
-unexpected_cfgs = { level = "warn", check-cfg = ['cfg(rtsan)'] }
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(rtsan)', 'cfg(rtsan_standalone)'] }
 
 [workspace.lints.rustdoc]
 broken_intra_doc_links = "deny"
@@ -335,6 +335,12 @@ rstest = { version = "0.26.1", features = ["async-timeout", "crate-name"] }
 # Beat detection NN inference (kithara-beat).
 rten = { version = "0.24", features = ["fft"] }
 rten-tensor = "0.24"
+# RealtimeSanitizer on stable. `prebuilt-libs` (its default) fetches the
+# runtime during the build, which suits a developer host; CI stages the library
+# into the image and names it through RTSAN_LIB_PATH, which takes priority over
+# the fetch. Turning the default off instead would leave no fetch to override
+# and fall back to building compiler-rt from source with cmake.
+rtsan-standalone = "0.3.0"
 rubato = "3.0"
 rustdoc-types = "0.60.0"
 rustls-platform-verifier = "0.7.0"
