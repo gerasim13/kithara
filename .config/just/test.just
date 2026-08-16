@@ -268,7 +268,11 @@ _rtsan SUITE FEATURES FILTER SUPPRESSIONS="":
     set -euo pipefail
     target="$(rustc -vV | sed -n 's/^host: //p')"
     backend="${KITHARA_RTSAN_BACKEND:-instrumented}"
-    options="symbolize=1"
+    # A sanitized binary that dies on a signal reports only the signal number
+    # through the harness above it — nextest saw one lane die on SIGSEGV while
+    # merely listing its tests, and the log named neither the frame nor the
+    # library. The runtime prints a symbolized stack for the signal it catches.
+    options="symbolize=1:handle_segv=1:handle_abort=1:print_stacktrace=1"
     if symbolizer="$(command -v llvm-symbolizer)"; then
         options="$options:external_symbolizer_path=$symbolizer"
     elif ! { [ "$(uname -s)" = Darwin ] && command -v atos >/dev/null; }; then
