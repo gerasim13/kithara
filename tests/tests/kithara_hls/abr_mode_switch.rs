@@ -1103,7 +1103,7 @@ async fn abr_switch_must_not_redownload_covered_segments() {
     serial,
     timeout(Duration::from_secs(30)),
     env(KITHARA_HANG_TIMEOUT_SECS = "5"),
-    tracing("kithara_abr=debug,kithara_hls=debug")
+    tracing("kithara_abr=debug,kithara_hls=debug,kithara_play=debug,kithara_audio=debug")
 )]
 async fn runtime_manual_switch_via_handle_changes_playing_variant() {
     let segment_count = 30;

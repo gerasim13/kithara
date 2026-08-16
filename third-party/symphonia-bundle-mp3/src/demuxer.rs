@@ -306,8 +306,17 @@ impl FormatReader for MpaReader<'_> {
         let mut n_parsed = 0;
 
         loop {
+            // A transient (not-ready) read part-way through this iteration
+            // must roll back to the iteration start: bytes consumed past it
+            // would make a retried seek resync to the NEXT frame header
+            // while `next_packet_ts` still counts the part-consumed frame,
+            // shifting every later timestamp by one frame.
+            self.reader.ensure_seekback_buffer(MAX_MPEG_FRAME_SIZE);
+            let checkpoint = self.reader.pos();
+
             // Sync to the next frame.
-            let sync = match header::sync_frame(&mut self.reader) {
+            let synced = header::sync_frame(&mut self.reader);
+            let sync = match roll_back_transient(&mut self.reader, checkpoint, synced) {
                 Ok(sync) => sync,
                 Err(Error::IoError(err)) if err.kind() == std::io::ErrorKind::UnexpectedEof => {
                     // MPEG streams have no well-defined end, so if no more frames can be read then
@@ -345,7 +354,9 @@ impl FormatReader for MpaReader<'_> {
                     // where its main data begins. Therefore, for a decoder to properly decode this
                     // frame, the reader must provide previous (reference) frames up to and
                     // including the frame that contains the first byte this frame's main_data.
-                    let main_data_begin = read_main_data_begin(&mut self.reader, &header)? as u64;
+                    let read = read_main_data_begin(&mut self.reader, &header);
+                    let main_data_begin =
+                        roll_back_transient(&mut self.reader, checkpoint, read)? as u64;
 
                     debug!(
                         "found frame with ts={} @ pos={} with main_data_begin={}",
@@ -391,7 +402,11 @@ impl FormatReader for MpaReader<'_> {
             };
 
             // Otherwise, ignore the frame body.
-            self.reader.ignore_bytes(header.frame_size as u64)?;
+            let ignored = self
+                .reader
+                .ignore_bytes(header.frame_size as u64)
+                .map_err(Error::from);
+            roll_back_transient(&mut self.reader, checkpoint, ignored)?;
 
             // Increment the timestamp for the next packet.
             self.next_packet_ts = next_packet_ts;
@@ -595,6 +610,29 @@ impl<'s> MpaReader<'s> {
         }
 
         Ok(())
+    }
+}
+
+/// Rolls the reader back to `checkpoint` when `result` is a transient
+/// (`Interrupted`/`WouldBlock`) I/O error so the caller can be retried from
+/// the same frame boundary. Requires a seekback buffer covering the bytes
+/// consumed since `checkpoint`.
+fn roll_back_transient<T>(
+    reader: &mut MediaSourceStream<'_>,
+    checkpoint: u64,
+    result: Result<T>,
+) -> Result<T> {
+    match result {
+        Err(Error::IoError(err))
+            if err.kind() == ErrorKind::Interrupted || err.kind() == ErrorKind::WouldBlock =>
+        {
+            if reader.seek_buffered(checkpoint) == checkpoint {
+                Err(Error::IoError(err))
+            } else {
+                decode_error("mpa: failed to roll back transient seek-scan read")
+            }
+        }
+        result => result,
     }
 }
 
