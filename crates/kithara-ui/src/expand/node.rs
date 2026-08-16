@@ -298,15 +298,102 @@ impl BlockNode for ExpandedNode {
     }
 }
 
-/// Whether anything in this subtree is placed by an endpoint rather than by the
-/// document alone.
+impl ControlSpec {
+    /// Whether this control draws a new picture every frame of its own accord,
+    /// with no endpoint and no input involved.
+    ///
+    /// A visualisation and a shader program are pictures of a moment rather than
+    /// of a value, so a host that stops drawing them stops them. Everything else
+    /// changes only when what it reads changes, and is drawn again then.
+    ///
+    /// Spelled out rather than defaulted, so a control added tomorrow stops
+    /// compiling here instead of quietly joining the majority.
+    pub(crate) const fn paints_every_frame(&self) -> bool {
+        match self {
+            Self::Shader(_) | Self::Vis => true,
+            Self::Bpm { .. }
+            | Self::Brand
+            | Self::Button { .. }
+            | Self::Cell { .. }
+            | Self::Checkbox
+            | Self::Chip { .. }
+            | Self::ContextBar { .. }
+            | Self::Crossfader { .. }
+            | Self::DeckSummary { .. }
+            | Self::Divider
+            | Self::Fader { .. }
+            | Self::Glyph { .. }
+            | Self::Knob { .. }
+            | Self::Meter
+            | Self::NavItem { .. }
+            | Self::PortalMap
+            | Self::PresetSelector
+            | Self::Range
+            | Self::Readout { .. }
+            | Self::Scalar { .. }
+            | Self::Segmented { .. }
+            | Self::Select { .. }
+            | Self::SettingsButton
+            | Self::Spacer
+            | Self::Sprite { .. }
+            | Self::StatusDot { .. }
+            | Self::Swatch { .. }
+            | Self::TabLarge { .. }
+            | Self::Table { .. }
+            | Self::Text { .. }
+            | Self::Time
+            | Self::TitleBar { .. }
+            | Self::Toggle
+            | Self::Tree { .. }
+            | Self::VuStereo
+            | Self::VuVertical { .. }
+            | Self::Wave { .. }
+            | Self::WindowControls { .. }
+            | Self::WindowDrag => false,
+        }
+    }
+}
+
+/// What a subtree does with nothing touching it.
 ///
-/// An object needs both ends of a track and something driving it to move at
-/// all: a far pose nobody travels towards, or a phase with nowhere to carry the
-/// object, both leave it exactly where the document wrote it. A host that keeps
-/// its tree between frames asks this to find out whether re-reading the
-/// document can move anything, and does no pose work at all when it cannot.
-pub(crate) fn has_driven_object(node: &ExpandedNode) -> bool {
+/// Both halves are asked for together because they are answered by one walk of
+/// the same tree, and because a host that separates them ends up with two
+/// accounts of when a document moves.
+#[derive(Clone, Copy, Default)]
+pub(crate) struct Unprompted {
+    /// Something here is placed by an endpoint rather than by the document
+    /// alone, so re-reading the endpoints can move a tree already mounted.
+    ///
+    /// An object needs both ends of a track and something driving it to move at
+    /// all: a far pose nobody travels towards, or a phase with nowhere to carry
+    /// the object, both leave it exactly where the document wrote it. A host
+    /// asks this to do no pose work on a page that cannot move.
+    pub(crate) driven: bool,
+    /// Something here draws a new picture every frame of its own accord, with
+    /// no endpoint and no input involved.
+    pub(crate) continuous: bool,
+}
+
+impl Unprompted {
+    const DRIVEN: Self = Self {
+        driven: true,
+        continuous: false,
+    };
+
+    pub(crate) fn or(self, other: Self) -> Self {
+        Self {
+            driven: self.driven || other.driven,
+            continuous: self.continuous || other.continuous,
+        }
+    }
+
+    fn of(nodes: &[ExpandedNode]) -> Self {
+        nodes.iter().map(motion_of).fold(Self::default(), Self::or)
+    }
+}
+
+/// What one subtree does with nothing touching it.
+pub(crate) fn motion_of(node: &ExpandedNode) -> Unprompted {
     match node {
         ExpandedNode::Object {
             to,
@@ -314,18 +401,28 @@ pub(crate) fn has_driven_object(node: &ExpandedNode) -> bool {
             motion,
             child,
             ..
-        } => (to.is_some() && (phase.is_some() || motion.is_some())) || has_driven_object(child),
+        } => {
+            let own = if to.is_some() && (phase.is_some() || motion.is_some()) {
+                Unprompted::DRIVEN
+            } else {
+                Unprompted::default()
+            };
+            own.or(motion_of(child))
+        }
         ExpandedNode::Row { children, .. }
         | ExpandedNode::Column { children, .. }
         | ExpandedNode::Stage { children, .. }
-        | ExpandedNode::Slot { children, .. } => children.iter().any(has_driven_object),
+        | ExpandedNode::Slot { children, .. } => Unprompted::of(children),
         ExpandedNode::Popover {
             anchor, content, ..
-        } => has_driven_object(anchor) || has_driven_object(content),
+        } => motion_of(anchor).or(motion_of(content)),
         ExpandedNode::Optional { child, .. }
         | ExpandedNode::Pressable { child, .. }
-        | ExpandedNode::Scroll { child, .. } => has_driven_object(child),
-        ExpandedNode::Control { .. } => false,
+        | ExpandedNode::Scroll { child, .. } => motion_of(child),
+        ExpandedNode::Control { spec, .. } => Unprompted {
+            driven: false,
+            continuous: spec.paints_every_frame(),
+        },
     }
 }
 

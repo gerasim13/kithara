@@ -48,6 +48,17 @@ type PopoverRegistration = (WidgetId, Rc<PopoverState>, Rc<dyn Fn() -> HostActio
 #[fieldwork(opt_in, get)]
 pub struct MasonryRoot<Action> {
     actions: Vec<Action>,
+    /// The document this root holds draws a different picture at a later
+    /// moment, so a frame it finished has to be followed by another.
+    ///
+    /// The tree answers for the widgets it owns: a leaf that repaints of its own
+    /// accord asks for the next frame through it. What the tree cannot answer is
+    /// the document, whose values are read afresh against a clock the host
+    /// advances — the tree is only ever told what this frame turned out to be,
+    /// never that the next one will differ. So the document says so here, or it
+    /// is drawn once and then only when something unrelated wakes the window.
+    #[field(with, vis = "pub")]
+    animates: bool,
     platform: Vec<RenderRootSignal>,
     engines: Vec<Rc<HostedEngine>>,
     popovers: Vec<PopoverRegistration>,
@@ -96,6 +107,7 @@ where
         );
         let mut this = Self {
             actions: Vec::new(),
+            animates: false,
             platform: Vec::new(),
             engines,
             popovers,
@@ -270,12 +282,12 @@ where
     /// Returns whether an animation frame, rather than an ordinary redraw, was
     /// requested. Every unrelated platform signal remains queued in order.
     pub(crate) fn complete_frame(&mut self) -> bool {
-        complete_frame_signals(&mut self.platform)
+        complete_frame_signals(&mut self.platform) || self.animates
     }
 
     /// Reports whether Masonry requested another paint or animation frame.
     pub(crate) fn needs_frame(&self) -> bool {
-        frame_requested(&self.platform)
+        frame_requested(&self.platform) || self.animates
     }
 
     #[cfg(test)]

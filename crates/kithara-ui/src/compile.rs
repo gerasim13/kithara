@@ -6,7 +6,7 @@ use crate::{
     error::UiDocError,
     expand::{
         Binding, BlockSpec, Budget, ControlSite, DropSpec, ExpandedInclude, ExpandedNode, Expander,
-        has_driven_object, intern_binding, substitute_binding, substitute_map,
+        Unprompted, intern_binding, motion_of, substitute_binding, substitute_map,
     },
     ids::{InternId, Interner, SourceUri, StrArena},
     layout::{Axis, FrameSides, LayoutNode, parse_layout},
@@ -36,6 +36,14 @@ pub struct CompiledUi {
     /// Somewhere in this document an object is placed by an endpoint, so
     /// re-reading the endpoints can move something a host already mounted.
     pub driven: bool,
+    /// This document draws a different picture at a later moment with nothing
+    /// else changing: an object is placed by an endpoint, or a binding reads the
+    /// host's own clock.
+    ///
+    /// A host that stops drawing such a document animates it only while some
+    /// unrelated event keeps waking it — a mouse crossing the window, and
+    /// nothing once the mouse stops.
+    pub animates: bool,
     arena: StrArena,
     includes: Vec<IncludedModule>,
     #[cfg(feature = "render")]
@@ -176,12 +184,15 @@ pub fn compile(
         .as_ref()
         .map(|binding| intern_binding(&mut interner, binding, &loaded.uri))
         .transpose()?;
+    let unprompted = motion_of_layout(&root);
+    let driven = unprompted.driven;
+    let animates = driven || unprompted.continuous || interner.reads_clock();
     let arena = interner.finish();
-    let driven = declares_motion(&root);
     Ok(CompiledUi {
         root,
         size,
         dragged,
+        animates,
         driven,
         includes,
         arena,
@@ -308,14 +319,15 @@ impl Compiler<'_> {
     }
 }
 
-/// Whether any module of this layout places something off an endpoint.
-fn declares_motion(node: &CompiledNode) -> bool {
+/// What every module of this layout does with nothing touching it.
+fn motion_of_layout(node: &CompiledNode) -> Unprompted {
     match node {
-        CompiledNode::Split { children, .. } => {
-            children.iter().any(|(_, child)| declares_motion(child))
-        }
-        CompiledNode::Optional { child, .. } => declares_motion(child),
-        CompiledNode::Module { root, .. } => has_driven_object(root),
+        CompiledNode::Split { children, .. } => children
+            .iter()
+            .map(|(_, child)| motion_of_layout(child))
+            .fold(Unprompted::default(), Unprompted::or),
+        CompiledNode::Optional { child, .. } => motion_of_layout(child),
+        CompiledNode::Module { root, .. } => motion_of(root),
     }
 }
 

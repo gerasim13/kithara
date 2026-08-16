@@ -8,6 +8,8 @@ mod masonry_shots;
 mod mock;
 mod offscreen;
 mod sections;
+#[cfg(all(test, feature = "masonry"))]
+mod walk;
 
 use iced::{Element, Size, Subscription, Task, Theme, time as iced_time, window, window::Settings};
 use kithara_platform::time::Duration;

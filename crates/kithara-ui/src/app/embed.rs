@@ -143,8 +143,8 @@ where
         to self.root {
             /// Satisfies the redraw signals covered by a frame the host completed.
             ///
-            /// Returns whether Masonry requested a following animation frame. Every
-            /// unrelated platform signal remains queued on the retained root.
+            /// Returns whether another frame should follow. Every unrelated
+            /// platform signal remains queued on the retained root.
             pub fn complete_frame(&mut self) -> bool;
             /// Reports whether the next retained frame would change the picture.
             pub fn needs_frame(&self) -> bool;
@@ -428,6 +428,7 @@ where
             test_font: None,
         },
     )
+    .map(|root| root.with_animates(ui.animates))
     .map_err(|error| RunError::Host(error.to_string()))
 }
 
