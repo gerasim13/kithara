@@ -828,6 +828,27 @@ async fn gapless_eof_flushes_once_and_drains_every_frame_across_repeated_ticks()
         .saturating_sub(usize::try_from(TRAILING_FRAMES).unwrap_or(usize::MAX));
     let mut frames = 0usize;
     let mut next_offset = 0u64;
+    // Drain while the deferred transition is in flight until the source
+    // exhausts; EOF must stay held for the transition and never surface.
+    while !fixture.source.decode.active().is_source_exhausted() {
+        match fixture.source.step_track() {
+            TrackStep::Produced(fetch) => {
+                let chunk = produced_data(fetch);
+                assert_eq!(chunk.meta.frame_offset, next_offset);
+                next_offset = next_offset.saturating_add(u64::from(chunk.meta.frames));
+                frames = frames.saturating_add(chunk.frames());
+            }
+            TrackStep::StateChanged | TrackStep::Blocked(_) => {}
+            TrackStep::Eof => panic!("EOF must stay held while a transition is in flight"),
+            TrackStep::Failed => panic!("finite gapless fixture must reach EOF cleanly"),
+        }
+        fixture.source.flush_deferred();
+    }
+
+    // Resolve the wedged transition: the next promote attempt retires the
+    // incoming, releasing the held EOF so it can finalize and flush the
+    // gapless boundary exactly once.
+    fixture.control.set_promotion(VariantPromotion::Stale);
     loop {
         match fixture.source.step_track() {
             TrackStep::Produced(fetch) => {

@@ -7,8 +7,8 @@ use kithara::{
     audio::{Audio, AudioConfig, ReadOutcome},
     decode::DecoderBackend,
     events::{
-        AbrEvent, AbrReason, AudioEvent, DownloaderEvent, Event, EventBus, EventReceiver, HlsEvent,
-        RequestId,
+        AbrEvent, AbrReason, AudioEvent, DecoderEvent, DownloaderEvent, Event, EventBus,
+        EventReceiver, HlsEvent, RequestId,
     },
     hls::{AbrMode, Hls, HlsConfig},
     platform::{
@@ -509,7 +509,7 @@ async fn wait_v0_fully_cached(collector: &EventCollector, segment_count: usize) 
     serial,
     timeout(Duration::from_secs(30)),
     env(KITHARA_HANG_TIMEOUT_SECS = "5"),
-    tracing("kithara_abr=debug,kithara_hls=debug")
+    tracing("kithara_abr=debug,kithara_hls=debug,kithara_audio=debug")
 )]
 async fn vod_manual_switch_affects_future_segments() {
     let segment_count = 30;
@@ -654,7 +654,7 @@ async fn vod_manual_switch_affects_future_segments() {
     serial,
     timeout(Duration::from_secs(30)),
     env(KITHARA_HANG_TIMEOUT_SECS = "5"),
-    tracing("kithara_abr=debug,kithara_hls=debug")
+    tracing("kithara_abr=debug,kithara_hls=debug,kithara_audio=debug")
 )]
 async fn stalled_boundary_escape_rescues_reader_blocked_on_slow_variant() {
     const STALLED_VARIANT: usize = 0;
@@ -827,7 +827,7 @@ async fn stalled_boundary_escape_rescues_reader_blocked_on_slow_variant() {
     serial,
     timeout(Duration::from_secs(45)),
     env(KITHARA_HANG_TIMEOUT_SECS = "5"),
-    tracing("kithara_abr=debug,kithara_hls=debug")
+    tracing("kithara_abr=debug,kithara_hls=debug,kithara_audio=debug")
 )]
 async fn multi_track_shared_abr_with_cache() {
     let segment_count = 15;
@@ -1008,7 +1008,7 @@ async fn multi_track_shared_abr_with_cache() {
     serial,
     timeout(Duration::from_secs(30)),
     env(KITHARA_HANG_TIMEOUT_SECS = "5"),
-    tracing("kithara_abr=debug,kithara_hls=debug")
+    tracing("kithara_abr=debug,kithara_hls=debug,kithara_audio=debug")
 )]
 async fn abr_switch_must_not_redownload_covered_segments() {
     let segment_count = 20;
@@ -1243,7 +1243,7 @@ async fn runtime_manual_switch_via_handle_changes_playing_variant() {
     serial,
     timeout(Duration::from_secs(45)),
     env(KITHARA_HANG_TIMEOUT_SECS = "5"),
-    tracing("kithara_abr=debug,kithara_hls=debug")
+    tracing("kithara_abr=debug,kithara_hls=debug,kithara_audio=debug")
 )]
 async fn runtime_cross_codec_manual_switch_no_hang() {
     let server = TestServerHelper::new().await;
@@ -1340,7 +1340,7 @@ async fn runtime_cross_codec_manual_switch_no_hang() {
     serial,
     timeout(Duration::from_secs(30)),
     env(KITHARA_HANG_TIMEOUT_SECS = "5"),
-    tracing("kithara_abr=debug,kithara_hls=debug")
+    tracing("kithara_abr=debug,kithara_hls=debug,kithara_audio=debug")
 )]
 async fn runtime_manual_switch_works_when_all_segments_cached() {
     let segment_count: usize = 6;
@@ -1457,6 +1457,138 @@ async fn runtime_manual_switch_works_when_all_segments_cached() {
     );
 }
 
+/// H1 regression (stress campaigns №6–№8): a Manual click accepted
+/// mid-playback dies silently when the outgoing variant drains to EOF
+/// before the incoming variant primes — the `AtEof` arm of
+/// `progress_variant_transition` aborts the pending transition and no
+/// tick source re-derives the intent.
+///
+/// Deterministic shape: variant 1's init segment is withheld, so the
+/// incoming session cannot construct while the unpaced drain runs the
+/// fully-cached outgoing to its end. The gate is released only when the
+/// pipeline itself reports `DecoderEvent::TransitionHold` — the signal
+/// that the outgoing is parked for the pending switch. Today that event
+/// never fires: the drain reaches EOF, the intent is aborted, the release
+/// never happens, and the `VariantApplied` below never arrives.
+#[kithara::test(
+    native,
+    tokio,
+    serial,
+    timeout(Duration::from_secs(30)),
+    env(KITHARA_HANG_TIMEOUT_SECS = "5"),
+    tracing("kithara_abr=debug,kithara_hls=debug,kithara_audio=debug")
+)]
+async fn runtime_manual_switch_survives_outgoing_eof() {
+    let segment_count: usize = 6;
+    let init_segment = Arc::new(create_wav_init_segment(segment_count * D.segment_size));
+    let pcm_data = Arc::new(create_pcm_segments(segment_count));
+
+    let (server, init_gate) = HlsTestServer::with_init_gate(
+        HlsTestServerConfig {
+            variant_count: 2,
+            segments_per_variant: segment_count,
+            segment_size: D.segment_size,
+            segment_duration_secs: segment_duration_secs(),
+            custom_data_per_variant: Some(vec![Arc::clone(&pcm_data), Arc::clone(&pcm_data)]),
+            init_data_per_variant: Some(vec![Arc::clone(&init_segment), Arc::clone(&init_segment)]),
+            variant_bandwidths: Some(vec![5_000_000, 1_000_000]),
+            ..Default::default()
+        },
+        1,
+    )
+    .await;
+
+    let url = server.url("/master.m3u8");
+    let temp_dir = TestTempDir::new();
+    let cancel = CancelToken::never();
+    let bus = EventBus::new(8192);
+    let collector = EventCollector::new(&bus);
+    // Subscribe before the bus is moved into the config so the hold event
+    // cannot be missed between promote-side publish and watcher start.
+    let mut hold_rx = bus.subscribe();
+
+    let hls_config = HlsConfig::for_url(url)
+        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
+        .cancel(cancel)
+        .events(bus.clone())
+        .initial_abr_mode(AbrMode::manual(0))
+        .download_batch_size(segment_count * 2)
+        .build();
+
+    let wav_info = MediaInfo::builder()
+        .maybe_codec(Some(AudioCodec::Pcm))
+        .maybe_container(Some(ContainerFormat::Wav))
+        .build();
+    let config = AudioConfig::<Hls>::for_stream(hls_config)
+        .byte_pool(kithara::bufpool::BytePool::default())
+        .pcm_pool(kithara::bufpool::PcmPool::default())
+        .events(bus)
+        .media_info(wav_info)
+        .block_on_underrun(true)
+        .build();
+    let audio = Audio::<Stream<Hls>>::new(config)
+        .await
+        .expect("create audio");
+
+    let (audio, warmup_samples) =
+        read_until_samples_blocking(audio, 8_192, "eof-race manual warmup").await;
+    assert!(warmup_samples > 0, "warmup must produce some audio");
+
+    wait_v0_fully_cached(&collector, segment_count).await;
+
+    // Release the incoming's init only on the pipeline's own hold signal:
+    // with the outgoing parked for the transition, the release timing can
+    // no longer race the drain. Without the hold the wait times out at
+    // quiescence and the gate stays closed — the deterministic red path.
+    let gate = init_gate.clone();
+    drop(spawn(async move {
+        let held = wait_for_event(
+            &mut hold_rx,
+            "TransitionHold for Manual(1)",
+            |ev| matches!(ev, Event::Decoder(DecoderEvent::TransitionHold { .. })),
+            Duration::from_secs(25),
+        )
+        .await;
+        if held.is_ok() {
+            gate.release();
+        }
+    }));
+
+    let handle = audio
+        .abr_handle()
+        .expect("HLS stream must expose AbrHandle");
+    let applied_before = collector.applied_transitions().len();
+    handle
+        .set_mode(AbrMode::manual(1))
+        .expect("Manual(1) target must be valid");
+
+    let (_audio, transition) = read_until_manual_applied(
+        audio,
+        &collector,
+        applied_before,
+        1,
+        "eof-race manual transition",
+    )
+    .await;
+
+    let transitions = collector.applied_transitions();
+    let manual_applied = transitions[applied_before..].contains(&(1, AbrReason::ManualOverride));
+    info!(
+        ?transitions,
+        ?transition,
+        init_requested = init_gate.requested(),
+        "H1: gated-incoming Manual click result"
+    );
+
+    assert!(
+        manual_applied,
+        "Manual(1) must survive the outgoing draining to EOF while variant 1 \
+         is still constructing: the pending transition must hold the outgoing \
+         (DecoderEvent::TransitionHold) instead of dying in the AtEof abort; \
+         saw {transitions:?}, transition={transition:?}"
+    );
+}
+
 /// MSW-3 regression: production bug from app.log (2026-05-17 15:26..15:27).
 ///
 /// Sequence reproduced from the GUI smoke run:
@@ -1480,7 +1612,7 @@ async fn runtime_manual_switch_works_when_all_segments_cached() {
     serial,
     timeout(Duration::from_secs(30)),
     env(KITHARA_HANG_TIMEOUT_SECS = "5"),
-    tracing("kithara_abr=debug,kithara_hls=debug")
+    tracing("kithara_abr=debug,kithara_hls=debug,kithara_audio=debug")
 )]
 async fn runtime_manual_switch_works_after_cache_and_seek() {
     let segment_count: usize = 8;
@@ -1647,7 +1779,7 @@ async fn runtime_manual_switch_works_after_cache_and_seek() {
     serial,
     timeout(Duration::from_secs(30)),
     env(KITHARA_HANG_TIMEOUT_SECS = "5"),
-    tracing("kithara_abr=debug,kithara_hls=debug")
+    tracing("kithara_abr=debug,kithara_hls=debug,kithara_audio=debug")
 )]
 async fn auto_does_not_up_switch_on_first_boundary_with_defaults() {
     let segment_count: usize = 6;
@@ -1772,7 +1904,7 @@ async fn auto_does_not_up_switch_on_first_boundary_with_defaults() {
     serial,
     timeout(Duration::from_secs(45)),
     env(KITHARA_HANG_TIMEOUT_SECS = "5"),
-    tracing("kithara_abr=debug,kithara_hls=debug")
+    tracing("kithara_abr=debug,kithara_hls=debug,kithara_audio=debug")
 )]
 #[ignore = "current implementation hits a separate same-codec byte_shift mismatch; needs deterministic timing setup to repro the cross→same race"]
 async fn rapid_cross_codec_then_same_codec_switch_no_false_eof() {
@@ -1893,7 +2025,7 @@ async fn rapid_cross_codec_then_same_codec_switch_no_false_eof() {
     serial,
     timeout(Duration::from_secs(90)),
     env(KITHARA_HANG_TIMEOUT_SECS = "15"),
-    tracing("kithara_abr=debug,kithara_hls=debug")
+    tracing("kithara_abr=debug,kithara_hls=debug,kithara_audio=debug")
 )]
 #[case::sw(DecoderBackend::Symphonia)]
 #[cfg_attr(
@@ -2110,7 +2242,7 @@ async fn play_seek_back_then_same_codec_downswitch_no_premature_eof(
     serial,
     timeout(Duration::from_secs(60)),
     env(KITHARA_HANG_TIMEOUT_SECS = "5"),
-    tracing("kithara_abr=debug,kithara_hls=debug")
+    tracing("kithara_abr=debug,kithara_hls=debug,kithara_audio=debug")
 )]
 #[case::sw_same_codec_aac_low_to_high(DecoderBackend::Symphonia, 2usize)]
 #[case::sw_cross_codec_aac_to_flac(DecoderBackend::Symphonia, 3usize)]

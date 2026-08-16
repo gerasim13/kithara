@@ -13,6 +13,7 @@ use kithara_events::{DeferredBus, Event};
 use kithara_platform::sync::Arc;
 use kithara_stream::{
     ByteMap, MediaInfo, OpenedReader, PlayheadWrite, ReaderProfile, SeekObserve, StreamType,
+    VariantTransition,
 };
 use kithara_test_utils::kithara;
 use tracing::{debug, warn};
@@ -158,6 +159,9 @@ pub(crate) struct ActiveDecode {
     pub(super) active: DecoderGeneration,
     pub(super) incoming: Option<IncomingDecode>,
     pub(super) blender: PcmBlender,
+    /// Which transition already announced `DecoderEvent::TransitionHold`,
+    /// so a held pass is reported once instead of per tick.
+    pub(super) announced_hold: Option<VariantTransition>,
     drain: EofDrain,
     #[field(get, vis = "pub(crate)", copy)]
     gapless_mode: GaplessMode,
@@ -201,6 +205,7 @@ impl ActiveDecode {
             effects,
             drain,
             incoming: None,
+            announced_hold: None,
             rejected_chunk: None,
             stage_error: None,
         }
@@ -295,6 +300,7 @@ impl ActiveDecode {
         to self.active {
             #[call(finish)]
             pub(crate) fn finish_active(&mut self);
+            pub(crate) fn mark_source_exhausted(&mut self);
             pub(crate) fn notify_seek(&mut self, retire: &dyn ChunkRetire);
         }
         to self.drain {

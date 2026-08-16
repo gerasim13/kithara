@@ -55,6 +55,17 @@ pub(crate) struct DecoderGeneration {
     gapless: GaplessStage,
     #[field(get = is_finished, vis = "pub(crate)", copy)]
     finished: bool,
+    /// The decoder consumed its source to the end while a variant transition
+    /// was in flight. Unlike `finished`, this keeps holdback and the staged
+    /// tail intact so the promotion proof stays reachable; no further PCM can
+    /// ever come from this generation.
+    #[field(get = is_source_exhausted, vis = "pub(crate)", copy)]
+    source_exhausted: bool,
+    /// The transition driver ran a pass after `source_exhausted` was set, so
+    /// a pending switch intent had its chance to plant an incoming slot
+    /// before EOF finalizes.
+    #[field(get = is_exhaustion_observed, vis = "pub(crate)", copy)]
+    exhaustion_observed: bool,
     holdback: Option<Holdback>,
     /// Lower bound for the decoder's observed timeline gap after an exact
     /// variant splice. The overlap proof normalizes equal codec profiles to
@@ -93,6 +104,8 @@ impl DecoderGeneration {
             gapless_profile,
             gapless,
             finished: false,
+            source_exhausted: false,
+            exhaustion_observed: false,
             holdback: None,
             timeline_gap_floor: 0,
             pending_head_skip,
@@ -125,6 +138,14 @@ impl DecoderGeneration {
         self.holdback = None;
         self.gapless.set_tail_compensation(self.gapless_profile());
         self.gapless.flush();
+    }
+
+    pub(crate) const fn mark_source_exhausted(&mut self) {
+        self.source_exhausted = true;
+    }
+
+    pub(crate) const fn observe_exhaustion(&mut self) {
+        self.exhaustion_observed = true;
     }
 
     pub(crate) fn finish_staging(&mut self) {
@@ -160,6 +181,8 @@ impl DecoderGeneration {
     }
     pub(crate) fn notify_seek(&mut self, retire: &dyn ChunkRetire) {
         self.finished = false;
+        self.source_exhausted = false;
+        self.exhaustion_observed = false;
         self.holdback = None;
         self.gapless.notify_seek(retire);
         for chunk in self.staged.drain(..) {
