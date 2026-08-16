@@ -2422,7 +2422,8 @@ mod gesture_census {
             ExpandedNode::Control {
                 path, spec, read, ..
             } => Some((*path, spec, read.as_ref())),
-            ExpandedNode::Optional { child, .. }
+            ExpandedNode::Object { child, .. }
+            | ExpandedNode::Optional { child, .. }
             | ExpandedNode::Pressable { child, .. }
             | ExpandedNode::Scroll { child, .. } => find_control(child),
             ExpandedNode::Row { children, .. }

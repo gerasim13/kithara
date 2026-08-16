@@ -282,11 +282,13 @@ fn walk_module(
         ControlNode::Object {
             id,
             transform,
+            to,
             child,
+            ..
         } => {
             let here = path.push(format!("Object({id})"));
             record(&id.0, &here, origin, seen)?;
-            single_box(transform, child, &here, origin)?;
+            single_box(transform, to.as_ref(), child, &here, origin)?;
             walk_module(child, &here, origin, seen, Sibling::Only)
         }
         ControlNode::Slot { id, default, .. } => {
@@ -322,11 +324,15 @@ fn walk_module(
 /// would move and the picture would stay.
 fn single_box(
     transform: &Pose,
+    to: Option<&Pose>,
     child: &ControlNode,
     path: &NodePath,
     origin: &SourceUri,
 ) -> Result<(), UiDocError> {
-    if transform.is_still() {
+    // A track is judged by both ends: an object that starts still and travels
+    // to a turn still turns.
+    let travels = to.is_some_and(|to| !to.is_still());
+    if transform.is_still() && !travels {
         return Ok(());
     }
     if let Some(child) = native_pass(child) {
@@ -336,8 +342,9 @@ fn single_box(
             child,
         });
     }
+    let turns = transform.turns() || to.is_some_and(Pose::turns);
     let group = match child {
-        _ if !transform.turns() => return Ok(()),
+        _ if !turns => return Ok(()),
         ControlNode::Row { .. } => "Row",
         ControlNode::Column { .. } => "Column",
         ControlNode::Slot { .. } => "Slot",
@@ -744,8 +751,9 @@ pub(crate) const fn value_kinds(control: &ControlNode) -> (Option<ValueKind>, Op
             (Some(ValueKind::Stereo), Some(ValueKind::Scalar))
         }
         ControlNode::Row { .. } | ControlNode::Column { .. } => (None, Some(ValueKind::Scalar)),
+        // The phase is a scalar and nothing writes back through an object.
+        ControlNode::Object { .. } => (Some(ValueKind::Scalar), None),
         ControlNode::Include { .. }
-        | ControlNode::Object { .. }
         | ControlNode::Scroll { .. }
         | ControlNode::Slot { .. }
         | ControlNode::Brand { .. }

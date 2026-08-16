@@ -133,6 +133,15 @@ pub enum ControlNode {
         id: NodeId,
         #[serde(default)]
         transform: Pose,
+        /// The pose at the far end of the track, if the object travels.
+        #[serde(default)]
+        to: Option<Pose>,
+        /// The scalar that says how far along the track the object is, `0.0`
+        /// at `transform` and `1.0` at `to`. One endpoint drives the whole
+        /// pose, which is the same scalar a sprite picks its frame by and a
+        /// Lottie reads its progress from.
+        #[serde(default)]
+        phase: Option<BindingRef>,
         child: Box<Self>,
     },
     Slot {

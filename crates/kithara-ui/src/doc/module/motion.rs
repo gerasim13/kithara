@@ -57,6 +57,25 @@ impl Pose {
         self.rotation != 0.0 || self.scale != (1.0, 1.0)
     }
 
+    /// This pose a fraction of the way toward `to`.
+    ///
+    /// `phase` is clamped to `0.0..=1.0`, so a model that overshoots settles at
+    /// `to` rather than flying past it. Every field travels, the rotation in
+    /// degrees, which is what makes `0.0` to `360.0` one full turn rather than
+    /// no turn at all.
+    #[must_use]
+    pub fn between(&self, to: &Self, phase: f32) -> Self {
+        let phase = phase.clamp(0.0, 1.0);
+        let travel = |from: f32, to: f32| (to - from).mul_add(phase, from);
+        let pair = |from: (f32, f32), to: (f32, f32)| (travel(from.0, to.0), travel(from.1, to.1));
+        Self {
+            position: pair(self.position, to.position),
+            anchor: pair(self.anchor, to.anchor),
+            scale: pair(self.scale, to.scale),
+            rotation: travel(self.rotation, to.rotation),
+        }
+    }
+
     /// This pose as one transform, in the coordinates the box was handed in.
     #[must_use]
     pub fn matrix(&self) -> Transform {
@@ -112,6 +131,52 @@ mod tests {
             },
             Pt { x: 20.0, y: 10.0 }
         );
+    }
+
+    #[kithara::test]
+    fn the_start_of_a_track_is_the_pose_it_started_from() {
+        let from = Pose::default();
+        let to = Pose {
+            rotation: 360.0,
+            ..Pose::default()
+        };
+
+        assert_eq!(from.between(&to, 0.0), from);
+    }
+
+    #[kithara::test]
+    fn the_end_of_a_track_is_the_pose_it_travelled_to() {
+        let from = Pose::default();
+        let to = Pose {
+            rotation: 360.0,
+            ..Pose::default()
+        };
+
+        assert_eq!(from.between(&to, 1.0), to);
+    }
+
+    #[kithara::test]
+    fn halfway_along_a_full_turn_is_half_a_turn() {
+        let from = Pose::default();
+        let to = Pose {
+            rotation: 360.0,
+            ..Pose::default()
+        };
+
+        assert_eq!(from.between(&to, 0.5).rotation, 180.0);
+    }
+
+    /// A model that runs past the end settles at the end, rather than carrying
+    /// the object off the page.
+    #[kithara::test]
+    fn a_phase_past_the_end_settles_at_the_end() {
+        let from = Pose::default();
+        let to = Pose {
+            position: (100.0, 0.0),
+            ..Pose::default()
+        };
+
+        assert_eq!(from.between(&to, 4.0), to);
     }
 
     #[kithara::test]

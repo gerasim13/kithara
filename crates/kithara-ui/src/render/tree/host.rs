@@ -646,7 +646,9 @@ impl HostedLayout {
                     .map(|child| Self::new(child, ui, reads, skin))
                     .collect(),
             },
-            ExpandedNode::Optional { child, .. } => Self::new(child, ui, reads, skin),
+            ExpandedNode::Object { child, .. } | ExpandedNode::Optional { child, .. } => {
+                Self::new(child, ui, reads, skin)
+            }
             ExpandedNode::Slot { size, children, .. } => Self::Slot {
                 sized: size.is_some(),
                 children: children
@@ -1715,7 +1717,9 @@ mod tests {
                     claimed_components(child, components);
                 }
             }
-            ExpandedNode::Optional { child, .. } | ExpandedNode::Scroll { child, .. } => {
+            ExpandedNode::Object { child, .. }
+            | ExpandedNode::Optional { child, .. }
+            | ExpandedNode::Scroll { child, .. } => {
                 claimed_components(child, components);
             }
             ExpandedNode::Control { spec, .. } => match spec {

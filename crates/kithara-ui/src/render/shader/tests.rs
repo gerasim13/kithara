@@ -104,7 +104,8 @@ fn spec(ui: &CompiledUi) -> ShaderSpec {
                 spec: ControlSpec::Shader(spec),
                 ..
             } => Some(spec.clone()),
-            ExpandedNode::Optional { child, .. }
+            ExpandedNode::Object { child, .. }
+            | ExpandedNode::Optional { child, .. }
             | ExpandedNode::Pressable { child, .. }
             | ExpandedNode::Scroll { child, .. } => find(child),
             ExpandedNode::Popover { anchor, .. } => find(anchor),

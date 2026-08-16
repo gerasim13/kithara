@@ -161,9 +161,9 @@ pub(crate) fn has_blocks(node: &ExpandedNode) -> bool {
         | ExpandedNode::Column { children, .. }
         | ExpandedNode::Slot { children, .. } => children.iter().any(has_blocks),
         ExpandedNode::Popover { anchor, .. } => has_blocks(anchor),
-        ExpandedNode::Pressable { child, .. } | ExpandedNode::Scroll { child, .. } => {
-            has_blocks(child)
-        }
+        ExpandedNode::Object { child, .. }
+        | ExpandedNode::Pressable { child, .. }
+        | ExpandedNode::Scroll { child, .. } => has_blocks(child),
         ExpandedNode::Control { .. } => false,
     }
 }
@@ -219,7 +219,9 @@ pub(crate) fn compiled_node_size_with_hidden(
 
 pub(crate) fn effective_size(node: &ExpandedNode, skin: &SkinDoc) -> Option<SizeSpec> {
     let declared = match node {
-        ExpandedNode::Optional { child, .. } | ExpandedNode::Pressable { child, .. } => {
+        ExpandedNode::Object { child, .. }
+        | ExpandedNode::Optional { child, .. }
+        | ExpandedNode::Pressable { child, .. } => {
             return effective_size(child, skin);
         }
         ExpandedNode::Popover { anchor, .. } => return effective_size(anchor, skin),
@@ -251,7 +253,8 @@ impl Composed<'_> {
 #[must_use]
 pub(crate) fn compute_size(node: &ExpandedNode, skin: &SkinDoc, hidden: Hidden<'_>) -> SizeSpec {
     let override_size = match node {
-        ExpandedNode::Optional { .. }
+        ExpandedNode::Object { .. }
+        | ExpandedNode::Optional { .. }
         | ExpandedNode::Popover { .. }
         | ExpandedNode::Pressable { .. } => None,
         ExpandedNode::Scroll { size, .. }
@@ -265,11 +268,11 @@ pub(crate) fn compute_size(node: &ExpandedNode, skin: &SkinDoc, hidden: Hidden<'
     }
 
     match node {
-        ExpandedNode::Optional { child, .. } | ExpandedNode::Pressable { child, .. } => {
-            compute_size(child, skin, hidden)
-        }
+        ExpandedNode::Object { child, .. }
+        | ExpandedNode::Optional { child, .. }
+        | ExpandedNode::Pressable { child, .. }
+        | ExpandedNode::Scroll { child, .. } => compute_size(child, skin, hidden),
         ExpandedNode::Popover { anchor, .. } => compute_size(anchor, skin, hidden),
-        ExpandedNode::Scroll { child, .. } => compute_size(child, skin, hidden),
         ExpandedNode::Row {
             children,
             gap,
@@ -398,7 +401,6 @@ mod tests {
     fn control(interner: &mut Interner, id: &str, size: SizeSpec) -> ExpandedNode {
         let origin = SourceUri("size-test.ron".to_owned());
         ExpandedNode::Control {
-            transform: crate::geom::Transform::IDENTITY,
             path: interner.intern(id, &origin).unwrap(),
             id: interner.intern(id, &origin).unwrap(),
             spec: ControlSpec::Knob { label: None },

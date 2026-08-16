@@ -2,13 +2,12 @@ use std::collections::BTreeMap;
 
 use crate::{
     error::UiDocError,
-    geom::Transform,
     ids::{InternId, SourceUri},
     layout::FrameSides,
     module::{
         AdaptivePolicy, BindingRef, ButtonStyle, ChipStyle, ChromeStyle, ControlNode,
-        DeckSummaryStyle, FaderStyle, GlyphStyle, IconName, PopoverAlign, PopoverAt, ScalarFormat,
-        TableColumn, TextAlign, TextStyle, Tone, WaveStyle, WindowControlsStyle,
+        DeckSummaryStyle, FaderStyle, GlyphStyle, IconName, PopoverAlign, PopoverAt, Pose,
+        ScalarFormat, TableColumn, TextAlign, TextStyle, Tone, WaveStyle, WindowControlsStyle,
     },
     shader::ShaderSpec,
     size::{BlockNode, SizeSpec},
@@ -55,6 +54,17 @@ pub enum ExpandedNode {
         size: Option<SizeSpec>,
         child: Box<Self>,
     },
+    /// Offsets what its subtree draws, and nothing else.
+    ///
+    /// The pose is resolved per frame rather than at compile time, because a
+    /// `phase` endpoint may move it between one frame and the next. Layout,
+    /// addresses, and pointer regions are the child's alone.
+    Object {
+        pose: Pose,
+        to: Option<Pose>,
+        phase: Option<Binding>,
+        child: Box<Self>,
+    },
     Optional {
         block: BlockSpec,
         child: Box<Self>,
@@ -87,10 +97,6 @@ pub enum ExpandedNode {
         read: Option<Binding>,
         write: Option<Binding>,
         adaptive: AdaptivePolicy,
-        /// Every enclosing object's pose, folded into one offset in the box
-        /// this control is painted into. Identity for a control no object
-        /// wraps, which is every control a document had before objects.
-        transform: Transform,
     },
 }
 

@@ -176,7 +176,6 @@ mod tests {
         let mut interner = Interner::new(1024);
         let id = interner.intern("cell", &origin).unwrap();
         let node = |size| ExpandedNode::Control {
-            transform: crate::draw::Transform::IDENTITY,
             path: id,
             id,
             spec: ControlSpec::Time,
@@ -221,7 +220,6 @@ mod tests {
             read: None,
             write: None,
             adaptive: AdaptivePolicy::default(),
-            transform: crate::draw::Transform::IDENTITY,
         }
     }
 

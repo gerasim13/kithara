@@ -1,13 +1,16 @@
+use num_traits::cast::AsPrimitive;
+
 use super::{
     Group, Host, Module, Popover,
     read::{read_flag, resolve},
 };
 use crate::{
     compile::{CompiledNode, CompiledUi},
+    draw::Transform,
     expand::{Binding, ExpandedNode, SurfaceSpec},
     ids::InternId,
     layout::{Axis, FrameSides},
-    module::{ChromeStyle, PopoverAlign, PopoverAt, TextAlign},
+    module::{ChromeStyle, PopoverAlign, PopoverAt, Pose, TextAlign},
     render::{InputOwner, ReadValue, Reads},
     size::{
         Dim, Hidden, SizeSpec, compiled_node_size_with_hidden, effective_size, is_hidden,
@@ -81,6 +84,7 @@ where
         Context {
             owner,
             input_owner: InputOwner::Engine,
+            transform: Transform::IDENTITY,
         },
         walk,
         &mut host,
@@ -143,6 +147,9 @@ where
                         } else {
                             InputOwner::Leaf
                         },
+                        // A module starts a fresh document: nothing outside it
+                        // can pose what it draws.
+                        transform: Transform::IDENTITY,
                     },
                     walk,
                     host,
@@ -178,6 +185,8 @@ where
 struct Context {
     owner: InternId,
     input_owner: InputOwner,
+    /// Every enclosing object's pose, composed and resolved for this frame.
+    transform: Transform,
 }
 
 #[derive(Clone, Copy)]
@@ -381,19 +390,24 @@ where
             let children = expanded_children(children, address, context, hidden, walk, host);
             host.slot(children, effective_size(node, walk.skin))
         }
+        ExpandedNode::Object {
+            pose,
+            to,
+            phase,
+            child,
+        } => {
+            let track = Track(*pose, to.as_ref(), phase.as_ref());
+            mount_object(track, child, address, context, walk, host)
+        }
         ExpandedNode::Control {
-            path,
-            spec,
-            read,
-            transform,
-            ..
+            path, spec, read, ..
         } => host.control(
             *path,
             spec,
             read.as_ref(),
             context.input_owner,
             effective_size(node, walk.skin),
-            *transform,
+            context.transform,
         ),
     }
 }
@@ -490,6 +504,51 @@ where
             (minimum, output)
         })
         .collect()
+}
+
+/// Where an object starts, where it ends, and what says how far along it is.
+#[derive(Clone, Copy)]
+struct Track<'a>(Pose, Option<&'a Pose>, Option<&'a Binding>);
+
+/// Composes an object's pose onto whatever its subtree draws.
+///
+/// The object mounts nothing of its own: the child goes straight to the host,
+/// carrying an offset the host applies to the picture and to nothing else.
+fn mount_object<H>(
+    track: Track<'_>,
+    child: &ExpandedNode,
+    address: &[usize],
+    context: Context,
+    walk: Walk<'_>,
+    host: &mut H,
+) -> H::Output
+where
+    H: Host,
+{
+    let Track(pose, to, phase) = track;
+    // A `phase` an endpoint answers moves the object along its track between
+    // one frame and the next; an object with no track, or one nobody drives,
+    // sits at the pose the document wrote down.
+    let along = phase
+        .and_then(|binding| resolve(walk.reads, binding, walk.ui))
+        .and_then(|value| match value {
+            ReadValue::Scalar(along) => Some(along.as_()),
+            _ => None,
+        });
+    let here = match (to, along) {
+        (Some(to), Some(along)) => pose.between(to, along),
+        _ => pose,
+    };
+    expanded(
+        child,
+        &child_address(address, 0),
+        Context {
+            transform: here.matrix().then(context.transform),
+            ..context
+        },
+        walk,
+        host,
+    )
 }
 
 fn child_address(parent: &[usize], index: usize) -> Vec<usize> {
