@@ -75,11 +75,9 @@
 00-atoms.png                2
 01-buttons.png              2
 
-# PROVISIONAL, NOT MEASURED. Motion turns and scales what a control draws, which
-# puts ink on pixels the rasterisers round differently along every edge that is
-# no longer axis-aligned, so this page is expected to sit above the pages that
-# only draw axis-aligned boxes. The number below is a guess written so the gate
-# has a line to read; the immediate half of the capture needs a live window,
-# which has not been run. Replace it with the measured share on the first full
-# capture, and say so here the way every other line does.
-21-motion.png               4
+# Motion landed 2026-08-16 at 1.0% of pixels and 1.1% of ink, which is the
+# floor every ordinary page sits on. Turning and scaling a control was expected
+# to cost more, because it puts ink on edges that are no longer axis-aligned and
+# the two rasterisers round those differently; it did not, because the pose is
+# resolved in the neutral list and both hosts flatten the same placed geometry.
+21-motion.png               2
