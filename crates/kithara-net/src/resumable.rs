@@ -310,7 +310,7 @@ mod tests {
     impl NetObserver for StallSignal {
         fn body_stalled(&self, _consumed: u64, _expected: Option<u64>, _stall: Duration) {
             if let Some(sender) = self.0.lock().take() {
-                let _ = sender.send(());
+                sender.send(()).ok();
             }
         }
     }
@@ -704,7 +704,7 @@ mod tests {
             let entered = Arc::clone(&entered);
             Box::pin(async move {
                 if let Some(sender) = entered.lock().take() {
-                    let _ = sender.send(());
+                    sender.send(()).ok();
                 }
                 futures::future::pending::<Result<Resumed, NetError>>().await
             })
