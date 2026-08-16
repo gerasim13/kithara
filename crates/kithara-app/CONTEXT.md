@@ -147,3 +147,14 @@ beat-grid encodings change. Configuration changes need no bump: `analysis_finger
 every blob and a mismatch is a miss, so `WAVEFORM_MAX_BUCKETS` and runtime beat-analysis tuning re-analyse on their own.
 Because the identity is the source location and not the bytes, a file overwritten in place keeps its entry until the
 version is bumped (acceptable for a library of stable files).
+
+## Baked DRM secrets
+
+`build.rs` bakes `app.yaml` provider secrets from the process env (workspace `.env` as fallback) into
+`kithara_app::baked`. A missing `$KITHARA_*` reference degrades silently by design: the cipher key bakes as an empty
+string, headers referencing the variable are omitted, and the binary compiles but the key server rejects its requests.
+This is the intended mode for every build that never talks to a real key server (local dev, the workspace test gate),
+which is why it is not a warning. Builds that do talk to one — the CI `network*` lanes, release pipelines — set
+`KITHARA_DRM_REQUIRE` (any non-empty value), which turns a missing variable into a build error naming that variable, so
+a forgotten secret surfaces at build time instead of as a runtime key rejection. The flag is strict for all env
+references in `app.yaml`, not only the providers a given lane exercises.

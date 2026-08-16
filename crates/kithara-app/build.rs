@@ -8,9 +8,12 @@
 //! 1. Real process env (preserves explicit `KEY=foo cargo build`).
 //! 2. Workspace `<root>/.env` file (parsed locally — never mutated
 //!    into the build process env).
-//! 3. Nothing — the provider's secret is replaced with an empty string
-//!    and a `cargo:warning=...` is emitted. The binary still compiles,
-//!    but the key server will reject the request.
+//! 3. Nothing — the provider's secret silently degrades: the cipher key
+//!    becomes an empty string, headers referencing the variable are
+//!    omitted. The binary still compiles, but the key server will
+//!    reject the request. Lanes that build against a real key server
+//!    set `KITHARA_DRM_REQUIRE` (any non-empty value), which turns a
+//!    missing variable into a build error naming that variable.
 //!
 //! `app.yaml` and `.env` are both `rerun-if-changed`.
 
@@ -172,6 +175,10 @@ fn main() {
         .unwrap_or_else(|e| panic!("parse {}: {e}", app_yaml_path.display()));
 
     let env_map = load_env(&dotenv_path);
+    println!("cargo:rerun-if-env-changed=KITHARA_DRM_REQUIRE");
+    let require = env_map
+        .get("KITHARA_DRM_REQUIRE")
+        .is_some_and(|v| !v.is_empty());
 
     for provider in &app.drm.providers {
         if let Some(name) = provider.cipher_env.as_deref().and_then(parse_env_ref) {
@@ -188,7 +195,7 @@ fn main() {
     emit_scalars(&mut code, &app);
     emit_tracks(&mut code, &app.playlist.tracks);
     emit_asset_layouts(&mut code, &app.assets.cache_identity);
-    emit_drm_policy(&mut code, &app.drm.providers, &env_map);
+    emit_drm_policy(&mut code, &app.drm.providers, &env_map, require);
 
     let out_dir = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR is set by cargo"));
     let out_path = out_dir.join("app_config_baked.rs");
@@ -302,6 +309,7 @@ fn emit_drm_policy(
     code: &mut String,
     providers: &[DrmProvider],
     env_map: &HashMap<String, String>,
+    require: bool,
 ) {
     // Each provider emits its own `KeyRequestFactory` closure that
     // rebuilds the X-Encrypted-Key salt on EVERY key request, using
@@ -322,17 +330,23 @@ fn emit_drm_policy(
          let mut rules = Vec::new();\n",
     );
     for provider in providers {
-        emit_provider(code, provider, env_map);
+        emit_provider(code, provider, env_map, require);
     }
     code.push_str("    DomainKeyPolicy::new(rules)\n}\n");
 }
 
-fn emit_provider(code: &mut String, p: &DrmProvider, env_map: &HashMap<String, String>) {
+fn emit_provider(
+    code: &mut String,
+    p: &DrmProvider,
+    env_map: &HashMap<String, String>,
+    require: bool,
+) {
     let cipher_expr = resolve_secret(
         p.cipher_key.as_deref(),
         p.cipher_env.as_deref(),
         env_map,
         &format!("provider `{}` cipher", p.name),
+        require,
     );
     let domains = p
         .domains
@@ -349,7 +363,7 @@ fn emit_provider(code: &mut String, p: &DrmProvider, env_map: &HashMap<String, S
             );
         }
         let label = format!("provider `{}` header `{name}`", p.name);
-        let Some(value_expr) = render_template(value, env_map, &label) else {
+        let Some(value_expr) = render_template(value, env_map, &label, require) else {
             continue;
         };
         writeln!(
@@ -396,6 +410,7 @@ fn resolve_secret(
     env_ref: Option<&str>,
     env_map: &HashMap<String, String>,
     label: &str,
+    require: bool,
 ) -> String {
     match (inline, env_ref) {
         (Some(_), Some(_)) => {
@@ -408,9 +423,9 @@ fn resolve_secret(
             });
             env_map.get(name).filter(|v| !v.is_empty()).map_or_else(
                 || {
-                    println!(
-                        "cargo:warning={label}: env `{name}` not set; falling back to empty string"
-                    );
+                    if require {
+                        panic!("{label}: env `{name}` is not set and KITHARA_DRM_REQUIRE is set");
+                    }
                     literal_expr("", false)
                 },
                 |v| literal_expr(v, true),
@@ -434,12 +449,19 @@ fn literal_expr(value: &str, obfuscate: bool) -> String {
 /// Literal values pass through unchanged. Env-resolved values are
 /// wrapped with `obfstr!()`. `None` means the value referenced a
 /// missing env var — the caller should drop the header entirely.
-fn render_template(value: &str, env_map: &HashMap<String, String>, label: &str) -> Option<String> {
+fn render_template(
+    value: &str,
+    env_map: &HashMap<String, String>,
+    label: &str,
+    require: bool,
+) -> Option<String> {
     if !value.contains("${") {
         if let Some(name) = parse_env_ref(value) {
             return env_map.get(name).filter(|v| !v.is_empty()).map_or_else(
                 || {
-                    println!("cargo:warning={label}: env `{name}` not set; value omitted");
+                    if require {
+                        panic!("{label}: env `{name}` is not set and KITHARA_DRM_REQUIRE is set");
+                    }
                     None
                 },
                 |v| Some(literal_expr(v, true)),
@@ -462,7 +484,9 @@ fn render_template(value: &str, env_map: &HashMap<String, String>, label: &str) 
             fmt_str.push_str("{}");
             args.push(literal_expr(v, true));
         } else {
-            println!("cargo:warning={label}: env `{name}` not set; value omitted");
+            if require {
+                panic!("{label}: env `{name}` is not set and KITHARA_DRM_REQUIRE is set");
+            }
             return None;
         }
         rest = &tail[end + 1..];
