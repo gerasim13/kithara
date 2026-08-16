@@ -426,13 +426,10 @@ fn standalone_rtsan_is_fail_closed_before_expanding_every_lane() {
         .collect();
     assert_eq!(lanes, ["rtsan", "rtsan-file", "rtsan-hls"]);
 
-    let backends: Vec<&str> = mapping_field(matrix, "backend")
-        .as_sequence()
-        .expect("RTSan backends are a sequence")
-        .iter()
-        .map(|backend| backend.as_str().expect("RTSan backend is a string"))
-        .collect();
-    assert_eq!(backends, ["instrumented", "standalone"]);
+    assert!(
+        !matrix.contains_key("backend"),
+        "one gate runs one backend; a second matrix axis doubles the runner's bill"
+    );
 
     let lane_step = named_step(rtsan, "Run RTSan lane");
     let lane_env = mapping_field(lane_step, "env")
@@ -440,7 +437,7 @@ fn standalone_rtsan_is_fail_closed_before_expanding_every_lane() {
         .expect("RTSan lane environment is a mapping");
     assert_eq!(
         mapping_field(lane_env, "KITHARA_RTSAN_BACKEND").as_str(),
-        Some("${{ matrix.backend }}")
+        Some("${{ inputs.backend || 'standalone' }}")
     );
     assert_eq!(
         mapping_field(lane_env, "LANE").as_str(),
@@ -456,7 +453,7 @@ fn standalone_rtsan_is_fail_closed_before_expanding_every_lane() {
         .as_str()
         .expect("RTSan artifact name is a string");
     for coordinate in [
-        "${{ matrix.backend }}",
+        "${{ inputs.backend || 'standalone' }}",
         "${{ matrix.lane }}",
         "${{ github.run_id }}",
         "${{ github.run_attempt }}",
@@ -470,6 +467,66 @@ fn standalone_rtsan_is_fail_closed_before_expanding_every_lane() {
         mapping_field(upload_inputs, "if-no-files-found").as_str(),
         Some("error")
     );
+}
+
+/// The gate judges with the standalone runtime unless someone says otherwise.
+/// Both backends are kept working; only one is paid for per run.
+#[test]
+fn rtsan_defaults_to_the_standalone_backend() {
+    let workflow = github_workflow("rtsan.yml");
+    let root = workflow.as_mapping().expect("workflow is a mapping");
+    let triggers = mapping_field(root, "on")
+        .as_mapping()
+        .expect("workflow triggers are a mapping");
+    for trigger in ["workflow_call", "workflow_dispatch"] {
+        let inputs = mapping_field(
+            mapping_field(triggers, trigger)
+                .as_mapping()
+                .unwrap_or_else(|| panic!("{trigger} is a mapping")),
+            "inputs",
+        )
+        .as_mapping()
+        .expect("RTSan inputs are a mapping");
+        let backend = mapping_field(inputs, "backend")
+            .as_mapping()
+            .expect("RTSan backend input is a mapping");
+        assert_eq!(
+            mapping_field(backend, "default").as_str(),
+            Some("standalone"),
+            "{trigger} must default to the standalone backend"
+        );
+    }
+}
+
+/// The instrumented backend is one dropdown away, not deleted: a verdict that
+/// needs the compiler's own instrumentation must be reachable from the UI.
+#[test]
+fn rtsan_offers_the_instrumented_backend_from_the_run_dialog() {
+    let workflow = github_workflow("rtsan.yml");
+    let root = workflow.as_mapping().expect("workflow is a mapping");
+    let dispatch = mapping_field(
+        mapping_field(root, "on")
+            .as_mapping()
+            .expect("workflow triggers are a mapping"),
+        "workflow_dispatch",
+    )
+    .as_mapping()
+    .expect("workflow_dispatch is a mapping");
+    let backend = mapping_field(
+        mapping_field(dispatch, "inputs")
+            .as_mapping()
+            .expect("RTSan inputs are a mapping"),
+        "backend",
+    )
+    .as_mapping()
+    .expect("RTSan backend input is a mapping");
+    let options: Vec<&str> = mapping_field(backend, "options")
+        .as_sequence()
+        .expect("RTSan backend options are a sequence")
+        .iter()
+        .map(|option| option.as_str().expect("RTSan backend option is a string"))
+        .collect();
+    assert_eq!(options, ["standalone", "instrumented"]);
 }
 
 #[test]
