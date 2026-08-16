@@ -24,6 +24,7 @@ const MAX_LABEL_BYTES: usize = 8 * 1024;
 const MAX_DIAGNOSTIC_BYTES: usize = 32 * 1024;
 const MAX_CONTEXT_BYTES: usize = 192 * 1024;
 const MAX_FLASH_BYTES: usize = 256 * 1024;
+const MAX_FLIGHT_CHANNEL_BYTES: usize = 32 * 1024;
 const MAX_FALLBACK_LOG_BYTES: usize = 64 * 1024;
 const MAX_JSON_EXPANSION: usize = 6;
 const ENVELOPE_OVERHEAD_BYTES: usize = 16 * 1024;
@@ -31,7 +32,8 @@ const MAX_BOUNDED_INPUT_BYTES: usize = 12 * MAX_NEXTEST_FIELD_BYTES
     + MAX_LABEL_BYTES
     + MAX_DIAGNOSTIC_BYTES
     + MAX_CONTEXT_BYTES
-    + MAX_FLASH_BYTES;
+    + MAX_FLASH_BYTES
+    + 2 * MAX_FLIGHT_CHANNEL_BYTES;
 
 const _: () = assert!(
     MAX_BOUNDED_INPUT_BYTES * MAX_JSON_EXPANSION + ENVELOPE_OVERHEAD_BYTES < MAX_ENVELOPE_BYTES
@@ -130,6 +132,12 @@ struct DumpEnvelope<'a> {
     pid: u32,
     nextest: NextestContext,
     context: Value,
+    /// Flight-recorder tails captured at dump time: the newest DEBUG events
+    /// and `#[kithara::probe]` firings. Every dump kind carries them — the
+    /// watchdog/timeout panics that follow a dump are suppressed as
+    /// duplicates, so this envelope is the only carrier of that context.
+    flight_events: Vec<String>,
+    flight_probes: Vec<String>,
 }
 
 fn flash_dump(label: &str) -> Option<String> {
@@ -185,6 +193,25 @@ fn bounded_owned(value: String, max_bytes: usize) -> String {
     }
 }
 
+/// Keep the newest lines whose total length fits the channel budget; a dump
+/// wants the moments before the failure, so the oldest lines go first.
+fn bounded_tail(mut lines: Vec<String>, max_bytes: usize) -> Vec<String> {
+    let mut total = 0usize;
+    let keep_from = lines
+        .iter()
+        .enumerate()
+        .rev()
+        .take_while(|(_, line)| {
+            total += line.len();
+            total <= max_bytes
+        })
+        .map(|(index, _)| index)
+        .last()
+        .unwrap_or(lines.len());
+    lines.drain(..keep_from);
+    lines
+}
+
 fn bounded_context(payload: String) -> Value {
     if payload.len() > MAX_CONTEXT_BYTES {
         return Value::String(bounded_excerpt(&payload, MAX_CONTEXT_BYTES));
@@ -201,6 +228,8 @@ fn serialize_envelope(mut envelope: DumpEnvelope<'_>) -> serde_json::Result<Opti
 
     let encoded_bytes = payload.len();
     envelope.flash = None;
+    envelope.flight_events = Vec::new();
+    envelope.flight_probes = Vec::new();
     envelope.context = Value::String(format!(
         "[kithara context and Flash omitted: encoded_bytes={encoded_bytes}]"
     ));
@@ -316,6 +345,8 @@ pub(crate) fn write_dump<C: HangDump>(label: &str, ctx: &C, dir: Option<&Path>, 
         pid,
         nextest: NextestContext::capture(),
         context,
+        flight_events: bounded_tail(crate::flight::tail(), MAX_FLIGHT_CHANNEL_BYTES),
+        flight_probes: bounded_tail(crate::flight::probes_tail(), MAX_FLIGHT_CHANNEL_BYTES),
     };
     let payload = match serialize_envelope(envelope) {
         Ok(Some(payload)) => payload,
@@ -530,11 +561,14 @@ mod tests {
             pid: 2,
             nextest: NextestContext::from_lookup(|_| None),
             context: Value::Null,
+            flight_events: vec!["DEBUG kithara_test: marker".to_owned()],
+            flight_probes: Vec::new(),
         };
 
         let value = serde_json::to_value(envelope).expect("serialize hang envelope");
 
         assert_eq!(value["flash"], "[flash hang dump] still running");
+        assert_eq!(value["flight_events"][0], "DEBUG kithara_test: marker");
     }
 
     #[test]
@@ -553,6 +587,14 @@ mod tests {
             pid: u32::MAX,
             nextest,
             context: bounded_context("\0".repeat(MAX_CONTEXT_BYTES + 1)),
+            flight_events: bounded_tail(
+                vec!["\0".repeat(MAX_FLIGHT_CHANNEL_BYTES + 1)],
+                MAX_FLIGHT_CHANNEL_BYTES,
+            ),
+            flight_probes: bounded_tail(
+                vec!["\0".repeat(MAX_FLIGHT_CHANNEL_BYTES / 2); 3],
+                MAX_FLIGHT_CHANNEL_BYTES,
+            ),
         };
 
         let payload = serialize_envelope(envelope)
@@ -576,6 +618,8 @@ mod tests {
                 (key == Consts::NEXTEST_ATTEMPT_ID).then(|| attempt_id.to_owned())
             }),
             context: Value::Null,
+            flight_events: vec!["evicted by the size fallback".to_owned()],
+            flight_probes: Vec::new(),
         };
 
         let payload = serialize_envelope(envelope)
@@ -591,5 +635,23 @@ mod tests {
                 .as_str()
                 .is_some_and(|context| { context.contains("context and Flash omitted") })
         );
+        assert!(
+            value["flight_events"].as_array().is_some_and(Vec::is_empty),
+            "size fallback must drop the flight tail"
+        );
+    }
+
+    #[test]
+    fn bounded_tail_keeps_newest_lines_within_budget() {
+        let lines = vec!["old".repeat(10), "mid".repeat(10), "new".repeat(10)];
+
+        let kept = bounded_tail(lines, 65);
+
+        assert_eq!(kept.len(), 2);
+        assert!(kept[0].starts_with("mid"));
+        assert!(kept[1].starts_with("new"));
+        assert!(bounded_tail(vec!["x".repeat(100)], 10).is_empty());
+        let all = bounded_tail(vec!["a".to_owned(), "b".to_owned()], 100);
+        assert_eq!(all, vec!["a".to_owned(), "b".to_owned()]);
     }
 }

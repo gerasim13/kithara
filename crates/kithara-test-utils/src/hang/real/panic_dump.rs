@@ -4,9 +4,8 @@ use std::{
 };
 
 use kithara_platform::sync::OnceLock;
-use serde::Serialize;
 
-use super::platform::write_dump;
+use super::{platform::write_dump, shared::NoContext};
 
 thread_local! {
     static SUPPRESS_NEXT: Cell<bool> = const { Cell::new(false) };
@@ -27,16 +26,11 @@ pub fn suppress_expected_panic_dumps() {
     SUPPRESS_ALL.with(|cell| cell.set(true));
 }
 
-#[derive(Serialize)]
-struct PanicContext {
-    recent_events: Vec<String>,
-    recent_probes: Vec<String>,
-}
-
 /// Process-wide hook recording a `kithara.hang.v1` envelope for every
 /// unexpected panic — assertion failures included, which otherwise die with
-/// stdout as their only trace. The envelope carries the flight-recorder tail,
-/// so a red case brings its own DEBUG context without a pre-arranged filter.
+/// stdout as their only trace. The envelope carries the flight-recorder tail
+/// (`write_dump` attaches it to every dump kind), so a red case brings its
+/// own DEBUG context without a pre-arranged filter.
 /// Idempotent; chains to the previously installed hook.
 pub fn install_panic_dump() {
     static INSTALL: OnceLock<()> = OnceLock::new();
@@ -64,10 +58,6 @@ fn record_panic(info: &PanicHookInfo<'_>) {
         .map(|message| (*message).to_owned())
         .or_else(|| info.payload().downcast_ref::<String>().cloned())
         .unwrap_or_else(|| "<non-string panic payload>".to_owned());
-    let context = PanicContext {
-        recent_events: crate::flight::tail(),
-        recent_probes: crate::flight::probes_tail(),
-    };
     let diagnostic = format!("panic at {location}: {message}");
-    write_dump("panic", &context, None, &diagnostic);
+    write_dump("panic", &NoContext, None, &diagnostic);
 }

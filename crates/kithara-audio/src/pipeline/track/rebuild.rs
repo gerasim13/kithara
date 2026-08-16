@@ -73,6 +73,7 @@ impl Track<RebuildingDecoder> {
             return finish_rebuild(src, rebuild, complete);
         }
         src.update_state(Self::new(rebuild).erase());
+        super::waiting_branch!("rebuilding_decoder_pending");
         TrackStep::Blocked(WaitingReason::Waiting)
     }
 }

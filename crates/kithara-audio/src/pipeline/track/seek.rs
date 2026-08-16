@@ -122,6 +122,7 @@ impl Track<ApplyingSeek> {
                 return TrackStep::Failed;
             }
             src.update_state(Self::new(applying).erase());
+            super::waiting_branch!("applying_seek_not_ready_unparked");
             return TrackStep::Blocked(WaitingReason::Waiting);
         }
         let transition = src.seek_engine.apply(
@@ -185,7 +186,10 @@ impl Track<AwaitingResume> {
         match decode_step(src) {
             DecodeStep::Produced(fetch) => TrackStep::Produced(fetch),
             DecodeStep::Interrupted => TrackStep::StateChanged,
-            DecodeStep::TransitionPending => TrackStep::Blocked(WaitingReason::Waiting),
+            DecodeStep::TransitionPending => {
+                super::waiting_branch!("awaiting_resume_transition_pending");
+                TrackStep::Blocked(WaitingReason::Waiting)
+            }
             DecodeStep::NotReady(reason) => TrackStep::Blocked(reason),
             DecodeStep::Eof => TrackStep::Eof,
             DecodeStep::Failed => TrackStep::Failed,
@@ -269,6 +273,9 @@ impl Track<WaitingForSource> {
                 })
                 .erase(),
             );
+            if reason == WaitingReason::Waiting {
+                super::waiting_branch!("parked_source_phase_waiting");
+            }
             return TrackStep::Blocked(reason);
         }
 

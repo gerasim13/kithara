@@ -416,14 +416,14 @@ mod panic_dump_tests {
         assert_eq!(parsed["label"], "panic");
         let diagnostic = parsed["diagnostic"].as_str().unwrap();
         assert!(diagnostic.contains("tests.rs:"), "{diagnostic}");
-        let events = parsed["context"]["recent_events"].as_array().unwrap();
+        let events = parsed["flight_events"].as_array().unwrap();
         assert!(
             events
                 .iter()
                 .any(|event| event.as_str().is_some_and(|line| line.contains(&marker))),
             "dump must carry the flight-recorder tail"
         );
-        let probes = parsed["context"]["recent_probes"].as_array().unwrap();
+        let probes = parsed["flight_probes"].as_array().unwrap();
         assert!(
             probes.iter().any(|event| {
                 event
@@ -450,6 +450,12 @@ mod panic_dump_tests {
         std::fs::create_dir_all(&dir).unwrap();
         let dir_for_closure = dir.clone();
 
+        let marker = format!("watchdog-flight-marker-{}", std::process::id());
+        let subscriber = tracing_subscriber::registry().with(crate::flight::layer());
+        tracing::subscriber::with_default(subscriber, || {
+            tracing::debug!(target: "kithara_panic_dump_test", "{marker}");
+        });
+
         let result = catch_unwind(AssertUnwindSafe(move || {
             let mut detector: HangDetector =
                 HangDetector::new("tests.panic_suppress", Duration::from_millis(1))
@@ -460,11 +466,28 @@ mod panic_dump_tests {
         }));
         assert!(result.is_err(), "detector must panic past deadline");
 
-        let own_dumps = std::fs::read_dir(&dir).unwrap().count();
-        assert_eq!(own_dumps, 1, "the watchdog writes exactly its own dump");
+        let own_dumps: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .collect();
+        assert_eq!(
+            own_dumps.len(),
+            1,
+            "the watchdog writes exactly its own dump"
+        );
         assert!(
             panic_dumps_containing("tests.panic_suppress").is_empty(),
             "the watchdog panic must not produce a second `panic` dump"
+        );
+        let body = std::fs::read_to_string(&own_dumps[0]).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert!(
+            parsed["flight_events"].as_array().is_some_and(|events| {
+                events
+                    .iter()
+                    .any(|event| event.as_str().is_some_and(|line| line.contains(&marker)))
+            }),
+            "the watchdog dump must carry the flight-recorder tail"
         );
         let _ = std::fs::remove_dir_all(&dir);
     }

@@ -265,7 +265,7 @@ mod tests {
 
     #[kithara::test]
     fn oversized_event_is_truncated_at_a_char_boundary() {
-        let payload = "п".repeat(MAX_EVENT_BYTES);
+        let payload = "\u{1f980}".repeat(MAX_EVENT_BYTES);
         let _guard = with_recorder(|| {
             debug!(target: "kithara_flight_test", oversized = payload.as_str(), "boundary probe");
         });

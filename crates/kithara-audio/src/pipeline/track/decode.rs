@@ -61,13 +61,17 @@ impl Track<Decoding> {
             }
             // Stay in Decoding — the dispatcher's sentinel is already
             // `Decoding`, so no restore is needed.
+            super::waiting_branch!("decoding_not_ready_unparked");
             return TrackStep::Blocked(WaitingReason::Waiting);
         }
 
         match decode_step(src) {
             DecodeStep::Produced(fetch) => TrackStep::Produced(fetch),
             DecodeStep::Interrupted => TrackStep::StateChanged,
-            DecodeStep::TransitionPending => TrackStep::Blocked(WaitingReason::Waiting),
+            DecodeStep::TransitionPending => {
+                super::waiting_branch!("decoding_transition_pending");
+                TrackStep::Blocked(WaitingReason::Waiting)
+            }
             // The decoder read across the current segment boundary into a
             // not-ready (withheld) byte. Park in `WaitingForSource(Playback)`
             // rather than re-running the full decode every tick: the wait
@@ -128,7 +132,12 @@ pub(super) fn decode_step<T: StreamType>(src: &mut StreamAudioSource<T>) -> Deco
             }
             DecodeStep::Produced(fetch)
         }
-        CoreDecodeAction::Pending(reason) => DecodeStep::NotReady(reason),
+        CoreDecodeAction::Pending(reason) => {
+            if reason == WaitingReason::Waiting {
+                super::waiting_branch!("decode_chunk_pending");
+            }
+            DecodeStep::NotReady(reason)
+        }
         CoreDecodeAction::TransitionPending => DecodeStep::TransitionPending,
         CoreDecodeAction::StartRecreate(recreate) => {
             start_recreating_decoder(src, recreate);
