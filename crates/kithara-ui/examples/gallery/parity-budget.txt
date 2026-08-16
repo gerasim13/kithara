@@ -108,3 +108,21 @@
 # outlines and text, and turned text has more edge per glyph than upright text,
 # which is why this page sits a little above the 1.2% the objects page reads.
 22-motion.png               2
+
+# Sprites, 2026-08-16, at 1.8% of pixels and 1.5% of ink. Eight frames of one
+# sheet held at their own second, one sheet played off the host's own clock and
+# one scrubbed by the fader beside it, and two more carried by moving objects.
+#
+# Its first capture read 1.9% and hid a plainly different picture, the fourth
+# time in this campaign a share inside a neighbouring page's budget did: the
+# turned sprite's ink sat at x 282..301 here against 290..310 there, an exact
+# 8-pixel shift. Both hosts were handed the same 96 by 96 box and the same
+# transform; the immediate host then laid that child out 112 tall, because a
+# stack offers its first layer its own box tightly and every later one loosely,
+# so whichever child a document wrote first was stretched to the stage while its
+# siblings kept what they asked for. The 8 pixels are that stretch: 96 fitted
+# inside 112 sits 8 lower, and 84 degrees of turn carries 8 down into 8 across.
+# A layer that draws nothing now takes the tight offer, both hosts read 292..309
+# against 292..310, and what is left is the edge-and-text noise every page
+# carries.
+23-sprites.png              2

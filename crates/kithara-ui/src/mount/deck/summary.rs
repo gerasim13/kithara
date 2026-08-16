@@ -50,7 +50,11 @@ mod host {
         }
 
         #[cfg(feature = "masonry")]
-        fn retained_refresh(&self, read: Reading<'_>) -> Option<DataRefresh<Loaded>> {
+        fn retained_refresh(
+            &self,
+            read: Reading<'_>,
+            _endpoint: Option<&str>,
+        ) -> Option<DataRefresh<Loaded>> {
             let scope = read.scope.to_owned();
             Some(Box::new(move |data, ctx| {
                 let next = snapshot(None, &ctx, &scope);

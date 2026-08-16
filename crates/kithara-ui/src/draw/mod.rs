@@ -13,7 +13,7 @@ mod text;
 
 pub use backend::{Backend, replay};
 pub use caps::{Caps, Needs, Unsupported};
-pub use image::ImageId;
+pub use image::{Image, ImageId};
 pub use ir::{DrawCmd, Geom, Pt, Rect, Rgba, Transform};
 pub use list::{DrawList, DrawListBuilder};
 pub use path::{FillRule, Outline, Path, PoolPath, Verb};

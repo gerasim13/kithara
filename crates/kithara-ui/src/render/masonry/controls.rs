@@ -24,6 +24,7 @@ use crate::{
         meter::StereoMeter,
         nav_item::NavItem,
         painter::{ControlPainter, Labelled},
+        picture::sprite::Sprite,
         pivot::{map::PortalMap, range::Range},
         readout::Readout,
         tab::TabLarge,
@@ -572,6 +573,12 @@ impl Retained for Spacer {}
 /// The gear the settings button shows comes from the built-in art, not from an
 /// endpoint.
 impl Retained for Settings {}
+
+/// A sheet's endpoint hands over seconds, and seconds are not a picture: which
+/// frame they land on needs the sheet and how long a pass through it takes,
+/// which the control knows and the painter does not. The refresh the control
+/// hands over is what steps it.
+impl Retained for Sprite {}
 
 impl Retained for Wave {
     fn set_read(data: &mut Self::Data, value: &ReadValue<'_>) -> bool {

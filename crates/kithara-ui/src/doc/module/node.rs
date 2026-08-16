@@ -466,6 +466,24 @@ pub enum ControlNode {
         adaptive: AdaptivePolicy,
     },
     /// A WGSL fragment fed by named read-only endpoint uniforms.
+    /// One frame of a named sheet, chosen by how far its own reading has run.
+    ///
+    /// `read` hands over seconds, so binding it to the host's own clock is what
+    /// makes the sheet play and binding it to anything else scrubs the sheet by
+    /// hand; `seconds` is how long one pass through every frame takes.
+    Sprite {
+        id: NodeId,
+        #[serde(default)]
+        size: Option<SizeSpec>,
+        sheet: String,
+        #[serde(default)]
+        read: Option<BindingRef>,
+        #[serde(default)]
+        write: Option<BindingRef>,
+        seconds: f32,
+        #[serde(default)]
+        adaptive: AdaptivePolicy,
+    },
     Shader {
         id: NodeId,
         #[serde(default)]
@@ -736,6 +754,7 @@ impl ControlNode {
             | Self::Fader { read, write, .. }
             | Self::Wave { read, write, .. }
             | Self::Vis { read, write, .. }
+            | Self::Sprite { read, write, .. }
             | Self::Range { read, write, .. }
             | Self::Table { read, write, .. }
             | Self::Tree { read, write, .. }
@@ -789,6 +808,7 @@ impl ControlNode {
             | Self::Fader { size, .. }
             | Self::Wave { size, .. }
             | Self::Vis { size, .. }
+            | Self::Sprite { size, .. }
             | Self::Shader { size, .. }
             | Self::PortalMap { size, .. }
             | Self::Range { size, .. }

@@ -21,6 +21,11 @@ impl Consts {
     /// on the page, so a gallery left running keeps its seconds exact in `f32`.
     /// A real application hands over its own monotonic time and never wraps.
     pub(super) const MOTION_CLOCK_PERIOD: f32 = 8.0;
+    /// Where the sprite page's fader starts, and — because a capture never
+    /// ticks — the frame both hosts photograph the scrubbed sheet at. Three
+    /// eighths of the way along, so the scrubbed sprite shows a different frame
+    /// from the played one beside it.
+    pub(super) const SPRITE_SCRUB_START: f32 = 0.375;
     pub(super) const BPM_VALUE: f32 = 70.0;
     pub(super) const CUES: &[f32] = &[0.27, 0.31];
     pub(super) const DURATION_SECS: f64 = 360.0;

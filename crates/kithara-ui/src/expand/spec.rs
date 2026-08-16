@@ -147,6 +147,10 @@ pub(super) fn control_spec(
             active: optional_binding(context, machine, extra.active.as_ref())?,
         },
         ControlNode::Shader { source, .. } => shader_spec(context, machine, source, extra, path)?,
+        ControlNode::Sprite { sheet, seconds, .. } => ControlSpec::Sprite {
+            sheet: intern_text(context, machine.interner, sheet, path, &context.origin)?,
+            seconds: *seconds,
+        },
         ControlNode::TitleBar { label, .. } => title_bar_spec(context, machine, label, path)?,
         ControlNode::Text {
             style,
@@ -289,6 +293,7 @@ fn fixed_control_spec(control: &ControlNode) -> Option<ControlSpec> {
         }),
         ControlNode::Crossfader { ticks, .. } => Some(ControlSpec::Crossfader { ticks: *ticks }),
         ControlNode::Vis { .. } => Some(ControlSpec::Vis),
+
         ControlNode::PortalMap { .. } => Some(ControlSpec::PortalMap),
         ControlNode::Range { .. } => Some(ControlSpec::Range),
         ControlNode::Toggle { .. } => Some(ControlSpec::Toggle),
@@ -316,6 +321,7 @@ fn fixed_control_spec(control: &ControlNode) -> Option<ControlSpec> {
         | ControlNode::Fader { .. }
         | ControlNode::Wave { .. }
         | ControlNode::Shader { .. }
+        | ControlNode::Sprite { .. }
         | ControlNode::Table { .. }
         | ControlNode::Tree { .. }
         | ControlNode::ContextBar { .. }

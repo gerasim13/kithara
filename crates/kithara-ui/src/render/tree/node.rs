@@ -235,22 +235,8 @@ impl<'a> DocumentHost for IcedHost<'a, '_> {
         apply_size(Rendered::leading(element), size)
     }
 
-    /// The declared box goes to the stack itself rather than to a container
-    /// around it. `Stack::layout` resolves its own size from its width, height
-    /// and first layer, then offers every other layer that size loosely — which
-    /// is the same arithmetic `NodeLayout::Stage` runs on the retained host.
-    /// Wrapping it instead leaves the stack the width of its first layer inside
-    /// a filled container, and a wider child is then clipped to the first one:
-    /// measured on the motion page, where a 120-wide chip came out 107.
     fn stage(&mut self, children: Vec<Self::Output>, size: Option<SizeSpec>) -> Self::Output {
-        let stack = Stack::with_children(children);
-        let Some(size) = size else {
-            return stack.into();
-        };
-        stack
-            .width(length_for(size.w, Length::Shrink))
-            .height(length_for(size.h, Length::Shrink))
-            .into()
+        stage(children, size)
     }
 
     fn control(
@@ -291,6 +277,36 @@ impl<'a> DocumentHost for IcedHost<'a, '_> {
             window_layers(content, dragged, resize_edges, self.skin)
         }
     }
+}
+
+/// The layers a stage hands the toolkit.
+///
+/// The declared box goes to the stack itself rather than to a container around
+/// it. `Stack::layout` resolves its own size from its width, height and first
+/// layer, then offers every other layer that size loosely — which is the same
+/// arithmetic `NodeLayout::Stage` runs on the retained host. Wrapping it instead
+/// leaves the stack the width of its first layer inside a filled container, and
+/// a wider child is then clipped to the first one: measured on the motion page,
+/// where a 120-wide chip came out 107.
+///
+/// That first layer is offered the stack's own box tightly rather than loosely,
+/// so whichever child a document happened to write first would be stretched to
+/// the stage while its siblings kept the box they asked for. A layer that draws
+/// nothing takes that offer, and every child the document wrote gets the one the
+/// retained host makes: measured on the sprites page, where a 96-tall sprite
+/// came out 112 tall here and 96 there, which a turn then carried 8 across the
+/// screen.
+fn stage<'a>(children: Vec<Element<'a, UiEvent>>, size: Option<SizeSpec>) -> Element<'a, UiEvent> {
+    let Some(size) = size else {
+        return Stack::with_children(children).into();
+    };
+    let mut layers = Vec::with_capacity(children.len() + 1);
+    layers.push(Element::from(Space::new()));
+    layers.extend(children);
+    Stack::with_children(layers)
+        .width(length_for(size.w, Length::Shrink))
+        .height(length_for(size.h, Length::Shrink))
+        .into()
 }
 
 fn main_length(dim: Dim) -> Length {
@@ -360,4 +376,81 @@ pub(super) fn render_engine_node<'a>(
         ctx,
         IcedHost::new(ctx, skin),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use iced::{
+        Pixels, Renderer,
+        advanced::{
+            layout::{Layout, Limits},
+            widget::Tree,
+        },
+    };
+    use iced_renderer::fallback::Renderer as FallbackRenderer;
+    use iced_tiny_skia::Renderer as TinySkiaRenderer;
+    use kithara_test_utils::kithara;
+
+    use super::*;
+    use crate::render::fonts::SANS;
+
+    /// The box each child of the stage asks for. The stage itself is taller,
+    /// which is the only way a child being stretched to it shows up at all.
+    const CHILD: f32 = 96.0;
+
+    /// The boxes a stage lays the children a document wrote into.
+    ///
+    /// Read from the end, so this says nothing about what a stage may put
+    /// underneath them and measures only what the document asked for.
+    fn document_children(count: usize) -> Vec<Size> {
+        let children = (0..count)
+            .map(|_| {
+                apply_size(
+                    Rendered::leading(Space::new().into()),
+                    Some(SizeSpec::new(Dim::Fixed(CHILD), Dim::Fixed(CHILD))),
+                )
+            })
+            .collect();
+        let stage_height = CHILD + 16.0;
+        let mut element = stage(
+            children,
+            Some(SizeSpec::new(Dim::Fill, Dim::Fixed(stage_height))),
+        );
+        let renderer: Renderer =
+            FallbackRenderer::Secondary(TinySkiaRenderer::new(SANS, Pixels(14.0)));
+        let mut tree = Tree::new(element.as_widget());
+        let node = element.as_widget_mut().layout(
+            &mut tree,
+            &renderer,
+            &Limits::new(Size::ZERO, Size::new(600.0, stage_height)),
+        );
+        let boxes: Vec<Size> = Layout::new(&node)
+            .children()
+            .map(|child| child.bounds().size())
+            .collect();
+
+        boxes[boxes.len() - count..].to_vec()
+    }
+
+    /// The toolkit offers a stack's first layer the stack's own box tightly and
+    /// every later one loosely, which would otherwise stretch whichever child a
+    /// document happened to write first.
+    #[kithara::test]
+    fn a_stage_lays_two_children_that_asked_for_one_box_into_the_same_box() {
+        let boxes = document_children(2);
+
+        assert_eq!(boxes[0], boxes[1]);
+    }
+
+    #[kithara::test]
+    fn the_child_a_document_wrote_first_keeps_the_box_it_asked_for() {
+        assert_eq!(document_children(2)[0], Size::new(CHILD, CHILD));
+    }
+
+    /// A stage with one child has no sibling to disagree with, so this is the
+    /// only place the stretch shows as itself.
+    #[kithara::test]
+    fn a_stages_only_child_keeps_the_box_it_asked_for() {
+        assert_eq!(document_children(1)[0], Size::new(CHILD, CHILD));
+    }
 }

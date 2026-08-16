@@ -26,6 +26,7 @@ render = [
     "dep:naga",
     "dep:num-traits",
     "dep:parley",
+    "dep:png",
     "dep:skrifa",
     "dep:tracing",
     "dep:unicode-segmentation",
@@ -58,6 +59,7 @@ masonry = { workspace = true, optional = true }
 naga = { workspace = true, optional = true }
 num-traits = { workspace = true, optional = true }
 parley = { workspace = true, optional = true }
+png = { workspace = true, optional = true }
 pollster = { workspace = true, optional = true }
 ron = { workspace = true }
 roxmltree = { workspace = true }

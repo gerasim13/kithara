@@ -7,7 +7,9 @@ use vello::{
 use super::vello::has_system_text;
 use crate::{
     backends::VelloBackend,
-    draw::{Backend, Caps, DrawList, Geom, ImageId, Paint, Pen, Rect, Rgba, Transform, replay},
+    draw::{
+        Backend, Caps, DrawList, Geom, Image, ImageId, Paint, Pen, Rect, Rgba, Transform, replay,
+    },
     text::GlyphRun,
 };
 
@@ -66,8 +68,8 @@ impl Backend for VelloImageBackend<'_, '_> {
         }
     }
 
-    fn image(&mut self, image: &ImageId, rect: Rect) {
-        if image != self.image_id {
+    fn image(&mut self, image: &Image, rect: Rect, _turn: f32) {
+        if image.id() != self.image_id {
             tracing::error!(?image, "Vello image registry does not own this image");
             return;
         }

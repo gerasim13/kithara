@@ -53,7 +53,11 @@ mod host {
         }
 
         #[cfg(feature = "masonry")]
-        fn retained_refresh(&self, read: Reading<'_>) -> Option<DataRefresh<Drawn>> {
+        fn retained_refresh(
+            &self,
+            read: Reading<'_>,
+            _endpoint: Option<&str>,
+        ) -> Option<DataRefresh<Drawn>> {
             let scope = read.scope.to_owned();
             let zoom = self
                 .zoom

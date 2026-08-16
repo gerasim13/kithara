@@ -298,7 +298,12 @@ pub(crate) fn registry() -> impl EndpointRegistry {
     mixer::insert_endpoints(&mut registry);
     stress::insert_endpoints(&mut registry);
     insert_output_levels(&mut registry);
-    for id in ["player.output.volume", "mock.cells.segmented", "vis.preset"] {
+    for id in [
+        "player.output.volume",
+        "mock.cells.segmented",
+        "vis.preset",
+        "gallery.sprite.scrub",
+    ] {
         registry.insert(
             EndpointCategory::Parameter,
             id,
@@ -365,6 +370,25 @@ pub(crate) fn registry() -> impl EndpointRegistry {
         "gallery.motion.clock",
         EndpointDesc::new(ValueKind::Scalar),
     );
+    // One second per frame of the sheet, held still, and the scrub the fader
+    // beside the played sprite writes.
+    for id in [
+        "gallery.sprite.frame.0",
+        "gallery.sprite.frame.1",
+        "gallery.sprite.frame.2",
+        "gallery.sprite.frame.3",
+        "gallery.sprite.frame.4",
+        "gallery.sprite.frame.5",
+        "gallery.sprite.frame.6",
+        "gallery.sprite.frame.7",
+        "gallery.sprite.scrub",
+    ] {
+        registry.insert(
+            EndpointCategory::Model,
+            id,
+            EndpointDesc::new(ValueKind::Scalar),
+        );
+    }
     for id in [
         "gallery.tab.atoms",
         "gallery.tab.buttons",
@@ -389,6 +413,7 @@ pub(crate) fn registry() -> impl EndpointRegistry {
         "gallery.tab.shader",
         "gallery.tab.objects",
         "gallery.tab.motion",
+        "gallery.tab.sprites",
         "gallery.module.deck",
         "gallery.module.deck_micro",
         "gallery.module.global_bar",

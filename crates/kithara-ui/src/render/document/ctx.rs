@@ -111,6 +111,17 @@ impl<'a, 'r> Ctx<'a, 'r> {
         }
     }
 
+    /// The endpoint a binding reads from, or nothing when it only writes.
+    ///
+    /// A name outlives the frame that found it, which a value does not, so this
+    /// is what a control keeps when it means to ask the same question again on
+    /// a later frame without holding on to this one.
+    #[must_use]
+    pub fn endpoint(self, read: Option<&Binding>) -> Option<&'a str> {
+        read.filter(|binding| !matches!(binding.kind, BindingKind::Command))
+            .map(|binding| self.ui.resolve(binding.key))
+    }
+
     /// Whether a binding reads true. An absent binding, or one that reads
     /// anything but a true flag, is false.
     #[must_use]

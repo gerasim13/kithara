@@ -441,6 +441,7 @@ const fn control_id(node: &ControlNode) -> Option<&NodeId> {
         | ControlNode::Fader { id, .. }
         | ControlNode::Wave { id, .. }
         | ControlNode::Vis { id, .. }
+        | ControlNode::Sprite { id, .. }
         | ControlNode::Shader { id, .. }
         | ControlNode::PortalMap { id, .. }
         | ControlNode::Range { id, .. }
@@ -773,9 +774,13 @@ pub(crate) const fn value_kinds(control: &ControlNode) -> (Option<ValueKind>, Op
         | ControlNode::Toggle { .. }
         | ControlNode::Checkbox { .. }
         | ControlNode::Chip { .. } => (Some(ValueKind::Bool), Some(ValueKind::Trigger)),
-        ControlNode::Time { .. } | ControlNode::Scalar { .. } | ControlNode::Meter { .. } => {
-            (Some(ValueKind::Scalar), None)
-        }
+        // A sprite reads how far its sheet has run and an object how far its
+        // motion has, and nothing writes back through either.
+        ControlNode::Time { .. }
+        | ControlNode::Scalar { .. }
+        | ControlNode::Meter { .. }
+        | ControlNode::Sprite { .. }
+        | ControlNode::Object { .. } => (Some(ValueKind::Scalar), None),
         ControlNode::Crossfader { .. }
         | ControlNode::Fader { .. }
         | ControlNode::Knob { .. }
@@ -790,8 +795,6 @@ pub(crate) const fn value_kinds(control: &ControlNode) -> (Option<ValueKind>, Op
             (Some(ValueKind::Stereo), Some(ValueKind::Scalar))
         }
         ControlNode::Row { .. } | ControlNode::Column { .. } => (None, Some(ValueKind::Scalar)),
-        // The phase is a scalar and nothing writes back through an object.
-        ControlNode::Object { .. } => (Some(ValueKind::Scalar), None),
         ControlNode::Include { .. }
         | ControlNode::Scroll { .. }
         | ControlNode::Stage { .. }

@@ -1,4 +1,4 @@
-use super::{Caps, DrawCmd, DrawList, Geom, ImageId, Needs, Paint, Pen, Rect, Rgba, Transform};
+use super::{Caps, DrawCmd, DrawList, Geom, Image, Needs, Paint, Pen, Rect, Rgba, Transform};
 use crate::text::GlyphRun;
 
 /// Consumes toolkit-neutral retained drawing commands.
@@ -13,8 +13,9 @@ pub trait Backend {
 
     fn fill(&mut self, geom: &Geom, paint: Paint);
 
-    /// Draws an image resolved by this backend into `rect`.
-    fn image(&mut self, image: &ImageId, rect: Rect);
+    /// Draws one picture into `rect`, turned by `turn` radians about that
+    /// rectangle's centre.
+    fn image(&mut self, image: &Image, rect: Rect, turn: f32);
 
     fn stroke(&mut self, geom: &Geom, color: Rgba, pen: Pen);
 
@@ -41,7 +42,7 @@ fn draw<B: Backend>(list: &DrawList, backend: &mut B) {
         match command {
             DrawCmd::Clip { region, list } => backend.clip(*region, list),
             DrawCmd::Fill { geom, paint } => backend.fill(geom, *paint),
-            DrawCmd::Image { image, rect } => backend.image(image, *rect),
+            DrawCmd::Image { image, rect, turn } => backend.image(image, *rect, *turn),
             DrawCmd::Stroke { geom, color, pen } => backend.stroke(geom, *color, *pen),
             DrawCmd::Text {
                 run,
@@ -58,10 +59,10 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::{
-        Backend, Caps, DrawCmd, DrawList, Geom, ImageId, Paint, Pen, Rect, Rgba, Transform, replay,
+        Backend, Caps, DrawCmd, DrawList, Geom, Image, Paint, Pen, Rect, Rgba, Transform, replay,
     };
     use crate::{
-        draw::{DrawListBuilder, FillRule, Path, Pt, Verb},
+        draw::{DrawListBuilder, FillRule, ImageId, Path, Pt, Verb},
         text::GlyphRun,
     };
 
@@ -85,7 +86,7 @@ mod tests {
             self.drawn += 1;
         }
 
-        fn image(&mut self, _image: &ImageId, _rect: Rect) {
+        fn image(&mut self, _image: &Image, _rect: Rect, _turn: f32) {
             self.drawn += 1;
         }
 
@@ -173,7 +174,10 @@ mod tests {
     fn every_command_reaches_the_backend_in_order() {
         let mut list = DrawListBuilder::default();
         list.fill_rect(unit_box(), ink());
-        list.image(ImageId::new("shader/test"), unit_box());
+        list.image(
+            Image::external(ImageId::new("shader/test"), 1, 1),
+            unit_box(),
+        );
         list.stroke_line(Pt { x: 0.0, y: 0.0 }, Pt { x: 1.0, y: 1.0 }, ink(), 1.0);
         let list = list.finish();
 

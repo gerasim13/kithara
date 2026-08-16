@@ -1,17 +1,21 @@
 use std::borrow::Cow;
 
+use kithara_platform::sync;
 use vello::{
     Glyph, Scene,
     kurbo::{
         Affine, Arc, BezPath, Cap, Circle, Join, Line, Point, Rect as KurboRect, RoundedRect,
         Shape, Stroke as KurboStroke, Vec2,
     },
-    peniko::{Brush, Color, ColorStop, Fill, FontData, Gradient},
+    peniko::{
+        Blob, Brush, Color, ColorStop, Fill, FontData, Gradient, ImageAlphaType, ImageBrush,
+        ImageData, ImageFormat,
+    },
 };
 
 use crate::{
     draw::{
-        Backend, Caps, DrawCmd, DrawList, FillRule, Geom, ImageId, LineCap, LineJoin, Paint, Path,
+        Backend, Caps, DrawCmd, DrawList, FillRule, Geom, Image, LineCap, LineJoin, Paint, Path,
         Pen, Pt, Rect, Rgba, Stops, Transform, Verb, replay,
     },
     text::{GlyphFace, GlyphRun},
@@ -48,6 +52,38 @@ impl<'scene> VelloBackend<'scene> {
     }
 }
 
+/// The picture's own pixels, shared rather than copied: `Blob` keeps the
+/// allocation this points at, and Vello keys its texture cache on that
+/// identity, so redrawing the same picture re-uses the upload.
+fn image_data(image: &Image) -> Option<ImageData> {
+    Some(ImageData {
+        alpha_type: ImageAlphaType::Alpha,
+        // `Arc` here is kurbo's geometric arc, so the shared pointer is
+        // named through its module.
+        data: Blob::new(sync::Arc::new(image.rgba()?.clone())),
+        format: ImageFormat::Rgba8,
+        height: image.height(),
+        width: image.width(),
+    })
+}
+
+/// Where the picture lands: scaled from its natural size to the box, then
+/// turned about that box's centre.
+fn placed(image: &Image, rect: Rect, turn: f32) -> Affine {
+    let centre = (
+        f64::from(rect.x + rect.w / 2.0),
+        f64::from(rect.y + rect.h / 2.0),
+    );
+    Affine::translate((f64::from(rect.x), f64::from(rect.y)))
+        .pre_scale_non_uniform(
+            f64::from(rect.w) / f64::from(image.width()),
+            f64::from(rect.h) / f64::from(image.height()),
+        )
+        .then_translate(Vec2::new(-centre.0, -centre.1))
+        .then_rotate(f64::from(turn))
+        .then_translate(Vec2::new(centre.0, centre.1))
+}
+
 pub(super) fn has_system_text(list: &DrawList) -> bool {
     list.commands().iter().any(|command| match command {
         DrawCmd::Clip { list, .. } => has_system_text(list),
@@ -60,10 +96,7 @@ pub(super) fn has_system_text(list: &DrawList) -> bool {
 }
 
 impl Backend for VelloBackend<'_> {
-    const CAPS: Caps = Caps {
-        can_draw_images: false,
-        ..Caps::EVERYTHING
-    };
+    const CAPS: Caps = Caps::EVERYTHING;
 
     fn clip(&mut self, region: Rect, list: &DrawList) {
         if has_system_text(list) {
@@ -136,8 +169,17 @@ impl Backend for VelloBackend<'_> {
         }
     }
 
-    fn image(&mut self, _image: &ImageId, _rect: Rect) {
-        tracing::error!("an image reached the Vello backend past the capability door");
+    fn image(&mut self, image: &Image, rect: Rect, turn: f32) {
+        let Some(data) = image_data(image) else {
+            tracing::error!(
+                id = image.id().as_str(),
+                "a picture rendered on the device reached the plain Vello backend, \
+                 which holds no binding for it"
+            );
+            return;
+        };
+        self.scene
+            .draw_image(&ImageBrush::new(data), placed(image, rect, turn));
     }
 
     fn stroke(&mut self, geom: &Geom, color: Rgba, pen: Pen) {

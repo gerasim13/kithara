@@ -262,7 +262,7 @@ fn subscription(state: &Gallery) -> Subscription<Message> {
     if state.capture.is_none()
         && matches!(
             state.reads.active_tab(),
-            Tab::Stress | Tab::Vis | Tab::Objects | Tab::Motion
+            Tab::Stress | Tab::Vis | Tab::Objects | Tab::Motion | Tab::Sprites
         )
     {
         Subscription::batch([
@@ -319,7 +319,7 @@ mod tests {
         compile::CompiledNode,
         expand::{Binding, BindingKind, ControlSpec, ExpandedNode},
         module::{ButtonStyle, ChromeStyle, IconName, Motion, Pose, WaveStyle},
-        render::{ControlAction, ReadValue, Reads},
+        render::{ControlAction, ReadValue, Reads, builtin_sheet, document::SECONDS},
     };
     use num_traits::cast::AsPrimitive;
 
@@ -606,6 +606,7 @@ mod tests {
                 ("gallery/objects/item", "activation"),
                 ("gallery/pivot/item", "activation"),
                 ("gallery/shader/item", "activation"),
+                ("gallery/sprites/item", "activation"),
                 ("gallery/sizes/item", "activation"),
                 ("gallery/stress/item", "activation"),
                 ("gallery/titlebars/item", "activation"),
@@ -692,6 +693,46 @@ mod tests {
             "the hosted {page} page's engine claims changed; unported controls, passive controls, \
              and containers are intentionally absent"
         );
+    }
+
+    /// Every control on a page, with the binding it reads from.
+    fn each_control_read(ui: &CompiledUi, visit: &mut impl FnMut(&ControlSpec, Option<&Binding>)) {
+        fn walk(node: &ExpandedNode, visit: &mut impl FnMut(&ControlSpec, Option<&Binding>)) {
+            match node {
+                ExpandedNode::Row { children, .. }
+                | ExpandedNode::Column { children, .. }
+                | ExpandedNode::Slot { children, .. }
+                | ExpandedNode::Stage { children, .. } => {
+                    for child in children {
+                        walk(child, visit);
+                    }
+                }
+                ExpandedNode::Object { child, .. }
+                | ExpandedNode::Optional { child, .. }
+                | ExpandedNode::Pressable { child, .. }
+                | ExpandedNode::Scroll { child, .. } => walk(child, visit),
+                ExpandedNode::Popover {
+                    anchor, content, ..
+                } => {
+                    walk(anchor, visit);
+                    walk(content, visit);
+                }
+                ExpandedNode::Control { spec, read, .. } => visit(spec, read.as_ref()),
+                _ => {}
+            }
+        }
+
+        let mut stack = vec![&ui.root];
+        while let Some(node) = stack.pop() {
+            match node {
+                CompiledNode::Split { children, .. } => {
+                    stack.extend(children.iter().map(|(_, child)| child));
+                }
+                CompiledNode::Optional { child, .. } => stack.push(child),
+                CompiledNode::Module { root, .. } => walk(root, visit),
+                _ => {}
+            }
+        }
     }
 
     fn each_control(ui: &CompiledUi, visit: &mut impl FnMut(&str, &ControlSpec)) {
@@ -1069,6 +1110,105 @@ mod tests {
                 && turns.iter().any(|rotation| *rotation < 0.0),
             "turns are {turns:?}"
         );
+    }
+
+    /// Every sprite the sprite page declares: the sheet it names, how long one
+    /// pass through it takes, and the endpoint it reads its seconds from.
+    fn sprite_sites(ui: &CompiledUi) -> Vec<(&str, f32, Option<&str>)> {
+        let mut found = Vec::new();
+        each_control_read(ui, &mut |spec, read| {
+            if let ControlSpec::Sprite { sheet, seconds } = spec {
+                found.push((
+                    ui.resolve(*sheet),
+                    *seconds,
+                    read.map(|binding| ui.resolve(binding.key)),
+                ));
+            }
+        });
+        found
+    }
+
+    /// A page that names a sheet nothing ships draws an empty row, and the
+    /// capture beside it would agree with itself about nothing at all.
+    #[kithara::test]
+    fn every_sprite_names_a_sheet_the_toolkit_ships() {
+        let ui = page(Tab::Sprites);
+
+        let missing: Vec<&str> = sprite_sites(&ui)
+            .iter()
+            .map(|(sheet, _, _)| *sheet)
+            .filter(|sheet| builtin_sheet(sheet).is_none())
+            .collect();
+
+        assert_eq!(missing, [""; 0]);
+    }
+
+    /// The row exists to show the sheet frame by frame, so its readings have to
+    /// land on different frames: one second apart over a pass of eight, with
+    /// eight frames cut, is one frame apart each.
+    #[kithara::test]
+    fn the_sheet_row_reads_one_second_per_frame() {
+        let ui = page(Tab::Sprites);
+        let reads = MockReads::default();
+
+        let mut seconds: Vec<f64> = sprite_sites(&ui)
+            .iter()
+            .filter(|(_, pass, _)| *pass == 8.0)
+            .filter_map(|(_, _, read)| match reads.get((*read)?)? {
+                ReadValue::Scalar(seconds) => Some(seconds),
+                _ => None,
+            })
+            .collect();
+        seconds.sort_unstable_by(f64::total_cmp);
+        seconds.dedup();
+
+        assert_eq!(seconds, [0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0]);
+    }
+
+    /// The played sprite reads the host's own clock, which no application
+    /// declares and this mock does not answer: if the host did not answer it
+    /// for itself, that sprite would hold its first frame for ever.
+    #[kithara::test]
+    fn the_played_sprite_reads_a_clock_the_application_does_not_own() {
+        let ui = page(Tab::Sprites);
+        let reads = MockReads::default();
+
+        let host_clock: Vec<&str> = sprite_sites(&ui)
+            .iter()
+            .filter_map(|(_, _, read)| *read)
+            .filter(|endpoint| reads.get(endpoint).is_none())
+            .collect();
+
+        assert!(
+            host_clock.iter().all(|endpoint| *endpoint == SECONDS),
+            "{host_clock:?} is read by a sprite and answered by nobody"
+        );
+    }
+
+    #[kithara::test]
+    fn the_page_plays_a_sprite_off_the_host_clock() {
+        let ui = page(Tab::Sprites);
+
+        let played = sprite_sites(&ui)
+            .iter()
+            .filter(|(_, _, read)| *read == Some(SECONDS))
+            .count();
+
+        assert!(played >= 1, "{played} sprite(s) run off the host's clock");
+    }
+
+    /// A sprite is a control like any other, so an object turns one. The claim
+    /// is only worth making if the page actually poses one.
+    #[kithara::test]
+    fn the_page_poses_a_sprite_inside_a_moving_object() {
+        let ui = page(Tab::Sprites);
+
+        let posed = motion_objects(&ui)
+            .iter()
+            .filter(|object| object.motion.is_some())
+            .count();
+
+        assert!(posed >= 2, "{posed} object(s) carry a sprite");
     }
 
     #[kithara::test]

@@ -14,6 +14,7 @@ pub mod masonry;
 pub mod model;
 mod owner;
 mod picker;
+pub mod picture;
 pub mod shader;
 pub mod skin;
 #[cfg(feature = "iced")]
@@ -41,6 +42,7 @@ pub use model::{
 };
 pub use owner::InputOwner;
 pub(crate) use picker::{picker_hits, picker_selected_index};
+pub use picture::{Sheet, SheetError, builtin_sheet};
 pub use skin::Skin;
 pub(crate) use text_input::text_input_layout;
 pub(crate) use window::{DragGhost, TitleBar, WindowControls, WindowSurface};

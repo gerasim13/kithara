@@ -61,6 +61,50 @@ pub(super) fn bounds(rect: Rect, by: Transform) -> Rect {
     }
 }
 
+/// The box a picture lands in, and how far it is turned inside it.
+///
+/// A picture is not flattened to an outline the way a shape is: both
+/// rasterisers draw it into a rectangle and turn it about that rectangle's
+/// centre, so that is the pair this reads off the transform. Exact for a
+/// transform built from a move, a turn and a scale, which is every pose a
+/// document can write.
+pub(super) fn turned(rect: Rect, by: Transform) -> (Rect, f32) {
+    let centre = by.apply(Pt {
+        x: rect.x + rect.w / 2.0,
+        y: rect.y + rect.h / 2.0,
+    });
+    let across = by.xx.hypot(by.yx);
+    let down = by.xy.hypot(by.yy);
+    let (w, h) = (rect.w * across, rect.h * down);
+    (
+        Rect {
+            h,
+            w,
+            x: centre.x - w / 2.0,
+            y: centre.y - h / 2.0,
+        },
+        by.yx.atan2(by.xx),
+    )
+}
+
+/// The upright rectangle a turned picture reaches into.
+pub(super) fn turned_ink(rect: Rect, turn: f32) -> Rect {
+    if turn == 0.0 {
+        return rect;
+    }
+    let centre = Pt {
+        x: rect.x + rect.w / 2.0,
+        y: rect.y + rect.h / 2.0,
+    };
+    let about = Transform::translate(Pt {
+        x: -centre.x,
+        y: -centre.y,
+    })
+    .then(Transform::rotate(turn))
+    .then(Transform::translate(centre));
+    bounds(rect, about)
+}
+
 /// The upright rectangle every command in `list` draws inside, if it draws.
 ///
 /// A painter is asked to draw inside the box it was handed, so this is the
@@ -75,7 +119,7 @@ fn command_ink(command: &DrawCmd) -> Option<Rect> {
     match command {
         DrawCmd::Clip { region, .. } => Some(*region),
         DrawCmd::Fill { geom, .. } => geom_ink(geom),
-        DrawCmd::Image { rect, .. } => Some(*rect),
+        DrawCmd::Image { rect, turn, .. } => Some(turned_ink(*rect, *turn)),
         DrawCmd::Stroke { geom, pen, .. } => {
             geom_ink(geom).map(|geom| grown(geom, pen.width / 2.0))
         }
@@ -269,10 +313,11 @@ fn element_verb(element: PathEl, by: Transform) -> Verb {
 
 #[cfg(test)]
 mod tests {
+    use kithara_platform::sync::Arc;
     use kithara_test_utils::kithara;
 
-    use super::{Transform, bounds, ink, rect_verbs};
-    use crate::draw::{DrawListBuilder, Pt, Rect, Rgba, Verb};
+    use super::{Transform, bounds, ink, rect_verbs, turned, turned_ink};
+    use crate::draw::{DrawListBuilder, Image, ImageId, Pt, Rect, Rgba, Verb};
 
     const BOX: Rect = Rect {
         h: 20.0,
@@ -391,6 +436,66 @@ mod tests {
             panic!("two shapes ink something");
         };
         assert_eq!(inked.x, -5.0);
+    }
+
+    #[kithara::test]
+    fn a_turned_picture_keeps_the_size_it_was_given() {
+        let (box_of, _) = turned(BOX, Transform::rotate(std::f32::consts::FRAC_PI_4));
+
+        assert!((box_of.w - BOX.w).abs() < 1e-4);
+    }
+
+    #[kithara::test]
+    fn a_turned_picture_reports_the_angle_it_was_turned_by() {
+        let (_, turn) = turned(BOX, Transform::rotate(std::f32::consts::FRAC_PI_4));
+
+        assert!((turn - std::f32::consts::FRAC_PI_4).abs() < 1e-4);
+    }
+
+    #[kithara::test]
+    fn a_scaled_picture_reports_the_size_the_scale_gave_it() {
+        let (box_of, _) = turned(BOX, Transform::scale(Pt { x: 2.0, y: 3.0 }));
+
+        assert_eq!([box_of.w, box_of.h], [BOX.w * 2.0, BOX.h * 3.0]);
+    }
+
+    #[kithara::test]
+    fn a_moved_picture_lands_where_the_move_put_its_centre() {
+        let (box_of, _) = turned(BOX, Transform::translate(Pt { x: 7.0, y: -3.0 }));
+
+        assert_eq!([box_of.x, box_of.y], [BOX.x + 7.0, BOX.y - 3.0]);
+    }
+
+    /// A picture is drawn turned rather than flattened, so what it reaches is
+    /// wider than the box it was given — which is what a host must not clip to.
+    #[kithara::test]
+    fn a_turned_picture_reaches_outside_its_own_box() {
+        let reached = turned_ink(BOX, std::f32::consts::FRAC_PI_4);
+
+        assert!(reached.w > BOX.w);
+    }
+
+    #[kithara::test]
+    fn an_upright_picture_reaches_exactly_its_own_box() {
+        assert_eq!(turned_ink(BOX, 0.0), BOX);
+    }
+
+    #[kithara::test]
+    fn a_picture_under_a_pose_inks_where_the_pose_carried_it() {
+        let mut list = DrawListBuilder::default();
+        list.transformed(Transform::translate(Pt { x: 100.0, y: 0.0 }), |list| {
+            list.image(picture(), BOX);
+        });
+
+        let Some(inked) = ink(&list.finish()) else {
+            panic!("a picture inks something");
+        };
+        assert_eq!(inked.x, BOX.x + 100.0);
+    }
+
+    fn picture() -> Image {
+        Image::pixels(ImageId::new("test/sprite"), 1, 1, Arc::from(vec![0_u8; 4]))
+            .unwrap_or_else(|| panic!("one opaque pixel is a picture"))
     }
 
     /// One opaque colour, because these tests are about where ink lands and

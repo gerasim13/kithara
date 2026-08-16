@@ -2,7 +2,7 @@
 use num_traits::ToPrimitive;
 
 use super::{
-    image::ImageId,
+    image::Image,
     list::DrawList,
     path::Path,
     style::{Paint, Pen},
@@ -100,10 +100,16 @@ pub enum DrawCmd {
         geom: Geom,
         paint: Paint,
     },
-    /// Draws an externally owned image into `rect`.
+    /// Draws one picture into `rect`, turned by `turn` radians about the
+    /// rectangle's own centre.
+    ///
+    /// A box and a turn, rather than a matrix: that is what both rasterisers
+    /// take for a picture, and it is exactly enough for one that is moved,
+    /// resized and rotated.
     Image {
-        image: ImageId,
+        image: Image,
         rect: Rect,
+        turn: f32,
     },
     Stroke {
         geom: Geom,

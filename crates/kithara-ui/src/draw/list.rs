@@ -1,5 +1,5 @@
 use super::{
-    DrawCmd, DrawPools, FillRule, Geom, ImageId, Paint, Path, Pen, PoolText, Pt, Rect, Rgba,
+    DrawCmd, DrawPools, FillRule, Geom, Image, Paint, Path, Pen, PoolText, Pt, Rect, Rgba,
     Transform, Verb, buffer::Buffer, place,
 };
 use crate::text::GlyphRun;
@@ -227,18 +227,18 @@ impl DrawListBuilder {
         });
     }
 
-    /// Adds an externally owned image at its destination rectangle.
+    /// Adds a picture at its destination rectangle.
     ///
-    /// The destination is a rectangle on both hosts — neither peniko's image
-    /// brush nor iced's image carries a matrix — so a turned image lands in
-    /// the upright box it fits in, upright.
-    pub fn image(&mut self, image: ImageId, rect: Rect) {
-        let rect = if self.transform.is_identity() {
-            rect
+    /// Whatever moved, resized or turned the drawing is read off the transform
+    /// in force and carried as a box and a turn, which is the pair both
+    /// rasterisers take for a picture.
+    pub fn image(&mut self, image: Image, rect: Rect) {
+        let (rect, turn) = if self.transform.is_identity() {
+            (rect, 0.0)
         } else {
-            place::bounds(rect, self.transform)
+            place::turned(rect, self.transform)
         };
-        self.commands.push(DrawCmd::Image { image, rect });
+        self.commands.push(DrawCmd::Image { image, rect, turn });
     }
 
     pub fn stroke_rounded_rect<P: Into<Pen>>(

@@ -118,7 +118,7 @@ mod tests {
 
     use super::{Caps, Needs, Unsupported};
     use crate::draw::{
-        DrawListBuilder, FillRule, ImageId, Paint, Path, Pt, Rect, Rgba, Stop, Stops, Verb,
+        DrawListBuilder, FillRule, Image, ImageId, Paint, Path, Pt, Rect, Rgba, Stop, Stops, Verb,
     };
 
     fn ink() -> Rgba {
@@ -188,7 +188,10 @@ mod tests {
     #[kithara::test]
     fn an_image_is_refused_by_a_backend_without_an_image_registry() {
         let mut list = DrawListBuilder::default();
-        list.image(ImageId::new("shader/test"), unit_box());
+        list.image(
+            Image::external(ImageId::new("shader/test"), 1, 1),
+            unit_box(),
+        );
         let needs = Needs::from(&list.finish());
 
         assert_eq!(Caps::EVERYTHING.accepts(needs), Ok(()));

@@ -116,6 +116,12 @@ macro_rules! controls {
             $crate::expand::ControlSpec::Shader(spec) => {
                 with.apply(&$crate::mount::Shader::new(spec))
             }
+            $crate::expand::ControlSpec::Sprite { sheet, seconds } => with.apply(
+                &$crate::mount::Sprite::builder()
+                    .seconds(*seconds)
+                    .sheet(*sheet)
+                    .build(),
+            ),
             $crate::expand::ControlSpec::PortalMap => with.apply(&$crate::mount::PortalMap),
             $crate::expand::ControlSpec::Range => with.apply(&$crate::mount::Range),
             $crate::expand::ControlSpec::Table {

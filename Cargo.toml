@@ -296,7 +296,7 @@ hotpath = "0.19.1"
 # Optional: unify lint settings later via workspace.metadata or deny.toml.
 
 # UI frameworks
-iced = { version = "0.14", features = ["tokio", "svg", "canvas", "advanced"] }
+iced = { version = "0.14", features = ["tokio", "svg", "canvas", "image", "advanced"] }
 iced_renderer = "0.14.0"
 iced_runtime = "0.14.0"
 iced_tiny_skia = "0.14.0"

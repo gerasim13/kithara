@@ -58,6 +58,7 @@ pub(crate) struct MockReads {
     toggle_on: bool,
     motion_phase: f32,
     motion_clock: f32,
+    sprite_scrub: f32,
     vis_phase: f32,
     levels_volume: f64,
     segmented_index: f64,
@@ -129,6 +130,7 @@ impl Default for MockReads {
             tree_visible_indices: Vec::with_capacity(CATALOG.tree.len()),
             motion_phase: Consts::MOTION_START,
             motion_clock: Consts::MOTION_CLOCK_START,
+            sprite_scrub: Consts::SPRITE_SCRUB_START,
             vis_levels: [0.66, 0.52],
             vis_phase: 0.0,
             vis_preset: 0,
@@ -302,7 +304,9 @@ impl MockReads {
             return;
         }
         let value = value.clamp(0.0, 1.0);
-        if path.ends_with("/loop_start") {
+        if path == "sprites/scrub" {
+            self.sprite_scrub = value.as_();
+        } else if path.ends_with("/loop_start") {
             self.transport.set_loop_start(value);
         } else if path.ends_with("/loop_end") {
             self.transport.set_loop_end(value);
@@ -378,6 +382,7 @@ impl MockReads {
             "gallery.tab.shader" => self.active_tab == Tab::Shader,
             "gallery.tab.objects" => self.active_tab == Tab::Objects,
             "gallery.tab.motion" => self.active_tab == Tab::Motion,
+            "gallery.tab.sprites" => self.active_tab == Tab::Sprites,
             "gallery.module.deck" => self.active_module == ModuleDemo::Deck,
             "gallery.module.deck_micro" => self.active_module == ModuleDemo::DeckMicro,
             "gallery.module.global_bar" => self.active_module == ModuleDemo::GlobalBar,
@@ -393,7 +398,7 @@ impl MockReads {
             Tab::Stress => self.stress.tick(),
             Tab::Vis => self.tick_vis(),
             Tab::Objects => self.tick_phase(),
-            Tab::Motion => self.tick_clock(),
+            Tab::Motion | Tab::Sprites => self.tick_clock(),
             _ => {}
         }
     }
@@ -489,6 +494,14 @@ impl Reads for MockReads {
         {
             return Some(ReadValue::Bool(self.collapsed.contains(module)));
         }
+        // One second apart over an eight second pass, so the row shows the
+        // sheet frame by frame in the order it was cut.
+        if let Some(index) = endpoint
+            .strip_prefix("gallery.sprite.frame.")
+            .and_then(|index| index.parse::<u8>().ok())
+        {
+            return Some(ReadValue::Scalar(f64::from(index)));
+        }
         if let Some(name) = endpoint.strip_prefix("gallery.table.columns.width.") {
             Consts::table_columns()
                 .iter()
@@ -519,6 +532,7 @@ impl Reads for MockReads {
             "shader.level" => ReadValue::Scalar(0.28),
             "gallery.motion.phase" => ReadValue::Scalar(f64::from(self.motion_phase)),
             "gallery.motion.clock" => ReadValue::Scalar(f64::from(self.motion_clock)),
+            "gallery.sprite.scrub" => ReadValue::Scalar(f64::from(self.sprite_scrub)),
             "vis.badge" => ReadValue::Bool(true),
             "vis.preset" => ReadValue::Scalar(self.vis_preset.as_()),
             "vis.time" => ReadValue::Scalar(self.vis_time_secs),

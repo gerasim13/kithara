@@ -176,6 +176,12 @@ pub enum ControlSpec {
         zoom: Option<Binding>,
     },
     Vis,
+    /// One frame of a named sheet, chosen by how far its reading has run and
+    /// how long `seconds` says one pass through the sheet takes.
+    Sprite {
+        sheet: InternId,
+        seconds: f32,
+    },
     Shader(ShaderSpec),
     PortalMap,
     Range,

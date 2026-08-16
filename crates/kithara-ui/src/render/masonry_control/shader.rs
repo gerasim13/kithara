@@ -5,7 +5,7 @@ use masonry::vello::{
 
 use crate::{
     backends::VelloImageBackend,
-    draw::{DrawListBuilder, Rect, replay},
+    draw::{DrawListBuilder, Image, Rect, replay},
     render::{
         document::Ctx,
         shader::{ShaderDeclaration, ShaderFrame, ShaderFrameError, logical_extent},
@@ -69,7 +69,10 @@ impl ShaderLeaf {
             return;
         };
         let mut list = DrawListBuilder::default();
-        list.image(frame.image().clone(), bounds);
+        list.image(
+            Image::external(frame.image().clone(), size[0], size[1]),
+            bounds,
+        );
         replay(
             &list.finish(),
             &mut VelloImageBackend::new(scene, frame.image(), image),

@@ -46,6 +46,7 @@ control_kinds!(
     SettingsButton,
     Shader,
     Spacer,
+    Sprite,
     StatusDot,
     Swatch,
     TabLarge,

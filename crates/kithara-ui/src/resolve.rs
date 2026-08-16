@@ -163,6 +163,7 @@ fn walk_includes(
         | ControlNode::Fader { .. }
         | ControlNode::Wave { .. }
         | ControlNode::Vis { .. }
+        | ControlNode::Sprite { .. }
         | ControlNode::PortalMap { .. }
         | ControlNode::Range { .. }
         | ControlNode::Table { .. }

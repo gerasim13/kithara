@@ -1,6 +1,11 @@
+use std::{cell::RefCell, collections::HashMap};
+
 use iced::{
     Color, Font, Point, Radians, Rectangle, Size,
-    advanced::graphics::{Gradient, gradient},
+    advanced::{
+        graphics::{Gradient, gradient},
+        image::{Handle, Image as IcedImage},
+    },
     font::{Family, Stretch, Style, Weight},
     widget::canvas::{
         Fill, Frame, Path, Stroke as IcedStroke, fill,
@@ -16,8 +21,8 @@ use skrifa::{
 
 use crate::{
     draw::{
-        Backend, Caps, DrawCmd, DrawList, FillRule, Geom, ImageId, LineCap, LineJoin, Needs, Paint,
-        Pen, Pt, Rect, Rgba, Transform, Verb,
+        Backend, Caps, DrawCmd, DrawList, FillRule, Geom, Image, ImageId, LineCap, LineJoin, Needs,
+        Paint, Pen, Pt, Rect, Rgba, Transform, Verb,
     },
     skin::{FontFamily, FontWeight},
     text::{GlyphFace, GlyphRun, GlyphSegment, TextResources, select},
@@ -100,7 +105,7 @@ fn flush(run: &mut Vec<&DrawCmd>, frame: &mut Frame, resources: &TextResources, 
             match command {
                 DrawCmd::Clip { region, list } => backend.clip(*region, list),
                 DrawCmd::Fill { geom, paint } => backend.fill(geom, *paint),
-                DrawCmd::Image { image, rect } => backend.image(image, *rect),
+                DrawCmd::Image { image, rect, turn } => backend.image(image, *rect, *turn),
                 DrawCmd::Stroke { geom, color, pen } => backend.stroke(geom, *color, *pen),
                 DrawCmd::Text {
                     run,
@@ -111,6 +116,26 @@ fn flush(run: &mut Vec<&DrawCmd>, frame: &mut Frame, resources: &TextResources, 
             }
         }
     });
+}
+
+/// The handle iced knows this picture by.
+///
+/// `Handle::from_rgba` stamps a fresh identity on every call, and iced keys its
+/// texture cache on that, so building one per frame would re-upload the pixels
+/// every frame. One handle per picture is kept here instead — a rasteriser-side
+/// memo of what has already been uploaded, keyed by the identity the neutral
+/// list carries, and holding nothing the document can see.
+fn handle(image: &Image) -> Option<Handle> {
+    thread_local! {
+        static UPLOADED: RefCell<HashMap<ImageId, Handle>> = RefCell::new(HashMap::new());
+    }
+    let rgba = image.rgba()?;
+    Some(UPLOADED.with_borrow_mut(|uploaded| {
+        uploaded
+            .entry(image.id().clone())
+            .or_insert_with(|| Handle::from_rgba(image.width(), image.height(), rgba.to_vec()))
+            .clone()
+    }))
 }
 
 const fn region_of(region: Rect) -> Rectangle {
@@ -129,7 +154,6 @@ impl Backend for IcedBackend<'_> {
     /// ramp is refused rather than approximated with a flat colour.
     const CAPS: Caps = Caps {
         radial_gradient: false,
-        can_draw_images: false,
         ..Caps::EVERYTHING
     };
 
@@ -157,8 +181,19 @@ impl Backend for IcedBackend<'_> {
         }
     }
 
-    fn image(&mut self, _image: &ImageId, _rect: Rect) {
-        tracing::error!("an image reached the iced canvas backend past the capability door");
+    fn image(&mut self, image: &Image, rect: Rect, turn: f32) {
+        let Some(handle) = handle(image) else {
+            tracing::error!(
+                id = image.id().as_str(),
+                "a picture rendered on the device reached the iced canvas, which holds no \
+                 binding for it"
+            );
+            return;
+        };
+        self.frame.draw_image(
+            region_of(rect),
+            IcedImage::new(handle).rotation(Radians(turn)),
+        );
     }
 
     fn stroke(&mut self, geom: &Geom, color: Rgba, pen: Pen) {
