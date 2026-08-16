@@ -111,9 +111,10 @@ impl HlsVariant {
             .map(PlannedFetch::Segment)
             .into_iter();
         let tail = (from_seg..segs_len).map(PlannedFetch::Segment);
-        let mut queue = self.flow.queue.lock();
-        queue.clear();
-        queue.extend(init.chain(probe).chain(tail));
+        self.flow
+            .queue
+            .lock()
+            .replace_with(init.chain(probe).chain(tail));
     }
 
     /// Same as [`Self::rebuild`] but also enqueues `seg 0` when

@@ -12,12 +12,13 @@ use std::{
     },
 };
 
-use arc_swap::ArcSwap;
+use arc_swap::{ArcSwap, Guard};
 use dashmap::DashSet;
 use kithara_platform::sync::Arc;
 use kithara_storage::AvailabilityObserver;
 use rangemap::RangeSet;
 
+use super::retire::{RETIRE_CAPACITY, Retired};
 use crate::{
     error::AssetsResult,
     index::persistence::{FlushHub, Flushable},
@@ -83,12 +84,18 @@ pub(super) type Entry = Arc<ArcSwap<Availability>>;
 ///
 /// Structural changes (a new resource, a deletion) publish a rebuilt tree;
 /// range updates swap only the resource's own [`Entry`]. Both happen on
-/// download and deletion paths, never on the audio thread.
+/// download and deletion paths, never on the audio thread. Publication is
+/// only half of the contract: a reader racing a writer can end up the last
+/// owner of the replaced generation, and its guard drop would then free the
+/// tree on the audio thread. Produce-core reads therefore park their
+/// snapshots in [`Retired`] and the write side pays the frees when it drains.
 pub(super) type AssetTree = HashMap<String, Arc<HashMap<String, Entry>>>;
 
 pub(super) struct InnerIndex {
     /// Maps `asset_root` -> `RelativePath` -> `Availability`
     pub(super) assets: ArcSwap<AssetTree>,
+    /// Snapshots parked by produce-core reads, freed by write-side drains.
+    pub(super) retired: Retired,
     /// `true` when the in-memory aggregate has uncommitted writes
     /// since the last successful flush.
     pub(super) dirty: AtomicBool,
@@ -115,6 +122,7 @@ impl AvailabilityIndex {
         Self {
             inner: Arc::new(InnerIndex {
                 assets: ArcSwap::from_pointee(AssetTree::new()),
+                retired: Retired::new(RETIRE_CAPACITY),
                 #[cfg(not(target_arch = "wasm32"))]
                 persist: OnceLock::new(),
                 hub: OnceLock::new(),
@@ -150,6 +158,7 @@ impl AvailabilityIndex {
     /// on disk — producing the HLS hang pinned by
     /// `red_test_delete_asset_strands_availability_index`.
     pub(crate) fn clear_root(&self, asset_root: &str) {
+        self.inner.retired.drain();
         let mut removed = false;
         self.edit_tree(|tree| removed = tree.remove(asset_root).is_some());
         if removed {
@@ -157,19 +166,47 @@ impl AvailabilityIndex {
         }
     }
 
+    /// Called from the decode produce path (`phase_at` cascade): reads the
+    /// snapshots in place and parks them instead of dropping, so a read
+    /// racing a writer never frees a replaced generation on the audio thread.
     pub(crate) fn contains_range(&self, key: &ResourceKey, range: Range<u64>) -> bool {
         if range.start >= range.end {
             return true;
         }
         let (root, path) = Self::resolve_refs(key);
-        self.entry(root, path)
-            .is_some_and(|entry| entry.load().contains(&range))
+        let tree = self.inner.assets.load();
+        let contains = tree
+            .get(root)
+            .and_then(|asset| asset.get(path))
+            .is_some_and(|entry| {
+                let snapshot = entry.load();
+                let contains = snapshot.contains(&range);
+                self.inner
+                    .retired
+                    .retire_availability(Guard::into_inner(snapshot));
+                contains
+            });
+        self.inner.retired.retire_tree(Guard::into_inner(tree));
+        contains
     }
 
+    /// Also on the produce path — see [`Self::contains_range`].
     pub(crate) fn final_len(&self, key: &ResourceKey) -> Option<u64> {
         let (root, path) = Self::resolve_refs(key);
-        self.entry(root, path)
-            .and_then(|entry| entry.load().final_len)
+        let tree = self.inner.assets.load();
+        let len = tree
+            .get(root)
+            .and_then(|asset| asset.get(path))
+            .and_then(|entry| {
+                let snapshot = entry.load();
+                let len = snapshot.final_len;
+                self.inner
+                    .retired
+                    .retire_availability(Guard::into_inner(snapshot));
+                len
+            });
+        self.inner.retired.retire_tree(Guard::into_inner(tree));
+        len
     }
 
     /// Force a synchronous flush. Routes through [`FlushHub::flush_now`]
@@ -250,6 +287,7 @@ impl AvailabilityIndex {
     }
 
     pub(crate) fn record_commit(&self, key: &ResourceKey, final_len: u64) {
+        self.inner.retired.drain();
         let (root, path) = Self::resolve_refs(key);
         let entry = self.insert_or_get_entry(root, path);
         if update(&entry, |next| next.mark_committed(final_len)) {
@@ -261,6 +299,8 @@ impl AvailabilityIndex {
         if range.start >= range.end {
             return;
         }
+        // The write side pays the frees the produce-core reads parked.
+        self.inner.retired.drain();
         let (root, path) = Self::resolve_refs(key);
         let entry = self.insert_or_get_entry(root, path);
         if update(&entry, |next| next.insert(range.clone())) {
@@ -269,6 +309,7 @@ impl AvailabilityIndex {
     }
 
     pub(crate) fn remove(&self, key: &ResourceKey) {
+        self.inner.retired.drain();
         let (root, path) = Self::resolve_refs(key);
         let mut removed = false;
         self.edit_tree(|tree| {
@@ -554,6 +595,30 @@ mod tests {
         idx.remove(&k);
 
         assert!(!idx.contains_range(&k, 0..10));
+    }
+
+    #[kithara::test(timeout(Duration::from_secs(1)))]
+    fn a_read_parks_its_snapshots_for_the_write_side() {
+        let idx = AvailabilityIndex::new();
+        let k = ResourceKey::relative("test_asset", "file1");
+        idx.record_write(&k, 0..10);
+        assert!(idx.inner.retired.is_empty());
+
+        let _ = idx.contains_range(&k, 0..10);
+
+        assert!(!idx.inner.retired.is_empty());
+    }
+
+    #[kithara::test(timeout(Duration::from_secs(1)))]
+    fn a_write_drains_the_parked_snapshots() {
+        let idx = AvailabilityIndex::new();
+        let k = ResourceKey::relative("test_asset", "file1");
+        idx.record_write(&k, 0..10);
+        let _ = idx.contains_range(&k, 0..10);
+
+        idx.record_write(&k, 10..20);
+
+        assert!(idx.inner.retired.is_empty());
     }
 
     #[kithara::test(timeout(Duration::from_secs(1)))]

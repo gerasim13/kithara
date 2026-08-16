@@ -37,6 +37,7 @@ kithara-test-utils = { workspace = true }
 arc-swap = { workspace = true }
 bitflags = { workspace = true }
 bon = { workspace = true }
+crossbeam-queue = { workspace = true }
 dashmap = { workspace = true }
 delegate = { workspace = true }
 derive_more = { workspace = true }

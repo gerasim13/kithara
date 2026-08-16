@@ -23,6 +23,8 @@ mod lifecycle;
 mod media;
 #[path = "map/offsets.rs"]
 mod offsets;
+#[path = "flow/plan_queue.rs"]
+mod plan_queue;
 #[path = "flow/probe.rs"]
 mod probe;
 #[path = "profile.rs"]

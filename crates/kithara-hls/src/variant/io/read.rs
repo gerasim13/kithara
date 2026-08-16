@@ -14,7 +14,10 @@ pub(super) enum RangeGate {
 
 impl HlsVariant {
     pub(super) fn fetch_is_planned(&self, planned: PlannedFetch) -> bool {
-        self.flow.queue.lock().contains(&planned)
+        // Runs on the produce core inside `phase_at`: the membership mirror,
+        // not the queue lock — a blocking lock here spins into `sched_yield`
+        // in a real-time context under planner contention.
+        self.flow.queue.planned(planned)
     }
 
     fn init_has_demand(&self) -> bool {
