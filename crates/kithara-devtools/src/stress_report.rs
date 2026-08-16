@@ -1013,17 +1013,30 @@ fn render_iterations(iterations: &BTreeSet<usize>) -> String {
     rendered
 }
 
+/// Sanitize text for one Markdown table cell, bounding it around the middle.
+///
+/// An over-long diagnostic keeps its head (level, target, message) *and* its
+/// tail: tracing lines put the load-bearing fields last (campaign #5's
+/// readiness line lost `queued=` to a tail cut, the one field separating "a
+/// stall" from "still fetching"), and assertion messages put their values
+/// last.
 fn markdown_cell(text: &str) -> String {
     let sanitized = text
         .replace('|', "\\|")
         .replace(['\r', '\n'], " ")
         .replace('`', "'");
-    let mut chars = sanitized.chars();
-    let mut bounded = chars.by_ref().take(MAX_CELL_CHARS).collect::<String>();
-    if chars.next().is_some() {
-        bounded.push_str("...");
+    let total = sanitized.chars().count();
+    if total <= MAX_CELL_CHARS {
+        return sanitized;
     }
-    bounded
+    let head_chars = MAX_CELL_CHARS * 2 / 3;
+    let tail_chars = MAX_CELL_CHARS - head_chars;
+    let head = sanitized.chars().take(head_chars).collect::<String>();
+    let tail = sanitized
+        .chars()
+        .skip(total - tail_chars)
+        .collect::<String>();
+    format!("{head}...{tail}")
 }
 
 #[cfg(test)]
@@ -1069,6 +1082,15 @@ mod tests {
         assert!(markdown.contains("33.33%"), "{markdown}");
         assert!(markdown.contains("| 1 | 250 ms |"), "{markdown}");
         assert!(!markdown.contains("demo::tests other"), "{markdown}");
+    }
+
+    #[test]
+    fn a_bounded_cell_keeps_the_line_tail() {
+        let line = format!("DEBUG target: {} queued=7", "x".repeat(400));
+
+        let cell = markdown_cell(&line);
+
+        assert!(cell.ends_with("queued=7"), "{cell}");
     }
 
     /// 25 tests, 4 repeats; repeat 0 fails wholesale, the rest are clean.
