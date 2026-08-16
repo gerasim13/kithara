@@ -301,6 +301,27 @@ timeout per tool.
   local clone whose revision is verified against HEAD. The clone is deleted after the
   run so Cha cache state cannot leak into the source checkout.
 
+## Orphan sweep ownership
+
+An orphan is a file no `mod` declaration in its package names. `cargo modules orphans`
+answers a narrower question — what one resolved configuration loads — and pairs a file
+with its parent by directory convention, so a module behind a `cfg` this build does not
+set, or one reached through `#[path]` from a sibling file, reads as unreferenced to it.
+The sweep therefore takes the tool's findings as candidates and settles each against the
+source: `declared.rs` walks the package tree, resolves `#[path]` and `cfg_attr(.., path)`
+against the directory of the declaring file and plain `mod` declarations against the
+directory that file owns, and a candidate the source names is dropped. What was dropped
+is printed per package, never silently — the filter is the reason the sweep can be
+green.
+
+The tool selects one target per run and offers no selector beyond `--lib` and `--bin`,
+so the sweep enumerates both for every package and folds a package's targets into one
+verdict: a file one target reports and another declares is not an orphan. This is what
+lets `[orphans].exclude_packages` stay empty — a package without a library is swept
+through its binaries instead of dropped.
+
+Without `--deny` the run is advisory; `just ci health` and the quality workflow pass it.
+
 ## CI report ownership
 
 `ci-report` consolidates one CI run's archived quality artifacts into a single markdown

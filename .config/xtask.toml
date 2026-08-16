@@ -711,26 +711,23 @@ tokens = ["GH_TOKEN", "GITLAB_TOKEN"]
 steps = ["nightly_retained"]
 
 [orphans]
-# Packages the sweep cannot say anything useful about: a generated crate, two
-# test harnesses, the fuzz targets, and the build tool.
+# Empty, and it should stay that way. This check exists to point at code that
+# needs rewriting, so a name on this list is a place someone decided not to
+# look, and a green sweep bought that way says exactly as much as a green run
+# that executed nothing.
 #
-# Nothing else belongs here. This check exists to point at code that needs
-# rewriting, so a name on this list is a place someone decided not to look, and
-# the list only ever grew because dropping a whole package is the only lever
-# the tool offers. A green sweep bought that way says exactly as much as a
-# green run that executed nothing.
+# The list used to hold five names because dropping a whole package was the
+# only lever the tool offered: a module gated behind another target or a
+# non-default feature, or one reached through `#[path]` from a sibling file,
+# reads as an orphan to `cargo modules`, which resolves one configuration and
+# pairs files with parents by directory convention. The sweep now settles that
+# question against the source — a file some `mod` declaration names is not an
+# orphan, whatever gates it — and covers every `--lib` and `--bin` target
+# rather than libraries alone, so a package without a library no longer has to
+# be dropped.
 #
-# A module the sweep reports but that is real — gated behind a non-default
-# feature or another target — is a gap in how the sweep is invoked, not grounds
-# for an entry here: it runs `--lib` with default features on the native target
-# and passes neither `--features` nor `--target`. Widen the invocation.
-exclude_packages = [
-  "kithara-workspace-hack",
-  "kithara-test-utils",
-  "kithara-test-macros",
-  "kithara-fuzz",
-  "xtask",
-]
+# An entry here now means a package whose dead files nobody will be told about.
+exclude_packages = []
 
 [ext.android]
 # Cargo package compiled into the Android JNI libraries.
