@@ -394,9 +394,15 @@ mod panic_dump_tests {
     fn assertion_panic_records_a_dump_with_the_flight_tail() {
         install_panic_dump();
         let marker = format!("flight-marker-{}", std::process::id());
+        let probe_marker = format!("probe-marker-{}", std::process::id());
         let subscriber = tracing_subscriber::registry().with(crate::flight::layer());
         tracing::subscriber::with_default(subscriber, || {
             tracing::debug!(target: "kithara_panic_dump_test", "{marker}");
+            tracing::trace!(
+                target: "kithara_panic_dump_test_probe",
+                probe = probe_marker.as_str(),
+                "probe firing"
+            );
         });
 
         let unique = format!("panic-dump-probe-{}", std::process::id());
@@ -416,6 +422,15 @@ mod panic_dump_tests {
                 .iter()
                 .any(|event| event.as_str().is_some_and(|line| line.contains(&marker))),
             "dump must carry the flight-recorder tail"
+        );
+        let probes = parsed["context"]["recent_probes"].as_array().unwrap();
+        assert!(
+            probes.iter().any(|event| {
+                event
+                    .as_str()
+                    .is_some_and(|line| line.contains(&probe_marker))
+            }),
+            "dump must carry the probe tail"
         );
         for dump in dumps {
             let _ = std::fs::remove_file(dump);

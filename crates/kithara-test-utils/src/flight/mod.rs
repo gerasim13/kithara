@@ -1,3 +1,3 @@
 mod recorder;
 
-pub use recorder::{layer, tail};
+pub use recorder::{layer, probes_tail, tail};

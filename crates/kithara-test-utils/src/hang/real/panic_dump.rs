@@ -30,6 +30,7 @@ pub fn suppress_expected_panic_dumps() {
 #[derive(Serialize)]
 struct PanicContext {
     recent_events: Vec<String>,
+    recent_probes: Vec<String>,
 }
 
 /// Process-wide hook recording a `kithara.hang.v1` envelope for every
@@ -65,6 +66,7 @@ fn record_panic(info: &PanicHookInfo<'_>) {
         .unwrap_or_else(|| "<non-string panic payload>".to_owned());
     let context = PanicContext {
         recent_events: crate::flight::tail(),
+        recent_probes: crate::flight::probes_tail(),
     };
     let diagnostic = format!("panic at {location}: {message}");
     write_dump("panic", &context, None, &diagnostic);
