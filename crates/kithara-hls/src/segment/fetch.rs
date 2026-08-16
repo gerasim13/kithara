@@ -74,6 +74,10 @@ pub(crate) struct DownloadClaim {
     slot: Arc<SegmentSlotState>,
     planned: PlannedFetch,
     variant: Weak<HlsVariant>,
+    /// Peer-wake handle for the `Drop` recovery: a claim dropped without a
+    /// settle must wake the peer to take the requeued work, and the claim
+    /// outlives every context that could lend it one.
+    signal: SizeSignal,
     settled: bool,
 }
 
@@ -100,12 +104,14 @@ impl FetchClaim<Downloading> {
         planned: PlannedFetch,
         variant: Weak<HlsVariant>,
         slot: Arc<SegmentSlotState>,
+        signal: SizeSignal,
     ) -> Self {
         Self {
             data: DownloadClaim {
                 planned,
                 variant,
                 slot,
+                signal,
                 settled: false,
             },
             _phase: PhantomData,
@@ -206,16 +212,28 @@ impl FetchClaim<Loaded> {
 /// dropped without a transition, the slot reverts to `Missing` so a leaked
 /// handle can never strand it in `Downloading`. The consume-self
 /// transitions set `settled` first, disarming this no-op.
+///
+/// Reverting the slot alone is not recovery: dispatch popped the plan entry
+/// when it sent this fetch, so a slot returned to `Missing` describes work
+/// nobody holds — the segment is never asked for again and the reader waits
+/// forever on the gap (the transient-failure settle documents the same
+/// contract). The work goes back on the plan and the peer is woken to take
+/// it.
 impl Drop for DownloadClaim {
     fn drop(&mut self) {
-        if !self.settled {
-            self.slot.mark_missing();
-            warn!(
-                target: "kithara_hls::settle",
-                planned = ?self.planned,
-                "Downloading claim dropped without settle — slot reverted to Missing"
-            );
+        if self.settled {
+            return;
         }
+        self.slot.mark_missing();
+        if let Some(variant) = self.variant.upgrade() {
+            variant.requeue_planned(self.planned);
+        }
+        self.signal.wake_peer();
+        warn!(
+            target: "kithara_hls::settle",
+            planned = ?self.planned,
+            "Downloading claim dropped without settle — slot reverted to Missing and requeued"
+        );
     }
 }
 

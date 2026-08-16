@@ -8,6 +8,7 @@ use kithara_platform::sync::Arc;
 
 use crate::{
     segment::fetch::{FetchClaim, PlannedFetch},
+    signal::SizeSignal,
     variant::HlsVariant,
 };
 
@@ -83,6 +84,7 @@ impl SegmentSlotState {
         self: &Arc<Self>,
         planned: PlannedFetch,
         variant: Weak<HlsVariant>,
+        signal: SizeSignal,
     ) -> Option<FetchClaim<Downloading>> {
         self.0
             .compare_exchange(
@@ -92,7 +94,7 @@ impl SegmentSlotState {
                 Ordering::Acquire,
             )
             .ok()
-            .map(|_| FetchClaim::claim(planned, variant, Arc::clone(self)))
+            .map(|_| FetchClaim::claim(planned, variant, Arc::clone(self), signal))
     }
 
     delegate::delegate! {
