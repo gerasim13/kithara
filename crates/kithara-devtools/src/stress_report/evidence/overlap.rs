@@ -97,6 +97,7 @@ mod tests {
             secs,
             timestamp: Some(start.to_owned()),
             output: String::new(),
+            output_truncated: false,
         }
     }
 

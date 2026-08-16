@@ -26,7 +26,7 @@ mod pressure;
 /// `assert_eq!`, its `left` and `right`.
 const PANIC_DETAIL_LINES: usize = 4;
 const MAX_SIGNATURE_ROWS: usize = 100;
-const MAX_SIGNATURE_EXAMPLES: usize = 5;
+pub(super) const MAX_SIGNATURE_EXAMPLES: usize = 5;
 
 #[derive(Debug, Default)]
 struct SignatureCluster {
@@ -696,6 +696,7 @@ mod tests {
             secs,
             timestamp: None,
             output: String::new(),
+            output_truncated: false,
         }
     }
 

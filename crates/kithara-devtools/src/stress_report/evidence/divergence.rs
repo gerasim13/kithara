@@ -299,6 +299,7 @@ mod tests {
             secs: 1.0,
             timestamp: None,
             output: output.to_owned(),
+            output_truncated: false,
         }
     }
 

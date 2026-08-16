@@ -119,6 +119,7 @@ mod tests {
             secs: 0.1,
             timestamp: None,
             output: String::new(),
+            output_truncated: false,
         }
     }
 

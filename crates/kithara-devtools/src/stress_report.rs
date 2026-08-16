@@ -22,6 +22,7 @@ use crate::{
 mod evidence;
 mod sanitizer;
 
+use evidence::MAX_SIGNATURE_EXAMPLES;
 pub(crate) use sanitizer::{ATTEMPT_MARKER, findings as sanitizer_findings};
 
 const MAX_FAILURE_ROWS: usize = 100;
@@ -216,6 +217,11 @@ pub(crate) struct LaneReport {
     /// verdict is an exit code rather than a set of test results.
     pub(crate) attempts: Option<LaneRate>,
     pub(crate) verdict: Result<()>,
+    /// Whether the lane produced valid per-attempt evidence at all. A lane
+    /// whose artifact was missing or invalid has nothing to stand in a
+    /// comparison — counting it as trustworthy is how a campaign summary
+    /// contradicts its own per-lane verdicts.
+    pub(crate) readable: bool,
 }
 
 /// How often one test failed in one lane.
@@ -233,6 +239,7 @@ pub(crate) fn lane_report(args: &StressReportArgs) -> Result<LaneReport> {
             rates: BTreeMap::new(),
             attempts: None,
             verdict: Err(NotClean::reported("stress evidence")),
+            readable: false,
         })
     };
     let inventory = match read_inventory(&args.inventory) {
@@ -304,7 +311,32 @@ pub(crate) fn lane_report(args: &StressReportArgs) -> Result<LaneReport> {
         junit.run_id.as_deref(),
         args,
     );
-    if !correlated_complete {
+    let truncated = junit
+        .cases
+        .iter()
+        .filter(|case| case.output_truncated)
+        .map(|case| {
+            format!(
+                "`{} {}`",
+                markdown_cell(&case.suite),
+                markdown_cell(&case.name)
+            )
+        })
+        .collect::<Vec<_>>();
+    if !truncated.is_empty() {
+        let _ = writeln!(
+            report.markdown,
+            "\nEvidence problem: retained failure output of `{}` testcase(s) hit the per-case byte budget and lost its tail: {}",
+            truncated.len(),
+            truncated
+                .iter()
+                .take(MAX_SIGNATURE_EXAMPLES)
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(", "),
+        );
+    }
+    if !correlated_complete || !truncated.is_empty() {
         report.complete = false;
         mark_incomplete(&mut report.markdown);
     }
@@ -318,6 +350,7 @@ pub(crate) fn lane_report(args: &StressReportArgs) -> Result<LaneReport> {
         rates: report.rates,
         attempts: None,
         verdict,
+        readable: true,
     })
 }
 
@@ -1052,6 +1085,7 @@ mod tests {
             secs,
             timestamp: None,
             output: String::new(),
+            output_truncated: false,
         }
     }
 
@@ -1293,6 +1327,75 @@ mod tests {
         );
         assert!(markdown.contains("more problems"), "{markdown}");
         assert!(!markdown.contains(too_wide.as_str()), "{markdown}");
+    }
+
+    /// One case's runaway retained output names itself and marks the lane
+    /// incomplete — it must not invalidate the artifact and erase the other
+    /// cases' evidence, which is what cost campaign #8 its flash-off lane.
+    #[test]
+    fn an_oversized_case_is_named_without_invalidating_the_lane() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let inventory = temp.path().join("inventory.json");
+        fs::write(
+            &inventory,
+            r#"{
+  "rust-suites": {
+    "demo::tests": {
+      "binary-id": "demo::tests",
+      "status": "listed",
+      "testcases": {
+        "seek": {"ignored": false, "filter-match": {"status": "matches"}}
+      }
+    }
+  }
+}"#,
+        )
+        .expect("write inventory");
+        let junit = temp.path().join("junit.xml");
+        let oversized = "y".repeat(crate::junit::MAX_CASE_OUTPUT_BYTES);
+        fs::write(
+            &junit,
+            format!(
+                r#"<testsuites uuid="run" timestamp="2026-08-16T12:00:00Z">
+  <testsuite name="demo::tests@stress-0">
+    <testcase name="seek" classname="demo::tests" time="0.1" timestamp="2026-08-16T12:00:00Z">
+      <failure type="test failure">boom</failure>
+      <system-out>{oversized}</system-out>
+    </testcase>
+  </testsuite>
+</testsuites>"#
+            ),
+        )
+        .expect("write junit");
+        let output = temp.path().join("report.md");
+
+        let lane =
+            lane_report(&StressReportArgs::new(junit, inventory, output, 1)).expect("lane report");
+
+        assert!(lane.readable, "one noisy case must not erase the lane");
+        assert!(
+            !lane.markdown.contains("INVALID JUNIT"),
+            "{}",
+            lane.markdown
+        );
+        assert!(
+            lane.markdown
+                .contains("Evidence problem: retained failure output of `1` testcase(s)"),
+            "{}",
+            lane.markdown
+        );
+        assert!(
+            lane.markdown.contains("`demo::tests seek`"),
+            "the noisy case is named: {}",
+            lane.markdown
+        );
+        assert!(
+            lane.markdown.contains("Result: **INCOMPLETE**"),
+            "{}",
+            lane.markdown
+        );
+        assert!(!lane.rates.is_empty(), "the case still counts in rates");
+        assert!(lane.verdict.is_err(), "a failed attempt keeps the verdict");
     }
 
     #[test]

@@ -558,11 +558,12 @@ fn run_report(args: &ReportArgs, ctx: &Ctx) -> Result<()> {
         let body = with_provenance(lane.markdown, &checked.verdict, &checked.details)?;
         writeln!(sections, "\n# Lane `{}`\n", markdown_cell(lane_name))?;
         sections.push_str(&body);
-        // Only a lane that verified against its expected identity may stand in
-        // a comparison. Numbers from one that did not are of unknown origin,
-        // and putting them beside trustworthy ones is how a campaign reports a
-        // difference between lanes that is really a difference between runs.
-        if trusted {
+        // Only a lane that verified against its expected identity AND read
+        // valid evidence may stand in a comparison. Numbers from one that did
+        // not are of unknown origin, and putting them beside trustworthy ones
+        // is how a campaign reports a difference between lanes that is really
+        // a difference between runs — or counts an invalid lane as evidence.
+        if trusted && lane.readable {
             match lane.attempts {
                 Some(rate) => commanded.push((lane_name.clone(), rate)),
                 None => measured.push((lane_name.clone(), lane.rates)),
@@ -621,6 +622,7 @@ fn command_lane_report(
                 rates: BTreeMap::new(),
                 attempts: None,
                 verdict: Err(NotClean::reported("stress evidence")),
+                readable: false,
             };
         }
     };
@@ -665,6 +667,7 @@ fn command_lane_report(
             attempts: observed,
         }),
         verdict,
+        readable: true,
     }
 }
 
