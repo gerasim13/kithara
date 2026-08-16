@@ -245,9 +245,17 @@ fn view(state: &Gallery, _window: window::Id) -> Element<'_, Message> {
     .map(Message::Ui)
 }
 
+/// A capture never ticks: the offscreen host photographs one frame of a freshly
+/// mounted page, so a clock running here would put the two hosts at different
+/// moments and the comparison would measure the difference between them.
 fn subscription(state: &Gallery) -> Subscription<Message> {
     let close = window::close_requests().map(Message::Close);
-    if matches!(state.reads.active_tab(), Tab::Stress | Tab::Vis) {
+    if state.capture.is_none()
+        && matches!(
+            state.reads.active_tab(),
+            Tab::Stress | Tab::Vis | Tab::Motion
+        )
+    {
         Subscription::batch([
             close,
             iced_time::every(Duration::from_millis(Consts::STRESS_TICK_MS)).map(|_| Message::Tick),
@@ -301,9 +309,10 @@ mod tests {
     use kithara_ui::{
         compile::CompiledNode,
         expand::{Binding, BindingKind, ControlSpec, ExpandedNode},
-        module::{ButtonStyle, ChromeStyle, IconName, WaveStyle},
-        render::{ControlAction, Reads},
+        module::{ButtonStyle, ChromeStyle, IconName, Pose, WaveStyle},
+        render::{ControlAction, ReadValue, Reads},
     };
+    use num_traits::cast::AsPrimitive;
 
     use super::*;
 
@@ -584,6 +593,7 @@ mod tests {
                 ("gallery/micro/item", "activation"),
                 ("gallery/mixer/item", "activation"),
                 ("gallery/modules/item", "activation"),
+                ("gallery/motion/item", "activation"),
                 ("gallery/pivot/item", "activation"),
                 ("gallery/shader/item", "activation"),
                 ("gallery/sizes/item", "activation"),
@@ -684,7 +694,8 @@ mod tests {
                         walk(child, ui, visit);
                     }
                 }
-                ExpandedNode::Optional { child, .. }
+                ExpandedNode::Object { child, .. }
+                | ExpandedNode::Optional { child, .. }
                 | ExpandedNode::Pressable { child, .. }
                 | ExpandedNode::Scroll { child, .. } => {
                     walk(child, ui, visit);
@@ -832,6 +843,120 @@ mod tests {
             ]
         );
         assert!(found.pressables.contains(&"app-menu/burger"));
+    }
+
+    /// One object the motion page declares, with the track it travels along.
+    struct Travel<'a> {
+        pose: Pose,
+        to: Option<Pose>,
+        phase: Option<&'a str>,
+    }
+
+    fn motion_objects(ui: &CompiledUi) -> Vec<Travel<'_>> {
+        fn walk<'a>(node: &'a ExpandedNode, ui: &'a CompiledUi, found: &mut Vec<Travel<'a>>) {
+            match node {
+                ExpandedNode::Object {
+                    pose,
+                    to,
+                    phase,
+                    child,
+                } => {
+                    found.push(Travel {
+                        pose: *pose,
+                        to: *to,
+                        phase: phase.as_ref().map(|binding| ui.resolve(binding.key)),
+                    });
+                    walk(child, ui, found);
+                }
+                ExpandedNode::Optional { child, .. }
+                | ExpandedNode::Pressable { child, .. }
+                | ExpandedNode::Scroll { child, .. } => walk(child, ui, found),
+                ExpandedNode::Row { children, .. }
+                | ExpandedNode::Column { children, .. }
+                | ExpandedNode::Slot { children, .. } => {
+                    for child in children {
+                        walk(child, ui, found);
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        let mut found = Vec::new();
+        let mut stack = vec![&ui.root];
+        while let Some(node) = stack.pop() {
+            match node {
+                CompiledNode::Split { children, .. } => {
+                    stack.extend(children.iter().map(|(_, child)| child));
+                }
+                CompiledNode::Optional { child, .. } => stack.push(child),
+                CompiledNode::Module { root, .. } => walk(root, ui, &mut found),
+                _ => {}
+            }
+        }
+        found
+    }
+
+    fn motion_page() -> CompiledUi {
+        compile(
+            Tab::Motion.entry(),
+            &resolver(),
+            &mock::registry(),
+            builtin::skin_doc(),
+            &UiConfig::default(),
+        )
+        .unwrap_or_else(|error| panic!("the motion page must compile: {error}"))
+    }
+
+    /// The page exists to show a control being moved, so a version of it with
+    /// nothing that travels would capture cleanly and prove nothing.
+    #[kithara::test]
+    fn the_motion_page_declares_objects_that_travel() {
+        let ui = motion_page();
+
+        let travelling = motion_objects(&ui)
+            .iter()
+            .filter(|object| object.to.is_some())
+            .count();
+
+        assert!(travelling >= 4, "{travelling} object(s) travel");
+    }
+
+    #[kithara::test]
+    fn the_mock_answers_the_phase_every_motion_track_reads() {
+        let ui = motion_page();
+        let reads = MockReads::default();
+
+        let unanswered: Vec<&str> = motion_objects(&ui)
+            .iter()
+            .filter_map(|object| object.phase)
+            .filter(|key| !matches!(reads.get(key), Some(ReadValue::Scalar(_))))
+            .collect();
+
+        assert_eq!(unanswered, [""; 0]);
+    }
+
+    /// A capture never ticks, so both hosts are photographed at the phase the
+    /// mock starts from. At either end of a track the object sits on one of its
+    /// two written poses, and the picture would say nothing about the travel
+    /// between them.
+    #[kithara::test]
+    fn every_motion_track_is_off_its_written_pose_when_captured() {
+        let ui = motion_page();
+        let reads = MockReads::default();
+
+        let still: Vec<&str> = motion_objects(&ui)
+            .iter()
+            .filter_map(|object| Some((object, object.to.as_ref()?, object.phase?)))
+            .filter_map(|(object, to, key)| {
+                let ReadValue::Scalar(phase) = reads.get(key)? else {
+                    return None;
+                };
+                (object.pose.between(to, phase.as_()) == object.pose).then_some(key)
+            })
+            .collect();
+
+        assert_eq!(still, [""; 0]);
     }
 
     #[kithara::test]

@@ -54,6 +54,14 @@ const ASSETS: &[(&str, &str)] = &[
         include_str!("assets/gallery-shader.klayout.ron"),
     ),
     (
+        "gallery-motion.klayout.ron",
+        include_str!("assets/gallery-motion.klayout.ron"),
+    ),
+    (
+        "modules/tabs/motion.kmodule.ron",
+        include_str!("assets/modules/tabs/motion.kmodule.ron"),
+    ),
+    (
         "modules/tabs/shader.kmodule.ron",
         include_str!("assets/modules/tabs/shader.kmodule.ron"),
     ),

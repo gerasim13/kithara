@@ -4,6 +4,13 @@ pub(super) struct Consts;
 
 impl Consts {
     pub(super) const BPM: &str = "70.00";
+    /// How far a motion track travels per 16 ms tick: a full pass every two
+    /// seconds, slow enough to read and fast enough to see.
+    pub(super) const MOTION_STEP: f32 = 0.008;
+    /// Where every track starts, and — because a capture never ticks — the one
+    /// phase both hosts are photographed at. Away from either end, so the page
+    /// compares turned, scaled and moved ink rather than four identities.
+    pub(super) const MOTION_START: f32 = 0.35;
     pub(super) const BPM_VALUE: f32 = 70.0;
     pub(super) const CUES: &[f32] = &[0.27, 0.31];
     pub(super) const DURATION_SECS: f64 = 360.0;

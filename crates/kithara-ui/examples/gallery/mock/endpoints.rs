@@ -355,6 +355,11 @@ pub(crate) fn registry() -> impl EndpointRegistry {
             EndpointDesc::new(ValueKind::Text),
         );
     }
+    registry.insert(
+        EndpointCategory::Model,
+        "gallery.motion.phase",
+        EndpointDesc::new(ValueKind::Scalar),
+    );
     for id in [
         "gallery.tab.atoms",
         "gallery.tab.buttons",
@@ -377,6 +382,7 @@ pub(crate) fn registry() -> impl EndpointRegistry {
         "gallery.tab.clock",
         "gallery.tab.pivot",
         "gallery.tab.shader",
+        "gallery.tab.motion",
         "gallery.module.deck",
         "gallery.module.deck_micro",
         "gallery.module.global_bar",
