@@ -1,5 +1,6 @@
 use iced::{Task, window, window::Direction};
 use kithara::audio::EqBandConfig;
+use kithara_platform::time::Duration;
 use kithara_ui::render::{WindowCommand, WindowEdge};
 use tracing::{error, warn};
 
@@ -8,6 +9,7 @@ use super::{
     deck::{self, DeckMsg},
     message::Message,
     mix, studio_ui,
+    subscription::subscription_config,
 };
 use crate::{
     catalog,
@@ -238,6 +240,12 @@ fn handle_load(state: &mut Kithara, index: usize, id: DeckId) {
 /// Every deck advances on the same tick: a deck the user is not looking at
 /// still plays, streams and needs its continuous values pulled.
 fn handle_tick(state: &mut Kithara) {
+    // The step the subscription is currently firing at, so this host's clock
+    // reads the time its frames were actually drawn at.
+    let playing = state.decks.iter().any(|deck| deck.ui.playing);
+    state.studio.advance(Duration::from_millis(
+        subscription_config(playing).tick_interval_ms,
+    ));
     state.broadcast.poll();
     for deck in state.decks.iter() {
         let _ = deck.controller.queue().tick();

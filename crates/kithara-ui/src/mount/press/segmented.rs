@@ -48,7 +48,7 @@ mod host {
                 items: self
                     .items
                     .iter()
-                    .map(|item| read.ui.resolve(*item).to_owned())
+                    .map(|item| read.ctx.ui.resolve(*item).to_owned())
                     .collect(),
             })
         }

@@ -29,16 +29,14 @@ use super::{
 };
 use crate::{
     backends::VelloBackend,
-    compile::CompiledUi,
     draw::{Pt, Rect, replay},
     interact::CursorShape,
     render::{
-        DragGhost, Reads, Skin, UiEvent, WindowCommand, WindowSurface,
-        document::{placements, read::resolve},
+        DragGhost, Skin, UiEvent, WindowCommand, WindowSurface,
+        document::{Ctx, placements},
         shader::ShaderDeclaration,
         vis::VisDeclaration,
     },
-    skin::SkinDoc,
     text::TextContext,
 };
 
@@ -444,16 +442,16 @@ where
     /// re-read one control at a time. A control's *pose* comes from the objects
     /// around it, and is worked out by the document walk rather than named
     /// anywhere, so it takes a walk to re-read — one for the whole document.
-    pub fn refresh(&mut self, ui: &CompiledUi, reads: &dyn Reads, skin: &SkinDoc) {
-        self.show_values(ui, reads);
-        self.place_objects(ui, reads, skin);
+    pub fn refresh(&mut self, ctx: Ctx<'_, '_>) {
+        self.show_values(ctx);
+        self.place_objects(ctx);
     }
 
-    fn show_values(&mut self, ui: &CompiledUi, reads: &dyn Reads) {
+    fn show_values(&mut self, ctx: Ctx<'_, '_>) {
         for watched in &self.watched {
             match watched {
                 Watched::Read { id, binding } => {
-                    let Some(value) = resolve(reads, binding, ui) else {
+                    let Some(value) = ctx.read(binding) else {
                         continue;
                     };
                     self.root.edit_widget(*id, |mut widget| {
@@ -466,7 +464,7 @@ where
                 Watched::Snapshot { id } => {
                     self.root.edit_widget(*id, |mut widget| {
                         let mut node = widget.downcast::<Node>();
-                        if node.widget.refresh(ui, reads) {
+                        if node.widget.refresh(ctx) {
                             node.ctx.request_paint_only();
                         }
                     });
@@ -481,11 +479,11 @@ where
     ///
     /// Nothing is watched this way unless the document declares an object an
     /// endpoint drives, so a page that never moves pays for none of this.
-    fn place_objects(&mut self, ui: &CompiledUi, reads: &dyn Reads, skin: &SkinDoc) {
-        if !ui.driven {
+    fn place_objects(&mut self, ctx: Ctx<'_, '_>) {
+        if !ctx.ui.driven {
             return;
         }
-        let placed = placements(&ui.root, ui, reads, skin);
+        let placed = placements(&ctx.ui.root, ctx);
         for watched in &self.watched {
             let Watched::Placed { id, path } = watched else {
                 continue;

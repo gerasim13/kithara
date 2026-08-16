@@ -18,35 +18,29 @@ use crate::{
         },
         tree::{face::Tree, retained::Drawn as TreeDrawn},
     },
-    compile::CompiledUi,
     draw::{Pt, Rect},
     engine::{Descriptor, Engine, Target},
     expand::{Binding, ControlSpec},
     ids::InternId,
     interact::{Hit, ScrollAxis},
     module::TableColumn,
-    render::{
-        ReadValue, Reads, Skin,
-        document::read::{read_scope, resolve},
-        picker_hits,
-    },
+    render::{ReadValue, Skin, document::Ctx, picker_hits},
 };
 
 pub(crate) fn hosted_control_plan(
     path: InternId,
     spec: &ControlSpec,
     read: Option<&Binding>,
-    ui: &CompiledUi,
-    reads: &dyn Reads,
+    ctx: Ctx<'_, '_>,
     skin: &Skin,
 ) -> Option<HostedControlPlan> {
     HostedControlPlan::resolved(
-        ui.resolve(path),
+        ctx.ui.resolve(path),
         spec,
-        read.and_then(|binding| resolve(reads, binding, ui)),
+        read.and_then(|binding| ctx.read(binding)),
         read,
-        read_scope(read, ui),
-        Resolving { reads, skin, ui },
+        ctx.scope(read),
+        Resolving { ctx, skin },
     )
 }
 
@@ -175,13 +169,13 @@ impl TreePlan {
         let _ = self.state.source.get_or_init(|| source);
     }
 
-    pub(crate) fn refresh(&self, reads: &dyn Reads) -> bool {
+    pub(crate) fn refresh(&self, ctx: Ctx<'_, '_>) -> bool {
         let Some(source) = self.state.source.get() else {
             self.report_missing("tree source");
             return false;
         };
         let skin = self.picture.borrow().skin().clone();
-        let next = source.picture(reads, &skin);
+        let next = source.picture(ctx, &skin);
         if *self.picture.borrow() == next {
             return false;
         }
@@ -295,8 +289,8 @@ impl TablePlan {
         plan
     }
 
-    pub(crate) fn refresh(&self, reads: &dyn Reads) -> bool {
-        if !self.refresh_picture(reads) {
+    pub(crate) fn refresh(&self, ctx: Ctx<'_, '_>) -> bool {
+        if !self.refresh_picture(ctx) {
             return false;
         }
         if let Some(projection) = self.projection() {
@@ -313,13 +307,13 @@ impl TablePlan {
         let _ = self.state.source.get_or_init(|| source);
     }
 
-    fn refresh_picture(&self, reads: &dyn Reads) -> bool {
+    fn refresh_picture(&self, ctx: Ctx<'_, '_>) -> bool {
         let Some(source) = self.state.source.get() else {
             self.report_missing("track-list source");
             return false;
         };
         let skin = self.picture.borrow().skin().clone();
-        let next = source.picture(reads, &skin);
+        let next = source.picture(ctx, &skin);
         if *self.picture.borrow() == next {
             return false;
         }
@@ -484,11 +478,11 @@ impl TableSource {
         }
     }
 
-    fn picture(&self, reads: &dyn Reads, skin: &Skin) -> TableFace {
+    fn picture(&self, ctx: Ctx<'_, '_>, skin: &Skin) -> TableFace {
         let rows = self
             .rows
             .as_deref()
-            .and_then(|endpoint| reads.get(endpoint))
+            .and_then(|endpoint| ctx.get(endpoint))
             .and_then(|value| match value {
                 ReadValue::Table(rows) => Some(rows),
                 _ => None,
@@ -500,7 +494,7 @@ impl TableSource {
             .columns_state
             .as_ref()
             .map(|(prefix, scope)| (prefix.as_str(), scope.as_str()));
-        let columns = column_layouts(&self.columns, reads, state, skin);
+        let columns = column_layouts(&self.columns, &ctx, state, skin);
         TableFace::new(rows, columns, skin)
     }
 }
@@ -510,11 +504,11 @@ impl TreeSource {
         Self { query, rows }
     }
 
-    fn picture(&self, reads: &dyn Reads, skin: &Skin) -> Tree {
+    fn picture(&self, ctx: Ctx<'_, '_>, skin: &Skin) -> Tree {
         let rows = self
             .rows
             .as_deref()
-            .and_then(|endpoint| reads.get(endpoint))
+            .and_then(|endpoint| ctx.get(endpoint))
             .and_then(|value| match value {
                 ReadValue::Tree(rows) => Some(rows),
                 _ => None,
@@ -523,7 +517,7 @@ impl TreeSource {
         let query = self
             .query
             .as_deref()
-            .and_then(|endpoint| reads.get(endpoint))
+            .and_then(|endpoint| ctx.get(endpoint))
             .and_then(|value| match value {
                 ReadValue::Text(query) => Some(query),
                 _ => None,

@@ -8,9 +8,8 @@ use num_traits::cast::AsPrimitive as _;
 
 use super::{ShaderFrame, logical_extent};
 use crate::{
-    compile::CompiledUi,
     draw::ImageId,
-    render::{Reads, UiEvent},
+    render::{UiEvent, document::Ctx},
     shader::ShaderSpec,
 };
 
@@ -39,13 +38,8 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
 }
 "#;
 
-pub(crate) fn view<'a>(
-    spec: &ShaderSpec,
-    path: &str,
-    reads: &dyn Reads,
-    ui: &CompiledUi,
-) -> Element<'a, UiEvent> {
-    let frame = match ShaderFrame::read(spec, path, reads, ui) {
+pub(crate) fn view<'a>(spec: &ShaderSpec, path: &str, ctx: Ctx<'_, '_>) -> Element<'a, UiEvent> {
+    let frame = match ShaderFrame::read(spec, path, &ctx, ctx.ui) {
         Ok(frame) => frame,
         Err(error) => {
             tracing::error!(%error, "document shader did not produce a frame");

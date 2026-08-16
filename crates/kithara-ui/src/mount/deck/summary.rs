@@ -46,14 +46,14 @@ mod host {
         /// A summary always draws: a deck with nothing loaded says so, which
         /// is a headline of its own rather than an empty panel.
         fn data(&self, read: Reading<'_>) -> Option<Loaded> {
-            Some(snapshot(read.value, read.reads, read.scope))
+            Some(snapshot(read.value, &read.ctx, read.scope))
         }
 
         #[cfg(feature = "masonry")]
         fn retained_refresh(&self, read: Reading<'_>) -> Option<DataRefresh<Loaded>> {
             let scope = read.scope.to_owned();
-            Some(Box::new(move |data, reads| {
-                let next = snapshot(None, reads, &scope);
+            Some(Box::new(move |data, ctx| {
+                let next = snapshot(None, &ctx, &scope);
                 std::mem::replace(data, next) != *data
             }))
         }

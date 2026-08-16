@@ -12,8 +12,8 @@ use kithara_ui::{
     param::Param,
     registry::{EndpointCategory, EndpointDesc, EndpointRegistry, ValueKind},
     render::{
-        ControlAction, ReadValue, Reads, StereoLevels, TableCell, TableRow, UiEvent, WaveBucket,
-        WaveformView, tree,
+        Clock, ControlAction, ReadValue, Reads, StereoLevels, TableCell, TableRow, UiEvent,
+        WaveBucket, WaveformView, tree,
     },
     source::{Limits, MemResolver, UiConfig},
 };
@@ -169,7 +169,13 @@ fn bench_view_build(c: &mut Criterion) {
     let reads = BenchReads::new();
     c.bench_function("ui/view_build/250-controls", |b| {
         b.iter(|| {
-            black_box(tree::render(&ui.root, &ui, &reads, builtin::skin()));
+            black_box(tree::render(
+                &ui.root,
+                &ui,
+                &reads,
+                builtin::skin(),
+                Clock::default(),
+            ));
         });
     });
 }
@@ -180,7 +186,13 @@ fn bench_data_push(c: &mut Criterion) {
     c.bench_function("ui/data_push/8192-wave-8-stereo-view", |b| {
         b.iter(|| {
             reads.push();
-            black_box(tree::render(&ui.root, &ui, &reads, builtin::skin()));
+            black_box(tree::render(
+                &ui.root,
+                &ui,
+                &reads,
+                builtin::skin(),
+                Clock::default(),
+            ));
         });
     });
 }
@@ -197,7 +209,13 @@ fn bench_event_apply(c: &mut Criterion) {
         group.bench_with_input(BenchmarkId::from_parameter(depth), &depth, |b, _| {
             b.iter(|| {
                 reads.apply(black_box(&event));
-                black_box(tree::render(&ui.root, &ui, &reads, builtin::skin()));
+                black_box(tree::render(
+                    &ui.root,
+                    &ui,
+                    &reads,
+                    builtin::skin(),
+                    Clock::default(),
+                ));
             });
         });
     }

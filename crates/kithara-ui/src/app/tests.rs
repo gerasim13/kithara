@@ -16,7 +16,10 @@ use crate::{
     ids::{EndpointId, SourceUri},
     interact::{Input, Key, MOUSE, Modifiers, PointerInput, PointerPhase},
     registry::{EndpointCategory, EndpointDesc, EndpointRegistry, ValueKind},
-    render::{ControlAction, ReadValue, Reads, Skin, StereoLevels, UiEvent},
+    render::{
+        ControlAction, ReadValue, Reads, Skin, StereoLevels, UiEvent,
+        document::{Clock, Ctx},
+    },
     source::MemResolver,
     text::FontPolicy,
 };
@@ -1194,8 +1197,9 @@ fn the_masonry_root_under_the_app_layer_publishes_the_same_press() {
         &UiConfig::default(),
     )
     .unwrap_or_else(|error| panic!("fixture must compile: {error}"));
-    let host = MasonryHost::new(&ui, &reads, &skin);
-    let node = document::render(&ui.root, &ui, &reads, builtin::skin_doc(), host);
+    let ctx = Ctx::new(&ui, &reads, builtin::skin_doc(), Clock::default());
+    let host = MasonryHost::new(ctx, &skin);
+    let node = document::render(&ui.root, ctx, host);
     let mut root = crate::render::masonry::MasonryRoot::new(
         node,
         RenderRootOptions {
@@ -1238,4 +1242,43 @@ fn the_masonry_root_under_the_app_layer_publishes_the_same_press() {
         }],
         "the masonry root must publish the press"
     );
+}
+
+/// The retained host owns its frame count. Driving it is what makes a frame
+/// reproducible, so the count has to be the host's and not a wall clock's.
+#[kithara::test]
+fn each_frame_advances_the_host_clock_by_one() {
+    let (registry, resolver, skin) = tree_fixture();
+    let config = Config::builder()
+        .endpoints(&registry)
+        .resolver(&resolver)
+        .skin(&skin)
+        .skin_doc(builtin::skin_doc())
+        .build();
+    let mut ui = Ui::new(Typed::default(), config, (240, 120), 1.0)
+        .unwrap_or_else(|error| panic!("the fixture must mount: {error}"));
+    assert_eq!(ui.clock().frame, 0);
+    ui.frame(Duration::from_millis(16));
+    assert_eq!(ui.clock().frame, 1);
+    ui.frame(Duration::from_millis(16));
+    assert_eq!(ui.clock().frame, 2);
+}
+
+/// Elapsed time is the sum of the steps it was driven with, so a caller that
+/// hands the same steps twice gets the same reading twice.
+#[kithara::test]
+fn the_host_clock_accumulates_the_steps_it_was_driven_with() {
+    let (registry, resolver, skin) = tree_fixture();
+    let config = Config::builder()
+        .endpoints(&registry)
+        .resolver(&resolver)
+        .skin(&skin)
+        .skin_doc(builtin::skin_doc())
+        .build();
+    let mut ui = Ui::new(Typed::default(), config, (240, 120), 1.0)
+        .unwrap_or_else(|error| panic!("the fixture must mount: {error}"));
+    for _ in 0..4 {
+        ui.frame(Duration::from_millis(25));
+    }
+    assert_eq!(ui.clock().elapsed, Duration::from_millis(100));
 }

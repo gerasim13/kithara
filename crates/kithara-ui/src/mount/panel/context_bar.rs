@@ -29,7 +29,6 @@ mod host {
         render::{
             ReadValue, Skin,
             controls::{Draws, Reading},
-            document::read::resolve,
             picker_selected_index,
         },
     };
@@ -51,14 +50,14 @@ mod host {
             let items = self
                 .scope_items
                 .iter()
-                .map(|item| read.ui.resolve(*item).to_owned())
+                .map(|item| read.ctx.ui.resolve(*item).to_owned())
                 .collect::<Vec<_>>();
             Some(Viewed {
                 breadcrumb: (*breadcrumb).to_owned(),
                 scope: (!items.is_empty()).then(|| Scope {
                     selected: picker_selected_index(
                         self.scope
-                            .and_then(|binding| resolve(read.reads, binding, read.ui))
+                            .and_then(|binding| read.ctx.read(binding))
                             .as_ref(),
                         items.len(),
                     ),

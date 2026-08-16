@@ -34,7 +34,7 @@ mod host {
 
         /// A select shows the word the document wrote; no endpoint moves it.
         fn data(&self, read: Reading<'_>) -> Option<String> {
-            Some(read.ui.resolve(self.label).to_owned())
+            Some(read.ctx.ui.resolve(self.label).to_owned())
         }
     }
 }

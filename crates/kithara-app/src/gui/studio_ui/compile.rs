@@ -1,9 +1,10 @@
 use iced::Element;
+use kithara_platform::time::Duration;
 use kithara_ui::{
     builtin,
     compile::{CompiledUi, compile},
     error::UiDocError,
-    render::{Walk, tree},
+    render::{Clock, Walk, tree},
     source::{MemResolver, UiConfig},
 };
 
@@ -84,6 +85,9 @@ const DOCS: &[(&str, &str)] = &[
 /// deck layouts are compiled once; the top bar picks which one renders.
 pub(crate) struct StudioUi {
     pub(crate) cache: StudioCache,
+    /// This host's own reading of time, advanced once per tick so a document
+    /// bound to it animates without the studio keeping a timer of its own.
+    clock: Clock,
     dual: CompiledUi,
     single: CompiledUi,
 }
@@ -94,7 +98,13 @@ impl StudioUi {
             single: compile_studio(DeckLayout::Single)?,
             dual: compile_studio(DeckLayout::Dual)?,
             cache: StudioCache::default(),
+            clock: Clock::default(),
         })
+    }
+
+    /// Moves this host's clock on by one tick of `step`.
+    pub(crate) fn advance(&mut self, step: Duration) {
+        self.clock = self.clock.advance(step);
     }
 
     const fn compiled(&self, layout: DeckLayout) -> &CompiledUi {
@@ -138,5 +148,12 @@ pub(crate) fn view(state: &Kithara) -> Element<'_, Message> {
     let root = StudioRoot::new(state);
     let reads = Walk::new(&root);
     let compiled = state.studio.compiled(state.studio.cache.layout());
-    tree::render(&compiled.root, compiled, &reads, builtin::skin()).map(Message::Ui)
+    tree::render(
+        &compiled.root,
+        compiled,
+        &reads,
+        builtin::skin(),
+        state.studio.clock,
+    )
+    .map(Message::Ui)
 }

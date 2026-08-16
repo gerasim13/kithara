@@ -43,7 +43,9 @@ mod host {
                 return None;
             };
             Some(Captioned {
-                label: self.label.map(|label| read.ui.resolve(label).to_owned()),
+                label: self
+                    .label
+                    .map(|label| read.ctx.ui.resolve(label).to_owned()),
                 value: value.clamp(0.0, 1.0).as_(),
             })
         }

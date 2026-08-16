@@ -1,3 +1,4 @@
+mod ctx;
 mod facade;
 mod group;
 mod host;
@@ -5,8 +6,10 @@ mod module;
 mod popover;
 #[cfg(feature = "masonry")]
 mod poses;
-pub(crate) mod read;
 
+#[cfg(test)]
+pub(crate) use ctx::probe;
+pub use ctx::{BuiltinEndpoints, Clock, Ctx, SECONDS};
 pub use facade::render;
 #[cfg(test)]
 pub(crate) use facade::render_engine_subtree;

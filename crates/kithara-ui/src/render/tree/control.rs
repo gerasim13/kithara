@@ -4,19 +4,17 @@ use super::{
     geometry::Rendered,
     host::{tree_input_layout, tree_search_input_layout},
     mount::{Cx, ViewControl},
-    read_scope, resolve,
     table::TableHost,
 };
 use crate::{
     atoms::{bar::context::Context, design::fader::rail_bounds},
-    compile::CompiledUi,
     draw::{Rect, Transform},
     engine::{Descriptor, Engine, Target},
     expand::{Binding, ControlSpec},
     ids::InternId,
     interact::{Hit, iced as iced_interact},
     mount,
-    render::{HostedControlPlan, InputOwner, ReadValue, Reads, Resolving, Skin},
+    render::{HostedControlPlan, InputOwner, ReadValue, Resolving, Skin, document::Ctx},
 };
 
 /// How the document placed one control: who owns its pointer, and the offset
@@ -31,28 +29,26 @@ pub(super) fn render_control<'a>(
     path: InternId,
     spec: &ControlSpec,
     read: Option<&Binding>,
-    ui: &'a CompiledUi,
-    reads: &dyn Reads,
+    ctx: Ctx<'a, '_>,
     skin: &'a Skin,
     placed: Placed,
 ) -> Rendered<'a> {
-    let value = read.and_then(|binding| resolve(reads, binding, ui));
+    let value = read.and_then(|binding| ctx.read(binding));
     let cx = Cx {
         owner: placed.owner,
         transform: placed.transform,
-        path: ui.resolve(path),
-        reads,
-        scope: read_scope(read, ui),
+        path: ctx.ui.resolve(path),
+        ctx,
+        scope: ctx.scope(read),
         skin,
-        ui,
         value: value.as_ref(),
     };
     mount::controls!(spec, Mount { cx: &cx })
 }
 
 /// Asks whichever control the document named to mount itself here.
-struct Mount<'cx, 'a, 'reads, 'value> {
-    cx: &'cx Cx<'a, 'reads, 'value>,
+struct Mount<'cx, 'a, 'ctx, 'value> {
+    cx: &'cx Cx<'a, 'ctx, 'value>,
 }
 
 impl<'a> Mount<'_, 'a, '_, '_> {

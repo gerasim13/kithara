@@ -40,13 +40,21 @@ use crate::{
     render::{
         ControlAction, PortalMapView, PortalTarget, ReadValue, Reads, ScalarRange, Skin,
         StereoLevels, TableCell, TableRow, TreeIcon, TreeRow, UiEvent, WaveBucket, WaveformView,
-        WindowCommand, WindowEdge, WindowLayerProgram, document, picker_hits,
+        WindowCommand, WindowEdge, WindowLayerProgram, document,
+        document::{Clock, Ctx},
+        picker_hits,
     },
     source::{MemResolver, UiConfig},
     text::{FontPolicy, TextContext},
 };
 
 struct FixtureReads;
+
+/// What the host hands the document for one frame, built from a fixture reader
+/// so a test drives the clock rather than waiting for one.
+fn ctx<'a>(ui: &'a CompiledUi, reads: &'a dyn Reads) -> Ctx<'a, 'a> {
+    Ctx::new(ui, reads, builtin::skin_doc(), Clock::default())
+}
 
 static CENSUS_PORTALS: [PortalTarget; 2] = [
     PortalTarget {
@@ -591,10 +599,8 @@ fn masonry_layout_rects_equal_snapped_neutral_rects() {
             let expected = fixture_section(fixture, preset, width, height);
             let output = document::render(
                 &ui.root,
-                &ui,
-                &reads,
-                builtin::skin_doc(),
-                MasonryHost::new(&ui, &reads, &skin),
+                ctx(&ui, &reads),
+                MasonryHost::new(ctx(&ui, &reads), &skin),
             );
             let ids = output.document_ids().to_vec();
             assert_eq!(
@@ -668,8 +674,8 @@ fn a_fill_slot_centers_its_fixed_content_like_the_immediate_host() {
     );
     let reads = FixtureReads;
     let state = MasonryState::default();
-    let host = MasonryHost::new(&ui, &reads, builtin::skin()).with_state(state.clone());
-    let output = document::render(&ui.root, &ui, &reads, builtin::skin_doc(), host);
+    let host = MasonryHost::new(ctx(&ui, &reads), builtin::skin()).with_state(state.clone());
+    let output = document::render(&ui.root, ctx(&ui, &reads), host);
     let root = masonry_root(output, 200, 120);
     let fixed = state
         .widget_id("demo/fixed")
@@ -700,13 +706,13 @@ fn wheel_actions_round_trip_through_the_public_custom_contract() {
         &registry,
     );
     let reads = FixtureReads;
-    let host = MasonryHost::map_actions(&ui, &reads, builtin::skin(), TestAction::Document)
+    let host = MasonryHost::map_actions(ctx(&ui, &reads), builtin::skin(), TestAction::Document)
         .with_custom(
             "demo/custom",
             WheelEmitter::observed(expected.clone(), Rc::clone(&recognized)),
             TestAction::Wheel,
         );
-    let output = document::render(&ui.root, &ui, &reads, builtin::skin_doc(), host);
+    let output = document::render(&ui.root, ctx(&ui, &reads), host);
     let mut root = masonry_root(output, 200, 120);
 
     root.handle_pointer_event(pointer_down(10.0, 50.0))
@@ -762,7 +768,7 @@ fn a_frame_that_transitions_to_no_repaint_still_paints_its_result() {
     );
     let reads = FixtureReads;
     let paints = Rc::new(Cell::new(0));
-    let host = MasonryHost::map_actions(&ui, &reads, builtin::skin(), TestAction::Document)
+    let host = MasonryHost::map_actions(ctx(&ui, &reads), builtin::skin(), TestAction::Document)
         .with_custom(
             "demo/custom",
             FrameProbe {
@@ -771,7 +777,7 @@ fn a_frame_that_transitions_to_no_repaint_still_paints_its_result() {
             },
             |()| TestAction::Document(UiEvent::OpenSettings),
         );
-    let output = document::render(&ui.root, &ui, &reads, builtin::skin_doc(), host);
+    let output = document::render(&ui.root, ctx(&ui, &reads), host);
     let mut root = masonry_root(output, 200, 120);
     root.redraw()
         .unwrap_or_else(|error| panic!("initial frame probe paint must remain typed: {error}"));
@@ -805,13 +811,13 @@ fn custom_mounting_replaces_an_actionable_controls_builtin_owner() {
         &registry,
     );
     let reads = FixtureReads;
-    let host = MasonryHost::map_actions(&ui, &reads, builtin::skin(), TestAction::Document)
+    let host = MasonryHost::map_actions(ctx(&ui, &reads), builtin::skin(), TestAction::Document)
         .with_custom(
             "demo/volume",
             WheelEmitter::new(Vec::<WheelAction>::new()),
             TestAction::Wheel,
         );
-    let output = document::render(&ui.root, &ui, &reads, builtin::skin_doc(), host);
+    let output = document::render(&ui.root, ctx(&ui, &reads), host);
     let mut root = masonry_root(output, 200, 120);
 
     assert_eq!(
@@ -835,7 +841,7 @@ fn custom_pointer_capture_keeps_moves_after_the_pointer_leaves() {
     );
     let reads = FixtureReads;
     let observations = PointerObservations::default();
-    let host = MasonryHost::map_actions(&ui, &reads, builtin::skin(), TestAction::Document)
+    let host = MasonryHost::map_actions(ctx(&ui, &reads), builtin::skin(), TestAction::Document)
         .with_custom(
             "demo/custom",
             CaptureProbe {
@@ -843,7 +849,7 @@ fn custom_pointer_capture_keeps_moves_after_the_pointer_leaves() {
             },
             |()| TestAction::Document(UiEvent::OpenSettings),
         );
-    let output = document::render(&ui.root, &ui, &reads, builtin::skin_doc(), host);
+    let output = document::render(&ui.root, ctx(&ui, &reads), host);
     let mut root = masonry_root(output, 200, 120);
     root.take_platform_signals();
 
@@ -904,7 +910,7 @@ fn a_modifier_capturing_custom_still_receives_the_actual_key_packet() {
     );
     let reads = FixtureReads;
     let observed = Rc::new(RefCell::new(Vec::new()));
-    let host = MasonryHost::map_actions(&ui, &reads, builtin::skin(), TestAction::Document)
+    let host = MasonryHost::map_actions(ctx(&ui, &reads), builtin::skin(), TestAction::Document)
         .with_custom(
             "demo/custom",
             KeyProbe {
@@ -912,7 +918,7 @@ fn a_modifier_capturing_custom_still_receives_the_actual_key_packet() {
             },
             |()| TestAction::Document(UiEvent::OpenSettings),
         );
-    let output = document::render(&ui.root, &ui, &reads, builtin::skin_doc(), host);
+    let output = document::render(&ui.root, ctx(&ui, &reads), host);
     let mut root = masonry_root(output, 200, 120);
     root.handle_pointer_event(pointer_down(10.0, 50.0))
         .unwrap_or_else(|error| panic!("custom focus press must remain typed: {error}"));
@@ -937,7 +943,7 @@ fn custom_component_receives_neutral_line_and_pixel_wheel_input() {
     );
     let reads = FixtureReads;
     let observations = ScrollObservations::default();
-    let host = MasonryHost::map_actions(&ui, &reads, builtin::skin(), TestAction::Document)
+    let host = MasonryHost::map_actions(ctx(&ui, &reads), builtin::skin(), TestAction::Document)
         .with_custom(
             "demo/custom",
             ScrollProbe {
@@ -945,7 +951,7 @@ fn custom_component_receives_neutral_line_and_pixel_wheel_input() {
             },
             |()| TestAction::Document(UiEvent::OpenSettings),
         );
-    let output = document::render(&ui.root, &ui, &reads, builtin::skin_doc(), host);
+    let output = document::render(&ui.root, ctx(&ui, &reads), host);
     let mut root = masonry_root(output, 200, 120);
 
     assert_eq!(
@@ -996,8 +1002,8 @@ fn popover_layer_places_exactly_and_owns_inside_and_outside_presses() {
         &registry,
     );
     let reads = FixtureReads;
-    let host = MasonryHost::map_actions(&ui, &reads, builtin::skin(), TestAction::Document);
-    let output = document::render(&ui.root, &ui, &reads, builtin::skin_doc(), host);
+    let host = MasonryHost::map_actions(ctx(&ui, &reads), builtin::skin(), TestAction::Document);
+    let output = document::render(&ui.root, ctx(&ui, &reads), host);
     let mut root = masonry_root(output, 200, 200);
     root.redraw()
         .unwrap_or_else(|error| panic!("popover redraw must retain typed actions: {error}"));
@@ -1087,10 +1093,8 @@ fn pointer_popover_retains_each_opening_origin_across_rebuilds() {
     let closed = PopoverReads { open: false };
     let output = document::render(
         &ui.root,
-        &ui,
-        &closed,
-        builtin::skin_doc(),
-        MasonryHost::new(&ui, &closed, builtin::skin()).with_state(state.clone()),
+        ctx(&ui, &closed),
+        MasonryHost::new(ctx(&ui, &closed), builtin::skin()).with_state(state.clone()),
     );
     let mut root = masonry_root(output, 200, 200);
     root.handle_pointer_event(pointer_down(70.0, 95.0))
@@ -1099,10 +1103,8 @@ fn pointer_popover_retains_each_opening_origin_across_rebuilds() {
     let open = PopoverReads { open: true };
     let output = document::render(
         &ui.root,
-        &ui,
-        &open,
-        builtin::skin_doc(),
-        MasonryHost::new(&ui, &open, builtin::skin()).with_state(state.clone()),
+        ctx(&ui, &open),
+        MasonryHost::new(ctx(&ui, &open), builtin::skin()).with_state(state.clone()),
     );
     let mut root = masonry_root(output, 200, 200);
     root.redraw()
@@ -1119,10 +1121,8 @@ fn pointer_popover_retains_each_opening_origin_across_rebuilds() {
 
     let output = document::render(
         &ui.root,
-        &ui,
-        &closed,
-        builtin::skin_doc(),
-        MasonryHost::new(&ui, &closed, builtin::skin()).with_state(state.clone()),
+        ctx(&ui, &closed),
+        MasonryHost::new(ctx(&ui, &closed), builtin::skin()).with_state(state.clone()),
     );
     let mut root = masonry_root(output, 200, 200);
     assert_eq!(
@@ -1143,10 +1143,8 @@ fn pointer_popover_retains_each_opening_origin_across_rebuilds() {
 
     let output = document::render(
         &ui.root,
-        &ui,
-        &open,
-        builtin::skin_doc(),
-        MasonryHost::new(&ui, &open, builtin::skin()).with_state(state),
+        ctx(&ui, &open),
+        MasonryHost::new(ctx(&ui, &open), builtin::skin()).with_state(state),
     );
     let mut root = masonry_root(output, 200, 200);
     root.redraw()
@@ -1177,8 +1175,8 @@ fn hosted_module_retains_its_engine_owned_knob_outside_the_control() {
         &registry,
     );
     let reads = FixtureReads;
-    let host = MasonryHost::map_actions(&ui, &reads, builtin::skin(), TestAction::Document);
-    let output = document::render(&ui.root, &ui, &reads, builtin::skin_doc(), host);
+    let host = MasonryHost::map_actions(ctx(&ui, &reads), builtin::skin(), TestAction::Document);
+    let output = document::render(&ui.root, ctx(&ui, &reads), host);
     let mut root = masonry_root(output, 200, 120);
 
     root.take_platform_signals();
@@ -1258,9 +1256,9 @@ fn a_knob_nested_in_a_pressable_popover_keeps_the_engine_gesture() {
     );
     let reads = PopoverReads { open: false };
     let state = MasonryState::default();
-    let host = MasonryHost::map_actions(&ui, &reads, builtin::skin(), TestAction::Document)
+    let host = MasonryHost::map_actions(ctx(&ui, &reads), builtin::skin(), TestAction::Document)
         .with_state(state.clone());
-    let output = document::render(&ui.root, &ui, &reads, builtin::skin_doc(), host);
+    let output = document::render(&ui.root, ctx(&ui, &reads), host);
     let mut root = masonry_root(output, 200, 120);
     let volume = state
         .widget_id("demo/volume")
@@ -1305,8 +1303,8 @@ fn the_settings_button_leaf_opens_settings_on_press() {
         &registry,
     );
     let reads = FixtureReads;
-    let host = MasonryHost::map_actions(&ui, &reads, builtin::skin(), TestAction::Document);
-    let output = document::render(&ui.root, &ui, &reads, builtin::skin_doc(), host);
+    let host = MasonryHost::map_actions(ctx(&ui, &reads), builtin::skin(), TestAction::Document);
+    let output = document::render(&ui.root, ctx(&ui, &reads), host);
     let mut root = masonry_root(output, 200, 120);
 
     assert_eq!(
@@ -1343,8 +1341,8 @@ fn leaf_owned_knob_uses_scalar_drag_wheel_reset_and_cursor() {
         &registry,
     );
     let reads = FixtureReads;
-    let host = MasonryHost::map_actions(&ui, &reads, builtin::skin(), TestAction::Document);
-    let output = document::render(&ui.root, &ui, &reads, builtin::skin_doc(), host);
+    let host = MasonryHost::map_actions(ctx(&ui, &reads), builtin::skin(), TestAction::Document);
+    let output = document::render(&ui.root, ctx(&ui, &reads), host);
     let mut root = masonry_root(output, 200, 120);
 
     root.take_platform_signals();
@@ -1450,8 +1448,9 @@ fn double_click_terminates_engine_and_leaf_owned_scalar_capture() {
             ])"#,
             &registry,
         );
-        let host = MasonryHost::map_actions(&ui, &reads, builtin::skin(), TestAction::Document);
-        let output = document::render(&ui.root, &ui, &reads, builtin::skin_doc(), host);
+        let host =
+            MasonryHost::map_actions(ctx(&ui, &reads), builtin::skin(), TestAction::Document);
+        let output = document::render(&ui.root, ctx(&ui, &reads), host);
         let mut root = masonry_root(output, 200, 120);
 
         assert_eq!(
@@ -1494,8 +1493,9 @@ fn picker_portal_honours_engine_and_leaf_owners_beneath_the_root_window_layer() 
             ])"#,
             &registry,
         );
-        let host = MasonryHost::map_actions(&ui, &reads, builtin::skin(), TestAction::Document);
-        let output = document::render(&ui.root, &ui, &reads, builtin::skin_doc(), host);
+        let host =
+            MasonryHost::map_actions(ctx(&ui, &reads), builtin::skin(), TestAction::Document);
+        let output = document::render(&ui.root, ctx(&ui, &reads), host);
         let control_id = *output
             .document_ids()
             .last()
@@ -1648,8 +1648,9 @@ fn titlebar_window_layer_honours_engine_and_leaf_owned_modules() {
             ])"#,
             &registry,
         );
-        let host = MasonryHost::map_actions(&ui, &reads, builtin::skin(), TestAction::Document);
-        let output = document::render(&ui.root, &ui, &reads, builtin::skin_doc(), host);
+        let host =
+            MasonryHost::map_actions(ctx(&ui, &reads), builtin::skin(), TestAction::Document);
+        let output = document::render(&ui.root, ctx(&ui, &reads), host);
         let mut root = masonry_root(output, 200, 120);
         root.redraw()
             .unwrap_or_else(|error| panic!("{module_id} titlebar must compose: {error}"));
@@ -1679,7 +1680,7 @@ fn outer_resize_layer_precedes_content_only_on_the_window_edge() {
     );
     let reads = FixtureReads;
     let observations = PointerObservations::default();
-    let host = MasonryHost::map_actions(&ui, &reads, builtin::skin(), TestAction::Document)
+    let host = MasonryHost::map_actions(ctx(&ui, &reads), builtin::skin(), TestAction::Document)
         .with_custom(
             "demo/custom",
             CaptureProbe {
@@ -1687,7 +1688,7 @@ fn outer_resize_layer_precedes_content_only_on_the_window_edge() {
             },
             |()| TestAction::Document(UiEvent::OpenSettings),
         );
-    let output = document::render(&ui.root, &ui, &reads, builtin::skin_doc(), host);
+    let output = document::render(&ui.root, ctx(&ui, &reads), host);
     let mut root = masonry_root(output, 200, 120);
 
     assert_eq!(
@@ -2040,10 +2041,8 @@ fn masonry_draws_every_control_the_census_claims_it_draws() {
             );
             let output = document::render(
                 &ui.root,
-                &ui,
-                &reads,
-                builtin::skin_doc(),
-                MasonryHost::new(&ui, &reads, &skin),
+                ctx(&ui, &reads),
+                MasonryHost::new(ctx(&ui, &reads), &skin),
             );
             let mut root = masonry_root(output, 240, 120);
             let (scene, _) = root.redraw().unwrap_or_else(|error| {
@@ -2091,9 +2090,9 @@ mod gesture_census {
         interact::Gestures,
         mount,
         render::{
-            Reads, Skin,
+            Skin,
             controls::{Draws, Gesture, Paint, Reading},
-            document::read::{read_scope, resolve},
+            document::Ctx,
             hosted::hosted_control_plan,
             masonry::{HostAction, Painted},
         },
@@ -2389,26 +2388,24 @@ mod gesture_census {
         path: InternId,
         spec: &ControlSpec,
         read: Option<&Binding>,
-        ui: &CompiledUi,
-        reads: &dyn Reads,
+        ctx: Ctx<'_, '_>,
         skin: &Skin,
     ) -> (Gestures, Gestures) {
-        let value = read.and_then(|binding| resolve(reads, binding, ui));
+        let value = read.and_then(|binding| ctx.read(binding));
         let leaf = mount::controls!(
             spec,
             Apply {
                 probe: Probe {
                     reading: Reading {
-                        reads,
-                        scope: read_scope(read, ui),
-                        ui,
+                        ctx,
+                        scope: ctx.scope(read),
                         value: value.as_ref(),
                     },
                     skin,
                 },
             }
         );
-        let engine = hosted_control_plan(path, spec, read, ui, reads, skin)
+        let engine = hosted_control_plan(path, spec, read, ctx, skin)
             .map_or(Gestures::NONE, |plan| plan.gestures());
         (
             leaf.immediate.union(engine).union(leaf.special),
@@ -2510,7 +2507,7 @@ mod gesture_census {
                 "the census row for {} mounts a different control than it names",
                 row.name
             );
-            let (immediate, retained) = mounted(path, spec, read, &ui, &reads, &skin);
+            let (immediate, retained) = mounted(path, spec, read, super::ctx(&ui, &reads), &skin);
             assert_eq!(
                 immediate, row.gestures,
                 "{} changed its iced gesture contract",
@@ -2554,10 +2551,8 @@ fn retained_vis_declares_exact_logical_frames_and_continuous_repaint() {
     );
     let output = document::render(
         &ui.root,
-        &ui,
-        &reads,
-        builtin::skin_doc(),
-        MasonryHost::new(&ui, &reads, builtin::skin()),
+        ctx(&ui, &reads),
+        MasonryHost::new(ctx(&ui, &reads), builtin::skin()),
     );
     let mut root = masonry_root(output, 80, 20);
     root.redraw()
@@ -2594,7 +2589,7 @@ fn retained_vis_declares_exact_logical_frames_and_continuous_repaint() {
     reads.right.set(0.5);
     reads.volume.set(0.5);
     reads.time.set(9.0);
-    root.refresh(&ui, &reads, builtin::skin_doc());
+    root.refresh(ctx(&ui, &reads));
     root.redraw()
         .unwrap_or_else(|error| panic!("Vis refresh must not remount the tree: {error}"));
     let refreshed = root.vis_declarations();
@@ -2604,14 +2599,14 @@ fn retained_vis_declares_exact_logical_frames_and_continuous_repaint() {
     assert_eq!(refreshed[0].frame().time(), 9.0);
 
     reads.first.set(f64::NAN);
-    root.refresh(&ui, &reads, builtin::skin_doc());
+    root.refresh(ctx(&ui, &reads));
     assert_eq!(
         root.vis_declarations().len(),
         1,
         "an invalid preset suppresses only its own native declaration"
     );
     reads.levels_present.set(false);
-    root.refresh(&ui, &reads, builtin::skin_doc());
+    root.refresh(ctx(&ui, &reads));
     assert!(
         root.vis_declarations().is_empty(),
         "missing levels suppress every Vis declaration"
@@ -2631,10 +2626,8 @@ fn stashed_continuous_vis_stops_and_unstashing_restarts_animation_frames() {
     );
     let output = document::render(
         &ui.root,
-        &ui,
-        &reads,
-        builtin::skin_doc(),
-        MasonryHost::new(&ui, &reads, builtin::skin()),
+        ctx(&ui, &reads),
+        MasonryHost::new(ctx(&ui, &reads), builtin::skin()),
     );
     let [_, parent, vis] = output.document_ids() else {
         panic!("the fixture must retain exactly the document root, one parent, and one Vis leaf")
@@ -2705,8 +2698,8 @@ fn a_retained_preset_press_release_is_painted_and_publishes_the_selected_name() 
         ])"#,
         &registry,
     );
-    let host = MasonryHost::map_actions(&ui, &reads, builtin::skin(), TestAction::Document);
-    let output = document::render(&ui.root, &ui, &reads, builtin::skin_doc(), host);
+    let host = MasonryHost::map_actions(ctx(&ui, &reads), builtin::skin(), TestAction::Document);
+    let output = document::render(&ui.root, ctx(&ui, &reads), host);
     let mut root = masonry_root(output, 126, 42);
     let (idle, _) = root
         .redraw()
@@ -2774,10 +2767,8 @@ fn retained_refresh_changes_the_active_preset_without_remounting_the_leaf() {
     );
     let output = document::render(
         &ui.root,
-        &ui,
-        &reads,
-        builtin::skin_doc(),
-        MasonryHost::new(&ui, &reads, builtin::skin()),
+        ctx(&ui, &reads),
+        MasonryHost::new(ctx(&ui, &reads), builtin::skin()),
     );
     let id = *output
         .document_ids()
@@ -2790,7 +2781,7 @@ fn retained_refresh_changes_the_active_preset_without_remounting_the_leaf() {
     let micro_draw_data = micro.encoding().draw_data.clone();
 
     reads.active.set(builtin::PLAYER_PRESET);
-    root.refresh(&ui, &reads, builtin::skin_doc());
+    root.refresh(ctx(&ui, &reads));
     let (player, _) = root
         .redraw()
         .unwrap_or_else(|error| panic!("PLAYER PresetSelector must draw: {error}"));
@@ -2823,10 +2814,8 @@ fn driven_root(
     let state = MasonryState::default();
     let output = document::render(
         &ui.root,
-        &ui,
-        reads,
-        builtin::skin_doc(),
-        MasonryHost::new(&ui, reads, builtin::skin()).with_state(state.clone()),
+        ctx(&ui, reads),
+        MasonryHost::new(ctx(&ui, reads), builtin::skin()).with_state(state.clone()),
     );
     let root = masonry_root(output, 200, 120);
     (ui, state, root)
@@ -2869,7 +2858,7 @@ fn a_driven_object_moves_when_the_retained_host_refreshes() {
     let start = placed_at(&root, &state, "demo/carried");
 
     reads.along.set(1.0);
-    root.refresh(&ui, &reads, builtin::skin_doc());
+    root.refresh(ctx(&ui, &reads));
 
     assert_ne!(placed_at(&root, &state, "demo/carried"), start);
 }
@@ -2894,7 +2883,7 @@ fn an_object_nobody_drives_keeps_its_pose_across_a_refresh() {
     let start = placed_at(&root, &state, "demo/carried");
 
     reads.along.set(1.0);
-    root.refresh(&ui, &reads, builtin::skin_doc());
+    root.refresh(ctx(&ui, &reads));
 
     assert_eq!(placed_at(&root, &state, "demo/carried"), start);
 }
@@ -2918,10 +2907,8 @@ fn a_mounted_table_draws_rows_that_arrive_during_refresh() {
     };
     let output = document::render(
         &ui.root,
-        &ui,
-        &reads,
-        builtin::skin_doc(),
-        MasonryHost::new(&ui, &reads, builtin::skin()),
+        ctx(&ui, &reads),
+        MasonryHost::new(ctx(&ui, &reads), builtin::skin()),
     );
     let mut root = masonry_root(output, 240, 160);
     let (before, _) = root
@@ -2929,7 +2916,7 @@ fn a_mounted_table_draws_rows_that_arrive_during_refresh() {
         .unwrap_or_else(|error| panic!("empty Table must draw its frame: {error}"));
     let before_glyphs = before.encoding().resources.glyphs.len();
     reads.loaded.set(true);
-    root.refresh(&ui, &reads, builtin::skin_doc());
+    root.refresh(ctx(&ui, &reads));
     let (after, _) = root
         .redraw()
         .unwrap_or_else(|error| panic!("refreshed Table must draw its rows: {error}"));
@@ -2956,10 +2943,8 @@ fn a_mounted_table_repaints_the_row_under_the_pointer() {
     };
     let output = document::render(
         &ui.root,
-        &ui,
-        &reads,
-        builtin::skin_doc(),
-        MasonryHost::new(&ui, &reads, builtin::skin()),
+        ctx(&ui, &reads),
+        MasonryHost::new(ctx(&ui, &reads), builtin::skin()),
     );
     let mut root = masonry_root(output, 240, 160);
     let (idle, _) = root
@@ -2997,10 +2982,8 @@ fn a_mounted_tree_refreshes_rows_and_query_independently() {
     };
     let output = document::render(
         &ui.root,
-        &ui,
-        &reads,
-        builtin::skin_doc(),
-        MasonryHost::new(&ui, &reads, builtin::skin()),
+        ctx(&ui, &reads),
+        MasonryHost::new(ctx(&ui, &reads), builtin::skin()),
     );
     let mut root = masonry_root(output, 240, 160);
     let (before, _) = root
@@ -3014,7 +2997,7 @@ fn a_mounted_tree_refreshes_rows_and_query_independently() {
     );
 
     reads.rows_loaded.set(true);
-    root.refresh(&ui, &reads, builtin::skin_doc());
+    root.refresh(ctx(&ui, &reads));
     assert_eq!(
         root.tree_picture("demo/browser"),
         Some((TREE_ROWS.len(), String::new())),
@@ -3030,7 +3013,7 @@ fn a_mounted_tree_refreshes_rows_and_query_independently() {
     );
 
     reads.query_loaded.set(true);
-    root.refresh(&ui, &reads, builtin::skin_doc());
+    root.refresh(ctx(&ui, &reads));
     assert_eq!(
         root.tree_picture("demo/browser"),
         Some((TREE_ROWS.len(), "Late".to_owned())),
@@ -3066,10 +3049,8 @@ fn a_mounted_tree_row_click_emits_its_typed_index_action() {
     };
     let output = document::render(
         &ui.root,
-        &ui,
-        &reads,
-        builtin::skin_doc(),
-        MasonryHost::new(&ui, &reads, builtin::skin()),
+        ctx(&ui, &reads),
+        MasonryHost::new(ctx(&ui, &reads), builtin::skin()),
     );
     let mut root = masonry_root(output, 240, 160);
     let expected = 2_usize;
@@ -3113,10 +3094,8 @@ fn a_mounted_tree_search_ime_commit_emits_the_complete_query() {
     };
     let output = document::render(
         &ui.root,
-        &ui,
-        &reads,
-        builtin::skin_doc(),
-        MasonryHost::new(&ui, &reads, builtin::skin()),
+        ctx(&ui, &reads),
+        MasonryHost::new(ctx(&ui, &reads), builtin::skin()),
     );
     let mut root = masonry_root(output, 240, 160);
     let skin = builtin::skin();
@@ -3170,10 +3149,8 @@ fn a_mounted_tree_repaints_after_scrolling() {
     };
     let output = document::render(
         &ui.root,
-        &ui,
-        &reads,
-        builtin::skin_doc(),
-        MasonryHost::new(&ui, &reads, builtin::skin()),
+        ctx(&ui, &reads),
+        MasonryHost::new(ctx(&ui, &reads), builtin::skin()),
     );
     let mut root = masonry_root(output, 240, 120);
     let (idle, _) = root
@@ -3215,10 +3192,8 @@ fn a_mounted_tree_repaints_the_row_under_the_pointer() {
     };
     let output = document::render(
         &ui.root,
-        &ui,
-        &reads,
-        builtin::skin_doc(),
-        MasonryHost::new(&ui, &reads, builtin::skin()),
+        ctx(&ui, &reads),
+        MasonryHost::new(ctx(&ui, &reads), builtin::skin()),
     );
     let mut root = masonry_root(output, 240, 160);
     let (idle, _) = root

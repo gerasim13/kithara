@@ -5,10 +5,9 @@ use masonry::vello::{
 
 use crate::{
     backends::VelloImageBackend,
-    compile::CompiledUi,
     draw::{DrawListBuilder, Rect, replay},
     render::{
-        Reads,
+        document::Ctx,
         shader::{ShaderDeclaration, ShaderFrame, ShaderFrameError, logical_extent},
     },
     shader::ShaderSpec,
@@ -23,7 +22,7 @@ pub(super) struct ShaderLeaf {
 }
 
 impl ShaderLeaf {
-    pub(super) fn new(spec: ShaderSpec, path: String, reads: &dyn Reads, ui: &CompiledUi) -> Self {
+    pub(super) fn new(spec: ShaderSpec, path: String, ctx: Ctx<'_, '_>) -> Self {
         let mut this = Self {
             error: None,
             frame: None,
@@ -31,7 +30,7 @@ impl ShaderLeaf {
             path,
             spec,
         };
-        this.update(reads, ui);
+        this.update(ctx);
         this
     }
 
@@ -77,12 +76,12 @@ impl ShaderLeaf {
         );
     }
 
-    pub(super) fn refresh(&mut self, reads: &dyn Reads, ui: &CompiledUi) -> bool {
-        self.update(reads, ui)
+    pub(super) fn refresh(&mut self, ctx: Ctx<'_, '_>) -> bool {
+        self.update(ctx)
     }
 
-    fn update(&mut self, reads: &dyn Reads, ui: &CompiledUi) -> bool {
-        match ShaderFrame::read(&self.spec, &self.path, reads, ui) {
+    fn update(&mut self, ctx: Ctx<'_, '_>) -> bool {
+        match ShaderFrame::read(&self.spec, &self.path, &ctx, ctx.ui) {
             Ok(frame) => {
                 self.error = None;
                 self.frame.as_ref() != Some(&frame) && {

@@ -25,7 +25,7 @@ use kithara_ui::{
     draw::PoolStats,
     registry::ValueKind,
     render::{
-        PortalMapView, PortalTarget, ReadValue, Reads, ScalarRange, StereoLevels, TableCell,
+        Clock, PortalMapView, PortalTarget, ReadValue, Reads, ScalarRange, StereoLevels, TableCell,
         TableRow, TreeIcon, TreeRow, UiEvent, WaveBucket, WaveformView, fonts, shader::ShaderPass,
         tree, vis::VisPass,
     },
@@ -461,7 +461,7 @@ fn iced(
     let skin = builtin::skin();
     let theme = theme::kithara_theme(&Palette::default().into());
     let mut ui = UserInterface::build(
-        tree::render(&compiled.root, &compiled, &reads, skin),
+        tree::render(&compiled.root, &compiled, &reads, skin, Clock::default()),
         Size::new(geometry.width as f32, geometry.height as f32),
         Cache::default(),
         renderer,

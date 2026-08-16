@@ -1,4 +1,4 @@
-use crate::render::{ReadValue, Reads, vis::VisFrame};
+use crate::render::{ReadValue, document::Ctx, vis::VisFrame};
 
 #[derive(fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
@@ -12,17 +12,17 @@ impl VisLeaf {
     pub(super) fn new(
         preset: Option<String>,
         value: Option<ReadValue<'_>>,
-        reads: &dyn Reads,
+        ctx: Ctx<'_, '_>,
     ) -> Self {
         Self {
-            frame: VisFrame::read(value, reads),
+            frame: VisFrame::read(value, &ctx),
             preset,
         }
     }
 
-    pub(super) fn refresh(&mut self, reads: &dyn Reads) -> bool {
-        let value = self.preset.as_deref().and_then(|preset| reads.get(preset));
-        let frame = VisFrame::read(value, reads);
+    pub(super) fn refresh(&mut self, ctx: Ctx<'_, '_>) -> bool {
+        let value = self.preset.as_deref().and_then(|preset| ctx.get(preset));
+        let frame = VisFrame::read(value, &ctx);
         self.frame != frame && {
             self.frame = frame;
             true

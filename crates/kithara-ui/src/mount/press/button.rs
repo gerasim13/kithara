@@ -98,8 +98,8 @@ mod host {
                 label: ButtonLabel {
                     active: self
                         .active_label
-                        .map(|label| read.ui.resolve(label).to_owned()),
-                    label: read.ui.resolve(self.label).to_owned(),
+                        .map(|label| read.ctx.ui.resolve(label).to_owned()),
+                    label: read.ctx.ui.resolve(self.label).to_owned(),
                 },
             })
         }

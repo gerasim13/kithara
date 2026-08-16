@@ -23,7 +23,6 @@ use super::{
 };
 use crate::{
     backends::VelloBackend,
-    compile::CompiledUi,
     draw::{DrawList, DrawListBuilder, Pt, Rect, Rgba, Transform, replay},
     interact::{
         CursorShape, Hit, Input, MOUSE, Outcome, PointerInput, PointerOwnership, PointerPhase,
@@ -31,7 +30,7 @@ use crate::{
     },
     module::TextAlign,
     render::{
-        HostLayer, ReadValue, Reads, UiEvent, WindowCommand, WindowLayerProgram,
+        HostLayer, ReadValue, UiEvent, WindowCommand, WindowLayerProgram, document::Ctx,
         shader::ShaderDeclaration,
     },
     skin::TextRoleSkin,
@@ -219,7 +218,7 @@ impl Leaf {
         }
     }
 
-    /// Takes what this leaf's endpoint now reads. This is the one way a mounted
+    /// Takes what this leaf's endpoint now ctx. This is the one way a mounted
     /// leaf learns a new value without the tree being rebuilt around it.
     pub(crate) fn set_read(&mut self, value: &ReadValue<'_>) -> bool {
         match self {
@@ -237,11 +236,11 @@ impl Leaf {
         }
     }
 
-    pub(crate) fn refresh(&mut self, ui: &CompiledUi, reads: &dyn Reads) -> bool {
+    pub(crate) fn refresh(&mut self, ctx: Ctx<'_, '_>) -> bool {
         match self {
-            Self::Control(control) => control.refresh(reads),
-            Self::Shader(shader) => shader.refresh(reads, ui),
-            Self::Vis(vis) => vis.refresh(reads),
+            Self::Control(control) => control.refresh(ctx),
+            Self::Shader(shader) => shader.refresh(ctx),
+            Self::Vis(vis) => vis.refresh(ctx),
             Self::Custom { .. } | Self::Empty | Self::Text { .. } => false,
         }
     }

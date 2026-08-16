@@ -12,6 +12,7 @@ use crate::{
     layout::{Axis, FrameSides, LayoutNode, parse_layout},
     module::ChromeStyle,
     registry::EndpointRegistry,
+    render::BuiltinEndpoints,
     resolve::load_module_graph,
     shader::ShaderCache,
     size::{
@@ -139,6 +140,9 @@ pub fn compile(
     skin: &SkinDoc,
     config: &UiConfig,
 ) -> Result<CompiledUi, UiDocError> {
+    // Over the application's own declarations, so a document may bind to what
+    // the host answers for itself without every application registering it.
+    let endpoints = &BuiltinEndpoints::new(endpoints);
     let loaded = resolver.load(None, entry)?;
     let bytes = loaded.text.len();
     if bytes > config.limits.max_bytes {

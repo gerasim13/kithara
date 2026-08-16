@@ -38,7 +38,7 @@ mod host {
         /// either draws nothing rather than half of itself.
         fn data(&self, read: Reading<'_>) -> Option<ReadoutData> {
             Some(ReadoutData {
-                label: read.ui.resolve(self.label?).to_owned(),
+                label: read.ctx.ui.resolve(self.label?).to_owned(),
                 value: match read.value? {
                     ReadValue::Text(value) => (*value).to_owned(),
                     ReadValue::Scalar(value) => format!("{value:.2}"),

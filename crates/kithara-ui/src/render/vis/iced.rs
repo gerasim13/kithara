@@ -6,10 +6,10 @@ use iced::{
 };
 
 use super::{SHADER, Uniforms, VisFrame};
-use crate::render::{ReadValue, Reads, UiEvent};
+use crate::render::{ReadValue, UiEvent, document::Ctx};
 
-pub(crate) fn view<'a>(preset: Option<&ReadValue<'_>>, reads: &dyn Reads) -> Element<'a, UiEvent> {
-    let Some(frame) = VisFrame::read(preset.copied(), reads) else {
+pub(crate) fn view<'a>(preset: Option<&ReadValue<'_>>, ctx: Ctx<'_, '_>) -> Element<'a, UiEvent> {
+    let Some(frame) = VisFrame::read(preset.copied(), &ctx) else {
         return Space::new().into();
     };
     shader::Shader::new(Program(frame))

@@ -14,7 +14,7 @@ use kithara_ui::{
     registry::{EndpointCategory, EndpointDesc, ValueKind},
     render::{
         InputOwner, Reads,
-        document::{Group, Host, Module, Popover, render},
+        document::{Clock, Ctx, Group, Host, Module, Popover, render},
     },
     size::SizeSpec,
     source::UiConfig,
@@ -235,9 +235,7 @@ fn mounted_wave(module: &str, source: &str, layout: &str, studio: bool) -> Vec<M
 
     render(
         &ui.root,
-        &ui,
-        &EmptyReads,
-        builtin::skin_doc(),
+        Ctx::new(&ui, &EmptyReads, builtin::skin_doc(), Clock::default()),
         WaveHost::new(&ui),
     )
 }

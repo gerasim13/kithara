@@ -31,8 +31,9 @@ mod host {
     use crate::{
         atoms::bar::preset::{Preset as Face, PresetData, PresetItem},
         render::{
-            ReadValue, Reads, Skin, UiEvent,
+            ReadValue, Skin, UiEvent,
             controls::{Draws, Grip, IndexEvent, Reading},
+            document::Ctx,
         },
     };
 
@@ -44,7 +45,7 @@ mod host {
         }
 
         fn data(&self, read: Reading<'_>) -> Option<PresetData> {
-            Some(Self::snapshot(read.reads))
+            Some(Self::snapshot(read.ctx))
         }
 
         fn grip(&self, _skin: &Skin, data: &PresetData) -> Grip {
@@ -64,15 +65,15 @@ mod host {
     }
 
     impl Preset {
-        pub(crate) fn snapshot(reads: &dyn Reads) -> PresetData {
+        pub(crate) fn snapshot(ctx: Ctx<'_, '_>) -> PresetData {
             let items = &ITEMS;
-            let active = active(items, reads);
+            let active = active(items, ctx);
             PresetData { active, items }
         }
     }
 
-    fn active(items: &[PresetItem], reads: &dyn Reads) -> Option<usize> {
-        let Some(ReadValue::Text(name)) = reads.get("ui.preset") else {
+    fn active(items: &[PresetItem], ctx: Ctx<'_, '_>) -> Option<usize> {
+        let Some(ReadValue::Text(name)) = ctx.get("ui.preset") else {
             return None;
         };
         items.iter().position(|item| item.name == name)
@@ -85,8 +86,8 @@ mod host {
     }
 
     #[cfg(feature = "masonry")]
-    fn refresh(data: &mut PresetData, reads: &dyn Reads) -> bool {
-        let active = active(data.items, reads);
+    fn refresh(data: &mut PresetData, ctx: Ctx<'_, '_>) -> bool {
+        let active = active(data.items, ctx);
         std::mem::replace(&mut data.active, active) != active
     }
 
@@ -95,7 +96,10 @@ mod host {
         use kithara_test_utils::kithara;
 
         use super::*;
-        use crate::builtin;
+        use crate::{
+            builtin,
+            render::{Reads, document::probe},
+        };
 
         struct PresetReads(Option<ReadValue<'static>>);
 
@@ -111,8 +115,9 @@ mod host {
 
         #[kithara::test]
         fn data_keeps_the_canonical_inventory_and_reads_the_active_name() {
-            let data =
-                Preset::snapshot(&PresetReads(Some(ReadValue::Text(builtin::PLAYER_PRESET))));
+            let data = Preset::snapshot(probe(&PresetReads(Some(ReadValue::Text(
+                builtin::PLAYER_PRESET,
+            )))));
 
             assert_eq!(data.items.len(), 2);
             assert_eq!(data.items[0].label, "MICRO");
@@ -129,13 +134,13 @@ mod host {
                 PresetReads(Some(ReadValue::Bool(true))),
                 PresetReads(Some(ReadValue::Text("unknown.klayout.ron"))),
             ] {
-                assert_eq!(Preset::snapshot(&reads).active, None);
+                assert_eq!(Preset::snapshot(probe(&reads)).active, None);
             }
         }
 
         #[kithara::test]
         fn selection_reads_the_name_from_the_same_data_item() {
-            let data = Preset::snapshot(&PresetReads(None));
+            let data = Preset::snapshot(probe(&PresetReads(None)));
 
             assert_eq!(
                 select(&data, 0),

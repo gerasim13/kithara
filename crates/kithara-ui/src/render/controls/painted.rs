@@ -738,6 +738,7 @@ mod tests {
         render::{
             Icon, ReadValue, Reads, StereoLevels,
             controls::{Draws, Grip},
+            document::probe,
             masonry::{HostAction, MasonryControl, Painted},
         },
         skin::ColorRole,
@@ -758,7 +759,7 @@ mod tests {
     }
 
     fn preset_data(active: Option<usize>) -> PresetData {
-        let mut data = mount::Preset::snapshot(&NoReads);
+        let mut data = mount::Preset::snapshot(probe(&NoReads));
         data.active = active;
         data
     }
@@ -1372,7 +1373,7 @@ mod indexed {
         builtin,
         interact::{PointerOwnership, PointerPhase},
         mount,
-        render::{ControlAction, ReadValue, Reads, controls::Draws},
+        render::{ControlAction, ReadValue, Reads, controls::Draws, document::probe},
     };
 
     #[derive(Clone, Copy)]
@@ -1402,7 +1403,7 @@ mod indexed {
             }
         }
 
-        mount::Preset::snapshot(&NoReads)
+        mount::Preset::snapshot(probe(&NoReads))
     }
 
     fn skin() -> Skin {

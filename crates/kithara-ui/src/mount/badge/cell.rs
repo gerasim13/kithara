@@ -36,7 +36,9 @@ mod host {
         fn data(&self, read: Reading<'_>) -> Option<CellData> {
             Some(CellData {
                 highlighted: self.highlighted,
-                label: self.label.map(|label| read.ui.resolve(label).to_owned()),
+                label: self
+                    .label
+                    .map(|label| read.ctx.ui.resolve(label).to_owned()),
             })
         }
     }

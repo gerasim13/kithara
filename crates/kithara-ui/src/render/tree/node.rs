@@ -7,7 +7,7 @@ use super::{
     control::{Placed, render_control},
     flex::Flex,
     geometry::{Rendered, apply_size, bordered, filled, length_for, padding},
-    host, read_flag,
+    host,
 };
 #[cfg(test)]
 use crate::compile::CompiledNode;
@@ -19,25 +19,24 @@ use crate::{
     layout::Axis,
     module::TextAlign,
     render::{
-        Anchored, ControlAction, DropZone, InputOwner, ModuleChrome, Placement, Reads, Skin,
-        UiEvent, WheelSurface, Widget,
+        Anchored, ControlAction, DropZone, InputOwner, ModuleChrome, Placement, Skin, UiEvent,
+        WheelSurface, Widget,
         document::{
-            Group, Host as DocumentHost, Module as DocumentModule, Popover as DocumentPopover,
+            Ctx, Group, Host as DocumentHost, Module as DocumentModule, Popover as DocumentPopover,
         },
         window_layers,
     },
     size::{Dim, SizeSpec},
 };
 
-pub(super) struct IcedHost<'a, 'reads> {
-    ui: &'a CompiledUi,
-    reads: &'reads dyn Reads,
+pub(super) struct IcedHost<'a, 'r> {
+    ctx: Ctx<'a, 'r>,
     skin: &'a Skin,
 }
 
-impl<'a, 'reads> IcedHost<'a, 'reads> {
-    pub(super) const fn new(ui: &'a CompiledUi, reads: &'reads dyn Reads, skin: &'a Skin) -> Self {
-        Self { ui, reads, skin }
+impl<'a, 'r> IcedHost<'a, 'r> {
+    pub(super) const fn new(ctx: Ctx<'a, 'r>, skin: &'a Skin) -> Self {
+        Self { ctx, skin }
     }
 }
 
@@ -74,20 +73,20 @@ impl<'a> DocumentHost for IcedHost<'a, '_> {
         mut module: DocumentModule<'_>,
         content: Option<Self::Output>,
     ) -> Self::Output {
-        let instance = self.ui.resolve(module.instance());
-        let module_name = self.ui.resolve(module.module());
+        let instance = self.ctx.ui.resolve(module.instance());
+        let module_name = self.ctx.ui.resolve(module.module());
         let content = content.unwrap_or_else(|| Space::new().into());
         let chrome_hosted = module.chrome_hosted();
         let child = ModuleChrome::builder()
             .content(content)
             .module(module_name)
-            .maybe_title(module.title().map(|id| self.ui.resolve(id)))
-            .maybe_chip(module.chip().map(|id| self.ui.resolve(id)))
+            .maybe_title(module.title().map(|id| self.ctx.ui.resolve(id)))
+            .maybe_chip(module.chip().map(|id| self.ctx.ui.resolve(id)))
             .assign(
                 module
                     .assign()
                     .iter()
-                    .map(|id| self.ui.resolve(*id))
+                    .map(|id| self.ctx.ui.resolve(*id))
                     .collect(),
             )
             .style(module.chrome())
@@ -102,7 +101,7 @@ impl<'a> DocumentHost for IcedHost<'a, '_> {
             .maybe_drop(
                 module
                     .drop()
-                    .map(|drop| DropZone::new(read_flag(Some(&drop.read), self.reads, self.ui))),
+                    .map(|drop| DropZone::new(self.ctx.flag(Some(&drop.read)))),
             )
             .collapsed(module.collapsed())
             .skin(self.skin)
@@ -167,7 +166,7 @@ impl<'a> DocumentHost for IcedHost<'a, '_> {
             ),
             group.surface(),
             size,
-            self.ui,
+            self.ctx.ui,
         );
         apply_size(Rendered::leading(element), group.size())
     }
@@ -187,7 +186,10 @@ impl<'a> DocumentHost for IcedHost<'a, '_> {
                 at: popover.at(),
                 align: popover.align(),
             },
-            crate::render::control_event(self.ui.resolve(popover.path()), ControlAction::Activate),
+            crate::render::control_event(
+                self.ctx.ui.resolve(popover.path()),
+                ControlAction::Activate,
+            ),
             self.skin,
         )
         .into();
@@ -200,7 +202,7 @@ impl<'a> DocumentHost for IcedHost<'a, '_> {
         child: Self::Output,
         size: Option<SizeSpec>,
     ) -> Self::Output {
-        let path = self.ui.resolve(path);
+        let path = self.ctx.ui.resolve(path);
         let element = mouse_area(child)
             .on_press(crate::render::control_event(path, ControlAction::Activate))
             .on_right_press(crate::render::control_event(
@@ -265,8 +267,7 @@ impl<'a> DocumentHost for IcedHost<'a, '_> {
                 path,
                 spec,
                 read,
-                self.ui,
-                self.reads,
+                self.ctx,
                 self.skin,
                 Placed { owner, transform },
             ),
@@ -275,7 +276,7 @@ impl<'a> DocumentHost for IcedHost<'a, '_> {
     }
 
     fn hosted(&mut self, node: &ExpandedNode, child: Self::Output) -> Self::Output {
-        host::host(child, node, self.ui, self.reads, self.skin)
+        host::host(child, node, self.ctx, self.skin)
     }
 
     fn window(
@@ -338,17 +339,10 @@ const fn column_alignment(align: TextAlign) -> Alignment {
 #[cfg(test)]
 pub(super) fn render_compiled<'a>(
     node: &CompiledNode,
-    ui: &'a CompiledUi,
-    reads: &dyn Reads,
+    ctx: Ctx<'a, '_>,
     skin: &'a Skin,
 ) -> Element<'a, UiEvent> {
-    crate::render::document::render(
-        node,
-        ui,
-        reads,
-        skin.document(),
-        IcedHost::new(ui, reads, skin),
-    )
+    crate::render::document::render(node, ctx, IcedHost::new(ctx, skin))
 }
 
 #[cfg(test)]
@@ -356,17 +350,14 @@ pub(super) fn render_engine_node<'a>(
     node: &ExpandedNode,
     address: &[usize],
     owner: InternId,
-    ui: &'a CompiledUi,
-    reads: &dyn Reads,
+    ctx: Ctx<'a, '_>,
     skin: &'a Skin,
 ) -> Element<'a, UiEvent> {
     crate::render::document::render_engine_subtree(
         node,
         address,
         owner,
-        ui,
-        reads,
-        skin.document(),
-        IcedHost::new(ui, reads, skin),
+        ctx,
+        IcedHost::new(ctx, skin),
     )
 }

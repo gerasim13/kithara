@@ -22,7 +22,7 @@ use kithara_ui::{
     ids::SourceUri,
     module::ChromeStyle,
     render::{
-        ReadValue, Reads, Skin, StereoLevels, TableCell, TableRow, WaveBucket, WaveformView,
+        Clock, ReadValue, Reads, Skin, StereoLevels, TableCell, TableRow, WaveBucket, WaveformView,
         fonts::{FONT_BYTES, SANS},
         tree,
     },
@@ -264,7 +264,7 @@ fn dump(
     renderer: &iced::Renderer,
     viewport: Size,
 ) -> String {
-    let mut element = tree::render(&ui.root, ui, reads, skin);
+    let mut element = tree::render(&ui.root, ui, reads, skin, Clock::default());
     let mut tree = Tree::new(element.as_widget());
     let node =
         element

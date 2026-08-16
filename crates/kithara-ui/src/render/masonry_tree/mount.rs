@@ -20,7 +20,6 @@ use crate::{
     render::{
         ControlsProgram, HostedControlPlan, InputOwner, ReadValue, Skin, TitleProgram,
         controls::{Draws, Reading},
-        document::read::{read_scope, resolve},
     },
     size::{Dim, SizeSpec, control_size},
     solve,
@@ -126,7 +125,7 @@ impl NodeControl for mount::TitleBar {
     {
         host.add_window_layer(
             output,
-            TitleProgram::new(host.ui.resolve(self.label), host.skin),
+            TitleProgram::new(host.ctx.ui.resolve(self.label), host.skin),
         );
     }
 }
@@ -185,13 +184,11 @@ impl NodeControl for mount::Vis {
     where
         A: std::fmt::Debug + Send + 'static,
     {
-        let value = cx
-            .read
-            .and_then(|binding| resolve(host.reads, binding, host.ui));
+        let value = cx.read.and_then(|binding| host.ctx.read(binding));
         let preset = cx
             .read
             .filter(|binding| binding.kind != BindingKind::Command)
-            .map(|binding| host.ui.resolve(binding.key).to_owned());
+            .map(|binding| host.ctx.ui.resolve(binding.key).to_owned());
         host.vis_leaf(preset, value, cx.declared)
     }
 }
@@ -293,12 +290,15 @@ impl NodeControl for mount::Text<'_> {
     {
         let content = cx
             .read
-            .and_then(|binding| resolve(host.reads, binding, host.ui))
+            .and_then(|binding| host.ctx.read(binding))
             .and_then(|value| match value {
                 ReadValue::Text(value) => Some(value.to_owned()),
                 _ => None,
             })
-            .or_else(|| self.label.map(|label| host.ui.resolve(label).to_owned()))
+            .or_else(|| {
+                self.label
+                    .map(|label| host.ctx.ui.resolve(label).to_owned())
+            })
             .unwrap_or_default();
         host.text_leaf(self, content, host.reads_true(self.active), cx.declared)
     }
@@ -752,13 +752,10 @@ where
     Control::Painter: Retained + 'static,
     A: std::fmt::Debug + Send + 'static,
 {
-    let value = cx
-        .read
-        .and_then(|binding| resolve(host.reads, binding, host.ui));
+    let value = cx.read.and_then(|binding| host.ctx.read(binding));
     let reading = Reading {
-        reads: host.reads,
-        scope: read_scope(cx.read, host.ui),
-        ui: host.ui,
+        ctx: host.ctx,
+        scope: host.ctx.scope(cx.read),
         value: value.as_ref(),
     };
     let Some(data) = control.data(reading) else {
@@ -772,7 +769,7 @@ where
         control.painter(host.skin),
         data,
         host.skin,
-        host.ui.draw_pools(),
+        host.ctx.ui.draw_pools(),
     );
     let leaf = if let Some(refresh) = refresh {
         leaf.refreshing(refresh)

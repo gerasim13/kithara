@@ -43,7 +43,7 @@ mod host {
 
     /// One of the deck's own scoped readings, or the start of the track.
     fn seconds(read: Reading<'_>, endpoint: &str) -> f64 {
-        match read.reads.get(&derived(endpoint, read.scope)) {
+        match read.ctx.get(&derived(endpoint, read.scope)) {
             Some(ReadValue::Scalar(value)) => value,
             _ => 0.0,
         }

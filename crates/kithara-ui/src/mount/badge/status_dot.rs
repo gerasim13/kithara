@@ -28,7 +28,6 @@ mod host {
         render::{
             ReadValue, Skin,
             controls::{Draws, Reading},
-            document::read::resolve,
         },
     };
 
@@ -42,12 +41,9 @@ mod host {
         fn data(&self, read: Reading<'_>) -> Option<StatusDotData> {
             Some(StatusDotData {
                 active: self.active.is_some_and(|binding| {
-                    matches!(
-                        resolve(read.reads, binding, read.ui),
-                        Some(ReadValue::Bool(true))
-                    )
+                    matches!(read.ctx.read(binding), Some(ReadValue::Bool(true)))
                 }),
-                label: read.ui.resolve(self.label).to_owned(),
+                label: read.ctx.ui.resolve(self.label).to_owned(),
             })
         }
     }

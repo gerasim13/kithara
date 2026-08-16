@@ -51,7 +51,6 @@ mod host {
         render::{
             Icon, ReadValue, Skin,
             controls::{Draws, Reading},
-            document::read::resolve,
             document_icon,
         },
         skin::ColorRole,
@@ -79,10 +78,7 @@ mod host {
         fn data(&self, read: Reading<'_>) -> Option<GlyphData> {
             Some(GlyphData {
                 active: self.active.is_some_and(|binding| {
-                    matches!(
-                        resolve(read.reads, binding, read.ui),
-                        Some(ReadValue::Bool(true))
-                    )
+                    matches!(read.ctx.read(binding), Some(ReadValue::Bool(true)))
                 }),
                 active_mark: self.active_icon.map(document_icon).and_then(Icon::mark),
                 mark: document_icon(self.icon).mark()?,

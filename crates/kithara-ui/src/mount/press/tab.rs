@@ -51,7 +51,7 @@ mod host {
             };
             Some(Labelled {
                 active: *active,
-                label: read.ui.resolve(self.label).to_owned(),
+                label: read.ctx.ui.resolve(self.label).to_owned(),
             })
         }
 

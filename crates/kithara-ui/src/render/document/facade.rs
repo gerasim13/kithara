@@ -1,9 +1,6 @@
 use num_traits::cast::AsPrimitive;
 
-use super::{
-    Group, Host, Module, Popover,
-    read::{read_flag, resolve},
-};
+use super::{Ctx, Group, Host, Module, Popover};
 use crate::{
     compile::{CompiledNode, CompiledUi},
     draw::Transform,
@@ -11,7 +8,7 @@ use crate::{
     ids::InternId,
     layout::{Axis, FrameSides},
     module::{ChromeStyle, Motion, PopoverAlign, PopoverAt, Pose, TextAlign},
-    render::{InputOwner, ReadValue, Reads},
+    render::{InputOwner, ReadValue},
     size::{
         Dim, Hidden, SizeSpec, compiled_node_size_with_hidden, effective_size, is_hidden,
         visible_compiled_children,
@@ -49,19 +46,12 @@ const HOSTED_MODULES: [&str; 21] = [
 /// composition are toolkit-neutral. `host` mounts each already-traversed node
 /// into its local layout, paint, and interaction vocabulary.
 #[must_use]
-pub fn render<H>(
-    node: &CompiledNode,
-    ui: &CompiledUi,
-    reads: &dyn Reads,
-    skin: &SkinDoc,
-    mut host: H,
-) -> H::Output
+pub fn render<H>(node: &CompiledNode, ctx: Ctx<'_, '_>, mut host: H) -> H::Output
 where
     H: Host,
 {
-    let walk = Walk { ui, reads, skin };
-    let content = compiled(node, walk, &mut host);
-    host.window(content, dragged_label(ui, reads), ui.resize_edges)
+    let content = compiled(node, ctx, &mut host);
+    host.window(content, dragged_label(ctx), ctx.ui.resize_edges)
 }
 
 #[cfg(test)]
@@ -69,40 +59,37 @@ pub(crate) fn render_engine_subtree<H>(
     node: &ExpandedNode,
     address: &[usize],
     owner: InternId,
-    ui: &CompiledUi,
-    reads: &dyn Reads,
-    skin: &SkinDoc,
+    ctx: Ctx<'_, '_>,
     mut host: H,
 ) -> H::Output
 where
     H: Host,
 {
-    let walk = Walk { ui, reads, skin };
     expanded(
         node,
         address,
-        Context {
+        Branch {
             owner,
             input_owner: InputOwner::Engine,
             transform: Transform::IDENTITY,
         },
-        walk,
+        ctx,
         &mut host,
     )
 }
 
-fn compiled<H>(node: &CompiledNode, walk: Walk<'_>, host: &mut H) -> H::Output
+fn compiled<H>(node: &CompiledNode, ctx: Ctx<'_, '_>, host: &mut H) -> H::Output
 where
     H: Host,
 {
-    let hidden: Hidden<'_> = &|block| read_flag(Some(&block.hidden), walk.reads, walk.ui);
+    let hidden: Hidden<'_> = &|block| ctx.flag(Some(&block.hidden));
     match node {
-        CompiledNode::Optional { child, .. } => compiled(child, walk, host),
+        CompiledNode::Optional { child, .. } => compiled(child, ctx, host),
         CompiledNode::Split { axis, children, .. } => {
             let mut mounted = Vec::with_capacity(children.len());
             for (weight, child) in visible_compiled_children(children, hidden) {
-                let size = compiled_node_size_with_hidden(child, walk.skin, hidden);
-                let output = compiled(child, walk, host);
+                let size = compiled_node_size_with_hidden(child, ctx.skin, hidden);
+                let output = compiled(child, ctx, host);
                 mounted.push((weight, size, output));
             }
             host.split(*axis, mounted)
@@ -124,23 +111,23 @@ where
         } => {
             let collapsed = *chrome == ChromeStyle::Full
                 && matches!(
-                    walk.reads.get(walk.ui.resolve(*collapsed)),
+                    ctx.get(ctx.ui.resolve(*collapsed)),
                     Some(ReadValue::Bool(true))
                 );
             let footer = footer
                 .as_ref()
-                .and_then(|binding| resolve(walk.reads, binding, walk.ui))
+                .and_then(|binding| ctx.read(binding))
                 .and_then(|value| match value {
                     ReadValue::Text(text) => Some(text.to_owned()),
                     _ => None,
                 });
-            let content_hosted = HOSTED_MODULES.contains(&walk.ui.resolve(*module));
+            let content_hosted = HOSTED_MODULES.contains(&ctx.ui.resolve(*module));
             let chrome_hosted = *chrome == ChromeStyle::Full || drop.is_some();
             let content = (!collapsed).then(|| {
                 let child = expanded(
                     root,
                     &[],
-                    Context {
+                    Branch {
                         owner: *instance,
                         input_owner: if content_hosted {
                             InputOwner::Engine
@@ -151,7 +138,7 @@ where
                         // can pose what it draws.
                         transform: Transform::IDENTITY,
                     },
-                    walk,
+                    ctx,
                     host,
                 );
                 if content_hosted {
@@ -182,18 +169,11 @@ where
 }
 
 #[derive(Clone, Copy)]
-struct Context {
+struct Branch {
     owner: InternId,
     input_owner: InputOwner,
     /// Every enclosing object's pose, composed and resolved for this frame.
     transform: Transform,
-}
-
-#[derive(Clone, Copy)]
-struct Walk<'a> {
-    ui: &'a CompiledUi,
-    reads: &'a dyn Reads,
-    skin: &'a SkinDoc,
 }
 
 #[derive(Clone, Copy)]
@@ -224,9 +204,9 @@ struct RowNode<'a> {
     size: Option<SizeSpec>,
 }
 
-fn row_group<'a>(node: RowNode<'a>, walk: Walk<'_>) -> Group<'a> {
-    let active = read_flag(node.active, walk.reads, walk.ui);
-    let padding = node.pad.unwrap_or(walk.skin.layout.grid_pad);
+fn row_group<'a>(node: RowNode<'a>, ctx: Ctx<'_, '_>) -> Group<'a> {
+    let active = ctx.flag(node.active);
+    let padding = node.pad.unwrap_or(ctx.skin.layout.grid_pad);
     let background = active
         .then_some(node.active_background)
         .flatten()
@@ -235,18 +215,18 @@ fn row_group<'a>(node: RowNode<'a>, walk: Walk<'_>) -> Group<'a> {
         .then_some(node.active_frame_color)
         .flatten()
         .or(node.frame_color)
-        .unwrap_or(walk.skin.divider.color);
+        .unwrap_or(ctx.skin.divider.color);
     Group {
         axis: Axis::Horizontal,
         alignment: TextAlign::Center,
-        gap: node.gap.unwrap_or(walk.skin.layout.grid_gap),
+        gap: node.gap.unwrap_or(ctx.skin.layout.grid_gap),
         padding_x: node.pad_x.unwrap_or(padding),
         padding_y: node.pad_y.unwrap_or(padding),
         frame: node.frame,
         background,
         background_alpha: node.background_alpha,
         frame_color,
-        frame_width: walk.skin.divider.width,
+        frame_width: ctx.skin.divider.width,
         surface: node.surface,
         size: node.size,
     }
@@ -259,44 +239,44 @@ fn row_group<'a>(node: RowNode<'a>, walk: Walk<'_>) -> Group<'a> {
 fn expanded<H>(
     node: &ExpandedNode,
     address: &[usize],
-    context: Context,
-    walk: Walk<'_>,
+    branch: Branch,
+    ctx: Ctx<'_, '_>,
     host: &mut H,
 ) -> H::Output
 where
     H: Host,
 {
-    if context.input_owner == InputOwner::Leaf && hosts_engine(walk.ui, context.owner, address) {
+    if branch.input_owner == InputOwner::Leaf && hosts_engine(ctx.ui, branch.owner, address) {
         let child = expanded(
             node,
             address,
-            Context {
+            Branch {
                 input_owner: InputOwner::Engine,
-                ..context
+                ..branch
             },
-            walk,
+            ctx,
             host,
         );
         return host.hosted(node, child);
     }
-    mounted(node, address, context, walk, host)
+    mounted(node, address, branch, ctx, host)
 }
 
 /// How one node becomes host output, once the engine question is settled.
 fn mounted<H>(
     node: &ExpandedNode,
     address: &[usize],
-    context: Context,
-    walk: Walk<'_>,
+    branch: Branch,
+    ctx: Ctx<'_, '_>,
     host: &mut H,
 ) -> H::Output
 where
     H: Host,
 {
-    let hidden: Hidden<'_> = &|block| read_flag(Some(&block.hidden), walk.reads, walk.ui);
+    let hidden: Hidden<'_> = &|block| ctx.flag(Some(&block.hidden));
     match node {
         ExpandedNode::Optional { child, .. } => {
-            expanded(child, &child_address(address, 0), context, walk, host)
+            expanded(child, &child_address(address, 0), branch, ctx, host)
         }
         ExpandedNode::Row {
             children,
@@ -328,15 +308,15 @@ where
                     frame_color: *frame_color,
                     active_frame_color: *active_frame_color,
                     surface: surface.as_ref(),
-                    size: effective_size(node, walk.skin),
+                    size: effective_size(node, ctx.skin),
                 },
-                walk,
+                ctx,
             ),
             children,
             address,
-            context,
+            branch,
             hidden,
-            walk,
+            ctx,
             host,
         ),
         ExpandedNode::Column {
@@ -355,22 +335,22 @@ where
             Group {
                 axis: Axis::Vertical,
                 alignment: *align,
-                gap: gap.unwrap_or(walk.skin.layout.grid_gap),
-                padding_x: pad_x.unwrap_or(pad.unwrap_or(walk.skin.layout.grid_pad)),
-                padding_y: pad_y.unwrap_or(pad.unwrap_or(walk.skin.layout.grid_pad)),
+                gap: gap.unwrap_or(ctx.skin.layout.grid_gap),
+                padding_x: pad_x.unwrap_or(pad.unwrap_or(ctx.skin.layout.grid_pad)),
+                padding_y: pad_y.unwrap_or(pad.unwrap_or(ctx.skin.layout.grid_pad)),
                 frame: *frame,
                 background: *background,
                 background_alpha: *background_alpha,
-                frame_color: walk.skin.divider.color,
-                frame_width: walk.skin.divider.width,
+                frame_color: ctx.skin.divider.color,
+                frame_width: ctx.skin.divider.width,
                 surface: surface.as_ref(),
-                size: effective_size(node, walk.skin),
+                size: effective_size(node, ctx.skin),
             },
             children,
             address,
-            context,
+            branch,
             hidden,
-            walk,
+            ctx,
             host,
         ),
         ExpandedNode::Popover {
@@ -388,28 +368,28 @@ where
                 align: *align,
                 anchor,
                 content,
-                size: effective_size(node, walk.skin),
+                size: effective_size(node, ctx.skin),
             },
             address,
-            context,
-            walk,
+            branch,
+            ctx,
             host,
         ),
         ExpandedNode::Pressable { path, child, .. } => {
-            let child = expanded(child, &child_address(address, 0), context, walk, host);
-            host.pressable(*path, child, effective_size(node, walk.skin))
+            let child = expanded(child, &child_address(address, 0), branch, ctx, host);
+            host.pressable(*path, child, effective_size(node, ctx.skin))
         }
         ExpandedNode::Scroll { id, child, .. } => {
-            let child = expanded(child, &child_address(address, 0), context, walk, host);
-            host.scroll(*id, child, effective_size(node, walk.skin))
+            let child = expanded(child, &child_address(address, 0), branch, ctx, host);
+            host.scroll(*id, child, effective_size(node, ctx.skin))
         }
         ExpandedNode::Slot { children, .. } => {
-            let mounted = expanded_children(children, address, context, hidden, walk, host);
-            host.slot(mounted, effective_size(node, walk.skin))
+            let mounted = expanded_children(children, address, branch, hidden, ctx, host);
+            host.slot(mounted, effective_size(node, ctx.skin))
         }
         ExpandedNode::Stage { children, .. } => {
-            let mounted = expanded_children(children, address, context, hidden, walk, host);
-            host.stage(mounted, effective_size(node, walk.skin))
+            let mounted = expanded_children(children, address, branch, hidden, ctx, host);
+            host.stage(mounted, effective_size(node, ctx.skin))
         }
         ExpandedNode::Object {
             pose,
@@ -424,7 +404,7 @@ where
                 phase: phase.as_ref(),
                 motion: motion.as_ref(),
             };
-            mount_object(track, child, address, context, walk, host)
+            mount_object(track, child, address, branch, ctx, host)
         }
         ExpandedNode::Control {
             path, spec, read, ..
@@ -432,9 +412,9 @@ where
             *path,
             spec,
             read.as_ref(),
-            context.input_owner,
-            effective_size(node, walk.skin),
-            context.transform,
+            branch.input_owner,
+            effective_size(node, ctx.skin),
+            branch.transform,
         ),
     }
 }
@@ -442,24 +422,17 @@ where
 fn mount_popover<H>(
     node: PopoverNode<'_>,
     address: &[usize],
-    context: Context,
-    walk: Walk<'_>,
+    branch: Branch,
+    ctx: Ctx<'_, '_>,
     host: &mut H,
 ) -> H::Output
 where
     H: Host,
 {
-    let open = read_flag(Some(node.open), walk.reads, walk.ui);
-    let anchor = expanded(node.anchor, &child_address(address, 0), context, walk, host);
-    let content = open.then(|| {
-        expanded(
-            node.content,
-            &child_address(address, 1),
-            context,
-            walk,
-            host,
-        )
-    });
+    let open = ctx.flag(Some(node.open));
+    let anchor = expanded(node.anchor, &child_address(address, 0), branch, ctx, host);
+    let content =
+        open.then(|| expanded(node.content, &child_address(address, 1), branch, ctx, host));
     host.popover(
         Popover {
             path: node.path,
@@ -476,9 +449,9 @@ where
 fn expanded_children<H>(
     children: &[ExpandedNode],
     address: &[usize],
-    context: Context,
+    branch: Branch,
     hidden: Hidden<'_>,
-    walk: Walk<'_>,
+    ctx: Ctx<'_, '_>,
     host: &mut H,
 ) -> Vec<H::Output>
 where
@@ -488,7 +461,7 @@ where
         .iter()
         .enumerate()
         .filter(|(_, child)| !is_hidden(*child, hidden))
-        .map(|(index, child)| expanded(child, &child_address(address, index), context, walk, host))
+        .map(|(index, child)| expanded(child, &child_address(address, index), branch, ctx, host))
         .collect()
 }
 
@@ -496,16 +469,16 @@ fn mount_group<H>(
     group: Group<'_>,
     children: &[ExpandedNode],
     address: &[usize],
-    context: Context,
+    branch: Branch,
     hidden: Hidden<'_>,
-    walk: Walk<'_>,
+    ctx: Ctx<'_, '_>,
     host: &mut H,
 ) -> H::Output
 where
     H: Host,
 {
     let children =
-        expanded_group_children(children, group.axis, address, context, hidden, walk, host);
+        expanded_group_children(children, group.axis, address, branch, hidden, ctx, host);
     host.group(group, children)
 }
 
@@ -513,9 +486,9 @@ fn expanded_group_children<H>(
     children: &[ExpandedNode],
     axis: Axis,
     address: &[usize],
-    context: Context,
+    branch: Branch,
     hidden: Hidden<'_>,
-    walk: Walk<'_>,
+    ctx: Ctx<'_, '_>,
     host: &mut H,
 ) -> Vec<(Option<f32>, H::Output)>
 where
@@ -526,8 +499,8 @@ where
         .enumerate()
         .filter(|(_, child)| !is_hidden(*child, hidden))
         .map(|(index, child)| {
-            let minimum = main_minimum(child, axis, walk.skin);
-            let output = expanded(child, &child_address(address, index), context, walk, host);
+            let minimum = main_minimum(child, axis, ctx.skin);
+            let output = expanded(child, &child_address(address, index), branch, ctx, host);
             (minimum, output)
         })
         .collect()
@@ -549,12 +522,12 @@ impl Track<'_> {
     /// next; a motion works the same scalar out from the seconds its clock
     /// hands over. An object with no track, or one nobody drives, sits at the
     /// pose the document wrote down and stays there.
-    fn resolve(self, walk: Walk<'_>) -> Pose {
+    fn resolve(self, ctx: Ctx<'_, '_>) -> Pose {
         // Validation refuses an object carrying both, so nothing is chosen
         // between here; one that somehow held both would sit still.
         let along = match (self.phase, self.motion) {
-            (Some(phase), None) => scalar(walk, phase),
-            (None, Some(motion)) => scalar(walk, &motion.clock).map(|at| motion.phase_at(at)),
+            (Some(phase), None) => scalar(ctx, phase),
+            (None, Some(motion)) => scalar(ctx, &motion.clock).map(|at| motion.phase_at(at)),
             (None, None) | (Some(_), Some(_)) => None,
         };
         match (self.to, along) {
@@ -565,8 +538,8 @@ impl Track<'_> {
 }
 
 /// One scalar an endpoint answers with, or nothing when it answers otherwise.
-fn scalar(walk: Walk<'_>, binding: &Binding) -> Option<f32> {
-    match resolve(walk.reads, binding, walk.ui)? {
+fn scalar(ctx: Ctx<'_, '_>, binding: &Binding) -> Option<f32> {
+    match ctx.read(binding)? {
         ReadValue::Scalar(value) => Some(value.as_()),
         _ => None,
     }
@@ -580,22 +553,22 @@ fn mount_object<H>(
     track: Track<'_>,
     child: &ExpandedNode,
     address: &[usize],
-    context: Context,
-    walk: Walk<'_>,
+    branch: Branch,
+    ctx: Ctx<'_, '_>,
     host: &mut H,
 ) -> H::Output
 where
     H: Host,
 {
-    let here = track.resolve(walk);
+    let here = track.resolve(ctx);
     expanded(
         child,
         &child_address(address, 0),
-        Context {
-            transform: here.matrix().then(context.transform),
-            ..context
+        Branch {
+            transform: here.matrix().then(branch.transform),
+            ..branch
         },
-        walk,
+        ctx,
         host,
     )
 }
@@ -625,9 +598,9 @@ fn hosts_engine(ui: &CompiledUi, owner: InternId, address: &[usize]) -> bool {
         .any(|module| ui.includes_module(owner, address, module))
 }
 
-fn dragged_label(ui: &CompiledUi, reads: &dyn Reads) -> Option<String> {
-    let binding = ui.dragged.as_ref()?;
-    match resolve(reads, binding, ui)? {
+fn dragged_label(ctx: Ctx<'_, '_>) -> Option<String> {
+    let binding = ctx.ui.dragged.as_ref()?;
+    match ctx.read(binding)? {
         ReadValue::Text(label) if !label.is_empty() => Some(label.to_owned()),
         _ => None,
     }

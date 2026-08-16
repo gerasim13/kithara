@@ -225,7 +225,7 @@ mod tests {
         builtin,
         draw::{DrawCmd, DrawList, DrawListBuilder, Geom, Paint, Pt, Rect},
         mount,
-        render::{ReadValue, Reads},
+        render::{ReadValue, Reads, document::probe},
         skin::{ColorRole, FontFamily, TextRoleSkin},
         solve::{Length, Size},
         text::TextContext,
@@ -247,7 +247,7 @@ mod tests {
     }
 
     fn data(active: Option<usize>) -> PresetData {
-        let mut data = mount::Preset::snapshot(&NoReads);
+        let mut data = mount::Preset::snapshot(probe(&NoReads));
         data.active = active;
         data
     }

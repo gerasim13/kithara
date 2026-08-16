@@ -1,19 +1,18 @@
 use iced::{Element, widget::Space};
 
-use super::{mount::Cx, read_scope, resolve};
+use super::mount::Cx;
 use crate::{
     atoms::{
         bar::context::{Context, Viewed},
         table::{TableRowData, column_layouts},
     },
-    compile::CompiledUi,
     draw::Rect,
     expand::Binding,
     ids::InternId,
     module::TableColumn,
     render::{
-        InputOwner, ReadValue, Reads, Skin, Tree, UiEvent, Widget, controls::Paint, scope_picker,
-        vis,
+        InputOwner, ReadValue, Skin, Tree, UiEvent, Widget, controls::Paint, document::Ctx,
+        scope_picker, vis,
     },
     text::TextContext,
 };
@@ -32,32 +31,35 @@ pub(super) fn context_bar<'a>(
     let (scope_items, scope) = scope;
     let skin = cx.skin;
     if scope_items.is_empty() {
-        return Paint::pooled(painter, data, skin, cx.ui.draw_pools())
+        return Paint::pooled(painter, data, skin, cx.ctx.ui.draw_pools())
             .posed(cx.transform)
             .view();
     }
-    let scope_value = scope.and_then(|binding| resolve(cx.reads, binding, cx.ui));
+    let scope_value = scope.and_then(|binding| cx.ctx.read(binding));
     let mut text = TextContext::from(skin.text_resources());
     let Some(face) = painter.face(&mut text, &data) else {
-        return Paint::pooled(painter, data, skin, cx.ui.draw_pools())
+        return Paint::pooled(painter, data, skin, cx.ctx.ui.draw_pools())
             .posed(cx.transform)
             .view();
     };
     scope_picker(
         cx.path,
-        scope_items.iter().map(|id| cx.ui.resolve(*id)).collect(),
+        scope_items
+            .iter()
+            .map(|id| cx.ctx.ui.resolve(*id))
+            .collect(),
         scope_value.as_ref(),
         skin,
         cx.owner,
-        Paint::pooled(painter, data, skin, cx.ui.draw_pools())
+        Paint::pooled(painter, data, skin, cx.ctx.ui.draw_pools())
             .posed(cx.transform)
             .view(),
         move |bounds: Rect| Context::placed(face, bounds),
     )
 }
 
-pub(super) fn vis<'a>(value: Option<&ReadValue<'_>>, reads: &dyn Reads) -> Element<'a, UiEvent> {
-    vis::view(value, reads)
+pub(super) fn vis<'a>(value: Option<&ReadValue<'_>>, ctx: Ctx<'_, '_>) -> Element<'a, UiEvent> {
+    vis::view(value, ctx)
 }
 
 pub(super) fn table<'a>(
@@ -68,10 +70,10 @@ pub(super) fn table<'a>(
         return Space::new().into();
     };
     let (columns, columns_state) = columns;
-    let columns_scope = read_scope(columns_state, cx.ui);
-    let columns_state = columns_state.map(|binding| cx.ui.resolve(binding.id));
+    let columns_scope = cx.ctx.scope(columns_state);
+    let columns_state = columns_state.map(|binding| cx.ctx.ui.resolve(binding.id));
     let state = columns_state.map(|prefix| (prefix, columns_scope));
-    let columns = column_layouts(columns, cx.reads, state, cx.skin);
+    let columns = column_layouts(columns, &cx.ctx, state, cx.skin);
     let rows = rows.iter().map(TableRowData::from).collect();
     crate::render::table(cx.path, rows, columns, cx.skin, cx.owner)
 }
@@ -80,13 +82,12 @@ pub(super) fn tree<'a>(
     path: &'a str,
     query: Option<&Binding>,
     value: Option<&ReadValue<'_>>,
-    ui: &CompiledUi,
-    reads: &dyn Reads,
+    ctx: Ctx<'_, '_>,
     skin: &'a Skin,
     owner: InputOwner,
 ) -> Element<'a, UiEvent> {
     let query = query
-        .and_then(|binding| resolve(reads, binding, ui))
+        .and_then(|binding| ctx.read(binding))
         .and_then(|value| match value {
             ReadValue::Text(query) => Some(query),
             _ => None,

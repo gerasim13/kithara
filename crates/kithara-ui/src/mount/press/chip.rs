@@ -39,7 +39,7 @@ mod host {
         fn data(&self, read: Reading<'_>) -> Option<Labelled> {
             Some(Labelled {
                 active: matches!(read.value, Some(ReadValue::Bool(true))),
-                label: read.ui.resolve(self.label).to_owned(),
+                label: read.ctx.ui.resolve(self.label).to_owned(),
             })
         }
 

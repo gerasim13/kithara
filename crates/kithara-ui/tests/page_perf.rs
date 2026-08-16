@@ -634,8 +634,13 @@ impl Immediate {
         let bounds = Size::new(Consts::WIDTH, Consts::HEIGHT);
         let element = measure_block!(
             "iced.view",
-            self.app
-                .reads(|reads| tree::render(&self.ui.root, &self.ui, reads, builtin::skin()))
+            self.app.reads(|reads| tree::render(
+                &self.ui.root,
+                &self.ui,
+                reads,
+                builtin::skin(),
+                Clock::default()
+            ))
         );
         let mut interface = measure_block!(
             "iced.build",

@@ -1,8 +1,7 @@
 use super::{Grip, IndexEvent};
 use crate::{
     atoms::painter::ControlPainter,
-    compile::CompiledUi,
-    render::{ReadValue, Reads, Skin},
+    render::{ReadValue, Skin, document::Ctx},
 };
 
 /// A control that draws itself: one painter, and the value it paints.
@@ -39,13 +38,16 @@ pub(crate) trait Draws {
 }
 
 #[cfg(feature = "masonry")]
-pub(crate) type DataRefresh<Data> = Box<dyn Fn(&mut Data, &dyn Reads) -> bool>;
+pub(crate) type DataRefresh<Data> = Box<dyn Fn(&mut Data, Ctx<'_, '_>) -> bool>;
 
 /// What a control is handed when it decides what to draw.
+///
+/// Values are reached through [`Ctx`] and nowhere else, so a control cannot be
+/// written that quietly misses what the host answers for itself — the frame's
+/// own clock among it.
 #[derive(Clone, Copy)]
 pub(crate) struct Reading<'a> {
-    pub(crate) reads: &'a dyn Reads,
+    pub(crate) ctx: Ctx<'a, 'a>,
     pub(crate) scope: &'a str,
-    pub(crate) ui: &'a CompiledUi,
     pub(crate) value: Option<&'a ReadValue<'a>>,
 }

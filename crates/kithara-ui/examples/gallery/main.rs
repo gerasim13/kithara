@@ -14,7 +14,7 @@ use kithara_platform::time::Duration;
 use kithara_ui::{
     builtin,
     compile::{CompiledUi, compile},
-    render::{Skin, UiEvent, WindowCommand, fonts, tree},
+    render::{Clock, Skin, UiEvent, WindowCommand, fonts, tree},
     source::{MemResolver, UiConfig},
 };
 
@@ -41,6 +41,9 @@ enum Message {
 struct Gallery {
     skin: &'static Skin,
     window_id: window::Id,
+    /// This host's own reading of time, advanced by the same step the tick
+    /// subscription fires at, so a document bound to it moves with the page.
+    clock: Clock,
     reads: MockReads,
     layouts: [CompiledUi; Tab::ALL.len()],
     module_layouts: [CompiledUi; ModuleDemo::ALL.len()],
@@ -59,6 +62,7 @@ impl Gallery {
                 .map(|module| compiled(module.entry(), &resolver, &endpoints)),
             window_id: window::Id::unique(),
             skin: builtin::skin(),
+            clock: Clock::default(),
             reads: MockReads::default(),
             capture: None,
         }
@@ -125,6 +129,7 @@ impl Gallery {
                 module_layouts,
                 window_id,
                 skin: builtin::skin(),
+                clock: Clock::default(),
                 reads: MockReads::default(),
                 capture,
             },
@@ -200,6 +205,9 @@ fn update(state: &mut Gallery, message: Message) -> Task<Message> {
         Message::Close(id) if id == state.window_id => iced::exit(),
         Message::Close(id) => window::close(id),
         Message::Tick => {
+            state.clock = state
+                .clock
+                .advance(Duration::from_millis(Consts::STRESS_TICK_MS));
             state.reads.tick();
             Task::none()
         }
@@ -241,6 +249,7 @@ fn view(state: &Gallery, _window: window::Id) -> Element<'_, Message> {
         state.compiled(),
         &state.reads,
         state.skin,
+        state.clock,
     )
     .map(Message::Ui)
 }

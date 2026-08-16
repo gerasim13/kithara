@@ -700,7 +700,13 @@ impl FrameHost for Immediate {
 
     fn frame(&mut self) -> usize {
         let bounds = Size::new(f32::from(WIDTH), f32::from(HEIGHT));
-        let element = tree::render(&self.ui.root, &self.ui, self.reads.as_ref(), skin());
+        let element = tree::render(
+            &self.ui.root,
+            &self.ui,
+            self.reads.as_ref(),
+            skin(),
+            Clock::default(),
+        );
         let mut interface = UserInterface::build(
             element,
             bounds,
@@ -773,7 +779,7 @@ fn redraw_asked(state: &State) -> bool {
 /// the geometry measured here and each is made to prove it was hit.
 fn laid_out_rect(fixture: &Fixture, reads: &CensusReads, renderer: &iced::Renderer) -> Rect {
     let ui = fixture.compiled();
-    let mut element = tree::render(&ui.root, &ui, reads, skin());
+    let mut element = tree::render(&ui.root, &ui, reads, skin(), Clock::default());
     let mut tree = Tree::new(element.as_widget());
     let bounds = Size::new(f32::from(WIDTH), f32::from(HEIGHT));
     let node =

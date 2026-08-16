@@ -29,7 +29,6 @@ mod host {
         render::{
             Skin,
             controls::{Draws, Reading},
-            document::read::wave_zoom,
         },
     };
 
@@ -45,10 +44,10 @@ mod host {
         fn data(&self, read: Reading<'_>) -> Option<Drawn> {
             Some(Drawn::read(
                 self.style,
-                wave_zoom(self.zoom, read.reads, read.ui),
-                self.badge.map(|id| read.ui.resolve(id)),
+                read.ctx.wave_zoom(self.zoom),
+                self.badge.map(|id| read.ctx.ui.resolve(id)),
                 read.value,
-                read.reads,
+                &read.ctx,
                 read.scope,
             ))
         }
@@ -58,9 +57,9 @@ mod host {
             let scope = read.scope.to_owned();
             let zoom = self
                 .zoom
-                .map(|binding| read.ui.resolve(binding.key).to_owned());
-            Some(Box::new(move |data, reads| {
-                data.refresh(reads, &scope, zoom.as_deref())
+                .map(|binding| read.ctx.ui.resolve(binding.key).to_owned());
+            Some(Box::new(move |data, ctx| {
+                data.refresh(&ctx, &scope, zoom.as_deref())
             }))
         }
     }

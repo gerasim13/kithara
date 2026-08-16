@@ -3,17 +3,16 @@ use iced::{alignment::Horizontal, widget::Space};
 use super::{
     geometry::Rendered,
     panel::{context_bar, table, tree, vis},
-    read_flag,
     window::{titlebar, window_controls},
 };
 use crate::{
-    compile::CompiledUi,
     draw::Transform,
     module::TextAlign,
     mount,
     render::{
-        InputOwner, MiniWave, ReadValue, Reads, Skin, Text, Widget, WindowSurface,
+        InputOwner, MiniWave, ReadValue, Skin, Text, Widget, WindowSurface,
         controls::{Draws, Gesture, Paint, Reading},
+        document::Ctx,
         shader,
     },
 };
@@ -29,17 +28,16 @@ pub(super) trait ViewControl {
 
 /// What a control is handed when it mounts: the document it was read from, the
 /// value behind it, and who owns the pointer over it.
-pub(super) struct Cx<'a, 'reads, 'value> {
+pub(super) struct Cx<'a, 'ctx, 'value> {
     pub(super) owner: InputOwner,
     pub(super) path: &'a str,
-    pub(super) reads: &'reads dyn Reads,
+    pub(super) ctx: Ctx<'a, 'ctx>,
     pub(super) scope: &'a str,
     pub(super) skin: &'a Skin,
     /// Every enclosing object's pose, folded into the box this control paints
     /// into. Identity for a control no object wraps.
     pub(super) transform: Transform,
-    pub(super) ui: &'a CompiledUi,
-    pub(super) value: Option<&'value ReadValue<'reads>>,
+    pub(super) value: Option<&'value ReadValue<'ctx>>,
 }
 
 impl ViewControl for mount::Summary {
@@ -86,7 +84,7 @@ impl ViewControl for mount::Drag {
 
 impl ViewControl for mount::TitleBar {
     fn view<'a>(&self, cx: &Cx<'a, '_, '_>) -> Rendered<'a> {
-        Rendered::leading(titlebar(self.label, cx.ui, cx.skin))
+        Rendered::leading(titlebar(self.label, cx.ctx.ui, cx.skin))
     }
 }
 
@@ -102,10 +100,10 @@ impl ViewControl for mount::Text<'_> {
             Text::builder()
                 .style(self.style)
                 .maybe_value(cx.value)
-                .maybe_label(self.label.map(|id| cx.ui.resolve(id)))
+                .maybe_label(self.label.map(|id| cx.ctx.ui.resolve(id)))
                 .maybe_color(self.color)
                 .maybe_active_color(self.active_color)
-                .active(read_flag(self.active, cx.reads, cx.ui))
+                .active(cx.ctx.flag(self.active))
                 .skin(cx.skin)
                 .build()
                 .view(),
@@ -194,13 +192,13 @@ impl ViewControl for mount::Wave<'_> {
 
 impl ViewControl for mount::Vis {
     fn view<'a>(&self, cx: &Cx<'a, '_, '_>) -> Rendered<'a> {
-        Rendered::leading(vis(cx.value, cx.reads))
+        Rendered::leading(vis(cx.value, cx.ctx))
     }
 }
 
 impl ViewControl for mount::Shader<'_> {
     fn view<'a>(&self, cx: &Cx<'a, '_, '_>) -> Rendered<'a> {
-        Rendered::leading(shader::view(self.spec, cx.path, cx.reads, cx.ui))
+        Rendered::leading(shader::view(self.spec, cx.path, cx.ctx))
     }
 }
 
@@ -225,7 +223,7 @@ impl ViewControl for mount::Table<'_> {
 impl ViewControl for mount::Tree<'_> {
     fn view<'a>(&self, cx: &Cx<'a, '_, '_>) -> Rendered<'a> {
         Rendered::leading(tree(
-            cx.path, self.query, cx.value, cx.ui, cx.reads, cx.skin, cx.owner,
+            cx.path, self.query, cx.value, cx.ctx, cx.skin, cx.owner,
         ))
     }
 }
@@ -333,8 +331,13 @@ where
     };
     let grip = control.grip(cx.skin, &data);
     let index_event = control.index_event();
-    let paint = Paint::pooled(control.painter(cx.skin), data, cx.skin, cx.ui.draw_pools())
-        .posed(cx.transform);
+    let paint = Paint::pooled(
+        control.painter(cx.skin),
+        data,
+        cx.skin,
+        cx.ctx.ui.draw_pools(),
+    )
+    .posed(cx.transform);
     let element = if cx.owner == InputOwner::Leaf {
         Gesture::with_grip(cx.path, paint, grip, index_event)
             .map_or_else(Paint::view, Gesture::view)
@@ -346,15 +349,14 @@ where
 
 /// What a control is handed when it decides what to draw, from what this host
 /// was handed when it mounted one.
-fn reading<'a, 'reads, 'value>(cx: &'a Cx<'a, 'reads, 'value>) -> Reading<'a>
+fn reading<'a, 'ctx, 'value>(cx: &'a Cx<'a, 'ctx, 'value>) -> Reading<'a>
 where
-    'reads: 'a,
+    'ctx: 'a,
     'value: 'a,
 {
     Reading {
-        reads: cx.reads,
+        ctx: cx.ctx,
         scope: cx.scope,
-        ui: cx.ui,
         value: cx.value,
     }
 }

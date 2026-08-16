@@ -33,7 +33,7 @@ use crate::{
         },
     },
     layout::FrameSides,
-    render::{ReadValue, Reads, shader::ShaderDeclaration, vis::VisFrame},
+    render::{ReadValue, document::Ctx, shader::ShaderDeclaration, vis::VisFrame},
     solve,
 };
 
@@ -167,10 +167,8 @@ impl Node {
         self.layout.leaf().is_some_and(|leaf| leaf.set_read(value))
     }
 
-    pub(crate) fn refresh(&mut self, ui: &crate::compile::CompiledUi, reads: &dyn Reads) -> bool {
-        self.layout
-            .leaf()
-            .is_some_and(|leaf| leaf.refresh(ui, reads))
+    pub(crate) fn refresh(&mut self, ctx: Ctx<'_, '_>) -> bool {
+        self.layout.leaf().is_some_and(|leaf| leaf.refresh(ctx))
     }
 
     pub(crate) fn shader_declaration(&self) -> Option<ShaderDeclaration> {

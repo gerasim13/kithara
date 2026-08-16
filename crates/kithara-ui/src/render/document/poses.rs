@@ -1,15 +1,14 @@
 use std::collections::BTreeMap;
 
-use super::{Group, Host, Module, Popover, render};
+use super::{Ctx, Group, Host, Module, Popover, render};
 use crate::{
-    compile::{CompiledNode, CompiledUi},
+    compile::CompiledNode,
     draw::Transform,
     expand::{Binding, ControlSpec, ExpandedNode},
     ids::InternId,
     layout::Axis,
-    render::{InputOwner, Reads},
+    render::InputOwner,
     size::SizeSpec,
-    skin::SkinDoc,
 };
 
 /// Where this frame puts every control the document shows.
@@ -25,18 +24,13 @@ use crate::{
 /// used, not a second implementation of it, which is the whole reason it is a
 /// [`Host`] rather than a bespoke traversal.
 #[must_use]
-pub(crate) fn placements(
-    node: &CompiledNode,
-    ui: &CompiledUi,
-    reads: &dyn Reads,
-    skin: &SkinDoc,
-) -> BTreeMap<InternId, Transform> {
+pub(crate) fn placements(node: &CompiledNode, ctx: Ctx<'_, '_>) -> BTreeMap<InternId, Transform> {
     let mut poses = Poses {
         placed: BTreeMap::new(),
     };
     // This host mounts nothing, so the walk's own output is empty and what it
     // collected on the way is the answer.
-    let () = render(node, ui, reads, skin, &mut poses);
+    let () = render(node, ctx, &mut poses);
     poses.placed
 }
 

@@ -33,7 +33,7 @@ use crate::{
     },
     draw::{DrawList, Rect, Transform},
     interact::{CursorShape, Hit, Input, Outcome},
-    render::{ReadValue, Reads, StereoLevels},
+    render::{ReadValue, StereoLevels, document::Ctx},
 };
 
 /// One built-in control mounted as a Masonry leaf.
@@ -56,14 +56,14 @@ pub(crate) trait MasonryControl {
 
     fn accepts_input(&self) -> bool;
 
-    /// Takes what the control's endpoint now reads, and reports whether the
+    /// Takes what the control's endpoint now ctx, and reports whether the
     /// control draws differently for it. This is the one way a mounted control
     /// learns a new value; no control is special-cased anywhere above it.
     fn set_read(&mut self, _value: &ReadValue<'_>) -> bool {
         false
     }
 
-    fn refresh(&mut self, _reads: &dyn Reads) -> bool {
+    fn refresh(&mut self, _ctx: Ctx<'_, '_>) -> bool {
         false
     }
 
@@ -181,7 +181,7 @@ mod flags {
         render::{Mark, ReadValue, Skin},
     };
 
-    /// Every control whose picture is decided by a flag. A control that reads a
+    /// Every control whose picture is decided by a flag. A control that ctx a
     /// flag and cannot be told the flag changed can only catch up by being
     /// rebuilt, and a rebuild throws away the gesture the hand is in the middle
     /// of, the pointer capture feeding it, and the run of clicks that makes a
@@ -379,7 +379,7 @@ mod dragged {
 
         assert!(
             (dragged(&mut knob, 20.0) - 0.95).abs() < 0.001,
-            "a knob told its endpoint reads 0.9 must drag on from there"
+            "a knob told its endpoint ctx 0.9 must drag on from there"
         );
     }
 
@@ -458,7 +458,7 @@ mod dragged {
 /// clicks a double click is made of. So it tells the mounted control instead,
 /// through here.
 pub(crate) trait Retained: ControlPainter {
-    /// Puts what the endpoint now reads into the data this painter draws, and
+    /// Puts what the endpoint now ctx into the data this painter draws, and
     /// says whether that changed the picture.
     fn set_read(_data: &mut Self::Data, _value: &ReadValue<'_>) -> bool {
         false
@@ -483,7 +483,7 @@ fn set_scalar(data: &mut f32, value: &ReadValue<'_>) -> bool {
     std::mem::replace(data, value) != value
 }
 
-/// A meter shows the levels it reads; the scalar it publishes while dragged is
+/// A meter shows the levels it ctx; the scalar it publishes while dragged is
 /// its volume, which is the one part of those levels a hand can set.
 fn set_levels(data: &mut StereoLevels, value: &ReadValue<'_>) -> bool {
     let levels = match value {
@@ -645,7 +645,7 @@ impl Retained for Telemetry {
     }
 }
 
-/// A clock moves with the track it reads, and the position is what its own
+/// A clock moves with the track it ctx, and the position is what its own
 /// endpoint reports; the duration comes from a sibling and lands on rebuild.
 impl Retained for Clock {
     fn set_read(data: &mut Self::Data, value: &ReadValue<'_>) -> bool {
@@ -677,7 +677,7 @@ impl Retained for Summary {
     }
 }
 
-/// A tempo readout is rebuilt when the track it reads changes, which is the
+/// A tempo readout is rebuilt when the track it ctx changes, which is the
 /// only thing that turns one reading into the other.
 impl Retained for Tempo {}
 

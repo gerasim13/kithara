@@ -16,7 +16,6 @@ use crate::{
         tree::face::Tree,
         wave::zoom_math::{clamp_zoom, window_bounds, zoom_for_wheel},
     },
-    compile::CompiledUi,
     draw::Rect,
     engine::{Descriptor, ScrollConfig},
     expand::{Binding, ControlSpec},
@@ -24,10 +23,8 @@ use crate::{
     interact::{CursorShape, Hover, ScrollAxis, recognizers::WheelStep},
     module::{FaderStyle, TableColumn, WaveStyle},
     render::{
-        ReadValue, Reads, Skin, TableRow, TreeRow,
-        document::read::{read_scope, resolve, wave_zoom},
-        model::derived,
-        picker_selected_index, text_input_layout,
+        ReadValue, Skin, TableRow, TreeRow, document::Ctx, model::derived, picker_selected_index,
+        text_input_layout,
     },
     text::TextContext,
 };
@@ -35,9 +32,8 @@ use crate::{
 /// things, the model that answers a reading, and the skin that sizes it.
 #[derive(Clone, Copy)]
 pub(crate) struct Resolving<'a> {
-    pub(crate) reads: &'a dyn Reads,
+    pub(crate) ctx: Ctx<'a, 'a>,
     pub(crate) skin: &'a Skin,
-    pub(crate) ui: &'a CompiledUi,
 }
 
 #[derive(Clone)]
@@ -154,7 +150,7 @@ impl HostedControlPlan {
         scope: &str,
         cx: Resolving<'_>,
     ) -> Option<Self> {
-        let Resolving { reads, skin, ui } = cx;
+        let Resolving { ctx, skin } = cx;
         match (spec, value) {
             (ControlSpec::Button { .. }, _)
             | (
@@ -180,8 +176,7 @@ impl HostedControlPlan {
                     path,
                     scope_items,
                     scope.as_ref(),
-                    reads,
-                    ui,
+                    ctx,
                     skin,
                 ))
             }
@@ -265,7 +260,7 @@ impl HostedControlPlan {
             (ControlSpec::Wave { style, zoom, .. }, Some(ReadValue::Waveform(waveform)))
                 if !waveform.buckets.is_empty() =>
             {
-                Some(wave_plan(path, *style, zoom.as_ref(), scope, reads, ui))
+                Some(wave_plan(path, *style, zoom.as_ref(), scope, ctx))
             }
             _ => None,
         }
@@ -389,9 +384,9 @@ fn tree_plan(
     rows: &[TreeRow<'_>],
     cx: Resolving<'_>,
 ) -> TreePlan {
-    let Resolving { reads, skin, ui } = cx;
+    let Resolving { ctx, skin } = cx;
     let query_text = query
-        .and_then(|binding| resolve(reads, binding, ui))
+        .and_then(|binding| ctx.read(binding))
         .and_then(|value| match value {
             ReadValue::Text(query) => Some(query),
             _ => None,
@@ -406,8 +401,8 @@ fn tree_plan(
     };
     #[cfg(feature = "masonry")]
     plan.bind_source(TreeSource::new(
-        _read.map(|binding| ui.resolve(binding.key).to_owned()),
-        query.map(|binding| ui.resolve(binding.key).to_owned()),
+        _read.map(|binding| ctx.ui.resolve(binding.key).to_owned()),
+        query.map(|binding| ctx.ui.resolve(binding.key).to_owned()),
     ));
     plan
 }
@@ -416,11 +411,10 @@ fn context_bar_plan(
     path: &str,
     scope_items: &[InternId],
     scope: Option<&Binding>,
-    reads: &dyn Reads,
-    ui: &CompiledUi,
+    ctx: Ctx<'_, '_>,
     skin: &Skin,
 ) -> HostedControlPlan {
-    let scope_value = scope.and_then(|binding| resolve(reads, binding, ui));
+    let scope_value = scope.and_then(|binding| ctx.read(binding));
     let selected = picker_selected_index(scope_value.as_ref(), scope_items.len());
     let mut text = TextContext::from(skin.text_resources());
     HostedControlPlan::Picker {
@@ -428,8 +422,10 @@ fn context_bar_plan(
         item_count: scope_items.len(),
         item_height: skin.tree.scope_item_height,
         selected,
-        face: Context::new(skin)
-            .face_of(&mut text, scope_items.iter().map(|item| ui.resolve(*item))),
+        face: Context::new(skin).face_of(
+            &mut text,
+            scope_items.iter().map(|item| ctx.ui.resolve(*item)),
+        ),
     }
 }
 
@@ -438,19 +434,18 @@ fn wave_plan(
     style: WaveStyle,
     zoom: Option<&Binding>,
     scope: &str,
-    reads: &dyn Reads,
-    ui: &CompiledUi,
+    ctx: Ctx<'_, '_>,
 ) -> HostedControlPlan {
     if style != WaveStyle::Hero {
         return HostedControlPlan::Wave {
             path: path.to_owned(),
         };
     }
-    let progress = match reads.get(&derived("deck.playback.position_normalized", scope)) {
+    let progress = match ctx.get(&derived("deck.playback.position_normalized", scope)) {
         Some(ReadValue::Scalar(value)) => value.as_(),
         _ => 0.0,
     };
-    let scale = clamp_zoom(wave_zoom(zoom, reads, ui));
+    let scale = clamp_zoom(ctx.wave_zoom(zoom));
     HostedControlPlan::HeroWave {
         path: path.to_owned(),
         scale,
@@ -496,10 +491,10 @@ impl TablePlan {
         rows: &[TableRow<'_>],
         cx: Resolving<'_>,
     ) -> Self {
-        let Resolving { reads, skin, ui } = cx;
+        let Resolving { ctx, skin } = cx;
         let state =
-            columns_state.map(|binding| (ui.resolve(binding.id), read_scope(Some(binding), ui)));
-        let columns = column_layouts(declared_columns, reads, state, skin);
+            columns_state.map(|binding| (ctx.ui.resolve(binding.id), ctx.scope(Some(binding))));
+        let columns = column_layouts(declared_columns, &ctx, state, skin);
         let rows = rows.iter().map(TableRowData::from).collect();
         let plan = Self::new(path, rows, columns, skin);
         #[cfg(feature = "masonry")]
@@ -507,11 +502,11 @@ impl TablePlan {
             declared_columns.to_vec(),
             columns_state.map(|binding| {
                 (
-                    ui.resolve(binding.id).to_owned(),
-                    read_scope(Some(binding), ui).to_owned(),
+                    ctx.ui.resolve(binding.id).to_owned(),
+                    ctx.scope(Some(binding)).to_owned(),
                 )
             }),
-            _read.map(|binding| ui.resolve(binding.key).to_owned()),
+            _read.map(|binding| ctx.ui.resolve(binding.key).to_owned()),
         ));
         plan
     }

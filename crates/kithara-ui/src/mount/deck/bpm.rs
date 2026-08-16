@@ -43,7 +43,7 @@ mod host {
             if let Some(bpm) = tempo(read.value) {
                 return Some(Beat::Bpm(bpm));
             }
-            let placeholder = self.placeholder.map(|id| read.ui.resolve(id));
+            let placeholder = self.placeholder.map(|id| read.ctx.ui.resolve(id));
             (placeholder == Some(ELAPSED)).then(|| Beat::Position(position(read)))
         }
     }
@@ -61,7 +61,7 @@ mod host {
     /// The deck's own scoped position, or the start of the track.
     fn position(read: Reading<'_>) -> f64 {
         match read
-            .reads
+            .ctx
             .get(&derived("deck.playback.position_secs", read.scope))
         {
             Some(ReadValue::Scalar(value)) => value,

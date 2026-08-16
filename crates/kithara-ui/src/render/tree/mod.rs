@@ -15,5 +15,3 @@ pub(crate) use event::{
     toggle_module, window,
 };
 pub use window::render;
-
-pub(super) use crate::render::document::read::{read_flag, read_scope, resolve};

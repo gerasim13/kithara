@@ -39,7 +39,7 @@ mod host {
         }
 
         fn data(&self, read: Reading<'_>) -> Option<String> {
-            Some(read.ui.resolve(self.label).to_owned())
+            Some(read.ctx.ui.resolve(self.label).to_owned())
         }
     }
 }

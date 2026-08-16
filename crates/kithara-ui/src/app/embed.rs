@@ -38,6 +38,7 @@ use crate::{
     interact::{Input, PointerPhase, ScrollAxis, masonry::masonry_text_event},
     render::{
         UiEvent, WindowCommand, document,
+        document::{Clock, Ctx},
         masonry::{MasonryHost, MasonryRoot, MasonryState},
     },
     source::UiConfig,
@@ -50,6 +51,10 @@ pub struct Ui<'config, Application> {
     /// The application this UI is showing.
     #[field(get, vis = "pub")]
     app: Application,
+    /// This host's own reading of time, advanced once per frame so a document
+    /// bound to it animates without the application having to keep a timer.
+    #[field(get(copy), vis = "pub")]
+    clock: Clock,
     commands: Vec<WindowCommand>,
     config: Config<'config>,
     pointer: PhysicalPosition<f64>,
@@ -78,9 +83,11 @@ where
         let size = PhysicalSize::new(size.0, size.1);
         let state = MasonryState::default();
         let ui = compile_document(&app, &config)?;
-        let root = mount(&app, &config, &state, &ui, size, scale)?;
+        let clock = Clock::default();
+        let root = mount(&app, &config, &state, &ui, size, scale, clock)?;
         Ok(Self {
             app,
+            clock,
             commands: Vec::new(),
             config,
             pointer: PhysicalPosition::new(0.0, 0.0),
@@ -221,15 +228,20 @@ where
 
     /// Advances one frame's worth of animation.
     pub fn frame(&mut self, elapsed: Duration) {
+        // Before the refresh, so what this frame draws is the time this frame
+        // stands at rather than the one before it.
+        self.clock = self.clock.advance(elapsed);
         self.app.tick();
         let Self {
             app,
+            clock,
             root,
             ui,
             config,
             ..
         } = self;
-        app.reads(|reads| root.refresh(ui, reads, config.skin_doc));
+        let clock = *clock;
+        app.reads(|reads| root.refresh(Ctx::new(ui, reads, config.skin_doc, clock)));
         if let Err(error) = self
             .root
             .handle_window_event(WindowEvent::AnimFrame(elapsed))
@@ -332,12 +344,14 @@ where
         if self.app.document() == was {
             let Self {
                 app,
+                clock,
                 root,
                 ui,
                 config,
                 ..
             } = self;
-            app.reads(|reads| root.refresh(ui, reads, config.skin_doc));
+            let clock = *clock;
+            app.reads(|reads| root.refresh(Ctx::new(ui, reads, config.skin_doc, clock)));
             return;
         }
         let Ok(ui) = compile_document(&self.app, &self.config)
@@ -352,6 +366,7 @@ where
             &ui,
             self.size,
             self.scale,
+            self.clock,
         )
         .inspect_err(|error| tracing::error!(%error, "document did not mount")) else {
             return;
@@ -390,6 +405,7 @@ fn mount<Application>(
     ui: &CompiledUi,
     size: PhysicalSize<u32>,
     scale: f64,
+    clock: Clock,
 ) -> Result<MasonryRoot<UiEvent>, RunError>
 where
     Application: App,
@@ -397,8 +413,9 @@ where
     #[cfg(test)]
     state.clear_paths();
     let node = app.reads(|reads| {
-        let host = MasonryHost::new(ui, reads, config.skin).with_state(state.clone());
-        document::render(&ui.root, ui, reads, config.skin_doc, host)
+        let ctx = Ctx::new(ui, reads, config.skin_doc, clock);
+        let host = MasonryHost::new(ctx, config.skin).with_state(state.clone());
+        document::render(&ui.root, ctx, host)
     });
     MasonryRoot::new(
         node,

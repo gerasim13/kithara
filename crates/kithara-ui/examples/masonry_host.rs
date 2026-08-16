@@ -9,6 +9,7 @@ use kithara_ui::{
     registry::{EndpointCategory, EndpointDesc, EndpointRegistry},
     render::{
         ReadValue, Reads, Skin, document,
+        document::{Clock, Ctx},
         masonry::{
             CustomWidget, MasonryHost, MasonryRoot, MasonryState, Repaint, Size2, SizeLimits,
             TextMeasurer,
@@ -124,16 +125,15 @@ fn main() -> Result<(), Box<dyn Error>> {
     )?;
     let reads = EmptyReads;
     let state = MasonryState::default();
-    let host = MasonryHost::new(&ui, &reads, &skin)
-        .with_state(state)
-        .with_custom(
-            "demo/custom",
-            LetterboxedBadge {
-                role: skin.text.section,
-            },
-            |()| kithara_ui::render::UiEvent::OpenSettings,
-        );
-    let root = document::render(&ui.root, &ui, &reads, builtin::skin_doc(), host);
+    let ctx = Ctx::new(&ui, &reads, builtin::skin_doc(), Clock::default());
+    let host = MasonryHost::new(ctx, &skin).with_state(state).with_custom(
+        "demo/custom",
+        LetterboxedBadge {
+            role: skin.text.section,
+        },
+        |()| kithara_ui::render::UiEvent::OpenSettings,
+    );
+    let root = document::render(&ui.root, ctx, host);
     let mut root = MasonryRoot::new(
         root,
         RenderRootOptions {

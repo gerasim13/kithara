@@ -16,8 +16,9 @@ use crate::{
         recognizers::{Edge, Scalar, ScalarState, Span as SpanRecognizer, SpanState, click},
     },
     render::{
-        ControlAction, ReadValue, Reads, ScalarRange, Skin, UiEvent, control_event,
+        ControlAction, ReadValue, ScalarRange, Skin, UiEvent, control_event,
         controls::{DataRefresh, Drag, Grip, IndexEvent, IndexPress, Indexing, Press, Span},
+        document::Ctx,
         span_event,
     },
     text::TextContext,
@@ -377,11 +378,11 @@ where
         self.repaint
     }
 
-    fn refresh(&mut self, reads: &dyn Reads) -> bool {
+    fn refresh(&mut self, ctx: Ctx<'_, '_>) -> bool {
         let Some(refresh) = self.refresh.as_ref() else {
             return false;
         };
-        self.repaint |= refresh(&mut self.data, reads);
+        self.repaint |= refresh(&mut self.data, ctx);
         self.repaint
     }
 
@@ -447,7 +448,7 @@ mod indexed {
         draw::Pt,
         interact::{PointerOwnership, PointerPhase, Propagation, mouse},
         mount,
-        render::{Reads, controls::Draws},
+        render::{Reads, controls::Draws, document::probe},
     };
 
     #[derive(Clone, Copy)]
@@ -477,7 +478,7 @@ mod indexed {
             }
         }
 
-        mount::Preset::snapshot(&NoReads)
+        mount::Preset::snapshot(probe(&NoReads))
     }
 
     fn skin() -> Skin {

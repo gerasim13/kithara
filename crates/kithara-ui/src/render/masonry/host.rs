@@ -23,7 +23,6 @@ use super::{
     vis::VisLeaf,
 };
 use crate::{
-    compile::CompiledUi,
     draw::Transform,
     expand::{Binding, ControlSpec, ExpandedNode},
     ids::InternId,
@@ -31,8 +30,8 @@ use crate::{
     module::{ChromeStyle, TextStyle},
     mount,
     render::{
-        ControlAction, HostedControlPlan, InputOwner, ReadValue, Reads, Skin, UiEvent,
-        document::{Group, Host, Module, Popover, read::resolve},
+        ControlAction, HostedControlPlan, InputOwner, ReadValue, Skin, UiEvent,
+        document::{Ctx, Group, Host, Module, Popover},
         hosted_control_plan,
     },
     size::SizeSpec,
@@ -44,8 +43,7 @@ use crate::{
 #[derive(fieldwork::Fieldwork)]
 #[fieldwork(opt_in, with)]
 pub struct MasonryHost<'a, Action = UiEvent> {
-    pub(super) ui: &'a CompiledUi,
-    pub(super) reads: &'a dyn Reads,
+    pub(super) ctx: Ctx<'a, 'a>,
     pub(super) skin: &'a Skin,
     custom: BTreeMap<String, Box<dyn MountedCustom>>,
     pub(super) map_event: Rc<dyn Fn(UiEvent) -> HostAction>,
@@ -93,8 +91,8 @@ impl MasonryState {
 
 impl<'a> MasonryHost<'a, UiEvent> {
     #[must_use]
-    pub fn new(ui: &'a CompiledUi, reads: &'a dyn Reads, skin: &'a Skin) -> Self {
-        Self::map_actions(ui, reads, skin, |event| event)
+    pub fn new(ctx: Ctx<'a, 'a>, skin: &'a Skin) -> Self {
+        Self::map_actions(ctx, skin, |event| event)
     }
 }
 
@@ -104,18 +102,12 @@ where
 {
     /// Creates a host that maps built-in document events into one app action.
     #[must_use]
-    pub fn map_actions<Map>(
-        ui: &'a CompiledUi,
-        reads: &'a dyn Reads,
-        skin: &'a Skin,
-        map: Map,
-    ) -> Self
+    pub fn map_actions<Map>(ctx: Ctx<'a, 'a>, skin: &'a Skin, map: Map) -> Self
     where
         Map: Fn(UiEvent) -> Action + 'static,
     {
         Self {
-            ui,
-            reads,
+            ctx,
             skin,
             custom: BTreeMap::new(),
             map_event: Rc::new(move |event| HostAction::new(map(event))),
@@ -214,7 +206,7 @@ where
         declared: solve::Size<solve::Length>,
     ) -> MasonryNode<Action> {
         MasonryNode::document(
-            NodeLayout::Leaf(Leaf::Vis(VisLeaf::new(preset, value, self.reads))),
+            NodeLayout::Leaf(Leaf::Vis(VisLeaf::new(preset, value, self.ctx))),
             declared,
             Vec::new(),
             false,
@@ -310,9 +302,7 @@ where
         declared: solve::Size<solve::Length>,
     ) -> MasonryNode<Action> {
         MasonryNode::document(
-            NodeLayout::Leaf(Leaf::Shader(ShaderLeaf::new(
-                spec, path, self.reads, self.ui,
-            ))),
+            NodeLayout::Leaf(Leaf::Shader(ShaderLeaf::new(spec, path, self.ctx))),
             declared,
             Vec::new(),
             false,
@@ -331,7 +321,7 @@ where
     Action: std::fmt::Debug + Send + 'static,
 {
     pub(super) fn reads_true(&self, read: Option<&Binding>) -> bool {
-        read.and_then(|binding| resolve(self.reads, binding, self.ui))
+        read.and_then(|binding| self.ctx.read(binding))
             .is_some_and(|value| matches!(value, ReadValue::Bool(true)))
     }
 
@@ -483,7 +473,7 @@ where
         anchor: Self::Output,
         content: Option<Self::Output>,
     ) -> Self::Output {
-        let path = self.ui.resolve(popover.path()).to_owned();
+        let path = self.ctx.ui.resolve(popover.path()).to_owned();
         let state = self.state.popover(&path, popover.is_open());
         let dismiss = self.shared_control_action(path.clone(), ControlAction::Activate);
         let size = popover.size().map_or_else(|| anchor.declared(), declared);
@@ -535,7 +525,7 @@ where
         size: Option<SizeSpec>,
     ) -> Self::Output {
         let declared = size.map_or_else(|| child.declared(), declared);
-        let path = self.ui.resolve(path);
+        let path = self.ctx.ui.resolve(path);
         let mut output =
             MasonryNode::document(NodeLayout::Stack, declared, vec![child], false, None, None);
         output.add_engine_control(
@@ -626,9 +616,9 @@ where
         transform: Transform,
     ) -> Self::Output {
         let declared = control_declared(spec, size, self.skin);
-        let plan = hosted_control_plan(path, spec, read, self.ui, self.reads, self.skin);
+        let plan = hosted_control_plan(path, spec, read, self.ctx, self.skin);
         let path_id = path;
-        let path = self.ui.resolve(path);
+        let path = self.ctx.ui.resolve(path);
         // What the document says, narrowed to what this host actually paints:
         // a control it still mounts as an empty box is driven by the engine
         // plan below, whatever the document said about its leaf.
@@ -657,7 +647,7 @@ where
         output.place(transform);
         // A document that places nothing off an endpoint can never move this
         // node, so it is not worth re-reading its pose every frame.
-        if self.ui.driven {
+        if self.ctx.ui.driven {
             output.watch_placement(path_id);
         }
         #[cfg(test)]

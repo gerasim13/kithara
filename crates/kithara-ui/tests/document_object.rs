@@ -6,6 +6,7 @@
 
 mod common;
 
+use kithara_platform::time::Duration;
 use kithara_test_utils::kithara;
 use kithara_ui::{
     builtin,
@@ -16,8 +17,8 @@ use kithara_ui::{
     layout::Axis,
     registry::{EndpointCategory, EndpointDesc, ValueKind},
     render::{
-        InputOwner, ReadValue, Reads,
-        document::{Group, Host, Module, Popover, render},
+        Clock, InputOwner, ReadValue, Reads,
+        document::{Ctx, Group, Host, Module, Popover, render},
     },
     size::SizeSpec,
     source::UiConfig,
@@ -179,7 +180,11 @@ fn document(root: &str) -> CompiledUi {
 fn placed(root: &str, reads: &Phase) -> Vec<Placed> {
     let ui = document(root);
 
-    render(&ui.root, &ui, reads, builtin::skin_doc(), Spy { ui: &ui })
+    render(
+        &ui.root,
+        Ctx::new(&ui, reads, builtin::skin_doc(), Clock::default()),
+        Spy { ui: &ui },
+    )
 }
 
 fn only(root: &str, reads: &Phase) -> Transform {
@@ -377,4 +382,69 @@ fn a_document_with_a_phase_is_driven() {
 #[kithara::test]
 fn a_document_with_a_motion_is_driven() {
     assert!(document(RUN).driven);
+}
+
+/// The host's own clock, which no application declares and none has to answer.
+const HOSTED: &str = r#"Object(id: "travel",
+    to: (position: (100.0, 0.0)),
+    motion: (clock: Model(id: "ui.clock.seconds"), duration: 4.0),
+    child: Text(id: "leaf"))"#;
+
+/// An application that answers nothing at all, so whatever moves below is the
+/// host's clock rather than something the test quietly supplied.
+struct Silent;
+
+impl Reads for Silent {
+    fn get(&self, _endpoint: &str) -> Option<ReadValue<'_>> {
+        None
+    }
+}
+
+fn at(clock: Clock) -> Transform {
+    let ui = document(HOSTED);
+    let placed = render(
+        &ui.root,
+        Ctx::new(&ui, &Silent, builtin::skin_doc(), clock),
+        Spy { ui: &ui },
+    );
+    let [one] = placed.as_slice() else {
+        panic!("the fixture mounts one control, not {placed:?}");
+    };
+    one.transform
+}
+
+/// `registry()` declares only the gallery's own endpoints. Compiling a document
+/// that binds to the host's clock is where the host's own declaration is proved.
+#[kithara::test]
+fn a_document_binds_to_the_host_clock_without_the_application_declaring_it() {
+    let _ = document(HOSTED);
+}
+
+#[kithara::test]
+fn an_application_that_answers_nothing_still_sees_the_motion_start_where_it_was_written() {
+    assert!(at(Clock::default()).is_identity());
+}
+
+#[kithara::test]
+fn running_the_host_clock_moves_an_object_the_application_knows_nothing_about() {
+    assert_ne!(
+        at(Clock::new(60, Duration::from_secs(1))),
+        Transform::IDENTITY
+    );
+}
+
+/// The determinism claim, stated as a test: the pose is a function of the clock
+/// and nothing else, so the same reading twice draws the same frame.
+#[kithara::test]
+fn the_same_clock_twice_puts_the_object_at_the_same_pose() {
+    let clock = Clock::new(90, Duration::from_millis(1500));
+    assert_eq!(at(clock), at(clock));
+}
+
+/// Two hosts counting frames differently must still agree, because what the
+/// document reads is the elapsed time and not the count beside it.
+#[kithara::test]
+fn the_frame_count_does_not_reach_the_document() {
+    let elapsed = Duration::from_millis(1500);
+    assert_eq!(at(Clock::new(90, elapsed)), at(Clock::new(37, elapsed)));
 }

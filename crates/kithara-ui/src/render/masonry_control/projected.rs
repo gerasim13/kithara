@@ -4,7 +4,8 @@ use crate::{
     draw::{DrawList, Rect, Transform},
     interact::{Hit, Input, Outcome},
     render::{
-        Reads, Skin,
+        Skin,
+        document::Ctx,
         hosted::{TablePlan, TreePlan},
     },
     text::TextContext,
@@ -20,7 +21,7 @@ pub(crate) struct ProjectedLeaf<P> {
 
 pub(crate) trait Projected {
     fn draw_list(&self, text: &mut TextContext, bounds: Rect) -> DrawList;
-    fn refresh(&self, reads: &dyn Reads) -> bool;
+    fn refresh(&self, ctx: Ctx<'_, '_>) -> bool;
 }
 
 impl<P> ProjectedLeaf<P>
@@ -54,8 +55,8 @@ where
         false
     }
 
-    fn refresh(&mut self, reads: &dyn Reads) -> bool {
-        self.plan.refresh(reads)
+    fn refresh(&mut self, ctx: Ctx<'_, '_>) -> bool {
+        self.plan.refresh(ctx)
     }
 }
 
@@ -67,8 +68,8 @@ impl Projected for TablePlan {
         TableFace::commands(&self.picture(), text, bounds, &drawn)
     }
 
-    fn refresh(&self, reads: &dyn Reads) -> bool {
-        self.refresh(reads)
+    fn refresh(&self, ctx: Ctx<'_, '_>) -> bool {
+        self.refresh(ctx)
     }
 }
 
@@ -80,7 +81,7 @@ impl Projected for TreePlan {
         TreeFace::commands(&self.picture(), text, bounds, &drawn)
     }
 
-    fn refresh(&self, reads: &dyn Reads) -> bool {
-        self.refresh(reads)
+    fn refresh(&self, ctx: Ctx<'_, '_>) -> bool {
+        self.refresh(ctx)
     }
 }

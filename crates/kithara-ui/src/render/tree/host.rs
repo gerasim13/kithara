@@ -10,16 +10,16 @@ use iced::{
 };
 use kithara_platform::time::Instant;
 
-use super::{geometry::effective_size, read_flag, read_scope, resolve};
+use super::geometry::effective_size;
 use crate::{
-    compile::CompiledUi,
     engine::{Descriptor, Engine, PickerSnapshot, Target},
     expand::ExpandedNode,
     interact::{Input, PointerPhase, ScrollAxis, iced as iced_interact},
     module::ChromeStyle,
     render::{
-        Reads, Resolving, Skin, UiEvent,
+        Resolving, Skin, UiEvent,
         controls::sync_tree_scroll,
+        document::Ctx,
         engine as engine_event, hosted_picker_overlay, picker_hits, sync_picker, sync_table_scroll,
         sync_text_input, toggle_module,
         tree::control::{HostedControl, append_control_descriptors, append_control_targets},
@@ -49,13 +49,12 @@ pub(super) fn module_host<'a>(
 pub(super) fn host<'a>(
     child: Element<'a, UiEvent>,
     root: &ExpandedNode,
-    ui: &CompiledUi,
-    reads: &dyn Reads,
+    ctx: Ctx<'_, '_>,
     skin: &Skin,
 ) -> Element<'a, UiEvent> {
     Element::new(Host {
         child,
-        layout: HostedLayout::new(root, ui, reads, skin),
+        layout: HostedLayout::new(root, ctx, skin),
     })
 }
 
@@ -625,8 +624,8 @@ impl HostedLayout {
         }
     }
 
-    fn new(node: &ExpandedNode, ui: &CompiledUi, reads: &dyn Reads, skin: &Skin) -> Self {
-        let hidden: Hidden<'_> = &|block| read_flag(Some(&block.hidden), reads, ui);
+    fn new(node: &ExpandedNode, ctx: Ctx<'_, '_>, skin: &Skin) -> Self {
+        let hidden: Hidden<'_> = &|block| ctx.flag(Some(&block.hidden));
         match node {
             ExpandedNode::Row {
                 size,
@@ -648,38 +647,37 @@ impl HostedLayout {
                 children: children
                     .iter()
                     .filter(|child| !is_hidden(*child, hidden))
-                    .map(|child| Self::new(child, ui, reads, skin))
+                    .map(|child| Self::new(child, ctx, skin))
                     .collect(),
             },
             ExpandedNode::Object { child, .. } | ExpandedNode::Optional { child, .. } => {
-                Self::new(child, ui, reads, skin)
+                Self::new(child, ctx, skin)
             }
             ExpandedNode::Slot { size, children, .. } => Self::Slot {
                 sized: size.is_some(),
                 children: children
                     .iter()
                     .filter(|child| !is_hidden(*child, hidden))
-                    .map(|child| Self::new(child, ui, reads, skin))
+                    .map(|child| Self::new(child, ctx, skin))
                     .collect(),
             },
             ExpandedNode::Stage { children, .. } => Self::Stage {
                 children: children
                     .iter()
                     .filter(|child| !is_hidden(*child, hidden))
-                    .map(|child| Self::new(child, ui, reads, skin))
+                    .map(|child| Self::new(child, ctx, skin))
                     .collect(),
             },
             ExpandedNode::Control {
                 path, spec, read, ..
             } => {
                 let control = HostedControl::new(
-                    ui.resolve(*path),
+                    ctx.ui.resolve(*path),
                     spec,
-                    read.as_ref()
-                        .and_then(|binding| resolve(reads, binding, ui)),
+                    read.as_ref().and_then(|binding| ctx.read(binding)),
                     read.as_ref(),
-                    read_scope(read.as_ref(), ui),
-                    Resolving { reads, skin, ui },
+                    ctx.scope(read.as_ref()),
+                    Resolving { ctx, skin },
                 );
                 if effective_size(node, skin).is_none() {
                     Self::SelfMeasuredControl(control)
@@ -689,15 +687,15 @@ impl HostedLayout {
             }
             ExpandedNode::Popover { anchor, .. } => Self::Wrapper {
                 sized: effective_size(node, skin).is_some(),
-                child: Box::new(Self::new(anchor, ui, reads, skin)),
+                child: Box::new(Self::new(anchor, ctx, skin)),
             },
             ExpandedNode::Pressable { child, .. } => Self::Wrapper {
                 sized: effective_size(node, skin).is_some(),
-                child: Box::new(Self::new(child, ui, reads, skin)),
+                child: Box::new(Self::new(child, ctx, skin)),
             },
             ExpandedNode::Scroll { child, .. } => Self::Scroll {
                 sized: effective_size(node, skin).is_some(),
-                child: Box::new(Self::new(child, ui, reads, skin)),
+                child: Box::new(Self::new(child, ctx, skin)),
             },
         }
     }
@@ -1029,7 +1027,7 @@ mod tests {
     use super::*;
     use crate::{
         builtin,
-        compile::{CompiledNode, compile},
+        compile::{CompiledNode, CompiledUi, compile},
         draw::{DrawList, Pt, Rect},
         engine::ScrollConfig,
         expand::ControlSpec,
@@ -1039,8 +1037,9 @@ mod tests {
         registry::{EndpointCategory, EndpointDesc, EndpointRegistry, ValueKind},
         render::{
             ControlAction, DragPhase, DropZone, HostLayer, InputOwner, LayerHit, ModuleChrome,
-            ReadValue, StereoLevels, TableCell, TableRow, TreeIcon, TreeRow, WaveBucket,
+            ReadValue, Reads, StereoLevels, TableCell, TableRow, TreeIcon, TreeRow, WaveBucket,
             WaveformView, WheelSurface, Widget, WindowCommand, WindowLayerProgram,
+            document::{Clock, Ctx},
             fonts::{FONT_BYTES, SANS},
             window_layer,
         },
@@ -1280,6 +1279,12 @@ mod tests {
                 _ => None,
             }
         }
+    }
+
+    /// What the host hands the document for one frame, built from a fixture
+    /// reader so a test drives the clock rather than waiting for one.
+    fn ctx<'a>(ui: &'a CompiledUi, reads: &'a dyn Reads) -> Ctx<'a, 'a> {
+        Ctx::new(ui, reads, builtin::skin_doc(), Clock::default())
     }
 
     struct FixtureReads {
@@ -2171,11 +2176,10 @@ mod tests {
             root,
             &[],
             *instance,
-            &ui,
-            &reads,
+            ctx(&ui, &reads),
             builtin::skin(),
         );
-        let mut element = host(child, root, &ui, &reads, builtin::skin());
+        let mut element = host(child, root, ctx(&ui, &reads), builtin::skin());
         let renderer = headless_renderer();
         let viewport = Size::new(232.0, 120.0);
         let mut tree = Tree::new(element.as_widget());
@@ -2184,7 +2188,7 @@ mod tests {
             &renderer,
             &Limits::new(Size::ZERO, viewport),
         );
-        let hosted = HostedLayout::new(root, &ui, &reads, builtin::skin());
+        let hosted = HostedLayout::new(root, ctx(&ui, &reads), builtin::skin());
         let descriptors = hosted.descriptors();
         assert!(matches!(
             descriptors.as_slice(),
@@ -2339,7 +2343,8 @@ mod tests {
     fn compiled_tree_surface_installs_the_retained_host() {
         let ui = compiled_tree_surface();
         let reads = FixtureReads::default();
-        let element = super::super::node::render_compiled(&ui.root, &ui, &reads, builtin::skin());
+        let element =
+            super::super::node::render_compiled(&ui.root, ctx(&ui, &reads), builtin::skin());
         let tree = Tree::new(element.as_widget());
 
         fn retained_hosts(tree: &Tree) -> usize {
@@ -2458,7 +2463,7 @@ mod tests {
         claimed_components(root, &mut components);
         assert_eq!(components, ["fader", "fader", "vertical-vu"]);
 
-        let full = super::super::node::render_compiled(&ui.root, &ui, &reads, builtin::skin());
+        let full = super::super::node::render_compiled(&ui.root, ctx(&ui, &reads), builtin::skin());
         let full_tree = Tree::new(full.as_widget());
         assert_eq!(host_count(&full_tree), 1, "the faders page owns one engine");
 
@@ -2468,18 +2473,17 @@ mod tests {
             root,
             &[],
             *instance,
-            &ui,
-            &reads,
+            ctx(&ui, &reads),
             builtin::skin(),
         );
-        let mut element = host(child, root, &ui, &reads, builtin::skin());
+        let mut element = host(child, root, ctx(&ui, &reads), builtin::skin());
         let mut tree = Tree::new(element.as_widget());
         let node = element.as_widget_mut().layout(
             &mut tree,
             &renderer,
             &Limits::new(Size::ZERO, viewport),
         );
-        let hosted = HostedLayout::new(root, &ui, &reads, builtin::skin());
+        let hosted = HostedLayout::new(root, ctx(&ui, &reads), builtin::skin());
         let descriptors = hosted.descriptors();
         assert_eq!(
             descriptors.iter().map(descriptor_path).collect::<Vec<_>>(),
@@ -2590,7 +2594,7 @@ mod tests {
         claimed_components(meters, &mut components);
         assert_eq!(components, ["stereo-meter", "vertical-vu", "vertical-vu"]);
 
-        let full = super::super::node::render_compiled(&ui.root, &ui, &reads, builtin::skin());
+        let full = super::super::node::render_compiled(&ui.root, ctx(&ui, &reads), builtin::skin());
         let full_tree = Tree::new(full.as_widget());
         assert_eq!(
             host_count(&full_tree),
@@ -2604,18 +2608,17 @@ mod tests {
             meters,
             &[1],
             *instance,
-            &ui,
-            &reads,
+            ctx(&ui, &reads),
             builtin::skin(),
         );
-        let mut element = host(child, meters, &ui, &reads, builtin::skin());
+        let mut element = host(child, meters, ctx(&ui, &reads), builtin::skin());
         let mut tree = Tree::new(element.as_widget());
         let node = element.as_widget_mut().layout(
             &mut tree,
             &renderer,
             &Limits::new(Size::ZERO, viewport),
         );
-        let hosted = HostedLayout::new(meters, &ui, &reads, builtin::skin());
+        let hosted = HostedLayout::new(meters, ctx(&ui, &reads), builtin::skin());
         let targets = hosted.targets(Layout::new(&node), Cursor::Unavailable);
         assert_eq!(
             targets.iter().map(|target| target.path).collect::<Vec<_>>(),
@@ -2674,7 +2677,7 @@ mod tests {
         claimed_components(toggles, &mut components);
         assert_eq!(components, ["activation"; 4]);
 
-        let full = super::super::node::render_compiled(&ui.root, &ui, &reads, builtin::skin());
+        let full = super::super::node::render_compiled(&ui.root, ctx(&ui, &reads), builtin::skin());
         let full_tree = Tree::new(full.as_widget());
         assert_eq!(
             host_count(&full_tree),
@@ -2688,18 +2691,17 @@ mod tests {
             toggles,
             &[1],
             *instance,
-            &ui,
-            &reads,
+            ctx(&ui, &reads),
             builtin::skin(),
         );
-        let mut element = host(child, toggles, &ui, &reads, builtin::skin());
+        let mut element = host(child, toggles, ctx(&ui, &reads), builtin::skin());
         let mut tree = Tree::new(element.as_widget());
         let node = element.as_widget_mut().layout(
             &mut tree,
             &renderer,
             &Limits::new(Size::ZERO, viewport),
         );
-        let hosted = HostedLayout::new(toggles, &ui, &reads, builtin::skin());
+        let hosted = HostedLayout::new(toggles, ctx(&ui, &reads), builtin::skin());
         let targets = hosted.targets(Layout::new(&node), Cursor::Unavailable);
         let mut clipboard = clipboard::Null;
         let mut messages = Vec::new();
@@ -2761,7 +2763,7 @@ mod tests {
         claimed_components(chips, &mut components);
         assert_eq!(components, ["activation"; 2]);
 
-        let full = super::super::node::render_compiled(&ui.root, &ui, &reads, builtin::skin());
+        let full = super::super::node::render_compiled(&ui.root, ctx(&ui, &reads), builtin::skin());
         let full_tree = Tree::new(full.as_widget());
         assert_eq!(
             host_count(&full_tree),
@@ -2775,18 +2777,17 @@ mod tests {
             chips,
             &[1],
             *instance,
-            &ui,
-            &reads,
+            ctx(&ui, &reads),
             builtin::skin(),
         );
-        let mut element = host(child, chips, &ui, &reads, builtin::skin());
+        let mut element = host(child, chips, ctx(&ui, &reads), builtin::skin());
         let mut tree = Tree::new(element.as_widget());
         let node = element.as_widget_mut().layout(
             &mut tree,
             &renderer,
             &Limits::new(Size::ZERO, viewport),
         );
-        let hosted = HostedLayout::new(chips, &ui, &reads, builtin::skin());
+        let hosted = HostedLayout::new(chips, ctx(&ui, &reads), builtin::skin());
         let descriptors = hosted.descriptors();
         assert_eq!(
             descriptors.iter().map(descriptor_path).collect::<Vec<_>>(),
@@ -2864,7 +2865,7 @@ mod tests {
         claimed_components(root, &mut components);
         assert_eq!(components, ["activation"; 6]);
 
-        let full = super::super::node::render_compiled(&ui.root, &ui, &reads, builtin::skin());
+        let full = super::super::node::render_compiled(&ui.root, ctx(&ui, &reads), builtin::skin());
         let full_tree = Tree::new(full.as_widget());
         assert_eq!(
             host_count(&full_tree),
@@ -2878,18 +2879,17 @@ mod tests {
             root,
             &[],
             *instance,
-            &ui,
-            &reads,
+            ctx(&ui, &reads),
             builtin::skin(),
         );
-        let mut element = host(child, root, &ui, &reads, builtin::skin());
+        let mut element = host(child, root, ctx(&ui, &reads), builtin::skin());
         let mut tree = Tree::new(element.as_widget());
         let node = element.as_widget_mut().layout(
             &mut tree,
             &renderer,
             &Limits::new(Size::ZERO, viewport),
         );
-        let hosted = HostedLayout::new(root, &ui, &reads, builtin::skin());
+        let hosted = HostedLayout::new(root, ctx(&ui, &reads), builtin::skin());
         let descriptors = hosted.descriptors();
         assert_eq!(
             descriptors.iter().map(descriptor_path).collect::<Vec<_>>(),
@@ -3017,7 +3017,7 @@ mod tests {
             ]
         );
 
-        let full = super::super::node::render_compiled(&ui.root, &ui, &reads, builtin::skin());
+        let full = super::super::node::render_compiled(&ui.root, ctx(&ui, &reads), builtin::skin());
         let full_tree = Tree::new(full.as_widget());
         assert_eq!(host_count(&full_tree), 1, "the cells page owns one engine");
 
@@ -3027,18 +3027,17 @@ mod tests {
             root,
             &[],
             *instance,
-            &ui,
-            &reads,
+            ctx(&ui, &reads),
             builtin::skin(),
         );
-        let mut element = host(child, root, &ui, &reads, builtin::skin());
+        let mut element = host(child, root, ctx(&ui, &reads), builtin::skin());
         let mut tree = Tree::new(element.as_widget());
         let node = element.as_widget_mut().layout(
             &mut tree,
             &renderer,
             &Limits::new(Size::ZERO, viewport),
         );
-        let hosted = HostedLayout::new(root, &ui, &reads, builtin::skin());
+        let hosted = HostedLayout::new(root, ctx(&ui, &reads), builtin::skin());
         let descriptors = hosted.descriptors();
         assert_eq!(
             descriptors.iter().map(descriptor_path).collect::<Vec<_>>(),
@@ -3141,7 +3140,7 @@ mod tests {
             ]
         );
 
-        let full = super::super::node::render_compiled(&ui.root, &ui, &reads, builtin::skin());
+        let full = super::super::node::render_compiled(&ui.root, ctx(&ui, &reads), builtin::skin());
         let full_tree = Tree::new(full.as_widget());
         assert_eq!(
             host_count(&full_tree),
@@ -3155,17 +3154,16 @@ mod tests {
             root,
             &[],
             *instance,
-            &ui,
-            &reads,
+            ctx(&ui, &reads),
             builtin::skin(),
         );
-        let mut element = host(child, root, &ui, &reads, builtin::skin());
+        let mut element = host(child, root, ctx(&ui, &reads), builtin::skin());
         let mut tree = Tree::new(element.as_widget());
         let node =
             element
                 .as_widget_mut()
                 .layout(&mut tree, &renderer, &Limits::new(Size::ZERO, narrow));
-        let hosted = HostedLayout::new(root, &ui, &reads, builtin::skin());
+        let hosted = HostedLayout::new(root, ctx(&ui, &reads), builtin::skin());
         let targets = hosted.targets(Layout::new(&node), Cursor::Unavailable);
         assert_eq!(
             targets
@@ -3266,8 +3264,7 @@ mod tests {
             root,
             &[],
             *instance,
-            &ui,
-            &reads,
+            ctx(&ui, &reads),
             builtin::skin(),
         );
         let mut child_tree = Tree::new(child.as_widget());
@@ -3326,7 +3323,7 @@ mod tests {
         claimed_components(root, &mut components);
         assert_eq!(components, ["text-input", "scroll", "picker", "track-list"]);
 
-        let full = super::super::node::render_compiled(&ui.root, &ui, &reads, builtin::skin());
+        let full = super::super::node::render_compiled(&ui.root, ctx(&ui, &reads), builtin::skin());
         let full_tree = Tree::new(full.as_widget());
         assert_eq!(
             host_count(&full_tree),
@@ -3340,18 +3337,17 @@ mod tests {
             root,
             &[],
             *instance,
-            &ui,
-            &reads,
+            ctx(&ui, &reads),
             builtin::skin(),
         );
-        let mut element = host(child, root, &ui, &reads, builtin::skin());
+        let mut element = host(child, root, ctx(&ui, &reads), builtin::skin());
         let mut tree = Tree::new(element.as_widget());
         let node = element.as_widget_mut().layout(
             &mut tree,
             &renderer,
             &Limits::new(Size::ZERO, viewport),
         );
-        let hosted = HostedLayout::new(root, &ui, &reads, builtin::skin());
+        let hosted = HostedLayout::new(root, ctx(&ui, &reads), builtin::skin());
         let descriptors = hosted.descriptors();
         assert_eq!(
             descriptors.iter().map(descriptor_path).collect::<Vec<_>>(),
@@ -3718,16 +3714,15 @@ mod tests {
         };
         let renderer = headless_renderer();
         let viewport = Size::new(900.0, 600.0);
-        let hosted_layout = HostedLayout::new(root, &ui, &reads, builtin::skin());
+        let hosted_layout = HostedLayout::new(root, ctx(&ui, &reads), builtin::skin());
         let child = super::super::node::render_engine_node(
             root,
             &[],
             *instance,
-            &ui,
-            &reads,
+            ctx(&ui, &reads),
             builtin::skin(),
         );
-        let hosted = host(child, root, &ui, &reads, builtin::skin());
+        let hosted = host(child, root, ctx(&ui, &reads), builtin::skin());
         let area = Rc::new(Cell::new(Rect {
             h: 0.0,
             w: 0.0,
@@ -3841,18 +3836,17 @@ mod tests {
             root,
             &[],
             *instance,
-            &ui,
-            &reads,
+            ctx(&ui, &reads),
             builtin::skin(),
         );
-        let mut element = host(child, root, &ui, &reads, builtin::skin());
+        let mut element = host(child, root, ctx(&ui, &reads), builtin::skin());
         let mut tree = Tree::new(element.as_widget());
         let node = element.as_widget_mut().layout(
             &mut tree,
             &renderer,
             &Limits::new(Size::ZERO, viewport),
         );
-        let hosted = HostedLayout::new(root, &ui, &reads, builtin::skin());
+        let hosted = HostedLayout::new(root, ctx(&ui, &reads), builtin::skin());
         let targets = hosted.targets(Layout::new(&node), Cursor::Unavailable);
         let search = targets
             .iter()
@@ -4062,7 +4056,7 @@ mod tests {
         let renderer = headless_renderer();
         let viewport = Size::new(900.0, 600.0);
         let viewport_bounds = Rectangle::with_size(viewport);
-        let hosted = HostedLayout::new(root, &ui, &reads, builtin::skin());
+        let hosted = HostedLayout::new(root, ctx(&ui, &reads), builtin::skin());
 
         for (key, code) in [
             (Named::Delete, Code::Delete),
@@ -4072,11 +4066,10 @@ mod tests {
                 root,
                 &[],
                 *instance,
-                &ui,
-                &reads,
+                ctx(&ui, &reads),
                 builtin::skin(),
             );
-            let mut element = host(child, root, &ui, &reads, builtin::skin());
+            let mut element = host(child, root, ctx(&ui, &reads), builtin::skin());
             let mut tree = Tree::new(element.as_widget());
             let node = element.as_widget_mut().layout(
                 &mut tree,
@@ -4166,7 +4159,7 @@ mod tests {
         claimed_components(root, &mut components);
         assert_eq!(components, ["activation"; 5]);
 
-        let full = super::super::node::render_compiled(&ui.root, &ui, &reads, builtin::skin());
+        let full = super::super::node::render_compiled(&ui.root, ctx(&ui, &reads), builtin::skin());
         let full_tree = Tree::new(full.as_widget());
         assert_eq!(host_count(&full_tree), 1, "the tabs own one engine");
 
@@ -4176,18 +4169,17 @@ mod tests {
             root,
             &[],
             *instance,
-            &ui,
-            &reads,
+            ctx(&ui, &reads),
             builtin::skin(),
         );
-        let mut element = host(child, root, &ui, &reads, builtin::skin());
+        let mut element = host(child, root, ctx(&ui, &reads), builtin::skin());
         let mut tree = Tree::new(element.as_widget());
         let node = element.as_widget_mut().layout(
             &mut tree,
             &renderer,
             &Limits::new(Size::ZERO, viewport),
         );
-        let hosted = HostedLayout::new(root, &ui, &reads, builtin::skin());
+        let hosted = HostedLayout::new(root, ctx(&ui, &reads), builtin::skin());
         let descriptors = hosted.descriptors();
         assert_eq!(
             descriptors.iter().map(descriptor_path).collect::<Vec<_>>(),
@@ -4258,7 +4250,7 @@ mod tests {
         claimed_components(root, &mut components);
         assert_eq!(components, ["activation"; 23]);
 
-        let full = super::super::node::render_compiled(&ui.root, &ui, &reads, builtin::skin());
+        let full = super::super::node::render_compiled(&ui.root, ctx(&ui, &reads), builtin::skin());
         let full_tree = Tree::new(full.as_widget());
         assert_eq!(host_count(&full_tree), 1, "the nav owns one engine");
 
@@ -4268,18 +4260,17 @@ mod tests {
             root,
             &[],
             *instance,
-            &ui,
-            &reads,
+            ctx(&ui, &reads),
             builtin::skin(),
         );
-        let mut element = host(child, root, &ui, &reads, builtin::skin());
+        let mut element = host(child, root, ctx(&ui, &reads), builtin::skin());
         let mut tree = Tree::new(element.as_widget());
         let node = element.as_widget_mut().layout(
             &mut tree,
             &renderer,
             &Limits::new(Size::ZERO, viewport),
         );
-        let hosted = HostedLayout::new(root, &ui, &reads, builtin::skin());
+        let hosted = HostedLayout::new(root, ctx(&ui, &reads), builtin::skin());
         let descriptors = hosted.descriptors();
         assert_eq!(
             descriptors.iter().map(descriptor_path).collect::<Vec<_>>(),
@@ -4361,7 +4352,7 @@ mod tests {
         let renderer = headless_renderer();
         let viewport = Size::new(198.0, 30.0);
         let mut element =
-            super::super::node::render_compiled(&ui.root, &ui, &reads, builtin::skin());
+            super::super::node::render_compiled(&ui.root, ctx(&ui, &reads), builtin::skin());
         let mut tree = Tree::new(element.as_widget());
         assert_eq!(host_count(&tree), 0, "a leaf nav item owns no engine");
 
@@ -4418,7 +4409,7 @@ mod tests {
         claimed_components(row, &mut components);
         assert_eq!(components, ["wave"]);
 
-        let full = super::super::node::render_compiled(&ui.root, &ui, &reads, builtin::skin());
+        let full = super::super::node::render_compiled(&ui.root, ctx(&ui, &reads), builtin::skin());
         let full_tree = Tree::new(full.as_widget());
         assert_eq!(
             host_count(&full_tree),
@@ -4432,18 +4423,17 @@ mod tests {
             row,
             &[0],
             *instance,
-            &ui,
-            &reads,
+            ctx(&ui, &reads),
             builtin::skin(),
         );
-        let mut element = host(child, row, &ui, &reads, builtin::skin());
+        let mut element = host(child, row, ctx(&ui, &reads), builtin::skin());
         let mut tree = Tree::new(element.as_widget());
         let node = element.as_widget_mut().layout(
             &mut tree,
             &renderer,
             &Limits::new(Size::ZERO, viewport),
         );
-        let hosted = HostedLayout::new(row, &ui, &reads, builtin::skin());
+        let hosted = HostedLayout::new(row, ctx(&ui, &reads), builtin::skin());
         let descriptors = hosted.descriptors();
         assert_eq!(descriptors.len(), 1);
         let Descriptor::Wave { path } = &descriptors[0] else {
@@ -4658,7 +4648,7 @@ mod tests {
 
         let renderer = headless_renderer();
         let viewport = Size::new(224.0, 420.0);
-        let full = super::super::node::render_compiled(&ui.root, &ui, &reads, builtin::skin());
+        let full = super::super::node::render_compiled(&ui.root, ctx(&ui, &reads), builtin::skin());
         let full_tree = Tree::new(full.as_widget());
         assert_eq!(host_count(&full_tree), 1, "the whole mixer owns one engine");
 
@@ -4666,18 +4656,17 @@ mod tests {
             root,
             &[],
             *instance,
-            &ui,
-            &reads,
+            ctx(&ui, &reads),
             builtin::skin(),
         );
-        let mut element = host(child, root, &ui, &reads, builtin::skin());
+        let mut element = host(child, root, ctx(&ui, &reads), builtin::skin());
         let mut tree = Tree::new(element.as_widget());
         let node = element.as_widget_mut().layout(
             &mut tree,
             &renderer,
             &Limits::new(Size::ZERO, viewport),
         );
-        let hosted = HostedLayout::new(root, &ui, &reads, builtin::skin());
+        let hosted = HostedLayout::new(root, ctx(&ui, &reads), builtin::skin());
         let descriptors = hosted.descriptors();
         let targets = hosted.targets(Layout::new(&node), Cursor::Unavailable);
         let expected_paths = [
@@ -4829,18 +4818,17 @@ mod tests {
             strip,
             &[0, 0],
             *instance,
-            &ui,
-            &reads,
+            ctx(&ui, &reads),
             builtin::skin(),
         );
-        let mut element = host(child, strip, &ui, &reads, builtin::skin());
+        let mut element = host(child, strip, ctx(&ui, &reads), builtin::skin());
         let mut tree = Tree::new(element.as_widget());
         let node = element.as_widget_mut().layout(
             &mut tree,
             &renderer,
             &Limits::new(Size::ZERO, viewport),
         );
-        let layout = HostedLayout::new(strip, &ui, &reads, builtin::skin());
+        let layout = HostedLayout::new(strip, ctx(&ui, &reads), builtin::skin());
         let high = layout
             .targets(Layout::new(&node), Cursor::Unavailable)
             .into_iter()
@@ -4874,11 +4862,15 @@ mod tests {
             strip,
             &[0, 0],
             *instance,
-            &ui,
-            &refreshed_reads,
+            ctx(&ui, &refreshed_reads),
             builtin::skin(),
         );
-        let mut next = host(next_child, strip, &ui, &refreshed_reads, builtin::skin());
+        let mut next = host(
+            next_child,
+            strip,
+            ctx(&ui, &refreshed_reads),
+            builtin::skin(),
+        );
         tree.diff(next.as_widget());
         let next_node =
             next.as_widget_mut()
