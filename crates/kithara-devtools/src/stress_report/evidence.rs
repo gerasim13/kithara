@@ -46,6 +46,10 @@ struct AttemptDossier {
     wait_graph: BTreeSet<String>,
     lines: BTreeSet<String>,
     envelopes: BTreeSet<String>,
+    /// Newest run-length groups of the attempt envelope's probe tail, oldest
+    /// first. Ordered evidence, not a set: the last firing before the dump is
+    /// the verdict, and its `(xN)` count is the starvation streak.
+    flight_tail: Vec<String>,
     pressure: String,
     co_runners: BTreeSet<String>,
 }
@@ -159,12 +163,14 @@ pub(super) fn append_correlated_evidence(
             &mut dossiers,
         );
     }
+    let mut flight = envelope::FlightClusters::default();
     if let Some(path) = &args.envelope_dir {
         complete &= envelope::append(
             out,
             path,
             envelope::Input::new(&outcomes, &expected_envelopes, run_id, &args.evidence),
             &mut waits,
+            &mut flight,
             &mut dossiers,
         );
     } else if !expected_envelopes.is_empty() {
@@ -180,6 +186,18 @@ pub(super) fn append_correlated_evidence(
         "Wait-graph signatures",
         &waits,
         "Repeated holders, waiters, or quiescence pins are causal candidates. Task IDs and timing counters are removed. An optional backtrace belongs to the snapshot caller, not necessarily to a holder or waiter.",
+    );
+    render_clusters(
+        out,
+        "Flight probe signatures",
+        &flight.probes,
+        "Probe firings recorded in the in-memory flight ring at dump time. Only failing attempts write dumps, so the failed column counts how many of them carried the line; numeric field values are normalized. A `waiting branch` line names the step that kept ticking the hang watchdog.",
+    );
+    render_clusters(
+        out,
+        "Flight event signatures",
+        &flight.events,
+        "DEBUG events from the flight ring at dump time — the state transitions immediately preceding the failure, independent of the stdout filter.",
     );
     if let Some(path) = &args.pressure_log {
         let (points, pressure_complete) = pressure::append(out, path);
@@ -462,12 +480,12 @@ fn render_attempt_dossiers(
         return;
     }
     out.push_str(
-        "\n## Failed-attempt evidence overlay\n\nEach bounded example row joins the terminal symptom with same-attempt runtime evidence; raw artifacts remain exhaustive. Empty cells mean that source emitted no attributable record. Co-runners and pressure are correlation candidates, not causes.\n\n| attempt | symptom | project frames | wait graph | line evidence | envelope | pressure | co-running tests |\n|---|---|---|---|---|---|---|---|\n",
+        "\n## Failed-attempt evidence overlay\n\nEach bounded example row joins the terminal symptom with same-attempt runtime evidence; raw artifacts remain exhaustive. Empty cells mean that source emitted no attributable record. The flight tail is ordered, oldest first, with `(xN)` marking consecutive repeats of one probe. Co-runners and pressure are correlation candidates, not causes.\n\n| attempt | symptom | project frames | wait graph | line evidence | envelope | flight tail | pressure | co-running tests |\n|---|---|---|---|---|---|---|---|---|\n",
     );
     for dossier in dossiers.values().take(MAX_FAILURE_ROWS) {
         let _ = writeln!(
             out,
-            "| `{}`<br>{} | {} | {} | {} | {} | {} | {} | {} |",
+            "| `{}`<br>{} | {} | {} | {} | {} | {} | {} | {} | {} |",
             markdown_cell(&dossier.display),
             markdown_cell(&dossier.test),
             markdown_cell(&dossier.symptom),
@@ -475,6 +493,7 @@ fn render_attempt_dossiers(
             render_set(&dossier.wait_graph),
             render_set(&dossier.lines),
             render_set(&dossier.envelopes),
+            render_ordered(&dossier.flight_tail),
             markdown_cell(&dossier.pressure),
             render_set(&dossier.co_runners),
         );
@@ -486,6 +505,16 @@ fn render_attempt_dossiers(
             dossiers.len(),
         );
     }
+}
+
+/// Ordered evidence cell: the sequence is the meaning, so no sorting and no
+/// truncation beyond what the producer already bounded.
+fn render_ordered(values: &[String]) -> String {
+    values
+        .iter()
+        .map(|value| markdown_cell(value))
+        .collect::<Vec<_>>()
+        .join("<br>")
 }
 
 fn render_set(values: &BTreeSet<String>) -> String {
