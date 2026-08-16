@@ -11,10 +11,9 @@ use kithara::{
     queue::{Queue, QueueConfig, RepeatMode, Transition},
 };
 use kithara_integration_tests::{
-    audio_mock::TestPcmReader, offline::resource_from_reader_with_src,
+    audio_mock::TestPcmReader,
+    offline::{OfflinePlayerHarness, OfflinePlayerOptions, resource_from_reader_with_src},
 };
-
-use super::offline_player_harness::{OfflinePlayerHarness, OfflinePlayerOptions};
 
 const SAMPLE_RATE: u32 = 44_100;
 const CHANNELS: u16 = 2;

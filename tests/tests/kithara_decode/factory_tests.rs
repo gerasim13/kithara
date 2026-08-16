@@ -7,11 +7,12 @@ use std::num::NonZeroU32;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 use std::sync::atomic::AtomicU64;
 
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+use kithara::platform::sync::Arc;
 use kithara::{
     self,
     bufpool::{BytePool, PcmPool},
     decode::{DecodeError, DecoderBackend, DecoderConfig, DecoderFactory},
-    platform::sync::Arc,
     resampler::NoResamplerBackend,
     stream::{AudioCodec, ContainerFormat, MediaInfo},
 };

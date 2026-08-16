@@ -7,10 +7,10 @@ use kithara::{
     play::{PlayerEvent, PlayerImpl, Resource, ResourceConfig},
 };
 use kithara_integration_tests::{
-    SignalFormat, SignalSpec, SignalSpecLength, TestServerHelper, TestTempDir, kithara, temp_dir,
+    SignalFormat, SignalSpec, SignalSpecLength, TestServerHelper, TestTempDir, kithara,
+    offline::{OfflinePlayerHarness, OfflinePlayerOptions},
+    temp_dir,
 };
-
-use super::offline_player_harness::{OfflinePlayerHarness, OfflinePlayerOptions};
 
 const SAMPLE_RATE: u32 = 44_100;
 const BLOCK_FRAMES: usize = 512;

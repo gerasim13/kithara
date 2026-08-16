@@ -12,13 +12,15 @@ use kithara::{
 };
 use kithara_devtools::viz::trace::{TraceRecord, TraceRecordKind};
 use kithara_integration_tests::{
-    TestServerHelper, architecture_trace, disk_asset_store, hls_fixture::create_test_downloader,
-    kithara, temp_dir, waits::wait_for_loader_done_event,
+    TestServerHelper, architecture_trace, disk_asset_store,
+    hls_fixture::create_test_downloader,
+    kithara,
+    offline::{OfflinePlayerHarness, OfflinePlayerOptions},
+    temp_dir,
+    waits::wait_for_loader_done_event,
 };
 use kithara_test_utils::probe::capture as probe_capture;
 use serial_test::serial;
-
-use super::offline_player_harness::{OfflinePlayerHarness, OfflinePlayerOptions};
 
 const SAMPLE_RATE: u32 = 44_100;
 const BLOCK_FRAMES: usize = 512;

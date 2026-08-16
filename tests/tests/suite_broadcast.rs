@@ -7,9 +7,6 @@
 mod common;
 
 mod kithara_broadcast {
-    #[path = "../common/offline_player_harness.rs"]
-    mod offline_player_harness;
-
     mod engine_e2e;
     mod hls_conformance;
     mod origin;

@@ -337,7 +337,7 @@ mod tests {
         dirty: AtomicBool,
         durable_flushes: AtomicUsize,
         flushes: AtomicUsize,
-        flushed: Option<mpsc::Sender<()>>,
+        flushed: Option<Sender<()>>,
     }
 
     impl CountingSource {
@@ -351,7 +351,7 @@ mod tests {
             })
         }
 
-        fn with_completion(name: &'static str, flushed: mpsc::Sender<()>) -> Arc<Self> {
+        fn with_completion(name: &'static str, flushed: Sender<()>) -> Arc<Self> {
             Arc::new(Self {
                 name,
                 dirty: AtomicBool::new(false),
