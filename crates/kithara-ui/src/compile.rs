@@ -6,7 +6,7 @@ use crate::{
     error::UiDocError,
     expand::{
         Binding, BlockSpec, Budget, ControlSite, DropSpec, ExpandedInclude, ExpandedNode, Expander,
-        intern_binding, substitute_binding, substitute_map,
+        has_driven_object, intern_binding, substitute_binding, substitute_map,
     },
     ids::{InternId, Interner, SourceUri, StrArena},
     layout::{Axis, FrameSides, LayoutNode, parse_layout},
@@ -32,6 +32,9 @@ pub struct CompiledUi {
     pub size: SizeSpec,
     /// The layout asked to be framed by its own resize edges.
     pub resize_edges: bool,
+    /// Somewhere in this document an object is placed by an endpoint, so
+    /// re-reading the endpoints can move something a host already mounted.
+    pub driven: bool,
     arena: StrArena,
     includes: Vec<IncludedModule>,
     #[cfg(feature = "render")]
@@ -170,10 +173,12 @@ pub fn compile(
         .map(|binding| intern_binding(&mut interner, binding, &loaded.uri))
         .transpose()?;
     let arena = interner.finish();
+    let driven = declares_motion(&root);
     Ok(CompiledUi {
         root,
         size,
         dragged,
+        driven,
         includes,
         arena,
         resize_edges: document.resize_edges,
@@ -296,6 +301,17 @@ impl Compiler<'_> {
                 })
             }
         }
+    }
+}
+
+/// Whether any module of this layout places something off an endpoint.
+fn declares_motion(node: &CompiledNode) -> bool {
+    match node {
+        CompiledNode::Split { children, .. } => {
+            children.iter().any(|(_, child)| declares_motion(child))
+        }
+        CompiledNode::Optional { child, .. } => declares_motion(child),
+        CompiledNode::Module { root, .. } => has_driven_object(root),
     }
 }
 

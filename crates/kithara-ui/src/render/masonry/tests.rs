@@ -26,15 +26,14 @@ use num_traits::cast::AsPrimitive;
 
 use super::{
     CustomWidget, MasonryHost, MasonryNode, MasonryRoot, MasonryState, Repaint, Size2, SizeLimits,
-    TextMeasurer,
-    leaf::DragProgram,
-    node::{Node, RootParts},
+    TextMeasurer, built::RootParts, leaf::DragProgram, node::Node,
 };
 use crate::{
     atoms::bar::context::Context,
     builtin,
     compile::{CompiledUi, compile},
     draw::{DrawListBuilder, Pt, Rect},
+    geom::Transform,
     ids::{EndpointId, SourceUri},
     interact::{Hit, Input, Key as NeutralKey, Outcome, PointerOwnership, PointerPhase, Scroll},
     registry::{EndpointCategory, EndpointDesc, EndpointRegistry, ValueKind},
@@ -2595,7 +2594,7 @@ fn retained_vis_declares_exact_logical_frames_and_continuous_repaint() {
     reads.right.set(0.5);
     reads.volume.set(0.5);
     reads.time.set(9.0);
-    root.refresh(&ui, &reads);
+    root.refresh(&ui, &reads, builtin::skin_doc());
     root.redraw()
         .unwrap_or_else(|error| panic!("Vis refresh must not remount the tree: {error}"));
     let refreshed = root.vis_declarations();
@@ -2605,14 +2604,14 @@ fn retained_vis_declares_exact_logical_frames_and_continuous_repaint() {
     assert_eq!(refreshed[0].frame().time(), 9.0);
 
     reads.first.set(f64::NAN);
-    root.refresh(&ui, &reads);
+    root.refresh(&ui, &reads, builtin::skin_doc());
     assert_eq!(
         root.vis_declarations().len(),
         1,
         "an invalid preset suppresses only its own native declaration"
     );
     reads.levels_present.set(false);
-    root.refresh(&ui, &reads);
+    root.refresh(&ui, &reads, builtin::skin_doc());
     assert!(
         root.vis_declarations().is_empty(),
         "missing levels suppress every Vis declaration"
@@ -2791,7 +2790,7 @@ fn retained_refresh_changes_the_active_preset_without_remounting_the_leaf() {
     let micro_draw_data = micro.encoding().draw_data.clone();
 
     reads.active.set(builtin::PLAYER_PRESET);
-    root.refresh(&ui, &reads);
+    root.refresh(&ui, &reads, builtin::skin_doc());
     let (player, _) = root
         .redraw()
         .unwrap_or_else(|error| panic!("PLAYER PresetSelector must draw: {error}"));
@@ -2801,6 +2800,103 @@ fn retained_refresh_changes_the_active_preset_without_remounting_the_leaf() {
         root.root().get_widget(id).is_some(),
         "refresh must update the mounted leaf rather than replace it"
     );
+}
+
+/// One scalar an object can be driven by, standing in for whatever the
+/// application advances between frames.
+struct DrivenReads {
+    along: Cell<f64>,
+}
+
+impl Reads for DrivenReads {
+    fn get(&self, endpoint: &str) -> Option<ReadValue<'_>> {
+        (endpoint == "deck.view.zoom").then(|| ReadValue::Scalar(self.along.get()))
+    }
+}
+
+fn driven_root(
+    root: &str,
+    reads: &DrivenReads,
+) -> (CompiledUi, MasonryState, MasonryRoot<UiEvent>) {
+    let registry = fixture_registry();
+    let ui = fixture_ui("driven-fixture", root, &registry);
+    let state = MasonryState::default();
+    let output = document::render(
+        &ui.root,
+        &ui,
+        reads,
+        builtin::skin_doc(),
+        MasonryHost::new(&ui, reads, builtin::skin()).with_state(state.clone()),
+    );
+    let root = masonry_root(output, 200, 120);
+    (ui, state, root)
+}
+
+fn placed_at(root: &MasonryRoot<UiEvent>, state: &MasonryState, path: &str) -> Transform {
+    let id = state
+        .widget_id(path)
+        .unwrap_or_else(|| panic!("`{path}` must stay addressable"));
+    root.root()
+        .get_widget(id)
+        .unwrap_or_else(|| panic!("`{path}` must stay mounted"))
+        .downcast::<Node>()
+        .unwrap_or_else(|| panic!("`{path}` must be a document node"))
+        .transform()
+}
+
+const DRIVEN: &str = r#"Row(size: (w: Fill, h: Fill), gap: 0.0, pad: 0.0, children: [
+    Object(
+        id: "travel",
+        to: (position: (100.0, 0.0)),
+        phase: Model(id: "deck.view.zoom"),
+        child: Spacer(id: "carried", size: Some((w: Fixed(40.0), h: Fixed(20.0)))),
+    ),
+])"#;
+
+/// What a refresh is for, asked of the one thing a rebuild used to answer.
+///
+/// The retained host keeps its tree across frames and re-reads the document
+/// into it instead. An object's pose is part of what the document says, so a
+/// clock the application advanced has to reach the mounted node the same way a
+/// control's value does — otherwise the immediate host animates and this one
+/// stands still, and a single-frame parity capture cannot tell.
+#[kithara::test]
+fn a_driven_object_moves_when_the_retained_host_refreshes() {
+    let reads = DrivenReads {
+        along: Cell::new(0.0),
+    };
+    let (ui, state, mut root) = driven_root(DRIVEN, &reads);
+    let start = placed_at(&root, &state, "demo/carried");
+
+    reads.along.set(1.0);
+    root.refresh(&ui, &reads, builtin::skin_doc());
+
+    assert_ne!(placed_at(&root, &state, "demo/carried"), start);
+}
+
+/// And an object nobody drives holds still across the same refresh, which is
+/// what makes the test above a measurement rather than a statement about the
+/// harness moving everything it touches.
+#[kithara::test]
+fn an_object_nobody_drives_keeps_its_pose_across_a_refresh() {
+    const STILL: &str = r#"Row(size: (w: Fill, h: Fill), gap: 0.0, pad: 0.0, children: [
+        Object(
+            id: "posed",
+            transform: (position: (10.0, 4.0)),
+            child: Spacer(id: "carried", size: Some((w: Fixed(40.0), h: Fixed(20.0)))),
+        ),
+    ])"#;
+
+    let reads = DrivenReads {
+        along: Cell::new(0.0),
+    };
+    let (ui, state, mut root) = driven_root(STILL, &reads);
+    let start = placed_at(&root, &state, "demo/carried");
+
+    reads.along.set(1.0);
+    root.refresh(&ui, &reads, builtin::skin_doc());
+
+    assert_eq!(placed_at(&root, &state, "demo/carried"), start);
 }
 
 #[kithara::test]
@@ -2833,7 +2929,7 @@ fn a_mounted_table_draws_rows_that_arrive_during_refresh() {
         .unwrap_or_else(|error| panic!("empty Table must draw its frame: {error}"));
     let before_glyphs = before.encoding().resources.glyphs.len();
     reads.loaded.set(true);
-    root.refresh(&ui, &reads);
+    root.refresh(&ui, &reads, builtin::skin_doc());
     let (after, _) = root
         .redraw()
         .unwrap_or_else(|error| panic!("refreshed Table must draw its rows: {error}"));
@@ -2918,7 +3014,7 @@ fn a_mounted_tree_refreshes_rows_and_query_independently() {
     );
 
     reads.rows_loaded.set(true);
-    root.refresh(&ui, &reads);
+    root.refresh(&ui, &reads, builtin::skin_doc());
     assert_eq!(
         root.tree_picture("demo/browser"),
         Some((TREE_ROWS.len(), String::new())),
@@ -2934,7 +3030,7 @@ fn a_mounted_tree_refreshes_rows_and_query_independently() {
     );
 
     reads.query_loaded.set(true);
-    root.refresh(&ui, &reads);
+    root.refresh(&ui, &reads, builtin::skin_doc());
     assert_eq!(
         root.tree_picture("demo/browser"),
         Some((TREE_ROWS.len(), "Late".to_owned())),

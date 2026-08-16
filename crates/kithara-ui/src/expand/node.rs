@@ -292,6 +292,37 @@ impl BlockNode for ExpandedNode {
     }
 }
 
+/// Whether anything in this subtree is placed by an endpoint rather than by the
+/// document alone.
+///
+/// An object needs both ends of a track and something driving it to move at
+/// all: a far pose nobody travels towards, or a phase with nowhere to carry the
+/// object, both leave it exactly where the document wrote it. A host that keeps
+/// its tree between frames asks this to find out whether re-reading the
+/// document can move anything, and does no pose work at all when it cannot.
+pub(crate) fn has_driven_object(node: &ExpandedNode) -> bool {
+    match node {
+        ExpandedNode::Object {
+            to,
+            phase,
+            motion,
+            child,
+            ..
+        } => (to.is_some() && (phase.is_some() || motion.is_some())) || has_driven_object(child),
+        ExpandedNode::Row { children, .. }
+        | ExpandedNode::Column { children, .. }
+        | ExpandedNode::Stage { children, .. }
+        | ExpandedNode::Slot { children, .. } => children.iter().any(has_driven_object),
+        ExpandedNode::Popover {
+            anchor, content, ..
+        } => has_driven_object(anchor) || has_driven_object(content),
+        ExpandedNode::Optional { child, .. }
+        | ExpandedNode::Pressable { child, .. }
+        | ExpandedNode::Scroll { child, .. } => has_driven_object(child),
+        ExpandedNode::Control { .. } => false,
+    }
+}
+
 /// Control path a wheel detent publishes on, and the scalar it steps.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]

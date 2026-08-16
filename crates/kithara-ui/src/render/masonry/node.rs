@@ -1,13 +1,13 @@
-use std::{cell::Cell, marker::PhantomData, rc::Rc};
+use std::{cell::Cell, rc::Rc};
 
 use kithara_platform::time::Duration;
 use masonry::{
     accesskit::{Node as AccessNode, Role},
     core::{
         AccessCtx, AllowRawMut, BoxConstraints, ChildrenIds, ComposeCtx, CursorIcon, EventCtx,
-        LayoutCtx, NewWidget, PaintCtx, PointerButton as MasonryPointerButton, PointerEvent,
-        PropertiesMut, PropertiesRef, QueryCtx, RegisterCtx, TextEvent, Update, UpdateCtx, Widget,
-        WidgetId, WidgetPod,
+        LayoutCtx, PaintCtx, PointerButton as MasonryPointerButton, PointerEvent, PropertiesMut,
+        PropertiesRef, QueryCtx, RegisterCtx, TextEvent, Update, UpdateCtx, Widget, WidgetId,
+        WidgetPod,
     },
     kurbo::{Point, Rect as MasonryRect, Size as MasonrySize},
     vello::Scene,
@@ -20,13 +20,11 @@ use super::{
     custom::HostAction,
     leaf::{Leaf, cursor_icon},
     mount::NodeLayout,
-    picker::{EngineTarget, HostedEngine, local_ime_area, sync_ime_area},
-    popover::PopoverState,
+    picker::{HostedEngine, local_ime_area, sync_ime_area},
 };
 use crate::{
     backends::VelloBackend,
     draw::{DrawListBuilder, Pt, Rect, Rgba, Transform, replay},
-    expand::Binding,
     interact::{
         CursorShape, Hit, Input, MOUSE, PointerInput, PointerOwnership, PointerPhase,
         masonry::{
@@ -35,39 +33,9 @@ use crate::{
         },
     },
     layout::FrameSides,
-    render::{
-        HostedControlPlan, ReadValue, Reads, UiEvent, shader::ShaderDeclaration, vis::VisFrame,
-    },
+    render::{ReadValue, Reads, shader::ShaderDeclaration, vis::VisFrame},
     solve,
 };
-
-type PopoverRegistration = (WidgetId, Rc<PopoverState>, Rc<dyn Fn() -> HostAction>);
-type WindowTracker = (Rc<Cell<Option<Pt>>>, Option<WidgetId>, bool);
-/// One mounted leaf and the model source it re-reads without rebuilding.
-pub(crate) enum Watched {
-    Read { id: WidgetId, binding: Binding },
-    Snapshot { id: WidgetId },
-}
-pub(super) type LayerParts = (
-    NewWidget<Node>,
-    solve::Size<solve::Length>,
-    Vec<NewWidget<dyn Widget>>,
-    Vec<PopoverRegistration>,
-    Vec<EngineTarget>,
-    Vec<Rc<HostedEngine>>,
-    Vec<WidgetId>,
-    Option<WindowTracker>,
-    Vec<Watched>,
-);
-pub(super) type RootParts = (
-    NewWidget<dyn Widget>,
-    Vec<NewWidget<dyn Widget>>,
-    Vec<PopoverRegistration>,
-    Vec<Rc<HostedEngine>>,
-    Vec<WidgetId>,
-    Option<WindowTracker>,
-    Vec<Watched>,
-);
 
 #[derive(Clone, Copy, Eq, PartialEq)]
 enum NodePointerOwner {
@@ -92,27 +60,8 @@ pub(crate) struct Node {
     transform: Transform,
 }
 
-/// A retained Masonry tree produced by the document facade.
-#[derive(fieldwork::Fieldwork)]
-#[fieldwork(opt_in, get)]
-pub struct MasonryNode<Action> {
-    widget: NewWidget<Node>,
-    #[field(get(copy), vis = "pub(crate)")]
-    declared: solve::Size<solve::Length>,
-    action: PhantomData<fn() -> Action>,
-    layers: Vec<NewWidget<dyn Widget>>,
-    popovers: Vec<PopoverRegistration>,
-    engine_targets: Vec<EngineTarget>,
-    engines: Vec<Rc<HostedEngine>>,
-    watched: Vec<Watched>,
-    native: Vec<WidgetId>,
-    window: Option<WindowTracker>,
-    #[cfg(test)]
-    document_ids: Vec<WidgetId>,
-}
-
 impl Node {
-    fn new(
+    pub(super) fn new(
         layout: NodeLayout,
         declared: solve::Size<solve::Length>,
         children: Vec<WidgetPod<Self>>,
@@ -495,6 +444,64 @@ impl Node {
     }
 }
 
+/// What the mount sets on a node, and what a refresh sets on it afterwards.
+///
+/// These are the node's own state rather than anything it computes, and the
+/// only callers are the tree builder and the render root; keeping them apart
+/// from the widget's behaviour is what says so.
+impl Node {
+    /// Puts this node where the document now says it is, and answers whether
+    /// that moved it. A pose only changes what the node paints, so a node that
+    /// moved needs repainting and nothing else re-measured.
+    pub(crate) fn place(&mut self, transform: Transform) -> bool {
+        let moved = self.transform != transform;
+        self.transform = transform;
+        moved
+    }
+
+    /// What this node runs when it is pressed, and what it runs when it is
+    /// pressed with the other button.
+    pub(super) fn set_actions(
+        &mut self,
+        primary: Option<Box<dyn Fn() -> HostAction>>,
+        secondary: Option<Box<dyn Fn() -> HostAction>>,
+    ) {
+        self.primary = primary;
+        self.secondary = secondary;
+    }
+
+    pub(super) fn set_engine(&mut self, engine: Rc<HostedEngine>) {
+        self.engine = Some(engine);
+    }
+
+    /// The cell this node publishes its laid-out box into, made on first ask.
+    ///
+    /// A retained engine reads the box to route a pointer, and only a node an
+    /// engine drives is worth tracking, so the cell appears when one asks for
+    /// it rather than on every node.
+    pub(super) fn geometry(&mut self) -> Rc<Cell<MasonryRect>> {
+        Rc::clone(
+            self.geometry
+                .get_or_insert_with(|| Rc::new(Cell::new(MasonryRect::ZERO))),
+        )
+    }
+
+    /// Whether this node draws through a pass of its own rather than into the
+    /// scene, which is what makes it something the host has to declare.
+    pub(super) const fn is_native(&self) -> bool {
+        matches!(
+            &self.layout,
+            NodeLayout::Leaf(Leaf::Shader(_) | Leaf::Vis(_))
+        )
+    }
+
+    /// Where this node draws, relative to the box the layout gave it.
+    #[cfg(test)]
+    pub(super) const fn transform(&self) -> Transform {
+        self.transform
+    }
+}
+
 impl AllowRawMut for Node {}
 
 impl Widget for Node {
@@ -731,227 +738,6 @@ impl Widget for Node {
     }
 }
 
-impl<Action> MasonryNode<Action> {
-    pub(super) fn document(
-        layout: NodeLayout,
-        declared: solve::Size<solve::Length>,
-        children: Vec<Self>,
-        _expose_children: bool,
-        background: Option<Rgba>,
-        frame: Option<(FrameSides, Rgba, f32)>,
-    ) -> Self {
-        let mut child_widgets = Vec::with_capacity(children.len());
-        let mut layers = Vec::new();
-        let mut popovers = Vec::new();
-        let mut engine_targets = Vec::new();
-        let mut engines = Vec::new();
-        let mut watched = Vec::new();
-        let mut native = Vec::new();
-        let mut window = None;
-        #[cfg(test)]
-        let mut child_ids = Vec::new();
-        for child in children {
-            layers.extend(child.layers);
-            popovers.extend(child.popovers);
-            engine_targets.extend(child.engine_targets);
-            engines.extend(child.engines);
-            watched.extend(child.watched);
-            native.extend(child.native);
-            window = merge_window(window, child.window);
-            #[cfg(test)]
-            if _expose_children {
-                child_ids.extend(child.document_ids);
-            }
-            child_widgets.push(child.widget.to_pod());
-        }
-        let widget = NewWidget::new(Node::new(
-            layout,
-            declared,
-            child_widgets,
-            background,
-            frame,
-        ));
-        if matches!(
-            &widget.widget.layout,
-            NodeLayout::Leaf(Leaf::Shader(_) | Leaf::Vis(_))
-        ) {
-            native.push(widget.id());
-        }
-        #[cfg(test)]
-        let document_ids = {
-            let mut ids = Vec::with_capacity(child_ids.len() + 1);
-            ids.push(widget.id());
-            ids.extend(child_ids);
-            ids
-        };
-        Self {
-            widget,
-            declared,
-            action: PhantomData,
-            layers,
-            popovers,
-            engine_targets,
-            engines,
-            watched,
-            native,
-            window,
-            #[cfg(test)]
-            document_ids,
-        }
-    }
-
-    pub(super) fn furniture(
-        layout: NodeLayout,
-        declared: solve::Size<solve::Length>,
-        background: Option<Rgba>,
-    ) -> Self {
-        let widget = NewWidget::new(Node::new(layout, declared, Vec::new(), background, None));
-        Self {
-            widget,
-            declared,
-            action: PhantomData,
-            layers: Vec::new(),
-            popovers: Vec::new(),
-            engine_targets: Vec::new(),
-            engines: Vec::new(),
-            watched: Vec::new(),
-            native: Vec::new(),
-            window: None,
-            #[cfg(test)]
-            document_ids: Vec::new(),
-        }
-    }
-
-    pub(crate) fn set_actions(
-        &mut self,
-        primary: Option<Box<dyn Fn() -> HostAction>>,
-        secondary: Option<Box<dyn Fn() -> HostAction>>,
-    ) {
-        self.widget.widget.primary = primary;
-        self.widget.widget.secondary = secondary;
-    }
-
-    delegate::delegate! {
-        to self.layers {
-            #[call(push)]
-            pub(crate) fn add_layer(&mut self, layer: NewWidget<dyn Widget>);
-            #[call(extend)]
-            pub(crate) fn append_layers(&mut self, layers: Vec<NewWidget<dyn Widget>>);
-        }
-    }
-
-    pub(crate) fn add_popover(
-        &mut self,
-        state: Rc<PopoverState>,
-        dismiss: Rc<dyn Fn() -> HostAction>,
-    ) {
-        self.popovers.push((self.widget.id(), state, dismiss));
-    }
-
-    pub(crate) fn append_popovers(&mut self, popovers: Vec<PopoverRegistration>) {
-        self.popovers.extend(popovers);
-    }
-
-    pub(crate) fn add_engine_control(&mut self, plan: HostedControlPlan, prepend: bool) {
-        let Some(target) = EngineTarget::new(self.track_geometry(), plan) else {
-            return;
-        };
-        let index = if prepend {
-            0
-        } else {
-            self.engine_targets.len()
-        };
-        self.engine_targets.insert(index, target);
-    }
-
-    pub(crate) fn track_geometry(&mut self) -> Rc<Cell<MasonryRect>> {
-        if let Some(geometry) = &self.widget.widget.geometry {
-            return Rc::clone(geometry);
-        }
-        let geometry = Rc::new(Cell::new(MasonryRect::ZERO));
-        self.widget.widget.geometry = Some(Rc::clone(&geometry));
-        geometry
-    }
-
-    pub(crate) fn append_engine_targets(&mut self, targets: Vec<EngineTarget>) {
-        self.engine_targets.extend(targets);
-    }
-
-    pub(crate) fn append_engines(&mut self, engines: Vec<Rc<HostedEngine>>) {
-        self.engines.extend(engines);
-    }
-
-    pub(crate) fn append_watched(&mut self, watched: Vec<Watched>) {
-        self.watched.extend(watched);
-    }
-
-    pub(crate) fn append_native(&mut self, native: Vec<WidgetId>) {
-        self.native.extend(native);
-    }
-
-    /// Remembers that this node's leaf shows one endpoint, so its value can be
-    /// re-read into the mounted tree instead of rebuilding the tree to show it.
-    pub(crate) fn watch(&mut self, binding: &Binding) {
-        self.watched.push(Watched::Read {
-            id: self.widget.id(),
-            binding: binding.clone(),
-        });
-    }
-
-    pub(crate) fn watch_snapshot(&mut self) {
-        self.watched.push(Watched::Snapshot {
-            id: self.widget.id(),
-        });
-    }
-
-    pub(crate) fn host_engine(&mut self, map_event: Rc<dyn Fn(UiEvent) -> HostAction>) {
-        if self.engine_targets.is_empty() {
-            return;
-        }
-        let targets = std::mem::take(&mut self.engine_targets);
-        let engine = HostedEngine::new(self.widget.id(), targets, map_event);
-        self.engines.push(Rc::clone(&engine));
-        self.widget.widget.engine = Some(engine);
-    }
-
-    /// Offsets everything the mounted leaf draws, without moving the box the
-    /// layout gave it or the region that answers the pointer.
-    pub(crate) fn set_transform(&mut self, transform: Transform) {
-        self.widget.widget.transform = transform;
-    }
-
-    pub(crate) fn set_window_pointer(&mut self, pointer: Rc<Cell<Option<Pt>>>) {
-        let (layer, repaint) = self
-            .window
-            .as_ref()
-            .map_or((None, false), |(_, layer, repaint)| (*layer, *repaint));
-        self.window = Some((pointer, layer, repaint));
-    }
-
-    pub(crate) fn set_window_layer(
-        &mut self,
-        pointer: Rc<Cell<Option<Pt>>>,
-        layer: WidgetId,
-        repaint: bool,
-    ) {
-        self.window = Some((pointer, Some(layer), repaint));
-    }
-
-    pub(crate) fn set_window_tracker(&mut self, tracker: WindowTracker) {
-        self.window = Some(tracker);
-    }
-
-    #[cfg(test)]
-    pub(crate) fn document_ids(&self) -> &[WidgetId] {
-        &self.document_ids
-    }
-
-    #[cfg(test)]
-    pub(crate) fn widget_id(&self) -> WidgetId {
-        self.widget.id()
-    }
-}
-
 #[cfg(test)]
 impl Node {
     pub(crate) fn set_child_stashed(
@@ -961,48 +747,5 @@ impl Node {
     ) {
         this.ctx
             .set_stashed(&mut this.widget.children[child], stashed);
-    }
-}
-
-impl<Action> From<MasonryNode<Action>> for LayerParts {
-    fn from(node: MasonryNode<Action>) -> Self {
-        (
-            node.widget,
-            node.declared,
-            node.layers,
-            node.popovers,
-            node.engine_targets,
-            node.engines,
-            node.native,
-            node.window,
-            node.watched,
-        )
-    }
-}
-
-impl<Action> From<MasonryNode<Action>> for RootParts {
-    fn from(node: MasonryNode<Action>) -> Self {
-        (
-            node.widget.erased(),
-            node.layers,
-            node.popovers,
-            node.engines,
-            node.native,
-            node.window,
-            node.watched,
-        )
-    }
-}
-
-fn merge_window(
-    left: Option<WindowTracker>,
-    right: Option<WindowTracker>,
-) -> Option<WindowTracker> {
-    match (left, right) {
-        (Some((pointer, layer, repaint)), Some((_, child_layer, child_repaint))) => {
-            Some((pointer, layer.or(child_layer), repaint || child_repaint))
-        }
-        (Some(window), None) | (None, Some(window)) => Some(window),
-        (None, None) => None,
     }
 }

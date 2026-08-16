@@ -222,8 +222,14 @@ where
     /// Advances one frame's worth of animation.
     pub fn frame(&mut self, elapsed: Duration) {
         self.app.tick();
-        let Self { app, root, ui, .. } = self;
-        app.reads(|reads| root.refresh(ui, reads));
+        let Self {
+            app,
+            root,
+            ui,
+            config,
+            ..
+        } = self;
+        app.reads(|reads| root.refresh(ui, reads, config.skin_doc));
         if let Err(error) = self
             .root
             .handle_window_event(WindowEvent::AnimFrame(elapsed))
@@ -324,8 +330,14 @@ where
             self.app.update(event);
         }
         if self.app.document() == was {
-            let Self { app, root, ui, .. } = self;
-            app.reads(|reads| root.refresh(ui, reads));
+            let Self {
+                app,
+                root,
+                ui,
+                config,
+                ..
+            } = self;
+            app.reads(|reads| root.refresh(ui, reads, config.skin_doc));
             return;
         }
         let Ok(ui) = compile_document(&self.app, &self.config)

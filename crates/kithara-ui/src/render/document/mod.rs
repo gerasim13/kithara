@@ -3,6 +3,8 @@ mod group;
 mod host;
 mod module;
 mod popover;
+#[cfg(feature = "masonry")]
+mod poses;
 pub(crate) mod read;
 
 pub use facade::render;
@@ -12,3 +14,5 @@ pub use group::Group;
 pub use host::Host;
 pub use module::Module;
 pub use popover::Popover;
+#[cfg(feature = "masonry")]
+pub(crate) use poses::placements;

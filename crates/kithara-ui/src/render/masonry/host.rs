@@ -9,6 +9,7 @@ use masonry::core::WidgetId;
 
 use super::{
     CustomWidget, MasonryNode,
+    built::LayerParts,
     custom::{HostAction, MappedCustom, MountedCustom},
     flex::{ChildLayout, Flex},
     leaf::{Leaf, WindowLeafLayer},
@@ -16,7 +17,6 @@ use super::{
         Cx, NodeControl, NodeLayout, Viewport, activates, alignment, control_declared, declared,
         length, main_length, pointer_owner,
     },
-    node::LayerParts,
     popover::{PopoverLayer, PopoverState},
     root::WindowLayer,
     shader::ShaderLeaf,
@@ -378,7 +378,7 @@ where
     ) where
         Program: crate::render::WindowLayerProgram + 'static,
     {
-        let geometry = output.track_geometry();
+        let geometry = output.geometry();
         let pointer = Rc::clone(&self.state.pointer);
         let layer = WindowLeafLayer::new(
             program,
@@ -627,6 +627,7 @@ where
     ) -> Self::Output {
         let declared = control_declared(spec, size, self.skin);
         let plan = hosted_control_plan(path, spec, read, self.ui, self.reads, self.skin);
+        let path_id = path;
         let path = self.ui.resolve(path);
         // What the document says, narrowed to what this host actually paints:
         // a control it still mounts as an empty box is driven by the engine
@@ -653,7 +654,12 @@ where
             },
             |widget| self.custom_leaf(widget, declared),
         );
-        output.set_transform(transform);
+        output.place(transform);
+        // A document that places nothing off an endpoint can never move this
+        // node, so it is not worth re-reading its pose every frame.
+        if self.ui.driven {
+            output.watch_placement(path_id);
+        }
         #[cfg(test)]
         self.state.tag_path(path, output.widget_id());
         if custom_installed {

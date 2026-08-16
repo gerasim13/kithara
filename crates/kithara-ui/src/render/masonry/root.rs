@@ -21,8 +21,9 @@ use thiserror::Error;
 use tracing::{Span, trace_span};
 
 use super::{
+    built::{MasonryNode, RootParts, Watched},
     custom::HostAction,
-    node::{MasonryNode, Node, RootParts, Watched},
+    node::Node,
     picker::{self, HostedEngine},
     popover::PopoverState,
 };
@@ -32,9 +33,12 @@ use crate::{
     draw::{Pt, Rect, replay},
     interact::CursorShape,
     render::{
-        DragGhost, Reads, Skin, UiEvent, WindowCommand, WindowSurface, document::read::resolve,
-        shader::ShaderDeclaration, vis::VisDeclaration,
+        DragGhost, Reads, Skin, UiEvent, WindowCommand, WindowSurface,
+        document::{placements, read::resolve},
+        shader::ShaderDeclaration,
+        vis::VisDeclaration,
     },
+    skin::SkinDoc,
     text::TextContext,
 };
 
@@ -140,39 +144,6 @@ where
         self.sync_popovers();
         self.sync()?;
         Ok(handled)
-    }
-
-    /// Re-reads every endpoint the mounted document shows and hands each value
-    /// to the widget that draws it.
-    ///
-    /// This is what a rebuild was doing, minus the rebuild: the tree stays, so a
-    /// gesture in flight and the pointer capture that feeds it both survive, and
-    /// every control bound to the same endpoint moves together rather than one
-    /// of them being poked by hand.
-    pub fn refresh(&mut self, ui: &CompiledUi, reads: &dyn Reads) {
-        for watched in &self.watched {
-            match watched {
-                Watched::Read { id, binding } => {
-                    let Some(value) = resolve(reads, binding, ui) else {
-                        continue;
-                    };
-                    self.root.edit_widget(*id, |mut widget| {
-                        let mut node = widget.downcast::<Node>();
-                        if node.widget.show_live(&value) {
-                            node.ctx.request_paint_only();
-                        }
-                    });
-                }
-                Watched::Snapshot { id } => {
-                    self.root.edit_widget(*id, |mut widget| {
-                        let mut node = widget.downcast::<Node>();
-                        if node.widget.refresh(ui, reads) {
-                            node.ctx.request_paint_only();
-                        }
-                    });
-                }
-            }
-        }
     }
 
     pub(crate) fn vis_declarations(&self) -> Vec<VisDeclaration> {
@@ -451,6 +422,84 @@ where
             })?;
         self.actions.push(action);
         Ok(())
+    }
+}
+
+/// Re-reading a standing tree, which is what this host does instead of
+/// rebuilding one.
+impl<Action> MasonryRoot<Action>
+where
+    Action: std::fmt::Debug + Send + 'static,
+{
+    /// Re-reads everything the mounted document shows and hands it to the
+    /// widget that draws it.
+    ///
+    /// This is what a rebuild was doing, minus the rebuild: the tree stays, so a
+    /// gesture in flight and the pointer capture that feeds it both survive, and
+    /// every control bound to the same endpoint moves together rather than one
+    /// of them being poked by hand.
+    ///
+    /// Two kinds of thing change between frames without the document changing.
+    /// A control's *value* comes from an endpoint the control names, and is
+    /// re-read one control at a time. A control's *pose* comes from the objects
+    /// around it, and is worked out by the document walk rather than named
+    /// anywhere, so it takes a walk to re-read — one for the whole document.
+    pub fn refresh(&mut self, ui: &CompiledUi, reads: &dyn Reads, skin: &SkinDoc) {
+        self.show_values(ui, reads);
+        self.place_objects(ui, reads, skin);
+    }
+
+    fn show_values(&mut self, ui: &CompiledUi, reads: &dyn Reads) {
+        for watched in &self.watched {
+            match watched {
+                Watched::Read { id, binding } => {
+                    let Some(value) = resolve(reads, binding, ui) else {
+                        continue;
+                    };
+                    self.root.edit_widget(*id, |mut widget| {
+                        let mut node = widget.downcast::<Node>();
+                        if node.widget.show_live(&value) {
+                            node.ctx.request_paint_only();
+                        }
+                    });
+                }
+                Watched::Snapshot { id } => {
+                    self.root.edit_widget(*id, |mut widget| {
+                        let mut node = widget.downcast::<Node>();
+                        if node.widget.refresh(ui, reads) {
+                            node.ctx.request_paint_only();
+                        }
+                    });
+                }
+                Watched::Placed { .. } => {}
+            }
+        }
+    }
+
+    /// Walks the document again for the poses alone, and moves whatever the
+    /// walk now puts somewhere else.
+    ///
+    /// Nothing is watched this way unless the document declares an object an
+    /// endpoint drives, so a page that never moves pays for none of this.
+    fn place_objects(&mut self, ui: &CompiledUi, reads: &dyn Reads, skin: &SkinDoc) {
+        if !ui.driven {
+            return;
+        }
+        let placed = placements(&ui.root, ui, reads, skin);
+        for watched in &self.watched {
+            let Watched::Placed { id, path } = watched else {
+                continue;
+            };
+            let Some(transform) = placed.get(path).copied() else {
+                continue;
+            };
+            self.root.edit_widget(*id, |mut widget| {
+                let mut node = widget.downcast::<Node>();
+                if node.widget.place(transform) {
+                    node.ctx.request_paint_only();
+                }
+            });
+        }
     }
 }
 

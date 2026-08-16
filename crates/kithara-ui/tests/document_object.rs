@@ -155,7 +155,7 @@ fn registry() -> common::TestRegistry {
     registry
 }
 
-fn placed(root: &str, reads: &Phase) -> Vec<Placed> {
+fn document(root: &str) -> CompiledUi {
     let mut resolver = builtin::resolver();
     resolver.insert(
         "object.klayout.ron",
@@ -166,14 +166,18 @@ fn placed(root: &str, reads: &Phase) -> Vec<Placed> {
         "modules/object.kmodule.ron",
         &format!(r#"(schema: "kithara.module", version: 1, id: "object", root: {root})"#),
     );
-    let ui = compile(
+    compile(
         "object.klayout.ron",
         &resolver,
         &registry(),
         builtin::skin_doc(),
         &UiConfig::default(),
     )
-    .unwrap_or_else(|error| panic!("the fixture must compile: {error}"));
+    .unwrap_or_else(|error| panic!("the fixture must compile: {error}"))
+}
+
+fn placed(root: &str, reads: &Phase) -> Vec<Placed> {
+    let ui = document(root);
 
     render(&ui.root, &ui, reads, builtin::skin_doc(), Spy { ui: &ui })
 }
@@ -340,4 +344,37 @@ fn a_document_with_a_motion_mounts_differently_as_the_clock_runs() {
         placed(RUN, &Phase(Some(1.0))),
         placed(RUN, &Phase(Some(2.0)))
     );
+}
+
+/// What a host that keeps its tree across frames asks the compiled document,
+/// so it can leave the poses alone entirely on a page that has none to move.
+#[kithara::test]
+fn a_document_that_places_nothing_off_an_endpoint_is_not_driven() {
+    assert!(
+        !document(
+            r#"Object(id: "shift", transform: (position: (10.0, 4.0)), child: Text(id: "leaf"))"#
+        )
+        .driven
+    );
+}
+
+/// A far pose nobody travels towards is not motion either: both ends and a
+/// driver are what it takes to move, and two of the three leave the object
+/// exactly where the document wrote it.
+#[kithara::test]
+fn a_far_pose_with_nothing_driving_it_is_not_driven() {
+    assert!(
+        !document(r#"Object(id: "half", to: (position: (100.0, 0.0)), child: Text(id: "leaf"))"#)
+            .driven
+    );
+}
+
+#[kithara::test]
+fn a_document_with_a_phase_is_driven() {
+    assert!(document(TRACK).driven);
+}
+
+#[kithara::test]
+fn a_document_with_a_motion_is_driven() {
+    assert!(document(RUN).driven);
 }
