@@ -1,9 +1,9 @@
 use std::{
     cell::Cell,
     panic::{self, PanicHookInfo},
-    sync::Once,
 };
 
+use kithara_platform::sync::OnceLock;
 use serde::Serialize;
 
 use super::platform::write_dump;
@@ -39,8 +39,8 @@ struct PanicContext {
 /// so a red case brings its own DEBUG context without a pre-arranged filter.
 /// Idempotent; chains to the previously installed hook.
 pub fn install_panic_dump() {
-    static INSTALL: Once = Once::new();
-    INSTALL.call_once(|| {
+    static INSTALL: OnceLock<()> = OnceLock::new();
+    INSTALL.get_or_init(|| {
         let previous = panic::take_hook();
         panic::set_hook(Box::new(move |info| {
             record_panic(info);

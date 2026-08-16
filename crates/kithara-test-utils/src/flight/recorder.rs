@@ -1,9 +1,9 @@
 use std::{
     collections::VecDeque,
     fmt::{self, Write as _},
-    sync::{Mutex, PoisonError},
 };
 
+use kithara_platform::sync::{Mutex, OnceLock};
 use tracing::{
     Event, Level, Metadata, Subscriber,
     field::{Field, Visit},
@@ -22,8 +22,14 @@ use tracing_subscriber::layer::{Context, Layer};
 const MAX_EVENTS: usize = 256;
 const MAX_EVENT_BYTES: usize = 512;
 
-static EVENTS: Mutex<VecDeque<String>> = Mutex::new(VecDeque::new());
-static PROBES: Mutex<VecDeque<String>> = Mutex::new(VecDeque::new());
+static EVENTS: OnceLock<Mutex<VecDeque<String>>> = OnceLock::new();
+static PROBES: OnceLock<Mutex<VecDeque<String>>> = OnceLock::new();
+
+/// The platform mutex has no `const` constructor (the loom backend cannot
+/// model one), so the rings initialize lazily.
+fn ring(cell: &'static OnceLock<Mutex<VecDeque<String>>>) -> &'static Mutex<VecDeque<String>> {
+    cell.get_or_init(|| Mutex::new(VecDeque::new()))
+}
 
 #[must_use]
 pub fn layer() -> RingLayer {
@@ -33,18 +39,17 @@ pub fn layer() -> RingLayer {
 /// Snapshot of the recorded DEBUG-event tail, oldest first.
 #[must_use]
 pub fn tail() -> Vec<String> {
-    snapshot(&EVENTS)
+    snapshot(ring(&EVENTS))
 }
 
 /// Snapshot of the recorded `#[kithara::probe]` tail, oldest first.
 #[must_use]
 pub fn probes_tail() -> Vec<String> {
-    snapshot(&PROBES)
+    snapshot(ring(&PROBES))
 }
 
 fn snapshot(ring: &Mutex<VecDeque<String>>) -> Vec<String> {
-    let ring = ring.lock().unwrap_or_else(PoisonError::into_inner);
-    ring.iter().cloned().collect()
+    ring.lock().iter().cloned().collect()
 }
 
 pub struct RingLayer;
@@ -97,11 +102,11 @@ impl<S: Subscriber> Layer<S> for RingLayer {
             target = meta.target(),
         );
         event.record(&mut LineVisitor { line: &mut line });
-        let ring = match lane {
+        let cell = match lane {
             Lane::Event => &EVENTS,
             Lane::Probe => &PROBES,
         };
-        record(ring, line);
+        record(ring(cell), line);
     }
 }
 
@@ -114,7 +119,7 @@ fn record(ring: &Mutex<VecDeque<String>>, mut line: String) {
         line.truncate(end);
         line.push('…');
     }
-    let mut ring = ring.lock().unwrap_or_else(PoisonError::into_inner);
+    let mut ring = ring.lock();
     if ring.len() == MAX_EVENTS {
         ring.pop_front();
     }
@@ -137,8 +142,7 @@ impl Visit for LineVisitor<'_> {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{Mutex, MutexGuard, PoisonError};
-
+    use kithara_platform::sync::{Mutex, MutexGuard, OnceLock};
     use tracing::debug;
     use tracing_subscriber::layer::SubscriberExt;
 
@@ -148,12 +152,10 @@ mod tests {
     /// The rings are process-global and the capacity tests flood them, so a
     /// concurrent marker lookup would find its entry evicted. Each test holds
     /// this lock from its emissions through its assertions.
-    static FLIGHT_TEST_LOCK: Mutex<()> = Mutex::new(());
+    static FLIGHT_TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
     fn with_recorder(body: impl FnOnce()) -> MutexGuard<'static, ()> {
-        let guard = FLIGHT_TEST_LOCK
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
+        let guard = FLIGHT_TEST_LOCK.get_or_init(|| Mutex::new(())).lock();
         let subscriber = tracing_subscriber::registry().with(layer());
         tracing::subscriber::with_default(subscriber, body);
         guard
