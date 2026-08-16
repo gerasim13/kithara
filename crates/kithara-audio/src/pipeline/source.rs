@@ -6,7 +6,7 @@ use kithara_stream::{
     Activity, OpenedVariantReader, OutgoingDisposition, PlayheadWrite, SeekControl, SeekObserve,
     StreamType, VariantControl, VariantPromotion, VariantReaderTake, VariantTransition,
 };
-use tracing::{trace, warn};
+use tracing::{debug, trace, warn};
 
 pub(crate) use crate::pipeline::{
     decode::{
@@ -303,6 +303,18 @@ impl<T: StreamType> StreamAudioSource<T> {
                     self.variant_control.clone(),
                     self.decode.incoming_transition(),
                 ) {
+                    // This abort also discards the pending variant intent, and
+                    // no tick source re-derives it afterwards. The fields
+                    // separate "incoming never primed" from "staged span never
+                    // reached the frontier" from "landing minted behind the
+                    // frontier" when a switch dies against the outgoing EOF.
+                    debug!(
+                        at_eof = matches!(self.state, CurrentFsm::AtEof(_)),
+                        latched_frontier = ?self.decode.incoming_frontier(),
+                        landing = ?self.resume.decode_head(self.seek_obs.epoch()),
+                        ?transition,
+                        "outgoing ended: aborting variant transition"
+                    );
                     self.abort_local_incoming(control.as_ref(), transition);
                 }
                 return;
