@@ -25,7 +25,9 @@ use crate::{
         parts::SourceParts,
         rebuild::{DecoderBuildComplete, DecoderBuildPurpose, port::RebuildPort, retire::Retired},
         seek::SeekEngine,
-        track::{self, CurrentFsm, Decoding, Track, TrackFailure, TrackStep, WaitContext},
+        track::{
+            self, CurrentFsm, Decoding, Track, TrackFailure, TrackStep, WaitContext, WaitingReason,
+        },
     },
     renderer::AudioWorkerSource,
 };
@@ -215,6 +217,23 @@ impl<T: StreamType> StreamAudioSource<T> {
     ) {
         self.discard_local_incoming();
         let _ = control.abort_variant(transition);
+    }
+
+    /// Hang classification for a transition-pending decode tick: a pending
+    /// transition whose incoming byte is serviced by an in-flight fetch is
+    /// upstream work (`WaitingDemand`, watchdog-quiet); one with nothing in
+    /// flight stays `Waiting` so a wedged switch still surfaces as a hang.
+    pub(crate) fn transition_wait_reason(&self) -> WaitingReason {
+        let demand_backed = self
+            .variant_control
+            .as_deref()
+            .zip(self.decode.incoming_transition())
+            .is_some_and(|(control, transition)| control.transition_demand_in_flight(transition));
+        if demand_backed {
+            WaitingReason::WaitingDemand
+        } else {
+            WaitingReason::Waiting
+        }
     }
 
     fn discard_local_incoming(&mut self) {

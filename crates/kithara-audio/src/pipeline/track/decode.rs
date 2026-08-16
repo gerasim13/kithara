@@ -70,7 +70,7 @@ impl Track<Decoding> {
             DecodeStep::Interrupted => TrackStep::StateChanged,
             DecodeStep::TransitionPending => {
                 super::waiting_branch!("decoding_transition_pending");
-                TrackStep::Blocked(WaitingReason::Waiting)
+                TrackStep::Blocked(src.transition_wait_reason())
             }
             // The decoder read across the current segment boundary into a
             // not-ready (withheld) byte. Park in `WaitingForSource(Playback)`

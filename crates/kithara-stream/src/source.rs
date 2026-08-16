@@ -405,6 +405,16 @@ pub trait VariantControl: Send + Sync + 'static {
     /// automatic selection wins even while transition publication is locked.
     fn selected_variant_for_seek(&self) -> usize;
 
+    /// Whether the named pending transition is stalled on a source demand
+    /// that is actually being serviced — the incoming session's next byte
+    /// waits on a planned or in-flight fetch. Drives the audio worker's
+    /// hang classification: `true` parks the worker without ticking its
+    /// watchdog, `false` keeps a wedged transition visible to it. The
+    /// default is the strict answer.
+    fn transition_demand_in_flight(&self, _transition: VariantTransition) -> bool {
+        false
+    }
+
     /// Transfer the prepared reader exactly once. The typed result keeps
     /// readiness, prior transfer, and stale identity distinct.
     ///
