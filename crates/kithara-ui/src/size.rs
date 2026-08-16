@@ -398,6 +398,7 @@ mod tests {
     fn control(interner: &mut Interner, id: &str, size: SizeSpec) -> ExpandedNode {
         let origin = SourceUri("size-test.ron".to_owned());
         ExpandedNode::Control {
+            transform: crate::geom::Transform::IDENTITY,
             path: interner.intern(id, &origin).unwrap(),
             id: interner.intern(id, &origin).unwrap(),
             spec: ControlSpec::Knob { label: None },

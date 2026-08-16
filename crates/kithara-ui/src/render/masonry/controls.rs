@@ -31,7 +31,7 @@ use crate::{
         vu::VerticalVu,
         wave::face::Wave,
     },
-    draw::{DrawList, Rect},
+    draw::{DrawList, Rect, Transform},
     interact::{CursorShape, Hit, Input, Outcome},
     render::{ReadValue, Reads, StereoLevels},
 };
@@ -42,7 +42,8 @@ use crate::{
 /// because they need direct cursor and capture ownership, which that contract
 /// does not expose.
 pub(crate) trait MasonryControl {
-    fn draw_list(&mut self, bounds: Rect) -> DrawList;
+    /// Draws into a box-local list, offset by every enclosing object's pose.
+    fn draw_list(&mut self, bounds: Rect, transform: Transform) -> DrawList;
 
     /// How big the control is on the axes it settles for itself. A zero on an
     /// axis leaves it to the row, which is what a leaf that cannot measure has
@@ -91,7 +92,7 @@ mod table_projection {
     use crate::{
         atoms::table::{ColumnLayout, face::Drawn},
         builtin,
-        draw::Rect,
+        draw::{Rect, Transform},
         engine::Engine,
         module::TableColumn,
         render::hosted::{TablePlan, TableProjection},
@@ -153,7 +154,11 @@ mod table_projection {
         plan.bind_projection(Rc::downgrade(&projection));
         let mut leaf = TableLeaf::new(plan, skin);
 
-        assert!(leaf.draw_list(bounds).commands().is_empty());
+        assert!(
+            leaf.draw_list(bounds, Transform::IDENTITY)
+                .commands()
+                .is_empty()
+        );
     }
 }
 
@@ -171,7 +176,7 @@ mod flags {
             tab::TabLarge,
         },
         builtin,
-        draw::Rect,
+        draw::{Rect, Transform},
         module::{ButtonStyle, ChipStyle},
         render::{Mark, ReadValue, Skin},
     };
@@ -225,14 +230,14 @@ mod flags {
         ];
 
         for (name, mut control) in mounted {
-            let idle = control.draw_list(bounds);
+            let idle = control.draw_list(bounds, Transform::IDENTITY);
             assert!(
                 control.set_read(&ReadValue::Bool(true)),
                 "{name} must report that flipping its endpoint changed its picture"
             );
             assert_ne!(
                 idle,
-                control.draw_list(bounds),
+                control.draw_list(bounds, Transform::IDENTITY),
                 "{name} drew the same picture after its endpoint flipped, so only a rebuild \
                  could ever show the new state"
             );
@@ -269,7 +274,7 @@ mod analysed {
     use crate::{
         atoms::wave::face::{Drawn, Wave},
         builtin,
-        draw::Rect,
+        draw::{Rect, Transform},
         module::WaveStyle,
         render::{ReadValue, Reads, WaveBucket, WaveformView},
     };
@@ -299,7 +304,7 @@ mod analysed {
             Drawn::read(WaveStyle::Default, 1.0, None, None, &NoReads, ""),
             skin,
         );
-        let empty = wave.draw_list(bounds);
+        let empty = wave.draw_list(bounds, Transform::IDENTITY);
         let buckets = [
             WaveBucket {
                 low: 0.25,
@@ -326,7 +331,7 @@ mod analysed {
         );
         assert_ne!(
             empty,
-            wave.draw_list(bounds),
+            wave.draw_list(bounds, Transform::IDENTITY),
             "the wave drew the same empty frame after its shape arrived"
         );
     }

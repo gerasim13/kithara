@@ -7,6 +7,7 @@ use kithara_ui::{
     builtin,
     compile::{CompiledUi, compile},
     expand::{Binding, ControlSpec, ExpandedNode},
+    geom::Transform,
     ids::InternId,
     layout::Axis,
     module::WaveStyle,
@@ -132,6 +133,7 @@ impl Host for WaveHost<'_> {
         _read: Option<&Binding>,
         owner: InputOwner,
         _size: Option<SizeSpec>,
+        _transform: Transform,
     ) -> Self::Output {
         match spec {
             ControlSpec::Wave { style, .. } => vec![MountedWave {

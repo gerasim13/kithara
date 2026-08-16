@@ -5,7 +5,7 @@ use crate::{
     expand::ControlSite,
     ids::{EndpointId, NodeId, SourceUri},
     layout::{LayoutDoc, LayoutNode},
-    module::{BindingRef, ControlNode, ModuleDoc, TableColumn},
+    module::{BindingRef, ControlNode, ModuleDoc, Pose, TableColumn},
     registry::{EndpointCategory, EndpointRegistry, ValueKind},
 };
 
@@ -279,6 +279,16 @@ fn walk_module(
             record(&id.0, &here, origin, seen)?;
             walk_module(child, &here, origin, seen, Sibling::Only)
         }
+        ControlNode::Object {
+            id,
+            transform,
+            child,
+        } => {
+            let here = path.push(format!("Object({id})"));
+            record(&id.0, &here, origin, seen)?;
+            single_box(transform, child, &here, origin)?;
+            walk_module(child, &here, origin, seen, Sibling::Only)
+        }
         ControlNode::Slot { id, default, .. } => {
             let here = path.push(format!("Slot({id})"));
             record(&id.0, &here, origin, seen)?;
@@ -302,11 +312,63 @@ fn walk_module(
     }
 }
 
+/// What a pose can reach.
+///
+/// A move applies to any subtree, because every box in it shifts by the same
+/// vector. A turn or a scale does not: each box would turn about its own
+/// corner, and a group would come apart, so a turning object has to hold
+/// something laid out as one box. And nothing at all reaches a control that
+/// paints a native pass or hands back a list it already finished — the box
+/// would move and the picture would stay.
+fn single_box(
+    transform: &Pose,
+    child: &ControlNode,
+    path: &NodePath,
+    origin: &SourceUri,
+) -> Result<(), UiDocError> {
+    if transform.is_still() {
+        return Ok(());
+    }
+    if let Some(child) = native_pass(child) {
+        return Err(UiDocError::ObjectNative {
+            origin: origin.clone(),
+            path: path.render(),
+            child,
+        });
+    }
+    let group = match child {
+        _ if !transform.turns() => return Ok(()),
+        ControlNode::Row { .. } => "Row",
+        ControlNode::Column { .. } => "Column",
+        ControlNode::Slot { .. } => "Slot",
+        ControlNode::Scroll { .. } => "Scroll",
+        ControlNode::Popover { .. } => "Popover",
+        ControlNode::Include { .. } => "Include",
+        _ => return Ok(()),
+    };
+    Err(UiDocError::ObjectGroup {
+        origin: origin.clone(),
+        path: path.render(),
+        child: group,
+    })
+}
+
+const fn native_pass(child: &ControlNode) -> Option<&'static str> {
+    match child {
+        ControlNode::Shader { .. } => Some("Shader"),
+        ControlNode::Vis { .. } => Some("Vis"),
+        ControlNode::Table { .. } => Some("Table"),
+        ControlNode::Tree { .. } => Some("Tree"),
+        _ => None,
+    }
+}
+
 const fn control_id(node: &ControlNode) -> Option<&NodeId> {
     match node {
         ControlNode::Row { .. }
         | ControlNode::Column { .. }
         | ControlNode::Include { .. }
+        | ControlNode::Object { .. }
         | ControlNode::Optional { .. }
         | ControlNode::Popover { .. }
         | ControlNode::Pressable { .. }
@@ -683,6 +745,7 @@ pub(crate) const fn value_kinds(control: &ControlNode) -> (Option<ValueKind>, Op
         }
         ControlNode::Row { .. } | ControlNode::Column { .. } => (None, Some(ValueKind::Scalar)),
         ControlNode::Include { .. }
+        | ControlNode::Object { .. }
         | ControlNode::Scroll { .. }
         | ControlNode::Slot { .. }
         | ControlNode::Brand { .. }
@@ -900,6 +963,69 @@ mod tests {
             UiDocError::InvalidId { id, reason, .. }
                 if id == "transport/play" && reason.contains('/')
         ));
+    }
+
+    #[kithara::test]
+    fn an_object_may_move_a_whole_row() {
+        let text = r#"(schema: "kithara.module", version: 1, id: "m",
+            root: Object(id: "shift", transform: (position: (8.0, 0.0)),
+                child: Row(children: [Button(id: "play", label: "PLAY")])))"#;
+        let doc = parse_module(text, &origin()).unwrap();
+
+        assert!(check_module_node_ids(&doc, &origin()).is_ok());
+    }
+
+    #[kithara::test]
+    fn an_object_may_not_turn_a_row() {
+        let text = r#"(schema: "kithara.module", version: 1, id: "m",
+            root: Object(id: "spin", transform: (rotation: 30.0),
+                child: Row(children: [Button(id: "play", label: "PLAY")])))"#;
+        let doc = parse_module(text, &origin()).unwrap();
+
+        let error = check_module_node_ids(&doc, &origin()).unwrap_err();
+
+        assert!(matches!(
+            error,
+            UiDocError::ObjectGroup { child: "Row", .. }
+        ));
+    }
+
+    #[kithara::test]
+    fn an_object_may_not_scale_a_row_either() {
+        let text = r#"(schema: "kithara.module", version: 1, id: "m",
+            root: Object(id: "grow", transform: (scale: (2.0, 2.0)),
+                child: Row(children: [Button(id: "play", label: "PLAY")])))"#;
+        let doc = parse_module(text, &origin()).unwrap();
+
+        assert!(check_module_node_ids(&doc, &origin()).is_err());
+    }
+
+    /// A visualiser paints its own pass, so an object over it would move the
+    /// box and leave the picture. Refusing beats drawing the wrong answer.
+    #[kithara::test]
+    fn an_object_may_not_even_move_a_native_pass() {
+        let text = r#"(schema: "kithara.module", version: 1, id: "m",
+            root: Object(id: "shift", transform: (position: (8.0, 0.0)),
+                child: Vis(id: "scope")))"#;
+        let doc = parse_module(text, &origin()).unwrap();
+
+        let error = check_module_node_ids(&doc, &origin()).unwrap_err();
+
+        assert!(matches!(
+            error,
+            UiDocError::ObjectNative { child: "Vis", .. }
+        ));
+    }
+
+    /// A still object is the identity, and the identity reaches everything
+    /// because it does nothing.
+    #[kithara::test]
+    fn a_still_object_may_wrap_anything() {
+        let text = r#"(schema: "kithara.module", version: 1, id: "m",
+            root: Object(id: "still", child: Vis(id: "scope")))"#;
+        let doc = parse_module(text, &origin()).unwrap();
+
+        assert!(check_module_node_ids(&doc, &origin()).is_ok());
     }
 
     #[kithara::test]

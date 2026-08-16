@@ -1,7 +1,7 @@
 use super::{controls::MasonryControl, custom::HostAction};
 use crate::{
     atoms::{table::face::TableFace, tree::face::Tree as TreeFace},
-    draw::{DrawList, Rect},
+    draw::{DrawList, Rect, Transform},
     interact::{Hit, Input, Outcome},
     render::{
         Reads, Skin,
@@ -39,7 +39,10 @@ impl<P> MasonryControl for ProjectedLeaf<P>
 where
     P: Projected,
 {
-    fn draw_list(&mut self, bounds: Rect) -> DrawList {
+    /// A projection hands back a list it already finished, so no pose reaches
+    /// what it drew. The document refuses to put one on a `Table` or a `Tree`
+    /// for exactly that reason, rather than moving the box and not the picture.
+    fn draw_list(&mut self, bounds: Rect, _transform: Transform) -> DrawList {
         self.plan.draw_list(&mut self.text, bounds)
     }
 

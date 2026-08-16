@@ -1,6 +1,6 @@
 use kithara_test_utils::kithara;
 
-use super::{ShaderFrame, ShaderFrameError};
+use super::{ShaderFrame, frame::ShaderFrameError};
 use crate::{
     builtin,
     compile::{CompiledNode, CompiledUi, compile},

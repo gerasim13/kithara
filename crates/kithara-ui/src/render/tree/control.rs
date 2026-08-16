@@ -10,7 +10,7 @@ use super::{
 use crate::{
     atoms::{bar::context::Context, design::fader::rail_bounds},
     compile::CompiledUi,
-    draw::Rect,
+    draw::{Rect, Transform},
     engine::{Descriptor, Engine, Target},
     expand::{Binding, ControlSpec},
     ids::InternId,
@@ -19,6 +19,14 @@ use crate::{
     render::{HostedControlPlan, InputOwner, ReadValue, Reads, Resolving, Skin},
 };
 
+/// How the document placed one control: who owns its pointer, and the offset
+/// every enclosing object folded into its box.
+#[derive(Clone, Copy)]
+pub(super) struct Placed {
+    pub(super) owner: InputOwner,
+    pub(super) transform: Transform,
+}
+
 pub(super) fn render_control<'a>(
     path: InternId,
     spec: &ControlSpec,
@@ -26,11 +34,12 @@ pub(super) fn render_control<'a>(
     ui: &'a CompiledUi,
     reads: &dyn Reads,
     skin: &'a Skin,
-    owner: InputOwner,
+    placed: Placed,
 ) -> Rendered<'a> {
     let value = read.and_then(|binding| resolve(reads, binding, ui));
     let cx = Cx {
-        owner,
+        owner: placed.owner,
+        transform: placed.transform,
         path: ui.resolve(path),
         reads,
         scope: read_scope(read, ui),

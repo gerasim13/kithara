@@ -155,6 +155,22 @@ pub enum UiDocError {
     InvalidContextScope { origin: SourceUri, path: String },
     #[error("{origin}: container at {path} declares write but has no id to address it by")]
     UnaddressedSurface { origin: SourceUri, path: String },
+    #[error(
+        "{origin}: Object at {path} turns or scales a {child}, which is laid out as several boxes and has no single one to turn about"
+    )]
+    ObjectGroup {
+        origin: SourceUri,
+        path: String,
+        child: &'static str,
+    },
+    #[error(
+        "{origin}: Object at {path} poses a {child}, which paints its own pass rather than a draw list"
+    )]
+    ObjectNative {
+        origin: SourceUri,
+        path: String,
+        child: &'static str,
+    },
     #[error("{origin}: compiled node count {count} exceeds limit {max}")]
     NodesExceeded {
         origin: SourceUri,

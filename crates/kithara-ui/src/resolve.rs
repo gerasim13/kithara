@@ -108,7 +108,8 @@ fn walk_includes(
             }
             Ok(())
         }
-        ControlNode::Optional { child, .. }
+        ControlNode::Object { child, .. }
+        | ControlNode::Optional { child, .. }
         | ControlNode::Pressable { child, .. }
         | ControlNode::Scroll { child, .. } => {
             walk_includes(resolver, origin, child, limits, set, stack, depth)

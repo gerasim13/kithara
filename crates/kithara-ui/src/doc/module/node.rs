@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{
     binding::{AdaptivePolicy, BindingRef},
+    motion::Pose,
     style::{
         ButtonStyle, ChipStyle, DeckSummaryStyle, FaderStyle, GlyphStyle, IconName, PopoverAlign,
         PopoverAt, ScalarFormat, TableColumn, TextAlign, TextStyle, Tone, WaveStyle,
@@ -119,6 +120,19 @@ pub enum ControlNode {
     Pressable {
         id: NodeId,
         press: BindingRef,
+        child: Box<Self>,
+    },
+    /// Offsets its child from wherever its container placed it.
+    ///
+    /// The base object: any node becomes one by being wrapped, a widget as
+    /// readily as a picture, and an object may hold another. The offset moves
+    /// what is drawn and nothing else — the container's layout is already
+    /// decided by the time this applies, and the region that answers the
+    /// pointer stays where that layout put it.
+    Object {
+        id: NodeId,
+        #[serde(default)]
+        transform: Pose,
         child: Box<Self>,
     },
     Slot {
@@ -666,6 +680,7 @@ impl ControlNode {
             Self::Popover { open, .. } => (Some(open), None),
             Self::Pressable { press, .. } => (None, Some(press)),
             Self::Include { .. }
+            | Self::Object { .. }
             | Self::Scroll { .. }
             | Self::Slot { .. }
             | Self::WindowDrag { .. }
@@ -714,6 +729,7 @@ impl ControlNode {
     pub(crate) const fn size(&self) -> Option<&SizeSpec> {
         match self {
             Self::Include { .. }
+            | Self::Object { .. }
             | Self::Optional { .. }
             | Self::Popover { .. }
             | Self::Pressable { .. } => None,

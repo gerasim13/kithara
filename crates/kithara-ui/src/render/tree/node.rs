@@ -4,7 +4,7 @@ use iced::{
 };
 
 use super::{
-    control::render_control,
+    control::{Placed, render_control},
     flex::Flex,
     geometry::{Rendered, apply_size, bordered, filled, length_for, padding},
     host, read_flag,
@@ -13,6 +13,7 @@ use super::{
 use crate::compile::CompiledNode;
 use crate::{
     compile::CompiledUi,
+    draw::Transform,
     expand::{Binding, ControlSpec, ExpandedNode, SurfaceSpec},
     ids::InternId,
     layout::Axis,
@@ -239,9 +240,18 @@ impl<'a> DocumentHost for IcedHost<'a, '_> {
         read: Option<&Binding>,
         owner: InputOwner,
         size: Option<SizeSpec>,
+        transform: Transform,
     ) -> Self::Output {
         apply_size(
-            render_control(path, spec, read, self.ui, self.reads, self.skin, owner),
+            render_control(
+                path,
+                spec,
+                read,
+                self.ui,
+                self.reads,
+                self.skin,
+                Placed { owner, transform },
+            ),
             size,
         )
     }

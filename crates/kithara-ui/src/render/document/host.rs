@@ -1,5 +1,6 @@
 use super::{Group, Module, Popover};
 use crate::{
+    draw::Transform,
     expand::{Binding, ControlSpec, ExpandedNode},
     ids::InternId,
     layout::Axis,
@@ -57,6 +58,11 @@ pub trait Host {
     fn slot(&mut self, children: Vec<Self::Output>, size: Option<SizeSpec>) -> Self::Output;
 
     /// Mounts one compiled control leaf.
+    ///
+    /// `transform` is every enclosing object's pose folded into one offset,
+    /// expressed in the box this control paints into. A host applies it to the
+    /// neutral draw list rather than asking its toolkit to turn the widget:
+    /// only one of the two toolkits can, and the two would disagree.
     fn control(
         &mut self,
         path: InternId,
@@ -64,6 +70,7 @@ pub trait Host {
         read: Option<&Binding>,
         owner: InputOwner,
         size: Option<SizeSpec>,
+        transform: Transform,
     ) -> Self::Output;
 
     /// Mounts the retained interaction owner around one produced subtree.

@@ -5,6 +5,7 @@ mod image;
 mod ir;
 mod list;
 mod path;
+mod place;
 mod pool;
 mod style;
 mod svg;

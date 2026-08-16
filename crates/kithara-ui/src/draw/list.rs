@@ -1,6 +1,6 @@
 use super::{
     DrawCmd, DrawPools, FillRule, Geom, ImageId, Paint, Path, Pen, PoolText, Pt, Rect, Rgba,
-    Transform, Verb, buffer::Buffer,
+    Transform, Verb, buffer::Buffer, place,
 };
 use crate::text::GlyphRun;
 
@@ -21,6 +21,7 @@ impl DrawList {
 pub struct DrawListBuilder {
     commands: Buffer<DrawCmd>,
     pools: Option<DrawPools>,
+    transform: Transform,
 }
 
 impl DrawListBuilder {
@@ -28,15 +29,115 @@ impl DrawListBuilder {
         Self {
             commands: pools.commands(),
             pools: Some(pools.clone()),
+            transform: Transform::IDENTITY,
         }
     }
 
     /// Starts a nested list with the same allocation owner as this one.
+    ///
+    /// The nested list inherits the transform in force, because a clip's
+    /// contents move with whatever moved the clip.
     #[must_use]
     pub fn child(&self) -> Self {
-        self.pools
+        let mut child = self
+            .pools
             .as_ref()
-            .map_or_else(Self::default, DrawPools::list)
+            .map_or_else(Self::default, DrawPools::list);
+        child.transform = self.transform;
+        child
+    }
+
+    /// Draws under `by`, composed onto whatever transform is already in force.
+    ///
+    /// The offset is resolved here, into the points each command carries,
+    /// rather than handed to a toolkit. Neither host can be trusted with it:
+    /// iced's canvas frame exposes similarity transforms only, and the clip it
+    /// opens for every command run is a fresh frame whose transform stack
+    /// starts at the identity. Resolving it in the neutral list is also what
+    /// makes a nested object exact — two transforms compose into one matrix
+    /// before a single point is rasterised.
+    pub fn transformed<R, Draw>(&mut self, by: Transform, draw: Draw) -> R
+    where
+        Draw: FnOnce(&mut Self) -> R,
+    {
+        let outer = self.transform;
+        self.transform = by.then(outer);
+        let drawn = draw(self);
+        self.transform = outer;
+        drawn
+    }
+
+    /// The geometry a command carries once the transform in force is resolved
+    /// into it.
+    ///
+    /// A named shape is kept while it stays nameable: a rectangle while the
+    /// axes stay put, a corner radius and a circle while lengths scale
+    /// equally. Anything else becomes an outline, which is the one shape that
+    /// can hold the result.
+    fn placed(&self, geom: Geom) -> Geom {
+        let by = self.transform;
+        if by.is_identity() {
+            return geom;
+        }
+        let upright = by.is_axis_aligned() && by.xx > 0.0 && by.yy > 0.0;
+        match geom {
+            Geom::Line { from, to } => Geom::Line {
+                from: by.apply(from),
+                to: by.apply(to),
+            },
+            Geom::Rect(shape) if by.is_axis_aligned() => Geom::Rect(place::bounds(shape, by)),
+            Geom::Rect(shape) => self.outline(FillRule::NonZero, place::rect_verbs(shape, by)),
+            Geom::RoundedRect { rect, radius } => match by.similarity() {
+                Some(scale) if by.is_axis_aligned() => Geom::RoundedRect {
+                    rect: place::bounds(rect, by),
+                    radius: radius * scale,
+                },
+                _ => self.outline(FillRule::NonZero, place::rounded_verbs(rect, radius, by)),
+            },
+            Geom::Circle { center, radius } => by.similarity().map_or_else(
+                || self.outline(FillRule::NonZero, place::circle_verbs(center, radius, by)),
+                |scale| Geom::Circle {
+                    center: by.apply(center),
+                    radius: radius * scale,
+                },
+            ),
+            Geom::Arc {
+                center,
+                radius,
+                start,
+                end,
+            } => match by.similarity() {
+                // An arc names the direction it sweeps in, so a turn or a
+                // mirror would have to rewrite its angles. Only the transform
+                // that leaves those angles alone keeps it an arc.
+                Some(scale) if upright => Geom::Arc {
+                    center: by.apply(center),
+                    radius: radius * scale,
+                    start,
+                    end,
+                },
+                _ => self.outline(
+                    FillRule::NonZero,
+                    place::arc_verbs(center, radius, start, end, by),
+                ),
+            },
+            Geom::Path(path) => self.outline(path.rule(), place::path_verbs(path.verbs(), by)),
+        }
+    }
+
+    fn outline(&self, rule: FillRule, verbs: Vec<Verb>) -> Geom {
+        Geom::Path(self.path(rule, verbs))
+    }
+
+    /// The pen a stroke is drawn with once the transform in force is resolved
+    /// into its width. A scaled object draws scaled lines; a line that kept
+    /// its width would thin out as the object grew.
+    fn inked<P: Into<Pen>>(&self, pen: P) -> Pen {
+        let mut pen = pen.into();
+        if !self.transform.is_identity() {
+            pen.width *= self.transform.length_scale();
+        }
+        pen
     }
 
     /// Builds a path with the same allocation owner as this list.
@@ -52,23 +153,32 @@ impl DrawListBuilder {
     }
 
     /// Adds a nested list scoped to a rectangular clip region.
+    ///
+    /// A clip region is a rectangle in both toolkits and in the neutral
+    /// command, so under a transform that turns it the region becomes the
+    /// upright box it fits in — a turned object clips to more than its own
+    /// outline, and says so here rather than being discovered.
     pub fn clip(&mut self, region: Rect, list: DrawList) {
+        let region = if self.transform.is_identity() {
+            region
+        } else {
+            place::bounds(region, self.transform)
+        };
         self.commands.push(DrawCmd::Clip { region, list });
     }
 
     pub fn fill_circle<P: Into<Paint>>(&mut self, center: Pt, radius: f32, paint: P) {
+        let geom = self.placed(Geom::Circle { center, radius });
         self.commands.push(DrawCmd::Fill {
-            geom: Geom::Circle { center, radius },
+            geom,
             paint: paint.into(),
         });
     }
 
     pub fn stroke_circle<P: Into<Pen>>(&mut self, center: Pt, radius: f32, color: Rgba, pen: P) {
-        self.commands.push(DrawCmd::Stroke {
-            geom: Geom::Circle { center, radius },
-            color,
-            pen: pen.into(),
-        });
+        let geom = self.placed(Geom::Circle { center, radius });
+        let pen = self.inked(pen);
+        self.commands.push(DrawCmd::Stroke { geom, color, pen });
     }
 
     /// Strokes an arc whose angles are expressed in radians.
@@ -81,46 +191,53 @@ impl DrawListBuilder {
         color: Rgba,
         pen: P,
     ) {
-        self.commands.push(DrawCmd::Stroke {
-            geom: Geom::Arc {
-                center,
-                radius,
-                start,
-                end,
-            },
-            color,
-            pen: pen.into(),
+        let geom = self.placed(Geom::Arc {
+            center,
+            radius,
+            start,
+            end,
         });
+        let pen = self.inked(pen);
+        self.commands.push(DrawCmd::Stroke { geom, color, pen });
     }
 
     pub fn stroke_line<P: Into<Pen>>(&mut self, from: Pt, to: Pt, color: Rgba, pen: P) {
-        self.commands.push(DrawCmd::Stroke {
-            geom: Geom::Line { from, to },
-            color,
-            pen: pen.into(),
-        });
+        let geom = self.placed(Geom::Line { from, to });
+        let pen = self.inked(pen);
+        self.commands.push(DrawCmd::Stroke { geom, color, pen });
     }
 
     pub fn fill_rect<P: Into<Paint>>(&mut self, rect: Rect, paint: P) {
+        let geom = self.placed(Geom::Rect(rect));
         self.commands.push(DrawCmd::Fill {
-            geom: Geom::Rect(rect),
+            geom,
             paint: paint.into(),
         });
     }
 
     pub fn fill_rounded_rect<P: Into<Paint>>(&mut self, rect: Rect, radius: f32, paint: P) {
+        let geom = self.placed(if radius == 0.0 {
+            Geom::Rect(rect)
+        } else {
+            Geom::RoundedRect { rect, radius }
+        });
         self.commands.push(DrawCmd::Fill {
-            geom: if radius == 0.0 {
-                Geom::Rect(rect)
-            } else {
-                Geom::RoundedRect { rect, radius }
-            },
+            geom,
             paint: paint.into(),
         });
     }
 
     /// Adds an externally owned image at its destination rectangle.
+    ///
+    /// The destination is a rectangle on both hosts — neither peniko's image
+    /// brush nor iced's image carries a matrix — so a turned image lands in
+    /// the upright box it fits in, upright.
     pub fn image(&mut self, image: ImageId, rect: Rect) {
+        let rect = if self.transform.is_identity() {
+            rect
+        } else {
+            place::bounds(rect, self.transform)
+        };
         self.commands.push(DrawCmd::Image { image, rect });
     }
 
@@ -131,15 +248,13 @@ impl DrawListBuilder {
         color: Rgba,
         pen: P,
     ) {
-        self.commands.push(DrawCmd::Stroke {
-            geom: if radius == 0.0 {
-                Geom::Rect(rect)
-            } else {
-                Geom::RoundedRect { rect, radius }
-            },
-            color,
-            pen: pen.into(),
+        let geom = self.placed(if radius == 0.0 {
+            Geom::Rect(rect)
+        } else {
+            Geom::RoundedRect { rect, radius }
         });
+        let pen = self.inked(pen);
+        self.commands.push(DrawCmd::Stroke { geom, color, pen });
     }
 
     pub fn fill_path<P: Into<Paint>>(&mut self, path: Path, paint: P) {
@@ -147,8 +262,9 @@ impl DrawListBuilder {
             Some(pools) => pools.pooled_path(path),
             None => path,
         };
+        let geom = self.placed(Geom::Path(path));
         self.commands.push(DrawCmd::Fill {
-            geom: Geom::Path(path),
+            geom,
             paint: paint.into(),
         });
     }
@@ -160,14 +276,13 @@ impl DrawListBuilder {
             Some(pools) => pools.pooled_path(path),
             None => path,
         };
-        self.commands.push(DrawCmd::Stroke {
-            geom: Geom::Path(path),
-            color,
-            pen: pen.into(),
-        });
+        let geom = self.placed(Geom::Path(path));
+        let pen = self.inked(pen);
+        self.commands.push(DrawCmd::Stroke { geom, color, pen });
     }
 
     pub fn text(&mut self, run: &GlyphRun, content: &str, transform: Transform, color: Rgba) {
+        let transform = transform.then(self.transform);
         self.commands.push(DrawCmd::Text {
             run: run.clone(),
             content: self
@@ -192,6 +307,161 @@ mod tests {
 
     use super::*;
     use crate::draw::{LineCap, LineJoin};
+
+    const fn ink() -> Rgba {
+        Rgba {
+            a: 1.0,
+            b: 0.25,
+            g: 0.5,
+            r: 0.75,
+        }
+    }
+
+    const fn shape() -> Rect {
+        Rect {
+            h: 10.0,
+            w: 20.0,
+            x: 4.0,
+            y: 8.0,
+        }
+    }
+
+    fn only(list: &DrawList) -> &DrawCmd {
+        match list.commands() {
+            [command] => command,
+            other => panic!("one command was drawn, not {}", other.len()),
+        }
+    }
+
+    #[kithara::test]
+    fn a_transformed_run_moves_what_it_draws() {
+        let mut list = DrawListBuilder::default();
+        list.transformed(Transform::translate(Pt { x: 5.0, y: -3.0 }), |list| {
+            list.fill_rect(shape(), ink());
+        });
+
+        assert_eq!(
+            only(&list.finish()),
+            &DrawCmd::Fill {
+                geom: Geom::Rect(Rect {
+                    h: 10.0,
+                    w: 20.0,
+                    x: 9.0,
+                    y: 5.0,
+                }),
+                paint: ink().into(),
+            }
+        );
+    }
+
+    /// An object inside an object is one matrix by the time a point is
+    /// written down, which is what makes a nested scene exact rather than
+    /// approximately placed by two toolkits in turn.
+    #[kithara::test]
+    fn nested_runs_compose_into_one_transform() {
+        let mut list = DrawListBuilder::default();
+        list.transformed(Transform::scale(Pt { x: 2.0, y: 2.0 }), |list| {
+            list.transformed(Transform::translate(Pt { x: 1.0, y: 1.0 }), |list| {
+                list.fill_rect(shape(), ink());
+            });
+        });
+
+        assert_eq!(
+            only(&list.finish()),
+            &DrawCmd::Fill {
+                geom: Geom::Rect(Rect {
+                    h: 20.0,
+                    w: 40.0,
+                    x: 10.0,
+                    y: 18.0,
+                }),
+                paint: ink().into(),
+            }
+        );
+    }
+
+    #[kithara::test]
+    fn the_transform_is_put_back_when_the_run_ends() {
+        let mut list = DrawListBuilder::default();
+        list.transformed(Transform::translate(Pt { x: 100.0, y: 100.0 }), |_| {});
+        list.fill_rect(shape(), ink());
+
+        assert_eq!(
+            only(&list.finish()),
+            &DrawCmd::Fill {
+                geom: Geom::Rect(shape()),
+                paint: ink().into(),
+            }
+        );
+    }
+
+    /// A turned rectangle is not a rectangle, and the neutral list says so by
+    /// carrying the outline rather than by handing a backend a rectangle and a
+    /// matrix it may or may not honour.
+    #[kithara::test]
+    fn a_turned_rectangle_becomes_an_outline() {
+        let mut list = DrawListBuilder::default();
+        list.transformed(Transform::rotate(0.4), |list| {
+            list.fill_rect(shape(), ink());
+        });
+
+        assert!(matches!(
+            only(&list.finish()),
+            DrawCmd::Fill {
+                geom: Geom::Path(_),
+                ..
+            }
+        ));
+    }
+
+    #[kithara::test]
+    fn a_squashed_circle_becomes_an_outline() {
+        let mut list = DrawListBuilder::default();
+        list.transformed(Transform::scale(Pt { x: 2.0, y: 1.0 }), |list| {
+            list.fill_circle(Pt { x: 0.0, y: 0.0 }, 4.0, ink());
+        });
+
+        assert!(matches!(
+            only(&list.finish()),
+            DrawCmd::Fill {
+                geom: Geom::Path(_),
+                ..
+            }
+        ));
+    }
+
+    #[kithara::test]
+    fn an_evenly_scaled_circle_stays_a_circle() {
+        let mut list = DrawListBuilder::default();
+        list.transformed(Transform::scale(Pt { x: 3.0, y: 3.0 }), |list| {
+            list.fill_circle(Pt { x: 1.0, y: 2.0 }, 4.0, ink());
+        });
+
+        assert_eq!(
+            only(&list.finish()),
+            &DrawCmd::Fill {
+                geom: Geom::Circle {
+                    center: Pt { x: 3.0, y: 6.0 },
+                    radius: 12.0,
+                },
+                paint: ink().into(),
+            }
+        );
+    }
+
+    #[kithara::test]
+    fn a_scaled_stroke_scales_its_pen() {
+        let mut list = DrawListBuilder::default();
+        list.transformed(Transform::scale(Pt { x: 2.0, y: 2.0 }), |list| {
+            list.stroke_line(Pt { x: 0.0, y: 0.0 }, Pt { x: 1.0, y: 0.0 }, ink(), 1.5);
+        });
+        let drawn = list.finish();
+
+        let DrawCmd::Stroke { pen, .. } = only(&drawn) else {
+            panic!("a stroked line is a stroke");
+        };
+        assert_eq!(pen.width, 3.0);
+    }
 
     #[kithara::test]
     fn a_zero_radius_rounded_fill_is_the_existing_rect_list() {

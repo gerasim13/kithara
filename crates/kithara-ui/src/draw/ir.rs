@@ -8,6 +8,7 @@ use super::{
     style::{Paint, Pen},
     text::PoolText,
 };
+pub use crate::geom::{Pt, Transform};
 use crate::text::GlyphRun;
 
 /// A toolkit-neutral RGBA colour.
@@ -19,13 +20,6 @@ pub struct Rgba {
     pub r: f32,
 }
 
-/// A toolkit-neutral point in logical pixels.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Pt {
-    pub x: f32,
-    pub y: f32,
-}
-
 /// A toolkit-neutral rectangle in logical pixels.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Rect {
@@ -33,13 +27,6 @@ pub struct Rect {
     pub w: f32,
     pub x: f32,
     pub y: f32,
-}
-
-impl Pt {
-    #[cfg(feature = "render")]
-    pub(crate) fn distance(self, other: Self) -> f32 {
-        (self.x - other.x).hypot(self.y - other.y)
-    }
 }
 
 impl Rect {
@@ -60,47 +47,6 @@ impl Rect {
             .floor()
             .to_usize()
             .map(|index| index.min(last))
-    }
-}
-
-/// A toolkit-neutral affine transform.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Transform {
-    pub xx: f32,
-    pub xy: f32,
-    pub yx: f32,
-    pub yy: f32,
-    pub dx: f32,
-    pub dy: f32,
-}
-
-impl Transform {
-    /// The identity transform.
-    pub const IDENTITY: Self = Self {
-        xx: 1.0,
-        xy: 0.0,
-        yx: 0.0,
-        yy: 1.0,
-        dx: 0.0,
-        dy: 0.0,
-    };
-
-    #[cfg(feature = "render")]
-    pub(crate) const fn apply(self, point: Pt) -> Pt {
-        Pt {
-            x: self.xx * point.x + self.xy * point.y + self.dx,
-            y: self.yx * point.x + self.yy * point.y + self.dy,
-        }
-    }
-
-    /// Creates a translation transform.
-    #[must_use]
-    pub const fn translate(offset: Pt) -> Self {
-        Self {
-            dx: offset.x,
-            dy: offset.y,
-            ..Self::IDENTITY
-        }
     }
 }
 

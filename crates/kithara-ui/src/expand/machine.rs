@@ -15,8 +15,9 @@ use super::{
 };
 use crate::{
     error::UiDocError,
+    geom::Transform,
     ids::{InternId, Interner, NodeId, SourceUri},
-    module::{BindingRef, ControlNode, PopoverAlign, PopoverAt, TableColumn},
+    module::{BindingRef, ControlNode, PopoverAlign, PopoverAt, Pose, TableColumn},
     param::Param,
     registry::EndpointRegistry,
     resolve::ModuleSet,
@@ -69,6 +70,7 @@ pub(crate) struct Expander<'m, 'v> {
     pub(super) shaders: &'m mut ShaderCache,
     visitor: &'m mut ControlVisitor<'v>,
     in_popover: bool,
+    transform: Transform,
     max_depth: usize,
 }
 
@@ -89,6 +91,7 @@ impl<'m, 'v> Expander<'m, 'v> {
             interner,
             visitor,
             in_popover: false,
+            transform: Transform::IDENTITY,
             address: Vec::new(),
             includes: Vec::new(),
         }
@@ -280,6 +283,7 @@ fn finish_control(
             .map(|binding| intern_binding(machine.interner, binding, &context.origin))
             .transpose()?,
         adaptive: fields.adaptive.clone(),
+        transform: machine.transform,
     })
 }
 
@@ -424,6 +428,24 @@ fn expand_pressable(
         press: intern_binding(machine.interner, &press, &context.origin)?,
         child: Box::new(walk_child(context, child, 0, depth, machine)?),
     })
+}
+
+/// An object leaves no node behind: it folds its pose into whatever its child
+/// expands to and steps out of the way, so neither the layout nor the addresses
+/// the render side walks can tell it was ever there.
+fn expand_object(
+    context: &Context<'_>,
+    pose: &Pose,
+    child: &ControlNode,
+    depth: usize,
+    machine: &mut Expander<'_, '_>,
+) -> Result<ExpandedNode, UiDocError> {
+    machine.budget.charge(&context.origin)?;
+    let outer = machine.transform;
+    machine.transform = pose.matrix().then(outer);
+    let expanded = walk(context, child, depth, machine);
+    machine.transform = outer;
+    expanded
 }
 
 fn expand_slot(
@@ -581,6 +603,9 @@ pub(super) fn walk(
         ControlNode::Pressable { id, press, child } => {
             expand_pressable(context, node, id, press, child, depth, machine)
         }
+        ControlNode::Object {
+            transform, child, ..
+        } => expand_object(context, transform, child, depth, machine),
         ControlNode::Include { id, source, with } => {
             expand_include(context, id, source, with, depth, machine)
         }
@@ -805,6 +830,108 @@ mod tests {
                 root: Text(id: "leaf"))"#,
         );
         resolver
+    }
+
+    fn posed_fixture(inner: &str) -> MemResolver {
+        let mut resolver = MemResolver::default();
+        resolver.insert(
+            "posed.kmodule.ron",
+            &format!(
+                r#"(schema: "kithara.module", version: 1, id: "posed",
+                    root: Object(id: "outer", transform: (position: (10.0, 0.0)),
+                        child: {inner}))"#
+            ),
+        );
+        resolver
+    }
+
+    fn only_control(root: &ExpandedNode) -> &ExpandedNode {
+        match root {
+            ExpandedNode::Control { .. } => root,
+            ExpandedNode::Row { children, .. } | ExpandedNode::Column { children, .. } => {
+                only_control(&children[0])
+            }
+            other => panic!("the fixture holds one control, not {other:?}"),
+        }
+    }
+
+    fn folded(root: &ExpandedNode) -> Transform {
+        let ExpandedNode::Control { transform, .. } = only_control(root) else {
+            unreachable!("only_control returns a control")
+        };
+        *transform
+    }
+
+    #[kithara::test]
+    fn an_object_leaves_its_pose_on_the_control_it_wraps() {
+        let resolver = posed_fixture(r#"Text(id: "leaf")"#);
+        let (uri, set) =
+            load_module_graph(&resolver, None, "posed.kmodule.ron", &Limits::default()).unwrap();
+
+        let (root, _) = expand(&set, &uri, &BTreeMap::new()).unwrap();
+
+        assert_eq!(
+            folded(&root),
+            Transform::translate(crate::geom::Pt { x: 10.0, y: 0.0 })
+        );
+    }
+
+    /// The object is gone from what the render side walks: it moved the picture
+    /// and left the tree, the addresses, and the layout exactly as they were.
+    #[kithara::test]
+    fn an_object_leaves_no_node_of_its_own() {
+        let resolver = posed_fixture(r#"Text(id: "leaf")"#);
+        let (uri, set) =
+            load_module_graph(&resolver, None, "posed.kmodule.ron", &Limits::default()).unwrap();
+
+        let (root, _) = expand(&set, &uri, &BTreeMap::new()).unwrap();
+
+        assert!(matches!(root, ExpandedNode::Control { .. }));
+    }
+
+    #[kithara::test]
+    fn nested_objects_fold_into_one_offset() {
+        let resolver = posed_fixture(
+            r#"Object(id: "inner", transform: (position: (0.0, 4.0)), child: Text(id: "leaf"))"#,
+        );
+        let (uri, set) =
+            load_module_graph(&resolver, None, "posed.kmodule.ron", &Limits::default()).unwrap();
+
+        let (root, _) = expand(&set, &uri, &BTreeMap::new()).unwrap();
+
+        assert_eq!(
+            folded(&root),
+            Transform::translate(crate::geom::Pt { x: 10.0, y: 4.0 })
+        );
+    }
+
+    /// A move applies to a whole subtree, so every control under one object
+    /// carries the same offset rather than a share of it.
+    #[kithara::test]
+    fn every_control_under_a_moved_object_carries_the_same_offset() {
+        let resolver = posed_fixture(r#"Row(children: [Text(id: "one"), Text(id: "two")])"#);
+        let (uri, set) =
+            load_module_graph(&resolver, None, "posed.kmodule.ron", &Limits::default()).unwrap();
+
+        let (root, _) = expand(&set, &uri, &BTreeMap::new()).unwrap();
+
+        let ExpandedNode::Row { children, .. } = &root else {
+            panic!("the fixture holds a row");
+        };
+        assert_eq!(folded(&children[0]), folded(&children[1]));
+    }
+
+    /// A control no object wraps draws exactly the list it drew before objects
+    /// existed, which is what keeps every page in the gallery where it was.
+    #[kithara::test]
+    fn a_control_no_object_wraps_is_left_alone() {
+        let resolver = deck_fixture();
+        let (uri, set) =
+            load_module_graph(&resolver, None, "deck.kmodule.ron", &Limits::default()).unwrap();
+
+        let (root, _) = expand(&set, &uri, &args(&[("deck", "b")])).unwrap();
+
+        assert!(folded(&root).is_identity());
     }
 
     #[kithara::test]

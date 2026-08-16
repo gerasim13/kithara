@@ -117,13 +117,19 @@ impl Leaf {
         }
     }
 
-    pub(crate) fn paint(&mut self, bounds: Rect, scene: &mut Scene) {
+    /// `transform` is every enclosing object's pose, folded into this leaf's
+    /// own box. A shader paints its own pass into the scene and is the one leaf
+    /// an object cannot move, because nothing it draws goes through the list.
+    pub(crate) fn paint(&mut self, bounds: Rect, transform: Transform, scene: &mut Scene) {
         if let Self::Control(control) = self {
-            replay(&control.draw_list(bounds), &mut VelloBackend::new(scene));
+            replay(
+                &control.draw_list(bounds, transform),
+                &mut VelloBackend::new(scene),
+            );
             return;
         }
         let mut list = DrawListBuilder::default();
-        match self {
+        list.transformed(transform, |list| match self {
             Self::Empty | Self::Control(_) | Self::Vis(_) => {}
             Self::Shader(shader) => shader.paint(bounds, scene),
             Self::Text {
@@ -149,9 +155,9 @@ impl Leaf {
                 }
             }
             Self::Custom { widget, text } => {
-                widget.paint(&mut list, &mut TextMeasurer::new(text), bounds);
+                widget.paint(list, &mut TextMeasurer::new(text), bounds);
             }
-        }
+        });
         replay(&list.finish(), &mut VelloBackend::new(scene));
     }
 

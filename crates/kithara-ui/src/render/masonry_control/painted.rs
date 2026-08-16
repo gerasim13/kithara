@@ -10,7 +10,7 @@ use super::{
 #[cfg(test)]
 use crate::interact::Gestures;
 use crate::{
-    draw::{DrawList, DrawListBuilder, DrawPools, Rect},
+    draw::{DrawList, DrawListBuilder, DrawPools, Rect, Transform},
     interact::{
         CursorShape, Hit, Hover, Input, Outcome, PointerOwnership, PointerPhase,
         recognizers::{Edge, Scalar, ScalarState, Span as SpanRecognizer, SpanState, click},
@@ -261,32 +261,37 @@ impl<Painter> MasonryControl for Painted<Painter>
 where
     Painter: Retained,
 {
-    fn draw_list(&mut self, bounds: Rect) -> DrawList {
+    fn draw_list(&mut self, bounds: Rect, transform: Transform) -> DrawList {
         self.repaint = false;
         let mut list = self
             .pools
             .as_ref()
             .map_or_else(DrawListBuilder::default, DrawPools::list);
-        match self
-            .interaction
-            .as_ref()
-            .map(|interaction| &interaction.recognize)
-        {
-            Some(Recognize::Index { .. }) => self.painter.draw_indexed(
-                &mut list,
-                &mut self.text,
-                &self.data,
-                bounds,
-                self.index.visual(),
-            ),
-            _ => self.painter.draw(
-                &mut list,
-                &mut self.text,
-                &self.data,
-                bounds,
-                self.press.visual(),
-            ),
-        }
+        let indexed = matches!(
+            self.interaction
+                .as_ref()
+                .map(|interaction| &interaction.recognize),
+            Some(Recognize::Index { .. })
+        );
+        list.transformed(transform, |list| {
+            if indexed {
+                self.painter.draw_indexed(
+                    list,
+                    &mut self.text,
+                    &self.data,
+                    bounds,
+                    self.index.visual(),
+                );
+            } else {
+                self.painter.draw(
+                    list,
+                    &mut self.text,
+                    &self.data,
+                    bounds,
+                    self.press.visual(),
+                );
+            }
+        });
         list.finish()
     }
 

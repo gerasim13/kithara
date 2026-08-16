@@ -22,7 +22,7 @@ use crate::{
         painter::{ControlPainter, IndexedVisual},
     },
     backends::replay_ordered,
-    draw::{DrawList, DrawListBuilder, DrawPools, Rect},
+    draw::{DrawList, DrawListBuilder, DrawPools, Rect, Transform},
     interact::{
         CursorShape, Hit, Hover, Input, Outcome, iced as iced_interact,
         recognizers::{Crossing, Scalar, ScalarState, Span as SpanRecognizer, SpanState, click},
@@ -49,6 +49,7 @@ where
     painter: Painter,
     pools: Option<DrawPools>,
     text_resources: &'skin TextResources,
+    transform: Transform,
 }
 
 /// What one painted canvas keeps between frames: the shaping context, the
@@ -94,6 +95,7 @@ where
             painter,
             pools: None,
             text_resources: skin.text_resources(),
+            transform: Transform::IDENTITY,
         }
     }
 
@@ -108,7 +110,16 @@ where
             painter,
             pools: Some(pools.clone()),
             text_resources: skin.text_resources(),
+            transform: Transform::IDENTITY,
         }
+    }
+
+    /// Offsets everything this control draws, without moving the box it draws
+    /// into or the region that answers the pointer.
+    #[must_use]
+    pub(crate) const fn posed(mut self, transform: Transform) -> Self {
+        self.transform = transform;
+        self
     }
 
     pub(crate) fn view(self) -> Element<'skin, UiEvent> {
@@ -163,8 +174,9 @@ where
             .pools
             .as_ref()
             .map_or_else(DrawListBuilder::default, DrawPools::list);
-        self.painter
-            .draw(&mut builder, text, &self.data, bounds, visual);
+        builder.transformed(self.transform, |builder| {
+            self.painter.draw(builder, text, &self.data, bounds, visual);
+        });
         builder.finish()
     }
 
@@ -180,8 +192,10 @@ where
             .pools
             .as_ref()
             .map_or_else(DrawListBuilder::default, DrawPools::list);
-        self.painter
-            .draw_indexed(&mut builder, text, &self.data, bounds, visual);
+        builder.transformed(self.transform, |builder| {
+            self.painter
+                .draw_indexed(builder, text, &self.data, bounds, visual);
+        });
         builder.finish()
     }
 
@@ -755,7 +769,7 @@ mod tests {
                     bounds,
                     iced_state.index.visual(),
                 ),
-                masonry.draw_list(bounds)
+                masonry.draw_list(bounds, Transform::IDENTITY)
             );
         }
 
@@ -777,7 +791,7 @@ mod tests {
             immediate
                 .paint
                 .indexed_draw_list(&iced_state.paint, bounds, iced_state.index.visual(),),
-            masonry.draw_list(bounds)
+            masonry.draw_list(bounds, Transform::IDENTITY)
         );
 
         let first = bounds.w / 4.0;
@@ -795,7 +809,7 @@ mod tests {
             immediate
                 .paint
                 .indexed_draw_list(&iced_state.paint, bounds, iced_state.index.visual(),),
-            masonry.draw_list(bounds)
+            masonry.draw_list(bounds, Transform::IDENTITY)
         );
 
         let second = bounds.w * 3.0 / 4.0;
@@ -811,7 +825,7 @@ mod tests {
             immediate
                 .paint
                 .indexed_draw_list(&iced_state.paint, bounds, iced_state.index.visual(),),
-            masonry.draw_list(bounds)
+            masonry.draw_list(bounds, Transform::IDENTITY)
         );
 
         let _ = immediate.on_input(
@@ -827,7 +841,7 @@ mod tests {
             immediate
                 .paint
                 .indexed_draw_list(&iced_state.paint, bounds, iced_state.index.visual(),),
-            masonry.draw_list(bounds)
+            masonry.draw_list(bounds, Transform::IDENTITY)
         );
 
         let _ = immediate.on_input(
@@ -841,7 +855,7 @@ mod tests {
             immediate
                 .paint
                 .indexed_draw_list(&iced_state.paint, bounds, iced_state.index.visual(),),
-            masonry.draw_list(bounds)
+            masonry.draw_list(bounds, Transform::IDENTITY)
         );
     }
 
@@ -862,7 +876,10 @@ mod tests {
             );
             let mut masonry = Painted::new(VerticalVu::new(ticks, skin), LEVELS, skin);
 
-            assert_eq!(iced, MasonryControl::draw_list(&mut masonry, bounds));
+            assert_eq!(
+                iced,
+                MasonryControl::draw_list(&mut masonry, bounds, Transform::IDENTITY)
+            );
         }
     }
 
@@ -904,7 +921,7 @@ mod tests {
 
                 assert_eq!(
                     iced,
-                    MasonryControl::draw_list(&mut masonry, bounds),
+                    MasonryControl::draw_list(&mut masonry, bounds, Transform::IDENTITY),
                     "the two hosts must record the same {name}"
                 );
             }
@@ -930,7 +947,10 @@ mod tests {
             );
             let mut masonry = Painted::new(Meter::new(skin), level, skin);
 
-            assert_eq!(iced, MasonryControl::draw_list(&mut masonry, bounds));
+            assert_eq!(
+                iced,
+                MasonryControl::draw_list(&mut masonry, bounds, Transform::IDENTITY)
+            );
         }
     }
 
@@ -956,7 +976,10 @@ mod tests {
                 );
                 let mut masonry = Painted::new(Cell::new(skin), data(), skin);
 
-                assert_eq!(iced, MasonryControl::draw_list(&mut masonry, bounds));
+                assert_eq!(
+                    iced,
+                    MasonryControl::draw_list(&mut masonry, bounds, Transform::IDENTITY)
+                );
             }
         }
     }
@@ -978,7 +1001,10 @@ mod tests {
             );
             let mut masonry = Painted::new(Swatch::new(role, skin), "ACCENT".to_owned(), skin);
 
-            assert_eq!(iced, MasonryControl::draw_list(&mut masonry, bounds));
+            assert_eq!(
+                iced,
+                MasonryControl::draw_list(&mut masonry, bounds, Transform::IDENTITY)
+            );
         }
     }
 
@@ -1011,7 +1037,10 @@ mod tests {
                 skin,
             );
 
-            assert_eq!(iced, MasonryControl::draw_list(&mut masonry, bounds));
+            assert_eq!(
+                iced,
+                MasonryControl::draw_list(&mut masonry, bounds, Transform::IDENTITY)
+            );
         }
     }
 
@@ -1044,7 +1073,10 @@ mod tests {
                 );
                 let mut masonry = Painted::new(NavItem::new(skin), data(), skin);
 
-                assert_eq!(iced, MasonryControl::draw_list(&mut masonry, bounds));
+                assert_eq!(
+                    iced,
+                    MasonryControl::draw_list(&mut masonry, bounds, Transform::IDENTITY)
+                );
                 assert!(
                     iced.commands().len() >= 4,
                     "{icon:?} must draw its icon alongside the rest"
@@ -1100,7 +1132,7 @@ mod tests {
 
                 assert_eq!(
                     iced,
-                    MasonryControl::draw_list(&mut masonry, bounds),
+                    MasonryControl::draw_list(&mut masonry, bounds, Transform::IDENTITY),
                     "the two hosts must record the same {style:?} button"
                 );
             }
@@ -1128,7 +1160,10 @@ mod tests {
             );
             let mut masonry = Painted::new(TabLarge::new(skin), data(), skin);
 
-            assert_eq!(iced, MasonryControl::draw_list(&mut masonry, bounds));
+            assert_eq!(
+                iced,
+                MasonryControl::draw_list(&mut masonry, bounds, Transform::IDENTITY)
+            );
         }
     }
 
@@ -1168,7 +1203,10 @@ mod tests {
                 );
                 let mut masonry = Painted::new(painter(), data(), skin);
 
-                assert_eq!(iced, MasonryControl::draw_list(&mut masonry, bounds));
+                assert_eq!(
+                    iced,
+                    MasonryControl::draw_list(&mut masonry, bounds, Transform::IDENTITY)
+                );
             }
         }
     }
@@ -1203,7 +1241,7 @@ mod tests {
 
             assert_eq!(
                 iced,
-                MasonryControl::draw_list(&mut masonry, bounds),
+                MasonryControl::draw_list(&mut masonry, bounds, Transform::IDENTITY),
                 "the two hosts must record the same {style:?} fader with caption {label:?}"
             );
         }
@@ -1226,7 +1264,10 @@ mod tests {
             );
             let mut masonry = Painted::new(Crossfader::new(ticks, skin), 0.8_f32, skin);
 
-            assert_eq!(iced, MasonryControl::draw_list(&mut masonry, bounds));
+            assert_eq!(
+                iced,
+                MasonryControl::draw_list(&mut masonry, bounds, Transform::IDENTITY)
+            );
         }
     }
 
@@ -1254,7 +1295,10 @@ mod tests {
             );
             let mut masonry = Painted::new(Knob::new(skin), data(), skin);
 
-            assert_eq!(iced, MasonryControl::draw_list(&mut masonry, bounds));
+            assert_eq!(
+                iced,
+                MasonryControl::draw_list(&mut masonry, bounds, Transform::IDENTITY)
+            );
         }
     }
 
@@ -1274,7 +1318,10 @@ mod tests {
         );
         let mut masonry = Painted::new(StereoMeter::new(skin), LEVELS, skin);
 
-        assert_eq!(iced, MasonryControl::draw_list(&mut masonry, bounds));
+        assert_eq!(
+            iced,
+            MasonryControl::draw_list(&mut masonry, bounds, Transform::IDENTITY)
+        );
     }
 }
 

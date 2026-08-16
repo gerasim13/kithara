@@ -8,6 +8,7 @@ use super::{
 };
 use crate::{
     compile::CompiledUi,
+    draw::Transform,
     module::TextAlign,
     mount,
     render::{
@@ -34,6 +35,9 @@ pub(super) struct Cx<'a, 'reads, 'value> {
     pub(super) reads: &'reads dyn Reads,
     pub(super) scope: &'a str,
     pub(super) skin: &'a Skin,
+    /// Every enclosing object's pose, folded into the box this control paints
+    /// into. Identity for a control no object wraps.
+    pub(super) transform: Transform,
     pub(super) ui: &'a CompiledUi,
     pub(super) value: Option<&'value ReadValue<'reads>>,
 }
@@ -329,7 +333,8 @@ where
     };
     let grip = control.grip(cx.skin, &data);
     let index_event = control.index_event();
-    let paint = Paint::pooled(control.painter(cx.skin), data, cx.skin, cx.ui.draw_pools());
+    let paint = Paint::pooled(control.painter(cx.skin), data, cx.skin, cx.ui.draw_pools())
+        .posed(cx.transform);
     let element = if cx.owner == InputOwner::Leaf {
         Gesture::with_grip(cx.path, paint, grip, index_event)
             .map_or_else(Paint::view, Gesture::view)

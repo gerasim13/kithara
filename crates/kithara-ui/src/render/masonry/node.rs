@@ -25,7 +25,7 @@ use super::{
 };
 use crate::{
     backends::VelloBackend,
-    draw::{DrawListBuilder, Pt, Rect, Rgba, replay},
+    draw::{DrawListBuilder, Pt, Rect, Rgba, Transform, replay},
     expand::Binding,
     interact::{
         CursorShape, Hit, Input, MOUSE, PointerInput, PointerOwnership, PointerPhase,
@@ -89,6 +89,7 @@ pub(crate) struct Node {
     pointer_owner: Option<NodePointerOwner>,
     geometry: Option<Rc<Cell<MasonryRect>>>,
     engine: Option<Rc<HostedEngine>>,
+    transform: Transform,
 }
 
 /// A retained Masonry tree produced by the document facade.
@@ -132,6 +133,7 @@ impl Node {
             pointer_owner: None,
             geometry: None,
             engine: None,
+            transform: Transform::IDENTITY,
         }
     }
 
@@ -647,7 +649,7 @@ impl Widget for Node {
         self.paint_surface(bounds, &mut list);
         replay(&list.finish(), &mut VelloBackend::new(scene));
         if let Some(leaf) = self.layout.leaf() {
-            leaf.paint(bounds, scene);
+            leaf.paint(bounds, self.transform, scene);
         }
     }
 
@@ -905,6 +907,12 @@ impl<Action> MasonryNode<Action> {
         let engine = HostedEngine::new(self.widget.id(), targets, map_event);
         self.engines.push(Rc::clone(&engine));
         self.widget.widget.engine = Some(engine);
+    }
+
+    /// Offsets everything the mounted leaf draws, without moving the box the
+    /// layout gave it or the region that answers the pointer.
+    pub(crate) fn set_transform(&mut self, transform: Transform) {
+        self.widget.widget.transform = transform;
     }
 
     pub(crate) fn set_window_pointer(&mut self, pointer: Rc<Cell<Option<Pt>>>) {

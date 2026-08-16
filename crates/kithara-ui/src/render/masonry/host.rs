@@ -24,6 +24,7 @@ use super::{
 };
 use crate::{
     compile::CompiledUi,
+    draw::Transform,
     expand::{Binding, ControlSpec, ExpandedNode},
     ids::InternId,
     layout::Axis,
@@ -598,6 +599,7 @@ where
         read: Option<&Binding>,
         owner: InputOwner,
         size: Option<SizeSpec>,
+        transform: Transform,
     ) -> Self::Output {
         let declared = control_declared(spec, size, self.skin);
         let plan = hosted_control_plan(path, spec, read, self.ui, self.reads, self.skin);
@@ -627,6 +629,7 @@ where
             },
             |widget| self.custom_leaf(widget, declared),
         );
+        output.set_transform(transform);
         #[cfg(test)]
         self.state.tag_path(path, output.widget_id());
         if custom_installed {

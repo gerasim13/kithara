@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 
 use crate::{
     error::UiDocError,
+    geom::Transform,
     ids::{InternId, SourceUri},
     layout::FrameSides,
     module::{
@@ -86,6 +87,10 @@ pub enum ExpandedNode {
         read: Option<Binding>,
         write: Option<Binding>,
         adaptive: AdaptivePolicy,
+        /// Every enclosing object's pose, folded into one offset in the box
+        /// this control is painted into. Identity for a control no object
+        /// wraps, which is every control a document had before objects.
+        transform: Transform,
     },
 }
 

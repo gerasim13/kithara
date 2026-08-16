@@ -13,6 +13,7 @@ pub mod draw;
 pub(crate) mod engine;
 pub mod error;
 pub mod expand;
+pub mod geom;
 pub mod ids;
 #[cfg(feature = "render")]
 pub mod interact;

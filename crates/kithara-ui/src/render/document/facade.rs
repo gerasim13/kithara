@@ -382,13 +382,18 @@ where
             host.slot(children, effective_size(node, walk.skin))
         }
         ExpandedNode::Control {
-            path, spec, read, ..
+            path,
+            spec,
+            read,
+            transform,
+            ..
         } => host.control(
             *path,
             spec,
             read.as_ref(),
             context.input_owner,
             effective_size(node, walk.skin),
+            *transform,
         ),
     }
 }
