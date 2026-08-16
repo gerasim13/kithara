@@ -14,6 +14,8 @@ pub fn setup_tracing_with_filter(_directives: &str) {}
 
 #[cfg(not(rtsan))]
 pub fn setup_tracing_with_filter(directives: &str) {
+    #[cfg(not(target_arch = "wasm32"))]
+    crate::hang::install_panic_dump();
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(directives));
     init_tracing(filter);
 }
@@ -43,6 +45,7 @@ pub fn init_tracing(filter: EnvFilter) {
         let _ = tracing_subscriber::registry()
             .with(fmt_layer)
             .with(probe_layer)
+            .with(crate::flight::layer())
             .try_init();
     }
 

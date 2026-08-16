@@ -50,7 +50,7 @@ pub(crate) fn emit_async_runtime_test(
     // test to reach this — whichever it happens to be — was reported as an
     // unsafe `malloc` in a real-time context. Process-wide setup belongs
     // before the future exists.
-    let tracing_init = make_tracing_init(args);
+    let tracing_init = make_tracing_init(args, remaining_attrs);
     let runtime_body = quote! {
         {
             #tracing_init
@@ -171,7 +171,7 @@ pub(crate) fn emit_async_timeout_test(
     // test to reach this — whichever it happens to be — was reported as an
     // unsafe `malloc` in a real-time context. Process-wide setup belongs
     // before the future exists.
-    let tracing_init = make_tracing_init(args);
+    let tracing_init = make_tracing_init(args, remaining_attrs);
     let runtime_body = quote! {
         {
             #tracing_init
@@ -298,7 +298,7 @@ pub(crate) fn emit_browser_test(
 ) -> TokenStream2 {
     let mut output = TokenStream2::new();
     let serial_attr = make_serial_attr(args);
-    let tracing_init = make_tracing_init(args);
+    let tracing_init = make_tracing_init(args, remaining_attrs);
 
     output.extend(make_dedicated_worker_config());
 

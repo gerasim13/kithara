@@ -6,6 +6,9 @@ mod platform;
 #[path = "wasm.rs"]
 mod platform;
 
+#[cfg(not(target_arch = "wasm32"))]
+mod panic_dump;
+
 mod shared;
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -17,6 +20,8 @@ mod detector;
 mod detector;
 
 pub use detector::HangDetector;
+#[cfg(not(target_arch = "wasm32"))]
+pub use panic_dump::{install_panic_dump, suppress_expected_panic_dumps};
 #[doc(hidden)]
 pub use platform::{PreKillGuard, record_test_hang};
 #[cfg(all(test, not(target_arch = "wasm32")))]

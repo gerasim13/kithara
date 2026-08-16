@@ -42,6 +42,13 @@ pub fn record_test_hang(label: &str, _diagnostic: &str) {
     kithara_platform::flash::log_hang_dump(label);
 }
 
+/// No dump machinery compiled in: unexpected panics keep the default hook.
+pub fn install_panic_dump() {}
+
+/// See [`install_panic_dump`]: nothing records, so nothing to suppress.
+#[doc(hidden)]
+pub fn suppress_expected_panic_dumps() {}
+
 impl<C: HangDump> HangDetector<C> {
     #[inline(always)]
     #[must_use]

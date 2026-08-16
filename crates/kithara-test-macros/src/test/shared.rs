@@ -5,7 +5,7 @@
 
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
-use syn::{Expr, Ident};
+use syn::{Attribute, Expr, Ident};
 
 use super::parse::TestArgs;
 
@@ -81,8 +81,8 @@ pub(crate) fn make_ambient_stmt(args: &TestArgs) -> TokenStream2 {
     }
 }
 
-pub(crate) fn make_tracing_init(args: &TestArgs) -> TokenStream2 {
-    if let Some(filter) = &args.tracing_filter {
+pub(crate) fn make_tracing_init(args: &TestArgs, remaining_attrs: &[&Attribute]) -> TokenStream2 {
+    let init = if let Some(filter) = &args.tracing_filter {
         quote! {
             ::kithara_test_utils::test::setup_tracing_with_filter(#filter);
         }
@@ -90,7 +90,30 @@ pub(crate) fn make_tracing_init(args: &TestArgs) -> TokenStream2 {
         quote! {
             ::kithara_test_utils::test::setup_tracing();
         }
+    };
+    if !expects_panic(remaining_attrs) {
+        return init;
     }
+    // `#[should_panic]` makes the panic the contract: the panic-dump hook must
+    // not record it as evidence.
+    quote! {
+        #init
+        #[cfg(not(target_arch = "wasm32"))]
+        ::kithara_test_utils::hang::suppress_expected_panic_dumps();
+    }
+}
+
+/// The test declares its panic (`#[should_panic]`, bare or inside `cfg_attr`).
+/// Token-level matching keeps the `cfg_attr` form covered without evaluating
+/// its condition: suppressing on a platform where the attribute is inactive
+/// only skips a dump for a test that then does not panic.
+fn expects_panic(remaining_attrs: &[&Attribute]) -> bool {
+    use quote::ToTokens as _;
+    remaining_attrs.iter().any(|attr| {
+        attr.path().is_ident("should_panic")
+            || (attr.path().is_ident("cfg_attr")
+                && attr.to_token_stream().to_string().contains("should_panic"))
+    })
 }
 
 pub(crate) fn make_prekill_guard(fn_name: &Ident) -> TokenStream2 {

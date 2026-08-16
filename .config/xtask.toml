@@ -202,13 +202,16 @@ source_excludes = ["kithara-test-macros/", "kithara-test-utils/src/test/"]
 [stress.modes.reproduction-flash-on]
 features = ["flash"]
 
+# Reproduction lanes set no RUST_LOG: `setup_tracing_with_filter` lets the env
+# override per-test `tracing(...)` annotations, so a campaign-wide RUST_LOG
+# silences exactly the verdict lines the annotated flaky tests were given.
+# Unannotated tests keep the "warn" default from `setup_tracing`.
 [stress.modes.reproduction-flash-on.set_env]
 KITHARA_HANG_PREKILL_SECS = "630"
 NEXTEST_FINAL_STATUS_LEVEL = "fail"
 NEXTEST_SHOW_PROGRESS = "counter"
 NEXTEST_STATUS_LEVEL = "fail"
 RUST_BACKTRACE = "1"
-RUST_LOG = "warn"
 
 [stress.modes.reproduction-flash-on.raw_path_env]
 KITHARA_HANG_DUMP_DIR = "hang"
@@ -228,7 +231,6 @@ NEXTEST_FINAL_STATUS_LEVEL = "fail"
 NEXTEST_SHOW_PROGRESS = "counter"
 NEXTEST_STATUS_LEVEL = "fail"
 RUST_BACKTRACE = "1"
-RUST_LOG = "warn"
 
 [stress.modes.reproduction-flash-off.raw_path_env]
 KITHARA_HANG_DUMP_DIR = "hang"
@@ -251,7 +253,6 @@ NEXTEST_FINAL_STATUS_LEVEL = "fail"
 NEXTEST_SHOW_PROGRESS = "counter"
 NEXTEST_STATUS_LEVEL = "fail"
 RUST_BACKTRACE = "1"
-RUST_LOG = "warn"
 
 [stress.modes.reproduction-no-block.raw_path_env]
 KITHARA_HANG_DUMP_DIR = "hang"

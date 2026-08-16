@@ -371,6 +371,10 @@ pub(crate) fn write_dump<C: HangDump>(label: &str, ctx: &C, dir: Option<&Path>, 
 #[doc(hidden)]
 pub fn record_test_hang(label: &str, diagnostic: &str) {
     write_dump(label, &NoContext, None, diagnostic);
+    // The timeout expansions panic right after this call on the same thread;
+    // that panic is already documented by the dump above. (The pre-kill timer
+    // thread never panics, so its stray flag is inert.)
+    super::panic_dump::suppress_next_panic_dump();
 }
 
 #[must_use]
