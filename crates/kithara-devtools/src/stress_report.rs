@@ -31,6 +31,17 @@ const MAX_CELL_CHARS: usize = 240;
 const PERCENT_SCALE: usize = 100;
 const PERCENT_HUNDREDTHS: usize = PERCENT_SCALE * PERCENT_SCALE;
 const MAX_INVENTORY_CASES: usize = 100_000;
+/// A repeat only qualifies for quarantine when it ran at least this many
+/// cases: a narrow filter (one test, fifty repeats) must keep its honest
+/// failures, and there mass failure is indistinguishable from the flake
+/// itself.
+const QUARANTINE_MIN_CASES: usize = 20;
+/// Quarantine a repeat when `failed * SHARE >= cases` — a quarter of the
+/// suite failing in one repeat. Real flake clusters stay far below this
+/// (campaign #5's worst honest repeat lost under 1% of its cases), while an
+/// environment event (evicted volume, vanished binaries) fails the suite
+/// wholesale.
+const QUARANTINE_FAIL_SHARE: usize = 4;
 pub(crate) const MAX_INVENTORY_BYTES: u64 = 64 * 1_024 * 1_024;
 pub(crate) const MAX_JUNIT_BYTES: u64 = 512 * 1_024 * 1_024;
 /// Bounds a lane log, which a campaign appends to once per attempt.
@@ -661,17 +672,17 @@ fn mark_incomplete(markdown: &mut String) {
     }
 }
 
-fn render(
+/// Validate each testcase against the selection and fold the survivors into
+/// per-test stats; every rejection becomes an evidence problem.
+fn collect_stats(
     cases: &[CaseTiming],
     inventory: &BTreeSet<TestId>,
     expected_count: usize,
-    run_id: Option<&str>,
-    timestamp: Option<&str>,
-) -> RenderedReport {
-    let mut tests = BTreeMap::<(String, String), TestStats>::new();
+    problems: &mut EvidenceProblems,
+) -> (BTreeMap<TestId, TestStats>, BTreeSet<usize>) {
+    let mut tests = BTreeMap::<TestId, TestStats>::new();
     let mut observed_iterations = BTreeSet::new();
     let mut unique_cases = BTreeSet::new();
-    let mut problems = EvidenceProblems::default();
     if cases.is_empty() {
         problems.add("the JUnit report contains no testcases".to_owned(), false);
     }
@@ -724,6 +735,29 @@ fn render(
         if case.failed {
             stats.failed_iterations.insert(iteration);
         }
+    }
+    (tests, observed_iterations)
+}
+
+fn render(
+    cases: &[CaseTiming],
+    inventory: &BTreeSet<TestId>,
+    expected_count: usize,
+    run_id: Option<&str>,
+    timestamp: Option<&str>,
+) -> RenderedReport {
+    let mut problems = EvidenceProblems::default();
+    let (mut tests, mut observed_iterations) =
+        collect_stats(cases, inventory, expected_count, &mut problems);
+
+    let quarantined = quarantine_poisoned_iterations(&mut tests, &mut observed_iterations);
+    for (iteration, (failed, total)) in &quarantined {
+        problems.add(
+            format!(
+                "iteration {iteration} failed en masse ({failed} of {total} cases) and was quarantined as environment poisoning"
+            ),
+            false,
+        );
     }
 
     add_coverage_problem(
@@ -799,6 +833,7 @@ fn render(
     let _ = writeln!(out, "- Testcases read: `{}`", cases.len());
     let _ = writeln!(out, "- Unique test iterations: `{attempts}`");
     let _ = writeln!(out, "- Failed attempts: `{failed_attempts}`");
+    let _ = writeln!(out, "- Quarantined iterations: `{}`", quarantined.len());
 
     if problems.total > 0 {
         out.push_str("\n## Evidence problems\n");
@@ -814,11 +849,68 @@ fn render(
         }
     }
 
+    render_quarantine(&mut out, &quarantined);
     render_failures(&mut out, tests);
     RenderedReport {
         markdown: out,
         complete,
         rates,
+    }
+}
+
+/// Pull environment-poisoned repeats out of the aggregate before any rate is
+/// computed.
+///
+/// A flake is a property of a test: it fails in some repeats while the suite
+/// around it passes. A repeat in which a quarter or more of the suite fails
+/// at once is a property of the environment — campaign #5 lost repeats 44-50
+/// to an external volume eviction mid-run, and the report then attributed
+/// ~1200 phantom per-test rates to tests whose binaries had simply vanished.
+/// Such repeats leave every rate; the report names them and their coverage
+/// gap instead.
+fn quarantine_poisoned_iterations(
+    tests: &mut BTreeMap<TestId, TestStats>,
+    observed: &mut BTreeSet<usize>,
+) -> BTreeMap<usize, (usize, usize)> {
+    let mut per_iteration = BTreeMap::<usize, (usize, usize)>::new();
+    for stats in tests.values() {
+        for &iteration in &stats.observed_iterations {
+            per_iteration.entry(iteration).or_default().1 += 1;
+        }
+        for &iteration in &stats.failed_iterations {
+            per_iteration.entry(iteration).or_default().0 += 1;
+        }
+    }
+    let quarantined = per_iteration
+        .into_iter()
+        .filter(|&(_, (failed, total))| {
+            total >= QUARANTINE_MIN_CASES && failed.saturating_mul(QUARANTINE_FAIL_SHARE) >= total
+        })
+        .collect::<BTreeMap<_, _>>();
+    if quarantined.is_empty() {
+        return quarantined;
+    }
+    for stats in tests.values_mut() {
+        stats
+            .observed_iterations
+            .retain(|iteration| !quarantined.contains_key(iteration));
+        stats
+            .failed_iterations
+            .retain(|iteration| !quarantined.contains_key(iteration));
+    }
+    observed.retain(|iteration| !quarantined.contains_key(iteration));
+    quarantined
+}
+
+fn render_quarantine(out: &mut String, quarantined: &BTreeMap<usize, (usize, usize)>) {
+    if quarantined.is_empty() {
+        return;
+    }
+    out.push_str(
+        "\n## Quarantined repeats\n\nA repeat in which a quarter or more of the suite fails at once is an environment event (an evicted volume, vanished binaries), not a property of the tests. These repeats are excluded from every rate in this report; the raw JUnit artifact remains exhaustive.\n\n| iteration (zero-based) | failed / cases |\n|---:|---:|\n",
+    );
+    for (iteration, (failed, total)) in quarantined {
+        let _ = writeln!(out, "| {iteration} | {failed} / {total} |");
     }
 }
 
@@ -977,6 +1069,71 @@ mod tests {
         assert!(markdown.contains("33.33%"), "{markdown}");
         assert!(markdown.contains("| 1 | 250 ms |"), "{markdown}");
         assert!(!markdown.contains("demo::tests other"), "{markdown}");
+    }
+
+    /// 25 tests, 4 repeats; repeat 0 fails wholesale, the rest are clean.
+    fn mass_failure_campaign() -> (Vec<CaseTiming>, BTreeSet<TestId>) {
+        let names = (0..25).map(|i| format!("case_{i:02}")).collect::<Vec<_>>();
+        let mut cases = Vec::new();
+        for name in &names {
+            for iteration in 0..4 {
+                cases.push(case(name, iteration, iteration == 0, 0.1));
+            }
+        }
+        let selected = names
+            .iter()
+            .map(|name| ("demo::tests".to_owned(), name.clone()))
+            .collect();
+        (cases, selected)
+    }
+
+    #[test]
+    fn a_mass_failing_repeat_leaves_the_per_test_rates() {
+        let (cases, selected) = mass_failure_campaign();
+
+        let report = render(&cases, &selected, 4, None, None);
+
+        let rate = report.rates[&("demo::tests".to_owned(), "case_00".to_owned())];
+        assert_eq!(
+            rate,
+            LaneRate {
+                failed: 0,
+                attempts: 3
+            },
+            "{}",
+            report.markdown
+        );
+    }
+
+    #[test]
+    fn a_quarantined_repeat_is_named_in_the_report() {
+        let (cases, selected) = mass_failure_campaign();
+
+        let report = render(&cases, &selected, 4, None, None);
+
+        assert!(
+            report.markdown.contains("## Quarantined repeats"),
+            "{}",
+            report.markdown
+        );
+    }
+
+    #[test]
+    fn a_narrow_filter_keeps_its_honest_failures() {
+        let cases = vec![case("seek", 0, true, 0.1), case("seek", 1, false, 0.1)];
+
+        let report = render(&cases, &inventory(&["seek"]), 2, None, None);
+
+        let rate = report.rates[&("demo::tests".to_owned(), "seek".to_owned())];
+        assert_eq!(
+            rate,
+            LaneRate {
+                failed: 1,
+                attempts: 2
+            },
+            "{}",
+            report.markdown
+        );
     }
 
     #[test]
