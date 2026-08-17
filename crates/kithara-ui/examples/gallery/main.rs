@@ -9,6 +9,8 @@ mod mock;
 mod offscreen;
 mod sections;
 #[cfg(test)]
+mod steady;
+#[cfg(test)]
 mod walk;
 
 use iced::{Element, Size, Subscription, Task, Theme, time as iced_time, window, window::Settings};

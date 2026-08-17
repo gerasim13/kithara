@@ -16,10 +16,12 @@
 //! the host's own clock — and it is spelled out per control, so a control added
 //! tomorrow is classified here or does not compile.
 //!
-//! Comparing two pictures instead was tried first and is not sound: six pages
-//! rasterise two different images of the same moment, so the oracle measured
-//! the rasteriser as much as the page and the set of pages said to move changed
-//! between runs of the same binary.
+//! Comparing two pictures instead cannot be the oracle *here*, and the reason
+//! is this walk's own rasteriser rather than the pages: through the software
+//! backend a page of plain controls comes out blank but for its title, so what
+//! that comparison measured was the handful of glyphs the backend does draw.
+//! The picture oracle lives beside this, in `steady`, on the backend the window
+//! actually draws with.
 //!
 //! Both hosts are walked, because the gallery's own window is the immediate one
 //! and the retained one answers a different question: whether a page settles is
