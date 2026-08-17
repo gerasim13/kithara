@@ -89,6 +89,11 @@ jobs:
   lanes:
     if: vars.KITHARA_RUNNER_LABELS != '' && github.event.schedule == '0 21 * * *'
     uses: ./.github/workflows/lanes.yml
+    # A called workflow starts with none of the caller's secrets. The network
+    # lane bakes real key-server credentials into the build and fails when one
+    # is absent, so a scheduled run reports every one of them unset while the
+    # same lane started by hand builds against them.
+    secrets: inherit
 
   quality-deep:
     if: vars.KITHARA_RUNNER_LABELS != '' && github.event.schedule == '0 8 * * 6'
