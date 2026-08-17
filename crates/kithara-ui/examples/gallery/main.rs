@@ -825,6 +825,7 @@ mod tests {
                     collect_expanded_nav_paths(child, ui, paths);
                 }
             }
+            ExpandedNode::Scroll { child, .. } => collect_expanded_nav_paths(child, ui, paths),
             ExpandedNode::Control {
                 path,
                 spec: ControlSpec::NavItem { .. },
@@ -1536,7 +1537,9 @@ mod tests {
                     collect_menu_tab_module(child, ui, found);
                 }
             }
-            ExpandedNode::Optional { child, .. } => collect_menu_tab_module(child, ui, found),
+            ExpandedNode::Optional { child, .. } | ExpandedNode::Scroll { child, .. } => {
+                collect_menu_tab_module(child, ui, found);
+            }
             ExpandedNode::Popover {
                 path,
                 open,
@@ -1610,7 +1613,9 @@ mod tests {
                 collect_menu_module_reads(anchor, ui, keys);
                 collect_menu_module_reads(content, ui, keys);
             }
-            ExpandedNode::Pressable { child, .. } => collect_menu_module_reads(child, ui, keys),
+            ExpandedNode::Pressable { child, .. } | ExpandedNode::Scroll { child, .. } => {
+                collect_menu_module_reads(child, ui, keys);
+            }
             ExpandedNode::Control { spec, read, .. } => {
                 if let Some(binding) = read {
                     keys.push(ui.resolve(binding.key));

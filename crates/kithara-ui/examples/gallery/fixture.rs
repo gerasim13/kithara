@@ -7,13 +7,7 @@ use kithara_ui::{builtin, source::MemResolver};
 pub(crate) struct Consts;
 
 impl Consts {
-    /// Tall enough for the whole page list. The nav is one column of
-    /// fixed-height items with nothing to scroll it, so a window shorter than
-    /// the list puts its last pages past the bottom edge, where a pointer
-    /// cannot reach them. A `Scroll` around the list is the shape this wants,
-    /// and it currently costs half a point of host parity on every page that
-    /// carries the nav: a viewport defect to fix before the shape is taken.
-    pub(crate) const HEIGHT: f32 = 860.0;
+    pub(crate) const HEIGHT: f32 = 720.0;
     pub(crate) const STRESS_TICK_MS: u64 = 16;
     pub(crate) const WIDTH: f32 = 1300.0;
 }

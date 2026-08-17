@@ -1,6 +1,9 @@
 use iced::{
     Alignment, Element, Length, Size,
-    widget::{Space, Stack, container, mouse_area, scrollable},
+    widget::{
+        Space, Stack, container, mouse_area, scrollable,
+        scrollable::{Direction, Scrollbar},
+    },
 };
 
 use super::{
@@ -215,13 +218,30 @@ impl<'a> DocumentHost for IcedHost<'a, '_> {
 
     /// The viewport is the declared box; the child keeps whatever height it
     /// asked for and iced moves it under that window.
+    ///
+    /// The box is given to the viewport itself rather than to a container around
+    /// it. A scrollable shrinks to its content, and a container told to fill
+    /// would then centre that content in the leftover — a window whose first row
+    /// starts below its own top, by half of whatever the page did not use.
+    ///
+    /// The bar is taken down to nothing because a document's viewport looks the
+    /// way this toolkit's skin says, and neither host draws an indicator yet.
+    /// Left at its default, iced paints ten columns of its own theme down the
+    /// window's right edge that the retained host has no counterpart for.
     fn scroll(
         &mut self,
         _id: InternId,
         child: Self::Output,
         size: Option<SizeSpec>,
     ) -> Self::Output {
-        apply_size(Rendered::leading(scrollable(child).into()), size)
+        let (width, height) = content_size(size);
+        scrollable(child)
+            .direction(Direction::Vertical(
+                Scrollbar::new().width(0.0).scroller_width(0.0),
+            ))
+            .width(width)
+            .height(height)
+            .into()
     }
 
     fn slot(&mut self, children: Vec<Self::Output>, size: Option<SizeSpec>) -> Self::Output {
@@ -392,7 +412,11 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::render::fonts::SANS;
+    use crate::{
+        builtin,
+        ids::{Interner, SourceUri},
+        render::{ReadValue, Reads, document::probe, fonts::SANS},
+    };
 
     /// The box each child of the stage asks for. The stage itself is taller,
     /// which is the only way a child being stretched to it shows up at all.
@@ -452,5 +476,50 @@ mod tests {
     #[kithara::test]
     fn a_stages_only_child_keeps_the_box_it_asked_for() {
         assert_eq!(document_children(1)[0], Size::new(CHILD, CHILD));
+    }
+
+    /// A viewport is a window, and a window's first row is at its own top.
+    ///
+    /// Sized through a container instead, a scrollable shorter than its
+    /// declared box is centred in what is left over, and the page it holds
+    /// starts halfway down a gap nobody wrote — which is neither what the
+    /// document says nor what the retained host does.
+    #[kithara::test]
+    fn a_viewport_puts_its_content_at_its_own_top() {
+        struct Silent;
+
+        impl Reads for Silent {
+            fn get(&self, _endpoint: &str) -> Option<ReadValue<'_>> {
+                None
+            }
+        }
+
+        let window = CHILD + 64.0;
+        let silent = Silent;
+        let mut host = IcedHost::new(probe(&silent), builtin::skin());
+        let mut interner = Interner::new(1024);
+        let id = interner
+            .intern("pages", &SourceUri("tree-test.ron".to_owned()))
+            .unwrap_or_else(|error| panic!("the viewport path must intern: {error}"));
+        let child = apply_size(
+            Rendered::leading(Space::new().into()),
+            Some(SizeSpec::new(Dim::Fill, Dim::Fixed(CHILD))),
+        );
+        let mut element = host.scroll(id, child, Some(SizeSpec::new(Dim::Fill, Dim::Fill)));
+        let renderer: Renderer =
+            FallbackRenderer::Secondary(TinySkiaRenderer::new(SANS, Pixels(14.0)));
+        let mut tree = Tree::new(element.as_widget());
+
+        let node = element.as_widget_mut().layout(
+            &mut tree,
+            &renderer,
+            &Limits::new(Size::ZERO, Size::new(600.0, window)),
+        );
+
+        let content = Layout::new(&node)
+            .children()
+            .next()
+            .unwrap_or_else(|| panic!("the viewport lays out the content it was given"));
+        assert_eq!(content.bounds().y, 0.0);
     }
 }
