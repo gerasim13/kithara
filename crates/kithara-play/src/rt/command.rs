@@ -40,6 +40,9 @@ impl PlayerNodeProcessor {
 
         let mut revived = false;
         for (_, track) in self.tracks.iter_mut() {
+            // Slot-wide: the re-base releases the natural-end hold on every
+            // loaded track, including the ones this seek does not move.
+            track.observe_seek_epoch(seek_epoch);
             match track.state() {
                 TrackState::FadingIn | TrackState::Playing => {
                     track.seek(seconds);
@@ -183,6 +186,7 @@ impl PlayerNodeProcessor {
             .prefetch_duration(self.prefetch_duration)
             .fade_curve(self.crossfade.fade_curve())
             .playback_rate(self.playback_rate)
+            .seek_epoch(self.playback.seek_epoch.load(Ordering::SeqCst))
             .build(resource);
 
         if let Some(rejected) = self.tracks.insert(track) {

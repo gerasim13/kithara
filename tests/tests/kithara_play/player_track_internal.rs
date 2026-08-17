@@ -28,9 +28,13 @@ use kithara_integration_tests::audio_mock::{
     LiveFrontierReader, MisreportedDurationReader, TestPcmReader,
 };
 use ringbuf::{
-    HeapRb,
+    HeapProd, HeapRb,
     traits::{Consumer, Split},
 };
+
+/// Slot seek epoch a freshly built track already sits at: nothing published,
+/// nothing pending, so a natural end finalizes immediately.
+const NO_SEEK_PENDING: u64 = 0;
 
 #[derive(Clone, Copy)]
 enum TrackStateScenario {
@@ -174,7 +178,7 @@ async fn eof_playback_stopped_notification_carries_item_id() {
             &mut scratch_bufs,
             &mut mix_bufs,
             0..512,
-            &mut RtSink::new(&mut notification_tx, &RtMetrics::default()),
+            &mut RtSink::new(&mut notification_tx, &RtMetrics::default(), NO_SEEK_PENDING),
         );
 
         while let Some(notification) = rx.try_pop() {
@@ -196,6 +200,90 @@ async fn eof_playback_stopped_notification_carries_item_id() {
     assert!(saw_eof_stop);
 }
 
+/// Count the EOF stops a run of blocks published, with no ordering claim of
+/// its own — the caller's assertion is about whether the end was reported at
+/// all, not about what preceded it.
+fn count_eof_stops(rx: &mut impl Consumer<Item = PlayerNotification>) -> usize {
+    collect_notifications(rx)
+        .iter()
+        .filter(|notification| {
+            matches!(
+                notification,
+                PlayerNotification::PlaybackStopped {
+                    reason: TrackPlaybackStopReason::Eof,
+                    ..
+                }
+            )
+        })
+        .count()
+}
+
+/// Read past the end of a short track, so the feeder drains and the natural-end
+/// path runs on every block.
+fn read_past_the_end(
+    track: &mut PlayerTrack,
+    sink_seek_epoch: u64,
+    tx: &mut HeapProd<PlayerNotification>,
+) {
+    let mut scratch_l = [0.0; 512];
+    let mut scratch_r = [0.0; 512];
+    let mut mix_l = [0.0; 512];
+    let mut mix_r = [0.0; 512];
+    let mut scratch_bufs = [&mut scratch_l[..], &mut scratch_r[..]];
+    let mut mix_bufs = [&mut mix_l[..], &mut mix_r[..]];
+
+    for _ in 0..4 {
+        let _ = track.read(
+            &mut scratch_bufs,
+            &mut mix_bufs,
+            0..512,
+            &mut RtSink::new(tx, &RtMetrics::default(), sink_seek_epoch),
+        );
+    }
+}
+
+/// Bug #5. `seek_seconds` publishes the next epoch *before* it sends the
+/// matching `PlayerCmd::Seek`, so a block that renders past EOF in that window
+/// renders a position the user has already left. Reporting the end there hands
+/// the queue an `ItemDidPlayToEnd` and it auto-advances out from under the seek
+/// the processor is about to apply — the track flips while the seek is settling.
+#[kithara::test(tokio)]
+async fn a_published_seek_holds_the_natural_end_report() {
+    let mut track = make_track_with(0.01, Some(Arc::from("item-1")));
+    let (mut notification_tx, mut rx) = HeapRb::<PlayerNotification>::new(16).split();
+
+    track.play();
+    read_past_the_end(&mut track, NO_SEEK_PENDING + 1, &mut notification_tx);
+
+    assert_eq!(
+        count_eof_stops(&mut rx),
+        0,
+        "a track the user has seeked away from must not report its old end"
+    );
+}
+
+/// The hold is released by the seek itself, so it costs blocks of silence, not
+/// the end-of-track signal: once the track is re-based onto the published
+/// epoch, the very same drained feeder reports the end.
+#[kithara::test(tokio)]
+async fn observing_the_seek_epoch_releases_the_held_end() {
+    let mut track = make_track_with(0.01, Some(Arc::from("item-1")));
+    let (mut notification_tx, mut rx) = HeapRb::<PlayerNotification>::new(16).split();
+
+    track.play();
+    read_past_the_end(&mut track, NO_SEEK_PENDING + 1, &mut notification_tx);
+    let _held = collect_notifications(&mut rx);
+
+    track.observe_seek_epoch(NO_SEEK_PENDING + 1);
+    read_past_the_end(&mut track, NO_SEEK_PENDING + 1, &mut notification_tx);
+
+    assert_eq!(
+        count_eof_stops(&mut rx),
+        1,
+        "the re-based track must report the end it was holding"
+    );
+}
+
 #[kithara::test(tokio)]
 async fn read_outcome_full_on_normal_read() {
     let mut track = make_track_with(60.0, None);
@@ -214,7 +302,7 @@ async fn read_outcome_full_on_normal_read() {
         &mut scratch_bufs,
         &mut mix_bufs,
         0..512,
-        &mut RtSink::new(&mut notification_tx, &RtMetrics::default()),
+        &mut RtSink::new(&mut notification_tx, &RtMetrics::default(), NO_SEEK_PENDING),
     );
 
     assert!(matches!(
@@ -272,7 +360,7 @@ async fn read_outcome_partial_then_eof() {
             &mut scratch_bufs,
             &mut mix_bufs,
             0..512,
-            &mut RtSink::new(&mut notification_tx, &RtMetrics::default()),
+            &mut RtSink::new(&mut notification_tx, &RtMetrics::default(), NO_SEEK_PENDING),
         );
 
         match outcome {
@@ -329,7 +417,7 @@ async fn handover_emits_once_when_position_crosses_fade_threshold() {
             &mut scratch_bufs,
             &mut mix_bufs,
             0..512,
-            &mut RtSink::new(&mut notification_tx, &RtMetrics::default()),
+            &mut RtSink::new(&mut notification_tx, &RtMetrics::default(), NO_SEEK_PENDING),
         );
         for notification in collect_notifications(&mut rx) {
             match notification {
@@ -362,7 +450,7 @@ async fn handover_emits_once_when_position_crosses_fade_threshold() {
         &mut scratch_bufs,
         &mut mix_bufs,
         0..512,
-        &mut RtSink::new(&mut notification_tx, &RtMetrics::default()),
+        &mut RtSink::new(&mut notification_tx, &RtMetrics::default(), NO_SEEK_PENDING),
     );
     let notifications = collect_notifications(&mut rx);
     assert!(
@@ -398,7 +486,7 @@ async fn handover_uses_buffered_eof_when_duration_is_overestimated() {
         &mut scratch_bufs,
         &mut mix_bufs,
         0..512,
-        &mut RtSink::new(&mut notification_tx, &RtMetrics::default()),
+        &mut RtSink::new(&mut notification_tx, &RtMetrics::default(), NO_SEEK_PENDING),
     );
 
     assert!(matches!(
@@ -450,7 +538,7 @@ async fn handover_backstops_eof_when_threshold_was_not_reached_earlier() {
         &mut scratch_bufs,
         &mut mix_bufs,
         0..512,
-        &mut RtSink::new(&mut notification_tx, &RtMetrics::default()),
+        &mut RtSink::new(&mut notification_tx, &RtMetrics::default(), NO_SEEK_PENDING),
     );
     assert!(matches!(outcome, TrackReadOutcome::Partial { .. }));
 
@@ -503,7 +591,7 @@ async fn handover_is_not_duplicated_at_eof_after_early_trigger() {
             &mut scratch_bufs,
             &mut mix_bufs,
             0..512,
-            &mut RtSink::new(&mut notification_tx, &RtMetrics::default()),
+            &mut RtSink::new(&mut notification_tx, &RtMetrics::default(), NO_SEEK_PENDING),
         );
 
         for notification in collect_notifications(&mut rx) {
@@ -555,7 +643,7 @@ async fn prefetch_fires_before_handover_when_prefetch_exceeds_fade() {
         &mut scratch_bufs,
         &mut mix_bufs,
         0..512,
-        &mut RtSink::new(&mut notification_tx, &RtMetrics::default()),
+        &mut RtSink::new(&mut notification_tx, &RtMetrics::default(), NO_SEEK_PENDING),
     );
 
     let notifications = collect_notifications(&mut rx);
@@ -597,7 +685,7 @@ async fn handover_fires_after_prefetch_when_position_reaches_fade_threshold() {
         &mut scratch_bufs,
         &mut mix_bufs,
         0..512,
-        &mut RtSink::new(&mut notification_tx, &RtMetrics::default()),
+        &mut RtSink::new(&mut notification_tx, &RtMetrics::default(), NO_SEEK_PENDING),
     );
     let after_prefetch = collect_notifications(&mut rx);
     assert!(
@@ -619,7 +707,7 @@ async fn handover_fires_after_prefetch_when_position_reaches_fade_threshold() {
             &mut scratch_bufs,
             &mut mix_bufs,
             0..512,
-            &mut RtSink::new(&mut notification_tx, &RtMetrics::default()),
+            &mut RtSink::new(&mut notification_tx, &RtMetrics::default(), NO_SEEK_PENDING),
         );
         for notification in collect_notifications(&mut rx) {
             if matches!(notification, PlayerNotification::HandoverRequested) {
@@ -656,7 +744,7 @@ async fn prefetch_fires_immediately_when_track_shorter_than_prefetch_duration() 
         &mut scratch_bufs,
         &mut mix_bufs,
         0..512,
-        &mut RtSink::new(&mut notification_tx, &RtMetrics::default()),
+        &mut RtSink::new(&mut notification_tx, &RtMetrics::default(), NO_SEEK_PENDING),
     );
 
     let notifications = collect_notifications(&mut rx);
@@ -688,7 +776,7 @@ async fn prefetch_and_handover_both_fire_when_thresholds_coincide() {
         &mut scratch_bufs,
         &mut mix_bufs,
         0..512,
-        &mut RtSink::new(&mut notification_tx, &RtMetrics::default()),
+        &mut RtSink::new(&mut notification_tx, &RtMetrics::default(), NO_SEEK_PENDING),
     );
     let mid = collect_notifications(&mut rx);
     assert!(mid.iter().all(|notification| !matches!(
@@ -704,7 +792,7 @@ async fn prefetch_and_handover_both_fire_when_thresholds_coincide() {
             &mut scratch_bufs,
             &mut mix_bufs,
             0..512,
-            &mut RtSink::new(&mut notification_tx, &RtMetrics::default()),
+            &mut RtSink::new(&mut notification_tx, &RtMetrics::default(), NO_SEEK_PENDING),
         );
         for notification in collect_notifications(&mut rx) {
             match notification {
@@ -743,7 +831,7 @@ async fn read_outcome_eof_when_track_finished() {
         &mut scratch_bufs,
         &mut mix_bufs,
         0..512,
-        &mut RtSink::new(&mut notification_tx, &RtMetrics::default()),
+        &mut RtSink::new(&mut notification_tx, &RtMetrics::default(), NO_SEEK_PENDING),
     );
 
     assert!(matches!(outcome, TrackReadOutcome::Eof));

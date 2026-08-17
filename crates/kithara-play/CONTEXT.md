@@ -225,6 +225,17 @@ the audio thread.
 When the arena's last track ends at *natural* EOF the processor keeps it resident but inert, so a
 later in-range seek can revive it; tracks finished via stop or a faded-out crossfade are discarded.
 
+**A published seek outranks a natural end.** `seek_seconds` publishes the next epoch on
+`PlaybackShared` *before* it sends the matching `PlayerCmd::Seek`, so a render block can drain the
+feeder in the window between. Ending the track there would be reporting a position the user has
+already left: the queue takes `ItemDidPlayToEnd` as the authoritative end of track and auto-advances,
+flipping the current item out from under the seek the processor is about to apply. So each track
+carries the slot epoch it has been re-based onto, `RtSink` carries the published one, and
+`handle_natural_end` refuses to finalize while they differ. The hold costs blocks of silence, never
+the signal: `apply_seek` re-bases *every* loaded track onto the applied epoch — including the ones
+the seek does not move — and a track planted later starts at the epoch already published, so no track
+can be born behind. `Failed` is not held: a broken source stays broken across a seek.
+
 The shared decode worker's produce core lives in `kithara-audio`
 (`runtime/scheduler.rs::produce_tick_rt`) and carries the same attribute; off-core work
 (pooled-buffer free, event flush, parking, symphonia allocation) belongs to the scheduler shell.
