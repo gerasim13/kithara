@@ -8,10 +8,12 @@ use kithara::{
     play::{PlayerImpl, Resource, ResourceConfig},
 };
 use kithara_integration_tests::{
-    TestTempDir, audio_fixture::EmbeddedAudio, create_test_wav, disk_asset_store, kithara, temp_dir,
+    TestTempDir,
+    audio_fixture::EmbeddedAudio,
+    create_test_wav, disk_asset_store, kithara,
+    offline::{OfflinePlayerHarness, OfflinePlayerOptions},
+    temp_dir,
 };
-
-use super::offline_player_harness::{OfflinePlayerHarness, OfflinePlayerOptions};
 
 const SAMPLE_RATE: u32 = 44_100;
 const BLOCK_FRAMES: usize = 512;

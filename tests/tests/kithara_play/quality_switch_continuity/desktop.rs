@@ -8,10 +8,13 @@ use kithara::{
     platform::sync::Arc,
     play::PlaybackResamplerBackend,
 };
-use kithara_integration_tests::{TestServerHelper, fixture_protocol::DelayRule};
+use kithara_integration_tests::{
+    TestServerHelper,
+    fixture_protocol::DelayRule,
+    offline::{OfflinePlayerHarness, OfflinePlayerOptions},
+};
 
 use super::*;
-use crate::kithara_play::offline_player_harness::{OfflinePlayerHarness, OfflinePlayerOptions};
 
 const HOST_SAMPLE_RATE: u32 = 48_000;
 const CAPTURE_FRAME: usize = HOST_SAMPLE_RATE as usize * 2;

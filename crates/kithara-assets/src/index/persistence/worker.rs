@@ -88,7 +88,7 @@ fn run(weak: &Weak<FlushHub>, wait: &HubWait, cancel: &CancelToken, policy: &Flu
             // indefinite wait parks until a real flush/shutdown event.
             #[cfg(test)]
             if let Some(sender) = wait.idle_park.lock().take() {
-                let _ = sender.send(());
+                sender.send(()).ok();
             }
             guard = wait.cv.wait(guard);
         }

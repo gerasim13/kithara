@@ -57,7 +57,7 @@ struct TapProcessor {
 }
 
 impl TapProcessor {
-    const STEREO: NonZeroUsize = NonZeroUsize::new(2).expect("2 is non-zero");
+    const STEREO: NonZeroUsize = NonZeroUsize::new(2).expect("BUG: 2 is non-zero");
 
     fn new(writer: Option<MixTapWriter>, sample_rate: NonZeroU32) -> Self {
         Self {

@@ -1,5 +1,7 @@
 <div align="center">
-  <img src="../../logo.svg" alt="kithara" width="300">
+
+<img src="../../logo.svg" alt="kithara" width="300">
+
 </div>
 
 <div align="center">
@@ -35,12 +37,19 @@ chunk.resize(4096, 0);
 ## Public Types
 
 <table>
+
 <tr><th>Type</th><th>Role</th></tr>
+
 <tr><td><code>BytePool</code></td><td>Sharded pool of <code>Vec&lt;u8&gt;</code> for I/O and segment buffers</td></tr>
+
 <tr><td><code>PcmPool</code></td><td>Sharded pool of <code>Vec&lt;f32&gt;</code> for decoded PCM frames</td></tr>
+
 <tr><td><code>PcmBuf</code></td><td>RAII handle for a pooled PCM buffer</td></tr>
+
 <tr><td><code>ByteBudget</code></td><td>Soft cap on outstanding bytes; returns <code>BudgetExhausted</code> when exceeded</td></tr>
+
 <tr><td><code>BudgetExhausted</code></td><td>Error returned when a budgeted allocation would breach <code>ByteBudget</code></td></tr>
+
 </table>
 
 Advanced pool types are exported for workspace-internal integrations, but most callers use `BytePool`, `PcmPool`, and their RAII handles.

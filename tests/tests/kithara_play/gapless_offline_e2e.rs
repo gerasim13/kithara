@@ -32,10 +32,10 @@ use kithara_integration_tests::{
         GaplessEncoding, PackagedAudioRequest, PackagedAudioSource, PackagedSignal,
     },
     goertzel::goertzel_magnitude,
+    offline::{OfflinePlayerHarness, OfflinePlayerOptions},
     temp_dir,
 };
 
-use super::offline_player_harness::{OfflinePlayerHarness, OfflinePlayerOptions};
 use crate::gapless_common::{
     AAC_FRAME_SAMPLES, AAC_GAPLESS_ENCODER_DELAY, AAC_GAPLESS_SEGMENT_FRAMES,
     AAC_GAPLESS_SEGMENT_SECS, AAC_GAPLESS_SEGMENTS, AAC_GAPLESS_TRAILING_DELAY, GAPLESS_CHANNELS,
@@ -1393,6 +1393,10 @@ fn seam_step_db(left: &[f32], stitch_frame: usize) -> f32 {
     amplitude_db((left[stitch_frame] - left[stitch_frame - 1]).abs())
 }
 
+#[cfg(all(
+    feature = "apple-fused-src",
+    any(target_os = "macos", target_os = "ios")
+))]
 fn nearby_seam_step_db(left: &[f32], stitch_frame: usize) -> [f32; 7] {
     let mut values = [0.0_f32; 7];
     let start = stitch_frame.saturating_sub(3);

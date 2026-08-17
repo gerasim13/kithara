@@ -55,6 +55,18 @@ jobs:
             fi
           } >> target/nightly-report.md
 
+          # The quality cron assembles its own consolidated report (`just ci
+          # report`) and archives it, so this collector carries the numbers
+          # rather than re-deriving them. Only that cron produces one, so a
+          # missing artifact is a normal state for the other crons.
+          if gh run download "$RUN_ID" --repo "$REPOSITORY" --name quality-report --dir quality \
+              && [[ -f quality/quality-report.md ]]; then
+            {
+              echo
+              cat quality/quality-report.md
+            } >> target/nightly-report.md
+          fi
+
           cat target/nightly-report.md >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload the nightly report

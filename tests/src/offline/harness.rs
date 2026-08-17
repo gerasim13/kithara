@@ -1,23 +1,25 @@
-#![cfg(not(target_arch = "wasm32"))]
-
 use kithara::{
     audio::{EqBandConfig, StretchControls},
     bufpool::Region,
     decode::GaplessMode,
     events::{Event, EventReceiver, PlayerEvent},
-    platform::sync::{Arc, Mutex},
+    platform::{
+        sync::{Arc, Mutex},
+        tokio::sync::broadcast::error::TryRecvError,
+    },
     play::{PlayerConfig, PlayerImpl, SessionDispatcher},
 };
-use kithara_integration_tests::offline::OfflineSession;
 
-pub(crate) struct OfflinePlayerHarness {
+use super::OfflineSession;
+
+pub struct OfflinePlayerHarness {
     events: Mutex<EventReceiver>,
     player: Arc<PlayerImpl>,
     session: Arc<OfflineSession>,
 }
 
 #[derive(Clone, bon::Builder)]
-pub(crate) struct OfflinePlayerOptions {
+pub struct OfflinePlayerOptions {
     #[builder(default = 1.0)]
     crossfade_duration: f32,
     eq_layout: Option<Vec<EqBandConfig>>,
@@ -27,7 +29,7 @@ pub(crate) struct OfflinePlayerOptions {
 }
 
 impl OfflinePlayerHarness {
-    pub(crate) fn with_sample_rate(options: OfflinePlayerOptions, sample_rate: u32) -> Self {
+    pub fn with_sample_rate(options: OfflinePlayerOptions, sample_rate: u32) -> Self {
         let session = Arc::new(OfflineSession::new_manual());
         let session_dispatcher = Arc::clone(&session) as Arc<dyn SessionDispatcher>;
         let region = Region::default();
@@ -52,23 +54,22 @@ impl OfflinePlayerHarness {
         }
     }
 
-    pub(crate) fn player(&self) -> &Arc<PlayerImpl> {
+    pub fn player(&self) -> &Arc<PlayerImpl> {
         &self.player
     }
 
-    pub(crate) fn session(&self) -> &Arc<OfflineSession> {
+    pub fn session(&self) -> &Arc<OfflineSession> {
         &self.session
     }
 
     /// Synchronously render `frames` of audio.
-    pub(crate) fn render(&self, frames: usize) -> Vec<f32> {
+    pub fn render(&self, frames: usize) -> Vec<f32> {
         self.session.render(frames)
     }
 
     /// Pump the player's notification ringbuf and drain `PlayerEvent`s
     /// from the bus subscriber.
-    pub(crate) fn tick_and_drain(&self) -> Vec<PlayerEvent> {
-        use kithara::platform::tokio::sync::broadcast::error::TryRecvError;
+    pub fn tick_and_drain(&self) -> Vec<PlayerEvent> {
         self.player.process_notifications();
 
         let mut events = Vec::new();
@@ -76,9 +77,8 @@ impl OfflinePlayerHarness {
         loop {
             match rx.try_recv().map(|env| env.event) {
                 Ok(Event::Player(event)) => events.push(event),
-                Ok(_) => continue,
+                Ok(_) | Err(TryRecvError::Lagged(_)) => continue,
                 Err(TryRecvError::Empty | TryRecvError::Closed) => break,
-                Err(TryRecvError::Lagged(_)) => continue,
             }
         }
         events

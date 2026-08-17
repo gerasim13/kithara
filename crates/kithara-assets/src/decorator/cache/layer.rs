@@ -663,7 +663,7 @@ where
 mod tests {
     use std::{fs, path::Path};
 
-    use kithara_platform::{CancelToken, sync::Arc, thread, time::Duration};
+    use kithara_platform::{CancelToken, sync::Arc, thread, time::Duration, tokio::sync::mpsc};
     use kithara_storage::StorageResource;
     use kithara_test_utils::kithara;
 
@@ -813,13 +813,23 @@ mod tests {
         assert_eq!(cached.cache.lock().len(), 3);
     }
 
-    fn record_invalidations() -> (Arc<Mutex<Vec<ResourceKey>>>, crate::store::OnInvalidatedFn) {
-        let log = Arc::new(Mutex::new(Vec::new()));
-        let log_cb = Arc::clone(&log);
+    fn record_invalidations() -> (
+        mpsc::UnboundedReceiver<ResourceKey>,
+        crate::store::OnInvalidatedFn,
+    ) {
+        let (tx, rx) = mpsc::unbounded_channel();
         let cb: crate::store::OnInvalidatedFn = Arc::new(move |key: &ResourceKey| {
-            log_cb.lock().push(key.clone());
+            tx.send(key.clone()).ok();
         });
-        (log, cb)
+        (rx, cb)
+    }
+
+    fn drained(rx: &mut mpsc::UnboundedReceiver<ResourceKey>) -> Vec<ResourceKey> {
+        let mut keys = Vec::new();
+        while let Ok(key) = rx.try_recv() {
+            keys.push(key);
+        }
+        keys
     }
 
     #[kithara::test(timeout(Duration::from_secs(5)))]
@@ -830,7 +840,7 @@ mod tests {
             CancelToken::never(),
             &crate::BytePool::default(),
         ));
-        let (log, cb) = record_invalidations();
+        let (mut invalidations, cb) = record_invalidations();
         let cached = CachedAssets::new(disk, NonZeroUsize::new(2).unwrap(), Some(cb), false);
 
         let keys: Vec<ResourceKey> = (0..3)
@@ -843,10 +853,10 @@ mod tests {
         // The oldest handle was displaced from the 2-slot in-memory LRU,
         // but its bytes survive on disk, so no invalidation must fire.
         assert_eq!(cached.cache.lock().len(), 2);
+        let invalidated = drained(&mut invalidations);
         assert!(
-            log.lock().is_empty(),
-            "durable backend must treat LRU displacement as transparent, got {:?}",
-            log.lock().as_slice()
+            invalidated.is_empty(),
+            "durable backend must treat LRU displacement as transparent, got {invalidated:?}"
         );
         assert!(
             matches!(
@@ -864,7 +874,7 @@ mod tests {
             None,
             &crate::BytePool::default(),
         ));
-        let (log, cb) = record_invalidations();
+        let (mut invalidations, cb) = record_invalidations();
         let cached = CachedAssets::new(mem, NonZeroUsize::new(2).unwrap(), Some(cb), true);
 
         let keys: Vec<ResourceKey> = (0..3)
@@ -878,8 +888,8 @@ mod tests {
         // displacement is real data loss and must invalidate the key.
         assert_eq!(cached.cache.lock().len(), 2);
         assert_eq!(
-            log.lock().as_slice(),
-            &[keys[0].clone()],
+            drained(&mut invalidations),
+            [keys[0].clone()],
             "ephemeral backend must invalidate the displaced key"
         );
     }
@@ -891,7 +901,7 @@ mod tests {
             None,
             &crate::BytePool::default(),
         ));
-        let (log, cb) = record_invalidations();
+        let (mut invalidations, cb) = record_invalidations();
         let cached = CachedAssets::with_max_bytes(
             mem,
             NonZeroUsize::new(5).unwrap(),
@@ -905,11 +915,11 @@ mod tests {
 
         let reader = writer.commit(Some(4)).unwrap();
         assert_eq!(cached.cache.lock().len(), 1);
-        assert!(log.lock().is_empty());
+        assert!(drained(&mut invalidations).is_empty());
 
         let reader = reader.release();
         assert!(cached.cache.lock().is_empty());
-        assert_eq!(log.lock().as_slice(), std::slice::from_ref(&key));
+        assert_eq!(drained(&mut invalidations), [key.clone()]);
         drop(reader);
     }
 

@@ -31,10 +31,9 @@ pub fn run_cmd<B: AudioBackend>(state: &mut SessionState<B>, cmd: Cmd) -> Reply 
             Ok(()) => Reply::Ok,
             Err(err) => Reply::Err(err),
         },
-        Cmd::AllocateSlot { player_id } => match slots::allocate_slot(state, player_id) {
-            Ok(reply) => reply,
-            Err(err) => Reply::Err(err),
-        },
+        Cmd::AllocateSlot { player_id } => {
+            slots::allocate_slot(state, player_id).unwrap_or_else(Reply::Err)
+        }
         Cmd::ReleaseSlot { player_id, slot } => match slots::release_slot(state, player_id, slot) {
             Ok(()) => Reply::Ok,
             Err(err) => Reply::Err(err),

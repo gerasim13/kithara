@@ -329,7 +329,7 @@ mod tests {
                 return;
             }
             if let Some(sender) = self.signal.lock().take() {
-                let _ = sender.send(());
+                sender.send(()).ok();
             }
         }
     }
@@ -723,7 +723,7 @@ mod tests {
             let entered = Arc::clone(&entered);
             Box::pin(async move {
                 if let Some(sender) = entered.lock().take() {
-                    let _ = sender.send(());
+                    sender.send(()).ok();
                 }
                 futures::future::pending::<Result<Resumed, NetError>>().await
             })

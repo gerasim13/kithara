@@ -1,8 +1,4 @@
 #[cfg(not(target_arch = "wasm32"))]
-#[path = "../common/offline_player_harness.rs"]
-mod offline_player_harness;
-
-#[cfg(not(target_arch = "wasm32"))]
 mod source_helper;
 #[cfg(not(target_arch = "wasm32"))]
 use source_helper::app_track_source;

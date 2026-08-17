@@ -13,10 +13,10 @@ use kithara_integration_tests::{
     fixture_protocol::{
         DelayRule, GaplessEncoding, PackagedAudioRequest, PackagedAudioSource, PackagedSignal,
     },
+    offline::{OfflinePlayerHarness, OfflinePlayerOptions},
     temp_dir,
 };
 
-use super::offline_player_harness::{OfflinePlayerHarness, OfflinePlayerOptions};
 use crate::gapless_common::{
     AAC_GAPLESS_ENCODER_DELAY, AAC_GAPLESS_SEGMENT_SECS, AAC_GAPLESS_TRAILING_DELAY,
     GAPLESS_CHANNELS, GAPLESS_SAMPLE_RATE,

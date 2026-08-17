@@ -7,9 +7,9 @@ use kithara::{
     decode::PcmSpec,
     play::{Cmd, PlayError, Resource, SessionDispatcher, SessionError},
 };
-use kithara_integration_tests::offline::resource_from_reader;
-
-use super::offline_player_harness::{OfflinePlayerHarness, OfflinePlayerOptions};
+use kithara_integration_tests::offline::{
+    OfflinePlayerHarness, OfflinePlayerOptions, resource_from_reader,
+};
 
 const SAMPLE_RATE: u32 = 44_100;
 const BLOCK_FRAMES: usize = 512;

@@ -18,14 +18,13 @@ use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, TestTempDir,
     fixture_protocol::PcmPattern,
     goertzel::goertzel_magnitude,
+    offline::{OfflinePlayerHarness, OfflinePlayerOptions},
     pcm_provenance::{
         FrameClass, Replay, SAWTOOTH_PERIOD_FRAMES, ascending_phase_replays, classify_windows,
         phase_units,
     },
     temp_dir,
 };
-
-use super::offline_player_harness::{OfflinePlayerHarness, OfflinePlayerOptions};
 
 const SAMPLE_RATE: u32 = 44_100;
 const RESAMPLED_RENDER_RATE: u32 = 48_000;

@@ -107,6 +107,8 @@ pub(crate) fn linux_build_args(pins: &CiPins) -> Result<Vec<(&'static str, Strin
         ("RUST_BASE_DIGEST", pins.linux_base_digest.clone()),
         ("MSRV_TOOLCHAIN", pins.msrv_toolchain.clone()),
         ("NIGHTLY_TOOLCHAIN", pins.nightly_toolchain.clone()),
+        ("LOCKBUD_TOOLCHAIN", pins.lockbud_toolchain.clone()),
+        ("LOCKBUD_REV", pins.lockbud_rev.clone()),
         ("CMAKE_VERSION", pins.cmake_version.clone()),
         ("CMAKE_AMD64_SHA256", pins.cmake_linux_amd64_sha256.clone()),
         ("CMAKE_ARM64_SHA256", pins.cmake_linux_arm64_sha256.clone()),

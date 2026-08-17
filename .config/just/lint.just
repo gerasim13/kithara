@@ -62,7 +62,7 @@ similarity *ARGS:
 
 [positional-arguments]
 deadlock *ARGS:
-    exec cargo lockbud -k deadlock --workspace "$@"
+    exec cargo "+${KITHARA_LOCKBUD_TOOLCHAIN:-nightly}" lockbud -k deadlock --workspace "$@"
 
 unused-pub:
     cargo workspace-unused-pub

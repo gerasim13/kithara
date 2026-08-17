@@ -217,7 +217,7 @@ fn bounded_context(payload: String) -> Value {
         return Value::String(bounded_excerpt(&payload, MAX_CONTEXT_BYTES));
     }
 
-    serde_json::from_str(&payload).unwrap_or_else(|_| Value::String(payload))
+    serde_json::from_str(&payload).unwrap_or(Value::String(payload))
 }
 
 fn serialize_envelope(mut envelope: DumpEnvelope<'_>) -> serde_json::Result<Option<String>> {

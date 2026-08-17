@@ -161,19 +161,76 @@ as SKIP instead of a false FAIL. Two stages needed a different answer:
   registry default. No workspace crate is published to crates.io — this is an
   application, not a crate release train — so the registry lookup could only
   ever fail. Comparing against `main` is a no-op there and a real check on a
-  branch that has drifted from it.
-- `lockbud-deadlock` is `.strict()`: lockbud has no entry in `[cargo_tools]`
-  and no install step in `image.rs`/`docker/ci.Dockerfile`, so the pinned CI
-  image never carries it — `no such command` there is not noise, it is the
-  honest state. `.config/just/tooling.just` installs it with a bare
-  `cargo install lockbud`, but lockbud is not on crates.io at all; it only
-  installs from its git repository, built against the specific nightly
-  toolchain it links `rustc_driver` against (currently not the toolchain this
-  repository pins). Wiring it into the image for real means picking a nightly
-  that satisfies both lockbud and the rest of the toolchain, or carrying a
-  second nightly in the image just for it — an infra decision, not a stage
-  tweak. Until that lands, `.strict()` keeps a missing lockbud reading as FAIL
-  rather than a harmless SKIP.
+  branch that has drifted from it. It names the packages in
+  `[health].semver_packages` rather than taking `--workspace`: cargo-semver-checks
+  gives every package its own target directory and rebuilds that package's whole
+  dependency tree in it, once for the branch and once for the baseline, so the
+  workspace form costs roughly 1.8 GB and a cold build per package. What is
+  listed is the facade, the one surface with a consumer outside this workspace;
+  internal crates are free to break by policy, so comparing them would report
+  churn the project has already allowed. The baseline is a git ref, which means CI has to
+  fetch it: `actions/checkout` brings one commit of one branch, and without an
+  explicit fetch the stage dies on `couldn't parse revision "origin/main^{tree}"`.
+  The invocation also states `--release-type minor`. Branch and baseline carry the
+  same version, so a derived release type is major — breaking is allowed there and
+  every lint skips, leaving a six-minute stage that runs 0 checks and reports
+  success. Stating minor is what turns it into a question: 196 checks run on the
+  facade instead of none.
+- `geiger` is rooted at `[health].geiger_package`. A dependency tree has a root
+  and this workspace's root manifest is virtual, so the workspace form only ever
+  reported that. The census is rooted at the facade, whose closure is what a
+  consumer links. cargo-geiger also rejects a relative `--manifest-path`, so the
+  stage resolves it through `cargo metadata`. It exits non-zero whenever it emits
+  a warning, which it always does here (it cannot match the workspace's own path
+  packages), so the stage stays `.advisory()` and the census lives in its log.
+- `lockbud-deadlock` is a rustc driver, not a crates.io package: it has no
+  `[cargo_tools]` entry because there is no published version to pin. The image
+  installs it from git at `lockbud_rev`, built by `lockbud_toolchain` — both in
+  `.config/ci-pins.toml` — and exports that toolchain as
+  `KITHARA_LOCKBUD_TOOLCHAIN`, which the stage, `just lint deadlock`, and
+  `just tooling install` all read. The toolchain is part of the invocation
+  because the driver links `rustc_driver` against one nightly and reads only a
+  workspace that same nightly compiled. Measured on the pinned commit: the
+  toolchain costs 1.3 GB, and the workspace compiles under it in about four
+  minutes — it is a 1.95.0-nightly, between the MSRV the fleet already builds
+  and the pinned stable.
+  The stage is `.strict()` because a driver that cannot load is a missing
+  verdict, not a clean one, and it carries `.own_crates()` because lockbud exits
+  zero on a deadlock it found: it writes the bug to its log and lets the build
+  succeed, so the exit status alone would report every run as clean.
+  `.own_crates()` also decides *whose* bugs the verdict is about. lockbud reports
+  on every crate the build compiled, dependencies included, and its `-l` / `-b`
+  crate filters do not restrict that — measured on the pinned commit over this
+  workspace, all three flag forms print the same 168 findings across
+  `kithara_storage`, `tokio` and `tokio_util`. So the verdict parses the
+  per-crate summary lines the tool already prints and counts only workspace
+  members, spelled as a compiled crate is named (`kithara_storage`, not
+  `kithara-storage`). Bugs in dependencies stay in the log, where a reader can
+  find them, and never fail a stage nobody here can turn green.
+  `health.lockbud_exclude` takes members back out of that judgement, named the
+  cargo way. A dependency needs no entry — it is outside the verdict already — so
+  the list holds the scaffold instead: `xtask`, `kithara-devtools`, the harness
+  and fuzz crates, the generated hack crate. `cargo lockbud --workspace`
+  compiles and reports on them like any other member, and a deadlock verdict is
+  about the product, not about what builds and tests it; the same set is named in
+  `[architecture.filters] exclude_crates`, kept per stage the way every other
+  `[health]` list is. A product crate does not belong here: the 8 `possibly`
+  double locks lockbud counts in `kithara-storage`, all in
+  `backend/resource/wait.rs` around the gate a waiter parks on and the cancel
+  callbacks that notify it, fail the stage until they are fixed.
+- `workspace-unused-pub` shells out to `rust-analyzer scip` to build its index.
+  rustup ships a `rust-analyzer` proxy binary whether or not the component is
+  installed, so an image without it does not report a missing tool — it reports
+  `rust-analyzer scip … exited with code 1`. `docker/ci.Dockerfile` adds the
+  component for that reason alone.
+- `machete` is handed the directories to walk. `cargo hakari` writes
+  kithara-workspace-hack's dependency list to unify features across the
+  workspace; that crate has no code and is never meant to use any of them, so
+  machete flags every entry and the stage could only ever be red. cargo-machete
+  0.9 takes no exclude flag — given no arguments it walks the whole tree — so
+  the stage names every workspace member except the ones in
+  `[health].machete_exclude`. The list is derived from `cargo metadata`, which
+  is what keeps a new crate covered without being named anywhere.
 
 ## Stress campaign ownership
 
@@ -283,7 +340,11 @@ timeout per tool.
   The wrapper checks delta JSON because cargo-crap's `--fail-regression` exit code does
   not include new functions. A failing instrumented test run still writes Cobertura and
   LCOV and runs cargo-crap; the combined stage preserves the test exit as findings
-  instead of losing the risk evidence.
+  instead of losing the risk evidence. The same scoring is rendered twice: the JSON
+  artifact the gate judges, and a `report.md` a reader opens. The rendering carries no
+  verdict of its own — only an empty one is an error — and it never takes the baseline,
+  because a delta narrows what the gate accepts while the report states the whole
+  picture. Inside GitHub Actions cargo-crap turns its own locations into source links.
 - `scheduled` runs Cha history/layers/smells, rustqual test-quality checks, and
   cargo-dupes sub-function duplication. Findings are advisory; missing tools, invalid
   reports, version mismatches, and timeouts are tool errors.
@@ -296,6 +357,37 @@ timeout per tool.
 - Cha runs only from a clean, non-shallow source worktree and analyzes a disposable
   local clone whose revision is verified against HEAD. The clone is deleted after the
   run so Cha cache state cannot leak into the source checkout.
+
+## Orphan sweep ownership
+
+An orphan is a file no `mod` declaration in its package names. `cargo modules orphans`
+answers a narrower question — what one resolved configuration loads — and pairs a file
+with its parent by directory convention, so a module behind a `cfg` this build does not
+set, or one reached through `#[path]` from a sibling file, reads as unreferenced to it.
+The sweep therefore takes the tool's findings as candidates and settles each against the
+source: `declared.rs` walks the package tree, resolves `#[path]` and `cfg_attr(.., path)`
+against the directory of the declaring file and plain `mod` declarations against the
+directory that file owns, and a candidate the source names is dropped. What was dropped
+is printed per package, never silently — the filter is the reason the sweep can be
+green.
+
+The tool selects one target per run and offers no selector beyond `--lib` and `--bin`,
+so the sweep enumerates both for every package and folds a package's targets into one
+verdict: a file one target reports and another declares is not an orphan. This is what
+lets `[orphans].exclude_packages` stay empty — a package without a library is swept
+through its binaries instead of dropped.
+
+Without `--deny` the run is advisory; `just ci health` and the quality workflow pass it.
+
+## CI report ownership
+
+`ci-report` consolidates one CI run's archived quality artifacts into a single markdown
+document: the health stage table (log tails stay in the artifact), the CRAP ranking
+capped to a readable prefix, and the architecture complexity index with its worst
+contours. It reads artifacts, never tools, so it cannot disagree with what a job
+measured, and it locates inputs by file name rather than by an upload's directory
+layout. A section whose input never arrived says so — an omitted section would read as
+"nothing to report" from a run that reported nothing.
 
 KISS is never executed: it overlaps the existing stack and writes hidden user-level
 state. Promoting a unique external check into `syn`, Cargo metadata, Git, or ast-grep

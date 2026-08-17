@@ -156,6 +156,7 @@ fn callback(out: &mut [f32; 512]) { decode_and_process(out); }
 ## Cache/layout/data-oriented
 
 **Array-of-structs scanned for one field** (folds K4 fat-ids, K5 pointer-chasing)
+
 ```rust
 // bad: whole struct dragged through L1 to read one field; String/PathBuf inline, per-sample hop
 struct Voice { env: [f32; 5], meta: String, path: PathBuf, gain: f32 }
@@ -164,10 +165,12 @@ for v in &voices { sum += v.gain; }
 struct Voices { gain: Vec<f32>, meta: Vec<VoiceMeta> }
 for &g in &voices.gain { sum += g; }
 ```
+
 For DSP keep planar per-channel buffers (`Vec<Vec<f32>>`, iterated per channel, one hop) and interleave only at the device boundary via `fast-interleave` - as bungee/resampler already do. Never `Vec<Box<T>>`/`Arc<Mutex<Box>>` chains in an inner loop.
 *tier: hot | detector: manual | present in kithara (planar buffers, u32 ids)*
 
 **Cloning shared id strings into every event/error/key** (folds K15)
+
 ```rust
 // bad: each event/error/cache key owns a fresh copy of the same id
 struct Track { url: String }
@@ -176,10 +179,12 @@ let ev = TrackEvent { url: self.url.clone() };       // heap String per event
 struct Track { url: Arc<str> }
 let ev = TrackEvent { url: Arc::clone(&self.url) };  // refcount bump
 ```
+
 kithara-events already threads `Arc<str>` `item_id`/`src`; the fix is `Arc<str>`, not a new ustr/lasso dep. For many freshly-created short values `CompactString` inlines <=24B, but prefer `Arc<str>` sharing for ids.
 *tier: warm | detector: manual | present in kithara (partly adopted)*
 
 **Default SipHash for trusted internal keys**
+
 ```rust
 // bad: DoS-hardened SipHash on a hot map keyed by our own ids
 let by_root: HashMap<String, LruEntry> = HashMap::new();
@@ -187,39 +192,47 @@ let by_root: HashMap<String, LruEntry> = HashMap::new();
 type FxHashMap<K, V> = HashMap<K, V, rustc_hash::FxBuildHasher>;
 let by_root: FxHashMap<String, LruEntry> = FxHashMap::default();
 ```
+
 Profile first (String keys, hashing may not be hot); new hasher dep needs workspace justification.
 *tier: warm | detector: manual (backlog audit.default-hashmap-hot.yml) | preventive*
 
 **False sharing of independently-written hot atomics**
+
 ```rust
 // bad: producer and consumer thrash adjacent fields on one cache line
 #[repr(C)] struct Rt { write_pos: AtomicU64, read_pos: AtomicU64 }
 // good: pad each hot field to its own line (or keep them in separate Arcs, as kithara does)
 struct Rt { write_pos: CachePadded<AtomicU64>, read_pos: CachePadded<AtomicU64> }
 ```
+
 Only bites once two threads write adjacent fields; confirm with `perf c2c`. kithara wraps each atomic in its own `Arc`, so no packed site exists yet.
 *tier: hot | detector: manual | preventive*
 
 **Queue used to publish latest-wins state**
+
 ```rust
 // bad: gain/playhead pushed through mpsc; consumer drains a stale backlog
 gain_tx.send(new_gain)?;                 // N queued, only the last matters
 // good: latest-wins snapshot
 gain.store(new_gain, Relaxed);           // or watch::Sender / triple_buffer / ArcSwap
 ```
+
 Keep queues for event streams where every element must be processed (kithara-events broadcast); use atomics/`ArcSwap` for scalar RT state.
 *tier: warm | detector: manual | present in kithara*
 
 **Lazy init / cold pages faulted on the first callback**
+
 ```rust
 // bad: first RT callback pays LazyLock init + first page fault
 fn process(&mut self, out: &mut [f32]) { let t = TABLE.get_or_init(build); /* ... */ }
 // good: force it during prepare(), off the deadline, and pre-touch RT buffers
 fn prepare(&mut self) { LazyLock::force(&TABLE); self.scratch.resize(max, 0.0); }
 ```
+
 *tier: hot | detector: manual (arch.no-raw-no-block governs RT discipline) | preventive*
 
 **SmallVec as the default "fast Vec" in hot structs**
+
 ```rust
 // bad: SmallVec everywhere; spill branch + fat inline storage on every move
 per_channel: SmallVec<[PcmBuf; 8]>,
@@ -227,10 +240,12 @@ per_channel: SmallVec<[PcmBuf; 8]>,
 per_channel: ArrayVec<PcmBuf, 8>,        // channels <= 8 is a real bound
 scratch.clear(); scratch.extend(frame); // pooled/reused, not re-allocated
 ```
+
 kithara's `SmallVec<[PcmChunk;2]>` for transient 0-2 returns is deliberate; reach for SmallVec only on profiled churn, not by default.
 *tier: hot | detector: manual | present in kithara (deliberate uses)*
 
 **Runtime-length loop for a compile-time-fixed DSP kernel**
+
 ```rust
 // bad: biquad coeffs as a runtime slice -> bounds checks, no unrolling
 fn step(x: f32, c: &[f32]) -> f32 { c[0]*x + c[1]*/* .. */ }
@@ -238,9 +253,11 @@ fn step(x: f32, c: &[f32]) -> f32 { c[0]*x + c[1]*/* .. */ }
 let [b0, b1, b2, a1, a2] = self.coefficients;   // [f32; 5]
 b0.mul_add(x0, b1 * x1 + b2 * x2 - a1 * y1 - a2 * y2)
 ```
+
 *tier: hot | detector: manual | present in kithara (resampler biquad)*
 
 **HashMap for a tiny / ordered-access closed set** (folds K20)
+
 ```rust
 // bad: HashMap for the 3-5 HLS variants or a bounded codec table
 let variants: HashMap<VariantId, VariantInfo> = /* .. */;
@@ -248,10 +265,16 @@ let variants: HashMap<VariantId, VariantInfo> = /* .. */;
 let variants: Vec<VariantInfo> = /* .. */;
 variants.iter().find(|v| v.id == want)   // scan of 3-5 beats hashing + pointer chase
 ```
+
 `BTreeMap` only for genuine range/ordered access.
-*tier: warm | detector: manual | present in kithara (Vec<VariantInfo>)*
+*tier: warm | detector: manual | present in kithara (Vec
+
+<VariantInfo>
+
+)*
 
 **`as_chunks`/`chunks_exact` expected to unroll a runtime block**
+
 ```rust
 // bad: assuming unrolled codegen from a runtime-sized chunk
 for blk in buf.chunks(block) { process(blk); }   // block: usize (runtime)
@@ -259,30 +282,36 @@ for blk in buf.chunks(block) { process(blk); }   // block: usize (runtime)
 let (blocks, tail) = buf.as_chunks::<128>();
 for blk in blocks { process(blk); }
 ```
+
 kithara's runtime-length timestretch/beat blocks legitimately keep `.chunks()`.
 *tier: hot | detector: manual | present in kithara*
 
 **Blanket `#[inline(always)]` sprinkled for speed**
+
 ```rust
 // bad: forced inlining bloats code, pressures I-cache, can pessimize
 #[inline(always)] fn mix(a: f32, b: f32) -> f32 { a + b }
 // good: trust LTO for cross-crate inlining; add #[inline] only on a profiled hot miss
 fn mix(a: f32, b: f32) -> f32 { a + b }
 ```
+
 kithara's 14 `inline(always)` are all inert no_block/test markers that must inline - a justified exception.
 *tier: hot | detector: manual | preventive*
 
 **Cold format/tracing built inline in a per-sample loop**
+
 ```rust
 // bad: unconditional fmt/tracing in the hot body
 for x in samples { tracing::trace!(?x); out.push(dsp(x)); }
 // good: keep the body fmt/alloc-free; format lives on a #[cold] error branch
 for x in samples { out.push(dsp(x)); }
 ```
+
 LLVM cold-outlines error construction, but only while it stays on a rare branch.
 *tier: hot | detector: manual | preventive*
 
 Watch-for (antipattern absent in kithara today):
+
 - **Hand-zoned cache fields defeated by `repr(Rust)`** - if you ever hand-order fields into cache zones, pin with `#[repr(C, align(128))]`; default `repr(Rust)` reorders and silently undoes it. *tier: hot | detector: manual | watch-for*
 - **`get_unchecked` to skip bounds checks** - never in network-fed decode paths; narrow to sub-slices / `try_into` fixed arrays instead. *tier: hot | detector: clippy undocumented_unsafe_blocks=deny | watch-for*
 - **Manual `_mm_prefetch` on linear/strided access** - hardware prefetchers cover stride-1; prefetch only for irreducibly irregular access with measured distance. *tier: hot | detector: manual | watch-for*

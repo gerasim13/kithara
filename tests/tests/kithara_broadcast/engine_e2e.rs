@@ -16,16 +16,15 @@ use kithara::{
     play::{Cmd, MixTapWriter, Resource, SessionDispatcher},
 };
 use kithara_integration_tests::{
-    audio_mock::TestPcmReader, offline::resource_from_reader, signal_pcm::signal::SineWave,
+    audio_mock::TestPcmReader,
+    offline::{OfflinePlayerHarness, OfflinePlayerOptions, resource_from_reader},
+    signal_pcm::signal::SineWave,
     waits::wait_until,
 };
 use ringbuf::{HeapRb, traits::Split};
 use url::Url;
 
-use super::{
-    offline_player_harness::{OfflinePlayerHarness, OfflinePlayerOptions},
-    origin::{Playlist, assert_carries_the_tone, decode_adts_left},
-};
+use super::origin::{Playlist, assert_carries_the_tone, decode_adts_left};
 
 const SESSION_RATE: u32 = 44_100;
 const TONE_HZ: f64 = 440.0;

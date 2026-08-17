@@ -12,12 +12,12 @@ description: Draft project-aligned PR descriptions from the current branch. Use 
 ## Workflow
 
 1. Determine the base branch for the current branch comparison.
-2. Review the branch history from the merge-base to `HEAD`.
-3. Review the current diff for the same range.
-4. If there are no committed changes in that range, inspect the current staged and unstaged changes instead and draft the PR from that evidence.
-5. Otherwise, include staged and unstaged changes only when the user explicitly asks for them or clearly wants them included in the draft.
-6. If you see staged or unstaged changes while preparing the draft, explicitly offer the user to commit them before finalizing the PR description.
-7. Derive every statement from actual commits, diffs, and validation evidence.
+1. Review the branch history from the merge-base to `HEAD`.
+1. Review the current diff for the same range.
+1. If there are no committed changes in that range, inspect the current staged and unstaged changes instead and draft the PR from that evidence.
+1. Otherwise, include staged and unstaged changes only when the user explicitly asks for them or clearly wants them included in the draft.
+1. If you see staged or unstaged changes while preparing the draft, explicitly offer the user to commit them before finalizing the PR description.
+1. Derive every statement from actual commits, diffs, and validation evidence.
 
 ## Output rules
 
