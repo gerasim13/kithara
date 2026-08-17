@@ -518,6 +518,7 @@ where
         open_mode,
         startup_probe.duration,
     )?;
+    demuxer.set_byte_len_handle(config.byte_len_handle.clone());
     demuxer.set_gapless(probed_gapless);
     let target_output_rate = decoder_embedded_target_output_rate(&config);
     let output_track = track_with_output_domain_gapless(demuxer.track_info(), target_output_rate)?;
