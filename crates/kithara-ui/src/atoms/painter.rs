@@ -407,6 +407,11 @@ impl ControlPainter for StatusDot {
     ) {
         self.paint_with_state(list, text, &data.label, bounds, data.active);
     }
+
+    /// Only the width: a dot fills the height of the row it sits in.
+    fn measure(&self, text: &mut TextContext, data: &StatusDotData) -> Size {
+        Size::new(self.intrinsic_width(text, &data.label), 0.0)
+    }
 }
 
 /// What a cell is handed each frame: its caption, and whether it is the one
