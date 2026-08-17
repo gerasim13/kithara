@@ -19,9 +19,12 @@ env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
 
+# This soak runs on the pool the stress campaign measures, so on a fork it
+# waits for the campaign rather than taking cores from it. See ci.yml.
 concurrency:
-  group: rtsan-${{ github.ref }}
+  group: ${{ github.event.repository.fork && format('fork-linux-{0}', github.repository) || format('rtsan-{0}', github.ref) }}
   cancel-in-progress: false
+  queue: max
 
 jobs:
   authorize:

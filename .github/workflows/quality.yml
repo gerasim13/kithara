@@ -22,9 +22,12 @@ env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
 
+# This analysis runs on the pool the stress campaign measures, so on a fork it
+# waits for the campaign rather than taking cores from it. See ci.yml.
 concurrency:
-  group: quality-${{ github.ref }}-${{ inputs.depth }}
-  cancel-in-progress: true
+  group: ${{ github.event.repository.fork && format('fork-linux-{0}', github.repository) || format('quality-{0}-{1}', github.ref, inputs.depth) }}
+  cancel-in-progress: ${{ !github.event.repository.fork }}
+  queue: max
 
 jobs:
   assess:
