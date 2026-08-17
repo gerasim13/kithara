@@ -234,10 +234,17 @@ dump_marker = "[flash hang dump]"
 primitive_marker = "created_at="
 holder_marker = "held by"
 wait_marker = "WAITING:"
+# `pace_anchor=` selects the engine's own counter line, the causal one in a
+# flash hang dump: `real_io` and `pace_anchor` together say whether virtual time
+# was advancing while real work was in flight. It is neither a holder nor a
+# waiter, so only this list can carry it into a section — without it the report
+# named who held quiescence but never why the clock moved, and reading that
+# meant opening the raw dump by hand.
 direct_markers = [
   "active_async holder",
   "active holder thread=",
   "engine core lock held",
+  "pace_anchor=",
   "BRIDGED sync wait",
   "state lock held",
 ]

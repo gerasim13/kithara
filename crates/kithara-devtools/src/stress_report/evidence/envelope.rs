@@ -292,11 +292,24 @@ fn normalize_diagnostic(text: &str) -> String {
 /// Flight lines carry per-call numeric fields (`seq=7`, `queue_len=12`) that
 /// vary on every firing; left in place each firing becomes its own cluster.
 /// String fields — the branch and probe names that identify the site — stay.
+///
+/// `caller_line` is exempt: it is a source location, not a per-call counter.
+/// Masked, the section named the file a probe fired from and erased the line
+/// inside it, so reading a signature meant opening the raw dump to find the
+/// site by hand — the one thing the section exists to spare.
 fn normalize_flight_line(line: &str) -> String {
     static NUMERIC_FIELDS: LazyLock<Regex> =
-        LazyLock::new(|| Regex::new(r"=\d+\b").expect("numeric field regex"));
+        LazyLock::new(|| Regex::new(r"(\w+)=\d+\b").expect("numeric field regex"));
     let (line, _) = split_recorded_repeats(line);
-    normalize_signature(&NUMERIC_FIELDS.replace_all(line, "=<n>"))
+    let masked = NUMERIC_FIELDS.replace_all(line, |caps: &regex::Captures<'_>| {
+        let key = &caps[1];
+        if key == "caller_line" {
+            caps[0].to_owned()
+        } else {
+            format!("{key}=<n>")
+        }
+    });
+    normalize_signature(&masked)
 }
 
 /// The in-test recorder folds a line that repeats inside its window, so a
@@ -535,6 +548,22 @@ mod tests {
             markdown.contains("demo::tests seek @stress-0"),
             "{markdown}"
         );
+    }
+
+    #[test]
+    fn a_probe_signature_keeps_the_source_line_it_fired_from() {
+        let line = normalize_flight_line(
+            r#"TRACE kithara_abr_probe: probe="decide" caller_file="crates/kithara-abr/src/state/decision.rs" caller_line=104"#,
+        );
+        assert!(line.contains("caller_line=104"), "{line}");
+    }
+
+    #[test]
+    fn a_probe_signature_still_masks_per_call_counters() {
+        let line = normalize_flight_line(
+            r#"TRACE kithara_abr_probe: probe="decide" caller_line=104 seq=7"#,
+        );
+        assert!(line.contains("seq=<n>"), "{line}");
     }
 
     #[test]

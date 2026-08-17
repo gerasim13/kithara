@@ -743,6 +743,60 @@ mod tests {
         );
     }
 
+    /// The first line the flash engine writes into a hang dump.
+    const ENGINE_COUNTERS: &str = "virtual_now_ns=86410020000000 active=1 active_async=0 real_io=0 pace_anchor=none yielders=0";
+
+    /// The engine's counter line is neither a primitive, a holder, nor a
+    /// waiter, so `direct_markers` is the only route that carries it into a
+    /// section — and it is the causal line of the whole dump.
+    #[test]
+    fn the_engine_counters_become_their_own_wait_signature() {
+        let mut evidence = evidence();
+        evidence.direct_markers.push("pace_anchor=".to_owned());
+
+        let signatures = wait_signatures(
+            &format!("[wait dump] audio_worker_loop\n{ENGINE_COUNTERS}\n"),
+            &evidence,
+        );
+
+        assert!(
+            signatures.iter().any(|s| s.contains("pace_anchor=none")),
+            "{signatures:?}"
+        );
+    }
+
+    /// `real_io` counts the real-I/O leases outstanding. Masked as jitter, the
+    /// signature could no longer tell a test that outran its own socket from
+    /// one whose work never started.
+    #[test]
+    fn a_pacing_signature_keeps_the_real_io_count() {
+        let normalized = normalize_wait(ENGINE_COUNTERS);
+
+        assert!(normalized.contains("real_io=0"), "{normalized}");
+    }
+
+    /// Whether the clock is anchored to real time is the other half of the
+    /// same verdict: `real_io>0` with no anchor is a clock free-running past
+    /// work in flight.
+    #[test]
+    fn a_pacing_signature_keeps_the_pace_anchor_state() {
+        let normalized = normalize_wait(ENGINE_COUNTERS);
+
+        assert!(normalized.contains("pace_anchor=none"), "{normalized}");
+    }
+
+    /// The virtual clock reads differently on every attempt; kept, it would
+    /// give each hang a cluster of its own.
+    #[test]
+    fn a_pacing_signature_drops_the_virtual_clock() {
+        let normalized = normalize_wait(ENGINE_COUNTERS);
+
+        assert!(
+            normalized.contains("virtual_now_ns=<volatile>"),
+            "{normalized}"
+        );
+    }
+
     /// Shaped like the retained output of a failed `assert_eq!`: the kind, the
     /// panic header, then the assertion's message and its values.
     fn panic_output(thread_id: &str) -> String {
