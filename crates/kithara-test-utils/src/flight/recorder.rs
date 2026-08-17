@@ -28,6 +28,18 @@ const MAX_EVENT_BYTES: usize = 512;
 /// few cycles wide collapses it where a last-line check would not, and a red
 /// test's dump keeps the rare transitions that led to the failure.
 const DEDUP_WINDOW: usize = 16;
+/// Fields a repeat is allowed to differ in and still fold.
+///
+/// Every probe event carries a monotonic sequence, so comparing whole lines
+/// made each firing unique and the fold above never once collapsed the probe
+/// lane: a dump's tail was the last [`MAX_EVENTS`] firings of whichever probe
+/// happened to be hottest, and a rare transition that led to the failure was
+/// gone. Measured on one green run of `packaged_abr_switch_keeps_player_
+/// continuity`: 19314 firings, 372 distinct once the counters are excluded.
+///
+/// The counters are dropped from the comparison only — the retained line keeps
+/// the first firing's values, and the fold count carries the tempo.
+const FOLD_COUNTERS: &[&str] = &["seq", "thread_seq"];
 
 static EVENTS: OnceLock<Mutex<VecDeque<Entry>>> = OnceLock::new();
 static PROBES: OnceLock<Mutex<VecDeque<Entry>>> = OnceLock::new();
@@ -35,6 +47,8 @@ static PROBES: OnceLock<Mutex<VecDeque<Entry>>> = OnceLock::new();
 /// One recorded line and how many times it repeated inside the window.
 struct Entry {
     line: String,
+    /// `line` without [`FOLD_COUNTERS`] — what a repeat is matched on.
+    key: String,
     repeats: u32,
 }
 
@@ -122,55 +136,72 @@ impl<S: Subscriber> Layer<S> for RingLayer {
         // No timestamp: the ring is chronological by construction, and a wall
         // stamp would mix real and flash-virtual clocks depending on where the
         // event fired.
-        let mut line = format!(
+        let prefix = format!(
             "{level} {target}:",
             level = meta.level(),
             target = meta.target(),
         );
-        event.record(&mut LineVisitor { line: &mut line });
+        let mut line = prefix.clone();
+        let mut key = prefix;
+        event.record(&mut LineVisitor {
+            line: &mut line,
+            key: &mut key,
+        });
         let cell = match lane {
             Lane::Event => &EVENTS,
             Lane::Probe => &PROBES,
         };
-        record(ring(cell), line);
+        record(ring(cell), line, key);
     }
 }
 
-fn record(ring: &Mutex<VecDeque<Entry>>, mut line: String) {
-    if line.len() > MAX_EVENT_BYTES {
-        let mut end = MAX_EVENT_BYTES;
-        while !line.is_char_boundary(end) {
-            end -= 1;
-        }
-        line.truncate(end);
-        line.push('…');
-    }
+fn record(ring: &Mutex<VecDeque<Entry>>, line: String, key: String) {
+    let line = clamp(line);
+    let key = clamp(key);
     let mut ring = ring.lock();
     let window = ring.len().saturating_sub(DEDUP_WINDOW);
-    if let Some(entry) = ring
-        .iter_mut()
-        .skip(window)
-        .find(|entry| entry.line == line)
-    {
+    if let Some(entry) = ring.iter_mut().skip(window).find(|entry| entry.key == key) {
         entry.repeats = entry.repeats.saturating_add(1);
         return;
     }
     if ring.len() == MAX_EVENTS {
         ring.pop_front();
     }
-    ring.push_back(Entry { line, repeats: 1 });
+    ring.push_back(Entry {
+        line,
+        key,
+        repeats: 1,
+    });
+}
+
+fn clamp(mut text: String) -> String {
+    if text.len() <= MAX_EVENT_BYTES {
+        return text;
+    }
+    let mut end = MAX_EVENT_BYTES;
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    text.truncate(end);
+    text.push('…');
+    text
 }
 
 struct LineVisitor<'a> {
     line: &'a mut String,
+    key: &'a mut String,
 }
 
 impl Visit for LineVisitor<'_> {
     fn record_debug(&mut self, field: &Field, value: &dyn fmt::Debug) {
         if field.name() == "message" {
             let _ = write!(self.line, " {value:?}");
-        } else {
-            let _ = write!(self.line, " {name}={value:?}", name = field.name());
+            let _ = write!(self.key, " {value:?}");
+            return;
+        }
+        let _ = write!(self.line, " {name}={value:?}", name = field.name());
+        if !FOLD_COUNTERS.contains(&field.name()) {
+            let _ = write!(self.key, " {name}={value:?}", name = field.name());
         }
     }
 }
@@ -209,6 +240,99 @@ mod tests {
             .expect("recorded event must be in the tail");
         assert!(line.contains("kithara_flight_test"), "{line}");
         assert!(line.contains("marker=41"), "{line}");
+    }
+
+    /// Without this the probe lane never folded at all: the sequence makes
+    /// every firing a distinct line, so a dump's tail was the last
+    /// `MAX_EVENTS` firings of the hottest probe and nothing else.
+    #[kithara::test]
+    fn a_probe_repeat_folds_across_a_changed_sequence() {
+        let _guard = with_recorder(|| {
+            for seq in 0..4u64 {
+                tracing::trace!(
+                    target: "kithara_flight_test_probe",
+                    probe = "fold_across_seq_marker",
+                    seq,
+                    ready = true,
+                );
+            }
+        });
+
+        let folded = probes_tail()
+            .into_iter()
+            .filter(|line| line.contains("fold_across_seq_marker"))
+            .collect::<Vec<_>>();
+
+        assert_eq!(folded.len(), 1, "{folded:?}");
+    }
+
+    /// The fold count is the tempo of the probe, so it must total the firings
+    /// rather than restart per line.
+    #[kithara::test]
+    fn a_folded_probe_counts_every_firing() {
+        let _guard = with_recorder(|| {
+            for seq in 0..4u64 {
+                tracing::trace!(
+                    target: "kithara_flight_test_probe",
+                    probe = "fold_count_marker",
+                    seq,
+                );
+            }
+        });
+
+        let line = probes_tail()
+            .into_iter()
+            .rev()
+            .find(|line| line.contains("fold_count_marker"))
+            .expect("folded probe must be in the probe tail");
+
+        assert!(line.ends_with("(x4)"), "{line}");
+    }
+
+    /// A probe argument is the reason the site is instrumented. Folding on it
+    /// would erase the transition the tail exists to show.
+    #[kithara::test]
+    fn a_changed_probe_argument_opens_a_new_entry() {
+        let _guard = with_recorder(|| {
+            for ready in [false, true] {
+                tracing::trace!(
+                    target: "kithara_flight_test_probe",
+                    probe = "argument_split_marker",
+                    seq = 1u64,
+                    ready,
+                );
+            }
+        });
+
+        let entries = probes_tail()
+            .into_iter()
+            .filter(|line| line.contains("argument_split_marker"))
+            .collect::<Vec<_>>();
+
+        assert_eq!(entries.len(), 2, "{entries:?}");
+    }
+
+    /// The retained line is the first firing's, counters included: a tail that
+    /// dropped them could no longer be matched against the stdout log.
+    #[kithara::test]
+    fn a_folded_probe_keeps_the_first_sequence_it_saw() {
+        let _guard = with_recorder(|| {
+            for seq in 5..8u64 {
+                tracing::trace!(
+                    target: "kithara_flight_test_probe",
+                    probe = "kept_sequence_marker",
+                    seq,
+                );
+            }
+        });
+
+        let line = probes_tail()
+            .into_iter()
+            .rev()
+            .find(|line| line.contains("kept_sequence_marker"))
+            .expect("folded probe must be in the probe tail");
+
+        assert!(line.contains("seq=5"), "{line}");
     }
 
     #[kithara::test]
