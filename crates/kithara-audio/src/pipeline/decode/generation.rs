@@ -380,6 +380,7 @@ mod tests {
 
     struct EofDecoder {
         gapless: Option<GaplessInfo>,
+        default_priming: u64,
         spec: PcmSpec,
     }
 
@@ -406,7 +407,7 @@ mod tests {
         }
 
         fn gapless_profile(&self, _codec: Option<kithara_stream::AudioCodec>) -> GaplessProfile {
-            GaplessProfile::new(self.spec, self.gapless, None, 0)
+            GaplessProfile::new(self.spec, self.gapless, None, self.default_priming)
         }
 
         fn update_byte_len(&self, _len: u64) {}
@@ -423,6 +424,7 @@ mod tests {
         DecoderGeneration::new(
             Box::new(EofDecoder {
                 gapless: None,
+                default_priming: 0,
                 spec,
             }),
             None,
@@ -437,6 +439,7 @@ mod tests {
         DecoderGeneration::new(
             Box::new(EofDecoder {
                 gapless: Some(GaplessInfo::new(0, trailing_frames)),
+                default_priming: 0,
                 spec,
             }),
             None,
@@ -444,6 +447,23 @@ mod tests {
             0,
             None,
             GaplessMode::MediaOnly,
+        )
+    }
+
+    /// A track whose container carries no gapless metadata while the codec
+    /// table offers an estimate — the AAC-LC case at a quality-switch seam.
+    fn priming_generation(spec: PcmSpec, mode: GaplessMode) -> DecoderGeneration {
+        DecoderGeneration::new(
+            Box::new(EofDecoder {
+                gapless: None,
+                default_priming: 1_024,
+                spec,
+            }),
+            None,
+            0,
+            0,
+            None,
+            mode,
         )
     }
 
@@ -457,6 +477,17 @@ mod tests {
             },
             PcmPool::default().attach(vec![0.25; sample_frames * usize::from(spec.channels)]),
         )
+    }
+
+    /// An unlabelled AAC track keeps its encoder priming in the PCM (the
+    /// `MediaOnly` trimmer removes nothing), yet those frames are not content:
+    /// the seam origin counts them, and the four `quality_switch_continuity`
+    /// integration tests fail by exactly this many frames if it stops.
+    #[kithara::test]
+    fn origin_counts_codec_priming_the_media_only_trimmer_leaves_in_place() {
+        let generation = priming_generation(spec(2, 44_100), GaplessMode::MediaOnly);
+
+        assert_eq!(generation.timeline_origin(GaplessMode::MediaOnly), 1_024);
     }
 
     #[kithara::test]
