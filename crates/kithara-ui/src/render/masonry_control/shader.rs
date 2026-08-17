@@ -41,10 +41,6 @@ impl ShaderLeaf {
         ))
     }
 
-    pub(super) fn is_continuous(&self) -> bool {
-        !self.spec.uniforms().is_empty()
-    }
-
     pub(super) fn paint(&mut self, bounds: Rect, scene: &mut Scene) {
         let Some(frame) = &self.frame else {
             return;

@@ -7,7 +7,7 @@ use crate::{
     expand::{ControlSpec, ExpandedNode},
     ids::EndpointId,
     registry::{EndpointCategory, EndpointDesc, EndpointRegistry, ValueKind},
-    render::{ReadValue, Reads, StereoLevels},
+    render::{BuiltinEndpoints, ReadValue, Reads, StereoLevels},
     shader::ShaderSpec,
     source::{MemResolver, UiConfig},
 };
@@ -67,6 +67,13 @@ impl EndpointRegistry for Endpoints {
 }
 
 fn document() -> CompiledUi {
+    bound(r#""level": Model(id: "shader.level")"#)
+}
+
+/// The same one-shader page, with whatever the caller binds the first uniform
+/// to. The second is always the pair of levels, so the packing tests keep both
+/// kinds.
+fn bound(level: &str) -> CompiledUi {
     let mut resolver = MemResolver::default();
     resolver.insert(
         "shader.klayout.ron",
@@ -75,26 +82,44 @@ fn document() -> CompiledUi {
     );
     resolver.insert(
         "page.kmodule.ron",
-        r#"(schema: "kithara.module", version: 1, id: "page",
+        &format!(
+            r#"(schema: "kithara.module", version: 1, id: "page",
             root: Shader(
                 id: "field",
                 source: "field.wgsl",
-                uniforms: {
-                    "level": Model(id: "shader.level"),
+                uniforms: {{
+                    {level},
                     "meter": Model(id: "shader.meter"),
-                },
+                }},
                 size: (w: Fill, h: Fill),
-            ))"#,
+            ))"#
+        ),
     );
     resolver.insert("field.wgsl", FRAGMENT);
     compile(
         "shader.klayout.ron",
         &resolver,
-        &Endpoints::default(),
+        &BuiltinEndpoints::new(&Endpoints::default()),
         builtin::skin_doc(),
         &UiConfig::default(),
     )
     .unwrap_or_else(|cause| panic!("the fixture document must compile: {cause}"))
+}
+
+/// A shader draws its uniforms, so a page whose uniforms hold still draws one
+/// picture however often it is asked. Declaring motion for the control's sake
+/// costs the window every frame it has: it rasterises and presents the same
+/// bytes sixty times a second and never sleeps.
+#[kithara::test]
+fn a_shader_bound_to_still_endpoints_declares_no_motion() {
+    assert!(!document().animates);
+}
+
+/// The other half of the same rule: bound to the host's own clock, the very
+/// same shader does move with nothing else changing, and the document says so.
+#[kithara::test]
+fn a_shader_bound_to_the_host_clock_declares_motion() {
+    assert!(bound(r#""level": Model(id: "ui.clock.seconds")"#).animates);
 }
 
 fn spec(ui: &CompiledUi) -> ShaderSpec {

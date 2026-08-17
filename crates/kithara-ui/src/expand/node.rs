@@ -308,16 +308,24 @@ impl ControlSpec {
     /// Whether this control draws a new picture every frame of its own accord,
     /// with no endpoint and no input involved.
     ///
-    /// A visualisation and a shader program are pictures of a moment rather than
-    /// of a value, so a host that stops drawing them stops them. Everything else
-    /// changes only when what it reads changes, and is drawn again then.
+    /// A visualisation is a picture of a moment rather than of a value: it keeps
+    /// its own decay between frames, so a host that stops drawing it stops it.
+    /// Everything else changes only when what it reads changes, and is drawn
+    /// again then.
+    ///
+    /// A shader belongs with everything else, not with the visualisation beside
+    /// it. It draws exactly what its uniforms say, and every uniform is an
+    /// endpoint — so a shader bound to the host's own clock moves by itself and
+    /// is caught as a clock reader, and one bound to endpoints that hold still
+    /// draws the same picture however often it is asked.
     ///
     /// Spelled out rather than defaulted, so a control added tomorrow stops
     /// compiling here instead of quietly joining the majority.
     pub(crate) const fn paints_every_frame(&self) -> bool {
         match self {
-            Self::Shader(_) | Self::Vis => true,
-            Self::Bpm { .. }
+            Self::Vis => true,
+            Self::Shader(_)
+            | Self::Bpm { .. }
             | Self::Brand
             | Self::Button { .. }
             | Self::Cell { .. }

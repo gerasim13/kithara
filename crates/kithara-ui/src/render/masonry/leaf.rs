@@ -193,9 +193,9 @@ impl Leaf {
     }
 
     pub(crate) fn repaint(&self) -> Repaint {
-        if matches!(self, Self::Vis(_))
-            || matches!(self, Self::Shader(shader) if shader.is_continuous())
-        {
+        // A shader is not here: it draws its uniforms, and a refresh that read
+        // new ones asks for the paint itself.
+        if matches!(self, Self::Vis(_)) {
             return Repaint::Continuous;
         }
         if let Self::Control(control) = self {
