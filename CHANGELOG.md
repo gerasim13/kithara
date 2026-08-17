@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [Unreleased](https://github.com/zvuk/kithara/compare/v0.0.1-alpha1...HEAD)
 
 ### Removed
 
@@ -18,7 +18,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 - UI (`kithara-ui`): `Popover.align` places the surface by its start or end edge;
   the deck's quality menu opens flush with the right edge of its cell.
 
-## [0.0.1-alpha1] - 2026-05-19
+## [0.0.1-alpha1](https://github.com/zvuk/kithara/releases/tag/v0.0.1-alpha1) - 2026-05-19
 
 First public alpha. Pre-release: public APIs may shift between alpha tags.
 
@@ -69,6 +69,3 @@ First public alpha. Pre-release: public APIs may shift between alpha tags.
 - `kithara-ui` and `kithara-tui` crates (collapsed into `kithara-app::gui` / `kithara-app::tui` modules behind feature flags).
 - `DownloadState`, `HlsSegmentView`, `commit_variant_layout`, the file-side demand machinery, and `ResourceConfig` chain shims; semantic mapping is now owned by `HlsCoord`, byte availability by `AssetStore`.
 - White-box `test_helpers`; tests now use only the public API.
-
-[Unreleased]: https://github.com/zvuk/kithara/compare/v0.0.1-alpha1...HEAD
-[0.0.1-alpha1]: https://github.com/zvuk/kithara/releases/tag/v0.0.1-alpha1

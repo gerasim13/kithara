@@ -5,25 +5,30 @@
 ## Benchmarking methodology
 
 **Benchmark input by-value / result DCE'd**
+
 ```rust
 // bad
 c.bench_function("mix", |b| b.iter(|| mix(pcm)));            // by-value memcpy each iter; result can be optimized away
 // good
 c.bench_function("mix", |b| b.iter(|| mix(black_box(&pcm)))); // black_box the borrow, return the output
 ```
+
 *tier: bench; detector: manual; present in kithara (tests/benches/perf_audit.rs already `black_box(&pcm)`)*
 
 **Setup/drop timed inside `iter`**
+
 ```rust
 // bad
 b.iter(|| { let mut p = proc.clone(); p.run(&chunk); });    // clone + Drop counted in the timed region
 // good
 b.iter_batched_ref(|| proc.clone(), |p| p.run(&chunk), BatchSize::SmallInput); // excludes both
 ```
+
 Use `iter_with_large_drop` for large outputs; never `BatchSize::PerIteration` for sub-us kernels.
 *tier: bench; detector: manual; partial in kithara (stretch bench excludes setup, not drop)*
 
 **Flamegraph of the stripped release**
+
 ```toml
 # bad: profiling [profile.release] with strip="symbols", opt-level="z" -> truncated stacks
 # good: dedicated profile, line tables only (no codegen impact)
@@ -32,14 +37,17 @@ inherits = "release"
 debug    = true
 strip    = "none"
 ```
+
 On macOS use samply/Instruments (inline-frame aware).
 *tier: bench; detector: manual; gap in kithara (no `[profile.profiling]`)*
 
 **Wall-time PR gate on shared CI**
+
 ```text
 // bad: gate PRs on criterion wall-time on a shared VM (perf.yml on ubuntu-latest)
 // good: keep wall-time opt-in/local (critcmp); hard-gate only on bare metal or one-shot iai-callgrind
 ```
+
 *tier: bench; detector: manual; already decided in kithara (perf.yml.disabled, `RUN_BENCHMARKS=1` gate)*
 
 **Trusting small deltas** - treat wall-time deltas below ~2x the measured noise floor as unproven; corroborate with repeated runs or layout-insensitive counts, set `noise_threshold` when gating. *tier: bench; detector: manual; preventive*
@@ -53,53 +61,64 @@ On macOS use samply/Instruments (inline-frame aware).
 These are the dedup boundary: each is already an ERROR/deny gate. Entries exist to point at the enforcing rule, not to re-teach it.
 
 **`Arc<Mutex<Collection>>` / god-map / `Arc<Atomic*>` glue**
+
 ```rust
 // bad
 tracks: Arc<Mutex<HashMap<TrackId, Track>>>,   // shared-mutable god-map as ownership glue
 // good
 // one owner holds the map; mutate via commands, expose read-side ArcSwap snapshots
 ```
+
 *tier: warm; detector: `arch.no-arc-mutex-collection` + `arch.no-arc-mutex-godmap` (ast-grep); already-enforced*
 
 **Fallback chain / sentinel value**
+
 ```rust
 // bad
 let v = primary().or_else(secondary).unwrap_or(SENTINEL);   // papers over a broken state contract
 // good
 let v = resolve()?;   // one correct source; fix the contract, not the symptom
 ```
+
 *tier: warm; detector: `rust.no-fallback-*` + `rust.no-sentinel-*` (ast-grep); already-enforced*
 
 **Direct time / sleep / rng**
+
 ```rust
 // bad
 std::thread::sleep(d); let t = std::time::Instant::now(); let r = rand::random();
 // good
 platform.clock().now(); platform.sleep(d).await; platform.rng().next_u64();
 ```
+
 *tier: cold; detector: `arch.no-direct-time` + `arch.no-implicit-sleep` + `arch.no-implicit-rng` (ast-grep); already-enforced*
 
 **Global pool accessor**
+
 ```rust
 // bad
 let buf = kithara_bufpool::pcm_pool().get();          // ambient global accessor
 // good
 let buf = self.pcm_pool.get_with(|b| b.clear());      // pool passed through config
 ```
+
 *tier: hot; detector: `perf.no-global-pool-accessor` (ast-grep); already-enforced*
 
 **`unwrap()` / `expect()` in production**
+
 ```rust
 // bad
 let n = map.get(k).unwrap();
 // good
 let n = map.get(k).ok_or(Error::Missing { key })?;    // or unwrap_or(default)
 ```
+
 *tier: warm; detector: `clippy::unwrap_used`=deny + `rust.no-expect-bare-string` (ast-grep); already-enforced*
 
 ## Other / backlog
 
 **Per-packet / per-segment buffer allocation (M2)**
+
 ```rust
 // bad
 for seg in segments { let buf = seg.bytes().to_vec(); decode(buf); }   // alloc per packet
@@ -107,19 +126,23 @@ for seg in segments { let buf = seg.bytes().to_vec(); decode(buf); }   // alloc 
 let mut buf = pool.get_with(|b| b.clear());
 for seg in segments { buf.clear(); buf.extend_from_slice(seg.bytes()); decode(&buf); } // reuse; Bytes for zero-copy
 ```
+
 *tier: warm; detector: `audit.alloc-in-loop` / `audit.push-in-loop` (backlog, port to `.config/ast-grep/perf.*` in M3); present in red-flags, not yet ast-grep-enforced*
 
 **Alloc-on-pool-miss fallback (I9)**
+
 ```rust
 // bad
 let buf = pool.try_acquire().unwrap_or_else(|| Vec::with_capacity(n)); // RT stall + banned fallback
 // good
 let Some(buf) = pool.try_acquire() else { self.underruns += 1; return; }; // wait-free, failable, counted
 ```
+
 Pre-fill the pool to a computed budget; allocate-on-miss only on non-RT lanes, and count misses.
 *tier: hot; detector: targeted ast-grep candidate (M3) - specializes `rust.no-fallback-*`; preventive*
 
 **`Arc` clone / `load_full()` in the inner loop**
+
 ```rust
 // bad
 for block in blocks { let cfg = self.cfg.load_full(); render(block, &cfg); } // refcount bump per block
@@ -127,16 +150,19 @@ for block in blocks { let cfg = self.cfg.load_full(); render(block, &cfg); } // 
 let cfg = self.cfg.load();          // ArcSwap Guard, no bump; or clone the Arc once at setup and borrow &T
 for block in blocks { render(block, &cfg); }
 ```
+
 kithara pre-warms the arc_swap debt node off-RT; no lint enforces this.
 *tier: hot; detector: manual; present in kithara (clean, preventive)*
 
 **Cargo-cult `get_unchecked`**
+
 ```rust
 // bad
 for i in 0..n { let x = unsafe { *buf.get_unchecked(i) }; }   // UB on crafted length = security bug
 // good
 for &x in &buf[..n] { /* ... */ }    // iterators/sub-slice/assert! first; get_unchecked only last-resort w/ SAFETY + bench
 ```
+
 kithara decodes untrusted network audio; 0 sites today.
 *tier: hot; detector: manual (census candidate); preventive*
 
