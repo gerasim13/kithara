@@ -13,7 +13,7 @@ use kithara_net::{NetError, Retryability};
 use kithara_platform::{CancelToken, sync::Arc};
 use kithara_storage::ResourceStatus;
 use kithara_stream::dl::{OnCompleteFn, WriterFn};
-use tracing::{debug, error, warn};
+use tracing::{debug, error};
 
 use crate::{
     segment::state::{Downloading, Failed, Loaded, Missing, SegmentPhase, SegmentSlotState},
@@ -229,7 +229,10 @@ impl Drop for DownloadClaim {
             variant.requeue_planned(self.planned);
         }
         self.signal.wake_peer();
-        warn!(
+        // Steady-state recovery, not an incident: a cancelled or superseded
+        // fetch drops its claim on every seek and variant switch, so a stress
+        // lane sees thousands of these in green runs.
+        debug!(
             target: "kithara_hls::settle",
             planned = ?self.planned,
             "Downloading claim dropped without settle — slot reverted to Missing and requeued"
