@@ -5259,7 +5259,6 @@ dependencies = [
  "ron",
  "roxmltree",
  "serde",
- "serde_json",
  "skrifa 0.37.0",
  "thiserror 2.0.19",
  "tracing",

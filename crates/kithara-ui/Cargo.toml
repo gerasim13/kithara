@@ -30,7 +30,6 @@ render = [
     "dep:num-traits",
     "dep:parley",
     "dep:png",
-    "dep:serde_json",
     "dep:skrifa",
     "dep:tracing",
     "dep:unicode-segmentation",
@@ -69,7 +68,6 @@ pollster = { workspace = true, optional = true }
 ron = { workspace = true }
 roxmltree = { workspace = true }
 serde = { workspace = true }
-serde_json = { workspace = true, optional = true }
 skrifa = { workspace = true, optional = true }
 thiserror = { workspace = true }
 tracing = { workspace = true, optional = true }
