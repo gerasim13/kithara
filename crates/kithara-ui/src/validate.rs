@@ -442,6 +442,7 @@ const fn control_id(node: &ControlNode) -> Option<&NodeId> {
         | ControlNode::Wave { id, .. }
         | ControlNode::Vis { id, .. }
         | ControlNode::Sprite { id, .. }
+        | ControlNode::Lottie { id, .. }
         | ControlNode::Shader { id, .. }
         | ControlNode::PortalMap { id, .. }
         | ControlNode::Range { id, .. }
@@ -774,12 +775,14 @@ pub(crate) const fn value_kinds(control: &ControlNode) -> (Option<ValueKind>, Op
         | ControlNode::Toggle { .. }
         | ControlNode::Checkbox { .. }
         | ControlNode::Chip { .. } => (Some(ValueKind::Bool), Some(ValueKind::Trigger)),
-        // A sprite reads how far its sheet has run and an object how far its
-        // motion has, and nothing writes back through either.
+        // A sprite reads how far its sheet has run, an artwork how far its pass
+        // has, and an object how far its motion has, and nothing writes back
+        // through any of them.
         ControlNode::Time { .. }
         | ControlNode::Scalar { .. }
         | ControlNode::Meter { .. }
         | ControlNode::Sprite { .. }
+        | ControlNode::Lottie { .. }
         | ControlNode::Object { .. } => (Some(ValueKind::Scalar), None),
         ControlNode::Crossfader { .. }
         | ControlNode::Fader { .. }

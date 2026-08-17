@@ -465,7 +465,25 @@ pub enum ControlNode {
         #[serde(default)]
         adaptive: AdaptivePolicy,
     },
-    /// A WGSL fragment fed by named read-only endpoint uniforms.
+    /// One frame of a named artwork, chosen by how far its own reading has run.
+    ///
+    /// The sheet contract with a drawing in place of a picture: `read` hands
+    /// over seconds, so binding it to the host's own clock is what makes the
+    /// artwork play and binding it to anything else scrubs it by hand;
+    /// `seconds` is how long one pass through the whole artwork takes.
+    Lottie {
+        id: NodeId,
+        #[serde(default)]
+        size: Option<SizeSpec>,
+        artwork: String,
+        #[serde(default)]
+        read: Option<BindingRef>,
+        #[serde(default)]
+        write: Option<BindingRef>,
+        seconds: f32,
+        #[serde(default)]
+        adaptive: AdaptivePolicy,
+    },
     /// One frame of a named sheet, chosen by how far its own reading has run.
     ///
     /// `read` hands over seconds, so binding it to the host's own clock is what
@@ -484,6 +502,7 @@ pub enum ControlNode {
         #[serde(default)]
         adaptive: AdaptivePolicy,
     },
+    /// A WGSL fragment fed by named read-only endpoint uniforms.
     Shader {
         id: NodeId,
         #[serde(default)]
@@ -754,6 +773,7 @@ impl ControlNode {
             | Self::Fader { read, write, .. }
             | Self::Wave { read, write, .. }
             | Self::Vis { read, write, .. }
+            | Self::Lottie { read, write, .. }
             | Self::Sprite { read, write, .. }
             | Self::Range { read, write, .. }
             | Self::Table { read, write, .. }
@@ -807,6 +827,7 @@ impl ControlNode {
             | Self::Crossfader { size, .. }
             | Self::Fader { size, .. }
             | Self::Wave { size, .. }
+            | Self::Lottie { size, .. }
             | Self::Vis { size, .. }
             | Self::Sprite { size, .. }
             | Self::Shader { size, .. }

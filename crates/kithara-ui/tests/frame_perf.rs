@@ -336,6 +336,19 @@ const SCENARIOS: &[Scenario] = &[
         control: r#"Range(id: "control", read: Model(id: "pivot.range"), write: Parameter(id: "pivot.range"))"#,
         interaction: Interaction::Drag,
     },
+    // A sheet is cut once and a frame of it is one picture draw; an artwork is
+    // read once and every frame of it is emitted afresh. Both are driven by a
+    // reading that moves, which is the frame their hosts actually pay for.
+    Scenario {
+        name: "Sprite",
+        control: r#"Sprite(id: "control", sheet: "spinner", seconds: 1.6, read: Model(id: "deck.view.zoom"))"#,
+        interaction: Interaction::DataChange,
+    },
+    Scenario {
+        name: "Lottie",
+        control: r#"Lottie(id: "control", artwork: "pulse", seconds: 1.6, read: Model(id: "deck.view.zoom"))"#,
+        interaction: Interaction::DataChange,
+    },
 ];
 
 static PORTALS: [PortalTarget; 2] = [

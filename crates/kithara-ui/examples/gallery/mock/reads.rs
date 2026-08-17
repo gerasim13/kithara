@@ -59,6 +59,7 @@ pub(crate) struct MockReads {
     motion_phase: f32,
     motion_clock: f32,
     sprite_scrub: f32,
+    lottie_scrub: f32,
     vis_phase: f32,
     levels_volume: f64,
     segmented_index: f64,
@@ -131,6 +132,7 @@ impl Default for MockReads {
             motion_phase: Consts::MOTION_START,
             motion_clock: Consts::MOTION_CLOCK_START,
             sprite_scrub: Consts::SPRITE_SCRUB_START,
+            lottie_scrub: Consts::LOTTIE_SCRUB_START,
             vis_levels: [0.66, 0.52],
             vis_phase: 0.0,
             vis_preset: 0,
@@ -306,6 +308,8 @@ impl MockReads {
         let value = value.clamp(0.0, 1.0);
         if path == "sprites/scrub" {
             self.sprite_scrub = value.as_();
+        } else if path == "lottie/scrub" {
+            self.lottie_scrub = value.as_();
         } else if path.ends_with("/loop_start") {
             self.transport.set_loop_start(value);
         } else if path.ends_with("/loop_end") {
@@ -383,6 +387,7 @@ impl MockReads {
             "gallery.tab.objects" => self.active_tab == Tab::Objects,
             "gallery.tab.motion" => self.active_tab == Tab::Motion,
             "gallery.tab.sprites" => self.active_tab == Tab::Sprites,
+            "gallery.tab.lottie" => self.active_tab == Tab::Lottie,
             "gallery.module.deck" => self.active_module == ModuleDemo::Deck,
             "gallery.module.deck_micro" => self.active_module == ModuleDemo::DeckMicro,
             "gallery.module.global_bar" => self.active_module == ModuleDemo::GlobalBar,
@@ -398,7 +403,7 @@ impl MockReads {
             Tab::Stress => self.stress.tick(),
             Tab::Vis => self.tick_vis(),
             Tab::Objects => self.tick_phase(),
-            Tab::Motion | Tab::Sprites => self.tick_clock(),
+            Tab::Motion | Tab::Sprites | Tab::Lottie => self.tick_clock(),
             _ => {}
         }
     }
@@ -533,6 +538,7 @@ impl Reads for MockReads {
             "gallery.motion.phase" => ReadValue::Scalar(f64::from(self.motion_phase)),
             "gallery.motion.clock" => ReadValue::Scalar(f64::from(self.motion_clock)),
             "gallery.sprite.scrub" => ReadValue::Scalar(f64::from(self.sprite_scrub)),
+            "gallery.lottie.scrub" => ReadValue::Scalar(f64::from(self.lottie_scrub)),
             "vis.badge" => ReadValue::Bool(true),
             "vis.preset" => ReadValue::Scalar(self.vis_preset.as_()),
             "vis.time" => ReadValue::Scalar(self.vis_time_secs),

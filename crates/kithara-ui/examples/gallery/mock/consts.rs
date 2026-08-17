@@ -26,6 +26,11 @@ impl Consts {
     /// eighths of the way along, so the scrubbed sprite shows a different frame
     /// from the played one beside it.
     pub(super) const SPRITE_SCRUB_START: f32 = 0.375;
+    /// Where the artwork page's fader starts, and — because a capture never
+    /// ticks — the frame both hosts photograph the scrubbed artwork at. Far
+    /// enough along its one second pass to stand at a plainly different frame
+    /// from the played one beside it.
+    pub(super) const LOTTIE_SCRUB_START: f32 = 0.6;
     pub(super) const BPM_VALUE: f32 = 70.0;
     pub(super) const CUES: &[f32] = &[0.27, 0.31];
     pub(super) const DURATION_SECS: f64 = 360.0;

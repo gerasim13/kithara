@@ -489,6 +489,25 @@ mod tests {
         )));
     }
 
+    /// The artwork the gallery shows. Three layers keyframed over two seconds:
+    /// two turning opposite ways and one breathing. Nothing here reads a clock,
+    /// so a frame drawn twice is drawn the same, and two frames apart are only
+    /// the same if the artwork does not move — which is what this asks.
+    #[kithara::test]
+    fn the_shipped_artwork_draws_a_different_picture_at_a_different_frame() {
+        let artwork =
+            Composition::from_slice(include_str!("../../assets/lottie/pulse.json").as_bytes())
+                .unwrap_or_else(|error| panic!("the shipped artwork must read: {error}"));
+        let at = |frame: f64| {
+            let mut list = DrawListBuilder::default();
+            emit(&artwork, frame, &mut list)
+                .unwrap_or_else(|error| panic!("the shipped artwork must draw: {error}"));
+            list.finish().commands().to_vec()
+        };
+
+        assert_ne!(at(0.0), at(30.0));
+    }
+
     #[kithara::test]
     fn a_stroked_contour_reaches_the_list_as_a_stroke() {
         assert!(

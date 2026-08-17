@@ -176,6 +176,12 @@ pub enum ControlSpec {
         zoom: Option<Binding>,
     },
     Vis,
+    /// One frame of a named artwork, chosen by how far its reading has run and
+    /// how long `seconds` says one pass through the artwork takes.
+    Lottie {
+        artwork: InternId,
+        seconds: f32,
+    },
     /// One frame of a named sheet, chosen by how far its reading has run and
     /// how long `seconds` says one pass through the sheet takes.
     Sprite {
@@ -324,6 +330,7 @@ impl ControlSpec {
             | Self::Fader { .. }
             | Self::Glyph { .. }
             | Self::Knob { .. }
+            | Self::Lottie { .. }
             | Self::Meter
             | Self::NavItem { .. }
             | Self::PortalMap

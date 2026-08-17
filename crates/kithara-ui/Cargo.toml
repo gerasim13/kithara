@@ -19,6 +19,9 @@ default = ["iced"]
 gpu = ["iced", "dep:pollster"]
 masonry = ["dep:futures-lite", "dep:masonry", "dep:winit", "vello"]
 perf = ["dep:hotpath", "hotpath/hotpath"]
+# Everything that draws. Artwork reading is part of it rather than an opt-in:
+# which controls a document may name is a contract of the toolkit, not of the
+# host's feature set, so a build that draws at all draws every control.
 render = [
     "dep:kithara-bufpool",
     "dep:kithara-platform",
@@ -27,14 +30,13 @@ render = [
     "dep:num-traits",
     "dep:parley",
     "dep:png",
+    "dep:serde_json",
     "dep:skrifa",
     "dep:tracing",
     "dep:unicode-segmentation",
+    "dep:velato",
 ]
 iced = ["render", "dep:iced", "iced/advanced"]
-# Lottie artwork. Opt-in because velato pulls vello's encoder in with it, which
-# the default set has no use for.
-lottie = ["render", "dep:serde_json", "dep:velato"]
 vello = [
     "render",
     "dep:kithara-platform",

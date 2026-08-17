@@ -303,6 +303,7 @@ pub(crate) fn registry() -> impl EndpointRegistry {
         "mock.cells.segmented",
         "vis.preset",
         "gallery.sprite.scrub",
+        "gallery.lottie.scrub",
     ] {
         registry.insert(
             EndpointCategory::Parameter,
@@ -382,6 +383,7 @@ pub(crate) fn registry() -> impl EndpointRegistry {
         "gallery.sprite.frame.6",
         "gallery.sprite.frame.7",
         "gallery.sprite.scrub",
+        "gallery.lottie.scrub",
     ] {
         registry.insert(
             EndpointCategory::Model,
@@ -414,6 +416,7 @@ pub(crate) fn registry() -> impl EndpointRegistry {
         "gallery.tab.objects",
         "gallery.tab.motion",
         "gallery.tab.sprites",
+        "gallery.tab.lottie",
         "gallery.module.deck",
         "gallery.module.deck_micro",
         "gallery.module.global_bar",

@@ -112,6 +112,13 @@
                                                         read: Model(id: "ui.clock.seconds"),
                                                         size: (w: Fixed(28.0), h: Fixed(28.0)),
                                                     ),
+                                                    Lottie(
+                                                        id: "activity-pulse",
+                                                        artwork: "pulse",
+                                                        seconds: 2.4,
+                                                        read: Model(id: "ui.clock.seconds"),
+                                                        size: (w: Fixed(28.0), h: Fixed(28.0)),
+                                                    ),
                                                     Text(id: "activity-label", style: MicroLabel, label: "ENGINE RUNNING"),
                                                 ],
                                             ),

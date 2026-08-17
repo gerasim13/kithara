@@ -46,6 +46,7 @@
             Include(id: "objects", source: "nav/item.kmodule.ron", with: { "icon": "Activity", "label": "OBJECTS", "tab": "gallery.tab.objects" }),
             Include(id: "motion", source: "nav/item.kmodule.ron", with: { "icon": "Clock", "label": "MOTION", "tab": "gallery.tab.motion" }),
             Include(id: "sprites", source: "nav/item.kmodule.ron", with: { "icon": "Orbit", "label": "SPRITES", "tab": "gallery.tab.sprites" }),
+            Include(id: "lottie", source: "nav/item.kmodule.ron", with: { "icon": "Disc", "label": "LOTTIE", "tab": "gallery.tab.lottie" }),
         ],
     ),
 )

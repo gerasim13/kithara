@@ -147,6 +147,12 @@ pub(super) fn control_spec(
             active: optional_binding(context, machine, extra.active.as_ref())?,
         },
         ControlNode::Shader { source, .. } => shader_spec(context, machine, source, extra, path)?,
+        ControlNode::Lottie {
+            artwork, seconds, ..
+        } => ControlSpec::Lottie {
+            artwork: intern_text(context, machine.interner, artwork, path, &context.origin)?,
+            seconds: *seconds,
+        },
         ControlNode::Sprite { sheet, seconds, .. } => ControlSpec::Sprite {
             sheet: intern_text(context, machine.interner, sheet, path, &context.origin)?,
             seconds: *seconds,
@@ -321,6 +327,7 @@ fn fixed_control_spec(control: &ControlNode) -> Option<ControlSpec> {
         | ControlNode::Fader { .. }
         | ControlNode::Wave { .. }
         | ControlNode::Shader { .. }
+        | ControlNode::Lottie { .. }
         | ControlNode::Sprite { .. }
         | ControlNode::Table { .. }
         | ControlNode::Tree { .. }

@@ -34,6 +34,7 @@ control_kinds!(
     Fader,
     Glyph,
     Knob,
+    Lottie,
     Meter,
     NavItem,
     PortalMap,

@@ -202,6 +202,12 @@ impl ViewControl for mount::Shader<'_> {
     }
 }
 
+impl ViewControl for mount::Lottie {
+    fn view<'a>(&self, cx: &Cx<'a, '_, '_>) -> Rendered<'a> {
+        painted(self, cx)
+    }
+}
+
 impl ViewControl for mount::Sprite {
     fn view<'a>(&self, cx: &Cx<'a, '_, '_>) -> Rendered<'a> {
         painted(self, cx)

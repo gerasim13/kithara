@@ -674,6 +674,7 @@ pub(super) fn walk(
         | ControlNode::Fader { id, adaptive, .. }
         | ControlNode::Wave { id, adaptive, .. }
         | ControlNode::Vis { id, adaptive, .. }
+        | ControlNode::Lottie { id, adaptive, .. }
         | ControlNode::Sprite { id, adaptive, .. }
         | ControlNode::Shader { id, adaptive, .. }
         | ControlNode::PortalMap { id, adaptive, .. }

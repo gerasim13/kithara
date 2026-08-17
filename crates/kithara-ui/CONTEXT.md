@@ -163,6 +163,14 @@ feature off because the backend only encodes commands. Enabling `masonry` still 
 wgpu 26 renderer through Masonry while iced brings wgpu 27. Cargo keeps the two majors distinct;
 `deny.toml` reports multiple versions as a warning, so this coexistence is intentional.
 
+`lottie` reads an artwork once with velato and emits one of its frames into the same neutral
+`DrawList` every other control paints into, so an artwork reaches both hosts through the seam and
+needs no backend of its own. velato sits in `render` rather than behind a feature of its own,
+which costs the iced-only build Vello's encoder: which controls a document may name is a contract
+of the toolkit, not of the host's feature set, and a feature-gated variant would fork
+`ControlSpec`, `ControlNode`, both gesture censuses and the gallery's page list along a build
+flag. A document may name `Lottie` wherever it draws at all.
+
 `text::TextContext` is the canonical shaping owner. It owns Parley's font and layout contexts and
 registers the embedded Inter, JetBrains Mono, Space Grotesk, and Lucide faces. A context is a
 caller-owned value injected where shaping occurs; there is no process-global font context.

@@ -1,7 +1,7 @@
 (
     schema: "kithara.layout",
     version: 1,
-    id: "gallery-sprites",
+    id: "gallery-lottie",
     root: Split(
         axis: Vertical,
         children: [
@@ -10,7 +10,7 @@
                 axis: Horizontal,
                 children: [
                     (weight: 1.0, node: Module(instance: "gallery", source: "modules/nav.kmodule.ron", corners: true, frame: (right: false), size: (w: Fixed(198.0), h: Fill))),
-                    (weight: 1.0, node: Module(instance: "sprites", source: "modules/tabs/sprites.kmodule.ron", corners: true, size: (w: Fill, h: Fill))),
+                    (weight: 1.0, node: Module(instance: "lottie", source: "modules/tabs/lottie.kmodule.ron", corners: true, size: (w: Fill, h: Fill))),
                 ],
             )),
         ],

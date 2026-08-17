@@ -578,6 +578,8 @@ impl Retained for Settings {}
 /// frame they land on needs the sheet and how long a pass through it takes,
 /// which the control knows and the painter does not. The refresh the control
 /// hands over is what steps it.
+impl Retained for crate::atoms::picture::lottie::Lottie {}
+
 impl Retained for Sprite {}
 
 impl Retained for Wave {

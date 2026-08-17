@@ -321,6 +321,7 @@ mod tests {
     use kithara_ui::{
         compile::CompiledNode,
         expand::{Binding, BindingKind, ControlSpec, ExpandedNode},
+        lottie::builtin_artwork,
         module::{ButtonStyle, ChromeStyle, IconName, Motion, Pose, WaveStyle},
         render::{ControlAction, ReadValue, Reads, builtin_sheet, document::SECONDS},
     };
@@ -601,6 +602,7 @@ mod tests {
                 ("gallery/clock/item", "activation"),
                 ("gallery/faders/item", "activation"),
                 ("gallery/library2/item", "activation"),
+                ("gallery/lottie/item", "activation"),
                 ("gallery/menu/item", "activation"),
                 ("gallery/micro/item", "activation"),
                 ("gallery/mixer/item", "activation"),
@@ -1212,6 +1214,128 @@ mod tests {
             .count();
 
         assert!(posed >= 2, "{posed} object(s) carry a sprite");
+    }
+
+    /// Every artwork the artwork page declares: the one it names, how long one
+    /// pass through it takes, and the endpoint it reads its seconds from.
+    fn artwork_sites(ui: &CompiledUi) -> Vec<(&str, f32, Option<&str>)> {
+        let mut found = Vec::new();
+        each_control_read(ui, &mut |spec, read| {
+            if let ControlSpec::Lottie { artwork, seconds } = spec {
+                found.push((
+                    ui.resolve(*artwork),
+                    *seconds,
+                    read.map(|binding| ui.resolve(binding.key)),
+                ));
+            }
+        });
+        found
+    }
+
+    /// A page that names an artwork nothing ships draws an empty box, and the
+    /// capture beside it would agree with itself about nothing at all.
+    #[kithara::test]
+    fn every_artwork_names_one_the_toolkit_ships() {
+        let ui = page(Tab::Lottie);
+
+        let missing: Vec<&str> = artwork_sites(&ui)
+            .iter()
+            .map(|(artwork, _, _)| *artwork)
+            .filter(|artwork| builtin_artwork(artwork).is_none())
+            .collect();
+
+        assert_eq!(missing, [""; 0]);
+    }
+
+    /// The played artwork reads the host's own clock, which no application
+    /// declares and this mock does not answer: if the host did not answer it
+    /// for itself, that artwork would hold its first frame for ever.
+    #[kithara::test]
+    fn the_played_artwork_reads_a_clock_the_application_does_not_own() {
+        let ui = page(Tab::Lottie);
+        let reads = MockReads::default();
+
+        let host_clock: Vec<&str> = artwork_sites(&ui)
+            .iter()
+            .filter_map(|(_, _, read)| *read)
+            .filter(|endpoint| reads.get(endpoint).is_none())
+            .collect();
+
+        assert!(
+            host_clock.iter().all(|endpoint| *endpoint == SECONDS),
+            "{host_clock:?} is read by an artwork and answered by nobody"
+        );
+    }
+
+    #[kithara::test]
+    fn the_page_plays_an_artwork_off_the_host_clock() {
+        let ui = page(Tab::Lottie);
+
+        let played = artwork_sites(&ui)
+            .iter()
+            .filter(|(_, _, read)| *read == Some(SECONDS))
+            .count();
+
+        assert!(played >= 1, "{played} artwork(s) run off the host's clock");
+    }
+
+    /// An artwork is a control like any other, so an object turns one. The claim
+    /// is only worth making if the page actually poses one.
+    #[kithara::test]
+    fn the_page_poses_an_artwork_inside_a_moving_object() {
+        let ui = page(Tab::Lottie);
+
+        let posed = motion_objects(&ui)
+            .iter()
+            .filter(|object| object.motion.is_some())
+            .count();
+
+        assert!(posed >= 2, "{posed} object(s) carry an artwork");
+    }
+
+    /// The one fader a page carries, under the path the document gives it.
+    fn only_fader_path(ui: &CompiledUi) -> String {
+        let mut found = Vec::new();
+        each_control(ui, &mut |path, spec| {
+            if matches!(spec, ControlSpec::Fader { .. }) {
+                found.push(path.to_owned());
+            }
+        });
+        let [path] = <[String; 1]>::try_from(found)
+            .unwrap_or_else(|found| panic!("the page must carry one fader, not {}", found.len()));
+        path
+    }
+
+    fn scalar(reads: &MockReads, endpoint: &str) -> f64 {
+        match reads.get(endpoint) {
+            Some(ReadValue::Scalar(value)) => value,
+            other => panic!("{endpoint} reads {other:?}"),
+        }
+    }
+
+    /// A document builds a control's path from the module instance it is
+    /// mounted under, so an application listening under another name hears
+    /// nothing and the fader is a control the page only claims to have.
+    #[kithara::test]
+    fn the_scrub_fader_moves_the_artwork_beside_it() {
+        let path = only_fader_path(&page(Tab::Lottie));
+        let mut reads = MockReads::default();
+        let before = scalar(&reads, "gallery.lottie.scrub");
+
+        reads.apply(&path, &ControlAction::SetScalar(0.9));
+
+        assert_ne!(scalar(&reads, "gallery.lottie.scrub"), before);
+    }
+
+    #[kithara::test]
+    fn the_scrub_fader_moves_the_sprite_beside_it() {
+        let path = only_fader_path(&page(Tab::Sprites));
+        let mut reads = MockReads::default();
+        let before = scalar(&reads, "gallery.sprite.scrub");
+
+        reads.apply(&path, &ControlAction::SetScalar(0.9));
+
+        assert_ne!(scalar(&reads, "gallery.sprite.scrub"), before);
     }
 
     #[kithara::test]

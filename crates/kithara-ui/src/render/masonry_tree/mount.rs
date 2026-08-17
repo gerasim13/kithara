@@ -202,6 +202,15 @@ impl NodeControl for mount::Shader<'_> {
         output
     }
 }
+impl NodeControl for mount::Lottie {
+    fn leaf<A>(&self, host: &MasonryHost<'_, A>, cx: &Cx<'_>) -> MasonryNode<A>
+    where
+        A: std::fmt::Debug + Send + 'static,
+    {
+        painted(self, host, cx)
+    }
+}
+
 impl NodeControl for mount::Sprite {
     fn leaf<A>(&self, host: &MasonryHost<'_, A>, cx: &Cx<'_>) -> MasonryNode<A>
     where

@@ -1866,6 +1866,11 @@ const CONTROL_CENSUS: &[(&str, Paints, &str)] = &[
         r#"Sprite(id: "control", sheet: "spinner", seconds: 1.6, read: Model(id: "ui.clock.seconds"))"#,
     ),
     (
+        "Lottie",
+        Paints::Yes,
+        r#"Lottie(id: "control", artwork: "pulse", seconds: 1.6, read: Model(id: "ui.clock.seconds"))"#,
+    ),
+    (
         // Unlike `Vis`, a shader is not a second pass beside the scene: the
         // retained host encodes the image draw into the Vello scene itself, and
         // the GPU pass fills the very image that draw points at.
@@ -2187,6 +2192,10 @@ mod gesture_census {
         },
         Row {
             name: "Sprite",
+            gestures: Gestures::NONE,
+        },
+        Row {
+            name: "Lottie",
             gestures: Gestures::NONE,
         },
         Row {
