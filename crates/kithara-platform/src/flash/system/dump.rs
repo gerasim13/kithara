@@ -64,7 +64,15 @@ impl fmt::Display for FlashInner {
         // currently `Running` (`active` may exceed the list by a reserved-but-
         // unclaimed slot or an in-flight wake bump, which carry no thread yet).
         for (id, loc) in &s.registry.active_async_holders {
-            writeln!(f, "  active_async holder task={id} spawned_at={loc}")?;
+            write!(f, "  active_async holder task={id} spawned_at={loc}")?;
+            // The gate state and poll count say HOW the task pins the clock: a
+            // climbing count is a task spinning through wake-poll-park, while a
+            // `Runnable` gate whose count stopped is a task the runtime never
+            // re-polled after a wake.
+            if let Some(diag) = s.registry.task_diag.get(id) {
+                write!(f, " state={:?} polls={}", diag.state.load(), diag.polls())?;
+            }
+            writeln!(f)?;
         }
         for (key, holder) in &s.registry.active_sync_holders {
             writeln!(

@@ -257,6 +257,51 @@ fn woken_async_task_stays_counted_until_repolled() {
     );
 }
 
+/// A pinning task's spawn site says WHERE it came from, never what it is doing.
+/// A campaign's nine hangs were all pinned by one task at one spawn site, with
+/// nothing in the dump to separate a task spinning through wake-poll-park from
+/// one the runtime never re-polled after a wake. The poll count separates them.
+#[test]
+fn a_task_that_has_never_been_polled_pins_the_clock_at_zero_polls() {
+    let _g = guard();
+    reset();
+
+    let notify = Notify::default();
+    let _task = Box::pin(participate(
+        async {
+            notify.notified().await;
+        },
+        Location::caller(),
+    ));
+
+    let dump = sched::dump();
+    assert!(dump.contains("polls=0"), "{dump}");
+}
+
+#[test]
+fn a_pinning_task_reports_the_polls_it_entered() {
+    let _g = guard();
+    reset();
+
+    let notify = Notify::default();
+    let mut task = Box::pin(participate(
+        async {
+            notify.notified().await;
+        },
+        Location::caller(),
+    ));
+    let waker = Waker::from(Arc::new(NoopWake));
+    let mut cx = Context::from_waker(&waker);
+
+    // Park on the notify, then wake it: the task holds a slot again, now with
+    // one entered poll behind it.
+    assert!(task.as_mut().poll(&mut cx).is_pending());
+    notify.notify_one();
+
+    let dump = sched::dump();
+    assert!(dump.contains("polls=1"), "{dump}");
+}
+
 #[test]
 fn now_advances_only_on_advance() {
     let _g = guard();

@@ -548,7 +548,7 @@ pub(super) fn strip_ansi(text: &str) -> String {
 
 fn normalize_signature(text: &str) -> String {
     static VOLATILE: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(r"\b([A-Za-z_][A-Za-z0-9_]*(?:_ns|_ms)|pid|task|thread|id|dump)=[^\s,;]+")
+        Regex::new(r"\b([A-Za-z_][A-Za-z0-9_]*(?:_ns|_ms)|pid|task|thread|id|dump|polls)=[^\s,;]+")
             .expect("volatile diagnostic regex")
     });
     // A Rust panic header names the thread and its id before the location.
@@ -728,6 +728,18 @@ mod tests {
         assert_eq!(
             normalized,
             "pid=<volatile> task=<volatile> address=0x<address>"
+        );
+    }
+
+    /// A poll count is per-attempt jitter: nine hangs sharing one pinning task
+    /// would cluster as nine separate causes if it survived into the signature.
+    /// The gate state beside it is the discriminator and must survive.
+    #[test]
+    fn a_pinning_tasks_poll_count_does_not_split_one_cause_into_many() {
+        let normalized = normalize_signature("active_async holder polls=41231 state=Runnable");
+        assert_eq!(
+            normalized,
+            "active_async holder polls=<volatile> state=Runnable"
         );
     }
 

@@ -8,7 +8,7 @@ use std::{
     thread::Thread,
 };
 
-use super::{pace::Pacer, sched::Entry, wake::Wake};
+use super::{gate::TaskDiag, pace::Pacer, sched::Entry, wake::Wake};
 use crate::{
     common::time::Instant as RealInstant,
     flash::{diag::PrimKind, ids::ThreadKey},
@@ -101,6 +101,16 @@ pub(in crate::flash) struct Registry {
     /// dump lists it so a quiescence pin reports WHICH task pins it (and where
     /// it was spawned) instead of a bare `active_async=N`.
     pub(super) active_async_holders: BTreeMap<u64, &'static Location<'static>>,
+    /// Gate state and poll count of every live async task, keyed by task id and
+    /// shared with its [`TaskGate`](super::gate::TaskGate). Inserted at
+    /// `async_acquire`, removed when the task completes or drops.
+    ///
+    /// A holder alone says a task pins the clock, not how. These two numbers
+    /// separate the two ways it can: a task spinning through wake-poll-park
+    /// climbs its poll count without bound, while one left `Runnable` by a wake
+    /// whose re-poll never arrived holds the slot at a poll count that never
+    /// moves again. Both look identical in `active_async=1`.
+    pub(super) task_diag: BTreeMap<u64, Arc<TaskDiag>>,
     /// SYNC counterpart of [`active_async_holders`](Self::active_async_holders):
     /// the dedicated-pacer OS threads currently counted as `Running` in `active`
     /// (audio worker, downloader runtime, flush hub, …), keyed by `ThreadKey`
@@ -248,6 +258,7 @@ impl Core {
                 cv_desc: BTreeMap::new(),
                 active_async_holders: BTreeMap::new(),
                 active_sync_holders: BTreeMap::new(),
+                task_diag: BTreeMap::new(),
             },
             sched: Scheduler {
                 timed: BTreeMap::new(),

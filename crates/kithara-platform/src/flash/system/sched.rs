@@ -8,7 +8,7 @@ use std::{
 use super::{
     Clock, Core, CvDesc, CvId, FLASH, FlashInner, Registry, WaiterId,
     credit::WaitGuard,
-    gate::{AtomicTaskState, ParkOutcome, TaskState, WakeOutcome},
+    gate::{AtomicTaskState, ParkOutcome, TaskDiag, TaskGate, TaskState, WakeOutcome},
     wake::{Token, Wake},
 };
 use crate::{
@@ -626,13 +626,17 @@ impl FlashInner {
     /// construction; the PARKED→RUNNABLE wake re-acquire goes through
     /// [`FlashInner::gate_wake_parked`], which couples the acquire to the state CAS
     /// under the lock.
-    pub(in crate::flash) fn async_acquire(&self, loc: &'static Location<'static>) -> u64 {
+    /// Returns the task's gate, whose [`TaskDiag`] the registry keeps a second
+    /// handle to until the task completes or drops.
+    pub(in crate::flash) fn async_acquire(&self, loc: &'static Location<'static>) -> Arc<TaskGate> {
         let mut s = self.core.lock();
         let id = s.registry.next_task_id;
         s.registry.next_task_id += 1;
         s.registry.active_async += 1;
         s.registry.active_async_holders.insert(id, loc);
-        id
+        let gate = TaskGate::new(id, loc, Arc::new(TaskDiag::default()));
+        s.registry.task_diag.insert(id, gate.diag());
+        gate
     }
 
     /// Gate completion under the `core` lock: mark `Done` and release the slot
@@ -642,6 +646,7 @@ impl FlashInner {
         let mut s = self.core.lock();
         state.store(TaskState::Done);
         s.registry.active_async_holders.remove(&id);
+        s.registry.task_diag.remove(&id);
         let adv = s.release_async(&self.clock);
         drop(s);
         adv.fire();
@@ -651,6 +656,7 @@ impl FlashInner {
     /// still held one (its prior state was counted — `Runnable`/`Running`/`RunningNotified`).
     pub(super) fn gate_drop_release(&self, state: &AtomicTaskState, id: u64) {
         let mut s = self.core.lock();
+        s.registry.task_diag.remove(&id);
         match state.swap(TaskState::Done) {
             TaskState::Runnable | TaskState::Running | TaskState::RunningNotified => {
                 s.registry.active_async_holders.remove(&id);
@@ -928,7 +934,7 @@ pub(crate) fn register_notify_async(cvid: CvId, waker: Waker) -> (Option<AsyncHa
 }
 
 /// Process-engine forward of [`FlashInner::async_acquire`].
-pub(crate) fn async_acquire(loc: &'static Location<'static>) -> u64 {
+pub(crate) fn async_acquire(loc: &'static Location<'static>) -> Arc<TaskGate> {
     FLASH.async_acquire(loc)
 }
 

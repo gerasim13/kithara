@@ -76,9 +76,8 @@ impl<F: Future> Future for Participating<F> {
 /// in the engine's `active_async` holder map, so a quiescence-hang dump names
 /// WHICH spawn pins the clock instead of printing a bare counter.
 pub fn participate<F: Future>(fut: F, loc: &'static Location<'static>) -> Participating<F> {
-    let id = system::async_acquire(loc);
     Participating {
         fut,
-        gate: TaskGate::new(id, loc),
+        gate: system::async_acquire(loc),
     }
 }
