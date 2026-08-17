@@ -245,11 +245,21 @@ source_excludes = ["kithara-test-macros/", "kithara-test-utils/src/test/"]
 [stress.modes.reproduction-flash-on]
 features = ["flash"]
 
-# Reproduction lanes set no RUST_LOG: `setup_tracing_with_filter` lets the env
-# override per-test `tracing(...)` annotations, so a campaign-wide RUST_LOG
-# silences exactly the verdict lines the annotated flaky tests were given.
-# Unannotated tests keep the "warn" default from `setup_tracing`.
+# Reproduction lanes set no RUST_LOG: a campaign-wide one used to override the
+# per-test `tracing(...)` annotations and silence exactly the verdict lines the
+# annotated flaky tests were given (`setup_tracing_with_filter` now merges the
+# two, keeping the wider level per target). Unannotated tests keep the "warn"
+# default from `setup_tracing`.
+#
+# `KITHARA_FLASH_SYNC_TRACE` is on in every reproduction lane, not just the
+# diagnostic ones: `flash::diag` reads it once and caches, so with it off every
+# primitive carries `meta = None` and the hang dump cannot name a holder or a
+# waiter — the dump degrades to "something is stuck" in exactly the lanes the
+# campaign actually runs. `KITHARA_FLASH_SYNC_BT` stays out: measured at
+# count=50 it inflates JUnit past the 512 MiB artifact limit, and it has its own
+# lane for when a stack is worth that price.
 [stress.modes.reproduction-flash-on.set_env]
+KITHARA_FLASH_SYNC_TRACE = "1"
 KITHARA_HANG_PREKILL_SECS = "630"
 NEXTEST_FINAL_STATUS_LEVEL = "fail"
 NEXTEST_SHOW_PROGRESS = "counter"
@@ -269,6 +279,7 @@ KITHARA_HANG_DUMP_DIR = "hang"
 features = []
 
 [stress.modes.reproduction-flash-off.set_env]
+KITHARA_FLASH_SYNC_TRACE = "1"
 KITHARA_HANG_PREKILL_SECS = "630"
 NEXTEST_FINAL_STATUS_LEVEL = "fail"
 NEXTEST_SHOW_PROGRESS = "counter"
@@ -289,6 +300,7 @@ KITHARA_HANG_DUMP_DIR = "hang"
 features = ["flash", "no-block"]
 
 [stress.modes.reproduction-no-block.set_env]
+KITHARA_FLASH_SYNC_TRACE = "1"
 KITHARA_HANG_PREKILL_SECS = "630"
 KITHARA_NO_BLOCK = "census"
 KITHARA_NO_BLOCK_BUDGET_MS = "100"

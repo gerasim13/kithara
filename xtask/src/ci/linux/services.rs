@@ -224,6 +224,12 @@ pub(super) fn cpuset(index: usize, cpus: u32, cores: usize) -> String {
 /// checkouts separately: cargo guards both with a lock file kept beside them,
 /// and jobs on this machine run at the same time. Mounting the data without
 /// the lock leaves two of them unpacking one crate into one directory.
+///
+/// `RuntimeDirectoryPreserve=yes` is not an optimisation. Every runner on the
+/// machine declares the same `RuntimeDirectory=kithara-ci`, and systemd removes
+/// a runtime directory when the unit that declared it stops — so one runner
+/// going down deletes the directory the others are still using, and restarting
+/// the fleet has them delete it from under each other until none can start.
 fn unit(
     host: &LinuxHost,
     runner: &LinuxRunner,
@@ -243,7 +249,8 @@ fn unit(
          Restart=always\n\
          RestartSec=10\n\
          RuntimeDirectory=kithara-ci\n\
-         RuntimeDirectoryMode=0700\n\n\
+         RuntimeDirectoryMode=0700\n\
+         RuntimeDirectoryPreserve=yes\n\n\
          ExecStartPre={executable} ci linux --config {config} firewall\n\
          ExecStartPre={executable} ci linux --config {config} configure --runner {name} \
          --env-file {env_file}\n",
@@ -428,6 +435,25 @@ mod tests {
         for entry in Container::ENVIRONMENT {
             assert!(text.contains(&format!("--env {entry}")), "{entry}:\n{text}");
         }
+    }
+
+    /// The whole fleet declares one runtime directory, so systemd must be told
+    /// to keep it: without this, stopping any single runner removes the
+    /// directory every other runner is still using.
+    #[test]
+    fn the_shared_runtime_directory_outlives_a_single_runner() {
+        let host = host_fixture();
+        let pins = &fixture().pins;
+        let text = unit(
+            &host,
+            host.runner("kithara-ci-octocat").expect("runner"),
+            "0,1,2",
+            pins,
+            "/usr/local/bin/kithara-ci",
+        )
+        .expect("the unit must render");
+
+        assert!(text.contains("RuntimeDirectoryPreserve=yes"), "{text}");
     }
 
     /// A build directory holds artefacts valid only for the configuration that

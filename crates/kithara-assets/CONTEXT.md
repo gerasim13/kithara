@@ -226,6 +226,14 @@ All three write through `Atomic<R>` and register with a shared `FlushHub` (`Flus
   index is always ephemeral.
 - Three call sites share one instance per disk root: `LeaseAssets` (pin/unpin), `EvictAssets` (reads
   the pinned set when picking candidates), `DiskAssetDeleter` (drops the pin on root removal).
+- One live `AssetStore` per disk root in a process — the topology `README.md` states, and the reach
+  of the per-file flush lock above. A second store over the same root is a second owner of
+  `_index/pins.bin`: it hydrates its own copy in `with_persist_at`, so its next flush (or a worker
+  checkpoint, which writes indices whose `dirty` flag is clear) republishes a snapshot taken before
+  the other store's unpin and resurrects a pin nobody holds. It also keeps its own `EvictAssets`
+  `seen` set, so eviction runs a second time against that stale pinned set. Neither is serialisable
+  by a lock inside one instance. Sharing is by cheap clone of the handle, or by passing the built
+  indices through the builder — never by two stores discovering each other through the filesystem.
 
 ### LRU index and eviction policy
 

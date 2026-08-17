@@ -177,11 +177,6 @@ pub fn virtual_park_timeout(duration: Duration) {
     crate::thread::park_timeout(duration);
 }
 
-/// No virtual timeline or quiescence engine to reset off the sim path (the
-/// clock is real), so this is a no-op.
-#[inline]
-pub fn reset() {}
-
 /// Off the sim path a real I/O operation needs no pacing (time is already
 /// real), so the scope is a ZST no-op. Under `flash` it is the engine's
 /// `RealIoScope`: while held, the virtual clock may not outrun real

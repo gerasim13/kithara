@@ -78,7 +78,9 @@ impl Clock {
         crate::flash::Instant::BASE_NANOS.saturating_add(elapsed)
     }
 
-    /// Reset the timeline to its base (the harness `reset()` path).
+    /// Reset the timeline to its base (the harness `reset()` path, gated with
+    /// it).
+    #[cfg(any(test, feature = "loom"))]
     fn reset(&self) {
         self.nanos
             .store(crate::flash::Instant::BASE_NANOS, Ordering::Release);
@@ -327,6 +329,7 @@ impl FlashInner {
     /// engine is empty. Deliberately untouched: the pacer's published wake
     /// handle, the real-clock anchor, and the per-thread credit cells (separate
     /// `reset_credit()`).
+    #[cfg(any(test, feature = "loom"))]
     pub(in crate::flash) fn reset(&self) {
         self.clock.reset();
         let mut core = self.core.lock();

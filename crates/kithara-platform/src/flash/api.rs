@@ -289,8 +289,16 @@ pub(crate) fn advance(delta: Duration) {
 /// Reset the timeline to its base and clear the quiescence engine. For unit
 /// tests that share one process; production tests get per-test process
 /// isolation from nextest. See `FlashInner::reset` for the ordering contract.
+///
+/// Crate-private and gated to the two configurations that reach it: this
+/// rewinds a process-wide clock, so a caller outside the engine could zero the
+/// timeline under someone else's running test. Callers are this crate's own
+/// unit tests and the loom harness (`backend/flash_loom.rs`), which owns the
+/// per-iteration boundary. Product tests get process isolation instead and must
+/// not have it.
+#[cfg(any(test, feature = "loom"))]
 #[inline]
-pub fn reset() {
+pub(crate) fn reset() {
     FLASH.reset();
 }
 

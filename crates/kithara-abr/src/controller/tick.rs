@@ -6,7 +6,7 @@ use kithara_platform::{
     time::{Duration, Instant},
 };
 use kithara_test_utils::kithara;
-use tracing::{debug, trace};
+use tracing::debug;
 
 use super::{
     core::{AbrController, AbrPeerId},
@@ -144,7 +144,12 @@ impl AbrController {
             }
         }
 
-        trace!(
+        // `debug!`, not `trace!`: this is the only record of what the owner of
+        // the decision decided. A campaign asking for `kithara_abr=debug` got
+        // zero lines from it across a hundred repeats of a switch that failed,
+        // which leaves "no switch was decided" and "one was decided and lost
+        // further down" indistinguishable in the artifact.
+        debug!(
             ?peer_id,
             reason = ?decision.reason(),
             did_change = decision.changed(),
