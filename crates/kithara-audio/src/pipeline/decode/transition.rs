@@ -785,7 +785,19 @@ fn incoming_origin_from(
     } else {
         incoming.timeline_gap()
     };
-    incoming.timeline_origin_with_gap(mode, gap)
+    let origin = incoming.timeline_origin_with_gap(mode, gap);
+    // The seam moves by exactly the AAC-LC default priming when the incoming
+    // track's own gapless metadata is missing: `origin` alone cannot say which
+    // of the two it is, so record the profile that produced it.
+    debug!(
+        origin,
+        gap,
+        gapless_known = incoming_profile.gapless().is_some(),
+        default_priming = incoming_profile.default_priming_frames(),
+        ?mode,
+        "incoming timeline origin resolved"
+    );
+    origin
 }
 
 fn shares_default_profile(
