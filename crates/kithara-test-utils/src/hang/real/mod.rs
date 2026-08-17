@@ -26,7 +26,7 @@ pub use panic_dump::{install_panic_dump, suppress_expected_panic_dumps};
 pub use platform::{PreKillGuard, record_test_hang};
 #[cfg(all(test, not(target_arch = "wasm32")))]
 pub(crate) use platform::{parse_timeout_secs, resolve_dump_dir, sanitize_label, write_dump};
-pub use shared::{HangDump, NoContext, default_timeout};
+pub use shared::{HangDump, NoContext, TimeoutOverride, default_timeout, override_timeout};
 
 #[cfg(test)]
 mod tests;

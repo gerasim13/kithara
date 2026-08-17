@@ -14,7 +14,7 @@ use crate::gapless_common::{
 const TRACK_FRAMES: usize = 48_000;
 const SINE_FREQ_HZ: f64 = 1_000.0;
 
-#[kithara::test(timeout(Duration::from_secs(10)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
+#[kithara::test(timeout(Duration::from_secs(10)), hang_timeout_secs(1))]
 fn synthetic_gapless_tracks_have_no_boundary_energy_dip() {
     let spec = PcmSpec::new(
         GAPLESS_CHANNELS,

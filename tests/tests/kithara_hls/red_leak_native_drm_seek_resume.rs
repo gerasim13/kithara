@@ -115,7 +115,7 @@ async fn run_drm_seek_resume_cycle(
     native,
     tokio,
     timeout(Duration::from_secs(120)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "10")
+    hang_timeout_secs(10)
 )]
 async fn red_leak_native_drm_seek_resume_thread_budget()
 -> Result<(), Box<dyn StdError + Send + Sync>> {

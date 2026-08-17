@@ -137,7 +137,7 @@ async fn read_audio_some(audio: &mut Audio<Stream<Hls>>, stage: &str) -> usize {
     native,
     serial,
     timeout(Duration::from_secs(30)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "3")
+    hang_timeout_secs(3)
 )]
 async fn abr_switch_real_assets_does_not_hang(temp_dir: TestTempDir) {
     let server = TestServerHelper::new().await;
@@ -206,7 +206,7 @@ async fn abr_switch_real_assets_does_not_hang(temp_dir: TestTempDir) {
     native,
     serial,
     timeout(Duration::from_secs(30)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "3"),
+    hang_timeout_secs(3),
     tracing("kithara_abr=debug,kithara_audio=debug,kithara_hls=debug,kithara_stream=debug")
 )]
 async fn packaged_abr_switch_keeps_player_continuity(temp_dir: TestTempDir) {
@@ -413,7 +413,7 @@ async fn packaged_abr_switch_keeps_player_continuity(temp_dir: TestTempDir) {
     native,
     serial,
     timeout(Duration::from_secs(30)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "5")
+    hang_timeout_secs(5)
 )]
 #[case::drm_abr_auto_sw("drm/master.m3u8", true, DecoderBackend::Symphonia)]
 #[cfg_attr(
@@ -543,7 +543,7 @@ async fn stream_continues_after_seek(
     native,
     serial,
     timeout(Duration::from_secs(20)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "3")
+    hang_timeout_secs(3)
 )]
 async fn fixed_variant_real_assets_plays_without_hang(temp_dir: TestTempDir) {
     let server = TestServerHelper::new().await;
@@ -604,7 +604,7 @@ async fn fixed_variant_real_assets_plays_without_hang(temp_dir: TestTempDir) {
     native,
     serial,
     timeout(Duration::from_secs(30)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "5"),
+    hang_timeout_secs(5),
     tracing("kithara_audio=warn,kithara_hls=warn,symphonia_format_isomp4=warn")
 )]
 #[case::drm("drm/master.m3u8")]
@@ -689,7 +689,7 @@ async fn seek_after_eof_mmap_produces_samples(temp_dir: TestTempDir, #[case] pat
     native,
     serial,
     timeout(Duration::from_secs(30)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "5")
+    hang_timeout_secs(5)
 )]
 async fn mp3_stream_continues_after_seek(temp_dir: TestTempDir) {
     let server = TestServerHelper::new().await;
@@ -779,7 +779,7 @@ async fn mp3_stream_continues_after_seek(temp_dir: TestTempDir) {
     native,
     serial,
     timeout(Duration::from_secs(20)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "3"),
+    hang_timeout_secs(3),
     tracing("kithara_audio=info,kithara_hls=info")
 )]
 async fn abr_frozen_during_seek_resumes_after(temp_dir: TestTempDir) {
@@ -990,7 +990,7 @@ fn read_manual_cross_codec_phase(
     native,
     serial,
     timeout(Duration::from_secs(60)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "5")
+    hang_timeout_secs(5)
 )]
 async fn manual_cross_codec_switch_sustains_post_switch_playback(temp_dir: TestTempDir) {
     let server = TestServerHelper::new().await;

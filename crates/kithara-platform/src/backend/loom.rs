@@ -3,7 +3,7 @@ pub mod sync;
 #[path = "loom/thread.rs"]
 pub mod thread;
 
-pub use crate::system::{env, logging, maybe_send, time, tokio};
+pub use crate::system::{logging, maybe_send, time, tokio};
 
 pub fn model<F>(f: F)
 where

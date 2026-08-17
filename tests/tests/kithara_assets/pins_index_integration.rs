@@ -23,11 +23,7 @@ fn disk_asset_store(temp_dir: kithara_integration_tests::TestTempDir) -> DiskAss
     DiskAssetStore::new(temp_dir.path(), CancelToken::never(), &BytePool::default())
 }
 
-#[kithara::test(
-    native,
-    timeout(Duration::from_secs(5)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "1")
-)]
+#[kithara::test(native, timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
 #[case::missing_file(None)]
 #[case::corrupted_file(Some(&b"{ this is not valid json"[..]))]
 fn pins_index_bad_state_returns_default(
@@ -59,11 +55,7 @@ fn pins_index_bad_state_returns_default(
     );
 }
 
-#[kithara::test(
-    native,
-    timeout(Duration::from_secs(5)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "1")
-)]
+#[kithara::test(native, timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
 fn pins_index_roundtrip_store_then_load(
     temp_dir: kithara_integration_tests::TestTempDir,
     disk_asset_store: DiskAssetStore,
@@ -85,11 +77,7 @@ fn pins_index_roundtrip_store_then_load(
     assert_eq!(loaded, pins, "pins index must roundtrip via store/load");
 }
 
-#[kithara::test(
-    native,
-    timeout(Duration::from_secs(5)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "1")
-)]
+#[kithara::test(native, timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
 #[case(vec!["asset-a"])]
 #[case(vec!["asset-a", "asset-b", "asset-c"])]
 #[case(vec!["asset-1", "asset-2", "asset-3", "asset-4", "asset-5"])]
@@ -109,11 +97,7 @@ fn pins_index_store_load_with_different_sets(
     assert_eq!(loaded, pins, "pins index must preserve all entries");
 }
 
-#[kithara::test(
-    native,
-    timeout(Duration::from_secs(5)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "1")
-)]
+#[kithara::test(native, timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
 #[case(2)]
 #[case(3)]
 #[case(5)]
@@ -145,11 +129,7 @@ fn pins_index_concurrent_updates_handled_correctly(
     assert_eq!(loaded2, pins2);
 }
 
-#[kithara::test(
-    native,
-    timeout(Duration::from_secs(5)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "1")
-)]
+#[kithara::test(native, timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
 fn pins_index_empty_set_stores_and_loads_correctly(
     _temp_dir: kithara_integration_tests::TestTempDir,
     disk_asset_store: DiskAssetStore,
@@ -168,11 +148,7 @@ fn pins_index_empty_set_stores_and_loads_correctly(
     );
 }
 
-#[kithara::test(
-    native,
-    timeout(Duration::from_secs(5)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "1")
-)]
+#[kithara::test(native, timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
 fn pins_index_persists_across_store_instances(temp_dir: kithara_integration_tests::TestTempDir) {
     let dir = temp_dir.path();
     let cancel = CancelToken::never();

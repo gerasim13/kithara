@@ -107,7 +107,7 @@ fn read_to_end(mut stream: Stream<File>) -> io::Result<Vec<u8>> {
     multi_thread,
     flash(false),
     timeout(Duration::from_secs(10)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "2")
+    hang_timeout_secs(2)
 )]
 async fn follower_joins_active_download_without_second_get() {
     let gets = Arc::new(AtomicUsize::new(0));
@@ -178,7 +178,7 @@ async fn follower_joins_active_download_without_second_get() {
     multi_thread,
     flash(false),
     timeout(Duration::from_secs(10)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "2")
+    hang_timeout_secs(2)
 )]
 async fn immediate_read_exceeds_zero_look_ahead_without_stalling() {
     let gets = Arc::new(AtomicUsize::new(0));

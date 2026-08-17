@@ -16,7 +16,7 @@ use kithara_integration_tests::{
 #[kithara::test(
     tokio,
     timeout(Duration::from_secs(2)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "1"),
+    hang_timeout_secs(1),
     tracing("kithara_hls=debug,kithara_stream=info,warn")
 )]
 async fn prefetch_403_returns_err_quickly(

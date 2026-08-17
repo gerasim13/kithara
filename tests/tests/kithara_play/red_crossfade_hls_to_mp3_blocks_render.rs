@@ -24,7 +24,7 @@ impl Consts {
 #[kithara::test(
     tokio,
     timeout(Duration::from_secs(30)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "10"),
+    hang_timeout_secs(10),
     tracing("kithara_audio=debug,kithara_decode=debug,kithara_play=debug,kithara_stream=debug")
 )]
 async fn red_hls_to_mp3_crossfade_no_render_budget_violations() {

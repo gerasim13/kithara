@@ -82,7 +82,7 @@ async fn run_concurrent_file(n: usize) {
     browser,
     serial,
     timeout(Duration::from_secs(20)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "2")
+    hang_timeout_secs(2)
 )]
 #[case::n2(2)]
 #[case::n4(4)]

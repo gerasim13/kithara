@@ -143,7 +143,7 @@ enum Trigger {
     multi_thread,
     serial,
     timeout(Duration::from_secs(60)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "1"),
+    hang_timeout_secs(1),
     tracing("kithara_hls=debug,kithara_stream=debug,kithara_audio=debug,kithara_queue=debug")
 )]
 async fn immediate_seek_size_withheld() {
@@ -161,7 +161,7 @@ async fn immediate_seek_size_withheld() {
     multi_thread,
     serial,
     timeout(Duration::from_secs(60)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "1"),
+    hang_timeout_secs(1),
     tracing("kithara_hls=debug,kithara_stream=debug,kithara_audio=debug,kithara_queue=debug")
 )]
 async fn immediate_seek_size_and_body_withheld() {

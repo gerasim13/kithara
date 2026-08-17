@@ -14,12 +14,7 @@ use crate::gapless_common::{
     AAC_GAPLESS_TRAILING_DELAY, GAPLESS_CHANNELS, GAPLESS_SAMPLE_RATE,
 };
 
-#[kithara::test(
-    native,
-    tokio,
-    timeout(Duration::from_secs(30)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "1")
-)]
+#[kithara::test(native, tokio, timeout(Duration::from_secs(30)), hang_timeout_secs(1))]
 async fn gapless_encoding_variants_yield_matching_decoder_metadata() {
     let server = TestServerHelper::new().await;
 

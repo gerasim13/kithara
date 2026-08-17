@@ -12,11 +12,7 @@ use kithara_integration_tests::{
 };
 use reqwest::Client;
 
-#[kithara::test(
-    tokio,
-    timeout(Duration::from_secs(5)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "1")
-)]
+#[kithara::test(tokio, timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
 async fn test_test_server_helper_serves_audio_fixture_urls() {
     let server = TestServerHelper::new().await;
 
@@ -30,12 +26,7 @@ async fn test_test_server_helper_serves_audio_fixture_urls() {
     assert!(mp3_url.path().ends_with("test.mp3"));
 }
 
-#[kithara::test(
-    native,
-    tokio,
-    timeout(Duration::from_secs(5)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "1")
-)]
+#[kithara::test(native, tokio, timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
 #[case("wav", "audio/wav", "WAV file")]
 #[case("mp3", "audio/mpeg", "MP3 file")]
 async fn test_test_server_helper_serves_format(
@@ -78,12 +69,7 @@ async fn test_test_server_helper_serves_format(
     assert!(content_length > 0, "{}: content length should be > 0", desc);
 }
 
-#[kithara::test(
-    native,
-    tokio,
-    timeout(Duration::from_secs(10)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "1")
-)]
+#[kithara::test(native, tokio, timeout(Duration::from_secs(10)), hang_timeout_secs(1))]
 #[case(SignalFormat::Mp3, "mp3", "audio/mpeg")]
 #[case(SignalFormat::Flac, "flac", "audio/flac")]
 #[case(SignalFormat::Aac, "aac", "audio/aac")]
@@ -132,12 +118,7 @@ async fn test_signal_server_encoded_formats_are_decodable(
     assert!(!chunk.samples.is_empty());
 }
 
-#[kithara::test(
-    native,
-    tokio,
-    timeout(Duration::from_secs(10)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "1")
-)]
+#[kithara::test(native, tokio, timeout(Duration::from_secs(10)), hang_timeout_secs(1))]
 #[case(SignalFormat::Aac, "aac", "audio/aac")]
 #[case(SignalFormat::Flac, "flac", "audio/flac")]
 async fn test_signal_server_aac_and_flac_roundtrip_produce_expected_pcm(
@@ -215,12 +196,7 @@ async fn test_signal_server_aac_and_flac_roundtrip_produce_expected_pcm(
     );
 }
 
-#[kithara::test(
-    native,
-    tokio,
-    timeout(Duration::from_secs(5)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "1")
-)]
+#[kithara::test(native, tokio, timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
 async fn test_create_packaged_hls_returns_stable_typed_urls() {
     let server = TestServerHelper::new().await;
     let created = server
@@ -263,12 +239,7 @@ async fn test_create_packaged_hls_returns_stable_typed_urls() {
     assert!(!segment.bytes().await.unwrap().is_empty());
 }
 
-#[kithara::test(
-    native,
-    tokio,
-    timeout(Duration::from_secs(5)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "1")
-)]
+#[kithara::test(native, tokio, timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
 async fn test_packaged_test_server_serves_audio_mp4_resources() {
     let server = PackagedTestServer::new().await;
     let client = Client::new();
@@ -298,12 +269,7 @@ async fn test_packaged_test_server_serves_audio_mp4_resources() {
     assert_eq!(segment.headers().get("content-type").unwrap(), "audio/mp4");
 }
 
-#[kithara::test(
-    native,
-    tokio,
-    timeout(Duration::from_secs(10)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "1")
-)]
+#[kithara::test(native, tokio, timeout(Duration::from_secs(10)), hang_timeout_secs(1))]
 #[case::aac("aac", AudioCodec::AacLc)]
 #[case::flac("flac", AudioCodec::Flac)]
 async fn test_packaged_hls_aac_and_flac_roundtrip_decode_descending_saw(
@@ -416,12 +382,7 @@ async fn test_packaged_hls_aac_and_flac_roundtrip_decode_descending_saw(
 //   - Symphonia is always on (kithara-decode/symphonia in [dependencies]),
 //   - Apple is on for `target_os = "macos" | "ios"`,
 //   - Android is on for `target_os = "android"`.
-#[kithara::test(
-    native,
-    tokio,
-    timeout(Duration::from_secs(10)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "1")
-)]
+#[kithara::test(native, tokio, timeout(Duration::from_secs(10)), hang_timeout_secs(1))]
 #[case::aac_lc_symphonia("aac_lc_symphonia", AudioCodec::AacLc, DecoderBackend::Symphonia)]
 #[case::aac_he_v2_symphonia("aac_he_v2_symphonia", AudioCodec::AacHeV2, DecoderBackend::Symphonia)]
 #[case::flac_symphonia("flac_symphonia", AudioCodec::Flac, DecoderBackend::Symphonia)]

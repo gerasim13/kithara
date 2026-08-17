@@ -31,7 +31,7 @@ use url::Url;
     tokio,
     browser,
     timeout(Duration::from_secs(5)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "1"),
+    hang_timeout_secs(1),
     tracing("kithara_hls=info,kithara_stream=info,warn")
 )]
 async fn test_basic_hls_playback(
@@ -86,12 +86,7 @@ async fn test_basic_hls_playback(
 }
 
 /// Test that verifies HLS session creation without actual playback.
-#[kithara::test(
-    tokio,
-    browser,
-    timeout(Duration::from_secs(5)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "1")
-)]
+#[kithara::test(tokio, browser, timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
 async fn test_hls_session_creation(
     temp_dir: TestTempDir,
     rt_cancel: CancelToken,
@@ -116,12 +111,7 @@ async fn test_hls_session_creation(
 }
 
 /// Test HLS with init segments.
-#[kithara::test(
-    tokio,
-    browser,
-    timeout(Duration::from_secs(5)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "1")
-)]
+#[kithara::test(tokio, browser, timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
 async fn test_hls_with_init_segments(
     temp_dir: TestTempDir,
     rt_cancel: CancelToken,
@@ -139,12 +129,7 @@ async fn test_hls_with_init_segments(
 }
 
 /// Test HLS with different options configurations.
-#[kithara::test(
-    tokio,
-    browser,
-    timeout(Duration::from_secs(5)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "1")
-)]
+#[kithara::test(tokio, browser, timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
 async fn test_hls_with_different_options(
     temp_dir: TestTempDir,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
@@ -160,12 +145,7 @@ async fn test_hls_with_different_options(
 }
 
 /// Test HLS session error handling with invalid URLs.
-#[kithara::test(
-    tokio,
-    browser,
-    timeout(Duration::from_secs(5)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "1")
-)]
+#[kithara::test(tokio, browser, timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
 #[case("http://127.0.0.1:9/master.m3u8")]
 #[case("not-a-valid-url")]
 #[case("")]
@@ -196,12 +176,7 @@ async fn test_hls_invalid_url_handling(
 
 /// Test that INIT segment comes first in byte stream (offset 0).
 /// This is critical for fMP4 HLS where decoder needs moov box before mdat.
-#[kithara::test(
-    tokio,
-    browser,
-    timeout(Duration::from_secs(5)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "1")
-)]
+#[kithara::test(tokio, browser, timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
 async fn test_init_segment_at_stream_start(
     temp_dir: TestTempDir,
     rt_cancel: CancelToken,
@@ -243,12 +218,7 @@ async fn test_init_segment_at_stream_start(
 }
 
 /// Test HLS with limited cache.
-#[kithara::test(
-    tokio,
-    browser,
-    timeout(Duration::from_secs(5)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "1")
-)]
+#[kithara::test(tokio, browser, timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
 async fn test_hls_without_cache(temp_dir: TestTempDir) -> Result<(), Box<dyn Error + Send + Sync>> {
     let server = TestServer::new().await;
 

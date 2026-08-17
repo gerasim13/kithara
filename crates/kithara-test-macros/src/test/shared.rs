@@ -236,100 +236,20 @@ pub(crate) fn wrap_with_timeout(
     }
 }
 
-/// Generate guarded env setup for the test body.
+/// Arm this test's hang-watchdog budget for as long as the guard lives.
 ///
-/// Uses a process-wide mutex to serialize env mutation and restores previous
-/// values on drop to avoid cross-test leakage.
-pub(crate) fn make_env_setup(env_vars: &[(String, String)]) -> TokenStream2 {
-    if env_vars.is_empty() {
-        return quote! {};
-    }
-
-    let mut actions: Vec<(String, Option<String>)> = env_vars
-        .iter()
-        .map(|(key, value)| (key.clone(), Some(value.clone())))
-        .collect();
-
-    if env_vars
-        .iter()
-        .any(|(key, _)| key.eq_ignore_ascii_case("NO_PROXY"))
-    {
-        for key in [
-            "HTTP_PROXY",
-            "HTTPS_PROXY",
-            "ALL_PROXY",
-            "http_proxy",
-            "https_proxy",
-            "all_proxy",
-        ] {
-            let is_explicit = env_vars.iter().any(|(env_key, _)| env_key == key);
-            if !is_explicit {
-                actions.push((key.to_string(), None));
-            }
+/// One process-global atomic rather than `KITHARA_HANG_TIMEOUT_SECS`: a watched
+/// function can be entered from a spawned worker, so the budget must be visible
+/// process-wide, and mutating the environment for that is undefined behaviour
+/// while any other thread reads it.
+pub(crate) fn make_hang_budget(secs: Option<u64>) -> TokenStream2 {
+    secs.map_or_else(TokenStream2::new, |secs| {
+        quote! {
+            let __kithara_hang_budget = ::kithara_test_utils::hang::override_timeout(
+                ::kithara_test_utils::kithara_platform::time::Duration::from_secs(#secs),
+            );
         }
-    }
-
-    let apply_actions: Vec<_> = actions
-        .iter()
-        .map(|(key, value)| {
-            if let Some(value) = value {
-                quote! {
-                    __saved.push((#key, std::env::var(#key).ok()));
-                    // SAFETY: guarded by process-wide env lock.
-                    unsafe { std::env::set_var(#key, #value); }
-                }
-            } else {
-                quote! {
-                    __saved.push((#key, std::env::var(#key).ok()));
-                    // SAFETY: guarded by process-wide env lock.
-                    unsafe { std::env::remove_var(#key); }
-                }
-            }
-        })
-        .collect();
-
-    quote! {
-        #[cfg(not(target_arch = "wasm32"))]
-        let _kithara_env_guard = {
-            struct __KitharaEnvGuard {
-                saved: ::std::vec::Vec<(
-                    &'static str,
-                    ::std::option::Option<::std::string::String>,
-                )>,
-                lock: ::std::option::Option<
-                    ::kithara_test_utils::kithara_platform::sync::MutexGuard<'static, ()>,
-                >,
-            }
-
-            impl Drop for __KitharaEnvGuard {
-                fn drop(&mut self) {
-                    for (key, value) in self.saved.drain(..).rev() {
-                        match value {
-                            Some(value) => {
-                                // SAFETY: test-scoped restoration under env lock.
-                                unsafe { std::env::set_var(key, value); }
-                            }
-                            None => {
-                                // SAFETY: test-scoped restoration under env lock.
-                                unsafe { std::env::remove_var(key); }
-                            }
-                        }
-                    }
-                    let _ = self.lock.take();
-                }
-            }
-
-            let __lock = ::kithara_test_utils::kithara_platform::env::mutation_lock().lock();
-
-            let mut __saved = ::std::vec::Vec::new();
-            #(#apply_actions)*
-
-            __KitharaEnvGuard {
-                saved: __saved,
-                lock: Some(__lock),
-            }
-        };
-    }
+    })
 }
 
 /// Wrap body in `catch_unwind`; re-panic unless the message matches a pattern.
@@ -388,7 +308,7 @@ pub(crate) fn wrap_with_soft_fail(
     }
 }
 
-/// Combine env-var setup and optional soft-fail wrapping around an
+/// Combine the hang-budget guard and optional soft-fail wrapping around an
 /// already-timeout-wrapped body.
 pub(crate) fn finalize_body(
     inner: &TokenStream2,
@@ -396,12 +316,12 @@ pub(crate) fn finalize_body(
     fn_name: &Ident,
     is_async: bool,
 ) -> TokenStream2 {
-    let env_setup = make_env_setup(&args.env_vars);
+    let hang_budget = make_hang_budget(args.hang_timeout_secs);
     if !args.soft_fail_patterns.is_empty() {
         let soft = wrap_with_soft_fail(inner, fn_name, is_async, &args.soft_fail_patterns);
-        quote! { { #env_setup #soft } }
-    } else if !args.env_vars.is_empty() {
-        quote! { { #env_setup #inner } }
+        quote! { { #hang_budget #soft } }
+    } else if args.hang_timeout_secs.is_some() {
+        quote! { { #hang_budget #inner } }
     } else {
         inner.clone()
     }

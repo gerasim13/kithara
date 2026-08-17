@@ -59,11 +59,7 @@ fn drain_to_eof(mut audio: Audio<Stream<File>>) -> bool {
     }
 }
 
-#[kithara::test(
-    tokio,
-    timeout(Duration::from_secs(2)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "2")
-)]
+#[kithara::test(tokio, timeout(Duration::from_secs(2)), hang_timeout_secs(2))]
 async fn waveform_and_player_share_one_get() {
     // 1s stereo WAV.
     let wav = Arc::new(create_test_wav(44_100, 44_100, 2));

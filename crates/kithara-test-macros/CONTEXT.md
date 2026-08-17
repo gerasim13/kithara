@@ -13,8 +13,11 @@ parameterization and `#[kithara::fixture]` injection.
 - `browser` — browser wasm path; awaits `kithara_platform::tokio::ensure_thread_pool()` before the body so Web Workers exist.
 - `timeout(Duration::...)` — wall-clock safety net that must fire on REAL time even under flash. Async wraps in
   `platform::time::timeout`; native sync runs the body on a helper thread with `recv_timeout`; wasm sync runs it unguarded.
-- `env(KEY = "value", ...)` — sets vars under the process-wide `platform::env::mutation_lock()` and restores previous
-  values on drop. Naming `NO_PROXY` also removes every `*_PROXY` variable not listed explicitly.
+- `hang_timeout_secs(N)` — the liveness budget `#[kithara::hang_watchdog]` arms with inside this test, restored on drop.
+  It shortens the REAL wait a watchdog park costs on the flash-off lane (under flash the park is virtual and the ambient
+  budget costs no wall time). One process-global atomic, not `KITHARA_HANG_TIMEOUT_SECS`: a watched function is entered
+  from whichever thread drives it, so the budget must be visible process-wide, and writing the environment to publish it
+  is undefined behaviour while any other thread reads it.
 - `tracing("directives")` — `EnvFilter` directives, default `warn`; `RUST_LOG` still wins.
 - `soft_fail("pattern", ...)` — catches panics whose message contains any pattern (case-insensitive; `"timeout"` also
   matches `timed out`) and prints `[SOFT FAIL]`; other panics resume unwinding. Requires `futures` at the call site for

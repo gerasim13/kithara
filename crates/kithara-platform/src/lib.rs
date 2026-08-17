@@ -30,7 +30,7 @@ mod system;
 #[cfg(all(not(target_arch = "wasm32"), not(feature = "flash")))]
 mod system;
 #[cfg(all(not(target_arch = "wasm32"), not(feature = "flash")))]
-pub use backend::{env, logging, maybe_send, sync, thread, time, tokio};
+pub use backend::{logging, maybe_send, sync, thread, time, tokio};
 
 #[cfg(not(target_arch = "wasm32"))]
 #[doc(hidden)]

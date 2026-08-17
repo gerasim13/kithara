@@ -109,7 +109,7 @@ async fn run_concurrent_hls(n: usize, abr: AbrMode, variants: usize) {
     browser,
     serial,
     timeout(Duration::from_secs(10)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "2"),
+    hang_timeout_secs(2),
     tracing("kithara_hls=debug,kithara_stream=debug")
 )]
 #[case::n2_manual(2, AbrMode::manual(0), 1)]

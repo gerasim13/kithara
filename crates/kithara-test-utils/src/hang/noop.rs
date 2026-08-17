@@ -119,3 +119,14 @@ pub fn default_timeout() -> Duration {
     const FALLBACK_SECS: u64 = 10;
     Duration::from_secs(FALLBACK_SECS)
 }
+
+/// No watchdog compiled in, so there is no budget to shorten: the guard exists
+/// only so a test that asks for a tighter one still compiles.
+#[derive(Debug)]
+pub struct TimeoutOverride;
+
+/// See [`override_timeout`](super::override_timeout) in the watchdog build.
+#[inline(always)]
+pub fn override_timeout(_timeout: Duration) -> TimeoutOverride {
+    TimeoutOverride
+}

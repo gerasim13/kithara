@@ -13,6 +13,18 @@ pub struct Pause {
     _not_send: PhantomData<*mut ()>,
 }
 
+/// Nothing is watched in this build, so there is no mode to force: the guard
+/// exists only so a test that asks for `panic` mode still compiles.
+#[derive(Debug)]
+#[must_use]
+pub struct PanicMode;
+
+/// See `no_block::force_panic_mode` in a watched build.
+#[inline(always)]
+pub fn force_panic_mode() -> PanicMode {
+    PanicMode
+}
+
 #[inline]
 pub fn permit() -> Permit {
     Permit {

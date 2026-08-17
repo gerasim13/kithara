@@ -33,12 +33,7 @@ use tracing::info;
 /// 4. Verify segment 1 data is readable
 ///
 /// EXPECTED: seek is processed, segment data is read correctly
-#[kithara::test(
-    tokio,
-    native,
-    timeout(Duration::from_secs(10)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "1")
-)]
+#[kithara::test(tokio, native, timeout(Duration::from_secs(10)), hang_timeout_secs(1))]
 async fn test_driver_seek_after_playlist_finished(temp_dir: TestTempDir, rt_cancel: CancelToken) {
     let server = TestServer::new().await;
     let url = server.url("/master.m3u8");
@@ -93,12 +88,7 @@ async fn test_driver_seek_after_playlist_finished(temp_dir: TestTempDir, rt_canc
 ///
 /// This tests seek backward at the Stream<Hls> level with ABR active,
 /// without the full decoder chain.
-#[kithara::test(
-    tokio,
-    native,
-    timeout(Duration::from_secs(30)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "1")
-)]
+#[kithara::test(tokio, native, timeout(Duration::from_secs(30)), hang_timeout_secs(1))]
 async fn test_driver_abr_seek_backward(temp_dir: TestTempDir, rt_cancel: CancelToken) {
     let server = AbrTestServer::new(
         master_playlist(256_000, 512_000, 1_024_000),

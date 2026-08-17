@@ -51,7 +51,7 @@ fn arm_panic_marker(marker: &'static str) -> Arc<AtomicBool> {
     native,
     serial,
     timeout(Duration::from_secs(20)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "2")
+    hang_timeout_secs(2)
 )]
 async fn idle_does_not_panic_hang_detector(temp_dir: TestTempDir) {
     let watchdog_fired = arm_panic_marker("HangDetector");

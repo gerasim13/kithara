@@ -526,7 +526,7 @@ async fn wait_v0_fully_cached(collector: &EventCollector, segment_count: usize) 
     tokio,
     serial,
     timeout(Duration::from_secs(30)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "5"),
+    hang_timeout_secs(5),
     tracing("kithara_abr=debug,kithara_hls=debug,kithara_audio=debug")
 )]
 async fn vod_manual_switch_affects_future_segments() {
@@ -671,7 +671,7 @@ async fn vod_manual_switch_affects_future_segments() {
     tokio,
     serial,
     timeout(Duration::from_secs(30)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "5"),
+    hang_timeout_secs(5),
     tracing("kithara_abr=debug,kithara_hls=debug,kithara_audio=debug")
 )]
 async fn stalled_boundary_escape_rescues_reader_blocked_on_slow_variant() {
@@ -844,7 +844,7 @@ async fn stalled_boundary_escape_rescues_reader_blocked_on_slow_variant() {
     tokio,
     serial,
     timeout(Duration::from_secs(45)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "5"),
+    hang_timeout_secs(5),
     tracing("kithara_abr=debug,kithara_hls=debug,kithara_audio=debug")
 )]
 async fn multi_track_shared_abr_with_cache() {
@@ -1025,7 +1025,7 @@ async fn multi_track_shared_abr_with_cache() {
     tokio,
     serial,
     timeout(Duration::from_secs(30)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "5"),
+    hang_timeout_secs(5),
     tracing("kithara_abr=debug,kithara_hls=debug,kithara_audio=debug")
 )]
 async fn abr_switch_must_not_redownload_covered_segments() {
@@ -1120,7 +1120,7 @@ async fn abr_switch_must_not_redownload_covered_segments() {
     tokio,
     serial,
     timeout(Duration::from_secs(30)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "5"),
+    hang_timeout_secs(5),
     tracing(
         "kithara_abr=debug,kithara_hls=debug,kithara_play=debug,kithara_audio=debug,suite_stress=info"
     )
@@ -1270,7 +1270,7 @@ async fn runtime_manual_switch_via_handle_changes_playing_variant() {
     tokio,
     serial,
     timeout(Duration::from_secs(45)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "5"),
+    hang_timeout_secs(5),
     tracing("kithara_abr=debug,kithara_hls=debug,kithara_audio=debug")
 )]
 async fn runtime_cross_codec_manual_switch_no_hang() {
@@ -1367,7 +1367,7 @@ async fn runtime_cross_codec_manual_switch_no_hang() {
     tokio,
     serial,
     timeout(Duration::from_secs(30)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "5"),
+    hang_timeout_secs(5),
     tracing("kithara_abr=debug,kithara_hls=debug,kithara_audio=debug")
 )]
 async fn runtime_manual_switch_works_when_all_segments_cached() {
@@ -1503,7 +1503,7 @@ async fn runtime_manual_switch_works_when_all_segments_cached() {
     tokio,
     serial,
     timeout(Duration::from_secs(30)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "5"),
+    hang_timeout_secs(5),
     tracing("kithara_abr=debug,kithara_hls=debug,kithara_audio=debug")
 )]
 async fn runtime_manual_switch_survives_outgoing_eof() {
@@ -1639,7 +1639,7 @@ async fn runtime_manual_switch_survives_outgoing_eof() {
     tokio,
     serial,
     timeout(Duration::from_secs(30)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "5"),
+    hang_timeout_secs(5),
     tracing("kithara_abr=debug,kithara_hls=debug,kithara_audio=debug")
 )]
 async fn runtime_manual_switch_works_after_cache_and_seek() {
@@ -1806,7 +1806,7 @@ async fn runtime_manual_switch_works_after_cache_and_seek() {
     tokio,
     serial,
     timeout(Duration::from_secs(30)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "5"),
+    hang_timeout_secs(5),
     tracing("kithara_abr=debug,kithara_hls=debug,kithara_audio=debug")
 )]
 async fn auto_does_not_up_switch_on_first_boundary_with_defaults() {
@@ -1931,7 +1931,7 @@ async fn auto_does_not_up_switch_on_first_boundary_with_defaults() {
     tokio,
     serial,
     timeout(Duration::from_secs(45)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "5"),
+    hang_timeout_secs(5),
     tracing("kithara_abr=debug,kithara_hls=debug,kithara_audio=debug")
 )]
 #[ignore = "current implementation hits a separate same-codec byte_shift mismatch; needs deterministic timing setup to repro the cross→same race"]
@@ -2052,7 +2052,7 @@ async fn rapid_cross_codec_then_same_codec_switch_no_false_eof() {
     tokio,
     serial,
     timeout(Duration::from_secs(90)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "15"),
+    hang_timeout_secs(15),
     tracing("kithara_abr=debug,kithara_hls=debug,kithara_audio=debug")
 )]
 #[case::sw(DecoderBackend::Symphonia)]
@@ -2269,7 +2269,7 @@ async fn play_seek_back_then_same_codec_downswitch_no_premature_eof(
     tokio,
     serial,
     timeout(Duration::from_secs(60)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "5"),
+    hang_timeout_secs(5),
     tracing("kithara_abr=debug,kithara_hls=debug,kithara_audio=debug")
 )]
 #[case::sw_same_codec_aac_low_to_high(DecoderBackend::Symphonia, 2usize)]
