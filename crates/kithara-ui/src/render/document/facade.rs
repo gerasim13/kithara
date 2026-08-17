@@ -190,6 +190,7 @@ struct PopoverNode<'a> {
 #[derive(Clone, Copy)]
 struct RowNode<'a> {
     gap: Option<f32>,
+    align: TextAlign,
     pad: Option<f32>,
     pad_x: Option<f32>,
     pad_y: Option<f32>,
@@ -218,7 +219,7 @@ fn row_group<'a>(node: RowNode<'a>, ctx: Ctx<'_, '_>) -> Group<'a> {
         .unwrap_or(ctx.skin.divider.color);
     Group {
         axis: Axis::Horizontal,
-        alignment: TextAlign::Center,
+        alignment: node.align,
         gap: node.gap.unwrap_or(ctx.skin.layout.grid_gap),
         padding_x: node.pad_x.unwrap_or(padding),
         padding_y: node.pad_y.unwrap_or(padding),
@@ -281,6 +282,7 @@ where
         ExpandedNode::Row {
             children,
             gap,
+            align,
             pad,
             pad_x,
             pad_y,
@@ -297,6 +299,7 @@ where
             row_group(
                 RowNode {
                     gap: *gap,
+                    align: *align,
                     pad: *pad,
                     pad_x: *pad_x,
                     pad_y: *pad_y,

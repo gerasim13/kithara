@@ -380,6 +380,7 @@ fn row(id: Option<String>, children: Vec<ControlNode>) -> ControlNode {
         id: id.map(NodeId),
         size: None,
         gap: None,
+        align: TextAlign::Center,
         pad: None,
         pad_x: None,
         pad_y: None,

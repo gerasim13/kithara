@@ -17,6 +17,12 @@ const fn default_framed() -> bool {
     true
 }
 
+/// A row that says nothing centres its children across itself: a label and a
+/// chip of different heights in one row line up on their middles.
+const fn centred() -> TextAlign {
+    TextAlign::Center
+}
+
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 #[non_exhaustive]
@@ -28,6 +34,11 @@ pub enum ControlNode {
         size: Option<SizeSpec>,
         #[serde(default)]
         gap: Option<f32>,
+        /// Where a child shorter than the row sits across it. Centred unless
+        /// the document says otherwise, which is what every row said before
+        /// this field existed.
+        #[serde(default = "centred")]
+        align: TextAlign,
         #[serde(default)]
         pad: Option<f32>,
         /// Per-axis override of `pad`.
