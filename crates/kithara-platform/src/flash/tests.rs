@@ -302,6 +302,62 @@ fn a_pinning_task_reports_the_polls_it_entered() {
     assert!(dump.contains("polls=1"), "{dump}");
 }
 
+/// A task left `RUNNABLE` by a wake keeps its slot until it is re-polled — but
+/// on a `current_thread` runtime the only thread that can re-poll it is the
+/// `block_on` thread, and a synchronous engine wait taken INSIDE a poll (a
+/// render loop's `virtual_pace`) blocks exactly that thread. The bridged branch
+/// releases the BLOCKING task's slot, not the stranded one's, so the stranded
+/// task pins the clock, the pace deadline never fires, and the poll that would
+/// clear the pin never runs — the crossfade hang, whose sixteen dumps all named
+/// one `Runnable` task with a frozen poll count. A task no live thread can poll
+/// must not pin the clock. Broken: this hangs forever (the deadlock verbatim).
+#[test]
+fn a_runnable_task_whose_only_poller_is_bridged_does_not_pin_the_clock() {
+    let _g = guard();
+    reset();
+    let _a = ambient_scope(true);
+    let _f = enter_dynamic(true);
+    // What makes the driver the task's ONLY poller is the runtime flavor;
+    // entering a current-thread runtime is how the production case
+    // (`#[kithara::test(tokio)]` without `multi_thread`) declares it.
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .build()
+        .expect("build current-thread runtime");
+    let _rt = rt.enter();
+    let waker = Waker::from(Arc::new(NoopWake));
+    let mut cx = Context::from_waker(&waker);
+
+    let notify = Notify::default();
+    let mut stranded = Box::pin(participate(
+        async {
+            notify.notified().await;
+        },
+        Location::caller(),
+    ));
+    // Park it, then wake it: `Runnable` with the slot held, and this thread —
+    // its only possible poller — is about to block instead of re-polling it.
+    assert!(stranded.as_mut().poll(&mut cx).is_pending());
+    notify.notify_one();
+    assert_eq!(
+        sched::async_active_count(),
+        1,
+        "a woken-but-not-yet-repolled task must hold its slot"
+    );
+
+    let start = RealInstant::now();
+    let mut driver = Box::pin(participate(
+        async {
+            crate::thread::sleep(Duration::from_millis(10));
+        },
+        Location::caller(),
+    ));
+    assert!(
+        driver.as_mut().poll(&mut cx).is_ready(),
+        "the bridged wait must be granted: nothing else can poll the task pinning it"
+    );
+    assert_fast(start);
+}
+
 #[test]
 fn now_advances_only_on_advance() {
     let _g = guard();

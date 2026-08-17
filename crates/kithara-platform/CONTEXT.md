@@ -165,7 +165,8 @@ independent of scheduling: runs are deterministic and every timed wait collapses
   closing the wake-to-re-register race. Lock order is always domain → engine; wakes fire only after
   the engine lock is released.
 - Async tasks are counted separately in `active_async`, owned by the spawn poll-wrapper
-  (`participate`), not by the firer. Quiescence requires `active == 0 && active_async == 0`.
+  (`participate`), not by the firer. Quiescence requires `active == 0 && active_async == 0`, with
+  the single exception below: a counted task no thread can poll.
 
 Virtualized waits:
 
@@ -192,6 +193,17 @@ event-driven `Thread` park (a `park_timeout` watchdog, no real timer), the engin
 yield-waiters at the current instant instead of jumping to a watchdog deadline. With a real
 `Timed`/`Condvar` waiter present the clock advances normally (draining yielders on the jump); a
 yielder that cannot progress re-parks-timed, emptying the yield set, so this never livelocks.
+
+Async counterpart: **a task no live thread can poll must not pin the clock.** A synchronous
+wrapped wait taken inside a poll (a BRIDGED wait) releases the blocking task's own slot — but on a
+`current_thread` runtime that thread is the only poller, so every OTHER task it drives is equally
+unpollable while it blocks. One left `RUNNABLE` by a wake would pin the clock that wait's own
+deadline needs, and neither side can move first: the crossfade hang, where a render loop's
+`virtual_pace` released the root slot and the resulting quiescent edge granted a peer task's yield.
+The gate samples each task's driver thread and whether that runtime has a single poller (per poll,
+so a task spawned onto another runtime's handle is judged by the runtime that actually drives it);
+`enter_wait_locked` marks the bridged thread; `Registry::pinning_async` subtracts exactly those
+tasks. A multi-thread runtime keeps pinning — another worker can still deliver the poll.
 
 `flash::reset()` clears the timeline and the engine. nextest's per-test process isolation keeps
 global state clean between tests; `reset()` is for runners sharing a process.

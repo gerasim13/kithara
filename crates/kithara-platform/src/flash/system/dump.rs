@@ -71,6 +71,11 @@ impl fmt::Display for FlashInner {
             // re-polled after a wake.
             if let Some(diag) = s.registry.task_diag.get(id) {
                 write!(f, " state={:?} polls={}", diag.state.load(), diag.polls())?;
+                // WHICH thread owes this task its next poll. Against `bridged`
+                // below it says whether that thread can currently give it one.
+                if let Some(driver) = diag.driver() {
+                    write!(f, " driver={driver:?}")?;
+                }
             }
             writeln!(f)?;
         }
@@ -112,6 +117,12 @@ impl fmt::Display for FlashInner {
                     d.created_on.as_deref().unwrap_or("<unnamed>"),
                 )?;
             }
+        }
+        // Threads blocked on the engine from inside an async poll: they poll
+        // nothing while listed, so a task whose `driver` is here is waiting for
+        // a poll that cannot come until the wait returns.
+        if !s.registry.bridged.is_empty() {
+            writeln!(f, "  bridged={:?}", s.registry.bridged)?;
         }
         if !s.sched.unpark_pending.is_empty() {
             writeln!(f, "  unpark_pending={:?}", s.sched.unpark_pending)?;

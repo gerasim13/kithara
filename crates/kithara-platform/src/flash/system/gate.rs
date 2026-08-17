@@ -1,123 +1,13 @@
 use std::{
     panic::Location,
-    sync::atomic::{AtomicU8, AtomicU64, Ordering},
     task::{Wake, Waker},
 };
 
-use super::FLASH;
+use super::{
+    FLASH, credit,
+    state::{AtomicTaskState, ParkOutcome, TaskDiag, TaskState, WakeOutcome},
+};
 use crate::{sync::Arc, system::lock::Mutex};
-
-/// Per-task quiescence states. The task occupies one `active_async` slot
-/// while it is in any non-quiescent state ([`Runnable`](TaskState::Runnable),
-/// [`Running`](TaskState::Running), [`RunningNotified`](TaskState::RunningNotified));
-/// it releases the slot only on the transition to [`Parked`](TaskState::Parked),
-/// on completion, or on drop.
-#[repr(u8)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum TaskState {
-    Parked = 0,
-    Runnable = 1,
-    Running = 2,
-    RunningNotified = 3,
-    Done = 4,
-}
-
-/// Typed atomic over [`TaskState`]: the gate FSM cell. The orderings are fixed
-/// per operation (CAS `AcqRel`/`Acquire`, swap `AcqRel`, store `Release`, load
-/// `Acquire`) — exactly the orderings the untyped `AtomicU8` sites used.
-pub(super) struct AtomicTaskState(AtomicU8);
-
-impl AtomicTaskState {
-    fn new(initial: TaskState) -> Self {
-        Self(AtomicU8::new(initial as u8))
-    }
-
-    /// CAS `current -> new`; `true` iff it transitioned.
-    pub(super) fn compare_exchange(&self, current: TaskState, new: TaskState) -> bool {
-        self.0
-            .compare_exchange(
-                current as u8,
-                new as u8,
-                Ordering::AcqRel,
-                Ordering::Acquire,
-            )
-            .is_ok()
-    }
-
-    pub(super) fn load(&self) -> TaskState {
-        Self::unpack(self.0.load(Ordering::Acquire))
-    }
-
-    pub(super) fn store(&self, new: TaskState) {
-        self.0.store(new as u8, Ordering::Release);
-    }
-
-    pub(super) fn swap(&self, new: TaskState) -> TaskState {
-        Self::unpack(self.0.swap(new as u8, Ordering::AcqRel))
-    }
-
-    fn unpack(v: u8) -> TaskState {
-        match v {
-            0 => TaskState::Parked,
-            1 => TaskState::Runnable,
-            2 => TaskState::Running,
-            3 => TaskState::RunningNotified,
-            4 => TaskState::Done,
-            // Only `TaskState` discriminants are ever stored in the cell.
-            _ => unreachable!("BUG: invalid TaskState discriminant {v}"),
-        }
-    }
-}
-
-/// Outcome of a gate park attempt ([`super::FlashInner::gate_park`]).
-pub(super) enum ParkOutcome {
-    /// `Running -> Parked`: the slot was released (a quiescent edge).
-    Parked,
-    /// A wake landed mid-poll (`RunningNotified`), so the CAS failed: the gate
-    /// stays runnable, keeping the slot for the re-poll that wake scheduled.
-    WokenMidPoll,
-}
-
-/// Outcome of waking a parked gate ([`super::FlashInner::gate_wake_parked`]).
-pub(super) enum WakeOutcome {
-    /// `Parked -> Runnable`: the slot was re-acquired; forward the runtime waker.
-    Resumed,
-    /// The state left `Parked` between the load and the CAS; the caller's wake
-    /// loop re-reads and handles the current state lock-free.
-    NotParked,
-}
-
-/// What a pinning task is doing, shared between its [`TaskGate`] and the
-/// engine's registry so a hang dump can read it without reaching for the task.
-///
-/// The state cell is the gate's own FSM cell — the dump reads the same word the
-/// transitions CAS. The poll count rises once per claimed poll, which is what
-/// separates a task spinning through wake-poll-park from one stranded
-/// `Runnable` by a wake whose re-poll never came: both pin the clock with
-/// `active_async=1` and are otherwise indistinguishable in a dump.
-pub(super) struct TaskDiag {
-    pub(super) state: AtomicTaskState,
-    polls: AtomicU64,
-}
-
-/// A task is `Runnable` from the moment it is spawned, before its first poll —
-/// not the cell's zero value, so this cannot be derived.
-impl Default for TaskDiag {
-    fn default() -> Self {
-        Self {
-            state: AtomicTaskState::new(TaskState::Runnable),
-            polls: AtomicU64::new(0),
-        }
-    }
-}
-
-impl TaskDiag {
-    /// Polls this task has actually entered (claimed at the gate), not polls the
-    /// runtime attempted.
-    pub(super) fn polls(&self) -> u64 {
-        self.polls.load(Ordering::Relaxed)
-    }
-}
 
 /// Per-task gate for quiescence accounting. It tracks whether the task currently
 /// occupies an `active_async` slot and INTERCEPTS every wake (it is handed to the
@@ -224,7 +114,7 @@ impl TaskGate {
             .state()
             .compare_exchange(TaskState::Runnable, TaskState::Running);
         if entered {
-            self.diag.polls.fetch_add(1, Ordering::Relaxed);
+            self.diag.enter_poll(credit::current_thread_key());
         }
         entered
     }
@@ -244,8 +134,9 @@ impl Wake for TaskGate {
                     // cannot jump past this task. The CAS and the acquire happen
                     // together under the engine lock so a concurrent `park`'s
                     // release cannot cancel this acquire — see
-                    // [`super::FlashInner::gate_wake_parked`]. `NotParked` means the
-                    // state left `Parked` between the load and the CAS; loop to re-read.
+                    // [`super::FlashInner::gate_wake_parked`]. `NotParked` means
+                    // the state left `Parked` between the load and the CAS; loop
+                    // to re-read.
                     match FLASH.gate_wake_parked(self.state(), self.id, self.loc) {
                         WakeOutcome::Resumed => {
                             self.forward();

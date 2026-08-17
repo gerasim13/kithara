@@ -8,7 +8,7 @@ use std::{
     thread::Thread,
 };
 
-use super::{gate::TaskDiag, pace::Pacer, sched::Entry, wake::Wake};
+use super::{pace::Pacer, sched::Entry, state::TaskDiag, wake::Wake};
 use crate::{
     common::time::Instant as RealInstant,
     flash::{diag::PrimKind, ids::ThreadKey},
@@ -122,6 +122,14 @@ pub(in crate::flash) struct Registry {
     /// `pre_count_dedicated` slot not yet claimed, or a just-fired wake bump
     /// before its thread resumes) — the dump annotates that gap.
     pub(super) active_sync_holders: BTreeMap<ThreadKey, SyncHolder>,
+    /// OS threads currently inside a BRIDGED wait — blocked on the engine from
+    /// within an async poll (`enter_wait_locked`'s bridged arm inserts, the
+    /// matching `resume_after_wait` removes). Such a thread polls nothing while
+    /// it blocks, so on a `current_thread` runtime every task it drives is
+    /// unpollable for the duration; the advance rule reads this set to keep
+    /// those tasks from pinning a clock only it could move
+    /// ([`Registry::pinning_async`]).
+    pub(super) bridged: BTreeSet<ThreadKey>,
     /// Provenance of every engine-backed primitive minted via
     /// [`Registry::fresh_cv`] (Condvar/Notify/channel halves/…), keyed by the raw
     /// cvid. Populated at construction by [`FlashInner::describe_cvid`] only under
@@ -255,6 +263,7 @@ impl Core {
                 next_id: 0,
                 next_cv: 0,
                 next_task_id: 0,
+                bridged: BTreeSet::new(),
                 cv_desc: BTreeMap::new(),
                 active_async_holders: BTreeMap::new(),
                 active_sync_holders: BTreeMap::new(),

@@ -8,7 +8,8 @@ use std::{
 use super::{
     Clock, Core, CvDesc, CvId, FLASH, FlashInner, Registry, WaiterId,
     credit::WaitGuard,
-    gate::{AtomicTaskState, ParkOutcome, TaskDiag, TaskGate, TaskState, WakeOutcome},
+    gate::TaskGate,
+    state::{AtomicTaskState, ParkOutcome, TaskDiag, TaskState, WakeOutcome},
     wake::{Token, Wake},
 };
 use crate::{
@@ -51,6 +52,31 @@ impl Registry {
         }
     }
 
+    /// Async slots that genuinely pin quiescence. A counted task normally does:
+    /// its poll is queued and the clock must not jump past it. The exception is
+    /// a task STRANDED behind a bridged wait — `Runnable` on a runtime with one
+    /// poller, that poller blocked on the engine mid-poll. Nothing can move
+    /// such a task, so counting it deadlocks the engine: the blocking wait's
+    /// deadline is only reached by an advance the task forbids, and the poll
+    /// that would clear it only runs once that wait returns. Counted by
+    /// subtraction from `active_async`, so a holder map that ever fell behind
+    /// the counter errs toward pinning.
+    fn pinning_async(&self) -> usize {
+        if self.active_async == 0 || self.bridged.is_empty() {
+            return self.active_async;
+        }
+        let stranded = self
+            .active_async_holders
+            .keys()
+            .filter(|id| {
+                self.task_diag
+                    .get(id)
+                    .is_some_and(|diag| diag.stranded_behind(&self.bridged))
+            })
+            .count();
+        self.active_async.saturating_sub(stranded)
+    }
+
     fn fresh_cv(&mut self) -> CvId {
         let id = self.next_cv;
         self.next_cv += 1;
@@ -81,7 +107,7 @@ impl WakeBatch {
 
 impl Core {
     pub(super) fn pace_target(&self, _clock: &Clock) -> Option<StdDuration> {
-        if self.registry.active != 0 || self.registry.active_async != 0 {
+        if self.registry.active != 0 || self.registry.pinning_async() != 0 {
             return None;
         }
         if self.sched.real_io == 0 {
@@ -114,9 +140,10 @@ impl Core {
     /// every participant is parked (`active == 0`) and at least one timed
     /// waiter exists.
     pub(super) fn try_advance(&mut self, clock: &Clock) -> WakeBatch {
-        if self.registry.active != 0 || self.registry.active_async != 0 {
+        if self.registry.active != 0 || self.registry.pinning_async() != 0 {
             // A running participant (sync OS thread OR async task mid-poll): do not
-            // jump. Both counters must be zero for genuine quiescence.
+            // jump. Both counters must be zero for genuine quiescence — except for
+            // async slots no thread can currently poll (`pinning_async`).
             return WakeBatch(Vec::new());
         }
         // Cooperative yielders re-poll at the CURRENT instant before the clock can

@@ -35,6 +35,11 @@ pub(super) mod pace;
 /// are the platform wait primitives (`thread::park_timeout`, `sync::Condvar`,
 /// async `FlashSleep`/`Notify`) plus the harness.
 pub(super) mod sched;
+/// Per-task gate state: the [`state::TaskState`] alphabet, the typed cell
+/// holding it, the park/wake outcomes, and the [`state::TaskDiag`] record the
+/// gate shares with the registry (poll count and the thread that owes the next
+/// poll).
+pub(super) mod state;
 /// Waiter wake handles ([`wake::Token`] / [`wake::Wake`]).
 pub(super) mod wake;
 
