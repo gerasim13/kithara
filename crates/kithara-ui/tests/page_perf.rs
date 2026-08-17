@@ -74,7 +74,7 @@ use kithara_ui::{
     interact::{Input, MOUSE, PointerButton, PointerInput, PointerPhase, Scroll},
     registry::EndpointRegistry,
     render::{
-        ReadValue, Reads, Skin, UiEvent,
+        Clock, ReadValue, Reads, Skin, UiEvent,
         fonts::{FONT_BYTES, SANS},
         shader::ShaderPass,
         tree,
@@ -1429,6 +1429,21 @@ struct Outcome<'run> {
 #[case("vello", Host::Retained, "gallery-buttons")]
 #[case("vello", Host::Retained, "gallery-stress")]
 fn ui_page_perf(#[case] label: &'static str, #[case] host: Host, #[case] page: &'static str) {
+    measure_one(label, host, Group::Pages, page);
+}
+
+/// The three pages that move without being touched: objects posed by a clock,
+/// a sheet cut into frames, and an artwork emitted afresh every frame. The
+/// buttons page above is the still control they are read against, because what
+/// is asked here is what the motion itself costs on each host.
+#[kithara::test]
+#[case("iced", Host::Immediate, "gallery-motion")]
+#[case("iced", Host::Immediate, "gallery-sprites")]
+#[case("iced", Host::Immediate, "gallery-lottie")]
+#[case("vello", Host::Retained, "gallery-motion")]
+#[case("vello", Host::Retained, "gallery-sprites")]
+#[case("vello", Host::Retained, "gallery-lottie")]
+fn ui_motion_perf(#[case] label: &'static str, #[case] host: Host, #[case] page: &'static str) {
     measure_one(label, host, Group::Pages, page);
 }
 

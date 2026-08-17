@@ -22,6 +22,13 @@ pages:
       cargo test -p kithara-ui --test page_perf --features perf,iced,masonry --release \
       -- ui_page_perf --test-threads=1 --nocapture 2>&1 | tee ui-page-perf.txt
 
+# Frame time on the pages that move on their own: posed objects, a sprite sheet
+# and an artwork.
+motion:
+    HOTPATH_METRICS_SERVER_OFF=1 \
+      cargo test -p kithara-ui --test page_perf --features perf,iced,masonry --release \
+      -- ui_motion_perf --test-threads=1 --nocapture 2>&1 | tee ui-motion-perf.txt
+
 # Cost per wheel event against cost per frame, swept over wheels per frame.
 scroll:
     HOTPATH_METRICS_SERVER_OFF=1 \

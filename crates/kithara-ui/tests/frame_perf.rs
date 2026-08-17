@@ -44,8 +44,8 @@ use kithara_ui::{
     interact::{Input, MOUSE, PointerInput, PointerPhase},
     registry::{EndpointCategory, EndpointDesc, EndpointRegistry, ValueKind},
     render::{
-        PortalMapView, PortalTarget, ReadValue, Reads, ScalarRange, Skin, StereoLevels, TableCell,
-        TableRow, TreeIcon, TreeRow, UiEvent, WaveBucket, WaveformView,
+        Clock, PortalMapView, PortalTarget, ReadValue, Reads, ScalarRange, Skin, StereoLevels,
+        TableCell, TableRow, TreeIcon, TreeRow, UiEvent, WaveBucket, WaveformView,
         fonts::{FONT_BYTES, SANS},
         tree,
     },
