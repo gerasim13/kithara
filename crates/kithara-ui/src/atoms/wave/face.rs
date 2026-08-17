@@ -100,6 +100,7 @@ impl Wave {
             style: self.style,
             waveform: data.waveform.as_ref().map(|waveform| WaveformView {
                 buckets: &waveform.buckets,
+                revision: waveform.revision,
                 beats: &waveform.beats,
                 downbeats: &waveform.downbeats,
                 bpm: None,
@@ -277,6 +278,7 @@ mod tests {
             match endpoint {
                 "deck.playback.waveform" => Some(ReadValue::Waveform(WaveformView {
                     buckets: &self.buckets,
+                    revision: 0,
                     beats: &[0.25],
                     downbeats: &[0.5],
                     bpm: Some(128.0),

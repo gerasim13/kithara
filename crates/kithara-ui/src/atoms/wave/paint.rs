@@ -258,6 +258,7 @@ mod tests {
             style: WaveStyle::Hero,
             waveform: Some(WaveformView {
                 buckets: &buckets,
+                revision: 0,
                 beats: &beats,
                 downbeats: &downbeats,
                 bpm: Some(120.0),
@@ -391,6 +392,7 @@ mod tests {
                 style,
                 waveform: Some(WaveformView {
                     buckets: &buckets,
+                    revision: 0,
                     beats: &[],
                     downbeats: &[],
                     bpm: None,

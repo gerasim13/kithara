@@ -532,6 +532,7 @@ fn wave_bucket(phase: f32) -> WaveBucket {
 const fn waveform_value(waveform: &[WaveBucket]) -> ReadValue<'_> {
     ReadValue::Waveform(WaveformView {
         buckets: waveform,
+        revision: 0,
         beats: &[],
         downbeats: &[],
         bpm: None,

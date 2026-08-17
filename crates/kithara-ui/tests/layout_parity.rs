@@ -165,6 +165,7 @@ impl Reads for FixtureReads {
             })),
             "deck.playback.waveform" => Some(ReadValue::Waveform(WaveformView {
                 buckets: &self.buckets,
+                revision: 0,
                 beats: &self.beats,
                 downbeats: &self.downbeats,
                 bpm: Some(128.0),

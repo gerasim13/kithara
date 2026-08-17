@@ -322,6 +322,7 @@ mod analysed {
         assert!(
             wave.set_read(&ReadValue::Waveform(WaveformView {
                 buckets: &buckets,
+                revision: 0,
                 beats: &[],
                 downbeats: &[],
                 bpm: None,

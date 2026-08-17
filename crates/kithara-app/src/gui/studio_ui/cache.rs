@@ -210,6 +210,11 @@ pub(in crate::gui) struct DeckCache {
     pub(in crate::gui) subtitle: String,
     pub(in crate::gui) tempo: String,
     pub(in crate::gui) wave: Vec<WaveBucket>,
+    /// What the toolkit calls the run of buckets currently in `wave`.
+    ///
+    /// Moved by whoever writes `wave`, so a viewer holding a copy can tell
+    /// the two apart without walking six figures of buckets every frame.
+    pub(in crate::gui) wave_revision: u64,
     wave_src: Option<usize>,
 }
 
@@ -317,6 +322,7 @@ impl DeckCache {
             return;
         }
         self.wave_src = src;
+        self.wave_revision = self.wave_revision.wrapping_add(1);
         self.wave.clear();
         if let Some(wave) = wave {
             self.wave.extend(waveform_buckets(wave));
@@ -411,7 +417,46 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::state::AbrVariant;
+    use crate::{state::AbrVariant, waveform::TrackAnalysis};
+
+    /// Version 1 plus one bucket of three band heights (0.5 = 0x3F000000).
+    fn wave_of(height: u8) -> TrackAnalysis {
+        let blob = [
+            1, 0, 0, 0, 0, 0, 0, height, 0, 0, 0, height, 0, 0, 0, height,
+        ];
+        let wave = Waveform::try_from(blob.as_slice()).expect("hand-built blob is valid");
+        TrackAnalysis::new(None, Some(wave), 0)
+    }
+
+    #[kithara::test]
+    fn the_deck_names_the_run_of_buckets_it_just_wrote() {
+        let mut cache = DeckCache::default();
+        let quiet = wave_of(62);
+
+        cache.refresh_wave(Some(&quiet));
+        let named = cache.wave_revision;
+
+        cache.refresh_wave(Some(&quiet));
+        assert_eq!(cache.wave_revision, named, "nothing was written");
+
+        cache.refresh_wave(Some(&wave_of(63)));
+        assert_ne!(
+            cache.wave_revision, named,
+            "a new run of buckets was written"
+        );
+    }
+
+    #[kithara::test]
+    fn dropping_the_track_names_the_empty_run() {
+        let mut cache = DeckCache::default();
+        cache.refresh_wave(Some(&wave_of(63)));
+        let named = cache.wave_revision;
+
+        cache.refresh_wave(None);
+
+        assert!(cache.wave.is_empty());
+        assert_ne!(cache.wave_revision, named, "the empty run is a run too");
+    }
 
     fn ladder() -> Vec<AbrVariant> {
         vec![

@@ -254,6 +254,7 @@ impl Reads for Fixture {
             ValueKind::Text => ReadValue::Text(text(base)),
             ValueKind::Waveform => ReadValue::Waveform(WaveformView {
                 buckets: &WAVE,
+                revision: 0,
                 beats: &[],
                 cues: &[],
                 downbeats: &[],

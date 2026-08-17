@@ -919,6 +919,7 @@ mod tests {
                 }
                 "mock.wave@deck=a" => Some(ReadValue::Waveform(WaveformView {
                     buckets: &FIXTURES.wave_buckets,
+                    revision: 0,
                     beats: &[],
                     downbeats: &[],
                     bpm: None,

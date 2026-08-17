@@ -18,6 +18,13 @@ pub struct WaveBucket {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct WaveformView<'a> {
     pub buckets: &'a [WaveBucket],
+    /// What the model calls this run of buckets.
+    ///
+    /// A different value means a different run. A viewer that keeps a copy —
+    /// which every retained host does — takes that on trust instead of
+    /// comparing a megabyte of buckets against its copy on every frame, so
+    /// whoever writes the buckets must move this when it writes them.
+    pub revision: u64,
     pub beats: &'a [f32],
     pub cues: &'a [f32],
     pub downbeats: &'a [f32],

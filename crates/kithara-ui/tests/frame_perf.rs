@@ -450,6 +450,7 @@ impl Reads for CensusReads {
             "deck.playback.waveform" | "mock.wave" => Some(ReadValue::Waveform(WaveformView {
                 beats: &[],
                 buckets: &WAVE,
+                revision: 0,
                 cues: &[],
                 downbeats: &[],
                 bpm: None,

@@ -204,6 +204,7 @@ impl Reads for FixtureReads {
             "mock.wave" => Some(ReadValue::Waveform(WaveformView {
                 beats: &[],
                 buckets: &CENSUS_WAVE,
+                revision: 0,
                 cues: &[],
                 downbeats: &[],
                 bpm: None,
@@ -4066,6 +4067,7 @@ impl Reads for DeckReads {
                 .then_some(ReadValue::Waveform(WaveformView {
                     beats: &[],
                     buckets: &CENSUS_WAVE,
+                    revision: 0,
                     cues: &[],
                     downbeats: &[],
                     bpm: None,

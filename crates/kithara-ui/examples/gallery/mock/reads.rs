@@ -565,6 +565,7 @@ impl Reads for MockReads {
             "deck.playback.tempo" => ReadValue::Text(Consts::TEMPO),
             "deck.playback.waveform" => ReadValue::Waveform(WaveformView {
                 buckets: &self.waveform,
+                revision: 0,
                 beats: &self.wave_beats,
                 downbeats: &self.wave_downbeats,
                 bpm: Some(Consts::BPM_VALUE),
