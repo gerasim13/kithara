@@ -137,6 +137,9 @@ impl<D: DriverIo> ResourceCore<D> {
                 .store(Arc::new(state.available.clone()));
         }
         self.inner.gate.notify_all();
+        // This write just replaced the generation a produce-core read may own;
+        // the write side pays the frees it parked.
+        self.inner.retired.drain();
 
         if let Some(observer) = self.inner.observer.as_ref() {
             observer.on_write(range);
@@ -315,6 +318,36 @@ mod tests {
                 ));
             }
         }
+    }
+
+    /// A `contains_range_inner` read runs on the audio thread, where freeing
+    /// the range tree is a real-time violation, so it must hand the snapshot it
+    /// loaded to the retire bin instead of dropping it.
+    #[kithara::test(timeout(Duration::from_secs(5)))]
+    fn a_produce_core_read_parks_its_snapshot() {
+        let core = open_mem();
+        core.write_at_inner(0, b"hello world")
+            .expect("active write must succeed");
+        assert!(core.inner.retired.is_empty());
+
+        let _ = core.contains_range_inner(0..11);
+
+        assert!(!core.inner.retired.is_empty());
+    }
+
+    /// The other half of that contract: the write side — which publishes the
+    /// generations in the first place — pays the frees the read parked.
+    #[kithara::test(timeout(Duration::from_secs(5)))]
+    fn a_write_drains_the_parked_snapshot() {
+        let core = open_mem();
+        core.write_at_inner(0, b"hello world")
+            .expect("active write must succeed");
+        let _ = core.contains_range_inner(0..11);
+
+        core.write_at_inner(11, b"!")
+            .expect("active write must succeed");
+
+        assert!(core.inner.retired.is_empty());
     }
 
     /// Fill `[0, len)` with `value` in multiple `write_at_inner` calls so a

@@ -12,6 +12,7 @@ use kithara_platform::{
 };
 use rangemap::RangeSet;
 
+use super::retire::{RETIRE_CAPACITY, Retired};
 use crate::{
     StorageError, StorageResult,
     backend::traits::{AvailabilityObserver, Driver, DriverIo},
@@ -28,6 +29,9 @@ pub(super) struct CommonState {
 /// Shared inner storage.
 pub(super) struct Inner<D: DriverIo> {
     pub(super) available_snapshot: ArcSwap<RangeSet<u64>>,
+    /// Snapshots parked by produce-core reads, freed by write-side drains —
+    /// see [`Retired`].
+    pub(super) retired: Retired,
     /// Lock-free lifecycle flag: `true` while the resource is committed, `false`
     /// once `reactivate` reopens it for a re-download. Distinct from the driver's
     /// committed snapshot, which stays published across a reactivate so reads
@@ -116,6 +120,7 @@ impl<D: Driver> ResourceCore<D> {
                 observer,
                 committed: AtomicBool::new(is_committed),
                 available_snapshot: ArcSwap::from_pointee(available.clone()),
+                retired: Retired::new(RETIRE_CAPACITY),
                 gate: CondvarGate::new(CommonState {
                     final_len,
                     available,

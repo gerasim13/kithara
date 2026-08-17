@@ -2,6 +2,7 @@
 
 use std::{ops::Range, path::Path, sync::atomic::Ordering};
 
+use arc_swap::Guard;
 use kithara_platform::sync::Arc;
 
 use crate::{
@@ -60,6 +61,8 @@ impl<D: DriverIo> ResourceCore<D> {
             }
         }
         self.inner.gate.notify_all();
+        // The write side pays the frees the produce-core reads parked.
+        self.inner.retired.drain();
 
         if let Some(len) = final_len
             && let Some(observer) = self.inner.observer.as_ref()
@@ -70,6 +73,10 @@ impl<D: DriverIo> ResourceCore<D> {
         Ok(())
     }
 
+    /// Called from the decode produce path (`phase_at` cascade), so the loaded
+    /// snapshot is parked rather than dropped here: a write publishes a new
+    /// generation on every chunk, and a read that races one would otherwise be
+    /// its last owner and free the range tree on the audio thread.
     pub(super) fn contains_range_inner(&self, range: Range<u64>) -> bool {
         if range.is_empty() {
             return true;
@@ -81,7 +88,9 @@ impl<D: DriverIo> ResourceCore<D> {
             return range.end <= committed_len;
         }
         let snap = self.inner.available_snapshot.load();
-        range_covered_by(&snap, &range)
+        let covered = range_covered_by(&snap, &range);
+        self.inner.retired.retire(Guard::into_inner(snap));
+        covered
     }
 
     pub(super) fn fail_inner(&self, reason: String) {
