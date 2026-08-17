@@ -216,6 +216,7 @@ remove = [
   "KITHARA_NO_BLOCK",
   "KITHARA_NO_BLOCK_BUDGET_MS",
   "KITHARA_NO_BLOCK_LOG",
+  "KITHARA_STRESS_REPEATS",
   "NEXTEST_FINAL_STATUS_LEVEL",
   "NEXTEST_SHOW_PROGRESS",
   "NEXTEST_STATUS_LEVEL",
@@ -313,28 +314,35 @@ RUST_BACKTRACE = "1"
 KITHARA_HANG_DUMP_DIR = "hang"
 KITHARA_NO_BLOCK_LOG = "no-block.log"
 
-# The real-time contract, measured the same way. RealtimeSanitizer aborts the
-# process at the offending call, so these lanes report an exit code per attempt.
-# They belong in the campaign because the violation is intermittent: one was
-# seen firing on a single attempt out of two, which a gate that runs each lane
-# once reports as green half the time. Their own recipes own the sanitizer
-# flags, the pinned nightly and `-Zbuild-std`.
+# The real-time contract, measured the same way. They belong in the campaign
+# because the violation is intermittent: one was seen firing on a single attempt
+# out of two, which a gate that runs each lane once reports as green half the
+# time. Their own recipes own the sanitizer flags, the pinned nightly and
+# `-Zbuild-std`, which is why these lanes name a command instead of a feature set.
 #
-# `attempt_junit` is what keeps the exit code from being the whole verdict: the
-# recipes run under nextest's process per test, so the abort takes one test down
-# and the report names it. The lane keeps a copy per attempt, because the runner
-# overwrites that one path on the next.
+# `owns_repeats` is what stops the campaign from launching that command once per
+# repeat. The recipes run under nextest, so handing them the count builds the
+# suite once and lands every repeat in one report with a per-test verdict —
+# measured the same way as the lanes above, and comparable with them. Launched per
+# repeat instead, each one paid a rebuild and a cold start and could report only
+# an exit code, which names no test.
+#
+# `attempt_junit` is that report. The runner overwrites the one path, so the lane
+# keeps its own copy.
 [stress.modes.rtsan]
 attempt_junit = "target/nextest/rtsan/junit.xml"
 command = ["just", "test", "rtsan"]
+owns_repeats = true
 
 [stress.modes.rtsan-file]
 attempt_junit = "target/nextest/rtsan/junit.xml"
 command = ["just", "test", "rtsan-file"]
+owns_repeats = true
 
 [stress.modes.rtsan-hls]
 attempt_junit = "target/nextest/rtsan/junit.xml"
 command = ["just", "test", "rtsan-hls"]
+owns_repeats = true
 
 [stress.modes.diagnostic]
 features = ["flash"]

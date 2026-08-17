@@ -15,6 +15,9 @@ use clap::{Args, Subcommand};
 /// Bounds the distinct sanitizer findings one lane section lists.
 const MAX_FINDING_ROWS: usize = 100;
 
+/// Hands the campaign's repeat count to a lane that performs its own repeats.
+const REPEATS_ENV: &str = "KITHARA_STRESS_REPEATS";
+
 use crate::{
     Ctx,
     common::project::{
@@ -304,13 +307,16 @@ fn write_attempts(path: &Path, codes: &[i32]) -> Result<()> {
     fs::write(path, json).with_context(|| format!("write command lane attempts {}", path.display()))
 }
 
-/// Repeats a lane's own command and records what each attempt did.
+/// Runs a lane's own command as many times as the lane needs, and records what
+/// each attempt did.
 ///
-/// A sanitizer aborts the process at the offending call, so there is no
-/// per-test verdict to collect — the evidence is an exit code per attempt and
-/// the log the attempt wrote. Repetition is the point: a violation that fires
-/// on one attempt in two is a defect with a rate, and a single green run has
-/// never been evidence that it is gone.
+/// Repetition is the point: a violation that fires on one attempt in two is a
+/// defect with a rate, and a single green run has never been evidence that it is
+/// gone. Which side performs the repeats is the lane's own business. A command
+/// that runs its tests under nextest is handed the count and launched once, so
+/// the workspace builds once and every repeat lands in one report that names the
+/// test; a command that cannot is launched once per repeat, and then an exit
+/// code per attempt is all there is to collect.
 fn run_command_lane(
     ctx: &Ctx,
     mode: &StressModeConfig,
@@ -326,8 +332,9 @@ fn run_command_lane(
         .attempt_junit
         .as_deref()
         .map(|path| ctx.root.join(path));
-    let mut codes = Vec::with_capacity(count);
-    for attempt in 0..count {
+    let attempts = command_lane_attempts(mode, count);
+    let mut codes = Vec::with_capacity(attempts);
+    for attempt in 0..attempts {
         mark_attempt(&paths.log, attempt)?;
         // The runner writes to one path. Removing it first means a copy can
         // only ever be this attempt's: an attempt that died before writing
@@ -343,6 +350,9 @@ fn run_command_lane(
         let mut command = Command::new(program);
         command.args(arguments).current_dir(&ctx.root);
         environment.apply(&mut command);
+        if mode.owns_repeats {
+            command.env(REPEATS_ENV, count.to_string());
+        }
         let status = run_output(&mut command, &paths.log)?;
         let code = status.code().unwrap_or_else(|| i32::from(u8::MAX));
         codes.push(code);
@@ -351,6 +361,17 @@ fn run_command_lane(
         }
     }
     Ok(codes)
+}
+
+/// How many times the campaign launches a command lane to buy `count` repeats.
+///
+/// One launch when the command repeats internally, `count` launches when it does
+/// not. The distinction is what the lane's numbers mean afterwards: launches are
+/// what an exit code can speak about, repeats are what a rate is measured over,
+/// and reporting one as the other is how a lane that ran fifty times reads as
+/// though it ran once.
+fn command_lane_attempts(mode: &StressModeConfig, count: usize) -> usize {
+    if mode.owns_repeats { 1 } else { count }
 }
 
 /// Keeps this attempt's report, if the command left one.
@@ -456,7 +477,7 @@ fn run_lane(args: &RunArgs, ctx: &Ctx, mode_name: &str, raw: &Path) -> Result<()
                         Ok(())
                     } else {
                         Err(ChildFailure::inherited(
-                            format!("{failed} of {count} attempts"),
+                            format!("{failed} of {} attempts", codes.len()),
                             codes.iter().copied().find(|code| *code != 0),
                         ))
                     }
@@ -587,7 +608,7 @@ fn run_report(args: &ReportArgs, ctx: &Ctx) -> Result<()> {
         let lane = if mode.command.is_empty() {
             stress_report::lane_report(&report_args)?
         } else {
-            command_lane_report(&paths, count, &config.evidence)
+            command_lane_report(&paths, mode, count, &config.evidence)
         };
         let expectation =
             ReportExpectation::new(&ctx.config, config, lane_name, mode, &filter, count)?;
@@ -635,12 +656,6 @@ fn run_report(args: &ReportArgs, ctx: &Ctx) -> Result<()> {
     choose_failure(failure.map_or(Ok(()), Err), campaign, Ok(()), Ok(())).map_or(Ok(()), Err)
 }
 
-/// Reads what a command lane recorded and states it as a rate.
-///
-/// The only thing such a lane can say is how many of its attempts the command
-/// rejected. That is exactly the number a one-shot gate cannot produce: a
-/// sanitizer that aborts on one attempt in two is green half the time, and
-/// half the time is what has kept its defect open.
 /// Why this lane may not stand beside the others, or `None` when it may.
 ///
 /// Named rather than counted: "one lane was dropped" sends the reader back to
@@ -659,11 +674,22 @@ fn exclusion_reason(trusted: bool, lane: &stress_report::LaneReport) -> Option<S
     None
 }
 
+/// Reads what a command lane recorded and states it as rates.
+///
+/// A lane that repeats internally has a report per repeat, so it says how often
+/// each test failed — the same number the campaign's own lanes report, which is
+/// what lets a sanitizer lane stand in the cross-lane comparison. A lane launched
+/// per repeat has only its exit codes, and how many attempts the command rejected
+/// is all it can say. Either way the number is the one a one-shot gate cannot
+/// produce: a sanitizer that aborts on one attempt in two is green half the time,
+/// and half the time is what has kept its defect open.
 fn command_lane_report(
     paths: &Paths,
-    expected: usize,
+    mode: &StressModeConfig,
+    count: usize,
     evidence: &StressEvidenceConfig,
 ) -> stress_report::LaneReport {
+    let expected = command_lane_attempts(mode, count);
     let attempts = &paths.attempts;
     let log = &paths.log;
     let mut markdown = String::from("# Stress evidence\n");
@@ -691,7 +717,13 @@ fn command_lane_report(
     };
     let failed = codes.iter().filter(|code| **code != 0).count();
     let observed = codes.len();
-    let result = if observed != expected {
+    let records = stress_report::attempt_records(&paths.attempt_junit, &codes);
+    // A lane that repeats inside one launch is only as complete as its own
+    // report: the exit code says the command finished, not that it ran the
+    // repeats it was given. Requiring the recorded repeats to match what was
+    // asked is what keeps a run that stopped early out of the comparison.
+    let short = mode.owns_repeats && records.repeats() != count;
+    let result = if observed != expected || short {
         "INCOMPLETE"
     } else if failed > 0 {
         "FAILED"
@@ -702,6 +734,13 @@ fn command_lane_report(
     let _ = writeln!(markdown, "- Requested attempts: `{expected}`");
     let _ = writeln!(markdown, "- Observed attempts: `{observed}`");
     let _ = writeln!(markdown, "- Rejected attempts: `{failed}`");
+    if mode.owns_repeats {
+        let _ = writeln!(
+            markdown,
+            "- Repeats the command performed itself: requested `{count}`, recorded `{}`",
+            records.repeats()
+        );
+    }
     if failed > 0 {
         let codes = codes
             .iter()
@@ -716,24 +755,54 @@ fn command_lane_report(
             markdown_cell(&codes)
         );
     }
-    stress_report::append_attempt_reports(&mut markdown, &paths.attempt_junit, &codes);
-    append_findings(&mut markdown, log, evidence, failed, observed);
+    stress_report::append_attempt_reports(&mut markdown, &records);
+    append_findings(
+        &mut markdown,
+        log,
+        evidence,
+        failed,
+        attributable(mode, observed),
+    );
     let verdict = if result == "PASSED" {
         Ok(())
     } else {
         Err(NotClean::reported("stress evidence"))
     };
+    // A lane that repeats internally is measured per test, like the lanes the
+    // campaign drives itself, and belongs in that comparison. A lane launched per
+    // repeat has only its exit codes, and a per-test table it cannot fill would
+    // read as though every test passed.
+    let (rates, attempts) = if mode.owns_repeats {
+        (records.rates, None)
+    } else {
+        (
+            BTreeMap::new(),
+            Some(stress_report::LaneRate {
+                failed,
+                attempts: observed,
+            }),
+        )
+    };
     stress_report::LaneReport {
         markdown,
-        rates: BTreeMap::new(),
-        attempts: Some(stress_report::LaneRate {
-            failed,
-            attempts: observed,
-        }),
+        rates,
+        attempts,
         verdict,
         readable: true,
-        complete: observed == expected,
+        complete: observed == expected && !short,
     }
+}
+
+/// The denominator a log finding may be reported against, or `None` when the log
+/// cannot say.
+///
+/// Findings are attributed by the attempt marker written before each launch. A
+/// lane that repeats inside one launch writes one marker, so every finding it
+/// reports belongs to "attempt 0" — a rate computed from that would say 100% for
+/// a violation that fired once in fifty repeats. The per-test table above carries
+/// the rate for those lanes; this refuses to invent a second one.
+fn attributable(mode: &StressModeConfig, observed: usize) -> Option<usize> {
+    (!mode.owns_repeats).then_some(observed)
 }
 
 /// Reports what the sanitizer itself said, and says so when it said nothing.
@@ -746,7 +815,7 @@ fn append_findings(
     log: &Path,
     evidence: &StressEvidenceConfig,
     failed: usize,
-    observed: usize,
+    observed: Option<usize>,
 ) {
     let text = match stress_report::read_bounded_utf8(
         log,
@@ -778,9 +847,30 @@ fn append_findings(
     let _ = writeln!(
         markdown,
         "\n## Sanitizer findings\n\nEach names the violated contract, the call that violated it, \
-         and the first project frames that reached it.\n\n\
-         | finding | attempts | rate |\n|---|---|---:|"
+         and the first project frames that reached it."
     );
+    if let Some(observed) = observed {
+        append_rated_findings(markdown, &findings, observed);
+    } else {
+        append_unrated_findings(markdown, &findings);
+    }
+    if findings.len() > MAX_FINDING_ROWS {
+        let _ = writeln!(
+            markdown,
+            "\nShowing the first {MAX_FINDING_ROWS} of {} distinct findings.",
+            findings.len()
+        );
+    }
+}
+
+/// Lists each finding with the attempts it appeared on, out of the attempts the
+/// lane ran.
+fn append_rated_findings(
+    markdown: &mut String,
+    findings: &stress_report::Findings,
+    observed: usize,
+) {
+    let _ = writeln!(markdown, "\n| finding | attempts | rate |\n|---|---|---:|");
     for (signature, attempts) in findings.iter().take(MAX_FINDING_ROWS) {
         let listed = attempts
             .iter()
@@ -795,12 +885,17 @@ fn append_findings(
             stress_report::rate_percent(attempts.len(), observed)
         );
     }
-    if findings.len() > MAX_FINDING_ROWS {
-        let _ = writeln!(
-            markdown,
-            "\nShowing the first {MAX_FINDING_ROWS} of {} distinct findings.",
-            findings.len()
-        );
+}
+
+/// Lists each finding on its own, for a lane whose log cannot place it in time.
+fn append_unrated_findings(markdown: &mut String, findings: &stress_report::Findings) {
+    let _ = writeln!(
+        markdown,
+        "\nThe command performed its own repeats, so the log cannot say which repeat a finding \
+         came from — how often each test failed is in the table above.\n\n| finding |\n|---|"
+    );
+    for signature in findings.keys().take(MAX_FINDING_ROWS) {
+        let _ = writeln!(markdown, "| `{}` |", markdown_cell(signature));
     }
 }
 
@@ -1193,6 +1288,23 @@ mod tests {
     use std::os::unix::fs::symlink;
 
     use super::*;
+    use crate::common::project::StressEnvironmentConfig;
+
+    /// A lane the campaign launches once per repeat.
+    fn per_repeat_mode() -> StressModeConfig {
+        StressModeConfig {
+            command: vec!["just".to_owned(), "test".to_owned(), "rtsan".to_owned()],
+            ..StressModeConfig::default()
+        }
+    }
+
+    /// A lane whose command performs the campaign's repeats itself.
+    fn self_repeating_mode() -> StressModeConfig {
+        StressModeConfig {
+            owns_repeats: true,
+            ..per_repeat_mode()
+        }
+    }
 
     fn command_lane_config() -> (StressConfig, StressModeConfig) {
         let config = StressConfig {
@@ -1200,11 +1312,7 @@ mod tests {
             backend: "wreq".to_owned(),
             ..StressConfig::default()
         };
-        let mode = StressModeConfig {
-            command: vec!["just".to_owned(), "test".to_owned(), "rtsan".to_owned()],
-            ..StressModeConfig::default()
-        };
-        (config, mode)
+        (config, per_repeat_mode())
     }
 
     /// The report has to expect the command the lane was told to run. Expecting
@@ -1258,7 +1366,12 @@ Intercepted call to real-time unsafe function `malloc` in real-time context!
         let temp = tempfile::tempdir().expect("tempdir");
         let paths = command_lane(&temp, "[0,134,0,0]", "");
 
-        let report = command_lane_report(&paths, 4, &StressEvidenceConfig::default());
+        let report = command_lane_report(
+            &paths,
+            &per_repeat_mode(),
+            4,
+            &StressEvidenceConfig::default(),
+        );
 
         assert!(
             report.markdown.contains("Rejected attempts: `1`"),
@@ -1277,7 +1390,12 @@ Intercepted call to real-time unsafe function `malloc` in real-time context!
         let log = format!("{}0\n{VIOLATION}", stress_report::ATTEMPT_MARKER);
         let paths = command_lane(&temp, "[134,0]", &log);
 
-        let report = command_lane_report(&paths, 2, &StressEvidenceConfig::default());
+        let report = command_lane_report(
+            &paths,
+            &per_repeat_mode(),
+            2,
+            &StressEvidenceConfig::default(),
+        );
 
         assert!(
             report.markdown.contains("unsafe-library-call"),
@@ -1302,10 +1420,306 @@ Intercepted call to real-time unsafe function `malloc` in real-time context!
         let temp = tempfile::tempdir().expect("tempdir");
         let paths = command_lane(&temp, "[1,0]", "error: could not compile `kithara-audio`\n");
 
-        let report = command_lane_report(&paths, 2, &StressEvidenceConfig::default());
+        let report = command_lane_report(
+            &paths,
+            &per_repeat_mode(),
+            2,
+            &StressEvidenceConfig::default(),
+        );
 
         assert!(
             report.markdown.contains("cannot name"),
+            "{}",
+            report.markdown
+        );
+    }
+
+    /// Where a launched lane records what repeat count it was handed.
+    const REPEATS_RECORD_ENV: &str = "DEVTOOLS_STRESS_REPEATS_RECORD";
+    const SUITE: &str = "kithara-integration-tests::rtsan";
+    const CASE: &str = "audio::mix_tap";
+
+    /// Runs a lane whose command is this test binary, and reports what
+    /// `KITHARA_STRESS_REPEATS` held on each launch.
+    fn recorded_repeats(mode: &StressModeConfig, count: usize) -> Vec<String> {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let record = temp.path().join("repeats.txt");
+        let executable = std::env::current_exe().expect("current test executable");
+        let mode = StressModeConfig {
+            command: vec![
+                executable.to_string_lossy().into_owned(),
+                child_test_name("record_repeats"),
+                "--exact".to_owned(),
+                "--ignored".to_owned(),
+                "--nocapture".to_owned(),
+            ],
+            set_env: BTreeMap::from([(
+                REPEATS_RECORD_ENV.to_owned(),
+                record.to_string_lossy().into_owned(),
+            )]),
+            ..mode.clone()
+        };
+        // The campaign clears the variable, as the project's own configuration
+        // does: a lane that is not handed a count must not inherit one from
+        // whatever launched the campaign.
+        let config = StressConfig {
+            environment: StressEnvironmentConfig {
+                remove: vec![REPEATS_ENV.to_owned()],
+            },
+            ..StressConfig::default()
+        };
+        let environment =
+            CampaignEnvironment::new(temp.path(), &config, &mode).expect("campaign environment");
+        let paths = Paths::new(
+            temp.path().to_path_buf(),
+            &StressArtifactConfig {
+                log: "lane.log".to_owned(),
+                ..StressArtifactConfig::default()
+            },
+        );
+        let ctx = Ctx::new(temp.path().to_path_buf(), ProjectConfig::default());
+
+        run_command_lane(&ctx, &mode, &paths, count, &environment).expect("run command lane");
+
+        fs::read_to_string(&record)
+            .expect("read recorded repeats")
+            .lines()
+            .map(str::to_owned)
+            .collect()
+    }
+
+    fn child_test_name(name: &str) -> String {
+        let module = module_path!();
+        let module = module.split_once("::").map_or(module, |(_, module)| module);
+        format!("{module}::{name}")
+    }
+
+    /// A lane that repeats inside one launch pays for a rebuild and a cold start
+    /// per launch. Launched fifty times, it pays fifty of each for the fifty
+    /// repeats its own runner was going to perform anyway.
+    #[test]
+    fn a_lane_that_owns_its_repeats_is_launched_once() {
+        assert_eq!(recorded_repeats(&self_repeating_mode(), 3).len(), 1);
+    }
+
+    /// The count has to reach the runner that performs the repeats. Without it
+    /// the lane runs its selection once and the campaign reports that as fifty.
+    #[test]
+    fn a_lane_that_owns_its_repeats_is_handed_the_count() {
+        assert_eq!(
+            recorded_repeats(&self_repeating_mode(), 3)
+                .first()
+                .map(String::as_str),
+            Some("3")
+        );
+    }
+
+    #[test]
+    fn a_lane_that_does_not_own_its_repeats_is_launched_once_per_repeat() {
+        assert_eq!(recorded_repeats(&per_repeat_mode(), 3).len(), 3);
+    }
+
+    /// Handing the count to a lane launched per repeat would multiply the two:
+    /// three launches of three repeats each, for the three that were asked for.
+    #[test]
+    fn a_lane_that_does_not_own_its_repeats_is_not_handed_a_count() {
+        assert!(
+            recorded_repeats(&per_repeat_mode(), 3)
+                .iter()
+                .all(|value| value == "unset"),
+            "a lane launched per repeat was handed a count"
+        );
+    }
+
+    #[test]
+    #[ignore = "subprocess entrypoint"]
+    fn record_repeats() {
+        let record = std::env::var_os(REPEATS_RECORD_ENV).expect("record path");
+        let value = std::env::var(REPEATS_ENV).unwrap_or_else(|_| "unset".to_owned());
+        let mut file = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(record)
+            .expect("open repeats record");
+        writeln!(file, "{value}").expect("write repeats record");
+    }
+
+    /// The report a lane's own runner leaves behind, one suite per repeat, which
+    /// is what nextest writes when it is given a repeat count.
+    fn keep_repeats(paths: &Paths, attempt: usize, outcomes: &[bool]) {
+        let suites = outcomes
+            .iter()
+            .enumerate()
+            .map(|(repeat, failed)| {
+                let failure = if *failed {
+                    "<failure type=\"test failure\">aborted</failure>"
+                } else {
+                    ""
+                };
+                format!(
+                    "  <testsuite name=\"{SUITE}@stress-{repeat}\">\n    <testcase \
+                     name=\"{CASE}\" classname=\"{SUITE}\" time=\"0.1\">{failure}</testcase>\n  \
+                     </testsuite>\n"
+                )
+            })
+            .collect::<String>();
+        fs::create_dir_all(&paths.attempt_junit).expect("create attempt report directory");
+        fs::write(
+            paths.attempt_junit.join(format!("attempt-{attempt}.xml")),
+            format!("<testsuites uuid=\"run\">\n{suites}</testsuites>"),
+        )
+        .expect("write attempt report fixture");
+    }
+
+    fn self_repeating_lane(temp: &tempfile::TempDir, log: &str, outcomes: &[bool]) -> Paths {
+        let paths = command_lane(temp, "[101]", log);
+        keep_repeats(&paths, 0, outcomes);
+        paths
+    }
+
+    fn measured_case() -> (String, String) {
+        (SUITE.to_owned(), CASE.to_owned())
+    }
+
+    /// A lane that repeats internally is measured per test, like the lanes the
+    /// campaign drives itself. Without those rates it contributes nothing to the
+    /// cross-lane comparison — which is how a campaign can run three sanitizer
+    /// lanes and say nothing about any test in them.
+    #[test]
+    fn a_self_repeating_lane_reports_a_rate_per_test() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let paths = self_repeating_lane(&temp, "", &[false, true, false]);
+
+        let report = command_lane_report(
+            &paths,
+            &self_repeating_mode(),
+            3,
+            &StressEvidenceConfig::default(),
+        );
+
+        assert_eq!(
+            report.rates[&measured_case()],
+            stress_report::LaneRate {
+                failed: 1,
+                attempts: 3
+            }
+        );
+    }
+
+    /// One lane, one denominator. A lane already reporting per-test rates must
+    /// not also enter the comparison as a lane with nothing but exit codes.
+    #[test]
+    fn a_self_repeating_lane_does_not_also_report_an_attempt_rate() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let paths = self_repeating_lane(&temp, "", &[false, true, false]);
+
+        let report = command_lane_report(
+            &paths,
+            &self_repeating_mode(),
+            3,
+            &StressEvidenceConfig::default(),
+        );
+
+        assert!(report.attempts.is_none());
+    }
+
+    /// A lane launched per repeat has only its exit codes, and that rate is what
+    /// keeps it in the comparison rather than out of it.
+    #[test]
+    fn a_lane_launched_per_repeat_reports_the_rate_its_exit_codes_support() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let paths = command_lane(&temp, "[0,134,0,0]", "");
+
+        let report = command_lane_report(
+            &paths,
+            &per_repeat_mode(),
+            4,
+            &StressEvidenceConfig::default(),
+        );
+
+        assert_eq!(
+            report.attempts,
+            Some(stress_report::LaneRate {
+                failed: 1,
+                attempts: 4
+            })
+        );
+    }
+
+    /// An exit code says the command finished, not that it ran the repeats it was
+    /// handed. A run that stopped after two of three is not evidence about three.
+    #[test]
+    fn a_self_repeating_lane_that_ran_fewer_repeats_than_asked_is_not_complete() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let paths = self_repeating_lane(&temp, "", &[false, false]);
+
+        let report = command_lane_report(
+            &paths,
+            &self_repeating_mode(),
+            3,
+            &StressEvidenceConfig::default(),
+        );
+
+        assert!(!report.complete, "{}", report.markdown);
+    }
+
+    #[test]
+    fn a_short_self_repeating_lane_says_so_in_its_headline() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let paths = self_repeating_lane(&temp, "", &[false, false]);
+
+        let report = command_lane_report(
+            &paths,
+            &self_repeating_mode(),
+            3,
+            &StressEvidenceConfig::default(),
+        );
+
+        assert!(
+            report.markdown.contains("Result: **INCOMPLETE**"),
+            "{}",
+            report.markdown
+        );
+    }
+
+    /// A lane launched once writes one attempt marker, so every finding in its
+    /// log belongs to "attempt 0". A rate computed from that would say 100% for a
+    /// violation that fired once in fifty repeats.
+    #[test]
+    fn a_self_repeating_lane_does_not_rate_its_findings_by_attempt() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let log = format!("{}0\n{VIOLATION}", stress_report::ATTEMPT_MARKER);
+        let paths = self_repeating_lane(&temp, &log, &[false, true, false]);
+
+        let report = command_lane_report(
+            &paths,
+            &self_repeating_mode(),
+            3,
+            &StressEvidenceConfig::default(),
+        );
+
+        assert!(
+            !report.markdown.contains("| finding | attempts | rate |"),
+            "{}",
+            report.markdown
+        );
+    }
+
+    #[test]
+    fn a_self_repeating_lane_still_names_the_violation_it_reported() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let log = format!("{}0\n{VIOLATION}", stress_report::ATTEMPT_MARKER);
+        let paths = self_repeating_lane(&temp, &log, &[false, true, false]);
+
+        let report = command_lane_report(
+            &paths,
+            &self_repeating_mode(),
+            3,
+            &StressEvidenceConfig::default(),
+        );
+
+        assert!(
+            report.markdown.contains("unsafe-library-call"),
             "{}",
             report.markdown
         );
@@ -1323,7 +1737,12 @@ Intercepted call to real-time unsafe function `malloc` in real-time context!
             },
         );
 
-        let report = command_lane_report(&paths, 2, &StressEvidenceConfig::default());
+        let report = command_lane_report(
+            &paths,
+            &per_repeat_mode(),
+            2,
+            &StressEvidenceConfig::default(),
+        );
 
         assert!(
             report.markdown.contains("NO ATTEMPTS"),

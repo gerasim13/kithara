@@ -23,7 +23,7 @@ mod evidence;
 mod sanitizer;
 
 use evidence::MAX_SIGNATURE_EXAMPLES;
-pub(crate) use sanitizer::{ATTEMPT_MARKER, findings as sanitizer_findings};
+pub(crate) use sanitizer::{ATTEMPT_MARKER, Findings, findings as sanitizer_findings};
 
 const MAX_FAILURE_ROWS: usize = 100;
 const MAX_PROBLEM_ROWS: usize = 100;
@@ -717,74 +717,143 @@ fn disagreement(cells: &[Option<LaneRate>]) -> f64 {
     high - low
 }
 
-/// Names what a command lane's own test runner recorded, attempt by attempt.
+/// What a command lane's own test runner recorded, gathered from the reports the
+/// lane kept.
 ///
-/// An exit code says an attempt was rejected; it does not say in which test.
-/// When the command runs its tests under a runner that writes a report, the
-/// lane keeps one copy per attempt, and this is where those copies become the
-/// sentence a reader needs: this test, on these attempts.
+/// Counted per execution rather than per attempt, because those are not the same
+/// number: a lane launched fifty times records one execution of each test per
+/// launch, and a lane launched once with a repeat count records fifty in a single
+/// report. Counting attempts would call the second one "one in one".
+#[derive(Debug, Default)]
+pub(crate) struct AttemptRecords {
+    /// Failed and total executions of each test the reports name.
+    pub(crate) rates: BTreeMap<TestId, LaneRate>,
+    /// Attempts each failing test failed in.
+    failed_in: BTreeMap<TestId, BTreeSet<usize>>,
+    /// Rejected attempts that wrote no report at all.
+    silent: BTreeSet<usize>,
+    /// Attempts whose report could not be read.
+    unreadable: BTreeSet<usize>,
+    /// How many attempts the lane recorded.
+    attempts: usize,
+}
+
+impl AttemptRecords {
+    /// The most executions any one test recorded.
+    ///
+    /// This is what a lane that repeats internally can be held to: its report
+    /// must show the repeats that were asked for, or the run stopped short of the
+    /// campaign it claims to be.
+    pub(crate) fn repeats(&self) -> usize {
+        self.rates
+            .values()
+            .map(|rate| rate.attempts)
+            .max()
+            .unwrap_or(0)
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.rates.is_empty() && self.silent.is_empty() && self.unreadable.is_empty()
+    }
+}
+
+/// Reads every report a command lane kept and counts what its runner recorded.
 ///
-/// A rejected attempt that left no report at all is reported too, and is the
-/// more serious of the two: the process died before the runner could write
-/// anything — the signature of a crash outside any test.
-pub(crate) fn append_attempt_reports(out: &mut String, directory: &Path, codes: &[i32]) {
-    let mut failures = BTreeMap::<TestId, BTreeSet<usize>>::new();
-    let mut silent = BTreeSet::new();
-    let mut unreadable = BTreeSet::new();
+/// A rejected attempt that left no report at all is recorded too, and is the more
+/// serious of the two: the process died before the runner could write anything —
+/// the signature of a crash outside any test.
+pub(crate) fn attempt_records(directory: &Path, codes: &[i32]) -> AttemptRecords {
+    let mut records = AttemptRecords {
+        attempts: codes.len(),
+        ..AttemptRecords::default()
+    };
     for (attempt, code) in codes.iter().enumerate() {
         let kept = directory.join(format!("attempt-{attempt}.xml"));
         let Ok(xml) = fs::read_to_string(&kept) else {
             if *code != 0 {
-                silent.insert(attempt);
+                records.silent.insert(attempt);
             }
             continue;
         };
         match parse_junit_report(&xml) {
             Ok(report) => {
-                for case in report.cases.iter().filter(|case| case.failed) {
-                    failures
-                        .entry((case.suite.clone(), case.name.clone()))
-                        .or_default()
-                        .insert(attempt);
+                for case in &report.cases {
+                    let id = (case.suite.clone(), case.name.clone());
+                    let rate = records.rates.entry(id.clone()).or_default();
+                    rate.attempts += 1;
+                    if case.failed {
+                        rate.failed += 1;
+                        records.failed_in.entry(id).or_default().insert(attempt);
+                    }
                 }
             }
             Err(_) => {
-                unreadable.insert(attempt);
+                records.unreadable.insert(attempt);
             }
         }
     }
-    if failures.is_empty() && silent.is_empty() && unreadable.is_empty() {
+    records
+}
+
+/// Names what a command lane's own test runner recorded.
+///
+/// An exit code says a run was rejected; it does not say in which test. When the
+/// command runs its tests under a runner that writes a report, this is where that
+/// report becomes the sentence a reader needs: this test, this often.
+pub(crate) fn append_attempt_reports(out: &mut String, records: &AttemptRecords) {
+    if records.is_empty() {
         return;
     }
+    let failures = records
+        .rates
+        .iter()
+        .filter(|(_, rate)| rate.failed > 0)
+        .collect::<Vec<_>>();
     out.push_str("\n## What the lane's own runner recorded\n");
     if !failures.is_empty() {
-        out.push_str("\n| test | rate | attempts |\n|---|---:|---|\n");
-        let mut rows = failures.into_iter().collect::<Vec<_>>();
-        rows.sort_by_key(|(id, attempts)| (Reverse(attempts.len()), id.clone()));
-        for (id, attempts) in rows.into_iter().take(MAX_FAILURE_ROWS) {
-            let _ = writeln!(
-                out,
-                "| `{}` | {} ({}/{}) | {} |",
-                markdown_cell(&format!("{} {}", id.0, id.1)),
-                rate_percent(attempts.len(), codes.len()),
-                attempts.len(),
-                codes.len(),
-                markdown_cell(&join_attempts(&attempts)),
+        // The attempt a failure belongs to is only worth a column when there is
+        // more than one attempt to tell apart. A lane that repeats inside a
+        // single launch would print the same "0" on every row.
+        let per_attempt = records.attempts > 1;
+        out.push_str(if per_attempt {
+            "\n| test | rate | attempts |\n|---|---:|---|\n"
+        } else {
+            "\n| test | rate |\n|---|---:|\n"
+        });
+        let mut rows = failures;
+        rows.sort_by_key(|(id, rate)| (Reverse(rate.failed), (*id).clone()));
+        for (id, rate) in rows.into_iter().take(MAX_FAILURE_ROWS) {
+            let named = markdown_cell(&format!("{} {}", id.0, id.1));
+            let measured = format!(
+                "{} ({}/{})",
+                rate_percent(rate.failed, rate.attempts),
+                rate.failed,
+                rate.attempts
             );
+            if per_attempt {
+                let attempts = records.failed_in.get(id).cloned().unwrap_or_default();
+                let _ = writeln!(
+                    out,
+                    "| `{named}` | {measured} | {} |",
+                    markdown_cell(&join_attempts(&attempts))
+                );
+            } else {
+                let _ = writeln!(out, "| `{named}` | {measured} |");
+            }
         }
     }
-    if !silent.is_empty() {
+    if !records.silent.is_empty() {
         let _ = writeln!(
             out,
             "\n- Rejected attempts that wrote no report (died before any verdict): `{}`",
-            markdown_cell(&join_attempts(&silent))
+            markdown_cell(&join_attempts(&records.silent))
         );
     }
-    if !unreadable.is_empty() {
+    if !records.unreadable.is_empty() {
         let _ = writeln!(
             out,
             "\n- Attempts whose report could not be read: `{}`",
-            markdown_cell(&join_attempts(&unreadable))
+            markdown_cell(&join_attempts(&records.unreadable))
         );
     }
 }
@@ -1890,12 +1959,43 @@ mod tests {
         )
     }
 
+    fn rendered(temp: &tempfile::TempDir, codes: &[i32]) -> String {
+        let mut out = String::new();
+        append_attempt_reports(&mut out, &attempt_records(temp.path(), codes));
+        out
+    }
+
+    /// One report holding several repeats of one test, which is what a lane run
+    /// under `--stress-count` writes.
+    fn repeated_case(name: &str, outcomes: &[bool]) -> String {
+        let suites = outcomes
+            .iter()
+            .enumerate()
+            .map(|(repeat, failed)| {
+                let failure = if *failed {
+                    "\n      <failure type=\"test failure\">aborted</failure>\n    "
+                } else {
+                    ""
+                };
+                format!(
+                    r#"  <testsuite name="demo::tests@stress-{repeat}">
+    <testcase name="{name}" classname="demo::tests" time="0.1">{failure}</testcase>
+  </testsuite>
+"#
+                )
+            })
+            .collect::<String>();
+        format!(
+            r#"<testsuites uuid="run" timestamp="2026-08-17T12:00:00Z">
+{suites}</testsuites>"#
+        )
+    }
+
     #[test]
     fn a_command_lanes_own_runner_names_the_test_behind_an_exit_code() {
         let temp = kept_reports(&[(1, &failed_case("mix_tap"))]);
-        let mut out = String::new();
 
-        append_attempt_reports(&mut out, temp.path(), &[0, 101, 0]);
+        let out = rendered(&temp, &[0, 101, 0]);
 
         assert!(out.contains("demo::tests mix_tap"), "{out}");
     }
@@ -1903,9 +2003,8 @@ mod tests {
     #[test]
     fn a_named_test_carries_the_attempts_it_was_rejected_on() {
         let temp = kept_reports(&[(1, &failed_case("mix_tap")), (2, &failed_case("mix_tap"))]);
-        let mut out = String::new();
 
-        append_attempt_reports(&mut out, temp.path(), &[0, 101, 101]);
+        let out = rendered(&temp, &[0, 101, 101]);
 
         assert!(out.contains("| 1, 2 |"), "{out}");
     }
@@ -1913,9 +2012,8 @@ mod tests {
     #[test]
     fn a_rejected_attempt_that_wrote_no_report_is_reported_as_silent() {
         let temp = kept_reports(&[]);
-        let mut out = String::new();
 
-        append_attempt_reports(&mut out, temp.path(), &[0, 139]);
+        let out = rendered(&temp, &[0, 139]);
 
         assert!(out.contains("died before any verdict"), "{out}");
     }
@@ -1923,9 +2021,8 @@ mod tests {
     #[test]
     fn an_accepted_attempt_that_wrote_no_report_is_not_called_silent() {
         let temp = kept_reports(&[]);
-        let mut out = String::new();
 
-        append_attempt_reports(&mut out, temp.path(), &[0, 0]);
+        let out = rendered(&temp, &[0, 0]);
 
         assert!(out.is_empty(), "{out}");
     }
@@ -1933,11 +2030,72 @@ mod tests {
     #[test]
     fn a_report_that_cannot_be_parsed_is_named_rather_than_counted_as_passing() {
         let temp = kept_reports(&[(0, "<testsuites")]);
-        let mut out = String::new();
 
-        append_attempt_reports(&mut out, temp.path(), &[101]);
+        let out = rendered(&temp, &[101]);
 
         assert!(out.contains("could not be read"), "{out}");
+    }
+
+    /// A lane launched once with a repeat count runs every repeat inside one
+    /// report. Counting launches there would divide by one and call a violation
+    /// that fired once in three "every attempt".
+    #[test]
+    fn every_repeat_inside_one_report_is_counted() {
+        let temp = kept_reports(&[(0, &repeated_case("mix_tap", &[false, true, false]))]);
+
+        let records = attempt_records(temp.path(), &[101]);
+
+        assert_eq!(
+            records.rates[&("demo::tests".to_owned(), "mix_tap".to_owned())],
+            LaneRate {
+                failed: 1,
+                attempts: 3
+            }
+        );
+    }
+
+    /// The repeats a lane recorded is what its requested count is checked
+    /// against: a run that stopped after two of fifty is not the campaign it
+    /// claims to be, and only the report can say so.
+    #[test]
+    fn the_recorded_repeats_are_the_most_any_test_ran() {
+        let temp = kept_reports(&[(0, &repeated_case("mix_tap", &[false, true, false]))]);
+
+        let records = attempt_records(temp.path(), &[101]);
+
+        assert_eq!(records.repeats(), 3);
+    }
+
+    /// Repeats spread over separate launches add up the same way: the number
+    /// that matters is executions, whichever side performed the repetition.
+    #[test]
+    fn executions_from_separate_launches_are_added_together() {
+        let temp = kept_reports(&[
+            (0, &repeated_case("mix_tap", &[false, false])),
+            (1, &repeated_case("mix_tap", &[true, false])),
+        ]);
+
+        let records = attempt_records(temp.path(), &[0, 101]);
+
+        assert_eq!(
+            records.rates[&("demo::tests".to_owned(), "mix_tap".to_owned())],
+            LaneRate {
+                failed: 1,
+                attempts: 4
+            }
+        );
+    }
+
+    /// A lane launched once writes one attempt marker, so an attempt column
+    /// would print the same `0` on every row and read as though each failure had
+    /// been located in time.
+    #[test]
+    fn a_single_launch_is_reported_without_an_attempt_column() {
+        let temp = kept_reports(&[(0, &repeated_case("mix_tap", &[false, true, false]))]);
+
+        let out = rendered(&temp, &[101]);
+
+        assert!(out.contains("| test | rate |"), "{out}");
     }
 
     #[test]

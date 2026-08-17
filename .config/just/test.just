@@ -321,13 +321,21 @@ _rtsan SUITE FEATURES FILTER SUPPRESSIONS="":
         exit 1
         ;;
     esac
+    # A campaign hands its repeat count here instead of launching this recipe once
+    # per repeat: nextest owns the repetition, so the suite is built once and
+    # every repeat lands in one report that names the test it belongs to. Unset —
+    # a gate, or a developer — runs the selection once.
+    repeats=""
+    if [ -n "${KITHARA_STRESS_REPEATS:-}" ]; then
+        repeats="--stress-count ${KITHARA_STRESS_REPEATS}"
+    fi
     RTSAN_OPTIONS="$options" \
     RUSTFLAGS="$flags" \
     RUSTDOCFLAGS="$flags" \
         cargo "$toolchain" nextest run --profile rtsan \
         -p kithara-integration-tests --test {{ SUITE }} \
         --features {{ FEATURES }} \
-        --target "$target" {{ FILTER }}
+        --target "$target" $repeats {{ FILTER }}
 
 rtsan-async FILTER="no_block": (_rtsan "suite_light" "no-block" FILTER ".config/rtsan/async-suppressions.txt")
 

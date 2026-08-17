@@ -470,22 +470,29 @@ pub struct StressModeConfig {
     pub features: Vec<String>,
     pub set_env: BTreeMap<String, String>,
     pub raw_path_env: BTreeMap<String, String>,
-    /// A command this lane repeats instead of running the test suite.
+    /// A command this lane runs instead of the campaign's own test runner.
     ///
-    /// Some contracts are not observable through a test runner. A sanitizer
-    /// aborts the process on the violating call, so there is no per-test
-    /// verdict to collect and no report to parse — what the lane produces is a
-    /// log and an exit code. Such a violation can still be intermittent, and a
-    /// campaign is the only thing that turns "it happened once" into a rate,
-    /// so these lanes belong in it rather than beside it. Empty means the lane
-    /// runs the configured test runner and is measured per test.
+    /// Some lanes cannot be described as a feature set: a sanitizer lane picks
+    /// its own toolchain, compiler flags and runtime library, and that contract
+    /// belongs to the recipe that owns it rather than to a second copy here.
+    /// The campaign runs the command and reads what it leaves behind. Empty
+    /// means the lane runs the configured test runner and is measured per test.
     pub command: Vec<String>,
+    /// Whether the command performs the campaign's repeats itself.
+    ///
+    /// A command that runs its tests under nextest can be handed the count
+    /// through `KITHARA_STRESS_REPEATS` and launched once: the workspace builds
+    /// once, and every repeat lands in one report carrying a per-test verdict,
+    /// which is what lets the lane stand in the same comparison as the lanes the
+    /// campaign drives directly. Launched once per repeat instead, the same lane
+    /// pays a rebuild and a cold start each time and can report only an exit
+    /// code — and an exit code names no test.
+    pub owns_repeats: bool,
     /// Where this command leaves a `JUnit` report, relative to the workspace.
     ///
-    /// A command lane's verdict is an exit code, and an exit code names no
-    /// test. When the command runs its tests under a runner that writes a
-    /// report anyway, that report is what turns "one attempt in fifty aborted"
-    /// into "this test aborted, on these attempts". The runner overwrites the
+    /// An exit code names no test. When the command runs its tests under a
+    /// runner that writes a report anyway, that report is what turns "something
+    /// aborted" into "this test aborted, this often". The runner overwrites the
     /// file every attempt, so the lane keeps a copy of each.
     pub attempt_junit: Option<String>,
 }
