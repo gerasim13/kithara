@@ -52,14 +52,6 @@ const DOCS: &[(&str, &str)] = &[
         include_str!("../../../assets/ui/modules/studio-mixer.kmodule.ron"),
     ),
     (
-        "modules/studio-settings.kmodule.ron",
-        include_str!("../../../assets/ui/modules/studio-settings.kmodule.ron"),
-    ),
-    (
-        "modules/shaders/load.wgsl",
-        include_str!("../../../assets/ui/shaders/load.wgsl"),
-    ),
-    (
         "modules/studio-mixer-single.kmodule.ron",
         include_str!("../../../assets/ui/modules/studio-mixer-single.kmodule.ron"),
     ),

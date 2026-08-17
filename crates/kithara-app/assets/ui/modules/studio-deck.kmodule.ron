@@ -20,48 +20,6 @@
                 adaptive: (priority: Required),
             ),
             Row(
-                id: "readout",
-                gap: 0.0,
-                size: (w: Fill, h: Fixed(28.0)),
-                background: BgDeep,
-                background_alpha: 0.84,
-                frame: (top: false, right: false, bottom: true, left: false),
-                children: [
-                    Chip(
-                        id: "focus",
-                        label: "$letter",
-                        size: (w: Fixed(34.0), h: Fill),
-                        read: Telemetry(id: "deck.focused", with: { "deck": "$deck" }),
-                    ),
-                    DeckSummary(
-                        id: "summary",
-                        style: Micro,
-                        size: (w: Fill, h: Fill),
-                        read: Telemetry(id: "deck.track.title", with: { "deck": "$deck" }),
-                    ),
-                    Divider(id: "before-elapsed"),
-                    Time(
-                        id: "elapsed",
-                        size: (w: Fixed(104.0), h: Fill),
-                        read: Telemetry(id: "deck.playback.position_secs", with: { "deck": "$deck" }),
-                    ),
-                    Divider(id: "before-remain"),
-                    Readout(
-                        id: "remain",
-                        label: Some("REMAIN"),
-                        size: (w: Fixed(96.0), h: Fill),
-                        read: Telemetry(id: "deck.playback.remain", with: { "deck": "$deck" }),
-                    ),
-                    Divider(id: "before-bpm"),
-                    Bpm(
-                        id: "bpm",
-                        size: (w: Fixed(62.0), h: Fill),
-                        placeholder: Some("--"),
-                        read: Telemetry(id: "deck.playback.waveform", with: { "deck": "$deck" }),
-                    ),
-                ],
-            ),
-            Row(
                 id: "transport",
                 gap: 0.0,
                 size: (w: Fill, h: Fixed(38.0)),

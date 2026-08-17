@@ -24,32 +24,7 @@
                 ],
             ),
             Divider(id: "after-layout"),
-            TitleBar(id: "title", label: "KITHARA STUDIO"),
             WindowDrag(id: "drag"),
-            Divider(id: "before-master"),
-            Row(
-                id: "master",
-                gap: 8.0,
-                pad: 11.0,
-                size: (w: Shrink, h: Fill),
-                children: [
-                    Text(id: "master-label", style: MicroLabel, label: "MASTER"),
-                    VuStereo(
-                        id: "master-vu",
-                        size: (w: Fixed(72.0), h: Fixed(20.0)),
-                        read: Telemetry(id: "player.output.levels"),
-                    ),
-                    Pressable(
-                        id: "vis",
-                        press: Command(id: "ui.vis.next"),
-                        child: Vis(
-                            id: "vis-face",
-                            size: (w: Fixed(64.0), h: Fixed(20.0)),
-                            read: Model(id: "vis.preset"),
-                        ),
-                    ),
-                ],
-            ),
             Divider(id: "before-cpu"),
             Row(
                 id: "cpu",
@@ -88,18 +63,6 @@
                         ),
                     ],
                 ),
-            ),
-            Divider(id: "before-presets"),
-            Row(
-                id: "presets",
-                gap: 0.0,
-                pad_x: 8.0,
-                size: (w: Shrink, h: Fill),
-                children: [
-                    PresetSelector(id: "preset"),
-                    Spacer(id: "preset-gap", size: (w: Fixed(8.0), h: Fill)),
-                    Include(id: "settings", source: "studio-settings.kmodule.ron"),
-                ],
             ),
             Divider(id: "before-window"),
             WindowControls(id: "window", style: Standard),
