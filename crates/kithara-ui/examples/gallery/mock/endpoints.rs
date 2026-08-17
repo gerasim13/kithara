@@ -330,6 +330,36 @@ pub(crate) fn registry() -> impl EndpointRegistry {
     insert_library_endpoints(&mut registry);
     insert_menu_endpoints(&mut registry);
     insert_quality_endpoints(&mut registry);
+    insert_page_endpoints(&mut registry);
+    for id in [
+        "deck.view.zoom",
+        "mock.knob.26",
+        "mock.knob.28",
+        "mock.knob.34",
+        "mock.knob.38",
+        "mock.volume",
+        "mock.cells.segmented",
+        "vis.preset",
+    ] {
+        registry.insert(
+            EndpointCategory::Model,
+            id,
+            EndpointDesc::new(ValueKind::Scalar),
+        );
+    }
+    insert_table_endpoints(&mut registry);
+    registry.insert(
+        EndpointCategory::Model,
+        "mock.levels",
+        EndpointDesc::new(ValueKind::Stereo),
+    );
+    registry
+}
+
+/// Everything the gallery pages read for themselves: the words they label
+/// their sections with, the poses their objects hold, and the flag each tab
+/// answers with.
+fn insert_page_endpoints(registry: &mut MockRegistry) {
     for id in [
         "gallery.label.knobs",
         "gallery.label.meters",
@@ -439,29 +469,6 @@ pub(crate) fn registry() -> impl EndpointRegistry {
             EndpointDesc::new(ValueKind::Bool),
         );
     }
-    for id in [
-        "deck.view.zoom",
-        "mock.knob.26",
-        "mock.knob.28",
-        "mock.knob.34",
-        "mock.knob.38",
-        "mock.volume",
-        "mock.cells.segmented",
-        "vis.preset",
-    ] {
-        registry.insert(
-            EndpointCategory::Model,
-            id,
-            EndpointDesc::new(ValueKind::Scalar),
-        );
-    }
-    insert_table_endpoints(&mut registry);
-    registry.insert(
-        EndpointCategory::Model,
-        "mock.levels",
-        EndpointDesc::new(ValueKind::Stereo),
-    );
-    registry
 }
 
 fn insert_table_endpoints(registry: &mut MockRegistry) {

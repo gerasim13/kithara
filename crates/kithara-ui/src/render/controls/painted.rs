@@ -73,7 +73,7 @@ impl PaintState {
     /// construction, and equality also settles the floats for free: `-0.0`
     /// compares equal to `0.0`, which is the normalisation the lsq wheel spells
     /// out with `OrderedFloat` for its own path caches.
-    fn refresh(&self, list: &DrawList) -> bool {
+    pub(crate) fn refresh(&self, list: &DrawList) -> bool {
         let mut drawn = self.drawn.borrow_mut();
         if drawn.as_ref() == Some(list) {
             return false;
@@ -81,6 +81,44 @@ impl PaintState {
         self.geometry.clear();
         *drawn = Some(list.clone());
         true
+    }
+
+    /// The shaping context this widget keeps between frames, made on first ask.
+    pub(crate) fn shaped<T>(
+        &self,
+        resources: &TextResources,
+        with: impl FnOnce(&mut TextContext) -> T,
+    ) -> T {
+        let mut text = self.text.borrow_mut();
+        with(text.get_or_insert_with(|| resources.into()))
+    }
+
+    /// Replays one list at `bounds`, tessellating it only when it differs from
+    /// the list the kept geometry was built from.
+    ///
+    /// `region` is the part of the box the list may put ink in, which is the
+    /// box itself unless something moved the drawing out of it.
+    pub(crate) fn replay(
+        &self,
+        renderer: &mut Renderer,
+        bounds: Rectangle,
+        region: Rectangle,
+        list: &DrawList,
+        resources: &TextResources,
+    ) {
+        self.refresh(list);
+        let inner = Rect {
+            h: region.height,
+            w: region.width,
+            x: region.x,
+            y: region.y,
+        };
+        renderer.with_translation(Vector::new(bounds.x, bounds.y), |renderer| {
+            let geometry = self.geometry.draw_with_bounds(renderer, region, |frame| {
+                replay_ordered_in(list, frame, resources, inner);
+            });
+            renderer.draw_geometry(geometry);
+        });
     }
 }
 
@@ -203,6 +241,7 @@ where
     ///
     /// The kept geometry is dropped only when the drawn list changed, so a
     /// control that did not change is not tessellated again.
+    #[cfg_attr(feature = "perf", hotpath::measure(label = "iced.control.paint"))]
     fn paint_into(
         &self,
         state: &PaintState,
@@ -227,6 +266,7 @@ where
         self.replay_into(state, renderer, bounds, &list);
     }
 
+    #[cfg_attr(feature = "perf", hotpath::measure(label = "iced.control.paint"))]
     fn paint_indexed_into(
         &self,
         state: &PaintState,
@@ -258,20 +298,8 @@ where
         bounds: Rectangle,
         list: &DrawList,
     ) {
-        state.refresh(list);
         let region = self.region(bounds.size(), list);
-        let inner = Rect {
-            h: region.height,
-            w: region.width,
-            x: region.x,
-            y: region.y,
-        };
-        renderer.with_translation(Vector::new(bounds.x, bounds.y), |renderer| {
-            let geometry = state.geometry.draw_with_bounds(renderer, region, |frame| {
-                replay_ordered_in(list, frame, self.text_resources, inner);
-            });
-            renderer.draw_geometry(geometry);
-        });
+        state.replay(renderer, bounds, region, list, self.text_resources);
     }
 
     /// Where this control may put ink, in the coordinates its box was handed.

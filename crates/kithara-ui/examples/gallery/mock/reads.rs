@@ -539,7 +539,7 @@ impl Reads for MockReads {
             "gallery.motion.clock" => ReadValue::Scalar(f64::from(self.motion_clock)),
             "gallery.sprite.scrub" => ReadValue::Scalar(f64::from(self.sprite_scrub)),
             "gallery.lottie.scrub" => ReadValue::Scalar(f64::from(self.lottie_scrub)),
-            "vis.badge" => ReadValue::Bool(true),
+            "vis.badge" | "deck.focused" => ReadValue::Bool(true),
             "vis.preset" => ReadValue::Scalar(self.vis_preset.as_()),
             "vis.time" => ReadValue::Scalar(self.vis_time_secs),
             "vis.preset_index" => ReadValue::Text(CATALOG.vis_indices[self.vis_preset]),
@@ -561,7 +561,6 @@ impl Reads for MockReads {
             "deck.playback.duration_secs" => ReadValue::Scalar(Consts::DURATION_SECS),
             "deck.playback.looping" => ReadValue::Bool(self.transport.loop_region().is_some()),
             "deck.playback.reverse" => ReadValue::Bool(self.transport.reverse()),
-            "deck.focused" => ReadValue::Bool(true),
             "deck.playback.synced" | "mock.button.sync" => ReadValue::Bool(self.button_sync),
             "deck.playback.tempo" => ReadValue::Text(Consts::TEMPO),
             "deck.playback.waveform" => ReadValue::Waveform(WaveformView {

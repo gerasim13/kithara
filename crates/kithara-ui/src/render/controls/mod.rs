@@ -22,7 +22,7 @@ pub(super) use scroll::{RetainedCanvas, RetainedCanvasState};
 #[cfg(feature = "iced")]
 pub(crate) use {
     chrome::{ChromeLeaf, chrome_leaf, header_chevron},
-    painted::{Gesture, Paint},
+    painted::{Gesture, Paint, PaintState},
     snap::snapped,
     tree::{sync_tree_scroll, tree_rows},
 };
