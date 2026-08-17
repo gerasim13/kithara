@@ -360,6 +360,24 @@ const PAGES: &[Page] = &[
         immediate_guard: "iced.gallery-faders",
         retained_guard: "vello.gallery-faders",
     },
+    Page {
+        // Transformed nodes with nothing running them: the mock hands each
+        // object its pose and the page's clock stands still. Read against
+        // `gallery-motion` it separates what a pose costs from what animating
+        // one costs, and against `gallery-buttons` what a transform costs at
+        // all.
+        name: "gallery-objects",
+        group: Group::Pages,
+        entry: "gallery-objects.klayout.ron",
+        tab: Tab::Objects,
+        frames: 120,
+        program: Program::Idle,
+        moving: None,
+        pointer_at: Pt { x: 700.0, y: 400.0 },
+        fenced: false,
+        immediate_guard: "iced.gallery-objects",
+        retained_guard: "vello.gallery-objects",
+    },
     // The three pages the toolkit's own motion runs on: objects posed by a
     // clock, sheets cut into frames, and artworks emitted per frame. All three
     // move off `gallery.motion.clock`, which the mock advances on their tabs,
@@ -1456,9 +1474,11 @@ fn ui_page_perf(#[case] label: &'static str, #[case] host: Host, #[case] page: &
 /// buttons page above is the still control they are read against, because what
 /// is asked here is what the motion itself costs on each host.
 #[kithara::test]
+#[case("iced", Host::Immediate, "gallery-objects")]
 #[case("iced", Host::Immediate, "gallery-motion")]
 #[case("iced", Host::Immediate, "gallery-sprites")]
 #[case("iced", Host::Immediate, "gallery-lottie")]
+#[case("vello", Host::Retained, "gallery-objects")]
 #[case("vello", Host::Retained, "gallery-motion")]
 #[case("vello", Host::Retained, "gallery-sprites")]
 #[case("vello", Host::Retained, "gallery-lottie")]
