@@ -5,6 +5,7 @@ mod custom;
 mod flex;
 mod host;
 mod leaf;
+mod menu;
 #[path = "../masonry_tree/mount.rs"]
 mod mount;
 mod node;

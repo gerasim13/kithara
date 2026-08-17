@@ -534,7 +534,7 @@ where
             },
             true,
         );
-        output.host_engine(Rc::clone(&self.map_event));
+        output.host_engine(Rc::clone(&self.map_event), self.skin);
         output.set_actions(
             None,
             Some(self.control_action(path.to_owned(), ControlAction::SecondaryActivate)),
@@ -676,7 +676,7 @@ where
         if let Some(plan) = plan {
             output.add_engine_control(plan, false);
             if owner == InputOwner::Leaf {
-                output.host_engine(Rc::clone(&self.map_event));
+                output.host_engine(Rc::clone(&self.map_event), self.skin);
             }
         } else if activates(spec) {
             output.set_actions(
@@ -688,7 +688,7 @@ where
     }
 
     fn hosted(&mut self, _node: &ExpandedNode, mut child: Self::Output) -> Self::Output {
-        child.host_engine(Rc::clone(&self.map_event));
+        child.host_engine(Rc::clone(&self.map_event), self.skin);
         child
     }
 

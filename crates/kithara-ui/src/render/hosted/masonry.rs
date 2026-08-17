@@ -102,7 +102,7 @@ impl HostedControlPlan {
         match self {
             Self::Picker {
                 path,
-                item_count,
+                items,
                 item_height,
                 face,
                 ..
@@ -113,7 +113,7 @@ impl HostedControlPlan {
                     .and_then(|engine| engine.picker_snapshot(path))
                     .is_some_and(|snapshot| snapshot.open)
                 {
-                    for region in picker_hits(anchor, *item_height, *item_count) {
+                    for region in picker_hits(anchor, *item_height, items.len()) {
                         targets.push(Target::item(
                             path,
                             Hit::new(point, region.area()),
@@ -589,7 +589,7 @@ mod tests {
         let skin = builtin::skin();
         let plan = HostedControlPlan::Picker {
             path: "scope".to_owned(),
-            item_count: 2,
+            items: vec!["ZVUK".to_owned(), "LOCAL".to_owned()],
             item_height: 18.0,
             selected: Some(0),
             face: Rect {

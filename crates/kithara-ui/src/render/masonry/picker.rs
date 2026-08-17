@@ -11,9 +11,9 @@ use num_traits::cast::AsPrimitive;
 
 use super::custom::HostAction;
 use crate::{
-    atoms::{table::face::Drawn, tree::retained::Drawn as TreeDrawn},
+    atoms::{bar::context::Context, table::face::Drawn, tree::retained::Drawn as TreeDrawn},
     draw::{Pt, Rect},
-    engine::{Engine, Target},
+    engine::{Engine, PickerSnapshot, Target},
     interact::{
         CursorShape, Input, MOUSE, Outcome, PointerInput, PointerPhase, masonry::pointer_button,
     },
@@ -35,6 +35,13 @@ impl EngineTarget {
     }
 }
 
+/// The menu an engine currently shows, ready to be drawn.
+pub(super) struct OpenPicker {
+    pub(super) anchor: Rect,
+    pub(super) highlighted: Option<usize>,
+    pub(super) items: Vec<String>,
+}
+
 /// What routing one event through the engine produced.
 pub(super) struct Routed {
     pub(super) focused: bool,
@@ -49,6 +56,12 @@ pub(crate) struct HostedEngine {
     map_event: Rc<dyn Fn(UiEvent) -> HostAction>,
     #[field(get(copy), vis = "pub(super)")]
     owner: WidgetId,
+    /// The layer that draws this engine's open menu, and whether that menu has
+    /// changed since the layer last drew it. The layer sits outside the tree
+    /// this engine belongs to, so nothing below marks it: the root reads this
+    /// after every event and repaints the layer itself.
+    menu: Cell<Option<WidgetId>>,
+    menu_changed: Cell<bool>,
     pointer: Rc<Cell<Option<Pt>>>,
     _projections: Vec<Rc<dyn TableProjection>>,
     _tree_projections: Vec<Rc<dyn TreeProjection>>,
@@ -107,6 +120,8 @@ impl HostedEngine {
                 engine: Rc::clone(&engine),
                 map_event,
                 owner,
+                menu: Cell::new(None),
+                menu_changed: Cell::new(false),
                 pointer: Rc::clone(&pointer),
                 _projections: projections,
                 _tree_projections: tree_projections,
@@ -120,6 +135,7 @@ impl HostedEngine {
         let mut engine = self.engine.borrow_mut();
         let before = self.table_views(&engine, self.pointer.get());
         let tree_before = self.tree_views(&engine, self.pointer.get());
+        let picker_before = self.picker_views(&engine);
         if matches!(input, Input::Pointer(_) | Input::Wheel(_)) {
             self.pointer.set(point);
         }
@@ -135,7 +151,15 @@ impl HostedEngine {
         }
         let emission = engine.handle(input, &targets, kithara_platform::time::Instant::now());
         let focused = engine.focused_path().is_some();
-        let repaint = before != self.table_views(&engine, self.pointer.get())
+        // A menu that just opened, closed, or moved its highlight is a picture
+        // the tree cannot know changed: it is drawn by a layer above the tree,
+        // out of the engine's own state, so nothing below asks for the frame.
+        let menu_changed = picker_before != self.picker_views(&engine);
+        if menu_changed {
+            self.menu_changed.set(true);
+        }
+        let repaint = menu_changed
+            || before != self.table_views(&engine, self.pointer.get())
             || tree_before != self.tree_views(&engine, self.pointer.get());
         let Some(emission) = emission else {
             return Routed {
@@ -169,14 +193,38 @@ impl HostedEngine {
     }
 
     pub(super) fn has_open_picker(&self) -> bool {
+        self.open_picker().is_some()
+    }
+
+    pub(super) fn set_menu_layer(&self, layer: WidgetId) {
+        self.menu.set(Some(layer));
+    }
+
+    /// The layer to repaint, once, because the menu it draws has changed.
+    pub(super) fn take_changed_menu(&self) -> Option<WidgetId> {
+        self.menu_changed.replace(false).then(|| self.menu.get())?
+    }
+
+    /// The one menu this engine currently shows, if any: where it hangs, what
+    /// it offers, and which option the pointer or the keyboard is on.
+    ///
+    /// A control shows at most one menu and a host raises at most one at a
+    /// time, so the first open one is the answer.
+    pub(super) fn open_picker(&self) -> Option<OpenPicker> {
         let engine = self.engine.borrow();
-        self.targets.iter().any(|target| {
-            let HostedControlPlan::Picker { path, .. } = &target.plan else {
-                return false;
+        self.targets.iter().find_map(|target| {
+            let HostedControlPlan::Picker {
+                path, items, face, ..
+            } = &target.plan
+            else {
+                return None;
             };
-            engine
-                .picker_snapshot(path)
-                .is_some_and(|snapshot| snapshot.open)
+            let snapshot = engine.picker_snapshot(path)?;
+            snapshot.open.then(|| OpenPicker {
+                anchor: Context::placed(*face, target_bounds(target)),
+                highlighted: snapshot.highlighted,
+                items: items.clone(),
+            })
         })
     }
 
@@ -227,6 +275,18 @@ impl HostedEngine {
                     return None;
                 };
                 plan.view(engine, point, target_bounds(target))
+            })
+            .collect()
+    }
+
+    fn picker_views(&self, engine: &Engine) -> Vec<PickerSnapshot> {
+        self.targets
+            .iter()
+            .filter_map(|target| {
+                let HostedControlPlan::Picker { path, .. } = &target.plan else {
+                    return None;
+                };
+                engine.picker_snapshot(path)
             })
             .collect()
     }

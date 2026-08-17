@@ -113,10 +113,10 @@ impl HostedControl {
         match &self.plan {
             HostedControlPlan::Picker {
                 path,
-                item_count,
+                items,
                 item_height,
                 ..
-            } => Some((path, *item_count, *item_height)),
+            } => Some((path, items.len(), *item_height)),
             _ => None,
         }
     }

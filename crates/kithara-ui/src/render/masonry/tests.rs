@@ -1632,6 +1632,106 @@ fn picker_portal_honours_engine_and_leaf_owners_beneath_the_root_window_layer() 
     }
 }
 
+/// The strip whose scope picker the retained host has to draw.
+const SCOPE_STRIP: &str = r#"Row(size: (w: Fill, h: Fill), gap: 0.0, pad: 0.0, children: [
+    ContextBar(
+        id: "context",
+        size: Some((w: Fill, h: Fixed(26.0))),
+        read: Model(id: "library.breadcrumb"),
+        write: Model(id: "library.scope"),
+        scope_items: ["ZVUK", "LOCAL"],
+        scope: Model(id: "library.scope"),
+    ),
+])"#;
+
+/// A press that opens a menu nobody draws answers with nothing on screen, and
+/// no assertion about the engine can tell that apart from a menu that appeared:
+/// the open flag is set either way. So the pointer is driven onto the closed
+/// face and the scene is asked what came of it.
+#[kithara::test]
+fn the_scope_menu_a_press_opens_reaches_the_retained_scene() {
+    let (mut root, face) = scope_strip_root();
+    let closed = scene_size(&mut root);
+
+    press_release(&mut root, face);
+
+    assert!(
+        scene_size(&mut root) > closed,
+        "the retained host drew the same picture with the menu open as with it closed, so the \
+         press opened a menu that is not on screen"
+    );
+}
+
+/// The other direction, which is what says the growth above was the menu and
+/// not something the first press woke up for good.
+#[kithara::test]
+fn dismissing_the_scope_menu_takes_its_drawing_off_again() {
+    let (mut root, face) = scope_strip_root();
+    let closed = scene_size(&mut root);
+    press_release(&mut root, face);
+    let open = scene_size(&mut root);
+
+    press_release(&mut root, (150.0, 110.0));
+
+    let dismissed = scene_size(&mut root);
+    assert!(
+        dismissed < open,
+        "dismissing the menu left its drawing in the scene: {dismissed} against {closed} closed \
+         and {open} open"
+    );
+}
+
+/// The strip mounted on the retained host, with the centre of its closed scope
+/// face — the one point on the strip that opens the menu.
+fn scope_strip_root() -> (MasonryRoot<TestAction>, (f32, f32)) {
+    let registry = fixture_registry();
+    let reads = FixtureReads;
+    let ui = fixture_ui("leaf-fixture", SCOPE_STRIP, &registry);
+    let host = MasonryHost::map_actions(ctx(&ui, &reads), builtin::skin(), TestAction::Document);
+    let output = document::render(&ui.root, ctx(&ui, &reads), host);
+    let control_id = *output
+        .document_ids()
+        .last()
+        .unwrap_or_else(|| panic!("the scope strip must have a real control node"));
+    let mut root = masonry_root(output, 200, 120);
+    root.redraw()
+        .unwrap_or_else(|error| panic!("the scope strip must compose: {error}"));
+    let bounds = root
+        .root()
+        .get_widget(control_id)
+        .unwrap_or_else(|| panic!("the scope strip must stay registered"))
+        .ctx()
+        .bounding_rect();
+    let skin = builtin::skin();
+    let mut text = TextContext::from(skin.text_resources());
+    let face = Context::placed(
+        Context::new(skin).face_of(&mut text, ["ZVUK", "LOCAL"]),
+        Rect {
+            h: 0.0,
+            w: 0.0,
+            x: bounds.x0.as_(),
+            y: bounds.y0.as_(),
+        },
+    );
+    (root, (face.x + face.w / 2.0, face.y + face.h / 2.0))
+}
+
+/// How much the retained host drew, in the one unit a Vello scene reports.
+fn scene_size(root: &mut MasonryRoot<TestAction>) -> usize {
+    let (scene, _access) = root
+        .redraw()
+        .unwrap_or_else(|error| panic!("the retained host must draw: {error}"));
+    let encoding = scene.encoding();
+    encoding.path_data.len() + encoding.draw_data.len()
+}
+
+fn press_release(root: &mut MasonryRoot<TestAction>, (x, y): (f32, f32)) {
+    root.handle_pointer_event(pointer_down(x.into(), y.into()))
+        .unwrap_or_else(|error| panic!("the press must route: {error}"));
+    root.handle_pointer_event(pointer_up(x.into(), y.into()))
+        .unwrap_or_else(|error| panic!("the release must route: {error}"));
+}
+
 #[kithara::test]
 fn titlebar_window_layer_honours_engine_and_leaf_owned_modules() {
     let registry = fixture_registry();

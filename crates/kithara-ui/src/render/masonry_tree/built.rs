@@ -7,6 +7,7 @@ use masonry::{
 
 use super::{
     custom::HostAction,
+    menu::PickerLayer,
     mount::NodeLayout,
     node::Node,
     picker::{EngineTarget, HostedEngine},
@@ -17,7 +18,7 @@ use crate::{
     expand::Binding,
     ids::InternId,
     layout::FrameSides,
-    render::{HostedControlPlan, UiEvent},
+    render::{HostedControlPlan, Skin, UiEvent},
     solve,
 };
 
@@ -254,12 +255,26 @@ impl<Action> MasonryNode<Action> {
         });
     }
 
-    pub(crate) fn host_engine(&mut self, map_event: Rc<dyn Fn(UiEvent) -> HostAction>) {
+    pub(crate) fn host_engine(
+        &mut self,
+        map_event: Rc<dyn Fn(UiEvent) -> HostAction>,
+        skin: &Skin,
+    ) {
         if self.engine_targets.is_empty() {
             return;
         }
         let targets = std::mem::take(&mut self.engine_targets);
+        let raises_menu = targets
+            .iter()
+            .any(|target| matches!(target.plan, HostedControlPlan::Picker { .. }));
         let engine = HostedEngine::new(self.widget.id(), targets, map_event);
+        // The menu hangs outside every box in the tree, so it is drawn by a
+        // layer above it rather than by the control that owns the engine.
+        if raises_menu {
+            let layer = NewWidget::new(PickerLayer::new(Rc::clone(&engine), skin));
+            engine.set_menu_layer(layer.id());
+            self.layers.push(layer.erased());
+        }
         self.engines.push(Rc::clone(&engine));
         self.widget.widget.set_engine(engine);
     }

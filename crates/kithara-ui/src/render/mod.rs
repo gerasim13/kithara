@@ -67,6 +67,7 @@ pub(crate) use {
 pub(crate) use {
     event::engine_value,
     hosted::hosted_control_plan,
+    picker::PickerMenu,
     window::{ControlsProgram, TitleProgram},
 };
 

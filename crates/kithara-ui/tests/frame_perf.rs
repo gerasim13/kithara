@@ -79,6 +79,11 @@ fn fs_main(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
 enum Interaction {
     Drag,
     Press,
+    /// A press on the leading part of the box rather than the middle of it, for
+    /// a control whose box is mostly a reading and whose one gesture sits at
+    /// one end. Pressing the middle of such a control is a press on the label,
+    /// which correctly answers nothing on either host.
+    PressLeading,
     DataChange,
 }
 
@@ -98,6 +103,10 @@ enum Step {
 const START: (f32, f32) = (0.25, 0.25);
 const MIDDLE: (f32, f32) = (0.5, 0.5);
 const END: (f32, f32) = (0.75, 0.75);
+/// Far enough in to clear the strip's own padding and its icon, and well short
+/// of where the reading beside the control starts. At this fixture's 240 that
+/// is x=48, against a scope chip the skin puts at 30 and runs about 50 wide.
+const LEADING: (f32, f32) = (0.2, 0.5);
 
 impl Interaction {
     fn steps(self, rect: Rect) -> Vec<Step> {
@@ -105,6 +114,7 @@ impl Interaction {
         match self {
             Self::Drag => vec![at(START), Step::Press, at(MIDDLE), at(END), Step::Release],
             Self::Press => vec![at(MIDDLE), Step::Press, Step::Release],
+            Self::PressLeading => vec![at(LEADING), Step::Press, Step::Release],
             Self::DataChange => vec![Step::Data],
         }
     }
@@ -224,7 +234,7 @@ const SCENARIOS: &[Scenario] = &[
     Scenario {
         name: "ContextBar",
         control: r#"ContextBar(id: "control", read: Model(id: "library.breadcrumb"), scope_items: ["ALL", "MINE"], scope: Model(id: "library.scope"), write: Model(id: "library.scope"))"#,
-        interaction: Interaction::Press,
+        interaction: Interaction::PressLeading,
     },
     Scenario {
         name: "Text",
@@ -1152,7 +1162,10 @@ fn measure(backend: &Backend) -> Vec<Reading> {
             driver.frame()
         });
         readings.push(Reading {
-            gestured: matches!(scenario.interaction, Interaction::Drag | Interaction::Press),
+            gestured: matches!(
+                scenario.interaction,
+                Interaction::Drag | Interaction::Press | Interaction::PressLeading
+            ),
             name: scenario.name,
             points: steps
                 .iter()

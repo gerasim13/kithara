@@ -140,6 +140,7 @@ where
             return self.route_root_pointer(event);
         }
         if self.routes_open_picker(&event)? {
+            self.sync()?;
             return Ok(Handled::Yes);
         }
         if self.dismisses_popover(&event)? {
@@ -392,7 +393,26 @@ where
         }
     }
 
+    /// Repaints the layer of every engine whose menu has changed.
+    ///
+    /// The menu is drawn above the tree by a layer of its own, so the widget
+    /// that routed the press cannot mark it: a press that opens a menu is,
+    /// from Masonry's side, a press that changed nothing on screen.
+    fn sync_menus(&mut self) {
+        let changed: Vec<WidgetId> = self
+            .engines
+            .iter()
+            .filter_map(|engine| engine.take_changed_menu())
+            .collect();
+        for layer in changed {
+            self.root.edit_widget(layer, |mut layer| {
+                layer.ctx.request_paint_only();
+            });
+        }
+    }
+
     fn sync(&mut self) -> Result<(), MasonryRootError> {
+        self.sync_menus();
         loop {
             let pending = {
                 let mut signals = self.signals.borrow_mut();

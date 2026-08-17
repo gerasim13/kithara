@@ -2,11 +2,112 @@ use num_traits::{ToPrimitive, cast::AsPrimitive};
 
 use crate::{
     atoms::design::picker::Picker,
-    draw::{DrawList, DrawListBuilder, Rect},
+    draw::{DrawList, DrawListBuilder, Rect, Rgba},
     interact::CursorShape,
     render::{HostLayer, LayerHit, ReadValue, Skin},
     text::TextContext,
 };
+
+/// The open menu, drawn from the skin alone.
+///
+/// Both hosts raise this layer for themselves — the immediate one as an iced
+/// overlay, the retained one as a Masonry layer above the tree — so the menu
+/// keeps its own painter rather than one copy per host. Everything it needs is
+/// taken from the skin here, because a layer outlives the borrow the document
+/// walk had.
+pub(crate) struct PickerMenu {
+    background: Rgba,
+    border: Rgba,
+    border_width: f32,
+    face: Picker,
+    item_height: f32,
+    radius: f32,
+    selected_background: Rgba,
+    selected_text: Rgba,
+    text: Rgba,
+}
+
+impl PickerMenu {
+    pub(crate) fn new(skin: &Skin) -> Self {
+        let metrics = &skin.tree;
+        Self {
+            background: skin.rgba(metrics.scope_menu_background),
+            border: skin.rgba(metrics.scope_menu_frame.border),
+            border_width: metrics.scope_menu_frame.border_width,
+            face: Picker::new(skin),
+            item_height: metrics.scope_item_height,
+            radius: metrics.scope_menu_frame.radius,
+            selected_background: skin.rgba(metrics.scope_selected_background),
+            selected_text: skin.rgba(metrics.scope_selected_text),
+            text: skin.rgba(metrics.scope_menu_text),
+        }
+    }
+
+    /// The menu hanging off `anchor`: its own unclipped frame, and one hit per
+    /// option.
+    pub(crate) fn layer<'a>(
+        &self,
+        text: &mut TextContext,
+        anchor: Rect,
+        items: impl IntoIterator<Item = &'a str>,
+        highlighted: Option<usize>,
+    ) -> HostLayer<usize> {
+        let items: Vec<&str> = items.into_iter().collect();
+        let bounds = Rect {
+            h: self.item_height * AsPrimitive::<f32>::as_(items.len()),
+            w: anchor.w,
+            x: anchor.x,
+            y: anchor.y + anchor.h,
+        };
+        HostLayer::new(
+            bounds,
+            self.commands(text, bounds.w, &items, highlighted),
+            picker_hits(anchor, self.item_height, items.len()),
+        )
+    }
+
+    fn commands(
+        &self,
+        text: &mut TextContext,
+        width: f32,
+        items: &[&str],
+        highlighted: Option<usize>,
+    ) -> DrawList {
+        let bounds = Rect {
+            h: self.item_height * AsPrimitive::<f32>::as_(items.len()),
+            w: width,
+            x: 0.0,
+            y: 0.0,
+        };
+        let mut list = DrawListBuilder::default();
+        list.fill_rounded_rect(bounds, self.radius, self.background);
+        for (index, label) in items.iter().enumerate() {
+            let item = Rect {
+                h: self.item_height,
+                w: bounds.w,
+                x: 0.0,
+                y: AsPrimitive::<f32>::as_(index) * self.item_height,
+            };
+            let active = highlighted == Some(index);
+            if active {
+                list.fill_rect(item, self.selected_background);
+            }
+            self.face.label(
+                &mut list,
+                text,
+                label,
+                item,
+                if active {
+                    self.selected_text
+                } else {
+                    self.text
+                },
+            );
+        }
+        list.stroke_rounded_rect(bounds, self.radius, self.border, self.border_width);
+        list.finish()
+    }
+}
 
 #[derive(fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
@@ -41,70 +142,7 @@ impl<'a> PickerPaint<'a> {
         anchor: Rect,
         highlighted: Option<usize>,
     ) -> HostLayer<usize> {
-        let bounds = Rect {
-            h: self.item_height() * AsPrimitive::<f32>::as_(self.items.len()),
-            w: anchor.w,
-            x: anchor.x,
-            y: anchor.y + anchor.h,
-        };
-        HostLayer::new(
-            bounds,
-            self.popup_commands(text, bounds.w, highlighted),
-            picker_hits(anchor, self.item_height(), self.items.len()),
-        )
-    }
-
-    fn popup_commands(
-        &self,
-        text: &mut TextContext,
-        width: f32,
-        highlighted: Option<usize>,
-    ) -> DrawList {
-        let bounds = Rect {
-            h: self.item_height() * AsPrimitive::<f32>::as_(self.items.len()),
-            w: width,
-            x: 0.0,
-            y: 0.0,
-        };
-        let mut list = DrawListBuilder::default();
-        list.fill_rounded_rect(
-            bounds,
-            self.skin.tree.scope_menu_frame.radius,
-            self.skin.rgba(self.skin.tree.scope_menu_background),
-        );
-        for (index, label) in self.items.iter().enumerate() {
-            let item = Rect {
-                h: self.item_height(),
-                w: bounds.w,
-                x: 0.0,
-                y: AsPrimitive::<f32>::as_(index) * self.item_height(),
-            };
-            let active = highlighted == Some(index);
-            if active {
-                list.fill_rect(
-                    item,
-                    self.skin.rgba(self.skin.tree.scope_selected_background),
-                );
-            }
-            Picker::new(self.skin).label(
-                &mut list,
-                text,
-                label,
-                item,
-                self.skin.rgba(if active {
-                    self.skin.tree.scope_selected_text
-                } else {
-                    self.skin.tree.scope_menu_text
-                }),
-            );
-        }
-        list.stroke_rounded_rect(
-            bounds,
-            self.skin.tree.scope_menu_frame.radius,
-            self.skin.rgba(self.skin.tree.scope_menu_frame.border),
-            self.skin.tree.scope_menu_frame.border_width,
-        );
-        list.finish()
+        PickerMenu::new(self.skin).layer(text, anchor, self.items.iter().copied(), highlighted)
     }
 }
 

@@ -746,6 +746,7 @@ const fn leaf_paints(spec: &ControlSpec) -> bool {
             | ControlSpec::Knob { .. }
             | ControlSpec::NavItem { .. }
             | ControlSpec::PresetSelector
+            | ControlSpec::Range
             | ControlSpec::SettingsButton
             | ControlSpec::TabLarge { .. }
     )

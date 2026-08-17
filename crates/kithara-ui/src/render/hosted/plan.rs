@@ -47,7 +47,10 @@ pub(crate) enum HostedControlPlan {
     },
     Picker {
         path: String,
-        item_count: usize,
+        /// The words the menu offers, in the order it offers them. The count
+        /// alone answers hit-testing; the words are what the open menu draws,
+        /// and the host that raises it has no other source for them.
+        items: Vec<String>,
         item_height: f32,
         selected: Option<usize>,
         /// Where the strip put its closed face, as an offset from the strip's
@@ -316,10 +319,10 @@ impl HostedControlPlan {
             }
             Self::Picker {
                 path,
-                item_count,
+                items,
                 selected,
                 ..
-            } => descriptors.push(Descriptor::picker(path.clone(), *item_count, *selected)),
+            } => descriptors.push(Descriptor::picker(path.clone(), items.len(), *selected)),
             Self::Tree(plan) => plan.append_descriptors(descriptors),
             Self::Table(plan) => plan.append_descriptors(descriptors),
             Self::Fader {
@@ -417,15 +420,17 @@ fn context_bar_plan(
     let scope_value = scope.and_then(|binding| ctx.read(binding));
     let selected = picker_selected_index(scope_value.as_ref(), scope_items.len());
     let mut text = TextContext::from(skin.text_resources());
+    let items: Vec<String> = scope_items
+        .iter()
+        .map(|item| ctx.ui.resolve(*item).to_owned())
+        .collect();
+    let face = Context::new(skin).face_of(&mut text, items.iter().map(String::as_str));
     HostedControlPlan::Picker {
         path: path.to_owned(),
-        item_count: scope_items.len(),
+        items,
         item_height: skin.tree.scope_item_height,
         selected,
-        face: Context::new(skin).face_of(
-            &mut text,
-            scope_items.iter().map(|item| ctx.ui.resolve(*item)),
-        ),
+        face,
     }
 }
 
