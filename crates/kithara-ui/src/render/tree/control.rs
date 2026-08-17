@@ -1,8 +1,7 @@
 use iced::advanced::{layout::Layout, mouse};
 
 use super::{
-    geometry::Rendered,
-    host::{tree_input_layout, tree_search_input_layout},
+    geometry::{Rendered, tree_input_layout, tree_search_input_layout},
     mount::{Cx, ViewControl},
     table::TableHost,
 };

@@ -3748,3 +3748,93 @@ fn insert_stream_endpoints(registry: &mut FixtureRegistry) {
             .with_scope("variant"),
     );
 }
+
+/// Four rows, stacked with no gap, each the skin's own row height.
+const CLIPPED_ROWS: &str = r#"Column(gap: 0.0, children: [
+    NavItem(id: "first", label: "FIRST", icon: Playlist, read: Model(id: "ui.menu.open")),
+    NavItem(id: "second", label: "SECOND", icon: Playlist, read: Model(id: "ui.menu.open")),
+    NavItem(id: "third", label: "THIRD", icon: Playlist, read: Model(id: "ui.menu.open")),
+    NavItem(id: "fourth", label: "FOURTH", icon: Playlist, read: Model(id: "ui.menu.open")),
+])"#;
+
+/// Those rows mounted on the retained host, either inside a box one row tall or
+/// with nothing around them. The pair is what makes a silent press readable: the
+/// same document, the same point, and the box the only difference between them.
+fn clipped_rows_root(boxed: bool) -> MasonryRoot<TestAction> {
+    let height = builtin::skin().nav.item_height;
+    let rows = if boxed {
+        format!(
+            r#"Column(gap: 0.0, pad: 0.0, size: (w: Fill, h: Fill), children: [
+                Scroll(id: "rows", size: (w: Fill, h: Fixed({height})), child: {CLIPPED_ROWS}),
+            ])"#
+        )
+    } else {
+        format!(
+            r#"Column(gap: 0.0, pad: 0.0, size: (w: Fill, h: Fill), children: [{CLIPPED_ROWS}])"#
+        )
+    };
+    let mut registry = fixture_registry();
+    registry.insert(
+        EndpointCategory::Model,
+        "ui.menu.open",
+        EndpointDesc::new(ValueKind::Bool),
+    );
+    let reads = FixtureReads;
+    let ui = fixture_ui("leaf-fixture", &rows, &registry);
+    let host = MasonryHost::map_actions(ctx(&ui, &reads), builtin::skin(), TestAction::Document);
+    let output = document::render(&ui.root, ctx(&ui, &reads), host);
+    let mut root = masonry_root(output, 198, 200);
+    root.redraw()
+        .unwrap_or_else(|error| panic!("the clipped rows must compose: {error}"));
+    root
+}
+
+/// The middle of the row at that index, counting from the top of the window.
+fn row_middle(index: f32) -> (f32, f32) {
+    let height = builtin::skin().nav.item_height;
+    (99.0, height.mul_add(index, height / 2.0))
+}
+
+/// The retained host answers where its box shows a row.
+#[kithara::test]
+fn the_retained_box_answers_where_it_shows_a_row() {
+    let mut root = clipped_rows_root(true);
+
+    press_release(&mut root, row_middle(0.0));
+
+    assert_eq!(
+        root.take_actions(),
+        vec![TestAction::Document(UiEvent::Control {
+            path: "demo/first".to_owned(),
+            action: ControlAction::Activate,
+        })]
+    );
+}
+
+/// And nowhere else: the rows it scrolled past its edge are not under a pointer
+/// that never entered it. The same press with the box taken off reaches the row
+/// the layout puts there, which is what says the box is what silenced it.
+#[kithara::test]
+fn the_retained_box_hides_the_rows_it_scrolled_past() {
+    let at = row_middle(3.0);
+    let mut unboxed = clipped_rows_root(false);
+    press_release(&mut unboxed, at);
+    assert_eq!(
+        unboxed.take_actions(),
+        vec![TestAction::Document(UiEvent::Control {
+            path: "demo/fourth".to_owned(),
+            action: ControlAction::Activate,
+        })],
+        "with nothing around them the rows reach that far down, or the press below measures nothing"
+    );
+
+    let mut boxed = clipped_rows_root(true);
+    press_release(&mut boxed, at);
+
+    assert_eq!(
+        boxed.take_actions(),
+        vec![],
+        "the box is one row tall and nothing is drawn below it, so a press on blank window \
+         answered by a row is a press the box never cut"
+    );
+}

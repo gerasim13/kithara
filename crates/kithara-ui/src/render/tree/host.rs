@@ -10,21 +10,16 @@ use iced::{
 };
 use kithara_platform::time::Instant;
 
-use super::geometry::effective_size;
+use super::geometry::HostedLayout;
 use crate::{
-    engine::{Descriptor, Engine, PickerSnapshot, Target},
+    engine::{Descriptor, Engine, Target},
     expand::ExpandedNode,
     interact::{Input, PointerPhase, ScrollAxis, iced as iced_interact},
     module::ChromeStyle,
     render::{
-        Resolving, Skin, UiEvent,
-        controls::sync_tree_scroll,
-        document::Ctx,
-        engine as engine_event, hosted_picker_overlay, picker_hits, sync_picker, sync_table_scroll,
-        sync_text_input, toggle_module,
-        tree::control::{HostedControl, append_control_descriptors, append_control_targets},
+        Skin, UiEvent, controls::sync_tree_scroll, document::Ctx, engine as engine_event,
+        hosted_picker_overlay, sync_picker, sync_table_scroll, sync_text_input, toggle_module,
     },
-    size::{Hidden, is_hidden},
 };
 
 #[derive(Clone, Copy)]
@@ -571,425 +566,6 @@ fn control_pointer_answered(engine: &Engine, input: Input<'_>, path: &str, answe
         && (engine.picker_snapshot(path).is_some() || engine.text_input_snapshot(path).is_some())
 }
 
-enum HostedLayout {
-    Chrome {
-        drop: Option<String>,
-        header: Option<(String, String)>,
-        collapsed: bool,
-    },
-    Group {
-        sized: bool,
-        surfaced: bool,
-        framed: bool,
-        children: Vec<Self>,
-    },
-    Slot {
-        sized: bool,
-        children: Vec<Self>,
-    },
-    /// A stack takes its declared box directly, with no container around it,
-    /// so its children sit exactly one level down whether it was sized or not.
-    Stage {
-        children: Vec<Self>,
-    },
-    Wrapper {
-        sized: bool,
-        child: Box<Self>,
-    },
-    /// A viewport, which like a stack takes its declared box directly: the
-    /// `scrollable` itself is the window, and it keeps a layout node of its own
-    /// for the content it offsets, so that content sits exactly one level down.
-    Scroll {
-        child: Box<Self>,
-    },
-    Control(Option<HostedControl>),
-    SelfMeasuredControl(Option<HostedControl>),
-}
-
-impl HostedLayout {
-    fn module(spec: ModuleHost<'_>) -> Self {
-        let ModuleHost {
-            instance,
-            module,
-            chrome,
-            collapsed,
-            drop,
-        } = spec;
-        Self::Chrome {
-            drop: drop.then(|| format!("{instance}/drop")),
-            header: (chrome == ChromeStyle::Full)
-                .then(|| (format!("{instance}/header"), module.to_owned())),
-            collapsed,
-        }
-    }
-
-    fn new(node: &ExpandedNode, ctx: Ctx<'_, '_>, skin: &Skin) -> Self {
-        let hidden: Hidden<'_> = &|block| ctx.flag(Some(&block.hidden));
-        match node {
-            ExpandedNode::Row {
-                size,
-                surface,
-                frame,
-                children,
-                ..
-            }
-            | ExpandedNode::Column {
-                size,
-                surface,
-                frame,
-                children,
-                ..
-            } => Self::Group {
-                sized: size.is_some(),
-                surfaced: surface.is_some(),
-                framed: frame.is_some(),
-                children: children
-                    .iter()
-                    .filter(|child| !is_hidden(*child, hidden))
-                    .map(|child| Self::new(child, ctx, skin))
-                    .collect(),
-            },
-            ExpandedNode::Object { child, .. } | ExpandedNode::Optional { child, .. } => {
-                Self::new(child, ctx, skin)
-            }
-            ExpandedNode::Slot { size, children, .. } => Self::Slot {
-                sized: size.is_some(),
-                children: children
-                    .iter()
-                    .filter(|child| !is_hidden(*child, hidden))
-                    .map(|child| Self::new(child, ctx, skin))
-                    .collect(),
-            },
-            ExpandedNode::Stage { children, .. } => Self::Stage {
-                children: children
-                    .iter()
-                    .filter(|child| !is_hidden(*child, hidden))
-                    .map(|child| Self::new(child, ctx, skin))
-                    .collect(),
-            },
-            ExpandedNode::Control {
-                path, spec, read, ..
-            } => {
-                let control = HostedControl::new(
-                    ctx.ui.resolve(*path),
-                    spec,
-                    read.as_ref().and_then(|binding| ctx.read(binding)),
-                    read.as_ref(),
-                    ctx.scope(read.as_ref()),
-                    Resolving { ctx, skin },
-                );
-                if effective_size(node, skin).is_none() {
-                    Self::SelfMeasuredControl(control)
-                } else {
-                    Self::Control(control)
-                }
-            }
-            ExpandedNode::Popover { anchor, .. } => Self::Wrapper {
-                sized: effective_size(node, skin).is_some(),
-                child: Box::new(Self::new(anchor, ctx, skin)),
-            },
-            ExpandedNode::Pressable { child, .. } => Self::Wrapper {
-                sized: effective_size(node, skin).is_some(),
-                child: Box::new(Self::new(child, ctx, skin)),
-            },
-            ExpandedNode::Scroll { child, .. } => Self::Scroll {
-                child: Box::new(Self::new(child, ctx, skin)),
-            },
-        }
-    }
-
-    fn descriptors(&self) -> Vec<Descriptor> {
-        let mut descriptors = Vec::new();
-        self.append_descriptors(&mut descriptors);
-        descriptors
-    }
-
-    fn append_descriptors(&self, descriptors: &mut Vec<Descriptor>) {
-        match self {
-            Self::Chrome { drop, header, .. } => {
-                if let Some(path) = drop {
-                    descriptors.push(Descriptor::crossing(path.clone()));
-                }
-                if let Some((path, _)) = header {
-                    descriptors.push(Descriptor::activation(path.clone()));
-                }
-            }
-            Self::Group { children, .. }
-            | Self::Slot { children, .. }
-            | Self::Stage { children, .. } => {
-                for child in children {
-                    child.append_descriptors(descriptors);
-                }
-            }
-            Self::Scroll { child, .. } | Self::Wrapper { child, .. } => {
-                child.append_descriptors(descriptors);
-            }
-            Self::Control(Some(control)) | Self::SelfMeasuredControl(Some(control)) => {
-                append_control_descriptors(control, descriptors);
-            }
-            Self::Control(None) | Self::SelfMeasuredControl(None) => {}
-        }
-    }
-
-    #[cfg(test)]
-    fn targets<'a>(&'a self, layout: Layout<'_>, cursor: mouse::Cursor) -> Vec<Target<'a>> {
-        self.targets_with_engine(layout, cursor, None)
-    }
-
-    fn targets_with_engine<'a>(
-        &'a self,
-        layout: Layout<'_>,
-        cursor: mouse::Cursor,
-        engine: Option<&Engine>,
-    ) -> Vec<Target<'a>> {
-        let mut targets = Vec::new();
-        self.append_targets(layout, cursor, engine, &mut targets);
-        if let Some(engine) = engine {
-            self.append_open_picker_targets(engine, cursor, &mut targets);
-        }
-        targets
-    }
-
-    fn append_open_picker_targets<'a>(
-        &'a self,
-        engine: &Engine,
-        cursor: mouse::Cursor,
-        targets: &mut Vec<Target<'a>>,
-    ) {
-        for (path, item_count, item_height) in self.pickers() {
-            if !engine
-                .picker_snapshot(path)
-                .is_some_and(|snapshot| snapshot.open)
-            {
-                continue;
-            }
-            let Some(position) = targets
-                .iter()
-                .position(|target| target.path == path && target.index.is_none())
-            else {
-                continue;
-            };
-            let anchor = targets.remove(position);
-            let area = anchor.hit.area();
-            targets.push(anchor);
-            for region in picker_hits(area, item_height, item_count) {
-                let bounds = region.area();
-                targets.push(Target::item(
-                    path,
-                    iced_interact::hit(
-                        Rectangle {
-                            x: bounds.x,
-                            y: bounds.y,
-                            width: bounds.w,
-                            height: bounds.h,
-                        },
-                        cursor,
-                    ),
-                    *region.action(),
-                ));
-            }
-        }
-    }
-
-    fn pickers(&self) -> Vec<(&str, usize, f32)> {
-        let mut pickers = Vec::new();
-        self.append_pickers(&mut pickers);
-        pickers
-    }
-
-    fn append_pickers<'a>(&'a self, pickers: &mut Vec<(&'a str, usize, f32)>) {
-        match self {
-            Self::Group { children, .. }
-            | Self::Slot { children, .. }
-            | Self::Stage { children, .. } => {
-                for child in children {
-                    child.append_pickers(pickers);
-                }
-            }
-            Self::Scroll { child, .. } | Self::Wrapper { child, .. } => {
-                child.append_pickers(pickers);
-            }
-            Self::Control(Some(control)) | Self::SelfMeasuredControl(Some(control)) => {
-                if let Some(picker) = control.picker() {
-                    pickers.push(picker);
-                }
-            }
-            Self::Chrome { .. } | Self::Control(None) | Self::SelfMeasuredControl(None) => {}
-        }
-    }
-
-    fn picker_snapshots<'a>(&'a self, engine: &Engine) -> Vec<(&'a str, PickerSnapshot)> {
-        self.pickers()
-            .into_iter()
-            .filter_map(|(path, _, _)| {
-                engine
-                    .picker_snapshot(path)
-                    .map(|snapshot| (path, snapshot))
-            })
-            .collect()
-    }
-
-    fn append_targets<'a>(
-        &'a self,
-        layout: Layout<'_>,
-        cursor: mouse::Cursor,
-        engine: Option<&Engine>,
-        targets: &mut Vec<Target<'a>>,
-    ) {
-        match self {
-            Self::Chrome {
-                drop,
-                header,
-                collapsed,
-            } => {
-                let shell = if let Some(path) = drop {
-                    targets.push(Target::new(
-                        path,
-                        iced_interact::hit(layout.bounds(), cursor),
-                    ));
-                    let Some(shell) = first_child(layout) else {
-                        return;
-                    };
-                    shell
-                } else {
-                    layout
-                };
-                let Some((path, _)) = header else {
-                    return;
-                };
-                let Some(body) = first_child(shell) else {
-                    return;
-                };
-                let Some(content) = first_child(body) else {
-                    return;
-                };
-                let header = if *collapsed {
-                    content
-                } else {
-                    let Some(header) = first_child(content) else {
-                        return;
-                    };
-                    header
-                };
-                targets.push(Target::new(
-                    path,
-                    iced_interact::hit(header.bounds(), cursor),
-                ));
-            }
-            Self::Group {
-                sized,
-                surfaced,
-                framed,
-                children,
-            } => {
-                let Some(layout) = group_children(layout, *sized, *surfaced, *framed) else {
-                    return;
-                };
-                for (child, layout) in children.iter().zip(layout.children()) {
-                    child.append_targets(layout, cursor, engine, targets);
-                }
-            }
-            Self::Slot { sized, children } => {
-                let Some(layout) = slot_children(layout, *sized) else {
-                    return;
-                };
-                for (child, layout) in children.iter().zip(layout.children()) {
-                    child.append_targets(layout, cursor, engine, targets);
-                }
-            }
-            Self::Stage { children } => {
-                for (child, layout) in children.iter().zip(layout.children()) {
-                    child.append_targets(layout, cursor, engine, targets);
-                }
-            }
-            Self::Wrapper { sized, child } => {
-                let layout = if *sized {
-                    let Some(layout) = first_child(layout) else {
-                        return;
-                    };
-                    layout
-                } else {
-                    layout
-                };
-                child.append_targets(layout, cursor, engine, targets);
-            }
-            Self::Scroll { child } => {
-                let Some(layout) = first_child(layout) else {
-                    return;
-                };
-                child.append_targets(layout, cursor, engine, targets);
-            }
-            Self::Control(Some(control)) => {
-                let Some(layout) = first_child(layout) else {
-                    return;
-                };
-                append_control_targets(control, layout, cursor, engine, targets);
-            }
-            Self::SelfMeasuredControl(Some(control)) => {
-                append_control_targets(control, layout, cursor, engine, targets);
-            }
-            Self::Control(None) | Self::SelfMeasuredControl(None) => {}
-        }
-    }
-
-    fn header_module<'a>(&'a self, path: &str) -> Option<&'a str> {
-        match self {
-            Self::Chrome {
-                header: Some((header, module)),
-                ..
-            } if header == path => Some(module),
-            Self::Chrome { .. }
-            | Self::Group { .. }
-            | Self::Scroll { .. }
-            | Self::Slot { .. }
-            | Self::Stage { .. }
-            | Self::Wrapper { .. }
-            | Self::Control(_)
-            | Self::SelfMeasuredControl(_) => None,
-        }
-    }
-}
-
-pub(super) fn tree_input_layout(layout: Layout<'_>) -> Option<Layout<'_>> {
-    let panel = layout.children().nth(1)?;
-    first_child(panel)
-}
-
-pub(super) fn tree_search_input_layout(layout: Layout<'_>) -> Option<Layout<'_>> {
-    let search = layout.children().next()?;
-    let row = first_child(search)?;
-    row.children().nth(1)
-}
-
-pub(super) fn group_children(
-    mut layout: Layout<'_>,
-    sized: bool,
-    surfaced: bool,
-    framed: bool,
-) -> Option<Layout<'_>> {
-    if sized {
-        layout = first_child(layout)?;
-    }
-    if surfaced {
-        layout = first_child(layout)?;
-    }
-    if framed {
-        layout = first_child(first_child(layout)?)?;
-    }
-    first_child(layout)
-}
-
-pub(super) fn slot_children(mut layout: Layout<'_>, sized: bool) -> Option<Layout<'_>> {
-    if sized {
-        layout = first_child(layout)?;
-    }
-    first_child(layout)
-}
-
-pub(super) fn first_child(layout: Layout<'_>) -> Option<Layout<'_>> {
-    layout.children().next()
-}
-
 #[cfg(test)]
 mod tests {
     use std::{borrow::Cow, cell::Cell, rc::Rc, sync::LazyLock};
@@ -1023,7 +599,7 @@ mod tests {
         builtin,
         compile::{CompiledNode, CompiledUi, compile},
         draw::{DrawList, Pt, Rect},
-        engine::ScrollConfig,
+        engine::{PickerSnapshot, ScrollConfig},
         expand::ControlSpec,
         ids::EndpointId,
         interact::{CursorShape, Key, Modifiers, mouse as mouse_input},
@@ -1035,6 +611,7 @@ mod tests {
             WaveformView, WheelSurface, Widget, WindowCommand, WindowLayerProgram,
             document::{Clock, Ctx},
             fonts::{FONT_BYTES, SANS},
+            tree::control::HostedControl,
             window_layer,
         },
         solve::{Length as SolveLength, Size as SolveSize},
@@ -1634,6 +1211,91 @@ mod tests {
             &UiConfig::default(),
         )
         .unwrap_or_else(|error| panic!("the leaf nav fixture must compile: {error}"))
+    }
+
+    /// Four rows in a box one row tall, and nothing under that box. Three of
+    /// the rows are past the fold: the window shows blank where their layout
+    /// still puts them, which is what makes a press there answerable by exactly
+    /// one thing — the cut, or the row the box hid.
+    fn compiled_clipped_scroll() -> CompiledUi {
+        let mut resolver = MemResolver::default();
+        resolver.insert(
+            "layout.klayout.ron",
+            r#"(schema: "kithara.layout", version: 1, id: "clipped-scroll-host",
+                root: Module(instance: "nav", source: "clipped-scroll.kmodule.ron"))"#,
+        );
+        resolver.insert(
+            "clipped-scroll.kmodule.ron",
+            r#"(schema: "kithara.module", version: 1, id: "clipped-scroll",
+                root: Column(children: [
+                    Scroll(
+                        id: "rows",
+                        size: (w: Fill, h: Fixed(30.0)),
+                        child: Column(children: [
+                            NavItem(id: "first", label: "FIRST", icon: "Play",
+                                read: Model(id: "mock.toggle.off")),
+                            NavItem(id: "second", label: "SECOND", icon: "Play",
+                                read: Model(id: "mock.toggle.off")),
+                            NavItem(id: "third", label: "THIRD", icon: "Play",
+                                read: Model(id: "mock.toggle.off")),
+                            NavItem(id: "fourth", label: "FOURTH", icon: "Play",
+                                read: Model(id: "mock.toggle.off")),
+                        ]),
+                    ),
+                ]))"#,
+        );
+        compile(
+            "layout.klayout.ron",
+            &resolver,
+            &Registry::default(),
+            builtin::skin_doc(),
+            &UiConfig::default(),
+        )
+        .unwrap_or_else(|error| panic!("the clipped scroll fixture must compile: {error}"))
+    }
+
+    /// A meter taller than the box it scrolls in, and a knob below that box.
+    ///
+    /// The meter seeks to wherever the pointer is rather than to how far it has
+    /// travelled, so it is the control a cut can silence mid-drag: it reads the
+    /// position out of the hit it is handed, and a cut hit carries none. Where
+    /// the pointer ends up there is the knob, which must stay silent while the
+    /// meter owns the gesture.
+    fn compiled_clipped_drag() -> CompiledUi {
+        let mut resolver = MemResolver::default();
+        resolver.insert(
+            "layout.klayout.ron",
+            r#"(schema: "kithara.layout", version: 1, id: "clipped-drag-host",
+                root: Module(instance: "nav", source: "clipped-drag.kmodule.ron"))"#,
+        );
+        resolver.insert(
+            "clipped-drag.kmodule.ron",
+            r#"(schema: "kithara.module", version: 1, id: "clipped-drag",
+                root: Column(gap: 0.0, children: [
+                    Scroll(
+                        id: "rows",
+                        size: (w: Fill, h: Fixed(120.0)),
+                        child: Column(gap: 0.0, children: [
+                            VuVertical(
+                                id: "held",
+                                size: (w: Fill, h: Fixed(240.0)),
+                                read: Telemetry(id: "levels"),
+                                write: Parameter(id: "gain"),
+                            ),
+                        ]),
+                    ),
+                    Knob(id: "other", read: Parameter(id: "gain"),
+                        write: Parameter(id: "gain")),
+                ]))"#,
+        );
+        compile(
+            "layout.klayout.ron",
+            &resolver,
+            &Registry::default(),
+            builtin::skin_doc(),
+            &UiConfig::default(),
+        )
+        .unwrap_or_else(|error| panic!("the clipped drag fixture must compile: {error}"))
     }
 
     fn compiled_overview_row() -> CompiledUi {
@@ -4378,6 +4040,252 @@ mod tests {
                 path: "nav/item".to_owned(),
                 action: ControlAction::Activate,
             }]
+        );
+    }
+
+    /// Mounts one compiled fixture in a window and hands the caller the mounted
+    /// tree. Every press in these tests goes through the host the window runs,
+    /// rather than through the target list alone, because what is under test is
+    /// what answers.
+    fn mounted<T>(
+        ui: &CompiledUi,
+        viewport: Size,
+        act: impl FnOnce(
+            &mut Element<'_, UiEvent>,
+            &mut Tree,
+            &layout::Node,
+            &Renderer,
+            Size,
+            &HostedLayout,
+        ) -> T,
+    ) -> T {
+        let reads = FixtureReads::default();
+        let CompiledNode::Module { instance, root, .. } = &ui.root else {
+            panic!("the fixture root must be a module");
+        };
+        let renderer = headless_renderer();
+        let child = super::super::node::render_engine_node(
+            root,
+            &[],
+            *instance,
+            ctx(ui, &reads),
+            builtin::skin(),
+        );
+        let mut element = host(child, root, ctx(ui, &reads), builtin::skin());
+        let mut tree = Tree::new(element.as_widget());
+        let node = element.as_widget_mut().layout(
+            &mut tree,
+            &renderer,
+            &Limits::new(Size::ZERO, viewport),
+        );
+        let hosted = HostedLayout::new(root, ctx(ui, &reads), builtin::skin());
+        act(&mut element, &mut tree, &node, &renderer, viewport, &hosted)
+    }
+
+    /// The window the clipped fixtures are mounted in: far taller than the box
+    /// either of them scrolls in, so what the box cuts away still has window
+    /// under it.
+    fn clipped_window() -> Size {
+        Size::new(198.0, 400.0)
+    }
+
+    /// The box one target publishes, wherever the layout put it.
+    fn box_of(targets: &[Target<'_>], path: &str) -> Rect {
+        targets
+            .iter()
+            .find(|target| target.path == path)
+            .unwrap_or_else(|| panic!("{path} must have a target"))
+            .hit
+            .area()
+    }
+
+    /// The centre of that box, which is where these tests point.
+    fn centre_of(targets: &[Target<'_>], path: &str) -> Point {
+        let area = box_of(targets, path);
+        Point::new(area.x + area.w / 2.0, area.y + area.h / 2.0)
+    }
+
+    /// A press on the blank window below a scrolling box reaches nothing: the
+    /// rows the box cut away are not under that point, whatever their layout
+    /// still says.
+    #[kithara::test]
+    fn a_press_below_a_scrolling_box_is_not_seen_by_the_rows_it_clipped() {
+        let (published, at) = mounted(
+            &compiled_clipped_scroll(),
+            clipped_window(),
+            |element, tree, node, renderer, viewport, hosted| {
+                let targets = hosted.targets(Layout::new(node), Cursor::Unavailable);
+                let at = centre_of(&targets, "nav/fourth");
+                let (messages, _) = dispatch_press(element, tree, node, renderer, viewport, at);
+                (messages, at)
+            },
+        );
+
+        assert!(
+            at.y > builtin::skin().nav.item_height,
+            "the fourth row has to sit past the fold of a box one row tall for a press there to \
+             mean anything, and the layout puts its centre at {at:?}"
+        );
+        assert_eq!(
+            published,
+            [],
+            "the box scrolls one row and nothing is drawn below it, so a press on blank window \
+             answered by a row is a press the box never cut"
+        );
+    }
+
+    /// The other direction, so the cut is not merely deafness: inside the box
+    /// the row under the pointer still answers.
+    #[kithara::test]
+    fn a_press_inside_a_scrolling_box_still_reaches_the_row_under_it() {
+        let (published, at) = mounted(
+            &compiled_clipped_scroll(),
+            clipped_window(),
+            |element, tree, node, renderer, viewport, hosted| {
+                let targets = hosted.targets(Layout::new(node), Cursor::Unavailable);
+                let at = centre_of(&targets, "nav/first");
+                let (messages, _) = dispatch_press(element, tree, node, renderer, viewport, at);
+                (messages, at)
+            },
+        );
+
+        assert!(
+            at.y < builtin::skin().nav.item_height,
+            "the first row is the one the box shows, and the layout puts its centre at {at:?}"
+        );
+        assert_eq!(
+            published,
+            [UiEvent::Control {
+                path: "nav/first".to_owned(),
+                action: ControlAction::Activate,
+            }]
+        );
+    }
+
+    /// What one drag out of a scrolling box did.
+    struct DraggedOut {
+        /// Whether the press inside the box armed the meter there. Without this
+        /// the move that follows measures nothing.
+        armed: bool,
+        /// What that move published.
+        published: Vec<UiEvent>,
+        /// Where the pointer ended up.
+        at: Point,
+        /// The meter's own box, which reaches past the box that scrolls it.
+        held: Rect,
+        /// The box of the knob below the scrolling one, which is what the
+        /// pointer ended up over.
+        other: Rect,
+    }
+
+    /// Presses the meter inside the scrolling box, then drags the pointer down
+    /// out of that box, onto the knob below it.
+    fn dragged_out_of_the_box() -> DraggedOut {
+        mounted(
+            &compiled_clipped_drag(),
+            clipped_window(),
+            |element, tree, node, renderer, viewport, hosted| {
+                let targets = hosted.targets(Layout::new(node), Cursor::Unavailable);
+                let held = box_of(&targets, "nav/held");
+                // The box shows the top half of the meter, so a quarter of the
+                // way down the meter is the middle of what is on screen.
+                let start = Point::new(held.x + held.w / 2.0, held.y + held.h / 4.0);
+                let at = centre_of(&targets, "nav/other");
+                let other = box_of(&targets, "nav/other");
+                let bounds = Rectangle::with_size(viewport);
+                let mut clipboard = clipboard::Null;
+                let mut armed_messages = Vec::new();
+                let mut shell = Shell::new(&mut armed_messages);
+                element.as_widget_mut().update(
+                    tree,
+                    &Event::Mouse(mouse::Event::ButtonPressed(Button::Left)),
+                    Layout::new(node),
+                    Cursor::Available(start),
+                    renderer,
+                    &mut clipboard,
+                    &mut shell,
+                    &bounds,
+                );
+                let armed = shell.is_event_captured();
+                drop(shell);
+
+                let mut published = Vec::new();
+                let mut shell = Shell::new(&mut published);
+                element.as_widget_mut().update(
+                    tree,
+                    &Event::Mouse(mouse::Event::CursorMoved { position: at }),
+                    Layout::new(node),
+                    Cursor::Available(at),
+                    renderer,
+                    &mut clipboard,
+                    &mut shell,
+                    &bounds,
+                );
+                drop(shell);
+
+                DraggedOut {
+                    armed,
+                    published,
+                    at,
+                    held,
+                    other,
+                }
+            },
+        )
+    }
+
+    /// A drag that starts inside a box and leaves it keeps reaching the control
+    /// that owns it: a gesture already in flight is the one thing the cut lets
+    /// through.
+    #[kithara::test]
+    fn a_drag_that_leaves_the_box_it_started_in_still_reaches_its_owner() {
+        let dragged = dragged_out_of_the_box();
+
+        assert!(
+            dragged.armed,
+            "the press inside the box must arm the meter there, or the move that follows measures \
+             nothing"
+        );
+        assert!(
+            dragged.held.contains(dragged.at.into()),
+            "the pointer has to leave the scrolling box while staying inside the meter's own box, \
+             or a cut is not what would silence it: it ended at {:?} against a meter of {:?}",
+            dragged.at,
+            dragged.held
+        );
+        let [UiEvent::Control { path, action }] = dragged.published.as_slice() else {
+            panic!(
+                "the drag must publish one control event, and it published {:?}",
+                dragged.published
+            );
+        };
+        assert_eq!(path, "nav/held");
+        assert!(
+            matches!(action, ControlAction::SetScalar(_)),
+            "the owner of a drag sets its own value, and it published {action:?}"
+        );
+    }
+
+    /// The subtree the pointer ends up over never sees that drag: while one
+    /// control owns the pointer, what happens to be under it does not answer.
+    #[kithara::test]
+    fn a_subtree_the_drag_passes_over_never_answers_it() {
+        let dragged = dragged_out_of_the_box();
+
+        assert!(
+            dragged.other.contains(dragged.at.into()),
+            "the drag has to end over the other knob for its silence to mean anything, and it \
+             ended at {:?} against a box of {:?}",
+            dragged.at,
+            dragged.other
+        );
+        assert!(
+            !dragged.published.iter().any(|event| matches!(
+                event,
+                UiEvent::Control { path, .. } if path == "nav/other"
+            )),
+            "the knob under the pointer answered a drag it never started: {:?}",
+            dragged.published
         );
     }
 
