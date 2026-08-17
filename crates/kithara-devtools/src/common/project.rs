@@ -275,9 +275,6 @@ pub struct HealthConfig {
     pub semver_packages: Vec<String>,
     /// Package whose dependency closure the unsafe-code census is rooted at.
     pub geiger_package: String,
-    /// Toolchain the deadlock stage selects. lockbud is a rustc driver and only
-    /// reads a workspace its own nightly compiled.
-    pub lockbud_toolchain: String,
     /// Crates whose manifest a generator owns, so "is this dependency used?"
     /// is a question about the generator rather than about the code.
     pub machete_exclude: Vec<String>,

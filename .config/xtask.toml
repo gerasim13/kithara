@@ -101,10 +101,6 @@ semver_packages = ["kithara"]
 # Root of the unsafe-code census. A dependency tree has a root and the workspace
 # manifest is virtual, so this names the package whose closure is the product's.
 geiger_package = "kithara"
-# lockbud is a rustc driver: it links `rustc_driver` against one nightly and
-# only reads a workspace that same nightly compiled, so the toolchain is part of
-# the invocation rather than whatever the caller happens to have by default.
-lockbud_toolchain = "nightly-2026-02-07"
 # `cargo hakari` writes kithara-workspace-hack's dependencies to unify features
 # across the workspace; the crate has no code and is never meant to use them, so
 # machete reports every one of them and the stage can only ever be red. It takes

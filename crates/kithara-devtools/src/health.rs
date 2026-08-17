@@ -60,6 +60,7 @@ struct Stage {
     args: Vec<String>,
     advisory: bool,
     strict: bool,
+    finding: Option<&'static str>,
 }
 
 impl Stage {
@@ -70,7 +71,16 @@ impl Stage {
             args: args.iter().map(|s| (*s).to_string()).collect(),
             advisory: false,
             strict: false,
+            finding: None,
         }
+    }
+
+    /// What a finding looks like in the log of a tool that reports one without
+    /// failing. Such a tool exits 0 whether or not it found anything, so a
+    /// green exit alone would report every run as a clean verdict.
+    const fn finding(mut self, marker: &'static str) -> Self {
+        self.finding = Some(marker);
+        self
     }
 
     const fn advisory(mut self) -> Self {
@@ -111,6 +121,7 @@ impl Stage {
             args,
             advisory: false,
             strict: false,
+            finding: None,
         }
     }
 }
@@ -172,9 +183,17 @@ fn build_stages(project: &ProjectConfig) -> Result<Vec<Stage>> {
         machete_paths: walkable_packages(&metadata, &project.health.machete_exclude),
         semver_packages: project.health.semver_packages.clone(),
         geiger_manifest: manifest_of(&metadata, &project.health.geiger_package)?,
-        lockbud_toolchain: format!("+{}", project.health.lockbud_toolchain),
+        lockbud_toolchain: format!("+{}", lockbud_toolchain()),
     };
     Ok(build_stages_with(&resolved))
+}
+
+/// Which nightly built the deadlock driver. The image installs one and names it
+/// here, the same way it names the nightly and the minimum supported toolchain;
+/// outside the image the driver is whatever `just tooling install` built, and
+/// that recipe reads the same variable.
+fn lockbud_toolchain() -> String {
+    std::env::var("KITHARA_LOCKBUD_TOOLCHAIN").unwrap_or_else(|_| "nightly".to_owned())
 }
 
 /// Workspace member directories relative to the workspace root, minus the
@@ -291,15 +310,13 @@ fn build_stages_with(resolved: &Resolved) -> Vec<Stage> {
             ],
         )
         .advisory(),
-        // lockbud has no entry in `.config/ci-pins.toml` `[cargo_tools]` and no
-        // install step in `xtask/src/ci/image.rs` / `docker/ci.Dockerfile`, so
-        // the pinned CI image never carries it: `cargo lockbud` there is a
-        // genuine "no such command". It is a rustc driver rather than a
-        // crates.io package — it installs from git against one nightly, and it
-        // only reads a workspace that same nightly compiled, which is why the
-        // toolchain is selected here. `.strict()` keeps that missing coverage
-        // from reading as a harmless SKIP; CONTEXT.md states what the image
-        // still owes it.
+        // A rustc driver rather than a crates.io package: it links
+        // `rustc_driver` against one nightly and only reads a workspace that
+        // same nightly compiled, which is why the toolchain is selected here
+        // rather than left to whatever the caller defaults to. `.strict()`
+        // because a driver that cannot load is a missing verdict, not a clean
+        // one, and `.finding()` because lockbud exits zero on a deadlock it
+        // found — it writes the bug to its log and lets the build succeed.
         Stage::new(
             "lockbud-deadlock",
             "cargo",
@@ -311,6 +328,7 @@ fn build_stages_with(resolved: &Resolved) -> Vec<Stage> {
                 "--workspace",
             ],
         )
+        .finding("\"bug_kind\"")
         .strict(),
         Stage::new("workspace-unused-pub", "cargo", &["workspace-unused-pub"]),
         Stage::new(
@@ -358,12 +376,21 @@ fn run_stage(idx: usize, stage: &Stage, logs_dir: &Path) -> StageResult {
     let duration = start.elapsed();
 
     match status_result {
-        Ok(s) if s.success() => StageResult {
-            cmdline,
-            duration,
-            name: stage.name,
-            status: Status::Pass,
-            note: None,
+        Ok(s) if s.success() => match reported_finding(stage, &log_path) {
+            Some(marker) => StageResult {
+                cmdline,
+                duration,
+                name: stage.name,
+                status: Status::Fail,
+                note: Some(format!("reported a finding: {marker}")),
+            },
+            None => StageResult {
+                cmdline,
+                duration,
+                name: stage.name,
+                status: Status::Pass,
+                note: None,
+            },
         },
         Ok(s) => {
             let exit = s.code().unwrap_or(-1);
@@ -499,6 +526,13 @@ fn classify_failure(marker: Option<&'static str>, stage: &Stage, exit: i32) -> (
         None if stage.advisory => (Status::Warn, format!("exit {exit}")),
         None => (Status::Fail, format!("exit {exit}")),
     }
+}
+
+/// The finding a stage exited zero with, if it names one and its log carries it.
+fn reported_finding(stage: &Stage, path: &Path) -> Option<&'static str> {
+    let marker = stage.finding?;
+    let content = fs::read_to_string(path).ok()?;
+    content.contains(marker).then_some(marker)
 }
 
 fn scan_env_skip_marker(path: &Path) -> Option<&'static str> {
@@ -802,5 +836,44 @@ mod tests {
             "one target directory and one full dependency build per package \
              puts the workspace form beyond any nightly budget"
         );
+    }
+
+    #[test]
+    fn the_deadlock_stage_states_what_a_finding_looks_like() {
+        let stages = build_stages_with(&Resolved::default());
+        let lockbud = stages
+            .iter()
+            .find(|s| s.name == "lockbud-deadlock")
+            .expect("lockbud-deadlock stage exists");
+        assert_eq!(
+            lockbud.finding,
+            Some("\"bug_kind\""),
+            "lockbud exits zero on a deadlock it found, so the exit status \
+             alone reports every run as clean"
+        );
+    }
+
+    #[test]
+    fn a_finding_in_the_log_is_read_as_one() {
+        let stage = Stage::new("probe", "true", &[]).finding("\"bug_kind\"");
+        let log = write_log("[{\"DoubleLock\": {\"bug_kind\": \"DoubleLock\"}}]\n");
+        assert_eq!(reported_finding(&stage, &log), Some("\"bug_kind\""));
+        let _ = fs::remove_file(&log);
+    }
+
+    #[test]
+    fn a_log_without_the_marker_is_not_a_finding() {
+        let stage = Stage::new("probe", "true", &[]).finding("\"bug_kind\"");
+        let log = write_log("Finished `dev` profile [unoptimized + debuginfo]\n");
+        assert_eq!(reported_finding(&stage, &log), None);
+        let _ = fs::remove_file(&log);
+    }
+
+    #[test]
+    fn a_stage_that_names_no_finding_never_reports_one() {
+        let stage = Stage::new("probe", "true", &[]);
+        let log = write_log("[{\"DoubleLock\": {\"bug_kind\": \"DoubleLock\"}}]\n");
+        assert_eq!(reported_finding(&stage, &log), None);
+        let _ = fs::remove_file(&log);
     }
 }

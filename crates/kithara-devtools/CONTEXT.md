@@ -183,18 +183,22 @@ as SKIP instead of a false FAIL. Two stages needed a different answer:
   stage resolves it through `cargo metadata`. It exits non-zero whenever it emits
   a warning, which it always does here (it cannot match the workspace's own path
   packages), so the stage stays `.advisory()` and the census lives in its log.
-- `lockbud-deadlock` is `.strict()`: lockbud has no entry in `[cargo_tools]`
-  and no install step in `image.rs`/`docker/ci.Dockerfile`, so the pinned CI
-  image never carries it — `no such command` there is not noise, it is the
-  honest state. It is a rustc driver, not a crates.io package: it installs from
-  git against the nightly its `rust-toolchain.toml` names (currently
-  `nightly-2026-02-07`, with `rustc-dev` and `llvm-tools-preview`), and it reads
-  only a workspace that same nightly compiled — which is why
-  `[health].lockbud_toolchain` is part of the invocation instead of whatever the
-  caller has by default. Carrying it in the image means a third toolchain plus
-  the `rustc-dev` component, and a full workspace compile under that toolchain on
-  every run: an infra decision, not a stage tweak. Until it lands, `.strict()`
-  keeps a missing lockbud reading as FAIL rather than a harmless SKIP.
+- `lockbud-deadlock` is a rustc driver, not a crates.io package: it has no
+  `[cargo_tools]` entry because there is no published version to pin. The image
+  installs it from git at `lockbud_rev`, built by `lockbud_toolchain` — both in
+  `.config/ci-pins.toml` — and exports that toolchain as
+  `KITHARA_LOCKBUD_TOOLCHAIN`, which the stage, `just lint deadlock`, and
+  `just tooling install` all read. The toolchain is part of the invocation
+  because the driver links `rustc_driver` against one nightly and reads only a
+  workspace that same nightly compiled. Measured on the pinned commit: the
+  toolchain costs 1.3 GB, and the workspace compiles under it in about four
+  minutes — it is a 1.95.0-nightly, between the MSRV the fleet already builds
+  and the pinned stable.
+  The stage is `.strict()` because a driver that cannot load is a missing
+  verdict, not a clean one, and it carries `.finding("\"bug_kind\"")` because
+  lockbud exits zero on a deadlock it found: it writes the bug to its log and
+  lets the build succeed, so the exit status alone would report every run as
+  clean.
 - `workspace-unused-pub` shells out to `rust-analyzer scip` to build its index.
   rustup ships a `rust-analyzer` proxy binary whether or not the component is
   installed, so an image without it does not report a missing tool — it reports

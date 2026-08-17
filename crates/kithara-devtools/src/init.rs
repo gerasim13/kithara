@@ -22,7 +22,6 @@ impl Consts {
 # machete_exclude = []
 # semver_packages = []
 # geiger_package = ""
-# lockbud_toolchain = ""
 #
 # [test]
 # default_lane = ""

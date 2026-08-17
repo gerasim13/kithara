@@ -46,6 +46,11 @@ pub(crate) struct CiPins {
     pub(crate) linux_android_runner_image: String,
     pub(crate) linux_image: String,
     pub(crate) linux_runner_image: String,
+    /// lockbud is a rustc driver rather than a crates.io package, so it is
+    /// pinned by commit and by the nightly it links `rustc_driver` against.
+    /// That nightly also has to compile the workspace it reads.
+    pub(crate) lockbud_rev: String,
+    pub(crate) lockbud_toolchain: String,
     /// Build the guest macOS must report. The CI VM is built locally from the
     /// matching Apple restore image instead of pulled from a registry.
     pub(crate) macos_guest_build: String,
@@ -110,6 +115,8 @@ impl CiPins {
             ),
             ("linux_image", self.linux_image.as_str()),
             ("linux_runner_image", self.linux_runner_image.as_str()),
+            ("lockbud_rev", self.lockbud_rev.as_str()),
+            ("lockbud_toolchain", self.lockbud_toolchain.as_str()),
             ("macos_guest_build", self.macos_guest_build.as_str()),
             ("msrv_toolchain", self.msrv_toolchain.as_str()),
             ("nightly_toolchain", self.nightly_toolchain.as_str()),

@@ -26,6 +26,8 @@ ARG GITLEAKS_AMD64_SHA256
 ARG GITLEAKS_ARM64_SHA256
 ARG GITLEAKS_VERSION
 ARG JUST_VERSION
+ARG LOCKBUD_REV
+ARG LOCKBUD_TOOLCHAIN
 ARG MD_FORMATTER_VERSION
 ARG MSRV_TOOLCHAIN
 ARG NIGHTLY_TOOLCHAIN
@@ -39,6 +41,7 @@ ARG WASM_BINDGEN_CLI_VERSION
 ARG WASM_PACK_VERSION
 ARG WASM_SLIM_VERSION
 
+ENV KITHARA_LOCKBUD_TOOLCHAIN=${LOCKBUD_TOOLCHAIN}
 ENV KITHARA_MSRV_TOOLCHAIN=${MSRV_TOOLCHAIN}
 ENV KITHARA_NIGHTLY_TOOLCHAIN=${NIGHTLY_TOOLCHAIN}
 ENV WASM_SLIM_TOOLCHAIN=${NIGHTLY_TOOLCHAIN}
@@ -112,6 +115,10 @@ RUN case "$(dpkg --print-architecture)" in \
 # its SCIP index by shelling out to it. rustup ships a proxy binary whether or
 # not the component is installed, so without this the health stage does not
 # report a missing tool — it reports `rust-analyzer scip … exited with code 1`.
+#
+# The lockbud toolchain is a fourth one and costs 1.3 GB, most of it `rustc-dev`.
+# A driver cannot borrow another toolchain's compiler internals, so a deadlock
+# verdict is what that gigabyte buys.
 RUN rustup component add clippy llvm-tools-preview rust-analyzer rust-src rustfmt \
  && rustup toolchain install "${NIGHTLY_TOOLCHAIN}" \
       --profile minimal \
@@ -119,6 +126,11 @@ RUN rustup component add clippy llvm-tools-preview rust-analyzer rust-src rustfm
       --component rust-src \
       --component rustfmt \
  && rustup toolchain install "${MSRV_TOOLCHAIN}" --profile minimal \
+ && rustup toolchain install "${LOCKBUD_TOOLCHAIN}" \
+      --profile minimal \
+      --component llvm-tools-preview \
+      --component rust-src \
+      --component rustc-dev \
  && rustup target add wasm32-unknown-unknown \
  && rustup target add wasm32-unknown-unknown --toolchain "${NIGHTLY_TOOLCHAIN}" \
  && host="$(rustc -vV | sed -n 's/^host: //p')" \
@@ -155,6 +167,17 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
  && cargo install --locked --version "${WASM_BINDGEN_CLI_VERSION}" wasm-bindgen-cli \
  && cargo install --locked --version "${WASM_PACK_VERSION}" wasm-pack \
  && cargo install --locked --version "${WASM_SLIM_VERSION}" wasm-slim
+
+# lockbud is a rustc driver, not a published crate, so it is installed from git
+# at a pinned commit and built by the same nightly it links `rustc_driver`
+# against — the one `KITHARA_LOCKBUD_TOOLCHAIN` names. The repository holds test
+# fixtures that are packages too, which is why the package is named explicitly.
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    --mount=type=cache,target=/tmp/cargo-install-target \
+    CARGO_TARGET_DIR=/tmp/cargo-install-target \
+    cargo "+${LOCKBUD_TOOLCHAIN}" install --locked \
+      --git https://github.com/BurtonQin/lockbud --rev "${LOCKBUD_REV}" lockbud
 
 # The account a job runs as. It is declared here rather than in the image that
 # starts the runner because images built on top of this one have state to hand
