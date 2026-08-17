@@ -143,6 +143,9 @@ struct RenderedReport {
     complete: bool,
     /// What each test did in this lane, kept so lanes can be put side by side.
     rates: BTreeMap<TestId, LaneRate>,
+    /// Repeats [`quarantine_poisoned_iterations`] threw out, kept so the
+    /// evidence census can be held to the same set as the rate tables.
+    quarantined: BTreeSet<usize>,
 }
 
 #[derive(Debug, Default)]
@@ -283,7 +286,7 @@ pub(crate) fn lane_report(args: &StressReportArgs) -> Result<LaneReport> {
             ));
         }
     };
-    let junit = match parse_junit_report(&xml) {
+    let mut junit = match parse_junit_report(&xml) {
         Ok(junit) => junit,
         Err(error) => {
             let detail = format!("{error:#}");
@@ -311,6 +314,7 @@ pub(crate) fn lane_report(args: &StressReportArgs) -> Result<LaneReport> {
         junit.run_id.as_deref(),
         junit.timestamp.as_deref(),
     );
+    retain_census_cases(&mut junit.cases, &report.quarantined);
     let correlated_complete = evidence::append_correlated_evidence(
         &mut report.markdown,
         &junit.cases,
@@ -1081,7 +1085,25 @@ fn render(
         markdown: out,
         complete,
         rates,
+        quarantined: quarantined.into_keys().collect(),
     }
+}
+
+/// Hold the evidence census to the repeats the rate tables kept.
+///
+/// Campaign 32068408884 lost repeats 23-49 of its `flash-off` lane to a host
+/// that stopped executing the binaries. The rate tables quarantined them, but
+/// the census still read every case: its only symptom cluster was 98226
+/// poisoned failures, and all 412 of its "divergent" lines were the difference
+/// between a repeat that ran and one that did not.
+fn retain_census_cases(cases: &mut Vec<CaseTiming>, quarantined: &BTreeSet<usize>) {
+    if quarantined.is_empty() {
+        return;
+    }
+    cases.retain(|case| {
+        case.iteration
+            .is_none_or(|iteration| !quarantined.contains(&iteration))
+    });
 }
 
 /// Pull environment-poisoned repeats out of the aggregate before any rate is
@@ -1364,6 +1386,42 @@ mod tests {
             report.markdown.contains("## Quarantined repeats"),
             "{}",
             report.markdown
+        );
+    }
+
+    /// The census reads a repeat that never executed as a repeat that failed,
+    /// so every line a live repeat logged becomes "divergent" against it.
+    #[test]
+    fn a_quarantined_repeat_is_kept_out_of_the_census() {
+        let (mut cases, selected) = mass_failure_campaign();
+        let report = render(&cases, &selected, 4, None, None);
+
+        retain_census_cases(&mut cases, &report.quarantined);
+
+        assert!(
+            cases.iter().all(|case| case.iteration != Some(0)),
+            "{:?}",
+            report.quarantined
+        );
+    }
+
+    /// The census is what names a cause, so it must keep every repeat the rate
+    /// tables still count.
+    #[test]
+    fn a_kept_repeat_stays_in_the_census() {
+        let (mut cases, selected) = mass_failure_campaign();
+        let report = render(&cases, &selected, 4, None, None);
+
+        retain_census_cases(&mut cases, &report.quarantined);
+
+        assert_eq!(
+            cases
+                .iter()
+                .filter(|case| case.iteration == Some(1))
+                .count(),
+            25,
+            "{:?}",
+            report.quarantined
         );
     }
 
