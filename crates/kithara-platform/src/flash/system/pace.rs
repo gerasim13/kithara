@@ -316,6 +316,43 @@ mod tests {
         assert_eq!(flash.clock.now_nanos(), rearm_base + ms(30));
     }
 
+    /// Every case above holds SYNC waiters only, so the pace promise was pinned
+    /// just where no async slot exists. [`crate::flash::real_io`] promises pace,
+    /// NOT pin: a deliberate virtual delay behind the op "still elapses at real
+    /// pace, so the peer stays live". A task holding its slot across the op
+    /// breaks it — `try_advance` vetoes on `pinning_async()` before it ever
+    /// consults the pace limit, so the delay behind the op never elapses. That
+    /// is the delayed-CDN hang: four stress tests, one dump signature
+    /// (`active=0 active_async=2 real_io=5 pace_anchor=set`), the test server's
+    /// own delay sitting unfired in `timed` while the tasks awaiting its
+    /// response hold the very slots that freeze the clock it waits on. Those
+    /// dumps name a `Running` holder — mid-poll — which the stranded-task rule
+    /// cannot release, since that one requires `Runnable`.
+    #[test]
+    fn a_held_async_slot_does_not_veto_a_paced_deadline() {
+        let _guard = guard();
+        let flash = FlashInner::new_arc();
+        let base = flash.clock.now_nanos();
+
+        flash.real_io_enter();
+        let slot = flash.test_hold_async();
+        let start = RealInstant::now();
+        let waiter = spawn_park_for(&flash, Duration::from_millis(30));
+        wait_until(
+            || flash.clock.now_nanos() >= base + ms(30),
+            "the paced deadline behind the op to elapse",
+        );
+        let elapsed = start.elapsed();
+
+        // Also guards the other direction: a fix that dropped pacing instead of
+        // the veto would JUMP to the deadline, and the lower bound catches it.
+        assert_paced_elapsed(elapsed, 30);
+
+        drop(slot);
+        flash.real_io_exit();
+        waiter.join().expect("waiter thread panicked");
+    }
+
     #[test]
     fn reset_preserves_pacer_wake() {
         let _guard = guard();

@@ -159,7 +159,9 @@ impl WakeBatch {
 
 impl Core {
     pub(super) fn pace_target(&self, _clock: &Clock) -> Option<StdDuration> {
-        if self.registry.active != 0 || self.registry.pinning_async() != 0 {
+        // No `pinning_async` veto: a paced target exists only while an op is in
+        // flight, and there the pin must not suppress it — see `try_advance`.
+        if self.registry.active != 0 {
             return None;
         }
         if self.sched.real_io == 0 {
@@ -192,7 +194,15 @@ impl Core {
     /// every participant is parked (`active == 0`) and at least one timed
     /// waiter exists.
     pub(super) fn try_advance(&mut self, clock: &Clock) -> WakeBatch {
-        if self.registry.active != 0 || self.registry.pinning_async() != 0 {
+        // While an op is in flight the advance below is capped at real pace, and a
+        // capped advance is what a wall clock does to a mid-poll task anyway. A pin
+        // exists to forbid JUMPS, which the cap already forbids, so suppressing the
+        // paced advance buys nothing and costs the op its answer: the virtual delay
+        // BEHIND it (a virtually-delayed test server) would never elapse, so the
+        // peer never replies, the await never returns, and the slot doing the
+        // pinning is never released. That is `real_io`'s pace-not-pin contract.
+        let paced = self.sched.real_io != 0 && self.sched.pace_anchor.is_some();
+        if self.registry.active != 0 || (!paced && self.registry.pinning_async() != 0) {
             // A running participant (sync OS thread OR async task mid-poll): do not
             // jump. Both counters must be zero for genuine quiescence — except for
             // async slots no thread can currently poll (`pinning_async`).
@@ -949,6 +959,17 @@ pub(crate) struct TestHold<'a> {
     flash: &'a FlashInner,
 }
 
+/// The async counterpart: a task occupying its `active_async` slot across an
+/// await, the way one mid-flight over a real I/O op does. Production acquires
+/// the slot through the spawn gate, which is wired to the process engine, so a
+/// pure-scheduler test on a LOCAL instance has no other way to express a held
+/// slot.
+#[cfg(test)]
+#[must_use]
+pub(crate) struct TestHoldAsync<'a> {
+    flash: &'a FlashInner,
+}
+
 #[cfg(test)]
 impl FlashInner {
     pub(in crate::flash) fn advance_log(&self) -> Vec<u64> {
@@ -968,6 +989,11 @@ impl FlashInner {
     pub(in crate::flash) fn test_hold(&self) -> TestHold<'_> {
         self.core.lock().registry.active += 1;
         TestHold { flash: self }
+    }
+
+    pub(in crate::flash) fn test_hold_async(&self) -> TestHoldAsync<'_> {
+        self.core.lock().registry.active_async += 1;
+        TestHoldAsync { flash: self }
     }
 
     /// Test-only: number of currently parked timed waiters.
@@ -997,6 +1023,21 @@ impl Drop for TestHold<'_> {
         let mut s = self.flash.core.lock();
         debug_assert!(s.registry.active > 0, "TestHold drop without matching hold");
         s.registry.active -= 1;
+        let adv = s.try_advance(&self.flash.clock);
+        drop(s);
+        adv.fire();
+    }
+}
+
+#[cfg(test)]
+impl Drop for TestHoldAsync<'_> {
+    fn drop(&mut self) {
+        let mut s = self.flash.core.lock();
+        debug_assert!(
+            s.registry.active_async > 0,
+            "TestHoldAsync drop without matching hold"
+        );
+        s.registry.active_async -= 1;
         let adv = s.try_advance(&self.flash.clock);
         drop(s);
         adv.fire();
