@@ -24,6 +24,7 @@ pub mod quality;
 pub mod quality_assessment;
 pub mod quality_lab;
 pub mod scope;
+pub mod semver;
 pub mod similarity;
 mod stages;
 pub mod stress;
@@ -77,6 +78,8 @@ pub enum CoreCommand {
     },
     /// Translate scope tokens to tool-specific flags (used by `just ci audit`).
     Scope(scope::ScopeArgs),
+    /// Compare the workspace's public surface against a baseline revision.
+    Semver(semver::SemverArgs),
     /// Run workspace tests through `cargo nextest`.
     Test(test::TestArgs),
     /// Run or independently verify a repeated-test evidence campaign.
@@ -117,6 +120,7 @@ pub fn run(cmd: &CoreCommand, ctx: &Ctx) -> anyhow::Result<()> {
         CoreCommand::Perf(args) => perf::run(args, ctx),
         CoreCommand::Quality { command } => quality::run(command, ctx),
         CoreCommand::Scope(args) => scope::run(args),
+        CoreCommand::Semver(args) => semver::run(args, ctx),
         CoreCommand::Test(args) => test::run(args),
         CoreCommand::Stress { command } => stress::run(command, ctx),
         CoreCommand::Health(args) => health::run(args),

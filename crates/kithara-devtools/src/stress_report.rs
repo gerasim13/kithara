@@ -810,7 +810,18 @@ pub(crate) fn append_attempt_reports(out: &mut String, records: &AttemptRecords)
         .filter(|(_, rate)| rate.failed > 0)
         .collect::<Vec<_>>();
     out.push_str("\n## What the lane's own runner recorded\n");
-    if !failures.is_empty() {
+    if failures.is_empty() {
+        // A heading with nothing under it reads as evidence that failed to
+        // arrive. What actually happened — the runner reported, over this many
+        // tests and this many repeats, and none of them failed — is the reason
+        // the lane is green, so it belongs here as a sentence.
+        let _ = writeln!(
+            out,
+            "\nNo test failed in any repeat the runner reported: `{}` test(s) over `{}` repeat(s).",
+            records.rates.len(),
+            records.repeats()
+        );
+    } else {
         // The attempt a failure belongs to is only worth a column when there is
         // more than one attempt to tell apart. A lane that repeats inside a
         // single launch would print the same "0" on every row.

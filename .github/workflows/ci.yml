@@ -303,13 +303,15 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # The browser is installed in the image, not by the job: Debian ships
-      # `chromium` with a version-matched `chromium-driver`, and the lane asserts
-      # both against the reviewed pin before it runs a test. Downloading Chrome
-      # for Testing per job did the opposite — it read a version index on GitHub
-      # Pages, three of whose four addresses this network cannot reach, and then
-      # installed an OLDER build over the working pair.
+      # `chromium` with a version-matched `chromium-driver`, and `.config/ci-pins.toml`
+      # records which pair a rebuild brought in. Downloading Chrome for Testing
+      # per job did the opposite — it read a version index on GitHub Pages, three
+      # of whose four addresses this network cannot reach, and then installed an
+      # OLDER build over the working pair. The recipe is called directly, as every
+      # other job here does: `just ci run <lane>` is the host executor's entry and
+      # wants a host profile this container has no reason to carry.
       - name: Run the Chromium browser lane
-        run: just ci run web-chromium
+        run: just test wasm chrome webcodecs
 
   machete:
     name: cargo-machete

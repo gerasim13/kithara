@@ -585,6 +585,7 @@ fn run_report(args: &ReportArgs, ctx: &Ctx) -> Result<()> {
     let mut excluded = Vec::new();
     let mut exit_codes = Vec::new();
     let mut failure = None;
+    let mut unclean = Vec::new();
     for lane_name in &lanes {
         let mode = config.mode(lane_name)?;
         let paths = Paths::new(raw_root.join(lane_name), &config.artifacts);
@@ -615,6 +616,9 @@ fn run_report(args: &ReportArgs, ctx: &Ctx) -> Result<()> {
         let checked = verify_manifest(args, &expectation, &paths.manifest);
         let trusted = checked.verdict.is_ok();
         let excluded_because = exclusion_reason(trusted, &lane);
+        if let Some(reason) = unclean_reason(excluded_because.as_deref(), &lane.verdict) {
+            unclean.push((lane_name.clone(), reason));
+        }
         exit_codes.push(checked.exit_code);
         let body = with_provenance(lane.markdown, &checked.verdict, &checked.details)?;
         writeln!(sections, "\n# Lane `{}`\n", markdown_cell(lane_name))?;
@@ -653,7 +657,44 @@ fn run_report(args: &ReportArgs, ctx: &Ctx) -> Result<()> {
     }
     document.push_str(&sections);
     stress_report::write_report(&output, &document)?;
+    if let Some(summary) = unclean_summary(&unclean, &output) {
+        println!("{summary}");
+    }
     choose_failure(failure.map_or(Ok(()), Err), campaign, Ok(()), Ok(())).map_or(Ok(()), Err)
+}
+
+/// Why this lane is not clean, or `None` when it is.
+///
+/// A lane can be red for two unrelated reasons: the evidence cannot be trusted,
+/// or the evidence is fine and the tests failed. The first already has a
+/// sentence; the second needs one, because "the check did not pass" with nothing
+/// named sends the reader looking for output that was never printed.
+fn unclean_reason(excluded: Option<&str>, verdict: &Result<()>) -> Option<String> {
+    if let Some(reason) = excluded {
+        return Some(reason.to_owned());
+    }
+    verdict
+        .as_ref()
+        .err()
+        .map(|_| "recorded a failed test or attempt".to_owned())
+}
+
+/// The verdict's findings, for the log the operator actually reads.
+///
+/// The report itself is a document a workflow puts in a step summary. The
+/// process that wrote it exits with "the check ran and did not pass. Its
+/// findings are above" — and above, in the job log, there was nothing. These
+/// lines are that "above": which lane, and why.
+fn unclean_summary(unclean: &[(String, String)], report: &Path) -> Option<String> {
+    if unclean.is_empty() {
+        return None;
+    }
+    let mut summary = String::from("stress evidence — lanes that did not come back clean:\n");
+    for (lane, reason) in unclean {
+        let _ = writeln!(summary, "  - {lane}: {reason}");
+    }
+    let _ = write!(summary, "Per-lane detail: {}", report.display());
+    Some(summary)
 }
 
 /// Why this lane may not stand beside the others, or `None` when it may.
@@ -1621,6 +1662,73 @@ Intercepted call to real-time unsafe function `malloc` in real-time context!
         );
 
         assert!(report.attempts.is_none());
+    }
+
+    /// A green lane's own runner did report, and how much it covered is the
+    /// reason the lane is green. A heading with nothing under it reads instead as
+    /// evidence that never arrived.
+    #[test]
+    fn a_self_repeating_lane_that_passed_says_what_its_runner_covered() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let paths = command_lane(&temp, "[0]", "");
+        keep_repeats(&paths, 0, &[false, false]);
+
+        let report = command_lane_report(
+            &paths,
+            &self_repeating_mode(),
+            2,
+            &StressEvidenceConfig::default(),
+        );
+
+        assert!(
+            report.markdown.contains(
+                "No test failed in any repeat the runner reported: `1` test(s) over `2` repeat(s)."
+            ),
+            "{}",
+            report.markdown
+        );
+    }
+
+    /// The verdict ends with "its findings are above". In the report job's log
+    /// there was nothing above, and the lane that made the campaign red had to be
+    /// found by downloading the artifact.
+    #[test]
+    fn a_campaign_that_is_not_clean_names_the_lane_in_its_own_output() {
+        let summary = unclean_summary(
+            &[(
+                "rtsan".to_owned(),
+                "recorded a failed test or attempt".to_owned(),
+            )],
+            Path::new("/tmp/stress-report.md"),
+        )
+        .expect("a lane that is not clean has a summary");
+
+        assert!(
+            summary.contains("rtsan: recorded a failed test or attempt"),
+            "{summary}"
+        );
+    }
+
+    /// A summary that speaks on every run trains the reader to skip it.
+    #[test]
+    fn a_clean_campaign_prints_no_summary() {
+        assert!(unclean_summary(&[], Path::new("/tmp/stress-report.md")).is_none());
+    }
+
+    /// Evidence that cannot be trusted and tests that failed are different
+    /// problems; the reason a reader gets must be the one that applies.
+    #[test]
+    fn an_excluded_lane_keeps_the_reason_it_was_excluded_for() {
+        assert_eq!(
+            unclean_reason(Some("evidence artifact missing or invalid"), &Ok(())),
+            Some("evidence artifact missing or invalid".to_owned())
+        );
+    }
+
+    /// A lane that verified and passed is not a finding.
+    #[test]
+    fn a_trustworthy_lane_that_passed_is_clean() {
+        assert!(unclean_reason(None, &Ok(())).is_none());
     }
 
     /// A lane launched per repeat has only its exit codes, and that rate is what

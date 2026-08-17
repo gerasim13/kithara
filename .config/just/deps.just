@@ -14,9 +14,10 @@ hack:
     just _xtask powerset --no-dev-deps
 
 # Baseline is a revision here, not crates.io: the workspace is unpublished.
+# Routed through xtask so the lane holds the shared target directory's job
+# lease for the whole comparison, like every other build lane.
 semver BASELINE="HEAD~1":
-    cargo semver-checks check-release --workspace --exclude kithara-fuzz \
-      --baseline-rev "{{ BASELINE }}"
+    just _xtask semver --baseline "{{ BASELINE }}"
 
 geiger:
     cargo geiger --all-targets --all-dependencies --output-format Ascii
