@@ -38,7 +38,7 @@ use crate::{
     interact::{Hit, Input, Key as NeutralKey, Outcome, PointerOwnership, PointerPhase, Scroll},
     registry::{EndpointCategory, EndpointDesc, EndpointRegistry, ValueKind},
     render::{
-        ControlAction, PortalMapView, PortalTarget, ReadValue, Reads, ScalarRange, Skin,
+        ControlAction, DragPhase, PortalMapView, PortalTarget, ReadValue, Reads, ScalarRange, Skin,
         StereoLevels, TableCell, TableRow, TreeIcon, TreeRow, UiEvent, WaveBucket, WaveformView,
         WindowCommand, WindowEdge, WindowLayerProgram, document,
         document::{Clock, Ctx},
@@ -3937,4 +3937,142 @@ fn a_hand_drawn_across_the_retained_wave_seeks() {
             );
         }
     }
+}
+
+/// A library that always has rows, beside a drop target that is not lit.
+struct DragReads;
+
+impl Reads for DragReads {
+    fn get(&self, endpoint: &str) -> Option<ReadValue<'_>> {
+        let id = endpoint.split_once('@').map_or(endpoint, |(id, _scope)| id);
+        match id {
+            "library.visible_tracks" => Some(ReadValue::Table(&LATE_TABLE_ROWS[..])),
+            "mock.drag.over" => Some(ReadValue::Bool(false)),
+            _ => FixtureReads.get(endpoint),
+        }
+    }
+}
+
+/// A track list beside a module that takes drops, the shape the studio ships.
+fn dragging_library_root() -> MasonryRoot<TestAction> {
+    let mut registry = fixture_registry();
+    registry.insert(
+        EndpointCategory::Command,
+        "mock.load",
+        EndpointDesc::new(ValueKind::Trigger),
+    );
+    registry.insert(
+        EndpointCategory::Model,
+        "mock.drag.over",
+        EndpointDesc::new(ValueKind::Bool),
+    );
+    let reads = DragReads;
+    let mut resolver = MemResolver::default();
+    resolver.insert(
+        "fixture.klayout.ron",
+        r#"(schema: "kithara.layout", version: 1, id: "fixture",
+            dragged: Some(Model(id: "library.breadcrumb")),
+            root: Split(axis: Horizontal, children: [
+                (node: Module(instance: "library", source: "library.kmodule.ron",
+                    size: (w: Fixed(200.0), h: Fill))),
+                (node: Module(instance: "deck", source: "deck.kmodule.ron",
+                    size: (w: Fill, h: Fill))),
+            ]))"#,
+    );
+    resolver.insert(
+        "library.kmodule.ron",
+        r#"(schema: "kithara.module", version: 1, id: "library", chrome: Plain,
+            root: Column(gap: 0.0, pad: 0.0, size: (w: Fill, h: Fill), children: [
+                Table(
+                    id: "tracks",
+                    read: Model(id: "library.visible_tracks"),
+                    columns: [(id: "title", label: "TITLE", style: Primary, width: 180.0)],
+                ),
+            ]))"#,
+    );
+    resolver.insert(
+        "deck.kmodule.ron",
+        r#"(schema: "kithara.module", version: 1, id: "deck", chrome: Plain,
+            drop: Some((write: Command(id: "mock.load"), read: Model(id: "mock.drag.over"))),
+            root: Column(gap: 0.0, pad: 0.0, size: (w: Fill, h: Fill), children: [
+                Text(id: "name", style: MicroLabel, label: "DECK", size: (w: Fill, h: Fill)),
+            ]))"#,
+    );
+    let ui = compile(
+        "fixture.klayout.ron",
+        &resolver,
+        &registry,
+        builtin::skin_doc(),
+        &UiConfig::default(),
+    )
+    .unwrap_or_else(|error| panic!("the drag fixture must compile: {error}"));
+    let host = MasonryHost::map_actions(ctx(&ui, &reads), builtin::skin(), TestAction::Document);
+    let output = document::render(&ui.root, ctx(&ui, &reads), host);
+    let mut root = masonry_root(output, 400, 200);
+    root.redraw()
+        .unwrap_or_else(|error| panic!("the drag fixture must compose: {error}"));
+    root
+}
+
+/// Presses a row of the library and pulls it across onto the deck.
+fn drag_a_track_onto_the_deck(root: &mut MasonryRoot<TestAction>) -> Vec<TestAction> {
+    root.handle_pointer_event(pointer_move(60.0, 60.0))
+        .unwrap_or_else(|error| panic!("the hover must route: {error}"));
+    root.handle_pointer_event(pointer_down(60.0, 60.0))
+        .unwrap_or_else(|error| panic!("the press must route: {error}"));
+    for at in [(64.0, 62.0), (150.0, 80.0), (300.0, 100.0)] {
+        root.handle_pointer_event(pointer_move(at.0, at.1))
+            .unwrap_or_else(|error| panic!("the move must route: {error}"));
+    }
+    root.handle_pointer_event(pointer_up(300.0, 100.0))
+        .unwrap_or_else(|error| panic!("the release must route: {error}"));
+    root.take_actions()
+}
+
+/// Whether the published events carry this one, on a path under `instance`.
+fn published_drag(published: &[TestAction], instance: &str, phase: DragPhase) -> bool {
+    published.iter().any(|action| {
+        matches!(
+            action,
+            TestAction::Document(UiEvent::Control { action, path })
+                if *action == ControlAction::Drag(phase) && path.starts_with(instance)
+        )
+    })
+}
+
+/// The list reports the drag it started, wherever the hand then goes.
+#[kithara::test]
+fn a_track_pulled_out_of_the_list_reports_its_drag() {
+    let published = drag_a_track_onto_the_deck(&mut dragging_library_root());
+
+    assert!(
+        published_drag(&published, "library", DragPhase::Start(1)),
+        "the list a track is pulled out of must report the drag, published {published:?}"
+    );
+}
+
+/// The module that takes drops reports the hand crossing into it.
+#[kithara::test]
+fn a_module_that_takes_drops_reports_the_hand_crossing_it() {
+    let published = drag_a_track_onto_the_deck(&mut dragging_library_root());
+
+    assert!(
+        published_drag(&published, "deck", DragPhase::Over(true)),
+        "a module that takes drops must report the hand above it, published {published:?}"
+    );
+}
+
+/// The release reaches the list, which is the only side that knows what is held.
+///
+/// Nothing captures the pointer for a drag, so this is the event a host that
+/// hit-tests loses: by the time the hand opens it is over the deck, and the
+/// list would never hear it.
+#[kithara::test]
+fn a_track_released_away_from_its_list_still_reports_the_drop() {
+    let published = drag_a_track_onto_the_deck(&mut dragging_library_root());
+
+    assert!(
+        published_drag(&published, "library", DragPhase::Drop),
+        "a track released away from its list must still report the drop, published {published:?}"
+    );
 }

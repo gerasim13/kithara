@@ -196,6 +196,11 @@ impl HostedEngine {
         self.open_picker().is_some()
     }
 
+    /// Whether a hand is pulling an item out of a list this engine drives.
+    pub(super) fn holds_item(&self) -> bool {
+        self.engine.borrow().holds_item()
+    }
+
     pub(super) fn set_menu_layer(&self, layer: WidgetId) {
         self.menu.set(Some(layer));
     }
@@ -385,6 +390,11 @@ pub(super) fn input(event: &PointerEvent) -> Option<(Input<'static>, Pt)> {
             &button.state,
         ),
         PointerEvent::Move(update) => (PointerPhase::Move, None, &update.current),
+        PointerEvent::Up(button) => (
+            PointerPhase::Up,
+            button.button.map(pointer_button),
+            &button.state,
+        ),
         _ => return None,
     };
     let position = state.logical_position();

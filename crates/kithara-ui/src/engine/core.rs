@@ -64,6 +64,18 @@ impl Engine {
         self.item_pressed(path).flatten()
     }
 
+    /// Whether a hand is pulling an item out of a list this engine drives.
+    ///
+    /// The gesture never takes the pointer, so a host that delivers events by
+    /// hit-testing loses the drag the moment the hand leaves the list. Asking
+    /// this is how such a host knows to keep feeding the list its own gesture.
+    #[cfg(feature = "masonry")]
+    pub(crate) fn holds_item(&self) -> bool {
+        self.components
+            .iter()
+            .any(|component| RetainedComponent::pressed_item_index(component).is_some())
+    }
+
     pub(crate) fn item_pressed(&self, path: &str) -> Option<Option<usize>> {
         self.components
             .iter()

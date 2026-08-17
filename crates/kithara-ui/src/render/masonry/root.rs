@@ -126,37 +126,6 @@ where
         Ok(this)
     }
 
-    /// Dispatches one pointer event, including origin banking and layer updates.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`MasonryRootError`] when a widget violates the typed action contract.
-    pub fn handle_pointer_event(
-        &mut self,
-        event: PointerEvent,
-    ) -> Result<Handled, MasonryRootError> {
-        self.observe_pointer(&event);
-        if self.root.pointer_capture_target().is_some() || self.window_answers_first(&event) {
-            return self.route_root_pointer(event);
-        }
-        if self.routes_open_picker(&event)? {
-            self.sync()?;
-            return Ok(Handled::Yes);
-        }
-        if self.dismisses_popover(&event)? {
-            return Ok(Handled::Yes);
-        }
-        self.bank_pointer(&event);
-        self.route_root_pointer(event)
-    }
-
-    fn route_root_pointer(&mut self, event: PointerEvent) -> Result<Handled, MasonryRootError> {
-        let handled = self.root.handle_pointer_event(event);
-        self.sync_popovers();
-        self.sync()?;
-        Ok(handled)
-    }
-
     pub(crate) fn vis_declarations(&self) -> Vec<VisDeclaration> {
         self.native
             .iter()
@@ -183,38 +152,6 @@ where
                 widget.shader_declaration()
             })
             .collect()
-    }
-
-    fn routes_open_picker(&mut self, event: &PointerEvent) -> Result<bool, MasonryRootError> {
-        let Some((input, point)) = picker::input(event) else {
-            return Ok(false);
-        };
-        let Some(engine) = self
-            .engines
-            .iter()
-            .rev()
-            .find(|engine| engine.has_open_picker())
-            .map(Rc::clone)
-        else {
-            return Ok(false);
-        };
-        let owner = engine.owner();
-        let routed = engine.route(input, Some(point));
-        let (outcome, focused) = (routed.outcome, routed.focused);
-        self.sync_picker_focus(owner, focused);
-        let captured = outcome.is_captured();
-        if let Some(action) = outcome.value() {
-            self.push_action(Box::new(action))?;
-        }
-        Ok(captured)
-    }
-
-    fn sync_picker_focus(&mut self, owner: WidgetId, focused: bool) {
-        if focused {
-            self.root.focus_on(Some(owner));
-        } else if self.root.focused_widget() == Some(owner) {
-            self.root.focus_on(None);
-        }
     }
 
     /// Dispatches one keyboard or input-method event.
@@ -296,6 +233,193 @@ where
         self.engines
             .iter()
             .find_map(|engine| engine.tree_picture(path))
+    }
+
+    fn sync_popovers(&self) {
+        for (id, state, _) in &self.popovers {
+            if let Some(widget) = self.root.get_widget(*id) {
+                state.set_anchor(widget.ctx().bounding_rect());
+            }
+        }
+    }
+
+    /// Repaints the layer of every engine whose menu has changed.
+    ///
+    /// The menu is drawn above the tree by a layer of its own, so the widget
+    /// that routed the press cannot mark it: a press that opens a menu is,
+    /// from Masonry's side, a press that changed nothing on screen.
+    fn sync_menus(&mut self) {
+        let changed: Vec<WidgetId> = self
+            .engines
+            .iter()
+            .filter_map(|engine| engine.take_changed_menu())
+            .collect();
+        for layer in changed {
+            self.root.edit_widget(layer, |mut layer| {
+                layer.ctx.request_paint_only();
+            });
+        }
+    }
+
+    fn sync(&mut self) -> Result<(), MasonryRootError> {
+        self.sync_menus();
+        loop {
+            let pending = {
+                let mut signals = self.signals.borrow_mut();
+                if signals.is_empty() {
+                    break;
+                }
+                signals.drain(..).collect::<Vec<_>>()
+            };
+            for signal in pending {
+                match signal {
+                    RenderRootSignal::Action(action, _) => self.push_action(action)?,
+                    RenderRootSignal::NewLayer(layer, position) => {
+                        self.root.add_layer(layer, position);
+                    }
+                    RenderRootSignal::RemoveLayer(id) => self.root.remove_layer(id),
+                    RenderRootSignal::RepositionLayer(id, position) => {
+                        self.root.reposition_layer(id, position);
+                    }
+                    signal => self.platform.push(signal),
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn push_action(&mut self, action: masonry::core::ErasedAction) -> Result<(), MasonryRootError> {
+        let actual = action.type_name();
+        let host = action
+            .downcast::<HostAction>()
+            .map_err(|_| MasonryRootError::ForeignAction { actual })?;
+        let actual = host.type_name();
+        let action = (*host)
+            .downcast::<Action>()
+            .map_err(|_| MasonryRootError::MappedAction {
+                actual,
+                expected: std::any::type_name::<Action>(),
+            })?;
+        self.actions.push(action);
+        Ok(())
+    }
+}
+
+/// How a pointer event finds the widget that answers it.
+///
+/// The tree answers by hit-testing, which is enough for a control that owns
+/// the box under the hand. The rest lives here: the window chrome that
+/// answers before the tree, the menu and the drag that outlive the box they
+/// started in, and the popover a press outside dismisses.
+impl<Action> MasonryRoot<Action>
+where
+    Action: std::fmt::Debug + Send + 'static,
+{
+    /// Dispatches one pointer event, including origin banking and layer updates.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MasonryRootError`] when a widget violates the typed action contract.
+    pub fn handle_pointer_event(
+        &mut self,
+        event: PointerEvent,
+    ) -> Result<Handled, MasonryRootError> {
+        self.observe_pointer(&event);
+        if self.root.pointer_capture_target().is_some() || self.window_answers_first(&event) {
+            return self.route_root_pointer(event);
+        }
+        if self.routes_open_picker(&event)? {
+            self.sync()?;
+            return Ok(Handled::Yes);
+        }
+        if self.dismisses_popover(&event)? {
+            return Ok(Handled::Yes);
+        }
+        self.routes_item_drag(&event)?;
+        self.bank_pointer(&event);
+        self.route_root_pointer(event)
+    }
+
+    /// Keeps feeding the pointer to the list a hand is pulling an item out of.
+    ///
+    /// The gesture never takes the pointer, so a tree that delivers events by
+    /// hit-testing loses the drag the moment the hand leaves the list, and the
+    /// release lands on whatever sits under it instead. The list is the one
+    /// place that knows the gesture is still running, so while it says so the
+    /// root hands it the event as well. Only while the hand is outside the box
+    /// the tree would have reached on its own: inside it, the list already
+    /// hears everything, and a second copy would be a second gesture.
+    ///
+    /// This does not answer the event. Whatever the hand is over still sees it,
+    /// which is how a module that takes drops learns the hand is above it.
+    fn routes_item_drag(&mut self, event: &PointerEvent) -> Result<(), MasonryRootError> {
+        let Some((input, point)) = picker::input(event) else {
+            return Ok(());
+        };
+        let Some(engine) = self
+            .engines
+            .iter()
+            .find(|engine| engine.holds_item())
+            .map(Rc::clone)
+        else {
+            return Ok(());
+        };
+        if self.owns_point(engine.owner(), point) {
+            return Ok(());
+        }
+        if let Some(action) = engine.route(input, Some(point)).outcome.value() {
+            self.push_action(Box::new(action))?;
+        }
+        Ok(())
+    }
+
+    /// Whether the tree would deliver a pointer at this point to that widget.
+    fn owns_point(&self, owner: WidgetId, point: Pt) -> bool {
+        self.root.get_widget(owner).is_some_and(|widget| {
+            widget
+                .ctx()
+                .bounding_rect()
+                .contains(Point::new(point.x.into(), point.y.into()))
+        })
+    }
+
+    fn route_root_pointer(&mut self, event: PointerEvent) -> Result<Handled, MasonryRootError> {
+        let handled = self.root.handle_pointer_event(event);
+        self.sync_popovers();
+        self.sync()?;
+        Ok(handled)
+    }
+
+    fn routes_open_picker(&mut self, event: &PointerEvent) -> Result<bool, MasonryRootError> {
+        let Some((input, point)) = picker::input(event) else {
+            return Ok(false);
+        };
+        let Some(engine) = self
+            .engines
+            .iter()
+            .rev()
+            .find(|engine| engine.has_open_picker())
+            .map(Rc::clone)
+        else {
+            return Ok(false);
+        };
+        let owner = engine.owner();
+        let routed = engine.route(input, Some(point));
+        let (outcome, focused) = (routed.outcome, routed.focused);
+        self.sync_picker_focus(owner, focused);
+        let captured = outcome.is_captured();
+        if let Some(action) = outcome.value() {
+            self.push_action(Box::new(action))?;
+        }
+        Ok(captured)
+    }
+
+    fn sync_picker_focus(&mut self, owner: WidgetId, focused: bool) {
+        if focused {
+            self.root.focus_on(Some(owner));
+        } else if self.root.focused_widget() == Some(owner) {
+            self.root.focus_on(None);
+        }
     }
 
     fn observe_pointer(&mut self, event: &PointerEvent) {
@@ -383,75 +507,6 @@ where
         };
         let position = button.state.logical_position();
         self.window_owns(Point::new(position.x, position.y))
-    }
-
-    fn sync_popovers(&self) {
-        for (id, state, _) in &self.popovers {
-            if let Some(widget) = self.root.get_widget(*id) {
-                state.set_anchor(widget.ctx().bounding_rect());
-            }
-        }
-    }
-
-    /// Repaints the layer of every engine whose menu has changed.
-    ///
-    /// The menu is drawn above the tree by a layer of its own, so the widget
-    /// that routed the press cannot mark it: a press that opens a menu is,
-    /// from Masonry's side, a press that changed nothing on screen.
-    fn sync_menus(&mut self) {
-        let changed: Vec<WidgetId> = self
-            .engines
-            .iter()
-            .filter_map(|engine| engine.take_changed_menu())
-            .collect();
-        for layer in changed {
-            self.root.edit_widget(layer, |mut layer| {
-                layer.ctx.request_paint_only();
-            });
-        }
-    }
-
-    fn sync(&mut self) -> Result<(), MasonryRootError> {
-        self.sync_menus();
-        loop {
-            let pending = {
-                let mut signals = self.signals.borrow_mut();
-                if signals.is_empty() {
-                    break;
-                }
-                signals.drain(..).collect::<Vec<_>>()
-            };
-            for signal in pending {
-                match signal {
-                    RenderRootSignal::Action(action, _) => self.push_action(action)?,
-                    RenderRootSignal::NewLayer(layer, position) => {
-                        self.root.add_layer(layer, position);
-                    }
-                    RenderRootSignal::RemoveLayer(id) => self.root.remove_layer(id),
-                    RenderRootSignal::RepositionLayer(id, position) => {
-                        self.root.reposition_layer(id, position);
-                    }
-                    signal => self.platform.push(signal),
-                }
-            }
-        }
-        Ok(())
-    }
-
-    fn push_action(&mut self, action: masonry::core::ErasedAction) -> Result<(), MasonryRootError> {
-        let actual = action.type_name();
-        let host = action
-            .downcast::<HostAction>()
-            .map_err(|_| MasonryRootError::ForeignAction { actual })?;
-        let actual = host.type_name();
-        let action = (*host)
-            .downcast::<Action>()
-            .map_err(|_| MasonryRootError::MappedAction {
-                actual,
-                expected: std::any::type_name::<Action>(),
-            })?;
-        self.actions.push(action);
-        Ok(())
     }
 }
 

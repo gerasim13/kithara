@@ -41,6 +41,13 @@ pub(crate) enum HostedControlPlan {
     Activation {
         path: String,
     },
+    /// A box that reports the pointer crossing into and out of it.
+    ///
+    /// This is what a document's `drop:` amounts to: the module never takes the
+    /// pointer, it only says when a hand carrying something is over it.
+    Crossing {
+        path: String,
+    },
     Segmented {
         path: String,
         item_count: usize,
@@ -269,6 +276,16 @@ impl HostedControlPlan {
         }
     }
 
+    /// What a module's `drop:` amounts to, wherever it is mounted.
+    ///
+    /// Both hosts ask here instead of each spelling out the path and the
+    /// gesture again, so a document that takes drops means one thing.
+    pub(in crate::render) fn crossing(instance: &str) -> Self {
+        Self::Crossing {
+            path: format!("{instance}/drop"),
+        }
+    }
+
     pub(crate) fn descriptors(&self) -> Vec<Descriptor> {
         let mut descriptors = Vec::with_capacity(self.descriptor_count());
         self.append_descriptors(&mut descriptors);
@@ -287,6 +304,7 @@ impl HostedControlPlan {
     pub(in crate::render) fn path(&self) -> &str {
         match self {
             Self::Activation { path }
+            | Self::Crossing { path }
             | Self::Segmented { path, .. }
             | Self::Picker { path, .. }
             | Self::Fader { path, .. }
@@ -314,6 +332,7 @@ impl HostedControlPlan {
     fn append_descriptors(&self, descriptors: &mut Vec<Descriptor>) {
         match self {
             Self::Activation { path } => descriptors.push(Descriptor::activation(path.clone())),
+            Self::Crossing { path } => descriptors.push(Descriptor::crossing(path.clone())),
             Self::Segmented { path, item_count } => {
                 descriptors.push(Descriptor::segmented(path.clone(), *item_count));
             }

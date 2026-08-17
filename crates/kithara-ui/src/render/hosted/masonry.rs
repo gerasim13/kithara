@@ -147,6 +147,7 @@ impl HostedControlPlan {
                 Hit::new(point, fader_bounds(bounds, *style, *labelled, *metrics)),
             )),
             Self::Activation { path }
+            | Self::Crossing { path }
             | Self::Segmented { path, .. }
             | Self::Crossfader { path }
             | Self::Knob { path, .. }

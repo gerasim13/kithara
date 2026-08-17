@@ -17,7 +17,10 @@ use crate::{
     interact::iced as iced_interact,
     layout::FrameSides,
     module::ChromeStyle,
-    render::{IcedSkin, Resolving, Skin, UiEvent, document::Ctx, frame_overlay, picker_hits},
+    render::{
+        HostedControlPlan, IcedSkin, Resolving, Skin, UiEvent, document::Ctx, frame_overlay,
+        picker_hits,
+    },
     size::{Dim, Hidden, SizeSpec, is_hidden},
     skin::ColorRole,
 };
@@ -135,7 +138,8 @@ pub(super) const fn length_for(dim: Dim, intrinsic: Length) -> Length {
 
 pub(super) enum HostedLayout {
     Chrome {
-        drop: Option<String>,
+        /// What the module's `drop:` mounts, when it declares one.
+        drop: Option<HostedControlPlan>,
         header: Option<(String, String)>,
         collapsed: bool,
     },
@@ -178,7 +182,7 @@ impl HostedLayout {
             drop,
         } = spec;
         Self::Chrome {
-            drop: drop.then(|| format!("{instance}/drop")),
+            drop: drop.then(|| HostedControlPlan::crossing(instance)),
             header: (chrome == ChromeStyle::Full)
                 .then(|| (format!("{instance}/header"), module.to_owned())),
             collapsed,
@@ -269,8 +273,8 @@ impl HostedLayout {
     fn append_descriptors(&self, descriptors: &mut Vec<Descriptor>) {
         match self {
             Self::Chrome { drop, header, .. } => {
-                if let Some(path) = drop {
-                    descriptors.push(Descriptor::crossing(path.clone()));
+                if let Some(plan) = drop {
+                    descriptors.append(&mut plan.descriptors());
                 }
                 if let Some((path, _)) = header {
                     descriptors.push(Descriptor::activation(path.clone()));
@@ -411,9 +415,9 @@ impl HostedLayout {
                 header,
                 collapsed,
             } => {
-                let shell = if let Some(path) = drop {
+                let shell = if let Some(plan) = drop {
                     targets.push(Target::new(
-                        path,
+                        plan.path(),
                         iced_interact::hit(layout.bounds(), cursor),
                     ));
                     let Some(shell) = first_child(layout) else {

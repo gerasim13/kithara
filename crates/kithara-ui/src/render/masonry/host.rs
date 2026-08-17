@@ -418,7 +418,17 @@ where
     }
 
     fn module(&mut self, module: Module<'_>, content: Option<Self::Output>) -> Self::Output {
-        self.mount_module(&module, content)
+        let mut output = self.mount_module(&module, content);
+        // A module that takes drops reports the pointer crossing it, and the
+        // hand carrying a track never belongs to the module: it belongs to the
+        // list it came from. So the module observes without capturing, and
+        // every control inside keeps the events it would have had.
+        if module.drop().is_some() {
+            let instance = self.ctx.ui.resolve(module.instance());
+            output.add_engine_control(HostedControlPlan::crossing(instance), true);
+            output.host_engine(Rc::clone(&self.map_event), self.skin);
+        }
+        output
     }
 
     fn group(
