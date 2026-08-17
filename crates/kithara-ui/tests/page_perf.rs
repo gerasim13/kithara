@@ -664,6 +664,24 @@ trait PageHost {
     /// The pixels of the last frame this host rasterised.
     fn pixels(&mut self) -> Vec<u8>;
 
+    /// A fingerprint of the last frame, taken at the last artefact this host
+    /// owns. Two runs of one page that fingerprint alike drew the same picture,
+    /// so this is what "the page moved" is read from.
+    ///
+    /// It is not the pixels on both hosts, and the reason is measured: the
+    /// retained host hands Vello a scene, and one unchanged scene rasterises to
+    /// as many as six different pixels from one call to the next. Fingerprinting
+    /// its pixels reports the rasteriser's own noise as the page moving — which
+    /// makes the control run flap and makes the wheel and drag assertions pass
+    /// whether or not anything scrolled.
+    fn picture(&mut self) -> u64;
+
+    /// What [`PageHost::picture`] is a fingerprint of, in one word, for the
+    /// lines that report it. A still scene on a page whose visualiser moves in
+    /// a pass that never enters one is not a still page, and a line that said
+    /// "picture" for both hosts would be claiming it is.
+    fn drawn_as(&self) -> &'static str;
+
     /// A fingerprint of the page's own moving reading, if the page named one.
     fn reading(&self, endpoint: Option<&str>) -> Option<u64>;
 
@@ -842,6 +860,17 @@ impl PageHost for Immediate {
         readback(&self.device, &self.queue, &self.texture)
     }
 
+    /// The pixels themselves: what this host hands the texture comes back the
+    /// same bytes every time, so a byte that differs is something drawn
+    /// differently.
+    fn picture(&mut self) -> u64 {
+        digest(&self.pixels())
+    }
+
+    fn drawn_as(&self) -> &'static str {
+        "pixels"
+    }
+
     fn reading(&self, endpoint: Option<&str>) -> Option<u64> {
         self.app.digest_of(endpoint?)
     }
@@ -872,6 +901,7 @@ fn redraw_asked(state: &State) -> bool {
 /// refresh, a paint into a Vello scene, and the two native passes around it.
 struct Retained<'a> {
     gpu: &'a mut RetainedGpu,
+    picture: u64,
     scheduled: bool,
     ui: Ui<'a, PageApp>,
     pointer_at: Pt,
@@ -883,6 +913,7 @@ impl<'a> Retained<'a> {
             .unwrap_or_else(|error| panic!("the page-perf fixture must mount: {error}"));
         Self {
             gpu,
+            picture: 0,
             scheduled: false,
             ui,
             pointer_at: page.pointer_at,
@@ -912,6 +943,22 @@ impl<'a> Retained<'a> {
             draw_tags: encoding.draw_tags.len(),
             path_data: encoding.path_data.len(),
             transforms: encoding.transforms.len(),
+        };
+        // The scene is where this host's own drawing ends: the coordinates, what
+        // is painted with them, where each is placed, and the counts that say
+        // how they are grouped. Past here the picture belongs to the rasteriser.
+        self.picture = {
+            let mut hasher = DefaultHasher::new();
+            encoding.path_data.hash(&mut hasher);
+            encoding.draw_data.hash(&mut hasher);
+            for placed in &encoding.transforms {
+                placed.matrix.map(f32::to_bits).hash(&mut hasher);
+                placed.translation.map(f32::to_bits).hash(&mut hasher);
+            }
+            encoding.n_paths.hash(&mut hasher);
+            encoding.n_path_segments.hash(&mut hasher);
+            encoding.n_clips.hash(&mut hasher);
+            hasher.finish()
         };
         let natives = Natives {
             shaders: frame.shaders().len(),
@@ -994,6 +1041,16 @@ impl PageHost for Retained<'_> {
 
     fn pixels(&mut self) -> Vec<u8> {
         readback_vello(&self.gpu.device, &self.gpu.queue, &self.gpu.texture)
+    }
+
+    /// The scene of the last frame drawn, fingerprinted where it was handed
+    /// over, rather than the pixels Vello then made of it.
+    fn picture(&mut self) -> u64 {
+        self.picture
+    }
+
+    fn drawn_as(&self) -> &'static str {
+        "scene"
     }
 
     fn reading(&self, endpoint: Option<&str>) -> Option<u64> {
@@ -1450,8 +1507,11 @@ struct Outcome<'run> {
     run: Run,
     tally: Tally,
     expected: Natives,
-    /// The rasterised page before the first measured frame and after the last.
+    /// The page as its host drew it, before the first measured frame and after
+    /// the last.
     picture: [u64; 2],
+    /// Which artefact those two were taken from, for the lines that report them.
+    drawn_as: &'static str,
     /// The page's own moving reading, at the same two moments.
     reading: [Option<u64>; 2],
     /// Whether the last frame is more than one flat colour.
@@ -1627,7 +1687,7 @@ fn measure<'run>(
     for _ in 0..WARMUP {
         driver.frame();
     }
-    let picture_before = digest(&driver.pixels());
+    let picture_before = driver.picture();
     let reading_before = driver.reading(page.moving);
     let tally = frames(driver.as_mut(), page, run, fenced);
     let pixels = driver.pixels();
@@ -1636,7 +1696,8 @@ fn measure<'run>(
         run,
         tally,
         expected,
-        picture: [picture_before, digest(&pixels)],
+        picture: [picture_before, driver.picture()],
+        drawn_as: driver.drawn_as(),
         reading: [reading_before, driver.reading(page.moving)],
         painted: painted(&pixels),
         published: driver.published(),
@@ -1782,8 +1843,9 @@ fn prove(label: &str, outcome: &Outcome<'_>, baseline: Option<u64>) {
         // whether its own picture moved is evidence about the page, not a
         // failure: a page with a caret or a visualiser moves on its own.
         Run::Wheels(0) => println!(
-            "{label} {}: with no wheel the page's picture {}",
+            "{label} {}: with no wheel the page's {} {}",
             page.name,
+            outcome.drawn_as,
             if outcome.picture[0] == outcome.picture[1] {
                 "stood still"
             } else {
@@ -1807,8 +1869,9 @@ fn prove(label: &str, outcome: &Outcome<'_>, baseline: Option<u64>) {
         // Same shape as the wheel: the undriven run is the control, and whether
         // it moved on its own is evidence rather than a failure.
         Run::Moves(0) => println!(
-            "{label} {}: with no drag the page's picture {}",
+            "{label} {}: with no drag the page's {} {}",
             page.name,
+            outcome.drawn_as,
             if outcome.picture[0] == outcome.picture[1] {
                 "stood still"
             } else {
