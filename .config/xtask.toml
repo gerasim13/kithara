@@ -259,18 +259,26 @@ KITHARA_HANG_DUMP_DIR = "hang"
 KITHARA_NO_BLOCK_LOG = "no-block.log"
 
 # The real-time contract, measured the same way. RealtimeSanitizer aborts the
-# process at the offending call, so these lanes are counted by attempts rather
-# than by tests. They belong in the campaign because the violation is
-# intermittent: one was seen firing on a single attempt out of two, which a
-# gate that runs each lane once reports as green half the time. Their own
-# recipes own the sanitizer flags, the pinned nightly and `-Zbuild-std`.
+# process at the offending call, so these lanes report an exit code per attempt.
+# They belong in the campaign because the violation is intermittent: one was
+# seen firing on a single attempt out of two, which a gate that runs each lane
+# once reports as green half the time. Their own recipes own the sanitizer
+# flags, the pinned nightly and `-Zbuild-std`.
+#
+# `attempt_junit` is what keeps the exit code from being the whole verdict: the
+# recipes run under nextest's process per test, so the abort takes one test down
+# and the report names it. The lane keeps a copy per attempt, because the runner
+# overwrites that one path on the next.
 [stress.modes.rtsan]
+attempt_junit = "target/nextest/rtsan/junit.xml"
 command = ["just", "test", "rtsan"]
 
 [stress.modes.rtsan-file]
+attempt_junit = "target/nextest/rtsan/junit.xml"
 command = ["just", "test", "rtsan-file"]
 
 [stress.modes.rtsan-hls]
+attempt_junit = "target/nextest/rtsan/junit.xml"
 command = ["just", "test", "rtsan-hls"]
 
 [stress.modes.diagnostic]

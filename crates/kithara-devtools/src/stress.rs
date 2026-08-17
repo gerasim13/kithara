@@ -123,6 +123,8 @@ pub(crate) fn run_stderr_output(command: &mut Command, path: &Path) -> Result<Ex
 struct Paths {
     raw: PathBuf,
     attempts: PathBuf,
+    /// One `JUnit` copy per attempt of a command lane, named by attempt.
+    attempt_junit: PathBuf,
     envelopes: Option<PathBuf>,
     inventory: PathBuf,
     junit: PathBuf,
@@ -174,6 +176,7 @@ impl Paths {
     fn new(raw: PathBuf, artifacts: &StressArtifactConfig) -> Self {
         Self {
             attempts: raw.join(&artifacts.attempts),
+            attempt_junit: raw.join("attempt-junit"),
             envelopes: artifacts.envelope_dir.as_deref().map(|path| raw.join(path)),
             inventory: raw.join(&artifacts.inventory),
             junit: raw.join(&artifacts.junit),
@@ -319,17 +322,52 @@ fn run_command_lane(
         .command
         .split_first()
         .context("a command lane needs a program to run")?;
+    let report = mode
+        .attempt_junit
+        .as_deref()
+        .map(|path| ctx.root.join(path));
     let mut codes = Vec::with_capacity(count);
     for attempt in 0..count {
         mark_attempt(&paths.log, attempt)?;
+        // The runner writes to one path. Removing it first means a copy can
+        // only ever be this attempt's: an attempt that died before writing
+        // leaves no file rather than the previous attempt's verdict under a
+        // new number.
+        if let Some(report) = report.as_deref()
+            && let Err(error) = fs::remove_file(report)
+            && error.kind() != std::io::ErrorKind::NotFound
+        {
+            return Err(error)
+                .with_context(|| format!("clear command lane report {}", report.display()));
+        }
         let mut command = Command::new(program);
         command.args(arguments).current_dir(&ctx.root);
         environment.apply(&mut command);
         let status = run_output(&mut command, &paths.log)?;
         let code = status.code().unwrap_or_else(|| i32::from(u8::MAX));
         codes.push(code);
+        if let Some(report) = report.as_deref() {
+            keep_attempt_report(report, &paths.attempt_junit, attempt)?;
+        }
     }
     Ok(codes)
+}
+
+/// Keeps this attempt's report, if the command left one.
+///
+/// An aborted attempt may leave nothing at all — that absence is itself
+/// evidence, and it is recorded by the copy that is missing rather than by an
+/// error here.
+fn keep_attempt_report(report: &Path, directory: &Path, attempt: usize) -> Result<()> {
+    if !report.is_file() {
+        return Ok(());
+    }
+    fs::create_dir_all(directory)
+        .with_context(|| format!("create attempt report directory {}", directory.display()))?;
+    let kept = directory.join(format!("attempt-{attempt}.xml"));
+    fs::copy(report, &kept)
+        .with_context(|| format!("keep attempt report {}", kept.display()))
+        .map(|_| ())
 }
 
 fn run_lane(args: &RunArgs, ctx: &Ctx, mode_name: &str, raw: &Path) -> Result<()> {
@@ -678,6 +716,7 @@ fn command_lane_report(
             markdown_cell(&codes)
         );
     }
+    stress_report::append_attempt_reports(&mut markdown, &paths.attempt_junit, &codes);
     append_findings(&mut markdown, log, evidence, failed, observed);
     let verdict = if result == "PASSED" {
         Ok(())

@@ -717,6 +717,87 @@ fn disagreement(cells: &[Option<LaneRate>]) -> f64 {
     high - low
 }
 
+/// Names what a command lane's own test runner recorded, attempt by attempt.
+///
+/// An exit code says an attempt was rejected; it does not say in which test.
+/// When the command runs its tests under a runner that writes a report, the
+/// lane keeps one copy per attempt, and this is where those copies become the
+/// sentence a reader needs: this test, on these attempts.
+///
+/// A rejected attempt that left no report at all is reported too, and is the
+/// more serious of the two: the process died before the runner could write
+/// anything — the signature of a crash outside any test.
+pub(crate) fn append_attempt_reports(out: &mut String, directory: &Path, codes: &[i32]) {
+    let mut failures = BTreeMap::<TestId, BTreeSet<usize>>::new();
+    let mut silent = BTreeSet::new();
+    let mut unreadable = BTreeSet::new();
+    for (attempt, code) in codes.iter().enumerate() {
+        let kept = directory.join(format!("attempt-{attempt}.xml"));
+        let Ok(xml) = fs::read_to_string(&kept) else {
+            if *code != 0 {
+                silent.insert(attempt);
+            }
+            continue;
+        };
+        match parse_junit_report(&xml) {
+            Ok(report) => {
+                for case in report.cases.iter().filter(|case| case.failed) {
+                    failures
+                        .entry((case.suite.clone(), case.name.clone()))
+                        .or_default()
+                        .insert(attempt);
+                }
+            }
+            Err(_) => {
+                unreadable.insert(attempt);
+            }
+        }
+    }
+    if failures.is_empty() && silent.is_empty() && unreadable.is_empty() {
+        return;
+    }
+    out.push_str("\n## What the lane's own runner recorded\n");
+    if !failures.is_empty() {
+        out.push_str("\n| test | rate | attempts |\n|---|---:|---|\n");
+        let mut rows = failures.into_iter().collect::<Vec<_>>();
+        rows.sort_by_key(|(id, attempts)| (Reverse(attempts.len()), id.clone()));
+        for (id, attempts) in rows.into_iter().take(MAX_FAILURE_ROWS) {
+            let _ = writeln!(
+                out,
+                "| `{}` | {} ({}/{}) | {} |",
+                markdown_cell(&format!("{} {}", id.0, id.1)),
+                rate_percent(attempts.len(), codes.len()),
+                attempts.len(),
+                codes.len(),
+                markdown_cell(&join_attempts(&attempts)),
+            );
+        }
+    }
+    if !silent.is_empty() {
+        let _ = writeln!(
+            out,
+            "\n- Rejected attempts that wrote no report (died before any verdict): `{}`",
+            markdown_cell(&join_attempts(&silent))
+        );
+    }
+    if !unreadable.is_empty() {
+        let _ = writeln!(
+            out,
+            "\n- Attempts whose report could not be read: `{}`",
+            markdown_cell(&join_attempts(&unreadable))
+        );
+    }
+}
+
+fn join_attempts(attempts: &BTreeSet<usize>) -> String {
+    attempts
+        .iter()
+        .take(MAX_ITERATIONS_PER_TEST)
+        .map(usize::to_string)
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 pub(crate) fn write_report(path: &Path, markdown: &str) -> Result<()> {
     if let Some(parent) = path.parent()
         && !parent.as_os_str().is_empty()
@@ -1786,6 +1867,77 @@ mod tests {
         );
 
         assert!(table.contains("flash-off"), "{table}");
+    }
+
+    fn kept_reports(reports: &[(usize, &str)]) -> tempfile::TempDir {
+        let temp = tempfile::tempdir().expect("tempdir");
+        for (attempt, xml) in reports {
+            fs::write(temp.path().join(format!("attempt-{attempt}.xml")), xml)
+                .expect("write kept report");
+        }
+        temp
+    }
+
+    fn failed_case(name: &str) -> String {
+        format!(
+            r#"<testsuites uuid="run" timestamp="2026-08-17T12:00:00Z">
+  <testsuite name="demo::tests@rtsan-0">
+    <testcase name="{name}" classname="demo::tests" time="0.1" timestamp="2026-08-17T12:00:00Z">
+      <failure type="test failure">aborted</failure>
+    </testcase>
+  </testsuite>
+</testsuites>"#
+        )
+    }
+
+    #[test]
+    fn a_command_lanes_own_runner_names_the_test_behind_an_exit_code() {
+        let temp = kept_reports(&[(1, &failed_case("mix_tap"))]);
+        let mut out = String::new();
+
+        append_attempt_reports(&mut out, temp.path(), &[0, 101, 0]);
+
+        assert!(out.contains("demo::tests mix_tap"), "{out}");
+    }
+
+    #[test]
+    fn a_named_test_carries_the_attempts_it_was_rejected_on() {
+        let temp = kept_reports(&[(1, &failed_case("mix_tap")), (2, &failed_case("mix_tap"))]);
+        let mut out = String::new();
+
+        append_attempt_reports(&mut out, temp.path(), &[0, 101, 101]);
+
+        assert!(out.contains("| 1, 2 |"), "{out}");
+    }
+
+    #[test]
+    fn a_rejected_attempt_that_wrote_no_report_is_reported_as_silent() {
+        let temp = kept_reports(&[]);
+        let mut out = String::new();
+
+        append_attempt_reports(&mut out, temp.path(), &[0, 139]);
+
+        assert!(out.contains("died before any verdict"), "{out}");
+    }
+
+    #[test]
+    fn an_accepted_attempt_that_wrote_no_report_is_not_called_silent() {
+        let temp = kept_reports(&[]);
+        let mut out = String::new();
+
+        append_attempt_reports(&mut out, temp.path(), &[0, 0]);
+
+        assert!(out.is_empty(), "{out}");
+    }
+
+    #[test]
+    fn a_report_that_cannot_be_parsed_is_named_rather_than_counted_as_passing() {
+        let temp = kept_reports(&[(0, "<testsuites")]);
+        let mut out = String::new();
+
+        append_attempt_reports(&mut out, temp.path(), &[101]);
+
+        assert!(out.contains("could not be read"), "{out}");
     }
 
     #[test]

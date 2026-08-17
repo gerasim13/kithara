@@ -447,6 +447,14 @@ pub struct StressModeConfig {
     /// so these lanes belong in it rather than beside it. Empty means the lane
     /// runs the configured test runner and is measured per test.
     pub command: Vec<String>,
+    /// Where this command leaves a `JUnit` report, relative to the workspace.
+    ///
+    /// A command lane's verdict is an exit code, and an exit code names no
+    /// test. When the command runs its tests under a runner that writes a
+    /// report anyway, that report is what turns "one attempt in fifty aborted"
+    /// into "this test aborted, on these attempts". The runner overwrites the
+    /// file every attempt, so the lane keeps a copy of each.
+    pub attempt_junit: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]

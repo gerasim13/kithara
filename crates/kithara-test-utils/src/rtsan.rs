@@ -62,6 +62,32 @@ fn resume_checks() {
     rtsan_standalone::enable();
 }
 
+/// Brings the runtime up before any shared library's initializer runs.
+///
+/// On Linux the standalone runtime is a static archive whose libc interceptors
+/// are live from the first instruction, while the real `malloc` behind them is
+/// resolved on first use. The loader runs the initializers of the program's
+/// shared libraries before the program's own, and glib's — reached through
+/// ffmpeg, ALSA and D-Bus — allocates in its. That call landed in the
+/// interceptor while the real allocator was still null and jumped to address
+/// zero: every lane died in the loader on `SIGSEGV`, before `main`, before the
+/// runtime could install its own signal handler, with an empty stderr and no
+/// test named.
+///
+/// `.preinit_array` is the one hook the loader runs ahead of every shared
+/// library initializer, so it is the only point early enough to be safe. macOS
+/// links the runtime as a dylib whose own initializer already covers this, and
+/// has no equivalent section.
+#[cfg(all(rtsan, rtsan_standalone, target_os = "linux"))]
+#[used]
+#[unsafe(link_section = ".preinit_array")]
+static RTSAN_PREINIT: extern "C" fn() = initialize_before_shared_libraries;
+
+#[cfg(all(rtsan, rtsan_standalone, target_os = "linux"))]
+extern "C" fn initialize_before_shared_libraries() {
+    rtsan_standalone::ensure_initialized();
+}
+
 #[cfg(rtsan)]
 thread_local! {
     /// Nesting depth of live [`Permit`] guards on this thread.
