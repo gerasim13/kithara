@@ -115,15 +115,19 @@ const REVERSAL: usize = 20;
 /// enough that each one lands on a different pixel of it.
 const DRAG_STEP: f32 = 1.5;
 
-/// The harness's own page, mounting the one scrolling module the gallery has
-/// together with the visualiser, so a scroll slope measured with a visualiser on
-/// the page can be compared against the same slope without one. It lives here
-/// rather than in the gallery's assets because every page there joins
-/// `Shot::all()` and the parity lane.
+/// The harness's own page, mounting the one list the gallery scrolls together
+/// with the visualiser, so a scroll slope measured with a visualiser on the page
+/// can be compared against the same slope without one. It lives here rather than
+/// in the gallery's assets because every page there joins `Shot::all()` and the
+/// parity lane.
+///
+/// The list is the navigator's: it is the only one in the gallery whose content
+/// outgrows its viewport, and a wheel over a viewport nothing overflows is a
+/// measurement of a clamp rather than of a scroll.
 const SCROLL_VIS_LAYOUT: &str = "perf-scroll-vis.klayout.ron";
 const SCROLL_VIS_RON: &str = r#"(schema: "kithara.layout", version: 1, id: "perf-scroll-vis",
-    root: Split(axis: Vertical, children: [
-        (weight: 1.0, node: Module(instance: "pivot", source: "modules/pivot-portals.kmodule.ron", corners: true, size: (w: Fill, h: Fixed(420.0)))),
+    root: Split(axis: Horizontal, children: [
+        (weight: 1.0, node: Module(instance: "nav", source: "modules/nav.kmodule.ron", corners: true, size: (w: Fixed(198.0), h: Fill))),
         (weight: 1.0, node: Module(instance: "vis", source: "modules/tabs/vis.kmodule.ron", corners: true, size: (w: Fill, h: Fill))),
     ]))"#;
 
@@ -312,7 +316,7 @@ const PAGES: &[Page] = &[
         frames: 60,
         program: Program::Wheels(&[0, 1, 4, 8]),
         moving: None,
-        pointer_at: Pt { x: 400.0, y: 180.0 },
+        pointer_at: Pt { x: 100.0, y: 400.0 },
         fenced: false,
         immediate_guard: "iced.gallery-pivot",
         retained_guard: "vello.gallery-pivot",
@@ -325,7 +329,7 @@ const PAGES: &[Page] = &[
         frames: 60,
         program: Program::Wheels(&[0, 1, 4, 8]),
         moving: None,
-        pointer_at: Pt { x: 700.0, y: 400.0 },
+        pointer_at: Pt { x: 100.0, y: 400.0 },
         fenced: false,
         immediate_guard: "iced.gallery-library2",
         retained_guard: "vello.gallery-library2",
@@ -338,7 +342,7 @@ const PAGES: &[Page] = &[
         frames: 60,
         program: Program::Wheels(&[0, 1, 4, 8]),
         moving: None,
-        pointer_at: Pt { x: 700.0, y: 400.0 },
+        pointer_at: Pt { x: 100.0, y: 400.0 },
         fenced: false,
         immediate_guard: "iced.gallery-tree",
         retained_guard: "vello.gallery-tree",
@@ -429,7 +433,7 @@ const PAGES: &[Page] = &[
         frames: 60,
         program: Program::Wheels(&[0, 1, 4, 8]),
         moving: Some("vis.time"),
-        pointer_at: Pt { x: 200.0, y: 150.0 },
+        pointer_at: Pt { x: 100.0, y: 400.0 },
         fenced: false,
         immediate_guard: "iced.perf-scroll-vis",
         retained_guard: "vello.perf-scroll-vis",
