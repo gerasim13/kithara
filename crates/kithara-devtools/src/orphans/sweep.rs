@@ -1,5 +1,7 @@
 use std::{
     collections::{BTreeMap, HashSet},
+    fs,
+    num::NonZero,
     path::{Path, PathBuf},
     process::Command,
     sync::{Arc, Mutex},
@@ -17,7 +19,14 @@ struct Consts;
 impl Consts {
     const INSTALL_HINT: &'static str = "cargo install cargo-modules";
     const MARKER: &'static str = "orphaned module `";
-    const PARALLELISM: usize = 4;
+    const MAX_PARALLELISM: usize = 4;
+    /// A cgroup v2 job container reports its own cap here; a machine without
+    /// one has no such file and is bounded by its cores alone.
+    const MEMORY_MAX: &'static str = "/sys/fs/cgroup/memory.max";
+    /// What one `cargo modules` run needs. It loads the whole workspace into a
+    /// rust-analyzer database and peaked at three gibibytes on this one, so
+    /// the budget is that measurement with room for the workspace to grow.
+    const WORKER_MEMORY: u64 = 3584 * 1024 * 1024;
 }
 
 #[derive(Debug, Args)]
@@ -116,17 +125,24 @@ pub(crate) fn run(args: &OrphansArgs, ctx: &Ctx) -> Result<()> {
         return Ok(());
     }
 
+    let cpus = thread::available_parallelism().map_or(1, NonZero::get);
+    let memory = memory_limit();
+    let parallelism = workers(cpus, memory);
+    let cap = memory.map_or_else(
+        || "no memory cap".to_owned(),
+        |bytes| format!("{} MiB memory cap", bytes / (1024 * 1024)),
+    );
     println!(
-        "orphans: checking {} target(s) with {}-way parallelism",
-        jobs.len(),
-        Consts::PARALLELISM
+        "orphans: checking {} target(s) with {parallelism}-way parallelism \
+         ({cpus} core(s), {cap})",
+        jobs.len()
     );
 
     let queue = Arc::new(Mutex::new(jobs));
     let reports = Arc::new(Mutex::new(Vec::<Report>::new()));
-    let mut handles = Vec::with_capacity(Consts::PARALLELISM);
+    let mut handles = Vec::with_capacity(parallelism);
 
-    for _ in 0..Consts::PARALLELISM {
+    for _ in 0..parallelism {
         let queue = Arc::clone(&queue);
         let reports = Arc::clone(&reports);
         let root = Arc::clone(&root);
@@ -156,6 +172,36 @@ pub(crate) fn run(args: &OrphansArgs, ctx: &Ctx) -> Result<()> {
         .expect("BUG: orphans reports mutex poisoned");
 
     verdict(&merge(reports), &root, args.deny)
+}
+
+/// How many runs the job has room for. A fixed count answers to the machine
+/// the sweep was written on, and a CI container holds fewer rust-analyzer
+/// databases than that: the kernel kills the job before it reports anything.
+fn workers(cpus: usize, memory: Option<u64>) -> usize {
+    let by_memory = memory.map_or(Consts::MAX_PARALLELISM, |bytes| {
+        usize::try_from(bytes / Consts::WORKER_MEMORY).unwrap_or(Consts::MAX_PARALLELISM)
+    });
+    cpus.min(by_memory).clamp(1, Consts::MAX_PARALLELISM)
+}
+
+/// What to report when a run fails. A tool that explained itself is quoted as
+/// it stands; one that ended without a word is named by how it ended.
+fn failure(status: &str, text: &str) -> String {
+    if text.trim().is_empty() {
+        return format!("cargo modules ended with {status} and produced no output");
+    }
+    text.to_owned()
+}
+
+/// The cap this job runs under, when it runs under one. `memory.max` reads
+/// `max` on an unbounded cgroup, which is not a size and leaves the count to
+/// the cores.
+fn memory_limit() -> Option<u64> {
+    fs::read_to_string(Consts::MEMORY_MAX)
+        .ok()?
+        .trim()
+        .parse()
+        .ok()
 }
 
 /// Folds a package's targets into one verdict. A file both the library and a
@@ -262,7 +308,7 @@ fn examine(job: &Job, root: &Path) -> Report {
     );
     let found = findings(&text, root);
     if found.is_empty() && !output.status.success() {
-        return Report::failed(job, text);
+        return Report::failed(job, failure(&output.status.to_string(), &text));
     }
     let declared = match declared_files(&job.src) {
         Ok(declared) => declared,
@@ -435,6 +481,47 @@ mod tests {
         );
 
         assert!(orphans.is_empty());
+    }
+
+    const GIB: u64 = 1024 * 1024 * 1024;
+
+    /// A worker the kernel kills leaves nothing behind, and a package reported
+    /// as unchecked without a reason reads as a broken tool rather than as a
+    /// job that ran out of room.
+    #[test]
+    fn a_run_that_said_nothing_reports_how_it_ended() {
+        assert!(failure("signal: 9 (SIGKILL)", "").contains("signal: 9 (SIGKILL)"));
+    }
+
+    #[test]
+    fn a_run_that_explained_itself_keeps_its_own_words() {
+        assert_eq!(
+            failure("exit status: 1", "error: no such package"),
+            "error: no such package"
+        );
+    }
+
+    /// The CI container: three cores and eight gibibytes. Four runs of a tool
+    /// that holds three apiece is what the kernel killed the sweep for.
+    #[test]
+    fn a_capped_container_runs_what_its_memory_holds() {
+        assert_eq!(workers(3, Some(8 * GIB)), 2);
+    }
+
+    #[test]
+    fn a_machine_without_a_cap_runs_the_maximum() {
+        assert_eq!(workers(16, None), Consts::MAX_PARALLELISM);
+    }
+
+    /// A cap too small for even one run still has to sweep, one at a time.
+    #[test]
+    fn a_cap_below_one_run_still_runs_one() {
+        assert_eq!(workers(3, Some(GIB)), 1);
+    }
+
+    #[test]
+    fn fewer_cores_than_memory_allows_run_one_per_core() {
+        assert_eq!(workers(2, Some(64 * GIB)), 2);
     }
 
     fn report(label: &str, orphans: Vec<Finding>, declared: Vec<PathBuf>) -> Report {

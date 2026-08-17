@@ -377,6 +377,15 @@ verdict: a file one target reports and another declares is not an orphan. This i
 lets `[orphans].exclude_packages` stay empty — a package without a library is swept
 through its binaries instead of dropped.
 
+One run of the tool loads the whole workspace into a rust-analyzer database and peaked
+at 3.0 GiB on this one, so how many run at once is a property of the job rather than a
+constant: the sweep takes the smaller of the cores it may use and its cgroup memory cap
+divided by that budget, capped at four. A CI job container here is bounded at 8 GiB and
+three cores, where a fixed four runs exhausted the cgroup and the kernel killed the step
+(exit 137) before the sweep reached a verdict. The chosen count and the numbers behind it
+are printed with the target count, because a sweep that quietly runs one at a time and a
+sweep that is slow for some other reason look identical otherwise.
+
 Without `--deny` the run is advisory; `just ci health` and the quality workflow pass it.
 
 ## CI report ownership
