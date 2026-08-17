@@ -77,6 +77,12 @@ fn composite(over: Rgba, under: Rgba) -> Rgba {
 /// column about half, and three of those composite to `1-(1-0.5)^3`, which is
 /// opaque enough to read as bar. The height is deliberately left alone — it
 /// carries the level, and rounding it would quantise the signal.
+///
+/// Snapping breaks its ties in one direction rather than away from zero, so a
+/// column left of the box's origin lands on the same grid as one right of it.
+/// A zoomed hero wave is laid out from the track's origin, which sits far off
+/// the left edge, and a tie that flipped direction at zero would cost that one
+/// column its gap.
 pub(crate) fn draw_column(
     list: &mut DrawListBuilder,
     bounds: Rect,
@@ -86,8 +92,8 @@ pub(crate) fn draw_column(
     metrics: WaveSkin,
     colors: [Rgba; 3],
 ) {
-    let left = (center_x - metrics.bar_width / 2.0).round();
-    let width = (center_x + metrics.bar_width / 2.0).round() - left;
+    let left = snap(center_x - metrics.bar_width / 2.0);
+    let width = snap(center_x + metrics.bar_width / 2.0) - left;
     for (level, color) in [bucket.low, bucket.mid, bucket.high]
         .into_iter()
         .zip(colors)
@@ -106,6 +112,12 @@ pub(crate) fn draw_column(
             color,
         );
     }
+}
+
+/// The whole pixel a coordinate belongs to, ties going the same way on both
+/// sides of the origin.
+fn snap(value: f32) -> f32 {
+    (value + 0.5).floor()
 }
 
 #[cfg(test)]
@@ -184,6 +196,24 @@ mod tests {
         assert!(
             second.x - (first.x + first.w) >= 1.0,
             "columns {first:?} and {second:?} left no gap"
+        );
+    }
+
+    /// A hero wave is laid out from the track's origin, so at any zoom most of
+    /// its comb sits at negative coordinates. Snapping that flipped direction
+    /// at zero would cost the column straddling the origin its gap.
+    #[kithara::test]
+    fn columns_either_side_of_the_origin_snap_the_same_way() {
+        let step = step(builtin::skin().wave);
+        let left = column_at(-step / 2.0);
+        let right = column_at(step / 2.0);
+
+        let first = left.first().unwrap_or_else(|| panic!("a band must draw"));
+        let second = right.first().unwrap_or_else(|| panic!("a band must draw"));
+        assert_eq!(
+            second.x - first.x,
+            step,
+            "columns {first:?} and {second:?} are one pitch apart in the grid"
         );
     }
 

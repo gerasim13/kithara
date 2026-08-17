@@ -1,4 +1,8 @@
-use std::{cell::RefCell, ops::Range, rc::Rc};
+use std::{
+    cell::{Cell, RefCell},
+    ops::Range,
+    rc::Rc,
+};
 
 use num_traits::cast::AsPrimitive;
 
@@ -95,12 +99,70 @@ pub(crate) enum HostedControlPlan {
     },
     HeroWave {
         path: String,
-        scale: f32,
-        progress: f32,
-        visible: Range<f32>,
-        wheel_positive: f32,
-        wheel_non_positive: f32,
+        /// Where the deck this wave belongs to answers from, kept so the window
+        /// below can be re-read once the tree is standing.
+        scope: String,
+        zoom: Option<Binding>,
+        window: Cell<HeroWindow>,
     },
+}
+
+/// The stretch of a track a hero wave is showing, which is what a hand on it is
+/// measured against.
+///
+/// It moves with the playhead and with the zoom, so it is not a property of the
+/// document: it is what the deck reads right now. A host that rebuilds its tree
+/// every frame gets a new one for free; one that keeps a tree re-reads this in
+/// place, or every gesture is measured against the window that happened to be
+/// on screen when the deck was mounted.
+#[derive(Clone, Copy, Default)]
+pub(crate) struct HeroWindow {
+    scale: f32,
+    progress: f32,
+    start: f32,
+    end: f32,
+    wheel_positive: f32,
+    wheel_non_positive: f32,
+}
+
+impl HeroWindow {
+    /// What the deck at `scope` is showing this frame.
+    fn read(scope: &str, zoom: Option<&Binding>, ctx: Ctx<'_, '_>) -> Self {
+        let progress = match ctx.get(&derived("deck.playback.position_normalized", scope)) {
+            Some(ReadValue::Scalar(value)) => value.as_(),
+            _ => 0.0,
+        };
+        let scale = clamp_zoom(ctx.wave_zoom(zoom));
+        let visible = window_bounds(progress, scale);
+        Self {
+            scale,
+            progress,
+            start: visible.start,
+            end: visible.end,
+            wheel_positive: zoom_for_wheel(scale, 1.0),
+            wheel_non_positive: zoom_for_wheel(scale, 0.0),
+        }
+    }
+
+    fn visible(self) -> Range<f32> {
+        self.start..self.end
+    }
+
+    /// The window a deck at `progress` shows at `zoom`, without a document to
+    /// read it from.
+    #[cfg(test)]
+    fn at(progress: f32, zoom: f32) -> Self {
+        let scale = clamp_zoom(zoom);
+        let visible = window_bounds(progress, scale);
+        Self {
+            scale,
+            progress,
+            start: visible.start,
+            end: visible.end,
+            wheel_positive: zoom_for_wheel(scale, 1.0),
+            wheel_non_positive: zoom_for_wheel(scale, 0.0),
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -267,12 +329,44 @@ impl HostedControlPlan {
                     path: path.to_owned(),
                 })
             }
-            (ControlSpec::Wave { style, zoom, .. }, Some(ReadValue::Waveform(waveform)))
-                if !waveform.buckets.is_empty() =>
-            {
+            // What a hand on a waveform does is what the document says it does.
+            // A deck is mounted before anything is loaded into it, and a host
+            // that keeps its tree decides this once: a wave that had to be
+            // carrying a track to answer would stay deaf for the life of the
+            // window, however many tracks were dropped on it afterwards.
+            (ControlSpec::Wave { style, zoom, .. }, _) => {
                 Some(wave_plan(path, *style, zoom.as_ref(), scope, ctx))
             }
             _ => None,
+        }
+    }
+
+    /// A hero wave showing a deck at `progress`, for a test that mounts one
+    /// without a document behind it.
+    #[cfg(test)]
+    pub(crate) fn hero_wave_at(path: &str, progress: f32, zoom: f32) -> Self {
+        Self::HeroWave {
+            path: path.to_owned(),
+            scope: String::new(),
+            zoom: None,
+            window: Cell::new(HeroWindow::at(progress, zoom)),
+        }
+    }
+
+    /// Re-reads whatever this plan measures a gesture against.
+    ///
+    /// A host that rebuilds its tree every frame resolves the whole plan afresh
+    /// and never calls this. One that keeps a tree calls it instead, so a
+    /// standing control answers a hand the same way a newly mounted one would.
+    pub(crate) fn reread(&self, ctx: Ctx<'_, '_>) {
+        if let Self::HeroWave {
+            scope,
+            zoom,
+            window,
+            ..
+        } = self
+        {
+            window.set(HeroWindow::read(scope, zoom.as_ref(), ctx));
         }
     }
 
@@ -380,21 +474,17 @@ impl HostedControlPlan {
                 descriptors.push(Descriptor::vertical_vu(path.clone()));
             }
             Self::Wave { path } => descriptors.push(Descriptor::wave(path.clone())),
-            Self::HeroWave {
-                path,
-                scale,
-                progress,
-                visible,
-                wheel_positive,
-                wheel_non_positive,
-            } => descriptors.push(Descriptor::hero_wave(
-                path.clone(),
-                *scale,
-                *progress,
-                visible.clone(),
-                *wheel_positive,
-                *wheel_non_positive,
-            )),
+            Self::HeroWave { path, window, .. } => {
+                let window = window.get();
+                descriptors.push(Descriptor::hero_wave(
+                    path.clone(),
+                    window.scale,
+                    window.progress,
+                    window.visible(),
+                    window.wheel_positive,
+                    window.wheel_non_positive,
+                ));
+            }
         }
     }
 }
@@ -465,19 +555,17 @@ fn wave_plan(
             path: path.to_owned(),
         };
     }
-    let progress = match ctx.get(&derived("deck.playback.position_normalized", scope)) {
-        Some(ReadValue::Scalar(value)) => value.as_(),
-        _ => 0.0,
-    };
-    let scale = clamp_zoom(ctx.wave_zoom(zoom));
-    HostedControlPlan::HeroWave {
+    // The window is not a property of the document, it is what the deck reads
+    // this frame, so both hosts arrive at it the same way: the immediate one
+    // here, the retained one again whenever the frame moves under its tree.
+    let plan = HostedControlPlan::HeroWave {
         path: path.to_owned(),
-        scale,
-        progress,
-        visible: window_bounds(progress, scale),
-        wheel_positive: zoom_for_wheel(scale, 1.0),
-        wheel_non_positive: zoom_for_wheel(scale, 0.0),
-    }
+        scope: scope.to_owned(),
+        zoom: zoom.cloned(),
+        window: Cell::default(),
+    };
+    plan.reread(ctx);
+    plan
 }
 
 impl TreePlan {

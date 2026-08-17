@@ -4405,14 +4405,7 @@ mod tests {
         let mut element = Element::new(Host {
             child,
             layout: HostedLayout::Control(Some(HostedControl::mounted(
-                crate::render::HostedControlPlan::HeroWave {
-                    path: path.to_owned(),
-                    scale: 0.25,
-                    progress: 0.75,
-                    visible: 0.625..0.875,
-                    wheel_positive: 0.3125,
-                    wheel_non_positive: 0.2,
-                },
+                crate::render::HostedControlPlan::hero_wave_at(path, 0.75, 0.25),
                 builtin::skin(),
             ))),
         });

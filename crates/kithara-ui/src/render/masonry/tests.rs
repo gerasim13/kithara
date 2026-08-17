@@ -3931,12 +3931,250 @@ fn a_hand_drawn_across_the_retained_wave_seeks() {
 
             let published = root.take_actions();
             assert!(
-                !published.is_empty(),
+                published.iter().any(|action| matches!(
+                    action,
+                    TestAction::Document(UiEvent::Control {
+                        action: ControlAction::SetScalar(_),
+                        path,
+                    }) if path.ends_with("/wave")
+                )),
                 "a hand drawn across a waveform that writes a seek must publish it, and the wave \
-                 declared as `{extra}` in a module that takes drops={takes_drops} published nothing"
+                 declared as `{extra}` in a module that takes drops={takes_drops} published \
+                 {published:?}"
             );
         }
     }
+}
+
+/// The deck as the studio ships it, in the layout that ships it.
+///
+/// The isolated wave takes a gesture, and the shipped one does not, so the
+/// difference is somewhere between them: the module takes drops, the wave is
+/// adaptive and reads telemetry, a transport row sits under it, the column
+/// paints a background, and the whole thing hangs off a split inside a window
+/// that has resize edges.
+fn studio_deck_root(reads: &DeckReads) -> (CompiledUi, MasonryRoot<TestAction>) {
+    let mut registry = fixture_registry();
+    registry.insert(
+        EndpointCategory::Command,
+        "deck.queue.load",
+        EndpointDesc::new(ValueKind::Trigger).with_scope("deck"),
+    );
+    registry.insert(
+        EndpointCategory::Model,
+        "ui.drag.over",
+        EndpointDesc::new(ValueKind::Bool).with_scope("deck"),
+    );
+    registry.insert(
+        EndpointCategory::Model,
+        "ui.drag.track",
+        EndpointDesc::new(ValueKind::Text),
+    );
+    let mut resolver = MemResolver::default();
+    resolver.insert(
+        "studio.klayout.ron",
+        r#"(schema: "kithara.layout", version: 1, id: "studio", resize_edges: true,
+            dragged: Some(Model(id: "ui.drag.track")),
+            root: Split(axis: Vertical, children: [
+                (node: Module(instance: "bar", source: "bar.kmodule.ron",
+                    size: (w: Fill, h: Fixed(42.0)))),
+                (weight: 2.1, node: Split(axis: Horizontal, children: [
+                    (weight: 1.0, node: Module(instance: "deck-a", source: "deck.kmodule.ron",
+                        with: { "deck": "a", "letter": "A" })),
+                    (weight: 1.0, node: Module(instance: "deck-b", source: "deck.kmodule.ron",
+                        with: { "deck": "b", "letter": "B" })),
+                ])),
+            ]))"#,
+    );
+    resolver.insert(
+        "bar.kmodule.ron",
+        r#"(schema: "kithara.module", version: 1, id: "bar", chrome: Plain,
+            root: Row(gap: 0.0, pad: 0.0, size: (w: Fill, h: Fill), children: [
+                Slot(id: "gap", size: (w: Fill, h: Fill)),
+            ]))"#,
+    );
+    resolver.insert(
+        "deck.kmodule.ron",
+        r#"(schema: "kithara.module", version: 1, id: "studio-deck",
+            parameters: ["deck", "letter"],
+            drop: Some((
+                write: Command(id: "deck.queue.load", with: { "deck": "$deck" }),
+                read: Model(id: "ui.drag.over", with: { "deck": "$deck" }),
+            )),
+            root: Column(background: BgInset, children: [
+                Wave(
+                    id: "wave",
+                    style: Hero,
+                    badge: Some("$letter"),
+                    read: Telemetry(id: "deck.playback.waveform", with: { "deck": "$deck" }),
+                    write: Command(id: "deck.transport.seek_normalized", with: { "deck": "$deck" }),
+                    zoom: Model(id: "deck.view.zoom"),
+                    adaptive: (priority: Required),
+                ),
+                Row(
+                    id: "transport",
+                    gap: 0.0,
+                    size: (w: Fill, h: Fixed(38.0)),
+                    background: BgDeep,
+                    background_alpha: 0.84,
+                    children: [Slot(id: "gap", size: (w: Fill, h: Fill))],
+                ),
+            ]))"#,
+    );
+    let ui = compile(
+        "studio.klayout.ron",
+        &resolver,
+        &registry,
+        builtin::skin_doc(),
+        &UiConfig::default(),
+    )
+    .unwrap_or_else(|error| panic!("the studio fixture must compile: {error}"));
+    let host = MasonryHost::map_actions(ctx(&ui, reads), builtin::skin(), TestAction::Document);
+    let output = document::render(&ui.root, ctx(&ui, reads), host);
+    let mut root = masonry_root(output, 800, 400);
+    root.redraw()
+        .unwrap_or_else(|error| panic!("the first frame must draw: {error}"));
+    (ui, root)
+}
+
+/// A deck whose track arrives after the tree is standing, which is the only way
+/// a deck ever gets one: the module is mounted empty and something is loaded.
+struct DeckReads {
+    loaded: Cell<bool>,
+    position: Cell<f32>,
+}
+
+impl DeckReads {
+    fn loaded_at(position: f32) -> Self {
+        Self {
+            loaded: Cell::new(true),
+            position: Cell::new(position),
+        }
+    }
+}
+
+impl Reads for DeckReads {
+    fn get(&self, endpoint: &str) -> Option<ReadValue<'_>> {
+        let id = endpoint.split_once('@').map_or(endpoint, |(id, _scope)| id);
+        if id == "deck.playback.position_normalized" {
+            return Some(ReadValue::Scalar(self.position.get().into()));
+        }
+        if id == "deck.playback.waveform" {
+            return self
+                .loaded
+                .get()
+                .then_some(ReadValue::Waveform(WaveformView {
+                    beats: &[],
+                    buckets: &CENSUS_WAVE,
+                    cues: &[],
+                    downbeats: &[],
+                    bpm: None,
+                    r#loop: None,
+                }));
+        }
+        FixtureReads.get(endpoint)
+    }
+}
+
+/// Draws a hand across the left deck's waveform and returns what it published.
+fn scrub_the_deck(root: &mut MasonryRoot<TestAction>) -> Vec<TestAction> {
+    root.handle_pointer_event(pointer_down(200.0, 200.0))
+        .unwrap_or_else(|error| panic!("the press must route: {error}"));
+    root.handle_pointer_event(pointer_move(300.0, 200.0))
+        .unwrap_or_else(|error| panic!("the move must route: {error}"));
+    root.handle_pointer_event(pointer_up(300.0, 200.0))
+        .unwrap_or_else(|error| panic!("the release must route: {error}"));
+    root.take_actions()
+}
+
+/// Whether a scrub reached the waveform.
+fn published_seek(published: &[TestAction]) -> bool {
+    published.iter().any(|action| {
+        matches!(
+            action,
+            TestAction::Document(UiEvent::Control {
+                action: ControlAction::SetScalar(_),
+                path,
+            }) if path.ends_with("/wave")
+        )
+    })
+}
+
+/// A hand drawn across the shipped deck's waveform seeks.
+#[kithara::test]
+fn a_hand_drawn_across_the_shipped_wave_seeks() {
+    let reads = DeckReads::loaded_at(0.0);
+    let (_ui, mut root) = studio_deck_root(&reads);
+
+    let published = scrub_the_deck(&mut root);
+
+    assert!(
+        published_seek(&published),
+        "a hand drawn across the shipped deck's waveform must publish a seek, and it published \
+         {published:?}"
+    );
+}
+
+/// A deck is mounted before it has a track, so a waveform that arrives after
+/// the tree is standing must take a gesture the same as one that was there at
+/// mount. A host that rebuilds the tree every frame gets this for free; one
+/// that keeps a tree has to carry the new reading into what is already
+/// mounted.
+#[kithara::test]
+fn a_waveform_that_arrives_after_the_mount_still_seeks() {
+    let reads = DeckReads {
+        loaded: Cell::new(false),
+        position: Cell::new(0.0),
+    };
+    let (ui, mut root) = studio_deck_root(&reads);
+    reads.loaded.set(true);
+    root.refresh(ctx(&ui, &reads));
+    root.redraw()
+        .unwrap_or_else(|error| panic!("the loaded frame must draw: {error}"));
+
+    let published = scrub_the_deck(&mut root);
+
+    assert!(
+        published_seek(&published),
+        "a waveform loaded into a standing deck must take a scrub, and it published {published:?}"
+    );
+}
+
+/// The seek a scrub published, if it published one.
+fn seek_value(published: &[TestAction]) -> Option<f64> {
+    published.iter().find_map(|action| match action {
+        TestAction::Document(UiEvent::Control {
+            action: ControlAction::SetScalar(value),
+            path,
+        }) if path.ends_with("/wave") => Some(*value),
+        _ => None,
+    })
+}
+
+/// A zoomed hero wave shows the window around where the track is now, so where
+/// a hand lands in that window depends on the playhead. A host that keeps its
+/// tree has to carry the moved playhead into the mounted gesture: otherwise the
+/// same point on screen seeks to where the track was when the deck was mounted.
+#[kithara::test]
+fn a_scrub_seeks_by_the_window_the_wave_is_showing_now() {
+    let standing_reads = DeckReads::loaded_at(0.0);
+    let (ui, mut standing) = studio_deck_root(&standing_reads);
+    standing_reads.position.set(0.5);
+    standing.refresh(ctx(&ui, &standing_reads));
+    standing
+        .redraw()
+        .unwrap_or_else(|error| panic!("the moved frame must draw: {error}"));
+    let fresh_reads = DeckReads::loaded_at(0.5);
+    let (_fresh_ui, mut fresh) = studio_deck_root(&fresh_reads);
+
+    let standing_seek = seek_value(&scrub_the_deck(&mut standing));
+    let fresh_seek = seek_value(&scrub_the_deck(&mut fresh));
+
+    assert_eq!(
+        standing_seek, fresh_seek,
+        "the same hand on the same window must seek to the same place whether the deck was \
+         mounted before the track moved or after it"
+    );
 }
 
 /// A library that always has rows, beside a drop target that is not lit.
@@ -4059,6 +4297,55 @@ fn a_module_that_takes_drops_reports_the_hand_crossing_it() {
     assert!(
         published_drag(&published, "deck", DragPhase::Over(true)),
         "a module that takes drops must report the hand above it, published {published:?}"
+    );
+}
+
+/// A hand carrying a track says so, wherever on the window it has got to.
+///
+/// The list is the only side that knows a drag is running, and the tree asks
+/// whatever sits under the pointer — which by then is the deck.
+#[kithara::test]
+fn a_hand_carrying_a_track_shows_it_over_a_module_it_did_not_start_in() {
+    let mut root = dragging_library_root();
+
+    root.handle_pointer_event(pointer_move(60.0, 60.0))
+        .unwrap_or_else(|error| panic!("the hover must route: {error}"));
+    root.handle_pointer_event(pointer_down(60.0, 60.0))
+        .unwrap_or_else(|error| panic!("the press must route: {error}"));
+    for at in [(64.0, 62.0), (150.0, 80.0)] {
+        root.handle_pointer_event(pointer_move(at.0, at.1))
+            .unwrap_or_else(|error| panic!("the move must route: {error}"));
+    }
+    root.take_platform_signals();
+    root.handle_pointer_event(pointer_move(300.0, 100.0))
+        .unwrap_or_else(|error| panic!("the move must route: {error}"));
+
+    let signals = root.take_platform_signals();
+    assert!(
+        signals
+            .iter()
+            .any(|signal| matches!(signal, RenderRootSignal::SetCursor(CursorIcon::Grabbing))),
+        "a hand carrying a track over another module must still read as carrying it, \
+         signalled {signals:?}"
+    );
+}
+
+/// The hand lets go, and the cursor stops saying it is carrying something.
+#[kithara::test]
+fn the_cursor_stops_carrying_when_the_track_is_released() {
+    let mut root = dragging_library_root();
+    drag_a_track_onto_the_deck(&mut root);
+    root.take_platform_signals();
+
+    root.handle_pointer_event(pointer_move(310.0, 100.0))
+        .unwrap_or_else(|error| panic!("the move must route: {error}"));
+
+    let signals = root.take_platform_signals();
+    assert!(
+        !signals
+            .iter()
+            .any(|signal| matches!(signal, RenderRootSignal::SetCursor(CursorIcon::Grabbing))),
+        "a released track must stop the carrying cursor, signalled {signals:?}"
     );
 }
 

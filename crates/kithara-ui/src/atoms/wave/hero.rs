@@ -61,8 +61,12 @@ fn draw_bars(
     metrics: WaveSkin,
     palette: WavePalette,
 ) {
-    let columns = bars::columns(bounds, metrics);
-    let Some(grid) = bar_grid(columns, data.zoom, window) else {
+    // The count of bars follows from the pitch, and the pitch is the skin's:
+    // the comb is a grid the window slides over, not a division of the box.
+    // The width it is measured against is the one that rasterises, so two hosts
+    // that lay the same box out a hair apart still summarise the same track.
+    let step = bars::step(metrics);
+    let Some(grid) = bar_grid(bounds.w.round(), step, data.zoom, window) else {
         return;
     };
     let played = bars::Played::new(
@@ -71,13 +75,14 @@ fn draw_bars(
         palette.bg_deep,
     );
     let available_height = (bounds.h - metrics.content_inset * 2.0).max(0.0);
+    let origin_x = bounds.x - window.start / grid.norm_width * step;
     for bar in grid.first..grid.last {
         let range = bar_bucket_range(bar, grid.norm_width, data.buckets.len());
         let Some(bucket) = max_bucket(data.buckets, range) else {
             continue;
         };
         let bar_f: f32 = bar.as_();
-        let center_x = bounds.x + norm_to_x((bar_f + 0.5) * grid.norm_width, window, bounds.w);
+        let center_x = (bar_f + 0.5).mul_add(step, origin_x);
         let colors = [palette.wave_low, palette.wave_mid, palette.wave_high];
         bars::draw_column(
             list,
@@ -279,4 +284,109 @@ fn draw_playhead(
 
 const fn with_alpha(color: Rgba, alpha: f32) -> Rgba {
     Rgba { a: alpha, ..color }
+}
+
+#[cfg(test)]
+mod tests {
+    use kithara_test_utils::kithara;
+
+    use super::*;
+    use crate::{
+        atoms::wave::zoom_math::DEFAULT_ZOOM,
+        builtin,
+        draw::{DrawCmd, Geom},
+    };
+
+    fn palette() -> WavePalette {
+        let ink = Rgba {
+            a: 1.0,
+            b: 1.0,
+            g: 1.0,
+            r: 1.0,
+        };
+        WavePalette {
+            bg_deep: ink,
+            line: ink,
+            text_dim: ink,
+            accent: ink,
+            accent_strong: ink,
+            wave_low: ink,
+            wave_mid: ink,
+            wave_high: ink,
+        }
+    }
+
+    /// The left edge of every column the hero wave draws, in order.
+    fn column_edges(bounds: Rect, zoom: f32) -> Vec<f32> {
+        let buckets = (0..4096)
+            .map(|index| {
+                let level: f32 = index.as_();
+                let level = 0.3 + (level * 0.017).sin().abs() * 0.6;
+                WaveBucket {
+                    high: level,
+                    low: level,
+                    mid: level,
+                }
+            })
+            .collect::<Vec<_>>();
+        let data = HeroWave {
+            buckets: &buckets,
+            beats: &[],
+            cues: &[],
+            downbeats: &[],
+            loop_region: None,
+            position: 0.5,
+            zoom,
+        };
+        let window = window_bounds(data.position, zoom);
+        let mut list = DrawListBuilder::default();
+        draw_bars(
+            &mut list,
+            bounds,
+            data,
+            &window,
+            builtin::skin().wave,
+            palette(),
+        );
+        let mut edges = list
+            .finish()
+            .commands()
+            .iter()
+            .filter_map(|command| match command {
+                DrawCmd::Fill {
+                    geom: Geom::Rect(rect),
+                    ..
+                } => Some(rect.x),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        edges.dedup();
+        edges
+    }
+
+    /// The comb is a grid, so every column sits the same distance from the one
+    /// before it. A pitch taken from the box rather than the skin drifts by a
+    /// fraction of a pixel per column and swallows a whole gap every so often,
+    /// which reads as a black stripe repeating across the waveform.
+    #[kithara::test]
+    fn the_hero_comb_keeps_one_pitch_across_the_box() {
+        for width in [400.0, 517.0, 663.0] {
+            let bounds = Rect {
+                h: 96.0,
+                w: width,
+                x: 0.0,
+                y: 0.0,
+            };
+            let edges = column_edges(bounds, DEFAULT_ZOOM);
+            let pitches = edges
+                .windows(2)
+                .map(|pair| pair[1] - pair[0])
+                .collect::<Vec<_>>();
+
+            assert!(
+                pitches.windows(2).all(|pair| pair[0] == pair[1]),
+                "a box {width} wide drew columns at uneven pitches {pitches:?}"
+            );
+        }
+    }
 }

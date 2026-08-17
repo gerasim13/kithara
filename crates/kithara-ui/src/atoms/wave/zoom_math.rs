@@ -25,12 +25,19 @@ pub(crate) struct BarGrid {
     pub(crate) last: i64,
 }
 
-pub(crate) fn bar_grid(columns: usize, zoom: f32, window: &Range<f32>) -> Option<BarGrid> {
-    if columns == 0 {
+/// The grid of bars covering `window` across a box `width` pixels wide, one bar
+/// to every `step` pixels.
+///
+/// The pitch comes from the skin rather than from dividing the box by a column
+/// count. A count that does not divide the box evenly leaves each bar a
+/// fraction of a pixel further along than the last, and once that fraction adds
+/// up to one the gap after a bar doubles — a black stripe repeating across the
+/// waveform at a regular interval.
+pub(crate) fn bar_grid(width: f32, step: f32, zoom: f32, window: &Range<f32>) -> Option<BarGrid> {
+    if width <= 0.0 || step <= 0.0 {
         return None;
     }
-    let columns_f: f32 = columns.as_();
-    let norm_width = clamp_zoom(zoom) / columns_f;
+    let norm_width = clamp_zoom(zoom) * step / width;
     let first: i64 = (window.start / norm_width).floor().as_();
     let last: i64 = (window.end / norm_width).ceil().as_();
     Some(BarGrid {
@@ -156,8 +163,8 @@ mod tests {
 
     #[kithara::test]
     fn bar_content_is_anchored_to_the_track_not_the_window() {
-        let near_start = bar_grid(10, 0.25, &window_bounds(0.2, 0.25)).unwrap();
-        let near_end = bar_grid(10, 0.25, &window_bounds(0.9, 0.25)).unwrap();
+        let near_start = bar_grid(40.0, 4.0, 0.25, &window_bounds(0.2, 0.25)).unwrap();
+        let near_end = bar_grid(40.0, 4.0, 0.25, &window_bounds(0.9, 0.25)).unwrap();
 
         assert_eq!(near_start.norm_width, near_end.norm_width);
         for bar in near_start.first.max(0)..near_start.last {
@@ -172,7 +179,7 @@ mod tests {
     #[kithara::test]
     fn bar_grid_covers_the_window_and_only_the_window() {
         let window = window_bounds(0.5, 0.25);
-        let grid = bar_grid(10, 0.25, &window).unwrap();
+        let grid = bar_grid(40.0, 4.0, 0.25, &window).unwrap();
 
         assert_near(grid.norm_width, 0.025);
         let first: f32 = grid.first.as_();
@@ -181,7 +188,7 @@ mod tests {
         assert!(last * grid.norm_width >= window.end - EPSILON);
         assert!((first + 1.0) * grid.norm_width > window.start);
         assert!((last - 1.0) * grid.norm_width < window.end);
-        assert!(bar_grid(0, 0.25, &window).is_none());
+        assert!(bar_grid(0.0, 4.0, 0.25, &window).is_none());
     }
 
     #[kithara::test]

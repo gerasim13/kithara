@@ -18,7 +18,9 @@ use crate::{
         CursorShape, Input, MOUSE, Outcome, PointerInput, PointerPhase, masonry::pointer_button,
     },
     render::{
-        HostedControlPlan, UiEvent, engine_value,
+        HostedControlPlan, UiEvent,
+        document::Ctx,
+        engine_value,
         hosted::{TablePlan, TableProjection, TreePlan, TreeProjection},
     },
 };
@@ -129,6 +131,18 @@ impl HostedEngine {
                 text_input,
             }
         })
+    }
+
+    /// Re-reads every plan this engine drives against the frame just read.
+    ///
+    /// The tree stands between frames, so a plan resolved when the tree was
+    /// built would measure every later gesture against a moment that has since
+    /// passed. Nothing is reconciled here: the descriptors are rebuilt from
+    /// these plans on the next event anyway.
+    pub(super) fn reread(&self, ctx: Ctx<'_, '_>) {
+        for target in &self.targets {
+            target.plan.reread(ctx);
+        }
     }
 
     pub(super) fn route(&self, input: Input<'_>, point: Option<Pt>) -> Routed {

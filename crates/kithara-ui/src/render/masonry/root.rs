@@ -23,6 +23,7 @@ use tracing::{Span, trace_span};
 use super::{
     built::{MasonryNode, RootParts, Watched},
     custom::HostAction,
+    leaf::cursor_icon,
     node::Node,
     picker::{self, HostedEngine},
     popover::PopoverState,
@@ -335,9 +336,39 @@ where
         if self.dismisses_popover(&event)? {
             return Ok(Handled::Yes);
         }
+        let at = picker::input(&event).map(|(_, point)| point);
         self.routes_item_drag(&event)?;
         self.bank_pointer(&event);
-        self.route_root_pointer(event)
+        let handled = self.route_root_pointer(event)?;
+        if let Some(point) = at {
+            self.show_item_drag(point);
+        }
+        Ok(handled)
+    }
+
+    /// Says what the hand is doing while it carries an item.
+    ///
+    /// The tree asks whatever sits under the pointer, and by the time a track
+    /// is over the deck that is the deck, which knows nothing about the drag.
+    /// The list that started it does, so its answer is the last word.
+    fn show_item_drag(&mut self, point: Pt) {
+        let Some(engine) = self.item_drag_engine() else {
+            return;
+        };
+        let shape = engine.cursor(point);
+        if shape == CursorShape::None {
+            return;
+        }
+        self.platform
+            .push(RenderRootSignal::SetCursor(cursor_icon(shape)));
+    }
+
+    /// The list a hand is currently pulling an item out of, if any.
+    fn item_drag_engine(&self) -> Option<Rc<HostedEngine>> {
+        self.engines
+            .iter()
+            .find(|engine| engine.holds_item())
+            .map(Rc::clone)
     }
 
     /// Keeps feeding the pointer to the list a hand is pulling an item out of.
@@ -356,12 +387,7 @@ where
         let Some((input, point)) = picker::input(event) else {
             return Ok(());
         };
-        let Some(engine) = self
-            .engines
-            .iter()
-            .find(|engine| engine.holds_item())
-            .map(Rc::clone)
-        else {
+        let Some(engine) = self.item_drag_engine() else {
             return Ok(());
         };
         if self.owns_point(engine.owner(), point) {
@@ -531,7 +557,20 @@ where
     /// anywhere, so it takes a walk to re-read — one for the whole document.
     pub fn refresh(&mut self, ctx: Ctx<'_, '_>) {
         self.show_values(ctx);
+        self.reread_plans(ctx);
         self.place_objects(ctx);
+    }
+
+    /// Carries the frame just read into the gestures already mounted.
+    ///
+    /// A control answers a hand against what it is showing, and what it is
+    /// showing changes without the tree changing shape. The immediate host
+    /// resolves that afresh every frame because it rebuilds; this one re-reads
+    /// it in place.
+    fn reread_plans(&mut self, ctx: Ctx<'_, '_>) {
+        for engine in &self.engines {
+            engine.reread(ctx);
+        }
     }
 
     fn show_values(&mut self, ctx: Ctx<'_, '_>) {
@@ -762,20 +801,6 @@ impl Widget for WindowLayer {
 
     fn make_trace_span(&self, id: WidgetId) -> Span {
         trace_span!("KitharaWindowLayer", id = id.trace())
-    }
-}
-
-const fn cursor_icon(shape: CursorShape) -> CursorIcon {
-    match shape {
-        CursorShape::None => CursorIcon::Default,
-        CursorShape::Grab => CursorIcon::Grab,
-        CursorShape::Grabbing => CursorIcon::Grabbing,
-        CursorShape::Pointer => CursorIcon::Pointer,
-        CursorShape::ResizeDiagonalDown => CursorIcon::NwseResize,
-        CursorShape::ResizeDiagonalUp => CursorIcon::NeswResize,
-        CursorShape::ResizeH => CursorIcon::EwResize,
-        CursorShape::ResizeV => CursorIcon::NsResize,
-        CursorShape::Text => CursorIcon::Text,
     }
 }
 
