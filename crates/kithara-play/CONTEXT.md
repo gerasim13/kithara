@@ -236,6 +236,13 @@ the signal: `apply_seek` re-bases *every* loaded track onto the applied epoch �
 the seek does not move — and a track planted later starts at the epoch already published, so no track
 can be born behind. `Failed` is not held: a broken source stays broken across a seek.
 
+Publishing is a promise that a re-base is coming, and the send can fail — a full slot command ring
+answers `PlayError::SlotChannelFull`. A promise nobody carries would hold the natural end forever, so
+`seek_seconds` withdraws the epoch on a send error (`PlaybackShared::withdraw_seek_epoch`).
+Withdrawal is a compare-exchange against the published value: a newer seek having published in the
+meantime makes it a no-op, because that seek carries its own command and rolling back over it would
+strand *it* instead.
+
 The shared decode worker's produce core lives in `kithara-audio`
 (`runtime/scheduler.rs::produce_tick_rt`) and carries the same attribute; off-core work
 (pooled-buffer free, event flush, parking, symphonia allocation) belongs to the scheduler shell.

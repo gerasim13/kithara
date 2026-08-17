@@ -160,10 +160,15 @@ impl PlayerImpl {
             },
         };
 
-        self.send_to_slot(PlayerCmd::Seek {
+        if let Err(err) = self.send_to_slot(PlayerCmd::Seek {
             seek_epoch,
             seconds: target_secs,
-        })?;
+        }) {
+            // Nothing will carry the re-base now, and the processor holds a
+            // track's natural end while a published seek outranks it.
+            playback.withdraw_seek_epoch(seek_epoch);
+            return Err(err);
+        }
 
         if matches!(outcome, SeekOutcome::Landed { .. }) {
             playback.position.store(target_secs, Ordering::Relaxed);
