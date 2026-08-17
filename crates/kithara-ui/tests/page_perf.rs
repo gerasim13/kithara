@@ -246,6 +246,23 @@ const PAGES: &[Page] = &[
         retained_guard: "vello.gallery-buttons",
     },
     Page {
+        // The page reported to hang the live window. Nothing on it is driven by
+        // the mock, so what it measures is the cost of the page standing still:
+        // a deck overview, an elapsed time and a master clock whose popover the
+        // mock opens by default, which is most of the page's tree.
+        name: "gallery-clock",
+        group: Group::Pages,
+        entry: "gallery-clock.klayout.ron",
+        tab: Tab::Clock,
+        frames: 120,
+        program: Program::Idle,
+        moving: None,
+        pointer_at: Pt { x: 700.0, y: 400.0 },
+        fenced: false,
+        immediate_guard: "iced.gallery-clock",
+        retained_guard: "vello.gallery-clock",
+    },
+    Page {
         name: "gallery-stress",
         group: Group::Pages,
         entry: "gallery-stress.klayout.ron",
@@ -1425,8 +1442,10 @@ struct Outcome<'run> {
 /// waveform buckets, or is it the page at all?
 #[kithara::test]
 #[case("iced", Host::Immediate, "gallery-buttons")]
+#[case("iced", Host::Immediate, "gallery-clock")]
 #[case("iced", Host::Immediate, "gallery-stress")]
 #[case("vello", Host::Retained, "gallery-buttons")]
+#[case("vello", Host::Retained, "gallery-clock")]
 #[case("vello", Host::Retained, "gallery-stress")]
 fn ui_page_perf(#[case] label: &'static str, #[case] host: Host, #[case] page: &'static str) {
     measure_one(label, host, Group::Pages, page);
