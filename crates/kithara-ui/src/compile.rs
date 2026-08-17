@@ -11,8 +11,7 @@ use crate::{
     ids::{InternId, Interner, SourceUri, StrArena},
     layout::{Axis, FrameSides, LayoutNode, parse_layout},
     module::ChromeStyle,
-    registry::EndpointRegistry,
-    render::BuiltinEndpoints,
+    registry::{BuiltinEndpoints, EndpointRegistry},
     resolve::load_module_graph,
     shader::ShaderCache,
     size::{

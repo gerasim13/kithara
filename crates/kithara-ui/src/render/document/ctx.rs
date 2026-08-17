@@ -5,18 +5,10 @@ use crate::{
     atoms::wave::zoom_math::DEFAULT_ZOOM,
     compile::CompiledUi,
     expand::{Binding, BindingKind},
-    ids::EndpointId,
-    registry::{EndpointCategory, EndpointDesc, EndpointRegistry, ValueKind},
+    registry::SECONDS,
     render::{ReadValue, Reads},
     skin::SkinDoc,
 };
-
-/// The endpoint a document binds to when it wants the host's own time.
-pub const SECONDS: &str = "ui.clock.seconds";
-
-/// What that endpoint answers with, declared once so a document may bind to it
-/// without every application having to register it.
-static SECONDS_DESC: EndpointDesc = EndpointDesc::new(ValueKind::Scalar);
 
 /// The host's reading of time for one frame.
 ///
@@ -162,33 +154,19 @@ impl Reads for Ctx<'_, '_> {
     }
 }
 
-/// Declares the endpoints a host answers for itself, over whatever the
-/// application declares.
-pub struct BuiltinEndpoints<'a>(&'a dyn EndpointRegistry);
-
-impl<'a> BuiltinEndpoints<'a> {
-    #[must_use]
-    pub const fn new(app: &'a dyn EndpointRegistry) -> Self {
-        Self(app)
-    }
-}
-
-impl EndpointRegistry for BuiltinEndpoints<'_> {
-    fn endpoint(&self, category: EndpointCategory, id: &EndpointId) -> Option<&EndpointDesc> {
-        if category == EndpointCategory::Model && id.0 == SECONDS {
-            return Some(&SECONDS_DESC);
-        }
-        self.0.endpoint(category, id)
-    }
-}
-
 /// A context over a document that says nothing, for a test that measures what
 /// one reader answers rather than what a document is shaped like.
 #[cfg(test)]
 pub(crate) fn probe(reads: &dyn Reads) -> Ctx<'_, '_> {
     use std::sync::LazyLock;
 
-    use crate::{builtin, compile::compile, source::UiConfig};
+    use crate::{
+        builtin,
+        compile::compile,
+        ids::EndpointId,
+        registry::{EndpointCategory, EndpointDesc, EndpointRegistry},
+        source::UiConfig,
+    };
 
     struct Nothing;
 

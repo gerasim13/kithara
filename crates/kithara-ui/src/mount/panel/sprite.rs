@@ -1,4 +1,5 @@
 use bon::Builder;
+#[cfg(feature = "render")]
 use num_traits::cast::AsPrimitive;
 
 use crate::{ids::InternId, mount::Control, size::SizeSpec, skin::SkinDoc};
@@ -25,6 +26,10 @@ impl Control for Sprite {
 ///
 /// Wraps, so a clock that keeps running keeps playing. A pass of nothing at all
 /// holds the first frame rather than dividing by it.
+///
+/// Only where there is drawing: a build that mounts documents without painting
+/// them never asks which frame shows.
+#[cfg(feature = "render")]
 pub(crate) fn frame_at(seconds: f32, pass: f32, frames: usize) -> usize {
     if frames == 0 || !pass.is_finite() || pass <= 0.0 || !seconds.is_finite() {
         return 0;
@@ -149,7 +154,7 @@ mod host {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "render"))]
 mod tests {
     use kithara_test_utils::kithara;
 

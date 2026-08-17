@@ -323,7 +323,8 @@ mod tests {
         expand::{Binding, BindingKind, ControlSpec, ExpandedNode},
         lottie::builtin_artwork,
         module::{ButtonStyle, ChromeStyle, IconName, Motion, Pose, WaveStyle},
-        render::{ControlAction, ReadValue, Reads, builtin_sheet, document::SECONDS},
+        registry::SECONDS,
+        render::{ControlAction, ReadValue, Reads, builtin_sheet},
     };
     use num_traits::cast::AsPrimitive;
 

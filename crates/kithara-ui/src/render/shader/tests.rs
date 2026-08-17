@@ -6,8 +6,8 @@ use crate::{
     compile::{CompiledNode, CompiledUi, compile},
     expand::{ControlSpec, ExpandedNode},
     ids::EndpointId,
-    registry::{EndpointCategory, EndpointDesc, EndpointRegistry, ValueKind},
-    render::{BuiltinEndpoints, ReadValue, Reads, StereoLevels},
+    registry::{BuiltinEndpoints, EndpointCategory, EndpointDesc, EndpointRegistry, ValueKind},
+    render::{ReadValue, Reads, StereoLevels},
     shader::ShaderSpec,
     source::{MemResolver, UiConfig},
 };

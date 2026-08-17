@@ -27,7 +27,7 @@ pub mod vis;
 mod window;
 
 pub use address::{Node, Scope, Walk};
-pub use document::{BuiltinEndpoints, Clock, Ctx};
+pub use document::{Clock, Ctx};
 pub use event::{ControlAction, DragPhase, UiEvent, WindowCommand, WindowEdge};
 pub(crate) use event::{control_event, span_event};
 pub(crate) use hosted::{HostedControlPlan, Resolving};

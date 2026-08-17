@@ -9,7 +9,7 @@ mod poses;
 
 #[cfg(test)]
 pub(crate) use ctx::probe;
-pub use ctx::{BuiltinEndpoints, Clock, Ctx, SECONDS};
+pub use ctx::{Clock, Ctx};
 pub use facade::render;
 #[cfg(test)]
 pub(crate) use facade::render_engine_subtree;

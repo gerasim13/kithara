@@ -1,7 +1,7 @@
 use derive_more::Display;
 use serde::{Deserialize, Serialize};
 
-use crate::{error::UiDocError, render::document::SECONDS};
+use crate::{error::UiDocError, registry::SECONDS};
 
 #[derive(Clone, Debug, Display, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 #[serde(transparent)]
