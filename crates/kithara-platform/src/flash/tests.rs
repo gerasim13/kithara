@@ -12,7 +12,7 @@ use std::{
 
 use super::{
     Duration, Instant, advance, ambient_scope, enter_dynamic, flash_enabled, participate, reset,
-    system::{FlashInner, credit, sched},
+    system::{FlashInner, credit, forward},
     yield_now,
 };
 use crate::sync::{Arc, Notify};
@@ -237,13 +237,13 @@ fn woken_async_task_stays_counted_until_repolled() {
     // First poll: the task registers on the notify and parks. A genuinely parked
     // task (waker not yet fired) is correctly uncounted.
     assert!(task.as_mut().poll(&mut cx).is_pending());
-    assert_eq!(sched::async_active_count(), 0, "parked task is uncounted");
+    assert_eq!(forward::async_active_count(), 0, "parked task is uncounted");
 
     // Signal it. The task is now RUNNABLE (its waker fired, it is queued) but has
     // NOT been re-polled. It MUST be counted so a concurrent `try_advance` cannot
     notify.notify_one();
     assert_eq!(
-        sched::async_active_count(),
+        forward::async_active_count(),
         1,
         "a woken-but-not-yet-repolled task must keep the engine non-quiescent"
     );
@@ -251,7 +251,7 @@ fn woken_async_task_stays_counted_until_repolled() {
     // Re-poll resolves it; the slot is released exactly once.
     assert!(task.as_mut().poll(&mut cx).is_ready());
     assert_eq!(
-        sched::async_active_count(),
+        forward::async_active_count(),
         0,
         "a completed task releases its slot exactly once"
     );
@@ -274,7 +274,7 @@ fn a_task_that_has_never_been_polled_pins_the_clock_at_zero_polls() {
         Location::caller(),
     ));
 
-    let dump = sched::dump();
+    let dump = forward::dump();
     assert!(dump.contains("polls=0"), "{dump}");
 }
 
@@ -298,8 +298,84 @@ fn a_pinning_task_reports_the_polls_it_entered() {
     assert!(task.as_mut().poll(&mut cx).is_pending());
     notify.notify_one();
 
-    let dump = sched::dump();
+    let dump = forward::dump();
     assert!(dump.contains("polls=1"), "{dump}");
+}
+
+/// A dump lists EVERY parked waiter and says nothing about which one the clock
+/// is waiting on: the four hangs of campaign #11 each had one deadline-less
+/// waiter holding it, and the pin had to be re-derived by hand from the
+/// counters. A deadline-less waiter is freed by nothing but a matching signal,
+/// so when its task is still counted, that waiter IS the pin — mark it.
+#[test]
+fn a_deadline_less_waiter_of_a_counted_task_is_marked_as_pinning() {
+    let _g = guard();
+    reset();
+    let _a = ambient_scope(true);
+    let _f = enter_dynamic(true);
+    let waker = Waker::from(Arc::new(NoopWake));
+    let mut cx = Context::from_waker(&waker);
+
+    let notify = Notify::default();
+    let dumped = Arc::new(Mutex::new(String::new()));
+    let seen = Arc::clone(&dumped);
+    let mut task = Box::pin(participate(
+        async move {
+            // Park on the deadline-less waiter WITHOUT ending this poll, so the
+            // snapshot catches the task still counted — the shape every real
+            // hang dump showed: `state=Running` plus an `indef` entry naming
+            // that same task.
+            let mut wait = Box::pin(notify.notified());
+            let inner = Waker::from(Arc::new(NoopWake));
+            assert!(
+                wait.as_mut()
+                    .poll(&mut Context::from_waker(&inner))
+                    .is_pending(),
+                "a fresh notify must park its first poll"
+            );
+            *seen.lock().unwrap_or_else(PoisonError::into_inner) = forward::dump();
+        },
+        Location::caller(),
+    ));
+    assert!(
+        task.as_mut().poll(&mut cx).is_ready(),
+        "the body runs to completion in one poll: it never awaits"
+    );
+
+    let dump = dumped.lock().unwrap_or_else(PoisonError::into_inner);
+    assert!(dump.contains("pins_clock"), "{dump}");
+}
+
+/// The other half of that contract. A healthy flash test parks hundreds of
+/// deadline-less waiters whose tasks are simply idle; marking those would make
+/// the pin marker — and the parking stack it gates — noise again.
+#[test]
+fn a_deadline_less_waiter_of_a_parked_task_is_not_marked_as_pinning() {
+    let _g = guard();
+    reset();
+    let _a = ambient_scope(true);
+    let _f = enter_dynamic(true);
+    let waker = Waker::from(Arc::new(NoopWake));
+    let mut cx = Context::from_waker(&waker);
+
+    let notify = Notify::default();
+    let mut task = Box::pin(participate(
+        async move {
+            notify.notified().await;
+        },
+        Location::caller(),
+    ));
+    assert!(
+        task.as_mut().poll(&mut cx).is_pending(),
+        "the task must park on the notify"
+    );
+
+    let dump = forward::dump();
+    assert!(
+        dump.contains("indef id="),
+        "precondition: the parked waiter must be in the dump at all\n{dump}"
+    );
+    assert!(!dump.contains("pins_clock"), "{dump}");
 }
 
 /// A task left `RUNNABLE` by a wake keeps its slot until it is re-polled — but
@@ -339,7 +415,7 @@ fn a_runnable_task_whose_only_poller_is_bridged_does_not_pin_the_clock() {
     assert!(stranded.as_mut().poll(&mut cx).is_pending());
     notify.notify_one();
     assert_eq!(
-        sched::async_active_count(),
+        forward::async_active_count(),
         1,
         "a woken-but-not-yet-repolled task must hold its slot"
     );
@@ -939,7 +1015,7 @@ fn ambient_off_yield_now_is_real_passthrough() {
     // yield-waiter, so re-poll resolves it with no advance.
     assert!(task.as_mut().poll(&mut cx).is_pending());
     assert_eq!(
-        sched::diag_yield_count(),
+        forward::diag_yield_count(),
         0,
         "ambient-off yield must not register an engine yield-waiter"
     );
@@ -1011,7 +1087,7 @@ fn ambient_blocking_closure_pins_virtual_clock() {
         release_timer.store(1, Ordering::Release);
     });
     let start = RealInstant::now();
-    sched::park_for(Duration::from_millis(10));
+    forward::park_for(Duration::from_millis(10));
     let waited = start.elapsed();
     releaser.join().expect("releaser thread");
     rt.block_on(handle).expect("blocking closure joined");

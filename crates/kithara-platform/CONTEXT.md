@@ -239,8 +239,22 @@ with holder and waiters, plus engine-backed kinds); it is pure, so the caller ro
 `flash::log_hang_dump` emits it via `tracing` at ERROR. The test harness records the same dump in
 its hang artifact before timeout panic/abort. The registry is gated at runtime by
 `KITHARA_FLASH_SYNC_TRACE` (default off - a wrapped primitive then pays only a null check);
-`KITHARA_FLASH_SYNC_BT=1` adds only the dump caller's backtrace. Holder and waiter evidence comes
-from their registered identities and static source locations, not from their live stacks.
+`KITHARA_FLASH_SYNC_BT=1` adds backtraces. Holder and waiter evidence otherwise comes from
+registered identities and static source locations, not from live stacks.
+
+Deadline-less (`indef`) waiters are the exception, because for them the parking site is the whole
+diagnosis: nothing but a matching signal frees one, so a dump's own backtrace - taken by the
+watchdog, not by the code that parked - names the wrong thread. Each `indef` entry therefore records
+where it parked: the OS thread always (an id read), and that thread's own backtrace under
+`KITHARA_FLASH_SYNC_BT`. Capture happens BEFORE the `core` lock; a stack walk under `core` would
+hold the whole engine for its duration. Timed waiters record nothing - their deadline already names
+the give-up authority.
+
+The dump marks an `indef` waiter `pins_clock` when it is the reason the clock is stuck: an async
+waiter whose task still holds an `active_async` slot, or a sync waiter whose parking thread is
+`bridged` (parked mid-poll, so every task it drives is stranded). The marker needs no env var, so
+every lane carries it; the recorded stack prints only for a marked waiter, since a healthy test
+parks hundreds of unmarked ones.
 
 Ground truth is two runs compared: the default real-time run (catches concurrency/timing bugs) and
 the `flash` run (fast). Divergence in sample-count positions or PCM flags that virtualization

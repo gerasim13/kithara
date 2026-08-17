@@ -1,4 +1,5 @@
 use std::{
+    backtrace::Backtrace,
     panic::Location,
     sync::atomic::{AtomicBool, Ordering},
     task::Waker,
@@ -6,8 +7,8 @@ use std::{
 };
 
 use super::{
-    Clock, Core, CvDesc, CvId, FLASH, FlashInner, Registry, WaiterId,
-    credit::WaitGuard,
+    Clock, Core, CvDesc, CvId, FlashInner, Registry, WaiterId,
+    credit::{self, WaitGuard},
     gate::TaskGate,
     state::{AtomicTaskState, ParkOutcome, TaskDiag, TaskState, WakeOutcome},
     wake::{Token, Wake},
@@ -32,10 +33,61 @@ pub(super) enum WaitKind {
     Condvar(CvId),
 }
 
+/// Where a deadline-less waiter parked, for the hang dump. Only `indef` entries
+/// carry it: a timed waiter is released by the engine crossing its deadline, so
+/// its parking site names nothing the deadline does not already name.
+pub(super) struct Parked {
+    /// The OS thread that parked. Read for SYNC waiters — an async waiter's
+    /// parking thread is merely whichever worker polled it. Against
+    /// [`Registry::bridged`] it says whether the wait is held from INSIDE an
+    /// async poll, i.e. whether it strands the tasks that thread owes a poll.
+    pub(super) thread: ThreadKey,
+    /// The stack that parked, only under `KITHARA_FLASH_SYNC_BT`. Unlike the
+    /// dump's own backtrace this belongs to the waiter, not to the watchdog that
+    /// took the snapshot, so it names the frame that owes the wait.
+    pub(super) stack: Option<Backtrace>,
+}
+
+impl Parked {
+    /// Capture the current parking site. Callers MUST call this BEFORE taking
+    /// the `core` lock: a stack walk under `core` would hold the whole engine
+    /// for its duration.
+    fn here() -> Self {
+        Self {
+            thread: credit::current_thread_key(),
+            stack: diag::parked_backtrace(),
+        }
+    }
+}
+
 /// A parked waiter's wake handle plus the group it belongs to.
 pub(super) struct Entry {
     pub(super) kind: WaitKind,
     pub(super) wake: Wake,
+    /// `Some` for deadline-less waiters only. See [`Parked`].
+    pub(super) parked: Option<Parked>,
+}
+
+impl Entry {
+    /// A waiter the engine itself will release by crossing its deadline, so no
+    /// parking site is recorded.
+    fn timed(kind: WaitKind, wake: Wake) -> Self {
+        Self {
+            kind,
+            wake,
+            parked: None,
+        }
+    }
+
+    /// A waiter with NO deadline: only a matching signal frees it, so when one
+    /// of these pins quiescence its parking site IS the diagnosis.
+    fn indef(kind: WaitKind, wake: Wake, parked: Parked) -> Self {
+        Self {
+            kind,
+            wake,
+            parked: Some(parked),
+        }
+    }
 }
 
 impl Registry {
@@ -278,10 +330,7 @@ impl FlashInner {
         let id = s.registry.fresh_id();
         s.sched.timed.insert(
             (deadline, id),
-            Entry {
-                wake: Wake::Sync(Arc::clone(&token)),
-                kind: WaitKind::Timed,
-            },
+            Entry::timed(WaitKind::Timed, Wake::Sync(Arc::clone(&token))),
         );
         let wait = self.enter_wait_locked(&mut s);
         let adv = s.try_advance(&self.clock);
@@ -314,10 +363,7 @@ impl FlashInner {
         let id = s.registry.fresh_id();
         s.sched.timed.insert(
             (deadline, id),
-            Entry {
-                wake: Wake::Sync(Arc::clone(&token)),
-                kind: WaitKind::Thread(thread_id),
-            },
+            Entry::timed(WaitKind::Thread(thread_id), Wake::Sync(Arc::clone(&token))),
         );
         let wait = self.enter_wait_locked(&mut s);
         let adv = s.try_advance(&self.clock);
@@ -343,10 +389,7 @@ impl FlashInner {
         let id = s.registry.fresh_id();
         s.sched.timed.insert(
             (deadline, id),
-            Entry {
-                wake: Wake::Sync(Arc::clone(&token)),
-                kind: WaitKind::Timed,
-            },
+            Entry::timed(WaitKind::Timed, Wake::Sync(Arc::clone(&token))),
         );
         let wait = self.enter_wait_locked(&mut s);
         let adv = s.try_advance(&self.clock);
@@ -447,10 +490,7 @@ impl FlashInner {
         let id = s.registry.fresh_id();
         s.sched.timed.insert(
             (deadline_nanos, id),
-            Entry {
-                wake: Wake::Sync(Arc::clone(&token)),
-                kind: WaitKind::Condvar(cvid),
-            },
+            Entry::timed(WaitKind::Condvar(cvid), Wake::Sync(Arc::clone(&token))),
         );
         let wait = self.enter_wait_locked(&mut s);
         let adv = s.try_advance(&self.clock);
@@ -465,14 +505,16 @@ impl FlashInner {
         cvid: CvId,
     ) -> (Arc<Token>, WakeBatch, WaitGuard<'_>) {
         let token = Token::new();
+        let parked = Parked::here();
         let mut s = self.core.lock();
         let id = s.registry.fresh_id();
         s.sched.indef.insert(
             id,
-            Entry {
-                wake: Wake::Sync(Arc::clone(&token)),
-                kind: WaitKind::Condvar(cvid),
-            },
+            Entry::indef(
+                WaitKind::Condvar(cvid),
+                Wake::Sync(Arc::clone(&token)),
+                parked,
+            ),
         );
         let wait = self.enter_wait_locked(&mut s);
         let adv = s.try_advance(&self.clock);
@@ -574,6 +616,7 @@ impl FlashInner {
         waker: Waker,
     ) -> (Option<AsyncHandle>, WakeBatch) {
         let granted = Arc::new(AtomicBool::new(false));
+        let parked = Parked::here();
         let mut s = self.core.lock();
         if s.sched.notify_permits.remove(&cvid) {
             return (None, WakeBatch(Vec::new()));
@@ -581,14 +624,15 @@ impl FlashInner {
         let id = s.registry.fresh_id();
         s.sched.indef.insert(
             id,
-            Entry {
-                wake: Wake::Task {
+            Entry::indef(
+                WaitKind::Condvar(cvid),
+                Wake::Task {
                     waker,
                     granted: Arc::clone(&granted),
                     task: ctx::cur_async(),
                 },
-                kind: WaitKind::Condvar(cvid),
-            },
+                parked,
+            ),
         );
         let adv = s.try_advance(&self.clock);
         drop(s);
@@ -622,14 +666,14 @@ impl FlashInner {
         let key = (deadline_nanos, id);
         s.sched.timed.insert(
             key,
-            Entry {
-                wake: Wake::Task {
+            Entry::timed(
+                WaitKind::Timed,
+                Wake::Task {
                     waker,
                     granted: Arc::clone(&granted),
                     task: ctx::cur_async(),
                 },
-                kind: WaitKind::Timed,
-            },
+            ),
         );
         let adv = s.try_advance(&self.clock);
         drop(s);
@@ -775,18 +819,20 @@ impl FlashInner {
         waker: Waker,
     ) -> (AsyncHandle, WakeBatch) {
         let granted = Arc::new(AtomicBool::new(false));
+        let parked = Parked::here();
         let mut s = self.core.lock();
         let id = s.registry.fresh_id();
         s.sched.indef.insert(
             id,
-            Entry {
-                wake: Wake::Task {
+            Entry::indef(
+                WaitKind::Condvar(cvid),
+                Wake::Task {
                     waker,
                     granted: Arc::clone(&granted),
                     task: ctx::cur_async(),
                 },
-                kind: WaitKind::Condvar(cvid),
-            },
+                parked,
+            ),
         );
         let adv = s.try_advance(&self.clock);
         drop(s);
@@ -886,110 +932,6 @@ impl AsyncHandle {
     }
 }
 
-/// Process-engine forward of [`FlashInner::next_condvar_id`].
-pub(crate) fn next_condvar_id() -> CvId {
-    FLASH.next_condvar_id()
-}
-
-/// Process-engine forward of [`FlashInner::describe_cvid`].
-pub(crate) fn describe_cvid(cvid: CvId, kind: diag::PrimKind, loc: &'static Location<'static>) {
-    FLASH.describe_cvid(cvid, kind, loc);
-}
-
-/// Process-engine forward of [`FlashInner::park_for`].
-#[cfg(test)]
-pub(crate) fn park_for(d: crate::flash::Duration) {
-    FLASH.park_for(d);
-}
-
-/// Process-engine forward of [`FlashInner::park_timed_unparkable`].
-pub(crate) fn park_timed_unparkable(d: crate::flash::Duration, thread_id: ThreadKey) {
-    FLASH.park_timed_unparkable(d, thread_id);
-}
-
-/// Process-engine forward of [`FlashInner::sleep_timed`].
-pub(crate) fn sleep_timed(d: crate::flash::Duration) {
-    FLASH.sleep_timed(d);
-}
-
-/// Process-engine forward of [`FlashInner::unpark`].
-pub(crate) fn unpark(thread_id: ThreadKey) {
-    FLASH.unpark(thread_id);
-}
-
-/// Process-engine forward of [`FlashInner::yield_until_advance`].
-pub(crate) fn yield_until_advance() {
-    FLASH.yield_until_advance();
-}
-
-/// Process-engine forward of [`FlashInner::register_yield_async`].
-pub(crate) fn register_yield_async(waker: Waker) -> (WaiterId, Arc<AtomicBool>, WakeBatch) {
-    FLASH.register_yield_async(waker)
-}
-
-/// Process-engine forward of [`FlashInner::cancel_yield`].
-pub(crate) fn cancel_yield(id: WaiterId) {
-    FLASH.cancel_yield(id);
-}
-
-/// Process-engine forward of [`FlashInner::register_condvar_timed`].
-pub(crate) fn register_condvar_timed(
-    deadline_nanos: u64,
-    cvid: CvId,
-) -> (Arc<Token>, WakeBatch, WaitGuard<'static>) {
-    FLASH.register_condvar_timed(deadline_nanos, cvid)
-}
-
-/// Process-engine forward of [`FlashInner::register_condvar_untimed`].
-pub(crate) fn register_condvar_untimed(cvid: CvId) -> (Arc<Token>, WakeBatch, WaitGuard<'static>) {
-    FLASH.register_condvar_untimed(cvid)
-}
-
-/// Process-engine forward of [`FlashInner::signal_condvar`].
-pub(crate) fn signal_condvar(cvid: CvId, all: bool) {
-    FLASH.signal_condvar(cvid, all);
-}
-
-/// Process-engine forward of [`FlashInner::register_sleep_async`].
-pub(crate) fn register_sleep_async(delta_nanos: u64, waker: Waker) -> (AsyncHandle, WakeBatch) {
-    FLASH.register_sleep_async(delta_nanos, waker)
-}
-
-/// Process-engine forward of [`FlashInner::register_notify_async`].
-pub(crate) fn register_notify_async(cvid: CvId, waker: Waker) -> (Option<AsyncHandle>, WakeBatch) {
-    FLASH.register_notify_async(cvid, waker)
-}
-
-/// Process-engine forward of [`FlashInner::async_acquire`].
-pub(crate) fn async_acquire(loc: &'static Location<'static>) -> Arc<TaskGate> {
-    FLASH.async_acquire(loc)
-}
-
-/// Process-engine forward of [`FlashInner::cancel_async_wait`].
-pub(crate) fn cancel_async_wait(handle: &AsyncHandle) {
-    FLASH.cancel_async_wait(handle);
-}
-
-/// Process-engine forward of [`FlashInner::signal_notify`].
-pub(crate) fn signal_notify(cvid: CvId) {
-    FLASH.signal_notify(cvid);
-}
-
-/// Process-engine forward of [`FlashInner::register_channel_async`].
-pub(crate) fn register_channel_async(cvid: CvId, waker: Waker) -> (AsyncHandle, WakeBatch) {
-    FLASH.register_channel_async(cvid, waker)
-}
-
-/// Process-engine forward of [`FlashInner::signal_channel`].
-pub(crate) fn signal_channel(cvid: CvId, all: bool) {
-    FLASH.signal_channel(cvid, all);
-}
-
-/// Process-engine diagnostic dump of [`FlashInner`] via its `Display` impl.
-pub(crate) fn dump() -> String {
-    FLASH.to_string()
-}
-
 /// Test-only coordinator that holds a RUNNING slot in `active` for its lifetime,
 /// so the engine cannot advance until it is dropped. The harness uses it to
 /// batch many waiters: hold it, let every worker register + park (each park
@@ -1059,16 +1001,4 @@ impl Drop for TestHold<'_> {
         drop(s);
         adv.fire();
     }
-}
-
-/// Process-engine forward of [`FlashInner::async_active_count`].
-#[cfg(test)]
-pub(crate) fn async_active_count() -> usize {
-    FLASH.async_active_count()
-}
-
-/// Process-engine forward of [`FlashInner::diag_yield_count`].
-#[cfg(test)]
-pub(crate) fn diag_yield_count() -> usize {
-    FLASH.diag_yield_count()
 }
