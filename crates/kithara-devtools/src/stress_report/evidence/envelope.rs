@@ -295,7 +295,22 @@ fn normalize_diagnostic(text: &str) -> String {
 fn normalize_flight_line(line: &str) -> String {
     static NUMERIC_FIELDS: LazyLock<Regex> =
         LazyLock::new(|| Regex::new(r"=\d+\b").expect("numeric field regex"));
+    let (line, _) = split_recorded_repeats(line);
     normalize_signature(&NUMERIC_FIELDS.replace_all(line, "=<n>"))
+}
+
+/// The in-test recorder folds a line that repeats inside its window, so a
+/// line can arrive already counted. The count says how many firings the line
+/// stands for — it belongs in the folded tail, never in the signature, where
+/// it would split one cause into a cluster per repeat count.
+fn split_recorded_repeats(line: &str) -> (&str, usize) {
+    let Some(rest) = line.strip_suffix(')') else {
+        return (line, 1);
+    };
+    let Some((head, count)) = rest.rsplit_once(" (x") else {
+        return (line, 1);
+    };
+    count.parse().map_or((line, 1), |count| (head, count))
 }
 
 /// Run-length encode a flight tail after normalization: a starving pass loop
@@ -304,10 +319,11 @@ fn normalize_flight_line(line: &str) -> String {
 fn fold_flight_tail(lines: &[String]) -> Vec<String> {
     let mut folded: Vec<(String, usize)> = Vec::new();
     for line in lines {
+        let repeats = split_recorded_repeats(line).1;
         let normalized = normalize_flight_line(line);
         match folded.last_mut() {
-            Some((previous, count)) if *previous == normalized => *count += 1,
-            _ => folded.push((normalized, 1)),
+            Some((previous, count)) if *previous == normalized => *count += repeats,
+            _ => folded.push((normalized, repeats)),
         }
     }
     folded
@@ -388,6 +404,31 @@ mod tests {
         assert_eq!(first, second);
         assert!(first.contains("<n> tick(s)"), "{first}");
         assert!(first.contains("timeout 1s"), "{first}");
+    }
+
+    /// The recorder folds a line that repeats inside its window, so the same
+    /// event reaches the report already counted — and the count differs per
+    /// attempt. Left in the signature it would split one cause per count.
+    #[test]
+    fn a_recorded_repeat_count_does_not_split_one_flight_line_into_many() {
+        let first = normalize_flight_line("DEBUG kithara_hls::settle: success (x7)");
+        let second = normalize_flight_line("DEBUG kithara_hls::settle: success (x31)");
+
+        assert_eq!(first, second);
+    }
+
+    /// The count is evidence in its own right — how many firings the folded
+    /// line stands for — so the tail must carry it, not drop it with the
+    /// signature.
+    #[test]
+    fn a_folded_tail_sums_the_recorded_repeat_counts() {
+        let folded = fold_flight_tail(&[
+            "DEBUG kithara_hls::settle: success (x7)".to_owned(),
+            "DEBUG kithara_hls::settle: success (x5)".to_owned(),
+        ]);
+
+        assert_eq!(folded.len(), 1, "{folded:?}");
+        assert!(folded[0].ends_with("(x12)"), "{folded:?}");
     }
 
     #[test]

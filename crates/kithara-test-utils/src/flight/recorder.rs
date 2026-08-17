@@ -21,13 +21,26 @@ use tracing_subscriber::layer::{Context, Layer};
 /// shared ring within milliseconds.
 const MAX_EVENTS: usize = 256;
 const MAX_EVENT_BYTES: usize = 512;
+/// How far back a repeat folds into the entry already in the ring.
+///
+/// Steady-state volume arrives as a short cycle of a few distinct lines — a
+/// fetch settling, then the two accounting lines it triggers — so a window a
+/// few cycles wide collapses it where a last-line check would not, and a red
+/// test's dump keeps the rare transitions that led to the failure.
+const DEDUP_WINDOW: usize = 16;
 
-static EVENTS: OnceLock<Mutex<VecDeque<String>>> = OnceLock::new();
-static PROBES: OnceLock<Mutex<VecDeque<String>>> = OnceLock::new();
+static EVENTS: OnceLock<Mutex<VecDeque<Entry>>> = OnceLock::new();
+static PROBES: OnceLock<Mutex<VecDeque<Entry>>> = OnceLock::new();
+
+/// One recorded line and how many times it repeated inside the window.
+struct Entry {
+    line: String,
+    repeats: u32,
+}
 
 /// The platform mutex has no `const` constructor (the loom backend cannot
 /// model one), so the rings initialize lazily.
-fn ring(cell: &'static OnceLock<Mutex<VecDeque<String>>>) -> &'static Mutex<VecDeque<String>> {
+fn ring(cell: &'static OnceLock<Mutex<VecDeque<Entry>>>) -> &'static Mutex<VecDeque<Entry>> {
     cell.get_or_init(|| Mutex::new(VecDeque::new()))
 }
 
@@ -48,8 +61,21 @@ pub fn probes_tail() -> Vec<String> {
     snapshot(ring(&PROBES))
 }
 
-fn snapshot(ring: &Mutex<VecDeque<String>>) -> Vec<String> {
-    ring.lock().iter().cloned().collect()
+fn snapshot(ring: &Mutex<VecDeque<Entry>>) -> Vec<String> {
+    ring.lock()
+        .iter()
+        .map(|entry| {
+            if entry.repeats > 1 {
+                format!(
+                    "{line} (x{repeats})",
+                    line = entry.line,
+                    repeats = entry.repeats
+                )
+            } else {
+                entry.line.clone()
+            }
+        })
+        .collect()
 }
 
 pub struct RingLayer;
@@ -110,7 +136,7 @@ impl<S: Subscriber> Layer<S> for RingLayer {
     }
 }
 
-fn record(ring: &Mutex<VecDeque<String>>, mut line: String) {
+fn record(ring: &Mutex<VecDeque<Entry>>, mut line: String) {
     if line.len() > MAX_EVENT_BYTES {
         let mut end = MAX_EVENT_BYTES;
         while !line.is_char_boundary(end) {
@@ -120,10 +146,19 @@ fn record(ring: &Mutex<VecDeque<String>>, mut line: String) {
         line.push('…');
     }
     let mut ring = ring.lock();
+    let window = ring.len().saturating_sub(DEDUP_WINDOW);
+    if let Some(entry) = ring
+        .iter_mut()
+        .skip(window)
+        .find(|entry| entry.line == line)
+    {
+        entry.repeats = entry.repeats.saturating_add(1);
+        return;
+    }
     if ring.len() == MAX_EVENTS {
         ring.pop_front();
     }
-    ring.push_back(line);
+    ring.push_back(Entry { line, repeats: 1 });
 }
 
 struct LineVisitor<'a> {
@@ -260,6 +295,59 @@ mod tests {
                 line.contains("capacity probe") && line.contains(&format!("index={MAX_EVENTS}"))
             }),
             "newest event must survive"
+        );
+    }
+
+    #[kithara::test]
+    fn a_repeated_line_is_counted_instead_of_filling_the_ring() {
+        let _guard = with_recorder(|| {
+            for _ in 0..5 {
+                debug!(target: "kithara_flight_test", "steady state line");
+            }
+        });
+
+        let recorded: Vec<String> = tail()
+            .into_iter()
+            .filter(|line| line.contains("steady state line"))
+            .collect();
+        assert_eq!(recorded.len(), 1, "{recorded:?}");
+    }
+
+    #[kithara::test]
+    fn a_repeated_line_carries_its_repeat_count() {
+        let _guard = with_recorder(|| {
+            for _ in 0..5 {
+                debug!(target: "kithara_flight_test", "counted line");
+            }
+        });
+
+        let line = tail()
+            .into_iter()
+            .rev()
+            .find(|line| line.contains("counted line"))
+            .expect("the repeated line must be in the tail");
+        assert!(line.contains("(x5)"), "{line}");
+    }
+
+    /// Volume does not arrive as one line repeating: a fetch settles, and the
+    /// two accounting lines it triggers follow. A last-line check would let
+    /// that cycle evict everything before it.
+    #[kithara::test]
+    fn a_repeating_cycle_does_not_evict_the_history() {
+        let _guard = with_recorder(|| {
+            debug!(target: "kithara_flight_test", "rare transition before the flood");
+            for _ in 0..MAX_EVENTS {
+                debug!(target: "kithara_flight_test", "cycle step one");
+                debug!(target: "kithara_flight_test", "cycle step two");
+                debug!(target: "kithara_flight_test", "cycle step three");
+            }
+        });
+
+        assert!(
+            tail()
+                .iter()
+                .any(|line| line.contains("rare transition before the flood")),
+            "a repeating cycle must not evict the transition that preceded it"
         );
     }
 
