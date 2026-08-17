@@ -302,38 +302,14 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Read the reviewed browser pin
-        id: browser-pin
-        shell: bash
-        run: |
-          version="$(sed -n 's/^chrome_for_testing_version = "\([^"]*\)"$/\1/p' .config/ci-pins.toml)"
-          test -n "$version"
-          echo "version=$version" >> "$GITHUB_OUTPUT"
-
-      - name: Install pinned Chromium and ChromeDriver
-        id: browser
-        uses: browser-actions/setup-chrome@2e1d749697dd1612b833dba4a722266286fbefcd # v2.1.2
-        with:
-          chrome-version: ${{ steps.browser-pin.outputs.version }}
-          install-chromedriver: true
-          no-sudo: true
-
-      - name: Expose browser commands to the WASM recipe
-        shell: bash
-        env:
-          CHROME_PATH: ${{ steps.browser.outputs.chrome-path }}
-          CHROMEDRIVER_PATH: ${{ steps.browser.outputs.chromedriver-path }}
-        run: |
-          test -x "$CHROME_PATH"
-          test -x "$CHROMEDRIVER_PATH"
-          browser_bin="$RUNNER_TEMP/kithara-browser-bin"
-          mkdir -p "$browser_bin"
-          ln -s "$CHROME_PATH" "$browser_bin/chromium"
-          ln -s "$CHROMEDRIVER_PATH" "$browser_bin/chromedriver"
-          echo "$browser_bin" >> "$GITHUB_PATH"
-
+      # The browser is installed in the image, not by the job: Debian ships
+      # `chromium` with a version-matched `chromium-driver`, and the lane asserts
+      # both against the reviewed pin before it runs a test. Downloading Chrome
+      # for Testing per job did the opposite — it read a version index on GitHub
+      # Pages, three of whose four addresses this network cannot reach, and then
+      # installed an OLDER build over the working pair.
       - name: Run the Chromium browser lane
-        run: just test wasm chrome webcodecs
+        run: just ci run web-chromium
 
   machete:
     name: cargo-machete

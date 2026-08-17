@@ -24,7 +24,12 @@ pub(crate) struct CiPins {
     pub(crate) android_platform_version: u32,
     pub(crate) brew_casks: Vec<String>,
     pub(crate) brew_formulae: Vec<String>,
-    pub(crate) chrome_for_testing_version: String,
+    /// Chromium the browser lane may run, and the version its `chromedriver` must
+    /// report. The image installs both from Debian as one version-matched pair,
+    /// so this pin is a review gate on what a rebuild brought in rather than a
+    /// download coordinate: a mismatch fails the lane by name instead of letting
+    /// a browser change alter test results unnoticed.
+    pub(crate) chromium_version: String,
     pub(crate) cmake_linux_amd64_sha256: String,
     pub(crate) cmake_linux_arm64_sha256: String,
     pub(crate) cmake_version: String,
@@ -102,10 +107,7 @@ impl CiPins {
                 self.android_commandline_tools_version.as_str(),
             ),
             ("android_ndk_version", self.android_ndk_version.as_str()),
-            (
-                "chrome_for_testing_version",
-                self.chrome_for_testing_version.as_str(),
-            ),
+            ("chromium_version", self.chromium_version.as_str()),
             ("cmake_version", self.cmake_version.as_str()),
             (
                 "expected_xcode_version",
