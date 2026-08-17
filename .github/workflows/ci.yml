@@ -192,10 +192,8 @@ jobs:
               "fixtures": (
                   "tests/src/",
                   "tests/tests/suite_harness.rs",
-                  "tests/tests/env_guard.rs",
                   "tests/tests/flash_lexical.rs",
                   "tests/tests/timeout_guard.rs",
-                  "tests/tests/red_env_guard_leak_thread.rs",
               ),
           }
           SHARED = (".config/xtask.toml", ".config/nextest.toml", "tests/Cargo.toml")
