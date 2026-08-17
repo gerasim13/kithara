@@ -14,6 +14,7 @@ use kithara_stream::{
     StreamResult, VariantPromotion, VariantReaderPlan, VariantReaderTake, VariantTransition,
     VariantTransitionId,
 };
+use kithara_test_utils::kithara;
 use tracing::debug;
 
 use super::{
@@ -148,6 +149,7 @@ impl HlsCoord {
         self.discard_incoming(&mut state, false);
     }
 
+    #[kithara::probe(abort_intent)]
     fn discard_incoming(&self, state: &mut TransitionState, abort_intent: bool) {
         let Some(slot) = state.incoming.take() else {
             return;
@@ -216,6 +218,7 @@ impl HlsCoord {
         self.sessions.transition.lock().incoming.is_some()
     }
 
+    #[kithara::probe(has_incoming = self.has_incoming())]
     pub(super) fn plan_variant_reader(
         &self,
         landing: Option<Duration>,
@@ -308,6 +311,10 @@ impl HlsCoord {
         )))
     }
 
+    #[kithara::probe(
+        active = transition.active_variant().get(),
+        incoming = transition.incoming_variant().get()
+    )]
     pub(super) fn promote_planned_variant(
         &self,
         transition: VariantTransition,

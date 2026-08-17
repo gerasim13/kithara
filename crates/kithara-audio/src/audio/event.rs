@@ -13,6 +13,7 @@ use kithara_events::{
 use kithara_platform::{sync::Arc, time::Duration};
 use kithara_resampler::ResamplerBackend;
 use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo, PlayheadWrite, SeekObserve};
+use kithara_test_utils::kithara;
 use num_traits::cast::ToPrimitive;
 
 use super::{ReadOutcome, ThreadWake, WakeSignal};
@@ -93,6 +94,7 @@ impl AudioEvents {
         }
     }
 
+    #[kithara::probe(epoch, pending = seek.pending_epoch().unwrap_or(0))]
     pub(super) fn post_seek_output(
         &self,
         seek: &dyn SeekObserve,
