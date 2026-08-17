@@ -12,7 +12,10 @@ use std::{
 
 use dashmap::DashMap;
 use kithara_bufpool::BytePool;
-use kithara_platform::{CancelToken, sync::Arc};
+use kithara_platform::{
+    CancelToken,
+    sync::{Arc, Mutex},
+};
 use kithara_storage::{Atomic, MmapDriver, StorageError};
 
 use super::core::{PinCounts, PinsIndex, PinsInner};
@@ -25,6 +28,9 @@ pub(super) struct PinsPersist {
     cancel: CancelToken,
     res: OnceLock<Atomic<MmapDriver>>,
     path: PathBuf,
+    /// One writer at a time for `pins.bin`: the snapshot and the atomic
+    /// rename that publishes it are one step.
+    writing: Mutex<()>,
 }
 
 impl PinsIndex {
@@ -42,6 +48,7 @@ impl PinsIndex {
                 persist: Some(PinsPersist {
                     path,
                     cancel,
+                    writing: Mutex::new(()),
                     res: opened.map_or_else(OnceLock::new, |a| {
                         let cell = OnceLock::new();
                         cell.set(a)
@@ -71,6 +78,7 @@ impl PinsInner {
             self.dirty.store(false, Ordering::Release);
             return Ok(());
         };
+        let _writing = persist.writing.lock();
         let snapshot = self.durable_roots();
         let atomic = init_atomic(&persist.res, &persist.path, &persist.cancel)?;
         write_pins(atomic, &snapshot, durable)?;

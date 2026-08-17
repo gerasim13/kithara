@@ -205,8 +205,12 @@ All three write through `Atomic<R>` and register with a shared `FlushHub` (`Flus
   non-durably even when their `dirty` flag is clear, so a checkpoint never leaves a stale worker
   snapshot behind.
 - Pins and LRU never wait for the worker: their mutators call `flush_sync` eagerly, because a pin
-  lost to a crash would let a live asset be evicted. The filesystem stays the source of truth — any
-  index may be missing and can be rebuilt.
+  lost to a crash would let a live asset be evicted. That eager write bypasses the hub's flush lock,
+  so each disk-backed index serialises its own file instead: the snapshot and the atomic rename that
+  publishes it happen under one per-file lock. Without it a flush that snapshotted before an unpin
+  could rename after it and resurrect a pin nobody holds — the asset then outlives every handle and
+  eviction can never reclaim it. The filesystem stays the source of truth — any index may be missing
+  and can be rebuilt.
 
 ### Pins index
 
