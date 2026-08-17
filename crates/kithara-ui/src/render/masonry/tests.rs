@@ -3838,3 +3838,103 @@ fn the_retained_box_hides_the_rows_it_scrolled_past() {
          answered by a row is a press the box never cut"
     );
 }
+
+/// A waveform with somewhere to publish its scrub, mounted alone.
+///
+/// The census entry for `Wave` binds only a reading, so nothing it did with a
+/// pointer could ever have been seen. This one writes, which is what the decks
+/// do: the overview and the hero wave both carry
+/// `Command(id: "deck.transport.seek_normalized")`.
+fn seeking_wave_root(extra: &str, takes_drops: bool) -> MasonryRoot<TestAction> {
+    let mut registry = fixture_registry();
+    registry.insert(
+        EndpointCategory::Model,
+        "mock.wave",
+        EndpointDesc::new(ValueKind::Waveform),
+    );
+    registry.insert(
+        EndpointCategory::Command,
+        "mock.seek",
+        EndpointDesc::new(ValueKind::Scalar),
+    );
+    registry.insert(
+        EndpointCategory::Command,
+        "mock.load",
+        EndpointDesc::new(ValueKind::Trigger),
+    );
+    registry.insert(
+        EndpointCategory::Model,
+        "mock.drag.over",
+        EndpointDesc::new(ValueKind::Bool),
+    );
+    let reads = FixtureReads;
+    let takes = if takes_drops {
+        r#"drop: Some((write: Command(id: "mock.load"), read: Model(id: "mock.drag.over"))),"#
+    } else {
+        ""
+    };
+    let mut resolver = MemResolver::default();
+    resolver.insert(
+        "fixture.klayout.ron",
+        r#"(schema: "kithara.layout", version: 1, id: "fixture",
+            root: Module(instance: "demo", source: "fixture.kmodule.ron", size: (w: Fill, h: Fill)))"#,
+    );
+    resolver.insert(
+        "fixture.kmodule.ron",
+        &format!(
+            r#"(schema: "kithara.module", version: 1, id: "leaf-fixture", chrome: Plain, {takes}
+            root: Column(gap: 0.0, pad: 0.0, size: (w: Fill, h: Fill), children: [
+                Wave(
+                    id: "wave",
+                    size: Some((w: Fill, h: Fixed(80.0))),
+                    read: Model(id: "mock.wave"),
+                    write: Command(id: "mock.seek"),
+                    {extra}
+                ),
+            ]))"#
+        ),
+    );
+    let ui = compile(
+        "fixture.klayout.ron",
+        &resolver,
+        &registry,
+        builtin::skin_doc(),
+        &UiConfig::default(),
+    )
+    .unwrap_or_else(|error| panic!("the wave fixture must compile: {error}"));
+    let host = MasonryHost::map_actions(ctx(&ui, &reads), builtin::skin(), TestAction::Document);
+    let output = document::render(&ui.root, ctx(&ui, &reads), host);
+    let mut root = masonry_root(output, 198, 200);
+    root.redraw()
+        .unwrap_or_else(|error| panic!("the wave must compose: {error}"));
+    root
+}
+
+/// A hand drawn across the waveform seeks the track.
+#[kithara::test]
+fn a_hand_drawn_across_the_retained_wave_seeks() {
+    for takes_drops in [false, true] {
+        for extra in [
+            "",
+            r#"style: Hero,"#,
+            r#"zoom: Model(id: "deck.view.zoom"),"#,
+            r#"style: Hero, badge: Some("A"), zoom: Model(id: "deck.view.zoom"),"#,
+        ] {
+            let mut root = seeking_wave_root(extra, takes_drops);
+
+            root.handle_pointer_event(pointer_down(49.0, 40.0))
+                .unwrap_or_else(|error| panic!("the press must route: {error}"));
+            root.handle_pointer_event(pointer_move(120.0, 40.0))
+                .unwrap_or_else(|error| panic!("the move must route: {error}"));
+            root.handle_pointer_event(pointer_up(120.0, 40.0))
+                .unwrap_or_else(|error| panic!("the release must route: {error}"));
+
+            let published = root.take_actions();
+            assert!(
+                !published.is_empty(),
+                "a hand drawn across a waveform that writes a seek must publish it, and the wave \
+                 declared as `{extra}` in a module that takes drops={takes_drops} published nothing"
+            );
+        }
+    }
+}
