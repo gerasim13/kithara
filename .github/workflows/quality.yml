@@ -179,6 +179,14 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      # `semver-checks` compares the branch against the tip of `main`, and the
+      # checkout above fetches one commit of one branch. Without this the stage
+      # dies on `couldn't parse revision: "origin/main^{tree}"` and reports a
+      # failure it never ran. One commit is enough: the baseline is a tree, and
+      # a full clone of this repository is gigabytes of history.
+      - name: Fetch the semver baseline
+        run: git fetch --depth=1 origin main:refs/remotes/origin/main
+
       - name: Report workspace health
         run: just ci health
 

@@ -24,7 +24,12 @@ install:
     cargo install --locked md-formatter
     cargo install --locked typos-cli
     cargo install --locked similarity-rs
-    cargo install --locked --force lockbud
+    # lockbud is a rustc driver, not a crates.io package: it installs from git
+    # and only against the nightly it links `rustc_driver` against, and the
+    # workspace it analyzes has to be compiled by that same nightly.
+    rustup toolchain install nightly-2026-02-07 --profile minimal \
+      --component llvm-tools-preview --component rust-src --component rustc-dev
+    cargo +nightly-2026-02-07 install --git https://github.com/BurtonQin/lockbud --force
     @echo "==> tools installed; run 'just ci health' to verify"
 
 # Run the cached xtask transport explicitly.

@@ -62,7 +62,7 @@ similarity *ARGS:
 
 [positional-arguments]
 deadlock *ARGS:
-    exec cargo lockbud -k deadlock --workspace "$@"
+    exec cargo +nightly-2026-02-07 lockbud -k deadlock --workspace "$@"
 
 unused-pub:
     cargo workspace-unused-pub

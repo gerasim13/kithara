@@ -107,7 +107,12 @@ RUN case "$(dpkg --print-architecture)" in \
 # library from source for some targets, and `cargo-semver-checks` inherits that
 # when it runs rustdoc — without the sources every crate it documents fails
 # before it can compare a single signature.
-RUN rustup component add clippy llvm-tools-preview rust-src rustfmt \
+#
+# `rust-analyzer` is not for editors here: `cargo workspace-unused-pub` builds
+# its SCIP index by shelling out to it. rustup ships a proxy binary whether or
+# not the component is installed, so without this the health stage does not
+# report a missing tool — it reports `rust-analyzer scip … exited with code 1`.
+RUN rustup component add clippy llvm-tools-preview rust-analyzer rust-src rustfmt \
  && rustup toolchain install "${NIGHTLY_TOOLCHAIN}" \
       --profile minimal \
       --component miri \

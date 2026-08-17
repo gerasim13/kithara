@@ -19,7 +19,10 @@ impl Consts {
 #
 # [health]
 # feature_powerset_exclude = []
-# workspace_exclude = []
+# machete_exclude = []
+# semver_packages = []
+# geiger_package = ""
+# lockbud_toolchain = ""
 #
 # [test]
 # default_lane = ""

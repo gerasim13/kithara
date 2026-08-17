@@ -271,8 +271,16 @@ pub struct HealthConfig {
     pub feature_invariants: Vec<FeatureInvariant>,
     /// Crates excluded from the `cargo hack --feature-powerset` stage.
     pub feature_powerset_exclude: Vec<String>,
-    /// Crates excluded from whole-workspace stages (semver, nextest, doc-test).
-    pub workspace_exclude: Vec<String>,
+    /// Packages the semver stage compares against the baseline branch.
+    pub semver_packages: Vec<String>,
+    /// Package whose dependency closure the unsafe-code census is rooted at.
+    pub geiger_package: String,
+    /// Toolchain the deadlock stage selects. lockbud is a rustc driver and only
+    /// reads a workspace its own nightly compiled.
+    pub lockbud_toolchain: String,
+    /// Crates whose manifest a generator owns, so "is this dependency used?"
+    /// is a question about the generator rather than about the code.
+    pub machete_exclude: Vec<String>,
 }
 
 /// A rule some crates state with `compile_error!`: this build needs a backend.

@@ -161,19 +161,53 @@ as SKIP instead of a false FAIL. Two stages needed a different answer:
   registry default. No workspace crate is published to crates.io — this is an
   application, not a crate release train — so the registry lookup could only
   ever fail. Comparing against `main` is a no-op there and a real check on a
-  branch that has drifted from it.
+  branch that has drifted from it. It names the packages in
+  `[health].semver_packages` rather than taking `--workspace`: cargo-semver-checks
+  gives every package its own target directory and rebuilds that package's whole
+  dependency tree in it, once for the branch and once for the baseline, so the
+  workspace form costs roughly 1.8 GB and a cold build per package. What is
+  listed is the facade, the one surface with a consumer outside this workspace;
+  internal crates are free to break by policy, so comparing them would report
+  churn the project has already allowed. The baseline is a git ref, which means CI has to
+  fetch it: `actions/checkout` brings one commit of one branch, and without an
+  explicit fetch the stage dies on `couldn't parse revision "origin/main^{tree}"`.
+  The invocation also states `--release-type minor`. Branch and baseline carry the
+  same version, so a derived release type is major — breaking is allowed there and
+  every lint skips, leaving a six-minute stage that runs 0 checks and reports
+  success. Stating minor is what turns it into a question: 196 checks run on the
+  facade instead of none.
+- `geiger` is rooted at `[health].geiger_package`. A dependency tree has a root
+  and this workspace's root manifest is virtual, so the workspace form only ever
+  reported that. The census is rooted at the facade, whose closure is what a
+  consumer links. cargo-geiger also rejects a relative `--manifest-path`, so the
+  stage resolves it through `cargo metadata`. It exits non-zero whenever it emits
+  a warning, which it always does here (it cannot match the workspace's own path
+  packages), so the stage stays `.advisory()` and the census lives in its log.
 - `lockbud-deadlock` is `.strict()`: lockbud has no entry in `[cargo_tools]`
   and no install step in `image.rs`/`docker/ci.Dockerfile`, so the pinned CI
   image never carries it — `no such command` there is not noise, it is the
-  honest state. `.config/just/tooling.just` installs it with a bare
-  `cargo install lockbud`, but lockbud is not on crates.io at all; it only
-  installs from its git repository, built against the specific nightly
-  toolchain it links `rustc_driver` against (currently not the toolchain this
-  repository pins). Wiring it into the image for real means picking a nightly
-  that satisfies both lockbud and the rest of the toolchain, or carrying a
-  second nightly in the image just for it — an infra decision, not a stage
-  tweak. Until that lands, `.strict()` keeps a missing lockbud reading as FAIL
-  rather than a harmless SKIP.
+  honest state. It is a rustc driver, not a crates.io package: it installs from
+  git against the nightly its `rust-toolchain.toml` names (currently
+  `nightly-2026-02-07`, with `rustc-dev` and `llvm-tools-preview`), and it reads
+  only a workspace that same nightly compiled — which is why
+  `[health].lockbud_toolchain` is part of the invocation instead of whatever the
+  caller has by default. Carrying it in the image means a third toolchain plus
+  the `rustc-dev` component, and a full workspace compile under that toolchain on
+  every run: an infra decision, not a stage tweak. Until it lands, `.strict()`
+  keeps a missing lockbud reading as FAIL rather than a harmless SKIP.
+- `workspace-unused-pub` shells out to `rust-analyzer scip` to build its index.
+  rustup ships a `rust-analyzer` proxy binary whether or not the component is
+  installed, so an image without it does not report a missing tool — it reports
+  `rust-analyzer scip … exited with code 1`. `docker/ci.Dockerfile` adds the
+  component for that reason alone.
+- `machete` is handed the directories to walk. `cargo hakari` writes
+  kithara-workspace-hack's dependency list to unify features across the
+  workspace; that crate has no code and is never meant to use any of them, so
+  machete flags every entry and the stage could only ever be red. cargo-machete
+  0.9 takes no exclude flag — given no arguments it walks the whole tree — so
+  the stage names every workspace member except the ones in
+  `[health].machete_exclude`. The list is derived from `cargo metadata`, which
+  is what keeps a new crate covered without being named anywhere.
 
 ## Stress campaign ownership
 
