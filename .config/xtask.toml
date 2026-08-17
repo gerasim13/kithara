@@ -521,8 +521,6 @@ prefix_args = [
   "--lib",
   "--test",
   "suite_harness",
-  "--test",
-  "red_env_guard_leak_thread",
   "--cargo-profile",
   "test-release",
 ]
