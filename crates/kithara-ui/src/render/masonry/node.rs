@@ -381,63 +381,35 @@ impl Node {
         let Some((sides, color, width)) = self.frame else {
             return;
         };
-        let right = bounds.x + bounds.w;
-        let bottom = bounds.y + bounds.h;
-        if sides.top {
-            list.stroke_line(
-                Pt {
-                    x: bounds.x,
-                    y: bounds.y,
-                },
-                Pt {
-                    x: right,
-                    y: bounds.y,
+        // A frame belongs to the box it frames, so each side is filled just
+        // inside it. A line stroked along the edge is centred on the edge, so
+        // half of it falls outside the box and a width of one pixel lands
+        // across two rows instead of on one — a whole pixel away from where
+        // the other host puts the same side.
+        let right = bounds.x + (bounds.w - width).max(0.0);
+        let bottom = bounds.y + (bounds.h - width).max(0.0);
+        let mut side = |x: f32, y: f32, w: f32, h: f32| {
+            list.fill_rect(
+                Rect {
+                    x,
+                    y,
+                    w: w.max(0.0),
+                    h: h.max(0.0),
                 },
                 color,
-                width,
             );
+        };
+        if sides.top {
+            side(bounds.x, bounds.y, bounds.w, width);
         }
         if sides.right {
-            list.stroke_line(
-                Pt {
-                    x: right,
-                    y: bounds.y,
-                },
-                Pt {
-                    x: right,
-                    y: bottom,
-                },
-                color,
-                width,
-            );
+            side(right, bounds.y, width, bounds.h);
         }
         if sides.bottom {
-            list.stroke_line(
-                Pt {
-                    x: bounds.x,
-                    y: bottom,
-                },
-                Pt {
-                    x: right,
-                    y: bottom,
-                },
-                color,
-                width,
-            );
+            side(bounds.x, bottom, bounds.w, width);
         }
         if sides.left {
-            list.stroke_line(
-                Pt {
-                    x: bounds.x,
-                    y: bounds.y,
-                },
-                Pt {
-                    x: bounds.x,
-                    y: bottom,
-                },
-                color,
-                width,
-            );
+            side(bounds.x, bounds.y, width, bounds.h);
         }
     }
 }
