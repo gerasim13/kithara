@@ -15,6 +15,7 @@ pub mod model;
 mod owner;
 mod picker;
 pub mod picture;
+pub(crate) mod scroll;
 pub mod shader;
 pub mod skin;
 #[cfg(feature = "iced")]
@@ -50,7 +51,7 @@ pub(crate) use window::{DragGhost, TitleBar, WindowControls, WindowSurface};
 pub(crate) use {
     controls::{ChromeLeaf, chrome_leaf, header_chevron, tree_rows},
     immediate::{
-        Anchored, DropZone, MiniWave, ModuleChrome, Placement, Text, Tree, WheelSurface,
+        Anchored, DropZone, MiniWave, ModuleChrome, Placement, Text, Tree, Viewport, WheelSurface,
         frame_overlay,
     },
     layer::{draw_host_layer, window_layer, window_layers},

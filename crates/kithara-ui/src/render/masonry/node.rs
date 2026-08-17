@@ -633,6 +633,30 @@ impl Widget for Node {
         }
     }
 
+    /// The one thing this node draws over its children rather than under
+    /// them: a window's indicator belongs above the rows it scrolls. Masonry
+    /// appends this scene after the children and outside the clip, which is
+    /// exactly where a bar on the window's own edge has to land.
+    fn post_paint(
+        &mut self,
+        ctx: &mut PaintCtx<'_>,
+        _props: &PropertiesRef<'_>,
+        scene: &mut Scene,
+    ) {
+        let size = ctx.size();
+        let mut list = DrawListBuilder::default();
+        self.layout.indicate(
+            Rect {
+                h: size.height.as_(),
+                w: size.width.as_(),
+                x: 0.0,
+                y: 0.0,
+            },
+            &mut list,
+        );
+        replay(&list.finish(), &mut VelloBackend::new(scene));
+    }
+
     fn accessibility_role(&self) -> Role {
         Role::GenericContainer
     }

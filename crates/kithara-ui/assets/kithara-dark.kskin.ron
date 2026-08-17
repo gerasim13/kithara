@@ -34,6 +34,13 @@
         grid_gap: 1.0,
         grid_pad: 0.0,
     ),
+    scroll: (
+        width: 3.0,
+        inset: 1.0,
+        min_length: 16.0,
+        track: BgInset,
+        thumb: LineHi,
+    ),
     chrome: (
         frame: (radius: 0.0, border_width: 1.0, border: Line),
         secondary_frame: (radius: 0.0, border_width: 1.0, border: Line),

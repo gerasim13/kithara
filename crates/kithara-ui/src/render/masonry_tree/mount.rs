@@ -13,13 +13,15 @@ use super::{
 };
 use crate::{
     atoms::{button::declared_width, deck::summary::Summary, tab::TabLarge},
+    draw::{DrawListBuilder, Rect as DrawRect},
     expand::{Binding, BindingKind, ControlSpec},
-    interact::{Input, recognizers::wheel},
+    interact::Input,
     module::TextAlign,
     mount,
     render::{
         ControlsProgram, HostedControlPlan, InputOwner, ReadValue, Skin, TitleProgram,
         controls::{Draws, Reading},
+        scroll::{Bar, Window},
     },
     size::{Dim, SizeSpec, control_size},
     solve,
@@ -461,24 +463,27 @@ impl NodeControl for mount::Button {
 
 /// A bounded window over a subtree taller than itself.
 ///
-/// The offset is the retained host's, not the document's: the document declares
-/// the window, and how far the content may travel is only known once the child
-/// has been laid out. Keeping it here rather than in `Node` puts the one
-/// mutable number beside the geometry that bounds it, and keeps the widget's
-/// own impl about being a widget.
-#[derive(Default)]
+/// The window itself is the neutral one both hosts keep; what lives here is
+/// only how this toolkit measures, places and clips the child under it, plus
+/// the indicator style resolved once from the skin so the widget can draw the
+/// bar without holding one.
 pub(super) struct Viewport {
-    accum: f32,
-    content: f32,
-    extent: f32,
-    offset: f32,
+    bar: Bar,
+    view: Window,
 }
 
-/// How far one wheel detent moves the content. A viewport of rows is read by
-/// the row, so a detent is worth about one of them rather than a page.
-const STEP: f32 = 40.0;
-
 impl Viewport {
+    pub(super) const fn new(bar: Bar) -> Self {
+        Self {
+            bar,
+            view: Window::new(),
+        }
+    }
+
+    pub(super) fn indicate(&self, bounds: DrawRect, list: &mut DrawListBuilder) {
+        self.view.indicate(bounds, self.bar, list);
+    }
+
     pub(super) fn layout(
         &mut self,
         ctx: &mut LayoutCtx<'_>,
@@ -502,11 +507,9 @@ impl Viewport {
             let measured = ctx.run_layout(child, &box_constraints(inner));
             AsPrimitive::<f32>::as_(measured.height)
         });
-        self.content = content;
-        self.extent = size.height;
-        self.offset = self.offset.clamp(0.0, self.travel());
+        let offset = self.view.measured(content, size.height);
         if let Some(child) = children.first_mut() {
-            ctx.place_child(child, Point::new(0.0, f64::from(-self.offset)));
+            ctx.place_child(child, Point::new(0.0, f64::from(-offset)));
         }
         ctx.set_clip_path(Rect::from_origin_size(
             Point::ORIGIN,
@@ -515,26 +518,8 @@ impl Viewport {
         size
     }
 
-    /// Moves the window, answering whether it actually moved.
-    ///
-    /// A wheel at either end of the travel is not consumed, so it continues to
-    /// whatever encloses this viewport instead of being swallowed by a window
-    /// that has nowhere left to go.
     pub(super) fn wheel(&mut self, input: Input<'_>) -> bool {
-        let Input::Wheel(scroll) = input else {
-            return false;
-        };
-        let steps = wheel::steps(&mut self.accum, scroll);
-        if steps == 0.0 {
-            return false;
-        }
-        let next = steps.mul_add(STEP, self.offset).clamp(0.0, self.travel());
-        std::mem::replace(&mut self.offset, next) != next
-    }
-
-    const fn travel(&self) -> f32 {
-        let travel = self.content - self.extent;
-        if travel > 0.0 { travel } else { 0.0 }
+        self.view.wheel(input)
     }
 }
 
@@ -573,6 +558,16 @@ impl NodeLayout {
         match self {
             Self::Leaf(leaf) => Some(leaf),
             Self::Flex(_) | Self::Scroll(_) | Self::Stack | Self::Stage => None,
+        }
+    }
+
+    /// Draws whatever this node paints over its own children. Only a window
+    /// has one: its indicator belongs above the rows it scrolls, not under
+    /// them.
+    pub(super) fn indicate(&self, bounds: DrawRect, list: &mut DrawListBuilder) {
+        match self {
+            Self::Scroll(viewport) => viewport.indicate(bounds, list),
+            Self::Flex(_) | Self::Leaf(_) | Self::Stack | Self::Stage => {}
         }
     }
 
@@ -843,65 +838,5 @@ mod owns {
             pointer_owner(InputOwner::Engine, &ControlSpec::Knob { label: None }),
             InputOwner::Engine
         );
-    }
-}
-
-#[cfg(test)]
-mod viewport {
-    use kithara_test_utils::kithara;
-
-    use super::*;
-    use crate::interact::Scroll;
-
-    fn viewport(content: f32, extent: f32) -> Viewport {
-        Viewport {
-            content,
-            extent,
-            ..Viewport::default()
-        }
-    }
-
-    fn lines(y: f32) -> Input<'static> {
-        Input::Wheel(Scroll::Lines { x: 0.0, y })
-    }
-
-    /// The window walks the content and stops at its end rather than running
-    /// past it into blank space.
-    #[kithara::test]
-    fn the_window_travels_the_overflow_and_clamps_at_both_ends() {
-        let mut view = viewport(300.0, 100.0);
-
-        assert!(view.wheel(lines(-1.0)));
-        assert_eq!(view.offset, STEP);
-        for _ in 0..20 {
-            view.wheel(lines(-1.0));
-        }
-        assert_eq!(view.offset, 200.0, "the last row is the end of the travel");
-
-        for _ in 0..20 {
-            view.wheel(lines(1.0));
-        }
-        assert_eq!(view.offset, 0.0);
-    }
-
-    /// A window with nothing hidden below it has no travel, so the wheel is
-    /// left for whatever encloses it.
-    #[kithara::test]
-    fn a_window_taller_than_its_content_answers_no_wheel() {
-        let mut view = viewport(80.0, 100.0);
-
-        assert!(!view.wheel(lines(-1.0)));
-        assert_eq!(view.offset, 0.0);
-    }
-
-    /// At the end of the travel a further wheel the same way is not consumed,
-    /// while one back the other way still is.
-    #[kithara::test]
-    fn the_end_of_travel_releases_the_wheel_in_one_direction_only() {
-        let mut view = viewport(140.0, 100.0);
-        assert!(view.wheel(lines(-1.0)));
-
-        assert!(!view.wheel(lines(-1.0)), "there is nowhere further to go");
-        assert!(view.wheel(lines(1.0)));
     }
 }

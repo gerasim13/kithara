@@ -1,9 +1,6 @@
 use iced::{
     Alignment, Element, Length, Size,
-    widget::{
-        Space, Stack, container, mouse_area, scrollable,
-        scrollable::{Direction, Scrollbar},
-    },
+    widget::{Space, Stack, container, mouse_area},
 };
 
 use super::{
@@ -23,7 +20,7 @@ use crate::{
     module::TextAlign,
     render::{
         Anchored, ControlAction, DropZone, InputOwner, ModuleChrome, Placement, Skin, UiEvent,
-        WheelSurface, Widget,
+        Viewport, WheelSurface, Widget,
         document::{
             Ctx, Group, Host as DocumentHost, Module as DocumentModule, Popover as DocumentPopover,
         },
@@ -224,10 +221,10 @@ impl<'a> DocumentHost for IcedHost<'a, '_> {
     /// would then centre that content in the leftover — a window whose first row
     /// starts below its own top, by half of whatever the page did not use.
     ///
-    /// The bar is taken down to nothing because a document's viewport looks the
-    /// way this toolkit's skin says, and neither host draws an indicator yet.
-    /// Left at its default, iced paints ten columns of its own theme down the
-    /// window's right edge that the retained host has no counterpart for.
+    /// The window is this toolkit's own rather than the one iced ships: its
+    /// offset is the same neutral window the retained host keeps, so both draw
+    /// the indicator the skin describes instead of one host painting a bar of
+    /// its own theme that the other has no counterpart for.
     fn scroll(
         &mut self,
         _id: InternId,
@@ -235,13 +232,7 @@ impl<'a> DocumentHost for IcedHost<'a, '_> {
         size: Option<SizeSpec>,
     ) -> Self::Output {
         let (width, height) = content_size(size);
-        scrollable(child)
-            .direction(Direction::Vertical(
-                Scrollbar::new().width(0.0).scroller_width(0.0),
-            ))
-            .width(width)
-            .height(height)
-            .into()
+        Viewport::new(child, width, height, self.skin).into()
     }
 
     fn slot(&mut self, children: Vec<Self::Output>, size: Option<SizeSpec>) -> Self::Output {

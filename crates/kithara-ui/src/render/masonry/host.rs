@@ -33,6 +33,7 @@ use crate::{
         ControlAction, HostedControlPlan, InputOwner, ReadValue, Skin, UiEvent,
         document::{Ctx, Group, Host, Module, Popover},
         hosted_control_plan,
+        scroll::Bar,
     },
     size::SizeSpec,
     solve,
@@ -552,7 +553,7 @@ where
     ) -> Self::Output {
         let declared = size.map_or_else(|| child.declared(), declared);
         MasonryNode::document(
-            NodeLayout::Scroll(Viewport::default()),
+            NodeLayout::Scroll(Viewport::new(Bar::new(self.skin))),
             declared,
             vec![child],
             false,

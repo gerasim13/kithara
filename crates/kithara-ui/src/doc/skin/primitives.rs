@@ -66,6 +66,19 @@ pub struct LayoutSkin {
     pub grid_pad: f32,
 }
 
+/// The indicator a viewport draws over its own right edge. `min_length` keeps
+/// a window over very long content from showing a thumb too short to see.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+#[non_exhaustive]
+pub struct ScrollSkin {
+    pub thumb: ColorRole,
+    pub track: ColorRole,
+    pub inset: f32,
+    pub min_length: f32,
+    pub width: f32,
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 #[non_exhaustive]
