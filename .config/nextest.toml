@@ -92,7 +92,7 @@ test-threads = "num-cpus"
 # attempt-correlated dump first.
 slow-timeout = { period = "60s", terminate-after = 11 }
 leak-timeout = "2s"
-# A campaign repeats thousands of tests tens of times, and printing the body of
+# A run repeats thousands of tests tens of times, and printing the body of
 # every failure turns its console into something no one reads. The bodies are
 # not lost: `store-failure-output` keeps them in the JUnit below, which is what
 # the evidence reporter parses for symptoms, backtraces and wait graphs — the

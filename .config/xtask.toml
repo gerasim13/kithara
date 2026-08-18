@@ -171,7 +171,7 @@ when_feature = "backend-cpal"
 always = ["backend-cpal"]
 
 [stress]
-# One campaign, both clocks. The first collapses the fixtures' artificial
+# One run, both clocks. The first collapses the fixtures' artificial
 # delays and is fast; the second keeps them and is the only one where a defect
 # decided by the order requests are served in can reproduce at all.
 default_modes = [
@@ -258,7 +258,7 @@ source_excludes = ["kithara-test-macros/", "kithara-test-utils/src/test/"]
 [stress.modes.reproduction-flash-on]
 features = ["flash"]
 
-# Reproduction lanes set no RUST_LOG: a campaign-wide one used to override the
+# Reproduction lanes set no RUST_LOG: a run-wide one used to override the
 # per-test `tracing(...)` annotations and silence exactly the verdict lines the
 # annotated flaky tests were given (`setup_tracing_with_filter` now merges the
 # two, keeping the wider level per target). Unannotated tests keep the "warn"
@@ -267,8 +267,8 @@ features = ["flash"]
 # `KITHARA_FLASH_SYNC_TRACE` is on in every reproduction lane, not just the
 # diagnostic ones: `flash::diag` reads it once and caches, so with it off every
 # primitive carries `meta = None` and the hang dump cannot name a holder or a
-# waiter — the dump degrades to "something is stuck" in exactly the lanes the
-# campaign actually runs. `KITHARA_FLASH_SYNC_BT` stays out: measured at
+# waiter — the dump degrades to "something is stuck" in exactly the lanes a
+# stress run actually repeats. `KITHARA_FLASH_SYNC_BT` stays out: measured at
 # count=50 it inflates JUnit past the 512 MiB artifact limit, and it has its own
 # lane for when a stack is worth that price.
 [stress.modes.reproduction-flash-on.set_env]
@@ -282,7 +282,7 @@ RUST_BACKTRACE = "1"
 [stress.modes.reproduction-flash-on.raw_path_env]
 KITHARA_HANG_DUMP_DIR = "hang"
 
-# The same campaign on real clocks. Flash collapses the fixtures' artificial
+# The same run on real clocks. Flash collapses the fixtures' artificial
 # delays, so a defect that shows itself as "the needed request queued behind an
 # unneeded one" cannot reproduce under it: at zero real delay the order of
 # service does not change the outcome. Loader priorities, stale-fetch
@@ -305,7 +305,7 @@ KITHARA_HANG_DUMP_DIR = "hang"
 # The async contract, measured with the same repetition as the flakes. The
 # blocking census reports a call that parks inside an async poll, which is a
 # defect whether or not a test fails on the attempt that carried it — and a
-# campaign that repeats every test fifty times is exactly what walks the paths
+# run that repeats every test fifty times is exactly what walks the paths
 # where such a call hides. It rides the virtual clock because the census
 # measures poll duration, and a real clock's scheduling noise would report the
 # machine's load as the code's fault.
@@ -326,13 +326,13 @@ RUST_BACKTRACE = "1"
 KITHARA_HANG_DUMP_DIR = "hang"
 KITHARA_NO_BLOCK_LOG = "no-block.log"
 
-# The real-time contract, measured the same way. They belong in the campaign
+# The real-time contract, measured the same way. They belong in the run
 # because the violation is intermittent: one was seen firing on a single attempt
 # out of two, which a gate that runs each lane once reports as green half the
 # time. Their own recipes own the sanitizer flags, the pinned nightly and
 # `-Zbuild-std`, which is why these lanes name a command instead of a feature set.
 #
-# `owns_repeats` is what stops the campaign from launching that command once per
+# `owns_repeats` is what stops the run from launching that command once per
 # repeat. The recipes run under nextest, so handing them the count builds the
 # suite once and lands every repeat in one report with a per-test verdict —
 # measured the same way as the lanes above, and comparable with them. Launched per

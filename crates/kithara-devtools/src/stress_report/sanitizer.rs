@@ -6,7 +6,7 @@
 //! codes throws all of that away and leaves the reader to open the log and
 //! guess. Attributing each finding to the attempt it came from turns a
 //! violation that fires intermittently into a rate, which is the same thing the
-//! per-test lanes report and the reason the lane is in a campaign at all.
+//! per-test lanes report and the reason the lane is in a run at all.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -120,7 +120,7 @@ fn finish(
 /// The contract a sanitizer says was violated, from its report header.
 ///
 /// The header names the sanitizer and then the violation, and both matter: a
-/// campaign may repeat more than one sanitizer, and a finding that did not say
+/// run may repeat more than one sanitizer, and a finding that did not say
 /// which one it came from could not be read.
 fn error_kind(line: &str) -> Option<String> {
     let (_, tail) = line.split_once("ERROR: ")?;
@@ -161,7 +161,7 @@ Call to blocking function `pthread_mutex_lock` in real-time context!
     #1 0x5628d3c11f30 in kithara_audio::renderer::slot crates/kithara-audio/src/renderer/slot.rs:88:9
 ";
 
-    /// What the campaign of 2026-08-15 actually collected: a stack the
+    /// What the run of 2026-08-15 actually collected: a stack the
     /// sanitizer printed without a symbolizer, so every frame is an address.
     const UNSYMBOLIZED: &str = "\
 ==2837838==ERROR: RealtimeSanitizer: unsafe-library-call

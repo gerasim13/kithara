@@ -16,12 +16,12 @@ use crate::common::project::{StressConfig, StressModeConfig};
 const TARGET_DIR_ENV: &str = "CARGO_TARGET_DIR";
 
 #[derive(Debug)]
-pub(super) struct CampaignEnvironment {
+pub(super) struct RunEnvironment {
     set: BTreeMap<OsString, OsString>,
     remove: BTreeSet<OsString>,
 }
 
-impl CampaignEnvironment {
+impl RunEnvironment {
     /// # Errors
     ///
     /// Returns an error when a raw path is absolute, or when the build
@@ -103,7 +103,7 @@ mod tests {
         };
 
         let environment =
-            CampaignEnvironment::new(Path::new("raw"), Path::new("/stress/build"), &config, &mode)
+            RunEnvironment::new(Path::new("raw"), Path::new("/stress/build"), &config, &mode)
                 .expect("environment");
 
         assert_eq!(environment.value("TRACE"), Some("verbose"));
@@ -118,7 +118,7 @@ mod tests {
             ..StressModeConfig::default()
         };
 
-        let error = CampaignEnvironment::new(
+        let error = RunEnvironment::new(
             Path::new("raw"),
             Path::new("/stress/build"),
             &StressConfig::default(),
@@ -131,7 +131,7 @@ mod tests {
 
     #[test]
     fn a_lane_builds_where_the_run_says() {
-        let environment = CampaignEnvironment::new(
+        let environment = RunEnvironment::new(
             Path::new("raw"),
             Path::new("/stress/build"),
             &StressConfig::default(),
@@ -149,7 +149,7 @@ mod tests {
             ..StressModeConfig::default()
         };
 
-        let environment = CampaignEnvironment::new(
+        let environment = RunEnvironment::new(
             Path::new("raw"),
             Path::new("/stress/build"),
             &StressConfig::default(),
@@ -162,7 +162,7 @@ mod tests {
 
     #[test]
     fn a_relative_build_directory_is_refused_before_a_child_inherits_it() {
-        let error = CampaignEnvironment::new(
+        let error = RunEnvironment::new(
             Path::new("raw"),
             Path::new("build"),
             &StressConfig::default(),

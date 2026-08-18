@@ -253,7 +253,7 @@ miri *ARGS:
 #
 # Either way a symbolizer is required rather than hoped for: a stack of bare
 # addresses is the one part of a sanitizer report nobody can reconstruct
-# afterwards, because the binary goes with the container. The campaign of
+# afterwards, because the binary goes with the container. The stress run of
 # 2026-08-15 found a real violation fifty times over and could not say where
 # any of them was. `llvm-symbolizer` is a system package, not a rustup
 # component — `llvm-tools-preview` does not ship it. On Darwin the sanitizer
@@ -321,7 +321,7 @@ _rtsan SUITE FEATURES FILTER SUPPRESSIONS="":
         exit 1
         ;;
     esac
-    # A campaign hands its repeat count here instead of launching this recipe once
+    # A run hands its repeat count here instead of launching this recipe once
     # per repeat: nextest owns the repetition, so the suite is built once and
     # every repeat lands in one report that names the test it belongs to. Unset —
     # a gate, or a developer — runs the selection once.

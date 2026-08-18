@@ -1,4 +1,4 @@
-//! Portable repeated-test campaign and independent evidence verification.
+//! Portable repeated-test runs and independent evidence verification.
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -15,7 +15,7 @@ use clap::{Args, Subcommand};
 /// Bounds the distinct sanitizer findings one lane section lists.
 const MAX_FINDING_ROWS: usize = 100;
 
-/// Hands the campaign's repeat count to a lane that performs its own repeats.
+/// Hands the run's repeat count to a lane that performs its own repeats.
 const REPEATS_ENV: &str = "KITHARA_STRESS_REPEATS";
 
 use crate::{
@@ -35,7 +35,7 @@ mod output;
 pub(crate) mod pressure;
 mod system;
 
-use environment::CampaignEnvironment;
+use environment::RunEnvironment;
 use manifest::{
     BuildSnapshot, ExecuteResult, ExpectedProvenance, Manifest, ManifestConfig, ManifestSpec,
     PolicySnapshot, Selection,
@@ -45,9 +45,9 @@ use pressure::Sampler;
 #[derive(Debug, Subcommand)]
 #[non_exhaustive]
 pub enum StressCommand {
-    /// Run the complete repeated-test campaign and preserve its evidence.
+    /// Run every configured lane and preserve the evidence.
     Run(RunArgs),
-    /// Independently verify and render a downloaded campaign artifact.
+    /// Independently verify and render a downloaded run artifact.
     Report(ReportArgs),
 }
 
@@ -57,7 +57,7 @@ pub struct RunArgs {
     /// Subject workspace whose tests are selected and executed.
     #[arg(long, default_value = ".")]
     subject_root: PathBuf,
-    /// Fresh raw evidence directory owned by this campaign.
+    /// Fresh raw evidence directory owned by this run.
     #[arg(long)]
     output: Option<PathBuf>,
     /// Nextest filterset selecting tests to repeat.
@@ -66,8 +66,8 @@ pub struct RunArgs {
     /// Number of times to run every selected test.
     #[arg(long)]
     count: Option<usize>,
-    /// Configured campaign mode; repeat to run several, empty for the
-    /// project's own list. Each becomes one lane of the same campaign.
+    /// Configured stress mode; repeat the flag for several, empty for the
+    /// project's own list. Each becomes one lane of the same run.
     #[arg(long = "mode")]
     modes: Vec<String>,
     /// Trusted controller revision to compare with the checkout.
@@ -109,7 +109,7 @@ pub struct ReportArgs {
 /// Returns an error when execution, finalization, or verification fails.
 pub(crate) fn run(command: &StressCommand, ctx: &Ctx) -> Result<()> {
     match command {
-        StressCommand::Run(args) => run_campaign(args, ctx),
+        StressCommand::Run(args) => execute_run(args, ctx),
         StressCommand::Report(args) => run_report(args, ctx),
     }
 }
@@ -193,16 +193,16 @@ impl Paths {
     }
 }
 
-/// Runs every lane of one campaign, in order, into one evidence directory.
+/// Runs every lane, in order, into one evidence directory.
 ///
-/// A lane that fails does not stop the ones after it. A campaign exists to
+/// A lane that fails does not stop the ones after it. A run exists to
 /// find out which lane a flake belongs to, and a run that stopped at the first
 /// red lane would answer that question only when the answer was already known.
-/// The first failure is what the campaign returns, after all of them have run.
-fn run_campaign(args: &RunArgs, ctx: &Ctx) -> Result<()> {
+/// The first failure is what the caller sees, once every lane has finished.
+fn execute_run(args: &RunArgs, ctx: &Ctx) -> Result<()> {
     let config = &ctx.config.stress;
-    ensure!(config.is_configured(), "stress campaign is not configured");
-    let lanes = campaign_lanes(&args.modes, config)?;
+    ensure!(config.is_configured(), "stress run is not configured");
+    let lanes = resolve_lanes(&args.modes, config)?;
     let root = absolute_from(
         &ctx.root,
         args.output
@@ -215,10 +215,10 @@ fn run_campaign(args: &RunArgs, ctx: &Ctx) -> Result<()> {
         !subject_junit
             .try_exists()
             .with_context(|| format!("inspect stress JUnit path {}", subject_junit.display()))?,
-        "stress JUnit already exists: {}; remove it before starting a new campaign",
+        "stress JUnit already exists: {}; remove it before starting a new run",
         subject_junit.display()
     );
-    prepare_campaign_root(&root)?;
+    prepare_run_root(&root)?;
     let mut failure = None;
     for lane in &lanes {
         let outcome = run_lane(args, ctx, lane, &root.join(lane));
@@ -252,32 +252,32 @@ fn subject_junit(subject_root: &Path, config: &StressConfig) -> PathBuf {
 }
 
 /// The lanes this invocation is made of: what was asked for, or what the
-/// project says a campaign is.
-fn campaign_lanes(requested: &[String], config: &StressConfig) -> Result<Vec<String>> {
+/// project says a run is.
+fn resolve_lanes(requested: &[String], config: &StressConfig) -> Result<Vec<String>> {
     let lanes = if requested.is_empty() {
         config.default_modes.clone()
     } else {
         requested.to_vec()
     };
-    ensure!(!lanes.is_empty(), "a campaign must name at least one mode");
+    ensure!(!lanes.is_empty(), "a run must name at least one mode");
     let mut seen = BTreeSet::new();
     for lane in &lanes {
         config.mode(lane)?;
         validate_lane_directory(lane)?;
-        ensure!(seen.insert(lane), "campaign mode `{lane}` is named twice");
+        ensure!(seen.insert(lane), "stress mode `{lane}` is named twice");
     }
     Ok(lanes)
 }
 
 /// A lane names the directory its evidence lands in, so it has to be a plain
-/// directory name rather than anything that could climb out of the campaign.
+/// directory name rather than anything that could climb out of the run.
 fn validate_lane_directory(lane: &str) -> Result<()> {
     let mut components = Path::new(lane).components();
     let single =
         matches!(components.next(), Some(Component::Normal(_))) && components.next().is_none();
     ensure!(
         single && !lane.is_empty(),
-        "campaign mode `{lane}` is not usable as a directory name"
+        "stress mode `{lane}` is not usable as a directory name"
     );
     Ok(())
 }
@@ -342,7 +342,7 @@ fn run_command_lane(
     mode: &StressModeConfig,
     paths: &Paths,
     count: usize,
-    environment: &CampaignEnvironment,
+    environment: &RunEnvironment,
 ) -> Result<Vec<i32>> {
     let (program, arguments) = mode
         .command
@@ -381,7 +381,7 @@ fn run_command_lane(
     Ok(codes)
 }
 
-/// How many times the campaign launches a command lane to buy `count` repeats.
+/// How many times the run launches a command lane to buy `count` repeats.
 ///
 /// One launch when the command repeats internally, `count` launches when it does
 /// not. The distinction is what the lane's numbers mean afterwards: launches are
@@ -461,7 +461,7 @@ fn run_lane(args: &RunArgs, ctx: &Ctx, mode_name: &str, raw: &Path) -> Result<()
     }
     ensure_raw_outside_subject_evidence(&paths.raw, &subject_junit)?;
     let system = system::capture()?;
-    let environment = CampaignEnvironment::new(&paths.raw, &build, config, mode)?;
+    let environment = RunEnvironment::new(&paths.raw, &build, config, mode)?;
     let mut manifest = Manifest::start(
         ManifestSpec {
             mode: mode_name.to_owned(),
@@ -577,17 +577,17 @@ fn render_raw_report(paths: &Paths, count: usize, config: &StressConfig) -> Resu
     stress_report::run(&args)
 }
 
-/// Verifies every lane of a downloaded campaign and renders them as one report.
+/// Verifies every lane of a downloaded run and renders them as one report.
 ///
 /// The lanes are read independently — each carries its own manifest, inventory
 /// and `JUnit`, and each is checked against what the project says it should have
-/// been. They are rendered together because the question a multi-lane campaign
+/// been. They are rendered together because the question a multi-lane run
 /// answers is a comparison, and a comparison split across two documents is one
 /// the reader has to make by hand.
 fn run_report(args: &ReportArgs, ctx: &Ctx) -> Result<()> {
     let config = &ctx.config.stress;
-    ensure!(config.is_configured(), "stress campaign is not configured");
-    let lanes = campaign_lanes(&args.modes, config)?;
+    ensure!(config.is_configured(), "stress run is not configured");
+    let lanes = resolve_lanes(&args.modes, config)?;
     let filter = args
         .filter
         .clone()
@@ -650,9 +650,9 @@ fn run_report(args: &ReportArgs, ctx: &Ctx) -> Result<()> {
         // Only a lane that verified against its expected identity, read valid
         // evidence, AND accounted for every requested iteration may stand in a
         // comparison. Numbers from one that did not are of unknown origin, and
-        // putting them beside trustworthy ones is how a campaign reports a
+        // putting them beside trustworthy ones is how a run reports a
         // difference between lanes that is really a difference between runs.
-        // A lane short of its own request measures a smaller campaign than the
+        // A lane short of its own request measures a smaller run than the
         // one that was asked for, so its rate belongs to a different question.
         match excluded_because {
             Some(reason) => excluded.push((lane_name.clone(), reason)),
@@ -669,13 +669,13 @@ fn run_report(args: &ReportArgs, ctx: &Ctx) -> Result<()> {
         }
     }
 
-    let campaign = verify_campaign_result(args.execute_result, &exit_codes);
+    let run = verify_run_result(args.execute_result, &exit_codes);
     let mut document =
         stress_report::render_lane_comparison(&measured, &commanded, &excluded, lanes.len());
-    if let Err(error) = &campaign {
+    if let Err(error) = &run {
         let _ = writeln!(
             document,
-            "\n- Campaign provenance: `{}`",
+            "\n- Run provenance: `{}`",
             markdown_cell(&format!("{error:#}"))
         );
     }
@@ -684,7 +684,7 @@ fn run_report(args: &ReportArgs, ctx: &Ctx) -> Result<()> {
     if let Some(summary) = unclean_summary(&unclean, &output) {
         println!("{summary}");
     }
-    choose_failure(failure.map_or(Ok(()), Err), campaign, Ok(()), Ok(())).map_or(Ok(()), Err)
+    choose_failure(failure.map_or(Ok(()), Err), run, Ok(()), Ok(())).map_or(Ok(()), Err)
 }
 
 /// Why this lane is not clean, or `None` when it is.
@@ -725,7 +725,7 @@ fn unclean_summary(unclean: &[(String, String)], report: &Path) -> Option<String
 ///
 /// Named rather than counted: "one lane was dropped" sends the reader back to
 /// the per-lane sections to work out which one and why, and that is the join
-/// the campaign document exists to spare them.
+/// the run document exists to spare them.
 fn exclusion_reason(trusted: bool, lane: &stress_report::LaneReport) -> Option<String> {
     if !trusted {
         return Some("failed provenance against its expected identity".to_owned());
@@ -742,7 +742,7 @@ fn exclusion_reason(trusted: bool, lane: &stress_report::LaneReport) -> Option<S
 /// Reads what a command lane recorded and states it as rates.
 ///
 /// A lane that repeats internally has a report per repeat, so it says how often
-/// each test failed — the same number the campaign's own lanes report, which is
+/// each test failed — the same number the run's own lanes report, which is
 /// what lets a sanitizer lane stand in the cross-lane comparison. A lane launched
 /// per repeat has only its exit codes, and how many attempts the command rejected
 /// is all it can say. Either way the number is the one a one-shot gate cannot
@@ -834,7 +834,7 @@ fn command_lane_report(
         Err(NotClean::reported("stress evidence"))
     };
     // A lane that repeats internally is measured per test, like the lanes the
-    // campaign drives itself, and belongs in that comparison. A lane launched per
+    // run drives itself, and belongs in that comparison. A lane launched per
     // repeat has only its exit codes, and a per-test table it cannot fill would
     // read as though every test passed.
     let (rates, attempts) = if mode.owns_repeats {
@@ -964,15 +964,15 @@ fn append_unrated_findings(markdown: &mut String, findings: &stress_report::Find
     }
 }
 
-/// Checks the job's own result against the campaign as a whole.
+/// Checks the job's own result against the run as a whole.
 ///
 /// A red job means some lane failed, and which one is a fact about the
-/// campaign rather than about any single manifest. Checking it per lane would
+/// run rather than about any single manifest. Checking it per lane would
 /// call every lane that passed a liar; checking it here catches the case that
 /// actually matters — a job reported as failed whose lanes all say they
 /// succeeded, which means the failure came from somewhere the evidence does
 /// not cover.
-fn verify_campaign_result(execute_result: ExecuteResult, exit_codes: &[Option<i32>]) -> Result<()> {
+fn verify_run_result(execute_result: ExecuteResult, exit_codes: &[Option<i32>]) -> Result<()> {
     if matches!(execute_result, ExecuteResult::Success) {
         return Ok(());
     }
@@ -990,7 +990,7 @@ fn verify_campaign_result(execute_result: ExecuteResult, exit_codes: &[Option<i3
 struct LaneProvenance {
     verdict: Result<()>,
     details: Vec<String>,
-    /// The lane's own exit code, kept so the campaign can check the job's
+    /// The lane's own exit code, kept so the run can check the job's
     /// result against all of its lanes rather than against each one alone.
     exit_code: Option<i32>,
 }
@@ -1087,12 +1087,12 @@ fn invalidate_result(markdown: &mut String) {
     markdown.push_str("\n- Result: **INVALID PROVENANCE**\n");
 }
 
-/// The directory the whole campaign writes into, one level above its lanes.
+/// The directory the whole run writes into, one level above its lanes.
 ///
 /// Freshness is demanded here rather than per lane: the lanes are created
 /// inside it as they run, so asking each of them for a directory that does not
 /// exist yet would fail on the second one.
-fn prepare_campaign_root(root: &Path) -> Result<()> {
+fn prepare_run_root(root: &Path) -> Result<()> {
     ensure!(
         !root
             .try_exists()
@@ -1134,7 +1134,7 @@ fn prepare_raw_directory(paths: &Paths) -> Result<()> {
 /// the path being empty when the lane starts. Without this, a lane whose
 /// nextest died before writing evidence would have its predecessor's `JUnit`
 /// staged under its own name, and the report would attribute one lane's
-/// failures to the other — the exact confusion a multi-lane campaign exists to
+/// failures to the other — the exact confusion a multi-lane run exists to
 /// resolve.
 fn clear_previous_lane_junit(junit: &Path) -> Result<()> {
     match fs::remove_file(junit) {
@@ -1355,7 +1355,7 @@ mod tests {
     use super::*;
     use crate::common::project::StressEnvironmentConfig;
 
-    /// A lane the campaign launches once per repeat.
+    /// A lane the run launches once per repeat.
     fn per_repeat_mode() -> StressModeConfig {
         StressModeConfig {
             command: vec!["just".to_owned(), "test".to_owned(), "rtsan".to_owned()],
@@ -1363,7 +1363,7 @@ mod tests {
         }
     }
 
-    /// A lane whose command performs the campaign's repeats itself.
+    /// A lane whose command performs the run's repeats itself.
     fn self_repeating_mode() -> StressModeConfig {
         StressModeConfig {
             owns_repeats: true,
@@ -1383,7 +1383,7 @@ mod tests {
     /// The report has to expect the command the lane was told to run. Expecting
     /// the test runner instead condemns a lane that did exactly what the
     /// project asked, and a condemned lane leaves the comparison — which is how
-    /// a campaign can run its sanitizer lanes and still report nothing about
+    /// a run can repeat its sanitizer lanes and still report nothing about
     /// them.
     #[test]
     fn a_command_lane_is_expected_to_have_run_its_own_command() {
@@ -1446,7 +1446,7 @@ Intercepted call to real-time unsafe function `malloc` in real-time context!
     }
 
     /// A sanitizer that fires on one attempt in two is green half the time. The
-    /// campaign's job is to state that as a rate rather than as a verdict.
+    /// run's job is to state that as a rate rather than as a verdict.
     #[test]
     fn a_command_lane_reports_how_many_attempts_the_command_rejected() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -1545,9 +1545,9 @@ Intercepted call to real-time unsafe function `malloc` in real-time context!
             )]),
             ..mode.clone()
         };
-        // The campaign clears the variable, as the project's own configuration
+        // The run clears the variable, as the project's own configuration
         // does: a lane that is not handed a count must not inherit one from
-        // whatever launched the campaign.
+        // whatever launched the run.
         let config = StressConfig {
             environment: StressEnvironmentConfig {
                 remove: vec![REPEATS_ENV.to_owned()],
@@ -1555,7 +1555,7 @@ Intercepted call to real-time unsafe function `malloc` in real-time context!
             ..StressConfig::default()
         };
         let environment =
-            CampaignEnvironment::new(temp.path(), &temp.path().join("build"), &config, &mode)
+            RunEnvironment::new(temp.path(), &temp.path().join("build"), &config, &mode)
                 .expect("run environment");
         let paths = Paths::new(
             temp.path().to_path_buf(),
@@ -1590,7 +1590,7 @@ Intercepted call to real-time unsafe function `malloc` in real-time context!
     }
 
     /// The count has to reach the runner that performs the repeats. Without it
-    /// the lane runs its selection once and the campaign reports that as fifty.
+    /// the lane runs its selection once and the report calls that fifty.
     #[test]
     fn a_lane_that_owns_its_repeats_is_handed_the_count() {
         assert_eq!(
@@ -1669,8 +1669,8 @@ Intercepted call to real-time unsafe function `malloc` in real-time context!
     }
 
     /// A lane that repeats internally is measured per test, like the lanes the
-    /// campaign drives itself. Without those rates it contributes nothing to the
-    /// cross-lane comparison — which is how a campaign can run three sanitizer
+    /// run drives itself. Without those rates it contributes nothing to the
+    /// cross-lane comparison — which is how a run can repeat three sanitizer
     /// lanes and say nothing about any test in them.
     #[test]
     fn a_self_repeating_lane_reports_a_rate_per_test() {
@@ -1736,10 +1736,10 @@ Intercepted call to real-time unsafe function `malloc` in real-time context!
     }
 
     /// The verdict ends with "its findings are above". In the report job's log
-    /// there was nothing above, and the lane that made the campaign red had to be
+    /// there was nothing above, and the lane that made the run red had to be
     /// found by downloading the artifact.
     #[test]
-    fn a_campaign_that_is_not_clean_names_the_lane_in_its_own_output() {
+    fn a_run_that_is_not_clean_names_the_lane_in_its_own_output() {
         let summary = unclean_summary(
             &[(
                 "rtsan".to_owned(),
@@ -1757,7 +1757,7 @@ Intercepted call to real-time unsafe function `malloc` in real-time context!
 
     /// A summary that speaks on every run trains the reader to skip it.
     #[test]
-    fn a_clean_campaign_prints_no_summary() {
+    fn a_clean_run_prints_no_summary() {
         assert!(unclean_summary(&[], Path::new("/tmp/stress-report.md")).is_none());
     }
 
@@ -1908,7 +1908,7 @@ Intercepted call to real-time unsafe function `malloc` in real-time context!
 
     #[test]
     fn a_failed_job_whose_lanes_all_passed_is_reported_as_unexplained() {
-        let error = verify_campaign_result(ExecuteResult::Failure, &[Some(0), Some(0)])
+        let error = verify_run_result(ExecuteResult::Failure, &[Some(0), Some(0)])
             .expect_err("a red job with only clean lanes is not explained by its evidence");
 
         assert!(format!("{error:#}").contains("every lane finished cleanly"));
@@ -1916,14 +1916,14 @@ Intercepted call to real-time unsafe function `malloc` in real-time context!
 
     #[test]
     fn a_failed_job_is_explained_by_a_single_failing_lane() {
-        verify_campaign_result(ExecuteResult::Failure, &[Some(0), Some(101)])
+        verify_run_result(ExecuteResult::Failure, &[Some(0), Some(101)])
             .expect("one failing lane explains a failed job");
     }
 
     #[test]
     fn a_successful_job_says_nothing_about_lanes_beyond_their_own_manifests() {
-        verify_campaign_result(ExecuteResult::Success, &[Some(0), Some(0)])
-            .expect("a green job needs no campaign-level explanation");
+        verify_run_result(ExecuteResult::Success, &[Some(0), Some(0)])
+            .expect("a green job needs no run-level explanation");
     }
 
     #[test]

@@ -1485,7 +1485,7 @@ async fn runtime_manual_switch_works_when_all_segments_cached() {
     );
 }
 
-/// H1 regression (stress campaigns №6–№8): a Manual click accepted
+/// H1 regression (stress runs №6–№8): a Manual click accepted
 /// mid-playback dies silently when the outgoing variant drains to EOF
 /// before the incoming variant primes — the `AtEof` arm of
 /// `progress_variant_transition` aborts the pending transition and no

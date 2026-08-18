@@ -258,7 +258,7 @@ fn woken_async_task_stays_counted_until_repolled() {
 }
 
 /// A pinning task's spawn site says WHERE it came from, never what it is doing.
-/// A campaign's nine hangs were all pinned by one task at one spawn site, with
+/// A run's nine hangs were all pinned by one task at one spawn site, with
 /// nothing in the dump to separate a task spinning through wake-poll-park from
 /// one the runtime never re-polled after a wake. The poll count separates them.
 #[test]
@@ -303,7 +303,7 @@ fn a_pinning_task_reports_the_polls_it_entered() {
 }
 
 /// A dump lists EVERY parked waiter and says nothing about which one the clock
-/// is waiting on: the four hangs of campaign #11 each had one deadline-less
+/// is waiting on: the four hangs of run #11 each had one deadline-less
 /// waiter holding it, and the pin had to be re-derived by hand from the
 /// counters. A deadline-less waiter is freed by nothing but a matching signal,
 /// so when its task is still counted, that waiter IS the pin — mark it.

@@ -13,7 +13,7 @@ env:
   RUST_BACKTRACE: 1
 
 # A fork's branches share one pool of Linux runners, so their pushes queue
-# rather than overlap. The stress campaign no longer queues here: it has a
+# rather than overlap. The stress run no longer queues here: it has a
 # runner of its own and a group of its own.
 # Production keeps the per-ref cancellation used for superseded pushes.
 concurrency:

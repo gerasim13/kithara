@@ -169,7 +169,7 @@ default_modes = ["baseline"]
 lane = "workspace"
 backend = "http"
 nextest_config = "config/runner.toml"
-nextest_profile = "campaign"
+nextest_profile = "repeated"
 default_filter = "all()"
 default_count = 3
 max_count = 10
@@ -219,7 +219,7 @@ features = []
     let config = ProjectConfig::load(temp.path()).expect("load stress config");
     let mode = config.stress.mode("baseline").expect("configured mode");
 
-    assert_eq!(config.stress.nextest_profile, "campaign");
+    assert_eq!(config.stress.nextest_profile, "repeated");
     assert_eq!(config.stress.max_count, 10);
     assert_eq!(mode.features, ["snapshot-clock"]);
     assert_eq!(mode.set_env["TRACE_LEVEL"], "warn");
@@ -237,7 +237,7 @@ default_modes = ["baseline"]
 lane = "workspace"
 backend = "http"
 nextest_config = "config/runner.toml"
-nextest_profile = "campaign"
+nextest_profile = "repeated"
 default_filter = "all()"
 default_count = 1
 max_count = 1

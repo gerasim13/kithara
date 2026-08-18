@@ -57,7 +57,7 @@ routine work:
 - `just ci gate`; scoped audit: `just ci audit <scope>`; broad report:
   `just ci health`; one run's archived quality artifacts consolidated into a
   single markdown report: `just ci report --artifacts <dir>`.
-- Repeated-test evidence campaign: `just ci stress <args>`; independent artifact
+- Repeated-test evidence run: `just ci stress <args>`; independent artifact
   verification: `just ci stress-report <args>`.
 - Architecture diagram, linked contour reports, and complexity profile:
   `just arch viz` (workspace, automatic LOD 0 plus crate/hotspot-subsystem pages);

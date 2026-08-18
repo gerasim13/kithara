@@ -26,7 +26,7 @@ const STRESS_EXECUTE_COMMAND: &str = r#"args=(
 [[ -z "$COUNT" ]] || args+=(--count "$COUNT")
 # `--mode` repeats per lane; the input is a space-separated list, so
 # one flag carrying the whole string would name a lane that does not
-# exist and fail the campaign at argument parsing.
+# exist and fail the run at argument parsing.
 for mode in $MODE; do args+=(--mode "$mode"); done
 just ci stress "${args[@]}""#;
 const STRESS_REPORT_COMMAND: &str = r#"args=(
@@ -563,8 +563,8 @@ fn stress_workflow_is_a_thin_fork_adapter() {
     let workflow: Value = serde_yaml_ng::from_str(&text).expect("stress workflow is valid YAML");
     assert_no_key(&workflow, "continue-on-error");
     let concurrency = workflow_concurrency(&workflow);
-    // The campaign queues in a group of its own: it runs on a dedicated
-    // runner, and sharing fork CI's group meant a campaign dispatched behind
+    // The run queues in a group of its own: it runs on a dedicated
+    // runner, and sharing fork CI's group meant a run dispatched behind
     // an already-queued lane was cancelled outright rather than queued.
     assert_eq!(
         mapping_field(concurrency, "group").as_str(),
@@ -727,7 +727,7 @@ fn stress_workflow_is_a_thin_fork_adapter() {
             "Checkout controller".to_owned(),
             "Checkout subject".to_owned(),
             "Export artifact identity".to_owned(),
-            "Run the stress campaign".to_owned(),
+            "Execute the stress run".to_owned(),
             "Upload the raw stress evidence".to_owned(),
         ])
     );
@@ -747,18 +747,18 @@ fn stress_workflow_is_a_thin_fork_adapter() {
 
     assert!(
         step_position(execute, "Checkout subject")
-            < step_position(execute, "Run the stress campaign")
+            < step_position(execute, "Execute the stress run")
     );
 
-    let campaign = named_step(execute, "Run the stress campaign");
+    let run = named_step(execute, "Execute the stress run");
     assert_eq!(
-        mapping_field(campaign, "working-directory").as_str(),
+        mapping_field(run, "working-directory").as_str(),
         Some("controller")
     );
-    let campaign_env = mapping_field(campaign, "env")
+    let stress_env = mapping_field(run, "env")
         .as_mapping()
-        .expect("campaign environment is a mapping");
-    assert_eq!(campaign_env.len(), 5);
+        .expect("run environment is a mapping");
+    assert_eq!(stress_env.len(), 5);
     for (name, expected) in [
         ("CONTROLLER_SHA", "${{ job.workflow_sha }}"),
         ("COUNT", "${{ inputs.count || vars.KITHARA_STRESS_COUNT }}"),
@@ -766,11 +766,11 @@ fn stress_workflow_is_a_thin_fork_adapter() {
         ("MODE", "${{ inputs.mode }}"),
         ("SUBJECT_SHA", "${{ inputs.revision || github.sha }}"),
     ] {
-        assert_eq!(mapping_field(campaign_env, name).as_str(), Some(expected));
+        assert_eq!(mapping_field(stress_env, name).as_str(), Some(expected));
     }
-    let execute_script = mapping_field(campaign, "run")
+    let execute_script = mapping_field(run, "run")
         .as_str()
-        .expect("campaign command is a script")
+        .expect("run command is a script")
         .trim();
     assert_eq!(execute_script, STRESS_EXECUTE_COMMAND);
     assert_eq!(execute_script.matches("just ci stress").count(), 1);

@@ -414,9 +414,9 @@ pub struct TestLaneConfig {
 #[non_exhaustive]
 #[serde(default, deny_unknown_fields)]
 pub struct StressConfig {
-    /// The lanes one campaign is made of, run in order. More than one is the
+    /// The lanes one run is made of, executed in order. More than one is the
     /// normal case: a clock the fixtures' delays collapse under answers a
-    /// different question than a clock they survive, and a campaign that runs
+    /// different question than a clock they survive, and a run covering
     /// only one of them cannot say which of the two a flake belongs to.
     pub default_modes: Vec<String>,
     pub lane: String,
@@ -485,21 +485,21 @@ pub struct StressModeConfig {
     pub features: Vec<String>,
     pub set_env: BTreeMap<String, String>,
     pub raw_path_env: BTreeMap<String, String>,
-    /// A command this lane runs instead of the campaign's own test runner.
+    /// A command this lane runs instead of the configured test runner.
     ///
     /// Some lanes cannot be described as a feature set: a sanitizer lane picks
     /// its own toolchain, compiler flags and runtime library, and that contract
     /// belongs to the recipe that owns it rather than to a second copy here.
-    /// The campaign runs the command and reads what it leaves behind. Empty
+    /// The run launches the command and reads what it leaves behind. Empty
     /// means the lane runs the configured test runner and is measured per test.
     pub command: Vec<String>,
-    /// Whether the command performs the campaign's repeats itself.
+    /// Whether the command performs the run's repeats itself.
     ///
     /// A command that runs its tests under nextest can be handed the count
     /// through `KITHARA_STRESS_REPEATS` and launched once: the workspace builds
     /// once, and every repeat lands in one report carrying a per-test verdict,
     /// which is what lets the lane stand in the same comparison as the lanes the
-    /// campaign drives directly. Launched once per repeat instead, the same lane
+    /// run drives directly. Launched once per repeat instead, the same lane
     /// pays a rebuild and a cold start each time and can report only an exit
     /// code — and an exit code names no test.
     pub owns_repeats: bool,
@@ -535,7 +535,7 @@ impl StressConfig {
         self != &Self::default()
     }
 
-    /// Resolve one configured campaign mode.
+    /// Resolve one configured stress mode.
     ///
     /// # Errors
     ///
@@ -599,7 +599,7 @@ impl StressConfig {
             if !self.modes.contains_key(name) {
                 bail!("stress.default_modes names `{name}`, which is not configured");
             }
-            // A lane names the directory its evidence lands in, so a campaign
+            // A lane names the directory its evidence lands in, so a run
             // that listed one twice would have its second run overwrite the
             // first and report half of what it did.
             if !seen.insert(name) {

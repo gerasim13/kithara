@@ -26,7 +26,7 @@ linux *ARGS:
 bridge *ARGS:
     just _xtask ci bridge "$@"
 
-# Run a complete repeated-test evidence campaign.
+# Run every lane of a repeated-test evidence run.
 [positional-arguments]
 stress *ARGS:
     just _xtask stress run "$@"

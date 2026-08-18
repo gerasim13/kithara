@@ -445,9 +445,9 @@ impl Manifest {
         // of them at once, so a red job says one lane failed, not this one: a
         // lane that passed inside a failed job has a zero exit code and is
         // telling the truth. Demanding nonzero here would mark exactly the
-        // clean lanes untrustworthy, and a campaign comparing two clocks would
+        // clean lanes untrustworthy, and a run comparing two clocks would
         // lose the half that worked. That a failed job had a failing lane
-        // somewhere is checked once, across the campaign, by the reporter.
+        // somewhere is checked once, across the run, by the reporter.
         if matches!(expected.execute_result, ExecuteResult::Success) && exit_code != 0 {
             mismatches.push(ProvenanceMismatch::new(
                 "timing.exit_code",
@@ -836,7 +836,7 @@ mod tests {
         ManifestSpec {
             mode: "baseline".to_owned(),
             build: BuildSnapshot::new(Path::new("/stress/target-stress")).expect("build"),
-            config: ManifestConfig::new("campaign", "controller/settings/runner.toml", 90),
+            config: ManifestConfig::new("repeated", "controller/settings/runner.toml", 90),
             controller_sha: CONTROLLER_SHA.to_owned(),
             subject_sha: SUBJECT_SHA.to_owned(),
             runner: runner(),
@@ -857,7 +857,7 @@ mod tests {
             count: 50,
             test_threads: "num-cpus".to_owned(),
             mode: "baseline".to_owned(),
-            config: ManifestConfig::new("campaign", "controller/settings/runner.toml", 90),
+            config: ManifestConfig::new("repeated", "controller/settings/runner.toml", 90),
             runner: runner(),
             policy: policy(),
             execute_result: ExecuteResult::Success,
@@ -966,7 +966,7 @@ mod tests {
         }
     }
 
-    /// A campaign runs several lanes in one job, so a red job means one of
+    /// A run has several lanes in one job, so a red job means one of
     /// them failed rather than this one. Marking a lane that passed as
     /// untrustworthy would drop exactly the clean half of a comparison.
     #[test]

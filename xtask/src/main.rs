@@ -150,7 +150,7 @@ mod tests {
     }
 
     #[test]
-    fn stress_campaign_commands_are_nested_under_stress() {
+    fn stress_run_commands_are_nested_under_stress() {
         assert!(
             Cli::try_parse_from([
                 "xtask",

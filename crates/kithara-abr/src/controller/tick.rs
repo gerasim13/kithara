@@ -145,7 +145,7 @@ impl AbrController {
         }
 
         // `debug!`, not `trace!`: this is the only record of what the owner of
-        // the decision decided. A campaign asking for `kithara_abr=debug` got
+        // the decision decided. A run asking for `kithara_abr=debug` got
         // zero lines from it across a hundred repeats of a switch that failed,
         // which leaves "no switch was decided" and "one was decided and lost
         // further down" indistinguishable in the artifact.

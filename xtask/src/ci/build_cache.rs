@@ -281,10 +281,10 @@ fn lease_is_held(directory: &Path) -> bool {
 /// The checkout lease cannot protect this one: on Linux runners the target is
 /// a per-runner Docker volume the host budgets directly, and the volume's only
 /// other liveness signal, `.cargo-lock`, is held while Cargo compiles. A
-/// campaign that was merely executing its built tests looked idle, and the
+/// stress run that was merely executing its built tests looked idle, and the
 /// midnight budget pass deleted the binaries out from under it — repetitions
 /// 44-50 then failed every exec and read as the product breaking. The lock is
-/// shared so concurrent holders (a campaign and the harness runs it spawns)
+/// shared so concurrent holders (a stress run and the harness runs it spawns)
 /// coexist; [`lease_is_held`] asks for it exclusively and backs off while any
 /// holder is alive.
 pub(crate) struct TargetLease {
@@ -507,7 +507,7 @@ mod tests {
         assert!(candidate_entries(directory.path()).unwrap().active);
     }
 
-    /// A campaign that is only executing its built tests holds no
+    /// A run that is only executing its built tests holds no
     /// `.cargo-lock`; the root lease is what says a job still lives in this
     /// target between compilations.
     #[test]

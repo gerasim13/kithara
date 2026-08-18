@@ -23,7 +23,7 @@ pub fn setup_tracing_with_filter(directives: &str) {
     )));
 }
 
-/// A campaign-wide `RUST_LOG` and a test's own `tracing(...)` directives are
+/// A run-wide `RUST_LOG` and a test's own `tracing(...)` directives are
 /// both wanted: a lane widens the evidence for every test, and a test keeps the
 /// targets the lane never names. Choosing one source over the other dropped the
 /// other entirely, so a lane that set `RUST_LOG` to widen the evidence silenced

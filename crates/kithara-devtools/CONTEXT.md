@@ -232,7 +232,7 @@ as SKIP instead of a false FAIL. Two stages needed a different answer:
   `[health].machete_exclude`. The list is derived from `cargo metadata`, which
   is what keeps a new crate covered without being named anywhere.
 
-## Stress campaign ownership
+## Stress run ownership
 
 `stress run` is the sole portable lifecycle owner for repeated-test evidence. It
 records a typed schema-v4 manifest, exact nextest inventory and JUnit, a live and
@@ -264,7 +264,7 @@ is never asked to agree about one.
 Pressure schema `devtools.pressure.v2` names its end-marker status
 `primary_exit_code`: sampling ends after the test/evidence phase so the reporter can
 consume a closed stream. The manifest's `timing.exit_code` is the later combined
-campaign verdict and can additionally reflect staging or supplemental-evidence errors.
+run verdict and can additionally reflect staging or supplemental-evidence errors.
 The pressure value is null when a coordinator failure prevents primary execution.
 
 `stress report` independently consumes an uploaded raw directory. It compares the

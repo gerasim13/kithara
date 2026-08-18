@@ -39,13 +39,13 @@ const MAX_INVENTORY_CASES: usize = 100_000;
 const QUARANTINE_MIN_CASES: usize = 20;
 /// Quarantine a repeat when `failed * SHARE >= cases` — a quarter of the
 /// suite failing in one repeat. Real flake clusters stay far below this
-/// (campaign #5's worst honest repeat lost under 1% of its cases), while an
+/// (run #5's worst honest repeat lost under 1% of its cases), while an
 /// environment event (evicted volume, vanished binaries) fails the suite
 /// wholesale.
 const QUARANTINE_FAIL_SHARE: usize = 4;
 pub(crate) const MAX_INVENTORY_BYTES: u64 = 64 * 1_024 * 1_024;
 pub(crate) const MAX_JUNIT_BYTES: u64 = 512 * 1_024 * 1_024;
-/// Bounds a lane log, which a campaign appends to once per attempt.
+/// Bounds a lane log, which a run appends to once per attempt.
 pub(crate) const MAX_LANE_LOG_BYTES: u64 = 512 * 1_024 * 1_024;
 
 #[derive(Debug, Args)]
@@ -209,9 +209,9 @@ pub(crate) fn run(args: &StressReportArgs) -> Result<()> {
 /// One lane's evidence: what it reads out of the artifact, and the verdict that
 /// reading carries.
 ///
-/// Rendering is separated from writing so that a campaign of several lanes can
+/// Rendering is separated from writing so that a run of several lanes can
 /// put them all in one document. A file per lane would leave the question the
-/// campaign exists to answer — which lane does this flake belong to — spread
+/// run exists to answer — which lane does this flake belong to — spread
 /// across two documents for the reader to join by hand.
 pub(crate) struct LaneReport {
     pub(crate) markdown: String,
@@ -222,13 +222,13 @@ pub(crate) struct LaneReport {
     pub(crate) verdict: Result<()>,
     /// Whether the lane produced valid per-attempt evidence at all. A lane
     /// whose artifact was missing or invalid has nothing to stand in a
-    /// comparison — counting it as trustworthy is how a campaign summary
+    /// comparison — counting it as trustworthy is how a run summary
     /// contradicts its own per-lane verdicts.
     pub(crate) readable: bool,
     /// Whether every requested iteration is accounted for. A readable lane can
     /// still fall short of its own request — quarantined repeats, truncated
     /// output, a run that stopped early — and a rate measured over the
-    /// survivors answers a different question than the campaign asked.
+    /// survivors answers a different question than the run asked.
     pub(crate) complete: bool,
 }
 
@@ -365,7 +365,7 @@ pub(crate) fn lane_report(args: &StressReportArgs) -> Result<LaneReport> {
     })
 }
 
-/// Check the inventory-by-iteration contract before the campaign records its
+/// Check the inventory-by-iteration contract before the run records its
 /// primary exit status. The full reporter later writes the actionable detail;
 /// this narrow verdict prevents a missing or partial `JUnit` from being
 /// mistaken for a successful nextest stress run.
@@ -508,9 +508,9 @@ fn parse_inventory(json: &str) -> Result<BTreeSet<TestId>> {
         match inventory.status.as_str() {
             "listed" => {}
             // A target the project's `default-filter` excludes is inventoried
-            // with this status and none of its cases. It owes the campaign
+            // with this status and none of its cases. It owes the run
             // nothing, and reading the exclusion as a malformed inventory is
-            // how a campaign ends before its first test. The suite is dropped
+            // how a run ends before its first test. The suite is dropped
             // whole rather than filtered case by case, so a future nextest
             // that does list them still cannot contribute any.
             "skipped-default-filter" => continue,
@@ -553,11 +553,11 @@ fn validate_expected_count(expected_count: usize) -> Result<()> {
     Ok(())
 }
 
-/// The lanes of one campaign, side by side, ordered by how much they disagree.
+/// The lanes of one run, side by side, ordered by how much they disagree.
 ///
 /// Disagreement is what the table is for. A test that fails at the same rate on
 /// both clocks is a flake that owes nothing to either of them; a test that
-/// fails on one and not the other is the campaign's whole point, and it must
+/// fails on one and not the other is the run's whole point, and it must
 /// not be buried under a hundred rows of the first kind.
 ///
 /// A test present in one lane and absent from the other is reported as absent
@@ -568,7 +568,7 @@ fn validate_expected_count(expected_count: usize) -> Result<()> {
 /// exit code per attempt, so they have no per-test rate to place in the table
 /// above and would otherwise be a column of tests that were never selected.
 /// Lanes kept out of the comparison are named with the reason that kept them
-/// out. A campaign that silently drops a lane reads as though it covered every
+/// out. A run that silently drops a lane reads as though it covered every
 /// lane it requested, which is the one thing the summary must never imply.
 pub(crate) fn render_lane_comparison(
     lanes: &[(String, BTreeMap<TestId, LaneRate>)],
@@ -576,7 +576,7 @@ pub(crate) fn render_lane_comparison(
     excluded: &[(String, String)],
     requested: usize,
 ) -> String {
-    let mut out = String::from("# Stress campaign\n");
+    let mut out = String::from("# Stress run\n");
     let _ = writeln!(out, "\n- Lanes requested: `{requested}`");
     let _ = writeln!(
         out,
@@ -699,7 +699,7 @@ fn render_per_test_comparison(out: &mut String, lanes: &[(String, BTreeMap<TestI
 /// Which lanes a test's redness survives in, as one phrase.
 ///
 /// The rate columns already carry this, but reading it off them means holding
-/// three numbers at once and knowing which lane means what. Campaign
+/// three numbers at once and knowing which lane means what. Run
 /// 32075786002 cost an afternoon to that: `packaged_abr_switch` is 2/50 on
 /// `reproduction-flash-on` and 0/50 on both of the other lanes, so the virtual
 /// clock is the whole defect and no product path is implicated — but the table
@@ -775,7 +775,7 @@ impl AttemptRecords {
     ///
     /// This is what a lane that repeats internally can be held to: its report
     /// must show the repeats that were asked for, or the run stopped short of the
-    /// campaign it claims to be.
+    /// run it claims to be.
     pub(crate) fn repeats(&self) -> usize {
         self.rates
             .values()
@@ -1082,7 +1082,7 @@ fn render(
         let _ = writeln!(out, "- Nextest run ID: `{}`", markdown_cell(run_id));
     }
     if let Some(timestamp) = timestamp {
-        let _ = writeln!(out, "- Campaign started: `{}`", markdown_cell(timestamp));
+        let _ = writeln!(out, "- Run started: `{}`", markdown_cell(timestamp));
     }
     let _ = writeln!(out, "- Requested iterations: `{expected_count}`");
     let _ = writeln!(out, "- Observed iterations: `{observed_count}`");
@@ -1119,7 +1119,7 @@ fn render(
 
 /// Hold the evidence census to the repeats the rate tables kept.
 ///
-/// Campaign 32068408884 lost repeats 23-49 of its `flash-off` lane to a host
+/// Run 32068408884 lost repeats 23-49 of its `flash-off` lane to a host
 /// that stopped executing the binaries. The rate tables quarantined them, but
 /// the census still read every case: its only symptom cluster was 98226
 /// poisoned failures, and all 412 of its "divergent" lines were the difference
@@ -1139,7 +1139,7 @@ fn retain_census_cases(cases: &mut Vec<CaseTiming>, quarantined: &BTreeSet<usize
 ///
 /// A flake is a property of a test: it fails in some repeats while the suite
 /// around it passes. A repeat in which a quarter or more of the suite fails
-/// at once is a property of the environment — campaign #5 lost repeats 44-50
+/// at once is a property of the environment — run #5 lost repeats 44-50
 /// to an external volume eviction mid-run, and the report then attributed
 /// ~1200 phantom per-test rates to tests whose binaries had simply vanished.
 /// Such repeats leave every rate; the report names them and their coverage
@@ -1292,7 +1292,7 @@ fn render_iterations(iterations: &BTreeSet<usize>) -> String {
 /// Sanitize text for one Markdown table cell, bounding it around the middle.
 ///
 /// An over-long diagnostic keeps its head (level, target, message) *and* its
-/// tail: tracing lines put the load-bearing fields last (campaign #5's
+/// tail: tracing lines put the load-bearing fields last (run #5's
 /// readiness line lost `queued=` to a tail cut, the one field separating "a
 /// stall" from "still fetching"), and assertion messages put their values
 /// last.
@@ -1371,7 +1371,7 @@ mod tests {
     }
 
     /// 25 tests, 4 repeats; repeat 0 fails wholesale, the rest are clean.
-    fn mass_failure_campaign() -> (Vec<CaseTiming>, BTreeSet<TestId>) {
+    fn mass_failure_run() -> (Vec<CaseTiming>, BTreeSet<TestId>) {
         let names = (0..25).map(|i| format!("case_{i:02}")).collect::<Vec<_>>();
         let mut cases = Vec::new();
         for name in &names {
@@ -1388,7 +1388,7 @@ mod tests {
 
     #[test]
     fn a_mass_failing_repeat_leaves_the_per_test_rates() {
-        let (cases, selected) = mass_failure_campaign();
+        let (cases, selected) = mass_failure_run();
 
         let report = render(&cases, &selected, 4, None, None);
 
@@ -1406,7 +1406,7 @@ mod tests {
 
     #[test]
     fn a_quarantined_repeat_is_named_in_the_report() {
-        let (cases, selected) = mass_failure_campaign();
+        let (cases, selected) = mass_failure_run();
 
         let report = render(&cases, &selected, 4, None, None);
 
@@ -1421,7 +1421,7 @@ mod tests {
     /// so every line a live repeat logged becomes "divergent" against it.
     #[test]
     fn a_quarantined_repeat_is_kept_out_of_the_census() {
-        let (mut cases, selected) = mass_failure_campaign();
+        let (mut cases, selected) = mass_failure_run();
         let report = render(&cases, &selected, 4, None, None);
 
         retain_census_cases(&mut cases, &report.quarantined);
@@ -1437,7 +1437,7 @@ mod tests {
     /// tables still count.
     #[test]
     fn a_kept_repeat_stays_in_the_census() {
-        let (mut cases, selected) = mass_failure_campaign();
+        let (mut cases, selected) = mass_failure_run();
         let report = render(&cases, &selected, 4, None, None);
 
         retain_census_cases(&mut cases, &report.quarantined);
@@ -1610,7 +1610,7 @@ mod tests {
 
     /// One case's runaway retained output names itself and marks the lane
     /// incomplete — it must not invalidate the artifact and erase the other
-    /// cases' evidence, which is what cost campaign #8 its flash-off lane.
+    /// cases' evidence, which is what cost run #8 its flash-off lane.
     #[test]
     fn an_oversized_case_is_named_without_invalidating_the_lane() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -1836,7 +1836,7 @@ mod tests {
 
     /// A target the project's `default-filter` excludes is listed by nextest
     /// with this status and no testcases. Reading it as a malformed inventory
-    /// stopped the campaign before it ran a single test.
+    /// stopped the run before it ran a single test.
     #[test]
     fn a_suite_skipped_by_the_default_filter_contributes_no_tests() {
         let json = r#"{
@@ -1954,7 +1954,7 @@ mod tests {
     }
 
     #[test]
-    fn a_campaign_with_one_trustworthy_lane_refuses_to_compare() {
+    fn a_run_with_one_trustworthy_lane_refuses_to_compare() {
         let table = render_lane_comparison(&[lane("on", &[("solo", 1, 10)])], &[], &[], 2);
 
         assert!(table.contains("needs two verified lanes"), "{table}");
@@ -1999,7 +1999,7 @@ mod tests {
     }
 
     /// A lane whose verdict is one exit code per attempt has no per-test rate to
-    /// put in the table above. Dropping it from the campaign for that reason is
+    /// put in the table above. Dropping it from the run for that reason is
     /// how a sanitizer lane runs and reports nothing.
     #[test]
     fn a_lane_measured_by_attempts_is_reported_beside_the_per_test_lanes() {
@@ -2027,7 +2027,7 @@ mod tests {
         );
     }
 
-    /// The campaign of 2026-08-16 quarantined thirty-three of one lane's fifty
+    /// The run of 2026-08-16 quarantined thirty-three of one lane's fifty
     /// repeats as environment poisoning, reported that lane `INCOMPLETE`, and
     /// still counted it among the six lanes with trustworthy evidence.
     #[test]
@@ -2186,7 +2186,7 @@ mod tests {
     }
 
     /// The repeats a lane recorded is what its requested count is checked
-    /// against: a run that stopped after two of fifty is not the campaign it
+    /// against: a run that stopped after two of fifty is not the run it
     /// claims to be, and only the report can say so.
     #[test]
     fn the_recorded_repeats_are_the_most_any_test_ran() {
@@ -2230,7 +2230,7 @@ mod tests {
     }
 
     #[test]
-    fn positive_campaign_counts_and_inventory_case_limits_are_explicit() {
+    fn positive_run_counts_and_inventory_case_limits_are_explicit() {
         for count in [1, 50, usize::MAX] {
             validate_expected_count(count).expect("valid expected count");
         }

@@ -82,7 +82,7 @@ pub enum CoreCommand {
     Semver(semver::SemverArgs),
     /// Run workspace tests through `cargo nextest`.
     Test(test::TestArgs),
-    /// Run or independently verify a repeated-test evidence campaign.
+    /// Execute or independently verify a repeated-test evidence run.
     Stress {
         #[command(subcommand)]
         command: stress::StressCommand,

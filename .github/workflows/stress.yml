@@ -1,12 +1,12 @@
 name: Stress
 
 # GitHub owns authorization, immutable checkout identity, artifact transport,
-# and the trusted reporting boundary. The Rust campaign owns portable work.
+# and the trusted reporting boundary. The Rust side owns portable work.
 #
-# The campaign runs on a runner of its own, labelled `kithara-stress` instead
+# The stress run goes to a runner of its own, labelled `kithara-stress` instead
 # of the fleet's `kithara` rather than in addition to it: GitHub places a job
 # on any runner whose labels cover the request, so a runner carrying both
-# would also take ordinary lanes, and a campaign measuring flakes would be
+# would also take ordinary lanes, and a run measuring flakes would be
 # back to sharing the machine with whatever else was queued.
 on:
   workflow_call:
@@ -24,7 +24,7 @@ on:
         required: false
         type: string
       mode:
-        description: configured campaign mode; empty uses the project configuration
+        description: configured stress mode; empty uses the project configuration
         required: false
         type: string
   workflow_dispatch:
@@ -42,14 +42,14 @@ on:
         required: false
         type: string
       mode:
-        description: configured campaign mode; empty uses the project configuration
+        description: configured stress mode; empty uses the project configuration
         required: false
         type: string
 
-# The campaign queues against itself, not against fork CI. Sharing CI's group
-# was right while both drew on one pool of runners; now that the campaign has a
+# The run queues against itself, not against fork CI. Sharing CI's group
+# was right while both drew on one pool of runners; now that the run has a
 # runner of its own it is a way to lose runs, because a group admits one queued
-# entry and a campaign arriving behind a queued lane is cancelled outright
+# entry and a run arriving behind a queued lane is cancelled outright
 # rather than held.
 concurrency:
   group: stress-${{ github.repository }}
@@ -136,7 +136,7 @@ jobs:
           repository: ${{ github.repository }}
           ref: ${{ inputs.revision || github.sha }}
 
-      - name: Run the stress campaign
+      - name: Execute the stress run
         working-directory: controller
         env:
           CONTROLLER_SHA: ${{ job.workflow_sha }}
@@ -155,7 +155,7 @@ jobs:
           [[ -z "$COUNT" ]] || args+=(--count "$COUNT")
           # `--mode` repeats per lane; the input is a space-separated list, so
           # one flag carrying the whole string would name a lane that does not
-          # exist and fail the campaign at argument parsing.
+          # exist and fail the run at argument parsing.
           for mode in $MODE; do args+=(--mode "$mode"); done
           just ci stress "${args[@]}"
 
