@@ -406,6 +406,9 @@ pub struct TestLaneConfig {
     pub passthrough: String,
     pub program: String,
     pub default_features: Vec<String>,
+    /// Environment the lane runs with, so what the lane exercises is named by
+    /// the lane rather than by whatever the caller happened to export.
+    pub env: BTreeMap<String, String>,
     pub prefix_args: Vec<String>,
     pub suffix_args: Vec<String>,
 }

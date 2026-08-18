@@ -794,6 +794,7 @@ mod tests {
             suffix_args: vec!["--locked".to_owned()],
             feature_arg: "--features".to_owned(),
             features: vec!["snapshot-clock".to_owned()],
+            env: BTreeMap::new(),
         }
     }
 

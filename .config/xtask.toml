@@ -647,6 +647,7 @@ default_features = ["selenium"]
 suffix_args = ["selenium", "--", "--nocapture"]
 passthrough = "after-suffix"
 default_flash = false
+env = { KITHARA_SELENIUM_BROWSER = "firefox" }
 
 [perf]
 primary_lane = "flash-on-wreq"
