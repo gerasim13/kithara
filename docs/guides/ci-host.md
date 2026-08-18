@@ -224,6 +224,13 @@ is written to the exact head commit under the status context
 context on `main` and prevent direct pushes or bypasses; otherwise the verifier
 is advisory and an unverified commit can still reach `main`.
 
+A quarantine ref is addressed by the exact head and base pair it was judged
+for. Once `main` moves, the next attempt reserves against the new base and
+publishes a new ref, so nothing names the old branch again and nothing reads
+its pipeline. Those branches are removed on the following tick; the pipelines,
+jobs and artifacts they produced stay in GitLab's interface, which keys them by
+commit rather than by branch.
+
 A pull request that changes a CI control path is rejected before a pipeline is
 created. Port that change through a GitLab merge request instead, so the code
 that judges GitHub pull requests changes under GitLab review. Once a protected
