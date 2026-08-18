@@ -308,6 +308,11 @@ fn ephemeral_resource_state_tracks_fail_remove_and_lru_eviction() {
 fn disk_resource_state_tracks_processing_pins_and_asset_eviction() {
     let dir = tempdir().unwrap();
 
+    // One store per disk root, extra assets get scopes off it. A second
+    // `AssetStore` over the same directory is a second owner of
+    // `_index/pins.bin`: it hydrates its own copy at build time, and its flush
+    // hub later republishes that snapshot over the first store's unpin. See
+    // `crates/kithara-assets/CONTEXT.md`.
     let scope_a = AssetStore::builder()
         .backend(StorageBackend::Disk {
             root: (dir.path()).into(),
@@ -355,13 +360,8 @@ fn disk_resource_state_tracks_processing_pins_and_asset_eviction() {
     reopened.read_into(&mut processed).unwrap();
     assert_eq!(processed, vec![0x45, 0x75, 0x65]);
 
-    let scope_b = AssetStore::builder()
-        .backend(StorageBackend::Disk {
-            root: (dir.path()).into(),
-        })
-        .max_assets(2)
-        .layouts(literal_layouts())
-        .build()
+    let scope_b = scope_a
+        .store()
         .scope::<LiteralLayout>(&source("asset-b"))
         .expect("scope");
     let key_b = scope_b.key(&resource("segments/0001.bin")).unwrap();
@@ -387,13 +387,8 @@ fn disk_resource_state_tracks_processing_pins_and_asset_eviction() {
         "dropping the last user handle must eagerly unpin even while the store stays alive"
     );
 
-    let scope_c = AssetStore::builder()
-        .backend(StorageBackend::Disk {
-            root: (dir.path()).into(),
-        })
-        .max_assets(2)
-        .layouts(literal_layouts())
-        .build()
+    let scope_c = scope_a
+        .store()
         .scope::<LiteralLayout>(&source("asset-c"))
         .expect("scope");
     let key_c = scope_c.key(&resource("segments/0001.bin")).unwrap();
@@ -407,21 +402,12 @@ fn disk_resource_state_tracks_processing_pins_and_asset_eviction() {
     let res_c = res_c.commit(Some(3)).unwrap();
     drop(res_c);
 
-    let scope_a_probe = AssetStore::builder()
-        .backend(StorageBackend::Disk {
-            root: (dir.path()).into(),
-        })
-        .max_assets(2)
-        .layouts(literal_layouts())
-        .build()
-        .scope::<LiteralLayout>(&source("asset-a"))
-        .expect("scope");
-    assert_eq!(
-        scope_a_probe.store().resource_state(&key_a).unwrap(),
-        AssetResourceState::Missing
+    assert!(
+        !dir.path().join("asset-a").exists(),
+        "a third asset over max_assets(2) must reclaim the unpinned asset-a from disk"
     );
     assert_eq!(
-        scope_b.store().resource_state(&key_b).unwrap(),
+        scope_a.store().resource_state(&key_b).unwrap(),
         AssetResourceState::Committed { final_len: Some(3) }
     );
 }
