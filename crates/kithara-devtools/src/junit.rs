@@ -3,7 +3,7 @@
 use anyhow::{Context, Result, bail};
 
 const MAX_JUNIT_CASES: usize = 750_000;
-const MAX_CASE_OUTPUT_BYTES: usize = 8 * 1_024 * 1_024;
+pub(crate) const MAX_CASE_OUTPUT_BYTES: usize = 8 * 1_024 * 1_024;
 
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
@@ -15,6 +15,9 @@ pub struct CaseTiming {
     pub secs: f64,
     pub timestamp: Option<String>,
     pub output: String,
+    /// The retained output hit the per-case budget and lost its tail. The case
+    /// itself stays valid evidence; reports must name the truncation.
+    pub output_truncated: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -30,8 +33,9 @@ pub(crate) struct JunitReport {
 /// Fails when the document is not `XML`, a `testcase` identity is empty, a
 /// stress suite does not own its testcase, or a `time` attribute is missing,
 /// negative, non-finite, or not a number. A skipped stress testcase is also
-/// rejected because it is not per-iteration execution evidence. Testcase and
-/// retained-output limits reject evidence that cannot be analyzed safely.
+/// rejected because it is not per-iteration execution evidence. The testcase
+/// limit rejects the artifact; an oversized retained output only truncates its
+/// own case and marks it [`CaseTiming::output_truncated`].
 pub fn parse_junit(xml: &str) -> Result<Vec<CaseTiming>> {
     parse_junit_report(xml).map(|report| report.cases)
 }
@@ -92,8 +96,7 @@ pub(crate) fn parse_junit_report(xml: &str) -> Result<JunitReport> {
             .children()
             .any(|c| c.has_tag_name("failure") || c.has_tag_name("error"));
         let timestamp = node.attribute("timestamp").map(str::to_owned);
-        let output = failure_output(node)
-            .with_context(|| format!("retain failure output on {suite} {name}"))?;
+        let (output, output_truncated) = failure_output(node);
         cases.push(CaseTiming {
             name,
             suite,
@@ -102,6 +105,7 @@ pub(crate) fn parse_junit_report(xml: &str) -> Result<JunitReport> {
             secs,
             timestamp,
             output,
+            output_truncated,
         });
     }
     Ok(JunitReport {
@@ -118,13 +122,14 @@ fn validate_case_count(count: usize) -> Result<()> {
     Ok(())
 }
 
-fn failure_output(node: roxmltree::Node<'_, '_>) -> Result<String> {
+fn failure_output(node: roxmltree::Node<'_, '_>) -> (String, bool) {
     let mut output = String::new();
+    let mut truncated = false;
     for child in node
         .children()
         .filter(|child| child.has_tag_name("failure") || child.has_tag_name("error"))
     {
-        append_failure_description(&mut output, child)?;
+        truncated |= append_failure_description(&mut output, child);
     }
     for text in node
         .children()
@@ -133,18 +138,28 @@ fn failure_output(node: roxmltree::Node<'_, '_>) -> Result<String> {
         .map(str::trim)
         .filter(|text| !text.is_empty())
     {
-        append_output(&mut output, "\n", text)?;
+        truncated |= append_output(&mut output, "\n", text);
     }
-    Ok(output)
+    (output, truncated)
 }
 
-fn append_failure_description(output: &mut String, node: roxmltree::Node<'_, '_>) -> Result<()> {
+fn append_failure_description(output: &mut String, node: roxmltree::Node<'_, '_>) -> bool {
     let kind = node
         .attribute("type")
         .unwrap_or_else(|| node.tag_name().name());
     let message = node.attribute("message").unwrap_or_default().trim();
     let body = node.text().unwrap_or_default().trim();
+    // A Rust panic puts the same header in both: nextest lifts the first line
+    // of the body into `message`. Keeping both spent the retained output — and
+    // every signature derived from it — on saying the header twice, which
+    // pushed the assertion's own values past the width a report row has.
+    let message = if body.starts_with(message) {
+        ""
+    } else {
+        message
+    };
     let mut first = true;
+    let mut truncated = false;
     for part in [kind, message, body]
         .into_iter()
         .filter(|part| !part.is_empty())
@@ -155,26 +170,33 @@ fn append_failure_description(output: &mut String, node: roxmltree::Node<'_, '_>
         } else {
             ": "
         };
-        append_output(output, separator, part)?;
+        truncated |= append_output(output, separator, part);
     }
-    Ok(())
+    truncated
 }
 
-fn append_output(output: &mut String, separator: &str, text: &str) -> Result<()> {
+/// Appends within the per-case budget and drops the tail beyond it, reporting
+/// whether anything was dropped. One case's runaway output must not invalidate
+/// the artifact: the head — where the assertion text lives — stays evidence,
+/// and the whole lane keeps its other cases.
+fn append_output(output: &mut String, separator: &str, text: &str) -> bool {
     let separator = if output.is_empty() { "" } else { separator };
-    let new_len = output
-        .len()
-        .checked_add(separator.len())
-        .and_then(|length| length.checked_add(text.len()))
-        .context("testcase retained output length overflow")?;
-    if new_len > MAX_CASE_OUTPUT_BYTES {
-        bail!(
-            "testcase retained failure output exceeds the deterministic limit of {MAX_CASE_OUTPUT_BYTES} bytes"
-        );
+    let budget = MAX_CASE_OUTPUT_BYTES.saturating_sub(output.len());
+    if budget < separator.len() {
+        return true;
     }
     output.push_str(separator);
-    output.push_str(text);
-    Ok(())
+    let budget = budget - separator.len();
+    if text.len() <= budget {
+        output.push_str(text);
+        return false;
+    }
+    let mut cut = budget;
+    while !text.is_char_boundary(cut) {
+        cut -= 1;
+    }
+    output.push_str(&text[..cut]);
+    true
 }
 
 fn stress_suite(suite: &str) -> Option<(&str, usize)> {
@@ -215,6 +237,52 @@ mod tests {
     </testcase>
   </testsuite>
 </testsuites>"#;
+
+    /// What nextest writes for a failed `assert_eq!`: the panic header is
+    /// lifted into `message` and the body repeats it verbatim.
+    const PANIC: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="nextest-run" tests="1" failures="1">
+  <testsuite name="demo-tests::suite_light" tests="1" failures="1">
+    <testcase name="audio::warms_pool" classname="demo-tests::suite_light" time="0.536">
+      <failure message="thread 'audio::warms_pool' (971370) panicked at tests/demo.rs:166:5" type="test failure with exit code 101">thread 'audio::warms_pool' (971370) panicked at tests/demo.rs:166:5:
+assertion `left == right` failed: a warmed pool must serve decode-sized buffers without allocating
+  left: 0
+ right: 1
+stack backtrace:
+   0: __rustc::rust_begin_unwind</failure>
+    </testcase>
+  </testsuite>
+</testsuites>"#;
+
+    /// The header is worth keeping once. Kept twice it consumed the retained
+    /// output a report row can show, and what fell off the end was the only
+    /// part that says which defect this is: the assertion's own values.
+    #[test]
+    fn a_panic_header_lifted_into_the_message_is_not_kept_twice() {
+        let cases = parse_junit(PANIC).expect("parse junit");
+
+        let output = &cases[0].output;
+        assert_eq!(output.matches("panicked at").count(), 1, "{output}");
+        assert!(output.contains("left: 0"), "{output}");
+        assert!(output.contains("right: 1"), "{output}");
+    }
+
+    /// A message the body does NOT repeat still carries information, and
+    /// dropping it would lose the only description such a failure has.
+    #[test]
+    fn a_message_the_body_does_not_repeat_is_kept() {
+        let cases = parse_junit(&PANIC.replace(
+            "message=\"thread 'audio::warms_pool' (971370) panicked at tests/demo.rs:166:5\"",
+            "message=\"the runner killed it\"",
+        ))
+        .expect("parse junit");
+
+        assert!(
+            cases[0].output.contains("the runner killed it"),
+            "{}",
+            cases[0].output
+        );
+    }
 
     /// Retries buy nothing if a passed-on-retry case still reads as failed.
     #[test]
@@ -341,17 +409,50 @@ mod tests {
     }
 
     #[test]
-    fn testcase_and_retained_output_limits_are_inclusive() {
+    fn testcase_limit_is_inclusive() {
         validate_case_count(MAX_JUNIT_CASES).expect("case limit is inclusive");
         assert!(validate_case_count(MAX_JUNIT_CASES + 1).is_err());
+    }
 
-        let mut output = "x".repeat(MAX_CASE_OUTPUT_BYTES);
-        let error = append_output(&mut output, "\n", "y").expect_err("output must be bounded");
+    /// One case's runaway output loses its tail, never the artifact: the head
+    /// keeps the assertion text and the case reports the truncation.
+    #[test]
+    fn oversized_retained_output_is_truncated_not_rejected() {
+        let mut output = String::from("assert head");
+        let head = output.len();
 
-        assert!(
-            error.to_string().contains("deterministic limit"),
-            "{error:?}"
+        assert!(append_output(
+            &mut output,
+            "\n",
+            &"\u{1f980}".repeat(MAX_CASE_OUTPUT_BYTES)
+        ));
+        assert!(output.len() <= MAX_CASE_OUTPUT_BYTES);
+        assert!(output.is_char_boundary(output.len()), "cut on a boundary");
+        assert!(output.starts_with("assert head\n"), "head survives");
+        assert!(output.len() > head, "budget is spent, not abandoned");
+        assert!(!append_output(&mut String::new(), "\n", "small"));
+    }
+
+    #[test]
+    fn a_truncated_case_still_parses_and_is_named() {
+        let oversized = "y".repeat(MAX_CASE_OUTPUT_BYTES);
+        let xml = format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="nextest-run" tests="1" failures="1">
+  <testsuite name="demo-tests::suite_light" tests="1" failures="1">
+    <testcase name="offline::seek" classname="demo-tests::suite_light" time="0.2">
+      <failure type="test failure">boom</failure>
+      <system-out>{oversized}</system-out>
+    </testcase>
+  </testsuite>
+</testsuites>"#
         );
-        assert_eq!(output.len(), MAX_CASE_OUTPUT_BYTES);
+
+        let cases = parse_junit(&xml).expect("one noisy case must not erase the artifact");
+
+        assert_eq!(cases.len(), 1);
+        assert!(cases[0].output_truncated);
+        assert!(cases[0].output.starts_with("test failure"), "head survives");
+        assert!(cases[0].output.len() <= MAX_CASE_OUTPUT_BYTES);
     }
 }

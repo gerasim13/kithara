@@ -31,8 +31,9 @@ mod rtsan_gate {
     impl<F: Future> Future for RtsanChecked<F> {
         type Output = F::Output;
 
-        #[sanitize(realtime = "nonblocking")]
+        #[cfg_attr(not(rtsan_standalone), sanitize(realtime = "nonblocking"))]
         fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+            let _realtime = crate::rtsan::realtime_scope();
             self.project().fut.poll(cx)
         }
     }
@@ -114,25 +115,17 @@ mod tests {
         any::Any,
         future::Future,
         panic::{AssertUnwindSafe, catch_unwind},
-        sync::Once,
     };
 
-    use kithara_platform::time::{Duration, Instant};
+    use kithara_platform::{
+        no_block::force_panic_mode,
+        time::{Duration, Instant},
+    };
     use kithara_test_utils::kithara;
 
     const BUDGET_MS: u64 = 5;
     const SLEEP_MS: u64 = 1;
     const SPIN_MS: u64 = 50;
-
-    static PANIC_MODE: Once = Once::new();
-
-    fn force_panic_mode() {
-        PANIC_MODE.call_once(|| {
-            // SAFETY: these tests set one process-global mode to the same value before
-            // any no_block-watched poll runs in this test binary.
-            unsafe { std::env::set_var("KITHARA_NO_BLOCK", "panic") };
-        });
-    }
 
     fn run<F: Future<Output = ()>>(fut: F) {
         let rt = kithara_platform::tokio::runtime::Builder::new_current_thread()
@@ -182,7 +175,7 @@ mod tests {
 
     #[test]
     fn no_block_attr_panics_with_fn_path() {
-        force_panic_mode();
+        let _mode = force_panic_mode();
 
         let err = catch_unwind(AssertUnwindSafe(|| run(no_block_spin_panics())))
             .expect_err("over-budget no_block async fn must panic");
@@ -196,7 +189,7 @@ mod tests {
 
     #[test]
     fn allow_block_sync_fn_suppresses_forbid() {
-        force_panic_mode();
+        let _mode = force_panic_mode();
 
         let caught = catch_unwind(AssertUnwindSafe(|| run(sync_allow_block_passes())));
         assert!(caught.is_ok());
@@ -204,7 +197,7 @@ mod tests {
 
     #[test]
     fn allow_block_async_fn_suppresses_forbid() {
-        force_panic_mode();
+        let _mode = force_panic_mode();
 
         let caught = catch_unwind(AssertUnwindSafe(|| run(async_allow_block_passes())));
         assert!(caught.is_ok());

@@ -48,11 +48,7 @@ async fn run_analysis(
     last
 }
 
-#[kithara::test(
-    tokio,
-    timeout(Duration::from_secs(2)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "2")
-)]
+#[kithara::test(tokio, timeout(Duration::from_secs(2)), hang_timeout_secs(2))]
 async fn runner_silent_wav_yields_all_zero_envelope() {
     let server = TestServerHelper::new().await;
     let url = server.silence(&silence_wav_spec()).await;
@@ -87,11 +83,7 @@ async fn runner_silent_wav_yields_all_zero_envelope() {
     );
 }
 
-#[kithara::test(
-    tokio,
-    timeout(Duration::from_secs(2)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "2")
-)]
+#[kithara::test(tokio, timeout(Duration::from_secs(2)), hang_timeout_secs(2))]
 async fn runner_returns_nothing_when_cancelled_upfront() {
     let server = TestServerHelper::new().await;
     let url = server.silence(&silence_wav_spec()).await;

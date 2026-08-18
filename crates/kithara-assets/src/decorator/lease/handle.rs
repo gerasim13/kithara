@@ -198,6 +198,14 @@ where
         self.cleanup.disarm();
     }
 
+    fn abandon(mut self) {
+        self.inner.abandon();
+        // Disarmed rather than swept: the hook declines to remove only a
+        // *committed* resource, so here it would delete the partial bytes the
+        // successor is still writing.
+        self.cleanup.disarm();
+    }
+
     fn reader(&self) -> LeaseReader<W::Reader, L> {
         LeaseReader::new(
             self.inner.reader(),

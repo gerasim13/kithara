@@ -196,6 +196,15 @@ pub trait WriteSide: Send + Sync + Debug + 'static {
     /// Mark the resource failed, waking any waiting reader.
     fn fail(self, reason: String);
 
+    /// Release the writer without marking the resource failed and without
+    /// removing what it wrote.
+    ///
+    /// For a caller whose write was cancelled and who knows a successor is
+    /// already refilling the same resource: a failure stamp or a cleanup sweep
+    /// would hit that successor, not this writer. Every other release keeps
+    /// both — see [`fail`](Self::fail) and the drop paths.
+    fn abandon(self);
+
     /// A clone-able raw-write handle for streaming pre-processing bytes into
     /// this writer's generation (see [`RawWriteHandle`]). Lets a `'static`
     /// raw-write closure write while the writer keeps sole ownership of

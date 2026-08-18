@@ -24,11 +24,12 @@ pub(crate) struct CiPins {
     pub(crate) android_platform_version: u32,
     pub(crate) brew_casks: Vec<String>,
     pub(crate) brew_formulae: Vec<String>,
-    /// Chrome for Testing publishes no Linux arm64 archive, so the image
-    /// carries the pinned pair on amd64 only.
-    pub(crate) chrome_for_testing_linux_amd64_sha256: String,
-    pub(crate) chrome_for_testing_version: String,
-    pub(crate) chromedriver_linux_amd64_sha256: String,
+    /// Chromium the browser lane may run, and the version its `chromedriver` must
+    /// report. The image installs both from Debian as one version-matched pair,
+    /// so this pin is a review gate on what a rebuild brought in rather than a
+    /// download coordinate: a mismatch fails the lane by name instead of letting
+    /// a browser change alter test results unnoticed.
+    pub(crate) chromium_version: String,
     pub(crate) cmake_linux_amd64_sha256: String,
     pub(crate) cmake_linux_arm64_sha256: String,
     pub(crate) cmake_version: String,
@@ -60,6 +61,12 @@ pub(crate) struct CiPins {
     pub(crate) macos_guest_build: String,
     pub(crate) msrv_toolchain: String,
     pub(crate) nightly_toolchain: String,
+    pub(crate) rtsan_linux_amd64_sha256: String,
+    pub(crate) rtsan_linux_arm64_sha256: String,
+    /// Release tag of the prebuilt realtime-sanitizer runtimes the stable lane
+    /// links. It tracks the LLVM the libraries were cut from, not a toolchain
+    /// pinned here.
+    pub(crate) rtsan_version: String,
     pub(crate) rustup_version: String,
     pub(crate) rustup_windows_sha256: String,
     pub(crate) stable_toolchain: String,
@@ -100,10 +107,7 @@ impl CiPins {
                 self.android_commandline_tools_version.as_str(),
             ),
             ("android_ndk_version", self.android_ndk_version.as_str()),
-            (
-                "chrome_for_testing_version",
-                self.chrome_for_testing_version.as_str(),
-            ),
+            ("chromium_version", self.chromium_version.as_str()),
             ("cmake_version", self.cmake_version.as_str()),
             (
                 "expected_xcode_version",
@@ -124,6 +128,7 @@ impl CiPins {
             ("macos_guest_build", self.macos_guest_build.as_str()),
             ("msrv_toolchain", self.msrv_toolchain.as_str()),
             ("nightly_toolchain", self.nightly_toolchain.as_str()),
+            ("rtsan_version", self.rtsan_version.as_str()),
             ("rustup_version", self.rustup_version.as_str()),
             ("stable_toolchain", self.stable_toolchain.as_str()),
             ("windows_eval_iso_url", self.windows_eval_iso_url.as_str()),
@@ -172,14 +177,6 @@ impl CiPins {
                 self.android_commandline_tools_sha256.as_str(),
             ),
             (
-                "chrome_for_testing_linux_amd64_sha256",
-                self.chrome_for_testing_linux_amd64_sha256.as_str(),
-            ),
-            (
-                "chromedriver_linux_amd64_sha256",
-                self.chromedriver_linux_amd64_sha256.as_str(),
-            ),
-            (
                 "cmake_linux_arm64_sha256",
                 self.cmake_linux_arm64_sha256.as_str(),
             ),
@@ -209,6 +206,14 @@ impl CiPins {
                 self.gitleaks_linux_arm64_sha256.as_str(),
             ),
             ("linux_base_digest", self.linux_base_digest.as_str()),
+            (
+                "rtsan_linux_amd64_sha256",
+                self.rtsan_linux_amd64_sha256.as_str(),
+            ),
+            (
+                "rtsan_linux_arm64_sha256",
+                self.rtsan_linux_arm64_sha256.as_str(),
+            ),
             ("rustup_windows_sha256", self.rustup_windows_sha256.as_str()),
             (
                 "windows_eval_iso_sha256",

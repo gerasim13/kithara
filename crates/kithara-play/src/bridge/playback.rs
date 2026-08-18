@@ -65,6 +65,27 @@ impl PlaybackShared {
             .wrapping_add(1)
     }
 
+    /// Withdraw an epoch whose `PlayerCmd::Seek` never reached the processor.
+    ///
+    /// Publishing promises the processor a re-base, and a track holds its
+    /// natural end while a published seek outranks it. A send that fails leaves
+    /// nothing to carry the promise, so it has to be taken back or the track
+    /// would hold that end forever.
+    ///
+    /// Withdrawal succeeds only while this epoch is still the published one: a
+    /// newer seek has its own command in flight, and rolling back over it would
+    /// strand that one instead.
+    pub fn withdraw_seek_epoch(&self, epoch: u64) {
+        self.seek_epoch
+            .compare_exchange(
+                epoch,
+                epoch.wrapping_sub(1),
+                Ordering::AcqRel,
+                Ordering::Relaxed,
+            )
+            .ok();
+    }
+
     /// Read every live playback scalar once. See [`PlaybackSnapshot`] for what the fields do and do
     /// not guarantee about each other.
     #[must_use]
@@ -106,6 +127,23 @@ mod tests {
         assert_eq!(playback.next_seek_epoch(), 1);
         assert_eq!(playback.next_seek_epoch(), 2);
         assert_eq!(playback.next_seek_epoch(), 3);
+    }
+
+    #[kithara::test]
+    fn withdrawing_the_newest_epoch_unpublishes_the_seek() {
+        let playback = PlaybackShared::default();
+        let epoch = playback.next_seek_epoch();
+        playback.withdraw_seek_epoch(epoch);
+        assert_eq!(playback.seek_epoch.load(Ordering::SeqCst), 0);
+    }
+
+    #[kithara::test]
+    fn withdrawing_an_overtaken_epoch_leaves_the_newer_seek_published() {
+        let playback = PlaybackShared::default();
+        let overtaken = playback.next_seek_epoch();
+        let newest = playback.next_seek_epoch();
+        playback.withdraw_seek_epoch(overtaken);
+        assert_eq!(playback.seek_epoch.load(Ordering::SeqCst), newest);
     }
 
     #[kithara::test]

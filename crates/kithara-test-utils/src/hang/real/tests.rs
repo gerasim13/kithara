@@ -360,6 +360,154 @@ mod dump_tests {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+mod panic_dump_tests {
+    use std::{
+        panic::{AssertUnwindSafe, catch_unwind},
+        path::PathBuf,
+    };
+
+    use kithara_platform::{thread::sleep, time::Duration};
+    use tracing_subscriber::layer::SubscriberExt;
+
+    use super::super::{HangDetector, install_panic_dump, suppress_expected_panic_dumps};
+    use crate::kithara;
+
+    /// Panic dumps land where `resolve_dump_dir` sends them with no explicit
+    /// dir and no env override: the system temp directory. Filenames carry the
+    /// pid, and each test filters by its own unique panic message.
+    fn panic_dumps_containing(needle: &str) -> Vec<PathBuf> {
+        let pid = format!("-{}-", std::process::id());
+        std::fs::read_dir(std::env::temp_dir())
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|entry| {
+                let name = entry.file_name().to_string_lossy().into_owned();
+                name.starts_with("kithara-hang-panic-") && name.contains(&pid)
+            })
+            .map(|entry| entry.path())
+            .filter(|path| std::fs::read_to_string(path).is_ok_and(|body| body.contains(needle)))
+            .collect()
+    }
+
+    #[kithara::test]
+    fn assertion_panic_records_a_dump_with_the_flight_tail() {
+        install_panic_dump();
+        let marker = format!("flight-marker-{}", std::process::id());
+        let probe_marker = format!("probe-marker-{}", std::process::id());
+        let subscriber = tracing_subscriber::registry().with(crate::flight::layer());
+        tracing::subscriber::with_default(subscriber, || {
+            tracing::debug!(target: "kithara_panic_dump_test", "{marker}");
+            tracing::trace!(
+                target: "kithara_panic_dump_test_probe",
+                probe = probe_marker.as_str(),
+                "probe firing"
+            );
+        });
+
+        let unique = format!("panic-dump-probe-{}", std::process::id());
+        let result = catch_unwind(AssertUnwindSafe(|| panic!("{unique} boom")));
+        assert!(result.is_err());
+
+        let dumps = panic_dumps_containing(&unique);
+        assert!(!dumps.is_empty(), "unexpected panic must write a dump");
+        let body = std::fs::read_to_string(&dumps[0]).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(parsed["label"], "panic");
+        let diagnostic = parsed["diagnostic"].as_str().unwrap();
+        assert!(diagnostic.contains("tests.rs:"), "{diagnostic}");
+        let events = parsed["flight_events"].as_array().unwrap();
+        assert!(
+            events
+                .iter()
+                .any(|event| event.as_str().is_some_and(|line| line.contains(&marker))),
+            "dump must carry the flight-recorder tail"
+        );
+        let probes = parsed["flight_probes"].as_array().unwrap();
+        assert!(
+            probes.iter().any(|event| {
+                event
+                    .as_str()
+                    .is_some_and(|line| line.contains(&probe_marker))
+            }),
+            "dump must carry the probe tail"
+        );
+        for dump in dumps {
+            let _ = std::fs::remove_file(dump);
+        }
+    }
+
+    // Real clock: the detector's deadline and the sleep must agree (see the
+    // detector contract tests above).
+    #[kithara::test(native, flash(false))]
+    fn watchdog_panic_is_not_duplicated_as_a_panic_dump() {
+        install_panic_dump();
+        let dir: PathBuf = std::env::temp_dir().join(format!(
+            "kithara-hang-panic-suppress-test-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let dir_for_closure = dir.clone();
+
+        let marker = format!("watchdog-flight-marker-{}", std::process::id());
+        let subscriber = tracing_subscriber::registry().with(crate::flight::layer());
+        tracing::subscriber::with_default(subscriber, || {
+            tracing::debug!(target: "kithara_panic_dump_test", "{marker}");
+        });
+
+        let result = catch_unwind(AssertUnwindSafe(move || {
+            let mut detector: HangDetector =
+                HangDetector::new("tests.panic_suppress", Duration::from_millis(1))
+                    .with_dump_dir(dir_for_closure);
+            detector.tick();
+            sleep(Duration::from_millis(10));
+            detector.tick();
+        }));
+        assert!(result.is_err(), "detector must panic past deadline");
+
+        let own_dumps: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .collect();
+        assert_eq!(
+            own_dumps.len(),
+            1,
+            "the watchdog writes exactly its own dump"
+        );
+        assert!(
+            panic_dumps_containing("tests.panic_suppress").is_empty(),
+            "the watchdog panic must not produce a second `panic` dump"
+        );
+        let body = std::fs::read_to_string(&own_dumps[0]).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert!(
+            parsed["flight_events"].as_array().is_some_and(|events| {
+                events
+                    .iter()
+                    .any(|event| event.as_str().is_some_and(|line| line.contains(&marker)))
+            }),
+            "the watchdog dump must carry the flight-recorder tail"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[kithara::test]
+    fn expected_panics_are_not_recorded() {
+        install_panic_dump();
+        suppress_expected_panic_dumps();
+
+        let unique = format!("expected-panic-probe-{}", std::process::id());
+        let result = catch_unwind(AssertUnwindSafe(|| panic!("{unique} expected")));
+        assert!(result.is_err());
+
+        assert!(
+            panic_dumps_containing(&unique).is_empty(),
+            "an expected panic must not be recorded as evidence"
+        );
+    }
+}
+
 struct Consts;
 impl Consts {
     const LOOP_BREAK_COUNT_2: i32 = 2;

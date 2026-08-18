@@ -97,7 +97,7 @@ pub(super) fn append(
     unreadable == 0 && !read.stopped_early
 }
 
-fn normalize(text: &str) -> String {
+pub(super) fn normalize(text: &str) -> String {
     static DURATION: LazyLock<Regex> = LazyLock::new(|| {
         Regex::new(r"\b\d+(?:\.\d+)?(?:ns|us|\x{00B5}s|ms|s)\b").expect("duration regex")
     });
@@ -119,6 +119,7 @@ mod tests {
             secs: 0.1,
             timestamp: None,
             output: String::new(),
+            output_truncated: false,
         }
     }
 

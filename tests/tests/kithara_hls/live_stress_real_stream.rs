@@ -313,7 +313,7 @@ async fn next_chunk(audio: &mut Audio<Stream<Hls>>, stage: &str) -> Option<PcmCh
     browser,
     serial,
     timeout(Consts::browser_timeout(60, 75)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "3"),
+    hang_timeout_secs(3),
     tracing("kithara_audio=info,kithara_hls=info,kithara_stream=info")
 )]
 async fn live_real_drm_playback_smoke() {
@@ -385,7 +385,7 @@ async fn live_real_drm_playback_smoke() {
     browser,
     serial,
     timeout(Consts::browser_timeout(30, 120)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "3"),
+    hang_timeout_secs(3),
     tracing(
         "kithara_audio=info,kithara::audio::pipeline::source=debug,kithara_hls=debug,kithara_stream=debug"
     )
@@ -633,7 +633,7 @@ async fn live_ephemeral_revisit_sequence_regression(
     native,
     serial,
     timeout(Duration::from_secs(90)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "3"),
+    hang_timeout_secs(3),
     tracing("kithara_audio=info,kithara_hls=info,kithara_stream=info")
 )]
 #[case::hls("hls/master.m3u8", "HLS")]
@@ -685,7 +685,7 @@ async fn live_real_stream_fixed_seek_window_regression(
     native,
     serial,
     timeout(Duration::from_secs(30)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "3"),
+    hang_timeout_secs(3),
     tracing("kithara_audio=info,kithara_hls=info,kithara_stream=info")
 )]
 #[case::hls("hls/master.m3u8", "HLS")]
@@ -733,7 +733,7 @@ async fn live_real_stream_random_seek_prefix_regression(
     native,
     serial,
     timeout(Duration::from_secs(90)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "3"),
+    hang_timeout_secs(3),
     tracing(
         "kithara_audio=info,kithara::audio::pipeline::source=debug,kithara_hls=debug,kithara_stream=debug"
     )
@@ -811,7 +811,7 @@ async fn live_real_stream_seek_resume_native(#[case] path: &str, #[case] label: 
     browser,
     serial,
     timeout(Consts::browser_timeout(60, 360)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "3"),
+    hang_timeout_secs(3),
     tracing("kithara_audio=info,kithara_hls=info")
 )]
 #[case::hls_ephemeral("hls/master.m3u8", "HLS", true)]
@@ -1158,7 +1158,7 @@ async fn live_stress_real_stream_seek_read_cache(
     browser,
     serial,
     timeout(Consts::browser_timeout(30, 120)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "3"),
+    hang_timeout_secs(3),
     tracing("kithara_audio=info,kithara_hls=info,kithara_stream=info")
 )]
 #[case::hls("hls/master.m3u8", "HLS")]
@@ -1234,7 +1234,7 @@ async fn live_ephemeral_small_cache_playback(#[case] path: &str, #[case] label: 
     browser,
     serial,
     timeout(Consts::browser_timeout(30, 120)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "3"),
+    hang_timeout_secs(3),
     tracing("kithara_audio=info,kithara_hls=info,kithara_stream=info")
 )]
 #[case::hls_sw("hls/master.m3u8", "HLS", DecoderBackend::Symphonia)]

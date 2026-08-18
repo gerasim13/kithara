@@ -1,15 +1,17 @@
 #![forbid(unsafe_code)]
 
-use std::{collections::BTreeMap, fs::OpenOptions, path::PathBuf, sync::OnceLock};
-
-use dashmap::DashMap;
-use kithara_platform::{
-    CancelToken,
-    sync::{Arc, Mutex},
+use std::{
+    collections::{BTreeMap, HashMap},
+    fs::OpenOptions,
+    path::PathBuf,
+    sync::OnceLock,
 };
+
+use arc_swap::ArcSwap;
+use kithara_platform::{CancelToken, sync::Arc};
 use kithara_storage::{Atomic, MmapDriver, StorageError};
 
-use super::core::{Availability, AvailabilityIndex, InnerIndex};
+use super::core::{Availability, AvailabilityIndex, Entry, InnerIndex};
 use crate::{
     error::{AssetsError, AssetsResult},
     index::persistence::{
@@ -81,9 +83,9 @@ impl AvailabilityIndex {
             }
         };
 
+        let mut tree = HashMap::clone(&self.inner.assets.load());
         for (root, asset_record) in archived.assets.iter() {
-            let root_str = root.as_str().to_string();
-            let asset_map = Arc::new(DashMap::new());
+            let mut asset_map = HashMap::new();
 
             for (path, res_record) in asset_record.resources.iter() {
                 let mut avail = Availability::default();
@@ -100,11 +102,15 @@ impl AvailabilityIndex {
                     None => avail.committed = res_record.is_committed,
                 }
 
-                asset_map.insert(path.as_str().to_string(), Arc::new(Mutex::new(avail)));
+                asset_map.insert(
+                    path.as_str().to_string(),
+                    Entry::new(ArcSwap::from_pointee(avail)),
+                );
             }
 
-            self.inner.assets.insert(root_str, asset_map);
+            tree.insert(root.as_str().to_string(), Arc::new(asset_map));
         }
+        self.inner.assets.store(Arc::new(tree));
         Ok(())
     }
 
@@ -159,41 +165,38 @@ fn write_aggregate(
     res: &Atomic<MmapDriver>,
     durable: bool,
 ) -> AssetsResult<()> {
-    let assets = inner
-        .assets
+    let tree = inner.assets.load();
+    let assets = tree
         .iter()
-        .filter_map(|entry| {
-            let resources: BTreeMap<String, ResourceAvailabilityFile> = entry
-                .value()
+        .filter_map(|(root, asset)| {
+            let resources: BTreeMap<String, ResourceAvailabilityFile> = asset
                 .iter()
-                .filter_map(|res_entry| {
-                    let record = {
-                        let avail = res_entry.value().lock();
-                        // The crash-recovery snapshot is a COMMITTED-only
-                        // contract: an uncommitted partial write (whose `.tmp`
-                        // was never renamed) must be invisible after a rebuild,
-                        // matching the aggregate probes' verdict. Persisting
-                        // its in-flight ranges would let a flush that races the
-                        // writer's cleanup resurrect a partial segment on the
-                        // next open — corrupting availability and a real crash
-                        // recovery alike. The live in-memory ranges still serve
-                        // in-flight readers; only the persisted snapshot filters.
-                        if !avail.committed {
-                            return None;
-                        }
-                        ResourceAvailabilityFile {
-                            ranges: avail.ranges.iter().map(|r| (r.start, r.end)).collect(),
-                            final_len: avail.final_len,
-                            is_committed: avail.committed,
-                        }
+                .filter_map(|(path, entry)| {
+                    let avail = entry.load();
+                    // The crash-recovery snapshot is a COMMITTED-only
+                    // contract: an uncommitted partial write (whose `.tmp`
+                    // was never renamed) must be invisible after a rebuild,
+                    // matching the aggregate probes' verdict. Persisting
+                    // its in-flight ranges would let a flush that races the
+                    // writer's cleanup resurrect a partial segment on the
+                    // next open — corrupting availability and a real crash
+                    // recovery alike. The live in-memory ranges still serve
+                    // in-flight readers; only the persisted snapshot filters.
+                    if !avail.committed {
+                        return None;
+                    }
+                    let record = ResourceAvailabilityFile {
+                        ranges: avail.ranges.iter().map(|r| (r.start, r.end)).collect(),
+                        final_len: avail.final_len,
+                        is_committed: avail.committed,
                     };
-                    Some((res_entry.key().clone(), record))
+                    Some((path.clone(), record))
                 })
                 .collect();
             if resources.is_empty() {
                 return None;
             }
-            Some((entry.key().clone(), AssetAvailabilityFile { resources }))
+            Some((root.clone(), AssetAvailabilityFile { resources }))
         })
         .collect();
     let file = AvailabilityFile { assets, version: 1 };

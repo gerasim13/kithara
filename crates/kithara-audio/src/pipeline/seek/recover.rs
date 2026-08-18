@@ -71,6 +71,9 @@ impl SeekRecovery {
                 .readiness
                 .source_park(ctx.stream, phase)
                 .unwrap_or(WaitingReason::Waiting);
+            if reason == WaitingReason::Waiting {
+                crate::pipeline::track::waiting_branch!("seek_recover_interrupted");
+            }
             return SeekTransition::Wait {
                 reason,
                 context: wait,

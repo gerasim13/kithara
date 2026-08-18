@@ -1,6 +1,10 @@
 use std::fmt;
 
-use super::{FlashInner, Registry, sched::WaitKind, wake::Wake};
+use super::{
+    FlashInner, Registry,
+    sched::{Entry, WaitKind},
+    wake::Wake,
+};
 
 /// Append the diagnostic detail of one parked waiter to `f`: the real async
 /// primitive behind a `Condvar(CvId)` waiter (kind + creation site, recorded by
@@ -29,6 +33,25 @@ fn write_waiter_detail(
         write!(f, " task={task_id} spawned_at={loc}")?;
     }
     Ok(())
+}
+
+/// Whether a deadline-less waiter is PINNING quiescence right now — the only
+/// case where its parking stack is a diagnosis rather than noise (a flash test
+/// parks hundreds of these legitimately). One test per waiter class:
+///
+/// - an ASYNC waiter whose task still holds an `active_async` slot: the clock
+///   may not advance past a counted task, and nothing but a signal for this
+///   waiter can release it;
+/// - a SYNC waiter parked from inside an async poll (its thread is `bridged`):
+///   while it waits, every task that thread owes a poll is stranded.
+fn pins_quiescence(entry: &Entry, reg: &Registry) -> bool {
+    if let Some((task_id, _)) = entry.wake.task() {
+        return reg.active_async_holders.contains_key(&task_id);
+    }
+    entry
+        .parked
+        .as_ref()
+        .is_some_and(|p| reg.bridged.contains(&p.thread))
 }
 
 /// Diagnostic snapshot of the engine for hang dumps: counters, who pins
@@ -64,7 +87,20 @@ impl fmt::Display for FlashInner {
         // currently `Running` (`active` may exceed the list by a reserved-but-
         // unclaimed slot or an in-flight wake bump, which carry no thread yet).
         for (id, loc) in &s.registry.active_async_holders {
-            writeln!(f, "  active_async holder task={id} spawned_at={loc}")?;
+            write!(f, "  active_async holder task={id} spawned_at={loc}")?;
+            // The gate state and poll count say HOW the task pins the clock: a
+            // climbing count is a task spinning through wake-poll-park, while a
+            // `Runnable` gate whose count stopped is a task the runtime never
+            // re-polled after a wake.
+            if let Some(diag) = s.registry.task_diag.get(id) {
+                write!(f, " state={:?} polls={}", diag.state.load(), diag.polls())?;
+                // WHICH thread owes this task its next poll. Against `bridged`
+                // below it says whether that thread can currently give it one.
+                if let Some(driver) = diag.driver() {
+                    write!(f, " driver={driver:?}")?;
+                }
+            }
+            writeln!(f)?;
         }
         for (key, holder) in &s.registry.active_sync_holders {
             writeln!(
@@ -88,7 +124,35 @@ impl fmt::Display for FlashInner {
         for (id, entry) in &s.sched.indef {
             write!(f, "  indef id={id:?} kind={:?}", entry.kind)?;
             write_waiter_detail(f, &entry.kind, &entry.wake, &s.registry)?;
+            // WHICH thread parked this deadline-less waiter — for a SYNC waiter
+            // only, where it is the parked thread itself (an async waiter prints
+            // `task=` above instead, its poller being incidental). Against
+            // `bridged` below it separates a wait taken by a dedicated thread
+            // (harmless: it polls nothing) from one taken mid-poll, which
+            // strands every task that thread drives.
+            if let Some(parked) = entry
+                .parked
+                .as_ref()
+                .filter(|_| entry.wake.task().is_none())
+            {
+                write!(f, " thread={:?}", parked.thread)?;
+            }
+            // A dump lists every parked waiter; this marks the ones the clock is
+            // actually waiting on, so the reader does not have to re-derive the
+            // pin from the counters. Printed in EVERY lane — it needs no env var.
+            let pins = pins_quiescence(entry, &s.registry);
+            if pins {
+                write!(f, " pins_clock")?;
+            }
             writeln!(f)?;
+            // The stack that parked, only for a waiter that pins the clock and
+            // only when `KITHARA_FLASH_SYNC_BT` was set: for that waiter it is
+            // the whole diagnosis, and for every other one it is noise.
+            if let Some(bt) = entry.parked.as_ref().and_then(|p| p.stack.as_ref())
+                && pins
+            {
+                writeln!(f, "    parked at:\n{bt}")?;
+            }
         }
         // Every engine-backed async primitive that recorded its provenance
         // (`describe_cvid`, under `KITHARA_FLASH_SYNC_TRACE`), so async primitives
@@ -104,6 +168,12 @@ impl fmt::Display for FlashInner {
                     d.created_on.as_deref().unwrap_or("<unnamed>"),
                 )?;
             }
+        }
+        // Threads blocked on the engine from inside an async poll: they poll
+        // nothing while listed, so a task whose `driver` is here is waiting for
+        // a poll that cannot come until the wait returns.
+        if !s.registry.bridged.is_empty() {
+            writeln!(f, "  bridged={:?}", s.registry.bridged)?;
         }
         if !s.sched.unpark_pending.is_empty() {
             writeln!(f, "  unpark_pending={:?}", s.sched.unpark_pending)?;

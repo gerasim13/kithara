@@ -30,6 +30,8 @@ An async writer and one or more sync readers share a resource: the downloader wr
 
 Neither driver evicts: `valid_window()` is `None`, so a published committed snapshot implies gap-free coverage of `[0, committed_len)` and `contains_range` takes a lock-free fast path.
 
+Lock-free is only half of what the produce core needs from `contains_range`: an active resource answers from the `available_snapshot` generation, `write_at` publishes a new one on every write, and a read racing that write can end up the *last* owner of the replaced generation — freeing a range tree on the audio thread (`RTSan`: unsafe-library-call in `free`). So a read never drops the snapshot it loaded: it parks the reference in the resource's retire bin, and the write side (`write_at`, `commit`/`seal`) drains the bin and pays the frees. A full bin leaks rather than freeing on the reader, which can only happen while writers are idle — exactly when no generation is being replaced.
+
 Both option types are `#[non_exhaustive]` `bon` builders: `MmapOptions::for_path(path)` (then `mode` / `initial_len`) and `MemOptions::builder()` (`pool`, `initial_data`, `capacity`).
 
 ## Chunked atomic claim

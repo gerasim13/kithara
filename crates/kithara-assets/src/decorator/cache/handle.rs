@@ -140,6 +140,7 @@ impl<W: WriteSide> WriteSide for CachedWriter<W> {
 
     delegate::delegate! {
         to self.inner {
+            fn abandon(self);
             fn fail(self, reason: String);
             fn raw_write_handle(&self) -> RawWriteHandle;
             fn write_at(&self, offset: u64, data: &[u8]) -> StorageResult<()>;

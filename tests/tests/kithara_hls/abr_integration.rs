@@ -118,7 +118,7 @@ fn test_variants_from_master_structure(parsed_master_playlist: ParsedMaster) {
     assert_eq!(variants[2].variant_index.get(), 2);
 }
 
-#[kithara::test(timeout(Duration::from_secs(5)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
+#[kithara::test(timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
 fn test_abr_controller_async_usage() {
     let controller = AbrController::new(AbrSettings::default());
     // Default settings seed an initial throughput estimate (see

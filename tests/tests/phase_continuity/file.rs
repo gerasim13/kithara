@@ -343,7 +343,8 @@ fn frames_for_duration_rounded(sample_rate: u32, duration: Duration) -> u64 {
     native,
     serial,
     timeout(Duration::from_secs(25)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+    hang_timeout_secs(1),
+    tracing("kithara_audio=debug,kithara_decode=debug,kithara_stream=debug")
 )]
 #[case::mp3_symphonia(SignalFormat::Mp3, DecoderBackend::Symphonia, Some(320_000))]
 #[cfg_attr(
@@ -367,7 +368,8 @@ async fn phase_continuity_file_local_socket_free(
     native,
     serial,
     timeout(Duration::from_secs(25)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+    hang_timeout_secs(1),
+    tracing("kithara_audio=debug,kithara_decode=debug,kithara_stream=debug")
 )]
 async fn phase_continuity_file_apple_fused_src_44k_to_host_48k() {
     local_apple_fused_run_case().await;
@@ -561,7 +563,8 @@ fn write_wav_mono_f32(path: &std::path::Path, samples: &[f32], sample_rate: u32)
     native,
     serial,
     timeout(Duration::from_secs(20)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+    hang_timeout_secs(1),
+    tracing("kithara_audio=debug,kithara_decode=debug,kithara_stream=debug")
 )]
 #[ignore = "diagnostic: writes /tmp/aac_dump/fixture_raw.{aac,m4a}; run with --run-ignored"]
 async fn dump_fixture_raw_bytes() {
@@ -601,7 +604,8 @@ async fn dump_fixture_raw_bytes() {
     native,
     serial,
     timeout(Duration::from_secs(30)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+    hang_timeout_secs(1),
+    tracing("kithara_audio=debug,kithara_decode=debug,kithara_stream=debug")
 )]
 #[ignore = "diagnostic: writes /tmp/aac_dump/*.wav for offline listening; run with --run-ignored"]
 async fn dump_aac_for_listening() {
@@ -670,7 +674,8 @@ async fn dump_aac_for_listening() {
     native,
     serial,
     timeout(Duration::from_secs(30)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+    hang_timeout_secs(1),
+    tracing("kithara_audio=debug,kithara_decode=debug,kithara_stream=debug")
 )]
 #[case::aac_128k(SignalFormat::Aac, 128_000)]
 #[case::aac_192k(SignalFormat::Aac, 192_000)]
@@ -772,7 +777,8 @@ async fn run_codec_compare(
     native,
     serial,
     timeout(Duration::from_secs(30)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+    hang_timeout_secs(1),
+    tracing("kithara_audio=debug,kithara_decode=debug,kithara_stream=debug")
 )]
 #[case::mp3_vs_wav_symphonia(SignalFormat::Mp3, SignalFormat::Wav, DecoderBackend::Symphonia, None)]
 #[case::aac_vs_wav_symphonia(SignalFormat::Aac, SignalFormat::Wav, DecoderBackend::Symphonia, None)]
@@ -879,7 +885,8 @@ async fn codec_distortion_profile(
     native,
     serial,
     timeout(Duration::from_secs(25)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+    hang_timeout_secs(1),
+    tracing("kithara_audio=debug,kithara_decode=debug,kithara_stream=debug")
 )]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
@@ -1051,7 +1058,8 @@ fn first_signal_window_phase(
     native,
     serial,
     timeout(Duration::from_secs(25)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+    hang_timeout_secs(1),
+    tracing("kithara_audio=debug,kithara_decode=debug,kithara_stream=debug")
 )]
 #[case::aac_symphonia(DecoderBackend::Symphonia)]
 #[cfg_attr(

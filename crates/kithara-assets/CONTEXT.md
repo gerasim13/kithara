@@ -153,9 +153,18 @@ aggregate `AvailabilityIndex` keyed by the `asset_root` and relative path alread
 - **Updated** by a `ScopedAvailabilityObserver` attached to every resource opened through the base
   stores: `write_at` fires `on_write(range)`, a successful `commit(Some(len))` fires
   `on_commit(len)`, and opening a pre-existing committed file seeds `0..final_len`.
-- **Queried** aggregate-only: no handle-cache mutex, no filesystem call. A resource the aggregate
-  does not know is absent and gets refetched — the same verdict `is_confirmed` gives the acquire
-  path. `resource_state` is the control-side inspection API and may block.
+- **Queried** aggregate-only: no handle-cache mutex, no filesystem call, **and no lock at all** —
+  the audio worker's produce path asks `contains_range` from inside its forbid-blocking region (the
+  HLS `phase_at` cascade), so readers load `arc-swap` snapshots and writers publish new ones. A
+  reader racing a writer sees the state from a moment ago, which for "is this byte on disk yet" is
+  indistinguishable from having asked a moment ago. Reclamation follows the same split: a reader
+  racing a writer can end up the last owner of a replaced snapshot generation, so produce-path
+  reads never drop the snapshots they load — they park them in a bounded retire bin and the write
+  side (download and deletion paths) drains it and pays the frees; overflow leaks instead of
+  freeing on the reader, and only happens while writers are idle, i.e. while generations are not
+  being replaced. A resource the aggregate does not know is
+  absent and gets refetched — the same verdict `is_confirmed` gives the acquire path.
+  `resource_state` is the control-side inspection API and may block.
 - **Persisted** in two tiers (below), and it is the **authority on what survives a restart**. A
   segment's file becomes visible at `rename`, but the barrier that puts its blocks on the medium is
   paid later, by the manifest flush, which forces every queued file down *before* naming it. So a
@@ -196,8 +205,12 @@ All three write through `Atomic<R>` and register with a shared `FlushHub` (`Flus
   non-durably even when their `dirty` flag is clear, so a checkpoint never leaves a stale worker
   snapshot behind.
 - Pins and LRU never wait for the worker: their mutators call `flush_sync` eagerly, because a pin
-  lost to a crash would let a live asset be evicted. The filesystem stays the source of truth — any
-  index may be missing and can be rebuilt.
+  lost to a crash would let a live asset be evicted. That eager write bypasses the hub's flush lock,
+  so each disk-backed index serialises its own file instead: the snapshot and the atomic rename that
+  publishes it happen under one per-file lock. Without it a flush that snapshotted before an unpin
+  could rename after it and resurrect a pin nobody holds — the asset then outlives every handle and
+  eviction can never reclaim it. The filesystem stays the source of truth — any index may be missing
+  and can be rebuilt.
 
 ### Pins index
 
@@ -213,6 +226,14 @@ All three write through `Atomic<R>` and register with a shared `FlushHub` (`Flus
   index is always ephemeral.
 - Three call sites share one instance per disk root: `LeaseAssets` (pin/unpin), `EvictAssets` (reads
   the pinned set when picking candidates), `DiskAssetDeleter` (drops the pin on root removal).
+- One live `AssetStore` per disk root in a process — the topology `README.md` states, and the reach
+  of the per-file flush lock above. A second store over the same root is a second owner of
+  `_index/pins.bin`: it hydrates its own copy in `with_persist_at`, so its next flush (or a worker
+  checkpoint, which writes indices whose `dirty` flag is clear) republishes a snapshot taken before
+  the other store's unpin and resurrects a pin nobody holds. It also keeps its own `EvictAssets`
+  `seen` set, so eviction runs a second time against that stale pinned set. Neither is serialisable
+  by a lock inside one instance. Sharing is by cheap clone of the handle, or by passing the built
+  indices through the builder — never by two stores discovering each other through the filesystem.
 
 ### LRU index and eviction policy
 

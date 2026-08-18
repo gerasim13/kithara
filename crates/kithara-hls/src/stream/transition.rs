@@ -14,6 +14,8 @@ use kithara_stream::{
     StreamResult, VariantPromotion, VariantReaderPlan, VariantReaderTake, VariantTransition,
     VariantTransitionId,
 };
+use kithara_test_utils::kithara;
+use tracing::debug;
 
 use super::{
     coord::{HlsCoord, variant_switch_target_time},
@@ -147,10 +149,20 @@ impl HlsCoord {
         self.discard_incoming(&mut state, false);
     }
 
+    #[kithara::probe(abort_intent)]
     fn discard_incoming(&self, state: &mut TransitionState, abort_intent: bool) {
         let Some(slot) = state.incoming.take() else {
             return;
         };
+        // With `abort_intent` the pending decision dies with the slot and no
+        // tick source re-derives it — this line is the only witness of a
+        // switch that ends without ever committing.
+        debug!(
+            transition = ?slot.transition,
+            abort_intent,
+            reader_untaken = slot.reader.is_some(),
+            "discarding incoming variant session"
+        );
         let active = self.active_session();
         self.sessions.publish_exact_one(active);
         slot.session.abort();
@@ -206,6 +218,7 @@ impl HlsCoord {
         self.sessions.transition.lock().incoming.is_some()
     }
 
+    #[kithara::probe(has_incoming = self.has_incoming())]
     pub(super) fn plan_variant_reader(
         &self,
         landing: Option<Duration>,
@@ -298,6 +311,10 @@ impl HlsCoord {
         )))
     }
 
+    #[kithara::probe(
+        active = transition.active_variant().get(),
+        incoming = transition.incoming_variant().get()
+    )]
     pub(super) fn promote_planned_variant(
         &self,
         transition: VariantTransition,
@@ -374,6 +391,7 @@ impl HlsCoord {
             Some(true) => {}
         }
         drop(state);
+        debug!(?transition, "variant transition promoted");
         self.abr
             .notify_exact_commit(slot.claim.decision(), transition.active_variant().get());
         self.signal().fire();

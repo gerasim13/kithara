@@ -102,7 +102,7 @@ fn measure_leading_silence(
     tokio,
     serial,
     timeout(Duration::from_secs(30)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+    hang_timeout_secs(1)
 )]
 #[case::symphonia_default(DecoderBackend::Symphonia, None)]
 #[case::symphonia_320k(DecoderBackend::Symphonia, Some(320_000))]
@@ -155,7 +155,7 @@ async fn mp3_raw_decoder_shift_vs_reference(
     tokio,
     serial,
     timeout(Duration::from_secs(30)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+    hang_timeout_secs(1)
 )]
 #[case::symphonia(DecoderBackend::Symphonia)]
 #[cfg_attr(

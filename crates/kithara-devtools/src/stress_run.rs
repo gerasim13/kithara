@@ -1,4 +1,4 @@
-//! Runs a controller-defined nextest stress campaign against the current workspace.
+//! Runs a controller-defined nextest stress lane against the current workspace.
 
 use std::{
     fs::{self, File},
@@ -35,7 +35,7 @@ pub(crate) struct StressRunSpec {
 ///
 /// # Errors
 ///
-/// Returns an error when the campaign inputs are invalid, listing does not
+/// Returns an error when the run inputs are invalid, listing does not
 /// produce a usable inventory, the `JUnit` destination is not fresh, nextest
 /// cannot complete the stress run, or any recorded attempt failed.
 pub(crate) fn run(
@@ -107,14 +107,12 @@ pub(crate) fn validate(args: &StressRunSpec) -> Result<()> {
         "stress JUnit path must be absolute: {}",
         args.junit.display()
     );
-    ensure!(
-        !args
-            .junit
-            .try_exists()
-            .with_context(|| format!("inspect stress JUnit path {}", args.junit.display()))?,
-        "stress JUnit already exists: {}; remove it before starting a new campaign",
-        args.junit.display()
-    );
+    // Whether the subject's JUnit path is clear is the whole run's business,
+    // not one lane's: a run of several lanes writes that one path once per
+    // lane, and a rule enforced here would stop its second lane before a
+    // single test ran. The run demands an untouched path before it starts
+    // and clears the previous lane's file before each run, which is also what
+    // makes staging honest — a file found afterwards can only be this run's.
     ensure!(
         args.config_file.is_file(),
         "nextest config does not exist: {}",
@@ -220,7 +218,7 @@ mod tests {
     }
 
     #[test]
-    fn stress_count_is_limited_to_supported_campaign_sizes() {
+    fn stress_count_is_limited_to_supported_run_sizes() {
         for count in [1, 50, 100] {
             validate_stress_count(count, 100).expect("valid stress count");
         }

@@ -291,8 +291,10 @@ overlap. `ActiveDecode::incoming` is an `IncomingDecode` FSM: `Preparing` →
 `StreamAudioSource::progress_variant_transition` drives it from `flush_deferred`
 and only from `Decoding`, or `WaitingForSource` in `WaitContext::Playback` (the
 starved reader an urgent down-switch exists to rescue). Seek and recreate phases
-are excluded — they are about to replace the decoder a promotion would install —
-and terminal phases abort the transition.
+are excluded — they are about to replace the decoder a promotion would install.
+A live transition holds the outgoing's EOF instead of dying to it (below); the
+terminal phases abort only a transition that outlives them: `Failed`, and an
+intent that first surfaces after `AtEof` has already latched.
 
 - **Landing.** `landing_for` places the incoming at the outgoing's
   `OutgoingFrontier::Exact` frame, translated through each generation's timeline
@@ -312,6 +314,15 @@ and terminal phases abort the transition.
   incoming catch one fixed cut instead of chasing an equal-rate outgoing stream.
   `IncomingPrime::Advanced` wakes the rebuild runtime; `Ready` means a proof
   exists, while EOF before the frontier is `Failed`.
+  When the *outgoing* runs out of source with a live incoming, the generation is
+  marked source-exhausted instead of finished: holdback and the staged tail stay
+  promotable, `DecoderEvent::TransitionHold` announces the held state once per
+  transition, and EOF finalization waits until the transition promotes or fails
+  (the held pass reports `Waiting`, so the hang watchdog bounds it). Even with
+  no slot, finalization defers by one tick so an intent that raced the last
+  chunk still plants its incoming before `AtEof` can latch. An exhausted
+  outgoing can never satisfy a wait-for-outgoing readiness answer, so those
+  degrade to a hard cut at the final frontier.
   A finished active generation still uses the unheld EOF drain. Gap, mixed-spec,
   malformed, or over-capacity PCM fails the decode and stays owned for shell
   retirement. `ResumeCursor` records each
@@ -326,7 +337,9 @@ and terminal phases abort the transition.
   end. An installed transition with `OutgoingDisposition::Abandoned` maps only
   its priming and promotion proof to `OutgoingFrontier::Unavailable`, an explicit
   hard cut; `WaitingForSource` alone does not. A retained transition still needs
-  real outgoing join PCM. `Deferred` preserves the same latched cut. `Awaiting`,
+  real outgoing join PCM — except a source-exhausted outgoing, whose join PCM
+  cannot exist past the final decode head and degrades the proof to a hard cut
+  there. `Deferred` preserves the same latched cut. `Awaiting`,
   a previous active join, a discontinuous
   span, or a landed-late incoming mints no proof.
 - **Promotion** takes the incoming generation into a non-copy

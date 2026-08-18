@@ -327,6 +327,7 @@ impl WorkerWake for CountingWake {
 
 pub(super) struct TestControl {
     byte_map_enabled: AtomicBool,
+    demand_in_flight: AtomicBool,
     exact_reader_ready: AtomicBool,
     exact_reader_taken: AtomicBool,
     plan_calls: AtomicU64,
@@ -347,6 +348,7 @@ impl TestControl {
         Self {
             aborted_transition: Mutex::new(None),
             byte_map_enabled: AtomicBool::new(false),
+            demand_in_flight: AtomicBool::new(false),
             exact_plan: Mutex::new(None),
             exact_reader_ready: AtomicBool::new(false),
             exact_reader_taken: AtomicBool::new(false),
@@ -395,6 +397,10 @@ impl TestControl {
         *self.prepared_profile.lock() = None;
         self.exact_reader_ready.store(false, Ordering::Release);
         self.exact_reader_taken.store(false, Ordering::Release);
+    }
+
+    pub(super) fn set_demand_in_flight(&self, in_flight: bool) {
+        self.demand_in_flight.store(in_flight, Ordering::Release);
     }
 
     pub(super) fn set_exact_reader_ready(&self) {
@@ -474,6 +480,15 @@ impl VariantControl for TestControl {
             *self.exact_plan.lock() = None;
         }
         promotion
+    }
+
+    fn transition_demand_in_flight(&self, transition: VariantTransition) -> bool {
+        self.demand_in_flight.load(Ordering::Acquire)
+            && self
+                .exact_plan
+                .lock()
+                .as_ref()
+                .is_some_and(|plan| plan.transition() == transition)
     }
 
     fn selected_variant_for_seek(&self) -> usize {
@@ -1249,6 +1264,50 @@ async fn replacement_aborts_building_incoming_and_retires_its_late_completion() 
     assert_replacement_decodes(&mut source);
     source.flush_deferred();
     assert_eq!(drops.lock().as_slice(), &[8, 1]);
+}
+
+#[kithara::test(tokio)]
+async fn transition_wait_with_demand_in_flight_is_upstream_pending() {
+    let RebuildFixture {
+        control,
+        mut source,
+        ..
+    } = test_source(1).await;
+    let plan = exact_incoming_plan();
+    let transition = plan.transition();
+    control.set_exact_plan(plan);
+    assert!(
+        source
+            .decode
+            .begin_incoming(transition, OutgoingFrontier::Awaiting)
+            .is_none()
+    );
+    control.set_demand_in_flight(true);
+
+    assert_eq!(
+        source.transition_wait_reason(),
+        WaitingReason::WaitingDemand
+    );
+}
+
+#[kithara::test(tokio)]
+async fn transition_wait_without_demand_stays_watchdog_visible() {
+    let RebuildFixture {
+        control,
+        mut source,
+        ..
+    } = test_source(1).await;
+    let plan = exact_incoming_plan();
+    let transition = plan.transition();
+    control.set_exact_plan(plan);
+    assert!(
+        source
+            .decode
+            .begin_incoming(transition, OutgoingFrontier::Awaiting)
+            .is_none()
+    );
+
+    assert_eq!(source.transition_wait_reason(), WaitingReason::Waiting);
 }
 
 #[kithara::test(tokio)]

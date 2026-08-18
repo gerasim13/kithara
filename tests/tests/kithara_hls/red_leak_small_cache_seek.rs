@@ -125,12 +125,7 @@ async fn stable_live_thread_baseline(server: &TestServer) -> usize {
     last.unwrap_or_else(live_thread_count)
 }
 
-#[kithara::test(
-    native,
-    tokio,
-    timeout(Duration::from_secs(30)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "5")
-)]
+#[kithara::test(native, tokio, timeout(Duration::from_secs(30)), hang_timeout_secs(5))]
 async fn red_small_cache_seek_stress_does_not_leak_threads()
 -> Result<(), Box<dyn StdError + Send + Sync>> {
     let server = TestServer::new().await;

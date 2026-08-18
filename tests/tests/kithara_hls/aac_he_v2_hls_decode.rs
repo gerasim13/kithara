@@ -93,7 +93,7 @@ async fn generate_he_aac_v2_fixture() {
     native,
     serial,
     timeout(Duration::from_secs(15)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "3")
+    hang_timeout_secs(3)
 )]
 #[case::symphonia(DecoderBackend::Symphonia)]
 #[cfg_attr(

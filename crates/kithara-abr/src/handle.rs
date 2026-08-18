@@ -179,6 +179,7 @@ impl AbrHandle {
     /// [`Self::mark_escape`]: the flag is set under the HLS state lock, but the
     /// tick reads `peer.progress()` (which re-locks that state), so the tick
     /// must fire OUTSIDE the lock. Mirrors the controller's `on_*` hooks.
+    #[kithara::probe]
     pub fn reevaluate(&self) {
         self.inner
             .controller

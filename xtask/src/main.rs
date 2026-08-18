@@ -105,6 +105,9 @@ fn work() -> anyhow::Result<()> {
         Command::Ci(args) if ci::is_standalone(args) => return ci::run_standalone(args),
         _ => {}
     }
+    // Held for the life of the process so the host's build-cache budget
+    // leaves the shared target directory alone while work runs in it.
+    let _target_lease: Option<ci::TargetLease> = ci::TargetLease::hold();
     let ctx = Ctx::load()?;
 
     match cli.command {
@@ -147,7 +150,7 @@ mod tests {
     }
 
     #[test]
-    fn stress_campaign_commands_are_nested_under_stress() {
+    fn stress_run_commands_are_nested_under_stress() {
         assert!(
             Cli::try_parse_from([
                 "xtask",

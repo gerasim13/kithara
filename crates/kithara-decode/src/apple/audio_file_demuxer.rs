@@ -1,7 +1,10 @@
-use std::mem::size_of;
+use std::{
+    mem::size_of,
+    sync::atomic::{AtomicU64, Ordering},
+};
 
 use kithara_apple::audio_toolbox::{AudioStreamPacketDescription, pod_to_vec, pod_write_to_slice};
-use kithara_platform::time::Duration;
+use kithara_platform::{sync::Arc, time::Duration};
 use kithara_stream::{AudioCodec, ContainerFormat, PrerollHint};
 use num_traits::ToPrimitive;
 
@@ -45,6 +48,14 @@ pub(crate) struct AppleAudioFileDemuxer {
     frames_per_packet: u32,
     next_packet: u64,
     last_read_len: usize,
+    /// Live source byte length (total), shared with the pipeline. Lets a
+    /// size-less seek report an estimated `landed_byte` so the stream's byte
+    /// cursor tracks where the decoder resumes: a size-less open is the one
+    /// case where `AudioFile` refuses to map packet→byte itself
+    /// (`kAudioFileInvalidPacketOffsetError`), and without an answer a
+    /// size-less MP3 seek leaves the stream position stale and the reopen read
+    /// mis-classifies as EOF. `None` / `0` when the total is unknown.
+    byte_len: Option<Arc<AtomicU64>>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -194,6 +205,7 @@ impl AppleAudioFileDemuxer {
             last_read_len: 0,
             last_packet_desc_blob: [0u8; size_of::<AudioStreamPacketDescription>()],
             next_packet: 0,
+            byte_len: None,
         })
     }
 
@@ -221,6 +233,32 @@ impl AppleAudioFileDemuxer {
     /// captured trim counts through here.
     pub(crate) const fn set_gapless(&mut self, gapless: Option<GaplessInfo>) {
         self.track_info.gapless = gapless;
+    }
+
+    /// Attach the shared live byte-length handle so a size-less seek can
+    /// report an estimated `landed_byte` (see the `byte_len` field).
+    pub(crate) fn set_byte_len_handle(&mut self, handle: Option<Arc<AtomicU64>>) {
+        self.byte_len = handle;
+    }
+
+    /// Estimate the source byte offset the decoder resumes reading at after a
+    /// seek that landed at `landed_at`, from the linear ratio of the landed
+    /// time to the track duration scaled by the total byte length. `None`
+    /// unless both the total byte length (live handle) and a positive track
+    /// duration are known — callers that get `None` leave the stream cursor
+    /// untouched (the pre-existing size-less behavior).
+    fn estimate_landed_byte(&self, landed_at: Duration) -> Option<u64> {
+        let total_bytes = self.byte_len.as_ref()?.load(Ordering::Acquire);
+        if total_bytes == 0 {
+            return None;
+        }
+        let total = self.track_info.duration?.as_nanos();
+        if total == 0 {
+            return None;
+        }
+        let landed = landed_at.as_nanos().min(total);
+        let byte = u128::from(total_bytes).saturating_mul(landed) / total;
+        Some(u64::try_from(byte).unwrap_or(total_bytes).min(total_bytes))
     }
 
     /// Whether Apple's standalone file path supports this `(codec,
@@ -360,9 +398,22 @@ impl Demuxer for AppleAudioFileDemuxer {
         let landed_frame = landed_packet.saturating_mul(u64::from(self.frames_per_packet));
         let landed_at = duration_for_frames(sample_rate, landed_frame);
 
+        // Prefer Apple's own packet→byte mapping so `landed_byte` matches the
+        // offset its packet read seeks to; fall back to a linear estimate from
+        // the live total when the property is unavailable.
+        // Apple's own packet→byte mapping is exact and is the offset its packet
+        // read seeks to, but a size-less open rejects it outright
+        // (`kAudioFileInvalidPacketOffsetError`). That degraded mode — the
+        // streamed MP3 path — falls back to the linear estimate; see
+        // `estimate_landed_byte`.
+        let landed_byte = self
+            .file
+            .packet_to_byte(landed_packet)
+            .or_else(|| self.estimate_landed_byte(landed_at));
+
         Ok(DemuxSeekOutcome::Landed {
             landed_at,
-            landed_byte: None,
+            landed_byte,
             preroll: PrerollHint::NotNeeded,
         })
     }
@@ -376,7 +427,7 @@ impl Demuxer for AppleAudioFileDemuxer {
 mod tests {
     use std::{
         io::{self, Cursor, Error, ErrorKind, Read, Seek, SeekFrom},
-        sync::atomic::{AtomicBool, AtomicUsize, Ordering},
+        sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
     };
 
     use kithara_platform::sync::Arc;
@@ -386,7 +437,10 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::{AppleAudioFileDemuxer, Duration, SourceOpenMode};
-    use crate::demuxer::{DemuxOutcome, Demuxer};
+    use crate::{
+        codec::CodecPriming,
+        demuxer::{DemuxOutcome, DemuxSeekOutcome, Demuxer},
+    };
 
     fn read_asset(name: &str) -> Vec<u8> {
         let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -574,6 +628,88 @@ mod tests {
             DemuxOutcome::Pending(PendingReason::NotReady(_)) => {}
             other => panic!("unexpected first MP3 outcome: {other:?}"),
         }
+    }
+
+    /// Seeks `dx` to three seconds and returns the reported `landed_byte`.
+    fn landed_byte_at_3s(dx: &mut AppleAudioFileDemuxer) -> Option<u64> {
+        match dx
+            .seek(Duration::from_secs(3), CodecPriming::default())
+            .expect("seek returns an outcome")
+        {
+            DemuxSeekOutcome::Landed { landed_byte, .. } => landed_byte,
+            other => panic!("unexpected seek outcome: {other:?}"),
+        }
+    }
+
+    /// Opens `assets/test.mp3` as MP3 in `mode`, returning the demuxer and the
+    /// fixture's total byte length.
+    fn open_mp3(mode: SourceOpenMode) -> (AppleAudioFileDemuxer, u64) {
+        let bytes = read_asset("test.mp3");
+        let total = u64::try_from(bytes.len()).expect("fixture length fits in u64");
+        let dx = AppleAudioFileDemuxer::open_for_with_mode(
+            Box::new(Cursor::new(bytes)),
+            AudioCodec::Mp3,
+            Some(ContainerFormat::MpegAudio),
+            mode,
+            Some(Duration::from_secs(180)),
+        )
+        .expect("MP3 open");
+        (dx, total)
+    }
+
+    /// Regression (reopen false-EOF): a size-less MP3 seek must report a
+    /// `landed_byte` so the pipeline realigns the stream's byte cursor with
+    /// where the decoder resumes (`seek::emit` calls `stream.set_position`).
+    /// Before the fix an Apple MP3 seek returned `landed_byte: None`, the
+    /// stream position stayed at the pre-seek offset, and a reopened track
+    /// mis-classified the post-seek read as EOF. Mirrors the symphonia MP3
+    /// contract asserted in `composed.rs`.
+    ///
+    /// This is the degraded path: a size-less open makes Apple's own mapping
+    /// answer `kAudioFileInvalidPacketOffsetError`, so the live byte-length
+    /// handle carries the answer. Pinned separately from the exact path in
+    /// [`sized_mp3_seek_reports_landed_byte_without_a_length_handle`].
+    #[kithara::test]
+    fn size_less_mp3_seek_reports_landed_byte_from_the_length_handle() {
+        let (mut dx, total) = open_mp3(SourceOpenMode::Streaming);
+        dx.set_byte_len_handle(Some(Arc::new(AtomicU64::new(total))));
+
+        let byte =
+            landed_byte_at_3s(&mut dx).expect("size-less MP3 seek must expose a landed_byte");
+
+        assert!(byte > 0, "landed_byte must leave the start of the file");
+    }
+
+    /// The same size-less seek must land inside the file: a `landed_byte` past
+    /// the end would move the stream cursor to a false EOF — the very failure
+    /// the reported offset exists to prevent.
+    #[kithara::test]
+    fn size_less_mp3_landed_byte_stays_inside_the_file() {
+        let (mut dx, total) = open_mp3(SourceOpenMode::Streaming);
+        dx.set_byte_len_handle(Some(Arc::new(AtomicU64::new(total))));
+
+        let byte =
+            landed_byte_at_3s(&mut dx).expect("size-less MP3 seek must expose a landed_byte");
+
+        assert!(
+            byte < total,
+            "landed_byte {byte} must precede EOF ({total})"
+        );
+    }
+
+    /// The exact path: with a known size `AudioFile` answers
+    /// `kAudioFilePropertyPacketToByte` itself, so the seek reports a
+    /// `landed_byte` with NO byte-length handle attached — the estimate cannot
+    /// contribute here, which is what makes this a pin on Apple's own mapping
+    /// rather than on the degraded fallback.
+    #[kithara::test]
+    fn sized_mp3_seek_reports_landed_byte_without_a_length_handle() {
+        let (mut dx, _total) = open_mp3(SourceOpenMode::Complete);
+
+        let byte = landed_byte_at_3s(&mut dx)
+            .expect("a sized open must map packet→byte through AudioFile itself");
+
+        assert!(byte > 0, "landed_byte must leave the start of the file");
     }
 
     /// Regression (#device-flac-slow-load): a streamed FLAC must open

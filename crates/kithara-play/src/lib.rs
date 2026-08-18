@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 #![cfg_attr(all(), allow(clippy::missing_errors_doc))]
-#![cfg_attr(rtsan, feature(sanitize))]
+#![cfg_attr(all(rtsan, not(rtsan_standalone)), feature(sanitize))]
 
 mod error;
 mod guard;

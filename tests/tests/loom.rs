@@ -12,6 +12,14 @@ use kithara::platform::{
     },
     thread,
 };
+
+/// A backstop, not a scheduling budget. The gate tests assert that a signal
+/// published after the waiter's snapshot wakes that waiter; a correct gate
+/// returns as soon as the signal lands, so this deadline never becomes runtime.
+/// It only has to outlive thread scheduling on a loaded host.
+#[cfg(feature = "flash")]
+const SIGNAL_BACKSTOP: Duration = Duration::from_secs(5);
+
 #[kithara::test(loom)]
 fn platform_mutex_is_explored_by_loom() {
     let value = Arc::new(Mutex::new(0));
@@ -100,7 +108,7 @@ fn thread_gate_closes_hls_snapshot_probe_park_race() {
     });
 
     if !ready.load(Ordering::Acquire) {
-        assert!(gate.wait_timeout(since, Duration::from_millis(1)));
+        assert!(gate.wait_timeout(since, SIGNAL_BACKSTOP));
     }
     assert!(ready.load(Ordering::Acquire));
     assert!(producer.join().is_ok());
@@ -114,8 +122,7 @@ fn thread_gate_refreshes_waiter_after_thread_handoff() {
     let first_since = gate.current();
     gate.signal();
     let first_gate = Arc::clone(&gate);
-    let first =
-        thread::spawn(move || first_gate.wait_timeout(first_since, Duration::from_millis(1)));
+    let first = thread::spawn(move || first_gate.wait_timeout(first_since, SIGNAL_BACKSTOP));
     assert!(matches!(first.join(), Ok(true)));
 
     let (snapshot_tx, snapshot_rx) = mpsc::channel();
@@ -125,7 +132,7 @@ fn thread_gate_refreshes_waiter_after_thread_handoff() {
         if snapshot_tx.send(()).is_err() {
             return false;
         }
-        second_gate.wait_timeout(since, Duration::from_millis(1))
+        second_gate.wait_timeout(since, SIGNAL_BACKSTOP)
     });
 
     let signaller = thread::spawn(move || {

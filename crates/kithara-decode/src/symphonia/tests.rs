@@ -7,15 +7,18 @@ use kithara_test_utils::kithara;
 use symphonia::{
     core::{
         errors::Error as SymphoniaError,
-        formats::{FormatOptions, FormatReader},
+        formats::{FormatOptions, FormatReader, SeekMode, SeekTo, SeekedTo},
         io::{MediaSource, MediaSourceStream, MediaSourceStreamOptions},
         packet::Packet,
+        units::Timestamp,
     },
     default::formats::MpaReader,
 };
 
 const INTERRUPTED_MESSAGE: &str = "synthetic MPEG frame interruption";
 const MPEG_FRAME_LEN: usize = 417;
+const MPEG_FRAME_DUR: i64 = 1152;
+const MAX_SEEK_RETRIES: usize = 32;
 
 struct SourceState {
     bytes: Vec<u8>,
@@ -33,6 +36,17 @@ impl SourceControl {
         let mut state = lock(&self.state);
         let interrupt_at = state.pos.saturating_add(offset);
         state.interrupt_at = Some(interrupt_at);
+        state.interrupts_remaining = count;
+    }
+
+    fn arm_at(&self, pos: usize, count: usize) {
+        let mut state = lock(&self.state);
+        assert!(
+            state.pos <= pos,
+            "interruption target {pos} already passed (source at {})",
+            state.pos
+        );
+        state.interrupt_at = Some(pos);
         state.interrupts_remaining = count;
     }
 }
@@ -108,9 +122,9 @@ fn lock(state: &Arc<Mutex<SourceState>>) -> MutexGuard<'_, SourceState> {
     state.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
-fn mpeg_frames() -> Vec<u8> {
-    let mut frames = Vec::with_capacity(4 * MPEG_FRAME_LEN);
-    for fill in [0x11, 0x22, 0x33, 0x44] {
+fn mpeg_frames(fills: &[u8]) -> Vec<u8> {
+    let mut frames = Vec::with_capacity(fills.len() * MPEG_FRAME_LEN);
+    for &fill in fills {
         let mut frame = [fill; MPEG_FRAME_LEN];
         frame[..4].copy_from_slice(&[0xff, 0xfb, 0x90, 0x00]);
         frames.extend_from_slice(&frame);
@@ -150,9 +164,54 @@ fn assert_interrupted(reader: &mut MpaReader<'_>) {
     }
 }
 
+fn seek_to(ts: i64) -> SeekTo {
+    SeekTo::Timestamp {
+        ts: Timestamp::new(ts),
+        track_id: 0,
+    }
+}
+
+fn seek_once(reader: &mut MpaReader<'_>, ts: i64) -> SeekedTo {
+    match reader.seek(SeekMode::Accurate, seek_to(ts)) {
+        Ok(seeked) => seeked,
+        Err(error) => panic!("synthetic MPEG seek failed: {error}"),
+    }
+}
+
+fn seek_after_interruption(reader: &mut MpaReader<'_>, ts: i64) -> SeekedTo {
+    match reader.seek(SeekMode::Accurate, seek_to(ts)) {
+        Err(SymphoniaError::IoError(error)) if error.kind() == ErrorKind::Interrupted => {}
+        Ok(_) => panic!("armed interruption must fire during the seek scan"),
+        Err(error) => panic!("synthetic MPEG seek failed: {error}"),
+    }
+    for _ in 0..MAX_SEEK_RETRIES {
+        match reader.seek(SeekMode::Accurate, seek_to(ts)) {
+            Ok(seeked) => return seeked,
+            Err(SymphoniaError::IoError(error)) if error.kind() == ErrorKind::Interrupted => {}
+            Err(error) => panic!("synthetic MPEG seek failed: {error}"),
+        }
+    }
+    panic!("synthetic MPEG seek did not settle after {MAX_SEEK_RETRIES} retries")
+}
+
+fn packet_at(reader: &mut MpaReader<'_>, ts: i64) -> Packet {
+    for _ in 0..MAX_SEEK_RETRIES {
+        let packet = next_packet(reader);
+        if packet.pts.get() == ts {
+            return packet;
+        }
+        assert!(
+            packet.pts.get() < ts,
+            "scan overshot pts {ts}: got {}",
+            packet.pts.get()
+        );
+    }
+    panic!("no packet reached pts {ts}")
+}
+
 #[kithara::test]
 fn mpa_packet_read_rolls_back_each_interruption() {
-    let bytes = mpeg_frames();
+    let bytes = mpeg_frames(&[0x11, 0x22, 0x33, 0x44]);
     let (fault_source, fault_control) = InterruptingSource::new(bytes.clone());
     let (control_source, _) = InterruptingSource::new(bytes);
     let mut fault = mpa_reader(fault_source);
@@ -165,4 +224,75 @@ fn mpa_packet_read_rolls_back_each_interruption() {
     assert_interrupted(&mut fault);
     assert_packet_eq(&next_packet(&mut fault), &next_packet(&mut control));
     assert_packet_eq(&next_packet(&mut fault), &next_packet(&mut control));
+}
+
+#[kithara::test]
+fn mpa_seek_retried_after_interruption_matches_uninterrupted_seek() {
+    let fills = [0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88];
+    let bytes = mpeg_frames(&fills);
+    let (fault_source, fault_control) = InterruptingSource::new(bytes.clone());
+    let (control_source, _) = InterruptingSource::new(bytes);
+    let mut fault = mpa_reader(fault_source);
+    let mut control = mpa_reader(control_source);
+
+    // Interrupt mid-body of frame 4 so the seek scan is cut after it has
+    // part-consumed that frame. A retried seek must resume from the same
+    // frame boundary; resyncing to the next header would count the frame
+    // it skipped and shift every later timestamp by one frame.
+    fault_control.arm_at(4 * MPEG_FRAME_LEN + MPEG_FRAME_LEN / 2, 1);
+
+    let target_ts = 6 * MPEG_FRAME_DUR;
+    let fault_seeked = seek_after_interruption(&mut fault, target_ts);
+    let control_seeked = seek_once(&mut control, target_ts);
+
+    assert_eq!(fault_seeked.actual_ts, control_seeked.actual_ts);
+    assert_packet_eq(&next_packet(&mut fault), &next_packet(&mut control));
+}
+
+#[kithara::test]
+fn mpa_seek_retry_interrupted_mid_header_matches_uninterrupted_seek() {
+    let fills = [0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88];
+    let bytes = mpeg_frames(&fills);
+    let (fault_source, fault_control) = InterruptingSource::new(bytes.clone());
+    let (control_source, _) = InterruptingSource::new(bytes);
+    let mut fault = mpa_reader(fault_source);
+    let mut control = mpa_reader(control_source);
+
+    // Interrupt right after the first header byte of frame 4, inside
+    // `sync_frame`. Without a rollback the stranded 0xFF makes the retried
+    // scan resync at frame 5 while carrying frame 4's timestamp.
+    fault_control.arm_at(4 * MPEG_FRAME_LEN + 1, 1);
+
+    let target_ts = 6 * MPEG_FRAME_DUR;
+    let fault_seeked = seek_after_interruption(&mut fault, target_ts);
+    let control_seeked = seek_once(&mut control, target_ts);
+
+    assert_eq!(fault_seeked.actual_ts, control_seeked.actual_ts);
+    assert_packet_eq(&next_packet(&mut fault), &next_packet(&mut control));
+}
+
+#[kithara::test]
+fn mpa_seek_retry_interrupted_in_side_info_keeps_pts_aligned_with_data() {
+    let fills = [0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88];
+    let bytes = mpeg_frames(&fills);
+    let (fault_source, fault_control) = InterruptingSource::new(bytes);
+    let mut fault = mpa_reader(fault_source);
+
+    // Interrupt inside the stop frame's side info (`read_main_data_begin`).
+    // A retried scan legitimately picks a shallower bit-reservoir reference
+    // (its frame ring restarts at the checkpoint), so fault/control equality
+    // does not hold here. The pinned property is narrower: packet data must
+    // stay aligned with pts — without a rollback the retry would deliver
+    // frame 7's bytes under frame 6's timestamp.
+    fault_control.arm_at(6 * MPEG_FRAME_LEN + 5, 1);
+
+    let target_ts = 6 * MPEG_FRAME_DUR;
+    seek_after_interruption(&mut fault, target_ts);
+
+    let packet = packet_at(&mut fault, target_ts);
+    assert!(
+        packet.data[4..].iter().all(|&byte| byte == 0x77),
+        "packet at pts {target_ts} must carry frame 6's bytes, got fill {:#04x}",
+        packet.data[4]
+    );
 }

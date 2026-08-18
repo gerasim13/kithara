@@ -336,6 +336,7 @@ pub(super) fn wait_for_source_on_recreate<T: StreamType>(
         return TrackStep::Failed;
     }
     src.update_state(Track::<RecreatingDecoder>::new(recreate).erase());
+    super::waiting_branch!("recreate_not_ready_unparked");
     TrackStep::Blocked(WaitingReason::Waiting)
 }
 

@@ -23,7 +23,7 @@ pub(crate) fn emit_one_test(
     body_stmts: &[syn::Stmt],
     args: &TestArgs,
 ) -> TokenStream2 {
-    let tracing_init = make_tracing_init(args);
+    let tracing_init = make_tracing_init(args, remaining_attrs);
     let ambient = make_ambient_stmt(args);
     // Plain body for the async-NATIVE emissions (their sole ambient holder is
     // the per-poll `with_ambient`; a body-held scope there tears down non-LIFO

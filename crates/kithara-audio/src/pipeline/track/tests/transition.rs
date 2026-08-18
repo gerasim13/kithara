@@ -572,6 +572,37 @@ async fn finite_incoming_latches_cut_while_outgoing_fills_the_join_tail() {
 }
 
 #[kithara::test(tokio)]
+async fn live_same_spec_promotion_arms_the_crossfade_ramp() {
+    const INCOMING_CHUNKS: usize = 5;
+
+    let mut fixture =
+        route_signal_source_with_finite_incoming(Consts::SAMPLE_RATE, INCOMING_CHUNKS).await;
+    let TrackStep::Produced(_) = fixture.source.step_track() else {
+        panic!("the active decoder must establish an exact production frontier");
+    };
+    let cut = u64::try_from(Consts::ROUTE_CHUNK_FRAMES).unwrap_or(u64::MAX);
+    let plan = incoming_plan_at(cut);
+    let transition = plan.transition();
+    fixture.control.set_exact_plan(plan);
+    fixture.control.set_exact_reader_ready();
+    fixture.control.set_promotion(VariantPromotion::Promoted);
+
+    fixture.source.flush_deferred();
+    wait_for_incoming_priming(&mut fixture, transition).await;
+    fixture.source.flush_deferred();
+    let TrackStep::Blocked(_) = fixture.source.step_track() else {
+        panic!("outgoing publication must stop at the latched cut while its join tail fills");
+    };
+    fixture.source.flush_deferred();
+    assert_eq!(fixture.control.promote_calls(), 1);
+
+    assert!(
+        !fixture.source.decode.blender_is_steady(),
+        "a live same-spec promotion must commit through the blender join ramp"
+    );
+}
+
+#[kithara::test(tokio)]
 async fn abandoned_incoming_hard_cuts_without_outgoing_join_pcm() {
     const INCOMING_CHUNKS: usize = 5;
 
@@ -828,6 +859,27 @@ async fn gapless_eof_flushes_once_and_drains_every_frame_across_repeated_ticks()
         .saturating_sub(usize::try_from(TRAILING_FRAMES).unwrap_or(usize::MAX));
     let mut frames = 0usize;
     let mut next_offset = 0u64;
+    // Drain while the deferred transition is in flight until the source
+    // exhausts; EOF must stay held for the transition and never surface.
+    while !fixture.source.decode.active().is_source_exhausted() {
+        match fixture.source.step_track() {
+            TrackStep::Produced(fetch) => {
+                let chunk = produced_data(fetch);
+                assert_eq!(chunk.meta.frame_offset, next_offset);
+                next_offset = next_offset.saturating_add(u64::from(chunk.meta.frames));
+                frames = frames.saturating_add(chunk.frames());
+            }
+            TrackStep::StateChanged | TrackStep::Blocked(_) => {}
+            TrackStep::Eof => panic!("EOF must stay held while a transition is in flight"),
+            TrackStep::Failed => panic!("finite gapless fixture must reach EOF cleanly"),
+        }
+        fixture.source.flush_deferred();
+    }
+
+    // Resolve the wedged transition: the next promote attempt retires the
+    // incoming, releasing the held EOF so it can finalize and flush the
+    // gapless boundary exactly once.
+    fixture.control.set_promotion(VariantPromotion::Stale);
     loop {
         match fixture.source.step_track() {
             TrackStep::Produced(fetch) => {

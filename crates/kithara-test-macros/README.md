@@ -42,7 +42,8 @@ Derive macros:
 
 A bare `#[kithara::test]` is a sync test on native + wasm; flags can be combined
 (e.g. `#[kithara::test(native, tokio, timeout(Duration::from_secs(5)))]`). Flags
-include `tokio`, `wasm`, `native`, `browser`, `timeout(...)`, `env(...)`,
+include `tokio`, `wasm`, `native`, `browser`, `timeout(...)`,
+`hang_timeout_secs(N)`,
 `tracing(...)`, `soft_fail(...)`, `serial`, `multi_thread`, `selenium`, and
 `loom`, and `flash(true|false)`. `loom` is a synchronous, unit-returning,
 opt-in model marker run by `just test run --loom=on`; ordinary test lanes execute it once

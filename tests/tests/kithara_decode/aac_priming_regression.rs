@@ -7,12 +7,7 @@ use kithara::{
 use kithara_integration_tests::{SignalFormat, SignalSpec, SignalSpecLength, TestServerHelper};
 use reqwest::Client;
 
-#[kithara::test(
-    native,
-    tokio,
-    timeout(Duration::from_secs(10)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "1")
-)]
+#[kithara::test(native, tokio, timeout(Duration::from_secs(10)), hang_timeout_secs(1))]
 async fn aac_decoder_strips_algorithmic_delay_on_first_chunk() {
     let server = TestServerHelper::new().await;
     let client = Client::new();

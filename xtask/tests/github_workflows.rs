@@ -24,7 +24,10 @@ const STRESS_EXECUTE_COMMAND: &str = r#"args=(
 )
 [[ -z "$FILTER" ]] || args+=(--filter "$FILTER")
 [[ -z "$COUNT" ]] || args+=(--count "$COUNT")
-[[ -z "$MODE" ]] || args+=(--mode "$MODE")
+# `--mode` repeats per lane; the input is a space-separated list, so
+# one flag carrying the whole string would name a lane that does not
+# exist and fail the run at argument parsing.
+for mode in $MODE; do args+=(--mode "$mode"); done
 just ci stress "${args[@]}""#;
 const STRESS_REPORT_COMMAND: &str = r#"args=(
   --raw "$GITHUB_WORKSPACE/raw"
@@ -35,7 +38,7 @@ const STRESS_REPORT_COMMAND: &str = r#"args=(
 )
 [[ -z "$FILTER" ]] || args+=(--filter "$FILTER")
 [[ -z "$COUNT" ]] || args+=(--count "$COUNT")
-[[ -z "$MODE" ]] || args+=(--mode "$MODE")
+for mode in $MODE; do args+=(--mode "$mode"); done
 just ci stress-report "${args[@]}""#;
 
 const AUTHORIZATION_SCRIPT: &str = r#"python3 - <<'PY'
@@ -555,6 +558,108 @@ fn standalone_rtsan_is_fail_closed_before_expanding_every_lane() {
         .map(|lane| lane.as_str().expect("RTSan lane is a string"))
         .collect();
     assert_eq!(lanes, ["rtsan", "rtsan-file", "rtsan-hls"]);
+
+    assert!(
+        !matrix.contains_key("backend"),
+        "one gate runs one backend; a second matrix axis doubles the runner's bill"
+    );
+
+    let lane_step = named_step(rtsan, "Run RTSan lane");
+    let lane_env = mapping_field(lane_step, "env")
+        .as_mapping()
+        .expect("RTSan lane environment is a mapping");
+    assert_eq!(
+        mapping_field(lane_env, "KITHARA_RTSAN_BACKEND").as_str(),
+        Some("${{ inputs.backend || 'standalone' }}")
+    );
+    assert_eq!(
+        mapping_field(lane_env, "LANE").as_str(),
+        Some("${{ matrix.lane }}")
+    );
+
+    let upload = named_step(rtsan, "Upload the RTSan report");
+    assert_uploads(upload, &["target/nextest/rtsan/junit.xml"]);
+    let upload_inputs = mapping_field(upload, "with")
+        .as_mapping()
+        .expect("RTSan upload inputs are a mapping");
+    let artifact = mapping_field(upload_inputs, "name")
+        .as_str()
+        .expect("RTSan artifact name is a string");
+    for coordinate in [
+        "${{ inputs.backend || 'standalone' }}",
+        "${{ matrix.lane }}",
+        "${{ github.run_id }}",
+        "${{ github.run_attempt }}",
+    ] {
+        assert!(
+            artifact.contains(coordinate),
+            "RTSan artifact name omits {coordinate:?} and collides across cells"
+        );
+    }
+    assert_eq!(
+        mapping_field(upload_inputs, "if-no-files-found").as_str(),
+        Some("error")
+    );
+}
+
+/// The gate judges with the standalone runtime unless someone says otherwise.
+/// Both backends are kept working; only one is paid for per run.
+#[test]
+fn rtsan_defaults_to_the_standalone_backend() {
+    let workflow = github_workflow("rtsan.yml");
+    let root = workflow.as_mapping().expect("workflow is a mapping");
+    let triggers = mapping_field(root, "on")
+        .as_mapping()
+        .expect("workflow triggers are a mapping");
+    for trigger in ["workflow_call", "workflow_dispatch"] {
+        let inputs = mapping_field(
+            mapping_field(triggers, trigger)
+                .as_mapping()
+                .unwrap_or_else(|| panic!("{trigger} is a mapping")),
+            "inputs",
+        )
+        .as_mapping()
+        .expect("RTSan inputs are a mapping");
+        let backend = mapping_field(inputs, "backend")
+            .as_mapping()
+            .expect("RTSan backend input is a mapping");
+        assert_eq!(
+            mapping_field(backend, "default").as_str(),
+            Some("standalone"),
+            "{trigger} must default to the standalone backend"
+        );
+    }
+}
+
+/// The instrumented backend is one dropdown away, not deleted: a verdict that
+/// needs the compiler's own instrumentation must be reachable from the UI.
+#[test]
+fn rtsan_offers_the_instrumented_backend_from_the_run_dialog() {
+    let workflow = github_workflow("rtsan.yml");
+    let root = workflow.as_mapping().expect("workflow is a mapping");
+    let dispatch = mapping_field(
+        mapping_field(root, "on")
+            .as_mapping()
+            .expect("workflow triggers are a mapping"),
+        "workflow_dispatch",
+    )
+    .as_mapping()
+    .expect("workflow_dispatch is a mapping");
+    let backend = mapping_field(
+        mapping_field(dispatch, "inputs")
+            .as_mapping()
+            .expect("RTSan inputs are a mapping"),
+        "backend",
+    )
+    .as_mapping()
+    .expect("RTSan backend input is a mapping");
+    let options: Vec<&str> = mapping_field(backend, "options")
+        .as_sequence()
+        .expect("RTSan backend options are a sequence")
+        .iter()
+        .map(|option| option.as_str().expect("RTSan backend option is a string"))
+        .collect();
+    assert_eq!(options, ["standalone", "instrumented"]);
 }
 
 #[test]
@@ -591,9 +696,12 @@ fn stress_workflow_is_a_thin_fork_adapter() {
     let workflow: Value = serde_yaml_ng::from_str(&text).expect("stress workflow is valid YAML");
     assert_no_key(&workflow, "continue-on-error");
     let concurrency = workflow_concurrency(&workflow);
+    // The run queues in a group of its own: it runs on a dedicated
+    // runner, and sharing fork CI's group meant a run dispatched behind
+    // an already-queued lane was cancelled outright rather than queued.
     assert_eq!(
         mapping_field(concurrency, "group").as_str(),
-        Some("fork-linux-${{ github.repository }}")
+        Some("stress-${{ github.repository }}")
     );
     assert_eq!(
         mapping_field(concurrency, "cancel-in-progress").as_bool(),
@@ -691,7 +799,7 @@ fn stress_workflow_is_a_thin_fork_adapter() {
         "[[ \"$COUNT\" =~ ^[1-9][0-9]*$ ]]",
         "[[ \"$MAX_COUNT\" =~ ^[1-9][0-9]*$ ]]",
         "10#$COUNT <= 10#$MAX_COUNT",
-        "\"self-hosted\", \"linux\", \"x64\", \"kithara\"",
+        "\"self-hosted\", \"linux\", \"x64\", \"kithara-stress\"",
         "<<< \"$RUNNER_LABELS\"",
     ] {
         assert!(
@@ -713,7 +821,7 @@ fn stress_workflow_is_a_thin_fork_adapter() {
         "contains(fromJSON(vars.KITHARA_STRESS_RUNNER_LABELS), 'self-hosted')",
         "contains(fromJSON(vars.KITHARA_STRESS_RUNNER_LABELS), 'linux')",
         "contains(fromJSON(vars.KITHARA_STRESS_RUNNER_LABELS), 'x64')",
-        "contains(fromJSON(vars.KITHARA_STRESS_RUNNER_LABELS), 'kithara')",
+        "contains(fromJSON(vars.KITHARA_STRESS_RUNNER_LABELS), 'kithara-stress')",
     ] {
         assert!(
             execute_guard.contains(contract),
@@ -752,7 +860,7 @@ fn stress_workflow_is_a_thin_fork_adapter() {
             "Checkout controller".to_owned(),
             "Checkout subject".to_owned(),
             "Export artifact identity".to_owned(),
-            "Run the stress campaign".to_owned(),
+            "Execute the stress run".to_owned(),
             "Upload the raw stress evidence".to_owned(),
         ])
     );
@@ -772,18 +880,18 @@ fn stress_workflow_is_a_thin_fork_adapter() {
 
     assert!(
         step_position(execute, "Checkout subject")
-            < step_position(execute, "Run the stress campaign")
+            < step_position(execute, "Execute the stress run")
     );
 
-    let campaign = named_step(execute, "Run the stress campaign");
+    let run = named_step(execute, "Execute the stress run");
     assert_eq!(
-        mapping_field(campaign, "working-directory").as_str(),
+        mapping_field(run, "working-directory").as_str(),
         Some("controller")
     );
-    let campaign_env = mapping_field(campaign, "env")
+    let stress_env = mapping_field(run, "env")
         .as_mapping()
-        .expect("campaign environment is a mapping");
-    assert_eq!(campaign_env.len(), 5);
+        .expect("run environment is a mapping");
+    assert_eq!(stress_env.len(), 5);
     for (name, expected) in [
         ("CONTROLLER_SHA", "${{ job.workflow_sha }}"),
         ("COUNT", "${{ inputs.count || vars.KITHARA_STRESS_COUNT }}"),
@@ -791,11 +899,11 @@ fn stress_workflow_is_a_thin_fork_adapter() {
         ("MODE", "${{ inputs.mode }}"),
         ("SUBJECT_SHA", "${{ inputs.revision || github.sha }}"),
     ] {
-        assert_eq!(mapping_field(campaign_env, name).as_str(), Some(expected));
+        assert_eq!(mapping_field(stress_env, name).as_str(), Some(expected));
     }
-    let execute_script = mapping_field(campaign, "run")
+    let execute_script = mapping_field(run, "run")
         .as_str()
-        .expect("campaign command is a script")
+        .expect("run command is a script")
         .trim();
     assert_eq!(execute_script, STRESS_EXECUTE_COMMAND);
     assert_eq!(execute_script.matches("just ci stress").count(), 1);

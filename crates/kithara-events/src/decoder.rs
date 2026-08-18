@@ -150,4 +150,9 @@ pub enum DecoderEvent {
         channels: u16,
         bypassed: bool,
     },
+    /// The playing generation is being held back for an in-flight variant
+    /// transition: its output stays parked (and, when `source_exhausted`,
+    /// its EOF stays unsurfaced) until the transition promotes or fails,
+    /// so a pending switch cannot be outrun by the outgoing track's end.
+    TransitionHold { source_exhausted: bool },
 }

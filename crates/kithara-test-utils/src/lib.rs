@@ -1,4 +1,4 @@
-#![cfg_attr(rtsan, feature(sanitize))]
+#![cfg_attr(all(rtsan, not(rtsan_standalone)), feature(sanitize))]
 
 #[cfg(test)]
 extern crate self as kithara_test_utils;
@@ -12,6 +12,8 @@ extern crate self as kithara_test_utils;
 /// flash wrapping.
 pub use kithara_platform;
 
+#[cfg(not(target_arch = "wasm32"))]
+pub mod flight;
 pub mod hang;
 pub mod mock;
 pub mod no_block;

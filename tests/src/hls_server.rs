@@ -275,6 +275,25 @@ impl HlsTestServer {
         (server, handle)
     }
 
+    /// Build a configurable HLS server that withholds the GET (body)
+    /// response for one variant's init (`EXT-X-MAP`) segment until the
+    /// returned handle releases it. A held init parks that variant's
+    /// session construction, so an incoming variant transition cannot
+    /// build or prime while the gate is closed — a release-driven lever
+    /// for "the switch target is still constructing" scenarios.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[must_use]
+    pub async fn with_init_gate(
+        config: HlsTestServerConfig,
+        variant: usize,
+    ) -> (Self, crate::InitGateHandle) {
+        let server = Self::new(config).await;
+        let handle = server
+            ._helper
+            .register_init_gate(server.created.token(), variant);
+        (server, handle)
+    }
+
     #[must_use]
     pub const fn config(&self) -> &HlsTestServerConfig {
         &self.config

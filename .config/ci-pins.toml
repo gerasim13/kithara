@@ -29,9 +29,7 @@ brew_formulae = [
   "rustup",
   "xcodegen",
 ]
-chrome_for_testing_linux_amd64_sha256 = "60a324a6e1d27b20f2035a2cdaf71641a739fe1f5571f63794773225820bce8a"
-chrome_for_testing_version = "151.0.7922.77"
-chromedriver_linux_amd64_sha256 = "65dca829d176845f864b794be1ecdd31e855f14ca9fa1eb93b2d1c0e7242abdd"
+chromium_version = "151.0.7922.137"
 cmake_linux_amd64_sha256 = "0dc2e9a6860f06bf10bd8fadc03e35d9eeb4df46e33763a7e480e987758f385c"
 cmake_linux_arm64_sha256 = "83f8fd91d2038a56556e1400390fcfe42f79602940c494f6c6f1cdae7f9e7f40"
 cmake_version = "3.31.12"
@@ -56,6 +54,9 @@ lockbud_toolchain = "nightly-2026-02-07"
 macos_guest_build = "25G72"
 msrv_toolchain = "1.92.0"
 nightly_toolchain = "nightly-2026-07-29"
+rtsan_linux_amd64_sha256 = "f6072e408c30f98978e860f8f7d667551d288a09767e687b27e0fb71514d18ea"
+rtsan_linux_arm64_sha256 = "404eb138286f485d994d822d7a0b97e1d357848d0512a276561a1f4f1a51b253"
+rtsan_version = "20.1.1.1"
 rustup_version = "1.28.2"
 rustup_windows_sha256 = "88d8258dcf6ae4f7a80c7d1088e1f36fa7025a1cfd1343731b4ee6f385121fc0"
 stable_toolchain = "1.97.1"

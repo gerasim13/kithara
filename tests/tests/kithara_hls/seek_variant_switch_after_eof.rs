@@ -25,7 +25,7 @@ use tracing::info;
     tokio,
     native,
     timeout(Duration::from_secs(10)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "1"),
+    hang_timeout_secs(1),
     tracing("kithara_hls=debug,kithara_stream=debug,kithara_decode=debug")
 )]
 async fn seek_after_variant_switch_at_eof_must_not_deadlock(

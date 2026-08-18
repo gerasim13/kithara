@@ -35,6 +35,8 @@ pub(crate) struct RenderTargets<'a> {
     pub(crate) tracks: &'a mut TrackSlots<{ PlayerNodeProcessor::MAX_TRACKS }>,
     pub(crate) notification_tx: &'a mut HeapProd<PlayerNotification>,
     pub(crate) metrics: &'a RtMetrics,
+    /// Slot seek epoch published when this block started rendering.
+    pub(crate) seek_epoch: u64,
 }
 
 pub(crate) struct RenderPass {
@@ -125,7 +127,7 @@ impl RenderPass {
             ch_buffer.fill(0.0);
         }
         let tracks = targets.tracks;
-        let mut sink = RtSink::new(targets.notification_tx, targets.metrics);
+        let mut sink = RtSink::new(targets.notification_tx, targets.metrics, targets.seek_epoch);
         let loaded_tracks: SmallVec<[(TrackSlot, TrackState); PlayerNodeProcessor::MAX_TRACKS]> =
             tracks
                 .iter()

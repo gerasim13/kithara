@@ -521,6 +521,13 @@ impl VariantControl for HlsCoord {
         Self::selected_variant_for_seek(self)
     }
 
+    fn transition_demand_in_flight(&self, transition: VariantTransition) -> bool {
+        self.sessions.incoming_session().is_some_and(|session| {
+            session.transition() == Some(transition)
+                && session.wait_phase() == SourcePhase::WaitingDemand
+        })
+    }
+
     fn take_prepared_variant_reader(
         &self,
         transition: VariantTransition,
@@ -1089,6 +1096,33 @@ mod tests {
         assert_eq!(coord.sessions.resident_count(), 1);
         assert_eq!(coord.variant_index(), 0);
         assert_eq!(coord.position(), 17);
+    }
+
+    #[kithara::test]
+    fn transition_demand_in_flight_names_a_planned_incoming_fetch() {
+        let (coord, _bus, _ctx, _abr_state) = switch_coord();
+        let transition = prepare_incoming(&coord, incremental_profile(32))
+            .expect("prepare incoming")
+            .expect("pending switch");
+
+        assert!(VariantControl::transition_demand_in_flight(
+            coord.as_ref(),
+            transition
+        ));
+    }
+
+    #[kithara::test]
+    fn transition_demand_in_flight_rejects_an_aborted_transition() {
+        let (coord, _bus, _ctx, _abr_state) = switch_coord();
+        let transition = prepare_incoming(&coord, incremental_profile(32))
+            .expect("prepare incoming")
+            .expect("pending switch");
+        assert!(coord.abort_variant(transition));
+
+        assert!(!VariantControl::transition_demand_in_flight(
+            coord.as_ref(),
+            transition
+        ));
     }
 
     #[kithara::test]

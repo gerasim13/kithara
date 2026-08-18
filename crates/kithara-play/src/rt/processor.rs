@@ -190,6 +190,7 @@ impl PlayerNodeProcessor {
                 tracks: &mut self.tracks,
                 notification_tx: &mut self.notif_tx,
                 metrics: self.playback.metrics(),
+                seek_epoch: self.playback.seek_epoch.load(Ordering::SeqCst),
             },
             buffers,
             frames,

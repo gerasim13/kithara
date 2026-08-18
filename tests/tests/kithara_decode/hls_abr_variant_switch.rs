@@ -34,7 +34,7 @@ use tracing::info;
     native,
     tokio,
     timeout(Duration::from_secs(10)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "1"),
+    hang_timeout_secs(1),
     tracing("kithara_decode=debug,kithara_hls=debug")
 )]
 async fn test_abr_variant_switch_no_byte_glitches(
@@ -148,7 +148,7 @@ async fn test_abr_variant_switch_no_byte_glitches(
     native,
     tokio,
     timeout(Duration::from_secs(10)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "1"),
+    hang_timeout_secs(1),
     tracing("info")
 )]
 async fn test_basic_multi_segment_reading(
@@ -215,7 +215,7 @@ async fn test_basic_multi_segment_reading(
     native,
     tokio,
     timeout(Duration::from_secs(10)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "1"),
+    hang_timeout_secs(1),
     tracing("debug")
 )]
 async fn test_abr_variant_switch_with_seek_backward(

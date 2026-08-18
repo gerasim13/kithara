@@ -229,7 +229,8 @@ async fn run_failure_resilience(healthy_count: usize, cancelled_count: usize) {
     browser,
     serial,
     timeout(Duration::from_secs(10)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "2")
+    hang_timeout_secs(2),
+    tracing("kithara_hls=debug,kithara_stream=debug")
 )]
 #[case::h2_c2(2, 2)]
 #[case::h4_c4(4, 4)]

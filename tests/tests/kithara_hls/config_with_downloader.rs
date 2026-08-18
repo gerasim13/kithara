@@ -15,12 +15,7 @@ use kithara_integration_tests::{
     temp_dir,
 };
 
-#[kithara::test(
-    tokio,
-    native,
-    timeout(Duration::from_secs(20)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "1")
-)]
+#[kithara::test(tokio, native, timeout(Duration::from_secs(20)), hang_timeout_secs(1))]
 async fn hls_config_with_downloader_shares_downloader_across_two_streams(temp_dir: TestTempDir) {
     let server_a = AbrTestServer::new(
         master_playlist(256_000, 512_000, 1_024_000),

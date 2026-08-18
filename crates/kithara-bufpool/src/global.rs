@@ -180,3 +180,66 @@ impl Default for PcmPool {
             .clone()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The reason `pre_warm` exists: the buffers a decode asks for come back
+    /// from the free list instead of allocating, and allocating is what the
+    /// audio thread may not do. Measured on a pool nobody else holds, because
+    /// the property is the warm's, not a moment's.
+    #[test]
+    fn a_warmed_pool_serves_what_it_was_warmed_for_without_allocating() {
+        let pool = PcmPool::new(128, 200_000);
+        let samples = 4_608 * 2;
+        pool.pre_warm(8, |buffer| {
+            buffer.clear();
+            buffer.resize(samples, 0.0);
+        });
+
+        let misses_before = pool.stats().alloc_misses;
+        let buffers: Vec<_> = (0..8)
+            .map(|_| pool.get_with(|buffer| buffer.resize(samples, 0.0)))
+            .collect();
+
+        assert_eq!(pool.stats().alloc_misses, misses_before);
+        drop(buffers);
+    }
+
+    /// One more than it was warmed for has to come from somewhere.
+    #[test]
+    fn a_warmed_pool_still_allocates_past_its_warm() {
+        let pool = PcmPool::new(128, 200_000);
+        let samples = 4_608 * 2;
+        pool.pre_warm(2, |buffer| {
+            buffer.clear();
+            buffer.resize(samples, 0.0);
+        });
+
+        let misses_before = pool.stats().alloc_misses;
+        let buffers: Vec<_> = (0..3)
+            .map(|_| pool.get_with(|buffer| buffer.resize(samples, 0.0)))
+            .collect();
+
+        assert_eq!(pool.stats().alloc_misses, misses_before.saturating_add(1));
+        drop(buffers);
+    }
+
+    /// A warm that hands back buffers too small for a decode is no warm at
+    /// all: the first `resize` reallocates on the very path the pool exists to
+    /// keep allocation-free.
+    #[test]
+    fn a_warmed_buffer_is_already_the_size_it_was_warmed_to() {
+        let pool = PcmPool::new(128, 200_000);
+        let samples = 4_608 * 2;
+        pool.pre_warm(1, |buffer| {
+            buffer.clear();
+            buffer.resize(samples, 0.0);
+        });
+
+        let buffer = pool.get_with(|buffer| buffer.clear());
+
+        assert!(buffer.capacity() >= samples, "{}", buffer.capacity());
+    }
+}

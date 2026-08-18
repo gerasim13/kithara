@@ -5,7 +5,7 @@ use syn::{Attribute, Ident};
 use super::{
     parse::TestArgs,
     shared::{
-        finalize_body, make_ambient_stmt, make_dedicated_worker_config, make_env_setup,
+        finalize_body, make_ambient_stmt, make_dedicated_worker_config, make_hang_budget,
         make_prekill_guard, make_runtime_builder, make_selenium_attrs, make_serial_attr,
         make_tracing_init, make_wasm_serial_guard, wrap_with_model, wrap_with_soft_fail,
         wrap_with_timeout,
@@ -28,7 +28,7 @@ pub(crate) fn emit_async_runtime_test(
     args: &TestArgs,
     serial_attr: &TokenStream2,
 ) -> TokenStream2 {
-    let env_setup = make_env_setup(&args.env_vars);
+    let hang_budget = make_hang_budget(args.hang_timeout_secs);
     let prekill_guard = make_prekill_guard(fn_name);
     let selenium_attr = make_selenium_attrs(args);
     let runtime_builder = make_runtime_builder(args);
@@ -50,7 +50,7 @@ pub(crate) fn emit_async_runtime_test(
     // test to reach this — whichever it happens to be — was reported as an
     // unsafe `malloc` in a real-time context. Process-wide setup belongs
     // before the future exists.
-    let tracing_init = make_tracing_init(args);
+    let tracing_init = make_tracing_init(args, remaining_attrs);
     let runtime_body = quote! {
         {
             #tracing_init
@@ -84,7 +84,7 @@ pub(crate) fn emit_async_runtime_test(
         #[cfg(not(target_arch = "wasm32"))]
         #[test]
         #vis fn #fn_name() #ret_type {
-            #env_setup
+            #hang_budget
             #prekill_guard
             #runtime_body
         }
@@ -161,7 +161,7 @@ pub(crate) fn emit_async_timeout_test(
         braced
     };
 
-    let env_setup = make_env_setup(&args.env_vars);
+    let hang_budget = make_hang_budget(args.hang_timeout_secs);
     let selenium_attr = make_selenium_attrs(args);
     let runtime_builder = make_runtime_builder(args);
     let flash = args.flash.unwrap_or(true);
@@ -171,7 +171,7 @@ pub(crate) fn emit_async_timeout_test(
     // test to reach this — whichever it happens to be — was reported as an
     // unsafe `malloc` in a real-time context. Process-wide setup belongs
     // before the future exists.
-    let tracing_init = make_tracing_init(args);
+    let tracing_init = make_tracing_init(args, remaining_attrs);
     let runtime_body = quote! {
         {
             #tracing_init
@@ -235,7 +235,7 @@ pub(crate) fn emit_async_timeout_test(
         #[cfg(not(target_arch = "wasm32"))]
         #[test]
         #vis fn #fn_name() #ret_type {
-            #env_setup
+            #hang_budget
 
             let __timeout_dur: ::std::time::Duration = #dur;
 
@@ -298,7 +298,7 @@ pub(crate) fn emit_browser_test(
 ) -> TokenStream2 {
     let mut output = TokenStream2::new();
     let serial_attr = make_serial_attr(args);
-    let tracing_init = make_tracing_init(args);
+    let tracing_init = make_tracing_init(args, remaining_attrs);
 
     output.extend(make_dedicated_worker_config());
 

@@ -6,7 +6,7 @@ use kithara_stream::{
     Activity, OpenedVariantReader, OutgoingDisposition, PlayheadWrite, SeekControl, SeekObserve,
     StreamType, VariantControl, VariantPromotion, VariantReaderTake, VariantTransition,
 };
-use tracing::{trace, warn};
+use tracing::{debug, trace, warn};
 
 pub(crate) use crate::pipeline::{
     decode::{
@@ -25,7 +25,9 @@ use crate::{
         parts::SourceParts,
         rebuild::{DecoderBuildComplete, DecoderBuildPurpose, port::RebuildPort, retire::Retired},
         seek::SeekEngine,
-        track::{self, CurrentFsm, Decoding, Track, TrackFailure, TrackStep, WaitContext},
+        track::{
+            self, CurrentFsm, Decoding, Track, TrackFailure, TrackStep, WaitContext, WaitingReason,
+        },
     },
     renderer::AudioWorkerSource,
 };
@@ -217,6 +219,23 @@ impl<T: StreamType> StreamAudioSource<T> {
         let _ = control.abort_variant(transition);
     }
 
+    /// Hang classification for a transition-pending decode tick: a pending
+    /// transition whose incoming byte is serviced by an in-flight fetch is
+    /// upstream work (`WaitingDemand`, watchdog-quiet); one with nothing in
+    /// flight stays `Waiting` so a wedged switch still surfaces as a hang.
+    pub(crate) fn transition_wait_reason(&self) -> WaitingReason {
+        let demand_backed = self
+            .variant_control
+            .as_deref()
+            .zip(self.decode.incoming_transition())
+            .is_some_and(|(control, transition)| control.transition_demand_in_flight(transition));
+        if demand_backed {
+            WaitingReason::WaitingDemand
+        } else {
+            WaitingReason::Waiting
+        }
+    }
+
     fn discard_local_incoming(&mut self) {
         if let Some(generation) = self.decode.discard_incoming() {
             self.retired.retire_generation(generation);
@@ -303,6 +322,18 @@ impl<T: StreamType> StreamAudioSource<T> {
                     self.variant_control.clone(),
                     self.decode.incoming_transition(),
                 ) {
+                    // This abort also discards the pending variant intent, and
+                    // no tick source re-derives it afterwards. The fields
+                    // separate "incoming never primed" from "staged span never
+                    // reached the frontier" from "landing minted behind the
+                    // frontier" when a switch dies against the outgoing EOF.
+                    debug!(
+                        at_eof = matches!(self.state, CurrentFsm::AtEof(_)),
+                        latched_frontier = ?self.decode.incoming_frontier(),
+                        landing = ?self.resume.decode_head(self.seek_obs.epoch()),
+                        ?transition,
+                        "outgoing ended: aborting variant transition"
+                    );
                     self.abort_local_incoming(control.as_ref(), transition);
                 }
                 return;

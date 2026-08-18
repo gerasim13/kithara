@@ -232,10 +232,10 @@ as SKIP instead of a false FAIL. Two stages needed a different answer:
   `[health].machete_exclude`. The list is derived from `cargo metadata`, which
   is what keeps a new crate covered without being named anywhere.
 
-## Stress campaign ownership
+## Stress run ownership
 
 `stress run` is the sole portable lifecycle owner for repeated-test evidence. It
-records a typed schema-v3 manifest, exact nextest inventory and JUnit, a live and
+records a typed schema-v4 manifest, exact nextest inventory and JUnit, a live and
 durable combined log, Linux pressure samples, and configured line/envelope artifacts
 under one fresh raw directory. The project-owned `[stress]` section in
 `.config/xtask.toml` is the sole owner of modes, test features, child environment,
@@ -245,10 +245,29 @@ runner, its arguments, and effective features so the independent reporter can re
 controller/config drift. The inventory-by-iteration contract, not nextest's last
 stress iteration status, owns the primary verdict.
 
+A stress run owns the directory it builds into. `[stress].build_dir` names it,
+relative to the checkout a lane compiles — the subject for a runner lane, the
+controller for a command lane — and the run exports it as `CARGO_TARGET_DIR` to
+every child after the lane's own environment, so no mode can name it away. An
+inherited value points at whatever directory the host shares with everything else
+on it, and a stress run lasts hours: five of them lost a whole lane to binaries
+that were cleared mid-run, after which every remaining repeat failed to exec in
+milliseconds and the lane reported nothing about the revision it was asked about.
+The price is one cold build per run per tree. `[stress.artifacts].subject_junit`
+and a mode's `attempt_junit` stay anchored at the checkout that runs the tests:
+nextest's store is rooted at the workspace root and does not follow
+`CARGO_TARGET_DIR`, so only the build moves — a report anchor under the build
+directory reads a path nextest never writes, and one run lost all six lanes'
+evidence to exactly that. The manifest records the resolved build directory under
+`build.target_dir`, so a lane that dies with its binaries names the directory
+itself instead of leaving it to be reconstructed from the log. The path is an
+observation, not provenance: the reporting machine has no such directory and is
+never asked to agree about one.
+
 Pressure schema `devtools.pressure.v2` names its end-marker status
 `primary_exit_code`: sampling ends after the test/evidence phase so the reporter can
 consume a closed stream. The manifest's `timing.exit_code` is the later combined
-campaign verdict and can additionally reflect staging or supplemental-evidence errors.
+run verdict and can additionally reflect staging or supplemental-evidence errors.
 The pressure value is null when a coordinator failure prevents primary execution.
 
 `stress report` independently consumes an uploaded raw directory. It compares the

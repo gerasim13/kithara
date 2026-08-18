@@ -57,6 +57,14 @@ pub struct PlayerTrack {
     /// mixer thanks to `PlayerResource`'s scratch buffer).
     pub(super) served_media_frames: f64,
     pub(super) sample_rate: u32,
+    /// Slot seek epoch this track has been re-based onto.
+    ///
+    /// The control thread publishes the next epoch before it sends the
+    /// matching `PlayerCmd::Seek`, so a render block that sees a newer
+    /// published epoch is rendering a position the user has already left.
+    /// [`read`](Self::read) uses the gap to refuse natural-EOF finalization
+    /// until the re-base arrives; see the crate `CONTEXT.md`.
+    pub(super) seek_epoch: u64,
 }
 
 #[bon]
@@ -75,6 +83,10 @@ impl PlayerTrack {
         #[builder(default = FadeCurve::SquareRoot)] fade_curve: FadeCurve,
         #[builder(default = 1.0)] playback_rate: f32,
         #[builder(default)] prefetch_duration: f32,
+        /// Slot seek epoch already published when this track loaded — a track
+        /// planted after earlier seeks starts level with them, not behind.
+        #[builder(default)]
+        seek_epoch: u64,
     ) -> Self {
         let observed_duration = resource.duration();
         let track = Self {
@@ -82,6 +94,7 @@ impl PlayerTrack {
             item_id,
             playback_rate,
             observed_duration,
+            seek_epoch,
             state: TrackState::Preloading,
             state_dirty: false,
             triggers: TrackTriggers::default(),
@@ -137,6 +150,15 @@ impl PlayerTrack {
         self.fade.play();
         self.triggers.reset();
         self.ended_at_eof = false;
+    }
+
+    /// Re-base this track onto a slot seek epoch the processor has applied.
+    ///
+    /// Every loaded track observes the epoch, not just the ones a seek moves:
+    /// a track the seek left alone must still stop counting as behind, or its
+    /// natural end would never finalize.
+    pub const fn observe_seek_epoch(&mut self, epoch: u64) {
+        self.seek_epoch = epoch;
     }
 
     /// Current media position in seconds.

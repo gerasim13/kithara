@@ -32,11 +32,7 @@ use url::Url;
 /// `ephemeral=true` → `MemResource` (no path). `ephemeral=false` → `MmapResource`
 /// (has a file path). The disk case is native-only because wasm targets do
 /// not expose a real filesystem.
-#[kithara::test(
-    native,
-    timeout(Duration::from_secs(5)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "1")
-)]
+#[kithara::test(native, timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
 #[case::ephemeral_mem(true, false)]
 #[case::disk_mmap(false, true)]
 fn resource_path_follows_storage_backend(#[case] ephemeral: bool, #[case] expect_path: bool) {
@@ -108,7 +104,7 @@ fn count_files(dir: &Path) -> usize {
     tokio,
     serial,
     timeout(Duration::from_secs(10)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "1"),
+    hang_timeout_secs(1),
     tracing("kithara_audio=debug,kithara_decode=debug,kithara_hls=debug,kithara_stream=debug")
 )]
 async fn ephemeral_pipeline_no_disk_writes() {

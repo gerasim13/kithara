@@ -1270,7 +1270,11 @@ fn dispatch_requeues_orphaned_downloading_segment() {
     // seg 1 is mid-flight under an orphaned claim (Missing -> Downloading).
     let orphan = v.segments()[1]
         .state()
-        .try_claim(PlannedFetch::Segment(1), Arc::downgrade(&v))
+        .try_claim(
+            PlannedFetch::Segment(1),
+            Arc::downgrade(&v),
+            ctx.signal.clone(),
+        )
         .expect("seg 1 must be claimable");
 
     v.flow.queue.lock().clear();
@@ -1307,12 +1311,38 @@ fn dispatch_requeues_orphaned_downloading_segment() {
 }
 
 #[kithara::test]
+fn a_dropped_claim_returns_its_fetch_to_the_plan() {
+    // The Drop safety net reverts the slot to Missing, but dispatch popped
+    // the plan entry when it sent the fetch: without a requeue the segment
+    // is never asked for again and the reader hangs on a gap nobody owns.
+    let ctx = test_ctx(3);
+    let v = make_var(0, 0, &[100, 100], &ctx);
+    let claim = v.segments()[0]
+        .state()
+        .try_claim(
+            PlannedFetch::Segment(0),
+            Arc::downgrade(&v),
+            ctx.signal.clone(),
+        )
+        .expect("segment claim");
+    assert!(!v.flow.queue.planned(PlannedFetch::Segment(0)));
+
+    drop(claim);
+
+    assert!(v.flow.queue.planned(PlannedFetch::Segment(0)));
+}
+
+#[kithara::test]
 fn phase_at_reports_waiting_demand_for_claimed_segment() {
     let ctx = test_ctx(3);
     let v = make_var(0, 0, &[100, 100], &ctx);
     let claim = v.segments()[0]
         .state()
-        .try_claim(PlannedFetch::Segment(0), Arc::downgrade(&v))
+        .try_claim(
+            PlannedFetch::Segment(0),
+            Arc::downgrade(&v),
+            ctx.signal.clone(),
+        )
         .expect("segment claim");
 
     assert_eq!(v.phase_at(0..16), SourcePhase::WaitingDemand);

@@ -92,10 +92,23 @@ test-threads = "num-cpus"
 # attempt-correlated dump first.
 slow-timeout = { period = "60s", terminate-after = 11 }
 leak-timeout = "2s"
+# A run repeats thousands of tests tens of times, and printing the body of
+# every failure turns its console into something no one reads. The bodies are
+# not lost: `store-failure-output` keeps them in the JUnit below, which is what
+# the evidence reporter parses for symptoms, backtraces and wait graphs — the
+# console is not an input to anything. What stays on it is the progress counter
+# and the name of each test that failed.
+failure-output = "never"
 
 [profile.stress.junit]
 path = "junit.xml"
 store-failure-output = true
+# Divergence analysis diffs the runtime lines of failing attempts against
+# passing attempts of the same test. Without stored green output the passing
+# side is invisible and "greens never emit this line" is an unsupported guess;
+# the reporter declares that gap instead of computing divergence. Volume stays
+# bounded because only annotated tests emit runtime lines, at debug level.
+store-success-output = true
 
 # Opt-in cold fixture-cache profile: same settings as default, plus the setup
 # script that recreates an isolated cold root and exports KITHARA_FIXTURE_CACHE.
@@ -134,3 +147,20 @@ default-filter = 'all()'
 # it); adds JUnit so `just perf suite` gets exact per-test timings.
 [profile.perf.junit]
 path = "junit.xml"
+
+# RealtimeSanitizer lanes. A violation aborts the process, so the point of
+# running them here rather than under `cargo test` is nextest's process per
+# test: the abort takes one test down and JUnit names it, instead of the whole
+# suite dying with a bare exit code. No retries — a violation is a fact, not a
+# flake, and re-running one only hides which attempt saw it. `default-filter`
+# is opened because the lanes select integration suites the product filter
+# excludes.
+[profile.rtsan]
+default-filter = 'all()'
+fail-fast = false
+slow-timeout = { period = "120s", terminate-after = 2 }
+leak-timeout = "2s"
+
+[profile.rtsan.junit]
+path = "junit.xml"
+store-failure-output = true

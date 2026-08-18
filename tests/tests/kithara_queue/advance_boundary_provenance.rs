@@ -174,12 +174,7 @@ enum ToneClass {
     Unknown,
 }
 
-#[kithara::test(
-    native,
-    tokio,
-    timeout(Duration::from_secs(120)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "5")
-)]
+#[kithara::test(native, tokio, timeout(Duration::from_secs(120)), hang_timeout_secs(5))]
 async fn natural_eof_advance_emits_only_b_after_a_flac(temp_dir: TestTempDir) {
     let server = TestServerHelper::new().await;
     let setup = setup_queue(&server, &temp_dir, true).await;
@@ -270,12 +265,7 @@ async fn natural_eof_advance_emits_only_b_after_a_flac(temp_dir: TestTempDir) {
     );
 }
 
-#[kithara::test(
-    native,
-    tokio,
-    timeout(Duration::from_secs(120)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "5")
-)]
+#[kithara::test(native, tokio, timeout(Duration::from_secs(120)), hang_timeout_secs(5))]
 async fn natural_eof_advance_with_late_variant_switch_flac(temp_dir: TestTempDir) {
     let server = TestServerHelper::new().await;
     let setup = setup_multivariant_flac_queue(&server, &temp_dir).await;
@@ -391,12 +381,7 @@ async fn natural_eof_advance_with_late_variant_switch_flac(temp_dir: TestTempDir
     );
 }
 
-#[kithara::test(
-    native,
-    tokio,
-    timeout(Duration::from_secs(120)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "5")
-)]
+#[kithara::test(native, tokio, timeout(Duration::from_secs(120)), hang_timeout_secs(5))]
 async fn natural_eof_advance_app_layer_crossfade_advance_flac_resampled_48k(temp_dir: TestTempDir) {
     let server = TestServerHelper::new().await;
     let timestretch = StretchControls::new(1.0);
@@ -437,12 +422,7 @@ async fn natural_eof_advance_app_layer_crossfade_advance_flac_resampled_48k(temp
     );
 }
 
-#[kithara::test(
-    native,
-    tokio,
-    timeout(Duration::from_secs(240)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "5")
-)]
+#[kithara::test(native, tokio, timeout(Duration::from_secs(240)), hang_timeout_secs(5))]
 async fn natural_eof_advance_app_layer_crossfade_advance_flac_resampled_48k_real_geometry(
     temp_dir: TestTempDir,
 ) {
@@ -494,12 +474,7 @@ async fn natural_eof_advance_app_layer_crossfade_advance_flac_resampled_48k_real
     );
 }
 
-#[kithara::test(
-    native,
-    tokio,
-    timeout(Duration::from_secs(120)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "5")
-)]
+#[kithara::test(native, tokio, timeout(Duration::from_secs(120)), hang_timeout_secs(5))]
 async fn natural_eof_advance_emits_only_b_flac_resampled_48k(temp_dir: TestTempDir) {
     let server = TestServerHelper::new().await;
     let setup = setup_queue_with_sample_rate(&server, &temp_dir, true, RESAMPLED_RENDER_RATE).await;
@@ -629,12 +604,7 @@ async fn natural_eof_advance_emits_only_b_flac_resampled_48k(temp_dir: TestTempD
     );
 }
 
-#[kithara::test(
-    native,
-    tokio,
-    timeout(Duration::from_secs(120)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "5")
-)]
+#[kithara::test(native, tokio, timeout(Duration::from_secs(120)), hang_timeout_secs(5))]
 async fn natural_eof_advance_emits_only_b_flac_crossfade_5s(temp_dir: TestTempDir) {
     let server = TestServerHelper::new().await;
     run_crossfade_flac_case(
@@ -649,12 +619,7 @@ async fn natural_eof_advance_emits_only_b_flac_crossfade_5s(temp_dir: TestTempDi
     .await;
 }
 
-#[kithara::test(
-    native,
-    tokio,
-    timeout(Duration::from_secs(120)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "5")
-)]
+#[kithara::test(native, tokio, timeout(Duration::from_secs(120)), hang_timeout_secs(5))]
 async fn natural_eof_advance_emits_only_b_flac_crossfade_5s_eq(temp_dir: TestTempDir) {
     let server = TestServerHelper::new().await;
     run_crossfade_flac_case(
@@ -669,12 +634,7 @@ async fn natural_eof_advance_emits_only_b_flac_crossfade_5s_eq(temp_dir: TestTem
     .await;
 }
 
-#[kithara::test(
-    native,
-    tokio,
-    timeout(Duration::from_secs(120)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "5")
-)]
+#[kithara::test(native, tokio, timeout(Duration::from_secs(120)), hang_timeout_secs(5))]
 async fn natural_eof_advance_emits_only_b_flac_crossfade_5s_eq_stretch(temp_dir: TestTempDir) {
     let server = TestServerHelper::new().await;
     let timestretch = StretchControls::new(1.0);
@@ -691,12 +651,7 @@ async fn natural_eof_advance_emits_only_b_flac_crossfade_5s_eq_stretch(temp_dir:
     .await;
 }
 
-#[kithara::test(
-    native,
-    tokio,
-    timeout(Duration::from_secs(120)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "5")
-)]
+#[kithara::test(native, tokio, timeout(Duration::from_secs(120)), hang_timeout_secs(5))]
 async fn natural_eof_advance_app_layer_crossfade_advance_flac(temp_dir: TestTempDir) {
     let server = TestServerHelper::new().await;
     let timestretch = StretchControls::new(1.0);
@@ -733,12 +688,7 @@ async fn natural_eof_advance_app_layer_crossfade_advance_flac(temp_dir: TestTemp
     );
 }
 
-#[kithara::test(
-    native,
-    tokio,
-    timeout(Duration::from_secs(120)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "5")
-)]
+#[kithara::test(native, tokio, timeout(Duration::from_secs(120)), hang_timeout_secs(5))]
 async fn natural_eof_advance_emits_only_b_flac_crossfade_5s_resampled_48k(temp_dir: TestTempDir) {
     let server = TestServerHelper::new().await;
     run_crossfade_flac_case(
@@ -753,12 +703,7 @@ async fn natural_eof_advance_emits_only_b_flac_crossfade_5s_resampled_48k(temp_d
     .await;
 }
 
-#[kithara::test(
-    native,
-    tokio,
-    timeout(Duration::from_secs(120)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "5")
-)]
+#[kithara::test(native, tokio, timeout(Duration::from_secs(120)), hang_timeout_secs(5))]
 async fn seek_near_end_then_eof_advance_emits_only_b_flac(temp_dir: TestTempDir) {
     let server = TestServerHelper::new().await;
     let setup = setup_queue(&server, &temp_dir, true).await;
@@ -861,12 +806,7 @@ async fn seek_near_end_then_eof_advance_emits_only_b_flac(temp_dir: TestTempDir)
 /// AAC cannot preserve the 0.67 Hz sawtooth slope/phase provenance reliably;
 /// this case uses 440 Hz vs 880 Hz tone provenance to keep the same replay
 /// contract on the lossy codec.
-#[kithara::test(
-    native,
-    tokio,
-    timeout(Duration::from_secs(120)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "5")
-)]
+#[kithara::test(native, tokio, timeout(Duration::from_secs(120)), hang_timeout_secs(5))]
 async fn natural_eof_advance_emits_only_b_aac(temp_dir: TestTempDir) {
     let server = TestServerHelper::new().await;
     let setup = setup_sine_aac_queue(&server, &temp_dir).await;

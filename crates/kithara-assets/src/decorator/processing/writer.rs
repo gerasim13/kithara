@@ -136,6 +136,14 @@ where
         self.guard.disarm();
     }
 
+    fn abandon(mut self) {
+        self.inner.abandon();
+        // Disarm without failing: the readiness gate is shared with readers of
+        // this generation, and the cancel that brought us here is tearing that
+        // generation down. Failing it would reach the successor's readers.
+        self.guard.disarm();
+    }
+
     fn reader(&self) -> ProcessedReader<W::Reader> {
         self.build_reader(self.inner.reader())
     }

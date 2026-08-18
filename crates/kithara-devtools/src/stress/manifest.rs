@@ -21,7 +21,7 @@ use time::format_timestamp;
 struct Consts;
 
 impl Consts {
-    const MANIFEST_SCHEMA: u32 = 3;
+    const MANIFEST_SCHEMA: u32 = 4;
     const MAX_MANIFEST_BYTES: usize = 1_048_576;
     const MANIFEST_READ_LIMIT: u64 = 1_048_577;
 }
@@ -31,6 +31,7 @@ impl Consts {
 pub(super) struct Manifest {
     pub(super) schema: u32,
     pub(super) mode: String,
+    pub(super) build: BuildSnapshot,
     pub(super) config: ManifestConfig,
     pub(super) controller: Revision,
     pub(super) subject: Revision,
@@ -45,6 +46,7 @@ pub(super) struct Manifest {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct ManifestSpec {
     pub(super) mode: String,
+    pub(super) build: BuildSnapshot,
     pub(super) config: ManifestConfig,
     pub(super) controller_sha: String,
     pub(super) subject_sha: String,
@@ -75,6 +77,35 @@ impl ManifestConfig {
             pressure_schema: PRESSURE_SCHEMA.to_owned(),
             workflow_job_timeout_minutes,
         }
+    }
+}
+
+/// Where the lane actually built, recorded rather than reconstructed.
+///
+/// A lane whose binaries went missing mid-run fails every remaining repeat in
+/// milliseconds, and the one fact that names the cause — the directory those
+/// binaries were in — used to appear nowhere in the evidence. It is an
+/// observation, not a policy: the reporting machine has no such directory and
+/// must not be asked to agree about one.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct BuildSnapshot {
+    pub(super) target_dir: String,
+}
+
+impl BuildSnapshot {
+    pub(super) fn new(target_dir: &Path) -> Result<Self> {
+        Ok(Self {
+            target_dir: target_dir
+                .to_str()
+                .with_context(|| {
+                    format!(
+                        "stress build directory is not UTF-8: {}",
+                        target_dir.display()
+                    )
+                })?
+                .to_owned(),
+        })
     }
 }
 
@@ -139,7 +170,7 @@ pub(super) enum ExecuteResult {
 }
 
 impl ExecuteResult {
-    const fn as_str(self) -> &'static str {
+    pub(super) const fn as_str(self) -> &'static str {
         match self {
             Self::Success => "success",
             Self::Failure => "failure",
@@ -181,6 +212,7 @@ impl Manifest {
         let manifest = Self {
             schema: Consts::MANIFEST_SCHEMA,
             mode: spec.mode,
+            build: spec.build,
             config: spec.config,
             controller: Revision {
                 sha: spec.controller_sha,
@@ -409,23 +441,21 @@ impl Manifest {
             ));
             return;
         };
-        let result_matches = match expected.execute_result {
-            ExecuteResult::Success => exit_code == 0,
-            ExecuteResult::Failure | ExecuteResult::Cancelled => exit_code != 0,
-        };
-        if !result_matches {
-            let expectation = match expected.execute_result {
-                ExecuteResult::Success => "zero for a successful execute job",
-                ExecuteResult::Failure => "nonzero for a failed execute job",
-                ExecuteResult::Cancelled => "nonzero for a cancelled execute job",
-            };
+        // Only success is a claim about every lane. The job's result covers all
+        // of them at once, so a red job says one lane failed, not this one: a
+        // lane that passed inside a failed job has a zero exit code and is
+        // telling the truth. Demanding nonzero here would mark exactly the
+        // clean lanes untrustworthy, and a run comparing two clocks would
+        // lose the half that worked. That a failed job had a failing lane
+        // somewhere is checked once, across the run, by the reporter.
+        if matches!(expected.execute_result, ExecuteResult::Success) && exit_code != 0 {
             mismatches.push(ProvenanceMismatch::new(
                 "timing.exit_code",
                 format!(
                     "{exit_code} with execute result {}",
                     expected.execute_result.as_str()
                 ),
-                expectation,
+                "zero for a successful execute job",
             ));
         }
     }
@@ -477,6 +507,11 @@ impl Manifest {
             "manifest subject SHA is invalid"
         );
         ensure!(!self.mode.trim().is_empty(), "manifest mode is empty");
+        ensure!(
+            Path::new(&self.build.target_dir).is_absolute(),
+            "manifest build directory is not absolute: {}",
+            self.build.target_dir
+        );
         ensure!(
             !self.config.profile.trim().is_empty(),
             "manifest nextest profile is empty"
@@ -801,7 +836,8 @@ mod tests {
     fn spec() -> ManifestSpec {
         ManifestSpec {
             mode: "baseline".to_owned(),
-            config: ManifestConfig::new("campaign", "controller/settings/runner.toml", 90),
+            build: BuildSnapshot::new(Path::new("/stress/target-stress")).expect("build"),
+            config: ManifestConfig::new("repeated", "controller/settings/runner.toml", 90),
             controller_sha: CONTROLLER_SHA.to_owned(),
             subject_sha: SUBJECT_SHA.to_owned(),
             runner: runner(),
@@ -822,7 +858,7 @@ mod tests {
             count: 50,
             test_threads: "num-cpus".to_owned(),
             mode: "baseline".to_owned(),
-            config: ManifestConfig::new("campaign", "controller/settings/runner.toml", 90),
+            config: ManifestConfig::new("repeated", "controller/settings/runner.toml", 90),
             runner: runner(),
             policy: policy(),
             execute_result: ExecuteResult::Success,
@@ -923,6 +959,21 @@ mod tests {
                 .iter()
                 .any(|mismatch| mismatch.field == "timing.exit_code")
         );
+
+        for execute_result in [ExecuteResult::Failure, ExecuteResult::Cancelled] {
+            let mut expected = expected();
+            expected.execute_result = execute_result;
+            assert_eq!(manifest.validate_provenance(&expected), Vec::new());
+        }
+    }
+
+    /// A run has several lanes in one job, so a red job means one of
+    /// them failed rather than this one. Marking a lane that passed as
+    /// untrustworthy would drop exactly the clean half of a comparison.
+    #[test]
+    fn a_lane_that_passed_inside_a_failed_job_keeps_its_provenance() {
+        let mut manifest = Manifest::start(spec(), system()).expect("start manifest");
+        manifest.finalize(0, true).expect("finalize manifest");
 
         for execute_result in [ExecuteResult::Failure, ExecuteResult::Cancelled] {
             let mut expected = expected();

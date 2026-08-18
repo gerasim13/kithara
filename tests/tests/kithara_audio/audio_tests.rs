@@ -155,19 +155,22 @@ async fn audio_new_warms_pcm_pool() {
         "Audio::new must pre-warm its PCM pool (allocated_bytes still 0)"
     );
 
-    // The warm-up's payoff: decode-sized buffers come back as pool hits,
-    // not fresh allocations on the audio thread.
-    let misses_before = pool.stats().alloc_misses;
+    // The warm is deep enough for a decode's worth of buffers and sized for
+    // one. Measured in allocated bytes rather than by taking buffers: by this
+    // point the pipeline is running and legitimately holds some of them, so
+    // how many are free is a question about the machine's load, not about the
+    // warm. Taking eight and demanding no allocation asked the second question
+    // while meaning the first, and answered it wrong once in four under load.
+    // That the free list serves what it was warmed for is the pool's own
+    // property, pinned in `kithara-bufpool`.
     let decode_samples = 4608 * 2;
-    let bufs: Vec<_> = (0..8)
-        .map(|_| pool.get_with(|b| b.resize(decode_samples, 0.0)))
-        .collect();
-    let misses_after = pool.stats().alloc_misses;
-    assert_eq!(
-        misses_before, misses_after,
-        "a warmed pool must serve decode-sized buffers without allocating"
+    let warmed = 8;
+    let expected = decode_samples * size_of::<f32>() * warmed;
+    assert!(
+        pool.allocated_bytes() >= expected,
+        "Audio::new must warm at least {warmed} decode-sized buffers ({expected} bytes), got {}",
+        pool.allocated_bytes()
     );
-    drop(bufs);
 }
 
 #[kithara::test]

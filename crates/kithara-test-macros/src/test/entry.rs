@@ -132,7 +132,7 @@ fn generate_wasm_only(ctx: &GenCtx<'_>) -> TokenStream2 {
 
     let emit = |name: &Ident, case_values: Option<&[Expr]>| -> TokenStream2 {
         let preamble = make_preamble(ctx.params, case_values);
-        let tracing_init = make_tracing_init(ctx.args);
+        let tracing_init = make_tracing_init(ctx.args, ctx.remaining_attrs);
         // wasm emission: no per-poll `with_ambient`, the body-held scope is
         // the sole ambient writer — KEEP it.
         let ambient = make_ambient_stmt(ctx.args);
@@ -174,7 +174,7 @@ fn generate_native_only(ctx: &GenCtx<'_>) -> TokenStream2 {
 
     let mut emit_one = |name: &Ident, case_values: Option<&[Expr]>| {
         let preamble = make_preamble(ctx.params, case_values);
-        let tracing_init = make_tracing_init(ctx.args);
+        let tracing_init = make_tracing_init(ctx.args, ctx.remaining_attrs);
         let ambient = make_ambient_stmt(ctx.args);
         let body_stmts = ctx.body_stmts;
         // Plain body for the async-native branches (sole ambient holder there
@@ -328,6 +328,37 @@ mod tests {
 
         assert!(expanded.contains("async fn contract"));
         assert!(expanded.contains("wasm_serial_guard"));
+        Ok(())
+    }
+
+    #[test]
+    fn should_panic_test_suppresses_panic_dumps() -> syn::Result<()> {
+        for source in [
+            "#[should_panic]\nfn contract() {}",
+            "#[should_panic(expected = \"boom\")]\nasync fn contract() {}",
+            "#[cfg_attr(not(target_arch = \"wasm32\"), should_panic(expected = \"boom\"))]\n\
+             fn contract() {}",
+        ] {
+            let args = syn::parse_str::<TestArgs>("")?;
+            let function = syn::parse_str(source)?;
+
+            let expanded = generate(args, function)?.to_string();
+            assert!(
+                expanded.contains("suppress_expected_panic_dumps"),
+                "`{source}` must suppress panic dumps"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn ordinary_test_keeps_panic_dumps_armed() -> syn::Result<()> {
+        let args = syn::parse_str::<TestArgs>("")?;
+        let function = syn::parse_str("fn contract() {}")?;
+
+        let expanded = generate(args, function)?.to_string();
+
+        assert!(!expanded.contains("suppress_expected_panic_dumps"));
         Ok(())
     }
 }

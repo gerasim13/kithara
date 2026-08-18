@@ -1,7 +1,4 @@
-use std::{
-    collections::VecDeque,
-    sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering},
-};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
 use bon::bon;
 use kithara_assets::AssetResource;
@@ -17,6 +14,7 @@ use kithara_stream::{AudioCodec, ContainerFormat, SeekObserve};
 use super::{
     cas_anchor::CasAnchorCell,
     offsets::Layout,
+    plan_queue::PlanQueue,
     probe::SizeDemandState,
     reader_runtime::ReaderRuntime,
     seqlock::{AtomicOptU64, AtomicSeekAlias},
@@ -25,7 +23,7 @@ use crate::{
     HlsResult,
     config::SizeProbeMethod,
     playlist::{PlaylistAccess, PlaylistState},
-    segment::{MediaSegment, PlannedFetch, Segment, SegmentContent, SegmentSize, SegmentSlotState},
+    segment::{MediaSegment, Segment, SegmentContent, SegmentSize, SegmentSlotState},
     signal::SizeSignal,
 };
 
@@ -105,7 +103,7 @@ pub(super) struct VariantFlow {
     /// reaching it is what re-opens the decision — see
     /// [`HlsVariant::take_prefetch_resume`].
     pub(super) prefetch_resume_at: AtomicU64,
-    pub(super) queue: Mutex<VecDeque<PlannedFetch>>,
+    pub(super) queue: PlanQueue,
     /// Timeline state consulted for `is_flushing` and active-seek gating.
     pub(super) reader: ReaderRuntime,
 }
@@ -169,14 +167,14 @@ impl VariantSegments {
 }
 
 impl VariantFlow {
-    fn new(seek_obs: Arc<dyn SeekObserve>, queue_capacity: usize) -> Self {
+    fn new(seek_obs: Arc<dyn SeekObserve>, num_segments: usize) -> Self {
         Self {
             prefetch_anchor: AtomicU64::new(0),
             prefetch_resume_at: AtomicU64::new(NO_PREFETCH_DEFERRAL),
             // Preallocate to the worst-case rebuild size (init + every media
-            // segment + the seg-0 decoder probe) so the per-seek
-            // `clear` + `extend` in `rebuild_queue` never reallocates on the
-            queue: Mutex::new(VecDeque::with_capacity(queue_capacity)),
+            // segment + the seg-0 decoder probe) so the per-seek rebuild in
+            // `rebuild_queue` never reallocates.
+            queue: PlanQueue::new(num_segments.saturating_add(2), num_segments),
             reader: ReaderRuntime::new(seek_obs),
         }
     }
@@ -292,7 +290,7 @@ impl VariantParts {
         Arc::new(HlsVariant {
             variant,
             layout,
-            flow: VariantFlow::new(seek_obs, segments.len().saturating_add(2)),
+            flow: VariantFlow::new(seek_obs, segments.len()),
             profile: VariantProfile {
                 codec,
                 container,

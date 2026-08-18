@@ -561,6 +561,35 @@ fn set_mode_clears_superseded_pending() {
     );
 }
 
+/// A user pinning the variant the controller had already queued keeps that
+/// queued switch — but it is the user's switch now, and the `VariantApplied`
+/// it eventually publishes is the only thing telling the app which it was.
+/// Left as the throughput reason, a manual switch reaches the app disguised as
+/// an automatic one, and a listener waiting for its own command never hears it.
+#[kithara::test]
+fn manual_mode_restating_a_queued_target_claims_it_as_manual() {
+    let state = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0))));
+    state.request_target(VariantIndex::new(2), AbrReason::DownSwitch);
+    state.set_mode(AbrMode::Manual(VariantIndex::new(2)));
+    assert_eq!(
+        state
+            .peek_pending_decision(state.current_variant_index())
+            .map(|decision| decision.reason()),
+        Some(AbrReason::ManualOverride),
+        "a manually restated switch must publish as a manual one"
+    );
+}
+
+/// The restated switch keeps the target the controller queued — claiming it
+/// for the user must not re-aim it.
+#[kithara::test]
+fn manual_mode_restating_a_queued_target_keeps_that_target() {
+    let state = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0))));
+    state.request_target(VariantIndex::new(2), AbrReason::DownSwitch);
+    state.set_mode(AbrMode::Manual(VariantIndex::new(2)));
+    assert_eq!(state.pending_target(), Some(VariantIndex::new(2)));
+}
+
 /// Same supersede rule when the re-pin lands mid-seek (state locked):
 /// the queued intent dies at `set_mode`, not at unlock — otherwise the
 /// post-unlock boundary would commit the stale pin.

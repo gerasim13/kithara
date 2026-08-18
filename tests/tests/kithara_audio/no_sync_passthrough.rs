@@ -345,7 +345,7 @@ fn first_sample_mismatch(candidate: &[f32], control: &[f32]) -> Option<usize> {
     flash(false),
     serial,
     timeout(Duration::from_secs(30)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "5")
+    hang_timeout_secs(5)
 )]
 async fn no_sync_unity_playback_is_bit_exact_and_cochlea_clean_under_load() {
     run_no_sync_passthrough(false).await;
@@ -356,7 +356,7 @@ async fn no_sync_unity_playback_is_bit_exact_and_cochlea_clean_under_load() {
     flash(false),
     serial,
     timeout(Duration::from_secs(60)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "5")
+    hang_timeout_secs(5)
 )]
 #[ignore = "writes opt-in listening artifacts; run explicitly with KITHARA_AUDIO_ARTIFACT_DIR"]
 async fn record_no_sync_unity_playback_artifacts() {

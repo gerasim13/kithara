@@ -106,7 +106,7 @@ production code, large fixtures belong under `tests/`.
 
 - `#[kithara::test]` — unified sync/async/native/wasm test attribute. Options
   include `tokio`, `multi_thread`, `timeout(Duration::…)`, and
-  `env(KEY = "value")`. Under `flash` the `timeout` is a **virtual** deadline.
+  `hang_timeout_secs(N)`. Under `flash` the `timeout` is a **virtual** deadline.
 - `#[kithara::flash]` / `#[kithara::flash(true|false)]` — a production
   dynamic-flash guard that propagates flash through the callstack and across
   spawns (sync: an RAII guard; async: a per-poll combinator). A no-op when the
@@ -123,14 +123,16 @@ production code, large fixtures belong under `tests/`.
 A `HangDetector` watchdog fails a wedged test with the **source location** of
 the stuck `hang_tick!` and of the last `hang_reset!` progress point, plus a spin
 count — so a hang names *what* stopped making progress, not just "something hung."
-The timeout is `KITHARA_HANG_TIMEOUT_SECS` (native) or a built-in default.
+The budget is the attribute's `hang_timeout_secs(N)`, else
+`KITHARA_HANG_TIMEOUT_SECS` (native), else a built-in default.
 
-> Set `KITHARA_HANG_TIMEOUT_SECS` **per test** (via the attribute's `env(...)`),
+> Shorten the budget **per test** with `#[kithara::test(hang_timeout_secs(N))]`,
 > never globally on a whole `just test` run — a tight global value false-trips
 > slow network-integration tests (e.g. the `hls_seek_*` family with built-in
-> hundreds-of-ms delays). The watchdog does not catch runtime-shutdown / `Drop`
-> deadlocks; those surface as the nextest hard-timeout (`SIGABRT`), not the
-> in-test watchdog.
+> hundreds-of-ms delays). It buys real time only on the flash-off lane: under
+> flash the watchdog park is virtual, so even the ambient budget costs no wall
+> clock. The watchdog does not catch runtime-shutdown / `Drop` deadlocks; those
+> surface as the nextest hard-timeout (`SIGABRT`), not the in-test watchdog.
 
 ## The `flash` virtual clock
 

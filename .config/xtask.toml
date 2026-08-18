@@ -171,7 +171,17 @@ when_feature = "backend-cpal"
 always = ["backend-cpal"]
 
 [stress]
-default_mode = "reproduction"
+# One run, both clocks. The first collapses the fixtures' artificial
+# delays and is fast; the second keeps them and is the only one where a defect
+# decided by the order requests are served in can reproduce at all.
+default_modes = [
+  "reproduction-flash-on",
+  "reproduction-flash-off",
+  "reproduction-no-block",
+  "rtsan",
+  "rtsan-file",
+  "rtsan-hls",
+]
 lane = "workspace"
 backend = "wreq"
 nextest_config = ".config/nextest.toml"
@@ -181,11 +191,17 @@ default_count = 50
 max_count = 100
 test_threads = "num-cpus"
 max_test_threads = 256
+# A directory of this run's own, inside the checkout it builds. Sharing the
+# machine's target directory cost five runs a whole lane: something else on the
+# host cleared it hours in, and every remaining repeat failed to exec in
+# milliseconds. The price is one cold build per run.
+build_dir = "target-stress"
 raw_output = "target/stress"
 report_output = "target/stress-report.md"
 workflow_job_timeout_minutes = 1380
 
 [stress.artifacts]
+attempts = "attempts.json"
 subject_junit = "target/nextest/stress/junit.xml"
 inventory = "inventory.json"
 junit = "junit.xml"
@@ -205,6 +221,7 @@ remove = [
   "KITHARA_NO_BLOCK",
   "KITHARA_NO_BLOCK_BUDGET_MS",
   "KITHARA_NO_BLOCK_LOG",
+  "KITHARA_STRESS_REPEATS",
   "NEXTEST_FINAL_STATUS_LEVEL",
   "NEXTEST_SHOW_PROGRESS",
   "NEXTEST_STATUS_LEVEL",
@@ -222,28 +239,122 @@ dump_marker = "[flash hang dump]"
 primitive_marker = "created_at="
 holder_marker = "held by"
 wait_marker = "WAITING:"
+# `pace_anchor=` selects the engine's own counter line, the causal one in a
+# flash hang dump: `real_io` and `pace_anchor` together say whether virtual time
+# was advancing while real work was in flight. It is neither a holder nor a
+# waiter, so only this list can carry it into a section — without it the report
+# named who held quiescence but never why the clock moved, and reading that
+# meant opening the raw dump by hand.
 direct_markers = [
   "active_async holder",
   "active holder thread=",
   "engine core lock held",
+  "pace_anchor=",
   "BRIDGED sync wait",
   "state lock held",
 ]
 source_excludes = ["kithara-test-macros/", "kithara-test-utils/src/test/"]
 
-[stress.modes.reproduction]
+[stress.modes.reproduction-flash-on]
 features = ["flash"]
 
-[stress.modes.reproduction.set_env]
+# Reproduction lanes set no RUST_LOG: a run-wide one used to override the
+# per-test `tracing(...)` annotations and silence exactly the verdict lines the
+# annotated flaky tests were given (`setup_tracing_with_filter` now merges the
+# two, keeping the wider level per target). Unannotated tests keep the "warn"
+# default from `setup_tracing`.
+#
+# `KITHARA_FLASH_SYNC_TRACE` is on in every reproduction lane, not just the
+# diagnostic ones: `flash::diag` reads it once and caches, so with it off every
+# primitive carries `meta = None` and the hang dump cannot name a holder or a
+# waiter — the dump degrades to "something is stuck" in exactly the lanes a
+# stress run actually repeats. `KITHARA_FLASH_SYNC_BT` stays out: measured at
+# count=50 it inflates JUnit past the 512 MiB artifact limit, and it has its own
+# lane for when a stack is worth that price.
+[stress.modes.reproduction-flash-on.set_env]
+KITHARA_FLASH_SYNC_TRACE = "1"
 KITHARA_HANG_PREKILL_SECS = "630"
 NEXTEST_FINAL_STATUS_LEVEL = "fail"
 NEXTEST_SHOW_PROGRESS = "counter"
 NEXTEST_STATUS_LEVEL = "fail"
 RUST_BACKTRACE = "1"
-RUST_LOG = "warn"
 
-[stress.modes.reproduction.raw_path_env]
+[stress.modes.reproduction-flash-on.raw_path_env]
 KITHARA_HANG_DUMP_DIR = "hang"
+
+# The same run on real clocks. Flash collapses the fixtures' artificial
+# delays, so a defect that shows itself as "the needed request queued behind an
+# unneeded one" cannot reproduce under it: at zero real delay the order of
+# service does not change the outcome. Loader priorities, stale-fetch
+# cancellation, and everything else decided by ORDER are invisible to the lane
+# above, however many times it repeats.
+[stress.modes.reproduction-flash-off]
+features = []
+
+[stress.modes.reproduction-flash-off.set_env]
+KITHARA_FLASH_SYNC_TRACE = "1"
+KITHARA_HANG_PREKILL_SECS = "630"
+NEXTEST_FINAL_STATUS_LEVEL = "fail"
+NEXTEST_SHOW_PROGRESS = "counter"
+NEXTEST_STATUS_LEVEL = "fail"
+RUST_BACKTRACE = "1"
+
+[stress.modes.reproduction-flash-off.raw_path_env]
+KITHARA_HANG_DUMP_DIR = "hang"
+
+# The async contract, measured with the same repetition as the flakes. The
+# blocking census reports a call that parks inside an async poll, which is a
+# defect whether or not a test fails on the attempt that carried it — and a
+# run that repeats every test fifty times is exactly what walks the paths
+# where such a call hides. It rides the virtual clock because the census
+# measures poll duration, and a real clock's scheduling noise would report the
+# machine's load as the code's fault.
+[stress.modes.reproduction-no-block]
+features = ["flash", "no-block"]
+
+[stress.modes.reproduction-no-block.set_env]
+KITHARA_FLASH_SYNC_TRACE = "1"
+KITHARA_HANG_PREKILL_SECS = "630"
+KITHARA_NO_BLOCK = "census"
+KITHARA_NO_BLOCK_BUDGET_MS = "100"
+NEXTEST_FINAL_STATUS_LEVEL = "fail"
+NEXTEST_SHOW_PROGRESS = "counter"
+NEXTEST_STATUS_LEVEL = "fail"
+RUST_BACKTRACE = "1"
+
+[stress.modes.reproduction-no-block.raw_path_env]
+KITHARA_HANG_DUMP_DIR = "hang"
+KITHARA_NO_BLOCK_LOG = "no-block.log"
+
+# The real-time contract, measured the same way. They belong in the run
+# because the violation is intermittent: one was seen firing on a single attempt
+# out of two, which a gate that runs each lane once reports as green half the
+# time. Their own recipes own the sanitizer flags, the pinned nightly and
+# `-Zbuild-std`, which is why these lanes name a command instead of a feature set.
+#
+# `owns_repeats` is what stops the run from launching that command once per
+# repeat. The recipes run under nextest, so handing them the count builds the
+# suite once and lands every repeat in one report with a per-test verdict —
+# measured the same way as the lanes above, and comparable with them. Launched per
+# repeat instead, each one paid a rebuild and a cold start and could report only
+# an exit code, which names no test.
+#
+# `attempt_junit` is that report. The runner overwrites the one path, so the lane
+# keeps its own copy.
+[stress.modes.rtsan]
+attempt_junit = "target/nextest/rtsan/junit.xml"
+command = ["just", "test", "rtsan"]
+owns_repeats = true
+
+[stress.modes.rtsan-file]
+attempt_junit = "target/nextest/rtsan/junit.xml"
+command = ["just", "test", "rtsan-file"]
+owns_repeats = true
+
+[stress.modes.rtsan-hls]
+attempt_junit = "target/nextest/rtsan/junit.xml"
+command = ["just", "test", "rtsan-hls"]
+owns_repeats = true
 
 [stress.modes.diagnostic]
 features = ["flash"]
@@ -426,8 +537,9 @@ prefix_args = [
 # The fixture library and the harness meta-tests: the local test server, the
 # fixture cache and protocol, the signal oracles (`signal_pcm`, `goertzel`,
 # `wav`, `rfc6381`) — and `suite_harness`, which asserts that a timeout kills a
-# wedged test and that `env(...)` is honoured. If these break quietly, product
-# tests start lying, which is why they keep a lane rather than being dropped.
+# wedged test and that `flash` rewrites the test body. If these break quietly,
+# product tests start lying, which is why they keep a lane rather than being
+# dropped.
 [test.lanes.fixtures]
 program = "cargo"
 default_features = ["harness"]
@@ -441,8 +553,6 @@ prefix_args = [
   "--lib",
   "--test",
   "suite_harness",
-  "--test",
-  "red_env_guard_leak_thread",
   "--cargo-profile",
   "test-release",
 ]

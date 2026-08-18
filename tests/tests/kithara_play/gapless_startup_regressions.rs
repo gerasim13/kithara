@@ -30,12 +30,7 @@ const STARTUP_TIMEOUT: Duration = Duration::from_secs(4);
 const STARTUP_POSITION_SECS: f64 = 0.05;
 const AUDIBLE_SAMPLE_THRESHOLD: f32 = 1.0e-3;
 
-#[kithara::test(
-    native,
-    tokio,
-    timeout(Duration::from_secs(20)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "1")
-)]
+#[kithara::test(native, tokio, timeout(Duration::from_secs(20)), hang_timeout_secs(1))]
 #[case(GaplessMode::MediaOnly)]
 #[case(GaplessMode::CodecPriming)]
 #[case(GaplessMode::SilenceTrim(SilenceTrimParams::default()))]

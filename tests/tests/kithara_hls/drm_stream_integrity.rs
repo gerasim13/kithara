@@ -193,7 +193,7 @@ fn assert_boxes_contiguous(boxes: &[(u64, u64, String)], label: &str) {
     native,
     serial,
     timeout(Duration::from_secs(45)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "3")
+    hang_timeout_secs(3)
 )]
 #[case::hls_disk_v0("hls/master.m3u8", "HLS-disk-v0", false, 0)]
 #[case::hls_disk_v3("hls/master.m3u8", "HLS-disk-v3", false, 3)]

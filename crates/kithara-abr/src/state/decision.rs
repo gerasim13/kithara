@@ -1,6 +1,6 @@
 use kithara_events::{AbrMode, AbrReason, VariantIndex, VariantInfo};
 use kithara_platform::time::Instant;
-use kithara_test_utils::probe::IntoProbeArg;
+use kithara_test_utils::{kithara, probe::IntoProbeArg};
 use num_traits::ToPrimitive;
 
 use super::{core::AbrState, view::AbrView};
@@ -94,6 +94,11 @@ impl IntoProbeArg for &AbrDecision {
 /// is known before it is judged: a rescue off a variant that stopped delivering
 /// must not wait out an interval whose whole purpose is to settle *quality*
 /// choices. A manual pin is the user's own decision and is never held.
+#[kithara::probe(
+    can_switch = state.can_switch_now(now, view.settings.min_switch_interval),
+    locked = state.is_locked(),
+    current = state.current_variant_index().get()
+)]
 pub(crate) fn evaluate(state: &AbrState, view: &AbrView<'_>, now: Instant) -> AbrDecision {
     let decision = decide(state, view);
     if !decision.changed() || is_rescue(&decision) || matches!(state.mode(), AbrMode::Manual(_)) {

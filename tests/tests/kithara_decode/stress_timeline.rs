@@ -8,7 +8,7 @@ use kithara_integration_tests::{Xorshift64, wav::create_test_wav};
 
 use crate::common::test_defaults::SawWav;
 
-#[kithara::test(timeout(Duration::from_secs(30)), env(KITHARA_HANG_TIMEOUT_SECS = "1"))]
+#[kithara::test(timeout(Duration::from_secs(30)), hang_timeout_secs(1))]
 fn stress_seeks_preserve_timeline_integrity() {
     const DURATION_SECS: u32 = 10;
     const SAMPLE_COUNT: usize = SawWav::DEFAULT.sample_rate as usize * DURATION_SECS as usize;

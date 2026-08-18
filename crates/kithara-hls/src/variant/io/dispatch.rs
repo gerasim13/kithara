@@ -74,10 +74,11 @@ impl HlsVariant {
                     let Some(init) = self.init() else {
                         continue;
                     };
-                    let Some(handle) = init
-                        .state()
-                        .try_claim(PlannedFetch::Init, Arc::downgrade(self))
-                    else {
+                    let Some(handle) = init.state().try_claim(
+                        PlannedFetch::Init,
+                        Arc::downgrade(self),
+                        ctx.signal.clone(),
+                    ) else {
                         if !init.state().is_loaded() && !init.state().is_failed() {
                             deferred.push(planned);
                         }
@@ -105,10 +106,11 @@ impl HlsVariant {
                     let Some(entry) = self.segments.get(seg_idx as usize) else {
                         continue;
                     };
-                    let Some(handle) = entry
-                        .state()
-                        .try_claim(PlannedFetch::Segment(seg_idx), Arc::downgrade(self))
-                    else {
+                    let Some(handle) = entry.state().try_claim(
+                        PlannedFetch::Segment(seg_idx),
+                        Arc::downgrade(self),
+                        ctx.signal.clone(),
+                    ) else {
                         // WHY: An orphaned download may return to `Missing` and need another claim.
                         if !entry.state().is_loaded() && !entry.state().is_failed() {
                             deferred.push(planned);
@@ -137,7 +139,12 @@ impl HlsVariant {
         if !deferred.is_empty() {
             let mut queue = self.flow.queue.lock();
             for planned in deferred.into_iter().rev() {
-                queue.push_front(planned);
+                // A concurrent claim's Drop may have requeued this entry
+                // between the pop above and this write-back (a downloader
+                // teardown racing the dispatch) — never double-plan it.
+                if !queue.contains(&planned) {
+                    queue.push_front(planned);
+                }
             }
         }
         self.defer_prefetch_until(resume_at.unwrap_or(NO_PREFETCH_DEFERRAL));

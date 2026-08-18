@@ -38,8 +38,8 @@ Exposed through the `CoreCommand` subcommand enum:
 - `manifest`, `orphans` — Cargo manifest hygiene and per-package orphan checks.
 - `test` — workspace tests through `cargo nextest` with lane / backend / feature
   selection.
-- `stress run`, `stress report` - run the complete repeated-test evidence
-  campaign or independently verify and render its downloaded artifact.
+- `stress run`, `stress report` - execute a complete repeated-test evidence
+  run, or independently verify and render its downloaded artifact.
 - `health` — aggregated workspace health report.
 - `ci-report` — consolidate one CI run's archived quality artifacts (health,
   coverage risk, architecture metrics) into a single markdown report.
