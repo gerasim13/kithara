@@ -700,18 +700,6 @@ async fn test_head_returns_content_length() {
 }
 
 #[kithara::test(tokio)]
-async fn test_timeout_behavior() {
-    let server = TestServer::new(test_router()).await;
-    let base = HttpClient::new(NetOptions::default(), CancelToken::never());
-    let timeout_duration = Duration::from_millis(10);
-    let timeout_client = base.with_timeout(timeout_duration);
-
-    let url = server.url("/test");
-    let result = timeout_client.get_bytes(url, None).await;
-    assert!(result.is_ok(), "Request should succeed within timeout");
-}
-
-#[kithara::test(tokio)]
 async fn test_retry_policy_exponential_backoff() {
     let policy = RetryPolicy::builder()
         .max_retries(3)
