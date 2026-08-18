@@ -75,6 +75,49 @@ hairline on chosen sides in a colour of its own; neither carries a shadow, so a 
 cast one. The pop-over needs both: `Anchored` draws its own background, frame, gold cap and shadow,
 and `SkinDoc.pop.frame` has radius `0.0`, so all three share one square outline.
 
+`SkinDoc` carries no words. The crossfader captions and the track list column and footer captions
+are catalog entries resolved onto `Skin` alone; see "Text Catalog Ownership" for where they come
+from.
+
+## Text Catalog Ownership
+
+`TextDoc` is the fourth `DocKind` (`kithara.text`), parsed by `parse_text` and owned by `kithara-ui`
+the way the skin is: `builtin::text_doc()` is the compile-time asset, and its `LazyLock` is a
+sanctioned panic site for an invalid embedded catalog, same as `builtin::skin_doc`. `compile` takes
+`text: &TextDoc` borrowed for the call, right beside `skin: &SkinDoc` - a resource document, not
+compile configuration, so it does not live on `UiConfig`.
+
+A document literal beginning with `@` names a catalog key. `expand::binding_subst::intern_text`
+resolves it between `substitute` and `interner.intern`, so `$`-substitution runs first and only the
+substituted result is checked for the marker: an argument carrying `"@key"` resolves through the
+catalog exactly like a literal `"@key"` written directly in the document. `@@` escapes to a literal
+leading `@`, mirroring `$$`; a `@` anywhere but the first byte of the value is not a marker, so
+`user@example.com` passes through unchanged. `Module.title`, `.chip` and `.assign` carry no
+`$`-substitution, so they resolve a leading `@` through the same catalog lookup directly rather than
+through `intern_text`, each against a synthetic `<prefix>/title`, `/chip` or `/assign/<index>` path.
+An unresolved key is `UiDocError::UnknownTextKey { origin, key, path }`, a compile error, never a
+rendered fallback - the same totality `UnresolvedParam` already holds for `$`.
+
+Resolution happens once, at compile time, on document literals only. Text a host supplies through
+`ReadValue::Text` never reaches `intern_text` and cannot become a key by starting with `@`; a track
+title beginning with `@` stays a track title.
+
+Two catalogs combine with `TextDoc::merge`, which unions their entries and fails with
+`UiDocError::DuplicateTextKey` on any key present in both - never a silent override. `kithara-app`
+merges `builtin::text_doc()` with its own small catalog (`assets/ui/app-en.ktext.ron`) once per
+`compile_ui` call; the app catalog holds only the words canon has no key for (its own window-manager
+menu - `Modules`, `Broadcast`, the two layout-count labels), so an app document reaches every other
+key through the canon catalog even though the `.kmodule.ron` file naming it lives under
+`kithara-app/assets`. `every_shipped_catalog_carries_the_same_key_set` in `tests/text.rs` is what
+keeps a second-language catalog from silently dropping a key later.
+
+`Skin::resolve` is the one place catalog resolution happens outside `compile`: it takes `text:
+&TextDoc` and resolves the crossfader's three captions and the track list's ten column and footer
+captions once, by fixed key, storing them on `Skin` as `CrossfaderLabels` and `TrackListLabels` (plus
+`tree_search_placeholder`) rather than on `SkinDoc`. No control declares these keys and no document
+names them; a `Crossfader`, `TrackList` or `Tree` control takes its captions from whichever catalog
+`Skin::resolve` was given, unconditionally.
+
 ## Wave View Ownership
 
 Hero-wave zoom and playback position are host-owned scalars. An optional `Wave.zoom` binding reads
@@ -427,7 +470,7 @@ Everything else stays in `widgets/anchored.rs`:
 `assets/modules/app-menu.kmodule.ron` and the row templates it includes from
 `assets/modules/app-menu/` are shipped assets that `builtin::resolver()` deliberately does not
 answer for: their window-manager endpoints - window list, per-window module flags, saved layouts -
-are host state no crate owns, so the documents must not become canonical preset surface the studio
+are host state no crate owns, so the documents must not become canonical preset surface the app
 can resolve. Exactly one copy of each exists and every consumer reaches it with `include_str!`.
 The window row, module-grid cell, saved-layout row, preference toggle and hint-reporting toggle are
 one template each (`window-row`, `module-cell`, `layout-row`, `toggle-row`, `hint-row`), taken as
@@ -438,7 +481,7 @@ often as the menu needs through `Include`. Each instance's control paths are
 
 `assets/modules/master-clock.kmodule.ron`, the deck key-lock and overview row, and
 `assets/modules/pivot-portals.kmodule.ron` are shipped component documents over host-owned timing
-state. They are not builtin studio presets: the Gallery embeds them explicitly and supplies mock
+state. They are not builtin app presets: the Gallery embeds them explicitly and supplies mock
 endpoints, while a production host must supply its measured clock sources, transport state and
 portal policy. The documents retain no tempo, source, range, Link or MIDI state.
 
@@ -474,7 +517,7 @@ system border would have given it. They lie over the content, not beside it, so 
 the layout no space; `SkinDoc.window.resize_edge` owns their thickness, and the host maps each
 `WindowEdge` to its toolkit's resize direction.
 `WindowDrag`, `TitleBar` and `WindowControls` paint no surface of their own and take their size from
-the row that holds them, so the same controls sit in a 26 px gallery header and in the studio's
+the row that holds them, so the same controls sit in a 26 px gallery header and in the app's
 42 px bar; the document declares the background. `WindowDrag` is the bare drag surface a bar without
 a title needs, `TitleBar` the same surface with a label. Both emit on press, not on release - a
 window drag only takes effect while the button is still held. Their glyphs are canvas strokes drawn
@@ -517,8 +560,8 @@ together or not at all.
 
 ## Application Consumer
 
-The `kithara-app` GUI studio is the production consumer: it embeds its own layout and module
-documents, implements `EndpointRegistry` (`gui/studio_ui/endpoints.rs`) and `Reads` over an address
-tree (`gui/studio_reads/`), and maps `UiEvent` to app messages (`gui/studio_ui/events.rs`). Builtin
+The `kithara-app` GUI is the production consumer: it embeds its own layout and module
+documents, implements `EndpointRegistry` (`gui/ui/endpoints.rs`) and `Reads` over an address
+tree (`gui/reads/`), and maps `UiEvent` to app messages (`gui/ui/events.rs`). Builtin
 module docs under `assets/modules/` remain the canonical presets consumed by the gallery modules
 page.
