@@ -84,10 +84,29 @@ fn github_workflow(name: &str) -> Value {
 }
 
 fn github_workflow_text(name: &str) -> String {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+    fs::read_to_string(workflows_dir().join(name)).expect("workflow is readable")
+}
+
+fn workflows_dir() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
-        .expect("xtask has a workspace root");
-    fs::read_to_string(root.join(".github/workflows").join(name)).expect("workflow is readable")
+        .expect("xtask has a workspace root")
+        .join(".github/workflows")
+}
+
+fn workflow_file_names() -> BTreeSet<String> {
+    fs::read_dir(workflows_dir())
+        .expect("workflow directory is readable")
+        .map(|entry| {
+            entry
+                .expect("workflow entry is readable")
+                .file_name()
+                .to_str()
+                .expect("workflow file name is UTF-8")
+                .to_owned()
+        })
+        .filter(|name| name.ends_with(".yml"))
+        .collect()
 }
 
 fn configured_stress_prekill_secs(root: &Path) -> u64 {
@@ -395,6 +414,83 @@ fn github_ci_is_fail_closed_and_aggregates_every_job() {
             .expect("required step is a script")
             .trim(),
         REQUIRED_SCRIPT
+    );
+}
+
+fn concurrency_prefixes(owner: &Mapping) -> BTreeSet<String> {
+    let Some(concurrency) = owner.get("concurrency") else {
+        return BTreeSet::new();
+    };
+    let group = match concurrency {
+        Value::String(group) => group.as_str(),
+        Value::Mapping(mapping) => mapping_field(mapping, "group")
+            .as_str()
+            .expect("concurrency group is a string"),
+        _ => panic!("concurrency is a string or a mapping"),
+    };
+    let formatted: BTreeSet<String> = group
+        .match_indices("format('")
+        .map(|(index, marker)| {
+            let literal = group[index + marker.len()..]
+                .split('\'')
+                .next()
+                .expect("format template is quoted");
+            group_prefix(literal)
+        })
+        .collect();
+    if formatted.is_empty() {
+        BTreeSet::from([group_prefix(group)])
+    } else {
+        formatted
+    }
+}
+
+// What a group expression can evaluate to, down to the part no branch varies:
+// `fork-linux-{0}` and `fork-linux-${{ github.repository }}` name one queue.
+fn group_prefix(group: &str) -> String {
+    group
+        .split(['{', '$'])
+        .next()
+        .unwrap_or(group)
+        .trim()
+        .to_owned()
+}
+
+#[test]
+fn a_called_workflow_never_waits_on_the_group_its_caller_holds() {
+    let mut deadlocks = Vec::new();
+    for name in workflow_file_names() {
+        let workflow = github_workflow(&name);
+        let held = concurrency_prefixes(workflow.as_mapping().expect("workflow is a mapping"));
+        for (job_name, job) in workflow_jobs(&workflow) {
+            let job = job.as_mapping().expect("workflow job is a mapping");
+            let Some(called) = job
+                .get("uses")
+                .and_then(Value::as_str)
+                .and_then(|uses| uses.strip_prefix("./.github/workflows/"))
+            else {
+                continue;
+            };
+            let mut caller = held.clone();
+            caller.extend(concurrency_prefixes(job));
+            let callee = concurrency_prefixes(
+                github_workflow(called)
+                    .as_mapping()
+                    .expect("called workflow is a mapping"),
+            );
+            let shared: Vec<&String> = caller.intersection(&callee).collect();
+            if !shared.is_empty() {
+                let job_name = job_name.as_str().expect("workflow job name is a string");
+                deadlocks.push(format!(
+                    "{name} job `{job_name}` calls {called} on {shared:?}"
+                ));
+            }
+        }
+    }
+
+    assert!(
+        deadlocks.is_empty(),
+        "a called workflow cannot start while its caller holds the same concurrency group: {deadlocks:?}"
     );
 }
 
