@@ -46,7 +46,8 @@ struct LoadProbe {
 }
 
 impl LoadProbe {
-    const fn new() -> Self {
+    // Not const: on the loom lane the platform alias resolves to loom's atomic.
+    fn new() -> Self {
         Self {
             phase: AtomicU8::new(LOAD_WARMUP),
         }

@@ -125,14 +125,15 @@ impl<P: Packager> BroadcastStop<P> {
 
 #[cfg(test)]
 mod tests {
+    // The flag below is a `static`, and the platform alias resolves to loom's
+    // atomic on the lane that models concurrency, whose `new` is not const.
+    use std::sync::atomic::{AtomicBool, Ordering};
+
     use kithara::{
         audio::ConsumerWakeMode,
         play::{Cmd, PlayError, Reply, SessionDispatcher},
     };
-    use kithara_platform::sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    };
+    use kithara_platform::sync::Arc;
 
     use super::*;
 
