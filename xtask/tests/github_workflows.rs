@@ -1370,3 +1370,32 @@ fn nightly_collector_is_read_only_and_does_not_mirror_the_source_verdict() {
         );
     }
 }
+
+// The image owns every pinned tool, browsers included. A run-time install puts
+// a third-party download on the critical path of a job, which this repository
+// has measured failing four runs out of six. See `docker/ci.Dockerfile`.
+#[test]
+fn a_browser_comes_from_the_image_and_is_never_fetched_by_a_job() {
+    let mut installs = Vec::new();
+    for name in workflow_file_names() {
+        let workflow = github_workflow(&name);
+        for (job_name, job) in workflow_jobs(&workflow) {
+            let job_name = job_name.as_str().expect("workflow job name is a string");
+            let Some(steps) = job.get("steps").and_then(Value::as_sequence) else {
+                continue;
+            };
+            for step in steps {
+                let uses = step.get("uses").and_then(Value::as_str).unwrap_or_default();
+                let run = step.get("run").and_then(Value::as_str).unwrap_or_default();
+                if uses.starts_with("browser-actions/") || run.contains("chrome-for-testing") {
+                    installs.push(format!("{name} job `{job_name}`"));
+                }
+            }
+        }
+    }
+
+    assert!(
+        installs.is_empty(),
+        "a browser is pinned in the CI image, never fetched by a job: {installs:?}"
+    );
+}

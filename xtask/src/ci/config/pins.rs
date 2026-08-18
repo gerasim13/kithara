@@ -24,7 +24,11 @@ pub(crate) struct CiPins {
     pub(crate) android_platform_version: u32,
     pub(crate) brew_casks: Vec<String>,
     pub(crate) brew_formulae: Vec<String>,
+    /// Chrome for Testing publishes no Linux arm64 archive, so the image
+    /// carries the pinned pair on amd64 only.
+    pub(crate) chrome_for_testing_linux_amd64_sha256: String,
     pub(crate) chrome_for_testing_version: String,
+    pub(crate) chromedriver_linux_amd64_sha256: String,
     pub(crate) cmake_linux_amd64_sha256: String,
     pub(crate) cmake_linux_arm64_sha256: String,
     pub(crate) cmake_version: String,
@@ -166,6 +170,14 @@ impl CiPins {
             (
                 "android_commandline_tools_sha256",
                 self.android_commandline_tools_sha256.as_str(),
+            ),
+            (
+                "chrome_for_testing_linux_amd64_sha256",
+                self.chrome_for_testing_linux_amd64_sha256.as_str(),
+            ),
+            (
+                "chromedriver_linux_amd64_sha256",
+                self.chromedriver_linux_amd64_sha256.as_str(),
             ),
             (
                 "cmake_linux_arm64_sha256",

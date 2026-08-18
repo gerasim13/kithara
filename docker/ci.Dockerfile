@@ -16,6 +16,9 @@ ARG CARGO_SEMVER_CHECKS_VERSION
 ARG CARGO_SHEAR_VERSION
 ARG CARGO_SORT_VERSION
 ARG CARGO_WORKSPACE_UNUSED_PUB_VERSION
+ARG CHROMEDRIVER_AMD64_SHA256
+ARG CHROME_FOR_TESTING_AMD64_SHA256
+ARG CHROME_FOR_TESTING_VERSION
 ARG CMAKE_AMD64_SHA256
 ARG CMAKE_ARM64_SHA256
 ARG CMAKE_VERSION
@@ -55,7 +58,7 @@ ENV WASM_SLIM_TOOLCHAIN=${NIGHTLY_TOOLCHAIN}
 # manifest the Vulkan loader reads to find it have to be in the image.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     -o Acquire::Retries=5 -o Acquire::http::Timeout=600 \
-    ca-certificates chromium chromium-driver curl ffmpeg firefox-esr git \
+    ca-certificates chromium chromium-driver curl ffmpeg firefox-esr git unzip \
     clang libclang-dev lld pkg-config \
     bubblewrap socat ripgrep nodejs npm \
     mesa-vulkan-drivers \
@@ -93,6 +96,31 @@ RUN case "$(dpkg --print-architecture)" in \
  && tar -xzf /tmp/geckodriver.tar.gz -C /usr/local/bin geckodriver \
  && rm /tmp/geckodriver.tar.gz \
  && ln -s /usr/bin/firefox-esr /usr/local/bin/firefox
+
+# Chrome for Testing ships `linux64` and nothing else for Linux, so the pinned
+# pair is amd64-only. An arm64 image keeps the distribution's chromium, and
+# `just ci run web-chromium` compares the version before it starts, so that
+# difference is reported rather than silently run.
+#
+# The apt packages above stay: they carry the shared libraries this build
+# loads. `/usr/local/bin` precedes `/usr/bin`, so the pinned pair is what the
+# lane resolves, and the two version checks are what prove it.
+RUN if [ "$(dpkg --print-architecture)" = "amd64" ]; then \
+      base="https://storage.googleapis.com/chrome-for-testing-public/${CHROME_FOR_TESTING_VERSION}/linux64" \
+   && curl -fsSL -o /tmp/chrome.zip "${base}/chrome-linux64.zip" \
+   && echo "${CHROME_FOR_TESTING_AMD64_SHA256}  /tmp/chrome.zip" | sha256sum -c - \
+   && curl -fsSL -o /tmp/chromedriver.zip "${base}/chromedriver-linux64.zip" \
+   && echo "${CHROMEDRIVER_AMD64_SHA256}  /tmp/chromedriver.zip" | sha256sum -c - \
+   && unzip -q /tmp/chrome.zip -d /opt \
+   && unzip -qj /tmp/chromedriver.zip chromedriver-linux64/chromedriver -d /usr/local/bin \
+   && rm /tmp/chrome.zip /tmp/chromedriver.zip \
+   && chmod +x /usr/local/bin/chromedriver \
+   && ln -s /opt/chrome-linux64/chrome /usr/local/bin/chromium \
+   && chromium --version | grep -q "${CHROME_FOR_TESTING_VERSION}" \
+   && chromedriver --version | grep -q "${CHROME_FOR_TESTING_VERSION}"; \
+    else \
+      echo "chrome-for-testing has no linux arm64 build; keeping the distribution chromium" >&2; \
+    fi
 
 RUN case "$(dpkg --print-architecture)" in \
       amd64) slice=x64; sum="${GITLEAKS_AMD64_SHA256}" ;; \

@@ -29,7 +29,9 @@ brew_formulae = [
   "rustup",
   "xcodegen",
 ]
+chrome_for_testing_linux_amd64_sha256 = "60a324a6e1d27b20f2035a2cdaf71641a739fe1f5571f63794773225820bce8a"
 chrome_for_testing_version = "151.0.7922.77"
+chromedriver_linux_amd64_sha256 = "65dca829d176845f864b794be1ecdd31e855f14ca9fa1eb93b2d1c0e7242abdd"
 cmake_linux_amd64_sha256 = "0dc2e9a6860f06bf10bd8fadc03e35d9eeb4df46e33763a7e480e987758f385c"
 cmake_linux_arm64_sha256 = "83f8fd91d2038a56556e1400390fcfe42f79602940c494f6c6f1cdae7f9e7f40"
 cmake_version = "3.31.12"
