@@ -317,7 +317,14 @@ impl FetchSlot {
             drop(writer);
             handle.abandon();
         } else {
-            writer.fail("fetch cancelled before completion".into());
+            // Release without stamping. The stamp lives on the shared resource,
+            // not on this writer, so it would fail the first `write_at` of
+            // whoever refills the slot — and on this path someone always does:
+            // the epoch rebuild that cancelled us owns the re-dispatch. Stamping
+            // here made a cancel indistinguishable from a broken sink, and the
+            // successor's error came back as a fatal `Decode`, parking the slot
+            // `Failed` for good.
+            writer.abandon();
             handle.into_missing();
         }
     }

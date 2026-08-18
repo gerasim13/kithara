@@ -83,6 +83,7 @@ impl WriteSide for BaseWriter {
 
     delegate::delegate! {
         to self.0 {
+            fn abandon(self);
             fn fail(self, reason: String);
             #[expr(BaseReader::new($))]
             #[call(clone)]

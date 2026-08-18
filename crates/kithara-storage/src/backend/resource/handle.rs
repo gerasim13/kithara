@@ -185,6 +185,24 @@ impl<D: DriverIo> Resource<Active, D> {
             /// cannot flush.
             #[call(seal_inner)]
             pub(crate) fn seal_in_place(&self, final_len: Option<u64>) -> StorageResult<()>;
+            /// Release the writer without marking the resource failed.
+            ///
+            /// Dropping an uncommitted writer stamps the resource `Failed` so a
+            /// reader blocked on bytes that will never arrive gets an error
+            /// instead of a hang. That stamp lives on the shared core, not on
+            /// this handle, and it outlives the writer: every later `write_at`
+            /// on the same resource fails with it, including a successor's. So
+            /// a caller that is itself re-dispatching the write — an epoch
+            /// rebuild that cancelled this fetch and owns the next one — must
+            /// release without stamping, or it poisons the resource it just
+            /// promised to refill. Same reasoning `should_fail_on_drop` already
+            /// applies to a cancelled core, extended to a cancelled caller.
+            ///
+            /// Readers are deliberately left waiting: the caller's re-dispatch
+            /// is what wakes them, and failing them here would be the very
+            /// error this avoids.
+            #[call(abandon_inner)]
+            pub fn abandon(&self);
             /// Mark the resource as failed, consuming the writer.
             #[call(fail_inner)]
             pub fn fail(self, reason: String);

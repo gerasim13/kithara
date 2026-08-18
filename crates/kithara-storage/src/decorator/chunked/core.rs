@@ -163,6 +163,15 @@ impl<D: DriverIo> AtomicChunked<D> {
         self.read_view().contains_range(range)
     }
 
+    /// Release the writer without failing the resource, keeping the temp file.
+    ///
+    /// The caller owns the refill, so the partial bytes belong to the successor
+    /// now — removing them, as [`fail`](Self::fail) does, would delete work in
+    /// flight.
+    pub fn abandon(&self) {
+        self.inner.load().abandon();
+    }
+
     /// Mark the resource failed and remove the orphaned temp file.
     pub fn fail(&self, reason: String) {
         self.inner.load().fail_in_place(reason);

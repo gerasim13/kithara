@@ -140,6 +140,10 @@ impl<D: DriverIo> ResourceCore<D> {
 
         self.inner.driver.reactivate()?;
         self.inner.committed.store(false, Ordering::Release);
+        // A new write generation starts armed: `abandon` waives the anti-hang
+        // stamp for the writer that owns the refill, not for whoever writes
+        // next over the same core.
+        self.inner.stamp_on_drop.store(true, Ordering::Release);
 
         {
             let mut state = self.inner.gate.lock();
@@ -151,11 +155,17 @@ impl<D: DriverIo> ResourceCore<D> {
         Ok(())
     }
 
+    /// Release the writer without the anti-hang failure stamp. Idempotent.
+    pub(super) fn abandon_inner(&self) {
+        self.inner.stamp_on_drop.store(false, Ordering::Release);
+    }
+
     /// Whether dropping an uncommitted writer should mark the core failed.
-    /// `false` once the resource is committed, already failed, or cancelled
-    /// (cancellation is a routine shutdown, not a writer error).
+    /// `false` once the resource is committed, already failed, cancelled
+    /// (cancellation is a routine shutdown, not a writer error), or explicitly
+    /// abandoned by a caller that owns the refill.
     pub(super) fn should_fail_on_drop(&self) -> bool {
-        if self.inner.cancel.is_cancelled() {
+        if self.inner.cancel.is_cancelled() || !self.inner.stamp_on_drop.load(Ordering::Acquire) {
             return false;
         }
         let state = self.inner.gate.lock();

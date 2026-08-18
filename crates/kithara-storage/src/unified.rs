@@ -85,6 +85,16 @@ impl StorageResource {
         }
     }
 
+    /// Release the writer without failing the resource, for a caller that owns
+    /// the refill. See [`AtomicChunked::abandon`].
+    pub fn abandon(&self) {
+        match self {
+            #[cfg(not(target_arch = "wasm32"))]
+            Self::Mmap(r) => r.abandon(),
+            Self::Mem(r) => r.abandon(),
+        }
+    }
+
     /// Mark the resource failed.
     pub fn fail(&self, reason: String) {
         match self {
