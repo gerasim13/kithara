@@ -244,11 +244,12 @@ fn build_root(root: &Path, config: &StressConfig) -> PathBuf {
 
 /// Where the test runner leaves the report a lane is measured by.
 ///
-/// The runner writes it under the directory it builds into, so both come from
-/// the same place. Two independent anchors would agree only until the run
-/// changed one of them.
+/// Anchored at the checkout, not the build directory: nextest's store is
+/// rooted at the workspace root and does not follow `CARGO_TARGET_DIR`, so a
+/// report anchor under the build directory points where no report is ever
+/// written.
 fn subject_junit(subject_root: &Path, config: &StressConfig) -> PathBuf {
-    build_root(subject_root, config).join(&config.artifacts.subject_junit)
+    subject_root.join(&config.artifacts.subject_junit)
 }
 
 /// The lanes this invocation is made of: what was asked for, or what the
@@ -348,8 +349,10 @@ fn run_command_lane(
         .command
         .split_first()
         .context("a command lane needs a program to run")?;
-    let build = build_root(&ctx.root, &ctx.config.stress);
-    let report = mode.attempt_junit.as_deref().map(|path| build.join(path));
+    let report = mode
+        .attempt_junit
+        .as_deref()
+        .map(|path| ctx.root.join(path));
     let attempts = command_lane_attempts(mode, count);
     let mut codes = Vec::with_capacity(attempts);
     for attempt in 0..attempts {
@@ -1148,6 +1151,7 @@ fn stage_junit(source: &Path, destination: &Path) -> Result<()> {
     match fs::copy(source, destination) {
         Ok(_) => Ok(()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            println!("stress JUnit staging: nothing at {}", source.display());
             Err(NotClean::reported("stress JUnit staging"))
         }
         Err(error) => Err(error).with_context(|| {
@@ -1403,16 +1407,16 @@ mod tests {
         assert_eq!(expectation.runner.prefix_args, ["test", "rtsan"]);
     }
 
-    /// The runner writes its report under the directory it builds into. Reading
-    /// it from anywhere else finds either nothing — and a lane whose report is
-    /// missing is staged as a failure it never had — or the report a different
-    /// run left behind.
+    /// nextest's store is rooted at the workspace root and ignores
+    /// `CARGO_TARGET_DIR`, so the report anchor stays on the checkout even
+    /// while the build is sent to the run's own directory. Anchoring it under
+    /// the build directory reads a path where no report is ever written.
     #[test]
-    fn a_lane_is_measured_by_the_report_under_its_own_build_directory() {
+    fn a_lane_is_measured_by_the_report_under_the_checkout_it_tests() {
         let config = StressConfig {
             build_dir: "target-stress".to_owned(),
             artifacts: StressArtifactConfig {
-                subject_junit: "nextest/stress/junit.xml".to_owned(),
+                subject_junit: "target/nextest/stress/junit.xml".to_owned(),
                 ..StressArtifactConfig::default()
             },
             ..StressConfig::default()
@@ -1420,7 +1424,7 @@ mod tests {
 
         assert_eq!(
             subject_junit(Path::new("/work/subject"), &config),
-            Path::new("/work/subject/target-stress/nextest/stress/junit.xml")
+            Path::new("/work/subject/target/nextest/stress/junit.xml")
         );
     }
 

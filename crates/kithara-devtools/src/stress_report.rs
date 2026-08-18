@@ -3,7 +3,7 @@
 use std::{
     cmp::Reverse,
     collections::{BTreeMap, BTreeSet},
-    fmt::Write as _,
+    fmt::{Display, Write as _},
     fs::{self, File},
     io::Read,
     path::{Path, PathBuf},
@@ -380,12 +380,11 @@ pub(crate) fn validate_primary_evidence(
     expected_count: usize,
 ) -> Result<()> {
     validate_expected_count(expected_count)?;
-    let inventory =
-        read_inventory(inventory_path).map_err(|_| NotClean::reported("stress run evidence"))?;
+    let inventory = read_inventory(inventory_path).map_err(primary_evidence_finding)?;
     let xml = read_bounded_utf8(junit_path, MAX_JUNIT_BYTES, "stress JUnit")
-        .map_err(|_| NotClean::reported("stress run evidence"))?;
-    let junit = parse_junit_report(&xml).map_err(|_| NotClean::reported("stress run evidence"))?;
-    validate_correlation_metadata(&junit).map_err(|_| NotClean::reported("stress run evidence"))?;
+        .map_err(primary_evidence_finding)?;
+    let junit = parse_junit_report(&xml).map_err(primary_evidence_finding)?;
+    validate_correlation_metadata(&junit).map_err(primary_evidence_finding)?;
     let report = render(
         &junit.cases,
         &inventory,
@@ -393,11 +392,26 @@ pub(crate) fn validate_primary_evidence(
         junit.run_id.as_deref(),
         junit.timestamp.as_deref(),
     );
-    if report.complete && !junit.cases.iter().any(|case| case.failed) {
+    let failed = junit.cases.iter().filter(|case| case.failed).count();
+    if report.complete && failed == 0 {
         Ok(())
     } else {
+        println!(
+            "stress run evidence: complete={complete}, failed cases={failed}",
+            complete = report.complete,
+        );
         Err(NotClean::reported("stress run evidence"))
     }
+}
+
+/// Names the finding a verdict would otherwise swallow.
+///
+/// `NotClean` stands for a check whose findings are printed above it; a reader
+/// error converted without printing leaves a verdict with nothing above it,
+/// and the one fact that names the unreadable path is the fact that is lost.
+fn primary_evidence_finding(error: impl Display) -> anyhow::Error {
+    println!("stress run evidence: {error:#}");
+    NotClean::reported("stress run evidence")
 }
 
 fn validate_correlation_metadata(junit: &crate::junit::JunitReport) -> Result<(), String> {
@@ -429,7 +443,7 @@ fn validate_correlation_metadata(junit: &crate::junit::JunitReport) -> Result<()
 
 fn render_missing(expected_count: usize, junit: &Path, allow_missing: bool) -> String {
     let explanation = if allow_missing {
-        "Nextest did not reach the point where it could write per-iteration evidence. Inspect the primary step log."
+        "No JUnit was staged for this lane: either nextest died before writing one, or the run looked for it at a path nextest does not write. The primary step log names which."
     } else {
         "The required per-iteration evidence was not produced. Inspect the command and input path."
     };

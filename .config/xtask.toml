@@ -202,7 +202,7 @@ workflow_job_timeout_minutes = 1380
 
 [stress.artifacts]
 attempts = "attempts.json"
-subject_junit = "nextest/stress/junit.xml"
+subject_junit = "target/nextest/stress/junit.xml"
 inventory = "inventory.json"
 junit = "junit.xml"
 log = "nextest.log"
@@ -342,17 +342,17 @@ KITHARA_NO_BLOCK_LOG = "no-block.log"
 # `attempt_junit` is that report. The runner overwrites the one path, so the lane
 # keeps its own copy.
 [stress.modes.rtsan]
-attempt_junit = "nextest/rtsan/junit.xml"
+attempt_junit = "target/nextest/rtsan/junit.xml"
 command = ["just", "test", "rtsan"]
 owns_repeats = true
 
 [stress.modes.rtsan-file]
-attempt_junit = "nextest/rtsan/junit.xml"
+attempt_junit = "target/nextest/rtsan/junit.xml"
 command = ["just", "test", "rtsan-file"]
 owns_repeats = true
 
 [stress.modes.rtsan-hls]
-attempt_junit = "nextest/rtsan/junit.xml"
+attempt_junit = "target/nextest/rtsan/junit.xml"
 command = ["just", "test", "rtsan-hls"]
 owns_repeats = true
 

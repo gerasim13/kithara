@@ -450,12 +450,12 @@ pub struct StressConfig {
 #[non_exhaustive]
 #[serde(default, deny_unknown_fields)]
 pub struct StressArtifactConfig {
-    /// Where the test runner leaves its report, relative to `build_dir`.
+    /// Where the test runner leaves its report, relative to the subject
+    /// checkout.
     ///
-    /// The runner writes it under the directory it builds into, so the path is
-    /// resolved against the same value that directory comes from. Anchored
-    /// anywhere else, the two would drift apart the moment the run stopped
-    /// building where the machine wanted it to.
+    /// nextest's store is rooted at the workspace root and does not follow
+    /// `CARGO_TARGET_DIR`, so the report stays put while the build is sent to
+    /// the run's own directory.
     pub subject_junit: String,
     pub inventory: String,
     pub junit: String,

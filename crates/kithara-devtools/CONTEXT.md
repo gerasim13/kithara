@@ -254,12 +254,15 @@ on it, and a stress run lasts hours: five of them lost a whole lane to binaries
 that were cleared mid-run, after which every remaining repeat failed to exec in
 milliseconds and the lane reported nothing about the revision it was asked about.
 The price is one cold build per run per tree. `[stress.artifacts].subject_junit`
-and a mode's `attempt_junit` are resolved against that same directory, because the
-runner writes its report under the directory it builds into; the manifest records
-the resolved path under `build.target_dir`, so a lane that dies this way names the
-directory itself instead of leaving it to be reconstructed from the log. The path
-is an observation, not provenance: the reporting machine has no such directory and
-is never asked to agree about one.
+and a mode's `attempt_junit` stay anchored at the checkout that runs the tests:
+nextest's store is rooted at the workspace root and does not follow
+`CARGO_TARGET_DIR`, so only the build moves — a report anchor under the build
+directory reads a path nextest never writes, and one run lost all six lanes'
+evidence to exactly that. The manifest records the resolved build directory under
+`build.target_dir`, so a lane that dies with its binaries names the directory
+itself instead of leaving it to be reconstructed from the log. The path is an
+observation, not provenance: the reporting machine has no such directory and is
+never asked to agree about one.
 
 Pressure schema `devtools.pressure.v2` names its end-marker status
 `primary_exit_code`: sampling ends after the test/evidence phase so the reporter can
