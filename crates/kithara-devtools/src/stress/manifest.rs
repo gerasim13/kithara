@@ -21,7 +21,7 @@ use time::format_timestamp;
 struct Consts;
 
 impl Consts {
-    const MANIFEST_SCHEMA: u32 = 3;
+    const MANIFEST_SCHEMA: u32 = 4;
     const MAX_MANIFEST_BYTES: usize = 1_048_576;
     const MANIFEST_READ_LIMIT: u64 = 1_048_577;
 }
@@ -31,6 +31,7 @@ impl Consts {
 pub(super) struct Manifest {
     pub(super) schema: u32,
     pub(super) mode: String,
+    pub(super) build: BuildSnapshot,
     pub(super) config: ManifestConfig,
     pub(super) controller: Revision,
     pub(super) subject: Revision,
@@ -45,6 +46,7 @@ pub(super) struct Manifest {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct ManifestSpec {
     pub(super) mode: String,
+    pub(super) build: BuildSnapshot,
     pub(super) config: ManifestConfig,
     pub(super) controller_sha: String,
     pub(super) subject_sha: String,
@@ -75,6 +77,35 @@ impl ManifestConfig {
             pressure_schema: PRESSURE_SCHEMA.to_owned(),
             workflow_job_timeout_minutes,
         }
+    }
+}
+
+/// Where the lane actually built, recorded rather than reconstructed.
+///
+/// A lane whose binaries went missing mid-run fails every remaining repeat in
+/// milliseconds, and the one fact that names the cause — the directory those
+/// binaries were in — used to appear nowhere in the evidence. It is an
+/// observation, not a policy: the reporting machine has no such directory and
+/// must not be asked to agree about one.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct BuildSnapshot {
+    pub(super) target_dir: String,
+}
+
+impl BuildSnapshot {
+    pub(super) fn new(target_dir: &Path) -> Result<Self> {
+        Ok(Self {
+            target_dir: target_dir
+                .to_str()
+                .with_context(|| {
+                    format!(
+                        "stress build directory is not UTF-8: {}",
+                        target_dir.display()
+                    )
+                })?
+                .to_owned(),
+        })
     }
 }
 
@@ -181,6 +212,7 @@ impl Manifest {
         let manifest = Self {
             schema: Consts::MANIFEST_SCHEMA,
             mode: spec.mode,
+            build: spec.build,
             config: spec.config,
             controller: Revision {
                 sha: spec.controller_sha,
@@ -475,6 +507,11 @@ impl Manifest {
             "manifest subject SHA is invalid"
         );
         ensure!(!self.mode.trim().is_empty(), "manifest mode is empty");
+        ensure!(
+            Path::new(&self.build.target_dir).is_absolute(),
+            "manifest build directory is not absolute: {}",
+            self.build.target_dir
+        );
         ensure!(
             !self.config.profile.trim().is_empty(),
             "manifest nextest profile is empty"
@@ -798,6 +835,7 @@ mod tests {
     fn spec() -> ManifestSpec {
         ManifestSpec {
             mode: "baseline".to_owned(),
+            build: BuildSnapshot::new(Path::new("/stress/target-stress")).expect("build"),
             config: ManifestConfig::new("campaign", "controller/settings/runner.toml", 90),
             controller_sha: CONTROLLER_SHA.to_owned(),
             subject_sha: SUBJECT_SHA.to_owned(),

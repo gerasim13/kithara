@@ -11,6 +11,10 @@ use anyhow::{Result, ensure};
 
 use crate::common::project::{StressConfig, StressModeConfig};
 
+/// The environment variable every `cargo` invocation reads to decide where it
+/// builds, and the one a stress run cannot afford to inherit.
+const TARGET_DIR_ENV: &str = "CARGO_TARGET_DIR";
+
 #[derive(Debug)]
 pub(super) struct CampaignEnvironment {
     set: BTreeMap<OsString, OsString>,
@@ -18,8 +22,13 @@ pub(super) struct CampaignEnvironment {
 }
 
 impl CampaignEnvironment {
+    /// # Errors
+    ///
+    /// Returns an error when a raw path is absolute, or when the build
+    /// directory is not one the run can hand a child.
     pub(super) fn new(
         raw_dir: &Path,
+        build_dir: &Path,
         config: &StressConfig,
         mode: &StressModeConfig,
     ) -> Result<Self> {
@@ -41,6 +50,21 @@ impl CampaignEnvironment {
             );
             set.insert(OsString::from(key), raw_dir.join(relative).into_os_string());
         }
+        // The run builds where it says, not where the machine says. An
+        // inherited value points at a directory shared with everything else on
+        // the host, and a stress run lasts hours: when those binaries went
+        // away mid-run, every test of every remaining repeat failed to exec in
+        // milliseconds and the lane reported nothing about the code it was
+        // asked about. Set last, so no lane can name this key away.
+        ensure!(
+            build_dir.is_absolute(),
+            "stress build directory must be absolute: {}",
+            build_dir.display()
+        );
+        set.insert(
+            OsString::from(TARGET_DIR_ENV),
+            build_dir.to_path_buf().into_os_string(),
+        );
         Ok(Self { set, remove })
     }
 
@@ -79,7 +103,8 @@ mod tests {
         };
 
         let environment =
-            CampaignEnvironment::new(Path::new("raw"), &config, &mode).expect("environment");
+            CampaignEnvironment::new(Path::new("raw"), Path::new("/stress/build"), &config, &mode)
+                .expect("environment");
 
         assert_eq!(environment.value("TRACE"), Some("verbose"));
         assert_eq!(environment.value("DUMP_DIR"), Some("raw/hang"));
@@ -93,9 +118,58 @@ mod tests {
             ..StressModeConfig::default()
         };
 
-        let error = CampaignEnvironment::new(Path::new("raw"), &StressConfig::default(), &mode)
-            .expect_err("absolute path");
+        let error = CampaignEnvironment::new(
+            Path::new("raw"),
+            Path::new("/stress/build"),
+            &StressConfig::default(),
+            &mode,
+        )
+        .expect_err("absolute path");
 
         assert!(error.to_string().contains("must be relative"));
+    }
+
+    #[test]
+    fn a_lane_builds_where_the_run_says() {
+        let environment = CampaignEnvironment::new(
+            Path::new("raw"),
+            Path::new("/stress/build"),
+            &StressConfig::default(),
+            &StressModeConfig::default(),
+        )
+        .expect("environment");
+
+        assert_eq!(environment.value(TARGET_DIR_ENV), Some("/stress/build"));
+    }
+
+    #[test]
+    fn a_lane_cannot_name_the_build_directory_away() {
+        let mode = StressModeConfig {
+            set_env: BTreeMap::from([(TARGET_DIR_ENV.to_owned(), "/elsewhere".to_owned())]),
+            ..StressModeConfig::default()
+        };
+
+        let environment = CampaignEnvironment::new(
+            Path::new("raw"),
+            Path::new("/stress/build"),
+            &StressConfig::default(),
+            &mode,
+        )
+        .expect("environment");
+
+        assert_eq!(environment.value(TARGET_DIR_ENV), Some("/stress/build"));
+    }
+
+    #[test]
+    fn a_relative_build_directory_is_refused_before_a_child_inherits_it() {
+        let error = CampaignEnvironment::new(
+            Path::new("raw"),
+            Path::new("build"),
+            &StressConfig::default(),
+            &StressModeConfig::default(),
+        )
+        .expect_err("relative build directory");
+
+        assert!(error.to_string().contains("must be absolute"));
     }
 }

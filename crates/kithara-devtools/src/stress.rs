@@ -37,8 +37,8 @@ mod system;
 
 use environment::CampaignEnvironment;
 use manifest::{
-    ExecuteResult, ExpectedProvenance, Manifest, ManifestConfig, ManifestSpec, PolicySnapshot,
-    Selection,
+    BuildSnapshot, ExecuteResult, ExpectedProvenance, Manifest, ManifestConfig, ManifestSpec,
+    PolicySnapshot, Selection,
 };
 use pressure::Sampler;
 
@@ -210,7 +210,7 @@ fn run_campaign(args: &RunArgs, ctx: &Ctx) -> Result<()> {
             .unwrap_or_else(|| Path::new(&config.raw_output)),
     );
     let subject_root = absolute_existing_directory(&ctx.root, &args.subject_root, "subject")?;
-    let subject_junit = subject_root.join(&config.artifacts.subject_junit);
+    let subject_junit = subject_junit(&subject_root, config);
     ensure!(
         !subject_junit
             .try_exists()
@@ -229,6 +229,26 @@ fn run_campaign(args: &RunArgs, ctx: &Ctx) -> Result<()> {
         }
     }
     failure.map_or(Ok(()), Err)
+}
+
+/// Where a lane building `root` leaves its artifacts.
+///
+/// The run names this directory instead of inheriting `CARGO_TARGET_DIR`, and it
+/// belongs to the checkout it builds: a lane that builds into a directory shared
+/// with the rest of the machine can have its binaries taken away while it is
+/// still running them, and a stress run that lasts hours is the one most likely
+/// to be standing there when it happens.
+fn build_root(root: &Path, config: &StressConfig) -> PathBuf {
+    root.join(&config.build_dir)
+}
+
+/// Where the test runner leaves the report a lane is measured by.
+///
+/// The runner writes it under the directory it builds into, so both come from
+/// the same place. Two independent anchors would agree only until the run
+/// changed one of them.
+fn subject_junit(subject_root: &Path, config: &StressConfig) -> PathBuf {
+    build_root(subject_root, config).join(&config.artifacts.subject_junit)
 }
 
 /// The lanes this invocation is made of: what was asked for, or what the
@@ -328,10 +348,8 @@ fn run_command_lane(
         .command
         .split_first()
         .context("a command lane needs a program to run")?;
-    let report = mode
-        .attempt_junit
-        .as_deref()
-        .map(|path| ctx.root.join(path));
+    let build = build_root(&ctx.root, &ctx.config.stress);
+    let report = mode.attempt_junit.as_deref().map(|path| build.join(path));
     let attempts = command_lane_attempts(mode, count);
     let mut codes = Vec::with_capacity(attempts);
     for attempt in 0..attempts {
@@ -417,9 +435,14 @@ fn run_lane(args: &RunArgs, ctx: &Ctx, mode_name: &str, raw: &Path) -> Result<()
         args.expected_subject_sha.as_deref(),
         "subject",
     )?;
-    let subject_junit = subject_root.join(&config.artifacts.subject_junit);
+    let subject_junit = subject_junit(&subject_root, config);
     let runner = lane_runner(&ctx.config, config, mode)?;
     let commanded = !mode.command.is_empty();
+    // A command lane runs its own recipe in the controller checkout; every
+    // other lane runs the configured runner against the subject. Each builds
+    // beside the tree it compiles, so one lane's artifacts never answer for
+    // another lane's source.
+    let build = build_root(if commanded { &ctx.root } else { &subject_root }, config);
     let spec = StressRunSpec {
         inventory: paths.inventory.clone(),
         junit: subject_junit.clone(),
@@ -438,10 +461,11 @@ fn run_lane(args: &RunArgs, ctx: &Ctx, mode_name: &str, raw: &Path) -> Result<()
     }
     ensure_raw_outside_subject_evidence(&paths.raw, &subject_junit)?;
     let system = system::capture()?;
-    let environment = CampaignEnvironment::new(&paths.raw, config, mode)?;
+    let environment = CampaignEnvironment::new(&paths.raw, &build, config, mode)?;
     let mut manifest = Manifest::start(
         ManifestSpec {
             mode: mode_name.to_owned(),
+            build: BuildSnapshot::new(&build)?,
             config: ManifestConfig::new(
                 config.nextest_profile.clone(),
                 config.nextest_config.clone(),
@@ -1379,6 +1403,27 @@ mod tests {
         assert_eq!(expectation.runner.prefix_args, ["test", "rtsan"]);
     }
 
+    /// The runner writes its report under the directory it builds into. Reading
+    /// it from anywhere else finds either nothing — and a lane whose report is
+    /// missing is staged as a failure it never had — or the report a different
+    /// run left behind.
+    #[test]
+    fn a_lane_is_measured_by_the_report_under_its_own_build_directory() {
+        let config = StressConfig {
+            build_dir: "target-stress".to_owned(),
+            artifacts: StressArtifactConfig {
+                subject_junit: "nextest/stress/junit.xml".to_owned(),
+                ..StressArtifactConfig::default()
+            },
+            ..StressConfig::default()
+        };
+
+        assert_eq!(
+            subject_junit(Path::new("/work/subject"), &config),
+            Path::new("/work/subject/target-stress/nextest/stress/junit.xml")
+        );
+    }
+
     const VIOLATION: &str = "\
 ==2534==ERROR: RealtimeSanitizer: unsafe-library-call
 Intercepted call to real-time unsafe function `malloc` in real-time context!
@@ -1510,7 +1555,8 @@ Intercepted call to real-time unsafe function `malloc` in real-time context!
             ..StressConfig::default()
         };
         let environment =
-            CampaignEnvironment::new(temp.path(), &config, &mode).expect("campaign environment");
+            CampaignEnvironment::new(temp.path(), &temp.path().join("build"), &config, &mode)
+                .expect("run environment");
         let paths = Paths::new(
             temp.path().to_path_buf(),
             &StressArtifactConfig {

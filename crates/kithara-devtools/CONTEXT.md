@@ -235,7 +235,7 @@ as SKIP instead of a false FAIL. Two stages needed a different answer:
 ## Stress campaign ownership
 
 `stress run` is the sole portable lifecycle owner for repeated-test evidence. It
-records a typed schema-v3 manifest, exact nextest inventory and JUnit, a live and
+records a typed schema-v4 manifest, exact nextest inventory and JUnit, a live and
 durable combined log, Linux pressure samples, and configured line/envelope artifacts
 under one fresh raw directory. The project-owned `[stress]` section in
 `.config/xtask.toml` is the sole owner of modes, test features, child environment,
@@ -244,6 +244,22 @@ product feature or environment names. The manifest also freezes the resolved tes
 runner, its arguments, and effective features so the independent reporter can reject
 controller/config drift. The inventory-by-iteration contract, not nextest's last
 stress iteration status, owns the primary verdict.
+
+A stress run owns the directory it builds into. `[stress].build_dir` names it,
+relative to the checkout a lane compiles — the subject for a runner lane, the
+controller for a command lane — and the run exports it as `CARGO_TARGET_DIR` to
+every child after the lane's own environment, so no mode can name it away. An
+inherited value points at whatever directory the host shares with everything else
+on it, and a stress run lasts hours: five of them lost a whole lane to binaries
+that were cleared mid-run, after which every remaining repeat failed to exec in
+milliseconds and the lane reported nothing about the revision it was asked about.
+The price is one cold build per run per tree. `[stress.artifacts].subject_junit`
+and a mode's `attempt_junit` are resolved against that same directory, because the
+runner writes its report under the directory it builds into; the manifest records
+the resolved path under `build.target_dir`, so a lane that dies this way names the
+directory itself instead of leaving it to be reconstructed from the log. The path
+is an observation, not provenance: the reporting machine has no such directory and
+is never asked to agree about one.
 
 Pressure schema `devtools.pressure.v2` names its end-marker status
 `primary_exit_code`: sampling ends after the test/evidence phase so the reporter can

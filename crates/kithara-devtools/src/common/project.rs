@@ -428,6 +428,15 @@ pub struct StressConfig {
     pub max_count: usize,
     pub test_threads: String,
     pub max_test_threads: usize,
+    /// The directory a lane builds into, relative to the checkout it builds.
+    ///
+    /// A stress run that inherits `CARGO_TARGET_DIR` builds into whatever
+    /// directory the machine shares with everything else on it, and a stress
+    /// run lasts hours: five of them lost a whole lane when those binaries
+    /// disappeared mid-run and every remaining repeat failed to exec in
+    /// milliseconds. Naming the directory here is what makes the artifacts the
+    /// lane runs belong to the revision the lane was asked about.
+    pub build_dir: String,
     pub raw_output: String,
     pub report_output: String,
     pub workflow_job_timeout_minutes: u64,
@@ -441,6 +450,12 @@ pub struct StressConfig {
 #[non_exhaustive]
 #[serde(default, deny_unknown_fields)]
 pub struct StressArtifactConfig {
+    /// Where the test runner leaves its report, relative to `build_dir`.
+    ///
+    /// The runner writes it under the directory it builds into, so the path is
+    /// resolved against the same value that directory comes from. Anchored
+    /// anywhere else, the two would drift apart the moment the run stopped
+    /// building where the machine wanted it to.
     pub subject_junit: String,
     pub inventory: String,
     pub junit: String,
@@ -488,7 +503,7 @@ pub struct StressModeConfig {
     /// pays a rebuild and a cold start each time and can report only an exit
     /// code — and an exit code names no test.
     pub owns_repeats: bool,
-    /// Where this command leaves a `JUnit` report, relative to the workspace.
+    /// Where this command leaves a `JUnit` report, relative to `build_dir`.
     ///
     /// An exit code names no test. When the command runs its tests under a
     /// runner that writes a report anyway, that report is what turns "something
@@ -539,6 +554,7 @@ impl StressConfig {
         require_value("stress.default_filter", &self.default_filter)?;
         require_value("stress.test_threads", &self.test_threads)?;
         validate_relative_path("stress.nextest_config", &self.nextest_config)?;
+        validate_relative_path("stress.build_dir", &self.build_dir)?;
         validate_relative_path("stress.raw_output", &self.raw_output)?;
         validate_relative_path("stress.report_output", &self.report_output)?;
         ensure_positive("stress.default_count", self.default_count)?;
@@ -705,6 +721,9 @@ impl StressConfig {
         }
         for word in &mode.command {
             require_value(&format!("stress.modes.{name}.command"), word)?;
+        }
+        if let Some(path) = &mode.attempt_junit {
+            validate_relative_path(&format!("stress.modes.{name}.attempt_junit"), path)?;
         }
         // A command lane selects nothing through the test runner, so features
         // meant for that runner would be read by no one. Saying so here beats

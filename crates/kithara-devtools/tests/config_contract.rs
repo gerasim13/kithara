@@ -175,6 +175,7 @@ default_count = 3
 max_count = 10
 test_threads = "4"
 max_test_threads = 8
+build_dir = "target-stress"
 raw_output = "target/evidence"
 report_output = "target/report.md"
 workflow_job_timeout_minutes = 60
@@ -242,6 +243,7 @@ default_count = 1
 max_count = 1
 test_threads = "1"
 max_test_threads = 1
+build_dir = "target-stress"
 raw_output = "target/evidence"
 report_output = "target/report.md"
 workflow_job_timeout_minutes = 60
@@ -277,6 +279,61 @@ features = []
     let error = ProjectConfig::load(temp.path()).expect_err("orphan envelope policy fails");
 
     assert!(format!("{error:#}").contains("stress.artifacts.envelope_dir"));
+}
+
+/// Left unnamed, the build directory is whatever the host already had in
+/// `CARGO_TARGET_DIR` — a directory shared with everything else on that machine,
+/// which is how five runs lost a whole lane to binaries cleared under them. The
+/// config has to say it rather than fall back to the environment.
+#[test]
+fn a_stress_config_must_name_the_directory_it_builds_into() {
+    let temp = tempdir().expect("tempdir");
+    write_config(
+        temp.path(),
+        r#"
+[stress]
+default_modes = ["baseline"]
+lane = "workspace"
+backend = "http"
+nextest_config = "config/runner.toml"
+nextest_profile = "repeated"
+default_filter = "all()"
+default_count = 1
+max_count = 1
+test_threads = "1"
+max_test_threads = 1
+raw_output = "target/evidence"
+report_output = "target/report.md"
+workflow_job_timeout_minutes = 60
+
+[stress.artifacts]
+attempts = "attempts.json"
+subject_junit = "runner/junit.xml"
+inventory = "inventory.json"
+junit = "junit.xml"
+log = "runner.log"
+manifest = "manifest.json"
+pressure = "pressure.jsonl"
+report = "report.md"
+
+[stress.modes.baseline]
+
+[test]
+default_lane = "workspace"
+default_backend = "http"
+
+[test.lanes.workspace]
+program = "cargo"
+prefix_args = ["nextest", "run"]
+
+[test.net_backends.http]
+features = []
+"#,
+    );
+
+    let error = ProjectConfig::load(temp.path()).expect_err("an unnamed build directory fails");
+
+    assert!(format!("{error:#}").contains("stress.build_dir"));
 }
 
 #[test]
