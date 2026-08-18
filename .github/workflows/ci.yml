@@ -276,10 +276,10 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # The browser is pinned in the CI image beside geckodriver, so the job
-      # installs nothing: the lane checks that chromium and chromedriver report
-      # the reviewed version before it starts. Same entrypoint as GitLab.
+      # installs nothing and runs the recipe directly. `just ci run` is GitLab's
+      # entrypoint and needs a host profile no GitHub runner carries.
       - name: Run the Chromium browser lane
-        run: just ci run web-chromium
+        run: just test wasm chrome webcodecs
 
   machete:
     name: cargo-machete

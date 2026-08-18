@@ -1399,3 +1399,32 @@ fn a_browser_comes_from_the_image_and_is_never_fetched_by_a_job() {
         "a browser is pinned in the CI image, never fetched by a job: {installs:?}"
     );
 }
+
+// `just ci run` is the GitLab entrypoint: it reads the host profile named by
+// `KITHARA_CI_HOST_CONFIG`, which only the GitLab runner provisioning installs.
+// A GitHub job that calls it dies before it reaches its own work, so a GitHub
+// job calls the recipe the lane calls instead.
+#[test]
+fn a_github_job_never_calls_the_gitlab_only_lane_runner() {
+    let mut callers = Vec::new();
+    for name in workflow_file_names() {
+        let workflow = github_workflow(&name);
+        for (job_name, job) in workflow_jobs(&workflow) {
+            let job_name = job_name.as_str().expect("workflow job name is a string");
+            let Some(steps) = job.get("steps").and_then(Value::as_sequence) else {
+                continue;
+            };
+            for step in steps {
+                let run = step.get("run").and_then(Value::as_str).unwrap_or_default();
+                if run.contains("just ci run") {
+                    callers.push(format!("{name} job `{job_name}`"));
+                }
+            }
+        }
+    }
+
+    assert!(
+        callers.is_empty(),
+        "`just ci run` needs the GitLab host profile: {callers:?}"
+    );
+}
