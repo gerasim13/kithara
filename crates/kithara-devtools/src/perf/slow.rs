@@ -241,6 +241,7 @@ mod tests {
             failed: false,
             timestamp: None,
             output: String::new(),
+            output_truncated: false,
         }
     }
 

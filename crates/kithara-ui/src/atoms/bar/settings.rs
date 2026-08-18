@@ -2,8 +2,8 @@ use crate::{
     atoms::{button::VisualState, design::quad::quad, icon::mark::Marked},
     draw::{DrawListBuilder, Rect, Rgba},
     render::{Mark, Skin},
+    shaping::TextContext,
     skin::FrameSkin,
-    text::TextContext,
 };
 
 /// The global bar's own button: a framed panel with one mark centred in it.

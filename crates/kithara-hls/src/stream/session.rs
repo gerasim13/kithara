@@ -15,7 +15,7 @@ use kithara_platform::{
 use kithara_storage::WaitOutcome;
 use kithara_stream::{
     ByteMap, ConstructionGate, PendingReason, ReaderProfile, SeekObserve, SegmentDescriptor,
-    SourceError, SourceSeekAnchor, StreamError, StreamResult, VariantTransition,
+    SourceError, SourcePhase, SourceSeekAnchor, StreamError, StreamResult, VariantTransition,
 };
 
 use self::cancel::SessionCancel;
@@ -34,6 +34,7 @@ pub(crate) struct HlsSession {
     active: AtomicBool,
     position: AtomicU64,
     construction_gate: ConstructionGate,
+    #[field(get, vis = "pub(crate)", copy)]
     transition: Option<VariantTransition>,
     cancel: SessionCancel,
     readiness: SessionReadiness,
@@ -322,6 +323,14 @@ impl HlsSession {
 
     pub(crate) fn variant(&self) -> Arc<HlsVariant> {
         Arc::clone(&self.variant)
+    }
+
+    /// Demand-aware phase at the session's own read position. Names what the
+    /// session's next byte is waiting on — `WaitingDemand` means a planned or
+    /// in-flight fetch is servicing it, `Waiting` means nothing is.
+    pub(crate) fn wait_phase(&self) -> SourcePhase {
+        let byte = self.projected_position().byte;
+        self.variant.phase_at(byte..byte.saturating_add(1))
     }
 
     /// Session-scoped twin of [`HlsCoord::wait_range`]: `Some(_)` is the

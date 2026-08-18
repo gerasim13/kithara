@@ -2,8 +2,8 @@ use crate::{
     atoms::{icon::mark::Marked, painter::NavData},
     draw::{DrawListBuilder, Pt, Rect, Rgba, Transform},
     render::Skin,
+    shaping::TextContext,
     skin::{ColorRole, FontFamily, FontWeight, NavSkin, TextRoleSkin},
-    text::TextContext,
 };
 
 pub(crate) struct NavItem {
@@ -119,7 +119,7 @@ mod tests {
         builtin,
         draw::{DrawCmd, Geom, Paint},
         render::Mark,
-        text::{FontId, GlyphFace, GlyphSegment},
+        shaping::{FontId, GlyphFace, GlyphSegment},
     };
 
     fn data(mark: Mark, active: bool) -> NavData {

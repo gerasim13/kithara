@@ -539,15 +539,24 @@ impl AbrState {
     /// the transition a consumer is already building against; clearing it here
     /// would cancel that work only for the re-derived tick to ask for the very
     /// same switch under a new identity.
+    ///
+    /// The restated entry changes hands: the switch is the user's now, and the
+    /// reason travels all the way out to `VariantApplied`. Left as the
+    /// throughput reason that queued it, a manual switch reaches the app
+    /// disguised as an automatic one.
     pub fn set_mode(&self, mode: AbrMode) {
         let mut state = self.pending.lock();
         self.mode.store(mode.into(), Ordering::Release);
-        let restates_queued_intent = matches!(
-            mode,
-            AbrMode::Manual(target) if state.pending.is_some_and(|pending| pending.target == target)
-        );
-        if !restates_queued_intent {
-            state.pending = None;
+        let restated = match mode {
+            AbrMode::Manual(target) => state
+                .pending
+                .as_mut()
+                .filter(|pending| pending.target == target),
+            AbrMode::Auto(_) => None,
+        };
+        match restated {
+            Some(pending) => pending.reason = AbrReason::ManualOverride,
+            None => state.pending = None,
         }
     }
 

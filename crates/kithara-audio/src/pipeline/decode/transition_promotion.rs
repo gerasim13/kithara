@@ -91,8 +91,12 @@ impl ActiveDecode {
         let IncomingDecode::Priming { mut generation, .. } = self.incoming.take()? else {
             return None;
         };
+        // A finished incoming may trim to empty: the end-of-track hard cut
+        // proves there is nothing past the cut, and an empty tail is exactly
+        // consistent with that proof.
+        let trimmed = trim_staged_head(&mut generation, span.overlap);
         assert!(
-            trim_staged_head(&mut generation, span.overlap) && generation.has_output(),
+            trimmed || generation.is_finished(),
             "BUG: a minted incoming promotion no longer covers its proven cut"
         );
         if let PromotionJoin::Blend {

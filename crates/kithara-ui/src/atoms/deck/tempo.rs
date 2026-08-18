@@ -2,8 +2,8 @@ use crate::{
     atoms::{deck::clock::clock_reading, design::quad::center_y},
     draw::{DrawListBuilder, Pt, Rect, Rgba, Transform},
     render::Skin,
+    shaping::TextContext,
     skin::{ColorRole, DeckSkin, FontFamily, TextRoleSkin},
-    text::TextContext,
 };
 
 /// What the caption above a position reading says.

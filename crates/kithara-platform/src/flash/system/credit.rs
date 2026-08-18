@@ -12,7 +12,7 @@ use crate::{
 
 /// `ThreadKey` of the calling OS thread — the key under which it appears in the
 /// engine's sync-holder dump map (matches `park_timeout`'s keying).
-fn current_thread_key() -> ThreadKey {
+pub(super) fn current_thread_key() -> ThreadKey {
     ThreadKey::of(current().id())
 }
 
@@ -326,6 +326,12 @@ impl FlashInner {
             if let Some((id, _)) = ctx::cur_async() {
                 s.registry.active_async_holders.remove(&id);
             }
+            // Releasing THIS task's slot is not enough when the blocking thread
+            // is its runtime's only poller: every OTHER task it drives is now
+            // unpollable too, and one left `Runnable` would pin the clock the
+            // wait needs to advance. Mark the thread so the advance rule can
+            // tell those tasks apart — see `Registry::pinning_async`.
+            s.registry.bridged.insert(current_thread_key());
         } else if !ctx::dedicated() {
             // Non-dedicated, non-async-poll thread (a tokio worker driving a raw-spawned
             // task, the main/test thread, a raw `thread::spawn`): NOT a virtual-time
@@ -424,6 +430,9 @@ impl FlashInner {
             if let Some((id, loc)) = ctx::cur_async() {
                 s.registry.active_async_holders.insert(id, loc);
             }
+            // The thread is a poller again: the tasks it drives pin the clock
+            // from here as usual.
+            s.registry.bridged.remove(&current_thread_key());
             drop(s);
             return;
         }

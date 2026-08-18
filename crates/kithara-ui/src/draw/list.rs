@@ -2,7 +2,7 @@ use super::{
     DrawCmd, DrawPools, FillRule, Geom, Image, Paint, Path, Pen, PoolText, Pt, Rect, Rgba,
     Transform, Verb, buffer::Buffer, place,
 };
-use crate::text::GlyphRun;
+use crate::shaping::GlyphRun;
 
 /// An ordered retained list of drawing commands.
 #[derive(Clone, Debug, Default, PartialEq)]

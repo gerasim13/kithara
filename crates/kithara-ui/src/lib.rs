@@ -23,14 +23,14 @@ pub(crate) mod mount;
 pub mod registry;
 #[cfg(feature = "render")]
 pub mod render;
+#[cfg(any(feature = "render", feature = "vello"))]
+pub mod shaping;
 pub mod size;
 #[cfg(feature = "render")]
 pub(crate) mod solve;
 pub mod source;
-#[cfg(any(feature = "render", feature = "vello"))]
-pub mod text;
 
-pub use doc::{envelope, layout, module, param, skin};
+pub use doc::{envelope, layout, module, param, skin, text};
 
 mod doc;
 mod resolve;

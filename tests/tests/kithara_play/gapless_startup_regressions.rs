@@ -13,10 +13,10 @@ use kithara_integration_tests::{
     fixture_protocol::{
         DelayRule, GaplessEncoding, PackagedAudioRequest, PackagedAudioSource, PackagedSignal,
     },
+    offline::{OfflinePlayerHarness, OfflinePlayerOptions},
     temp_dir,
 };
 
-use super::offline_player_harness::{OfflinePlayerHarness, OfflinePlayerOptions};
 use crate::gapless_common::{
     AAC_GAPLESS_ENCODER_DELAY, AAC_GAPLESS_SEGMENT_SECS, AAC_GAPLESS_TRAILING_DELAY,
     GAPLESS_CHANNELS, GAPLESS_SAMPLE_RATE,
@@ -30,12 +30,7 @@ const STARTUP_TIMEOUT: Duration = Duration::from_secs(4);
 const STARTUP_POSITION_SECS: f64 = 0.05;
 const AUDIBLE_SAMPLE_THRESHOLD: f32 = 1.0e-3;
 
-#[kithara::test(
-    native,
-    tokio,
-    timeout(Duration::from_secs(20)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "1")
-)]
+#[kithara::test(native, tokio, timeout(Duration::from_secs(20)), hang_timeout_secs(1))]
 #[case(GaplessMode::MediaOnly)]
 #[case(GaplessMode::CodecPriming)]
 #[case(GaplessMode::SilenceTrim(SilenceTrimParams::default()))]

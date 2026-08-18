@@ -8,7 +8,7 @@
 //! See the crate `README.md` for usage and `CONTEXT.md` for threading model and architecture.
 
 #![forbid(unsafe_code)]
-#![cfg_attr(rtsan, feature(sanitize))]
+#![cfg_attr(all(rtsan, not(rtsan_standalone)), feature(sanitize))]
 
 pub mod analysis;
 mod audio;

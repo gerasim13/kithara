@@ -2,7 +2,7 @@ use crate::{
     atoms::icon::mark::Marked,
     draw::{DrawListBuilder, Rect, Rgba},
     render::Mark,
-    text::TextContext,
+    shaping::TextContext,
 };
 
 /// One icon on its own, centred in the box it was given.

@@ -9,6 +9,7 @@ use super::{
     Binding, ControlSpec,
     binding_subst::{
         intern_binding, intern_optional_binding, intern_optional_text, intern_text, intern_texts,
+        resolve_text_key,
     },
     machine::{Context, Expander},
     site::ExtraBindings,
@@ -380,9 +381,26 @@ fn table_spec(
     machine: &mut Expander<'_, '_>,
     columns: &[TableColumn],
     extra: &ExtraBindings,
+    path: &str,
 ) -> Result<ControlSpec, UiDocError> {
+    let mut resolved = Vec::with_capacity(columns.len());
+    for (index, column) in columns.iter().enumerate() {
+        let label = resolve_text_key(
+            context.text,
+            column.label(),
+            &context.origin,
+            &format!("{path}/columns/{index}/label"),
+        )?;
+        resolved.push(TableColumn::new(
+            column.id(),
+            label,
+            column.style(),
+            column.width(),
+            column.flexible(),
+        ));
+    }
     Ok(ControlSpec::Table {
-        columns: columns.to_vec(),
+        columns: resolved,
         columns_state: intern_optional_binding(
             machine.interner,
             extra.columns_state.as_ref(),
@@ -399,5 +417,5 @@ fn table_control_spec(
     path: &str,
 ) -> Result<ControlSpec, UiDocError> {
     let columns = context.optional_param(columns, path)?.unwrap_or_default();
-    table_spec(context, machine, &columns, extra)
+    table_spec(context, machine, &columns, extra, path)
 }

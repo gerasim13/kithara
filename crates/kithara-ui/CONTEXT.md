@@ -40,7 +40,7 @@ is an iced canvas program. The platform-specific monospace family stays code-own
 `Skin::resolve` also copies every sub-skin (`button`, `cell`, ... one per widget family) onto `Skin`
 itself, so each field's value lives twice: once flat on `Skin` for zero-indirection hot-path render
 access (`skin.button()`), once nested inside the retained `document: SkinDoc` for round-trip (the
-raw doc a "reload"/"save skin" flow reads back). That is why `render/skin.rs` is listed in
+raw doc a "reload"/"save skin" flow reads back). That is why `render/skin/neutral.rs` is listed in
 `field_passthrough.exempt_files` in `.config/arch/thresholds.toml` - the check's "duplicates a field
 already reachable through `self.document`" is structurally correct but the duplication is the design,
 not an oversight; collapsing it back to `self.document().button` would put the doc's indirection back
@@ -546,9 +546,9 @@ Routing the document event through the recognizer or engine instead would point 
 crate's orchestration layer, and every base peer points strictly downward: `draw` to `text`, `text`
 to `skin`, `solve` to `layout::Axis`.
 
-The retained interaction boundary explicitly names nineteen documents: `studio-deck`,
-`studio-strip`, `studio-mixer`, `studio-mixer-single`, `studio-overview`,
-`studio-overview-row`, `studio-overview-single`, `gallery-knobs`, `gallery-meters`,
+The retained interaction boundary explicitly names nineteen documents: `app-deck`,
+`app-strip`, `app-mixer`, `app-mixer-single`, `app-overview`,
+`app-overview-row`, `app-overview-single`, `gallery-knobs`, `gallery-meters`,
 `gallery-toggles`, `gallery-chips`, `gallery-buttons-tab`, `gallery-cells-tab`,
 `gallery-faders-tab`, `gallery-library2-tab`, `gallery-table-tab`, `gallery-tree-tab`,
 `gallery-module-tabs`, and `gallery-nav`. A direct layout module is selected by its compiled module
@@ -573,7 +573,7 @@ retargeting by document order or component kind.
 
 The mixer host absorbs the expanded roots of both included strips. Rendering beneath that host
 propagates `InputOwner::Engine`, while only `InputOwner::Leaf` may open a host, so the nested
-`studio-strip` markers cannot open second hosts. The descriptor and target walks recurse through the
+`app-strip` markers cannot open second hosts. The descriptor and target walks recurse through the
 already-expanded rows and columns into both strips. One mixer therefore owns one engine and one
 pointer-capture slot for its crossfader, knobs, and VUs; a captured drag in one strip remains
 exclusive while the pointer crosses the other strip.
@@ -674,7 +674,7 @@ the two hosts own disjoint targets and no shared gesture state.
 
 The dual mixer adds one crossfader and an inert divider around two supported strips; the single
 mixer contains one supported strip. Each strip contains knobs, a vertical VU, and a label. Each
-`studio-overview-row` contains one supported wave between two inert text labels. `gallery-knobs`
+`app-overview-row` contains one supported wave between two inert text labels. `gallery-knobs`
 contains four knobs and a label; `gallery-meters` contains a stereo meter, two vertical VUs, and a
 label; `gallery-toggles` contains two toggles, two checkboxes, and a label.
 `gallery-buttons-tab` contains six activation buttons and two inert text labels; its micro
@@ -694,7 +694,7 @@ search interaction are engine-answered.
 optional drag step, the Volume fader keeps continuous drag plus its own wheel step, and the vertical
 VU keeps its scalar descriptor. The page's telemetry `Scalar` is an inert readout and is not hosted.
 `gallery-module-tabs` contains five activation tabs. `gallery-nav` contains eighteen activation nav
-items plus an inert icon and label in its header. Each hosted `studio-deck` contains one Hero Wave
+items plus an inert icon and label in its header. Each hosted `app-deck` contains one Hero Wave
 and five Lucide activation buttons, while its Slot and labels are passive and its tempo row remains
 an iced wheel surface. The Hero component preserves shift-loop child emissions, child-addressed
 wheel zoom, and the plain scalar drag.
@@ -833,6 +833,58 @@ advance - so the whole delta is tracking.
 `render::window::title`. Those are unported sites, not a fallback: they take the iced path
 entirely, including losing their tracking, until their own wave moves them. Nothing chooses between
 the two at runtime.
+
+`SkinDoc` carries no words. The crossfader captions, the table footer caption and the tree
+search placeholder are catalog entries resolved onto `Skin` alone, and a table's column captions
+are catalog keys the document itself carries; see "Text Catalog Ownership" for where they come
+from.
+
+## Text Catalog Ownership
+
+`TextDoc` is the fourth `DocKind` (`kithara.text`), parsed by `parse_text` and owned by `kithara-ui`
+the way the skin is: `builtin::text_doc()` is the compile-time asset, and its `LazyLock` is a
+sanctioned panic site for an invalid embedded catalog, same as `builtin::skin_doc`. `compile` takes
+`text: &TextDoc` borrowed for the call, right beside `skin: &SkinDoc` - a resource document, not
+compile configuration, so it does not live on `UiConfig`.
+
+A document literal beginning with `@` names a catalog key. `expand::binding_subst::intern_text`
+resolves it between `substitute` and `interner.intern`, so `$`-substitution runs first and only the
+substituted result is checked for the marker: an argument carrying `"@key"` resolves through the
+catalog exactly like a literal `"@key"` written directly in the document. `@@` escapes to a literal
+leading `@`, mirroring `$$`; a `@` anywhere but the first byte of the value is not a marker, so
+`user@example.com` passes through unchanged. `Module.title`, `.chip` and `.assign` carry no
+`$`-substitution, so they resolve a leading `@` through the same catalog lookup directly rather than
+through `intern_text`, each against a synthetic `<prefix>/title`, `/chip` or `/assign/<index>` path.
+An unresolved key is `UiDocError::UnknownTextKey { origin, key, path }`, a compile error, never a
+rendered fallback - the same totality `UnresolvedParam` already holds for `$`.
+
+Resolution happens once, at compile time, on document literals only. Text a host supplies through
+`ReadValue::Text` never reaches `intern_text` and cannot become a key by starting with `@`; a track
+title beginning with `@` stays a track title.
+
+Two catalogs combine with `TextDoc::merge`, which unions their entries and fails with
+`UiDocError::DuplicateTextKey` on any key present in both - never a silent override. `kithara-app`
+merges `builtin::text_doc()` with its own small catalog (`assets/ui/app-en.ktext.ron`) once per
+`compile_ui` call; the app catalog holds only the six words canon has no key for (its own
+window-manager menu and the two EQ-mode labels), so an app document reaches every other key through
+the canon catalog even though the `.kmodule.ron` file naming it lives under `kithara-app/assets`.
+`every_shipped_catalog_carries_the_same_key_set` in `tests/text.rs` compares `[builtin::text_doc()]`
+against itself: it pins nothing today and is a placeholder for the second catalog that does not
+exist yet. Only `builtin_catalog_holds_exactly_the_declared_entries` actually pins the canon key
+set.
+
+`Skin::resolve` is the one place catalog resolution happens outside `compile`: it takes `text:
+&TextDoc` and resolves the crossfader's three captions, `table.footer_rows` and
+`tree.search_placeholder` once, by fixed key, storing them on `Skin` as `CrossfaderLabels`,
+`table_footer_rows` and `tree_search_placeholder` rather than on `SkinDoc`. No control declares
+those keys and no document names them; a `Crossfader` or `Tree` control, and a `Table`'s footer,
+take their captions from whichever catalog `Skin::resolve` was given, unconditionally.
+
+A table's column captions are the exception, because a document authors them: `TableColumn.label`
+is a document literal, so `expand::spec::table_spec` resolves each one through `resolve_text_key`
+against `<path>/columns/<index>/label`, the same lookup and the same `UnknownTextKey` every other
+`@key` gets. The generic `Table` therefore carries no per-column catalog knowledge, and a document
+naming a missing column key fails at compile time rather than painting a raw `@track_list...`.
 
 ## Wave View Ownership
 
@@ -1270,7 +1322,7 @@ to the M7 root flip.
 `assets/modules/app-menu.kmodule.ron` and the row templates it includes from
 `assets/modules/app-menu/` are shipped assets that `builtin::resolver()` deliberately does not
 answer for: their window-manager endpoints - window list, per-window module flags, saved layouts -
-are host state no crate owns, so the documents must not become canonical preset surface the studio
+are host state no crate owns, so the documents must not become canonical preset surface the app
 can resolve. Exactly one copy of each exists and every consumer reaches it with `include_str!`.
 The window row, module-grid cell, saved-layout row, preference toggle and hint-reporting toggle are
 one template each (`window-row`, `module-cell`, `layout-row`, `toggle-row`, `hint-row`), taken as
@@ -1281,7 +1333,7 @@ often as the menu needs through `Include`. Each instance's control paths are
 
 `assets/modules/master-clock.kmodule.ron`, the deck key-lock and overview row, and
 `assets/modules/pivot-portals.kmodule.ron` are shipped component documents over host-owned timing
-state. They are not builtin studio presets: the Gallery embeds them explicitly and supplies mock
+state. They are not builtin app presets: the Gallery embeds them explicitly and supplies mock
 endpoints, while a production host must supply its measured clock sources, transport state and
 portal policy. The documents retain no tempo, source, range, Link or MIDI state.
 
@@ -1342,7 +1394,7 @@ system border would have given it. They lie over the content, not beside it, so 
 the layout no space; `SkinDoc.window.resize_edge` owns their thickness, and the host maps each
 `WindowEdge` to its toolkit's resize direction.
 `WindowDrag`, `TitleBar` and `WindowControls` paint no surface of their own and take their size from
-the row that holds them, so the same controls sit in a 26 px gallery header and in the studio's
+the row that holds them, so the same controls sit in a 26 px gallery header and in the app's
 42 px bar; the document declares the background. `WindowDrag` is the bare drag surface a bar without
 a title needs, `TitleBar` the same surface with a label. Both emit on press, not on release - a
 window drag only takes effect while the button is still held. Their glyphs are canvas strokes drawn
@@ -1361,7 +1413,7 @@ document field is a `Param<Vec<TableColumn>>`, so an including document may pass
 so a literal `columns: [Title, Artist, Time]` parses as before. Validation reads the resolved list:
 `ControlSite` carries it already substituted beside the substituted `read` and `write`, so routing
 columns through a parameter cannot slip past the `Title` requirement. This lets one
-`library.kmodule.ron` serve both the built-in player preset and the app studio.
+`library.kmodule.ron` serve both the built-in player preset and the app.
 
 The renderer owns table geometry and cell presentation but not column visibility: with a
 `columns_state` binding present the host may expose Bool reads at
@@ -1458,9 +1510,9 @@ to the host shortcut layer.
 
 ## Application Consumer
 
-The `kithara-app` GUI studio is the production consumer: it embeds its own layout and module
-documents, implements `EndpointRegistry` (`gui/studio_ui/endpoints.rs`) and `Reads` over an address
-tree (`gui/studio_reads/`), and maps `UiEvent` to app messages (`gui/studio_ui/events.rs`). Builtin
+The `kithara-app` GUI is the production consumer: it embeds its own layout and module
+documents, implements `EndpointRegistry` (`gui/ui/endpoints.rs`) and `Reads` over an address
+tree (`gui/reads/`), and maps `UiEvent` to app messages (`gui/ui/events.rs`). Builtin
 module docs under `assets/modules/` remain the canonical presets consumed by the gallery modules
 page.
 

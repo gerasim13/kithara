@@ -7,9 +7,9 @@ use crate::{
     draw::{DrawList, DrawListBuilder, Pt, Rect, Rgba, Transform},
     interact::CursorShape,
     render::{HostLayer, LayerHit, Skin, WindowCommand, WindowLayerProgram},
+    shaping::{TextContext, TextResources},
     skin::TextRoleSkin,
     solve::{Length, Size},
-    text::{TextContext, TextResources},
 };
 
 #[derive(bon::Builder)]

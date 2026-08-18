@@ -1,5 +1,7 @@
 <div align="center">
-  <img src="../../logo.svg" alt="kithara" width="300">
+
+<img src="../../logo.svg" alt="kithara" width="300">
+
 </div>
 
 <div align="center">
@@ -31,13 +33,21 @@ Decorators compose via the `NetExt` extension trait: `with_retry` adds exponenti
 ## Key Types
 
 <table>
+
 <tr><th>Type</th><th>Role</th></tr>
+
 <tr><td><code>Net</code> (trait)</td><td>HTTP operations: <code>get_bytes</code>, <code>post_bytes</code>, <code>stream</code>, <code>get_range</code>, <code>head</code></td></tr>
+
 <tr><td><code>HttpClient</code></td><td>Backend-agnostic client implementing <code>Net</code> for the selected feature backend</td></tr>
+
 <tr><td><code>Headers</code></td><td><code>HashMap&lt;String, String&gt;</code> wrapper</td></tr>
+
 <tr><td><code>RangeSpec</code></td><td>HTTP byte range: <code>{ start: u64, end: Option&lt;u64&gt; }</code></td></tr>
+
 <tr><td><code>RetryPolicy</code></td><td>Retry configuration: base delay, max delay, max retries</td></tr>
+
 <tr><td><code>NetError</code></td><td>Error variants: <code>Status</code>, <code>Timeout</code>, <code>Network</code>, <code>Decode</code>, <code>RetryExhausted</code>, <code>Unimplemented</code>, <code>Cancelled</code>, <code>InvalidContentType</code>. Retry decisioning via <code>retryability() -&gt; Retryability</code> (typed, no substring matching)</td></tr>
+
 </table>
 
 ## Integration

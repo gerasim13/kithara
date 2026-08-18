@@ -9,7 +9,7 @@ use super::{
     text::PoolText,
 };
 pub use crate::geom::{Pt, Transform};
-use crate::text::GlyphRun;
+use crate::shaping::GlyphRun;
 
 /// A toolkit-neutral RGBA colour.
 #[derive(Clone, Copy, Debug, PartialEq)]

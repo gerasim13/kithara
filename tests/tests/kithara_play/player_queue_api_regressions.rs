@@ -7,21 +7,16 @@ use kithara::{
     play::{PlayerEvent, PlayerImpl, Resource, ResourceConfig},
 };
 use kithara_integration_tests::{
-    SignalFormat, SignalSpec, SignalSpecLength, TestServerHelper, TestTempDir, kithara, temp_dir,
+    SignalFormat, SignalSpec, SignalSpecLength, TestServerHelper, TestTempDir, kithara,
+    offline::{OfflinePlayerHarness, OfflinePlayerOptions},
+    temp_dir,
 };
-
-use super::offline_player_harness::{OfflinePlayerHarness, OfflinePlayerOptions};
 
 const SAMPLE_RATE: u32 = 44_100;
 const BLOCK_FRAMES: usize = 512;
 const STARTUP_CLEAR_TIMEOUT: Duration = Duration::from_secs(5);
 
-#[kithara::test(
-    native,
-    tokio,
-    timeout(Duration::from_secs(10)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "1")
-)]
+#[kithara::test(native, tokio, timeout(Duration::from_secs(10)), hang_timeout_secs(1))]
 async fn auto_advance_starts_next_track_without_explicit_play(temp_dir: TestTempDir) {
     let server = TestServerHelper::new().await;
     let harness = OfflinePlayerHarness::with_sample_rate(

@@ -6,9 +6,9 @@ use crate::{
     interact::{CursorShape, Hit, Input, Outcome, PointerPhase},
     module::WindowControlsStyle,
     render::{HostLayer, LayerHit, Skin, WindowCommand, WindowLayerProgram},
+    shaping::TextResources,
     skin::{FrameSkin, WindowControlSkin},
     solve::{Length, Size},
-    text::TextResources,
 };
 
 #[derive(bon::Builder)]

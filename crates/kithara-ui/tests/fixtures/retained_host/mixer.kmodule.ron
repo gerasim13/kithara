@@ -1,7 +1,7 @@
 (
     schema: "kithara.module",
     version: 1,
-    id: "studio-mixer",
+    id: "app-mixer",
     root: Column(
         size: (w: Fill, h: Fill),
         children: [
@@ -11,9 +11,9 @@
                 frame: (top: false, right: false, bottom: true, left: false),
                 size: (w: Fill, h: Fill),
                 children: [
-                    Include(id: "a", source: "studio-strip.kmodule.ron"),
+                    Include(id: "a", source: "app-strip.kmodule.ron"),
                     Divider(id: "between-strips", size: (w: Fixed(1.0), h: Fill)),
-                    Include(id: "b", source: "studio-strip.kmodule.ron"),
+                    Include(id: "b", source: "app-strip.kmodule.ron"),
                 ],
             ),
             Crossfader(

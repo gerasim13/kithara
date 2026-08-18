@@ -1094,6 +1094,7 @@ impl Fixture {
             &self.resolver,
             self.registry.as_ref(),
             builtin::skin_doc(),
+            builtin::text_doc(),
             &UiConfig::default(),
         )
         .unwrap_or_else(|error| panic!("the page-perf document {entry} must compile: {error}"))

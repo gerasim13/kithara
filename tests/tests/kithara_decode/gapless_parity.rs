@@ -18,12 +18,7 @@ use crate::gapless_common::{
     GAPLESS_SAMPLE_RATE,
 };
 
-#[kithara::test(
-    native,
-    tokio,
-    timeout(Duration::from_secs(20)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "1")
-)]
+#[kithara::test(native, tokio, timeout(Duration::from_secs(20)), hang_timeout_secs(1))]
 async fn generated_aac_elst_visible_frames_match_generated_timing_across_factory_paths() {
     let server = TestServerHelper::new().await;
     let fixture =
@@ -243,12 +238,7 @@ async fn fetch_bytes(client: &Client, url: String) -> Vec<u8> {
         .to_vec()
 }
 
-#[kithara::test(
-    native,
-    tokio,
-    timeout(Duration::from_secs(20)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "1")
-)]
+#[kithara::test(native, tokio, timeout(Duration::from_secs(20)), hang_timeout_secs(1))]
 #[case::mp3(SignalFormat::Mp3, "mp3", 48_000)]
 #[case::flac(SignalFormat::Flac, "flac", 48_000)]
 async fn generated_encoded_signal_visible_frames_match_requested_signal_frames(

@@ -108,7 +108,7 @@ mod hls_timeline {
     #[kithara::test(
         tokio,
         timeout(Duration::from_secs(10)),
-        env(KITHARA_HANG_TIMEOUT_SECS = "1"),
+        hang_timeout_secs(1),
         tracing("kithara_decode=debug,kithara_hls=debug,kithara_stream=debug")
     )]
     async fn test_hls_timeline_segment_tracking() {

@@ -12,6 +12,7 @@ use kithara_platform::{
 };
 use rangemap::RangeSet;
 
+use super::retire::{RETIRE_CAPACITY, Retired};
 use crate::{
     StorageError, StorageResult,
     backend::traits::{AvailabilityObserver, Driver, DriverIo},
@@ -28,6 +29,9 @@ pub(super) struct CommonState {
 /// Shared inner storage.
 pub(super) struct Inner<D: DriverIo> {
     pub(super) available_snapshot: ArcSwap<RangeSet<u64>>,
+    /// Snapshots parked by produce-core reads, freed by write-side drains —
+    /// see [`Retired`].
+    pub(super) retired: Retired,
     /// Lock-free lifecycle flag: `true` while the resource is committed, `false`
     /// once `reactivate` reopens it for a re-download. Distinct from the driver's
     /// committed snapshot, which stays published across a reactivate so reads
@@ -35,6 +39,12 @@ pub(super) struct Inner<D: DriverIo> {
     /// so `len()` reports `None` for an active (being-rewritten) resource without
     /// taking the state mutex.
     pub(super) committed: AtomicBool,
+    /// Cleared by [`ResourceCore::abandon_inner`]: release the writer without
+    /// the anti-hang failure stamp, for a caller that owns the refill. Lives on
+    /// the shared inner rather than the write guard because every layer above
+    /// (`AtomicChunked`, `StorageResource`) holds this resource behind an `Arc`
+    /// and can only reach it through `&self`.
+    pub(super) stamp_on_drop: AtomicBool,
     pub(super) cancel: CancelToken,
     /// Guarded readiness state plus its condvar, unified in the shared
     /// [`CondvarGate`] — the gold-standard single-lock event-driven wait the
@@ -115,7 +125,9 @@ impl<D: Driver> ResourceCore<D> {
                 driver,
                 observer,
                 committed: AtomicBool::new(is_committed),
+                stamp_on_drop: AtomicBool::new(true),
                 available_snapshot: ArcSwap::from_pointee(available.clone()),
+                retired: Retired::new(RETIRE_CAPACITY),
                 gate: CondvarGate::new(CommonState {
                     final_len,
                     available,

@@ -5,8 +5,8 @@ use crate::{
     draw::{DrawList, Pt, Rect},
     interact::CursorShape,
     render::{HostLayer, LayerHit, WindowCommand, WindowEdge, WindowLayerProgram},
+    shaping::TextResources,
     solve::{Length, Size},
-    text::TextResources,
 };
 
 pub(crate) struct WindowSurface {

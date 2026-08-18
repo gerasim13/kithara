@@ -24,8 +24,8 @@ use crate::{
         Backend, Caps, DrawCmd, DrawList, FillRule, Geom, Image, ImageId, LineCap, LineJoin, Needs,
         Paint, Pen, Pt, Rect, Rgba, Transform, Verb,
     },
+    shaping::{GlyphFace, GlyphRun, GlyphSegment, TextResources, select},
     skin::{FontFamily, FontWeight},
-    text::{GlyphFace, GlyphRun, GlyphSegment, TextResources, select},
 };
 
 pub(crate) struct IcedBackend<'frame> {

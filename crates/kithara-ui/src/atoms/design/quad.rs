@@ -1,7 +1,7 @@
 use crate::{
     draw::{DrawListBuilder, Rect, Rgba},
+    shaping::GlyphRun,
     skin::FrameSkin,
-    text::GlyphRun,
 };
 
 /// The filled, framed box almost every control is built on.

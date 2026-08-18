@@ -10,8 +10,8 @@ use crate::{
     interact::ScrollAxis,
     module::TableColumnStyle,
     render::Skin,
+    shaping::TextContext,
     skin::{ColorRole, FontFamily, FontSkin, FrameSkin, TextRoleSkin},
-    text::TextContext,
 };
 
 #[derive(Clone, Debug, PartialEq, fieldwork::Fieldwork)]
@@ -480,7 +480,7 @@ fn paint_footer(
         y: bounds.y + bounds.h - paint.skin.table.footer_height,
     };
     list.fill_rect(footer, paint.skin.palette.bg_footer);
-    let label = format!("{} {}", paint.rows().len(), paint.skin.table.footer_rows);
+    let label = format!("{} {}", paint.rows().len(), paint.skin.table_footer_rows);
     paint_text(
         list,
         text,
@@ -641,7 +641,7 @@ fn shape(
     font: FontSkin,
     family: FontFamily,
     max_width: Option<f32>,
-) -> crate::text::GlyphRun {
+) -> crate::shaping::GlyphRun {
     text.shape(
         content,
         TextRoleSkin {

@@ -3,9 +3,9 @@ use crate::{
     draw::{DrawListBuilder, Pt, Rect, Rgba, Transform},
     module::DeckSummaryStyle,
     render::Skin,
+    shaping::TextContext,
     skin::{ColorRole, DeckSkin, FontFamily, TextRoleSkin},
     solve::{Length, Size},
-    text::TextContext,
 };
 
 /// The deck's headline: what is loaded, and where it came from.

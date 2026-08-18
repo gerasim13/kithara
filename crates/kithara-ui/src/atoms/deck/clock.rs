@@ -4,8 +4,8 @@ use crate::{
     atoms::design::quad::center_y,
     draw::{DrawListBuilder, Pt, Rect, Rgba, Transform},
     render::Skin,
+    shaping::TextContext,
     skin::{FontFamily, TextRoleSkin},
-    text::TextContext,
 };
 
 const SECONDS_PER_MINUTE: u64 = 60;

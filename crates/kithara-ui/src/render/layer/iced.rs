@@ -19,7 +19,7 @@ use crate::{
     render::{
         DragGhost, HostLayer, Skin, UiEvent, WindowCommand, WindowSurface, window as window_event,
     },
-    text::{TextContext, TextResources},
+    shaping::{TextContext, TextResources},
 };
 
 pub(crate) fn draw_host_layer<A>(

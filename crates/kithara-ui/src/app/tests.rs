@@ -20,8 +20,8 @@ use crate::{
         ControlAction, ReadValue, Reads, Skin, StereoLevels, UiEvent,
         document::{Clock, Ctx},
     },
+    shaping::FontPolicy,
     source::MemResolver,
-    text::FontPolicy,
 };
 
 /// A registry that answers for the one endpoint the fixture binds to.
@@ -292,6 +292,7 @@ fn focused_search<'a>(
         .resolver(resolver)
         .skin(skin)
         .skin_doc(builtin::skin_doc())
+        .text(builtin::text_doc())
         .build();
     let mut ui = Ui::new(Typed::default(), config, (240, 120), 1.0)
         .unwrap_or_else(|error| panic!("the search box must mount: {error}"));
@@ -381,6 +382,7 @@ fn drag(control: &Draggable) -> Dragged {
         .resolver(&resolver)
         .skin(&skin)
         .skin_doc(builtin::skin_doc())
+        .text(builtin::text_doc())
         .build();
     let mut ui = Ui::new(Dial::new(stereo), config, (240, 120), 1.0)
         .unwrap_or_else(|error| panic!("{control} must mount: {error}"));
@@ -444,6 +446,7 @@ fn a_wheel_notch_over_a_knob_steps_it() {
             .resolver(&resolver)
             .skin(&skin)
             .skin_doc(builtin::skin_doc())
+            .text(builtin::text_doc())
             .build(),
         (240, 120),
         1.0,
@@ -514,6 +517,7 @@ fn controls_on_one_page_publish_only_their_own_activation() {
             .resolver(&resolver)
             .skin(&skin)
             .skin_doc(builtin::skin_doc())
+            .text(builtin::text_doc())
             .build(),
         (240, 120),
         1.0,
@@ -550,6 +554,7 @@ fn named_press_drag_and_wheel_publish_events_and_leave_a_picture() {
             .resolver(&resolver)
             .skin(&skin)
             .skin_doc(builtin::skin_doc())
+            .text(builtin::text_doc())
             .build(),
         SIZE,
         1.0,
@@ -624,8 +629,13 @@ fn a_mounted_ui_takes_its_page_colour_from_the_skin_document() {
     let mut doc = builtin::skin_doc().clone();
     doc.palette.bg = "#123456".to_owned();
     let origin = SourceUri("fixture:app-input".to_owned());
-    let skin = Skin::resolve_with_font_policy(doc.clone(), &origin, FontPolicy::Embedded)
-        .unwrap_or_else(|error| panic!("the fixture skin must resolve: {error}"));
+    let skin = Skin::resolve_with_font_policy(
+        doc.clone(),
+        builtin::text_doc(),
+        &origin,
+        FontPolicy::Embedded,
+    )
+    .unwrap_or_else(|error| panic!("the fixture skin must resolve: {error}"));
     let ui = Ui::new(
         Swapper::default(),
         Config::builder()
@@ -633,6 +643,7 @@ fn a_mounted_ui_takes_its_page_colour_from_the_skin_document() {
             .resolver(&resolver)
             .skin(&skin)
             .skin_doc(&doc)
+            .text(builtin::text_doc())
             .build(),
         (240, 120),
         1.0,
@@ -671,6 +682,7 @@ fn moving_a_control_does_not_compile_the_document_again() {
             .resolver(&resolver)
             .skin(&skin)
             .skin_doc(builtin::skin_doc())
+            .text(builtin::text_doc())
             .build(),
         (240, 120),
         1.0,
@@ -778,6 +790,7 @@ fn resolver() -> MemResolver {
 fn skin() -> Skin {
     Skin::resolve_with_font_policy(
         builtin::skin_doc().clone(),
+        builtin::text_doc(),
         &SourceUri("fixture:app-input".to_owned()),
         FontPolicy::Embedded,
     )
@@ -798,6 +811,7 @@ fn scene_keeps_the_public_single_redraw_signature() {
         .resolver(&resolver)
         .skin(&skin)
         .skin_doc(builtin::skin_doc())
+        .text(builtin::text_doc())
         .build();
     let mut ui = Ui::new(Dial::new(false), config, (240, 120), 1.0)
         .unwrap_or_else(|error| panic!("the scene fixture must mount: {error}"));
@@ -817,6 +831,7 @@ fn an_idle_ui_skips_its_following_frame() {
         .resolver(&resolver)
         .skin(&skin)
         .skin_doc(builtin::skin_doc())
+        .text(builtin::text_doc())
         .build();
     let mut ui = Ui::new(Dial::new(false), config, (240, 120), 1.0)
         .unwrap_or_else(|error| panic!("the idle fixture must mount: {error}"));
@@ -853,6 +868,7 @@ fn a_tick_refreshes_non_vis_reads_without_remounting() {
         .resolver(&resolver)
         .skin(&skin)
         .skin_doc(builtin::skin_doc())
+        .text(builtin::text_doc())
         .build();
     let mut ui = Ui::new(TickingDial { value: 0.25 }, config, (240, 120), 1.0)
         .unwrap_or_else(|error| panic!("the ticking knob must mount: {error}"));
@@ -891,6 +907,7 @@ fn resize_from_one_to_two_x_keeps_layout_geometry_logical() {
         .resolver(&resolver)
         .skin(&skin)
         .skin_doc(builtin::skin_doc())
+        .text(builtin::text_doc())
         .build();
     let mut ui = Ui::new(Dial::new(false), config, (240, 120), 1.0)
         .unwrap_or_else(|error| panic!("the scale fixture must mount: {error}"));
@@ -925,6 +942,7 @@ fn a_press_on_a_control_reaches_the_application_and_redraws_the_new_document() {
         .resolver(&resolver)
         .skin(&skin)
         .skin_doc(builtin::skin_doc())
+        .text(builtin::text_doc())
         .build();
     let mut scenario = Scenario::mount(Swapper::default(), config, (240, 120), 1.0);
     assert_eq!(scenario.app().document(), "dim.klayout.ron");
@@ -1017,6 +1035,7 @@ fn dragging_a_knob_by_path_publishes_a_run_of_rising_values() {
             .resolver(&resolver)
             .skin(&skin)
             .skin_doc(builtin::skin_doc())
+            .text(builtin::text_doc())
             .build(),
         (240, 120),
         1.0,
@@ -1073,6 +1092,7 @@ fn controls_sharing_an_endpoint_move_together_during_the_gesture() {
         .resolver(&resolver)
         .skin(&skin)
         .skin_doc(builtin::skin_doc())
+        .text(builtin::text_doc())
         .build();
     let mut ui = Ui::new(Dial::new(false), config, (240, 120), 1.0)
         .unwrap_or_else(|error| panic!("the pair must mount: {error}"));
@@ -1126,6 +1146,7 @@ fn a_double_click_resets_the_knob_it_lands_on() {
         .resolver(&resolver)
         .skin(&skin)
         .skin_doc(builtin::skin_doc())
+        .text(builtin::text_doc())
         .build();
     let mut ui = Ui::new(Dial::new(false), config, (240, 120), 1.0)
         .unwrap_or_else(|error| panic!("the dial must mount: {error}"));
@@ -1194,6 +1215,7 @@ fn the_masonry_root_under_the_app_layer_publishes_the_same_press() {
         &resolver,
         &endpoints,
         builtin::skin_doc(),
+        builtin::text_doc(),
         &UiConfig::default(),
     )
     .unwrap_or_else(|error| panic!("fixture must compile: {error}"));
@@ -1254,6 +1276,7 @@ fn each_frame_advances_the_host_clock_by_one() {
         .resolver(&resolver)
         .skin(&skin)
         .skin_doc(builtin::skin_doc())
+        .text(builtin::text_doc())
         .build();
     let mut ui = Ui::new(Typed::default(), config, (240, 120), 1.0)
         .unwrap_or_else(|error| panic!("the fixture must mount: {error}"));
@@ -1274,6 +1297,7 @@ fn the_host_clock_accumulates_the_steps_it_was_driven_with() {
         .resolver(&resolver)
         .skin(&skin)
         .skin_doc(builtin::skin_doc())
+        .text(builtin::text_doc())
         .build();
     let mut ui = Ui::new(Typed::default(), config, (240, 120), 1.0)
         .unwrap_or_else(|error| panic!("the fixture must mount: {error}"));

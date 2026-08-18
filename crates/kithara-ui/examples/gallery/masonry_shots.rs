@@ -213,6 +213,7 @@ fn capture(dir: &PathBuf) -> Result<usize, String> {
         .resolver(&resolver)
         .skin(builtin::skin())
         .skin_doc(builtin::skin_doc())
+        .text(builtin::text_doc())
         .build();
     write_frame(dir, frame)?;
     let mut written = 0;

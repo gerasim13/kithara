@@ -6,11 +6,12 @@ use kithara_platform::{
     tokio,
 };
 use kithara_ui::render::fonts;
+#[cfg(feature = "masonry")]
 use num_traits::cast::AsPrimitive;
 
 use super::{
     app::{Decks, Kithara},
-    studio_ui::StudioUi,
+    ui::AppUi,
     update, view,
 };
 use crate::{
@@ -52,7 +53,7 @@ fn immediate(boot: Boot) -> Result<(), FrontendError> {
                 boot.decks,
                 boot.catalog,
                 boot.config,
-                boot.studio,
+                boot.ui,
                 boot.broadcast,
             )
         },
@@ -77,40 +78,40 @@ fn retained(boot: Boot) -> Result<(), FrontendError> {
         boot.decks,
         boot.catalog,
         boot.config,
-        boot.studio,
+        boot.ui,
         boot.broadcast,
     ))?;
     Ok(())
 }
 
 mod consts {
-    /// DJ Studio window size in whole logical points. The minimum keeps both
-    /// deck panes wide enough for their fixed transport and timestretch
-    /// controls; the studio never gets shorter than it opens.
-    pub(super) const STUDIO_WIDTH: u32 = 1280;
-    pub(super) const STUDIO_HEIGHT: u32 = 760;
-    pub(super) const STUDIO_MIN_WIDTH: u32 = 1080;
+    /// The minimum keeps both deck panes wide enough for their fixed
+    /// transport and timestretch controls.
+    pub(super) const WINDOW_MIN_WIDTH: f32 = 1080.0;
+    pub(super) const WINDOW_MIN_HEIGHT: f32 = super::WINDOW_SIZE.height;
 }
 use consts::*;
 
-/// The studio window and the smallest box the document is laid out for, in
+use super::ui::window::WINDOW_SIZE;
+
+/// The app window and the smallest box the document is laid out for, in whole
 /// logical points. Both hosts open the same window.
-pub(crate) const fn studio_size() -> ((u32, u32), (u32, u32)) {
+#[cfg(feature = "masonry")]
+pub(crate) fn window_size() -> ((u32, u32), (u32, u32)) {
+    let whole = |value: f32| -> u32 { value.as_() };
     (
-        (STUDIO_WIDTH, STUDIO_HEIGHT),
-        (STUDIO_MIN_WIDTH, STUDIO_HEIGHT),
+        (whole(WINDOW_SIZE.width), whole(WINDOW_SIZE.height)),
+        (whole(WINDOW_MIN_WIDTH), whole(WINDOW_MIN_HEIGHT)),
     )
 }
 
-/// Settings for the studio window. The bar draws the window chrome itself, so
+/// Settings for the app window. The bar draws the window chrome itself, so
 /// the system decorations stay off; close goes through `close_requests()`,
 /// whose handler exits the app.
 pub(crate) fn window_settings() -> Settings {
-    let (size, min_size) = studio_size();
-    let logical = |(width, height): (u32, u32)| Size::new(width.as_(), height.as_());
     Settings {
-        size: logical(size),
-        min_size: Some(logical(min_size)),
+        size: WINDOW_SIZE,
+        min_size: Some(Size::new(WINDOW_MIN_WIDTH, WINDOW_MIN_HEIGHT)),
         decorations: false,
         exit_on_close_request: false,
         ..Settings::default()
@@ -123,7 +124,7 @@ struct Boot {
     catalog: Catalog,
     session: DeckSet,
     decks: Decks,
-    studio: StudioUi,
+    ui: AppUi,
 }
 
 /// GUI frontend for the studio.
@@ -165,7 +166,7 @@ impl GuiFrontend {
     /// state is handed over exactly once by construction.
     pub fn run_loop(&mut self, session: DeckSet) -> Result<(), FrontendError> {
         let config = self.config.clone();
-        let studio = StudioUi::new()?;
+        let ui = AppUi::new()?;
 
         let rt = tokio::runtime::Runtime::new().map_err(FrontendError::from)?;
         let _guard = rt.enter();
@@ -197,7 +198,7 @@ impl GuiFrontend {
                 .take()
                 .ok_or("broadcast service was not configured")?,
             session,
-            studio,
+            ui,
             decks: Decks::new(controllers).ok_or("no decks to render")?,
             catalog: Catalog::new(config.tracks.clone()),
             config: config.clone(),

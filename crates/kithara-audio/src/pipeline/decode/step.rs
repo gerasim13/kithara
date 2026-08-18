@@ -47,7 +47,42 @@ pub(crate) fn tick<T: StreamType>(
             Err(error) => return decode_failed(core, error, &ctx),
         }
         if core.transition_holds_output() && !core.outgoing_holdback_needs_pcm() {
-            return DecodeAction::TransitionPending;
+            return transition_hold(core, &ctx);
+        }
+        if core.active().is_source_exhausted() {
+            if core.has_live_incoming() {
+                // Exhausted with the switch still in flight but the output
+                // hold not engaged (frontier unlatched or blender mid-join):
+                // surfacing EOF here would latch AtEof and abort the pending
+                // intent, so park as a transition wait instead.
+                return transition_hold(core, &ctx);
+            }
+            if !core.active().is_exhaustion_observed() {
+                // Defer finalization by exactly one tick: the scheduler runs
+                // the transition driver between ticks, so an intent that
+                // raced the last chunk still gets its incoming slot planted
+                // before EOF finalizes and AtEof can latch.
+                core.observe_source_exhaustion();
+                return DecodeAction::TransitionPending;
+            }
+            core.finish_active();
+            match core.next_output_unheld(&mut *ctx.cursor, epoch) {
+                Ok(Some(chunk)) => return produced(chunk, epoch, &mut ctx),
+                Ok(None) => {}
+                Err(error) => return decode_failed(core, error, &ctx),
+            }
+            if let FormatDecision::Recreate(recreate) =
+                detect(ctx.stream, core.active(), ctx.seek_observe)
+            {
+                return DecodeAction::StartRecreate(recreate);
+            }
+            if let Some(chunk) = core.next_drain() {
+                return produced(chunk, epoch, &mut ctx);
+            }
+            if let Some(emit) = ctx.emit {
+                emit.enqueue(AudioEvent::EndOfStream.into());
+            }
+            return DecodeAction::Eof;
         }
         match core.next_chunk(ctx.stream.position()) {
             Ok(DecoderChunkOutcome::Pending(PendingReason::VariantChange)) => {
@@ -70,24 +105,7 @@ pub(crate) fn tick<T: StreamType>(
                 }
             }
             Ok(DecoderChunkOutcome::Eof) => {
-                core.finish_active();
-                match core.next_output_unheld(&mut *ctx.cursor, epoch) {
-                    Ok(Some(chunk)) => return produced(chunk, epoch, &mut ctx),
-                    Ok(None) => {}
-                    Err(error) => return decode_failed(core, error, &ctx),
-                }
-                if let FormatDecision::Recreate(recreate) =
-                    detect(ctx.stream, core.active(), ctx.seek_observe)
-                {
-                    return DecodeAction::StartRecreate(recreate);
-                }
-                if let Some(chunk) = core.next_drain() {
-                    return produced(chunk, epoch, &mut ctx);
-                }
-                if let Some(emit) = ctx.emit {
-                    emit.enqueue(AudioEvent::EndOfStream.into());
-                }
-                return DecodeAction::Eof;
+                core.mark_source_exhausted();
             }
             Err(error) if error.classify() == ErrorClass::VariantChange => {
                 return variant_change(core, &ctx);
@@ -96,6 +114,20 @@ pub(crate) fn tick<T: StreamType>(
             Err(error) => return decode_failed(core, error, &ctx),
         }
     }
+}
+
+fn transition_hold<T: StreamType>(core: &mut ActiveDecode, ctx: &DecodeCtx<'_, T>) -> DecodeAction {
+    if core.announce_transition_hold()
+        && let Some(emit) = ctx.emit
+    {
+        emit.enqueue(
+            DecoderEvent::TransitionHold {
+                source_exhausted: core.active().is_source_exhausted(),
+            }
+            .into(),
+        );
+    }
+    DecodeAction::TransitionPending
 }
 
 fn decode_failed<T: StreamType>(

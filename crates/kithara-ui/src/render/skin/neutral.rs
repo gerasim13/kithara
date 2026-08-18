@@ -4,6 +4,7 @@ use crate::{
     ids::SourceUri,
     module::TextStyle,
     render::theme::RenderPalette,
+    shaping::{FontPolicy, TextResources},
     skin::{
         ButtonSkin, CellSkin, CheckboxSkin, ChipSkin, ChromeSkin, ColorRole, CrossfaderSkin,
         DeckSkin, DividerSkin, DragSkin, FaderSkin, GlobalBarSkin, KnobSkin, LayoutPreviewSkin,
@@ -12,10 +13,19 @@ use crate::{
         TableSkin, TelemetrySkin, TextInputSkin, TextRoleSkin, TextSkin, ToggleSkin, TreeSkin,
         VisSkin, VuStereoSkin, VuVerticalSkin, WaveSkin, WindowSkin, parse_color,
     },
-    text::{FontPolicy, TextResources},
+    text::TextDoc,
 };
 
 const CHANNEL_MAX: f32 = 255.0;
+
+/// The three captions painted around a crossfader track.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct CrossfaderLabels {
+    pub left: String,
+    pub center: String,
+    pub right: String,
+}
 
 /// Resolved skin consumed by renderers.
 #[derive(Clone, Debug, PartialEq, fieldwork::Fieldwork)]
@@ -56,6 +66,9 @@ pub struct Skin {
     pub toggle: ToggleSkin,
     pub table: TableSkin,
     pub tree: TreeSkin,
+    pub crossfader_labels: CrossfaderLabels,
+    pub table_footer_rows: String,
+    pub tree_search_placeholder: String,
     pub vis: VisSkin,
     pub vu_stereo: VuStereoSkin,
     pub vu_vertical: VuVerticalSkin,
@@ -156,20 +169,30 @@ impl Skin {
         }
     }
 
-    /// Resolves a parsed document into neutral colors and render metrics.
+    /// Resolves a parsed document into neutral colors and render metrics,
+    /// pulling the crossfader, tree search and table footer captions from
+    /// `catalog`.
     ///
     /// # Errors
-    /// Returns [`UiDocError`] when a palette value or embedded font is invalid.
-    pub fn resolve(document: SkinDoc, origin: &SourceUri) -> Result<Self, UiDocError> {
-        Self::resolve_with_font_policy(document, origin, FontPolicy::System)
+    /// Returns [`UiDocError`] when a palette value or embedded font is invalid,
+    /// or [`UiDocError::UnknownTextKey`] when `catalog` is missing one of those
+    /// captions.
+    pub fn resolve(
+        document: SkinDoc,
+        catalog: &TextDoc,
+        origin: &SourceUri,
+    ) -> Result<Self, UiDocError> {
+        Self::resolve_with_font_policy(document, catalog, origin, FontPolicy::System)
     }
 
     /// Resolves a parsed document under an explicit font policy.
     ///
     /// # Errors
-    /// Returns [`UiDocError`] when a palette value or embedded font is invalid.
+    /// Returns [`UiDocError`] when a palette value or embedded font is invalid,
+    /// or [`UiDocError::UnknownTextKey`] when `catalog` is missing a caption.
     pub fn resolve_with_font_policy(
         document: SkinDoc,
+        catalog: &TextDoc,
         origin: &SourceUri,
         font_policy: FontPolicy,
     ) -> Result<Self, UiDocError> {
@@ -207,7 +230,12 @@ impl Skin {
             window: document.window,
             text_input: document.text_input,
             knob: document.knob,
-            crossfader: document.crossfader.clone(),
+            crossfader: document.crossfader,
+            crossfader_labels: CrossfaderLabels {
+                left: text_field(catalog, "crossfader.left_label", origin)?,
+                center: text_field(catalog, "crossfader.center_label", origin)?,
+                right: text_field(catalog, "crossfader.right_label", origin)?,
+            },
             vu_stereo: document.vu_stereo,
             vu_vertical: document.vu_vertical,
             vis: document.vis,
@@ -237,13 +265,26 @@ impl Skin {
             drag: document.drag,
             meter: document.meter,
             telemetry: document.telemetry,
-            tree: document.tree.clone(),
-            table: document.table.clone(),
+            tree: document.tree,
+            tree_search_placeholder: text_field(catalog, "tree.search_placeholder", origin)?,
+            table: document.table,
+            table_footer_rows: text_field(catalog, "table.footer_rows", origin)?,
             layout_preview: document.layout_preview,
             text_resources: TextResources::new(font_policy)?,
             document,
         })
     }
+}
+
+fn text_field(catalog: &TextDoc, key: &str, origin: &SourceUri) -> Result<String, UiDocError> {
+    catalog
+        .get(key)
+        .map(str::to_owned)
+        .ok_or_else(|| UiDocError::UnknownTextKey {
+            origin: origin.clone(),
+            key: key.to_owned(),
+            path: format!("skin.{key}"),
+        })
 }
 
 fn color(value: &str, origin: &SourceUri) -> Result<Rgba, UiDocError> {

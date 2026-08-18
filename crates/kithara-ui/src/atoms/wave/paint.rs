@@ -9,8 +9,8 @@ use crate::{
     draw::{DrawListBuilder, Pt, Rect, Rgba},
     module::WaveStyle,
     render::{WaveBucket, WaveformView},
+    shaping::TextContext,
     skin::{FrameSkin, WaveSkin},
-    text::TextContext,
 };
 
 #[derive(Clone, Copy)]

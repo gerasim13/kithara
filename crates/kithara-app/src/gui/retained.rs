@@ -7,13 +7,13 @@ use kithara_ui::{
 
 use super::{
     app::{Decks, Kithara},
-    frontend::studio_size,
+    frontend::window_size,
     message::Message,
-    studio_reads::StudioRoot,
-    studio_ui::{self, StudioUi},
+    reads::ReadRoot,
+    ui::{self, AppUi},
     update,
 };
-use crate::{catalog::Catalog, config::AppConfig, deck::DeckSet, gui::studio_ui::endpoints};
+use crate::{catalog::Catalog, config::AppConfig, deck::DeckSet, gui::ui::endpoints};
 
 /// The studio driven by the retained host.
 ///
@@ -30,7 +30,7 @@ impl Studio {
         decks: Decks,
         catalog: Catalog,
         config: AppConfig,
-        studio: StudioUi,
+        studio: AppUi,
         broadcast: crate::broadcast::Broadcaster,
     ) -> Self {
         Self {
@@ -49,13 +49,13 @@ impl Studio {
 
 impl App for Studio {
     fn document(&self) -> &str {
-        studio_ui::entry(self.state.studio.cache.layout())
+        ui::entry(self.state.ui.cache.layout())
     }
 
     /// The studio answers its endpoints by walking its own state, so the walk
     /// borrows the studio and lives no longer than this call.
     fn reads<R>(&self, with: impl FnOnce(&dyn Reads) -> R) -> R {
-        let root = StudioRoot::new(&self.state);
+        let root = ReadRoot::new(&self.state);
         with(&Walk::new(&root))
     }
 
@@ -69,7 +69,7 @@ impl App for Studio {
         if matches!(event, UiEvent::Window(_)) {
             return;
         }
-        if let Some(message) = studio_ui::translate(&mut self.state, event) {
+        if let Some(message) = ui::translate(&mut self.state, event) {
             drop(update::update(&mut self.state, message));
         }
     }
@@ -81,9 +81,10 @@ impl App for Studio {
 /// Returns [`RunError`] when the studio document does not compile, or when the
 /// window and its GPU surface cannot be brought up.
 pub(crate) fn run(app: Studio) -> Result<(), RunError> {
-    let resolver = studio_ui::resolver();
-    let endpoints = endpoints::StudioRegistry::default();
-    let (size, min_size) = studio_size();
+    let resolver = ui::resolver();
+    let endpoints = endpoints::Registry::default();
+    let text = ui::text()?;
+    let (size, min_size) = window_size();
     kithara_ui::app::run(
         app,
         Config::builder()
@@ -91,6 +92,7 @@ pub(crate) fn run(app: Studio) -> Result<(), RunError> {
             .resolver(&resolver)
             .skin(builtin::skin())
             .skin_doc(builtin::skin_doc())
+            .text(&text)
             .decorations(false)
             .min_size(min_size)
             .title("Kithara - DJ Studio")
@@ -107,7 +109,7 @@ mod tests {
         render::{ReadValue, Reads},
     };
 
-    use super::{App, Config, builtin, endpoints, studio_ui};
+    use super::{App, Config, builtin, endpoints, ui};
 
     /// A studio with nothing loaded: every control falls back to what the
     /// document and the skin say, which is the hardest case for a host that
@@ -122,7 +124,7 @@ mod tests {
 
     impl App for Empty {
         fn document(&self) -> &str {
-            studio_ui::entry(studio_ui::cache::DeckLayout::Dual)
+            ui::entry(ui::cache::DeckLayout::Dual)
         }
 
         fn reads<R>(&self, with: impl FnOnce(&dyn Reads) -> R) -> R {
@@ -137,8 +139,9 @@ mod tests {
     /// application actually ships, mounted the way the window mounts it.
     #[kithara::test]
     fn the_studio_draws_under_the_retained_host() {
-        let resolver = studio_ui::resolver();
-        let endpoints = endpoints::StudioRegistry::default();
+        let resolver = ui::resolver();
+        let endpoints = endpoints::Registry::default();
+        let text = ui::text().expect("the app catalog must merge with the canon one");
         let mut ui = Ui::new(
             Empty,
             Config::builder()
@@ -146,6 +149,7 @@ mod tests {
                 .resolver(&resolver)
                 .skin(builtin::skin())
                 .skin_doc(builtin::skin_doc())
+                .text(&text)
                 .build(),
             (1280, 760),
             1.0,

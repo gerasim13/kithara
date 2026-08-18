@@ -2,8 +2,8 @@ use crate::{
     atoms::design::quad::center_y,
     draw::{DrawListBuilder, Pt, Rect, Rgba, Transform},
     render::Skin,
+    shaping::TextContext,
     skin::{FontFamily, GlobalBarSkin, TextRoleSkin},
-    text::TextContext,
 };
 
 /// The wordmark at the head of the global bar, one letter at a time.

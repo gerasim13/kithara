@@ -33,6 +33,7 @@ pub(super) fn run() -> bool {
         .resolver(&resolver)
         .skin(builtin::skin())
         .skin_doc(builtin::skin_doc())
+        .text(builtin::text_doc())
         .decorations(false)
         .min_size(size)
         .title("Kithara UI Gallery")
@@ -128,6 +129,7 @@ mod tests {
             .resolver(&resolver)
             .skin(builtin::skin())
             .skin_doc(builtin::skin_doc())
+            .text(builtin::text_doc())
             .build();
         let size = (
             num_traits::cast::AsPrimitive::<u32>::as_(1100.0 * scale),
@@ -186,6 +188,7 @@ mod fills {
                 .resolver(&resolver)
                 .skin(builtin::skin())
                 .skin_doc(builtin::skin_doc())
+                .text(builtin::text_doc())
                 .build();
             let mut ui = Ui::new(Gallery::default(), config, (width, height), scale)
                 .unwrap_or_else(|error| panic!("the gallery must mount at {scale}x: {error}"));

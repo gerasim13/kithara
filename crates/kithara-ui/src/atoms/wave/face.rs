@@ -10,8 +10,8 @@ use crate::{
     draw::{DrawListBuilder, Rect, Rgba},
     module::WaveStyle,
     render::{ReadValue, Reads, Skin, WaveformView, model::derived},
+    shaping::TextContext,
     skin::WaveSkin,
-    text::TextContext,
 };
 
 /// The waveform a deck shows: the track's shape, where the playhead is in it,
@@ -265,7 +265,7 @@ mod tests {
         builtin,
         draw::{DrawCmd, DrawListBuilder, Geom, Pt},
         render::{ReadValue, Reads, WaveBucket, WaveformView},
-        text::TextContext,
+        shaping::TextContext,
     };
 
     struct WaveReads {

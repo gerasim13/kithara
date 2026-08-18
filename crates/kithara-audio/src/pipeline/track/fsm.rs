@@ -76,6 +76,18 @@ pub(crate) const fn map_source_phase(phase: SourcePhase) -> Option<WaitingReason
     }
 }
 
+/// Marks a step that returned `Waiting` this pass, on the probe channel the
+/// flight recorder keeps. `Waiting` — unlike `WaitingDemand` — ticks the
+/// audio-worker hang watchdog, so when the watchdog fires, the dump's probe
+/// tail names the branch that starved it. TRACE on the `_probe` target stays
+/// out of stdout; only the in-memory ring records it.
+macro_rules! waiting_branch {
+    ($branch:literal) => {
+        tracing::trace!(target: "kithara_audio_probe", branch = $branch, "waiting branch");
+    };
+}
+pub(crate) use waiting_branch;
+
 fn emit_event<T: StreamType>(src: &StreamAudioSource<T>, event: AudioEvent) {
     if let Some(ref emit) = src.emit {
         emit.enqueue(event.into());

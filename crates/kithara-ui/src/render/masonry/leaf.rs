@@ -33,9 +33,9 @@ use crate::{
         HostLayer, ReadValue, UiEvent, WindowCommand, WindowLayerProgram, document::Ctx,
         shader::ShaderDeclaration,
     },
+    shaping::{TextContext, TextResources},
     skin::TextRoleSkin,
     solve::{Length, Size},
-    text::{TextContext, TextResources},
 };
 
 pub(super) enum Leaf {

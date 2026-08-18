@@ -2,8 +2,8 @@ use iced::Font;
 
 use crate::{
     backends::font,
+    shaping::FontId,
     skin::{FontFamily, FontWeight},
-    text::FontId,
 };
 
 pub const INTER_REGULAR_BYTES: &[u8] = FontId::InterRegular.bytes();

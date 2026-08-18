@@ -26,7 +26,7 @@ linux *ARGS:
 bridge *ARGS:
     just _xtask ci bridge "$@"
 
-# Run a complete repeated-test evidence campaign.
+# Run every lane of a repeated-test evidence run.
 [positional-arguments]
 stress *ARGS:
     just _xtask stress run "$@"
@@ -54,6 +54,11 @@ gate *ARGS:
 # Comprehensive workspace health report.
 health:
     just _xtask health
+
+# Consolidate one run's quality artifacts into a single markdown report.
+[positional-arguments]
+report *ARGS:
+    just _xtask ci-report "$@"
 
 # Full CI cycle with independent stage logs.
 full OUTPUT:

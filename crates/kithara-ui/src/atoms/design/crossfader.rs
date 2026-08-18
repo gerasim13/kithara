@@ -2,14 +2,15 @@ use num_traits::cast::AsPrimitive;
 
 use crate::{
     draw::{DrawListBuilder, Pt, Rect, Rgba, Transform},
-    render::Skin,
+    render::{CrossfaderLabels, Skin},
+    shaping::{GlyphRun, TextContext},
     skin::{ColorRole, CrossfaderSkin, FontFamily, FontSkin, TextRoleSkin, TickSkin},
-    text::{GlyphRun, TextContext},
 };
 
 pub(crate) struct Crossfader {
     arrow_color: Rgba,
     arrows: (char, char),
+    captions: CrossfaderLabels,
     label_color: Rgba,
     label_role: TextRoleSkin,
     letter_color: Rgba,
@@ -24,13 +25,14 @@ pub(crate) struct Crossfader {
 
 impl Crossfader {
     pub(crate) fn new(ticks: bool, skin: &Skin) -> Self {
-        let metrics = skin.crossfader.clone();
+        let metrics = skin.crossfader;
         Self {
             arrow_color: skin.rgba(metrics.arrow_color),
             arrows: (
                 char::from(lucide_icons::Icon::ChevronsLeft),
                 char::from(lucide_icons::Icon::ChevronsRight),
             ),
+            captions: skin.crossfader_labels.clone(),
             label_color: skin.rgba(metrics.label_color),
             label_role: role(metrics.label_text),
             letter_color: skin.rgba(metrics.letter_color),
@@ -126,9 +128,9 @@ impl Crossfader {
     /// the letters hug the outer edges, the caption owns the middle third.
     fn paint_labels(&self, list: &mut DrawListBuilder, text: &mut TextContext, bounds: Rect) {
         let metrics = &self.metrics;
-        let left = text.shape(&metrics.left_label, self.letter_role, None);
-        let right = text.shape(&metrics.right_label, self.letter_role, None);
-        let center = text.shape(&metrics.center_label, self.label_role, None);
+        let left = text.shape(&self.captions.left, self.letter_role, None);
+        let right = text.shape(&self.captions.right, self.letter_role, None);
+        let center = text.shape(&self.captions.center, self.label_role, None);
         let back = self.arrows.0.to_string();
         let forward = self.arrows.1.to_string();
         let back_run = text.shape_lucide(&back, metrics.arrow_size);
@@ -150,13 +152,13 @@ impl Crossfader {
             x + run.width() + metrics.arrow_gap
         };
 
-        let x = place(&left, &metrics.left_label, bounds.x, self.letter_color);
+        let x = place(&left, &self.captions.left, bounds.x, self.letter_color);
         place(&back_run, &back, x, self.arrow_color);
 
         let column = bounds.w / 3.0;
         place(
             &center,
-            &metrics.center_label,
+            &self.captions.center,
             bounds.x + column + (column - center.width()) / 2.0,
             self.label_color,
         );
@@ -168,7 +170,7 @@ impl Crossfader {
             bounds.x + bounds.w - tail,
             self.arrow_color,
         );
-        place(&right, &metrics.right_label, x, self.letter_color);
+        place(&right, &self.captions.right, x, self.letter_color);
     }
 }
 

@@ -172,6 +172,7 @@ fn document(root: &str) -> CompiledUi {
         &resolver,
         &registry(),
         builtin::skin_doc(),
+        builtin::text_doc(),
         &UiConfig::default(),
     )
     .unwrap_or_else(|error| panic!("the fixture must compile: {error}"))

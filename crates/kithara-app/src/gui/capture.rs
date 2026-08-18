@@ -30,7 +30,6 @@ use kithara_ui::{
         tree, vis::VisPass,
     },
 };
-use num_traits::cast::AsPrimitive;
 use png::{BitDepth, ColorType, Encoder};
 use vello::{
     AaConfig, AaSupport, RenderParams, Renderer, RendererOptions,
@@ -44,13 +43,13 @@ use vello::{
 };
 
 use super::{
-    frontend::studio_size,
-    studio_ui::{
+    frontend::window_size,
+    theme,
+    ui::{
         self,
         cache::DeckLayout,
-        endpoints::{StudioRegistry, readable_kind},
+        endpoints::{Registry, readable_kind},
     },
-    theme,
 };
 use crate::theme::Palette;
 
@@ -93,7 +92,7 @@ impl Geometry {
     const TEXT_SIZE: Pixels = Pixels(14.0);
 
     fn studio() -> Self {
-        let ((width, height), _) = studio_size();
+        let ((width, height), _) = window_size();
         Self {
             height,
             scale: 1.0,
@@ -245,11 +244,7 @@ impl Reads for Fixture {
         let base = endpoint.split_once('@').map_or(endpoint, |(base, _)| base);
         let value = match readable_kind(base)? {
             ValueKind::Bool => ReadValue::Bool(self.on(base)),
-            ValueKind::Scalar => ReadValue::Scalar(if base == "ui.layout.decks" {
-                self.layout.index().as_()
-            } else {
-                Self::SCALAR
-            }),
+            ValueKind::Scalar => ReadValue::Scalar(Self::SCALAR),
             ValueKind::Stereo => ReadValue::Stereo(Self::LEVELS),
             ValueKind::Text => ReadValue::Text(text(base)),
             ValueKind::Waveform => ReadValue::Waveform(WaveformView {
@@ -295,7 +290,7 @@ fn text(endpoint: &str) -> &'static str {
 
 impl App for Fixture {
     fn document(&self) -> &str {
-        studio_ui::entry(self.layout)
+        ui::entry(self.layout)
     }
 
     fn reads<R>(&self, with: impl FnOnce(&dyn Reads) -> R) -> R {
@@ -456,8 +451,8 @@ fn iced(
     renderer: &mut iced::Renderer,
     geometry: Geometry,
 ) -> Result<(Vec<u8>, PoolSample), String> {
-    let compiled = studio_ui::compile_studio(layout)
-        .map_err(|error| format!("compile {}: {error}", studio_ui::entry(layout)))?;
+    let compiled = ui::compile_ui(layout)
+        .map_err(|error| format!("compile {}: {error}", ui::entry(layout)))?;
     let reads = Fixture::new(layout);
     let skin = builtin::skin();
     let theme = theme::kithara_theme(&Palette::default().into());
@@ -511,8 +506,9 @@ fn masonry(
     offscreen: &mut Offscreen,
     geometry: Geometry,
 ) -> Result<(Vec<u8>, PoolSample), String> {
-    let resolver = studio_ui::resolver();
-    let endpoints = StudioRegistry::default();
+    let resolver = ui::resolver();
+    let endpoints = Registry::default();
+    let text = ui::text().map_err(|error| format!("catalog: {error}"))?;
     let mut ui = Ui::new(
         Fixture::new(layout),
         Config::builder()
@@ -520,19 +516,20 @@ fn masonry(
             .resolver(&resolver)
             .skin(builtin::skin())
             .skin_doc(builtin::skin_doc())
+            .text(&text)
             .build(),
         (geometry.width, geometry.height),
         f64::from(geometry.scale),
     )
-    .map_err(|error| format!("mount {}: {error}", studio_ui::entry(layout)))?;
+    .map_err(|error| format!("mount {}: {error}", ui::entry(layout)))?;
     let frame = ui
         .render()
-        .map_err(|error| format!("draw {}: {error}", studio_ui::entry(layout)))?;
+        .map_err(|error| format!("draw {}: {error}", ui::entry(layout)))?;
     let rgba = offscreen.rasterise(&frame, ui.background().into())?;
     let first = ui.draw_pool_stats();
     drop(
         ui.render()
-            .map_err(|error| format!("second draw {}: {error}", studio_ui::entry(layout)))?,
+            .map_err(|error| format!("second draw {}: {error}", ui::entry(layout)))?,
     );
     Ok((
         rgba,

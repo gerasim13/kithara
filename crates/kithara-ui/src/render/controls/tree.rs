@@ -16,7 +16,7 @@ use crate::{
     engine::{ScrollConfig, ScrollState},
     interact::{ScrollAxis, iced as iced_interact},
     render::{InputOwner, UiEvent, index},
-    text::TextContext,
+    shaping::TextContext,
 };
 
 pub(crate) fn tree_rows<'a>(path: &str, picture: Tree, owner: InputOwner) -> Element<'a, UiEvent> {

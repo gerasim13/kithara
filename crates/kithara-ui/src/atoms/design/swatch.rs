@@ -4,8 +4,8 @@ use crate::{
     atoms::design::quad::quad,
     draw::{DrawListBuilder, Pt, Rect, Rgba, Transform},
     render::Skin,
+    shaping::TextContext,
     skin::{ColorRole, SwatchSkin},
-    text::TextContext,
 };
 
 /// A block of one palette colour, captioned with its name and its hex.

@@ -1,5 +1,7 @@
 <div align="center">
-  <img src="../logo.svg" alt="kithara" width="300">
+
+<img src="../logo.svg" alt="kithara" width="300">
+
 </div>
 
 <div align="center">
@@ -282,6 +284,7 @@ just platform apple xcframework --profile debug
 cd apple
 KITHARA_LOCAL_DEV=1 open Package.swift
 ```
+
 ## Demo App
 
 An iOS/macOS demo player is included in [`Examples/KitharaDemo`](Examples/KitharaDemo). It plays audio from any URL (MP3, AAC, FLAC, HLS) with transport controls, seek, volume, playback rate, and error reporting.
@@ -312,6 +315,7 @@ just platform apple xcframework --profile debug
 ```
 
 Output: `apple/KitharaFFIInternal.xcframework` with slices for:
+
 - `macos-arm64_x86_64`
 - `ios-arm64`
 - `ios-arm64_x86_64-simulator`

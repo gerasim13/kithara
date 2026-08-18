@@ -102,6 +102,8 @@ impl<C: HangDump> HangDetector<C> {
             Some(ctx) => write_dump(self.label, ctx, self.dump_dir.as_deref(), &diag),
             None => write_dump(self.label, &NoContext, self.dump_dir.as_deref(), &diag),
         }
+        // The imminent watchdog panic is already documented by this dump.
+        super::panic_dump::suppress_next_panic_dump();
     }
 
     /// Liveness budget left before the deadline, on the current (real or

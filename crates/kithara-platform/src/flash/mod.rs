@@ -25,7 +25,7 @@ pub mod tokio;
 pub use api::*;
 pub(crate) use ctx::{flash_ambient, flash_enabled};
 
-pub use crate::backend::{env, logging, maybe_send};
+pub use crate::backend::{logging, maybe_send};
 
 #[cfg(test)]
 mod tests;

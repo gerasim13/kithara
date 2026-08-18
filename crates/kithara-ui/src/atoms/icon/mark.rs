@@ -1,7 +1,7 @@
 use crate::{
     draw::{DrawListBuilder, Pt, Rect, Rgba, Transform},
     render::Mark,
-    text::TextContext,
+    shaping::TextContext,
 };
 
 /// One icon at one size: a lucide glyph shaped as text, or an authored outline

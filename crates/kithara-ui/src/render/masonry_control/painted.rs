@@ -21,7 +21,7 @@ use crate::{
         document::Ctx,
         span_event,
     },
-    text::TextContext,
+    shaping::TextContext,
 };
 
 /// One built-in control mounted as a Masonry leaf: a painter, the data it

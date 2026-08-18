@@ -10,7 +10,7 @@ use iced::{
 
 use super::contract::WindowLayerProgram;
 #[cfg(test)]
-use crate::{draw::Pt, render::HostLayer, solve::Size as SolveSize, text::TextResources};
+use crate::{draw::Pt, render::HostLayer, shaping::TextResources, solve::Size as SolveSize};
 use crate::{
     draw::Rect,
     interact::{Input, Outcome, PointerId, PointerOwnership, PointerPhase, iced as iced_interact},

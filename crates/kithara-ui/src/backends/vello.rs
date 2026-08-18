@@ -18,7 +18,7 @@ use crate::{
         Backend, Caps, DrawCmd, DrawList, FillRule, Geom, Image, LineCap, LineJoin, Paint, Path,
         Pen, Pt, Rect, Rgba, Stops, Transform, Verb, replay,
     },
-    text::{GlyphFace, GlyphRun},
+    shaping::{GlyphFace, GlyphRun},
 };
 
 /// A backend that encodes drawing commands into a Vello [`Scene`].
@@ -332,8 +332,8 @@ mod tests {
     use super::*;
     use crate::{
         draw::{DrawCmd, DrawListBuilder, Rect},
+        shaping::{FontPolicy, GlyphRun, TextContext, TextResources},
         skin::{ColorRole, FontFamily, FontWeight, TextRoleSkin},
-        text::{FontPolicy, GlyphRun, TextContext, TextResources},
     };
 
     #[kithara::test]

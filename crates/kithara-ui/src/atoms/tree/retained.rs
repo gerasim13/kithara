@@ -5,8 +5,8 @@ use crate::{
     draw::{DrawList, DrawListBuilder, Pt, Rect, Rgba, Transform},
     engine::TextInputSnapshot,
     render::{Skin, TreeIcon, tree_icon},
+    shaping::TextContext,
     skin::{ColorRole, FontFamily, TextRoleSkin},
-    text::TextContext,
 };
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -186,7 +186,7 @@ fn paint_query(
             skin,
         );
     } else if !has_preedit {
-        let placeholder = skin.tree.search_placeholder.as_str();
+        let placeholder = skin.tree_search_placeholder.as_str();
         let run = text.shape(placeholder, role, None);
         paint_search_text(
             &mut content,
@@ -213,7 +213,7 @@ fn paint_query(
 
 fn paint_search_text(
     list: &mut DrawListBuilder,
-    run: &crate::text::GlyphRun,
+    run: &crate::shaping::GlyphRun,
     content: &str,
     bounds: Rect,
     color: Rgba,

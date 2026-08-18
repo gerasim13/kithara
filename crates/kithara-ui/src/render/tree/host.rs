@@ -614,9 +614,9 @@ mod tests {
             tree::control::HostedControl,
             window_layer,
         },
+        shaping::TextResources,
         solve::{Length as SolveLength, Size as SolveSize},
         source::{MemResolver, UiConfig},
-        text::TextResources,
     };
 
     fn redraw_event() -> Event {
@@ -945,14 +945,15 @@ mod tests {
             include_str!("../../../tests/fixtures/retained_host/mixer.kmodule.ron"),
         );
         resolver.insert(
-            "studio-strip.kmodule.ron",
-            include_str!("../../../tests/fixtures/retained_host/studio-strip.kmodule.ron"),
+            "app-strip.kmodule.ron",
+            include_str!("../../../tests/fixtures/retained_host/app-strip.kmodule.ron"),
         );
         compile(
             "layout.klayout.ron",
             &resolver,
             &Registry::default(),
             builtin::skin_doc(),
+            builtin::text_doc(),
             &UiConfig::default(),
         )
         .unwrap_or_else(|error| panic!("retained host fixture must compile: {error}"))
@@ -981,6 +982,7 @@ mod tests {
             &resolver,
             &Registry::default(),
             builtin::skin_doc(),
+            builtin::text_doc(),
             &UiConfig::default(),
         )
         .unwrap_or_else(|error| panic!("tree surface fixture must compile: {error}"))
@@ -1002,6 +1004,7 @@ mod tests {
             &resolver,
             &Registry::default(),
             builtin::skin_doc(),
+            builtin::text_doc(),
             &UiConfig::default(),
         )
         .unwrap_or_else(|error| panic!("gallery library fixture must compile: {error}"))
@@ -1028,6 +1031,7 @@ mod tests {
             &resolver,
             &Registry::default(),
             builtin::skin_doc(),
+            builtin::text_doc(),
             &UiConfig::default(),
         )
         .unwrap_or_else(|error| panic!("gallery {page} fixture must compile: {error}"))
@@ -1070,6 +1074,7 @@ mod tests {
             &resolver,
             &Registry::default(),
             builtin::skin_doc(),
+            builtin::text_doc(),
             &UiConfig::default(),
         )
         .unwrap_or_else(|error| panic!("gallery buttons fixture must compile: {error}"))
@@ -1091,6 +1096,7 @@ mod tests {
             &resolver,
             &Registry::default(),
             builtin::skin_doc(),
+            builtin::text_doc(),
             &UiConfig::default(),
         )
         .unwrap_or_else(|error| panic!("gallery cells fixture must compile: {error}"))
@@ -1112,6 +1118,7 @@ mod tests {
             &resolver,
             &Registry::default(),
             builtin::skin_doc(),
+            builtin::text_doc(),
             &UiConfig::default(),
         )
         .unwrap_or_else(|error| panic!("gallery track-list fixture must compile: {error}"))
@@ -1133,6 +1140,7 @@ mod tests {
             &resolver,
             &Registry::default(),
             builtin::skin_doc(),
+            builtin::text_doc(),
             &UiConfig::default(),
         )
         .unwrap_or_else(|error| panic!("gallery faders fixture must compile: {error}"))
@@ -1154,6 +1162,7 @@ mod tests {
             &resolver,
             &Registry::default(),
             builtin::skin_doc(),
+            builtin::text_doc(),
             &UiConfig::default(),
         )
         .unwrap_or_else(|error| panic!("gallery module tabs fixture must compile: {error}"))
@@ -1179,6 +1188,7 @@ mod tests {
             &resolver,
             &Registry::default(),
             builtin::skin_doc(),
+            builtin::text_doc(),
             &UiConfig::default(),
         )
         .unwrap_or_else(|error| panic!("gallery nav fixture must compile: {error}"))
@@ -1209,6 +1219,7 @@ mod tests {
             &resolver,
             &Registry::default(),
             builtin::skin_doc(),
+            builtin::text_doc(),
             &UiConfig::default(),
         )
         .unwrap_or_else(|error| panic!("the leaf nav fixture must compile: {error}"))
@@ -1250,6 +1261,7 @@ mod tests {
             &resolver,
             &Registry::default(),
             builtin::skin_doc(),
+            builtin::text_doc(),
             &UiConfig::default(),
         )
         .unwrap_or_else(|error| panic!("the clipped scroll fixture must compile: {error}"))
@@ -1294,6 +1306,7 @@ mod tests {
             &resolver,
             &Registry::default(),
             builtin::skin_doc(),
+            builtin::text_doc(),
             &UiConfig::default(),
         )
         .unwrap_or_else(|error| panic!("the clipped drag fixture must compile: {error}"))
@@ -1304,22 +1317,22 @@ mod tests {
         resolver.insert(
             "layout.klayout.ron",
             r#"(schema: "kithara.layout", version: 1, id: "overview-host",
-                root: Module(instance: "overview", source: "studio-overview.kmodule.ron"))"#,
+                root: Module(instance: "overview", source: "app-overview.kmodule.ron"))"#,
         );
         resolver.insert(
-            "studio-overview.kmodule.ron",
-            r#"(schema: "kithara.module", version: 1, id: "studio-overview",
+            "app-overview.kmodule.ron",
+            r#"(schema: "kithara.module", version: 1, id: "app-overview",
                 root: Row(children: [
                     Include(
                         id: "a",
-                        source: "studio-overview-row.kmodule.ron",
+                        source: "app-overview-row.kmodule.ron",
                         with: { "deck": "a" },
                     ),
                 ]))"#,
         );
         resolver.insert(
-            "studio-overview-row.kmodule.ron",
-            r#"(schema: "kithara.module", version: 1, id: "studio-overview-row",
+            "app-overview-row.kmodule.ron",
+            r#"(schema: "kithara.module", version: 1, id: "app-overview-row",
                 parameters: ["deck"],
                 root: Row(gap: 0.0, size: (w: Fill, h: Fixed(40.0)), children: [
                     Text(id: "letter", label: "A"),
@@ -1336,6 +1349,7 @@ mod tests {
             &resolver,
             &Registry::default(),
             builtin::skin_doc(),
+            builtin::text_doc(),
             &UiConfig::default(),
         )
         .unwrap_or_else(|error| panic!("overview row fixture must compile: {error}"))
@@ -1501,7 +1515,7 @@ mod tests {
     #[kithara::test]
     fn module_drop_crossing_observes_boundaries_and_forwards_to_the_child() {
         let instance = "deck-a";
-        let module = "studio-deck";
+        let module = "app-deck";
         let spec = ModuleHost {
             instance,
             module,
@@ -1623,7 +1637,7 @@ mod tests {
 
     #[kithara::test]
     fn full_module_header_activation_toggles_the_module_directly() {
-        let module = "studio-deck";
+        let module = "app-deck";
         let spec = ModuleHost {
             instance: "deck-a",
             module,
@@ -4308,8 +4322,8 @@ mod tests {
         };
         let row = &children[0];
 
-        assert_eq!(ui.resolve(*module), "studio-overview");
-        assert!(ui.includes_module(*instance, &[0], "studio-overview-row"));
+        assert_eq!(ui.resolve(*module), "app-overview");
+        assert!(ui.includes_module(*instance, &[0], "app-overview-row"));
         let mut components = Vec::new();
         claimed_components(row, &mut components);
         assert_eq!(components, ["wave"]);
@@ -4471,12 +4485,12 @@ mod tests {
             "mixer.kmodule.ron",
             r#"(schema: "kithara.module", version: 1, id: "mixer",
                 root: Row(children: [
-                    Include(id: "strip", source: "studio-strip.kmodule.ron"),
+                    Include(id: "strip", source: "app-strip.kmodule.ron"),
                 ]))"#,
         );
         resolver.insert(
-            "studio-strip.kmodule.ron",
-            r#"(schema: "kithara.module", version: 1, id: "studio-strip",
+            "app-strip.kmodule.ron",
+            r#"(schema: "kithara.module", version: 1, id: "app-strip",
                 root: Include(id: "body", source: "strip-body.kmodule.ron"))"#,
         );
         resolver.insert(
@@ -4489,6 +4503,7 @@ mod tests {
             &resolver,
             &Registry::default(),
             builtin::skin_doc(),
+            builtin::text_doc(),
             &UiConfig::default(),
         )
         .unwrap_or_else(|error| panic!("root include chain must compile: {error}"));
@@ -4497,7 +4512,7 @@ mod tests {
         };
 
         assert!(ui.includes_module(*instance, &[0], "strip-body"));
-        assert!(ui.includes_module(*instance, &[0], "studio-strip"));
+        assert!(ui.includes_module(*instance, &[0], "app-strip"));
     }
 
     #[kithara::test]
@@ -4524,9 +4539,9 @@ mod tests {
         };
         assert_eq!(strips.len(), 3, "two strips must surround one divider");
 
-        assert_eq!(ui.resolve(*module), "studio-mixer");
-        assert!(ui.includes_module(*instance, &[0, 0], "studio-strip"));
-        assert!(ui.includes_module(*instance, &[0, 2], "studio-strip"));
+        assert_eq!(ui.resolve(*module), "app-mixer");
+        assert!(ui.includes_module(*instance, &[0, 0], "app-strip"));
+        assert!(ui.includes_module(*instance, &[0, 2], "app-strip"));
         let mut components = Vec::new();
         claimed_components(root, &mut components);
         assert_eq!(

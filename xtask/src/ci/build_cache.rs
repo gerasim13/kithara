@@ -1,6 +1,7 @@
 #[cfg(unix)]
 use std::os::unix::fs::MetadataExt;
 use std::{
+    env,
     ffi::OsStr,
     fs::{self, File, OpenOptions},
     io,
@@ -159,7 +160,9 @@ fn candidate_entries(target_dir: &Path) -> Result<CacheContents> {
         .with_context(|| format!("reading build cache {}", target_dir.display()))?;
     let mut contents = CacheContents {
         entries: Vec::new(),
-        active: false,
+        // A target a live job leased is active even between compilations,
+        // when no `.cargo-lock` is held.
+        active: lease_is_held(target_dir),
         locks: Vec::new(),
     };
     for entry in entries {
@@ -254,14 +257,14 @@ fn allocated_bytes(metadata: &fs::Metadata) -> u64 {
 /// reclaim from another job can tell "in use" from "left behind".
 pub(crate) const JOB_LEASE: &str = ".kithara-job-lease";
 
-/// Whether a job is running in this checkout right now.
+/// Whether a live job holds the lease under `directory`.
 ///
 /// `.cargo-lock` cannot answer that: Cargo holds it only while it compiles, so
-/// a checkout whose tests are already running looks abandoned. A reclaim that
-/// believed it deleted a live `target` out from under a sibling job, and the
-/// 1869 tests that then failed to exec their own binaries looked like the
-/// product breaking rather than the CI eating itself.
-fn checkout_is_leased(directory: &Path) -> bool {
+/// a checkout or shared target whose tests are already running looks
+/// abandoned. A reclaim that believed it deleted a live `target` out from
+/// under a sibling job, and the 1869 tests that then failed to exec their own
+/// binaries looked like the product breaking rather than the CI eating itself.
+fn lease_is_held(directory: &Path) -> bool {
     let path = directory.join(JOB_LEASE);
     let Ok(file) = OpenOptions::new().read(true).write(true).open(&path) else {
         return false;
@@ -270,6 +273,42 @@ fn checkout_is_leased(directory: &Path) -> bool {
         Ok(()) => false,
         // Held by a live job, or unreadable — either way, not ours to remove.
         Err(_) => true,
+    }
+}
+
+/// A process's claim on the shared Cargo target directory it works in.
+///
+/// The checkout lease cannot protect this one: on Linux runners the target is
+/// a per-runner Docker volume the host budgets directly, and the volume's only
+/// other liveness signal, `.cargo-lock`, is held while Cargo compiles. A
+/// stress run that was merely executing its built tests looked idle, and the
+/// midnight budget pass deleted the binaries out from under it — repetitions
+/// 44-50 then failed every exec and read as the product breaking. The lock is
+/// shared so concurrent holders (a stress run and the harness runs it spawns)
+/// coexist; [`lease_is_held`] asks for it exclusively and backs off while any
+/// holder is alive.
+pub(crate) struct TargetLease {
+    _file: File,
+}
+
+impl TargetLease {
+    /// Claim `CARGO_TARGET_DIR` for the life of this process, if one is named.
+    pub(crate) fn hold() -> Option<Self> {
+        let target = PathBuf::from(env::var_os("CARGO_TARGET_DIR")?);
+        if !target.is_dir() {
+            return None;
+        }
+        let file = OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .open(target.join(JOB_LEASE))
+            .ok()?;
+        // Like the checkout lease: a lease that cannot be taken only restores
+        // the pre-lease behaviour, which is no reason to refuse work.
+        FileExt::try_lock_shared(&file).ok()?;
+        Some(Self { _file: file })
     }
 }
 
@@ -286,7 +325,7 @@ pub(crate) fn persistent_target_dirs(root: &Path) -> Result<Vec<PathBuf>> {
     let mut targets = Vec::new();
     while let Some(directory) = pending.pop() {
         if directory.join("Cargo.toml").is_file() {
-            if checkout_is_leased(&directory) {
+            if lease_is_held(&directory) {
                 continue;
             }
             for name in ["target", "target-flash-off"] {
@@ -466,5 +505,32 @@ mod tests {
         FileExt::lock(&lock).unwrap();
 
         assert!(candidate_entries(directory.path()).unwrap().active);
+    }
+
+    /// A run that is only executing its built tests holds no
+    /// `.cargo-lock`; the root lease is what says a job still lives in this
+    /// target between compilations.
+    #[test]
+    fn a_leased_target_defers_eviction() {
+        let directory = tempfile::tempdir().unwrap();
+        let lease = OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .open(directory.path().join(JOB_LEASE))
+            .unwrap();
+        FileExt::try_lock_shared(&lease).unwrap();
+
+        assert!(candidate_entries(directory.path()).unwrap().active);
+    }
+
+    /// A lease file nobody holds is a leftover, not a claim.
+    #[test]
+    fn a_released_lease_leaves_the_target_evictable() {
+        let directory = tempfile::tempdir().unwrap();
+        fs::write(directory.path().join(JOB_LEASE), b"").unwrap();
+
+        assert!(!candidate_entries(directory.path()).unwrap().active);
     }
 }

@@ -4,8 +4,8 @@ use crate::{
     atoms::design::quad::{border, center_y},
     draw::{DrawListBuilder, Pt, Rect, Rgba, Transform},
     render::Skin,
+    shaping::TextContext,
     skin::{FontFamily, SegmentedSkin, TextRoleSkin},
-    text::TextContext,
 };
 
 /// A row of equal cells, one of them picked out.

@@ -5,8 +5,8 @@ use num_traits::ToPrimitive;
 use crate::{
     draw::{DrawList, DrawListBuilder, Pt, Rect, Rgba, Transform},
     render::{Skin, TreeIcon, TreeRow, tree_icon},
+    shaping::TextContext,
     skin::{ColorRole, FontFamily, TextRoleSkin},
-    text::TextContext,
 };
 
 #[derive(Clone, Debug, PartialEq, fieldwork::Fieldwork)]

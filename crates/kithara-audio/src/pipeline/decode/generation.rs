@@ -55,6 +55,17 @@ pub(crate) struct DecoderGeneration {
     gapless: GaplessStage,
     #[field(get = is_finished, vis = "pub(crate)", copy)]
     finished: bool,
+    /// The decoder consumed its source to the end while a variant transition
+    /// was in flight. Unlike `finished`, this keeps holdback and the staged
+    /// tail intact so the promotion proof stays reachable; no further PCM can
+    /// ever come from this generation.
+    #[field(get = is_source_exhausted, vis = "pub(crate)", copy)]
+    source_exhausted: bool,
+    /// The transition driver ran a pass after `source_exhausted` was set, so
+    /// a pending switch intent had its chance to plant an incoming slot
+    /// before EOF finalizes.
+    #[field(get = is_exhaustion_observed, vis = "pub(crate)", copy)]
+    exhaustion_observed: bool,
     holdback: Option<Holdback>,
     /// Lower bound for the decoder's observed timeline gap after an exact
     /// variant splice. The overlap proof normalizes equal codec profiles to
@@ -93,6 +104,8 @@ impl DecoderGeneration {
             gapless_profile,
             gapless,
             finished: false,
+            source_exhausted: false,
+            exhaustion_observed: false,
             holdback: None,
             timeline_gap_floor: 0,
             pending_head_skip,
@@ -125,6 +138,14 @@ impl DecoderGeneration {
         self.holdback = None;
         self.gapless.set_tail_compensation(self.gapless_profile());
         self.gapless.flush();
+    }
+
+    pub(crate) const fn mark_source_exhausted(&mut self) {
+        self.source_exhausted = true;
+    }
+
+    pub(crate) const fn observe_exhaustion(&mut self) {
+        self.exhaustion_observed = true;
     }
 
     pub(crate) fn finish_staging(&mut self) {
@@ -160,6 +181,8 @@ impl DecoderGeneration {
     }
     pub(crate) fn notify_seek(&mut self, retire: &dyn ChunkRetire) {
         self.finished = false;
+        self.source_exhausted = false;
+        self.exhaustion_observed = false;
         self.holdback = None;
         self.gapless.notify_seek(retire);
         for chunk in self.staged.drain(..) {
@@ -357,6 +380,7 @@ mod tests {
 
     struct EofDecoder {
         gapless: Option<GaplessInfo>,
+        default_priming: u64,
         spec: PcmSpec,
     }
 
@@ -383,7 +407,7 @@ mod tests {
         }
 
         fn gapless_profile(&self, _codec: Option<kithara_stream::AudioCodec>) -> GaplessProfile {
-            GaplessProfile::new(self.spec, self.gapless, None, 0)
+            GaplessProfile::new(self.spec, self.gapless, None, self.default_priming)
         }
 
         fn update_byte_len(&self, _len: u64) {}
@@ -400,6 +424,7 @@ mod tests {
         DecoderGeneration::new(
             Box::new(EofDecoder {
                 gapless: None,
+                default_priming: 0,
                 spec,
             }),
             None,
@@ -414,6 +439,7 @@ mod tests {
         DecoderGeneration::new(
             Box::new(EofDecoder {
                 gapless: Some(GaplessInfo::new(0, trailing_frames)),
+                default_priming: 0,
                 spec,
             }),
             None,
@@ -421,6 +447,23 @@ mod tests {
             0,
             None,
             GaplessMode::MediaOnly,
+        )
+    }
+
+    /// A track whose container carries no gapless metadata while the codec
+    /// table offers an estimate — the AAC-LC case at a quality-switch seam.
+    fn priming_generation(spec: PcmSpec, mode: GaplessMode) -> DecoderGeneration {
+        DecoderGeneration::new(
+            Box::new(EofDecoder {
+                gapless: None,
+                default_priming: 1_024,
+                spec,
+            }),
+            None,
+            0,
+            0,
+            None,
+            mode,
         )
     }
 
@@ -434,6 +477,17 @@ mod tests {
             },
             PcmPool::default().attach(vec![0.25; sample_frames * usize::from(spec.channels)]),
         )
+    }
+
+    /// An unlabelled AAC track keeps its encoder priming in the PCM (the
+    /// `MediaOnly` trimmer removes nothing), yet those frames are not content:
+    /// the seam origin counts them, and the four `quality_switch_continuity`
+    /// integration tests fail by exactly this many frames if it stops.
+    #[kithara::test]
+    fn origin_counts_codec_priming_the_media_only_trimmer_leaves_in_place() {
+        let generation = priming_generation(spec(2, 44_100), GaplessMode::MediaOnly);
+
+        assert_eq!(generation.timeline_origin(GaplessMode::MediaOnly), 1_024);
     }
 
     #[kithara::test]

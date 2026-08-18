@@ -210,6 +210,7 @@ mod retained {
             .resolver(&resolver)
             .skin(builtin::skin())
             .skin_doc(builtin::skin_doc())
+            .text(builtin::text_doc())
             .build();
         let size = (
             num_traits::cast::AsPrimitive::<u32>::as_(Consts::WIDTH),
@@ -224,6 +225,7 @@ mod retained {
             &resolver,
             &endpoints,
             builtin::skin_doc(),
+            builtin::text_doc(),
             &UiConfig::default(),
         )
         .unwrap_or_else(|error| panic!("page {} must compile: {error}", page.name()))

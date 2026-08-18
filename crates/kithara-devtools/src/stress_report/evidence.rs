@@ -15,14 +15,18 @@ use super::{MAX_FAILURE_ROWS, StressReportArgs, markdown_cell, test_id};
 use crate::{common::project::StressEvidenceConfig, junit::CaseTiming};
 
 mod attempt;
+mod divergence;
 mod envelope;
 mod line;
 mod line_reader;
 mod overlap;
 mod pressure;
 
+/// Payload lines kept after a panic header: the assertion's message and, for
+/// `assert_eq!`, its `left` and `right`.
+const PANIC_DETAIL_LINES: usize = 4;
 const MAX_SIGNATURE_ROWS: usize = 100;
-const MAX_SIGNATURE_EXAMPLES: usize = 5;
+pub(super) const MAX_SIGNATURE_EXAMPLES: usize = 5;
 
 #[derive(Debug, Default)]
 struct SignatureCluster {
@@ -42,6 +46,10 @@ struct AttemptDossier {
     wait_graph: BTreeSet<String>,
     lines: BTreeSet<String>,
     envelopes: BTreeSet<String>,
+    /// Newest run-length groups of the attempt envelope's probe tail, oldest
+    /// first. Ordered evidence, not a set: the last firing before the dump is
+    /// the verdict, and its `(xN)` count is the starvation streak.
+    flight_tail: Vec<String>,
     pressure: String,
     co_runners: BTreeSet<String>,
 }
@@ -144,6 +152,7 @@ pub(super) fn append_correlated_evidence(
         &backtraces,
         "The first project frames shared by failing attempts. Wrapper and address noise is removed.",
     );
+    complete &= divergence::append(out, cases);
     if let Some(path) = &args.line_log {
         complete &= line::append(
             out,
@@ -154,12 +163,14 @@ pub(super) fn append_correlated_evidence(
             &mut dossiers,
         );
     }
+    let mut flight = envelope::FlightClusters::default();
     if let Some(path) = &args.envelope_dir {
         complete &= envelope::append(
             out,
             path,
             envelope::Input::new(&outcomes, &expected_envelopes, run_id, &args.evidence),
             &mut waits,
+            &mut flight,
             &mut dossiers,
         );
     } else if !expected_envelopes.is_empty() {
@@ -175,6 +186,18 @@ pub(super) fn append_correlated_evidence(
         "Wait-graph signatures",
         &waits,
         "Repeated holders, waiters, or quiescence pins are causal candidates. Task IDs and timing counters are removed. An optional backtrace belongs to the snapshot caller, not necessarily to a holder or waiter.",
+    );
+    render_clusters(
+        out,
+        "Flight probe signatures",
+        &flight.probes,
+        "Probe firings recorded in the in-memory flight ring at dump time. Only failing attempts write dumps, so the failed column counts how many of them carried the line; numeric field values are normalized. A `waiting branch` line names the step that kept ticking the hang watchdog.",
+    );
+    render_clusters(
+        out,
+        "Flight event signatures",
+        &flight.events,
+        "DEBUG events from the flight ring at dump time — the state transitions immediately preceding the failure, independent of the stdout filter.",
     );
     if let Some(path) = &args.pressure_log {
         let (points, pressure_complete) = pressure::append(out, path);
@@ -303,23 +326,41 @@ fn failure_signature(case: &CaseTiming, evidence: &StressEvidenceConfig) -> Stri
         if is_timeout_line(line) {
             return normalize_signature(line);
         }
-        if line.contains("panicked at") {
-            let detail = lines
+        if is_panic_header(line) {
+            // The header arrives twice — nextest puts it in the failure
+            // `message` attribute and the body repeats it — so the first line
+            // after it is the duplicate, not the payload. Taking that one line
+            // as the detail spent the whole signature on saying the same thing
+            // twice and dropped what distinguishes one failure from another:
+            // the assertion's own message and its values.
+            let detail: Vec<&str> = lines
                 .iter()
                 .skip(index + 1)
-                .find(|candidate| {
-                    !candidate.is_empty()
-                        && !candidate.starts_with("stack backtrace")
+                .map(String::as_str)
+                .filter(|candidate| !is_panic_header(candidate))
+                .take_while(|candidate| {
+                    !candidate.starts_with("stack backtrace")
                         && !candidate.starts_with("note: run with")
                 })
-                .map_or(String::new(), |detail| format!(": {detail}"));
-            return normalize_signature(&format!("{line}{detail}"));
+                .take(PANIC_DETAIL_LINES)
+                .collect();
+            let head = line.trim_end_matches(':');
+            let detail = if detail.is_empty() {
+                String::new()
+            } else {
+                format!(": {}", detail.join(" "))
+            };
+            return normalize_signature(&format!("{head}{detail}"));
         }
     }
     lines.first().map_or_else(
         || "failure output unavailable".to_owned(),
         |line| normalize_signature(line),
     )
+}
+
+fn is_panic_header(line: &str) -> bool {
+    line.contains("panicked at")
 }
 
 fn requires_envelope(output: &str, evidence: &StressEvidenceConfig) -> bool {
@@ -343,7 +384,7 @@ fn is_junit_timeout(line: &str) -> bool {
     line == "test timeout" || line.starts_with("test timeout:")
 }
 
-fn backtrace_signature(output: &str, evidence: &StressEvidenceConfig) -> Option<String> {
+pub(super) fn backtrace_signature(output: &str, evidence: &StressEvidenceConfig) -> Option<String> {
     static SOURCE: LazyLock<Regex> = LazyLock::new(|| {
         Regex::new(r"(?:[A-Za-z0-9_.-]+/)+[A-Za-z0-9_./-]+\.rs:\d+(?::\d+)?")
             .expect("source-location regex")
@@ -439,12 +480,12 @@ fn render_attempt_dossiers(
         return;
     }
     out.push_str(
-        "\n## Failed-attempt evidence overlay\n\nEach bounded example row joins the terminal symptom with same-attempt runtime evidence; raw artifacts remain exhaustive. Empty cells mean that source emitted no attributable record. Co-runners and pressure are correlation candidates, not causes.\n\n| attempt | symptom | project frames | wait graph | line evidence | envelope | pressure | co-running tests |\n|---|---|---|---|---|---|---|---|\n",
+        "\n## Failed-attempt evidence overlay\n\nEach bounded example row joins the terminal symptom with same-attempt runtime evidence; raw artifacts remain exhaustive. Empty cells mean that source emitted no attributable record. The flight tail is ordered, oldest first, with `(xN)` marking consecutive repeats of one probe. Co-runners and pressure are correlation candidates, not causes.\n\n| attempt | symptom | project frames | wait graph | line evidence | envelope | flight tail | pressure | co-running tests |\n|---|---|---|---|---|---|---|---|---|\n",
     );
     for dossier in dossiers.values().take(MAX_FAILURE_ROWS) {
         let _ = writeln!(
             out,
-            "| `{}`<br>{} | {} | {} | {} | {} | {} | {} | {} |",
+            "| `{}`<br>{} | {} | {} | {} | {} | {} | {} | {} | {} |",
             markdown_cell(&dossier.display),
             markdown_cell(&dossier.test),
             markdown_cell(&dossier.symptom),
@@ -452,6 +493,7 @@ fn render_attempt_dossiers(
             render_set(&dossier.wait_graph),
             render_set(&dossier.lines),
             render_set(&dossier.envelopes),
+            render_ordered(&dossier.flight_tail),
             markdown_cell(&dossier.pressure),
             render_set(&dossier.co_runners),
         );
@@ -463,6 +505,16 @@ fn render_attempt_dossiers(
             dossiers.len(),
         );
     }
+}
+
+/// Ordered evidence cell: the sequence is the meaning, so no sorting and no
+/// truncation beyond what the producer already bounded.
+fn render_ordered(values: &[String]) -> String {
+    values
+        .iter()
+        .map(|value| markdown_cell(value))
+        .collect::<Vec<_>>()
+        .join("<br>")
 }
 
 fn render_set(values: &BTreeSet<String>) -> String {
@@ -488,7 +540,7 @@ fn clean_lines(text: &str) -> Vec<String> {
         .collect()
 }
 
-fn strip_ansi(text: &str) -> String {
+pub(super) fn strip_ansi(text: &str) -> String {
     static ANSI: LazyLock<Regex> =
         LazyLock::new(|| Regex::new(r"\x1b\[[0-9;?]*[ -/]*[@-~]").expect("ANSI escape regex"));
     ANSI.replace_all(text, "").into_owned()
@@ -496,13 +548,23 @@ fn strip_ansi(text: &str) -> String {
 
 fn normalize_signature(text: &str) -> String {
     static VOLATILE: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(r"\b([A-Za-z_][A-Za-z0-9_]*(?:_ns|_ms)|pid|task|thread|id|dump)=[^\s,;]+")
+        Regex::new(r"\b([A-Za-z_][A-Za-z0-9_]*(?:_ns|_ms)|pid|task|thread|id|dump|polls)=[^\s,;]+")
             .expect("volatile diagnostic regex")
+    });
+    // A Rust panic header names the thread and its id before the location.
+    // The id changes on every attempt, which made each failure its own
+    // cluster — the one section whose purpose is to say "these are one cause"
+    // reported each of them separately. The thread NAME is the test's own,
+    // already carried by the examples column, and spending the row's width on
+    // it is what pushed the assertion's values off the end.
+    static PANIC_THREAD: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"thread '[^']*' \(\d+\) panicked at").expect("panic thread identity regex")
     });
     static HEX: LazyLock<Regex> =
         LazyLock::new(|| Regex::new(r"0x[0-9a-fA-F]+").expect("address regex"));
     let text = strip_ansi(text).replace(['\r', '\n'], " ");
     let text = VOLATILE.replace_all(&text, "$1=<volatile>");
+    let text = PANIC_THREAD.replace_all(&text, "panicked at");
     let text = HEX.replace_all(&text, "0x<address>");
     markdown_cell(text.trim())
 }
@@ -634,6 +696,7 @@ mod tests {
             secs,
             timestamp: None,
             output: String::new(),
+            output_truncated: false,
         }
     }
 
@@ -666,6 +729,146 @@ mod tests {
             normalized,
             "pid=<volatile> task=<volatile> address=0x<address>"
         );
+    }
+
+    /// A poll count is per-attempt jitter: nine hangs sharing one pinning task
+    /// would cluster as nine separate causes if it survived into the signature.
+    /// The gate state beside it is the discriminator and must survive.
+    #[test]
+    fn a_pinning_tasks_poll_count_does_not_split_one_cause_into_many() {
+        let normalized = normalize_signature("active_async holder polls=41231 state=Runnable");
+        assert_eq!(
+            normalized,
+            "active_async holder polls=<volatile> state=Runnable"
+        );
+    }
+
+    /// The first line the flash engine writes into a hang dump.
+    const ENGINE_COUNTERS: &str = "virtual_now_ns=86410020000000 active=1 active_async=0 real_io=0 pace_anchor=none yielders=0";
+
+    /// The engine's counter line is neither a primitive, a holder, nor a
+    /// waiter, so `direct_markers` is the only route that carries it into a
+    /// section — and it is the causal line of the whole dump.
+    #[test]
+    fn the_engine_counters_become_their_own_wait_signature() {
+        let mut evidence = evidence();
+        evidence.direct_markers.push("pace_anchor=".to_owned());
+
+        let signatures = wait_signatures(
+            &format!("[wait dump] audio_worker_loop\n{ENGINE_COUNTERS}\n"),
+            &evidence,
+        );
+
+        assert!(
+            signatures.iter().any(|s| s.contains("pace_anchor=none")),
+            "{signatures:?}"
+        );
+    }
+
+    /// `real_io` counts the real-I/O leases outstanding. Masked as jitter, the
+    /// signature could no longer tell a test that outran its own socket from
+    /// one whose work never started.
+    #[test]
+    fn a_pacing_signature_keeps_the_real_io_count() {
+        let normalized = normalize_wait(ENGINE_COUNTERS);
+
+        assert!(normalized.contains("real_io=0"), "{normalized}");
+    }
+
+    /// Whether the clock is anchored to real time is the other half of the
+    /// same verdict: `real_io>0` with no anchor is a clock free-running past
+    /// work in flight.
+    #[test]
+    fn a_pacing_signature_keeps_the_pace_anchor_state() {
+        let normalized = normalize_wait(ENGINE_COUNTERS);
+
+        assert!(normalized.contains("pace_anchor=none"), "{normalized}");
+    }
+
+    /// The virtual clock reads differently on every attempt; kept, it would
+    /// give each hang a cluster of its own.
+    #[test]
+    fn a_pacing_signature_drops_the_virtual_clock() {
+        let normalized = normalize_wait(ENGINE_COUNTERS);
+
+        assert!(
+            normalized.contains("virtual_now_ns=<volatile>"),
+            "{normalized}"
+        );
+    }
+
+    /// Shaped like the retained output of a failed `assert_eq!`: the kind, the
+    /// panic header, then the assertion's message and its values.
+    fn panic_output(thread_id: &str) -> String {
+        format!(
+            "test failure with exit code 101: thread 'demo::warms_pool' ({thread_id}) panicked at tests/demo.rs:166:5:\n\
+             assertion `left == right` failed: a warmed pool must serve decode-sized buffers without allocating\n\
+             \x20 left: 0\n\
+             \x20right: 1\n\
+             stack backtrace:\n\
+             \x20  0: __rustc::rust_begin_unwind\n"
+        )
+    }
+
+    /// The values are the whole diagnosis: one miss out of eight is a
+    /// different defect from eight out of eight, and a signature that stops at
+    /// "an assertion failed" cannot tell a reader which they have.
+    #[test]
+    fn a_panic_signature_carries_the_assertion_that_failed() {
+        let mut failed = case("warms_pool", 0, true, 1.0);
+        failed.output = panic_output("971370");
+
+        let signature = failure_signature(&failed, &evidence());
+
+        assert!(
+            signature.contains("a warmed pool must serve"),
+            "{signature}"
+        );
+        assert!(signature.contains("left: 0"), "{signature}");
+        assert!(signature.contains("right: 1"), "{signature}");
+    }
+
+    /// The thread's name is the test's own, and the examples column already
+    /// carries it. In a symptom cluster it is width spent on what the row
+    /// does not ask.
+    #[test]
+    fn a_panic_signature_drops_the_thread_the_examples_already_name() {
+        let mut failed = case("warms_pool", 0, true, 1.0);
+        failed.output = panic_output("971370");
+
+        let signature = failure_signature(&failed, &evidence());
+
+        assert!(!signature.contains("demo::warms_pool"), "{signature}");
+        assert!(signature.contains("tests/demo.rs:166:5"), "{signature}");
+    }
+
+    /// The point of a symptom cluster is that one cause is one row. The thread
+    /// id changes on every attempt, so leaving it in the signature turned
+    /// thirteen failures of one assertion into thirteen clusters of one — the
+    /// section grouped nothing exactly where it was needed.
+    #[test]
+    fn two_attempts_of_one_assertion_share_a_signature() {
+        let mut first = case("warms_pool", 0, true, 1.0);
+        first.output = panic_output("971370");
+        let mut second = case("warms_pool", 7, true, 1.0);
+        second.output = panic_output("208442");
+
+        assert_eq!(
+            failure_signature(&first, &evidence()),
+            failure_signature(&second, &evidence())
+        );
+    }
+
+    /// The header arrives twice; spending the signature's width on saying it
+    /// twice is what pushed the payload past the cell bound.
+    #[test]
+    fn a_panic_signature_does_not_repeat_its_own_header() {
+        let mut failed = case("warms_pool", 0, true, 1.0);
+        failed.output = panic_output("971370");
+
+        let signature = failure_signature(&failed, &evidence());
+
+        assert_eq!(signature.matches("panicked at").count(), 1, "{signature}");
     }
 
     #[test]

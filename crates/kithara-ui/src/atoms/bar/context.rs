@@ -5,8 +5,8 @@ use crate::{
     },
     draw::{DrawListBuilder, Pt, Rect, Rgba, Transform},
     render::{Mark, Skin},
+    shaping::TextContext,
     skin::{FontFamily, TextRoleSkin},
-    text::TextContext,
 };
 
 /// The chevron between the scope and the path it opens onto.

@@ -1,7 +1,3 @@
-#[cfg(not(target_arch = "wasm32"))]
-#[path = "../common/offline_player_harness.rs"]
-mod offline_player_harness;
-
 mod abr_auto_no_infinite_buffering;
 mod cache_commit_grows;
 mod commands_survive_switch_storm;

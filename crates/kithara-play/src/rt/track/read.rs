@@ -133,8 +133,25 @@ impl PlayerTrack {
         }
     }
 
-    fn handle_natural_end(&mut self, notification_tx: &mut HeapProd<PlayerNotification>) {
+    /// Finalize the track at its natural end — unless the control thread has
+    /// already published a seek this track has not been re-based onto yet.
+    ///
+    /// The publish happens before the matching `PlayerCmd::Seek` is sent, so a
+    /// newer `published_seek_epoch` means the user left this position while the
+    /// render block was in flight. Ending the track there would hand the queue a
+    /// `ItemDidPlayToEnd` for a position nobody is at, and the queue would
+    /// auto-advance out from under the seek the processor is about to apply.
+    /// Holding costs the caller one block of silence: the seek command that
+    /// releases the hold is already on its way.
+    fn handle_natural_end(
+        &mut self,
+        notification_tx: &mut HeapProd<PlayerNotification>,
+        published_seek_epoch: u64,
+    ) {
         if self.state == TrackState::Finished {
+            return;
+        }
+        if published_seek_epoch != self.seek_epoch {
             return;
         }
         self.triggers.mark_prefetch_requested();
@@ -159,6 +176,7 @@ impl PlayerTrack {
         partial: PartialRead,
     ) -> TrackReadOutcome {
         let TrackReadContext { sink, range } = ctx;
+        let published_seek_epoch = sink.seek_epoch;
         let notification_tx = sink.notifications;
         let PartialRead { frames, duration } = partial;
         self.advance_media_clock(frames);
@@ -183,7 +201,7 @@ impl PlayerTrack {
                 sample_rate: self.sample_rate,
             },
         );
-        self.handle_natural_end(notification_tx);
+        self.handle_natural_end(notification_tx, published_seek_epoch);
 
         TrackReadOutcome::Partial { frames, duration }
     }
@@ -251,7 +269,7 @@ impl PlayerTrack {
                 PartialRead { duration, frames },
             ),
             TrackReadOutcome::Eof => {
-                self.handle_natural_end(sink.notifications);
+                self.handle_natural_end(sink.notifications, sink.seek_epoch);
                 TrackReadOutcome::Eof
             }
             TrackReadOutcome::Failed => {

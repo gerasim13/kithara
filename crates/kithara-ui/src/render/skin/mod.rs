@@ -4,8 +4,8 @@ mod neutral;
 
 #[cfg(feature = "iced")]
 pub(crate) use iced::IcedSkin;
-pub use neutral::Skin;
 // Its production reader is `Skin::text_role` inside `neutral`; the only
 // caller outside it is the iced tree's test-only frame join.
 #[cfg(test)]
 pub(crate) use neutral::active_tone;
+pub use neutral::{CrossfaderLabels, Skin};

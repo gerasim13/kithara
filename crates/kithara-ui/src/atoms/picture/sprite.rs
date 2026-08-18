@@ -3,7 +3,7 @@ use num_traits::cast::AsPrimitive;
 use crate::{
     atoms::{button::VisualState, painter::ControlPainter},
     draw::{DrawListBuilder, Image, Rect},
-    text::TextContext,
+    shaping::TextContext,
 };
 
 /// Draws one frame of a sheet, fitted to its box without stretching it.

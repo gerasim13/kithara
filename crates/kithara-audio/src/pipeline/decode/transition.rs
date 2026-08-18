@@ -139,6 +139,36 @@ impl super::core::ActiveDecode {
             .and_then(Into::into)
     }
 
+    pub(crate) const fn has_live_incoming(&self) -> bool {
+        matches!(
+            self.incoming,
+            Some(
+                IncomingDecode::Preparing { .. }
+                    | IncomingDecode::Building { .. }
+                    | IncomingDecode::Priming { .. }
+            )
+        )
+    }
+
+    /// One `DecoderEvent::TransitionHold` per transition: the first held
+    /// pass announces it, later passes stay silent.
+    pub(crate) fn announce_transition_hold(&mut self) -> bool {
+        let Some(transition) = self.incoming.as_ref().map(IncomingDecode::transition) else {
+            return false;
+        };
+        if self.announced_hold == Some(transition) {
+            return false;
+        }
+        self.announced_hold = Some(transition);
+        true
+    }
+
+    pub(crate) fn observe_source_exhaustion(&mut self) {
+        if self.active.is_source_exhausted() {
+            self.active.observe_exhaustion();
+        }
+    }
+
     delegate::delegate! {
         to self.incoming {
             #[expr($.and_then(Into::into))]
@@ -443,19 +473,11 @@ fn promotion_readiness(
         return PromotionReadiness::NeedIncoming;
     };
     let incoming_rate = incoming_spec.sample_rate.get();
-    let (outgoing_frame, outgoing_rate) = match outgoing_frontier {
-        OutgoingFrontier::Awaiting => return PromotionReadiness::NeedIncoming,
-        OutgoingFrontier::Exact { frame, rate } => (frame, rate),
-        OutgoingFrontier::Unavailable => {
-            return PromotionReadiness::Ready(PromotionSpan {
-                join: PromotionJoin::HardCut,
-                overlap: OverlapSpan {
-                    incoming_first,
-                    incoming_next: incoming_first,
-                },
-            });
-        }
-    };
+    let (outgoing_frame, outgoing_rate) =
+        match resolve_frontier(active, outgoing_frontier, incoming_first) {
+            Ok(pair) => pair,
+            Err(verdict) => return verdict,
+        };
     let active_spec = active.blender_profile().spec();
     let active_rate = active_spec.sample_rate.get();
     let Some(incoming_first_time) = content_time(
@@ -477,6 +499,14 @@ fn promotion_readiness(
         return PromotionReadiness::NeedIncoming;
     };
     if incoming_first_time > outgoing_next {
+        if active.is_source_exhausted() {
+            debug!(
+                ?incoming_first_time,
+                ?outgoing_next,
+                "outgoing exhausted behind the incoming landing: hard cut"
+            );
+            return hard_cut_at(incoming_first, incoming_first);
+        }
         trace!(
             ?incoming_first_time,
             ?incoming_end_time,
@@ -492,6 +522,20 @@ fn promotion_readiness(
         return PromotionReadiness::AwaitingOutgoingFrontier;
     }
     if outgoing_next >= incoming_end_time {
+        if active.is_source_exhausted() && generation.is_finished() {
+            // Nothing exists past the cut on either side: the outgoing ran
+            // out of source at the frontier and the incoming ran out at or
+            // before it. Commit the switch at the end with an empty incoming
+            // tail instead of failing it as unlandable — the intent resolves
+            // and the track then ends on the promoted variant.
+            debug!(
+                incoming_first,
+                incoming_end,
+                ?outgoing_next,
+                "exhausted frontier meets a finished incoming: committing at the end"
+            );
+            return hard_cut_at(incoming_first, incoming_end);
+        }
         return PromotionReadiness::NeedIncoming;
     }
     let Some(incoming_next) = frame_at_or_after(incoming_rate, incoming_origin, outgoing_next)
@@ -502,39 +546,21 @@ fn promotion_readiness(
         return PromotionReadiness::NeedIncoming;
     }
     let join = if incoming_spec == active_spec {
-        let frames = blender.join_frame_count();
         let Some(outgoing_first) = frame_at_or_after(active_rate, outgoing_origin, outgoing_next)
         else {
             return PromotionReadiness::NeedIncoming;
         };
-        if !generation.staged_covers(incoming_spec, incoming_next, frames) {
-            trace!(
-                frames,
-                incoming_next,
-                outgoing_first,
-                ?outgoing_next,
-                "same-spec promotion is waiting for incoming join PCM"
-            );
-            return PromotionReadiness::NeedIncoming;
-        }
-        if !active.staged_covers(active_spec, outgoing_first, frames) {
-            trace!(
-                frames,
-                incoming_next,
-                outgoing_first,
-                ?outgoing_next,
-                "same-spec promotion is waiting for outgoing join PCM"
-            );
-            return if active.is_finished() {
-                PromotionReadiness::NeedIncoming
-            } else {
-                PromotionReadiness::AwaitingOutgoingPcm
-            };
-        }
-        PromotionJoin::Blend {
-            frames,
+        match same_spec_join(
+            active,
+            blender,
+            generation,
+            active_spec,
+            incoming_next,
             outgoing_first,
-            spec: active_spec,
+            outgoing_next,
+        ) {
+            Ok(join) => join,
+            Err(verdict) => return verdict,
         }
     } else {
         PromotionJoin::HardCut
@@ -560,6 +586,88 @@ fn promotion_readiness(
         "incoming generation covers the outgoing frontier"
     );
     PromotionReadiness::Ready(span)
+}
+
+fn hard_cut_at(incoming_first: u64, incoming_next: u64) -> PromotionReadiness {
+    PromotionReadiness::Ready(PromotionSpan {
+        join: PromotionJoin::HardCut,
+        overlap: OverlapSpan {
+            incoming_first,
+            incoming_next,
+        },
+    })
+}
+
+fn resolve_frontier(
+    active: &DecoderGeneration,
+    frontier: OutgoingFrontier,
+    incoming_first: u64,
+) -> Result<(u64, u32), PromotionReadiness> {
+    match frontier {
+        // An exhausted outgoing can never establish (or advance) a frontier,
+        // so every "wait for the outgoing" answer below is a dead end; the
+        // switch degrades to a hard cut instead of wedging forever.
+        OutgoingFrontier::Awaiting if !active.is_source_exhausted() => {
+            Err(PromotionReadiness::NeedIncoming)
+        }
+        OutgoingFrontier::Awaiting | OutgoingFrontier::Unavailable => {
+            Err(hard_cut_at(incoming_first, incoming_first))
+        }
+        OutgoingFrontier::Exact { frame, rate } => Ok((frame, rate)),
+    }
+}
+
+fn same_spec_join(
+    active: &DecoderGeneration,
+    blender: &PcmBlender,
+    generation: &DecoderGeneration,
+    spec: PcmSpec,
+    incoming_next: u64,
+    outgoing_first: u64,
+    outgoing_next: Duration,
+) -> Result<PromotionJoin, PromotionReadiness> {
+    let frames = blender.join_frame_count();
+    if !generation.staged_covers(spec, incoming_next, frames) {
+        trace!(
+            frames,
+            incoming_next,
+            outgoing_first,
+            ?outgoing_next,
+            "same-spec promotion is waiting for incoming join PCM"
+        );
+        return Err(PromotionReadiness::NeedIncoming);
+    }
+    if active.staged_covers(spec, outgoing_first, frames) {
+        return Ok(PromotionJoin::Blend {
+            frames,
+            outgoing_first,
+            spec,
+        });
+    }
+    if active.is_source_exhausted() {
+        // The join PCM would have to come from past the final decode
+        // head — it does not exist. Cut at the frontier instead of
+        // demanding PCM the outgoing can never produce.
+        debug!(
+            frames,
+            incoming_next,
+            outgoing_first,
+            "outgoing exhausted without join PCM: hard cut at the final frontier"
+        );
+        return Ok(PromotionJoin::HardCut);
+    }
+    trace!(
+        frames,
+        incoming_next,
+        outgoing_first,
+        ?outgoing_next,
+        "same-spec promotion is waiting for outgoing join PCM"
+    );
+    if active.is_finished() {
+        Err(PromotionReadiness::NeedIncoming)
+    } else {
+        Err(PromotionReadiness::AwaitingOutgoingPcm)
+    }
 }
 
 fn staged_ahead(
@@ -677,7 +785,19 @@ fn incoming_origin_from(
     } else {
         incoming.timeline_gap()
     };
-    incoming.timeline_origin_with_gap(mode, gap)
+    let origin = incoming.timeline_origin_with_gap(mode, gap);
+    // The seam moves by exactly the AAC-LC default priming when the incoming
+    // track's own gapless metadata is missing: `origin` alone cannot say which
+    // of the two it is, so record the profile that produced it.
+    debug!(
+        origin,
+        gap,
+        gapless_known = incoming_profile.gapless().is_some(),
+        default_priming = incoming_profile.default_priming_frames(),
+        ?mode,
+        "incoming timeline origin resolved"
+    );
+    origin
 }
 
 fn shares_default_profile(

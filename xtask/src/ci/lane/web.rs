@@ -15,8 +15,8 @@ use crate::ci::{
 pub(crate) fn chromium(process: &Process, pins: &CiPins) -> Result<()> {
     require_os("linux", "Web browser")?;
     process.require_tools(&["chromium", "chromedriver", "just"])?;
-    require_version(process, "chromium", &pins.chrome_for_testing_version)?;
-    require_version(process, "chromedriver", &pins.chrome_for_testing_version)?;
+    require_version(process, "chromium", &pins.chromium_version)?;
+    require_version(process, "chromedriver", &pins.chromium_version)?;
     process.run(
         "just",
         &["test", "wasm", "chrome", "webcodecs"],

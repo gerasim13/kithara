@@ -229,6 +229,7 @@ fn mounted_wave(module: &str, source: &str, layout: &str, studio: bool) -> Vec<M
         &resolver,
         &registry,
         builtin::skin_doc(),
+        builtin::text_doc(),
         &UiConfig::default(),
     )
     .unwrap_or_else(|error| panic!("{module} must compile: {error}"));
@@ -260,16 +261,16 @@ fn all_four_shipped_wave_documents_mount_through_the_neutral_facade() {
             false,
         ),
         (
-            "studio-deck",
-            include_str!("../../kithara-app/assets/ui/modules/studio-deck.kmodule.ron"),
+            "app-deck",
+            include_str!("../../kithara-app/assets/ui/modules/app-deck.kmodule.ron"),
             studio_layout(),
             WaveStyle::Hero,
             InputOwner::Engine,
             true,
         ),
         (
-            "studio-overview-row",
-            include_str!("../../kithara-app/assets/ui/modules/studio-overview-row.kmodule.ron"),
+            "app-overview-row",
+            include_str!("../../kithara-app/assets/ui/modules/app-overview-row.kmodule.ron"),
             studio_layout(),
             WaveStyle::Default,
             InputOwner::Engine,

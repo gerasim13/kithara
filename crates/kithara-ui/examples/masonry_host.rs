@@ -15,8 +15,8 @@ use kithara_ui::{
             TextMeasurer,
         },
     },
+    shaping::FontPolicy,
     source::{MemResolver, UiConfig},
-    text::FontPolicy,
 };
 use masonry::{
     app::{RenderRootOptions, WindowSizePolicy},
@@ -116,10 +116,12 @@ fn main() -> Result<(), Box<dyn Error>> {
         &resolver,
         &EmptyRegistry,
         builtin::skin_doc(),
+        builtin::text_doc(),
         &UiConfig::default(),
     )?;
     let skin = Skin::resolve_with_font_policy(
         builtin::skin_doc().clone(),
+        builtin::text_doc(),
         &SourceUri("example:masonry".to_owned()),
         FontPolicy::Embedded,
     )?;

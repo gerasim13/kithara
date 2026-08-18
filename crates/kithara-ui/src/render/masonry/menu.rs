@@ -16,7 +16,7 @@ use crate::{
     backends::VelloBackend,
     draw::replay,
     render::{PickerMenu, Skin},
-    text::TextContext,
+    shaping::TextContext,
 };
 
 /// The open scope menu, drawn above the tree that raised it.

@@ -18,6 +18,7 @@ const CONFIG_REL: &str = ".config/xtask.toml";
 pub struct ProjectConfig {
     pub architecture: ArchitectureConfig,
     pub audit_clippy: AuditClippyConfig,
+    pub ci_report: CiReportConfig,
     pub health: HealthConfig,
     pub lint_exclude: LintExcludeConfig,
     pub orphans: OrphansConfig,
@@ -164,6 +165,28 @@ pub struct AuditClippyConfig {
     pub lints: Vec<String>,
 }
 
+/// How much of each measurement the consolidated CI report inlines before it
+/// sends the reader to the artifact it was rendered from.
+#[derive(Debug, Deserialize)]
+#[non_exhaustive]
+#[serde(default, deny_unknown_fields)]
+pub struct CiReportConfig {
+    /// Rows of the CRAP table carried into the report. The whole table runs to
+    /// five figures of lines and a step summary is capped at a megabyte.
+    pub crap_rows: usize,
+    /// Contours listed under the architecture complexity index, worst first.
+    pub top_contours: usize,
+}
+
+impl Default for CiReportConfig {
+    fn default() -> Self {
+        Self {
+            crap_rows: 120,
+            top_contours: 10,
+        }
+    }
+}
+
 /// Workspace-wide Rust file scan exclusions.
 #[derive(Debug, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -248,8 +271,18 @@ pub struct HealthConfig {
     pub feature_invariants: Vec<FeatureInvariant>,
     /// Crates excluded from the `cargo hack --feature-powerset` stage.
     pub feature_powerset_exclude: Vec<String>,
-    /// Crates excluded from whole-workspace stages (semver, nextest, doc-test).
-    pub workspace_exclude: Vec<String>,
+    /// Packages the semver stage compares against the baseline branch.
+    pub semver_packages: Vec<String>,
+    /// Package whose dependency closure the unsafe-code census is rooted at.
+    pub geiger_package: String,
+    /// Crates whose manifest a generator owns, so "is this dependency used?"
+    /// is a question about the generator rather than about the code.
+    pub machete_exclude: Vec<String>,
+    /// Crates whose deadlock findings the stage reports without failing on.
+    /// Only this workspace's own crates belong here: a dependency is out of
+    /// the verdict already, and this list is for a finding that has an owner
+    /// and a place it is being fixed.
+    pub lockbud_exclude: Vec<String>,
 }
 
 /// A rule some crates state with `compile_error!`: this build needs a backend.
@@ -381,7 +414,11 @@ pub struct TestLaneConfig {
 #[non_exhaustive]
 #[serde(default, deny_unknown_fields)]
 pub struct StressConfig {
-    pub default_mode: String,
+    /// The lanes one run is made of, executed in order. More than one is the
+    /// normal case: a clock the fixtures' delays collapse under answers a
+    /// different question than a clock they survive, and a run covering
+    /// only one of them cannot say which of the two a flake belongs to.
+    pub default_modes: Vec<String>,
     pub lane: String,
     pub backend: String,
     pub nextest_config: String,
@@ -391,6 +428,15 @@ pub struct StressConfig {
     pub max_count: usize,
     pub test_threads: String,
     pub max_test_threads: usize,
+    /// The directory a lane builds into, relative to the checkout it builds.
+    ///
+    /// A stress run that inherits `CARGO_TARGET_DIR` builds into whatever
+    /// directory the machine shares with everything else on it, and a stress
+    /// run lasts hours: five of them lost a whole lane when those binaries
+    /// disappeared mid-run and every remaining repeat failed to exec in
+    /// milliseconds. Naming the directory here is what makes the artifacts the
+    /// lane runs belong to the revision the lane was asked about.
+    pub build_dir: String,
     pub raw_output: String,
     pub report_output: String,
     pub workflow_job_timeout_minutes: u64,
@@ -404,6 +450,12 @@ pub struct StressConfig {
 #[non_exhaustive]
 #[serde(default, deny_unknown_fields)]
 pub struct StressArtifactConfig {
+    /// Where the test runner leaves its report, relative to the subject
+    /// checkout.
+    ///
+    /// nextest's store is rooted at the workspace root and does not follow
+    /// `CARGO_TARGET_DIR`, so the report stays put while the build is sent to
+    /// the run's own directory.
     pub subject_junit: String,
     pub inventory: String,
     pub junit: String,
@@ -413,6 +465,10 @@ pub struct StressArtifactConfig {
     pub report: String,
     pub envelope_dir: Option<String>,
     pub line_log: Option<String>,
+    /// Per-attempt exit codes of a lane that repeats a command. A sanitizer
+    /// leaves no per-test verdict, so this is the whole of what such a lane
+    /// can be counted by.
+    pub attempts: String,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq)]
@@ -429,6 +485,31 @@ pub struct StressModeConfig {
     pub features: Vec<String>,
     pub set_env: BTreeMap<String, String>,
     pub raw_path_env: BTreeMap<String, String>,
+    /// A command this lane runs instead of the configured test runner.
+    ///
+    /// Some lanes cannot be described as a feature set: a sanitizer lane picks
+    /// its own toolchain, compiler flags and runtime library, and that contract
+    /// belongs to the recipe that owns it rather than to a second copy here.
+    /// The run launches the command and reads what it leaves behind. Empty
+    /// means the lane runs the configured test runner and is measured per test.
+    pub command: Vec<String>,
+    /// Whether the command performs the run's repeats itself.
+    ///
+    /// A command that runs its tests under nextest can be handed the count
+    /// through `KITHARA_STRESS_REPEATS` and launched once: the workspace builds
+    /// once, and every repeat lands in one report carrying a per-test verdict,
+    /// which is what lets the lane stand in the same comparison as the lanes the
+    /// run drives directly. Launched once per repeat instead, the same lane
+    /// pays a rebuild and a cold start each time and can report only an exit
+    /// code — and an exit code names no test.
+    pub owns_repeats: bool,
+    /// Where this command leaves a `JUnit` report, relative to `build_dir`.
+    ///
+    /// An exit code names no test. When the command runs its tests under a
+    /// runner that writes a report anyway, that report is what turns "something
+    /// aborted" into "this test aborted, this often". The runner overwrites the
+    /// file every attempt, so the lane keeps a copy of each.
+    pub attempt_junit: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -454,7 +535,7 @@ impl StressConfig {
         self != &Self::default()
     }
 
-    /// Resolve one configured campaign mode.
+    /// Resolve one configured stress mode.
     ///
     /// # Errors
     ///
@@ -466,7 +547,6 @@ impl StressConfig {
     }
 
     pub(crate) fn validate(&self) -> Result<()> {
-        require_value("stress.default_mode", &self.default_mode)?;
         require_value("stress.lane", &self.lane)?;
         require_value("stress.backend", &self.backend)?;
         require_value("stress.nextest_config", &self.nextest_config)?;
@@ -474,6 +554,7 @@ impl StressConfig {
         require_value("stress.default_filter", &self.default_filter)?;
         require_value("stress.test_threads", &self.test_threads)?;
         validate_relative_path("stress.nextest_config", &self.nextest_config)?;
+        validate_relative_path("stress.build_dir", &self.build_dir)?;
         validate_relative_path("stress.raw_output", &self.raw_output)?;
         validate_relative_path("stress.report_output", &self.report_output)?;
         ensure_positive("stress.default_count", self.default_count)?;
@@ -509,11 +590,21 @@ impl StressConfig {
             require_value("stress mode name", name)?;
             Self::validate_mode(name, mode)?;
         }
-        if !self.modes.contains_key(&self.default_mode) {
-            bail!(
-                "stress.default_mode `{}` is not configured",
-                self.default_mode
-            );
+        if self.default_modes.is_empty() {
+            bail!("stress.default_modes must name at least one mode");
+        }
+        let mut seen = BTreeSet::new();
+        for name in &self.default_modes {
+            require_value("stress.default_modes entry", name)?;
+            if !self.modes.contains_key(name) {
+                bail!("stress.default_modes names `{name}`, which is not configured");
+            }
+            // A lane names the directory its evidence lands in, so a run
+            // that listed one twice would have its second run overwrite the
+            // first and report half of what it did.
+            if !seen.insert(name) {
+                bail!("stress.default_modes names `{name}` twice");
+            }
         }
         Ok(())
     }
@@ -527,6 +618,7 @@ impl StressConfig {
             ("manifest", self.artifacts.manifest.as_str()),
             ("pressure", self.artifacts.pressure.as_str()),
             ("report", self.artifacts.report.as_str()),
+            ("attempts", self.artifacts.attempts.as_str()),
         ] {
             validate_relative_path(&format!("stress.artifacts.{name}"), path)?;
         }
@@ -626,6 +718,18 @@ impl StressConfig {
         for (key, path) in &mode.raw_path_env {
             require_env_key(&format!("stress.modes.{name}.raw_path_env"), key)?;
             validate_relative_path(&format!("stress.modes.{name}.raw_path_env.{key}"), path)?;
+        }
+        for word in &mode.command {
+            require_value(&format!("stress.modes.{name}.command"), word)?;
+        }
+        if let Some(path) = &mode.attempt_junit {
+            validate_relative_path(&format!("stress.modes.{name}.attempt_junit"), path)?;
+        }
+        // A command lane selects nothing through the test runner, so features
+        // meant for that runner would be read by no one. Saying so here beats
+        // a lane that silently ignores half of what it was configured with.
+        if !mode.command.is_empty() && !mode.features.is_empty() {
+            bail!("stress mode `{name}` runs a command, so its features reach nothing");
         }
         Ok(())
     }

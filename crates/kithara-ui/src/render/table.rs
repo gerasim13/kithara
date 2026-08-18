@@ -357,7 +357,7 @@ mod tests {
             ControlAction, DragPhase,
             fonts::{FONT_BYTES, SANS},
         },
-        text::TextContext,
+        shaping::TextContext,
     };
 
     fn rows() -> Vec<TableRowData> {

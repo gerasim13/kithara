@@ -6,6 +6,7 @@ use crate::{
     render::{Reads, Skin, UiEvent},
     skin::SkinDoc,
     source::SourceResolver,
+    text::TextDoc,
 };
 
 /// What a host needs from an application to show it and keep it fed.
@@ -44,6 +45,8 @@ pub struct Config<'a> {
     pub skin: &'a Skin,
     /// The skin document, which the layout pass still consults.
     pub skin_doc: &'a SkinDoc,
+    /// The caption catalog every `@key` in the document resolves against.
+    pub text: &'a TextDoc,
     /// Whether the system draws the window frame. A document that carries its
     /// own title bar, drag region and window buttons wants this off, or the two
     /// frames are drawn one inside the other.

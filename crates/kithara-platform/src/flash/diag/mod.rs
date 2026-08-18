@@ -6,13 +6,14 @@
 //!
 //! Gated at runtime by `KITHARA_FLASH_SYNC_TRACE` (default OFF): off ⇒
 //! [`register`] returns `None` and a wrapped primitive pays only a null check.
-//! `KITHARA_FLASH_SYNC_BT=1` adds the dumping thread's backtrace. See the crate
-//! `CONTEXT.md` "Virtual time (`flash`)".
+//! `KITHARA_FLASH_SYNC_BT=1` adds backtraces: the dumping thread's, and — for
+//! deadline-less waiters, captured where they park — the waiter's own. See the
+//! crate `CONTEXT.md` "Virtual time (`flash`)".
 
 mod registry;
 mod thread;
 mod toggle;
 
 pub(in crate::flash) use registry::{PrimEntry, PrimKind, register, snapshot};
-pub(in crate::flash) use thread::current_thread_context;
+pub(in crate::flash) use thread::{current_thread_context, parked_backtrace};
 pub(in crate::flash) use toggle::{bt_enabled, trace_enabled};

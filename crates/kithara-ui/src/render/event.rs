@@ -84,7 +84,7 @@ pub enum WindowCommand {
     Resize(WindowEdge),
     Minimize,
     ToggleMaximize,
-    Fullscreen,
+    ToggleFullScreen,
     Close,
 }
 

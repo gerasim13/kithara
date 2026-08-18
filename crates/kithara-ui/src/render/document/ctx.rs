@@ -192,6 +192,7 @@ pub(crate) fn probe(reads: &dyn Reads) -> Ctx<'_, '_> {
             &resolver,
             &Nothing,
             builtin::skin_doc(),
+            builtin::text_doc(),
             &UiConfig::default(),
         )
         .unwrap_or_else(|error| panic!("the probe document must compile: {error}"))

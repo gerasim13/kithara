@@ -35,9 +35,9 @@ use crate::{
         hosted_control_plan,
         scroll::Bar,
     },
+    shaping::TextContext,
     size::SizeSpec,
     solve,
-    text::TextContext,
 };
 
 /// Mounts the toolkit-neutral document fold into a retained Masonry widget tree.

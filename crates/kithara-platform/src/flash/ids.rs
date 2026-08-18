@@ -55,4 +55,10 @@ impl ThreadKey {
     pub(in crate::flash) fn of<I: Hash>(id: I) -> Self {
         Self(thread_id_hash(id))
     }
+
+    /// The raw hash, for keeping a key in an atomic cell (a task's driver
+    /// thread, written lock-free at poll entry). Round-trips through `From`.
+    pub(in crate::flash) fn raw(self) -> u64 {
+        self.0
+    }
 }

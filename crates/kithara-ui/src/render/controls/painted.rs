@@ -32,8 +32,8 @@ use crate::{
         controls::{Drag, Grip, IndexEvent, IndexPress, Indexing, Press, Span, snapped},
         publish, scalar, span_event,
     },
+    shaping::{TextContext, TextResources},
     solve,
-    text::{TextContext, TextResources},
 };
 
 /// One neutral painter drawn straight into an iced canvas.

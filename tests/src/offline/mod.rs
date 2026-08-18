@@ -6,10 +6,12 @@
 //! so tests can render samples deterministically.
 
 pub mod backend;
+pub mod harness;
 pub mod player;
 pub mod session;
 
 pub use backend::{OfflineBackend, OfflineConfig, OfflineError};
+pub use harness::{OfflinePlayerHarness, OfflinePlayerOptions};
 pub use player::{
     NotificationKind, OfflinePlayer, resource_from_reader, resource_from_reader_with_src,
 };

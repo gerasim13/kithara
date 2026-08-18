@@ -2,18 +2,40 @@ name: RTSan
 
 # RealtimeSanitizer gate for the audio produce-core.
 #
-# Compiles the player RT path under `-Zsanitizer=realtime --cfg rtsan` and runs
-# the offline-render produce-core lanes without an audio device. Any malloc /
-# lock / syscall reached inside a `#[kithara::rtsan_forbid_blocking]` region
-# (the worker produce-core, kithara-play `process()`) aborts the run unless
-# wrapped by a documented `#[kithara::rtsan_allow_blocking]`.
+# Runs the offline-render produce-core lanes without an audio device. The gate
+# runs one backend, chosen by the `backend` input, so the cost stays three jobs:
+#
+#   standalone — the default: stable Rust with `--cfg rtsan
+#     --cfg rtsan_standalone`, guarding at runtime against the library the
+#     image stages.
+#   instrumented — the pinned nightly compiles the RT path with
+#     `-Zsanitizer=realtime --cfg rtsan`. Kept working and one dropdown away,
+#     for when a verdict needs the compiler's own instrumentation to confirm it.
+#
+# Either way, any malloc / lock / syscall reached inside a
+# `#[kithara::rtsan_forbid_blocking]` region (the worker produce-core,
+# kithara-play `process()`) aborts the run unless wrapped by a documented
+# `#[kithara::rtsan_allow_blocking]`.
 #
 # The read/seek path is verified kevent/yield-free (wake, on-core seek, and FSM
 # AudioEvent emission are all deferred off the forbid path); see
 # kithara-play/README.md "Real-Time Audio Thread".
 on:
   workflow_call:
+    inputs:
+      backend:
+        description: Sanitizer backend to judge with.
+        type: string
+        default: standalone
   workflow_dispatch:
+    inputs:
+      backend:
+        description: Sanitizer backend to judge with.
+        type: choice
+        default: standalone
+        options:
+          - standalone
+          - instrumented
 
 env:
   CARGO_TERM_COLOR: always
@@ -60,7 +82,7 @@ jobs:
           PY
 
   rtsan:
-    name: RTSan ${{ matrix.lane }}
+    name: RTSan ${{ inputs.backend || 'standalone' }} ${{ matrix.lane }}
     needs: authorize
     runs-on: ${{ fromJSON(vars.KITHARA_RUNNER_LABELS) }}
     timeout-minutes: 120
@@ -76,9 +98,24 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      # The sanitizer needs the pinned nightly, which the image already carries
-      # and names, so the toolchain stays owned by the reviewed pins.
+      # Each backend needs a toolchain the image already carries and names, so
+      # the toolchain stays owned by the reviewed pins. The recipe rejects any
+      # backend it does not know, so an unset input reads as the default here
+      # rather than as an empty selection there.
       - name: Run RTSan lane
         env:
+          KITHARA_RTSAN_BACKEND: ${{ inputs.backend || 'standalone' }}
           LANE: ${{ matrix.lane }}
         run: just test "$LANE"
+
+      # A violation aborts the process, so the lane log alone never names the
+      # test that tripped. The JUnit report does, and it is only evidence if it
+      # survives the failure that produced it.
+      - name: Upload the RTSan report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: rtsan-junit-${{ inputs.backend || 'standalone' }}-${{ matrix.lane }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: target/nextest/rtsan/junit.xml
+          if-no-files-found: error
+          retention-days: 14

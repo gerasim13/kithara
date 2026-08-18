@@ -119,6 +119,39 @@ Two-step contract shared by the demuxer and `ComposedDecoder`.
   against decoded output, not the packet fed. Without it a seek leaks up to one
   packet of pre-target audio.
 
+### `landed_byte` on the Apple path (sanctioned degraded mode)
+
+`DemuxSeekOutcome::Landed { landed_byte }` is what realigns the stream's byte
+cursor with where the decoder resumes (`kithara-audio`'s `seek::emit` calls
+`stream.set_position`); reporting `None` leaves the cursor at the pre-seek
+offset, and a reopened track then mis-classifies the post-seek read as EOF.
+
+`AppleAudioFileDemuxer` answers it from two sources, and this is the one
+sanctioned fallback on the path:
+
+- **Exact** — `kAudioFilePropertyPacketToByte`, the same mapping Apple's own
+  packet read seeks to. Available only when the open knows the total size.
+- **Degraded** — a linear estimate from the live byte-length handle
+  (`set_byte_len_handle`) scaled by the landed time over track duration.
+
+The degraded branch is not papering over a state bug: measured, a size-less
+open (`SizeMode::Unknown`, the streamed MP3 path) rejects *every* packet with
+`kAudioFileInvalidPacketOffsetError` (`'pck?'`) — with no total, `AudioFile`
+cannot bound the packet, and the offset it would seek to is not exposed
+anywhere else at seek time. The estimate is a strict improvement over the
+`None` that caused the false EOF, and it is safe to approximate: the value
+drives the byte-oriented stream's own cursor and progress events, never the
+decoder's reads, which `AudioFileServices` issues at absolute offsets through
+its callbacks. The two branches cannot leave a gap, because one flag selects both the open
+mode and the mechanism: `factory::inner` opens `Streaming` exactly when
+`config.byte_len_handle` is `Some` and `Complete` otherwise. So a size-less
+open always has the handle the estimate needs, and a sized open always has the
+mapping Apple answers from. Both branches are pinned separately, in the same
+two combinations production uses — the degraded one by
+`size_less_mp3_seek_reports_landed_byte_from_the_length_handle`, the exact one
+by `sized_mp3_seek_reports_landed_byte_without_a_length_handle`, which attaches
+no handle so only Apple's mapping can answer.
+
 ## Read-ahead strand
 
 Over an HLS `Stream`, `next_frame` can be interrupted at a not-yet-downloaded

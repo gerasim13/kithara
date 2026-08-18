@@ -52,6 +52,22 @@ where
     panic!("timed out waiting for ReadOutcome::Frames");
 }
 
+/// One read pass with no budget of its own — the caller owns the deadline.
+/// Unlike [`wait_for_frames`], a pass that yields no frames is a result, not a
+/// panic, so a caller can keep the output moving while it watches the bus.
+async fn pump_once<S>(audio: Audio<S>) -> (Audio<S>, ReadOutcome)
+where
+    Audio<S>: Send + 'static,
+{
+    let mut buf = [0.0f32; 256];
+    let (audio, (_buf, outcome)) = blocking_audio(audio, move |audio| {
+        let outcome = audio.read(&mut buf);
+        (buf, outcome)
+    })
+    .await;
+    (audio, outcome.expect("read"))
+}
+
 async fn drain_to_eof<S>(mut audio: Audio<S>, budget: Duration) -> (Audio<S>, usize)
 where
     Audio<S>: Send + 'static,
@@ -93,7 +109,11 @@ async fn basic_decode_to_eof() {
     );
 }
 
-#[kithara::test(tokio, timeout(Duration::from_secs(10)))]
+#[kithara::test(
+    tokio,
+    timeout(Duration::from_secs(10)),
+    tracing("kithara_audio=debug,kithara_decode=debug,kithara_stream=debug")
+)]
 async fn seek_during_active_decode_completes_without_hang() {
     let config = wav_stream(44_100 * 3);
     let audio = Audio::<Stream<MemStream>>::new(config)
@@ -124,26 +144,24 @@ async fn seek_during_active_decode_completes_without_hang() {
     }
     let expected_epoch = observed_epoch.expect("SeekLifecycle::SeekRequest event");
 
+    // `SeekComplete` is published from the first output pass after the seek, so
+    // the consumer has to keep reading: waiting on the bus without reading waits
+    // for an event nothing will produce.
     let deadline = Instant::now() + Duration::from_secs(5);
     let mut saw_complete = false;
-    while Instant::now() < deadline {
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        match time::timeout(remaining, events.recv())
-            .await
-            .map(|r| r.map(|env| env.event))
-        {
-            Ok(Ok(Event::Audio(AudioEvent::SeekComplete { seek_epoch, .. })))
-                if seek_epoch == expected_epoch =>
+    while Instant::now() < deadline && !saw_complete {
+        let (next_audio, outcome) = pump_once(audio).await;
+        audio = next_audio;
+        if matches!(outcome, ReadOutcome::Pending { .. }) {
+            time::sleep(Duration::from_millis(20)).await;
+        }
+        while let Ok(envelope) = events.try_recv() {
+            if let Event::Audio(AudioEvent::SeekComplete { seek_epoch, .. }) = envelope.event
+                && seek_epoch == expected_epoch
             {
                 saw_complete = true;
                 break;
             }
-            Ok(_) => {
-                let (next_audio, _frames) =
-                    wait_for_frames(audio, Duration::from_millis(150)).await;
-                audio = next_audio;
-            }
-            Err(_) => break,
         }
     }
     assert!(saw_complete, "SeekComplete must arrive after seek");
@@ -155,7 +173,11 @@ async fn seek_during_active_decode_completes_without_hang() {
     );
 }
 
-#[kithara::test(tokio, timeout(Duration::from_secs(15)))]
+#[kithara::test(
+    tokio,
+    timeout(Duration::from_secs(15)),
+    tracing("kithara_audio=debug,kithara_decode=debug,kithara_stream=debug")
+)]
 async fn rapid_seeks_via_timeline_all_complete() {
     const SEEK_COUNT: usize = 6;
 

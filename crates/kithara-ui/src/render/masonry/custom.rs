@@ -4,8 +4,8 @@ use masonry::core::ErasedAction;
 use crate::{
     draw::{DrawListBuilder, Rect},
     interact::{Hit, Input, Outcome},
+    shaping::{GlyphRun, TextContext},
     skin::TextRoleSkin,
-    text::{GlyphRun, TextContext},
 };
 
 /// Frame scheduling requested by custom content.

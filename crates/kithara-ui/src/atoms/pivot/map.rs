@@ -1,8 +1,8 @@
 use crate::{
     draw::{DrawListBuilder, FillRule, Pt, Rect, Rgba, Transform, Verb},
     render::{PortalMapView, PortalTarget, Skin},
+    shaping::TextContext,
     skin::{ColorRole, FontFamily, PortalMapSkin, TextRoleSkin},
-    text::TextContext,
 };
 
 /// A tempo axis with one arc from the master tempo to each target.

@@ -2,21 +2,27 @@ use ringbuf::HeapProd;
 
 use crate::bridge::{PlayerNotification, RtMetrics};
 
-/// The two lock-free channels a track reports through: discrete events the control thread reacts
-/// to, and counters it samples.
+/// What a track reports through for one render block: discrete events the control thread reacts
+/// to, counters it samples, and the slot seek epoch that block is rendering under.
 pub struct RtSink<'a> {
     pub(super) notifications: &'a mut HeapProd<PlayerNotification>,
     pub(super) metrics: &'a RtMetrics,
+    /// Latest seek epoch the control thread has published for this slot,
+    /// sampled once per block. A track whose own epoch is older is rendering
+    /// a position the user has already left.
+    pub(super) seek_epoch: u64,
 }
 
 impl<'a> RtSink<'a> {
     pub const fn new(
         notifications: &'a mut HeapProd<PlayerNotification>,
         metrics: &'a RtMetrics,
+        seek_epoch: u64,
     ) -> Self {
         Self {
             notifications,
             metrics,
+            seek_epoch,
         }
     }
 
@@ -24,6 +30,7 @@ impl<'a> RtSink<'a> {
         RtSink {
             notifications: self.notifications,
             metrics: self.metrics,
+            seek_epoch: self.seek_epoch,
         }
     }
 }

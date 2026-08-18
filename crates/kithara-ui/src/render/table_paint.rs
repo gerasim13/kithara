@@ -21,7 +21,7 @@ use crate::{
         recognizers::{ItemDrag, ScalarState},
     },
     module::TableColumn,
-    text::TextContext,
+    shaping::TextContext,
 };
 
 pub(super) struct TablePaint {

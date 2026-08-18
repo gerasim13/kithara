@@ -12,7 +12,10 @@ pub(crate) struct TestArgs {
     pub(crate) flash: Option<bool>,
     pub(crate) timeout: Option<Expr>,
     pub(crate) tracing_filter: Option<String>,
-    pub(crate) env_vars: Vec<(String, String)>,
+    /// `hang_timeout_secs(N)`: the liveness budget `#[kithara::hang_watchdog]`
+    /// arms with inside this test. Shortens the REAL wait a watchdog park costs
+    /// on the flash-off lane, where the ambient budget is spent in wall time.
+    pub(crate) hang_timeout_secs: Option<u64>,
     /// Substring patterns for soft-fail: if a panic message contains any of
     /// these (case-insensitive), the test prints a warning instead of failing.
     pub(crate) soft_fail_patterns: Vec<String>,
@@ -121,13 +124,11 @@ impl Parse for TestArgs {
                     let lit: syn::LitBool = content.parse()?;
                     args.flash = Some(lit.value);
                 }
-                "env" => {
-                    args.env_vars = parse_comma_separated(input, |content| {
-                        let key: Ident = content.parse()?;
-                        content.parse::<Token![=]>()?;
-                        let value: syn::LitStr = content.parse()?;
-                        Ok((key.to_string(), value.value()))
-                    })?;
+                "hang_timeout_secs" => {
+                    let content;
+                    syn::parenthesized!(content in input);
+                    let secs: syn::LitInt = content.parse()?;
+                    args.hang_timeout_secs = Some(secs.base10_parse()?);
                 }
                 "soft_fail" => {
                     args.soft_fail_patterns = parse_comma_separated(input, |content| {

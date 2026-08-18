@@ -49,8 +49,8 @@ use kithara_ui::{
         fonts::{FONT_BYTES, SANS},
         tree,
     },
+    shaping::FontPolicy,
     source::{MemResolver, UiConfig},
-    text::FontPolicy,
 };
 
 const LAYOUT: &str = "fixture.klayout.ron";
@@ -632,6 +632,7 @@ impl Fixture {
             &self.resolver,
             &self.registry,
             builtin::skin_doc(),
+            builtin::text_doc(),
             &UiConfig::default(),
         )
         .unwrap_or_else(|error| panic!("the frame-perf fixture must compile: {error}"))
@@ -1036,6 +1037,7 @@ fn skin() -> &'static Skin {
     static SKIN: LazyLock<Skin> = LazyLock::new(|| {
         Skin::resolve_with_font_policy(
             builtin::skin_doc().clone(),
+            builtin::text_doc(),
             &SourceUri("fixture:ui-frame-perf".to_owned()),
             FontPolicy::Embedded,
         )

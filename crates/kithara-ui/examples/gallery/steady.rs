@@ -316,6 +316,7 @@ mod retained {
             .resolver(&resolver)
             .skin(builtin::skin())
             .skin_doc(builtin::skin_doc())
+            .text(builtin::text_doc())
             .build();
         let (width, height) = physical();
         let mut ui = Ui::new(Gallery::at(page), config, (width, height), 1.0)

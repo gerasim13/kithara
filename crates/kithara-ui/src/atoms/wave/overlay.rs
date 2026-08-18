@@ -1,7 +1,7 @@
 use crate::{
     draw::{DrawListBuilder, Pt, Rect, Rgba, Transform},
+    shaping::TextContext,
     skin::{ColorRole, FontFamily, FontSkin, FrameSkin, TextRoleSkin, WaveOverlaySkin},
-    text::TextContext,
 };
 
 #[derive(Clone, Copy)]

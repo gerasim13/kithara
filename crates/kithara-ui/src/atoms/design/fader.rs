@@ -5,8 +5,8 @@ use crate::{
     draw::{DrawListBuilder, Pt, Rect, Rgba, Transform},
     module::FaderStyle,
     render::Skin,
+    shaping::TextContext,
     skin::{ColorRole, FaderSkin, FontFamily, TextRoleSkin},
-    text::TextContext,
 };
 
 /// The horizontal fader in both of its looks: a captioned rail with a handle,
@@ -264,7 +264,7 @@ mod tests {
     use crate::{
         builtin,
         draw::{DrawCmd, DrawList, DrawListBuilder, Geom, Paint},
-        text::TextContext,
+        shaping::TextContext,
     };
 
     const BOUNDS: Rect = Rect {

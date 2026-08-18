@@ -119,7 +119,7 @@ mod host {
             draw::{DrawList, DrawListBuilder, Rect},
             module::IconName,
             render::{Icon, Skin, controls::Draws},
-            text::TextContext,
+            shaping::TextContext,
         };
 
         const BOUNDS: Rect = Rect {

@@ -451,9 +451,11 @@ where
                 WindowCommand::ToggleMaximize => {
                     self.window.set_maximized(!self.window.is_maximized());
                 }
-                WindowCommand::Fullscreen => {
-                    self.window
-                        .set_fullscreen(Some(winit::window::Fullscreen::Borderless(None)));
+                WindowCommand::ToggleFullScreen => {
+                    let full = self.window.fullscreen().is_some();
+                    self.window.set_fullscreen(
+                        (!full).then(|| winit::window::Fullscreen::Borderless(None)),
+                    );
                 }
                 WindowCommand::Close => close = true,
             }

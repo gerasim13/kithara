@@ -1,5 +1,5 @@
 use super::{Caps, DrawCmd, DrawList, Geom, Image, Needs, Paint, Pen, Rect, Rgba, Transform};
-use crate::text::GlyphRun;
+use crate::shaping::GlyphRun;
 
 /// Consumes toolkit-neutral retained drawing commands.
 pub trait Backend {
@@ -63,7 +63,7 @@ mod tests {
     };
     use crate::{
         draw::{DrawListBuilder, FillRule, ImageId, Path, Pt, Verb},
-        text::GlyphRun,
+        shaping::GlyphRun,
     };
 
     /// A backend that records what it was asked to draw and nothing else.

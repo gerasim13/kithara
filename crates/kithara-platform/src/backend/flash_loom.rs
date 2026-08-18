@@ -1,5 +1,3 @@
-#[path = "../system/env.rs"]
-pub mod env;
 #[path = "../system/support/logging.rs"]
 pub mod logging;
 #[path = "../system/support/maybe_send.rs"]

@@ -1,8 +1,8 @@
 use crate::{
     draw::{DrawListBuilder, Pt, Rect, Rgba, Transform},
     render::Skin,
+    shaping::TextContext,
     skin::{FontFamily, FrameSkin, TextRoleSkin},
-    text::TextContext,
 };
 
 /// The closed face of a scope picker: a framed box holding the picked word,

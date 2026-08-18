@@ -4,9 +4,10 @@ use std::num::NonZeroU32;
 
 use cochlea_features::{Audio as CochleaAudio, SegmentOpts, segment_timeline};
 use kithara::decode::PcmSpec;
-use kithara_integration_tests::{audio_mock::TestPcmReader, offline::resource_from_reader};
-
-use super::offline_player_harness::{OfflinePlayerHarness, OfflinePlayerOptions};
+use kithara_integration_tests::{
+    audio_mock::TestPcmReader,
+    offline::{OfflinePlayerHarness, OfflinePlayerOptions, resource_from_reader},
+};
 
 const SAMPLE_RATE: u32 = 48_000;
 const CHANNELS: u16 = 2;

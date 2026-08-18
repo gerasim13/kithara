@@ -305,12 +305,31 @@ mod tests {
 
     const STALL: Duration = Duration::from_millis(40);
 
-    struct StallSignal(Mutex<Option<tokio::sync::oneshot::Sender<()>>>);
+    /// Fires once, on the `at`-th stall. Which stall matters: only the second
+    /// one onwards is followed by a real backoff wait.
+    struct StallSignal {
+        at: u64,
+        seen: AtomicU64,
+        signal: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+    }
+
+    impl StallSignal {
+        fn nth(at: u64, signal: tokio::sync::oneshot::Sender<()>) -> Self {
+            Self {
+                at,
+                seen: AtomicU64::new(0),
+                signal: Mutex::new(Some(signal)),
+            }
+        }
+    }
 
     impl NetObserver for StallSignal {
         fn body_stalled(&self, _consumed: u64, _expected: Option<u64>, _stall: Duration) {
-            if let Some(sender) = self.0.lock().take() {
-                let _ = sender.send(());
+            if self.seen.fetch_add(1, Ordering::SeqCst) + 1 != self.at {
+                return;
+            }
+            if let Some(sender) = self.signal.lock().take() {
+                sender.send(()).ok();
             }
         }
     }
@@ -704,7 +723,7 @@ mod tests {
             let entered = Arc::clone(&entered);
             Box::pin(async move {
                 if let Some(sender) = entered.lock().take() {
-                    let _ = sender.send(());
+                    sender.send(()).ok();
                 }
                 futures::future::pending::<Result<Resumed, NetError>>().await
             })
@@ -733,18 +752,37 @@ mod tests {
 
     #[kithara::test(tokio, multi_thread, flash(false), timeout(Duration::from_secs(1)))]
     async fn cancellation_interrupts_retry_backoff() {
+        // `delay_for_attempt(0)` is ZERO — the first retry is immediate, so a
+        // cancel aimed at it races a sleep of no length and proves nothing about
+        // a backoff. The SECOND stall is the first one followed by a real wait,
+        // so that is the one this test cancels: the 60s the cancel must cut
+        // short is longer than any scheduling slack, which is what makes the
+        // outcome independent of who wins the race to run.
         let (stalled_tx, stalled_rx) = tokio::sync::oneshot::channel();
-        let observer = Observer(Arc::new(StallSignal(Mutex::new(Some(stalled_tx)))));
+        let observer = Observer(Arc::new(StallSignal::nth(2, stalled_tx)));
         let cancel = CancelToken::root();
         let trigger = cancel.clone();
         tokio::task::spawn(async move {
-            stalled_rx.await.expect("body must stall");
+            stalled_rx.await.expect("body must stall twice");
             trigger.cancel();
         });
-        let refetch: Refetch =
-            Box::new(|_off| Box::pin(async { panic!("cancelled backoff must not re-fetch") }));
+        let refetches = Arc::new(AtomicU64::new(0));
+        let refetch: Refetch = Box::new(move |_off| {
+            // Counted on POLL, not on call: `tokio::select!` builds every
+            // branch's future before it polls the biased cancel arm, so the
+            // closure runs even for a re-fetch that is never awaited.
+            let refetches = Arc::clone(&refetches);
+            Box::pin(async move {
+                assert_eq!(
+                    refetches.fetch_add(1, Ordering::SeqCst),
+                    0,
+                    "cancelled backoff must not re-fetch"
+                );
+                Ok(resumed(withheld(), 0))
+            })
+        });
         let long_backoff = RetryPolicy::builder()
-            .max_retries(1)
+            .max_retries(2)
             .base_delay(Duration::from_secs(60))
             .max_delay(Duration::from_secs(60))
             .build();

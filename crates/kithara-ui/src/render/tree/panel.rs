@@ -14,7 +14,7 @@ use crate::{
         InputOwner, ReadValue, Skin, Tree, UiEvent, Widget, controls::Paint, document::Ctx,
         scope_picker, vis,
     },
-    text::TextContext,
+    shaping::TextContext,
 };
 
 /// The context strip, with the menu its scope face opens.

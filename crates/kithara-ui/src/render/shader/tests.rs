@@ -101,6 +101,7 @@ fn bound(level: &str) -> CompiledUi {
         &resolver,
         &BuiltinEndpoints::new(&Endpoints::default()),
         builtin::skin_doc(),
+        builtin::text_doc(),
         &UiConfig::default(),
     )
     .unwrap_or_else(|cause| panic!("the fixture document must compile: {cause}"))

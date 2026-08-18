@@ -45,6 +45,7 @@ mod tests {
             &resolver,
             &Registry::default(),
             builtin::skin_doc(),
+            builtin::text_doc(),
             &UiConfig::default(),
         )
         .unwrap()
@@ -186,6 +187,7 @@ mod tests {
             &resolver,
             &Registry::default(),
             builtin::skin_doc(),
+            builtin::text_doc(),
             &UiConfig::default(),
         )
         .unwrap();

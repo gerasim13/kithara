@@ -4,9 +4,9 @@ use crate::{
     layout::FrameSides,
     module::ButtonStyle,
     render::{Mark, Skin},
+    shaping::{GlyphRun, TextContext},
     skin::{ColorRole, FontFamily, FontSkin, FrameSkin, TextRoleSkin},
     solve::{Length, Size},
-    text::{GlyphRun, TextContext},
 };
 
 /// What a document asks a button to be, before a skin resolves it.
@@ -585,7 +585,7 @@ mod tests {
         builtin,
         draw::{DrawCmd, DrawListBuilder, Geom, Paint, Pen, Rect},
         module::ButtonStyle,
-        text::{FontId, GlyphFace, GlyphSegment, TextContext},
+        shaping::{FontId, GlyphFace, GlyphSegment, TextContext},
     };
 
     fn plain(label: &str) -> ButtonLabel<&str> {

@@ -21,7 +21,7 @@ use crate::{
     engine::{Descriptor, Engine, PickerSnapshot},
     interact::iced as iced_interact,
     render::{InputOwner, ReadValue, Skin, UiEvent, engine as engine_event},
-    text::TextContext,
+    shaping::TextContext,
 };
 
 /// Wraps a control that already draws its own closed picker face, and gives

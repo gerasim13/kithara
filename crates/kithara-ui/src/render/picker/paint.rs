@@ -5,7 +5,7 @@ use crate::{
     draw::{DrawList, DrawListBuilder, Rect, Rgba},
     interact::CursorShape,
     render::{HostLayer, LayerHit, ReadValue, Skin},
-    text::TextContext,
+    shaping::TextContext,
 };
 
 /// The open menu, drawn from the skin alone.

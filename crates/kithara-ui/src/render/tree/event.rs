@@ -224,12 +224,12 @@ mod tests {
 
     #[kithara::test]
     fn module_header_activation_binds_directly_to_toggle_module() {
-        let action = toggle_module("studio-deck", Outcome::set(()))
+        let action = toggle_module("app-deck", Outcome::set(()))
             .unwrap_or_else(|| panic!("a module-header activation must publish"));
 
         assert_eq!(
             action.into_inner().0,
-            Some(UiEvent::ToggleModule("studio-deck".to_owned()))
+            Some(UiEvent::ToggleModule("app-deck".to_owned()))
         );
     }
 }

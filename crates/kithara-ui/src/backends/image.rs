@@ -10,7 +10,7 @@ use crate::{
     draw::{
         Backend, Caps, DrawList, Geom, Image, ImageId, Paint, Pen, Rect, Rgba, Transform, replay,
     },
-    text::GlyphRun,
+    shaping::GlyphRun,
 };
 
 /// A Vello encoder with one externally owned image available to the list.

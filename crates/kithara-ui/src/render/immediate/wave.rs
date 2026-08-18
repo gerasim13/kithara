@@ -21,7 +21,7 @@ use crate::{
     },
     module::WaveStyle,
     render::{Skin, UiEvent, Widget, controls::snapped, scalar, scalar_child},
-    text::TextContext,
+    shaping::TextContext,
 };
 
 /// The waveform with the gesture only the immediate host recognises: shift to

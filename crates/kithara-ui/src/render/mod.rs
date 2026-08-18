@@ -44,7 +44,7 @@ pub use model::{
 pub use owner::InputOwner;
 pub(crate) use picker::{picker_hits, picker_selected_index};
 pub use picture::{Sheet, SheetError, builtin_sheet};
-pub use skin::Skin;
+pub use skin::{CrossfaderLabels, Skin};
 pub(crate) use text_input::text_input_layout;
 pub(crate) use window::{DragGhost, TitleBar, WindowControls, WindowSurface};
 #[cfg(feature = "iced")]

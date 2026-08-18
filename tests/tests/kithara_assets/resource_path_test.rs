@@ -27,11 +27,7 @@ enum WriteMode {
     Streaming,
 }
 
-#[kithara::test(
-    native,
-    timeout(Duration::from_secs(5)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "1")
-)]
+#[kithara::test(native, timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
 #[case::atomic("metadata.json", WriteMode::Atomic)]
 #[case::streaming("media.bin", WriteMode::Streaming)]
 fn asset_resource_path_method(
@@ -79,11 +75,7 @@ fn asset_resource_path_method(
     assert!(asset_path.file_name().unwrap() == resource_name);
 }
 
-#[kithara::test(
-    native,
-    timeout(Duration::from_secs(5)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "1")
-)]
+#[kithara::test(native, timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
 fn asset_resource_path_consistency(temp_dir: TestTempDir) {
     let scope = asset_scope_with_root(&temp_dir, "test-asset");
     let key = scope.key(&resource("data.bin")).unwrap();
@@ -109,11 +101,7 @@ fn asset_resource_path_consistency(temp_dir: TestTempDir) {
     assert!(!asset_resource.path().unwrap().as_os_str().is_empty());
 }
 
-#[kithara::test(
-    native,
-    timeout(Duration::from_secs(5)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "1")
-)]
+#[kithara::test(native, timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
 fn asset_resource_path_reflects_asset_root_and_resource_name(temp_dir: TestTempDir) {
     let asset_root = "my-asset";
     let resource_name = "subdir/file.txt";
@@ -141,11 +129,7 @@ fn asset_resource_path_reflects_asset_root_and_resource_name(temp_dir: TestTempD
     assert!(relative_path.ends_with(resource_name));
 }
 
-#[kithara::test(
-    native,
-    timeout(Duration::from_secs(5)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "1")
-)]
+#[kithara::test(native, timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
 fn multiple_resources_same_asset_root_have_different_paths(temp_dir: TestTempDir) {
     let asset_root = "shared-asset";
     let scope = asset_scope_with_root(&temp_dir, asset_root);

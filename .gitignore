@@ -8,6 +8,10 @@
 # lint / ast-grep scans (generated build code would otherwise trip style rules).
 /target-flash*/
 /target-audit-clippy/
+# A stress run builds into a directory of its own for the same reason, plus one:
+# the machine's shared target directory can be cleared by something else on the
+# host hours in, and every remaining repeat then fails to exec.
+/target-stress/
 # Note: Cargo.lock is tracked for reproducible builds in workspace with examples
 
 # Rustfmt / Clippy / IDE noise

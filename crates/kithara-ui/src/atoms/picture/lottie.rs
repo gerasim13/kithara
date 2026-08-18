@@ -4,7 +4,7 @@ use crate::{
     atoms::{button::VisualState, painter::ControlPainter},
     draw::{DrawListBuilder, Rect, Transform},
     lottie::{Artwork, emit::emit},
-    text::TextContext,
+    shaping::TextContext,
 };
 
 /// Which artwork stands at which of its own frames.

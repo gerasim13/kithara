@@ -8,7 +8,7 @@ use crate::{
         document::Ctx,
         hosted::{TablePlan, TreePlan},
     },
-    text::TextContext,
+    shaping::TextContext,
 };
 
 pub(crate) type TableLeaf = ProjectedLeaf<TablePlan>;

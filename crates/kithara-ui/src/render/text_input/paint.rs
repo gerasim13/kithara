@@ -8,8 +8,8 @@ use crate::{
     draw::{DrawList, DrawListBuilder, Pt, Rect, Transform},
     interact::TextInputLayout,
     render::Skin,
+    shaping::{GlyphRun, TextContext},
     skin::{ColorRole, FontFamily, TextRoleSkin},
-    text::{GlyphRun, TextContext},
 };
 
 pub(super) struct TextInputPaint<'a> {
@@ -26,7 +26,7 @@ impl<'a> TextInputPaint<'a> {
         let mut text = TextContext::from(skin.text_resources());
         let role = text_role(skin);
         let (query_run, carets) = text.shape_input(query, role);
-        let placeholder = skin.tree.search_placeholder.as_str();
+        let placeholder = skin.tree_search_placeholder.as_str();
         let placeholder_run = text.shape(placeholder, role, None);
         let line_y = ((skin.tree.search_height - role.size) / 2.0).max(0.0);
         let layout = TextInputLayout::new(

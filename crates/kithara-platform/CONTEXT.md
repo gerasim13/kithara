@@ -169,7 +169,8 @@ independent of scheduling: runs are deterministic and every timed wait collapses
   closing the wake-to-re-register race. Lock order is always domain → engine; wakes fire only after
   the engine lock is released.
 - Async tasks are counted separately in `active_async`, owned by the spawn poll-wrapper
-  (`participate`), not by the firer. Quiescence requires `active == 0 && active_async == 0`.
+  (`participate`), not by the firer. Quiescence requires `active == 0 && active_async == 0`, with
+  the single exception below: a counted task no thread can poll.
 
 Virtualized waits:
 
@@ -196,6 +197,17 @@ event-driven `Thread` park (a `park_timeout` watchdog, no real timer), the engin
 yield-waiters at the current instant instead of jumping to a watchdog deadline. With a real
 `Timed`/`Condvar` waiter present the clock advances normally (draining yielders on the jump); a
 yielder that cannot progress re-parks-timed, emptying the yield set, so this never livelocks.
+
+Async counterpart: **a task no live thread can poll must not pin the clock.** A synchronous
+wrapped wait taken inside a poll (a BRIDGED wait) releases the blocking task's own slot — but on a
+`current_thread` runtime that thread is the only poller, so every OTHER task it drives is equally
+unpollable while it blocks. One left `RUNNABLE` by a wake would pin the clock that wait's own
+deadline needs, and neither side can move first: the crossfade hang, where a render loop's
+`virtual_pace` released the root slot and the resulting quiescent edge granted a peer task's yield.
+The gate samples each task's driver thread and whether that runtime has a single poller (per poll,
+so a task spawned onto another runtime's handle is judged by the runtime that actually drives it);
+`enter_wait_locked` marks the bridged thread; `Registry::pinning_async` subtracts exactly those
+tasks. A multi-thread runtime keeps pinning — another worker can still deliver the poll.
 
 `flash::reset()` clears the timeline and the engine. nextest's per-test process isolation keeps
 global state clean between tests; `reset()` is for runners sharing a process.
@@ -231,8 +243,22 @@ with holder and waiters, plus engine-backed kinds); it is pure, so the caller ro
 `flash::log_hang_dump` emits it via `tracing` at ERROR. The test harness records the same dump in
 its hang artifact before timeout panic/abort. The registry is gated at runtime by
 `KITHARA_FLASH_SYNC_TRACE` (default off - a wrapped primitive then pays only a null check);
-`KITHARA_FLASH_SYNC_BT=1` adds only the dump caller's backtrace. Holder and waiter evidence comes
-from their registered identities and static source locations, not from their live stacks.
+`KITHARA_FLASH_SYNC_BT=1` adds backtraces. Holder and waiter evidence otherwise comes from
+registered identities and static source locations, not from live stacks.
+
+Deadline-less (`indef`) waiters are the exception, because for them the parking site is the whole
+diagnosis: nothing but a matching signal frees one, so a dump's own backtrace - taken by the
+watchdog, not by the code that parked - names the wrong thread. Each `indef` entry therefore records
+where it parked: the OS thread always (an id read), and that thread's own backtrace under
+`KITHARA_FLASH_SYNC_BT`. Capture happens BEFORE the `core` lock; a stack walk under `core` would
+hold the whole engine for its duration. Timed waiters record nothing - their deadline already names
+the give-up authority.
+
+The dump marks an `indef` waiter `pins_clock` when it is the reason the clock is stuck: an async
+waiter whose task still holds an `active_async` slot, or a sync waiter whose parking thread is
+`bridged` (parked mid-poll, so every task it drives is stranded). The marker needs no env var, so
+every lane carries it; the recorded stack prints only for a marked waiter, since a healthy test
+parks hundreds of unmarked ones.
 
 Ground truth is two runs compared: the default real-time run (catches concurrency/timing bugs) and
 the `flash` run (fast). Divergence in sample-count positions or PCM flags that virtualization

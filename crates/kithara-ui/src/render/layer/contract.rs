@@ -2,8 +2,8 @@ use crate::{
     draw::{Pt, Rect},
     interact::{Input, Outcome},
     render::{HostLayer, WindowCommand},
+    shaping::TextResources,
     solve::{Length, Size},
-    text::TextResources,
 };
 
 pub(crate) trait WindowLayerProgram {

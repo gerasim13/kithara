@@ -19,8 +19,8 @@ use crate::{
     draw::{DrawListBuilder, Rect},
     interact::{CursorShape, Hover, iced as iced_interact, recognizers::click},
     render::{IcedSkin, InputOwner, Skin, UiEvent, controls::snapped, toggle_module},
+    shaping::TextContext,
     skin::{ColorRole, FontFamily, FontWeight, FrameSkin, TextRoleSkin},
-    text::TextContext,
 };
 
 #[derive(Clone, Copy)]
@@ -499,7 +499,7 @@ mod tests {
     #[kithara::test]
     fn the_leaf_header_canvas_publishes_the_module_toggle() {
         let program = ChevronProgram {
-            module: "studio-deck".to_owned(),
+            module: "app-deck".to_owned(),
             paint: ChevronPaint::new(false, builtin::skin()),
         };
         let bounds = Rectangle {
@@ -517,7 +517,7 @@ mod tests {
         assert_eq!(
             action.into_inner(),
             (
-                Some(UiEvent::ToggleModule("studio-deck".to_owned())),
+                Some(UiEvent::ToggleModule("app-deck".to_owned())),
                 RedrawRequest::Wait,
                 event::Status::Captured,
             )

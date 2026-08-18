@@ -30,7 +30,7 @@ pub enum UiDocError {
     BadColor { origin: SourceUri, value: String },
     #[cfg(feature = "render")]
     #[error(transparent)]
-    Text(#[from] crate::text::TextError),
+    Text(#[from] crate::shaping::TextError),
     #[error("{origin}: duplicate id {id:?} at {path}")]
     DuplicateId {
         origin: SourceUri,
@@ -181,4 +181,12 @@ pub enum UiDocError {
         count: usize,
         max: usize,
     },
+    #[error("{origin}: unknown text key {key:?} at {path}")]
+    UnknownTextKey {
+        origin: SourceUri,
+        key: String,
+        path: String,
+    },
+    #[error("{origin}: text key {key:?} is defined in more than one catalog")]
+    DuplicateTextKey { origin: SourceUri, key: String },
 }

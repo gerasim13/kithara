@@ -233,7 +233,7 @@ fn phase5_revisit_seeks(
     browser,
     serial,
     timeout(Duration::from_secs(30)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "1"),
+    hang_timeout_secs(1),
     tracing("kithara_audio=info,kithara_file=info")
 )]
 #[cfg_attr(

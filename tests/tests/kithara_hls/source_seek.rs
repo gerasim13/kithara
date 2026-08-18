@@ -8,12 +8,7 @@ use kithara_integration_tests::{
 };
 use tracing::info;
 
-#[kithara::test(
-    tokio,
-    native,
-    timeout(Duration::from_secs(10)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "1")
-)]
+#[kithara::test(tokio, native, timeout(Duration::from_secs(10)), hang_timeout_secs(1))]
 #[case(0, b"V0-SEG-0:")]
 #[case(200_000, b"V0-SEG-1:")]
 #[case(400_000, b"V0-SEG-2:")]
@@ -46,12 +41,7 @@ async fn hls_stream_seek_to_segment_start(
     assert_eq!(&result.1[..result.0], &expected_vec[..]);
 }
 
-#[kithara::test(
-    tokio,
-    native,
-    timeout(Duration::from_secs(10)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "1")
-)]
+#[kithara::test(tokio, native, timeout(Duration::from_secs(10)), hang_timeout_secs(1))]
 async fn hls_stream_seek_current(temp_dir: TestTempDir, rt_cancel: CancelToken) {
     let server = TestServer::new().await;
     let mut stream = HlsStreamBuilder::new()
@@ -75,12 +65,7 @@ async fn hls_stream_seek_current(temp_dir: TestTempDir, rt_cancel: CancelToken) 
     .unwrap();
 }
 
-#[kithara::test(
-    tokio,
-    native,
-    timeout(Duration::from_secs(10)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "1")
-)]
+#[kithara::test(tokio, native, timeout(Duration::from_secs(10)), hang_timeout_secs(1))]
 async fn hls_stream_multiple_seeks(temp_dir: TestTempDir, rt_cancel: CancelToken) {
     let server = TestServer::new().await;
     let mut stream = HlsStreamBuilder::new()
@@ -109,12 +94,7 @@ async fn hls_stream_multiple_seeks(temp_dir: TestTempDir, rt_cancel: CancelToken
     .unwrap();
 }
 
-#[kithara::test(
-    tokio,
-    native,
-    timeout(Duration::from_secs(10)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "1")
-)]
+#[kithara::test(tokio, native, timeout(Duration::from_secs(10)), hang_timeout_secs(1))]
 async fn hls_stream_read_all_then_seek_back(temp_dir: TestTempDir, rt_cancel: CancelToken) {
     let server = TestServer::new().await;
     let mut stream = HlsStreamBuilder::new()
@@ -156,12 +136,7 @@ async fn hls_stream_read_all_then_seek_back(temp_dir: TestTempDir, rt_cancel: Ca
     .unwrap();
 }
 
-#[kithara::test(
-    tokio,
-    native,
-    timeout(Duration::from_secs(10)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "1")
-)]
+#[kithara::test(tokio, native, timeout(Duration::from_secs(10)), hang_timeout_secs(1))]
 async fn hls_with_manual_abr_uses_fixed_variant(temp_dir: TestTempDir, rt_cancel: CancelToken) {
     let server = TestServer::new().await;
     let mut stream = HlsStreamBuilder::new()
@@ -180,12 +155,7 @@ async fn hls_with_manual_abr_uses_fixed_variant(temp_dir: TestTempDir, rt_cancel
     .unwrap();
 }
 
-#[kithara::test(
-    tokio,
-    native,
-    timeout(Duration::from_secs(10)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "1")
-)]
+#[kithara::test(tokio, native, timeout(Duration::from_secs(10)), hang_timeout_secs(1))]
 async fn hls_seek_across_all_segments_with_fixed_abr(
     temp_dir: TestTempDir,
     rt_cancel: CancelToken,
@@ -227,12 +197,7 @@ async fn hls_seek_across_all_segments_with_fixed_abr(
 ///
 /// This test shows that different variants produce different data at the same positions,
 /// which is the foundation for ABR switch + seek correctness.
-#[kithara::test(
-    tokio,
-    native,
-    timeout(Duration::from_secs(15)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "1")
-)]
+#[kithara::test(tokio, native, timeout(Duration::from_secs(15)), hang_timeout_secs(1))]
 async fn hls_seek_different_variants_return_different_data(
     temp_dir: TestTempDir,
     rt_cancel: CancelToken,

@@ -23,12 +23,7 @@ fn registry_for_host(host: &str, processor: kithara::hls::KeyProcessor) -> KeyPr
     reg
 }
 
-#[kithara::test(
-    tokio,
-    browser,
-    timeout(Duration::from_secs(5)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "1")
-)]
+#[kithara::test(tokio, browser, timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
 async fn fetch_and_cache_key(
     #[future] test_server: TestServer,
     assets_fixture: TestAssets,
@@ -43,12 +38,7 @@ async fn fetch_and_cache_key(
     Ok(())
 }
 
-#[kithara::test(
-    tokio,
-    browser,
-    timeout(Duration::from_secs(5)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "1")
-)]
+#[kithara::test(tokio, browser, timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
 async fn key_processor_applied(
     #[future] test_server: TestServer,
     assets_fixture: TestAssets,
@@ -69,12 +59,7 @@ async fn key_processor_applied(
     Ok(())
 }
 
-#[kithara::test(
-    tokio,
-    browser,
-    timeout(Duration::from_secs(5)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "1")
-)]
+#[kithara::test(tokio, browser, timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
 async fn key_store_with_different_processors(
     #[future] test_server: TestServer,
     assets_fixture: TestAssets,
@@ -97,12 +82,7 @@ async fn key_store_with_different_processors(
     Ok(())
 }
 
-#[kithara::test(
-    tokio,
-    browser,
-    timeout(Duration::from_secs(5)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "1")
-)]
+#[kithara::test(tokio, browser, timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
 async fn key_store_error_handling(assets_fixture: TestAssets) -> HlsResult<()> {
     let key_store = test_key_store(&assets_fixture, None);
 
@@ -115,12 +95,7 @@ async fn key_store_error_handling(assets_fixture: TestAssets) -> HlsResult<()> {
     Ok(())
 }
 
-#[kithara::test(
-    tokio,
-    browser,
-    timeout(Duration::from_secs(5)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "1")
-)]
+#[kithara::test(tokio, browser, timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
 async fn key_store_caching_behavior(
     #[future] test_server: TestServer,
     assets_fixture: TestAssets,
@@ -137,12 +112,7 @@ async fn key_store_caching_behavior(
     Ok(())
 }
 
-#[kithara::test(
-    tokio,
-    browser,
-    timeout(Duration::from_secs(5)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "1")
-)]
+#[kithara::test(tokio, browser, timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
 async fn unmatched_domain_uses_raw_key(
     #[future] test_server: TestServer,
     assets_fixture: TestAssets,
@@ -161,12 +131,7 @@ async fn unmatched_domain_uses_raw_key(
     Ok(())
 }
 
-#[kithara::test(
-    tokio,
-    browser,
-    timeout(Duration::from_secs(30)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "1")
-)]
+#[kithara::test(tokio, browser, timeout(Duration::from_secs(30)), hang_timeout_secs(1))]
 async fn aes128_key_decrypts_ciphertext(
     #[future] test_server: TestServer,
     assets_fixture: TestAssets,

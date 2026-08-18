@@ -227,6 +227,55 @@ fn test_status_failed() {
     assert_eq!(reader.status(), ResourceStatus::Failed("boom".to_string()));
 }
 
+/// The anti-hang stamp is what makes an abandoned resource poisonous to its
+/// successor, so `abandon` must leave none: the caller releasing this way is
+/// the one re-dispatching the write.
+#[kithara::test(timeout(Duration::from_secs(1)))]
+fn abandoned_writer_leaves_no_failure_stamp() {
+    let res = create_resource();
+    let reader = res.reader();
+
+    res.abandon();
+    drop(res);
+
+    assert_eq!(reader.status(), ResourceStatus::Active);
+}
+
+/// `abandon` is an opt-in for a caller that owns the re-dispatch. Every other
+/// release keeps the stamp, or a reader waits on bytes nobody will write.
+#[kithara::test(timeout(Duration::from_secs(1)))]
+fn dropped_writer_still_stamps_the_failure() {
+    let res = create_resource();
+    let reader = res.reader();
+
+    drop(res);
+
+    assert!(
+        matches!(reader.status(), ResourceStatus::Failed(_)),
+        "{:?}",
+        reader.status()
+    );
+}
+
+/// `abandon` waives the stamp for the writer that owns the refill, not for the
+/// resource forever: the next write generation starts armed again.
+#[kithara::test(timeout(Duration::from_secs(1)))]
+fn reactivated_writer_is_armed_again_after_an_abandon() {
+    let res = create_resource();
+    res.abandon();
+    let res = res.commit(Some(0)).unwrap();
+    let res = res.reactivate().unwrap();
+    let reader = res.reader();
+
+    drop(res);
+
+    assert!(
+        matches!(reader.status(), ResourceStatus::Failed(_)),
+        "{:?}",
+        reader.status()
+    );
+}
+
 #[kithara::test(timeout(Duration::from_secs(1)))]
 fn test_reactivate() {
     let res = create_resource();

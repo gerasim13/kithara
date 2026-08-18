@@ -3,8 +3,8 @@ use num_traits::cast::AsPrimitive;
 use crate::{
     draw::{DrawListBuilder, Pt, Rect, Rgba, Transform},
     render::{HostLayer, Skin, WindowCommand},
+    shaping::TextContext,
     skin::DragSkin,
-    text::TextContext,
 };
 
 /// What the pointer is carrying, drawn at the pointer over everything the
@@ -117,7 +117,7 @@ mod tests {
     use crate::{
         builtin,
         draw::{DrawCmd, Geom, Pt},
-        text::TextContext,
+        shaping::TextContext,
     };
 
     fn painted_box(layer: &HostLayer<WindowCommand>) -> Rect {

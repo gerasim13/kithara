@@ -38,7 +38,7 @@ use crate::{
         shader::ShaderDeclaration,
         vis::VisDeclaration,
     },
-    text::TextContext,
+    shaping::TextContext,
 };
 
 type WindowTracker = (Rc<Cell<Option<Pt>>>, Option<WidgetId>, bool);
@@ -821,7 +821,7 @@ const fn command_cursor(command: WindowCommand) -> CursorShape {
         WindowCommand::Drag
         | WindowCommand::Minimize
         | WindowCommand::ToggleMaximize
-        | WindowCommand::Fullscreen
+        | WindowCommand::ToggleFullScreen
         | WindowCommand::Close => CursorShape::None,
     }
 }

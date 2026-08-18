@@ -26,8 +26,8 @@ use kithara_ui::{
         fonts::{FONT_BYTES, SANS},
         tree,
     },
+    shaping::{FontPolicy, GlyphFace, GlyphSegment, TextContext},
     source::{MemResolver, UiConfig},
-    text::{FontPolicy, GlyphFace, GlyphSegment, TextContext},
 };
 
 struct FixtureReads {
@@ -193,6 +193,7 @@ fn headless_renderer() -> iced::Renderer {
 fn fixture_skin() -> Skin {
     Skin::resolve_with_font_policy(
         builtin::skin_doc().clone(),
+        builtin::text_doc(),
         &SourceUri("fixture:layout-parity".to_owned()),
         FontPolicy::Embedded,
     )
@@ -789,6 +790,7 @@ fn builtin_layouts_match_rect_fixtures() {
             &builtin::resolver(),
             &common::player_registry(),
             builtin::skin_doc(),
+            builtin::text_doc(),
             &UiConfig::default(),
         )
         .expect("builtin layout must compile");
@@ -854,6 +856,7 @@ fn split_weights_reach_layout_as_f32() {
         &resolver,
         &common::player_registry(),
         builtin::skin_doc(),
+        builtin::text_doc(),
         &UiConfig::default(),
     )
     .expect("fractional split document must compile");

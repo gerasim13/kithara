@@ -3,9 +3,9 @@ use crate::{
     draw::{DrawListBuilder, Pt, Rect, Rgba, Transform},
     module::ScalarFormat,
     render::Skin,
+    shaping::TextContext,
     skin::{FontFamily, TelemetrySkin, TextRoleSkin},
     solve::{Length, Size},
-    text::TextContext,
 };
 
 /// One formatted number, centred in its box and framed only when the document

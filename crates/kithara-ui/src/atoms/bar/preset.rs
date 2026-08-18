@@ -8,9 +8,9 @@ use crate::{
     },
     draw::{DrawListBuilder, Pt, Rect, Rgba, Transform},
     render::Skin,
+    shaping::TextContext,
     skin::{ColorRole, FontFamily, GlobalBarSkin, TextRoleSkin},
     solve::{Length, Size},
-    text::TextContext,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -226,9 +226,9 @@ mod tests {
         draw::{DrawCmd, DrawList, DrawListBuilder, Geom, Paint, Pt, Rect},
         mount,
         render::{ReadValue, Reads, document::probe},
+        shaping::TextContext,
         skin::{ColorRole, FontFamily, TextRoleSkin},
         solve::{Length, Size},
-        text::TextContext,
     };
 
     const BOUNDS: Rect = Rect {

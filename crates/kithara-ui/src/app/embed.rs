@@ -394,6 +394,7 @@ where
         config.resolver,
         config.endpoints,
         config.skin_doc,
+        config.text,
         &UiConfig::default(),
     )?)
 }

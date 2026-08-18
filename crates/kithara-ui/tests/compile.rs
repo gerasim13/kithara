@@ -60,6 +60,7 @@ fn compiles_micro_layout_end_to_end() {
         &resolver(),
         &common::player_registry(),
         builtin::skin_doc(),
+        builtin::text_doc(),
         &UiConfig::default(),
     )
     .unwrap();
@@ -98,6 +99,7 @@ fn crossfader_compiles_with_scalar_read_and_write_bindings() {
         &resolver,
         &registry,
         builtin::skin_doc(),
+        builtin::text_doc(),
         &UiConfig::default(),
     )
     .unwrap();
@@ -157,6 +159,7 @@ fn fs_main(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
         &resolver,
         &common::player_registry(),
         builtin::skin_doc(),
+        builtin::text_doc(),
         &UiConfig::default(),
     )
     .unwrap();
@@ -183,6 +186,7 @@ fn malformed_shader_reports_the_resolved_source() {
         &resolver,
         &common::player_registry(),
         builtin::skin_doc(),
+        builtin::text_doc(),
         &UiConfig::default(),
     )
     .unwrap_err();
@@ -216,6 +220,7 @@ fn fs_main() -> @location(0) vec4<f32> {
         &resolver,
         &registry,
         builtin::skin_doc(),
+        builtin::text_doc(),
         &UiConfig::default(),
     )
     .unwrap_err();
@@ -255,6 +260,7 @@ fn meter_reads_a_scalar_and_refuses_any_other_kind() {
         &resolver,
         &registry,
         builtin::skin_doc(),
+        builtin::text_doc(),
         &UiConfig::default(),
     )
     .unwrap();
@@ -279,6 +285,7 @@ fn meter_reads_a_scalar_and_refuses_any_other_kind() {
         &resolver,
         &registry,
         builtin::skin_doc(),
+        builtin::text_doc(),
         &UiConfig::default(),
     )
     .unwrap_err();
@@ -320,6 +327,7 @@ fn vis_compiles_with_scalar_read_and_select_index_write() {
         &resolver,
         &registry,
         builtin::skin_doc(),
+        builtin::text_doc(),
         &UiConfig::default(),
     )
     .unwrap();
@@ -377,6 +385,7 @@ fn vis_rejects_non_scalar_read_and_write_bindings() {
         &resolver,
         &registry,
         builtin::skin_doc(),
+        builtin::text_doc(),
         &UiConfig::default(),
     )
     .unwrap_err();
@@ -396,6 +405,7 @@ fn vis_rejects_non_scalar_read_and_write_bindings() {
         &resolver,
         &registry,
         builtin::skin_doc(),
+        builtin::text_doc(),
         &UiConfig::default(),
     )
     .unwrap_err();
@@ -425,6 +435,7 @@ fn table_accepts_arbitrary_text_columns() {
         &resolver,
         &common::player_registry(),
         builtin::skin_doc(),
+        builtin::text_doc(),
         &UiConfig::default(),
     )
     .expect("a table must not require track-specific columns");
@@ -439,6 +450,7 @@ fn a_column_list_may_arrive_as_an_include_parameter() {
         ),
         &common::player_registry(),
         builtin::skin_doc(),
+        builtin::text_doc(),
         &UiConfig::default(),
     )
     .expect("a substituted column list must compile like a literal one");
@@ -453,6 +465,7 @@ fn a_parameterised_column_list_can_use_non_music_ids() {
         ),
         &common::player_registry(),
         builtin::skin_doc(),
+        builtin::text_doc(),
         &UiConfig::default(),
     )
     .expect("parameterized tables must accept arbitrary column identifiers");
@@ -485,6 +498,7 @@ fn table_compiles_typed_columns_and_optional_state_prefix() {
         &resolver,
         &registry,
         builtin::skin_doc(),
+        builtin::text_doc(),
         &UiConfig::default(),
     )
     .unwrap();
@@ -519,6 +533,113 @@ fn table_compiles_typed_columns_and_optional_state_prefix() {
 }
 
 #[kithara::test]
+fn a_table_column_label_resolves_through_the_catalog() {
+    let resolver = table_resolver(
+        r#"(schema: "kithara.module", version: 1, id: "table",
+            root: Table(
+                id: "rows",
+                columns: [
+                    (id: "deck", label: "@track_list.column.deck", style: Badge, width: 44.0),
+                    (id: "name", label: "NAME", style: Primary, width: 180.0, flexible: true),
+                ],
+                read: Model(id: "library.visible_tracks"),
+            ))"#,
+    );
+
+    let ui = compile(
+        "table.klayout.ron",
+        &resolver,
+        &common::player_registry(),
+        builtin::skin_doc(),
+        builtin::text_doc(),
+        &UiConfig::default(),
+    )
+    .unwrap();
+    let CompiledNode::Module { root, .. } = &ui.root else {
+        panic!("expected module root");
+    };
+    let ExpandedNode::Control {
+        spec: ControlSpec::Table { columns, .. },
+        ..
+    } = &**root
+    else {
+        panic!("expected table control");
+    };
+
+    assert_eq!(columns[0].label(), "DECK");
+}
+
+#[kithara::test]
+fn a_table_column_label_written_as_plain_text_stays_that_text() {
+    let resolver = table_resolver(
+        r#"(schema: "kithara.module", version: 1, id: "table",
+            root: Table(
+                id: "rows",
+                columns: [
+                    (id: "deck", label: "@track_list.column.deck", style: Badge, width: 44.0),
+                    (id: "name", label: "NAME", style: Primary, width: 180.0, flexible: true),
+                ],
+                read: Model(id: "library.visible_tracks"),
+            ))"#,
+    );
+
+    let ui = compile(
+        "table.klayout.ron",
+        &resolver,
+        &common::player_registry(),
+        builtin::skin_doc(),
+        builtin::text_doc(),
+        &UiConfig::default(),
+    )
+    .unwrap();
+    let CompiledNode::Module { root, .. } = &ui.root else {
+        panic!("expected module root");
+    };
+    let ExpandedNode::Control {
+        spec: ControlSpec::Table { columns, .. },
+        ..
+    } = &**root
+    else {
+        panic!("expected table control");
+    };
+
+    assert_eq!(columns[1].label(), "NAME");
+}
+
+#[kithara::test]
+fn a_table_column_naming_a_missing_key_is_a_compile_error() {
+    let resolver = table_resolver(
+        r#"(schema: "kithara.module", version: 1, id: "table",
+            root: Table(
+                id: "rows",
+                columns: [
+                    (id: "deck", label: "@missing.key", style: Badge, width: 44.0),
+                ],
+                read: Model(id: "library.visible_tracks"),
+            ))"#,
+    );
+
+    let error = compile(
+        "table.klayout.ron",
+        &resolver,
+        &common::player_registry(),
+        builtin::skin_doc(),
+        builtin::text_doc(),
+        &UiConfig::default(),
+    )
+    .expect_err("a column caption naming no catalog entry must not compile");
+
+    let UiDocError::UnknownTextKey { key, path, .. } = error else {
+        panic!("expected an unknown-key error, got {error:?}");
+    };
+    assert_eq!(key, "missing.key");
+    assert!(
+        path.ends_with("/columns/0/label"),
+        "the error must name the column that carried the key, got {path}"
+    );
+}
+
+#[kithara::test]
 fn present_table_column_state_endpoint_must_be_bool() {
     let resolver = table_resolver(
         r#"(schema: "kithara.module", version: 1, id: "table",
@@ -541,6 +662,7 @@ fn present_table_column_state_endpoint_must_be_bool() {
         &resolver,
         &registry,
         builtin::skin_doc(),
+        builtin::text_doc(),
         &UiConfig::default(),
     )
     .unwrap_err();
@@ -575,6 +697,7 @@ fn layout_module_size_override_wins_over_computed_size() {
         &resolver,
         &common::player_registry(),
         builtin::skin_doc(),
+        builtin::text_doc(),
         &UiConfig::default(),
     )
     .unwrap();
@@ -614,6 +737,7 @@ fn module_shell_metadata_compiles_into_the_module_node() {
         &resolver,
         &common::player_registry(),
         builtin::skin_doc(),
+        builtin::text_doc(),
         &UiConfig::default(),
     )
     .unwrap();
@@ -687,6 +811,7 @@ fn module_footer_requires_a_text_read_endpoint() {
         &resolver,
         &common::player_registry(),
         builtin::skin_doc(),
+        builtin::text_doc(),
         &UiConfig::default(),
     )
     .unwrap_err();
@@ -715,6 +840,7 @@ fn unknown_endpoint_fails_with_module_origin_and_path() {
         &resolver,
         &common::player_registry(),
         builtin::skin_doc(),
+        builtin::text_doc(),
         &UiConfig::default(),
     )
     .unwrap_err();
@@ -739,6 +865,7 @@ fn node_limit_is_enforced() {
         &resolver(),
         &common::player_registry(),
         builtin::skin_doc(),
+        builtin::text_doc(),
         &UiConfig::builder().limits(limits).build(),
     )
     .unwrap_err();
@@ -766,6 +893,7 @@ fn layout_parameter_reference_is_unresolved() {
         &resolver,
         &common::player_registry(),
         builtin::skin_doc(),
+        builtin::text_doc(),
         &UiConfig::default(),
     )
     .unwrap_err();
@@ -797,6 +925,7 @@ fn layout_doubled_dollar_passes_literal_dollar() {
         &resolver,
         &common::player_registry(),
         builtin::skin_doc(),
+        builtin::text_doc(),
         &UiConfig::default(),
     )
     .unwrap();
@@ -829,6 +958,7 @@ fn oversized_layout_source_is_rejected() {
         &resolver,
         &common::player_registry(),
         builtin::skin_doc(),
+        builtin::text_doc(),
         &UiConfig::builder().limits(limits).build(),
     )
     .unwrap_err();
@@ -864,6 +994,7 @@ fn fifty_empty_columns_exceed_node_limit() {
         &resolver,
         &common::player_registry(),
         builtin::skin_doc(),
+        builtin::text_doc(),
         &UiConfig::builder().limits(limits).build(),
     )
     .unwrap_err();
@@ -902,6 +1033,7 @@ fn knob_caption_is_document_text_and_optional() {
         &resolver,
         &common::player_registry(),
         builtin::skin_doc(),
+        builtin::text_doc(),
         &UiConfig::default(),
     )
     .unwrap();
@@ -970,6 +1102,7 @@ fn compile_blocks(resolver: &MemResolver, entry: &str) -> Result<CompiledUi, UiD
         resolver,
         &block_registry(),
         builtin::skin_doc(),
+        builtin::text_doc(),
         &UiConfig::default(),
     )
 }
@@ -1625,6 +1758,7 @@ fn compile_glyphs(resolver: &MemResolver) -> Result<CompiledUi, UiDocError> {
         resolver,
         &common::player_registry(),
         builtin::skin_doc(),
+        builtin::text_doc(),
         &UiConfig::default(),
     )
 }
@@ -1723,6 +1857,7 @@ fn one_template_reads_a_different_endpoint_per_include() {
         &resolver,
         &registry,
         builtin::skin_doc(),
+        builtin::text_doc(),
         &UiConfig::default(),
     )
     .unwrap();

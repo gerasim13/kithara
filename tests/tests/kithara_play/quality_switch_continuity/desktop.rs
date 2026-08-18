@@ -8,10 +8,13 @@ use kithara::{
     platform::sync::Arc,
     play::PlaybackResamplerBackend,
 };
-use kithara_integration_tests::{TestServerHelper, fixture_protocol::DelayRule};
+use kithara_integration_tests::{
+    TestServerHelper,
+    fixture_protocol::DelayRule,
+    offline::{OfflinePlayerHarness, OfflinePlayerOptions},
+};
 
 use super::*;
-use crate::kithara_play::offline_player_harness::{OfflinePlayerHarness, OfflinePlayerOptions};
 
 const HOST_SAMPLE_RATE: u32 = 48_000;
 const CAPTURE_FRAME: usize = HOST_SAMPLE_RATE as usize * 2;
@@ -444,7 +447,7 @@ fn assert_no_desktop_click(switched: &[f32], control: &[f32]) {
     native,
     serial,
     timeout(Duration::from_secs(180)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "3")
+    hang_timeout_secs(3)
 )]
 async fn kithara_app_manual_aac_to_flac_switch_is_gapless() {
     let server = TestServerHelper::new().await;

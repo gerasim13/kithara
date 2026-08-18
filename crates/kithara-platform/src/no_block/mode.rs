@@ -1,6 +1,13 @@
 #[cfg(test)]
 use std::cell::{Cell, RefCell};
-use std::{path::PathBuf, sync::OnceLock, time::Duration};
+use std::{
+    path::PathBuf,
+    sync::{
+        OnceLock,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::Duration,
+};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Mode {
@@ -26,12 +33,42 @@ thread_local! {
     static FORCED_LOG: RefCell<Option<PathBuf>> = const { RefCell::new(None) };
 }
 
+/// Set while a [`PanicMode`] guard lives; see [`force_panic_mode`].
+static FORCED_PANIC: AtomicBool = AtomicBool::new(false);
+
+/// Restores the previous panic-mode request when dropped.
+#[derive(Debug)]
+#[must_use = "the forced mode lasts only while this guard is alive"]
+pub struct PanicMode(bool);
+
+impl Drop for PanicMode {
+    fn drop(&mut self) {
+        FORCED_PANIC.store(self.0, Ordering::Release);
+    }
+}
+
+/// Judge blocking waits in `panic` mode while the guard lives, whatever
+/// `KITHARA_NO_BLOCK` the lane configured.
+///
+/// A test asserting that a blocking wait panics takes this instead of writing
+/// `KITHARA_NO_BLOCK`: mutating the process environment while any other thread
+/// reads it is undefined behaviour. Process-global rather than thread-local
+/// because a watched poll runs on whichever thread drives it, not on the
+/// thread that declared the mode.
+pub fn force_panic_mode() -> PanicMode {
+    PanicMode(FORCED_PANIC.swap(true, Ordering::AcqRel))
+}
+
 pub(super) fn mode() -> Mode {
     #[cfg(test)]
     {
         if let Some(mode) = FORCED.with(Cell::get) {
             return mode;
         }
+    }
+
+    if FORCED_PANIC.load(Ordering::Acquire) {
+        return Mode::Panic;
     }
 
     static CACHED: OnceLock<Mode> = OnceLock::new();

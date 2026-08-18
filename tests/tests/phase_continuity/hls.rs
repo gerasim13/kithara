@@ -255,7 +255,7 @@ async fn run_case_paced(
     native,
     serial,
     timeout(Duration::from_secs(25)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+    hang_timeout_secs(1)
 )]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
@@ -490,7 +490,7 @@ fn late_switches() -> Vec<(AbrMode, f64)> {
     native,
     serial,
     timeout(Duration::from_secs(60)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "10")
+    hang_timeout_secs(10)
 )]
 #[case::aac_lc_symphonia_pace1ms(
     Fixture::Single(Codec::AacLc),
@@ -556,7 +556,7 @@ async fn phase_continuity_hls_diag_paced(
     native,
     serial,
     timeout(Duration::from_secs(25)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "1")
+    hang_timeout_secs(1)
 )]
 #[ignore = "pins real regression — uncompensated decoder warmup at HLS seek/switch seams (cross-codec AAC→FLAC ~1024 samples; he_v2 in-variant seek ~40 samples); unignore when HLS decoder-warmup / per-codec algo-delay fix lands"]
 #[cfg_attr(

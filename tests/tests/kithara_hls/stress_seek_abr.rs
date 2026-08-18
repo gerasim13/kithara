@@ -81,7 +81,7 @@ fn run_rapid_random_seeks(audio: &mut Audio<Stream<Hls>>, buf: &mut [f32]) -> Se
     native,
     serial,
     timeout(Duration::from_secs(120)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "3")
+    hang_timeout_secs(3)
 )]
 #[case::hls("hls/master.m3u8", "HLS")]
 #[case::drm("drm/master.m3u8", "DRM")]
@@ -179,7 +179,7 @@ async fn stress_seek_during_abr_switch_real_decoder(
     native,
     serial,
     timeout(Duration::from_secs(120)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "5")
+    hang_timeout_secs(5)
 )]
 #[case::hls("hls/master.m3u8", "HLS")]
 #[case::drm("drm/master.m3u8", "DRM")]

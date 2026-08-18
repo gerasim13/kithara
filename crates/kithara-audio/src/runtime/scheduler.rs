@@ -574,11 +574,11 @@ mod tests {
 
     impl Node for LifecycleNode {
         fn on_cancel(&mut self) {
-            let _ = self.events.send("cancel");
+            self.events.send("cancel").ok();
         }
 
         fn recycle(&mut self) {
-            let _ = self.events.send("recycle");
+            self.events.send("recycle").ok();
         }
 
         fn tick(&mut self) -> TickResult {
@@ -594,7 +594,7 @@ mod tests {
     impl Node for DeferredWaitingNode {
         fn recycle(&mut self) {
             if mem::take(&mut self.pending) {
-                let _ = self.events.send("recycle");
+                self.events.send("recycle").ok();
             }
         }
 

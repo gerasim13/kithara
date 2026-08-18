@@ -3,7 +3,6 @@
 //! Compiled only off wasm32 (gated in `lib.rs`), so the tree itself
 //! carries no cfg.
 
-pub mod env;
 #[cfg(not(feature = "loom"))]
 #[path = "support/errors.rs"]
 pub(crate) mod errors;

@@ -44,8 +44,8 @@ use crate::{
         document::{Clock, Ctx},
         picker_hits,
     },
+    shaping::{FontPolicy, TextContext},
     source::{MemResolver, UiConfig},
-    text::{FontPolicy, TextContext},
 };
 
 struct FixtureReads;
@@ -573,6 +573,7 @@ fn masonry_layout_rects_equal_snapped_neutral_rects() {
     let registry = fixture_registry();
     let skin = Skin::resolve_with_font_policy(
         builtin::skin_doc().clone(),
+        builtin::text_doc(),
         &SourceUri("fixture:masonry-layout-parity".to_owned()),
         FontPolicy::Embedded,
     )
@@ -593,6 +594,7 @@ fn masonry_layout_rects_equal_snapped_neutral_rects() {
             &builtin::resolver(),
             &registry,
             builtin::skin_doc(),
+            builtin::text_doc(),
             &UiConfig::default(),
         )
         .unwrap_or_else(|error| panic!("builtin layout must compile: {error}"));
@@ -2135,6 +2137,7 @@ fn masonry_draws_every_control_the_census_claims_it_draws() {
     let reads = FixtureReads;
     let skin = Skin::resolve_with_font_policy(
         builtin::skin_doc().clone(),
+        builtin::text_doc(),
         &SourceUri("fixture:masonry-control-census".to_owned()),
         FontPolicy::Embedded,
     )
@@ -2605,8 +2608,9 @@ mod gesture_census {
         let reads = FixtureReads;
         let skin = Skin::resolve_with_font_policy(
             crate::builtin::skin_doc().clone(),
+            crate::builtin::text_doc(),
             &crate::ids::SourceUri("fixture:gesture-census".to_owned()),
-            crate::text::FontPolicy::Embedded,
+            crate::shaping::FontPolicy::Embedded,
         )
         .unwrap_or_else(|error| panic!("the census skin must resolve: {error}"));
 
@@ -3418,6 +3422,7 @@ fn fixture_ui_with_options(
         &resolver,
         registry,
         builtin::skin_doc(),
+        builtin::text_doc(),
         &UiConfig::default(),
     )
     .unwrap_or_else(|error| panic!("Masonry contract fixture must compile: {error}"))
@@ -3900,6 +3905,7 @@ fn seeking_wave_root(extra: &str, takes_drops: bool) -> MasonryRoot<TestAction> 
         &resolver,
         &registry,
         builtin::skin_doc(),
+        builtin::text_doc(),
         &UiConfig::default(),
     )
     .unwrap_or_else(|error| panic!("the wave fixture must compile: {error}"));
@@ -3996,7 +4002,7 @@ fn studio_deck_root(reads: &DeckReads) -> (CompiledUi, MasonryRoot<TestAction>) 
     );
     resolver.insert(
         "deck.kmodule.ron",
-        r#"(schema: "kithara.module", version: 1, id: "studio-deck",
+        r#"(schema: "kithara.module", version: 1, id: "app-deck",
             parameters: ["deck", "letter"],
             drop: Some((
                 write: Command(id: "deck.queue.load", with: { "deck": "$deck" }),
@@ -4027,6 +4033,7 @@ fn studio_deck_root(reads: &DeckReads) -> (CompiledUi, MasonryRoot<TestAction>) 
         &resolver,
         &registry,
         builtin::skin_doc(),
+        builtin::text_doc(),
         &UiConfig::default(),
     )
     .unwrap_or_else(|error| panic!("the studio fixture must compile: {error}"));
@@ -4243,6 +4250,7 @@ fn dragging_library_root() -> MasonryRoot<TestAction> {
         &resolver,
         &registry,
         builtin::skin_doc(),
+        builtin::text_doc(),
         &UiConfig::default(),
     )
     .unwrap_or_else(|error| panic!("the drag fixture must compile: {error}"));

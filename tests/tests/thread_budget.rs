@@ -69,7 +69,7 @@ fn thread_budget_audio_worker_is_one_thread() {
     native,
     serial,
     timeout(Duration::from_secs(15)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "3")
+    hang_timeout_secs(3)
 )]
 async fn thread_budget_single_hls_pipeline(temp_dir: TestTempDir) {
     let server = TestServerHelper::new().await;
@@ -116,7 +116,7 @@ async fn thread_budget_single_hls_pipeline(temp_dir: TestTempDir) {
     native,
     serial,
     timeout(Duration::from_secs(20)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "3")
+    hang_timeout_secs(3)
 )]
 async fn thread_budget_three_tracks_shared_worker(temp_dir: TestTempDir) {
     let server = TestServerHelper::new().await;

@@ -2,8 +2,8 @@ use crate::{
     atoms::design::quad::quad,
     draw::{DrawListBuilder, Pt, Rect, Rgba, Transform},
     render::Skin,
+    shaping::TextContext,
     skin::{CellSkin, FrameSkin, TextRoleSkin},
-    text::TextContext,
 };
 
 /// A framed box with a caption under it.

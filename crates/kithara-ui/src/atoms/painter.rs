@@ -43,8 +43,8 @@ use crate::{
     draw::{DrawListBuilder, Rect},
     interact::Hit,
     render::{Mark, ScalarRange, StereoLevels},
+    shaping::TextContext,
     solve::{Length, Size},
-    text::TextContext,
 };
 
 /// Transient per-cell state owned by an indexed control adapter.

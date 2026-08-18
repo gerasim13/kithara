@@ -465,4 +465,74 @@ mod tests {
         idx2.remove("from_first", PinDurability::Durable).unwrap();
         assert!(!idx.contains("from_first"));
     }
+
+    /// Membership as `pins.bin` holds it right now, read straight off the
+    /// file — the cheap check the stress loop below needs thousands of
+    /// times, without opening a second index per round.
+    fn on_disk_contains(path: &std::path::Path, root: &str) -> bool {
+        let Ok(bytes) = fs::read(path) else {
+            return false;
+        };
+        if bytes.is_empty() {
+            return false;
+        }
+        rkyv::access::<crate::index::schema::ArchivedPinsIndexFile, rkyv::rancor::Error>(&bytes)
+            .is_ok_and(|archived| {
+                archived
+                    .pinned
+                    .iter()
+                    .filter(|(_, v)| **v)
+                    .any(|(k, _)| k.as_str() == root)
+            })
+    }
+
+    /// Two flushes of one `pins.bin` can overlap: the eager mutator path
+    /// and a hub flush from the worker or a checkpoint. Whoever renames
+    /// last decides the file, so a flush that snapshotted before an unpin
+    /// must never publish after it. Measured before the per-file write
+    /// lock: 6 resurrections in 2000 rounds.
+    #[kithara::test(timeout(Duration::from_secs(60)))]
+    fn an_eager_unpin_is_never_resurrected_by_a_concurrent_flush() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        use crate::index::persistence::{FlushHub, FlushPolicy};
+
+        let temp_dir = tempdir().unwrap();
+        let path = temp_dir.path().join("pins.bin");
+        let idx = disk_index(&path);
+        let hub = FlushHub::new(CancelToken::never(), FlushPolicy::default());
+        idx.attach_to(&hub);
+
+        let stop = Arc::new(AtomicBool::new(false));
+        let flushers: Vec<_> = (0..3)
+            .map(|n| {
+                let hub = Arc::clone(&hub);
+                let stop = Arc::clone(&stop);
+                kithara_platform::thread::spawn_named(format!("probe-flusher-{n}"), move || {
+                    while !stop.load(Ordering::Acquire) {
+                        let _ = hub.flush_now();
+                    }
+                })
+            })
+            .collect();
+
+        let mut violations = 0_usize;
+        let rounds = 500_usize;
+        for _ in 0..rounds {
+            idx.add("asset-a", PinDurability::Durable).unwrap();
+            idx.remove("asset-a", PinDurability::Durable).unwrap();
+            if on_disk_contains(&path, "asset-a") {
+                violations += 1;
+            }
+        }
+        stop.store(true, Ordering::Release);
+        for flusher in flushers {
+            flusher.join().unwrap();
+        }
+
+        assert_eq!(
+            violations, 0,
+            "an eager unpin must not be resurrected on disk by a concurrent flush ({violations}/{rounds})"
+        );
+    }
 }

@@ -33,15 +33,15 @@
                         size: (w: Fill, h: Fill),
                         read: Model(id: "library.visible_tracks"),
                         columns: [
-                            (id: "index", label: "#", style: Index, width: 28.0),
-                            (id: "deck", label: "DECK", style: Badge, width: 64.0),
-                            (id: "title", label: "TITLE", style: Primary, width: 180.0, flexible: true),
-                            (id: "artist", label: "ARTIST", style: Secondary, width: 200.0),
-                            (id: "bpm", label: "BPM", style: Metric, width: 70.0),
-                            (id: "key", label: "KEY", style: Mono, width: 56.0),
-                            (id: "time", label: "TIME", style: Time, width: 70.0),
-                            (id: "energy", label: "ENERGY", style: Meter, width: 110.0),
-                            (id: "transition", label: "TRANSITION", style: Transition, width: 130.0),
+                            (id: "index", label: "@track_list.column.index", style: Index, width: 28.0),
+                            (id: "deck", label: "@track_list.column.deck", style: Badge, width: 64.0),
+                            (id: "title", label: "@track_list.column.title", style: Primary, width: 180.0, flexible: true),
+                            (id: "artist", label: "@track_list.column.artist", style: Secondary, width: 200.0),
+                            (id: "bpm", label: "@track_list.column.bpm", style: Metric, width: 70.0),
+                            (id: "key", label: "@track_list.column.key", style: Mono, width: 56.0),
+                            (id: "time", label: "@track_list.column.time", style: Time, width: 70.0),
+                            (id: "energy", label: "@track_list.column.energy", style: Meter, width: 110.0),
+                            (id: "transition", label: "@track_list.column.transition", style: Transition, width: 130.0),
                         ],
                         columns_state: Some(Model(id: "gallery.table.columns")),
                         adaptive: (priority: Required),
@@ -63,7 +63,7 @@
                                 gap: Some(8.0),
                                 children: [
                                     Checkbox(id: "column-index", read: Model(id: "gallery.table.columns.index")),
-                                    Text(id: "column-index-label", style: MicroLabel, label: "#", size: (w: Fill, h: Fill)),
+                                    Text(id: "column-index-label", style: MicroLabel, label: "@track_list.column.index", size: (w: Fill, h: Fill)),
                                 ],
                             ),
                             Row(
@@ -71,7 +71,7 @@
                                 gap: Some(8.0),
                                 children: [
                                     Checkbox(id: "column-deck", read: Model(id: "gallery.table.columns.deck")),
-                                    Text(id: "column-deck-label", style: MicroLabel, label: "DECK", size: (w: Fill, h: Fill)),
+                                    Text(id: "column-deck-label", style: MicroLabel, label: "@track_list.column.deck", size: (w: Fill, h: Fill)),
                                 ],
                             ),
                             Row(
@@ -79,7 +79,7 @@
                                 gap: Some(8.0),
                                 children: [
                                     Checkbox(id: "column-title", read: Model(id: "gallery.table.columns.title")),
-                                    Text(id: "column-title-label", style: MicroLabel, label: "TITLE", size: (w: Fill, h: Fill)),
+                                    Text(id: "column-title-label", style: MicroLabel, label: "@track_list.column.title", size: (w: Fill, h: Fill)),
                                 ],
                             ),
                             Row(
@@ -87,7 +87,7 @@
                                 gap: Some(8.0),
                                 children: [
                                     Checkbox(id: "column-artist", read: Model(id: "gallery.table.columns.artist")),
-                                    Text(id: "column-artist-label", style: MicroLabel, label: "ARTIST", size: (w: Fill, h: Fill)),
+                                    Text(id: "column-artist-label", style: MicroLabel, label: "@track_list.column.artist", size: (w: Fill, h: Fill)),
                                 ],
                             ),
                             Row(
@@ -95,7 +95,7 @@
                                 gap: Some(8.0),
                                 children: [
                                     Checkbox(id: "column-bpm", read: Model(id: "gallery.table.columns.bpm")),
-                                    Text(id: "column-bpm-label", style: MicroLabel, label: "BPM", size: (w: Fill, h: Fill)),
+                                    Text(id: "column-bpm-label", style: MicroLabel, label: "@track_list.column.bpm", size: (w: Fill, h: Fill)),
                                 ],
                             ),
                             Row(
@@ -103,7 +103,7 @@
                                 gap: Some(8.0),
                                 children: [
                                     Checkbox(id: "column-key", read: Model(id: "gallery.table.columns.key")),
-                                    Text(id: "column-key-label", style: MicroLabel, label: "KEY", size: (w: Fill, h: Fill)),
+                                    Text(id: "column-key-label", style: MicroLabel, label: "@track_list.column.key", size: (w: Fill, h: Fill)),
                                 ],
                             ),
                             Row(
@@ -111,7 +111,7 @@
                                 gap: Some(8.0),
                                 children: [
                                     Checkbox(id: "column-time", read: Model(id: "gallery.table.columns.time")),
-                                    Text(id: "column-time-label", style: MicroLabel, label: "TIME", size: (w: Fill, h: Fill)),
+                                    Text(id: "column-time-label", style: MicroLabel, label: "@track_list.column.time", size: (w: Fill, h: Fill)),
                                 ],
                             ),
                             Row(
@@ -119,7 +119,7 @@
                                 gap: Some(8.0),
                                 children: [
                                     Checkbox(id: "column-energy", read: Model(id: "gallery.table.columns.energy")),
-                                    Text(id: "column-energy-label", style: MicroLabel, label: "ENERGY", size: (w: Fill, h: Fill)),
+                                    Text(id: "column-energy-label", style: MicroLabel, label: "@track_list.column.energy", size: (w: Fill, h: Fill)),
                                 ],
                             ),
                             Row(
@@ -127,7 +127,7 @@
                                 gap: Some(8.0),
                                 children: [
                                     Checkbox(id: "column-transition", read: Model(id: "gallery.table.columns.transition")),
-                                    Text(id: "column-transition-label", style: MicroLabel, label: "TRANSITION", size: (w: Fill, h: Fill)),
+                                    Text(id: "column-transition-label", style: MicroLabel, label: "@track_list.column.transition", size: (w: Fill, h: Fill)),
                                 ],
                             ),
                             Button(

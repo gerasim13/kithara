@@ -1,9 +1,9 @@
 use crate::{
     draw::{DrawListBuilder, Pt, Rect, Rgba, Transform},
     render::Skin,
+    shaping::{GlyphRun, TextContext},
     skin::{ColorRole, FontFamily, FontWeight, TabLargeSkin, TextRoleSkin},
     solve::{Length, Size},
-    text::{GlyphRun, TextContext},
 };
 
 pub(crate) struct TabLarge {

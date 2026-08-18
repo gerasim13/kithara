@@ -144,6 +144,7 @@ where
     }
 
     /// Check if byte limit is exceeded and run eviction if needed.
+    #[kithara::probe(pinned = self.pins.snapshot().len())]
     pub fn check_and_evict_if_over_limit(&self) {
         if !self.is_active() || self.cancel.is_cancelled() || self.cfg.max_bytes.is_none() {
             return;
@@ -169,6 +170,7 @@ where
         }
     }
 
+    #[kithara::probe(is_pinned = pinned.contains(cand))]
     fn evict_one(&self, pinned: &HashSet<String>, cand: &str) {
         if pinned.contains(cand) {
             tracing::debug!(asset_root = %cand, "Skipping pinned asset");

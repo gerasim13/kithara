@@ -57,8 +57,9 @@ routine work:
 - Complete isolated UI suite: `just test ui` (unit and integration tests,
   GPU renderer tests, and host-parity captures).
 - `just ci gate`; scoped audit: `just ci audit <scope>`; broad report:
-  `just ci health`.
-- Repeated-test evidence campaign: `just ci stress <args>`; independent artifact
+  `just ci health`; one run's archived quality artifacts consolidated into a
+  single markdown report: `just ci report --artifacts <dir>`.
+- Repeated-test evidence run: `just ci stress <args>`; independent artifact
   verification: `just ci stress-report <args>`.
 - Architecture diagram, linked contour reports, and complexity profile:
   `just arch viz` (workspace, automatic LOD 0 plus crate/hotspot-subsystem pages);
@@ -66,8 +67,7 @@ routine work:
   module abstractions: `just arch viz --crate <package> --module <path>`
   (automatic LOD 2);
   crate boundaries/resources: `just arch viz --crate <package> --lod 3`;
-  complete module call graph: `just arch viz --crate <package> --module <path>
-  --lod 4`. A crate view isolates the selected crate, hides Cargo dependencies
+  complete module call graph: `just arch viz --crate <package> --module <path> --lod 4`. A crate view isolates the selected crate, hides Cargo dependencies
   and incoming callers, and terminates concrete outgoing interactions at
   compact public external ports. Use `--view ownership` for the ownership lens and
   `--scenario <name>` for one configured runtime flow. Project defaults under
@@ -135,6 +135,7 @@ Reject a design before coding when it:
 ## Coding Conventions
 
 ### Imports and qualified paths
+
 - Keep production code in `src/` and substantial fixtures in `tests/`.
 - Keep `use` imports at the top of the file. Do not place `use` inside functions, methods, or blocks.
 - Prefer short readable names in the body over repeated deep qualified paths.
@@ -148,6 +149,7 @@ Reject a design before coding when it:
 - Avoid clever or overly long names that encode implementation history instead of meaning.
 
 ### Comments and documentation
+
 - Keep in-code comments short and local.
 - Do not add large comment blocks at the top of files.
 - Do not restate the obvious in comments.
@@ -249,6 +251,7 @@ Split proposal:
 Prefer split execution when write boundaries are explicit and independent.
 
 Every split task must define:
+
 - owned paths per agent
 - forbidden paths per agent
 - required reads per agent

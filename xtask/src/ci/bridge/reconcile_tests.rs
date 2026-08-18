@@ -474,22 +474,43 @@ fn a_direct_github_update_opens_an_incident_without_a_push() {
     );
 }
 
-/// Trust says who may change the CI configuration. It does not say which
-/// configuration the verification runs, and conflating the two took the
-/// normalization away from every trusted branch at once: a June branch went to
-/// the host with its own `xtask`, which could not parse the host profile, and
-/// its own pipeline, which still named a job the default branch had dropped.
-/// Both died before a single test.
+/// A conflict is a verdict, and it has to reach the author as one. Left as an
+/// error it would only retry each minute forever, with the pull request sitting
+/// at "verification running" and nothing to act on.
 #[test]
-fn only_a_pull_request_that_changes_the_controls_is_judged_with_its_own() {
-    assert!(
-        judged_with_own_controls(true, true),
-        "a trusted author's control-path change has nowhere else to be tested"
+fn an_unmergeable_head_is_failed_and_rejected_with_the_reason() {
+    let directory = tempfile::tempdir().unwrap();
+    let ledger = Ledger::new(directory.path()).unwrap();
+    let entry = ledger.reserve("head", "base").unwrap();
+    let actions = RefCell::new(Vec::new());
+
+    reject_unmergeable(
+        118,
+        "head",
+        "base",
+        &entry,
+        |sha, state, detail| {
+            assert!(detail.contains("does not merge"), "{detail}");
+            assert!(detail.contains("Merge the default branch"), "{detail}");
+            actions
+                .borrow_mut()
+                .push(VerificationAction::Report(sha.into(), state.into()));
+            Ok(())
+        },
+        |attempt, _| {
+            actions
+                .borrow_mut()
+                .push(VerificationAction::Reject(attempt));
+            Ok(())
+        },
+    )
+    .unwrap();
+
+    assert_eq!(
+        *actions.borrow(),
+        [
+            VerificationAction::Report("head".into(), "failure".into()),
+            VerificationAction::Reject(entry.attempt),
+        ]
     );
-    assert!(
-        !judged_with_own_controls(true, false),
-        "a trusted author's stale branch needs the base's controls like any other"
-    );
-    assert!(!judged_with_own_controls(false, true));
-    assert!(!judged_with_own_controls(false, false));
 }

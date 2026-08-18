@@ -164,7 +164,7 @@ async fn run_mixed(file_count: usize, hls_count: usize) {
     browser,
     serial,
     timeout(Duration::from_secs(30)),
-    env(KITHARA_HANG_TIMEOUT_SECS = "2")
+    hang_timeout_secs(2)
 )]
 #[case::two_file_two_hls(2, 2)]
 #[case::four_file_four_hls(4, 4)]

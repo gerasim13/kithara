@@ -89,6 +89,7 @@ impl Gallery {
                 &resolver,
                 &endpoints,
                 builtin::skin_doc(),
+                builtin::text_doc(),
                 &UiConfig::default(),
             )
             .unwrap_or_else(|error| {
@@ -104,6 +105,7 @@ impl Gallery {
                 &resolver,
                 &endpoints,
                 builtin::skin_doc(),
+                builtin::text_doc(),
                 &UiConfig::default(),
             )
             .unwrap_or_else(|error| {
@@ -295,6 +297,7 @@ fn compiled(
         resolver,
         endpoints,
         builtin::skin_doc(),
+        builtin::text_doc(),
         &UiConfig::default(),
     )
     .unwrap_or_else(|error| panic!("embedded gallery document {entry} must compile: {error}"))
@@ -343,6 +346,7 @@ mod tests {
                 &resolver,
                 &endpoints,
                 builtin::skin_doc(),
+                builtin::text_doc(),
                 &UiConfig::default(),
             )
             .unwrap();
@@ -392,6 +396,7 @@ mod tests {
                 &resolver,
                 &endpoints,
                 builtin::skin_doc(),
+                builtin::text_doc(),
                 &UiConfig::default(),
             )
             .unwrap_or_else(|error| panic!("{} must compile: {error}", tab.entry()));
@@ -417,6 +422,7 @@ mod tests {
                 &resolver,
                 &endpoints,
                 builtin::skin_doc(),
+                builtin::text_doc(),
                 &UiConfig::default(),
             )
             .unwrap_or_else(|error| panic!("{entry} must compile: {error}"));
@@ -673,6 +679,7 @@ mod tests {
             &resolver(),
             &mock::registry(),
             builtin::skin_doc(),
+            builtin::text_doc(),
             &UiConfig::default(),
         )
         .unwrap_or_else(|error| panic!("the {tab:?} tab must compile: {error}"));
@@ -792,6 +799,7 @@ mod tests {
             &resolver(),
             &mock::registry(),
             builtin::skin_doc(),
+            builtin::text_doc(),
             &UiConfig::default(),
         )
         .unwrap();
@@ -847,6 +855,7 @@ mod tests {
             &resolver,
             &endpoints,
             builtin::skin_doc(),
+            builtin::text_doc(),
             &UiConfig::default(),
         )
         .unwrap();
@@ -870,6 +879,7 @@ mod tests {
             &resolver,
             &endpoints,
             builtin::skin_doc(),
+            builtin::text_doc(),
             &UiConfig::default(),
         )
         .unwrap();
@@ -969,6 +979,7 @@ mod tests {
             &resolver(),
             &mock::registry(),
             builtin::skin_doc(),
+            builtin::text_doc(),
             &UiConfig::default(),
         )
         .unwrap_or_else(|error| panic!("the {tab:?} page must compile: {error}"))
@@ -1421,6 +1432,7 @@ mod tests {
             &resolver,
             &endpoints,
             builtin::skin_doc(),
+            builtin::text_doc(),
             &UiConfig::default(),
         )
         .unwrap();
@@ -1448,6 +1460,7 @@ mod tests {
             &resolver,
             &endpoints,
             builtin::skin_doc(),
+            builtin::text_doc(),
             &UiConfig::default(),
         )
         .unwrap();
@@ -1466,6 +1479,7 @@ mod tests {
             &resolver,
             &endpoints,
             builtin::skin_doc(),
+            builtin::text_doc(),
             &UiConfig::default(),
         )
         .unwrap();

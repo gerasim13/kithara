@@ -2,8 +2,8 @@ use crate::{
     atoms::design::quad::{center_y, quad},
     draw::{DrawListBuilder, Pt, Rect, Rgba, Transform},
     render::Skin,
+    shaping::TextContext,
     skin::{FontFamily, SelectSkin, TextRoleSkin},
-    text::TextContext,
 };
 
 /// The chevron a select shows on its closing edge.

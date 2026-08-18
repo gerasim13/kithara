@@ -3,8 +3,8 @@ use crate::{
     draw::{DrawListBuilder, Pt, Rect, Rgba, Transform},
     module::ChipStyle,
     render::Skin,
+    shaping::TextContext,
     skin::{ColorRole, FontFamily, FontSkin, FrameSkin, TextRoleSkin},
-    text::TextContext,
 };
 
 pub(crate) struct Chip {
@@ -126,7 +126,7 @@ mod tests {
     use crate::{
         builtin,
         draw::{DrawCmd, DrawListBuilder, Geom, Paint, Pen, Rect},
-        text::TextContext,
+        shaping::TextContext,
     };
 
     #[kithara::test]

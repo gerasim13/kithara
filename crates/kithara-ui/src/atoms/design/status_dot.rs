@@ -3,8 +3,8 @@ use crate::{
     draw::{DrawListBuilder, Pt, Rect, Rgba, Transform},
     module::Tone,
     render::Skin,
+    shaping::TextContext,
     skin::{FontFamily, StatusDotSkin, TextRoleSkin},
-    text::TextContext,
 };
 
 /// A coloured dot with a word beside it.

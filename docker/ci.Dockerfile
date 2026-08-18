@@ -26,9 +26,14 @@ ARG GITLEAKS_AMD64_SHA256
 ARG GITLEAKS_ARM64_SHA256
 ARG GITLEAKS_VERSION
 ARG JUST_VERSION
+ARG LOCKBUD_REV
+ARG LOCKBUD_TOOLCHAIN
 ARG MD_FORMATTER_VERSION
 ARG MSRV_TOOLCHAIN
 ARG NIGHTLY_TOOLCHAIN
+ARG RTSAN_AMD64_SHA256
+ARG RTSAN_ARM64_SHA256
+ARG RTSAN_VERSION
 ARG SCCACHE_VERSION
 ARG SIMILARITY_RS_VERSION
 ARG TAPLO_CLI_VERSION
@@ -39,6 +44,7 @@ ARG WASM_BINDGEN_CLI_VERSION
 ARG WASM_PACK_VERSION
 ARG WASM_SLIM_VERSION
 
+ENV KITHARA_LOCKBUD_TOOLCHAIN=${LOCKBUD_TOOLCHAIN}
 ENV KITHARA_MSRV_TOOLCHAIN=${MSRV_TOOLCHAIN}
 ENV KITHARA_NIGHTLY_TOOLCHAIN=${NIGHTLY_TOOLCHAIN}
 ENV WASM_SLIM_TOOLCHAIN=${NIGHTLY_TOOLCHAIN}
@@ -53,7 +59,7 @@ ENV WASM_SLIM_TOOLCHAIN=${NIGHTLY_TOOLCHAIN}
 RUN apt-get update && apt-get install -y --no-install-recommends \
     -o Acquire::Retries=5 -o Acquire::http::Timeout=600 \
     ca-certificates chromium chromium-driver curl ffmpeg firefox-esr git \
-    clang libclang-dev lld pkg-config \
+    clang libclang-dev lld llvm pkg-config \
     bubblewrap socat ripgrep nodejs npm \
     mesa-vulkan-drivers \
     libasound2-dev libdbus-1-dev libssl-dev \
@@ -103,17 +109,50 @@ RUN case "$(dpkg --print-architecture)" in \
  && tar -xzf /tmp/gitleaks.tar.gz -C /usr/local/bin gitleaks \
  && rm /tmp/gitleaks.tar.gz
 
+# The stable RTSan lane links this runtime through `rtsan-standalone`, whose
+# build script downloads it itself when nothing stages it — a build script that
+# reaches the network is a lane that fails on the first mirror hiccup. The
+# linker asks for the library by the name upstream ships it under, so the file
+# keeps that name and only the directory is ours to name.
+RUN case "$(dpkg --print-architecture)" in \
+      amd64) slice=x86_64; sum="${RTSAN_AMD64_SHA256}" ;; \
+      arm64) slice=aarch64; sum="${RTSAN_ARM64_SHA256}" ;; \
+      *) echo "unsupported architecture: $(dpkg --print-architecture)" >&2; exit 1 ;; \
+    esac \
+ && library="libclang_rt.rtsan_linux_${slice}.a" \
+ && mkdir -p /opt/rtsan \
+ && curl -fsSL \
+      -o "/opt/rtsan/${library}" \
+      "https://github.com/realtime-sanitizer/rtsan-libs/releases/download/v${RTSAN_VERSION}/${library}" \
+ && echo "${sum}  /opt/rtsan/${library}" | sha256sum -c -
+
+ENV KITHARA_RTSAN_LIB_DIR=/opt/rtsan
+
 # `rust-src` on the default toolchain too: the workspace builds the standard
 # library from source for some targets, and `cargo-semver-checks` inherits that
 # when it runs rustdoc — without the sources every crate it documents fails
 # before it can compare a single signature.
-RUN rustup component add clippy llvm-tools-preview rust-src rustfmt \
+#
+# `rust-analyzer` is not for editors here: `cargo workspace-unused-pub` builds
+# its SCIP index by shelling out to it. rustup ships a proxy binary whether or
+# not the component is installed, so without this the health stage does not
+# report a missing tool — it reports `rust-analyzer scip … exited with code 1`.
+#
+# The lockbud toolchain is a fourth one and costs 1.3 GB, most of it `rustc-dev`.
+# A driver cannot borrow another toolchain's compiler internals, so a deadlock
+# verdict is what that gigabyte buys.
+RUN rustup component add clippy llvm-tools-preview rust-analyzer rust-src rustfmt \
  && rustup toolchain install "${NIGHTLY_TOOLCHAIN}" \
       --profile minimal \
       --component miri \
       --component rust-src \
       --component rustfmt \
  && rustup toolchain install "${MSRV_TOOLCHAIN}" --profile minimal \
+ && rustup toolchain install "${LOCKBUD_TOOLCHAIN}" \
+      --profile minimal \
+      --component llvm-tools-preview \
+      --component rust-src \
+      --component rustc-dev \
  && rustup target add wasm32-unknown-unknown \
  && rustup target add wasm32-unknown-unknown --toolchain "${NIGHTLY_TOOLCHAIN}" \
  && host="$(rustc -vV | sed -n 's/^host: //p')" \
@@ -150,6 +189,17 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
  && cargo install --locked --version "${WASM_BINDGEN_CLI_VERSION}" wasm-bindgen-cli \
  && cargo install --locked --version "${WASM_PACK_VERSION}" wasm-pack \
  && cargo install --locked --version "${WASM_SLIM_VERSION}" wasm-slim
+
+# lockbud is a rustc driver, not a published crate, so it is installed from git
+# at a pinned commit and built by the same nightly it links `rustc_driver`
+# against — the one `KITHARA_LOCKBUD_TOOLCHAIN` names. The repository holds test
+# fixtures that are packages too, which is why the package is named explicitly.
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    --mount=type=cache,target=/tmp/cargo-install-target \
+    CARGO_TARGET_DIR=/tmp/cargo-install-target \
+    cargo "+${LOCKBUD_TOOLCHAIN}" install --locked \
+      --git https://github.com/BurtonQin/lockbud --rev "${LOCKBUD_REV}" lockbud
 
 # The account a job runs as. It is declared here rather than in the image that
 # starts the runner because images built on top of this one have state to hand

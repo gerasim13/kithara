@@ -30,7 +30,7 @@ use crate::{
         ReadValue, Skin, TableRow, TreeRow, document::Ctx, model::derived, picker_selected_index,
         text_input_layout,
     },
-    text::TextContext,
+    shaping::TextContext,
 };
 /// What a control plan is resolved against: the compiled document that names
 /// things, the model that answers a reading, and the skin that sizes it.

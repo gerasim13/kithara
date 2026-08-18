@@ -36,6 +36,7 @@ pub(super) enum ReportKind {
     CargoCrapDelta { threshold: f64 },
     Json,
     JsonStream,
+    Markdown,
     RustqualJson,
 }
 
@@ -55,21 +56,9 @@ pub(super) fn build(
 
 fn cargo_crap(_workspace_root: &Path, options: &AdapterOptions<'_>) -> Result<ToolSpec> {
     let lcov = required_file(options.lcov, "cargo-crap requires --lcov <FILE>")?;
-    let mut args = vec![
-        "--workspace".to_owned(),
-        "--lcov".to_owned(),
-        path_arg(&lcov),
-        "--format".to_owned(),
-        "json".to_owned(),
-        "--sort".to_owned(),
-        "file".to_owned(),
-        "--missing".to_owned(),
-        "pessimistic".to_owned(),
-        "--threshold".to_owned(),
-        CRAP_THRESHOLD.to_string(),
-        "--exclude".to_owned(),
-        "fuzz/**".to_owned(),
-    ];
+    let scoring = crap_scoring(&lcov);
+    let mut args = scoring.clone();
+    args.extend(strings(&["--format", "json", "--sort", "file"]));
     let (finding_exit_codes, report): (&'static [i32], ReportKind) =
         if let Some(baseline) = options.baseline {
             let baseline = canonical_file(baseline, "cargo-crap baseline")?;
@@ -85,18 +74,48 @@ fn cargo_crap(_workspace_root: &Path, options: &AdapterOptions<'_>) -> Result<To
         } else {
             (&[], ReportKind::Json)
         };
+    let mut readable = scoring;
+    readable.extend(strings(&["--format", "markdown"]));
     Ok(ToolSpec {
         program: Tool::CargoCrap.program().to_owned(),
         version_args: &["--version"],
-        invocations: vec![InvocationSpec {
-            name: "coverage-risk",
-            args,
-            artifact: "report.json",
-            finding_exit_codes,
-            report,
-        }],
+        invocations: vec![
+            InvocationSpec {
+                name: "coverage-risk",
+                args,
+                artifact: "report.json",
+                finding_exit_codes,
+                report,
+            },
+            // Same scoring, rendered for a reader instead of for the gate: the
+            // JSON report is the one `validate_report` judges, and a metric
+            // nobody can read is the reason this run went unpublished for so
+            // long. Deltas stay out of it — a baseline only narrows what the
+            // gate accepts, and the report exists to state the whole picture.
+            InvocationSpec {
+                name: "coverage-risk-report",
+                args: readable,
+                artifact: "report.md",
+                finding_exit_codes: &[],
+                report: ReportKind::Markdown,
+            },
+        ],
         requires_clean_clone: false,
     })
+}
+
+fn crap_scoring(lcov: &Path) -> Vec<String> {
+    vec![
+        "--workspace".to_owned(),
+        "--lcov".to_owned(),
+        path_arg(lcov),
+        "--missing".to_owned(),
+        "pessimistic".to_owned(),
+        "--threshold".to_owned(),
+        CRAP_THRESHOLD.to_string(),
+        "--exclude".to_owned(),
+        "fuzz/**".to_owned(),
+    ]
 }
 
 fn cha() -> ToolSpec {
@@ -309,6 +328,82 @@ mod tests {
                 .args
                 .contains(&"--fail-regression".to_owned())
         );
+    }
+
+    #[test]
+    fn cargo_crap_renders_a_report_a_reader_can_open() {
+        let temp = tempdir().expect("tempdir");
+        let lcov = temp.path().join("lcov.info");
+        fs::write(&lcov, "TN:\n").expect("lcov");
+
+        let spec = build(
+            Tool::CargoCrap,
+            temp.path(),
+            &AdapterOptions {
+                lcov: Some(&lcov),
+                baseline: None,
+            },
+        )
+        .expect("absolute spec");
+
+        let readable = spec
+            .invocations
+            .iter()
+            .find(|invocation| invocation.artifact == "report.md")
+            .expect("a coverage-risk run must publish a readable report");
+        assert!(readable.args.contains(&"markdown".to_owned()));
+    }
+
+    #[test]
+    fn cargo_crap_scores_the_readable_report_at_the_gate_threshold() {
+        let temp = tempdir().expect("tempdir");
+        let lcov = temp.path().join("lcov.info");
+        let baseline = temp.path().join("baseline.json");
+        fs::write(&lcov, "TN:\n").expect("lcov");
+        fs::write(&baseline, "{}").expect("baseline");
+
+        let spec = build(
+            Tool::CargoCrap,
+            temp.path(),
+            &AdapterOptions {
+                lcov: Some(&lcov),
+                baseline: Some(&baseline),
+            },
+        )
+        .expect("delta spec");
+
+        let threshold = CRAP_THRESHOLD.to_string();
+        assert!(
+            spec.invocations
+                .iter()
+                .all(|invocation| invocation.args.contains(&threshold))
+        );
+    }
+
+    #[test]
+    fn cargo_crap_readable_report_never_gates_on_its_own() {
+        let temp = tempdir().expect("tempdir");
+        let lcov = temp.path().join("lcov.info");
+        let baseline = temp.path().join("baseline.json");
+        fs::write(&lcov, "TN:\n").expect("lcov");
+        fs::write(&baseline, "{}").expect("baseline");
+
+        let spec = build(
+            Tool::CargoCrap,
+            temp.path(),
+            &AdapterOptions {
+                lcov: Some(&lcov),
+                baseline: Some(&baseline),
+            },
+        )
+        .expect("delta spec");
+
+        let readable = spec
+            .invocations
+            .iter()
+            .find(|invocation| invocation.artifact == "report.md")
+            .expect("readable report");
+        assert!(readable.finding_exit_codes.is_empty());
     }
 
     #[test]

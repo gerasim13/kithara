@@ -42,6 +42,13 @@ pub fn record_test_hang(label: &str, _diagnostic: &str) {
     kithara_platform::flash::log_hang_dump(label);
 }
 
+/// No dump machinery compiled in: unexpected panics keep the default hook.
+pub fn install_panic_dump() {}
+
+/// See [`install_panic_dump`]: nothing records, so nothing to suppress.
+#[doc(hidden)]
+pub fn suppress_expected_panic_dumps() {}
+
 impl<C: HangDump> HangDetector<C> {
     #[inline(always)]
     #[must_use]
@@ -111,4 +118,15 @@ pub fn default_timeout() -> Duration {
     // xtask-lint-ignore: retry_fallback
     const FALLBACK_SECS: u64 = 10;
     Duration::from_secs(FALLBACK_SECS)
+}
+
+/// No watchdog compiled in, so there is no budget to shorten: the guard exists
+/// only so a test that asks for a tighter one still compiles.
+#[derive(Debug)]
+pub struct TimeoutOverride;
+
+/// See [`override_timeout`](super::override_timeout) in the watchdog build.
+#[inline(always)]
+pub fn override_timeout(_timeout: Duration) -> TimeoutOverride {
+    TimeoutOverride
 }
