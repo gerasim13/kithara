@@ -664,11 +664,11 @@ fn render_per_test_comparison(out: &mut String, lanes: &[(String, BTreeMap<TestI
     for (name, _) in lanes {
         let _ = write!(out, " {} |", markdown_cell(name));
     }
-    out.push_str("\n|---|");
+    out.push_str(" holds in |\n|---|");
     for _ in lanes {
         out.push_str("---:|");
     }
-    out.push('\n');
+    out.push_str("---|\n");
     for (_, (suite, name), cells) in ranked.iter().take(MAX_FAILURE_ROWS) {
         let _ = write!(out, "| `{}` |", markdown_cell(&format!("{suite} {name}")));
         for cell in cells {
@@ -685,7 +685,7 @@ fn render_per_test_comparison(out: &mut String, lanes: &[(String, BTreeMap<TestI
                 None => out.push_str(" not selected |"),
             }
         }
-        out.push('\n');
+        let _ = writeln!(out, " {} |", markdown_cell(&lane_span(lanes, cells)));
     }
     if ranked.len() > MAX_FAILURE_ROWS {
         let _ = writeln!(
@@ -693,6 +693,34 @@ fn render_per_test_comparison(out: &mut String, lanes: &[(String, BTreeMap<TestI
             "\nShowing the first {MAX_FAILURE_ROWS} of {} tests that failed somewhere.",
             ranked.len()
         );
+    }
+}
+
+/// Which lanes a test's redness survives in, as one phrase.
+///
+/// The rate columns already carry this, but reading it off them means holding
+/// three numbers at once and knowing which lane means what. Campaign
+/// 32075786002 cost an afternoon to that: `packaged_abr_switch` is 2/50 on
+/// `reproduction-flash-on` and 0/50 on both of the other lanes, so the virtual
+/// clock is the whole defect and no product path is implicated — but the table
+/// said that only to a reader who compared the columns by hand.
+fn lane_span(lanes: &[(String, BTreeMap<TestId, LaneRate>)], cells: &[Option<LaneRate>]) -> String {
+    let selected = cells.iter().flatten().count();
+    let red = cells
+        .iter()
+        .enumerate()
+        .filter(|(_, cell)| cell.is_some_and(|rate| rate.failed > 0))
+        .map(|(index, _)| index)
+        .collect::<Vec<_>>();
+
+    match (selected, red.as_slice()) {
+        (0 | 1, _) => "only one lane ran it".to_string(),
+        (selected, red) if red.len() == selected => "every lane".to_string(),
+        (_, [index]) => lanes.get(*index).map_or_else(
+            || "one lane".to_string(),
+            |(name, _)| format!("only {name}"),
+        ),
+        (selected, red) => format!("{} of {selected} lanes", red.len()),
     }
 }
 
@@ -1930,6 +1958,40 @@ mod tests {
         let table = render_lane_comparison(&[lane("on", &[("solo", 1, 10)])], &[], &[], 2);
 
         assert!(table.contains("needs two verified lanes"), "{table}");
+    }
+
+    /// A test that only one lane can redden is a defect of that lane's
+    /// configuration, not of the code every lane shares.
+    #[test]
+    fn a_test_red_in_one_lane_names_that_lane() {
+        let table = render_lane_comparison(
+            &[
+                lane("flash-on", &[("clockbound", 2, 50)]),
+                lane("flash-off", &[("clockbound", 0, 50)]),
+            ],
+            &[],
+            &[],
+            2,
+        );
+
+        assert!(table.contains("only flash-on"), "{table}");
+    }
+
+    /// Redness every lane reproduces cannot be blamed on any one lane's
+    /// configuration, and the table must say so rather than name a lane.
+    #[test]
+    fn a_test_red_in_every_lane_names_no_lane() {
+        let table = render_lane_comparison(
+            &[
+                lane("flash-on", &[("everywhere", 2, 50)]),
+                lane("flash-off", &[("everywhere", 3, 50)]),
+            ],
+            &[],
+            &[],
+            2,
+        );
+
+        assert!(table.contains("every lane"), "{table}");
     }
 
     fn attempted(name: &str, failed: usize, attempts: usize) -> (String, LaneRate) {
