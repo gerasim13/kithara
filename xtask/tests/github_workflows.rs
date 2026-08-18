@@ -445,6 +445,43 @@ fn concurrency_prefixes(owner: &Mapping) -> BTreeSet<String> {
     }
 }
 
+#[test]
+fn a_queue_is_never_declared_beside_a_cancellation_that_can_fire() {
+    let mut conflicts = Vec::new();
+    for name in workflow_file_names() {
+        let workflow = github_workflow(&name);
+        let mut owners = vec![("".to_owned(), workflow.as_mapping().cloned())];
+        for (job_name, job) in workflow_jobs(&workflow) {
+            let job_name = job_name.as_str().expect("workflow job name is a string");
+            owners.push((format!(" job `{job_name}`"), job.as_mapping().cloned()));
+        }
+        for (where_, owner) in owners {
+            let Some(Value::Mapping(concurrency)) =
+                owner.as_ref().and_then(|owner| owner.get("concurrency"))
+            else {
+                continue;
+            };
+            if concurrency.get("queue").and_then(Value::as_str) != Some("max") {
+                continue;
+            }
+            // GitHub rejects `queue: max` beside `cancel-in-progress: true`, and
+            // an expression that reads false on a fork still reads true upstream.
+            if concurrency
+                .get("cancel-in-progress")
+                .and_then(Value::as_bool)
+                != Some(false)
+            {
+                conflicts.push(format!("{name}{where_}"));
+            }
+        }
+    }
+
+    assert!(
+        conflicts.is_empty(),
+        "`queue: max` needs `cancel-in-progress: false`, not an expression that can read true: {conflicts:?}"
+    );
+}
+
 // What a group expression can evaluate to, down to the part no branch varies:
 // `fork-linux-{0}` and `fork-linux-${{ github.repository }}` name one queue.
 fn group_prefix(group: &str) -> String {

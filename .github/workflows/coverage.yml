@@ -10,10 +10,11 @@ on:
 
 # An instrumented run costs the same pool the stress campaign measures, so on a
 # fork it waits for the campaign rather than taking cores from it. See ci.yml.
+# It keeps the default one-pending queue: `queue` takes no expression, and `max`
+# may not be declared beside the cancellation production still wants.
 concurrency:
   group: ${{ github.event.repository.fork && format('fork-linux-{0}', github.repository) || format('coverage-{0}', github.ref) }}
   cancel-in-progress: ${{ !github.event.repository.fork }}
-  queue: max
 
 jobs:
   coverage:
