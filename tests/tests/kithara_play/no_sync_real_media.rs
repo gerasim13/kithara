@@ -71,10 +71,16 @@ impl Media {
 struct Case {
     label: &'static str,
     host_rate: u32,
+    /// Channels the case's fixtures decode to. Decoders emit the source's
+    /// channel count; the engine mixes to `CHANNELS` planes regardless.
+    source_channels: u16,
     media: &'static [Media],
 }
 
 const MP3_ONE: &[Media] = &[Media::Mp3("test.mp3")];
+/// A mono source. Channel count is the only parameter that differs from
+/// `MP3_ONE`: `mono.mp3` is the same content downmixed to one channel.
+const MP3_MONO_ONE: &[Media] = &[Media::Mp3("mono.mp3")];
 const MP3_TWO: &[Media] = &[Media::Mp3("test.mp3"), Media::Mp3("track.mp3")];
 const MP3_FOUR: &[Media] = &[
     Media::Mp3("test.mp3"),
@@ -95,31 +101,43 @@ const CASES: &[Case] = &[
     Case {
         label: "no-sync-mp3-one-44100",
         host_rate: 44_100,
+        source_channels: CHANNELS,
         media: MP3_ONE,
     },
     Case {
         label: "no-sync-mp3-distinct-two-48000",
         host_rate: 48_000,
+        source_channels: CHANNELS,
         media: MP3_TWO,
     },
     Case {
         label: "no-sync-mp3-alternating-four-44100",
         host_rate: 44_100,
+        source_channels: CHANNELS,
         media: MP3_FOUR,
+    },
+    Case {
+        label: "no-sync-mp3-mono-one-48000",
+        host_rate: 48_000,
+        source_channels: 1,
+        media: MP3_MONO_ONE,
     },
     Case {
         label: "no-sync-hls-one-48000",
         host_rate: 48_000,
+        source_channels: CHANNELS,
         media: HLS_ONE,
     },
     Case {
         label: "no-sync-hls-mp3-distinct-two-44100",
         host_rate: 44_100,
+        source_channels: CHANNELS,
         media: HLS_MP3_TWO,
     },
     Case {
         label: "no-sync-hls-mp3-alternating-four-48000",
         host_rate: 48_000,
+        source_channels: CHANNELS,
         media: HLS_MP3_FOUR,
     },
 ];

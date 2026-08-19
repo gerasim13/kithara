@@ -187,12 +187,16 @@ impl ChunkCursor {
         recv: RecvCtx<'_>,
         output: &'a mut [&'a mut [f32]],
     ) -> Result<CursorRead, DecodeError> {
-        let channels = output.len();
-        let Some(num_channels) = NonZeroUsize::new(channels) else {
+        let Some(out_channels) = NonZeroUsize::new(output.len()) else {
             return Ok(pending(playhead, PendingReason::Buffering));
         };
+        // An interleaved source frame carries `spec.channels` samples; the plane
+        // count belongs to the device, not to the stream. Sizing, framing, and
+        // deinterleaving all follow the stream so a mono source keeps one
+        // sample per frame instead of being read as interleaved stereo.
+        let src_channels = source_channels(self.spec);
         let frames = output[0].len();
-        let total_samples = frames * channels;
+        let total_samples = frames * src_channels.get();
         let Some(mut interleaved) = self.interleaved.take() else {
             return Err(DecodeError::ScratchDetached);
         };
@@ -203,9 +207,10 @@ impl ChunkCursor {
         let result = match result {
             Ok(mut read) => {
                 if let ReadOutcome::Frames { count, position } = read.outcome {
-                    let actual_frames = count.get() / channels;
+                    let actual_frames = count.get() / src_channels.get();
                     debug_assert!(actual_frames <= frames);
-                    deinterleave_variable(&interleaved[..], num_channels, output, 0..actual_frames);
+                    deinterleave_variable(&interleaved[..], src_channels, output, 0..actual_frames);
+                    spread_leading_channel(src_channels, out_channels, output, actual_frames);
                     read.outcome = NonZeroUsize::new(actual_frames).map_or(
                         ReadOutcome::Pending {
                             position,
@@ -226,6 +231,30 @@ impl ChunkCursor {
 struct CopyOutcome {
     finished: bool,
     samples: usize,
+}
+
+/// Samples one interleaved source frame carries. Mirrors [`ChunkCursor::copy_into`],
+/// which frames the same buffer by the chunk's own channel count.
+fn source_channels(spec: PcmSpec) -> NonZeroUsize {
+    NonZeroUsize::new(usize::from(spec.channels)).unwrap_or(NonZeroUsize::MIN)
+}
+
+/// Copy the leading source channel into the output planes the stream leaves
+/// untouched, so a mono stream reaches every plane of a stereo device.
+fn spread_leading_channel(
+    src_channels: NonZeroUsize,
+    out_channels: NonZeroUsize,
+    output: &mut [&mut [f32]],
+    frames: usize,
+) {
+    if src_channels >= out_channels {
+        return;
+    }
+    let (filled, unfilled) = output.split_at_mut(src_channels.get());
+    let leading = &filled[0][..frames];
+    for plane in unfilled {
+        plane[..frames].copy_from_slice(leading);
+    }
 }
 
 fn frames_to_samples(frames: u64, channels: u64) -> Result<usize, DecodeError> {
@@ -372,6 +401,114 @@ mod tests {
         assert!(matches!(read.outcome, ReadOutcome::Pending { .. }));
         assert!(ring.current_chunk.is_some());
         assert!(trash_rx.try_pop().is_none());
+    }
+
+    /// Frames a mono source must fill in one planar read, and the source
+    /// frames it may consume doing so. A mono chunk carries one sample per
+    /// frame, so filling `MONO_OUTPUT_FRAMES` output frames must consume
+    /// exactly that many source frames.
+    const MONO_OUTPUT_FRAMES: usize = 4;
+
+    #[kithara::test]
+    fn mono_planar_read_consumes_one_source_frame_per_output_frame() {
+        let (mut cursor, mut ring, mut events, playhead) = mono_ramp_cursor();
+        let mut left = vec![0.0; MONO_OUTPUT_FRAMES];
+        let mut right = vec![0.0; MONO_OUTPUT_FRAMES];
+        let mut planar: [&mut [f32]; 2] = [&mut left, &mut right];
+
+        let read = cursor
+            .read_planar(
+                &mut ring,
+                &mut events,
+                &playhead,
+                RecvCtx {
+                    cancel: None,
+                    worker: None,
+                    abr: None,
+                },
+                &mut planar,
+            )
+            .expect("mono planar read succeeds");
+
+        let ReadOutcome::Frames { count, .. } = read.outcome else {
+            panic!("expected frames from mono chunk");
+        };
+        assert_eq!(count.get(), MONO_OUTPUT_FRAMES);
+        assert_eq!(
+            cursor.current_chunk_consumed_frames, MONO_OUTPUT_FRAMES as u64,
+            "a mono source read as interleaved stereo consumes two source frames per output frame, playing back at double rate"
+        );
+    }
+
+    #[kithara::test]
+    fn mono_planar_read_carries_each_sample_to_both_channels() {
+        let (mut cursor, mut ring, mut events, playhead) = mono_ramp_cursor();
+        let mut left = vec![0.0; MONO_OUTPUT_FRAMES];
+        let mut right = vec![0.0; MONO_OUTPUT_FRAMES];
+        let mut planar: [&mut [f32]; 2] = [&mut left, &mut right];
+
+        cursor
+            .read_planar(
+                &mut ring,
+                &mut events,
+                &playhead,
+                RecvCtx {
+                    cancel: None,
+                    worker: None,
+                    abr: None,
+                },
+                &mut planar,
+            )
+            .expect("mono planar read succeeds");
+
+        let want: Vec<f32> = (0..MONO_OUTPUT_FRAMES).map(|i| i as f32).collect();
+        assert_eq!(
+            left, want,
+            "mono frames must reach the left channel in source order"
+        );
+        assert_eq!(
+            right, want,
+            "mono frames must reach the right channel in source order"
+        );
+    }
+
+    /// A cursor over one mono chunk whose samples ramp `0.0, 1.0, ...` so a
+    /// misread of the interleave shows up as a gap in the recovered order.
+    fn mono_ramp_cursor() -> (ChunkCursor, RingConsumer, AudioEvents, PlayheadState) {
+        let spec = PcmSpec::new(1, NonZeroU32::new(48_000).expect("test rate"));
+        let frames = u32::try_from(MONO_OUTPUT_FRAMES * 2).expect("test frame count fits u32");
+        let samples: Vec<f32> = (0..frames).map(|i| i as f32).collect();
+        let chunk = PcmChunk::new(
+            PcmMeta {
+                spec,
+                timestamp: Duration::ZERO,
+                end_timestamp: Duration::from_millis(1),
+                frames,
+                ..Default::default()
+            },
+            PcmPool::default().attach(samples),
+        );
+        let (mut data_tx, data_rx) = connect::<Fetch<PcmChunk>>(4, None);
+        let (trash_tx, _trash_rx) = connect::<PcmChunk>(8, None);
+        let mut ring = RingConsumer::new(RingParts {
+            trash_tx,
+            pcm_rx: data_rx,
+            reader_wake: Arc::new(ThreadWake::default()),
+            epoch: Arc::new(AtomicU64::new(0)),
+            block_on_underrun: false,
+            consumer_wake_mode: ConsumerWakeMode::RealtimeDeferred,
+        });
+        ring.preloaded = true;
+        data_tx
+            .try_push(Fetch::data(chunk, 0))
+            .expect("chunk reaches test ring");
+        let pool = PcmPool::default();
+        (
+            ChunkCursor::new(&pool, spec),
+            ring,
+            AudioEvents::test(),
+            PlayheadState::new(),
+        )
     }
 
     fn timed_chunk(spec: PcmSpec, frames: u32, start: Duration, end: Duration) -> PcmChunk {

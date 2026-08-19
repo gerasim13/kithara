@@ -442,6 +442,18 @@ is a typed config decision, never a runtime fallback chain. Output capacity is a
 correctness invariant, not a knob: the backend reports `output_frames_for_input`
 in the ceil frame domain and the decoder adapter sizes buffers from that.
 
+## Channel mapping
+
+Channel count is stream-owned, never inferred from the destination. Decoders
+emit the source's channels — a mono file decodes to mono PCM — while the
+playback plane count is the device's, fixed at two by `PlayerResource`. The
+planar read in `ChunkCursor::read_planar` is the single boundary that holds both
+numbers, so it frames its interleaved scratch by `spec.channels` and then copies
+the leading channel into the planes the stream does not fill. Framing a mono
+source by the plane count instead recovers one frame per two source frames and
+splits alternate samples across the sides, which plays back an octave up at
+twice the rate before any rate change is asked for (LABA-418).
+
 ## Time-stretch (speed and key-lock)
 
 Playback speed lives in the source-domain `TimeStretchProcessor`; the resampler
