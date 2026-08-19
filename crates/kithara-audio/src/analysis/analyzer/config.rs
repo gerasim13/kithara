@@ -91,4 +91,17 @@ mod tests {
             "rubato"
         );
     }
+
+    #[cfg(feature = "beat-nn")]
+    #[test]
+    fn cache_tag_invalidates_pre_bpm_from_beats_results() {
+        let tag = BeatAnalysisConfig::<RubatoBackend>::default()
+            .cache_tag()
+            .expect("beat NN has a cache tag");
+
+        assert!(
+            tag.contains(":grid_bpm_from_beats_v1:"),
+            "grid semantics must participate in durable-cache identity"
+        );
+    }
 }

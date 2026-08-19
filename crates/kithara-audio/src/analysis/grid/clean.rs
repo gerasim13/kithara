@@ -31,20 +31,37 @@ fn pop_std(values: &[f64]) -> f64 {
     (values.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / n).sqrt()
 }
 
-/// Step 1: drop downbeats closer than `min_gap` to their predecessor
-/// (detector double-detections, e.g. halving errors).
-pub(super) fn filter_downbeats(db: Vec<f64>, min_gap: f64) -> Vec<f64> {
-    let Some(&first) = db.first() else {
-        return db;
+/// Drops detector marks closer than `min_gap` to the last retained mark.
+pub(super) fn filter_close(marks: Vec<f64>, min_gap: f64) -> Vec<f64> {
+    filter_close_preferring(marks, &[], min_gap)
+}
+
+/// Drops close marks while preserving a preferred mark in each collision.
+pub(super) fn filter_close_preferring(
+    marks: Vec<f64>,
+    preferred: &[f64],
+    min_gap: f64,
+) -> Vec<f64> {
+    let Some(&first) = marks.first() else {
+        return marks;
     };
     let mut kept = vec![first];
-    for &t in &db[1..] {
-        if let Some(&last) = kept.last()
-            && t - last < min_gap
+    for &mark in &marks[1..] {
+        if let Some(last) = kept.last_mut()
+            && mark - *last < min_gap
         {
+            let mark_is_preferred = preferred
+                .binary_search_by(|candidate| candidate.total_cmp(&mark))
+                .is_ok();
+            let last_is_preferred = preferred
+                .binary_search_by(|candidate| candidate.total_cmp(last))
+                .is_ok();
+            if mark_is_preferred && !last_is_preferred {
+                *last = mark;
+            }
             continue;
         }
-        kept.push(t);
+        kept.push(mark);
     }
     kept
 }
