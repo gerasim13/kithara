@@ -62,3 +62,17 @@ real-clock worker records evidence shortly before the outer nextest deadline;
 dropping the guard cancels and joins that worker. Explicit wall-clock, hard and
 sync timeout paths call the same artifact owner directly before panic or abort.
 The hook records evidence but never terminates the process.
+
+The hook answers only panics whose payload is a `&str` or a `String`. Every
+panic this workspace raises carries a message; a payload that is neither is a
+dependency unwinding for control flow rather than failing, which is how `loom`
+cancels each suspended generator at the end of every execution. Such an unwind
+is skipped before the one-shot suppression is consumed, so the suppression a
+caller armed still covers the panic it was armed for.
+
+The flight-recorder rings are `std::sync::Mutex`, not the platform one. They
+are process-global, outlive every `loom::model` execution and are read from the
+panic hook; a loom-modelled lock panics the moment anything touches it after
+the execution that created it ended, which under a panic hook aborts the
+process. Ring poisoning is ignored: a dump that drops its tail because another
+thread died mid-record loses exactly the evidence it was taken for.

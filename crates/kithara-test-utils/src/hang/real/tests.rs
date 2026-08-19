@@ -370,7 +370,10 @@ mod panic_dump_tests {
     use kithara_platform::{thread::sleep, time::Duration};
     use tracing_subscriber::layer::SubscriberExt;
 
-    use super::super::{HangDetector, install_panic_dump, suppress_expected_panic_dumps};
+    use super::super::{
+        HangDetector, install_panic_dump, panic_dump::suppress_next_panic_dump,
+        suppress_expected_panic_dumps,
+    };
     use crate::kithara;
 
     /// Panic dumps land where `resolve_dump_dir` sends them with no explicit
@@ -504,6 +507,41 @@ mod panic_dump_tests {
         assert!(
             panic_dumps_containing(&unique).is_empty(),
             "an expected panic must not be recorded as evidence"
+        );
+    }
+
+    /// A payload that is neither `&str` nor `String` is a dependency unwinding
+    /// for control flow rather than a failing test: `loom` cancels every
+    /// suspended generator that way at the end of each execution.
+    #[kithara::test]
+    fn control_flow_unwinds_are_not_recorded() {
+        install_panic_dump();
+
+        let line = line!() + 1;
+        let result = catch_unwind(AssertUnwindSafe(|| std::panic::panic_any(0xdead_beef_u64)));
+        assert!(result.is_err());
+
+        assert!(
+            panic_dumps_containing(&format!("tests.rs:{line}")).is_empty(),
+            "a control-flow unwind must not be recorded as evidence"
+        );
+    }
+
+    #[kithara::test]
+    fn control_flow_unwinds_leave_an_armed_suppression_alone() {
+        install_panic_dump();
+        suppress_next_panic_dump();
+
+        let result = catch_unwind(AssertUnwindSafe(|| std::panic::panic_any(0xdead_beef_u64)));
+        assert!(result.is_err());
+
+        let unique = format!("armed-suppression-probe-{}", std::process::id());
+        let result = catch_unwind(AssertUnwindSafe(|| panic!("{unique} expected")));
+        assert!(result.is_err());
+
+        assert!(
+            panic_dumps_containing(&unique).is_empty(),
+            "the unwind must not spend the suppression armed for the next panic"
         );
     }
 }

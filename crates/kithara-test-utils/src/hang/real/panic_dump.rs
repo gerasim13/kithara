@@ -44,6 +44,19 @@ pub fn install_panic_dump() {
 }
 
 fn record_panic(info: &PanicHookInfo<'_>) {
+    // Every panic this workspace raises carries a message. A payload that is
+    // neither form is a dependency unwinding for control flow rather than
+    // failing - `loom` cancels each suspended generator that way at the end of
+    // every execution. Answered before the one-shot suppression is consumed:
+    // such an unwind is not the panic a caller armed the suppression for.
+    let Some(message) = info
+        .payload()
+        .downcast_ref::<&str>()
+        .map(|message| (*message).to_owned())
+        .or_else(|| info.payload().downcast_ref::<String>().cloned())
+    else {
+        return;
+    };
     let suppressed = SUPPRESS_ALL.with(Cell::get) || SUPPRESS_NEXT.with(|cell| cell.replace(false));
     if suppressed {
         return;
@@ -52,12 +65,6 @@ fn record_panic(info: &PanicHookInfo<'_>) {
         || "<unknown>".to_owned(),
         |location| format!("{}:{}", location.file(), location.line()),
     );
-    let message = info
-        .payload()
-        .downcast_ref::<&str>()
-        .map(|message| (*message).to_owned())
-        .or_else(|| info.payload().downcast_ref::<String>().cloned())
-        .unwrap_or_else(|| "<non-string panic payload>".to_owned());
     let diagnostic = format!("panic at {location}: {message}");
     write_dump("panic", &NoContext, None, &diagnostic);
 }
