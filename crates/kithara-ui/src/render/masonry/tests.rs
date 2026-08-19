@@ -2194,22 +2194,27 @@ mod gesture_census {
     use kithara_test_utils::kithara;
 
     use super::{
-        super::controls::Retained, CENSUS_SOURCES, CONTROL_CENSUS, FixtureReads, fixture_registry,
-        fixture_ui_with_sources,
+        super::controls::Retained, CENSUS_SOURCES, CONTROL_CENSUS, FixtureReads, FixtureRegistry,
+        Handled, LATE_TABLE_ROWS, MasonryHost, MasonryRoot, MasonryState, PointerEvent,
+        ScrollDelta, fixture_registry, fixture_ui_with_sources, masonry_root, pointer_down,
+        pointer_move, pointer_scroll, pointer_up,
     };
     use crate::{
+        builtin,
         compile::{CompiledNode, CompiledUi},
         expand::{Binding, ControlSpec, ExpandedNode},
-        ids::InternId,
+        ids::{InternId, SourceUri},
         interact::Gestures,
         mount,
+        registry::{EndpointCategory, EndpointDesc, EndpointRegistry, ValueKind},
         render::{
-            Skin,
+            ReadValue, Reads, Skin, UiEvent,
             controls::{Draws, Gesture, Paint, Reading},
-            document::Ctx,
+            document::{self, Ctx},
             hosted::hosted_control_plan,
             masonry::{HostAction, Painted},
         },
+        shaping::FontPolicy,
     };
 
     #[derive(Clone, Copy)]
@@ -2599,20 +2604,9 @@ mod gesture_census {
             "the paint and gesture censuses must cover the same controls in the same order"
         );
 
-        let mut registry = fixture_registry();
-        registry.insert(
-            crate::registry::EndpointCategory::Model,
-            "ui.menu.open",
-            crate::registry::EndpointDesc::new(crate::registry::ValueKind::Bool),
-        );
+        let registry = census_registry();
         let reads = FixtureReads;
-        let skin = Skin::resolve_with_font_policy(
-            crate::builtin::skin_doc().clone(),
-            crate::builtin::text_doc(),
-            &crate::ids::SourceUri("fixture:gesture-census".to_owned()),
-            crate::shaping::FontPolicy::Embedded,
-        )
-        .unwrap_or_else(|error| panic!("the census skin must resolve: {error}"));
+        let skin = census_skin();
 
         for (row, (_, _, control)) in ROWS.iter().zip(CONTROL_CENSUS) {
             let ui = fixture_ui_with_sources(
@@ -2642,6 +2636,237 @@ mod gesture_census {
                 row.name
             );
         }
+    }
+
+    fn census_registry() -> FixtureRegistry {
+        let mut registry = fixture_registry();
+        registry.insert(
+            EndpointCategory::Model,
+            "ui.menu.open",
+            EndpointDesc::new(ValueKind::Bool),
+        );
+        registry
+    }
+
+    fn census_skin() -> Skin {
+        Skin::resolve_with_font_policy(
+            builtin::skin_doc().clone(),
+            builtin::text_doc(),
+            &SourceUri("fixture:gesture-census".to_owned()),
+            FontPolicy::Embedded,
+        )
+        .unwrap_or_else(|error| panic!("the census skin must resolve: {error}"))
+    }
+
+    const DRIVEN_WIDTH: u32 = 240;
+    const DRIVEN_HEIGHT: u32 = 120;
+
+    /// The readings a driven control needs to have anything under the hand.
+    ///
+    /// A table with no rows takes no press for a reason that has nothing to do
+    /// with the host, so the driven census binds the rows the rest of the
+    /// fixture leaves out.
+    struct DrivenReads;
+
+    impl Reads for DrivenReads {
+        fn get(&self, endpoint: &str) -> Option<ReadValue<'_>> {
+            let id = endpoint.split_once('@').map_or(endpoint, |(id, _scope)| id);
+            if id == "library.visible_tracks" {
+                return Some(ReadValue::Table(&LATE_TABLE_ROWS));
+            }
+            FixtureReads.get(endpoint)
+        }
+    }
+
+    /// The single promise one driven sequence measures.
+    ///
+    /// A control that names a drag also names a press, and the two are
+    /// separate promises: measuring them together lets one cover for the
+    /// other. Each is driven on its own root by the event that carries it.
+    ///
+    /// A drag takes two moves, not one: `ItemDrag` spends the first fixing the
+    /// point the travel is measured from, so a single move is below every
+    /// threshold by construction and would measure the sequence, not the host.
+    #[derive(Clone, Copy, Debug)]
+    enum Named {
+        Press,
+        Drag,
+        Wheel,
+    }
+
+    impl Named {
+        fn declared_by(self, gestures: Gestures) -> bool {
+            match self {
+                Self::Press => gestures.press,
+                Self::Drag => gestures.drag,
+                Self::Wheel => gestures.wheel,
+            }
+        }
+    }
+
+    /// What the retained host did with the event carrying the promise.
+    ///
+    /// Neither observable is sound alone: a control can take an event and
+    /// change only its own state, and the root answers `Handled::No` for a
+    /// path that emitted nothing at all.
+    #[derive(Clone, Copy, Debug, Default)]
+    struct Answer {
+        acted: bool,
+        handled: bool,
+    }
+
+    impl Answer {
+        fn or(self, other: Self) -> Self {
+            Self {
+                acted: self.acted || other.acted,
+                handled: self.handled || other.handled,
+            }
+        }
+
+        fn silent(self) -> bool {
+            !self.acted && !self.handled
+        }
+    }
+
+    fn take(root: &mut MasonryRoot<UiEvent>, event: PointerEvent) -> Answer {
+        let handled = root
+            .handle_pointer_event(event)
+            .unwrap_or_else(|error| panic!("driven input must stay typed: {error}"));
+        Answer {
+            acted: !root.take_actions().is_empty(),
+            handled: handled == Handled::Yes,
+        }
+    }
+
+    /// The middle of the box the control was actually laid out into.
+    ///
+    /// Window chrome answers before the tree and has no document leaf to
+    /// address; the middle of the root is on it, because it is the only thing
+    /// mounted.
+    fn aim(
+        root: &MasonryRoot<UiEvent>,
+        state: &MasonryState,
+        across: f64,
+        down: f64,
+    ) -> (f64, f64) {
+        state
+            .widget_id("demo/control")
+            .and_then(|id| root.root().get_widget(id))
+            .map_or_else(
+                || {
+                    (
+                        f64::from(DRIVEN_WIDTH) * across,
+                        f64::from(DRIVEN_HEIGHT) * down,
+                    )
+                },
+                |widget| {
+                    let origin = widget.ctx().window_origin();
+                    let size = widget.ctx().size();
+                    (
+                        origin.x + size.width * across,
+                        origin.y + size.height * down,
+                    )
+                },
+            )
+    }
+
+    /// The interior of a box, in fractions of its own width and height.
+    ///
+    /// A control is not uniformly live: a strip answers on its crumbs and not
+    /// in the gap between them, and a table answers on a row. Aiming at one
+    /// point measures where the aim landed, not what the control takes, so
+    /// every point gets its own root and the control answers if any does.
+    const AIMS: &[f64] = &[0.25, 0.5, 0.75];
+
+    /// Whether the press alone keeps this promise.
+    ///
+    /// `HostLayer::handle` answers `Down` and nothing else, because
+    /// `WindowCommand::Drag` gives the gesture to the window manager: no move
+    /// ever comes back for the toolkit to answer. Both hosts share that layer,
+    /// so this is the contract rather than a retained-host gap. It is named
+    /// here instead of skipped, so the census fails the day a handover starts
+    /// answering moves.
+    fn handed_over(name: &str, named: Named) -> bool {
+        name == "WindowDrag" && matches!(named, Named::Drag)
+    }
+
+    fn driven(named: Named, control: &str, registry: &dyn EndpointRegistry, skin: &Skin) -> Answer {
+        let reads = DrivenReads;
+        let ui = fixture_ui_with_sources(
+            "gesture-drive",
+            &format!(r#"Row(size: (w: Fill, h: Fill), gap: 0.0, pad: 0.0, children: [{control}])"#),
+            registry,
+            CENSUS_SOURCES,
+        );
+        let mut answer = Answer::default();
+        for across in AIMS {
+            for down in AIMS {
+                let state = MasonryState::default();
+                let host =
+                    MasonryHost::new(super::ctx(&ui, &reads), skin).with_state(state.clone());
+                let output = document::render(&ui.root, super::ctx(&ui, &reads), host);
+                let mut root = masonry_root(output, DRIVEN_WIDTH, DRIVEN_HEIGHT);
+                root.redraw()
+                    .unwrap_or_else(|error| panic!("the driven control must lay out: {error}"));
+                let (x, y) = aim(&root, &state, *across, *down);
+                answer = answer.or(at(named, &mut root, x, y));
+            }
+        }
+        answer
+    }
+
+    fn at(named: Named, root: &mut MasonryRoot<UiEvent>, x: f64, y: f64) -> Answer {
+        match named {
+            Named::Press => {
+                let down = take(root, pointer_down(x, y));
+                let up = take(root, pointer_up(x, y));
+                down.or(up)
+            }
+            Named::Drag => {
+                let _down = take(root, pointer_down(x, y));
+                let first = take(root, pointer_move(x + 2.0, y));
+                first.or(take(root, pointer_move(x + 24.0, y)))
+            }
+            Named::Wheel => take(
+                root,
+                pointer_scroll(x, y, ScrollDelta::LineDelta(0.0, -2.0)),
+            ),
+        }
+    }
+
+    /// Drives, on the retained host, the pointer gesture each control names.
+    ///
+    /// The census beside this one compares the two hosts' declarations. Saying
+    /// a gesture is not answering it: a control declared a drag both hosts
+    /// agreed on while the retained one dropped every move, and no test could
+    /// see it, because the words matched. This mounts each control alone,
+    /// finds the box it was laid out into, and pushes real input at it.
+    #[kithara::test]
+    fn every_control_answers_the_pointer_gesture_it_names_on_the_retained_host() {
+        let registry = census_registry();
+        let skin = census_skin();
+
+        let mut observed = Vec::new();
+        let mut expected = Vec::new();
+        for (row, (_, _, control)) in ROWS.iter().zip(CONTROL_CENSUS) {
+            for named in [Named::Press, Named::Drag, Named::Wheel] {
+                if !named.declared_by(row.gestures) {
+                    continue;
+                }
+                let answers = !driven(named, control, &registry, &skin).silent();
+                observed.push(format!("{} {named:?}: {answers}", row.name));
+                expected.push(format!(
+                    "{} {named:?}: {}",
+                    row.name,
+                    !handed_over(row.name, named)
+                ));
+            }
+        }
+
+        assert_eq!(
+            observed, expected,
+            "the retained host answers a different set of pointer gestures than the controls name"
+        );
     }
 }
 
