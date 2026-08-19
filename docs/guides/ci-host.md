@@ -209,6 +209,21 @@ Activate the staged launch daemon only after validation:
 sudo -E /Volumes/KitharaCI/services/bin/kithara-ci ci host activate-bridge
 ```
 
+The daemon keeps running the executable that was installed, not the one on
+`main`, so a fix to the bridge itself changes nothing until it is reinstalled.
+From a checkout of a reviewed GitLab commit, with `KITHARA_CI_HOST_CONFIG`
+exported as above:
+
+```text
+cargo build --locked --release -p xtask
+sudo -E target/release/xtask ci host install-services
+sudo -E /Volumes/KitharaCI/services/bin/kithara-ci ci host activate-bridge
+```
+
+`install-services` replaces the installed binary and the staged service
+definitions without revalidating Xcode; `activate-bridge` boots the daemon out
+and kickstarts it, so the next tick runs the new binary.
+
 The old GitLab pull mirror is disabled because it force-updated `main` and
 could discard work already merged here. The bridge now moves `main` only by
 fast-forward. When GitLab is ahead, it fast-forwards GitHub to the same commit;
