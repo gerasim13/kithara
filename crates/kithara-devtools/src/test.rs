@@ -1,4 +1,8 @@
-use std::{collections::BTreeSet, path::Path, process::Command};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::Path,
+    process::Command,
+};
 
 use anyhow::{Context, Result, bail};
 use clap::Args;
@@ -113,8 +117,29 @@ pub(crate) fn run(args: &TestArgs) -> Result<()> {
     validate_config(test)?;
 
     let (lane_name, lane) = select_lane(test, &request)?;
+    let mut cmd = lane_command(&project, lane_name, lane, &request)?;
+
+    let status = cmd
+        .status()
+        .with_context(|| format!("failed to run test lane `{lane_name}`: {}", lane.program))?;
+    if !status.success() {
+        return Err(ChildFailure::inherited(
+            format!("test lane `{lane_name}`"),
+            status.code(),
+        ));
+    }
+    Ok(())
+}
+
+fn lane_command(
+    project: &ProjectConfig,
+    lane_name: &str,
+    lane: &TestLaneConfig,
+    request: &TestRequest,
+) -> Result<Command> {
+    let test = &project.test;
     let passthrough = passthrough_position(lane)?;
-    let mut cmd = match passthrough {
+    match passthrough {
         PassthroughPosition::BeforeSuffix if lane_name == test.default_lane => {
             let toggles = LaneToggles {
                 flash: request
@@ -128,13 +153,14 @@ pub(crate) fn run(args: &TestArgs) -> Result<()> {
                 .net_backend
                 .as_deref()
                 .unwrap_or(&test.default_backend);
-            let (_, cmd) = nextest_lane_command(&project, toggles, backend, &request.passthrough)?;
-            cmd
+            let (_, cmd) = nextest_lane_command(project, toggles, backend, &request.passthrough)?;
+            Ok(cmd)
         }
         passthrough => {
             let mut cmd = Command::new(&lane.program);
+            cmd.envs(&lane.env);
             cmd.args(&lane.prefix_args);
-            let features = features_for(test, lane, &request)?;
+            let features = features_for(test, lane, request)?;
             if !features.is_empty() {
                 cmd.arg(&test.feature_arg)
                     .arg(features.into_iter().collect::<Vec<_>>().join(","));
@@ -149,20 +175,9 @@ pub(crate) fn run(args: &TestArgs) -> Result<()> {
                     cmd.args(&request.passthrough);
                 }
             }
-            cmd
+            Ok(cmd)
         }
-    };
-
-    let status = cmd
-        .status()
-        .with_context(|| format!("failed to run test lane `{lane_name}`: {}", lane.program))?;
-    if !status.success() {
-        return Err(ChildFailure::inherited(
-            format!("test lane `{lane_name}`"),
-            status.code(),
-        ));
     }
-    Ok(())
 }
 
 fn validate_config(config: &TestCommandConfig) -> Result<()> {
@@ -318,6 +333,10 @@ pub(crate) struct ConfiguredLane {
     pub(crate) suffix_args: Vec<String>,
     pub(crate) feature_arg: String,
     pub(crate) features: Vec<String>,
+    /// A lane with no environment of its own records none, so a campaign that
+    /// predates lane environments keeps comparing against the same runner.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub(crate) env: BTreeMap<String, String>,
 }
 
 pub(crate) fn nextest_lane_command_for(
@@ -344,10 +363,13 @@ pub(crate) fn nextest_configured_lane_command(
 ) -> Result<(Vec<String>, Command)> {
     resolved.validate()?;
     build_nextest_command(
-        &resolved.program,
-        &resolved.prefix_args,
-        &resolved.suffix_args,
-        &resolved.feature_arg,
+        NextestSpec {
+            program: &resolved.program,
+            prefix_args: &resolved.prefix_args,
+            suffix_args: &resolved.suffix_args,
+            feature_arg: &resolved.feature_arg,
+            env: &resolved.env,
+        },
         resolved.features.iter().cloned().collect(),
         extra,
         action,
@@ -383,6 +405,7 @@ pub(crate) fn configured_lane(
         suffix_args: lane.suffix_args.clone(),
         feature_arg: test.feature_arg.clone(),
         features: features.into_iter().collect(),
+        env: lane.env.clone(),
     })
 }
 
@@ -411,6 +434,17 @@ impl ConfiguredLane {
     }
 }
 
+/// What a lane runs, resolved from either the lane config or a configured
+/// runner recorded by a campaign.
+#[derive(Clone, Copy)]
+struct NextestSpec<'a> {
+    program: &'a str,
+    prefix_args: &'a [String],
+    suffix_args: &'a [String],
+    feature_arg: &'a str,
+    env: &'a BTreeMap<String, String>,
+}
+
 fn nextest_command(
     test: &TestCommandConfig,
     lane: &TestLaneConfig,
@@ -419,10 +453,13 @@ fn nextest_command(
     action: NextestAction,
 ) -> Result<(Vec<String>, Command)> {
     build_nextest_command(
-        &lane.program,
-        &lane.prefix_args,
-        &lane.suffix_args,
-        &test.feature_arg,
+        NextestSpec {
+            program: &lane.program,
+            prefix_args: &lane.prefix_args,
+            suffix_args: &lane.suffix_args,
+            feature_arg: &test.feature_arg,
+            env: &lane.env,
+        },
         features,
         extra,
         action,
@@ -430,15 +467,20 @@ fn nextest_command(
 }
 
 fn build_nextest_command(
-    program: &str,
-    prefix_args: &[String],
-    suffix_args: &[String],
-    feature_arg: &str,
+    spec: NextestSpec<'_>,
     features: BTreeSet<String>,
     extra: &[String],
     action: NextestAction,
 ) -> Result<(Vec<String>, Command)> {
+    let NextestSpec {
+        program,
+        prefix_args,
+        suffix_args,
+        feature_arg,
+        env,
+    } = spec;
     let mut cmd = Command::new(program);
+    cmd.envs(env);
     match action {
         NextestAction::Run => {
             cmd.args(prefix_args);
@@ -506,6 +548,19 @@ mod tests {
             .collect()
     }
 
+    fn envs_of(cmd: &Command) -> Vec<(String, String)> {
+        cmd.get_envs()
+            .filter_map(|(key, value)| {
+                value.map(|value| {
+                    (
+                        key.to_string_lossy().into_owned(),
+                        value.to_string_lossy().into_owned(),
+                    )
+                })
+            })
+            .collect()
+    }
+
     fn synthetic_project() -> ProjectConfig {
         let mut lanes = BTreeMap::new();
         lanes.insert(
@@ -522,6 +577,7 @@ mod tests {
                 default_flash: None,
                 default_no_block: None,
                 passthrough: String::new(),
+                env: BTreeMap::new(),
             },
         );
         lanes.insert(
@@ -538,6 +594,7 @@ mod tests {
                 default_flash: Some(false),
                 default_no_block: None,
                 passthrough: String::new(),
+                env: BTreeMap::new(),
             },
         );
         lanes.insert(
@@ -550,6 +607,20 @@ mod tests {
                 default_flash: None,
                 default_no_block: Some(true),
                 passthrough: String::new(),
+                env: BTreeMap::new(),
+            },
+        );
+        lanes.insert(
+            "browser".to_owned(),
+            TestLaneConfig {
+                program: "cargo".to_owned(),
+                prefix_args: vec!["test".to_owned()],
+                suffix_args: vec!["selenium".to_owned()],
+                default_features: Vec::new(),
+                default_flash: Some(false),
+                default_no_block: None,
+                passthrough: "after-suffix".to_owned(),
+                env: BTreeMap::from([("DEMO_BROWSER".to_owned(), "firefox".to_owned())]),
             },
         );
         let mut net_backends = BTreeMap::new();
@@ -872,6 +943,46 @@ mod tests {
             error
                 .to_string()
                 .contains("conflicts with --lane=workspace")
+        );
+    }
+
+    #[test]
+    fn a_lane_that_names_an_environment_runs_with_it() {
+        let project = synthetic_project();
+        let request = TestRequest::parse(&["--lane=browser".to_owned()]).expect("parse request");
+        let (name, lane) = select_lane(&project.test, &request).expect("select browser lane");
+
+        let cmd = lane_command(&project, name, lane, &request).expect("browser lane command");
+
+        assert_eq!(
+            envs_of(&cmd),
+            vec![("DEMO_BROWSER".to_owned(), "firefox".to_owned())]
+        );
+    }
+
+    #[test]
+    fn a_lane_that_names_none_runs_with_none() {
+        let project = synthetic_project();
+        let request = TestRequest::parse(&[]).expect("parse request");
+        let (name, lane) = select_lane(&project.test, &request).expect("select default lane");
+
+        let cmd = lane_command(&project, name, lane, &request).expect("default lane command");
+
+        assert!(envs_of(&cmd).is_empty());
+    }
+
+    #[test]
+    fn a_configured_lane_carries_its_environment_to_the_runner() {
+        let project = synthetic_project();
+
+        let resolved = configured_lane(&project, "browser", "http", &[]).expect("configured lane");
+
+        assert_eq!(resolved.env["DEMO_BROWSER"], "firefox");
+        let (_, cmd) =
+            nextest_configured_lane_command(&resolved, &[], NextestAction::Run).expect("command");
+        assert_eq!(
+            envs_of(&cmd),
+            vec![("DEMO_BROWSER".to_owned(), "firefox".to_owned())]
         );
     }
 }

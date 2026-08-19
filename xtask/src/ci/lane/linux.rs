@@ -71,16 +71,15 @@ pub(crate) fn configured(process: &Process, lane: &str) -> Result<()> {
 }
 
 /// A selenium lane per browser: the lane name (`selenium-<browser>`) is the
-/// only place the browser is decided, and `KITHARA_SELENIUM_BROWSER` carries
-/// it into the harness (`tests/tests/kithara_ffi_web/selenium.rs`), which
-/// otherwise defaults to chrome regardless of what the image actually pins.
+/// only place the browser is decided. The lane's own configuration carries it
+/// into the harness, so a run started here and a run started by hand exercise
+/// the same browser.
 pub(crate) fn selenium(process: &Process, browser: &str) -> Result<()> {
     preflight(process)?;
     let lane = format!("selenium-{browser}");
     let mut command = process.command("just");
     command
         .env("CARGO_BUILD_JOBS", "2")
-        .env("KITHARA_SELENIUM_BROWSER", browser)
         .args(["test", "run", &format!("--lane={lane}")]);
     process.run_command(&mut command, &format!("Linux {lane} lane"))
 }

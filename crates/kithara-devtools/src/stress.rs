@@ -304,6 +304,9 @@ fn lane_runner(
         suffix_args: Vec::new(),
         feature_arg: "--features".to_owned(),
         features: Vec::new(),
+        // A mode that names its own command replaces the runner, so it carries
+        // no lane environment; `set_env` is the channel a mode has for that.
+        env: BTreeMap::new(),
     })
 }
 

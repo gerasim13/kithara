@@ -13,6 +13,7 @@ use reqwest::{Client, Url};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use thirtyfour::{
+    bidi::modules::script::GetRealms,
     common::capabilities::{chromium::ChromiumLikeCapabilities, firefox::FirefoxPreferences},
     extensions::cdp::ChromeDevTools,
     prelude::*,
@@ -1057,30 +1058,33 @@ impl WasmPlayerSelenium {
         self.stop_and_replay_verify().await
     }
 
-    /// Count dedicated Web Workers via Chrome `DevTools` Protocol.
+    /// Count dedicated Web Workers, through `WebDriver` `BiDi`.
     ///
-    /// Returns `(worker_count, worker_titles)` — only dedicated workers
-    /// (not service workers or shared workers).
+    /// Returns `(worker_count, worker_origins)` — only dedicated workers, not
+    /// service workers, shared workers or worklets. The equivalent Chrome
+    /// `DevTools` call answers this browser only; every browser this lane can
+    /// name speaks `BiDi`.
     async fn count_web_workers(&self) -> Result<(usize, Vec<String>), String> {
-        let dev_tools = ChromeDevTools::new(self.driver.handle().clone());
-        let result = dev_tools
-            .execute_cdp("Target.getTargets")
+        let bidi = self
+            .driver
+            .bidi()
             .await
-            .map_err(|e| format!("CDP Target.getTargets failed: {e}"))?;
+            .map_err(|err| format!("BiDi session unavailable: {err}"))?;
+        let realms = bidi
+            .send(GetRealms {
+                context: None,
+                r#type: Some("dedicated-worker".to_owned()),
+            })
+            .await
+            .map_err(|err| format!("BiDi script.getRealms failed: {err}"))?;
 
-        let targets = result["targetInfos"]
-            .as_array()
-            .ok_or_else(|| "CDP response missing targetInfos array".to_string())?;
+        let workers: Vec<String> = realms
+            .realms
+            .into_iter()
+            .map(|realm| realm.origin)
+            .collect();
 
-        let mut worker_titles = Vec::new();
-        for target in targets {
-            if target["type"].as_str() == Some("worker") {
-                let title = target["title"].as_str().unwrap_or("<unknown>");
-                worker_titles.push(title.to_string());
-            }
-        }
-
-        Ok((worker_titles.len(), worker_titles))
+        Ok((workers.len(), workers))
     }
 
     /// Run the worker count scenario: verify workers are created and cleaned up
@@ -1505,6 +1509,10 @@ async fn build_webdriver(
                 caps.add_arg("--headless=new")
                     .map_err(|err| format!("failed to set chrome headless: {err}"))?;
             }
+            // The worker census reads BiDi realms, and the driver only serves
+            // them when the session asked for a socket at New Session.
+            caps.enable_bidi()
+                .map_err(|err| format!("failed to ask chrome for bidi: {err}"))?;
             WebDriver::new(driver_url, caps)
                 .await
                 .map_err(|err| format!("failed to create chrome session: {err}"))?
@@ -1525,6 +1533,8 @@ async fn build_webdriver(
                 .map_err(|err| format!("failed to set firefox worker pref: {err}"))?;
             caps.set_preferences(prefs)
                 .map_err(|err| format!("failed to set firefox prefs: {err}"))?;
+            caps.enable_bidi()
+                .map_err(|err| format!("failed to ask firefox for bidi: {err}"))?;
 
             WebDriver::new(driver_url, caps)
                 .await

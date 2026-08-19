@@ -17,9 +17,12 @@ env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
 
+# These lanes run on the pool the stress campaign measures, so on a fork they
+# wait for the campaign rather than taking cores from it. See ci.yml.
 concurrency:
-  group: lanes-${{ github.ref }}
+  group: ${{ github.event.repository.fork && format('fork-linux-{0}', github.repository) || format('lanes-{0}', github.ref) }}
   cancel-in-progress: false
+  queue: max
 
 jobs:
   # Which lanes this run is for, decided before any of them start.
@@ -98,13 +101,7 @@ jobs:
           KITHARA_DRM_PROD_AUTH_TOKEN: ${{ secrets.KITHARA_DRM_PROD_AUTH_TOKEN }}
           KITHARA_DRM_PROD_SP_ZV_TOKEN: ${{ secrets.KITHARA_DRM_PROD_SP_ZV_TOKEN }}
           KITHARA_DRM_STAGE_AUTH_TOKEN: ${{ secrets.KITHARA_DRM_STAGE_AUTH_TOKEN }}
-        # A selenium-<browser> lane names the browser it exercises; the
-        # harness (tests/tests/kithara_ffi_web/selenium.rs) otherwise defaults
-        # to chrome regardless of what the fleet actually pins.
         run: |
-          if [[ "$LANE" == selenium-* ]]; then
-            export KITHARA_SELENIUM_BROWSER="${LANE#selenium-}"
-          fi
           if [[ "$LANE" == network* ]]; then
             export KITHARA_DRM_REQUIRE=1
           fi

@@ -377,7 +377,7 @@ symphonia-core = "0.6.0"
 symphonia-format-isomp4 = "0.6.0"
 syn = { version = "3", features = ["full"] }
 tempfile = "3.27.0"
-thirtyfour = "0.37.1"
+thirtyfour = { version = "0.37.1", features = ["bidi"] }
 thiserror = "2.0.18"
 thunderdome = { version = "0.6.1", default-features = false }
 tokio = { version = "1.52.3", default-features = false }

@@ -41,6 +41,9 @@ env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
 
+# CI runs this soak as one of its jobs, so it must never name the queue its
+# caller already holds - a called workflow that does can never start. Waiting
+# for the stress campaign is the caller's to declare; see schedule.yml.
 concurrency:
   group: rtsan-${{ github.ref }}
   cancel-in-progress: false

@@ -1,7 +1,7 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
-    path::Path,
+    path::{Path, PathBuf},
 };
 
 use proc_macro2::{Delimiter, TokenStream, TokenTree};
@@ -87,10 +87,29 @@ fn github_workflow(name: &str) -> Value {
 }
 
 fn github_workflow_text(name: &str) -> String {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+    fs::read_to_string(workflows_dir().join(name)).expect("workflow is readable")
+}
+
+fn workflows_dir() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
-        .expect("xtask has a workspace root");
-    fs::read_to_string(root.join(".github/workflows").join(name)).expect("workflow is readable")
+        .expect("xtask has a workspace root")
+        .join(".github/workflows")
+}
+
+fn workflow_file_names() -> BTreeSet<String> {
+    fs::read_dir(workflows_dir())
+        .expect("workflow directory is readable")
+        .map(|entry| {
+            entry
+                .expect("workflow entry is readable")
+                .file_name()
+                .to_str()
+                .expect("workflow file name is UTF-8")
+                .to_owned()
+        })
+        .filter(|name| name.ends_with(".yml"))
+        .collect()
 }
 
 fn configured_stress_prekill_secs(root: &Path) -> u64 {
@@ -398,6 +417,120 @@ fn github_ci_is_fail_closed_and_aggregates_every_job() {
             .expect("required step is a script")
             .trim(),
         REQUIRED_SCRIPT
+    );
+}
+
+fn concurrency_prefixes(owner: &Mapping) -> BTreeSet<String> {
+    let Some(concurrency) = owner.get("concurrency") else {
+        return BTreeSet::new();
+    };
+    let group = match concurrency {
+        Value::String(group) => group.as_str(),
+        Value::Mapping(mapping) => mapping_field(mapping, "group")
+            .as_str()
+            .expect("concurrency group is a string"),
+        _ => panic!("concurrency is a string or a mapping"),
+    };
+    let formatted: BTreeSet<String> = group
+        .match_indices("format('")
+        .map(|(index, marker)| {
+            let literal = group[index + marker.len()..]
+                .split('\'')
+                .next()
+                .expect("format template is quoted");
+            group_prefix(literal)
+        })
+        .collect();
+    if formatted.is_empty() {
+        BTreeSet::from([group_prefix(group)])
+    } else {
+        formatted
+    }
+}
+
+#[test]
+fn a_queue_is_never_declared_beside_a_cancellation_that_can_fire() {
+    let mut conflicts = Vec::new();
+    for name in workflow_file_names() {
+        let workflow = github_workflow(&name);
+        let mut owners = vec![("".to_owned(), workflow.as_mapping().cloned())];
+        for (job_name, job) in workflow_jobs(&workflow) {
+            let job_name = job_name.as_str().expect("workflow job name is a string");
+            owners.push((format!(" job `{job_name}`"), job.as_mapping().cloned()));
+        }
+        for (where_, owner) in owners {
+            let Some(Value::Mapping(concurrency)) =
+                owner.as_ref().and_then(|owner| owner.get("concurrency"))
+            else {
+                continue;
+            };
+            if concurrency.get("queue").and_then(Value::as_str) != Some("max") {
+                continue;
+            }
+            // GitHub rejects `queue: max` beside `cancel-in-progress: true`, and
+            // an expression that reads false on a fork still reads true upstream.
+            if concurrency
+                .get("cancel-in-progress")
+                .and_then(Value::as_bool)
+                != Some(false)
+            {
+                conflicts.push(format!("{name}{where_}"));
+            }
+        }
+    }
+
+    assert!(
+        conflicts.is_empty(),
+        "`queue: max` needs `cancel-in-progress: false`, not an expression that can read true: {conflicts:?}"
+    );
+}
+
+// What a group expression can evaluate to, down to the part no branch varies:
+// `fork-linux-{0}` and `fork-linux-${{ github.repository }}` name one queue.
+fn group_prefix(group: &str) -> String {
+    group
+        .split(['{', '$'])
+        .next()
+        .unwrap_or(group)
+        .trim()
+        .to_owned()
+}
+
+#[test]
+fn a_called_workflow_never_waits_on_the_group_its_caller_holds() {
+    let mut deadlocks = Vec::new();
+    for name in workflow_file_names() {
+        let workflow = github_workflow(&name);
+        let held = concurrency_prefixes(workflow.as_mapping().expect("workflow is a mapping"));
+        for (job_name, job) in workflow_jobs(&workflow) {
+            let job = job.as_mapping().expect("workflow job is a mapping");
+            let Some(called) = job
+                .get("uses")
+                .and_then(Value::as_str)
+                .and_then(|uses| uses.strip_prefix("./.github/workflows/"))
+            else {
+                continue;
+            };
+            let mut caller = held.clone();
+            caller.extend(concurrency_prefixes(job));
+            let callee = concurrency_prefixes(
+                github_workflow(called)
+                    .as_mapping()
+                    .expect("called workflow is a mapping"),
+            );
+            let shared: Vec<&String> = caller.intersection(&callee).collect();
+            if !shared.is_empty() {
+                let job_name = job_name.as_str().expect("workflow job name is a string");
+                deadlocks.push(format!(
+                    "{name} job `{job_name}` calls {called} on {shared:?}"
+                ));
+            }
+        }
+    }
+
+    assert!(
+        deadlocks.is_empty(),
+        "a called workflow cannot start while its caller holds the same concurrency group: {deadlocks:?}"
     );
 }
 
@@ -1344,4 +1477,62 @@ fn nightly_collector_is_read_only_and_does_not_mirror_the_source_verdict() {
             "nightly collector contains forbidden `{forbidden}`"
         );
     }
+}
+
+// The image owns every pinned tool, browsers included. A run-time install puts
+// a third-party download on the critical path of a job, which this repository
+// has measured failing four runs out of six. See `docker/ci.Dockerfile`.
+#[test]
+fn a_browser_comes_from_the_image_and_is_never_fetched_by_a_job() {
+    let mut installs = Vec::new();
+    for name in workflow_file_names() {
+        let workflow = github_workflow(&name);
+        for (job_name, job) in workflow_jobs(&workflow) {
+            let job_name = job_name.as_str().expect("workflow job name is a string");
+            let Some(steps) = job.get("steps").and_then(Value::as_sequence) else {
+                continue;
+            };
+            for step in steps {
+                let uses = step.get("uses").and_then(Value::as_str).unwrap_or_default();
+                let run = step.get("run").and_then(Value::as_str).unwrap_or_default();
+                if uses.starts_with("browser-actions/") || run.contains("chrome-for-testing") {
+                    installs.push(format!("{name} job `{job_name}`"));
+                }
+            }
+        }
+    }
+
+    assert!(
+        installs.is_empty(),
+        "a browser is pinned in the CI image, never fetched by a job: {installs:?}"
+    );
+}
+
+// `just ci run` is the GitLab entrypoint: it reads the host profile named by
+// `KITHARA_CI_HOST_CONFIG`, which only the GitLab runner provisioning installs.
+// A GitHub job that calls it dies before it reaches its own work, so a GitHub
+// job calls the recipe the lane calls instead.
+#[test]
+fn a_github_job_never_calls_the_gitlab_only_lane_runner() {
+    let mut callers = Vec::new();
+    for name in workflow_file_names() {
+        let workflow = github_workflow(&name);
+        for (job_name, job) in workflow_jobs(&workflow) {
+            let job_name = job_name.as_str().expect("workflow job name is a string");
+            let Some(steps) = job.get("steps").and_then(Value::as_sequence) else {
+                continue;
+            };
+            for step in steps {
+                let run = step.get("run").and_then(Value::as_str).unwrap_or_default();
+                if run.contains("just ci run") {
+                    callers.push(format!("{name} job `{job_name}`"));
+                }
+            }
+        }
+    }
+
+    assert!(
+        callers.is_empty(),
+        "`just ci run` needs the GitLab host profile: {callers:?}"
+    );
 }

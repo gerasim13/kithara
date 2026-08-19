@@ -3,15 +3,13 @@
 **/target/
 /xtask/.agent-hook-cache*
 /xtask/.xtask-cache*
-# Flash-time builds use a separate CARGO_TARGET_DIR so the flash/non-flash
-# feature sets don't thrash one cache; keep them out of git AND out of
+# Flash-time builds, lanes and audits each use a separate CARGO_TARGET_DIR so
+# their feature sets don't thrash one cache; keep them out of git AND out of
 # lint / ast-grep scans (generated build code would otherwise trip style rules).
-/target-flash*/
-/target-audit-clippy/
 # A stress run builds into a directory of its own for the same reason, plus one:
 # the machine's shared target directory can be cleared by something else on the
 # host hours in, and every remaining repeat then fails to exec.
-/target-stress/
+/target-*/
 # Note: Cargo.lock is tracked for reproducible builds in workspace with examples
 
 # Rustfmt / Clippy / IDE noise
