@@ -3,16 +3,14 @@ use std::{
     sync::{Arc, Mutex, MutexGuard, PoisonError},
 };
 
+use kithara_mpa::MpaReader;
 use kithara_test_utils::kithara;
-use symphonia::{
-    core::{
-        errors::Error as SymphoniaError,
-        formats::{FormatOptions, FormatReader, SeekMode, SeekTo, SeekedTo},
-        io::{MediaSource, MediaSourceStream, MediaSourceStreamOptions},
-        packet::Packet,
-        units::Timestamp,
-    },
-    default::formats::MpaReader,
+use symphonia::core::{
+    errors::Error as SymphoniaError,
+    formats::{FormatOptions, FormatReader, SeekMode, SeekTo, SeekedTo},
+    io::{MediaSource, MediaSourceStream, MediaSourceStreamOptions},
+    packet::Packet,
+    units::Timestamp,
 };
 
 const INTERRUPTED_MESSAGE: &str = "synthetic MPEG frame interruption";

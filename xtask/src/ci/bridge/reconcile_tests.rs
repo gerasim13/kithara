@@ -514,3 +514,88 @@ fn an_unmergeable_head_is_failed_and_rejected_with_the_reason() {
         ]
     );
 }
+
+const CURRENT_BASE: &str = "04fcb5a0a1978c3d1f0e2b3a4c5d6e7f80910111";
+const OLDER_BASE: &str = "418167884f6c2e1d3a4b5c6d7e8f90a1b2c3d4e5";
+const PULL_HEAD: &str = "8a4e697a770d5e6f8091a2b3c4d5e6f708192a3b";
+
+#[test]
+fn a_quarantine_ref_judged_against_an_older_base_is_superseded() {
+    let refs = [quarantine_ref(PULL_HEAD, OLDER_BASE, 1)];
+
+    assert_eq!(
+        superseded_quarantine_refs(&refs, CURRENT_BASE),
+        [refs[0].as_str()]
+    );
+}
+
+#[test]
+fn a_quarantine_ref_judged_against_the_current_base_is_kept() {
+    let refs = [quarantine_ref(PULL_HEAD, CURRENT_BASE, 2)];
+
+    assert_eq!(
+        superseded_quarantine_refs(&refs, CURRENT_BASE),
+        [] as [&str; 0]
+    );
+}
+
+#[test]
+fn a_branch_that_is_not_a_verification_run_is_never_swept() {
+    let refs = ["main".to_owned(), "laba/419-connectivity".to_owned()];
+
+    assert_eq!(
+        superseded_quarantine_refs(&refs, CURRENT_BASE),
+        [] as [&str; 0]
+    );
+}
+
+#[test]
+fn the_older_quarantine_naming_scheme_is_swept_by_the_same_rule() {
+    let refs = [format!(
+        "quarantine/github/{PULL_HEAD}/{OLDER_BASE}/attempt-1"
+    )];
+
+    assert_eq!(
+        superseded_quarantine_refs(&refs, CURRENT_BASE),
+        [refs[0].as_str()]
+    );
+}
+
+#[test]
+fn a_sweep_drops_every_branch_a_moved_base_left_behind() {
+    let stale = quarantine_ref(PULL_HEAD, OLDER_BASE, 1);
+    let live = quarantine_ref(PULL_HEAD, CURRENT_BASE, 2);
+    let listed = vec![stale.clone(), live, "main".to_owned()];
+    let deleted = RefCell::new(Vec::new());
+
+    sweep_quarantine_refs(
+        CURRENT_BASE,
+        || Ok(listed),
+        |refs| {
+            deleted
+                .borrow_mut()
+                .extend(refs.iter().map(|reference| (*reference).to_owned()));
+            Ok(())
+        },
+    )
+    .unwrap();
+
+    assert_eq!(*deleted.borrow(), [stale]);
+}
+
+#[test]
+fn a_sweep_with_nothing_left_behind_never_reaches_the_remote() {
+    let called = Cell::new(false);
+
+    sweep_quarantine_refs(
+        CURRENT_BASE,
+        || Ok(vec![quarantine_ref(PULL_HEAD, CURRENT_BASE, 1)]),
+        |_| {
+            called.set(true);
+            Ok(())
+        },
+    )
+    .unwrap();
+
+    assert!(!called.get());
+}
