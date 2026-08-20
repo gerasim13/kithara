@@ -518,6 +518,10 @@ async fn run_prod_drm_scenario_no_warmup(url: &str, ratio: f64) {
 /// The other three (`173388194_1`, `50984034_1`, `171515249_1`) answer 502 and
 /// are left out: a test that cannot reach its media reports the catalogue, not
 /// the player.
+///
+/// A replacement track needs to run past 100 s: the near-end scenario seeks to
+/// 90 % and then measures a full 10 s window of audio after it. The shortest
+/// here is `59232754_2` at 142 s.
 const PROD_DRM_PLAYLIST: &[&str] = &[
     "https://cdn-hls-slicer.zvuk.com/drm/track/180082552_1/master.m3u8",
     "https://cdn-hls-slicer.zvuk.com/drm/track/5807750_3/master.m3u8",
@@ -531,59 +535,78 @@ const PROD_DRM_PLAYLIST: &[&str] = &[
 const OFFLINE_SAMPLE_RATE: usize = 44_100;
 const STEREO_CHANNELS: usize = 2;
 const TEN_SECONDS_FRAMES: usize = OFFLINE_SAMPLE_RATE * 10;
-/// Per-`render()` request size. Matches the engine's typical block
-/// — keeps render-loop wall-clock cost in the same ballpark as the
-/// audio worker's tick.
+/// Per-`render()` request size. Matches the engine's typical block.
 const RENDER_BLOCK_FRAMES: usize = 1024;
-/// Hard ceiling on render-loop iterations while waiting for the
-/// next track to take over (handover). At 1024 frames / iteration
-/// and 44.1 kHz this is ~4000 × 23ms = ~90 s, well above any
-/// realistic prod CDN warmup. Translates a true hang into a clear
-/// failure rather than letting the test run forever.
-const HANDOVER_BLOCK_LIMIT: usize = 4000;
+/// Amplitude above which a sample counts as content. Shared by the
+/// render loop and [`assert_audio_live`] so both agree on what "the
+/// engine is producing audio" means.
+const SILENCE_FLOOR: f32 = 1.0e-4;
+/// How long the engine may make no observable progress — no audio, or
+/// no handover — before the scenario calls it the stall it hunts. Named
+/// after the `audio_worker_loop no progress for 10s` window in
+/// `app.log`, and wide enough for the live CDN to answer a media
+/// playlist read, a per-segment key signing and a segment fetch.
+const ENGINE_PROGRESS_BUDGET: Duration = Duration::from_secs(10);
+/// Pause between render blocks while the engine has nothing to hand
+/// back, so the loop paces against the network instead of spinning.
+const RENDER_POLL: Duration = Duration::from_millis(20);
 
-/// Drive the offline session forward by `target_frames` frames worth of
-/// audio, ticking the queue between blocks so async lifecycle (load
-/// dispatch, ABR commits, EOF detection) advances. Returns the captured
-/// interleaved PCM (`stereo × target_frames` samples).
+/// Drive the offline session forward until it has captured
+/// `target_frames` frames of actual audio, ticking the queue between
+/// blocks so async lifecycle (load dispatch, ABR commits, EOF
+/// detection) advances. Returns the interleaved PCM
+/// (`stereo × target_frames` samples).
 ///
-/// No `sleep` — wall-clock is driven entirely by `OfflineSession::render`
-/// (which blocks on the engine's render dispatcher) and `Queue::tick`
-/// (a single sync pass). If the audio worker is stalled the rendered
-/// PCM will be silence, which the caller catches via `assert_audio_live`.
-fn render_audio_frames(session: &OfflineSession, queue: &Queue, target_frames: usize) -> Vec<f32> {
+/// The offline renderer has no wall clock: `OfflineBackend::render`
+/// always hands back a full buffer, zero-filled while the PCM ring is
+/// dry, so an unpaced loop captures "10 s of audio" in milliseconds.
+/// Against a live CDN that measures the round trip rather than the
+/// audio worker — `Queue::seek` returns its outcome optimistically and
+/// the RT thread drops what the feeder buffered, so a near-end seek is
+/// always followed by a refill an unpaced loop would read as silence.
+/// Silent blocks therefore pace the loop instead of counting toward the
+/// window, and only silence lasting [`ENGINE_PROGRESS_BUDGET`] is the
+/// stall this scenario hunts.
+async fn render_audio_frames(
+    session: &OfflineSession,
+    queue: &Queue,
+    target_frames: usize,
+    label: &str,
+) -> Vec<f32> {
     let mut pcm = Vec::with_capacity(target_frames * STEREO_CHANNELS);
-    let mut empty_blocks = 0usize;
+    let mut silent_since = None;
     while pcm.len() / STEREO_CHANNELS < target_frames {
         let block = session.render(RENDER_BLOCK_FRAMES);
         let _ = queue.tick();
-        if block.is_empty() {
-            empty_blocks = empty_blocks.saturating_add(1);
-            assert!(
-                empty_blocks < HANDOVER_BLOCK_LIMIT,
-                "OfflineSession::render returned empty for {empty_blocks} consecutive blocks — \
-                 engine never started a stream (no player session or session worker dead)"
-            );
+        if block.iter().any(|s| s.abs() > SILENCE_FLOOR) {
+            silent_since = None;
+            pcm.extend_from_slice(&block);
             continue;
         }
-        empty_blocks = 0;
-        pcm.extend_from_slice(&block);
+        let since = *silent_since.get_or_insert_with(kithara::platform::time::Instant::now);
+        assert!(
+            since.elapsed() < ENGINE_PROGRESS_BUDGET,
+            "{label}: no audio for {ENGINE_PROGRESS_BUDGET:?} — the audio worker stalled, or \
+             no stream was ever started (captured {captured} of {target_frames} frames)",
+            captured = pcm.len() / STEREO_CHANNELS
+        );
+        sleep(RENDER_POLL).await;
     }
     pcm
 }
 
-/// Tick the queue and pull empty render blocks until the named track
-/// becomes the current item with a known duration. No `sleep`: the
-/// render dispatcher provides the wall-clock cadence. Panics on
-/// exceeding `HANDOVER_BLOCK_LIMIT` so a true handover failure surfaces
-/// as a hard error instead of an infinite loop.
-fn wait_for_handover(
+/// Tick the queue and pull render blocks until the named track becomes
+/// the current item with a known duration. Bounded by wall clock rather
+/// than by an iteration count: a render block costs microseconds here
+/// (see [`render_audio_frames`]), so counting blocks bounds nothing.
+async fn wait_for_handover(
     session: &OfflineSession,
     queue: &Queue,
     track_id: kithara::events::TrackId,
     label: &str,
 ) {
-    for attempt in 0..HANDOVER_BLOCK_LIMIT {
+    let started = kithara::platform::time::Instant::now();
+    loop {
         let _ = queue.tick();
         let _ = session.render(RENDER_BLOCK_FRAMES);
         if queue.current().map(|e| e.id) == Some(track_id)
@@ -591,20 +614,21 @@ fn wait_for_handover(
         {
             return;
         }
-        let _ = attempt;
+        assert!(
+            started.elapsed() < ENGINE_PROGRESS_BUDGET,
+            "{label}: track {track_id:?} never became current with known duration within \
+             {ENGINE_PROGRESS_BUDGET:?}"
+        );
+        sleep(RENDER_POLL).await;
     }
-    panic!(
-        "{label}: track {track_id:?} never became current with known duration after \
-         {HANDOVER_BLOCK_LIMIT} render blocks"
-    );
 }
 
 /// Treat a stereo-interleaved PCM buffer as "live audio" if its RMS
 /// exceeds a small threshold AND a sizeable fraction of samples are
-/// non-trivial. A hung worker emits silence (zeros); a stalled-then-
-/// recovered worker emits a brief silent prefix followed by content.
-/// We require both metrics to be high so a buffer that's 90 % silence
-/// + 10 % click does NOT pass.
+/// non-trivial. [`render_audio_frames`] already refuses to count a
+/// fully silent block, so this is the level check on top: a window
+/// stitched from blocks that each carry one click and nothing else
+/// does NOT pass.
 fn assert_audio_live(samples: &[f32], label: &str) {
     assert!(
         !samples.is_empty(),
@@ -615,7 +639,7 @@ fn assert_audio_live(samples: &[f32], label: &str) {
     for &s in samples {
         let s_f = f64::from(s);
         sum_sq += s_f * s_f;
-        if s.abs() > 1.0e-4 {
+        if s.abs() > SILENCE_FLOOR {
             nonzero = nonzero.saturating_add(1);
         }
     }
@@ -642,23 +666,25 @@ fn assert_audio_live(samples: &[f32], label: &str) {
 /// padding seam.
 
 /// Body of both `user_sim_prod_*_multi_track_select_seek_end_hang`
-/// tests. PCM-driven scenario, no `sleep`: the test thread renders the
-/// audio graph synchronously, so wall-clock advances only through real
-/// engine work. For every track we:
+/// tests. PCM-driven scenario: the test thread renders the audio graph
+/// itself, so nothing advances unless the engine produces. For every
+/// track we:
 ///   1. select,
-///   2. render 10 s of audio and assert it's *live* (non-trivial RMS),
+///   2. capture 10 s of audio and assert it's *live* (non-trivial RMS),
 ///   3. seek near-end,
-///   4. render another 10 s and assert it's still live.
+///   4. capture another 10 s and assert it's still live.
 ///
 /// A stalled audio worker — whether it tripped the `HangDetector`
 /// (which `panic!`s and aborts the process) or just stopped producing
-/// PCM (PCM ring drains to silence) — fails the assertion. A position-
-/// progress heuristic is not enough: the cached `position_seconds()`
-/// can advance even when the actual audio is silence (the timeline
-/// commits the seek-landed position before any chunk is decoded).
-/// Reading PCM is the ground truth.
+/// PCM (PCM ring drains to silence) — fails inside
+/// [`render_audio_frames`], which gives the engine
+/// [`ENGINE_PROGRESS_BUDGET`] to hand back a block carrying content. A
+/// position-progress heuristic is not enough: the cached
+/// `position_seconds()` can advance even when the actual audio is
+/// silence (the timeline commits the seek-landed position before any
+/// chunk is decoded). Reading PCM is the ground truth.
 async fn run_multi_track_select_seek_end_hang(urls: &[&str], label: &str) {
-    use kithara::play::SessionDispatcher;
+    use kithara::play::{SeekOutcome, SessionDispatcher};
 
     let prod = build_prod_ctx();
     let session = Arc::new(OfflineSession::new_manual());
@@ -690,21 +716,30 @@ async fn run_multi_track_select_seek_end_hang(urls: &[&str], label: &str) {
                 .select(track_id, Transition::None)
                 .unwrap_or_else(|e| panic!("{ctx} select Err: {e}"));
 
-            wait_for_handover(&session, &queue, track_id, &ctx);
+            wait_for_handover(&session, &queue, track_id, &ctx).await;
 
-            let pcm_phase1 = render_audio_frames(&session, &queue, TEN_SECONDS_FRAMES);
-            assert_audio_live(&pcm_phase1, &format!("{ctx} phase1 (post-select)"));
+            let phase1 = format!("{ctx} phase1 (post-select)");
+            let pcm_phase1 =
+                render_audio_frames(&session, &queue, TEN_SECONDS_FRAMES, &phase1).await;
+            assert_audio_live(&pcm_phase1, &phase1);
 
             let duration = queue
                 .duration_seconds()
                 .expect("duration known after wait_for_handover");
             let target = (duration * 0.90).clamp(0.0, duration);
-            queue
+            let outcome = queue
                 .seek(target)
                 .unwrap_or_else(|e| panic!("{ctx} seek Err: {e}"));
+            assert!(
+                matches!(outcome, SeekOutcome::Landed { .. }),
+                "{ctx} seek to {target:.2}s of a {duration:.2}s track reported {outcome:?} — \
+                 the reader parked at the end, so there is no post-seek audio to measure"
+            );
 
-            let pcm_phase2 = render_audio_frames(&session, &queue, TEN_SECONDS_FRAMES);
-            assert_audio_live(&pcm_phase2, &format!("{ctx} phase2 (post-near-end-seek)"));
+            let phase2 = format!("{ctx} phase2 (post-near-end-seek)");
+            let pcm_phase2 =
+                render_audio_frames(&session, &queue, TEN_SECONDS_FRAMES, &phase2).await;
+            assert_audio_live(&pcm_phase2, &phase2);
         }
     }
 }
