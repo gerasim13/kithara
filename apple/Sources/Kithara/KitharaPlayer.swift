@@ -422,43 +422,39 @@ open class KitharaPlayer: KitharaPlayerProtocol, @unchecked Sendable {
             return
         }
 
-        switch type {
-        case .began:
-            // iOS raises the interruption again without an intervening `ended`.
-            // The permission belongs to the interruption, not to a single
-            // notification, so a repeat arms nothing and withdraws nothing.
-            if currentRate > 0 {
-                _pausedByInterruption.withLock { $0 = true }
-                pause()
-            }
-        case .ended:
-            // The interruption took the native output away and the system does
-            // not hand it back. Rebuilding it here is what makes both the
-            // resume below and a later user `play()` reach real audio; a
-            // rebuild attempted before the platform session is active again is
-            // retried by the session worker.
-            notifyAudioRouteChanged(reason: "AVAudioSession.interruptionEnded")
+        let action = _pausedByInterruption.withLock { armed -> InterruptionAction in
+            let action = InterruptionPolicy.action(
+                for: type,
+                options: interruptionOptions(notification),
+                isPlaying: currentRate > 0,
+                armed: armed
+            )
+            armed = action.armed
+            return action
+        }
 
-            let armed = _pausedByInterruption.withLock { paused -> Bool in
-                let armed = paused
-                paused = false
-                return armed
-            }
-            if armed && interruptionAllowsResume(notification) {
-                play()
-            }
-        @unknown default:
-            return
+        if action.pause {
+            pause()
+        }
+        // A rebuild attempted before the platform session is active again is
+        // retried by the session worker.
+        if action.rebuildOutput {
+            notifyAudioRouteChanged(reason: "AVAudioSession.interruptionEnded")
+        }
+        if action.resume {
+            play()
         }
     }
 
-    private func interruptionAllowsResume(_ notification: Notification) -> Bool {
+    private func interruptionOptions(
+        _ notification: Notification
+    ) -> AVAudioSession.InterruptionOptions {
         guard
             let rawOptions = notification.userInfo?[AVAudioSessionInterruptionOptionKey] as? UInt
         else {
-            return false
+            return []
         }
-        return AVAudioSession.InterruptionOptions(rawValue: rawOptions).contains(.shouldResume)
+        return AVAudioSession.InterruptionOptions(rawValue: rawOptions)
     }
 #else
     private func bindPlatformAudioSession() {}
