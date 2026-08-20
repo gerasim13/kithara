@@ -9,12 +9,12 @@ on:
   workflow_dispatch:
 
 # An instrumented run costs the same pool the stress campaign measures, so on a
-# fork it waits for the campaign rather than taking cores from it. See ci.yml.
-# It keeps the default one-pending queue: `queue` takes no expression, and `max`
-# may not be declared beside the cancellation production still wants.
+# fork it waits for the campaign rather than taking cores from it, and waits in
+# a queue nothing evicts. See ci.yml for why that costs the cancellation.
 concurrency:
   group: ${{ github.event.repository.fork && format('fork-linux-{0}', github.repository) || format('coverage-{0}', github.ref) }}
-  cancel-in-progress: ${{ !github.event.repository.fork }}
+  cancel-in-progress: false
+  queue: max
 
 jobs:
   coverage:
