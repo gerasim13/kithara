@@ -340,7 +340,7 @@ fn assert_monotonic_nondecreasing(samples: &[f64], url: &str) {
     )
 )]
 #[case::zvuk_drm_2_symphonia(
-    "https://cdn-hls-slicer.zvuk.com/drm/track/50984034_1/master.m3u8",
+    "https://cdn-hls-slicer.zvuk.com/drm/track/79829257_2/master.m3u8",
     42,
     DecoderBackend::Symphonia,
     AbrMode::Auto(None)
@@ -348,7 +348,7 @@ fn assert_monotonic_nondecreasing(samples: &[f64], url: &str) {
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
     case::zvuk_drm_2_apple(
-        "https://cdn-hls-slicer.zvuk.com/drm/track/50984034_1/master.m3u8",
+        "https://cdn-hls-slicer.zvuk.com/drm/track/79829257_2/master.m3u8",
         42,
         DecoderBackend::Apple,
         AbrMode::Auto(None)
@@ -357,7 +357,7 @@ fn assert_monotonic_nondecreasing(samples: &[f64], url: &str) {
 #[cfg_attr(
     target_os = "android",
     case::zvuk_drm_2_android(
-        "https://cdn-hls-slicer.zvuk.com/drm/track/50984034_1/master.m3u8",
+        "https://cdn-hls-slicer.zvuk.com/drm/track/79829257_2/master.m3u8",
         42,
         DecoderBackend::Android,
         AbrMode::Auto(None)

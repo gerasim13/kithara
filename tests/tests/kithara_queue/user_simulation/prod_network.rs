@@ -40,8 +40,7 @@ const PROD_DRM_TRACK: &str = "https://cdn-hls-slicer.zvuk.com/drm/track/18008255
 /// Second prod DRM track — exercises the same provider but a
 /// different track id, in case the bug is content-specific. URL
 /// shape sourced from `app.yaml` playlist.
-const PROD_DRM_TRACK_ALT: &str =
-    "https://cdn-hls-slicer.zvuk.com/drm/track/173388194_1/master.m3u8";
+const PROD_DRM_TRACK_ALT: &str = "https://cdn-hls-slicer.zvuk.com/drm/track/5807750_3/master.m3u8";
 
 /// Build a prod-DRM track via the same `kithara-app` source resolver
 /// the binary uses. The resolver picks up baked credentials and the
@@ -510,17 +509,19 @@ async fn run_prod_drm_scenario_no_warmup(url: &str, ratio: f64) {
     let _ = tick.await;
 }
 
-/// Production DRM playlist sourced from `crates/kithara-app/app.yaml`.
-/// All on `cdn-hls-slicer.zvuk.com` with the same `zvuk-prod` provider —
-/// some are HE-AAC v2 fMP4, some FLAC fMP4, so the multi-track scenario
-/// mixes codecs the way the user's GUI playlist does.
+/// The tracks of the `crates/kithara-app/app.yaml` production playlist that
+/// the slicer still serves. All on `cdn-hls-slicer.zvuk.com` with the same
+/// `zvuk-prod` provider — three carry a FLAC fMP4 rendition and every one a
+/// HE-AAC v2, so the multi-track scenario mixes codecs the way the user's GUI
+/// playlist does.
+///
+/// The other three (`173388194_1`, `50984034_1`, `171515249_1`) answer 502 and
+/// are left out: a test that cannot reach its media reports the catalogue, not
+/// the player.
 const PROD_DRM_PLAYLIST: &[&str] = &[
-    "https://cdn-hls-slicer.zvuk.com/drm/track/173388194_1/master.m3u8",
     "https://cdn-hls-slicer.zvuk.com/drm/track/180082552_1/master.m3u8",
     "https://cdn-hls-slicer.zvuk.com/drm/track/5807750_3/master.m3u8",
-    "https://cdn-hls-slicer.zvuk.com/drm/track/50984034_1/master.m3u8",
     "https://cdn-hls-slicer.zvuk.com/drm/track/79829257_2/master.m3u8",
-    "https://cdn-hls-slicer.zvuk.com/drm/track/171515249_1/master.m3u8",
     "https://cdn-hls-slicer.zvuk.com/drm/track/59232754_2/master.m3u8",
 ];
 
