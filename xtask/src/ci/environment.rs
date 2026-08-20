@@ -900,6 +900,49 @@ mod tests {
         );
     }
 
+    /// TEMPORARY probe, not for merge: repeat the sibling-job scenario and
+    /// report how often the artifact survives a reclaim it should not, together
+    /// with the allocated block counts a fresh write reports on this host.
+    #[cfg(unix)]
+    #[test]
+    fn probe_leased_checkout_reclaim_repeats() {
+        use std::os::unix::fs::MetadataExt as _;
+
+        let mut survived = 0_u32;
+        let mut blocks_seen = Vec::new();
+        for index in 0..100 {
+            let root = tempfile::tempdir().unwrap();
+            let checkout = root
+                .path()
+                .join("workspaces/gitlab/runner-a/0/disrupt/kithara");
+            let target = checkout.join("target/debug");
+            fs::create_dir_all(&target).unwrap();
+            fs::write(checkout.join("Cargo.toml"), "[package]\n").unwrap();
+            fs::write(target.join("artifact"), vec![0_u8; 400_000]).unwrap();
+
+            let blocks = fs::symlink_metadata(target.join("artifact"))
+                .unwrap()
+                .blocks();
+            if index < 8 {
+                blocks_seen.push(blocks);
+            }
+
+            let held = CheckoutLease::acquire(&checkout).expect("the running job takes its lease");
+            reclaim_build_caches(root.path(), 0, u64::MAX).unwrap();
+            drop(held);
+            reclaim_build_caches(root.path(), 0, u64::MAX).unwrap();
+
+            if target.join("artifact").exists() {
+                survived += 1;
+            }
+        }
+
+        assert_eq!(
+            survived, 0,
+            "PROBE survived={survived}/100 first_blocks={blocks_seen:?}"
+        );
+    }
+
     /// A sibling job holds the checkout while its tests run. Cargo has long
     /// released `.cargo-lock` by then, so without the lease the reclaim reads
     /// the checkout as abandoned and deletes the binaries the tests are still
