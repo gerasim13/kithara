@@ -900,31 +900,50 @@ mod tests {
         );
     }
 
-    /// TEMPORARY probe, not for merge: repeat the sibling-job scenario and, for
-    /// every repeat whose artifact survived a reclaim that should have evicted
-    /// it, ask the lease file directly what it answers - contended, or an I/O
-    /// error with an errno.
+    /// TEMPORARY probe, not for merge: on every repeat whose artifact survived
+    /// a reclaim that should have evicted it, ask the kernel who holds the
+    /// lease lock - `/proc/locks` names the pid, and `/proc/<pid>/comm` names
+    /// the process.
     #[cfg(unix)]
     #[test]
     fn probe_leased_checkout_reclaim_repeats() {
-        use std::{fs::OpenOptions, os::unix::fs::MetadataExt as _};
+        use std::os::unix::fs::MetadataExt as _;
 
-        use fs4::{FileExt, TryLockError};
-
-        fn answer(path: &std::path::Path) -> String {
-            match OpenOptions::new().read(true).write(true).open(path) {
-                Err(error) => format!("open_error={:?}", error.raw_os_error()),
-                Ok(file) => match FileExt::try_lock(&file) {
-                    Ok(()) => "free".to_owned(),
-                    Err(TryLockError::WouldBlock) => "would_block".to_owned(),
-                    Err(TryLockError::Error(error)) => {
-                        format!(
-                            "io_error={:?} kind={:?}",
-                            error.raw_os_error(),
-                            error.kind()
-                        )
-                    }
-                },
+        fn holders(lease: &std::path::Path) -> String {
+            let Ok(metadata) = fs::symlink_metadata(lease) else {
+                return "lease_missing".to_owned();
+            };
+            let inode = metadata.ino();
+            let Ok(locks) = fs::read_to_string("/proc/locks") else {
+                return "no_proc_locks".to_owned();
+            };
+            let mut found = Vec::new();
+            for line in locks.lines() {
+                let fields: Vec<&str> = line.split_whitespace().collect();
+                let Some(location) = fields.get(5) else {
+                    continue;
+                };
+                let Some(entry_inode) = location.rsplit(':').next() else {
+                    continue;
+                };
+                if entry_inode != inode.to_string() {
+                    continue;
+                }
+                let pid = fields.get(4).copied().unwrap_or("?");
+                let comm = fs::read_to_string(format!("/proc/{pid}/comm"))
+                    .unwrap_or_else(|_| "gone".to_owned());
+                found.push(format!(
+                    "{}|{}|pid={pid}|comm={}|self={}",
+                    fields.get(1).copied().unwrap_or("?"),
+                    fields.get(3).copied().unwrap_or("?"),
+                    comm.trim(),
+                    std::process::id()
+                ));
+            }
+            if found.is_empty() {
+                "no_lock_entry".to_owned()
+            } else {
+                found.join(" ; ")
             }
         }
 
@@ -946,14 +965,7 @@ mod tests {
 
             if target.join("artifact").exists() {
                 let lease = checkout.join(build_cache::JOB_LEASE);
-                let first = answer(&lease);
-                let second = answer(&lease);
-                let blocks = fs::symlink_metadata(target.join("artifact"))
-                    .unwrap()
-                    .blocks();
-                survivors.push(format!(
-                    "index={index} blocks={blocks} lease_now={first} lease_again={second}"
-                ));
+                survivors.push(format!("index={index} holders=[{}]", holders(&lease)));
             }
         }
 
