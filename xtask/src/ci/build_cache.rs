@@ -162,7 +162,7 @@ fn candidate_entries(target_dir: &Path) -> Result<CacheContents> {
         entries: Vec::new(),
         // A target a live job leased is active even between compilations,
         // when no `.cargo-lock` is held.
-        active: target_lease_is_held(target_dir),
+        active: lease_is_held(target_dir, FileExt::try_lock),
         locks: Vec::new(),
     };
     for entry in entries {
@@ -257,7 +257,9 @@ fn allocated_bytes(metadata: &fs::Metadata) -> u64 {
 /// reclaim from another job can tell "in use" from "left behind".
 pub(crate) const JOB_LEASE: &str = ".kithara-job-lease";
 
-/// Whether a live job holds `directory` as its checkout.
+/// Whether a live job holds `directory`, asked with the request that sees the
+/// kind of holder in question: `try_lock_shared` for a checkout, `try_lock`
+/// for a Cargo target.
 ///
 /// `.cargo-lock` cannot answer that: Cargo holds it only while it compiles, so
 /// a checkout or shared target whose tests are already running looks
@@ -265,24 +267,13 @@ pub(crate) const JOB_LEASE: &str = ".kithara-job-lease";
 /// under a sibling job, and the 1869 tests that then failed to exec their own
 /// binaries looked like the product breaking rather than the CI eating itself.
 ///
-/// The question is asked with a shared request even though the owner takes the
-/// lease exclusively: a shared request still cannot be granted while the owner
-/// holds it, and it leaves concurrent observers alone. Asking exclusively made
-/// the question itself exclusive, so two observers answered "held" about each
-/// other while no job held anything — measured on Linux with four observers and
-/// no owner, 37694 of 80000 answers were that invention.
-fn checkout_lease_is_held(directory: &Path) -> bool {
-    lease_is_held(directory, FileExt::try_lock_shared)
-}
-
-/// Whether any live job holds `directory` as its Cargo target.
-///
-/// Target holders take the lease shared so several coexist, so only an
-/// exclusive request sees them at all.
-fn target_lease_is_held(directory: &Path) -> bool {
-    lease_is_held(directory, FileExt::try_lock)
-}
-
+/// A checkout owner takes the lease exclusively, so a shared request already
+/// cannot be granted while it holds, and it leaves concurrent observers alone.
+/// Asking exclusively made the question itself exclusive, so two observers
+/// answered "held" about each other while no job held anything — measured on
+/// Linux with four observers and no owner, 37694 of 80000 answers were that
+/// invention. Target holders take the lease shared so several coexist, so only
+/// an exclusive request sees them at all.
 fn lease_is_held(directory: &Path, ask: fn(&File) -> Result<(), TryLockError>) -> bool {
     let path = directory.join(JOB_LEASE);
     let Ok(file) = OpenOptions::new().read(true).write(true).open(&path) else {
@@ -301,8 +292,8 @@ fn lease_is_held(directory: &Path, ask: fn(&File) -> Result<(), TryLockError>) -
 /// midnight budget pass deleted the binaries out from under it — repetitions
 /// 44-50 then failed every exec and read as the product breaking. The lock is
 /// shared so concurrent holders (a stress run and the harness runs it spawns)
-/// coexist; [`target_lease_is_held`] asks for it exclusively and backs off
-/// while any holder is alive.
+/// coexist; the reclaim asks [`lease_is_held`] exclusively and backs off while
+/// any holder is alive.
 pub(crate) struct TargetLease {
     _file: File,
 }
@@ -341,7 +332,7 @@ pub(crate) fn persistent_target_dirs(root: &Path) -> Result<Vec<PathBuf>> {
     let mut targets = Vec::new();
     while let Some(directory) = pending.pop() {
         if directory.join("Cargo.toml").is_file() {
-            if checkout_lease_is_held(&directory) {
+            if lease_is_held(&directory, FileExt::try_lock_shared) {
                 continue;
             }
             for name in ["target", "target-flash-off"] {
@@ -433,7 +424,7 @@ mod tests {
                 let invented = Arc::clone(&invented);
                 thread::spawn(move || {
                     for _ in 0..2_000 {
-                        if checkout_lease_is_held(&checkout) {
+                        if lease_is_held(&checkout, FileExt::try_lock_shared) {
                             invented.fetch_add(1, Ordering::Relaxed);
                         }
                     }
