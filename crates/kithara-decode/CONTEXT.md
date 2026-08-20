@@ -172,7 +172,9 @@ position restore — no pre-roll back-off and no codec flush — while a native
 `Duration` round-trip is avoided because it loses packet-boundary precision.
 
 Native MPEG-audio readers (`FORMAT_ID_MP1`, `FORMAT_ID_MP2`, `FORMAT_ID_MP3`)
-instead own a byte-exact packet transaction. Each frame read checkpoints the MSS
+instead own a byte-exact packet transaction. That reader is `kithara-mpa`, a
+fork of Symphonia's `MpaReader` that this crate registers in place of the
+upstream one; the contract itself is owned there. Each frame read checkpoints the MSS
 cursor, retains `MAX_MPEG_FRAME_SIZE` bytes for seekback, and on `Interrupted` or
 `WouldBlock` returns the original error only after an exact buffered rollback.
 An inexact rollback is a terminal decode error. The checkpoint is per frame, so
@@ -182,6 +184,12 @@ formats and does not layer timestamp recovery over their rollback. Pending from
 inside `MpaReader::seek` is not made resumable by this packet-read contract; seek
 transactionality remains a separate concern. The strand never reaches the
 `Stream` / `wait_range` contract.
+
+Because of that substitution, `registry::get_probe` builds the format list by
+hand instead of calling `register_enabled_formats`. A probe tier resolves to the
+first candidate whose marker matches and whose score accepts, so registration
+order is load-bearing — ADTS and MPEG audio share a `0xFF` sync prefix. The list
+mirrors Symphonia's own order with the MPA reader replaced in place.
 
 ## Gapless playback
 
