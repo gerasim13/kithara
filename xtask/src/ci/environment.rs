@@ -930,11 +930,10 @@ mod tests {
                 let blocks = fs::symlink_metadata(target.join("artifact"))
                     .unwrap()
                     .blocks();
-                let offered = build_cache::persistent_target_dirs(
-                    &root.path().join("workspaces/gitlab"),
-                )
-                .unwrap()
-                .len();
+                let offered =
+                    build_cache::persistent_target_dirs(&root.path().join("workspaces/gitlab"))
+                        .unwrap()
+                        .len();
                 let lease_file = checkout.join(build_cache::JOB_LEASE).exists();
                 survivors.push(format!(
                     "index={index} blocks={blocks} offered_targets={offered} lease_file={lease_file}"
