@@ -900,15 +900,33 @@ mod tests {
         );
     }
 
-    /// TEMPORARY probe, not for merge: repeat the sibling-job scenario and
-    /// record, for every repeat whose artifact survived a reclaim that should
-    /// have evicted it, what the reclaim saw - the lease decision (whether the
-    /// checkout was offered as a target at all) and the blocks the artifact
-    /// reported.
+    /// TEMPORARY probe, not for merge: repeat the sibling-job scenario and, for
+    /// every repeat whose artifact survived a reclaim that should have evicted
+    /// it, ask the lease file directly what it answers - contended, or an I/O
+    /// error with an errno.
     #[cfg(unix)]
     #[test]
     fn probe_leased_checkout_reclaim_repeats() {
-        use std::os::unix::fs::MetadataExt as _;
+        use std::{fs::OpenOptions, os::unix::fs::MetadataExt as _};
+
+        use fs4::{FileExt, TryLockError};
+
+        fn answer(path: &std::path::Path) -> String {
+            match OpenOptions::new().read(true).write(true).open(path) {
+                Err(error) => format!("open_error={:?}", error.raw_os_error()),
+                Ok(file) => match FileExt::try_lock(&file) {
+                    Ok(()) => "free".to_owned(),
+                    Err(TryLockError::WouldBlock) => "would_block".to_owned(),
+                    Err(TryLockError::Error(error)) => {
+                        format!(
+                            "io_error={:?} kind={:?}",
+                            error.raw_os_error(),
+                            error.kind()
+                        )
+                    }
+                },
+            }
+        }
 
         let mut survivors = Vec::new();
         for index in 0..300 {
@@ -927,16 +945,14 @@ mod tests {
             reclaim_build_caches(root.path(), 0, u64::MAX).unwrap();
 
             if target.join("artifact").exists() {
+                let lease = checkout.join(build_cache::JOB_LEASE);
+                let first = answer(&lease);
+                let second = answer(&lease);
                 let blocks = fs::symlink_metadata(target.join("artifact"))
                     .unwrap()
                     .blocks();
-                let offered =
-                    build_cache::persistent_target_dirs(&root.path().join("workspaces/gitlab"))
-                        .unwrap()
-                        .len();
-                let lease_file = checkout.join(build_cache::JOB_LEASE).exists();
                 survivors.push(format!(
-                    "index={index} blocks={blocks} offered_targets={offered} lease_file={lease_file}"
+                    "index={index} blocks={blocks} lease_now={first} lease_again={second}"
                 ));
             }
         }
