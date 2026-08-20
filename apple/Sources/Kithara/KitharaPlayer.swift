@@ -424,12 +424,21 @@ open class KitharaPlayer: KitharaPlayerProtocol, @unchecked Sendable {
 
         switch type {
         case .began:
-            let wasPlaying = currentRate > 0
-            _pausedByInterruption.withLock { $0 = wasPlaying }
-            if wasPlaying {
+            // iOS raises the interruption again without an intervening `ended`.
+            // The permission belongs to the interruption, not to a single
+            // notification, so a repeat arms nothing and withdraws nothing.
+            if currentRate > 0 {
+                _pausedByInterruption.withLock { $0 = true }
                 pause()
             }
         case .ended:
+            // The interruption took the native output away and the system does
+            // not hand it back. Rebuilding it here is what makes both the
+            // resume below and a later user `play()` reach real audio; a
+            // rebuild attempted before the platform session is active again is
+            // retried by the session worker.
+            notifyAudioRouteChanged(reason: "AVAudioSession.interruptionEnded")
+
             let armed = _pausedByInterruption.withLock { paused -> Bool in
                 let armed = paused
                 paused = false

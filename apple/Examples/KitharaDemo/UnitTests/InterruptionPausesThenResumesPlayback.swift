@@ -7,8 +7,104 @@ import Testing
 struct IntegrationRegressionsIOS {}
 
 extension IntegrationRegressionsIOS {
-    @Test("An interruption resumes only when allowed and keeps controls responsive")
-    func interruptionResumesOnlyWhenAllowed() async throws {
+    @Test("An interruption pauses playback")
+    func interruptionPausesPlayback() async throws {
+        try await withPlayingFixture { player in
+            postInterruption(.began)
+            try await waitForInterruptionFact("playback to pause after interruption began") {
+                player.currentRate == 0
+            }
+        }
+    }
+
+    @Test("An interruption that ends with permission resumes playback")
+    func interruptionEndedWithPermissionResumesPlayback() async throws {
+        try await withPlayingFixture { player in
+            postInterruption(.began)
+            try await waitForInterruptionFact("playback to pause after interruption began") {
+                player.currentRate == 0
+            }
+
+            let origin = player.currentTime
+            postInterruption(.ended, options: .shouldResume)
+            try await waitForInterruptionFact("playback to resume and advance after shouldResume") {
+                player.currentRate > 0 && player.currentTime >= origin + 0.15
+            }
+        }
+    }
+
+    @Test("An interruption that ends without permission keeps playback paused")
+    func interruptionEndedWithoutPermissionKeepsPlaybackPaused() async throws {
+        try await withPlayingFixture { player in
+            postInterruption(.began)
+            try await waitForInterruptionFact("playback to pause after interruption began") {
+                player.currentRate == 0
+            }
+
+            postInterruption(.ended)
+            let resumed = await reachedInterruptionFact(for: .seconds(1)) {
+                player.currentRate > 0
+            }
+            #expect(!resumed, "Playback resumed after an interruption ended without shouldResume")
+        }
+    }
+
+    /// iOS delivers consecutive `began` notifications without an `ended`
+    /// between them — an incoming call that is never answered raises the
+    /// interruption more than once. The permission to resume belongs to the
+    /// interruption as a whole, so a repeated `began` must not withdraw it.
+    @Test("A repeated interruption-began keeps the permission to resume")
+    func repeatedInterruptionBeganKeepsResumePermission() async throws {
+        try await withPlayingFixture { player in
+            postInterruption(.began)
+            try await waitForInterruptionFact("playback to pause after the first began") {
+                player.currentRate == 0
+            }
+
+            postInterruption(.began)
+
+            let origin = player.currentTime
+            postInterruption(.ended, options: .shouldResume)
+            try await waitForInterruptionFact("playback to resume and advance after shouldResume") {
+                player.currentRate > 0 && player.currentTime >= origin + 0.15
+            }
+        }
+    }
+
+    /// The framework must never hold a `play()` back on its own account: the
+    /// system decides whether playback resumes by itself, the user decides
+    /// whether it resumes at all.
+    ///
+    /// A simulator cannot take the audio output away the way a phone call
+    /// does — measured on Xcode 26.6 / iOS 26.3.1, `setActive(false)` under a
+    /// running stream leaves the clock advancing — so this pins the framework's
+    /// own transport logic, not the recovery of a torn-down output. Recovery is
+    /// only observable on a device.
+    @Test("A public play resumes playback after an interruption")
+    func publicPlayResumesPlaybackAfterAnInterruption() async throws {
+        try await withPlayingFixture { player in
+            postInterruption(.began)
+            try await waitForInterruptionFact("playback to pause after interruption began") {
+                player.currentRate == 0
+            }
+            postInterruption(.ended)
+
+            let origin = player.currentTime
+            player.play()
+            try await waitForInterruptionFact("public play to resume and advance playback") {
+                player.currentRate > 0 && player.currentTime >= origin + 0.15
+            }
+
+            player.pause()
+            try await waitForInterruptionFact("public pause to pause playback") {
+                player.currentRate == 0
+            }
+        }
+    }
+
+    private func withPlayingFixture(
+        _ body: (KitharaPlayer) async throws -> Void
+    ) async throws {
         let audioSession = AVAudioSession.sharedInstance()
         try audioSession.setCategory(.playback)
         try audioSession.setActive(true)
@@ -35,41 +131,7 @@ extension IntegrationRegressionsIOS {
             player.currentRate > 0 && player.currentTime > 0.1
         }
 
-        postInterruption(.began)
-        try await waitForInterruptionFact("playback to pause after interruption began") {
-            player.currentRate == 0
-        }
-
-        let automaticResumeOrigin = player.currentTime
-        postInterruption(.ended, options: .shouldResume)
-        try await waitForInterruptionFact("playback to resume and advance after shouldResume") {
-            player.currentRate > 0 && player.currentTime >= automaticResumeOrigin + 0.15
-        }
-
-        postInterruption(.began)
-        try await waitForInterruptionFact("playback to pause before no-resume ended") {
-            player.currentRate == 0
-        }
-
-        postInterruption(.ended)
-        let resumedWithoutPermission = await reachedInterruptionFact(for: .seconds(1)) {
-            player.currentRate > 0
-        }
-        #expect(
-            !resumedWithoutPermission,
-            "Playback resumed after interruption ended without shouldResume"
-        )
-
-        let manualResumeOrigin = player.currentTime
-        player.play()
-        try await waitForInterruptionFact("public play to resume and advance playback") {
-            player.currentRate > 0 && player.currentTime >= manualResumeOrigin + 0.15
-        }
-
-        player.pause()
-        try await waitForInterruptionFact("public pause to pause playback") {
-            player.currentRate == 0
-        }
+        try await body(player)
     }
 
     private func postInterruption(
