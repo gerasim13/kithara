@@ -15,10 +15,18 @@ env:
 # A fork's branches share one pool of Linux runners, so their pushes queue
 # rather than overlap. The stress run no longer queues here: it has a
 # runner of its own and a group of its own.
-# Production keeps the per-ref cancellation used for superseded pushes.
+#
+# `queue: max` is what makes that queue honest. The default `single` holds one
+# pending run and lets every new arrival evict it, so one push to any branch
+# cancelled whichever branch had been waiting its turn — a queue in name only.
+# `queue` takes no expression and may not be declared beside
+# `cancel-in-progress: true`, so the per-ref cancellation of superseded pushes
+# goes with it, the trade lanes.yml already made. A superseded push now runs to
+# completion instead of being cancelled.
 concurrency:
   group: ${{ github.event.repository.fork && format('fork-linux-{0}', github.repository) || format('ci-{0}', github.ref) }}
-  cancel-in-progress: ${{ !github.event.repository.fork }}
+  cancel-in-progress: false
+  queue: max
 
 jobs:
   # Authorization runs on a GitHub-hosted machine, before any job can reach a
