@@ -66,9 +66,8 @@ The hook records evidence but never terminates the process.
 The hook answers only panics whose payload is a `&str` or a `String`. Every
 panic this workspace raises carries a message; a payload that is neither is a
 dependency unwinding for control flow rather than failing, which is how `loom`
-cancels each suspended generator at the end of every execution. Such an unwind
-is skipped before the one-shot suppression is consumed, so the suppression a
-caller armed still covers the panic it was armed for.
+cancels each suspended generator at the end of every execution. Building a dump
+for such an unwind reaches state that execution owned, so it is skipped.
 
 The flight-recorder rings are `std::sync::Mutex`, not the platform one. They
 are process-global, outlive every `loom::model` execution and are read from the
