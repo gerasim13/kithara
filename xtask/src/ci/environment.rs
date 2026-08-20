@@ -901,16 +901,17 @@ mod tests {
     }
 
     /// TEMPORARY probe, not for merge: repeat the sibling-job scenario and
-    /// report how often the artifact survives a reclaim it should not, together
-    /// with the allocated block counts a fresh write reports on this host.
+    /// record, for every repeat whose artifact survived a reclaim that should
+    /// have evicted it, what the reclaim saw - the lease decision (whether the
+    /// checkout was offered as a target at all) and the blocks the artifact
+    /// reported.
     #[cfg(unix)]
     #[test]
     fn probe_leased_checkout_reclaim_repeats() {
         use std::os::unix::fs::MetadataExt as _;
 
-        let mut survived = 0_u32;
-        let mut blocks_seen = Vec::new();
-        for index in 0..100 {
+        let mut survivors = Vec::new();
+        for index in 0..300 {
             let root = tempfile::tempdir().unwrap();
             let checkout = root
                 .path()
@@ -920,26 +921,31 @@ mod tests {
             fs::write(checkout.join("Cargo.toml"), "[package]\n").unwrap();
             fs::write(target.join("artifact"), vec![0_u8; 400_000]).unwrap();
 
-            let blocks = fs::symlink_metadata(target.join("artifact"))
-                .unwrap()
-                .blocks();
-            if index < 8 {
-                blocks_seen.push(blocks);
-            }
-
             let held = CheckoutLease::acquire(&checkout).expect("the running job takes its lease");
             reclaim_build_caches(root.path(), 0, u64::MAX).unwrap();
             drop(held);
             reclaim_build_caches(root.path(), 0, u64::MAX).unwrap();
 
             if target.join("artifact").exists() {
-                survived += 1;
+                let blocks = fs::symlink_metadata(target.join("artifact"))
+                    .unwrap()
+                    .blocks();
+                let offered = build_cache::persistent_target_dirs(
+                    &root.path().join("workspaces/gitlab"),
+                )
+                .unwrap()
+                .len();
+                let lease_file = checkout.join(build_cache::JOB_LEASE).exists();
+                survivors.push(format!(
+                    "index={index} blocks={blocks} offered_targets={offered} lease_file={lease_file}"
+                ));
             }
         }
 
-        assert_eq!(
-            survived, 0,
-            "PROBE survived={survived}/100 first_blocks={blocks_seen:?}"
+        assert!(
+            survivors.is_empty(),
+            "PROBE survivors={}/300 {survivors:?}",
+            survivors.len()
         );
     }
 
