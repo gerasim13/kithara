@@ -900,87 +900,79 @@ mod tests {
         );
     }
 
-    /// TEMPORARY probe, not for merge: on every repeat whose artifact survived
-    /// a reclaim that should have evicted it, match `/proc/locks` on the full
-    /// device and inode, and list this process's own descriptors that still
-    /// point at the lease file.
+    /// TEMPORARY probe, not for merge: nobody owns this lease, so every "held"
+    /// answer is a lie. Ask it concurrently the way `lease_is_held` does today
+    /// (exclusive) and the way an observer could (shared), and count the lies.
     #[cfg(unix)]
     #[test]
-    fn probe_leased_checkout_reclaim_repeats() {
-        use std::os::unix::fs::MetadataExt as _;
+    fn probe_lease_observers_interfere() {
+        use std::{
+            fs::OpenOptions,
+            sync::{
+                Arc,
+                atomic::{AtomicU64, Ordering},
+            },
+            thread,
+        };
 
-        fn report(lease: &std::path::Path) -> String {
-            let Ok(metadata) = fs::symlink_metadata(lease) else {
-                return "lease_missing".to_owned();
+        use fs4::FileExt;
+
+        fn exclusive(path: &std::path::Path) -> bool {
+            let Ok(file) = OpenOptions::new().read(true).write(true).open(path) else {
+                return false;
             };
-            let inode = metadata.ino();
-            let device = metadata.dev();
-            let major = (device >> 8) & 0xfff;
-            let minor = (device & 0xff) | ((device >> 12) & 0xfff_f00);
-            let wanted = format!("{major:02x}:{minor:02x}:{inode}");
-
-            let mut locks_here = Vec::new();
-            if let Ok(locks) = fs::read_to_string("/proc/locks") {
-                for line in locks.lines() {
-                    let fields: Vec<&str> = line.split_whitespace().collect();
-                    if fields.get(5).copied() != Some(wanted.as_str()) {
-                        continue;
-                    }
-                    let pid = fields.get(4).copied().unwrap_or("?");
-                    locks_here.push(format!(
-                        "{}|{}|pid={pid}",
-                        fields.get(1).copied().unwrap_or("?"),
-                        fields.get(3).copied().unwrap_or("?")
-                    ));
-                }
-            }
-
-            let mut own_fds = Vec::new();
-            if let Ok(entries) = fs::read_dir("/proc/self/fd") {
-                for entry in entries.flatten() {
-                    let Ok(link) = fs::read_link(entry.path()) else {
-                        continue;
-                    };
-                    if link == lease {
-                        own_fds.push(entry.file_name().to_string_lossy().into_owned());
-                    }
-                }
-            }
-
-            format!(
-                "wanted={wanted} self={} locks=[{}] own_fds=[{}]",
-                std::process::id(),
-                locks_here.join(" ; "),
-                own_fds.join(",")
-            )
-        }
-
-        let mut survivors = Vec::new();
-        for index in 0..300 {
-            let root = tempfile::tempdir().unwrap();
-            let checkout = root
-                .path()
-                .join("workspaces/gitlab/runner-a/0/disrupt/kithara");
-            let target = checkout.join("target/debug");
-            fs::create_dir_all(&target).unwrap();
-            fs::write(checkout.join("Cargo.toml"), "[package]\n").unwrap();
-            fs::write(target.join("artifact"), vec![0_u8; 400_000]).unwrap();
-
-            let held = CheckoutLease::acquire(&checkout).expect("the running job takes its lease");
-            reclaim_build_caches(root.path(), 0, u64::MAX).unwrap();
-            drop(held);
-            reclaim_build_caches(root.path(), 0, u64::MAX).unwrap();
-
-            if target.join("artifact").exists() {
-                let lease = checkout.join(build_cache::JOB_LEASE);
-                survivors.push(format!("index={index} {}", report(&lease)));
+            match FileExt::try_lock(&file) {
+                Ok(()) => false,
+                Err(_) => true,
             }
         }
 
-        assert!(
-            survivors.is_empty(),
-            "PROBE survivors={}/300 {survivors:?}",
-            survivors.len()
+        fn shared(path: &std::path::Path) -> bool {
+            let Ok(file) = OpenOptions::new().read(true).write(true).open(path) else {
+                return false;
+            };
+            match FileExt::try_lock_shared(&file) {
+                Ok(()) => false,
+                Err(_) => true,
+            }
+        }
+
+        fn count_lies(observe: fn(&std::path::Path) -> bool, observers: usize, rounds: u64) -> u64 {
+            let directory = tempfile::tempdir().unwrap();
+            let path = Arc::new(directory.path().join(build_cache::JOB_LEASE));
+            OpenOptions::new()
+                .create(true)
+                .truncate(false)
+                .write(true)
+                .open(path.as_path())
+                .unwrap();
+            let lies = Arc::new(AtomicU64::new(0));
+            let handles: Vec<_> = (0..observers)
+                .map(|_| {
+                    let lies = Arc::clone(&lies);
+                    let path = Arc::clone(&path);
+                    thread::spawn(move || {
+                        for _ in 0..rounds {
+                            if observe(path.as_path()) {
+                                lies.fetch_add(1, Ordering::Relaxed);
+                            }
+                        }
+                    })
+                })
+                .collect();
+            for handle in handles {
+                handle.join().unwrap();
+            }
+            lies.load(Ordering::Relaxed)
+        }
+
+        let exclusive_lies = count_lies(exclusive, 4, 20_000);
+        let shared_lies = count_lies(shared, 4, 20_000);
+
+        assert_eq!(
+            (exclusive_lies, shared_lies),
+            (0, 0),
+            "PROBE answers=80000 each exclusive_false_held={exclusive_lies} shared_false_held={shared_lies}"
         );
     }
 
