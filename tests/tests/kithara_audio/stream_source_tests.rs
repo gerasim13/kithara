@@ -303,6 +303,14 @@ async fn rapid_seeks_via_timeline_all_complete() {
             Err(_) => break,
         }
     }
+    // Paced blocking reads can exhaust the virtual-clock budget before the
+    // loop drains its own subscriber queue; events already delivered before
+    // the deadline still count toward the contract.
+    while let Ok(envelope) = events.try_recv() {
+        if let Event::Audio(AudioEvent::SeekComplete { seek_epoch, .. }) = envelope.event {
+            last_complete = Some(seek_epoch);
+        }
+    }
     assert_eq!(
         last_complete,
         Some(highest_expected),
