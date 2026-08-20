@@ -162,7 +162,7 @@ fn candidate_entries(target_dir: &Path) -> Result<CacheContents> {
         entries: Vec::new(),
         // A target a live job leased is active even between compilations,
         // when no `.cargo-lock` is held.
-        active: lease_is_held(target_dir),
+        active: target_lease_is_held(target_dir),
         locks: Vec::new(),
     };
     for entry in entries {
@@ -257,23 +257,39 @@ fn allocated_bytes(metadata: &fs::Metadata) -> u64 {
 /// reclaim from another job can tell "in use" from "left behind".
 pub(crate) const JOB_LEASE: &str = ".kithara-job-lease";
 
-/// Whether a live job holds the lease under `directory`.
+/// Whether a live job holds `directory` as its checkout.
 ///
 /// `.cargo-lock` cannot answer that: Cargo holds it only while it compiles, so
 /// a checkout or shared target whose tests are already running looks
 /// abandoned. A reclaim that believed it deleted a live `target` out from
 /// under a sibling job, and the 1869 tests that then failed to exec their own
 /// binaries looked like the product breaking rather than the CI eating itself.
-fn lease_is_held(directory: &Path) -> bool {
+///
+/// The question is asked with a shared request even though the owner takes the
+/// lease exclusively: a shared request still cannot be granted while the owner
+/// holds it, and it leaves concurrent observers alone. Asking exclusively made
+/// the question itself exclusive, so two observers answered "held" about each
+/// other while no job held anything — measured on Linux with four observers and
+/// no owner, 37694 of 80000 answers were that invention.
+fn checkout_lease_is_held(directory: &Path) -> bool {
+    lease_is_held(directory, FileExt::try_lock_shared)
+}
+
+/// Whether any live job holds `directory` as its Cargo target.
+///
+/// Target holders take the lease shared so several coexist, so only an
+/// exclusive request sees them at all.
+fn target_lease_is_held(directory: &Path) -> bool {
+    lease_is_held(directory, FileExt::try_lock)
+}
+
+fn lease_is_held(directory: &Path, ask: fn(&File) -> Result<(), TryLockError>) -> bool {
     let path = directory.join(JOB_LEASE);
     let Ok(file) = OpenOptions::new().read(true).write(true).open(&path) else {
         return false;
     };
-    match FileExt::try_lock(&file) {
-        Ok(()) => false,
-        // Held by a live job, or unreadable — either way, not ours to remove.
-        Err(_) => true,
-    }
+    // Held by a live job, or unreadable — either way, not ours to remove.
+    ask(&file).is_err()
 }
 
 /// A process's claim on the shared Cargo target directory it works in.
@@ -285,8 +301,8 @@ fn lease_is_held(directory: &Path) -> bool {
 /// midnight budget pass deleted the binaries out from under it — repetitions
 /// 44-50 then failed every exec and read as the product breaking. The lock is
 /// shared so concurrent holders (a stress run and the harness runs it spawns)
-/// coexist; [`lease_is_held`] asks for it exclusively and backs off while any
-/// holder is alive.
+/// coexist; [`target_lease_is_held`] asks for it exclusively and backs off
+/// while any holder is alive.
 pub(crate) struct TargetLease {
     _file: File,
 }
@@ -325,7 +341,7 @@ pub(crate) fn persistent_target_dirs(root: &Path) -> Result<Vec<PathBuf>> {
     let mut targets = Vec::new();
     while let Some(directory) = pending.pop() {
         if directory.join("Cargo.toml").is_file() {
-            if lease_is_held(&directory) {
+            if checkout_lease_is_held(&directory) {
                 continue;
             }
             for name in ["target", "target-flash-off"] {
@@ -372,6 +388,11 @@ pub(crate) fn persistent_target_dirs(root: &Path) -> Result<Vec<PathBuf>> {
 mod tests {
     use std::{
         fs::OpenOptions,
+        sync::{
+            Arc,
+            atomic::{AtomicU64, Ordering},
+        },
+        thread,
         time::{Duration, UNIX_EPOCH},
     };
 
@@ -385,6 +406,49 @@ mod tests {
             size_bytes,
             modified: UNIX_EPOCH + Duration::from_secs(age),
         }
+    }
+
+    /// Nobody holds this lease, so every "held" answer is invented. Observers
+    /// must not invent one about each other, which is what asking for the
+    /// owner's own exclusive lock did.
+    ///
+    /// The invention needs `flock` to conflict between two descriptors of one
+    /// process. That is Linux behaviour and what CI runs on; on macOS the same
+    /// pair never conflicts, so this test cannot fail there.
+    #[test]
+    fn concurrent_observers_do_not_invent_a_checkout_holder() {
+        let directory = tempfile::tempdir().unwrap();
+        OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(directory.path().join(JOB_LEASE))
+            .unwrap();
+        let checkout = Arc::new(directory.path().to_path_buf());
+        let invented = Arc::new(AtomicU64::new(0));
+
+        let observers: Vec<_> = (0..4)
+            .map(|_| {
+                let checkout = Arc::clone(&checkout);
+                let invented = Arc::clone(&invented);
+                thread::spawn(move || {
+                    for _ in 0..2_000 {
+                        if checkout_lease_is_held(&checkout) {
+                            invented.fetch_add(1, Ordering::Relaxed);
+                        }
+                    }
+                })
+            })
+            .collect();
+        for observer in observers {
+            observer.join().unwrap();
+        }
+
+        assert_eq!(
+            invented.load(Ordering::Relaxed),
+            0,
+            "an observer answered for a job that never took the lease"
+        );
     }
 
     #[test]
