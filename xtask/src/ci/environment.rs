@@ -901,50 +901,58 @@ mod tests {
     }
 
     /// TEMPORARY probe, not for merge: on every repeat whose artifact survived
-    /// a reclaim that should have evicted it, ask the kernel who holds the
-    /// lease lock - `/proc/locks` names the pid, and `/proc/<pid>/comm` names
-    /// the process.
+    /// a reclaim that should have evicted it, match `/proc/locks` on the full
+    /// device and inode, and list this process's own descriptors that still
+    /// point at the lease file.
     #[cfg(unix)]
     #[test]
     fn probe_leased_checkout_reclaim_repeats() {
         use std::os::unix::fs::MetadataExt as _;
 
-        fn holders(lease: &std::path::Path) -> String {
+        fn report(lease: &std::path::Path) -> String {
             let Ok(metadata) = fs::symlink_metadata(lease) else {
                 return "lease_missing".to_owned();
             };
             let inode = metadata.ino();
-            let Ok(locks) = fs::read_to_string("/proc/locks") else {
-                return "no_proc_locks".to_owned();
-            };
-            let mut found = Vec::new();
-            for line in locks.lines() {
-                let fields: Vec<&str> = line.split_whitespace().collect();
-                let Some(location) = fields.get(5) else {
-                    continue;
-                };
-                let Some(entry_inode) = location.rsplit(':').next() else {
-                    continue;
-                };
-                if entry_inode != inode.to_string() {
-                    continue;
+            let device = metadata.dev();
+            let major = (device >> 8) & 0xfff;
+            let minor = (device & 0xff) | ((device >> 12) & 0xfff_f00);
+            let wanted = format!("{major:02x}:{minor:02x}:{inode}");
+
+            let mut locks_here = Vec::new();
+            if let Ok(locks) = fs::read_to_string("/proc/locks") {
+                for line in locks.lines() {
+                    let fields: Vec<&str> = line.split_whitespace().collect();
+                    if fields.get(5).copied() != Some(wanted.as_str()) {
+                        continue;
+                    }
+                    let pid = fields.get(4).copied().unwrap_or("?");
+                    locks_here.push(format!(
+                        "{}|{}|pid={pid}",
+                        fields.get(1).copied().unwrap_or("?"),
+                        fields.get(3).copied().unwrap_or("?")
+                    ));
                 }
-                let pid = fields.get(4).copied().unwrap_or("?");
-                let comm = fs::read_to_string(format!("/proc/{pid}/comm"))
-                    .unwrap_or_else(|_| "gone".to_owned());
-                found.push(format!(
-                    "{}|{}|pid={pid}|comm={}|self={}",
-                    fields.get(1).copied().unwrap_or("?"),
-                    fields.get(3).copied().unwrap_or("?"),
-                    comm.trim(),
-                    std::process::id()
-                ));
             }
-            if found.is_empty() {
-                "no_lock_entry".to_owned()
-            } else {
-                found.join(" ; ")
+
+            let mut own_fds = Vec::new();
+            if let Ok(entries) = fs::read_dir("/proc/self/fd") {
+                for entry in entries.flatten() {
+                    let Ok(link) = fs::read_link(entry.path()) else {
+                        continue;
+                    };
+                    if link == lease {
+                        own_fds.push(entry.file_name().to_string_lossy().into_owned());
+                    }
+                }
             }
+
+            format!(
+                "wanted={wanted} self={} locks=[{}] own_fds=[{}]",
+                std::process::id(),
+                locks_here.join(" ; "),
+                own_fds.join(",")
+            )
         }
 
         let mut survivors = Vec::new();
@@ -965,7 +973,7 @@ mod tests {
 
             if target.join("artifact").exists() {
                 let lease = checkout.join(build_cache::JOB_LEASE);
-                survivors.push(format!("index={index} holders=[{}]", holders(&lease)));
+                survivors.push(format!("index={index} {}", report(&lease)));
             }
         }
 
