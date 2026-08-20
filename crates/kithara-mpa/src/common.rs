@@ -16,7 +16,7 @@ use symphonia_core::{
 
 /// The MPEG audio version.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub enum MpegVersion {
+pub(crate) enum MpegVersion {
     /// Version 2.5
     Mpeg2p5,
     /// Version 2
@@ -27,7 +27,7 @@ pub enum MpegVersion {
 
 /// The MPEG audio layer.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub enum MpegLayer {
+pub(crate) enum MpegLayer {
     /// Layer 1
     Layer1,
     /// Layer 2
@@ -38,7 +38,7 @@ pub enum MpegLayer {
 
 /// The channel mode.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub enum ChannelMode {
+pub(crate) enum ChannelMode {
     /// Single mono audio channel.
     Mono,
     /// Dual mono audio channels.
@@ -49,19 +49,21 @@ pub enum ChannelMode {
     JointStereo,
 }
 
-impl ChannelMode {
-    /// Gets the number of channels.
+impl From<ChannelMode> for usize {
+    /// The number of channels the mode decodes to.
     #[inline(always)]
-    pub fn count(&self) -> usize {
-        match self {
-            Self::Mono => 1,
+    fn from(mode: ChannelMode) -> Self {
+        match mode {
+            ChannelMode::Mono => 1,
             _ => 2,
         }
     }
+}
 
+impl ChannelMode {
     /// Gets the channel map.
     #[inline(always)]
-    pub fn channels(&self) -> Channels {
+    pub(crate) fn channels(self) -> Channels {
         let positions = match self {
             Self::Mono => Position::FRONT_LEFT,
             _ => Position::FRONT_LEFT | Position::FRONT_RIGHT,
@@ -73,24 +75,24 @@ impl ChannelMode {
 
 /// An MPEG 1, 2, or 2.5 audio frame header.
 #[derive(Debug)]
-pub struct FrameHeader {
-    pub version: MpegVersion,
-    pub layer: MpegLayer,
-    pub sample_rate: u32,
-    pub channel_mode: ChannelMode,
-    pub has_crc: bool,
-    pub frame_size: usize,
+pub(crate) struct FrameHeader {
+    pub(crate) version: MpegVersion,
+    pub(crate) layer: MpegLayer,
+    pub(crate) sample_rate: u32,
+    pub(crate) channel_mode: ChannelMode,
+    pub(crate) has_crc: bool,
+    pub(crate) frame_size: usize,
 }
 
 impl FrameHeader {
     /// Returns true if this is an MPEG-1 frame, false otherwise.
     #[inline(always)]
-    pub fn is_mpeg1(&self) -> bool {
+    pub(crate) fn is_mpeg1(&self) -> bool {
         self.version == MpegVersion::Mpeg1
     }
 
     /// Returns the codec ID for the frame.
-    pub fn codec(&self) -> AudioCodecId {
+    pub(crate) fn codec(&self) -> AudioCodecId {
         match self.layer {
             MpegLayer::Layer1 => CODEC_ID_MP1,
             MpegLayer::Layer2 => CODEC_ID_MP2,
@@ -99,11 +101,11 @@ impl FrameHeader {
     }
 
     /// Returns the number of per-channel audio samples in the MPEG frame.
-    pub fn num_frames(&self) -> u16 {
+    pub(crate) fn num_frames(&self) -> u16 {
         match self.layer {
             MpegLayer::Layer1 => 384,
             MpegLayer::Layer2 => 1152,
-            MpegLayer::Layer3 => 576 * self.n_granules() as u16,
+            MpegLayer::Layer3 => 576 * self.n_granules(),
         }
     }
 
@@ -111,13 +113,13 @@ impl FrameHeader {
     ///
     /// This is effectively the same as `num_frames`, but as a `Duration`.
     #[inline(always)]
-    pub fn duration(&self) -> Duration {
+    pub(crate) fn duration(&self) -> Duration {
         Duration::from(self.num_frames())
     }
 
     /// Returns the number of granules in the frame.
     #[inline(always)]
-    pub fn n_granules(&self) -> usize {
+    pub(crate) fn n_granules(&self) -> u16 {
         match self.version {
             MpegVersion::Mpeg1 => 2,
             _ => 1,
@@ -126,13 +128,13 @@ impl FrameHeader {
 
     /// Returns the number of channels per granule.
     #[inline(always)]
-    pub fn n_channels(&self) -> usize {
-        self.channel_mode.count()
+    pub(crate) fn n_channels(&self) -> usize {
+        usize::from(self.channel_mode)
     }
 
     /// Get the side information length.
     #[inline(always)]
-    pub fn side_info_len(&self) -> usize {
+    pub(crate) fn side_info_len(&self) -> usize {
         match (self.version, self.channel_mode) {
             (MpegVersion::Mpeg1, ChannelMode::Mono) => 17,
             (MpegVersion::Mpeg1, _) => 32,
