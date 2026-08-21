@@ -343,11 +343,10 @@ fn github_ci_is_fail_closed_and_aggregates_every_job() {
             "${{ github.event.repository.fork && format('fork-linux-{0}', github.repository) || format('ci-{0}', github.ref) }}"
         )
     );
-    // A fork's branches share one queue, and `queue: max` is what stops each
-    // arrival from evicting whoever was waiting. GitHub takes no expression
-    // for it and refuses it beside a cancellation that can fire, so
-    // cancelling a superseded push upstream is the price that bought it —
-    // the trade `ci.yml` spells out, and the one `lanes.yml` made first.
+    // The fork's branches share one Linux pool, so they queue instead of
+    // evicting each other. `queue` takes no expression and may not sit beside a
+    // cancellation that can read true, so the one literal serves both sides and
+    // production gives up cancelling a superseded push. See ci.yml.
     assert_eq!(
         mapping_field(concurrency, "cancel-in-progress").as_bool(),
         Some(false)
