@@ -11,6 +11,7 @@ use std::{
 
 use anyhow::{Context, Result, bail};
 use fs4::{FileExt, TryLockError};
+use kithara_devtools::lease;
 use tracing::info;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -253,10 +254,6 @@ fn allocated_bytes(metadata: &fs::Metadata) -> u64 {
     metadata.len()
 }
 
-/// The file a running job holds a lock on for as long as it lives, so a
-/// reclaim from another job can tell "in use" from "left behind".
-pub(crate) const JOB_LEASE: &str = ".kithara-job-lease";
-
 /// Whether a live job holds `directory`, asked with the request that sees the
 /// kind of holder in question: `try_lock_shared` for a checkout, `try_lock`
 /// for a Cargo target.
@@ -275,7 +272,7 @@ pub(crate) const JOB_LEASE: &str = ".kithara-job-lease";
 /// invention. Target holders take the lease shared so several coexist, so only
 /// an exclusive request sees them at all.
 fn lease_is_held(directory: &Path, ask: fn(&File) -> Result<(), TryLockError>) -> bool {
-    let path = directory.join(JOB_LEASE);
+    let path = directory.join(lease::FILE);
     let Ok(file) = OpenOptions::new().read(true).write(true).open(&path) else {
         return false;
     };
@@ -283,40 +280,15 @@ fn lease_is_held(directory: &Path, ask: fn(&File) -> Result<(), TryLockError>) -
     ask(&file).is_err()
 }
 
-/// A process's claim on the shared Cargo target directory it works in.
+/// Claims `CARGO_TARGET_DIR` for the life of this process, if one is named.
 ///
-/// The checkout lease cannot protect this one: on Linux runners the target is
-/// a per-runner Docker volume the host budgets directly, and the volume's only
-/// other liveness signal, `.cargo-lock`, is held while Cargo compiles. A
-/// stress run that was merely executing its built tests looked idle, and the
-/// midnight budget pass deleted the binaries out from under it — repetitions
-/// 44-50 then failed every exec and read as the product breaking. The lock is
-/// shared so concurrent holders (a stress run and the harness runs it spawns)
-/// coexist; the reclaim asks [`lease_is_held`] exclusively and backs off while
-/// any holder is alive.
-pub(crate) struct TargetLease {
-    _file: File,
-}
-
-impl TargetLease {
-    /// Claim `CARGO_TARGET_DIR` for the life of this process, if one is named.
-    pub(crate) fn hold() -> Option<Self> {
-        let target = PathBuf::from(env::var_os("CARGO_TARGET_DIR")?);
-        if !target.is_dir() {
-            return None;
-        }
-        let file = OpenOptions::new()
-            .create(true)
-            .truncate(false)
-            .read(true)
-            .write(true)
-            .open(target.join(JOB_LEASE))
-            .ok()?;
-        // Like the checkout lease: a lease that cannot be taken only restores
-        // the pre-lease behaviour, which is no reason to refuse work.
-        FileExt::try_lock_shared(&file).ok()?;
-        Some(Self { _file: file })
-    }
+/// The checkout lease cannot protect it: on Linux runners the target is a
+/// per-runner Docker volume the host budgets directly, and a lease on the
+/// checkout says nothing about a directory outside it. A lane that builds into
+/// a directory of its own claims that one where it names it, so both claims are
+/// the one protocol [`lease`] owns and [`lease_is_held`] asks about.
+pub(crate) fn hold_target_lease() -> Option<lease::Lease> {
+    lease::hold(&PathBuf::from(env::var_os("CARGO_TARGET_DIR")?))
 }
 
 /// Every `target` directory under `root` that belongs to a checkout no job is
@@ -335,7 +307,11 @@ pub(crate) fn persistent_target_dirs(root: &Path) -> Result<Vec<PathBuf>> {
             if lease_is_held(&directory, FileExt::try_lock_shared) {
                 continue;
             }
-            for name in ["target", "target-flash-off"] {
+            // `target-stress` belongs here too: it is target-dir sized, the
+            // repo's own tooling creates it, and no other pass owns it. It is
+            // only safe to reclaim because the lane that builds into it holds
+            // the lease `candidate_entries` asks about.
+            for name in ["target", "target-flash-off", "target-stress"] {
                 let path = directory.join(name);
                 let metadata = match fs::symlink_metadata(&path) {
                     Ok(metadata) => metadata,
@@ -413,7 +389,7 @@ mod tests {
             .create(true)
             .truncate(false)
             .write(true)
-            .open(directory.path().join(JOB_LEASE))
+            .open(directory.path().join(lease::FILE))
             .unwrap();
         let checkout = Arc::new(directory.path().to_path_buf());
         let invented = Arc::new(AtomicU64::new(0));
@@ -573,7 +549,7 @@ mod tests {
             .truncate(false)
             .read(true)
             .write(true)
-            .open(directory.path().join(JOB_LEASE))
+            .open(directory.path().join(lease::FILE))
             .unwrap();
         FileExt::try_lock_shared(&lease).unwrap();
 
@@ -584,8 +560,45 @@ mod tests {
     #[test]
     fn a_released_lease_leaves_the_target_evictable() {
         let directory = tempfile::tempdir().unwrap();
-        fs::write(directory.path().join(JOB_LEASE), b"").unwrap();
+        fs::write(directory.path().join(lease::FILE), b"").unwrap();
 
         assert!(!candidate_entries(directory.path()).unwrap().active);
+    }
+
+    /// The claim a lane takes and the question a reclaim asks are one protocol,
+    /// so the holder has to be the real one, not a lock this test rolled itself.
+    #[test]
+    fn a_lane_holding_its_build_directory_keeps_it() {
+        let directory = tempfile::tempdir().unwrap();
+        let held = lease::hold(directory.path()).expect("hold the build directory");
+
+        assert!(candidate_entries(directory.path()).unwrap().active);
+
+        drop(held);
+        assert!(!candidate_entries(directory.path()).unwrap().active);
+    }
+
+    /// The stress lane builds into a directory of its own, and a build cache no
+    /// budget names is one the host can never get the space back from.
+    #[test]
+    fn the_stress_build_directory_is_a_cache_the_budget_owns() {
+        let root = tempfile::tempdir().unwrap();
+        let checkout = root.path().join("disrupt/kithara");
+        fs::create_dir_all(&checkout).unwrap();
+        fs::write(checkout.join("Cargo.toml"), b"").unwrap();
+        for name in ["target", "target-flash-off", "target-stress"] {
+            checkout_target(&checkout, name, 1);
+        }
+
+        let targets = persistent_target_dirs(root.path()).unwrap();
+
+        assert_eq!(
+            targets,
+            vec![
+                checkout.join("target"),
+                checkout.join("target-flash-off"),
+                checkout.join("target-stress"),
+            ]
+        );
     }
 }

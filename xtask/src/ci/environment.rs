@@ -8,7 +8,7 @@ use std::{
 
 use anyhow::{Context, Result, bail};
 use fs4::{FileExt, TryLockError};
-use kithara_devtools::Ctx;
+use kithara_devtools::{Ctx, lease};
 use tracing::warn;
 
 use super::{
@@ -253,7 +253,7 @@ struct CheckoutLease {
 
 impl CheckoutLease {
     fn acquire(checkout: &Path) -> Option<Self> {
-        let path = checkout.join(build_cache::JOB_LEASE);
+        let path = checkout.join(lease::FILE);
         let file = OpenOptions::new()
             .create(true)
             .truncate(false)
@@ -517,15 +517,42 @@ fn ensure_room_for_a_job(config: &CiConfig, shared_root: &Path) -> Result<()> {
     if !is_ci() || free >= required {
         return Ok(());
     }
-    reclaim_build_caches(config.host.build_root(), free, required)?;
+    let workspaces = gitlab_workspaces(config.host.build_root());
+    let reclaimed_from = reclaim_build_caches(&workspaces, free, required)?;
     let free = free_bytes(shared_root)?;
     if free < required {
-        bail!(
-            "the CI cache has {free} bytes free after reclaiming build caches; a job needs \
-             {required} bytes"
-        );
+        bail!("{}", refusal(free, required, &workspaces, reclaimed_from));
     }
     Ok(())
+}
+
+/// The checkouts whose build caches the budget owns.
+fn gitlab_workspaces(build_root: &Path) -> PathBuf {
+    build_root.join("workspaces/gitlab")
+}
+
+/// Why the job is refused, in the terms of what the reclaim could act on.
+///
+/// Saying "after reclaiming build caches" when there was nothing to reclaim
+/// pointed every reading of this refusal at the compiler cache, which was
+/// neither holding the space nor able to give any back: a workspace a live job
+/// leases is skipped, so on a host whose only checkout is the running one the
+/// reclaim has no candidate at all and the sentence described work that never
+/// happened. What an operator needs at that point is the opposite — that the
+/// space is held somewhere this gate does not look.
+fn refusal(free: u64, required: u64, workspaces: &Path, reclaimed_from: usize) -> String {
+    if reclaimed_from == 0 {
+        return format!(
+            "the CI cache has {free} bytes free and a job needs {required}; no reclaimable build \
+             cache sits under {}, so the space is held by live work or by trees the build-cache \
+             budget does not own",
+            workspaces.display()
+        );
+    }
+    format!(
+        "the CI cache has {free} bytes free after reclaiming from {reclaimed_from} build \
+         cache(s); a job needs {required} bytes"
+    )
 }
 
 /// Return what this host accumulated for itself, before deciding there is no
@@ -547,11 +574,16 @@ fn ensure_room_for_a_job(config: &CiConfig, shared_root: &Path) -> Result<()> {
 ///
 /// Failing to reclaim is not itself a refusal — the gate re-reads free space
 /// and answers on that.
-fn reclaim_build_caches(build_root: &Path, free: u64, required: u64) -> Result<()> {
-    let workspaces = build_root.join("workspaces/gitlab");
-    let targets = build_cache::persistent_target_dirs(&workspaces)?;
+fn reclaim_build_caches(workspaces: &Path, free: u64, required: u64) -> Result<usize> {
+    let targets = build_cache::persistent_target_dirs(workspaces)?;
     if targets.is_empty() {
-        return Ok(());
+        warn!(
+            free_bytes = free,
+            required_bytes = required,
+            root = %workspaces.display(),
+            "no reclaimable build cache to free before refusing the job"
+        );
+        return Ok(0);
     }
     let shortfall = required.saturating_sub(free);
     warn!(
@@ -561,7 +593,8 @@ fn reclaim_build_caches(build_root: &Path, free: u64, required: u64) -> Result<(
         targets = targets.len(),
         "reclaiming build caches before refusing the job"
     );
-    build_cache::reclaim_at_least(&targets, shortfall)
+    build_cache::reclaim_at_least(&targets, shortfall)?;
+    Ok(targets.len())
 }
 
 pub(crate) fn is_gitlab() -> bool {
@@ -892,7 +925,7 @@ mod tests {
         fs::write(checkout.join("Cargo.toml"), "[package]\n").unwrap();
         fs::write(target.join("artifact"), vec![0_u8; 400_000]).unwrap();
 
-        reclaim_build_caches(root.path(), 0, u64::MAX).unwrap();
+        reclaim_build_caches(&gitlab_workspaces(root.path()), 0, u64::MAX).unwrap();
 
         assert!(
             !target.join("artifact").exists(),
@@ -917,7 +950,7 @@ mod tests {
 
         let held = CheckoutLease::acquire(&checkout).expect("the running job takes its lease");
 
-        reclaim_build_caches(root.path(), 0, u64::MAX).unwrap();
+        reclaim_build_caches(&gitlab_workspaces(root.path()), 0, u64::MAX).unwrap();
 
         assert!(
             target.join("artifact").exists(),
@@ -925,11 +958,45 @@ mod tests {
         );
         drop(held);
 
-        reclaim_build_caches(root.path(), 0, u64::MAX).unwrap();
+        reclaim_build_caches(&gitlab_workspaces(root.path()), 0, u64::MAX).unwrap();
 
         assert!(
             !target.join("artifact").exists(),
             "once the job is gone its cache is evictable again"
         );
+    }
+
+    #[test]
+    fn a_refusal_with_nothing_to_reclaim_does_not_claim_it_reclaimed() {
+        let message = refusal(10, 20, Path::new("/ci/workspaces/gitlab"), 0);
+
+        assert!(
+            !message.contains("after reclaiming"),
+            "a reclaim that never had a candidate must not be reported as done: {message}"
+        );
+        assert!(
+            message.contains("no reclaimable build cache sits under /ci/workspaces/gitlab"),
+            "the refusal must name the root it found nothing under: {message}"
+        );
+    }
+
+    #[test]
+    fn a_refusal_that_reclaimed_says_how_much_it_had_to_work_with() {
+        let message = refusal(10, 20, Path::new("/ci/workspaces/gitlab"), 3);
+
+        assert!(
+            message.contains("after reclaiming from 3 build cache(s)"),
+            "the refusal must say how many caches it emptied: {message}"
+        );
+    }
+
+    #[test]
+    fn a_workspace_root_that_does_not_exist_has_nothing_to_reclaim() {
+        let root = tempfile::tempdir().unwrap();
+
+        let reclaimed_from =
+            reclaim_build_caches(&gitlab_workspaces(root.path()), 0, u64::MAX).unwrap();
+
+        assert_eq!(reclaimed_from, 0);
     }
 }
