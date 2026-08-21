@@ -509,24 +509,37 @@ async fn run_prod_drm_scenario_no_warmup(url: &str, ratio: f64) {
     let _ = tick.await;
 }
 
-/// The tracks of the `crates/kithara-app/app.yaml` production playlist that
-/// the slicer still serves. All on `cdn-hls-slicer.zvuk.com` with the same
-/// `zvuk-prod` provider — three carry a FLAC fMP4 rendition and every one a
-/// HE-AAC v2, so the multi-track scenario mixes codecs the way the user's GUI
-/// playlist does.
+/// Live prod-DRM tracks, all on `cdn-hls-slicer.zvuk.com` behind the same
+/// `zvuk-prod` provider. Every one carries a HE-AAC v2 rendition beside two
+/// AAC-LC ones, and eight of the ten add a FLAC fMP4 rendition (all but
+/// `79829257_2` and `34487517_1`), so the multi-track scenario mixes codecs
+/// the way the user's GUI playlist does.
 ///
-/// The other three (`173388194_1`, `50984034_1`, `171515249_1`) answer 502 and
-/// are left out: a test that cannot reach its media reports the catalogue, not
-/// the player.
+/// The first four come from the `crates/kithara-app/app.yaml` playlist; its
+/// other three (`173388194_1`, `50984034_1`, `171515249_1`) answer 502 and are
+/// left out, because a test that cannot reach its media reports the catalogue
+/// rather than the player. The rest are live tracks added to carry more of the
+/// catalogue than that playlist alone can.
 ///
-/// A replacement track needs to run past 100 s: the near-end scenario seeks to
-/// 90 % and then measures a full 10 s window of audio after it. The shortest
-/// here is `59232754_2` at 142 s.
+/// A track here has to run past 100 s: the near-end scenario seeks to 90 % and
+/// then measures a full 10 s window of audio after it. Durations, summed from
+/// `#EXTINF` on 2026-08-21: 169.10, 222.41, 480.16, 142.22, 211.33, 199.14,
+/// 180.05, 386.20, 437.41, 276.59 s. `160830411_2` is the one live candidate
+/// left out — at 85.88 s a 90 % seek leaves 8.59 s, less than the window.
+///
+/// A track id resolves through exactly one variant suffix, and which one it is
+/// varies per track; the other suffixes answer 502.
 const PROD_DRM_PLAYLIST: &[&str] = &[
     "https://cdn-hls-slicer.zvuk.com/drm/track/180082552_1/master.m3u8",
     "https://cdn-hls-slicer.zvuk.com/drm/track/5807750_3/master.m3u8",
     "https://cdn-hls-slicer.zvuk.com/drm/track/79829257_2/master.m3u8",
     "https://cdn-hls-slicer.zvuk.com/drm/track/59232754_2/master.m3u8",
+    "https://cdn-hls-slicer.zvuk.com/drm/track/34487517_1/master.m3u8",
+    "https://cdn-hls-slicer.zvuk.com/drm/track/149150095_3/master.m3u8",
+    "https://cdn-hls-slicer.zvuk.com/drm/track/24288695_2/master.m3u8",
+    "https://cdn-hls-slicer.zvuk.com/drm/track/150005977_2/master.m3u8",
+    "https://cdn-hls-slicer.zvuk.com/drm/track/116711682_2/master.m3u8",
+    "https://cdn-hls-slicer.zvuk.com/drm/track/133269928_2/master.m3u8",
 ];
 
 /// Default sample rate of `OfflineSession::new_manual()` — must
