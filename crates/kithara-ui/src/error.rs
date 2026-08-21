@@ -40,6 +40,80 @@ pub enum UiDocError {
         id: String,
         reason: String,
     },
+    #[error("{origin}: adaptive node {id:?} at {path} declares no steps")]
+    AdaptiveWithoutSteps {
+        origin: SourceUri,
+        id: String,
+        path: String,
+    },
+    #[error(
+        "{origin}: adaptive step {index} at {path} starts at {from}; steps climb from a finite value"
+    )]
+    AdaptiveStepOrder {
+        origin: SourceUri,
+        path: String,
+        index: usize,
+        from: f32,
+    },
+    #[error("{origin}: adaptive step at {path} draws from {from} {axis} and needs {needs}")]
+    AdaptiveStepRoom {
+        origin: SourceUri,
+        path: String,
+        axis: &'static str,
+        from: f32,
+        needs: f32,
+    },
+    #[error(
+        "{origin}: container at {path} stands cells needing {needs} {axis} in the {room} it has"
+    )]
+    RevealRoom {
+        origin: SourceUri,
+        path: String,
+        axis: &'static str,
+        needs: f32,
+        room: f32,
+    },
+    #[error("{origin}: node at {path} declares {room} {axis} and holds content needing {needs}")]
+    DeclaredRoom {
+        origin: SourceUri,
+        path: String,
+        axis: &'static str,
+        needs: f32,
+        room: f32,
+    },
+    #[error("{origin}: {path} measures its own {axis} and must declare that axis as a box")]
+    UnmeasuredAxis {
+        origin: SourceUri,
+        path: String,
+        axis: &'static str,
+    },
+    #[error("{origin}: reveal at {path} has no container measuring itself to show it")]
+    UnmeasuredReveal { origin: SourceUri, path: String },
+    #[error(
+        "{origin}: reveal at {path} appears from {from}; a threshold is finite and not negative"
+    )]
+    RevealThreshold {
+        origin: SourceUri,
+        path: String,
+        from: f32,
+    },
+    #[error(
+        "{origin}: reveal at {path} appears from {from} and stops at {until}; a band ends above the room it starts in"
+    )]
+    RevealBand {
+        origin: SourceUri,
+        path: String,
+        from: f32,
+        until: f32,
+    },
+    #[error(
+        "{origin}: adaptive node {id:?} at {path} reads its measure and takes the size of the branch it draws"
+    )]
+    MeasuredBoxWithoutAxis {
+        origin: SourceUri,
+        id: String,
+        path: String,
+    },
     #[error("{origin}: optional block {id:?} at {path} has no parent to hide it")]
     RootBlock {
         origin: SourceUri,
