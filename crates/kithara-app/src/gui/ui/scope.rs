@@ -10,6 +10,8 @@ pub(in crate::gui) fn deck_index(letter: &str) -> Option<usize> {
     byte.is_ascii_lowercase().then(|| usize::from(byte - b'a'))
 }
 
+pub(in crate::gui) const MICRO_DECK: &str = "a";
+
 pub(super) fn deck_letter(index: usize) -> Option<char> {
     let byte = u8::try_from(index).ok()?.checked_add(b'a')?;
     byte.is_ascii_lowercase().then(|| char::from(byte))

@@ -5,7 +5,7 @@ use kithara_ui::{
     builtin,
     compile::{CompiledNode, CompiledUi, compile},
     error::UiDocError,
-    expand::{Binding, BindingKind, ControlSpec, ExpandedNode},
+    expand::{Binding, BindingKind, ControlSpec, ExpandedNode, MeasureSpec},
     module::{ChromeStyle, IconName, PopoverAt, TrackColumn},
     registry::{EndpointCategory, EndpointDesc, ValueKind},
     size::{Dim, SizeSpec},
@@ -808,6 +808,11 @@ fn block_registry() -> common::TestRegistry {
         "ui.menu.toggle",
         EndpointDesc::new(ValueKind::Trigger),
     );
+    registry.insert(
+        EndpointCategory::Model,
+        "ui.measure",
+        EndpointDesc::new(ValueKind::Scalar),
+    );
     registry
 }
 
@@ -831,6 +836,142 @@ fn compile_blocks(resolver: &MemResolver, entry: &str) -> Result<CompiledUi, UiD
         builtin::text_doc(),
         &UiConfig::default(),
     )
+}
+
+const ADAPTIVE_MODULE: &str = r#"(schema: "kithara.module", version: 1, id: "mixer",
+    root: Adaptive(
+        id: "bank",
+        measure: Read(Model(id: "ui.measure")),
+        base: Row(id: "narrow", children: [Knob(id: "low")]),
+        steps: [
+            (from: 4.0, node: Row(id: "wide", children: [Knob(id: "low"), Knob(id: "high")])),
+        ],
+    ))"#;
+
+#[kithara::test]
+fn an_adaptive_node_leaves_no_segment_of_its_own_in_a_control_address() {
+    let resolver = block_resolver(ADAPTIVE_MODULE);
+
+    let ui = compile_blocks(&resolver, "blocks.klayout.ron").unwrap();
+
+    let CompiledNode::Module { root, .. } = &ui.root else {
+        panic!("expected a module root");
+    };
+    let ExpandedNode::Adaptive {
+        measure,
+        base,
+        steps,
+        ..
+    } = &**root
+    else {
+        panic!("expected an adaptive root");
+    };
+    let MeasureSpec::Read(measure) = measure else {
+        panic!("expected a read measure");
+    };
+    assert_eq!(ui.resolve(measure.id), "ui.measure");
+
+    let path_of = |node: &ExpandedNode| {
+        let ExpandedNode::Row { children, .. } = node else {
+            panic!("expected a row branch");
+        };
+        let ExpandedNode::Control { path, .. } = &children[0] else {
+            panic!("expected a control");
+        };
+        ui.resolve(*path).to_owned()
+    };
+
+    assert_eq!(steps.len(), 1);
+    assert_eq!(steps[0].0, 4.0);
+    assert_eq!(path_of(base), "mixer/low");
+    assert_eq!(path_of(&steps[0].1), "mixer/low");
+}
+
+#[kithara::test]
+fn a_reveal_leaves_no_segment_of_its_own_in_a_control_address() {
+    let resolver = block_resolver(
+        r#"(schema: "kithara.module", version: 1, id: "mixer",
+            root: Row(
+                id: "bar",
+                measure: Width,
+                size: (w: Fill, h: Fixed(42.0)),
+                children: [
+                    Knob(id: "low"),
+                    Reveal(from: 440.0, child: Knob(id: "high")),
+                ],
+            ))"#,
+    );
+
+    let ui = compile_blocks(&resolver, "blocks.klayout.ron").unwrap();
+
+    let CompiledNode::Module { root, .. } = &ui.root else {
+        panic!("expected a module root");
+    };
+    let ExpandedNode::Row { children, .. } = &**root else {
+        panic!("expected a row root");
+    };
+    let ExpandedNode::Reveal { from, child, .. } = &children[1] else {
+        panic!("expected a reveal, got {:?}", children[1]);
+    };
+    let ExpandedNode::Control { path, .. } = &**child else {
+        panic!("expected a control under the reveal");
+    };
+
+    assert_eq!(*from, 440.0);
+    assert_eq!(ui.resolve(*path), "mixer/high");
+}
+
+#[kithara::test]
+fn a_self_measured_layout_is_the_box_it_declares() {
+    let mut resolver = block_resolver(
+        r#"(schema: "kithara.module", version: 1, id: "deck",
+            root: Row(id: "body", children: [Knob(id: "low")]))"#,
+    );
+    resolver.insert(
+        "wide.klayout.ron",
+        r#"(schema: "kithara.layout", version: 1, id: "wide",
+            root: Adaptive(
+                id: "body",
+                measure: Width,
+                size: (w: Fill, h: Fill),
+                base: Module(instance: "deck-a", source: "blocks.kmodule.ron"),
+                steps: [
+                    (from: 1100.0, node: Split(axis: Horizontal, children: [
+                        (node: Module(instance: "deck-a", source: "blocks.kmodule.ron")),
+                        (node: Module(instance: "deck-b", source: "blocks.kmodule.ron")),
+                    ])),
+                ],
+            ))"#,
+    );
+
+    let ui = compile_blocks(&resolver, "wide.klayout.ron").unwrap();
+
+    assert_eq!(ui.size, SizeSpec::new(Dim::Fill, Dim::Fill));
+    let CompiledNode::Adaptive { steps, .. } = &ui.root else {
+        panic!("expected an adaptive root, got {:?}", ui.root);
+    };
+    assert_eq!(steps.len(), 1);
+}
+
+#[kithara::test]
+fn an_adaptive_measure_must_read_a_scalar() {
+    let resolver = block_resolver(
+        r#"(schema: "kithara.module", version: 1, id: "mixer",
+            root: Adaptive(
+                id: "bank",
+                measure: Read(Model(id: "ui.block.hidden")),
+                base: Knob(id: "low"),
+                steps: [(from: 4.0, node: Knob(id: "high"))],
+            ))"#,
+    );
+
+    let error = compile_blocks(&resolver, "blocks.klayout.ron").unwrap_err();
+
+    assert!(
+        matches!(&error, UiDocError::BindingType { expected, got, path, .. }
+            if expected == "Scalar" && got == "Bool" && path == "mixer/bank"),
+        "{error:?}"
+    );
 }
 
 #[kithara::test]
@@ -984,7 +1125,7 @@ fn a_layout_block_compiles_around_the_node_it_wraps() {
     let CompiledNode::Split { children, .. } = &ui.root else {
         panic!("expected a split root");
     };
-    let CompiledNode::Optional { block, child } = &children[0].1 else {
+    let CompiledNode::Optional { block, child } = &children[0].node else {
         panic!("expected an optional block");
     };
 
@@ -1449,7 +1590,7 @@ fn an_escaped_dollar_in_a_layout_block_binding_stays_a_literal() {
     let CompiledNode::Split { children, .. } = &ui.root else {
         panic!("expected a split root");
     };
-    let CompiledNode::Optional { block, .. } = &children[0].1 else {
+    let CompiledNode::Optional { block, .. } = &children[0].node else {
         panic!("expected an optional block");
     };
 
@@ -1635,4 +1776,337 @@ fn a_template_may_not_read_an_endpoint_the_registry_does_not_know() {
         matches!(error, UiDocError::UnknownEndpoint { .. }),
         "{error}"
     );
+}
+
+#[kithara::test]
+fn an_adaptive_step_may_not_start_below_what_its_branch_needs() {
+    let branch = r#"Row(id: "wide", gap: 0.0, pad: 0.0,
+        children: [Knob(id: "low"), Knob(id: "high")])"#;
+    let module = |measure: &str| {
+        format!(
+            r#"(schema: "kithara.module", version: 1, id: "mixer",
+                root: Adaptive(
+                    id: "bank",
+                    measure: {measure},
+                    base: Knob(id: "low"),
+                    steps: [(from: 4.0, node: {branch})],
+                ))"#
+        )
+    };
+
+    let error = compile_blocks(
+        &block_resolver(&module("Width, size: (w: Fill, h: Fixed(42.0))")),
+        "blocks.klayout.ron",
+    )
+    .unwrap_err();
+
+    assert!(
+        matches!(&error, UiDocError::AdaptiveStepRoom { from, needs, axis, .. }
+            if *from == 4.0 && *needs == 56.0 && *axis == "width"),
+        "{error:?}"
+    );
+    compile_blocks(
+        &block_resolver(&module(r#"Read(Model(id: "ui.measure"))"#)),
+        "blocks.klayout.ron",
+    )
+    .expect("a read measure counts what its endpoint counts, which is no width");
+}
+
+#[kithara::test]
+fn a_layout_step_may_not_start_below_what_its_modules_need() {
+    let mut resolver = block_resolver(
+        r#"(schema: "kithara.module", version: 1, id: "deck",
+            root: Row(id: "body", gap: 0.0, pad: 0.0, children: [Knob(id: "low")]))"#,
+    );
+    resolver.insert(
+        "wide.klayout.ron",
+        r#"(schema: "kithara.layout", version: 1, id: "wide",
+            root: Adaptive(
+                id: "body",
+                measure: Width,
+                size: (w: Fill, h: Fill),
+                base: Module(instance: "deck-a", source: "blocks.kmodule.ron"),
+                steps: [
+                    (from: 40.0, node: Split(axis: Horizontal, children: [
+                        (node: Module(instance: "deck-a", source: "blocks.kmodule.ron")),
+                        (node: Module(instance: "deck-b", source: "blocks.kmodule.ron")),
+                    ])),
+                ],
+            ))"#,
+    );
+
+    let error = compile_blocks(&resolver, "wide.klayout.ron").unwrap_err();
+
+    assert!(
+        matches!(&error, UiDocError::AdaptiveStepRoom { from, needs, .. }
+            if *from == 40.0 && *needs == 56.0),
+        "{error:?}"
+    );
+}
+
+#[kithara::test]
+fn a_threshold_may_not_promise_room_the_container_does_not_have() {
+    let bar = |from: f32| {
+        format!(
+            r#"(schema: "kithara.module", version: 1, id: "mixer",
+                root: Row(
+                    id: "bar",
+                    measure: Width,
+                    size: (w: Fill, h: Fixed(42.0)),
+                    gap: 0.0,
+                    pad: 0.0,
+                    children: [
+                        Knob(id: "low"),
+                        Reveal(from: {from}, child: Knob(id: "high", size: (w: Fixed(200.0), h: Fill))),
+                    ],
+                ))"#
+        )
+    };
+
+    let error = compile_blocks(&block_resolver(&bar(100.0)), "blocks.klayout.ron").unwrap_err();
+
+    assert!(
+        matches!(&error, UiDocError::RevealRoom { room, needs, axis, .. }
+            if *room == 100.0 && *needs == 228.0 && *axis == "width"),
+        "{error:?}"
+    );
+    compile_blocks(&block_resolver(&bar(300.0)), "blocks.klayout.ron")
+        .expect("a threshold above what the cells take promises room they fit in");
+}
+
+fn cell_resolver(cells: &[(&str, f32)], layout: &str) -> MemResolver {
+    let mut resolver = MemResolver::default();
+    resolver.insert("cells.klayout.ron", layout);
+    for (name, width) in cells {
+        resolver.insert(
+            &format!("{name}.kmodule.ron"),
+            &format!(
+                r#"(schema: "kithara.module", version: 1, id: "{name}",
+                    root: Knob(id: "{name}", size: (w: Fixed({width}), h: Fixed(20.0))))"#
+            ),
+        );
+    }
+    resolver
+}
+
+const BAR_CELLS: [(&str, f32); 5] = [
+    ("menu", 40.0),
+    ("play", 38.0),
+    ("strip", 36.0),
+    ("wave", 60.0),
+    ("window", 80.0),
+];
+
+#[kithara::test]
+fn a_measuring_split_needs_the_room_its_standing_cells_settle_on() {
+    let bar = |head: &str, strip: &str, wave: &str| {
+        format!(
+            r#"(schema: "kithara.layout", version: 1, id: "cells",
+                root: Split(axis: Horizontal, {head} children: [
+                    (node: Module(instance: "menu", source: "menu.kmodule.ron")),
+                    (node: Module(instance: "play", source: "play.kmodule.ron")),
+                    (node: Module(instance: "strip", source: "strip.kmodule.ron"){strip}),
+                    (node: Module(instance: "wave", source: "wave.kmodule.ron"){wave}),
+                    (node: Module(instance: "window", source: "window.kmodule.ron")),
+                ]))"#
+        )
+    };
+    let measured = bar(
+        "measure: Width, size: (w: Fill, h: Fixed(42.0)),",
+        ", until: Some(350.0)",
+        ", from: 350.0",
+    );
+    let plain = bar("", "", "");
+
+    let ui = compile_blocks(&cell_resolver(&BAR_CELLS, &measured), "cells.klayout.ron").unwrap();
+
+    assert_eq!(
+        ui.min,
+        SizeSpec::new(Dim::Fixed(194.0), Dim::Fixed(42.0)),
+        "the strip stands at the narrowest the bar gets, and the box holds its height",
+    );
+    let ui = compile_blocks(&cell_resolver(&BAR_CELLS, &plain), "cells.klayout.ron").unwrap();
+
+    assert_eq!(
+        ui.min,
+        SizeSpec::new(Dim::Fixed(254.0), Dim::Fixed(20.0)),
+        "a split reading no room needs every cell it holds",
+    );
+}
+
+#[kithara::test]
+fn a_split_band_may_not_promise_room_the_cell_does_not_fit() {
+    let bar = |from: f32| {
+        format!(
+            r#"(schema: "kithara.layout", version: 1, id: "cells",
+                root: Split(axis: Horizontal, measure: Width, size: (w: Fill, h: Fixed(42.0)),
+                    children: [
+                        (node: Module(instance: "menu", source: "menu.kmodule.ron")),
+                        (node: Module(instance: "wide", source: "wide.kmodule.ron"), from: {from}),
+                    ]))"#
+        )
+    };
+    let cells = [("menu", 40.0), ("wide", 200.0)];
+
+    let error =
+        compile_blocks(&cell_resolver(&cells, &bar(100.0)), "cells.klayout.ron").unwrap_err();
+
+    assert!(
+        matches!(&error, UiDocError::RevealRoom { room, needs, axis, .. }
+            if *room == 100.0 && *needs == 240.0 && *axis == "width"),
+        "{error:?}"
+    );
+    compile_blocks(&cell_resolver(&cells, &bar(300.0)), "cells.klayout.ron")
+        .expect("a band above what the cells take promises room they fit in");
+}
+
+#[kithara::test]
+fn a_declared_box_raises_the_room_a_split_holds_its_bands_against() {
+    let bar = |room: f32| {
+        format!(
+            r#"(schema: "kithara.layout", version: 1, id: "cells",
+                root: Split(axis: Horizontal, measure: Width,
+                    size: (w: Fixed({room}), h: Fixed(42.0)),
+                    children: [
+                        (node: Module(instance: "menu", source: "menu.kmodule.ron")),
+                        (node: Module(instance: "wide", source: "wide.kmodule.ron"), from: 100.0),
+                    ]))"#
+        )
+    };
+    let cells = [("menu", 40.0), ("wide", 250.0)];
+
+    compile_blocks(&cell_resolver(&cells, &bar(300.0)), "cells.klayout.ron")
+        .expect("a box holding every cell standing in it leaves its bands nothing to promise");
+    let error =
+        compile_blocks(&cell_resolver(&cells, &bar(120.0)), "cells.klayout.ron").unwrap_err();
+
+    assert!(
+        matches!(&error, UiDocError::RevealRoom { room, needs, .. }
+            if *room == 120.0 && *needs == 290.0),
+        "{error:?}"
+    );
+}
+
+#[kithara::test]
+fn a_declared_box_may_not_be_smaller_than_what_it_holds() {
+    let bar = |cell: &str| {
+        format!(
+            r#"(schema: "kithara.module", version: 1, id: "mixer",
+                root: Row(
+                    id: "bar",
+                    gap: 0.0,
+                    pad: 0.0,
+                    size: (w: Fill, h: Fixed(42.0)),
+                    children: [Knob(id: "low", size: {cell})],
+                ))"#
+        )
+    };
+
+    let error = compile_blocks(
+        &block_resolver(&bar("(w: Fixed(80.0), h: Fixed(120.0))")),
+        "blocks.klayout.ron",
+    )
+    .unwrap_err();
+
+    assert!(
+        matches!(&error, UiDocError::DeclaredRoom { room, needs, axis, .. }
+            if *room == 42.0 && *needs == 120.0 && *axis == "height"),
+        "{error:?}"
+    );
+    compile_blocks(
+        &block_resolver(&bar("(w: Fixed(80.0), h: Fixed(20.0))")),
+        "blocks.klayout.ron",
+    )
+    .expect("a box above what the content takes is the floor the node keeps");
+}
+
+#[kithara::test]
+fn a_slot_and_an_adaptive_answer_for_the_box_they_declare() {
+    let tall = r#"Knob(id: "low", size: (w: Fixed(80.0), h: Fixed(120.0)))"#;
+    let modules = [
+        format!(
+            r#"(schema: "kithara.module", version: 1, id: "mixer",
+                root: Slot(id: "well", size: (w: Fill, h: Fixed(42.0)), default: [{tall}]))"#
+        ),
+        format!(
+            r#"(schema: "kithara.module", version: 1, id: "mixer",
+                root: Adaptive(
+                    id: "bank",
+                    measure: Width,
+                    size: (w: Fill, h: Fixed(42.0)),
+                    base: {tall},
+                    steps: [(from: 400.0, node: Knob(id: "high"))],
+                ))"#
+        ),
+    ];
+
+    for module in modules {
+        let error = compile_blocks(&block_resolver(&module), "blocks.klayout.ron").unwrap_err();
+
+        assert!(
+            matches!(&error, UiDocError::DeclaredRoom { room, needs, axis, .. }
+                if *room == 42.0 && *needs == 120.0 && *axis == "height"),
+            "{error:?}"
+        );
+    }
+}
+
+#[kithara::test]
+fn a_layout_box_may_not_be_smaller_than_the_node_standing_in_it() {
+    let module = r#"(schema: "kithara.module", version: 1, id: "mixer",
+        root: Row(
+            id: "bar",
+            gap: 0.0,
+            pad: 0.0,
+            children: [Knob(id: "low", size: (w: Fixed(80.0), h: Fixed(120.0)))],
+        ))"#;
+    let layouts = |room: f32| {
+        [
+            (
+                "root/Module(mixer)",
+                format!(
+                    r#"(schema: "kithara.layout", version: 1, id: "boxed",
+                        root: Module(
+                            instance: "mixer",
+                            source: "blocks.kmodule.ron",
+                            size: (w: Fill, h: Fixed({room})),
+                        ))"#
+                ),
+            ),
+            (
+                "root/Adaptive(bank)",
+                format!(
+                    r#"(schema: "kithara.layout", version: 1, id: "boxed",
+                        root: Adaptive(
+                            id: "bank",
+                            measure: Width,
+                            size: (w: Fill, h: Fixed({room})),
+                            base: Module(instance: "mixer", source: "blocks.kmodule.ron"),
+                            steps: [(
+                                from: 400.0,
+                                node: Module(instance: "mixer", source: "blocks.kmodule.ron"),
+                            )],
+                        ))"#
+                ),
+            ),
+        ]
+    };
+    let compile_layout = |layout: &str| {
+        let mut resolver = block_resolver(module);
+        resolver.insert("boxed.klayout.ron", layout);
+        compile_blocks(&resolver, "boxed.klayout.ron")
+    };
+
+    for (at, layout) in layouts(42.0) {
+        let error = compile_layout(&layout).unwrap_err();
+
+        assert!(
+            matches!(&error, UiDocError::DeclaredRoom { path, room, needs, axis, .. }
+                if path == at && *room == 42.0 && *needs == 120.0 && *axis == "height"),
+            "{error:?}"
+        );
+    }
+    for (_, layout) in layouts(120.0) {
+        compile_layout(&layout).expect("a box the node fills exactly is a box it fits in");
+    }
 }
