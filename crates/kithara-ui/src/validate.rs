@@ -5,8 +5,9 @@ use crate::{
     expand::ControlSite,
     ids::{EndpointId, NodeId, SourceUri},
     layout::{LayoutDoc, LayoutNode},
-    module::{BindingRef, ControlNode, ModuleDoc, TrackColumn},
+    module::{AdaptiveStep, BindingRef, ControlNode, Measure, MeasureAxis, ModuleDoc, TrackColumn},
     registry::{EndpointCategory, EndpointRegistry, ValueKind},
+    size::{Dim, SizeSpec},
 };
 
 #[derive(Clone, Debug, Default)]
@@ -45,7 +46,14 @@ pub(crate) fn check_layout_instances(
 #[derive(Clone, Copy, PartialEq)]
 enum Sibling {
     Among,
+    Measured,
     Only,
+}
+
+impl Sibling {
+    const fn laid_out_among_siblings(self) -> bool {
+        matches!(self, Self::Among | Self::Measured)
+    }
 }
 
 fn check_block_position(
@@ -54,7 +62,7 @@ fn check_block_position(
     origin: &SourceUri,
     sibling: Sibling,
 ) -> Result<(), UiDocError> {
-    if sibling == Sibling::Among {
+    if sibling.laid_out_among_siblings() {
         return Ok(());
     }
     Err(UiDocError::RootBlock {
@@ -62,6 +70,37 @@ fn check_block_position(
         id: id.0.clone(),
         path: path.render(),
     })
+}
+
+fn check_reveal(
+    from: f32,
+    until: Option<f32>,
+    path: &NodePath,
+    origin: &SourceUri,
+    sibling: Sibling,
+) -> Result<(), UiDocError> {
+    if sibling != Sibling::Measured {
+        return Err(UiDocError::UnmeasuredReveal {
+            origin: origin.clone(),
+            path: path.render(),
+        });
+    }
+    if !from.is_finite() || from < 0.0 {
+        return Err(UiDocError::RevealThreshold {
+            origin: origin.clone(),
+            path: path.render(),
+            from,
+        });
+    }
+    match until {
+        Some(until) if !until.is_finite() || until <= from => Err(UiDocError::RevealBand {
+            origin: origin.clone(),
+            path: path.render(),
+            from,
+            until,
+        }),
+        _ => Ok(()),
+    }
 }
 
 fn walk_layout(
@@ -72,7 +111,19 @@ fn walk_layout(
     sibling: Sibling,
 ) -> Result<(), UiDocError> {
     match node {
-        LayoutNode::Split { children, .. } => {
+        LayoutNode::Split {
+            measure,
+            size,
+            children,
+            ..
+        } => {
+            let among = match measure {
+                Some(axis) => {
+                    check_measured_box(*axis, *size, &path.push("Split"), origin)?;
+                    Sibling::Measured
+                }
+                None => Sibling::Among,
+            };
             for (index, child) in children.iter().enumerate() {
                 let child_path = path.push(format!("Split[{index}]"));
                 let weight = child.weight;
@@ -83,7 +134,10 @@ fn walk_layout(
                         value: format!("{weight}"),
                     });
                 }
-                walk_layout(&child.node, &child_path, origin, seen, Sibling::Among)?;
+                if child.from != 0.0 || child.until.is_some() {
+                    check_reveal(child.from, child.until, &child_path, origin, among)?;
+                }
+                walk_layout(&child.node, &child_path, origin, seen, among)?;
             }
             Ok(())
         }
@@ -92,6 +146,31 @@ fn walk_layout(
             check_block_position(id, &here, origin, sibling)?;
             record_block(id, &here, origin, seen)?;
             walk_layout(node, &here, origin, seen, Sibling::Only)
+        }
+        LayoutNode::Adaptive {
+            id, base, steps, ..
+        } => {
+            let here = path.push(format!("Adaptive({id})"));
+            check_id(&id.0, origin)?;
+            check_layout_steps(id, steps, &here, origin)?;
+            let taken = seen.clone();
+            for (index, branch) in std::iter::once((0, base.as_ref())).chain(
+                steps
+                    .iter()
+                    .enumerate()
+                    .map(|(index, step)| (index + 1, &step.node)),
+            ) {
+                let mut claimed = taken.clone();
+                walk_layout(
+                    branch,
+                    &here.push(format!("[{index}]")),
+                    origin,
+                    &mut claimed,
+                    Sibling::Only,
+                )?;
+                seen.extend(claimed);
+            }
+            Ok(())
         }
         LayoutNode::Module { instance, .. } => {
             check_id(&instance.0, origin)?;
@@ -103,6 +182,26 @@ fn walk_layout(
             )
         }
     }
+}
+
+pub(crate) fn check_layout_measure(
+    id: &NodeId,
+    measure: MeasureAxis,
+    size: SizeSpec,
+    origin: &SourceUri,
+) -> Result<(), UiDocError> {
+    let path = NodePath::default().push(format!("Adaptive({id})"));
+    check_measured_box(measure, Some(size), &path, origin)
+}
+
+fn check_layout_steps(
+    id: &NodeId,
+    steps: &[crate::layout::AdaptiveStep],
+    path: &NodePath,
+    origin: &SourceUri,
+) -> Result<(), UiDocError> {
+    let thresholds: Vec<f32> = steps.iter().map(|step| step.from).collect();
+    check_thresholds(id, &thresholds, path, origin)
 }
 
 pub(crate) fn check_block_path(path: &str, origin: &SourceUri) -> Result<(), UiDocError> {
@@ -214,12 +313,16 @@ fn walk_module(
     match node {
         ControlNode::Row {
             id,
+            size,
+            measure,
             write,
             children,
             ..
         }
         | ControlNode::Column {
             id,
+            size,
+            measure,
             write,
             children,
             ..
@@ -238,19 +341,38 @@ fn walk_module(
                 }
                 None => path.clone(),
             };
+            let among = match measure {
+                Some(axis) => {
+                    check_measured_box(*axis, *size, &here, origin)?;
+                    Sibling::Measured
+                }
+                None => Sibling::Among,
+            };
             for (index, child) in children.iter().enumerate() {
-                walk_module(
-                    child,
-                    &here.push(format!("[{index}]")),
-                    origin,
-                    seen,
-                    Sibling::Among,
-                )?;
+                walk_module(child, &here.push(format!("[{index}]")), origin, seen, among)?;
             }
             Ok(())
         }
+        ControlNode::Reveal { from, until, child } => {
+            let here = path.push("Reveal");
+            check_reveal(*from, *until, &here, origin, sibling)?;
+            walk_module(child, &here, origin, seen, Sibling::Only)
+        }
         ControlNode::Include { id, .. } => {
             record(&id.0, &path.push(format!("Include({id})")), origin, seen)
+        }
+        ControlNode::Adaptive {
+            id,
+            measure,
+            size,
+            base,
+            steps,
+        } => {
+            let here = path.push(format!("Adaptive({id})"));
+            record(&id.0, &here, origin, seen)?;
+            check_adaptive_measure(id, measure, *size, &here, origin)?;
+            check_adaptive_steps(id, steps, &here, origin)?;
+            walk_branches(base, steps, &here, origin, seen)
         }
         ControlNode::Optional { id, child, .. } => {
             let here = path.push(format!("Optional({id})"));
@@ -302,12 +424,119 @@ fn walk_module(
     }
 }
 
+fn check_adaptive_steps(
+    id: &NodeId,
+    steps: &[AdaptiveStep],
+    path: &NodePath,
+    origin: &SourceUri,
+) -> Result<(), UiDocError> {
+    let thresholds: Vec<f32> = steps.iter().map(|step| step.from).collect();
+    check_thresholds(id, &thresholds, path, origin)
+}
+
+fn check_thresholds(
+    id: &NodeId,
+    steps: &[f32],
+    path: &NodePath,
+    origin: &SourceUri,
+) -> Result<(), UiDocError> {
+    if steps.is_empty() {
+        return Err(UiDocError::AdaptiveWithoutSteps {
+            origin: origin.clone(),
+            id: id.0.clone(),
+            path: path.render(),
+        });
+    }
+    let mut below = f32::NEG_INFINITY;
+    for (index, from) in steps.iter().copied().enumerate() {
+        if from <= below || !from.is_finite() {
+            return Err(UiDocError::AdaptiveStepOrder {
+                origin: origin.clone(),
+                path: path.render(),
+                from,
+                index,
+            });
+        }
+        below = from;
+    }
+    Ok(())
+}
+
+fn check_measured_box(
+    axis: MeasureAxis,
+    size: Option<SizeSpec>,
+    path: &NodePath,
+    origin: &SourceUri,
+) -> Result<(), UiDocError> {
+    let declared = size.map(|size| match axis {
+        MeasureAxis::Width => size.w,
+        MeasureAxis::Height => size.h,
+    });
+    if matches!(declared, Some(dim) if dim != Dim::Shrink) {
+        return Ok(());
+    }
+    Err(UiDocError::UnmeasuredAxis {
+        origin: origin.clone(),
+        path: path.render(),
+        axis: axis.name(),
+    })
+}
+
+fn check_adaptive_measure(
+    id: &NodeId,
+    measure: &Measure,
+    size: Option<SizeSpec>,
+    path: &NodePath,
+    origin: &SourceUri,
+) -> Result<(), UiDocError> {
+    match (measure.axis(), size) {
+        (Some(axis), size) => check_measured_box(axis, size, path, origin),
+        (None, None) => Ok(()),
+        (None, Some(_)) => Err(UiDocError::MeasuredBoxWithoutAxis {
+            origin: origin.clone(),
+            id: id.0.clone(),
+            path: path.render(),
+        }),
+    }
+}
+
+fn walk_branches(
+    base: &ControlNode,
+    steps: &[AdaptiveStep],
+    path: &NodePath,
+    origin: &SourceUri,
+    seen: &mut BTreeSet<String>,
+) -> Result<(), UiDocError> {
+    let taken = seen.clone();
+    walk_branch(base, &path.push("base"), origin, &taken, seen)?;
+    for (index, step) in steps.iter().enumerate() {
+        let branch = path.push(format!("steps[{index}]"));
+        walk_branch(&step.node, &branch, origin, &taken, seen)?;
+    }
+    Ok(())
+}
+
+fn walk_branch(
+    node: &ControlNode,
+    path: &NodePath,
+    origin: &SourceUri,
+    taken: &BTreeSet<String>,
+    seen: &mut BTreeSet<String>,
+) -> Result<(), UiDocError> {
+    let mut claimed = taken.clone();
+    walk_module(node, path, origin, &mut claimed, Sibling::Only)?;
+    seen.extend(claimed);
+    Ok(())
+}
+
 const fn control_id(node: &ControlNode) -> Option<&NodeId> {
     match node {
         ControlNode::Row { .. }
+        | ControlNode::Adaptive { .. }
         | ControlNode::Column { .. }
         | ControlNode::Include { .. }
         | ControlNode::Optional { .. }
+        | ControlNode::Reveal { .. }
         | ControlNode::Popover { .. }
         | ControlNode::Pressable { .. }
         | ControlNode::Scroll { .. }
@@ -610,6 +839,7 @@ pub(crate) const fn value_kinds(control: &ControlNode) -> (Option<ValueKind>, Op
         | ControlNode::Text { .. }
         | ControlNode::Readout { .. } => (Some(ValueKind::Text), None),
         ControlNode::ContextBar { .. } => (Some(ValueKind::Text), Some(ValueKind::Scalar)),
+        ControlNode::Adaptive { .. } => (Some(ValueKind::Scalar), None),
         ControlNode::Optional { .. } => (Some(BLOCK_HIDDEN), None),
         ControlNode::Popover { .. } => (Some(ValueKind::Bool), None),
         ControlNode::Pressable { .. } => (None, Some(ValueKind::Trigger)),
@@ -637,6 +867,7 @@ pub(crate) const fn value_kinds(control: &ControlNode) -> (Option<ValueKind>, Op
         }
         ControlNode::Row { .. } | ControlNode::Column { .. } => (None, Some(ValueKind::Scalar)),
         ControlNode::Include { .. }
+        | ControlNode::Reveal { .. }
         | ControlNode::Scroll { .. }
         | ControlNode::Slot { .. }
         | ControlNode::Brand { .. }
@@ -820,6 +1051,88 @@ mod tests {
         ));
     }
 
+    fn layout_root(root: &str) -> Result<(), UiDocError> {
+        let text = format!(r#"(schema: "kithara.layout", version: 1, id: "l", root: {root})"#);
+        let doc = parse_layout(&text, &origin())?;
+        check_layout_instances(&doc, &origin())
+    }
+
+    fn split_cell(head: &str, tail: &str) -> Result<(), UiDocError> {
+        layout_root(&format!(
+            r#"Split(axis: Horizontal, {head} children: [
+                (node: Module(instance: "deck-a", source: "m.ron"){tail}),
+            ])"#
+        ))
+    }
+
+    fn measuring_split_cell(tail: &str) -> Result<(), UiDocError> {
+        split_cell("measure: Width, size: (w: Fill, h: Fixed(42.0)),", tail)
+    }
+
+    #[kithara::test]
+    fn a_band_stands_only_among_the_cells_of_a_measuring_split() {
+        for band in [", from: 350.0", ", until: Some(350.0)"] {
+            let error = split_cell("", band).unwrap_err();
+            assert!(
+                matches!(&error, UiDocError::UnmeasuredReveal { path, .. }
+                    if path == "root/Split[0]"),
+                "{band}: {error:?}",
+            );
+        }
+    }
+
+    #[kithara::test]
+    fn a_measuring_split_reveals_its_own_cells() {
+        layout_root(
+            r#"Split(axis: Horizontal, measure: Width, size: (w: Fill, h: Fixed(42.0)), children: [
+                (node: Module(instance: "menu", source: "m.ron")),
+                (node: Module(instance: "strip", source: "m.ron"), until: Some(350.0)),
+                (node: Module(instance: "wave", source: "m.ron"), from: 350.0),
+            ])"#,
+        )
+        .unwrap();
+    }
+
+    #[kithara::test]
+    fn a_measuring_split_must_declare_the_axis_it_measures() {
+        for head in [
+            "measure: Width,",
+            "measure: Height,",
+            "measure: Width, size: (w: Shrink, h: Fill),",
+            "measure: Height, size: (w: Fill, h: Shrink),",
+        ] {
+            let error = split_cell(head, "").unwrap_err();
+            assert!(
+                matches!(&error, UiDocError::UnmeasuredAxis { path, .. }
+                    if path == "root/Split"),
+                "{head}: {error:?}",
+            );
+        }
+    }
+
+    #[kithara::test]
+    fn a_split_band_is_finite_and_closes_above_the_room_it_opens_in() {
+        for band in [", from: -1.0", ", from: inf", ", from: NaN"] {
+            let error = measuring_split_cell(band).unwrap_err();
+            assert!(
+                matches!(&error, UiDocError::RevealThreshold { .. }),
+                "{band}: {error:?}",
+            );
+        }
+        for band in [
+            ", from: 350.0, until: Some(350.0)",
+            ", from: 350.0, until: Some(0.0)",
+            ", until: Some(-inf)",
+            ", until: Some(NaN)",
+        ] {
+            let error = measuring_split_cell(band).unwrap_err();
+            assert!(
+                matches!(&error, UiDocError::RevealBand { .. }),
+                "{band}: {error:?}",
+            );
+        }
+    }
+
     #[kithara::test]
     fn empty_and_parameter_like_ids_are_rejected() {
         for id in ["", "$deck"] {
@@ -880,6 +1193,253 @@ mod tests {
             error,
             UiDocError::UnaddressedSurface { path, .. } if path == "root"
         ));
+    }
+
+    fn adaptive(steps: &str) -> Result<(), UiDocError> {
+        let text = format!(
+            r#"(schema: "kithara.module", version: 1, id: "m",
+                root: Adaptive(
+                    id: "bank",
+                    measure: Read(Model(id: "ui.measure")),
+                    base: Knob(id: "low"),
+                    steps: [{steps}],
+                ))"#
+        );
+        let doc = parse_module(&text, &origin())?;
+        check_module_node_ids(&doc, &origin())
+    }
+
+    #[kithara::test]
+    fn an_adaptive_node_without_steps_is_rejected() {
+        let error = adaptive("").unwrap_err();
+
+        assert!(
+            matches!(&error, UiDocError::AdaptiveWithoutSteps { id, path, .. }
+                if id == "bank" && path == "root/Adaptive(bank)"),
+            "{error:?}"
+        );
+    }
+
+    #[kithara::test]
+    fn adaptive_steps_must_climb() {
+        for (steps, at) in [
+            (
+                r#"(from: 4.0, node: Knob(id: "a")), (from: 2.0, node: Knob(id: "b"))"#,
+                1,
+            ),
+            (
+                r#"(from: 4.0, node: Knob(id: "a")), (from: 4.0, node: Knob(id: "b"))"#,
+                1,
+            ),
+            (r#"(from: NaN, node: Knob(id: "a"))"#, 0),
+        ] {
+            let error = adaptive(steps).unwrap_err();
+            assert!(
+                matches!(&error, UiDocError::AdaptiveStepOrder { index, .. } if *index == at),
+                "{steps}: {error:?}"
+            );
+        }
+    }
+
+    fn measured(measure: &str, size: &str) -> Result<(), UiDocError> {
+        let text = format!(
+            r#"(schema: "kithara.module", version: 1, id: "m",
+                root: Adaptive(
+                    id: "bank",
+                    measure: {measure},
+                    {size}
+                    base: Knob(id: "low"),
+                    steps: [(from: 4.0, node: Knob(id: "high"))],
+                ))"#
+        );
+        let doc = parse_module(&text, &origin())?;
+        check_module_node_ids(&doc, &origin())
+    }
+
+    #[kithara::test]
+    fn a_self_measured_node_must_declare_the_axis_it_measures() {
+        for (measure, size) in [
+            ("Width", ""),
+            ("Height", ""),
+            ("Width", "size: Some((w: Shrink, h: Fill)),"),
+            ("Height", "size: Some((w: Fill, h: Shrink)),"),
+        ] {
+            let error = measured(measure, size).unwrap_err();
+            assert!(
+                matches!(&error, UiDocError::UnmeasuredAxis { path, .. }
+                    if path == "root/Adaptive(bank)"),
+                "{measure} {size}: {error:?}",
+            );
+        }
+    }
+
+    #[kithara::test]
+    fn a_declared_axis_carries_a_self_measured_node() {
+        measured("Width", "size: Some((w: Fill, h: Shrink)),").unwrap();
+        measured("Height", "size: Some((w: Shrink, h: Fixed(80.0))),").unwrap();
+    }
+
+    #[kithara::test]
+    fn a_read_measure_declares_no_box() {
+        let error = measured(
+            r#"Read(Model(id: "ui.measure"))"#,
+            "size: Some((w: Fill, h: Fill)),",
+        )
+        .unwrap_err();
+
+        assert!(
+            matches!(&error, UiDocError::MeasuredBoxWithoutAxis { id, .. } if id == "bank"),
+            "{error:?}",
+        );
+    }
+
+    fn module_root(root: &str) -> Result<(), UiDocError> {
+        let text = format!(r#"(schema: "kithara.module", version: 1, id: "m", root: {root})"#);
+        let doc = parse_module(&text, &origin())?;
+        check_module_node_ids(&doc, &origin())
+    }
+
+    const BAR: &str = r#"id: "bar", measure: Width, size: (w: Fill, h: Fixed(42.0)),"#;
+
+    #[kithara::test]
+    fn a_reveal_stands_only_among_the_children_of_a_measuring_container() {
+        for root in [
+            r#"Reveal(from: 1.0, child: Knob(id: "low"))"#.to_owned(),
+            r#"Row(children: [Reveal(from: 1.0, child: Knob(id: "low"))])"#.to_owned(),
+            format!(
+                r#"Row({BAR} children: [Pressable(id: "press", press: Command(id: "ui.press"),
+                    child: Reveal(from: 1.0, child: Knob(id: "low")))])"#
+            ),
+            format!(
+                r#"Row({BAR} children: [Reveal(from: 1.0,
+                    child: Reveal(from: 2.0, child: Knob(id: "low")))])"#
+            ),
+        ] {
+            let error = module_root(&root).unwrap_err();
+            assert!(
+                matches!(&error, UiDocError::UnmeasuredReveal { .. }),
+                "{root}: {error:?}",
+            );
+        }
+    }
+
+    #[kithara::test]
+    fn a_measuring_container_reveals_its_own_children() {
+        module_root(&format!(
+            r#"Row({BAR} children: [
+                Knob(id: "low"),
+                Reveal(from: 0.0, child: Knob(id: "mid")),
+                Reveal(from: 350.0, child: Knob(id: "high")),
+            ])"#
+        ))
+        .unwrap();
+    }
+
+    #[kithara::test]
+    fn a_measuring_container_must_declare_the_axis_it_measures() {
+        for (measure, size) in [
+            ("Width", ""),
+            ("Height", ""),
+            ("Width", "size: (w: Shrink, h: Fill),"),
+            ("Height", "size: (w: Fill, h: Shrink),"),
+        ] {
+            let root =
+                format!(r#"Row(id: "bar", measure: {measure}, {size} children: [Knob(id: "a")])"#);
+            let error = module_root(&root).unwrap_err();
+            assert!(
+                matches!(&error, UiDocError::UnmeasuredAxis { path, .. }
+                    if path == "root/Group(bar)"),
+                "{root}: {error:?}",
+            );
+        }
+    }
+
+    #[kithara::test]
+    fn a_threshold_is_finite_and_not_negative() {
+        for from in ["-1.0", "inf", "-inf", "NaN"] {
+            let root =
+                format!(r#"Row({BAR} children: [Reveal(from: {from}, child: Knob(id: "a"))])"#);
+            let error = module_root(&root).unwrap_err();
+            assert!(
+                matches!(&error, UiDocError::RevealThreshold { .. }),
+                "{from}: {error:?}",
+            );
+        }
+    }
+
+    #[kithara::test]
+    fn a_band_closes_above_the_room_it_opens_in() {
+        for until in ["0.0", "350.0", "inf", "-inf", "NaN"] {
+            let root = format!(
+                r#"Row({BAR} children: [Reveal(from: 350.0, until: Some({until}),
+                    child: Knob(id: "a"))])"#
+            );
+            let error = module_root(&root).unwrap_err();
+            assert!(
+                matches!(&error, UiDocError::RevealBand { .. }),
+                "{until}: {error:?}",
+            );
+        }
+    }
+
+    #[kithara::test]
+    fn bands_meeting_at_one_number_stand_in_one_line() {
+        module_root(&format!(
+            r#"Row({BAR} children: [
+                Reveal(from: 0.0, until: Some(350.0), child: Knob(id: "strip")),
+                Reveal(from: 350.0, child: Knob(id: "wave")),
+            ])"#
+        ))
+        .unwrap();
+    }
+
+    #[kithara::test]
+    fn thresholds_need_not_climb() {
+        module_root(&format!(
+            r#"Row({BAR} children: [
+                Reveal(from: 520.0, child: Knob(id: "a")),
+                Reveal(from: 350.0, child: Knob(id: "b")),
+            ])"#
+        ))
+        .unwrap();
+    }
+
+    #[kithara::test]
+    fn adaptive_branches_may_name_the_same_place() {
+        adaptive(r#"(from: 4.0, node: Knob(id: "low"))"#).unwrap();
+    }
+
+    #[kithara::test]
+    fn a_duplicate_id_inside_one_adaptive_branch_is_rejected() {
+        let error =
+            adaptive(r#"(from: 4.0, node: Row(children: [Knob(id: "dup"), Knob(id: "dup")]))"#)
+                .unwrap_err();
+
+        assert!(
+            matches!(&error, UiDocError::DuplicateId { id, .. } if id == "dup"),
+            "{error:?}"
+        );
+    }
+
+    #[kithara::test]
+    fn a_sibling_after_an_adaptive_node_sees_every_branch_id() {
+        let text = r#"(schema: "kithara.module", version: 1, id: "m",
+            root: Row(children: [
+                Adaptive(
+                    id: "bank",
+                    measure: Read(Model(id: "ui.measure")),
+                    base: Knob(id: "low"),
+                    steps: [(from: 4.0, node: Knob(id: "low-mid"))],
+                ),
+                Knob(id: "low-mid"),
+            ]))"#;
+        let doc = parse_module(text, &origin()).unwrap();
+        let error = check_module_node_ids(&doc, &origin()).unwrap_err();
+
+        assert!(
+            matches!(&error, UiDocError::DuplicateId { id, .. } if id == "low-mid"),
+            "{error:?}"
+        );
     }
 
     #[kithara::test]
