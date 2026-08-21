@@ -343,14 +343,15 @@ fn github_ci_is_fail_closed_and_aggregates_every_job() {
             "${{ github.event.repository.fork && format('fork-linux-{0}', github.repository) || format('ci-{0}', github.ref) }}"
         )
     );
+    // The fork's branches share one Linux pool, so they queue instead of
+    // evicting each other. `queue` takes no expression and may not sit beside a
+    // cancellation that can read true, so the one literal serves both sides and
+    // production gives up cancelling a superseded push. See ci.yml.
     assert_eq!(
-        mapping_field(concurrency, "cancel-in-progress").as_str(),
-        Some("${{ !github.event.repository.fork }}")
+        mapping_field(concurrency, "cancel-in-progress").as_bool(),
+        Some(false)
     );
-    assert!(
-        !concurrency.contains_key("queue"),
-        "CI must preserve production cancel-in-progress semantics"
-    );
+    assert_eq!(mapping_field(concurrency, "queue").as_str(), Some("max"));
     let jobs = workflow_jobs(&workflow);
 
     let advisory_browser = workflow_job(jobs, "wasm-browser");
