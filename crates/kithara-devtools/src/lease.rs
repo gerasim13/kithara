@@ -1,6 +1,6 @@
 use std::{
     fs::{self, File, OpenOptions},
-    path::Path,
+    path::{self, Path},
 };
 
 use fs4::FileExt;
@@ -39,6 +39,11 @@ pub fn hold(directory: &Path) -> Option<Lease> {
     // The directory a lane builds into does not exist before the build starts,
     // and the build is the longest stretch that needs the claim.
     fs::create_dir_all(directory).ok()?;
+    // Absolute, because a reclaim asks about an absolute path. A relative
+    // `CARGO_TARGET_DIR` would claim a file under whatever directory the lane
+    // happened to start in, and a claim the reclaim never reads protects
+    // nothing.
+    let directory = path::absolute(directory).ok()?;
     let file = OpenOptions::new()
         .create(true)
         .truncate(false)
