@@ -27,7 +27,7 @@ use kithara_test_utils::kithara;
 use crate::{
     ids::duration_prefix,
     stream::HlsCoord,
-    variant::{PlanCtx, PlanKnobs},
+    variant::{PlanConfig, PlanCtx},
 };
 
 struct HlsTrackState {
@@ -41,9 +41,9 @@ struct HlsTrackState {
     /// activation time. All epoch/target/pending reads use this directly
     /// rather than routing through `coord.timeline`.
     seek_obs: Arc<dyn SeekObserve>,
-    /// The `HlsConfig`-derived knobs threaded into every `PlanCtx` this
-    /// state constructs for `dispatch`.
-    knobs: PlanKnobs,
+    /// The `HlsConfig`-derived plan config threaded into every `PlanCtx`
+    /// this state constructs for `dispatch`.
+    config: PlanConfig,
     /// Target segment of an in-flight forward seek, held until the reader's
     /// physical byte cursor catches up to it. `coord.position()` only
     /// advances when the reader actually reads at the new offset, so right
@@ -185,7 +185,7 @@ impl HlsPeer {
         self: &Arc<Self>,
         coord: Arc<HlsCoord>,
         eviction_rx: mpsc::UnboundedReceiver<ResourceKey>,
-        knobs: PlanKnobs,
+        config: PlanConfig,
     ) {
         let reader_advanced = Arc::clone(&self.reader_advanced);
         // Let the `on_slow` hook wake this peer's `poll_next` when an in-flight
@@ -202,7 +202,7 @@ impl HlsPeer {
             .map_or(0, |(idx, _, _)| idx);
         let active = coord.active();
         let plan_ctx = PlanCtx {
-            knobs,
+            config,
             bus: active.event_bus(),
             scope: coord.scope.clone(),
             headers: coord.headers.clone(),
@@ -219,7 +219,7 @@ impl HlsPeer {
                 reader_variant: coord.variant_index(),
                 coord,
                 seek_obs: Arc::clone(&self.seek_obs),
-                knobs,
+                config,
                 eviction_rx,
                 last_seek_epoch: 0,
                 seek_settle_floor: None,
@@ -371,12 +371,12 @@ impl Peer for HlsPeer {
         }
 
         let mut cmds = Vec::new();
-        if outcome.ctx.knobs.prefetch_budget > 0 {
+        if outcome.ctx.config.prefetch_budget > 0 {
             let has_incoming = outcome.coord.has_incoming();
-            if has_incoming && outcome.ctx.knobs.prefetch_budget == 1 {
+            if has_incoming && outcome.ctx.config.prefetch_budget == 1 {
                 let first = self.session_turns.next(true);
                 cmds.extend(dispatch_session(&outcome.coord, &outcome.ctx, first, 1));
-                if cmds.len() < outcome.ctx.knobs.prefetch_budget {
+                if cmds.len() < outcome.ctx.config.prefetch_budget {
                     cmds.extend(dispatch_session(
                         &outcome.coord,
                         &outcome.ctx,
@@ -393,10 +393,10 @@ impl Peer for HlsPeer {
             // The active session feeds the speaker; the incoming one is only
             // preparation. Serve the active first and reserve a single slot for
             // the incoming, so a switch can never starve the audio that is
-            let active_budget = if has_incoming && outcome.ctx.knobs.prefetch_budget > 1 {
-                outcome.ctx.knobs.prefetch_budget - 1
+            let active_budget = if has_incoming && outcome.ctx.config.prefetch_budget > 1 {
+                outcome.ctx.config.prefetch_budget - 1
             } else {
-                outcome.ctx.knobs.prefetch_budget
+                outcome.ctx.config.prefetch_budget
             };
             cmds.extend(outcome.coord.dispatch_active(&outcome.ctx, active_budget));
             // Whatever the active session declined is idle capacity, not
@@ -405,10 +405,18 @@ impl Peer for HlsPeer {
             // variant sits fully cached. The incoming never draws past its own
             // reader position and look-ahead, so this changes when its bytes
             // arrive, never how far ahead of itself it fetches.
-            let mut remaining = outcome.ctx.knobs.prefetch_budget.saturating_sub(cmds.len());
+            let mut remaining = outcome
+                .ctx
+                .config
+                .prefetch_budget
+                .saturating_sub(cmds.len());
             if has_incoming && remaining > 0 {
                 cmds.extend(outcome.coord.dispatch_incoming(&outcome.ctx, remaining));
-                remaining = outcome.ctx.knobs.prefetch_budget.saturating_sub(cmds.len());
+                remaining = outcome
+                    .ctx
+                    .config
+                    .prefetch_budget
+                    .saturating_sub(cmds.len());
             }
             if remaining > 0 {
                 cmds.extend(outcome.coord.dispatch_active(&outcome.ctx, remaining));
@@ -421,7 +429,7 @@ impl Peer for HlsPeer {
             // own consumer cannot make while it waits.
             tracing::trace!(
                 has_incoming = outcome.coord.has_incoming(),
-                budget = outcome.ctx.knobs.prefetch_budget,
+                budget = outcome.ctx.config.prefetch_budget,
                 "hls peer parked without commands"
             );
             return Poll::Pending;
@@ -623,7 +631,7 @@ impl HlsTrackState {
             bus: self.coord.emit.bus().clone(),
             scope: self.coord.scope.clone(),
             headers: self.coord.headers.clone(),
-            knobs: self.knobs,
+            config: self.config,
             seek_epoch: self.seek_obs.epoch(),
             signal: self.coord.signal(),
         }

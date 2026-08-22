@@ -117,7 +117,7 @@ impl HlsVariant {
         let segment_peer = SegmentPeer::new(self.profile.headers.clone());
         Some(segment_peer.size_probe(
             url,
-            ctx.knobs.size_probe_method,
+            ctx.config.size_probe_method,
             cancel,
             writer,
             on_complete,

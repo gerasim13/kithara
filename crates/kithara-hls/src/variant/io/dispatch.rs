@@ -69,7 +69,7 @@ impl HlsVariant {
         self.dispatch_size_demands(ctx, &mut out, &mut remaining, &cancel);
         let prefetch_base = position.max(self.prefetch_anchor());
         let prefetch_byte_cap = ctx
-            .knobs
+            .config
             .look_ahead_bytes
             .map(|n| prefetch_base.saturating_add(n));
         let prefetch_segment_cap = self.prefetch_segment_cap(ctx, prefetch_base);
@@ -90,7 +90,7 @@ impl HlsVariant {
                             && seg_off > cap
                         {
                             resume_at = ctx
-                                .knobs
+                                .config
                                 .look_ahead_bytes
                                 .map(|window| seg_off.saturating_sub(window));
                             break;
@@ -235,7 +235,7 @@ impl HlsVariant {
         err: &AssetsError,
     ) {
         let failures = entry.state().note_acquire_failure();
-        match settle_for(err, failures, ctx.knobs.acquire_attempt_budget) {
+        match settle_for(err, failures, ctx.config.acquire_attempt_budget) {
             AcquireSettle::Requeue => {
                 debug!(
                     variant = self.variant,
@@ -272,7 +272,7 @@ impl HlsVariant {
 }
 
 fn look_ahead_segments(ctx: &PlanCtx) -> Option<u32> {
-    let window = ctx.knobs.look_ahead_segments?;
+    let window = ctx.config.look_ahead_segments?;
     Some(u32::try_from(window.max(1)).unwrap_or(u32::MAX))
 }
 
@@ -333,7 +333,7 @@ mod tests {
         assert_eq!(settle_for(&other(), u8::MAX, BUDGET), AcquireSettle::Fail);
     }
 
-    /// The budget is a config knob, not a constant: a caller that raises it
+    /// The budget is a config field, not a constant: a caller that raises it
     /// gets the extra rounds, and one that zeroes it settles on the first
     /// failure.
     #[kithara::test]

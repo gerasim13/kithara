@@ -604,7 +604,7 @@ mod tests {
         config::{HlsConfig, SizeProbeMethod},
         playlist::{PlaylistState, SegmentState, VariantState},
         segment::{MediaSegment, Segment, SegmentContent, SegmentSize, SegmentSlotState},
-        variant::{PlanCtx, PlanKnobs, VariantParts},
+        variant::{PlanConfig, PlanCtx, VariantParts},
     };
 
     struct TestAbrPeer {
@@ -651,7 +651,7 @@ mod tests {
             seek_epoch: 0,
             headers: None,
             signal: signal.clone(),
-            knobs: PlanKnobs {
+            config: PlanConfig {
                 prefetch_budget: 1,
                 acquire_attempt_budget: HlsConfig::DEFAULT_ACQUIRE_ATTEMPT_BUDGET,
                 look_ahead_bytes: None,

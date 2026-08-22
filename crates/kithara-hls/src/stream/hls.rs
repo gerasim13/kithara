@@ -29,7 +29,7 @@ use crate::{
         load_variant_playlists, resolve_init_decrypt_ctx, resolve_variant_decrypt_contexts,
     },
     signal::SizeSignal,
-    variant::{HlsVariant, PlanCtx, PlanKnobs},
+    variant::{HlsVariant, PlanConfig, PlanCtx},
 };
 
 /// Marker type for HLS streaming.
@@ -139,7 +139,7 @@ impl StreamType for Hls {
         let signal = SizeSignal::new(Arc::new(ThreadGate::default()), Arc::new(OnceLock::new()));
         let emit = Arc::new(DeferredBus::new(bus.clone(), 256));
 
-        let plan_knobs = PlanKnobs {
+        let plan_config = PlanConfig {
             look_ahead_bytes,
             look_ahead_segments,
             prefetch_budget: config.download_batch_size.max(1),
@@ -147,7 +147,7 @@ impl StreamType for Hls {
             size_probe_method: config.size_probe_method,
         };
         let plan_ctx = PlanCtx {
-            knobs: plan_knobs,
+            config: plan_config,
             bus: bus.clone(),
             scope: stream_peer.scope(),
             headers: config.headers.clone(),
@@ -189,7 +189,7 @@ impl StreamType for Hls {
 
         let mut source = HlsSource::new(Arc::clone(&coord), emit, stream_scope);
 
-        hls_peer.activate(coord, evict_rx, plan_knobs);
+        hls_peer.activate(coord, evict_rx, plan_config);
 
         source.set_peer_handle(stream_peer.peer_handle());
         source.set_hls_peer(hls_peer);

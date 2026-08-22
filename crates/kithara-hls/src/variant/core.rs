@@ -35,10 +35,10 @@ pub(super) const NO_PREFETCH_DEFERRAL: u64 = u64::MAX;
 /// The `HlsConfig`-derived slice of a plan: everything the dispatch policy
 /// reads, resolved once when the stream is built and carried unchanged into
 /// every [`PlanCtx`] the peer constructs afterwards. Kept apart from the
-/// per-activation runtime handles so a new knob lands in the config and not in
-/// another positional argument.
+/// per-activation runtime handles so a new parameter lands in the config and
+/// not in another positional argument.
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct PlanKnobs {
+pub(crate) struct PlanConfig {
     /// Max bytes the downloader may be ahead of the reader before
     /// `dispatch` pauses emitting `FetchCmd`s. Mirrors
     /// `HlsConfig::look_ahead_bytes`:
@@ -72,7 +72,7 @@ pub(crate) struct PlanCtx {
     /// Mirrors `HlsConfig::headers`; threaded through so DRM-style auth
     /// tokens carried by the playlist load also reach segment GETs.
     pub(crate) headers: Option<Headers>,
-    pub(crate) knobs: PlanKnobs,
+    pub(crate) config: PlanConfig,
     pub(crate) signal: SizeSignal,
     /// Snapshot of `SeekObserve::epoch()` at plan-time. Tagged on
     /// every emitted `FetchCmd`'s probe so integration tests can

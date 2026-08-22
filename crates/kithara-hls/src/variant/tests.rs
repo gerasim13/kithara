@@ -25,7 +25,7 @@ use kithara_stream::{
 use kithara_test_utils::kithara;
 use url::Url;
 
-use super::{HlsVariant, PlanCtx, PlanKnobs, SizeDemand, VariantParts, segment_placeholder_size};
+use super::{HlsVariant, PlanConfig, PlanCtx, SizeDemand, VariantParts, segment_placeholder_size};
 use crate::{
     config::{HlsConfig, SizeProbeMethod},
     playlist::{PlaylistState, SegmentState, VariantState},
@@ -56,7 +56,7 @@ fn test_ctx(prefetch_budget: usize) -> PlanCtx {
         seek_epoch: 0,
         headers: None,
         signal: SizeSignal::new(Arc::new(ThreadGate::default()), Arc::new(OnceLock::new())),
-        knobs: PlanKnobs {
+        config: PlanConfig {
             prefetch_budget,
             acquire_attempt_budget: HlsConfig::DEFAULT_ACQUIRE_ATTEMPT_BUDGET,
             look_ahead_bytes: None,
@@ -1232,7 +1232,7 @@ fn dispatch_respects_budget() {
 #[kithara::test]
 fn dispatch_respects_segment_lookahead_cap() {
     let mut ctx = test_ctx(10);
-    ctx.knobs.look_ahead_segments = Some(2);
+    ctx.config.look_ahead_segments = Some(2);
     let v = make_var(0, 0, &[100; 6], &ctx);
     v.rebuild(&ctx, 0);
     let session = active_session(&v, &ctx, 0);
