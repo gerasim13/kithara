@@ -1,35 +1,34 @@
 use std::fmt;
 
 use kithara_bufpool::BytePool;
-use kithara_platform::sync::Arc;
+use kithara_platform::{sync::Arc, time::Duration};
 use kithara_storage::{StorageError, StorageResult};
 
 use super::{contract::ProcessCtx, gate::ReadinessGate, guard::GateGuard, reader::ProcessedReader};
 use crate::resource::{RawWriteHandle, ReadSide, WriteSide};
-
-pub(super) const CHUNK_SIZE: usize = 64 * 1024;
-const CHUNK_SIZE_U64: u64 = 64 * 1024;
 
 fn run_process<W>(
     pool: &BytePool,
     processor: &ProcessCtx,
     inner: &W,
     final_len: u64,
+    chunk_size: usize,
 ) -> StorageResult<u64>
 where
     W: WriteSide,
 {
+    let chunk_size_u64 = chunk_size as u64;
     let mut sink = processor.begin();
     let raw = inner.reader();
 
-    let mut input_buf = pool.get_with(|buffer| buffer.resize(CHUNK_SIZE, 0));
-    let mut output_buf = pool.get_with(|buffer| buffer.resize(CHUNK_SIZE, 0));
+    let mut input_buf = pool.get_with(|buffer| buffer.resize(chunk_size, 0));
+    let mut output_buf = pool.get_with(|buffer| buffer.resize(chunk_size, 0));
 
     let mut read_offset = 0u64;
     let mut write_offset = 0u64;
 
     while read_offset < final_len {
-        let remaining_u64 = (final_len - read_offset).min(CHUNK_SIZE_U64);
+        let remaining_u64 = (final_len - read_offset).min(chunk_size_u64);
         let to_read = usize::try_from(remaining_u64).map_err(|err| {
             StorageError::Failed(format!(
                 "process_and_write: chunk size {remaining_u64} does not fit usize: {err}"
@@ -62,6 +61,8 @@ where
 /// Write handle that processes a resource atomically when it is committed.
 pub struct ProcessedWriter<W> {
     pool: BytePool,
+    chunk_size: usize,
+    gate_poll_interval: Duration,
     guard: GateGuard,
     processor: Option<ProcessCtx>,
     inner: W,
@@ -82,13 +83,21 @@ where
     W: WriteSide,
 {
     /// Creates a pending writer for a resource and its optional processor.
-    pub fn new(inner: W, processor: Option<ProcessCtx>, pool: BytePool) -> Self {
+    pub fn new(
+        inner: W,
+        processor: Option<ProcessCtx>,
+        pool: BytePool,
+        chunk_size: usize,
+        gate_poll_interval: Duration,
+    ) -> Self {
         let ready = processor.is_none();
         Self {
             inner,
             processor,
             pool,
-            guard: GateGuard::new(Arc::new(ReadinessGate::new(ready))),
+            chunk_size,
+            gate_poll_interval,
+            guard: GateGuard::new(Arc::new(ReadinessGate::new(ready, gate_poll_interval))),
         }
     }
 
@@ -98,6 +107,8 @@ where
             self.guard.shared(),
             self.processor.clone(),
             self.pool.clone(),
+            self.chunk_size,
+            self.gate_poll_interval,
         )
     }
 }
@@ -111,9 +122,13 @@ where
     fn commit(mut self, final_len: Option<u64>) -> StorageResult<ProcessedReader<W::Reader>> {
         let needs_processing = self.processor.is_some() && !self.guard.is_ready();
         let actual_len = match (needs_processing, final_len, self.processor.as_ref()) {
-            (true, Some(len), Some(processor)) if len > 0 => {
-                Some(run_process(&self.pool, processor, &self.inner, len)?)
-            }
+            (true, Some(len), Some(processor)) if len > 0 => Some(run_process(
+                &self.pool,
+                processor,
+                &self.inner,
+                len,
+                self.chunk_size,
+            )?),
             _ => final_len,
         };
 
@@ -127,6 +142,8 @@ where
             self.guard.shared(),
             self.processor.clone(),
             self.pool.clone(),
+            self.chunk_size,
+            self.gate_poll_interval,
         ))
     }
 

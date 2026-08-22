@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use kithara_bufpool::BytePool;
-use kithara_platform::sync::Arc;
+use kithara_platform::{sync::Arc, time::Duration};
 
 use super::{contract::ProcessCtx, reader::ProcessedReader, writer::ProcessedWriter};
 use crate::{
@@ -19,14 +19,28 @@ where
 {
     inner: Arc<A>,
     pool: BytePool,
+    /// Mirrors `AssetStore::builder().processing_chunk_size(..)`.
+    chunk_size: usize,
+    /// Mirrors `AssetStore::builder().processing_gate_poll_interval(..)`.
+    gate_poll_interval: Duration,
 }
 
 impl<A> ProcessingAssets<A>
 where
     A: Assets,
 {
-    pub const fn new(inner: Arc<A>, pool: BytePool) -> Self {
-        Self { inner, pool }
+    pub const fn new(
+        inner: Arc<A>,
+        pool: BytePool,
+        chunk_size: usize,
+        gate_poll_interval: Duration,
+    ) -> Self {
+        Self {
+            inner,
+            pool,
+            chunk_size,
+            gate_poll_interval,
+        }
     }
 
     fn wrap_ready(
@@ -34,7 +48,13 @@ where
         inner: A::ReadyRes,
         processor: Option<ProcessCtx>,
     ) -> ProcessedReader<A::ReadyRes> {
-        ProcessedReader::wrap_ready(inner, processor, self.pool.clone())
+        ProcessedReader::wrap_ready(
+            inner,
+            processor,
+            self.pool.clone(),
+            self.chunk_size,
+            self.gate_poll_interval,
+        )
     }
 }
 
@@ -54,9 +74,15 @@ where
         ctx: Option<Self::Context>,
     ) -> AssetsResult<AcquisitionResult<Self::ActiveRes, Self::ReadyRes>> {
         match self.inner.acquire_resource(key, identity)? {
-            AcquisitionResult::Pending(writer) => Ok(AcquisitionResult::Pending(
-                ProcessedWriter::new(writer, ctx, self.pool.clone()),
-            )),
+            AcquisitionResult::Pending(writer) => {
+                Ok(AcquisitionResult::Pending(ProcessedWriter::new(
+                    writer,
+                    ctx,
+                    self.pool.clone(),
+                    self.chunk_size,
+                    self.gate_poll_interval,
+                )))
+            }
             AcquisitionResult::Ready(reader) => {
                 Ok(AcquisitionResult::Ready(self.wrap_ready(reader, ctx)))
             }

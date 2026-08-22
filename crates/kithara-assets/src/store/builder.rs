@@ -8,7 +8,7 @@ use bon::bon;
 use dashmap::DashMap;
 use kithara_bufpool::BytePool;
 use kithara_events::EventBus;
-use kithara_platform::{CancelScope, CancelToken, sync::Arc};
+use kithara_platform::{CancelScope, CancelToken, sync::Arc, time::Duration};
 
 use super::{
     OnInvalidatedFn,
@@ -36,6 +36,15 @@ struct Consts;
 impl Consts {
     /// Default in-memory LRU cache capacity (init + 2-3 media segments).
     const DEFAULT_CACHE_CAPACITY: NonZeroUsize = NonZeroUsize::new(5).unwrap();
+    /// Default bytes read, transformed, and written per pass when a resource
+    /// is processed on commit. Large enough that the transform is not
+    /// dominated by per-pass overhead, small enough that the two pooled
+    /// buffers a pass holds stay cheap to lease.
+    const DEFAULT_PROCESSING_CHUNK_SIZE: usize = 64 * 1024;
+    /// Default recheck cadence for a reader blocked on the processing
+    /// readiness gate. The gate is woken by `notify_all`, so this only trades
+    /// teardown latency against idle wakeups.
+    const DEFAULT_PROCESSING_GATE_POLL_INTERVAL: Duration = Duration::from_millis(100);
 }
 
 /// Storage backend selection: where committed resource bytes live.
@@ -86,6 +95,15 @@ impl AssetStore {
         max_bytes: Option<u64>,
         mem_resource_capacity: Option<usize>,
         #[builder(default = BytePool::default())] pool: BytePool,
+        #[builder(default = Consts::DEFAULT_PROCESSING_CHUNK_SIZE)] processing_chunk_size: usize,
+        #[builder(default = Consts::DEFAULT_PROCESSING_GATE_POLL_INTERVAL)]
+        processing_gate_poll_interval: Duration,
+        #[cfg_attr(
+            not(target_arch = "wasm32"),
+            builder(default = crate::backend::DEFAULT_SEGMENT_RESERVATION)
+        )]
+        #[cfg_attr(target_arch = "wasm32", builder(default = 0))]
+        segment_reservation: u64,
     ) -> Self {
         let availability = AvailabilityIndex::new();
         // The pending-resource index is a consumer-driven sibling of `availability`:
@@ -108,78 +126,32 @@ impl AssetStore {
         };
 
         #[cfg(target_arch = "wasm32")]
-        let _ = backend;
+        let _ = (backend, segment_reservation);
 
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(root_dir) = disk_root {
-            let evict_cfg = EvictConfig {
-                max_assets,
-                max_bytes,
-            };
-            let cancel = CancelScope::new(cancel).token();
-            let hub =
-                flush_hub.unwrap_or_else(|| FlushHub::new(cancel.child(), FlushPolicy::default()));
-
-            let pins = open_disk_pins_index(&root_dir, &cancel, &pool);
-            let lru = open_disk_lru_index(&root_dir, &cancel, &pool);
-            pins.attach_to(&hub);
-            lru.attach_to(&hub);
-
-            let disk_availability = availability.clone();
-            let deleter: Arc<dyn AssetDeleter> = Arc::new(DiskAssetDeleter::new(
-                root_dir.clone(),
-                disk_availability.clone(),
-                pins.clone(),
-                lru.clone(),
-            ));
-
-            if let Some(path) = lazy_index_path(&root_dir, "availability.bin") {
-                disk_availability.enable_persistence(path, cancel.clone());
-            }
-            disk_availability.attach_to(&hub);
-
-            let disk = Arc::new(DiskAssetStore::with_availability_and_deleter(
-                root_dir,
-                cancel.clone(),
-                disk_availability,
-                Arc::clone(&deleter),
-            ));
-            let base = Arc::clone(&disk);
-            let evict = Arc::new(EvictAssets::new(
-                disk,
-                EvictDeps {
-                    lru,
-                    deleter,
-                    cfg: evict_cfg,
-                    cancel: cancel.clone(),
-                    events: EvictionEvents::new(event_bus.clone()),
-                    pins: pins.clone(),
-                },
-            ));
-            let processing = Arc::new(ProcessingAssets::new(Arc::clone(&evict), pool));
-            let capacity = cache_capacity.unwrap_or(Consts::DEFAULT_CACHE_CAPACITY);
-            // Disk bytes survive LRU displacement, so it needs no invalidation hook.
-            let cached = Arc::new(CachedAssets::new(processing, capacity, None, false));
-            let byte_recorder: Option<Arc<dyn ByteRecorder>> =
-                Some(Arc::clone(&evict) as Arc<dyn ByteRecorder>);
-            let store = LeaseAssets::with_byte_recorder(
-                cached,
-                cancel,
-                byte_recorder,
-                LeaseEvents::new(event_bus),
-                pins,
-            );
-
             return Self::new_handle(AssetStoreInner {
-                availability,
                 pending_resources,
                 transactions,
                 eviction,
                 layouts,
-                backend: StoreBackendInner::Disk {
-                    store,
-                    base: Some(base),
-                },
+                backend: open_disk_backend(DiskStoreSetup {
+                    root_dir,
+                    cancel,
+                    flush_hub,
+                    pool,
+                    event_bus,
+                    cache_capacity,
+                    availability: availability.clone(),
+                    evict_cfg: EvictConfig {
+                        max_assets,
+                        max_bytes,
+                    },
+                    processing_chunk_size,
+                    processing_gate_poll_interval,
+                    segment_reservation,
+                }),
+                availability,
             });
         }
 
@@ -223,7 +195,12 @@ impl AssetStore {
             },
         ));
         let capacity = cache_capacity.unwrap_or(Consts::DEFAULT_CACHE_CAPACITY);
-        let processing = Arc::new(ProcessingAssets::new(Arc::clone(&evict), pool));
+        let processing_assets = Arc::new(ProcessingAssets::new(
+            Arc::clone(&evict),
+            pool,
+            processing_chunk_size,
+            processing_gate_poll_interval,
+        ));
         // Memory bytes do not survive displacement, so indexes must be invalidated.
         let availability_for_hook = availability.clone();
         let eviction_for_hook = eviction.clone();
@@ -232,7 +209,7 @@ impl AssetStore {
             eviction_for_hook.route(key);
         });
         let cached = Arc::new(CachedAssets::with_max_bytes(
-            processing,
+            processing_assets,
             capacity,
             Some(on_invalidated),
             true,
@@ -254,6 +231,105 @@ impl AssetStore {
             layouts,
             backend: StoreBackendInner::Memory { store },
         })
+    }
+}
+
+/// Everything [`AssetStore::open`] resolved before it picked the disk
+/// branch. Mirrors [`MemStoreSetup`] on the memory side: one bundle so the
+/// branch is a function instead of another sixty lines in the builder.
+#[cfg(not(target_arch = "wasm32"))]
+struct DiskStoreSetup {
+    root_dir: PathBuf,
+    cancel: Option<CancelToken>,
+    flush_hub: Option<Arc<FlushHub>>,
+    pool: BytePool,
+    event_bus: Option<EventBus>,
+    cache_capacity: Option<NonZeroUsize>,
+    availability: AvailabilityIndex,
+    evict_cfg: EvictConfig,
+    processing_chunk_size: usize,
+    processing_gate_poll_interval: Duration,
+    segment_reservation: u64,
+}
+
+/// Assemble the disk decorator chain: evict over the disk store, processing
+/// over that, the memory cache over that, leases on top.
+#[cfg(not(target_arch = "wasm32"))]
+fn open_disk_backend(setup: DiskStoreSetup) -> StoreBackendInner {
+    let DiskStoreSetup {
+        root_dir,
+        cancel,
+        flush_hub,
+        pool,
+        event_bus,
+        cache_capacity,
+        availability,
+        evict_cfg,
+        processing_chunk_size,
+        processing_gate_poll_interval,
+        segment_reservation,
+    } = setup;
+    let cancel = CancelScope::new(cancel).token();
+    let hub = flush_hub.unwrap_or_else(|| FlushHub::new(cancel.child(), FlushPolicy::default()));
+
+    let pins = open_disk_pins_index(&root_dir, &cancel, &pool);
+    let lru = open_disk_lru_index(&root_dir, &cancel, &pool);
+    pins.attach_to(&hub);
+    lru.attach_to(&hub);
+
+    let deleter: Arc<dyn AssetDeleter> = Arc::new(DiskAssetDeleter::new(
+        root_dir.clone(),
+        availability.clone(),
+        pins.clone(),
+        lru.clone(),
+    ));
+
+    if let Some(path) = lazy_index_path(&root_dir, "availability.bin") {
+        availability.enable_persistence(path, cancel.clone());
+    }
+    availability.attach_to(&hub);
+
+    let disk = Arc::new(DiskAssetStore::with_availability_and_deleter(
+        root_dir,
+        cancel.clone(),
+        availability,
+        Arc::clone(&deleter),
+        segment_reservation,
+    ));
+    let base = Arc::clone(&disk);
+    let evict = Arc::new(EvictAssets::new(
+        disk,
+        EvictDeps {
+            lru,
+            deleter,
+            cfg: evict_cfg,
+            cancel: cancel.clone(),
+            events: EvictionEvents::new(event_bus.clone()),
+            pins: pins.clone(),
+        },
+    ));
+    let processing_assets = Arc::new(ProcessingAssets::new(
+        Arc::clone(&evict),
+        pool,
+        processing_chunk_size,
+        processing_gate_poll_interval,
+    ));
+    let capacity = cache_capacity.unwrap_or(Consts::DEFAULT_CACHE_CAPACITY);
+    // Disk bytes survive LRU displacement, so it needs no invalidation hook.
+    let cached = Arc::new(CachedAssets::new(processing_assets, capacity, None, false));
+    let byte_recorder: Option<Arc<dyn ByteRecorder>> =
+        Some(Arc::clone(&evict) as Arc<dyn ByteRecorder>);
+    let store = LeaseAssets::with_byte_recorder(
+        cached,
+        cancel,
+        byte_recorder,
+        LeaseEvents::new(event_bus),
+        pins,
+    );
+
+    StoreBackendInner::Disk {
+        store,
+        base: Some(base),
     }
 }
 

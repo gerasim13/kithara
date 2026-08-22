@@ -1,7 +1,7 @@
 use std::{fmt, ops::Range, path::Path};
 
 use kithara_bufpool::BytePool;
-use kithara_platform::{CancelToken, sync::Arc};
+use kithara_platform::{CancelToken, sync::Arc, time::Duration};
 use kithara_storage::{ResourceStatus, StorageError, StorageResult, WaitOutcome};
 
 use super::{contract::ProcessCtx, gate::ReadinessGate, writer::ProcessedWriter};
@@ -11,6 +11,8 @@ use crate::resource::ReadSide;
 pub struct ProcessedReader<R> {
     readiness: Arc<ReadinessGate>,
     pool: BytePool,
+    chunk_size: usize,
+    gate_poll_interval: Duration,
     processor: Option<ProcessCtx>,
     inner: R,
 }
@@ -23,6 +25,8 @@ where
         Self {
             readiness: Arc::clone(&self.readiness),
             pool: self.pool.clone(),
+            chunk_size: self.chunk_size,
+            gate_poll_interval: self.gate_poll_interval,
             processor: self.processor.clone(),
             inner: self.inner.clone(),
         }
@@ -60,23 +64,35 @@ where
         readiness: Arc<ReadinessGate>,
         processor: Option<ProcessCtx>,
         pool: BytePool,
+        chunk_size: usize,
+        gate_poll_interval: Duration,
     ) -> Self {
         Self {
             readiness,
             pool,
+            chunk_size,
+            gate_poll_interval,
             processor,
             inner,
         }
     }
 
-    pub(super) fn wrap_ready(inner: R, processor: Option<ProcessCtx>, pool: BytePool) -> Self {
+    pub(super) fn wrap_ready(
+        inner: R,
+        processor: Option<ProcessCtx>,
+        pool: BytePool,
+        chunk_size: usize,
+        gate_poll_interval: Duration,
+    ) -> Self {
         let ready =
             processor.is_none() || matches!(inner.status(), ResourceStatus::Committed { .. });
         Self {
             pool,
+            chunk_size,
+            gate_poll_interval,
             processor,
             inner,
-            readiness: Arc::new(ReadinessGate::new(ready)),
+            readiness: Arc::new(ReadinessGate::new(ready, gate_poll_interval)),
         }
     }
 
@@ -117,7 +133,13 @@ where
 
     fn reactivate(self) -> StorageResult<ProcessedWriter<R::Writer>> {
         let inner = self.inner.reactivate()?;
-        Ok(ProcessedWriter::new(inner, self.processor, self.pool))
+        Ok(ProcessedWriter::new(
+            inner,
+            self.processor,
+            self.pool,
+            self.chunk_size,
+            self.gate_poll_interval,
+        ))
     }
 
     fn read_at(&self, offset: u64, buf: &mut [u8]) -> StorageResult<usize> {
