@@ -21,6 +21,20 @@ use crate::ci::{
     process::Process,
 };
 
+/// Whether a stale tree still has to be asked if anything is using it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Liveness {
+    /// A workspace is leased and handed to job after job, so its timestamp says
+    /// nothing about whether one is running in it right now.
+    Ask,
+    /// A scratch entry belongs to one job and is never handed to another, so
+    /// its age is the whole answer. Asking anyway costs an `lsof` walk per
+    /// entry, and the backlog this was written for had reached sixty-eight
+    /// thousand of them: hours inside a pass that runs every five minutes,
+    /// with every other step in the ladder waiting behind it.
+    Age,
+}
+
 /// Ordered least to most urgent: the watchdog reports the worst volume, not
 /// the total, so that a roomy one cannot hide a full one.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
@@ -509,11 +523,11 @@ impl<'a> HostStorage<'a> {
     }
 
     fn prune_host_trees(&self, relative: &str, age: Duration) -> Result<()> {
-        self.prune_old_trees(&self.host_root, relative, age)
+        self.prune_old_trees(&self.host_root, relative, age, Liveness::Ask)
     }
 
     fn prune_build_trees(&self, relative: &str, age: Duration) -> Result<()> {
-        self.prune_old_trees(&self.build_root, relative, age)
+        self.prune_old_trees(&self.build_root, relative, age, Liveness::Ask)
     }
 
     /// Prune what the lanes leave behind in their scratch root.
@@ -537,12 +551,18 @@ impl<'a> HostStorage<'a> {
     /// `prune_old_trees` only ever offers their children.
     fn prune_scratch_trees(&self, age: Duration) -> Result<()> {
         for trust in CacheTrust::ALL {
-            self.prune_old_trees(&self.scratch_root, trust.as_str(), age)?;
+            self.prune_old_trees(&self.scratch_root, trust.as_str(), age, Liveness::Age)?;
         }
         Ok(())
     }
 
-    fn prune_old_trees(&self, root: &Path, relative: &str, age: Duration) -> Result<()> {
+    fn prune_old_trees(
+        &self,
+        root: &Path,
+        relative: &str,
+        age: Duration,
+        liveness: Liveness,
+    ) -> Result<()> {
         let directory = root.join(relative);
         if !directory.is_dir() {
             return Ok(());
@@ -556,7 +576,7 @@ impl<'a> HostStorage<'a> {
             if !metadata.file_type().is_dir() || !older_than(&metadata, age)? {
                 continue;
             }
-            if self.active(&path) {
+            if liveness == Liveness::Ask && self.active(&path) {
                 info!(path = %path.display(), "keeping active CI path");
                 continue;
             }

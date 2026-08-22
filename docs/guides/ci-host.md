@@ -368,7 +368,11 @@ rather than against a list of names:
   pruned on age alone, unlike the workspaces beside them, because a namespace
   entry belongs to one job and is never handed to another; a day is more than ten
   times the longest lane, so a running job's scratch is never a candidate, and
-  the namespace directories themselves are never offered.
+  the namespace directories themselves are never offered. Age alone is also what
+  keeps the pass affordable: the workspace sweep asks `lsof` whether anything is
+  using a candidate, and one walk per entry over a backlog this size would run
+  for hours inside a pass that repeats every five minutes, with every later step
+  in the ladder waiting behind it.
 
 Health and cleanup run through launchd. They can also be checked directly:
 
