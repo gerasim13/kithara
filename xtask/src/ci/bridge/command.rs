@@ -188,7 +188,7 @@ mod tests {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .unwrap()
-            .join("ci/bridge/config.example.toml");
+            .join(".config/bridge/config.example.toml");
         std::fs::read_to_string(path).unwrap()
     }
 
