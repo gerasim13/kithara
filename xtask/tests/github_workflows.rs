@@ -306,7 +306,6 @@ fn assert_hosted_authorization(job: &Mapping) {
         mapping_field(job, "runs-on").as_str(),
         Some("ubuntu-latest")
     );
-    assert!(!job.contains_key("if"));
 
     let step = first_step(job);
     let env = mapping_field(step, "env")
@@ -364,7 +363,17 @@ fn github_ci_is_fail_closed_and_aggregates_every_job() {
         Some(true)
     );
 
-    assert_hosted_authorization(workflow_job(jobs, "authorize"));
+    let authorize = workflow_job(jobs, "authorize");
+    assert_hosted_authorization(authorize);
+    // The one condition this job may carry. Anything else here, and a push that
+    // should have been judged is skipped instead — reported as a green run. Both
+    // halves are load-bearing: the variable admits a repository that declares
+    // runners, the fork flag admits one whose settings this repository cannot
+    // read.
+    assert_eq!(
+        mapping_field(authorize, "if").as_str(),
+        Some("github.event.repository.fork || vars.KITHARA_RUNNER_LABELS != ''")
+    );
     let gate = workflow_job(jobs, "gate");
     assert_eq!(job_needs(gate), BTreeSet::from(["authorize".to_owned()]));
     assert_eq!(
@@ -395,9 +404,14 @@ fn github_ci_is_fail_closed_and_aggregates_every_job() {
         mapping_field(required, "runs-on").as_str(),
         Some("ubuntu-latest")
     );
+    // The aggregate demands success from every job it needs, and a skip is not a
+    // success, so it has to carry the same guard verbatim or it alone stays red
+    // on a repository the run skipped.
     assert_eq!(
         mapping_field(required, "if").as_str(),
-        Some("${{ always() }}")
+        Some(
+            "${{ always() && (github.event.repository.fork || vars.KITHARA_RUNNER_LABELS != '') }}"
+        )
     );
     let mut expected = workflow_job_names(jobs);
     expected.remove("required");
@@ -541,7 +555,12 @@ fn standalone_rtsan_is_fail_closed_before_expanding_every_lane() {
     assert_no_key(&workflow, "continue-on-error");
     let jobs = workflow_jobs(&workflow);
 
-    assert_hosted_authorization(workflow_job(jobs, "authorize"));
+    let authorize = workflow_job(jobs, "authorize");
+    assert_hosted_authorization(authorize);
+    // Nothing starts this workflow on a repository without runners: it is only
+    // ever called. So it needs no guard, and a condition here could only ever
+    // skip a judgement someone asked for.
+    assert!(!authorize.contains_key("if"));
     let rtsan = workflow_job(jobs, "rtsan");
     assert_eq!(job_needs(rtsan), BTreeSet::from(["authorize".to_owned()]));
     assert!(!rtsan.contains_key("if"));
@@ -1448,7 +1467,13 @@ fn nightly_collector_is_read_only_and_does_not_mirror_the_source_verdict() {
         mapping_field(job, "runs-on").as_str(),
         Some("ubuntu-latest")
     );
-    assert!(!job.contains_key("if"));
+    // The collector shows the source verdict, so it runs for every conclusion
+    // that is one. A skipped source has none, and reporting on it turned into a
+    // red check about a run that never happened.
+    assert_eq!(
+        mapping_field(job, "if").as_str(),
+        Some("github.event.workflow_run.conclusion != 'skipped'")
+    );
 
     let collect = named_step(job, "Collect the source run jobs");
     let script = mapping_field(collect, "run")

@@ -424,8 +424,11 @@ resampler fields.
 | `probe` | no | USDT runtime tracing opt-in (forwards nothing on its own) |
 | `mock` | no | Exposes the `mock` module (`EqualizerMock`) |
 
-`src/guard.rs` hard-fails misconfigured builds: wasm32 requires both `backend-web-audio` and
-`wasm-bindgen`; non-wasm requires `backend-cpal`.
+`src/guard.rs` hard-fails misconfigured builds: wasm32 requires `backend-web-audio`,
+`wasm-bindgen`, and a resampler backend (`resample-rubato` or `resample-glide`); non-wasm
+requires `backend-cpal`. The resampler is a build requirement on wasm because the web-audio
+context runs at the browser's rate and nothing downstream bridges to it: without a backend
+`PlaybackResamplerBackend` is `NoResamplerBackend` and every off-rate track fails to open.
 
 File and HLS pipelines are unconditional: `kithara-play` always links `kithara-file`,
 `kithara-hls`, `kithara-abr`, `kithara-assets`, `kithara-net`.
