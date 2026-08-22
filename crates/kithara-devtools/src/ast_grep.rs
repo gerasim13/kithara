@@ -369,14 +369,31 @@ fn scratch(values: &[f64], count: usize) {
 }
 "#;
 
-        assert_eq!(primitive_pool_hits(source), 10);
+        assert_eq!(primitive_pool_hits(source), 11);
     }
 
     #[test]
-    fn primitive_pool_rule_allows_empty_vec_without_capacity() {
-        let source = "fn owner() { let empty = Vec::<u64>::new(); }";
+    fn primitive_pool_rule_rejects_empty_vectors_that_can_grow() {
+        let source = r#"
+fn scratch(bytes: &[u8], count: usize) {
+    let mut copied: Vec<u8> = Vec::new();
+    copied.extend_from_slice(bytes);
 
-        assert_eq!(primitive_pool_hits(source), 0);
+    let mut pcm = Vec::<f32>::new();
+    pcm.push(0.0);
+
+    let mut inferred = Vec::new();
+    inferred.push(0_u16);
+
+    let mut ids: Vec<u64> = Vec::default();
+    ids.reserve(count);
+
+    let mut flags: Vec<bool> = Default::default();
+    flags.resize(count, false);
+}
+"#;
+
+        assert_eq!(primitive_pool_hits(source), 5);
     }
 
     #[test]
@@ -393,19 +410,15 @@ fn owner(count: usize) {
     }
 
     #[test]
-    fn primitive_pool_rule_allows_owned_result_construction() {
+    fn primitive_pool_rule_rejects_owned_result_and_field_construction() {
         let source = r#"
 struct Owner {
     values: Vec<f64>,
 }
 
-fn direct(values: &[f64]) -> Vec<f64> {
-    return values.to_vec();
-}
-
-fn field(values: &[f64]) -> Owner {
+fn field(count: usize) -> Owner {
     Owner {
-        values: values.to_vec(),
+        values: vec![0.0; count],
     }
 }
 
@@ -420,9 +433,34 @@ fn tuple(count: usize) -> Result<(usize, Vec<u8>), ()> {
     values.fill(1);
     return Ok((count, values));
 }
+
+fn replace(owner: &mut Owner, count: usize) {
+    owner.values = vec![0.0; count];
+}
 "#;
 
-        assert_eq!(primitive_pool_hits(source), 0);
+        assert_eq!(primitive_pool_hits(source), 4);
+    }
+
+    #[test]
+    fn primitive_pool_rule_preserves_legacy_byte_and_pcm_coverage() {
+        let source = r#"
+fn legacy(count: usize) {
+    let _ = vec![0u8; count];
+    let _ = vec![0_u8; count];
+    let _ = vec![0; count];
+    let _ = Vec::<u8>::with_capacity(count);
+    let _ = Vec::<u8>::new();
+    let _ = vec![0.0f32; count];
+    let _ = vec![0_f32; count];
+    let _ = vec![0.0_f32; count];
+    let _ = vec![0.0; count];
+    let _ = Vec::<f32>::with_capacity(count);
+    let _ = Vec::<f32>::new();
+}
+"#;
+
+        assert_eq!(primitive_pool_hits(source), 11);
     }
 
     #[test]

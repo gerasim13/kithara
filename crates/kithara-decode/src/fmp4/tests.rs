@@ -19,7 +19,7 @@ use crate::{
     demuxer::{Demuxer, TrackInfo},
     fmp4::{
         Fmp4SegmentDemuxer,
-        parsing::{CodecConfig, parse_init, parse_segment_frames},
+        parsing::{parse_init, parse_segment_frames},
     },
     symphonia::{SymphoniaCodec, SymphoniaConfig},
     traits::{BoxedSource, Decoder, DecoderChunkOutcome, DecoderSeekOutcome},
@@ -276,10 +276,8 @@ type AacFrameHarness = (SymphoniaCodec, Vec<u8>, Vec<(usize, usize)>);
 /// produce, then returns the per-frame `(offset, size)` access-unit ranges.
 fn aac_codec_and_frames() -> AacFrameHarness {
     let init_bytes = read_fixture("init-slq-a1.mp4");
-    let init = parse_init(&init_bytes).expect("BUG: parse AAC init");
-    let extra_data = match &init.config {
-        CodecConfig::Aac(bytes) | CodecConfig::Flac(bytes) => bytes.clone(),
-    };
+    let init = parse_init(&init_bytes, &BytePool::default()).expect("BUG: parse AAC init");
+    let extra_data = init.config.as_ref().to_vec();
     let track = TrackInfo {
         extra_data,
         codec: init.codec,

@@ -26,7 +26,7 @@ where
     pub(crate) fn build(&self, spec: PcmSpec) -> TrackAnalyzers<B> {
         TrackAnalyzers {
             beat: Config::build(&self.beat, spec, &self.pcm_pool),
-            waveform: waveform::build(&self.waveform, spec),
+            waveform: waveform::build(&self.waveform, spec, &self.pcm_pool),
             source_frames: 0,
             source_sample_rate: spec.sample_rate,
         }

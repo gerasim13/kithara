@@ -1,3 +1,4 @@
+use kithara_bufpool::{PcmBuf, PcmPool};
 use kithara_decode::{BlenderProfile, PcmChunk, PcmSpec};
 
 struct Consts;
@@ -22,20 +23,24 @@ enum JoinState {
 pub(crate) struct PcmBlender {
     active: BlenderProfile,
     join: JoinState,
-    outgoing: Vec<f32>,
+    outgoing: PcmBuf,
+    pool: PcmPool,
     prepared: BlenderProfile,
-    prepared_outgoing: Vec<f32>,
+    prepared_outgoing: PcmBuf,
 }
 
 impl PcmBlender {
-    pub(crate) fn new(active: BlenderProfile) -> Self {
+    pub(crate) fn new(active: BlenderProfile, pool: &PcmPool) -> Self {
         let samples = join_samples(active.spec());
+        let outgoing = pool.get_with(|buffer| buffer.resize(samples, 0.0));
+        let prepared_outgoing = pool.get_with(|buffer| buffer.resize(samples, 0.0));
         Self {
             active,
             join: JoinState::Steady,
-            outgoing: vec![0.0; samples],
+            outgoing,
+            pool: pool.clone(),
             prepared: active,
-            prepared_outgoing: vec![0.0; samples],
+            prepared_outgoing,
         }
     }
 
@@ -70,8 +75,9 @@ impl PcmBlender {
 
     pub(crate) fn prepare_active(&mut self, active: BlenderProfile) {
         self.prepared = active;
-        self.prepared_outgoing
-            .resize(join_samples(active.spec()), 0.0);
+        self.prepared_outgoing = self
+            .pool
+            .get_with(|buffer| buffer.resize(join_samples(active.spec()), 0.0));
     }
 
     pub(crate) fn prepare_join(&mut self, copy_outgoing: impl FnOnce(&mut [f32]) -> bool) -> bool {

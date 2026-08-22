@@ -7,13 +7,14 @@ message: |
     - `Vec<f32>` containing PCM uses `PcmPool`;
     - other primitive scratch is reshaped to reuse one of those injected pools.
 
-  The rule covers capacity-bearing constructors, `vec!`, `collect`, `to_vec`,
-  and `repeat` when the primitive type is explicit. An explicit
-  `collect::<Vec<_>>()` is also rejected conservatively in these crates.
-  `Vec::new()` alone does not allocate and is intentionally not a finding.
-  Long-lived result storage is allowed, but disposable scratch must reuse the
-  pool injected by the composition root. Component-local pool construction is
-  forbidden.
+  The rule covers empty and capacity-bearing constructors, `default`, `vec!`,
+  `collect`, `to_vec`, and `repeat` when the primitive type is explicit. An
+  empty `Vec` is included conservatively because its first `push`, `extend`,
+  `resize`, or `reserve` can allocate outside the injected pool. A bare
+  `Vec::new()` whose primitive type is inferred from a later `push`, `resize`,
+  or literal extension is covered too. An explicit `collect::<Vec<_>>()` and a
+  repeated primitive literal are also rejected conservatively in these crates.
+  Component-local pool construction is forbidden.
 severity: error
 language: Rust
 files:
@@ -40,24 +41,34 @@ rule:
                 - pattern: "let mut $NAME: Vec<$TYPE> = $ALLOC;"
         - pattern: "$ITER.collect::<Vec<_>>()"
         - pattern: "$ITER.collect::<Vec<$TYPE>>()"
+        - pattern: "Vec::<$TYPE>::new()"
+        - pattern: "Vec::<$TYPE>::default()"
         - pattern: "Vec::<$TYPE>::with_capacity($CAPACITY)"
         - pattern: "Vec::<$TYPE>::from($VALUE)"
-        - pattern: "let $NAME = vec![$ELEMENT; $CAPACITY];"
-        - pattern: "let mut $NAME = vec![$ELEMENT; $CAPACITY];"
-    - not:
-        inside:
-          all:
-            - kind: function_item
-            - regex: '(?s)^[^{]*->[^{]*Vec\s*<\s*(?:u8|u16|u32|u64|u128|usize|i8|i16|i32|i64|i128|isize|f32|f64|bool|char)\s*>'
-          stopBy: end
-    - not:
-        inside:
-          kind: return_expression
-          stopBy: end
-    - not:
-        inside:
-          kind: field_initializer
-          stopBy: end
+        - all:
+            - any:
+                - pattern: "let mut $NAME = Vec::new();"
+                - pattern: "let mut $NAME = Vec::default();"
+                - pattern: "let mut $NAME = Default::default();"
+            - inside:
+                all:
+                  - kind: function_item
+                  - has:
+                      any:
+                        - pattern: "$NAME.push($ELEMENT)"
+                        - pattern: "$NAME.resize($_, $ELEMENT)"
+                        - pattern: "$NAME.extend([$ELEMENT])"
+                        - pattern: "$NAME.extend_from_slice(&[$ELEMENT])"
+                      stopBy: end
+                stopBy: end
+        - all:
+            - pattern: "vec![$ELEMENT; $CAPACITY]"
+            - not:
+                inside:
+                  any:
+                    - pattern: "let $NAME: Vec<$TYPE> = $_;"
+                    - pattern: "let mut $NAME: Vec<$TYPE> = $_;"
+                  stopBy: end
     - not:
         inside:
           all:
@@ -84,7 +95,7 @@ constraints:
   TYPE:
     regex: '^(?:u8|u16|u32|u64|u128|usize|i8|i16|i32|i64|i128|isize|f32|f64|bool|char)$'
   ALLOC:
-    regex: '(?s)(?:^vec!\s*\[|^Vec(?:::\s*<[^>]+>)?::(?:with_capacity|from)\s*\(|\.(?:collect(?:\s*::\s*<[^>]+>)?|to_vec|repeat)\s*\()'
+    regex: '(?s)(?:^vec!\s*\[|^Vec(?:::\s*<[^>]+>)?::(?:new|default|with_capacity|from)\s*\(|^Default::default\s*\(|\.(?:collect(?:\s*::\s*<[^>]+>)?|to_vec|repeat)\s*\()'
   ELEMENT:
     any:
       - kind: integer_literal
