@@ -38,13 +38,12 @@ pub use kithara_resampler::{
 };
 pub use musical::{
     AssetAxis, AssetBeatMap, AssetFrame, AssetMapPublishError, AssetMapPublisher, AssetMapUpdate,
-    Beat, BeatEstimate, BeatEvidence, BeatMap, BeatMapError, BeatMapId, BeatMapRevision,
-    BeatMapSnapshot, BeatMapSnapshotError, BeatMarker, BeatOrdinal, BeatsPerMinute,
-    CoordinateError, FrameUncertainty, HostAxis, HostBeatMap, HostEpoch, MapAxis,
+    Beat, BeatEstimate, BeatEvidence, BeatMap, BeatMapId, BeatMapIdAllocationError,
+    BeatMapRevision, BeatMapSnapshot, BeatMapSnapshotError, BeatMarker, BeatOrdinal,
+    BeatsPerMinute, CoordinateError, FrameUncertainty, HostAxis, HostBeatMap, HostEpoch, MapAxis,
     MapCoordinateError, MapPoint, MapPosition, MapQuery, MapRegion, MapSegment, MapStamp, MapState,
     MapUnavailable, Meter, MeterError, MeterFacts, SegmentDraft, SegmentEndpoint, SegmentError,
-    SegmentFacts, SegmentSet, SessionAnchor, SessionBeat, SessionFrame, SourceFrame, TrackBeat,
-    TrackBeatMap,
+    SegmentFacts, SegmentSet, SessionAnchor, SessionBeat, SessionFrame,
 };
 pub use pipeline::{
     config::{AudioConfig, AudioDecoderConfig, ConsumerWakeMode, DecoderResamplerSettings},

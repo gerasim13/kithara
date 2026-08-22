@@ -1,4 +1,4 @@
-use std::num::{NonZeroU32, NonZeroU64};
+use std::num::NonZeroU32;
 
 use kithara_audio::{
     AssetAxis, AssetBeatMap, AssetFrame, AssetMapPublishError, AssetMapUpdate, Beat, BeatEvidence,
@@ -10,8 +10,8 @@ use kithara_audio::{
 };
 use kithara_test_utils::kithara;
 
-fn map_id(value: u64) -> BeatMapId {
-    BeatMapId::new(NonZeroU64::new(value).expect("invariant: fixture map id is non-zero"))
+fn map_id() -> BeatMapId {
+    BeatMapId::allocate().expect("invariant: fixture map identity space is available")
 }
 
 fn sample_rate() -> NonZeroU32 {
@@ -67,7 +67,7 @@ fn resolved<T: std::fmt::Debug>(query: MapQuery<T>) -> T {
 #[kithara::test]
 fn two_beat_gap_preserves_musical_distance() {
     let period = 24_000.0;
-    let (map, mut publisher) = AssetBeatMap::new(map_id(1), sample_rate(), 72_001);
+    let (map, mut publisher) = AssetBeatMap::new(map_id(), sample_rate(), 72_001);
     let segment = MapSegment::new(
         observed(0.0, 0),
         observed(2.0 * period, 2),
@@ -117,7 +117,7 @@ fn pickup_ordinals_keep_canonical_downbeat_zero() {
         Beat::try_from(BeatOrdinal::new(9_007_199_254_740_993)),
         Err(MapCoordinateError::InexactBeatOrdinal)
     );
-    let (map, mut publisher) = AssetBeatMap::new(map_id(27), sample_rate(), 96_001);
+    let (map, mut publisher) = AssetBeatMap::new(map_id(), sample_rate(), 96_001);
     let segment = MapSegment::new(
         observed(0.0, -2),
         observed(96_000.0, 2),
@@ -151,7 +151,7 @@ fn pickup_ordinals_keep_canonical_downbeat_zero() {
 
 #[kithara::test]
 fn analyzer_snapshot_requires_marker_span_evidence() {
-    let (map, mut publisher) = AssetBeatMap::new(map_id(2), sample_rate(), 72_001);
+    let (map, mut publisher) = AssetBeatMap::new(map_id(), sample_rate(), 72_001);
     let facts = metered(
         BeatEvidence::Interpolated,
         Meter::new(4).expect("invariant: fixture meter is valid"),
@@ -184,7 +184,7 @@ fn analyzer_snapshot_requires_marker_span_evidence() {
 
 #[kithara::test]
 fn scalar_tempo_and_segments_share_declared_topology() {
-    let (map, mut publisher) = AssetBeatMap::new(map_id(3), sample_rate(), 96_001);
+    let (map, mut publisher) = AssetBeatMap::new(map_id(), sample_rate(), 96_001);
     let facts = metered(
         BeatEvidence::Observed,
         Meter::new(4).expect("invariant: fixture meter is valid"),
@@ -219,7 +219,7 @@ fn scalar_tempo_and_segments_share_declared_topology() {
 
 #[kithara::test]
 fn tempo_only_geometry_does_not_fabricate_meter() {
-    let (map, mut publisher) = AssetBeatMap::new(map_id(20), sample_rate(), 48_001);
+    let (map, mut publisher) = AssetBeatMap::new(map_id(), sample_rate(), 48_001);
     let segment = MapSegment::new(
         observed(0.0, 0),
         observed(48_000.0, 2),
@@ -262,7 +262,7 @@ fn tempo_only_geometry_does_not_fabricate_meter() {
 
 #[kithara::test]
 fn segment_derived_values_report_segment_evidence() {
-    let (map, mut publisher) = AssetBeatMap::new(map_id(16), sample_rate(), 48_001);
+    let (map, mut publisher) = AssetBeatMap::new(map_id(), sample_rate(), 48_001);
     let meter = Meter::new(4).expect("invariant: fixture meter is valid");
     let segment = MapSegment::new(
         observed(0.0, 0),
@@ -299,7 +299,7 @@ fn segment_derived_values_report_segment_evidence() {
 
 #[kithara::test]
 fn building_gap_is_uncovered_but_complete_extent_is_outside_domain() {
-    let (map, mut publisher) = AssetBeatMap::new(map_id(4), sample_rate(), 120_001);
+    let (map, mut publisher) = AssetBeatMap::new(map_id(), sample_rate(), 120_001);
     let facts = metered(
         BeatEvidence::Observed,
         Meter::new(4).expect("invariant: fixture meter is valid"),
@@ -346,7 +346,7 @@ fn building_gap_is_uncovered_but_complete_extent_is_outside_domain() {
 
 #[kithara::test]
 fn missing_beat_reports_the_corresponding_position_gap() {
-    let (map, mut publisher) = AssetBeatMap::new(map_id(18), sample_rate(), 120_001);
+    let (map, mut publisher) = AssetBeatMap::new(map_id(), sample_rate(), 120_001);
     let facts = metered(
         BeatEvidence::Interpolated,
         Meter::new(4).expect("invariant: fixture meter is valid"),
@@ -379,7 +379,7 @@ fn missing_beat_reports_the_corresponding_position_gap() {
 
 #[kithara::test]
 fn map_revision_publish_is_monotonic_and_old_snapshots_stay_immutable() {
-    let (map, mut publisher) = AssetBeatMap::new(map_id(5), sample_rate(), 72_001);
+    let (map, mut publisher) = AssetBeatMap::new(map_id(), sample_rate(), 72_001);
     let facts = metered(
         BeatEvidence::Interpolated,
         Meter::new(4).expect("invariant: fixture meter is valid"),
@@ -429,8 +429,8 @@ fn map_revision_publish_is_monotonic_and_old_snapshots_stay_immutable() {
 
 #[kithara::test]
 fn stale_asset_updates_do_not_publish() {
-    let (map, mut publisher) = AssetBeatMap::new(map_id(25), sample_rate(), 48_001);
-    let (foreign, _) = AssetBeatMap::new(map_id(26), sample_rate(), 48_001);
+    let (map, mut publisher) = AssetBeatMap::new(map_id(), sample_rate(), 48_001);
+    let (foreign, _) = AssetBeatMap::new(map_id(), sample_rate(), 48_001);
     let initial = map.snapshot();
     let segment = MapSegment::new(
         observed(0.0, 0),
@@ -467,7 +467,7 @@ fn stale_asset_updates_do_not_publish() {
 
 #[kithara::test]
 fn stamped_point_from_old_revision_is_stale() {
-    let (map, mut publisher) = AssetBeatMap::new(map_id(6), sample_rate(), 72_001);
+    let (map, mut publisher) = AssetBeatMap::new(map_id(), sample_rate(), 72_001);
     let initial = map.snapshot();
     let old_point = MapPoint::new(initial.stamp(), asset_frame(24_000.0));
     let old_beat = MapPoint::new(
@@ -505,7 +505,7 @@ fn stamped_point_from_old_revision_is_stale() {
 
 #[kithara::test]
 fn overlapping_segments_are_rejected_without_publication() {
-    let (map, mut publisher) = AssetBeatMap::new(map_id(7), sample_rate(), 96_001);
+    let (map, mut publisher) = AssetBeatMap::new(map_id(), sample_rate(), 96_001);
     let base = map.snapshot();
     let facts = metered(
         BeatEvidence::Observed,
@@ -546,7 +546,7 @@ fn one_sided_segment_boundaries_are_rejected_without_publication() {
         MapSegment::new(observed(48_000.0, 1), observed(72_000.0, 2), facts)
             .expect("invariant: repeated-beat segment is valid alone"),
     ] {
-        let (map, mut publisher) = AssetBeatMap::new(map_id(15), sample_rate(), 96_001);
+        let (map, mut publisher) = AssetBeatMap::new(map_id(), sample_rate(), 96_001);
         let base = map.snapshot();
 
         let result = publisher.publish(AssetMapUpdate::new(
@@ -567,7 +567,7 @@ fn one_sided_segment_boundaries_are_rejected_without_publication() {
 
 #[kithara::test]
 fn sparse_snapshot_is_honest_and_invertible() {
-    let (map, mut publisher) = AssetBeatMap::new(map_id(8), sample_rate(), 120_001);
+    let (map, mut publisher) = AssetBeatMap::new(map_id(), sample_rate(), 120_001);
     let meter = Meter::new(4).expect("invariant: fixture meter is valid");
     let snapshot = publisher
         .publish(AssetMapUpdate::new(
@@ -617,7 +617,7 @@ fn sparse_snapshot_is_honest_and_invertible() {
 
 #[kithara::test]
 fn progressive_extrapolation_is_immediate_and_refines_immutably() {
-    let (map, mut publisher) = AssetBeatMap::new(map_id(34), sample_rate(), 144_001);
+    let (map, mut publisher) = AssetBeatMap::new(map_id(), sample_rate(), 144_001);
     let meter = Meter::new(4).expect("invariant: fixture meter is valid");
     let low = uncertainty(2.0);
     let high = uncertainty(480.0);
@@ -706,7 +706,7 @@ fn progressive_extrapolation_is_immediate_and_refines_immutably() {
 
 #[kithara::test]
 fn late_meter_lane_rebases_over_latest_beat_revision() {
-    let (map, mut publisher) = AssetBeatMap::new(map_id(35), sample_rate(), 48_001);
+    let (map, mut publisher) = AssetBeatMap::new(map_id(), sample_rate(), 48_001);
     let base = map.snapshot();
     let tempo_only = publisher
         .publish(AssetMapUpdate::new(
@@ -807,7 +807,7 @@ fn beat_from(map: &dyn BeatMap, position: MapPosition) -> f64 {
 #[kithara::test]
 fn asset_host_and_group_fake_satisfy_one_object_safe_contract() {
     let meter = Meter::new(4).expect("invariant: fixture meter is valid");
-    let (asset, mut publisher) = AssetBeatMap::new(map_id(9), sample_rate(), 48_001);
+    let (asset, mut publisher) = AssetBeatMap::new(map_id(), sample_rate(), 48_001);
     let asset_snapshot = publisher
         .publish(AssetMapUpdate::new(
             asset.snapshot().stamp(),
@@ -830,13 +830,13 @@ fn asset_host_and_group_fake_satisfy_one_object_safe_contract() {
     )
     .expect("invariant: fixture host relation is valid");
     let host = HostBeatMap::new(
-        map_id(10),
+        map_id(),
         BeatMapRevision::first(),
         HostEpoch::new(1),
         anchor,
         Some(host_meter(meter)),
     );
-    let group_id = map_id(11);
+    let group_id = map_id();
     let group_axis = MapAxis::Asset(AssetAxis::new(sample_rate(), 48_001));
     let group_snapshot = BeatMapSnapshot::try_from((
         group_id,
@@ -888,7 +888,7 @@ fn external_segment_snapshots_reject_incompatible_states() {
     ] {
         assert_eq!(
             BeatMapSnapshot::try_from((
-                map_id(30),
+                map_id(),
                 BeatMapRevision::first(),
                 state,
                 segments.clone(),
@@ -902,7 +902,7 @@ fn external_segment_snapshots_reject_incompatible_states() {
         .expect("invariant: an empty host fixture segment set is valid");
     assert_eq!(
         BeatMapSnapshot::try_from((
-            map_id(32),
+            map_id(),
             BeatMapRevision::first(),
             MapState::Complete,
             host_segments,
@@ -918,7 +918,7 @@ fn external_segment_snapshots_reject_incompatible_states() {
 fn empty_host_segment_snapshot_reports_a_host_native_gap() {
     let axis = MapAxis::Host(HostAxis::new(sample_rate(), HostEpoch::new(3)));
     let snapshot = BeatMapSnapshot::try_from((
-        map_id(33),
+        map_id(),
         BeatMapRevision::first(),
         MapState::Building,
         SegmentSet::new(axis, Vec::new())
@@ -940,7 +940,7 @@ fn empty_host_segment_snapshot_reports_a_host_native_gap() {
 fn touching_segment_seams_belong_to_the_following_segment() {
     let first_meter = Meter::new(4).expect("invariant: fixture meter is valid");
     let second_meter = Meter::new(3).expect("invariant: fixture meter is valid");
-    let (map, mut publisher) = AssetBeatMap::new(map_id(31), sample_rate(), 96_001);
+    let (map, mut publisher) = AssetBeatMap::new(map_id(), sample_rate(), 96_001);
     let snapshot = publisher
         .publish(AssetMapUpdate::new(
             map.snapshot().stamp(),
@@ -993,7 +993,7 @@ fn host_revision_is_assigned_by_the_transport_owner() {
     )
     .expect("invariant: fixture host relation is valid");
     let host = HostBeatMap::new(
-        map_id(14),
+        map_id(),
         revision,
         HostEpoch::new(2),
         anchor,
@@ -1015,7 +1015,7 @@ fn host_inverse_reports_frame_rounding_uncertainty() {
     )
     .expect("invariant: fixture host relation is valid");
     let host = HostBeatMap::new(
-        map_id(19),
+        map_id(),
         BeatMapRevision::first(),
         HostEpoch::new(1),
         anchor,
@@ -1046,7 +1046,7 @@ fn host_without_meter_keeps_beat_queries_live_but_meter_is_unavailable() {
     )
     .expect("invariant: fixture host relation is valid");
     let host = HostBeatMap::new(
-        map_id(21),
+        map_id(),
         BeatMapRevision::first(),
         HostEpoch::new(1),
         anchor,
@@ -1072,7 +1072,7 @@ fn host_without_meter_keeps_beat_queries_live_but_meter_is_unavailable() {
 #[kithara::test]
 fn asset_axis_is_independent_of_host_sample_rate() {
     let source_rate = NonZeroU32::new(44_100).expect("invariant: source rate is non-zero");
-    let (asset, mut publisher) = AssetBeatMap::new(map_id(11), source_rate, 44_101);
+    let (asset, mut publisher) = AssetBeatMap::new(map_id(), source_rate, 44_101);
     let asset_snapshot = publisher
         .publish(AssetMapUpdate::new(
             asset.snapshot().stamp(),
@@ -1098,7 +1098,7 @@ fn asset_axis_is_independent_of_host_sample_rate() {
     )
     .expect("invariant: host relation is valid");
     let host = HostBeatMap::new(
-        map_id(12),
+        map_id(),
         BeatMapRevision::first(),
         HostEpoch::new(1),
         host_anchor,
@@ -1124,7 +1124,7 @@ fn asset_axis_is_independent_of_host_sample_rate() {
 
 #[kithara::test]
 fn marker_beyond_asset_extent_is_rejected_without_publication() {
-    let (map, mut publisher) = AssetBeatMap::new(map_id(13), sample_rate(), 48_000);
+    let (map, mut publisher) = AssetBeatMap::new(map_id(), sample_rate(), 48_000);
     let base = map.snapshot();
     let segment = MapSegment::new(
         observed(0.0, 0),
@@ -1156,7 +1156,7 @@ fn large_asset_extent_uses_exact_integer_boundary_semantics() {
     const FIRST_INEXACT_U64: u64 = 9_007_199_254_740_993;
     const LAST_REPRESENTABLE_BELOW: f64 = 9_007_199_254_740_992.0;
     const FIRST_REPRESENTABLE_ABOVE: f64 = 9_007_199_254_740_994.0;
-    let (map, mut publisher) = AssetBeatMap::new(map_id(23), sample_rate(), FIRST_INEXACT_U64);
+    let (map, mut publisher) = AssetBeatMap::new(map_id(), sample_rate(), FIRST_INEXACT_U64);
     let facts = metered(
         BeatEvidence::Interpolated,
         Meter::new(4).expect("invariant: fixture meter is valid"),
@@ -1198,7 +1198,7 @@ fn large_asset_extent_uses_exact_integer_boundary_semantics() {
 
 #[kithara::test]
 fn segment_with_unrepresentable_tempo_is_rejected_without_publication() {
-    let (map, mut publisher) = AssetBeatMap::new(map_id(24), sample_rate(), 1);
+    let (map, mut publisher) = AssetBeatMap::new(map_id(), sample_rate(), 1);
     let base = map.snapshot();
     let segment = MapSegment::new(
         observed(0.0, 0),
@@ -1227,7 +1227,7 @@ fn segment_with_unrepresentable_tempo_is_rejected_without_publication() {
 
 #[kithara::test]
 fn bounded_asset_map_rejects_incompatible_states_without_publication() {
-    let (map, mut publisher) = AssetBeatMap::new(map_id(17), sample_rate(), 48_001);
+    let (map, mut publisher) = AssetBeatMap::new(map_id(), sample_rate(), 48_001);
     let base = map.snapshot();
     let segment = MapSegment::new(
         observed(0.0, 0),
@@ -1260,7 +1260,7 @@ fn bounded_asset_map_rejects_incompatible_states_without_publication() {
 
 #[kithara::test]
 fn complete_asset_map_cannot_return_to_building() {
-    let (map, mut publisher) = AssetBeatMap::new(map_id(22), sample_rate(), 48_001);
+    let (map, mut publisher) = AssetBeatMap::new(map_id(), sample_rate(), 48_001);
     let segment = MapSegment::new(
         observed(0.0, 0),
         observed(48_000.0, 2),
@@ -1296,7 +1296,7 @@ fn complete_asset_map_cannot_return_to_building() {
 
 #[kithara::test]
 fn complete_asset_map_can_refine_but_cannot_change_coverage() {
-    let (map, mut publisher) = AssetBeatMap::new(map_id(28), sample_rate(), 96_001);
+    let (map, mut publisher) = AssetBeatMap::new(map_id(), sample_rate(), 96_001);
     let facts = metered(
         BeatEvidence::Interpolated,
         Meter::new(4).expect("invariant: fixture meter is valid"),

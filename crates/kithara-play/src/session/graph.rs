@@ -210,19 +210,41 @@ pub(super) mod lifecycle {
             }
             player.started = false;
         }
-        shutdown_if_idle(state);
+        shutdown_if_idle(state)?;
         debug!("[KITHARA-ROUTE] player stopped");
         Ok(())
     }
     /// Release the output device once no player is left to feed it. A media
     /// app that has stopped playing must not keep the platform's output
     /// engaged; the next `start_player` builds a fresh context.
-    fn shutdown_if_idle<B: AudioBackend>(state: &mut SessionState<B>) {
+    fn shutdown_if_idle<B: AudioBackend>(state: &mut SessionState<B>) -> Result<(), SessionError> {
         if state.players.iter().all(|player| !player.started) {
             debug!("[KITHARA-ROUTE] shutting down idle session stream");
-            if let Some(ref mut fw_ctx) = state.ctx {
-                fw_ctx.stop_stream();
+            if state.ctx.is_none() {
+                return Err(SessionError::NoContext);
             }
+            let mut host_map_generation = state
+                .transport_control
+                .as_mut()
+                .ok_or_else(|| {
+                    graph_state("session transport control is missing during idle shutdown")
+                })?
+                .observation()
+                .host_map();
+            // Backends may defer processor drop after `stop_stream`. Reserve a
+            // successor before stopping so teardown never depends on the RT
+            // `stream_stopped` callback reaching this control handle. Control
+            // admits at most one unobserved commit; the next context advances
+            // once more before publishing.
+            host_map_generation
+                .advance_restart()
+                .map_err(|error| graph_state(error.message()))?;
+            state.host_map_generation = Some(host_map_generation);
+            state
+                .ctx
+                .as_mut()
+                .ok_or(SessionError::NoContext)?
+                .stop_stream();
             state.ctx = None;
             state.transport_control = None;
             state.mix_tap = None;
@@ -231,6 +253,7 @@ pub(super) mod lifecycle {
             state.session_output_memo = None;
             state.session_limiter_node_id = None;
         }
+        Ok(())
     }
     pub(super) fn remove_player_graph<B: AudioBackend>(
         fw_ctx: &mut FirewheelCtx<B>,
@@ -575,14 +598,17 @@ mod tests {
     use firewheel::{
         StreamInfo, backend::BackendProcessInfo, node::StreamStatus, processor::FirewheelProcessor,
     };
-    use kithara_audio::generate_log_spaced_bands;
+    use kithara_audio::{Beat, BeatMap, MapPoint, MapQuery, generate_log_spaced_bands};
     use kithara_bufpool::PcmPool;
     use kithara_events::EventBus;
     use kithara_platform::time::{Duration, Instant};
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::session::{dispatch::run_cmd, protocol::Cmd};
+    use crate::{
+        api::{SessionTransportSnapshot, Tempo},
+        session::{dispatch::run_cmd, protocol::Cmd},
+    };
 
     const BLOCK_FRAMES: usize = 128;
 
@@ -590,6 +616,8 @@ mod tests {
     #[derive(Default)]
     struct AudioDevice {
         processor: Option<FirewheelProcessor<TestBackend>>,
+        retired_processors: Vec<FirewheelProcessor<TestBackend>>,
+        defer_processor_drop: bool,
         next_stream: u64,
         owner: u64,
     }
@@ -610,7 +638,10 @@ mod tests {
         fn drop(&mut self) {
             device(|dev| {
                 if dev.owner == self.stream {
-                    dev.processor = None;
+                    let processor = dev.processor.take();
+                    if dev.defer_processor_drop {
+                        dev.retired_processors.extend(processor);
+                    }
                 }
             });
         }
@@ -760,6 +791,26 @@ mod tests {
         }
     }
 
+    fn set_tempo_and_read_host_map(
+        state: &mut SessionState<TestBackend>,
+    ) -> SessionTransportSnapshot {
+        assert!(matches!(
+            run_cmd(
+                state,
+                Cmd::SetSessionTempo {
+                    tempo: Tempo::new(120.0).expect("invariant: fixture tempo is valid"),
+                },
+            ),
+            Reply::Ok
+        ));
+        assert!(deliver_one_block(), "transport commit must be rendered");
+        match run_cmd(state, Cmd::QuerySessionTransport) {
+            Reply::SessionTransport(snapshot) => snapshot,
+            Reply::Err(error) => panic!("transport snapshot failed: {error}"),
+            _ => panic!("transport query returned an unexpected reply"),
+        }
+    }
+
     #[kithara::test]
     fn a_running_player_replaces_its_eq_layout_without_releasing_slots() {
         device(|dev| *dev = AudioDevice::default());
@@ -848,5 +899,56 @@ mod tests {
             processed_frames(&state) > before,
             "the second player's stream delivered no processed callback"
         );
+    }
+
+    #[kithara::test]
+    fn idle_context_recreation_advances_generation_before_deferred_processor_drop() {
+        device(|dev| {
+            *dev = AudioDevice::default();
+            dev.defer_processor_drop = true;
+        });
+        let mut state = SessionState::<TestBackend>::new(start_test_stream);
+        let first_player = register(&mut state);
+        start(&mut state, first_player);
+        let before = set_tempo_and_read_host_map(&mut state);
+        let old_beat = MapPoint::new(
+            before.host_map_stamp(),
+            Beat::new(1.0).expect("invariant: fixture beat is finite"),
+        );
+
+        unregister(&mut state, first_player);
+        assert!(
+            state.ctx.is_none(),
+            "idle teardown must destroy the context"
+        );
+        device(|dev| {
+            assert_eq!(
+                dev.retired_processors.len(),
+                1,
+                "old processor must still be alive while the new context starts"
+            );
+        });
+
+        let second_player = register(&mut state);
+        start(&mut state, second_player);
+        let after = set_tempo_and_read_host_map(&mut state);
+
+        assert_eq!(
+            before.host_map_stamp().map_id(),
+            after.host_map_stamp().map_id(),
+            "one session keeps one host-map identity"
+        );
+        assert!(after.host_epoch() > before.host_epoch());
+        assert!(after.host_map_stamp().revision() > before.host_map_stamp().revision());
+        assert!(matches!(
+            after.host_map().snapshot().position_at(old_beat),
+            MapQuery::Stale { expected, given }
+                if expected == after.host_map_stamp() && given == before.host_map_stamp()
+        ));
+        device(|dev| {
+            assert_eq!(dev.retired_processors.len(), 1);
+            dev.retired_processors.clear();
+            dev.defer_processor_drop = false;
+        });
     }
 }

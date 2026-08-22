@@ -10,8 +10,8 @@ pub use anchor::{SessionAnchor, SessionBeat, SessionFrame};
 pub use asset::{AssetBeatMap, AssetMapPublishError, AssetMapPublisher, AssetMapUpdate};
 pub(crate) use beat_map::BeatMapSnapshotData;
 pub use beat_map::{
-    BeatEstimate, BeatMap, BeatMapId, BeatMapRevision, BeatMapSnapshot, BeatMapSnapshotError,
-    MapQuery, MapStamp, MapState, MapUnavailable,
+    BeatEstimate, BeatMap, BeatMapId, BeatMapIdAllocationError, BeatMapRevision, BeatMapSnapshot,
+    BeatMapSnapshotError, MapQuery, MapStamp, MapState, MapUnavailable,
 };
 pub(crate) use coordinate::AxisKind;
 pub use coordinate::{
@@ -19,7 +19,7 @@ pub use coordinate::{
     MapCoordinateError, MapPoint, MapPosition,
 };
 pub use host::HostBeatMap;
-pub use map::{BeatMapError, CoordinateError, SourceFrame, TrackBeat, TrackBeatMap};
+pub use map::CoordinateError;
 pub use segment::{
     BeatEvidence, BeatMarker, BeatsPerMinute, MapRegion, MapSegment, Meter, MeterError, MeterFacts,
     SegmentDraft, SegmentEndpoint, SegmentError, SegmentFacts, SegmentSet,

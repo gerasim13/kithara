@@ -96,6 +96,7 @@ pub fn run_cmd<B: AudioBackend>(state: &mut SessionState<B>, cmd: Cmd) -> Reply 
             Ok(snapshot) => Reply::SessionTransport(snapshot),
             Err(err) => Reply::Err(err),
         },
+        Cmd::QueryAssetMaps => Reply::AssetMaps(state.beat_maps()),
         Cmd::InvalidateAudioRoute { reason } => invalidate_audio_route(state, &reason),
         Cmd::QuerySampleRate => {
             let measured = state

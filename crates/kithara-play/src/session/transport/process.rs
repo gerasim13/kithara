@@ -8,8 +8,8 @@ use kithara_audio::{SessionAnchor, SessionBeat, SessionFrame};
 use triple_buffer::Input;
 
 use super::commit::{
-    SessionTransportCommit, TransportBoundary, TransportCommitEvent, TransportCommitResult,
-    TransportCommitStamp, TransportObservation, TransportProcessError,
+    HostMapGeneration, SessionTransportCommit, TransportBoundary, TransportCommitEvent,
+    TransportCommitResult, TransportCommitStamp, TransportObservation, TransportProcessError,
 };
 use crate::api::{SessionTransportSnapshot, Tempo, TransportRevision};
 
@@ -18,7 +18,7 @@ struct RenderBoundary {
     frame: SessionFrame,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub(crate) struct TransportCommitState {
     active: Option<SessionTransportCommit>,
     anchor: Option<SessionAnchor>,
@@ -28,6 +28,7 @@ pub(crate) struct TransportCommitState {
     pending: Option<TransportCommitStamp>,
     reanchor_beat: Option<SessionBeat>,
     snapshot: Option<SessionTransportSnapshot>,
+    host_map: HostMapGeneration,
 }
 
 #[derive(Debug)]
@@ -67,11 +68,12 @@ pub(crate) fn process_transport(
 }
 
 pub(crate) fn restart_transport(store: &mut ProcStore) -> Result<(), TransportProcessError> {
-    store
+    let result = store
         .try_get_mut::<TransportCommitState>()
         .ok_or(TransportProcessError::MissingState)?
         .restart();
-    publish_observation(store)
+    publish_observation(store)?;
+    result
 }
 
 fn publish_observation(store: &mut ProcStore) -> Result<(), TransportProcessError> {
@@ -79,7 +81,7 @@ fn publish_observation(store: &mut ProcStore) -> Result<(), TransportProcessErro
         let state = store
             .try_get::<TransportCommitState>()
             .ok_or(TransportProcessError::MissingState)?;
-        TransportObservation::new(state.completion, state.snapshot)
+        TransportObservation::new(state.completion, state.snapshot, state.host_map)
     };
     store
         .try_get_mut::<TransportObservationInput>()
@@ -89,6 +91,20 @@ fn publish_observation(store: &mut ProcStore) -> Result<(), TransportProcessErro
 }
 
 impl TransportCommitState {
+    pub(crate) const fn new(host_map: HostMapGeneration) -> Self {
+        Self {
+            active: None,
+            anchor: None,
+            boundary: None,
+            completion: None,
+            ignored_through_revision: None,
+            pending: None,
+            reanchor_beat: None,
+            snapshot: None,
+            host_map,
+        }
+    }
+
     fn apply_abort(&mut self, revision: TransportRevision) -> Result<(), TransportProcessError> {
         if self
             .ignored_through_revision
@@ -156,13 +172,16 @@ impl TransportCommitState {
                 SessionBeat::new(0.0).map_err(|_| TransportProcessError::InvalidBeatRange)?
             }
         };
-        self.active = Some(stamp.next());
-        self.set_anchor(
+        let anchor = Self::build_anchor(
             stamp.target_frame(),
             beat,
             stamp.next().tempo(),
             stamp.sample_rate(),
         )?;
+        let host_map_revision = self.host_map.next_revision()?;
+        self.active = Some(stamp.next());
+        self.anchor = Some(anchor);
+        self.host_map.commit_revision(host_map_revision);
         self.pending = None;
         self.completion = Some(TransportCommitResult::Applied(revision));
         Ok(())
@@ -266,6 +285,8 @@ impl TransportCommitState {
             commit.tempo(),
             commit.revision(),
             anchor,
+            self.host_map.stamp()?,
+            self.host_map.epoch(),
         )))
     }
 
@@ -288,12 +309,13 @@ impl TransportCommitState {
             return Ok(());
         };
         let commit = self.active.ok_or(TransportProcessError::InvalidBeatRange)?;
-        self.set_anchor(
+        let anchor = Self::build_anchor(
             SessionFrame::new(info.clock_samples.0),
             beat,
             commit.tempo(),
             info.sample_rate,
         )?;
+        self.anchor = Some(anchor);
         self.boundary = None;
         Ok(())
     }
@@ -318,13 +340,18 @@ impl TransportCommitState {
         self.completion = Some(TransportCommitResult::Rejected(revision));
     }
 
-    fn restart(&mut self) {
+    fn restart(&mut self) -> Result<(), TransportProcessError> {
         self.reject_pending();
         if let Some(snapshot) = self.snapshot.take() {
             self.reanchor_beat = Some(snapshot.position());
         }
+        let generation = self.host_map.advance_restart();
+        if generation.is_err() {
+            self.reanchor_beat = None;
+        }
         self.anchor = None;
         self.boundary = None;
+        generation
     }
 
     fn session_beats(
@@ -355,13 +382,12 @@ impl TransportCommitState {
         Ok(Some(at(start)?..at(end)?))
     }
 
-    fn set_anchor(
-        &mut self,
+    fn build_anchor(
         frame: SessionFrame,
         beat: SessionBeat,
         tempo: Tempo,
         sample_rate: NonZeroU32,
-    ) -> Result<(), TransportProcessError> {
+    ) -> Result<SessionAnchor, TransportProcessError> {
         let anchor = SessionAnchor::new(frame, beat, tempo.beats_per_second(), sample_rate)
             .map_err(|_| TransportProcessError::InvalidBeatRange)?;
         if anchor
@@ -371,8 +397,7 @@ impl TransportCommitState {
         {
             return Err(TransportProcessError::InvalidBeatRange);
         }
-        self.anchor = Some(anchor);
-        Ok(())
+        Ok(anchor)
     }
 
     fn set_once<T>(slot: &mut Option<T>, value: T) -> Result<(), TransportProcessError> {

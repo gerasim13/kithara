@@ -1,6 +1,7 @@
 use std::num::NonZeroU64;
 
 use kithara_platform::sync::Arc;
+use portable_atomic::{AtomicU64, Ordering};
 
 use super::{
     AssetAxis, Beat, BeatEvidence, BeatsPerMinute, FrameUncertainty, MapAxis, MapPoint,
@@ -29,12 +30,33 @@ const SECONDS_PER_MINUTE: f64 = 60.0;
 pub struct BeatMapId(NonZeroU64);
 
 impl BeatMapId {
-    /// Creates an opaque map identity from an owner-allocated value.
-    #[must_use]
-    pub const fn new(value: NonZeroU64) -> Self {
-        Self(value)
+    /// Allocates an identity unique to this process.
+    ///
+    /// Every map owner uses this allocation site so points from independent
+    /// sessions and registries cannot acquire equal stamps accidentally.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BeatMapIdAllocationError`] after the non-zero identity space
+    /// has been exhausted.
+    pub fn allocate() -> Result<Self, BeatMapIdAllocationError> {
+        static NEXT: AtomicU64 = AtomicU64::new(1);
+
+        let value = NEXT
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+                (current != 0).then(|| current.wrapping_add(1))
+            })
+            .map_err(|_| BeatMapIdAllocationError)?;
+        NonZeroU64::new(value)
+            .map(Self)
+            .ok_or(BeatMapIdAllocationError)
     }
 }
+
+/// The process-wide musical-map identity space is exhausted.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
+#[error("beat map identity space is exhausted")]
+pub struct BeatMapIdAllocationError;
 
 /// Monotonic revision of one [`BeatMapId`].
 #[derive(

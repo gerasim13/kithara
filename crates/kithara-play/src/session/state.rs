@@ -11,11 +11,12 @@ use super::{
     dispatch::{restart_stream, trace_stream_info},
     graph::{ducking_gain, tap},
     protocol::{PlayerId, SessionError, StartStreamFn},
-    transport::{SessionTransportState, TransportControl, install},
+    transport::{HostMapGeneration, SessionTransportState, TransportControl, install},
 };
 use crate::{
     api::{SessionDuckingMode, SlotId},
     bridge::{MixTapWriter, SharedEq},
+    resource::AssetMapRegistry,
     rt::{LimiterNode, MasterEqNode},
 };
 
@@ -99,11 +100,14 @@ pub struct SessionState<B: AudioBackend> {
     pub(super) stream_needs_restart: bool,
     pub(super) sample_rate_hint: u32,
     pub(super) transport: SessionTransportState,
+    beat_maps: AssetMapRegistry,
+    pub(super) host_map_generation: Option<HostMapGeneration>,
 }
 
 impl<B: AudioBackend> SessionState<B> {
     pub const DEFAULT_SAMPLE_RATE: u32 = 44_100;
 
+    /// Creates session state with its own musical-map namespace.
     #[must_use]
     pub fn new<F>(start_stream_fn: F) -> Self
     where
@@ -123,11 +127,17 @@ impl<B: AudioBackend> SessionState<B> {
             session_limiter_node_id: None,
             stream_needs_restart: false,
             transport: SessionTransportState::default(),
+            beat_maps: AssetMapRegistry::default(),
+            host_map_generation: None,
         }
     }
 
     pub const fn ctx_mut(&mut self) -> Option<&mut FirewheelCtx<B>> {
         self.ctx.as_mut()
+    }
+
+    pub(crate) fn beat_maps(&self) -> AssetMapRegistry {
+        self.beat_maps.clone()
     }
 }
 
@@ -187,8 +197,22 @@ fn create_firewheel_context<B: AudioBackend>(
         ..FirewheelConfig::default()
     };
     let mut ctx = FirewheelCtx::<B>::new(config);
-    let transport_control = install(&mut ctx).map_err(|error| SessionError::Graph(error.into()))?;
-    (state.start_stream_fn)(&mut ctx, sample_rate).map_err(SessionError::StreamStart)?;
+    let host_map = if let Some(generation) = state.host_map_generation.take() {
+        generation
+    } else {
+        HostMapGeneration::new(AssetMapRegistry::reserve_host_id()?)
+    };
+    let transport_control = match install(&mut ctx, host_map) {
+        Ok(control) => control,
+        Err(error) => {
+            state.host_map_generation = Some(host_map);
+            return Err(SessionError::Graph(error.into()));
+        }
+    };
+    if let Err(error) = (state.start_stream_fn)(&mut ctx, sample_rate) {
+        state.host_map_generation = Some(host_map);
+        return Err(SessionError::StreamStart(error));
+    }
     state.ctx = Some(ctx);
     state.transport_control = Some(transport_control);
     state.sample_rate_hint = sample_rate;
