@@ -13,6 +13,7 @@ pub mod health;
 pub mod idioms;
 pub mod init;
 pub mod junit;
+pub mod lease;
 #[cfg(feature = "lint")]
 pub mod lint;
 pub mod manifest;

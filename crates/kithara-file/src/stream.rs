@@ -308,11 +308,12 @@ impl File {
     /// (tmp disappears) - both unblock our next
     /// `OpenOptions::create_new` call.
     ///
-    /// Wrapped in `#[kithara::hang_watchdog]` so a stale tmp from a
-    /// crashed-out previous process (which never releases the
-    /// filesystem-level signal) surfaces as a deterministic panic
-    /// rather than an indefinite hang. A *live* sibling keeps writing,
-    /// so the tmp grows; only a frozen tmp counts as no-progress -
+    /// `TmpClaimed` only ever names a *live* holder - a crashed-out
+    /// process releases its advisory lock to the OS, and the next
+    /// `AtomicChunked::open` reclaims that tmp - so this loop is
+    /// guaranteed to terminate. `#[kithara::hang_watchdog]` still covers
+    /// a live sibling that stops making progress: it keeps writing, so
+    /// the tmp grows, and only a frozen tmp counts as no-progress -
     /// otherwise a second consumer of the same URL (e.g. waveform
     /// analysis alongside the player) would panic on any download
     /// longer than the watchdog timeout.

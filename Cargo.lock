@@ -4481,6 +4481,7 @@ dependencies = [
  "delegate",
  "derive_more",
  "fieldwork",
+ "fs4",
  "glob",
  "proc-macro2",
  "quote",
