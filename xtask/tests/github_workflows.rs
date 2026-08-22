@@ -366,10 +366,13 @@ fn github_ci_is_fail_closed_and_aggregates_every_job() {
     let authorize = workflow_job(jobs, "authorize");
     assert_hosted_authorization(authorize);
     // The one condition this job may carry. Anything else here, and a push that
-    // should have been judged is skipped instead — reported as a green run.
+    // should have been judged is skipped instead — reported as a green run. Both
+    // halves are load-bearing: the variable admits a repository that declares
+    // runners, the fork flag admits one whose settings this repository cannot
+    // read.
     assert_eq!(
         mapping_field(authorize, "if").as_str(),
-        Some("vars.KITHARA_RUNNER_LABELS != ''")
+        Some("github.event.repository.fork || vars.KITHARA_RUNNER_LABELS != ''")
     );
     let gate = workflow_job(jobs, "gate");
     assert_eq!(job_needs(gate), BTreeSet::from(["authorize".to_owned()]));
@@ -401,9 +404,14 @@ fn github_ci_is_fail_closed_and_aggregates_every_job() {
         mapping_field(required, "runs-on").as_str(),
         Some("ubuntu-latest")
     );
+    // The aggregate demands success from every job it needs, and a skip is not a
+    // success, so it has to carry the same guard verbatim or it alone stays red
+    // on a repository the run skipped.
     assert_eq!(
         mapping_field(required, "if").as_str(),
-        Some("${{ always() && vars.KITHARA_RUNNER_LABELS != '' }}")
+        Some(
+            "${{ always() && (github.event.repository.fork || vars.KITHARA_RUNNER_LABELS != '') }}"
+        )
     );
     let mut expected = workflow_job_names(jobs);
     expected.remove("required");
@@ -1459,7 +1467,13 @@ fn nightly_collector_is_read_only_and_does_not_mirror_the_source_verdict() {
         mapping_field(job, "runs-on").as_str(),
         Some("ubuntu-latest")
     );
-    assert!(!job.contains_key("if"));
+    // The collector shows the source verdict, so it runs for every conclusion
+    // that is one. A skipped source has none, and reporting on it turned into a
+    // red check about a run that never happened.
+    assert_eq!(
+        mapping_field(job, "if").as_str(),
+        Some("github.event.workflow_run.conclusion != 'skipped'")
+    );
 
     let collect = named_step(job, "Collect the source run jobs");
     let script = mapping_field(collect, "run")
