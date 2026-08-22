@@ -12,10 +12,10 @@ use super::{
 use crate::ci::image::linux_build_args;
 
 /// The throwaway VM the macOS lane clones for every job.
-struct JobVm;
+pub(super) struct JobVm;
 
 impl JobVm {
-    const NAME: &'static str = "kithara-ci-job";
+    pub(super) const NAME: &'static str = "kithara-ci-job";
     const BOOT_ATTEMPTS: u32 = 40;
     const BOOT_POLL: Duration = Duration::from_secs(5);
     const WAIT_SECONDS: u32 = 7200;

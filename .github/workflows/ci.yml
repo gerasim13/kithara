@@ -30,10 +30,28 @@ concurrency:
 
 jobs:
   # Authorization runs on a GitHub-hosted machine, before any job can reach a
-  # self-hosted runner. Missing or malformed runner configuration is a failed
-  # check, never a skipped workflow that can be mistaken for success.
+  # self-hosted runner. Malformed runner configuration is a failed check, never
+  # a skipped workflow that can be mistaken for success. Absent configuration
+  # is a different statement — this repository runs no CI — and the guard below
+  # answers it before a job is requested.
   authorize:
     name: CI authorization
+    # Every job below takes its `runs-on` from the runner-labels variable, so a
+    # repository without one runs nothing: upstream has no runners and is not
+    # getting any — its gate is the GitLab verification status the bridge
+    # writes. Every other workflow already skips on that variable; this one
+    # turned the question into a job, and on upstream that job cannot even
+    # start ("your account is locked due to a billing issue"), so every push
+    # there was red with all twenty checks skipped. A permanent red reads as a
+    # regression and hides the next real one.
+    #
+    # A fork is admitted on its own, without the variable being readable from
+    # here, because a fork someone else owns is where this repository is
+    # developed and its settings are not ours to inspect. The trade is that a
+    # fork with no runners starts a run whose jobs fail to resolve `runs-on`
+    # rather than being skipped. A malformed value is still a hard failure: it
+    # passes this guard and fails the step below.
+    if: github.event.repository.fork || vars.KITHARA_RUNNER_LABELS != ''
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -415,7 +433,10 @@ jobs:
   # reject every result other than an executed success.
   required:
     name: CI required
-    if: ${{ always() }}
+    # `always()` alone would keep this job red on a repository the guard above
+    # skipped: it demands success from every job it needs, and a skip is not a
+    # success. It carries the same guard so the whole run is skipped there.
+    if: ${{ always() && (github.event.repository.fork || vars.KITHARA_RUNNER_LABELS != '') }}
     needs:
       - authorize
       - gate

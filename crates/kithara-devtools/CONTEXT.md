@@ -273,6 +273,16 @@ itself instead of leaving it to be reconstructed from the log. The path is an
 observation, not provenance: the reporting machine has no such directory and is
 never asked to agree about one.
 
+The lane also holds a lease on that directory for as long as it owns it.
+`lease::hold` claims `.kithara-job-lease` there with a shared lock, and a
+build-cache budget elsewhere asks for the same file exclusively before
+reclaiming — the one request a shared holder refuses. Exporting the directory as
+the children's `CARGO_TARGET_DIR` cannot stand in for that: the children are
+`cargo`, which claims nothing, and a directory no budget can see is a directory
+no budget can ever get the space back from. The claim covers the cold build too,
+because `lease::hold` creates the directory it claims and the build is the
+longest stretch that needs it.
+
 Pressure schema `devtools.pressure.v2` names its end-marker status
 `primary_exit_code`: sampling ends after the test/evidence phase so the reporter can
 consume a closed stream. The manifest's `timing.exit_code` is the later combined
