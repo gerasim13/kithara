@@ -7,6 +7,7 @@ use super::{
         median,
     },
     fit::{GridFitCtx, anchored_boundaries, build_segments},
+    scratch::{GridPool, GridScratch},
 };
 use crate::{analysis::beat::detector::RawBeats, waveform::BeatGrid};
 
@@ -81,23 +82,50 @@ impl Default for GridParams {
 }
 
 /// Builds a cleaned [`BeatGrid`] in source frames, preferring beat marks for tempo.
-pub(crate) fn build_grid(raw: &RawBeats, sample_rate: u32, params: &GridParams) -> BeatGrid {
-    let sr = f64::from(sample_rate);
-    let mut db: Vec<f64> = raw
-        .downbeats
-        .iter()
-        .map(|&t| f64::from(t) * sr)
-        .filter(|p| p.is_finite() && *p >= 0.0)
-        .collect();
-    db.sort_by(f64::total_cmp);
-    let nominal_seed = median(&bar_gaps(&db));
-    let mut db = filter_close(db, params.min_gap_ratio * nominal_seed);
-    let downbeat_bpm = bar_to_bpm(median(&bar_gaps(&db)), sr);
+pub(crate) fn build_grid(
+    raw: &RawBeats,
+    sample_rate: u32,
+    params: &GridParams,
+    pool: &GridPool,
+) -> BeatGrid {
+    pool.with(raw.beats.len(), raw.downbeats.len(), |scratch| {
+        build_grid_with(raw, sample_rate, params, scratch)
+    })
+}
 
-    let beats = clean_beats(&raw.beats, &db, sr, params);
-    let marks_bpm = beats_bpm(&beats, sr);
+fn build_grid_with(
+    raw: &RawBeats,
+    sample_rate: u32,
+    params: &GridParams,
+    scratch: &mut GridScratch,
+) -> BeatGrid {
+    let sr = f64::from(sample_rate);
+    scratch.positions.clear();
+    scratch.positions.extend(
+        raw.downbeats
+            .iter()
+            .map(|&time| f64::from(time) * sr)
+            .filter(|position| position.is_finite() && *position >= 0.0),
+    );
+    scratch.positions.sort_unstable_by(f64::total_cmp);
+    bar_gaps(&scratch.positions, &mut scratch.gaps);
+    let nominal_seed = median(&scratch.gaps, &mut scratch.sorted);
+    filter_close(&mut scratch.positions, params.min_gap_ratio * nominal_seed);
+    bar_gaps(&scratch.positions, &mut scratch.gaps);
+    let downbeat_bpm = bar_to_bpm(median(&scratch.gaps, &mut scratch.sorted), sr);
+
+    let beats = clean_beats(
+        &raw.beats,
+        &scratch.positions,
+        sr,
+        params,
+        &mut scratch.marks,
+        &mut scratch.gaps,
+        &mut scratch.sorted,
+    );
+    let marks_bpm = beats_bpm(&beats, sr, &mut scratch.gaps, &mut scratch.sorted);
     if beats.len() >= Consts::MIN_MAP_BEATS {
-        db.retain(|position| {
+        scratch.positions.retain(|position| {
             position
                 .round()
                 .to_u64()
@@ -105,20 +133,27 @@ pub(crate) fn build_grid(raw: &RawBeats, sample_rate: u32, params: &GridParams) 
         });
     }
 
-    if db.len() < Consts::MIN_DOWNBEATS {
+    if scratch.positions.len() < Consts::MIN_DOWNBEATS {
         return BeatGrid::new(
             marks_bpm.unwrap_or(downbeat_bpm),
             beats,
-            positions_to_frames(&db),
+            positions_to_frames(&scratch.positions),
             Vec::new(),
         );
     }
-    let nominal_seed = median(&bar_gaps(&db));
-    let downbeats = positions_to_frames(&db);
+    bar_gaps(&scratch.positions, &mut scratch.gaps);
+    let nominal_seed = median(&scratch.gaps, &mut scratch.sorted);
+    let downbeats = positions_to_frames(&scratch.positions);
 
     // Degraded mode (per plan): too short / no stable tempo region means no
     // trustworthy piecewise grid — report tempo only, no segments.
-    let Some((anchor_idx, nominal_bar)) = find_stable_window(&db, nominal_seed, params) else {
+    let Some((anchor_idx, nominal_bar)) = find_stable_window(
+        &scratch.positions,
+        nominal_seed,
+        params,
+        &mut scratch.gaps,
+        &mut scratch.sorted,
+    ) else {
         return BeatGrid::new(
             marks_bpm.unwrap_or(downbeat_bpm),
             beats,
@@ -127,10 +162,17 @@ pub(crate) fn build_grid(raw: &RawBeats, sample_rate: u32, params: &GridParams) 
         );
     };
 
-    let outliers = classify_outliers(&db, nominal_bar, params);
-    let fit = GridFitCtx::new(&db, &outliers, sr, params);
-    let boundaries = anchored_boundaries(&fit, anchor_idx);
-    let segments = build_segments(&fit, &boundaries, nominal_bar);
+    classify_outliers(
+        &scratch.positions,
+        nominal_bar,
+        params,
+        &mut scratch.outliers,
+        &mut scratch.neighbors,
+        &mut scratch.sorted,
+    );
+    let fit = GridFitCtx::new(&scratch.positions, &scratch.outliers, sr, params);
+    anchored_boundaries(&fit, anchor_idx, &mut scratch.boundaries);
+    let segments = build_segments(&fit, &scratch.boundaries, nominal_bar, &mut scratch.spans);
 
     BeatGrid::new(
         marks_bpm.unwrap_or_else(|| bar_to_bpm(nominal_bar, sr)),
@@ -141,37 +183,49 @@ pub(crate) fn build_grid(raw: &RawBeats, sample_rate: u32, params: &GridParams) 
 }
 
 /// Converts beat marks to source frames and removes close double detections.
-fn clean_beats(secs: &[f32], downbeats: &[f64], sr: f64, params: &GridParams) -> Vec<u64> {
-    let mut marks: Vec<f64> = secs
-        .iter()
-        .map(|&t| f64::from(t) * sr)
-        .filter(|p| p.is_finite() && *p >= 0.0)
-        .collect();
-    marks.sort_by(f64::total_cmp);
-    let nominal = median(&bar_gaps(&marks));
-    positions_to_frames(&filter_close_preferring(
-        marks,
-        downbeats,
-        params.min_gap_ratio * nominal,
-    ))
+fn clean_beats(
+    secs: &[f32],
+    downbeats: &[f64],
+    sr: f64,
+    params: &GridParams,
+    marks: &mut Vec<f64>,
+    gaps: &mut Vec<f64>,
+    sorted: &mut Vec<f64>,
+) -> Vec<u64> {
+    marks.clear();
+    marks.extend(
+        secs.iter()
+            .map(|&time| f64::from(time) * sr)
+            .filter(|position| position.is_finite() && *position >= 0.0),
+    );
+    marks.sort_unstable_by(f64::total_cmp);
+    bar_gaps(marks, gaps);
+    let nominal = median(gaps, sorted);
+    filter_close_preferring(marks, downbeats, params.min_gap_ratio * nominal);
+    positions_to_frames(marks)
 }
 
 /// Estimates tempo by weighting each gap by the beat spans it covers.
-fn beats_bpm(beats: &[u64], sr: f64) -> Option<f64> {
-    let marks: Vec<f64> = beats.iter().filter_map(ToPrimitive::to_f64).collect();
-    let gaps: Vec<f64> = bar_gaps(&marks).into_iter().filter(|g| *g > 0.0).collect();
+fn beats_bpm(beats: &[u64], sr: f64, gaps: &mut Vec<f64>, sorted: &mut Vec<f64>) -> Option<f64> {
+    gaps.clear();
+    gaps.extend(beats.windows(2).filter_map(|window| {
+        window[1]
+            .checked_sub(window[0])
+            .and_then(|gap| gap.to_f64())
+            .filter(|gap| *gap > 0.0)
+    }));
     if gaps.len() < Consts::MIN_BEAT_GAPS {
         return None;
     }
 
-    let mut beat = median(&gaps);
+    let mut beat = median(gaps, sorted);
     for _ in 0..2 {
         if beat <= 0.0 {
             return None;
         }
         let mut span = 0.0;
         let mut count = 0.0;
-        for &gap in &gaps {
+        for &gap in gaps.iter() {
             let k = (gap / beat).round();
             if k > 0.0 {
                 span += gap;
@@ -222,6 +276,10 @@ mod tests {
             downbeats,
             beats: Vec::new(),
         }
+    }
+
+    fn build_grid(raw: &RawBeats, sample_rate: u32, params: &GridParams) -> BeatGrid {
+        super::build_grid(raw, sample_rate, params, &GridPool::default())
     }
 
     #[kithara::test(native, flash(false))]
