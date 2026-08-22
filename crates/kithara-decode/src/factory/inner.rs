@@ -883,9 +883,11 @@ where
 
 #[cfg(test)]
 mod tests {
+    use kithara_test_utils::kithara;
+
     use super::*;
 
-    #[kithara_test_utils::kithara::test(native, flash(false))]
+    #[kithara::test(native, flash(false))]
     fn wav_reader_profile_requires_gated_input() {
         let media_info = MediaInfo::builder()
             .maybe_codec(Some(AudioCodec::Pcm))
@@ -897,7 +899,7 @@ mod tests {
         assert_eq!(profile.input(), ReaderInput::InitOnly);
     }
 
-    #[kithara_test_utils::kithara::test(native, flash(false))]
+    #[kithara::test(native, flash(false))]
     fn self_framing_reader_profile_remains_incremental() {
         let media_info = MediaInfo::builder()
             .maybe_codec(Some(AudioCodec::Mp3))
@@ -910,7 +912,7 @@ mod tests {
     }
 
     #[cfg(feature = "resample-rubato")]
-    #[kithara_test_utils::kithara::test(native, flash(false))]
+    #[kithara::test(native, flash(false))]
     fn decoder_resampler_config_keeps_typed_backend() {
         let target_sample_rate = NonZeroU32::new(48_000).expect("test rate");
         let config: DecoderResamplerConfig<RubatoBackend> = DecoderResamplerConfig::builder()

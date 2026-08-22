@@ -73,7 +73,7 @@ impl SessionDispatcher for CountingSession {
     }
 }
 
-#[kithara_test_utils::kithara::test(native, flash(false))]
+#[kithara::test(native, flash(false))]
 fn counting_session_preserves_inner_consumer_wake_mode() {
     let session = CountingSession::new();
 

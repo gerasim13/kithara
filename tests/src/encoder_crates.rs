@@ -129,6 +129,8 @@ impl Lockfile {
 
 #[cfg(test)]
 mod tests {
+    use kithara_test_utils::kithara;
+
     use super::{BTreeSet, Lockfile};
 
     const UNCLASSIFIED_DIRECT_DEPENDENCY: &str = r#"
@@ -200,28 +202,28 @@ checksum = "ffmpeg-next-checksum"
             .expect("test lockfile must describe kithara-encode dependencies")
     }
 
-    #[kithara_test_utils::kithara::test(native, flash(false))]
+    #[kithara::test(native, flash(false))]
     fn encoder_versions_rejects_missing_encoder() {
         let lockfile = Lockfile::parse(MISSING_ENCODER).expect("test lockfile must be TOML");
 
         assert!(lockfile.encoder_versions().is_err());
     }
 
-    #[kithara_test_utils::kithara::test(native, flash(false))]
+    #[kithara::test(native, flash(false))]
     fn unclassified_direct_external_dependency_is_reported() {
         let unaccounted = unaccounted(UNCLASSIFIED_DIRECT_DEPENDENCY);
 
         assert_eq!(unaccounted, BTreeSet::from(["mp3lame-sys".to_owned()]));
     }
 
-    #[kithara_test_utils::kithara::test(native, flash(false))]
+    #[kithara::test(native, flash(false))]
     fn classified_encoder_dependency_is_not_reported() {
         let unaccounted = unaccounted(CLASSIFIED_ENCODER_DEPENDENCY);
 
         assert!(unaccounted.is_empty());
     }
 
-    #[kithara_test_utils::kithara::test(native, flash(false))]
+    #[kithara::test(native, flash(false))]
     fn dependency_through_local_package_is_not_reported() {
         let unaccounted = unaccounted(TRANSITIVE_DEPENDENCY_OF_LOCAL_PACKAGE);
 

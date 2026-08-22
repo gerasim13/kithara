@@ -17,7 +17,7 @@ mod tests {
         }
     }
 
-    #[kithara_test_utils::kithara::test(native, flash(false))]
+    #[kithara::test(native, flash(false))]
     fn baked_query_identity_separates_tracks_without_splitting_renewed_urls() {
         let store = AssetStore::builder()
             .backend(StorageBackend::Memory)

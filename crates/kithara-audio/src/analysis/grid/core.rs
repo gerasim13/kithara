@@ -204,6 +204,8 @@ fn bar_to_bpm(bar_samples: f64, sr: f64) -> f64 {
 
 #[cfg(test)]
 mod tests {
+    use kithara_test_utils::kithara;
+
     use super::*;
 
     struct Consts;
@@ -222,7 +224,7 @@ mod tests {
         }
     }
 
-    #[kithara_test_utils::kithara::test(native, flash(false))]
+    #[kithara::test(native, flash(false))]
     fn a_doubled_beat_is_dropped_like_a_doubled_downbeat() {
         let beat = 0.5f32;
         let mut beats: Vec<f32> = (0..64u16).map(|i| f32::from(i) * beat).collect();
@@ -246,7 +248,7 @@ mod tests {
         );
     }
 
-    #[kithara_test_utils::kithara::test(native, flash(false))]
+    #[kithara::test(native, flash(false))]
     fn cleaning_keeps_every_downbeat_on_a_retained_beat() {
         let beat = 0.5f32;
         let mut beats: Vec<f32> = (0..64u16).map(|i| f32::from(i) * beat).collect();
@@ -269,7 +271,7 @@ mod tests {
         );
     }
 
-    #[kithara_test_utils::kithara::test(native, flash(false))]
+    #[kithara::test(native, flash(false))]
     fn a_downbeat_wins_a_close_beat_collision() {
         let mut beats = steady(0.0, 0.5, 12);
         beats.push(1.9);
@@ -288,7 +290,7 @@ mod tests {
         assert!(grid.beats().binary_search(&190).is_err());
     }
 
-    #[kithara_test_utils::kithara::test(native, flash(false))]
+    #[kithara::test(native, flash(false))]
     fn unmatched_downbeat_is_omitted_from_a_map_capable_grid() {
         let grid = build_grid(
             &RawBeats {
@@ -307,7 +309,7 @@ mod tests {
         );
     }
 
-    #[kithara_test_utils::kithara::test(native, flash(false))]
+    #[kithara::test(native, flash(false))]
     fn an_evenly_spaced_beat_track_survives_the_filter_whole() {
         let beats: Vec<f32> = (0..64u16).map(|i| f32::from(i) * 0.5).collect();
         let grid = build_grid(
@@ -322,7 +324,7 @@ mod tests {
         assert_eq!(grid.beats().len(), 64, "no clean beat may be dropped");
     }
 
-    #[kithara_test_utils::kithara::test(native, flash(false))]
+    #[kithara::test(native, flash(false))]
     fn quantized_gaps_average_out_instead_of_latching_to_the_grid() {
         // 37 gaps of 0.48 s and 25 of 0.46 s: a 127.14 BPM record seen
         // through a 20 ms grid. The single-gap median latches onto 0.48 s.
@@ -354,7 +356,7 @@ mod tests {
         );
     }
 
-    #[kithara_test_utils::kithara::test(native, flash(false))]
+    #[kithara::test(native, flash(false))]
     fn skipped_marks_do_not_bend_the_tempo() {
         let beats: Vec<f32> = (0..64u16)
             .filter(|i| i % 7 != 6)
@@ -383,7 +385,7 @@ mod tests {
         );
     }
 
-    #[kithara_test_utils::kithara::test(native, flash(false))]
+    #[kithara::test(native, flash(false))]
     fn marks_out_vote_downbeats_that_strike_every_beat() {
         let beats: Vec<f32> = (0..64u16).map(|i| f32::from(i) * 0.4).collect();
         let grid = build_grid(
@@ -431,7 +433,7 @@ mod tests {
         best
     }
 
-    #[kithara_test_utils::kithara::test(native, flash(false))]
+    #[kithara::test(native, flash(false))]
     fn clean_track_is_one_on_grid_segment() {
         let grid = build_grid(
             &raw(steady(1.0, 2.0, 64)),
@@ -459,7 +461,7 @@ mod tests {
         assert!(seg.end_frame().abs_diff(last) < Consts::TOL_20MS);
     }
 
-    #[kithara_test_utils::kithara::test(native, flash(false))]
+    #[kithara::test(native, flash(false))]
     fn drifting_track_splits_into_phrase_aligned_segments() {
         // 32 bars at 2.00 s, then 32 bars at 2.06 s (3 % drift, not outlier).
         let mut db = Vec::new();
@@ -516,7 +518,7 @@ mod tests {
         }
     }
 
-    #[kithara_test_utils::kithara::test(native, flash(false))]
+    #[kithara::test(native, flash(false))]
     fn double_detections_are_filtered() {
         // Clean 64-bar track plus spurious half-bar downbeats (halving error).
         let mut db = steady(1.0, 2.0, 64);
@@ -535,7 +537,7 @@ mod tests {
         assert!((grid.bpm() - 120.0).abs() < 0.2);
     }
 
-    #[kithara_test_utils::kithara::test(native, flash(false))]
+    #[kithara::test(native, flash(false))]
     fn fade_out_garbage_does_not_bend_the_grid() {
         // Clean 64 bars, then a sparse fade-out tail with bogus gaps.
         let mut db = steady(1.0, 2.0, 64);
@@ -555,7 +557,7 @@ mod tests {
         assert!(!grid.segments().is_empty());
     }
 
-    #[kithara_test_utils::kithara::test(native, flash(false))]
+    #[kithara::test(native, flash(false))]
     fn short_track_yields_tempo_without_segments() {
         let beats = vec![0.5f32, 1.0, 1.5];
         let grid = build_grid(
@@ -581,7 +583,7 @@ mod tests {
         );
     }
 
-    #[kithara_test_utils::kithara::test(native, flash(false))]
+    #[kithara::test(native, flash(false))]
     fn downbeat_only_short_track_remains_a_degraded_tempo_grid() {
         let grid = build_grid(
             &raw(steady(1.0, 2.0, 8)),
