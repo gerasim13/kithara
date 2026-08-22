@@ -12,19 +12,23 @@ env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
 
-# A fork's branches share one pool of Linux runners, so their pushes queue
-# rather than overlap. The stress run no longer queues here: it has a
-# runner of its own and a group of its own.
+# One queue per branch. Pushes to different branches hold nothing from each
+# other: they share the machine at the runner, where a job waits for the cores
+# it asks for, which is the resource actually being rationed. Serialising whole
+# runs instead was measured on the Linux host — two pushes waited fourteen
+# minutes behind one nightly assessment with fifteen of eighteen runner slots
+# and two thirds of the CPU idle. The lanes that do want the whole fleet queue
+# together under `heavy-linux-`, and the stress campaign has a runner of its own
+# and a group of its own.
 #
-# `queue: max` is what makes that queue honest. The default `single` holds one
-# pending run and lets every new arrival evict it, so one push to any branch
-# cancelled whichever branch had been waiting its turn — a queue in name only.
-# `queue` takes no expression and may not be declared beside
-# `cancel-in-progress: true`, so the per-ref cancellation of superseded pushes
-# goes with it, the trade lanes.yml already made. A superseded push now runs to
-# completion instead of being cancelled.
+# `queue: max` is what makes this queue honest. The default `single` holds one
+# pending run and lets every new arrival evict it, so a second push to a branch
+# cancelled the run already waiting there — a queue in name only. `queue` takes
+# no expression and may not be declared beside `cancel-in-progress: true`, so
+# the cancellation of superseded pushes goes with it, the trade lanes.yml
+# already made. A superseded push runs to completion instead of being cancelled.
 concurrency:
-  group: ${{ github.event.repository.fork && format('fork-linux-{0}', github.repository) || format('ci-{0}', github.ref) }}
+  group: ci-${{ github.ref }}
   cancel-in-progress: false
   queue: max
 
