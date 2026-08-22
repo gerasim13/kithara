@@ -6,6 +6,7 @@ use std::{
 
 use anyhow::{Context, Result};
 use fs4::{FileExt, TryLockError};
+use tracing::warn;
 
 use super::layout::{self, GENERATION_PREFIX, LEASE_FILE, REFRESH_LOCK};
 
@@ -58,7 +59,12 @@ impl Drop for GenerationLease {
     fn drop(&mut self) {
         drop(self.file.take());
         if let Some(cleanup) = self.cleanup.take() {
-            let _ = cleanup.run();
+            // Retention is opportunistic — the next lease to fall away retries
+            // it — but a failure has to be sayable. Discarded, the cache simply
+            // stops shrinking and nothing anywhere records why.
+            if let Err(error) = cleanup.run() {
+                warn!(%error, "self-cache retention cleanup failed");
+            }
         }
     }
 }
@@ -321,6 +327,34 @@ mod tests {
         Ok(())
     }
 
+    /// What the cache holds and how old each entry is.
+    ///
+    /// A bare `!exists()` failure says only that one generation outlived the
+    /// sweep, which is the one thing already known. The gate has gone red on
+    /// that twice — 2026-08-21 and 2026-08-22 — and stayed green through 925
+    /// repetitions off it, so the next occurrence has to carry its own
+    /// diagnosis: retention protecting the wrong generation shows up as a
+    /// missing sibling, a clock stepped backwards as an age that will not
+    /// subtract, and a cleanup that failed on the way to the delete as
+    /// everything still in place.
+    fn census(cache: &Path) -> Vec<String> {
+        let now = SystemTime::now();
+        let mut lines = fs::read_dir(cache)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|entry| {
+                let age = entry
+                    .metadata()
+                    .and_then(|metadata| metadata.modified())
+                    .map(|modified| now.duration_since(modified));
+                format!("{} {age:?}", entry.file_name().to_string_lossy())
+            })
+            .collect::<Vec<_>>();
+        lines.sort();
+        lines
+    }
+
     #[test]
     fn cleanup_skips_a_leased_inactive_generation() -> Result<()> {
         let temp = tempfile::tempdir()?;
@@ -416,7 +450,11 @@ mod tests {
         assert!(leased.is_dir());
         drop(second);
 
-        assert!(!leased.exists());
+        assert!(
+            !leased.exists(),
+            "the last lease to fall away must retry retention: {:?}",
+            census(&cache)
+        );
         assert!(retained.is_dir());
         assert!(active.is_dir());
         Ok(())
