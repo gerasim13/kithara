@@ -35,8 +35,8 @@ const GUEST: GuestSources = GuestSources {
     prompt_attempts: 40,
     enrolment_attempts: 60,
     first_phase_attempts: 60,
-    answer_file: "ci/windows/autounattend.xml",
-    provision_script: "ci/windows/provision.ps1",
+    answer_file: ".config/windows/autounattend.xml",
+    provision_script: ".config/windows/provision.ps1",
     build_tools_url: "https://aka.ms/vs/17/release/vs_buildtools.exe",
     cargo_tools: ["cargo-nextest", "just"],
 };
@@ -57,7 +57,7 @@ struct Enrolment<'a> {
 struct GuestSettings<'a> {
     build_tools_url: &'a str,
     /// Empty: Microsoft replaces this bootstrapper in place, so the guest
-    /// verifies its signature instead. See ci/windows/provision.ps1.
+    /// verifies its signature instead. See .config/windows/provision.ps1.
     build_tools_sha256: &'a str,
     cargo_tools: BTreeMap<&'a str, &'a str>,
     cmake_sha256: &'a str,
@@ -459,8 +459,23 @@ fn path_text(path: &Path) -> Result<&str> {
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
+
     use super::*;
     use crate::ci::config::fixture;
+
+    /// Both names are repository paths resolved at install time, on a host, in
+    /// a step that runs months apart from any edit to this file. A rename that
+    /// missed one of them would surface there and nowhere earlier.
+    #[test]
+    fn the_guest_sources_name_files_this_repository_tracks() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("the crate sits inside the workspace");
+        for source in [GUEST.answer_file, GUEST.provision_script] {
+            assert!(root.join(source).is_file(), "{source}");
+        }
+    }
 
     #[test]
     fn the_guest_is_told_versions_rather_than_left_to_choose() {
