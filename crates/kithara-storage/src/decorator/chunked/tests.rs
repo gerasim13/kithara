@@ -15,12 +15,19 @@ use kithara_platform::{CancelToken, time::Duration};
 use tempfile::TempDir;
 
 use super::core::{AtomicChunked, OpenIntent, make_tmp_path};
-use crate::{MmapDriver, MmapOptions, OpenMode, Resource};
+use crate::{MmapDriver, MmapOptions, OpenMode, Resource, StorageResult};
 
 fn open_chunked(dir: &TempDir, name: &str) -> (AtomicChunked<MmapDriver>, PathBuf, PathBuf) {
     let canonical = dir.path().join(name);
+    let res = open_chunked_result(dir, name).unwrap();
+    let tmp = make_tmp_path(&canonical).unwrap();
+    (res, canonical, tmp)
+}
+
+fn open_chunked_result(dir: &TempDir, name: &str) -> StorageResult<AtomicChunked<MmapDriver>> {
+    let canonical = dir.path().join(name);
     let cancel = CancelToken::never();
-    let res = AtomicChunked::<MmapDriver>::open(canonical.clone(), move |target, intent| {
+    AtomicChunked::<MmapDriver>::open(canonical, move |target, intent| {
         let mode = match intent {
             OpenIntent::Fresh => OpenMode::ReadWrite,
             OpenIntent::Reopen => OpenMode::ReadOnly,
@@ -34,9 +41,6 @@ fn open_chunked(dir: &TempDir, name: &str) -> (AtomicChunked<MmapDriver>, PathBu
             },
         )
     })
-    .unwrap();
-    let tmp = make_tmp_path(&canonical).unwrap();
-    (res, canonical, tmp)
 }
 
 #[kithara::test(timeout(Duration::from_secs(2)))]
@@ -86,38 +90,45 @@ fn fail_cleans_tmp() {
     assert!(!canonical.exists());
 }
 
+/// A tmp nobody holds is an orphan: its owner is gone, so nothing will ever
+/// commit or clean it. Rejecting it would make the canonical path
+/// permanently unwritable — the segment stays unfetchable for good.
 #[kithara::test(timeout(Duration::from_secs(2)))]
-fn open_rejects_when_stale_tmp_blocks_claim() {
+fn open_reclaims_a_stale_tmp_no_live_writer_holds() {
     let dir = TempDir::new().unwrap();
-    let canonical = dir.path().join("survivor.bin");
-    let stale_tmp = make_tmp_path(&canonical).unwrap();
+    let stale_tmp = make_tmp_path(&dir.path().join("survivor.bin")).unwrap();
     fs::write(&stale_tmp, b"stale-from-previous-process").unwrap();
 
-    let cancel = CancelToken::never();
-    let factory = {
-        let cancel = cancel;
-        move |target: &Path, intent: OpenIntent| {
-            let mode = match intent {
-                OpenIntent::Fresh => OpenMode::ReadWrite,
-                OpenIntent::Reopen => OpenMode::ReadOnly,
-            };
-            Resource::open(
-                cancel.clone(),
-                MmapOptions {
-                    mode,
-                    initial_len: None,
-                    path: target.to_path_buf(),
-                },
-            )
-        }
-    };
+    let (res, canonical, tmp) = open_chunked(&dir, "survivor.bin");
+    assert_eq!(tmp, stale_tmp, "the reclaimed tmp must be the planted one");
 
-    let err = AtomicChunked::<MmapDriver>::open(canonical, factory)
-        .expect_err("stale tmp must block atomic claim");
-    assert!(
-        matches!(err, crate::StorageError::TmpClaimed(_)),
-        "expected TmpClaimed, got {err:?}"
+    res.write_at(0, b"written-by-successor").unwrap();
+    res.commit(Some(20)).unwrap();
+    assert_eq!(
+        &fs::read(&canonical).unwrap(),
+        b"written-by-successor",
+        "the committed bytes must be the successor's, not the dead writer's"
     );
+    assert!(!tmp.exists(), "tmp consumed by the atomic rename");
+}
+
+/// Since the claim is a lock rather than a file, it has to be released when
+/// the writer settles — otherwise a rewrite of the same canonical path would
+/// see `TmpClaimed` from a holder that is done.
+#[kithara::test(timeout(Duration::from_secs(2)))]
+fn a_settled_claim_frees_the_tmp_for_a_successor() {
+    let dir = TempDir::new().unwrap();
+    let (holder, canonical, tmp) = open_chunked(&dir, "held.bin");
+    holder.write_at(0, b"in-flight").unwrap();
+    holder.commit(Some(9)).unwrap();
+    drop(holder);
+    assert!(!tmp.exists());
+    assert!(canonical.is_file());
+
+    let successor = open_chunked_result(&dir, "held.bin").expect("settled claim must be released");
+    successor.write_at(0, b"rewritten").unwrap();
+    successor.commit(Some(9)).unwrap();
+    assert_eq!(&fs::read(&canonical).unwrap(), b"rewritten");
 }
 
 #[kithara::test(timeout(Duration::from_secs(2)))]

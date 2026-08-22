@@ -12,20 +12,50 @@ env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
 
-# A fork's branches share one pool of Linux runners, so their pushes queue
-# rather than overlap. The stress run no longer queues here: it has a
-# runner of its own and a group of its own.
-# Production keeps the per-ref cancellation used for superseded pushes.
+# One queue per branch. Pushes to different branches hold nothing from each
+# other: they share the machine at the runner, where a job waits for the cores
+# it asks for, which is the resource actually being rationed. Serialising whole
+# runs instead was measured on the Linux host — two pushes waited fourteen
+# minutes behind one nightly assessment with fifteen of eighteen runner slots
+# and two thirds of the CPU idle. The lanes that do want the whole fleet queue
+# together under `heavy-linux-`, and the stress campaign has a runner of its own
+# and a group of its own.
+#
+# `queue: max` is what makes this queue honest. The default `single` holds one
+# pending run and lets every new arrival evict it, so a second push to a branch
+# cancelled the run already waiting there — a queue in name only. `queue` takes
+# no expression and may not be declared beside `cancel-in-progress: true`, so
+# the cancellation of superseded pushes goes with it, the trade lanes.yml
+# already made. A superseded push runs to completion instead of being cancelled.
 concurrency:
-  group: ${{ github.event.repository.fork && format('fork-linux-{0}', github.repository) || format('ci-{0}', github.ref) }}
-  cancel-in-progress: ${{ !github.event.repository.fork }}
+  group: ci-${{ github.ref }}
+  cancel-in-progress: false
+  queue: max
 
 jobs:
   # Authorization runs on a GitHub-hosted machine, before any job can reach a
-  # self-hosted runner. Missing or malformed runner configuration is a failed
-  # check, never a skipped workflow that can be mistaken for success.
+  # self-hosted runner. Malformed runner configuration is a failed check, never
+  # a skipped workflow that can be mistaken for success. Absent configuration
+  # is a different statement — this repository runs no CI — and the guard below
+  # answers it before a job is requested.
   authorize:
     name: CI authorization
+    # Every job below takes its `runs-on` from the runner-labels variable, so a
+    # repository without one runs nothing: upstream has no runners and is not
+    # getting any — its gate is the GitLab verification status the bridge
+    # writes. Every other workflow already skips on that variable; this one
+    # turned the question into a job, and on upstream that job cannot even
+    # start ("your account is locked due to a billing issue"), so every push
+    # there was red with all twenty checks skipped. A permanent red reads as a
+    # regression and hides the next real one.
+    #
+    # A fork is admitted on its own, without the variable being readable from
+    # here, because a fork someone else owns is where this repository is
+    # developed and its settings are not ours to inspect. The trade is that a
+    # fork with no runners starts a run whose jobs fail to resolve `runs-on`
+    # rather than being skipped. A malformed value is still a hard failure: it
+    # passes this guard and fails the step below.
+    if: github.event.repository.fork || vars.KITHARA_RUNNER_LABELS != ''
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -407,7 +437,10 @@ jobs:
   # reject every result other than an executed success.
   required:
     name: CI required
-    if: ${{ always() }}
+    # `always()` alone would keep this job red on a repository the guard above
+    # skipped: it demands success from every job it needs, and a skip is not a
+    # success. It carries the same guard so the whole run is skipped there.
+    if: ${{ always() && (github.event.repository.fork || vars.KITHARA_RUNNER_LABELS != '') }}
     needs:
       - authorize
       - gate

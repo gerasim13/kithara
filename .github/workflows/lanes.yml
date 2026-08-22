@@ -17,10 +17,11 @@ env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
 
-# These lanes run on the pool the stress campaign measures, so on a fork they
-# wait for the campaign rather than taking cores from it. See ci.yml.
+# Heavy work: this asks for the whole fleet, so it queues with the other heavy
+# lanes and takes its turn among them rather than beside them. A push is not
+# behind that queue; see ci.yml.
 concurrency:
-  group: ${{ github.event.repository.fork && format('fork-linux-{0}', github.repository) || format('lanes-{0}', github.ref) }}
+  group: heavy-linux-${{ github.repository }}
   cancel-in-progress: false
   queue: max
 

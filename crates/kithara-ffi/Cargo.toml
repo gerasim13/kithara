@@ -155,7 +155,14 @@ kithara-drm = { workspace = true }
 # key-processor types directly (native reaches the same types through the
 # `kithara` facade and a native-only `kithara-drm` dep).
 kithara-hls = { workspace = true, default-features = false }
-kithara-play = { workspace = true, default-features = false, features = ["backend-web-audio", "wasm-bindgen", "symphonia", "webcodecs"] }
+# `resample-rubato` is in `kithara-play`'s default set, so turning defaults off
+# to keep the native device builds lean silently left wasm with
+# `NoResamplerBackend`. A WebAudio context runs at one rate, and every track
+# that does not already match it — `assets/track.mp3` is 48 kHz against a
+# 44.1 kHz context — then failed to open with "resampler backend none does not
+# support fixed-ratio mode". rubato is what native plays through, so wasm
+# resamples the same way rather than a cheaper way.
+kithara-play = { workspace = true, default-features = false, features = ["backend-web-audio", "wasm-bindgen", "symphonia", "webcodecs", "resample-rubato"] }
 kithara-queue = { workspace = true, default-features = false, features = ["backend-web-audio", "symphonia", "webcodecs"] }
 kithara-test-macros = { workspace = true }
 

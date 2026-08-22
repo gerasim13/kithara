@@ -1,8 +1,7 @@
 #![forbid(unsafe_code)]
 
 use std::{
-    fs::{self, OpenOptions},
-    io::ErrorKind,
+    fs::{self, File, OpenOptions, TryLockError},
     ops::Range,
     path::{Path, PathBuf},
 };
@@ -25,6 +24,42 @@ pub(super) fn make_tmp_path(canonical: &Path) -> Option<PathBuf> {
     let parent = canonical.parent()?;
     let name = canonical.file_name()?.to_str()?;
     Some(parent.join(format!("{name}.tmp")))
+}
+
+/// One writer's hold on `<canonical>.tmp` for the lifetime of its claim.
+///
+/// The claim is the *lock*, not the file. `file` holds an exclusive advisory
+/// lock (`flock(LOCK_EX)`), which the OS releases when the handle closes —
+/// including when the owning process dies. That is what separates a live
+/// sibling writer from an orphan a `kill -9` left behind; the file's mere
+/// existence cannot.
+struct TmpClaim {
+    path: PathBuf,
+    file: File,
+}
+
+impl TmpClaim {
+    /// Take the claim on `path`, or report who holds it.
+    ///
+    /// Never truncates: a claimant that loses the race must leave the
+    /// winner's in-flight bytes untouched. Bytes a *dead* writer left behind
+    /// need no wiping either — the successor's inner opens with
+    /// [`OpenIntent::Fresh`], so nothing records them as available and no
+    /// reader can reach them, and `commit` trims the file back to
+    /// `final_len`.
+    fn take(path: PathBuf) -> StorageResult<Self> {
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&path)?;
+        match file.try_lock() {
+            Ok(()) => Ok(Self { path, file }),
+            Err(TryLockError::WouldBlock) => Err(StorageError::TmpClaimed(path)),
+            Err(TryLockError::Error(e)) => Err(StorageError::Io(e)),
+        }
+    }
 }
 
 /// When the committed bytes are forced onto the medium.
@@ -84,10 +119,10 @@ pub struct AtomicChunked<D: DriverIo> {
     /// The current writer. Swapped (not cloned) on the commit-rename.
     /// Read/wait paths mint a cheap `ResourceReader` from the current snapshot.
     inner: ArcSwap<ResourceWriter<D>>,
-    /// `Some(<path>.tmp)` while writes are in flight; cleared on
-    /// successful `commit`. `Drop` / `fail` use a still-set value to
-    /// remove the orphaned temp file.
-    tmp_path: Mutex<Option<PathBuf>>,
+    /// `Some(claim on <path>.tmp)` while writes are in flight; cleared on
+    /// successful `commit`. `Drop` / `fail` use a still-set value to remove
+    /// the orphaned temp file. Dropping the claim releases its lock.
+    claim: Mutex<Option<TmpClaim>>,
     /// Factory to reopen the inner on the canonical path post-rename.
     /// `None` when the wrapper was constructed in passthrough mode.
     factory: Option<FactoryFn<D>>,
@@ -101,7 +136,10 @@ pub struct AtomicChunked<D: DriverIo> {
 
 impl<D: DriverIo> std::fmt::Debug for AtomicChunked<D> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let tmp = self.tmp_path.try_lock().map(|g| (*g).clone());
+        let tmp = self
+            .claim
+            .try_lock()
+            .map(|g| g.as_ref().map(|claim| claim.path.clone()));
         f.debug_struct("AtomicChunked")
             .field("canonical_path", &self.canonical_path)
             .field("tmp_path", &tmp)
@@ -118,33 +156,30 @@ impl<D: DriverIo> AtomicChunked<D> {
     /// # Errors
     /// Propagates the inner commit error and any filesystem error.
     pub fn commit(&self, final_len: Option<u64>) -> StorageResult<()> {
-        let Some(tmp) = self.tmp_path.lock().take() else {
+        let Some(claim) = self.claim.lock().take() else {
             return self.inner.load().commit_in_place(final_len);
         };
+        let TmpClaim { path: tmp, file } = &claim;
 
         // Sealing skips the driver's snapshot: it would map the temp file
-        // that the rename below retires. One handle then trims the surplus
-        // reservation and forces the bytes down, so the canonical path can
-        // only ever appear fully durable.
+        // that the rename below retires. The claim's own handle then trims
+        // the surplus reservation and forces the bytes down, so the canonical
+        // path can only ever appear fully durable.
         self.inner.load().seal_in_place(final_len)?;
 
-        let f = OpenOptions::new().write(true).open(&tmp).map_err(|e| {
-            StorageError::Failed(format!("AtomicChunked commit: open tmp {tmp:?}: {e}"))
-        })?;
         if let Some(len) = final_len
-            && f.metadata().is_ok_and(|m| m.len() > len)
+            && file.metadata().is_ok_and(|m| m.len() > len)
         {
-            f.set_len(len).map_err(|e| {
+            file.set_len(len).map_err(|e| {
                 StorageError::Failed(format!("AtomicChunked commit: trim {tmp:?}: {e}"))
             })?;
         }
         if self.barrier == Barrier::Inline {
-            f.sync_data().map_err(|e| {
+            file.sync_data().map_err(|e| {
                 StorageError::Failed(format!("AtomicChunked commit: sync_data {tmp:?}: {e}"))
             })?;
         }
-        drop(f);
-        fs::rename(&tmp, &self.canonical_path).map_err(|e| {
+        fs::rename(tmp, &self.canonical_path).map_err(|e| {
             StorageError::Failed(format!(
                 "AtomicChunked commit: rename {tmp:?} -> {:?}: {e}",
                 self.canonical_path
@@ -175,9 +210,9 @@ impl<D: DriverIo> AtomicChunked<D> {
     /// Mark the resource failed and remove the orphaned temp file.
     pub fn fail(&self, reason: String) {
         self.inner.load().fail_in_place(reason);
-        let tmp = self.tmp_path.lock().take();
-        if let Some(tmp) = tmp {
-            let _ = fs::remove_file(&tmp);
+        let claim = self.claim.lock().take();
+        if let Some(claim) = claim {
+            let _ = fs::remove_file(&claim.path);
         }
     }
 
@@ -192,17 +227,17 @@ impl<D: DriverIo> AtomicChunked<D> {
     /// constructor and once more with the canonical path after the
     /// atomic rename in [`AtomicChunked::commit`].
     ///
-    /// Atomically claims `<canonical>.tmp` via `OpenOptions::create_new`
-    /// — the filesystem rejects the second concurrent open of the same
-    /// tmp path. Returns [`StorageError::TmpClaimed`] if another
-    /// `AssetStore` instance (or another process) is already writing
-    /// the same canonical path.
+    /// Claims `<canonical>.tmp` by taking an exclusive advisory lock on it
+    /// — see [`TmpClaim`]. Returns [`StorageError::TmpClaimed`] only while
+    /// another `AssetStore` instance (or another process) is *alive* and
+    /// writing the same canonical path; a tmp whose owner is gone carries
+    /// no lock, so this open reclaims it.
     ///
     /// # Errors
     ///
     /// - [`StorageError::Failed`] — canonical path has no parent /
     ///   non-utf8 file name.
-    /// - [`StorageError::TmpClaimed`] — tmp path already exists.
+    /// - [`StorageError::TmpClaimed`] — a live writer holds the tmp.
     /// - [`StorageError::Io`] / [`StorageError::Mmap`] — propagated
     ///   from the OS or from the supplied factory.
     pub fn open<F>(canonical_path: PathBuf, factory: F) -> StorageResult<Self>
@@ -241,25 +276,13 @@ impl<D: DriverIo> AtomicChunked<D> {
         if let Some(parent) = tmp_path.parent() {
             fs::create_dir_all(parent)?;
         }
-        match OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&tmp_path)
-        {
-            Ok(file) => {
-                drop(file);
-            }
-            Err(e) if e.kind() == ErrorKind::AlreadyExists => {
-                return Err(StorageError::TmpClaimed(tmp_path));
-            }
-            Err(e) => return Err(StorageError::Io(e)),
-        }
-        let inner = factory(&tmp_path, OpenIntent::Fresh)?;
+        let claim = TmpClaim::take(tmp_path)?;
+        let inner = factory(&claim.path, OpenIntent::Fresh)?;
         Ok(Self {
             barrier,
             canonical_path,
             inner: ArcSwap::from_pointee(inner),
-            tmp_path: Mutex::new(Some(tmp_path)),
+            claim: Mutex::new(Some(claim)),
             factory: Some(Box::new(factory)),
         })
     }
@@ -273,7 +296,7 @@ impl<D: DriverIo> AtomicChunked<D> {
         Self {
             canonical_path,
             inner: ArcSwap::from_pointee(inner),
-            tmp_path: Mutex::default(),
+            claim: Mutex::default(),
             factory: None,
             barrier: Barrier::Inline,
         }
@@ -373,13 +396,14 @@ impl<D: DriverIo> AtomicChunked<D> {
 
 impl<D: DriverIo> Drop for AtomicChunked<D> {
     /// Clean up the orphaned temp file when a writer is dropped
-    /// without a successful commit. Best-effort: a `kill -9` skips
-    /// `Drop` entirely, in which case the next `AtomicChunked::open`
-    /// over the same canonical path wipes the stale temp.
+    /// without a successful commit. A `kill -9` skips `Drop` entirely; the
+    /// OS then releases the claim's lock instead, and the next
+    /// `AtomicChunked::open` over the same canonical path reclaims the
+    /// stale temp.
     fn drop(&mut self) {
-        let tmp = self.tmp_path.lock().take();
-        if let Some(tmp) = tmp {
-            let _ = fs::remove_file(&tmp);
+        let claim = self.claim.lock().take();
+        if let Some(claim) = claim {
+            let _ = fs::remove_file(&claim.path);
         }
     }
 }

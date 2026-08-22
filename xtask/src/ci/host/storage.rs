@@ -1,6 +1,7 @@
 #[cfg(test)]
 use std::{cell::RefCell, collections::VecDeque};
 use std::{
+    cmp::Reverse,
     collections::BTreeMap,
     fs::{self, OpenOptions},
     io::{self, Write},
@@ -9,10 +10,30 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 
-use crate::ci::{SCCACHE_SLOT_CONTROL_NAMESPACE, build_cache, config::CiConfig, process::Process};
+use super::runner_images::JobVm;
+use crate::ci::{
+    SCCACHE_SLOT_CONTROL_NAMESPACE, build_cache,
+    config::CiConfig,
+    environment::{CacheTrust, scratch_root},
+    process::Process,
+};
+
+/// Whether a stale tree still has to be asked if anything is using it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Liveness {
+    /// A workspace is leased and handed to job after job, so its timestamp says
+    /// nothing about whether one is running in it right now.
+    Ask,
+    /// A scratch entry belongs to one job and is never handed to another, so
+    /// its age is the whole answer. Asking anyway costs an `lsof` walk per
+    /// entry, and the backlog this was written for had reached sixty-eight
+    /// thousand of them: hours inside a pass that runs every five minutes,
+    /// with every other step in the ladder waiting behind it.
+    Age,
+}
 
 /// Ordered least to most urgent: the watchdog reports the worst volume, not
 /// the total, so that a roomy one cannot hide a full one.
@@ -28,6 +49,10 @@ pub(super) enum Pressure {
 pub(super) struct HostStorage<'a> {
     host_root: PathBuf,
     build_root: PathBuf,
+    /// Where the lanes put their temporaries. Absolute and shared by every job
+    /// on the machine, so the test constructor points it inside its own fixture
+    /// rather than let a test sweep the real one.
+    scratch_root: PathBuf,
     config: &'a CiConfig,
     process: &'a Process,
     #[cfg(test)]
@@ -82,6 +107,16 @@ struct Volume {
     available: u64,
 }
 
+/// One entry of `tart list --format json`. Only liveness is read here; the
+/// sizes it also reports are apparent and say nothing about what the volume
+/// pays for a sparse disk image.
+#[derive(Deserialize)]
+#[serde(rename_all = "PascalCase")]
+struct TartVm {
+    name: String,
+    running: bool,
+}
+
 impl Volume {
     fn read(path: &Path) -> Result<Self> {
         let total = fs4::total_space(path)
@@ -126,6 +161,7 @@ impl<'a> HostStorage<'a> {
         Ok(Self {
             host_root,
             build_root,
+            scratch_root: scratch_root(),
             config,
             process,
             #[cfg(test)]
@@ -140,6 +176,7 @@ impl<'a> HostStorage<'a> {
         validate_root(&host_root)?;
         validate_root(&build_root)?;
         Ok(Self {
+            scratch_root: host_root.join("scratch"),
             host_root,
             build_root,
             config,
@@ -192,10 +229,12 @@ impl<'a> HostStorage<'a> {
         info!(free_bytes = initial, ?pressure, volume = %volume.display(), "cleanup started");
 
         self.prune_host_trees("workspaces/tmp", Self::DAY)?;
+        self.prune_scratch_trees(Self::DAY)?;
         self.prune_host_trees("workspaces/builds", Self::DAY)?;
         self.prune_build_trees("workspaces/gitlab", Self::DAY)?;
         self.prune_host_trees("vm/overlays", Self::DAY)?;
         self.prune_host_trees("vm/android/avd", Self::DAY)?;
+        self.prune_abandoned_job_vms(Self::DAY);
         self.prune_host_files("logs", 14 * Self::DAY)?;
         self.rotate_logs()?;
         self.prune_retired_caches(7 * Self::DAY)?;
@@ -261,8 +300,26 @@ impl<'a> HostStorage<'a> {
             ?final_pressure,
             "cleanup completed"
         );
+        // A pass that cannot reach the threshold has to say what is holding the
+        // space. Saying only that every step reached its floor is what made this
+        // recur: the message rules out the caches and names nothing, so each
+        // recurrence starts from nothing and the trees no step owns are never
+        // even looked at. Measured only on the way to a failure, so a healthy
+        // pass pays nothing for it.
+        let holders = if final_pressure >= Pressure::Aggressive {
+            let holders = self.largest_trees(10);
+            for (path, bytes) in &holders {
+                info!(path = %path.display(), apparent_bytes = bytes, "CI space holder");
+            }
+            holders
+        } else {
+            Vec::new()
+        };
         if final_pressure == Pressure::Reject {
-            bail!("CI volume remains above the new-job threshold after cleanup");
+            bail!(
+                "CI volume remains above the new-job threshold after cleanup; largest trees: {}",
+                name_holders(&holders)
+            );
         }
         // A pass that runs every step and moves nothing is the failure this
         // host spent hours in: `Aggressive` in, `Aggressive` out, `bytes_freed=0`
@@ -274,9 +331,10 @@ impl<'a> HostStorage<'a> {
         if final_pressure >= Pressure::Aggressive && final_pressure >= pressure {
             bail!(
                 "cleanup left {} at {final_pressure:?} with {free} bytes free, unchanged from \
-                 {pressure:?}: every step this owns is already at its floor, so what is holding \
-                 the space is not build caches",
-                volume.display()
+                 {pressure:?}: every step this owns is already at its floor, so the space is held \
+                 by {}",
+                volume.display(),
+                name_holders(&holders)
             );
         }
         Ok(())
@@ -465,14 +523,46 @@ impl<'a> HostStorage<'a> {
     }
 
     fn prune_host_trees(&self, relative: &str, age: Duration) -> Result<()> {
-        self.prune_old_trees(&self.host_root, relative, age)
+        self.prune_old_trees(&self.host_root, relative, age, Liveness::Ask)
     }
 
     fn prune_build_trees(&self, relative: &str, age: Duration) -> Result<()> {
-        self.prune_old_trees(&self.build_root, relative, age)
+        self.prune_old_trees(&self.build_root, relative, age, Liveness::Ask)
     }
 
-    fn prune_old_trees(&self, root: &Path, relative: &str, age: Duration) -> Result<()> {
+    /// Prune what the lanes leave behind in their scratch root.
+    ///
+    /// `CiEnvironment` points every lane's `TMPDIR` at a namespace under
+    /// [`scratch_root`], which sits outside both CI roots for three reasons of
+    /// its own — see its doc comment — so no step in this ladder could reach it
+    /// and nothing ever came back for it. A job killed before its temporaries
+    /// drop leaves them where they are, and cancellation is routine for fork
+    /// branches, so the leak is steady rather than exceptional.
+    ///
+    /// Measured on the CI host 2026-08-22: sixty-eight thousand directories
+    /// holding 3.5 gibibytes across the three namespaces, the oldest from
+    /// 18 August, growing by roughly 660 mebibytes a day — on the same APFS
+    /// container whose free space every pressure threshold is read from.
+    ///
+    /// Age is the whole signal here, unlike the workspaces beside it: a
+    /// namespace entry belongs to one job and is never handed to another, so
+    /// its timestamp is its creation, and a day is more than ten times the
+    /// longest lane. The namespaces themselves are never candidates, because
+    /// `prune_old_trees` only ever offers their children.
+    fn prune_scratch_trees(&self, age: Duration) -> Result<()> {
+        for trust in CacheTrust::ALL {
+            self.prune_old_trees(&self.scratch_root, trust.as_str(), age, Liveness::Age)?;
+        }
+        Ok(())
+    }
+
+    fn prune_old_trees(
+        &self,
+        root: &Path,
+        relative: &str,
+        age: Duration,
+        liveness: Liveness,
+    ) -> Result<()> {
         let directory = root.join(relative);
         if !directory.is_dir() {
             return Ok(());
@@ -486,7 +576,7 @@ impl<'a> HostStorage<'a> {
             if !metadata.file_type().is_dir() || !older_than(&metadata, age)? {
                 continue;
             }
-            if self.active(&path) {
+            if liveness == Liveness::Ask && self.active(&path) {
                 info!(path = %path.display(), "keeping active CI path");
                 continue;
             }
@@ -682,6 +772,86 @@ impl<'a> HostStorage<'a> {
         }
     }
 
+    /// Delete the macOS job VM once no runner is serving from it.
+    ///
+    /// The macOS lane clones [`JobVm::NAME`] from the base bundle and destroys
+    /// it at both ends of every runner loop, so the clone is disposable by
+    /// construction: a runner that finds it missing makes another. When the
+    /// runner dies between those ends the clone outlives it, and nothing ever
+    /// comes back for it. `vm/tart/cache` is pruned by age; the bundle
+    /// directory beside it is not, because pruning that directory by age would
+    /// take the base bundle with it, and the base is only rebuildable by hand
+    /// with `tart create --from-ipsw`.
+    ///
+    /// Seen on the CI host 2026-08-22: a stopped clone from 12 August, ten days
+    /// after the runner that made it was last loaded, while cleanup reported
+    /// `Normal` and freed nothing every five minutes.
+    ///
+    /// What that clone returned is the measure to trust, and it was almost
+    /// nothing: `tart clone` copies on write, so a clone shares its blocks with
+    /// the base until it diverges, and that one had never been booted. A
+    /// directory walk counted its 38 gibibytes twice over — once in each bundle
+    /// — because both files hold the same blocks. So this reclaims what the
+    /// dead runner wrote, not what the bundle appears to weigh: nothing for a
+    /// clone that never ran, and the whole divergence for one that served jobs
+    /// before its runner died. It is worth doing for the second case, and no
+    /// apparent size should be read as the space it will return.
+    ///
+    /// Named rather than swept, so the base bundle is never a candidate, and
+    /// taken apart through `tart` rather than the filesystem, so the tool that
+    /// owns the bundle is the one that dismantles it. Both signals are
+    /// required, because neither can tell an idle runner from a dead one on its
+    /// own: the loop leaves the clone stopped for as long as a boot takes,
+    /// which is longer than the interval this runs on, and a booted guest
+    /// waiting for work writes nothing to its bundle for hours.
+    fn prune_abandoned_job_vms(&self, age: Duration) {
+        let tart = self.config.host.brew_tool("tart");
+        let Ok(home) = self.config.host.tart_home() else {
+            return;
+        };
+        let bundle = home.join("vms").join(JobVm::NAME);
+        if !tart.is_file() || !bundle.is_dir() {
+            return;
+        }
+        let Some(touched) = newest_part_mtime(&bundle) else {
+            return;
+        };
+        if !older_than_time(touched, age) || self.job_vm_is_running(&tart) {
+            return;
+        }
+        info!(vm = JobVm::NAME, bundle = %bundle.display(), "removing abandoned macOS job VM");
+        let mut command = self.process.command(&tart);
+        command.args(["delete", JobVm::NAME]);
+        if let Err(error) = self
+            .process
+            .run_command(&mut command, "delete abandoned CI macOS VM")
+        {
+            warn!(%error, "abandoned macOS job VM cleanup failed");
+        }
+    }
+
+    /// Whether `tart` reports the job VM as running.
+    ///
+    /// A question that cannot be answered answers `true`: an unreadable listing
+    /// must not become permission to delete a guest that may be serving jobs.
+    fn job_vm_is_running(&self, tart: &Path) -> bool {
+        let Ok(output) = self
+            .process
+            .command(tart)
+            .args(["list", "--format", "json"])
+            .output()
+        else {
+            return true;
+        };
+        if !output.status.success() {
+            return true;
+        }
+        let Ok(listed) = serde_json::from_slice::<Vec<TartVm>>(&output.stdout) else {
+            return true;
+        };
+        listed.iter().any(|vm| vm.name == JobVm::NAME && vm.running)
+    }
+
     fn prune_docker_cache(&self, age: &str) {
         let home = self.host_root.join("home").join(&self.config.host.ci_user);
         let socket = home.join(".colima/kithara/docker.sock");
@@ -792,7 +962,100 @@ impl<'a> HostStorage<'a> {
     fn is_removable(&self, target: &Path) -> bool {
         is_removable_under(&self.host_root, target, Self::REMOVABLE_ROOTS)
             || is_removable_under(&self.build_root, target, &["workspaces"])
+            || is_removable_under(
+                &self.scratch_root,
+                target,
+                &CacheTrust::ALL.map(CacheTrust::as_str),
+            )
     }
+
+    /// The largest trees under the CI roots, largest first.
+    ///
+    /// Measured two levels down, so an answer names a subsystem — `vm/tart`,
+    /// `cache/trusted`, one runner's workspaces — rather than the volume it is
+    /// already known to be on. A first-level directory with no subdirectories
+    /// of its own stands for itself.
+    ///
+    /// Sizes are apparent, not allocated, so a sparse disk image reads larger
+    /// than it costs rather than smaller. This picks which tree to look at; it
+    /// is not an accounting of the volume.
+    fn largest_trees(&self, count: usize) -> Vec<(PathBuf, u64)> {
+        let mut roots = vec![self.host_root.clone()];
+        if !self.build_root.starts_with(&self.host_root) {
+            roots.push(self.build_root.clone());
+        }
+        let mut sizes = Vec::new();
+        for root in &roots {
+            for first in child_dirs(root) {
+                let children = child_dirs(&first);
+                if children.is_empty() {
+                    let bytes = tree_bytes(&first);
+                    sizes.push((first, bytes));
+                    continue;
+                }
+                for child in children {
+                    let bytes = tree_bytes(&child);
+                    sizes.push((child, bytes));
+                }
+            }
+        }
+        sizes.sort_unstable_by_key(|(_, bytes)| Reverse(*bytes));
+        sizes.truncate(count);
+        sizes
+    }
+}
+
+/// The holders as `path=bytes`, largest first, for a message that is read once
+/// and acted on.
+fn name_holders(holders: &[(PathBuf, u64)]) -> String {
+    if holders.is_empty() {
+        return "trees this pass could not measure".to_string();
+    }
+    holders
+        .iter()
+        .take(5)
+        .map(|(path, bytes)| format!("{}={bytes}", path.display()))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// Immediate subdirectories of `directory`, following no symlink, empty when it
+/// cannot be read.
+fn child_dirs(directory: &Path) -> Vec<PathBuf> {
+    let Ok(entries) = fs::read_dir(directory) else {
+        return Vec::new();
+    };
+    entries
+        .flatten()
+        .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
+        .map(|entry| entry.path())
+        .collect()
+}
+
+/// Apparent bytes of the files under `path`, following no symlink.
+///
+/// What it cannot read it skips: this runs to name a tree while jobs are being
+/// refused, and one unreadable directory is not a reason to answer nothing.
+fn tree_bytes(path: &Path) -> u64 {
+    let mut pending = vec![path.to_path_buf()];
+    let mut total: u64 = 0;
+    while let Some(directory) = pending.pop() {
+        let Ok(entries) = fs::read_dir(&directory) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let Ok(kind) = entry.file_type() else {
+                continue;
+            };
+            if kind.is_dir() {
+                pending.push(entry.path());
+            } else if kind.is_file() {
+                total =
+                    total.saturating_add(entry.metadata().map(|it| it.len()).unwrap_or_default());
+            }
+        }
+    }
+    total
 }
 
 fn is_removable_under(root: &Path, target: &Path, removable_roots: &[&str]) -> bool {
@@ -869,10 +1132,28 @@ fn validate_root(root: &Path) -> Result<()> {
 
 fn older_than(metadata: &fs::Metadata, age: Duration) -> Result<bool> {
     let modified = metadata.modified().context("reading modification time")?;
-    Ok(SystemTime::now()
+    Ok(older_than_time(modified, age))
+}
+
+fn older_than_time(modified: SystemTime, age: Duration) -> bool {
+    SystemTime::now()
         .duration_since(modified)
         .unwrap_or_default()
-        > age)
+        > age
+}
+
+/// When the parts of a VM bundle were last written, newest first.
+///
+/// The bundle's own directory only changes when `tart` adds or removes a part,
+/// which happens when it clones and never again, so its timestamp reads as old
+/// throughout a run that writes gigabytes to the disk image inside it. The
+/// newest part is what says when the guest last did anything. A directory with
+/// no parts is not a bundle, and answers `None` rather than "infinitely old".
+fn newest_part_mtime(bundle: &Path) -> Option<SystemTime> {
+    fs::read_dir(bundle)
+        .ok()?
+        .filter_map(|entry| entry.ok()?.metadata().ok()?.modified().ok())
+        .max()
 }
 
 fn writable_probe(directory: &Path) -> Result<()> {
@@ -1157,6 +1438,75 @@ mod tests {
         assert!(storage.remove_path(&cache).is_err());
     }
 
+    /// One entry in a scratch namespace, aged as a job that died before its
+    /// temporaries dropped leaves it.
+    fn scratch_entry(root: &Path, namespace: &str, age: Duration) -> PathBuf {
+        let entry = root.join("scratch").join(namespace).join(".tmpJ8kQ2v");
+        fs::create_dir_all(entry.join("fixture")).unwrap();
+        fs::File::open(&entry)
+            .unwrap()
+            .set_times(FileTimes::new().set_modified(SystemTime::now() - age))
+            .unwrap();
+        entry
+    }
+
+    /// What the CI host held on 2026-08-22: sixty-eight thousand directories
+    /// and 3.5 gibibytes under the lanes' `TMPDIR`, the oldest four days old,
+    /// on the same container every pressure threshold is read from. Every
+    /// namespace is checked, because a lane runs under whichever one it is
+    /// given and a namespace left out of the sweep leaks exactly as this one
+    /// did. Driven through `cleanup`, because a step nothing calls frees
+    /// nothing.
+    #[test]
+    fn scratch_no_job_is_using_is_pruned() {
+        let directory = tempfile::tempdir().unwrap();
+        let stale = CacheTrust::ALL
+            .map(|trust| scratch_entry(directory.path(), trust.as_str(), 4 * HostStorage::DAY));
+        let cfg = config(directory.path());
+        let process = Process::new(directory.path(), BTreeMap::new());
+        let mut storage = HostStorage::for_test(&cfg, &process).unwrap();
+        storage.set_pressure_sequence([Pressure::Normal, Pressure::Normal, Pressure::Normal]);
+
+        storage.cleanup().unwrap();
+
+        for entry in &stale {
+            assert!(!entry.exists(), "{} outlived the sweep", entry.display());
+        }
+    }
+
+    /// A running job owns its scratch and is writing into it, so the sweep must
+    /// not reach anything a lane could still be using. The day it waits is more
+    /// than ten times the longest lane.
+    #[test]
+    fn scratch_a_running_job_owns_is_left_alone() {
+        let directory = tempfile::tempdir().unwrap();
+        let live = scratch_entry(directory.path(), "trusted", Duration::from_secs(60));
+        let cfg = config(directory.path());
+        let process = Process::new(directory.path(), BTreeMap::new());
+        let mut storage = HostStorage::for_test(&cfg, &process).unwrap();
+        storage.set_pressure_sequence([Pressure::Normal, Pressure::Normal, Pressure::Normal]);
+
+        storage.cleanup().unwrap();
+
+        assert!(live.is_dir());
+    }
+
+    /// The namespace directories are what `CiEnvironment::prepare` hands out as
+    /// `TMPDIR`, and the root above them is shared by every job on the machine.
+    /// Only their contents are ever a candidate.
+    #[test]
+    fn a_scratch_namespace_is_never_removable() {
+        let directory = tempfile::tempdir().unwrap();
+        let cfg = config(directory.path());
+        let process = Process::new(directory.path(), BTreeMap::new());
+        let storage = HostStorage::for_test(&cfg, &process).unwrap();
+        let root = directory.path().join("scratch");
+        fs::create_dir_all(root.join("trusted")).unwrap();
+
+        assert!(storage.remove_path(&root.join("trusted")).is_err());
+        assert!(storage.remove_path(&root).is_err());
+    }
+
     #[test]
     fn persistent_targets_are_discovered_under_the_checkout_root() {
         let directory = tempfile::tempdir().unwrap();
@@ -1286,6 +1636,42 @@ mod tests {
         assert!(storage.cleanup().is_err());
     }
 
+    /// A pass that cannot reach the threshold names the tree holding the space.
+    ///
+    /// Reporting only that every owned step reached its floor is what let this
+    /// recur: it rules out the caches and names nothing, so the trees no step
+    /// owns are never the thing anyone looks at next.
+    #[test]
+    fn a_pass_that_cannot_reach_the_threshold_names_what_holds_the_space() {
+        let directory = tempfile::tempdir().unwrap();
+        let heavy = directory.path().join("vm/tart/vms");
+        fs::create_dir_all(&heavy).unwrap();
+        fs::write(heavy.join("disk.img"), vec![0_u8; 400_000]).unwrap();
+        let light = directory.path().join("logs/bridge");
+        fs::create_dir_all(&light).unwrap();
+        fs::write(light.join("bridge.log"), b"quiet").unwrap();
+        let mut cfg = config(directory.path());
+        cfg.host.brew_root = directory.path().join("brew");
+        let process = Process::new(directory.path(), BTreeMap::new());
+        let mut storage = HostStorage::for_test(&cfg, &process).unwrap();
+        storage.set_pressure_sequence([
+            Pressure::Aggressive,
+            Pressure::Aggressive,
+            Pressure::Aggressive,
+        ]);
+
+        let error = storage.cleanup().unwrap_err().to_string();
+
+        assert!(
+            error.contains("vm/tart=400000"),
+            "the failure must name the tree holding the space and its size: {error}"
+        );
+        assert!(
+            !error.contains("not build caches"),
+            "the old message ruled the caches out and named nothing: {error}"
+        );
+    }
+
     #[test]
     fn review_compiler_cache_is_pruned_when_pressure_stays_aggressive() {
         let directory = tempfile::tempdir().unwrap();
@@ -1304,5 +1690,144 @@ mod tests {
         storage.cleanup().unwrap();
 
         assert!(!review.exists());
+    }
+
+    /// A `tart` that answers a listing and records what else it was asked for.
+    #[cfg(unix)]
+    fn fake_tart(cfg: &mut CiConfig, root: &Path, running: bool) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+
+        cfg.host.brew_root = root.join("brew");
+        let bin = cfg.host.brew_root.join("bin");
+        fs::create_dir_all(&bin).unwrap();
+        let asked = root.join("asked");
+        let tart = bin.join("tart");
+        fs::write(
+            &tart,
+            format!(
+                "#!/bin/sh\nif [ \"$1\" = list ]; then printf '%s' \
+                 '[{{\"Name\":\"kithara-ci-job\",\"Running\":{running},\"State\":\"stopped\"}},\
+                 {{\"Name\":\"kithara-macos-base\",\"Running\":false,\"State\":\"stopped\"}}]'; \
+                 exit 0; fi\nprintf '%s' \"$*\" > {}\n",
+                asked.display()
+            ),
+        )
+        .unwrap();
+        fs::set_permissions(&tart, fs::Permissions::from_mode(0o755)).unwrap();
+        asked
+    }
+
+    /// Lay out `<TART_HOME>/vms` with a base bundle and, optionally, a clone
+    /// whose parts were last written `since` ago.
+    #[cfg(unix)]
+    fn tart_vms(cfg: &mut CiConfig, root: &Path, clone_age: Option<Duration>) {
+        let vms = root.join("vm/tart/vms");
+        cfg.host.macos_vm_bundle = vms.join("kithara-macos-base");
+        fs::create_dir_all(&cfg.host.macos_vm_bundle).unwrap();
+        fs::write(cfg.host.macos_vm_bundle.join("disk.img"), b"base").unwrap();
+        let Some(age) = clone_age else {
+            return;
+        };
+        let clone = vms.join("kithara-ci-job");
+        fs::create_dir_all(&clone).unwrap();
+        let part = clone.join("disk.img");
+        fs::write(&part, b"clone").unwrap();
+        fs::File::options()
+            .write(true)
+            .open(&part)
+            .unwrap()
+            .set_times(FileTimes::new().set_modified(SystemTime::now() - age))
+            .unwrap();
+    }
+
+    /// The clone the CI host held on 2026-08-22: left behind on 12 August by a
+    /// runner that has not been loaded since, on a volume reporting `Normal`
+    /// and freeing nothing every five minutes. What it returns is the
+    /// divergence the dead runner wrote, not the size a directory walk reads
+    /// off a copy-on-write clone. Driven through `cleanup` rather than the
+    /// step alone, because a step nothing calls frees nothing.
+    #[cfg(unix)]
+    #[test]
+    fn an_abandoned_job_vm_is_deleted() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut cfg = config(directory.path());
+        let asked = fake_tart(&mut cfg, directory.path(), false);
+        tart_vms(&mut cfg, directory.path(), Some(10 * HostStorage::DAY));
+        let process = Process::new(directory.path(), BTreeMap::new());
+        let mut storage = HostStorage::for_test(&cfg, &process).unwrap();
+        storage.set_pressure_sequence([Pressure::Normal, Pressure::Normal, Pressure::Normal]);
+
+        storage.cleanup().unwrap();
+
+        assert_eq!(
+            fs::read_to_string(&asked).unwrap_or_default(),
+            "delete kithara-ci-job",
+            "an abandoned clone must be handed back to tart"
+        );
+    }
+
+    /// The base bundle is the one thing here that cannot be remade without a
+    /// person and an IPSW, so it is named out of the sweep rather than aged out
+    /// of it: with no clone beside it, cleanup must ask tart for nothing.
+    #[cfg(unix)]
+    #[test]
+    fn the_base_bundle_is_never_a_delete_candidate() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut cfg = config(directory.path());
+        let asked = fake_tart(&mut cfg, directory.path(), false);
+        tart_vms(&mut cfg, directory.path(), None);
+        let process = Process::new(directory.path(), BTreeMap::new());
+        let storage = HostStorage::for_test(&cfg, &process).unwrap();
+
+        storage.prune_abandoned_job_vms(HostStorage::DAY);
+
+        assert!(
+            !asked.exists(),
+            "the base bundle must never be offered for deletion"
+        );
+        assert!(cfg.host.macos_vm_bundle.is_dir());
+    }
+
+    /// A guest serves every job it is offered and writes nothing to its bundle
+    /// while it waits, so an idle runner looks exactly as stale as a dead one.
+    /// Liveness is what separates them.
+    #[cfg(unix)]
+    #[test]
+    fn a_job_vm_a_runner_serves_from_survives() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut cfg = config(directory.path());
+        let asked = fake_tart(&mut cfg, directory.path(), true);
+        tart_vms(&mut cfg, directory.path(), Some(10 * HostStorage::DAY));
+        let process = Process::new(directory.path(), BTreeMap::new());
+        let storage = HostStorage::for_test(&cfg, &process).unwrap();
+
+        storage.prune_abandoned_job_vms(HostStorage::DAY);
+
+        assert!(
+            !asked.exists(),
+            "a running guest must not be taken from the runner serving jobs on it"
+        );
+    }
+
+    /// The runner loop leaves the clone stopped from `tart clone` until the
+    /// guest answers, which is up to two hundred seconds — longer than the five
+    /// minutes this runs on. Deleting it there fails the boot and takes the
+    /// runner down with it.
+    #[cfg(unix)]
+    #[test]
+    fn a_freshly_cloned_job_vm_survives() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut cfg = config(directory.path());
+        let asked = fake_tart(&mut cfg, directory.path(), false);
+        tart_vms(&mut cfg, directory.path(), Some(Duration::ZERO));
+        let process = Process::new(directory.path(), BTreeMap::new());
+        let storage = HostStorage::for_test(&cfg, &process).unwrap();
+
+        storage.prune_abandoned_job_vms(HostStorage::DAY);
+
+        assert!(
+            !asked.exists(),
+            "a clone still booting must survive the interval it boots across"
+        );
     }
 }

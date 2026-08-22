@@ -273,7 +273,14 @@ impl<'a> ServiceInstaller<'a> {
             "<key>StartInterval</key><integer>300</integer>",
         );
         self.write_agent("cleanup", &cleanup)?;
-        self.write_agent("health", &health)
+        self.write_agent("health", &health)?;
+        // Writing the plist is half the job: launchd keeps the definition it
+        // loaded until something replaces it, and this runs as root, outside
+        // the GUI domain the agents live in. The cleanup agent on this host
+        // ran once an hour for days from an older definition while the file
+        // beside it asked for every five minutes.
+        info!("maintenance agents staged; load them with `ci host activate` as the CI user");
+        Ok(())
     }
 
     /// The daemon runs the copy under `toolchains/shared-bin`, the one the CI

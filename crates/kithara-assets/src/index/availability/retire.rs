@@ -20,18 +20,23 @@ use super::core::{AssetTree, Availability};
 /// here, and the write side — the index's download and deletion paths, which
 /// already publish the generations — drains the bin and pays the frees.
 /// Overflow leaks the reference instead of freeing on the reader, mirroring
-/// the decode retire queue; it only happens when writers are idle, which is
-/// exactly when generations are not being replaced and the leak pins memory
-/// that is live anyway.
+/// the decode retire queue. That leak is unrecoverable - `mem::forget` inflates
+/// the strong count for good - and it is not rare: the park rate follows
+/// *reads* (two per read, at audio-tick cadence) while the drain rate follows
+/// *writes*, and nothing bounds that ratio. Playback served from cache issues
+/// thousands of reads between two downloads and overflows on every one of them
+/// past the first 128 (measured 2026-08-20: 844 overflow warnings in two
+/// minutes of HLS playback). Bounding it needs the reader to stop taking
+/// ownership per read - see `a_read_burst_never_leaks_a_generation`.
 pub(super) struct Retired {
     trees: ArrayQueue<Arc<AssetTree>>,
     availabilities: ArrayQueue<Arc<Availability>>,
     overflowed: AtomicBool,
 }
 
-/// Capacity of each retire queue. Reads park at produce-tick cadence and
-/// write-side drains run at download cadence; 256 spans that gap with room,
-/// and overflow degrades to a leak, never to a free on the reader.
+/// Capacity of each retire queue. It buys time, not a bound: no capacity can
+/// span an unbounded read:write ratio, so raising this number only moves the
+/// overflow threshold.
 pub(super) const RETIRE_CAPACITY: usize = 256;
 
 impl Retired {
@@ -68,5 +73,11 @@ impl Retired {
     #[cfg(test)]
     pub(super) fn is_empty(&self) -> bool {
         self.trees.is_empty() && self.availabilities.is_empty()
+    }
+
+    /// Whether a park has leaked a generation since the last drain.
+    #[cfg(test)]
+    pub(super) fn overflowed(&self) -> bool {
+        self.overflowed.load(Ordering::Acquire)
     }
 }

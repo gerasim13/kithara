@@ -75,6 +75,10 @@ impl Default for ClockState {
 }
 
 impl ClockState {
+    pub(super) const fn set_open(&mut self, open: bool) {
+        self.open = open;
+    }
+
     pub(super) fn activate(&mut self, path: &str) -> bool {
         if path.contains("key-lock/") {
             match path.rsplit('/').next() {

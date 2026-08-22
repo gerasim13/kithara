@@ -191,7 +191,7 @@ Android, and web checks.
 
 ## Repository bridge
 
-Copy `ci/bridge/config.example.toml` to
+Copy `.config/bridge/config.example.toml` to
 `/Volumes/KitharaCI/services/bridge/config.toml`. The config and the two
 tokens must belong to UID 504 (`kithara-sync`) and have mode `0600`. The GitHub
 token needs `Contents: write` to publish `main`, `Pull requests: read` to
@@ -209,6 +209,33 @@ Activate the staged launch daemon only after validation:
 sudo -E /Volumes/KitharaCI/services/bin/kithara-ci ci host activate-bridge
 ```
 
+The daemon keeps running the executable that was installed, not the one on
+`main`, so a fix to the bridge itself changes nothing until it is reinstalled.
+From a checkout of a reviewed GitLab commit, with `KITHARA_CI_HOST_CONFIG`
+exported as above:
+
+```text
+cargo build --locked --release -p xtask
+sudo -E target/release/xtask ci host install-services
+sudo -E /Volumes/KitharaCI/services/bin/kithara-ci ci host activate-bridge
+```
+
+Then, in the logged-in `kithara-ci` GUI session:
+
+```text
+/Volumes/KitharaCI/services/bin/kithara-ci ci host activate
+```
+
+`install-services` replaces the installed binary and the staged service
+definitions without revalidating Xcode; `activate-bridge` boots the daemon out
+and kickstarts it, so the next tick runs the new binary. `activate` does the
+same for the maintenance agents, and it is not optional: launchd keeps the
+definition it loaded, so the agents otherwise keep running the old one. This
+host spent days cleaning once an hour from a `StartCalendarInterval` left by an
+earlier install, while the plist beside it asked for every five minutes — a
+twelve-fold difference in cadence that comparing the files could not show.
+`launchctl print gui/<uid>/com.zvuk.kithara-ci.cleanup` reports what is loaded.
+
 The old GitLab pull mirror is disabled because it force-updated `main` and
 could discard work already merged here. The bridge now moves `main` only by
 fast-forward. When GitLab is ahead, it fast-forwards GitHub to the same commit;
@@ -223,6 +250,13 @@ is written to the exact head commit under the status context
 `kithara/gitlab-verification`. GitHub branch protection must require that
 context on `main` and prevent direct pushes or bypasses; otherwise the verifier
 is advisory and an unverified commit can still reach `main`.
+
+A quarantine ref is addressed by the exact head and base pair it was judged
+for. Once `main` moves, the next attempt reserves against the new base and
+publishes a new ref, so nothing names the old branch again and nothing reads
+its pipeline. Those branches are removed on the following tick; the pipelines,
+jobs and artifacts they produced stay in GitLab's interface, which keys them by
+commit rather than by branch.
 
 A pull request that changes a CI control path is rejected before a pipeline is
 created. Port that change through a GitLab merge request instead, so the code
@@ -308,6 +342,49 @@ rather than against a list of names:
   named steps alone left six gigabytes of `cargo-reapi` stores behind after
   that tool came off the CI path: a namespace that stops being written to goes
   invisible rather than stale.
+- The build-cache ceiling covers the checkout a job is working in. Skipping a
+  claimed checkout wholesale kept its caches out of the budget's reach before it
+  could weigh them, so on a host serving one project the ceiling had nothing at
+  all to act on and reclaimed nothing, however long jobs had been refused. What
+  protects a live cache now is the claim the lane takes on the directory it
+  builds into, and those bytes are charged against the ceiling rather than
+  excused from it — which is what leaves the idle caches beside them payable.
+- A macOS job VM outlives the runner that cloned it. The lane throws the clone
+  away and remakes it from the base bundle at both ends of every loop, so a
+  runner that dies in between leaves one behind, and every step around it looks
+  elsewhere: the bundle directory cannot be pruned by age without taking the
+  base bundle, which only `tart create --from-ipsw` and a person can rebuild.
+  The clone is now named out of the sweep instead — deleted through `tart`, and
+  only once tart reports it stopped *and* its parts have been untouched for a
+  day. Both are needed: the loop leaves it stopped for as long as a boot takes,
+  which outlasts the five-minute cleanup interval, and a booted guest waiting
+  for work writes nothing to its bundle for hours, so neither signal alone
+  separates an idle runner from a dead one. Seen 2026-08-22: a clone stopped
+  since 12 August, on a volume reporting `Normal` and freeing nothing. Deleting
+  it returned almost none of the 38 gibibytes a directory walk attributed to it,
+  because `tart clone` copies on write and that clone had never been booted, so
+  its blocks were the base's blocks counted a second time. This reclaims the
+  divergence a dead runner wrote, which is nothing for an unused clone and
+  substantial for one that served jobs — and no apparent size on this volume
+  should be read as space that deleting it will return.
+- The lanes' scratch root is swept too, and it is the one tree here that sits
+  outside both CI roots. `CiEnvironment` points every lane's `TMPDIR` at a
+  namespace under `/tmp/kithara-ci`, which is deliberate — outside the checkout,
+  short enough for the Unix sockets the suite binds, and on local storage the
+  macOS guest can bind at all — and it also put the directory beyond every step
+  in the ladder. A job killed before its temporaries drop leaves them there, and
+  cancellation is routine on fork branches, so the leak is steady: measured
+  2026-08-22, sixty-eight thousand directories holding 3.5 gibibytes across the
+  three namespaces, the oldest four days old, growing about 660 mebibytes a day
+  on the same APFS container every pressure threshold is read from. Entries are
+  pruned on age alone, unlike the workspaces beside them, because a namespace
+  entry belongs to one job and is never handed to another; a day is more than ten
+  times the longest lane, so a running job's scratch is never a candidate, and
+  the namespace directories themselves are never offered. Age alone is also what
+  keeps the pass affordable: the workspace sweep asks `lsof` whether anything is
+  using a candidate, and one walk per entry over a backlog this size would run
+  for hours inside a pass that repeats every five minutes, with every later step
+  in the ladder waiting behind it.
 
 Health and cleanup run through launchd. They can also be checked directly:
 

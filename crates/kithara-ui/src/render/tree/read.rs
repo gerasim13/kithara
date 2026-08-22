@@ -2,10 +2,27 @@ use num_traits::cast::AsPrimitive;
 
 use crate::{
     compile::CompiledUi,
-    expand::{Binding, BindingKind},
+    expand::{Binding, BindingKind, BlockSpec},
     render::{ReadValue, Reads},
+    size::Snapshot,
     widgets::wave::zoom_math::DEFAULT_ZOOM,
 };
+
+#[derive(Clone, Copy)]
+pub(super) struct Answers<'a> {
+    pub(super) reads: &'a dyn Reads,
+    pub(super) ui: &'a CompiledUi,
+}
+
+impl Snapshot for Answers<'_> {
+    fn hidden(&self, block: &BlockSpec) -> bool {
+        read_flag(Some(&block.hidden), self.reads, self.ui)
+    }
+
+    fn measure(&self, measure: &Binding) -> Option<f32> {
+        read_measure(measure, self.reads, self.ui)
+    }
+}
 
 pub(super) fn resolve<'a>(
     reads: &'a dyn Reads,
@@ -31,6 +48,14 @@ pub(super) fn read_flag(binding: Option<&Binding>, reads: &dyn Reads, ui: &Compi
         binding.and_then(|binding| resolve(reads, binding, ui)),
         Some(ReadValue::Bool(true))
     )
+}
+
+fn read_measure(binding: &Binding, reads: &dyn Reads, ui: &CompiledUi) -> Option<f32> {
+    let Some(ReadValue::Scalar(value)) = resolve(reads, binding, ui) else {
+        return None;
+    };
+    let value: f32 = value.as_();
+    value.is_finite().then_some(value)
 }
 
 pub(super) fn wave_zoom(zoom: Option<&Binding>, reads: &dyn Reads, ui: &CompiledUi) -> f32 {

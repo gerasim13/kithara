@@ -58,11 +58,11 @@ jobs:
 
   rtsan:
     if: vars.KITHARA_RUNNER_LABELS != '' && github.event.schedule == '0 5 * * *'
-    # The soak carries no queue of its own, because CI calls it too. Started
-    # here it shares a machine with the stress campaign, so on a fork this call
-    # waits for the campaign; elsewhere it names its own run and never waits.
+    # Started here the soak is heavy work — a full night of it — so this call
+    # takes its turn with the other heavy lanes. Its own group stays per-ref,
+    # because CI calls it too and that call belongs to the push.
     concurrency:
-      group: ${{ github.event.repository.fork && format('fork-linux-{0}', github.repository) || format('scheduled-rtsan-{0}', github.run_id) }}
+      group: heavy-linux-${{ github.repository }}
       cancel-in-progress: false
       queue: max
     uses: ./.github/workflows/rtsan.yml

@@ -3,6 +3,7 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
+use kithara_mpa::MpaReader;
 use kithara_platform::sync::Arc;
 use kithara_stream::ContainerFormat;
 use symphonia::{
@@ -11,13 +12,10 @@ use symphonia::{
         io::{MediaSourceStream, MediaSourceStreamOptions},
         meta::MetadataOptions,
     },
-    default::{
-        formats::{AdtsReader, FlacReader, IsoMp4Reader, MpaReader, OggReader, WavReader},
-        get_probe,
-    },
+    default::formats::{AdtsReader, FlacReader, IsoMp4Reader, OggReader, WavReader},
 };
 
-use super::{adapter::ReadSeekAdapter, config::SymphoniaConfig};
+use super::{adapter::ReadSeekAdapter, config::SymphoniaConfig, registry::get_probe};
 use crate::error::{DecodeError, DecodeResult};
 
 pub(crate) struct ReaderBootstrap {

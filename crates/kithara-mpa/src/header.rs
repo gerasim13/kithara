@@ -13,10 +13,10 @@ use symphonia_core::{
 use crate::common::{ChannelMode, FrameHeader, MpegLayer, MpegVersion};
 
 /// The length in bytes of an MPEG frame header word.
-pub const MPEG_HEADER_LEN: usize = 4;
+pub(crate) const MPEG_HEADER_LEN: usize = 4;
 
 /// The maximum length in bytes of an MPEG audio frame including the header.
-pub const MAX_MPEG_FRAME_SIZE: usize = 2881;
+pub(crate) const MAX_MPEG_FRAME_SIZE: usize = 2881;
 
 struct BitRates;
 
@@ -54,7 +54,7 @@ impl BitRates {
 
 /// Quickly check if a header sync word may be valid.
 #[inline]
-pub fn check_header(header: u32) -> bool {
+pub(crate) fn check_header(header: u32) -> bool {
     // Version (0x1 is not allowed).
     if (header >> 19) & 0x3 == 0x1 {
         return false;
@@ -76,12 +76,12 @@ pub fn check_header(header: u32) -> bool {
 
 /// Returns true if the provided frame header word is synced.
 #[inline(always)]
-pub fn is_frame_header_word_synced(sync: u32) -> bool {
+pub(crate) fn is_frame_header_word_synced(sync: u32) -> bool {
     (sync & 0xffe0_0000) == 0xffe0_0000
 }
 
 /// Synchronize the provided reader to the end of the frame header and return it as a `u32`.
-pub fn sync_frame<B: ReadBytes>(reader: &mut B) -> Result<u32> {
+pub(crate) fn sync_frame<B: ReadBytes>(reader: &mut B) -> Result<u32> {
     let mut sync = 0u32;
 
     loop {
@@ -104,7 +104,7 @@ pub fn sync_frame<B: ReadBytes>(reader: &mut B) -> Result<u32> {
     Ok(sync)
 }
 
-pub fn parse_frame_header(header: u32) -> Result<FrameHeader> {
+pub(crate) fn parse_frame_header(header: u32) -> Result<FrameHeader> {
     // The MPEG audio header is structured as follows:
     //
     // 0b1111_1111 0b111v_vlly 0brrrr_hhpx 0bmmmm_coee
@@ -162,11 +162,9 @@ pub fn parse_frame_header(header: u32) -> Result<FrameHeader> {
         (0b10, _) => ChannelMode::DualMono,
         // Mono, for layers 1, 2, and 3.
         (0b11, _) => ChannelMode::Mono,
-        // Joint stereo mode for layer 3 supports a combination of Mid-Side and Intensity Stereo
-        // depending on the mode extension bits.
-        (0b01, MpegLayer::Layer3) => ChannelMode::JointStereo,
-        // Joint stereo mode for layers 1 and 2 only supports Intensity Stereo. The mode extension
-        // bits indicate for which sub-bands intensity stereo coding is applied.
+        // Joint stereo, for layers 1, 2, and 3. Layer 3 may combine Mid-Side and Intensity
+        // Stereo; layers 1 and 2 only support Intensity Stereo. Either way the mode extension
+        // bits describe the encoding, and this reader does not decode, so both parse the same.
         (0b01, _) => ChannelMode::JointStereo,
         _ => unreachable!(),
     };
@@ -222,6 +220,6 @@ pub fn parse_frame_header(header: u32) -> Result<FrameHeader> {
 /// Read an MPEG audio frame header word from the current location in the stream without any frame
 /// synchronization.
 #[inline]
-pub fn read_frame_header_word_no_sync<B: ReadBytes>(reader: &mut B) -> Result<u32> {
+pub(crate) fn read_frame_header_word_no_sync<B: ReadBytes>(reader: &mut B) -> Result<u32> {
     Ok(reader.read_be_u32()?)
 }

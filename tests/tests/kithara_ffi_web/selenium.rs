@@ -1531,6 +1531,13 @@ async fn build_webdriver(
             prefs
                 .set("dom.workers.requestAnimationFrame", true)
                 .map_err(|err| format!("failed to set firefox worker pref: {err}"))?;
+            // Everything the page loads is on 127.0.0.1. A profile that
+            // inherits a host proxy sends the browser's own startup traffic
+            // through it, and a proxy that wants credentials opens an auth
+            // prompt the headless session cannot answer.
+            prefs
+                .set("network.proxy.type", 0)
+                .map_err(|err| format!("failed to set firefox proxy pref: {err}"))?;
             caps.set_preferences(prefs)
                 .map_err(|err| format!("failed to set firefox prefs: {err}"))?;
             caps.enable_bidi()

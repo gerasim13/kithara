@@ -48,16 +48,23 @@ fn record_panic(info: &PanicHookInfo<'_>) {
     if suppressed {
         return;
     }
-    let location = info.location().map_or_else(
-        || "<unknown>".to_owned(),
-        |location| format!("{}:{}", location.file(), location.line()),
-    );
-    let message = info
+    // Every panic this workspace raises carries a message. A payload that is
+    // neither form is a dependency unwinding for control flow rather than
+    // failing - `loom` cancels each suspended generator that way at the end of
+    // every execution, and building a dump for it reaches state that execution
+    // owned.
+    let Some(message) = info
         .payload()
         .downcast_ref::<&str>()
         .map(|message| (*message).to_owned())
         .or_else(|| info.payload().downcast_ref::<String>().cloned())
-        .unwrap_or_else(|| "<non-string panic payload>".to_owned());
+    else {
+        return;
+    };
+    let location = info.location().map_or_else(
+        || "<unknown>".to_owned(),
+        |location| format!("{}:{}", location.file(), location.line()),
+    );
     let diagnostic = format!("panic at {location}: {message}");
     write_dump("panic", &NoContext, None, &diagnostic);
 }

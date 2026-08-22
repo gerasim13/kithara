@@ -58,6 +58,10 @@ pub(super) struct MatchedMixAudio {
     pub(super) report: Option<MatchedMixReport>,
 }
 
+/// `no_block`: Cochlea analysis of the whole capture is offline measurement,
+/// not a blocking wait; it is seconds of arithmetic per case and the test has
+/// nothing to overlap it with.
+#[kithara::allow_block]
 pub(super) fn assess_audio(
     label: &str,
     sample_rate: u32,
@@ -227,6 +231,9 @@ pub(super) fn assess_matched_mix(
     }
 }
 
+/// `no_block`: one Cochlea pass per stem, mix and reference. Same reason as
+/// `assess_audio`, and this one runs once per deck.
+#[kithara::allow_block]
 pub(super) fn measure_audio_level(
     label: &str,
     role: AudioRole,
@@ -447,7 +454,31 @@ fn rms(samples: &[f32]) -> f64 {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use kithara::platform::no_block::force_panic_mode;
+
+    use super::{super::SOURCE_RATE, *};
+
+    /// The Cochlea oracles are seconds of arithmetic. Unsanctioned they are
+    /// measured against the poll budget of whatever async test calls them,
+    /// which is what failed the matrix on a loaded CI host.
+    #[kithara::test(flash(false))]
+    async fn cochlea_oracles_are_sanctioned_offline_work() {
+        let _mode = force_panic_mode();
+        let frames = usize::try_from(SOURCE_RATE).expect("source rate fits usize") / 2;
+        let capture = (0..frames * usize::from(CHANNELS))
+            .map(|index| (index as f32 * 0.017).sin() * 0.4)
+            .collect::<Vec<_>>();
+        watched_oracles(&capture).await;
+    }
+
+    /// A millisecond is far below any Cochlea pass, so the strict tier answers
+    /// an unsanctioned call whatever the host's CPU-to-wall ratio says.
+    #[kithara::no_block(budget_ms = 1)]
+    async fn watched_oracles(capture: &[f32]) {
+        let mut failures = Vec::new();
+        let _ = assess_audio("no-block-guard", SOURCE_RATE, capture, &mut failures);
+        let _ = measure_audio_level("no-block-guard", AudioRole::FinalMix, SOURCE_RATE, capture);
+    }
 
     #[test]
     fn matched_mix_rejects_global_attenuation_and_each_missing_deck() {

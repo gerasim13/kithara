@@ -506,6 +506,23 @@ mod panic_dump_tests {
             "an expected panic must not be recorded as evidence"
         );
     }
+
+    /// A payload that is neither `&str` nor `String` is a dependency unwinding
+    /// for control flow rather than a failing test: `loom` cancels every
+    /// suspended generator that way at the end of each execution.
+    #[kithara::test]
+    fn control_flow_unwinds_are_not_recorded() {
+        install_panic_dump();
+
+        let line = line!() + 1;
+        let result = catch_unwind(AssertUnwindSafe(|| std::panic::panic_any(0xdead_beef_u64)));
+        assert!(result.is_err());
+
+        assert!(
+            panic_dumps_containing(&format!("tests.rs:{line}")).is_empty(),
+            "a control-flow unwind must not be recorded as evidence"
+        );
+    }
 }
 
 struct Consts;

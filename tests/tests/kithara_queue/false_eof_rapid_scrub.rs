@@ -20,16 +20,21 @@ use kithara_app::{baked, config::AppConfig};
 use kithara_integration_tests::{TestTempDir, kithara, offline::OfflineSession};
 use kithara_test_utils::probe::capture::{Recorder, install as install_recorder};
 
-/// Captured from `app.log @ 06:39:13`. `cdn-hls-slicer.zvuk.com` →
-/// `zvuk-prod` provider in baked `app.yaml`.
-const TARGET_TRACK: &str = "https://cdn-hls-slicer.zvuk.com/drm/track/171515249_1/master.m3u8";
+/// `cdn-hls-slicer.zvuk.com` → `zvuk-prod` provider in baked `app.yaml`.
+///
+/// The track the bug was captured on (`171515249_1`, `app.log @ 06:39:13`)
+/// answers 502 — the slicer no longer serves it, so the scenario ran against
+/// the catalogue rather than the player. This is the longest track the
+/// playlist still serves, which is what the scrub needs: somewhere to land
+/// far outside anything the warmup could have buffered.
+const TARGET_TRACK: &str = "https://cdn-hls-slicer.zvuk.com/drm/track/79829257_2/master.m3u8";
 
-/// Absolute scrub target captured from `app.log` (the slider was at
-/// ~45% of the 276.85s track). Fixed in seconds rather than as a
-/// ratio because `Queue::duration_seconds()` is only populated after
+/// Absolute scrub target: the same ~45% of the track the captured slider
+/// position was at, over this track's 480.16s. Fixed in seconds rather than
+/// as a ratio because `Queue::duration_seconds()` is only populated after
 /// the player has decoded at least one frame, and we want the scrub
 /// to land outside the buffered range — the bug precondition.
-const SCRUB_TARGET_SECS: f64 = 124.58;
+const SCRUB_TARGET_SECS: f64 = 216.07;
 
 /// Safety budgets. These are NOT timer-driven control flow — every
 /// state transition is probe / event driven. Budgets fail the test

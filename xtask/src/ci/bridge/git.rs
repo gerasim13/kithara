@@ -313,16 +313,51 @@ impl GitRepo {
             .to_owned())
     }
 
-    pub(super) fn push_gitlab(&self, gitlab: &Gitlab, sha: &str, destination: &str) -> Result<()> {
-        let url = format!(
+    fn gitlab_url(&self) -> String {
+        format!(
             "{}/{}.git",
             self.config.gitlab_origin(),
             self.config.gitlab_project_path
-        );
+        )
+    }
+
+    pub(super) fn push_gitlab(&self, gitlab: &Gitlab, sha: &str, destination: &str) -> Result<()> {
         self.run(
-            &["push", &url, &format!("{sha}:refs/heads/{destination}")],
+            &[
+                "push",
+                &self.gitlab_url(),
+                &format!("{sha}:refs/heads/{destination}"),
+            ],
             Some(gitlab.git_header()),
         )?;
+        Ok(())
+    }
+
+    /// The verification branches `GitLab` still carries. Asked of the remote
+    /// rather than of the local mirror, which never fetches them back.
+    pub(super) fn gitlab_quarantine_refs(&self, gitlab: &Gitlab) -> Result<Vec<String>> {
+        let listing = self.run(
+            &[
+                "ls-remote",
+                "--heads",
+                &self.gitlab_url(),
+                "refs/heads/quarantine/*",
+            ],
+            Some(gitlab.git_header()),
+        )?;
+        let listing = String::from_utf8(listing).context("git ls-remote returned invalid UTF-8")?;
+        Ok(quarantine_heads(&listing))
+    }
+
+    pub(super) fn delete_gitlab(&self, gitlab: &Gitlab, refs: &[&str]) -> Result<()> {
+        let url = self.gitlab_url();
+        let deletions: Vec<String> = refs
+            .iter()
+            .map(|reference| format!(":refs/heads/{reference}"))
+            .collect();
+        let mut args = vec!["push", url.as_str()];
+        args.extend(deletions.iter().map(String::as_str));
+        self.run(&args, Some(gitlab.git_header()))?;
         Ok(())
     }
 
@@ -367,6 +402,16 @@ fn checked(output: Output, label: &str) -> Result<Vec<u8>> {
         );
     }
     Ok(output.stdout)
+}
+
+/// Branch names out of an `ls-remote` listing, which answers `<sha>\t<ref>`.
+fn quarantine_heads(listing: &str) -> Vec<String> {
+    listing
+        .lines()
+        .filter_map(|line| line.split_once('\t'))
+        .filter_map(|(_, reference)| reference.trim().strip_prefix("refs/heads/"))
+        .map(str::to_owned)
+        .collect()
 }
 
 fn path_text(path: &Path) -> Result<&str> {
@@ -729,5 +774,25 @@ mod tests {
             repo.weakening_control_paths(&base, &head).unwrap(),
             [".gitlab-ci.yml", "xtask/src/main.rs"]
         );
+    }
+
+    #[test]
+    fn a_remote_listing_is_read_back_as_branch_names() {
+        let listing = "04fcb5a0a1978c3d1f0e2b3a4c5d6e7f80910111\trefs/heads/quarantine/gh/8a4e697a770d-418167884f6c/attempt-1
+418167884f6c2e1d3a4b5c6d7e8f90a1b2c3d4e5\trefs/heads/quarantine/gh/ccde033c8f4c-04fcb5a0a197/attempt-2
+";
+
+        assert_eq!(
+            quarantine_heads(listing),
+            [
+                "quarantine/gh/8a4e697a770d-418167884f6c/attempt-1",
+                "quarantine/gh/ccde033c8f4c-04fcb5a0a197/attempt-2"
+            ]
+        );
+    }
+
+    #[test]
+    fn a_listing_line_that_names_no_branch_is_skipped() {
+        assert_eq!(quarantine_heads("\n"), [] as [String; 0]);
     }
 }

@@ -1,5 +1,5 @@
 use iced::{
-    Alignment, Element, Length, mouse,
+    Alignment, Element, Length, Padding, Size, mouse,
     widget::{Column, Row, Space, Stack, container, mouse_area, scrollable},
 };
 use num_traits::cast::AsPrimitive;
@@ -10,18 +10,19 @@ use super::{
         Rendered, active_tone, apply_size, bordered, content_size, effective_size, filled,
         frame_tone, length_for, padding,
     },
-    read::{read_flag, resolve},
+    read::{Answers, read_flag, resolve},
     size::{node_size, visible_children},
 };
 use crate::{
-    compile::{CompiledNode, CompiledUi},
-    expand::{ExpandedNode, SurfaceSpec},
+    compile::{CompiledNode, CompiledUi, compiled_node_size},
+    expand::{ExpandedNode, MeasureSpec, SurfaceSpec},
     layout::Axis,
     module::{ChromeStyle, TextAlign},
     render::{ControlAction, DragPhase, ReadValue, Reads, Skin, UiEvent},
-    size::{Dim, Hidden, visible},
+    size::{Dim, SizeSpec, branch, visible},
     widgets::{
         DropZone, ModuleChrome, Widget,
+        adaptive::{Measured, Revealed, Shape},
         anchored::{Anchored, Placement},
         wheel::WheelSurface,
     },
@@ -33,48 +34,27 @@ pub(super) fn render_compiled<'a>(
     reads: &dyn Reads,
     skin: &'a Skin,
 ) -> Element<'a, UiEvent> {
-    let hidden: Hidden<'_> = &|block| read_flag(Some(&block.hidden), reads, ui);
     match node {
         CompiledNode::Optional { child, .. } => render_compiled(child, ui, reads, skin),
-        CompiledNode::Split { axis, children, .. } => match axis {
-            Axis::Horizontal => container(
-                Row::with_children(visible_children(children, hidden).map(|(weight, child)| {
-                    container(render_compiled(child, ui, reads, skin))
-                        .width(split_length(
-                            node_size(child, skin.document(), hidden).w,
-                            weight,
-                            skin,
-                        ))
-                        .height(length_for(
-                            node_size(child, skin.document(), hidden).h,
-                            Length::Fill,
-                        ))
-                        .into()
-                }))
-                .width(Length::Fill)
-                .height(Length::Fill),
-            )
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .into(),
-            Axis::Vertical => container(
-                Column::with_children(visible_children(children, hidden).map(|(weight, child)| {
-                    container(render_compiled(child, ui, reads, skin))
-                        .width(Length::Fill)
-                        .height(split_length(
-                            node_size(child, skin.document(), hidden).h,
-                            weight,
-                            skin,
-                        ))
-                        .into()
-                }))
-                .width(Length::Fill)
-                .height(Length::Fill),
-            )
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .into(),
-        },
+        CompiledNode::Adaptive {
+            axis,
+            size,
+            base,
+            steps,
+        } => Measured::new(
+            std::iter::once(base.as_ref())
+                .chain(steps.iter().map(|(_, node)| node))
+                .map(|node| render_compiled(node, ui, reads, skin))
+                .collect(),
+            steps.iter().map(|(from, _)| *from).collect(),
+            *axis,
+            Size::new(
+                length_for(size.w, Length::Fill),
+                length_for(size.h, Length::Fill),
+            ),
+        )
+        .into(),
+        CompiledNode::Split { .. } => render_split(node, ui, reads, skin),
         CompiledNode::Module {
             instance,
             module,
@@ -164,98 +144,28 @@ fn render_node<'a>(
     reads: &dyn Reads,
     skin: &'a Skin,
 ) -> Element<'a, UiEvent> {
-    let size = content_size(node, skin);
-    let hidden: Hidden<'_> = &|block| read_flag(Some(&block.hidden), reads, ui);
+    let snapshot = Answers { reads, ui };
+    let size = content_size(node, skin, &snapshot);
     let rendered = match node {
-        ExpandedNode::Optional { child, .. } => return render_node(child, ui, reads, skin),
-        ExpandedNode::Row {
-            children,
-            gap,
-            pad,
-            pad_x,
-            pad_y,
-            frame,
-            background,
-            background_alpha,
-            active,
-            active_background,
-            frame_color,
-            active_frame_color,
-            surface,
+        ExpandedNode::Adaptive {
+            measure,
+            size: Some(declared),
+            base,
+            steps,
+        } => measured_branches(measure, (base, steps), *declared, (ui, reads, skin)),
+        ExpandedNode::Adaptive {
+            measure,
+            base,
+            steps,
             ..
         } => {
-            let active = read_flag(active.as_ref(), reads, ui);
-            Rendered::leading(wheeled(
-                bordered(
-                    filled(
-                        container(
-                            Row::with_children(
-                                visible(children, hidden)
-                                    .map(|child| render_node(child, ui, reads, skin)),
-                            )
-                            .spacing(gap.unwrap_or(skin.layout.grid_gap))
-                            .align_y(Alignment::Center)
-                            .width(size.0)
-                            .height(size.1),
-                        )
-                        .padding(padding(*pad, *pad_x, *pad_y, skin))
-                        .width(size.0)
-                        .height(size.1),
-                        active_tone(*background, *active_background, active),
-                        *background_alpha,
-                        skin,
-                    ),
-                    *frame,
-                    frame_tone(*frame_color, *active_frame_color, active, skin),
-                    size,
-                    skin,
-                ),
-                surface.as_ref(),
-                size,
-                ui,
-            ))
+            return render_node(branch(measure, base, steps, &snapshot), ui, reads, skin);
         }
-        ExpandedNode::Column {
-            children,
-            gap,
-            align,
-            pad,
-            pad_x,
-            pad_y,
-            frame,
-            frame_color,
-            background,
-            background_alpha,
-            surface,
-            ..
-        } => Rendered::leading(wheeled(
-            bordered(
-                filled(
-                    container(
-                        Column::with_children(
-                            visible(children, hidden)
-                                .map(|child| render_node(child, ui, reads, skin)),
-                        )
-                        .spacing(gap.unwrap_or(skin.layout.grid_gap))
-                        .align_x(column_alignment(*align))
-                        .width(size.0),
-                    )
-                    .padding(padding(*pad, *pad_x, *pad_y, skin))
-                    .width(size.0)
-                    .height(size.1),
-                    *background,
-                    *background_alpha,
-                    skin,
-                ),
-                *frame,
-                frame_tone(*frame_color, None, false, skin),
-                size,
-                skin,
-            ),
-            surface.as_ref(),
-            size,
-            ui,
-        )),
+        ExpandedNode::Optional { child, .. } | ExpandedNode::Reveal { child, .. } => {
+            return render_node(child, ui, reads, skin);
+        }
+        ExpandedNode::Row { .. } => render_row(node, size, ui, reads, skin),
+        ExpandedNode::Column { .. } => render_column(node, size, ui, reads, skin),
         ExpandedNode::Popover {
             path,
             open,
@@ -299,7 +209,7 @@ fn render_node<'a>(
         ExpandedNode::Slot { children, .. } => Rendered::leading(
             container(
                 Column::with_children(
-                    visible(children, hidden).map(|child| render_node(child, ui, reads, skin)),
+                    visible(children, &snapshot).map(|child| render_node(child, ui, reads, skin)),
                 )
                 .spacing(skin.layout.grid_gap)
                 .width(Length::Fill),
@@ -311,7 +221,272 @@ fn render_node<'a>(
             path, spec, read, ..
         } => render_control(*path, spec, read.as_ref(), ui, reads, skin),
     };
-    apply_size(rendered, effective_size(node, skin))
+    apply_size(rendered, effective_size(node, skin, &snapshot))
+}
+
+fn render_row<'a>(
+    node: &ExpandedNode,
+    size: (Length, Length),
+    ui: &'a CompiledUi,
+    reads: &dyn Reads,
+    skin: &'a Skin,
+) -> Rendered<'a> {
+    let ExpandedNode::Row {
+        children,
+        measure,
+        gap,
+        pad,
+        pad_x,
+        pad_y,
+        frame,
+        background,
+        background_alpha,
+        active,
+        active_background,
+        frame_color,
+        active_frame_color,
+        surface,
+        ..
+    } = node
+    else {
+        unreachable!("render_row is called only for a row")
+    };
+    let snapshot = Answers { reads, ui };
+    let active = read_flag(active.as_ref(), reads, ui);
+    let gap = gap.unwrap_or(skin.layout.grid_gap);
+    let inset = padding(*pad, *pad_x, *pad_y, skin);
+    let (content, outer) = measure.map_or_else(
+        || {
+            let flow = Row::with_children(
+                visible(children, &snapshot).map(|child| render_node(child, ui, reads, skin)),
+            )
+            .spacing(gap)
+            .align_y(Alignment::Center)
+            .width(size.0)
+            .height(size.1);
+            (Element::from(flow), inset)
+        },
+        |axis| {
+            let shape = Shape {
+                flow: Axis::Horizontal,
+                measure: axis,
+                size: Size::new(size.0, size.1),
+                padding: inset,
+                gap,
+                align: Alignment::Center,
+            };
+            (revealed(children, shape, (ui, reads, skin)), Padding::ZERO)
+        },
+    );
+    Rendered::leading(wheeled(
+        bordered(
+            filled(
+                container(content)
+                    .padding(outer)
+                    .width(size.0)
+                    .height(size.1),
+                active_tone(*background, *active_background, active),
+                *background_alpha,
+                skin,
+            ),
+            *frame,
+            frame_tone(*frame_color, *active_frame_color, active, skin),
+            size,
+            skin,
+        ),
+        surface.as_ref(),
+        size,
+        ui,
+    ))
+}
+
+fn render_column<'a>(
+    node: &ExpandedNode,
+    size: (Length, Length),
+    ui: &'a CompiledUi,
+    reads: &dyn Reads,
+    skin: &'a Skin,
+) -> Rendered<'a> {
+    let ExpandedNode::Column {
+        children,
+        measure,
+        gap,
+        align,
+        pad,
+        pad_x,
+        pad_y,
+        frame,
+        frame_color,
+        background,
+        background_alpha,
+        surface,
+        ..
+    } = node
+    else {
+        unreachable!("render_column is called only for a column")
+    };
+    let snapshot = Answers { reads, ui };
+    let gap = gap.unwrap_or(skin.layout.grid_gap);
+    let inset = padding(*pad, *pad_x, *pad_y, skin);
+    let (content, outer) = measure.map_or_else(
+        || {
+            let flow = Column::with_children(
+                visible(children, &snapshot).map(|child| render_node(child, ui, reads, skin)),
+            )
+            .spacing(gap)
+            .align_x(column_alignment(*align))
+            .width(size.0);
+            (Element::from(flow), inset)
+        },
+        |axis| {
+            let shape = Shape {
+                flow: Axis::Vertical,
+                measure: axis,
+                size: Size::new(size.0, size.1),
+                padding: inset,
+                gap,
+                align: column_alignment(*align),
+            };
+            (revealed(children, shape, (ui, reads, skin)), Padding::ZERO)
+        },
+    );
+    Rendered::leading(wheeled(
+        bordered(
+            filled(
+                container(content)
+                    .padding(outer)
+                    .width(size.0)
+                    .height(size.1),
+                *background,
+                *background_alpha,
+                skin,
+            ),
+            *frame,
+            frame_tone(*frame_color, None, false, skin),
+            size,
+            skin,
+        ),
+        surface.as_ref(),
+        size,
+        ui,
+    ))
+}
+
+fn render_split<'a>(
+    node: &CompiledNode,
+    ui: &'a CompiledUi,
+    reads: &dyn Reads,
+    skin: &'a Skin,
+) -> Element<'a, UiEvent> {
+    let CompiledNode::Split {
+        axis,
+        measure,
+        children,
+        ..
+    } = node
+    else {
+        unreachable!("render_split is called only for a split")
+    };
+    let snapshot = Answers { reads, ui };
+    let cells: Vec<_> = visible_children(children, &snapshot)
+        .map(|cell| {
+            let size = node_size(&cell.node, skin.document(), &snapshot);
+            let element = container(render_compiled(&cell.node, ui, reads, skin));
+            let element = match axis {
+                Axis::Horizontal => element
+                    .width(split_length(size.w, cell.weight, skin))
+                    .height(length_for(size.h, Length::Fill)),
+                Axis::Vertical => {
+                    element
+                        .width(Length::Fill)
+                        .height(split_length(size.h, cell.weight, skin))
+                }
+            };
+            ((cell.from, cell.until), Element::from(element))
+        })
+        .collect();
+    if let Some(measure) = measure {
+        let declared = compiled_node_size(node);
+        return Revealed::new(
+            cells,
+            Shape {
+                flow: *axis,
+                measure: *measure,
+                size: Size::new(
+                    length_for(declared.w, Length::Fill),
+                    length_for(declared.h, Length::Fill),
+                ),
+                padding: Padding::ZERO,
+                gap: 0.0,
+                align: Alignment::Start,
+            },
+        )
+        .into();
+    }
+    let cells = cells.into_iter().map(|(_, element)| element);
+    let flow = match axis {
+        Axis::Horizontal => Element::from(
+            Row::with_children(cells)
+                .width(Length::Fill)
+                .height(Length::Fill),
+        ),
+        Axis::Vertical => Element::from(
+            Column::with_children(cells)
+                .width(Length::Fill)
+                .height(Length::Fill),
+        ),
+    };
+    container(flow)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .into()
+}
+
+fn revealed<'a>(
+    children: &[ExpandedNode],
+    shape: Shape,
+    context: (&'a CompiledUi, &dyn Reads, &'a Skin),
+) -> Element<'a, UiEvent> {
+    let (ui, reads, skin) = context;
+    let snapshot = Answers { reads, ui };
+    let cells = visible(children, &snapshot)
+        .map(|child| match child {
+            ExpandedNode::Reveal { from, until, child } => {
+                ((*from, *until), render_node(child, ui, reads, skin))
+            }
+            child => ((0.0, None), render_node(child, ui, reads, skin)),
+        })
+        .collect();
+    Revealed::new(cells, shape).into()
+}
+
+fn measured_branches<'a>(
+    measure: &MeasureSpec,
+    branches: (&ExpandedNode, &[(f32, ExpandedNode)]),
+    declared: SizeSpec,
+    context: (&'a CompiledUi, &dyn Reads, &'a Skin),
+) -> Rendered<'a> {
+    let ((base, steps), (ui, reads, skin)) = (branches, context);
+    let Some(axis) = measure.axis() else {
+        return Rendered::leading(render_node(base, ui, reads, skin));
+    };
+    let elements = std::iter::once(base)
+        .chain(steps.iter().map(|(_, node)| node))
+        .map(|node| render_node(node, ui, reads, skin))
+        .collect();
+    let size = Size::new(
+        length_for(declared.w, Length::Fill),
+        length_for(declared.h, Length::Fill),
+    );
+    Rendered::leading(
+        Measured::new(
+            elements,
+            steps.iter().map(|(from, _)| *from).collect(),
+            axis,
+            size,
+        )
+        .into(),
+    )
 }
 
 fn render_scroll<'a>(

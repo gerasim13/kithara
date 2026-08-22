@@ -16,6 +16,14 @@ const DOWNLOAD_ARTIFACT: &str =
 const INSTALL_ACTION: &str = "taiki-e/install-action@b20dedce73af6905cdc30d6611090c9b67557c8d";
 const UPLOAD_ARTIFACT: &str = "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a";
 const STRESS_RAW_DIR: &str = "${{ runner.temp }}/kithara-stress/raw";
+const HEAVY_LINUX_GROUP: &str = "heavy-linux-${{ github.repository }}";
+const HEAVY_LINUX_WORKFLOWS: [&str; 5] = [
+    "coverage.yml",
+    "lanes.yml",
+    "miri.yml",
+    "mutants.yml",
+    "quality.yml",
+];
 const STRESS_EXECUTE_COMMAND: &str = r#"args=(
   --subject-root "$GITHUB_WORKSPACE/subject"
   --output "$RUNNER_TEMP/kithara-stress/raw"
@@ -306,7 +314,6 @@ fn assert_hosted_authorization(job: &Mapping) {
         mapping_field(job, "runs-on").as_str(),
         Some("ubuntu-latest")
     );
-    assert!(!job.contains_key("if"));
 
     let step = first_step(job);
     let env = mapping_field(step, "env")
@@ -339,18 +346,18 @@ fn github_ci_is_fail_closed_and_aggregates_every_job() {
     let concurrency = workflow_concurrency(&workflow);
     assert_eq!(
         mapping_field(concurrency, "group").as_str(),
-        Some(
-            "${{ github.event.repository.fork && format('fork-linux-{0}', github.repository) || format('ci-{0}', github.ref) }}"
-        )
+        Some("ci-${{ github.ref }}")
     );
+    // One queue per branch: pushes to different branches hold nothing from each
+    // other, and the machine is shared at the runner, where a job waits for the
+    // three cores it asks for. `queue` takes no expression and may not sit
+    // beside a cancellation that can read true, so pushes to one branch queue
+    // rather than evict, and a superseded push is not cancelled. See ci.yml.
     assert_eq!(
-        mapping_field(concurrency, "cancel-in-progress").as_str(),
-        Some("${{ !github.event.repository.fork }}")
+        mapping_field(concurrency, "cancel-in-progress").as_bool(),
+        Some(false)
     );
-    assert!(
-        !concurrency.contains_key("queue"),
-        "CI must preserve production cancel-in-progress semantics"
-    );
+    assert_eq!(mapping_field(concurrency, "queue").as_str(), Some("max"));
     let jobs = workflow_jobs(&workflow);
 
     let advisory_browser = workflow_job(jobs, "wasm-browser");
@@ -363,7 +370,17 @@ fn github_ci_is_fail_closed_and_aggregates_every_job() {
         Some(true)
     );
 
-    assert_hosted_authorization(workflow_job(jobs, "authorize"));
+    let authorize = workflow_job(jobs, "authorize");
+    assert_hosted_authorization(authorize);
+    // The one condition this job may carry. Anything else here, and a push that
+    // should have been judged is skipped instead — reported as a green run. Both
+    // halves are load-bearing: the variable admits a repository that declares
+    // runners, the fork flag admits one whose settings this repository cannot
+    // read.
+    assert_eq!(
+        mapping_field(authorize, "if").as_str(),
+        Some("github.event.repository.fork || vars.KITHARA_RUNNER_LABELS != ''")
+    );
     let gate = workflow_job(jobs, "gate");
     assert_eq!(job_needs(gate), BTreeSet::from(["authorize".to_owned()]));
     assert_eq!(
@@ -394,9 +411,14 @@ fn github_ci_is_fail_closed_and_aggregates_every_job() {
         mapping_field(required, "runs-on").as_str(),
         Some("ubuntu-latest")
     );
+    // The aggregate demands success from every job it needs, and a skip is not a
+    // success, so it has to carry the same guard verbatim or it alone stays red
+    // on a repository the run skipped.
     assert_eq!(
         mapping_field(required, "if").as_str(),
-        Some("${{ always() }}")
+        Some(
+            "${{ always() && (github.event.repository.fork || vars.KITHARA_RUNNER_LABELS != '') }}"
+        )
     );
     let mut expected = workflow_job_names(jobs);
     expected.remove("required");
@@ -486,7 +508,7 @@ fn a_queue_is_never_declared_beside_a_cancellation_that_can_fire() {
 }
 
 // What a group expression can evaluate to, down to the part no branch varies:
-// `fork-linux-{0}` and `fork-linux-${{ github.repository }}` name one queue.
+// `heavy-linux-{0}` and `heavy-linux-${{ github.repository }}` name one queue.
 fn group_prefix(group: &str) -> String {
     group
         .split(['{', '$'])
@@ -535,12 +557,50 @@ fn a_called_workflow_never_waits_on_the_group_its_caller_holds() {
 }
 
 #[test]
+fn the_heavy_lanes_queue_together_and_ordinary_ci_queues_per_branch() {
+    // One machine serves every lane, and the queue that protects it must not
+    // also stall the pushes. Measured on the Linux host before this split, when
+    // every Linux workflow named one group per repository: a nightly assessment
+    // held the only slot with three jobs while two pushes waited fourteen
+    // minutes with fifteen of eighteen runner slots and two thirds of the CPU
+    // idle. Coverage, the extra suites, Miri, mutation, and assessment ask for
+    // the whole fleet, so they take turns; a push does not wait behind them.
+    for name in HEAVY_LINUX_WORKFLOWS {
+        let workflow = github_workflow(name);
+        let concurrency = workflow_concurrency(&workflow);
+        assert_eq!(
+            mapping_field(concurrency, "group").as_str(),
+            Some(HEAVY_LINUX_GROUP),
+            "{name}"
+        );
+        assert_eq!(
+            mapping_field(concurrency, "queue").as_str(),
+            Some("max"),
+            "{name}"
+        );
+    }
+
+    let ordinary = github_workflow("ci.yml");
+    let group = mapping_field(workflow_concurrency(&ordinary), "group")
+        .as_str()
+        .expect("the CI group is a string")
+        .to_owned();
+    assert!(group.contains("github.ref"), "{group}");
+    assert_ne!(group_prefix(&group), group_prefix(HEAVY_LINUX_GROUP));
+}
+
+#[test]
 fn standalone_rtsan_is_fail_closed_before_expanding_every_lane() {
     let workflow = github_workflow("rtsan.yml");
     assert_no_key(&workflow, "continue-on-error");
     let jobs = workflow_jobs(&workflow);
 
-    assert_hosted_authorization(workflow_job(jobs, "authorize"));
+    let authorize = workflow_job(jobs, "authorize");
+    assert_hosted_authorization(authorize);
+    // Nothing starts this workflow on a repository without runners: it is only
+    // ever called. So it needs no guard, and a condition here could only ever
+    // skip a judgement someone asked for.
+    assert!(!authorize.contains_key("if"));
     let rtsan = workflow_job(jobs, "rtsan");
     assert_eq!(job_needs(rtsan), BTreeSet::from(["authorize".to_owned()]));
     assert!(!rtsan.contains_key("if"));
@@ -1447,7 +1507,13 @@ fn nightly_collector_is_read_only_and_does_not_mirror_the_source_verdict() {
         mapping_field(job, "runs-on").as_str(),
         Some("ubuntu-latest")
     );
-    assert!(!job.contains_key("if"));
+    // The collector shows the source verdict, so it runs for every conclusion
+    // that is one. A skipped source has none, and reporting on it turned into a
+    // red check about a run that never happened.
+    assert_eq!(
+        mapping_field(job, "if").as_str(),
+        Some("github.event.workflow_run.conclusion != 'skipped'")
+    );
 
     let collect = named_step(job, "Collect the source run jobs");
     let script = mapping_field(collect, "run")

@@ -159,6 +159,17 @@ impl Bridge {
                 );
             }
         }
+        if let Err(error) = sweep_quarantine_refs(
+            base_sha,
+            || self.repo.gitlab_quarantine_refs(&self.gitlab),
+            |refs| self.repo.delete_gitlab(&self.gitlab, refs),
+        ) {
+            warn!(
+                %base_sha,
+                %error,
+                "verification branches left behind by a moved base were not removed"
+            );
+        }
         Ok(())
     }
 
@@ -294,6 +305,48 @@ fn quarantine_ref(head_sha: &str, base_sha: &str, attempt: u64) -> String {
 /// land between two pull-request heads verified against the same base.
 fn abbreviate(sha: &str) -> &str {
     &sha[..sha.len().min(12)]
+}
+
+/// The verification branches nothing will ever name again.
+///
+/// A quarantine ref is addressed by the pair it was judged for, so the moment
+/// main moves the bridge writes a new name and the old branch is left behind.
+/// Matching on the base alone covers every naming scheme the bridge has used,
+/// because each one spells the base out abbreviated or in full.
+fn superseded_quarantine_refs<'a>(refs: &'a [String], base_sha: &str) -> Vec<&'a str> {
+    let base = abbreviate(base_sha);
+    refs.iter()
+        .map(String::as_str)
+        .filter(|reference| reference.starts_with("quarantine/") && !reference.contains(base))
+        .collect()
+}
+
+/// Drop the verification branches a moved base left behind.
+///
+/// The bridge pushes one of these per attempt and never reads it back: the
+/// verdict lives in the ledger, and `verify_pull` reserves against whatever
+/// main is now, so a branch judged for an earlier base is orphaned the moment
+/// main moves. Nothing addresses it again and nothing reads its pipeline, so
+/// what is left is exhaust - 197 of them had piled up on `GitLab` by the time
+/// anyone counted. Cancelling an orphan's pipeline on the way out is a gain on
+/// a runner that takes one job at a time.
+fn sweep_quarantine_refs(
+    base_sha: &str,
+    list: impl FnOnce() -> Result<Vec<String>>,
+    delete: impl FnOnce(&[&str]) -> Result<()>,
+) -> Result<()> {
+    let listed = list()?;
+    let superseded = superseded_quarantine_refs(&listed, base_sha);
+    if superseded.is_empty() {
+        return Ok(());
+    }
+    delete(&superseded)?;
+    info!(
+        dropped = superseded.len(),
+        %base_sha,
+        "verification branches left behind by a moved base removed"
+    );
+    Ok(())
 }
 
 fn resolve_pipeline(pipeline_ids: &[u64]) -> Result<Option<u64>> {

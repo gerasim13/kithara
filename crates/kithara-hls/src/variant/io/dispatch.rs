@@ -1,8 +1,10 @@
+use kithara_assets::AssetsError;
 use kithara_events::RequestPriority;
 use kithara_platform::{CancelToken, sync::Arc};
+use kithara_storage::StorageError;
 use kithara_stream::dl::FetchCmd;
 use kithara_test_utils::kithara;
-use tracing::debug;
+use tracing::{debug, warn};
 
 use super::{HlsVariant, PlanCtx, core::NO_PREFETCH_DEFERRAL};
 use crate::segment::{Downloading, FetchClaim, PlannedFetch};
@@ -171,13 +173,7 @@ impl HlsVariant {
         let resource = match resource_handle.acquire(entry.content()) {
             Ok(r) => r,
             Err(err) => {
-                debug!(
-                    variant = self.variant,
-                    seg_idx,
-                    error = %err,
-                    "emit_fetch_cmd: acquire_resource dropped (variant switch in flight)"
-                );
-                let _ = handle.into_missing();
+                self.settle_unacquirable(seg_idx, handle, &err);
                 return None;
             }
         };
@@ -188,6 +184,40 @@ impl HlsVariant {
             ctx.signal.clone(),
             cancel,
         )
+    }
+
+    /// Settle a claim whose resource could not be acquired.
+    ///
+    /// Reverting to `Missing` keeps the fetch on the plan, so `dispatch_from`
+    /// tries again — right for a tmp a live sibling writer still holds, since
+    /// that holder always settles and releases it. For anything else the retry
+    /// never resolves, and the requeue is invisible: the slot stays planned, so
+    /// `range_wait_phase` answers `WaitingDemand` and `range_has_failed` stays
+    /// false while the decode gate parks for good. Those settle as `Failed`,
+    /// which is what surfaces `SegmentUnavailable` to the reader.
+    fn settle_unacquirable(
+        &self,
+        seg_idx: u32,
+        handle: FetchClaim<Downloading>,
+        err: &AssetsError,
+    ) {
+        if matches!(err, AssetsError::Storage(StorageError::TmpClaimed(_))) {
+            debug!(
+                variant = self.variant,
+                seg_idx,
+                error = %err,
+                "emit_fetch_cmd: segment tmp held by a live writer; requeued"
+            );
+            let _ = handle.into_missing();
+            return;
+        }
+        warn!(
+            variant = self.variant,
+            seg_idx,
+            error = %err,
+            "emit_fetch_cmd: segment resource cannot be acquired; settling as failed"
+        );
+        let _ = handle.into_failed();
     }
 
     fn prefetch_segment_cap(&self, ctx: &PlanCtx, prefetch_base: u64) -> Option<u32> {

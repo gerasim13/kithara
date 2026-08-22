@@ -1,8 +1,9 @@
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    expand::{BlockSpec, ControlSpec, ExpandedNode},
-    module::{ButtonStyle, ChromeStyle, GlyphStyle, TextStyle},
+    expand::{Binding, BlockSpec, ControlSpec, ExpandedNode, MeasureSpec, adaptive_branch},
+    layout::Axis,
+    module::{ButtonStyle, ChromeStyle, GlyphStyle, MeasureAxis, TextStyle, WaveStyle},
     skin::{SkinDoc, WindowControlSkin},
 };
 
@@ -221,7 +222,11 @@ pub fn control_size(spec: &ControlSpec, skin: &SkinDoc) -> SizeSpec {
         ControlSpec::Scalar { .. } => skin.telemetry.size,
         ControlSpec::Crossfader { .. } => skin.crossfader.size,
         ControlSpec::Fader { .. } => skin.fader.size,
-        ControlSpec::Wave { .. } => skin.wave.size,
+        ControlSpec::Wave { style, .. } => match style {
+            WaveStyle::Default => skin.wave.default_size,
+            WaveStyle::Hero => skin.wave.size,
+            WaveStyle::Micro => skin.wave.micro_size,
+        },
         ControlSpec::Vis => skin.vis.size,
         ControlSpec::PortalMap => skin.portal_map.size,
         ControlSpec::Range => skin.range.size,
@@ -246,16 +251,37 @@ pub fn control_size(spec: &ControlSpec, skin: &SkinDoc) -> SizeSpec {
     }
 }
 
-pub(crate) type Hidden<'a> = &'a dyn Fn(&BlockSpec) -> bool;
+pub(crate) trait Snapshot {
+    fn hidden(&self, block: &BlockSpec) -> bool;
+    fn measure(&self, measure: &Binding) -> Option<f32>;
+}
 
-pub(crate) const VISIBLE: Hidden<'static> = &|_| false;
+struct Unanswered;
+
+impl Snapshot for Unanswered {
+    fn hidden(&self, _: &BlockSpec) -> bool {
+        false
+    }
+
+    fn measure(&self, _: &Binding) -> Option<f32> {
+        None
+    }
+}
+
+pub(crate) const DEFAULTS: &dyn Snapshot = &Unanswered;
 
 pub(crate) fn has_blocks(node: &ExpandedNode) -> bool {
     match node {
+        ExpandedNode::Adaptive { size, .. } => size.is_none(),
         ExpandedNode::Optional { .. } => true,
-        ExpandedNode::Row { children, .. }
-        | ExpandedNode::Column { children, .. }
-        | ExpandedNode::Slot { children, .. } => children.iter().any(has_blocks),
+        ExpandedNode::Reveal { child, .. } => has_blocks(child),
+        ExpandedNode::Row {
+            measure, children, ..
+        }
+        | ExpandedNode::Column {
+            measure, children, ..
+        } => measure.is_none() && children.iter().any(has_blocks),
+        ExpandedNode::Slot { children, .. } => children.iter().any(has_blocks),
         ExpandedNode::Popover { anchor, .. } => has_blocks(anchor),
         ExpandedNode::Pressable { child, .. } | ExpandedNode::Scroll { child, .. } => {
             has_blocks(child)
@@ -268,27 +294,45 @@ pub(crate) trait BlockNode {
     fn block(&self) -> Option<&BlockSpec>;
 }
 
-pub(crate) fn is_hidden<N: BlockNode>(node: &N, hidden: Hidden<'_>) -> bool {
-    node.block().is_some_and(hidden)
+pub(crate) fn is_hidden<N: BlockNode>(node: &N, snapshot: &dyn Snapshot) -> bool {
+    node.block().is_some_and(|block| snapshot.hidden(block))
 }
 
 pub(crate) fn visible<'a, N: BlockNode>(
     children: &'a [N],
-    hidden: Hidden<'a>,
+    snapshot: &'a dyn Snapshot,
 ) -> impl Iterator<Item = &'a N> {
     children
         .iter()
-        .filter(move |child| !is_hidden(*child, hidden))
+        .filter(move |child| !is_hidden(*child, snapshot))
+}
+
+pub(crate) fn branch<'a>(
+    measure: &MeasureSpec,
+    base: &'a ExpandedNode,
+    steps: &'a [(f32, ExpandedNode)],
+    snapshot: &dyn Snapshot,
+) -> &'a ExpandedNode {
+    let read = measure
+        .binding()
+        .and_then(|binding| snapshot.measure(binding));
+    adaptive_branch(base, steps, read)
 }
 
 /// Computes a node's intrinsic size from its override, children, or control specification.
 #[must_use]
-pub(crate) fn compute_size(node: &ExpandedNode, skin: &SkinDoc, hidden: Hidden<'_>) -> SizeSpec {
+pub(crate) fn compute_size(
+    node: &ExpandedNode,
+    skin: &SkinDoc,
+    snapshot: &dyn Snapshot,
+) -> SizeSpec {
     let override_size = match node {
         ExpandedNode::Optional { .. }
         | ExpandedNode::Popover { .. }
-        | ExpandedNode::Pressable { .. } => None,
-        ExpandedNode::Scroll { size, .. }
+        | ExpandedNode::Pressable { .. }
+        | ExpandedNode::Reveal { .. } => None,
+        ExpandedNode::Adaptive { size, .. }
+        | ExpandedNode::Scroll { size, .. }
         | ExpandedNode::Row { size, .. }
         | ExpandedNode::Column { size, .. }
         | ExpandedNode::Slot { size, .. }
@@ -299,11 +343,17 @@ pub(crate) fn compute_size(node: &ExpandedNode, skin: &SkinDoc, hidden: Hidden<'
     }
 
     match node {
-        ExpandedNode::Optional { child, .. } | ExpandedNode::Pressable { child, .. } => {
-            compute_size(child, skin, hidden)
-        }
-        ExpandedNode::Popover { anchor, .. } => compute_size(anchor, skin, hidden),
-        ExpandedNode::Scroll { child, .. } => compute_size(child, skin, hidden),
+        ExpandedNode::Adaptive {
+            measure,
+            base,
+            steps,
+            ..
+        } => compute_size(branch(measure, base, steps, snapshot), skin, snapshot),
+        ExpandedNode::Optional { child, .. }
+        | ExpandedNode::Pressable { child, .. }
+        | ExpandedNode::Reveal { child, .. }
+        | ExpandedNode::Scroll { child, .. } => compute_size(child, skin, snapshot),
+        ExpandedNode::Popover { anchor, .. } => compute_size(anchor, skin, snapshot),
         ExpandedNode::Row {
             children,
             gap,
@@ -312,14 +362,14 @@ pub(crate) fn compute_size(node: &ExpandedNode, skin: &SkinDoc, hidden: Hidden<'
             pad_y,
             ..
         } => {
-            let laid_out: Vec<_> = visible(children, hidden).collect();
+            let laid_out: Vec<_> = visible(children, snapshot).collect();
             inset(
                 combine_horizontal(
                     laid_out
                         .iter()
-                        .map(|child| compute_size(child, skin, hidden)),
+                        .map(|child| compute_size(child, skin, snapshot)),
                 ),
-                gap_total(*gap, laid_out.len(), skin.layout.size_gap),
+                gap_total(gap.unwrap_or(skin.layout.size_gap), laid_out.len()),
                 0.0,
                 Pad::new(*pad, *pad_x, *pad_y, skin.layout.size_pad),
             )
@@ -332,32 +382,219 @@ pub(crate) fn compute_size(node: &ExpandedNode, skin: &SkinDoc, hidden: Hidden<'
             pad_y,
             ..
         } => {
-            let laid_out: Vec<_> = visible(children, hidden).collect();
+            let laid_out: Vec<_> = visible(children, snapshot).collect();
             inset(
                 combine_vertical(
                     laid_out
                         .iter()
-                        .map(|child| compute_size(child, skin, hidden)),
+                        .map(|child| compute_size(child, skin, snapshot)),
                 ),
                 0.0,
-                gap_total(*gap, laid_out.len(), skin.layout.size_gap),
+                gap_total(gap.unwrap_or(skin.layout.size_gap), laid_out.len()),
                 Pad::new(*pad, *pad_x, *pad_y, skin.layout.size_pad),
             )
         }
         ExpandedNode::Slot { children, .. } => {
-            let laid_out: Vec<_> = visible(children, hidden).collect();
+            let laid_out: Vec<_> = visible(children, snapshot).collect();
             if laid_out.is_empty() {
                 SizeSpec::FILL
             } else {
                 combine_vertical(
                     laid_out
                         .iter()
-                        .map(|child| compute_size(child, skin, hidden)),
+                        .map(|child| compute_size(child, skin, snapshot)),
                 )
             }
         }
         ExpandedNode::Control { spec, .. } => control_size(spec, skin),
     }
+}
+
+#[must_use]
+pub(crate) fn min_size(node: &ExpandedNode, skin: &SkinDoc) -> SizeSpec {
+    match node {
+        ExpandedNode::Control { .. } => needs(compute_size(node, skin, DEFAULTS)),
+        ExpandedNode::Scroll { size, child, .. } => {
+            size.map_or_else(|| min_size(child, skin), needs)
+        }
+        ExpandedNode::Optional { child, .. }
+        | ExpandedNode::Pressable { child, .. }
+        | ExpandedNode::Reveal { child, .. } => min_size(child, skin),
+        ExpandedNode::Popover { anchor, .. } => min_size(anchor, skin),
+        ExpandedNode::Adaptive { size, base, .. } => at_least(*size, min_size(base, skin)),
+        ExpandedNode::Slot { size, children, .. } => at_least(
+            *size,
+            combine_vertical(children.iter().map(|child| min_size(child, skin))),
+        ),
+        ExpandedNode::Row { size, measure, .. } | ExpandedNode::Column { size, measure, .. } => {
+            at_least(*size, settled(node, *measure, skin))
+        }
+    }
+}
+
+pub(crate) fn settled(
+    node: &ExpandedNode,
+    measure: Option<MeasureAxis>,
+    skin: &SkinDoc,
+) -> SizeSpec {
+    Cells::of(node, skin).map_or(SizeSpec::new(Dim::Fixed(0.0), Dim::Fixed(0.0)), |cells| {
+        cells.settled(measure)
+    })
+}
+
+#[must_use]
+pub(crate) fn rooms(node: &ExpandedNode, axis: MeasureAxis, skin: &SkinDoc) -> Vec<(f32, f32)> {
+    Cells::of(node, skin).map_or_else(Vec::new, |cells| {
+        cells.rooms(axis, axis_min(min_size(node, skin), axis))
+    })
+}
+
+pub(crate) fn axis_dim(size: SizeSpec, axis: MeasureAxis) -> Dim {
+    match axis {
+        MeasureAxis::Width => size.w,
+        MeasureAxis::Height => size.h,
+    }
+}
+
+pub(crate) fn axis_min(size: SizeSpec, axis: MeasureAxis) -> f32 {
+    axis_dim(size, axis).min()
+}
+
+pub(crate) struct Cell {
+    from: f32,
+    until: Option<f32>,
+    min: SizeSpec,
+}
+
+impl Cell {
+    pub(crate) const fn new(from: f32, until: Option<f32>, min: SizeSpec) -> Self {
+        Self { from, until, min }
+    }
+}
+
+#[must_use]
+pub(crate) fn stands(from: f32, until: Option<f32>, room: f32) -> bool {
+    from <= room && until.is_none_or(|until| room < until)
+}
+
+fn thresholds(cells: &[Cell]) -> usize {
+    cells
+        .iter()
+        .map(|cell| usize::from(cell.from > 0.0) + usize::from(cell.until.is_some()))
+        .sum()
+}
+
+pub(crate) struct Cells {
+    along: Axis,
+    cells: Vec<Cell>,
+    gap: f32,
+    pad: Pad,
+}
+
+impl Cells {
+    pub(crate) const fn new(along: Axis, cells: Vec<Cell>) -> Self {
+        Self {
+            along,
+            cells,
+            gap: 0.0,
+            pad: Pad::NONE,
+        }
+    }
+
+    fn of(node: &ExpandedNode, skin: &SkinDoc) -> Option<Self> {
+        let (along, children, gap, pad, pad_x, pad_y) = match node {
+            ExpandedNode::Row {
+                children,
+                gap,
+                pad,
+                pad_x,
+                pad_y,
+                ..
+            } => (Axis::Horizontal, children, gap, pad, pad_x, pad_y),
+            ExpandedNode::Column {
+                children,
+                gap,
+                pad,
+                pad_x,
+                pad_y,
+                ..
+            } => (Axis::Vertical, children, gap, pad, pad_x, pad_y),
+            _ => return None,
+        };
+        let cells = children
+            .iter()
+            .map(|child| {
+                let (from, until) = match child {
+                    ExpandedNode::Reveal { from, until, .. } => (*from, *until),
+                    _ => (0.0, None),
+                };
+                Cell::new(from, until, min_size(child, skin))
+            })
+            .collect();
+        Some(Self {
+            along,
+            cells,
+            gap: gap.unwrap_or(skin.layout.size_gap),
+            pad: Pad::new(*pad, *pad_x, *pad_y, skin.layout.size_pad),
+        })
+    }
+
+    fn need(&self, room: Option<f32>) -> SizeSpec {
+        let standing: Vec<_> = self
+            .cells
+            .iter()
+            .filter(|cell| room.is_none_or(|room| stands(cell.from, cell.until, room)))
+            .map(|cell| cell.min)
+            .collect();
+        let gaps = gap_total(self.gap, standing.len());
+        match self.along {
+            Axis::Horizontal => inset(combine_horizontal(standing), gaps, 0.0, self.pad),
+            Axis::Vertical => inset(combine_vertical(standing), 0.0, gaps, self.pad),
+        }
+    }
+
+    pub(crate) fn settled(&self, measure: Option<MeasureAxis>) -> SizeSpec {
+        let Some(axis) = measure else {
+            return self.need(None);
+        };
+        let mut size = self.need(Some(0.0));
+        for _ in 0..thresholds(&self.cells) + 2 {
+            size = covering(size, self.need(Some(axis_min(size, axis))));
+        }
+        size
+    }
+
+    pub(crate) fn rooms(&self, axis: MeasureAxis, least: f32) -> Vec<(f32, f32)> {
+        std::iter::once(least)
+            .chain(
+                self.cells
+                    .iter()
+                    .map(|cell| cell.from)
+                    .filter(|from| *from > least),
+            )
+            .map(|room| (room, axis_min(self.need(Some(room)), axis)))
+            .collect()
+    }
+}
+
+fn covering(left: SizeSpec, right: SizeSpec) -> SizeSpec {
+    SizeSpec::new(
+        Dim::from(Bounds::from(left.w).max(right.w)),
+        Dim::from(Bounds::from(left.h).max(right.h)),
+    )
+}
+
+fn needs(size: SizeSpec) -> SizeSpec {
+    SizeSpec::new(Dim::Fixed(size.w.min()), Dim::Fixed(size.h.min()))
+}
+
+pub(crate) fn at_least(declared: Option<SizeSpec>, composed: SizeSpec) -> SizeSpec {
+    declared.map_or(composed, |declared| {
+        SizeSpec::new(
+            Dim::Fixed(declared.w.min().max(composed.w.min())),
+            Dim::Fixed(declared.h.min().max(composed.h.min())),
+        )
+    })
 }
 
 pub(crate) fn with_module_chrome(size: SizeSpec, chrome: ChromeStyle, skin: &SkinDoc) -> SizeSpec {
@@ -369,9 +606,9 @@ pub(crate) fn with_module_chrome(size: SizeSpec, chrome: ChromeStyle, skin: &Ski
     SizeSpec::new(size.w, grow(size.h, height))
 }
 
-fn gap_total(gap: Option<f32>, child_count: usize, default: f32) -> f32 {
+fn gap_total(gap: f32, child_count: usize) -> f32 {
     let gaps = u16::try_from(child_count.saturating_sub(1)).unwrap_or(u16::MAX);
-    gap.unwrap_or(default) * f32::from(gaps)
+    gap * f32::from(gaps)
 }
 
 /// Padding a container adds on each axis, mirroring what the renderer applies:
@@ -383,6 +620,8 @@ struct Pad {
 }
 
 impl Pad {
+    const NONE: Self = Self { x: 0.0, y: 0.0 };
+
     fn new(pad: Option<f32>, pad_x: Option<f32>, pad_y: Option<f32>, default: f32) -> Self {
         let base = pad.unwrap_or(default);
         Self {
@@ -424,7 +663,7 @@ mod tests {
         builtin,
         expand::{Binding, BindingKind},
         ids::{Interner, SourceUri},
-        module::{AdaptivePolicy, GlyphStyle, IconName, PopoverAlign, PopoverAt, TextAlign},
+        module::{GlyphStyle, IconName, MeasureAxis, PopoverAlign, PopoverAt, TextAlign},
     };
 
     fn control(interner: &mut Interner, id: &str, size: SizeSpec) -> ExpandedNode {
@@ -435,7 +674,6 @@ mod tests {
             spec: ControlSpec::Knob { label: None },
             read: None,
             write: None,
-            adaptive: AdaptivePolicy::default(),
             size: Some(size),
         }
     }
@@ -444,10 +682,16 @@ mod tests {
         SizeSpec::new(Dim::Fixed(w), Dim::Fixed(h))
     }
 
-    fn row(children: Vec<ExpandedNode>, size: Option<SizeSpec>, gap: Option<f32>) -> ExpandedNode {
+    fn row(
+        children: Vec<ExpandedNode>,
+        size: Option<SizeSpec>,
+        gap: Option<f32>,
+        measure: Option<MeasureAxis>,
+    ) -> ExpandedNode {
         ExpandedNode::Row {
             size,
             gap,
+            measure,
             children,
             id: None,
             pad: None,
@@ -470,6 +714,7 @@ mod tests {
             children,
             id: None,
             size: None,
+            measure: None,
             align: TextAlign::Start,
             pad: None,
             pad_x: None,
@@ -525,10 +770,11 @@ mod tests {
             vec![control(&mut interner, "child", fixed(10.0, 10.0))],
             Some(SizeSpec::new(Dim::Shrink, Dim::Fixed(30.0))),
             Some(0.0),
+            None,
         );
 
         assert_eq!(
-            compute_size(&node, builtin::skin_doc(), VISIBLE),
+            compute_size(&node, builtin::skin_doc(), DEFAULTS),
             SizeSpec::new(Dim::Shrink, Dim::Fixed(30.0))
         );
     }
@@ -540,6 +786,7 @@ mod tests {
             vec![control(&mut interner, "child", fixed(10.0, 4.0))],
             None,
             Some(0.0),
+            None,
         ) else {
             panic!("expected a row");
         };
@@ -547,6 +794,7 @@ mod tests {
             children,
             id: None,
             size: None,
+            measure: None,
             gap: Some(0.0),
             pad: None,
             pad_x: Some(11.0),
@@ -561,7 +809,7 @@ mod tests {
             surface: None,
         };
 
-        let size = compute_size(&node, builtin::skin_doc(), VISIBLE);
+        let size = compute_size(&node, builtin::skin_doc(), DEFAULTS);
 
         assert_eq!(size.w.min(), 32.0);
         assert_eq!(size.h.min(), 10.0);
@@ -581,9 +829,10 @@ mod tests {
             ],
             None,
             Some(0.0),
+            None,
         );
 
-        let size = compute_size(&node, builtin::skin_doc(), VISIBLE);
+        let size = compute_size(&node, builtin::skin_doc(), DEFAULTS);
 
         assert_eq!(size.w.min(), 10.0);
         assert_eq!(size.w.max(), None);
@@ -676,7 +925,7 @@ mod tests {
         };
 
         assert_eq!(
-            compute_size(&node, builtin::skin_doc(), VISIBLE),
+            compute_size(&node, builtin::skin_doc(), DEFAULTS),
             fixed(36.0, 36.0)
         );
     }
@@ -691,9 +940,10 @@ mod tests {
             ],
             None,
             Some(0.0),
+            None,
         );
 
-        let size = compute_size(&node, builtin::skin_doc(), VISIBLE);
+        let size = compute_size(&node, builtin::skin_doc(), DEFAULTS);
 
         assert_eq!(size.w.min(), 16.0);
         assert_eq!(size.h.min(), 8.0);
@@ -710,7 +960,7 @@ mod tests {
             Some(0.0),
         );
 
-        let size = compute_size(&node, builtin::skin_doc(), VISIBLE);
+        let size = compute_size(&node, builtin::skin_doc(), DEFAULTS);
 
         assert_eq!(size.w.min(), 10.0);
         assert_eq!(size.h.min(), 12.0);
@@ -726,12 +976,13 @@ mod tests {
             ],
             None,
             None,
+            None,
         );
         let mut skin = builtin::skin_doc().clone();
         skin.layout.size_gap = 3.0;
         skin.layout.size_pad = 2.0;
 
-        let size = compute_size(&node, &skin, VISIBLE);
+        let size = compute_size(&node, &skin, DEFAULTS);
 
         assert_eq!(size.w.min(), 23.0);
         assert_eq!(size.h.min(), 12.0);
@@ -745,10 +996,11 @@ mod tests {
             vec![control(&mut interner, "child", fixed(10.0, 10.0))],
             Some(override_size),
             None,
+            None,
         );
 
         assert_eq!(
-            compute_size(&node, builtin::skin_doc(), VISIBLE),
+            compute_size(&node, builtin::skin_doc(), DEFAULTS),
             override_size
         );
     }
@@ -767,11 +1019,260 @@ mod tests {
             ],
             None,
             Some(0.0),
+            None,
         );
 
-        let size = compute_size(&node, builtin::skin_doc(), VISIBLE);
+        let size = compute_size(&node, builtin::skin_doc(), DEFAULTS);
 
         assert_eq!(size.w.min(), 10.0);
         assert_eq!(size.w.max(), None);
+    }
+
+    struct Measured(f32);
+
+    impl Snapshot for Measured {
+        fn hidden(&self, _: &BlockSpec) -> bool {
+            false
+        }
+
+        fn measure(&self, _: &Binding) -> Option<f32> {
+            Some(self.0)
+        }
+    }
+
+    #[kithara::test]
+    fn a_self_measured_node_is_opaque_to_its_parent() {
+        let mut interner = Interner::new(1024);
+        let declared = SizeSpec::new(Dim::Fill, Dim::Fixed(120.0));
+        let node = ExpandedNode::Adaptive {
+            measure: MeasureSpec::Width,
+            size: Some(declared),
+            base: Box::new(control(&mut interner, "narrow", fixed(40.0, 40.0))),
+            steps: vec![(1000.0, control(&mut interner, "wide", fixed(900.0, 600.0)))],
+        };
+
+        assert_eq!(compute_size(&node, builtin::skin_doc(), DEFAULTS), declared);
+        assert_eq!(
+            compute_size(&node, builtin::skin_doc(), &Measured(5000.0)),
+            declared,
+        );
+        assert!(
+            !has_blocks(&node),
+            "an opaque node keeps a constant size, so the renderer may memoise it",
+        );
+    }
+
+    struct Folded;
+
+    impl Snapshot for Folded {
+        fn hidden(&self, _: &BlockSpec) -> bool {
+            true
+        }
+
+        fn measure(&self, _: &Binding) -> Option<f32> {
+            None
+        }
+    }
+
+    fn reveal(from: f32, until: Option<f32>, child: ExpandedNode) -> ExpandedNode {
+        ExpandedNode::Reveal {
+            from,
+            until,
+            child: Box::new(child),
+        }
+    }
+
+    fn optional(interner: &mut Interner, id: &str, child: ExpandedNode) -> ExpandedNode {
+        let origin = SourceUri("size-test.ron".to_owned());
+        let path = interner.intern(id, &origin).unwrap();
+        ExpandedNode::Optional {
+            block: BlockSpec {
+                path,
+                hidden: Binding {
+                    kind: BindingKind::Model,
+                    id: path,
+                    key: path,
+                    with: BTreeMap::new(),
+                },
+            },
+            child: Box::new(child),
+        }
+    }
+
+    #[kithara::test]
+    fn a_measuring_container_is_opaque_to_its_parent() {
+        let mut interner = Interner::new(1024);
+        let declared = SizeSpec::new(Dim::Fill, Dim::Fixed(42.0));
+        let mut cell = |id| control(&mut interner, id, fixed(80.0, 20.0));
+        let (wave, volume, quality) = (cell("wave"), cell("volume"), cell("cell"));
+        let node = row(
+            vec![
+                reveal(350.0, None, wave),
+                reveal(440.0, None, volume),
+                optional(&mut interner, "quality", quality),
+            ],
+            Some(declared),
+            Some(0.0),
+            Some(MeasureAxis::Width),
+        );
+
+        assert_eq!(compute_size(&node, builtin::skin_doc(), DEFAULTS), declared);
+        assert_eq!(compute_size(&node, builtin::skin_doc(), &Folded), declared);
+        assert!(
+            !has_blocks(&node),
+            "an opaque container keeps a constant size, so the renderer may memoise it",
+        );
+    }
+
+    #[kithara::test]
+    fn a_declared_box_leaves_the_cells_their_room() {
+        let mut interner = Interner::new(1024);
+        let node = row(
+            vec![
+                control(&mut interner, "left", fixed(10.0, 4.0)),
+                control(&mut interner, "right", fixed(6.0, 8.0)),
+            ],
+            Some(SizeSpec::FILL),
+            None,
+            None,
+        );
+        let mut skin = builtin::skin_doc().clone();
+        skin.layout.size_gap = 3.0;
+        skin.layout.size_pad = 2.0;
+
+        assert_eq!(compute_size(&node, &skin, DEFAULTS), SizeSpec::FILL);
+        assert_eq!(min_size(&node, &skin), fixed(23.0, 12.0));
+    }
+
+    #[kithara::test]
+    fn a_measuring_container_needs_the_room_its_standing_cells_settle_on() {
+        let mut interner = Interner::new(1024);
+        let skin = builtin::skin_doc();
+        let bar = |always: SizeSpec, interner: &mut Interner| {
+            let wave = control(interner, "wave", fixed(40.0, 20.0));
+            let remain = control(interner, "remain", fixed(40.0, 20.0));
+            row(
+                vec![
+                    control(interner, "menu", always),
+                    reveal(150.0, None, wave),
+                    reveal(500.0, None, remain),
+                ],
+                Some(SizeSpec::new(Dim::Fill, Dim::Fixed(42.0))),
+                Some(0.0),
+                Some(MeasureAxis::Width),
+            )
+        };
+
+        let narrow = bar(fixed(100.0, 20.0), &mut interner);
+        let wide = bar(fixed(200.0, 20.0), &mut interner);
+        let chained = row(
+            vec![
+                control(&mut interner, "menu", fixed(100.0, 20.0)),
+                reveal(
+                    100.0,
+                    None,
+                    control(&mut interner, "wave", fixed(40.0, 20.0)),
+                ),
+                reveal(
+                    140.0,
+                    None,
+                    control(&mut interner, "remain", fixed(40.0, 20.0)),
+                ),
+                reveal(
+                    180.0,
+                    None,
+                    control(&mut interner, "quality", fixed(40.0, 20.0)),
+                ),
+            ],
+            Some(SizeSpec::new(Dim::Fill, Dim::Fixed(42.0))),
+            Some(0.0),
+            Some(MeasureAxis::Width),
+        );
+
+        assert_eq!(min_size(&narrow, skin), fixed(100.0, 42.0));
+        assert_eq!(min_size(&wide, skin), fixed(240.0, 42.0));
+        assert_eq!(min_size(&chained, skin), fixed(220.0, 42.0));
+    }
+
+    #[kithara::test]
+    fn a_band_leaves_the_room_to_the_cell_opening_where_it_closes() {
+        let mut interner = Interner::new(1024);
+        let skin = builtin::skin_doc();
+        let mut cell = |id, width| control(&mut interner, id, fixed(width, 20.0));
+        let (menu, play, window) = (cell("menu", 40.0), cell("play", 38.0), cell("window", 80.0));
+        let (strip, wave) = (cell("strip", 36.0), cell("wave", 60.0));
+        let bar = row(
+            vec![
+                menu,
+                play,
+                reveal(0.0, Some(350.0), strip),
+                reveal(350.0, None, wave),
+                window,
+            ],
+            Some(SizeSpec::new(Dim::Fill, Dim::Fixed(42.0))),
+            Some(0.0),
+            Some(MeasureAxis::Width),
+        );
+
+        assert_eq!(
+            min_size(&bar, skin).w.min(),
+            194.0,
+            "the strip stands at the narrowest the bar gets",
+        );
+        assert_eq!(
+            rooms(&bar, MeasureAxis::Width, skin),
+            vec![(194.0, 194.0), (350.0, 218.0)],
+            "350 takes the strip out and stands the wave in its room",
+        );
+    }
+
+    #[kithara::test]
+    fn cells_laid_edge_to_edge_settle_where_the_bar_does() {
+        let cell = |from, until, width| Cell::new(from, until, fixed(width, 20.0));
+        let bar = Cells::new(
+            Axis::Horizontal,
+            vec![
+                cell(0.0, None, 40.0),
+                cell(0.0, None, 38.0),
+                cell(0.0, Some(350.0), 36.0),
+                cell(350.0, None, 60.0),
+                cell(0.0, None, 80.0),
+            ],
+        );
+
+        assert_eq!(
+            bar.settled(Some(MeasureAxis::Width)).w.min(),
+            194.0,
+            "the strip stands at the narrowest the bar gets",
+        );
+        assert_eq!(
+            bar.rooms(MeasureAxis::Width, 194.0),
+            vec![(194.0, 194.0), (350.0, 218.0)],
+            "350 takes the strip out and stands the wave in its room",
+        );
+        assert_eq!(
+            bar.settled(None).w.min(),
+            254.0,
+            "a split reading no room stands every cell it holds",
+        );
+    }
+
+    #[kithara::test]
+    fn a_block_takes_its_room_whether_the_host_shows_it_or_not() {
+        let mut interner = Interner::new(1024);
+        let skin = builtin::skin_doc();
+        let quality = control(&mut interner, "quality", fixed(80.0, 20.0));
+        let node = row(
+            vec![
+                control(&mut interner, "menu", fixed(100.0, 20.0)),
+                optional(&mut interner, "quality", quality),
+            ],
+            None,
+            Some(0.0),
+            None,
+        );
+
+        assert_eq!(min_size(&node, skin), fixed(180.0, 20.0));
+        assert_eq!(compute_size(&node, skin, &Folded).w.min(), 100.0);
     }
 }

@@ -1,9 +1,9 @@
 use std::{
     collections::VecDeque,
     fmt::{self, Write as _},
+    sync::{Mutex, MutexGuard, PoisonError},
 };
 
-use kithara_platform::sync::{Mutex, OnceLock};
 use tracing::{
     Event, Level, Metadata, Subscriber,
     field::{Field, Visit},
@@ -41,8 +41,8 @@ const DEDUP_WINDOW: usize = 16;
 /// the first firing's values, and the fold count carries the tempo.
 const FOLD_COUNTERS: &[&str] = &["seq", "thread_seq"];
 
-static EVENTS: OnceLock<Mutex<VecDeque<Entry>>> = OnceLock::new();
-static PROBES: OnceLock<Mutex<VecDeque<Entry>>> = OnceLock::new();
+static EVENTS: Mutex<VecDeque<Entry>> = Mutex::new(VecDeque::new());
+static PROBES: Mutex<VecDeque<Entry>> = Mutex::new(VecDeque::new());
 
 /// One recorded line and how many times it repeated inside the window.
 struct Entry {
@@ -52,10 +52,15 @@ struct Entry {
     repeats: u32,
 }
 
-/// The platform mutex has no `const` constructor (the loom backend cannot
-/// model one), so the rings initialize lazily.
-fn ring(cell: &'static OnceLock<Mutex<VecDeque<Entry>>>) -> &'static Mutex<VecDeque<Entry>> {
-    cell.get_or_init(|| Mutex::new(VecDeque::new()))
+/// The rings outlive every `loom::model` execution and are read from the
+/// panic hook, so they stay on the real mutex rather than the platform one:
+/// a loom-modelled lock created inside one execution panics the moment
+/// anything touches it after that execution ends.
+///
+/// Poisoning is ignored on purpose — a dump that drops the tail because some
+/// other thread died mid-record loses exactly the evidence it was taken for.
+fn lock(ring: &Mutex<VecDeque<Entry>>) -> MutexGuard<'_, VecDeque<Entry>> {
+    ring.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 #[must_use]
@@ -66,17 +71,17 @@ pub fn layer() -> RingLayer {
 /// Snapshot of the recorded DEBUG-event tail, oldest first.
 #[must_use]
 pub fn tail() -> Vec<String> {
-    snapshot(ring(&EVENTS))
+    snapshot(&EVENTS)
 }
 
 /// Snapshot of the recorded `#[kithara::probe]` tail, oldest first.
 #[must_use]
 pub fn probes_tail() -> Vec<String> {
-    snapshot(ring(&PROBES))
+    snapshot(&PROBES)
 }
 
 fn snapshot(ring: &Mutex<VecDeque<Entry>>) -> Vec<String> {
-    ring.lock()
+    lock(ring)
         .iter()
         .map(|entry| {
             if entry.repeats > 1 {
@@ -147,18 +152,18 @@ impl<S: Subscriber> Layer<S> for RingLayer {
             line: &mut line,
             key: &mut key,
         });
-        let cell = match lane {
+        let ring = match lane {
             Lane::Event => &EVENTS,
             Lane::Probe => &PROBES,
         };
-        record(ring(cell), line, key);
+        record(ring, line, key);
     }
 }
 
 fn record(ring: &Mutex<VecDeque<Entry>>, line: String, key: String) {
     let line = clamp(line);
     let key = clamp(key);
-    let mut ring = ring.lock();
+    let mut ring = lock(ring);
     let window = ring.len().saturating_sub(DEDUP_WINDOW);
     if let Some(entry) = ring.iter_mut().skip(window).find(|entry| entry.key == key) {
         entry.repeats = entry.repeats.saturating_add(1);
@@ -208,7 +213,8 @@ impl Visit for LineVisitor<'_> {
 
 #[cfg(test)]
 mod tests {
-    use kithara_platform::sync::{Mutex, MutexGuard, OnceLock};
+    use std::sync::{Mutex, MutexGuard, PoisonError};
+
     use tracing::debug;
     use tracing_subscriber::layer::SubscriberExt;
 
@@ -218,10 +224,12 @@ mod tests {
     /// The rings are process-global and the capacity tests flood them, so a
     /// concurrent marker lookup would find its entry evicted. Each test holds
     /// this lock from its emissions through its assertions.
-    static FLIGHT_TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    static FLIGHT_TEST_LOCK: Mutex<()> = Mutex::new(());
 
     fn with_recorder(body: impl FnOnce()) -> MutexGuard<'static, ()> {
-        let guard = FLIGHT_TEST_LOCK.get_or_init(|| Mutex::new(())).lock();
+        let guard = FLIGHT_TEST_LOCK
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
         let subscriber = tracing_subscriber::registry().with(layer());
         tracing::subscriber::with_default(subscriber, body);
         guard
