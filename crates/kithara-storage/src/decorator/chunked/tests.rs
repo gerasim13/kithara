@@ -112,6 +112,26 @@ fn open_reclaims_a_stale_tmp_no_live_writer_holds() {
     assert!(!tmp.exists(), "tmp consumed by the atomic rename");
 }
 
+/// Reclaiming a stale tmp has to start from an empty file. The claim itself
+/// no longer creates the tmp exclusively, so nothing else wipes what a dead
+/// owner left there, and `commit` trims only when the caller knows
+/// `final_len` — a length-less commit renames the tmp exactly as it stands.
+#[kithara::test(timeout(Duration::from_secs(2)))]
+fn a_reclaimed_tmp_carries_no_byte_of_its_dead_owner() {
+    let dir = TempDir::new().unwrap();
+    let stale_tmp = make_tmp_path(&dir.path().join("tail.bin")).unwrap();
+    fs::write(&stale_tmp, b"stale-from-previous-process").unwrap();
+
+    let (_res, _canonical, tmp) = open_chunked(&dir, "tail.bin");
+
+    let bytes = fs::read(&tmp).unwrap();
+    assert!(
+        bytes.iter().all(|byte| *byte == 0),
+        "reclaimed tmp still carries the dead owner's bytes: {:?}",
+        &bytes[..bytes.len().min(32)]
+    );
+}
+
 /// Since the claim is a lock rather than a file, it has to be released when
 /// the writer settles — otherwise a rewrite of the same canonical path would
 /// see `TmpClaimed` from a holder that is done.

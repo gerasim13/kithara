@@ -41,12 +41,13 @@ struct TmpClaim {
 impl TmpClaim {
     /// Take the claim on `path`, or report who holds it.
     ///
-    /// Never truncates: a claimant that loses the race must leave the
-    /// winner's in-flight bytes untouched. Bytes a *dead* writer left behind
-    /// need no wiping either — the successor's inner opens with
-    /// [`OpenIntent::Fresh`], so nothing records them as available and no
-    /// reader can reach them, and `commit` trims the file back to
-    /// `final_len`.
+    /// Wipes the tmp on the way in, but only once the lock is won: winning it
+    /// proves no other writer is live, while a claimant that loses must leave
+    /// the winner's in-flight bytes untouched — which is why the open itself
+    /// must not truncate. The wipe is what `OpenOptions::create_new` used to
+    /// give for free, and it is still required: `commit` trims to `final_len`
+    /// only when the caller knows it, so a length-less commit would rename a
+    /// dead owner's tail into place under the canonical name.
     fn take(path: PathBuf) -> StorageResult<Self> {
         let file = OpenOptions::new()
             .read(true)
@@ -55,7 +56,10 @@ impl TmpClaim {
             .truncate(false)
             .open(&path)?;
         match file.try_lock() {
-            Ok(()) => Ok(Self { path, file }),
+            Ok(()) => {
+                file.set_len(0)?;
+                Ok(Self { path, file })
+            }
             Err(TryLockError::WouldBlock) => Err(StorageError::TmpClaimed(path)),
             Err(TryLockError::Error(e)) => Err(StorageError::Io(e)),
         }
