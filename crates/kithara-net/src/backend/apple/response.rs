@@ -161,7 +161,7 @@ fn non_identity_content_encoding(pairs: &[(String, String)]) -> Option<&str> {
 mod tests {
     use super::{has_content_encoding, non_identity_content_encoding};
 
-    #[test]
+    #[kithara_test_utils::kithara::test(native, flash(false))]
     fn content_encoding_detection_is_ascii_case_insensitive() {
         let pairs = [("CoNtEnT-EnCoDiNg".to_string(), "identity, GZIP".to_string())];
 
@@ -172,7 +172,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[kithara_test_utils::kithara::test(native, flash(false))]
     fn identity_content_encoding_is_not_rejected() {
         let pairs = [("Content-Encoding".to_string(), "IDENTITY".to_string())];
 

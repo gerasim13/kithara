@@ -167,6 +167,9 @@ fn run_grouped(args: &AstGrepArgs, ctx: &Ctx) -> Result<()> {
         if args.strict {
             rule_cmd.arg("--warning");
         }
+        for p in &args.paths {
+            rule_cmd.arg(p);
+        }
         rule_cmd.stdout(Stdio::piped());
         rule_cmd.stderr(Stdio::inherit());
         let rule_out = rule_cmd.output()?;

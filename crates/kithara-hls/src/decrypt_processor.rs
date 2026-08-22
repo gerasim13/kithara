@@ -65,7 +65,7 @@ impl ChunkSink for CbcSink {
 mod tests {
     use super::*;
 
-    #[test]
+    #[kithara_test_utils::kithara::test(native, flash(false))]
     fn debug_redacts_key_material() {
         let key = [0xAB; 16];
         let iv = [0xCD; 16];

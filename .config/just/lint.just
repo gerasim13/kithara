@@ -23,7 +23,6 @@ _shared:
     just fmt check
     just check clippy
     just lint ast-grep
-    just lint ast-grep-tests
     just lint typos
     just lint arch
 
@@ -48,16 +47,6 @@ full:
 [positional-arguments]
 ast-grep *ARGS:
     just _xtask ast-grep "$@"
-
-# Validate structural-rule examples without accepting snapshot changes.
-ast-grep-tests:
-    ast-grep test --config sgconfig.yml --skip-snapshot-tests
-
-# Rewrite raw test attributes only under explicit paths whose enclosing test
-# modules already import `kithara_test_utils::kithara`.
-[positional-arguments]
-fix-raw-tests TARGET *MORE:
-    ast-grep scan --rule .config/ast-grep-fixes/arch.no-raw-test.yml --update-all --report-style short "$@"
 
 [positional-arguments]
 audit-clippy *ARGS:

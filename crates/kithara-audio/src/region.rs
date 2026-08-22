@@ -135,7 +135,7 @@ mod tests {
         GridSegment::new(start, end, ratio)
     }
 
-    #[test]
+    #[kithara_test_utils::kithara::test(native, flash(false))]
     fn plan_rejects_invalid_segments() {
         assert!(matches!(
             RegionPlan::new(vec![seg(10, 10, 1.0)]),
@@ -151,7 +151,7 @@ mod tests {
         ));
     }
 
-    #[test]
+    #[kithara_test_utils::kithara::test(native, flash(false))]
     fn lookup_covers_segments_and_gaps() {
         let plan =
             RegionPlan::new(vec![seg(100, 200, 1.1), seg(300, 400, 0.9)]).expect("valid plan");

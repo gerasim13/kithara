@@ -56,7 +56,7 @@ fn workspace_relative(path: &str) -> String {
 mod tests {
     use super::*;
 
-    #[test]
+    #[kithara_test_utils::kithara::test(native, flash(false))]
     fn caller_symbol_is_reduced_to_owner_and_method() {
         assert_eq!(
             symbol_name("kithara_queue::queue::lifecycle::Queue::append"),

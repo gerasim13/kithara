@@ -50,7 +50,7 @@ pub fn crossfader_gain(bus: CrossfaderBus, position: f32) -> Result<f32, PlayErr
 mod tests {
     use super::*;
 
-    #[test]
+    #[kithara_test_utils::kithara::test(native, flash(false))]
     fn a_b_endpoints_are_exact() {
         assert_eq!(crossfader_gain(CrossfaderBus::A, 0.0).unwrap(), 1.0);
         assert_eq!(crossfader_gain(CrossfaderBus::A, 1.0).unwrap(), 0.0);
@@ -58,14 +58,14 @@ mod tests {
         assert_eq!(crossfader_gain(CrossfaderBus::B, 1.0).unwrap(), 1.0);
     }
 
-    #[test]
+    #[kithara_test_utils::kithara::test(native, flash(false))]
     fn center_is_equal_power() {
         let center = 0.5_f32.sqrt();
         assert!((crossfader_gain(CrossfaderBus::A, 0.5).unwrap() - center).abs() < 1e-6);
         assert!((crossfader_gain(CrossfaderBus::B, 0.5).unwrap() - center).abs() < 1e-6);
     }
 
-    #[test]
+    #[kithara_test_utils::kithara::test(native, flash(false))]
     fn bypass_is_always_unity() {
         for &position in &[0.0, 0.25, 0.5, 0.75, 1.0] {
             assert_eq!(
@@ -75,7 +75,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[kithara_test_utils::kithara::test(native, flash(false))]
     fn invalid_position_is_rejected() {
         assert!(crossfader_gain(CrossfaderBus::A, -0.1).is_err());
         assert!(crossfader_gain(CrossfaderBus::A, 1.1).is_err());

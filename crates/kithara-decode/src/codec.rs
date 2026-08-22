@@ -134,7 +134,7 @@ pub(crate) trait FrameCodec: Send + 'static {
 mod tests {
     use super::*;
 
-    #[test]
+    #[kithara_test_utils::kithara::test(native, flash(false))]
     fn codec_priming_default_is_all_zero() {
         let p = CodecPriming::default();
         assert_eq!(p.frames, 0);

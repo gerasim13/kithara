@@ -54,13 +54,13 @@ fn smoke(kind: StretchKind) {
 }
 
 #[cfg(feature = "stretch-signalsmith")]
-#[test]
+#[kithara_test_utils::kithara::test(native, flash(false))]
 fn builds_and_processes_signalsmith_backend() {
     smoke(StretchKind::Signalsmith);
 }
 
 #[cfg(feature = "stretch-bungee")]
-#[test]
+#[kithara_test_utils::kithara::test(native, flash(false))]
 fn builds_and_processes_bungee_backend() {
     smoke(StretchKind::Bungee);
 }

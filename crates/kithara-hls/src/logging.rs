@@ -65,7 +65,7 @@ mod tests {
 
     use super::*;
 
-    #[test]
+    #[kithara_test_utils::kithara::test(native, flash(false))]
     fn display_omits_credentials_query_and_fragment() {
         let url = Url::parse(
             "https://api-user:api-password@keys.example.com:8443/key.bin?access_token=secret#part",
@@ -81,7 +81,7 @@ mod tests {
         assert!(!display.contains("part"));
     }
 
-    #[test]
+    #[kithara_test_utils::kithara::test(native, flash(false))]
     fn network_error_display_omits_url_body_and_backend_details() {
         let url = Url::parse("https://api-user:api-password@keys.example/key?token=secret")
             .expect("valid URL");

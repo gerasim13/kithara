@@ -88,7 +88,7 @@ mod tests {
         out
     }
 
-    #[test]
+    #[kithara_test_utils::kithara::test(native, flash(false))]
     fn stereo_48k_header_matches_the_wire_format() {
         assert_eq!(
             header(48_000, 2, Consts::PAYLOAD),
@@ -96,7 +96,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[kithara_test_utils::kithara::test(native, flash(false))]
     fn mono_44k1_header_matches_the_wire_format() {
         assert_eq!(
             header(44_100, 1, Consts::PAYLOAD),
@@ -104,7 +104,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[kithara_test_utils::kithara::test(native, flash(false))]
     fn the_frame_carries_the_header_and_the_payload() {
         let mut out = Vec::new();
         AdtsPacker::new(48_000, 2)
@@ -116,7 +116,7 @@ mod tests {
         assert_eq!(&out[AdtsPacker::HEADER_LEN..], [1, 2, 3]);
     }
 
-    #[test]
+    #[kithara_test_utils::kithara::test(native, flash(false))]
     fn a_rate_outside_the_table_is_rejected() {
         let error = AdtsPacker::new(45_000, 2).expect_err("unsupported rate");
 
@@ -131,7 +131,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[kithara_test_utils::kithara::test(native, flash(false))]
     fn a_channel_count_outside_the_table_is_rejected() {
         for channels in [0, 7, 8] {
             let error = AdtsPacker::new(48_000, channels).expect_err("unsupported channels");
@@ -143,7 +143,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[kithara_test_utils::kithara::test(native, flash(false))]
     fn a_payload_past_the_frame_length_field_is_rejected() {
         let packer = AdtsPacker::new(48_000, 2).expect("packer");
         let mut out = Vec::new();

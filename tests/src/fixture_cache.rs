@@ -127,7 +127,7 @@ impl FixtureCache {
 mod tests {
     use super::*;
 
-    #[test]
+    #[kithara_test_utils::kithara::test(native, flash(false))]
     fn key_is_stable_and_domain_separated() {
         let a = cache_key("signal", b"sine|44100|2|440|1.0|mp3");
         let a2 = cache_key("signal", b"sine|44100|2|440|1.0|mp3");
@@ -140,7 +140,7 @@ mod tests {
         assert!(a.chars().all(|c| c.is_ascii_hexdigit()));
     }
 
-    #[test]
+    #[kithara_test_utils::kithara::test(native, flash(false))]
     fn disabled_only_via_explicit_none() {
         let store = FixtureCache::from_dir(None);
         assert!(store.get("signal", b"spec").is_none());
@@ -148,7 +148,7 @@ mod tests {
         assert!(store.get("signal", b"spec").is_none());
     }
 
-    #[test]
+    #[kithara_test_utils::kithara::test(native, flash(false))]
     fn default_cache_dir_is_fingerprinted_under_temp() {
         let dir = resolve_cache_dir(None);
         let base = std::env::temp_dir().join("kithara-fixture-cache");
@@ -164,7 +164,7 @@ mod tests {
         assert!(fingerprint.chars().all(|c| c.is_ascii_hexdigit()));
     }
 
-    #[test]
+    #[kithara_test_utils::kithara::test(native, flash(false))]
     fn explicit_cache_root_is_preserved() {
         let root = PathBuf::from("explicit-cache-root");
         let dir = resolve_cache_dir(Some(root.clone()));
@@ -175,7 +175,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[kithara_test_utils::kithara::test(native, flash(false))]
     fn explicit_cache_root_ends_with_build_fingerprint() {
         let dir = resolve_cache_dir(Some(PathBuf::from("explicit-cache-root")));
 
@@ -185,7 +185,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[kithara_test_utils::kithara::test(native, flash(false))]
     fn from_env_is_enabled_by_default() {
         // Read-only env probe: under the opt-in `cold` profile the setup
         // script exports KITHARA_FIXTURE_CACHE, so only assert the default
@@ -200,7 +200,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[kithara_test_utils::kithara::test(native, flash(false))]
     fn roundtrip_hit_after_store() {
         let dir = std::env::temp_dir().join(format!("fixcache-test-{}", uuid::Uuid::new_v4()));
         let store = FixtureCache::from_dir(Some(dir.clone()));
@@ -213,7 +213,7 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
     }
 
-    #[test]
+    #[kithara_test_utils::kithara::test(native, flash(false))]
     fn entry_lock_is_exclusive_and_released_on_drop() {
         let dir = std::env::temp_dir().join(format!("fixcache-lock-{}", uuid::Uuid::new_v4()));
         let store = FixtureCache::from_dir(Some(dir.clone()));
@@ -236,7 +236,7 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
     }
 
-    #[test]
+    #[kithara_test_utils::kithara::test(native, flash(false))]
     fn corrupt_or_empty_entry_is_a_miss() {
         let dir = std::env::temp_dir().join(format!("fixcache-test-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&dir).unwrap();

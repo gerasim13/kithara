@@ -615,7 +615,7 @@ mod tests {
 
     use super::{Packet, packet_ends_at_or_before, pending_reason};
 
-    #[test]
+    #[kithara_test_utils::kithara::test(native, flash(false))]
     fn resume_floor_rejects_the_packet_before_the_authoritative_timestamp() {
         let packet = Packet::new(
             0,
@@ -628,7 +628,7 @@ mod tests {
         assert!(!packet_ends_at_or_before(&packet, 2_151));
     }
 
-    #[test]
+    #[kithara_test_utils::kithara::test(native, flash(false))]
     fn would_block_uses_source_pending_reason() {
         let error = SymphoniaError::IoError(io::Error::from(io::ErrorKind::WouldBlock));
 

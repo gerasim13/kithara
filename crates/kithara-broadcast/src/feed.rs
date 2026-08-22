@@ -89,7 +89,7 @@ mod tests {
         (producer, drops, feed)
     }
 
-    #[test]
+    #[kithara_test_utils::kithara::test(native, flash(false))]
     fn a_gap_is_reported_once() {
         let (mut producer, drops, mut feed) = ring();
         let mut out = Vec::new();
@@ -109,7 +109,7 @@ mod tests {
         assert_eq!(feed.poll(&mut out).dropped, 8, "only the new gap");
     }
 
-    #[test]
+    #[kithara_test_utils::kithara::test(native, flash(false))]
     fn a_released_producer_hands_over_its_remainder_before_the_end() {
         let (mut producer, _drops, mut feed) = ring();
         let mut out = Vec::new();
@@ -132,7 +132,7 @@ mod tests {
         assert!(out.is_empty());
     }
 
-    #[test]
+    #[kithara_test_utils::kithara::test(native, flash(false))]
     fn a_closed_feed_hands_over_what_the_ring_held_and_ends_there() {
         let (mut producer, _drops, mut feed) = ring();
         let mut out = Vec::new();
@@ -151,7 +151,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[kithara_test_utils::kithara::test(native, flash(false))]
     fn an_empty_ring_with_a_live_producer_polls_empty() {
         let (_producer, _drops, mut feed) = ring();
         let mut out = Vec::new();

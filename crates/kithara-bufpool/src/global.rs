@@ -189,7 +189,7 @@ mod tests {
     /// from the free list instead of allocating, and allocating is what the
     /// audio thread may not do. Measured on a pool nobody else holds, because
     /// the property is the warm's, not a moment's.
-    #[test]
+    #[kithara_test_utils::kithara::test(native, flash(false))]
     fn a_warmed_pool_serves_what_it_was_warmed_for_without_allocating() {
         let pool = PcmPool::new(128, 200_000);
         let samples = 4_608 * 2;
@@ -208,7 +208,7 @@ mod tests {
     }
 
     /// One more than it was warmed for has to come from somewhere.
-    #[test]
+    #[kithara_test_utils::kithara::test(native, flash(false))]
     fn a_warmed_pool_still_allocates_past_its_warm() {
         let pool = PcmPool::new(128, 200_000);
         let samples = 4_608 * 2;
@@ -229,7 +229,7 @@ mod tests {
     /// A warm that hands back buffers too small for a decode is no warm at
     /// all: the first `resize` reallocates on the very path the pool exists to
     /// keep allocation-free.
-    #[test]
+    #[kithara_test_utils::kithara::test(native, flash(false))]
     fn a_warmed_buffer_is_already_the_size_it_was_warmed_to() {
         let pool = PcmPool::new(128, 200_000);
         let samples = 4_608 * 2;

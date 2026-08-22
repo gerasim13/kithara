@@ -279,7 +279,7 @@ impl Resampler for DelayedProbeResampler {
     }
 }
 
-#[test]
+#[kithara_test_utils::kithara::test(native, flash(false))]
 fn standalone_decoder_adapter_wraps_configured_backend() {
     let target_rate = NonZeroU32::new(TARGET_RATE).expect("test rate");
     let mut decoder = decoder_with_resampler(target_rate, AdapterProbeBackend);
@@ -294,7 +294,7 @@ fn standalone_decoder_adapter_wraps_configured_backend() {
     assert_eq!(&*output.samples, marker_samples());
 }
 
-#[test]
+#[kithara_test_utils::kithara::test(native, flash(false))]
 fn standalone_decoder_adapter_flushes_backend_delay_at_eof() {
     let target_rate = NonZeroU32::new(TARGET_RATE).expect("test rate");
     let mut decoder = decoder_with_resampler(target_rate, DelayedProbeBackend);
@@ -312,7 +312,7 @@ fn standalone_decoder_adapter_flushes_backend_delay_at_eof() {
     ));
 }
 
-#[test]
+#[kithara_test_utils::kithara::test(native, flash(false))]
 fn resampler_never_sees_a_sample_the_file_poisoned() {
     let captured: Captured = Arc::default();
     let target_rate = NonZeroU32::new(TARGET_RATE).expect("test rate");
@@ -352,7 +352,7 @@ fn resampler_never_sees_a_sample_the_file_poisoned() {
     drop(seen);
 }
 
-#[test]
+#[kithara_test_utils::kithara::test(native, flash(false))]
 fn decoder_factory_uses_configured_pcm_pool() {
     let pcm_pool = PcmPool::new(4, 4_096);
     let config: DecoderConfig = DecoderConfig::builder()

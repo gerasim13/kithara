@@ -50,7 +50,7 @@ fn spin_for(d: Duration) {
     }
 }
 
-#[test]
+#[kithara_test_utils::kithara::test(native, flash(false))]
 fn budget_flags_over_budget_poll() {
     force_mode(Mode::Panic);
 
@@ -67,7 +67,7 @@ fn budget_flags_over_budget_poll() {
     assert!(msg.contains("budget"), "got: {msg}");
 }
 
-#[test]
+#[kithara_test_utils::kithara::test(native, flash(false))]
 fn blanket_wait_over_budget_logs_not_panics() {
     force_mode(Mode::Panic);
     force_blanket_budget(Duration::from_millis(BLANKET_TEST_BUDGET_MS));
@@ -95,7 +95,7 @@ fn blanket_wait_over_budget_logs_not_panics() {
     let _ = fs::remove_file(path);
 }
 
-#[test]
+#[kithara_test_utils::kithara::test(native, flash(false))]
 fn blanket_spin_over_budget_panics() {
     force_mode(Mode::Panic);
     force_blanket_budget(Duration::from_millis(BLANKET_TEST_BUDGET_MS));
@@ -115,7 +115,7 @@ fn blanket_spin_over_budget_panics() {
     assert!(msg.contains("CPU spin"), "got: {msg}");
 }
 
-#[test]
+#[kithara_test_utils::kithara::test(native, flash(false))]
 fn off_mode_skips_blocking_checks_and_budget() {
     force_mode(Mode::Off);
 
@@ -143,7 +143,7 @@ fn off_mode_skips_blocking_checks_and_budget() {
     assert!(msg.contains("panic_task"), "got: {msg}");
 }
 
-#[test]
+#[kithara_test_utils::kithara::test(native, flash(false))]
 fn budget_ignores_paused_time() {
     force_mode(Mode::Panic);
 
@@ -154,7 +154,7 @@ fn budget_ignores_paused_time() {
     let _ = poll_once(fut);
 }
 
-#[test]
+#[kithara_test_utils::kithara::test(native, flash(false))]
 fn fast_poll_passes() {
     force_mode(Mode::Panic);
 
@@ -164,7 +164,7 @@ fn fast_poll_passes() {
     ));
 }
 
-#[test]
+#[kithara_test_utils::kithara::test(native, flash(false))]
 fn census_writes_to_forced_log_path() {
     force_mode(Mode::Census);
 
@@ -186,7 +186,7 @@ fn census_writes_to_forced_log_path() {
     let _ = fs::remove_file(path);
 }
 
-#[test]
+#[kithara_test_utils::kithara::test(native, flash(false))]
 fn census_panics_when_configured_log_cannot_be_written() {
     force_mode(Mode::Census);
 
@@ -214,7 +214,7 @@ fn census_panics_when_configured_log_cannot_be_written() {
     );
 }
 
-#[test]
+#[kithara_test_utils::kithara::test(native, flash(false))]
 fn forbid_fires_on_platform_sleep_inside_poll() {
     force_mode(Mode::Panic);
 
@@ -234,7 +234,7 @@ fn forbid_fires_on_platform_sleep_inside_poll() {
     );
 }
 
-#[test]
+#[kithara_test_utils::kithara::test(native, flash(false))]
 fn allow_block_permit_suppresses_forbid() {
     force_mode(Mode::Panic);
 
@@ -245,7 +245,7 @@ fn allow_block_permit_suppresses_forbid() {
     let _ = poll_once(fut);
 }
 
-#[test]
+#[kithara_test_utils::kithara::test(native, flash(false))]
 fn permit_poll_suppresses_forbid_and_budget() {
     force_mode(Mode::Panic);
 
@@ -259,7 +259,7 @@ fn permit_poll_suppresses_forbid_and_budget() {
     let _ = poll_once(fut);
 }
 
-#[test]
+#[kithara_test_utils::kithara::test(native, flash(false))]
 fn forbid_still_fires_after_permit_poll_scope_ends() {
     force_mode(Mode::Panic);
 
@@ -284,14 +284,14 @@ fn forbid_still_fires_after_permit_poll_scope_ends() {
     assert!(msg.contains("plain"), "got: {msg}");
 }
 
-#[test]
+#[kithara_test_utils::kithara::test(native, flash(false))]
 fn sleep_outside_poll_is_untouched() {
     force_mode(Mode::Panic);
 
     crate::thread::sleep(Duration::from_millis(1));
 }
 
-#[test]
+#[kithara_test_utils::kithara::test(native, flash(false))]
 fn snapshot_rate_limits_thread_cpu_reads() {
     force_mode(Mode::Panic);
 

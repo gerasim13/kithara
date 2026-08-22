@@ -69,7 +69,7 @@ impl<T> DerefMut for MutexGuard<'_, T> {
 mod tests {
     use super::Mutex;
 
-    #[test]
+    #[kithara_test_utils::kithara::test(native, flash(false))]
     fn unlocked_releases_and_relocks() {
         let m = Mutex::new(1);
         let mut g = m.lock();

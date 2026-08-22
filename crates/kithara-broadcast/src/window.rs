@@ -157,7 +157,7 @@ mod tests {
         u64::try_from(BroadcastConfig::WINDOW).expect("the window fits a sequence number")
     }
 
-    #[test]
+    #[kithara_test_utils::kithara::test(native, flash(false))]
     fn the_playlist_holds_the_last_window_of_segments() {
         let mut window = window();
 
@@ -185,7 +185,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[kithara_test_utils::kithara::test(native, flash(false))]
     fn an_evicted_segment_stays_fetchable_for_the_grace() {
         let mut window = window();
 
@@ -203,7 +203,7 @@ mod tests {
         assert!(snapshot.segment(9).is_some());
     }
 
-    #[test]
+    #[kithara_test_utils::kithara::test(native, flash(false))]
     fn a_discontinuous_segment_carries_the_tag() {
         let mut window = window();
 
@@ -225,7 +225,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[kithara_test_utils::kithara::test(native, flash(false))]
     fn the_discontinuity_sequence_counts_the_tags_that_left_the_playlist() {
         let mut window = window();
 
@@ -255,7 +255,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[kithara_test_utils::kithara::test(native, flash(false))]
     fn a_live_playlist_has_no_endlist_and_a_finished_one_does() {
         let mut window = window();
         fill(&mut window, 3);
@@ -278,7 +278,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[kithara_test_utils::kithara::test(native, flash(false))]
     fn the_target_duration_is_the_configured_one_whatever_the_window_holds() {
         let mut window = window();
         let empty = window.snapshot();
@@ -300,7 +300,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[kithara_test_utils::kithara::test(native, flash(false))]
     fn a_window_of_short_segments_keeps_the_configured_target_duration() {
         let mut window = window();
 
@@ -319,7 +319,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[kithara_test_utils::kithara::test(native, flash(false))]
     fn an_empty_window_renders_a_playlist_with_no_segments() {
         assert_eq!(
             window().snapshot().playlist.as_ref(),
@@ -331,7 +331,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[kithara_test_utils::kithara::test(native, flash(false))]
     fn the_rendered_playlist_is_grammatical_hls() {
         let mut window = window();
         fill(&mut window, 10);
@@ -352,7 +352,7 @@ mod tests {
         assert!(parsed.has_end_list);
     }
 
-    #[test]
+    #[kithara_test_utils::kithara::test(native, flash(false))]
     fn a_window_the_playlist_rules_reject_is_refused() {
         assert!(LiveWindow::new(&BroadcastConfig::builder().window(0).build()).is_err());
         assert!(LiveWindow::new(&BroadcastConfig::builder().sample_rate(0).build()).is_err());

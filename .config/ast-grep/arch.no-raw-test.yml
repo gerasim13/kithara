@@ -1,15 +1,16 @@
 id: arch.no-raw-test
 message: |
-  Product crates must use `#[kithara::test]` instead of raw `#[test]` so
-  test execution follows the workspace's native/WASM and Flash contracts.
+  Product crates must use the Kithara test harness instead of raw `#[test]`.
+  The native and flash(false) flags preserve the execution surface and clock
+  semantics of an existing Rust test; broader coverage remains explicit.
 
-  To rewrite an explicit scope, first import
-  `kithara_test_utils::kithara` in the enclosing test module, then run:
-  `just lint fix-raw-tests <path> [<path> ...]`.
-severity: warning
+  Apply configured fixes to the workspace or an explicit crate/path scope with
+  `just lint ast-grep --fix --allow-dirty [<path> ...]`.
+severity: error
 language: Rust
 files:
-  - crates/**/src/**/*.rs
+  - crates/**/*.rs
+  - tests/**/*.rs
 ignores:
   - "**/kithara-devtools/**"
   - "**/kithara-encode/**"
@@ -21,3 +22,4 @@ rule:
   all:
     - kind: attribute_item
     - regex: '^#\[test\]$'
+fix: "#[kithara_test_utils::kithara::test(native, flash(false))]"

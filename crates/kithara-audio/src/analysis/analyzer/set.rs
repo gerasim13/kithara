@@ -157,7 +157,7 @@ mod tests {
         Box::new(mock)
     }
 
-    #[test]
+    #[kithara_test_utils::kithara::test(native, flash(false))]
     fn finish_staged_emits_once_without_a_beat_pass() {
         let spec = PcmSpec {
             channels: 2,
@@ -174,7 +174,7 @@ mod tests {
         assert!(stages[0].beat().is_none());
     }
 
-    #[test]
+    #[kithara_test_utils::kithara::test(native, flash(false))]
     fn finish_staged_emits_waveform_then_waveform_plus_beat() {
         let spec = PcmSpec {
             channels: 2,
