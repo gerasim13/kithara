@@ -25,9 +25,9 @@ use kithara_stream::{
 use kithara_test_utils::kithara;
 use url::Url;
 
-use super::{HlsVariant, PlanCtx, SizeDemand, VariantParts, segment_placeholder_size};
+use super::{HlsVariant, PlanCtx, PlanKnobs, SizeDemand, VariantParts, segment_placeholder_size};
 use crate::{
-    config::SizeProbeMethod,
+    config::{HlsConfig, SizeProbeMethod},
     playlist::{PlaylistState, SegmentState, VariantState},
     segment::{
         InitSegment, MediaSegment, PlannedFetch, Segment, SegmentContent, SegmentSize,
@@ -46,7 +46,6 @@ fn test_ctx(prefetch_budget: usize) -> PlanCtx {
             .build(),
     );
     PlanCtx {
-        prefetch_budget,
         bus: EventBus::new(8),
         scope: backend
             .scope::<crate::Hls>(&AssetSource::Remote {
@@ -55,11 +54,15 @@ fn test_ctx(prefetch_budget: usize) -> PlanCtx {
             })
             .expect("test asset scope"),
         seek_epoch: 0,
-        look_ahead_bytes: None,
-        look_ahead_segments: None,
         headers: None,
-        size_probe_method: SizeProbeMethod::Head,
         signal: SizeSignal::new(Arc::new(ThreadGate::default()), Arc::new(OnceLock::new())),
+        knobs: PlanKnobs {
+            prefetch_budget,
+            acquire_attempt_budget: HlsConfig::DEFAULT_ACQUIRE_ATTEMPT_BUDGET,
+            look_ahead_bytes: None,
+            look_ahead_segments: None,
+            size_probe_method: SizeProbeMethod::Head,
+        },
     }
 }
 
@@ -1229,7 +1232,7 @@ fn dispatch_respects_budget() {
 #[kithara::test]
 fn dispatch_respects_segment_lookahead_cap() {
     let mut ctx = test_ctx(10);
-    ctx.look_ahead_segments = Some(2);
+    ctx.knobs.look_ahead_segments = Some(2);
     let v = make_var(0, 0, &[100; 6], &ctx);
     v.rebuild(&ctx, 0);
     let session = active_session(&v, &ctx, 0);

@@ -115,7 +115,13 @@ impl HlsVariant {
             signal.fire();
         });
         let segment_peer = SegmentPeer::new(self.profile.headers.clone());
-        Some(segment_peer.size_probe(url, ctx.size_probe_method, cancel, writer, on_complete))
+        Some(segment_peer.size_probe(
+            url,
+            ctx.knobs.size_probe_method,
+            cancel,
+            writer,
+            on_complete,
+        ))
     }
 
     pub(super) fn dispatch_size_demands(

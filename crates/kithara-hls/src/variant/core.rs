@@ -32,13 +32,13 @@ pub(super) const INIT_PLACEHOLDER_BYTES: u64 = 16 * 1024;
 /// deferred" (a `2^64 - 1` byte cursor is unreachable).
 pub(super) const NO_PREFETCH_DEFERRAL: u64 = u64::MAX;
 
-pub(crate) struct PlanCtx {
-    pub(crate) scope: kithara_assets::AssetScope,
-    pub(crate) bus: EventBus,
-    /// Per-resource HTTP headers applied to every init/segment fetch.
-    /// Mirrors `HlsConfig::headers`; threaded through so DRM-style auth
-    /// tokens carried by the playlist load also reach segment GETs.
-    pub(crate) headers: Option<Headers>,
+/// The `HlsConfig`-derived slice of a plan: everything the dispatch policy
+/// reads, resolved once when the stream is built and carried unchanged into
+/// every [`PlanCtx`] the peer constructs afterwards. Kept apart from the
+/// per-activation runtime handles so a new knob lands in the config and not in
+/// another positional argument.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct PlanKnobs {
     /// Max bytes the downloader may be ahead of the reader before
     /// `dispatch` pauses emitting `FetchCmd`s. Mirrors
     /// `HlsConfig::look_ahead_bytes`:
@@ -57,13 +57,28 @@ pub(crate) struct PlanCtx {
     /// and trigger eviction/rebuild thrash.
     pub(crate) look_ahead_segments: Option<usize>,
     pub(crate) size_probe_method: SizeProbeMethod,
+    /// Mirrors `HlsConfig::download_batch_size`: segments one dispatch round
+    /// may emit.
+    pub(crate) prefetch_budget: usize,
+    /// Mirrors `HlsConfig::acquire_attempt_budget`: dispatch rounds a slot
+    /// gets before an acquire failure settles it terminally.
+    pub(crate) acquire_attempt_budget: u8,
+}
+
+pub(crate) struct PlanCtx {
+    pub(crate) scope: kithara_assets::AssetScope,
+    pub(crate) bus: EventBus,
+    /// Per-resource HTTP headers applied to every init/segment fetch.
+    /// Mirrors `HlsConfig::headers`; threaded through so DRM-style auth
+    /// tokens carried by the playlist load also reach segment GETs.
+    pub(crate) headers: Option<Headers>,
+    pub(crate) knobs: PlanKnobs,
     pub(crate) signal: SizeSignal,
     /// Snapshot of `SeekObserve::epoch()` at plan-time. Tagged on
     /// every emitted `FetchCmd`'s probe so integration tests can
     /// distinguish fetches that pre-date a user seek from those that
     /// the scheduler issued *after* observing the new epoch.
     pub(crate) seek_epoch: u64,
-    pub(crate) prefetch_budget: usize,
 }
 
 pub(crate) struct HlsVariant {

@@ -9,14 +9,6 @@ use tracing::{debug, warn};
 use super::{HlsVariant, PlanCtx, core::NO_PREFETCH_DEFERRAL};
 use crate::segment::{Downloading, FetchClaim, PlannedFetch, Segment};
 
-/// Acquire attempts a segment slot gets before the dispatch gives up on it.
-/// A requeue is re-dispatched on the peer's next poll, so this counts
-/// dispatch rounds rather than wall-clock time: enough for an obstruction
-/// another task is already clearing to disappear, and few enough that a
-/// standing one reaches the reader instead of parking it. The third failure
-/// settles the slot.
-const ACQUIRE_ATTEMPT_BUDGET: u8 = 3;
-
 /// What a dispatch-side acquire failure does to the slot.
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 enum AcquireSettle {
@@ -34,16 +26,16 @@ enum AcquireSettle {
 /// retry is guaranteed to resolve and needs no budget. Nothing promises as
 /// much for any other error — but a momentary one, a descriptor the host was
 /// briefly short of or a parent directory a concurrent eviction was removing,
-/// must not cost the whole segment either. Those retry against
-/// [`ACQUIRE_ATTEMPT_BUDGET`] and settle `Fail` once it is spent, because a
-/// requeue that never resolves is invisible: the slot stays planned, so
-/// `range_wait_phase` answers `WaitingDemand` and `range_has_failed` stays
+/// must not cost the whole segment either. Those retry against `budget`
+/// ([`crate::HlsConfig::acquire_attempt_budget`]) and settle `Fail` once it is spent,
+/// because a requeue that never resolves is invisible: the slot stays planned,
+/// so `range_wait_phase` answers `WaitingDemand` and `range_has_failed` stays
 /// false while the decode gate parks for good.
-const fn settle_for(err: &AssetsError, failures: u8) -> AcquireSettle {
+const fn settle_for(err: &AssetsError, failures: u8, budget: u8) -> AcquireSettle {
     if matches!(err, AssetsError::Storage(StorageError::TmpClaimed(_))) {
         return AcquireSettle::Requeue;
     }
-    if failures < ACQUIRE_ATTEMPT_BUDGET {
+    if failures < budget {
         AcquireSettle::Requeue
     } else {
         AcquireSettle::Fail
@@ -77,6 +69,7 @@ impl HlsVariant {
         self.dispatch_size_demands(ctx, &mut out, &mut remaining, &cancel);
         let prefetch_base = position.max(self.prefetch_anchor());
         let prefetch_byte_cap = ctx
+            .knobs
             .look_ahead_bytes
             .map(|n| prefetch_base.saturating_add(n));
         let prefetch_segment_cap = self.prefetch_segment_cap(ctx, prefetch_base);
@@ -97,6 +90,7 @@ impl HlsVariant {
                             && seg_off > cap
                         {
                             resume_at = ctx
+                                .knobs
                                 .look_ahead_bytes
                                 .map(|window| seg_off.saturating_sub(window));
                             break;
@@ -217,7 +211,7 @@ impl HlsVariant {
                 r
             }
             Err(err) => {
-                self.settle_unacquirable(entry, seg_idx, handle, &err);
+                self.settle_unacquirable(ctx, entry, seg_idx, handle, &err);
                 return None;
             }
         };
@@ -234,13 +228,14 @@ impl HlsVariant {
     /// [`settle_for`].
     fn settle_unacquirable(
         &self,
+        ctx: &PlanCtx,
         entry: &Segment,
         seg_idx: u32,
         handle: FetchClaim<Downloading>,
         err: &AssetsError,
     ) {
         let failures = entry.state().note_acquire_failure();
-        match settle_for(err, failures) {
+        match settle_for(err, failures, ctx.knobs.acquire_attempt_budget) {
             AcquireSettle::Requeue => {
                 debug!(
                     variant = self.variant,
@@ -277,7 +272,7 @@ impl HlsVariant {
 }
 
 fn look_ahead_segments(ctx: &PlanCtx) -> Option<u32> {
-    let window = ctx.look_ahead_segments?;
+    let window = ctx.knobs.look_ahead_segments?;
     Some(u32::try_from(window.max(1)).unwrap_or(u32::MAX))
 }
 
@@ -286,6 +281,7 @@ mod tests {
     use std::{io, path::PathBuf};
 
     use super::*;
+    use crate::config::HlsConfig;
 
     fn tmp_claimed() -> AssetsError {
         AssetsError::Storage(StorageError::TmpClaimed(PathBuf::from("seg.m4s.tmp")))
@@ -295,13 +291,15 @@ mod tests {
         AssetsError::Io(io::Error::from(io::ErrorKind::IsADirectory))
     }
 
+    const BUDGET: u8 = HlsConfig::DEFAULT_ACQUIRE_ATTEMPT_BUDGET;
+
     /// The holder of a claimed tmp always settles and releases it, so this
     /// retry resolves on its own however long it takes.
     #[kithara::test]
     fn a_claimed_tmp_requeues_without_a_budget() {
-        for failures in [1, ACQUIRE_ATTEMPT_BUDGET, u8::MAX] {
+        for failures in [1, BUDGET, u8::MAX] {
             assert_eq!(
-                settle_for(&tmp_claimed(), failures),
+                settle_for(&tmp_claimed(), failures, BUDGET),
                 AcquireSettle::Requeue,
                 "a live writer's tmp must never fail the slot ({failures} failures)"
             );
@@ -312,11 +310,11 @@ mod tests {
     /// indistinguishable from the standing ones at the point of failure.
     #[kithara::test]
     fn another_error_retries_inside_the_budget() {
-        for failures in 1..ACQUIRE_ATTEMPT_BUDGET {
+        for failures in 1..BUDGET {
             assert_eq!(
-                settle_for(&other(), failures),
+                settle_for(&other(), failures, BUDGET),
                 AcquireSettle::Requeue,
-                "failure {failures} of {ACQUIRE_ATTEMPT_BUDGET} must not be terminal"
+                "failure {failures} of {BUDGET} must not be terminal"
             );
         }
     }
@@ -325,16 +323,30 @@ mod tests {
     /// reaches the reader instead of parking the decode gate for good.
     #[kithara::test]
     fn another_error_fails_the_slot_once_the_budget_is_spent() {
-        assert_eq!(
-            settle_for(&other(), ACQUIRE_ATTEMPT_BUDGET),
-            AcquireSettle::Fail
-        );
+        assert_eq!(settle_for(&other(), BUDGET, BUDGET), AcquireSettle::Fail);
     }
 
     /// Saturating the counter must not wrap back under the budget and hand a
     /// standing obstruction a fresh set of retries.
     #[kithara::test]
     fn a_saturated_counter_stays_terminal() {
-        assert_eq!(settle_for(&other(), u8::MAX), AcquireSettle::Fail);
+        assert_eq!(settle_for(&other(), u8::MAX, BUDGET), AcquireSettle::Fail);
+    }
+
+    /// The budget is a config knob, not a constant: a caller that raises it
+    /// gets the extra rounds, and one that zeroes it settles on the first
+    /// failure.
+    #[kithara::test]
+    fn the_budget_comes_from_the_caller() {
+        assert_eq!(
+            settle_for(&other(), BUDGET, BUDGET + 1),
+            AcquireSettle::Requeue,
+            "a raised budget must grant the extra round"
+        );
+    }
+
+    #[kithara::test]
+    fn a_zero_budget_settles_on_the_first_failure() {
+        assert_eq!(settle_for(&other(), 1, 0), AcquireSettle::Fail);
     }
 }
