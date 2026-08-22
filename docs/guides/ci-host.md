@@ -220,9 +220,21 @@ sudo -E target/release/xtask ci host install-services
 sudo -E /Volumes/KitharaCI/services/bin/kithara-ci ci host activate-bridge
 ```
 
+Then, in the logged-in `kithara-ci` GUI session:
+
+```text
+/Volumes/KitharaCI/services/bin/kithara-ci ci host activate
+```
+
 `install-services` replaces the installed binary and the staged service
 definitions without revalidating Xcode; `activate-bridge` boots the daemon out
-and kickstarts it, so the next tick runs the new binary.
+and kickstarts it, so the next tick runs the new binary. `activate` does the
+same for the maintenance agents, and it is not optional: launchd keeps the
+definition it loaded, so the agents otherwise keep running the old one. This
+host spent days cleaning once an hour from a `StartCalendarInterval` left by an
+earlier install, while the plist beside it asked for every five minutes — a
+twelve-fold difference in cadence that comparing the files could not show.
+`launchctl print gui/<uid>/com.zvuk.kithara-ci.cleanup` reports what is loaded.
 
 The old GitLab pull mirror is disabled because it force-updated `main` and
 could discard work already merged here. The bridge now moves `main` only by
