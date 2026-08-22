@@ -5,14 +5,15 @@ message: |
 
     - `Vec<u8>` uses `BytePool`;
     - `Vec<f32>` containing PCM uses `PcmPool`;
-    - other primitive scratch uses `SharedPool<_, Vec<T>>`.
+    - other primitive scratch is reshaped to reuse one of those injected pools.
 
   The rule covers capacity-bearing constructors, `vec!`, `collect`, `to_vec`,
   and `repeat` when the primitive type is explicit. An explicit
   `collect::<Vec<_>>()` is also rejected conservatively in these crates.
   `Vec::new()` alone does not allocate and is intentionally not a finding.
-  Long-lived result storage is allowed, but disposable scratch must come from
-  a pool owned and injected by the subsystem rather than a global accessor.
+  Long-lived result storage is allowed, but disposable scratch must reuse the
+  pool injected by the composition root. Component-local pool construction is
+  forbidden.
 severity: error
 language: Rust
 files:

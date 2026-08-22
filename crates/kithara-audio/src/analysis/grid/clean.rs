@@ -1,45 +1,55 @@
+use kithara_bufpool::{BudgetExhausted, PcmBuf};
 use num_traits::cast::AsPrimitive;
 
-use super::core::GridParams;
+use super::{
+    core::GridParams,
+    scratch::{fill, retain},
+};
 
-pub(super) fn bar_gaps(db: &[f64], gaps: &mut Vec<f64>) {
-    gaps.clear();
-    gaps.extend(db.windows(2).map(|window| window[1] - window[0]));
+pub(super) fn bar_gaps(db: &[f32], gaps: &mut PcmBuf) -> Result<(), BudgetExhausted> {
+    fill(gaps, db.windows(2).map(|window| window[1] - window[0]))
 }
 
 /// np-style median: mean of the two middle values for even lengths.
-pub(super) fn median(values: &[f64], sorted: &mut Vec<f64>) -> f64 {
+pub(super) fn median(values: &[f32], sorted: &mut PcmBuf) -> Result<f64, BudgetExhausted> {
     if values.is_empty() {
-        return 0.0;
+        return Ok(0.0);
     }
-    sorted.clear();
-    sorted.extend_from_slice(values);
-    sorted.sort_unstable_by(f64::total_cmp);
+    fill(sorted, values.iter().copied())?;
+    sorted.sort_unstable_by(f32::total_cmp);
     let n = sorted.len();
     if n % 2 == 1 {
-        sorted[n / 2]
+        Ok(f64::from(sorted[n / 2]))
     } else {
-        f64::midpoint(sorted[n / 2 - 1], sorted[n / 2])
+        Ok(f64::midpoint(
+            f64::from(sorted[n / 2 - 1]),
+            f64::from(sorted[n / 2]),
+        ))
     }
 }
 
 /// Population standard deviation (`np.std` default).
-fn pop_std(values: &[f64]) -> f64 {
+fn pop_std(values: &[f32]) -> f64 {
     if values.is_empty() {
         return 0.0;
     }
     let n: f64 = values.len().as_();
-    let mean = values.iter().sum::<f64>() / n;
-    (values.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / n).sqrt()
+    let mean = values.iter().map(|&value| f64::from(value)).sum::<f64>() / n;
+    (values
+        .iter()
+        .map(|&value| (f64::from(value) - mean).powi(2))
+        .sum::<f64>()
+        / n)
+        .sqrt()
 }
 
 /// Drops detector marks closer than `min_gap` to the last retained mark.
-pub(super) fn filter_close(marks: &mut Vec<f64>, min_gap: f64) {
+pub(super) fn filter_close(marks: &mut PcmBuf, min_gap: f64) {
     filter_close_preferring(marks, &[], min_gap);
 }
 
 /// Drops close marks while preserving a preferred mark in each collision.
-pub(super) fn filter_close_preferring(marks: &mut Vec<f64>, preferred: &[f64], min_gap: f64) {
+pub(super) fn filter_close_preferring(marks: &mut PcmBuf, preferred: &[f32], min_gap: f64) {
     if marks.len() < 2 {
         return;
     }
@@ -47,7 +57,7 @@ pub(super) fn filter_close_preferring(marks: &mut Vec<f64>, preferred: &[f64], m
     for read in 1..marks.len() {
         let mark = marks[read];
         let last = marks[kept - 1];
-        if mark - last < min_gap {
+        if f64::from(mark - last) < min_gap {
             let mark_is_preferred = preferred
                 .binary_search_by(|candidate| candidate.total_cmp(&mark))
                 .is_ok();
@@ -67,81 +77,88 @@ pub(super) fn filter_close_preferring(marks: &mut Vec<f64>, preferred: &[f64], m
 
 /// Step 3: slide a `stable_window_bars` window over bar gaps; the lowest
 /// `std + |median − nominal|` window whose median sits inside the trust band
-/// wins. Returns `(anchor_idx, stable_median_bar_samples)` — the window's
+/// wins. Returns `(anchor_idx, stable_median_bar_seconds)` - the window's
 /// centre downbeat and its median bar length (the track's true tempo).
 pub(super) fn find_stable_window(
-    db: &[f64],
+    db: &[f32],
     nominal_bar: f64,
     params: &GridParams,
-    gaps: &mut Vec<f64>,
-    sorted: &mut Vec<f64>,
-) -> Option<(usize, f64)> {
+    gaps: &mut PcmBuf,
+    sorted: &mut PcmBuf,
+) -> Result<Option<(usize, f64)>, BudgetExhausted> {
     let w = params.stable_window_bars;
     if w == 0 || db.len() < w + 1 {
-        return None;
+        return Ok(None);
     }
-    bar_gaps(db, gaps);
+    bar_gaps(db, gaps)?;
     let trust_lo = nominal_bar * (1.0 - params.median_trust_ratio);
     let trust_hi = nominal_bar * (1.0 + params.median_trust_ratio);
     let mut best: Option<(f64, usize, f64)> = None;
     for start in 0..=(gaps.len() - w) {
         let window = &gaps[start..start + w];
-        let med = median(window, sorted);
+        let med = median(window, sorted)?;
         if med < trust_lo || med > trust_hi {
             continue;
         }
         let score = pop_std(window) + (med - nominal_bar).abs();
         if best.is_none_or(|(s, _, _)| score < s) {
-            best = Some((score, start + w / 2, med.round()));
+            best = Some((score, start + w / 2, med));
         }
     }
-    best.map(|(_, idx, med)| (idx, med))
+    Ok(best.map(|(_, idx, med)| (idx, med)))
 }
 
 /// Step 2: a downbeat is an outlier when the gap leading into it falls
 /// outside the hard bar bounds or deviates from the neighbour-window median
 /// factor by more than `outlier_ratio`. The first downbeat never is.
 pub(super) fn classify_outliers(
-    db: &[f64],
+    db: &[f32],
     nominal_bar: f64,
     params: &GridParams,
-    outliers: &mut Vec<bool>,
-    neighbors: &mut Vec<f64>,
-    sorted: &mut Vec<f64>,
-) {
+    outliers: &mut PcmBuf,
+    neighbors: &mut PcmBuf,
+    sorted: &mut PcmBuf,
+) -> Result<(), BudgetExhausted> {
     let n = db.len();
-    outliers.clear();
-    outliers.resize(n, false);
+    fill(outliers, (0..n).map(|_| 0.0))?;
     if n < 2 {
-        return;
+        return Ok(());
     }
-    for (i, slot) in outliers.iter_mut().enumerate().skip(1) {
+    for i in 1..n {
         let center = i - 1;
-        let Some(factor) = gap_factor(db, center, nominal_bar, params) else {
-            *slot = true;
+        let Some(gap) = valid_gap(db, center, nominal_bar, params) else {
+            outliers[i] = 1.0;
             continue;
         };
         let lo = center.saturating_sub(params.outlier_window);
         let hi = (center + params.outlier_window + 1).min(n - 1);
-        neighbors.clear();
-        neighbors.extend(
-            (lo..hi)
-                .filter(|&index| index != center)
-                .filter_map(|index| gap_factor(db, index, nominal_bar, params)),
-        );
-        let med = if neighbors.is_empty() {
+        fill(
+            neighbors,
+            (lo..hi).map(|index| {
+                (index != center)
+                    .then(|| valid_gap(db, index, nominal_bar, params))
+                    .flatten()
+                    .unwrap_or(f32::NAN)
+            }),
+        )?;
+        retain(neighbors, f32::is_finite);
+        let median_factor = if neighbors.is_empty() {
             1.0
         } else {
-            median(neighbors, sorted)
+            median(neighbors, sorted)? / nominal_bar
         };
-        if (factor - med).abs() > params.outlier_ratio {
-            *slot = true;
+        let factor = f64::from(gap) / nominal_bar;
+        if (factor - median_factor).abs() > params.outlier_ratio {
+            outliers[i] = 1.0;
         }
     }
+    Ok(())
 }
 
-fn gap_factor(db: &[f64], index: usize, nominal_bar: f64, params: &GridParams) -> Option<f64> {
+fn valid_gap(db: &[f32], index: usize, nominal_bar: f64, params: &GridParams) -> Option<f32> {
     let gap = db[index + 1] - db[index];
-    (gap >= params.min_bar_ratio * nominal_bar && gap <= params.max_bar_ratio * nominal_bar)
-        .then_some(gap / nominal_bar)
+    let gap_seconds = f64::from(gap);
+    (gap_seconds >= params.min_bar_ratio * nominal_bar
+        && gap_seconds <= params.max_bar_ratio * nominal_bar)
+        .then_some(gap)
 }

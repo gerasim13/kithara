@@ -5,7 +5,7 @@ use kithara_resampler::ResamplerBackend;
 use crate::{
     analysis::{
         analyzer::{BeatAnalysisConfig, default_beat_detector},
-        beat::{BeatDetector, BeatPass, BeatPassConfig, GridParams, GridPool},
+        beat::{BeatDetector, BeatPass, BeatPassConfig, GridParams},
     },
     waveform::BeatGrid,
 };
@@ -21,25 +21,20 @@ where
     detector: Option<Detector>,
 }
 
-pub(crate) struct Config<B>
+pub(crate) struct Config<B>(Option<BeatConfig<B>>)
 where
-    B: ResamplerBackend,
-{
-    beat: Option<BeatConfig<B>>,
-    grid_pool: GridPool,
-}
+    B: ResamplerBackend;
 
 impl<B> Config<B>
 where
     B: ResamplerBackend,
 {
     pub(crate) fn build(&self, spec: PcmSpec, pcm_pool: &PcmPool) -> Slot<B> {
-        Slot(self.beat.as_ref().map(|config| {
+        Slot(self.0.as_ref().map(|config| {
             let pass = BeatPassConfig::builder()
                 .source_rate(spec.sample_rate.get())
                 .params(config.params.clone())
                 .resampler(config.resampler.clone())
-                .grid_pool(self.grid_pool.clone())
                 .pcm_pool(pcm_pool.clone())
                 .build();
             BeatPass::new(pass)
@@ -47,7 +42,7 @@ where
     }
 
     delegate::delegate! {
-        to self.beat {
+        to self.0 {
             #[call(is_none)]
             pub(crate) const fn is_empty(&self) -> bool;
             #[expr($.and_then(|config| config.detector.take()))]
@@ -57,13 +52,13 @@ where
     }
 
     pub(crate) fn set_resampler(&mut self, resampler: BeatAnalysisConfig<B>) {
-        if let Some(config) = &mut self.beat {
+        if let Some(config) = &mut self.0 {
             config.resampler = resampler;
         }
     }
 
     pub(crate) fn with_default(&mut self, resampler: BeatAnalysisConfig<B>) {
-        self.beat = default_beat_detector().map(|detector| BeatConfig {
+        self.0 = default_beat_detector().map(|detector| BeatConfig {
             resampler,
             detector: Some(detector),
             params: GridParams::default(),
@@ -77,7 +72,7 @@ where
         params: GridParams,
         resampler: BeatAnalysisConfig<B>,
     ) {
-        self.beat = Some(BeatConfig {
+        self.0 = Some(BeatConfig {
             params,
             resampler,
             detector: Some(detector),
@@ -90,10 +85,7 @@ where
     B: ResamplerBackend,
 {
     fn default() -> Self {
-        Self {
-            beat: None,
-            grid_pool: GridPool::default(),
-        }
+        Self(None)
     }
 }
 

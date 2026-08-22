@@ -8,7 +8,7 @@ use tracing::warn;
 
 use super::{
     detector::{BeatDetectError, BeatDetector, RawBeats},
-    grid::{GridParams, GridPool, build_grid},
+    grid::{GridParams, build_grid},
 };
 use crate::{analysis::analyzer::BeatAnalysisConfig, waveform::BeatGrid};
 
@@ -20,7 +20,6 @@ where
     resampler: BeatAnalysisConfig<B>,
     #[builder(default)]
     params: GridParams,
-    grid_pool: GridPool,
     pcm_pool: PcmPool,
     source_rate: u32,
 }
@@ -36,7 +35,7 @@ where
     params: GridParams,
     feed: MonoFeed,
     failure: Option<BeatDetectError>,
-    grid_pool: GridPool,
+    pcm_pool: PcmPool,
     resampler: Option<MonoStream<B>>,
     windows: WindowedBeats,
     source_rate: u32,
@@ -58,7 +57,6 @@ where
             source_rate,
             params,
             resampler: config,
-            grid_pool,
             pcm_pool,
         } = config;
         let (feed, resampler) = if source_rate == config.target_rate() {
@@ -69,6 +67,7 @@ where
                 |r| (MonoFeed::Resample, Some(r)),
             )
         };
+        let windows = WindowedBeats::new(&config, &pcm_pool);
 
         Self {
             params,
@@ -76,8 +75,8 @@ where
             resampler,
             source_rate,
             failure: None,
-            grid_pool,
-            windows: WindowedBeats::new(&config, &pcm_pool),
+            pcm_pool,
+            windows,
         }
     }
 
@@ -105,12 +104,8 @@ where
         })?;
 
         let raw = self.windows.finish(detector)?;
-        Ok(build_grid(
-            &raw,
-            self.source_rate,
-            &self.params,
-            &self.grid_pool,
-        ))
+        build_grid(&raw, self.source_rate, &self.params, &self.pcm_pool)
+            .map_err(|_| BeatDetectError::Buffer)
     }
 
     pub(crate) fn push_interleaved(
@@ -367,10 +362,7 @@ mod tests {
         super::detector::{BeatDetectError, BeatDetector, BeatDetectorMock, RawBeats},
         BeatAnalyzer,
     };
-    use crate::analysis::{
-        BeatAnalysisConfig,
-        beat::{BeatPassConfig, GridPool},
-    };
+    use crate::analysis::{BeatAnalysisConfig, beat::BeatPassConfig};
 
     struct Consts;
 
@@ -398,7 +390,6 @@ mod tests {
             BeatPassConfig::builder()
                 .source_rate(source_rate)
                 .resampler(config)
-                .grid_pool(GridPool::default())
                 .pcm_pool(pcm_pool())
                 .build(),
         )

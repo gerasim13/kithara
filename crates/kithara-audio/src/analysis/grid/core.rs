@@ -1,4 +1,5 @@
 use bon::Builder;
+use kithara_bufpool::{BudgetExhausted, PcmBuf, PcmPool};
 use num_traits::cast::ToPrimitive;
 
 use super::{
@@ -6,8 +7,8 @@ use super::{
         bar_gaps, classify_outliers, filter_close, filter_close_preferring, find_stable_window,
         median,
     },
-    fit::{GridFitCtx, anchored_boundaries, build_segments},
-    scratch::{GridPool, GridScratch},
+    fit::{GridFitCtx, build_segments},
+    scratch::{GridBuffers, fill, retain},
 };
 use crate::{analysis::beat::detector::RawBeats, waveform::BeatGrid};
 
@@ -86,146 +87,133 @@ pub(crate) fn build_grid(
     raw: &RawBeats,
     sample_rate: u32,
     params: &GridParams,
-    pool: &GridPool,
-) -> BeatGrid {
-    pool.with(raw.beats.len(), raw.downbeats.len(), |scratch| {
-        build_grid_with(raw, sample_rate, params, scratch)
-    })
+    pool: &PcmPool,
+) -> Result<BeatGrid, BudgetExhausted> {
+    let mut buffers = GridBuffers::new(pool);
+    build_grid_with(raw, sample_rate, params, &mut buffers)
 }
 
 fn build_grid_with(
     raw: &RawBeats,
     sample_rate: u32,
     params: &GridParams,
-    scratch: &mut GridScratch,
-) -> BeatGrid {
+    buffers: &mut GridBuffers,
+) -> Result<BeatGrid, BudgetExhausted> {
     let sr = f64::from(sample_rate);
-    scratch.positions.clear();
-    scratch.positions.extend(
-        raw.downbeats
-            .iter()
-            .map(|&time| f64::from(time) * sr)
-            .filter(|position| position.is_finite() && *position >= 0.0),
-    );
-    scratch.positions.sort_unstable_by(f64::total_cmp);
-    bar_gaps(&scratch.positions, &mut scratch.gaps);
-    let nominal_seed = median(&scratch.gaps, &mut scratch.sorted);
-    filter_close(&mut scratch.positions, params.min_gap_ratio * nominal_seed);
-    bar_gaps(&scratch.positions, &mut scratch.gaps);
-    let downbeat_bpm = bar_to_bpm(median(&scratch.gaps, &mut scratch.sorted), sr);
+    fill(&mut buffers.positions, raw.downbeats.iter().copied())?;
+    retain(&mut buffers.positions, |time| {
+        time.is_finite() && time >= 0.0
+    });
+    buffers.positions.sort_unstable_by(f32::total_cmp);
+    bar_gaps(&buffers.positions, &mut buffers.gaps)?;
+    let nominal_seed = median(&buffers.gaps, &mut buffers.sorted)?;
+    filter_close(&mut buffers.positions, params.min_gap_ratio * nominal_seed);
+    bar_gaps(&buffers.positions, &mut buffers.gaps)?;
+    let downbeat_bpm = bar_to_bpm(median(&buffers.gaps, &mut buffers.sorted)?);
 
-    let beats = clean_beats(
+    clean_beats(
         &raw.beats,
-        &scratch.positions,
-        sr,
+        &buffers.positions,
         params,
-        &mut scratch.marks,
-        &mut scratch.gaps,
-        &mut scratch.sorted,
-    );
-    let marks_bpm = beats_bpm(&beats, sr, &mut scratch.gaps, &mut scratch.sorted);
+        &mut buffers.marks,
+        &mut buffers.gaps,
+        &mut buffers.sorted,
+    )?;
+    let marks_bpm = beats_bpm(&buffers.marks, &mut buffers.gaps, &mut buffers.sorted)?;
+    let beats = positions_to_frames(&buffers.marks, sr);
     if beats.len() >= Consts::MIN_MAP_BEATS {
-        scratch.positions.retain(|position| {
-            position
-                .round()
-                .to_u64()
-                .is_some_and(|frame| beats.binary_search(&frame).is_ok())
+        retain(&mut buffers.positions, |position| {
+            position_to_frame(position, sr).is_some_and(|frame| beats.binary_search(&frame).is_ok())
         });
     }
 
-    if scratch.positions.len() < Consts::MIN_DOWNBEATS {
-        return BeatGrid::new(
+    if buffers.positions.len() < Consts::MIN_DOWNBEATS {
+        return Ok(BeatGrid::new(
             marks_bpm.unwrap_or(downbeat_bpm),
             beats,
-            positions_to_frames(&scratch.positions),
+            positions_to_frames(&buffers.positions, sr),
             Vec::new(),
-        );
+        ));
     }
-    bar_gaps(&scratch.positions, &mut scratch.gaps);
-    let nominal_seed = median(&scratch.gaps, &mut scratch.sorted);
-    let downbeats = positions_to_frames(&scratch.positions);
+    bar_gaps(&buffers.positions, &mut buffers.gaps)?;
+    let nominal_seed = median(&buffers.gaps, &mut buffers.sorted)?;
+    let downbeats = positions_to_frames(&buffers.positions, sr);
 
     // Degraded mode (per plan): too short / no stable tempo region means no
     // trustworthy piecewise grid — report tempo only, no segments.
     let Some((anchor_idx, nominal_bar)) = find_stable_window(
-        &scratch.positions,
+        &buffers.positions,
         nominal_seed,
         params,
-        &mut scratch.gaps,
-        &mut scratch.sorted,
-    ) else {
-        return BeatGrid::new(
+        &mut buffers.gaps,
+        &mut buffers.sorted,
+    )?
+    else {
+        return Ok(BeatGrid::new(
             marks_bpm.unwrap_or(downbeat_bpm),
             beats,
             downbeats,
             Vec::new(),
-        );
+        ));
     };
 
     classify_outliers(
-        &scratch.positions,
+        &buffers.positions,
         nominal_bar,
         params,
-        &mut scratch.outliers,
-        &mut scratch.neighbors,
-        &mut scratch.sorted,
-    );
-    let fit = GridFitCtx::new(&scratch.positions, &scratch.outliers, sr, params);
-    anchored_boundaries(&fit, anchor_idx, &mut scratch.boundaries);
-    let segments = build_segments(&fit, &scratch.boundaries, nominal_bar, &mut scratch.spans);
+        &mut buffers.outliers,
+        &mut buffers.neighbors,
+        &mut buffers.sorted,
+    )?;
+    let fit = GridFitCtx::new(&buffers.positions, &buffers.outliers, sr, params);
+    let segments = build_segments(&fit, anchor_idx, nominal_bar);
 
-    BeatGrid::new(
-        marks_bpm.unwrap_or_else(|| bar_to_bpm(nominal_bar, sr)),
+    Ok(BeatGrid::new(
+        marks_bpm.unwrap_or_else(|| bar_to_bpm(nominal_bar)),
         beats,
         downbeats,
         segments,
-    )
+    ))
 }
 
-/// Converts beat marks to source frames and removes close double detections.
 fn clean_beats(
     secs: &[f32],
-    downbeats: &[f64],
-    sr: f64,
+    downbeats: &[f32],
     params: &GridParams,
-    marks: &mut Vec<f64>,
-    gaps: &mut Vec<f64>,
-    sorted: &mut Vec<f64>,
-) -> Vec<u64> {
-    marks.clear();
-    marks.extend(
-        secs.iter()
-            .map(|&time| f64::from(time) * sr)
-            .filter(|position| position.is_finite() && *position >= 0.0),
-    );
-    marks.sort_unstable_by(f64::total_cmp);
-    bar_gaps(marks, gaps);
-    let nominal = median(gaps, sorted);
+    marks: &mut PcmBuf,
+    gaps: &mut PcmBuf,
+    sorted: &mut PcmBuf,
+) -> Result<(), BudgetExhausted> {
+    fill(marks, secs.iter().copied())?;
+    retain(marks, |time| time.is_finite() && time >= 0.0);
+    marks.sort_unstable_by(f32::total_cmp);
+    bar_gaps(marks, gaps)?;
+    let nominal = median(gaps, sorted)?;
     filter_close_preferring(marks, downbeats, params.min_gap_ratio * nominal);
-    positions_to_frames(marks)
+    Ok(())
 }
 
 /// Estimates tempo by weighting each gap by the beat spans it covers.
-fn beats_bpm(beats: &[u64], sr: f64, gaps: &mut Vec<f64>, sorted: &mut Vec<f64>) -> Option<f64> {
-    gaps.clear();
-    gaps.extend(beats.windows(2).filter_map(|window| {
-        window[1]
-            .checked_sub(window[0])
-            .and_then(|gap| gap.to_f64())
-            .filter(|gap| *gap > 0.0)
-    }));
+fn beats_bpm(
+    beats: &[f32],
+    gaps: &mut PcmBuf,
+    sorted: &mut PcmBuf,
+) -> Result<Option<f64>, BudgetExhausted> {
+    bar_gaps(beats, gaps)?;
+    retain(gaps, |gap| gap > 0.0);
     if gaps.len() < Consts::MIN_BEAT_GAPS {
-        return None;
+        return Ok(None);
     }
 
-    let mut beat = median(gaps, sorted);
+    let mut beat = median(gaps, sorted)?;
     for _ in 0..2 {
         if beat <= 0.0 {
-            return None;
+            return Ok(None);
         }
         let mut span = 0.0;
         let mut count = 0.0;
         for &gap in gaps.iter() {
+            let gap = f64::from(gap);
             let k = (gap / beat).round();
             if k > 0.0 {
                 span += gap;
@@ -233,24 +221,28 @@ fn beats_bpm(beats: &[u64], sr: f64, gaps: &mut Vec<f64>, sorted: &mut Vec<f64>)
             }
         }
         if count == 0.0 {
-            return None;
+            return Ok(None);
         }
         beat = span / count;
     }
-    (beat > 0.0).then(|| Consts::SECS_PER_MIN * sr / beat)
+    Ok((beat > 0.0).then(|| Consts::SECS_PER_MIN / beat))
 }
 
-fn positions_to_frames(positions: &[f64]) -> Vec<u64> {
+fn positions_to_frames(positions: &[f32], sample_rate: f64) -> Vec<u64> {
     positions
         .iter()
-        .filter_map(|p| p.round().to_u64())
+        .filter_map(|&position| position_to_frame(position, sample_rate))
         .collect()
 }
 
+fn position_to_frame(position: f32, sample_rate: f64) -> Option<u64> {
+    (f64::from(position) * sample_rate).round().to_u64()
+}
+
 /// 4/4 bars: bpm = beats-per-bar (4) × 60 / bar-seconds.
-fn bar_to_bpm(bar_samples: f64, sr: f64) -> f64 {
-    if bar_samples > 0.0 {
-        Consts::BEATS_PER_BAR * Consts::SECS_PER_MIN * sr / bar_samples
+fn bar_to_bpm(bar_seconds: f64) -> f64 {
+    if bar_seconds > 0.0 {
+        Consts::BEATS_PER_BAR * Consts::SECS_PER_MIN / bar_seconds
     } else {
         0.0
     }
@@ -258,6 +250,7 @@ fn bar_to_bpm(bar_samples: f64, sr: f64) -> f64 {
 
 #[cfg(test)]
 mod tests {
+    use kithara_bufpool::PcmPool;
     use kithara_test_utils::kithara;
 
     use super::*;
@@ -279,7 +272,26 @@ mod tests {
     }
 
     fn build_grid(raw: &RawBeats, sample_rate: u32, params: &GridParams) -> BeatGrid {
-        super::build_grid(raw, sample_rate, params, &GridPool::default())
+        super::build_grid(raw, sample_rate, params, &PcmPool::default())
+            .expect("grid scratch fits the PCM pool budget")
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn injected_pcm_pool_reuses_grid_buffers() {
+        let pool = PcmPool::new(64, 200_000);
+        let raw = RawBeats {
+            beats: steady(0.0, 0.5, 128),
+            downbeats: steady(0.0, 2.0, 64),
+        };
+
+        super::build_grid(&raw, Consts::SR, &GridParams::default(), &pool)
+            .expect("first grid fits the PCM pool budget");
+        let misses = pool.stats().alloc_misses;
+
+        super::build_grid(&raw, Consts::SR, &GridParams::default(), &pool)
+            .expect("second grid fits the PCM pool budget");
+
+        assert_eq!(pool.stats().alloc_misses, misses);
     }
 
     #[kithara::test(native, flash(false))]

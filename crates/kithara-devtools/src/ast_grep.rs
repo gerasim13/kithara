@@ -288,7 +288,7 @@ mod tests {
 
     use tempfile::tempdir;
 
-    fn primitive_pool_hits(source: &str) -> usize {
+    fn rule_hits(rule_file: &str, source: &str) -> usize {
         let temp = tempdir().expect("tempdir");
         let source_path = temp
             .path()
@@ -298,7 +298,8 @@ mod tests {
         fs::write(&source_path, source).expect("write fixture");
 
         let rule = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../.config/ast-grep/perf.prefer-primitive-pool.yml");
+            .join("../../.config/ast-grep")
+            .join(rule_file);
         let output = Command::new("ast-grep")
             .current_dir(temp.path())
             .args(["scan", "--rule"])
@@ -319,6 +320,35 @@ mod tests {
             .lines()
             .filter(|line| !line.trim().is_empty())
             .count()
+    }
+
+    fn primitive_pool_hits(source: &str) -> usize {
+        rule_hits("perf.prefer-primitive-pool.yml", source)
+    }
+
+    #[test]
+    fn component_pool_rule_rejects_local_pool_owners() {
+        let source = r#"
+fn component() {
+    let bytes = BytePool::new(32, 0);
+    let pcm = PcmPool::new(128, 200_000);
+    let scratch = SharedPool::new(4, 65_536);
+    let typed = SharedPool::<4, Vec<f32>>::new(4, 65_536);
+    let qualified = kithara_bufpool::PcmPool::new(128, 200_000);
+}
+
+#[cfg(test)]
+mod tests {
+    fn fixture() {
+        let pool = PcmPool::new(4, 1024);
+    }
+}
+"#;
+
+        assert_eq!(
+            rule_hits("perf.no-component-pool-construction.yml", source),
+            5
+        );
     }
 
     #[test]

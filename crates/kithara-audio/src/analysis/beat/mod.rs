@@ -12,5 +12,5 @@ pub(crate) use detector::backend::{BeatDetectorKind, build_detector};
 pub(crate) use detector::{BeatDetectorMock, RawBeats};
 #[cfg(feature = "beat-nn")]
 pub(crate) use grid::GRID_SEMANTICS_TAG;
-pub(crate) use grid::{GridParams, GridPool};
+pub(crate) use grid::GridParams;
 pub(crate) use pass::BeatPass;
