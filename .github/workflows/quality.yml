@@ -22,11 +22,11 @@ env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
 
-# This analysis runs on the pool the stress campaign measures, so on a fork it
-# waits for the campaign rather than taking cores from it, and waits in a queue
-# nothing evicts. See ci.yml for why that costs the cancellation.
+# Heavy work: this asks for the whole fleet, so it queues with the other heavy
+# lanes and takes its turn among them rather than beside them. A push is not
+# behind that queue; see ci.yml.
 concurrency:
-  group: ${{ github.event.repository.fork && format('fork-linux-{0}', github.repository) || format('quality-{0}-{1}', github.ref, inputs.depth) }}
+  group: heavy-linux-${{ github.repository }}
   cancel-in-progress: false
   queue: max
 

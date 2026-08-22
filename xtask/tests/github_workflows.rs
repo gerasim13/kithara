@@ -16,6 +16,14 @@ const DOWNLOAD_ARTIFACT: &str =
 const INSTALL_ACTION: &str = "taiki-e/install-action@b20dedce73af6905cdc30d6611090c9b67557c8d";
 const UPLOAD_ARTIFACT: &str = "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a";
 const STRESS_RAW_DIR: &str = "${{ runner.temp }}/kithara-stress/raw";
+const HEAVY_LINUX_GROUP: &str = "heavy-linux-${{ github.repository }}";
+const HEAVY_LINUX_WORKFLOWS: [&str; 5] = [
+    "coverage.yml",
+    "lanes.yml",
+    "miri.yml",
+    "mutants.yml",
+    "quality.yml",
+];
 const STRESS_EXECUTE_COMMAND: &str = r#"args=(
   --subject-root "$GITHUB_WORKSPACE/subject"
   --output "$RUNNER_TEMP/kithara-stress/raw"
@@ -338,14 +346,13 @@ fn github_ci_is_fail_closed_and_aggregates_every_job() {
     let concurrency = workflow_concurrency(&workflow);
     assert_eq!(
         mapping_field(concurrency, "group").as_str(),
-        Some(
-            "${{ github.event.repository.fork && format('fork-linux-{0}', github.repository) || format('ci-{0}', github.ref) }}"
-        )
+        Some("ci-${{ github.ref }}")
     );
-    // The fork's branches share one Linux pool, so they queue instead of
-    // evicting each other. `queue` takes no expression and may not sit beside a
-    // cancellation that can read true, so the one literal serves both sides and
-    // production gives up cancelling a superseded push. See ci.yml.
+    // One queue per branch: pushes to different branches hold nothing from each
+    // other, and the machine is shared at the runner, where a job waits for the
+    // three cores it asks for. `queue` takes no expression and may not sit
+    // beside a cancellation that can read true, so pushes to one branch queue
+    // rather than evict, and a superseded push is not cancelled. See ci.yml.
     assert_eq!(
         mapping_field(concurrency, "cancel-in-progress").as_bool(),
         Some(false)
@@ -501,7 +508,7 @@ fn a_queue_is_never_declared_beside_a_cancellation_that_can_fire() {
 }
 
 // What a group expression can evaluate to, down to the part no branch varies:
-// `fork-linux-{0}` and `fork-linux-${{ github.repository }}` name one queue.
+// `heavy-linux-{0}` and `heavy-linux-${{ github.repository }}` name one queue.
 fn group_prefix(group: &str) -> String {
     group
         .split(['{', '$'])
@@ -547,6 +554,39 @@ fn a_called_workflow_never_waits_on_the_group_its_caller_holds() {
         deadlocks.is_empty(),
         "a called workflow cannot start while its caller holds the same concurrency group: {deadlocks:?}"
     );
+}
+
+#[test]
+fn the_heavy_lanes_queue_together_and_ordinary_ci_queues_per_branch() {
+    // One machine serves every lane, and the queue that protects it must not
+    // also stall the pushes. Measured on the Linux host before this split, when
+    // every Linux workflow named one group per repository: a nightly assessment
+    // held the only slot with three jobs while two pushes waited fourteen
+    // minutes with fifteen of eighteen runner slots and two thirds of the CPU
+    // idle. Coverage, the extra suites, Miri, mutation, and assessment ask for
+    // the whole fleet, so they take turns; a push does not wait behind them.
+    for name in HEAVY_LINUX_WORKFLOWS {
+        let workflow = github_workflow(name);
+        let concurrency = workflow_concurrency(&workflow);
+        assert_eq!(
+            mapping_field(concurrency, "group").as_str(),
+            Some(HEAVY_LINUX_GROUP),
+            "{name}"
+        );
+        assert_eq!(
+            mapping_field(concurrency, "queue").as_str(),
+            Some("max"),
+            "{name}"
+        );
+    }
+
+    let ordinary = github_workflow("ci.yml");
+    let group = mapping_field(workflow_concurrency(&ordinary), "group")
+        .as_str()
+        .expect("the CI group is a string")
+        .to_owned();
+    assert!(group.contains("github.ref"), "{group}");
+    assert_ne!(group_prefix(&group), group_prefix(HEAVY_LINUX_GROUP));
 }
 
 #[test]
