@@ -1,6 +1,7 @@
 #[cfg(test)]
 use std::{cell::RefCell, collections::VecDeque};
 use std::{
+    cmp::Reverse,
     collections::BTreeMap,
     fs::{self, OpenOptions},
     io::{self, Write},
@@ -261,8 +262,26 @@ impl<'a> HostStorage<'a> {
             ?final_pressure,
             "cleanup completed"
         );
+        // A pass that cannot reach the threshold has to say what is holding the
+        // space. Saying only that every step reached its floor is what made this
+        // recur: the message rules out the caches and names nothing, so each
+        // recurrence starts from nothing and the trees no step owns are never
+        // even looked at. Measured only on the way to a failure, so a healthy
+        // pass pays nothing for it.
+        let holders = if final_pressure >= Pressure::Aggressive {
+            let holders = self.largest_trees(10);
+            for (path, bytes) in &holders {
+                info!(path = %path.display(), apparent_bytes = bytes, "CI space holder");
+            }
+            holders
+        } else {
+            Vec::new()
+        };
         if final_pressure == Pressure::Reject {
-            bail!("CI volume remains above the new-job threshold after cleanup");
+            bail!(
+                "CI volume remains above the new-job threshold after cleanup; largest trees: {}",
+                name_holders(&holders)
+            );
         }
         // A pass that runs every step and moves nothing is the failure this
         // host spent hours in: `Aggressive` in, `Aggressive` out, `bytes_freed=0`
@@ -274,9 +293,10 @@ impl<'a> HostStorage<'a> {
         if final_pressure >= Pressure::Aggressive && final_pressure >= pressure {
             bail!(
                 "cleanup left {} at {final_pressure:?} with {free} bytes free, unchanged from \
-                 {pressure:?}: every step this owns is already at its floor, so what is holding \
-                 the space is not build caches",
-                volume.display()
+                 {pressure:?}: every step this owns is already at its floor, so the space is held \
+                 by {}",
+                volume.display(),
+                name_holders(&holders)
             );
         }
         Ok(())
@@ -793,6 +813,94 @@ impl<'a> HostStorage<'a> {
         is_removable_under(&self.host_root, target, Self::REMOVABLE_ROOTS)
             || is_removable_under(&self.build_root, target, &["workspaces"])
     }
+
+    /// The largest trees under the CI roots, largest first.
+    ///
+    /// Measured two levels down, so an answer names a subsystem — `vm/tart`,
+    /// `cache/trusted`, one runner's workspaces — rather than the volume it is
+    /// already known to be on. A first-level directory with no subdirectories
+    /// of its own stands for itself.
+    ///
+    /// Sizes are apparent, not allocated, so a sparse disk image reads larger
+    /// than it costs rather than smaller. This picks which tree to look at; it
+    /// is not an accounting of the volume.
+    fn largest_trees(&self, count: usize) -> Vec<(PathBuf, u64)> {
+        let mut roots = vec![self.host_root.clone()];
+        if !self.build_root.starts_with(&self.host_root) {
+            roots.push(self.build_root.clone());
+        }
+        let mut sizes = Vec::new();
+        for root in &roots {
+            for first in child_dirs(root) {
+                let children = child_dirs(&first);
+                if children.is_empty() {
+                    let bytes = tree_bytes(&first);
+                    sizes.push((first, bytes));
+                    continue;
+                }
+                for child in children {
+                    let bytes = tree_bytes(&child);
+                    sizes.push((child, bytes));
+                }
+            }
+        }
+        sizes.sort_unstable_by_key(|(_, bytes)| Reverse(*bytes));
+        sizes.truncate(count);
+        sizes
+    }
+}
+
+/// The holders as `path=bytes`, largest first, for a message that is read once
+/// and acted on.
+fn name_holders(holders: &[(PathBuf, u64)]) -> String {
+    if holders.is_empty() {
+        return "trees this pass could not measure".to_string();
+    }
+    holders
+        .iter()
+        .take(5)
+        .map(|(path, bytes)| format!("{}={bytes}", path.display()))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// Immediate subdirectories of `directory`, following no symlink, empty when it
+/// cannot be read.
+fn child_dirs(directory: &Path) -> Vec<PathBuf> {
+    let Ok(entries) = fs::read_dir(directory) else {
+        return Vec::new();
+    };
+    entries
+        .flatten()
+        .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
+        .map(|entry| entry.path())
+        .collect()
+}
+
+/// Apparent bytes of the files under `path`, following no symlink.
+///
+/// What it cannot read it skips: this runs to name a tree while jobs are being
+/// refused, and one unreadable directory is not a reason to answer nothing.
+fn tree_bytes(path: &Path) -> u64 {
+    let mut pending = vec![path.to_path_buf()];
+    let mut total: u64 = 0;
+    while let Some(directory) = pending.pop() {
+        let Ok(entries) = fs::read_dir(&directory) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let Ok(kind) = entry.file_type() else {
+                continue;
+            };
+            if kind.is_dir() {
+                pending.push(entry.path());
+            } else if kind.is_file() {
+                total =
+                    total.saturating_add(entry.metadata().map(|it| it.len()).unwrap_or_default());
+            }
+        }
+    }
+    total
 }
 
 fn is_removable_under(root: &Path, target: &Path, removable_roots: &[&str]) -> bool {
@@ -1284,6 +1392,42 @@ mod tests {
         ]);
 
         assert!(storage.cleanup().is_err());
+    }
+
+    /// A pass that cannot reach the threshold names the tree holding the space.
+    ///
+    /// Reporting only that every owned step reached its floor is what let this
+    /// recur: it rules out the caches and names nothing, so the trees no step
+    /// owns are never the thing anyone looks at next.
+    #[test]
+    fn a_pass_that_cannot_reach_the_threshold_names_what_holds_the_space() {
+        let directory = tempfile::tempdir().unwrap();
+        let heavy = directory.path().join("vm/tart/vms");
+        fs::create_dir_all(&heavy).unwrap();
+        fs::write(heavy.join("disk.img"), vec![0_u8; 400_000]).unwrap();
+        let light = directory.path().join("logs/bridge");
+        fs::create_dir_all(&light).unwrap();
+        fs::write(light.join("bridge.log"), b"quiet").unwrap();
+        let mut cfg = config(directory.path());
+        cfg.host.brew_root = directory.path().join("brew");
+        let process = Process::new(directory.path(), BTreeMap::new());
+        let mut storage = HostStorage::for_test(&cfg, &process).unwrap();
+        storage.set_pressure_sequence([
+            Pressure::Aggressive,
+            Pressure::Aggressive,
+            Pressure::Aggressive,
+        ]);
+
+        let error = storage.cleanup().unwrap_err().to_string();
+
+        assert!(
+            error.contains("vm/tart=400000"),
+            "the failure must name the tree holding the space and its size: {error}"
+        );
+        assert!(
+            !error.contains("not build caches"),
+            "the old message ruled the caches out and named nothing: {error}"
+        );
     }
 
     #[test]
