@@ -725,10 +725,19 @@ impl<'a> HostStorage<'a> {
     /// take the base bundle with it, and the base is only rebuildable by hand
     /// with `tart create --from-ipsw`.
     ///
-    /// Measured on the CI host 2026-08-22: 38 gibibytes of stopped clone left
-    /// over from 12 August, ten days after the runner that made it was last
-    /// loaded, on a volume where cleanup reported `Normal` and freed nothing
-    /// every five minutes since.
+    /// Seen on the CI host 2026-08-22: a stopped clone from 12 August, ten days
+    /// after the runner that made it was last loaded, while cleanup reported
+    /// `Normal` and freed nothing every five minutes.
+    ///
+    /// What that clone returned is the measure to trust, and it was almost
+    /// nothing: `tart clone` copies on write, so a clone shares its blocks with
+    /// the base until it diverges, and that one had never been booted. A
+    /// directory walk counted its 38 gibibytes twice over — once in each bundle
+    /// — because both files hold the same blocks. So this reclaims what the
+    /// dead runner wrote, not what the bundle appears to weigh: nothing for a
+    /// clone that never ran, and the whole divergence for one that served jobs
+    /// before its runner died. It is worth doing for the second case, and no
+    /// apparent size should be read as the space it will return.
     ///
     /// Named rather than swept, so the base bundle is never a candidate, and
     /// taken apart through `tart` rather than the filesystem, so the tool that

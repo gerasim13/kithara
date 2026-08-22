@@ -347,8 +347,14 @@ rather than against a list of names:
   day. Both are needed: the loop leaves it stopped for as long as a boot takes,
   which outlasts the five-minute cleanup interval, and a booted guest waiting
   for work writes nothing to its bundle for hours, so neither signal alone
-  separates an idle runner from a dead one. Measured 2026-08-22: 38 gibibytes
-  held since 12 August, on a volume reporting `Normal` and freeing nothing.
+  separates an idle runner from a dead one. Seen 2026-08-22: a clone stopped
+  since 12 August, on a volume reporting `Normal` and freeing nothing. Deleting
+  it returned almost none of the 38 gibibytes a directory walk attributed to it,
+  because `tart clone` copies on write and that clone had never been booted, so
+  its blocks were the base's blocks counted a second time. This reclaims the
+  divergence a dead runner wrote, which is nothing for an unused clone and
+  substantial for one that served jobs — and no apparent size on this volume
+  should be read as space that deleting it will return.
 
 Health and cleanup run through launchd. They can also be checked directly:
 
