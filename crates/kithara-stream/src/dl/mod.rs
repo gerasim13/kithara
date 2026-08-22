@@ -15,7 +15,7 @@ mod response;
 mod tests;
 
 pub use cmd::{FetchCmd, OnCompleteFn, OnResponseFn, OnSlowFn, WriterFn, reject_html_response};
-pub use config::DownloaderConfig;
+pub use config::{DEFAULT_PEER_CMD_CHANNEL_CAPACITY, DownloaderConfig};
 pub use downloader::Downloader;
 pub use kithara_events::{RequestMethod, RequestPriority};
 pub use peer::{Peer, PeerHandle};

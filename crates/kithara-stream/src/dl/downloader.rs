@@ -86,6 +86,7 @@ pub(super) struct DownloaderInner {
     /// Sender for registering new peers (cold path).
     pub(super) register_tx: mpsc::UnboundedSender<RegisteredPeerEntry>,
     pub(super) max_concurrent: usize,
+    pub(super) peer_cmd_channel_capacity: usize,
     /// Monotonic source of [`kithara_events::RequestId`]s assigned to
     /// every command this Downloader accepts. Starts at 1 (`NonZero`
     /// invariant); never wraps in practice (`u64`).
@@ -131,6 +132,7 @@ impl Downloader {
                 cancel,
                 client: config.client,
                 max_concurrent: config.max_concurrent,
+                peer_cmd_channel_capacity: config.peer_cmd_channel_capacity,
                 demand_throttle: config.demand_throttle,
                 inflight: Arc::new(AtomicUsize::new(0)),
                 fetch_waker: Arc::new(AtomicWaker::new()),
@@ -158,11 +160,9 @@ impl Downloader {
     /// and ABR state through the shared controller. The returned handle's
     /// `Drop` unregisters both.
     pub fn register(&self, peer: Arc<dyn Peer>) -> PeerHandle {
-        /// Capacity of the per-peer bounded command channel.
-        const PEER_CMD_CHANNEL_CAPACITY: usize = 32;
         self.ensure_spawned();
         let cancel = self.inner.cancel.child();
-        let (cmd_tx, cmd_rx) = mpsc::channel(PEER_CMD_CHANNEL_CAPACITY);
+        let (cmd_tx, cmd_rx) = mpsc::channel(self.inner.peer_cmd_channel_capacity);
         let bus: Arc<RwLock<Option<EventBus>>> = Arc::new(RwLock::default());
 
         let abr_peer: Arc<dyn Abr> = Arc::clone(&peer) as Arc<dyn Abr>;
