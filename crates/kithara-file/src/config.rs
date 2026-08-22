@@ -4,9 +4,19 @@ use bon::Builder;
 use kithara_assets::{AssetStore, BytePool};
 use kithara_events::EventBus;
 use kithara_net::Headers;
-use kithara_platform::CancelToken;
+use kithara_platform::{CancelToken, time::Duration};
 use kithara_stream::dl::Downloader;
 use url::Url;
+
+/// Default [`FileConfig::reader_event_capacity`]. A decode pass emits at most
+/// one progress event per decoded chunk, so this bounds the worst-case
+/// post-seek skip burst without blocking the decode core.
+pub const DEFAULT_READER_EVENT_CAPACITY: usize = 256;
+
+/// Default [`FileConfig::tmp_claim_poll_interval`]. Short enough that the
+/// observed ~67 ms race window in `local_queue_playlist_behavior` resolves in
+/// a handful of ticks, long enough not to busy-spin a tokio worker.
+pub const DEFAULT_TMP_CLAIM_POLL_INTERVAL: Duration = Duration::from_millis(10);
 
 /// Source of a file stream: either a remote URL or a local path.
 #[derive(Clone, Debug, derive_more::From, PartialEq, Eq)]
@@ -49,6 +59,13 @@ pub struct FileConfig {
     /// Event bus channel capacity (used when `bus` is not provided).
     #[builder(default = kithara_events::DEFAULT_EVENT_BUS_CAPACITY)]
     pub event_channel_capacity: usize,
+    /// Ring depth for the decode-core to shell reader-event hand-off.
+    #[builder(default = DEFAULT_READER_EVENT_CAPACITY)]
+    pub reader_event_capacity: usize,
+    /// Poll interval while a sibling `AssetStore` instance holds the
+    /// atomic-chunked tmp for this file's canonical path.
+    #[builder(default = DEFAULT_TMP_CLAIM_POLL_INTERVAL)]
+    pub tmp_claim_poll_interval: Duration,
 }
 
 impl fmt::Debug for FileConfig {
@@ -64,6 +81,8 @@ impl fmt::Debug for FileConfig {
             .field("pool", &self.pool)
             .field("store", &self.store)
             .field("event_channel_capacity", &self.event_channel_capacity)
+            .field("reader_event_capacity", &self.reader_event_capacity)
+            .field("tmp_claim_poll_interval", &self.tmp_claim_poll_interval)
             .finish_non_exhaustive()
     }
 }

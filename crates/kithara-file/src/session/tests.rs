@@ -20,7 +20,7 @@ use kithara_stream::{
 use kithara_test_utils::kithara;
 
 use super::source::{FileLocalConfig, FileSource};
-use crate::{File, coord::FileCoord};
+use crate::{File, config::DEFAULT_READER_EVENT_CAPACITY, coord::FileCoord};
 
 fn test_key(store: &AssetStore, name: &str) -> ResourceKey {
     let source = AssetSource::Remote {
@@ -63,6 +63,7 @@ fn make_source_with_cancel(
             .coord(coord)
             .bus(bus)
             .cancel(cancel)
+            .reader_event_capacity(DEFAULT_READER_EVENT_CAPACITY)
             .cached_codec(AudioCodec::Mp3)
             .build(),
     )
@@ -413,6 +414,7 @@ fn source_cancel_interrupts_blocked_wait_without_poisoning_asset() {
             .coord(coord)
             .bus(EventBus::new(16))
             .cancel(scope.token())
+            .reader_event_capacity(DEFAULT_READER_EVENT_CAPACITY)
             .cached_codec(AudioCodec::Mp3)
             .build(),
     );
