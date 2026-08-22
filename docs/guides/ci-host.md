@@ -355,6 +355,20 @@ rather than against a list of names:
   divergence a dead runner wrote, which is nothing for an unused clone and
   substantial for one that served jobs — and no apparent size on this volume
   should be read as space that deleting it will return.
+- The lanes' scratch root is swept too, and it is the one tree here that sits
+  outside both CI roots. `CiEnvironment` points every lane's `TMPDIR` at a
+  namespace under `/tmp/kithara-ci`, which is deliberate — outside the checkout,
+  short enough for the Unix sockets the suite binds, and on local storage the
+  macOS guest can bind at all — and it also put the directory beyond every step
+  in the ladder. A job killed before its temporaries drop leaves them there, and
+  cancellation is routine on fork branches, so the leak is steady: measured
+  2026-08-22, sixty-eight thousand directories holding 3.5 gibibytes across the
+  three namespaces, the oldest four days old, growing about 660 mebibytes a day
+  on the same APFS container every pressure threshold is read from. Entries are
+  pruned on age alone, unlike the workspaces beside them, because a namespace
+  entry belongs to one job and is never handed to another; a day is more than ten
+  times the longest lane, so a running job's scratch is never a candidate, and
+  the namespace directories themselves are never offered.
 
 Health and cleanup run through launchd. They can also be checked directly:
 

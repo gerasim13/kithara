@@ -14,7 +14,12 @@ use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 
 use super::runner_images::JobVm;
-use crate::ci::{SCCACHE_SLOT_CONTROL_NAMESPACE, build_cache, config::CiConfig, process::Process};
+use crate::ci::{
+    SCCACHE_SLOT_CONTROL_NAMESPACE, build_cache,
+    config::CiConfig,
+    environment::{CacheTrust, scratch_root},
+    process::Process,
+};
 
 /// Ordered least to most urgent: the watchdog reports the worst volume, not
 /// the total, so that a roomy one cannot hide a full one.
@@ -30,6 +35,10 @@ pub(super) enum Pressure {
 pub(super) struct HostStorage<'a> {
     host_root: PathBuf,
     build_root: PathBuf,
+    /// Where the lanes put their temporaries. Absolute and shared by every job
+    /// on the machine, so the test constructor points it inside its own fixture
+    /// rather than let a test sweep the real one.
+    scratch_root: PathBuf,
     config: &'a CiConfig,
     process: &'a Process,
     #[cfg(test)]
@@ -138,6 +147,7 @@ impl<'a> HostStorage<'a> {
         Ok(Self {
             host_root,
             build_root,
+            scratch_root: scratch_root(),
             config,
             process,
             #[cfg(test)]
@@ -152,6 +162,7 @@ impl<'a> HostStorage<'a> {
         validate_root(&host_root)?;
         validate_root(&build_root)?;
         Ok(Self {
+            scratch_root: host_root.join("scratch"),
             host_root,
             build_root,
             config,
@@ -204,6 +215,7 @@ impl<'a> HostStorage<'a> {
         info!(free_bytes = initial, ?pressure, volume = %volume.display(), "cleanup started");
 
         self.prune_host_trees("workspaces/tmp", Self::DAY)?;
+        self.prune_scratch_trees(Self::DAY)?;
         self.prune_host_trees("workspaces/builds", Self::DAY)?;
         self.prune_build_trees("workspaces/gitlab", Self::DAY)?;
         self.prune_host_trees("vm/overlays", Self::DAY)?;
@@ -502,6 +514,32 @@ impl<'a> HostStorage<'a> {
 
     fn prune_build_trees(&self, relative: &str, age: Duration) -> Result<()> {
         self.prune_old_trees(&self.build_root, relative, age)
+    }
+
+    /// Prune what the lanes leave behind in their scratch root.
+    ///
+    /// `CiEnvironment` points every lane's `TMPDIR` at a namespace under
+    /// [`scratch_root`], which sits outside both CI roots for three reasons of
+    /// its own — see its doc comment — so no step in this ladder could reach it
+    /// and nothing ever came back for it. A job killed before its temporaries
+    /// drop leaves them where they are, and cancellation is routine for fork
+    /// branches, so the leak is steady rather than exceptional.
+    ///
+    /// Measured on the CI host 2026-08-22: sixty-eight thousand directories
+    /// holding 3.5 gibibytes across the three namespaces, the oldest from
+    /// 18 August, growing by roughly 660 mebibytes a day — on the same APFS
+    /// container whose free space every pressure threshold is read from.
+    ///
+    /// Age is the whole signal here, unlike the workspaces beside it: a
+    /// namespace entry belongs to one job and is never handed to another, so
+    /// its timestamp is its creation, and a day is more than ten times the
+    /// longest lane. The namespaces themselves are never candidates, because
+    /// `prune_old_trees` only ever offers their children.
+    fn prune_scratch_trees(&self, age: Duration) -> Result<()> {
+        for trust in CacheTrust::ALL {
+            self.prune_old_trees(&self.scratch_root, trust.as_str(), age)?;
+        }
+        Ok(())
     }
 
     fn prune_old_trees(&self, root: &Path, relative: &str, age: Duration) -> Result<()> {
@@ -904,6 +942,11 @@ impl<'a> HostStorage<'a> {
     fn is_removable(&self, target: &Path) -> bool {
         is_removable_under(&self.host_root, target, Self::REMOVABLE_ROOTS)
             || is_removable_under(&self.build_root, target, &["workspaces"])
+            || is_removable_under(
+                &self.scratch_root,
+                target,
+                &CacheTrust::ALL.map(CacheTrust::as_str),
+            )
     }
 
     /// The largest trees under the CI roots, largest first.
@@ -1375,6 +1418,75 @@ mod tests {
         assert!(storage.remove_path(&cache).is_err());
     }
 
+    /// One entry in a scratch namespace, aged as a job that died before its
+    /// temporaries dropped leaves it.
+    fn scratch_entry(root: &Path, namespace: &str, age: Duration) -> PathBuf {
+        let entry = root.join("scratch").join(namespace).join(".tmpJ8kQ2v");
+        fs::create_dir_all(entry.join("fixture")).unwrap();
+        fs::File::open(&entry)
+            .unwrap()
+            .set_times(FileTimes::new().set_modified(SystemTime::now() - age))
+            .unwrap();
+        entry
+    }
+
+    /// What the CI host held on 2026-08-22: sixty-eight thousand directories
+    /// and 3.5 gibibytes under the lanes' `TMPDIR`, the oldest four days old,
+    /// on the same container every pressure threshold is read from. Every
+    /// namespace is checked, because a lane runs under whichever one it is
+    /// given and a namespace left out of the sweep leaks exactly as this one
+    /// did. Driven through `cleanup`, because a step nothing calls frees
+    /// nothing.
+    #[test]
+    fn scratch_no_job_is_using_is_pruned() {
+        let directory = tempfile::tempdir().unwrap();
+        let stale = CacheTrust::ALL
+            .map(|trust| scratch_entry(directory.path(), trust.as_str(), 4 * HostStorage::DAY));
+        let cfg = config(directory.path());
+        let process = Process::new(directory.path(), BTreeMap::new());
+        let mut storage = HostStorage::for_test(&cfg, &process).unwrap();
+        storage.set_pressure_sequence([Pressure::Normal, Pressure::Normal, Pressure::Normal]);
+
+        storage.cleanup().unwrap();
+
+        for entry in &stale {
+            assert!(!entry.exists(), "{} outlived the sweep", entry.display());
+        }
+    }
+
+    /// A running job owns its scratch and is writing into it, so the sweep must
+    /// not reach anything a lane could still be using. The day it waits is more
+    /// than ten times the longest lane.
+    #[test]
+    fn scratch_a_running_job_owns_is_left_alone() {
+        let directory = tempfile::tempdir().unwrap();
+        let live = scratch_entry(directory.path(), "trusted", Duration::from_secs(60));
+        let cfg = config(directory.path());
+        let process = Process::new(directory.path(), BTreeMap::new());
+        let mut storage = HostStorage::for_test(&cfg, &process).unwrap();
+        storage.set_pressure_sequence([Pressure::Normal, Pressure::Normal, Pressure::Normal]);
+
+        storage.cleanup().unwrap();
+
+        assert!(live.is_dir());
+    }
+
+    /// The namespace directories are what `CiEnvironment::prepare` hands out as
+    /// `TMPDIR`, and the root above them is shared by every job on the machine.
+    /// Only their contents are ever a candidate.
+    #[test]
+    fn a_scratch_namespace_is_never_removable() {
+        let directory = tempfile::tempdir().unwrap();
+        let cfg = config(directory.path());
+        let process = Process::new(directory.path(), BTreeMap::new());
+        let storage = HostStorage::for_test(&cfg, &process).unwrap();
+        let root = directory.path().join("scratch");
+        fs::create_dir_all(root.join("trusted")).unwrap();
+
+        assert!(storage.remove_path(&root.join("trusted")).is_err());
+        assert!(storage.remove_path(&root).is_err());
+    }
+
     #[test]
     fn persistent_targets_are_discovered_under_the_checkout_root() {
         let directory = tempfile::tempdir().unwrap();
@@ -1608,11 +1720,12 @@ mod tests {
             .unwrap();
     }
 
-    /// The 38.9 GiB the CI host held on 2026-08-22: a clone left behind on 12
-    /// August by a runner that has not been loaded since, on a volume reporting
-    /// `Normal` and freeing nothing every five minutes. Driven through
-    /// `cleanup` rather than the step alone, because a step nothing calls frees
-    /// nothing.
+    /// The clone the CI host held on 2026-08-22: left behind on 12 August by a
+    /// runner that has not been loaded since, on a volume reporting `Normal`
+    /// and freeing nothing every five minutes. What it returns is the
+    /// divergence the dead runner wrote, not the size a directory walk reads
+    /// off a copy-on-write clone. Driven through `cleanup` rather than the
+    /// step alone, because a step nothing calls frees nothing.
     #[cfg(unix)]
     #[test]
     fn an_abandoned_job_vm_is_deleted() {

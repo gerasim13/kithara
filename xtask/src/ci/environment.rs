@@ -62,13 +62,17 @@ impl SccacheSlot {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum CacheTrust {
+pub(super) enum CacheTrust {
     Quarantine,
     Review,
     Trusted,
 }
 
 impl CacheTrust {
+    /// Every namespace `prepare` can hand a lane, so a sweep over the scratch
+    /// root covers everything that can appear in it.
+    pub(super) const ALL: [Self; 3] = [Self::Quarantine, Self::Review, Self::Trusted];
+
     fn from_environment() -> Result<Self> {
         match env::var("KITHARA_CACHE_TRUST")
             .unwrap_or_else(|_| "review".into())
@@ -81,7 +85,7 @@ impl CacheTrust {
         }
     }
 
-    const fn as_str(self) -> &'static str {
+    pub(super) const fn as_str(self) -> &'static str {
         match self {
             Self::Quarantine => "quarantine",
             Self::Review => "review",
@@ -433,7 +437,7 @@ impl Drop for CiEnvironment {
 /// because macOS caps Unix socket paths at `SUN_LEN` and the suite binds
 /// sockets here. And it lives on local storage: the macOS guest reaches the
 /// shared cache over virtiofs, which cannot bind a socket at all.
-fn scratch_root() -> PathBuf {
+pub(super) fn scratch_root() -> PathBuf {
     PathBuf::from("/tmp/kithara-ci")
 }
 
