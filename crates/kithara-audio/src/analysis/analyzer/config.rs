@@ -81,10 +81,11 @@ where
 #[cfg(test)]
 mod tests {
     use kithara_resampler::rubato::RubatoBackend;
+    use kithara_test_utils::kithara;
 
     use super::BeatAnalysisConfig;
 
-    #[test]
+    #[kithara::test]
     fn default_beat_config_reports_configured_backend() {
         assert_eq!(
             BeatAnalysisConfig::<RubatoBackend>::default().resampler_backend_name(),
@@ -93,7 +94,7 @@ mod tests {
     }
 
     #[cfg(feature = "beat-nn")]
-    #[test]
+    #[kithara::test]
     fn cache_tag_invalidates_pre_bpm_from_beats_results() {
         let tag = BeatAnalysisConfig::<RubatoBackend>::default()
             .cache_tag()

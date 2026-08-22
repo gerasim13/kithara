@@ -1,5 +1,7 @@
 ruleDirs:
   - .config/ast-grep
+testConfigs:
+  - testDir: .config/ast-grep-tests
 languageGlobs:
   Yaml:
     - Cargo.toml

@@ -1,0 +1,23 @@
+id: arch.no-raw-test
+message: |
+  Product crates must use `#[kithara::test]` instead of raw `#[test]` so
+  test execution follows the workspace's native/WASM and Flash contracts.
+
+  To rewrite an explicit scope, first import
+  `kithara_test_utils::kithara` in the enclosing test module, then run:
+  `just lint fix-raw-tests <path> [<path> ...]`.
+severity: warning
+language: Rust
+files:
+  - crates/**/src/**/*.rs
+ignores:
+  - "**/kithara-devtools/**"
+  - "**/kithara-encode/**"
+  - "**/kithara-fuzz/**"
+  - "**/kithara-integration-tests/**"
+  - "**/kithara-test-macros/**"
+  - "**/kithara-test-utils/**"
+rule:
+  all:
+    - kind: attribute_item
+    - regex: '^#\[test\]$'
