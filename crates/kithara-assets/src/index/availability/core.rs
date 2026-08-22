@@ -621,6 +621,48 @@ mod tests {
         assert!(idx.inner.retired.is_empty());
     }
 
+    /// A read never leaks a generation, however long the write side stays quiet.
+    ///
+    /// Every read parks two references - the tree and the resource snapshot -
+    /// so the free lands off the audio thread, and only the write side drains
+    /// them. The produce path reads at audio-tick cadence (~94 ticks/s at
+    /// 48 kHz with 512-frame blocks) while writes arrive at download cadence,
+    /// so a stretch served from cache issues thousands of reads with no drain
+    /// between them. The bin is bounded and overflow does not free, it
+    /// *forgets*: a forgotten generation is unreachable memory that no later
+    /// drain can recover.
+    ///
+    /// Measured in the field on 2026-08-20: 844 overflow warnings in two
+    /// minutes of HLS playback. The burst below is ten seconds of produce
+    /// ticks, deliberately not derived from `RETIRE_CAPACITY` - raising the
+    /// capacity moves the threshold, it does not bound the read:write ratio.
+    ///
+    /// `#[ignore]`d, not deleted: falsified locally at 940 reads. Removing the
+    /// leak means the reader stops taking ownership per read, which is a
+    /// redesign of the produce-path read contract, not a patch.
+    #[kithara::test(timeout(Duration::from_secs(5)))]
+    #[ignore = "pins real regression — a read parks two references while only \
+                writes drain the bounded bin, so ordinary playback overflows it \
+                and mem::forget leaks a generation for good; unignore when \
+                quiescent-state reclamation replaces the retire bin"]
+    fn a_read_burst_never_leaks_a_generation() {
+        const TICKS_PER_SECOND: usize = 94;
+        const BURST: usize = TICKS_PER_SECOND * 10;
+
+        let idx = AvailabilityIndex::new();
+        let k = ResourceKey::relative("test_asset", "file1");
+        idx.record_write(&k, 0..10);
+
+        for _ in 0..BURST {
+            assert!(idx.contains_range(&k, 0..10));
+        }
+
+        assert!(
+            !idx.inner.retired.overflowed(),
+            "{BURST} reads with no intervening write leaked a generation"
+        );
+    }
+
     #[kithara::test(timeout(Duration::from_secs(1)))]
     fn index_snapshot_and_seed_roundtrip() {
         let dir = TempDir::new().unwrap();

@@ -55,10 +55,14 @@ pub(super) fn route(instance: &str) -> Option<Route> {
 
 fn control(state: &mut Kithara, path: &str, action: &ControlAction) -> Option<Message> {
     let (instance, rest) = path.split_once('/')?;
-    match route(instance)? {
-        Route::MicroBar | Route::Bar if let Some(row) = rest.strip_prefix("menu/") => {
-            menu_control(&mut state.ui.cache, row, action)
-        }
+    let target = route(instance)?;
+    // A match guard would read better, but `if let` guards are above the MSRV.
+    if let Some(row) = rest.strip_prefix("menu/")
+        && matches!(target, Route::MicroBar | Route::Bar)
+    {
+        return menu_control(&mut state.ui.cache, row, action);
+    }
+    match target {
         Route::MicroBar => micro_control(state, rest, action),
         Route::Bar => bar_control(rest, action),
         Route::Mixer => mixer_control(state, rest, action),
