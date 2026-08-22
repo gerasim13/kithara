@@ -306,7 +306,6 @@ fn assert_hosted_authorization(job: &Mapping) {
         mapping_field(job, "runs-on").as_str(),
         Some("ubuntu-latest")
     );
-    assert!(!job.contains_key("if"));
 
     let step = first_step(job);
     let env = mapping_field(step, "env")
@@ -364,7 +363,14 @@ fn github_ci_is_fail_closed_and_aggregates_every_job() {
         Some(true)
     );
 
-    assert_hosted_authorization(workflow_job(jobs, "authorize"));
+    let authorize = workflow_job(jobs, "authorize");
+    assert_hosted_authorization(authorize);
+    // The one condition this job may carry. Anything else here, and a push that
+    // should have been judged is skipped instead — reported as a green run.
+    assert_eq!(
+        mapping_field(authorize, "if").as_str(),
+        Some("vars.KITHARA_RUNNER_LABELS != ''")
+    );
     let gate = workflow_job(jobs, "gate");
     assert_eq!(job_needs(gate), BTreeSet::from(["authorize".to_owned()]));
     assert_eq!(
@@ -397,7 +403,7 @@ fn github_ci_is_fail_closed_and_aggregates_every_job() {
     );
     assert_eq!(
         mapping_field(required, "if").as_str(),
-        Some("${{ always() }}")
+        Some("${{ always() && vars.KITHARA_RUNNER_LABELS != '' }}")
     );
     let mut expected = workflow_job_names(jobs);
     expected.remove("required");
@@ -541,7 +547,12 @@ fn standalone_rtsan_is_fail_closed_before_expanding_every_lane() {
     assert_no_key(&workflow, "continue-on-error");
     let jobs = workflow_jobs(&workflow);
 
-    assert_hosted_authorization(workflow_job(jobs, "authorize"));
+    let authorize = workflow_job(jobs, "authorize");
+    assert_hosted_authorization(authorize);
+    // Nothing starts this workflow on a repository without runners: it is only
+    // ever called. So it needs no guard, and a condition here could only ever
+    // skip a judgement someone asked for.
+    assert!(!authorize.contains_key("if"));
     let rtsan = workflow_job(jobs, "rtsan");
     assert_eq!(job_needs(rtsan), BTreeSet::from(["authorize".to_owned()]));
     assert!(!rtsan.contains_key("if"));

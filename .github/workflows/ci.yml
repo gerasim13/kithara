@@ -34,6 +34,15 @@ jobs:
   # check, never a skipped workflow that can be mistaken for success.
   authorize:
     name: CI authorization
+    # Runner labels are attached to the repository that owns runners. Upstream
+    # has none and is not getting any — its gate is the GitLab verification
+    # status the bridge writes — so a push there has nothing to authorize and
+    # nothing to run. Every other workflow beside this one already skips on the
+    # same variable; this one turned the question into a failing job, so every
+    # upstream push was red with all twenty checks skipped. A permanent red
+    # reads as a regression and hides the next real one. A malformed value is
+    # still a hard failure: it passes this guard and fails the step below.
+    if: vars.KITHARA_RUNNER_LABELS != ''
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -415,7 +424,10 @@ jobs:
   # reject every result other than an executed success.
   required:
     name: CI required
-    if: ${{ always() }}
+    # `always()` alone would keep this job red on a repository the guard above
+    # skipped: it demands success from every job it needs, and a skip is not a
+    # success. It carries the same guard so the whole run is skipped there.
+    if: ${{ always() && vars.KITHARA_RUNNER_LABELS != '' }}
     needs:
       - authorize
       - gate
