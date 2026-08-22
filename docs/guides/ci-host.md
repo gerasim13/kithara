@@ -191,7 +191,7 @@ Android, and web checks.
 
 ## Repository bridge
 
-Copy `ci/bridge/config.example.toml` to
+Copy `.config/bridge/config.example.toml` to
 `/Volumes/KitharaCI/services/bridge/config.toml`. The config and the two
 tokens must belong to UID 504 (`kithara-sync`) and have mode `0600`. The GitHub
 token needs `Contents: write` to publish `main`, `Pull requests: read` to
