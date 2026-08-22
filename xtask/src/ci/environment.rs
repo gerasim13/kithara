@@ -236,44 +236,26 @@ pub(crate) struct CiEnvironment {
     pub(crate) temp: PathBuf,
     lease: PathBuf,
     sccache: Option<PreparedSccache>,
-    /// Held for the life of the job so a reclaim running in a sibling job
-    /// leaves this checkout alone.
-    _checkout: Option<CheckoutLease>,
+    /// Held for the life of the job so a reclaim — this job's own or a sibling
+    /// job's — leaves the directory this one builds into alone. The ceiling
+    /// still charges its bytes; the claim only says they cannot be taken back.
+    _target: Option<lease::Lease>,
     vars: BTreeMap<OsString, OsString>,
-}
-
-/// A job's claim on the checkout it works in.
-///
-/// Taken before anything is reclaimed, including by this job itself: the
-/// `target` a job is about to build into is exactly the one it must not hand
-/// to the budget.
-struct CheckoutLease {
-    _file: File,
-}
-
-impl CheckoutLease {
-    fn acquire(checkout: &Path) -> Option<Self> {
-        let path = checkout.join(lease::FILE);
-        let file = OpenOptions::new()
-            .create(true)
-            .truncate(false)
-            .read(true)
-            .write(true)
-            .open(&path)
-            .ok()?;
-        // A lease that cannot be taken is not a reason to refuse work: the
-        // worst case is the reclaim treating this checkout as idle, which is
-        // the behaviour that existed before the lease.
-        FileExt::try_lock(&file).ok()?;
-        Some(Self { _file: file })
-    }
 }
 
 impl CiEnvironment {
     pub(crate) fn prepare(ctx: &Ctx, config: &CiConfig, lane: Lane) -> Result<Self> {
         config.validate()?;
         raise_open_file_limit()?;
-        let checkout = CheckoutLease::acquire(&ctx.root);
+        let project_root =
+            env::var_os("CI_PROJECT_DIR").map_or_else(|| ctx.root.clone(), PathBuf::from);
+        let target = project_root.join("target");
+        // Claimed before anything is reclaimed, including by this job itself:
+        // the directory this job is about to build into is the one it must not
+        // lose. Its bytes still answer to the ceiling, because
+        // `candidate_entries` charges what it keeps, so the claim costs the host
+        // nothing it could otherwise have freed.
+        let target_lease = lease::hold(&target);
         let home = env::var_os("HOME")
             .or_else(|| env::var_os("USERPROFILE"))
             .map(PathBuf::from)
@@ -304,9 +286,6 @@ impl CiEnvironment {
         let fixture_cache = cache_root.join("fixtures");
         let npm_cache = cache_root.join("npm");
         let swiftpm_cache = cache_root.join("swiftpm");
-        let project_root =
-            env::var_os("CI_PROJECT_DIR").map_or_else(|| ctx.root.clone(), PathBuf::from);
-        let target = project_root.join("target");
         let temp = scratch_root().join(trust.as_str());
 
         for directory in [
@@ -424,7 +403,7 @@ impl CiEnvironment {
             temp,
             lease,
             sccache,
-            _checkout: checkout,
+            _target: target_lease,
             vars,
         })
     }
@@ -933,12 +912,13 @@ mod tests {
         );
     }
 
-    /// A sibling job holds the checkout while its tests run. Cargo has long
-    /// released `.cargo-lock` by then, so without the lease the reclaim reads
-    /// the checkout as abandoned and deletes the binaries the tests are still
-    /// executing — 1869 of them failed to exec that way before this existed.
+    /// A sibling job holds the directory it builds into while its tests run.
+    /// Cargo has long released `.cargo-lock` by then, so without the claim the
+    /// reclaim reads the cache as abandoned and deletes the binaries the tests
+    /// are still executing — 1869 of them failed to exec that way before this
+    /// existed.
     #[test]
-    fn a_leased_checkout_is_left_alone_by_a_sibling_job() {
+    fn a_leased_build_directory_is_left_alone_by_a_sibling_job() {
         let root = tempfile::tempdir().unwrap();
         let checkout = root
             .path()
@@ -948,13 +928,13 @@ mod tests {
         fs::write(checkout.join("Cargo.toml"), "[package]\n").unwrap();
         fs::write(target.join("artifact"), vec![0_u8; 400_000]).unwrap();
 
-        let held = CheckoutLease::acquire(&checkout).expect("the running job takes its lease");
+        let held = lease::hold(&checkout.join("target")).expect("the running job claims its build");
 
         reclaim_build_caches(&gitlab_workspaces(root.path()), 0, u64::MAX).unwrap();
 
         assert!(
             target.join("artifact").exists(),
-            "a checkout a job is working in must survive another job's reclaim"
+            "a cache a job is building into must survive another job's reclaim"
         );
         drop(held);
 

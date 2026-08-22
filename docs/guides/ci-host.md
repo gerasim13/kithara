@@ -330,6 +330,13 @@ rather than against a list of names:
   named steps alone left six gigabytes of `cargo-reapi` stores behind after
   that tool came off the CI path: a namespace that stops being written to goes
   invisible rather than stale.
+- The build-cache ceiling covers the checkout a job is working in. Skipping a
+  claimed checkout wholesale kept its caches out of the budget's reach before it
+  could weigh them, so on a host serving one project the ceiling had nothing at
+  all to act on and reclaimed nothing, however long jobs had been refused. What
+  protects a live cache now is the claim the lane takes on the directory it
+  builds into, and those bytes are charged against the ceiling rather than
+  excused from it — which is what leaves the idle caches beside them payable.
 
 Health and cleanup run through launchd. They can also be checked directly:
 
