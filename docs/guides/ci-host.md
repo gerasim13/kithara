@@ -337,6 +337,18 @@ rather than against a list of names:
   protects a live cache now is the claim the lane takes on the directory it
   builds into, and those bytes are charged against the ceiling rather than
   excused from it — which is what leaves the idle caches beside them payable.
+- A macOS job VM outlives the runner that cloned it. The lane throws the clone
+  away and remakes it from the base bundle at both ends of every loop, so a
+  runner that dies in between leaves one behind, and every step around it looks
+  elsewhere: the bundle directory cannot be pruned by age without taking the
+  base bundle, which only `tart create --from-ipsw` and a person can rebuild.
+  The clone is now named out of the sweep instead — deleted through `tart`, and
+  only once tart reports it stopped *and* its parts have been untouched for a
+  day. Both are needed: the loop leaves it stopped for as long as a boot takes,
+  which outlasts the five-minute cleanup interval, and a booted guest waiting
+  for work writes nothing to its bundle for hours, so neither signal alone
+  separates an idle runner from a dead one. Measured 2026-08-22: 38 gibibytes
+  held since 12 August, on a volume reporting `Normal` and freeing nothing.
 
 Health and cleanup run through launchd. They can also be checked directly:
 

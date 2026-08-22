@@ -10,9 +10,10 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 
+use super::runner_images::JobVm;
 use crate::ci::{SCCACHE_SLOT_CONTROL_NAMESPACE, build_cache, config::CiConfig, process::Process};
 
 /// Ordered least to most urgent: the watchdog reports the worst volume, not
@@ -81,6 +82,16 @@ struct Volume {
     path: PathBuf,
     total: u64,
     available: u64,
+}
+
+/// One entry of `tart list --format json`. Only liveness is read here; the
+/// sizes it also reports are apparent and say nothing about what the volume
+/// pays for a sparse disk image.
+#[derive(Deserialize)]
+#[serde(rename_all = "PascalCase")]
+struct TartVm {
+    name: String,
+    running: bool,
 }
 
 impl Volume {
@@ -197,6 +208,7 @@ impl<'a> HostStorage<'a> {
         self.prune_build_trees("workspaces/gitlab", Self::DAY)?;
         self.prune_host_trees("vm/overlays", Self::DAY)?;
         self.prune_host_trees("vm/android/avd", Self::DAY)?;
+        self.prune_abandoned_job_vms(Self::DAY);
         self.prune_host_files("logs", 14 * Self::DAY)?;
         self.rotate_logs()?;
         self.prune_retired_caches(7 * Self::DAY)?;
@@ -702,6 +714,77 @@ impl<'a> HostStorage<'a> {
         }
     }
 
+    /// Delete the macOS job VM once no runner is serving from it.
+    ///
+    /// The macOS lane clones [`JobVm::NAME`] from the base bundle and destroys
+    /// it at both ends of every runner loop, so the clone is disposable by
+    /// construction: a runner that finds it missing makes another. When the
+    /// runner dies between those ends the clone outlives it, and nothing ever
+    /// comes back for it. `vm/tart/cache` is pruned by age; the bundle
+    /// directory beside it is not, because pruning that directory by age would
+    /// take the base bundle with it, and the base is only rebuildable by hand
+    /// with `tart create --from-ipsw`.
+    ///
+    /// Measured on the CI host 2026-08-22: 38 gibibytes of stopped clone left
+    /// over from 12 August, ten days after the runner that made it was last
+    /// loaded, on a volume where cleanup reported `Normal` and freed nothing
+    /// every five minutes since.
+    ///
+    /// Named rather than swept, so the base bundle is never a candidate, and
+    /// taken apart through `tart` rather than the filesystem, so the tool that
+    /// owns the bundle is the one that dismantles it. Both signals are
+    /// required, because neither can tell an idle runner from a dead one on its
+    /// own: the loop leaves the clone stopped for as long as a boot takes,
+    /// which is longer than the interval this runs on, and a booted guest
+    /// waiting for work writes nothing to its bundle for hours.
+    fn prune_abandoned_job_vms(&self, age: Duration) {
+        let tart = self.config.host.brew_tool("tart");
+        let Ok(home) = self.config.host.tart_home() else {
+            return;
+        };
+        let bundle = home.join("vms").join(JobVm::NAME);
+        if !tart.is_file() || !bundle.is_dir() {
+            return;
+        }
+        let Some(touched) = newest_part_mtime(&bundle) else {
+            return;
+        };
+        if !older_than_time(touched, age) || self.job_vm_is_running(&tart) {
+            return;
+        }
+        info!(vm = JobVm::NAME, bundle = %bundle.display(), "removing abandoned macOS job VM");
+        let mut command = self.process.command(&tart);
+        command.args(["delete", JobVm::NAME]);
+        if let Err(error) = self
+            .process
+            .run_command(&mut command, "delete abandoned CI macOS VM")
+        {
+            warn!(%error, "abandoned macOS job VM cleanup failed");
+        }
+    }
+
+    /// Whether `tart` reports the job VM as running.
+    ///
+    /// A question that cannot be answered answers `true`: an unreadable listing
+    /// must not become permission to delete a guest that may be serving jobs.
+    fn job_vm_is_running(&self, tart: &Path) -> bool {
+        let Ok(output) = self
+            .process
+            .command(tart)
+            .args(["list", "--format", "json"])
+            .output()
+        else {
+            return true;
+        };
+        if !output.status.success() {
+            return true;
+        }
+        let Ok(listed) = serde_json::from_slice::<Vec<TartVm>>(&output.stdout) else {
+            return true;
+        };
+        listed.iter().any(|vm| vm.name == JobVm::NAME && vm.running)
+    }
+
     fn prune_docker_cache(&self, age: &str) {
         let home = self.host_root.join("home").join(&self.config.host.ci_user);
         let socket = home.join(".colima/kithara/docker.sock");
@@ -977,10 +1060,28 @@ fn validate_root(root: &Path) -> Result<()> {
 
 fn older_than(metadata: &fs::Metadata, age: Duration) -> Result<bool> {
     let modified = metadata.modified().context("reading modification time")?;
-    Ok(SystemTime::now()
+    Ok(older_than_time(modified, age))
+}
+
+fn older_than_time(modified: SystemTime, age: Duration) -> bool {
+    SystemTime::now()
         .duration_since(modified)
         .unwrap_or_default()
-        > age)
+        > age
+}
+
+/// When the parts of a VM bundle were last written, newest first.
+///
+/// The bundle's own directory only changes when `tart` adds or removes a part,
+/// which happens when it clones and never again, so its timestamp reads as old
+/// throughout a run that writes gigabytes to the disk image inside it. The
+/// newest part is what says when the guest last did anything. A directory with
+/// no parts is not a bundle, and answers `None` rather than "infinitely old".
+fn newest_part_mtime(bundle: &Path) -> Option<SystemTime> {
+    fs::read_dir(bundle)
+        .ok()?
+        .filter_map(|entry| entry.ok()?.metadata().ok()?.modified().ok())
+        .max()
 }
 
 fn writable_probe(directory: &Path) -> Result<()> {
@@ -1448,5 +1549,143 @@ mod tests {
         storage.cleanup().unwrap();
 
         assert!(!review.exists());
+    }
+
+    /// A `tart` that answers a listing and records what else it was asked for.
+    #[cfg(unix)]
+    fn fake_tart(cfg: &mut CiConfig, root: &Path, running: bool) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+
+        cfg.host.brew_root = root.join("brew");
+        let bin = cfg.host.brew_root.join("bin");
+        fs::create_dir_all(&bin).unwrap();
+        let asked = root.join("asked");
+        let tart = bin.join("tart");
+        fs::write(
+            &tart,
+            format!(
+                "#!/bin/sh\nif [ \"$1\" = list ]; then printf '%s' \
+                 '[{{\"Name\":\"kithara-ci-job\",\"Running\":{running},\"State\":\"stopped\"}},\
+                 {{\"Name\":\"kithara-macos-base\",\"Running\":false,\"State\":\"stopped\"}}]'; \
+                 exit 0; fi\nprintf '%s' \"$*\" > {}\n",
+                asked.display()
+            ),
+        )
+        .unwrap();
+        fs::set_permissions(&tart, fs::Permissions::from_mode(0o755)).unwrap();
+        asked
+    }
+
+    /// Lay out `<TART_HOME>/vms` with a base bundle and, optionally, a clone
+    /// whose parts were last written `since` ago.
+    #[cfg(unix)]
+    fn tart_vms(cfg: &mut CiConfig, root: &Path, clone_age: Option<Duration>) {
+        let vms = root.join("vm/tart/vms");
+        cfg.host.macos_vm_bundle = vms.join("kithara-macos-base");
+        fs::create_dir_all(&cfg.host.macos_vm_bundle).unwrap();
+        fs::write(cfg.host.macos_vm_bundle.join("disk.img"), b"base").unwrap();
+        let Some(age) = clone_age else {
+            return;
+        };
+        let clone = vms.join("kithara-ci-job");
+        fs::create_dir_all(&clone).unwrap();
+        let part = clone.join("disk.img");
+        fs::write(&part, b"clone").unwrap();
+        fs::File::options()
+            .write(true)
+            .open(&part)
+            .unwrap()
+            .set_times(FileTimes::new().set_modified(SystemTime::now() - age))
+            .unwrap();
+    }
+
+    /// The 38.9 GiB the CI host held on 2026-08-22: a clone left behind on 12
+    /// August by a runner that has not been loaded since, on a volume reporting
+    /// `Normal` and freeing nothing every five minutes. Driven through
+    /// `cleanup` rather than the step alone, because a step nothing calls frees
+    /// nothing.
+    #[cfg(unix)]
+    #[test]
+    fn an_abandoned_job_vm_is_deleted() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut cfg = config(directory.path());
+        let asked = fake_tart(&mut cfg, directory.path(), false);
+        tart_vms(&mut cfg, directory.path(), Some(10 * HostStorage::DAY));
+        let process = Process::new(directory.path(), BTreeMap::new());
+        let mut storage = HostStorage::for_test(&cfg, &process).unwrap();
+        storage.set_pressure_sequence([Pressure::Normal, Pressure::Normal, Pressure::Normal]);
+
+        storage.cleanup().unwrap();
+
+        assert_eq!(
+            fs::read_to_string(&asked).unwrap_or_default(),
+            "delete kithara-ci-job",
+            "an abandoned clone must be handed back to tart"
+        );
+    }
+
+    /// The base bundle is the one thing here that cannot be remade without a
+    /// person and an IPSW, so it is named out of the sweep rather than aged out
+    /// of it: with no clone beside it, cleanup must ask tart for nothing.
+    #[cfg(unix)]
+    #[test]
+    fn the_base_bundle_is_never_a_delete_candidate() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut cfg = config(directory.path());
+        let asked = fake_tart(&mut cfg, directory.path(), false);
+        tart_vms(&mut cfg, directory.path(), None);
+        let process = Process::new(directory.path(), BTreeMap::new());
+        let storage = HostStorage::for_test(&cfg, &process).unwrap();
+
+        storage.prune_abandoned_job_vms(HostStorage::DAY);
+
+        assert!(
+            !asked.exists(),
+            "the base bundle must never be offered for deletion"
+        );
+        assert!(cfg.host.macos_vm_bundle.is_dir());
+    }
+
+    /// A guest serves every job it is offered and writes nothing to its bundle
+    /// while it waits, so an idle runner looks exactly as stale as a dead one.
+    /// Liveness is what separates them.
+    #[cfg(unix)]
+    #[test]
+    fn a_job_vm_a_runner_serves_from_survives() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut cfg = config(directory.path());
+        let asked = fake_tart(&mut cfg, directory.path(), true);
+        tart_vms(&mut cfg, directory.path(), Some(10 * HostStorage::DAY));
+        let process = Process::new(directory.path(), BTreeMap::new());
+        let storage = HostStorage::for_test(&cfg, &process).unwrap();
+
+        storage.prune_abandoned_job_vms(HostStorage::DAY);
+
+        assert!(
+            !asked.exists(),
+            "a running guest must not be taken from the runner serving jobs on it"
+        );
+    }
+
+    /// The runner loop leaves the clone stopped from `tart clone` until the
+    /// guest answers, which is up to two hundred seconds — longer than the five
+    /// minutes this runs on. Deleting it there fails the boot and takes the
+    /// runner down with it.
+    #[cfg(unix)]
+    #[test]
+    fn a_freshly_cloned_job_vm_survives() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut cfg = config(directory.path());
+        let asked = fake_tart(&mut cfg, directory.path(), false);
+        tart_vms(&mut cfg, directory.path(), Some(Duration::ZERO));
+        let process = Process::new(directory.path(), BTreeMap::new());
+        let storage = HostStorage::for_test(&cfg, &process).unwrap();
+
+        storage.prune_abandoned_job_vms(HostStorage::DAY);
+
+        assert!(
+            !asked.exists(),
+            "a clone still booting must survive the interval it boots across"
+        );
     }
 }
