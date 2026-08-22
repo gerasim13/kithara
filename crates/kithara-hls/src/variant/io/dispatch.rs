@@ -7,7 +7,48 @@ use kithara_test_utils::kithara;
 use tracing::{debug, warn};
 
 use super::{HlsVariant, PlanCtx, core::NO_PREFETCH_DEFERRAL};
-use crate::segment::{Downloading, FetchClaim, PlannedFetch};
+use crate::segment::{Downloading, FetchClaim, PlannedFetch, Segment};
+
+/// Acquire attempts a segment slot gets before the dispatch gives up on it.
+/// A requeue is re-dispatched on the peer's next poll, so this counts
+/// dispatch rounds rather than wall-clock time: enough for an obstruction
+/// another task is already clearing to disappear, and few enough that a
+/// standing one reaches the reader instead of parking it. The third failure
+/// settles the slot.
+const ACQUIRE_ATTEMPT_BUDGET: u8 = 3;
+
+/// What a dispatch-side acquire failure does to the slot.
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+enum AcquireSettle {
+    /// Back onto the plan, so `dispatch_from` tries this segment again.
+    Requeue,
+    /// Terminal, which is what surfaces `SegmentUnavailable` to the reader.
+    Fail,
+}
+
+/// Decide how an acquire failure settles, given how many the slot has already
+/// taken (this one included).
+///
+/// A live sibling writer holding the tmp is the one obstruction the system
+/// itself promises to clear: that holder always settles and releases, so the
+/// retry is guaranteed to resolve and needs no budget. Nothing promises as
+/// much for any other error — but a momentary one, a descriptor the host was
+/// briefly short of or a parent directory a concurrent eviction was removing,
+/// must not cost the whole segment either. Those retry against
+/// [`ACQUIRE_ATTEMPT_BUDGET`] and settle `Fail` once it is spent, because a
+/// requeue that never resolves is invisible: the slot stays planned, so
+/// `range_wait_phase` answers `WaitingDemand` and `range_has_failed` stays
+/// false while the decode gate parks for good.
+const fn settle_for(err: &AssetsError, failures: u8) -> AcquireSettle {
+    if matches!(err, AssetsError::Storage(StorageError::TmpClaimed(_))) {
+        return AcquireSettle::Requeue;
+    }
+    if failures < ACQUIRE_ATTEMPT_BUDGET {
+        AcquireSettle::Requeue
+    } else {
+        AcquireSettle::Fail
+    }
+}
 
 impl HlsVariant {
     #[kithara::probe(
@@ -171,9 +212,12 @@ impl HlsVariant {
             return None;
         };
         let resource = match resource_handle.acquire(entry.content()) {
-            Ok(r) => r,
+            Ok(r) => {
+                entry.state().clear_acquire_failures();
+                r
+            }
             Err(err) => {
-                self.settle_unacquirable(seg_idx, handle, &err);
+                self.settle_unacquirable(entry, seg_idx, handle, &err);
                 return None;
             }
         };
@@ -186,38 +230,38 @@ impl HlsVariant {
         )
     }
 
-    /// Settle a claim whose resource could not be acquired.
-    ///
-    /// Reverting to `Missing` keeps the fetch on the plan, so `dispatch_from`
-    /// tries again — right for a tmp a live sibling writer still holds, since
-    /// that holder always settles and releases it. For anything else the retry
-    /// never resolves, and the requeue is invisible: the slot stays planned, so
-    /// `range_wait_phase` answers `WaitingDemand` and `range_has_failed` stays
-    /// false while the decode gate parks for good. Those settle as `Failed`,
-    /// which is what surfaces `SegmentUnavailable` to the reader.
+    /// Settle a claim whose resource could not be acquired, per
+    /// [`settle_for`].
     fn settle_unacquirable(
         &self,
+        entry: &Segment,
         seg_idx: u32,
         handle: FetchClaim<Downloading>,
         err: &AssetsError,
     ) {
-        if matches!(err, AssetsError::Storage(StorageError::TmpClaimed(_))) {
-            debug!(
-                variant = self.variant,
-                seg_idx,
-                error = %err,
-                "emit_fetch_cmd: segment tmp held by a live writer; requeued"
-            );
-            let _ = handle.into_missing();
-            return;
+        let failures = entry.state().note_acquire_failure();
+        match settle_for(err, failures) {
+            AcquireSettle::Requeue => {
+                debug!(
+                    variant = self.variant,
+                    seg_idx,
+                    failures,
+                    error = %err,
+                    "emit_fetch_cmd: segment resource not acquirable yet; requeued"
+                );
+                let _ = handle.into_missing();
+            }
+            AcquireSettle::Fail => {
+                warn!(
+                    variant = self.variant,
+                    seg_idx,
+                    failures,
+                    error = %err,
+                    "emit_fetch_cmd: segment resource cannot be acquired; settling as failed"
+                );
+                let _ = handle.into_failed();
+            }
         }
-        warn!(
-            variant = self.variant,
-            seg_idx,
-            error = %err,
-            "emit_fetch_cmd: segment resource cannot be acquired; settling as failed"
-        );
-        let _ = handle.into_failed();
     }
 
     fn prefetch_segment_cap(&self, ctx: &PlanCtx, prefetch_base: u64) -> Option<u32> {
@@ -235,4 +279,62 @@ impl HlsVariant {
 fn look_ahead_segments(ctx: &PlanCtx) -> Option<u32> {
     let window = ctx.look_ahead_segments?;
     Some(u32::try_from(window.max(1)).unwrap_or(u32::MAX))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{io, path::PathBuf};
+
+    use super::*;
+
+    fn tmp_claimed() -> AssetsError {
+        AssetsError::Storage(StorageError::TmpClaimed(PathBuf::from("seg.m4s.tmp")))
+    }
+
+    fn other() -> AssetsError {
+        AssetsError::Io(io::Error::from(io::ErrorKind::IsADirectory))
+    }
+
+    /// The holder of a claimed tmp always settles and releases it, so this
+    /// retry resolves on its own however long it takes.
+    #[kithara::test]
+    fn a_claimed_tmp_requeues_without_a_budget() {
+        for failures in [1, ACQUIRE_ATTEMPT_BUDGET, u8::MAX] {
+            assert_eq!(
+                settle_for(&tmp_claimed(), failures),
+                AcquireSettle::Requeue,
+                "a live writer's tmp must never fail the slot ({failures} failures)"
+            );
+        }
+    }
+
+    /// Every other error gets retried, because the momentary ones are
+    /// indistinguishable from the standing ones at the point of failure.
+    #[kithara::test]
+    fn another_error_retries_inside_the_budget() {
+        for failures in 1..ACQUIRE_ATTEMPT_BUDGET {
+            assert_eq!(
+                settle_for(&other(), failures),
+                AcquireSettle::Requeue,
+                "failure {failures} of {ACQUIRE_ATTEMPT_BUDGET} must not be terminal"
+            );
+        }
+    }
+
+    /// And is given up on once the budget is spent, so a standing obstruction
+    /// reaches the reader instead of parking the decode gate for good.
+    #[kithara::test]
+    fn another_error_fails_the_slot_once_the_budget_is_spent() {
+        assert_eq!(
+            settle_for(&other(), ACQUIRE_ATTEMPT_BUDGET),
+            AcquireSettle::Fail
+        );
+    }
+
+    /// Saturating the counter must not wrap back under the budget and hand a
+    /// standing obstruction a fresh set of retries.
+    #[kithara::test]
+    fn a_saturated_counter_stays_terminal() {
+        assert_eq!(settle_for(&other(), u8::MAX), AcquireSettle::Fail);
+    }
 }

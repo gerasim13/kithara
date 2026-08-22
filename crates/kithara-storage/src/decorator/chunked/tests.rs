@@ -112,15 +112,16 @@ fn open_reclaims_a_stale_tmp_no_live_writer_holds() {
     assert!(!tmp.exists(), "tmp consumed by the atomic rename");
 }
 
-/// Reclaiming a stale tmp has to start from an empty file. The claim itself
-/// no longer creates the tmp exclusively, so nothing else wipes what a dead
-/// owner left there, and `commit` trims only when the caller knows
-/// `final_len` — a length-less commit renames the tmp exactly as it stands.
+/// What a dead owner left in the tmp a successor reclaims.
+const DEAD_OWNERS_BYTES: &[u8] = b"stale-from-previous-process";
+
+/// Reclaiming a stale tmp starts from an empty file. `create_new` used to
+/// give that for free; the lock-based claim has to do it itself.
 #[kithara::test(timeout(Duration::from_secs(2)))]
 fn a_reclaimed_tmp_carries_no_byte_of_its_dead_owner() {
     let dir = TempDir::new().unwrap();
     let stale_tmp = make_tmp_path(&dir.path().join("tail.bin")).unwrap();
-    fs::write(&stale_tmp, b"stale-from-previous-process").unwrap();
+    fs::write(&stale_tmp, DEAD_OWNERS_BYTES).unwrap();
 
     let (_res, _canonical, tmp) = open_chunked(&dir, "tail.bin");
 
@@ -129,6 +130,24 @@ fn a_reclaimed_tmp_carries_no_byte_of_its_dead_owner() {
         bytes.iter().all(|byte| *byte == 0),
         "reclaimed tmp still carries the dead owner's bytes: {:?}",
         &bytes[..bytes.len().min(32)]
+    );
+}
+
+/// Emptiness is the invariant the driver reads the tmp against:
+/// `MmapDriver::open` adopts a non-empty file whole — available `0..len`,
+/// committed, `final_len` set — so a dead owner's bytes come back as readable
+/// payload, not as residue nothing can reach.
+#[kithara::test(timeout(Duration::from_secs(2)))]
+fn a_reclaimed_tmp_offers_none_of_its_dead_owner_as_payload() {
+    let dir = TempDir::new().unwrap();
+    let stale_tmp = make_tmp_path(&dir.path().join("adopted.bin")).unwrap();
+    fs::write(&stale_tmp, DEAD_OWNERS_BYTES).unwrap();
+
+    let (res, _canonical, _tmp) = open_chunked(&dir, "adopted.bin");
+
+    assert!(
+        !res.contains_range(0..DEAD_OWNERS_BYTES.len() as u64),
+        "the dead owner's bytes came back as available payload"
     );
 }
 

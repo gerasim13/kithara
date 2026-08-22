@@ -44,10 +44,15 @@ impl TmpClaim {
     /// Wipes the tmp on the way in, but only once the lock is won: winning it
     /// proves no other writer is live, while a claimant that loses must leave
     /// the winner's in-flight bytes untouched — which is why the open itself
-    /// must not truncate. The wipe is what `OpenOptions::create_new` used to
-    /// give for free, and it is still required: `commit` trims to `final_len`
-    /// only when the caller knows it, so a length-less commit would rename a
-    /// dead owner's tail into place under the canonical name.
+    /// must not truncate.
+    ///
+    /// The wipe is what `OpenOptions::create_new` used to give for free, and
+    /// emptiness is the invariant the driver reads the tmp against: a
+    /// `MmapDriver::open` that finds a non-empty file adopts it whole —
+    /// `available.insert(0..len)`, `is_committed: true`, `final_len:
+    /// Some(len)` — so a dead owner's bytes would come back not as unreachable
+    /// residue but as committed, readable payload. `commit` is no backstop
+    /// either: it trims to `final_len` only when the caller knows it.
     fn take(path: PathBuf) -> StorageResult<Self> {
         let file = OpenOptions::new()
             .read(true)
