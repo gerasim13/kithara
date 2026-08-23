@@ -25,9 +25,15 @@ use super::*;
 
 const VALID_MASTER: &[u8] = b"#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=128000\naudio.m3u8\n";
 
-struct MockPeer;
+struct MockPeer {
+    cancel: CancelToken,
+}
 
-impl kithara_abr::Abr for MockPeer {}
+impl kithara_abr::Abr for MockPeer {
+    fn cancel(&self) -> CancelToken {
+        self.cancel.clone()
+    }
+}
 impl Peer for MockPeer {}
 
 async fn playlist_server(body: Bytes) -> (Url, Arc<AtomicUsize>) {
@@ -90,7 +96,9 @@ fn test_cache(scope: AssetScope) -> PlaylistCache {
         DownloaderConfig::for_client(HttpClient::new(NetOptions::default(), CancelToken::never()))
             .build(),
     );
-    let handle = downloader.register(Arc::new(MockPeer));
+    let handle = downloader.register(Arc::new(MockPeer {
+        cancel: CancelToken::never(),
+    }));
     PlaylistCache::new(scope, handle, kithara_bufpool::BytePool::default())
 }
 

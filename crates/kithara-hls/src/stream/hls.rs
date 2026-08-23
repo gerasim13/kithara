@@ -88,6 +88,7 @@ impl StreamType for Hls {
             Arc::clone(&seek_obs),
             Arc::clone(&seek) as Arc<dyn Activity>,
             config.initial_abr_mode,
+            cancel.clone(),
         ));
         let stream_peer = StreamPeer::register(
             &downloader,

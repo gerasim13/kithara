@@ -1,7 +1,7 @@
 use kithara_platform::time::Duration;
 use kithara_test_utils::kithara;
 
-use super::{HlsVariant, PlanCtx};
+use super::{HlsVariant, PlanCtx, PlanRevision};
 use crate::segment::PlannedFetch;
 
 impl HlsVariant {
@@ -73,13 +73,17 @@ impl HlsVariant {
         self.rebuild_queue(from_seg, None);
     }
 
-    pub(crate) fn rebuild_at_time(&self, ctx: &PlanCtx, target: Duration) -> Option<u32> {
+    pub(crate) fn rebuild_at_time(&self, _ctx: &PlanCtx, target: Duration) -> Option<u32> {
         let seg = self.segment_index_at_time(target)?;
         let fetch_start = self.seek_readahead_start_segment(seg);
         if let Some(byte) = self.segment_byte_offset(fetch_start) {
             self.set_prefetch_anchor(byte);
         }
-        self.rebuild(ctx, fetch_start);
+        if self.fetch_plan_satisfied(fetch_start) {
+            self.flow.queue.lock().replace_with(std::iter::empty());
+        } else {
+            self.rebuild_queue(fetch_start, None);
+        }
         Some(seg)
     }
 
@@ -90,13 +94,12 @@ impl HlsVariant {
     /// holds. The peer then wakes to an empty plan and asks for nothing, and
     /// the segment is never fetched again — playback stops at that gap even
     /// once the network is back. Front of the queue, because playback is
-    /// waiting on it; only when absent, so a rebuild that already re-planned
-    /// it is not duplicated.
-    pub(crate) fn requeue_planned(&self, planned: PlannedFetch) {
+    /// waiting on it. Only work from the current plan revision may return, and
+    /// only when absent, so a seek cannot resurrect an obsolete prefix or
+    /// duplicate a fetch that its replacement plan already contains.
+    pub(crate) fn requeue_planned(&self, planned: PlannedFetch, revision: PlanRevision) -> bool {
         let mut queue = self.flow.queue.lock();
-        if !queue.contains(&planned) {
-            queue.push_front(planned);
-        }
+        queue.push_front_if_current(planned, revision)
     }
 
     #[kithara::probe]

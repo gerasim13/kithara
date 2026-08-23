@@ -12,7 +12,7 @@ use mmap_io::MemoryMappedFile;
 use crate::{
     StorageError, StorageResult,
     backend::{
-        mmap::driver::{Consts, MmapDriver, MmapState},
+        mmap::driver::{MmapDriver, MmapState},
         traits::DriverIo,
     },
     resource::OpenMode,
@@ -245,7 +245,7 @@ impl DriverIo for MmapDriver {
         let mmap = match &*mmap_guard {
             MmapState::Active(m) => {
                 if end > m.len() {
-                    let new_size = end.max(m.len() * Consts::MMAP_GROWTH_FACTOR);
+                    let new_size = end.max(m.len() * self.growth_factor);
                     m.resize(new_size)?;
                 }
                 m
@@ -256,7 +256,7 @@ impl DriverIo for MmapDriver {
                 ));
             }
             MmapState::Empty => {
-                let size = end.max(Consts::DEFAULT_INITIAL_SIZE);
+                let size = end.max(self.initial_len);
                 let m = MemoryMappedFile::create_rw(&self.path, size)?;
                 *mmap_guard = MmapState::Active(m);
                 match &*mmap_guard {

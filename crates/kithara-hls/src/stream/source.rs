@@ -182,10 +182,15 @@ mod tests {
     };
 
     struct TestAbrPeer {
+        cancel: CancelToken,
         state: Arc<AbrState>,
     }
 
     impl Abr for TestAbrPeer {
+        fn cancel(&self) -> CancelToken {
+            self.cancel.clone()
+        }
+
         fn state(&self) -> Option<Arc<AbrState>> {
             Some(Arc::clone(&self.state))
         }
@@ -233,8 +238,13 @@ mod tests {
             .into_variant(0, ctx);
             let state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0)))));
             let publisher = state.publisher();
-            let peer: Arc<dyn Abr> = Arc::new(TestAbrPeer { state });
-            let controller = AbrController::new(AbrSettings::default());
+            let peer: Arc<dyn Abr> = Arc::new(TestAbrPeer {
+                cancel: cancel.clone(),
+                state,
+            });
+            let settings = AbrSettings::builder().cancel(cancel.clone()).build();
+            let controller = AbrController::new(settings);
+            let handle = controller.register(&peer);
             Arc::new(HlsCoord::new(
                 HlsCoordEnv {
                     cancel,
@@ -245,7 +255,7 @@ mod tests {
                 },
                 Arc::new(PlayheadState::new()),
                 Arc::new(SeekState::new()),
-                controller.register(&peer),
+                handle,
                 publisher,
                 Arc::from(vec![variant]),
             ))
@@ -314,6 +324,7 @@ mod tests {
                 coord.seek_observe(),
                 coord.activity(),
                 AbrMode::Auto(Some(VariantIndex::new(0))),
+                cancel.clone(),
             ));
             let wake = peer.reader_wake();
             source.set_hls_peer(peer);

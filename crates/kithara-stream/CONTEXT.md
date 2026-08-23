@@ -120,6 +120,14 @@ scope, `None` owns a standalone one). Ownership sits above this crate: the
 embedding surface (`kithara-app`, `kithara-ffi`) builds one `Downloader` and
 threads it through `kithara-play::ResourceConfig::downloader`, so every peer shares
 one HTTP pool; with none supplied, `kithara-play` builds a per-resource one.
+The downloader binds `AbrSettings::cancel` to its own scope before constructing
+the shared controller, which therefore owns a child of the downloader scope. Downloader peer handles
+retain a separate per-registration fetch/registry scope; ABR registration does not
+receive that token and instead obtains the protocol track token through `Abr::cancel()`.
+The downloader run loop also drives the controller's coalesced tick slots and nearest
+`min_switch_interval` deadline inside `Registry::tick`. ABR does not spawn a second
+worker or use an ambient runtime; its readiness participates in the same
+cancellation-safe polling boundary as peer and registration readiness.
 
 ## Features
 

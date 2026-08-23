@@ -22,11 +22,10 @@ Storage primitives for kithara. Provides a unified `StorageResource` enum (`Mmap
 use kithara_storage::{MmapResource, MmapOptions, OpenMode, StorageResource};
 
 // File-backed (mmap)
-let mmap = MmapResource::open(cancel_token, MmapOptions {
-    path: path.into(),
-    initial_len: None,
-    mode: OpenMode::Auto,
-})?;
+let mmap = MmapResource::open(
+    cancel_token,
+    MmapOptions::for_path(path.into()).mode(OpenMode::Auto).build(),
+)?;
 let resource = StorageResource::from(mmap);
 resource.write_at(0, &data)?;
 let outcome = resource.wait_range(0..1024)?;

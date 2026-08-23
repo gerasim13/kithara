@@ -607,11 +607,16 @@ mod tests {
     };
 
     struct TestAbrPeer {
+        cancel: CancelToken,
         state: Arc<AbrState>,
         variants: Vec<kithara_events::VariantInfo>,
     }
 
     impl Abr for TestAbrPeer {
+        fn cancel(&self) -> CancelToken {
+            self.cancel.clone()
+        }
+
         fn state(&self) -> Option<Arc<AbrState>> {
             Some(Arc::clone(&self.state))
         }
@@ -721,6 +726,7 @@ mod tests {
         let abr_state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0)))));
         let abr_publisher = abr_state.publisher();
         let peer: Arc<dyn Abr> = Arc::new(TestAbrPeer {
+            cancel: cancel.clone(),
             state: Arc::clone(&abr_state),
             variants: vec![
                 kithara_events::VariantInfo {
@@ -745,7 +751,8 @@ mod tests {
                 },
             ],
         });
-        let controller = Arc::new(AbrController::new(AbrSettings::default()));
+        let settings = AbrSettings::builder().cancel(cancel.clone()).build();
+        let controller = AbrController::new(settings);
         let handle = controller.register(&peer);
         abr_state.request_target(VariantIndex::new(1), reason);
         let coord = Arc::new(HlsCoord::new(

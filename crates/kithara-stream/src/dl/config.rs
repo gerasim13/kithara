@@ -40,4 +40,12 @@ pub struct DownloaderConfig {
     /// Maximum number of concurrent in-flight fetch commands.
     #[builder(default = 5)]
     pub(crate) max_concurrent: usize,
+    /// Capacity of the per-peer bounded command channel. A peer that fills
+    /// it backpressures its own producer instead of the download loop, so
+    /// this bounds the queue one peer may build ahead of the fetcher. The
+    /// default is deep enough that a peer's planning burst does not block on
+    /// the download loop, shallow enough that a stalled fetcher stops the
+    /// producer rather than growing an unbounded backlog.
+    #[builder(default = 32)]
+    pub(crate) peer_cmd_channel_capacity: usize,
 }

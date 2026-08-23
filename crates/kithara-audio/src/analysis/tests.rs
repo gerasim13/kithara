@@ -159,6 +159,8 @@ impl PcmControl for FakeReader {
 }
 
 mod node {
+    #[cfg(feature = "analysis-waveform")]
+    use kithara_bufpool::PcmPool;
     #[cfg(feature = "analysis-beat")]
     use kithara_platform::sync::Arc;
     use kithara_platform::{CancelToken, sync::mpsc, tokio::sync::watch};
@@ -285,7 +287,7 @@ mod node {
     #[kithara::test]
     fn matches_direct_waveform_analyzer_over_chunked_stream() {
         let samples = sine(usize::try_from(SR).unwrap());
-        let mut direct = WaveformAnalyzer::new(SR, AnalysisParams::default());
+        let mut direct = WaveformAnalyzer::new(SR, AnalysisParams::default(), &PcmPool::default());
         direct.push_interleaved(&samples, 2);
         let want = direct.finalize(BUCKETS);
 

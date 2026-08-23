@@ -102,7 +102,7 @@ fn start_request(
 #[kithara::probe(request_id, bytes_transferred, duration)]
 fn finish_request(
     bus: Option<&EventBus>,
-    abr: &AbrController,
+    abr: &Arc<AbrController>,
     peer_id: AbrPeerId,
     request_id: RequestId,
     bytes_transferred: u64,
