@@ -37,12 +37,14 @@ fn a_selenium_lane_names_its_browser_in_its_own_environment() {
     assert!(checked > 0, "no selenium lane is configured to check");
 }
 
-// The coverage floor gates a report that nothing else gates, so it has to be
+// The coverage bar gates a report that nothing else gates, so it has to be
 // enforced where it is declared, and declared once. Two copies is what let the
 // lane pass 80 while the recipe defaulted to 80: agreeing by accident, and one
-// edit away from gating a local run and CI at different bars.
+// edit away from gating a local run and CI at different bars. The bar is above
+// what the workspace holds today on purpose — the UI surface gets its own tests
+// — so this also fixes the number a green lane may not be bought with.
 #[test]
-fn the_coverage_floor_is_declared_once_and_enforced_where_it_is_declared() {
+fn the_coverage_bar_is_declared_once_and_enforced_where_it_is_declared() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .expect("xtask has a workspace root");
@@ -50,18 +52,18 @@ fn the_coverage_floor_is_declared_once_and_enforced_where_it_is_declared() {
         .expect("the test recipes are readable");
 
     assert!(
-        recipe.contains(r#"COVERAGE_MIN="${COVERAGE_MIN:-76}""#),
-        "the coverage floor is declared in .config/just/test.just"
+        recipe.contains(r#"COVERAGE_MIN="${COVERAGE_MIN:-80}""#),
+        "the coverage bar is declared in .config/just/test.just"
     );
     assert!(
         recipe.contains(r#"--fail-under-lines "$COVERAGE_MIN""#),
-        "the declared floor is the one the report is failed under"
+        "the declared bar is the one the report is failed under"
     );
 
     let lane = fs::read_to_string(root.join("xtask/src/ci/lane/linux.rs"))
         .expect("the Linux lanes are readable");
     assert!(
         !lane.contains("COVERAGE_MIN"),
-        "the coverage lane inherits the floor instead of keeping a second copy"
+        "the coverage lane inherits the bar instead of keeping a second copy"
     );
 }
