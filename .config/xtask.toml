@@ -1082,6 +1082,10 @@ steps = [
 # five-gigabyte VM the kernel picks one and kills it, leaving no trace but
 # `ld terminated with signal 9`; the lane runs nightly and can afford the
 # wall-clock two units at a time costs.
+#
+# The bar the report is failed under is not set here: it lives in the coverage
+# recipe, and a second copy is one edit away from gating a local run and CI at
+# different bars.
 [ext.ci.lanes.linux-coverage]
 cache_group = "linux"
 label = "Linux"
@@ -1092,7 +1096,7 @@ steps = [
   { args = [
     "test",
     "coverage",
-  ], label = "Linux coverage", env = { CARGO_BUILD_JOBS = "2", COVERAGE_MIN = "80", COVERAGE_OUTPUT_DIR = "coverage" } },
+  ], label = "Linux coverage", env = { CARGO_BUILD_JOBS = "2", COVERAGE_OUTPUT_DIR = "coverage" } },
 ]
 
 # Every Windows lane sets the same two variables. `bungee-sys` builds through

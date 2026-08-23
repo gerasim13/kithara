@@ -888,56 +888,48 @@
   <require tools> cargo just sccache
   just test coverage
     CARGO_BUILD_JOBS=2
-    COVERAGE_MIN=80
     COVERAGE_OUTPUT_DIR=coverage
 # linux-coverage / platforms
   <require os> linux
   <require tools> cargo just sccache
   just test coverage
     CARGO_BUILD_JOBS=2
-    COVERAGE_MIN=80
     COVERAGE_OUTPUT_DIR=coverage
 # linux-coverage / merge-request
   <require os> linux
   <require tools> cargo just sccache
   just test coverage
     CARGO_BUILD_JOBS=2
-    COVERAGE_MIN=80
     COVERAGE_OUTPUT_DIR=coverage
 # linux-coverage / quarantine
   <require os> linux
   <require tools> cargo just sccache
   just test coverage
     CARGO_BUILD_JOBS=2
-    COVERAGE_MIN=80
     COVERAGE_OUTPUT_DIR=coverage
 # linux-coverage / main
   <require os> linux
   <require tools> cargo just sccache
   just test coverage
     CARGO_BUILD_JOBS=2
-    COVERAGE_MIN=80
     COVERAGE_OUTPUT_DIR=coverage
 # linux-coverage / nightly
   <require os> linux
   <require tools> cargo just sccache
   just test coverage
     CARGO_BUILD_JOBS=2
-    COVERAGE_MIN=80
     COVERAGE_OUTPUT_DIR=coverage
 # linux-coverage / weekly
   <require os> linux
   <require tools> cargo just sccache
   just test coverage
     CARGO_BUILD_JOBS=2
-    COVERAGE_MIN=80
     COVERAGE_OUTPUT_DIR=coverage
 # linux-coverage / release
   <require os> linux
   <require tools> cargo just sccache
   just test coverage
     CARGO_BUILD_JOBS=2
-    COVERAGE_MIN=80
     COVERAGE_OUTPUT_DIR=coverage
 # linux-doc / branch
   <require os> linux
