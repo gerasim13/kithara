@@ -140,6 +140,12 @@ coverage:
     #!/usr/bin/env bash
     set -uo pipefail
     OUTPUT_DIR="${COVERAGE_OUTPUT_DIR:-./coverage}"
+    # The bar stands at 80 while the workspace holds 76.5% of lines. The gap is
+    # the UI surface — kithara-ui widgets and kithara-app/src/gui, several files
+    # of it at zero — and it closes by covering that surface, not by moving the
+    # number. The number lives only here: the CI lane inherits it, because a
+    # second copy is one edit away from gating a local run and CI at different
+    # bars.
     COVERAGE_MIN="${COVERAGE_MIN:-80}"
     IGNORE_REGEX='(tests/|examples/|benches/|xtask/)'
     COBERTURA="$OUTPUT_DIR/cobertura.xml"
