@@ -317,6 +317,8 @@ impl GeneratedHls {
 
 fn materialize_body(spec: &ResolvedHlsSpec) -> Result<MaterializedHlsBody, HlsSpecError> {
     if let Some(packaged) = &spec.packaged_audio {
+        let segment_frames = packaged_segment_frames(packaged)
+            .map_err(|error| HlsSpecError::PackagedAudio(error.to_string()))?;
         // A cold-cache encode is CPU-bound ffmpeg work running inside the
         // calling test's wall budget: encode variants concurrently so a fully
         // cold fixture costs one variant's encode time, not the sum.
@@ -343,7 +345,7 @@ fn materialize_body(spec: &ResolvedHlsSpec) -> Result<MaterializedHlsBody, HlsSp
                             return Ok(data);
                         }
                         tracing::info!(key, "cold hls-variant fixture encode");
-                        let track = encode_packaged_variant(packaged, variant)
+                        let track = encode_packaged_variant(packaged, variant, segment_frames)
                             .map_err(|error| HlsSpecError::PackagedAudio(error.to_string()))?;
                         let data = mux_audio_track(&track, packaged.gapless_encoding)
                             .map_err(|error| HlsSpecError::PackagedAudio(error.to_string()))?;
@@ -448,13 +450,14 @@ fn decode_variant_blob(blob: &[u8]) -> Option<PackagedVariantData> {
 fn packaged_frame_layout(
     packaged: &ResolvedPackagedAudioSpec,
     frame_samples: usize,
-) -> (usize, usize, u32) {
+    segment_frames: usize,
+) -> (usize, usize, usize, u32) {
     let requested_segment_frames =
         (packaged.segment_duration_secs * f64::from(packaged.sample_rate)).round() as usize;
-    // Content duration belongs to the master timeline. Codec frame alignment
-    // is padding, recorded below as trailing delay, not audible content.
-    let content_frames = requested_segment_frames.saturating_mul(packaged.segments_per_variant);
-    let packets_per_segment = requested_segment_frames.div_ceil(frame_samples).max(1);
+    let nominal_content_frames =
+        requested_segment_frames.saturating_mul(packaged.segments_per_variant);
+    let packets_per_segment = segment_frames / frame_samples;
+    let content_frames = segment_frames.saturating_mul(packaged.segments_per_variant);
     let unaligned_total_frames = content_frames
         .saturating_add(packaged.encoder_delay as usize)
         .saturating_add(packaged.trailing_delay as usize);
@@ -464,17 +467,55 @@ fn packaged_frame_layout(
     let aligned_trailing_delay = packaged.trailing_delay.saturating_add(
         u32::try_from(total_frames.saturating_sub(unaligned_total_frames)).unwrap_or(u32::MAX),
     );
-    (packets_per_segment, content_frames, aligned_trailing_delay)
+    (
+        nominal_content_frames,
+        packets_per_segment,
+        content_frames,
+        aligned_trailing_delay,
+    )
+}
+
+fn packaged_segment_frames(packaged: &ResolvedPackagedAudioSpec) -> Result<usize, EncodeError> {
+    let requested_segment_frames =
+        (packaged.segment_duration_secs * f64::from(packaged.sample_rate)).round() as usize;
+    let frame_quantum = packaged
+        .variants
+        .iter()
+        .try_fold(1usize, |common, variant| {
+            let frame_samples = EncoderFactory::frame_samples(variant.codec)?;
+            least_common_multiple(common, frame_samples)
+        })?;
+    requested_segment_frames
+        .div_ceil(frame_quantum)
+        .max(1)
+        .checked_mul(frame_quantum)
+        .ok_or_else(|| EncodeError::InvalidInput("packaged frame alignment overflow".to_owned()))
+}
+
+fn least_common_multiple(lhs: usize, rhs: usize) -> Result<usize, EncodeError> {
+    lhs.checked_div(greatest_common_divisor(lhs, rhs))
+        .and_then(|reduced| reduced.checked_mul(rhs))
+        .ok_or_else(|| EncodeError::InvalidInput("packaged frame alignment overflow".to_owned()))
+}
+
+fn greatest_common_divisor(mut lhs: usize, mut rhs: usize) -> usize {
+    while rhs != 0 {
+        let remainder = lhs % rhs;
+        lhs = rhs;
+        rhs = remainder;
+    }
+    lhs
 }
 
 fn encode_packaged_variant(
     packaged: &ResolvedPackagedAudioSpec,
     variant: &ResolvedPackagedVariant,
+    segment_frames: usize,
 ) -> Result<EncodedTrack, EncodeError> {
     let encoder = EncoderFactory::create_packaged(variant.codec)?;
     let frame_samples = encoder.packaged_frame_samples(variant.codec)?;
-    let (packets_per_segment, content_frames, aligned_trailing_delay) =
-        packaged_frame_layout(packaged, frame_samples);
+    let (nominal_content_frames, packets_per_segment, content_frames, aligned_trailing_delay) =
+        packaged_frame_layout(packaged, frame_samples, segment_frames);
 
     let media_info = MediaInfo::builder()
         .codec(variant.codec)
@@ -583,7 +624,7 @@ fn encode_packaged_variant(
             }
         }
         ResolvedPackagedSignal::Sweep { start_hz, end_hz } => {
-            let sweep_frames = content_frames.saturating_add(
+            let sweep_frames = nominal_content_frames.saturating_add(
                 usize::try_from(variant.start_frame).expect("start_frame must fit usize"),
             );
             let sweep = || signal::Sweep::new(start_hz, end_hz, sweep_frames, SweepMode::Linear);
@@ -909,7 +950,7 @@ mod tests {
     }
 
     #[kithara::test]
-    fn packaged_segments_follow_the_requested_content_timeline() {
+    fn packaged_segments_can_exceed_requested_segment_count() {
         let spec = crate::test_server::HlsFixtureBuilder::new()
             .variant_count(1)
             .segments_per_variant(8)
@@ -920,10 +961,14 @@ mod tests {
         let generated = GeneratedHls::new(resolved).unwrap();
         let playlist = generated.media_playlist(0).unwrap();
 
-        assert!(playlist.contains("seg/v0_7.m4s"));
-        assert!(!playlist.contains("seg/v0_8.m4s"));
-        assert!(generated.segment_bytes(0, 7).is_some());
-        assert!(generated.segment_bytes(0, 8).is_none());
+        assert!(
+            playlist.contains("seg/v0_8.m4s"),
+            "packaged playlist should expose the muxed tail segment"
+        );
+        assert!(
+            generated.segment_bytes(0, 8).is_some(),
+            "packaged fixture must serve every segment listed in the playlist"
+        );
     }
 
     #[kithara::test(native, flash(false))]
