@@ -14,7 +14,7 @@ use crate::{
         minimum_table_width, table_content_height, table_row_at,
     },
     backends::replay_ordered,
-    draw::{DrawList, Pt, Rect},
+    draw::{CachedValue, DrawList, Pt, Rect},
     engine::{ScrollConfig, ScrollState},
     interact::{
         ScrollAxis,
@@ -64,22 +64,24 @@ impl TablePaint {
             vertical,
             &self.face,
         );
-        let list = self.commands(
-            text,
-            bounds,
-            &Drawn {
-                columns: self.face.columns().to_vec(),
-                horizontal,
-                hovered,
-                pressed: state.pressed_index,
-                vertical,
-            },
-        );
-        state.refresh(&list);
+        let drawn = Drawn {
+            columns: self.face.columns().to_vec(),
+            horizontal,
+            hovered,
+            pressed: state.pressed_index,
+            vertical,
+        };
+        state.mark(bounds, &drawn, &self.face, || {
+            self.commands(text, bounds, &drawn)
+        });
+        let marks = state.marks.borrow();
+        let Some(list) = marks.value() else {
+            return Vec::new();
+        };
         vec![
             state
                 .geometry
-                .draw(renderer, size, |frame| self.tessellate(frame, &list)),
+                .draw(renderer, size, |frame| self.tessellate(frame, list)),
         ]
     }
 
@@ -139,16 +141,37 @@ pub(super) struct TableState {
     pub(super) dividers: Vec<(TableColumn, ScalarState)>,
     pub(super) horizontal: ScrollState,
     path: String,
-    /// The marks the kept geometry was tessellated from, and that geometry.
-    /// A table is the one canvas this host drew from scratch every frame; a
-    /// painted control has held both since it learned not to.
-    drawn: RefCell<Option<DrawList>>,
+    /// The marks, kept behind the state they were built from, and the geometry
+    /// tessellated from them. A table is the one canvas this host drew from
+    /// scratch every frame; a painted control has held both since it learned
+    /// not to.
+    marks: RefCell<CachedValue<Option<Marks>, DrawList>>,
     geometry: canvas::Cache,
     pub(super) drag_index: Option<usize>,
     pub(super) pressed_index: Option<usize>,
     pub(super) row_drag: ItemDrag,
     text: RefCell<Option<TextContext>>,
     pub(super) vertical: ScrollState,
+}
+
+/// The state the table's marks were built from, kept whole so that the next
+/// frame can ask whether any of it moved.
+#[derive(PartialEq)]
+struct Marks {
+    bounds: Rect,
+    drawn: Drawn,
+    face: TableFace,
+}
+
+/// What a frame cost the table.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) enum Marked {
+    /// The key held: no marks were built and the geometry stands.
+    Kept,
+    /// The marks were built and came out the same: the geometry stands.
+    Same,
+    /// The marks came out different: the geometry was dropped.
+    Changed,
 }
 
 #[derive(Clone)]
@@ -161,21 +184,48 @@ pub(super) struct TableConfig {
 }
 
 impl TableState {
-    /// Drops the kept geometry when the marks behind it changed, and reports
-    /// whether it had to. That answer is the whole of this cache, so it is
-    /// returned rather than inferred from the pixels.
+    /// Builds the marks only when the state they come from moved, drops the
+    /// kept geometry only when the marks that came out differ, and reports
+    /// which of the two it had to do. Those answers are the whole of this
+    /// cache, so they are returned rather than inferred from the pixels.
     ///
-    /// The key is the drawn list itself, on the same reasoning a painted
-    /// control gives: two equal lists draw the same picture by construction,
-    /// and equality settles the floats for free.
-    pub(super) fn refresh(&self, list: &DrawList) -> bool {
-        let mut drawn = self.drawn.borrow_mut();
-        if drawn.as_ref() == Some(list) {
-            return false;
+    /// The key is the three things [`TablePaint::commands`] reads, compared
+    /// whole. A hash would be cheaper to carry, but it would have to be taught
+    /// every field of the skin, and a skin field it was never taught freezes
+    /// the table on the old colour; derived equality cannot forget one.
+    pub(super) fn mark(
+        &self,
+        bounds: Rect,
+        drawn: &Drawn,
+        face: &TableFace,
+        build: impl FnOnce() -> DrawList,
+    ) -> Marked {
+        let mut marks = self.marks.borrow_mut();
+        let held = marks
+            .key()
+            .as_ref()
+            .is_some_and(|key| key.bounds == bounds && &key.drawn == drawn && &key.face == face);
+        if held && marks.value().is_some() {
+            return Marked::Kept;
         }
-        self.geometry.clear();
-        *drawn = Some(list.clone());
-        true
+        let list = build();
+        let changed = marks.value() != Some(&list);
+        if changed {
+            self.geometry.clear();
+        }
+        marks.update(
+            Some(Marks {
+                bounds,
+                drawn: drawn.clone(),
+                face: face.clone(),
+            }),
+            Some(list),
+        );
+        if changed {
+            Marked::Changed
+        } else {
+            Marked::Same
+        }
     }
 
     pub(super) fn reconcile(&mut self, path: &str, config: &TableConfig) {

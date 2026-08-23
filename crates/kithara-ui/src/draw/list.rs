@@ -1,6 +1,6 @@
 use super::{
     DrawCmd, DrawPools, FillRule, Geom, Image, Paint, Path, Pen, PoolText, Pt, Rect, Rgba,
-    Transform, Verb, buffer::Buffer, place,
+    Transform, Verb, place, pool::Buffer,
 };
 use crate::shaping::GlyphRun;
 

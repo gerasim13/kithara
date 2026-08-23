@@ -5,8 +5,8 @@ use super::{
     image::Image,
     list::DrawList,
     path::Path,
+    pool::PoolText,
     style::{Paint, Pen},
-    text::PoolText,
 };
 pub use crate::geom::{Pt, Transform};
 use crate::shaping::GlyphRun;

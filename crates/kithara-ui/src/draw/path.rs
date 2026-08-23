@@ -1,6 +1,6 @@
 use super::{
-    buffer::{Buffer, VecPool},
     ir::{Pt, Rect},
+    pool::{Buffer, VecPool},
 };
 
 /// One move a vector outline is made of, in logical pixels.

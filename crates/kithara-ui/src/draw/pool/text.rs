@@ -5,7 +5,7 @@ use kithara_bufpool::{PooledOwned, Reuse, SharedPool};
 const SHARDS: usize = 1;
 
 #[derive(Debug, Default)]
-pub(super) struct TextBuffer(pub(super) String);
+pub(in crate::draw) struct TextBuffer(pub(in crate::draw) String);
 
 impl Reuse for TextBuffer {
     fn byte_size(&self) -> usize {
@@ -18,7 +18,7 @@ impl Reuse for TextBuffer {
     }
 }
 
-pub(super) type TextPool = SharedPool<SHARDS, TextBuffer>;
+pub(in crate::draw) type TextPool = SharedPool<SHARDS, TextBuffer>;
 type TextGuard = PooledOwned<SHARDS, TextBuffer>;
 
 /// UTF-8 text whose allocation can return to its owning draw-pool family.
@@ -32,7 +32,7 @@ enum TextStorage {
 }
 
 impl PoolText {
-    pub(super) fn pooled(content: &str, pool: &TextPool) -> Self {
+    pub(in crate::draw) fn pooled(content: &str, pool: &TextPool) -> Self {
         let mut guard = pool.get();
         guard.0.push_str(content);
         Self {

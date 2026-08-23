@@ -1,7 +1,8 @@
 use kithara_bufpool::SharedPool;
 
 use super::{
-    DrawCmd, DrawListBuilder, FillRule, PoolPath, PoolText, Verb,
+    super::{DrawCmd, DrawListBuilder, FillRule, PoolPath, Verb},
+    PoolText,
     buffer::{Buffer, VecPool},
     text::TextPool,
 };
@@ -81,11 +82,11 @@ impl DrawPools {
         }
     }
 
-    pub(super) fn commands(&self) -> Buffer<DrawCmd> {
+    pub(in crate::draw) fn commands(&self) -> Buffer<DrawCmd> {
         Buffer::pooled(&self.commands)
     }
 
-    pub(super) fn pooled_path(&self, path: PoolPath) -> PoolPath {
+    pub(in crate::draw) fn pooled_path(&self, path: PoolPath) -> PoolPath {
         path.into_pooled(&self.paths)
     }
 }

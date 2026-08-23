@@ -5,7 +5,7 @@ use kithara_bufpool::{PooledOwned, Reuse, SharedPool};
 const SHARDS: usize = 1;
 
 #[derive(Debug)]
-pub(super) struct DrawBuffer<T>(Vec<T>);
+pub(in crate::draw) struct DrawBuffer<T>(Vec<T>);
 
 impl<T> Default for DrawBuffer<T> {
     fn default() -> Self {
@@ -24,38 +24,38 @@ impl<T> Reuse for DrawBuffer<T> {
     }
 }
 
-pub(super) type VecPool<T> = SharedPool<SHARDS, DrawBuffer<T>>;
+pub(in crate::draw) type VecPool<T> = SharedPool<SHARDS, DrawBuffer<T>>;
 type VecGuard<T> = PooledOwned<SHARDS, DrawBuffer<T>>;
 
-pub(super) enum Buffer<T> {
+pub(in crate::draw) enum Buffer<T> {
     Owned(Vec<T>),
     Pooled(VecGuard<T>),
 }
 
 impl<T> Buffer<T> {
-    pub(super) const fn owned(values: Vec<T>) -> Self {
+    pub(in crate::draw) const fn owned(values: Vec<T>) -> Self {
         Self::Owned(values)
     }
 
-    pub(super) fn pooled(pool: &VecPool<T>) -> Self {
+    pub(in crate::draw) fn pooled(pool: &VecPool<T>) -> Self {
         Self::Pooled(pool.get())
     }
 
-    pub(super) fn push(&mut self, value: T) {
+    pub(in crate::draw) fn push(&mut self, value: T) {
         match self {
             Self::Owned(values) => values.push(value),
             Self::Pooled(guard) => guard.0.push(value),
         }
     }
 
-    pub(super) fn as_slice(&self) -> &[T] {
+    pub(in crate::draw) fn as_slice(&self) -> &[T] {
         match self {
             Self::Owned(values) => values,
             Self::Pooled(guard) => &guard.0,
         }
     }
 
-    pub(super) fn into_pooled(self, pool: &VecPool<T>) -> Self {
+    pub(in crate::draw) fn into_pooled(self, pool: &VecPool<T>) -> Self {
         match self {
             pooled @ Self::Pooled(_) => pooled,
             Self::Owned(mut values) => {

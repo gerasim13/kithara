@@ -347,7 +347,7 @@ mod tests {
     use iced_tiny_skia::Renderer as TinySkiaRenderer;
     use kithara_test_utils::kithara;
 
-    use super::*;
+    use super::{paint::Marked, *};
     use crate::{
         atoms::table::{TableCell, face::Drawn, table_body, table_row_rect},
         builtin,
@@ -419,19 +419,18 @@ mod tests {
 
     /// One frame of the immediate host's table: the program is built afresh,
     /// and the canvas state is the one thing that survived the last frame.
-    /// Reports whether that frame had to be tessellated again.
-    fn drew_again(state: &TableState, paint: &TablePaint, drawn: &Drawn) -> bool {
+    /// Reports what that frame cost.
+    fn marked(state: &TableState, paint: &TablePaint, drawn: &Drawn) -> Marked {
         let mut text = TextContext::from(paint.face.skin().text_resources());
-        state.refresh(&paint.face.commands(
-            &mut text,
-            Rect {
-                h: 120.0,
-                w: 180.0,
-                x: 0.0,
-                y: 0.0,
-            },
-            drawn,
-        ))
+        let bounds = Rect {
+            h: 120.0,
+            w: 180.0,
+            x: 0.0,
+            y: 0.0,
+        };
+        state.mark(bounds, drawn, &paint.face, || {
+            paint.face.commands(&mut text, bounds, drawn)
+        })
     }
 
     /// What a table standing still is drawn from.
@@ -446,17 +445,18 @@ mod tests {
     }
 
     /// The host rebuilds the whole element tree every frame, so a table nothing
-    /// touched must not be tessellated a second time. It was the one canvas
-    /// this host drew from scratch on every single frame.
+    /// touched must not be built a second time. It was the one canvas this host
+    /// drew from scratch on every single frame.
     #[kithara::test]
-    fn an_unchanged_table_keeps_the_geometry_it_drew() {
+    fn an_unchanged_table_builds_no_marks_again() {
         let paint = paint();
         let state = TableState::default();
         let drawn = still(&paint);
+        marked(&state, &paint, &drawn);
 
-        assert!(drew_again(&state, &paint, &drawn), "the first frame draws");
-        assert!(
-            !drew_again(&state, &paint, &drawn),
+        assert_eq!(
+            marked(&state, &paint, &drawn),
+            Marked::Kept,
             "a table nothing touched must keep what it drew"
         );
     }
@@ -467,10 +467,10 @@ mod tests {
         let paint = paint();
         let state = TableState::default();
         let drawn = still(&paint);
-        assert!(drew_again(&state, &paint, &drawn), "the first frame draws");
+        marked(&state, &paint, &drawn);
 
-        assert!(
-            drew_again(
+        assert_eq!(
+            marked(
                 &state,
                 &paint,
                 &Drawn {
@@ -478,6 +478,7 @@ mod tests {
                     ..drawn
                 }
             ),
+            Marked::Changed,
             "a row taken under the pointer must draw again"
         );
     }
@@ -489,10 +490,10 @@ mod tests {
         let paint = paint();
         let state = TableState::default();
         let drawn = still(&paint);
-        assert!(drew_again(&state, &paint, &drawn), "the first frame draws");
+        marked(&state, &paint, &drawn);
 
-        assert!(
-            drew_again(
+        assert_eq!(
+            marked(
                 &state,
                 &paint,
                 &Drawn {
@@ -500,7 +501,31 @@ mod tests {
                     ..drawn
                 }
             ),
+            Marked::Changed,
             "a table scrolled to other rows must draw again"
+        );
+    }
+
+    /// The rows and the scroll offsets are the loud part of the key, and a key
+    /// that only carried those would hold across a change of theme and freeze
+    /// the table on the old skin.
+    #[kithara::test]
+    fn a_reskinned_table_draws_again() {
+        let paint = paint();
+        let state = TableState::default();
+        let drawn = still(&paint);
+        marked(&state, &paint, &drawn);
+        let mut skin = builtin::skin().clone();
+        skin.table.header_height += 7.0;
+
+        assert_eq!(
+            marked(
+                &state,
+                &TablePaint::new("library/tracks", rows(), columns(), &skin),
+                &drawn
+            ),
+            Marked::Changed,
+            "a table given another skin must draw again"
         );
     }
 
