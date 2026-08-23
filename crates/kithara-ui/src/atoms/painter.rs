@@ -44,8 +44,7 @@ use crate::{
     interact::Hit,
     render::{Mark, ScalarRange, StereoLevels},
     shaping::TextContext,
-    size::length,
-    solve::{Length, Size},
+    solve::{Length, Size, length},
 };
 
 /// Transient per-cell state owned by an indexed control adapter.

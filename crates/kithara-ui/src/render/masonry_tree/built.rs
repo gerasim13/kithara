@@ -146,6 +146,26 @@ impl<Action> MasonryNode<Action> {
         }
     }
 
+    /// The module shell's own bars, and whatever they hold.
+    ///
+    /// Chrome is furniture that holds furniture: it names no document path, so
+    /// it must not answer as a document node when a test counts them.
+    pub(super) fn chrome(
+        layout: NodeLayout,
+        declared: solve::Size<solve::Length>,
+        children: Vec<Self>,
+        background: Option<Rgba>,
+        frame: Option<(FrameSides, Rgba, f32)>,
+    ) -> Self {
+        let node = Self::document(layout, declared, children, false, background, frame);
+        #[cfg(test)]
+        let node = Self {
+            document_ids: Vec::new(),
+            ..node
+        };
+        node
+    }
+
     pub(super) fn furniture(
         layout: NodeLayout,
         declared: solve::Size<solve::Length>,

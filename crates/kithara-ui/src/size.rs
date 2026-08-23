@@ -7,7 +7,6 @@ use crate::{
     module::{ChromeStyle, MeasureAxis},
     mount,
     skin::SkinDoc,
-    solve,
 };
 
 /// One-axis size rule. `Fill` takes available space, `Shrink` takes exactly what
@@ -454,18 +453,6 @@ pub(crate) fn rooms(node: &ExpandedNode, axis: MeasureAxis, skin: &SkinDoc) -> V
     Cells::of(node, skin).map_or_else(Vec::new, |cells| {
         cells.rooms(axis, axis_min(min_size(node, skin), axis))
     })
-}
-
-/// The document's word for an axis in the solver's own vocabulary.
-///
-/// A range is a fill with a floor: the solver has no word for the floor, so the
-/// node that declares one keeps it and the solver is told to fill.
-pub(crate) const fn length(dim: Dim) -> solve::Length {
-    match dim {
-        Dim::Fixed(value) => solve::Length::Fixed(value),
-        Dim::Shrink => solve::Length::Shrink,
-        Dim::Range { .. } | Dim::Fill => solve::Length::Fill,
-    }
 }
 
 pub(crate) fn axis_dim(size: SizeSpec, axis: MeasureAxis) -> Dim {

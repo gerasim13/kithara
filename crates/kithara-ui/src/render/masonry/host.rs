@@ -8,7 +8,7 @@ use std::{
 use masonry::core::WidgetId;
 
 use super::{
-    CustomWidget, MasonryNode,
+    CustomWidget, MasonryNode, Painted,
     built::LayerParts,
     custom::{HostAction, MappedCustom, MountedCustom},
     flex::{ChildLayout, Flex},
@@ -23,11 +23,12 @@ use super::{
     vis::VisLeaf,
 };
 use crate::{
-    draw::Transform,
+    atoms::chrome::{ChromeChevron, ChromeLabel, footer_role},
+    draw::{Rgba, Transform},
     expand::{Binding, ControlSpec, ExpandedNode},
     ids::InternId,
-    layout::Axis,
-    module::{ChromeStyle, MeasureAxis, TextStyle},
+    layout::{Axis, FrameSides},
+    module::{ChromeStyle, MeasureAxis, TextAlign, TextStyle},
     mount,
     render::{
         ControlAction, HostedControlPlan, InputOwner, ReadValue, Skin, UiEvent,
@@ -36,7 +37,8 @@ use crate::{
         scroll::Bar,
     },
     shaping::TextContext,
-    size::{SizeSpec, length},
+    size::SizeSpec,
+    skin::FrameSkin,
     solve,
 };
 
@@ -219,7 +221,7 @@ where
     /// One module's chrome around the content the walk already produced.
     fn mount_module(
         &self,
-        module: &Module<'_>,
+        module: &mut Module<'_>,
         content: Option<MasonryNode<Action>>,
     ) -> MasonryNode<Action> {
         let chrome = module.chrome();
@@ -230,22 +232,18 @@ where
         ));
         let panel = Some(self.skin.rgba(self.skin.chrome.panel_background));
         match chrome {
-            ChromeStyle::Full if module.collapsed() => MasonryNode::document(
-                NodeLayout::Leaf(Leaf::Empty),
+            ChromeStyle::Full if module.collapsed() => MasonryNode::chrome(
+                NodeLayout::Stack,
                 solve::Size::new(
                     solve::Length::Fill,
                     solve::Length::Fixed(self.skin.chrome.header_height),
                 ),
-                Vec::new(),
-                false,
-                Some(self.skin.rgba(self.skin.chrome.header_background)),
+                vec![self.module_header(module)],
+                panel,
                 frame,
             ),
             ChromeStyle::Full => {
-                let header = furniture(
-                    self.skin.chrome.header_height,
-                    Some(self.skin.rgba(self.skin.chrome.header_background)),
-                );
+                let header = self.module_header(module);
                 let first_line = furniture(
                     self.skin.chrome.inner_line_width,
                     Some(self.skin.rgba(self.skin.chrome.inner_line)),
@@ -256,10 +254,7 @@ where
                     self.skin.chrome.inner_line_width,
                     Some(self.skin.rgba(self.skin.chrome.inner_line)),
                 );
-                let footer = furniture(
-                    self.skin.chrome.footer_height,
-                    Some(self.skin.rgba(self.skin.chrome.footer_background)),
-                );
+                let footer = self.module_footer(module.take_footer().unwrap_or_default());
                 let children = vec![header, first_line, content, second_line, footer];
                 let layouts = children
                     .iter()
@@ -294,6 +289,132 @@ where
                 )
             }
         }
+    }
+
+    /// The bar across the top of a module: what it is called, what it is
+    /// assigned to, and the chevron that folds it away.
+    fn module_header(&self, module: &Module<'_>) -> MasonryNode<Action> {
+        let metrics = self.skin.chrome;
+        let mut children = Vec::with_capacity(4 + module.assign().len());
+        if let Some(chip) = module.chip() {
+            children
+                .push(self.chrome_label(ChromeLabel::chip(self.skin), self.ctx.ui.resolve(chip)));
+        }
+        if let Some(title) = module.title() {
+            children
+                .push(self.chrome_label(ChromeLabel::title(self.skin), self.ctx.ui.resolve(title)));
+            children.push(MasonryNode::furniture(
+                NodeLayout::Leaf(Leaf::Empty),
+                solve::Size::new(
+                    solve::Length::Fixed(metrics.inner_line_width),
+                    solve::Length::Fill,
+                ),
+                Some(self.skin.rgba(metrics.inner_line)),
+            ));
+        }
+        children.push(MasonryNode::empty(solve::Size::new(
+            solve::Length::Fill,
+            solve::Length::Fill,
+        )));
+        children.extend(module.assign().iter().map(|label| {
+            self.chrome_label(ChromeLabel::chip(self.skin), self.ctx.ui.resolve(*label))
+        }));
+        children.push(self.module_chevron(module.collapsed()));
+        let layouts = children
+            .iter()
+            .map(|child| ChildLayout::natural(child.declared(), None))
+            .collect();
+        MasonryNode::chrome(
+            NodeLayout::Flex(Flex::new(
+                Axis::Horizontal,
+                solve::Length::Fill,
+                solve::Length::Fixed(metrics.header_height),
+                solve::Padding::default(),
+                0.0,
+                solve::Alignment::Center,
+                layouts,
+            )),
+            solve::Size::new(
+                solve::Length::Fill,
+                solve::Length::Fixed(metrics.header_height),
+            ),
+            children,
+            Some(self.skin.rgba(metrics.header_background)),
+            self.chrome_frame(metrics.header_frame),
+        )
+    }
+
+    /// A word in a box, sized by the word.
+    fn chrome_label(&self, label: ChromeLabel, content: &str) -> MasonryNode<Action> {
+        MasonryNode::control_leaf(
+            Painted::pooled(
+                label,
+                content.to_owned(),
+                self.skin,
+                self.ctx.ui.draw_pools(),
+            ),
+            solve::Size::new(solve::Length::Shrink, solve::Length::Fill),
+        )
+    }
+
+    /// The cell at the end of the header, with the mark that says which way
+    /// the module folds.
+    fn module_chevron(&self, collapsed: bool) -> MasonryNode<Action> {
+        let metrics = self.skin.chrome;
+        let declared = solve::Size::new(
+            solve::Length::Fixed(metrics.chevron_size),
+            solve::Length::Fill,
+        );
+        let mark = MasonryNode::control_leaf(
+            Painted::pooled(
+                ChromeChevron::new(self.skin),
+                collapsed,
+                self.skin,
+                self.ctx.ui.draw_pools(),
+            ),
+            declared,
+        );
+        MasonryNode::chrome(
+            NodeLayout::Stack,
+            declared,
+            vec![mark],
+            Some(self.skin.rgba(metrics.header_background)),
+            self.chrome_frame(metrics.chevron_frame),
+        )
+    }
+
+    /// The strip under a module, carrying the one word it resolved for itself.
+    fn module_footer(&self, content: String) -> MasonryNode<Action> {
+        let metrics = self.skin.chrome;
+        let role = footer_role(self.skin);
+        MasonryNode::chrome(
+            NodeLayout::Leaf(Leaf::Text {
+                align: TextAlign::Start,
+                content,
+                role,
+                padding_x: metrics.footer_pad,
+                color: self.skin.rgba(role.color),
+                text: Box::new(TextContext::from(self.skin.text_resources())),
+            }),
+            solve::Size::new(
+                solve::Length::Fill,
+                solve::Length::Fixed(metrics.footer_height),
+            ),
+            Vec::new(),
+            Some(self.skin.rgba(metrics.footer_background)),
+            self.chrome_frame(metrics.footer_frame),
+        )
+    }
+
+    /// A chrome frame is drawn only when the skin asks for one.
+    fn chrome_frame(&self, frame: FrameSkin) -> Option<(FrameSides, Rgba, f32)> {
+        (frame.border_width > 0.0).then(|| {
+            (
+                FrameSides::default(),
+                self.skin.rgba(frame.border),
+                frame.border_width,
+            )
+        })
     }
 
     pub(super) fn shader_leaf(
@@ -433,8 +554,8 @@ where
         MasonryNode::document(NodeLayout::Measured(plan), size, branches, true, None, None)
     }
 
-    fn module(&mut self, module: Module<'_>, content: Option<Self::Output>) -> Self::Output {
-        let mut output = self.mount_module(&module, content);
+    fn module(&mut self, mut module: Module<'_>, content: Option<Self::Output>) -> Self::Output {
+        let mut output = self.mount_module(&mut module, content);
         // A module that takes drops reports the pointer crossing it, and the
         // hand carrying a track never belongs to the module: it belongs to the
         // list it came from. So the module observes without capturing, and
@@ -473,8 +594,8 @@ where
             NodeLayout::Flex(
                 Flex::new(
                     group.axis(),
-                    length(size.w),
-                    length(size.h),
+                    solve::length(size.w),
+                    solve::length(size.h),
                     solve::Padding {
                         top: group.padding_y(),
                         right: group.padding_x(),
@@ -746,7 +867,7 @@ where
     }
 }
 
-fn furniture<Action>(height: f32, background: Option<crate::draw::Rgba>) -> MasonryNode<Action> {
+fn furniture<Action>(height: f32, background: Option<Rgba>) -> MasonryNode<Action> {
     MasonryNode::furniture(
         NodeLayout::Leaf(Leaf::Empty),
         solve::Size::new(solve::Length::Fill, solve::Length::Fixed(height)),

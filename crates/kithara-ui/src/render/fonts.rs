@@ -31,7 +31,6 @@ pub const FONT_BYTES: [&[u8]; 10] = [
 ];
 
 pub const SANS: Font = font(FontFamily::Sans, FontWeight::Normal);
-pub const MONO: Font = font(FontFamily::Mono, FontWeight::Normal);
 pub const LUCIDE: Font = Font::with_name("lucide");
 
 #[must_use]

@@ -35,7 +35,7 @@ pub(crate) use hosted::{HostedControlPlan, Resolving};
 pub use icons::Icon;
 pub(crate) use icons::{Mark, document_icon, tree_icon};
 #[cfg(feature = "iced")]
-pub use immediate::{LayoutPreview, shaped_text};
+pub use immediate::LayoutPreview;
 pub(crate) use layer::{HostLayer, LayerHit, WindowLayerProgram, place_popover};
 pub use model::{
     PortalMapView, PortalTarget, ReadValue, Reads, ScalarRange, StereoLevels, TableCell, TableRow,

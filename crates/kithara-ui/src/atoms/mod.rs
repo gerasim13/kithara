@@ -1,6 +1,7 @@
 pub(crate) mod bar;
 pub(crate) mod button;
 pub(crate) mod chip;
+pub(crate) mod chrome;
 pub(crate) mod deck;
 pub(crate) mod design;
 pub(crate) mod icon;

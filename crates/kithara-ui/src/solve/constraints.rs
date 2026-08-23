@@ -1,4 +1,5 @@
 use super::Size;
+use crate::size::Dim;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) enum Length {
@@ -15,6 +16,18 @@ impl Length {
             Self::FillPortion(factor) => factor,
             Self::Shrink | Self::Fixed(_) => 0,
         }
+    }
+}
+
+/// The document's word for an axis in the solver's own vocabulary.
+///
+/// A range is a fill with a floor: the solver has no word for the floor, so the
+/// node that declares one keeps it and the solver is told to fill.
+pub(crate) const fn length(dim: Dim) -> Length {
+    match dim {
+        Dim::Fixed(value) => Length::Fixed(value),
+        Dim::Shrink => Length::Shrink,
+        Dim::Range { .. } | Dim::Fill => Length::Fill,
     }
 }
 

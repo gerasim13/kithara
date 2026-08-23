@@ -683,6 +683,88 @@ fn masonry_layout_rects_equal_snapped_neutral_rects() {
     }
 }
 
+/// A flow that measures its room, holding one cell that always stands and one
+/// that waits for a wider window.
+const REVEALING_BAR: &str = r#"Row(id: "bar", measure: Width, size: (w: Fill, h: Fill),
+    gap: 0.0, pad: 0.0, children: [
+        Spacer(id: "always", size: Some((w: Fixed(40.0), h: Fixed(20.0)))),
+        Reveal(from: 200.0, child: Spacer(id: "wide", size: Some((w: Fixed(40.0), h: Fixed(20.0))))),
+    ])"#;
+
+/// The revealed cell of [`REVEALING_BAR`] on a window of the given width, and
+/// whether Masonry keeps it out of the picture.
+fn revealed_cell_is_hidden(width: u32) -> bool {
+    let registry = fixture_registry();
+    let reads = FixtureReads;
+    let ui = fixture_ui("revealing-bar", REVEALING_BAR, &registry);
+    let output = document::render(
+        &ui.root,
+        ctx(&ui, &reads),
+        MasonryHost::new(ctx(&ui, &reads), builtin::skin()),
+    );
+    let wide = *output
+        .document_ids()
+        .last()
+        .unwrap_or_else(|| panic!("the fixture must retain the revealed cell"));
+    let mut root = masonry_root(output, width, 60);
+    root.redraw()
+        .unwrap_or_else(|error| panic!("the revealing bar must compose: {error}"));
+    root.root()
+        .get_widget(wide)
+        .unwrap_or_else(|| panic!("the revealed cell must stay registered"))
+        .ctx()
+        .is_stashed()
+}
+
+#[kithara::test]
+fn a_cell_the_room_does_not_reach_draws_nothing() {
+    assert!(
+        revealed_cell_is_hidden(120),
+        "a cell whose band the room does not reach must be stashed: Masonry then skips it for \
+         paint, and an empty box alone still lets the leaves inside it draw at the flow's origin"
+    );
+}
+
+#[kithara::test]
+fn a_cell_the_room_reaches_draws() {
+    assert!(
+        !revealed_cell_is_hidden(240),
+        "a cell whose band the room reaches must stand in the picture"
+    );
+}
+
+#[kithara::test]
+fn a_cell_comes_back_when_the_room_grows_to_reach_it() {
+    let registry = fixture_registry();
+    let reads = FixtureReads;
+    let ui = fixture_ui("revealing-bar-resized", REVEALING_BAR, &registry);
+    let output = document::render(
+        &ui.root,
+        ctx(&ui, &reads),
+        MasonryHost::new(ctx(&ui, &reads), builtin::skin()),
+    );
+    let wide = *output
+        .document_ids()
+        .last()
+        .unwrap_or_else(|| panic!("the fixture must retain the revealed cell"));
+    let mut root = masonry_root(output, 120, 60);
+    root.redraw()
+        .unwrap_or_else(|error| panic!("the narrow bar must compose: {error}"));
+    root.handle_window_event(WindowEvent::Resize(PhysicalSize::new(240, 60)))
+        .unwrap_or_else(|error| panic!("the bar must take the wider window: {error}"));
+    root.redraw()
+        .unwrap_or_else(|error| panic!("the widened bar must compose: {error}"));
+    assert!(
+        !root
+            .root()
+            .get_widget(wide)
+            .unwrap_or_else(|| panic!("the revealed cell must stay registered"))
+            .ctx()
+            .is_stashed(),
+        "a cell the room grew to reach must be back in the picture"
+    );
+}
+
 #[kithara::test]
 fn a_fill_slot_centers_its_fixed_content_like_the_immediate_host() {
     let registry = fixture_registry();
@@ -4622,5 +4704,110 @@ fn a_track_released_away_from_its_list_still_reports_the_drop() {
     assert!(
         published_drag(&published, "library", DragPhase::Drop),
         "a track released away from its list must still report the drop, published {published:?}"
+    );
+}
+
+/// A module drawn with the full shell: a chip and a title in its header, and
+/// the chevron that folds it away.
+fn chrome_ui(title: &str, registry: &dyn EndpointRegistry) -> CompiledUi {
+    let mut resolver = MemResolver::default();
+    resolver.insert(
+        "fixture.klayout.ron",
+        r#"(schema: "kithara.layout", version: 1, id: "fixture",
+            root: Module(instance: "demo", source: "fixture.kmodule.ron", size: (w: Fill, h: Fill)))"#,
+    );
+    let module = [
+        r#"(schema: "kithara.module", version: 1, id: "shell", chrome: Full, chip: Some("A"), title: Some(""#,
+        title,
+        r#""), root: Spacer(id: "body", size: Some((w: Fill, h: Fill))))"#,
+    ]
+    .concat();
+    resolver.insert("fixture.kmodule.ron", &module);
+    compile(
+        "fixture.klayout.ron",
+        &resolver,
+        registry,
+        builtin::skin_doc(),
+        builtin::text_doc(),
+        &UiConfig::default(),
+    )
+    .unwrap_or_else(|error| panic!("the chrome fixture must compile: {error}"))
+}
+
+/// Where the retained host put each cell of a full module's header, and where
+/// the header itself stands.
+fn header_cells(title: &str) -> (Point, MasonrySize, Vec<(Point, MasonrySize)>) {
+    let registry = fixture_registry();
+    let reads = FixtureReads;
+    let ui = chrome_ui(title, &registry);
+    let output = document::render(
+        &ui.root,
+        ctx(&ui, &reads),
+        MasonryHost::new(ctx(&ui, &reads), builtin::skin()),
+    );
+    let mut root = masonry_root(output, 300, 200);
+    root.redraw()
+        .unwrap_or_else(|error| panic!("the module shell must compose: {error}"));
+    let root = root.root();
+    let mut queue = VecDeque::from([root.get_layer_root(0)]);
+    let height = f64::from(builtin::skin().chrome.header_height);
+    while let Some(widget) = queue.pop_front() {
+        let children = widget.children();
+        if widget.ctx().size().height == height && children.len() > 1 {
+            return (
+                widget.ctx().window_origin(),
+                widget.ctx().size(),
+                children
+                    .into_iter()
+                    .map(|cell| (cell.ctx().window_origin(), cell.ctx().size()))
+                    .collect(),
+            );
+        }
+        queue.extend(children);
+    }
+    panic!("a full module must draw a header holding more than one cell");
+}
+
+#[kithara::test]
+fn a_full_header_holds_a_cell_for_everything_it_names() {
+    let (_, _, cells) = header_cells("DECK");
+
+    assert_eq!(
+        cells.len(),
+        5,
+        "a header naming a chip and a title holds the chip, the title, the line after it, the \
+         space that pushes the rest right, and the chevron cell: {cells:?}"
+    );
+}
+
+#[kithara::test]
+fn a_header_cell_grows_with_the_word_it_carries() {
+    let (_, _, short) = header_cells("D");
+    let (_, _, long) = header_cells("DECK MICRO");
+
+    assert!(
+        long[1].1.width > short[1].1.width,
+        "a title cell must be measured from its own word: {} px for `D` and {} px for `DECK MICRO`",
+        short[1].1.width,
+        long[1].1.width
+    );
+}
+
+#[kithara::test]
+fn the_chevron_cell_stands_at_the_end_of_the_header() {
+    let (origin, size, cells) = header_cells("DECK");
+    let (cell_origin, cell_size) = cells[cells.len() - 1];
+
+    assert_eq!(cell_origin.x + cell_size.width, origin.x + size.width);
+}
+
+#[kithara::test]
+fn the_chevron_cell_takes_the_width_the_skin_gives_it() {
+    let (_, _, cells) = header_cells("DECK");
+    let (_, cell_size) = cells[cells.len() - 1];
+
+    assert_eq!(
+        cell_size.width,
+        f64::from(builtin::skin().chrome.chevron_size)
     );
 }

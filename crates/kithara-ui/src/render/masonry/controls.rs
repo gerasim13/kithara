@@ -13,6 +13,7 @@ use crate::{
         },
         button::Button,
         chip::Chip,
+        chrome::{ChromeChevron, ChromeLabel},
         deck::{clock::Clock, summary::Summary, tempo::Tempo},
         design::{
             cell::Cell, crossfader::Crossfader, fader::Fader, meter::Meter, segmented::Segmented,
@@ -561,6 +562,13 @@ impl Retained for Meter {
         set_scalar(data, value)
     }
 }
+
+/// A module's chrome is settled when the document is folded: the word a chip
+/// or a title carries, and which way the chevron points, arrive by rebuilding
+/// the header rather than through an endpoint.
+impl Retained for ChromeLabel {}
+
+impl Retained for ChromeChevron {}
 
 /// The bar's furniture shows what the skin said; no endpoint moves any of it.
 impl Retained for Brand {}

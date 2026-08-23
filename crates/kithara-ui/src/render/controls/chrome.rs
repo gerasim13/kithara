@@ -1,7 +1,7 @@
 use std::cell::RefCell;
 
 use iced::{
-    Element, Event, Length, Point, Rectangle, Renderer, Size, Theme, Vector,
+    Element, Event, Length, Rectangle, Renderer, Size, Theme, Vector,
     advanced::{
         Renderer as _, Widget as IcedWidget,
         graphics::geometry::Renderer as _,
@@ -10,23 +10,28 @@ use iced::{
         widget::{self, Tree},
     },
     mouse::{Cursor, Interaction},
-    widget::canvas::{self, Action, Canvas, Frame, Geometry, Path, Stroke},
+    widget::canvas::{self, Action, Canvas, Frame, Geometry},
 };
 
 use crate::{
-    atoms::text::Text,
+    atoms::{
+        chrome::{ChromeChevron, ChromeLabel, footer_role},
+        text::Text,
+    },
     backends::replay_ordered,
     draw::{DrawListBuilder, Rect},
     interact::{CursorShape, Hover, iced as iced_interact, recognizers::click},
-    render::{IcedSkin, InputOwner, Skin, UiEvent, controls::snapped, toggle_module},
+    render::{InputOwner, Skin, UiEvent, controls::snapped, toggle_module},
     shaping::TextContext,
-    skin::{ColorRole, FontFamily, FontWeight, FrameSkin, TextRoleSkin},
 };
 
-#[derive(Clone, Copy)]
+/// The footer carries the one word a module resolves for itself, so it owns it
+/// where the rest of the chrome borrows what the document already interned.
+#[derive(Clone)]
 pub(crate) enum ChromeLeaf<'a> {
     Chip(&'a str),
     Title(&'a str),
+    Footer(String),
     HorizontalLine,
     VerticalLine,
 }
@@ -47,8 +52,9 @@ struct LeafState {
 
 impl LeafPaint<'_, '_> {
     fn lengths(&self) -> Size<Length> {
-        match self.leaf {
+        match &self.leaf {
             ChromeLeaf::Chip(_) | ChromeLeaf::Title(_) => Size::new(Length::Shrink, Length::Fill),
+            ChromeLeaf::Footer(_) => Size::new(Length::Fill, Length::Fill),
             ChromeLeaf::HorizontalLine => Size::new(
                 Length::Fill,
                 Length::Fixed(self.skin.chrome.inner_line_width),
@@ -60,73 +66,30 @@ impl LeafPaint<'_, '_> {
         }
     }
 
-    fn text(&self) -> Option<Text<'_, '_>> {
-        let metrics = self.skin.chrome;
-        match self.leaf {
-            ChromeLeaf::Chip(label) => Some(Text::new(
-                label,
-                TextRoleSkin {
-                    color: metrics.chip_text,
-                    font: FontFamily::Mono,
-                    size: metrics.chip_text_size,
-                    spacing: 0.0,
-                    weight: FontWeight::Normal,
-                },
-                metrics.chip_pad,
-                self.skin,
-            )),
-            ChromeLeaf::Title(title) => Some(Text::new(
-                title,
-                TextRoleSkin {
-                    color: metrics.title_text,
-                    font: FontFamily::Display,
-                    size: metrics.title_text_size,
-                    spacing: 0.0,
-                    weight: FontWeight::Medium,
-                },
-                metrics.chip_pad,
-                self.skin,
-            )),
-            ChromeLeaf::HorizontalLine | ChromeLeaf::VerticalLine => None,
-        }
-    }
-
-    fn frame(&self) -> Option<(FrameSkin, ColorRole)> {
-        match self.leaf {
-            ChromeLeaf::Chip(_) => Some((
-                self.skin.chrome.chip_frame,
-                self.skin.chrome.chip_background,
-            )),
-            ChromeLeaf::Title(_) => Some((
-                self.skin.chrome.title_frame,
-                self.skin.chrome.title_background,
-            )),
-            ChromeLeaf::HorizontalLine | ChromeLeaf::VerticalLine => None,
+    /// The label this leaf draws, and what it says. A line has neither, and a
+    /// footer is a word with no box around it.
+    fn label(&self) -> Option<(ChromeLabel, &str)> {
+        match &self.leaf {
+            ChromeLeaf::Chip(label) => Some((ChromeLabel::chip(self.skin), label)),
+            ChromeLeaf::Title(title) => Some((ChromeLabel::title(self.skin), title)),
+            ChromeLeaf::Footer(_) | ChromeLeaf::HorizontalLine | ChromeLeaf::VerticalLine => None,
         }
     }
 
     fn paint(&self, builder: &mut DrawListBuilder, text: &mut TextContext, bounds: Rect) {
-        if let Some((frame, background)) = self.frame() {
-            builder.fill_rounded_rect(bounds, frame.radius, self.skin.rgba(background));
-            if frame.border_width > 0.0 {
-                let inset = frame.border_width / 2.0;
-                builder.stroke_rounded_rect(
-                    Rect {
-                        h: (bounds.h - frame.border_width).max(0.0),
-                        w: (bounds.w - frame.border_width).max(0.0),
-                        x: bounds.x + inset,
-                        y: bounds.y + inset,
-                    },
-                    frame.radius,
-                    self.skin.rgba(frame.border),
-                    frame.border_width,
-                );
-            }
-            if let Some(label) = self.text() {
-                label.paint(builder, text, bounds);
-            }
-        } else {
-            builder.fill_rect(bounds, self.skin.rgba(self.skin.chrome.inner_line));
+        if let Some((label, content)) = self.label() {
+            label.paint(builder, text, content, bounds);
+            return;
+        }
+        match &self.leaf {
+            ChromeLeaf::Footer(content) => Text::new(
+                content,
+                footer_role(self.skin),
+                self.skin.chrome.footer_pad,
+                self.skin,
+            )
+            .paint(builder, text, bounds),
+            _ => builder.fill_rect(bounds, self.skin.rgba(self.skin.chrome.inner_line)),
         }
     }
 }
@@ -150,11 +113,11 @@ impl IcedWidget<UiEvent, Theme, Renderer> for LeafPaint<'_, '_> {
         _renderer: &Renderer,
         limits: &layout::Limits,
     ) -> layout::Node {
-        let intrinsic = if let Some(label) = self.text() {
+        let intrinsic = if let Some((label, content)) = self.label() {
             let state = tree.state.downcast_mut::<LeafState>();
             let mut text = state.text.borrow_mut();
             let text = text.get_or_insert_with(|| self.skin.text_resources().into());
-            let (width, height) = label.measure(text);
+            let (width, height) = label.intrinsic(text, content);
             Size::new(width, height)
         } else {
             Size::ZERO
@@ -206,7 +169,11 @@ pub(crate) fn header_chevron<'a>(
     skin: &'a Skin,
     owner: InputOwner,
 ) -> Element<'a, UiEvent> {
-    let paint = ChevronPaint::new(collapsed, skin);
+    let paint = ChevronPaint {
+        chevron: ChromeChevron::new(skin),
+        collapsed,
+        skin,
+    };
     match owner {
         InputOwner::Leaf => Canvas::new(ChevronProgram {
             module: module.to_owned(),
@@ -222,12 +189,12 @@ pub(crate) fn header_chevron<'a>(
     }
 }
 
-struct ChevronProgram {
+struct ChevronProgram<'skin> {
     module: String,
-    paint: ChevronPaint,
+    paint: ChevronPaint<'skin>,
 }
 
-impl canvas::Program<UiEvent> for ChevronProgram {
+impl canvas::Program<UiEvent> for ChevronProgram<'_> {
     type State = ();
 
     fn draw(
@@ -260,57 +227,34 @@ impl canvas::Program<UiEvent> for ChevronProgram {
     }
 }
 
-struct ChevronPaint {
-    cell_width: f32,
+/// The chevron drawn over the header, through the same neutral mark the
+/// retained host draws in its own cell.
+struct ChevronPaint<'skin> {
+    chevron: ChromeChevron,
     collapsed: bool,
-    color: iced::Color,
-    icon_size: f32,
-    line_color: iced::Color,
-    line_width: f32,
-    stroke_width: f32,
+    skin: &'skin Skin,
 }
 
-impl ChevronPaint {
-    fn new(collapsed: bool, skin: &Skin) -> Self {
-        Self {
-            cell_width: skin.chrome.chevron_size,
-            collapsed,
-            color: skin.color(skin.chrome.chevron_color),
-            icon_size: skin.chrome.chevron_icon_size,
-            line_color: skin.color(skin.chrome.inner_line),
-            line_width: skin.chrome.inner_line_width,
-            stroke_width: skin.chrome.chevron_stroke_width,
-        }
-    }
-
+impl ChevronPaint<'_> {
     fn geometry(&self, renderer: &Renderer, bounds: Rectangle) -> Vec<Geometry> {
         let mut frame = Frame::new(renderer, bounds.size());
-        let cell_x = (bounds.width - self.cell_width).max(0.0);
-        frame.fill_rectangle(
-            Point::new(cell_x, 0.0),
-            Size::new(self.line_width, bounds.height),
-            self.line_color,
+        let mut list = DrawListBuilder::default();
+        self.chevron.paint(
+            &mut list,
+            Rect {
+                h: bounds.height,
+                w: bounds.width,
+                x: 0.0,
+                y: 0.0,
+            },
+            self.collapsed,
         );
-        let center = Point::new(cell_x + self.cell_width / 2.0, bounds.height / 2.0);
-        let half = self.icon_size / 2.0;
-        let rise = self.icon_size / 4.0;
-        let direction = if self.collapsed { 1.0 } else { -1.0 };
-        let path = Path::new(|builder| {
-            builder.move_to(Point::new(center.x - half, center.y - rise * direction));
-            builder.line_to(Point::new(center.x, center.y + rise * direction));
-            builder.line_to(Point::new(center.x + half, center.y - rise * direction));
-        });
-        frame.stroke(
-            &path,
-            Stroke::default()
-                .with_color(self.color)
-                .with_width(self.stroke_width),
-        );
+        replay_ordered(&list.finish(), &mut frame, self.skin.text_resources());
         vec![frame.into_geometry()]
     }
 }
 
-impl canvas::Program<UiEvent> for ChevronPaint {
+impl canvas::Program<UiEvent> for ChevronPaint<'_> {
     type State = ();
 
     fn draw(
@@ -345,8 +289,15 @@ mod tests {
     use crate::{
         builtin,
         draw::DrawCmd,
-        render::{fonts, shaped_text},
+        render::{IcedSkin, fonts},
+        skin::FontWeight,
     };
+
+    /// The word iced lays out on its own, against which the painted leaf is
+    /// measured: shaped the way every string this toolkit sets is shaped.
+    fn shaped(content: &'static str) -> iced::widget::Text<'static> {
+        iced::widget::Text::new(content).shaping(iced::widget::text::Shaping::Advanced)
+    }
 
     fn headless_renderer() -> Renderer {
         let mut system = font_system()
@@ -465,8 +416,8 @@ mod tests {
         let metrics = skin.chrome;
         let renderer = headless_renderer();
         let chip: Element<'_, UiEvent> = container(
-            shaped_text("FX")
-                .font(fonts::MONO)
+            shaped("FX")
+                .font(fonts::mono(FontWeight::Normal))
                 .size(metrics.chip_text_size)
                 .color(skin.color(metrics.chip_text)),
         )
@@ -475,7 +426,7 @@ mod tests {
         .align_y(Vertical::Center)
         .into();
         let title: Element<'_, UiEvent> = container(
-            shaped_text("DECK")
+            shaped("DECK")
                 .font(fonts::display(FontWeight::Medium))
                 .size(metrics.title_text_size)
                 .color(skin.color(metrics.title_text)),
@@ -500,7 +451,11 @@ mod tests {
     fn the_leaf_header_canvas_publishes_the_module_toggle() {
         let program = ChevronProgram {
             module: "app-deck".to_owned(),
-            paint: ChevronPaint::new(false, builtin::skin()),
+            paint: ChevronPaint {
+                chevron: ChromeChevron::new(builtin::skin()),
+                collapsed: false,
+                skin: builtin::skin(),
+            },
         };
         let bounds = Rectangle {
             height: 28.0,

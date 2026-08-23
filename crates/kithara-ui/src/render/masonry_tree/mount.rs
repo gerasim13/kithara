@@ -24,7 +24,7 @@ use crate::{
         document::Measured,
         scroll::{Bar, Window},
     },
-    size::{Dim, SizeSpec, control_size, length},
+    size::{Dim, SizeSpec, control_size},
     solve,
 };
 
@@ -695,7 +695,7 @@ pub(crate) const fn main_length(dim: Dim) -> solve::Length {
 }
 
 pub(crate) const fn declared(size: SizeSpec) -> solve::Size<solve::Length> {
-    solve::Size::new(length(size.w), length(size.h))
+    solve::Size::new(solve::length(size.w), solve::length(size.h))
 }
 
 pub(crate) fn control_declared(

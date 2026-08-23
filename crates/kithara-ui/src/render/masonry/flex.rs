@@ -133,6 +133,18 @@ impl Flex {
             .enumerate()
             .filter_map(|(index, on)| on.then_some(index))
             .collect();
+        // A cell the room did not reach is stashed, not placed at an empty box:
+        // an empty box still lets every leaf inside it draw at its own natural
+        // size, and it drew them at the flow's own origin. Masonry skips a
+        // stashed child for layout, paint and accessibility, which is what the
+        // immediate host does by leaving the cell out of the flow entirely.
+        //
+        // This stands before the solver, which measures a standing cell by
+        // laying it out: a cell the room has just grown to reach has to be back
+        // in the picture before anything asks it for a size.
+        for (index, on) in standing.iter().enumerate() {
+            ctx.set_stashed(&mut children[index], !on);
+        }
         let items = slots
             .iter()
             .map(|slot| {
@@ -184,20 +196,6 @@ impl Flex {
             }
         }
         let fitted = fit_padding(self.padding, size, outer_limits.max());
-
-        // Every child is placed, standing or not: a cell the room did not
-        // reach takes an empty box, which draws nothing and answers nothing.
-        for (index, on) in standing.iter().enumerate() {
-            if !on {
-                let child = &mut measure.children[index];
-                let none = solve::Limits::new(solve::Size::ZERO, solve::Size::ZERO);
-                Node::set_child_limits(measure.ctx, child, none);
-                measure
-                    .ctx
-                    .run_layout(child, &BoxConstraints::tight(MasonrySize::ZERO));
-                measure.ctx.place_child(child, Point::ORIGIN);
-            }
-        }
         for (slot, item) in slots.iter().zip(items) {
             let child = &mut measure.children[*slot];
             let exact = solve::Limits::new(item.size, item.size);

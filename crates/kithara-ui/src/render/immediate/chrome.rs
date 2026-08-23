@@ -1,6 +1,5 @@
 use iced::{
     Alignment, Background, Border, Color, Element, Length, Point, Rectangle, Renderer, Size, Theme,
-    alignment::Vertical,
     widget::{
         Canvas, Row, Space, Stack,
         canvas::{self, Frame, Geometry},
@@ -13,8 +12,7 @@ use crate::{
     layout::FrameSides,
     module::ChromeStyle,
     render::{
-        ChromeLeaf, IcedSkin, InputOwner, Skin, UiEvent, Widget, chrome_leaf, fonts,
-        header_chevron, shaped_text,
+        ChromeLeaf, IcedSkin, InputOwner, Skin, UiEvent, Widget, chrome_leaf, header_chevron,
     },
 };
 
@@ -145,22 +143,17 @@ where
 
     let panel_background = skin.color(metrics.panel_background);
     let footer_background = skin.color(metrics.footer_background);
-    let footer_text = skin.color(metrics.footer_text);
     let footer_border = skin.border(metrics.footer_frame);
     let content = container(chrome.content)
         .width(Length::Fill)
         .height(Length::Fill)
         .style(move |_| panel_style(panel_background));
-    let footer = container(
-        shaped_text(chrome.footer.unwrap_or_default())
-            .font(fonts::MONO)
-            .size(metrics.footer_text_size)
-            .color(footer_text),
-    )
-    .padding([0.0, metrics.footer_pad])
+    let footer = container(chrome_leaf(
+        ChromeLeaf::Footer(chrome.footer.unwrap_or_default()),
+        skin,
+    ))
     .width(Length::Fill)
     .height(Length::Fixed(metrics.footer_height))
-    .align_y(Vertical::Center)
     .style(move |_| panel_frame_style(footer_background, footer_border));
     let shell = column![
         header,
