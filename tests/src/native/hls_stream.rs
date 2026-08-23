@@ -448,15 +448,13 @@ fn decode_variant_blob(blob: &[u8]) -> Option<PackagedVariantData> {
 fn packaged_frame_layout(
     packaged: &ResolvedPackagedAudioSpec,
     frame_samples: usize,
-) -> (usize, usize, usize, u32) {
+) -> (usize, usize, u32) {
     let requested_segment_frames =
         (packaged.segment_duration_secs * f64::from(packaged.sample_rate)).round() as usize;
-    let nominal_content_frames =
-        requested_segment_frames.saturating_mul(packaged.segments_per_variant);
+    // Content duration belongs to the master timeline. Codec frame alignment
+    // is padding, recorded below as trailing delay, not audible content.
+    let content_frames = requested_segment_frames.saturating_mul(packaged.segments_per_variant);
     let packets_per_segment = requested_segment_frames.div_ceil(frame_samples).max(1);
-    let content_frames = packets_per_segment
-        .saturating_mul(frame_samples)
-        .saturating_mul(packaged.segments_per_variant);
     let unaligned_total_frames = content_frames
         .saturating_add(packaged.encoder_delay as usize)
         .saturating_add(packaged.trailing_delay as usize);
@@ -466,12 +464,7 @@ fn packaged_frame_layout(
     let aligned_trailing_delay = packaged.trailing_delay.saturating_add(
         u32::try_from(total_frames.saturating_sub(unaligned_total_frames)).unwrap_or(u32::MAX),
     );
-    (
-        nominal_content_frames,
-        packets_per_segment,
-        content_frames,
-        aligned_trailing_delay,
-    )
+    (packets_per_segment, content_frames, aligned_trailing_delay)
 }
 
 fn encode_packaged_variant(
@@ -480,7 +473,7 @@ fn encode_packaged_variant(
 ) -> Result<EncodedTrack, EncodeError> {
     let encoder = EncoderFactory::create_packaged(variant.codec)?;
     let frame_samples = encoder.packaged_frame_samples(variant.codec)?;
-    let (nominal_content_frames, packets_per_segment, content_frames, aligned_trailing_delay) =
+    let (packets_per_segment, content_frames, aligned_trailing_delay) =
         packaged_frame_layout(packaged, frame_samples);
 
     let media_info = MediaInfo::builder()
@@ -590,7 +583,7 @@ fn encode_packaged_variant(
             }
         }
         ResolvedPackagedSignal::Sweep { start_hz, end_hz } => {
-            let sweep_frames = nominal_content_frames.saturating_add(
+            let sweep_frames = content_frames.saturating_add(
                 usize::try_from(variant.start_frame).expect("start_frame must fit usize"),
             );
             let sweep = || signal::Sweep::new(start_hz, end_hz, sweep_frames, SweepMode::Linear);
@@ -916,7 +909,7 @@ mod tests {
     }
 
     #[kithara::test]
-    fn packaged_segments_can_exceed_requested_segment_count() {
+    fn packaged_segments_follow_the_requested_content_timeline() {
         let spec = crate::test_server::HlsFixtureBuilder::new()
             .variant_count(1)
             .segments_per_variant(8)
@@ -927,14 +920,10 @@ mod tests {
         let generated = GeneratedHls::new(resolved).unwrap();
         let playlist = generated.media_playlist(0).unwrap();
 
-        assert!(
-            playlist.contains("seg/v0_8.m4s"),
-            "packaged playlist should expose the muxed tail segment"
-        );
-        assert!(
-            generated.segment_bytes(0, 8).is_some(),
-            "packaged fixture must serve every segment listed in the playlist"
-        );
+        assert!(playlist.contains("seg/v0_7.m4s"));
+        assert!(!playlist.contains("seg/v0_8.m4s"));
+        assert!(generated.segment_bytes(0, 7).is_some());
+        assert!(generated.segment_bytes(0, 8).is_none());
     }
 
     #[kithara::test(native, flash(false))]
