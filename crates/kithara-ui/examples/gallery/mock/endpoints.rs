@@ -462,6 +462,7 @@ fn insert_page_endpoints(registry: &mut MockRegistry) {
         "gallery.tab.motion",
         "gallery.tab.sprites",
         "gallery.tab.lottie",
+        "gallery.tab.table_long",
         "gallery.module.deck",
         "gallery.module.deck_micro",
         "gallery.module.global_bar",
@@ -595,6 +596,7 @@ fn insert_menu_endpoints(registry: &mut MockRegistry) {
 fn insert_library_endpoints(registry: &mut MockRegistry) {
     for (id, kind) in [
         ("library.visible_tracks", ValueKind::Table),
+        ("library.long_tracks", ValueKind::Table),
         ("library.tree", ValueKind::Tree),
         ("library.breadcrumb", ValueKind::Text),
         ("library.query", ValueKind::Text),

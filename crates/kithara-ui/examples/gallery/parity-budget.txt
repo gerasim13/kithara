@@ -155,3 +155,11 @@
 # and strokes on the neutral list, so what is left here is the edge-and-text
 # noise every page carries, plus the curve edges velato emits.
 24-lottie.png               2
+
+# The long table, 2026-08-23, at 2.2% of pixels and 1.1% of ink - the widest
+# gap in the set, and the reason is that it is the densest text in the set:
+# twenty visible rows of eight columns, where the short table page draws eleven.
+# The mask is glyph edges and nothing else; the rows, the columns, the energy
+# bars and the scroll thumb land on the same pixels in both hosts, so what is
+# priced here is text gamma at the count this page carries.
+25-tablelong.png            3

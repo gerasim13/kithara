@@ -97,6 +97,10 @@ struct MockTrack {
 
 pub(crate) struct Catalog {
     pub(crate) rows: &'static [TableRow<'static>],
+    /// The same tracks, played through enough times that the table overflows
+    /// its viewport. Nothing else in the gallery makes a table scroll, and a
+    /// table that never scrolls hides what a file list actually costs.
+    pub(crate) long_rows: &'static [TableRow<'static>],
     pub(crate) tree: &'static [TreeRow<'static>],
     pub(crate) artist: &'static str,
     pub(crate) breadcrumb: &'static str,
@@ -109,6 +113,10 @@ pub(crate) struct Catalog {
 
 pub(crate) static CATALOG: LazyLock<Catalog> = LazyLock::new(load_catalog);
 
+/// How many rows the long table carries: a little over four screens at the
+/// gallery's size, which is enough to scroll and short of the stress page.
+const LONG_ROWS: usize = 120;
+
 fn load_catalog() -> Catalog {
     let data: MockData = ron::from_str(include_str!("../assets/mock-data.ron"))
         .expect("embedded gallery mock data must parse");
@@ -117,22 +125,25 @@ fn load_catalog() -> Catalog {
         .tracks
         .iter()
         .enumerate()
-        .map(|(index, track)| {
-            TableRow::new(
-                vec![
-                    TableCell::text("title", &track.title),
-                    TableCell::text("artist", &track.artist),
-                    TableCell::text("time", &track.time),
-                    TableCell::text("search", &track.search),
-                    TableCell::text("deck", &track.deck),
-                    TableCell::text("bpm", &track.bpm),
-                    TableCell::text("key", &track.key),
-                    TableCell::number("energy", track.energy),
-                    TableCell::text("transition", &track.transition),
-                ],
-                index == 0,
-            )
-        })
+        .map(|(index, track)| track_row(track, &track.title, index == 0))
+        .collect();
+    let takes = data.tracks.len();
+    let titles: &'static [String] = Box::leak(
+        (0..LONG_ROWS)
+            .map(|index| {
+                format!(
+                    "{} {:02}",
+                    data.tracks[index % takes].title,
+                    index / takes + 1
+                )
+            })
+            .collect::<Vec<_>>()
+            .into_boxed_slice(),
+    );
+    let long_rows: Vec<TableRow<'static>> = titles
+        .iter()
+        .enumerate()
+        .map(|(index, title)| track_row(&data.tracks[index % takes], title, index == 0))
         .collect();
     let tree: Vec<TreeRow<'static>> = data
         .tree
@@ -163,7 +174,27 @@ fn load_catalog() -> Catalog {
             data.vis_presets.1.as_str(),
             data.vis_presets.2.as_str(),
         ],
+        long_rows: Box::leak(long_rows.into_boxed_slice()),
         rows: Box::leak(rows.into_boxed_slice()),
         tree: Box::leak(tree.into_boxed_slice()),
     }
+}
+
+/// One table row for `track`, shown under `title` so a repeated catalogue does
+/// not read as the same track over and over.
+fn track_row(track: &'static MockTrack, title: &'static str, selected: bool) -> TableRow<'static> {
+    TableRow::new(
+        vec![
+            TableCell::text("title", title),
+            TableCell::text("artist", &track.artist),
+            TableCell::text("time", &track.time),
+            TableCell::text("search", &track.search),
+            TableCell::text("deck", &track.deck),
+            TableCell::text("bpm", &track.bpm),
+            TableCell::text("key", &track.key),
+            TableCell::number("energy", track.energy),
+            TableCell::text("transition", &track.transition),
+        ],
+        selected,
+    )
 }

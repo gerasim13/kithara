@@ -25,10 +25,11 @@ pub(super) enum Tab {
     Motion,
     Sprites,
     Lottie,
+    TableLong,
 }
 
 impl Tab {
-    pub(super) const ALL: [Self; 25] = [
+    pub(super) const ALL: [Self; 26] = [
         Self::Atoms,
         Self::Buttons,
         Self::Faders,
@@ -54,6 +55,7 @@ impl Tab {
         Self::Motion,
         Self::Sprites,
         Self::Lottie,
+        Self::TableLong,
     ];
 
     pub(super) const fn entry(self) -> &'static str {
@@ -83,6 +85,7 @@ impl Tab {
             Self::Motion => "gallery-motion.klayout.ron",
             Self::Sprites => "gallery-sprites.klayout.ron",
             Self::Lottie => "gallery-lottie.klayout.ron",
+            Self::TableLong => "gallery-table-long.klayout.ron",
         }
     }
 
@@ -113,6 +116,7 @@ impl Tab {
             Self::Motion => 22,
             Self::Sprites => 23,
             Self::Lottie => 24,
+            Self::TableLong => 25,
         }
     }
 }
@@ -151,6 +155,7 @@ impl TryFrom<&str> for Tab {
             "motion" => Ok(Self::Motion),
             "sprites" => Ok(Self::Sprites),
             "lottie" => Ok(Self::Lottie),
+            "table_long" => Ok(Self::TableLong),
             _ => Err(()),
         }
     }

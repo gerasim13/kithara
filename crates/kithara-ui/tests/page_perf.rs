@@ -352,6 +352,23 @@ const PAGES: &[Page] = &[
         retained_guard: "vello.gallery-library2",
     },
     Page {
+        // The file table with more rows than fit, which is the only page where
+        // the table's marks cache misses on every frame. The still table page
+        // prices a hit; this one prices what the key costs when it does not
+        // hold and the marks have to be built anyway.
+        name: "gallery-table-long",
+        group: Group::Scroll,
+        entry: "gallery-table-long.klayout.ron",
+        tab: Tab::TableLong,
+        frames: 60,
+        program: Program::Wheels(&[0, 1, 4, 8]),
+        moving: None,
+        pointer_at: Pt { x: 600.0, y: 400.0 },
+        fenced: false,
+        immediate_guard: "iced.gallery-table-long",
+        retained_guard: "vello.gallery-table-long",
+    },
+    Page {
         name: "gallery-tree",
         group: Group::Scroll,
         entry: "gallery-tree.klayout.ron",
@@ -1587,10 +1604,12 @@ fn ui_native_perf(#[case] label: &'static str, #[case] host: Host, #[case] page:
 #[case("iced", Host::Immediate, "gallery-pivot")]
 #[case("iced", Host::Immediate, "gallery-library2")]
 #[case("iced", Host::Immediate, "gallery-tree")]
+#[case("iced", Host::Immediate, "gallery-table-long")]
 #[case("iced", Host::Immediate, "perf-scroll-vis")]
 #[case("vello", Host::Retained, "gallery-pivot")]
 #[case("vello", Host::Retained, "gallery-library2")]
 #[case("vello", Host::Retained, "gallery-tree")]
+#[case("vello", Host::Retained, "gallery-table-long")]
 #[case("vello", Host::Retained, "perf-scroll-vis")]
 fn ui_scroll_perf(#[case] label: &'static str, #[case] host: Host, #[case] page: &'static str) {
     measure_one(label, host, Group::Scroll, page);

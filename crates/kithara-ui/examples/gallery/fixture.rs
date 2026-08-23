@@ -146,6 +146,10 @@ const ASSETS: &[(&str, &str)] = &[
         include_str!("assets/gallery-table.klayout.ron"),
     ),
     (
+        "gallery-table-long.klayout.ron",
+        include_str!("assets/gallery-table-long.klayout.ron"),
+    ),
+    (
         "gallery-tree.klayout.ron",
         include_str!("assets/gallery-tree.klayout.ron"),
     ),
@@ -368,6 +372,10 @@ const ASSETS: &[(&str, &str)] = &[
     (
         "modules/tabs/table.kmodule.ron",
         include_str!("assets/modules/tabs/table.kmodule.ron"),
+    ),
+    (
+        "modules/tabs/table-long.kmodule.ron",
+        include_str!("assets/modules/tabs/table-long.kmodule.ron"),
     ),
     (
         "modules/tabs/tree.kmodule.ron",
