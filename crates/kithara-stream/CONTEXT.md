@@ -120,6 +120,9 @@ scope, `None` owns a standalone one). Ownership sits above this crate: the
 embedding surface (`kithara-app`, `kithara-ffi`) builds one `Downloader` and
 threads it through `kithara-play::ResourceConfig::downloader`, so every peer shares
 one HTTP pool; with none supplied, `kithara-play` builds a per-resource one.
+The shared controller owns a child of the downloader scope. Downloader peer handles
+retain a separate per-registration fetch/registry scope; ABR registration does not
+receive that token and instead obtains the protocol track token through `Abr::cancel()`.
 
 ## Features
 

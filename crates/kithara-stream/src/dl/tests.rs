@@ -33,9 +33,23 @@ const FLOOD_BATCH_SIZE: usize = 10;
 const PORT_STRESS_TIMEOUT_SECS: u64 = 60;
 const SLOW_DEADLINE_SECS: u64 = 5;
 
-struct MockPeer;
+struct MockPeer {
+    cancel: CancelToken,
+}
 
-impl Abr for MockPeer {}
+impl MockPeer {
+    fn new() -> Self {
+        Self {
+            cancel: CancelToken::never(),
+        }
+    }
+}
+
+impl Abr for MockPeer {
+    fn cancel(&self) -> CancelToken {
+        self.cancel.clone()
+    }
+}
 impl Peer for MockPeer {}
 
 fn test_client() -> HttpClient {
@@ -115,11 +129,16 @@ fn cancellation_cmd(url: &Url, gate: &Arc<CompletionGate>, errors: &CompletionEr
 }
 
 struct QueuedPeer {
+    cancel: CancelToken,
     cmds: Mutex<Option<Vec<FetchCmd>>>,
     yielded: Notify,
 }
 
-impl Abr for QueuedPeer {}
+impl Abr for QueuedPeer {
+    fn cancel(&self) -> CancelToken {
+        self.cancel.clone()
+    }
+}
 impl Peer for QueuedPeer {
     fn poll_next(&self, _cx: &mut Context<'_>) -> Poll<Option<Vec<FetchCmd>>> {
         let Some(cmds) = self.cmds.lock().take() else {
@@ -147,6 +166,7 @@ async fn downloader_shutdown_cancels_queued_commands() {
     let gate = CompletionGate::new(COMMANDS);
     let errors = Arc::new(Mutex::new(Vec::new()));
     let peer = Arc::new(QueuedPeer {
+        cancel: CancelToken::never(),
         cmds: Mutex::new(Some(
             (0..COMMANDS)
                 .map(|_| cancellation_cmd(&url, &gate, &errors))
@@ -195,6 +215,7 @@ async fn streaming_without_writer_still_completes() {
         ))
         .build();
     let peer = Arc::new(QueuedPeer {
+        cancel: CancelToken::never(),
         cmds: Mutex::new(Some(vec![cmd])),
         yielded: Notify::default(),
     });
@@ -244,8 +265,8 @@ async fn body_stream_empty_collects_to_empty() {
 #[kithara::test(tokio)]
 async fn peer_handle_cancel_scoped_to_peer() {
     let dl = Downloader::new(test_config());
-    let peer_a = dl.register(Arc::new(MockPeer));
-    let peer_b = dl.register(Arc::new(MockPeer));
+    let peer_a = dl.register(Arc::new(MockPeer::new()));
+    let peer_b = dl.register(Arc::new(MockPeer::new()));
 
     peer_a.cancel().cancel();
 
@@ -258,7 +279,7 @@ async fn peer_handle_cancel_scoped_to_peer() {
 #[kithara::test(tokio)]
 async fn peer_handle_cancel_fires_on_last_clone_drop() {
     let dl = Downloader::new(test_config());
-    let handle = dl.register(Arc::new(MockPeer));
+    let handle = dl.register(Arc::new(MockPeer::new()));
     let cancel = handle.cancel();
     let clone = handle.clone();
 
@@ -286,7 +307,7 @@ async fn peer_handle_execute_returns_error_on_unreachable() {
     let dl = Downloader::new(
         DownloaderConfig::for_client(HttpClient::new(net, CancelToken::never())).build(),
     );
-    let handle = dl.register(Arc::new(MockPeer));
+    let handle = dl.register(Arc::new(MockPeer::new()));
 
     let h2 = handle.clone();
     let task = tokio_spawn(async move {
@@ -320,7 +341,7 @@ async fn peer_handle_downloader_cancel_cascades() {
             .cancel(cancel.clone())
             .build(),
     );
-    let handle = dl.register(Arc::new(MockPeer));
+    let handle = dl.register(Arc::new(MockPeer::new()));
 
     cancel.cancel();
     assert!(
@@ -382,7 +403,7 @@ async fn max_concurrent_limits_inflight_connections() {
         ..test_config()
     };
     let dl = Downloader::new(config);
-    let handle = dl.register(Arc::new(MockPeer));
+    let handle = dl.register(Arc::new(MockPeer::new()));
 
     let cmds: Vec<FetchCmd> = (0..TOTAL_REQUESTS)
         .map(|_| FetchCmd::head(url.clone()).build())
@@ -460,7 +481,7 @@ async fn many_downloaders_global_peak_stays_bounded() {
                 ..test_config()
             };
             let dl = Downloader::new(config);
-            let handle = dl.register(Arc::new(MockPeer));
+            let handle = dl.register(Arc::new(MockPeer::new()));
             let cmds: Vec<FetchCmd> = (0..REQUESTS_PER_DL)
                 .map(|_| FetchCmd::head(url.clone()).build())
                 .collect();
@@ -539,12 +560,17 @@ async fn poll_next_respects_max_concurrent() {
     /// Peer that produces `remaining` HEAD commands via `poll_next`,
     /// counting each completion into a shared [`CompletionGate`].
     struct FloodPeer {
+        cancel: CancelToken,
         url: Url,
         remaining: Mutex<usize>,
         gate: Arc<CompletionGate>,
     }
 
-    impl Abr for FloodPeer {}
+    impl Abr for FloodPeer {
+        fn cancel(&self) -> CancelToken {
+            self.cancel.clone()
+        }
+    }
     impl Peer for FloodPeer {
         fn priority(&self) -> RequestPriority {
             RequestPriority::Low
@@ -592,6 +618,7 @@ async fn poll_next_respects_max_concurrent() {
     let dl = Downloader::new(config);
     let gate = CompletionGate::new(TOTAL_CMDS);
     let handle = dl.register(Arc::new(FloodPeer {
+        cancel: CancelToken::never(),
         url,
         remaining: Mutex::new(TOTAL_CMDS),
         gate: Arc::clone(&gate),
@@ -687,7 +714,7 @@ async fn shared_client_keepalive_bounds_connection_count() {
                     ..test_config()
                 };
                 let dl = Downloader::new(config);
-                let handle = dl.register(Arc::new(MockPeer));
+                let handle = dl.register(Arc::new(MockPeer::new()));
                 let cmds: Vec<FetchCmd> = (0..REQUESTS_PER_DL)
                     .map(|_| FetchCmd::head(url.clone()).build())
                     .collect();
@@ -763,7 +790,9 @@ async fn soft_timeout_publishes_load_slow_on_peer_bus() {
     let scoped = root.scoped();
     let mut rx = scoped.subscribe();
 
-    let handle = dl.register(Arc::new(MockPeer)).with_bus(scoped.clone());
+    let handle = dl
+        .register(Arc::new(MockPeer::new()))
+        .with_bus(scoped.clone());
     let _ = handle.execute(FetchCmd::get(url).build()).await;
 
     let deadline = Instant::now() + Duration::from_secs(SLOW_DEADLINE_SECS);
@@ -803,7 +832,7 @@ async fn soft_timeout_covers_response_body() {
     let scoped = root.scoped();
     let mut rx = scoped.subscribe();
 
-    let handle = dl.register(Arc::new(MockPeer)).with_bus(scoped);
+    let handle = dl.register(Arc::new(MockPeer::new())).with_bus(scoped);
     let response = handle
         .execute(FetchCmd::get(url).build())
         .await
@@ -841,6 +870,7 @@ type CompletionLog = Arc<Mutex<Vec<(PeerTag, usize)>>>;
 /// tag when the response arrives. `priority()` reads the shared
 /// `SeekState` activity so a mid-stream flip of `set_playing` is observable.
 struct TaggedPriorityPeer {
+    cancel: CancelToken,
     gate: Arc<CompletionGate>,
     seek: Arc<SeekState>,
     completion_log: CompletionLog,
@@ -859,6 +889,7 @@ impl TaggedPriorityPeer {
         completion_log: &CompletionLog,
     ) -> Self {
         Self {
+            cancel: CancelToken::never(),
             tag,
             seek,
             url,
@@ -869,7 +900,11 @@ impl TaggedPriorityPeer {
     }
 }
 
-impl Abr for TaggedPriorityPeer {}
+impl Abr for TaggedPriorityPeer {
+    fn cancel(&self) -> CancelToken {
+        self.cancel.clone()
+    }
+}
 impl Peer for TaggedPriorityPeer {
     fn poll_next(&self, cx: &mut Context<'_>) -> Poll<Option<Vec<FetchCmd>>> {
         let (take, more) = {
@@ -1020,7 +1055,7 @@ async fn retry_and_first_byte_publish_on_peer_bus() {
     let root = EventBus::new(64);
     let scoped = root.scoped();
     let mut rx = scoped.subscribe();
-    let handle = dl.register(Arc::new(MockPeer)).with_bus(scoped);
+    let handle = dl.register(Arc::new(MockPeer::new())).with_bus(scoped);
 
     let response = handle
         .execute(FetchCmd::get(url).build())
@@ -1079,7 +1114,7 @@ async fn stalled_body_publishes_resume_and_exhaustion_events() {
     let root = EventBus::new(64);
     let scoped = root.scoped();
     let mut rx = scoped.subscribe();
-    let handle = dl.register(Arc::new(MockPeer)).with_bus(scoped);
+    let handle = dl.register(Arc::new(MockPeer::new())).with_bus(scoped);
 
     // dl `execute` drives the whole fetch through the peer writer, so a
     // permanently stalled body surfaces as the terminal establish error.
@@ -1271,9 +1306,14 @@ async fn both_peers_idle_no_priority_ordering_asserted() {
 #[kithara::test(tokio, timeout(Duration::from_secs(10)))]
 async fn peer_handle_execute_respects_either_peer_priority() {
     struct FlippablePeer {
+        cancel: CancelToken,
         seek: Arc<SeekState>,
     }
-    impl Abr for FlippablePeer {}
+    impl Abr for FlippablePeer {
+        fn cancel(&self) -> CancelToken {
+            self.cancel.clone()
+        }
+    }
     impl Peer for FlippablePeer {
         fn priority(&self) -> RequestPriority {
             if self.seek.is_playing() {
@@ -1287,6 +1327,7 @@ async fn peer_handle_execute_respects_either_peer_priority() {
     let dl = Downloader::new(test_config());
     let seek = Arc::new(SeekState::new());
     let peer = Arc::new(FlippablePeer {
+        cancel: CancelToken::never(),
         seek: Arc::clone(&seek),
     });
     let handle = dl.register(peer);

@@ -7,7 +7,7 @@ use bon::Builder;
 use dashmap::DashMap;
 use kithara_events::{AbrEvent, AbrMode, EventBus};
 use kithara_platform::{
-    CancelToken,
+    CancelGroup, CancelScope, CancelToken,
     sync::{Arc, Mutex, RwLock},
     time::{Duration, Instant},
 };
@@ -116,6 +116,7 @@ impl Default for AbrSettings {
 pub struct AbrController {
     #[field(get)]
     pub(super) settings: AbrSettings,
+    scope: CancelScope,
     pub(super) estimator: Arc<dyn Estimator>,
     next_peer_id: AtomicU64,
     peers: DashMap<AbrPeerId, Arc<PeerEntry>>,
@@ -125,11 +126,11 @@ impl AbrController {
     /// Minimum delay between `AbrEvent::ThroughputSample` emits (fixed).
     pub(super) const MIN_THROUGHPUT_SAMPLE_INTERVAL: Duration = Duration::from_millis(200);
 
-    /// Create a new controller with the default [`ThroughputEstimator`].
-    ///
+    /// Create a new controller with the default [`ThroughputEstimator`] below
+    /// `cancel`.
     #[must_use]
-    pub fn new(settings: AbrSettings) -> Arc<Self> {
-        Self::with_estimator(settings, Arc::new(ThroughputEstimator::new()))
+    pub fn new(settings: AbrSettings, cancel: CancelToken) -> Arc<Self> {
+        Self::with_estimator(settings, Arc::new(ThroughputEstimator::new()), cancel)
     }
 
     pub(super) fn allocate_peer_id(&self) -> AbrPeerId {
@@ -192,24 +193,31 @@ impl AbrController {
     }
 
     pub(crate) fn peer_entry(&self, id: AbrPeerId) -> Option<Arc<PeerEntry>> {
-        self.peers.get(&id).map(|r| Arc::clone(r.value()))
+        self.peers
+            .get(&id)
+            .map(|entry| Arc::clone(entry.value()))
+            .filter(|entry| !entry.cancel.is_cancelled())
     }
 
-    /// Register a peer below its cancellation scope.
+    /// Register a peer below the controller scope.
     ///
-    /// The controller derives a child from `cancel`; cancelling the parent or
-    /// dropping the returned handle stops delayed re-evaluations for this peer.
-    pub fn register(self: &Arc<Self>, peer: &Arc<dyn Abr>, cancel: &CancelToken) -> AbrHandle {
+    /// The controller observes both its own per-registration child and the
+    /// protocol token returned by [`Abr::cancel`]. Dropping the returned handle
+    /// cancels only the registration child.
+    pub fn register(self: &Arc<Self>, peer: &Arc<dyn Abr>) -> AbrHandle {
         let id = self.allocate_peer_id();
         let state = peer.state();
         let peer_weak = Arc::downgrade(peer);
+        let registration_cancel = self.scope.token().child();
+        let cancel = CancelGroup::new(vec![registration_cancel.clone(), peer.cancel()]);
         let bus: Arc<RwLock<Option<EventBus>>> = Arc::new(RwLock::default());
         let entry = Arc::new(PeerEntry {
             peer_weak,
             bus: Arc::clone(&bus),
             variants_registered_published: AtomicBool::new(false),
             bytes_downloaded: AtomicU64::new(0),
-            cancel: cancel.child(),
+            cancel,
+            registration_cancel,
             deferred_tick_at: Mutex::default(),
             throttle: Mutex::default(),
             state: state.clone(),
@@ -227,20 +235,31 @@ impl AbrController {
     /// Called from [`AbrHandle::drop`].
     pub(crate) fn unregister(&self, id: AbrPeerId) {
         if let Some((_, entry)) = self.peers.remove(&id) {
-            entry.cancel.cancel();
+            entry.registration_cancel.cancel();
         }
     }
 
-    /// Create a new controller with a custom estimator. Used in tests to
-    /// inject a mock.
+    /// Create a new controller with a custom estimator below `cancel`. Used in
+    /// tests to inject a mock.
     #[must_use]
-    pub fn with_estimator(settings: AbrSettings, estimator: Arc<dyn Estimator>) -> Arc<Self> {
+    pub fn with_estimator(
+        settings: AbrSettings,
+        estimator: Arc<dyn Estimator>,
+        cancel: CancelToken,
+    ) -> Arc<Self> {
         Self::seed_estimator(&settings, &estimator);
         Arc::new(Self {
             settings,
+            scope: CancelScope::new(Some(cancel)),
             estimator,
             next_peer_id: AtomicU64::new(0),
             peers: DashMap::new(),
         })
+    }
+}
+
+impl Drop for AbrController {
+    fn drop(&mut self) {
+        self.scope.cancel();
     }
 }

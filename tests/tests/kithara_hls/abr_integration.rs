@@ -4,7 +4,7 @@ use kithara::{
     abr::{AbrController, AbrMode, AbrSettings},
     events::{VariantDuration, VariantIndex, VariantInfo},
     hls::{ParsedMaster, parse_master_playlist},
-    platform::time::Duration,
+    platform::{CancelToken, time::Duration},
 };
 
 /// Convert HLS master playlist variants to ABR variant list (test helper).
@@ -66,7 +66,7 @@ fn test_manual_selector_different_indices(
     #[case] selector_index: usize,
     variants_from_parsed_playlist: Vec<VariantInfo>,
 ) {
-    let _ = AbrController::new(AbrSettings::default());
+    let _ = AbrController::new(AbrSettings::default(), CancelToken::never());
     assert_eq!(variants_from_parsed_playlist.len(), 3);
     let _ = AbrMode::manual(selector_index);
 }
@@ -76,7 +76,7 @@ fn test_abr_controller_no_selector(
     abr_settings_default: AbrSettings,
     variants_from_parsed_playlist: Vec<VariantInfo>,
 ) {
-    let controller = AbrController::new(abr_settings_default);
+    let controller = AbrController::new(abr_settings_default, CancelToken::never());
     // Default settings now seed `initial_throughput_bps = Some(2 Mbps)` so
     // ABR can pick a sensible variant on the first tick instead of starting
     // at LQ. `is_some()` keeps the assertion future-proof against the exact
@@ -96,7 +96,7 @@ fn test_abr_decision_with_different_conditions(
     #[case] _time_since_last_switch_secs: f64,
     variants_from_parsed_playlist: Vec<VariantInfo>,
 ) {
-    let controller = AbrController::new(AbrSettings::default());
+    let controller = AbrController::new(AbrSettings::default(), CancelToken::never());
     // Default settings seed an initial throughput hint — see
     // `test_abr_controller_no_selector` for the rationale.
     assert!(controller.settings().initial_throughput_bps.is_some());
@@ -120,7 +120,7 @@ fn test_variants_from_master_structure(parsed_master_playlist: ParsedMaster) {
 
 #[kithara::test(timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
 fn test_abr_controller_async_usage() {
-    let controller = AbrController::new(AbrSettings::default());
+    let controller = AbrController::new(AbrSettings::default(), CancelToken::never());
     // Default settings seed an initial throughput estimate (see
     // `test_abr_controller_no_selector`) — `is_some()` keeps the
     // assertion stable against the exact seed value.

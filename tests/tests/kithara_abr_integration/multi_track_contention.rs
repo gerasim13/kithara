@@ -14,11 +14,16 @@ fn settings_fast() -> AbrSettings {
 }
 
 struct TestPeer {
+    cancel: CancelToken,
     state: Arc<AbrState>,
     variants: Vec<VariantInfo>,
 }
 
 impl kithara::abr::Abr for TestPeer {
+    fn cancel(&self) -> CancelToken {
+        self.cancel.clone()
+    }
+
     fn variants(&self) -> Vec<VariantInfo> {
         self.variants.clone()
     }
@@ -45,6 +50,7 @@ fn variants(bitrates: &[u64]) -> Vec<VariantInfo> {
 fn new_peer(bitrates: &[u64]) -> (Arc<AbrState>, Arc<dyn kithara::abr::Abr>) {
     let state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0)))));
     let peer: Arc<dyn kithara::abr::Abr> = Arc::new(TestPeer {
+        cancel: CancelToken::never(),
         state: Arc::clone(&state),
         variants: variants(bitrates),
     });
@@ -56,16 +62,16 @@ async fn three_peers_maintain_independent_variant_indices() {
     let controller = AbrController::with_estimator(
         settings_fast(),
         Arc::new(ThroughputEstimator::new()) as Arc<_>,
+        CancelToken::never(),
     );
 
     let (s0, p0) = new_peer(&[300_000, 900_000]);
     let (s1, p1) = new_peer(&[400_000, 1_000_000, 3_000_000, 10_000_000]);
     let (s2, p2) = new_peer(&[512_000]);
 
-    let cancel = CancelToken::never();
-    let h0 = controller.register(&p0, &cancel);
-    let h1 = controller.register(&p1, &cancel);
-    let h2 = controller.register(&p2, &cancel);
+    let h0 = controller.register(&p0);
+    let h1 = controller.register(&p1);
+    let h2 = controller.register(&p2);
 
     for _ in 0..10 {
         controller.record_bandwidth(

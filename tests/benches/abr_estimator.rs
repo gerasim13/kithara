@@ -41,11 +41,16 @@ fn variants_4() -> Vec<VariantInfo> {
 }
 
 struct BenchPeer {
+    cancel: CancelToken,
     state: Arc<AbrState>,
     variants: Vec<VariantInfo>,
 }
 
 impl Abr for BenchPeer {
+    fn cancel(&self) -> CancelToken {
+        self.cancel.clone()
+    }
+
     fn variants(&self) -> Vec<VariantInfo> {
         self.variants.clone()
     }
@@ -98,13 +103,14 @@ fn bench_controller_record_bandwidth(c: &mut Criterion) {
             &(bytes, duration_ms),
             |b, &(bytes, duration_ms)| {
                 b.iter(|| {
-                    let controller = AbrController::new(settings());
+                    let controller = AbrController::new(settings(), CancelToken::never());
                     let state = Arc::new(AbrState::new(auto(1)));
                     let peer: Arc<dyn Abr> = Arc::new(BenchPeer {
+                        cancel: CancelToken::never(),
                         state: Arc::clone(&state),
                         variants: variants_4(),
                     });
-                    let handle = controller.register(&peer, &CancelToken::never());
+                    let handle = controller.register(&peer);
                     for _ in 0..8 {
                         controller.record_bandwidth(
                             handle.peer_id(),

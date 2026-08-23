@@ -765,11 +765,16 @@ fn locked_state_rejects_switch(
 }
 
 struct SeedPeer {
+    cancel: CancelToken,
     state: Arc<AbrState>,
     variants: Vec<VariantInfo>,
 }
 
 impl Abr for SeedPeer {
+    fn cancel(&self) -> CancelToken {
+        self.cancel.clone()
+    }
+
     fn state(&self) -> Option<Arc<AbrState>> {
         Some(Arc::clone(&self.state))
     }
@@ -779,11 +784,16 @@ impl Abr for SeedPeer {
 }
 
 struct RetryPeer {
+    cancel: CancelToken,
     state: Arc<AbrState>,
     wake: Arc<Notify>,
 }
 
 impl Abr for RetryPeer {
+    fn cancel(&self) -> CancelToken {
+        self.cancel.clone()
+    }
+
     fn state(&self) -> Option<Arc<AbrState>> {
         Some(Arc::clone(&self.state))
     }
@@ -824,13 +834,15 @@ async fn auto_mode_with_default_seed_picks_high_variant_on_cold_start() {
         .min_switch_interval(Duration::ZERO)
         .min_buffer_for_up_switch(Duration::ZERO)
         .build();
-    let controller = AbrController::new(settings);
+    let controller_cancel = CancelToken::never();
+    let controller = AbrController::new(settings, controller_cancel);
     let state = Arc::new(AbrState::new(AbrMode::Auto(None)));
     let peer: Arc<dyn Abr> = Arc::new(SeedPeer {
+        cancel: CancelToken::never(),
         state: Arc::clone(&state),
         variants: audio_variants_4tier(),
     });
-    let handle = controller.register(&peer, &CancelToken::never());
+    let handle = controller.register(&peer);
     controller.tick(handle.peer_id(), Instant::now());
     assert_eq!(
         state.pending_target(),
@@ -852,13 +864,15 @@ async fn auto_mode_without_seed_stays_on_initial_variant_on_cold_start() {
         min_buffer_for_up_switch: Duration::ZERO,
         ..AbrSettings::default()
     };
-    let controller = AbrController::new(settings);
+    let controller_cancel = CancelToken::never();
+    let controller = AbrController::new(settings, controller_cancel);
     let state = Arc::new(AbrState::new(AbrMode::Auto(None)));
     let peer: Arc<dyn Abr> = Arc::new(SeedPeer {
+        cancel: CancelToken::never(),
         state: Arc::clone(&state),
         variants: audio_variants_4tier(),
     });
-    let handle = controller.register(&peer, &CancelToken::never());
+    let handle = controller.register(&peer);
     controller.tick(handle.peer_id(), Instant::now());
     assert_eq!(state.current_variant_index(), VariantIndex::new(0));
     assert_eq!(state.pending_target(), None);
@@ -871,14 +885,16 @@ async fn min_interval_retries_without_another_bandwidth_sample() {
         .min_switch_interval(Duration::from_millis(20))
         .min_buffer_for_up_switch(Duration::ZERO)
         .build();
-    let controller = AbrController::new(settings);
+    let controller_cancel = CancelToken::never();
+    let controller = AbrController::new(settings, controller_cancel);
     let state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0)))));
     let wake = Arc::new(Notify::default());
     let peer: Arc<dyn Abr> = Arc::new(RetryPeer {
+        cancel: CancelToken::never(),
         state: Arc::clone(&state),
         wake: Arc::clone(&wake),
     });
-    let handle = controller.register(&peer, &CancelToken::never());
+    let handle = controller.register(&peer);
 
     controller.tick(handle.peer_id(), Instant::now());
     assert_eq!(
@@ -892,29 +908,134 @@ async fn min_interval_retries_without_another_bandwidth_sample() {
 }
 
 #[kithara::test(tokio, timeout(Duration::from_secs(1)))]
-async fn parent_cancel_stops_the_deferred_min_interval_retry() {
+async fn peer_cancel_stops_the_deferred_min_interval_retry() {
     let settings = AbrSettings::builder()
         .min_switch_interval(Duration::from_millis(100))
         .min_buffer_for_up_switch(Duration::ZERO)
         .build();
-    let controller = AbrController::new(settings);
+    let controller_cancel = CancelToken::never();
+    let controller = AbrController::new(settings, controller_cancel);
     let state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0)))));
     let wake = Arc::new(Notify::default());
+    let peer_cancel = CancelToken::never();
     let peer: Arc<dyn Abr> = Arc::new(RetryPeer {
+        cancel: peer_cancel.clone(),
         state: Arc::clone(&state),
         wake: Arc::clone(&wake),
     });
-    let cancel = CancelToken::never();
-    let handle = controller.register(&peer, &cancel);
+    let handle = controller.register(&peer);
 
     controller.tick(handle.peer_id(), Instant::now());
-    cancel.cancel();
+    peer_cancel.cancel();
+    assert!(controller.peer_entry(handle.peer_id()).is_none());
 
     assert!(
         time::timeout(Duration::from_millis(150), wake.notified())
             .await
             .is_err(),
         "cancelling the peer scope must suppress its delayed wake",
+    );
+    assert_eq!(state.pending_target(), None);
+}
+
+#[kithara::test(tokio, timeout(Duration::from_secs(1)))]
+async fn controller_cancel_stops_the_deferred_min_interval_retry() {
+    let settings = AbrSettings::builder()
+        .min_switch_interval(Duration::from_millis(100))
+        .min_buffer_for_up_switch(Duration::ZERO)
+        .build();
+    let controller_cancel = CancelToken::never();
+    let controller = AbrController::new(settings, controller_cancel.clone());
+    let state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0)))));
+    let wake = Arc::new(Notify::default());
+    let peer: Arc<dyn Abr> = Arc::new(RetryPeer {
+        cancel: CancelToken::never(),
+        state: Arc::clone(&state),
+        wake: Arc::clone(&wake),
+    });
+    let handle = controller.register(&peer);
+
+    controller.tick(handle.peer_id(), Instant::now());
+    controller_cancel.cancel();
+    assert!(controller.peer_entry(handle.peer_id()).is_none());
+
+    assert!(
+        time::timeout(Duration::from_millis(150), wake.notified())
+            .await
+            .is_err(),
+        "cancelling the controller parent must suppress delayed peer wakes",
+    );
+    assert_eq!(state.pending_target(), None);
+}
+
+#[kithara::test(tokio, timeout(Duration::from_secs(1)))]
+async fn peer_cancel_does_not_stop_a_sibling_retry() {
+    let settings = AbrSettings::builder()
+        .min_switch_interval(Duration::from_millis(100))
+        .min_buffer_for_up_switch(Duration::ZERO)
+        .build();
+    let controller_cancel = CancelToken::never();
+    let controller = AbrController::new(settings, controller_cancel);
+    let first_state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0)))));
+    let second_state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0)))));
+    let first_wake = Arc::new(Notify::default());
+    let second_wake = Arc::new(Notify::default());
+    let first_cancel = CancelToken::never();
+    let first_peer: Arc<dyn Abr> = Arc::new(RetryPeer {
+        cancel: first_cancel.clone(),
+        state: Arc::clone(&first_state),
+        wake: Arc::clone(&first_wake),
+    });
+    let second_peer: Arc<dyn Abr> = Arc::new(RetryPeer {
+        cancel: CancelToken::never(),
+        state: Arc::clone(&second_state),
+        wake: Arc::clone(&second_wake),
+    });
+    let first_handle = controller.register(&first_peer);
+    let second_handle = controller.register(&second_peer);
+
+    controller.tick(first_handle.peer_id(), Instant::now());
+    controller.tick(second_handle.peer_id(), Instant::now());
+    first_cancel.cancel();
+    assert!(controller.peer_entry(first_handle.peer_id()).is_none());
+    assert!(controller.peer_entry(second_handle.peer_id()).is_some());
+
+    second_wake.notified().await;
+    assert!(
+        time::timeout(Duration::from_millis(50), first_wake.notified())
+            .await
+            .is_err(),
+        "cancelling one peer must not wake it or cancel a sibling retry",
+    );
+    assert_eq!(first_state.pending_target(), None);
+    assert_eq!(second_state.pending_target(), Some(VariantIndex::new(3)));
+}
+
+#[kithara::test(tokio, timeout(Duration::from_secs(1)))]
+async fn dropping_handle_stops_only_its_deferred_retry() {
+    let settings = AbrSettings::builder()
+        .min_switch_interval(Duration::from_millis(100))
+        .min_buffer_for_up_switch(Duration::ZERO)
+        .build();
+    let controller_cancel = CancelToken::never();
+    let controller = AbrController::new(settings, controller_cancel);
+    let state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0)))));
+    let wake = Arc::new(Notify::default());
+    let peer: Arc<dyn Abr> = Arc::new(RetryPeer {
+        cancel: CancelToken::never(),
+        state: Arc::clone(&state),
+        wake: Arc::clone(&wake),
+    });
+    let handle = controller.register(&peer);
+
+    controller.tick(handle.peer_id(), Instant::now());
+    drop(handle);
+
+    assert!(
+        time::timeout(Duration::from_millis(150), wake.notified())
+            .await
+            .is_err(),
+        "dropping the ABR handle must suppress its delayed retry",
     );
     assert_eq!(state.pending_target(), None);
 }
@@ -927,13 +1048,14 @@ async fn parent_cancel_stops_the_deferred_min_interval_retry() {
 /// stale throughput-driven pending.
 #[kithara::test(tokio)]
 async fn tick_already_optimal_retracts_stale_throughput_pending() {
-    let controller = AbrController::new(settings_fast());
+    let controller = AbrController::new(settings_fast(), CancelToken::never());
     let state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(2)))));
     let peer: Arc<dyn Abr> = Arc::new(SeedPeer {
+        cancel: CancelToken::never(),
         state: Arc::clone(&state),
         variants: test_variants_3(),
     });
-    let handle = controller.register(&peer, &CancelToken::never());
+    let handle = controller.register(&peer);
 
     // A quality down-switch, not a rescue: a rescue answers a variant that
     // stopped delivering, and a recovered estimate is no evidence about that.
@@ -970,13 +1092,14 @@ fn tick_min_interval_hold_preserves_pending() {
         min_buffer_for_up_switch: Duration::ZERO,
         ..AbrSettings::default()
     };
-    let controller = AbrController::new(settings);
+    let controller = AbrController::new(settings, CancelToken::never());
     let state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0)))));
     let peer: Arc<dyn Abr> = Arc::new(SeedPeer {
+        cancel: CancelToken::never(),
         state: Arc::clone(&state),
         variants: audio_variants_4tier(),
     });
-    let handle = controller.register(&peer, &CancelToken::never());
+    let handle = controller.register(&peer);
     state.request_target(VariantIndex::new(3), AbrReason::UpSwitch);
 
     // The 2 Mbps seed still wants the up-switch; only the interval holds it,
@@ -999,13 +1122,14 @@ fn tick_min_interval_hold_preserves_pending() {
 /// choice.
 #[kithara::test(tokio)]
 async fn set_mode_back_to_current_kills_queued_switch() {
-    let controller = AbrController::new(settings_fast());
+    let controller = AbrController::new(settings_fast(), CancelToken::never());
     let state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0)))));
     let peer: Arc<dyn Abr> = Arc::new(SeedPeer {
+        cancel: CancelToken::never(),
         state: Arc::clone(&state),
         variants: test_variants_3(),
     });
-    let handle = controller.register(&peer, &CancelToken::never());
+    let handle = controller.register(&peer);
     handle
         .set_mode(AbrMode::Manual(VariantIndex::new(2)))
         .expect("variant 2 exists");
@@ -1029,14 +1153,22 @@ async fn set_mode_back_to_current_kills_queued_switch() {
 #[kithara::test(tokio)]
 async fn lock_refcount_holds_across_record_bandwidth() {
     let settings = settings_fast();
-    let controller =
-        AbrController::with_estimator(settings, Arc::new(ThroughputEstimator::new()) as Arc<_>);
+    let controller = AbrController::with_estimator(
+        settings,
+        Arc::new(ThroughputEstimator::new()) as Arc<_>,
+        CancelToken::never(),
+    );
 
     struct LockedPeer {
+        cancel: CancelToken,
         state: Arc<AbrState>,
         variants: Vec<VariantInfo>,
     }
     impl Abr for LockedPeer {
+        fn cancel(&self) -> CancelToken {
+            self.cancel.clone()
+        }
+
         fn state(&self) -> Option<Arc<AbrState>> {
             Some(Arc::clone(&self.state))
         }
@@ -1047,10 +1179,11 @@ async fn lock_refcount_holds_across_record_bandwidth() {
     let state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0)))));
     state.lock();
     let peer: Arc<dyn Abr> = Arc::new(LockedPeer {
+        cancel: CancelToken::never(),
         state: Arc::clone(&state),
         variants: test_variants_3(),
     });
-    let handle = controller.register(&peer, &CancelToken::never());
+    let handle = controller.register(&peer);
 
     for _ in 0..20 {
         controller.record_bandwidth(

@@ -325,9 +325,14 @@ mod tests {
     }
 
     struct StatefulPeer {
+        cancel: CancelToken,
         state: Arc<AbrState>,
     }
     impl Abr for StatefulPeer {
+        fn cancel(&self) -> CancelToken {
+            self.cancel.clone()
+        }
+
         fn state(&self) -> Option<Arc<AbrState>> {
             Some(Arc::clone(&self.state))
         }
@@ -341,13 +346,15 @@ mod tests {
         let controller = AbrController::with_estimator(
             settings_fast(),
             Arc::new(ThroughputEstimator::new()) as Arc<_>,
+            CancelToken::never(),
         );
         let state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0)))));
         let publisher = state.publisher();
         let peer: Arc<dyn Abr> = Arc::new(StatefulPeer {
+            cancel: CancelToken::never(),
             state: Arc::clone(&state),
         });
-        let handle = controller.register(&peer, &CancelToken::never());
+        let handle = controller.register(&peer);
 
         state.request_target(VariantIndex::new(2), AbrReason::UpSwitch);
 
@@ -379,13 +386,15 @@ mod tests {
         let controller = AbrController::with_estimator(
             settings_fast(),
             Arc::new(ThroughputEstimator::new()) as Arc<_>,
+            CancelToken::never(),
         );
         let state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0)))));
         let publisher = state.publisher();
         let peer: Arc<dyn Abr> = Arc::new(StatefulPeer {
+            cancel: CancelToken::never(),
             state: Arc::clone(&state),
         });
-        let handle = controller.register(&peer, &CancelToken::never());
+        let handle = controller.register(&peer);
 
         state.request_target(VariantIndex::new(2), AbrReason::UpSwitch);
         let claim = handle
@@ -402,12 +411,14 @@ mod tests {
         let controller = AbrController::with_estimator(
             settings_fast(),
             Arc::new(ThroughputEstimator::new()) as Arc<_>,
+            CancelToken::never(),
         );
         let state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0)))));
         let peer: Arc<dyn Abr> = Arc::new(StatefulPeer {
+            cancel: CancelToken::never(),
             state: Arc::clone(&state),
         });
-        let handle = controller.register(&peer, &CancelToken::never());
+        let handle = controller.register(&peer);
 
         handle.lock();
         state.request_target(VariantIndex::new(2), AbrReason::UpSwitch);
@@ -425,12 +436,14 @@ mod tests {
         let controller = AbrController::with_estimator(
             settings_fast(),
             Arc::new(ThroughputEstimator::new()) as Arc<_>,
+            CancelToken::never(),
         );
         let state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(1)))));
         let peer: Arc<dyn Abr> = Arc::new(StatefulPeer {
+            cancel: CancelToken::never(),
             state: Arc::clone(&state),
         });
-        let handle = controller.register(&peer, &CancelToken::never());
+        let handle = controller.register(&peer);
 
         let variants = handle.variants();
         assert_eq!(variants.len(), 3);
@@ -460,13 +473,15 @@ mod tests {
         let controller = AbrController::with_estimator(
             settings_fast(),
             Arc::new(ThroughputEstimator::new()) as Arc<_>,
+            CancelToken::never(),
         );
         let state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0)))));
         let handle = {
             let peer: Arc<dyn Abr> = Arc::new(StatefulPeer {
+                cancel: CancelToken::never(),
                 state: Arc::clone(&state),
             });
-            let h = controller.register(&peer, &CancelToken::never());
+            let h = controller.register(&peer);
             assert_eq!(h.variants().len(), 3);
             h
         };
@@ -484,17 +499,17 @@ mod tests {
         let controller = AbrController::with_estimator(
             settings_fast(),
             Arc::new(ThroughputEstimator::new()) as Arc<_>,
+            CancelToken::never(),
         );
         let state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0)))));
         let peer: Arc<dyn Abr> = Arc::new(StatefulPeer {
+            cancel: CancelToken::never(),
             state: Arc::clone(&state),
         });
 
         let bus = EventBus::new(DEFAULT_EVENT_BUS_CAPACITY);
         let mut rx = bus.subscribe();
-        let handle = controller
-            .register(&peer, &CancelToken::never())
-            .with_bus(bus);
+        let handle = controller.register(&peer).with_bus(bus);
 
         let decision = AbrDecision::UpSwitch {
             from: VariantIndex::new(0),

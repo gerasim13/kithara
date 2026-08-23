@@ -5,7 +5,7 @@ use std::sync::{
 
 use kithara_events::EventBus;
 use kithara_platform::{
-    CancelToken,
+    CancelGroup, CancelToken,
     sync::{Arc, Mutex, RwLock},
     time::Instant,
 };
@@ -19,7 +19,8 @@ pub(crate) struct PeerEntry {
     pub(super) bus: Arc<RwLock<Option<EventBus>>>,
     pub(super) variants_registered_published: AtomicBool,
     pub(super) bytes_downloaded: AtomicU64,
-    pub(super) cancel: CancelToken,
+    pub(super) cancel: CancelGroup,
+    pub(super) registration_cancel: CancelToken,
     pub(super) deferred_tick_at: Mutex<Option<Instant>>,
     pub(super) throttle: Mutex<EventThrottleCache>,
     pub(super) state: Option<Arc<AbrState>>,

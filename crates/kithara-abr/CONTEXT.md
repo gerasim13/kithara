@@ -72,9 +72,11 @@ Dual-track EWMA — fast (2 s half-life) and slow (10 s half-life); estimate = `
 ## Ownership
 
 - Variants live on the peer (`Abr::variants()`), never in `AbrState`; they reach the decision through `AbrView`. `AbrState` owns only runtime control: current index, mode, lock count, escape flag, bandwidth cap, last-switch timestamp, pending slot.
+- `Abr::cancel()` is mandatory and returns the protocol track/source token. The controller observes this token but never cancels it; HLS returns its stream token and File returns its source token.
 - `AbrHandle::set_mode` validates `Manual(idx)` against the peer's live variant list and returns `AbrError::VariantOutOfBounds`; `AbrState::set_mode` does not validate.
 - `AbrHandle` is the consumer surface; dropping the last clone unregisters the peer. The track-scoped `EventBus` lives on the handle (`with_bus`), so peers stay free of event-bus plumbing.
-- Delayed retry cancellation is peer-scoped, not controller-global. The lifetime owner passes its existing peer scope through `register`; the controller stores only a child for the registered peer, and unregistering the peer cancels that child.
+- `AbrController` owns a child scope of the parent passed to its constructor. Each registration derives one controller-owned child and OR-combines it with `Abr::cancel()` through `CancelGroup`; controller/parent cancellation stops every registration, protocol cancellation stops that track, and sibling registrations remain live.
+- `AbrController::register(peer)` discovers protocol cancellation from the peer. Dropping the last `AbrHandle` cancels only the controller-owned registration child, so unregister never cancels the protocol track or the controller scope.
 - `AbrHandle::notify_exact_commit` publishes `AbrEvent::VariantApplied` after a promotion and does nothing else. Its caller is the audio worker, which is not a runtime thread, so this path must not schedule async work.
 - `kithara-hls` reads the variant through `AbrHandle` / `Arc<AbrState>`; no cloneable `Arc<AtomicUsize>` handle is exposed — see `redundant_accessors` in `crates/kithara-devtools/src/arch/checks` for the rationale.
 
@@ -84,7 +86,7 @@ Per peer: `ThroughputSample` at most every 200 ms (fixed constant); `BandwidthEs
 
 ## Module layout
 
-- `abr.rs` — `Abr` trait, the per-peer capability surface; every method is defaulted so simple peers opt out.
+- `abr.rs` — `Abr` trait, the per-peer capability surface; `cancel()` is mandatory while optional ABR capabilities are defaulted so simple peers opt out.
 - `controller/` — `core.rs` (`AbrController`, `AbrSettings`, `AbrPeerId`, registration, peer-state callbacks), `tick.rs`, `retry.rs` (peer-scoped delayed `MinInterval` re-evaluation), `throttle.rs`, `peer.rs` (`PeerEntry`).
 - `estimator.rs` — `Estimator` trait, `ThroughputEstimator`, private `Ewma`.
 - `handle.rs` — `AbrHandle` (Drop-driven unregister).

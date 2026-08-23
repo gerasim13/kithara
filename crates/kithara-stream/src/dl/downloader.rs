@@ -119,10 +119,10 @@ impl Downloader {
         #[cfg(not(target_arch = "wasm32"))]
         let runtime = config.runtime;
         // Composed/standalone seam: `Some` parent → child of it; `None` → own
-        // root. The loop and peer scopes derive from this token; each peer
-        // hands its scope to ABR registration as well.
+        // root. The loop, peer scopes, and the shared ABR controller derive
+        // from this token.
         let cancel = CancelScope::new(config.cancel).token();
-        let abr = AbrController::new(config.abr_settings);
+        let abr = AbrController::new(config.abr_settings, cancel.clone());
         Self {
             inner: Arc::new(DownloaderInner {
                 soft_timeout,
@@ -168,7 +168,7 @@ impl Downloader {
         let bus: Arc<RwLock<Option<EventBus>>> = Arc::new(RwLock::default());
 
         let abr_peer: Arc<dyn Abr> = Arc::clone(&peer) as Arc<dyn Abr>;
-        let abr_handle = self.inner.abr.register(&abr_peer, &cancel_token);
+        let abr_handle = self.inner.abr.register(&abr_peer);
         let peer_id = abr_handle.peer_id();
 
         let entry = RegisteredPeerEntry {
