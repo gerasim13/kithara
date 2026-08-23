@@ -1274,6 +1274,7 @@ fn dispatch_requeues_orphaned_downloading_segment() {
             PlannedFetch::Segment(1),
             Arc::downgrade(&v),
             ctx.signal.clone(),
+            v.flow.queue.lock().generation(),
         )
         .expect("seg 1 must be claimable");
 
@@ -1323,6 +1324,7 @@ fn a_dropped_claim_returns_its_fetch_to_the_plan() {
             PlannedFetch::Segment(0),
             Arc::downgrade(&v),
             ctx.signal.clone(),
+            v.flow.queue.lock().generation(),
         )
         .expect("segment claim");
     assert!(!v.flow.queue.planned(PlannedFetch::Segment(0)));
@@ -1330,6 +1332,83 @@ fn a_dropped_claim_returns_its_fetch_to_the_plan() {
     drop(claim);
 
     assert!(v.flow.queue.planned(PlannedFetch::Segment(0)));
+}
+
+#[kithara::test]
+fn a_cancel_settled_claim_reenters_the_current_plan() {
+    // A transition's look-ahead retire cancels in-flight fetches without
+    // rebuilding any plan: nobody re-plans the entry dispatch popped, so the
+    // cancelled settle itself must put the work back — or the incoming
+    // decoder waits forever on a segment nobody owns (phase_continuity
+    // 25s wall-timeout).
+    let ctx = test_ctx(3);
+    let v = make_var(0, 0, &[100, 100], &ctx);
+    let generation = v.flow.queue.lock().generation();
+    let claim = v.segments()[0]
+        .state()
+        .try_claim(
+            PlannedFetch::Segment(0),
+            Arc::downgrade(&v),
+            ctx.signal.clone(),
+            generation,
+        )
+        .expect("segment claim");
+    assert!(!v.flow.queue.planned(PlannedFetch::Segment(0)));
+
+    claim.into_missing_requeued();
+
+    assert!(v.flow.queue.planned(PlannedFetch::Segment(0)));
+}
+
+#[kithara::test]
+fn a_cancel_settled_claim_stays_off_a_rebuilt_plan() {
+    // A seek's rearm cancels and then rebuilds: the rebuild owns the
+    // re-dispatch, and the stale settle must not resurrect a prefix entry
+    // the new plan skipped (pinned end-to-end by
+    // `hls_seek_near_end_skips_prefix`).
+    let ctx = test_ctx(3);
+    let v = make_var(0, 0, &[100, 100], &ctx);
+    let generation = v.flow.queue.lock().generation();
+    let claim = v.segments()[0]
+        .state()
+        .try_claim(
+            PlannedFetch::Segment(0),
+            Arc::downgrade(&v),
+            ctx.signal.clone(),
+            generation,
+        )
+        .expect("segment claim");
+    v.rebuild(&ctx, 1);
+
+    claim.into_missing_requeued();
+
+    assert!(!v.flow.queue.planned(PlannedFetch::Segment(0)));
+}
+
+#[kithara::test]
+fn a_noop_rebuild_disowns_a_cancelled_fetch() {
+    // A rebuild that changes nothing (the target range is fully loaded and
+    // the queue is empty) still claims plan ownership: the fetch the
+    // triggering rearm cancelled settles into a foreign plan and stays off
+    // it, instead of re-entering as the new queue head.
+    let ctx = test_ctx(3);
+    let v = make_var(0, 0, &[100, 100], &ctx);
+    v.segments()[1].state().mark_loaded();
+    let generation = v.flow.queue.lock().generation();
+    let claim = v.segments()[0]
+        .state()
+        .try_claim(
+            PlannedFetch::Segment(0),
+            Arc::downgrade(&v),
+            ctx.signal.clone(),
+            generation,
+        )
+        .expect("segment claim");
+    v.rebuild(&ctx, 1);
+
+    claim.into_missing_requeued();
+
+    assert!(!v.flow.queue.planned(PlannedFetch::Segment(0)));
 }
 
 #[kithara::test]
@@ -1342,6 +1421,7 @@ fn phase_at_reports_waiting_demand_for_claimed_segment() {
             PlannedFetch::Segment(0),
             Arc::downgrade(&v),
             ctx.signal.clone(),
+            v.flow.queue.lock().generation(),
         )
         .expect("segment claim");
 
@@ -2158,7 +2238,8 @@ fn seg_idx_by_url(v: &HlsVariant, url: &Url) -> u32 {
 
 /// While a variant transition is building, the audible session may hold only
 /// its owed window — the playing segment and the next. The look-ahead it
-/// would otherwise queue is what starves the incoming construction.
+/// would otherwise queue is what starves the incoming construction. A latch
+/// inside the playing segment adds nothing to that window.
 #[kithara::test]
 fn dispatch_owed_stops_after_the_next_segment() {
     let ctx = test_ctx(8);
@@ -2166,13 +2247,93 @@ fn dispatch_owed_stops_after_the_next_segment() {
     v.rebuild(&ctx, 0);
     let session = active_session(&v, &ctx, 0);
 
-    let cmds = session.dispatch_owed(&ctx, 10);
+    let cmds = session.dispatch_owed(&ctx, 10, Duration::ZERO);
 
     let got: Vec<Url> = cmds.iter().map(|cmd| cmd.url().clone()).collect();
     assert_eq!(
         got,
         vec![v.segments()[0].url().clone(), v.segments()[1].url().clone(),],
         "position 0 owes segment 0 and its successor, nothing further"
+    );
+}
+
+/// The look-ahead caps are an option, the owed window is a debt: while a
+/// transition builds, the outgoing must still fetch every segment up to the
+/// latch even when the prefetch segment window is narrower — the splice
+/// cannot land without those bytes.
+#[kithara::test]
+fn dispatch_owed_overrides_the_segment_lookahead_cap() {
+    let mut ctx = test_ctx(10);
+    ctx.look_ahead_segments = Some(2);
+    let v = make_var(0, 0, &[100, 100, 100, 100, 100, 100], &ctx);
+    v.rebuild(&ctx, 0);
+    let session = active_session(&v, &ctx, 0);
+
+    let cmds = session.dispatch_owed(&ctx, 10, Duration::from_secs(5));
+
+    let got: Vec<Url> = cmds.iter().map(|cmd| cmd.url().clone()).collect();
+    assert_eq!(
+        got,
+        vec![
+            v.segments()[0].url().clone(),
+            v.segments()[1].url().clone(),
+            v.segments()[2].url().clone(),
+            v.segments()[3].url().clone(),
+        ],
+        "the owed debt runs to the latch through a narrower segment window"
+    );
+}
+
+/// Same debt against the byte-sized prefetch window: bytes the splice still
+/// needs dispatch even when they lie past `look_ahead_bytes`.
+#[kithara::test]
+fn dispatch_owed_overrides_the_byte_lookahead_cap() {
+    let mut ctx = test_ctx(10);
+    ctx.look_ahead_bytes = Some(150);
+    let v = make_var(0, 0, &[100, 100, 100, 100, 100, 100], &ctx);
+    v.rebuild(&ctx, 0);
+    let session = active_session(&v, &ctx, 0);
+
+    let cmds = session.dispatch_owed(&ctx, 10, Duration::from_secs(5));
+
+    let got: Vec<Url> = cmds.iter().map(|cmd| cmd.url().clone()).collect();
+    assert_eq!(
+        got,
+        vec![
+            v.segments()[0].url().clone(),
+            v.segments()[1].url().clone(),
+            v.segments()[2].url().clone(),
+            v.segments()[3].url().clone(),
+        ],
+        "the owed debt runs to the latch through a narrower byte window"
+    );
+}
+
+/// The owed window follows the transition latch when the cut lies ahead of
+/// the reader: the outgoing must decode every byte up to the cut, and a seek
+/// can park its reads segments ahead of the byte cursor. Starving those
+/// fetches parks the outgoing decoder forever, and the incoming prime waits
+/// on its frontier just as long.
+#[kithara::test]
+fn dispatch_owed_reaches_the_transition_latch() {
+    let ctx = test_ctx(8);
+    let v = make_var(0, 0, &[100, 100, 100, 100, 100, 100], &ctx);
+    v.rebuild(&ctx, 0);
+    let session = active_session(&v, &ctx, 0);
+
+    // Reader at segment 0; the latch sits at 5s, inside segment 2.
+    let cmds = session.dispatch_owed(&ctx, 10, Duration::from_secs(5));
+
+    let got: Vec<Url> = cmds.iter().map(|cmd| cmd.url().clone()).collect();
+    assert_eq!(
+        got,
+        vec![
+            v.segments()[0].url().clone(),
+            v.segments()[1].url().clone(),
+            v.segments()[2].url().clone(),
+            v.segments()[3].url().clone(),
+        ],
+        "the owed window runs through the latch segment and its successor"
     );
 }
 

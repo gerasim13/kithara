@@ -56,16 +56,27 @@ impl HlsVariant {
         let mut remaining = budget;
         self.dispatch_size_demands(ctx, &mut out, &mut remaining, &cancel);
         let prefetch_base = position.max(self.prefetch_anchor());
-        let prefetch_byte_cap = ctx
-            .look_ahead_bytes
-            .map(|n| prefetch_base.saturating_add(n));
-        let prefetch_segment_cap = self.prefetch_segment_cap(ctx, prefetch_base);
+        // A construction bound names a debt: everything up to it must land for
+        // the splice or build to finish. Look-ahead trims optional prefetch
+        // only, so inside a bounded window the caps step aside.
+        let prefetch_byte_cap = construction_segment_end
+            .is_none()
+            .then(|| {
+                ctx.look_ahead_bytes
+                    .map(|n| prefetch_base.saturating_add(n))
+            })
+            .flatten();
+        let prefetch_segment_cap = construction_segment_end
+            .is_none()
+            .then(|| self.prefetch_segment_cap(ctx, prefetch_base))
+            .flatten();
         let mut resume_at: Option<u64> = None;
         while remaining > 0 {
             hang_tick!();
-            let planned = {
+            let (planned, plan_generation) = {
                 let mut queue = self.flow.queue.lock();
-                match queue.front().copied() {
+                let generation = queue.generation();
+                let planned = match queue.front().copied() {
                     None => break,
                     Some(PlannedFetch::Init) => queue.pop_front(),
                     Some(PlannedFetch::Segment(seg_idx)) => {
@@ -89,7 +100,8 @@ impl HlsVariant {
                         }
                         queue.pop_front()
                     }
-                }
+                };
+                (planned, generation)
             };
             let Some(planned) = planned else { break };
             match planned {
@@ -101,6 +113,7 @@ impl HlsVariant {
                         PlannedFetch::Init,
                         Arc::downgrade(self),
                         ctx.signal.clone(),
+                        plan_generation,
                     ) else {
                         if !init.state().is_loaded() && !init.state().is_failed() {
                             deferred.push(planned);
@@ -133,6 +146,7 @@ impl HlsVariant {
                         PlannedFetch::Segment(seg_idx),
                         Arc::downgrade(self),
                         ctx.signal.clone(),
+                        plan_generation,
                     ) else {
                         // WHY: An orphaned download may return to `Missing` and need another claim.
                         if !entry.state().is_loaded() && !entry.state().is_failed() {

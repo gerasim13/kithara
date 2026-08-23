@@ -80,11 +80,14 @@ impl SegmentSlotState {
     /// Atomic `Missing -> Downloading` claim. Returns the owned
     /// [`FetchClaim<Downloading>`](FetchClaim) handle when the caller now owns
     /// the in-flight slot, `None` when another caller already claimed it.
+    /// `plan_generation` records the plan the fetch was taken from, so a
+    /// cancelled settle can tell a still-current plan from a rebuilt one.
     pub(crate) fn try_claim(
         self: &Arc<Self>,
         planned: PlannedFetch,
         variant: Weak<HlsVariant>,
         signal: SizeSignal,
+        plan_generation: u64,
     ) -> Option<FetchClaim<Downloading>> {
         self.0
             .compare_exchange(
@@ -94,7 +97,7 @@ impl SegmentSlotState {
                 Ordering::Acquire,
             )
             .ok()
-            .map(|_| FetchClaim::claim(planned, variant, Arc::clone(self), signal))
+            .map(|_| FetchClaim::claim(planned, variant, Arc::clone(self), signal, plan_generation))
     }
 
     delegate::delegate! {

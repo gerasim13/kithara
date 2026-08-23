@@ -65,7 +65,10 @@ alternate (`SessionTurns`). `dispatch_constructing` caps an incoming session at
 cannot disagree; the cap ends when the reader is transferred — a priming decoder must not stay
 inside a build-sized window. `dispatch_from` anchors the look-ahead on
 `max(session position, prefetch anchor)` and stops at the first segment past `look_ahead_bytes` or
-`look_ahead_segments`, with `Init` exempt from both; it publishes `prefetch_resume_at`, the cursor
+`look_ahead_segments`, with `Init` exempt from both; a `construction_segment_end` bound disables
+both look-ahead caps — the bound names a debt (an owed window or a construction window) that must
+land in full, and look-ahead only trims optional prefetch, so an option must never cut a debt.
+`dispatch_from` publishes `prefetch_resume_at`, the cursor
 byte at which the deferred segment enters the window, so `Source::advance` (`take_prefetch_resume`)
 wakes the peer once per deferred segment rather than once per read — the window is cursor-anchored,
 so only the reader's consumption can make it stale and only that consumption may re-open it.
@@ -79,10 +82,25 @@ rearm still burns both. Installing the incoming slot (`prepare_planned_variant_r
 that token: queued look-ahead packs deliver cancelled and in-flight ones abort, freeing capacity
 the construction is otherwise starved of — those bytes lie past the cut the transition latches and
 are dead to the splice anyway. Until the transition resolves, `dispatch_active` holds the audible
-session to the same owed window (`dispatch_owed`), or the next poll would refill the look-ahead.
+session to the owed window (`dispatch_owed`), or the next poll would refill the look-ahead. That
+window is everything the splice still consumes: the reader's segment and the next, extended
+through the latch segment plus one when the cut lies further ahead — a seek can park the outgoing
+decoder's reads segments past the byte cursor, and starving those fetches parks the decoder
+forever while the incoming prime waits on its frontier just as long. A retire that burned a fetch
+the wider window still owes is recovered by the cancelled-settle requeue: the fetch re-enters the
+current plan and the next owed dispatch re-issues it.
 Retired and recovering fetches re-enter the plan in plan order (`requeue_planned` is an ordered
 insert): dispatch caps read the queue head, and a far look-ahead entry parked at the front would
 wall off every nearer segment behind it.
+
+A fetch cancelled in flight settles back toward the plan it was popped from, gated by the plan
+generation. The generation bumps on every rebuild — including the short-circuit rebuild that
+changes nothing, because that rebuild still claims plan ownership. A claim captures the generation
+at pop (`dispatch_from`), and `settle_cancelled` re-inserts (`requeue_cancelled`) only when the
+generation still matches and the entry is absent: a look-ahead retire rebuilds nothing, so its
+cancels re-enter and the reader is never left waiting on work nobody holds; a seek's rearm
+rebuilds, so its cancels fail the compare and drop — the rebuilt plan owns the re-dispatch, and a
+stale prefix must not resurrect behind the target.
 
 When the downloader's `soft_timeout` marks an in-flight slot stalled, it wakes the peer immediately
 so `reconcile_escape` can move away from that variant; a stalled reader produces no progress wake.

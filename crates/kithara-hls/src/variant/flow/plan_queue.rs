@@ -1,7 +1,7 @@
 use std::{
     collections::VecDeque,
     ops::Deref,
-    sync::atomic::{AtomicBool, Ordering},
+    sync::atomic::{AtomicBool, AtomicU64, Ordering},
 };
 
 use kithara_platform::sync::{Mutex, MutexGuard};
@@ -19,6 +19,10 @@ use crate::segment::PlannedFetch;
 /// mirror.
 pub(in crate::variant) struct PlanQueue {
     queue: Mutex<VecDeque<PlannedFetch>>,
+    /// Plan identity, bumped by every rebuild (see [`PlanGuard::bump_generation`]).
+    /// Mutated only under the queue lock; the atomic exists for the guard's
+    /// shared-reference plumbing, not for lock-free readers.
+    generation: AtomicU64,
     init_planned: AtomicBool,
     segments_planned: Box<[AtomicBool]>,
 }
@@ -27,6 +31,7 @@ impl PlanQueue {
     pub(in crate::variant) fn new(queue_capacity: usize, num_segments: usize) -> Self {
         Self {
             queue: Mutex::new(VecDeque::with_capacity(queue_capacity)),
+            generation: AtomicU64::new(0),
             init_planned: AtomicBool::new(false),
             segments_planned: (0..num_segments).map(|_| AtomicBool::new(false)).collect(),
         }
@@ -48,6 +53,7 @@ impl PlanQueue {
     pub(in crate::variant) fn lock(&self) -> PlanGuard<'_> {
         PlanGuard {
             queue: self.queue.lock(),
+            generation: &self.generation,
             init_planned: &self.init_planned,
             segments_planned: &self.segments_planned,
         }
@@ -74,6 +80,7 @@ impl PlanQueue {
 /// own methods so the membership mirror can never drift from the plan.
 pub(in crate::variant) struct PlanGuard<'a> {
     queue: MutexGuard<'a, VecDeque<PlannedFetch>>,
+    generation: &'a AtomicU64,
     init_planned: &'a AtomicBool,
     segments_planned: &'a [AtomicBool],
 }
@@ -87,6 +94,20 @@ impl Deref for PlanGuard<'_> {
 }
 
 impl PlanGuard<'_> {
+    /// Identity of the plan this queue currently holds. A fetch taken off
+    /// the plan records it, and a cancelled settle re-enters only a plan
+    /// with the same identity (see `HlsVariant::requeue_cancelled`).
+    pub(in crate::variant) fn generation(&self) -> u64 {
+        self.generation.load(Ordering::Relaxed)
+    }
+
+    /// Declare a new plan identity. Every rebuild bumps — including one that
+    /// leaves the queue untouched — so a fetch cancelled by the rearm that
+    /// triggered it settles into a foreign plan and stays off it.
+    pub(in crate::variant) fn bump_generation(&mut self) {
+        self.generation.fetch_add(1, Ordering::Relaxed);
+    }
+
     pub(in crate::variant) fn pop_front(&mut self) -> Option<PlannedFetch> {
         let planned = self.queue.pop_front();
         if let Some(planned) = planned {
@@ -125,6 +146,7 @@ impl PlanGuard<'_> {
     }
 
     pub(in crate::variant) fn replace_with(&mut self, plan: impl Iterator<Item = PlannedFetch>) {
+        self.bump_generation();
         self.queue.clear();
         self.init_planned.store(false, Ordering::Relaxed);
         for flag in self.segments_planned {

@@ -182,11 +182,18 @@ impl HlsCoord {
         ctx: &crate::variant::PlanCtx,
         budget: usize,
     ) -> Vec<kithara_stream::dl::FetchCmd> {
+        let latch = self
+            .sessions
+            .transition
+            .lock()
+            .incoming
+            .as_ref()
+            .map(|slot| slot.landing_time);
         let session = self.active_session();
-        if self.has_incoming() {
-            return session.dispatch_owed(ctx, budget);
-        }
-        session.dispatch(ctx, budget)
+        latch.map_or_else(
+            || session.dispatch(ctx, budget),
+            |latch| session.dispatch_owed(ctx, budget, latch),
+        )
     }
 
     /// Fetches for the variant a switch is preparing.

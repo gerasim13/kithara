@@ -78,6 +78,9 @@ pub(crate) struct DownloadClaim {
     /// settle must wake the peer to take the requeued work, and the claim
     /// outlives every context that could lend it one.
     signal: SizeSignal,
+    /// Identity of the plan the fetch was taken from — a cancelled settle
+    /// re-enters only that plan (see [`FetchClaim::into_missing_requeued`]).
+    plan_generation: u64,
     settled: bool,
 }
 
@@ -105,6 +108,7 @@ impl FetchClaim<Downloading> {
         variant: Weak<HlsVariant>,
         slot: Arc<SegmentSlotState>,
         signal: SizeSignal,
+        plan_generation: u64,
     ) -> Self {
         Self {
             data: DownloadClaim {
@@ -112,6 +116,7 @@ impl FetchClaim<Downloading> {
                 variant,
                 slot,
                 signal,
+                plan_generation,
                 settled: false,
             },
             _phase: PhantomData,
@@ -177,6 +182,26 @@ impl FetchClaim<Downloading> {
         FetchClaim {
             data: (),
             _phase: PhantomData,
+        }
+    }
+
+    /// `Downloading -> Missing` for a fetch cancelled in flight. The slot
+    /// returns to the dispatch pool, and the work returns to the plan it
+    /// was taken from — unless a rebuild replaced that plan, in which case
+    /// the rebuild owns the re-dispatch and the stale entry stays off it
+    /// (see `HlsVariant::requeue_cancelled`). The peer is woken to take the
+    /// re-entered work: a cancelled download produces no reader progress,
+    /// so nothing else asks for it.
+    pub(crate) fn into_missing_requeued(self) {
+        let planned = self.data.planned;
+        let plan_generation = self.data.plan_generation;
+        let variant = self.data.variant.upgrade();
+        let signal = self.data.signal.clone();
+        let _ = self.into_missing();
+        if let Some(variant) = variant
+            && variant.requeue_cancelled(planned, plan_generation)
+        {
+            signal.wake_peer();
         }
     }
 
@@ -311,7 +336,13 @@ impl FetchSlot {
             ..
         } = self;
         let committed = matches!(reader.status(), ResourceStatus::Committed { .. });
-        debug!(target: "kithara_hls::settle", bytes_written, committed, "stale (cancelled)");
+        debug!(
+            target: "kithara_hls::settle",
+            planned = ?handle.planned(),
+            bytes_written,
+            committed,
+            "stale (cancelled)"
+        );
         if committed {
             // Committed by the new epoch's writer — dropping our (stale)
             // writer fails only its own generation's gate; the cleanup is
@@ -321,13 +352,15 @@ impl FetchSlot {
         } else {
             // Release without stamping. The stamp lives on the shared resource,
             // not on this writer, so it would fail the first `write_at` of
-            // whoever refills the slot — and on this path someone always does:
-            // the epoch rebuild that cancelled us owns the re-dispatch. Stamping
-            // here made a cancel indistinguishable from a broken sink, and the
-            // successor's error came back as a fatal `Decode`, parking the slot
-            // `Failed` for good.
+            // whoever refills the slot. Stamping here made a cancel
+            // indistinguishable from a broken sink, and the successor's error
+            // came back as a fatal `Decode`, parking the slot `Failed` for
+            // good. The work itself goes back on the plan it came from — a
+            // transition's look-ahead retire cancels without rebuilding, so
+            // nobody else re-plans the entry dispatch popped; only a settle
+            // that outlived a rebuild leaves the re-dispatch to that rebuild.
             writer.abandon();
-            handle.into_missing();
+            handle.into_missing_requeued();
         }
     }
 

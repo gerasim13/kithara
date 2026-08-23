@@ -17,6 +17,7 @@ use kithara_stream::{
     ByteMap, ConstructionGate, PendingReason, ReaderProfile, SeekObserve, SegmentDescriptor,
     SourceError, SourcePhase, SourceSeekAnchor, StreamError, StreamResult, VariantTransition,
 };
+use tracing::debug;
 
 use self::cancel::SessionCancel;
 pub(super) use self::reader::HlsSessionReader;
@@ -180,18 +181,30 @@ impl HlsSession {
 
     /// Fetches for the audible session while a variant transition is building.
     ///
-    /// Capped at the owed window — the playing segment and the next — so the
-    /// outgoing look-ahead cannot hold downloader capacity the incoming
-    /// construction is waiting on. Everything past the latched cut is dead to
-    /// the splice anyway; only the frontier the reader is consuming stays owed.
+    /// Capped at the owed window, so the outgoing look-ahead cannot hold
+    /// downloader capacity the incoming construction is waiting on. Owed is
+    /// everything the splice still consumes: the reader's own segment and the
+    /// next, and — when the latched cut lies further ahead, as after a seek
+    /// that parks the decoder's reads past the byte cursor — every segment up
+    /// to the cut plus one for the frame that straddles it. Only bytes past
+    /// that are dead to the splice.
     pub(crate) fn dispatch_owed(
         &self,
         ctx: &crate::variant::PlanCtx,
         budget: usize,
+        latch: Duration,
     ) -> Vec<kithara_stream::dl::FetchCmd> {
-        let owed_end = self
+        let read_end = self
             .find_at_offset(self.projected_position().byte)
             .map(|(seg_idx, _, _)| seg_idx.saturating_add(1));
+        let latch_end = self
+            .variant
+            .segment_index_at_time(latch)
+            .map(|seg_idx| seg_idx.saturating_add(1));
+        let owed_end = match (read_end, latch_end) {
+            (Some(read), Some(latch)) => Some(read.max(latch)),
+            (read, latch) => read.or(latch),
+        };
         self.dispatch_capped(ctx, budget, owed_end)
     }
 
@@ -373,6 +386,14 @@ impl HlsSession {
                     outcome,
                     Err(StreamError::Source(SourceError::WaitBudgetExceeded))
                 ) {
+                    debug!(
+                        target: "kithara_hls::wait",
+                        variant = self.variant.variant_index_u32(),
+                        start = range.start,
+                        end = range.end,
+                        phase = ?self.variant.phase_at(range.clone()),
+                        "construction wait parked on an unready range"
+                    );
                     self.signal.wake_peer();
                 }
                 outcome

@@ -1,5 +1,6 @@
 use kithara_platform::time::Duration;
 use kithara_test_utils::kithara;
+use tracing::debug;
 
 use super::{HlsVariant, PlanCtx};
 use crate::segment::PlannedFetch;
@@ -68,6 +69,11 @@ impl HlsVariant {
     )]
     pub(crate) fn rebuild(&self, _ctx: &PlanCtx, from_seg: u32) {
         if self.queue_matches_plan(from_seg) {
+            // Nothing to re-plan, but the rebuild still claims plan
+            // ownership: a fetch the triggering rearm cancelled in flight
+            // must settle into a foreign plan, not resurrect a prefix
+            // behind the target (see `Self::requeue_cancelled`).
+            self.flow.queue.lock().bump_generation();
             return;
         }
         self.rebuild_queue(from_seg, None);
@@ -98,6 +104,36 @@ impl HlsVariant {
         if !queue.contains(&planned) {
             queue.insert_sorted(planned);
         }
+    }
+
+    /// Put a fetch cancelled in flight back on the plan it was taken from.
+    ///
+    /// A cancel has two owners. A seek's rearm rebuilds the plan, and that
+    /// rebuild owns the re-dispatch — its plan already holds everything it
+    /// wants, and re-inserting the stale entry would resurrect a prefix the
+    /// seek skipped. A transition's look-ahead retire rebuilds nothing: the
+    /// plan the fetch came from is still current, and without the re-insert
+    /// the entry dispatch popped is work nobody holds — the reader waits
+    /// forever on the gap. The plan generation separates the two: it bumps
+    /// on every rebuild, so a stale settle fails the compare and drops.
+    /// Returns whether the fetch re-entered the plan.
+    pub(crate) fn requeue_cancelled(&self, planned: PlannedFetch, plan_generation: u64) -> bool {
+        let mut queue = self.flow.queue.lock();
+        let current = queue.generation();
+        let reenters = current == plan_generation && !queue.contains(&planned);
+        debug!(
+            target: "kithara_hls::settle",
+            variant = self.variant,
+            ?planned,
+            plan_generation,
+            current_generation = current,
+            reenters,
+            "cancelled fetch settling back toward the plan"
+        );
+        if reenters {
+            queue.insert_sorted(planned);
+        }
+        reenters
     }
 
     #[kithara::probe]
