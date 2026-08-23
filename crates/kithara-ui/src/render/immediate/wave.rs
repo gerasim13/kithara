@@ -94,6 +94,7 @@ impl canvas::Program<UiEvent> for MiniWaveCanvas<'_> {
         bounds: Rectangle,
         cursor: Cursor,
     ) -> Vec<Geometry> {
+        let placed = bounds;
         let bounds = snapped(bounds);
         let show_overlay = !cursor.is_over(iced_bounds(self.painter.overlay_bounds(
             &self.data,
@@ -104,13 +105,13 @@ impl canvas::Program<UiEvent> for MiniWaveCanvas<'_> {
                 y: bounds.y,
             },
         )));
-        let bounds = local_bounds(&bounds);
+        let bounds = local_bounds(&bounds, placed);
         let mut text = state.text.borrow_mut();
         let text = text.get_or_insert_with(|| self.skin.text_resources().into());
         let mut list = DrawListBuilder::default();
         self.painter
             .paint(&mut list, text, &self.data, bounds, show_overlay);
-        let mut frame = Frame::new(renderer, Size::new(bounds.w, bounds.h));
+        let mut frame = Frame::new(renderer, Size::new(placed.width, placed.height));
         replay_ordered(&list.finish(), &mut frame, self.skin.text_resources());
         vec![frame.into_geometry()]
     }
@@ -191,12 +192,20 @@ impl MiniWaveCanvas<'_> {
     }
 }
 
-const fn local_bounds(bounds: &Rectangle) -> Rect {
+/// The whole-pixel box the painter draws into, in the coordinates of the canvas
+/// it is placed at.
+///
+/// iced lays the geometry down at the box the solver arrived at, fractions and
+/// all, so a painter drawing from the canvas origin would put its bars half a
+/// pixel off the grid the retained host - which is handed the snapped box -
+/// draws them on. Carrying the snap across as an offset lands the same ink on
+/// the same pixels in both hosts.
+const fn local_bounds(bounds: &Rectangle, placed: Rectangle) -> Rect {
     Rect {
         h: bounds.height,
         w: bounds.width,
-        x: 0.0,
-        y: 0.0,
+        x: bounds.x - placed.x,
+        y: bounds.y - placed.y,
     }
 }
 
@@ -206,5 +215,65 @@ const fn iced_bounds(bounds: Rect) -> Rectangle {
         width: bounds.w,
         x: bounds.x,
         y: bounds.y,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use kithara_test_utils::kithara;
+
+    use super::*;
+
+    /// A box the solver put on a half pixel, which is where the two hosts drew
+    /// the same waveform on different rows.
+    const PLACED: Rectangle = Rectangle {
+        height: 120.5,
+        width: 262.5,
+        x: 197.5,
+        y: 182.25,
+    };
+
+    /// Where the painter's own origin ends up on the screen.
+    fn origin(placed: Rectangle) -> (f32, f32) {
+        let local = local_bounds(&snapped(placed), placed);
+        (placed.x + local.x, placed.y + local.y)
+    }
+
+    #[kithara::test]
+    fn a_canvas_placed_off_the_grid_draws_from_the_column_beside_it() {
+        assert_eq!(
+            origin(PLACED).0,
+            198.0,
+            "the painter must start on the pixel column the retained host draws from"
+        );
+    }
+
+    #[kithara::test]
+    fn a_canvas_placed_off_the_grid_draws_from_the_row_beside_it() {
+        assert_eq!(
+            origin(PLACED).1,
+            182.0,
+            "the painter must start on the pixel row the retained host draws from"
+        );
+    }
+
+    #[kithara::test]
+    fn a_canvas_already_on_the_grid_draws_from_its_own_origin() {
+        let placed = Rectangle {
+            height: 120.0,
+            width: 262.0,
+            x: 212.0,
+            y: 85.0,
+        };
+        let local = local_bounds(&snapped(placed), placed);
+
+        assert_eq!((local.x, local.y), (0.0, 0.0));
+    }
+
+    #[kithara::test]
+    fn the_painter_is_handed_the_size_the_snapped_box_covers() {
+        let local = local_bounds(&snapped(PLACED), PLACED);
+
+        assert_eq!((local.w, local.h), (262.0, 121.0));
     }
 }
