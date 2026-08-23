@@ -377,10 +377,17 @@ impl Node {
         Some((input, hit, window))
     }
 
-    fn paint_surface(&self, bounds: Rect, list: &mut DrawListBuilder) {
+    fn paint_background(&self, bounds: Rect, list: &mut DrawListBuilder) {
         if let Some(color) = self.background {
             list.fill_rect(bounds, color);
         }
+    }
+
+    /// A frame is drawn over whatever the node holds, not under it: a child
+    /// that fills its parent to the edge would otherwise paint the side away,
+    /// which is what the other host, stacking the frame above the body, never
+    /// does.
+    fn paint_frame(&self, bounds: Rect, list: &mut DrawListBuilder) {
         let Some((sides, color, width)) = self.frame else {
             return;
         };
@@ -629,17 +636,18 @@ impl Widget for Node {
             y: 0.0,
         };
         let mut list = DrawListBuilder::default();
-        self.paint_surface(bounds, &mut list);
+        self.paint_background(bounds, &mut list);
         replay(&list.finish(), &mut VelloBackend::new(scene));
         if let Some(leaf) = self.layout.leaf() {
             leaf.paint(bounds, self.transform, scene);
         }
     }
 
-    /// The one thing this node draws over its children rather than under
-    /// them: a window's indicator belongs above the rows it scrolls. Masonry
-    /// appends this scene after the children and outside the clip, which is
-    /// exactly where a bar on the window's own edge has to land.
+    /// What this node draws over its children rather than under them: a
+    /// window's indicator belongs above the rows it scrolls, and a frame
+    /// belongs on the edge of the box whatever fills it. Masonry appends this
+    /// scene after the children and outside the clip, which is exactly where a
+    /// mark on the node's own edge has to land.
     fn post_paint(
         &mut self,
         ctx: &mut PaintCtx<'_>,
@@ -648,15 +656,14 @@ impl Widget for Node {
     ) {
         let size = ctx.size();
         let mut list = DrawListBuilder::default();
-        self.layout.indicate(
-            Rect {
-                h: size.height.as_(),
-                w: size.width.as_(),
-                x: 0.0,
-                y: 0.0,
-            },
-            &mut list,
-        );
+        let bounds = Rect {
+            h: size.height.as_(),
+            w: size.width.as_(),
+            x: 0.0,
+            y: 0.0,
+        };
+        self.layout.indicate(bounds, &mut list);
+        self.paint_frame(bounds, &mut list);
         replay(&list.finish(), &mut VelloBackend::new(scene));
     }
 
@@ -746,5 +753,137 @@ impl Node {
     ) {
         this.ctx
             .set_stashed(&mut this.widget.children[child], stashed);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use kithara_test_utils::kithara;
+
+    use super::*;
+    use crate::draw::{DrawCmd, Geom};
+
+    /// The node the checks below paint.
+    struct Fixture;
+
+    impl Fixture {
+        /// A box wide enough to tell one side of a frame from another.
+        const BOX: Rect = Rect {
+            h: 40.0,
+            w: 100.0,
+            x: 0.0,
+            y: 0.0,
+        };
+
+        /// The colour its frame is drawn in.
+        const INK: Rgba = Rgba {
+            a: 1.0,
+            b: 0.5,
+            g: 0.4,
+            r: 0.3,
+        };
+
+        /// The ground it lays down under its children.
+        const PAPER: Rgba = Rgba {
+            a: 1.0,
+            b: 0.1,
+            g: 0.1,
+            r: 0.1,
+        };
+    }
+
+    fn framed() -> Node {
+        Node::new(
+            NodeLayout::Leaf(Leaf::Empty),
+            solve::Size::new(solve::Length::Fill, solve::Length::Fill),
+            Vec::new(),
+            Some(Fixture::PAPER),
+            Some((FrameSides::default(), Fixture::INK, 1.0)),
+        )
+    }
+
+    fn drawn(paint: impl FnOnce(&Node, &mut DrawListBuilder)) -> Vec<DrawCmd> {
+        let node = framed();
+        let mut list = DrawListBuilder::default();
+        paint(&node, &mut list);
+        list.finish().commands().to_vec()
+    }
+
+    fn rects(commands: &[DrawCmd]) -> Vec<Rect> {
+        commands
+            .iter()
+            .filter_map(|command| match command {
+                DrawCmd::Fill {
+                    geom: Geom::Rect(rect),
+                    ..
+                } => Some(*rect),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[kithara::test]
+    fn the_pass_under_a_node_s_children_lays_down_its_ground_alone() {
+        let commands = drawn(|node, list| node.paint_background(Fixture::BOX, list));
+
+        assert_eq!(
+            rects(&commands),
+            vec![Fixture::BOX],
+            "the pass children paint over must carry the ground and nothing else: {commands:?}"
+        );
+    }
+
+    #[kithara::test]
+    fn a_node_puts_every_side_of_its_frame_in_the_pass_over_its_children() {
+        let commands = drawn(|node, list| node.paint_frame(Fixture::BOX, list));
+
+        assert_eq!(
+            rects(&commands),
+            vec![
+                Rect {
+                    h: 1.0,
+                    w: Fixture::BOX.w,
+                    x: Fixture::BOX.x,
+                    y: Fixture::BOX.y,
+                },
+                Rect {
+                    h: Fixture::BOX.h,
+                    w: 1.0,
+                    x: Fixture::BOX.x + Fixture::BOX.w - 1.0,
+                    y: Fixture::BOX.y,
+                },
+                Rect {
+                    h: 1.0,
+                    w: Fixture::BOX.w,
+                    x: Fixture::BOX.x,
+                    y: Fixture::BOX.y + Fixture::BOX.h - 1.0,
+                },
+                Rect {
+                    h: Fixture::BOX.h,
+                    w: 1.0,
+                    x: Fixture::BOX.x,
+                    y: Fixture::BOX.y,
+                },
+            ],
+            "each side belongs just inside the box it frames: {commands:?}"
+        );
+    }
+
+    #[kithara::test]
+    fn a_node_with_no_frame_draws_nothing_over_its_children() {
+        let node = Node::new(
+            NodeLayout::Leaf(Leaf::Empty),
+            solve::Size::new(solve::Length::Fill, solve::Length::Fill),
+            Vec::new(),
+            Some(Fixture::PAPER),
+            None,
+        );
+        let mut list = DrawListBuilder::default();
+        node.paint_frame(Fixture::BOX, &mut list);
+
+        assert!(
+            list.finish().commands().is_empty(),
+            "a node the skin gives no frame must leave the pass over its children empty"
+        );
     }
 }
