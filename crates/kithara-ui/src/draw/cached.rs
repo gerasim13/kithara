@@ -38,16 +38,18 @@ impl<K: PartialEq + Default, V> CachedValue<K, V> {
 
 #[cfg(test)]
 mod tests {
+    use kithara_test_utils::kithara;
+
     use super::CachedValue;
 
-    #[test]
+    #[kithara::test]
     fn a_fresh_cache_holds_no_value() {
         let cached = CachedValue::<u8, &str>::default();
 
         assert_eq!(cached.value(), None, "nothing was ever built");
     }
 
-    #[test]
+    #[kithara::test]
     fn a_new_key_takes_the_value_that_came_with_it() {
         let mut cached = CachedValue::default();
 
@@ -56,7 +58,7 @@ mod tests {
         assert_eq!(cached.value(), Some(&"one"));
     }
 
-    #[test]
+    #[kithara::test]
     fn the_key_moves_with_the_value_it_admitted() {
         let mut cached = CachedValue::default();
 
@@ -65,7 +67,7 @@ mod tests {
         assert_eq!(cached.key(), &1, "the value is only as good as its key");
     }
 
-    #[test]
+    #[kithara::test]
     fn a_key_that_still_holds_keeps_its_value() {
         let mut cached = CachedValue::default();
         cached.update(1_u8, Some("one"));
@@ -75,7 +77,7 @@ mod tests {
         assert_eq!(cached.value(), Some(&"one"), "the key did not move");
     }
 
-    #[test]
+    #[kithara::test]
     fn a_moved_key_takes_the_value_offered_with_it() {
         let mut cached = CachedValue::default();
         cached.update(1_u8, Some("one"));

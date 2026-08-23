@@ -42,6 +42,8 @@ impl WaveformData {
 
 #[cfg(test)]
 mod tests {
+    use kithara_test_utils::kithara;
+
     use super::{WaveformData, WaveformView};
     use crate::render::WaveBucket;
 
@@ -65,21 +67,21 @@ mod tests {
         }
     }
 
-    #[test]
+    #[kithara::test]
     fn a_new_name_is_a_new_waveform_even_when_the_buckets_read_the_same() {
         let held = WaveformData::from(view(&[bucket(0.9)], 7, &[]));
 
         assert!(!held.matches(view(&[bucket(0.9)], 8, &[])));
     }
 
-    #[test]
+    #[kithara::test]
     fn the_copy_takes_the_name_its_owner_gave_the_buckets_on_trust() {
         let held = WaveformData::from(view(&[bucket(0.9)], 7, &[]));
 
         assert!(held.matches(view(&[bucket(0.2)], 7, &[])));
     }
 
-    #[test]
+    #[kithara::test]
     fn marks_that_move_under_an_unmoved_name_still_land() {
         let held = WaveformData::from(view(&[bucket(0.9)], 7, &[0.25]));
 

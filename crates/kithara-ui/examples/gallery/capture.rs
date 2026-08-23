@@ -244,6 +244,8 @@ pub(super) fn read_frame(dir: &Path) -> Option<Frame> {
 
 #[cfg(test)]
 mod tests {
+    use kithara_test_utils::kithara;
+
     use super::{Film, Shot, Tab};
 
     fn film(spec: &str) -> Film {
@@ -254,7 +256,7 @@ mod tests {
         Shot { tab, module: None }
     }
 
-    #[test]
+    #[kithara::test]
     fn a_film_photographs_the_pages_it_names_in_the_order_it_names_them() {
         assert_eq!(
             film("motion,lottie:2x3").pages,
@@ -262,42 +264,42 @@ mod tests {
         );
     }
 
-    #[test]
+    #[kithara::test]
     fn a_film_takes_as_many_photographs_as_it_asks_for() {
         assert_eq!(film("motion:2x3").photos, 2);
     }
 
-    #[test]
+    #[kithara::test]
     fn a_film_runs_as_many_frames_between_photographs_as_it_asks_for() {
         assert_eq!(film("motion:2x3").steps, 3);
     }
 
-    #[test]
+    #[kithara::test]
     fn a_page_the_gallery_does_not_have_is_refused() {
         assert!(Film::parse("nowhere:2x3").is_err());
     }
 
-    #[test]
+    #[kithara::test]
     fn a_spec_with_no_cadence_is_refused() {
         assert!(Film::parse("motion").is_err());
     }
 
-    #[test]
+    #[kithara::test]
     fn a_cadence_with_no_frame_count_is_refused() {
         assert!(Film::parse("motion:2").is_err());
     }
 
-    #[test]
+    #[kithara::test]
     fn a_film_of_no_photographs_is_refused() {
         assert!(Film::parse("motion:0x3").is_err());
     }
 
-    #[test]
+    #[kithara::test]
     fn a_film_with_no_time_between_photographs_is_refused() {
         assert!(Film::parse("motion:2x0").is_err());
     }
 
-    #[test]
+    #[kithara::test]
     fn a_page_photographed_once_keeps_the_name_a_still_set_gives_it() {
         assert_eq!(
             film("motion:1x1").file(shot(Tab::Motion), 0),
@@ -305,7 +307,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[kithara::test]
     fn a_page_photographed_more_than_once_numbers_its_photographs() {
         assert_eq!(
             film("motion:2x1").file(shot(Tab::Motion), 1),
@@ -313,13 +315,13 @@ mod tests {
         );
     }
 
-    #[test]
+    #[kithara::test]
     fn a_still_set_is_every_page_once() {
         let stills = Film::stills();
         assert_eq!(stills.pages, Shot::all());
     }
 
-    #[test]
+    #[kithara::test]
     fn a_still_set_takes_one_photograph_of_each_page() {
         assert_eq!(Film::stills().photos, 1);
     }

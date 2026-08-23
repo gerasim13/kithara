@@ -259,9 +259,11 @@ fn place(
 
 #[cfg(test)]
 mod tests {
+    use kithara_test_utils::kithara;
+
     use super::*;
 
-    #[test]
+    #[kithara::test]
     fn placement_matches_iced_flip_alignment_and_clamp_contract() {
         let anchor = MasonryRect::new(40.0, 30.0, 90.0, 50.0);
         assert_eq!(
@@ -286,7 +288,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[kithara::test]
     fn every_open_latches_its_own_press_after_a_close() {
         let state = PopoverState::default();
         let first = Point::new(12.0, 18.0);
