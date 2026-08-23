@@ -5,10 +5,10 @@ mod node;
 mod style;
 
 pub use self::{
-    binding::{AdaptivePolicy, BindingRef, Priority},
+    binding::BindingRef,
     doc::{ChromeStyle, ModuleDoc, ModuleDrop, parse_module},
     motion::{Easing, Motion, Pose, Repeat},
-    node::ControlNode,
+    node::{AdaptiveStep, ControlNode, Measure, MeasureAxis},
     style::{
         ButtonStyle, ChipStyle, DeckSummaryStyle, FaderStyle, GlyphStyle, IconName, PopoverAlign,
         PopoverAt, ScalarFormat, TableColumn, TableColumnStyle, TextAlign, TextStyle, Tone,

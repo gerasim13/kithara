@@ -309,12 +309,14 @@ fn fixed_control_spec(control: &ControlNode) -> Option<ControlSpec> {
         ControlNode::VuStereo { .. } => Some(ControlSpec::VuStereo),
         ControlNode::VuVertical { ticks, .. } => Some(ControlSpec::VuVertical { ticks: *ticks }),
         ControlNode::Row { .. }
+        | ControlNode::Adaptive { .. }
         | ControlNode::Column { .. }
         | ControlNode::Scroll { .. }
         | ControlNode::Include { .. }
         | ControlNode::Object { .. }
         | ControlNode::Optional { .. }
         | ControlNode::Popover { .. }
+        | ControlNode::Reveal { .. }
         | ControlNode::Pressable { .. }
         | ControlNode::Stage { .. }
         | ControlNode::Slot { .. }

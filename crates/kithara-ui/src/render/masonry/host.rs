@@ -15,7 +15,7 @@ use super::{
     leaf::{Leaf, WindowLeafLayer},
     mount::{
         Cx, NodeControl, NodeLayout, Viewport, activates, alignment, control_declared, declared,
-        length, main_length, pointer_owner,
+        main_length, pointer_owner,
     },
     popover::{PopoverLayer, PopoverState},
     root::WindowLayer,
@@ -27,16 +27,16 @@ use crate::{
     expand::{Binding, ControlSpec, ExpandedNode},
     ids::InternId,
     layout::Axis,
-    module::{ChromeStyle, TextStyle},
+    module::{ChromeStyle, MeasureAxis, TextStyle},
     mount,
     render::{
         ControlAction, HostedControlPlan, InputOwner, ReadValue, Skin, UiEvent,
-        document::{Ctx, Group, Host, Module, Popover},
+        document::{Ctx, Group, GroupMount, Host, Measured, Module, Popover, SplitMount},
         hosted_control_plan,
         scroll::Bar,
     },
     shaping::TextContext,
-    size::SizeSpec,
+    size::{SizeSpec, length},
     solve,
 };
 
@@ -388,33 +388,49 @@ where
 {
     type Output = MasonryNode<Action>;
 
-    fn split(&mut self, axis: Axis, children: Vec<(f32, SizeSpec, Self::Output)>) -> Self::Output {
+    fn split(
+        &mut self,
+        axis: Axis,
+        measure: Option<MeasureAxis>,
+        children: Vec<SplitMount<Self::Output>>,
+    ) -> Self::Output {
         let mut layouts = Vec::with_capacity(children.len());
         let mut nodes = Vec::with_capacity(children.len());
-        for (weight, size, child) in children {
+        for cell in children {
             let split_size = match axis {
-                Axis::Horizontal => solve::Size::new(main_length(size.w), solve::Length::Fill),
-                Axis::Vertical => solve::Size::new(solve::Length::Fill, main_length(size.h)),
+                Axis::Horizontal => solve::Size::new(main_length(cell.size.w), solve::Length::Fill),
+                Axis::Vertical => solve::Size::new(solve::Length::Fill, main_length(cell.size.h)),
             };
-            layouts.push(ChildLayout::weighted(child.declared(), split_size, weight));
-            nodes.push(child);
+            layouts.push(
+                ChildLayout::weighted(cell.output.declared(), split_size, cell.weight)
+                    .within(cell.band),
+            );
+            nodes.push(cell.output);
         }
         MasonryNode::document(
-            NodeLayout::Flex(Flex::new(
-                axis,
-                solve::Length::Fill,
-                solve::Length::Fill,
-                solve::Padding::default(),
-                0.0,
-                solve::Alignment::Start,
-                layouts,
-            )),
+            NodeLayout::Flex(
+                Flex::new(
+                    axis,
+                    solve::Length::Fill,
+                    solve::Length::Fill,
+                    solve::Padding::default(),
+                    0.0,
+                    solve::Alignment::Start,
+                    layouts,
+                )
+                .measure(measure),
+            ),
             solve::Size::new(solve::Length::Fill, solve::Length::Fill),
             nodes,
             true,
             None,
             None,
         )
+    }
+
+    fn measured(&mut self, plan: Measured, branches: Vec<Self::Output>) -> Self::Output {
+        let size = declared(plan.size);
+        MasonryNode::document(NodeLayout::Measured(plan), size, branches, true, None, None)
     }
 
     fn module(&mut self, module: Module<'_>, content: Option<Self::Output>) -> Self::Output {
@@ -431,17 +447,15 @@ where
         output
     }
 
-    fn group(
-        &mut self,
-        group: Group<'_>,
-        children: Vec<(Option<f32>, Self::Output)>,
-    ) -> Self::Output {
+    fn group(&mut self, group: Group<'_>, children: Vec<GroupMount<Self::Output>>) -> Self::Output {
         let size = group.size().unwrap_or(SizeSpec::FILL);
         let mut layouts = Vec::with_capacity(children.len());
         let mut nodes = Vec::with_capacity(children.len());
-        for (minimum, child) in children {
-            layouts.push(ChildLayout::natural(child.declared(), minimum));
-            nodes.push(child);
+        for child in children {
+            layouts.push(
+                ChildLayout::natural(child.output.declared(), child.minimum).within(child.band),
+            );
+            nodes.push(child.output);
         }
         let background = group.background().map(|role| {
             let mut color = self.skin.rgba(role);
@@ -456,20 +470,23 @@ where
             )
         });
         MasonryNode::document(
-            NodeLayout::Flex(Flex::new(
-                group.axis(),
-                length(size.w),
-                length(size.h),
-                solve::Padding {
-                    top: group.padding_y(),
-                    right: group.padding_x(),
-                    bottom: group.padding_y(),
-                    left: group.padding_x(),
-                },
-                group.gap(),
-                alignment(group.alignment()),
-                layouts,
-            )),
+            NodeLayout::Flex(
+                Flex::new(
+                    group.axis(),
+                    length(size.w),
+                    length(size.h),
+                    solve::Padding {
+                        top: group.padding_y(),
+                        right: group.padding_x(),
+                        bottom: group.padding_y(),
+                        left: group.padding_x(),
+                    },
+                    group.gap(),
+                    alignment(group.alignment()),
+                    layouts,
+                )
+                .measure(group.measure()),
+            ),
             declared(size),
             nodes,
             true,

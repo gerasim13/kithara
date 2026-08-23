@@ -8,6 +8,10 @@ pub(crate) struct Consts;
 
 impl Consts {
     pub(crate) const HEIGHT: f32 = 720.0;
+    /// The smallest window the gallery opens to, so a page can be dragged
+    /// down to the room its adaptive and revealed cells answer.
+    pub(crate) const MIN_HEIGHT: f32 = 320.0;
+    pub(crate) const MIN_WIDTH: f32 = 400.0;
     pub(crate) const STRESS_TICK_MS: u64 = 16;
     pub(crate) const WIDTH: f32 = 1300.0;
 }
@@ -326,20 +330,8 @@ const ASSETS: &[(&str, &str)] = &[
         include_str!("assets/modules/tabs/menu-notes.kmodule.ron"),
     ),
     (
-        "modules/tabs/micro-4a.kmodule.ron",
-        include_str!("assets/modules/tabs/micro-4a.kmodule.ron"),
-    ),
-    (
-        "modules/tabs/micro-4b.kmodule.ron",
-        include_str!("assets/modules/tabs/micro-4b.kmodule.ron"),
-    ),
-    (
-        "modules/tabs/micro-4c.kmodule.ron",
-        include_str!("assets/modules/tabs/micro-4c.kmodule.ron"),
-    ),
-    (
-        "modules/tabs/micro-4d.kmodule.ron",
-        include_str!("assets/modules/tabs/micro-4d.kmodule.ron"),
+        "modules/tabs/micro-notes.kmodule.ron",
+        include_str!("assets/modules/tabs/micro-notes.kmodule.ron"),
     ),
     (
         "modules/tabs/mixer-1d.kmodule.ron",

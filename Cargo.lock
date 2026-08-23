@@ -4689,6 +4689,7 @@ dependencies = [
  "js-sys",
  "kithara-apple",
  "kithara-bufpool",
+ "kithara-mpa",
  "kithara-platform",
  "kithara-resampler",
  "kithara-storage",
@@ -4721,6 +4722,7 @@ dependencies = [
  "delegate",
  "derive_more",
  "fieldwork",
+ "fs4",
  "glob",
  "proc-macro2",
  "quote",
@@ -4971,6 +4973,16 @@ dependencies = [
  "wasm-bindgen-futures",
  "wasm-bindgen-test",
  "web-sys",
+]
+
+[[package]]
+name = "kithara-mpa"
+version = "0.0.1-alpha4"
+dependencies = [
+ "kithara-workspace-hack",
+ "num-traits",
+ "symphonia-core 0.6.0",
+ "tracing",
 ]
 
 [[package]]
@@ -8929,7 +8941,7 @@ checksum = "1758d6c853020a7244de03cc3e0185eaea3f58715122422dd3cc7452e6d4c16a"
 dependencies = [
  "lazy_static",
  "symphonia-bundle-flac",
- "symphonia-bundle-mp3 0.6.0",
+ "symphonia-bundle-mp3",
  "symphonia-codec-aac",
  "symphonia-codec-adpcm",
  "symphonia-codec-alac",
@@ -8959,16 +8971,8 @@ dependencies = [
 [[package]]
 name = "symphonia-bundle-mp3"
 version = "0.6.0"
-dependencies = [
- "log",
- "symphonia-bundle-mp3 0.6.0 (git+https://github.com/pdeljanov/Symphonia.git?rev=980bf5830a90e069fd64641d9c38f067ab772a24)",
- "symphonia-core 0.6.0",
-]
-
-[[package]]
-name = "symphonia-bundle-mp3"
-version = "0.6.0"
-source = "git+https://github.com/pdeljanov/Symphonia.git?rev=980bf5830a90e069fd64641d9c38f067ab772a24#980bf5830a90e069fd64641d9c38f067ab772a24"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "350f1f2f2e19ad4dd315db94304d1eb361b29af070681f94e51b8fdaad769546"
 dependencies = [
  "lazy_static",
  "log",
@@ -9056,7 +9060,8 @@ dependencies = [
 [[package]]
 name = "symphonia-core"
 version = "0.6.0"
-source = "git+https://github.com/pdeljanov/Symphonia.git?rev=980bf5830a90e069fd64641d9c38f067ab772a24#980bf5830a90e069fd64641d9c38f067ab772a24"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "95ec293b5f288383b72a7bffcade6b2860b642cf66f28b3bd5967349a49938b1"
 dependencies = [
  "bitflags 2.13.1",
  "bytemuck",

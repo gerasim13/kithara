@@ -11,7 +11,6 @@
                 size: (w: Fixed(232.0), h: Fill),
                 read: Model(id: "library.tree"),
                 query: Model(id: "library.query"),
-                adaptive: (priority: Required),
             ),
             Column(
                 size: (w: Fill, h: Fill),
@@ -23,7 +22,6 @@
                         write: Model(id: "library.scope"),
                         scope_items: ["ZVUK", "LOCAL"],
                         scope: Model(id: "library.scope"),
-                        adaptive: (priority: Required),
                     ),
                     Table(
                         id: "table",
@@ -37,7 +35,6 @@
                             (id: "key", label: "@track_list.column.key", style: Mono, width: 56.0),
                             (id: "time", label: "@track_list.column.time", style: Time, width: 70.0),
                         ],
-                        adaptive: (priority: Required),
                     ),
                 ],
             ),

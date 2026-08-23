@@ -7,11 +7,16 @@ use num_traits::cast::AsPrimitive;
 use super::node::Node;
 use crate::{
     layout::Axis,
+    module::MeasureAxis,
+    render::document::Band,
     solve::{self, Distribution, Input, Measure},
 };
 
 pub(crate) struct Flex {
     axis: Axis,
+    /// The axis whose room decides which children stand, when they come and go
+    /// with the room at all.
+    measure: Option<MeasureAxis>,
     width: solve::Length,
     height: solve::Length,
     padding: solve::Padding,
@@ -23,6 +28,7 @@ pub(crate) struct Flex {
 
 #[derive(Clone, Copy)]
 pub(crate) struct ChildLayout {
+    band: Band,
     natural: solve::Size<solve::Length>,
     declared: Option<solve::Size<solve::Length>>,
     main_minimum: Option<f32>,
@@ -35,6 +41,7 @@ impl ChildLayout {
         main_minimum: Option<f32>,
     ) -> Self {
         Self {
+            band: Band::ALWAYS,
             natural,
             declared: None,
             main_minimum,
@@ -48,11 +55,18 @@ impl ChildLayout {
         main_weight: f32,
     ) -> Self {
         Self {
+            band: Band::ALWAYS,
             natural,
             declared: Some(declared),
             main_minimum: None,
             main_weight: Some(main_weight),
         }
+    }
+
+    /// The band of room this child stands in.
+    pub(crate) const fn within(mut self, band: Band) -> Self {
+        self.band = band;
+        self
     }
 }
 
@@ -68,6 +82,7 @@ impl Flex {
     ) -> Self {
         Self {
             axis,
+            measure: None,
             width,
             height,
             padding,
@@ -76,6 +91,27 @@ impl Flex {
             main_alignment: solve::Alignment::Start,
             children,
         }
+    }
+
+    /// Names the axis whose room decides which children stand.
+    pub(crate) const fn measure(mut self, axis: Option<MeasureAxis>) -> Self {
+        self.measure = axis;
+        self
+    }
+
+    /// Which children stand in the room this flow turned out to have.
+    fn standing(&self, limits: solve::Limits) -> Vec<bool> {
+        let Some(axis) = self.measure else {
+            return vec![true; self.children.len()];
+        };
+        let room = match axis {
+            MeasureAxis::Width => limits.max().width,
+            MeasureAxis::Height => limits.max().height,
+        };
+        self.children
+            .iter()
+            .map(|child| child.band.stands(room))
+            .collect()
     }
 
     pub(crate) const fn align_main(mut self, alignment: solve::Alignment) -> Self {
@@ -91,10 +127,16 @@ impl Flex {
     ) -> solve::Size {
         let outer_limits = limits.width(self.width).height(self.height);
         let inner_limits = outer_limits.shrink(self.padding).loose();
-        let items = children
+        let standing = self.standing(outer_limits);
+        let slots: Vec<usize> = standing
             .iter()
-            .zip(&self.children)
-            .map(|(_child, layout)| {
+            .enumerate()
+            .filter_map(|(index, on)| on.then_some(index))
+            .collect();
+        let items = slots
+            .iter()
+            .map(|slot| {
+                let layout = &self.children[*slot];
                 let declared = layout.declared.unwrap_or(layout.natural);
                 layout.main_weight.map_or_else(
                     || solve::Item::new(declared, layout.main_minimum),
@@ -105,6 +147,7 @@ impl Flex {
         let mut measure = MasonryMeasure {
             children,
             layouts: &self.children,
+            slots: &slots,
             ctx,
         };
         let Distribution { size, mut items } = solve::resolve(
@@ -142,7 +185,21 @@ impl Flex {
         }
         let fitted = fit_padding(self.padding, size, outer_limits.max());
 
-        for (child, item) in measure.children.iter_mut().zip(items) {
+        // Every child is placed, standing or not: a cell the room did not
+        // reach takes an empty box, which draws nothing and answers nothing.
+        for (index, on) in standing.iter().enumerate() {
+            if !on {
+                let child = &mut measure.children[index];
+                let none = solve::Limits::new(solve::Size::ZERO, solve::Size::ZERO);
+                Node::set_child_limits(measure.ctx, child, none);
+                measure
+                    .ctx
+                    .run_layout(child, &BoxConstraints::tight(MasonrySize::ZERO));
+                measure.ctx.place_child(child, Point::ORIGIN);
+            }
+        }
+        for (slot, item) in slots.iter().zip(items) {
+            let child = &mut measure.children[*slot];
             let exact = solve::Limits::new(item.size, item.size);
             Node::set_child_limits(measure.ctx, child, exact);
             measure.ctx.run_layout(
@@ -171,17 +228,21 @@ impl Flex {
 struct MasonryMeasure<'a, 'ctx> {
     children: &'a mut [WidgetPod<Node>],
     layouts: &'a [ChildLayout],
+    /// Which child each item the solver asks about actually is: the solver sees
+    /// only the cells that stand.
+    slots: &'a [usize],
     ctx: &'a mut LayoutCtx<'ctx>,
 }
 
 impl Measure for MasonryMeasure<'_, '_> {
     fn measure(&mut self, index: usize, limits: &solve::Limits) -> solve::Size {
-        let declared = self.layouts[index].declared;
+        let slot = self.slots[index];
+        let declared = self.layouts[slot].declared;
         let child_limits = declared.map_or(*limits, |declared| {
             limits.width(declared.width).height(declared.height).loose()
         });
         let child_limits = normalized(child_limits);
-        let child = &mut self.children[index];
+        let child = &mut self.children[slot];
         Node::set_child_limits(self.ctx, child, child_limits);
         let intrinsic = self.ctx.run_layout(child, &box_constraints(child_limits));
         let intrinsic = solve::Size::new(intrinsic.width.as_(), intrinsic.height.as_());

@@ -22,17 +22,18 @@ use tracing::warn;
 /// drains the bin and pays the frees.
 ///
 /// Overflow leaks the reference instead of freeing it on the reader, mirroring
-/// the availability-index bin: it only happens while writers are idle, which
-/// is exactly when generations are not being replaced, so the leak pins a
-/// snapshot that is still the live one.
+/// the availability-index bin - and, like that bin, it leaks under ordinary
+/// playback rather than only at the margins: parks follow *reads* at
+/// produce-tick cadence, drains follow *writes*, and nothing bounds that
+/// ratio. `mem::forget` makes each overflow permanent.
 pub(super) struct Retired {
     snapshots: ArrayQueue<Arc<RangeSet<u64>>>,
     overflowed: AtomicBool,
 }
 
-/// Capacity of the retire queue. Reads park at produce-tick cadence and
-/// write-side drains run at chunk-write cadence; 256 spans that gap with room,
-/// and overflow degrades to a leak, never to a free on the reader.
+/// Capacity of the retire queue. It buys time, not a bound: no capacity can
+/// span an unbounded read:write ratio, so raising this number only moves the
+/// overflow threshold.
 pub(super) const RETIRE_CAPACITY: usize = 256;
 
 impl Retired {

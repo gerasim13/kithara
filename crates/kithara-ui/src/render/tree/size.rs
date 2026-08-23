@@ -1,5 +1,5 @@
 #[cfg(test)]
-use crate::size::{Hidden, SizeSpec, compiled_node_size_with_hidden as node_size};
+use crate::size::{SizeSpec, Snapshot, compiled_node_size_with_hidden as node_size};
 
 #[cfg(test)]
 mod tests {
@@ -9,26 +9,61 @@ mod tests {
     use crate::{
         builtin,
         compile::{CompiledUi, compile},
+        expand::{Binding, BlockSpec},
         ids::EndpointId,
         registry::{EndpointCategory, EndpointDesc, EndpointRegistry, ValueKind},
-        size::{Dim, VISIBLE},
+        size::{DEFAULTS, Dim},
         source::{MemResolver, UiConfig},
     };
 
-    struct Registry(EndpointDesc);
+    struct Registry {
+        flag: EndpointDesc,
+        scalar: EndpointDesc,
+        trigger: EndpointDesc,
+    }
 
     impl Default for Registry {
         fn default() -> Self {
-            Self(EndpointDesc::new(ValueKind::Bool))
+            Self {
+                flag: EndpointDesc::new(ValueKind::Bool),
+                scalar: EndpointDesc::new(ValueKind::Scalar),
+                trigger: EndpointDesc::new(ValueKind::Trigger),
+            }
         }
     }
 
     impl EndpointRegistry for Registry {
         fn endpoint(&self, category: EndpointCategory, id: &EndpointId) -> Option<&EndpointDesc> {
             match (category, id.0.as_str()) {
-                (EndpointCategory::Model, "ui.block.hidden") => Some(&self.0),
+                (EndpointCategory::Model, "ui.block.hidden") => Some(&self.flag),
+                (EndpointCategory::Model, "ui.measure") => Some(&self.scalar),
+                (EndpointCategory::Command, "ui.press") => Some(&self.trigger),
                 _ => None,
             }
+        }
+    }
+
+    struct AllHidden;
+
+    impl Snapshot for AllHidden {
+        fn hidden(&self, _: &BlockSpec) -> bool {
+            true
+        }
+
+        fn measure(&self, _: &Binding) -> Option<f32> {
+            None
+        }
+    }
+
+    struct Measured(f32);
+
+    impl Snapshot for Measured {
+        fn hidden(&self, _: &BlockSpec) -> bool {
+            false
+        }
+
+        fn measure(&self, _: &Binding) -> Option<f32> {
+            Some(self.0)
         }
     }
 
@@ -51,11 +86,51 @@ mod tests {
         .unwrap()
     }
 
-    fn size_of(ui: &CompiledUi, hidden: Hidden<'_>) -> SizeSpec {
-        node_size(&ui.root, builtin::skin_doc(), hidden)
+    fn size_of(ui: &CompiledUi, snapshot: &dyn Snapshot) -> SizeSpec {
+        node_size(&ui.root, builtin::skin_doc(), snapshot)
     }
 
-    const HIDDEN: Hidden<'static> = &|_| true;
+    const HIDDEN: &dyn Snapshot = &AllHidden;
+
+    #[kithara::test]
+    fn an_adaptive_bank_is_the_size_of_the_branch_its_measure_selects() {
+        let ui = compiled(
+            r#"(schema: "kithara.module", version: 1, id: "mixer",
+                root: Popover(
+                    id: "menu",
+                    open: Model(id: "ui.block.hidden"),
+                    anchor: Pressable(
+                        id: "press",
+                        press: Command(id: "ui.press"),
+                        child: Adaptive(
+                            id: "bank",
+                            measure: Read(Model(id: "ui.measure")),
+                            base: Row(id: "narrow", gap: 0.0, pad: 0.0, children: [
+                                Knob(id: "low"),
+                            ]),
+                            steps: [
+                                (from: 4.0, node: Row(id: "wide", gap: 0.0, pad: 0.0, children: [
+                                    Knob(id: "low-4"),
+                                    Knob(id: "high-4"),
+                                ])),
+                            ],
+                        ),
+                    ),
+                    content: Knob(id: "pop"),
+                ))"#,
+        );
+
+        let three = size_of(&ui, &Measured(3.0));
+        let four = size_of(&ui, &Measured(4.0));
+
+        assert_ne!(three, four, "each branch measures for itself");
+        assert_eq!(
+            size_of(&ui, DEFAULTS),
+            three,
+            "an unread measure takes base"
+        );
+        assert!(four.w.min() > three.w.min());
+    }
 
     #[kithara::test]
     fn a_hidden_block_leaves_the_module_the_size_it_has_without_it() {
@@ -74,10 +149,10 @@ mod tests {
                 ]))"#,
         );
 
-        assert_eq!(size_of(&full, HIDDEN), size_of(&trimmed, VISIBLE));
+        assert_eq!(size_of(&full, HIDDEN), size_of(&trimmed, DEFAULTS));
         assert_ne!(
-            size_of(&full, VISIBLE),
-            size_of(&trimmed, VISIBLE),
+            size_of(&full, DEFAULTS),
+            size_of(&trimmed, DEFAULTS),
             "a visible block takes space",
         );
     }
@@ -101,7 +176,7 @@ mod tests {
                 ]))"#,
         );
 
-        assert_eq!(size_of(&full, HIDDEN), size_of(&trimmed, VISIBLE));
+        assert_eq!(size_of(&full, HIDDEN), size_of(&trimmed, DEFAULTS));
     }
 
     #[kithara::test]
@@ -118,8 +193,8 @@ mod tests {
                 root: Slot(id: "extra"))"#,
         );
 
-        assert_eq!(size_of(&full, HIDDEN), size_of(&empty, VISIBLE));
-        assert_ne!(size_of(&full, VISIBLE), size_of(&empty, VISIBLE));
+        assert_eq!(size_of(&full, HIDDEN), size_of(&empty, DEFAULTS));
+        assert_ne!(size_of(&full, DEFAULTS), size_of(&empty, DEFAULTS));
     }
 
     /// Both hosts measure a stack's first layer and hand every layer that box:
@@ -139,7 +214,7 @@ mod tests {
                 root: Stage(id: "scene", children: [Knob(id: "volume")]))"#,
         );
 
-        assert_eq!(size_of(&stage, VISIBLE), size_of(&alone, VISIBLE));
+        assert_eq!(size_of(&stage, DEFAULTS), size_of(&alone, DEFAULTS));
     }
 
     /// The same two knobs in a column do add up, which is what makes the
@@ -161,7 +236,7 @@ mod tests {
                 ]))"#,
         );
 
-        assert_ne!(size_of(&stage, VISIBLE), size_of(&column, VISIBLE));
+        assert_ne!(size_of(&stage, DEFAULTS), size_of(&column, DEFAULTS));
     }
 
     #[kithara::test]
@@ -196,6 +271,6 @@ mod tests {
             size_of(&ui, HIDDEN),
             SizeSpec::new(Dim::Fixed(0.0), Dim::Fixed(0.0)),
         );
-        assert_ne!(size_of(&ui, VISIBLE), size_of(&ui, HIDDEN));
+        assert_ne!(size_of(&ui, DEFAULTS), size_of(&ui, HIDDEN));
     }
 }

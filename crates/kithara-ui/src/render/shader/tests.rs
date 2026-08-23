@@ -133,7 +133,11 @@ fn spec(ui: &CompiledUi) -> ShaderSpec {
             ExpandedNode::Object { child, .. }
             | ExpandedNode::Optional { child, .. }
             | ExpandedNode::Pressable { child, .. }
+            | ExpandedNode::Reveal { child, .. }
             | ExpandedNode::Scroll { child, .. } => find(child),
+            ExpandedNode::Adaptive { base, steps, .. } => {
+                find(base).or_else(|| steps.iter().find_map(|(_, branch)| find(branch)))
+            }
             ExpandedNode::Popover { anchor, .. } => find(anchor),
             ExpandedNode::Row { children, .. }
             | ExpandedNode::Column { children, .. }

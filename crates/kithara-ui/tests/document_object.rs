@@ -15,10 +15,11 @@ use kithara_ui::{
     geom::{Pt, Transform},
     ids::InternId,
     layout::Axis,
+    module::MeasureAxis,
     registry::{EndpointCategory, EndpointDesc, ValueKind},
     render::{
         Clock, InputOwner, ReadValue, Reads,
-        document::{Ctx, Group, Host, Module, Popover, render},
+        document::{Ctx, Group, GroupMount, Host, Measured, Module, Popover, SplitMount, render},
     },
     size::SizeSpec,
     source::UiConfig,
@@ -44,8 +45,17 @@ impl Spy<'_> {
 impl Host for Spy<'_> {
     type Output = Vec<Placed>;
 
-    fn split(&mut self, _axis: Axis, children: Vec<(f32, SizeSpec, Self::Output)>) -> Self::Output {
-        Self::flatten(children.into_iter().map(|(_, _, output)| output))
+    fn split(
+        &mut self,
+        _axis: Axis,
+        _measure: Option<MeasureAxis>,
+        children: Vec<SplitMount<Self::Output>>,
+    ) -> Self::Output {
+        Self::flatten(children.into_iter().map(|cell| cell.output))
+    }
+
+    fn measured(&mut self, _plan: Measured, branches: Vec<Self::Output>) -> Self::Output {
+        Self::flatten(branches)
     }
 
     fn module(&mut self, _module: Module<'_>, content: Option<Self::Output>) -> Self::Output {
@@ -55,9 +65,9 @@ impl Host for Spy<'_> {
     fn group(
         &mut self,
         _group: Group<'_>,
-        children: Vec<(Option<f32>, Self::Output)>,
+        children: Vec<GroupMount<Self::Output>>,
     ) -> Self::Output {
-        Self::flatten(children.into_iter().map(|(_, output)| output))
+        Self::flatten(children.into_iter().map(|cell| cell.output))
     }
 
     fn popover(

@@ -44,6 +44,7 @@ use crate::{
     interact::Hit,
     render::{Mark, ScalarRange, StereoLevels},
     shaping::TextContext,
+    size::length,
     solve::{Length, Size},
 };
 
@@ -612,11 +613,11 @@ impl ControlPainter for Summary {
         self.paint(list, text, data, bounds);
     }
 
-    /// A deck's headline is wider than the controls beside it by a factor the
-    /// skin names, so `Fill` would divide the row evenly and the deck would be
-    /// wrong.
+    /// A deck's headline takes the box its skin names: it is as wide as the
+    /// words it holds, not a share of the row it stands in.
     fn length(&self, _text: &mut TextContext, _data: &Self::Data) -> Size<Length> {
-        Self::declared_length(self.metrics())
+        let size = self.metrics().summary_size;
+        Size::new(length(size.w), length(size.h))
     }
 }
 

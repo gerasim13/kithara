@@ -21,7 +21,7 @@ use crate::{
         HostedControlPlan, IcedSkin, Resolving, Skin, UiEvent, document::Ctx, frame_overlay,
         picker_hits,
     },
-    size::{Dim, Hidden, SizeSpec, is_hidden},
+    size::{Dim, SizeSpec, Snapshot, branch, is_hidden},
     skin::ColorRole,
 };
 
@@ -93,18 +93,12 @@ pub(super) fn frame_tone(
     )
 }
 
-#[cfg(test)]
-pub(super) fn content_size(node: &ExpandedNode, skin: &Skin) -> (Length, Length) {
-    effective_size(node, skin).map_or((Length::Fill, Length::Fill), |size| {
-        (
-            length_for(size.w, Length::Fill),
-            length_for(size.h, Length::Fill),
-        )
-    })
-}
-
-pub(super) fn effective_size(node: &ExpandedNode, skin: &Skin) -> Option<SizeSpec> {
-    crate::size::effective_size(node, skin.document())
+pub(super) fn effective_size(
+    node: &ExpandedNode,
+    skin: &Skin,
+    snapshot: &dyn Snapshot,
+) -> Option<SizeSpec> {
+    crate::size::effective_size(node, skin.document(), snapshot)
 }
 
 pub(super) fn apply_size<'a>(
@@ -158,6 +152,11 @@ pub(super) enum HostedLayout {
     Stage {
         children: Vec<Self>,
     },
+    /// Branches that all keep a layout node, of which one is drawn. The rest
+    /// keep an empty one, so a branch holds its place whether it stands or not.
+    Measured {
+        children: Vec<Self>,
+    },
     Wrapper {
         sized: bool,
         child: Box<Self>,
@@ -190,7 +189,7 @@ impl HostedLayout {
     }
 
     pub(super) fn new(node: &ExpandedNode, ctx: Ctx<'_, '_>, skin: &Skin) -> Self {
-        let hidden: Hidden<'_> = &|block| ctx.flag(Some(&block.hidden));
+        let snapshot: &dyn Snapshot = &ctx;
         match node {
             ExpandedNode::Row {
                 size,
@@ -211,25 +210,42 @@ impl HostedLayout {
                 framed: frame.is_some(),
                 children: children
                     .iter()
-                    .filter(|child| !is_hidden(*child, hidden))
+                    .filter(|child| !is_hidden(*child, snapshot))
                     .map(|child| Self::new(child, ctx, skin))
                     .collect(),
             },
-            ExpandedNode::Object { child, .. } | ExpandedNode::Optional { child, .. } => {
-                Self::new(child, ctx, skin)
-            }
+            ExpandedNode::Object { child, .. }
+            | ExpandedNode::Optional { child, .. }
+            | ExpandedNode::Reveal { child, .. } => Self::new(child, ctx, skin),
+            // An axis names a room only the layout pass knows, so every branch
+            // is mounted and the plan keeps them all. A measure that is read
+            // has its answer here, and only the branch it names is mounted.
+            ExpandedNode::Adaptive {
+                measure,
+                base,
+                steps,
+                ..
+            } => match measure.axis() {
+                Some(_) => Self::Measured {
+                    children: std::iter::once(base.as_ref())
+                        .chain(steps.iter().map(|(_, node)| node))
+                        .map(|node| Self::new(node, ctx, skin))
+                        .collect(),
+                },
+                None => Self::new(branch(measure, base, steps, snapshot), ctx, skin),
+            },
             ExpandedNode::Slot { size, children, .. } => Self::Slot {
                 sized: size.is_some(),
                 children: children
                     .iter()
-                    .filter(|child| !is_hidden(*child, hidden))
+                    .filter(|child| !is_hidden(*child, snapshot))
                     .map(|child| Self::new(child, ctx, skin))
                     .collect(),
             },
             ExpandedNode::Stage { children, .. } => Self::Stage {
                 children: children
                     .iter()
-                    .filter(|child| !is_hidden(*child, hidden))
+                    .filter(|child| !is_hidden(*child, snapshot))
                     .map(|child| Self::new(child, ctx, skin))
                     .collect(),
             },
@@ -244,18 +260,18 @@ impl HostedLayout {
                     ctx.scope(read.as_ref()),
                     Resolving { ctx, skin },
                 );
-                if effective_size(node, skin).is_none() {
+                if effective_size(node, skin, snapshot).is_none() {
                     Self::SelfMeasuredControl(control)
                 } else {
                     Self::Control(control)
                 }
             }
             ExpandedNode::Popover { anchor, .. } => Self::Wrapper {
-                sized: effective_size(node, skin).is_some(),
+                sized: effective_size(node, skin, snapshot).is_some(),
                 child: Box::new(Self::new(anchor, ctx, skin)),
             },
             ExpandedNode::Pressable { child, .. } => Self::Wrapper {
-                sized: effective_size(node, skin).is_some(),
+                sized: effective_size(node, skin, snapshot).is_some(),
                 child: Box::new(Self::new(child, ctx, skin)),
             },
             ExpandedNode::Scroll { child, .. } => Self::Scroll {
@@ -281,6 +297,7 @@ impl HostedLayout {
                 }
             }
             Self::Group { children, .. }
+            | Self::Measured { children }
             | Self::Slot { children, .. }
             | Self::Stage { children, .. } => {
                 for child in children {
@@ -370,6 +387,7 @@ impl HostedLayout {
     fn append_pickers<'a>(&'a self, pickers: &mut Vec<(&'a str, usize, f32)>) {
         match self {
             Self::Group { children, .. }
+            | Self::Measured { children }
             | Self::Slot { children, .. }
             | Self::Stage { children, .. } => {
                 for child in children {
@@ -470,7 +488,7 @@ impl HostedLayout {
                     child.append_targets(layout, cursor, engine, targets);
                 }
             }
-            Self::Stage { children } => {
+            Self::Measured { children } | Self::Stage { children } => {
                 for (child, layout) in children.iter().zip(layout.children()) {
                     child.append_targets(layout, cursor, engine, targets);
                 }
@@ -518,6 +536,7 @@ impl HostedLayout {
             } if header == path => Some(module),
             Self::Chrome { .. }
             | Self::Group { .. }
+            | Self::Measured { .. }
             | Self::Scroll { .. }
             | Self::Slot { .. }
             | Self::Stage { .. }
@@ -587,9 +606,10 @@ mod tests {
     use super::*;
     use crate::{
         builtin,
-        expand::{Binding, BindingKind, ControlSpec},
+        expand::{Binding, BindingKind, BlockSpec, ControlSpec, MeasureSpec},
         ids::{InternId, Interner, SourceUri},
-        module::{AdaptivePolicy, PopoverAlign, PopoverAt},
+        module::{PopoverAlign, PopoverAt},
+        size::{DEFAULTS, Snapshot},
     };
 
     #[kithara::test]
@@ -621,40 +641,38 @@ mod tests {
         );
     }
 
-    #[kithara::test]
-    fn content_size_follows_both_declared_axes() {
+    fn timed(size: Option<SizeSpec>) -> (Skin, ExpandedNode) {
         let origin = SourceUri("tree-test.ron".to_owned());
         let skin =
             Skin::resolve(builtin::skin_doc().clone(), builtin::text_doc(), &origin).unwrap();
         let mut interner = Interner::new(1024);
         let id = interner.intern("cell", &origin).unwrap();
-        let node = |size| ExpandedNode::Control {
+        let node = ExpandedNode::Control {
             path: id,
             id,
             spec: ControlSpec::Time,
             size,
             read: None,
             write: None,
-            adaptive: AdaptivePolicy::default(),
         };
+        (skin, node)
+    }
+
+    #[kithara::test]
+    fn a_declared_box_reaches_both_axes_unchanged() {
+        let declared = SizeSpec::new(Dim::Fixed(40.0), Dim::Shrink);
+        let (skin, node) = timed(Some(declared));
+
+        assert_eq!(effective_size(&node, &skin, DEFAULTS), Some(declared));
+    }
+
+    #[kithara::test]
+    fn a_control_declaring_no_box_takes_the_one_its_skin_names() {
+        let (skin, node) = timed(None);
 
         assert_eq!(
-            content_size(&node(Some(SizeSpec::new(Dim::Shrink, Dim::Shrink))), &skin),
-            (Length::Shrink, Length::Shrink)
-        );
-        assert_eq!(
-            content_size(
-                &node(Some(SizeSpec::new(Dim::Fixed(40.0), Dim::Shrink))),
-                &skin
-            ),
-            (Length::Fixed(40.0), Length::Shrink)
-        );
-        assert_eq!(
-            content_size(&node(None), &skin),
-            (
-                length_for(skin.document().deck.time_size.w, Length::Fill),
-                length_for(skin.document().deck.time_size.h, Length::Fill)
-            )
+            effective_size(&node, &skin, DEFAULTS),
+            Some(skin.document().deck.time_size)
         );
     }
 
@@ -672,8 +690,52 @@ mod tests {
             size: Some(size),
             read: None,
             write: None,
-            adaptive: AdaptivePolicy::default(),
         }
+    }
+
+    struct Measured(Option<f32>);
+
+    impl Snapshot for Measured {
+        fn hidden(&self, _: &BlockSpec) -> bool {
+            false
+        }
+
+        fn measure(&self, _: &Binding) -> Option<f32> {
+            self.0
+        }
+    }
+
+    #[kithara::test]
+    fn a_wrapper_over_an_adaptive_node_measures_the_selected_branch() {
+        let origin = SourceUri("tree-test.ron".to_owned());
+        let skin =
+            Skin::resolve(builtin::skin_doc().clone(), builtin::text_doc(), &origin).unwrap();
+        let mut interner = Interner::new(1024);
+        let narrow = SizeSpec::new(Dim::Fixed(34.0), Dim::Fixed(45.0));
+        let wide = SizeSpec::new(Dim::Fixed(68.0), Dim::Fixed(45.0));
+        let pressable = ExpandedNode::Pressable {
+            path: interner.intern("bank", &origin).unwrap(),
+            press: model(interner.intern("deck.eq.menu", &origin).unwrap()),
+            child: Box::new(ExpandedNode::Adaptive {
+                measure: MeasureSpec::Read(model(
+                    interner.intern("deck.eq.bands", &origin).unwrap(),
+                )),
+                size: None,
+                base: Box::new(control(&mut interner, &origin, "three", narrow)),
+                steps: vec![(4.0, control(&mut interner, &origin, "four", wide))],
+            }),
+        };
+
+        assert_eq!(
+            effective_size(&pressable, &skin, &Measured(Some(4.0))),
+            Some(wide),
+            "a press target takes the size of the branch that is drawn"
+        );
+        assert_eq!(
+            effective_size(&pressable, &skin, &Measured(None)),
+            Some(narrow),
+            "nothing read leaves the base branch"
+        );
     }
 
     fn model(id: InternId) -> Binding {
@@ -708,11 +770,11 @@ mod tests {
         };
 
         assert_eq!(
-            effective_size(&popover, &skin),
+            effective_size(&popover, &skin, DEFAULTS),
             Some(anchor),
             "the content is laid out in the overlay and never in flow"
         );
-        assert_eq!(effective_size(&pressable, &skin), Some(content));
+        assert_eq!(effective_size(&pressable, &skin, DEFAULTS), Some(content));
     }
 
     #[kithara::test]

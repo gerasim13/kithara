@@ -1,16 +1,15 @@
 use crate::{
-    atoms::design::quad::center_y,
     draw::{DrawListBuilder, Pt, Rect, Rgba, Transform},
     module::DeckSummaryStyle,
     render::Skin,
     shaping::TextContext,
-    skin::{ColorRole, DeckSkin, FontFamily, TextRoleSkin},
-    solve::{Length, Size},
+    skin::{ColorRole, DeckSkin, FontFamily, FontSkin, TextRoleSkin},
 };
 
 /// The deck's headline: what is loaded, and where it came from.
 ///
-/// The compact look puts the two beside each other; the full one stacks them.
+/// Both looks stack the two words; the compact one leads with the source and
+/// takes its type straight from the skin's roles.
 #[derive(fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
 pub(crate) struct Summary {
@@ -33,59 +32,31 @@ pub(crate) struct Loaded {
 }
 
 impl Summary {
-    /// The box a summary asks for: a weighted share of its row, and the height
-    /// the skin fixes. Said once here because both hosts settle it — the
-    /// retained one while it is still walking the document, before it holds a
-    /// painter at all.
-    pub(crate) const fn declared_length(metrics: DeckSkin) -> Size<Length> {
-        Size::new(
-            Length::FillPortion(metrics.summary_fill),
-            Length::Fixed(metrics.summary_height),
-        )
-    }
-
     pub(crate) fn new(style: DeckSummaryStyle, skin: &Skin) -> Self {
         let metrics = skin.deck;
-        let compact = style == DeckSummaryStyle::Micro;
-        let role = |font: crate::skin::FontSkin, family, color| TextRoleSkin {
+        let role = |font: FontSkin, family, color| TextRoleSkin {
             color,
             font: family,
             size: font.size,
             spacing: 0.0,
             weight: font.weight,
         };
+        let (source_role, title_role) = if style == DeckSummaryStyle::Micro {
+            (metrics.micro_source, metrics.micro_title)
+        } else {
+            (
+                role(metrics.artist, FontFamily::Sans, ColorRole::TextDim),
+                role(metrics.title, FontFamily::Display, ColorRole::Text),
+            )
+        };
         Self {
             metrics,
             panel: skin.palette.bg_panel,
-            source: if compact {
-                skin.palette.muted
-            } else {
-                skin.palette.text_dim
-            },
-            source_role: role(
-                if compact {
-                    metrics.micro_source
-                } else {
-                    metrics.artist
-                },
-                FontFamily::Sans,
-                if compact {
-                    ColorRole::Muted
-                } else {
-                    ColorRole::TextDim
-                },
-            ),
+            source: skin.rgba(source_role.color),
+            source_role,
             style,
-            title: skin.palette.text,
-            title_role: role(
-                if compact {
-                    metrics.micro_title
-                } else {
-                    metrics.title
-                },
-                FontFamily::Display,
-                ColorRole::Text,
-            ),
+            title: skin.rgba(title_role.color),
+            title_role,
         }
     }
 
@@ -105,45 +76,43 @@ impl Summary {
         };
         let title = text.shape(&data.title, self.title_role, None);
         let source = text.shape(&data.source, self.source_role, None);
-        let mut content = list.child();
-        if self.style == DeckSummaryStyle::Micro {
-            content.text(
-                &title,
-                &data.title,
-                Transform::translate(Pt {
-                    x: inner.x,
-                    y: center_y(inner, &title),
-                }),
-                self.title,
-            );
-            content.text(
-                &source,
-                &data.source,
-                Transform::translate(Pt {
-                    x: inner.x + title.width() + self.metrics.micro_summary_gap,
-                    y: center_y(inner, &source),
-                }),
-                self.source,
-            );
+        let compact = self.style == DeckSummaryStyle::Micro;
+        let gap = if compact {
+            self.metrics.micro_summary_gap
         } else {
-            let stacked = title.height() + self.metrics.readout_gap + source.height();
-            let y = inner.y + (inner.h - stacked) / 2.0;
-            content.text(
-                &title,
-                &data.title,
-                Transform::translate(Pt { x: inner.x, y }),
-                self.title,
-            );
-            content.text(
-                &source,
-                &data.source,
-                Transform::translate(Pt {
-                    x: inner.x,
-                    y: y + title.height() + self.metrics.readout_gap,
-                }),
-                self.source,
-            );
-        }
+            self.metrics.readout_gap
+        };
+        // The compact deck names where the track came from first and the track
+        // under it; the full one leads with the track.
+        let [upper, lower] = if compact {
+            [
+                (&source, &data.source, self.source),
+                (&title, &data.title, self.title),
+            ]
+        } else {
+            [
+                (&title, &data.title, self.title),
+                (&source, &data.source, self.source),
+            ]
+        };
+        let stacked = upper.0.height() + gap + lower.0.height();
+        let y = inner.y + (inner.h - stacked) / 2.0;
+        let mut content = list.child();
+        content.text(
+            upper.0,
+            upper.1,
+            Transform::translate(Pt { x: inner.x, y }),
+            upper.2,
+        );
+        content.text(
+            lower.0,
+            lower.1,
+            Transform::translate(Pt {
+                x: inner.x,
+                y: y + upper.0.height() + gap,
+            }),
+            lower.2,
+        );
         list.clip(inner, content.finish());
     }
 }

@@ -4,8 +4,7 @@ use kithara_ui::{
     ids::SourceUri,
     layout::{FrameSides, LayoutNode, parse_layout},
     module::{
-        ChipStyle, ControlNode, GlyphStyle, IconName, PopoverAt, Priority, TextStyle, Tone,
-        parse_module,
+        ChipStyle, ControlNode, GlyphStyle, IconName, PopoverAt, TextStyle, Tone, parse_module,
     },
     param::Param,
     size::{Dim, SizeSpec},
@@ -41,7 +40,6 @@ const DECK_MODULE: &str = r#"(
                 id: "title",
                 style: TrackTitle,
                 read: Telemetry(id: "deck.track.title", with: { "deck": "$deck" }),
-                adaptive: (priority: Required),
             ),
             Include(id: "transport", source: "deck/transport.kmodule.ron", with: { "deck": "$deck" }),
             Slot(id: "extra-controls"),
@@ -67,7 +65,6 @@ const ROUNDTRIP_MODULE: &str = r##"(
                         read: Telemetry(id: "deck.playback.playing", with: { "deck": "$deck" }),
                         write: Command(id: "deck.transport.toggle_play", with: { "deck": "$deck" }),
                         size: Some((w: Fixed(96.0), h: Fixed(32.0))),
-                        adaptive: (priority: Required),
                     ),
                     Scalar(
                         id: "load",
@@ -82,7 +79,6 @@ const ROUNDTRIP_MODULE: &str = r##"(
                         read: Parameter(id: "player.output.volume"),
                         write: Parameter(id: "player.output.volume"),
                         size: Some((w: Fixed(120.0), h: Fill)),
-                        adaptive: (priority: High),
                     ),
                     Table(
                         id: "tracks",
@@ -100,7 +96,6 @@ const ROUNDTRIP_MODULE: &str = r##"(
                         ],
                         columns_state: Some(Model(id: "ui.table.columns")),
                         size: Some((w: Fill, h: Fixed(160.0))),
-                        adaptive: (priority: Low),
                     ),
                 ],
             ),
@@ -115,7 +110,7 @@ const ROUNDTRIP_MODULE: &str = r##"(
                     Column(
                         id: "nested",
                         children: [
-                            Text(id: "status", adaptive: (priority: Normal)),
+                            Text(id: "status"),
                         ],
                     ),
                 ],
@@ -270,11 +265,10 @@ fn module_parses_with_implicit_some_bindings() {
         panic!("expected column root");
     };
     assert_eq!(children.len(), 3);
-    let ControlNode::Text { read, adaptive, .. } = &children[0] else {
+    let ControlNode::Text { read, .. } = &children[0] else {
         panic!("expected control");
     };
     assert!(read.is_some());
-    assert_eq!(adaptive.priority, Priority::Required);
 }
 
 #[kithara::test]

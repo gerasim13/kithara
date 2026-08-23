@@ -4,7 +4,7 @@ use serde::de::DeserializeOwned;
 
 use super::{
     Binding, BlockSpec, Budget, ControlSite, ControlSpec, ControlVisitor, DropSpec,
-    ExpandedInclude, ExpandedModule, ExpandedNode, SurfaceSpec,
+    ExpandedInclude, ExpandedModule, ExpandedNode, MeasureSpec, SurfaceSpec,
     binding_subst::{
         intern_binding, intern_module_text, intern_module_text_opt, intern_optional_binding,
         resolve_optional_param, resolve_param, substitute_binding,
@@ -16,7 +16,10 @@ use super::{
 use crate::{
     error::UiDocError,
     ids::{InternId, Interner, NodeId, SourceUri},
-    module::{BindingRef, ControlNode, Motion, PopoverAlign, PopoverAt, Pose, TableColumn},
+    module::{
+        AdaptiveStep, BindingRef, ControlNode, Measure, Motion, PopoverAlign, PopoverAt, Pose,
+        TableColumn,
+    },
     param::Param,
     registry::EndpointRegistry,
     resolve::ModuleSet,
@@ -284,7 +287,6 @@ fn finish_control(
             .as_ref()
             .map(|binding| intern_binding(machine.interner, binding, &context.origin))
             .transpose()?,
-        adaptive: fields.adaptive.clone(),
     })
 }
 
@@ -309,6 +311,56 @@ fn expand_control(
         spec,
         machine,
     )
+}
+
+fn expand_adaptive(
+    context: &Context<'_>,
+    node: &ControlNode,
+    id: &NodeId,
+    declared: (&Measure, Option<SizeSpec>),
+    branches: (&ControlNode, &[AdaptiveStep]),
+    depth: usize,
+    machine: &mut Expander<'_, '_>,
+) -> Result<ExpandedNode, UiDocError> {
+    let ((measure, size), (base, steps)) = (declared, branches);
+    machine.budget.charge(&context.origin)?;
+    let path = child_path(&context.prefix, id);
+    let read = match measure {
+        Measure::Read(binding) => Some(context.substitute(binding, &path)?),
+        Measure::Width | Measure::Height => None,
+    };
+    (machine.visitor)(
+        ControlSite {
+            path: &path,
+            control: node,
+            columns: &[],
+            read: read.as_ref(),
+            write: None,
+            columns_state: None,
+            query: None,
+            scope: None,
+            zoom: None,
+            active: None,
+        },
+        &context.origin,
+    )?;
+    let measure = match (measure, read) {
+        (Measure::Width, _) => MeasureSpec::Width,
+        (Measure::Height, _) => MeasureSpec::Height,
+        (Measure::Read(_), Some(binding)) => {
+            MeasureSpec::Read(intern_binding(machine.interner, &binding, &context.origin)?)
+        }
+        (Measure::Read(_), None) => unreachable!("a read measure substitutes its binding"),
+    };
+    Ok(ExpandedNode::Adaptive {
+        measure,
+        size,
+        base: Box::new(walk(context, base, depth, machine)?),
+        steps: steps
+            .iter()
+            .map(|step| Ok((step.from, walk(context, &step.node, depth, machine)?)))
+            .collect::<Result<_, UiDocError>>()?,
+    })
 }
 
 fn expand_optional(
@@ -345,6 +397,22 @@ fn expand_optional(
             hidden: intern_binding(machine.interner, &hidden, &context.origin)?,
         },
         child: Box::new(walk_child(context, child, 0, depth, machine)?),
+    })
+}
+
+fn expand_reveal(
+    context: &Context<'_>,
+    from: f32,
+    until: Option<f32>,
+    child: &ControlNode,
+    depth: usize,
+    machine: &mut Expander<'_, '_>,
+) -> Result<ExpandedNode, UiDocError> {
+    machine.budget.charge(&context.origin)?;
+    Ok(ExpandedNode::Reveal {
+        from,
+        until,
+        child: Box::new(walk(context, child, depth, machine)?),
     })
 }
 
@@ -608,8 +676,26 @@ pub(super) fn walk(
         ControlNode::Slot { id, size, default } => {
             expand_slot(context, id, *size, default, depth, machine)
         }
+        ControlNode::Adaptive {
+            id,
+            measure,
+            size,
+            base,
+            steps,
+        } => expand_adaptive(
+            context,
+            node,
+            id,
+            (measure, *size),
+            (base.as_ref(), steps),
+            depth,
+            machine,
+        ),
         ControlNode::Optional { id, hidden, child } => {
             expand_optional(context, node, id, hidden, child, depth, machine)
+        }
+        ControlNode::Reveal { from, until, child } => {
+            expand_reveal(context, *from, *until, child, depth, machine)
         }
         ControlNode::Popover {
             id,
@@ -657,53 +743,53 @@ pub(super) fn walk(
         ControlNode::Include { id, source, with } => {
             expand_include(context, id, source, with, depth, machine)
         }
-        control @ (ControlNode::DeckSummary { id, adaptive, .. }
-        | ControlNode::Brand { id, adaptive, .. }
-        | ControlNode::Spacer { id, adaptive, .. }
-        | ControlNode::Meter { id, adaptive, .. }
-        | ControlNode::Divider { id, adaptive, .. }
-        | ControlNode::PresetSelector { id, adaptive, .. }
-        | ControlNode::SettingsButton { id, adaptive, .. }
-        | ControlNode::WindowDrag { id, adaptive, .. }
-        | ControlNode::TitleBar { id, adaptive, .. }
-        | ControlNode::WindowControls { id, adaptive, .. }
-        | ControlNode::Text { id, adaptive, .. }
-        | ControlNode::Glyph { id, adaptive, .. }
-        | ControlNode::NavItem { id, adaptive, .. }
-        | ControlNode::TabLarge { id, adaptive, .. }
-        | ControlNode::Button { id, adaptive, .. }
-        | ControlNode::Bpm { id, adaptive, .. }
-        | ControlNode::Time { id, adaptive, .. }
-        | ControlNode::Scalar { id, adaptive, .. }
-        | ControlNode::Crossfader { id, adaptive, .. }
-        | ControlNode::Fader { id, adaptive, .. }
-        | ControlNode::Wave { id, adaptive, .. }
-        | ControlNode::Vis { id, adaptive, .. }
-        | ControlNode::Lottie { id, adaptive, .. }
-        | ControlNode::Sprite { id, adaptive, .. }
-        | ControlNode::Shader { id, adaptive, .. }
-        | ControlNode::PortalMap { id, adaptive, .. }
-        | ControlNode::Range { id, adaptive, .. }
-        | ControlNode::Table { id, adaptive, .. }
-        | ControlNode::Tree { id, adaptive, .. }
-        | ControlNode::ContextBar { id, adaptive, .. }
-        | ControlNode::Toggle { id, adaptive, .. }
-        | ControlNode::Checkbox { id, adaptive, .. }
-        | ControlNode::Segmented { id, adaptive, .. }
-        | ControlNode::Select { id, adaptive, .. }
-        | ControlNode::StatusDot { id, adaptive, .. }
-        | ControlNode::Swatch { id, adaptive, .. }
-        | ControlNode::Cell { id, adaptive, .. }
-        | ControlNode::Readout { id, adaptive, .. }
-        | ControlNode::Chip { id, adaptive, .. }
-        | ControlNode::Knob { id, adaptive, .. }
-        | ControlNode::VuStereo { id, adaptive, .. }
-        | ControlNode::VuVertical { id, adaptive, .. }) => {
+        control @ (ControlNode::DeckSummary { id, .. }
+        | ControlNode::Brand { id, .. }
+        | ControlNode::Spacer { id, .. }
+        | ControlNode::Meter { id, .. }
+        | ControlNode::Divider { id, .. }
+        | ControlNode::PresetSelector { id, .. }
+        | ControlNode::SettingsButton { id, .. }
+        | ControlNode::WindowDrag { id, .. }
+        | ControlNode::TitleBar { id, .. }
+        | ControlNode::WindowControls { id, .. }
+        | ControlNode::Text { id, .. }
+        | ControlNode::Glyph { id, .. }
+        | ControlNode::NavItem { id, .. }
+        | ControlNode::TabLarge { id, .. }
+        | ControlNode::Button { id, .. }
+        | ControlNode::Bpm { id, .. }
+        | ControlNode::Time { id, .. }
+        | ControlNode::Scalar { id, .. }
+        | ControlNode::Crossfader { id, .. }
+        | ControlNode::Fader { id, .. }
+        | ControlNode::Wave { id, .. }
+        | ControlNode::Vis { id, .. }
+        | ControlNode::Lottie { id, .. }
+        | ControlNode::Sprite { id, .. }
+        | ControlNode::Shader { id, .. }
+        | ControlNode::PortalMap { id, .. }
+        | ControlNode::Range { id, .. }
+        | ControlNode::Table { id, .. }
+        | ControlNode::Tree { id, .. }
+        | ControlNode::ContextBar { id, .. }
+        | ControlNode::Toggle { id, .. }
+        | ControlNode::Checkbox { id, .. }
+        | ControlNode::Segmented { id, .. }
+        | ControlNode::Select { id, .. }
+        | ControlNode::StatusDot { id, .. }
+        | ControlNode::Swatch { id, .. }
+        | ControlNode::Cell { id, .. }
+        | ControlNode::Readout { id, .. }
+        | ControlNode::Chip { id, .. }
+        | ControlNode::Knob { id, .. }
+        | ControlNode::VuStereo { id, .. }
+        | ControlNode::VuVertical { id, .. }) => {
             let (read, write) = control.bindings();
             expand_control(
                 context,
                 control,
-                ControlFields::new(id, control.size().copied(), read, write, adaptive),
+                ControlFields::new(id, control.size().copied(), read, write),
                 depth,
                 machine,
             )
@@ -720,6 +806,7 @@ fn expand_row(
     let ControlNode::Row {
         id,
         size,
+        measure,
         gap,
         align,
         pad,
@@ -746,6 +833,7 @@ fn expand_row(
         surface,
         id: intern_node_id(id.as_ref(), context, machine)?,
         size: *size,
+        measure: *measure,
         gap: *gap,
         align: *align,
         pad: *pad,
@@ -770,6 +858,7 @@ fn expand_column(
     let ControlNode::Column {
         id,
         size,
+        measure,
         gap,
         align,
         pad,
@@ -792,6 +881,7 @@ fn expand_column(
         surface,
         id: intern_node_id(id.as_ref(), context, machine)?,
         size: *size,
+        measure: *measure,
         gap: *gap,
         align: *align,
         pad: *pad,

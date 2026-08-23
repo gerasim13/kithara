@@ -5,9 +5,9 @@ use crate::{
     ids::{InternId, SourceUri},
     layout::FrameSides,
     module::{
-        AdaptivePolicy, BindingRef, ButtonStyle, ChipStyle, ChromeStyle, ControlNode,
-        DeckSummaryStyle, FaderStyle, GlyphStyle, IconName, Motion, PopoverAlign, PopoverAt, Pose,
-        ScalarFormat, TableColumn, TextAlign, TextStyle, Tone, WaveStyle, WindowControlsStyle,
+        BindingRef, ButtonStyle, ChipStyle, ChromeStyle, ControlNode, DeckSummaryStyle, FaderStyle,
+        GlyphStyle, IconName, MeasureAxis, Motion, PopoverAlign, PopoverAt, Pose, ScalarFormat,
+        TableColumn, TextAlign, TextStyle, Tone, WaveStyle, WindowControlsStyle,
     },
     shader::ShaderSpec,
     size::{BlockNode, SizeSpec},
@@ -20,6 +20,7 @@ pub enum ExpandedNode {
     Row {
         id: Option<InternId>,
         size: Option<SizeSpec>,
+        measure: Option<MeasureAxis>,
         gap: Option<f32>,
         align: TextAlign,
         pad: Option<f32>,
@@ -38,6 +39,7 @@ pub enum ExpandedNode {
     Column {
         id: Option<InternId>,
         size: Option<SizeSpec>,
+        measure: Option<MeasureAxis>,
         gap: Option<f32>,
         align: TextAlign,
         pad: Option<f32>,
@@ -65,6 +67,21 @@ pub enum ExpandedNode {
         to: Option<Pose>,
         phase: Option<Binding>,
         motion: Option<Motion<Binding>>,
+        child: Box<Self>,
+    },
+    /// Draws one branch: the last step whose threshold the measure reaches,
+    /// and `base` below the first of them.
+    Adaptive {
+        measure: MeasureSpec,
+        size: Option<SizeSpec>,
+        base: Box<Self>,
+        steps: Vec<(f32, Self)>,
+    },
+    /// Laid out while the enclosing container measures a number in `[from,
+    /// until)` on the axis it declares.
+    Reveal {
+        from: f32,
+        until: Option<f32>,
         child: Box<Self>,
     },
     Optional {
@@ -104,7 +121,6 @@ pub enum ExpandedNode {
         size: Option<SizeSpec>,
         read: Option<Binding>,
         write: Option<Binding>,
-        adaptive: AdaptivePolicy,
     },
 }
 
@@ -296,6 +312,48 @@ pub struct BlockSpec {
     pub path: InternId,
 }
 
+/// Where the number that picks a branch comes from: the box the node is given,
+/// or a scalar the host answers.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub enum MeasureSpec {
+    Width,
+    Height,
+    Read(Binding),
+}
+
+impl MeasureSpec {
+    pub(crate) const fn axis(&self) -> Option<MeasureAxis> {
+        match self {
+            Self::Width => Some(MeasureAxis::Width),
+            Self::Height => Some(MeasureAxis::Height),
+            Self::Read(_) => None,
+        }
+    }
+
+    pub(crate) const fn binding(&self) -> Option<&Binding> {
+        match self {
+            Self::Read(binding) => Some(binding),
+            Self::Width | Self::Height => None,
+        }
+    }
+}
+
+pub(crate) fn adaptive_branch<'a>(
+    base: &'a ExpandedNode,
+    steps: &'a [(f32, ExpandedNode)],
+    value: Option<f32>,
+) -> &'a ExpandedNode {
+    let Some(value) = value else {
+        return base;
+    };
+    steps
+        .iter()
+        .rev()
+        .find(|(from, _)| *from <= value)
+        .map_or(base, |(_, node)| node)
+}
+
 impl BlockNode for ExpandedNode {
     fn block(&self) -> Option<&BlockSpec> {
         match self {
@@ -434,7 +492,14 @@ pub(crate) fn motion_of(node: &ExpandedNode) -> Unprompted {
         } => motion_of(anchor).or(motion_of(content)),
         ExpandedNode::Optional { child, .. }
         | ExpandedNode::Pressable { child, .. }
+        | ExpandedNode::Reveal { child, .. }
         | ExpandedNode::Scroll { child, .. } => motion_of(child),
+        // Which branch stands is settled by the room, so the node moves if any
+        // branch it may draw does.
+        ExpandedNode::Adaptive { base, steps, .. } => steps
+            .iter()
+            .map(|(_, branch)| motion_of(branch))
+            .fold(motion_of(base), Unprompted::or),
         ExpandedNode::Control { spec, .. } => Unprompted {
             driven: false,
             continuous: spec.paints_every_frame(),
@@ -497,5 +562,49 @@ impl Budget {
             });
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use kithara_test_utils::kithara;
+
+    use super::*;
+
+    fn form(gap: f32) -> ExpandedNode {
+        ExpandedNode::Row {
+            gap: Some(gap),
+            id: None,
+            size: None,
+            align: TextAlign::default(),
+            measure: None,
+            pad: None,
+            pad_x: None,
+            pad_y: None,
+            frame: None,
+            background: None,
+            background_alpha: None,
+            active: None,
+            active_background: None,
+            frame_color: None,
+            active_frame_color: None,
+            surface: None,
+            children: Vec::new(),
+        }
+    }
+
+    #[kithara::test]
+    fn a_measure_takes_the_last_step_it_reaches() {
+        let base = form(0.0);
+        let steps = vec![(4.0, form(4.0)), (8.0, form(8.0))];
+        let branch = |value| adaptive_branch(&base, &steps, value);
+
+        assert_eq!(branch(None), &base, "nothing read");
+        assert_eq!(branch(Some(3.9)), &base, "below the first step");
+        assert_eq!(branch(Some(4.0)), &steps[0].1, "exactly on a threshold");
+        assert_eq!(branch(Some(7.9)), &steps[0].1);
+        assert_eq!(branch(Some(8.0)), &steps[1].1);
+        assert_eq!(branch(Some(f32::MAX)), &steps[1].1, "above every step");
+        assert_eq!(branch(Some(f32::NAN)), &base, "ordered against nothing");
     }
 }

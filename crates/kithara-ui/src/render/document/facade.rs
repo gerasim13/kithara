@@ -1,17 +1,17 @@
 use num_traits::cast::AsPrimitive;
 
-use super::{Ctx, Group, Host, Module, Popover};
+use super::{Band, Ctx, Group, GroupMount, Host, Measured, Module, Popover, SplitMount};
 use crate::{
     compile::{CompiledNode, CompiledUi},
     draw::Transform,
-    expand::{Binding, ExpandedNode, SurfaceSpec},
+    expand::{Binding, ExpandedNode, MeasureSpec, SurfaceSpec},
     ids::InternId,
     layout::{Axis, FrameSides},
-    module::{ChromeStyle, Motion, PopoverAlign, PopoverAt, Pose, TextAlign},
+    module::{ChromeStyle, MeasureAxis, Motion, PopoverAlign, PopoverAt, Pose, TextAlign},
     render::{InputOwner, ReadValue},
     size::{
-        Dim, Hidden, SizeSpec, compiled_node_size_with_hidden, effective_size, is_hidden,
-        visible_compiled_children,
+        Dim, SizeSpec, Snapshot, branch as adaptive_branch, compiled_node_size_with_hidden,
+        effective_size, is_hidden, visible_compiled_children,
     },
     skin::{ColorRole, SkinDoc},
 };
@@ -88,17 +88,47 @@ fn compiled<H>(node: &CompiledNode, ctx: Ctx<'_, '_>, host: &mut H) -> H::Output
 where
     H: Host,
 {
-    let hidden: Hidden<'_> = &|block| ctx.flag(Some(&block.hidden));
+    let snapshot: &dyn Snapshot = &ctx;
     match node {
         CompiledNode::Optional { child, .. } => compiled(child, ctx, host),
-        CompiledNode::Split { axis, children, .. } => {
-            let mut mounted = Vec::with_capacity(children.len());
-            for (weight, child) in visible_compiled_children(children, hidden) {
-                let size = compiled_node_size_with_hidden(child, ctx.skin, hidden);
-                let output = compiled(child, ctx, host);
-                mounted.push((weight, size, output));
+        CompiledNode::Adaptive {
+            axis,
+            size,
+            base,
+            steps,
+        } => {
+            let mut branches = Vec::with_capacity(steps.len() + 1);
+            branches.push(compiled(base, ctx, host));
+            for (_, node) in steps {
+                branches.push(compiled(node, ctx, host));
             }
-            host.split(*axis, mounted)
+            host.measured(
+                Measured {
+                    axis: *axis,
+                    steps: steps.iter().map(|(from, _)| *from).collect(),
+                    size: *size,
+                },
+                branches,
+            )
+        }
+        CompiledNode::Split {
+            axis,
+            measure,
+            children,
+            ..
+        } => {
+            let mut mounted = Vec::with_capacity(children.len());
+            for cell in visible_compiled_children(children, snapshot) {
+                let size = compiled_node_size_with_hidden(&cell.node, ctx.skin, snapshot);
+                let output = compiled(&cell.node, ctx, host);
+                mounted.push(SplitMount {
+                    band: Band::new(cell.from, cell.until),
+                    weight: cell.weight,
+                    size,
+                    output,
+                });
+            }
+            host.split(*axis, *measure, mounted)
         }
         CompiledNode::Module {
             instance,
@@ -195,6 +225,7 @@ struct PopoverNode<'a> {
 
 #[derive(Clone, Copy)]
 struct RowNode<'a> {
+    measure: Option<MeasureAxis>,
     gap: Option<f32>,
     align: TextAlign,
     pad: Option<f32>,
@@ -225,6 +256,7 @@ fn row_group<'a>(node: RowNode<'a>, ctx: Ctx<'_, '_>) -> Group<'a> {
         .unwrap_or(ctx.skin.divider.color);
     Group {
         axis: Axis::Horizontal,
+        measure: node.measure,
         alignment: node.align,
         gap: node.gap.unwrap_or(ctx.skin.layout.grid_gap),
         padding_x: node.pad_x.unwrap_or(padding),
@@ -269,6 +301,194 @@ where
     mounted(node, address, branch, ctx, host)
 }
 
+/// An adaptive block: the branches it chooses between and the box it keeps.
+struct Adaptive<'a> {
+    node: &'a ExpandedNode,
+    measure: &'a MeasureSpec,
+    size: Option<SizeSpec>,
+    base: &'a ExpandedNode,
+    steps: &'a [(f32, ExpandedNode)],
+}
+
+/// How an adaptive block becomes host output.
+///
+/// An axis names a room only the layout pass knows, so every branch is mounted
+/// and the host chooses. A measured reading is answered here.
+fn mount_adaptive<H>(
+    adaptive: &Adaptive<'_>,
+    address: &[usize],
+    branch: Branch,
+    ctx: Ctx<'_, '_>,
+    host: &mut H,
+) -> H::Output
+where
+    H: Host,
+{
+    let &Adaptive {
+        node,
+        measure,
+        size,
+        base,
+        steps,
+    } = adaptive;
+    let snapshot: &dyn Snapshot = &ctx;
+    match measure.axis() {
+        Some(axis) => {
+            let mut branches = Vec::with_capacity(steps.len() + 1);
+            branches.push(expanded(
+                base,
+                &child_address(address, 0),
+                branch,
+                ctx,
+                host,
+            ));
+            for (index, (_, node)) in steps.iter().enumerate() {
+                branches.push(expanded(
+                    node,
+                    &child_address(address, index + 1),
+                    branch,
+                    ctx,
+                    host,
+                ));
+            }
+            host.measured(
+                Measured {
+                    axis,
+                    steps: steps.iter().map(|(from, _)| *from).collect(),
+                    size: size
+                        .or_else(|| effective_size(node, ctx.skin, snapshot))
+                        .unwrap_or(SizeSpec::FILL),
+                },
+                branches,
+            )
+        }
+        None => expanded(
+            adaptive_branch(measure, base, steps, snapshot),
+            &child_address(address, 0),
+            branch,
+            ctx,
+            host,
+        ),
+    }
+}
+
+/// How a row becomes host output.
+fn mount_row<H>(
+    node: &ExpandedNode,
+    address: &[usize],
+    branch: Branch,
+    ctx: Ctx<'_, '_>,
+    host: &mut H,
+) -> H::Output
+where
+    H: Host,
+{
+    let ExpandedNode::Row {
+        measure,
+        children,
+        gap,
+        align,
+        pad,
+        pad_x,
+        pad_y,
+        frame,
+        background,
+        background_alpha,
+        active,
+        active_background,
+        frame_color,
+        active_frame_color,
+        surface,
+        ..
+    } = node
+    else {
+        unreachable!("mount_row is called only for a row")
+    };
+    let snapshot: &dyn Snapshot = &ctx;
+    mount_group(
+        row_group(
+            RowNode {
+                measure: *measure,
+                gap: *gap,
+                align: *align,
+                pad: *pad,
+                pad_x: *pad_x,
+                pad_y: *pad_y,
+                frame: *frame,
+                background: *background,
+                background_alpha: *background_alpha,
+                active: active.as_ref(),
+                active_background: *active_background,
+                frame_color: *frame_color,
+                active_frame_color: *active_frame_color,
+                surface: surface.as_ref(),
+                size: effective_size(node, ctx.skin, snapshot),
+            },
+            ctx,
+        ),
+        children,
+        address,
+        branch,
+        snapshot,
+        ctx,
+        host,
+    )
+}
+
+/// How a column becomes host output.
+fn mount_column<H>(
+    node: &ExpandedNode,
+    address: &[usize],
+    branch: Branch,
+    ctx: Ctx<'_, '_>,
+    host: &mut H,
+) -> H::Output
+where
+    H: Host,
+{
+    let ExpandedNode::Column {
+        measure,
+        children,
+        gap,
+        align,
+        pad,
+        pad_x,
+        pad_y,
+        frame,
+        background,
+        background_alpha,
+        surface,
+        ..
+    } = node
+    else {
+        unreachable!("mount_column is called only for a column")
+    };
+    let snapshot: &dyn Snapshot = &ctx;
+    mount_group(
+        Group {
+            axis: Axis::Vertical,
+            measure: *measure,
+            alignment: *align,
+            gap: gap.unwrap_or(ctx.skin.layout.grid_gap),
+            padding_x: pad_x.unwrap_or(pad.unwrap_or(ctx.skin.layout.grid_pad)),
+            padding_y: pad_y.unwrap_or(pad.unwrap_or(ctx.skin.layout.grid_pad)),
+            frame: *frame,
+            background: *background,
+            background_alpha: *background_alpha,
+            frame_color: ctx.skin.divider.color,
+            frame_width: ctx.skin.divider.width,
+            surface: surface.as_ref(),
+            size: effective_size(node, ctx.skin, snapshot),
+        },
+        children,
+        address,
+        branch,
+        snapshot,
+        ctx,
+        host,
+    )
+}
+
 /// How one node becomes host output, once the engine question is settled.
 fn mounted<H>(
     node: &ExpandedNode,
@@ -280,88 +500,33 @@ fn mounted<H>(
 where
     H: Host,
 {
-    let hidden: Hidden<'_> = &|block| ctx.flag(Some(&block.hidden));
+    let snapshot: &dyn Snapshot = &ctx;
     match node {
-        ExpandedNode::Optional { child, .. } => {
+        // A reveal says when its child stands, not what it is: the band is read
+        // by the flow that holds it, and the child mounts as itself.
+        ExpandedNode::Optional { child, .. } | ExpandedNode::Reveal { child, .. } => {
             expanded(child, &child_address(address, 0), branch, ctx, host)
         }
-        ExpandedNode::Row {
-            children,
-            gap,
-            align,
-            pad,
-            pad_x,
-            pad_y,
-            frame,
-            background,
-            background_alpha,
-            active,
-            active_background,
-            frame_color,
-            active_frame_color,
-            surface,
-            ..
-        } => mount_group(
-            row_group(
-                RowNode {
-                    gap: *gap,
-                    align: *align,
-                    pad: *pad,
-                    pad_x: *pad_x,
-                    pad_y: *pad_y,
-                    frame: *frame,
-                    background: *background,
-                    background_alpha: *background_alpha,
-                    active: active.as_ref(),
-                    active_background: *active_background,
-                    frame_color: *frame_color,
-                    active_frame_color: *active_frame_color,
-                    surface: surface.as_ref(),
-                    size: effective_size(node, ctx.skin),
-                },
-                ctx,
-            ),
-            children,
-            address,
-            branch,
-            hidden,
-            ctx,
-            host,
-        ),
-        ExpandedNode::Column {
-            children,
-            gap,
-            align,
-            pad,
-            pad_x,
-            pad_y,
-            frame,
-            background,
-            background_alpha,
-            surface,
-            ..
-        } => mount_group(
-            Group {
-                axis: Axis::Vertical,
-                alignment: *align,
-                gap: gap.unwrap_or(ctx.skin.layout.grid_gap),
-                padding_x: pad_x.unwrap_or(pad.unwrap_or(ctx.skin.layout.grid_pad)),
-                padding_y: pad_y.unwrap_or(pad.unwrap_or(ctx.skin.layout.grid_pad)),
-                frame: *frame,
-                background: *background,
-                background_alpha: *background_alpha,
-                frame_color: ctx.skin.divider.color,
-                frame_width: ctx.skin.divider.width,
-                surface: surface.as_ref(),
-                size: effective_size(node, ctx.skin),
+        ExpandedNode::Adaptive {
+            measure,
+            size,
+            base,
+            steps,
+        } => mount_adaptive(
+            &Adaptive {
+                node,
+                measure,
+                size: *size,
+                base,
+                steps,
             },
-            children,
             address,
             branch,
-            hidden,
             ctx,
             host,
         ),
+        ExpandedNode::Row { .. } => mount_row(node, address, branch, ctx, host),
+        ExpandedNode::Column { .. } => mount_column(node, address, branch, ctx, host),
         ExpandedNode::Popover {
             path,
             open,
@@ -377,7 +542,7 @@ where
                 align: *align,
                 anchor,
                 content,
-                size: effective_size(node, ctx.skin),
+                size: effective_size(node, ctx.skin, snapshot),
             },
             address,
             branch,
@@ -386,19 +551,19 @@ where
         ),
         ExpandedNode::Pressable { path, child, .. } => {
             let child = expanded(child, &child_address(address, 0), branch, ctx, host);
-            host.pressable(*path, child, effective_size(node, ctx.skin))
+            host.pressable(*path, child, effective_size(node, ctx.skin, snapshot))
         }
         ExpandedNode::Scroll { id, child, .. } => {
             let child = expanded(child, &child_address(address, 0), branch, ctx, host);
-            host.scroll(*id, child, effective_size(node, ctx.skin))
+            host.scroll(*id, child, effective_size(node, ctx.skin, snapshot))
         }
         ExpandedNode::Slot { children, .. } => {
-            let mounted = expanded_children(children, address, branch, hidden, ctx, host);
-            host.slot(mounted, effective_size(node, ctx.skin))
+            let mounted = expanded_children(children, address, branch, snapshot, ctx, host);
+            host.slot(mounted, effective_size(node, ctx.skin, snapshot))
         }
         ExpandedNode::Stage { children, .. } => {
-            let mounted = expanded_children(children, address, branch, hidden, ctx, host);
-            host.stage(mounted, effective_size(node, ctx.skin))
+            let mounted = expanded_children(children, address, branch, snapshot, ctx, host);
+            host.stage(mounted, effective_size(node, ctx.skin, snapshot))
         }
         ExpandedNode::Object {
             pose,
@@ -422,7 +587,7 @@ where
             spec,
             read.as_ref(),
             branch.input_owner,
-            effective_size(node, ctx.skin),
+            effective_size(node, ctx.skin, snapshot),
             branch.transform,
         ),
     }
@@ -459,7 +624,7 @@ fn expanded_children<H>(
     children: &[ExpandedNode],
     address: &[usize],
     branch: Branch,
-    hidden: Hidden<'_>,
+    snapshot: &dyn Snapshot,
     ctx: Ctx<'_, '_>,
     host: &mut H,
 ) -> Vec<H::Output>
@@ -469,7 +634,7 @@ where
     children
         .iter()
         .enumerate()
-        .filter(|(_, child)| !is_hidden(*child, hidden))
+        .filter(|(_, child)| !is_hidden(*child, snapshot))
         .map(|(index, child)| expanded(child, &child_address(address, index), branch, ctx, host))
         .collect()
 }
@@ -479,7 +644,7 @@ fn mount_group<H>(
     children: &[ExpandedNode],
     address: &[usize],
     branch: Branch,
-    hidden: Hidden<'_>,
+    snapshot: &dyn Snapshot,
     ctx: Ctx<'_, '_>,
     host: &mut H,
 ) -> H::Output
@@ -487,7 +652,7 @@ where
     H: Host,
 {
     let children =
-        expanded_group_children(children, group.axis, address, branch, hidden, ctx, host);
+        expanded_group_children(children, group.axis, address, branch, snapshot, ctx, host);
     host.group(group, children)
 }
 
@@ -496,23 +661,31 @@ fn expanded_group_children<H>(
     axis: Axis,
     address: &[usize],
     branch: Branch,
-    hidden: Hidden<'_>,
+    snapshot: &dyn Snapshot,
     ctx: Ctx<'_, '_>,
     host: &mut H,
-) -> Vec<(Option<f32>, H::Output)>
+) -> Vec<GroupMount<H::Output>>
 where
     H: Host,
 {
     children
         .iter()
         .enumerate()
-        .filter(|(_, child)| !is_hidden(*child, hidden))
-        .map(|(index, child)| {
-            let minimum = main_minimum(child, axis, ctx.skin);
-            let output = expanded(child, &child_address(address, index), branch, ctx, host);
-            (minimum, output)
+        .filter(|(_, child)| !is_hidden(*child, snapshot))
+        .map(|(index, child)| GroupMount {
+            band: band_of(child),
+            minimum: main_minimum(child, axis, ctx.skin, snapshot),
+            output: expanded(child, &child_address(address, index), branch, ctx, host),
         })
         .collect()
+}
+
+/// The band of room one child of a flow stands in.
+fn band_of(node: &ExpandedNode) -> Band {
+    match node {
+        ExpandedNode::Reveal { from, until, .. } => Band::new(*from, *until),
+        _ => Band::ALWAYS,
+    }
 }
 
 /// Where an object starts, where it ends, and what carries it between them.
@@ -589,8 +762,13 @@ fn child_address(parent: &[usize], index: usize) -> Vec<usize> {
     address
 }
 
-fn main_minimum(node: &ExpandedNode, axis: Axis, skin: &SkinDoc) -> Option<f32> {
-    let size = effective_size(node, skin)?;
+fn main_minimum(
+    node: &ExpandedNode,
+    axis: Axis,
+    skin: &SkinDoc,
+    snapshot: &dyn Snapshot,
+) -> Option<f32> {
+    let size = effective_size(node, skin, snapshot)?;
     let dim = match axis {
         Axis::Horizontal => size.w,
         Axis::Vertical => size.h,

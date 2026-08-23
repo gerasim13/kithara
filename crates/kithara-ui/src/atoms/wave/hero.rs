@@ -309,7 +309,6 @@ mod tests {
             line: ink,
             text_dim: ink,
             accent: ink,
-            accent_strong: ink,
             wave_low: ink,
             wave_mid: ink,
             wave_high: ink,

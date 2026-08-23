@@ -18,6 +18,7 @@ members = [
     "crates/kithara-ffi",
     "crates/kithara-file",
     "crates/kithara-hls",
+    "crates/kithara-mpa",
     "crates/kithara-net",
     "crates/kithara-platform",
     "crates/kithara-play",
@@ -34,7 +35,6 @@ members = [
     "tests/fuzz",
     "xtask",
 ]
-exclude = ["third-party/symphonia-bundle-mp3"]
 default-members = [
     "crates/kithara",
     "crates/kithara-abr",
@@ -49,6 +49,7 @@ default-members = [
     "crates/kithara-events",
     "crates/kithara-file",
     "crates/kithara-hls",
+    "crates/kithara-mpa",
     "crates/kithara-net",
     "crates/kithara-platform",
     "crates/kithara-play",
@@ -200,6 +201,7 @@ kithara-events = { path = "crates/kithara-events", version = "0.0.1-alpha4" }
 kithara-ffi = { path = "crates/kithara-ffi" }
 kithara-file = { path = "crates/kithara-file", version = "0.0.1-alpha4", default-features = false }
 kithara-hls = { path = "crates/kithara-hls", version = "0.0.1-alpha4", default-features = false }
+kithara-mpa = { path = "crates/kithara-mpa", version = "0.0.1-alpha4" }
 kithara-net = { path = "crates/kithara-net", version = "0.0.1-alpha4", default-features = false }
 kithara-platform = { path = "crates/kithara-platform", version = "0.0.1-alpha4" }
 kithara-play = { path = "crates/kithara-play", version = "0.0.1-alpha4", default-features = false }
@@ -431,6 +433,8 @@ opt-level = 2
 opt-level = 2
 [profile.dev.package.symphonia-bundle-mp3]
 opt-level = 2
+[profile.dev.package.kithara-mpa]
+opt-level = 2
 [profile.dev.package.symphonia-codec-aac]
 opt-level = 2
 [profile.dev.package.symphonia-bundle-flac]
@@ -506,5 +510,3 @@ codegen-units = 1
 [patch.crates-io]
 btls-sys = { git = "https://github.com/0x676e67/btls", rev = "ac7fe822bb1a3386c0ef0b44b4784a9429ba9903" }
 firewheel-web-audio = { git = "https://github.com/gerasim13/firewheel-web-audio", rev = "1a5e383af4d5d318f93d6d25e617cc95d7b20aef" }
-symphonia-bundle-mp3 = { path = "third-party/symphonia-bundle-mp3" }
-symphonia-core = { git = "https://github.com/pdeljanov/Symphonia.git", rev = "980bf5830a90e069fd64641d9c38f067ab772a24" }

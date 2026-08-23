@@ -92,7 +92,7 @@ impl Geometry {
     const TEXT_SIZE: Pixels = Pixels(14.0);
 
     fn studio() -> Self {
-        let ((width, height), _) = window_size();
+        let (width, height) = window_size();
         Self {
             height,
             scale: 1.0,

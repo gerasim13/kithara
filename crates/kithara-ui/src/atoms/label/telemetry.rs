@@ -4,7 +4,7 @@ use crate::{
     module::ScalarFormat,
     render::Skin,
     shaping::TextContext,
-    skin::{FontFamily, TelemetrySkin, TextRoleSkin},
+    skin::{TelemetrySkin, TextRoleSkin},
     solve::{Length, Size},
 };
 
@@ -28,15 +28,9 @@ impl Telemetry {
             framed,
             inset: skin.palette.bg_inset,
             metrics,
-            role: TextRoleSkin {
-                color: crate::skin::ColorRole::Text,
-                font: FontFamily::Mono,
-                size: metrics.text.size,
-                spacing: 0.0,
-                weight: metrics.text.weight,
-            },
+            role: metrics.text,
             stroke: skin.rgba(metrics.frame.border),
-            text: skin.palette.text,
+            text: skin.rgba(metrics.text.color),
         }
     }
 

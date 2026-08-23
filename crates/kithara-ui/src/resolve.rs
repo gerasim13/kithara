@@ -110,9 +110,17 @@ fn walk_includes(
             }
             Ok(())
         }
+        ControlNode::Adaptive { base, steps, .. } => {
+            walk_includes(resolver, origin, base, limits, set, stack, depth)?;
+            for step in steps {
+                walk_includes(resolver, origin, &step.node, limits, set, stack, depth)?;
+            }
+            Ok(())
+        }
         ControlNode::Object { child, .. }
         | ControlNode::Optional { child, .. }
         | ControlNode::Pressable { child, .. }
+        | ControlNode::Reveal { child, .. }
         | ControlNode::Scroll { child, .. } => {
             walk_includes(resolver, origin, child, limits, set, stack, depth)
         }

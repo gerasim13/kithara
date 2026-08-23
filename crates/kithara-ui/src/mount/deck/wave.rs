@@ -14,8 +14,14 @@ pub(crate) struct Wave<'a> {
 }
 
 impl Control for Wave<'_> {
+    /// Each style is a height the rows it stands in are built to, so a fourth
+    /// one names its own number before it renders.
     fn size(&self, skin: &SkinDoc) -> SizeSpec {
-        skin.wave.size
+        match self.style {
+            WaveStyle::Default => skin.wave.default_size,
+            WaveStyle::Hero => skin.wave.size,
+            WaveStyle::Micro => skin.wave.micro_size,
+        }
     }
 }
 

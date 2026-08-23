@@ -12,18 +12,19 @@ use super::{
     node::Node,
 };
 use crate::{
-    atoms::{button::declared_width, deck::summary::Summary, tab::TabLarge},
+    atoms::{button::declared_width, tab::TabLarge},
     draw::{DrawListBuilder, Rect as DrawRect},
     expand::{Binding, BindingKind, ControlSpec},
     interact::Input,
-    module::TextAlign,
+    module::{MeasureAxis, TextAlign},
     mount,
     render::{
         ControlsProgram, HostedControlPlan, InputOwner, ReadValue, Skin, TitleProgram,
         controls::{Draws, Reading},
+        document::Measured,
         scroll::{Bar, Window},
     },
-    size::{Dim, SizeSpec, control_size},
+    size::{Dim, SizeSpec, control_size, length},
     solve,
 };
 
@@ -526,6 +527,8 @@ impl Viewport {
 pub(super) enum NodeLayout {
     Leaf(Leaf),
     Flex(super::flex::Flex),
+    /// Branches of which the room picks one.
+    Measured(Measured),
     Scroll(Viewport),
     Stack,
     Stage,
@@ -548,6 +551,7 @@ impl NodeLayout {
                 let intrinsic = flex.layout(ctx, children, limits);
                 limits.resolve(declared.width, declared.height, intrinsic)
             }
+            Self::Measured(plan) => measured(plan, ctx, children, limits, declared),
             Self::Scroll(viewport) => viewport.layout(ctx, children, limits, declared),
             Self::Stack => stack(ctx, children, limits, declared),
             Self::Stage => stage(ctx, children, limits, declared),
@@ -557,7 +561,7 @@ impl NodeLayout {
     pub(super) const fn leaf(&mut self) -> Option<&mut Leaf> {
         match self {
             Self::Leaf(leaf) => Some(leaf),
-            Self::Flex(_) | Self::Scroll(_) | Self::Stack | Self::Stage => None,
+            Self::Flex(_) | Self::Measured(_) | Self::Scroll(_) | Self::Stack | Self::Stage => None,
         }
     }
 
@@ -567,7 +571,7 @@ impl NodeLayout {
     pub(super) fn indicate(&self, bounds: DrawRect, list: &mut DrawListBuilder) {
         match self {
             Self::Scroll(viewport) => viewport.indicate(bounds, list),
-            Self::Flex(_) | Self::Leaf(_) | Self::Stack | Self::Stage => {}
+            Self::Flex(_) | Self::Leaf(_) | Self::Measured(_) | Self::Stack | Self::Stage => {}
         }
     }
 
@@ -575,7 +579,7 @@ impl NodeLayout {
     pub(super) fn wheel(&mut self, input: Input<'_>) -> bool {
         match self {
             Self::Scroll(viewport) => viewport.wheel(input),
-            Self::Flex(_) | Self::Leaf(_) | Self::Stack | Self::Stage => false,
+            Self::Flex(_) | Self::Leaf(_) | Self::Measured(_) | Self::Stack | Self::Stage => false,
         }
     }
 
@@ -623,6 +627,38 @@ fn stage(
     size
 }
 
+/// Lays out the one branch the room reaches, and hands every other an empty
+/// box: a branch keeps its place from one frame to the next, standing or not.
+fn measured(
+    plan: &Measured,
+    ctx: &mut LayoutCtx<'_>,
+    children: &mut [WidgetPod<Node>],
+    limits: solve::Limits,
+    declared: solve::Size<solve::Length>,
+) -> solve::Size {
+    let inner = normalized(limits.width(declared.width).height(declared.height));
+    let room = match plan.axis {
+        MeasureAxis::Width => inner.max().width,
+        MeasureAxis::Height => inner.max().height,
+    };
+    let drawn = plan.branch(room).min(children.len().saturating_sub(1));
+    let none = solve::Limits::new(solve::Size::ZERO, solve::Size::ZERO);
+    let loose = inner.loose();
+    let mut intrinsic = solve::Size::ZERO;
+    for (index, child) in children.iter_mut().enumerate() {
+        if index == drawn {
+            Node::set_child_limits(ctx, child, loose);
+            let size = ctx.run_layout(child, &box_constraints(loose));
+            intrinsic = solve::Size::new(size.width.as_(), size.height.as_());
+        } else {
+            Node::set_child_limits(ctx, child, none);
+            ctx.run_layout(child, &BoxConstraints::tight(MasonrySize::ZERO));
+        }
+        ctx.place_child(child, Point::ORIGIN);
+    }
+    limits.resolve(declared.width, declared.height, intrinsic)
+}
+
 fn stack(
     ctx: &mut LayoutCtx<'_>,
     children: &mut [WidgetPod<Node>],
@@ -658,14 +694,6 @@ pub(crate) const fn main_length(dim: Dim) -> solve::Length {
     }
 }
 
-pub(crate) const fn length(dim: Dim) -> solve::Length {
-    match dim {
-        Dim::Fixed(value) => solve::Length::Fixed(value),
-        Dim::Shrink => solve::Length::Shrink,
-        Dim::Range { .. } | Dim::Fill => solve::Length::Fill,
-    }
-}
-
 pub(crate) const fn declared(size: SizeSpec) -> solve::Size<solve::Length> {
     solve::Size::new(length(size.w), length(size.h))
 }
@@ -676,7 +704,6 @@ pub(crate) fn control_declared(
     skin: &Skin,
 ) -> solve::Size<solve::Length> {
     let intrinsic = match spec {
-        ControlSpec::DeckSummary { .. } => Summary::declared_length(skin.deck),
         ControlSpec::Button { style, .. } => {
             solve::Size::new(declared_width(*style, skin), solve::Length::Fill)
         }

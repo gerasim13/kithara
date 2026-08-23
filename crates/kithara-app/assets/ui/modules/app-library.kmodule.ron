@@ -12,7 +12,6 @@
                     (id: "title", label: "@track_list.column.title", style: Primary, width: 180.0, flexible: true),
                     (id: "artist", label: "@track_list.column.artist", style: Secondary, width: 200.0),
                 ],
-                adaptive: (priority: Required),
             ),
         ],
     ),

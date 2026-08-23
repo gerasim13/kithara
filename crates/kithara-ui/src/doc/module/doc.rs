@@ -1,8 +1,8 @@
 use serde::{Deserialize, Serialize};
 
-use super::{binding::BindingRef, node::ControlNode};
 #[cfg(test)]
-use super::{binding::Priority, style::WindowControlsStyle};
+use super::style::WindowControlsStyle;
+use super::{binding::BindingRef, node::ControlNode};
 use crate::{
     doc::ron_io,
     envelope::{self, DocKind},
@@ -128,16 +128,11 @@ mod tests {
                 read: Model(id: "mixer.xfade"),
                 write: Parameter(id: "mixer.xfade"),
                 size: Some((w: Fixed(220.0), h: Fixed(38.0))),
-                adaptive: (priority: Required),
             ))"#;
 
         let document = parse_module(text, &origin()).unwrap();
         let ControlNode::Crossfader {
-            read,
-            write,
-            size,
-            adaptive,
-            ..
+            read, write, size, ..
         } = document.root
         else {
             panic!("expected crossfader");
@@ -149,7 +144,6 @@ mod tests {
             size,
             Some(SizeSpec::new(Dim::Fixed(220.0), Dim::Fixed(38.0)))
         );
-        assert_eq!(adaptive.priority, Priority::Required);
     }
 
     #[kithara::test]
@@ -160,16 +154,11 @@ mod tests {
                 read: Model(id: "library.tree"),
                 query: Model(id: "library.query"),
                 size: Some((w: Fixed(232.0), h: Fill)),
-                adaptive: (priority: Required),
             ))"#;
 
         let document = parse_module(text, &origin()).unwrap();
         let ControlNode::Tree {
-            read,
-            query,
-            size,
-            adaptive,
-            ..
+            read, query, size, ..
         } = document.root
         else {
             panic!("expected tree");
@@ -178,7 +167,6 @@ mod tests {
         assert!(matches!(read, Some(BindingRef::Model { .. })));
         assert!(matches!(query, Some(BindingRef::Model { .. })));
         assert_eq!(size, Some(SizeSpec::new(Dim::Fixed(232.0), Dim::Fill)));
-        assert_eq!(adaptive.priority, Priority::Required);
     }
 
     #[kithara::test]

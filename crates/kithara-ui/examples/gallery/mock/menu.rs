@@ -169,6 +169,10 @@ impl MenuState {
         true
     }
 
+    pub(super) const fn set_open(&mut self, open: bool) {
+        self.open = open;
+    }
+
     const fn can_open(&self) -> bool {
         self.windows.len() < Consts::MAX_WINDOWS
     }

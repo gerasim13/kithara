@@ -19,6 +19,7 @@ use crate::{
 pub(crate) struct Wave {
     background: Rgba,
     border: Rgba,
+    cache_strip: Rgba,
     cue_badge: Rgba,
     cue_text: Rgba,
     metrics: WaveSkin,
@@ -29,6 +30,8 @@ pub(crate) struct Wave {
 
 /// What the wave is handed each frame.
 pub(crate) struct Drawn {
+    /// How far the host says the track is held, as a share of its length.
+    pub(crate) cached: f32,
     pub(crate) overlay: Option<OverlayData>,
     pub(crate) progress: f32,
     pub(crate) waveform: Option<WaveformData>,
@@ -40,6 +43,10 @@ impl Wave {
         Self {
             background: skin.rgba(skin.wave.background),
             border: skin.rgba(skin.wave.frame.border),
+            cache_strip: Rgba {
+                a: skin.wave.cache_strip_alpha,
+                ..skin.rgba(skin.wave.cache_strip_color)
+            },
             cue_badge: skin.rgba(skin.wave.cue_badge_background),
             cue_text: skin.rgba(skin.wave.cue_badge_text_color),
             metrics: skin.wave,
@@ -49,7 +56,6 @@ impl Wave {
                 line: skin.palette.line,
                 text_dim: skin.palette.text_dim,
                 accent: skin.palette.accent,
-                accent_strong: skin.palette.accent_strong,
                 wave_low: skin.palette.wave_low,
                 wave_mid: skin.palette.wave_mid,
                 wave_high: skin.palette.wave_high,
@@ -83,6 +89,8 @@ impl Wave {
         WavePaint {
             background: self.background,
             border: self.border,
+            cache_strip: self.cache_strip,
+            cached: data.cached,
             cue_badge: self.cue_badge,
             cue_text: self.cue_text,
             metrics: self.metrics,
@@ -133,6 +141,7 @@ impl Drawn {
             _ => 0.0,
         };
         Self {
+            cached: cached_extent(reads, scope, progress),
             overlay: (style == WaveStyle::Hero).then(|| OverlayData {
                 title: read_text(reads, &derived("deck.track.title", scope))
                     .filter(|title| !title.is_empty())
@@ -192,7 +201,9 @@ impl Drawn {
                 _ => None,
             })
             .map_or(self.zoom, clamp_zoom);
+        let cached = cached_extent(reads, scope, progress);
         let mut changed = std::mem::replace(&mut self.progress, progress) != progress;
+        changed |= std::mem::replace(&mut self.cached, cached) != cached;
         changed |= std::mem::replace(&mut self.zoom, zoom) != zoom;
         if let Some(overlay) = &mut self.overlay {
             let next = OverlayData {
@@ -249,6 +260,22 @@ fn overlay_palette(skin: &Skin) -> OverlayPalette {
     }
 }
 
+/// How far the track is held, as a share of its length.
+///
+/// The host owns the answer and a deck that answers nothing is not behind:
+/// the playhead is the floor, so a wave with no cache endpoint draws the
+/// played part alone.
+fn cached_extent(reads: &dyn Reads, scope: &str, progress: f32) -> f32 {
+    let played = progress.clamp(0.0, 1.0);
+    match reads.get(&derived("deck.playback.cached_normalized", scope)) {
+        Some(ReadValue::Scalar(cached)) => {
+            let cached: f32 = cached.as_();
+            cached.max(played).min(1.0)
+        }
+        _ => played,
+    }
+}
+
 fn read_text<'a>(reads: &'a dyn Reads, endpoint: &str) -> Option<&'a str> {
     match reads.get(endpoint) {
         Some(ReadValue::Text(value)) => Some(value),
@@ -260,13 +287,50 @@ fn read_text<'a>(reads: &'a dyn Reads, endpoint: &str) -> Option<&'a str> {
 mod tests {
     use kithara_test_utils::kithara;
 
-    use super::{Drawn, Rect, Skin, Wave, WaveStyle};
+    use super::{Drawn, Rect, Skin, Wave, WaveStyle, cached_extent};
     use crate::{
         builtin,
         draw::{DrawCmd, DrawListBuilder, Geom, Pt},
         render::{ReadValue, Reads, WaveBucket, WaveformView},
         shaping::TextContext,
     };
+
+    struct CacheReads(Option<f64>);
+
+    impl Reads for CacheReads {
+        fn get(&self, endpoint: &str) -> Option<ReadValue<'_>> {
+            if endpoint == "deck.playback.cached_normalized@deck=a" {
+                self.0.map(ReadValue::Scalar)
+            } else {
+                None
+            }
+        }
+    }
+
+    #[kithara::test]
+    fn what_is_held_never_falls_behind_the_playhead() {
+        assert_eq!(cached_extent(&CacheReads(Some(0.1)), "@deck=a", 0.4), 0.4);
+    }
+
+    #[kithara::test]
+    fn what_is_held_takes_the_answer_ahead_of_the_playhead() {
+        assert_eq!(cached_extent(&CacheReads(Some(0.7)), "@deck=a", 0.4), 0.7);
+    }
+
+    #[kithara::test]
+    fn what_is_held_stops_at_the_end_of_the_track() {
+        assert_eq!(cached_extent(&CacheReads(Some(1.4)), "@deck=a", 0.4), 1.0);
+    }
+
+    #[kithara::test]
+    fn a_deck_answering_nothing_holds_only_what_it_played() {
+        assert_eq!(cached_extent(&CacheReads(None), "@deck=a", 0.4), 0.4);
+    }
+
+    #[kithara::test]
+    fn the_answer_is_read_in_the_wave_own_scope() {
+        assert_eq!(cached_extent(&CacheReads(Some(0.9)), "@deck=b", 0.4), 0.4);
+    }
 
     struct WaveReads {
         buckets: [WaveBucket; 2],

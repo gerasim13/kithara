@@ -85,7 +85,7 @@ impl Kithara {
         ui: AppUi,
         broadcast: crate::broadcast::Broadcaster,
     ) -> (Self, Task<Message>) {
-        let (window_id, open) = window::open(window_settings());
+        let (window_id, open) = window::open(window_settings(ui.window_min()));
 
         (
             Self::mounted(session, decks, catalog, config, ui, broadcast, window_id),

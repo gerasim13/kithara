@@ -1418,8 +1418,15 @@ mod tests {
             }
             ExpandedNode::Object { child, .. }
             | ExpandedNode::Optional { child, .. }
+            | ExpandedNode::Reveal { child, .. }
             | ExpandedNode::Scroll { child, .. } => {
                 claimed_components(child, components);
+            }
+            ExpandedNode::Adaptive { base, steps, .. } => {
+                claimed_components(base, components);
+                for (_, branch) in steps {
+                    claimed_components(branch, components);
+                }
             }
             ExpandedNode::Control { spec, .. } => match spec {
                 ControlSpec::Button { .. }

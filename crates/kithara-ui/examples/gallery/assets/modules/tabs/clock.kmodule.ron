@@ -11,7 +11,7 @@
             Row(
                 id: "controls",
                 gap: 18.0,
-                size: (w: Fill, h: Fixed(36.0)),
+                size: (w: Fill, h: Fixed(38.0)),
                 children: [
                     Time(id: "elapsed", read: Telemetry(id: "deck.playback.position_normalized", with: { "deck": "a" })),
                     Divider(id: "rule"),

@@ -1,4 +1,4 @@
-use iced::Element;
+use iced::{Element, Size};
 use kithara_platform::time::Duration;
 use kithara_ui::{
     builtin,
@@ -28,6 +28,10 @@ const DOCS: &[(&str, &str)] = &[
     (
         "modules/app-bar.kmodule.ron",
         include_str!("../../../assets/ui/modules/app-bar.kmodule.ron"),
+    ),
+    (
+        "modules/app-bar-micro.kmodule.ron",
+        include_str!("../../../assets/ui/modules/app-bar-micro.kmodule.ron"),
     ),
     (
         "modules/app-menu.kmodule.ron",
@@ -66,8 +70,8 @@ const DOCS: &[(&str, &str)] = &[
         include_str!("../../../assets/ui/modules/app-mixer-single.kmodule.ron"),
     ),
     (
-        "modules/app-select-row.kmodule.ron",
-        include_str!("../../../assets/ui/modules/app-select-row.kmodule.ron"),
+        "modules/app-strip/eq-mode-row.kmodule.ron",
+        include_str!("../../../assets/ui/modules/app-strip/eq-mode-row.kmodule.ron"),
     ),
     (
         "modules/app-strip.kmodule.ron",
@@ -111,6 +115,13 @@ impl AppUi {
     /// Moves this host's clock on by one tick of `step`.
     pub(crate) fn advance(&mut self, step: Duration) {
         self.clock = self.clock.advance(step);
+    }
+
+    pub(crate) fn window_min(&self) -> Size {
+        Size::new(
+            self.single.min.w.min().max(self.dual.min.w.min()),
+            self.single.min.h.min().max(self.dual.min.h.min()),
+        )
     }
 
     const fn compiled(&self, layout: DeckLayout) -> &CompiledUi {

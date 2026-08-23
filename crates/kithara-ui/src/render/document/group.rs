@@ -1,7 +1,7 @@
 use crate::{
     expand::SurfaceSpec,
     layout::{Axis, FrameSides},
-    module::TextAlign,
+    module::{MeasureAxis, TextAlign},
     size::SizeSpec,
     skin::ColorRole,
 };
@@ -11,6 +11,9 @@ use crate::{
 #[non_exhaustive]
 pub struct Group<'a> {
     pub(super) axis: Axis,
+    /// The axis whose room decides which of its children stand, when the
+    /// document says its children come and go with the room.
+    pub(super) measure: Option<MeasureAxis>,
     pub(super) alignment: TextAlign,
     pub(super) gap: f32,
     pub(super) padding_x: f32,
@@ -29,6 +32,12 @@ impl Group<'_> {
     #[must_use]
     pub const fn axis(&self) -> Axis {
         self.axis
+    }
+
+    /// The axis whose room decides which children stand, when they do.
+    #[must_use]
+    pub const fn measure(&self) -> Option<MeasureAxis> {
+        self.measure
     }
 
     /// Cross-axis child alignment.

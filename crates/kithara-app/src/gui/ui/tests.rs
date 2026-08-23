@@ -1,11 +1,17 @@
+use std::{cell::RefCell, collections::BTreeSet};
+
 use kithara_test_utils::kithara;
 use kithara_ui::{
-    compile::{CompiledNode, CompiledUi},
+    builtin,
+    compile::{CompiledNode, CompiledUi, compiled_min},
     expand::{ControlSpec, ExpandedNode},
-    module::{ButtonStyle, IconName, TextAlign, TextStyle, WaveStyle},
+    module::{ButtonStyle, IconName, MeasureAxis, TextAlign, TextStyle, WaveStyle},
+    render::{Clock, ReadValue, Reads, tree},
+    size::{Dim, SizeSpec, control_size},
 };
 
-use super::{cache::DeckLayout, compile::compile_ui};
+use super::{cache::DeckLayout, compile::compile_ui, events::route, scope::MICRO_DECK};
+
 const LAYOUTS: [DeckLayout; 2] = [DeckLayout::Single, DeckLayout::Dual];
 
 const SINGLE_HOSTED_CLAIMS: [(&str, &str); 15] = [
@@ -60,40 +66,51 @@ const DUAL_HOSTED_CLAIMS: [(&str, &str); 31] = [
     ("overview/b/wave", "wave"),
 ];
 
-fn each_node(ui: &CompiledUi, visit: &mut impl FnMut(&ExpandedNode)) {
-    fn walk(node: &ExpandedNode, visit: &mut impl FnMut(&ExpandedNode)) {
-        visit(node);
-        match node {
-            ExpandedNode::Row { children, .. }
-            | ExpandedNode::Column { children, .. }
-            | ExpandedNode::Slot { children, .. } => {
-                for child in children {
-                    walk(child, visit);
-                }
+fn each_expanded(node: &ExpandedNode, visit: &mut impl FnMut(&ExpandedNode)) {
+    visit(node);
+    match node {
+        ExpandedNode::Row { children, .. }
+        | ExpandedNode::Column { children, .. }
+        | ExpandedNode::Slot { children, .. } => {
+            for child in children {
+                each_expanded(child, visit);
             }
-            ExpandedNode::Optional { child, .. }
-            | ExpandedNode::Pressable { child, .. }
-            | ExpandedNode::Scroll { child, .. } => {
-                walk(child, visit);
-            }
-            ExpandedNode::Popover {
-                anchor, content, ..
-            } => {
-                walk(anchor, visit);
-                walk(content, visit);
-            }
-            _ => {}
         }
+        ExpandedNode::Optional { child, .. }
+        | ExpandedNode::Pressable { child, .. }
+        | ExpandedNode::Reveal { child, .. }
+        | ExpandedNode::Scroll { child, .. } => {
+            each_expanded(child, visit);
+        }
+        ExpandedNode::Adaptive { base, steps, .. } => {
+            each_expanded(base, visit);
+            for (_, branch) in steps {
+                each_expanded(branch, visit);
+            }
+        }
+        ExpandedNode::Popover {
+            anchor, content, ..
+        } => {
+            each_expanded(anchor, visit);
+            each_expanded(content, visit);
+        }
+        _ => {}
     }
+}
 
+fn each_node(ui: &CompiledUi, visit: &mut impl FnMut(&ExpandedNode)) {
     let mut stack = vec![&ui.root];
     while let Some(node) = stack.pop() {
         match node {
             CompiledNode::Split { children, .. } => {
-                stack.extend(children.iter().map(|(_, child)| child));
+                stack.extend(children.iter().map(|cell| &cell.node));
             }
             CompiledNode::Optional { child, .. } => stack.push(child),
-            CompiledNode::Module { root, .. } => walk(root, visit),
+            CompiledNode::Adaptive { base, steps, .. } => {
+                stack.push(base);
+                stack.extend(steps.iter().map(|(_, branch)| branch));
+            }
+            CompiledNode::Module { root, .. } => each_expanded(root, visit),
             _ => {}
         }
     }
@@ -166,9 +183,13 @@ fn drop_targets(ui: &CompiledUi) -> Vec<(&str, Vec<&str>)> {
     while let Some(node) = stack.pop() {
         match node {
             CompiledNode::Split { children, .. } => {
-                stack.extend(children.iter().map(|(_, child)| child));
+                stack.extend(children.iter().map(|cell| &cell.node));
             }
             CompiledNode::Optional { child, .. } => stack.push(child),
+            CompiledNode::Adaptive { base, steps, .. } => {
+                stack.push(base);
+                stack.extend(steps.iter().map(|(_, branch)| branch));
+            }
             CompiledNode::Module {
                 instance,
                 drop: Some(drop),
@@ -232,6 +253,404 @@ fn documents_compile_against_the_registry() {
     }
 }
 
+fn instances<'a>(ui: &'a CompiledUi, node: &'a CompiledNode) -> Vec<&'a str> {
+    let mut out = Vec::new();
+    let mut stack = vec![node];
+    while let Some(node) = stack.pop() {
+        match node {
+            CompiledNode::Split { children, .. } => {
+                stack.extend(children.iter().map(|cell| &cell.node));
+            }
+            CompiledNode::Optional { child, .. } => stack.push(child),
+            CompiledNode::Adaptive { base, steps, .. } => {
+                stack.push(base);
+                stack.extend(steps.iter().map(|(_, branch)| branch));
+            }
+            CompiledNode::Module { instance, .. } => out.push(ui.resolve(*instance)),
+            _ => {}
+        }
+    }
+    out.sort_unstable();
+    out
+}
+
+fn module<'a>(ui: &'a CompiledUi, want: &str) -> &'a CompiledNode {
+    let mut stack = vec![&ui.root];
+    while let Some(node) = stack.pop() {
+        match node {
+            CompiledNode::Split { children, .. } => {
+                stack.extend(children.iter().map(|cell| &cell.node));
+            }
+            CompiledNode::Optional { child, .. } => stack.push(child),
+            CompiledNode::Adaptive { base, steps, .. } => {
+                stack.push(base);
+                stack.extend(steps.iter().map(|(_, branch)| branch));
+            }
+            CompiledNode::Module { instance, .. } if ui.resolve(*instance) == want => {
+                return node;
+            }
+            _ => {}
+        }
+    }
+    panic!("no module instance `{want}`");
+}
+
+fn cell_id<'a>(ui: &'a CompiledUi, node: &'a ExpandedNode) -> &'a str {
+    match node {
+        ExpandedNode::Control { path, .. }
+        | ExpandedNode::Popover { path, .. }
+        | ExpandedNode::Pressable { path, .. } => ui.resolve(*path),
+        ExpandedNode::Optional { block, .. } => ui.resolve(block.path),
+        ExpandedNode::Adaptive { base, .. } => cell_id(ui, base),
+        ExpandedNode::Reveal { child, .. } | ExpandedNode::Scroll { child, .. } => {
+            cell_id(ui, child)
+        }
+        ExpandedNode::Row { children, .. }
+        | ExpandedNode::Column { children, .. }
+        | ExpandedNode::Slot { children, .. } => {
+            children.first().map_or("", |child| cell_id(ui, child))
+        }
+        _ => "",
+    }
+}
+
+fn module_root<'a>(ui: &'a CompiledUi, instance: &str) -> &'a ExpandedNode {
+    let CompiledNode::Module { root, .. } = module(ui, instance) else {
+        panic!("`{instance}` is no module");
+    };
+    root
+}
+
+fn cells<'a>(
+    node: &'a ExpandedNode,
+    axis: MeasureAxis,
+) -> Vec<((f32, Option<f32>), &'a ExpandedNode)> {
+    let (ExpandedNode::Row {
+        measure, children, ..
+    }
+    | ExpandedNode::Column {
+        measure, children, ..
+    }) = node
+    else {
+        panic!("a container that measures itself is a row or a column");
+    };
+    assert_eq!(
+        *measure,
+        Some(axis),
+        "a cell answers a threshold on the axis its container measures",
+    );
+    children
+        .iter()
+        .map(|child| match child {
+            ExpandedNode::Reveal {
+                from, until, child, ..
+            } => ((*from, *until), &**child),
+            child => ((0.0, None), child),
+        })
+        .collect()
+}
+
+fn bar_cells<'a>(ui: &'a CompiledUi, bar: &'a ExpandedNode) -> Vec<((f32, Option<f32>), &'a str)> {
+    cells(bar, MeasureAxis::Width)
+        .into_iter()
+        .map(|(band, cell)| (band, cell_id(ui, cell)))
+        .collect()
+}
+
+fn root_cells(ui: &CompiledUi) -> Vec<((f32, Option<f32>), &CompiledNode)> {
+    let CompiledNode::Split {
+        measure, children, ..
+    } = &ui.root
+    else {
+        panic!("the window stacks its blocks in one split");
+    };
+    assert_eq!(
+        *measure,
+        Some(MeasureAxis::Height),
+        "the window reads its own height",
+    );
+    children
+        .iter()
+        .map(|cell| ((cell.from, cell.until), &cell.node))
+        .collect()
+}
+
+fn standing<'a>(
+    ui: &'a CompiledUi,
+    cells: &[((f32, Option<f32>), &'a CompiledNode)],
+    room: f32,
+) -> Vec<&'a str> {
+    let mut out: Vec<&str> = cells
+        .iter()
+        .filter(|((from, until), _)| *from <= room && until.is_none_or(|until| room < until))
+        .flat_map(|(_, node)| instances(ui, node))
+        .collect();
+    out.sort_unstable();
+    out
+}
+
+fn standing_height(cells: &[((f32, Option<f32>), &CompiledNode)], room: f32) -> f32 {
+    cells
+        .iter()
+        .filter(|((from, until), _)| *from <= room && until.is_none_or(|until| room < until))
+        .map(|(_, node)| compiled_min(node, builtin::skin_doc()).h.min())
+        .sum()
+}
+
+fn micro_bar<'a>(ui: &'a CompiledUi) -> &'a ExpandedNode {
+    module_root(ui, "micro-bar")
+}
+
+fn bar_box(bar: &ExpandedNode) -> SizeSpec {
+    let ExpandedNode::Row {
+        size: Some(size), ..
+    } = bar
+    else {
+        panic!("the micro bar declares its own box");
+    };
+    *size
+}
+
+fn list_min(pane: &ExpandedNode) -> f32 {
+    let mut found = None;
+    each_expanded(pane, &mut |node| {
+        if let ExpandedNode::Control { spec, size, .. } = node
+            && matches!(spec, ControlSpec::Table { .. })
+        {
+            found = Some(size.unwrap_or_else(|| control_size(spec, builtin::skin_doc())));
+        }
+    });
+    found.expect("the browser panel draws a track list").h.min()
+}
+
+#[kithara::test]
+fn every_address_names_an_instance_the_host_routes() {
+    for layout in LAYOUTS {
+        let ui = compile_ui(layout).unwrap();
+        let mut named: Vec<&str> = control_paths(&ui)
+            .into_iter()
+            .filter_map(|path| path.split_once('/').map(|(instance, _)| instance))
+            .collect();
+        named.sort_unstable();
+        named.dedup();
+        for instance in &named {
+            assert!(
+                route(instance).is_some(),
+                "{layout:?}: `{instance}` addresses controls that `events::route` does not name",
+            );
+        }
+
+        let mut want = vec!["bar", "deck-a", "library", "micro-bar", "mixer", "overview"];
+        if layout == DeckLayout::Dual {
+            want.push("deck-b");
+        }
+        want.sort_unstable();
+        assert_eq!(named, want, "{layout:?}");
+    }
+}
+
+#[kithara::test]
+fn every_block_stands_once_the_window_holds_the_ones_above_it() {
+    for layout in LAYOUTS {
+        let ui = compile_ui(layout).unwrap();
+        let cells = root_cells(&ui);
+
+        assert_eq!(ui.size, SizeSpec::new(Dim::Fill, Dim::Fill), "{layout:?}");
+        for from in cells.iter().map(|((from, _), _)| *from) {
+            if from > 0.0 {
+                assert_eq!(
+                    standing_height(&cells, from),
+                    from,
+                    "{layout:?}: the blocks standing at {from}",
+                );
+            }
+        }
+    }
+}
+
+#[kithara::test]
+fn the_window_takes_its_blocks_one_by_one_as_it_grows_taller() {
+    for layout in LAYOUTS {
+        let ui = compile_ui(layout).unwrap();
+        let cells = root_cells(&ui);
+        let mut ladder: Vec<f32> = cells
+            .iter()
+            .map(|((from, _), _)| *from)
+            .filter(|from| *from > 0.0)
+            .collect();
+        ladder.sort_by(f32::total_cmp);
+        ladder.dedup();
+        let [browser, overview, decks] = ladder[..] else {
+            panic!("{layout:?}: the window climbs three rungs, got {ladder:?}");
+        };
+
+        assert_eq!(
+            standing(&ui, &cells, ui.min.h.min()),
+            ["micro-bar"],
+            "{layout:?}",
+        );
+        assert_eq!(
+            standing(&ui, &cells, browser),
+            ["library", "micro-bar"],
+            "{layout:?}",
+        );
+        assert_eq!(
+            standing(&ui, &cells, overview),
+            ["library", "micro-bar", "overview"],
+            "{layout:?}",
+        );
+        let mut want = vec!["bar", "deck-a", "library", "mixer", "overview"];
+        if layout == DeckLayout::Dual {
+            want.push("deck-b");
+        }
+        want.sort_unstable();
+        assert_eq!(standing(&ui, &cells, decks), want, "{layout:?}");
+    }
+}
+
+#[kithara::test]
+fn the_micro_bar_reveals_its_cells_as_the_window_widens() {
+    for layout in LAYOUTS {
+        let ui = compile_ui(layout).unwrap();
+
+        assert_eq!(
+            bar_cells(&ui, micro_bar(&ui)),
+            [
+                ((0.0, None), "micro-bar/menu/pop"),
+                ((0.0, None), "micro-bar/play"),
+                ((590.0, None), "micro-bar/summary"),
+                ((0.0, Some(350.0)), "micro-bar/drag"),
+                ((350.0, None), "micro-bar/wave"),
+                ((670.0, None), "micro-bar/speaker"),
+                ((440.0, None), "micro-bar/remain"),
+                ((0.0, None), "micro-bar/before-window"),
+                ((0.0, None), "micro-bar/window"),
+            ],
+            "{layout:?}",
+        );
+    }
+}
+
+#[kithara::test]
+fn the_micro_drag_strip_hands_its_place_to_the_wave() {
+    for layout in LAYOUTS {
+        let ui = compile_ui(layout).unwrap();
+        let cells = bar_cells(&ui, micro_bar(&ui));
+        let band = |id: &str| {
+            cells
+                .iter()
+                .find_map(|(band, cell)| (*cell == id).then_some(*band))
+                .unwrap_or_else(|| panic!("{layout:?}: the bar names {id}"))
+        };
+
+        let (strip_from, strip_until) = band("micro-bar/drag");
+        let (wave_from, wave_until) = band("micro-bar/wave");
+
+        assert_eq!(
+            strip_from, 0.0,
+            "{layout:?}: the strip stands at the narrowest bar"
+        );
+        assert_eq!(strip_until, Some(wave_from), "{layout:?}");
+        assert_eq!(
+            wave_until, None,
+            "{layout:?}: the wave stands from its width up"
+        );
+    }
+}
+
+#[kithara::test]
+fn the_bar_reveals_its_telemetry_as_the_window_widens() {
+    for layout in LAYOUTS {
+        let ui = compile_ui(layout).unwrap();
+
+        assert_eq!(
+            bar_cells(&ui, module_root(&ui, "bar")),
+            [
+                ((0.0, None), "bar/menu/pop"),
+                ((1250.0, None), "bar/brand"),
+                ((0.0, None), "bar/drag"),
+                ((1120.0, None), "bar/cpu-block"),
+                ((0.0, None), "bar/broadcast-block"),
+                ((0.0, None), "bar/before-window"),
+                ((0.0, None), "bar/window"),
+            ],
+            "{layout:?}",
+        );
+    }
+}
+
+#[kithara::test]
+fn the_browser_panel_stands_once_the_window_is_tall_enough_for_it() {
+    for layout in LAYOUTS {
+        let ui = compile_ui(layout).unwrap();
+        let cells = root_cells(&ui);
+        let Some(((from, None), _)) = cells
+            .iter()
+            .copied()
+            .find(|(_, node)| instances(&ui, node) == ["library"])
+        else {
+            panic!("{layout:?}: the window stands the browser over the bar");
+        };
+
+        assert_eq!(
+            from,
+            bar_box(micro_bar(&ui)).h.min() + list_min(module_root(&ui, "library")),
+            "{layout:?}",
+        );
+    }
+}
+
+#[kithara::test]
+fn the_window_minimum_holds_the_micro_bar() {
+    for layout in LAYOUTS {
+        let ui = compile_ui(layout).unwrap();
+
+        assert_eq!(
+            ui.min,
+            SizeSpec::new(Dim::Fixed(221.0), Dim::Fixed(42.0)),
+            "{layout:?}",
+        );
+        assert_eq!(
+            ui.min,
+            compiled_min(module(&ui, "micro-bar"), builtin::skin_doc()),
+            "{layout:?}",
+        );
+    }
+}
+
+#[kithara::test]
+fn every_walker_reaches_the_nodes_the_documents_declare() {
+    for layout in LAYOUTS {
+        let ui = compile_ui(layout).unwrap();
+        let dual = layout == DeckLayout::Dual;
+        for (walker, found, floor) in [
+            (
+                "controls",
+                controls(&ui).len(),
+                if dual { 213 } else { 156 },
+            ),
+            ("surfaces", surfaces(&ui).len(), layout.decks()),
+            (
+                "pressables",
+                pressables(&ui).len(),
+                if dual { 47 } else { 36 },
+            ),
+            ("drop_targets", drop_targets(&ui).len(), layout.decks()),
+            ("guarded_by", guarded_by(&ui, "ui.module.hidden").len(), 4),
+            (
+                "optional_modules",
+                optional_modules(&ui, "ui.module.hidden").len(),
+                3,
+            ),
+        ] {
+            assert!(
+                found >= floor,
+                "{layout:?}: `{walker}` reached {found} nodes, under the {floor} the documents declare",
+            );
+        }
+    }
+}
+
 #[kithara::test]
 fn deck_scoped_controls_are_routed_to_the_deck_they_read() {
     for layout in LAYOUTS {
@@ -243,11 +662,14 @@ fn deck_scoped_controls_are_routed_to_the_deck_they_read() {
                 }) else {
                     continue;
                 };
-                let routed = [
+                let mut routed = vec![
                     format!("deck-{letter}/"),
                     format!("mixer/{letter}/"),
                     format!("overview/{letter}/"),
                 ];
+                if letter == MICRO_DECK {
+                    routed.push("micro-bar/".to_owned());
+                }
                 assert!(
                     routed.iter().any(|prefix| path.starts_with(prefix)),
                     "{layout:?}: control `{path}` is bound to `{key}` but is not addressed by deck `{letter}`",
@@ -331,8 +753,19 @@ fn the_bar_owns_the_window_chrome() {
                 seen.push(ui.resolve(*path));
             }
         });
+        seen.sort_unstable();
+        seen.dedup();
 
-        assert_eq!(seen, ["bar/drag", "bar/window"], "{layout:?}");
+        assert_eq!(
+            seen,
+            [
+                "bar/drag",
+                "bar/window",
+                "micro-bar/drag",
+                "micro-bar/window",
+            ],
+            "{layout:?}",
+        );
         assert!(
             ui.resize_edges,
             "{layout:?}: the window has no other way to be resized"
@@ -372,6 +805,106 @@ fn every_channel_strip_carries_the_supported_control_set() {
             assert!(
                 controls.contains(&name),
                 "missing control `mixer/{letter}/{name}`"
+            );
+        }
+    }
+}
+
+struct BandReads {
+    bands: Option<ReadValue<'static>>,
+    seen: RefCell<BTreeSet<String>>,
+}
+
+impl BandReads {
+    fn banked(bands: Option<ReadValue<'static>>) -> BTreeSet<String> {
+        let ui = compile_ui(DeckLayout::Dual).unwrap();
+        let reads = Self {
+            bands,
+            seen: RefCell::default(),
+        };
+
+        drop(tree::render(
+            &ui.root,
+            &ui,
+            &reads,
+            builtin::skin(),
+            Clock::default(),
+        ));
+
+        reads.seen.take()
+    }
+}
+
+impl Reads for BandReads {
+    fn get(&self, endpoint: &str) -> Option<ReadValue<'_>> {
+        self.seen.borrow_mut().insert(endpoint.to_owned());
+        if endpoint == "deck.eq.bands@deck=a" {
+            return self.bands;
+        }
+        None
+    }
+}
+
+#[kithara::test]
+fn one_band_count_decides_which_eq_bank_a_deck_draws() {
+    for (bands, drawn, spare) in [
+        (3.0, "deck.eq.mid", "deck.eq.low_mid"),
+        (4.0, "deck.eq.low_mid", "deck.eq.mid"),
+    ] {
+        let seen = BandReads::banked(Some(ReadValue::Scalar(bands)));
+
+        assert!(
+            seen.contains(&format!("{drawn}@deck=a")),
+            "{bands} bands: `{drawn}` must be drawn, saw {seen:?}",
+        );
+        assert!(
+            !seen.contains(&format!("{spare}@deck=a")),
+            "{bands} bands: `{spare}` belongs to the other bank",
+        );
+    }
+}
+
+#[kithara::test]
+fn a_band_count_that_is_no_number_draws_the_three_band_bank() {
+    for unstated in [
+        None,
+        Some(ReadValue::Scalar(f64::NAN)),
+        Some(ReadValue::Scalar(f64::INFINITY)),
+        Some(ReadValue::Bool(true)),
+    ] {
+        let seen = BandReads::banked(unstated);
+
+        assert!(
+            seen.contains("deck.eq.mid@deck=a"),
+            "{unstated:?}: the three-band bank draws, saw {seen:?}",
+        );
+        assert!(
+            !seen.contains("deck.eq.low_mid@deck=a"),
+            "{unstated:?}: the four-band bank needs a count of four",
+        );
+    }
+}
+
+#[kithara::test]
+fn the_mode_menu_asks_the_key_the_deck_answers() {
+    let ui = compile_ui(DeckLayout::Dual).unwrap();
+    let mut asked = Vec::new();
+    each_node(&ui, &mut |node| {
+        if let ExpandedNode::Row {
+            active: Some(binding),
+            ..
+        } = node
+        {
+            asked.push(ui.resolve(binding.key));
+        }
+    });
+
+    for letter in ["a", "b"] {
+        for bands in [3, 4] {
+            let want = format!("deck.eq.selected@bands={bands},deck={letter}");
+            assert!(
+                asked.contains(&want.as_str()),
+                "no menu row reads `{want}`, saw {asked:?}",
             );
         }
     }
@@ -653,6 +1186,15 @@ fn guarded_by<'a>(ui: &'a CompiledUi, key: &str) -> Vec<&'a str> {
                     walk(child, ui, key, guarded, out);
                 }
             }
+            ExpandedNode::Reveal { child, .. } | ExpandedNode::Scroll { child, .. } => {
+                walk(child, ui, key, guarded, out);
+            }
+            ExpandedNode::Adaptive { base, steps, .. } => {
+                walk(base, ui, key, guarded, out);
+                for (_, branch) in steps {
+                    walk(branch, ui, key, guarded, out);
+                }
+            }
             ExpandedNode::Popover {
                 anchor, content, ..
             } => {
@@ -668,9 +1210,13 @@ fn guarded_by<'a>(ui: &'a CompiledUi, key: &str) -> Vec<&'a str> {
     while let Some(node) = stack.pop() {
         match node {
             CompiledNode::Split { children, .. } => {
-                stack.extend(children.iter().map(|(_, child)| child));
+                stack.extend(children.iter().map(|cell| &cell.node));
             }
             CompiledNode::Optional { child, .. } => stack.push(child),
+            CompiledNode::Adaptive { base, steps, .. } => {
+                stack.push(base);
+                stack.extend(steps.iter().map(|(_, branch)| branch));
+            }
             CompiledNode::Module { root, .. } => walk(root, ui, key, false, &mut out),
             _ => {}
         }
@@ -689,8 +1235,14 @@ fn optional_modules<'a>(ui: &'a CompiledUi, key: &str) -> Vec<(&'a str, &'a str)
     ) {
         match node {
             CompiledNode::Split { children, .. } => {
-                for (_, child) in children {
-                    walk(child, ui, key, guard, out);
+                for cell in children {
+                    walk(&cell.node, ui, key, guard, out);
+                }
+            }
+            CompiledNode::Adaptive { base, steps, .. } => {
+                walk(base, ui, key, guard, out);
+                for (_, branch) in steps {
+                    walk(branch, ui, key, guard, out);
                 }
             }
             CompiledNode::Optional { block, child } => {

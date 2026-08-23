@@ -93,3 +93,10 @@ the `WorkerCmd` channel plus a local cache so the infallible facade getters can 
 round trip. Wasm builds use the web-audio backend and link no stretch backend; playback rate is
 retained as main-thread control state only — no `WorkerCmd` carries it — so PCM speed stays 1.0
 until a wasm-capable stretch backend exists.
+
+Wasm does link a resampler: the wasm32 dependency arm re-adds `resample-rubato` on top of
+`default-features = false`. A web-audio context runs at the one rate the browser gives it, and any
+track whose own rate differs needs a fixed-ratio stage to reach it. Without the feature
+`PlaybackResamplerBackend` resolves to `NoResamplerBackend` and such a track fails to open at all.
+The Apple device set above can drop rubato because AudioToolbox decodes straight to the host rate;
+the browser offers no equivalent.

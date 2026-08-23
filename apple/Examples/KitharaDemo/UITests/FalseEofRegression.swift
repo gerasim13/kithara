@@ -46,13 +46,18 @@ final class FalseEofRegression: XCTestCase {
         continueAfterFailure = false
     }
 
-    /// The prod-DRM track URL the user repeatedly crashes on in
-    /// `app.log @ 09:43:50` / `@ 11:50`. Adding it through the
-    /// URL input keeps the test independent of the demo's default
+    /// A prod-DRM track from the demo's seed playlist. Adding it through
+    /// the URL input keeps the test independent of the demo's default
     /// playlist — which is empty when build-time DRM secrets are
     /// missing or `player.insert()` fails on first launch.
+    ///
+    /// The track the crash was captured on (`171515249_1`,
+    /// `app.log @ 09:43:50` / `@ 11:50`) answers 502 — the slicer no longer
+    /// serves it, so the test failed on the catalogue rather than on the
+    /// player. The scrub is a normalized slider position, so any
+    /// multi-minute track carries the scenario.
     private static let prodDrmTrackUrl =
-        "https://cdn-hls-slicer.zvuk.com/drm/track/171515249_1/master.m3u8"
+        "https://cdn-hls-slicer.zvuk.com/drm/track/79829257_2/master.m3u8"
 
     func testRapidScrubWithoutWarmupDoesNotFalseEofAdvance() throws {
         // Bundle id is set explicitly because the XcodeGen-generated
@@ -76,7 +81,7 @@ final class FalseEofRegression: XCTestCase {
         // Add-via-URL-input flow which is fragile on iOS Simulator
         // (TextField focus + keyboard interplay) and unnecessary
         // when the track is already in the seed.
-        let urlNeedle = "171515249_1/master.m3u8"
+        let urlNeedle = "79829257_2/master.m3u8"
         let prodRowPredicate = NSPredicate(
             format: "(identifier CONTAINS %@) OR (label CONTAINS %@)",
             urlNeedle, urlNeedle
@@ -122,7 +127,7 @@ final class FalseEofRegression: XCTestCase {
                 "Could not locate prod-DRM track row (needle '\(urlNeedle)') " +
                 "in the seed playlist. Visible row ids: [\(allRowIds)]. " +
                 "Either the demo's baked playlist no longer contains the " +
-                "171515249 track or the iOS XCFramework was built without " +
+                "79829257 track or the iOS XCFramework was built without " +
                 ".env DRM keys (so the row failed `player.insert`)."
             )
             return

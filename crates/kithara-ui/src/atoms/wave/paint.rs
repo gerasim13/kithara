@@ -19,7 +19,6 @@ pub(crate) struct WavePalette {
     pub(crate) line: Rgba,
     pub(crate) text_dim: Rgba,
     pub(crate) accent: Rgba,
-    pub(crate) accent_strong: Rgba,
     pub(crate) wave_low: Rgba,
     pub(crate) wave_mid: Rgba,
     pub(crate) wave_high: Rgba,
@@ -29,6 +28,9 @@ pub(crate) struct WavePalette {
 pub(crate) struct WavePaint<'a> {
     pub(crate) background: Rgba,
     pub(crate) border: Rgba,
+    pub(crate) cache_strip: Rgba,
+    /// How far the host says the track is held, as a share of its length.
+    pub(crate) cached: f32,
     pub(crate) cue_badge: Rgba,
     pub(crate) cue_text: Rgba,
     pub(crate) metrics: WaveSkin,
@@ -110,6 +112,23 @@ impl WavePaint<'_> {
         draw_border(list, bounds, self.metrics.frame, self.border);
     }
 
+    /// The bottom strip the micro wave draws: played to the playhead, held
+    /// ahead of it, and the plain background wherever the host answers
+    /// nothing.
+    fn paint_cache_strip(&self, list: &mut DrawListBuilder, bounds: Rect, head_x: f32) {
+        let h = self.metrics.cache_strip_height;
+        let y = bounds.y + (bounds.h - h).max(0.0);
+        let cached_x = bounds.x + self.cached.clamp(0.0, 1.0) * bounds.w;
+        let mut fill = |x: f32, w: f32, color| {
+            if w > 0.0 {
+                list.fill_rect(Rect { h, w, x, y }, color);
+            }
+        };
+        fill(bounds.x, bounds.w, self.background);
+        fill(bounds.x, head_x - bounds.x, self.palette.accent);
+        fill(head_x, cached_x - head_x, self.cache_strip);
+    }
+
     pub(crate) fn paint_foreground(
         &self,
         list: &mut DrawListBuilder,
@@ -128,9 +147,21 @@ impl WavePaint<'_> {
                     x: head_x,
                     y: bounds.y + bounds.h,
                 },
-                self.palette.accent_strong,
+                self.palette.accent,
                 self.metrics.playhead_width,
             );
+            list.fill_rect(
+                Rect {
+                    x: head_x - self.metrics.playhead_marker_width / 2.0,
+                    y: bounds.y,
+                    w: self.metrics.playhead_marker_width,
+                    h: self.metrics.playhead_marker_height,
+                },
+                self.palette.accent,
+            );
+            if self.style == WaveStyle::Micro {
+                self.paint_cache_strip(list, bounds, head_x);
+            }
         }
         if show_overlay && let Some(data) = self.overlay {
             overlay::paint(list, text, bounds, data, self.metrics.overlay);
@@ -211,7 +242,7 @@ mod tests {
     use crate::{
         atoms::wave::overlay::OverlayPalette,
         builtin,
-        draw::{DrawCmd, Geom, Paint, Transform},
+        draw::{DrawCmd, DrawList, Geom, Paint, Transform},
     };
 
     #[kithara::test]
@@ -229,7 +260,6 @@ mod tests {
             line: color(0.2),
             text_dim: color(0.3),
             accent: color(0.4),
-            accent_strong: color(0.5),
             wave_low: color(0.6),
             wave_mid: color(0.7),
             wave_high: color(0.8),
@@ -241,6 +271,8 @@ mod tests {
         let paint = WavePaint {
             background: color(0.01),
             border: color(0.02),
+            cache_strip: color(0.04),
+            cached: 0.5,
             cue_badge,
             cue_text: color(0.03),
             metrics,
@@ -366,7 +398,6 @@ mod tests {
             line: color(0.2),
             text_dim: color(0.3),
             accent: color(0.4),
-            accent_strong: color(0.5),
             wave_low: color(0.6),
             wave_mid: color(0.7),
             wave_high: color(0.8),
@@ -383,6 +414,8 @@ mod tests {
             let paint = WavePaint {
                 background: color(0.01),
                 border: color(0.02),
+                cache_strip: color(0.05),
+                cached: 0.8,
                 cue_badge: color(0.03),
                 cue_text: color(0.04),
                 metrics,
@@ -423,7 +456,7 @@ mod tests {
             for color in expected {
                 assert!(has_fill(commands, color));
             }
-            assert!(has_line(commands, palette.accent_strong));
+            assert!(has_line(commands, palette.accent));
             assert!(!has_fill(
                 commands,
                 Rgba {
@@ -431,6 +464,100 @@ mod tests {
                     ..palette.bg_deep
                 }
             ));
+        }
+    }
+
+    /// The wave the held-strip tests paint, named once so the box and the
+    /// colour the assertions read cannot drift apart.
+    mod strip {
+        use super::{Rect, Rgba, color};
+
+        pub(super) const BOUNDS: Rect = Rect {
+            h: 60.0,
+            w: 320.0,
+            x: 13.0,
+            y: 19.0,
+        };
+
+        /// The held strip's own colour, distinct from every other colour the
+        /// fixture paints, so `fill_rect` finds the strip and nothing else.
+        pub(super) const COLOR: Rgba = color(0.05);
+    }
+
+    fn strip_face(style: WaveStyle, cached: f32) -> DrawList {
+        let paint = WavePaint {
+            background: color(0.01),
+            border: color(0.02),
+            cache_strip: strip::COLOR,
+            cached,
+            cue_badge: color(0.03),
+            cue_text: color(0.04),
+            metrics: builtin::skin().wave,
+            overlay: None,
+            palette: WavePalette {
+                bg_deep: color(0.1),
+                line: color(0.2),
+                text_dim: color(0.3),
+                accent: color(0.4),
+                wave_low: color(0.6),
+                wave_mid: color(0.7),
+                wave_high: color(0.8),
+            },
+            progress: 0.5,
+            style,
+            waveform: None,
+            zoom: 1.0,
+        };
+        let mut text = TextContext::from(builtin::skin().text_resources());
+        let mut list = DrawListBuilder::default();
+
+        paint.paint(&mut list, &mut text, strip::BOUNDS, false);
+
+        list.finish()
+    }
+
+    #[kithara::test]
+    fn the_micro_strip_runs_from_the_playhead_to_what_the_host_holds() {
+        let list = strip_face(WaveStyle::Micro, 0.8);
+        let strip = fill_rect(list.commands(), strip::COLOR).expect("held strip");
+
+        assert_eq!(strip.x, strip::BOUNDS.x + 0.5 * strip::BOUNDS.w);
+        assert_eq!(strip.w, 0.3 * strip::BOUNDS.w);
+    }
+
+    #[kithara::test]
+    fn the_micro_strip_sits_along_the_bottom_of_the_wave() {
+        let height = builtin::skin().wave.cache_strip_height;
+        let list = strip_face(WaveStyle::Micro, 0.8);
+        let strip = fill_rect(list.commands(), strip::COLOR).expect("held strip");
+
+        assert_eq!(strip.h, height);
+    }
+
+    #[kithara::test]
+    fn the_micro_strip_ends_where_the_wave_ends() {
+        let list = strip_face(WaveStyle::Micro, 0.8);
+        let strip = fill_rect(list.commands(), strip::COLOR).expect("held strip");
+
+        assert_eq!(strip.y + strip.h, strip::BOUNDS.y + strip::BOUNDS.h);
+    }
+
+    #[kithara::test]
+    fn a_deck_holding_nothing_ahead_of_the_playhead_draws_no_strip() {
+        let list = strip_face(WaveStyle::Micro, 0.5);
+
+        assert!(fill_rect(list.commands(), strip::COLOR).is_none());
+    }
+
+    #[kithara::test]
+    fn only_the_micro_style_draws_the_held_strip() {
+        for style in [WaveStyle::Default, WaveStyle::Hero] {
+            let list = strip_face(style, 0.8);
+
+            assert!(
+                fill_rect(list.commands(), strip::COLOR).is_none(),
+                "{style:?} drew the held strip"
+            );
         }
     }
 

@@ -9,7 +9,6 @@
                 id: "tracks",
                 read: Model(id: "$read"),
                 columns: "$columns",
-                adaptive: (priority: Required),
             ),
         ],
     ),

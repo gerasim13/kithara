@@ -1,12 +1,13 @@
 use std::collections::BTreeMap;
 
-use super::{Ctx, Group, Host, Module, Popover, render};
+use super::{Ctx, Group, GroupMount, Host, Measured, Module, Popover, SplitMount, render};
 use crate::{
     compile::CompiledNode,
     draw::Transform,
     expand::{Binding, ControlSpec, ExpandedNode},
     ids::InternId,
     layout::Axis,
+    module::MeasureAxis,
     render::InputOwner,
     size::SizeSpec,
 };
@@ -41,11 +42,19 @@ struct Poses {
 impl Host for &mut Poses {
     type Output = ();
 
-    fn split(&mut self, _axis: Axis, _children: Vec<(f32, SizeSpec, Self::Output)>) {}
+    fn split(
+        &mut self,
+        _axis: Axis,
+        _measure: Option<MeasureAxis>,
+        _children: Vec<SplitMount<Self::Output>>,
+    ) {
+    }
+
+    fn measured(&mut self, _plan: Measured, _branches: Vec<Self::Output>) {}
 
     fn module(&mut self, _module: Module<'_>, _content: Option<Self::Output>) {}
 
-    fn group(&mut self, _group: Group<'_>, _children: Vec<(Option<f32>, Self::Output)>) {}
+    fn group(&mut self, _group: Group<'_>, _children: Vec<GroupMount<Self::Output>>) {}
 
     fn popover(
         &mut self,

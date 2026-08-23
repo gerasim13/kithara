@@ -117,7 +117,7 @@ impl Gallery {
         });
         let settings = Settings {
             size: Size::new(Consts::WIDTH, Consts::HEIGHT),
-            min_size: Some(Size::new(Consts::WIDTH, Consts::HEIGHT)),
+            min_size: Some(Size::new(Consts::MIN_WIDTH, Consts::MIN_HEIGHT)),
             decorations: false,
             exit_on_close_request: false,
             ..Settings::default()
@@ -356,14 +356,14 @@ mod tests {
             let CompiledNode::Split {
                 children: gallery_children,
                 ..
-            } = &children[1].1
+            } = &children[1].node
             else {
                 panic!("expected gallery content");
             };
             let CompiledNode::Split {
                 children: module_children,
                 ..
-            } = &gallery_children[1].1
+            } = &gallery_children[1].node
             else {
                 panic!("expected module demo stack");
             };
@@ -373,7 +373,7 @@ mod tests {
                 chrome,
                 footer,
                 ..
-            } = &module_children[1].1
+            } = &module_children[1].node
             else {
                 panic!("expected module demo");
             };
@@ -725,6 +725,7 @@ mod tests {
                 ExpandedNode::Object { child, .. }
                 | ExpandedNode::Optional { child, .. }
                 | ExpandedNode::Pressable { child, .. }
+                | ExpandedNode::Reveal { child, .. }
                 | ExpandedNode::Scroll { child, .. } => walk(child, visit),
                 ExpandedNode::Popover {
                     anchor, content, ..
@@ -732,8 +733,14 @@ mod tests {
                     walk(anchor, visit);
                     walk(content, visit);
                 }
+                ExpandedNode::Adaptive { base, steps, .. } => {
+                    walk(base, visit);
+                    for (_, branch) in steps {
+                        walk(branch, visit);
+                    }
+                }
                 ExpandedNode::Control { spec, read, .. } => visit(spec, read.as_ref()),
-                _ => {}
+                other => panic!("the control census does not walk {other:?}"),
             }
         }
 
@@ -741,11 +748,15 @@ mod tests {
         while let Some(node) = stack.pop() {
             match node {
                 CompiledNode::Split { children, .. } => {
-                    stack.extend(children.iter().map(|(_, child)| child));
+                    stack.extend(children.iter().map(|cell| &cell.node));
                 }
                 CompiledNode::Optional { child, .. } => stack.push(child),
+                CompiledNode::Adaptive { base, steps, .. } => {
+                    stack.push(base);
+                    stack.extend(steps.iter().map(|(_, branch)| branch));
+                }
                 CompiledNode::Module { root, .. } => walk(root, visit),
-                _ => {}
+                other => panic!("the control census does not walk {other:?}"),
             }
         }
     }
@@ -755,7 +766,8 @@ mod tests {
             match node {
                 ExpandedNode::Row { children, .. }
                 | ExpandedNode::Column { children, .. }
-                | ExpandedNode::Slot { children, .. } => {
+                | ExpandedNode::Slot { children, .. }
+                | ExpandedNode::Stage { children, .. } => {
                     for child in children {
                         walk(child, ui, visit);
                     }
@@ -763,6 +775,7 @@ mod tests {
                 ExpandedNode::Object { child, .. }
                 | ExpandedNode::Optional { child, .. }
                 | ExpandedNode::Pressable { child, .. }
+                | ExpandedNode::Reveal { child, .. }
                 | ExpandedNode::Scroll { child, .. } => {
                     walk(child, ui, visit);
                 }
@@ -772,10 +785,16 @@ mod tests {
                     walk(anchor, ui, visit);
                     walk(content, ui, visit);
                 }
+                ExpandedNode::Adaptive { base, steps, .. } => {
+                    walk(base, ui, visit);
+                    for (_, branch) in steps {
+                        walk(branch, ui, visit);
+                    }
+                }
                 ExpandedNode::Control { path, spec, .. } => {
                     visit(ui.resolve(*path), spec);
                 }
-                _ => {}
+                other => panic!("the control census does not walk {other:?}"),
             }
         }
 
@@ -783,11 +802,15 @@ mod tests {
         while let Some(node) = stack.pop() {
             match node {
                 CompiledNode::Split { children, .. } => {
-                    stack.extend(children.iter().map(|(_, child)| child));
+                    stack.extend(children.iter().map(|cell| &cell.node));
                 }
                 CompiledNode::Optional { child, .. } => stack.push(child),
+                CompiledNode::Adaptive { base, steps, .. } => {
+                    stack.push(base);
+                    stack.extend(steps.iter().map(|(_, branch)| branch));
+                }
                 CompiledNode::Module { root, .. } => walk(root, ui, visit),
-                _ => {}
+                other => panic!("the control census does not walk {other:?}"),
             }
         }
     }
@@ -817,7 +840,8 @@ mod tests {
     fn collect_nav_item_paths(node: &CompiledNode, ui: &CompiledUi, paths: &mut Vec<String>) {
         match node {
             CompiledNode::Split { children, .. } => {
-                for (_, child) in children {
+                for cell in children {
+                    let child = &cell.node;
                     collect_nav_item_paths(child, ui, paths);
                 }
             }
@@ -963,7 +987,7 @@ mod tests {
         while let Some(node) = stack.pop() {
             match node {
                 CompiledNode::Split { children, .. } => {
-                    stack.extend(children.iter().map(|(_, child)| child));
+                    stack.extend(children.iter().map(|cell| &cell.node));
                 }
                 CompiledNode::Optional { child, .. } => stack.push(child),
                 CompiledNode::Module { root, .. } => walk(root, ui, &mut found),
@@ -1025,7 +1049,7 @@ mod tests {
         while let Some(node) = stack.pop() {
             match node {
                 CompiledNode::Split { children, .. } => {
-                    stack.extend(children.iter().map(|(_, child)| child));
+                    stack.extend(children.iter().map(|cell| &cell.node));
                 }
                 CompiledNode::Optional { child, .. } => stack.push(child),
                 CompiledNode::Module { root, .. } => walk(root, &mut found),
@@ -1495,7 +1519,8 @@ mod tests {
     fn collect_tab_large_paths(node: &CompiledNode, ui: &CompiledUi, paths: &mut Vec<String>) {
         match node {
             CompiledNode::Split { children, .. } => {
-                for (_, child) in children {
+                for cell in children {
+                    let child = &cell.node;
                     collect_tab_large_paths(child, ui, paths);
                 }
             }
@@ -1531,7 +1556,8 @@ mod tests {
     fn collect_menu_tab<'a>(node: &'a CompiledNode, ui: &'a CompiledUi, found: &mut MenuTab<'a>) {
         match node {
             CompiledNode::Split { children, .. } => {
-                for (_, child) in children {
+                for cell in children {
+                    let child = &cell.node;
                     collect_menu_tab(child, ui, found);
                 }
             }
@@ -1582,7 +1608,8 @@ mod tests {
     fn collect_menu_reads<'a>(node: &'a CompiledNode, ui: &'a CompiledUi, keys: &mut Vec<&'a str>) {
         match node {
             CompiledNode::Split { children, .. } => {
-                for (_, child) in children {
+                for cell in children {
+                    let child = &cell.node;
                     collect_menu_reads(child, ui, keys);
                 }
             }
@@ -1660,7 +1687,8 @@ mod tests {
     ) {
         match node {
             CompiledNode::Split { children, .. } => {
-                for (_, child) in children {
+                for cell in children {
+                    let child = &cell.node;
                     collect_tree_queries(child, ui, queries);
                 }
             }
@@ -1705,7 +1733,8 @@ mod tests {
     ) {
         match node {
             CompiledNode::Split { children, .. } => {
-                for (_, child) in children {
+                for cell in children {
+                    let child = &cell.node;
                     collect_context_scopes(child, ui, contexts);
                 }
             }

@@ -220,11 +220,16 @@ impl Face {
             style,
             ButtonStyle::Transport | ButtonStyle::TransportPrimary
         );
-        let highlighted = active || style == ButtonStyle::MicroPrimary;
+        // The accent fill follows the read value alone: the micro play button
+        // is a cell in a bar, not a lamp that is always lit, so it dims with
+        // the rest of the bar while the deck is stopped.
+        let highlighted = active;
         let content: Rgba = if style == ButtonStyle::VisNav {
             skin.rgba(skin.vis.nav_text_color)
         } else if highlighted {
             palette.bg
+        } else if style == ButtonStyle::MicroPrimary {
+            palette.text_dim
         } else {
             palette.text
         };
@@ -593,6 +598,54 @@ mod tests {
             active: None,
             label,
         }
+    }
+
+    /// The colour the micro play button paints its cell with, at rest.
+    fn micro_fill(active: bool) -> Rgba {
+        let skin = builtin::skin();
+        let glyph = char::from(lucide_icons::Icon::Play);
+        let mut text = TextContext::from(skin.text_resources());
+        let mut builder = DrawListBuilder::default();
+        Button::new(
+            ButtonConfig::builder()
+                .mark(Mark::Glyph(glyph))
+                .style(ButtonStyle::MicroPrimary)
+                .build(),
+            Some(Mark::Glyph(glyph)),
+            skin,
+        )
+        .paint(
+            &mut builder,
+            &mut text,
+            &plain(""),
+            active,
+            Rect {
+                h: 34.0,
+                w: 34.0,
+                x: 0.0,
+                y: 0.0,
+            },
+            VisualState::Idle,
+        );
+        let list = builder.finish();
+        let Some(DrawCmd::Fill {
+            paint: Paint::Solid(color),
+            ..
+        }) = list.commands().first()
+        else {
+            panic!("a button paints its cell first");
+        };
+        *color
+    }
+
+    #[kithara::test]
+    fn a_playing_micro_button_takes_the_accent() {
+        assert_eq!(micro_fill(true), builtin::skin().palette.accent);
+    }
+
+    #[kithara::test]
+    fn a_stopped_micro_button_does_not_take_the_accent() {
+        assert_ne!(micro_fill(false), builtin::skin().palette.accent);
     }
 
     #[kithara::test]

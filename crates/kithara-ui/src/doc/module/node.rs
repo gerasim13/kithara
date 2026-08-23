@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 use super::{
-    binding::{AdaptivePolicy, BindingRef},
+    binding::BindingRef,
     motion::{Motion, Pose},
     style::{
         ButtonStyle, ChipStyle, DeckSummaryStyle, FaderStyle, GlyphStyle, IconName, PopoverAlign,
@@ -32,6 +32,10 @@ pub enum ControlNode {
         id: Option<NodeId>,
         #[serde(default)]
         size: Option<SizeSpec>,
+        /// Measures the declared box on this axis and reveals the children
+        /// whose threshold it reaches.
+        #[serde(default)]
+        measure: Option<MeasureAxis>,
         #[serde(default)]
         gap: Option<f32>,
         /// Where a child shorter than the row sits across it. Centred unless
@@ -71,6 +75,10 @@ pub enum ControlNode {
         id: Option<NodeId>,
         #[serde(default)]
         size: Option<SizeSpec>,
+        /// Measures the declared box on this axis and reveals the children
+        /// whose threshold it reaches.
+        #[serde(default)]
+        measure: Option<MeasureAxis>,
         #[serde(default)]
         gap: Option<f32>,
         #[serde(default)]
@@ -107,6 +115,27 @@ pub enum ControlNode {
         source: String,
         #[serde(default)]
         with: BTreeMap<String, String>,
+    },
+    /// Declares one place in several forms. `measure` picks the last step it
+    /// reaches; `base` is the form below every step.
+    Adaptive {
+        id: NodeId,
+        measure: Measure,
+        /// Required by a self-measured node and refused by a read one: a box
+        /// that came from the branch could not decide which branch to draw.
+        #[serde(default)]
+        size: Option<SizeSpec>,
+        base: Box<Self>,
+        steps: Vec<AdaptiveStep>,
+    },
+    /// Shows its child while the container measures a number in `[from,
+    /// until)` on the axis it declares; `until: None` names no ceiling. Only a
+    /// container declaring `measure` may hold one.
+    Reveal {
+        from: f32,
+        #[serde(default)]
+        until: Option<f32>,
+        child: Box<Self>,
     },
     /// Marks its child as a block the host may hide. While `hidden` reads
     /// true the child is not laid out.
@@ -190,8 +219,6 @@ pub enum ControlNode {
         #[serde(default)]
         write: Option<BindingRef>,
         #[serde(default)]
-        adaptive: AdaptivePolicy,
-        #[serde(default)]
         style: DeckSummaryStyle,
     },
     Brand {
@@ -202,8 +229,6 @@ pub enum ControlNode {
         read: Option<BindingRef>,
         #[serde(default)]
         write: Option<BindingRef>,
-        #[serde(default)]
-        adaptive: AdaptivePolicy,
     },
     Spacer {
         id: NodeId,
@@ -213,8 +238,6 @@ pub enum ControlNode {
         read: Option<BindingRef>,
         #[serde(default)]
         write: Option<BindingRef>,
-        #[serde(default)]
-        adaptive: AdaptivePolicy,
     },
     /// Horizontal fill bar reporting one scalar.
     Meter {
@@ -225,8 +248,6 @@ pub enum ControlNode {
         read: Option<BindingRef>,
         #[serde(default)]
         write: Option<BindingRef>,
-        #[serde(default)]
-        adaptive: AdaptivePolicy,
     },
     /// Hairline between adjacent bar cells.
     Divider {
@@ -237,8 +258,6 @@ pub enum ControlNode {
         read: Option<BindingRef>,
         #[serde(default)]
         write: Option<BindingRef>,
-        #[serde(default)]
-        adaptive: AdaptivePolicy,
     },
     PresetSelector {
         id: NodeId,
@@ -248,8 +267,6 @@ pub enum ControlNode {
         read: Option<BindingRef>,
         #[serde(default)]
         write: Option<BindingRef>,
-        #[serde(default)]
-        adaptive: AdaptivePolicy,
     },
     SettingsButton {
         id: NodeId,
@@ -259,24 +276,18 @@ pub enum ControlNode {
         read: Option<BindingRef>,
         #[serde(default)]
         write: Option<BindingRef>,
-        #[serde(default)]
-        adaptive: AdaptivePolicy,
     },
     /// Bare drag surface for a window that draws its own chrome.
     WindowDrag {
         id: NodeId,
         #[serde(default)]
         size: Option<SizeSpec>,
-        #[serde(default)]
-        adaptive: AdaptivePolicy,
     },
     TitleBar {
         id: NodeId,
         label: String,
         #[serde(default)]
         size: Option<SizeSpec>,
-        #[serde(default)]
-        adaptive: AdaptivePolicy,
     },
     WindowControls {
         id: NodeId,
@@ -284,8 +295,6 @@ pub enum ControlNode {
         style: WindowControlsStyle,
         #[serde(default)]
         size: Option<SizeSpec>,
-        #[serde(default)]
-        adaptive: AdaptivePolicy,
     },
     Text {
         id: NodeId,
@@ -295,8 +304,6 @@ pub enum ControlNode {
         read: Option<BindingRef>,
         #[serde(default)]
         write: Option<BindingRef>,
-        #[serde(default)]
-        adaptive: AdaptivePolicy,
         #[serde(default)]
         style: TextStyle,
         #[serde(default)]
@@ -319,8 +326,6 @@ pub enum ControlNode {
         read: Option<BindingRef>,
         #[serde(default)]
         write: Option<BindingRef>,
-        #[serde(default)]
-        adaptive: AdaptivePolicy,
         icon: Param<IconName>,
         #[serde(default)]
         active_icon: Option<Param<IconName>>,
@@ -341,8 +346,6 @@ pub enum ControlNode {
         read: Option<BindingRef>,
         #[serde(default)]
         write: Option<BindingRef>,
-        #[serde(default)]
-        adaptive: AdaptivePolicy,
         label: String,
         icon: Param<IconName>,
     },
@@ -354,8 +357,6 @@ pub enum ControlNode {
         read: Option<BindingRef>,
         #[serde(default)]
         write: Option<BindingRef>,
-        #[serde(default)]
-        adaptive: AdaptivePolicy,
         label: String,
     },
     Button {
@@ -366,8 +367,6 @@ pub enum ControlNode {
         read: Option<BindingRef>,
         #[serde(default)]
         write: Option<BindingRef>,
-        #[serde(default)]
-        adaptive: AdaptivePolicy,
         label: String,
         #[serde(default)]
         icon: Option<Param<IconName>>,
@@ -389,8 +388,6 @@ pub enum ControlNode {
         #[serde(default)]
         write: Option<BindingRef>,
         #[serde(default)]
-        adaptive: AdaptivePolicy,
-        #[serde(default)]
         placeholder: Option<String>,
     },
     Time {
@@ -401,8 +398,6 @@ pub enum ControlNode {
         read: Option<BindingRef>,
         #[serde(default)]
         write: Option<BindingRef>,
-        #[serde(default)]
-        adaptive: AdaptivePolicy,
     },
     Scalar {
         id: NodeId,
@@ -412,8 +407,6 @@ pub enum ControlNode {
         read: Option<BindingRef>,
         #[serde(default)]
         write: Option<BindingRef>,
-        #[serde(default)]
-        adaptive: AdaptivePolicy,
         #[serde(default)]
         format: ScalarFormat,
         #[serde(default = "default_framed")]
@@ -427,8 +420,6 @@ pub enum ControlNode {
         read: Option<BindingRef>,
         #[serde(default)]
         write: Option<BindingRef>,
-        #[serde(default)]
-        adaptive: AdaptivePolicy,
         /// Draw the scale above the rail.
         #[serde(default)]
         ticks: bool,
@@ -442,8 +433,6 @@ pub enum ControlNode {
         #[serde(default)]
         write: Option<BindingRef>,
         #[serde(default)]
-        adaptive: AdaptivePolicy,
-        #[serde(default)]
         style: FaderStyle,
         #[serde(default)]
         label: Option<String>,
@@ -456,8 +445,6 @@ pub enum ControlNode {
         read: Option<BindingRef>,
         #[serde(default)]
         write: Option<BindingRef>,
-        #[serde(default)]
-        adaptive: AdaptivePolicy,
         #[serde(default)]
         style: WaveStyle,
         #[serde(default)]
@@ -473,8 +460,6 @@ pub enum ControlNode {
         read: Option<BindingRef>,
         #[serde(default)]
         write: Option<BindingRef>,
-        #[serde(default)]
-        adaptive: AdaptivePolicy,
     },
     /// One frame of a named artwork, chosen by how far its own reading has run.
     ///
@@ -492,8 +477,6 @@ pub enum ControlNode {
         #[serde(default)]
         write: Option<BindingRef>,
         seconds: f32,
-        #[serde(default)]
-        adaptive: AdaptivePolicy,
     },
     /// One frame of a named sheet, chosen by how far its own reading has run.
     ///
@@ -510,8 +493,6 @@ pub enum ControlNode {
         #[serde(default)]
         write: Option<BindingRef>,
         seconds: f32,
-        #[serde(default)]
-        adaptive: AdaptivePolicy,
     },
     /// A WGSL fragment fed by named read-only endpoint uniforms.
     Shader {
@@ -521,8 +502,6 @@ pub enum ControlNode {
         source: String,
         #[serde(default)]
         uniforms: BTreeMap<String, BindingRef>,
-        #[serde(default)]
-        adaptive: AdaptivePolicy,
     },
     PortalMap {
         id: NodeId,
@@ -530,8 +509,6 @@ pub enum ControlNode {
         size: Option<SizeSpec>,
         #[serde(default)]
         read: Option<BindingRef>,
-        #[serde(default)]
-        adaptive: AdaptivePolicy,
     },
     Range {
         id: NodeId,
@@ -541,8 +518,6 @@ pub enum ControlNode {
         read: Option<BindingRef>,
         #[serde(default)]
         write: Option<BindingRef>,
-        #[serde(default)]
-        adaptive: AdaptivePolicy,
     },
     Table {
         id: NodeId,
@@ -552,8 +527,6 @@ pub enum ControlNode {
         read: Option<BindingRef>,
         #[serde(default)]
         write: Option<BindingRef>,
-        #[serde(default)]
-        adaptive: AdaptivePolicy,
         #[serde(default)]
         columns: Option<Param<Vec<TableColumn>>>,
         #[serde(default)]
@@ -568,8 +541,6 @@ pub enum ControlNode {
         #[serde(default)]
         write: Option<BindingRef>,
         #[serde(default)]
-        adaptive: AdaptivePolicy,
-        #[serde(default)]
         query: Option<BindingRef>,
     },
     ContextBar {
@@ -580,8 +551,6 @@ pub enum ControlNode {
         read: Option<BindingRef>,
         #[serde(default)]
         write: Option<BindingRef>,
-        #[serde(default)]
-        adaptive: AdaptivePolicy,
         #[serde(default)]
         scope_items: Vec<String>,
         #[serde(default)]
@@ -595,8 +564,6 @@ pub enum ControlNode {
         read: Option<BindingRef>,
         #[serde(default)]
         write: Option<BindingRef>,
-        #[serde(default)]
-        adaptive: AdaptivePolicy,
     },
     Checkbox {
         id: NodeId,
@@ -606,8 +573,6 @@ pub enum ControlNode {
         read: Option<BindingRef>,
         #[serde(default)]
         write: Option<BindingRef>,
-        #[serde(default)]
-        adaptive: AdaptivePolicy,
     },
     Segmented {
         id: NodeId,
@@ -617,8 +582,6 @@ pub enum ControlNode {
         read: Option<BindingRef>,
         #[serde(default)]
         write: Option<BindingRef>,
-        #[serde(default)]
-        adaptive: AdaptivePolicy,
         items: Vec<String>,
     },
     Select {
@@ -629,8 +592,6 @@ pub enum ControlNode {
         read: Option<BindingRef>,
         #[serde(default)]
         write: Option<BindingRef>,
-        #[serde(default)]
-        adaptive: AdaptivePolicy,
         label: String,
     },
     StatusDot {
@@ -641,8 +602,6 @@ pub enum ControlNode {
         read: Option<BindingRef>,
         #[serde(default)]
         write: Option<BindingRef>,
-        #[serde(default)]
-        adaptive: AdaptivePolicy,
         label: String,
         #[serde(default)]
         dot_size: Option<f32>,
@@ -659,8 +618,6 @@ pub enum ControlNode {
         label: String,
         #[serde(default)]
         size: Option<SizeSpec>,
-        #[serde(default)]
-        adaptive: AdaptivePolicy,
     },
     Cell {
         id: NodeId,
@@ -670,8 +627,6 @@ pub enum ControlNode {
         read: Option<BindingRef>,
         #[serde(default)]
         write: Option<BindingRef>,
-        #[serde(default)]
-        adaptive: AdaptivePolicy,
         #[serde(default)]
         label: Option<String>,
         #[serde(default)]
@@ -685,8 +640,6 @@ pub enum ControlNode {
         read: Option<BindingRef>,
         #[serde(default)]
         write: Option<BindingRef>,
-        #[serde(default)]
-        adaptive: AdaptivePolicy,
         #[serde(default)]
         label: Option<String>,
         #[serde(default)]
@@ -702,8 +655,6 @@ pub enum ControlNode {
         read: Option<BindingRef>,
         #[serde(default)]
         write: Option<BindingRef>,
-        #[serde(default)]
-        adaptive: AdaptivePolicy,
         label: String,
         #[serde(default)]
         style: ChipStyle,
@@ -717,8 +668,6 @@ pub enum ControlNode {
         #[serde(default)]
         write: Option<BindingRef>,
         #[serde(default)]
-        adaptive: AdaptivePolicy,
-        #[serde(default)]
         label: Option<String>,
     },
     VuStereo {
@@ -729,8 +678,6 @@ pub enum ControlNode {
         read: Option<BindingRef>,
         #[serde(default)]
         write: Option<BindingRef>,
-        #[serde(default)]
-        adaptive: AdaptivePolicy,
     },
     VuVertical {
         id: NodeId,
@@ -740,23 +687,76 @@ pub enum ControlNode {
         read: Option<BindingRef>,
         #[serde(default)]
         write: Option<BindingRef>,
-        #[serde(default)]
-        adaptive: AdaptivePolicy,
         /// Draw the scale left of the fader.
         #[serde(default)]
         ticks: bool,
     },
 }
 
+/// One form of an adaptive node, taken from `from` logical pixels up.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+#[non_exhaustive]
+pub struct AdaptiveStep {
+    pub from: f32,
+    pub node: ControlNode,
+}
+
+/// Where the number that picks a branch comes from.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+#[non_exhaustive]
+pub enum Measure {
+    /// The width the node is given, in logical pixels.
+    Width,
+    /// The height the node is given, in logical pixels.
+    Height,
+    /// A scalar the host answers.
+    Read(BindingRef),
+}
+
+impl Measure {
+    pub(crate) const fn axis(&self) -> Option<MeasureAxis> {
+        match self {
+            Self::Width => Some(MeasureAxis::Width),
+            Self::Height => Some(MeasureAxis::Height),
+            Self::Read(_) => None,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+#[non_exhaustive]
+pub enum MeasureAxis {
+    Width,
+    Height,
+}
+
+impl MeasureAxis {
+    pub(crate) const fn name(self) -> &'static str {
+        match self {
+            Self::Width => "width",
+            Self::Height => "height",
+        }
+    }
+}
+
 impl ControlNode {
     pub(crate) const fn bindings(&self) -> (Option<&BindingRef>, Option<&BindingRef>) {
         match self {
             Self::Row { write, .. } | Self::Column { write, .. } => (None, write.as_ref()),
+            Self::Adaptive {
+                measure: Measure::Read(measure),
+                ..
+            } => (Some(measure), None),
             Self::Optional { hidden, .. } => (Some(hidden), None),
             Self::Popover { open, .. } => (Some(open), None),
             Self::Pressable { press, .. } => (None, Some(press)),
-            Self::Include { .. }
+            Self::Adaptive { .. }
+            | Self::Include { .. }
             | Self::Object { .. }
+            | Self::Reveal { .. }
             | Self::Scroll { .. }
             | Self::Stage { .. }
             | Self::Slot { .. }
@@ -811,8 +811,10 @@ impl ControlNode {
             | Self::Object { .. }
             | Self::Optional { .. }
             | Self::Popover { .. }
-            | Self::Pressable { .. } => None,
-            Self::Scroll { size, .. }
+            | Self::Pressable { .. }
+            | Self::Reveal { .. } => None,
+            Self::Adaptive { size, .. }
+            | Self::Scroll { size, .. }
             | Self::Row { size, .. }
             | Self::Column { size, .. }
             | Self::Stage { size, .. }

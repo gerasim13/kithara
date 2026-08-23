@@ -243,6 +243,14 @@ impl Reads for PopoverReads {
     }
 }
 
+/// The endpoints the shipped presets name, owned by one file and shared with
+/// the integration tests that compile the same documents.
+mod preset_registry {
+    use crate as kithara_ui;
+
+    include!("../../../tests/common/mod.rs");
+}
+
 #[derive(Default)]
 struct FixtureRegistry {
     endpoints: BTreeMap<(EndpointCategory, EndpointId), EndpointDesc>,
@@ -264,10 +272,9 @@ impl EndpointRegistry for FixtureRegistry {
 #[derive(Debug)]
 struct ExpectedRect {
     path: String,
-    x: f64,
-    y: f64,
-    width: f64,
-    height: f64,
+    /// The box the neutral host gave this node, or nothing when the room never
+    /// reached it and neither host laid it out.
+    placed: Option<[f64; 4]>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -570,7 +577,7 @@ impl CustomWidget for CaptureProbe {
 #[kithara::test]
 fn masonry_layout_rects_equal_snapped_neutral_rects() {
     let reads = FixtureReads;
-    let registry = fixture_registry();
+    let registry = preset_registry::player_registry();
     let skin = Skin::resolve_with_font_policy(
         builtin::skin_doc().clone(),
         builtin::text_doc(),
@@ -649,16 +656,27 @@ fn masonry_layout_rects_equal_snapped_neutral_rects() {
                 );
                 let origin = widget.ctx().window_origin();
                 let size = widget.ctx().size();
-                let snapped_x = expected.x.round();
-                let snapped_y = expected.y.round();
-                let snapped_width = (expected.x + expected.width).round() - snapped_x;
-                let snapped_height = (expected.y + expected.height).round() - snapped_y;
+                let Some(rect @ [x, y, rect_width, rect_height]) = expected.placed else {
+                    // The room never reached this node, so the neutral host
+                    // gave it no box and this one must not give it one either.
+                    assert_eq!(
+                        [size.width, size.height],
+                        [0.0, 0.0],
+                        "{preset} @ {width}x{height} path `{}` stands here and nowhere on the \
+                         neutral host",
+                        expected.path
+                    );
+                    continue;
+                };
+                let snapped_x = x.round();
+                let snapped_y = y.round();
+                let snapped_width = (x + rect_width).round() - snapped_x;
+                let snapped_height = (y + rect_height).round() - snapped_y;
                 assert_eq!(
                     [origin.x, origin.y, size.width, size.height],
                     [snapped_x, snapped_y, snapped_width, snapped_height],
-                    "{preset} @ {width}x{height} path `{}` diverged from endpoint snapping of neutral rect {:?}",
+                    "{preset} @ {width}x{height} path `{}` diverged from endpoint snapping of neutral rect {rect:?}",
                     expected.path,
-                    [expected.x, expected.y, expected.width, expected.height]
                 );
             }
         }
@@ -2548,7 +2566,10 @@ mod gesture_census {
             ExpandedNode::Object { child, .. }
             | ExpandedNode::Optional { child, .. }
             | ExpandedNode::Pressable { child, .. }
+            | ExpandedNode::Reveal { child, .. }
             | ExpandedNode::Scroll { child, .. } => find_control(child),
+            ExpandedNode::Adaptive { base, steps, .. } => find_control(base)
+                .or_else(|| steps.iter().find_map(|(_, branch)| find_control(branch))),
             ExpandedNode::Row { children, .. }
             | ExpandedNode::Column { children, .. }
             | ExpandedNode::Slot { children, .. }
@@ -2568,7 +2589,9 @@ mod gesture_census {
                 };
                 root
             }
-            CompiledNode::Split { .. } => panic!("the census fixture must contain one module"),
+            CompiledNode::Adaptive { .. } | CompiledNode::Split { .. } => {
+                panic!("the census fixture must contain one module")
+            }
         };
         find_control(root).unwrap_or_else(|| panic!("the census fixture must contain a control"))
     }
@@ -3778,21 +3801,24 @@ fn fixture_section(fixture: &str, preset: &str, width: u32, height: u32) -> Vec<
         let Some(path) = fields.next() else {
             continue;
         };
-        let mut number = || {
-            fields
-                .next()
-                .unwrap_or_else(|| panic!("fixture line `{line}` is missing a coordinate"))
-                .parse::<f64>()
-                .unwrap_or_else(|error| {
-                    panic!("fixture line `{line}` has a bad coordinate: {error}")
-                })
+        let placed = if fields.clone().next() == Some("-") {
+            fields.next();
+            None
+        } else {
+            let mut number = || {
+                fields
+                    .next()
+                    .unwrap_or_else(|| panic!("fixture line `{line}` is missing a coordinate"))
+                    .parse::<f64>()
+                    .unwrap_or_else(|error| {
+                        panic!("fixture line `{line}` has a bad coordinate: {error}")
+                    })
+            };
+            Some([number(), number(), number(), number()])
         };
         rects.push(ExpectedRect {
             path: path.to_owned(),
-            x: number(),
-            y: number(),
-            width: number(),
-            height: number(),
+            placed,
         });
         assert!(
             fields.next().is_none(),
@@ -4241,7 +4267,6 @@ fn studio_deck_root(reads: &DeckReads) -> (CompiledUi, MasonryRoot<TestAction>) 
                     read: Telemetry(id: "deck.playback.waveform", with: { "deck": "$deck" }),
                     write: Command(id: "deck.transport.seek_normalized", with: { "deck": "$deck" }),
                     zoom: Model(id: "deck.view.zoom"),
-                    adaptive: (priority: Required),
                 ),
                 Row(
                     id: "transport",
@@ -4457,6 +4482,7 @@ fn dragging_library_root() -> MasonryRoot<TestAction> {
             root: Column(gap: 0.0, pad: 0.0, size: (w: Fill, h: Fill), children: [
                 Table(
                     id: "tracks",
+                    size: (w: Fill, h: Fill),
                     read: Model(id: "library.visible_tracks"),
                     columns: [(id: "title", label: "TITLE", style: Primary, width: 180.0)],
                 ),

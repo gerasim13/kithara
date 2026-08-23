@@ -11,7 +11,7 @@ use num_traits::cast::AsPrimitive;
 
 use super::{
     app::{Decks, Kithara},
-    ui::AppUi,
+    ui::{AppUi, window::WINDOW_SIZE},
     update, view,
 };
 use crate::{
@@ -84,34 +84,32 @@ fn retained(boot: Boot) -> Result<(), FrontendError> {
     Ok(())
 }
 
-mod consts {
-    /// The minimum keeps both deck panes wide enough for their fixed
-    /// transport and timestretch controls.
-    pub(super) const WINDOW_MIN_WIDTH: f32 = 1080.0;
-    pub(super) const WINDOW_MIN_HEIGHT: f32 = super::WINDOW_SIZE.height;
-}
-use consts::*;
-
-use super::ui::window::WINDOW_SIZE;
-
-/// The app window and the smallest box the document is laid out for, in whole
-/// logical points. Both hosts open the same window.
+/// The box the app window opens at, in whole logical points. Both hosts open
+/// the same window.
 #[cfg(feature = "masonry")]
-pub(crate) fn window_size() -> ((u32, u32), (u32, u32)) {
-    let whole = |value: f32| -> u32 { value.as_() };
-    (
-        (whole(WINDOW_SIZE.width), whole(WINDOW_SIZE.height)),
-        (whole(WINDOW_MIN_WIDTH), whole(WINDOW_MIN_HEIGHT)),
-    )
+pub(crate) fn window_size() -> (u32, u32) {
+    (whole(WINDOW_SIZE.width), whole(WINDOW_SIZE.height))
+}
+
+/// The smallest box the compiled documents are laid out for, in whole logical
+/// points.
+#[cfg(feature = "masonry")]
+pub(crate) fn window_min(min: Size) -> (u32, u32) {
+    (whole(min.width), whole(min.height))
+}
+
+#[cfg(feature = "masonry")]
+fn whole(value: f32) -> u32 {
+    value.as_()
 }
 
 /// Settings for the app window. The bar draws the window chrome itself, so
 /// the system decorations stay off; close goes through `close_requests()`,
 /// whose handler exits the app.
-pub(crate) fn window_settings() -> Settings {
+pub(crate) fn window_settings(min: Size) -> Settings {
     Settings {
         size: WINDOW_SIZE,
-        min_size: Some(Size::new(WINDOW_MIN_WIDTH, WINDOW_MIN_HEIGHT)),
+        min_size: Some(min),
         decorations: false,
         exit_on_close_request: false,
         ..Settings::default()

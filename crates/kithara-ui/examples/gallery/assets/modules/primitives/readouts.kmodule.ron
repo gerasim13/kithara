@@ -31,6 +31,12 @@
                         framed: true,
                         read: Model(id: "mock.remain"),
                     ),
+                    Bpm(
+                        id: "tempo",
+                        size: (w: Fixed(56.0), h: Fixed(26.0)),
+                        placeholder: Some("time"),
+                        read: Telemetry(id: "deck.playback.waveform", with: { "deck": "a" }),
+                    ),
                 ],
             ),
         ],

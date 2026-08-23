@@ -20,12 +20,11 @@ an allocation failure returns `UiDocError::ArenaFull`.
 ## Document And Compiled Layers
 
 `BindingRef` and the typed `ControlNode` variants are the serde document inputs; `Binding` and
-`ControlSpec` their compiled forms. `ControlSpec` string payloads are interned; style, format, tone
-and boolean fields stay typed. A layer split, not a second source of domain truth: endpoint
-validation runs on the typed document variant and the substituted binding before interning.
-Arena types live in `ids.rs` because they back compiled identifiers and strings. The builtin skin is
-a compile-time asset; the `LazyLock` in `builtin::skin_doc` / `builtin::skin` is the sanctioned panic
-site for an invalid embedded document or colour.
+`ControlSpec` their compiled forms, with string payloads interned and style, format, tone and
+boolean fields typed. A layer split, not a second source of domain truth: endpoint validation runs
+on the typed document variant and the substituted binding before interning. Arena types live in
+`ids.rs`. The `LazyLock` in `builtin::skin_doc` / `builtin::skin` is the sanctioned panic site for
+an invalid embedded document or colour.
 
 ## Skin Ownership
 
@@ -47,11 +46,9 @@ not an oversight; collapsing it back to `self.document().button` would put the d
 on every render call.
 
 The palette is the single colour vocabulary: a skin section names a `ColorRole`, never a hex, and
-only `PaletteDoc::validate` parses one. Alpha stays a skin field beside the role it applies to, in
-the shape `track_alpha`, `played_alpha` and `ShadowSkin.alpha` already carry.
-
-A `ColorRole` is an alias for a value; several role names do not carry the design token they sound
-like. Select a role by the value it holds:
+only `PaletteDoc::validate` parses one. Alpha stays a skin field beside the role it applies to. A
+`ColorRole` is an alias for a value, and several role names do not carry the design token they sound
+like - select a role by the value it holds:
 
 | role | hex | design token |
 | --- | --- | --- |
@@ -63,15 +60,12 @@ like. Select a role by the value it holds:
 | `LineDim` | `#242442` | none |
 | `AccentSoft` | `#bb94422e` | none - and no consumer |
 
-Two pins guard the palette, one property each. `palette_holds_exactly_the_declared_roles` in
-`doc/skin/document.rs` owns completeness and every hex by comparing the parsed document against a
-whole-struct `PaletteDoc` literal. `tests/skin.rs::TOKENS` is the checked-in
-`(design token, hex, ColorRole)` table, covering only fields carrying a token (`bg_panel_2`,
-`line_dim`, `line_soft`, `accent_soft` have no row); its length assert pins the written list against
-the table, not the struct, so a new field takes a token row by review, never by assert.
+Two pins guard it: `palette_holds_exactly_the_declared_roles` in `doc/skin/document.rs` owns
+completeness and every hex against a whole-struct literal, and `tests/skin.rs::TOKENS` is the
+checked-in `(design token, hex, ColorRole)` table over the fields that carry one, its length assert
+pinned against the table rather than the struct, so a new field takes a token row by review.
 
-`SkinDoc.menu` owns the four menu icon sizes. Menu typography resolves through `SkinDoc.text`, one
-entry per type spec (family, weight, size, letter-spacing, default colour), so a tone differing from
+Menu typography resolves through `SkinDoc.text`, one entry per type spec, so a tone differing from
 the default is named on the node and mints no second entry. A `Dim` is a literal with no role
 indirection: a `.kmodule.ron` cannot name a skin metric, and menu row heights live in the markup.
 A document-declared frame is a `Canvas` over the container's plain background fill, drawing a
@@ -841,22 +835,22 @@ from.
 
 ## Text Catalog Ownership
 
-`TextDoc` is the fourth `DocKind` (`kithara.text`), parsed by `parse_text` and owned by `kithara-ui`
-the way the skin is: `builtin::text_doc()` is the compile-time asset, and its `LazyLock` is a
-sanctioned panic site for an invalid embedded catalog, same as `builtin::skin_doc`. `compile` takes
-`text: &TextDoc` borrowed for the call, right beside `skin: &SkinDoc` - a resource document, not
-compile configuration, so it does not live on `UiConfig`.
+`TextDoc` is the fourth `DocKind` (`kithara.text`), parsed by `parse_text`; `builtin::text_doc()` is
+the compile-time asset with the same sanctioned `LazyLock` panic site as the skin. `compile` borrows
+`text: &TextDoc` beside `skin: &SkinDoc` - a resource document, not compile configuration, so it
+does not live on `UiConfig`.
 
-A document literal beginning with `@` names a catalog key. `expand::binding_subst::intern_text`
-resolves it between `substitute` and `interner.intern`, so `$`-substitution runs first and only the
-substituted result is checked for the marker: an argument carrying `"@key"` resolves through the
-catalog exactly like a literal `"@key"` written directly in the document. `@@` escapes to a literal
-leading `@`, mirroring `$$`; a `@` anywhere but the first byte of the value is not a marker, so
-`user@example.com` passes through unchanged. `Module.title`, `.chip` and `.assign` carry no
-`$`-substitution, so they resolve a leading `@` through the same catalog lookup directly rather than
-through `intern_text`, each against a synthetic `<prefix>/title`, `/chip` or `/assign/<index>` path.
-An unresolved key is `UiDocError::UnknownTextKey { origin, key, path }`, a compile error, never a
-rendered fallback - the same totality `UnresolvedParam` already holds for `$`.
+A document literal beginning with `@` names a catalog key, resolved by
+`expand::binding_subst::intern_text` after `substitute`, so an argument carrying `"@key"` resolves
+exactly like a literal one. `@@` escapes a leading `@`, mirroring `$$`; a `@` anywhere but the first
+byte is not a marker. `Module.title`, `.chip` and `.assign` carry no `$`-substitution and resolve a
+leading `@` directly, each against a synthetic path. An unresolved key is
+`UiDocError::UnknownTextKey`, a compile error, never a rendered fallback. Resolution happens once,
+at compile time, on document literals only: text a host supplies through `ReadValue::Text` cannot
+become a key by starting with `@`. `TextDoc::merge` unions two catalogs and fails with
+`UiDocError::DuplicateTextKey` on any shared key, and
+`every_shipped_catalog_carries_the_same_key_set` in `tests/text.rs` keeps a second-language catalog
+from dropping one.
 
 Resolution happens once, at compile time, on document literals only. Text a host supplies through
 `ReadValue::Text` never reaches `intern_text` and cannot become a key by starting with `@`; a track
@@ -903,12 +897,20 @@ Playhead dimming is per style: hero dims left of the playhead with `SkinDoc.wave
 mapped through its zoom window, bars dims the full track with `overview_played_alpha`, micro dims
 nothing.
 
+Every non-hero wave draws the playhead as a line in `palette.accent` with a tab of
+`skin.wave.playhead_marker_*` at its top. The micro style alone adds a bottom strip
+`skin.wave.cache_strip_height` tall: played to the playhead in the accent, held ahead of it in
+`cache_strip_color` at `cache_strip_alpha`, and the wave's own background wherever neither reaches.
+How far the track is held is host-owned and read at `deck.playback.cached_normalized` in the wave's
+own scope; `atoms/wave/face.rs::cached_extent` is the one place that read is made total, and the
+playhead is its floor, so a host answering nothing - or answering behind the playhead - draws the
+played part alone rather than a strip running backwards.
+
 ## Active Tone Ownership
 
 `Text`, `Glyph` and `Row` each carry an optional `active` binding - one shape across three carriers.
-It is a host-owned Bool read through `render/tree/read.rs::read_flag`, the one path every binding
-read takes; an absent read means inactive. `Text` renders the content its `read` binding or `label`
-supplies; `active` selects only a tone, never content.
+It is a host-owned Bool read through `Ctx::flag`; an absent read means inactive, and `active`
+selects a tone, never content.
 
 - `render/tree/geometry.rs::active_tone` is the single selection rule: the active role when the node
   is active and declares one, otherwise the base role.
@@ -992,10 +994,10 @@ backend-specific document syntax participates in production drawing.
 A read binding with a non-empty `with` map resolves through the canonical scoped key
 `<endpoint>@<scope>=<value>[,<scope2>=<value2>...]`, scope names in `BTreeMap` order. The key is
 built by `expand::scoped_key`, interned once at compile time, and carried by `Binding::key`
-(`key == id` when the scope is empty). `render/tree/read.rs::resolve` passes exactly this key to
-`Reads::get`; hosts key their read maps by the same form. A `Command` binding reads as `None`.
-Widgets reading derived endpoints beyond their binding (`DeckSummary`, `Bpm`, `Time`, `MiniWave`)
-take the read binding's scope suffix (`@deck=a` or empty) from `read::read_scope` and append it to
+(`key == id` when the scope is empty); `Ctx::read` passes exactly this key to `Reads::get`, and
+hosts key their read maps by the same form. A `Command` binding reads as `None`.
+Controls reading derived endpoints beyond their binding (`Summary`, `Bpm`, `Time`, `Wave`)
+take the read binding's scope suffix (`@deck=a` or empty) from `Ctx::scope` and append it to
 each derived endpoint, so `deck.track.title@deck=b` stays addressable per deck. `Table` column
 state takes the suffix of the `columns_state` binding instead. Host-global endpoints
 (`player.output.levels`, `ui.preset`, `vis.time`) stay unscoped.
@@ -1003,42 +1005,42 @@ state takes the suffix of the `columns_state` binding instead. Host-global endpo
 ## The Address Tree
 
 `Reads::get` is the renderer's boundary and stays flat: one canonical key in, one value out.
-`render::address` is how a host organises the answer behind it. A `Node` resolves one segment into a
-child and reads its own value, knowing neither siblings nor parent, so no type carries the whole
-vocabulary. `Walk` adapts a tree of them to `Reads`: split the key at `@`, walk the dotted path
-segment by segment, read the leaf.
+`render::address` is how a host organises the answer behind it - a `Node` resolves one segment into
+a child and reads its own value, knowing neither siblings nor parent, and `Walk` adapts a tree of
+them to `Reads` by splitting the key at `@` and walking the dotted path.
 
-- The scope selects an instance rather than naming a path segment, and the node owning the instances
-  is the one that spends it - a leaf reading a scope it does not own can answer for an instance that
-  does not exist.
-- Both `Node` methods default to `None`: a node answers only what it claims, and an address nobody
-  claims reads as absent, which the renderer shows as its default.
-- A node whose value borrows from data built for the frame implements `Node` for `&Self` so that
-  data outlives the walk; a node borrowing only longer-lived state implements it by value.
+- The scope selects an instance rather than a path segment, and the node owning the instances is the
+  one that spends it - a leaf reading a scope it does not own can answer for an instance that does
+  not exist.
+- Both `Node` methods default to `None`: an address nobody claims reads as absent, which the
+  renderer shows as its default.
+- A node whose value borrows from data built for the frame implements `Node` for `&Self`; a node
+  borrowing only longer-lived state implements it by value.
 - A module document id becomes a segment of `ui.module.<id>.collapsed`, so
   `validate::check_module_id` rejects a module id containing `.`.
 
 ## Typed Control Schema
 
-Each supported control is a structural `ControlNode` enum variant. RON deserialization owns field
-validation, so the document layer has no string control discriminator, property map, or property
-kind catalog. Common control fields are repeated in the serde variants because RON flattening is not
-part of the schema contract.
-Captions attached to a control - the fader's inline label, the knob's caption under its dial - are
-document text on the control node; the skin owns their typography, and the knob's caption is a full
-text role down to family and letter-spacing. A control without a caption renders bare.
-A waveform column is one bar wide for all three bands: low, mid and high draw from the vertical
-centre over each other and nest by level, never by width, so a single `bar_width` and `bar_gap` set
-the column pitch for both the deck wave and the overview row.
+Each supported control is a structural `ControlNode` enum variant, so the document layer has no
+string discriminator, property map or property kind catalog; RON deserialization owns field
+validation, and common fields are repeated in the serde variants because RON flattening is not part
+of the schema contract. `validate::value_kinds` is the single owner of control read/write endpoint
+kinds; `size::control_size` selects intrinsic sizes exhaustively from `ControlSpec` and `SkinDoc`,
+available in non-render and wasm builds. Renderers match `ControlSpec` directly and resolve no
+runtime control catalog. A waveform column is one bar wide for all three bands, which nest by level
+rather than by width, so one `bar_width` and `bar_gap` set the pitch for every wave style.
 
 ### Sizing
 
-- Controls take their size from the wrapper, not from themselves: a widget fills what
-  `size::control_size` or the document gives it, and pinning its own height would break its row.
+- Controls take their size from the wrapper: a widget fills what `size::control_size` or the
+  document gives it, and pinning its own height would break its row.
 - The declared size is the whole control box - the knob's caption row sits inside it and the dial is
   what remains, so a 28 px dial asks for a 39 px box and a square declaration renders a squashed
   dial. A knob declaring no size takes `skin.knob.size`, the one place those two numbers are kept
   together.
+- A wave takes its box from its style (`skin.wave.size`, `default_size`, `micro_size`), each a
+  height the rows that style stands in are built to; `mount::Wave::size` matches all three, so a
+  fourth style names its own number before it renders.
 - A menu glyph is the one control whose declared size names one axis only: drawn as a text glyph,
   its box is the icon size wide and a line box tall (`1.3` times the size, the iced default), so a
   square declaration overflows. `size::icon_cell` fixes the width and leaves the height to the row.
@@ -1052,25 +1054,21 @@ the column pitch for both the deck wave and the overview row.
   Text measures its glyphs and takes alignment from that wrapper; a readout drawing its own framed
   cell keeps filling the box the document gave it.
 - A transport cell carries its hairline on the sides `SkinDoc.button.transport_sides` names (only
-  transport styles read that declaration); a `Button` declaring `frame` names them itself. One seam
-  stands between neighbouring cells and none at the strip's ends, so cells before the flexible gap
-  keep the skin's right seam and cells after it take a left one.
+  transport styles read that declaration); a `Button` declaring `frame` names them itself.
 
 ### Wheel surfaces
 
 A `Row` or `Column` declaring `write` is an interactive surface over its whole box (`SurfaceSpec`,
 drawn by `render/immediate/wheel.rs::WheelSurface`):
 
-- A wheel detent emits one signed `ControlAction::StepScalar`, a double click emits
-  `ControlAction::Activate`, both on the container's own path.
 - A trackpad gesture steps by the sign of each pixel delta, no sooner than
-  `WheelState::STEP_INTERVAL_MS` (200 ms) after the last step; `WheelScrolled` carries no scroll
+  `WheelState::STEP_INTERVAL_MS` (200 ms) after the last step: `WheelScrolled` carries no scroll
   phase, so that interval is what bounds macOS momentum deltas after the fingers lift.
-- A held press drags the same step at `WheelState::DRAG_STEPS_PER_PIXEL` (0.25) per pixel, upward
-  for a step up, measured from where the last step left off so the surface never needs the value.
-  The press consults the double click first, so the second press of a pair resets rather than drags.
-- The surface counts steps and nothing else: it reads no value and holds no range, so what a step is
-  worth and what the click returns to belong to the host owning the parameter.
+- A held press drags the same step at `WheelState::DRAG_STEPS_PER_PIXEL` (0.25) per pixel, measured
+  from where the last step left off. The press consults the double click first, so the second press
+  of a pair resets rather than drags.
+- The surface counts steps and nothing else: what a step is worth and what the click returns to
+  belong to the host owning the parameter.
 - It claims the pointer over its whole box, reporting `ResizingVertically`, which in a `Stack`
   levitates the cursor away from everything it covers.
 - Such a container needs an `id`; `validate::check_module_node_ids` otherwise rejects the document
@@ -1107,100 +1105,226 @@ runtime control catalog.
 
 ## Markup Composition
 
-Cross-axis alignment is the container's: a `Row` centres its children, a `Column` leads them. Every
-document in this crate, in `examples/gallery/assets` and in `crates/kithara-app/assets` takes those
-defaults; a column wanting centred children composes it with spacers.
+Cross-axis alignment is the container's: a `Row` centres its children, a `Column` leads them, and
+every document in this crate, in `examples/gallery/assets` and in `crates/kithara-app/assets` takes
+those defaults. A `Row` distributes no main-axis alignment, so a fixed-size cell centres its content
+between two `Fill` spacers carrying no id; a leading indent spacer composes with its row's own
+`gap`, and a trailing spacer belongs to the container whose bottom padding it reproduces. Checked-in
+spec tables pin each node's own declared numbers and never a child's resolved position. A cell that
+may leave a strip draws its own leading hairline rather than taking a seam from its neighbour, so a
+cell the room or the host withdraws takes neither space nor seam with it.
 
-A `Row` distributes no main-axis alignment, so a fixed-size cell centres its content by composition:
-the content sits between two spacers that are `Fill` on both axes, carrying no id so no spec table
-names them. A leading indent spacer composes with its row's own `gap`, inserted after the spacer as
-well as between every other pair, so a pinned indent is spacer plus row padding plus that gap. A
-trailing spacer belongs to the container whose bottom padding it reproduces, as its last child.
-Checked-in spec tables pin each node's own declared numbers and never a child's resolved position,
-so no row of theirs can assert a composed offset.
+## Parameter Substitution
+
+A layout declares no parameters, so `expand::substitute` owns what `$` means at both levels: `$name`
+in a layout-level `hidden` scope or in `Module.with` is a document error, `$$name` escapes a literal
+`$name`, and inside a module the same function resolves `$name` against the instance's arguments. An
+argument reaches a `String` field through `substitute`, an endpoint id through `substitute_binding`
+(the substituted id being what the visitor hands `validate::check_controls`), and a typed field
+through `param::Param<T>`. Serde tries the variant before the `"$name"` string, so a misspelt
+variant parses as a reference - `resolve_param` spends the missing `$` on `BadVariant` and an
+argument naming no variant on `BadParamVariant`, both carrying the node path.
 
 ## Module Chrome And Collapse Ownership
 
 `ModuleDoc` owns optional shell labels, static assign labels and footer binding plus a typed
-`ChromeStyle`. `Frame` is the serde default and renders the plain module frame, `Plain` renders only
-module content, `Full` adds skin-owned header, separators and footer with assign labels as header
-chips immediately before its chevron.
+`ChromeStyle`: `Frame` (the serde default) renders the plain module frame, `Plain` only module
+content, `Full` adds skin-owned header, separators and footer with assign labels as header chips.
 Each layout module instance owns which outer frame sides render (`FrameSides`, all four true by
-default) and whether decorative corner ticks draw at its top-left and bottom-right (opt-in), letting
-adjacent modules yield shared edges to the layout grid. The skin owns frame thickness and colour and
-corner tick size, width, offset and colour.
+default) and whether decorative corner ticks draw, letting adjacent modules yield shared edges to
+the layout grid. Collapse state is host-owned: a Full module reads `Bool` from
+`ui.module.<module-doc-id>.collapsed` (absent means expanded) and header activation emits
+`UiEvent::ToggleModule(<module-doc-id>)`, which the renderer neither retains nor mutates; Frame and
+Plain modules ignore that endpoint.
 
 A layout declaring `dragged` names what the pointer is carrying: while that binding reads as
 non-empty text the renderer draws it at the pointer, over everything the layout lays out. The ghost
 paints only - no event captured, no cursor claimed - and asks for a redraw as the pointer moves, so
-following the pointer costs the host no messages. `SkinDoc.drag` owns its box and type; box position
-relative to the pointer and label elision (against a mono advance estimate, since a canvas cannot
-measure text) belong to the widget.
-
-A module declaring `drop` takes dragged items: it emits
+following the pointer costs the host no messages. `SkinDoc.drag` owns its box and type; box
+position relative to the pointer and label elision belong to the widget. A module declaring `drop`
+emits
 `ControlAction::Drag(DragPhase::Over(bool))` on `<instance>/drop` as the pointer crosses its bounds
 and outlines itself while its `read` binding is true; `write` names the command the host runs on a
 drop. The renderer never learns what is being dragged - the drag source reports its own start and
-release on its own path, and the host holds the item and decides what a drop means.
-Collapse state is host-owned. A Full module reads `Bool` from `ui.module.<module-doc-id>.collapsed`
-(absent means expanded) and header activation emits `UiEvent::ToggleModule(<module-doc-id>)`. The
-renderer neither retains nor mutates collapse state; Frame and Plain modules ignore that endpoint.
+release on its own path, and the host decides what a drop means.
 
 ## Optional Block Ownership
 
-`Optional` wraps exactly one node in a module or layout tree and marks it a block the host may hide.
-It is a wrapper, not a field on `Row`, `Column`, `Include` or `Module`: those own layout, and
-optionality is a separate responsibility. Visibility is host-owned: the document names the endpoint
-through `hidden` and kithara-ui invents none, the binding reads as `Bool` exactly like `Text.active`
-and `ModuleDrop.read`, and an absent read means visible. `validate::value_kinds` owns that kind for
-a module-level wrapper, `validate::check_layout_block` the same kind at the layout level. The
-binding takes `$`-substitution and scoped-key resolution like every other, so
-`with: { "deck": "$deck" }` gives per-deck visibility without a crate-level scoping rule.
+`Optional` wraps exactly one node and marks it a block the host may hide. It is a wrapper rather
+than a field on `Row`, `Column`, `Include` or `Module`: those own layout, and optionality is a
+separate responsibility. Visibility is host-owned - the document names the endpoint through `hidden`
+and kithara-ui invents none, the binding reads as `Bool`, and an absent read means visible.
+`validate::value_kinds` owns that kind for a module-level wrapper, `validate::check_layout_block` at
+the layout level; the binding takes `$`-substitution and scoped-key resolution like every other.
 
 A block is hidden by its parent skipping it while iterating children, so it may only sit where some
 parent iterates: a `Split` child, or a `Row`, `Column` or `Slot` child. `validate` rejects it
 anywhere else - layout root, module root, directly under another `Optional`, and under a `Popover`
-anchor/content or a `Pressable`. The rule is total, so renderer and sizer need no case for a hidden
-node handed to them directly.
+anchor/content or a `Pressable` - and the rule is total, so renderer and sizer need no case for a
+hidden node handed to them directly. A block that must withdraw a click target wraps the
+`Pressable`, not the glyph inside it; a fixed cell holding the slot open stays outside the block.
 
-A block that must withdraw a click target along with what it draws wraps the `Pressable`, not the
-glyph inside it. The fixed cell holding the slot open stays outside the block, a plain container
-with its own id, so hiding the block moves no neighbour.
 A block address names read state, so neither `.` nor `@` may appear in it, and
-`validate::check_block_path` applies that rule to the whole expanded chain of enclosing ids - a
-`mixer.a` module instance may not enclose a block. The id shares the one namespace its siblings use:
-a module block id collides with a control id, a layout block id with a module instance. The compiled
-block keeps the expanded path (`mixer/eq`, `deck-a/transport/eq`), addressable like a control.
+`validate::check_block_path` applies that to the whole expanded chain of enclosing ids. The id
+shares the one namespace its siblings use: a module block id collides with a control id, a layout
+block id with a module instance. The compiled block keeps the expanded path, addressable like a
+control.
 
-A layout declares no parameters, so `expand::substitute` owns what `$` means at both levels:
-`$name` in a layout-level `hidden` scope or in `Module.with` is a document error, `$$name` escapes a
-literal `$name`, and inside a module the same function resolves `$name` against the instance's
-arguments. An argument reaches a `String` field through `substitute`; an endpoint id through the
-same call in `substitute_binding`, the substituted id being what the visitor hands
-`validate::check_controls`; and a typed field through `param::Param<T>`, which reads either the
-variant itself or a `"$name"` string. Serde tries the variant first, so a spelled-out one never
-reads as a reference, at the cost that a misspelt variant parses as a reference - `resolve_param`
-spends the missing `$` on `BadVariant` and an argument naming no variant on `BadParamVariant`, both
-carrying the node path.
+Sizing with blocks: a visible wrapper is fully transparent and delegates to its child,
+`content_size` and `effective_size` included, so it never reaches the undeclared-size mapping in
+`content_size`. A container decides emptiness over the children it actually lays out - a `Slot`
+whose only child is hidden has the `SizeSpec::FILL` of an empty one, a gap is charged between
+visible children only, and an all-hidden `Split` folds to `Dim::Fixed(0.0)`. `size::BlockNode` is
+the single owner of "which block does this node declare", implemented once for `ExpandedNode` and
+once for `CompiledNode`, so `size::visible` filters both stages through one predicate built from
+`Ctx::flag` - which makes a `Command` endpoint resolve to nothing.
 
-Sizing with blocks:
+A subtree's intrinsic size is a function of the node and the host snapshot, constant when neither an
+optional block nor an adaptive node sits below it. `CompiledNode` records that in `blocks`, which
+`size::has_blocks` sets, and `size::compiled_node_size_with_hidden` returns the precomputed
+`compile::compiled_node_size` for such subtrees - memoization, not a fallback path.
+`size::Snapshot` is the single description of what the host answers about a tree, one method per
+question the sizer asks: which blocks are hidden, and what each adaptive measure reads.
+`size::DEFAULTS` is the state before any answer, `CompiledUi.size` the size function evaluated in
+it, and `render/document/ctx.rs` carries the one implementation that reads a host, on the `Ctx`
+both hosts already walk with, so snapshot-aware sizing stays toolkit-independent and neither host
+owns a second reader.
 
-- A visible wrapper is fully transparent and delegates to its child, `content_size` and
-  `effective_size` included, so it never reaches the undeclared-size mapping in `content_size`.
-- A container decides emptiness over the children it actually lays out: a `Slot` whose only child is
-  hidden has the `SizeSpec::FILL` of an empty one, a gap is charged between visible children only,
-  and an all-hidden `Split` folds to `Dim::Fixed(0.0)`.
-- `size::BlockNode` is the single owner of "which block does this node declare", implemented once
-  for `ExpandedNode` and once for `CompiledNode`, so `size::visible` filters both stages through one
-  predicate built from `read::read_flag` - which makes a `Command` endpoint resolve to nothing.
-- A subtree's intrinsic size is a function of the node and the visibility snapshot, constant when no
-  optional block sits below it. `CompiledNode` records that at compile time in `blocks`, and
-  `render/tree/size.rs::node_size` returns the precomputed `compile::compiled_node_size` for such
-  subtrees instead of walking them once a frame - memoization, not a fallback path. A layout
-  `Module` declaring its own `size` records `blocks: false` and never re-walks.
-- `CompiledUi.size` is that function evaluated with every block visible (`size::VISIBLE`).
-  `size::compute_size` takes the snapshot as a `size::Hidden` predicate over `BlockSpec`, so
-  visibility-aware sizing stays toolkit-independent and available in non-render and wasm builds.
+## Adaptive Branch Ownership
+
+`Adaptive` declares one place in several forms and draws exactly one of them: `base`, plus `steps`
+ordered by the `from` threshold each takes effect at. The selected branch is the last step whose
+`from` the measured value reaches, `base` below all of them - a step function over the whole real
+line, not a chain of attempts. `expand::adaptive_branch` is that function, pure in the thresholds
+and the value alone, and `size::branch` is the one place a `Snapshot` is turned into a call of it. The measured number belongs to the host endpoint, not to the node, and two
+axes are two nested adaptive nodes.
+
+- `measure` reads `ValueKind::Scalar` (`validate::value_kinds`), and the read is total in one place:
+  `Snapshot::measure` on `Ctx` answers `None` for a missing read, a value of another kind and a
+  non-finite cast. `None` is `base` by contract, the rule that also makes an unread `Optional`
+  visible and an unread `Popover` closed.
+- `validate::check_adaptive_steps` requires at least one step, each starting at a finite value above
+  the one below it; that order is what makes the selection total without a tie-break. Thresholds are
+  document literals in whatever unit the endpoint measures.
+- A node measuring `Width` or `Height` reads the box the toolkit gives it and must declare that
+  axis: `validate::check_measured_box` rejects an absent `size` and a `Dim::Shrink` on that axis
+  with `UiDocError::UnmeasuredAxis`, and a read measure declaring a box at all with
+  `MeasuredBoxWithoutAxis`. Such a node answers its declared box whatever branch it draws, which
+  keeps the pick from moving the siblings whose room decided it and lets `size::has_blocks` call the
+  subtree constant. The pick itself is a host job, because only the host knows the box: the
+  neutral walk mounts every branch and hands them to `Host::measured` with a
+  `document::Measured` plan, and each host lays out the branch that fits - `render/tree/measured.rs`
+  on iced, `NodeLayout::Measured` in `render/masonry_tree/mount.rs` on masonry. Both build every
+  branch once, so a pick costs no rebuild and each branch keeps its state.
+  `document::Measured::branch` is the arithmetic, shared by both.
+
+The node contributes no segment to the addresses below it: `expand::machine::expand_adaptive` spends
+its own `id` on the visitor and its binding, then walks every branch with the enclosing context.
+Repeating an `id` across branches is the point - one address, one host handler - and
+`validate::walk_branches` unions each branch's claims from a clone of its parent's ids, so ids
+collide inside a branch and never across them. A node reading its measure declares no `size` and
+measures as the branch its snapshot selects, in `size::compute_size` and `geometry::effective_size`
+alike - and the walk expands it in place rather than mounting a host node at all, so a wrapper above it reports the drawn branch's size the way it reports an `Optional`
+child's. Every branch expands at compile time, so the arena and the node budget carry them all.
+
+## Threshold Reveal Ownership
+
+A `Row` or `Column` declaring `measure` reads the box it is given on that axis, and each child
+wrapped in `Reveal { from, until }` stands while that axis is inside the band: `from` is reached at
+its own value and `until` is not, so two bands sharing an edge hold one place with exactly one cell
+in it at any width. `size::stands` is that rule, and `document::Band` is the value both hosts carry
+it in, so the compile-time filter and the two flow widgets ask one question. Several children stand at once, which is where this differs from `Adaptive`; a child
+carrying no wrapper always stands.
+
+- The container obeys the same declared-box rule a self-measured `Adaptive` does, through the same
+  `check_measured_box` and `UnmeasuredAxis`, so it answers its declared box however many children it
+  shows and `size::has_blocks` calls it constant. A measuring `Column` is therefore handed both axes
+  of its box, where a plain one leaves its height to its content.
+- That box is the answer while every ancestor leaves the axis free. An ancestor asking for an
+  intrinsic size sets `Limits::compression` on that axis, `iced`'s `Limits::resolve` then takes the
+  intrinsic size over `Fill`, and the container answers the room its shown cells take while the
+  threshold still reads the maximum it was handed. Validation lets such an ancestor through, so a
+  document that puts one there gets a box that moves with its cells inside a subtree `has_blocks`
+  calls constant.
+
+Only that container answers a threshold, so a `Reveal` stands only among its direct children;
+anywhere else is `UiDocError::UnmeasuredReveal`. `validate::Sibling::Measured` is what a measuring
+container passes its children and `Sibling::Only` what a `Reveal` passes its own, so an `Optional`
+directly below one is rejected too. A threshold is finite and not negative
+(`UiDocError::RevealThreshold`), a ceiling finite and above the threshold it closes
+(`UiDocError::RevealBand`), and `until: None` names no ceiling; bands carry no order among
+themselves, unlike `Adaptive` steps. A ceiling can only take a cell out of a room, never put one in,
+so the rooms `size::rooms` asks about stay the same set: the container's own minimum and every
+`from` above it. The wrapper carries no `id` and contributes no segment to the addresses below it,
+so a control inside one is addressed exactly as a control beside it.
+`render/document/facade.rs` filters the host-hidden children through `size::visible` first and
+hands each survivor its `Band`, so an `Optional` may stand among `Reveal`s as a plain
+always-revealed cell and a child carrying no wrapper takes `Band::ALWAYS`. The threshold is read
+against the box the container declares, padding included: each host's flow widget charges
+`pad`/`pad_x`/`pad_y` inside itself.
+
+A layout `Split` asks the same question of whole modules: declaring `measure` reads the box it is
+given, and each `SplitCell` names the band it stands in beside the weight it takes, so the band
+sits on the child rather than in a wrapper. The arithmetic is the one value `size::Cells` - a row, a
+column and a split hand it their cells and ask `need`, `settled` and `rooms`, so there is one climb
+and one `size::stands` behind every threshold in the crate. `room::check_layout_cells` holds each
+band against the tree behind it, the check a nested `Adaptive` could not give: a step answers only
+its base's minimum, while a cell answers its own.
+
+A band is carried by the one flow widget each host already has - `render/tree/flex.rs` on iced,
+`render/masonry/flex.rs` on masonry - rather than a second container beside it, so `gap`, padding,
+alignment and `Fill` distribution stay one implementation per host. The pass solves the standing
+cells alone and scatters their nodes back into place, leaving an empty layout node where a cell does
+not stand: the child list keeps its shape, so widget state stays bound to position, the
+`HostedLayout` walk zips one-to-one against `layout.children()`, and painting, hit-testing and
+overlays skip a withdrawn cell because its node has no room. `State { shown }` is what the widget
+remembers between passes, and a length that disagrees with the child list falls back to all-standing
+rather than indexing past it.
+
+## Minimum Room Ownership
+
+A tree answers two questions. `size::compute_size` answers what box a node shows its parent, where a
+declared `size` replaces everything below it - that constancy is what lets `size::has_blocks` call a
+self-measured subtree memoisable. `size::min_size` answers how much room the node actually needs,
+and there a declared box is a floor rather than the answer: the per-axis maximum of the declared
+minimum and what the children compose to, so a box cannot swallow the room its cells take.
+`min_size` takes no `Snapshot` - it is a property of the document and the skin alone.
+
+A `Control` needs what `compute_size` answers for it, a declared box included; `Popover` needs its
+anchor, `Pressable` its child, and `Scroll` its declared box when it has one. An `Optional` child
+counts as standing - the host owns that switch, and a bar that overflows the moment the host shows a
+block again is a bar that never fitted - while a `Reveal` child is the opposite, the room owning it,
+so a cell waiting for a threshold contributes nothing on either axis until the room reaches it. An
+`Adaptive` needs its base branch, the form it draws in the smallest window; what its steps need is
+the separate question `room::check_steps` answers. `compile::compiled_min` carries the question up
+the layout tree - `Split` settles its cells, `Optional` takes its child, `Adaptive` takes its base,
+a `Module` takes its expanded root plus chrome - and `CompiledUi::min` is the answer at the root,
+the number a host holds its window to; `compiled_min` is public so a host can ask the same of one
+branch behind a threshold.
+
+Which cells a measuring container stands at its own minimum depends on that minimum, so
+`size::Cells::settled` resolves the circle by climbing from what the cells waiting for nothing take.
+A round may only raise the answer - the climb is monotone because it is held so - and its fixed
+point is a room whose own standing cells fit in it, bounded by a round per threshold and two more. A
+container reading no room stands every cell, which is what `render/document/facade.rs` mounts for a
+`Reveal` outside a measuring container.
+
+Three rules follow, all checked at compile time against the skin, because each is a question a
+document can only answer once its controls have sizes.
+
+- A step draws in the room its threshold promises: `room::check_steps` requires
+  `step.from >= min_size(step)` on the measured axis, for every `Adaptive` reading `Width` or
+  `Height`. A `MeasureSpec::Read` step is left alone - its threshold counts whatever its endpoint
+  counts, and pixels are not that unit. Failure is `UiDocError::AdaptiveStepRoom`.
+- A threshold names room the container has: `room::check_cells` requires that the cells standing in
+  a room fit in it, at the container's own minimum and at every threshold above it - the standing
+  set stands still between those points, so they cover every width rather than sample it. A
+  threshold below the minimum is no error. Failure is `UiDocError::RevealRoom`.
+- A node holds what its box can take: `room::check_box` requires, on both axes, that a declared box
+  naming a ceiling - `Dim::Fixed`, or `Dim::Range` with a closed top - covers what the node
+  composes, and `compile::Compiler::build` asks the same of a layout's own boxes. `Dim::Fill`,
+  `Dim::Shrink` and an open range name no ceiling and are left alone, as are a `Scroll` and a
+  `Control`, whose box overrides the skin on purpose. Failure is `UiDocError::DeclaredRoom`.
 
 ## Icon Identity
 
@@ -1219,13 +1343,10 @@ name in UpperCamel.
 ## Container Press Ownership
 
 `Pressable` makes any subtree a click target: `ControlAction::Activate` on a left press,
-`ControlAction::SecondaryActivate` on a right press, both on its own path and inside the existing
-`UiEvent::Control`, so a right-clicked node is addressed exactly as a left-clicked one.
-
-It is a wrapper rather than a `press` field on `Row` and `Column` because `validate::value_kinds`,
-the single owner of read and write endpoint kinds, answers per variant: a `press` field would make
-`Row` answer two write kinds depending on which field is populated. As a variant, `Pressable`
-answers `(None, Some(Trigger))` and rides the existing write site unchanged, while `Row`/`Column`
+`ControlAction::SecondaryActivate` on a right press, both on its own path inside `UiEvent::Control`.
+It is a wrapper rather than a `press` field on `Row` and `Column` because `validate::value_kinds`
+answers per variant: a `press` field would make `Row` answer two write kinds depending on which
+field is populated. As a variant, `Pressable` answers `(None, Some(Trigger))` while `Row`/`Column`
 `write` keeps its wheel meaning (`Some(Scalar)`).
 
 The innermost target wins with no hit-testing: `mouse_area` forwards the event to its content first
@@ -1244,16 +1365,14 @@ silent.
 ## Popover Ownership
 
 `Popover` floats one subtree over the layout while a host-owned Bool reads true; an absent read
-means closed - the default-state shape `Optional` and collapse already carry. Only `anchor` is laid
-out in flow and it alone owns the node's intrinsic size (`size::compute_size` and
-`geometry::effective_size` delegate to it); `content` is measured inside the overlay and contributes
-nothing to the parent. The node carries no `size` field - the content column declares its own width
-and the widget draws the chrome outward of it.
-An optional block below a popover's `content` is charged, validated, interned and given a
-`BlockSpec` like any other, yet `size::has_blocks` stops at the anchor, so the enclosing module
-records `blocks: false` and answers from the memoized value. Content contributes no size in any
-snapshot, so this is the one place where "a block sits below" and "the size can change with the
+means closed. Only `anchor` is laid out in flow and it alone owns the node's intrinsic size;
+`content` is measured inside the overlay and contributes nothing to the parent. The node carries no
+`size` field - the content column declares its own width and the widget draws the chrome outward of
+it. An optional block below `content` is charged, validated, interned and given a `BlockSpec` like
+any other, yet `size::has_blocks` stops at the anchor, so the enclosing module records
+`blocks: false`: this is the one place where "a block sits below" and "the size can change with the
 snapshot" diverge.
+
 A popover must not open inside another popover's content, enforced during expansion
 (`Expander::in_popover`) rather than in the per-document node walk: expansion is the only stage that
 sees across `Include` boundaries, and a `Popover` is legal at a module root, so a document-local
@@ -1261,11 +1380,11 @@ rule would let `Popover(content: Include(m))` through whenever `m` declares one.
 
 The document names which geometry the surface opens from and which of its edges lines up with it;
 the widget owns how. `at: PopoverAt` chooses anchor rectangle or pointer, defaulting to `Anchor`;
-`align: PopoverAlign` picks the edge, defaulting to `Start`, `End` lining the surface's right edge
-up with the anchor's. A menu on a full-width row needs `Pointer` (an anchor rectangle spanning the
-list cannot say where the user clicked); a burger under a fixed cell needs `Anchor`.
-
-Everything else stays in `render/immediate/anchored.rs`:
+`align: PopoverAlign` picks the edge, defaulting to `Start`. A menu on a full-width row needs
+`Pointer` (an anchor rectangle spanning the list cannot say where the user clicked); a burger under
+a fixed cell needs `Anchor`. Everything else stays in `render/immediate/anchored.rs`, which owns
+the whole pop chrome `SkinDoc.pop` declares - background, frame, gold cap, shadow - while markup
+declares only content, frame and cap drawing outward of the content column:
 
 - `place` puts the surface below whichever geometry it opens from, overhangs it `FRAME_OVERHANG`
   (1 px) past the aligned edge so the content column lands flush, flips above when the room below
@@ -1319,23 +1438,32 @@ to the M7 root flip.
 
 ## Shipped App Menu
 
-`assets/modules/app-menu.kmodule.ron` and the row templates it includes from
-`assets/modules/app-menu/` are shipped assets that `builtin::resolver()` deliberately does not
-answer for: their window-manager endpoints - window list, per-window module flags, saved layouts -
-are host state no crate owns, so the documents must not become canonical preset surface the app
-can resolve. Exactly one copy of each exists and every consumer reaches it with `include_str!`.
-The window row, module-grid cell, saved-layout row, preference toggle and hint-reporting toggle are
-one template each (`window-row`, `module-cell`, `layout-row`, `toggle-row`, `hint-row`), taken as
-often as the menu needs through `Include`. Each instance's control paths are
-`app-menu/<include id>/<node id>`, so the template's own ids stay plain.
+## Shipped Documents
 
-## Clock And Pivot Ownership
+`builtin::resolver()` answers for every document below, and each exists in exactly one copy.
 
-`assets/modules/master-clock.kmodule.ron`, the deck key-lock and overview row, and
-`assets/modules/pivot-portals.kmodule.ron` are shipped component documents over host-owned timing
-state. They are not builtin app presets: the Gallery embeds them explicitly and supplies mock
-endpoints, while a production host must supply its measured clock sources, transport state and
-portal policy. The documents retain no tempo, source, range, Link or MIDI state.
+- `assets/modules/app-menu.kmodule.ron` and the row templates in `assets/modules/app-menu/` are the
+  burger cell and the popover behind it. A host of `MICRO_PRESET` owes the window-manager endpoints
+  the menu names: the window list, the per-window module flags and the saved layouts. Each row kind
+  is one template taken as often as the menu needs through `Include`, and each instance's control
+  paths are `app-menu/<include id>/<node id>`, so a template's own ids stay plain.
+- `assets/modules/deck-micro.kmodule.ron` is the `MICRO_PRESET` window and
+  `assets/modules/deck-micro/bar.kmodule.ron` its bar: a `Column` measuring `Height` over a `Row`
+  measuring `Width`, so the window takes the deck and the library as it grows taller and the bar
+  takes its cells as it widens. The bar stands the menu at every width.
+- `assets/modules/master-clock.kmodule.ron` and `assets/modules/pivot-portals.kmodule.ron` are
+  component documents over host-owned timing state: a production host supplies its measured clock
+  sources, transport state and portal policy, and the documents retain no tempo, source, range, Link
+  or MIDI state. The clock's popover surface is a document of its own, so the standalone module and
+  the micro bar open one panel. The deck key-lock, overview row and portals stay outside the builtin
+  preset surface: the Gallery embeds them explicitly and supplies mock endpoints.
+- `assets/modules/deck/quality.kmodule.ron` is the deck's stream-quality cell and its menu, taken
+  per deck through `parameters: ["deck"]`. It is markup over `Popover`, `Pressable` and the row
+  templates in `assets/modules/deck/quality/`, so the crate gains no control for it; its surface is
+  the crate's own `Pop` chrome, which is where it departs from the design's `HlsCell`. The ladder is
+  host-owned throughout: the cell is an `Optional` block the host hides on a plain file, each rung
+  is an `Optional` slot, automatic selection is a sibling template pinned to `variant: "auto"`, and
+  the popover's own path carries the set-false the widget publishes on dismissal.
 
 `PortalMap` and `Range` are the dedicated renderer primitives in this group, and both are neutral
 painters mounted once through the registry, so the two hosts draw one picture. `PortalMapData` owns
@@ -1393,17 +1521,14 @@ A layout setting `resize_edges` is framed by `render::tree::render` with the eig
 system border would have given it. They lie over the content, not beside it, so declaring them costs
 the layout no space; `SkinDoc.window.resize_edge` owns their thickness, and the host maps each
 `WindowEdge` to its toolkit's resize direction.
-`WindowDrag`, `TitleBar` and `WindowControls` paint no surface of their own and take their size from
-the row that holds them, so the same controls sit in a 26 px gallery header and in the app's
-42 px bar; the document declares the background. `WindowDrag` is the bare drag surface a bar without
-a title needs, `TitleBar` the same surface with a label. Both emit on press, not on release - a
-window drag only takes effect while the button is still held. Their glyphs are canvas strokes drawn
-to the skin's icon size.
 
-`TitleBar` and `WindowControls` are portable, binding-free controls emitting typed
-`UiEvent::Window(WindowCommand)` values; the host owning the native window ID executes drag,
-minimize, maximize and close. `kithara-ui` owns their declarative schema and skin-driven
-presentation, never native window state.
+`WindowDrag`, `TitleBar` and `WindowControls` paint no surface of their own and take their size from
+the row that holds them, so the same controls sit in a gallery header and in an app bar; the
+document declares the background. `WindowDrag` is the bare drag surface a bar without a title needs,
+`TitleBar` the same surface with a label, and both emit on press rather than on release. All three
+are portable, binding-free controls emitting typed `UiEvent::Window(WindowCommand)` values; the host
+owning the native window ID executes drag, minimize, maximize and close. `kithara-ui` owns their
+declarative schema and skin-driven presentation, never native window state.
 
 ## Track List Column Ownership
 
@@ -1463,9 +1588,8 @@ are host-owned. The renderer never mutates or filters that state; activating any
 `ControlAction::SelectIndex` on the control path, and the host decides whether that index toggles a
 branch or selects a leaf. `TreeSkin` owns search, row, indentation, panel and context-bar metrics.
 `ContextBar` keeps breadcrumb text read-only; optional scope items use a separate Scalar read
-binding and emit `SelectIndex` on the control path so scope state stays host-owned.
-`validate::check_context_scope` requires `scope_items`, the scope read and the write to appear
-together or not at all.
+binding and emit `SelectIndex` on the control path. `validate::check_context_scope` requires
+`scope_items`, the scope read and the write to appear together or not at all.
 
 The search combines two ownership domains without merging them. The query is document-owned: each
 ordinary text edit and each native IME commit emits exactly one `UiEvent::LibraryQuery` containing

@@ -7,7 +7,7 @@ use kithara_ui::{
 
 use super::{
     app::{Decks, Kithara},
-    frontend::window_size,
+    frontend::{window_min, window_size},
     message::Message,
     reads::ReadRoot,
     ui::{self, AppUi},
@@ -84,7 +84,7 @@ pub(crate) fn run(app: Studio) -> Result<(), RunError> {
     let resolver = ui::resolver();
     let endpoints = endpoints::Registry::default();
     let text = ui::text()?;
-    let (size, min_size) = window_size();
+    let (size, min_size) = (window_size(), window_min(app.state.ui.window_min()));
     kithara_ui::app::run(
         app,
         Config::builder()

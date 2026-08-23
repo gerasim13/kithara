@@ -329,6 +329,41 @@ impl LayoutWalker<'_> {
         }
     }
 
+    /// Writes a document node the room never reached, which carries a path and
+    /// no box.
+    fn unplaced(&mut self, path: &str, depth: usize) {
+        for _ in 0..depth {
+            self.output.push_str("  ");
+        }
+        writeln!(self.output, "{path} -").expect("writing to a String cannot fail");
+        self.attribution.document_nodes += 1;
+    }
+
+    /// Names every document node beneath a cell the room never reached.
+    ///
+    /// Nothing under such a cell is laid out, so there is no iced node to walk
+    /// and the paths come from the document alone.
+    fn unreached(&mut self, node: &ExpandedNode, parent: &str, position: usize, depth: usize) {
+        let path = expanded_path(node, self.ui, parent, position);
+        match node {
+            ExpandedNode::Row { children, .. }
+            | ExpandedNode::Column { children, .. }
+            | ExpandedNode::Slot { children, .. } => {
+                self.unplaced(&path, depth);
+                for (position, child) in children.iter().enumerate() {
+                    self.unreached(child, &path, position, depth + 1);
+                }
+            }
+            ExpandedNode::Optional { child, .. } | ExpandedNode::Reveal { child, .. } => {
+                self.unreached(child, parent, position, depth);
+            }
+            ExpandedNode::Control { .. }
+            | ExpandedNode::Popover { .. }
+            | ExpandedNode::Pressable { .. } => self.unplaced(&path, depth),
+            _ => panic!("unsupported expanded node at document path `{path}`"),
+        }
+    }
+
     fn wrapper(&mut self) {
         self.attribution.wrappers += 1;
     }
@@ -357,10 +392,10 @@ impl LayoutWalker<'_> {
                 let flex = only_child(layout, &path, "split container");
                 self.wrapper();
                 let child_layouts = exact_children(flex, children.len(), &path, "split Flex");
-                for (position, ((_, child), child_layout)) in
+                for (position, (cell, child_layout)) in
                     children.iter().zip(child_layouts).enumerate()
                 {
-                    self.compiled(child, child_layout, &path, position, depth + 1);
+                    self.compiled(&cell.node, child_layout, &path, position, depth + 1);
                 }
             }
             CompiledNode::Module {
@@ -532,6 +567,18 @@ impl LayoutWalker<'_> {
             ExpandedNode::Optional { child, .. } => {
                 self.expanded(child, layout, parent, position, depth, already_attributed);
             }
+            // A revealed cell takes the place of its child when the room
+            // reaches its band, and keeps the empty node `Flex` left for it
+            // when it does not. Both hosts mount the child either way, so the
+            // walk names it either way and only the box goes missing.
+            ExpandedNode::Reveal { child, .. } => {
+                if stood(layout) {
+                    self.expanded(child, layout, parent, position, depth, already_attributed);
+                } else {
+                    self.unreached(child, parent, position, depth);
+                    self.furniture(layout);
+                }
+            }
             _ => panic!("unsupported expanded node at document path `{path}`"),
         }
     }
@@ -631,7 +678,7 @@ fn document_node_count(node: &CompiledNode, ui: &CompiledUi, reads: &dyn Reads) 
         CompiledNode::Split { children, .. } => {
             1 + children
                 .iter()
-                .map(|(_, child)| document_node_count(child, ui, reads))
+                .map(|cell| document_node_count(&cell.node, ui, reads))
                 .sum::<usize>()
         }
         CompiledNode::Module {
@@ -662,8 +709,21 @@ fn expanded_node_count(node: &ExpandedNode) -> usize {
         | ExpandedNode::Slot { children, .. } => {
             1 + children.iter().map(expanded_node_count).sum::<usize>()
         }
+        // A reveal writes no rect of its own: the node the walk emits is the
+        // one it holds.
+        ExpandedNode::Reveal { child, .. } => expanded_node_count(child),
         _ => 1,
     }
+}
+
+/// Whether a cell of a measured flow stood in the room it was laid out in.
+///
+/// `render/tree/flex.rs` leaves `layout::Node::default()` in the place of a
+/// cell the room never reached, so a cell with neither size nor children is
+/// one that did not stand.
+fn stood(layout: Layout<'_>) -> bool {
+    let bounds = layout.bounds();
+    bounds.width > 0.0 || bounds.height > 0.0 || layout.children().next().is_some()
 }
 
 fn compiled_path(node: &CompiledNode, ui: &CompiledUi, parent: &str, position: usize) -> String {
@@ -881,6 +941,78 @@ fn split_weights_reach_layout_as_f32() {
             "unit 335.000 0.000 1000.000 100.000",
         ],
         "split weights were quantized through FillPortion (the rounded result is 338.731:996.269)",
+    );
+}
+
+/// A band names a room in the box the document declared, not what is left of it
+/// once the flow spends its own padding. `render/masonry/flex.rs` reads the same
+/// number, so a document means one thing on both hosts.
+#[kithara::test]
+fn a_padded_measuring_row_reads_its_bands_against_the_declared_box() {
+    let mut resolver = MemResolver::default();
+    resolver.insert(
+        "banded.klayout.ron",
+        r#"(schema: "kithara.layout", version: 1, id: "banded",
+            root: Split(axis: Horizontal, children: [
+                (weight: 1.0, node: Module(
+                    instance: "bar",
+                    source: "bar.kmodule.ron",
+                    size: (w: Fill, h: Fill),
+                )),
+            ]))"#,
+    );
+    resolver.insert(
+        "bar.kmodule.ron",
+        r#"(schema: "kithara.module", version: 1, id: "bar", chrome: Plain,
+            root: Row(
+                id: "body",
+                size: (w: Fill, h: Fill),
+                gap: 0.0,
+                pad_x: 30.0,
+                measure: Width,
+                children: [
+                    Reveal(from: 350.0, child: Spacer(
+                        id: "late",
+                        size: Some((w: Fixed(30.0), h: Fill)),
+                    )),
+                ],
+            ))"#,
+    );
+    let ui = compile(
+        "banded.klayout.ron",
+        &resolver,
+        &common::player_registry(),
+        builtin::skin_doc(),
+        builtin::text_doc(),
+        &UiConfig::default(),
+    )
+    .expect("banded document must compile");
+    let laid_out = |width: f32| {
+        dump(
+            "banded.klayout.ron",
+            &ui,
+            &FixtureReads::default(),
+            &fixture_skin(),
+            &headless_renderer(),
+            Size::new(width, 42.0),
+        )
+        .lines()
+        .find_map(|line| {
+            let line = line.trim();
+            line.strip_prefix("bar/late ").map(str::to_owned)
+        })
+        .unwrap_or_else(|| panic!("the banded cell must be named at {width} wide"))
+    };
+
+    assert_eq!(
+        laid_out(349.0),
+        "-",
+        "349 does not reach the band, so the cell has no box"
+    );
+    assert_eq!(
+        laid_out(360.0),
+        "30.000 0.000 30.000 42.000",
+        "360 reaches 350 before the row spends its padding"
     );
 }
 

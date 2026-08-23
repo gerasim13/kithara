@@ -23,6 +23,7 @@ use crate::{
     common::project::{
         ProjectConfig, StressArtifactConfig, StressConfig, StressEvidenceConfig, StressModeConfig,
     },
+    lease,
     stress_report::{self, StressReportArgs},
     stress_run::{self, StressRunSpec},
     test::{ConfiguredLane, configured_lane},
@@ -449,6 +450,9 @@ fn run_lane(args: &RunArgs, ctx: &Ctx, mode_name: &str, raw: &Path) -> Result<()
     // beside the tree it compiles, so one lane's artifacts never answer for
     // another lane's source.
     let build = build_root(if commanded { &ctx.root } else { &subject_root }, config);
+    // Held for the lane, so the host's build-cache budget leaves these
+    // artifacts alone while the lane is still executing them.
+    let _build_lease = lease::hold(&build);
     let spec = StressRunSpec {
         inventory: paths.inventory.clone(),
         junit: subject_junit.clone(),

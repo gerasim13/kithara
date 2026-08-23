@@ -176,6 +176,15 @@ as SKIP instead of a false FAIL. Two stages needed a different answer:
   every lint skips, leaving a six-minute stage that runs 0 checks and reports
   success. Stating minor is what turns it into a question: 196 checks run on the
   facade instead of none.
+
+  The CI lane in `semver.rs` is the wider form: `--workspace` against `HEAD~1`.
+  There, `--workspace` makes cargo-semver-checks resolve every member by name
+  inside the baseline checkout, and a member the baseline does not have fails the
+  whole run — so adding a crate broke the lane on the commit that added it. The
+  lane reads the baseline's lockfile (path entries carry no `source`, which is
+  what separates the workspace's own crates from its dependencies) and excludes
+  the members missing there, naming each one on stdout. A crate with no earlier
+  surface cannot have broken it; skipping it is the answer, not a gap in it.
 - `geiger` is rooted at `[health].geiger_package`. A dependency tree has a root
   and this workspace's root manifest is virtual, so the workspace form only ever
   reported that. The census is rooted at the facade, whose closure is what a
@@ -263,6 +272,16 @@ evidence to exactly that. The manifest records the resolved build directory unde
 itself instead of leaving it to be reconstructed from the log. The path is an
 observation, not provenance: the reporting machine has no such directory and is
 never asked to agree about one.
+
+The lane also holds a lease on that directory for as long as it owns it.
+`lease::hold` claims `.kithara-job-lease` there with a shared lock, and a
+build-cache budget elsewhere asks for the same file exclusively before
+reclaiming — the one request a shared holder refuses. Exporting the directory as
+the children's `CARGO_TARGET_DIR` cannot stand in for that: the children are
+`cargo`, which claims nothing, and a directory no budget can see is a directory
+no budget can ever get the space back from. The claim covers the cold build too,
+because `lease::hold` creates the directory it claims and the build is the
+longest stretch that needs it.
 
 Pressure schema `devtools.pressure.v2` names its end-marker status
 `primary_exit_code`: sampling ends after the test/evidence phase so the reporter can

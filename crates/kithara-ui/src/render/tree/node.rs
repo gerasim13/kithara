@@ -5,9 +5,9 @@ use iced::{
 
 use super::{
     control::{Placed, render_control},
-    flex::Flex,
     geometry::{Rendered, apply_size, bordered, filled, length_for, padding},
     host,
+    measure::{Flex, Measured},
 };
 #[cfg(test)]
 use crate::compile::CompiledNode;
@@ -17,12 +17,13 @@ use crate::{
     expand::{Binding, ControlSpec, ExpandedNode, SurfaceSpec},
     ids::InternId,
     layout::Axis,
-    module::TextAlign,
+    module::{MeasureAxis, TextAlign},
     render::{
         Anchored, ControlAction, DropZone, InputOwner, ModuleChrome, Placement, Skin, UiEvent,
         Viewport, WheelSurface, Widget,
         document::{
-            Ctx, Group, Host as DocumentHost, Module as DocumentModule, Popover as DocumentPopover,
+            Band, Ctx, Group, GroupMount, Host as DocumentHost, Measured as MeasuredPlan,
+            Module as DocumentModule, Popover as DocumentPopover, SplitMount,
         },
         window_layers,
     },
@@ -43,29 +44,46 @@ impl<'a, 'r> IcedHost<'a, 'r> {
 impl<'a> DocumentHost for IcedHost<'a, '_> {
     type Output = Element<'a, UiEvent>;
 
-    fn split(&mut self, axis: Axis, children: Vec<(f32, SizeSpec, Self::Output)>) -> Self::Output {
-        match axis {
-            Axis::Horizontal => container(
-                Flex::row_weighted(children.into_iter().map(|(weight, size, child)| {
-                    (child, Size::new(main_length(size.w), Length::Fill), weight)
-                }))
+    fn split(
+        &mut self,
+        axis: Axis,
+        measure: Option<MeasureAxis>,
+        children: Vec<SplitMount<Self::Output>>,
+    ) -> Self::Output {
+        let flex = match axis {
+            Axis::Horizontal => Flex::row_weighted(children.into_iter().map(|cell| {
+                (
+                    cell.output,
+                    Size::new(main_length(cell.size.w), Length::Fill),
+                    cell.weight,
+                    cell.band,
+                )
+            })),
+            Axis::Vertical => Flex::column_weighted(children.into_iter().map(|cell| {
+                (
+                    cell.output,
+                    Size::new(Length::Fill, main_length(cell.size.h)),
+                    cell.weight,
+                    cell.band,
+                )
+            })),
+        };
+        container(
+            flex.measure(measure)
                 .width(Length::Fill)
                 .height(Length::Fill),
-            )
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .into(),
-            Axis::Vertical => container(
-                Flex::column_weighted(children.into_iter().map(|(weight, size, child)| {
-                    (child, Size::new(Length::Fill, main_length(size.h)), weight)
-                }))
-                .width(Length::Fill)
-                .height(Length::Fill),
-            )
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .into(),
-        }
+        )
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .into()
+    }
+
+    fn measured(&mut self, plan: MeasuredPlan, branches: Vec<Self::Output>) -> Self::Output {
+        let size = Size::new(
+            length_for(plan.size.w, Length::Fill),
+            length_for(plan.size.h, Length::Fill),
+        );
+        Measured::new(branches, plan, size).into()
     }
 
     fn module(
@@ -123,17 +141,13 @@ impl<'a> DocumentHost for IcedHost<'a, '_> {
         }
     }
 
-    fn group(
-        &mut self,
-        group: Group<'_>,
-        children: Vec<(Option<f32>, Self::Output)>,
-    ) -> Self::Output {
+    fn group(&mut self, group: Group<'_>, children: Vec<GroupMount<Self::Output>>) -> Self::Output {
         let size = content_size(group.size());
         let flex = match group.axis() {
             Axis::Horizontal => Flex::row(
                 children
                     .into_iter()
-                    .map(|(minimum, child)| (child, minimum)),
+                    .map(|child| (child.output, child.minimum, child.band)),
             )
             .spacing(group.gap())
             .align(column_alignment(group.alignment()))
@@ -142,19 +156,18 @@ impl<'a> DocumentHost for IcedHost<'a, '_> {
             Axis::Vertical => Flex::column(
                 children
                     .into_iter()
-                    .map(|(minimum, child)| (child, minimum)),
+                    .map(|child| (child.output, child.minimum, child.band)),
             )
             .spacing(group.gap())
             .align(column_alignment(group.alignment()))
             .width(size.0),
-        };
+        }
+        .measure(group.measure())
+        .padding(padding(group.padding_x(), group.padding_y()));
         let element = wheeled(
             bordered(
                 filled(
-                    container(flex)
-                        .padding(padding(group.padding_x(), group.padding_y()))
-                        .width(size.0)
-                        .height(size.1),
+                    container(flex).width(size.0).height(size.1),
                     group.background(),
                     group.background_alpha(),
                     self.skin,
@@ -237,9 +250,13 @@ impl<'a> DocumentHost for IcedHost<'a, '_> {
 
     fn slot(&mut self, children: Vec<Self::Output>, size: Option<SizeSpec>) -> Self::Output {
         let element = container(
-            Flex::column(children.into_iter().map(|child| (child, None)))
-                .spacing(self.skin.layout.grid_gap)
-                .width(Length::Fill),
+            Flex::column(
+                children
+                    .into_iter()
+                    .map(|child| (child, None, Band::ALWAYS)),
+            )
+            .spacing(self.skin.layout.grid_gap)
+            .width(Length::Fill),
         )
         .width(Length::Fill)
         .into();
@@ -327,6 +344,8 @@ fn main_length(dim: Dim) -> Length {
     }
 }
 
+/// The lengths a node hands the toolkit: its declared box where it has one,
+/// and the whole room where it has none.
 fn content_size(size: Option<SizeSpec>) -> (Length, Length) {
     size.map_or((Length::Fill, Length::Fill), |size| {
         (
@@ -408,6 +427,19 @@ mod tests {
         ids::{Interner, SourceUri},
         render::{ReadValue, Reads, document::probe, fonts::SANS},
     };
+
+    #[kithara::test]
+    fn a_node_declaring_no_box_takes_the_whole_room() {
+        assert_eq!(content_size(None), (Length::Fill, Length::Fill));
+    }
+
+    #[kithara::test]
+    fn a_declared_box_maps_each_axis_on_its_own() {
+        assert_eq!(
+            content_size(Some(SizeSpec::new(Dim::Fixed(40.0), Dim::Shrink))),
+            (Length::Fixed(40.0), Length::Shrink)
+        );
+    }
 
     /// The box each child of the stage asks for. The stage itself is taller,
     /// which is the only way a child being stretched to it shows up at all.

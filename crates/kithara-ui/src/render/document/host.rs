@@ -1,9 +1,10 @@
-use super::{Group, Module, Popover};
+use super::{Group, GroupMount, Measured, Module, Popover, SplitMount};
 use crate::{
     draw::Transform,
     expand::{Binding, ControlSpec, ExpandedNode},
     ids::InternId,
     layout::Axis,
+    module::MeasureAxis,
     render::InputOwner,
     size::SizeSpec,
 };
@@ -18,17 +19,31 @@ pub trait Host {
     type Output;
 
     /// Mounts a weighted layout split.
-    fn split(&mut self, axis: Axis, children: Vec<(f32, SizeSpec, Self::Output)>) -> Self::Output;
+    ///
+    /// A split that names a `measure` shows only the cells whose band holds the
+    /// room it turned out to have, which is a question only the layout pass can
+    /// answer: every cell is mounted either way.
+    fn split(
+        &mut self,
+        axis: Axis,
+        measure: Option<MeasureAxis>,
+        children: Vec<SplitMount<Self::Output>>,
+    ) -> Self::Output;
+
+    /// Mounts the branches of a node that draws whichever one fits its room.
+    ///
+    /// Every branch is mounted because the choice is the layout pass's to make;
+    /// the host draws, measures, and drives only the one that stands.
+    fn measured(&mut self, plan: Measured, branches: Vec<Self::Output>) -> Self::Output;
 
     /// Mounts one compiled module around its already-produced content.
     fn module(&mut self, module: Module<'_>, content: Option<Self::Output>) -> Self::Output;
 
     /// Mounts a row or column around its already-produced visible children.
-    fn group(
-        &mut self,
-        group: Group<'_>,
-        children: Vec<(Option<f32>, Self::Output)>,
-    ) -> Self::Output;
+    ///
+    /// A group that names a `measure` shows only the children whose band holds
+    /// the room it turned out to have; the rest are mounted and stand aside.
+    fn group(&mut self, group: Group<'_>, children: Vec<GroupMount<Self::Output>>) -> Self::Output;
 
     /// Mounts an anchored popover around its produced anchor and optional content.
     fn popover(

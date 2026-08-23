@@ -4,9 +4,10 @@ use num_traits::cast::AsPrimitive;
 use crate::{
     atoms::wave::zoom_math::DEFAULT_ZOOM,
     compile::CompiledUi,
-    expand::{Binding, BindingKind},
+    expand::{Binding, BindingKind, BlockSpec},
     registry::SECONDS,
     render::{ReadValue, Reads},
+    size::Snapshot,
     skin::SkinDoc,
 };
 
@@ -143,6 +144,24 @@ impl<'a, 'r> Ctx<'a, 'r> {
                 _ => None,
             })
             .unwrap_or(DEFAULT_ZOOM)
+    }
+}
+
+/// The document asks about room through the same context it asks about values:
+/// what a block hides, and what a measured binding reads to.
+impl Snapshot for Ctx<'_, '_> {
+    fn hidden(&self, block: &BlockSpec) -> bool {
+        self.flag(Some(&block.hidden))
+    }
+
+    /// A measurement that is not a finite number is no measurement, so the
+    /// node falls back to the branch it draws with nothing read.
+    fn measure(&self, measure: &Binding) -> Option<f32> {
+        let Some(ReadValue::Scalar(value)) = self.read(measure) else {
+            return None;
+        };
+        let value: f32 = value.as_();
+        value.is_finite().then_some(value)
     }
 }
 

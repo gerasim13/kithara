@@ -6,8 +6,8 @@ use kithara_ui::{
     compile::{CompiledUi, compile},
     ids::{DocId, EndpointId, NodeId, SourceUri},
     module::{
-        AdaptivePolicy, BindingRef, ButtonStyle, ControlNode, FaderStyle, ModuleDoc, ScalarFormat,
-        TableColumn, TableColumnStyle, TextAlign, WaveStyle, parse_module,
+        BindingRef, ButtonStyle, ControlNode, FaderStyle, ModuleDoc, ScalarFormat, TableColumn,
+        TableColumnStyle, TextAlign, WaveStyle, parse_module,
     },
     param::Param,
     registry::{EndpointCategory, EndpointDesc, EndpointRegistry, ValueKind},
@@ -380,6 +380,7 @@ fn row(id: Option<String>, children: Vec<ControlNode>) -> ControlNode {
         children,
         id: id.map(NodeId),
         size: None,
+        measure: None,
         gap: None,
         align: TextAlign::Center,
         pad: None,
@@ -401,6 +402,7 @@ fn column(id: Option<String>, children: Vec<ControlNode>) -> ControlNode {
         children,
         id: id.map(NodeId),
         size: None,
+        measure: None,
         gap: None,
         align: TextAlign::Start,
         pad: None,
@@ -420,7 +422,6 @@ fn spacer(id: &str) -> ControlNode {
         size: None,
         read: None,
         write: None,
-        adaptive: AdaptivePolicy::default(),
     }
 }
 
@@ -430,7 +431,6 @@ fn knob(id: &str, endpoint: &str) -> ControlNode {
         size: None,
         read: Some(model(endpoint)),
         write: None,
-        adaptive: AdaptivePolicy::default(),
         label: None,
     }
 }
@@ -441,7 +441,6 @@ fn fader(id: &str, endpoint: &str) -> ControlNode {
         size: None,
         read: Some(model(endpoint)),
         write: None,
-        adaptive: AdaptivePolicy::default(),
         style: FaderStyle::default(),
         label: None,
     }
@@ -453,7 +452,6 @@ fn scalar(id: &str, endpoint: &str) -> ControlNode {
         size: None,
         read: Some(model(endpoint)),
         write: None,
-        adaptive: AdaptivePolicy::default(),
         format: ScalarFormat::default(),
         framed: true,
     }
@@ -465,7 +463,6 @@ fn button(id: &str, endpoint: &str) -> ControlNode {
         size: None,
         read: Some(model(endpoint)),
         write: None,
-        adaptive: AdaptivePolicy::default(),
         label: "PLAY".to_owned(),
         active_label: Some("PAUSE".to_owned()),
         style: ButtonStyle::default(),
@@ -480,7 +477,6 @@ fn wave(id: &str, endpoint: &str) -> ControlNode {
         size: None,
         read: Some(model(endpoint)),
         write: None,
-        adaptive: AdaptivePolicy::default(),
         style: WaveStyle::default(),
         badge: None,
         zoom: None,
@@ -493,7 +489,6 @@ fn vu(id: &str, endpoint: &str) -> ControlNode {
         size: None,
         read: Some(model(endpoint)),
         write: None,
-        adaptive: AdaptivePolicy::default(),
     }
 }
 
@@ -503,7 +498,6 @@ fn table(id: &str, endpoint: &str) -> ControlNode {
         size: None,
         read: Some(model(endpoint)),
         write: None,
-        adaptive: AdaptivePolicy::default(),
         columns: Some(Param::Fixed(vec![TableColumn::new(
             "name",
             "NAME",

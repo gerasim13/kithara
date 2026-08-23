@@ -44,7 +44,6 @@
                             (id: "transition", label: "@track_list.column.transition", style: Transition, width: 130.0),
                         ],
                         columns_state: Some(Model(id: "gallery.table.columns")),
-                        adaptive: (priority: Required),
                     ),
                     Column(
                         id: "columns-panel",

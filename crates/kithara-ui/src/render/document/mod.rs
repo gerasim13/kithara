@@ -1,3 +1,4 @@
+mod cell;
 mod ctx;
 mod facade;
 mod group;
@@ -7,6 +8,7 @@ mod popover;
 #[cfg(feature = "masonry")]
 mod poses;
 
+pub use cell::{Band, GroupMount, Measured, SplitMount};
 #[cfg(test)]
 pub(crate) use ctx::probe;
 pub use ctx::{Clock, Ctx};
