@@ -17,7 +17,7 @@ use super::{
         AttemptKey, AttemptMetadata, AttemptOutcome, foreign_run, outcome_for, render_key,
         render_test,
     },
-    normalize_signature, render_clusters, wait_signatures,
+    normalize_signature, render_clusters, strip_ansi, wait_signatures,
 };
 use crate::common::project::StressEvidenceConfig;
 
@@ -161,14 +161,15 @@ pub(super) fn append(
         let context = envelope.context.to_string();
         let signature =
             normalize_diagnostic(&format!("{}: {}", envelope.label, envelope.diagnostic));
-        let probe_tail = fold_flight_tail(&envelope.flight_probes);
         if outcome == AttemptOutcome::Failed
             && let Some(dossier) = dossiers.get_mut(&attempt.key)
         {
             dossier.envelopes.insert(signature.clone());
             if dossier.flight_tail.is_empty() {
-                let newest = probe_tail.len().saturating_sub(FLIGHT_TAIL_GROUPS);
-                dossier.flight_tail = probe_tail[newest..].to_vec();
+                dossier.flight_tail = newest_groups(fold_flight_tail(&envelope.flight_probes));
+            }
+            if dossier.event_tail.is_empty() {
+                dossier.event_tail = newest_groups(fold_flight_tail(&envelope.flight_events));
             }
         }
         add_signature(
@@ -326,29 +327,63 @@ fn split_recorded_repeats(line: &str) -> (&str, usize) {
     count.parse().map_or((line, 1), |count| (head, count))
 }
 
-/// Run-length encode a flight tail after normalization: a starving pass loop
-/// fires the same probe hundreds of times in a row, and `line (x312)` says so
-/// where three hundred identical rows would say nothing.
+/// Run-length encode a flight tail: a starving pass loop fires the same probe
+/// hundreds of times in a row, and `line (x312)` says so where three hundred
+/// identical rows would say nothing. Grouping folds on the normalized form so
+/// drifting values do not split one loop into many rows, but each group shows
+/// its last firing's real field values — the tail is the verdict, and a
+/// verdict of `queue_head=<n>` names no cause.
 fn fold_flight_tail(lines: &[String]) -> Vec<String> {
-    let mut folded: Vec<(String, usize)> = Vec::new();
+    struct Group {
+        key: String,
+        display: String,
+        count: usize,
+    }
+    let mut folded: Vec<Group> = Vec::new();
     for line in lines {
-        let repeats = split_recorded_repeats(line).1;
-        let normalized = normalize_flight_line(line);
+        let (head, repeats) = split_recorded_repeats(line);
+        let key = normalize_flight_line(line);
+        let display = display_flight_line(head);
         match folded.last_mut() {
-            Some((previous, count)) if *previous == normalized => *count += repeats,
-            _ => folded.push((normalized, repeats)),
+            Some(group) if group.key == key => {
+                group.count += repeats;
+                group.display = display;
+            }
+            _ => folded.push(Group {
+                key,
+                display,
+                count: repeats,
+            }),
         }
     }
     folded
         .into_iter()
-        .map(|(line, count)| {
-            if count > 1 {
-                format!("{line} (x{count})")
+        .map(|group| {
+            if group.count > 1 {
+                format!("{} (x{})", group.display, group.count)
             } else {
-                line
+                group.display
             }
         })
         .collect()
+}
+
+/// The newest run-length groups of a folded tail — the dossier's bounded view.
+fn newest_groups(mut tail: Vec<String>) -> Vec<String> {
+    let newest = tail.len().saturating_sub(FLIGHT_TAIL_GROUPS);
+    tail.split_off(newest)
+}
+
+/// A tail line kept readable: real field values stay, only the recorder's
+/// per-firing counters go — they order lines inside the ring and differ on
+/// every firing, saying nothing about the state a group stands for.
+fn display_flight_line(line: &str) -> String {
+    static RECORDER_COUNTERS: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"\s+(?:seq|thread_id|thread_seq|install_id)=\d+\b")
+            .expect("recorder counter regex")
+    });
+    let line = strip_ansi(line).replace(['\r', '\n'], " ");
+    RECORDER_COUNTERS.replace_all(&line, "").trim().to_owned()
 }
 
 fn read_envelope(path: &Path) -> Option<String> {
@@ -442,6 +477,109 @@ mod tests {
 
         assert_eq!(folded.len(), 1, "{folded:?}");
         assert!(folded[0].ends_with("(x12)"), "{folded:?}");
+    }
+
+    /// The dossier tail is the verdict: a starving loop's last firing names
+    /// the exact state it died in, so each folded group must keep real field
+    /// values instead of `<n>` placeholders.
+    #[test]
+    fn a_folded_tail_keeps_the_last_firing_field_values() {
+        let folded = fold_flight_tail(&[
+            r#"TRACE kithara_hls_probe: probe="dispatch_from" caller_line=39 seq=100 variant=2 budget=2 queue_len=3 queue_head=26 cap=26"#.to_owned(),
+            r#"TRACE kithara_hls_probe: probe="dispatch_from" caller_line=39 seq=101 variant=2 budget=2 queue_len=3 queue_head=27 cap=26"#.to_owned(),
+        ]);
+
+        assert_eq!(folded.len(), 1, "one form is one group: {folded:?}");
+        assert!(folded[0].contains("queue_head=27"), "{folded:?}");
+        assert!(folded[0].contains("cap=26"), "{folded:?}");
+        assert!(!folded[0].contains("<n>"), "{folded:?}");
+        assert!(folded[0].ends_with("(x2)"), "{folded:?}");
+    }
+
+    /// The recorder's per-firing counters order lines inside the ring and
+    /// differ on every firing; in a tail group they are noise that buries the
+    /// state fields the group exists to show.
+    #[test]
+    fn a_folded_tail_drops_the_recorder_counters() {
+        let folded = fold_flight_tail(&[
+            r#"TRACE kithara_hls_probe: probe="total_bytes" caller_line=11 seq=54634 thread_id=11876854719037224982 thread_seq=2249 install_id=1 variant=1 total=437160"#.to_owned(),
+        ]);
+
+        assert!(!folded[0].contains("seq="), "{folded:?}");
+        assert!(!folded[0].contains("thread_id="), "{folded:?}");
+        assert!(!folded[0].contains("install_id="), "{folded:?}");
+        assert!(folded[0].contains("total=437160"), "{folded:?}");
+    }
+
+    /// Grouping still folds on the normalized form: values that drift between
+    /// firings (a moving byte offset) must not break one loop into many rows.
+    #[test]
+    fn drifting_values_do_not_split_a_tail_group() {
+        let folded = fold_flight_tail(&[
+            "DEBUG demo: read byte_offset=100".to_owned(),
+            "DEBUG demo: read byte_offset=200".to_owned(),
+            "DEBUG demo: read byte_offset=300".to_owned(),
+        ]);
+
+        assert_eq!(folded.len(), 1, "{folded:?}");
+        assert!(folded[0].contains("byte_offset=300"), "{folded:?}");
+        assert!(folded[0].ends_with("(x3)"), "{folded:?}");
+    }
+
+    /// The event tail is the state chronology immediately preceding the
+    /// failure — it must land in the failed attempt's dossier next to the
+    /// probe tail instead of staying only in the raw dump.
+    #[test]
+    fn the_event_tail_lands_in_the_dossier() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        fs::write(
+            temp.path().join("hang.json"),
+            r#"{
+  "schema":"demo.hang.v1",
+  "label":"audio_worker_loop",
+  "diagnostic":"stuck",
+  "nextest":{
+    "run_id":"run",
+    "binary_id":"demo::tests",
+    "test_name":"seek",
+    "stress_current":"0"
+  },
+  "context":{},
+  "flight_events":[
+    "DEBUG kithara_abr: ABR: tick estimate_bps=26204656",
+    "DEBUG kithara_abr: ABR: tick estimate_bps=18852415",
+    "DEBUG kithara_audio: decoder returned EOF chunks=435 pos=2000000"
+  ],
+  "flight_probes":[]
+}"#,
+        )
+        .expect("write event fixture");
+        let key = key();
+        let outcomes = BTreeMap::from([(key.clone(), AttemptOutcome::Failed)]);
+        let mut dossiers = dossier(key);
+        let mut markdown = String::new();
+        let evidence = evidence();
+
+        assert!(append(
+            &mut markdown,
+            temp.path(),
+            Input::new(&outcomes, &BTreeSet::new(), Some("run"), &evidence),
+            &mut BTreeMap::new(),
+            &mut FlightClusters::default(),
+            &mut dossiers,
+        ));
+
+        let tail = &dossiers.values().next().expect("dossier").event_tail;
+        assert_eq!(
+            tail.len(),
+            2,
+            "ticks fold, EOF stays its own group: {tail:?}"
+        );
+        assert!(
+            tail[0].contains("estimate_bps=18852415") && tail[0].ends_with("(x2)"),
+            "the folded group shows its last firing: {tail:?}"
+        );
+        assert!(tail[1].contains("pos=2000000"), "{tail:?}");
     }
 
     #[test]
