@@ -1,6 +1,6 @@
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
-use bon::bon;
+use bon::{Builder, bon};
 use kithara_assets::AssetResource;
 use kithara_drm::DecryptContext;
 use kithara_events::EventBus;
@@ -21,7 +21,7 @@ use super::{
 };
 use crate::{
     HlsResult,
-    config::SizeProbeMethod,
+    config::{HlsConfig, SizeProbeMethod},
     playlist::{PlaylistAccess, PlaylistState},
     segment::{MediaSegment, Segment, SegmentContent, SegmentSize, SegmentSlotState},
     signal::SizeSignal,
@@ -37,7 +37,7 @@ pub(super) const NO_PREFETCH_DEFERRAL: u64 = u64::MAX;
 /// every [`PlanCtx`] the peer constructs afterwards. Kept apart from the
 /// per-activation runtime handles so a new parameter lands in the config and
 /// not in another positional argument.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Builder)]
 pub(crate) struct PlanConfig {
     /// Max bytes the downloader may be ahead of the reader before
     /// `dispatch` pauses emitting `FetchCmd`s. Mirrors
@@ -56,12 +56,15 @@ pub(crate) struct PlanConfig {
     /// lookahead can otherwise prefetch more resources than the cache can retain
     /// and trigger eviction/rebuild thrash.
     pub(crate) look_ahead_segments: Option<usize>,
+    #[builder(default)]
     pub(crate) size_probe_method: SizeProbeMethod,
     /// Mirrors `HlsConfig::download_batch_size`: segments one dispatch round
     /// may emit.
+    #[builder(default = HlsConfig::DEFAULT_DOWNLOAD_BATCH_SIZE)]
     pub(crate) prefetch_budget: usize,
     /// Mirrors `HlsConfig::acquire_attempt_budget`: dispatch rounds a slot
     /// gets before an acquire failure settles it terminally.
+    #[builder(default = HlsConfig::DEFAULT_ACQUIRE_ATTEMPT_BUDGET)]
     pub(crate) acquire_attempt_budget: u8,
 }
 

@@ -173,7 +173,6 @@ mod tests {
 
     use super::*;
     use crate::{
-        config::{HlsConfig, SizeProbeMethod},
         peer::HlsPeer,
         playlist::{PlaylistState, SegmentState, VariantState},
         segment::{MediaSegment, Segment, SegmentContent, SegmentSize, SegmentSlotState},
@@ -272,13 +271,10 @@ mod tests {
                 seek_epoch: 0,
                 headers: None,
                 signal: SizeSignal::new(Arc::new(ThreadGate::default()), Arc::new(OnceLock::new())),
-                config: PlanConfig {
-                    prefetch_budget: 8,
-                    acquire_attempt_budget: HlsConfig::DEFAULT_ACQUIRE_ATTEMPT_BUDGET,
-                    look_ahead_bytes: Some(look_ahead_bytes),
-                    look_ahead_segments: None,
-                    size_probe_method: SizeProbeMethod::Head,
-                },
+                config: PlanConfig::builder()
+                    .prefetch_budget(8)
+                    .look_ahead_bytes(look_ahead_bytes)
+                    .build(),
             }
         }
 

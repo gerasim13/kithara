@@ -108,7 +108,7 @@ pub struct HlsConfig {
     #[builder(default)]
     pub size_probe_method: SizeProbeMethod,
     /// Max segments to download per step.
-    #[builder(default = 3)]
+    #[builder(default = HlsConfig::DEFAULT_DOWNLOAD_BATCH_SIZE)]
     pub download_batch_size: usize,
     /// Acquire attempts a planned segment slot gets before the dispatch
     /// settles it terminally. A requeue is re-dispatched on the peer's next
@@ -179,6 +179,10 @@ impl HlsConfig {
     pub const DEFAULT_EPHEMERAL_CACHE_MAX_MEDIA_WINDOW: usize = 60;
     pub const DEFAULT_EPHEMERAL_CACHE_MIN_MEDIA_WINDOW: usize = 3;
     pub const DEFAULT_EPHEMERAL_CACHE_NON_MEDIA_RESERVE: usize = 4;
+    /// Default [`Self::download_batch_size`]. Three segments keep the fetcher
+    /// busy across one round-trip without planning further ahead than a
+    /// look-ahead cap would allow anyway.
+    pub const DEFAULT_DOWNLOAD_BATCH_SIZE: usize = 3;
     /// Default `look_ahead_bytes` cap (~2 `MiB`). Production HLS streams
     /// need a downloader backpressure cap so an idle reader does not
     /// drain the whole playlist into cache.

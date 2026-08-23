@@ -601,7 +601,6 @@ mod tests {
 
     use super::*;
     use crate::{
-        config::{HlsConfig, SizeProbeMethod},
         playlist::{PlaylistState, SegmentState, VariantState},
         segment::{MediaSegment, Segment, SegmentContent, SegmentSize, SegmentSlotState},
         variant::{PlanConfig, PlanCtx, VariantParts},
@@ -651,13 +650,7 @@ mod tests {
             seek_epoch: 0,
             headers: None,
             signal: signal.clone(),
-            config: PlanConfig {
-                prefetch_budget: 1,
-                acquire_attempt_budget: HlsConfig::DEFAULT_ACQUIRE_ATTEMPT_BUDGET,
-                look_ahead_bytes: None,
-                look_ahead_segments: None,
-                size_probe_method: SizeProbeMethod::Head,
-            },
+            config: PlanConfig::builder().prefetch_budget(1).build(),
         };
         let playlist = Arc::new(PlaylistState::new(vec![
             VariantState {

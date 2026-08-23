@@ -27,7 +27,6 @@ use url::Url;
 
 use super::{HlsVariant, PlanConfig, PlanCtx, SizeDemand, VariantParts, segment_placeholder_size};
 use crate::{
-    config::{HlsConfig, SizeProbeMethod},
     playlist::{PlaylistState, SegmentState, VariantState},
     segment::{
         InitSegment, MediaSegment, PlannedFetch, Segment, SegmentContent, SegmentSize,
@@ -56,13 +55,9 @@ fn test_ctx(prefetch_budget: usize) -> PlanCtx {
         seek_epoch: 0,
         headers: None,
         signal: SizeSignal::new(Arc::new(ThreadGate::default()), Arc::new(OnceLock::new())),
-        config: PlanConfig {
-            prefetch_budget,
-            acquire_attempt_budget: HlsConfig::DEFAULT_ACQUIRE_ATTEMPT_BUDGET,
-            look_ahead_bytes: None,
-            look_ahead_segments: None,
-            size_probe_method: SizeProbeMethod::Head,
-        },
+        config: PlanConfig::builder()
+            .prefetch_budget(prefetch_budget)
+            .build(),
     }
 }
 
