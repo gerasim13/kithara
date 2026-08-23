@@ -29,7 +29,7 @@ use crate::{
         load_variant_playlists, resolve_init_decrypt_ctx, resolve_variant_decrypt_contexts,
     },
     signal::SizeSignal,
-    variant::{HlsVariant, PlanCtx},
+    variant::{HlsVariant, PlanConfig, PlanCtx},
 };
 
 /// Marker type for HLS streaming.
@@ -140,16 +140,20 @@ impl StreamType for Hls {
         let signal = SizeSignal::new(Arc::new(ThreadGate::default()), Arc::new(OnceLock::new()));
         let emit = Arc::new(DeferredBus::new(bus.clone(), 256));
 
-        let plan_ctx = PlanCtx {
+        let plan_config = PlanConfig {
             look_ahead_bytes,
             look_ahead_segments,
+            prefetch_budget: config.download_batch_size.max(1),
+            acquire_attempt_budget: config.acquire_attempt_budget,
+            size_probe_method: config.size_probe_method,
+        };
+        let plan_ctx = PlanCtx {
+            config: plan_config,
             bus: bus.clone(),
             scope: stream_peer.scope(),
             headers: config.headers.clone(),
-            prefetch_budget: config.download_batch_size.max(1),
             seek_epoch: seek_obs.epoch(),
             signal: signal.clone(),
-            size_probe_method: config.size_probe_method,
         };
 
         let variants: Vec<Arc<HlsVariant>> = media_playlists
@@ -186,14 +190,7 @@ impl StreamType for Hls {
 
         let mut source = HlsSource::new(Arc::clone(&coord), emit, stream_scope);
 
-        hls_peer.activate(
-            coord,
-            evict_rx,
-            config.download_batch_size.max(1),
-            look_ahead_bytes,
-            look_ahead_segments,
-            config.size_probe_method,
-        );
+        hls_peer.activate(coord, evict_rx, plan_config);
 
         source.set_peer_handle(stream_peer.peer_handle());
         source.set_hls_peer(hls_peer);

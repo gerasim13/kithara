@@ -23,10 +23,127 @@ pub(crate) struct KitharaExt {
 #[serde(default, deny_unknown_fields)]
 pub(crate) struct CiProjectConfig {
     pub(crate) pins: PathBuf,
+    pub(crate) lanes: BTreeMap<String, CiLaneConfig>,
+}
+
+/// A CI lane that is nothing but the work it asks the executor for. Lanes that
+/// need more than parameters keep a function; this is what the rest are.
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub(crate) struct CiLaneConfig {
+    /// The shared cache the lane leases, named the way the runner tags are.
+    pub(crate) cache_group: String,
+    /// How the lane names itself when it refuses a platform.
+    pub(crate) label: String,
+    pub(crate) os: Option<String>,
+    pub(crate) tools: Vec<String>,
+    /// Tools whose reported version has to match a reviewed pin before the lane
+    /// spends a runner on a build it would have to throw away.
+    pub(crate) pinned: Vec<CiLanePin>,
+    /// Paths a predecessor job has to have left in the checkout, and the job
+    /// that leaves them. A lane that arrives without them fails minutes in, on
+    /// a device, with nothing more informative than a link error.
+    pub(crate) left_behind: Vec<String>,
+    pub(crate) left_behind_by: String,
+    pub(crate) program: String,
+    pub(crate) steps: Vec<CiLaneStep>,
+    /// Pipeline kinds this lane refuses rather than runs. A lane that is not
+    /// scheduled in a pipeline never reaches this; one that is scheduled and
+    /// declines has to say so where the schedule can be read against it.
+    pub(crate) kinds_refused: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub(crate) struct CiLaneStep {
+    pub(crate) args: Vec<String>,
+    pub(crate) label: String,
+    /// What the step needs the executor to be, rather than to run: a build-job
+    /// cap the container cannot exceed, a target directory a gate owns, the
+    /// browser a harness would otherwise guess. A value may name the checkout
+    /// with `{root}`, which is the only thing a lane cannot spell for itself.
+    pub(crate) env: BTreeMap<String, String>,
+    /// The program for this step alone. A lane that installs a target before
+    /// using it runs two, so the lane's own `program` is only the default.
+    pub(crate) program: Option<String>,
+    /// Arguments for one pipeline kind, replacing `args` there. A review ref
+    /// and the default branch ask the same question of a gate; a quarantine
+    /// run deliberately asks a narrower one.
+    pub(crate) args_by_kind: BTreeMap<String, Vec<String>>,
+}
+
+/// The lane's own executable. A Windows job runs the binary it started as
+/// rather than `cargo xtask`, which would rebuild it - and Windows refuses to
+/// replace a running image, so Cargo reported that as a failure to remove
+/// `xtask.exe`.
+pub(crate) const SELF_PROGRAM: &str = "<xtask>";
+
+/// The checkout a lane resolves in. A compiler flag that has to name a file in
+/// the repository needs an absolute path, and only the runner knows it.
+pub(crate) const ROOT_PLACEHOLDER: &str = "{root}";
+
+/// A reviewed pin, by name: `{pin.msrv_toolchain}` is the value that key holds
+/// in `.config/ci-pins.toml`.
+pub(crate) const PIN_PREFIX: &str = "{pin.";
+
+/// A version check: ask `tool` how old it is, and require the answer to carry
+/// the value `pin` names in `.config/ci-pins.toml`.
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub(crate) struct CiLanePin {
+    pub(crate) tool: String,
+    pub(crate) args: Vec<String>,
+    pub(crate) pin: String,
+    /// What the reported version has to read in full, on its first line, for
+    /// tools that print more than a number. Without it any whitespace-separated
+    /// word matching the pin is accepted.
+    pub(crate) line_prefix: Option<String>,
 }
 
 impl CiProjectConfig {
+    fn validate_lanes(&self) -> Result<()> {
+        for (name, lane) in &self.lanes {
+            if !matches!(
+                lane.cache_group.as_str(),
+                "macos" | "linux" | "windows" | "host"
+            ) {
+                bail!(
+                    "ext.ci.lanes.{name}.cache_group must be macos, linux, windows or host, got `{}`",
+                    lane.cache_group
+                );
+            }
+            if lane.program.is_empty() {
+                bail!("ext.ci.lanes.{name} must name a program");
+            }
+            if lane.steps.is_empty() {
+                bail!("ext.ci.lanes.{name} must declare at least one step");
+            }
+            if lane.os.is_some() && lane.label.is_empty() {
+                bail!("ext.ci.lanes.{name} pins an OS, so it must carry a label to refuse under");
+            }
+            for check in &lane.pinned {
+                if check.tool.is_empty() || check.pin.is_empty() {
+                    bail!("ext.ci.lanes.{name}.pinned must name both a tool and a pin");
+                }
+            }
+            if !lane.left_behind.is_empty() && lane.left_behind_by.is_empty() {
+                bail!("ext.ci.lanes.{name} must name the job its left_behind paths come from");
+            }
+            for step in &lane.steps {
+                for (key, value) in &step.env {
+                    validate_substitutions(name, key, value)?;
+                }
+                let by_kind = step.args_by_kind.values().flatten();
+                for value in step.args.iter().chain(by_kind) {
+                    validate_substitutions(name, "an argument", value)?;
+                }
+            }
+        }
+        Ok(())
+    }
+
     pub(crate) fn validate(&self) -> Result<()> {
+        self.validate_lanes()?;
         if self.pins.as_os_str().is_empty()
             || self.pins.is_absolute()
             || self
@@ -38,6 +155,26 @@ impl CiProjectConfig {
         }
         Ok(())
     }
+}
+
+/// `{root}` and `{pin.<key>}` are the whole substitution vocabulary. A typo
+/// that reached the runner would be passed through as a literal brace and fail
+/// as a missing header or an unknown toolchain rather than as a bad config.
+fn validate_substitutions(lane: &str, whose: &str, value: &str) -> Result<()> {
+    let mut rest = value.replace(ROOT_PLACEHOLDER, "");
+    while let Some(start) = rest.find(PIN_PREFIX) {
+        let Some(end) = rest[start..].find('}') else {
+            bail!("ext.ci.lanes.{lane} leaves {PIN_PREFIX} unclosed in {whose}: `{value}`");
+        };
+        rest.replace_range(start..=start + end, "");
+    }
+    if rest.contains('{') {
+        bail!(
+            "ext.ci.lanes.{lane} names something other than {ROOT_PLACEHOLDER} or \
+             {PIN_PREFIX}<key>}} in {whose}: `{value}`"
+        );
+    }
+    Ok(())
 }
 
 impl KitharaExt {

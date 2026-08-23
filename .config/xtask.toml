@@ -800,6 +800,652 @@ handler = "format-edited-paths"
 [ext.ci]
 pins = ".config/ci-pins.toml"
 
+# Lanes that are nothing but the work they ask the executor for. A lane needs a
+# function only when a parameter cannot say what it does.
+[ext.ci.lanes.deps-deny]
+cache_group = "linux"
+label = "dependency audit"
+os = "linux"
+tools = ["cargo", "just"]
+program = "just"
+steps = [{ args = ["deps", "deny"], label = "licence and advisory gate" }]
+
+[ext.ci.lanes.deps-unused]
+cache_group = "linux"
+label = "dependency audit"
+os = "linux"
+tools = ["cargo", "just"]
+program = "just"
+steps = [
+  { args = [
+    "deps",
+    "machete",
+  ], label = "unused manifest entries" },
+  { args = [
+    "deps",
+    "shear",
+  ], label = "unused crate dependencies" },
+]
+
+[ext.ci.lanes.deps-features]
+cache_group = "linux"
+label = "dependency audit"
+os = "linux"
+tools = ["cargo", "just"]
+program = "just"
+steps = [{ args = ["deps", "hack"], label = "feature powerset check" }]
+
+[ext.ci.lanes.deps-semver]
+cache_group = "linux"
+label = "dependency audit"
+os = "linux"
+tools = ["cargo", "just"]
+program = "just"
+steps = [{ args = ["deps", "semver"], label = "public API compatibility" }]
+
+# One browser per job: the two engines fail for unrelated reasons, and Chromium
+# owns the WebCodecs target while Firefox keeps the full integration suite. Both
+# go through the repository's wasm recipe rather than `wasm-pack`, because the
+# target rebuilds std for shared memory and only the pinned nightly honours it.
+[ext.ci.lanes.web-chromium]
+cache_group = "linux"
+label = "Web browser"
+os = "linux"
+tools = ["chromium", "chromedriver", "just"]
+pinned = [
+  { tool = "chromium", args = [
+    "--version",
+  ], pin = "chromium_version" },
+  { tool = "chromedriver", args = [
+    "--version",
+  ], pin = "chromium_version" },
+]
+program = "just"
+steps = [
+  { args = [
+    "test",
+    "wasm",
+    "chrome",
+    "webcodecs",
+  ], label = "Chromium WebCodecs tests" },
+]
+
+[ext.ci.lanes.web-firefox]
+cache_group = "linux"
+label = "Web browser"
+os = "linux"
+tools = ["firefox", "geckodriver", "just"]
+program = "just"
+steps = [{ args = ["test", "wasm", "firefox"], label = "Firefox WASM tests" }]
+
+[ext.ci.lanes.web-size]
+cache_group = "linux"
+label = "WASM size"
+os = "linux"
+tools = ["cargo", "just"]
+program = "just"
+steps = [
+  { args = [
+    "platform",
+    "wasm",
+    "size-check",
+  ], label = "WASM size check" },
+]
+
+[ext.ci.lanes.deep-rtsan]
+cache_group = "macos"
+label = "deep Apple"
+os = "macos"
+tools = ["cargo", "just"]
+program = "just"
+steps = [
+  { args = [
+    "test",
+    "rtsan",
+  ], label = "real-time sanitizer suite" },
+  { args = [
+    "test",
+    "rtsan-async",
+  ], label = "real-time sanitizer suite" },
+  { args = [
+    "test",
+    "rtsan-file",
+  ], label = "real-time sanitizer suite" },
+  { args = [
+    "test",
+    "rtsan-hls",
+  ], label = "real-time sanitizer suite" },
+]
+
+[ext.ci.lanes.deep-perf]
+cache_group = "macos"
+label = "deep Apple"
+os = "macos"
+tools = ["cargo", "just"]
+program = "just"
+steps = [
+  { args = [
+    "perf",
+    "memory",
+  ], label = "memory profile" },
+  { args = [
+    "perf",
+  ], label = "performance profile" },
+]
+
+[ext.ci.lanes.deep-bench]
+cache_group = "macos"
+label = "deep Apple"
+os = "macos"
+tools = ["cargo", "just"]
+program = "just"
+steps = [{ args = ["perf", "bench", "ci"], label = "benchmark suite" }]
+
+# The scan reports where it found something, not merely how many: without the
+# findings it announced "leaks found: 5" and stopped, which is a number nobody
+# can act on. Values stay redacted, so neither the log nor the report repeats a
+# secret while naming the rule, the file and the commit.
+[ext.ci.lanes.linux-secrets]
+cache_group = "linux"
+label = "Linux"
+os = "linux"
+tools = ["gitleaks"]
+program = "gitleaks"
+steps = [
+  { args = [
+    "git",
+    ".",
+    "--config",
+    ".gitleaks.toml",
+    "--log-opts=--all",
+    "--no-banner",
+    "--redact=100",
+    "--verbose",
+    "--report-format",
+    "json",
+    "--report-path",
+    "gitleaks-report.json",
+  ], label = "repository secret scan" },
+]
+
+[ext.ci.lanes.linux-check]
+cache_group = "linux"
+label = "Linux"
+os = "linux"
+tools = ["cargo", "just", "sccache"]
+program = "just"
+steps = [{ args = ["check", "workspace"], label = "Linux workspace check" }]
+
+[ext.ci.lanes.linux-wasm]
+cache_group = "linux"
+label = "Linux"
+os = "linux"
+tools = ["cargo", "just", "sccache"]
+program = "just"
+steps = [{ args = ["platform", "wasm"], label = "WASM portability check" }]
+
+# Every Linux test lane caps Cargo at two build jobs. The container has five
+# CPUs and under eight gigabytes, so five compilations at once put the peak past
+# the cgroup limit: the kernel logged `Killed process (rustc) anon-rss:1727320kB`
+# twice in one second, and Cargo reported only "could not compile" with no
+# diagnostic, because the compiler never reached one.
+[ext.ci.lanes.linux-test]
+cache_group = "linux"
+label = "Linux"
+os = "linux"
+tools = ["cargo", "just", "sccache"]
+program = "just"
+steps = [
+  { args = [
+    "test",
+    "run",
+    "--profile",
+    "ci",
+  ], label = "Linux tests", env = { CARGO_BUILD_JOBS = "2" } },
+]
+
+[ext.ci.lanes.linux-doc]
+cache_group = "linux"
+label = "Linux"
+os = "linux"
+tools = ["cargo", "just", "sccache"]
+program = "just"
+steps = [
+  { args = [
+    "test",
+    "run",
+    "--lane=doc",
+  ], label = "Linux doc lane", env = { CARGO_BUILD_JOBS = "2" } },
+]
+
+[ext.ci.lanes.linux-loom]
+cache_group = "linux"
+label = "Linux"
+os = "linux"
+tools = ["cargo", "just", "sccache"]
+program = "just"
+steps = [
+  { args = [
+    "test",
+    "run",
+    "--lane=loom",
+  ], label = "Linux loom lane", env = { CARGO_BUILD_JOBS = "2" } },
+]
+
+[ext.ci.lanes.linux-broadcast]
+cache_group = "linux"
+label = "Linux"
+os = "linux"
+tools = ["cargo", "just", "sccache"]
+program = "just"
+steps = [
+  { args = [
+    "test",
+    "run",
+    "--lane=broadcast",
+  ], label = "Linux broadcast lane", env = { CARGO_BUILD_JOBS = "2" } },
+]
+
+[ext.ci.lanes.linux-integration-regressions]
+cache_group = "linux"
+label = "Linux"
+os = "linux"
+tools = ["cargo", "just", "sccache"]
+program = "just"
+steps = [
+  { args = [
+    "test",
+    "run",
+    "--lane=integration-regressions",
+  ], label = "Linux integration-regressions lane", env = { CARGO_BUILD_JOBS = "2" } },
+]
+
+# The lane name is the only place the browser is decided; the harness lane it
+# calls carries that name into the run, so a run started here and a run started
+# by hand exercise the same browser.
+[ext.ci.lanes.linux-selenium-firefox]
+cache_group = "linux"
+label = "Linux"
+os = "linux"
+tools = ["cargo", "just", "sccache"]
+program = "just"
+steps = [
+  { args = [
+    "test",
+    "run",
+    "--lane=selenium-firefox",
+  ], label = "Linux selenium-firefox lane", env = { CARGO_BUILD_JOBS = "2" } },
+]
+
+# Instrumented test binaries are large and the workspace has twenty of them, so
+# Cargo reaches the link step with several `ld` processes at once. In a
+# five-gigabyte VM the kernel picks one and kills it, leaving no trace but
+# `ld terminated with signal 9`; the lane runs nightly and can afford the
+# wall-clock two units at a time costs.
+#
+# The bar the report is failed under is not set here: it lives in the coverage
+# recipe, and a second copy is one edit away from gating a local run and CI at
+# different bars.
+[ext.ci.lanes.linux-coverage]
+cache_group = "linux"
+label = "Linux"
+os = "linux"
+tools = ["cargo", "just", "sccache"]
+program = "just"
+steps = [
+  { args = [
+    "test",
+    "coverage",
+  ], label = "Linux coverage", env = { CARGO_BUILD_JOBS = "2", COVERAGE_OUTPUT_DIR = "coverage" } },
+]
+
+# Every Windows lane sets the same two variables. `bungee-sys` builds through
+# the `cmake` crate, which asks for the Visual Studio generator and hard-codes
+# `-Thost=x64` for every MSVC target; on an ARM64 host that picks the emulated
+# x64 tools, MSBuild loses the tracker log it writes beside each object, and the
+# job fails with `MSB6003: link.exe could not be run`. Ninja is the one
+# generator the crate leaves alone. The same dependency builds its C++ against
+# the static CRT and says so twice, neither of which an environment variable can
+# reach, so Rust's dynamic default met it in the linker as `LNK2038: mismatch
+# detected for 'RuntimeLibrary'`. Windows here builds test binaries and ships no
+# artifact, so the whole lane takes the CRT the dependency insists on and `cc`
+# compiles every other C crate to match.
+#
+# `CFLAGS_*`/`CXXFLAGS_*` force-include a shim that libfdk-aac needs on ARM64:
+# the crate vendors a snapshot from before the library learned `_M_ARM64` and
+# before one GCC attribute became portable. The fixes live in the header rather
+# than in defines here, because a flag for a target reaches every crate built
+# for it and the header can ask which compiler is reading it - `aws-lc-sys`
+# picks `clang-cl` and needs none of this. The x64 chain has recognised
+# `_M_X64` all along, so its lanes carry neither.
+[ext.ci.lanes.windows-arm64]
+cache_group = "windows"
+label = "Windows"
+os = "windows"
+tools = ["cargo", "rustup", "sccache", "cmake", "ninja"]
+program = "<xtask>"
+steps = [
+  { args = [
+    "target",
+    "add",
+    "aarch64-pc-windows-msvc",
+  ], label = "install Windows target", program = "rustup" },
+  { args = [
+    "test",
+    "--profile",
+    "ci",
+    "--target",
+    "aarch64-pc-windows-msvc",
+  ], label = "Windows tests", env = { CMAKE_GENERATOR = "Ninja", RUSTFLAGS = "-C target-feature=+crt-static", CFLAGS_aarch64_pc_windows_msvc = "-FI{root}/.config/windows/fdk-msvc-shim.h", CXXFLAGS_aarch64_pc_windows_msvc = "-FI{root}/.config/windows/fdk-msvc-shim.h" } },
+]
+
+[ext.ci.lanes.windows-x64]
+cache_group = "windows"
+label = "Windows"
+os = "windows"
+tools = ["cargo", "rustup", "sccache", "cmake", "ninja"]
+program = "<xtask>"
+steps = [
+  { args = [
+    "target",
+    "add",
+    "x86_64-pc-windows-msvc",
+  ], label = "install Windows target", program = "rustup" },
+  { args = [
+    "test",
+    "--profile",
+    "ci",
+    "--target",
+    "x86_64-pc-windows-msvc",
+  ], label = "Windows tests", env = { CMAKE_GENERATOR = "Ninja", RUSTFLAGS = "-C target-feature=+crt-static" } },
+]
+
+# The x86_64 suite used to run here too, on a host with no x86_64 in it: every
+# test reported on the emulator as much as on the commit, and took the time to
+# say so. An x86 executor runs that lane on hardware. What this host still
+# answers for is whether the target compiles at all - the native dependencies
+# break per target, not per instruction executed - so it builds the workspace
+# and everything it tests with, and runs none of it. `xtask` is excluded because
+# it runs on the executor, never on the target, and its own tests reach for
+# `std::os::unix`.
+[ext.ci.lanes.windows-x64-build]
+cache_group = "windows"
+label = "Windows"
+os = "windows"
+tools = ["cargo", "rustup", "sccache", "cmake", "ninja"]
+program = "cargo"
+steps = [
+  { args = [
+    "target",
+    "add",
+    "x86_64-pc-windows-msvc",
+  ], label = "install Windows target", program = "rustup" },
+  { args = [
+    "check",
+    "--locked",
+    "--workspace",
+    "--exclude",
+    "xtask",
+    "--all-targets",
+    "--target",
+    "x86_64-pc-windows-msvc",
+  ], label = "Windows build", env = { CMAKE_GENERATOR = "Ninja", RUSTFLAGS = "-C target-feature=+crt-static" } },
+]
+
+[ext.ci.lanes.android-build]
+cache_group = "host"
+label = "Android"
+os = "macos"
+tools = ["cargo", "java", "just", "sccache"]
+program = "just"
+steps = [
+  { args = [
+    "platform",
+    "android",
+    "build",
+  ], label = "Android native build" },
+]
+
+# The emulator, the connected suite, and the shutdown are one job: the tests
+# only mean anything while the device this job booted is still alive, and a
+# device left running would poison the next Android job on the host. The
+# emulator runs wherever the machine's own architecture matches the guest's, so
+# the lane pins tools rather than a platform.
+#
+# The libraries and the bindings come from the job that builds them, and Gradle
+# is told to skip generating them: a job that arrives without them builds an
+# archive with no library in it and fails on the device with
+# `UnsatisfiedLinkError`, minutes after the emulator came up.
+[ext.ci.lanes.android-test]
+cache_group = "host"
+label = "Android"
+tools = ["adb", "cargo", "emulator", "java", "just", "sccache"]
+left_behind_by = "Android build"
+left_behind = [
+  "android/lib/build/generated/jniLibs/arm64-v8a/libkithara_ffi.so",
+  "android/lib/build/generated/uniffi/kotlin",
+]
+program = "just"
+steps = [
+  { args = [
+    "platform",
+    "android",
+    "test",
+    "--avd",
+    "{pin.android_avd}",
+    "--skip-build",
+  ], label = "Android connected tests" },
+]
+
+# Every Apple job repeats the preflight instead of inheriting it from a
+# predecessor. Each one is scheduled on its own and can be retried alone, so the
+# wrong Xcode has to fail in the job that would have used it.
+[ext.ci.lanes.apple-lint]
+cache_group = "macos"
+label = "Apple"
+os = "macos"
+tools = ["cargo", "just", "sccache", "swift", "xcodebuild", "xcodegen"]
+pinned = [
+  { tool = "xcodebuild", args = [
+    "-version",
+  ], pin = "expected_xcode_version", line_prefix = "Xcode " },
+]
+program = "just"
+# Both chains run the checks that answer whether a change is acceptable:
+# formatting, Clippy over the workspace, ast-grep, typos, the architecture
+# ratchet and the two idiom checks a review is held to. What only the default
+# branch pays for is the rest of the ratchet family - the full idiom set, style,
+# the quality scans and this tool's own tests. They guard a baseline rather than
+# judge a diff, and on one Apple host every one of them is a minute a review
+# waits.
+steps = [
+  { args = [
+    "lint",
+    "full",
+  ], label = "full lint gate", args_by_kind = { branch = [
+    "lint",
+    "fast",
+  ], merge-request = [
+    "lint",
+    "fast",
+  ], quarantine = [
+    "lint",
+    "fast",
+  ] } },
+]
+
+[ext.ci.lanes.apple-msrv]
+cache_group = "macos"
+label = "Apple"
+os = "macos"
+tools = ["cargo", "just", "sccache", "swift", "xcodebuild", "xcodegen"]
+pinned = [
+  { tool = "xcodebuild", args = [
+    "-version",
+  ], pin = "expected_xcode_version", line_prefix = "Xcode " },
+]
+program = "just"
+steps = [
+  { args = [
+    "check",
+    "workspace",
+  ], label = "MSRV workspace check", env = { RUSTUP_TOOLCHAIN = "{pin.msrv_toolchain}" } },
+]
+
+# A review ref asks the same question the default branch asks: what a reviewer
+# would have to fix anyway is cheaper to learn before merge. Quarantine keeps
+# its plain profile probe.
+[ext.ci.lanes.apple-test]
+cache_group = "macos"
+label = "Apple"
+os = "macos"
+tools = ["cargo", "just", "sccache", "swift", "xcodebuild", "xcodegen"]
+pinned = [
+  { tool = "xcodebuild", args = [
+    "-version",
+  ], pin = "expected_xcode_version", line_prefix = "Xcode " },
+]
+kinds_refused = { weekly = "weekly pipelines do not run the Apple suite" }
+program = "just"
+steps = [
+  { args = [
+    "test",
+    "run",
+    "--flash=on",
+    "--no-block=on",
+    "--profile",
+    "ci",
+  ], label = "Apple flash and no-block gate", args_by_kind = { quarantine = [
+    "test",
+    "run",
+    "--profile",
+    "ci",
+  ] } },
+]
+
+# The off-flash suite owns its own target directory: the two gates differ by
+# feature, and sharing one directory makes each run rebuild what the other just
+# replaced.
+[ext.ci.lanes.apple-test-flash-off]
+cache_group = "macos"
+label = "Apple"
+os = "macos"
+tools = ["cargo", "just", "sccache", "swift", "xcodebuild", "xcodegen"]
+pinned = [
+  { tool = "xcodebuild", args = [
+    "-version",
+  ], pin = "expected_xcode_version", line_prefix = "Xcode " },
+]
+program = "just"
+steps = [
+  { args = [
+    "test",
+    "run",
+    "--flash=off",
+    "--profile",
+    "ci",
+  ], label = "Apple flash-off gate", env = { CARGO_TARGET_DIR = "target-flash-off" } },
+]
+
+# End-to-end playback across the resampler axis. Each lane pins one source-rate
+# conversion shape, and a change to decode, blending or output can break one of
+# them while every unit test still passes - so the three run together or the
+# axis is not covered. They share a target directory: the lanes differ by
+# feature, and the executor keeps the tree warm between them.
+[ext.ci.lanes.apple-e2e]
+cache_group = "macos"
+label = "Apple"
+os = "macos"
+tools = ["cargo", "just", "sccache", "swift", "xcodebuild", "xcodegen"]
+pinned = [
+  { tool = "xcodebuild", args = [
+    "-version",
+  ], pin = "expected_xcode_version", line_prefix = "Xcode " },
+]
+program = "just"
+steps = [
+  { args = [
+    "test",
+    "run",
+    "--lane=e2e",
+    "--profile",
+    "ci",
+  ], label = "Apple end-to-end suite" },
+  { args = [
+    "test",
+    "run",
+    "--lane=e2e-fused",
+    "--profile",
+    "ci",
+  ], label = "Apple end-to-end suite" },
+  { args = [
+    "test",
+    "run",
+    "--lane=e2e-glide",
+    "--profile",
+    "ci",
+  ], label = "Apple end-to-end suite" },
+]
+
+[ext.ci.lanes.apple-xcframework]
+cache_group = "macos"
+label = "Apple"
+os = "macos"
+tools = ["cargo", "just", "sccache", "swift", "xcodebuild", "xcodegen"]
+pinned = [
+  { tool = "xcodebuild", args = [
+    "-version",
+  ], pin = "expected_xcode_version", line_prefix = "Xcode " },
+]
+program = "just"
+steps = [
+  { args = [
+    "platform",
+    "apple",
+    "xcframework",
+    "--profile",
+    "debug",
+  ], label = "Apple XCFramework" },
+]
+
+[ext.ci.lanes.apple-ios]
+cache_group = "macos"
+label = "Apple"
+os = "macos"
+tools = ["cargo", "just", "sccache", "swift", "xcodebuild", "xcodegen"]
+pinned = [
+  { tool = "xcodebuild", args = [
+    "-version",
+  ], pin = "expected_xcode_version", line_prefix = "Xcode " },
+]
+program = "just"
+steps = [
+  { args = [
+    "platform",
+    "apple",
+    "ios",
+  ], label = "iOS Simulator build", env = { KITHARA_LOCAL_DEV = "1" } },
+]
+
+# Safari goes through the repository's own wasm recipe for the same reason the
+# other browsers do: the target rebuilds std for shared memory, and only the
+# pinned nightly honours that. It needs no Xcode of its own.
+[ext.ci.lanes.apple-safari]
+cache_group = "macos"
+label = "Safari WASM"
+os = "macos"
+tools = ["cargo", "just"]
+program = "just"
+steps = [
+  { args = [
+    "platform",
+    "wasm",
+    "test",
+    "safari",
+  ], label = "Safari WASM tests" },
+]
+
+
 [ext.publish]
 workspace_hack_crate = "kithara-workspace-hack"
 delay_secs = 20
