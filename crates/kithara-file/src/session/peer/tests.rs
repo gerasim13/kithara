@@ -18,7 +18,6 @@ use url::Url;
 use super::*;
 use crate::{
     File,
-    config::DEFAULT_READER_EVENT_CAPACITY,
     coord::FileCoord,
     session::{FileSource, inner::FileSourceCtx},
 };
@@ -83,7 +82,7 @@ fn make_inner_with_cancel(
             coord,
             cancel,
             bus,
-            reader_event_capacity: DEFAULT_READER_EVENT_CAPACITY,
+            reader_event_capacity: 16,
         },
         crate::session::inner::FileAssetCtx {
             reader,

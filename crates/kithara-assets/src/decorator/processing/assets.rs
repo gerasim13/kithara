@@ -19,10 +19,12 @@ where
 {
     inner: Arc<A>,
     pool: BytePool,
-    /// Mirrors `AssetStore::builder().processing_chunk_size(..)`.
-    chunk_size: usize,
-    /// Mirrors `AssetStore::builder().processing_gate_poll_interval(..)`.
-    gate_poll_interval: Duration,
+    /// `AssetStore::builder().processing_chunk_size(..)`, unset when the
+    /// caller left the processing layer's own default in place.
+    chunk_size: Option<usize>,
+    /// `AssetStore::builder().processing_gate_poll_interval(..)`, unset when
+    /// the caller left the processing layer's own default in place.
+    gate_poll_interval: Option<Duration>,
 }
 
 impl<A> ProcessingAssets<A>
@@ -32,8 +34,8 @@ where
     pub const fn new(
         inner: Arc<A>,
         pool: BytePool,
-        chunk_size: usize,
-        gate_poll_interval: Duration,
+        chunk_size: Option<usize>,
+        gate_poll_interval: Option<Duration>,
     ) -> Self {
         Self {
             inner,
@@ -48,13 +50,13 @@ where
         inner: A::ReadyRes,
         processor: Option<ProcessCtx>,
     ) -> ProcessedReader<A::ReadyRes> {
-        ProcessedReader::wrap_ready(
-            inner,
-            processor,
-            self.pool.clone(),
-            self.chunk_size,
-            self.gate_poll_interval,
-        )
+        ProcessedReader::wrap_ready()
+            .inner(inner)
+            .maybe_processor(processor)
+            .pool(self.pool.clone())
+            .maybe_chunk_size(self.chunk_size)
+            .maybe_gate_poll_interval(self.gate_poll_interval)
+            .call()
     }
 }
 
@@ -74,15 +76,15 @@ where
         ctx: Option<Self::Context>,
     ) -> AssetsResult<AcquisitionResult<Self::ActiveRes, Self::ReadyRes>> {
         match self.inner.acquire_resource(key, identity)? {
-            AcquisitionResult::Pending(writer) => {
-                Ok(AcquisitionResult::Pending(ProcessedWriter::new(
-                    writer,
-                    ctx,
-                    self.pool.clone(),
-                    self.chunk_size,
-                    self.gate_poll_interval,
-                )))
-            }
+            AcquisitionResult::Pending(writer) => Ok(AcquisitionResult::Pending(
+                ProcessedWriter::builder()
+                    .inner(writer)
+                    .maybe_processor(ctx)
+                    .pool(self.pool.clone())
+                    .maybe_chunk_size(self.chunk_size)
+                    .maybe_gate_poll_interval(self.gate_poll_interval)
+                    .build(),
+            )),
             AcquisitionResult::Ready(reader) => {
                 Ok(AcquisitionResult::Ready(self.wrap_ready(reader, ctx)))
             }

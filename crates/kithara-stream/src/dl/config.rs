@@ -3,12 +3,6 @@ use kithara_abr::AbrSettings;
 use kithara_net::HttpClient;
 use kithara_platform::{CancelToken, time::Duration, tokio::runtime::Handle};
 
-/// Default [`DownloaderConfig::peer_cmd_channel_capacity`]. Deep enough that
-/// a peer's planning burst does not block on the download loop, shallow
-/// enough that a stalled fetcher stops the producer rather than growing an
-/// unbounded backlog.
-pub const DEFAULT_PEER_CMD_CHANNEL_CAPACITY: usize = 32;
-
 /// Configuration for [`Downloader`](super::Downloader).
 #[derive(Clone, Builder)]
 #[builder(start_fn = for_client)]
@@ -48,7 +42,10 @@ pub struct DownloaderConfig {
     pub(crate) max_concurrent: usize,
     /// Capacity of the per-peer bounded command channel. A peer that fills
     /// it backpressures its own producer instead of the download loop, so
-    /// this bounds the queue one peer may build ahead of the fetcher.
-    #[builder(default = DEFAULT_PEER_CMD_CHANNEL_CAPACITY)]
+    /// this bounds the queue one peer may build ahead of the fetcher. The
+    /// default is deep enough that a peer's planning burst does not block on
+    /// the download loop, shallow enough that a stalled fetcher stops the
+    /// producer rather than growing an unbounded backlog.
+    #[builder(default = 32)]
     pub(crate) peer_cmd_channel_capacity: usize,
 }

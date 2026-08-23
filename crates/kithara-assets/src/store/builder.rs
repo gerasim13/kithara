@@ -36,15 +36,6 @@ struct Consts;
 impl Consts {
     /// Default in-memory LRU cache capacity (init + 2-3 media segments).
     const DEFAULT_CACHE_CAPACITY: NonZeroUsize = NonZeroUsize::new(5).unwrap();
-    /// Default bytes read, transformed, and written per pass when a resource
-    /// is processed on commit. Large enough that the transform is not
-    /// dominated by per-pass overhead, small enough that the two pooled
-    /// buffers a pass holds stay cheap to lease.
-    const DEFAULT_PROCESSING_CHUNK_SIZE: usize = 64 * 1024;
-    /// Default recheck cadence for a reader blocked on the processing
-    /// readiness gate. The gate is woken by `notify_all`, so this only trades
-    /// teardown latency against idle wakeups.
-    const DEFAULT_PROCESSING_GATE_POLL_INTERVAL: Duration = Duration::from_millis(100);
 }
 
 /// Storage backend selection: where committed resource bytes live.
@@ -95,15 +86,16 @@ impl AssetStore {
         max_bytes: Option<u64>,
         mem_resource_capacity: Option<usize>,
         #[builder(default = BytePool::default())] pool: BytePool,
-        #[builder(default = Consts::DEFAULT_PROCESSING_CHUNK_SIZE)] processing_chunk_size: usize,
-        #[builder(default = Consts::DEFAULT_PROCESSING_GATE_POLL_INTERVAL)]
-        processing_gate_poll_interval: Duration,
-        #[cfg_attr(
-            not(target_arch = "wasm32"),
-            builder(default = crate::backend::DEFAULT_SEGMENT_RESERVATION)
-        )]
-        #[cfg_attr(target_arch = "wasm32", builder(default = 0))]
-        segment_reservation: u64,
+        /// Bytes read, transformed, and written per pass when a resource is
+        /// processed on commit. Unset leaves the processing layer's own
+        /// default.
+        processing_chunk_size: Option<usize>,
+        /// Recheck cadence for a reader blocked on the processing readiness
+        /// gate. Unset leaves the processing layer's own default.
+        processing_gate_poll_interval: Option<Duration>,
+        /// Bytes a fresh segment's temp file is reserved at. Unset leaves the
+        /// disk backend's own default.
+        segment_reservation: Option<u64>,
     ) -> Self {
         let availability = AvailabilityIndex::new();
         // The pending-resource index is a consumer-driven sibling of `availability`:
@@ -247,9 +239,9 @@ struct DiskStoreSetup {
     cache_capacity: Option<NonZeroUsize>,
     availability: AvailabilityIndex,
     evict_cfg: EvictConfig,
-    processing_chunk_size: usize,
-    processing_gate_poll_interval: Duration,
-    segment_reservation: u64,
+    processing_chunk_size: Option<usize>,
+    processing_gate_poll_interval: Option<Duration>,
+    segment_reservation: Option<u64>,
 }
 
 /// Assemble the disk decorator chain: evict over the disk store, processing
@@ -289,13 +281,15 @@ fn open_disk_backend(setup: DiskStoreSetup) -> StoreBackendInner {
     }
     availability.attach_to(&hub);
 
-    let disk = Arc::new(DiskAssetStore::with_availability_and_deleter(
-        root_dir,
-        cancel.clone(),
-        availability,
-        Arc::clone(&deleter),
-        segment_reservation,
-    ));
+    let disk = Arc::new(
+        DiskAssetStore::with_availability_and_deleter()
+            .root_dir(root_dir)
+            .cancel(cancel.clone())
+            .availability(availability)
+            .deleter(Arc::clone(&deleter))
+            .maybe_segment_reservation(segment_reservation)
+            .call(),
+    );
     let base = Arc::clone(&disk);
     let evict = Arc::new(EvictAssets::new(
         disk,

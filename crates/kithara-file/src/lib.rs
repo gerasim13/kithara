@@ -23,7 +23,5 @@ mod error;
 mod session;
 mod stream;
 
-pub use config::{
-    DEFAULT_READER_EVENT_CAPACITY, DEFAULT_TMP_CLAIM_POLL_INTERVAL, FileConfig, FileSrc,
-};
+pub use config::{FileConfig, FileSrc};
 pub use stream::File;

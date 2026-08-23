@@ -18,16 +18,6 @@ use crate::{
     resource::OpenMode,
 };
 
-/// Default [`MmapOptions::initial_len`]. One page-aligned block, enough that a
-/// small resource is written without a single re-map, small enough that a
-/// resource that turns out to be empty costs one sparse block.
-pub const DEFAULT_INITIAL_LEN: u64 = 64 * 1024;
-
-/// Default [`MmapOptions::growth_factor`]. Doubling keeps the number of
-/// re-maps logarithmic in the final size; a caller that knows the size up
-/// front sets `initial_len` and never pays a re-map at all.
-pub const DEFAULT_GROWTH_FACTOR: u64 = 2;
-
 /// Options for opening a [`MmapResource`].
 #[derive(Debug, Clone, Builder)]
 #[builder(start_fn = for_path)]
@@ -39,14 +29,18 @@ pub struct MmapOptions {
     /// Open mode controlling read/write behavior for existing files.
     #[builder(default)]
     pub mode: OpenMode,
-    /// Size a new file is created at. Ignored for existing files.
-    #[builder(default = DEFAULT_INITIAL_LEN)]
+    /// Size a new file is created at. Ignored for existing files. The default
+    /// is one page-aligned block: enough that a small resource is written
+    /// without a single re-map, small enough that a resource that turns out to
+    /// be empty costs one sparse block.
+    #[builder(default = 64 * 1024)]
     pub initial_len: u64,
     /// Multiplier applied to the current mapping length when a write runs
     /// past its end. The mapping grows to the larger of the write's end and
     /// `len * growth_factor`, so a factor of 1 grows to exactly what each
-    /// write needs and re-maps on every one.
-    #[builder(default = DEFAULT_GROWTH_FACTOR)]
+    /// write needs and re-maps on every one. The default doubles, which keeps
+    /// the number of re-maps logarithmic in the final size.
+    #[builder(default = 2)]
     pub growth_factor: u64,
 }
 
@@ -404,12 +398,18 @@ mod tests {
         );
     }
 
-    /// The default doubles instead, so the same write leaves room for the next
-    /// one rather than re-mapping on every write.
+    /// Left unset, the default overshoots instead, so the same write leaves
+    /// room for the next one rather than re-mapping on every write.
     #[kithara::test(timeout(Duration::from_secs(1)))]
     fn the_default_growth_factor_overshoots_the_write() {
         let dir = TempDir::new().unwrap();
-        let res = create_resource_growing_by(&dir, 64, DEFAULT_GROWTH_FACTOR);
+        let res: MmapResource = Resource::open(
+            CancelToken::never(),
+            MmapOptions::for_path(dir.path().join("test.dat"))
+                .initial_len(64)
+                .build(),
+        )
+        .expect("BUG: open test resource with hard-coded params must succeed");
 
         res.write_at(0, &[7u8; 100]).unwrap();
 

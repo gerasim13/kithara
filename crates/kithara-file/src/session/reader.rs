@@ -96,7 +96,6 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::config::DEFAULT_READER_EVENT_CAPACITY;
 
     fn sink(bus: EventBus, event_capacity: usize) -> FileReaderEventSink {
         let coord = Arc::new(FileCoord::new(
@@ -132,10 +131,10 @@ mod tests {
         assert_eq!(dropped_in(&EventBus::new(16), 3, 1), 2);
     }
 
+    /// The same burst through a ring deep enough to hold it drops nothing, so
+    /// what the first test observes is the depth and not the burst.
     #[kithara::test]
-    fn the_default_ring_absorbs_the_same_burst() {
-        let dropped = dropped_in(&EventBus::new(16), 3, DEFAULT_READER_EVENT_CAPACITY);
-
-        assert_eq!(dropped, 0);
+    fn a_ring_deeper_than_the_burst_drops_nothing() {
+        assert_eq!(dropped_in(&EventBus::new(16), 3, 4), 0);
     }
 }

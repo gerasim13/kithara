@@ -22,18 +22,6 @@ use crate::{
     resource::{AcquisitionResult, AssetResourceState, BaseReader, BaseWriter, RequestIdentity},
 };
 
-/// Default bytes reserved for a fresh segment's temp file. A segment arrives
-/// in many small chunks, and every time the writes outgrow the mapping the
-/// driver re-maps the file — the single most expensive step of a segment
-/// commit. One reservation that covers a typical segment removes those
-/// re-maps; anything larger still grows, and the surplus is trimmed back to
-/// `final_len` on commit, so this costs a sparse extent and nothing else.
-///
-/// The store builder defaults its `segment_reservation` to this; the value
-/// lives here because [`DiskAssetStore::new`] — the test convenience that
-/// bypasses the builder — needs it too.
-pub(crate) const DEFAULT_SEGMENT_RESERVATION: u64 = 1024 * 1024;
-
 /// Concrete on-disk [`Assets`] implementation.
 ///
 /// One `DiskAssetStore` services every asset under its `root_dir`;
@@ -46,8 +34,13 @@ pub struct DiskAssetStore {
     availability: AvailabilityIndex,
     cancel: CancelToken,
     root_dir: PathBuf,
-    /// Bytes a fresh segment's temp file is sized to on open. See
-    /// [`DEFAULT_SEGMENT_RESERVATION`].
+    /// Bytes a fresh segment's temp file is sized to on open. A segment
+    /// arrives in many small chunks, and every time the writes outgrow the
+    /// mapping the driver re-maps the file — the single most expensive step of
+    /// a segment commit. One reservation that covers a typical segment removes
+    /// those re-maps; anything larger still grows, and the surplus is trimmed
+    /// back to `final_len` on commit, so this costs a sparse extent and
+    /// nothing else.
     segment_reservation: u64,
 }
 
@@ -124,6 +117,7 @@ impl AssetDeleter for DiskAssetDeleter {
     }
 }
 
+#[bon::bon]
 impl DiskAssetStore {
     /// Create a store rooted at `root_dir` with its own unshared
     /// [`AvailabilityIndex`]. Convenient for tests; production
@@ -144,13 +138,12 @@ impl DiskAssetStore {
             pins,
             lru,
         ));
-        Self::with_availability_and_deleter(
-            root_dir,
-            cancel,
-            availability,
-            deleter,
-            DEFAULT_SEGMENT_RESERVATION,
-        )
+        Self::with_availability_and_deleter()
+            .root_dir(root_dir)
+            .cancel(cancel)
+            .availability(availability)
+            .deleter(deleter)
+            .call()
     }
 
     /// Persist the current [`AvailabilityIndex`] snapshot to
@@ -307,12 +300,15 @@ impl DiskAssetStore {
     /// share one [`Arc<dyn AssetDeleter>`] between the store and the
     /// LRU evictor; tests construct a fresh deleter via
     /// [`Self::new`].
+    /// `segment_reservation` defaults to one mebibyte, which covers a typical
+    /// media segment in a single mapping.
+    #[builder]
     pub(crate) fn with_availability_and_deleter<P: Into<PathBuf>>(
         root_dir: P,
         cancel: CancelToken,
         availability: AvailabilityIndex,
         deleter: Arc<dyn AssetDeleter>,
-        segment_reservation: u64,
+        #[builder(default = 1024 * 1024)] segment_reservation: u64,
     ) -> Self {
         Self {
             cancel,
@@ -548,13 +544,13 @@ mod tests {
             PinsIndex::ephemeral(),
             LruIndex::ephemeral(),
         ));
-        DiskAssetStore::with_availability_and_deleter(
-            root,
-            CancelToken::never(),
-            availability,
-            deleter,
-            reservation,
-        )
+        DiskAssetStore::with_availability_and_deleter()
+            .root_dir(root)
+            .cancel(CancelToken::never())
+            .availability(availability)
+            .deleter(deleter)
+            .segment_reservation(reservation)
+            .call()
     }
 
     fn segment_tmp_len(store: &DiskAssetStore, root: &Path) -> u64 {

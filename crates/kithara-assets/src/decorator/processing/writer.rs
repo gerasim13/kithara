@@ -1,5 +1,6 @@
 use std::fmt;
 
+use bon::bon;
 use kithara_bufpool::BytePool;
 use kithara_platform::{sync::Arc, time::Duration};
 use kithara_storage::{StorageError, StorageResult};
@@ -58,6 +59,16 @@ where
     Ok(write_offset)
 }
 
+/// Default [`ProcessedWriter`] transform pass size. One pass over a 64 `KiB`
+/// window keeps the pooled input and output buffers page-sized while still
+/// committing most resources in a handful of passes.
+pub(super) const DEFAULT_CHUNK_SIZE: usize = 64 * 1024;
+
+/// Default backstop between [`ReadinessGate`] wakeups. The gate is woken by
+/// `notify_all` on every state change, so this only bounds how long a waiter
+/// sleeps before rechecking an abort it was not signalled for.
+pub(super) const DEFAULT_GATE_POLL_INTERVAL: Duration = Duration::from_millis(100);
+
 /// Write handle that processes a resource atomically when it is committed.
 pub struct ProcessedWriter<W> {
     pool: BytePool,
@@ -78,17 +89,22 @@ impl<W: fmt::Debug> fmt::Debug for ProcessedWriter<W> {
     }
 }
 
+#[bon]
 impl<W> ProcessedWriter<W>
 where
     W: WriteSide,
 {
     /// Creates a pending writer for a resource and its optional processor.
+    /// `chunk_size` and `gate_poll_interval` carry the production defaults, so
+    /// a caller states them only when it wants a different pass size or
+    /// recheck cadence.
+    #[builder]
     pub fn new(
         inner: W,
         processor: Option<ProcessCtx>,
         pool: BytePool,
-        chunk_size: usize,
-        gate_poll_interval: Duration,
+        #[builder(default = DEFAULT_CHUNK_SIZE)] chunk_size: usize,
+        #[builder(default = DEFAULT_GATE_POLL_INTERVAL)] gate_poll_interval: Duration,
     ) -> Self {
         let ready = processor.is_none();
         Self {
