@@ -1,6 +1,6 @@
 use std::sync::{
     Weak,
-    atomic::{AtomicBool, AtomicU64},
+    atomic::{AtomicBool, AtomicU64, Ordering},
 };
 
 use kithara_events::EventBus;
@@ -21,35 +21,43 @@ pub(crate) struct PeerEntry {
     pub(super) bytes_downloaded: AtomicU64,
     pub(super) cancel: CancelGroup,
     pub(super) registration_cancel: CancelToken,
-    pub(super) deferred_tick_at: Mutex<Option<Instant>>,
+    pub(super) tick_deadline: Mutex<Option<Instant>>,
+    pub(super) tick_requested: AtomicBool,
     pub(super) throttle: Mutex<EventThrottleCache>,
     pub(super) state: Option<Arc<AbrState>>,
 }
 
 impl PeerEntry {
-    pub(super) fn arm_deferred_tick(&self, deadline: Instant) -> bool {
-        let mut armed = self.deferred_tick_at.lock();
-        if armed.is_some_and(|current| current <= deadline) {
-            return false;
-        }
-        *armed = Some(deadline);
-        true
+    pub(super) fn clear_tick_deadline(&self) {
+        *self.tick_deadline.lock() = None;
     }
 
     pub(super) fn bus(&self) -> Option<EventBus> {
         self.bus.read().clone()
     }
 
-    pub(super) fn clear_deferred_tick(&self) {
-        *self.deferred_tick_at.lock() = None;
+    pub(super) fn mark_tick_requested(&self) -> bool {
+        !self.tick_requested.swap(true, Ordering::AcqRel)
     }
 
-    pub(super) fn take_deferred_tick(&self, deadline: Instant) -> bool {
-        let mut armed = self.deferred_tick_at.lock();
-        if *armed != Some(deadline) {
+    pub(super) fn take_due_tick_deadline(&self, now: Instant) -> bool {
+        let mut deadline = self.tick_deadline.lock();
+        if !deadline.is_some_and(|deadline| deadline <= now) {
             return false;
         }
-        *armed = None;
+        *deadline = None;
         true
+    }
+
+    pub(super) fn tick_deadline(&self) -> Option<Instant> {
+        *self.tick_deadline.lock()
+    }
+
+    pub(super) fn set_tick_deadline(&self, deadline: Instant) {
+        *self.tick_deadline.lock() = Some(deadline);
+    }
+
+    pub(super) fn take_tick_request(&self) -> bool {
+        self.tick_requested.swap(false, Ordering::AcqRel)
     }
 }

@@ -13,8 +13,11 @@ use axum::{
 };
 use bytes::Bytes;
 use futures::{StreamExt, stream::iter as stream_iter};
-use kithara_abr::Abr;
-use kithara_events::{DownloaderEvent, Envelope, Event, EventBus};
+use kithara_abr::{Abr, AbrSettings, AbrState};
+use kithara_events::{
+    AbrEvent, AbrMode, AbrReason, DownloaderEvent, Envelope, Event, EventBus, VariantDuration,
+    VariantIndex, VariantInfo,
+};
 use kithara_net::{Headers as ResponseHeaders, HttpClient, NetError as FetchError, NetOptions};
 use kithara_platform::{
     CancelToken,
@@ -52,6 +55,43 @@ impl Abr for MockPeer {
 }
 impl Peer for MockPeer {}
 
+struct ScheduledAbrPeer {
+    cancel: CancelToken,
+    state: Arc<AbrState>,
+    wake: Arc<Notify>,
+}
+
+impl Abr for ScheduledAbrPeer {
+    fn cancel(&self) -> CancelToken {
+        self.cancel.clone()
+    }
+
+    fn state(&self) -> Option<Arc<AbrState>> {
+        Some(Arc::clone(&self.state))
+    }
+
+    fn variants(&self) -> Vec<VariantInfo> {
+        [66_000_u64, 134_000, 270_000, 900_000]
+            .into_iter()
+            .enumerate()
+            .map(|(index, bandwidth_bps)| VariantInfo {
+                variant_index: VariantIndex::new(index),
+                bandwidth_bps: Some(bandwidth_bps),
+                duration: VariantDuration::Unknown,
+                name: None,
+                codecs: None,
+                container: None,
+            })
+            .collect()
+    }
+
+    fn wake(&self) {
+        self.wake.notify_one();
+    }
+}
+
+impl Peer for ScheduledAbrPeer {}
+
 fn test_client() -> HttpClient {
     HttpClient::new(NetOptions::default(), CancelToken::never())
 }
@@ -63,6 +103,45 @@ fn test_config() -> DownloaderConfig {
 fn test_body_stream(chunks: Vec<&'static [u8]>) -> BodyStream {
     let stream = stream_iter(chunks.into_iter().map(|c| Ok(Bytes::from_static(c))));
     BodyStream::wrap_raw(Box::pin(stream))
+}
+
+#[kithara::test(tokio, timeout(Duration::from_secs(1)))]
+async fn downloader_loop_drives_interval_gated_abr_tick_without_fetch_work() {
+    let settings = AbrSettings::builder()
+        .min_switch_interval(Duration::from_millis(20))
+        .min_buffer_for_up_switch(Duration::ZERO)
+        .build();
+    let downloader = Downloader::new(DownloaderConfig {
+        abr_settings: settings,
+        ..test_config()
+    });
+    let state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0)))));
+    let wake = Arc::new(Notify::default());
+    let peer = Arc::new(ScheduledAbrPeer {
+        cancel: CancelToken::never(),
+        state: Arc::clone(&state),
+        wake: Arc::clone(&wake),
+    });
+    let bus = EventBus::default();
+    let mut events = bus.subscribe();
+    let handle = downloader.register(peer).with_bus(bus);
+
+    handle.abr().reevaluate();
+    wake.notified().await;
+
+    assert_eq!(state.pending_target(), Some(VariantIndex::new(3)));
+    let saw_interval_gate = std::iter::from_fn(|| events.try_recv().ok()).any(|envelope| {
+        matches!(
+            envelope.event,
+            Event::Abr(AbrEvent::DecisionSkipped {
+                reason: AbrReason::MinInterval
+            })
+        )
+    });
+    assert!(
+        saw_interval_gate,
+        "the downloader loop must observe MinInterval before its deadline tick"
+    );
 }
 
 /// Event-driven completion barrier. Each finished fetch calls

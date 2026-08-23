@@ -1,8 +1,5 @@
 use kithara_events::{AbrEvent, AbrMode, EventBus, VariantIndex, VariantInfo};
-use kithara_platform::{
-    sync::{Arc, RwLock},
-    time::Instant,
-};
+use kithara_platform::sync::{Arc, RwLock};
 use kithara_test_utils::kithara;
 
 use crate::{
@@ -181,9 +178,7 @@ impl AbrHandle {
     /// must fire OUTSIDE the lock. Mirrors the controller's `on_*` hooks.
     #[kithara::probe]
     pub fn reevaluate(&self) {
-        self.inner
-            .controller
-            .tick(self.inner.peer_id, Instant::now());
+        self.inner.controller.request_tick(self.inner.peer_id);
     }
 
     /// Variant selected for a seek replacement, including a locked pending
@@ -278,7 +273,10 @@ mod tests {
         AbrEvent, AbrReason, DEFAULT_EVENT_BUS_CAPACITY, Envelope, Event, EventBus,
         VariantDuration, VariantIndex, VariantInfo,
     };
-    use kithara_platform::{CancelToken, time::Duration};
+    use kithara_platform::{
+        CancelToken,
+        time::{Duration, Instant},
+    };
     use kithara_test_utils::kithara;
 
     use super::*;

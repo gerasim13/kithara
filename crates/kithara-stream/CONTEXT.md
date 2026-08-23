@@ -123,6 +123,10 @@ one HTTP pool; with none supplied, `kithara-play` builds a per-resource one.
 The shared controller owns a child of the downloader scope. Downloader peer handles
 retain a separate per-registration fetch/registry scope; ABR registration does not
 receive that token and instead obtains the protocol track token through `Abr::cancel()`.
+The downloader run loop also drives the controller's coalesced tick slots and nearest
+`min_switch_interval` deadline inside `Registry::tick`. ABR does not spawn a second
+worker or use an ambient runtime; its readiness participates in the same
+cancellation-safe polling boundary as peer and registration readiness.
 
 ## Features
 

@@ -1,6 +1,7 @@
 use std::{
     num::NonZeroU64,
     sync::atomic::{AtomicBool, AtomicU64, Ordering},
+    task::Waker,
 };
 
 use bon::Builder;
@@ -9,7 +10,7 @@ use kithara_events::{AbrEvent, AbrMode, EventBus};
 use kithara_platform::{
     CancelGroup, CancelScope, CancelToken,
     sync::{Arc, Mutex, RwLock},
-    time::{Duration, Instant},
+    time::Duration,
 };
 use kithara_test_utils::kithara;
 
@@ -118,8 +119,9 @@ pub struct AbrController {
     pub(super) settings: AbrSettings,
     scope: CancelScope,
     pub(super) estimator: Arc<dyn Estimator>,
+    pub(super) tick_waker: Mutex<Option<Waker>>,
     next_peer_id: AtomicU64,
-    peers: DashMap<AbrPeerId, Arc<PeerEntry>>,
+    pub(super) peers: DashMap<AbrPeerId, Arc<PeerEntry>>,
 }
 
 impl AbrController {
@@ -162,7 +164,7 @@ impl AbrController {
         {
             bus.publish(AbrEvent::MaxBandwidthCapChanged { cap });
         }
-        self.tick(peer_id, Instant::now());
+        self.request_tick(peer_id);
     }
 
     #[kithara::probe(peer_id, mode)]
@@ -172,11 +174,11 @@ impl AbrController {
         {
             bus.publish(AbrEvent::ModeChanged { mode });
         }
-        self.tick(peer_id, Instant::now());
+        self.request_tick(peer_id);
         if let Some(entry) = self.peer_entry(peer_id)
             && let Some(peer) = entry.peer_weak.upgrade()
         {
-            // A mode change is work even when the synchronous decision is
+            // A mode change is work even when the queued decision is
             // temporarily locked by a seek. Re-polling the peer synchronizes
             // that lock; its existing unlock edge then re-evaluates the mode.
             peer.wake();
@@ -189,7 +191,7 @@ impl AbrController {
         {
             bus.publish(AbrEvent::Unlocked);
         }
-        self.tick(peer_id, Instant::now());
+        self.request_tick(peer_id);
     }
 
     pub(crate) fn peer_entry(&self, id: AbrPeerId) -> Option<Arc<PeerEntry>> {
@@ -218,7 +220,8 @@ impl AbrController {
             bytes_downloaded: AtomicU64::new(0),
             cancel,
             registration_cancel,
-            deferred_tick_at: Mutex::default(),
+            tick_deadline: Mutex::default(),
+            tick_requested: AtomicBool::new(false),
             throttle: Mutex::default(),
             state: state.clone(),
         });
@@ -252,6 +255,7 @@ impl AbrController {
             settings,
             scope: CancelScope::new(Some(cancel)),
             estimator,
+            tick_waker: Mutex::default(),
             next_peer_id: AtomicU64::new(0),
             peers: DashMap::new(),
         })

@@ -58,7 +58,7 @@ impl AbrController {
             }
         }
 
-        self.tick(peer_id, now);
+        self.request_tick(peer_id);
     }
 
     #[kithara::probe(peer_id)]
@@ -125,7 +125,7 @@ impl AbrController {
                 reason: AbrReason::AlreadyOptimal,
                 current,
             } => {
-                ctx.entry.clear_deferred_tick();
+                ctx.entry.clear_tick_deadline();
                 // The only Stay that retracts: AlreadyOptimal positively
                 // re-affirms `current` on live evidence. MinInterval wraps a
                 // switch `evaluate()` still wants; Locked and NoEstimate are
@@ -140,7 +140,7 @@ impl AbrController {
             } => {
                 let deadline =
                     now + state.switch_interval_remaining(now, self.settings.min_switch_interval);
-                self.defer_tick(peer_id, &ctx.entry, deadline);
+                ctx.entry.set_tick_deadline(deadline);
                 if let Some(ref bus) = bus {
                     bus.publish(AbrEvent::DecisionSkipped {
                         reason: AbrReason::MinInterval,
@@ -148,13 +148,13 @@ impl AbrController {
                 }
             }
             AbrDecision::Stay { reason, .. } => {
-                ctx.entry.clear_deferred_tick();
+                ctx.entry.clear_tick_deadline();
                 if let Some(ref bus) = bus {
                     bus.publish(AbrEvent::DecisionSkipped { reason });
                 }
             }
             change => {
-                ctx.entry.clear_deferred_tick();
+                ctx.entry.clear_tick_deadline();
                 state.request_target(change.target(), change.reason());
                 ctx.peer.wake();
             }
