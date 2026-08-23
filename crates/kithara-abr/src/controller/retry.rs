@@ -30,7 +30,7 @@ impl AbrController {
         let cancel = entry.cancel.clone();
         let controller = Arc::downgrade(self);
         let entry = Arc::downgrade(entry);
-        let retry = async move {
+        let deferred_tick = async move {
             let delay = deadline.saturating_duration_since(Instant::now());
             select! {
                 biased;
@@ -45,9 +45,9 @@ impl AbrController {
         };
 
         #[cfg(not(target_arch = "wasm32"))]
-        drop(task::spawn_on(&runtime, retry));
+        drop(task::spawn_on(&runtime, deferred_tick));
         #[cfg(target_arch = "wasm32")]
-        drop(task::spawn(retry));
+        drop(task::spawn(deferred_tick));
     }
 
     fn run_deferred_tick(
