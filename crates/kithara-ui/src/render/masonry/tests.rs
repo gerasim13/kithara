@@ -4801,6 +4801,39 @@ fn the_chevron_cell_stands_at_the_end_of_the_header() {
     assert_eq!(cell_origin.x + cell_size.width, origin.x + size.width);
 }
 
+/// A module folds away from the retained host too.
+///
+/// The other host answers a press anywhere on the header, through the
+/// activation target it registers for it. Without the same answer here the
+/// chevron is a mark that looks like a button and does nothing, and a module
+/// mounted in this host can never be folded.
+#[kithara::test]
+fn a_press_on_a_module_header_folds_the_module_away() {
+    let registry = fixture_registry();
+    let reads = FixtureReads;
+    let ui = chrome_ui("DECK", &registry);
+    let output = document::render(
+        &ui.root,
+        ctx(&ui, &reads),
+        MasonryHost::new(ctx(&ui, &reads), builtin::skin()),
+    );
+    let mut root = masonry_root(output, 300, 200);
+    root.redraw()
+        .unwrap_or_else(|error| panic!("the module shell must compose: {error}"));
+    let (origin, size, _) = header_cells("DECK");
+
+    root.handle_pointer_event(pointer_down(
+        origin.x + size.width / 2.0,
+        origin.y + size.height / 2.0,
+    ))
+    .unwrap_or_else(|error| panic!("the press must route: {error}"));
+
+    assert_eq!(
+        root.take_actions(),
+        [UiEvent::ToggleModule("shell".to_owned())]
+    );
+}
+
 #[kithara::test]
 fn the_chevron_cell_takes_the_width_the_skin_gives_it() {
     let (_, _, cells) = header_cells("DECK");

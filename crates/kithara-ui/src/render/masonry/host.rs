@@ -324,7 +324,7 @@ where
             .iter()
             .map(|child| ChildLayout::natural(child.declared(), None))
             .collect();
-        MasonryNode::chrome(
+        let mut header = MasonryNode::chrome(
             NodeLayout::Flex(Flex::new(
                 Axis::Horizontal,
                 solve::Length::Fill,
@@ -341,7 +341,17 @@ where
             children,
             Some(self.skin.rgba(metrics.header_background)),
             self.chrome_frame(metrics.header_frame),
-        )
+        );
+        // The bar itself folds the module away, not just the mark at the end of
+        // it: the other host answers a press anywhere on the header through the
+        // activation target it registers for it, and a chevron that only looks
+        // like a button is a module this host cannot fold.
+        let name = self.ctx.ui.resolve(module.module()).to_owned();
+        header.set_actions(
+            Some(self.event(move || UiEvent::ToggleModule(name.clone()))),
+            None,
+        );
+        header
     }
 
     /// A word in a box, sized by the word.
