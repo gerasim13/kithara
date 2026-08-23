@@ -361,17 +361,19 @@ mod tests {
         let publisher = state.publisher();
         let peer: Arc<dyn Abr> = Arc::new(TestAbrPeer { state });
         let controller = Arc::new(AbrController::new(AbrSettings::default()));
+        let cancel = CancelToken::never();
+        let handle = controller.register(&peer, &cancel);
         Arc::new(HlsCoord::new(
             HlsCoordEnv {
                 scope: ctx.scope.clone(),
-                cancel: CancelToken::never(),
+                cancel,
                 headers: None,
                 emit: Arc::new(DeferredBus::new(bus.clone(), 8)),
                 signal: ctx.signal,
             },
             Arc::new(PlayheadState::new()),
             Arc::new(SeekState::new()),
-            controller.register(&peer),
+            handle,
             publisher,
             Arc::from(vec![variant]),
         ))

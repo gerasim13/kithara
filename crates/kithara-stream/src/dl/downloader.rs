@@ -168,10 +168,7 @@ impl Downloader {
         let bus: Arc<RwLock<Option<EventBus>>> = Arc::new(RwLock::default());
 
         let abr_peer: Arc<dyn Abr> = Arc::clone(&peer) as Arc<dyn Abr>;
-        let abr_handle = self
-            .inner
-            .abr
-            .register_with_cancel(&abr_peer, &cancel_token);
+        let abr_handle = self.inner.abr.register(&abr_peer, &cancel_token);
         let peer_id = abr_handle.peer_id();
 
         let entry = RegisteredPeerEntry {

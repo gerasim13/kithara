@@ -750,7 +750,7 @@ mod tests {
             ],
         });
         let controller = Arc::new(AbrController::new(AbrSettings::default()));
-        let handle = controller.register(&peer);
+        let handle = controller.register(&peer, &cancel);
         abr_state.request_target(VariantIndex::new(1), reason);
         let coord = Arc::new(HlsCoord::new(
             HlsCoordEnv {

@@ -8,7 +8,7 @@ use kithara::{
         Abr, AbrController, AbrSettings, AbrState, BandwidthSource, Estimator, ThroughputEstimator,
     },
     events::{VariantDuration, VariantIndex, VariantInfo},
-    platform::{sync::Arc, time::Duration},
+    platform::{CancelToken, sync::Arc, time::Duration},
 };
 use kithara_integration_tests::auto;
 
@@ -104,7 +104,7 @@ fn bench_controller_record_bandwidth(c: &mut Criterion) {
                         state: Arc::clone(&state),
                         variants: variants_4(),
                     });
-                    let handle = controller.register(&peer);
+                    let handle = controller.register(&peer, &CancelToken::never());
                     for _ in 0..8 {
                         controller.record_bandwidth(
                             handle.peer_id(),

@@ -236,6 +236,7 @@ mod tests {
             let publisher = state.publisher();
             let peer: Arc<dyn Abr> = Arc::new(TestAbrPeer { state });
             let controller = AbrController::new(AbrSettings::default());
+            let handle = controller.register(&peer, &cancel);
             Arc::new(HlsCoord::new(
                 HlsCoordEnv {
                     cancel,
@@ -246,7 +247,7 @@ mod tests {
                 },
                 Arc::new(PlayheadState::new()),
                 Arc::new(SeekState::new()),
-                controller.register(&peer),
+                handle,
                 publisher,
                 Arc::from(vec![variant]),
             ))

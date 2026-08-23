@@ -7,7 +7,7 @@ use bon::Builder;
 use dashmap::DashMap;
 use kithara_events::{AbrEvent, AbrMode, EventBus};
 use kithara_platform::{
-    CancelScope, CancelToken,
+    CancelToken,
     sync::{Arc, Mutex, RwLock},
     time::{Duration, Instant},
 };
@@ -195,23 +195,11 @@ impl AbrController {
         self.peers.get(&id).map(|r| Arc::clone(r.value()))
     }
 
-    /// Register a peer. Returns an [`AbrHandle`] that the caller keeps alive
-    /// for the peer's lifetime; the handle's `Drop` unregisters the peer.
-    pub fn register(self: &Arc<Self>, peer: &Arc<dyn Abr>) -> AbrHandle {
-        let cancel = CancelScope::new(None);
-        let token = cancel.token();
-        self.register_with_cancel(peer, &token)
-    }
-
-    /// Register a peer below an existing cancellation scope.
+    /// Register a peer below its cancellation scope.
     ///
     /// The controller derives a child from `cancel`; cancelling the parent or
     /// dropping the returned handle stops delayed re-evaluations for this peer.
-    pub fn register_with_cancel(
-        self: &Arc<Self>,
-        peer: &Arc<dyn Abr>,
-        cancel: &CancelToken,
-    ) -> AbrHandle {
+    pub fn register(self: &Arc<Self>, peer: &Arc<dyn Abr>, cancel: &CancelToken) -> AbrHandle {
         let id = self.allocate_peer_id();
         let state = peer.state();
         let peer_weak = Arc::downgrade(peer);

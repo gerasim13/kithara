@@ -2,7 +2,7 @@ use kithara::{
     self,
     abr::{AbrController, AbrMode, AbrSettings, AbrState, ThroughputEstimator},
     events::{BandwidthSource, VariantDuration, VariantIndex, VariantInfo},
-    platform::{sync::Arc, time::Duration},
+    platform::{CancelToken, sync::Arc, time::Duration},
 };
 
 fn settings_fast() -> AbrSettings {
@@ -62,9 +62,10 @@ async fn three_peers_maintain_independent_variant_indices() {
     let (s1, p1) = new_peer(&[400_000, 1_000_000, 3_000_000, 10_000_000]);
     let (s2, p2) = new_peer(&[512_000]);
 
-    let h0 = controller.register(&p0);
-    let h1 = controller.register(&p1);
-    let h2 = controller.register(&p2);
+    let cancel = CancelToken::never();
+    let h0 = controller.register(&p0, &cancel);
+    let h1 = controller.register(&p1, &cancel);
+    let h2 = controller.register(&p2, &cancel);
 
     for _ in 0..10 {
         controller.record_bandwidth(

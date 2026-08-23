@@ -74,7 +74,7 @@ Dual-track EWMA — fast (2 s half-life) and slow (10 s half-life); estimate = `
 - Variants live on the peer (`Abr::variants()`), never in `AbrState`; they reach the decision through `AbrView`. `AbrState` owns only runtime control: current index, mode, lock count, escape flag, bandwidth cap, last-switch timestamp, pending slot.
 - `AbrHandle::set_mode` validates `Manual(idx)` against the peer's live variant list and returns `AbrError::VariantOutOfBounds`; `AbrState::set_mode` does not validate.
 - `AbrHandle` is the consumer surface; dropping the last clone unregisters the peer. The track-scoped `EventBus` lives on the handle (`with_bus`), so peers stay free of event-bus plumbing.
-- Delayed retry cancellation is peer-scoped, not controller-global. A composed owner such as `Downloader` passes its existing peer scope through `register_with_cancel`; plain `register` creates a standalone peer scope. The controller stores only a child for the registered peer, and unregistering the peer cancels that child.
+- Delayed retry cancellation is peer-scoped, not controller-global. The lifetime owner passes its existing peer scope through `register`; the controller stores only a child for the registered peer, and unregistering the peer cancels that child.
 - `AbrHandle::notify_exact_commit` publishes `AbrEvent::VariantApplied` after a promotion and does nothing else. Its caller is the audio worker, which is not a runtime thread, so this path must not schedule async work.
 - `kithara-hls` reads the variant through `AbrHandle` / `Arc<AbrState>`; no cloneable `Arc<AtomicUsize>` handle is exposed — see `redundant_accessors` in `crates/kithara-devtools/src/arch/checks` for the rationale.
 

@@ -830,7 +830,7 @@ async fn auto_mode_with_default_seed_picks_high_variant_on_cold_start() {
         state: Arc::clone(&state),
         variants: audio_variants_4tier(),
     });
-    let handle = controller.register(&peer);
+    let handle = controller.register(&peer, &CancelToken::never());
     controller.tick(handle.peer_id(), Instant::now());
     assert_eq!(
         state.pending_target(),
@@ -858,7 +858,7 @@ async fn auto_mode_without_seed_stays_on_initial_variant_on_cold_start() {
         state: Arc::clone(&state),
         variants: audio_variants_4tier(),
     });
-    let handle = controller.register(&peer);
+    let handle = controller.register(&peer, &CancelToken::never());
     controller.tick(handle.peer_id(), Instant::now());
     assert_eq!(state.current_variant_index(), VariantIndex::new(0));
     assert_eq!(state.pending_target(), None);
@@ -878,7 +878,7 @@ async fn min_interval_retries_without_another_bandwidth_sample() {
         state: Arc::clone(&state),
         wake: Arc::clone(&wake),
     });
-    let handle = controller.register(&peer);
+    let handle = controller.register(&peer, &CancelToken::never());
 
     controller.tick(handle.peer_id(), Instant::now());
     assert_eq!(
@@ -905,7 +905,7 @@ async fn parent_cancel_stops_the_deferred_min_interval_retry() {
         wake: Arc::clone(&wake),
     });
     let cancel = CancelToken::never();
-    let handle = controller.register_with_cancel(&peer, &cancel);
+    let handle = controller.register(&peer, &cancel);
 
     controller.tick(handle.peer_id(), Instant::now());
     cancel.cancel();
@@ -933,7 +933,7 @@ async fn tick_already_optimal_retracts_stale_throughput_pending() {
         state: Arc::clone(&state),
         variants: test_variants_3(),
     });
-    let handle = controller.register(&peer);
+    let handle = controller.register(&peer, &CancelToken::never());
 
     // A quality down-switch, not a rescue: a rescue answers a variant that
     // stopped delivering, and a recovered estimate is no evidence about that.
@@ -976,7 +976,7 @@ fn tick_min_interval_hold_preserves_pending() {
         state: Arc::clone(&state),
         variants: audio_variants_4tier(),
     });
-    let handle = controller.register(&peer);
+    let handle = controller.register(&peer, &CancelToken::never());
     state.request_target(VariantIndex::new(3), AbrReason::UpSwitch);
 
     // The 2 Mbps seed still wants the up-switch; only the interval holds it,
@@ -1005,7 +1005,7 @@ async fn set_mode_back_to_current_kills_queued_switch() {
         state: Arc::clone(&state),
         variants: test_variants_3(),
     });
-    let handle = controller.register(&peer);
+    let handle = controller.register(&peer, &CancelToken::never());
     handle
         .set_mode(AbrMode::Manual(VariantIndex::new(2)))
         .expect("variant 2 exists");
@@ -1050,7 +1050,7 @@ async fn lock_refcount_holds_across_record_bandwidth() {
         state: Arc::clone(&state),
         variants: test_variants_3(),
     });
-    let handle = controller.register(&peer);
+    let handle = controller.register(&peer, &CancelToken::never());
 
     for _ in 0..20 {
         controller.record_bandwidth(

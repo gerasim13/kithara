@@ -278,7 +278,7 @@ mod tests {
         AbrEvent, AbrReason, DEFAULT_EVENT_BUS_CAPACITY, Envelope, Event, EventBus,
         VariantDuration, VariantIndex, VariantInfo,
     };
-    use kithara_platform::time::Duration;
+    use kithara_platform::{CancelToken, time::Duration};
     use kithara_test_utils::kithara;
 
     use super::*;
@@ -347,7 +347,7 @@ mod tests {
         let peer: Arc<dyn Abr> = Arc::new(StatefulPeer {
             state: Arc::clone(&state),
         });
-        let handle = controller.register(&peer);
+        let handle = controller.register(&peer, &CancelToken::never());
 
         state.request_target(VariantIndex::new(2), AbrReason::UpSwitch);
 
@@ -385,7 +385,7 @@ mod tests {
         let peer: Arc<dyn Abr> = Arc::new(StatefulPeer {
             state: Arc::clone(&state),
         });
-        let handle = controller.register(&peer);
+        let handle = controller.register(&peer, &CancelToken::never());
 
         state.request_target(VariantIndex::new(2), AbrReason::UpSwitch);
         let claim = handle
@@ -407,7 +407,7 @@ mod tests {
         let peer: Arc<dyn Abr> = Arc::new(StatefulPeer {
             state: Arc::clone(&state),
         });
-        let handle = controller.register(&peer);
+        let handle = controller.register(&peer, &CancelToken::never());
 
         handle.lock();
         state.request_target(VariantIndex::new(2), AbrReason::UpSwitch);
@@ -430,7 +430,7 @@ mod tests {
         let peer: Arc<dyn Abr> = Arc::new(StatefulPeer {
             state: Arc::clone(&state),
         });
-        let handle = controller.register(&peer);
+        let handle = controller.register(&peer, &CancelToken::never());
 
         let variants = handle.variants();
         assert_eq!(variants.len(), 3);
@@ -466,7 +466,7 @@ mod tests {
             let peer: Arc<dyn Abr> = Arc::new(StatefulPeer {
                 state: Arc::clone(&state),
             });
-            let h = controller.register(&peer);
+            let h = controller.register(&peer, &CancelToken::never());
             assert_eq!(h.variants().len(), 3);
             h
         };
@@ -492,7 +492,9 @@ mod tests {
 
         let bus = EventBus::new(DEFAULT_EVENT_BUS_CAPACITY);
         let mut rx = bus.subscribe();
-        let handle = controller.register(&peer).with_bus(bus);
+        let handle = controller
+            .register(&peer, &CancelToken::never())
+            .with_bus(bus);
 
         let decision = AbrDecision::UpSwitch {
             from: VariantIndex::new(0),
