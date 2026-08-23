@@ -29,7 +29,9 @@ pub use backend::{
     Reader, Resource, ResourcePhase, ResourceRead, ResourceReader, ResourceWriter,
 };
 #[cfg(not(target_arch = "wasm32"))]
-pub use backend::{MmapDriver, MmapOptions, MmapResource};
+pub use backend::{
+    DEFAULT_GROWTH_FACTOR, DEFAULT_INITIAL_LEN, MmapDriver, MmapOptions, MmapResource,
+};
 pub use decorator::{Atomic, AtomicChunked, Barrier, OpenIntent};
 pub use error::{StorageError, StorageResult};
 pub use resource::{OpenMode, ResourceStatus, WaitOutcome};

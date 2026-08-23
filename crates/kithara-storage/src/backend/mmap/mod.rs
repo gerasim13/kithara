@@ -14,4 +14,6 @@
 pub(crate) mod driver;
 pub(crate) mod io;
 
-pub use driver::{MmapDriver, MmapOptions, MmapResource};
+pub use driver::{
+    DEFAULT_GROWTH_FACTOR, DEFAULT_INITIAL_LEN, MmapDriver, MmapOptions, MmapResource,
+};

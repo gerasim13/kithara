@@ -12,7 +12,7 @@ pub(crate) mod mmap;
 
 pub use memory::{MemDriver, MemOptions, MemResource};
 #[cfg(not(target_arch = "wasm32"))]
-pub use mmap::{MmapDriver, MmapOptions, MmapResource};
+pub use mmap::{DEFAULT_GROWTH_FACTOR, DEFAULT_INITIAL_LEN, MmapDriver, MmapOptions, MmapResource};
 pub use resource::{
     Active, Committed, Reader, Resource, ResourcePhase, ResourceRead, ResourceReader,
     ResourceWriter,

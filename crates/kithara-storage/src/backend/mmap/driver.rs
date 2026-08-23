@@ -18,6 +18,16 @@ use crate::{
     resource::OpenMode,
 };
 
+/// Default [`MmapOptions::initial_len`]. One page-aligned block, enough that a
+/// small resource is written without a single re-map, small enough that a
+/// resource that turns out to be empty costs one sparse block.
+pub const DEFAULT_INITIAL_LEN: u64 = 64 * 1024;
+
+/// Default [`MmapOptions::growth_factor`]. Doubling keeps the number of
+/// re-maps logarithmic in the final size; a caller that knows the size up
+/// front sets `initial_len` and never pays a re-map at all.
+pub const DEFAULT_GROWTH_FACTOR: u64 = 2;
+
 /// Options for opening a [`MmapResource`].
 #[derive(Debug, Clone, Builder)]
 #[builder(start_fn = for_path)]
@@ -29,8 +39,15 @@ pub struct MmapOptions {
     /// Open mode controlling read/write behavior for existing files.
     #[builder(default)]
     pub mode: OpenMode,
-    /// Initial file size for new files. Ignored for existing files.
-    pub initial_len: Option<u64>,
+    /// Size a new file is created at. Ignored for existing files.
+    #[builder(default = DEFAULT_INITIAL_LEN)]
+    pub initial_len: u64,
+    /// Multiplier applied to the current mapping length when a write runs
+    /// past its end. The mapping grows to the larger of the write's end and
+    /// `len * growth_factor`, so a factor of 1 grows to exactly what each
+    /// write needs and re-maps on every one.
+    #[builder(default = DEFAULT_GROWTH_FACTOR)]
+    pub growth_factor: u64,
 }
 
 /// Mmap state machine.
@@ -77,6 +94,9 @@ pub struct MmapDriver {
     /// like the first one instead of restarting from the default and
     /// re-mapping its way back up.
     pub(super) initial_len: u64,
+    /// Multiplier a write past the mapping's end grows it by, from
+    /// `MmapOptions::growth_factor`.
+    pub(super) growth_factor: u64,
     /// Lock-free queue for fast-path range notifications.
     pub(super) ready_ranges: SegQueue<Range<u64>>,
 }
@@ -89,15 +109,6 @@ impl fmt::Debug for MmapDriver {
             .field("committed", &self.committed.load().is_some())
             .finish_non_exhaustive()
     }
-}
-
-pub(super) struct Consts;
-impl Consts {
-    /// Default initial size for new mmap files (64 KB).
-    pub(super) const DEFAULT_INITIAL_SIZE: u64 = 64 * 1024;
-
-    /// Growth factor when the mmap file needs to be resized.
-    pub(super) const MMAP_GROWTH_FACTOR: u64 = 2;
 }
 
 impl Driver for MmapDriver {
@@ -140,7 +151,7 @@ impl Driver for MmapDriver {
                 if let Some(parent) = opts.path.parent() {
                     fs::create_dir_all(parent)?;
                 }
-                let size = opts.initial_len.unwrap_or(Consts::DEFAULT_INITIAL_SIZE);
+                let size = opts.initial_len;
                 let mmap_state = if size == 0 {
                     MmapState::Empty
                 } else {
@@ -155,7 +166,8 @@ impl Driver for MmapDriver {
             committed,
             mmap: Mutex::new(mmap_state),
             path: opts.path,
-            initial_len: opts.initial_len.unwrap_or(Consts::DEFAULT_INITIAL_SIZE),
+            initial_len: opts.initial_len,
+            growth_factor: opts.growth_factor,
             ready_ranges: SegQueue::new(),
         };
 
@@ -191,11 +203,10 @@ mod tests {
         let path = dir.path().join("test.dat");
         Resource::open(
             CancelToken::never(),
-            MmapOptions {
-                path,
-                initial_len: size,
-                mode: OpenMode::Auto,
-            },
+            MmapOptions::for_path(path)
+                .mode(OpenMode::Auto)
+                .maybe_initial_len(size)
+                .build(),
         )
         .expect("BUG: open test resource with hard-coded params must succeed")
     }
@@ -302,11 +313,7 @@ mod tests {
 
         let res: MmapResource = Resource::open(
             cancel.clone(),
-            MmapOptions {
-                path,
-                initial_len: None,
-                mode: OpenMode::Auto,
-            },
+            MmapOptions::for_path(path).mode(OpenMode::Auto).build(),
         )
         .expect("BUG: open cancel-test resource with hard-coded params must succeed");
 
@@ -331,11 +338,9 @@ mod tests {
         {
             let res: MmapResource = Resource::open(
                 CancelToken::never(),
-                MmapOptions {
-                    path: path.clone(),
-                    initial_len: None,
-                    mode: OpenMode::Auto,
-                },
+                MmapOptions::for_path(path.clone())
+                    .mode(OpenMode::Auto)
+                    .build(),
             )
             .expect("BUG: opening the first resource in this test setup must succeed");
             res.write_all(b"persisted data").unwrap();
@@ -343,11 +348,7 @@ mod tests {
 
         let res: MmapResource = Resource::open(
             CancelToken::never(),
-            MmapOptions {
-                path,
-                initial_len: None,
-                mode: OpenMode::Auto,
-            },
+            MmapOptions::for_path(path).mode(OpenMode::Auto).build(),
         )
         .expect("BUG: re-opening the resource in this test setup must succeed");
 
@@ -375,6 +376,47 @@ mod tests {
         let n = res.read_at(0, &mut buf).unwrap();
         assert_eq!(n, 1024);
         assert!(buf.iter().all(|&b| b == 42));
+    }
+
+    fn create_resource_growing_by(dir: &TempDir, initial: u64, factor: u64) -> MmapResource {
+        Resource::open(
+            CancelToken::never(),
+            MmapOptions::for_path(dir.path().join("test.dat"))
+                .initial_len(initial)
+                .growth_factor(factor)
+                .build(),
+        )
+        .expect("BUG: open test resource with hard-coded params must succeed")
+    }
+
+    /// The growth factor is the caller's: at 1 a write past the mapping's end
+    /// grows it to exactly that end and nothing more.
+    #[kithara::test(timeout(Duration::from_secs(1)))]
+    fn a_growth_factor_of_one_grows_to_exactly_the_write() {
+        let dir = TempDir::new().unwrap();
+        let res = create_resource_growing_by(&dir, 64, 1);
+
+        res.write_at(0, &[7u8; 100]).unwrap();
+
+        assert_eq!(
+            fs::metadata(dir.path().join("test.dat")).unwrap().len(),
+            100
+        );
+    }
+
+    /// The default doubles instead, so the same write leaves room for the next
+    /// one rather than re-mapping on every write.
+    #[kithara::test(timeout(Duration::from_secs(1)))]
+    fn the_default_growth_factor_overshoots_the_write() {
+        let dir = TempDir::new().unwrap();
+        let res = create_resource_growing_by(&dir, 64, DEFAULT_GROWTH_FACTOR);
+
+        res.write_at(0, &[7u8; 100]).unwrap();
+
+        assert_eq!(
+            fs::metadata(dir.path().join("test.dat")).unwrap().len(),
+            128
+        );
     }
 
     /// Sealing finalizes the bytes without publishing a snapshot, because the

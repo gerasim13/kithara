@@ -34,11 +34,9 @@ fn open_chunked_result(dir: &TempDir, name: &str) -> StorageResult<AtomicChunked
         };
         Resource::open(
             cancel.clone(),
-            MmapOptions {
-                mode,
-                initial_len: None,
-                path: target.to_path_buf(),
-            },
+            MmapOptions::for_path(target.to_path_buf())
+                .mode(mode)
+                .build(),
         )
     })
 }
@@ -146,11 +144,9 @@ fn concurrent_open_atomic_claim_returns_tmp_claimed() {
             };
             Resource::open(
                 cancel.clone(),
-                MmapOptions {
-                    mode,
-                    initial_len: None,
-                    path: target.to_path_buf(),
-                },
+                MmapOptions::for_path(target.to_path_buf())
+                    .mode(mode)
+                    .build(),
             )
         }
     };
