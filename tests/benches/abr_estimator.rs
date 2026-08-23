@@ -14,7 +14,7 @@ use kithara_integration_tests::auto;
 
 fn settings() -> AbrSettings {
     AbrSettings::builder()
-        .initial_throughput_bps(2_000_000)
+        .initial_throughput_bps(Some(2_000_000))
         .min_switch_interval(Duration::ZERO)
         .min_buffer_for_up_switch(Duration::ZERO)
         .build()

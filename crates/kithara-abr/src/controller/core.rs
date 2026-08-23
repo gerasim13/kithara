@@ -1,6 +1,6 @@
 use std::{
     num::NonZeroU64,
-    sync::atomic::{AtomicBool, AtomicU64, Ordering},
+    sync::atomic::{AtomicU64, Ordering},
     task::Waker,
 };
 
@@ -84,11 +84,7 @@ pub struct AbrSettings {
     #[builder(default = Defaults::URGENT_DOWNSWITCH_BUFFER)]
     pub urgent_downswitch_buffer: Duration,
     /// Seed throughput estimate (bps) applied at controller construction.
-    #[builder(
-        required,
-        with = Some,
-        default = Some(Defaults::INITIAL_THROUGHPUT_BPS)
-    )]
+    #[builder(required, default = Some(Defaults::INITIAL_THROUGHPUT_BPS))]
     pub initial_throughput_bps: Option<u64>,
     /// Global data-saver cap.
     pub max_bandwidth_bps: Option<u64>,
@@ -168,7 +164,7 @@ impl AbrController {
         {
             bus.publish(AbrEvent::MaxBandwidthCapChanged { cap });
         }
-        self.request_tick(peer_id);
+        self.tick(peer_id);
     }
 
     #[kithara::probe(peer_id, mode)]
@@ -178,7 +174,7 @@ impl AbrController {
         {
             bus.publish(AbrEvent::ModeChanged { mode });
         }
-        self.request_tick(peer_id);
+        self.tick(peer_id);
         if let Some(entry) = self.peer_entry(peer_id)
             && let Some(peer) = entry.peer_weak.upgrade()
         {
@@ -195,7 +191,7 @@ impl AbrController {
         {
             bus.publish(AbrEvent::Unlocked);
         }
-        self.request_tick(peer_id);
+        self.tick(peer_id);
     }
 
     pub(crate) fn peer_entry(&self, id: AbrPeerId) -> Option<Arc<PeerEntry>> {
@@ -217,18 +213,10 @@ impl AbrController {
         let registration_cancel = self.scope.token().child();
         let cancel = CancelGroup::new(vec![registration_cancel.clone(), peer.cancel()]);
         let bus: Arc<RwLock<Option<EventBus>>> = Arc::new(RwLock::default());
-        let entry = Arc::new(PeerEntry {
-            peer_weak,
-            bus: Arc::clone(&bus),
-            variants_registered_published: AtomicBool::new(false),
-            bytes_downloaded: AtomicU64::new(0),
-            cancel,
-            registration_cancel,
-            tick_deadline: Mutex::default(),
-            tick_requested: AtomicBool::new(false),
-            throttle: Mutex::default(),
-            state: state.clone(),
-        });
+        let entry = Arc::new(
+            PeerEntry::new(peer_weak, Arc::clone(&bus), cancel, registration_cancel)
+                .with_state(state.clone()),
+        );
         self.peers.insert(id, entry);
         AbrHandle::new(Arc::clone(self), id, state, bus)
     }

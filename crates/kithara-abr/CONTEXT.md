@@ -4,7 +4,7 @@ Detailed contracts and invariants for the kithara-abr crate; the README is the o
 
 ## Decision flow
 
-`AbrController::record_bandwidth` → `Estimator::push_sample` → coalesced `request_tick(peer_id)` → downloader `Registry::tick` → ABR `tick(peer_id, now)`:
+`AbrController::record_bandwidth` → `Estimator::push_sample` → coalesced `tick(peer_id)` → downloader `Registry::tick` → ABR `run_tick(peer_id, now)`:
 
 1. Resolve the peer entry and upgrade its `Weak<dyn Abr>`; either lookup failing aborts the tick silently.
 1. Pull `peer.variants()` and `peer.progress()`; `buffer_ahead = download_head_playback_time - reader_playback_time`.
@@ -35,7 +35,7 @@ The tick never publishes a variant change. Publication is a separate, boundary-d
 
 `Stay { MinInterval }` is a deferred decision, not a final verdict. The controller records one deadline for that peer at the exact remaining interval, so a completed download cannot leave the desired switch waiting forever for an unrelated future sample. The existing downloader loop polls the earliest ABR deadline inside its cancellation-safe `Registry::tick`; expiry requests the same canonical `tick`, never a cached target. Tick requests coalesce to one dirty bit per peer, while every bandwidth sample still reaches the estimator before the bit is set. No ABR task, peer timer, or ambient runtime lookup exists. Dropping the last `AbrHandle` removes the peer and its deadline.
 
-`decide()` avoids a heterogeneous guard cascade (parallel computes, then one tuple-match) and `tick()` uses a single Option-resolver instead of a homogeneous let-else cascade — see `crates/kithara-devtools/src/idioms/checks/guard_cascade.rs` for why, and what NOT to do as a workaround.
+`decide()` avoids a heterogeneous guard cascade (parallel computes, then one tuple-match) and `run_tick()` uses a single Option-resolver instead of a homogeneous let-else cascade — see `crates/kithara-devtools/src/idioms/checks/guard_cascade.rs` for why, and what NOT to do as a workaround.
 
 ## Pending protocol and publication authority
 
@@ -67,7 +67,7 @@ Dual-track EWMA — fast (2 s half-life) and slow (10 s half-life); estimate = `
 
 `AbrSettings::initial_throughput_bps` (default `Some(2_000_000)`) is applied to the estimator at controller construction so the first tick can pick a sensible variant before a real sample lands. ≈2 Mbps covers Wi-Fi and most 4G; constrained networks down-switch after the first real sample. It is a transient prior — real EWMA weight replaces it through the `min(fast, slow)` consensus. Set it to `None` for the cold-start path: `decide()` returns `NoEstimate` and the peer stays on its initial variant until samples accumulate.
 
-`AbrSettings` is the facade configuration for the controller: it carries both algorithm parameters and injected resources such as the optional parent `CancelToken`. It is `#[non_exhaustive]` and built with `AbrSettings::builder()…build()` (`Default` goes through the builder); the `initial_throughput_bps` setter takes a bare `u64`.
+`AbrSettings` is the facade configuration for the controller: it carries both algorithm parameters and injected resources such as the optional parent `CancelToken`. It is `#[non_exhaustive]` and built with `AbrSettings::builder()…build()` (`Default` goes through the builder); `initial_throughput_bps(Some(value))` sets the seed and `initial_throughput_bps(None)` explicitly disables it.
 
 ## Ownership
 

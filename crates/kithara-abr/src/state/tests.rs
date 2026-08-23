@@ -51,11 +51,10 @@ fn test_variants_3() -> Vec<VariantInfo> {
 }
 
 fn settings_fast() -> AbrSettings {
-    AbrSettings {
-        min_switch_interval: Duration::ZERO,
-        min_buffer_for_up_switch: Duration::ZERO,
-        ..AbrSettings::default()
-    }
+    AbrSettings::builder()
+        .min_switch_interval(Duration::ZERO)
+        .min_buffer_for_up_switch(Duration::ZERO)
+        .build()
 }
 
 fn view_with_bw<'a>(
@@ -146,12 +145,11 @@ fn decide_downswitch_when_bandwidth_drops() {
 fn decide_urgent_downswitch_when_buffer_low() {
     let state = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(2))));
     let variants = test_variants_3();
-    let settings = AbrSettings {
-        urgent_downswitch_buffer: Duration::from_secs(5),
-        down_hysteresis_ratio: 0.01,
-        min_switch_interval: Duration::ZERO,
-        ..AbrSettings::default()
-    };
+    let settings = AbrSettings::builder()
+        .urgent_downswitch_buffer(Duration::from_secs(5))
+        .down_hysteresis_ratio(0.01)
+        .min_switch_interval(Duration::ZERO)
+        .build();
     let view = AbrView {
         estimate_bps: Some(700_000),
         buffer_ahead: Some(Duration::from_secs(2)),
@@ -167,11 +165,10 @@ fn decide_urgent_downswitch_when_buffer_low() {
 fn decide_buffer_too_low_for_upswitch() {
     let state = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0))));
     let variants = test_variants_3();
-    let settings = AbrSettings {
-        min_buffer_for_up_switch: Duration::from_secs(10),
-        min_switch_interval: Duration::ZERO,
-        ..AbrSettings::default()
-    };
+    let settings = AbrSettings::builder()
+        .min_buffer_for_up_switch(Duration::from_secs(10))
+        .min_switch_interval(Duration::ZERO)
+        .build();
     let view = AbrView {
         estimate_bps: Some(3_000_000),
         buffer_ahead: Some(Duration::from_secs(2)),
@@ -650,11 +647,10 @@ fn request_target_accepts_manual_pin_target() {
 fn min_switch_interval_prevents_oscillation() {
     let state = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0))));
     let variants = test_variants_3();
-    let settings = AbrSettings {
-        min_switch_interval: Duration::from_secs(30),
-        min_buffer_for_up_switch: Duration::ZERO,
-        ..AbrSettings::default()
-    };
+    let settings = AbrSettings::builder()
+        .min_switch_interval(Duration::from_secs(30))
+        .min_buffer_for_up_switch(Duration::ZERO)
+        .build();
     let now = Instant::now();
     let view = AbrView {
         estimate_bps: Some(3_000_000),
@@ -689,11 +685,10 @@ fn min_switch_interval_prevents_oscillation() {
 fn min_switch_interval_guards_the_first_switch_of_a_session() {
     let state = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0))));
     let variants = test_variants_3();
-    let settings = AbrSettings {
-        min_switch_interval: Duration::from_secs(30),
-        min_buffer_for_up_switch: Duration::ZERO,
-        ..AbrSettings::default()
-    };
+    let settings = AbrSettings::builder()
+        .min_switch_interval(Duration::from_secs(30))
+        .min_buffer_for_up_switch(Duration::ZERO)
+        .build();
     let now = Instant::now();
     let view = AbrView {
         estimate_bps: Some(3_000_000),
@@ -719,11 +714,10 @@ fn min_switch_interval_guards_the_first_switch_of_a_session() {
 fn urgent_down_switch_is_not_held_by_the_switch_interval() {
     let state = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(2))));
     let variants = test_variants_3();
-    let settings = AbrSettings {
-        min_switch_interval: Duration::from_secs(30),
-        urgent_downswitch_buffer: Duration::from_secs(5),
-        ..AbrSettings::default()
-    };
+    let settings = AbrSettings::builder()
+        .min_switch_interval(Duration::from_secs(30))
+        .urgent_downswitch_buffer(Duration::from_secs(5))
+        .build();
     let now = Instant::now();
     let view = AbrView {
         estimate_bps: Some(1),
@@ -937,7 +931,7 @@ async fn auto_mode_with_default_seed_picks_high_variant_on_cold_start() {
         variants: audio_variants_4tier(),
     });
     let handle = controller.register(&peer);
-    controller.tick(handle.peer_id(), Instant::now());
+    controller.run_tick(handle.peer_id(), Instant::now());
     assert_eq!(
         state.pending_target(),
         Some(VariantIndex::new(3)),
@@ -952,12 +946,11 @@ async fn auto_mode_with_default_seed_picks_high_variant_on_cold_start() {
 /// initial variant (0).
 #[kithara::test(tokio)]
 async fn auto_mode_without_seed_stays_on_initial_variant_on_cold_start() {
-    let settings = AbrSettings {
-        initial_throughput_bps: None,
-        min_switch_interval: Duration::ZERO,
-        min_buffer_for_up_switch: Duration::ZERO,
-        ..AbrSettings::default()
-    };
+    let settings = AbrSettings::builder()
+        .initial_throughput_bps(None)
+        .min_switch_interval(Duration::ZERO)
+        .min_buffer_for_up_switch(Duration::ZERO)
+        .build();
     let controller = AbrController::new(settings);
     let state = Arc::new(AbrState::new(AbrMode::Auto(None)));
     let peer: Arc<dyn Abr> = Arc::new(SeedPeer {
@@ -966,7 +959,7 @@ async fn auto_mode_without_seed_stays_on_initial_variant_on_cold_start() {
         variants: audio_variants_4tier(),
     });
     let handle = controller.register(&peer);
-    controller.tick(handle.peer_id(), Instant::now());
+    controller.run_tick(handle.peer_id(), Instant::now());
     assert_eq!(state.current_variant_index(), VariantIndex::new(0));
     assert_eq!(state.pending_target(), None);
     drop(handle);
@@ -1228,11 +1221,10 @@ async fn tick_already_optimal_retracts_stale_throughput_pending() {
 // construction: both must come from the same clock, so this one opts out
 #[kithara::test(flash(false))]
 fn tick_min_interval_hold_preserves_pending() {
-    let settings = AbrSettings {
-        min_switch_interval: Duration::from_secs(30),
-        min_buffer_for_up_switch: Duration::ZERO,
-        ..AbrSettings::default()
-    };
+    let settings = AbrSettings::builder()
+        .min_switch_interval(Duration::from_secs(30))
+        .min_buffer_for_up_switch(Duration::ZERO)
+        .build();
     let controller = AbrController::new(settings);
     let state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0)))));
     let peer: Arc<dyn Abr> = Arc::new(SeedPeer {
@@ -1245,7 +1237,7 @@ fn tick_min_interval_hold_preserves_pending() {
 
     // The 2 Mbps seed still wants the up-switch; only the interval holds it,
     // so `evaluate()` reports `Stay { MinInterval }` on this tick.
-    controller.tick(handle.peer_id(), Instant::now());
+    controller.run_tick(handle.peer_id(), Instant::now());
 
     assert_eq!(
         state.pending_target(),

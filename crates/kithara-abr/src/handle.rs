@@ -178,7 +178,7 @@ impl AbrHandle {
     /// must fire OUTSIDE the lock. Mirrors the controller's `on_*` hooks.
     #[kithara::probe]
     pub fn reevaluate(&self) {
-        self.inner.controller.request_tick(self.inner.peer_id);
+        self.inner.controller.tick(self.inner.peer_id);
     }
 
     /// Variant selected for a seek replacement, including a locked pending
@@ -315,11 +315,10 @@ mod tests {
     }
 
     fn settings_fast() -> AbrSettings {
-        AbrSettings {
-            min_switch_interval: Duration::ZERO,
-            min_buffer_for_up_switch: Duration::ZERO,
-            ..AbrSettings::default()
-        }
+        AbrSettings::builder()
+            .min_switch_interval(Duration::ZERO)
+            .min_buffer_for_up_switch(Duration::ZERO)
+            .build()
     }
 
     struct StatefulPeer {

@@ -5,7 +5,7 @@ use kithara_platform::{sync::Arc, time::Instant};
 use super::core::{AbrController, AbrPeerId};
 
 impl AbrController {
-    pub(crate) fn request_tick(&self, peer_id: AbrPeerId) {
+    pub(crate) fn tick(&self, peer_id: AbrPeerId) {
         let Some(entry) = self.peer_entry(peer_id) else {
             return;
         };
@@ -38,7 +38,7 @@ impl AbrController {
         let mut ticked = false;
         while let Some(peer_id) = self.take_tick_request() {
             ticked = true;
-            self.tick(peer_id, Instant::now());
+            self.run_tick(peer_id, Instant::now());
         }
         ticked
     }

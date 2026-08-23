@@ -6,7 +6,7 @@
 //!   callbacks + the [`AbrSettings`] config and [`AbrPeerId`] identifier.
 //! - `driver` - coalesced tick readiness and deadlines polled by the existing
 //!   downloader run loop.
-//! - `tick` — `record_bandwidth` + `tick`. The `tick` body uses a
+//! - `tick` — `record_bandwidth` + `run_tick`. The tick body uses a
 //!   `TickContext::resolve` Option-resolver to collapse the previous
 //!   homogeneous let-else cascade — see `xtask/src/idioms/checks/guard_cascade.rs`
 //!   module docs for the rationale.

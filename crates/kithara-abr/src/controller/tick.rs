@@ -58,11 +58,11 @@ impl AbrController {
             }
         }
 
-        self.request_tick(peer_id);
+        self.tick(peer_id);
     }
 
     #[kithara::probe(peer_id)]
-    pub(crate) fn tick(self: &Arc<Self>, peer_id: AbrPeerId, now: Instant) {
+    pub(crate) fn run_tick(self: &Arc<Self>, peer_id: AbrPeerId, now: Instant) {
         let Some(ctx) = TickContext::resolve(self, peer_id) else {
             return;
         };

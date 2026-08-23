@@ -14,6 +14,9 @@ use super::throttle::EventThrottleCache;
 use crate::{abr::Abr, state::AbrState};
 
 /// Per-peer bookkeeping shared by tick orchestration and throttling.
+#[derive(fieldwork::Fieldwork)]
+#[non_exhaustive]
+#[fieldwork(opt_in, with, vis = "pub(super)")]
 pub(crate) struct PeerEntry {
     pub(crate) peer_weak: Weak<dyn Abr>,
     pub(super) bus: Arc<RwLock<Option<EventBus>>>,
@@ -24,10 +27,31 @@ pub(crate) struct PeerEntry {
     pub(super) tick_deadline: Mutex<Option<Instant>>,
     pub(super) tick_requested: AtomicBool,
     pub(super) throttle: Mutex<EventThrottleCache>,
+    #[field(with)]
     pub(super) state: Option<Arc<AbrState>>,
 }
 
 impl PeerEntry {
+    pub(super) fn new(
+        peer_weak: Weak<dyn Abr>,
+        bus: Arc<RwLock<Option<EventBus>>>,
+        cancel: CancelGroup,
+        registration_cancel: CancelToken,
+    ) -> Self {
+        Self {
+            peer_weak,
+            bus,
+            cancel,
+            registration_cancel,
+            variants_registered_published: AtomicBool::default(),
+            bytes_downloaded: AtomicU64::default(),
+            tick_deadline: Mutex::default(),
+            tick_requested: AtomicBool::default(),
+            throttle: Mutex::default(),
+            state: None,
+        }
+    }
+
     pub(super) fn clear_tick_deadline(&self) {
         *self.tick_deadline.lock() = None;
     }
