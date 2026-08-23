@@ -461,6 +461,25 @@ mod tests {
         );
     }
 
+    /// The host builds a fresh program every frame, so the key the second frame
+    /// offers is a different `Rc` carrying an equal face. A cache that compared
+    /// the pointer would miss on every frame of a table nothing touched, and the
+    /// test above cannot say so: it hands the second frame the very program the
+    /// first one keyed on.
+    #[kithara::test]
+    fn a_table_rebuilt_from_scratch_still_holds_its_key() {
+        let state = TableState::default();
+        let first = paint();
+        marked(&state, &first, &still(&first));
+
+        let second = paint();
+        assert_eq!(
+            marked(&state, &second, &still(&second)),
+            Marked::Kept,
+            "a face rebuilt with the same rows must answer the key it built"
+        );
+    }
+
     /// A row under the pointer is a different picture.
     #[kithara::test]
     fn a_table_whose_hovered_row_moved_draws_again() {
