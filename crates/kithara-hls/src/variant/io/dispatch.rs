@@ -22,7 +22,12 @@ impl HlsVariant {
     #[kithara::probe(
         variant = self.variant as u64,
         budget = budget as u64,
-        queue_len = self.flow.queue.lock().len() as u64
+        queue_len = self.flow.queue.lock().len() as u64,
+        queue_head = self.flow.queue.lock().front().map_or(u64::MAX, |f| match f {
+            PlannedFetch::Init => u64::MAX - 1,
+            PlannedFetch::Segment(idx) => u64::from(*idx),
+        }),
+        cap = construction_segment_end.map_or(u64::MAX, u64::from)
     )]
     /// Emits prioritized fetches within construction and look-ahead bounds.
     ///
