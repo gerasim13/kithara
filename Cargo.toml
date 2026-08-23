@@ -409,9 +409,15 @@ uuid = { version = "1", features = ["v5"] }
 # would add a second wgpu major beside the 27 that iced already brings.
 velato = { version = "0.8", default-features = false }
 vello = { version = "0.6", default-features = false }
-wasm-bindgen = "0.2"
-wasm-bindgen-futures = "0.4"
-wasm-bindgen-test = "0.3"
+# Exact, because `wasm-bindgen` refuses a Wasm file whose bindgen schema differs from the
+# CLI's, and the CI image carries `wasm-bindgen-cli` 0.2.120. The UI stack added here
+# (wgpu 27, winit, softbuffer, bevy_platform) accepts `js-sys`/`web-sys` 0.3.103, which
+# pulls bindgen 0.2.126; the browser lane then rejects every Wasm file it is handed and
+# reports nothing rather than failing loudly. Caret ranges cannot express "whatever the
+# image installed", so the three move together and only with the image.
+wasm-bindgen = "=0.2.120"
+wasm-bindgen-futures = "=0.4.70"
+wasm-bindgen-test = "=0.3.70"
 wasm_safe_thread = "0.1.1"
 web-sys = { version = "0.3", features = ["AudioData", "AudioDataCopyToOptions", "AudioDecoder", "AudioDecoderConfig", "AudioDecoderInit", "AudioDecoderSupport", "AudioSampleFormat", "Blob", "BroadcastChannel", "console", "DedicatedWorkerGlobalScope", "Document", "Element", "EncodedAudioChunk", "EncodedAudioChunkInit", "EncodedAudioChunkType", "Event", "EventTarget", "File", "FileList", "FileReader", "HtmlElement", "HtmlInputElement", "MessageEvent", "Window"] }
 web-time = "1.1"
