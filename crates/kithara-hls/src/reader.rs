@@ -250,12 +250,11 @@ mod tests {
 
     use super::*;
     use crate::{
-        config::SizeProbeMethod,
         playlist::{PlaylistState, SegmentState, VariantState},
         segment::{MediaSegment, Segment, SegmentContent, SegmentSize, SegmentSlotState},
         signal::SizeSignal,
         stream::HlsCoordEnv,
-        variant::{PlanCtx, VariantParts},
+        variant::{PlanConfig, PlanCtx, VariantParts},
     };
 
     struct TestAbrPeer {
@@ -278,7 +277,6 @@ mod tests {
         );
         PlanCtx {
             bus: bus.clone(),
-            prefetch_budget: 1,
             scope: store
                 .scope::<crate::Hls>(&AssetSource::Remote {
                     url: "https://example.com/master.m3u8"
@@ -288,11 +286,9 @@ mod tests {
                 })
                 .expect("reader asset scope"),
             seek_epoch: 0,
-            look_ahead_bytes: None,
-            look_ahead_segments: None,
             headers: None,
-            size_probe_method: SizeProbeMethod::Head,
             signal: SizeSignal::new(Arc::new(ThreadGate::default()), Arc::new(OnceLock::new())),
+            config: PlanConfig::builder().prefetch_budget(1).build(),
         }
     }
 

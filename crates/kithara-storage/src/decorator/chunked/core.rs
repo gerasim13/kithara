@@ -41,12 +41,18 @@ struct TmpClaim {
 impl TmpClaim {
     /// Take the claim on `path`, or report who holds it.
     ///
-    /// Never truncates: a claimant that loses the race must leave the
-    /// winner's in-flight bytes untouched. Bytes a *dead* writer left behind
-    /// need no wiping either — the successor's inner opens with
-    /// [`OpenIntent::Fresh`], so nothing records them as available and no
-    /// reader can reach them, and `commit` trims the file back to
-    /// `final_len`.
+    /// Wipes the tmp on the way in, but only once the lock is won: winning it
+    /// proves no other writer is live, while a claimant that loses must leave
+    /// the winner's in-flight bytes untouched — which is why the open itself
+    /// must not truncate.
+    ///
+    /// The wipe is what `OpenOptions::create_new` used to give for free, and
+    /// emptiness is the invariant the driver reads the tmp against: a
+    /// `MmapDriver::open` that finds a non-empty file adopts it whole —
+    /// `available.insert(0..len)`, `is_committed: true`, `final_len:
+    /// Some(len)` — so a dead owner's bytes would come back not as unreachable
+    /// residue but as committed, readable payload. `commit` is no backstop
+    /// either: it trims to `final_len` only when the caller knows it.
     fn take(path: PathBuf) -> StorageResult<Self> {
         let file = OpenOptions::new()
             .read(true)
@@ -55,7 +61,10 @@ impl TmpClaim {
             .truncate(false)
             .open(&path)?;
         match file.try_lock() {
-            Ok(()) => Ok(Self { path, file }),
+            Ok(()) => {
+                file.set_len(0)?;
+                Ok(Self { path, file })
+            }
             Err(TryLockError::WouldBlock) => Err(StorageError::TmpClaimed(path)),
             Err(TryLockError::Error(e)) => Err(StorageError::Io(e)),
         }
