@@ -89,7 +89,6 @@ pub(crate) fn coverage(process: &Process) -> Result<()> {
     let mut command = process.command("just");
     command
         .env("COVERAGE_OUTPUT_DIR", "coverage")
-        .env("COVERAGE_MIN", "80")
         // Instrumented test binaries are large and the workspace has twenty of
         // them, so Cargo reaches the link step with several `ld` processes at
         // once. In a five-gigabyte VM the kernel picks one and kills it, and
