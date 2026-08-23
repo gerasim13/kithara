@@ -6,7 +6,8 @@ use super::{
     overlay::{self, Overlay},
 };
 use crate::{
-    draw::{DrawListBuilder, Pt, Rect, Rgba},
+    atoms::design::quad::rule,
+    draw::{DrawListBuilder, Rect, Rgba},
     module::WaveStyle,
     render::{WaveBucket, WaveformView},
     shaping::TextContext,
@@ -138,17 +139,12 @@ impl WavePaint<'_> {
     ) {
         if !self.hero() {
             let head_x = bounds.x + self.progress.clamp(0.0, 1.0) * bounds.w;
-            list.stroke_line(
-                Pt {
-                    x: head_x,
-                    y: bounds.y,
-                },
-                Pt {
-                    x: head_x,
-                    y: bounds.y + bounds.h,
-                },
-                self.palette.accent,
+            rule(
+                list,
+                bounds,
+                head_x,
                 self.metrics.playhead_width,
+                self.palette.accent,
             );
             list.fill_rect(
                 Rect {
@@ -242,7 +238,7 @@ mod tests {
     use crate::{
         atoms::wave::overlay::OverlayPalette,
         builtin,
-        draw::{DrawCmd, DrawList, Geom, Paint, Transform},
+        draw::{DrawCmd, DrawList, Geom, Paint, Pt, Transform},
     };
 
     #[kithara::test]
@@ -343,22 +339,22 @@ mod tests {
                 ..palette.bg_deep
             }
         ));
-        assert!(has_line(
+        assert!(has_rule(
             commands,
             Rgba {
                 a: paint.metrics.grid_alpha,
                 ..palette.line
             }
         ));
-        assert!(has_line(
+        assert!(has_rule(
             commands,
             Rgba {
                 a: paint.metrics.downbeat_alpha,
                 ..palette.text_dim
             }
         ));
-        assert!(has_line(commands, palette.accent));
-        assert!(has_line(commands, palette.wave_high));
+        assert!(has_rule(commands, palette.accent));
+        assert!(has_rule(commands, palette.wave_high));
         assert!(
             commands
                 .iter()
@@ -456,7 +452,7 @@ mod tests {
             for color in expected {
                 assert!(has_fill(commands, color));
             }
-            assert!(has_line(commands, palette.accent));
+            assert!(has_rule(commands, palette.accent));
             assert!(!has_fill(
                 commands,
                 Rgba {
@@ -567,15 +563,17 @@ mod tests {
             .any(|command| matches!(command, DrawCmd::Fill { paint: Paint::Solid(found), .. } if *found == color))
     }
 
-    fn has_line(commands: &[DrawCmd], color: Rgba) -> bool {
+    /// A rule the painter drew in `color`: a mark down the wave is filled on
+    /// the columns it covers rather than stroked astride them, so it reads as a
+    /// rectangle taller than it is wide.
+    fn has_rule(commands: &[DrawCmd], color: Rgba) -> bool {
         commands.iter().any(|command| {
             matches!(
                 command,
-                DrawCmd::Stroke {
-                    geom: Geom::Line { .. },
-                    color: found,
-                    ..
-                } if *found == color
+                DrawCmd::Fill {
+                    geom: Geom::Rect(rect),
+                    paint: Paint::Solid(found),
+                } if *found == color && rect.h > rect.w
             )
         })
     }

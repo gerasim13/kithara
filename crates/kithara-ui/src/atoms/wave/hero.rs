@@ -11,6 +11,7 @@ use super::{
     },
 };
 use crate::{
+    atoms::design::quad::rule,
     draw::{DrawListBuilder, Pt, Rect, Rgba, Transform},
     render::WaveBucket,
     shaping::TextContext,
@@ -132,15 +133,7 @@ fn draw_marks(
 ) {
     for &mark in marks {
         let x = bounds.x + norm_to_x(mark, window, bounds.w);
-        list.stroke_line(
-            Pt { x, y: bounds.y },
-            Pt {
-                x,
-                y: bounds.y + bounds.h,
-            },
-            color,
-            width,
-        );
+        rule(list, bounds, x, width, color);
     }
 }
 
@@ -172,15 +165,7 @@ fn draw_loop(
     for x in [start_x, end_x] {
         if (0.0..=bounds.w).contains(&x) {
             let x = bounds.x + x;
-            list.stroke_line(
-                Pt { x, y: bounds.y },
-                Pt {
-                    x,
-                    y: bounds.y + bounds.h,
-                },
-                palette.accent,
-                metrics.loop_bound_width,
-            );
+            rule(list, bounds, x, metrics.loop_bound_width, palette.accent);
         }
     }
 }
@@ -196,14 +181,12 @@ fn draw_cues(
 ) {
     for index in visible_mark_range(cues, window) {
         let x = bounds.x + norm_to_x(cues[index], window, bounds.w);
-        list.stroke_line(
-            Pt { x, y: bounds.y },
-            Pt {
-                x,
-                y: bounds.y + bounds.h,
-            },
-            palette.base.wave_high,
+        rule(
+            list,
+            bounds,
+            x,
             metrics.cue_line_width,
+            palette.base.wave_high,
         );
         let badge = Rect {
             h: metrics.cue_badge_size,
@@ -256,15 +239,7 @@ fn draw_playhead(
     palette: WavePalette,
 ) {
     let x = bounds.x + norm_to_x(position.clamp(0.0, 1.0), window, bounds.w);
-    list.stroke_line(
-        Pt { x, y: bounds.y },
-        Pt {
-            x,
-            y: bounds.y + bounds.h,
-        },
-        palette.accent,
-        metrics.playhead_width,
-    );
+    rule(list, bounds, x, metrics.playhead_width, palette.accent);
     let marker_x = x - metrics.playhead_marker_width / 2.0;
     for y in [
         bounds.y,

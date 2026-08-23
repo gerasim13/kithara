@@ -290,9 +290,10 @@ mod tests {
     use super::{Drawn, Rect, Skin, Wave, WaveStyle, cached_extent};
     use crate::{
         builtin,
-        draw::{DrawCmd, DrawListBuilder, Geom, Pt},
+        draw::{DrawCmd, DrawListBuilder, Geom, Paint, Pt, Rgba},
         render::{ReadValue, Reads, WaveBucket, WaveformView},
         shaping::TextContext,
+        skin::ColorRole,
     };
 
     struct CacheReads(Option<f64>);
@@ -501,12 +502,16 @@ mod tests {
                 ..
             }
         )));
+        let grid = Rgba {
+            a: skin.wave.grid_alpha,
+            ..skin.rgba(ColorRole::Line)
+        };
         assert!(list.commands().iter().any(|command| matches!(
             command,
-            DrawCmd::Stroke {
-                geom: Geom::Line { .. },
-                ..
-            }
+            DrawCmd::Fill {
+                geom: Geom::Rect(rect),
+                paint: Paint::Solid(found),
+            } if *found == grid && rect.h > rect.w
         )));
         assert!(list.commands().iter().any(|command| matches!(
             command,

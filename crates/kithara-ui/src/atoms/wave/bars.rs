@@ -1,6 +1,7 @@
 use num_traits::cast::AsPrimitive;
 
 use crate::{
+    atoms::design::quad::snap,
     draw::{DrawListBuilder, Rect, Rgba},
     render::WaveBucket,
     skin::WaveSkin,
@@ -112,12 +113,6 @@ pub(crate) fn draw_column(
             color,
         );
     }
-}
-
-/// The whole pixel a coordinate belongs to, ties going the same way on both
-/// sides of the origin.
-fn snap(value: f32) -> f32 {
-    (value + 0.5).floor()
 }
 
 #[cfg(test)]

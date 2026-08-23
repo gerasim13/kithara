@@ -1,7 +1,8 @@
 use crate::{
+    atoms::design::quad::quad,
     draw::{DrawListBuilder, Pt, Rect, Rgba, Transform},
     shaping::TextContext,
-    skin::{ColorRole, FontFamily, FontSkin, FrameSkin, TextRoleSkin, WaveOverlaySkin},
+    skin::{ColorRole, FontFamily, FontSkin, TextRoleSkin, WaveOverlaySkin},
 };
 
 #[derive(Clone, Copy)]
@@ -82,7 +83,7 @@ fn draw_art(
         x: header.x + metrics.padding_x,
         y: header.y + (header.h - metrics.art_size) / 2.0,
     };
-    draw_box(
+    quad(
         list,
         art,
         metrics.art_frame,
@@ -119,7 +120,7 @@ fn draw_telemetry(
         x: right - metrics.badge_size,
         y: header.y + (header.h - metrics.badge_size) / 2.0,
     };
-    draw_box(
+    quad(
         list,
         badge,
         metrics.badge_frame,
@@ -228,7 +229,7 @@ fn draw_readout(
 ) {
     let (label, value, value_color, framed) = data;
     if framed {
-        draw_box(
+        quad(
             list,
             bounds,
             metrics.readout_frame,
@@ -266,19 +267,6 @@ fn draw_readout(
         metrics.readout_value,
         value_color,
     );
-}
-
-fn draw_box(
-    list: &mut DrawListBuilder,
-    bounds: Rect,
-    skin: FrameSkin,
-    background: Rgba,
-    border: Rgba,
-) {
-    list.fill_rounded_rect(bounds, skin.radius, background);
-    if skin.border_width > 0.0 {
-        list.stroke_rounded_rect(bounds, skin.radius, border, skin.border_width);
-    }
 }
 
 fn draw_centered(
