@@ -267,6 +267,23 @@ const PAGES: &[Page] = &[
         retained_guard: "vello.gallery-clock",
     },
     Page {
+        // The file table, reported to cost frames while it merely stands there
+        // and to starve the visualiser beside it. Nothing on the page moves, so
+        // what this measures is the price of a still table: its canvas keeps no
+        // list and no tessellated geometry, and rebuilds both on every draw.
+        name: "gallery-table",
+        group: Group::Pages,
+        entry: "gallery-table.klayout.ron",
+        tab: Tab::Table,
+        frames: 120,
+        program: Program::Idle,
+        moving: None,
+        pointer_at: Pt { x: 700.0, y: 400.0 },
+        fenced: false,
+        immediate_guard: "iced.gallery-table",
+        retained_guard: "vello.gallery-table",
+    },
+    Page {
         name: "gallery-stress",
         group: Group::Pages,
         entry: "gallery-stress.klayout.ron",
@@ -1085,6 +1102,7 @@ impl Fixture {
             .resolver(&self.resolver)
             .skin(builtin::skin())
             .skin_doc(builtin::skin_doc())
+            .text(builtin::text_doc())
             .build()
     }
 
@@ -1464,7 +1482,7 @@ fn leaves(ui: &CompiledUi) -> Natives {
     while let Some(node) = stack.pop() {
         match node {
             CompiledNode::Split { children, .. } => {
-                stack.extend(children.iter().map(|(_, child)| child));
+                stack.extend(children.iter().map(|cell| &cell.node));
             }
             CompiledNode::Optional { child, .. } => stack.push(child),
             CompiledNode::Module { root, .. } => walk(root, &mut found),
@@ -1526,9 +1544,11 @@ struct Outcome<'run> {
 #[kithara::test]
 #[case("iced", Host::Immediate, "gallery-buttons")]
 #[case("iced", Host::Immediate, "gallery-clock")]
+#[case("iced", Host::Immediate, "gallery-table")]
 #[case("iced", Host::Immediate, "gallery-stress")]
 #[case("vello", Host::Retained, "gallery-buttons")]
 #[case("vello", Host::Retained, "gallery-clock")]
+#[case("vello", Host::Retained, "gallery-table")]
 #[case("vello", Host::Retained, "gallery-stress")]
 fn ui_page_perf(#[case] label: &'static str, #[case] host: Host, #[case] page: &'static str) {
     measure_one(label, host, Group::Pages, page);

@@ -623,6 +623,7 @@ impl Fixture {
             .resolver(&self.resolver)
             .skin(skin())
             .skin_doc(builtin::skin_doc())
+            .text(builtin::text_doc())
             .build()
     }
 
