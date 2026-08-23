@@ -17,7 +17,7 @@ use crate::state::{AbrDecision, AbrView};
 
 impl AbrController {
     /// Record a bandwidth sample for `peer_id`. Called by the Downloader
-    /// when a fetch completes. Also triggers a `tick` for the peer.
+    /// when a fetch completes. Also evaluates the peer at the sample timestamp.
     pub fn record_bandwidth(
         self: &Arc<Self>,
         peer_id: AbrPeerId,
@@ -58,7 +58,7 @@ impl AbrController {
             }
         }
 
-        self.tick(peer_id);
+        self.run_tick(peer_id, now);
     }
 
     #[kithara::probe(peer_id)]

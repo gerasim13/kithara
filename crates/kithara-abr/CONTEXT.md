@@ -4,7 +4,7 @@ Detailed contracts and invariants for the kithara-abr crate; the README is the o
 
 ## Decision flow
 
-`AbrController::record_bandwidth` → `Estimator::push_sample` → coalesced `tick(peer_id)` → downloader `Registry::tick` → ABR `run_tick(peer_id, now)`:
+`AbrController::record_bandwidth` → `Estimator::push_sample` → ABR `run_tick(peer_id, now)`:
 
 1. Resolve the peer entry and upgrade its `Weak<dyn Abr>`; either lookup failing aborts the tick silently.
 1. Pull `peer.variants()` and `peer.progress()`; `buffer_ahead = download_head_playback_time - reader_playback_time`.

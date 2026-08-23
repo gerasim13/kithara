@@ -862,7 +862,7 @@ async fn wait_for_controller_deadline(controller: &Arc<AbrController>) -> bool {
 }
 
 #[kithara::test(tokio)]
-async fn bandwidth_samples_are_preserved_while_tick_requests_coalesce() {
+async fn bandwidth_samples_are_preserved_across_immediate_ticks() {
     const SAMPLES: usize = 64;
 
     let samples = Arc::new(AtomicUsize::new(0));
@@ -891,8 +891,7 @@ async fn bandwidth_samples_are_preserved_while_tick_requests_coalesce() {
     }
 
     assert_eq!(samples.load(Ordering::Acquire), SAMPLES);
-    assert!(poll_controller(&controller, false).await);
-    assert_eq!(ticks.load(Ordering::Acquire), 1);
+    assert_eq!(ticks.load(Ordering::Acquire), SAMPLES);
     assert!(!poll_controller(&controller, false).await);
 }
 
@@ -1202,8 +1201,6 @@ async fn tick_already_optimal_retracts_stale_throughput_pending() {
         Duration::from_secs(1),
         BandwidthSource::Network,
     );
-    assert!(poll_controller(&controller, false).await);
-
     assert_eq!(
         state.pending_target(),
         None,
@@ -1214,6 +1211,7 @@ async fn tick_already_optimal_retracts_stale_throughput_pending() {
         VariantIndex::new(2),
         "retraction drops the intent, never the audible variant"
     );
+    assert!(!poll_controller(&controller, false).await);
     drop(handle);
 }
 
