@@ -200,6 +200,7 @@ impl Backend for IcedBackend<'_> {
         self.frame.stroke(&path(geom), stroke(color, pen));
     }
 
+    #[cfg_attr(feature = "perf", hotpath::measure(label = "iced.text.run"))]
     fn text(&mut self, run: &GlyphRun, _content: &str, transform: Transform, color: Rgba) {
         let resources = self.resources;
         let path = Path::new(|builder| {
@@ -235,6 +236,7 @@ impl Backend for IcedBackend<'_> {
     }
 }
 
+#[cfg_attr(feature = "perf", hotpath::measure(label = "iced.text.outline"))]
 fn draw_segment(
     builder: &mut Builder,
     segment: &GlyphSegment,
