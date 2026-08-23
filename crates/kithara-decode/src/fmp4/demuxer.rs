@@ -4,7 +4,7 @@ use kithara_stream::{AudioCodec, ByteMap, ReaderInput};
 use kithara_test_utils::kithara;
 
 use super::{
-    parsing::{CodecConfig, Fmp4Frame, Fmp4InitInfo, parse_init, parse_segment_frames},
+    parsing::{Fmp4Frame, Fmp4InitInfo, parse_init, parse_segment_frames},
     source_io::{FillStatus, LiveRange, SegmentReadState, fill_segment_buffer},
 };
 use crate::{
@@ -125,7 +125,7 @@ impl Fmp4SegmentDemuxer {
         )? {
             return Err(DecodeError::Interrupted);
         }
-        let init = parse_init(&init_state.buffer)?;
+        let init = parse_init(&init_state.buffer, &byte_pool)?;
         let duration = compute_duration(&segments);
         let track_info = build_track_info(&init, duration);
         Ok(Self {
@@ -311,9 +311,7 @@ fn compute_preroll_byte(
 }
 
 fn build_track_info(init: &Fmp4InitInfo, duration: Option<Duration>) -> TrackInfo {
-    let extra_data = match &init.config {
-        CodecConfig::Aac(bytes) | CodecConfig::Flac(bytes) => bytes.clone(),
-    };
+    let extra_data = init.config.as_ref().to_vec();
     TrackInfo {
         extra_data,
         duration,

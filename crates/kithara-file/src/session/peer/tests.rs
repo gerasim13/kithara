@@ -78,7 +78,12 @@ fn make_inner_with_cancel(
     cancel: CancelToken,
 ) -> Arc<FileInner> {
     Arc::new(FileInner::new(
-        FileSourceCtx { coord, cancel, bus },
+        FileSourceCtx {
+            coord,
+            cancel,
+            bus,
+            reader_event_capacity: 16,
+        },
         crate::session::inner::FileAssetCtx {
             reader,
             headers: None,

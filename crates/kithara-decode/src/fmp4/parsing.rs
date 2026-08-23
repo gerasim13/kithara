@@ -1,11 +1,17 @@
 use std::io::{Cursor, Read, Seek, SeekFrom};
 
+use kithara_bufpool::BytePool;
 use kithara_stream::AudioCodec;
 use re_mp4::{BoxHeader, BoxType, MoofBox, Mp4, ReadBox, StsdBoxContent, TfhdBox, TrunBox};
 
 use crate::error::{DecodeError, DecodeResult};
 
-const FOURCC_FLAC: u32 = 0x664c_6143;
+struct Consts;
+
+impl Consts {
+    const FLAC_STREAMINFO_BYTES: usize = 34;
+    const FOURCC_FLAC: u32 = 0x664c_6143;
+}
 
 /// Codec-specific decoder config bytes carried in the init segment.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -13,13 +19,14 @@ pub(crate) enum CodecConfig {
     /// AAC `AudioSpecificConfig` bytes (`ESDS` `DecoderSpecificInfo` body).
     Aac(Vec<u8>),
     /// FLAC `STREAMINFO` block payload (34 bytes, no metadata header).
-    Flac(Vec<u8>),
+    Flac([u8; Consts::FLAC_STREAMINFO_BYTES]),
 }
 
 impl AsRef<[u8]> for CodecConfig {
     fn as_ref(&self) -> &[u8] {
         match self {
-            Self::Aac(bytes) | Self::Flac(bytes) => bytes,
+            Self::Aac(bytes) => bytes,
+            Self::Flac(bytes) => bytes,
         }
     }
 }
@@ -55,7 +62,7 @@ pub(crate) struct Fmp4Frame {
 }
 
 /// Parse an `EXT-X-MAP` init segment.
-pub(crate) fn parse_init(bytes: &[u8]) -> DecodeResult<Fmp4InitInfo> {
+pub(crate) fn parse_init(bytes: &[u8], byte_pool: &BytePool) -> DecodeResult<Fmp4InitInfo> {
     let mp4 = Mp4::read_bytes(bytes).map_err(|e| DecodeError::parse("re_mp4", e))?;
 
     let track_box = mp4
@@ -88,7 +95,7 @@ pub(crate) fn parse_init(bytes: &[u8]) -> DecodeResult<Fmp4InitInfo> {
                 CodecConfig::Aac(asc),
             )
         }
-        StsdBoxContent::Unknown(fourcc) if u32::from(*fourcc) == FOURCC_FLAC => {
+        StsdBoxContent::Unknown(fourcc) if u32::from(*fourcc) == Consts::FOURCC_FLAC => {
             let (sample_rate, channels, streaminfo) = parse_flac_sample_entry(bytes)?;
             (
                 AudioCodec::Flac,
@@ -106,7 +113,7 @@ pub(crate) fn parse_init(bytes: &[u8]) -> DecodeResult<Fmp4InitInfo> {
 
     let gapless = {
         let mut cursor = Cursor::new(bytes);
-        crate::gapless::probe_mp4_gapless(&mut cursor).unwrap_or(None)
+        crate::gapless::probe_mp4_gapless(&mut cursor, byte_pool).unwrap_or(None)
     };
 
     Ok(Fmp4InitInfo {
@@ -293,7 +300,9 @@ fn read_descriptor_header(cursor: &mut Cursor<&[u8]>) -> DecodeResult<(u8, u32)>
 
 /// Locate `fLaC` sample entry inside the init bytes and read its
 /// associated `dfLa` box payload (FLAC STREAMINFO).
-fn parse_flac_sample_entry(bytes: &[u8]) -> DecodeResult<(u32, u16, Vec<u8>)> {
+fn parse_flac_sample_entry(
+    bytes: &[u8],
+) -> DecodeResult<(u32, u16, [u8; Consts::FLAC_STREAMINFO_BYTES])> {
     const FOURCC_DFLA: u32 = 0x6466_4c61;
 
     let mut cursor = Cursor::new(bytes);
@@ -319,7 +328,7 @@ fn parse_flac_sample_entry(bytes: &[u8]) -> DecodeResult<(u32, u16, Vec<u8>)> {
 
     let entry_start = cursor.position();
     let (entry_type, entry_size) = read_header(&mut cursor)?;
-    if u32::from(entry_type) != FOURCC_FLAC {
+    if u32::from(entry_type) != Consts::FOURCC_FLAC {
         return Err(DecodeError::InvalidData {
             detail: "expected fLaC sample entry",
         });
@@ -344,7 +353,7 @@ fn parse_flac_sample_entry(bytes: &[u8]) -> DecodeResult<(u32, u16, Vec<u8>)> {
             cursor
                 .seek(SeekFrom::Current(4 + 4))
                 .map_err(|e| DecodeError::parse("seek past dfLa header", e))?;
-            let mut payload = vec![0u8; 34];
+            let mut payload = [0u8; Consts::FLAC_STREAMINFO_BYTES];
             cursor
                 .read_exact(&mut payload)
                 .map_err(|e| DecodeError::parse("read STREAMINFO", e))?;
@@ -574,7 +583,7 @@ mod tests {
     #[kithara::test]
     fn parse_init_aac_extracts_codec_and_asc() {
         let bytes = read_fixture("init-slq-a1.mp4");
-        let init = parse_init(&bytes).expect("BUG: parse init");
+        let init = parse_init(&bytes, &BytePool::default()).expect("BUG: parse init");
         assert_eq!(init.codec, AudioCodec::AacLc);
         assert!(init.timescale > 0, "timescale={}", init.timescale);
         assert!(init.sample_rate >= 8_000 && init.sample_rate <= 96_000);
@@ -592,7 +601,7 @@ mod tests {
     #[kithara::test]
     fn parse_init_flac_extracts_streaminfo() {
         let bytes = read_fixture("init-slossless-a1.mp4");
-        let init = parse_init(&bytes).expect("BUG: parse FLAC init");
+        let init = parse_init(&bytes, &BytePool::default()).expect("BUG: parse FLAC init");
         assert_eq!(init.codec, AudioCodec::Flac);
         assert!(matches!(init.config, CodecConfig::Flac(_)));
         let len = init.config.as_ref().len();
@@ -602,7 +611,7 @@ mod tests {
     #[kithara::test]
     fn parse_segment_frames_aac_yields_monotonic_frames() {
         let init_bytes = read_fixture("init-slq-a1.mp4");
-        let init = parse_init(&init_bytes).expect("BUG: parse init");
+        let init = parse_init(&init_bytes, &BytePool::default()).expect("BUG: parse init");
         let seg_bytes = read_fixture("segment-1-slq-a1.m4s");
         let frames = parse_segment_frames(&init, &seg_bytes).expect("BUG: parse seg");
         assert!(
@@ -638,7 +647,7 @@ mod tests {
     #[kithara::test]
     fn parse_segment_frames_presizes_vec_to_sample_count() {
         let init_bytes = read_fixture("init-slq-a1.mp4");
-        let init = parse_init(&init_bytes).expect("BUG: parse init");
+        let init = parse_init(&init_bytes, &BytePool::default()).expect("BUG: parse init");
         let seg_bytes = read_fixture("segment-1-slq-a1.m4s");
         let frames = parse_segment_frames(&init, &seg_bytes).expect("BUG: parse seg");
         assert!(!frames.is_empty(), "segment must yield frames");
@@ -653,7 +662,7 @@ mod tests {
     #[kithara::test]
     fn parse_segment_frames_total_duration_matches_extinf() {
         let init_bytes = read_fixture("init-slq-a1.mp4");
-        let init = parse_init(&init_bytes).expect("BUG: parse init");
+        let init = parse_init(&init_bytes, &BytePool::default()).expect("BUG: parse init");
         let seg_bytes = read_fixture("segment-1-slq-a1.m4s");
         let frames = parse_segment_frames(&init, &seg_bytes).expect("BUG: parse seg");
         let total_ticks: u64 = frames.iter().map(|f| u64::from(f.duration)).sum();

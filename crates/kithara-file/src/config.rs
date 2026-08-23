@@ -4,7 +4,7 @@ use bon::Builder;
 use kithara_assets::{AssetStore, BytePool};
 use kithara_events::EventBus;
 use kithara_net::Headers;
-use kithara_platform::CancelToken;
+use kithara_platform::{CancelToken, time::Duration};
 use kithara_stream::dl::Downloader;
 use url::Url;
 
@@ -49,6 +49,19 @@ pub struct FileConfig {
     /// Event bus channel capacity (used when `bus` is not provided).
     #[builder(default = kithara_events::DEFAULT_EVENT_BUS_CAPACITY)]
     pub event_channel_capacity: usize,
+    /// Ring depth for the decode-core to shell reader-event hand-off. A decode
+    /// pass emits at most one progress event per decoded chunk, so the default
+    /// bounds the worst-case post-seek skip burst without blocking the decode
+    /// core.
+    #[builder(default = 256)]
+    pub reader_event_capacity: usize,
+    /// Poll interval while a sibling `AssetStore` instance holds the
+    /// atomic-chunked tmp for this file's canonical path. The default is short
+    /// enough that the observed ~67 ms race window in
+    /// `local_queue_playlist_behavior` resolves in a handful of ticks, long
+    /// enough not to busy-spin a tokio worker.
+    #[builder(default = Duration::from_millis(10))]
+    pub tmp_claim_poll_interval: Duration,
 }
 
 impl fmt::Debug for FileConfig {
@@ -64,6 +77,8 @@ impl fmt::Debug for FileConfig {
             .field("pool", &self.pool)
             .field("store", &self.store)
             .field("event_channel_capacity", &self.event_channel_capacity)
+            .field("reader_event_capacity", &self.reader_event_capacity)
+            .field("tmp_claim_poll_interval", &self.tmp_claim_poll_interval)
             .finish_non_exhaustive()
     }
 }

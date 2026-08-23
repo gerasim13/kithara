@@ -6,12 +6,7 @@ use kithara_assets::{
 };
 use kithara_events::{EventBus, FileError, FileEvent};
 use kithara_net::{Headers, HttpClient, NetOptions};
-use kithara_platform::{
-    CancelScope, CancelToken,
-    sync::Arc,
-    time::{Duration, sleep},
-    tokio,
-};
+use kithara_platform::{CancelScope, CancelToken, sync::Arc, time::sleep, tokio};
 use kithara_storage::StorageError;
 use kithara_stream::{
     PlayheadState, SeekState, SourceError as StreamSourceError, StreamType,
@@ -61,6 +56,7 @@ struct RemoteFileOpen {
     bus: EventBus,
     coord: Arc<FileCoord>,
     headers: Option<Headers>,
+    reader_event_capacity: usize,
     url: Url,
 }
 
@@ -95,7 +91,12 @@ fn completed_coord(len: Option<u64>) -> Arc<FileCoord> {
     coord
 }
 
-fn cached_source(reader: AssetReader, bus: EventBus, cancel: CancelToken) -> FileSource {
+fn cached_source(
+    reader: AssetReader,
+    bus: EventBus,
+    cancel: CancelToken,
+    reader_event_capacity: usize,
+) -> FileSource {
     let coord = completed_coord(reader.len());
     let cached_codec = sniff_codec(&reader);
     FileSource::local(
@@ -104,6 +105,7 @@ fn cached_source(reader: AssetReader, bus: EventBus, cancel: CancelToken) -> Fil
             .coord(coord)
             .bus(bus)
             .cancel(cancel)
+            .reader_event_capacity(reader_event_capacity)
             .maybe_cached_codec(cached_codec)
             .build(),
     )
@@ -173,6 +175,7 @@ impl RemoteFileOpen {
             coord,
             downloader,
             headers,
+            reader_event_capacity,
             url,
         } = self;
 
@@ -186,6 +189,7 @@ impl RemoteFileOpen {
                 coord: Arc::clone(&coord),
                 cancel,
                 bus: bus.clone(),
+                reader_event_capacity,
             },
             FileAssetCtx {
                 reader,
@@ -238,6 +242,7 @@ impl File {
     ) -> Result<FileSource, SourceError> {
         let key = local_key(path)?;
         let store = config.store.clone();
+        let reader_event_capacity = config.reader_event_capacity;
         let bus = config
             .bus
             .unwrap_or_else(|| EventBus::new(config.event_channel_capacity));
@@ -247,7 +252,12 @@ impl File {
             source_error
         })?;
 
-        Ok(cached_source(reader, bus, cancel.child()))
+        Ok(cached_source(
+            reader,
+            bus,
+            cancel.child(),
+            reader_event_capacity,
+        ))
     }
 
     /// Create a source for a remote file.
@@ -270,6 +280,7 @@ impl File {
             headers,
             look_ahead_bytes,
             pool,
+            reader_event_capacity,
             store,
             ..
         } = config;
@@ -287,7 +298,12 @@ impl File {
         match acq {
             AcquisitionResult::Ready(reader) => {
                 tracing::debug!("file already cached, skipping download");
-                Ok(cached_source(reader, bus, cancel.child()))
+                Ok(cached_source(
+                    reader,
+                    bus,
+                    cancel.child(),
+                    reader_event_capacity,
+                ))
             }
             AcquisitionResult::Pending(attachment) => Ok(RemoteFileOpen {
                 cancel,
@@ -295,6 +311,7 @@ impl File {
                 bus,
                 coord,
                 headers,
+                reader_event_capacity,
                 url,
             }
             .into_source(attachment)),
@@ -323,12 +340,7 @@ impl File {
         config: FileConfig,
         cancel: CancelToken,
     ) -> Result<FileSource, StreamSourceError> {
-        /// Bounded poll interval while a sibling `AssetStore` instance holds
-        /// the atomic-chunked tmp for the same canonical path. Short enough
-        /// that the observed ~67 ms race window in
-        /// `local_queue_playlist_behavior` resolves in a handful of ticks but
-        /// long enough not to busy-spin a tokio worker.
-        const TMP_CLAIMED_POLL_INTERVAL: Duration = Duration::from_millis(10);
+        let poll_interval = config.tmp_claim_poll_interval;
         let mut progress = TmpClaimProgress::default();
         loop {
             if cancel.is_cancelled() {
@@ -349,7 +361,7 @@ impl File {
                     tokio::select! {
                         biased;
                         () = cancel.cancelled() => return Err(StreamSourceError::Cancelled),
-                        () = sleep(TMP_CLAIMED_POLL_INTERVAL) => {}
+                        () = sleep(poll_interval) => {}
                     }
                 }
                 Err(e) => return Err(StreamSourceError::from(e)),
@@ -362,6 +374,7 @@ impl File {
 mod tests {
     use kithara_assets::{AcquisitionResult, AssetStore, StorageBackend};
     use kithara_events::{Event, FileEvent};
+    use kithara_platform::time::Duration;
     use tempfile::tempdir;
 
     use super::*;

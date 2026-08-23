@@ -619,9 +619,15 @@ mod tests {
 
     const VALID_KEY: &[u8] = b"0123456789abcdef";
 
-    struct MockPeer;
+    struct MockPeer {
+        cancel: CancelToken,
+    }
 
-    impl kithara_abr::Abr for MockPeer {}
+    impl kithara_abr::Abr for MockPeer {
+        fn cancel(&self) -> CancelToken {
+            self.cancel.clone()
+        }
+    }
     impl Peer for MockPeer {}
 
     struct HostResolver {
@@ -845,7 +851,9 @@ mod tests {
                 .build(),
         );
         let handle = downloader
-            .register(Arc::new(MockPeer))
+            .register(Arc::new(MockPeer {
+                cancel: CancelToken::never(),
+            }))
             .with_bus(bus.clone());
         KeyStore::new(
             handle,

@@ -18,7 +18,7 @@ use tracing::{debug, error};
 use crate::{
     segment::state::{Downloading, Failed, Loaded, Missing, SegmentPhase, SegmentSlotState},
     signal::SizeSignal,
-    variant::HlsVariant,
+    variant::{HlsVariant, PlanRevision},
 };
 
 /// Whether a fetch error is terminal for the slot — whether this segment is
@@ -73,14 +73,12 @@ pub(crate) struct FetchClaim<S: SegmentPhase> {
 pub(crate) struct DownloadClaim {
     slot: Arc<SegmentSlotState>,
     planned: PlannedFetch,
+    plan_revision: PlanRevision,
     variant: Weak<HlsVariant>,
     /// Peer-wake handle for the `Drop` recovery: a claim dropped without a
     /// settle must wake the peer to take the requeued work, and the claim
     /// outlives every context that could lend it one.
     signal: SizeSignal,
-    /// Identity of the plan the fetch was taken from — a cancelled settle
-    /// re-enters only that plan (see [`FetchClaim::into_missing_requeued`]).
-    plan_generation: u64,
     settled: bool,
 }
 
@@ -105,18 +103,18 @@ impl FetchClaim<Downloading> {
     /// `Weak` back-reference for the post-commit size apply.
     pub(crate) const fn claim(
         planned: PlannedFetch,
+        plan_revision: PlanRevision,
         variant: Weak<HlsVariant>,
         slot: Arc<SegmentSlotState>,
         signal: SizeSignal,
-        plan_generation: u64,
     ) -> Self {
         Self {
             data: DownloadClaim {
                 planned,
+                plan_revision,
                 variant,
                 slot,
                 signal,
-                plan_generation,
                 settled: false,
             },
             _phase: PhantomData,
@@ -185,28 +183,13 @@ impl FetchClaim<Downloading> {
         }
     }
 
-    /// `Downloading -> Missing` for a fetch cancelled in flight. The slot
-    /// returns to the dispatch pool, and the work returns to the plan it
-    /// was taken from — unless a rebuild replaced that plan, in which case
-    /// the rebuild owns the re-dispatch and the stale entry stays off it
-    /// (see `HlsVariant::requeue_cancelled`). The peer is woken to take the
-    /// re-entered work: a cancelled download produces no reader progress,
-    /// so nothing else asks for it.
-    pub(crate) fn into_missing_requeued(self) {
-        let planned = self.data.planned;
-        let plan_generation = self.data.plan_generation;
-        let variant = self.data.variant.upgrade();
-        let signal = self.data.signal.clone();
-        let _ = self.into_missing();
-        if let Some(variant) = variant
-            && variant.requeue_cancelled(planned, plan_generation)
-        {
-            signal.wake_peer();
+    delegate::delegate! {
+        to self.data {
+            #[field]
+            pub(crate) const fn planned(&self) -> PlannedFetch;
+            #[field]
+            pub(crate) const fn plan_revision(&self) -> PlanRevision;
         }
-    }
-
-    pub(crate) const fn planned(&self) -> PlannedFetch {
-        self.data.planned
     }
 
     /// Share the slot's CAS cell so the `on_slow` hook can flag the in-flight
@@ -250,9 +233,10 @@ impl Drop for DownloadClaim {
             return;
         }
         self.slot.mark_missing();
-        if let Some(variant) = self.variant.upgrade() {
-            variant.requeue_planned(self.planned);
-        }
+        let requeued = self
+            .variant
+            .upgrade()
+            .is_some_and(|variant| variant.requeue_planned(self.planned, self.plan_revision));
         self.signal.wake_peer();
         // Steady-state recovery, not an incident: a cancelled or superseded
         // fetch drops its claim on every seek and variant switch, so a stress
@@ -260,7 +244,8 @@ impl Drop for DownloadClaim {
         debug!(
             target: "kithara_hls::settle",
             planned = ?self.planned,
-            "Downloading claim dropped without settle — slot reverted to Missing and requeued"
+            requeued,
+            "Downloading claim dropped without settle — slot reverted to Missing"
         );
     }
 }
@@ -333,6 +318,7 @@ impl FetchSlot {
             handle,
             writer,
             reader,
+            signal,
             ..
         } = self;
         let committed = matches!(reader.status(), ResourceStatus::Committed { .. });
@@ -357,10 +343,19 @@ impl FetchSlot {
             // came back as a fatal `Decode`, parking the slot `Failed` for
             // good. The work itself goes back on the plan it came from — a
             // transition's look-ahead retire cancels without rebuilding, so
-            // nobody else re-plans the entry dispatch popped; only a settle
-            // that outlived a rebuild leaves the re-dispatch to that rebuild.
+            // nobody else re-plans the entry dispatch popped; a settle that
+            // outlived a rebuild carries a superseded revision and the
+            // requeue refuses it, leaving the re-dispatch to that rebuild.
+            let planned = handle.planned();
+            let plan_revision = handle.plan_revision();
+            let variant = handle.variant();
             writer.abandon();
-            handle.into_missing_requeued();
+            handle.into_missing();
+            if let Some(variant) = variant
+                && variant.requeue_planned(planned, plan_revision)
+            {
+                signal.wake_peer();
+            }
         }
     }
 
@@ -412,10 +407,11 @@ impl FetchSlot {
                 // is never asked for again and playback stops at the gap it
                 // leaves, even once the network is back.
                 let planned = handle.planned();
+                let plan_revision = handle.plan_revision();
                 let variant = handle.variant();
                 handle.into_missing();
                 if let Some(variant) = variant {
-                    variant.requeue_planned(planned);
+                    let _ = variant.requeue_planned(planned, plan_revision);
                 }
                 signal.wake_peer();
             }

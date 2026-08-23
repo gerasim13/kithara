@@ -63,6 +63,7 @@ fn make_source_with_cancel(
             .coord(coord)
             .bus(bus)
             .cancel(cancel)
+            .reader_event_capacity(16)
             .cached_codec(AudioCodec::Mp3)
             .build(),
     )
@@ -413,6 +414,7 @@ fn source_cancel_interrupts_blocked_wait_without_poisoning_asset() {
             .coord(coord)
             .bus(EventBus::new(16))
             .cancel(scope.token())
+            .reader_event_capacity(16)
             .cached_codec(AudioCodec::Mp3)
             .build(),
     );

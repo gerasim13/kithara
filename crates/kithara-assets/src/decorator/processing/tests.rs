@@ -18,8 +18,11 @@ use crate::{
     resource::{AcquisitionResult, BaseReader, BaseWriter, ReadSide, WriteSide},
 };
 
+/// Four regions wide enough for any pass size these tests use. The pass size
+/// itself comes from the `ProcessedWriter` builder's default unless a test
+/// states its own.
 fn test_pool() -> BytePool {
-    BytePool::new(4, super::writer::CHUNK_SIZE)
+    BytePool::new(4, 64 * 1024)
 }
 
 fn mock_writer(content: &[u8]) -> (BaseWriter, tempfile::TempDir) {
@@ -97,7 +100,11 @@ fn writer_commit_returns_readable_reader() {
     let process_fn = xor_chunk_processor(0x42, Arc::clone(&call_count));
     let (writer, _dir) = mock_writer(b"test content");
 
-    let writer = ProcessedWriter::new(writer, Some(process_fn), test_pool());
+    let writer = ProcessedWriter::builder()
+        .inner(writer)
+        .processor(process_fn)
+        .pool(test_pool())
+        .build();
     let reader = writer.commit(Some(b"test content".len() as u64)).unwrap();
     assert!(call_count.load(Ordering::SeqCst) > 0);
 
@@ -115,7 +122,11 @@ fn read_at_after_processing_honours_offset() {
     let content: Vec<u8> = (0..100).collect();
     let (writer, _dir) = mock_writer(&content);
 
-    let writer = ProcessedWriter::new(writer, Some(process_fn), test_pool());
+    let writer = ProcessedWriter::builder()
+        .inner(writer)
+        .processor(process_fn)
+        .pool(test_pool())
+        .build();
     let reader = writer.commit(Some(100)).unwrap();
 
     let mut buf = vec![0u8; 20];
@@ -132,7 +143,10 @@ fn ctx_none_writer_commits_straight_through_to_readable() {
     let (writer, _dir) = mock_writer(b"plain bytes!");
 
     let _ = process_fn;
-    let writer: ProcessedWriter<BaseWriter> = ProcessedWriter::new(writer, None, test_pool());
+    let writer: ProcessedWriter<BaseWriter> = ProcessedWriter::builder()
+        .inner(writer)
+        .pool(test_pool())
+        .build();
     let reader = writer.commit(Some(12)).unwrap();
 
     let mut buf = vec![0u8; 12];
@@ -152,7 +166,11 @@ fn encrypted_writer_reader_is_not_readable_before_commit() {
     let process_fn = xor_chunk_processor(0x42, Arc::clone(&call_count));
     let (writer, _dir) = mock_writer(b"test content");
 
-    let writer = ProcessedWriter::new(writer, Some(process_fn), test_pool());
+    let writer = ProcessedWriter::builder()
+        .inner(writer)
+        .processor(process_fn)
+        .pool(test_pool())
+        .build();
     let reader = writer.reader();
 
     assert!(
@@ -173,7 +191,11 @@ fn reader_view_blocks_until_writer_commits() {
     let raw: Vec<u8> = (0..32u8).collect();
     let (writer, _dir) = mock_writer(&raw);
 
-    let writer = ProcessedWriter::new(writer, Some(process_fn), test_pool());
+    let writer = ProcessedWriter::builder()
+        .inner(writer)
+        .processor(process_fn)
+        .pool(test_pool())
+        .build();
     let reader = writer.reader();
     let raw_len = raw.len() as u64;
 
@@ -210,11 +232,11 @@ fn wait_range_aborts_on_cancellation() {
         Resource::open(cancel.clone(), MmapOptions::for_path(path).build()).unwrap();
     resource.write_at(0, &[1u8; 16]).unwrap();
 
-    let writer = ProcessedWriter::new(
-        BaseWriter::new(StorageResource::from(resource)),
-        Some(process_fn),
-        test_pool(),
-    );
+    let writer = ProcessedWriter::builder()
+        .inner(BaseWriter::new(StorageResource::from(resource)))
+        .processor(process_fn)
+        .pool(test_pool())
+        .build();
     let reader = writer.reader();
 
     let handle = std::thread::spawn(move || reader.wait_range(0..16));
@@ -251,11 +273,11 @@ fn external_cancel_interrupts_processing_wait_without_cancelling_resource() {
     )
     .expect("open processing test resource");
     resource.write_at(0, &[1u8; 16]).unwrap();
-    let writer = ProcessedWriter::new(
-        BaseWriter::new(StorageResource::from(resource)),
-        Some(process_fn),
-        test_pool(),
-    );
+    let writer = ProcessedWriter::builder()
+        .inner(BaseWriter::new(StorageResource::from(resource)))
+        .processor(process_fn)
+        .pool(test_pool())
+        .build();
     let reader = writer.reader();
     let wait_cancel = CancelToken::never();
     let entering_wait = Arc::new(Barrier::new(2));
@@ -291,7 +313,11 @@ fn reactivate_forks_fresh_gate_without_poisoning_reader() {
     let ciphertext: Vec<u8> = plaintext.iter().map(|b| b ^ 0x42).collect();
     let (writer, _dir) = mock_writer(&ciphertext);
 
-    let writer = ProcessedWriter::new(writer, Some(process_fn), test_pool());
+    let writer = ProcessedWriter::builder()
+        .inner(writer)
+        .processor(process_fn)
+        .pool(test_pool())
+        .build();
     let reader_a = writer.commit(Some(ciphertext.len() as u64)).unwrap();
 
     let mut buf = vec![0u8; ciphertext.len()];
@@ -324,7 +350,11 @@ fn reactivate_then_commit_reruns_processor() {
     assert_eq!(first.len(), second.len());
     let (writer, _dir) = mock_writer(&first);
 
-    let writer = ProcessedWriter::new(writer, Some(process_fn), test_pool());
+    let writer = ProcessedWriter::builder()
+        .inner(writer)
+        .processor(process_fn)
+        .pool(test_pool())
+        .build();
     let len = first.len() as u64;
     let reader = writer.commit(Some(len)).expect("first commit");
     let first_count = call_count.load(Ordering::SeqCst);
@@ -354,7 +384,11 @@ fn reactivate_then_commit_reruns_processor_mem() {
     assert_eq!(first.len(), second.len());
     let writer = mock_writer_mem(&first);
 
-    let writer = ProcessedWriter::new(writer, Some(process_fn), test_pool());
+    let writer = ProcessedWriter::builder()
+        .inner(writer)
+        .processor(process_fn)
+        .pool(test_pool())
+        .build();
     let len = first.len() as u64;
     let reader = writer.commit(Some(len)).expect("first commit");
     let first_count = call_count.load(Ordering::SeqCst);
@@ -381,7 +415,11 @@ fn writer_drop_without_commit_fails_gate() {
     let process_fn = xor_chunk_processor(0x00, Arc::clone(&call_count));
     let (writer, _dir) = mock_writer(&[7u8; 16]);
 
-    let writer = ProcessedWriter::new(writer, Some(process_fn), test_pool());
+    let writer = ProcessedWriter::builder()
+        .inner(writer)
+        .processor(process_fn)
+        .pool(test_pool())
+        .build();
     writer.write_at(0, &[7u8; 16]).unwrap();
     let reader = writer.reader();
     let reader_probe = reader.clone();
@@ -427,8 +465,11 @@ fn reopened_committed_processed_reader_is_readable_immediately() {
         .commit(Some(already_processed.len() as u64))
         .unwrap();
 
-    let reader =
-        ProcessedReader::wrap_ready(BaseReader::new(storage), Some(process_fn), test_pool());
+    let reader = ProcessedReader::wrap_ready()
+        .inner(BaseReader::new(storage))
+        .processor(process_fn)
+        .pool(test_pool())
+        .call();
 
     let mut buf = vec![0u8; already_processed.len()];
     let n = reader.read_at(0, &mut buf).unwrap();
@@ -466,4 +507,40 @@ fn open_resource_none_ctx_does_not_leak_precommit_guard() {
             );
         }
     }
+}
+
+/// The pass size is the caller's, not a crate constant: a commit over a
+/// 32-byte resource runs one `ChunkSink::process` per configured chunk.
+#[kithara::test]
+fn a_small_chunk_size_splits_the_commit_into_passes() {
+    const CONTENT_LEN: usize = 32;
+    let call_count = Arc::new(AtomicUsize::new(0));
+    let process_fn = xor_chunk_processor(0x42, Arc::clone(&call_count));
+    let writer = ProcessedWriter::builder()
+        .inner(mock_writer_mem(&[7u8; CONTENT_LEN]))
+        .processor(process_fn)
+        .pool(test_pool())
+        .chunk_size(CONTENT_LEN / 4)
+        .build();
+
+    drop(writer.commit(Some(CONTENT_LEN as u64)).unwrap());
+
+    assert_eq!(call_count.load(Ordering::SeqCst), 4);
+}
+
+#[kithara::test]
+fn a_chunk_size_that_spans_the_resource_commits_in_one_pass() {
+    const CONTENT_LEN: usize = 32;
+    let call_count = Arc::new(AtomicUsize::new(0));
+    let process_fn = xor_chunk_processor(0x42, Arc::clone(&call_count));
+    let writer = ProcessedWriter::builder()
+        .inner(mock_writer_mem(&[7u8; CONTENT_LEN]))
+        .processor(process_fn)
+        .pool(test_pool())
+        .chunk_size(CONTENT_LEN)
+        .build();
+
+    drop(writer.commit(Some(CONTENT_LEN as u64)).unwrap());
+
+    assert_eq!(call_count.load(Ordering::SeqCst), 1);
 }

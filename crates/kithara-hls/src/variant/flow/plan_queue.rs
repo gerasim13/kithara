@@ -8,6 +8,9 @@ use kithara_platform::sync::{Mutex, MutexGuard};
 
 use crate::segment::PlannedFetch;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct PlanRevision(u64);
+
 /// The fetch plan with a lock-free membership mirror.
 ///
 /// The deque is the plan's order; the planner side mutates it under the
@@ -19,10 +22,7 @@ use crate::segment::PlannedFetch;
 /// mirror.
 pub(in crate::variant) struct PlanQueue {
     queue: Mutex<VecDeque<PlannedFetch>>,
-    /// Plan identity, bumped by every rebuild (see [`PlanGuard::bump_generation`]).
-    /// Mutated only under the queue lock; the atomic exists for the guard's
-    /// shared-reference plumbing, not for lock-free readers.
-    generation: AtomicU64,
+    revision: AtomicU64,
     init_planned: AtomicBool,
     segments_planned: Box<[AtomicBool]>,
 }
@@ -31,7 +31,7 @@ impl PlanQueue {
     pub(in crate::variant) fn new(queue_capacity: usize, num_segments: usize) -> Self {
         Self {
             queue: Mutex::new(VecDeque::with_capacity(queue_capacity)),
-            generation: AtomicU64::new(0),
+            revision: AtomicU64::new(0),
             init_planned: AtomicBool::new(false),
             segments_planned: (0..num_segments).map(|_| AtomicBool::new(false)).collect(),
         }
@@ -53,10 +53,15 @@ impl PlanQueue {
     pub(in crate::variant) fn lock(&self) -> PlanGuard<'_> {
         PlanGuard {
             queue: self.queue.lock(),
-            generation: &self.generation,
+            revision: &self.revision,
             init_planned: &self.init_planned,
             segments_planned: &self.segments_planned,
         }
+    }
+
+    #[cfg(test)]
+    pub(in crate::variant) fn revision(&self) -> PlanRevision {
+        PlanRevision(self.revision.load(Ordering::Relaxed))
     }
 
     fn mark(
@@ -80,7 +85,7 @@ impl PlanQueue {
 /// own methods so the membership mirror can never drift from the plan.
 pub(in crate::variant) struct PlanGuard<'a> {
     queue: MutexGuard<'a, VecDeque<PlannedFetch>>,
-    generation: &'a AtomicU64,
+    revision: &'a AtomicU64,
     init_planned: &'a AtomicBool,
     segments_planned: &'a [AtomicBool],
 }
@@ -94,26 +99,12 @@ impl Deref for PlanGuard<'_> {
 }
 
 impl PlanGuard<'_> {
-    /// Identity of the plan this queue currently holds. A fetch taken off
-    /// the plan records it, and a cancelled settle re-enters only a plan
-    /// with the same identity (see `HlsVariant::requeue_cancelled`).
-    pub(in crate::variant) fn generation(&self) -> u64 {
-        self.generation.load(Ordering::Relaxed)
-    }
-
-    /// Declare a new plan identity. Every rebuild bumps — including one that
-    /// leaves the queue untouched — so a fetch cancelled by the rearm that
-    /// triggered it settles into a foreign plan and stays off it.
-    pub(in crate::variant) fn bump_generation(&mut self) {
-        self.generation.fetch_add(1, Ordering::Relaxed);
-    }
-
-    pub(in crate::variant) fn pop_front(&mut self) -> Option<PlannedFetch> {
+    pub(in crate::variant) fn pop_front(&mut self) -> Option<(PlannedFetch, PlanRevision)> {
         let planned = self.queue.pop_front();
         if let Some(planned) = planned {
             PlanQueue::mark(self.init_planned, self.segments_planned, planned, false);
         }
-        planned
+        planned.map(|planned| (planned, PlanRevision(self.revision.load(Ordering::Relaxed))))
     }
 
     pub(in crate::variant) fn push_front(&mut self, planned: PlannedFetch) {
@@ -121,10 +112,22 @@ impl PlanGuard<'_> {
         PlanQueue::mark(self.init_planned, self.segments_planned, planned, true);
     }
 
-    /// Insert keeping plan order (`Init` first, segments ascending). The
-    /// queue is built sorted and every mutation preserves that, so a single
-    /// ordered insert is enough.
-    pub(in crate::variant) fn insert_sorted(&mut self, planned: PlannedFetch) {
+    /// Re-enter work popped off a still-current plan. The insert keeps plan
+    /// order (`Init` first, segments ascending) rather than taking the front:
+    /// dispatch bounds read the queue head, and a retired look-ahead entry
+    /// parked there would wall off every nearer segment behind it. Work from
+    /// a superseded plan is refused, so a seek cannot resurrect an obsolete
+    /// prefix, and an entry the current plan already holds is never doubled.
+    pub(in crate::variant) fn requeue_if_current(
+        &mut self,
+        planned: PlannedFetch,
+        revision: PlanRevision,
+    ) -> bool {
+        if PlanRevision(self.revision.load(Ordering::Relaxed)) != revision
+            || self.queue.contains(&planned)
+        {
+            return false;
+        }
         let at = self
             .queue
             .iter()
@@ -132,6 +135,15 @@ impl PlanGuard<'_> {
             .unwrap_or(self.queue.len());
         self.queue.insert(at, planned);
         PlanQueue::mark(self.init_planned, self.segments_planned, planned, true);
+        true
+    }
+
+    /// Declare a new plan identity without touching the queue. Every rebuild
+    /// supersedes — including one that leaves the plan as-is — so a fetch
+    /// cancelled by the rearm that triggered it settles into a foreign plan
+    /// and stays off it.
+    pub(in crate::variant) fn supersede(&mut self) {
+        self.revision.fetch_add(1, Ordering::Relaxed);
     }
 
     #[cfg(test)]
@@ -146,7 +158,7 @@ impl PlanGuard<'_> {
     }
 
     pub(in crate::variant) fn replace_with(&mut self, plan: impl Iterator<Item = PlannedFetch>) {
-        self.bump_generation();
+        self.supersede();
         self.queue.clear();
         self.init_planned.store(false, Ordering::Relaxed);
         for flag in self.segments_planned {
@@ -161,13 +173,15 @@ impl PlanGuard<'_> {
 
 #[cfg(test)]
 mod tests {
+    use kithara_test_utils::kithara;
+
     use super::*;
 
     fn plan() -> PlanQueue {
         PlanQueue::new(8, 4)
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn a_replaced_plan_is_visible_without_the_lock() {
         let queue = plan();
 
@@ -180,19 +194,22 @@ mod tests {
         assert!(!queue.planned(PlannedFetch::Segment(1)));
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn a_popped_fetch_leaves_the_mirror() {
         let queue = plan();
         queue
             .lock()
             .replace_with([PlannedFetch::Segment(1)].into_iter());
 
-        assert_eq!(queue.lock().pop_front(), Some(PlannedFetch::Segment(1)));
+        assert_eq!(
+            queue.lock().pop_front().map(|(planned, _)| planned),
+            Some(PlannedFetch::Segment(1))
+        );
 
         assert!(!queue.planned(PlannedFetch::Segment(1)));
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn a_requeued_fetch_reenters_the_mirror() {
         let queue = plan();
 
@@ -201,13 +218,54 @@ mod tests {
         assert!(queue.planned(PlannedFetch::Segment(3)));
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn a_segment_outside_the_map_is_never_planned() {
         let queue = plan();
 
         queue.lock().push_front(PlannedFetch::Segment(40));
 
         assert!(!queue.planned(PlannedFetch::Segment(40)));
-        assert_eq!(queue.lock().pop_front(), Some(PlannedFetch::Segment(40)));
+        assert_eq!(
+            queue.lock().pop_front().map(|(planned, _)| planned),
+            Some(PlannedFetch::Segment(40))
+        );
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn a_replaced_plan_rejects_a_stale_requeue() {
+        let queue = plan();
+        queue
+            .lock()
+            .replace_with([PlannedFetch::Segment(1)].into_iter());
+        let (planned, revision) = queue.lock().pop_front().expect("planned fetch");
+
+        queue
+            .lock()
+            .replace_with([PlannedFetch::Segment(3)].into_iter());
+
+        assert!(!queue.lock().requeue_if_current(planned, revision));
+        assert_eq!(
+            queue.lock().iter().copied().collect::<Vec<_>>(),
+            vec![PlannedFetch::Segment(3)]
+        );
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn a_requeued_fetch_reenters_in_plan_order() {
+        let queue = plan();
+        queue
+            .lock()
+            .replace_with([PlannedFetch::Segment(0), PlannedFetch::Segment(3)].into_iter());
+        let (near, revision) = queue.lock().pop_front().expect("near fetch");
+        let (far, _) = queue.lock().pop_front().expect("far fetch");
+
+        assert!(queue.lock().requeue_if_current(near, revision));
+        assert!(queue.lock().requeue_if_current(far, revision));
+
+        assert_eq!(
+            queue.lock().iter().copied().collect::<Vec<_>>(),
+            vec![PlannedFetch::Segment(0), PlannedFetch::Segment(3)],
+            "a returning far entry must not park in front of a nearer one"
+        );
     }
 }

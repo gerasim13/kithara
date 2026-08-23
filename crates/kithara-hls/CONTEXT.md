@@ -94,10 +94,10 @@ insert): dispatch caps read the queue head, and a far look-ahead entry parked at
 wall off every nearer segment behind it.
 
 A fetch cancelled in flight settles back toward the plan it was popped from, gated by the plan
-generation. The generation bumps on every rebuild — including the short-circuit rebuild that
-changes nothing, because that rebuild still claims plan ownership. A claim captures the generation
-at pop (`dispatch_from`), and `settle_cancelled` re-inserts (`requeue_cancelled`) only when the
-generation still matches and the entry is absent: a look-ahead retire rebuilds nothing, so its
+revision. The revision supersedes on every rebuild — including the short-circuit rebuild that
+changes nothing, because that rebuild still claims plan ownership. A claim captures the revision
+at pop (`dispatch_from`), and `settle_cancelled` re-inserts (`requeue_planned`) only when the
+revision is still current and the entry is absent: a look-ahead retire rebuilds nothing, so its
 cancels re-enter and the reader is never left waiting on work nobody holds; a seek's rearm
 rebuilds, so its cancels fail the compare and drop — the rebuilt plan owns the re-dispatch, and a
 stale prefix must not resurrect behind the target.

@@ -108,6 +108,7 @@ where
 }
 
 struct StreamSourceRegistration<'a, T: StreamType> {
+    byte_pool: BytePool,
     cancel: &'a CancelToken,
     playback_resampler_backend: &'static str,
     emit: Arc<kithara_events::DeferredBus<Event>>,
@@ -127,6 +128,7 @@ struct StreamSourceRegistration<'a, T: StreamType> {
     effects: Vec<Box<dyn AudioEffect>>,
     recreate_on_host_rate_change: bool,
     pcm_buffer_chunks: usize,
+    pcm_pool: PcmPool,
 }
 
 struct RegisteredStreamSource {
@@ -240,11 +242,13 @@ where
             total_duration,
         );
         let registered = register_stream_audio_source(StreamSourceRegistration {
+            byte_pool: byte_pool.clone(),
             decoder,
             effects,
             engine_load,
             gapless_mode,
             pcm_buffer_chunks,
+            pcm_pool: pcm_pool.clone(),
             preload_chunks,
             runtime_handle,
             shared_stream,
@@ -391,12 +395,14 @@ where
     );
     let worker_wake: Arc<dyn WorkerWake> = Arc::new(WorkerWakeBridge(worker.clone()));
     let decode = DecodeInit {
+        byte_pool: registration.byte_pool,
         decoder: registration.decoder,
         decoder_factory: registration.decoder_factory,
         decoder_backend: registration.decoder_backend,
         gapless_mode: registration.gapless_mode,
         host_sample_rate: registration.host_sample_rate.clone(),
         media_info: registration.initial_media_info,
+        pcm_pool: registration.pcm_pool,
         playback_resampler_backend: registration.playback_resampler_backend,
         recreate_on_host_rate_change: registration.recreate_on_host_rate_change,
     }

@@ -1,8 +1,7 @@
 use kithara_platform::time::Duration;
 use kithara_test_utils::kithara;
-use tracing::debug;
 
-use super::{HlsVariant, PlanCtx};
+use super::{HlsVariant, PlanCtx, PlanRevision};
 use crate::segment::PlannedFetch;
 
 impl HlsVariant {
@@ -72,20 +71,24 @@ impl HlsVariant {
             // Nothing to re-plan, but the rebuild still claims plan
             // ownership: a fetch the triggering rearm cancelled in flight
             // must settle into a foreign plan, not resurrect a prefix
-            // behind the target (see `Self::requeue_cancelled`).
-            self.flow.queue.lock().bump_generation();
+            // behind the target (see `PlanGuard::supersede`).
+            self.flow.queue.lock().supersede();
             return;
         }
         self.rebuild_queue(from_seg, None);
     }
 
-    pub(crate) fn rebuild_at_time(&self, ctx: &PlanCtx, target: Duration) -> Option<u32> {
+    pub(crate) fn rebuild_at_time(&self, _ctx: &PlanCtx, target: Duration) -> Option<u32> {
         let seg = self.segment_index_at_time(target)?;
         let fetch_start = self.seek_readahead_start_segment(seg);
         if let Some(byte) = self.segment_byte_offset(fetch_start) {
             self.set_prefetch_anchor(byte);
         }
-        self.rebuild(ctx, fetch_start);
+        if self.fetch_plan_satisfied(fetch_start) {
+            self.flow.queue.lock().replace_with(std::iter::empty());
+        } else {
+            self.rebuild_queue(fetch_start, None);
+        }
         Some(seg)
     }
 
@@ -96,44 +99,14 @@ impl HlsVariant {
     /// holds. The peer then wakes to an empty plan and asks for nothing, and
     /// the segment is never fetched again — playback stops at that gap even
     /// once the network is back. In plan order, not at the front: dispatch
-    /// caps read the queue head, and a retired look-ahead entry parked there
-    /// would wall off every nearer segment behind it. Only when absent, so a
-    /// rebuild that already re-planned it is not duplicated.
-    pub(crate) fn requeue_planned(&self, planned: PlannedFetch) {
+    /// bounds read the queue head, and a retired look-ahead entry parked
+    /// there would wall off every nearer segment behind it. Only work from
+    /// the current plan revision may return, and only when absent, so a seek
+    /// cannot resurrect an obsolete prefix or duplicate a fetch that its
+    /// replacement plan already contains.
+    pub(crate) fn requeue_planned(&self, planned: PlannedFetch, revision: PlanRevision) -> bool {
         let mut queue = self.flow.queue.lock();
-        if !queue.contains(&planned) {
-            queue.insert_sorted(planned);
-        }
-    }
-
-    /// Put a fetch cancelled in flight back on the plan it was taken from.
-    ///
-    /// A cancel has two owners. A seek's rearm rebuilds the plan, and that
-    /// rebuild owns the re-dispatch — its plan already holds everything it
-    /// wants, and re-inserting the stale entry would resurrect a prefix the
-    /// seek skipped. A transition's look-ahead retire rebuilds nothing: the
-    /// plan the fetch came from is still current, and without the re-insert
-    /// the entry dispatch popped is work nobody holds — the reader waits
-    /// forever on the gap. The plan generation separates the two: it bumps
-    /// on every rebuild, so a stale settle fails the compare and drops.
-    /// Returns whether the fetch re-entered the plan.
-    pub(crate) fn requeue_cancelled(&self, planned: PlannedFetch, plan_generation: u64) -> bool {
-        let mut queue = self.flow.queue.lock();
-        let current = queue.generation();
-        let reenters = current == plan_generation && !queue.contains(&planned);
-        debug!(
-            target: "kithara_hls::settle",
-            variant = self.variant,
-            ?planned,
-            plan_generation,
-            current_generation = current,
-            reenters,
-            "cancelled fetch settling back toward the plan"
-        );
-        if reenters {
-            queue.insert_sorted(planned);
-        }
-        reenters
+        queue.requeue_if_current(planned, revision)
     }
 
     #[kithara::probe]

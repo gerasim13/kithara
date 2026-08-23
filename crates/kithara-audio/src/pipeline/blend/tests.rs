@@ -33,6 +33,10 @@ fn chunk(spec: PcmSpec, samples: Vec<f32>) -> PcmChunk {
     )
 }
 
+fn blender(profile: BlenderProfile) -> PcmBlender {
+    PcmBlender::new(profile, &PcmPool::default())
+}
+
 #[kithara::test]
 fn single_input_blender_is_bit_exact() {
     let spec = spec(2, 48_000);
@@ -44,7 +48,7 @@ fn single_input_blender_is_bit_exact() {
         .iter()
         .map(|sample| sample.to_bits())
         .collect::<Vec<_>>();
-    let mut blender = PcmBlender::new(BlenderProfile::new(spec));
+    let mut blender = blender(BlenderProfile::new(spec));
 
     let output = blender.process_active(input);
 
@@ -65,7 +69,7 @@ fn single_input_blender_is_bit_exact() {
 fn replacing_active_profile_accepts_the_new_spec() {
     let initial = spec(2, 44_100);
     let replacement = spec(6, 48_000);
-    let mut blender = PcmBlender::new(BlenderProfile::new(initial));
+    let mut blender = blender(BlenderProfile::new(initial));
 
     blender.prepare_active(BlenderProfile::new(replacement));
     let capacities_before = blender.buffer_capacities();
@@ -90,7 +94,7 @@ fn replacing_active_profile_accepts_the_new_spec() {
 #[kithara::test]
 fn high_rate_join_uses_the_full_twenty_milliseconds() {
     let spec = spec(2, 384_000);
-    let blender = PcmBlender::new(BlenderProfile::new(spec));
+    let blender = blender(BlenderProfile::new(spec));
 
     assert_eq!(blender.join_frame_count(), 7_680);
 }
@@ -109,7 +113,7 @@ fn real_outgoing_pcm_is_blended_for_the_full_linear_join() {
     let incoming = (0..(JOIN_FRAMES + POST_JOIN_FRAMES).saturating_mul(channels))
         .map(|sample| deterministic_sample(sample + 19, 53, 251))
         .collect::<Vec<_>>();
-    let mut blender = PcmBlender::new(BlenderProfile::new(spec));
+    let mut blender = blender(BlenderProfile::new(spec));
     blender.prepare_active(BlenderProfile::new(spec));
     assert!(blender.prepare_join(|tail| {
         tail.copy_from_slice(&outgoing);
@@ -160,7 +164,7 @@ fn reset_cancels_an_active_join() {
     let spec = spec(2, 44_100);
     let channels = usize::from(spec.channels);
     let outgoing = vec![-0.75; JOIN_FRAMES * channels];
-    let mut blender = PcmBlender::new(BlenderProfile::new(spec));
+    let mut blender = blender(BlenderProfile::new(spec));
     blender.prepare_active(BlenderProfile::new(spec));
     assert!(blender.prepare_join(|tail| {
         tail.copy_from_slice(&outgoing);

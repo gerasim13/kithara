@@ -86,11 +86,12 @@ impl PlayerImpl {
             .sample_rate(config.sample_rate)
             .pcm_pool(resolved_pool)
             .maybe_session(config.session.clone())
-            .cancel(cancel)
+            .cancel(cancel.clone())
             .build();
         let engine = EngineImpl::new(engine_config, bus.clone());
         if config.abr.is_none() {
-            config.abr = Some(AbrController::new(AbrSettings::default()));
+            let abr_settings = AbrSettings::builder().cancel(cancel.clone()).build();
+            config.abr = Some(AbrController::new(abr_settings));
         }
 
         // Seed the single speed source with the configured default rate.

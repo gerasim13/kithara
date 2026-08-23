@@ -1,5 +1,5 @@
 use kithara_events::{AbrProgressSnapshot, VariantInfo};
-use kithara_platform::sync::Arc;
+use kithara_platform::{CancelToken, sync::Arc};
 use kithara_test_utils::kithara;
 
 use crate::state::AbrState;
@@ -13,6 +13,12 @@ use crate::state::AbrState;
 /// [`AbrHandle`](crate::AbrHandle); peers do not need to juggle it.
 #[kithara::mock(api = AbrMock)]
 pub trait Abr: Send + Sync + 'static {
+    /// Cancellation scope of the protocol track represented by this peer.
+    ///
+    /// The controller observes this token but never cancels it. Cancelling the
+    /// track stops only this peer's ABR work.
+    fn cancel(&self) -> CancelToken;
+
     /// Pull-model buffer observation used for buffer-aware decisions.
     /// Returning `None` disables buffer gates for this peer.
     fn progress(&self) -> Option<AbrProgressSnapshot> {

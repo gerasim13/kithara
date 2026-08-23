@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use kithara_bufpool::BytePool;
-use kithara_platform::sync::Arc;
+use kithara_platform::{sync::Arc, time::Duration};
 
 use super::{contract::ProcessCtx, reader::ProcessedReader, writer::ProcessedWriter};
 use crate::{
@@ -19,14 +19,30 @@ where
 {
     inner: Arc<A>,
     pool: BytePool,
+    /// `AssetStore::builder().processing_chunk_size(..)`, unset when the
+    /// caller left the processing layer's own default in place.
+    chunk_size: Option<usize>,
+    /// `AssetStore::builder().processing_gate_poll_interval(..)`, unset when
+    /// the caller left the processing layer's own default in place.
+    gate_poll_interval: Option<Duration>,
 }
 
 impl<A> ProcessingAssets<A>
 where
     A: Assets,
 {
-    pub const fn new(inner: Arc<A>, pool: BytePool) -> Self {
-        Self { inner, pool }
+    pub const fn new(
+        inner: Arc<A>,
+        pool: BytePool,
+        chunk_size: Option<usize>,
+        gate_poll_interval: Option<Duration>,
+    ) -> Self {
+        Self {
+            inner,
+            pool,
+            chunk_size,
+            gate_poll_interval,
+        }
     }
 
     fn wrap_ready(
@@ -34,7 +50,13 @@ where
         inner: A::ReadyRes,
         processor: Option<ProcessCtx>,
     ) -> ProcessedReader<A::ReadyRes> {
-        ProcessedReader::wrap_ready(inner, processor, self.pool.clone())
+        ProcessedReader::wrap_ready()
+            .inner(inner)
+            .maybe_processor(processor)
+            .pool(self.pool.clone())
+            .maybe_chunk_size(self.chunk_size)
+            .maybe_gate_poll_interval(self.gate_poll_interval)
+            .call()
     }
 }
 
@@ -55,7 +77,13 @@ where
     ) -> AssetsResult<AcquisitionResult<Self::ActiveRes, Self::ReadyRes>> {
         match self.inner.acquire_resource(key, identity)? {
             AcquisitionResult::Pending(writer) => Ok(AcquisitionResult::Pending(
-                ProcessedWriter::new(writer, ctx, self.pool.clone()),
+                ProcessedWriter::builder()
+                    .inner(writer)
+                    .maybe_processor(ctx)
+                    .pool(self.pool.clone())
+                    .maybe_chunk_size(self.chunk_size)
+                    .maybe_gate_poll_interval(self.gate_poll_interval)
+                    .build(),
             )),
             AcquisitionResult::Ready(reader) => {
                 Ok(AcquisitionResult::Ready(self.wrap_ready(reader, ctx)))

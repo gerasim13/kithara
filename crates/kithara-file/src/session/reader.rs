@@ -6,11 +6,6 @@ use kithara_stream::{ReaderChunkSignal, ReaderEventSink, ReaderSeekSignal};
 
 use crate::coord::FileCoord;
 
-/// Ring depth for the decode-core → shell event hand-off. A pass emits at
-/// most one progress event per decoded chunk; this bounds the worst-case
-/// post-seek skip burst without blocking the decode core.
-const READER_EVENT_CAPACITY: usize = 256;
-
 pub(crate) struct FileReaderEventSink {
     coord: Arc<FileCoord>,
     seek_epoch_handle: Arc<AtomicU64>,
@@ -27,10 +22,11 @@ impl FileReaderEventSink {
         bus: EventBus,
         coord: Arc<FileCoord>,
         seek_epoch_handle: Arc<AtomicU64>,
+        event_capacity: usize,
     ) -> Self {
         let last_cursor = coord.position();
         Self {
-            bus: DeferredBus::new(bus, READER_EVENT_CAPACITY),
+            bus: DeferredBus::new(bus, event_capacity),
             coord,
             last_cursor,
             seek_epoch_handle,
@@ -90,5 +86,55 @@ impl ReaderEventSink for FileReaderEventSink {
             from_offset: from,
             to_offset: to,
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use kithara_events::{BusEvent, Event};
+    use kithara_stream::{PlayheadState, SeekState};
+    use kithara_test_utils::kithara;
+
+    use super::*;
+
+    fn sink(bus: EventBus, event_capacity: usize) -> FileReaderEventSink {
+        let coord = Arc::new(FileCoord::new(
+            Arc::new(PlayheadState::new()),
+            Arc::new(SeekState::new()),
+        ));
+        FileReaderEventSink::new(bus, coord, Arc::new(AtomicU64::new(0)), event_capacity)
+    }
+
+    fn burst(sink: &mut FileReaderEventSink, chunks: usize) {
+        for _ in 0..chunks {
+            sink.on_chunk(ReaderChunkSignal::Chunk);
+        }
+        sink.flush();
+    }
+
+    fn dropped_in(bus: &EventBus, chunks: usize, event_capacity: usize) -> u64 {
+        let mut rx = bus.subscribe();
+        burst(&mut sink(bus.clone(), event_capacity), chunks);
+        let mut dropped = 0;
+        while let Ok(envelope) = rx.try_recv() {
+            if let Event::Bus(BusEvent::Overflow { dropped: count, .. }) = envelope.event {
+                dropped += count;
+            }
+        }
+        dropped
+    }
+
+    /// The ring depth is the caller's, not a crate constant: a one-slot ring
+    /// keeps the first chunk of a burst and reports the rest as dropped.
+    #[kithara::test]
+    fn a_one_slot_ring_drops_the_rest_of_the_burst() {
+        assert_eq!(dropped_in(&EventBus::new(16), 3, 1), 2);
+    }
+
+    /// The same burst through a ring deep enough to hold it drops nothing, so
+    /// what the first test observes is the depth and not the burst.
+    #[kithara::test]
+    fn a_ring_deeper_than_the_burst_drops_nothing() {
+        assert_eq!(dropped_in(&EventBus::new(16), 3, 4), 0);
     }
 }
