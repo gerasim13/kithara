@@ -4595,16 +4595,23 @@ fn dragging_library_root() -> MasonryRoot<TestAction> {
     root
 }
 
-/// Presses a row of the library and pulls it across onto the deck.
-fn drag_a_track_onto_the_deck(root: &mut MasonryRoot<TestAction>) -> Vec<TestAction> {
+/// Presses a row of the library and pulls it as far as the deck, still held.
+fn carry_a_track_over_the_deck(root: &mut MasonryRoot<TestAction>) {
     root.handle_pointer_event(pointer_move(60.0, 60.0))
         .unwrap_or_else(|error| panic!("the hover must route: {error}"));
     root.handle_pointer_event(pointer_down(60.0, 60.0))
         .unwrap_or_else(|error| panic!("the press must route: {error}"));
-    for at in [(64.0, 62.0), (150.0, 80.0), (300.0, 100.0)] {
+    for at in [(64.0, 62.0), (150.0, 80.0)] {
         root.handle_pointer_event(pointer_move(at.0, at.1))
             .unwrap_or_else(|error| panic!("the move must route: {error}"));
     }
+}
+
+/// Presses a row of the library and pulls it across onto the deck.
+fn drag_a_track_onto_the_deck(root: &mut MasonryRoot<TestAction>) -> Vec<TestAction> {
+    carry_a_track_over_the_deck(root);
+    root.handle_pointer_event(pointer_move(300.0, 100.0))
+        .unwrap_or_else(|error| panic!("the move must route: {error}"));
     root.handle_pointer_event(pointer_up(300.0, 100.0))
         .unwrap_or_else(|error| panic!("the release must route: {error}"));
     root.take_actions()
@@ -4651,14 +4658,7 @@ fn a_module_that_takes_drops_reports_the_hand_crossing_it() {
 fn a_hand_carrying_a_track_shows_it_over_a_module_it_did_not_start_in() {
     let mut root = dragging_library_root();
 
-    root.handle_pointer_event(pointer_move(60.0, 60.0))
-        .unwrap_or_else(|error| panic!("the hover must route: {error}"));
-    root.handle_pointer_event(pointer_down(60.0, 60.0))
-        .unwrap_or_else(|error| panic!("the press must route: {error}"));
-    for at in [(64.0, 62.0), (150.0, 80.0)] {
-        root.handle_pointer_event(pointer_move(at.0, at.1))
-            .unwrap_or_else(|error| panic!("the move must route: {error}"));
-    }
+    carry_a_track_over_the_deck(&mut root);
     root.take_platform_signals();
     root.handle_pointer_event(pointer_move(300.0, 100.0))
         .unwrap_or_else(|error| panic!("the move must route: {error}"));
@@ -4689,6 +4689,67 @@ fn the_cursor_stops_carrying_when_the_track_is_released() {
             .iter()
             .any(|signal| matches!(signal, RenderRootSignal::SetCursor(CursorIcon::Grabbing))),
         "a released track must stop the carrying cursor, signalled {signals:?}"
+    );
+}
+
+/// A window runner is handed the cursor the carrying tree asked for.
+#[kithara::test]
+fn taking_the_cursor_hands_over_the_shape_the_tree_asked_for() {
+    let mut root = dragging_library_root();
+
+    carry_a_track_over_the_deck(&mut root);
+
+    assert_eq!(
+        root.take_cursor(),
+        Some(CursorIcon::Grabbing),
+        "a runner must be handed the cursor the carrying tree asked for"
+    );
+}
+
+/// Taking the cursor leaves every other platform signal where it stood.
+///
+/// The queue carries redraws and focus alongside the cursor, and a runner that
+/// reads the cursor every event must not swallow them on the way past.
+#[kithara::test]
+fn taking_the_cursor_leaves_the_other_platform_signals_queued() {
+    let mut whole = dragging_library_root();
+    let mut split = dragging_library_root();
+    for root in [&mut whole, &mut split] {
+        carry_a_track_over_the_deck(root);
+    }
+    let rest = |signals: Vec<RenderRootSignal>| -> Vec<String> {
+        signals
+            .iter()
+            .filter(|signal| !matches!(signal, RenderRootSignal::SetCursor(_)))
+            .map(|signal| format!("{signal:?}"))
+            .collect()
+    };
+    let expected = rest(whole.take_platform_signals());
+    assert!(
+        !expected.is_empty(),
+        "the fixture must queue signals besides the cursor for this to say anything"
+    );
+
+    split.take_cursor();
+
+    assert_eq!(
+        rest(split.take_platform_signals()),
+        expected,
+        "taking the cursor must leave every other signal in order"
+    );
+}
+
+/// A runner that reads the cursor twice is told nothing the second time.
+#[kithara::test]
+fn taking_the_cursor_twice_reports_no_second_change() {
+    let mut root = dragging_library_root();
+    carry_a_track_over_the_deck(&mut root);
+    root.take_cursor();
+
+    assert_eq!(
+        root.take_cursor(),
+        None,
+        "a cursor already handed over must not be handed over again"
     );
 }
 

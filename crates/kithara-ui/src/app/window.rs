@@ -437,9 +437,12 @@ where
         self.request_redraw();
     }
 
-    /// Carries out what the document asked its window to do, and says whether
-    /// it asked to be closed.
+    /// Carries out what the document asked its window to do: the cursor to
+    /// show, then any window command. Says whether it asked to be closed.
     fn obey(&mut self, _event_loop: &ActiveEventLoop) -> bool {
+        if let Some(cursor) = self.ui.take_cursor() {
+            self.window.set_cursor(cursor);
+        }
         let mut close = false;
         for command in self.ui.take_window_commands() {
             match command {

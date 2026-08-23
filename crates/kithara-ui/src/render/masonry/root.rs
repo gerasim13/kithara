@@ -216,6 +216,26 @@ where
         std::mem::take(&mut self.platform)
     }
 
+    /// Takes the cursor the tree last asked its window to show, if it asked.
+    ///
+    /// Every cursor the tree resolves reaches a host this way: the shape a
+    /// widget answers a hover with, the resize edge, the text caret, and the
+    /// carry [`Self::show_item_drag`] adds. A host that never reads them shows
+    /// one cursor for the life of its window and keeps them queued forever, so
+    /// a window runner takes them here. Only the last one is worth showing, and
+    /// every other platform signal is left where it stands.
+    pub fn take_cursor(&mut self) -> Option<CursorIcon> {
+        let mut cursor = None;
+        self.platform.retain(|signal| {
+            let RenderRootSignal::SetCursor(icon) = signal else {
+                return true;
+            };
+            cursor = Some(*icon);
+            false
+        });
+        cursor
+    }
+
     /// Satisfies the redraw signals covered by a completed frame.
     ///
     /// Returns whether an animation frame, rather than an ordinary redraw, was

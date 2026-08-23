@@ -7,7 +7,7 @@ use std::{
 
 use kithara_platform::time::Duration;
 use kithara_test_utils::kithara;
-use masonry::vello::Scene;
+use masonry::{core::CursorIcon, vello::Scene};
 
 use super::{App, Config, RunError, Ui, scenario::Scenario};
 use crate::{
@@ -799,6 +799,42 @@ fn skin() -> Skin {
 
 fn press(at: Pt, phase: PointerPhase) -> Input<'static> {
     Input::Pointer(PointerInput::new(MOUSE, None, phase, Some(at), 1))
+}
+
+/// The cursor under the pointer reaches the runner that owns the window.
+///
+/// The retained host answers the question once, when the pointer moves, and
+/// leaves the answer queued. A runner that never collects it shows one cursor
+/// for the life of the window however carefully the tree resolves the shape.
+#[kithara::test]
+fn a_hover_hands_the_runner_the_cursor_under_the_pointer() {
+    let endpoints = Registry("fixture.dial", EndpointDesc::new(ValueKind::Scalar));
+    let resolver = one_control(
+        r#"Knob(id: "dial", size: (w: Fixed(38.0), h: Fixed(49.0)), read: Model(id: "fixture.dial"))"#,
+    );
+    let skin = skin();
+    let mut ui = Ui::new(
+        Dial::new(false),
+        Config::builder()
+            .endpoints(&endpoints)
+            .resolver(&resolver)
+            .skin(&skin)
+            .skin_doc(builtin::skin_doc())
+            .text(builtin::text_doc())
+            .build(),
+        (240, 120),
+        1.0,
+    )
+    .unwrap_or_else(|error| panic!("the knob must mount: {error}"));
+    ui.take_cursor();
+
+    ui.input(press(Pt { x: 19.0, y: 60.0 }, PointerPhase::Move));
+
+    assert_eq!(
+        ui.take_cursor(),
+        Some(CursorIcon::NsResize),
+        "a hover over the knob must hand the runner the shape the knob asks for"
+    );
 }
 
 #[kithara::test]

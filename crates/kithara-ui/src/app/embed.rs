@@ -10,7 +10,7 @@
 use kithara_platform::{sync::Arc, time::Duration};
 use masonry::{
     app::{RenderRootOptions, WindowSizePolicy},
-    core::{PointerEvent, TextEvent, WindowEvent},
+    core::{CursorIcon, PointerEvent, TextEvent, WindowEvent},
     dpi::{PhysicalPosition, PhysicalSize},
     kurbo::Affine,
     theme::default_property_set,
@@ -148,6 +148,11 @@ where
             pub fn complete_frame(&mut self) -> bool;
             /// Reports whether the next retained frame would change the picture.
             pub fn needs_frame(&self) -> bool;
+            /// Takes the cursor the document last asked its window to show.
+            ///
+            /// A host that owns a window applies it; a host without one can
+            /// drop it, but takes it either way so the queue stays bounded.
+            pub fn take_cursor(&mut self) -> Option<CursorIcon>;
         }
     }
 
