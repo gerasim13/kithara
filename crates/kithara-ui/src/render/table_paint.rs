@@ -14,7 +14,7 @@ use crate::{
         minimum_table_width, table_content_height, table_row_at,
     },
     backends::replay_ordered,
-    draw::{Pt, Rect},
+    draw::{DrawList, Pt, Rect},
     engine::{ScrollConfig, ScrollState},
     interact::{
         ScrollAxis,
@@ -51,7 +51,7 @@ impl TablePaint {
         cursor: Cursor,
     ) -> Vec<Geometry> {
         let (horizontal, vertical) = state.paint_offsets();
-        let mut frame = Frame::new(renderer, bounds.size());
+        let frame = Frame::new(renderer, bounds.size());
         let mut text = state.text.borrow_mut();
         let text = text.get_or_insert_with(|| self.face.skin().text_resources().into());
         let point = cursor.position_in(bounds).map(Into::into);
@@ -64,7 +64,7 @@ impl TablePaint {
             vertical,
             &self.face,
         );
-        let list = self.face.commands(
+        let list = self.commands(
             text,
             bounds,
             &Drawn {
@@ -75,8 +75,20 @@ impl TablePaint {
                 vertical,
             },
         );
-        replay_ordered(&list, &mut frame, self.face.skin().text_resources());
-        vec![frame.into_geometry()]
+        vec![self.tessellated(frame, &list)]
+    }
+
+    /// The marks the table's rows, header and footer come to, built afresh.
+    #[cfg_attr(feature = "perf", hotpath::measure(label = "iced.table.commands"))]
+    fn commands(&self, text: &mut TextContext, bounds: Rect, drawn: &Drawn) -> DrawList {
+        self.face.commands(text, bounds, drawn)
+    }
+
+    /// Those marks turned into triangles the renderer can hand the GPU.
+    #[cfg_attr(feature = "perf", hotpath::measure(label = "iced.table.tessellate"))]
+    fn tessellated(&self, mut frame: Frame, list: &DrawList) -> Geometry {
+        replay_ordered(list, &mut frame, self.face.skin().text_resources());
+        frame.into_geometry()
     }
 
     pub(super) fn config(&self) -> TableConfig {
