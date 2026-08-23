@@ -26,19 +26,20 @@ use kithara_platform::CancelToken;
 
 // Owned at the consumer-crate top (Queue / App / FFI player / PlayerImpl).
 let cancel = CancelToken::root();
-let controller: Arc<AbrController> =
-    AbrController::new(AbrSettings::default(), cancel.child());
+let controller: Arc<AbrController> = AbrController::new(AbrSettings::default());
 
 // Each peer (HLS variant, file source) implements `Abr` and registers itself.
-let handle: AbrHandle = controller.register(&(peer as Arc<dyn Abr>));
+let peer_cancel = cancel.child();
+let handle: AbrHandle =
+    controller.register_with_cancel(&(peer as Arc<dyn Abr>), &peer_cancel);
 
 // Throughput samples flow back from the downloader.
 controller.record_bandwidth(peer_id, bytes, duration, source);
 ```
 
-`AbrController::new` returns `Arc<Self>`. The controller is registered with multiple peers via `register(peer)`; dropping the returned `AbrHandle` unregisters the peer automatically.
+`AbrController::new` returns `Arc<Self>`. The controller is registered with multiple peers via `register(peer)` or, inside a composed subsystem, `register_with_cancel(peer, parent_cancel)`; dropping the returned `AbrHandle` unregisters the peer automatically.
 
-ABR decisions are pull-driven — they fire from the peer's scheduler on each fetch, not on a separate timer.
+ABR decisions are normally pull-driven from peer activity. When a desired switch is held only by `min_switch_interval`, the controller arms one deduplicated, peer-scoped retry at the exact eligibility deadline; it does not require another download to finish.
 
 ## Key Types
 

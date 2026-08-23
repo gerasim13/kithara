@@ -119,7 +119,8 @@ impl Downloader {
         #[cfg(not(target_arch = "wasm32"))]
         let runtime = config.runtime;
         // Composed/standalone seam: `Some` parent → child of it; `None` → own
-        // root. The loop, peers, and ABR controller all derive from this token.
+        // root. The loop and peer scopes derive from this token; each peer
+        // hands its scope to ABR registration as well.
         let cancel = CancelScope::new(config.cancel).token();
         let abr = AbrController::new(config.abr_settings);
         Self {
@@ -161,19 +162,23 @@ impl Downloader {
         /// Capacity of the per-peer bounded command channel.
         const PEER_CMD_CHANNEL_CAPACITY: usize = 32;
         self.ensure_spawned();
-        let cancel = self.inner.cancel.child();
+        let cancel = CancelScope::new(Some(self.inner.cancel.clone()));
+        let cancel_token = cancel.token();
         let (cmd_tx, cmd_rx) = mpsc::channel(PEER_CMD_CHANNEL_CAPACITY);
         let bus: Arc<RwLock<Option<EventBus>>> = Arc::new(RwLock::default());
 
         let abr_peer: Arc<dyn Abr> = Arc::clone(&peer) as Arc<dyn Abr>;
-        let abr_handle = self.inner.abr.register(&abr_peer);
+        let abr_handle = self
+            .inner
+            .abr
+            .register_with_cancel(&abr_peer, &cancel_token);
         let peer_id = abr_handle.peer_id();
 
         let entry = RegisteredPeerEntry {
             peer,
             cmd_rx,
             peer_id,
-            cancel: cancel.clone(),
+            cancel: cancel_token,
             bus: Arc::clone(&bus),
         };
         self.inner.register_tx.send(entry).ok();

@@ -2,8 +2,9 @@ use kithara_events::{
     AbrMode, AbrReason, BandwidthSource, VariantDuration, VariantIndex, VariantInfo,
 };
 use kithara_platform::{
-    sync::Arc,
-    time::{Duration, Duration as StdDuration, Instant},
+    CancelToken,
+    sync::{Arc, Notify},
+    time::{self, Duration, Duration as StdDuration, Instant},
 };
 use kithara_test_utils::kithara;
 use proptest::prelude::*;
@@ -777,6 +778,25 @@ impl Abr for SeedPeer {
     }
 }
 
+struct RetryPeer {
+    state: Arc<AbrState>,
+    wake: Arc<Notify>,
+}
+
+impl Abr for RetryPeer {
+    fn state(&self) -> Option<Arc<AbrState>> {
+        Some(Arc::clone(&self.state))
+    }
+
+    fn variants(&self) -> Vec<VariantInfo> {
+        audio_variants_4tier()
+    }
+
+    fn wake(&self) {
+        self.wake.notify_one();
+    }
+}
+
 fn audio_variants_4tier() -> Vec<VariantInfo> {
     [66_000_u64, 134_000, 270_000, 900_000]
         .into_iter()
@@ -843,6 +863,60 @@ async fn auto_mode_without_seed_stays_on_initial_variant_on_cold_start() {
     assert_eq!(state.current_variant_index(), VariantIndex::new(0));
     assert_eq!(state.pending_target(), None);
     drop(handle);
+}
+
+#[kithara::test(tokio, timeout(Duration::from_secs(1)))]
+async fn min_interval_retries_without_another_bandwidth_sample() {
+    let settings = AbrSettings::builder()
+        .min_switch_interval(Duration::from_millis(20))
+        .min_buffer_for_up_switch(Duration::ZERO)
+        .build();
+    let controller = AbrController::new(settings);
+    let state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0)))));
+    let wake = Arc::new(Notify::default());
+    let peer: Arc<dyn Abr> = Arc::new(RetryPeer {
+        state: Arc::clone(&state),
+        wake: Arc::clone(&wake),
+    });
+    let handle = controller.register(&peer);
+
+    controller.tick(handle.peer_id(), Instant::now());
+    assert_eq!(
+        state.pending_target(),
+        None,
+        "the anti-oscillation interval must hold the first switch"
+    );
+
+    wake.notified().await;
+    assert_eq!(state.pending_target(), Some(VariantIndex::new(3)));
+}
+
+#[kithara::test(tokio, timeout(Duration::from_secs(1)))]
+async fn parent_cancel_stops_the_deferred_min_interval_retry() {
+    let settings = AbrSettings::builder()
+        .min_switch_interval(Duration::from_millis(100))
+        .min_buffer_for_up_switch(Duration::ZERO)
+        .build();
+    let controller = AbrController::new(settings);
+    let state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0)))));
+    let wake = Arc::new(Notify::default());
+    let peer: Arc<dyn Abr> = Arc::new(RetryPeer {
+        state: Arc::clone(&state),
+        wake: Arc::clone(&wake),
+    });
+    let cancel = CancelToken::never();
+    let handle = controller.register_with_cancel(&peer, &cancel);
+
+    controller.tick(handle.peer_id(), Instant::now());
+    cancel.cancel();
+
+    assert!(
+        time::timeout(Duration::from_millis(150), wake.notified())
+            .await
+            .is_err(),
+        "cancelling the peer scope must suppress its delayed wake",
+    );
+    assert_eq!(state.pending_target(), None);
 }
 
 /// Prod trace (`runtime_manual_switch_works_when_all_segments_cached`): an
