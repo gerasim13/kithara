@@ -2337,6 +2337,75 @@ fn dispatch_owed_reaches_the_transition_latch() {
     );
 }
 
+/// A parked read is owed no matter where the projection points: the outgoing
+/// demuxer consumes past the projected byte cursor and waits on segments the
+/// stale owed window refuses to dispatch, leaving the queue head one past the
+/// cap forever (the phase_continuity livelock: `queue_head=27 cap=26`). The
+/// range the reader waits on is what the splice still consumes, so the owed
+/// window must run through it.
+#[kithara::test]
+fn dispatch_owed_covers_the_range_the_reader_waits_on() {
+    let ctx = test_ctx(8);
+    let v = make_var(0, 0, &[100, 100, 100, 100, 100, 100], &ctx);
+    v.rebuild(&ctx, 0);
+    let session = active_session(&v, &ctx, 0);
+    // The demuxer parked on bytes 300..500 (segments 3 and 4), past the owed
+    // window of a reader projected at byte 0 with the latch inside segment 0.
+    let parked = v.wait_range(300..500, Some(Duration::ZERO));
+    assert!(
+        matches!(
+            parked,
+            Err(StreamError::Source(SourceError::WaitBudgetExceeded))
+        ),
+        "the unloaded range must park the reader first: {parked:?}"
+    );
+
+    let cmds = session.dispatch_owed(&ctx, 10, Duration::ZERO);
+
+    let got: Vec<Url> = cmds.iter().map(|cmd| cmd.url().clone()).collect();
+    assert_eq!(
+        got,
+        vec![
+            v.segments()[0].url().clone(),
+            v.segments()[1].url().clone(),
+            v.segments()[2].url().clone(),
+            v.segments()[3].url().clone(),
+            v.segments()[4].url().clone(),
+        ],
+        "the owed window runs through the segments the parked read waits on"
+    );
+}
+
+/// A session seek retires the parked-read debt: the wait belonged to reads
+/// the seek abandoned, and dragging it forward would hold look-ahead capacity
+/// against the new position.
+#[kithara::test]
+fn a_session_seek_clears_the_parked_read_debt() {
+    let ctx = test_ctx(8);
+    let v = make_var(0, 0, &[100, 100, 100, 100, 100, 100], &ctx);
+    v.rebuild(&ctx, 0);
+    let session = active_session(&v, &ctx, 0);
+    let _ = v.wait_range(300..500, Some(Duration::ZERO));
+
+    session.seek_to_byte(100);
+    let cmds = session.dispatch_owed(&ctx, 10, Duration::ZERO);
+
+    // The plan itself is the peer rebuild's job; this session-level pass
+    // still drains the queue from its head. The property is the cap: with
+    // the wait retired it ends at the new position's owed window (segment 2),
+    // not at the abandoned wait's segment 4.
+    let got: Vec<Url> = cmds.iter().map(|cmd| cmd.url().clone()).collect();
+    assert_eq!(
+        got,
+        vec![
+            v.segments()[0].url().clone(),
+            v.segments()[1].url().clone(),
+            v.segments()[2].url().clone(),
+        ],
+        "a seek retires the old wait; the owed cap follows the new position"
+    );
+}
+
 /// Retiring the look-ahead burns the tokens of fetches past the owed window,
 /// so the downloader frees their slots instead of finishing bytes the latched
 /// cut already declared dead.

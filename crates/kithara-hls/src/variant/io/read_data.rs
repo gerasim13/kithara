@@ -118,20 +118,27 @@ impl HlsVariant {
         _timeout: Option<Duration>,
     ) -> StreamResult<WaitOutcome> {
         let stable_pending = match self.range_gate(&range) {
-            Some(RangeGate::Eof) => return Ok(WaitOutcome::Eof),
+            Some(RangeGate::Eof) => {
+                self.flow.reader.clear_wait();
+                return Ok(WaitOutcome::Eof);
+            }
             Some(RangeGate::Ready) => {
                 hang_reset!();
+                self.flow.reader.clear_wait();
                 return Ok(WaitOutcome::Ready);
             }
             Some(RangeGate::Metadata(_) | RangeGate::Pending) => true,
             None => false,
         };
         if self.flow.reader.is_flushing() {
+            self.flow.reader.clear_wait();
             return Ok(WaitOutcome::Interrupted);
         }
         if stable_pending && self.range_has_failed(&range) {
+            self.flow.reader.clear_wait();
             return Err(StreamError::Source(HlsError::SegmentUnavailable.into()));
         }
+        self.flow.reader.note_wait(range.end);
         trace!(
             variant = self.variant,
             start = range.start,
