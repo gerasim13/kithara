@@ -12,6 +12,10 @@ use crate::{
 
 pub(crate) const BYTE_MAX_BUFFERS: usize = usize::MAX;
 pub(crate) const BYTE_TRIM_CAPACITY: usize = 0;
+/// Workspace default byte budget: the cap a `Region` shares between its two
+/// pools, and the cap on the process-wide `BytePool` singleton. One number,
+/// because the two describe the same "how much memory may pooling hold".
+pub(crate) const DEFAULT_MAX_BYTES: usize = 256 * 1024 * 1024;
 pub(crate) const PCM_MAX_BUFFERS: usize = 128;
 pub(crate) const PCM_TRIM_CAPACITY: usize = 200_000;
 
@@ -163,7 +167,7 @@ impl fmt::Debug for PcmBuf {
 impl Default for BytePool {
     fn default() -> Self {
         static GLOBAL: OnceLock<BytePool> = OnceLock::new();
-        const BUDGET: ByteBudget = ByteBudget(256 * 1024 * 1024);
+        const BUDGET: ByteBudget = ByteBudget(DEFAULT_MAX_BYTES);
         GLOBAL
             .get_or_init(|| Self::with_byte_budget(BYTE_MAX_BUFFERS, BYTE_TRIM_CAPACITY, BUDGET))
             .clone()
