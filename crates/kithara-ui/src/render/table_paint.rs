@@ -1,4 +1,4 @@
-use std::cell::RefCell;
+use std::{cell::RefCell, rc::Rc};
 
 use iced::{
     Rectangle, Renderer, Theme,
@@ -25,7 +25,11 @@ use crate::{
 };
 
 pub(super) struct TablePaint {
-    pub(super) face: TableFace,
+    /// Shared with the marks cache, which keeps the face it last drew from.
+    /// The host builds a fresh face every frame, so the cache would otherwise
+    /// have to clone all the rows to remember one - a price paid on exactly
+    /// the frames that were already the expensive ones.
+    pub(super) face: Rc<TableFace>,
     pub(super) path: String,
 }
 
@@ -37,7 +41,7 @@ impl TablePaint {
         skin: &Skin,
     ) -> Self {
         Self {
-            face: TableFace::new(rows, columns, skin),
+            face: Rc::new(TableFace::new(rows, columns, skin)),
             path: path.to_owned(),
         }
     }
@@ -160,7 +164,7 @@ pub(super) struct TableState {
 struct Marks {
     bounds: Rect,
     drawn: Drawn,
-    face: TableFace,
+    face: Rc<TableFace>,
 }
 
 /// What a frame cost the table.
@@ -197,7 +201,7 @@ impl TableState {
         &self,
         bounds: Rect,
         drawn: &Drawn,
-        face: &TableFace,
+        face: &Rc<TableFace>,
         build: impl FnOnce() -> DrawList,
     ) -> Marked {
         let mut marks = self.marks.borrow_mut();
@@ -217,7 +221,7 @@ impl TableState {
             Some(Marks {
                 bounds,
                 drawn: drawn.clone(),
-                face: face.clone(),
+                face: Rc::clone(face),
             }),
             Some(list),
         );
