@@ -72,8 +72,23 @@ impl Gallery {
         }
     }
 
-    /// Turns to the page a shot names.
+    /// One frame of the gallery's own time: the clock a document binds to,
+    /// and the application's own reading of how far along it is.
+    fn tick(&mut self) {
+        self.clock = self
+            .clock
+            .advance(Duration::from_millis(Consts::STRESS_TICK_MS));
+        self.reads.tick();
+    }
+
+    /// Turns to the page a shot names, as freshly as the retained host mounts
+    /// one: that host builds a page its own, so a page opens here at nothing
+    /// on the clock and nothing behind it. Carrying the page before it over
+    /// would photograph the two hosts at two different moments, and a film of
+    /// a page would open wherever the page before it left off.
     fn select(&mut self, shot: Shot) {
+        self.clock = Clock::default();
+        self.reads = MockReads::default();
         self.reads.select_tab(shot.tab);
         if let Some(module) = shot.module {
             self.reads.select_module(module);
@@ -211,10 +226,7 @@ fn update(state: &mut Gallery, message: Message) -> Task<Message> {
         Message::Close(id) if id == state.window_id => iced::exit(),
         Message::Close(id) => window::close(id),
         Message::Tick => {
-            state.clock = state
-                .clock
-                .advance(Duration::from_millis(Consts::STRESS_TICK_MS));
-            state.reads.tick();
+            state.tick();
             Task::none()
         }
         Message::Ui(UiEvent::Control { path, action }) => {
@@ -334,6 +346,57 @@ mod tests {
     use num_traits::cast::AsPrimitive;
 
     use super::*;
+
+    fn shot(tab: Tab) -> Shot {
+        Shot { tab, module: None }
+    }
+
+    fn seconds(reads: &dyn Reads, endpoint: &str) -> f64 {
+        let Some(ReadValue::Scalar(value)) = reads.get(endpoint) else {
+            panic!("{endpoint} answers a scalar")
+        };
+        value
+    }
+
+    #[kithara::test]
+    fn a_tick_moves_the_clock_a_page_binds_to() {
+        let mut gallery = Gallery::mounted();
+        gallery.select(shot(Tab::Motion));
+        gallery.tick();
+        assert_ne!(gallery.clock, Clock::default());
+    }
+
+    #[kithara::test]
+    fn a_tick_moves_the_reading_the_application_hands_over() {
+        let mut gallery = Gallery::mounted();
+        gallery.select(shot(Tab::Motion));
+        gallery.tick();
+        assert_ne!(
+            seconds(&gallery.reads, "gallery.motion.clock"),
+            seconds(&MockReads::default(), "gallery.motion.clock")
+        );
+    }
+
+    #[kithara::test]
+    fn a_page_the_capture_turns_to_opens_at_nothing_on_the_clock() {
+        let mut gallery = Gallery::mounted();
+        gallery.select(shot(Tab::Motion));
+        gallery.tick();
+        gallery.select(shot(Tab::Sprites));
+        assert_eq!(gallery.clock, Clock::default());
+    }
+
+    #[kithara::test]
+    fn a_page_the_capture_turns_to_opens_with_nothing_behind_it() {
+        let mut gallery = Gallery::mounted();
+        gallery.select(shot(Tab::Motion));
+        gallery.tick();
+        gallery.select(shot(Tab::Sprites));
+        assert_eq!(
+            seconds(&gallery.reads, "gallery.motion.clock"),
+            seconds(&MockReads::default(), "gallery.motion.clock")
+        );
+    }
 
     #[kithara::test]
     fn every_module_demo_compiles_with_full_chrome() {

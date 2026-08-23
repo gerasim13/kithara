@@ -11,6 +11,7 @@ use std::{
 };
 
 use futures_lite::future::block_on;
+use kithara_platform::time::Duration;
 use kithara_ui::{
     app::{Config, Frame as UiFrame, Ui},
     builtin,
@@ -30,7 +31,7 @@ use num_traits::cast::AsPrimitive;
 
 use super::{
     Consts,
-    capture::{Frame, Shot, read_frame, write_frame, write_png},
+    capture::{Film, Frame, read_frame, write_frame, write_png},
     host::Gallery,
     mock, resolver,
 };
@@ -216,9 +217,10 @@ fn capture(dir: &PathBuf) -> Result<usize, String> {
         .text(builtin::text_doc())
         .build();
     write_frame(dir, frame)?;
+    let film = Film::requested()?.unwrap_or_else(Film::stills);
     let mut written = 0;
 
-    for shot in Shot::all() {
+    for &shot in &film.pages {
         let mut ui = Ui::new(
             Gallery::at(shot),
             config,
@@ -226,14 +228,23 @@ fn capture(dir: &PathBuf) -> Result<usize, String> {
             frame.scale,
         )
         .map_err(|error| format!("mount {}: {error}", shot.name()))?;
-        let ui_frame = ui
-            .render()
-            .map_err(|error| format!("draw {}: {error}", shot.name()))?;
-        let rgba = off.rasterise(&ui_frame, frame.scale, ui.background().into())?;
-        let path = dir.join(format!("{}.png", shot.name()));
-        write_png(&path, &rgba, frame.width, frame.height)?;
-        println!("captured {}", path.display());
-        written += 1;
+        for photo in 0..film.photos {
+            // Time passes between two photographs, never before the first: a
+            // film opens where the page opens.
+            if photo > 0 {
+                for _ in 0..film.steps {
+                    ui.frame(Duration::from_millis(Consts::STRESS_TICK_MS));
+                }
+            }
+            let ui_frame = ui
+                .render()
+                .map_err(|error| format!("draw {}: {error}", shot.name()))?;
+            let rgba = off.rasterise(&ui_frame, frame.scale, ui.background().into())?;
+            let path = dir.join(film.file(shot, photo));
+            write_png(&path, &rgba, frame.width, frame.height)?;
+            println!("captured {}", path.display());
+            written += 1;
+        }
     }
     Ok(written)
 }

@@ -41,7 +41,7 @@ use kithara_ui::render::fonts::{FONT_BYTES, SANS};
 use num_traits::cast::AsPrimitive;
 
 use super::{
-    capture::{Frame, Shot, read_frame, write_frame, write_png},
+    capture::{Film, Frame, read_frame, write_frame, write_png},
     theme, view,
 };
 
@@ -71,17 +71,27 @@ fn capture(dir: &PathBuf) -> Result<usize, String> {
     let skin = gallery.skin;
     let theme = theme(skin);
     let mut renderer = renderer()?;
+    let film = Film::requested()?.unwrap_or_else(Film::stills);
     let mut written = 0;
-    for shot in Shot::all() {
+    for &shot in &film.pages {
         gallery.select(shot);
-        let rgba = page(&gallery, &theme, frame, &mut renderer)?;
-        write_png(
-            &dir.join(format!("{}.png", shot.name())),
-            &rgba,
-            frame.width,
-            frame.height,
-        )?;
-        written += 1;
+        for photo in 0..film.photos {
+            // Time passes between two photographs, never before the first: a
+            // film opens where the page opens.
+            if photo > 0 {
+                for _ in 0..film.steps {
+                    gallery.tick();
+                }
+            }
+            let rgba = page(&gallery, &theme, frame, &mut renderer)?;
+            write_png(
+                &dir.join(film.file(shot, photo)),
+                &rgba,
+                frame.width,
+                frame.height,
+            )?;
+            written += 1;
+        }
     }
     Ok(written)
 }
