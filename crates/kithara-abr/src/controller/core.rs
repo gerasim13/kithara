@@ -56,10 +56,15 @@ impl kithara_test_utils::probe::IntoProbeArg for AbrPeerId {
 }
 
 /// ABR controller settings.
-#[derive(Clone, Debug, PartialEq, Builder)]
+#[derive(Clone, Debug, Builder)]
 #[builder(state_mod(vis = "pub"))]
 #[non_exhaustive]
 pub struct AbrSettings {
+    /// Optional parent cancellation token for the controller scope.
+    ///
+    /// `Some` derives a child scope from the supplied parent; `None` gives the
+    /// controller a standalone scope.
+    pub cancel: Option<CancelToken>,
     /// Minimum interval between `AbrEvent::BandwidthEstimate` emits.
     #[builder(default = Defaults::BANDWIDTH_EMIT_MIN_INTERVAL)]
     pub bandwidth_emit_min_interval: Duration,
@@ -128,11 +133,10 @@ impl AbrController {
     /// Minimum delay between `AbrEvent::ThroughputSample` emits (fixed).
     pub(super) const MIN_THROUGHPUT_SAMPLE_INTERVAL: Duration = Duration::from_millis(200);
 
-    /// Create a new controller with the default [`ThroughputEstimator`] below
-    /// `cancel`.
+    /// Create a new controller with the default [`ThroughputEstimator`].
     #[must_use]
-    pub fn new(settings: AbrSettings, cancel: CancelToken) -> Arc<Self> {
-        Self::with_estimator(settings, Arc::new(ThroughputEstimator::new()), cancel)
+    pub fn new(settings: AbrSettings) -> Arc<Self> {
+        Self::with_estimator(settings, Arc::new(ThroughputEstimator::new()))
     }
 
     pub(super) fn allocate_peer_id(&self) -> AbrPeerId {
@@ -242,18 +246,15 @@ impl AbrController {
         }
     }
 
-    /// Create a new controller with a custom estimator below `cancel`. Used in
-    /// tests to inject a mock.
+    /// Create a new controller with a custom estimator. Used in tests to inject
+    /// a mock.
     #[must_use]
-    pub fn with_estimator(
-        settings: AbrSettings,
-        estimator: Arc<dyn Estimator>,
-        cancel: CancelToken,
-    ) -> Arc<Self> {
+    pub fn with_estimator(settings: AbrSettings, estimator: Arc<dyn Estimator>) -> Arc<Self> {
         Self::seed_estimator(&settings, &estimator);
+        let scope = CancelScope::new(settings.cancel.clone());
         Arc::new(Self {
             settings,
-            scope: CancelScope::new(Some(cancel)),
+            scope,
             estimator,
             tick_waker: Mutex::default(),
             next_peer_id: AtomicU64::new(0),

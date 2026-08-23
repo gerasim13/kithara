@@ -67,7 +67,7 @@ Dual-track EWMA — fast (2 s half-life) and slow (10 s half-life); estimate = `
 
 `AbrSettings::initial_throughput_bps` (default `Some(2_000_000)`) is applied to the estimator at controller construction so the first tick can pick a sensible variant before a real sample lands. ≈2 Mbps covers Wi-Fi and most 4G; constrained networks down-switch after the first real sample. It is a transient prior — real EWMA weight replaces it through the `min(fast, slow)` consensus. Set it to `None` for the cold-start path: `decide()` returns `NoEstimate` and the peer stays on its initial variant until samples accumulate.
 
-`AbrSettings` is `#[non_exhaustive]` and built with `AbrSettings::builder()…build()` (`Default` goes through the builder); the `initial_throughput_bps` setter takes a bare `u64`.
+`AbrSettings` is the facade configuration for the controller: it carries both algorithm parameters and injected resources such as the optional parent `CancelToken`. It is `#[non_exhaustive]` and built with `AbrSettings::builder()…build()` (`Default` goes through the builder); the `initial_throughput_bps` setter takes a bare `u64`.
 
 ## Ownership
 
@@ -75,7 +75,7 @@ Dual-track EWMA — fast (2 s half-life) and slow (10 s half-life); estimate = `
 - `Abr::cancel()` is mandatory and returns the protocol track/source token. The controller observes this token but never cancels it; HLS returns its stream token and File returns its source token.
 - `AbrHandle::set_mode` validates `Manual(idx)` against the peer's live variant list and returns `AbrError::VariantOutOfBounds`; `AbrState::set_mode` does not validate.
 - `AbrHandle` is the consumer surface; dropping the last clone unregisters the peer. The track-scoped `EventBus` lives on the handle (`with_bus`), so peers stay free of event-bus plumbing.
-- `AbrController` owns a child scope of the parent passed to its constructor. Each registration derives one controller-owned child and OR-combines it with `Abr::cancel()` through `CancelGroup`; controller/parent cancellation stops every registration, protocol cancellation stops that track, and sibling registrations remain live.
+- `AbrController` owns a child scope of the optional parent carried by `AbrSettings`. Each registration derives one controller-owned child and OR-combines it with `Abr::cancel()` through `CancelGroup`; controller/parent cancellation stops every registration, protocol cancellation stops that track, and sibling registrations remain live.
 - `Downloader::run` is the only async driver for ABR scheduling. `AbrController` stores coalesced tick requests, deadlines, and the downloader task's current waker; it never spawns a worker of its own.
 - `AbrController::register(peer)` discovers protocol cancellation from the peer. Dropping the last `AbrHandle` cancels only the controller-owned registration child, so unregister never cancels the protocol track or the controller scope.
 - `AbrHandle::notify_exact_commit` publishes `AbrEvent::VariantApplied` after a promotion and does nothing else. Its caller is the audio worker, which is not a runtime thread, so this path must not schedule async work.

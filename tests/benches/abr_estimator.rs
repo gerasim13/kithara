@@ -103,7 +103,7 @@ fn bench_controller_record_bandwidth(c: &mut Criterion) {
             &(bytes, duration_ms),
             |b, &(bytes, duration_ms)| {
                 b.iter(|| {
-                    let controller = AbrController::new(settings(), CancelToken::never());
+                    let controller = AbrController::new(settings());
                     let state = Arc::new(AbrState::new(auto(1)));
                     let peer: Arc<dyn Abr> = Arc::new(BenchPeer {
                         cancel: CancelToken::never(),

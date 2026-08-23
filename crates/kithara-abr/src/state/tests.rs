@@ -878,7 +878,6 @@ async fn bandwidth_samples_are_preserved_while_tick_requests_coalesce() {
         Arc::new(CountingEstimator {
             samples: Arc::clone(&samples),
         }),
-        CancelToken::never(),
     );
     let state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0)))));
     let peer: Arc<dyn Abr> = Arc::new(CountingTickPeer {
@@ -930,8 +929,7 @@ async fn auto_mode_with_default_seed_picks_high_variant_on_cold_start() {
         .min_switch_interval(Duration::ZERO)
         .min_buffer_for_up_switch(Duration::ZERO)
         .build();
-    let controller_cancel = CancelToken::never();
-    let controller = AbrController::new(settings, controller_cancel);
+    let controller = AbrController::new(settings);
     let state = Arc::new(AbrState::new(AbrMode::Auto(None)));
     let peer: Arc<dyn Abr> = Arc::new(SeedPeer {
         cancel: CancelToken::never(),
@@ -960,8 +958,7 @@ async fn auto_mode_without_seed_stays_on_initial_variant_on_cold_start() {
         min_buffer_for_up_switch: Duration::ZERO,
         ..AbrSettings::default()
     };
-    let controller_cancel = CancelToken::never();
-    let controller = AbrController::new(settings, controller_cancel);
+    let controller = AbrController::new(settings);
     let state = Arc::new(AbrState::new(AbrMode::Auto(None)));
     let peer: Arc<dyn Abr> = Arc::new(SeedPeer {
         cancel: CancelToken::never(),
@@ -981,8 +978,7 @@ async fn min_interval_ticks_without_another_bandwidth_sample() {
         .min_switch_interval(Duration::from_millis(20))
         .min_buffer_for_up_switch(Duration::ZERO)
         .build();
-    let controller_cancel = CancelToken::never();
-    let controller = AbrController::new(settings, controller_cancel);
+    let controller = AbrController::new(settings);
     let state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0)))));
     let wake = Arc::new(Notify::default());
     let peer: Arc<dyn Abr> = Arc::new(TickPeer {
@@ -1011,8 +1007,7 @@ async fn peer_cancel_stops_the_scheduled_min_interval_tick() {
         .min_switch_interval(Duration::from_millis(100))
         .min_buffer_for_up_switch(Duration::ZERO)
         .build();
-    let controller_cancel = CancelToken::never();
-    let controller = AbrController::new(settings, controller_cancel);
+    let controller = AbrController::new(settings);
     let state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0)))));
     let wake = Arc::new(Notify::default());
     let peer_cancel = CancelToken::never();
@@ -1043,12 +1038,13 @@ async fn peer_cancel_stops_the_scheduled_min_interval_tick() {
 
 #[kithara::test(tokio, timeout(Duration::from_secs(1)))]
 async fn controller_cancel_stops_the_scheduled_min_interval_tick() {
+    let controller_cancel = CancelToken::never();
     let settings = AbrSettings::builder()
+        .cancel(controller_cancel.clone())
         .min_switch_interval(Duration::from_millis(100))
         .min_buffer_for_up_switch(Duration::ZERO)
         .build();
-    let controller_cancel = CancelToken::never();
-    let controller = AbrController::new(settings, controller_cancel.clone());
+    let controller = AbrController::new(settings);
     let state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0)))));
     let wake = Arc::new(Notify::default());
     let peer: Arc<dyn Abr> = Arc::new(TickPeer {
@@ -1084,8 +1080,7 @@ async fn peer_cancel_does_not_stop_a_sibling_tick() {
         .min_switch_interval(Duration::from_millis(100))
         .min_buffer_for_up_switch(Duration::ZERO)
         .build();
-    let controller_cancel = CancelToken::never();
-    let controller = AbrController::new(settings, controller_cancel);
+    let controller = AbrController::new(settings);
     let first_state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0)))));
     let second_state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0)))));
     let first_wake = Arc::new(Notify::default());
@@ -1129,8 +1124,7 @@ async fn dropping_handle_stops_only_its_scheduled_tick() {
         .min_switch_interval(Duration::from_millis(100))
         .min_buffer_for_up_switch(Duration::ZERO)
         .build();
-    let controller_cancel = CancelToken::never();
-    let controller = AbrController::new(settings, controller_cancel);
+    let controller = AbrController::new(settings);
     let state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0)))));
     let wake = Arc::new(Notify::default());
     let peer: Arc<dyn Abr> = Arc::new(TickPeer {
@@ -1165,7 +1159,7 @@ async fn dropped_peer_does_not_leave_a_due_tick_deadline_spinning() {
         .min_switch_interval(Duration::from_millis(20))
         .min_buffer_for_up_switch(Duration::ZERO)
         .build();
-    let controller = AbrController::new(settings, CancelToken::never());
+    let controller = AbrController::new(settings);
     let state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0)))));
     let peer: Arc<dyn Abr> = Arc::new(TickPeer {
         cancel: CancelToken::never(),
@@ -1194,7 +1188,7 @@ async fn dropped_peer_does_not_leave_a_due_tick_deadline_spinning() {
 /// stale throughput-driven pending.
 #[kithara::test(tokio)]
 async fn tick_already_optimal_retracts_stale_throughput_pending() {
-    let controller = AbrController::new(settings_fast(), CancelToken::never());
+    let controller = AbrController::new(settings_fast());
     let state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(2)))));
     let peer: Arc<dyn Abr> = Arc::new(SeedPeer {
         cancel: CancelToken::never(),
@@ -1239,7 +1233,7 @@ fn tick_min_interval_hold_preserves_pending() {
         min_buffer_for_up_switch: Duration::ZERO,
         ..AbrSettings::default()
     };
-    let controller = AbrController::new(settings, CancelToken::never());
+    let controller = AbrController::new(settings);
     let state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0)))));
     let peer: Arc<dyn Abr> = Arc::new(SeedPeer {
         cancel: CancelToken::never(),
@@ -1269,7 +1263,7 @@ fn tick_min_interval_hold_preserves_pending() {
 /// choice.
 #[kithara::test(tokio)]
 async fn set_mode_back_to_current_kills_queued_switch() {
-    let controller = AbrController::new(settings_fast(), CancelToken::never());
+    let controller = AbrController::new(settings_fast());
     let state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0)))));
     let peer: Arc<dyn Abr> = Arc::new(SeedPeer {
         cancel: CancelToken::never(),
@@ -1301,11 +1295,8 @@ async fn set_mode_back_to_current_kills_queued_switch() {
 #[kithara::test(tokio)]
 async fn lock_refcount_holds_across_record_bandwidth() {
     let settings = settings_fast();
-    let controller = AbrController::with_estimator(
-        settings,
-        Arc::new(ThroughputEstimator::new()) as Arc<_>,
-        CancelToken::never(),
-    );
+    let controller =
+        AbrController::with_estimator(settings, Arc::new(ThroughputEstimator::new()) as Arc<_>);
 
     struct LockedPeer {
         cancel: CancelToken,

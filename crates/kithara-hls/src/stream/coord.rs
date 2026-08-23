@@ -751,7 +751,8 @@ mod tests {
                 },
             ],
         });
-        let controller = AbrController::new(AbrSettings::default(), cancel.clone());
+        let settings = AbrSettings::builder().cancel(cancel.clone()).build();
+        let controller = AbrController::new(settings);
         let handle = controller.register(&peer);
         abr_state.request_target(VariantIndex::new(1), reason);
         let coord = Arc::new(HlsCoord::new(

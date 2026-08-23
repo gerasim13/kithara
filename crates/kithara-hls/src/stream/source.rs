@@ -242,7 +242,8 @@ mod tests {
                 cancel: cancel.clone(),
                 state,
             });
-            let controller = AbrController::new(AbrSettings::default(), cancel.clone());
+            let settings = AbrSettings::builder().cancel(cancel.clone()).build();
+            let controller = AbrController::new(settings);
             let handle = controller.register(&peer);
             Arc::new(HlsCoord::new(
                 HlsCoordEnv {

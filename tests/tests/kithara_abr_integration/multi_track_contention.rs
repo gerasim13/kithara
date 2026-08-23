@@ -62,7 +62,6 @@ async fn three_peers_maintain_independent_variant_indices() {
     let controller = AbrController::with_estimator(
         settings_fast(),
         Arc::new(ThroughputEstimator::new()) as Arc<_>,
-        CancelToken::never(),
     );
 
     let (s0, p0) = new_peer(&[300_000, 900_000]);

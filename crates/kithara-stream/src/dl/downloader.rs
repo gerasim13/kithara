@@ -122,7 +122,9 @@ impl Downloader {
         // root. The loop, peer scopes, and the shared ABR controller derive
         // from this token.
         let cancel = CancelScope::new(config.cancel).token();
-        let abr = AbrController::new(config.abr_settings, cancel.clone());
+        let mut abr_settings = config.abr_settings;
+        abr_settings.cancel = Some(cancel.clone());
+        let abr = AbrController::new(abr_settings);
         Self {
             inner: Arc::new(DownloaderInner {
                 soft_timeout,
