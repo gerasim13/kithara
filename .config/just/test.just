@@ -140,15 +140,13 @@ coverage:
     #!/usr/bin/env bash
     set -uo pipefail
     OUTPUT_DIR="${COVERAGE_OUTPUT_DIR:-./coverage}"
-    # The floor is a ratchet: raise it, never lower it. Measured on the
-    # coverage lane on 2026-08-23 (run 32605953272, 5318 tests, all passing):
-    # 76.48% of lines, 75.01% of regions, 78.77% of functions. It is set at 76
-    # rather than 76.48 so that platform-gated skips and the functions llvm-cov
-    # reports as mismatched cannot turn ordinary jitter red; half a point here is
-    # some six hundred lines, so a real regression still moves it. The number
-    # lives only here — the CI lane inherits it, because a second copy is how a
-    # local run and CI came to gate at different bars.
-    COVERAGE_MIN="${COVERAGE_MIN:-76}"
+    # The bar stands at 80 while the workspace holds 76.5% of lines. The gap is
+    # the UI surface — kithara-ui widgets and kithara-app/src/gui, several files
+    # of it at zero — and it closes by covering that surface, not by moving the
+    # number. The number lives only here: the CI lane inherits it, because a
+    # second copy is one edit away from gating a local run and CI at different
+    # bars.
+    COVERAGE_MIN="${COVERAGE_MIN:-80}"
     IGNORE_REGEX='(tests/|examples/|benches/|xtask/)'
     COBERTURA="$OUTPUT_DIR/cobertura.xml"
     LCOV="$OUTPUT_DIR/lcov.info"
