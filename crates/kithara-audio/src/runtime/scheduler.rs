@@ -90,7 +90,7 @@ impl<N: Node, O: SchedulerObserver> Scheduler<N, O> {
 /// Unchecked scheduler shell.
 ///
 /// Owns all intrinsically-blocking bookkeeping — cancel/command drain, slot
-/// reorder, the `slots`/`slots_order` Vec lifecycle (grow on register, free
+/// reorder, the `slots` Vec lifecycle (grow on register, free
 /// on `retain`), deferred buffer recycle, and the idle park. Only the
 /// RT node ticks run through [`produce_tick_rt`], so the Vec `malloc`/`free`
 /// here never lands on the checked path.
@@ -103,7 +103,6 @@ fn run_loop<N: Node, O: SchedulerObserver>(
 ) {
     trace!("scheduler started");
     let mut slots: Vec<Slot<N>> = Vec::new();
-    let mut slots_order: Vec<usize> = Vec::new();
     let mut needs_reorder = false;
     let mut produced_streak: u32 = 0;
 
@@ -117,13 +116,13 @@ fn run_loop<N: Node, O: SchedulerObserver>(
         refresh_service_classes(&mut slots, &mut needs_reorder);
 
         if needs_reorder {
-            recompute_slots_order(&slots, &mut slots_order);
+            reorder_slots(&mut slots);
             needs_reorder = false;
         }
 
-        recycle_all(&mut slots, &slots_order);
+        recycle_all(&mut slots);
 
-        let report = produce_pass(&mut slots, &slots_order, &mut observer);
+        let report = produce_pass(&mut slots, &mut observer);
         needs_reorder |= remove_terminal(&mut slots);
 
         report_outcome(&mut observer, report);
@@ -137,11 +136,9 @@ fn run_loop<N: Node, O: SchedulerObserver>(
 /// The scheduler calls this before the checked produce core and once more after
 /// the pass. The final recycle delivers work armed by the last tick before a
 /// terminal slot is removed or the worker parks.
-fn recycle_all<N: Node>(slots: &mut [Slot<N>], slots_order: &[usize]) {
-    for &idx in slots_order {
-        if let Some(slot) = slots.get_mut(idx) {
-            slot.node.recycle();
-        }
+fn recycle_all<N: Node>(slots: &mut [Slot<N>]) {
+    for slot in slots {
+        slot.node.recycle();
     }
 }
 
@@ -199,20 +196,23 @@ fn park_after_outcome<N: Node, O: SchedulerObserver>(
     }
 }
 
-fn recompute_slots_order<N: Node>(slots: &[Slot<N>], slots_order: &mut Vec<usize>) {
-    slots_order.clear();
-    slots_order.reserve(slots.len());
-    slots_order.extend(0..slots.len());
-    slots_order.sort_by(|&a, &b| {
-        let class_a = slots[a].service_class;
-        let class_b = slots[b].service_class;
-        class_b.cmp(&class_a)
-    });
+fn reorder_slots<N: Node>(slots: &mut [Slot<N>]) {
+    for i in 1..slots.len() {
+        let mut position = i;
+        while position > 0 && slot_precedes(&slots[position], &slots[position - 1]) {
+            slots.swap(position - 1, position);
+            position -= 1;
+        }
+    }
+}
+
+fn slot_precedes<N>(left: &Slot<N>, right: &Slot<N>) -> bool {
+    left.service_class > right.service_class
+        || (left.service_class == right.service_class && left.id < right.id)
 }
 
 fn produce_pass<N: Node, O: SchedulerObserver>(
     slots: &mut [Slot<N>],
-    slots_order: &[usize],
     observer: &mut O,
 ) -> PassReport {
     let mut report = PassReport::new(slots.len());
@@ -222,12 +222,7 @@ fn produce_pass<N: Node, O: SchedulerObserver>(
 
     let mut best = TickResult::Done;
 
-    for &idx in slots_order {
-        if idx >= slots.len() {
-            continue;
-        }
-        let slot = &mut slots[idx];
-
+    for slot in slots.iter_mut() {
         // Serve the slot ahead into its own ring instead of handing one chunk
         // per pass, so a neighbour's blocking step cannot set this slot's rate.
         // The visit ends as soon as it stops being free for the others: a slot
@@ -316,7 +311,7 @@ fn produce_pass<N: Node, O: SchedulerObserver>(
     // shell. This is load-bearing for terminal ticks: run_loop removes those
     // slots immediately after produce_pass returns, so there is no next-pass
     // recycle in which to wake a blocked reader or flush terminal events.
-    recycle_all(slots, slots_order);
+    recycle_all(slots);
 
     report.outcome = match best {
         TickResult::Progress => PassOutcome::Produced,
@@ -545,7 +540,7 @@ mod tests {
     /// mirroring the production `DecoderNode` — the real-time consumer writes
     /// the atomic wait-free and the scheduler reads it back each pass via
     /// `service_class()`. Lets a test drive the live re-prioritisation path
-    /// (`refresh_service_classes` → `recompute_slots_order`) deterministically.
+    /// (`refresh_service_classes` → `reorder_slots`) deterministically.
     struct AtomicClassNode {
         class: Arc<AtomicServiceClass>,
     }
@@ -698,7 +693,7 @@ mod tests {
 
     #[kithara::test]
     fn scheduler_orders_service_classes_descending() {
-        let slots = vec![
+        let mut slots = vec![
             Slot {
                 id: 1,
                 node: ServiceClassNode {
@@ -728,10 +723,12 @@ mod tests {
             },
         ];
 
-        let mut slots_order: Vec<usize> = Vec::new();
-        recompute_slots_order(&slots, &mut slots_order);
+        reorder_slots(&mut slots);
 
-        assert_eq!(slots_order, vec![1, 2, 0]);
+        assert_eq!(
+            slots.iter().map(|slot| slot.id).collect::<Vec<_>>(),
+            vec![2, 3, 1]
+        );
     }
 
     #[kithara::test]
@@ -739,7 +736,7 @@ mod tests {
         // End-to-end of the live re-prioritisation path the worker runs each
         // pass: the real-time consumer writes a track's `AtomicServiceClass`
         // wait-free; the scheduler's `refresh_service_classes` must observe the
-        // new value and flag a reorder, after which `recompute_slots_order`
+        // new value and flag a reorder, after which `reorder_slots`
         // places the Audible track ahead of the Idle one. Deterministic by
         // construction — no live worker thread, no rings, no concurrency, no
         // timing: just the exact functions a pass calls, over a fixed in-memory
@@ -781,10 +778,9 @@ mod tests {
         );
         assert_eq!(slots[1].service_class, ServiceClass::Audible);
 
-        let mut order: Vec<usize> = Vec::new();
-        recompute_slots_order(&slots, &mut order);
+        reorder_slots(&mut slots);
         assert_eq!(
-            order,
+            slots.iter().map(|slot| slot.id).collect::<Vec<_>>(),
             vec![1, 0],
             "Audible (slot 1) must be ordered before Idle (slot 0)"
         );
@@ -800,9 +796,9 @@ mod tests {
             needs_reorder,
             "refresh must flag a reorder after the priority swap"
         );
-        recompute_slots_order(&slots, &mut order);
+        reorder_slots(&mut slots);
         assert_eq!(
-            order,
+            slots.iter().map(|slot| slot.id).collect::<Vec<_>>(),
             vec![0, 1],
             "after the swap, A (now Audible) must lead B (now Idle)"
         );
@@ -811,10 +807,9 @@ mod tests {
     #[kithara::test]
     fn produce_pass_keeps_live_upstream_demand_out_of_hang_wait() {
         let mut observer = TestObserver;
-        let order = vec![0usize];
         let mut pending = vec![fixed_slot(1, TickResult::UpstreamPending)];
         assert_eq!(
-            produce_pass(&mut pending, &order, &mut observer).outcome,
+            produce_pass(&mut pending, &mut observer).outcome,
             PassOutcome::UpstreamPending
         );
 
@@ -822,9 +817,8 @@ mod tests {
             fixed_slot(1, TickResult::UpstreamPending),
             fixed_slot(2, TickResult::Waiting),
         ];
-        let order = vec![0usize, 1usize];
         assert_eq!(
-            produce_pass(&mut mixed, &order, &mut observer).outcome,
+            produce_pass(&mut mixed, &mut observer).outcome,
             PassOutcome::Waiting,
             "a real dead upstream wait must still tick the hang detector"
         );
@@ -840,10 +834,9 @@ mod tests {
             rt_policy: RtPolicy::Rt,
             is_terminal: false,
         }];
-        let order = [0];
         let mut observer = TestObserver;
 
-        let _ = produce_pass(&mut slots, &order, &mut observer);
+        let _ = produce_pass(&mut slots, &mut observer);
         assert!(slots[0].is_terminal);
         assert_eq!(received.try_recv(), Ok("recycle"));
         assert_eq!(received.try_recv(), Ok("recycle"));
@@ -869,7 +862,7 @@ mod tests {
         }];
         let mut observer = TestObserver;
 
-        let report = produce_pass(&mut slots, &[0], &mut observer);
+        let report = produce_pass(&mut slots, &mut observer);
 
         assert_eq!(report.outcome, PassOutcome::Waiting);
         assert_eq!(received.try_recv(), Ok("recycle"));
@@ -931,9 +924,8 @@ mod tests {
         assert_eq!(slots[0].node.policy_calls.get(), 1);
 
         let mut observer = TestObserver;
-        let order = [0];
-        let _ = produce_pass(&mut slots, &order, &mut observer);
-        let _ = produce_pass(&mut slots, &order, &mut observer);
+        let _ = produce_pass(&mut slots, &mut observer);
+        let _ = produce_pass(&mut slots, &mut observer);
 
         // The cached policy is read once at registration and never again, no
         // matter how many ticks a visit runs — a pass serves a slot as a burst,
@@ -943,8 +935,8 @@ mod tests {
     }
 
     #[kithara::test]
-    fn recompute_slots_order_keeps_capacity_stable() {
-        let slots: Vec<Slot<ServiceClassNode>> = (0..8)
+    fn reorder_slots_restores_registration_order_within_a_service_class() {
+        let mut slots: Vec<Slot<ServiceClassNode>> = (0..8)
             .map(|id| Slot {
                 id,
                 node: ServiceClassNode {
@@ -956,26 +948,17 @@ mod tests {
             })
             .collect();
 
-        let mut slots_order: Vec<usize> = Vec::new();
-        recompute_slots_order(&slots, &mut slots_order);
-
-        let cap = slots_order.capacity();
-        let ptr = slots_order.as_ptr() as usize;
-        assert_eq!(slots_order.len(), slots.len());
+        slots.swap(2, 6);
+        slots.swap(0, 7);
 
         for _ in 0..100 {
-            recompute_slots_order(&slots, &mut slots_order);
+            reorder_slots(&mut slots);
         }
 
         assert_eq!(
-            slots_order.capacity(),
-            cap,
-            "steady recompute must not grow the slots_order backing"
-        );
-        assert_eq!(
-            slots_order.as_ptr() as usize,
-            ptr,
-            "clear() retains capacity so the backing is never reallocated"
+            slots.iter().map(|slot| slot.id).collect::<Vec<_>>(),
+            (0..8).collect::<Vec<_>>(),
+            "equal service classes restore registration order"
         );
     }
 
@@ -1046,7 +1029,6 @@ mod tests {
             rt_policy: RtPolicy::Rt,
             is_terminal: false,
         }];
-        let slots_order = vec![0usize];
         let mut observer = TestObserver;
 
         let mut total_spent = 0usize;
@@ -1056,8 +1038,8 @@ mod tests {
                     total_spent += 1;
                 }
             }
-            recycle_all(&mut slots, &slots_order);
-            let _report = produce_pass(&mut slots, &slots_order, &mut observer);
+            recycle_all(&mut slots);
+            let _report = produce_pass(&mut slots, &mut observer);
             while pcm_rx.try_pop().is_some() {}
         }
 
@@ -1079,7 +1061,7 @@ mod tests {
         // producer flush its parked overflow into the freed ring, until the
         // pipe is fully empty. No buffer is lost.
         loop {
-            recycle_all(&mut slots, &slots_order);
+            recycle_all(&mut slots);
             if !trash_tx.has_pending() {
                 break;
             }
@@ -1135,7 +1117,7 @@ mod tests {
         }];
         let mut observer = TestObserver;
 
-        let report = produce_pass(&mut slots, &[0], &mut observer);
+        let report = produce_pass(&mut slots, &mut observer);
 
         assert_eq!(report.outcome, PassOutcome::Idle);
         assert!(slots[0].is_terminal);

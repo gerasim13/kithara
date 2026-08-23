@@ -250,19 +250,23 @@ mod tests {
 
     use super::*;
     use crate::{
-        config::SizeProbeMethod,
         playlist::{PlaylistState, SegmentState, VariantState},
         segment::{MediaSegment, Segment, SegmentContent, SegmentSize, SegmentSlotState},
         signal::SizeSignal,
         stream::HlsCoordEnv,
-        variant::{PlanCtx, VariantParts},
+        variant::{PlanConfig, PlanCtx, VariantParts},
     };
 
     struct TestAbrPeer {
+        cancel: CancelToken,
         state: Arc<AbrState>,
     }
 
     impl Abr for TestAbrPeer {
+        fn cancel(&self) -> CancelToken {
+            self.cancel.clone()
+        }
+
         fn state(&self) -> Option<Arc<AbrState>> {
             Some(Arc::clone(&self.state))
         }
@@ -278,7 +282,6 @@ mod tests {
         );
         PlanCtx {
             bus: bus.clone(),
-            prefetch_budget: 1,
             scope: store
                 .scope::<crate::Hls>(&AssetSource::Remote {
                     url: "https://example.com/master.m3u8"
@@ -288,11 +291,9 @@ mod tests {
                 })
                 .expect("reader asset scope"),
             seek_epoch: 0,
-            look_ahead_bytes: None,
-            look_ahead_segments: None,
             headers: None,
-            size_probe_method: SizeProbeMethod::Head,
             signal: SizeSignal::new(Arc::new(ThreadGate::default()), Arc::new(OnceLock::new())),
+            config: PlanConfig::builder().prefetch_budget(1).build(),
         }
     }
 
@@ -359,19 +360,25 @@ mod tests {
         .into_variant(0, &ctx);
         let state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0)))));
         let publisher = state.publisher();
-        let peer: Arc<dyn Abr> = Arc::new(TestAbrPeer { state });
-        let controller = Arc::new(AbrController::new(AbrSettings::default()));
+        let cancel = CancelToken::never();
+        let peer: Arc<dyn Abr> = Arc::new(TestAbrPeer {
+            cancel: cancel.clone(),
+            state,
+        });
+        let settings = AbrSettings::builder().cancel(cancel.clone()).build();
+        let controller = AbrController::new(settings);
+        let handle = controller.register(&peer);
         Arc::new(HlsCoord::new(
             HlsCoordEnv {
                 scope: ctx.scope.clone(),
-                cancel: CancelToken::never(),
+                cancel,
                 headers: None,
                 emit: Arc::new(DeferredBus::new(bus.clone(), 8)),
                 signal: ctx.signal,
             },
             Arc::new(PlayheadState::new()),
             Arc::new(SeekState::new()),
-            controller.register(&peer),
+            handle,
             publisher,
             Arc::from(vec![variant]),
         ))

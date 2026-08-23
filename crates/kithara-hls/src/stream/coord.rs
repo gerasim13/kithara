@@ -601,18 +601,22 @@ mod tests {
 
     use super::*;
     use crate::{
-        config::SizeProbeMethod,
         playlist::{PlaylistState, SegmentState, VariantState},
         segment::{MediaSegment, Segment, SegmentContent, SegmentSize, SegmentSlotState},
-        variant::{PlanCtx, VariantParts},
+        variant::{PlanConfig, PlanCtx, VariantParts},
     };
 
     struct TestAbrPeer {
+        cancel: CancelToken,
         state: Arc<AbrState>,
         variants: Vec<kithara_events::VariantInfo>,
     }
 
     impl Abr for TestAbrPeer {
+        fn cancel(&self) -> CancelToken {
+            self.cancel.clone()
+        }
+
         fn state(&self) -> Option<Arc<AbrState>> {
             Some(Arc::clone(&self.state))
         }
@@ -640,7 +644,6 @@ mod tests {
         let signal = SizeSignal::new(Arc::new(ThreadGate::default()), Arc::new(OnceLock::new()));
         let ctx = PlanCtx {
             bus: bus.clone(),
-            prefetch_budget: 1,
             scope: store
                 .scope::<crate::Hls>(&AssetSource::Remote {
                     url: "https://example.com/master.m3u8"
@@ -650,11 +653,9 @@ mod tests {
                 })
                 .expect("coord asset scope"),
             seek_epoch: 0,
-            look_ahead_bytes: None,
-            look_ahead_segments: None,
             headers: None,
-            size_probe_method: SizeProbeMethod::Head,
             signal: signal.clone(),
+            config: PlanConfig::builder().prefetch_budget(1).build(),
         };
         let playlist = Arc::new(PlaylistState::new(vec![
             VariantState {
@@ -725,6 +726,7 @@ mod tests {
         let abr_state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0)))));
         let abr_publisher = abr_state.publisher();
         let peer: Arc<dyn Abr> = Arc::new(TestAbrPeer {
+            cancel: cancel.clone(),
             state: Arc::clone(&abr_state),
             variants: vec![
                 kithara_events::VariantInfo {
@@ -749,7 +751,8 @@ mod tests {
                 },
             ],
         });
-        let controller = Arc::new(AbrController::new(AbrSettings::default()));
+        let settings = AbrSettings::builder().cancel(cancel.clone()).build();
+        let controller = AbrController::new(settings);
         let handle = controller.register(&peer);
         abr_state.request_target(VariantIndex::new(1), reason);
         let coord = Arc::new(HlsCoord::new(

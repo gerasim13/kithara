@@ -1,0 +1,70 @@
+id: perf.no-component-pool-construction
+message: |
+  Constructing a buffer pool inside a library component creates a second
+  owner and bypasses the application region's shared budget. Composition
+  roots create one `Region`; components receive its `BytePool` and `PcmPool`
+  through config or constructor arguments and reuse those instances.
+severity: error
+language: Rust
+files:
+  - crates/kithara-assets/src/**/*.rs
+  - crates/kithara-audio/src/**/*.rs
+  - crates/kithara-decode/src/**/*.rs
+  - crates/kithara-file/src/**/*.rs
+  - crates/kithara-hls/src/**/*.rs
+  - crates/kithara-play/src/**/*.rs
+  - crates/kithara-queue/src/**/*.rs
+  - crates/kithara-resampler/src/**/*.rs
+  - crates/kithara-stream/src/**/*.rs
+ignores:
+  - "**/tests/**"
+  - "**/test_*.rs"
+  - "**/*_test.rs"
+  - "**/*_tests.rs"
+  - "**/tests.rs"
+  - "**/benches/**"
+rule:
+  all:
+    - any:
+        - pattern: "BytePool::new($$$ARGS)"
+        - pattern: "PcmPool::new($$$ARGS)"
+        - pattern: "Pool::new($$$ARGS)"
+        - pattern: "SharedPool::new($$$ARGS)"
+        - pattern: "Pool::<$SHARDS, $TYPE>::new($$$ARGS)"
+        - pattern: "SharedPool::<$SHARDS, $TYPE>::new($$$ARGS)"
+        - pattern: "kithara_bufpool::BytePool::new($$$ARGS)"
+        - pattern: "kithara_bufpool::PcmPool::new($$$ARGS)"
+        - pattern: "kithara_bufpool::Pool::new($$$ARGS)"
+        - pattern: "kithara_bufpool::SharedPool::new($$$ARGS)"
+        - pattern: "BytePool::with_byte_budget($$$ARGS)"
+        - pattern: "PcmPool::with_byte_budget($$$ARGS)"
+        - pattern: "Pool::with_byte_budget($$$ARGS)"
+        - pattern: "SharedPool::with_byte_budget($$$ARGS)"
+        - pattern: "Pool::<$SHARDS, $TYPE>::with_byte_budget($$$ARGS)"
+        - pattern: "SharedPool::<$SHARDS, $TYPE>::with_byte_budget($$$ARGS)"
+        - pattern: "kithara_bufpool::BytePool::with_byte_budget($$$ARGS)"
+        - pattern: "kithara_bufpool::PcmPool::with_byte_budget($$$ARGS)"
+        - pattern: "kithara_bufpool::Pool::with_byte_budget($$$ARGS)"
+        - pattern: "kithara_bufpool::SharedPool::with_byte_budget($$$ARGS)"
+    - not:
+        inside:
+          all:
+            - kind: mod_item
+            - follows:
+                kind: attribute_item
+                regex: 'cfg\(test\)|cfg\(all\([^)]*\btest\b'
+                stopBy:
+                  not:
+                    kind: attribute_item
+          stopBy: end
+    - not:
+        inside:
+          all:
+            - kind: function_item
+            - follows:
+                kind: attribute_item
+                regex: 'cfg\(test\)|cfg\(all\([^)]*\btest\b|^#\[test\]$|kithara::test'
+                stopBy:
+                  not:
+                    kind: attribute_item
+          stopBy: end

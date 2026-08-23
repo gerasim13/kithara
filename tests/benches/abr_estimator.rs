@@ -8,13 +8,13 @@ use kithara::{
         Abr, AbrController, AbrSettings, AbrState, BandwidthSource, Estimator, ThroughputEstimator,
     },
     events::{VariantDuration, VariantIndex, VariantInfo},
-    platform::{sync::Arc, time::Duration},
+    platform::{CancelToken, sync::Arc, time::Duration},
 };
 use kithara_integration_tests::auto;
 
 fn settings() -> AbrSettings {
     AbrSettings::builder()
-        .initial_throughput_bps(2_000_000)
+        .initial_throughput_bps(Some(2_000_000))
         .min_switch_interval(Duration::ZERO)
         .min_buffer_for_up_switch(Duration::ZERO)
         .build()
@@ -41,11 +41,16 @@ fn variants_4() -> Vec<VariantInfo> {
 }
 
 struct BenchPeer {
+    cancel: CancelToken,
     state: Arc<AbrState>,
     variants: Vec<VariantInfo>,
 }
 
 impl Abr for BenchPeer {
+    fn cancel(&self) -> CancelToken {
+        self.cancel.clone()
+    }
+
     fn variants(&self) -> Vec<VariantInfo> {
         self.variants.clone()
     }
@@ -101,6 +106,7 @@ fn bench_controller_record_bandwidth(c: &mut Criterion) {
                     let controller = AbrController::new(settings());
                     let state = Arc::new(AbrState::new(auto(1)));
                     let peer: Arc<dyn Abr> = Arc::new(BenchPeer {
+                        cancel: CancelToken::never(),
                         state: Arc::clone(&state),
                         variants: variants_4(),
                     });

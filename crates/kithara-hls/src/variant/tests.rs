@@ -25,9 +25,8 @@ use kithara_stream::{
 use kithara_test_utils::kithara;
 use url::Url;
 
-use super::{HlsVariant, PlanCtx, SizeDemand, VariantParts, segment_placeholder_size};
+use super::{HlsVariant, PlanConfig, PlanCtx, SizeDemand, VariantParts, segment_placeholder_size};
 use crate::{
-    config::SizeProbeMethod,
     playlist::{PlaylistState, SegmentState, VariantState},
     segment::{
         InitSegment, MediaSegment, PlannedFetch, Segment, SegmentContent, SegmentSize,
@@ -46,7 +45,6 @@ fn test_ctx(prefetch_budget: usize) -> PlanCtx {
             .build(),
     );
     PlanCtx {
-        prefetch_budget,
         bus: EventBus::new(8),
         scope: backend
             .scope::<crate::Hls>(&AssetSource::Remote {
@@ -55,11 +53,11 @@ fn test_ctx(prefetch_budget: usize) -> PlanCtx {
             })
             .expect("test asset scope"),
         seek_epoch: 0,
-        look_ahead_bytes: None,
-        look_ahead_segments: None,
         headers: None,
-        size_probe_method: SizeProbeMethod::Head,
         signal: SizeSignal::new(Arc::new(ThreadGate::default()), Arc::new(OnceLock::new())),
+        config: PlanConfig::builder()
+            .prefetch_budget(prefetch_budget)
+            .build(),
     }
 }
 
@@ -1229,7 +1227,7 @@ fn dispatch_respects_budget() {
 #[kithara::test]
 fn dispatch_respects_segment_lookahead_cap() {
     let mut ctx = test_ctx(10);
-    ctx.look_ahead_segments = Some(2);
+    ctx.config.look_ahead_segments = Some(2);
     let v = make_var(0, 0, &[100; 6], &ctx);
     v.rebuild(&ctx, 0);
     let session = active_session(&v, &ctx, 0);
@@ -1272,6 +1270,7 @@ fn dispatch_requeues_orphaned_downloading_segment() {
         .state()
         .try_claim(
             PlannedFetch::Segment(1),
+            v.flow.queue.revision(),
             Arc::downgrade(&v),
             ctx.signal.clone(),
         )
@@ -1321,6 +1320,7 @@ fn a_dropped_claim_returns_its_fetch_to_the_plan() {
         .state()
         .try_claim(
             PlannedFetch::Segment(0),
+            v.flow.queue.revision(),
             Arc::downgrade(&v),
             ctx.signal.clone(),
         )
@@ -1333,6 +1333,42 @@ fn a_dropped_claim_returns_its_fetch_to_the_plan() {
 }
 
 #[kithara::test]
+fn a_seek_supersedes_claims_from_the_previous_plan() {
+    let ctx = test_ctx(3);
+    let v = VariantParts {
+        init: None,
+        segments: (0..5).map(|idx| make_seg(idx, 100, &ctx.scope)).collect(),
+        seek_obs: Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
+        codec: Some(AudioCodec::AacLc),
+        container: Some(ContainerFormat::Fmp4),
+    }
+    .into_variant(0, &ctx);
+    let claim = v.segments()[0]
+        .state()
+        .try_claim(
+            PlannedFetch::Segment(0),
+            v.flow.queue.revision(),
+            Arc::downgrade(&v),
+            ctx.signal.clone(),
+        )
+        .expect("prefix segment claim");
+    for segment in &v.segments()[1..] {
+        segment.state().mark_loaded();
+    }
+
+    let target = v
+        .rebuild_at_time(&ctx, Duration::from_secs(4))
+        .expect("target segment");
+    drop(claim);
+
+    assert_eq!(target, 2);
+    assert!(
+        queue_seg_indices(&v).is_empty(),
+        "a fully cached seek must neither rebuild the plan nor resurrect its old prefix"
+    );
+}
+
+#[kithara::test]
 fn phase_at_reports_waiting_demand_for_claimed_segment() {
     let ctx = test_ctx(3);
     let v = make_var(0, 0, &[100, 100], &ctx);
@@ -1340,6 +1376,7 @@ fn phase_at_reports_waiting_demand_for_claimed_segment() {
         .state()
         .try_claim(
             PlannedFetch::Segment(0),
+            v.flow.queue.revision(),
             Arc::downgrade(&v),
             ctx.signal.clone(),
         )

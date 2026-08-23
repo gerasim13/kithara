@@ -146,6 +146,12 @@ impl PlayerResource {
         eof_reached
     }
 
+    fn prefetch_target(&self, callback_frames: usize) -> usize {
+        self.write_len
+            .saturating_add(callback_frames)
+            .min(self.channel_buffers[0].len())
+    }
+
     /// Remaining buffered frames when the wrapped reader has reached EOF.
     ///
     /// `Some(0)` means the current read drained the last buffered frame exactly;
@@ -205,7 +211,8 @@ impl PlayerResource {
             self.write_pos = tail_size;
 
             if frames_to_write == frames_to_read {
-                eof_reached |= self.fill_scratch(frames_to_read, metrics);
+                let target = self.prefetch_target(frames_to_read);
+                eof_reached |= self.fill_scratch(target, metrics);
             }
 
             if frames_to_write == frames_to_read {

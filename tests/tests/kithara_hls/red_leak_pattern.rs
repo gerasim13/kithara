@@ -60,18 +60,24 @@ async fn wait_thread_count_quiesced(settle_window: usize, budget: Duration) -> u
 /// A peer that behaves like `HlsPeer`: `poll_next` never returns
 /// `Ready(None)` — always `Pending`.
 struct ImmortalPeer {
+    cancel: CancelToken,
     _polled: AtomicBool,
 }
 
 impl ImmortalPeer {
     fn new() -> Self {
         Self {
+            cancel: CancelToken::never(),
             _polled: AtomicBool::new(false),
         }
     }
 }
 
-impl Abr for ImmortalPeer {}
+impl Abr for ImmortalPeer {
+    fn cancel(&self) -> CancelToken {
+        self.cancel.clone()
+    }
+}
 
 impl Peer for ImmortalPeer {
     fn poll_next(&self, _cx: &mut Context<'_>) -> Poll<Option<Vec<FetchCmd>>> {

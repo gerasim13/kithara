@@ -120,9 +120,12 @@ impl Downloader {
         #[cfg(not(target_arch = "wasm32"))]
         let runtime = config.runtime;
         // Composed/standalone seam: `Some` parent → child of it; `None` → own
-        // root. The loop, peers, and ABR controller all derive from this token.
+        // root. The loop, peer scopes, and the shared ABR controller derive
+        // from this token.
         let cancel = CancelScope::new(config.cancel).token();
-        let abr = AbrController::new(config.abr_settings);
+        let mut abr_settings = config.abr_settings;
+        abr_settings.cancel = Some(cancel.clone());
+        let abr = AbrController::new(abr_settings);
         Self {
             inner: Arc::new(DownloaderInner {
                 soft_timeout,
@@ -161,7 +164,8 @@ impl Downloader {
     /// `Drop` unregisters both.
     pub fn register(&self, peer: Arc<dyn Peer>) -> PeerHandle {
         self.ensure_spawned();
-        let cancel = self.inner.cancel.child();
+        let cancel = CancelScope::new(Some(self.inner.cancel.clone()));
+        let cancel_token = cancel.token();
         let (cmd_tx, cmd_rx) = mpsc::channel(self.inner.peer_cmd_channel_capacity);
         let bus: Arc<RwLock<Option<EventBus>>> = Arc::new(RwLock::default());
 
@@ -173,7 +177,7 @@ impl Downloader {
             peer,
             cmd_rx,
             peer_id,
-            cancel: cancel.clone(),
+            cancel: cancel_token,
             bus: Arc::clone(&bus),
         };
         self.inner.register_tx.send(entry).ok();

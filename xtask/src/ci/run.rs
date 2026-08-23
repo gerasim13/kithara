@@ -1,4 +1,10 @@
-use std::{env, ffi::OsStr, path::PathBuf, process::Output};
+use std::{
+    collections::BTreeMap,
+    env,
+    ffi::OsStr,
+    path::{Path, PathBuf},
+    process::Output,
+};
 
 use anyhow::{Context, Result, bail};
 use clap::{Args, ValueEnum};
@@ -8,60 +14,35 @@ use tracing::{info, warn};
 use super::{
     config::CiConfig,
     environment::{CiEnvironment, PROVISIONED_LINUX_IMAGE_ENV, is_gitlab},
-    lane,
-    process::Process,
+    process::{Process, Recording},
     verdict,
 };
-use crate::config::KitharaExt;
+use crate::config::{CiLaneConfig, KitharaExt};
 
 /// One CI job. Lanes are deliberately narrow: a job that does one thing can be
 /// retried, skipped, or read on its own, and the step that failed is the job
 /// name rather than a line buried in an hour of output. Where two lanes need
 /// the same build, they repeat it — the executor keeps a warm target directory,
 /// so repeating is cheaper than threading artifacts between jobs.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+///
+/// The variants left here are the ones that are programs rather than
+/// invocations: they take the workspace context and produce artifacts, or hold
+/// something open for the length of a run. Everything else a pipeline schedules
+/// is `Declared`, and lives in `.config/xtask.toml`.
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum Lane {
-    AppleLint,
-    AppleMsrv,
-    AppleTest,
-    AppleTestFlashOff,
-    AppleE2e,
-    AppleXcframework,
     AppleSwiftTest,
-    AppleIos,
     AppleIosTest,
-    AppleSafari,
-    LinuxSecrets,
-    LinuxCheck,
-    LinuxWasm,
-    LinuxTest,
-    LinuxDoc,
-    LinuxLoom,
-    LinuxBroadcast,
-    LinuxIntegrationRegressions,
-    LinuxSeleniumFirefox,
-    LinuxCoverage,
-    AndroidBuild,
-    AndroidTest,
-    WebChromium,
-    WebFirefox,
-    WebSize,
-    WindowsArm64,
-    WindowsX64,
-    WindowsX64Build,
-    DeepRtsan,
-    DeepPerf,
-    DeepBench,
-    DepsDeny,
-    DepsUnused,
-    DepsFeatures,
-    DepsSemver,
     ReleaseXcframework,
     ReleaseDocs,
     ReleaseWasm,
     ReleaseAndroid,
     ReleasePublish,
     Verdict,
+    Declared {
+        name: String,
+        cache_group: CacheGroup,
+    },
 }
 
 /// Which shared cache a lane leases. Lanes sharing an executor share its cache,
@@ -75,53 +56,76 @@ pub(crate) enum CacheGroup {
     Host,
 }
 
-impl Lane {
-    pub(crate) const fn cache_group(self) -> CacheGroup {
+impl CacheGroup {
+    pub(crate) const fn uses_sccache(self) -> bool {
+        !matches!(self, Self::Windows)
+    }
+
+    const fn as_str(self) -> &'static str {
         match self {
-            Self::AppleLint
-            | Self::AppleMsrv
-            | Self::AppleTest
-            | Self::AppleTestFlashOff
-            | Self::AppleE2e
-            | Self::AppleXcframework
-            | Self::AppleSwiftTest
-            | Self::AppleIos
+            Self::Macos => "macos",
+            Self::Linux => "linux",
+            Self::Windows => "windows",
+            Self::Host => "host",
+        }
+    }
+
+    fn parse(name: &str) -> Option<Self> {
+        [Self::Macos, Self::Linux, Self::Windows, Self::Host]
+            .into_iter()
+            .find(|group| group.as_str() == name)
+    }
+}
+
+impl Lane {
+    /// The residual lanes, by the name a pipeline schedules them under. They
+    /// are matched before the configuration is consulted, so a declared lane
+    /// cannot shadow one of them.
+    const RESIDUAL: [(&'static str, Self); 8] = [
+        ("apple-swift-test", Self::AppleSwiftTest),
+        ("apple-ios-test", Self::AppleIosTest),
+        ("release-xcframework", Self::ReleaseXcframework),
+        ("release-docs", Self::ReleaseDocs),
+        ("release-wasm", Self::ReleaseWasm),
+        ("release-android", Self::ReleaseAndroid),
+        ("release-publish", Self::ReleasePublish),
+        ("verdict", Self::Verdict),
+    ];
+
+    /// A lane name from the command line, against the lanes this repository
+    /// actually has. An unknown one fails here rather than on the runner, and
+    /// says what it could have been.
+    pub(crate) fn parse(name: &str, lanes: &BTreeMap<String, CiLaneConfig>) -> Result<Self> {
+        if let Some((_, lane)) = Self::RESIDUAL.iter().find(|(known, _)| *known == name) {
+            return Ok(lane.clone());
+        }
+        if let Some(declared) = lanes.get(name) {
+            let cache_group = CacheGroup::parse(&declared.cache_group)
+                .with_context(|| format!("ext.ci.lanes.{name}.cache_group is not a cache group"))?;
+            return Ok(Self::Declared {
+                name: name.to_owned(),
+                cache_group,
+            });
+        }
+        bail!("`{name}` is not a CI lane; this repository has {}", {
+            let mut names: Vec<&str> = Self::RESIDUAL.iter().map(|(known, _)| *known).collect();
+            names.extend(lanes.keys().map(String::as_str));
+            names.sort_unstable();
+            names.join(", ")
+        })
+    }
+
+    pub(crate) const fn cache_group(&self) -> CacheGroup {
+        match self {
+            Self::AppleSwiftTest
             | Self::AppleIosTest
-            | Self::AppleSafari
-            | Self::DeepRtsan
-            | Self::DeepPerf
-            | Self::DeepBench
             | Self::ReleaseXcframework
             | Self::ReleaseDocs
             | Self::ReleaseWasm
             | Self::Verdict => CacheGroup::Macos,
-            Self::LinuxSecrets
-            | Self::LinuxCheck
-            | Self::LinuxWasm
-            | Self::LinuxTest
-            | Self::LinuxDoc
-            | Self::LinuxLoom
-            | Self::LinuxBroadcast
-            | Self::LinuxIntegrationRegressions
-            | Self::LinuxSeleniumFirefox
-            | Self::LinuxCoverage
-            | Self::WebChromium
-            | Self::WebFirefox
-            | Self::WebSize
-            | Self::DepsDeny
-            | Self::DepsUnused
-            | Self::DepsFeatures
-            | Self::DepsSemver => CacheGroup::Linux,
-            Self::WindowsArm64 | Self::WindowsX64 | Self::WindowsX64Build => CacheGroup::Windows,
-            Self::AndroidBuild
-            | Self::AndroidTest
-            | Self::ReleaseAndroid
-            | Self::ReleasePublish => CacheGroup::Host,
+            Self::ReleaseAndroid | Self::ReleasePublish => CacheGroup::Host,
+            Self::Declared { cache_group, .. } => *cache_group,
         }
-    }
-
-    pub(crate) const fn uses_sccache(self) -> bool {
-        !matches!(self.cache_group(), CacheGroup::Windows)
     }
 }
 
@@ -139,8 +143,8 @@ pub(crate) enum PipelineKind {
 
 #[derive(Debug, Args)]
 pub(crate) struct RunArgs {
-    /// CI lane to execute.
-    lane: Lane,
+    /// CI lane to execute, as `.config/xtask.toml` and the pipeline name it.
+    lane: String,
     /// Pipeline policy used by lanes with fast and full variants.
     #[arg(
         long,
@@ -156,6 +160,9 @@ pub(crate) struct RunArgs {
     /// Delivery channel from `ext.release.channels`.
     #[arg(long, default_value = "release")]
     channel: String,
+    /// Report what the lane would require and run, without running it.
+    #[arg(long)]
+    dry_run: bool,
 }
 
 #[derive(Debug)]
@@ -224,11 +231,11 @@ fn linux_image_diagnosis(
 }
 
 fn require_provisioned_linux_image(
-    lane: Lane,
+    cache_group: CacheGroup,
     config: &CiConfig,
     attestation: Option<&LinuxImageAttestation>,
 ) -> Result<()> {
-    if lane.cache_group() != CacheGroup::Linux {
+    if cache_group != CacheGroup::Linux {
         return Ok(());
     }
     let Some(attestation) = attestation else {
@@ -300,10 +307,7 @@ fn execute_lane(
 }
 
 pub(crate) fn run(args: &RunArgs, ctx: &Ctx) -> Result<()> {
-    let lane_name = args
-        .lane
-        .to_possible_value()
-        .map_or_else(|| "lane".to_owned(), |value| value.get_name().to_owned());
+    let lane_name = args.lane.clone();
     verdict::clear(&ctx.root, &lane_name)?;
     let outcome = execute(args, ctx);
     // A lane that fell over before it reached its own work — no host profile,
@@ -319,6 +323,10 @@ pub(crate) fn run(args: &RunArgs, ctx: &Ctx) -> Result<()> {
 fn execute(args: &RunArgs, ctx: &Ctx) -> Result<()> {
     let ext = KitharaExt::from_ctx(ctx)?;
     ext.ci.validate()?;
+    // The lane name is checked against this repository's lanes before anything
+    // reads the executor, so a typo answers with the list of lanes rather than
+    // with whatever the machine is missing.
+    let lane = Lane::parse(&args.lane, &ext.ci.lanes)?;
     let host_config = env::var_os("KITHARA_CI_HOST_CONFIG")
         .map(PathBuf::from)
         .context(
@@ -326,10 +334,10 @@ fn execute(args: &RunArgs, ctx: &Ctx) -> Result<()> {
         )?;
     let ci_config = CiConfig::load(&host_config, &ctx.root.join(&ext.ci.pins))?;
     let image_attestation = LinuxImageAttestation::from_gitlab()?;
-    require_provisioned_linux_image(args.lane, &ci_config, image_attestation.as_ref())?;
-    let environment = CiEnvironment::prepare(ctx, &ci_config, args.lane)?;
+    require_provisioned_linux_image(lane.cache_group(), &ci_config, image_attestation.as_ref())?;
+    let environment = CiEnvironment::prepare(ctx, &ci_config, lane.cache_group())?;
     info!(
-        lane = ?args.lane,
+        lane = %args.lane,
         kind = ?args.kind,
         cache_root = %environment.cache_root.display(),
         "CI environment prepared"
@@ -348,44 +356,17 @@ fn execute(args: &RunArgs, ctx: &Ctx) -> Result<()> {
     // exited 254. Retire the server so it restarts with what this job asked
     // for; the cache on disk is untouched. Shared-host Unix sockets need one
     // explicit start before Cargo's parallel compilers can race to start it.
-    execute_lane(&process, uses_sccache, has_server_uds, || match args.lane {
-        Lane::AppleLint => lane::apple::lint(&process, &ci_config, args.kind),
-        Lane::AppleMsrv => lane::apple::msrv(&process, &ci_config),
-        Lane::AppleTest => lane::apple::test(&process, &ci_config, args.kind),
-        Lane::AppleTestFlashOff => lane::apple::test_flash_off(&process, &ci_config),
-        Lane::AppleE2e => lane::apple::e2e(&process, &ci_config),
-        Lane::AppleXcframework => lane::apple::xcframework(&process, &ci_config),
-        Lane::AppleSwiftTest => lane::apple::swift_test(&process, &ci_config, &swiftpm_cache),
-        Lane::AppleIos => lane::apple::ios(&process, &ci_config),
-        Lane::AppleIosTest => lane::apple::ios_test(&process, &ci_config),
-        Lane::AppleSafari => lane::apple::safari(&process),
-        Lane::LinuxSecrets => lane::linux::secrets(&process),
-        Lane::LinuxCheck => lane::linux::check(&process),
-        Lane::LinuxWasm => lane::linux::wasm(&process),
-        Lane::LinuxTest => lane::linux::test(&process),
-        Lane::LinuxDoc => lane::linux::configured(&process, "doc"),
-        Lane::LinuxLoom => lane::linux::configured(&process, "loom"),
-        Lane::LinuxBroadcast => lane::linux::configured(&process, "broadcast"),
-        Lane::LinuxIntegrationRegressions => {
-            lane::linux::configured(&process, "integration-regressions")
-        }
-        Lane::LinuxSeleniumFirefox => lane::linux::selenium(&process, "firefox"),
-        Lane::LinuxCoverage => lane::linux::coverage(&process),
-        Lane::AndroidBuild => lane::android::build(&process),
-        Lane::AndroidTest => lane::android::test(&process, &ci_config),
-        Lane::WebChromium => lane::web::chromium(&process, &ci_config.pins),
-        Lane::WebFirefox => lane::web::firefox(&process),
-        Lane::WebSize => lane::web::size(&process),
-        Lane::WindowsArm64 => lane::windows::tests(&process, "aarch64-pc-windows-msvc"),
-        Lane::WindowsX64 => lane::windows::tests(&process, "x86_64-pc-windows-msvc"),
-        Lane::WindowsX64Build => lane::windows::build(&process, "x86_64-pc-windows-msvc"),
-        Lane::DeepRtsan => lane::deep::rtsan(&process),
-        Lane::DeepPerf => lane::deep::perf(&process),
-        Lane::DeepBench => lane::deep::bench(&process),
-        Lane::DepsDeny => lane::deps::deny(&process),
-        Lane::DepsUnused => lane::deps::unused(&process),
-        Lane::DepsFeatures => lane::deps::features(&process),
-        Lane::DepsSemver => lane::deps::semver(&process),
+    if args.dry_run {
+        return report_lane(
+            &lane,
+            args.kind,
+            &ctx.root,
+            &ci_config,
+            &swiftpm_cache,
+            &ext.ci.lanes,
+        );
+    }
+    execute_lane(&process, uses_sccache, has_server_uds, || match lane {
         Lane::ReleaseXcframework => {
             super::release::xcframework(&process, ctx, &ext, &temp, &args.package)
         }
@@ -394,26 +375,302 @@ fn execute(args: &RunArgs, ctx: &Ctx) -> Result<()> {
         Lane::ReleaseAndroid => super::release::build_android(&process, ctx, &ext),
         Lane::ReleasePublish => super::release::publish(&process, ctx, &ext, &args.channel),
         Lane::Verdict => verdict::lane(&ctx.root, environment.shared_root(), args.kind),
+        ref lane => command_lane(
+            lane,
+            args.kind,
+            &process,
+            &ci_config,
+            &swiftpm_cache,
+            &ext.ci.lanes,
+        ),
     })
+}
+
+/// What the lane would ask of the executor, without asking. Answers "what does
+/// this job actually run" from a laptop, and is what the lane snapshot reads.
+fn report_lane(
+    lane: &Lane,
+    kind: PipelineKind,
+    root: &Path,
+    ci_config: &CiConfig,
+    swiftpm_cache: &Path,
+    lanes: &BTreeMap<String, CiLaneConfig>,
+) -> Result<()> {
+    let process = Process::recording(
+        root,
+        Recording::default()
+            .with_reply(
+                "xcodebuild",
+                &format!("Xcode {}", ci_config.pins.expected_xcode_version),
+            )
+            .with_reply("chromium", &ci_config.pins.chromium_version)
+            .with_reply("chromedriver", &ci_config.pins.chromium_version),
+    );
+    let outcome = command_lane(lane, kind, &process, ci_config, swiftpm_cache, lanes);
+    let recorded = process
+        .recorded()
+        .context("a recording process keeps its recording")?;
+    if let Err(error) = &outcome {
+        println!("refused: {error}");
+    }
+    for step in recorded.steps() {
+        println!("{} {}", step.program, step.args.join(" "));
+    }
+    outcome
+}
+
+/// Every lane that resolves to commands on the executor.
+///
+/// `release` and `verdict` are absent on purpose: they take the workspace
+/// context and produce artifacts - checksums, a release tag, the verdict
+/// journal - so they are programs rather than invocations, and they stay with
+/// the caller.
+fn command_lane(
+    lane: &Lane,
+    kind: PipelineKind,
+    process: &Process,
+    ci_config: &CiConfig,
+    swiftpm_cache: &Path,
+    lanes: &BTreeMap<String, CiLaneConfig>,
+) -> Result<()> {
+    match lane {
+        Lane::ReleaseXcframework
+        | Lane::ReleaseDocs
+        | Lane::ReleaseWasm
+        | Lane::ReleaseAndroid
+        | Lane::ReleasePublish
+        | Lane::Verdict => bail!("{lane:?} produces artifacts and is not a command lane"),
+        Lane::AppleSwiftTest => super::lane::apple::swift_test(process, ci_config, swiftpm_cache),
+        Lane::AppleIosTest => super::lane::apple::ios_test(process, ci_config),
+        Lane::Declared { name, .. } => {
+            let declared = lanes.get(name).with_context(|| {
+                format!("ext.ci.lanes.{name} is not declared in .config/xtask.toml")
+            })?;
+            super::lane::declared::run(process, declared, &ci_config.pins, kind)
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     #[cfg(unix)]
     use std::{collections::BTreeMap, ffi::OsString, os::unix::fs::PermissionsExt};
-    use std::{collections::BTreeSet, fs, path::Path};
+    use std::{collections::BTreeSet, env, fs, path::Path};
 
     use clap::{Parser, ValueEnum};
 
     #[cfg(unix)]
     use super::execute_lane;
     use super::{
-        CacheGroup, Consts, Lane, LinuxImageAttestation, linux_image_diagnosis,
-        require_provisioned_linux_image, sccache_server_is_stopped,
+        super::{config::fixture, process::Recording},
+        CacheGroup, Consts, Lane, LinuxImageAttestation, PipelineKind, command_lane,
+        linux_image_diagnosis, require_provisioned_linux_image, sccache_server_is_stopped,
     };
-    use crate::Cli;
-    #[cfg(unix)]
-    use crate::ci::process::Process;
+    use crate::{
+        Cli,
+        ci::process::Process,
+        config::{CiLaneConfig, KitharaExt},
+    };
+
+    /// One lane resolved in one pipeline kind: the program and arguments of
+    /// each step it asks for, or the reason it refuses the kind.
+    fn resolve(
+        name: &str,
+        kind: PipelineKind,
+    ) -> (Result<(), String>, Vec<(String, Vec<String>, String)>) {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("xtask has a workspace root");
+        let ci_config = fixture();
+        let ext = KitharaExt::load(root).expect("the project config parses");
+        let lane = Lane::parse(name, &ext.ci.lanes).expect("the lane is declared");
+        let recording = Recording::default().with_reply(
+            "xcodebuild",
+            &format!("Xcode {}", ci_config.pins.expected_xcode_version),
+        );
+        let process = Process::recording(root, recording);
+        let outcome = command_lane(
+            &lane,
+            kind,
+            &process,
+            &ci_config,
+            &root.join("target/swiftpm"),
+            &ext.ci.lanes,
+        )
+        .map_err(|error| error.to_string());
+        let steps = process
+            .recorded()
+            .expect("a recording process records")
+            .steps()
+            .iter()
+            .map(|step| (step.program.clone(), step.args.clone(), step.label.clone()))
+            .collect();
+        (outcome, steps)
+    }
+
+    /// The step a lane exists to run, as opposed to the version probes and
+    /// preflight it runs first.
+    fn gate(name: &str, kind: PipelineKind) -> (Vec<String>, String) {
+        let (outcome, steps) = resolve(name, kind);
+        outcome.expect("the lane accepts this kind");
+        let (_, args, label) = steps
+            .into_iter()
+            .find(|(program, _, _)| program == "just")
+            .expect("the lane runs a just recipe");
+        (args, label)
+    }
+
+    #[test]
+    fn reviewed_pipelines_run_the_explicit_flash_and_no_block_gate() {
+        for kind in [
+            PipelineKind::MergeRequest,
+            PipelineKind::Branch,
+            PipelineKind::Main,
+            PipelineKind::Platforms,
+            PipelineKind::Nightly,
+            PipelineKind::Release,
+        ] {
+            let (args, _) = gate("apple-test", kind);
+
+            assert_eq!(
+                args,
+                [
+                    "test",
+                    "run",
+                    "--flash=on",
+                    "--no-block=on",
+                    "--profile",
+                    "ci"
+                ],
+                "{kind:?} must run the explicit gate"
+            );
+        }
+    }
+
+    #[test]
+    fn quarantine_keeps_its_plain_profile_probe() {
+        let (args, _) = gate("apple-test", PipelineKind::Quarantine);
+
+        assert_eq!(args, ["test", "run", "--profile", "ci"]);
+    }
+
+    #[test]
+    fn weekly_pipelines_do_not_claim_to_run_the_apple_suite() {
+        let (outcome, _) = resolve("apple-test", PipelineKind::Weekly);
+
+        assert_eq!(
+            outcome.unwrap_err(),
+            "weekly pipelines do not run the Apple suite"
+        );
+    }
+
+    /// Saying that a lane does not run on this pipeline is an answer about the
+    /// pipeline, so it costs nothing the machine has to provide: no platform
+    /// check, no tool lookup, no version probe.
+    #[test]
+    fn a_refused_kind_asks_the_machine_for_nothing() {
+        let (_, steps) = resolve("apple-test", PipelineKind::Weekly);
+
+        assert_eq!(steps, Vec::new());
+    }
+
+    #[test]
+    fn platform_runs_use_the_default_branch_apple_lint_gate() {
+        let (args, label) = gate("apple-lint", PipelineKind::Platforms);
+
+        assert_eq!(args, ["lint", "full"]);
+        assert_eq!(label, "full lint gate");
+    }
+
+    /// Every command lane, resolved but not run, in every pipeline kind it
+    /// accepts. The snapshot is taken from the code that owns the routing
+    /// today; moving that routing into configuration has to reproduce it
+    /// byte for byte, which is a check that does not depend on CI - and CI is
+    /// the one thing a routing change cannot be verified against.
+    #[test]
+    fn every_command_lane_resolves_to_its_recorded_commands() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("xtask has a workspace root");
+        let ci_config = fixture();
+        let ext = KitharaExt::load(root).expect("the project config parses");
+        let mut report = String::new();
+
+        for name in every_lane() {
+            let lane = Lane::parse(&name, &ext.ci.lanes).expect("every lane parses");
+            for kind in PipelineKind::value_variants() {
+                let kind_name = kind
+                    .to_possible_value()
+                    .expect("every kind has a name")
+                    .get_name()
+                    .to_owned();
+                let version = ci_config.pins.chromium_version.clone();
+                let recording = Recording::default()
+                    .with_reply(
+                        "xcodebuild",
+                        &format!("Xcode {}", ci_config.pins.expected_xcode_version),
+                    )
+                    .with_reply("chromium", &version)
+                    .with_reply("chromedriver", &version);
+                let process = Process::recording(root, recording);
+                let outcome = command_lane(
+                    &lane,
+                    *kind,
+                    &process,
+                    &ci_config,
+                    &root.join("target/swiftpm"),
+                    &ext.ci.lanes,
+                );
+                let steps = process.recorded().expect("a recording process records");
+                report.push_str(&format!("# {name} / {kind_name}\n"));
+                if let Err(error) = outcome {
+                    report.push_str(&format!("  refused: {error}\n"));
+                }
+                for step in steps.steps() {
+                    report.push_str(&format!("  {}", step.program));
+                    if !step.args.is_empty() {
+                        report.push_str(&format!(" {}", step.args.join(" ")));
+                    }
+                    report.push('\n');
+                    // Several lanes differ from each other by nothing but their
+                    // environment - a build-job cap, a target directory, a
+                    // toolchain - so a snapshot that recorded only the command
+                    // would let exactly those differences drift unseen.
+                    for (key, value) in &step.env {
+                        report.push_str(&format!("    {key}={value}\n"));
+                    }
+                    if !step.relative_dir.is_empty() {
+                        report.push_str(&format!("    <in> {}\n", step.relative_dir));
+                    }
+                }
+            }
+        }
+
+        let report = portable(&report, root);
+        let snapshot =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/ci-lane-commands.txt");
+        if env::var_os("KITHARA_UPDATE_SNAPSHOT").is_some() {
+            fs::write(&snapshot, &report).expect("snapshot is writable");
+        }
+        let expected = fs::read_to_string(&snapshot).expect("the lane snapshot exists");
+        assert_eq!(
+            report, expected,
+            "a lane resolves to a different command than the snapshot records; \
+             re-record with KITHARA_UPDATE_SNAPSHOT=1 only when the change is intended"
+        );
+    }
+
+    /// Two things a lane resolves to are true only of the machine that resolved
+    /// them: the checkout it sits in, and the test binary Cargo happened to
+    /// build. Both are named rather than spelled out, so the snapshot says the
+    /// same thing on a runner as it does on a laptop.
+    fn portable(report: &str, root: &Path) -> String {
+        let report = env::current_exe().map_or_else(
+            |_| report.to_owned(),
+            |exe| report.replace(&exe.display().to_string(), "<xtask>"),
+        );
+        report.replace(&root.display().to_string(), "<root>")
+    }
 
     /// Lane names cross a language boundary: the enum is Rust, the schedule is
     /// pipeline YAML, and nothing but this test connects them. Renaming a lane
@@ -545,8 +802,8 @@ exit 19
 
     #[test]
     fn windows_lanes_disable_sccache() {
-        assert!(!Lane::WindowsX64.uses_sccache());
-        assert!(Lane::LinuxCheck.uses_sccache());
+        assert!(!CacheGroup::Windows.uses_sccache());
+        assert!(CacheGroup::Linux.uses_sccache());
     }
 
     #[test]
@@ -675,7 +932,7 @@ exit 19
 
     #[test]
     fn image_drift_diagnosis_names_the_image_host_and_build_command() {
-        let config = crate::ci::config::fixture();
+        let config = fixture();
         let diagnosis = linux_image_diagnosis(
             &config,
             "kithara-mac-mini-linux",
@@ -696,9 +953,9 @@ exit 19
 
     #[test]
     fn a_local_linux_lane_does_not_require_runner_attestation() {
-        let config = crate::ci::config::fixture();
+        let config = fixture();
 
-        require_provisioned_linux_image(Lane::LinuxCheck, &config, None).unwrap();
+        require_provisioned_linux_image(CacheGroup::Linux, &config, None).unwrap();
     }
 
     fn image_attestation(provisioned: Option<&str>) -> LinuxImageAttestation {
@@ -711,18 +968,18 @@ exit 19
 
     #[test]
     fn a_gitlab_linux_lane_accepts_the_provisioned_image() {
-        let config = crate::ci::config::fixture();
+        let config = fixture();
         let attestation = image_attestation(Some(&config.pins.linux_image));
 
-        require_provisioned_linux_image(Lane::LinuxCheck, &config, Some(&attestation)).unwrap();
+        require_provisioned_linux_image(CacheGroup::Linux, &config, Some(&attestation)).unwrap();
     }
 
     #[test]
     fn a_gitlab_linux_lane_rejects_a_different_image() {
-        let config = crate::ci::config::fixture();
+        let config = fixture();
         let attestation = image_attestation(Some("kithara-ci:old"));
 
-        let error = require_provisioned_linux_image(Lane::LinuxCheck, &config, Some(&attestation))
+        let error = require_provisioned_linux_image(CacheGroup::Linux, &config, Some(&attestation))
             .unwrap_err();
 
         assert!(error.to_string().contains("kithara-ci:old"));
@@ -730,10 +987,10 @@ exit 19
 
     #[test]
     fn a_gitlab_linux_lane_rejects_a_missing_image_declaration() {
-        let config = crate::ci::config::fixture();
+        let config = fixture();
         let attestation = image_attestation(None);
 
-        let error = require_provisioned_linux_image(Lane::LinuxCheck, &config, Some(&attestation))
+        let error = require_provisioned_linux_image(CacheGroup::Linux, &config, Some(&attestation))
             .unwrap_err();
 
         assert!(error.to_string().contains("not declared by runner"));
@@ -823,42 +1080,79 @@ exit 19
         ));
     }
 
+    /// The lane name is no longer a Rust type, so the check that it names
+    /// something moved from clap to `Lane::parse` - and it happens before the
+    /// executor is touched, with the list of names it could have been.
     #[test]
-    fn ci_lane_is_typed_and_uses_modular_names() {
+    fn an_unknown_lane_fails_with_the_names_it_could_have_been() {
         assert!(Cli::try_parse_from(["xtask", "ci", "run", "apple-lint"]).is_ok());
         assert!(
             Cli::try_parse_from(["xtask", "ci", "run", "linux-test", "--kind", "quarantine"])
                 .is_ok()
         );
-        assert!(Cli::try_parse_from(["xtask", "ci", "run", "apple"]).is_err());
-        assert!(Cli::try_parse_from(["xtask", "ci", "run", "unknown"]).is_err());
+
+        let lanes = declared_lanes();
+        assert!(Lane::parse("linux-test", &lanes).is_ok());
+        assert!(Lane::parse("verdict", &lanes).is_ok());
+        let error = Lane::parse("apple", &lanes).unwrap_err().to_string();
+        assert!(error.starts_with("`apple` is not a CI lane"), "{error}");
+        assert!(error.contains("apple-lint"), "{error}");
     }
 
     #[test]
     fn lanes_lease_the_cache_of_the_executor_they_run_on() {
+        let lanes = declared_lanes();
+
         assert_eq!(Lane::ReleaseXcframework.cache_group(), CacheGroup::Macos);
-        assert_eq!(Lane::WebFirefox.cache_group(), CacheGroup::Linux);
         assert_eq!(Lane::ReleaseAndroid.cache_group(), CacheGroup::Host);
-        assert_eq!(Lane::WindowsX64Build.cache_group(), CacheGroup::Windows);
+        assert_eq!(
+            Lane::parse("web-firefox", &lanes).unwrap().cache_group(),
+            CacheGroup::Linux
+        );
+        assert_eq!(
+            Lane::parse("windows-x64-build", &lanes)
+                .unwrap()
+                .cache_group(),
+            CacheGroup::Windows
+        );
+    }
+
+    fn declared_lanes() -> BTreeMap<String, CiLaneConfig> {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("xtask has a workspace root");
+        KitharaExt::load(root)
+            .expect("the project config parses")
+            .ci
+            .lanes
+    }
+
+    /// Every lane this repository has, under the name a pipeline schedules it
+    /// by: the ones that are still Rust, and the ones that are configuration.
+    fn every_lane() -> Vec<String> {
+        let mut names: Vec<String> = Lane::RESIDUAL
+            .iter()
+            .map(|(name, _)| (*name).to_owned())
+            .collect();
+        names.extend(declared_lanes().keys().cloned());
+        names.sort();
+        names
     }
 
     #[test]
     fn the_pipeline_schedules_every_lane_and_only_real_lanes() {
         let scheduled = scheduled_lanes();
+        let lanes = declared_lanes();
         for name in &scheduled {
             assert!(
-                Lane::from_str(name, false).is_ok(),
+                Lane::parse(name, &lanes).is_ok(),
                 "a pipeline job runs `{name}`, which is not a CI lane"
             );
         }
-        for lane in Lane::value_variants() {
-            let name = lane
-                .to_possible_value()
-                .expect("every lane is reachable from the command line");
+        for name in every_lane() {
             assert!(
-                scheduled.contains(name.get_name()),
-                "no pipeline job runs the {} lane",
-                name.get_name()
+                scheduled.contains(&name),
+                "no pipeline job runs the {name} lane"
             );
         }
     }
