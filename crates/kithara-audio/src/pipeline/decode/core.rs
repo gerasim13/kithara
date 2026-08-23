@@ -218,21 +218,6 @@ impl ActiveDecode {
         }
     }
 
-    #[cfg(test)]
-    fn for_test(
-        active: DecoderGeneration,
-        gapless_mode: GaplessMode,
-        effects: Vec<Box<dyn AudioEffect>>,
-    ) -> Self {
-        Self::new(
-            active,
-            gapless_mode,
-            effects,
-            &BytePool::default(),
-            &PcmPool::default(),
-        )
-    }
-
     pub(crate) fn flush_reader_signals(&mut self) {
         self.active.decoder_mut().flush_reader_signals();
         self.flush_incoming_reader_signals();
@@ -447,7 +432,7 @@ mod tests {
     use std::num::NonZeroU32;
 
     use kithara_abr::{AbrMode, AbrReason, AbrState, VariantIndex};
-    use kithara_bufpool::PcmPool;
+    use kithara_bufpool::{BytePool, PcmPool};
     use kithara_decode::{BlenderProfile, DecoderSeekOutcome, PcmMeta, PcmSpec};
     use kithara_platform::time::Duration;
     use kithara_stream::{
@@ -457,6 +442,16 @@ mod tests {
 
     use super::*;
     use crate::pipeline::decode::transition::IncomingPrime;
+
+    fn active_decode(
+        active: DecoderGeneration,
+        gapless_mode: GaplessMode,
+        effects: Vec<Box<dyn AudioEffect>>,
+    ) -> ActiveDecode {
+        let byte_pool = BytePool::default();
+        let pcm_pool = PcmPool::default();
+        ActiveDecode::new(active, gapless_mode, effects, &byte_pool, &pcm_pool)
+    }
 
     #[kithara::test]
     fn configured_container_selects_the_incoming_reader_profile() {
@@ -484,8 +479,7 @@ mod tests {
     #[kithara::test]
     fn steady_output_bypasses_transition_staging() {
         let spec = PcmSpec::new(2, NonZeroU32::new(44_100).expect("test rate"));
-        let mut decode =
-            ActiveDecode::for_test(generation(spec), GaplessMode::Disabled, Vec::new());
+        let mut decode = active_decode(generation(spec), GaplessMode::Disabled, Vec::new());
         let initial_capacity = decode.active().staged_capacity();
         let mut cursor = ResumeCursor::new(
             Arc::new(AtomicU32::new(spec.sample_rate.get())),
@@ -529,7 +523,7 @@ mod tests {
             VariantIndex::new(0),
             VariantIndex::new(1),
         );
-        let mut decode = ActiveDecode::for_test(active, GaplessMode::Disabled, Vec::new());
+        let mut decode = active_decode(active, GaplessMode::Disabled, Vec::new());
         decode.incoming = Some(IncomingDecode::Priming {
             transition,
             generation: incoming,
@@ -597,7 +591,7 @@ mod tests {
             VariantIndex::new(0),
             VariantIndex::new(1),
         );
-        let mut decode = ActiveDecode::for_test(active, GaplessMode::Disabled, Vec::new());
+        let mut decode = active_decode(active, GaplessMode::Disabled, Vec::new());
         decode.incoming = Some(IncomingDecode::Priming {
             transition,
             generation: incoming,
@@ -639,7 +633,7 @@ mod tests {
             VariantIndex::new(0),
             VariantIndex::new(1),
         );
-        let mut decode = ActiveDecode::for_test(active, GaplessMode::Disabled, Vec::new());
+        let mut decode = active_decode(active, GaplessMode::Disabled, Vec::new());
         decode.incoming = Some(IncomingDecode::Priming {
             transition,
             generation: incoming,
@@ -713,8 +707,7 @@ mod tests {
                     .saturating_mul(usize::from(spec.channels))
             ]),
         ));
-        let mut decode =
-            ActiveDecode::for_test(generation(spec), GaplessMode::Disabled, Vec::new());
+        let mut decode = active_decode(generation(spec), GaplessMode::Disabled, Vec::new());
         decode.incoming = Some(IncomingDecode::Priming {
             transition,
             generation: incoming,
@@ -784,7 +777,7 @@ mod tests {
         active.stage(make_chunk(0));
         let mut incoming = generation(spec);
         incoming.stage(make_chunk(LANDED));
-        let mut decode = ActiveDecode::for_test(active, GaplessMode::Disabled, Vec::new());
+        let mut decode = active_decode(active, GaplessMode::Disabled, Vec::new());
         decode.incoming = Some(IncomingDecode::Priming {
             transition,
             generation: incoming,
@@ -830,8 +823,7 @@ mod tests {
             None,
             GaplessMode::Disabled,
         );
-        let mut decode =
-            ActiveDecode::for_test(generation(spec), GaplessMode::Disabled, Vec::new());
+        let mut decode = active_decode(generation(spec), GaplessMode::Disabled, Vec::new());
         decode.incoming = Some(IncomingDecode::Priming {
             transition,
             generation: incoming,
@@ -865,8 +857,7 @@ mod tests {
             VariantIndex::new(0),
             VariantIndex::new(1),
         );
-        let mut decode =
-            ActiveDecode::for_test(generation(spec), GaplessMode::Disabled, Vec::new());
+        let mut decode = active_decode(generation(spec), GaplessMode::Disabled, Vec::new());
         let frames = u32::try_from(decode.blender.join_frame_count()).expect("test join fits u32");
         let samples = usize::try_from(frames)
             .expect("test join fits usize")
@@ -924,8 +915,7 @@ mod tests {
             VariantIndex::new(0),
             VariantIndex::new(1),
         );
-        let mut decode =
-            ActiveDecode::for_test(generation(spec), GaplessMode::Disabled, Vec::new());
+        let mut decode = active_decode(generation(spec), GaplessMode::Disabled, Vec::new());
         decode.active.stage(PcmChunk::new(
             PcmMeta {
                 spec,
