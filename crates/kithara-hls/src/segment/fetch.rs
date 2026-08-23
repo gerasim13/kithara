@@ -18,7 +18,7 @@ use tracing::{debug, error};
 use crate::{
     segment::state::{Downloading, Failed, Loaded, Missing, SegmentPhase, SegmentSlotState},
     signal::SizeSignal,
-    variant::HlsVariant,
+    variant::{HlsVariant, PlanRevision},
 };
 
 /// Whether a fetch error is terminal for the slot — whether this segment is
@@ -73,6 +73,7 @@ pub(crate) struct FetchClaim<S: SegmentPhase> {
 pub(crate) struct DownloadClaim {
     slot: Arc<SegmentSlotState>,
     planned: PlannedFetch,
+    plan_revision: PlanRevision,
     variant: Weak<HlsVariant>,
     /// Peer-wake handle for the `Drop` recovery: a claim dropped without a
     /// settle must wake the peer to take the requeued work, and the claim
@@ -102,6 +103,7 @@ impl FetchClaim<Downloading> {
     /// `Weak` back-reference for the post-commit size apply.
     pub(crate) const fn claim(
         planned: PlannedFetch,
+        plan_revision: PlanRevision,
         variant: Weak<HlsVariant>,
         slot: Arc<SegmentSlotState>,
         signal: SizeSignal,
@@ -109,6 +111,7 @@ impl FetchClaim<Downloading> {
         Self {
             data: DownloadClaim {
                 planned,
+                plan_revision,
                 variant,
                 slot,
                 signal,
@@ -180,8 +183,13 @@ impl FetchClaim<Downloading> {
         }
     }
 
-    pub(crate) const fn planned(&self) -> PlannedFetch {
-        self.data.planned
+    delegate::delegate! {
+        to self.data {
+            #[field]
+            pub(crate) const fn planned(&self) -> PlannedFetch;
+            #[field]
+            pub(crate) const fn plan_revision(&self) -> PlanRevision;
+        }
     }
 
     /// Share the slot's CAS cell so the `on_slow` hook can flag the in-flight
@@ -225,9 +233,10 @@ impl Drop for DownloadClaim {
             return;
         }
         self.slot.mark_missing();
-        if let Some(variant) = self.variant.upgrade() {
-            variant.requeue_planned(self.planned);
-        }
+        let requeued = self
+            .variant
+            .upgrade()
+            .is_some_and(|variant| variant.requeue_planned(self.planned, self.plan_revision));
         self.signal.wake_peer();
         // Steady-state recovery, not an incident: a cancelled or superseded
         // fetch drops its claim on every seek and variant switch, so a stress
@@ -235,7 +244,8 @@ impl Drop for DownloadClaim {
         debug!(
             target: "kithara_hls::settle",
             planned = ?self.planned,
-            "Downloading claim dropped without settle — slot reverted to Missing and requeued"
+            requeued,
+            "Downloading claim dropped without settle — slot reverted to Missing"
         );
     }
 }
@@ -377,10 +387,11 @@ impl FetchSlot {
                 // is never asked for again and playback stops at the gap it
                 // leaves, even once the network is back.
                 let planned = handle.planned();
+                let plan_revision = handle.plan_revision();
                 let variant = handle.variant();
                 handle.into_missing();
                 if let Some(variant) = variant {
-                    variant.requeue_planned(planned);
+                    let _ = variant.requeue_planned(planned, plan_revision);
                 }
                 signal.wake_peer();
             }
