@@ -51,7 +51,7 @@ impl TablePaint {
         cursor: Cursor,
     ) -> Vec<Geometry> {
         let (horizontal, vertical) = state.paint_offsets();
-        let frame = Frame::new(renderer, bounds.size());
+        let size = bounds.size();
         let mut text = state.text.borrow_mut();
         let text = text.get_or_insert_with(|| self.face.skin().text_resources().into());
         let point = cursor.position_in(bounds).map(Into::into);
@@ -75,7 +75,12 @@ impl TablePaint {
                 vertical,
             },
         );
-        vec![self.tessellated(frame, &list)]
+        state.refresh(&list);
+        vec![
+            state
+                .geometry
+                .draw(renderer, size, |frame| self.tessellate(frame, &list)),
+        ]
     }
 
     /// The marks the table's rows, header and footer come to, built afresh.
@@ -84,11 +89,12 @@ impl TablePaint {
         self.face.commands(text, bounds, drawn)
     }
 
-    /// Those marks turned into triangles the renderer can hand the GPU.
+    /// Those marks turned into triangles the renderer can hand the GPU. Run
+    /// only when the kept geometry was dropped, which is what makes a table
+    /// nothing changed cost nothing to draw.
     #[cfg_attr(feature = "perf", hotpath::measure(label = "iced.table.tessellate"))]
-    fn tessellated(&self, mut frame: Frame, list: &DrawList) -> Geometry {
-        replay_ordered(list, &mut frame, self.face.skin().text_resources());
-        frame.into_geometry()
+    fn tessellate(&self, frame: &mut Frame, list: &DrawList) {
+        replay_ordered(list, frame, self.face.skin().text_resources());
     }
 
     pub(super) fn config(&self) -> TableConfig {
@@ -133,6 +139,11 @@ pub(super) struct TableState {
     pub(super) dividers: Vec<(TableColumn, ScalarState)>,
     pub(super) horizontal: ScrollState,
     path: String,
+    /// The marks the kept geometry was tessellated from, and that geometry.
+    /// A table is the one canvas this host drew from scratch every frame; a
+    /// painted control has held both since it learned not to.
+    drawn: RefCell<Option<DrawList>>,
+    geometry: canvas::Cache,
     pub(super) drag_index: Option<usize>,
     pub(super) pressed_index: Option<usize>,
     pub(super) row_drag: ItemDrag,
@@ -150,6 +161,23 @@ pub(super) struct TableConfig {
 }
 
 impl TableState {
+    /// Drops the kept geometry when the marks behind it changed, and reports
+    /// whether it had to. That answer is the whole of this cache, so it is
+    /// returned rather than inferred from the pixels.
+    ///
+    /// The key is the drawn list itself, on the same reasoning a painted
+    /// control gives: two equal lists draw the same picture by construction,
+    /// and equality settles the floats for free.
+    pub(super) fn refresh(&self, list: &DrawList) -> bool {
+        let mut drawn = self.drawn.borrow_mut();
+        if drawn.as_ref() == Some(list) {
+            return false;
+        }
+        self.geometry.clear();
+        *drawn = Some(list.clone());
+        true
+    }
+
     pub(super) fn reconcile(&mut self, path: &str, config: &TableConfig) {
         self.rebind(path);
         let horizontal = ScrollConfig::plain(ScrollAxis::Horizontal, config.content_width);

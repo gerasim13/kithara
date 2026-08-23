@@ -417,6 +417,93 @@ mod tests {
         FallbackRenderer::Secondary(TinySkiaRenderer::new(SANS, Pixels(14.0)))
     }
 
+    /// One frame of the immediate host's table: the program is built afresh,
+    /// and the canvas state is the one thing that survived the last frame.
+    /// Reports whether that frame had to be tessellated again.
+    fn drew_again(state: &TableState, paint: &TablePaint, drawn: &Drawn) -> bool {
+        let mut text = TextContext::from(paint.face.skin().text_resources());
+        state.refresh(&paint.face.commands(
+            &mut text,
+            Rect {
+                h: 120.0,
+                w: 180.0,
+                x: 0.0,
+                y: 0.0,
+            },
+            drawn,
+        ))
+    }
+
+    /// What a table standing still is drawn from.
+    fn still(paint: &TablePaint) -> Drawn {
+        Drawn {
+            columns: paint.face.columns().to_vec(),
+            horizontal: 0.0,
+            hovered: None,
+            pressed: None,
+            vertical: 0.0,
+        }
+    }
+
+    /// The host rebuilds the whole element tree every frame, so a table nothing
+    /// touched must not be tessellated a second time. It was the one canvas
+    /// this host drew from scratch on every single frame.
+    #[kithara::test]
+    fn an_unchanged_table_keeps_the_geometry_it_drew() {
+        let paint = paint();
+        let state = TableState::default();
+        let drawn = still(&paint);
+
+        assert!(drew_again(&state, &paint, &drawn), "the first frame draws");
+        assert!(
+            !drew_again(&state, &paint, &drawn),
+            "a table nothing touched must keep what it drew"
+        );
+    }
+
+    /// A row under the pointer is a different picture.
+    #[kithara::test]
+    fn a_table_whose_hovered_row_moved_draws_again() {
+        let paint = paint();
+        let state = TableState::default();
+        let drawn = still(&paint);
+        assert!(drew_again(&state, &paint, &drawn), "the first frame draws");
+
+        assert!(
+            drew_again(
+                &state,
+                &paint,
+                &Drawn {
+                    hovered: Some(2),
+                    ..drawn
+                }
+            ),
+            "a row taken under the pointer must draw again"
+        );
+    }
+
+    /// Scrolling carries other rows under the viewport, which is another
+    /// picture and not the one that was kept.
+    #[kithara::test]
+    fn a_scrolled_table_draws_again() {
+        let paint = paint();
+        let state = TableState::default();
+        let drawn = still(&paint);
+        assert!(drew_again(&state, &paint, &drawn), "the first frame draws");
+
+        assert!(
+            drew_again(
+                &state,
+                &paint,
+                &Drawn {
+                    vertical: 13.0,
+                    ..drawn
+                }
+            ),
+            "a table scrolled to other rows must draw again"
+        );
+    }
+
     #[kithara::test]
     fn body_rows_are_scoped_under_a_vertical_clip() {
         let paint = paint();
