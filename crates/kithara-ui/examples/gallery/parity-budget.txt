@@ -28,9 +28,14 @@
 # `1-(1-0.5)^3`, which reads as bar — so the retained host drew a waveform with
 # no gaps at all while the immediate host drew a clean comb. Snapping the
 # columns took this page from 12.0% of pixels and 5.2% of ink to 2.7% and 2.5%.
-03-modules-deck.png         3
+# Lowered 3 -> 2 on 2026-08-23: a rule down the wave - beat, downbeat, cue,
+# loop bound, playhead - is filled on the columns it covers instead of stroked
+# astride them, so tiny-skia's snapped hairline and Vello's area sample stop
+# disagreeing about every mark on the deck. 2.5% -> 1.1%.
+03-modules-deck.png         2
 # Retained slots now centre fixed content like iced; telemetry fell 7.8 -> 1.2.
-03-modules-telemetry.png    2
+# Lowered 2 -> 1 on 2026-08-23 with the module frame; see globalbar below.
+03-modules-telemetry.png    1
 # Raised 4 -> 5 on 2026-08-15: the nav gained CLOCK and PIVOT rows with
 # production PR #188, and every page carries that sidebar, so each page picked
 # up two more rows of the nav's own text disagreement. Stress sat closest to its
@@ -46,7 +51,13 @@
 # same two boxes: a Canvas is placed by the toolkit at the float box, and the
 # clip each replayed run opens discards the parent transform, so the program
 # cannot carry its own geometry back onto the grid.
-16-stress.png               4
+# Lowered 4 -> 1 on 2026-08-23, when the three ways a mark could land off the
+# pixel grid were closed. The note above ended by calling the last of them
+# impossible - a Canvas is placed at the float box and the clip a replayed run
+# opens discards the parent transform - and it is not: the program cannot move
+# the placement, but it can carry the snap the other way, drawing from the
+# offset between the box it was given and the box it covers. 3.5% -> 0.8%.
+16-stress.png               1
 
 # Table landed 2026-08-09: library2 fell 37.8% -> 3.1%, table to 1.5%.
 # The generic document shader, landed 2026-08-15. Its first capture differed by
@@ -55,7 +66,7 @@
 # full-screen triangle halved its own UV span. With that corrected the page sits
 # on the noise floor, which is what a shader running the same way in both hosts
 # is supposed to look like.
-20-shader.png                2
+20-shader.png                1
 
 # The two pages production PR #188 added, priced here for the first time.
 # Measured 2026-08-15 at the same geometry as the rest: clock 2.0%, pivot 2.5%.
@@ -64,14 +75,18 @@
 19-pivot.png                3
 
 15-library2.png             4
-08-micro.png                3
+08-micro.png                2
 13-table.png            2
 07-tokens.png               2
 17-menu.png                 2
 11-chrome.png               2
 03-modules-layout.png       2
 03-modules-deckmicro.png    2
-03-modules-globalbar.png    2
+# Lowered 2 -> 1 on 2026-08-23 with telemetry above, when the retained host
+# started drawing a node's frame over its children rather than under them. A
+# child that filled its parent to the edge used to paint the side away, so a
+# module lost the outline the immediate host stacks above its body.
+03-modules-globalbar.png    1
 09-mixer.png                2
 06-sizes.png                2
 05-cells.png                2
