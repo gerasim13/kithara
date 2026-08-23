@@ -4,13 +4,13 @@ Detailed contracts and invariants for the kithara-abr crate; the README is the o
 
 ## Decision flow
 
-`AbrController::record_bandwidth` → `Estimator::push_sample` → `tick(peer_id, now)`:
+`AbrController::record_bandwidth` → `Estimator::push_sample` → ABR `run_tick(peer_id, now)`:
 
 1. Resolve the peer entry and upgrade its `Weak<dyn Abr>`; either lookup failing aborts the tick silently.
 1. Pull `peer.variants()` and `peer.progress()`; `buffer_ahead = download_head_playback_time - reader_playback_time`.
 1. Publish `VariantsRegistered` once per peer, then the throttled `BandwidthEstimate` / `BufferAhead` events.
 1. `AbrState::decide(&AbrView, now)`.
-1. `Stay { AlreadyOptimal }` → `retract_throughput_pending(current)`; any other `Stay` → publish `DecisionSkipped`; a switch → `request_target(target, reason)` + `peer.wake()`.
+1. `Stay { AlreadyOptimal }` → `retract_throughput_pending(current)`; `Stay { MinInterval }` → record the eligibility deadline on the peer; any other `Stay` → publish `DecisionSkipped`; a switch → `request_target(target, reason)` + `peer.wake()`.
 
 The tick never publishes a variant change. Publication is a separate, boundary-driven step — see the pending protocol below.
 
@@ -33,7 +33,9 @@ The tick never publishes a variant change. Publication is a separate, boundary-d
 
 `min_switch_interval` (default 30 s) is applied **after** `decide()`, never before: urgency must be known before it is judged. Rescues (`EscapeStalled`, `UrgentDownSwitch`) and `Manual` mode are never held; anything else that would switch too soon becomes `Stay { MinInterval }`. Before the first switch the interval is measured from state construction, so one fast first segment cannot flip the variant under a listener who has barely started.
 
-`decide()` avoids a heterogeneous guard cascade (parallel computes, then one tuple-match) and `tick()` uses a single Option-resolver instead of a homogeneous let-else cascade — see `crates/kithara-devtools/src/idioms/checks/guard_cascade.rs` for why, and what NOT to do as a workaround.
+`Stay { MinInterval }` is a deferred decision, not a final verdict. The controller records one deadline for that peer at the exact remaining interval, so a completed download cannot leave the desired switch waiting forever for an unrelated future sample. The existing downloader loop polls the earliest ABR deadline inside its cancellation-safe `Registry::tick`; expiry requests the same canonical `tick`, never a cached target. Tick requests coalesce to one dirty bit per peer, while every bandwidth sample still reaches the estimator before the bit is set. No ABR task, peer timer, or ambient runtime lookup exists. Dropping the last `AbrHandle` removes the peer and its deadline.
+
+`decide()` avoids a heterogeneous guard cascade (parallel computes, then one tuple-match) and `run_tick()` uses a single Option-resolver instead of a homogeneous let-else cascade — see `crates/kithara-devtools/src/idioms/checks/guard_cascade.rs` for why, and what NOT to do as a workaround.
 
 ## Pending protocol and publication authority
 
@@ -65,13 +67,17 @@ Dual-track EWMA — fast (2 s half-life) and slow (10 s half-life); estimate = `
 
 `AbrSettings::initial_throughput_bps` (default `Some(2_000_000)`) is applied to the estimator at controller construction so the first tick can pick a sensible variant before a real sample lands. ≈2 Mbps covers Wi-Fi and most 4G; constrained networks down-switch after the first real sample. It is a transient prior — real EWMA weight replaces it through the `min(fast, slow)` consensus. Set it to `None` for the cold-start path: `decide()` returns `NoEstimate` and the peer stays on its initial variant until samples accumulate.
 
-`AbrSettings` is `#[non_exhaustive]` and built with `AbrSettings::builder()…build()` (`Default` goes through the builder); the `initial_throughput_bps` setter takes a bare `u64`.
+`AbrSettings` is the facade configuration for the controller: it carries both algorithm parameters and injected resources such as the optional parent `CancelToken`. It is `#[non_exhaustive]` and built with `AbrSettings::builder()…build()` (`Default` goes through the builder); `initial_throughput_bps(Some(value))` sets the seed and `initial_throughput_bps(None)` explicitly disables it.
 
 ## Ownership
 
 - Variants live on the peer (`Abr::variants()`), never in `AbrState`; they reach the decision through `AbrView`. `AbrState` owns only runtime control: current index, mode, lock count, escape flag, bandwidth cap, last-switch timestamp, pending slot.
+- `Abr::cancel()` is mandatory and returns the protocol track/source token. The controller observes this token but never cancels it; HLS returns its stream token and File returns its source token.
 - `AbrHandle::set_mode` validates `Manual(idx)` against the peer's live variant list and returns `AbrError::VariantOutOfBounds`; `AbrState::set_mode` does not validate.
 - `AbrHandle` is the consumer surface; dropping the last clone unregisters the peer. The track-scoped `EventBus` lives on the handle (`with_bus`), so peers stay free of event-bus plumbing.
+- `AbrController` owns a child scope of the optional parent carried by `AbrSettings`. Each registration derives one controller-owned child and OR-combines it with `Abr::cancel()` through `CancelGroup`; controller/parent cancellation stops every registration, protocol cancellation stops that track, and sibling registrations remain live.
+- `Downloader::run` is the only async driver for ABR scheduling. `AbrController` stores coalesced tick requests, deadlines, and the downloader task's current waker; it never spawns a worker of its own.
+- `AbrController::register(peer)` discovers protocol cancellation from the peer. Dropping the last `AbrHandle` cancels only the controller-owned registration child, so unregister never cancels the protocol track or the controller scope.
 - `AbrHandle::notify_exact_commit` publishes `AbrEvent::VariantApplied` after a promotion and does nothing else. Its caller is the audio worker, which is not a runtime thread, so this path must not schedule async work.
 - `kithara-hls` reads the variant through `AbrHandle` / `Arc<AbrState>`; no cloneable `Arc<AtomicUsize>` handle is exposed — see `redundant_accessors` in `crates/kithara-devtools/src/arch/checks` for the rationale.
 
@@ -81,8 +87,8 @@ Per peer: `ThroughputSample` at most every 200 ms (fixed constant); `BandwidthEs
 
 ## Module layout
 
-- `abr.rs` — `Abr` trait, the per-peer capability surface; every method is defaulted so simple peers opt out.
-- `controller/` — `core.rs` (`AbrController`, `AbrSettings`, `AbrPeerId`, registration, peer-state callbacks), `tick.rs`, `throttle.rs`, `peer.rs` (`PeerEntry`).
+- `abr.rs` — `Abr` trait, the per-peer capability surface; `cancel()` is mandatory while optional ABR capabilities are defaulted so simple peers opt out.
+- `controller/` — `core.rs` (`AbrController`, `AbrSettings`, `AbrPeerId`, registration, peer-state callbacks), `driver.rs` (coalesced tick readiness and deadlines driven by the downloader), `tick.rs`, `throttle.rs`, `peer.rs` (`PeerEntry`).
 - `estimator.rs` — `Estimator` trait, `ThroughputEstimator`, private `Ewma`.
 - `handle.rs` — `AbrHandle` (Drop-driven unregister).
 - `state/` — `core.rs` (`AbrState`), `decision.rs` (pure `evaluate`), `view.rs`, `pending.rs` (`AbrTicket`, `PendingAbrClaim`, `PendingAbrDecision`), `publisher.rs` (`AbrPublisher`), `error.rs`, `tests.rs`.

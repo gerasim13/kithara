@@ -6,7 +6,7 @@ use kithara_stream::dl::FetchCmd;
 use kithara_test_utils::kithara;
 use tracing::{debug, warn};
 
-use super::{HlsVariant, PlanCtx, core::NO_PREFETCH_DEFERRAL};
+use super::{HlsVariant, PlanCtx, PlanRevision, core::NO_PREFETCH_DEFERRAL};
 use crate::segment::{Downloading, FetchClaim, PlannedFetch, Segment};
 
 /// What a dispatch-side acquire failure does to the slot.
@@ -60,7 +60,7 @@ impl HlsVariant {
         cancel: CancelToken,
     ) -> Vec<FetchCmd> {
         let mut out = Vec::new();
-        let mut deferred: Vec<PlannedFetch> = Vec::new();
+        let mut deferred: Vec<(PlannedFetch, PlanRevision)> = Vec::new();
         let owed_through = audible
             .then(|| self.find_at_offset(position).map(|(seg_idx, _, _)| seg_idx))
             .flatten();
@@ -105,7 +105,9 @@ impl HlsVariant {
                     }
                 }
             };
-            let Some(planned) = planned else { break };
+            let Some((planned, plan_revision)) = planned else {
+                break;
+            };
             match planned {
                 PlannedFetch::Init => {
                     let Some(init) = self.init() else {
@@ -113,11 +115,12 @@ impl HlsVariant {
                     };
                     let Some(handle) = init.state().try_claim(
                         PlannedFetch::Init,
+                        plan_revision,
                         Arc::downgrade(self),
                         ctx.signal.clone(),
                     ) else {
                         if !init.state().is_loaded() && !init.state().is_failed() {
-                            deferred.push(planned);
+                            deferred.push((planned, plan_revision));
                         }
                         continue;
                     };
@@ -131,7 +134,7 @@ impl HlsVariant {
                             .init()
                             .is_some_and(|i| !i.state().is_loaded() && !i.state().is_failed())
                         {
-                            deferred.push(planned);
+                            deferred.push((planned, plan_revision));
                         }
                         continue;
                     };
@@ -145,12 +148,13 @@ impl HlsVariant {
                     };
                     let Some(handle) = entry.state().try_claim(
                         PlannedFetch::Segment(seg_idx),
+                        plan_revision,
                         Arc::downgrade(self),
                         ctx.signal.clone(),
                     ) else {
                         // WHY: An orphaned download may return to `Missing` and need another claim.
                         if !entry.state().is_loaded() && !entry.state().is_failed() {
-                            deferred.push(planned);
+                            deferred.push((planned, plan_revision));
                         }
                         continue;
                     };
@@ -162,7 +166,7 @@ impl HlsVariant {
                     let Some(mut cmd) = self.emit_fetch_cmd(ctx, seg_idx, handle, cancel.clone())
                     else {
                         // WHY: A reverted claim must remain queued for another acquisition attempt.
-                        deferred.push(planned);
+                        deferred.push((planned, plan_revision));
                         continue;
                     };
                     if owed(seg_idx) {
@@ -175,13 +179,11 @@ impl HlsVariant {
         }
         if !deferred.is_empty() {
             let mut queue = self.flow.queue.lock();
-            for planned in deferred.into_iter().rev() {
+            for (planned, revision) in deferred.into_iter().rev() {
                 // A concurrent claim's Drop may have requeued this entry
                 // between the pop above and this write-back (a downloader
                 // teardown racing the dispatch) — never double-plan it.
-                if !queue.contains(&planned) {
-                    queue.push_front(planned);
-                }
+                queue.push_front_if_current(planned, revision);
             }
         }
         self.defer_prefetch_until(resume_at.unwrap_or(NO_PREFETCH_DEFERRAL));

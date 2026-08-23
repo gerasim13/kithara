@@ -9,7 +9,7 @@ use kithara_platform::sync::Arc;
 use crate::{
     segment::fetch::{FetchClaim, PlannedFetch},
     signal::SizeSignal,
-    variant::HlsVariant,
+    variant::{HlsVariant, PlanRevision},
 };
 
 bitflags! {
@@ -115,6 +115,7 @@ impl SegmentSlotState {
     pub(crate) fn try_claim(
         self: &Arc<Self>,
         planned: PlannedFetch,
+        plan_revision: PlanRevision,
         variant: Weak<HlsVariant>,
         signal: SizeSignal,
     ) -> Option<FetchClaim<Downloading>> {
@@ -126,7 +127,7 @@ impl SegmentSlotState {
                 Ordering::Acquire,
             )
             .ok()
-            .map(|_| FetchClaim::claim(planned, variant, Arc::clone(self), signal))
+            .map(|_| FetchClaim::claim(planned, plan_revision, variant, Arc::clone(self), signal))
     }
 
     delegate::delegate! {

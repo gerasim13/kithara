@@ -17,9 +17,9 @@ use crate::state::{AbrDecision, AbrView};
 
 impl AbrController {
     /// Record a bandwidth sample for `peer_id`. Called by the Downloader
-    /// when a fetch completes. Also triggers a `tick` for the peer.
+    /// when a fetch completes. Also evaluates the peer at the sample timestamp.
     pub fn record_bandwidth(
-        &self,
+        self: &Arc<Self>,
         peer_id: AbrPeerId,
         bytes: u64,
         fetch_duration: Duration,
@@ -58,11 +58,11 @@ impl AbrController {
             }
         }
 
-        self.tick(peer_id, now);
+        self.run_tick(peer_id, now);
     }
 
     #[kithara::probe(peer_id)]
-    pub(crate) fn tick(&self, peer_id: AbrPeerId, now: Instant) {
+    pub(crate) fn run_tick(self: &Arc<Self>, peer_id: AbrPeerId, now: Instant) {
         let Some(ctx) = TickContext::resolve(self, peer_id) else {
             return;
         };
@@ -125,6 +125,7 @@ impl AbrController {
                 reason: AbrReason::AlreadyOptimal,
                 current,
             } => {
+                ctx.entry.clear_tick_deadline();
                 // The only Stay that retracts: AlreadyOptimal positively
                 // re-affirms `current` on live evidence. MinInterval wraps a
                 // switch `evaluate()` still wants; Locked and NoEstimate are
@@ -133,12 +134,27 @@ impl AbrController {
                 // no verdict on a pending down-switch.
                 state.retract_throughput_pending(current);
             }
+            AbrDecision::Stay {
+                reason: AbrReason::MinInterval,
+                ..
+            } => {
+                let deadline =
+                    now + state.switch_interval_remaining(now, self.settings.min_switch_interval);
+                ctx.entry.set_tick_deadline(deadline);
+                if let Some(ref bus) = bus {
+                    bus.publish(AbrEvent::DecisionSkipped {
+                        reason: AbrReason::MinInterval,
+                    });
+                }
+            }
             AbrDecision::Stay { reason, .. } => {
+                ctx.entry.clear_tick_deadline();
                 if let Some(ref bus) = bus {
                     bus.publish(AbrEvent::DecisionSkipped { reason });
                 }
             }
             change => {
+                ctx.entry.clear_tick_deadline();
                 state.request_target(change.target(), change.reason());
                 ctx.peer.wake();
             }

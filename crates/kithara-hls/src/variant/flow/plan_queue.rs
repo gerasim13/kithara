@@ -1,12 +1,15 @@
 use std::{
     collections::VecDeque,
     ops::Deref,
-    sync::atomic::{AtomicBool, Ordering},
+    sync::atomic::{AtomicBool, AtomicU64, Ordering},
 };
 
 use kithara_platform::sync::{Mutex, MutexGuard};
 
 use crate::segment::PlannedFetch;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct PlanRevision(u64);
 
 /// The fetch plan with a lock-free membership mirror.
 ///
@@ -19,6 +22,7 @@ use crate::segment::PlannedFetch;
 /// mirror.
 pub(in crate::variant) struct PlanQueue {
     queue: Mutex<VecDeque<PlannedFetch>>,
+    revision: AtomicU64,
     init_planned: AtomicBool,
     segments_planned: Box<[AtomicBool]>,
 }
@@ -27,6 +31,7 @@ impl PlanQueue {
     pub(in crate::variant) fn new(queue_capacity: usize, num_segments: usize) -> Self {
         Self {
             queue: Mutex::new(VecDeque::with_capacity(queue_capacity)),
+            revision: AtomicU64::new(0),
             init_planned: AtomicBool::new(false),
             segments_planned: (0..num_segments).map(|_| AtomicBool::new(false)).collect(),
         }
@@ -48,9 +53,15 @@ impl PlanQueue {
     pub(in crate::variant) fn lock(&self) -> PlanGuard<'_> {
         PlanGuard {
             queue: self.queue.lock(),
+            revision: &self.revision,
             init_planned: &self.init_planned,
             segments_planned: &self.segments_planned,
         }
+    }
+
+    #[cfg(test)]
+    pub(in crate::variant) fn revision(&self) -> PlanRevision {
+        PlanRevision(self.revision.load(Ordering::Relaxed))
     }
 
     fn mark(
@@ -74,6 +85,7 @@ impl PlanQueue {
 /// own methods so the membership mirror can never drift from the plan.
 pub(in crate::variant) struct PlanGuard<'a> {
     queue: MutexGuard<'a, VecDeque<PlannedFetch>>,
+    revision: &'a AtomicU64,
     init_planned: &'a AtomicBool,
     segments_planned: &'a [AtomicBool],
 }
@@ -87,17 +99,35 @@ impl Deref for PlanGuard<'_> {
 }
 
 impl PlanGuard<'_> {
-    pub(in crate::variant) fn pop_front(&mut self) -> Option<PlannedFetch> {
+    pub(in crate::variant) fn pop_front(&mut self) -> Option<(PlannedFetch, PlanRevision)> {
         let planned = self.queue.pop_front();
         if let Some(planned) = planned {
             PlanQueue::mark(self.init_planned, self.segments_planned, planned, false);
         }
-        planned
+        planned.map(|planned| (planned, PlanRevision(self.revision.load(Ordering::Relaxed))))
     }
 
     pub(in crate::variant) fn push_front(&mut self, planned: PlannedFetch) {
         self.queue.push_front(planned);
         PlanQueue::mark(self.init_planned, self.segments_planned, planned, true);
+    }
+
+    pub(in crate::variant) fn push_front_if_current(
+        &mut self,
+        planned: PlannedFetch,
+        revision: PlanRevision,
+    ) -> bool {
+        if PlanRevision(self.revision.load(Ordering::Relaxed)) != revision
+            || self.queue.contains(&planned)
+        {
+            return false;
+        }
+        self.push_front(planned);
+        true
+    }
+
+    fn supersede(&mut self) {
+        self.revision.fetch_add(1, Ordering::Relaxed);
     }
 
     #[cfg(test)]
@@ -112,6 +142,7 @@ impl PlanGuard<'_> {
     }
 
     pub(in crate::variant) fn replace_with(&mut self, plan: impl Iterator<Item = PlannedFetch>) {
+        self.supersede();
         self.queue.clear();
         self.init_planned.store(false, Ordering::Relaxed);
         for flag in self.segments_planned {
@@ -126,13 +157,15 @@ impl PlanGuard<'_> {
 
 #[cfg(test)]
 mod tests {
+    use kithara_test_utils::kithara;
+
     use super::*;
 
     fn plan() -> PlanQueue {
         PlanQueue::new(8, 4)
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn a_replaced_plan_is_visible_without_the_lock() {
         let queue = plan();
 
@@ -145,19 +178,22 @@ mod tests {
         assert!(!queue.planned(PlannedFetch::Segment(1)));
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn a_popped_fetch_leaves_the_mirror() {
         let queue = plan();
         queue
             .lock()
             .replace_with([PlannedFetch::Segment(1)].into_iter());
 
-        assert_eq!(queue.lock().pop_front(), Some(PlannedFetch::Segment(1)));
+        assert_eq!(
+            queue.lock().pop_front().map(|(planned, _)| planned),
+            Some(PlannedFetch::Segment(1))
+        );
 
         assert!(!queue.planned(PlannedFetch::Segment(1)));
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn a_requeued_fetch_reenters_the_mirror() {
         let queue = plan();
 
@@ -166,13 +202,35 @@ mod tests {
         assert!(queue.planned(PlannedFetch::Segment(3)));
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn a_segment_outside_the_map_is_never_planned() {
         let queue = plan();
 
         queue.lock().push_front(PlannedFetch::Segment(40));
 
         assert!(!queue.planned(PlannedFetch::Segment(40)));
-        assert_eq!(queue.lock().pop_front(), Some(PlannedFetch::Segment(40)));
+        assert_eq!(
+            queue.lock().pop_front().map(|(planned, _)| planned),
+            Some(PlannedFetch::Segment(40))
+        );
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn a_replaced_plan_rejects_a_stale_requeue() {
+        let queue = plan();
+        queue
+            .lock()
+            .replace_with([PlannedFetch::Segment(1)].into_iter());
+        let (planned, revision) = queue.lock().pop_front().expect("planned fetch");
+
+        queue
+            .lock()
+            .replace_with([PlannedFetch::Segment(3)].into_iter());
+
+        assert!(!queue.lock().push_front_if_current(planned, revision));
+        assert_eq!(
+            queue.lock().iter().copied().collect::<Vec<_>>(),
+            vec![PlannedFetch::Segment(3)]
+        );
     }
 }

@@ -1,8 +1,5 @@
 use kithara_events::{AbrEvent, AbrMode, EventBus, VariantIndex, VariantInfo};
-use kithara_platform::{
-    sync::{Arc, RwLock},
-    time::Instant,
-};
+use kithara_platform::sync::{Arc, RwLock};
 use kithara_test_utils::kithara;
 
 use crate::{
@@ -181,9 +178,7 @@ impl AbrHandle {
     /// must fire OUTSIDE the lock. Mirrors the controller's `on_*` hooks.
     #[kithara::probe]
     pub fn reevaluate(&self) {
-        self.inner
-            .controller
-            .tick(self.inner.peer_id, Instant::now());
+        self.inner.controller.tick(self.inner.peer_id);
     }
 
     /// Variant selected for a seek replacement, including a locked pending
@@ -278,7 +273,10 @@ mod tests {
         AbrEvent, AbrReason, DEFAULT_EVENT_BUS_CAPACITY, Envelope, Event, EventBus,
         VariantDuration, VariantIndex, VariantInfo,
     };
-    use kithara_platform::time::Duration;
+    use kithara_platform::{
+        CancelToken,
+        time::{Duration, Instant},
+    };
     use kithara_test_utils::kithara;
 
     use super::*;
@@ -317,17 +315,21 @@ mod tests {
     }
 
     fn settings_fast() -> AbrSettings {
-        AbrSettings {
-            min_switch_interval: Duration::ZERO,
-            min_buffer_for_up_switch: Duration::ZERO,
-            ..AbrSettings::default()
-        }
+        AbrSettings::builder()
+            .min_switch_interval(Duration::ZERO)
+            .min_buffer_for_up_switch(Duration::ZERO)
+            .build()
     }
 
     struct StatefulPeer {
+        cancel: CancelToken,
         state: Arc<AbrState>,
     }
     impl Abr for StatefulPeer {
+        fn cancel(&self) -> CancelToken {
+            self.cancel.clone()
+        }
+
         fn state(&self) -> Option<Arc<AbrState>> {
             Some(Arc::clone(&self.state))
         }
@@ -345,6 +347,7 @@ mod tests {
         let state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0)))));
         let publisher = state.publisher();
         let peer: Arc<dyn Abr> = Arc::new(StatefulPeer {
+            cancel: CancelToken::never(),
             state: Arc::clone(&state),
         });
         let handle = controller.register(&peer);
@@ -383,6 +386,7 @@ mod tests {
         let state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0)))));
         let publisher = state.publisher();
         let peer: Arc<dyn Abr> = Arc::new(StatefulPeer {
+            cancel: CancelToken::never(),
             state: Arc::clone(&state),
         });
         let handle = controller.register(&peer);
@@ -405,6 +409,7 @@ mod tests {
         );
         let state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0)))));
         let peer: Arc<dyn Abr> = Arc::new(StatefulPeer {
+            cancel: CancelToken::never(),
             state: Arc::clone(&state),
         });
         let handle = controller.register(&peer);
@@ -428,6 +433,7 @@ mod tests {
         );
         let state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(1)))));
         let peer: Arc<dyn Abr> = Arc::new(StatefulPeer {
+            cancel: CancelToken::never(),
             state: Arc::clone(&state),
         });
         let handle = controller.register(&peer);
@@ -464,6 +470,7 @@ mod tests {
         let state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0)))));
         let handle = {
             let peer: Arc<dyn Abr> = Arc::new(StatefulPeer {
+                cancel: CancelToken::never(),
                 state: Arc::clone(&state),
             });
             let h = controller.register(&peer);
@@ -487,6 +494,7 @@ mod tests {
         );
         let state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0)))));
         let peer: Arc<dyn Abr> = Arc::new(StatefulPeer {
+            cancel: CancelToken::never(),
             state: Arc::clone(&state),
         });
 

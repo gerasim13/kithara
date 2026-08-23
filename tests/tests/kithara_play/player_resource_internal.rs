@@ -7,7 +7,10 @@
     reason = "test fixture values are small positive integers/floats"
 )]
 
-use std::num::NonZeroU32;
+use std::{
+    num::NonZeroU32,
+    sync::atomic::{AtomicU64, Ordering},
+};
 
 use kithara::{
     self,
@@ -94,6 +97,86 @@ impl PcmSession for PendingReader {
 }
 
 impl PcmControl for PendingReader {
+    fn seek(&mut self, position: Duration) -> Result<SeekOutcome, DecodeError> {
+        Ok(SeekOutcome::Landed {
+            target: position,
+            landed_at: position,
+        })
+    }
+}
+
+struct ChunkReader {
+    bus: EventBus,
+    emitted: Arc<AtomicU64>,
+    meta: TrackMetadata,
+    spec: PcmSpec,
+}
+
+impl ChunkReader {
+    const CHUNK_FRAMES: usize = 1_024;
+
+    fn new(emitted: Arc<AtomicU64>) -> Self {
+        Self {
+            bus: EventBus::default(),
+            emitted,
+            meta: TrackMetadata::default(),
+            spec: mock_spec(),
+        }
+    }
+
+    fn emit(&self, frames: usize) -> ReadOutcome {
+        self.emitted.fetch_add(frames as u64, Ordering::Relaxed);
+        ReadOutcome::Frames {
+            count: std::num::NonZeroUsize::new(frames).expect("chunk is non-empty"),
+            position: self.position(),
+        }
+    }
+}
+
+impl PcmRead for ChunkReader {
+    fn read(&mut self, buf: &mut [f32]) -> Result<ReadOutcome, DecodeError> {
+        let frames = Self::CHUNK_FRAMES.min(buf.len() / usize::from(self.spec.channels));
+        buf[..frames * usize::from(self.spec.channels)].fill(0.5);
+        Ok(self.emit(frames))
+    }
+
+    fn read_planar<'a>(
+        &mut self,
+        output: &'a mut [&'a mut [f32]],
+    ) -> Result<ReadOutcome, DecodeError> {
+        let frames = Self::CHUNK_FRAMES.min(output[0].len());
+        for channel in output {
+            channel[..frames].fill(0.5);
+        }
+        Ok(self.emit(frames))
+    }
+
+    fn spec(&self) -> PcmSpec {
+        self.spec
+    }
+
+    fn position(&self) -> Duration {
+        Duration::from_secs_f64(
+            self.emitted.load(Ordering::Relaxed) as f64 / f64::from(self.spec.sample_rate.get()),
+        )
+    }
+}
+
+impl PcmSession for ChunkReader {
+    fn duration(&self) -> Option<Duration> {
+        None
+    }
+
+    fn metadata(&self) -> &TrackMetadata {
+        &self.meta
+    }
+
+    fn event_bus(&self) -> &EventBus {
+        &self.bus
+    }
+}
+
+impl PcmControl for ChunkReader {
     fn seek(&mut self, position: Duration) -> Result<SeekOutcome, DecodeError> {
         Ok(SeekOutcome::Landed {
             target: position,
@@ -229,6 +312,26 @@ async fn read_returns_constant_samples_full() {
     for &s in &right[..128] {
         assert!((s - 0.5).abs() < f32::EPSILON);
     }
+}
+
+#[kithara::test]
+fn full_read_refills_before_the_next_callback_drains_scratch() {
+    let emitted = Arc::new(AtomicU64::new(0));
+    let reader = ChunkReader::new(Arc::clone(&emitted));
+    let resource = Resource::from_reader(reader, None);
+    let mut player = PlayerResource::new(resource, Arc::from("chunked"), &PcmPool::default());
+    let mut left = vec![0.0f32; 512];
+    let mut right = vec![0.0f32; 512];
+    let mut output: Vec<&mut [f32]> = vec![&mut left, &mut right];
+
+    let result = player.read(&mut output, 0..512, &RtMetrics::default());
+
+    assert_eq!(result, BlockReadOutcome::Full { frames: 512 });
+    assert_eq!(
+        emitted.load(Ordering::Relaxed),
+        2 * ChunkReader::CHUNK_FRAMES as u64,
+        "a successful callback must refill while one callback is still buffered",
+    );
 }
 
 #[kithara::test(tokio)]

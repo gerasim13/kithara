@@ -1,6 +1,8 @@
 use std::{io::Cursor, num::NonZeroU32};
 
-use kithara::{decode::probe_mp4_gapless, platform::time::Duration, stream::AudioCodec};
+use kithara::{
+    bufpool::BytePool, decode::probe_mp4_gapless, platform::time::Duration, stream::AudioCodec,
+};
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper,
     fixture_protocol::{
@@ -58,7 +60,8 @@ async fn probe_init_segment(
     encoding: GaplessEncoding,
 ) -> Option<kithara::decode::GaplessInfo> {
     let init_bytes = build_init_segment(server, encoding).await;
-    probe_mp4_gapless(&mut Cursor::new(init_bytes)).expect("probe init segment")
+    probe_mp4_gapless(&mut Cursor::new(init_bytes), &BytePool::default())
+        .expect("probe init segment")
 }
 
 async fn build_init_segment(server: &TestServerHelper, encoding: GaplessEncoding) -> Vec<u8> {

@@ -9,13 +9,18 @@ use kithara_platform::{
 pub(super) struct ReadinessGate {
     failed: AtomicBool,
     gate: CondvarGate<bool>,
+    /// Backstop between condvar wakeups, so an abort request is noticed even
+    /// when no writer ever signals. Mirrors
+    /// `AssetStore::builder().processing_gate_poll_interval(..)`.
+    poll_interval: Duration,
 }
 
 impl ReadinessGate {
-    pub(super) fn new(initial: bool) -> Self {
+    pub(super) fn new(initial: bool, poll_interval: Duration) -> Self {
         Self {
             gate: CondvarGate::new(initial),
             failed: AtomicBool::new(false),
+            poll_interval,
         }
     }
 
@@ -38,8 +43,6 @@ impl ReadinessGate {
     }
 
     pub(super) fn wait_until_ready(&self, should_abort: &dyn Fn() -> bool) -> bool {
-        const COND_WAIT_MS: u64 = 100;
-
         loop {
             if self.is_failed() {
                 return false;
@@ -52,7 +55,7 @@ impl ReadinessGate {
                 if self.is_failed() || should_abort() {
                     return false;
                 }
-                let deadline = Instant::now() + Duration::from_millis(COND_WAIT_MS);
+                let deadline = Instant::now() + self.poll_interval;
                 let next = self.gate.wait_until(guard, deadline);
                 *next
             };

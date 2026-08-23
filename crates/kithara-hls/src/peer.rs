@@ -124,6 +124,7 @@ impl SessionTurns {
 pub(crate) struct HlsPeer {
     abr_publisher: AbrPublisher,
     abr: Arc<AbrState>,
+    cancel: CancelToken,
     /// Narrow activity handle. Used by `priority()` to check whether
     /// the track is currently playing.
     activity: Arc<dyn Activity>,
@@ -159,6 +160,7 @@ impl HlsPeer {
         seek_obs: Arc<dyn SeekObserve>,
         activity: Arc<dyn Activity>,
         initial_mode: AbrMode,
+        cancel: CancelToken,
     ) -> Self {
         let abr = Arc::new(AbrState::new(initial_mode));
         let abr_publisher = abr.publisher();
@@ -167,6 +169,7 @@ impl HlsPeer {
             activity,
             abr,
             abr_publisher,
+            cancel,
             state: Arc::new(Mutex::new(None)),
             pending_waker: Mutex::default(),
             wake_signal: CancelToken::never(),
@@ -305,6 +308,10 @@ impl Drop for HlsPeer {
 }
 
 impl Abr for HlsPeer {
+    fn cancel(&self) -> CancelToken {
+        self.cancel.clone()
+    }
+
     fn progress(&self) -> Option<AbrProgressSnapshot> {
         let current = self.abr.current_variant_index();
         let durations: Vec<Duration> = self
@@ -661,7 +668,26 @@ impl HlsTrackState {
 
 #[cfg(test)]
 mod tests {
+    use kithara_stream::SeekState;
+
     use super::*;
+
+    #[kithara::test]
+    fn abr_cancel_observes_the_hls_track_scope() {
+        let track_cancel = CancelToken::never();
+        let seek = Arc::new(SeekState::new());
+        let peer = HlsPeer::new(
+            Arc::clone(&seek) as Arc<dyn SeekObserve>,
+            seek as Arc<dyn Activity>,
+            AbrMode::default(),
+            track_cancel.clone(),
+        );
+        let observed = Abr::cancel(&peer);
+
+        assert!(!observed.is_cancelled());
+        track_cancel.cancel();
+        assert!(observed.is_cancelled());
+    }
 
     #[kithara::test]
     fn one_slot_scheduler_alternates_active_and_incoming() {

@@ -15,15 +15,15 @@ impl Consts {
 
 pub(super) struct GridFitCtx<'a> {
     params: &'a GridParams,
-    outliers: &'a [bool],
-    db: &'a [f64],
+    outliers: &'a [f32],
+    db: &'a [f32],
     sample_rate: f64,
 }
 
 impl<'a> GridFitCtx<'a> {
     pub(super) const fn new(
-        db: &'a [f64],
-        outliers: &'a [bool],
+        db: &'a [f32],
+        outliers: &'a [f32],
         sample_rate: f64,
         params: &'a GridParams,
     ) -> Self {
@@ -53,30 +53,40 @@ impl Segment {
 /// Fewer than two trusted points: line through the endpoints, residual 0.
 fn fit_segment(ctx: &GridFitCtx<'_>, segment: Segment) -> (f64, f64, f64) {
     let Segment { start, end } = segment;
-    let points: Vec<(f64, f64)> = (start..=end)
-        .filter(|&i| !ctx.outliers[i])
-        .map(|i| {
-            let x: f64 = i.as_();
-            (x, ctx.db[i])
-        })
-        .collect();
-    if points.len() < Consts::MIN_FIT_POINTS {
+    let trusted = (start..=end).filter(|&index| ctx.outliers[index] == 0.0);
+    let (count, sum_x, sum_y) =
+        trusted
+            .clone()
+            .fold((0usize, 0.0, 0.0), |(count, sum_x, sum_y), index| {
+                let x: f64 = index.as_();
+                (count + 1, sum_x + x, sum_y + f64::from(ctx.db[index]))
+            });
+    if count < Consts::MIN_FIT_POINTS {
         let span: f64 = (end - start).max(1).as_();
-        return (ctx.db[start], (ctx.db[end] - ctx.db[start]) / span, 0.0);
+        return (
+            f64::from(ctx.db[start]),
+            f64::from(ctx.db[end] - ctx.db[start]) / span,
+            0.0,
+        );
     }
-    let n: f64 = points.len().as_();
-    let mean_x = points.iter().map(|p| p.0).sum::<f64>() / n;
-    let mean_y = points.iter().map(|p| p.1).sum::<f64>() / n;
-    let var_x = points.iter().map(|p| (p.0 - mean_x).powi(2)).sum::<f64>();
-    let cov = points
-        .iter()
-        .map(|p| (p.0 - mean_x) * (p.1 - mean_y))
-        .sum::<f64>();
+    let n: f64 = count.as_();
+    let mean_x = sum_x / n;
+    let mean_y = sum_y / n;
+    let (var_x, cov) = trusted.clone().fold((0.0, 0.0), |(var_x, cov), index| {
+        let x: f64 = index.as_();
+        let dx = x - mean_x;
+        (
+            var_x + dx.powi(2),
+            cov + dx * (f64::from(ctx.db[index]) - mean_y),
+        )
+    });
     let slope = cov / var_x;
     let intercept = mean_y - slope * mean_x;
-    let max_resid = points
-        .iter()
-        .map(|p| (p.1 - (intercept + slope * p.0)).abs())
+    let max_resid = trusted
+        .map(|index| {
+            let x: f64 = index.as_();
+            (f64::from(ctx.db[index]) - (intercept + slope * x)).abs()
+        })
         .fold(0.0, f64::max);
     (intercept, slope, max_resid)
 }
@@ -107,101 +117,167 @@ fn aligned_mid(start: usize, end: usize, align: usize, min_seg: usize) -> usize 
 
 /// Step 4: recursively split `[start, end]` until each leaf's trusted
 /// downbeats fit one line within `residual_ms`, or the leaf is too short to
-/// split into two `min_leaf_bars` halves. Returns leaf boundary bar indices.
-fn bisect_segment(ctx: &GridFitCtx<'_>, segment: Segment) -> Vec<usize> {
+/// split into two `min_leaf_bars` halves.
+fn bisect_segment(ctx: &GridFitCtx<'_>, segment: Segment, visit: &mut impl FnMut(Segment)) {
     let Segment { start, end } = segment;
     if end - start <= 1 {
-        return vec![start, end];
+        visit(segment);
+        return;
     }
     let (_, _, max_resid) = fit_segment(ctx, segment);
-    let resid_ms = max_resid / ctx.sample_rate * Consts::MS_PER_SEC;
+    let resid_ms = max_resid * Consts::MS_PER_SEC;
     if resid_ms < ctx.params.residual_ms
         || (end - start) < Consts::SPLIT_HALVES * ctx.params.min_leaf_bars
     {
-        return vec![start, end];
+        visit(segment);
+        return;
     }
     let mid = aligned_mid(start, end, ctx.params.align_bars, ctx.params.min_leaf_bars);
-    let mut left = bisect_segment(ctx, Segment::new(start, mid));
-    let right = bisect_segment(ctx, Segment::new(mid, end));
-    left.pop();
-    left.extend(right);
-    left
+    bisect_segment(ctx, Segment::new(start, mid), visit);
+    bisect_segment(ctx, Segment::new(mid, end), visit);
 }
 
-/// Bisect each half of the track left and right of the anchor and join the
-/// boundary lists at the anchor bar.
-pub(super) fn anchored_boundaries(ctx: &GridFitCtx<'_>, anchor_idx: usize) -> Vec<usize> {
+fn visit_anchored_leaves(ctx: &GridFitCtx<'_>, anchor_idx: usize, visit: &mut impl FnMut(Segment)) {
     let last = ctx.db.len() - 1;
     if anchor_idx == 0 || anchor_idx >= last {
         let end = if anchor_idx == 0 { last } else { anchor_idx };
-        return bisect_segment(ctx, Segment::new(0, end));
+        bisect_segment(ctx, Segment::new(0, end), visit);
+        return;
     }
-    let mut left = bisect_segment(ctx, Segment::new(0, anchor_idx));
-    let right = bisect_segment(ctx, Segment::new(anchor_idx, last));
-    left.pop();
-    left.extend(right);
-    left
+    bisect_segment(ctx, Segment::new(0, anchor_idx), visit);
+    bisect_segment(ctx, Segment::new(anchor_idx, last), visit);
 }
 
-/// Step 5: per-leaf fits become [`GridSegment`]s. Adjacent leaves whose
-/// corrections agree within `merge_ratio_eps` collapse into one refit span;
-/// boundary frames average the two abutting fits' predictions (denoised).
-pub(super) fn build_segments(
-    ctx: &GridFitCtx<'_>,
-    boundaries: &[usize],
-    nominal_bar: f64,
-) -> Vec<GridSegment> {
-    if boundaries.len() < 2 {
-        return Vec::new();
-    }
-    let mut spans: Vec<(usize, usize, f64, f64)> = Vec::with_capacity(boundaries.len() - 1);
-    for pair in boundaries.windows(2) {
-        let segment = Segment::new(pair[0], pair[1]);
+#[derive(Clone, Copy)]
+struct FitSpan {
+    end: usize,
+    intercept: f64,
+    slope: f64,
+    start: usize,
+}
+
+impl FitSpan {
+    fn fit(ctx: &GridFitCtx<'_>, segment: Segment) -> Self {
         let (intercept, slope, _) = fit_segment(ctx, segment);
-        if let Some(last) = spans.last_mut() {
-            let r_last = ratio_correction(nominal_bar, last.3);
-            let r_new = ratio_correction(nominal_bar, slope);
-            if (r_last - r_new).abs() <= ctx.params.merge_ratio_eps {
-                let (a, b, _) = fit_segment(ctx, Segment::new(last.0, pair[1]));
-                *last = (last.0, pair[1], a, b);
-                continue;
-            }
+        Self {
+            end: segment.end,
+            intercept,
+            slope,
+            start: segment.start,
         }
-        spans.push((pair[0], pair[1], intercept, slope));
     }
 
-    let predict = |span: &(usize, usize, f64, f64), bar: usize| -> f64 {
-        let x: f64 = bar.as_();
-        span.3.mul_add(x, span.2)
-    };
-    let mut segments = Vec::with_capacity(spans.len());
-    for (k, span) in spans.iter().enumerate() {
-        let start = if k > 0 {
-            f64::midpoint(predict(&spans[k - 1], span.0), predict(span, span.0))
-        } else {
-            predict(span, span.0)
-        };
-        let end = if k + 1 < spans.len() {
-            f64::midpoint(predict(span, span.1), predict(&spans[k + 1], span.1))
-        } else {
-            predict(span, span.1)
-        };
-        let (Some(start_frame), Some(end_frame)) = (
-            start.round().max(0.0).to_u64(),
-            end.round().max(0.0).to_u64(),
-        ) else {
-            continue;
-        };
-        if end_frame <= start_frame {
-            continue;
-        }
-        segments.push(GridSegment::new(
-            start_frame,
-            end_frame,
-            ratio_correction(nominal_bar, span.3),
-        ));
+    fn predict(self, bar: usize) -> f64 {
+        let bar: f64 = bar.as_();
+        self.intercept + self.slope * bar
     }
-    segments
+}
+
+struct SegmentWriter<'a> {
+    ctx: &'a GridFitCtx<'a>,
+    current: Option<FitSpan>,
+    nominal_bar: f64,
+    previous: Option<FitSpan>,
+    previous_start: Option<f64>,
+    segments: Vec<GridSegment>,
+}
+
+impl<'a> SegmentWriter<'a> {
+    fn new(ctx: &'a GridFitCtx<'a>, nominal_bar: f64) -> Self {
+        Self {
+            ctx,
+            current: None,
+            nominal_bar,
+            previous: None,
+            previous_start: None,
+            segments: Vec::new(),
+        }
+    }
+
+    fn visit(&mut self, segment: Segment) {
+        let next = FitSpan::fit(self.ctx, segment);
+        let Some(current) = self.current else {
+            self.current = Some(next);
+            return;
+        };
+        let current_ratio = ratio_correction(self.nominal_bar, current.slope);
+        let next_ratio = ratio_correction(self.nominal_bar, next.slope);
+        if (current_ratio - next_ratio).abs() <= self.ctx.params.merge_ratio_eps {
+            self.current = Some(FitSpan::fit(
+                self.ctx,
+                Segment::new(current.start, next.end),
+            ));
+            return;
+        }
+        self.emit_previous(current);
+        self.previous = Some(current);
+        self.current = Some(next);
+    }
+
+    fn emit_previous(&mut self, current: FitSpan) {
+        let Some(previous) = self.previous else {
+            return;
+        };
+        let boundary = f64::midpoint(
+            previous.predict(previous.end),
+            current.predict(current.start),
+        );
+        let start = self
+            .previous_start
+            .unwrap_or_else(|| previous.predict(previous.start));
+        self.push(previous, start, boundary);
+        self.previous_start = Some(boundary);
+    }
+
+    fn push(&mut self, span: FitSpan, start: f64, end: f64) {
+        let (Some(start_frame), Some(end_frame)) = (
+            (start * self.ctx.sample_rate).round().max(0.0).to_u64(),
+            (end * self.ctx.sample_rate).round().max(0.0).to_u64(),
+        ) else {
+            return;
+        };
+        if end_frame > start_frame {
+            self.segments.push(GridSegment::new(
+                start_frame,
+                end_frame,
+                ratio_correction(self.nominal_bar, span.slope),
+            ));
+        }
+    }
+
+    fn finish(mut self) -> Vec<GridSegment> {
+        let Some(current) = self.current else {
+            return self.segments;
+        };
+        if let Some(previous) = self.previous {
+            let boundary = f64::midpoint(
+                previous.predict(previous.end),
+                current.predict(current.start),
+            );
+            let start = self
+                .previous_start
+                .unwrap_or_else(|| previous.predict(previous.start));
+            self.push(previous, start, boundary);
+            self.push(current, boundary, current.predict(current.end));
+        } else {
+            self.push(
+                current,
+                current.predict(current.start),
+                current.predict(current.end),
+            );
+        }
+        self.segments
+    }
+}
+
+pub(super) fn build_segments(
+    ctx: &GridFitCtx<'_>,
+    anchor_idx: usize,
+    nominal_bar: f64,
+) -> Vec<GridSegment> {
+    let mut writer = SegmentWriter::new(ctx, nominal_bar);
+    visit_anchored_leaves(ctx, anchor_idx, &mut |segment| writer.visit(segment));
+    writer.finish()
 }
 
 /// `nominal_bar / fitted_bar`; a degenerate fit cannot yield a ratio and
