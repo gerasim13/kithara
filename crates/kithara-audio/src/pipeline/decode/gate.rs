@@ -169,7 +169,7 @@ fn source_phase_for_seek_landing<T: StreamType>(
     demand_phase(stream, byte..end)
 }
 
-/// Phase poll that files the polled range as reader demand when it parks.
+/// Phase poll that arms the polled range as reader demand when it parks.
 ///
 /// A phase snapshot alone leaves a parked decoder invisible to the source:
 /// dispatch budgets cover only ranges the source knows a reader waits on
@@ -178,6 +178,10 @@ fn source_phase_for_seek_landing<T: StreamType>(
 /// nobody filed starves one segment past the cap forever. Ready, EOF, and
 /// seek polls stay pure snapshots.
 ///
+/// The filing call itself locks source state (`Source::wait_range`), so this
+/// poll only arms the wait-free demand cell; the scheduler shell delivers it
+/// via `SharedStream::flush_demand` — same core/shell split as `DeferredWake`.
+///
 /// [`Source::wait_range`]: kithara_stream::Source::wait_range
 fn demand_phase<T: StreamType>(stream: &SharedStream<T>, range: Range<u64>) -> SourcePhase {
     let phase = stream.phase_at(range.clone());
@@ -185,7 +189,7 @@ fn demand_phase<T: StreamType>(stream: &SharedStream<T>, range: Range<u64>) -> S
         phase,
         SourcePhase::Waiting | SourcePhase::WaitingDemand | SourcePhase::WaitingMetadata
     ) {
-        let _ = stream.probe_wait(range);
+        stream.arm_demand(range);
     }
     phase
 }

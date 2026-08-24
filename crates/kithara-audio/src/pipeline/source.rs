@@ -600,6 +600,10 @@ impl<T: StreamType> AudioWorkerSource for StreamAudioSource<T> {
         // lands here in the shell. Same `Arc<DeferredWake>` the reader drivers
         // and the FSM arm, so one flush covers both. `None` for file streams.
         self.readiness.flush_peer_wake();
+        // File the demand window a parked gate poll armed this pass. The
+        // filing (`Source::wait_range`) locks source state, so it too stays
+        // off the forbid-blocking core.
+        self.shared_stream.flush_demand();
     }
 
     fn retire_chunk(&self, chunk: PcmChunk) {

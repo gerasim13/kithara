@@ -1,6 +1,7 @@
 use std::{
     io::{self, Read, Seek, SeekFrom},
     ops::Range,
+    sync::atomic::{AtomicBool, AtomicU64, Ordering},
 };
 
 use delegate::delegate;
@@ -13,6 +14,38 @@ use kithara_stream::{
 
 use super::offset::OffsetReader;
 
+/// Reader-demand handoff from the produce core to the scheduler shell.
+///
+/// The gate's parked phase polls must tell the source which range the
+/// decoder waits on, but the filing call ([`Stream::probe_wait`] →
+/// `Source::wait_range`) takes source-side locks and is off-limits on the
+/// forbid-blocking core. Same split as `DeferredWake`: the core arms this
+/// wait-free cell, the shell flushes it. Single writer (produce core),
+/// single reader (shell); a re-arm before the flush overwrites the range —
+/// only the latest polled window matters.
+#[derive(Default)]
+struct DemandCell {
+    start: AtomicU64,
+    end: AtomicU64,
+    armed: AtomicBool,
+}
+
+impl DemandCell {
+    fn arm(&self, range: Range<u64>) {
+        self.start.store(range.start, Ordering::Relaxed);
+        self.end.store(range.end, Ordering::Relaxed);
+        self.armed.store(true, Ordering::Release);
+    }
+
+    fn take(&self) -> Option<Range<u64>> {
+        if self.armed.swap(false, Ordering::AcqRel) {
+            Some(self.start.load(Ordering::Relaxed)..self.end.load(Ordering::Relaxed))
+        } else {
+            None
+        }
+    }
+}
+
 /// Shared stream wrapper for format change detection.
 ///
 /// Wraps Stream in `Arc<Mutex>` to allow:
@@ -20,6 +53,7 @@ use super::offset::OffsetReader;
 /// - `StreamAudioSource` to check `media_info()` for format changes
 pub(crate) struct SharedStream<T: StreamType> {
     inner: Arc<Mutex<Stream<T>>>,
+    demand: Arc<DemandCell>,
     /// Construction mode for one decoder reader. Coordinator clones carry no
     /// gate; every opened reader receives a fresh gate so an off-RT rebuild
     /// cannot switch the active decoder to blocking I/O.
@@ -30,7 +64,22 @@ impl<T: StreamType> SharedStream<T> {
     pub(crate) fn new(stream: Stream<T>) -> Self {
         Self {
             inner: Arc::new(Mutex::new(stream)),
+            demand: Arc::default(),
             construction_gate: None,
+        }
+    }
+
+    /// Record `range` as the window a parked decoder poll waits on.
+    /// Wait-free; safe on the forbid-blocking produce core.
+    pub(crate) fn arm_demand(&self, range: Range<u64>) {
+        self.demand.arm(range);
+    }
+
+    /// Deliver the armed demand window to the source ([`Stream::probe_wait`]).
+    /// Locks source state — scheduler shell only.
+    pub(crate) fn flush_demand(&self) {
+        if let Some(range) = self.demand.take() {
+            let _ = self.probe_wait(range);
         }
     }
 
@@ -66,6 +115,7 @@ impl<T: StreamType> SharedStream<T> {
     fn with_construction_gate(&self, construction_gate: ConstructionGate) -> Self {
         Self {
             inner: Arc::clone(&self.inner),
+            demand: Arc::clone(&self.demand),
             construction_gate: Some(construction_gate),
         }
     }
@@ -127,6 +177,7 @@ impl<T: StreamType> Clone for SharedStream<T> {
     fn clone(&self) -> Self {
         Self {
             inner: Arc::clone(&self.inner),
+            demand: Arc::clone(&self.demand),
             construction_gate: self.construction_gate.clone(),
         }
     }
