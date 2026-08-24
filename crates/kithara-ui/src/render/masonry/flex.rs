@@ -159,6 +159,7 @@ impl Flex {
         let mut measure = MasonryMeasure {
             children,
             layouts: &self.children,
+            stood: vec![None; slots.len()],
             slots: &slots,
             ctx,
         };
@@ -196,17 +197,14 @@ impl Flex {
             }
         }
         let fitted = fit_padding(self.padding, size, outer_limits.max());
-        for (slot, item) in slots.iter().zip(items) {
+        for (index, (slot, item)) in slots.iter().zip(items).enumerate() {
+            let placed = match measure.stood[index] {
+                Some((limits, size)) if size == item.size => limits,
+                _ => solve::Limits::new(item.size, item.size),
+            };
             let child = &mut measure.children[*slot];
-            let exact = solve::Limits::new(item.size, item.size);
-            Node::set_child_limits(measure.ctx, child, exact);
-            measure.ctx.run_layout(
-                child,
-                &BoxConstraints::tight(MasonrySize::new(
-                    f64::from(item.size.width),
-                    f64::from(item.size.height),
-                )),
-            );
+            Node::set_child_limits(measure.ctx, child, placed);
+            measure.ctx.run_layout(child, &box_constraints(placed));
             measure.ctx.place_child(
                 child,
                 Point::new(
@@ -229,6 +227,17 @@ struct MasonryMeasure<'a, 'ctx> {
     /// Which child each item the solver asks about actually is: the solver sees
     /// only the cells that stand.
     slots: &'a [usize],
+    /// Where measuring left each cell: the limits it was last laid out under
+    /// and the size it answered there.
+    ///
+    /// Measuring a cell lays out everything inside it, and so does placing it,
+    /// so a cell placed at a size it was not measured at is walked twice - and
+    /// a cell inside that cell is walked twice for each of those, which is how
+    /// a page seven boxes deep comes to lay itself out seventy-five times over.
+    /// A cell the solver hands exactly the size it answered with is already
+    /// standing right, and asking Masonry for that same box again is answered
+    /// from its own layout cache rather than by walking the cell again.
+    stood: Vec<Option<(solve::Limits, solve::Size)>>,
     ctx: &'a mut LayoutCtx<'ctx>,
 }
 
@@ -244,6 +253,7 @@ impl Measure for MasonryMeasure<'_, '_> {
         Node::set_child_limits(self.ctx, child, child_limits);
         let intrinsic = self.ctx.run_layout(child, &box_constraints(child_limits));
         let intrinsic = solve::Size::new(intrinsic.width.as_(), intrinsic.height.as_());
+        self.stood[index] = Some((child_limits, intrinsic));
         declared.map_or(intrinsic, |declared| {
             limits
                 .width(declared.width)

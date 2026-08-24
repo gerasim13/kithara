@@ -482,6 +482,23 @@ struct KeyProbe {
     observed: Rc<RefCell<Vec<&'static str>>>,
 }
 
+/// Counts how often the leaf at the bottom of a stack of boxes is asked for its
+/// size while the page above it is laid out once.
+struct MeasureProbe {
+    measures: Rc<Cell<usize>>,
+}
+
+impl CustomWidget for MeasureProbe {
+    type Action = ();
+
+    fn measure(&mut self, _text: &mut TextMeasurer<'_>, _limits: SizeLimits) -> Size2 {
+        self.measures.set(self.measures.get() + 1);
+        Size2::new(40.0, 40.0)
+    }
+
+    fn paint(&mut self, _list: &mut DrawListBuilder, _text: &mut TextMeasurer<'_>, _bounds: Rect) {}
+}
+
 impl CustomWidget for KeyProbe {
     type Action = ();
 
@@ -924,6 +941,52 @@ fn wheel_actions_round_trip_through_the_public_custom_contract() {
             PointerPhase::Leave,
         ],
         "consumer state must retain the gesture and recognize long-press phases without toolkit types"
+    );
+}
+
+/// A cell placed at the size it was measured at is not laid out a second time.
+///
+/// A flow measures a cell by laying it out and then places it by laying it out
+/// again, so a cell one box down is walked twice for each of the two walks
+/// above it: the cost doubles per box, not per cell. The leaf here stands under
+/// six of them counting the module, and was measured sixty-four times instead
+/// of once - which is how the gallery page that nests deepest came to lay
+/// itself out seventy-five times over.
+#[kithara::test]
+fn a_cell_placed_where_it_was_measured_is_laid_out_once() {
+    let registry = fixture_registry();
+    let ui = fixture_ui(
+        "custom-fixture",
+        r#"Row(size: (w: Fill, h: Fill), gap: 0.0, pad: 0.0, children: [
+            Column(size: (w: Fill, h: Fill), gap: 0.0, pad: 0.0, children: [
+                Row(size: (w: Fill, h: Fill), gap: 0.0, pad: 0.0, children: [
+                    Column(size: (w: Fill, h: Fill), gap: 0.0, pad: 0.0, children: [
+                        Row(size: (w: Fill, h: Fill), gap: 0.0, pad: 0.0, children: [
+                            Spacer(id: "deep", size: Some((w: Fixed(40.0), h: Fixed(40.0)))),
+                        ]),
+                    ]),
+                ]),
+            ]),
+        ])"#,
+        &registry,
+    );
+    let reads = FixtureReads;
+    let measures = Rc::new(Cell::new(0));
+    let host = MasonryHost::map_actions(ctx(&ui, &reads), builtin::skin(), TestAction::Document)
+        .with_custom(
+            "demo/deep",
+            MeasureProbe {
+                measures: Rc::clone(&measures),
+            },
+            |()| TestAction::Document(UiEvent::OpenSettings),
+        );
+    let output = document::render(&ui.root, ctx(&ui, &reads), host);
+    let _root = masonry_root(output, 200, 120);
+
+    assert_eq!(
+        measures.get(),
+        1,
+        "the leaf was measured once per box standing over it instead of once for the page"
     );
 }
 

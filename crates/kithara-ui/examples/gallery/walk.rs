@@ -185,14 +185,46 @@ mod immediate {
 mod retained {
     use kithara_platform::time::Duration;
     use kithara_ui::{
-        app::{App as _, Config, Ui},
+        app::{App, Config, Ui},
         builtin,
         compile::compile,
+        render::{Reads, UiEvent},
         source::UiConfig,
     };
 
     use super::{FRAMES, Shot, Walked};
     use crate::{Consts, host::Gallery, mock, resolver};
+
+    /// The gallery with its own clock held unless the page says it moves.
+    ///
+    /// The window ticks the application once per frame it draws, so a page
+    /// whose readings the application keeps changing would be measured moving
+    /// on the strength of the harness rather than of its own document — the
+    /// same rule the immediate walk beside this one states, and for the same
+    /// reason. What a fed page does is a separate question, asked separately.
+    struct Still {
+        gallery: Gallery,
+        ticks: bool,
+    }
+
+    impl App for Still {
+        delegate::delegate! {
+            to self.gallery {
+                fn document(&self) -> &str;
+                fn update(&mut self, event: UiEvent);
+            }
+        }
+
+        fn reads<R>(&self, with: impl FnOnce(&dyn Reads) -> R) -> R {
+            self.gallery.reads(with)
+        }
+
+        fn tick(&mut self) {
+            if self.ticks {
+                self.gallery.tick();
+            }
+        }
+    }
 
     /// Steps one page with nothing touching it.
     ///
@@ -203,6 +235,17 @@ mod retained {
     /// has stopped driving itself still looks alive here, because the harness
     /// kept calling it.
     pub(super) fn walk(page: Shot) -> Walked {
+        walked(page, false)
+    }
+
+    /// Steps one page with the application feeding it every frame, which is
+    /// what the window does.
+    #[cfg(test)]
+    pub(super) fn fed(page: Shot) -> Walked {
+        walked(page, true)
+    }
+
+    fn walked(page: Shot, ticks: bool) -> Walked {
         let endpoints = mock::registry();
         let resolver = resolver();
         let config = Config::builder()
@@ -230,7 +273,11 @@ mod retained {
         )
         .unwrap_or_else(|error| panic!("page {} must compile: {error}", page.name()))
         .animates;
-        let mut ui = Ui::new(at, config, size, 1.0)
+        let still = Still {
+            gallery: at,
+            ticks: ticks || animates,
+        };
+        let mut ui = Ui::new(still, config, size, 1.0)
             .unwrap_or_else(|error| panic!("page {} must mount: {error}", page.name()));
         // One frame at sixty a second, which is what the window tells the pass.
         let frame = Duration::from_millis(16);
@@ -300,6 +347,27 @@ fn no_page_asks_for_frames_its_document_never_declared() {
         spinning.is_empty(),
         "these pages ask the window for a frame forever with nothing on them declared to move, so \
          the loop never sleeps and every other page waits behind them: {spinning:?}"
+    );
+}
+
+/// The other way round from the empty spin: a page the application keeps
+/// feeding has to ask for the frame after it.
+///
+/// Nothing in the document says a reading will move — the application decides
+/// that, one frame at a time — so a window that only honoured the declaration
+/// would draw this page whenever some unrelated event woke it and freeze in
+/// between, which is to say it would move under a travelling mouse.
+#[cfg(feature = "masonry")]
+#[kithara::test]
+fn a_page_the_application_keeps_feeding_asks_for_the_frame_after_it() {
+    let page = Shot::all()
+        .into_iter()
+        .find(|page| page.tab == Tab::Stress)
+        .expect("the gallery must hold the stress page");
+    assert!(
+        retained::fed(page).asking,
+        "the stress page draws readings the application moves every frame, so the window has to \
+         come back for the frame after it"
     );
 }
 
