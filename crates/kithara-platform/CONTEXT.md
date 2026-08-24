@@ -86,6 +86,19 @@ and under `flash` it is the virtual clock. `web_time` is internal to this crate 
 `std::time`, `web_time`, `tokio::time`), `arch.no-direct-thread-wait` (blocking thread waits),
 `arch.no-implicit-clock` (hidden clock reads in library code).
 
+## Ranged Values
+
+`ranged!` declares a float newtype that cannot hold a value outside its range: the type
+carries `MIN`, `MAX` and `DEFAULT` as values of itself, and the only way in is `From`,
+which clamps. `NaN` is in no range and yields `DEFAULT` rather than propagating through
+every later comparison.
+
+It exists so a bound crosses a crate boundary as a type rather than as a pair of loose
+constants a caller has to import and remember to clamp against. The owning crate declares
+the type next to the code that defines the range; every other crate imports the type.
+Plain `f32` stays at ABI and RT-message boundaries (FFI, `firewheel` diffable nodes),
+which convert once at the door.
+
 ## Feature Flags
 
 All off by default. `flash`, `loom`, `no-block` are native and test-only, referenced by no

@@ -2,7 +2,7 @@ use iced::{
     Task, window,
     window::{Direction, Mode},
 };
-use kithara::audio::EqBandConfig;
+use kithara::audio::{EqBandConfig, effects::eq::GainDb};
 use kithara_ui::render::{WindowCommand, WindowEdge};
 use tracing::{error, warn};
 
@@ -23,7 +23,7 @@ struct EqModeChange<'a> {
     controller: &'a StateController,
     previous: Vec<EqBandConfig>,
     next: Vec<EqBandConfig>,
-    gains: Vec<f32>,
+    gains: Vec<GainDb>,
 }
 
 pub(crate) fn update(state: &mut Kithara, message: Message) -> Task<Message> {

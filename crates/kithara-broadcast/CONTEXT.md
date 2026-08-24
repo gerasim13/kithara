@@ -60,7 +60,7 @@ The serving thread is a plain OS thread. `kithara-platform`'s spawns enrol a thr
 
 The worker is the sole mutator of the segmenter and the window. It publishes each closed segment by swapping a whole `PlaylistSnapshot` into an `ArcSwap`, so no request ever waits on the worker. The handle's join slot is the crate's only mutex and the serving path never touches it; the counters the handle reports are the worker's alone, and the origin does not read them.
 
-Nothing in the pipeline reads a wall clock: rotation is media-driven and the playlist changes only when a segment closes. The worker's poll backoff paces an empty feed and is not part of the contract.
+Nothing in the pipeline reads a wall clock: rotation is media-driven and the playlist changes only when a segment closes. The worker's poll backoff paces an empty feed and is not part of the contract; `BroadcastConfig::poll_interval` sets it, and no output depends on the value.
 
 That backoff decides which tests can run on the simulated clock. On the sim path it waits for a clock advance, and the engine advances only once every participant is parked on a wait it wrapped. A test body holds its participant slot through synchronous work — a render loop, a poll loop over `status()`, a `stop()` that blocks on the worker's thread join — because the lexical rewriter reaches a body's `time::sleep` and `park_timeout` and leaves the rest as they are. Whether that matters turns on one thing: the backoff falls through to a plain yield while no timed waiter exists, so a test of the origin alone runs on the simulated clock, and one that also runs a session engine or an HLS client — either of which registers a timed waiter — has to run on the real clock and says so at the test.
 

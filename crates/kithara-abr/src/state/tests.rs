@@ -5,8 +5,8 @@ use std::{
 };
 
 use kithara_events::{
-    AbrMode, AbrProgressSnapshot, AbrReason, BandwidthSource, VariantDuration, VariantIndex,
-    VariantInfo,
+    AbrEvent, AbrMode, AbrProgressSnapshot, AbrReason, BandwidthSource, DEFAULT_EVENT_BUS_CAPACITY,
+    Envelope, Event, EventBus, VariantDuration, VariantIndex, VariantInfo,
 };
 use kithara_platform::{
     CancelToken,
@@ -893,6 +893,56 @@ async fn bandwidth_samples_are_preserved_across_immediate_ticks() {
     assert_eq!(samples.load(Ordering::Acquire), SAMPLES);
     assert_eq!(ticks.load(Ordering::Acquire), SAMPLES);
     assert!(!poll_controller(&controller, false).await);
+}
+
+/// Publish two back-to-back samples through a controller whose emit throttle
+/// is `interval`, and count what reached the bus.
+fn throughput_samples_published_with(interval: Duration) -> usize {
+    let controller = AbrController::with_estimator(
+        AbrSettings::builder()
+            .throughput_sample_min_interval(interval)
+            .build(),
+        Arc::new(ThroughputEstimator::new()) as Arc<_>,
+    );
+    let peer: Arc<dyn Abr> = Arc::new(TickPeer {
+        cancel: CancelToken::never(),
+        state: Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0))))),
+        wake: Arc::new(Notify::default()),
+    });
+    let bus = EventBus::new(DEFAULT_EVENT_BUS_CAPACITY);
+    let mut rx = bus.subscribe();
+    let handle = controller.register(&peer).with_bus(bus);
+
+    for _ in 0..2 {
+        controller.record_bandwidth(
+            handle.peer_id(),
+            32 * 1024,
+            Duration::from_millis(50),
+            BandwidthSource::Network,
+        );
+    }
+
+    std::iter::from_fn(|| rx.try_recv().ok())
+        .filter(|Envelope { event, .. }| {
+            matches!(event, Event::Abr(AbrEvent::ThroughputSample { .. }))
+        })
+        .count()
+}
+
+/// The knob is a throttle, so a zero interval throttles nothing.
+#[kithara::test]
+fn a_zero_sample_interval_publishes_every_throughput_sample() {
+    assert_eq!(throughput_samples_published_with(Duration::ZERO), 2);
+}
+
+/// A second sample arriving inside the interval is dropped, which is what
+/// makes the interval a parameter worth setting.
+#[kithara::test]
+fn a_throughput_sample_inside_the_interval_is_not_published() {
+    assert_eq!(
+        throughput_samples_published_with(Duration::from_secs(3600)),
+        1
+    );
 }
 
 fn audio_variants_4tier() -> Vec<VariantInfo> {

@@ -217,18 +217,7 @@ impl AppleNet {
 
     #[must_use]
     pub fn with_observer(&self, observer: Option<Observer>) -> Self {
-        let options = NetOptions::builder()
-            .compression(self.options.compression)
-            .inactivity_timeout(self.options.inactivity_timeout)
-            .impersonate(self.options.impersonate)
-            .byte_pool(self.options.byte_pool.clone())
-            .retry_policy(self.options.retry_policy.clone())
-            .is_insecure(self.options.is_insecure)
-            .body_queue_capacity(self.options.body_queue_capacity)
-            .body_queue_resume_at(self.options.body_queue_resume_at)
-            .pool_max_idle_per_host(self.options.pool_max_idle_per_host)
-            .maybe_observer(observer)
-            .build();
+        let options = self.options.with_observer(observer);
         let raw = RawAppleNet {
             session: self.session.clone(),
             cancel: self.cancel.clone(),

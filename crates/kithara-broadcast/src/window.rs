@@ -131,6 +131,10 @@ mod tests {
         const TIMESCALE: u32 = 48_000;
     }
 
+    fn listed_window() -> usize {
+        BroadcastConfig::builder().build().window
+    }
+
     fn window() -> LiveWindow {
         LiveWindow::new(&BroadcastConfig::builder().build()).expect("window")
     }
@@ -155,7 +159,7 @@ mod tests {
     }
 
     fn listed() -> u64 {
-        u64::try_from(BroadcastConfig::WINDOW).expect("the window fits a sequence number")
+        u64::try_from(listed_window()).expect("the window fits a sequence number")
     }
 
     #[kithara::test(native, flash(false))]
@@ -343,7 +347,7 @@ mod tests {
             .expect("the live playlist parses");
         assert_eq!(parsed.media_sequence, 5);
         assert_eq!(parsed.discontinuity_sequence, 0);
-        assert_eq!(parsed.segments.iter().count(), BroadcastConfig::WINDOW);
+        assert_eq!(parsed.segments.iter().count(), listed_window());
         assert!(!parsed.has_end_list);
 
         window.finish();

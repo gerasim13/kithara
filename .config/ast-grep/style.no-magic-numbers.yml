@@ -28,6 +28,11 @@ rule:
               stopBy: end
         - not:
             inside:
+              kind: attribute_item
+              regex: '^#\[(?:builder|serde)\('
+              stopBy: end
+        - not:
+            inside:
               kind: field_expression
               field: field
         - not:
@@ -62,6 +67,16 @@ rule:
         - not:
             inside:
               kind: static_item
+              stopBy: end
+        - not:
+            inside:
+              kind: attribute_item
+              regex: '^#\[(?:builder|serde)\('
+              stopBy: end
+        - not:
+            inside:
+              kind: macro_invocation
+              regex: '^ranged!'
               stopBy: end
         - not:
             inside:

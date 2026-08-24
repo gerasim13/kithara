@@ -83,7 +83,7 @@ Dual-track EWMA — fast (2 s half-life) and slow (10 s half-life); estimate = `
 
 ## Event throttling
 
-Per peer: `ThroughputSample` at most every 200 ms (fixed constant); `BandwidthEstimate` when `bandwidth_emit_min_interval` has elapsed **or** the relative change reaches `bandwidth_emit_min_delta_ratio`; `BufferAhead` on any `Some`/`None` transition, otherwise when both the interval and the absolute-delta thresholds are met.
+Per peer: `ThroughputSample` at most every `throughput_sample_min_interval` (default 200 ms); `BandwidthEstimate` when `bandwidth_emit_min_interval` has elapsed **or** the relative change reaches `bandwidth_emit_min_delta_ratio`; `BufferAhead` on any `Some`/`None` transition, otherwise when both the interval and the absolute-delta thresholds are met.
 
 ## Module layout
 

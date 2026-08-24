@@ -1,6 +1,9 @@
+use bon::bon;
 use thiserror::Error;
 
-use crate::{inference::BeatPredictor, mel::MelExtractor, postprocess::PeakPicker};
+use crate::{
+    config::BeatConfig, inference::BeatPredictor, mel::MelExtractor, postprocess::PeakPicker,
+};
 
 #[derive(Debug, Error)]
 #[non_exhaustive]
@@ -26,23 +29,25 @@ pub struct BeatThis {
     picker: PeakPicker,
 }
 
-/// Models from `(mel, beat)` ONNX bytes.
-///
-/// # Errors
-/// [`BeatError::ModelLoad`] when either model fails to parse.
-impl TryFrom<(&[u8], &[u8])> for BeatThis {
-    type Error = BeatError;
-
-    fn try_from((mel, beat): (&[u8], &[u8])) -> Result<Self, BeatError> {
+#[bon]
+impl BeatThis {
+    /// Models from mel and beat ONNX bytes, decoded with `config`.
+    ///
+    /// # Errors
+    /// [`BeatError::ModelLoad`] when either model fails to parse.
+    #[builder]
+    pub fn new(
+        mel_model: &[u8],
+        beat_model: &[u8],
+        #[builder(default)] config: BeatConfig,
+    ) -> Result<Self, BeatError> {
         Ok(Self {
-            mel: MelExtractor::try_from(mel)?,
-            predictor: BeatPredictor::try_from(beat)?,
-            picker: PeakPicker::default(),
+            mel: MelExtractor::try_from(mel_model)?,
+            predictor: BeatPredictor::try_from(beat_model)?,
+            picker: PeakPicker::new(config),
         })
     }
-}
 
-impl BeatThis {
     /// Input: whole-track mono f32 at `22_050` Hz. Output: seconds.
     ///
     /// # Errors

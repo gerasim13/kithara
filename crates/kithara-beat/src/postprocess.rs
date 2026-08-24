@@ -1,6 +1,6 @@
 use num_traits::cast::AsPrimitive;
 
-use crate::api::BeatError;
+use crate::{api::BeatError, config::BeatConfig};
 
 /// Frames per second of the beat model output.
 const FPS: f32 = 50.0;
@@ -8,16 +8,14 @@ const FPS: f32 = 50.0;
 /// Decodes raw beat/downbeat logits into timestamped events: max-pool peak
 /// picking, thresholding, deduplication, downbeat-to-beat snapping.
 pub(crate) struct PeakPicker {
-    fps: f32,
-}
-
-impl Default for PeakPicker {
-    fn default() -> Self {
-        Self { fps: FPS }
-    }
+    config: BeatConfig,
 }
 
 impl PeakPicker {
+    pub(crate) fn new(config: BeatConfig) -> Self {
+        Self { config }
+    }
+
     /// Decode beat and downbeat logits into `(beats, downbeats)` in seconds.
     ///
     /// Both slices must have the same length (one value per mel frame).
@@ -36,16 +34,16 @@ impl PeakPicker {
             });
         }
 
-        let beat_frames = find_peaks(beat_logits);
-        let downbeat_frames = find_peaks(downbeat_logits);
+        let beat_frames = find_peaks(beat_logits, &self.config);
+        let downbeat_frames = find_peaks(downbeat_logits, &self.config);
 
         let beats: Vec<f32> = beat_frames
             .iter()
-            .map(|&f| (f / f64::from(self.fps)).as_())
+            .map(|&f| (f / f64::from(FPS)).as_())
             .collect();
         let mut downbeats: Vec<f32> = downbeat_frames
             .iter()
-            .map(|&f| (f / f64::from(self.fps)).as_())
+            .map(|&f| (f / f64::from(FPS)).as_())
             .collect();
 
         snap_downbeats_to_beats(&beats, &mut downbeats);
@@ -54,22 +52,22 @@ impl PeakPicker {
     }
 }
 
-/// Identify local maxima exceeding the logit threshold (> 0.0).
+/// Identify local maxima exceeding [`BeatConfig::peak_threshold`].
 ///
-/// Max-pool window of 7 frames (±3), stride 1: a frame is a peak if it equals
-/// the local maximum and is positive.
-fn find_peaks(logits: &[f32]) -> Vec<f64> {
+/// Max-pool window of `2 * peak_half_width + 1` frames, stride 1: a frame is a
+/// peak if it equals the local maximum and clears the threshold.
+fn find_peaks(logits: &[f32], config: &BeatConfig) -> Vec<f64> {
     let len = logits.len();
     let mut peaks = Vec::new();
 
     for i in 0..len {
-        // logit > 0 corresponds to probability > 0.5 after sigmoid.
-        if logits[i] <= 0.0 {
+        // The default threshold of 0 is probability 0.5 after the sigmoid.
+        if logits[i] <= config.peak_threshold {
             continue;
         }
 
-        let start = i.saturating_sub(3);
-        let end = (i + 4).min(len);
+        let start = i.saturating_sub(config.peak_half_width);
+        let end = (i + config.peak_half_width + 1).min(len);
 
         let mut is_max = true;
         for j in start..end {
@@ -84,7 +82,7 @@ fn find_peaks(logits: &[f32]) -> Vec<f64> {
         }
     }
 
-    deduplicate_peaks(&peaks, 1)
+    deduplicate_peaks(&peaks, config.dedup_width)
 }
 
 /// Merge adjacent peak frame indices using a running mean.
@@ -150,17 +148,53 @@ mod tests {
 
     use super::*;
 
+    /// The threshold decides which model outputs become beats at all. Raising
+    /// it past a peak's logit drops that beat; the picker must not carry a
+    /// fixed sensitivity the caller cannot move.
+    #[kithara::test(native, flash(false))]
+    fn a_raised_threshold_drops_a_weak_peak() {
+        let logits = [0.0, 0.0, 0.5, 1.0, 0.5, 0.0, 0.0];
+        let strict = BeatConfig::builder().peak_threshold(1.5).build();
+
+        assert_eq!(find_peaks(&logits, &BeatConfig::default()), vec![3.0]);
+        assert!(find_peaks(&logits, &strict).is_empty());
+    }
+
+    /// The max-pool half-width is the shortest gap two beats may be reported
+    /// at. Widening it must suppress a smaller neighbour the default keeps.
+    #[kithara::test(native, flash(false))]
+    fn a_wider_window_suppresses_a_neighbour_the_default_keeps() {
+        // 4 frames apart: each wins its own +-3 window, neither wins a +-4 one.
+        let mut logits = vec![0.0; 10];
+        logits[2] = 2.0;
+        logits[6] = 1.0;
+        let wide = BeatConfig::builder().peak_half_width(4).build();
+
+        assert_eq!(find_peaks(&logits, &BeatConfig::default()), vec![2.0, 6.0]);
+        assert_eq!(find_peaks(&logits, &wide), vec![2.0]);
+    }
+
+    /// Dedup width is how far apart two surviving peaks still count as one
+    /// beat. A wider one must merge peaks the default reports separately.
+    #[kithara::test(native, flash(false))]
+    fn a_wider_dedup_merges_peaks_the_default_reports_apart() {
+        let peaks = [10, 14];
+
+        assert_eq!(deduplicate_peaks(&peaks, 1), vec![10.0, 14.0]);
+        assert_eq!(deduplicate_peaks(&peaks, 4), vec![12.0]);
+    }
+
     #[kithara::test(native, flash(false))]
     fn find_peaks_single_peak() {
         let logits = [0.0, 0.0, 0.5, 1.0, 0.5, 0.0, 0.0];
-        let peaks = find_peaks(&logits);
+        let peaks = find_peaks(&logits, &BeatConfig::default());
         assert_eq!(peaks, vec![3.0]);
     }
 
     #[kithara::test(native, flash(false))]
     fn find_peaks_below_threshold() {
         let logits = [-1.0, -0.5, -2.0, -0.1];
-        let peaks = find_peaks(&logits);
+        let peaks = find_peaks(&logits, &BeatConfig::default());
         assert!(peaks.is_empty());
     }
 
@@ -170,7 +204,7 @@ mod tests {
         let mut logits = vec![0.0; 20];
         logits[3] = 2.0;
         logits[15] = 1.5;
-        let peaks = find_peaks(&logits);
+        let peaks = find_peaks(&logits, &BeatConfig::default());
         assert_eq!(peaks, vec![3.0, 15.0]);
     }
 
@@ -180,7 +214,7 @@ mod tests {
         let mut logits = vec![0.0; 10];
         logits[4] = 2.0;
         logits[7] = 1.0;
-        let peaks = find_peaks(&logits);
+        let peaks = find_peaks(&logits, &BeatConfig::default());
         assert_eq!(peaks, vec![4.0]);
     }
 
@@ -190,7 +224,7 @@ mod tests {
         let mut logits = vec![0.0; 10];
         logits[2] = 2.0;
         logits[6] = 1.0;
-        let peaks = find_peaks(&logits);
+        let peaks = find_peaks(&logits, &BeatConfig::default());
         assert_eq!(peaks, vec![2.0, 6.0]);
     }
 
@@ -199,7 +233,7 @@ mod tests {
         // Adjacent frames with equal positive values: both tie the max-pool,
         // dedup merges them to the plateau centre.
         let logits = [0.0, 1.0, 1.0, 0.0];
-        let peaks = find_peaks(&logits);
+        let peaks = find_peaks(&logits, &BeatConfig::default());
         assert_eq!(peaks.len(), 1);
         assert_eq!(peaks[0], 1.5);
     }
@@ -279,7 +313,7 @@ mod tests {
         // Downbeat at frame 51 snaps to the beat at frame 50.
         downbeat_logits[51] = 2.0;
 
-        let pp = PeakPicker::default();
+        let pp = PeakPicker::new(BeatConfig::default());
         let (beats, downbeats) = pp.decode(&beat_logits, &downbeat_logits).unwrap();
 
         assert_eq!(beats, vec![1.0, 2.0, 3.0]);
@@ -288,7 +322,7 @@ mod tests {
 
     #[kithara::test(native, flash(false))]
     fn decode_empty_logits() {
-        let pp = PeakPicker::default();
+        let pp = PeakPicker::new(BeatConfig::default());
         let (beats, downbeats) = pp.decode(&[], &[]).unwrap();
         assert!(beats.is_empty());
         assert!(downbeats.is_empty());
@@ -296,7 +330,7 @@ mod tests {
 
     #[kithara::test(native, flash(false))]
     fn decode_mismatched_lengths() {
-        let pp = PeakPicker::default();
+        let pp = PeakPicker::new(BeatConfig::default());
         let err = pp.decode(&[1.0, 2.0], &[1.0]);
         assert!(err.is_err());
     }

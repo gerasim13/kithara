@@ -55,6 +55,12 @@ pub struct QueueConfig {
     /// is preloaded into the audio processor. Default: 3.5.
     #[builder(default = DEFAULT_PREFETCH_DURATION)]
     pub prefetch_duration: f32,
+
+    /// Entries the navigation history keeps. Only explicit selections and
+    /// auto-advances land there, so the default is a listening session's
+    /// worth of back-steps; the queue's own track list is unbounded.
+    #[builder(default = 100)]
+    pub max_history_size: usize,
 }
 
 impl fmt::Debug for QueueConfig {
@@ -63,6 +69,7 @@ impl fmt::Debug for QueueConfig {
             .field("max_concurrent_loads", &self.max_concurrent_loads)
             .field("should_autoplay", &self.should_autoplay)
             .field("prefetch_duration", &self.prefetch_duration)
+            .field("max_history_size", &self.max_history_size)
             .finish_non_exhaustive()
     }
 }

@@ -1,3 +1,4 @@
+use kithara::audio::effects::eq::GainDb;
 use kithara_ui::render::{
     ControlAction, DEFAULT_ZOOM, DragPhase, UiEvent, WindowCommand, zoom_in, zoom_out,
 };
@@ -5,7 +6,6 @@ use num_traits::cast::AsPrimitive;
 
 use super::{
     cache::{DeckLayout, ViewCache},
-    endpoints::db_from_knob,
     scope::{MICRO_DECK, deck_index, eq_band},
 };
 use crate::{
@@ -281,7 +281,7 @@ fn deck_id(state: &Kithara, index: usize) -> Option<DeckId> {
 }
 
 fn eq_msg(band: usize, knob: f64) -> DeckMsg {
-    DeckMsg::EqBandChanged(band, db_from_knob(knob.as_()))
+    DeckMsg::EqBandChanged(band, GainDb::at_knob(knob.as_()))
 }
 
 #[cfg(test)]

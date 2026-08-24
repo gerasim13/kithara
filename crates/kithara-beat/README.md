@@ -28,9 +28,12 @@ grid cleanup.
 
 ## Key types
 
-- `BeatThis::try_from((mel_bytes, beat_bytes))` — load models from bytes
-  (caller chooses embed vs file vs download).
+- `BeatThis::builder()` — load models from bytes (caller chooses embed vs file
+  vs download) and pick the decoding policy.
 - `BeatThis::analyze(&mono_22050)` — run the mel → inference → peak-pick pipeline.
+- `BeatConfig` — peak threshold, max-pool half-width, dedup width. The defaults
+  are the values the golden fixtures are held to; see CONTEXT.md before moving
+  them.
 - `RawBeats { beats, downbeats }` — output positions in seconds, sorted and
   deduplicated.
 
@@ -39,7 +42,10 @@ grid cleanup.
 ```rust
 use kithara_beat::{BeatThis, RawBeats};
 
-let mut bt = BeatThis::try_from((mel_bytes, beat_bytes))?;
+let mut bt = BeatThis::builder()
+    .mel_model(mel_bytes)
+    .beat_model(beat_bytes)
+    .build()?;
 let raw: RawBeats = bt.analyze(&mono_22050)?;
 ```
 

@@ -6,7 +6,7 @@ use std::{
 use kithara::{
     audio::{
         AudioEffect, EqEffect, PeakLimiter,
-        effects::eq::{MAX_GAIN_DB, MIN_GAIN_DB, generate_log_spaced_bands},
+        effects::eq::{GainDb, generate_log_spaced_bands},
     },
     bufpool::PcmPool,
     decode::{PcmChunk, PcmMeta, PcmSpec},
@@ -26,10 +26,10 @@ const INTERMEDIATE_RATE: u16 = 44_100;
 const LIMITER_CEILING: f32 = 0.98;
 const LIMITER_RELEASE_MS: f32 = 50.0;
 
-const EQ_GAIN_PATHS: [(&str, f32); 3] = [
-    ("flat", 0.0),
-    ("boosted", MAX_GAIN_DB),
-    ("killed", MIN_GAIN_DB),
+const EQ_GAIN_PATHS: [(&str, GainDb); 3] = [
+    ("flat", GainDb::DEFAULT),
+    ("boosted", GainDb::MAX),
+    ("killed", GainDb::MIN),
 ];
 
 const SETTLE_FRAMES: usize = 9_600;
@@ -67,7 +67,7 @@ fn render(signal: &dyn SignalFn, sample_rate: u16, frames: usize) -> Vec<f32> {
         .collect()
 }
 
-fn eq_with_gain(gain_db: f32, band_count: usize, channels: u16) -> EqEffect {
+fn eq_with_gain(gain_db: GainDb, band_count: usize, channels: u16) -> EqEffect {
     let bands = generate_log_spaced_bands(band_count);
     let mut eq = EqEffect::new(bands, u32::from(HOST_RATE), channels);
     for band in 0..band_count {
@@ -132,10 +132,10 @@ fn non_finite_report(label: &str, samples: &[f32]) -> Vec<String> {
 }
 
 #[kithara::test]
-#[case::flat(0.0)]
-#[case::boosted(MAX_GAIN_DB)]
-#[case::killed(MIN_GAIN_DB)]
-fn eq_maps_silence_to_exact_silence(#[case] gain_db: f32) {
+#[case::flat(GainDb::DEFAULT)]
+#[case::boosted(GainDb::MAX)]
+#[case::killed(GainDb::MIN)]
+fn eq_maps_silence_to_exact_silence(#[case] gain_db: GainDb) {
     let pool = pcm_pool();
     let spec = host_spec(2);
     let mut eq = eq_with_gain(gain_db, 5, spec.channels);
@@ -164,7 +164,7 @@ fn limiter_maps_silence_to_exact_silence() {
 #[kithara::test]
 fn master_chain_maps_silence_to_exact_silence() {
     let pool = pcm_pool();
-    let mut eq = eq_with_gain(MAX_GAIN_DB, 5, 2);
+    let mut eq = eq_with_gain(GainDb::MAX, 5, 2);
     let mut limiter = limiter_with_ceiling(LIMITER_CEILING);
 
     let output = master_chain(&mut eq, &mut limiter, &pool, vec![0.0f32; 4_096]);
@@ -181,7 +181,7 @@ fn master_chain_maps_silence_to_exact_silence() {
 fn eq_at_zero_db_is_bit_exact_identity(#[case] channels: u16, #[case] band_count: usize) {
     let pool = pcm_pool();
     let spec = host_spec(channels);
-    let mut eq = eq_with_gain(0.0, band_count, channels);
+    let mut eq = eq_with_gain(GainDb::default(), band_count, channels);
     let input = render(&SineWave(440.0), HOST_RATE, 8_192 * usize::from(channels));
 
     let output = process_eq(&mut eq, &pool, spec, input.clone());
@@ -196,11 +196,11 @@ fn eq_at_zero_db_is_bit_exact_identity(#[case] channels: u16, #[case] band_count
 fn eq_returns_to_bit_exact_identity_after_a_gain_round_trip() {
     let pool = pcm_pool();
     let spec = host_spec(2);
-    let mut eq = eq_with_gain(0.0, 3, spec.channels);
+    let mut eq = eq_with_gain(GainDb::default(), 3, spec.channels);
 
-    eq.set_gain(0, MAX_GAIN_DB);
+    eq.set_gain(0, GainDb::MAX);
     settle(&mut eq, &pool, spec);
-    eq.set_gain(0, 0.0);
+    eq.set_gain(0, GainDb::default());
     settle(&mut eq, &pool, spec);
     settle(&mut eq, &pool, spec);
 
@@ -237,7 +237,7 @@ fn limiter_below_ceiling_is_bit_exact_identity(#[case] ceiling: f32) {
 #[kithara::test]
 fn master_chain_at_unity_is_bit_exact_identity() {
     let pool = pcm_pool();
-    let mut eq = eq_with_gain(0.0, 5, 2);
+    let mut eq = eq_with_gain(GainDb::default(), 5, 2);
     let mut limiter = limiter_with_ceiling(LIMITER_CEILING);
 
     let sine = render(&SineWave(440.0), HOST_RATE, 8_192);

@@ -29,7 +29,9 @@ Contracts and invariants for `kithara-queue`; the README is the overview.
   `TrackSource::Uri` resources share it; a caller-supplied `ResourceConfig` keeps its
   own.
 - `max_concurrent_loads` (default 3) sizes the prefetch lane only.
-- `prefetch_duration` (default 3.5) is declared but not applied by `Queue::new`.
+- `prefetch_duration` (default 3.5) is applied to the player the queue drives — built
+  or caller-supplied — the same way `auto_advance_enabled` is.
+- `max_history_size` (default 100) caps `NavigationState`'s history.
 - `should_autoplay` (default `true`) is consumed only by the
   `cfg(any(test, feature = "probe"))` harness. The production append / insert path
   never starts playback: the caller drives the first `select` / `play`, so order is
@@ -184,7 +186,8 @@ seeking — not from `PlayerImpl::current_index`.
   so it stays in that address space (FFI reserves the id at item construction and
   surfaces it as `audioId`).
 - `NavigationState` is pure logic; the caller owns locking. History is deduped against
-  its tail and capped at 100 entries. `next()`: unselected → `0`; `RepeatMode::One` →
+  its tail and capped at the `history_limit` it is constructed with
+  (`QueueConfig::max_history_size`). `next()`: unselected → `0`; `RepeatMode::One` →
   current; `All` wraps to `0`; `Off` returns `None` and clears the current index at the
   end. `prev()` returns `None` at index 0 or before the first selection. `finish()`
   pushes the current index into history and clears it, keeping `last_selected_index()`.

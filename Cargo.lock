@@ -4348,6 +4348,7 @@ dependencies = [
  "derive_more",
  "fast-interleave",
  "fieldwork",
+ "firewheel-core",
  "hotpath",
  "js-sys",
  "kithara-abr",
@@ -4388,6 +4389,7 @@ dependencies = [
 name = "kithara-beat"
 version = "0.0.1-alpha4"
 dependencies = [
+ "bon",
  "kithara-test-utils",
  "kithara-workspace-hack",
  "num-traits",

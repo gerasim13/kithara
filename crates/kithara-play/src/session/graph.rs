@@ -2,7 +2,7 @@ use firewheel::{
     FirewheelCtx, Volume, backend::AudioBackend, diff::Memo,
     dsp::volume::amp_to_linear_volume_clamped, node::NodeID, nodes::volume::VolumeNode,
 };
-use kithara_audio::EqBandConfig;
+use kithara_audio::{EqBandConfig, effects::eq::GainDb};
 use tracing::{debug, warn};
 
 use super::{
@@ -141,7 +141,7 @@ pub(super) mod lifecycle {
         }
         let mut master_eq = MasterEqNode::new(&player.eq_layout);
         for (band, gain) in player.shared_eq.snapshot().into_iter().enumerate() {
-            master_eq.set_gain(band, gain);
+            master_eq.set_gain(band, GainDb::from(gain));
         }
         let master_eq_memo = Memo::new(master_eq.clone());
         let master_eq_id = fw_ctx.add_node(master_eq, None);
@@ -465,7 +465,7 @@ pub(super) mod controls {
                 bands: memo.bands.len(),
             });
         }
-        memo.set_gain(band, gain_db);
+        memo.set_gain(band, GainDb::from(gain_db));
         let mut queue = fw_ctx.event_queue(master_eq_id);
         memo.update_memo(&mut queue);
         Ok(())
@@ -775,7 +775,7 @@ mod tests {
         let previous_volume = state.players[0].master_volume_node_id;
         let mut layout = generate_log_spaced_bands(4);
         for (band, gain) in layout.iter_mut().zip([-6.0, -3.0, 1.5, 4.0]) {
-            band.set_gain_db(gain);
+            band.set_gain_db(GainDb::from(gain));
         }
 
         assert!(matches!(

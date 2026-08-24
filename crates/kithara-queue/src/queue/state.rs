@@ -126,7 +126,8 @@ impl Queue {
             store,
             cancel: config_cancel,
             max_concurrent_loads,
-            prefetch_duration: _,
+            max_history_size,
+            prefetch_duration,
             #[cfg(any(test, feature = "probe"))]
             should_autoplay,
             #[cfg(not(any(test, feature = "probe")))]
@@ -152,6 +153,7 @@ impl Queue {
                 .build()
         });
         player.set_auto_advance_enabled(false);
+        player.set_prefetch_duration(prefetch_duration);
         let bus = player.bus().clone();
         let tracks = Arc::new(Tracks::new(bus.clone()));
         let loader = Arc::new(Loader::new(
@@ -169,7 +171,7 @@ impl Queue {
             #[cfg(any(test, feature = "probe"))]
             should_autoplay,
             shutdown: cancel,
-            navigation: Arc::new(Mutex::new(NavigationState::new())),
+            navigation: Arc::new(Mutex::new(NavigationState::new(max_history_size))),
             pending_select: Arc::new(Mutex::new(SelectPhase::Idle)),
             select_apply: Arc::new(Mutex::new(())),
             #[cfg(any(test, feature = "probe"))]
@@ -283,6 +285,16 @@ pub(super) mod tests {
     #[kithara::test]
     fn queue_new_constructs_without_panic() {
         let _queue = make_queue();
+    }
+
+    /// `PlayerImpl::set_prefetch_duration` names the queue as the canonical
+    /// owner of this knob, so what the queue's config says has to be what
+    /// the player it drives runs with.
+    #[kithara::test]
+    fn the_configured_prefetch_lead_reaches_the_player() {
+        let queue = Queue::new(QueueConfig::builder().prefetch_duration(8.0).build());
+
+        assert!((queue.player.prefetch_duration() - 8.0).abs() < f32::EPSILON);
     }
 
     #[kithara::test]

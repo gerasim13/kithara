@@ -51,8 +51,11 @@ fn report(kind: &str, s: &Score) {
 #[kithara::test(native, flash(false))]
 fn python_parity_small_model() {
     let pcm = load_pcm_fixture();
-    let mut bt = BeatThis::try_from((MEL_MODEL_BYTES, BEAT_MODEL_BYTES))
-        .unwrap_or_else(|e| panic!("BeatThis::try_from failed: {e}"));
+    let mut bt = BeatThis::builder()
+        .mel_model(MEL_MODEL_BYTES)
+        .beat_model(BEAT_MODEL_BYTES)
+        .build()
+        .unwrap_or_else(|e| panic!("BeatThis::builder failed: {e}"));
     let raw = bt
         .analyze(&pcm)
         .unwrap_or_else(|e| panic!("analyze failed: {e}"));

@@ -4,10 +4,10 @@ use kithara_platform::sync::Arc;
 use crate::{
     BytePool, PcmPool,
     budget::RegionBudget,
-    global::{BYTE_MAX_BUFFERS, BYTE_TRIM_CAPACITY, PCM_MAX_BUFFERS, PCM_TRIM_CAPACITY},
+    global::{
+        BYTE_MAX_BUFFERS, BYTE_TRIM_CAPACITY, DEFAULT_MAX_BYTES, PCM_MAX_BUFFERS, PCM_TRIM_CAPACITY,
+    },
 };
-
-const DEFAULT_MAX_BYTES: usize = 256 * 1024 * 1024;
 
 /// Configuration for a shared buffer-pool region.
 ///
