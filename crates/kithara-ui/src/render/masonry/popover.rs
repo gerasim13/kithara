@@ -24,7 +24,7 @@ use crate::{
 
 #[derive(Default)]
 pub(crate) struct PopoverState {
-    anchor: Cell<MasonryRect>,
+    anchor: Cell<Option<MasonryRect>>,
     open: Cell<bool>,
     pointer: Cell<Option<Point>>,
     press: Cell<Option<Point>>,
@@ -43,12 +43,29 @@ impl PopoverState {
         self.press.set(Some(point));
     }
 
-    pub(crate) fn set_anchor(&self, anchor: MasonryRect) {
+    /// Takes up where the node this surface hangs on stands, or nothing when
+    /// it stands nowhere.
+    pub(crate) fn set_anchor(&self, anchor: Option<MasonryRect>) {
         self.anchor.set(anchor);
     }
 
+    /// Whether the document holds this surface open, which is the latch alone
+    /// and says nothing about whether the surface has anywhere to stand.
     pub(crate) fn is_open(&self) -> bool {
         self.open.get()
+    }
+
+    /// The box this surface hangs on while it stands, and nothing when it does
+    /// not stand at all.
+    ///
+    /// A surface stands when the document holds it open *and* the node it opens
+    /// from is itself in the picture. One document can mount the same menu on
+    /// two anchors and show whichever one the room reaches, and both read the
+    /// one flag: a surface hanging on the anchor that stands aside has no box
+    /// to hang on, and one that opened anyway would take the window origin and
+    /// cover the room the standing anchor is using.
+    pub(crate) fn standing(&self) -> Option<MasonryRect> {
+        self.open.get().then(|| self.anchor.get()).flatten()
     }
 
     pub(crate) fn surface(&self) -> MasonryRect {
@@ -123,14 +140,14 @@ impl Widget for PopoverLayer {
         constraints: &BoxConstraints,
     ) -> MasonrySize {
         let viewport = constraints.max();
-        // A surface the document holds shut stands aside rather than being left
-        // out of the tree, and this is the one place that decides it: the child
-        // is stashed, so Masonry skips it for layout, paint and accessibility,
-        // and the surface keeps no size, so the box composed from it is empty
-        // and nothing lands in it.
-        let open = self.state.is_open();
-        ctx.set_stashed(&mut self.child, !open);
-        if !open {
+        // A surface that does not stand stands aside rather than being left out
+        // of the tree, and this is the one place that decides it: the child is
+        // stashed, so Masonry skips it for layout, paint and accessibility, and
+        // the surface keeps no size, so the box composed from it is empty and
+        // nothing lands in it.
+        let standing = self.state.standing().is_some();
+        ctx.set_stashed(&mut self.child, !standing);
+        if !standing {
             self.surface_size = MasonrySize::ZERO;
             return viewport;
         }
@@ -166,8 +183,12 @@ impl Widget for PopoverLayer {
     }
 
     fn compose(&mut self, ctx: &mut ComposeCtx<'_>) {
+        let Some(anchor) = self.state.standing() else {
+            self.state.surface.set(MasonryRect::ZERO);
+            return;
+        };
         let position = place(
-            self.state.anchor.get(),
+            anchor,
             (self.at == PopoverAt::Pointer)
                 .then(|| self.state.pointer.get())
                 .flatten(),
@@ -188,7 +209,7 @@ impl Widget for PopoverLayer {
         // The chrome is this layer's own, so an empty box does not stand it
         // down the way it stands the content down: drawn against one it would
         // still put a shape in the picture for a menu nobody opened.
-        if !self.state.is_open() {
+        if self.state.standing().is_none() {
             return;
         }
         let surface = self.state.surface();

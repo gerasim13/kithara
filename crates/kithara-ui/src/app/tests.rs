@@ -968,6 +968,143 @@ fn drawn_shapes<A: App>(ui: &mut Ui<'_, A>) -> u32 {
 /// What the host draws for the menu fixture at each of the three moments the
 /// document passes through: shut, opened by a press on its anchor, and shut
 /// again by a press away from it.
+/// A bar carrying the menu, mounted under one instance name.
+fn menu_bar(instance: &str, band: &str) -> String {
+    format!(
+        r#"({band} node: Module(instance: "{instance}", source: "one.kmodule.ron",
+            size: (w: Fill, h: Fixed(42.0))))"#
+    )
+}
+
+/// A document that hangs the one menu on `bars` anchors and shows whichever bar
+/// the room reaches, the way the shipped app bar carries a wide strip and a
+/// narrow one and stands the other aside.
+///
+/// Every bar reads the one flag, so a press on the standing burger opens them
+/// all as far as the document is concerned.
+fn banded_bars(bars: &[String]) -> MemResolver {
+    let mut resolver = MemResolver::default();
+    let mut cells = bars.join(",\n                ");
+    cells.push_str(
+        r#",
+                (weight: 1.0, node: Module(instance: "body", source: "body.kmodule.ron",
+                    size: (w: Fill, h: Fill)))"#,
+    );
+    resolver.insert(
+        "one.klayout.ron",
+        &format!(
+            r#"(schema: "kithara.layout", version: 1, id: "one",
+                root: Split(axis: Vertical, measure: Height, size: (w: Fill, h: Fill),
+                    children: [{cells}]))"#
+        ),
+    );
+    resolver.insert(
+        "one.kmodule.ron",
+        &format!(
+            r#"(schema: "kithara.module", version: 1, id: "gallery-knobs", chrome: Plain,
+                root: Row(size: (w: Fill, h: Fill), gap: 0.0, pad: 0.0, children: [{MENU}]))"#
+        ),
+    );
+    resolver.insert(
+        "body.kmodule.ron",
+        r#"(schema: "kithara.module", version: 1, id: "body", chrome: Plain,
+            root: Row(size: (w: Fill, h: Fill), gap: 0.0, pad: 0.0, children: []))"#,
+    );
+    resolver
+}
+
+/// Mounts a banded document in a window short enough that only the narrow bar
+/// stands, presses the burger that is in the picture, and hands the result over.
+fn with_bars(bars: &[String], check: impl FnOnce(Ui<'_, Menu>)) {
+    let endpoints = MenuEndpoints::default();
+    let resolver = banded_bars(bars);
+    let skin = skin();
+    let mut ui = Ui::new(
+        Menu::default(),
+        Config::builder()
+            .endpoints(&endpoints)
+            .resolver(&resolver)
+            .skin(&skin)
+            .skin_doc(builtin::skin_doc())
+            .text(builtin::text_doc())
+            .build(),
+        (400, 400),
+        1.0,
+    )
+    .unwrap_or_else(|error| panic!("the banded fixture must mount: {error}"));
+    let anchor = ui
+        .rect_of("narrow/anchor")
+        .unwrap_or_else(|| panic!("the bar the room reaches must be laid out"));
+    press_at(
+        &mut ui,
+        Pt {
+            x: anchor.x + anchor.w / 2.0,
+            y: anchor.y + anchor.h / 2.0,
+        },
+    );
+    assert!(
+        ui.app().open,
+        "the press on the standing burger must reach the application"
+    );
+    check(ui);
+}
+
+/// The narrow bar, which is the one a 400-tall window reaches.
+fn narrow_bar() -> String {
+    menu_bar("narrow", "until: Some(493.0),")
+}
+
+/// The wide bar, which the same window stands aside.
+fn wide_bar() -> String {
+    menu_bar("wide", "from: 493.0,")
+}
+
+#[kithara::test]
+fn a_menu_whose_anchor_stands_aside_stays_out_of_the_picture() {
+    let mut both = 0;
+    let mut alone = 0;
+    with_bars(&[narrow_bar(), wide_bar()], |mut ui| {
+        both = drawn_shapes(&mut ui);
+    });
+    with_bars(&[narrow_bar()], |mut ui| alone = drawn_shapes(&mut ui));
+
+    assert_eq!(
+        both, alone,
+        "a document carrying a second bar the room never reached drew {both} shapes where the \
+         same document without it drew {alone}: the menu hanging on the anchor that stands aside \
+         opened as well"
+    );
+}
+
+#[kithara::test]
+fn a_menu_whose_anchor_stands_aside_takes_no_box() {
+    with_bars(&[narrow_bar(), wide_bar()], |ui| {
+        assert_eq!(
+            ui.rect_of("wide/content").map(|rect| (rect.w, rect.h)),
+            Some((0.0, 0.0)),
+            "the menu hanging on the bar the room never reached took a box of its own"
+        );
+    });
+}
+
+#[kithara::test]
+fn the_menu_whose_anchor_stands_hangs_below_it() {
+    with_bars(&[narrow_bar(), wide_bar()], |ui| {
+        let anchor = ui
+            .rect_of("narrow/anchor")
+            .unwrap_or_else(|| panic!("the standing anchor must keep its box"));
+        let content = ui
+            .rect_of("narrow/content")
+            .unwrap_or_else(|| panic!("the standing menu must take a box"));
+        assert!(
+            content.y >= anchor.y + anchor.h,
+            "the open menu stands at y={} over the anchor it hangs on, which ends at y={}",
+            content.y,
+            anchor.y + anchor.h
+        );
+    });
+}
+
 fn menu_pictures() -> [u32; 3] {
     let mut drawn = [0; 3];
     with_document(MENU, |mut ui| {

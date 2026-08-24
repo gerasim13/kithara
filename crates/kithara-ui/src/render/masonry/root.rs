@@ -12,7 +12,7 @@ use masonry::{
         PointerEvent, PropertiesMut, PropertiesRef, QueryCtx, RegisterCtx, TextEvent, Widget,
         WidgetId, WidgetRef, WindowEvent, find_widget_under_pointer,
     },
-    kurbo::{Point, Size},
+    kurbo::{Point, Rect as MasonryRect, Size},
     ui_events::keyboard::{Key, NamedKey},
     vello::Scene,
 };
@@ -170,7 +170,7 @@ where
                 .popovers
                 .iter()
                 .rev()
-                .find(|popover| popover.state.is_open())
+                .find(|popover| popover.state.standing().is_some())
                 .map(|popover| (popover.dismiss)())
         {
             self.push_action(Box::new(action))?;
@@ -254,10 +254,19 @@ where
 
     fn sync_popovers(&self) {
         for popover in &self.popovers {
-            if let Some(widget) = self.root.get_widget(popover.anchor) {
-                popover.state.set_anchor(widget.ctx().bounding_rect());
-            }
+            popover.state.set_anchor(self.anchor_box(popover.anchor));
         }
+    }
+
+    /// Where the node a surface hangs on stands, or nothing when it stands
+    /// nowhere.
+    ///
+    /// A node the room did not reach is stashed rather than left out of the
+    /// tree, and a stashed node keeps the box it last had, so the box alone
+    /// cannot say whether it is still in the picture.
+    fn anchor_box(&self, anchor: WidgetId) -> Option<MasonryRect> {
+        let widget = self.root.get_widget(anchor)?;
+        (!widget.ctx().is_stashed()).then(|| widget.ctx().bounding_rect())
     }
 
     /// Repaints the layer of every engine whose menu has changed.
@@ -497,7 +506,11 @@ where
         let PointerEvent::Down(button) = event else {
             return;
         };
-        if self.popovers.iter().any(|popover| popover.state.is_open()) {
+        if self
+            .popovers
+            .iter()
+            .any(|popover| popover.state.standing().is_some())
+        {
             return;
         }
         let position = button.state.logical_position();
@@ -518,7 +531,7 @@ where
             .popovers
             .iter()
             .rev()
-            .find(|popover| popover.state.is_open())
+            .find(|popover| popover.state.standing().is_some())
         else {
             return Ok(false);
         };
