@@ -1,5 +1,6 @@
 use kithara_platform::time::Duration;
 use kithara_test_utils::kithara;
+use tracing::debug;
 
 use super::{HlsVariant, PlanCtx, PlanRevision};
 use crate::segment::PlannedFetch;
@@ -105,8 +106,15 @@ impl HlsVariant {
     /// cannot resurrect an obsolete prefix or duplicate a fetch that its
     /// replacement plan already contains.
     pub(crate) fn requeue_planned(&self, planned: PlannedFetch, revision: PlanRevision) -> bool {
-        let mut queue = self.flow.queue.lock();
-        queue.requeue_if_current(planned, revision)
+        let requeued = self.flow.queue.lock().requeue_if_current(planned, revision);
+        if !requeued {
+            debug!(
+                variant = self.variant,
+                ?planned,
+                "requeue refused: plan superseded or entry already queued"
+            );
+        }
+        requeued
     }
 
     #[kithara::probe]
@@ -125,6 +133,10 @@ impl HlsVariant {
             .queue
             .lock()
             .replace_with(init.chain(probe).chain(tail));
+        debug!(
+            variant = self.variant,
+            from_seg, probe_seg, segs_len, "fetch plan rebuilt"
+        );
     }
 
     /// Same as [`Self::rebuild`] but also enqueues `seg 0` when
