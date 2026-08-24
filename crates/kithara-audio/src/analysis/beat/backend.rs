@@ -46,11 +46,13 @@ struct NnDetector {
 
 impl NnDetector {
     fn new() -> Result<Self, BeatDetectError> {
-        let inner = BeatThis::try_from((MEL_MODEL_BYTES, BEAT_MODEL_BYTES)).map_err(|e| {
-            BeatDetectError::Init {
+        let inner = BeatThis::builder()
+            .mel_model(MEL_MODEL_BYTES)
+            .beat_model(BEAT_MODEL_BYTES)
+            .build()
+            .map_err(|e| BeatDetectError::Init {
                 reason: e.to_string(),
-            }
-        })?;
+            })?;
         Ok(Self { inner })
     }
 }

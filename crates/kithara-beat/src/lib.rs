@@ -1,4 +1,5 @@
 mod api;
+mod config;
 mod inference;
 mod mel;
 #[cfg(feature = "embed-small-model")]
@@ -7,5 +8,6 @@ mod postprocess;
 mod runtime;
 
 pub use api::{BeatError, BeatThis, RawBeats};
+pub use config::BeatConfig;
 #[cfg(feature = "embed-small-model")]
 pub use models::{BEAT_MODEL_BYTES, MEL_MODEL_BYTES};
