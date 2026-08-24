@@ -1,5 +1,4 @@
 pub(crate) use ::wreq::{Client, ClientBuilder, RequestBuilder, Response, StatusCode};
-use kithara_platform::time::Duration;
 
 use super::metrics::CountConnectionsLayer;
 use crate::{
@@ -36,7 +35,7 @@ pub(crate) fn build_client(
         .emulation(::wreq_util::Profile::from(options.impersonate))
         .cookie_store(true)
         .pool_max_idle_per_host(options.pool_max_idle_per_host)
-        .pool_idle_timeout(Some(Duration::from_secs(5)))
+        .pool_idle_timeout(Some(options.pool_idle_timeout))
         .tls_cert_verification(!options.is_insecure);
     super::apply_compression(base, options.compression).build()
 }

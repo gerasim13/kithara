@@ -9,8 +9,9 @@ Detailed contracts and invariants for the kithara-beat crate; the README is the 
 - Output: `RawBeats { beats, downbeats }` — positions in **seconds**, sorted, deduplicated,
   every downbeat snapped to the nearest beat. Grid cleanup and source-frame conversion belong to
   the consumer (`kithara-audio`).
-- Models load from `(mel, beat)` ONNX bytes via `BeatThis::try_from` — the caller decides embed
-  vs file vs download; `embed-small-model` exposes the bundled bytes.
+- Models load from `(mel, beat)` ONNX bytes via `BeatThis::builder()` — the caller decides embed
+  vs file vs download; `embed-small-model` exposes the bundled bytes. The same builder takes the
+  `BeatConfig` the peak picker runs with.
 
 ## Pipeline
 
@@ -22,13 +23,20 @@ Detailed contracts and invariants for the kithara-beat crate; the README is the 
   the spectrogram end. Chunks run in reverse order so earlier chunks overwrite later ones in
   overlaps — that is the `keep_first` rule. Outputs are read as `beat` / `downbeat` with
   `beat_logits` / `downbeat_logits` as export-name fallbacks.
-1. `postprocess.rs` — minimal peak picking, no DBN: a frame is a peak when its logit > 0
-  (probability > 0.5 after sigmoid) and it is the max of a 7-frame window (±3 = ±60 ms); peaks at
-  most 1 frame apart merge to their running mean; each downbeat then snaps to the nearest beat.
+1. `postprocess.rs` — minimal peak picking, no DBN, driven by `BeatConfig`: a frame is a peak
+  when its logit clears `peak_threshold` and it is the max of the `2 * peak_half_width + 1` frames
+  around it; peaks at most `dedup_width` frames apart merge to their running mean; each downbeat
+  then snaps to the nearest beat.
 
-The pipeline constants (chunk 1500, border 6, stride 1488, hop 441, 50 fps, threshold 0, ±3
-window) are **frozen**: they define numerical parity with the Python reference and must be folded
-into any analysis cache key by consumers. Changing one invalidates the golden fixtures.
+Two groups of numbers, with different owners:
+
+- **Chunk geometry** (chunk 1500, border 6, stride 1488, hop 441, 50 fps) stays constant. It is
+  the segmentation the model was trained on, not a knob — a different chunking runs the model
+  outside its training regime.
+- **Picking policy** (`BeatConfig`: threshold 0, half-width 3 = ±60 ms, dedup width 1) is the
+  caller's. Its **defaults** are the frozen parity values: they define numerical parity with the
+  Python reference, the golden fixtures are held to them, and a consumer that moves them must
+  fold the new values into its analysis cache key. The crate does not do that for it.
 
 ## Validation
 

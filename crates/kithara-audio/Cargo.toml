@@ -98,6 +98,7 @@ delegate = { workspace = true }
 derive_more = { workspace = true }
 fast-interleave = { workspace = true }
 fieldwork = { workspace = true }
+firewheel-core = { workspace = true }
 num-traits = { workspace = true }
 portable-atomic = { workspace = true }
 realfft = { workspace = true, optional = true }
