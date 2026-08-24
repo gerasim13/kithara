@@ -115,6 +115,16 @@ impl<'a, 'r> Ctx<'a, 'r> {
             .map(|binding| self.ui.resolve(binding.key))
     }
 
+    /// What one text binding answers, or nothing when there is no binding, no
+    /// answer, or an empty answer.
+    #[must_use]
+    pub fn label(self, binding: Option<&Binding>) -> Option<&'r str> {
+        match self.read(binding?)? {
+            ReadValue::Text(label) if !label.is_empty() => Some(label),
+            _ => None,
+        }
+    }
+
     /// Whether a binding reads true. An absent binding, or one that reads
     /// anything but a true flag, is false.
     #[must_use]

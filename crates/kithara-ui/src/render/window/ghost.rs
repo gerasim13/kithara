@@ -29,15 +29,28 @@ impl DragGhost {
     /// pointer instead of sitting under it.
     const POINTER_GAP: f32 = 12.0;
 
-    pub(crate) fn new(label: Option<String>, skin: &Skin) -> Self {
+    pub(crate) fn new(label: Option<&str>, skin: &Skin) -> Self {
         let metrics = skin.drag;
-        Self {
-            label: label.map(|label| elide(&label, fitting_chars(metrics))),
+        let mut ghost = Self {
+            label: None,
             metrics,
             background: skin.rgba(metrics.background),
             border: skin.rgba(metrics.frame.border),
             text_color: skin.rgba(metrics.text.color),
+        };
+        ghost.carry(label);
+        ghost
+    }
+
+    /// Takes up what the pointer is carrying now, cut to what the box fits, and
+    /// says whether that changed what the ghost draws.
+    pub(crate) fn carry(&mut self, label: Option<&str>) -> bool {
+        let label = label.map(|label| elide(label, fitting_chars(self.metrics)));
+        if self.label == label {
+            return false;
         }
+        self.label = label;
+        true
     }
 
     pub(crate) fn layer(
@@ -145,7 +158,7 @@ mod tests {
     #[kithara::test]
     fn the_retained_ghost_follows_the_pointer_and_has_no_hit_region() {
         let skin = builtin::skin();
-        let ghost = DragGhost::new(Some("Signal Path".to_owned()), skin);
+        let ghost = DragGhost::new(Some("Signal Path"), skin);
         let bounds = Rect {
             h: 80.0,
             w: 300.0,

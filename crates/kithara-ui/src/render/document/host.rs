@@ -107,10 +107,16 @@ pub trait Host {
     fn hosted(&mut self, node: &ExpandedNode, child: Self::Output) -> Self::Output;
 
     /// Finishes the whole document with host-owned window layers.
+    ///
+    /// `carried` is the binding the window names for what the pointer carries,
+    /// not the reading of it, because the two kinds of host read it at
+    /// different moments: one asks afresh every frame, and one mounts a layer
+    /// for the life of the window and asks again whenever the document is
+    /// shown.
     fn window(
         &mut self,
         content: Self::Output,
-        dragged: Option<String>,
+        carried: Option<&Binding>,
         resize_edges: bool,
     ) -> Self::Output;
 }

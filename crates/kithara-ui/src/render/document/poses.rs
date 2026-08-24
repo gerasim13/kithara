@@ -92,5 +92,5 @@ impl Host for &mut Poses {
 
     fn hosted(&mut self, _node: &ExpandedNode, _child: Self::Output) {}
 
-    fn window(&mut self, _content: Self::Output, _dragged: Option<String>, _resize_edges: bool) {}
+    fn window(&mut self, _content: Self::Output, _carried: Option<&Binding>, _resize_edges: bool) {}
 }

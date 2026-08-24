@@ -302,13 +302,13 @@ impl<'a> DocumentHost for IcedHost<'a, '_> {
     fn window(
         &mut self,
         content: Self::Output,
-        dragged: Option<String>,
+        carried: Option<&Binding>,
         resize_edges: bool,
     ) -> Self::Output {
-        if !resize_edges && dragged.is_none() {
+        if !resize_edges && carried.is_none() {
             content
         } else {
-            window_layers(content, dragged, resize_edges, self.skin)
+            window_layers(content, self.ctx.label(carried), resize_edges, self.skin)
         }
     }
 }

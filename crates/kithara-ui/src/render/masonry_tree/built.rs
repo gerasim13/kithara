@@ -40,7 +40,17 @@ pub(crate) struct PopoverRegistration {
     pub(crate) dismiss: Rc<dyn Fn() -> HostAction>,
 }
 
-type WindowTracker = (Rc<Cell<Option<Pt>>>, Option<WidgetId>, bool);
+/// The window layer one tree mounted, and what a root needs to keep it in step
+/// with the document it came from.
+pub(crate) struct WindowTracker {
+    pub(crate) pointer: Rc<Cell<Option<Pt>>>,
+    pub(crate) layer: Option<WidgetId>,
+    /// What the pointer carries, re-read whenever the document is shown again.
+    pub(crate) carried: Option<Binding>,
+    /// Whether the last reading found anything, which is when the layer has to
+    /// be painted again as the pointer moves.
+    pub(crate) carrying: bool,
+}
 /// One mounted leaf and the document source it re-reads without rebuilding.
 pub(crate) enum Watched {
     Read {
@@ -325,20 +335,32 @@ impl<Action> MasonryNode<Action> {
     }
 
     pub(crate) fn set_window_pointer(&mut self, pointer: Rc<Cell<Option<Pt>>>) {
-        let (layer, repaint) = self
-            .window
-            .as_ref()
-            .map_or((None, false), |(_, layer, repaint)| (*layer, *repaint));
-        self.window = Some((pointer, layer, repaint));
+        match &mut self.window {
+            Some(window) => window.pointer = pointer,
+            None => {
+                self.window = Some(WindowTracker {
+                    pointer,
+                    layer: None,
+                    carried: None,
+                    carrying: false,
+                });
+            }
+        }
     }
 
     pub(crate) fn set_window_layer(
         &mut self,
         pointer: Rc<Cell<Option<Pt>>>,
         layer: WidgetId,
-        repaint: bool,
+        carried: Option<Binding>,
+        carrying: bool,
     ) {
-        self.window = Some((pointer, Some(layer), repaint));
+        self.window = Some(WindowTracker {
+            pointer,
+            layer: Some(layer),
+            carried,
+            carrying,
+        });
     }
 
     pub(crate) fn set_window_tracker(&mut self, tracker: WindowTracker) {
@@ -391,9 +413,12 @@ fn merge_window(
     right: Option<WindowTracker>,
 ) -> Option<WindowTracker> {
     match (left, right) {
-        (Some((pointer, layer, repaint)), Some((_, child_layer, child_repaint))) => {
-            Some((pointer, layer.or(child_layer), repaint || child_repaint))
-        }
+        (Some(window), Some(child)) => Some(WindowTracker {
+            pointer: window.pointer,
+            layer: window.layer.or(child.layer),
+            carried: window.carried.or(child.carried),
+            carrying: window.carrying || child.carrying,
+        }),
         (Some(window), None) | (None, Some(window)) => Some(window),
         (None, None) => None,
     }

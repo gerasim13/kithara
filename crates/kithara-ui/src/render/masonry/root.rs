@@ -21,7 +21,7 @@ use thiserror::Error;
 use tracing::{Span, trace_span};
 
 use super::{
-    built::{MasonryNode, PopoverRegistration, RootParts, Watched},
+    built::{MasonryNode, PopoverRegistration, RootParts, Watched, WindowTracker},
     custom::HostAction,
     leaf::cursor_icon,
     node::Node,
@@ -39,8 +39,6 @@ use crate::{
     },
     shaping::TextContext,
 };
-
-type WindowTracker = (Rc<Cell<Option<Pt>>>, Option<WidgetId>, bool);
 
 /// A Masonry render root with native-layer synchronization and typed actions.
 #[derive(fieldwork::Fieldwork)]
@@ -481,13 +479,12 @@ where
                 x: position.x.as_(),
                 y: position.y.as_(),
             };
-            if let Some((pointer, layer, repaint)) = &self.window {
-                pointer.set(Some(point));
-                if *repaint
+            if let Some(window) = &self.window {
+                window.pointer.set(Some(point));
+                if window.carrying
                     && matches!(event, PointerEvent::Move(_))
-                    && let Some(layer) = layer
+                    && let Some(layer) = window.layer
                 {
-                    let layer = *layer;
                     self.root.edit_widget(layer, |mut layer| {
                         layer.ctx.request_paint_only();
                     });
@@ -536,11 +533,11 @@ where
     }
 
     fn window_owns(&self, point: Point) -> bool {
-        let Some((_, Some(layer), _)) = &self.window else {
+        let Some(layer) = self.window.as_ref().and_then(|window| window.layer) else {
             return false;
         };
         self.root
-            .get_widget(*layer)
+            .get_widget(layer)
             .and_then(|layer| layer.find_widget_under_pointer(point))
             .is_some()
     }
@@ -578,6 +575,29 @@ where
         self.reread_plans(ctx);
         self.place_objects(ctx);
         self.open_surfaces(ctx);
+        self.carry_ghost(ctx);
+    }
+
+    /// Shows what the pointer is carrying now.
+    ///
+    /// The ghost is a value the window layer draws, not shape the layer was
+    /// mounted with: the layer stands for the life of the window, and what the
+    /// pointer carries changes under it.
+    fn carry_ghost(&mut self, ctx: Ctx<'_, '_>) {
+        let Some(window) = &mut self.window else {
+            return;
+        };
+        let Some(layer) = window.layer else {
+            return;
+        };
+        let label = ctx.label(window.carried.as_ref());
+        window.carrying = label.is_some();
+        self.root.edit_widget(layer, |mut widget| {
+            let mut window = widget.downcast::<WindowLayer>();
+            if window.widget.carry(label) {
+                window.ctx.request_paint_only();
+            }
+        });
     }
 
     /// Opens the surfaces the document now holds open, and shuts the rest.
@@ -704,7 +724,7 @@ pub(crate) struct WindowLayer {
 
 impl WindowLayer {
     pub(crate) fn new(
-        dragged: Option<String>,
+        ghost: Option<DragGhost>,
         resize_edges: bool,
         pointer: Rc<Cell<Option<Pt>>>,
         map_event: Rc<dyn Fn(UiEvent) -> HostAction>,
@@ -712,13 +732,19 @@ impl WindowLayer {
     ) -> Self {
         Self {
             active: None,
-            ghost: dragged.map(|label| DragGhost::new(Some(label), skin)),
+            ghost,
             map_event,
             pointer,
             resize_edge: skin.window.resize_edge,
             resize_edges,
             text: TextContext::from(skin.text_resources()),
         }
+    }
+
+    /// Takes up what the pointer is carrying now, and says whether that changed
+    /// what this layer draws.
+    fn carry(&mut self, label: Option<&str>) -> bool {
+        self.ghost.as_mut().is_some_and(|ghost| ghost.carry(label))
     }
 
     fn bounds(size: Size) -> Rect {

@@ -135,7 +135,7 @@ impl Host for Spy<'_> {
     fn window(
         &mut self,
         content: Self::Output,
-        _dragged: Option<String>,
+        _carried: Option<&Binding>,
         _resize_edges: bool,
     ) -> Self::Output {
         content

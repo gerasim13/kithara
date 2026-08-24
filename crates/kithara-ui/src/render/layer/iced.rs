@@ -40,13 +40,13 @@ pub(crate) fn draw_host_layer<A>(
 
 pub(crate) fn window_layers<'a>(
     child: Element<'a, UiEvent>,
-    dragged: Option<String>,
+    carried: Option<&str>,
     resize_edges: bool,
     skin: &'a Skin,
 ) -> Element<'a, UiEvent> {
     Element::new(WindowLayers {
         child,
-        ghost: dragged.map(|label| DragGhost::new(Some(label), skin)),
+        ghost: carried.map(|label| DragGhost::new(Some(label), skin)),
         resize_edges,
         skin,
     })
@@ -640,12 +640,7 @@ mod tests {
     #[kithara::test]
     fn moving_the_drag_ghost_redraws_without_publishing_or_capturing() {
         let child = Space::new().width(Length::Fill).height(Length::Fill).into();
-        let mut element = window_layers(
-            child,
-            Some("Signal Path".to_owned()),
-            false,
-            builtin::skin(),
-        );
+        let mut element = window_layers(child, Some("Signal Path"), false, builtin::skin());
         let renderer = FallbackRenderer::Secondary(TinySkiaRenderer::new(SANS, Pixels(14.0)));
         let viewport = Size::new(240.0, 80.0);
         let mut tree = Tree::new(element.as_widget());

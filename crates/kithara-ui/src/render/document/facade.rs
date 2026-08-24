@@ -57,7 +57,7 @@ where
     H: Host,
 {
     let content = compiled(node, ctx, &mut host);
-    host.window(content, dragged_label(ctx), ctx.ui.resize_edges)
+    host.window(content, ctx.ui.dragged.as_ref(), ctx.ui.resize_edges)
 }
 
 #[cfg(test)]
@@ -782,12 +782,4 @@ fn hosts_engine(ui: &CompiledUi, owner: InternId, address: &[usize]) -> bool {
     HOSTED_MODULES
         .iter()
         .any(|module| ui.includes_module(owner, address, module))
-}
-
-fn dragged_label(ctx: Ctx<'_, '_>) -> Option<String> {
-    let binding = ctx.ui.dragged.as_ref()?;
-    match ctx.read(binding)? {
-        ReadValue::Text(label) if !label.is_empty() => Some(label.to_owned()),
-        _ => None,
-    }
 }

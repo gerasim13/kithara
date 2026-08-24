@@ -31,7 +31,7 @@ use crate::{
     module::{ChromeStyle, MeasureAxis, TextAlign, TextStyle},
     mount,
     render::{
-        ControlAction, HostedControlPlan, InputOwner, ReadValue, Skin, UiEvent,
+        ControlAction, DragGhost, HostedControlPlan, InputOwner, ReadValue, Skin, UiEvent,
         document::{Ctx, Group, GroupMount, Host, Measured, Module, Popover, SplitMount},
         hosted_control_plan,
         scroll::Bar,
@@ -848,16 +848,20 @@ where
     fn window(
         &mut self,
         mut content: Self::Output,
-        dragged: Option<String>,
+        carried: Option<&Binding>,
         resize_edges: bool,
     ) -> Self::Output {
-        if dragged.is_none() && !resize_edges {
+        if carried.is_none() && !resize_edges {
             return content;
         }
+        // A window that names what it carries gets its ghost whether or not the
+        // pointer is carrying anything yet: this tree keeps the shape it mounts,
+        // and the load arrives long after the window is standing.
+        let label = self.ctx.label(carried);
+        let ghost = carried.is_some().then(|| DragGhost::new(label, self.skin));
         let pointer = Rc::clone(&self.state.pointer);
-        let repaint = dragged.is_some();
         let layer = WindowLayer::new(
-            dragged,
+            ghost,
             resize_edges,
             Rc::clone(&pointer),
             Rc::clone(&self.map_event),
@@ -866,7 +870,7 @@ where
         let layer = masonry::core::NewWidget::new(layer);
         let layer_id = layer.id();
         content.add_layer(layer.erased());
-        content.set_window_layer(pointer, layer_id, repaint);
+        content.set_window_layer(pointer, layer_id, carried.cloned(), label.is_some());
         content
     }
 }

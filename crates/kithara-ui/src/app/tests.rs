@@ -936,7 +936,7 @@ fn with_document(control: &str, check: impl FnOnce(Ui<'_, Menu>)) {
 }
 
 /// Puts one whole press through the hand at one point.
-fn press_at(ui: &mut Ui<'_, Menu>, at: Pt) {
+fn press_at<A: App>(ui: &mut Ui<'_, A>, at: Pt) {
     ui.input(press(at, PointerPhase::Move));
     ui.input(press(at, PointerPhase::Down));
     ui.input(press(at, PointerPhase::Up));
@@ -958,7 +958,7 @@ fn press_the_anchor(ui: &mut Ui<'_, Menu>) {
 
 /// How much of a picture the host draws, read the way the control census in the
 /// retained host reads a picture.
-fn drawn_shapes(ui: &mut Ui<'_, Menu>) -> u32 {
+fn drawn_shapes<A: App>(ui: &mut Ui<'_, A>) -> u32 {
     ui.scene()
         .unwrap_or_else(|error| panic!("the menu fixture must draw: {error}"))
         .encoding()
@@ -1060,6 +1060,220 @@ fn a_shut_menu_takes_no_press_over_the_room_its_surface_filled() {
              while it was open"
         );
     });
+}
+
+/// An application that picks a track up when its one control is pressed and
+/// carries it until it is pressed again, the way a playlist row starts a drag.
+#[derive(Default)]
+struct Carry {
+    carrying: bool,
+}
+
+impl Reads for Carry {
+    fn get(&self, endpoint: &str) -> Option<ReadValue<'_>> {
+        let id = endpoint.split_once('@').map_or(endpoint, |(id, _)| id);
+        (id == "fixture.carried" && self.carrying).then_some(ReadValue::Text("Signal Path"))
+    }
+}
+
+impl App for Carry {
+    fn document(&self) -> &str {
+        "carry.klayout.ron"
+    }
+
+    fn reads<R>(&self, with: impl FnOnce(&dyn Reads) -> R) -> R {
+        with(self)
+    }
+
+    fn update(&mut self, event: UiEvent) {
+        if let UiEvent::Control { action, .. } = event
+            && action == ControlAction::Activate
+        {
+            self.carrying = !self.carrying;
+        }
+    }
+}
+
+/// The endpoints the carrying fixture binds to: what the pointer carries, and
+/// the command the control it is picked up from publishes.
+struct CarryEndpoints {
+    carried: EndpointDesc,
+    grab: EndpointDesc,
+}
+
+impl Default for CarryEndpoints {
+    fn default() -> Self {
+        Self {
+            carried: EndpointDesc::new(ValueKind::Text),
+            grab: EndpointDesc::new(ValueKind::Trigger),
+        }
+    }
+}
+
+impl EndpointRegistry for CarryEndpoints {
+    fn endpoint(&self, category: EndpointCategory, id: &EndpointId) -> Option<&EndpointDesc> {
+        match (category, id.0.as_str()) {
+            (EndpointCategory::Model, "fixture.carried") => Some(&self.carried),
+            (EndpointCategory::Command, "fixture.grab") => Some(&self.grab),
+            _ => None,
+        }
+    }
+}
+
+/// A window that names what the pointer carries, over one control to pick a
+/// track up from.
+fn carry_document() -> MemResolver {
+    let mut resolver = MemResolver::default();
+    resolver.insert(
+        "carry.klayout.ron",
+        r#"(schema: "kithara.layout", version: 1, id: "carry", resize_edges: true,
+            dragged: Some(Model(id: "fixture.carried")),
+            root: Module(instance: "demo", source: "carry.kmodule.ron", size: (w: Fill, h: Fill)))"#,
+    );
+    resolver.insert(
+        "carry.kmodule.ron",
+        r#"(schema: "kithara.module", version: 1, id: "gallery-knobs", chrome: Plain,
+            root: Row(size: (w: Fill, h: Fill), gap: 0.0, pad: 0.0, children: [
+                Pressable(id: "grab", press: Command(id: "fixture.grab"),
+                    child: Spacer(id: "row", size: Some((w: Fixed(40.0), h: Fixed(20.0))))),
+            ]))"#,
+    );
+    resolver
+}
+
+/// Mounts the carrying fixture and hands it to the check.
+fn with_carry(check: impl FnOnce(Ui<'_, Carry>)) {
+    let endpoints = CarryEndpoints::default();
+    let resolver = carry_document();
+    let skin = skin();
+    let ui = Ui::new(
+        Carry::default(),
+        Config::builder()
+            .endpoints(&endpoints)
+            .resolver(&resolver)
+            .skin(&skin)
+            .skin_doc(builtin::skin_doc())
+            .text(builtin::text_doc())
+            .build(),
+        (240, 120),
+        1.0,
+    )
+    .unwrap_or_else(|error| panic!("the carrying fixture must mount: {error}"));
+    check(ui);
+}
+
+/// What the host draws at each of the three moments the pointer passes through:
+/// empty, carrying a track, and empty again. The pointer stands in the same
+/// place throughout, so the load is the only thing that differs.
+fn carrying_pictures() -> [u32; 3] {
+    let mut drawn = [0; 3];
+    with_carry(|mut ui| {
+        let over = Pt { x: 160.0, y: 90.0 };
+        ui.input(press(over, PointerPhase::Move));
+        drawn[0] = drawn_shapes(&mut ui);
+
+        let grab = ui
+            .rect_of("demo/row")
+            .unwrap_or_else(|| panic!("the control a track is picked up from must be laid out"));
+        let grab = Pt {
+            x: grab.x + grab.w / 2.0,
+            y: grab.y + grab.h / 2.0,
+        };
+        press_at(&mut ui, grab);
+        assert!(
+            ui.app().carrying,
+            "the press must reach the application and pick the track up"
+        );
+        ui.input(press(over, PointerPhase::Move));
+        drawn[1] = drawn_shapes(&mut ui);
+
+        press_at(&mut ui, grab);
+        assert!(
+            !ui.app().carrying,
+            "the second press must reach the application and put the track down"
+        );
+        ui.input(press(over, PointerPhase::Move));
+        drawn[2] = drawn_shapes(&mut ui);
+    });
+    drawn
+}
+
+/// Presents and completes one frame, so what is read after it is about the one
+/// thing the test does next.
+fn settle_frame(ui: &mut Ui<'_, Carry>) {
+    ui.frame(Duration::from_millis(16));
+    ui.render()
+        .unwrap_or_else(|error| panic!("the carrying fixture must draw: {error}"));
+    let _ = ui.complete_frame();
+}
+
+/// Whether moving the pointer asks the host for another frame, with a track
+/// picked up first or with nothing carried at all.
+fn frame_asked_while_moving(carrying: bool) -> bool {
+    let mut asked = false;
+    with_carry(|mut ui| {
+        if carrying {
+            let grab = ui.rect_of("demo/row").unwrap_or_else(|| {
+                panic!("the control a track is picked up from must be laid out")
+            });
+            press_at(
+                &mut ui,
+                Pt {
+                    x: grab.x + grab.w / 2.0,
+                    y: grab.y + grab.h / 2.0,
+                },
+            );
+            assert!(
+                ui.app().carrying,
+                "the press must reach the application and pick the track up"
+            );
+        }
+        settle_frame(&mut ui);
+
+        ui.input(press(Pt { x: 160.0, y: 90.0 }, PointerPhase::Move));
+
+        asked = ui.needs_frame();
+    });
+    asked
+}
+
+#[kithara::test]
+fn a_carried_track_asks_for_a_frame_as_the_pointer_moves() {
+    assert!(
+        frame_asked_while_moving(true),
+        "a track is drawn under the pointer, so it has to follow it: a window carrying one must \
+         paint again as the pointer moves"
+    );
+}
+
+#[kithara::test]
+fn an_empty_pointer_asks_for_no_frame_as_it_moves() {
+    assert!(
+        !frame_asked_while_moving(false),
+        "a pointer carrying nothing draws nothing that follows it, so moving it must leave the \
+         host with nothing to paint"
+    );
+}
+
+#[kithara::test]
+fn a_track_the_pointer_picks_up_is_drawn_under_it() {
+    let [empty, carrying, _] = carrying_pictures();
+
+    assert!(
+        carrying > empty,
+        "the application says the pointer is carrying a track, so the host it is embedded in must \
+         draw it: an empty pointer drew {empty} shapes, a carrying one drew {carrying}"
+    );
+}
+
+#[kithara::test]
+fn a_track_the_pointer_puts_down_is_taken_out_of_the_picture_again() {
+    let [empty, _, put_down] = carrying_pictures();
+
+    assert_eq!(
+        put_down, empty,
+        "a pointer carrying nothing must leave the picture exactly as it found it"
+    );
 }
 
 #[kithara::test]
