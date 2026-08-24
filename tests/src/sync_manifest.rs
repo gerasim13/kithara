@@ -71,6 +71,7 @@ impl OracleRegistration {
 #[must_use]
 pub fn registrations() -> Vec<OracleRegistration> {
     let mut rows = active_oracle_rows();
+    rows.extend(asset_provider_rows());
     rows.extend(sync_group_rows());
     rows.extend(beat_map_rows());
     rows.extend(transport_rows());
@@ -137,7 +138,7 @@ fn active_oracle_rows() -> Vec<OracleRegistration> {
             source_path: "tests/src/sync_matrix/oracle.rs",
             source_test: "post_sync_tempo_oracle_rejects_120_bpm_for_127_bpm_target",
             observable: "post-SYNC tempo is measured from PCM instead of trusted metadata",
-            preserved_contract: "120 BPM calibration; 127 BPM mismatch; 0.5 BPM tolerance",
+            preserved_contract: "120 BPM calibration; 127 BPM mismatch; exact nearest representable Cochlea tempo bin",
             destination_path: "tests/src/sync_matrix/oracle.rs",
             destination_test: "post_sync_tempo_oracle_rejects_120_bpm_for_127_bpm_target",
             state: OracleState::ActiveOracleSelfTest,
@@ -186,6 +187,80 @@ fn active_oracle_rows() -> Vec<OracleRegistration> {
         "tests/src/sync_matrix/oracle.rs",
         "exact_phase_oracle_rejects_one_beat_bar_phase_error",
     ));
+    rows
+}
+
+fn asset_provider_rows() -> Vec<OracleRegistration> {
+    let behaviors = [
+        "four_deck_sync",
+        "paused_sync",
+        "play_seek_sync",
+        "play_sync_seek",
+        "seek_play_sync",
+        "seek_sync_play",
+        "sequential_sync",
+        "sync_play_seek",
+        "sync_seek_play",
+        "tempo_down_30hz",
+        "tempo_up_120hz",
+    ];
+    let mut rows = behaviors
+        .iter()
+        .copied()
+        .enumerate()
+        .map(|(index, suffix)| {
+            gap(
+                &format!("SYNC-ASSET-{:03}", index + 1),
+                "Player/Queue oracle lacked an independent known-good asset provider",
+                "the shared signal oracle accepts a prepared aligned asset for the paired behavioral case",
+                "same SyncCase and SignalOracle; direct Resource decode; canonical cached FLAC fixture pipeline",
+                "tests/tests/kithara_queue/sync_behavioral_matrix.rs",
+                &format!("prepared_assets_validate_each_behavioral_oracle_case_{suffix}"),
+            )
+        })
+        .collect::<Vec<_>>();
+    rows.extend(
+        behaviors
+            .iter()
+            .copied()
+            .enumerate()
+            .map(|(index, suffix)| {
+                gap(
+                    &format!("SYNC-ASSET-UNSYNC-{:03}", index + 1),
+                    "a green oracle case did not prove that the same oracle rejects an unsynchronized asset",
+                    "the paired known-bad asset is rejected specifically by post-SYNC phase evidence",
+                    "same SyncCase and SignalOracle; 1024-frame phase defect beyond the 512-frame budget; no unrelated failure category",
+                    "tests/tests/kithara_queue/sync_behavioral_matrix.rs",
+                    &format!(
+                        "prepared_unsynced_assets_are_rejected_for_each_behavioral_oracle_case_{suffix}"
+                    ),
+                )
+            }),
+    );
+    let defects = [
+        ("one_frame", "exact one-frame activation defect"),
+        ("beat_ordinal", "one-bar beat ordinal defect"),
+        ("bar_phase", "one-beat bar-phase defect"),
+        ("drift", "two-BPM rhythmic drift"),
+        ("discontinuity", "one missing rhythmic event"),
+    ];
+    rows.extend(
+        defects
+            .into_iter()
+            .enumerate()
+            .map(|(index, (suffix, defect))| {
+                gap(
+                    &format!("SYNC-ASSET-NEG-{:03}", index + 1),
+                    "Player/Queue oracle lacked independent known-bad prepared assets",
+                    "the shared signal oracle rejects a prepared asset with the named defect",
+                    defect,
+                    "tests/tests/kithara_queue/sync_behavioral_matrix.rs",
+                    &format!(
+                        "signal_oracle_negative_controls_are_rejected_for_the_intended_reason_{suffix}"
+                    ),
+                )
+            }),
+    );
     rows
 }
 

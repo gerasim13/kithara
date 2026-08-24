@@ -7,7 +7,7 @@ use kithara::{
 
 use super::{
     CHANNELS, CaptureBundle, CaptureSource, DeckOutcome, Operation, PcmCapture, RENDER_FRAMES,
-    ScenarioFacts, SyncCase, SyncHarness, SyncMedia, SyncOracle, SyncOracleReport,
+    ScenarioFacts, SignalEvidence, SyncCase, SyncHarness, SyncMedia, SyncOracle, SyncOracleReport,
     persist_then_assert,
 };
 use crate::{offline::MixTapProbe, sync_control::SyncDeckControl};
@@ -120,14 +120,23 @@ impl SyncHarness {
             self.capture_failures
                 .push(format!("disable mix tap: {error:#}"));
         }
+        let label = label.into();
+        if tapped != backend {
+            self.capture_failures.push(format!(
+                "{label}: final session mix tap differs from rendered backend PCM"
+            ));
+        }
+        if drops != 0 {
+            self.capture_failures.push(format!(
+                "{label}: final session mix tap dropped {drops} samples"
+            ));
+        }
         PcmCapture {
-            backend_matches_tap: tapped == backend,
             channels: CHANNELS,
-            label: label.into(),
+            label,
             sample_rate: self.case.sample_rate,
             samples: tapped,
             start_session_frame,
-            tap_dropped_samples: drops,
         }
     }
 
@@ -226,15 +235,18 @@ impl SyncHarness {
             .collect();
         Ok(CaptureBundle {
             capture_failures,
-            control_mix,
-            control_replays,
-            deck_replays,
             facts,
             ledger,
             library_seed: self.media.library_seed,
             media_id: self.media.id.clone(),
-            mix,
-            pre_sync_replays,
+            signal: SignalEvidence {
+                control_mix,
+                control_replays,
+                deck_replays,
+                mix,
+                phase_observations: Vec::new(),
+                pre_sync_replays,
+            },
             sources,
         })
     }
@@ -331,7 +343,6 @@ impl SyncHarness {
             map_republishes: self.map_republishes,
             reloads: self.reloads,
             rebinds: self.rebinds,
-            phase_observations: Vec::new(),
             tempo_ride_points: self.tempo_ride_points,
             tempo_ride_requests: self.tempo_ride_requests,
             tempo_ride_transport_not_processed: self.tempo_ride_transport_not_processed,

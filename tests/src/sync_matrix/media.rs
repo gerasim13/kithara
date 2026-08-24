@@ -1,9 +1,4 @@
-use std::{
-    f64::consts::TAU,
-    fs,
-    num::NonZeroU32,
-    path::{Path, PathBuf},
-};
+use std::num::NonZeroU32;
 
 use anyhow::{Context, Result, bail};
 use kithara::{
@@ -12,74 +7,45 @@ use kithara::{
 };
 
 use super::{CHANNELS, SyncCase};
-use crate::{
-    TestTempDir,
-    signal_pcm::{Finite, SignalPcm, signal::SignalFn},
-    wav::create_wav_from_signal,
-};
-
-const TRACK_SECONDS: usize = 30;
-const TEMPOS: [f64; 4] = [96.0, 108.0, 132.0, 144.0];
-const TONES: [f64; 4] = [220.0, 880.0, 1_760.0, 3_520.0];
-
-#[derive(Clone, Copy)]
-struct PulseTrack {
-    bpm: f64,
-    tone_hz: f64,
-}
-
-impl SignalFn for PulseTrack {
-    fn sample(&self, frame: usize, sample_rate: u32) -> i16 {
-        let beat_frames = (f64::from(sample_rate) * 60.0 / self.bpm).round() as usize;
-        let into_beat = frame % beat_frames;
-        let burst_frames = beat_frames / 10;
-        if into_beat >= burst_frames {
-            return 0;
-        }
-        let decay = 1.0 - into_beat as f64 / burst_frames as f64;
-        let phase = TAU * self.tone_hz * into_beat as f64 / f64::from(sample_rate);
-        (phase.sin() * decay * decay * f64::from(i16::MAX) * 0.6) as i16
-    }
-}
+use crate::{SignalFormat, SignalSpec, SignalSpecLength, TestServerHelper};
 
 pub(super) struct SyntheticFixture {
-    _temp: TestTempDir,
+    _server: TestServerHelper,
     tracks: Vec<SyntheticTrack>,
 }
 
 struct SyntheticTrack {
     analysis: TrackAnalysis,
     bpm: f64,
-    path: PathBuf,
+    source: String,
     tone_hz: f64,
 }
 
 impl SyntheticFixture {
-    pub(super) fn new(case: SyncCase) -> Result<Self> {
-        if !(2..=4).contains(&case.decks) {
-            bail!("{case}: synthetic matrix supports two to four decks");
+    pub(super) async fn new(case: SyncCase) -> Result<Self> {
+        if case.signal_tracks.len() < 2 {
+            bail!("{case}: synthetic matrix requires at least two signal tracks");
         }
-        let temp = TestTempDir::new();
-        let tracks = TEMPOS
-            .iter()
-            .zip(TONES)
-            .enumerate()
-            .take(case.decks)
-            .map(|(index, (&bpm, tone_hz))| {
-                let path = temp
-                    .path()
-                    .join(format!("sync-{index}-{bpm:.0}-{}.wav", case.sample_rate));
-                write_pulse(&path, bpm, tone_hz, case.sample_rate)?;
-                Ok(SyntheticTrack {
-                    analysis: synthetic_analysis(bpm, case.sample_rate)?,
-                    bpm,
-                    path,
-                    tone_hz,
-                })
-            })
-            .collect::<Result<Vec<_>>>()?;
+        let server = TestServerHelper::new().await;
+        let spec = SignalSpec {
+            format: SignalFormat::Flac,
+            length: SignalSpecLength::Seconds(case.signal_seconds as f64),
+            channels: CHANNELS,
+            sample_rate: case.sample_rate,
+            bit_rate: None,
+        };
+        let mut tracks = Vec::with_capacity(case.signal_tracks.len());
+        for signal in case.signal_tracks {
+            let source = server.rhythmic_mix(&spec, &[*signal]).await.to_string();
+            tracks.push(SyntheticTrack {
+                analysis: synthetic_analysis(signal.bpm, case.sample_rate, case.signal_seconds)?,
+                bpm: signal.bpm,
+                source,
+                tone_hz: signal.tone_hz,
+            });
+        }
         Ok(Self {
-            _temp: temp,
+            _server: server,
             tracks,
         })
     }
@@ -91,8 +57,8 @@ impl SyntheticFixture {
                 .iter()
                 .map(|track| {
                     SyncTrackFixture::new(
-                        track.path.display().to_string(),
-                        track.path.to_string_lossy().into_owned(),
+                        track.source.clone(),
+                        track.source.clone(),
                         track.analysis.clone(),
                         format!("synthetic:{}:{}", track.bpm, track.tone_hz),
                     )
@@ -185,21 +151,9 @@ impl SyncMedia {
     }
 }
 
-fn write_pulse(path: &Path, bpm: f64, tone_hz: f64, sample_rate: u32) -> Result<()> {
-    let track_frames = sample_rate as usize * TRACK_SECONDS;
-    let pcm = SignalPcm::new(
-        PulseTrack { bpm, tone_hz },
-        sample_rate,
-        CHANNELS,
-        Finite::new(track_frames),
-    );
-    fs::write(path, create_wav_from_signal(pcm))
-        .with_context(|| format!("write deterministic pulse WAV '{}'", path.display()))
-}
-
-fn synthetic_analysis(bpm: f64, sample_rate: u32) -> Result<TrackAnalysis> {
+fn synthetic_analysis(bpm: f64, sample_rate: u32, signal_seconds: usize) -> Result<TrackAnalysis> {
     let track_seconds =
-        u64::try_from(TRACK_SECONDS).context("fixture duration must fit the source axis")?;
+        u64::try_from(signal_seconds).context("fixture duration must fit the source axis")?;
     let track_frames = u64::from(sample_rate) * track_seconds;
     let rate = NonZeroU32::new(sample_rate).context("fixture sample rate must be non-zero")?;
     let beat_frames = (f64::from(sample_rate) * 60.0 / bpm).round() as u64;

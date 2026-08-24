@@ -1,5 +1,7 @@
 use std::fmt;
 
+use crate::signal_pcm::signal::RhythmicTrack;
+
 pub(super) const CHANNELS: u16 = 2;
 pub(super) const COCHLEA_PHASE_SPREAD_BUDGET_FRAMES: u64 = 512;
 pub(super) const MAX_LOCKED_PHASE_ERROR_FRAMES: u64 = 1;
@@ -119,6 +121,8 @@ pub struct SyncCase {
     pub(super) sample_rate: u32,
     pub(super) seek_seconds: f64,
     pub(super) session_bpm: f64,
+    pub(super) signal_seconds: usize,
+    pub(super) signal_tracks: &'static [RhythmicTrack],
     pub(super) stagger_beats: f64,
     pub(super) tempo_ride: TempoRide,
     pub(super) tempo_updates_hz: u32,
@@ -128,19 +132,22 @@ impl SyncCase {
     #[must_use]
     pub const fn running(
         id: &'static str,
-        decks: usize,
         sample_rate: u32,
         order: OperationOrder,
+        signal_seconds: usize,
+        signal_tracks: &'static [RhythmicTrack],
     ) -> Self {
         Self {
             capture_beats: 6,
-            decks,
+            decks: signal_tracks.len(),
             id,
             initial: InitialDeckState::RunningStaggered,
             order,
             sample_rate,
             seek_seconds: 5.25,
             session_bpm: 120.0,
+            signal_seconds,
+            signal_tracks,
             stagger_beats: 3.0 / 8.0,
             tempo_ride: TempoRide::Triangle,
             tempo_updates_hz: 60,
@@ -150,19 +157,22 @@ impl SyncCase {
     #[must_use]
     pub const fn paused(
         id: &'static str,
-        decks: usize,
         sample_rate: u32,
         order: OperationOrder,
+        signal_seconds: usize,
+        signal_tracks: &'static [RhythmicTrack],
     ) -> Self {
         Self {
             capture_beats: 6,
-            decks,
+            decks: signal_tracks.len(),
             id,
             initial: InitialDeckState::Paused,
             order,
             sample_rate,
             seek_seconds: 5.25,
             session_bpm: 120.0,
+            signal_seconds,
+            signal_tracks,
             stagger_beats: 3.0 / 8.0,
             tempo_ride: TempoRide::Triangle,
             tempo_updates_hz: 60,

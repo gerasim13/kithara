@@ -68,7 +68,7 @@ pub(super) struct SyncHarness {
 
 impl SyncHarness {
     pub(super) async fn synthetic(case: SyncCase) -> Result<Self> {
-        let fixture = SyntheticFixture::new(case)?;
+        let fixture = SyntheticFixture::new(case).await?;
         let media = fixture.media();
         Self::open_inner(case, media, Some(fixture)).await
     }
@@ -82,8 +82,8 @@ impl SyncHarness {
         media: SyncMedia,
         fixture_guard: Option<SyntheticFixture>,
     ) -> Result<Self> {
-        if !(2..=4).contains(&case.decks) {
-            bail!("{case}: behavioral matrix supports two to four decks");
+        if case.decks < 2 {
+            bail!("{case}: behavioral matrix requires at least two decks");
         }
         media.validate(case)?;
         let session = Arc::new(OfflineSession::new_manual());

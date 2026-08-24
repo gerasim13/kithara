@@ -34,7 +34,7 @@ fn sync_oracle_manifest_is_complete_unique_and_exportable() {
     );
     assert_eq!(
         rows.len(),
-        108,
+        135,
         "manifest lost or silently added a frozen product, lower-level, or active oracle row"
     );
     let manifest = write_manifest_from_env().expect("optional sync manifest export succeeds");

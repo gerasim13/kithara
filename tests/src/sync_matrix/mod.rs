@@ -3,9 +3,11 @@ mod case;
 mod harness;
 mod media;
 mod oracle;
+mod provider;
 mod replay;
+mod signal_oracle;
 
-pub use capture::CaptureBundle;
+pub use capture::{CaptureBundle, SignalEvidence};
 use capture::{
     CaptureSource, DeckOutcome, LedgerEntry, LockedPhaseObservation, PcmCapture, ScenarioFacts,
 };
@@ -17,4 +19,11 @@ pub use case::{OperationOrder, SyncCase, TempoRide};
 use harness::SyncHarness;
 pub use media::{SyncMedia, SyncTrackFixture};
 pub use oracle::{SyncOracle, SyncOracleReport, persist_then_assert};
+pub use provider::{
+    AssetProvider, PlayerQueueProvider, SignalCapture, SignalDefect, SignalProvider,
+    evaluate_signal,
+};
 pub use replay::{assert_behavioral_row, run_synthetic_behavioral_row};
+pub use signal_oracle::{SignalFailure, SignalFailureKind, SignalOracle, SignalOracleReport};
+
+pub use crate::signal_pcm::signal::RhythmicTrack;
