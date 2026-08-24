@@ -21,12 +21,11 @@ use thiserror::Error;
 use tracing::{Span, trace_span};
 
 use super::{
-    built::{MasonryNode, RootParts, Watched},
+    built::{MasonryNode, PopoverRegistration, RootParts, Watched},
     custom::HostAction,
     leaf::cursor_icon,
     node::Node,
     picker::{self, HostedEngine},
-    popover::PopoverState,
 };
 use crate::{
     backends::VelloBackend,
@@ -42,7 +41,6 @@ use crate::{
 };
 
 type WindowTracker = (Rc<Cell<Option<Pt>>>, Option<WidgetId>, bool);
-type PopoverRegistration = (WidgetId, Rc<PopoverState>, Rc<dyn Fn() -> HostAction>);
 
 /// A Masonry render root with native-layer synchronization and typed actions.
 #[derive(fieldwork::Fieldwork)]
@@ -174,8 +172,8 @@ where
                 .popovers
                 .iter()
                 .rev()
-                .find(|(_, state, _)| state.is_open())
-                .map(|(_, _, dismiss)| dismiss())
+                .find(|popover| popover.state.is_open())
+                .map(|popover| (popover.dismiss)())
         {
             self.push_action(Box::new(action))?;
             return Ok(Handled::Yes);
@@ -257,9 +255,9 @@ where
     }
 
     fn sync_popovers(&self) {
-        for (id, state, _) in &self.popovers {
-            if let Some(widget) = self.root.get_widget(*id) {
-                state.set_anchor(widget.ctx().bounding_rect());
+        for popover in &self.popovers {
+            if let Some(widget) = self.root.get_widget(popover.anchor) {
+                popover.state.set_anchor(widget.ctx().bounding_rect());
             }
         }
     }
@@ -502,7 +500,7 @@ where
         let PointerEvent::Down(button) = event else {
             return;
         };
-        if self.popovers.iter().any(|(_, state, _)| state.is_open()) {
+        if self.popovers.iter().any(|popover| popover.state.is_open()) {
             return;
         }
         let position = button.state.logical_position();
@@ -510,8 +508,8 @@ where
         if self.window_owns(point) {
             return;
         }
-        for (_, state, _) in &self.popovers {
-            state.bank(point);
+        for popover in &self.popovers {
+            popover.state.bank(point);
         }
     }
 
@@ -519,20 +517,20 @@ where
         let PointerEvent::Down(button) = event else {
             return Ok(false);
         };
-        let Some((_, state, dismiss)) = self
+        let Some(popover) = self
             .popovers
             .iter()
             .rev()
-            .find(|(_, state, _)| state.is_open())
+            .find(|popover| popover.state.is_open())
         else {
             return Ok(false);
         };
         let position = button.state.logical_position();
         let point = Point::new(position.x, position.y);
-        if self.window_owns(point) || state.surface().contains(point) {
+        if self.window_owns(point) || popover.state.surface().contains(point) {
             return Ok(false);
         }
-        let action = dismiss();
+        let action = (popover.dismiss)();
         self.push_action(Box::new(action))?;
         Ok(true)
     }
@@ -579,6 +577,31 @@ where
         self.show_values(ctx);
         self.reread_plans(ctx);
         self.place_objects(ctx);
+        self.open_surfaces(ctx);
+    }
+
+    /// Opens the surfaces the document now holds open, and shuts the rest.
+    ///
+    /// This is the one thing a mounted surface cannot answer for itself. Every
+    /// other read reaches a leaf that is already standing, and re-reading it
+    /// changes what that leaf shows; a popover opening changes nothing inside
+    /// its content, only whether the content stands in the picture. So the flag
+    /// is read here, against the layer the content was mounted into.
+    fn open_surfaces(&mut self, ctx: Ctx<'_, '_>) {
+        let changed: Vec<WidgetId> = self
+            .popovers
+            .iter()
+            .filter(|popover| ctx.flag(Some(&popover.flag)) != popover.state.is_open())
+            .map(|popover| {
+                popover.state.latch(!popover.state.is_open());
+                popover.layer
+            })
+            .collect();
+        for layer in changed {
+            self.root.edit_widget(layer, |mut layer| {
+                layer.ctx.request_layout();
+            });
+        }
     }
 
     /// Carries the frame just read into the gestures already mounted.

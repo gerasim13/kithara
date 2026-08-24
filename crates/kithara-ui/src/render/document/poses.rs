@@ -56,12 +56,18 @@ impl Host for &mut Poses {
 
     fn group(&mut self, _group: Group<'_>, _children: Vec<GroupMount<Self::Output>>) {}
 
+    /// Poses only what the document shows. A host that mounts a shut surface
+    /// anyway keeps its content in the tree, but placing objects nobody can see
+    /// would be work on every refresh for a menu that is standing aside.
     fn popover(
         &mut self,
-        _popover: Popover,
+        popover: Popover<'_>,
         _anchor: Self::Output,
-        _content: Option<Self::Output>,
+        content: &mut dyn FnMut(&mut Self) -> Self::Output,
     ) {
+        if popover.is_open() {
+            content(self);
+        }
     }
 
     fn pressable(&mut self, _path: InternId, _child: Self::Output, _size: Option<SizeSpec>) {}

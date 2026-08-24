@@ -603,20 +603,19 @@ fn mount_popover<H>(
 where
     H: Host,
 {
-    let open = ctx.flag(Some(node.open));
     let anchor = expanded(node.anchor, &child_address(address, 0), branch, ctx, host);
-    let content =
-        open.then(|| expanded(node.content, &child_address(address, 1), branch, ctx, host));
+    let content = child_address(address, 1);
     host.popover(
         Popover {
             path: node.path,
             at: node.at,
             align: node.align,
-            open,
+            open: ctx.flag(Some(node.open)),
+            flag: node.open,
             size: node.size,
         },
         anchor,
-        content,
+        &mut |host| expanded(node.content, &content, branch, ctx, host),
     )
 }
 

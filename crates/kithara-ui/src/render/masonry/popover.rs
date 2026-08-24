@@ -122,9 +122,20 @@ impl Widget for PopoverLayer {
         _props: &mut PropertiesMut<'_>,
         constraints: &BoxConstraints,
     ) -> MasonrySize {
+        let viewport = constraints.max();
+        // A surface the document holds shut stands aside rather than being left
+        // out of the tree, and this is the one place that decides it: the child
+        // is stashed, so Masonry skips it for layout, paint and accessibility,
+        // and the surface keeps no size, so the box composed from it is empty
+        // and nothing lands in it.
+        let open = self.state.is_open();
+        ctx.set_stashed(&mut self.child, !open);
+        if !open {
+            self.surface_size = MasonrySize::ZERO;
+            return viewport;
+        }
         let frame = f64::from(self.border_width);
         let cap = f64::from(self.cap_height);
-        let viewport = constraints.max();
         let inner_max = solve::Size::new(
             (viewport.width - frame * 2.0).max(0.0).as_(),
             (viewport.height - frame * 2.0 - cap).max(0.0).as_(),
@@ -174,6 +185,12 @@ impl Widget for PopoverLayer {
     }
 
     fn paint(&mut self, _ctx: &mut PaintCtx<'_>, _props: &PropertiesRef<'_>, scene: &mut Scene) {
+        // The chrome is this layer's own, so an empty box does not stand it
+        // down the way it stands the content down: drawn against one it would
+        // still put a shape in the picture for a menu nobody opened.
+        if !self.state.is_open() {
+            return;
+        }
         let surface = self.state.surface();
         let rect = Rect {
             x: surface.x0.as_(),

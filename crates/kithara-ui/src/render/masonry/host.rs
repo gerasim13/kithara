@@ -628,48 +628,42 @@ where
 
     fn popover(
         &mut self,
-        popover: Popover,
+        popover: Popover<'_>,
         anchor: Self::Output,
-        content: Option<Self::Output>,
+        content: &mut dyn FnMut(&mut Self) -> Self::Output,
     ) -> Self::Output {
+        // The surface is mounted whether the document holds it open or shut:
+        // this tree keeps the shape it mounts, and a surface left out of it
+        // could never be opened again without rebuilding everything around it.
+        let content = content(self);
         let path = self.ctx.ui.resolve(popover.path()).to_owned();
         let state = self.state.popover(&path, popover.is_open());
         let dismiss = self.shared_control_action(path.clone(), ControlAction::Activate);
         let size = popover.size().map_or_else(|| anchor.declared(), declared);
         let mut output =
             MasonryNode::document(NodeLayout::Stack, size, vec![anchor], false, None, None);
-        output.add_popover(Rc::clone(&state), Rc::clone(&dismiss));
-        if let Some(content) = content {
-            let (
-                content,
-                declared,
-                layers,
-                popovers,
-                engine_targets,
-                engines,
-                native,
-                window,
-                watched,
-            ) = LayerParts::from(content);
-            let layer = PopoverLayer::new(
-                content,
-                declared,
-                state,
-                popover.at(),
-                popover.align(),
-                self.skin,
-            );
-            output.append_layers(layers);
-            output.append_popovers(popovers);
-            output.append_engine_targets(engine_targets);
-            output.append_engines(engines);
-            output.append_native(native);
-            output.append_watched(watched);
-            if let Some(window) = window {
-                output.set_window_tracker(window);
-            }
-            output.add_layer(masonry::core::NewWidget::new(layer).erased());
+        let (content, declared, layers, popovers, engine_targets, engines, native, window, watched) =
+            LayerParts::from(content);
+        let layer = masonry::core::NewWidget::new(PopoverLayer::new(
+            content,
+            declared,
+            Rc::clone(&state),
+            popover.at(),
+            popover.align(),
+            self.skin,
+        ))
+        .erased();
+        output.add_popover(layer.id(), popover.flag(), state, Rc::clone(&dismiss));
+        output.append_layers(layers);
+        output.append_popovers(popovers);
+        output.append_engine_targets(engine_targets);
+        output.append_engines(engines);
+        output.append_native(native);
+        output.append_watched(watched);
+        if let Some(window) = window {
+            output.set_window_tracker(window);
         }
+        output.add_layer(layer);
         output.set_actions(
             Some(self.control_action(path, ControlAction::Activate)),
             None,

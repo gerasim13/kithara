@@ -45,12 +45,20 @@ pub trait Host {
     /// the room it turned out to have; the rest are mounted and stand aside.
     fn group(&mut self, group: Group<'_>, children: Vec<GroupMount<Self::Output>>) -> Self::Output;
 
-    /// Mounts an anchored popover around its produced anchor and optional content.
+    /// Mounts an anchored popover around its produced anchor, and around the
+    /// content it expands from `content` if it wants it.
+    ///
+    /// The content is handed over unexpanded because the two kinds of host want
+    /// opposite things from a closed surface. One that rebuilds its tree every
+    /// frame gains nothing by producing content nobody sees, and pays for every
+    /// endpoint read below it. One that mounts a tree and keeps it has to mount
+    /// the content while it is shut, because a surface missing from the tree
+    /// could never be opened without rebuilding everything around it.
     fn popover(
         &mut self,
-        popover: Popover,
+        popover: Popover<'_>,
         anchor: Self::Output,
-        content: Option<Self::Output>,
+        content: &mut dyn FnMut(&mut Self) -> Self::Output,
     ) -> Self::Output;
 
     /// Mounts a pressable document node.

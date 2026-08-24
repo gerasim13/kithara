@@ -105,13 +105,16 @@ impl Host for WaveHost<'_> {
         Self::flatten(children.into_iter().map(|cell| cell.output))
     }
 
+    /// Counts what the document shows, so a shut surface contributes nothing.
     fn popover(
         &mut self,
-        _popover: Popover,
+        popover: Popover<'_>,
         mut anchor: Self::Output,
-        content: Option<Self::Output>,
+        content: &mut dyn FnMut(&mut Self) -> Self::Output,
     ) -> Self::Output {
-        anchor.extend(content.unwrap_or_default());
+        if popover.is_open() {
+            anchor.extend(content(self));
+        }
         anchor
     }
 

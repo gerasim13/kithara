@@ -837,6 +837,231 @@ fn a_hover_hands_the_runner_the_cursor_under_the_pointer() {
     );
 }
 
+/// An application whose one menu opens and closes on activation, the way the
+/// burger of the shipped app bar does, and which remembers whether a press ever
+/// reached the control the menu keeps inside itself.
+#[derive(Default)]
+struct Menu {
+    open: bool,
+    picked: bool,
+}
+
+impl Reads for Menu {
+    fn get(&self, endpoint: &str) -> Option<ReadValue<'_>> {
+        let id = endpoint.split_once('@').map_or(endpoint, |(id, _)| id);
+        (id == "fixture.menu").then_some(ReadValue::Bool(self.open))
+    }
+}
+
+impl App for Menu {
+    fn document(&self) -> &str {
+        "one.klayout.ron"
+    }
+
+    fn reads<R>(&self, with: impl FnOnce(&dyn Reads) -> R) -> R {
+        with(self)
+    }
+
+    fn update(&mut self, event: UiEvent) {
+        let UiEvent::Control { path, action } = event else {
+            return;
+        };
+        if action != ControlAction::Activate {
+            return;
+        }
+        if path.ends_with("inside") {
+            self.picked = true;
+        } else {
+            self.open = !self.open;
+        }
+    }
+}
+
+/// The endpoints the menu fixture binds to: the flag the document reads to know
+/// whether the menu stands open, and the commands its two pressables publish.
+struct MenuEndpoints {
+    open: EndpointDesc,
+    press: EndpointDesc,
+}
+
+impl Default for MenuEndpoints {
+    fn default() -> Self {
+        Self {
+            open: EndpointDesc::new(ValueKind::Bool),
+            press: EndpointDesc::new(ValueKind::Trigger),
+        }
+    }
+}
+
+impl EndpointRegistry for MenuEndpoints {
+    fn endpoint(&self, category: EndpointCategory, id: &EndpointId) -> Option<&EndpointDesc> {
+        match (category, id.0.as_str()) {
+            (EndpointCategory::Model, "fixture.menu") => Some(&self.open),
+            (EndpointCategory::Command, "fixture.toggle" | "fixture.pick") => Some(&self.press),
+            _ => None,
+        }
+    }
+}
+
+/// A burger with a menu hanging on it, the menu holding a control of its own.
+const MENU: &str = r#"Popover(id: "menu", open: Model(id: "fixture.menu"), align: Start,
+    anchor: Pressable(id: "burger", press: Command(id: "fixture.toggle"),
+        child: Spacer(id: "anchor", size: Some((w: Fixed(40.0), h: Fixed(20.0))))),
+    content: Pressable(id: "inside", press: Command(id: "fixture.pick"),
+        child: Spacer(id: "content", size: Some((w: Fixed(100.0), h: Fixed(60.0))))))"#;
+
+/// The same burger with no menu on it, which is the picture a shut menu owes.
+const NO_MENU: &str = r#"Pressable(id: "burger", press: Command(id: "fixture.toggle"),
+    child: Spacer(id: "anchor", size: Some((w: Fixed(40.0), h: Fixed(20.0)))))"#;
+
+/// Mounts one of the menu documents and hands it to the check.
+fn with_document(control: &str, check: impl FnOnce(Ui<'_, Menu>)) {
+    let endpoints = MenuEndpoints::default();
+    let resolver = one_control(control);
+    let skin = skin();
+    let ui = Ui::new(
+        Menu::default(),
+        Config::builder()
+            .endpoints(&endpoints)
+            .resolver(&resolver)
+            .skin(&skin)
+            .skin_doc(builtin::skin_doc())
+            .text(builtin::text_doc())
+            .build(),
+        (240, 120),
+        1.0,
+    )
+    .unwrap_or_else(|error| panic!("the menu fixture must mount: {error}"));
+    check(ui);
+}
+
+/// Puts one whole press through the hand at one point.
+fn press_at(ui: &mut Ui<'_, Menu>, at: Pt) {
+    ui.input(press(at, PointerPhase::Move));
+    ui.input(press(at, PointerPhase::Down));
+    ui.input(press(at, PointerPhase::Up));
+}
+
+/// Presses the anchor the menu hangs on, wherever the layout put it.
+fn press_the_anchor(ui: &mut Ui<'_, Menu>) {
+    let anchor = ui
+        .rect_of("demo/anchor")
+        .unwrap_or_else(|| panic!("the anchor the menu hangs on must be laid out"));
+    press_at(
+        ui,
+        Pt {
+            x: anchor.x + anchor.w / 2.0,
+            y: anchor.y + anchor.h / 2.0,
+        },
+    );
+}
+
+/// How much of a picture the host draws, read the way the control census in the
+/// retained host reads a picture.
+fn drawn_shapes(ui: &mut Ui<'_, Menu>) -> u32 {
+    ui.scene()
+        .unwrap_or_else(|error| panic!("the menu fixture must draw: {error}"))
+        .encoding()
+        .n_paths
+}
+
+/// What the host draws for the menu fixture at each of the three moments the
+/// document passes through: shut, opened by a press on its anchor, and shut
+/// again by a press away from it.
+fn menu_pictures() -> [u32; 3] {
+    let mut drawn = [0; 3];
+    with_document(MENU, |mut ui| {
+        drawn[0] = drawn_shapes(&mut ui);
+
+        press_the_anchor(&mut ui);
+        assert!(
+            ui.app().open,
+            "the press on the anchor must reach the application"
+        );
+        drawn[1] = drawn_shapes(&mut ui);
+
+        press_at(&mut ui, Pt { x: 200.0, y: 100.0 });
+        assert!(
+            !ui.app().open,
+            "a press away from an open menu must reach the application as a dismissal"
+        );
+        drawn[2] = drawn_shapes(&mut ui);
+    });
+    drawn
+}
+
+#[kithara::test]
+fn a_menu_the_document_holds_shut_draws_nothing_of_its_own() {
+    let mut shut = 0;
+    let mut bare = 0;
+    with_document(MENU, |mut ui| shut = drawn_shapes(&mut ui));
+    with_document(NO_MENU, |mut ui| bare = drawn_shapes(&mut ui));
+
+    assert_eq!(
+        shut, bare,
+        "a menu the document holds shut must leave the same picture as no menu at all"
+    );
+}
+
+#[kithara::test]
+fn opening_a_menu_puts_its_surface_in_the_picture() {
+    let [shut, open, _] = menu_pictures();
+
+    assert!(
+        open > shut,
+        "the application opened the menu, so the host it is embedded in must draw the surface it \
+         mounted for it: shut drew {shut} shapes, open drew {open}"
+    );
+}
+
+#[kithara::test]
+fn closing_a_menu_takes_its_surface_out_of_the_picture_again() {
+    let [shut, _, shut_again] = menu_pictures();
+
+    assert_eq!(
+        shut_again, shut,
+        "a menu the application closed must leave the picture exactly as it found it"
+    );
+}
+
+#[kithara::test]
+fn a_shut_menu_takes_no_press_over_the_room_its_surface_filled() {
+    with_document(MENU, |mut ui| {
+        press_the_anchor(&mut ui);
+        let surface = ui
+            .rect_of("demo/content")
+            .unwrap_or_else(|| panic!("an open menu must lay its content out"));
+        let anchor = ui
+            .rect_of("demo/anchor")
+            .unwrap_or_else(|| panic!("the anchor the menu hangs on must be laid out"));
+        let at = Pt {
+            x: surface.x + surface.w / 2.0,
+            y: surface.y + surface.h / 2.0,
+        };
+        assert!(
+            at.x < anchor.x
+                || at.x >= anchor.x + anchor.w
+                || at.y < anchor.y
+                || at.y >= anchor.y + anchor.h,
+            "the fixture must offer a point the menu covers and the burger does not: \
+             surface {surface:?}, anchor {anchor:?}"
+        );
+        press_at(&mut ui, Pt { x: 200.0, y: 100.0 });
+        assert!(
+            !ui.app().open,
+            "a press away from an open menu must shut it again"
+        );
+
+        press_at(&mut ui, at);
+
+        assert!(
+            !ui.app().picked,
+            "a menu the document holds shut must take no press over the room its surface filled \
+             while it was open"
+        );
+    });
+}
+
 #[kithara::test]
 fn scene_keeps_the_public_single_redraw_signature() {
     let endpoints = Registry("fixture.dial", EndpointDesc::new(ValueKind::Scalar));

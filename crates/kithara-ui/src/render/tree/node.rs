@@ -186,11 +186,17 @@ impl<'a> DocumentHost for IcedHost<'a, '_> {
 
     fn popover(
         &mut self,
-        popover: DocumentPopover,
+        popover: DocumentPopover<'_>,
         anchor: Self::Output,
-        content: Option<Self::Output>,
+        content: &mut dyn FnMut(&mut Self) -> Self::Output,
     ) -> Self::Output {
-        let content = content.unwrap_or_else(|| Space::new().into());
+        // This tree is thrown away and built again every frame, so a shut
+        // surface is cheapest left unbuilt: the frame that opens it builds it.
+        let content = if popover.is_open() {
+            content(self)
+        } else {
+            Space::new().into()
+        };
         let element = Anchored::new(
             anchor,
             content,

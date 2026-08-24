@@ -22,7 +22,24 @@ use crate::{
     solve,
 };
 
-type PopoverRegistration = (WidgetId, Rc<PopoverState>, Rc<dyn Fn() -> HostAction>);
+/// One popover the tree mounted, and what a root needs to keep it in step with
+/// the document it came from.
+///
+/// A retained tree mounts the surface whether the document holds it open or
+/// shut, because the shape it mounts is the shape it keeps. So the flag is kept
+/// beside it: the surface opening is not a value inside the content, it is
+/// whether the content stands in the picture at all.
+pub(crate) struct PopoverRegistration {
+    /// The node the surface opens from.
+    pub(crate) anchor: WidgetId,
+    /// The layer the surface is drawn in.
+    pub(crate) layer: WidgetId,
+    /// What the document reads to know whether the surface stands open.
+    pub(crate) flag: Binding,
+    pub(crate) state: Rc<PopoverState>,
+    pub(crate) dismiss: Rc<dyn Fn() -> HostAction>,
+}
+
 type WindowTracker = (Rc<Cell<Option<Pt>>>, Option<WidgetId>, bool);
 /// One mounted leaf and the document source it re-reads without rebuilding.
 pub(crate) enum Watched {
@@ -233,10 +250,18 @@ impl<Action> MasonryNode<Action> {
 
     pub(crate) fn add_popover(
         &mut self,
+        layer: WidgetId,
+        flag: &Binding,
         state: Rc<PopoverState>,
         dismiss: Rc<dyn Fn() -> HostAction>,
     ) {
-        self.popovers.push((self.widget.id(), state, dismiss));
+        self.popovers.push(PopoverRegistration {
+            anchor: self.widget.id(),
+            layer,
+            flag: flag.clone(),
+            state,
+            dismiss,
+        });
     }
 
     pub(crate) fn add_engine_control(&mut self, plan: HostedControlPlan, prepend: bool) {

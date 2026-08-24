@@ -1,4 +1,5 @@
 use crate::{
+    expand::Binding,
     ids::InternId,
     module::{PopoverAlign, PopoverAt},
     size::SizeSpec,
@@ -7,15 +8,16 @@ use crate::{
 /// Resolved toolkit-neutral placement of one document popover.
 #[derive(Clone, Copy, Debug)]
 #[non_exhaustive]
-pub struct Popover {
+pub struct Popover<'a> {
     pub(super) path: InternId,
     pub(super) at: PopoverAt,
     pub(super) align: PopoverAlign,
     pub(super) open: bool,
+    pub(super) flag: &'a Binding,
     pub(super) size: Option<SizeSpec>,
 }
 
-impl Popover {
+impl<'a> Popover<'a> {
     /// Event path published by the anchor.
     #[must_use]
     pub const fn path(&self) -> InternId {
@@ -34,10 +36,21 @@ impl Popover {
         self.align
     }
 
-    /// Whether overlay content is currently present.
+    /// Whether the document holds the overlay open right now.
     #[must_use]
     pub const fn is_open(&self) -> bool {
         self.open
+    }
+
+    /// What [`Self::is_open`] was read from.
+    ///
+    /// A host that rebuilds its tree every frame is handed the answer above and
+    /// needs no more. One that mounts a tree and keeps it has to read the flag
+    /// again when the document is shown again, because the surface opening is
+    /// not a value inside the content — it is the content being there at all.
+    #[must_use]
+    pub const fn flag(&self) -> &'a Binding {
+        self.flag
     }
 
     /// Effective in-flow size, inherited from the anchor.
