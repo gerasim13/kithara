@@ -393,10 +393,7 @@ impl HttpClient {
 
     #[must_use]
     pub fn with_observer(&self, observer: Option<Observer>) -> Self {
-        let options = NetOptions {
-            observer,
-            ..self.options.clone()
-        };
+        let options = self.options.with_observer(observer);
         let raw = RawHttp {
             inner: self.inner.clone(),
             options: options.clone(),

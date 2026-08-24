@@ -203,6 +203,46 @@ pub struct NetOptions {
     pub pool_idle_timeout: Duration,
 }
 
+impl NetOptions {
+    /// The same options carrying a different observer.
+    ///
+    /// The source is destructured exhaustively on purpose. Rebuilding through
+    /// the builder is the workspace form for a config, and a bare
+    /// `Self::builder()` chain would silently reset any option nobody
+    /// remembered to list here; the pattern has no rest, so an option added
+    /// to the struct breaks this build instead.
+    #[must_use]
+    pub fn with_observer(&self, observer: Option<Observer>) -> Self {
+        let Self {
+            byte_pool,
+            compression,
+            inactivity_timeout,
+            impersonate,
+            observer: _,
+            retry_policy,
+            is_insecure,
+            body_queue_capacity,
+            body_queue_resume_at,
+            pool_max_idle_per_host,
+            pool_idle_timeout,
+        } = self.clone();
+
+        Self::builder()
+            .byte_pool(byte_pool)
+            .compression(compression)
+            .inactivity_timeout(inactivity_timeout)
+            .impersonate(impersonate)
+            .maybe_observer(observer)
+            .retry_policy(retry_policy)
+            .is_insecure(is_insecure)
+            .body_queue_capacity(body_queue_capacity)
+            .body_queue_resume_at(body_queue_resume_at)
+            .pool_max_idle_per_host(pool_max_idle_per_host)
+            .pool_idle_timeout(pool_idle_timeout)
+            .build()
+    }
+}
+
 impl Default for NetOptions {
     fn default() -> Self {
         Self::builder().build()
