@@ -46,13 +46,12 @@ impl Packager for Backend {
 struct Ring;
 
 impl Ring {
-    const CHANNELS: usize = 2;
     const SECONDS: usize = 2;
 
     /// Interleaved samples the mix tap may run ahead of the packager by.
-    fn capacity(sample_rate: usize) -> Option<usize> {
+    fn capacity(sample_rate: usize, channels: usize) -> Option<usize> {
         sample_rate
-            .checked_mul(Self::CHANNELS)
+            .checked_mul(channels)
             .and_then(|capacity| capacity.checked_mul(Self::SECONDS))
     }
 }
@@ -70,8 +69,7 @@ fn start(
     shutdown: &CancelToken,
     config: &BroadcastConfig,
 ) -> BroadcastResult<Stream> {
-    let sample_rate = config.sample_rate;
-    let capacity = ring_capacity(sample_rate)?;
+    let capacity = ring_capacity(config)?;
     let (producer, consumer) = HeapRb::<f32>::new(capacity).split();
     let drops = Arc::new(AtomicU64::new(0));
 
@@ -101,13 +99,18 @@ fn measured_config(session: &SessionHandle) -> BroadcastResult<Option<BroadcastC
         .map(|sample_rate| BroadcastConfig::builder().sample_rate(sample_rate).build()))
 }
 
-fn ring_capacity(sample_rate: u32) -> BroadcastResult<usize> {
-    let sample_rate = usize::try_from(sample_rate)?;
+fn ring_capacity(config: &BroadcastConfig) -> BroadcastResult<usize> {
+    let sample_rate = usize::try_from(config.sample_rate)?;
     if sample_rate == 0 {
         return Err("session returned zero sample rate".into());
     }
 
-    Ring::capacity(sample_rate).ok_or_else(|| "broadcast ring capacity overflow".into())
+    let channels = usize::from(config.channels);
+    if channels == 0 {
+        return Err("broadcast configured with no channels".into());
+    }
+
+    Ring::capacity(sample_rate, channels).ok_or_else(|| "broadcast ring capacity overflow".into())
 }
 
 #[cfg(test)]
@@ -237,6 +240,19 @@ mod tests {
 
     #[kithara::test]
     fn missing_session_sample_rate_is_rejected_before_ring_creation() {
-        assert!(ring_capacity(0).is_err());
+        assert!(ring_capacity(&BroadcastConfig::builder().sample_rate(0).build()).is_err());
+    }
+
+    /// The ring carries interleaved samples, so its size has to follow the
+    /// channel count the broadcast is configured for. Sizing it for a fixed
+    /// stereo pair starves a wider mix of half its lead.
+    #[kithara::test]
+    fn the_ring_is_sized_for_the_configured_channel_count() {
+        let stereo =
+            ring_capacity(&BroadcastConfig::builder().channels(2).build()).expect("a stereo ring");
+        let quad =
+            ring_capacity(&BroadcastConfig::builder().channels(4).build()).expect("a quad ring");
+
+        assert_eq!(quad, stereo * 2);
     }
 }
