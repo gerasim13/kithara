@@ -7,7 +7,8 @@ use delegate::delegate;
 use kithara_platform::sync::{Arc, Mutex};
 use kithara_stream::{
     Activity, ByteMap, ConstructionGate, MediaInfo, OpenedReader, PlayheadWrite, SeekControl,
-    SeekObserve, SourcePhase, SourceSeekAnchor, Stream, StreamType, WorkerWake,
+    SeekObserve, SourcePhase, SourceSeekAnchor, Stream, StreamResult, StreamType, WaitOutcome,
+    WorkerWake,
 };
 
 use super::offset::OffsetReader;
@@ -79,7 +80,7 @@ impl<T: StreamType> SharedStream<T> {
             pub(crate) fn len(&self) -> Option<u64>;
             pub(crate) fn media_info(&self) -> Option<MediaInfo>;
             pub(crate) fn abr_handle(&self) -> Option<kithara_abr::AbrHandle>;
-            pub(crate) fn format_change_segment_range(&self) -> kithara_stream::StreamResult<Range<u64>>;
+            pub(crate) fn format_change_segment_range(&self) -> StreamResult<Range<u64>>;
             pub(crate) fn seek_time_anchor(&self, position: kithara_platform::time::Duration) -> Result<Option<SourceSeekAnchor>, io::Error>;
             /// Build a fresh reader-side event-sink instance from the inner source.
             pub(crate) fn take_reader_event_sink(&self) -> Option<kithara_stream::BoxedEventSink>;
@@ -100,6 +101,10 @@ impl<T: StreamType> SharedStream<T> {
             pub(crate) fn phase(&self) -> SourcePhase;
             /// Point-in-time readiness for a specific byte range.
             pub(crate) fn phase_at(&self, range: Range<u64>) -> SourcePhase;
+            /// Zero-budget readiness probe that also files `range` as reader
+            /// demand with the source — the channel dispatch budgets follow.
+            /// See [`Stream::probe_wait`].
+            pub(crate) fn probe_wait(&self, range: Range<u64>) -> StreamResult<WaitOutcome>;
             /// The reader→peer wake handle — `Some` for segmented sources
             /// (HLS) that push a downloader peer. The FSM arms it on the
             /// produce core (seek-apply / finalize); the scheduler shell
