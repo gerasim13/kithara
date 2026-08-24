@@ -21,8 +21,9 @@ use kithara::{
     },
     play::{
         Cmd, PlayerConfig, PlayerImpl, Reply, Resource, ResourceConfig, SeekOutcome,
-        SelectTransition, SessionDispatcher, apply_mix,
+        SessionDispatcher, apply_mix,
     },
+    queue::{Queue, QueueConfig, Transition},
 };
 use kithara_integration_tests::{
     TestServerHelper, audio_artifact::write_audio_artifact, cochlea::CochleaReport,
@@ -164,7 +165,7 @@ struct CapturedAudio {
     flash(false),
     timeout(Duration::from_secs(300))
 )]
-async fn no_sync_real_media_matrix_is_continuous_and_unsynchronized() {
+async fn no_sync_player_queue_real_media_matrix_is_continuous_and_unsynchronized() {
     run_real_media_matrix(false).await;
 }
 
@@ -393,7 +394,7 @@ async fn capture_pass(
         runtime::drain_all_events(decks, label, EventPolicy::AudiblePlayback, failures);
     }
     for deck in &*decks {
-        deck.player.process_notifications();
+        deck.queue.process_notifications();
     }
     runtime::drain_all_events(
         decks,
@@ -453,7 +454,7 @@ async fn reset_for_capture(
     }
 
     for deck in &*decks {
-        deck.player.pause();
+        deck.queue.pause();
     }
     settle_controls(
         case,
@@ -489,7 +490,7 @@ async fn reset_for_capture(
     }
     let mut requested = true;
     for (deck_index, deck) in decks.iter().enumerate() {
-        match deck.player.seek_seconds(deck.capture_target_secs) {
+        match deck.queue.seek(deck.capture_target_secs) {
             Ok(SeekOutcome::Landed { .. }) => {}
             Ok(SeekOutcome::PastEof { duration, .. }) => {
                 requested = false;
@@ -532,7 +533,7 @@ async fn reset_for_capture(
     }
 
     for deck in &*decks {
-        deck.player.play();
+        deck.queue.play();
     }
     let mut completed = false;
     for _ in 0..oracle::blocks_for_secs(case.host_rate, MAX_SEEK_SECS) {
@@ -553,9 +554,9 @@ async fn reset_for_capture(
         for deck in &*decks {
             if deck.seek_complete_epoch == deck.seek_request_epoch
                 && deck.muted_seek_underrun_epoch.is_none()
-                && deck.player.is_playing()
+                && deck.queue.is_playing()
             {
-                deck.player.pause();
+                deck.queue.pause();
             }
         }
         if decks.iter().any(|deck| deck.seek_terminal) {
@@ -570,7 +571,7 @@ async fn reset_for_capture(
         }
     }
     for deck in &*decks {
-        deck.player.pause();
+        deck.queue.pause();
     }
     if !completed {
         failures.push(format!(
@@ -625,7 +626,7 @@ async fn reset_for_capture(
         return false;
     }
     for deck in &*decks {
-        deck.player.play();
+        deck.queue.play();
     }
     settle_controls(
         case,
@@ -743,17 +744,12 @@ fn assess_position_advance(
 fn load_decks(case: &Case, decks: &[Deck], failures: &mut Vec<String>) {
     for (deck_index, deck) in decks.iter().enumerate() {
         runtime::record_control_state(case, deck_index, deck, "before playback", failures);
-        deck.player
-            .select_item_with_crossfade(
-                0,
-                SelectTransition {
-                    autoplay: false,
-                    crossfade_seconds: 0.0,
-                },
-            )
+        deck.queue
+            .select(deck.track_id, Transition::None)
             .unwrap_or_else(|error| {
                 panic!("{} deck {deck_index}: select resource: {error}", case.label)
             });
+        deck.queue.pause();
     }
 }
 
@@ -820,14 +816,18 @@ async fn prepare_deck(
         .build();
     let reference = open_resource(case, deck_index, "reference", reference_config).await;
     let reference_events = reference.subscribe();
-    player.insert(
-        resource,
-        Some(Arc::from(format!("{}-deck-{deck_index}", case.label))),
-        None,
+    let queue = Queue::new(
+        QueueConfig::builder()
+            .player(Arc::clone(&player))
+            .should_autoplay(false)
+            .build(),
     );
+    let track_id = queue.insert_loaded_for_test(resource);
 
     Deck {
         player,
+        queue,
+        track_id,
         reference,
         reference_events,
         controls,
@@ -880,7 +880,7 @@ async fn open_resource(
 
 async fn render_paced(session: &OfflineSession, decks: &[Deck], sample_rate: u32) -> Vec<f32> {
     for deck in decks {
-        deck.player.process_notifications();
+        deck.queue.process_notifications();
     }
     let block = session.render(BLOCK_FRAMES);
     time::sleep(Duration::from_secs_f64(

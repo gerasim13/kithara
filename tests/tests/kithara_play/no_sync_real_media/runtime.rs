@@ -6,6 +6,7 @@ use kithara::{
     },
     platform::{sync::Arc, tokio::sync::broadcast::error::TryRecvError},
     play::{Cmd, PlayerImpl, Reply, Resource, SessionDispatcher, SessionError},
+    queue::{Queue, TrackId},
 };
 use kithara_integration_tests::offline::OfflineSession;
 use serde::Serialize;
@@ -14,6 +15,8 @@ use super::{CHANNELS, Case, SEEK_POSITION_TOLERANCE_SECS, SOURCE_RATE};
 
 pub(super) struct Deck {
     pub(super) player: Arc<PlayerImpl>,
+    pub(super) queue: Queue,
+    pub(super) track_id: TrackId,
     pub(super) reference: Resource,
     pub(super) reference_events: EventReceiver,
     pub(super) controls: Arc<StretchControls>,
