@@ -1,29 +1,7 @@
-use kithara::audio::effects::eq::{MAX_GAIN_DB, MIN_GAIN_DB};
 use kithara_ui::{
     ids::EndpointId,
     registry::{EndpointCategory, EndpointDesc, EndpointRegistry, ValueKind},
 };
-
-/// EQ knob travel in dB: knob `0.0` is [`MIN_GAIN_DB`], knob `0.5` is unity,
-/// knob `1.0` is [`MAX_GAIN_DB`]. The range belongs to the EQ band itself, so
-/// the knob asks `kithara-audio` for it rather than keeping its own copy.
-pub(in crate::gui) fn db_from_knob(knob: f32) -> f32 {
-    let offset = knob.clamp(0.0, 1.0) - 0.5;
-    2.0 * offset * half_span(offset)
-}
-
-pub(in crate::gui) fn knob_from_db(db: f32) -> f32 {
-    let db = db.clamp(MIN_GAIN_DB, MAX_GAIN_DB);
-    0.5 + db / (2.0 * half_span(db))
-}
-
-fn half_span(side: f32) -> f32 {
-    if side < 0.0 {
-        -MIN_GAIN_DB
-    } else {
-        MAX_GAIN_DB
-    }
-}
 
 struct Endpoint {
     scopes: &'static [&'static str],
@@ -497,34 +475,5 @@ impl EndpointRegistry for Registry {
             .iter()
             .find(|entry| entry.endpoint.category == category && entry.endpoint.id == id.0)
             .map(|entry| &entry.desc)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use kithara_test_utils::kithara;
-
-    use super::*;
-
-    const STEPS: usize = 256;
-
-    #[kithara::test]
-    fn unity_gain_sits_at_the_middle_of_the_knob_travel() {
-        assert_eq!(knob_from_db(0.0), 0.5);
-        assert_eq!(db_from_knob(0.5), 0.0);
-        assert_eq!(db_from_knob(0.0), MIN_GAIN_DB);
-        assert_eq!(db_from_knob(1.0), MAX_GAIN_DB);
-    }
-
-    #[kithara::test]
-    fn reading_back_a_written_gain_lands_on_the_same_knob_position() {
-        for step in 0..=STEPS {
-            let knob = step as f32 / STEPS as f32;
-            let round_trip = knob_from_db(db_from_knob(knob));
-            assert!(
-                (round_trip - knob).abs() < 1e-6,
-                "knob {knob} came back as {round_trip}"
-            );
-        }
     }
 }

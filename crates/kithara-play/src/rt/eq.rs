@@ -11,10 +11,8 @@ use firewheel::{
         ProcBuffers, ProcExtra, ProcInfo, ProcStreamCtx, ProcessStatus,
     },
 };
-use kithara_audio::{EqBandConfig, IsolatorEq};
+use kithara_audio::{EqBandConfig, IsolatorEq, effects::eq::GainDb};
 use kithara_test_utils::kithara;
-
-use crate::bridge::{EQ_MAX_GAIN_DB, EQ_MIN_GAIN_DB};
 
 #[derive(Diff, Patch, Debug, Clone, Copy, PartialEq)]
 pub(crate) struct MasterEqBand {
@@ -36,7 +34,7 @@ impl MasterEqNode {
             .iter()
             .map(|band| MasterEqBand {
                 frequency: band.frequency(),
-                gain_db: band.gain_db(),
+                gain_db: f32::from(band.gain_db()),
                 q_factor: band.q_factor(),
                 kind: band.kind() as u8,
             })
@@ -48,9 +46,9 @@ impl MasterEqNode {
         }
     }
 
-    pub(crate) fn set_gain(&mut self, index: usize, gain_db: f32) {
+    pub(crate) fn set_gain(&mut self, index: usize, gain_db: GainDb) {
         if let Some(band) = self.bands.get_mut(index) {
-            band.gain_db = gain_db.clamp(EQ_MIN_GAIN_DB, EQ_MAX_GAIN_DB);
+            band.gain_db = f32::from(gain_db);
         }
     }
 }
@@ -90,8 +88,8 @@ impl MasterEqProcessor {
         let mut eq_r = IsolatorEq::new(&bands, sample_rate.get());
 
         for (i, band) in params.bands.iter().enumerate() {
-            eq_l.set_gain(i, band.gain_db);
-            eq_r.set_gain(i, band.gain_db);
+            eq_l.set_gain(i, GainDb::from(band.gain_db));
+            eq_r.set_gain(i, GainDb::from(band.gain_db));
         }
 
         Self {
@@ -104,8 +102,8 @@ impl MasterEqProcessor {
 
     fn sync_gains(&mut self) {
         for (i, band) in self.params.bands.iter().enumerate() {
-            self.eq_l.set_gain(i, band.gain_db);
-            self.eq_r.set_gain(i, band.gain_db);
+            self.eq_l.set_gain(i, GainDb::from(band.gain_db));
+            self.eq_r.set_gain(i, GainDb::from(band.gain_db));
         }
     }
 }
@@ -118,7 +116,7 @@ fn bands_from_params(params: &MasterEqNode) -> Vec<EqBandConfig> {
             EqBandConfig::builder()
                 .frequency(b.frequency)
                 .q_factor(b.q_factor)
-                .gain_db(b.gain_db)
+                .gain_db(GainDb::from(b.gain_db))
                 .kind(b.kind.into())
                 .build()
         })

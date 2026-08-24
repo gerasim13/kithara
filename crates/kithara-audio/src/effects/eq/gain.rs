@@ -1,6 +1,6 @@
 use num_traits::cast::AsPrimitive;
 
-use super::{MAX_GAIN_DB, MIN_GAIN_DB};
+use super::GainDb;
 
 struct Consts;
 
@@ -15,13 +15,13 @@ impl Consts {
 
 struct GainState {
     current_linear: f32,
-    target_db: f32,
+    target_db: GainDb,
     target_linear: f32,
 }
 
 impl GainState {
-    fn new(gain_db: f32) -> Self {
-        let linear = db_to_linear(gain_db);
+    fn new(gain_db: GainDb) -> Self {
+        let linear = db_to_linear(f32::from(gain_db));
         Self {
             target_db: gain_db,
             target_linear: linear,
@@ -29,13 +29,13 @@ impl GainState {
         }
     }
 
-    fn set_target(&mut self, gain_db: f32) {
-        let clamped = gain_db.clamp(MIN_GAIN_DB, MAX_GAIN_DB);
-        if (clamped - self.target_db).abs() < f32::EPSILON {
+    fn set_target(&mut self, gain_db: GainDb) {
+        let db = f32::from(gain_db);
+        if (db - f32::from(self.target_db)).abs() < f32::EPSILON {
             return;
         }
-        self.target_db = clamped;
-        self.target_linear = db_to_linear(clamped);
+        self.target_db = gain_db;
+        self.target_linear = db_to_linear(db);
     }
 
     #[inline]
@@ -62,7 +62,7 @@ pub(crate) struct GainBank {
 }
 
 impl GainBank {
-    pub(crate) fn new(gains_db: impl Iterator<Item = f32>, sample_rate: f32) -> Self {
+    pub(crate) fn new(gains_db: impl Iterator<Item = GainDb>, sample_rate: f32) -> Self {
         let gains = gains_db.map(GainState::new).collect();
         let mut bank = Self {
             gains,
@@ -93,7 +93,7 @@ impl GainBank {
             pub(crate) const fn len(&self) -> usize;
             #[expr($.map(|state| state.target_db))]
             #[call(get)]
-            pub(crate) fn target(&self, band: usize) -> Option<f32>;
+            pub(crate) fn target(&self, band: usize) -> Option<GainDb>;
         }
     }
 
@@ -115,7 +115,7 @@ impl GainBank {
 
     pub(crate) fn reset(&mut self) {
         for gain in &mut self.gains {
-            gain.target_db = 0.0;
+            gain.target_db = GainDb::default();
             gain.target_linear = 1.0;
             gain.current_linear = 1.0;
         }
@@ -123,7 +123,7 @@ impl GainBank {
         self.refresh_fastpath();
     }
 
-    pub(crate) fn set(&mut self, band: usize, gain_db: f32) {
+    pub(crate) fn set(&mut self, band: usize, gain_db: GainDb) {
         if let Some(state) = self.gains.get_mut(band) {
             state.set_target(gain_db);
         }
@@ -149,7 +149,7 @@ impl GainBank {
 
 #[inline]
 fn db_to_linear(db: f32) -> f32 {
-    if db <= MIN_GAIN_DB {
+    if db <= f32::from(GainDb::MIN) {
         0.0
     } else {
         Consts::LOG_FREQ_BASE.powf(db / Consts::DB_DIVISOR)
@@ -171,7 +171,7 @@ mod tests {
 
     #[kithara::test]
     fn db_to_linear_kill_at_min() {
-        assert!(db_to_linear(MIN_GAIN_DB).abs() < f32::EPSILON);
+        assert!(db_to_linear(f32::from(GainDb::MIN)).abs() < f32::EPSILON);
         assert!(db_to_linear(-30.0).abs() < f32::EPSILON);
     }
 

@@ -81,6 +81,7 @@ impl<'a, 'b: 'a> Node<'a> for &'a ReadRoot<'b> {
 
 #[cfg(test)]
 mod tests {
+    use ::kithara::audio::effects::eq::GainDb;
     use iced::Size;
     use kithara_test_utils::kithara;
     use kithara_ui::render::{ReadValue, Reads, Walk};
@@ -190,7 +191,7 @@ mod tests {
     fn deck(tempo: &str) -> (UiState, DeckCache) {
         let mut ui = UiState::empty();
         ui.track_name = "Loaded".to_string();
-        ui.eq_bands = vec![0.0; 3];
+        ui.eq_bands = vec![GainDb::default(); 3];
         ui.duration = 120.0;
         ui.abr_variants = hls_ladder();
         let mut cache = DeckCache::default();
@@ -205,7 +206,7 @@ mod tests {
         let mut fixture = Fixture::new(["+2.0%", "-1.0%"]);
         fixture.eq_mode = mode;
         for (ui, _) in &mut fixture.decks {
-            ui.eq_bands = vec![0.0; mode.bands().len()];
+            ui.eq_bands = vec![GainDb::default(); mode.bands().len()];
         }
         fixture
     }
