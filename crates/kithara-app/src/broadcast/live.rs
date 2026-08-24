@@ -5,6 +5,7 @@ use kithara::{
 use kithara_platform::{
     CancelToken,
     sync::{Arc, atomic::AtomicU64},
+    time::Duration,
 };
 use ringbuf::{HeapRb, traits::Split};
 
@@ -27,11 +28,15 @@ impl Packager for Backend {
         live.handle.status().is_live
     }
 
-    fn start(session: &SessionHandle, shutdown: &CancelToken) -> BroadcastResult<Option<Stream>> {
+    fn start(
+        session: &SessionHandle,
+        shutdown: &CancelToken,
+        tap_lead: Duration,
+    ) -> BroadcastResult<Option<Stream>> {
         let Some(config) = measured_config(session)? else {
             return Ok(None);
         };
-        start(session, shutdown, &config).map(Some)
+        start(session, shutdown, &config, tap_lead).map(Some)
     }
 
     fn stop(live: Stream) {
@@ -46,13 +51,13 @@ impl Packager for Backend {
 struct Ring;
 
 impl Ring {
-    const SECONDS: usize = 2;
+    const MILLIS_PER_SECOND: usize = 1_000;
 
     /// Interleaved samples the mix tap may run ahead of the packager by.
-    fn capacity(sample_rate: usize, channels: usize) -> Option<usize> {
-        sample_rate
-            .checked_mul(channels)
-            .and_then(|capacity| capacity.checked_mul(Self::SECONDS))
+    fn capacity(sample_rate: usize, channels: usize, lead: Duration) -> Option<usize> {
+        let millis = usize::try_from(lead.as_millis()).ok()?;
+        let frames = sample_rate.checked_mul(millis)? / Self::MILLIS_PER_SECOND;
+        frames.checked_mul(channels)
     }
 }
 
@@ -68,8 +73,9 @@ fn start(
     session: &SessionHandle,
     shutdown: &CancelToken,
     config: &BroadcastConfig,
+    tap_lead: Duration,
 ) -> BroadcastResult<Stream> {
-    let capacity = ring_capacity(config)?;
+    let capacity = ring_capacity(config, tap_lead)?;
     let (producer, consumer) = HeapRb::<f32>::new(capacity).split();
     let drops = Arc::new(AtomicU64::new(0));
 
@@ -99,7 +105,7 @@ fn measured_config(session: &SessionHandle) -> BroadcastResult<Option<BroadcastC
         .map(|sample_rate| BroadcastConfig::builder().sample_rate(sample_rate).build()))
 }
 
-fn ring_capacity(config: &BroadcastConfig) -> BroadcastResult<usize> {
+fn ring_capacity(config: &BroadcastConfig, tap_lead: Duration) -> BroadcastResult<usize> {
     let sample_rate = usize::try_from(config.sample_rate)?;
     if sample_rate == 0 {
         return Err("session returned zero sample rate".into());
@@ -110,7 +116,14 @@ fn ring_capacity(config: &BroadcastConfig) -> BroadcastResult<usize> {
         return Err("broadcast configured with no channels".into());
     }
 
-    Ring::capacity(sample_rate, channels).ok_or_else(|| "broadcast ring capacity overflow".into())
+    match Ring::capacity(sample_rate, channels, tap_lead) {
+        None => Err("broadcast ring capacity overflow".into()),
+        Some(0) => Err(format!(
+            "broadcast tap lead {tap_lead:?} holds no samples at {sample_rate} Hz"
+        )
+        .into()),
+        Some(capacity) => Ok(capacity),
+    }
 }
 
 #[cfg(test)]
@@ -125,10 +138,12 @@ mod tests {
             atomic::{AtomicU32, Ordering},
         },
         thread,
-        time::Duration,
     };
 
     use super::*;
+
+    /// The lead every test that does not measure the ring starts on air with.
+    const TAP_LEAD: Duration = Duration::from_secs(2);
 
     struct SampleRateSession {
         sample_rate: AtomicU32,
@@ -178,7 +193,7 @@ mod tests {
         let dispatcher = Arc::new(SampleRateSession::new(sample_rate));
         let session = SessionHandle::new(dispatcher.clone());
         let shutdown = CancelToken::root();
-        let stream = Backend::start(&session, &shutdown)
+        let stream = Backend::start(&session, &shutdown, TAP_LEAD)
             .expect("the packager starts")
             .expect("a measured rate yields a stream");
         (stream, dispatcher, shutdown)
@@ -191,7 +206,7 @@ mod tests {
 
         assert!(measured_config(&session).unwrap().is_none());
         assert!(
-            Backend::start(&session, &CancelToken::root())
+            Backend::start(&session, &CancelToken::root(), TAP_LEAD)
                 .unwrap()
                 .is_none(),
             "an unmeasured rate is a retry, not a failure"
@@ -240,7 +255,9 @@ mod tests {
 
     #[kithara::test]
     fn missing_session_sample_rate_is_rejected_before_ring_creation() {
-        assert!(ring_capacity(&BroadcastConfig::builder().sample_rate(0).build()).is_err());
+        assert!(
+            ring_capacity(&BroadcastConfig::builder().sample_rate(0).build(), TAP_LEAD).is_err()
+        );
     }
 
     /// The ring carries interleaved samples, so its size has to follow the
@@ -248,11 +265,33 @@ mod tests {
     /// stereo pair starves a wider mix of half its lead.
     #[kithara::test]
     fn the_ring_is_sized_for_the_configured_channel_count() {
-        let stereo =
-            ring_capacity(&BroadcastConfig::builder().channels(2).build()).expect("a stereo ring");
-        let quad =
-            ring_capacity(&BroadcastConfig::builder().channels(4).build()).expect("a quad ring");
+        let stereo = ring_capacity(&BroadcastConfig::builder().channels(2).build(), TAP_LEAD)
+            .expect("a stereo ring");
+        let quad = ring_capacity(&BroadcastConfig::builder().channels(4).build(), TAP_LEAD)
+            .expect("a quad ring");
 
         assert_eq!(quad, stereo * 2);
+    }
+
+    /// The lead is what the ring buys: how long the packager may stall before
+    /// the mix tap starts dropping samples. Asking for twice the lead has to
+    /// yield twice the ring, or the knob does not mean what it says.
+    #[kithara::test]
+    fn a_longer_tap_lead_buys_a_proportionally_deeper_ring() {
+        let config = BroadcastConfig::builder().build();
+
+        let short = ring_capacity(&config, TAP_LEAD).expect("a ring for the default lead");
+        let long = ring_capacity(&config, TAP_LEAD * 2).expect("a ring for twice the lead");
+
+        assert_eq!(long, short * 2);
+    }
+
+    /// A lead below one sample rounds down to an empty ring, which would take
+    /// the mix tap's every write. That is a configuration error, not a ring.
+    #[kithara::test]
+    fn a_tap_lead_too_short_to_hold_a_sample_is_rejected() {
+        let config = BroadcastConfig::builder().build();
+
+        assert!(ring_capacity(&config, Duration::ZERO).is_err());
     }
 }
