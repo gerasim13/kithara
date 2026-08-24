@@ -230,6 +230,7 @@ pub trait BeatMap: Send + Sync + 'static {
 
 /// One immutable, revisioned musical-map observation.
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub struct BeatMapSnapshot {
     pub(crate) data: Arc<BeatMapSnapshotData>,
 }
@@ -252,7 +253,7 @@ pub(crate) struct BeatMapSnapshotData {
     pub(crate) geometry: BeatMapGeometry,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) enum BeatMapGeometry {
     Segments(SegmentSet),
     Host {
@@ -289,6 +290,20 @@ impl TryFrom<(BeatMapId, BeatMapRevision, MapState, SegmentSet)> for BeatMapSnap
 }
 
 impl BeatMapSnapshot {
+    /// Copies this immutable geometry under a caller-owned map stamp.
+    #[must_use]
+    pub fn restamp(&self, stamp: MapStamp) -> Self {
+        Self {
+            data: Arc::new(BeatMapSnapshotData {
+                id: stamp.map_id(),
+                revision: stamp.revision(),
+                state: self.state(),
+                axis: self.axis(),
+                geometry: self.data.geometry.clone(),
+            }),
+        }
+    }
+
     fn new_segments(
         id: BeatMapId,
         revision: BeatMapRevision,

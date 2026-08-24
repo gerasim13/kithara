@@ -5,6 +5,7 @@ mod coordinate;
 mod host;
 mod map;
 mod segment;
+mod sync;
 
 pub use anchor::{SessionAnchor, SessionBeat, SessionFrame};
 pub use asset::{AssetBeatMap, AssetMapPublishError, AssetMapPublisher, AssetMapUpdate};
@@ -23,4 +24,8 @@ pub use map::CoordinateError;
 pub use segment::{
     BeatEvidence, BeatMarker, BeatsPerMinute, MapRegion, MapSegment, Meter, MeterError, MeterFacts,
     SegmentDraft, SegmentEndpoint, SegmentError, SegmentFacts, SegmentSet,
+};
+pub use sync::{
+    SyncAlignment, SyncGroup, SyncGroupEdit, SyncGroupMember, SyncGroupSnapshot,
+    SyncGroupTopologyError, SyncGroupUpdate, TopologyRevision, TopologyStamp,
 };

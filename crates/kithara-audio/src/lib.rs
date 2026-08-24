@@ -43,7 +43,9 @@ pub use musical::{
     BeatsPerMinute, CoordinateError, FrameUncertainty, HostAxis, HostBeatMap, HostEpoch, MapAxis,
     MapCoordinateError, MapPoint, MapPosition, MapQuery, MapRegion, MapSegment, MapStamp, MapState,
     MapUnavailable, Meter, MeterError, MeterFacts, SegmentDraft, SegmentEndpoint, SegmentError,
-    SegmentFacts, SegmentSet, SessionAnchor, SessionBeat, SessionFrame,
+    SegmentFacts, SegmentSet, SessionAnchor, SessionBeat, SessionFrame, SyncAlignment, SyncGroup,
+    SyncGroupEdit, SyncGroupMember, SyncGroupSnapshot, SyncGroupTopologyError, SyncGroupUpdate,
+    TopologyRevision, TopologyStamp,
 };
 pub use pipeline::{
     config::{AudioConfig, AudioDecoderConfig, ConsumerWakeMode, DecoderResamplerSettings},
