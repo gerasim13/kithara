@@ -77,6 +77,16 @@ pub mod signal_url;
 pub mod storage_ext;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod swallow_detector;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod sync_artifact;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod sync_control;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod sync_fixture;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod sync_manifest;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod sync_matrix;
 pub mod test_defaults;
 pub mod test_server;
 pub mod token_store;

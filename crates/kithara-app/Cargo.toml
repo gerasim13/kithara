@@ -109,6 +109,10 @@ kithara-test-utils = { workspace = true, features = ["mock", "probe", "hang"] }
 futures = { workspace = true }
 tempfile = { workspace = true }
 
+[target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "ios"), not(target_os = "android")))'.dev-dependencies]
+cochlea-features = { workspace = true }
+firewheel = { workspace = true }
+
 [target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))'.dev-dependencies]
 kithara-net = { workspace = true, default-features = false, features = ["client-reqwest", "tls-rustls"] }
 

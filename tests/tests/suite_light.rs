@@ -6,6 +6,9 @@
 
 mod common;
 
+#[path = "sync_manifest.rs"]
+mod sync_manifest;
+
 #[path = "common/continuity.rs"]
 pub(crate) mod continuity;
 #[path = "common/gapless.rs"]

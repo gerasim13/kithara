@@ -339,3 +339,7 @@ harness = false
 [[bench]]
 name = "rt_block_budget"
 harness = false
+
+[[bench]]
+name = "sync_plan"
+harness = false

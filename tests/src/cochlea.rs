@@ -1,7 +1,11 @@
-use cochlea_features::{Audio, ProbeOpts, SegmentOpts, probe, segment_timeline};
+use std::sync::OnceLock;
+
+use cochlea_features::{
+    Audio, ProbeOpts, SegmentOpts, TempoOpts, estimate_tempo, probe, segment_timeline,
+};
 use serde::Serialize;
 
-const WINDOW_MS: f64 = 5.0;
+pub(crate) const DEFAULT_WINDOW_MS: f64 = 5.0;
 
 /// Cochlea measurements used by final-PCM acceptance tests and manifests.
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -19,6 +23,14 @@ pub struct CochleaReport {
     pub silent_segments: usize,
     /// Detected onset timestamps in milliseconds.
     pub onset_times_ms: Vec<f64>,
+    /// Detected beat timestamps in milliseconds.
+    pub beat_times_ms: Vec<f64>,
+    /// Estimated tempo in beats per minute, when defined.
+    pub tempo_bpm: Option<f64>,
+    /// Confidence of the tempo estimate.
+    pub tempo_confidence: f64,
+    /// Whether Cochlea classified the rhythm as clear.
+    pub clear_rhythm: bool,
     /// Number of samples at or beyond full scale.
     pub clipped_samples: usize,
     /// Whether the measured true peak exceeds 0 dBTP.
@@ -39,12 +51,15 @@ impl CochleaReport {
             sample_rate,
         };
         let report = probe(&audio, &ProbeOpts::default());
-        let silent_segments =
-            segment_timeline(&audio, &SegmentOpts::default().with_window_ms(WINDOW_MS))
-                .segments
-                .iter()
-                .filter(|segment| segment.silent)
-                .count();
+        let tempo = estimate_tempo(&audio, &TempoOpts::default());
+        let silent_segments = segment_timeline(
+            &audio,
+            &SegmentOpts::default().with_window_ms(DEFAULT_WINDOW_MS),
+        )
+        .segments
+        .iter()
+        .filter(|segment| segment.silent)
+        .count();
 
         Self {
             integrated_lufs: report.loudness.integrated_lufs,
@@ -53,6 +68,10 @@ impl CochleaReport {
             true_peak_dbtp: report.loudness.true_peak_dbtp,
             silent_segments,
             onset_times_ms: report.onsets.times_ms,
+            beat_times_ms: tempo.beats_ms,
+            tempo_bpm: tempo.bpm,
+            tempo_confidence: tempo.confidence,
+            clear_rhythm: tempo.clear_rhythm,
             clipped_samples: report.clipping.clipped_samples,
             true_peak_over_0dbtp: report.clipping.true_peak_over_0dbtp,
             leading_silence_ms: report.silence.leading_ms,
@@ -99,13 +118,13 @@ pub fn continuity_failures(
     if candidate.true_peak_over_0dbtp && !control.true_peak_over_0dbtp {
         failures.push(format!("{label}: candidate-only true peak over 0 dBTP"));
     }
-    if candidate.leading_silence_ms > control.leading_silence_ms + WINDOW_MS {
+    if candidate.leading_silence_ms > control.leading_silence_ms + DEFAULT_WINDOW_MS {
         failures.push(format!(
             "{label}: extra leading silence: candidate={:.3}ms, control={:.3}ms",
             candidate.leading_silence_ms, control.leading_silence_ms,
         ));
     }
-    if candidate.trailing_silence_ms > control.trailing_silence_ms + WINDOW_MS {
+    if candidate.trailing_silence_ms > control.trailing_silence_ms + DEFAULT_WINDOW_MS {
         failures.push(format!(
             "{label}: extra trailing silence: candidate={:.3}ms, control={:.3}ms",
             candidate.trailing_silence_ms, control.trailing_silence_ms,
@@ -157,6 +176,92 @@ pub fn assert_oracle_load_bearing(
         control_report.clipped_samples + channel_count,
         "Cochlea oracle did not count one injected clipped frame"
     );
+
+    assert_phase_oracle_load_bearing();
+}
+
+pub(crate) fn assert_rhythmic_oracle_load_bearing() {
+    const CHANNELS: usize = 2;
+    const QUANTUM_FRAMES: usize = 512;
+    const SAMPLE_RATE: u32 = 48_000;
+
+    let control = rhythmic_calibration(CHANNELS, SAMPLE_RATE);
+    assert_oracle_load_bearing(&control, CHANNELS as u16, SAMPLE_RATE, QUANTUM_FRAMES);
+}
+
+fn assert_phase_oracle_load_bearing() {
+    const CHANNELS: usize = 2;
+    const QUANTUM_FRAMES: usize = 512;
+    const SAMPLE_RATE: u32 = 48_000;
+
+    static CALIBRATED: OnceLock<()> = OnceLock::new();
+    CALIBRATED.get_or_init(|| {
+        let rhythmic = rhythmic_calibration(CHANNELS, SAMPLE_RATE);
+        let rhythmic_audio = Audio {
+            samples: rhythmic.clone(),
+            channels: CHANNELS as u16,
+            sample_rate: SAMPLE_RATE,
+        };
+        let rhythmic_report = estimate_tempo(&rhythmic_audio, &TempoOpts::default());
+        assert!(
+            rhythmic_report.clear_rhythm && rhythmic_report.beats_ms.len() >= 3,
+            "Cochlea phase oracle needs a clear rhythmic calibration signal: {rhythmic_report:?}"
+        );
+        let shift_samples = QUANTUM_FRAMES.saturating_mul(CHANNELS);
+        assert!(
+            shift_samples < rhythmic.len(),
+            "Cochlea oracle control is too short for the phase-shift injection"
+        );
+        let mut shifted = vec![0.0; shift_samples];
+        shifted.extend_from_slice(&rhythmic[..rhythmic.len() - shift_samples]);
+        let shifted_audio = Audio {
+            samples: shifted,
+            channels: CHANNELS as u16,
+            sample_rate: SAMPLE_RATE,
+        };
+        let shifted_report = estimate_tempo(&shifted_audio, &TempoOpts::default());
+        let compared = rhythmic_report
+            .beats_ms
+            .iter()
+            .zip(&shifted_report.beats_ms)
+            .take(8)
+            .map(|(control, shifted)| (shifted - control).abs())
+            .collect::<Vec<_>>();
+        let expected_shift_ms =
+            QUANTUM_FRAMES as f64 / f64::from(SAMPLE_RATE) * 1_000.0;
+        assert!(
+            compared.len() >= 3
+                && compared
+                    .iter()
+                    .filter(|offset| **offset >= expected_shift_ms / 2.0)
+                    .count()
+                    >= compared.len() / 2,
+            "Cochlea oracle did not reject a {QUANTUM_FRAMES}-frame phase shift: expected about {expected_shift_ms:.3}ms, offsets={compared:?}"
+        );
+    });
+}
+
+pub(crate) fn rhythmic_calibration(channels: usize, sample_rate: u32) -> Vec<f32> {
+    const BPM: f64 = 120.0;
+    const SECONDS: usize = 12;
+    const TONE_HZ: f64 = 880.0;
+
+    let frames = sample_rate as usize * SECONDS;
+    let beat_frames = (f64::from(sample_rate) * 60.0 / BPM).round() as usize;
+    let burst_frames = beat_frames / 10;
+    let mut pcm = Vec::with_capacity(frames.saturating_mul(channels));
+    for frame in 0..frames {
+        let into_beat = frame % beat_frames;
+        let sample = if frame >= beat_frames && into_beat < burst_frames {
+            let decay = 1.0 - into_beat as f64 / burst_frames as f64;
+            let phase = std::f64::consts::TAU * TONE_HZ * into_beat as f64 / f64::from(sample_rate);
+            (phase.sin() * decay * decay * 0.6) as f32
+        } else {
+            0.0
+        };
+        pcm.extend(std::iter::repeat_n(sample, channels));
+    }
+    pcm
 }
 
 #[cfg(test)]

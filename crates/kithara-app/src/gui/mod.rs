@@ -5,6 +5,13 @@ mod message;
 mod mix;
 mod reads;
 mod subscription;
+#[cfg(all(
+    test,
+    not(target_arch = "wasm32"),
+    not(target_os = "ios"),
+    not(target_os = "android")
+))]
+mod sync;
 mod theme;
 mod ui;
 mod update;
