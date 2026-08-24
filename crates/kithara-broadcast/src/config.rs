@@ -9,44 +9,35 @@ use crate::{BroadcastError, BroadcastResult};
 #[derive(Debug, Clone, Builder)]
 #[non_exhaustive]
 pub struct BroadcastConfig {
-    #[builder(default = BroadcastConfig::SAMPLE_RATE)]
+    /// Sample rate of the mix.
+    #[builder(default = 48_000)]
     pub sample_rate: u32,
-    #[builder(default = BroadcastConfig::CHANNELS)]
+    /// Channel count of the mix.
+    #[builder(default = 2)]
     pub channels: u16,
-    #[builder(default = BroadcastConfig::BIT_RATE)]
+    /// AAC-LC bit rate the encoder targets.
+    #[builder(default = 128_000)]
     pub bit_rate: u64,
-    #[builder(default = BroadcastConfig::TARGET)]
+    /// Media duration a segment is cut at.
+    #[builder(default = Duration::from_secs(4))]
     pub segment_target: Duration,
-    #[builder(default = BroadcastConfig::WINDOW)]
+    /// Segments a client sees in the playlist.
+    #[builder(default = 6)]
     pub window: usize,
-    #[builder(default = BroadcastConfig::GRACE)]
+    /// Segments kept fetchable past the playlist window.
+    #[builder(default = 3)]
     pub grace: usize,
-    #[builder(default = BroadcastConfig::BIND)]
+    /// Loopback on an ephemeral port.
+    #[builder(default = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0))]
     pub bind: SocketAddr,
+    /// How long the packager thread waits before polling the mix tap again
+    /// after it found no samples. The floor on how promptly a segment is cut
+    /// once audio resumes, paid for in wake-ups on an idle broadcast.
+    #[builder(default = Duration::from_millis(2))]
+    pub poll_interval: Duration,
 }
 
 impl BroadcastConfig {
-    /// AAC-LC bit rate the encoder targets.
-    pub const BIT_RATE: u64 = 128_000;
-
-    /// Loopback on an ephemeral port.
-    pub const BIND: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0);
-
-    /// Channel count of the mix.
-    pub const CHANNELS: u16 = 2;
-
-    /// Segments kept fetchable past the playlist window.
-    pub const GRACE: usize = 3;
-
-    /// Sample rate of the mix.
-    pub const SAMPLE_RATE: u32 = 48_000;
-
-    /// Media duration a segment is cut at.
-    pub const TARGET: Duration = Duration::from_secs(4);
-
-    /// Segments a client sees in the playlist.
-    pub const WINDOW: usize = 6;
-
     const MILLIS_PER_SECOND: u64 = 1_000;
 
     const MIN_TARGETS: u64 = 3;

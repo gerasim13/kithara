@@ -1,5 +1,6 @@
 use kithara::{
     abr::AbrHandle,
+    audio::effects::eq::GainDb,
     events::{AbrMode, BpmInfo, DjEvent, Event, MediaTime, PlayerEvent, SlotId, VariantInfo},
     play::StretchControls,
     prelude::EngineLoadSnapshot,
@@ -35,7 +36,7 @@ pub struct UiState {
     pub selected_variant: Option<usize>,
     pub track_name: String,
     pub abr_variants: Vec<AbrVariant>,
-    pub eq_bands: Vec<f32>,
+    pub eq_bands: Vec<GainDb>,
     pub tracks: Vec<TrackEntry>,
     pub abr_mode_is_auto: bool,
     pub is_seeking: bool,
@@ -64,7 +65,7 @@ impl UiState {
             position: queue.position_seconds().unwrap_or(0.0),
             duration: queue.duration_seconds().unwrap_or(0.0),
             volume: queue.volume(),
-            eq_bands: vec![0.0; queue.eq_band_count()],
+            eq_bands: vec![GainDb::default(); queue.eq_band_count()],
             analysis: None,
             beat_marks: Arc::from(Vec::new()),
             downbeat_marks: Arc::from(Vec::new()),
@@ -356,9 +357,9 @@ fn spawn_listener(
 
 /// Push the desired EQ gains down to the engine. Calls for bands with no
 /// active slot are no-ops; the master EQ persists once a slot accepts them.
-fn reapply_eq(queue: &Queue, eq_bands: &[f32]) {
+fn reapply_eq(queue: &Queue, eq_bands: &[GainDb]) {
     for (band, &gain) in eq_bands.iter().enumerate() {
-        let _ = queue.set_eq_gain(band, gain);
+        let _ = queue.set_eq_gain(band, f32::from(gain));
     }
 }
 

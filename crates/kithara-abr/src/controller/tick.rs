@@ -44,9 +44,9 @@ impl AbrController {
         let bus = entry.bus();
         if let Some(ref bus) = bus {
             let mut throttle = entry.throttle.lock();
-            let emit = throttle
-                .last_throughput_sample_at
-                .is_none_or(|t| now.duration_since(t) >= Self::MIN_THROUGHPUT_SAMPLE_INTERVAL);
+            let emit = throttle.last_throughput_sample_at.is_none_or(|t| {
+                now.duration_since(t) >= self.settings.throughput_sample_min_interval
+            });
             if emit {
                 throttle.last_throughput_sample_at = Some(now);
                 drop(throttle);
