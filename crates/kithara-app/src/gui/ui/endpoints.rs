@@ -1,25 +1,28 @@
+use kithara::audio::effects::eq::{MAX_GAIN_DB, MIN_GAIN_DB};
 use kithara_ui::{
     ids::EndpointId,
     registry::{EndpointCategory, EndpointDesc, EndpointRegistry, ValueKind},
 };
 
-/// EQ knob travel in dB: knob `0.0` is `EQ_MIN_DB`, knob `0.5` is unity, knob
-/// `1.0` is `EQ_MAX_DB`.
-pub(in crate::gui) const EQ_MIN_DB: f32 = -24.0;
-pub(in crate::gui) const EQ_MAX_DB: f32 = 6.0;
-
+/// EQ knob travel in dB: knob `0.0` is [`MIN_GAIN_DB`], knob `0.5` is unity,
+/// knob `1.0` is [`MAX_GAIN_DB`]. The range belongs to the EQ band itself, so
+/// the knob asks `kithara-audio` for it rather than keeping its own copy.
 pub(in crate::gui) fn db_from_knob(knob: f32) -> f32 {
     let offset = knob.clamp(0.0, 1.0) - 0.5;
     2.0 * offset * half_span(offset)
 }
 
 pub(in crate::gui) fn knob_from_db(db: f32) -> f32 {
-    let db = db.clamp(EQ_MIN_DB, EQ_MAX_DB);
+    let db = db.clamp(MIN_GAIN_DB, MAX_GAIN_DB);
     0.5 + db / (2.0 * half_span(db))
 }
 
 fn half_span(side: f32) -> f32 {
-    if side < 0.0 { -EQ_MIN_DB } else { EQ_MAX_DB }
+    if side < 0.0 {
+        -MIN_GAIN_DB
+    } else {
+        MAX_GAIN_DB
+    }
 }
 
 struct Endpoint {
@@ -509,8 +512,8 @@ mod tests {
     fn unity_gain_sits_at_the_middle_of_the_knob_travel() {
         assert_eq!(knob_from_db(0.0), 0.5);
         assert_eq!(db_from_knob(0.5), 0.0);
-        assert_eq!(db_from_knob(0.0), EQ_MIN_DB);
-        assert_eq!(db_from_knob(1.0), EQ_MAX_DB);
+        assert_eq!(db_from_knob(0.0), MIN_GAIN_DB);
+        assert_eq!(db_from_knob(1.0), MAX_GAIN_DB);
     }
 
     #[kithara::test]
