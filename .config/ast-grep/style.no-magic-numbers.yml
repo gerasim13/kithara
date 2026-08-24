@@ -75,6 +75,11 @@ rule:
               stopBy: end
         - not:
             inside:
+              kind: macro_invocation
+              regex: '^ranged!'
+              stopBy: end
+        - not:
+            inside:
               all:
                 - kind: mod_item
                 - follows:
