@@ -11,7 +11,7 @@ use kithara::{
     stream::dl::Downloader,
 };
 use kithara_drm::KeyProcessorRegistry;
-use kithara_platform::{CancelToken, sync::Arc};
+use kithara_platform::{CancelToken, sync::Arc, time::Duration};
 use url::Url;
 
 use crate::{baked, theme::Palette};
@@ -97,6 +97,12 @@ pub struct AppConfig {
     /// Crossfade duration in seconds.
     #[builder(default = baked::BAKED_CROSSFADE_SECONDS)]
     pub crossfade_seconds: f32,
+    /// Media duration the broadcast mix tap may run ahead of the packager by.
+    /// The app allocates that ring, so it owns its depth: a longer lead rides
+    /// out a longer packager stall and pays for it in the memory those
+    /// interleaved samples occupy.
+    #[builder(default = Duration::from_secs(2))]
+    pub broadcast_tap_lead: Duration,
     /// Upper bound on waveform buckets (native = one per FFT window). Only
     /// caps very long tracks, to bound the cached blob.
     #[builder(default = 96_000)]
@@ -127,6 +133,7 @@ impl fmt::Debug for AppConfig {
                 &self.should_accept_invalid_certs,
             )
             .field("crossfade_seconds", &self.crossfade_seconds)
+            .field("broadcast_tap_lead", &self.broadcast_tap_lead)
             .field("waveform_max_buckets", &self.waveform_max_buckets)
             .field("eq_bands", &self.eq_bands)
             .field("beat_analysis", &self.beat_analysis)

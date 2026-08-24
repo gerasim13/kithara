@@ -4389,6 +4389,7 @@ dependencies = [
 name = "kithara-beat"
 version = "0.0.1-alpha4"
 dependencies = [
+ "bon",
  "kithara-test-utils",
  "kithara-workspace-hack",
  "num-traits",

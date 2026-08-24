@@ -1,5 +1,5 @@
 use kithara::play::SessionHandle;
-use kithara_platform::CancelToken;
+use kithara_platform::{CancelToken, time::Duration};
 
 use super::state::{BroadcastResult, Packager};
 
@@ -18,7 +18,11 @@ impl Packager for Backend {
         match *live {}
     }
 
-    fn start(_session: &SessionHandle, _shutdown: &CancelToken) -> BroadcastResult<Option<Stream>> {
+    fn start(
+        _session: &SessionHandle,
+        _shutdown: &CancelToken,
+        _tap_lead: Duration,
+    ) -> BroadcastResult<Option<Stream>> {
         Err("this build carries no broadcaster; rebuild with `--features broadcast`".into())
     }
 
