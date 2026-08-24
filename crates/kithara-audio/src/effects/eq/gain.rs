@@ -5,8 +5,6 @@ use super::GainDb;
 struct Consts;
 
 impl Consts {
-    const DB_DIVISOR: f32 = 20.0;
-    const LOG_FREQ_BASE: f32 = 10.0;
     const MS_PER_SEC: f32 = 1000.0;
     const SMOOTH_BLOCK_SIZE: usize = 32;
     const SMOOTH_CONVERGENCE_THRESHOLD: f32 = 0.0001;
@@ -21,7 +19,7 @@ struct GainState {
 
 impl GainState {
     fn new(gain_db: GainDb) -> Self {
-        let linear = db_to_linear(f32::from(gain_db));
+        let linear = gain_db.linear();
         Self {
             target_db: gain_db,
             target_linear: linear,
@@ -35,7 +33,7 @@ impl GainState {
             return;
         }
         self.target_db = gain_db;
-        self.target_linear = db_to_linear(db);
+        self.target_linear = gain_db.linear();
     }
 
     #[inline]
@@ -115,9 +113,7 @@ impl GainBank {
 
     pub(crate) fn reset(&mut self) {
         for gain in &mut self.gains {
-            gain.target_db = GainDb::default();
-            gain.target_linear = 1.0;
-            gain.current_linear = 1.0;
+            *gain = GainState::new(GainDb::default());
         }
         self.block_counter = 0;
         self.refresh_fastpath();
@@ -147,38 +143,9 @@ impl GainBank {
     }
 }
 
-#[inline]
-fn db_to_linear(db: f32) -> f32 {
-    if db <= f32::from(GainDb::MIN) {
-        0.0
-    } else {
-        Consts::LOG_FREQ_BASE.powf(db / Consts::DB_DIVISOR)
-    }
-}
-
 fn compute_smooth_coeff(sample_rate: f32) -> f32 {
     let tau = Consts::SMOOTH_TIME_MS / Consts::MS_PER_SEC;
     let block_size_f32: f32 = Consts::SMOOTH_BLOCK_SIZE.as_();
     let effective_rate = sample_rate / block_size_f32;
     1.0 - (-1.0 / (tau * effective_rate)).exp()
-}
-
-#[cfg(test)]
-mod tests {
-    use kithara_test_utils::kithara;
-
-    use super::*;
-
-    #[kithara::test]
-    fn db_to_linear_kill_at_min() {
-        assert!(db_to_linear(f32::from(GainDb::MIN)).abs() < f32::EPSILON);
-        assert!(db_to_linear(-30.0).abs() < f32::EPSILON);
-    }
-
-    #[kithara::test]
-    #[case::unity_at_zero(0.0, 1.0, 0.001)]
-    #[case::boost_at_6db(6.0, 2.0, 0.02)]
-    fn db_to_linear_maps_to_gain(#[case] db: f32, #[case] expected: f32, #[case] eps: f32) {
-        assert!((db_to_linear(db) - expected).abs() < eps);
-    }
 }

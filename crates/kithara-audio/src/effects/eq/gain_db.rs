@@ -1,5 +1,12 @@
 use kithara_platform::ranged;
 
+struct Consts;
+
+impl Consts {
+    const DB_DIVISOR: f32 = 20.0;
+    const DB_LOG_BASE: f32 = 10.0;
+}
+
 ranged!(
     /// Gain of one EQ band, in dB. `0.0` is unity and [`GainDb::MIN`] kills the
     /// band. The range is asymmetric on purpose: cutting stays useful far past
@@ -23,6 +30,16 @@ impl GainDb {
     pub fn knob(self) -> f32 {
         let db = f32::from(self);
         0.5 + db / (2.0 * Self::half_span(db))
+    }
+
+    /// This gain as a linear amplitude. The floor of the range means the band
+    /// is off, so it maps to exact zero rather than to the very small number
+    /// the dB curve gives there.
+    pub(crate) fn linear(self) -> f32 {
+        if self == Self::MIN {
+            return 0.0;
+        }
+        Consts::DB_LOG_BASE.powf(f32::from(self) / Consts::DB_DIVISOR)
     }
 
     fn half_span(side: f32) -> f32 {
@@ -78,5 +95,28 @@ mod tests {
     fn a_knob_past_its_travel_is_held_at_the_end() {
         assert_eq!(GainDb::at_knob(2.0), GainDb::MAX);
         assert_eq!(GainDb::at_knob(-1.0), GainDb::MIN);
+    }
+
+    #[kithara::test]
+    fn the_floor_of_the_range_is_exact_silence() {
+        assert_eq!(GainDb::MIN.linear(), 0.0);
+    }
+
+    /// A request below the floor is held at the floor, so it kills the band
+    /// too rather than landing on the dB curve's value for it.
+    #[kithara::test]
+    fn a_gain_under_the_floor_is_exact_silence_as_well() {
+        assert_eq!(GainDb::from(-30.0).linear(), 0.0);
+    }
+
+    #[kithara::test]
+    #[case::unity_at_zero(0.0, 1.0, 0.001)]
+    #[case::boost_at_6db(6.0, 2.0, 0.02)]
+    fn a_gain_in_db_maps_onto_its_amplitude(
+        #[case] db: f32,
+        #[case] expected: f32,
+        #[case] eps: f32,
+    ) {
+        assert!((GainDb::from(db).linear() - expected).abs() < eps);
     }
 }
