@@ -42,8 +42,5 @@ pub use kithara_audio::{
 };
 pub use kithara_net::Headers;
 pub use player::{PlayerConfig, PlayerImpl, SelectTransition};
-pub use resource::{
-    AssetMapRegistration, AssetMapRegistry, AssetMapRegistryError, PlaybackResamplerBackend,
-    Resource, ResourceConfig, ResourceSrc, SourceType,
-};
+pub use resource::{PlaybackResamplerBackend, Resource, ResourceConfig, ResourceSrc, SourceType};
 pub use rt::PlayerNode;

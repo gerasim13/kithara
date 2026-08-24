@@ -1,6 +1,6 @@
 mod wire {
     use firewheel::FirewheelCtx;
-    use kithara_audio::{EqBandConfig, SyncError};
+    use kithara_audio::{BeatMapIdAllocationError, EqBandConfig, SyncError};
     use kithara_bufpool::PcmPool;
     use kithara_events::EventBus;
     use kithara_platform::sync::mpsc;
@@ -8,7 +8,6 @@ mod wire {
     use crate::{
         api::{SessionBeat, SessionDuckingMode, SessionTransportSnapshot, SlotId, Tempo},
         bridge::{MixTapWriter, SlotControl},
-        resource::{AssetMapRegistry, AssetMapRegistryError},
     };
 
     pub type PlayerId = u64;
@@ -58,7 +57,7 @@ mod wire {
         #[error(transparent)]
         Sync(#[from] SyncError),
         #[error(transparent)]
-        BeatMapRegistry(#[from] AssetMapRegistryError),
+        BeatMapIdAllocation(#[from] BeatMapIdAllocationError),
         #[error("stream stopped: {reason}; restart failed: {source}")]
         RestartFailed { reason: String, r#source: String },
     }
@@ -124,7 +123,6 @@ mod wire {
             target: SessionBeat,
         },
         QuerySessionTransport,
-        QueryAssetMaps,
         InvalidateAudioRoute {
             reason: String,
         },
@@ -159,7 +157,6 @@ mod wire {
         PlayerRegistered(PlayerId),
         SessionDucking(SessionDuckingMode),
         SessionTransport(SessionTransportSnapshot),
-        AssetMaps(AssetMapRegistry),
         SlotAllocated(AllocatedSlot),
         SampleRate(SessionSampleRate),
         Err(SessionError),
@@ -208,7 +205,7 @@ mod handle {
     use kithara_platform::sync::Arc;
 
     use super::wire::{AllocatedSlot, Cmd, PlayerId, PlayerLevel, Reply, SessionSampleRate};
-    use crate::{api::SlotId, error::PlayError, resource::AssetMapRegistry};
+    use crate::{api::SlotId, error::PlayError};
 
     pub trait SessionDispatcher: Send + Sync + 'static {
         fn exec(&self, cmd: Cmd) -> Result<Reply, PlayError>;
@@ -231,16 +228,6 @@ mod handle {
         #[must_use]
         pub fn new(dispatcher: Arc<dyn SessionDispatcher>) -> Self {
             Self(dispatcher)
-        }
-
-        /// Returns the map namespace owned by this exact session endpoint.
-        pub fn beat_maps(&self) -> Result<AssetMapRegistry, PlayError> {
-            match self.exec_ok(Cmd::QueryAssetMaps)? {
-                Reply::AssetMaps(registry) => Ok(registry),
-                _ => Err(PlayError::Internal(
-                    "unexpected reply for session asset maps query".into(),
-                )),
-            }
         }
 
         pub fn allocate_slot(&self, player_id: PlayerId) -> Result<AllocatedSlot, PlayError> {
@@ -392,16 +379,12 @@ pub use wire::{
 
 #[cfg(test)]
 mod tests {
-    use std::num::NonZeroU32;
-
-    use kithara_assets::{AssetSource, AssetStore};
-    use kithara_audio::{AssetAxis, ConsumerWakeMode};
+    use kithara_audio::ConsumerWakeMode;
     use kithara_platform::sync::Arc;
     use kithara_test_utils::kithara;
-    use url::Url;
 
     use super::{Cmd, Reply, SessionDispatcher, SessionHandle};
-    use crate::{PlayError, session::testing::test_session};
+    use crate::PlayError;
 
     struct DefaultSession;
 
@@ -423,40 +406,5 @@ mod tests {
             handle.consumer_wake_mode(),
             ConsumerWakeMode::RealtimeDeferred
         );
-    }
-
-    #[kithara::test]
-    fn handles_wrapping_one_dispatcher_query_one_map_namespace() {
-        struct TestAsset;
-
-        let dispatcher = test_session();
-        let first = SessionHandle::new(dispatcher.clone());
-        let second = SessionHandle::new(dispatcher);
-        let store = AssetStore::builder().build();
-        let scope = store
-            .scope::<TestAsset>(&AssetSource::Remote {
-                url: Url::parse("https://example.com/track.wav")
-                    .expect("invariant: fixture URL is valid"),
-                discriminator: None,
-            })
-            .expect("invariant: fixture scope is valid");
-        let axis = AssetAxis::new(
-            NonZeroU32::new(48_000).expect("invariant: sample rate is non-zero"),
-            96_000,
-        );
-        let first_registry = first
-            .beat_maps()
-            .expect("invariant: session exposes its registry");
-        let second_registry = second
-            .beat_maps()
-            .expect("invariant: second handle reaches the same registry");
-        let _registration = first_registry
-            .map(&scope, axis)
-            .expect("invariant: first map registration is valid");
-
-        assert!(matches!(
-            second_registry.map(&scope, axis),
-            Err(crate::AssetMapRegistryError::PublisherClaimed)
-        ));
     }
 }

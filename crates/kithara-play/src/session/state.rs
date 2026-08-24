@@ -23,7 +23,6 @@ use super::{
 use crate::{
     api::{SessionDuckingMode, SlotId},
     bridge::{MixTapWriter, SharedEq},
-    resource::AssetMapRegistry,
     rt::{LimiterNode, MasterEqNode},
 };
 
@@ -115,7 +114,6 @@ pub struct SessionState<B: AudioBackend> {
     pub(super) stream_needs_restart: bool,
     pub(super) sample_rate_hint: u32,
     pub(super) transport: SessionTransportState,
-    beat_maps: AssetMapRegistry,
     pub(super) host_map_generation: Option<HostMapGeneration>,
     pub(super) host: Option<Host>,
 }
@@ -123,7 +121,7 @@ pub struct SessionState<B: AudioBackend> {
 impl<B: AudioBackend> SessionState<B> {
     pub const DEFAULT_SAMPLE_RATE: u32 = 44_100;
 
-    /// Creates session state with its own musical-map namespace.
+    /// Creates session state with its own musical-map topology.
     #[must_use]
     pub fn new<F>(start_stream_fn: F) -> Self
     where
@@ -142,7 +140,6 @@ impl<B: AudioBackend> SessionState<B> {
             session_limiter_node_id: None,
             stream_needs_restart: false,
             transport: SessionTransportState::default(),
-            beat_maps: AssetMapRegistry::default(),
             host_map_generation: None,
             host: None,
         }
@@ -150,10 +147,6 @@ impl<B: AudioBackend> SessionState<B> {
 
     pub const fn ctx_mut(&mut self) -> Option<&mut FirewheelCtx<B>> {
         self.ctx.as_mut()
-    }
-
-    pub(crate) fn beat_maps(&self) -> AssetMapRegistry {
-        self.beat_maps.clone()
     }
 }
 
@@ -171,11 +164,11 @@ pub(super) fn register_player<B: AudioBackend>(
         .checked_add(1)
         .ok_or(SessionError::PlayerIdExhausted)?;
     let host_id = if state.host.is_none() {
-        Some(AssetMapRegistry::reserve_id()?)
+        Some(BeatMapId::allocate()?)
     } else {
         None
     };
-    let deck_id = AssetMapRegistry::reserve_id()?;
+    let deck_id = BeatMapId::allocate()?;
     let deck = Deck::new(player_id, deck_id, bus, eq_layout, pcm_pool, sample_rate);
     if let Some(host) = state.host.as_mut() {
         attach_deck(host, deck)?;
@@ -250,7 +243,7 @@ fn ensure_sync_root<B: AudioBackend>(
     if state.host.is_some() {
         return Ok(());
     }
-    let id = AssetMapRegistry::reserve_id()?;
+    let id = BeatMapId::allocate()?;
     let host = Host::new(id, sample_rate);
     let mut generation = HostMapGeneration::new(id);
     generation.commit_revision(BeatMapRevision::first());
