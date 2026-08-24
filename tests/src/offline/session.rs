@@ -1,4 +1,7 @@
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::{
+    ops::RangeInclusive,
+    sync::atomic::{AtomicU64, Ordering},
+};
 
 use kithara::{
     audio::ConsumerWakeMode,
@@ -17,8 +20,36 @@ use tracing::warn;
 
 use super::backend::{OfflineBackend, OfflineConfig};
 
-const OFFLINE_BLOCK_FRAMES: usize = 512;
-const OFFLINE_PARK_MS: u64 = 10;
+pub const OFFLINE_BLOCK_FRAMES: usize = 512;
+pub const OFFLINE_PARK_MS: u64 = 10;
+
+/// Liveness floor for a position-gain probe: well under one nominal
+/// window, so it fails only when the auto-render effectively stalls.
+const GAIN_FLOOR_SECS: f64 = 0.9;
+/// Budget for everything a gain probe's endpoints cannot pin to the render
+/// thread: both endpoints (progress events or position polls) are delivered
+/// asynchronously, so the render keeps advancing across each endpoint's
+/// delivery lag, and progress emits quantize position in ~100 ms steps.
+const ENDPOINT_SLACK_SECS: f64 = 0.5;
+
+/// Expected playback-position gain (seconds) when a test sleeps
+/// `window_secs` of virtual time while the auto-render worker advances.
+///
+/// Nominal cadence is one [`OFFLINE_BLOCK_FRAMES`] block per
+/// [`OFFLINE_PARK_MS`] park at the session's default output rate —
+/// ~1.16x the virtual clock. The ceiling is that cadence over the window
+/// plus [`ENDPOINT_SLACK_SECS`]: the probe measures the render through
+/// asynchronous endpoints, not the render loop itself, so a legitimate
+/// outcome can exceed the pure-window nominal by the endpoint slack. A
+/// broken cadence (extra blocks per park) overshoots the ceiling anyway.
+#[must_use]
+pub fn offline_gain_window(window_secs: f64) -> RangeInclusive<f64> {
+    let default_rate = SessionState::<OfflineBackend>::DEFAULT_SAMPLE_RATE;
+    let block_frames = f64::from(u32::try_from(OFFLINE_BLOCK_FRAMES).unwrap_or(u32::MAX));
+    let park_ms = f64::from(u32::try_from(OFFLINE_PARK_MS).unwrap_or(u32::MAX));
+    let rate = (block_frames / f64::from(default_rate)) / (park_ms / 1_000.0);
+    GAIN_FLOOR_SECS..=(rate * (window_secs + ENDPOINT_SLACK_SECS))
+}
 
 enum OfflineMsg {
     Cmd {
@@ -257,5 +288,30 @@ mod tests {
             session.consumer_wake_mode(),
             ConsumerWakeMode::ImmediateOffRt
         );
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn gain_window_floor_rejects_a_stalled_render() {
+        assert!(!offline_gain_window(2.0).contains(&0.8));
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn gain_window_admits_the_nominal_cadence() {
+        assert!(offline_gain_window(2.0).contains(&2.32));
+    }
+
+    /// Both probe endpoints are delivered asynchronously to the render
+    /// thread, so under host-scheduler perturbation the render advances
+    /// past the pure-window nominal before an endpoint lands. Stress runs
+    /// 32703368671 / 32718477852 / 32739592529 measured 2.501–2.509 s over
+    /// a 2 s window this way — a legitimate outcome, not a cadence defect.
+    #[kithara::test(native, flash(false))]
+    fn gain_window_admits_endpoint_delivery_lag() {
+        assert!(offline_gain_window(2.0).contains(&2.51));
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn gain_window_rejects_a_double_cadence() {
+        assert!(!offline_gain_window(2.0).contains(&4.64));
     }
 }

@@ -20,7 +20,7 @@ use kithara::{
 use kithara_app::{baked, config::AppConfig};
 use kithara_integration_tests::{
     TestTempDir, Xorshift64, kithara,
-    offline::OfflineSession,
+    offline::{OfflineSession, offline_gain_window},
     waits::{wait_for_position_at_least, wait_for_position_near},
 };
 
@@ -431,10 +431,11 @@ async fn track_plays_end_to_end(
     time::sleep(Duration::from_secs(2)).await;
     let end_pos = ctx.queue.position_seconds().unwrap_or(0.0);
     let gain = end_pos - start_pos;
+    let gain_window = offline_gain_window(2.0);
     assert!(
-        (0.9..=2.5).contains(&gain),
+        gain_window.contains(&gain),
         "position gain out of offline-realtime window [{url}]: got \
-         {gain:.2}s over 2s wall clock (expected 0.9..2.5; start=\
+         {gain:.2}s over 2s wall clock (expected {gain_window:?}; start=\
          {start_pos:.2} end={end_pos:.2})",
     );
 
