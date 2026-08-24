@@ -1,15 +1,9 @@
-use std::{env, fs, io, path::PathBuf};
-
-use serde::Serialize;
-
 const COCHLEA_SHA: &str = "faf7517df90a586f1459fdb0519b9a20d8dabd99";
 const PR_118_SHA: &str = "820388954cb43be8560101293e75d7da7b20ce8c";
 const PR_150_SHA: &str = "b93921fc97dedd4a43a40a2788f73ad072372019";
 const PR_187_SHA: &str = "ccde033c8f4c3e958349d6ab903782fdce8fbd26";
-const MANIFEST_DIR_ENV: &str = "KITHARA_SYNC_MANIFEST_DIR";
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum OracleState {
     ActiveOracleSelfTest,
@@ -17,8 +11,7 @@ pub enum OracleState {
     BlockedFixture,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum ActivationWave {
     Foundation,
@@ -28,8 +21,7 @@ pub enum ActivationWave {
     Acceptance,
 }
 
-#[derive(Clone, Debug, Serialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
+#[derive(Clone, Debug)]
 #[non_exhaustive]
 pub enum OracleSource {
     Frozen {
@@ -43,7 +35,7 @@ pub enum OracleSource {
     },
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug)]
 #[non_exhaustive]
 pub struct OracleRegistration {
     oracle_id: String,
@@ -66,6 +58,27 @@ impl OracleRegistration {
     pub const fn state(&self) -> OracleState {
         self.state
     }
+
+    #[must_use]
+    pub const fn activation_wave(&self) -> ActivationWave {
+        self.activation_wave
+    }
+
+    #[must_use]
+    pub fn has_complete_provenance(&self) -> bool {
+        let source_complete = match &self.source {
+            OracleSource::Frozen {
+                sha, path, test, ..
+            } => !sha.is_empty() && !path.is_empty() && !test.is_empty(),
+            OracleSource::ConfirmedGap { gap } => !gap.is_empty(),
+        };
+        source_complete
+            && !self.oracle_id.is_empty()
+            && !self.observable.is_empty()
+            && !self.preserved_contract.is_empty()
+            && !self.destination_path.is_empty()
+            && !self.destination_test.is_empty()
+    }
 }
 
 #[must_use]
@@ -78,29 +91,6 @@ pub fn registrations() -> Vec<OracleRegistration> {
     rows.extend(cochlea_product_rows());
     rows.extend(renderer_source_rows());
     rows
-}
-
-/// Writes the typed transfer manifest when CI supplies an artifact directory.
-///
-/// # Errors
-///
-/// Returns an I/O error for an invalid directory, serialization failure, or
-/// failed write.
-pub fn write_manifest_from_env() -> io::Result<Option<PathBuf>> {
-    let Some(root) = env::var_os(MANIFEST_DIR_ENV).map(PathBuf::from) else {
-        return Ok(None);
-    };
-    if !root.is_absolute() {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!("{MANIFEST_DIR_ENV} must be an absolute path"),
-        ));
-    }
-    fs::create_dir_all(&root)?;
-    let path = root.join("sync-oracle-manifest.json");
-    let bytes = serde_json::to_vec_pretty(&registrations()).map_err(io::Error::other)?;
-    fs::write(&path, bytes)?;
-    Ok(Some(path))
 }
 
 fn active_oracle_rows() -> Vec<OracleRegistration> {
@@ -593,7 +583,7 @@ fn cochlea_product_rows() -> Vec<OracleRegistration> {
     rows.push(frozen_owned_test(FrozenProductRegistration {
         oracle_id: "SYNC-PRODUCT-UI-001".to_owned(),
         sha: COCHLEA_SHA,
-        path: "crates/kithara-app/src/gui/sync.rs",
+        path: "crates/kithara-app/tests/gui_sync/mod.rs",
         test: "raw_sync_controls_adopt_one_grid_and_bind_the_actual_tracks".to_owned(),
         observable:
             "raw UI controls create and reuse one Session-owned group without replacing tracks",

@@ -12,6 +12,8 @@ extern crate self as kithara_test_utils;
 /// flash wrapping.
 pub use kithara_platform;
 
+#[cfg(feature = "artifact")]
+pub mod audio_artifact;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod flight;
 pub mod hang;

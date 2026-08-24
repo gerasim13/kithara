@@ -130,18 +130,9 @@ jobs:
       - name: Run tests
         env:
           KITHARA_HANG_DUMP_DIR: ${{ github.workspace }}/target/hang
-          KITHARA_SYNC_MANIFEST_DIR: ${{ github.workspace }}/target/sync-oracle-manifest
         run: |
           mkdir -p "$KITHARA_HANG_DUMP_DIR"
           just test all
-
-      - name: Upload sync oracle manifest
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: sync-oracle-manifest
-          path: target/sync-oracle-manifest/sync-oracle-manifest.json
-          if-no-files-found: error
 
       # A hang dump names the branch that starved the watchdog; the job's
       # container does not outlive the job, so an unuploaded dump is evidence

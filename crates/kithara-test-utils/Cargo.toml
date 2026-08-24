@@ -10,6 +10,7 @@ categories = ["development-tools::testing"]
 
 [features]
 default = ["hang"]
+artifact = ["dep:serde", "dep:serde_json"]
 flash = ["kithara-platform/flash"]
 hang = ["dep:serde", "dep:serde_json"]
 mock = ["dep:unimock"]
@@ -54,6 +55,7 @@ tracing-wasm = { workspace = true }
 
 [dev-dependencies]
 kithara-test-utils = { path = ".", default-features = false }
+tempfile = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
 
 [lints]

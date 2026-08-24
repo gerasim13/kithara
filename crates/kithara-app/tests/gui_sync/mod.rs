@@ -1,5 +1,3 @@
-#![cfg(test)]
-
 use std::{f64::consts::TAU, fs, mem::size_of, path::Path};
 
 use ::kithara::{

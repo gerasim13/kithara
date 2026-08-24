@@ -11,6 +11,7 @@ mod subscription;
     not(target_os = "ios"),
     not(target_os = "android")
 ))]
+#[path = "../../tests/gui_sync/mod.rs"]
 mod sync;
 mod theme;
 mod ui;
