@@ -56,6 +56,14 @@ pub struct MasonryRoot<Action> {
     /// is drawn once and then only when something unrelated wakes the window.
     #[field(with, vis = "pub")]
     animates: bool,
+    /// The last refresh moved the picture without an event having asked it to.
+    ///
+    /// A document showing values the application keeps changing draws a new
+    /// picture whenever those values move, and nothing in the tree knows that
+    /// the next one will differ again. So a frame that moved asks for the one
+    /// after it, and a document that has come to rest stops asking after a
+    /// single frame that moved nothing.
+    moved: bool,
     platform: Vec<RenderRootSignal>,
     engines: Vec<Rc<HostedEngine>>,
     boxes: Vec<NodeBox>,
@@ -107,6 +115,7 @@ where
         let mut this = Self {
             actions: Vec::new(),
             animates: false,
+            moved: false,
             platform: Vec::new(),
             engines,
             boxes,
@@ -240,12 +249,13 @@ where
     /// Returns whether an animation frame, rather than an ordinary redraw, was
     /// requested. Every unrelated platform signal remains queued in order.
     pub(crate) fn complete_frame(&mut self) -> bool {
-        complete_frame_signals(&mut self.platform) || self.animates
+        let animation = complete_frame_signals(&mut self.platform);
+        animation || self.animates || std::mem::take(&mut self.moved)
     }
 
     /// Reports whether Masonry requested another paint or animation frame.
     pub(crate) fn needs_frame(&self) -> bool {
-        frame_requested(&self.platform) || self.animates
+        frame_requested(&self.platform) || self.animates || self.moved
     }
 
     #[cfg(test)]
@@ -603,11 +613,12 @@ where
     /// around it, and is worked out by the document walk rather than named
     /// anywhere, so it takes a walk to re-read — one for the whole document.
     pub fn refresh(&mut self, ctx: Ctx<'_, '_>) {
-        self.show_values(ctx);
+        let shown = self.show_values(ctx);
         self.reread_plans(ctx);
-        self.place_objects(ctx);
+        let placed = self.place_objects(ctx);
         self.open_surfaces(ctx);
-        self.carry_ghost(ctx);
+        let carried = self.carry_ghost(ctx);
+        self.moved = shown || placed || carried;
     }
 
     /// Shows what the pointer is carrying now.
@@ -615,21 +626,23 @@ where
     /// The ghost is a value the window layer draws, not shape the layer was
     /// mounted with: the layer stands for the life of the window, and what the
     /// pointer carries changes under it.
-    fn carry_ghost(&mut self, ctx: Ctx<'_, '_>) {
+    fn carry_ghost(&mut self, ctx: Ctx<'_, '_>) -> bool {
         let Some(window) = &mut self.window else {
-            return;
+            return false;
         };
         let Some(layer) = window.layer else {
-            return;
+            return false;
         };
         let label = ctx.label(window.carried.as_ref());
         window.carrying = label.is_some();
         self.root.edit_widget(layer, |mut widget| {
             let mut window = widget.downcast::<WindowLayer>();
-            if window.widget.carry(label) {
+            let carried = window.widget.carry(label);
+            if carried {
                 window.ctx.request_paint_only();
             }
-        });
+            carried
+        })
     }
 
     /// Opens the surfaces the document now holds open, and shuts the rest.
@@ -668,31 +681,37 @@ where
         }
     }
 
-    fn show_values(&mut self, ctx: Ctx<'_, '_>) {
+    fn show_values(&mut self, ctx: Ctx<'_, '_>) -> bool {
+        let mut moved = false;
         for watched in &self.watched {
             match watched {
                 Watched::Read { id, binding } => {
                     let Some(value) = ctx.read(binding) else {
                         continue;
                     };
-                    self.root.edit_widget(*id, |mut widget| {
+                    moved |= self.root.edit_widget(*id, |mut widget| {
                         let mut node = widget.downcast::<Node>();
-                        if node.widget.show_live(&value) {
+                        let shown = node.widget.show_live(&value);
+                        if shown {
                             node.ctx.request_paint_only();
                         }
+                        shown
                     });
                 }
                 Watched::Snapshot { id } => {
-                    self.root.edit_widget(*id, |mut widget| {
+                    moved |= self.root.edit_widget(*id, |mut widget| {
                         let mut node = widget.downcast::<Node>();
-                        if node.widget.refresh(ctx) {
+                        let shown = node.widget.refresh(ctx);
+                        if shown {
                             node.ctx.request_paint_only();
                         }
+                        shown
                     });
                 }
                 Watched::Placed { .. } => {}
             }
         }
+        moved
     }
 
     /// Walks the document again for the poses alone, and moves whatever the
@@ -700,11 +719,12 @@ where
     ///
     /// Nothing is watched this way unless the document declares an object an
     /// endpoint drives, so a page that never moves pays for none of this.
-    fn place_objects(&mut self, ctx: Ctx<'_, '_>) {
+    fn place_objects(&mut self, ctx: Ctx<'_, '_>) -> bool {
         if !ctx.ui.driven {
-            return;
+            return false;
         }
         let placed = placements(&ctx.ui.root, ctx);
+        let mut moved = false;
         for watched in &self.watched {
             let Watched::Placed { id, path } = watched else {
                 continue;
@@ -712,13 +732,16 @@ where
             let Some(transform) = placed.get(path).copied() else {
                 continue;
             };
-            self.root.edit_widget(*id, |mut widget| {
+            moved |= self.root.edit_widget(*id, |mut widget| {
                 let mut node = widget.downcast::<Node>();
-                if node.widget.place(transform) {
+                let moved = node.widget.place(transform);
+                if moved {
                     node.ctx.request_paint_only();
                 }
+                moved
             });
         }
+        moved
     }
 }
 

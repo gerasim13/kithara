@@ -66,6 +66,7 @@ where
 struct Live<'config, Application> {
     clicks: Clicks,
     context: RenderContext,
+    frames: FrameClock,
     idle: IdleClock,
     modifiers: Modifiers,
     pointer: PhysicalPosition<f64>,
@@ -83,6 +84,30 @@ enum SurfaceRecovery {
     Retry,
     Reconfigure,
     Stop,
+}
+
+/// The wall clock the document is advanced against.
+///
+/// A redraw arrives whenever the window is woken - by a hand, by the idle
+/// period, or by the frame before it - so the gap between two of them is not a
+/// constant. Told a fixed step instead, a document's own time would run at
+/// whatever rate the window happened to be woken at, which is to say at the
+/// rate a hand was moving over it.
+struct FrameClock {
+    last: WallInstant,
+}
+
+impl FrameClock {
+    const fn new(now: WallInstant) -> Self {
+        Self { last: now }
+    }
+
+    /// How long it has been since the frame before this one.
+    fn step(&mut self, now: WallInstant) -> Duration {
+        let elapsed = now.saturating_duration_since(self.last);
+        self.last = now;
+        elapsed
+    }
 }
 
 struct IdleClock {
@@ -284,6 +309,7 @@ where
         let mut live = Live {
             clicks: Clicks::default(),
             context,
+            frames: FrameClock::new(WallInstant::now()),
             idle: IdleClock::new(WallInstant::now()),
             modifiers: Modifiers::default(),
             pointer: PhysicalPosition::new(0.0, 0.0),
@@ -304,10 +330,6 @@ impl<Application> Live<'_, Application>
 where
     Application: App,
 {
-    /// One logical frame at sixty a second, which is what the animation pass is
-    /// told when the window asks for a redraw.
-    const FRAME: Duration = Duration::from_millis(16);
-
     fn request_redraw(&mut self) {
         self.clear_recovery_redraw();
         self.window.request_redraw();
@@ -467,7 +489,8 @@ where
     }
 
     fn draw(&mut self) {
-        self.ui.frame(Self::FRAME);
+        let elapsed = self.frames.step(WallInstant::now());
+        self.ui.frame(elapsed);
         if !self.ui.needs_frame() {
             return;
         }
@@ -580,7 +603,24 @@ mod tests {
     use masonry::vello::wgpu::SurfaceError;
     use winit::dpi::PhysicalPosition;
 
-    use super::{Clicks, IdleClock, SurfaceRecovery, WallInstant, surface_recovery};
+    use super::{Clicks, FrameClock, IdleClock, SurfaceRecovery, WallInstant, surface_recovery};
+
+    /// The document is told how long it has really been, so its own time runs
+    /// at the rate the world does rather than the rate the window is woken at.
+    #[kithara::test]
+    fn the_frame_clock_reports_the_gap_between_two_wakes() {
+        let start = WallInstant::now();
+        let mut frames = FrameClock::new(start);
+
+        assert_eq!(
+            frames.step(start + Duration::from_millis(16)),
+            Duration::from_millis(16)
+        );
+        assert_eq!(
+            frames.step(start + Duration::from_millis(516)),
+            Duration::from_millis(500)
+        );
+    }
 
     #[kithara::test]
     fn idle_clock_wakes_once_per_period() {

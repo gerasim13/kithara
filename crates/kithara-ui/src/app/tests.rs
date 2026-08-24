@@ -2037,3 +2037,107 @@ fn a_row_a_window_scrolled_into_view_answers_its_own_press() {
     scenario.click(&last);
     assert_eq!(scenario.app().opened, vec![last]);
 }
+
+/// An application showing one reading, which either keeps moving - the way a
+/// meter fed from somewhere else does - or settles and stays put.
+struct Reading {
+    moves: bool,
+    shown: String,
+}
+
+impl Reading {
+    fn new(moves: bool) -> Self {
+        Self {
+            moves,
+            shown: String::from("0"),
+        }
+    }
+}
+
+impl Reads for Reading {
+    fn get(&self, endpoint: &str) -> Option<ReadValue<'_>> {
+        let id = endpoint.split_once('@').map_or(endpoint, |(id, _)| id);
+        (id == "fixture.reading").then_some(ReadValue::Text(&self.shown))
+    }
+}
+
+impl App for Reading {
+    fn document(&self) -> &str {
+        "one.klayout.ron"
+    }
+
+    fn reads<R>(&self, with: impl FnOnce(&dyn Reads) -> R) -> R {
+        with(self)
+    }
+
+    fn tick(&mut self) {
+        if !self.moves {
+            return;
+        }
+        let next = self.shown.parse::<u32>().unwrap_or_default() + 1;
+        self.shown = next.to_string();
+    }
+
+    fn update(&mut self, _event: UiEvent) {}
+}
+
+/// The parts a document holding one reading is mounted from.
+fn reading_fixture() -> (Registry, MemResolver, Skin) {
+    (
+        Registry("fixture.reading", EndpointDesc::new(ValueKind::Text)),
+        one_control(
+            r#"Readout(id: "reading", label: Some("READING"), read: Model(id: "fixture.reading"))"#,
+        ),
+        skin(),
+    )
+}
+
+/// Mounts that document, drawn and settled, so a test acts on a window that
+/// has come to rest.
+fn reading_ui<'a>(
+    moves: bool,
+    endpoints: &'a Registry,
+    resolver: &'a MemResolver,
+    skin: &'a Skin,
+) -> Ui<'a, Reading> {
+    let config = Config::builder()
+        .endpoints(endpoints)
+        .resolver(resolver)
+        .skin(skin)
+        .skin_doc(builtin::skin_doc())
+        .text(builtin::text_doc())
+        .build();
+    let mut ui = Ui::new(Reading::new(moves), config, (240, 120), 1.0)
+        .unwrap_or_else(|error| panic!("the reading must mount: {error}"));
+    ui.frame(Duration::from_millis(16));
+    ui.render()
+        .unwrap_or_else(|error| panic!("the reading must draw its first frame: {error}"));
+    let _ = ui.complete_frame();
+    ui
+}
+
+/// A document showing values the application keeps changing draws itself
+/// again on its own, instead of only when something unrelated wakes it.
+#[kithara::test]
+fn a_frame_that_moved_a_value_asks_for_the_frame_after_it() {
+    let (endpoints, resolver, skin) = reading_fixture();
+    let mut ui = reading_ui(true, &endpoints, &resolver, &skin);
+
+    ui.frame(Duration::from_millis(16));
+    ui.render()
+        .unwrap_or_else(|error| panic!("the moved reading must draw: {error}"));
+
+    assert!(ui.complete_frame());
+}
+
+/// A document that has come to rest lets the window sleep, so a page showing
+/// nothing new costs nothing.
+#[kithara::test]
+fn a_frame_that_moved_nothing_asks_for_no_frame_after_it() {
+    let (endpoints, resolver, skin) = reading_fixture();
+    let mut ui = reading_ui(false, &endpoints, &resolver, &skin);
+
+    ui.frame(Duration::from_millis(16));
+
+    assert!(!ui.complete_frame());
+}
