@@ -99,7 +99,14 @@ impl Leaf {
                 text,
                 ..
             } => {
-                let run = text.shape(content, *role, wrap_width(limits.max().width, *padding_x));
+                // Shaped unbounded, because this is the width the run asks its
+                // parent for, the same contract `atoms::text::Text` states for
+                // the other host. A run shaped against the room it was offered
+                // asks for the width its broken lines happen to need, and a
+                // parent that grants exactly that leaves the line no way back.
+                // `paint` shapes against the box it was given instead, so a
+                // squeezed run still breaks rather than overflowing.
+                let run = text.shape(content, *role, None);
                 Size::new(run.width() + *padding_x * 2.0, run.height())
             }
             Self::Custom { widget, text } => {
@@ -273,12 +280,6 @@ impl Leaf {
         };
         shader.declaration()
     }
-}
-
-fn wrap_width(width: f32, padding_x: f32) -> Option<f32> {
-    width
-        .is_finite()
-        .then_some((width - padding_x * 2.0).max(0.0))
 }
 
 fn text_x(align: TextAlign, bounds: Rect, width: f32, padding_x: f32) -> f32 {
