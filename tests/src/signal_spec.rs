@@ -9,13 +9,14 @@ use thiserror::Error;
 
 use crate::{
     consts::Consts,
-    signal_pcm::{SignalLength, SweepMode},
+    signal_pcm::{SignalLength, SweepMode, signal::RhythmicTrack},
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SignalKind {
     Sawtooth,
     SawtoothDescending,
+    RhythmicMix,
     Sine,
     Sweep,
     Silence,
@@ -28,12 +29,13 @@ impl TryFrom<&str> for SignalKind {
         match value {
             "sawtooth" => Ok(Self::Sawtooth),
             "sawtooth-desc" => Ok(Self::SawtoothDescending),
+            "rhythmic-mix" => Ok(Self::RhythmicMix),
             "sine" => Ok(Self::Sine),
             "sweep" => Ok(Self::Sweep),
             "silence" => Ok(Self::Silence),
             _ => Err(SignalRequestError::InvalidField {
                 field: "signal_kind",
-                message: "must be one of `sawtooth`, `sawtooth-desc`, `sine`, `sweep`, or `silence`",
+                message: "must be one of `sawtooth`, `sawtooth-desc`, `rhythmic-mix`, `sine`, `sweep`, or `silence`",
             }),
         }
     }
@@ -85,6 +87,7 @@ pub(crate) struct SignalRequest {
 pub(crate) struct ResolvedSignalSpec {
     pub(crate) sine_freq_hz: Option<f64>,
     pub(crate) sweep: Option<ResolvedSweep>,
+    pub(crate) rhythmic_tracks: Vec<RhythmicTrack>,
     pub(crate) kind: SignalKind,
     pub(crate) length: SignalLength,
     pub(crate) channels: u16,
@@ -142,11 +145,24 @@ struct SignalSpecPayload {
     #[serde(default)]
     start_freq: Option<f64>,
     #[serde(default)]
+    tracks: Option<Vec<RhythmicTrackPayload>>,
+    #[serde(default)]
     sweep_mode: Option<String>,
     #[serde(default)]
     bit_rate: Option<u64>,
     channels: u16,
     sample_rate: u32,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RhythmicTrackPayload {
+    bpm: f64,
+    #[serde(default)]
+    muted_beat: Option<usize>,
+    #[serde(default)]
+    phase_frames: usize,
+    tone_hz: f64,
 }
 
 pub(crate) fn parse_signal_request(
@@ -220,25 +236,28 @@ fn resolve_signal_format(
     }
 }
 
-fn normalize_signal_spec(
-    kind: SignalKind,
-    format: SignalFormat,
-    payload: &SignalSpecPayload,
-) -> Result<ResolvedSignalSpec, SignalRequestError> {
+fn validate_signal_layout(payload: &SignalSpecPayload) -> Result<(), SignalRequestError> {
     if !(Consts::MIN_SAMPLE_RATE..=Consts::MAX_SAMPLE_RATE).contains(&payload.sample_rate) {
         return Err(SignalRequestError::InvalidField {
             field: "sample_rate",
             message: "must be between 8000 and 192000 Hz",
         });
     }
-
     if payload.channels == 0 || payload.channels > Consts::MAX_CHANNELS {
         return Err(SignalRequestError::InvalidField {
             field: "channels",
             message: "must be between 1 and 8",
         });
     }
+    Ok(())
+}
 
+fn normalize_signal_spec(
+    kind: SignalKind,
+    format: SignalFormat,
+    payload: &SignalSpecPayload,
+) -> Result<ResolvedSignalSpec, SignalRequestError> {
+    validate_signal_layout(payload)?;
     let length = normalize_length(kind, payload, format)?;
     let bit_rate = normalize_bit_rate(format, payload)?;
 
@@ -249,7 +268,7 @@ fn normalize_signal_spec(
         });
     }
 
-    let (sine_freq_hz, sweep) = match kind {
+    let (sine_freq_hz, sweep, rhythmic_tracks) = match kind {
         SignalKind::Sine => {
             let Some(freq) = payload.freq else {
                 return Err(SignalRequestError::InvalidField {
@@ -268,6 +287,7 @@ fn normalize_signal_spec(
             if payload.start_freq.is_some()
                 || payload.end_freq.is_some()
                 || payload.sweep_mode.is_some()
+                || payload.tracks.is_some()
             {
                 return Err(SignalRequestError::InvalidField {
                     field: "start_freq",
@@ -275,7 +295,7 @@ fn normalize_signal_spec(
                 });
             }
 
-            (Some(freq), None)
+            (Some(freq), None, Vec::new())
         }
         SignalKind::Sawtooth | SignalKind::SawtoothDescending | SignalKind::Silence => {
             if payload.freq.is_some() {
@@ -288,6 +308,7 @@ fn normalize_signal_spec(
             if payload.start_freq.is_some()
                 || payload.end_freq.is_some()
                 || payload.sweep_mode.is_some()
+                || payload.tracks.is_some()
             {
                 return Err(SignalRequestError::InvalidField {
                     field: "start_freq",
@@ -295,13 +316,32 @@ fn normalize_signal_spec(
                 });
             }
 
-            (None, None)
+            (None, None, Vec::new())
+        }
+        SignalKind::RhythmicMix => {
+            if payload.freq.is_some()
+                || payload.start_freq.is_some()
+                || payload.end_freq.is_some()
+                || payload.sweep_mode.is_some()
+            {
+                return Err(SignalRequestError::InvalidField {
+                    field: "tracks",
+                    message: "cannot be combined with sine or sweep fields",
+                });
+            }
+            (None, None, normalize_rhythmic_tracks(payload, length)?)
         }
         SignalKind::Sweep => {
             if payload.freq.is_some() {
                 return Err(SignalRequestError::InvalidField {
                     field: "freq",
                     message: "is not allowed for the `sweep` route",
+                });
+            }
+            if payload.tracks.is_some() {
+                return Err(SignalRequestError::InvalidField {
+                    field: "tracks",
+                    message: "is only allowed for the `rhythmic-mix` route",
                 });
             }
 
@@ -357,6 +397,7 @@ fn normalize_signal_spec(
                     end_hz,
                     start_hz,
                 }),
+                Vec::new(),
             )
         }
     };
@@ -366,10 +407,63 @@ fn normalize_signal_spec(
         length,
         sine_freq_hz,
         sweep,
+        rhythmic_tracks,
         sample_rate: payload.sample_rate,
         channels: payload.channels,
         bit_rate,
     })
+}
+
+fn normalize_rhythmic_tracks(
+    payload: &SignalSpecPayload,
+    length: SignalLength,
+) -> Result<Vec<RhythmicTrack>, SignalRequestError> {
+    let Some(tracks) = payload.tracks.as_deref() else {
+        return Err(SignalRequestError::InvalidField {
+            field: "tracks",
+            message: "is required for `rhythmic-mix`",
+        });
+    };
+    if tracks.is_empty() || tracks.len() > 16 {
+        return Err(SignalRequestError::InvalidField {
+            field: "tracks",
+            message: "must contain between 1 and 16 tracks",
+        });
+    }
+
+    let total_frames = length.total_frames();
+    tracks
+        .iter()
+        .map(|track| {
+            if !track.bpm.is_finite() || !(30.0..=300.0).contains(&track.bpm) {
+                return Err(SignalRequestError::InvalidField {
+                    field: "tracks.bpm",
+                    message: "must be finite and between 30 and 300 BPM",
+                });
+            }
+            if !track.tone_hz.is_finite()
+                || track.tone_hz <= 0.0
+                || track.tone_hz >= f64::from(payload.sample_rate) / 2.0
+            {
+                return Err(SignalRequestError::InvalidField {
+                    field: "tracks.tone_hz",
+                    message: "must be finite, positive, and below Nyquist",
+                });
+            }
+            if total_frames.is_some_and(|frames| track.phase_frames >= frames) {
+                return Err(SignalRequestError::InvalidField {
+                    field: "tracks.phase_frames",
+                    message: "must be inside the finite signal",
+                });
+            }
+            let resolved =
+                RhythmicTrack::new(track.bpm, track.tone_hz).with_phase_frames(track.phase_frames);
+            Ok(match track.muted_beat {
+                Some(beat) => resolved.with_muted_beat(beat),
+                None => resolved,
+            })
+        })
+        .collect()
 }
 
 fn normalize_bit_rate(

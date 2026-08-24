@@ -13,7 +13,7 @@ pub enum SweepMode {
 
 /// Built-in signal functions for test PCM generation.
 pub mod signal {
-    use std::f64::consts::PI;
+    use std::f64::consts::{PI, TAU};
 
     use super::{SAW_PERIOD, SweepMode};
 
@@ -24,6 +24,95 @@ pub mod signal {
     pub trait SignalFn: Send + 'static {
         /// Compute one 16-bit PCM sample at the given frame index.
         fn sample(&self, frame: usize, sample_rate: u32) -> i16;
+    }
+
+    /// One deterministic rhythmic component used by encoded signal fixtures.
+    #[derive(Debug, Clone, Copy, PartialEq)]
+    #[non_exhaustive]
+    pub struct RhythmicTrack {
+        pub bpm: f64,
+        pub tone_hz: f64,
+        pub phase_frames: usize,
+        pub muted_beat: Option<usize>,
+    }
+
+    impl RhythmicTrack {
+        #[must_use]
+        pub const fn new(bpm: f64, tone_hz: f64) -> Self {
+            Self {
+                bpm,
+                tone_hz,
+                phase_frames: 0,
+                muted_beat: None,
+            }
+        }
+
+        #[must_use]
+        pub const fn with_phase_frames(mut self, phase_frames: usize) -> Self {
+            self.phase_frames = phase_frames;
+            self
+        }
+
+        #[must_use]
+        pub const fn with_muted_beat(mut self, beat: usize) -> Self {
+            self.muted_beat = Some(beat);
+            self
+        }
+
+        fn sample_f64(self, frame: usize, sample_rate: u32) -> f64 {
+            let Some(local_frame) = frame.checked_sub(self.phase_frames) else {
+                return 0.0;
+            };
+            let beat_frames = (f64::from(sample_rate) * 60.0 / self.bpm).round() as usize;
+            if beat_frames == 0 {
+                return 0.0;
+            }
+            let beat = local_frame / beat_frames;
+            if self.muted_beat == Some(beat) {
+                return 0.0;
+            }
+            let into_beat = local_frame % beat_frames;
+            let burst_frames = (beat_frames / 10).max(1);
+            if into_beat >= burst_frames {
+                return 0.0;
+            }
+            let decay = 1.0 - into_beat as f64 / burst_frames as f64;
+            let phase = TAU * self.tone_hz * into_beat as f64 / f64::from(sample_rate);
+            phase.sin() * decay * decay * 0.6
+        }
+    }
+
+    impl SignalFn for RhythmicTrack {
+        fn sample(&self, frame: usize, sample_rate: u32) -> i16 {
+            (self.sample_f64(frame, sample_rate) * f64::from(i16::MAX)) as i16
+        }
+    }
+
+    /// A normalized sum of rhythmic tracks encoded as one prepared media fixture.
+    #[derive(Debug, Clone, PartialEq)]
+    pub struct RhythmicMix {
+        tracks: Vec<RhythmicTrack>,
+    }
+
+    impl RhythmicMix {
+        #[must_use]
+        pub fn new(tracks: Vec<RhythmicTrack>) -> Self {
+            assert!(!tracks.is_empty());
+            Self { tracks }
+        }
+    }
+
+    impl SignalFn for RhythmicMix {
+        fn sample(&self, frame: usize, sample_rate: u32) -> i16 {
+            let gain = 1.0 / self.tracks.len() as f64;
+            let sample = self
+                .tracks
+                .iter()
+                .map(|track| track.sample_f64(frame, sample_rate))
+                .sum::<f64>()
+                * gain;
+            (sample.clamp(-1.0, 1.0) * f64::from(i16::MAX)) as i16
+        }
     }
 
     /// Ascending saw-tooth: frame 0 → -32768, frame 65535 → 32767.

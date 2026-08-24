@@ -32,6 +32,7 @@ pub(crate) fn router() -> Router<Arc<TestServerState>> {
             "/signal/sawtooth-desc/{spec_with_ext}",
             get(sawtooth_descending),
         )
+        .route("/signal/rhythmic-mix/{spec_with_ext}", get(rhythmic_mix))
         .route("/signal/sine/{spec_with_ext}", get(sine))
         .route("/signal/sweep/{spec_with_ext}", get(sweep))
         .route("/signal/silence/{spec_with_ext}", get(silence))
@@ -56,6 +57,14 @@ async fn sawtooth_descending(
         &spec_with_ext,
         &headers,
     )
+}
+
+async fn rhythmic_mix(
+    State(state): State<Arc<TestServerState>>,
+    Path(spec_with_ext): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    handle_signal(&state, SignalKind::RhythmicMix, &spec_with_ext, &headers)
 }
 
 async fn sine(
@@ -130,6 +139,7 @@ const fn kind_str(kind: SignalKind) -> &'static str {
     match kind {
         SignalKind::Sawtooth => "sawtooth",
         SignalKind::SawtoothDescending => "sawtooth-desc",
+        SignalKind::RhythmicMix => "rhythmic-mix",
         SignalKind::Sine => "sine",
         SignalKind::Sweep => "sweep",
         SignalKind::Silence => "silence",
@@ -170,7 +180,7 @@ fn encode_signal_payload_with_cache(
 fn signal_l2_spec_key(request: &SignalRequest) -> String {
     let s = &request.spec;
     format!(
-        "{kind:?}|{fmt:?}|sr={sr}|ch={ch}|len={len:?}|freq={freq:?}|sweep={sweep:?}|br={br:?}",
+        "{kind:?}|{fmt:?}|sr={sr}|ch={ch}|len={len:?}|freq={freq:?}|sweep={sweep:?}|tracks={tracks:?}|br={br:?}",
         kind = s.kind,
         fmt = request.format,
         sr = s.sample_rate,
@@ -178,6 +188,7 @@ fn signal_l2_spec_key(request: &SignalRequest) -> String {
         len = s.length,
         freq = s.sine_freq_hz,
         sweep = s.sweep,
+        tracks = s.rhythmic_tracks,
         br = s.bit_rate,
     )
 }
@@ -227,6 +238,9 @@ fn encode_wav_payload(spec: &ResolvedSignalSpec) -> Option<EncodedSignal> {
     let bytes = match spec.kind {
         SignalKind::Sawtooth => render_wav(signal::Sawtooth, spec),
         SignalKind::SawtoothDescending => render_wav(signal::SawtoothDescending, spec),
+        SignalKind::RhythmicMix => {
+            render_wav(signal::RhythmicMix::new(spec.rhythmic_tracks.clone()), spec)
+        }
         SignalKind::Sine => render_wav(signal::SineWave(spec.sine_freq_hz?), spec),
         SignalKind::Sweep => render_wav(build_sweep_signal(spec), spec),
         SignalKind::Silence => render_wav(signal::Silence, spec),
@@ -245,6 +259,9 @@ fn encode_compressed_payload(
         match spec.kind {
             SignalKind::Sawtooth => SignalEnum::Sawtooth(signal::Sawtooth),
             SignalKind::SawtoothDescending => SignalEnum::SawtoothDesc(signal::SawtoothDescending),
+            SignalKind::RhythmicMix => {
+                SignalEnum::RhythmicMix(signal::RhythmicMix::new(spec.rhythmic_tracks.clone()))
+            }
             SignalKind::Sine => SignalEnum::Sine(signal::SineWave(spec.sine_freq_hz?)),
             SignalKind::Sweep => SignalEnum::Sweep(build_sweep_signal(spec)),
             SignalKind::Silence => SignalEnum::Silence(signal::Silence),
@@ -276,6 +293,7 @@ fn encode_compressed_payload(
 enum SignalEnum {
     Sawtooth(signal::Sawtooth),
     SawtoothDesc(signal::SawtoothDescending),
+    RhythmicMix(signal::RhythmicMix),
     Sine(signal::SineWave),
     Sweep(signal::Sweep),
     Silence(signal::Silence),
@@ -286,6 +304,7 @@ impl signal::SignalFn for SignalEnum {
         match self {
             Self::Sawtooth(s) => s.sample(frame, sample_rate),
             Self::SawtoothDesc(s) => s.sample(frame, sample_rate),
+            Self::RhythmicMix(s) => s.sample(frame, sample_rate),
             Self::Sine(s) => s.sample(frame, sample_rate),
             Self::Sweep(s) => s.sample(frame, sample_rate),
             Self::Silence(s) => s.sample(frame, sample_rate),
@@ -339,6 +358,9 @@ fn build_infinite_wav_response(spec: &ResolvedSignalSpec) -> Response {
     let body = match spec.kind {
         SignalKind::Sawtooth => stream_wav(signal::Sawtooth, spec),
         SignalKind::SawtoothDescending => stream_wav(signal::SawtoothDescending, spec),
+        SignalKind::RhythmicMix => {
+            stream_wav(signal::RhythmicMix::new(spec.rhythmic_tracks.clone()), spec)
+        }
         SignalKind::Sine => match spec.sine_freq_hz {
             Some(freq_hz) => stream_wav(signal::SineWave(freq_hz), spec),
             None => {

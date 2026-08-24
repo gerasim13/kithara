@@ -20,7 +20,7 @@ use crate::{
         stream,
     },
     signal_spec::{SignalKind as InternalSignalKind, parse_signal_request},
-    signal_url::{SignalKind, SignalSpec, signal_path},
+    signal_url::{RhythmicTrack, SignalKind, SignalSpec, rhythmic_mix_path, signal_path},
     test_server::{CreateHlsError, CreatedHls, HlsFixtureBuilder},
     test_server_state::{DelayGate, FixtureBehavior, InitGate, SegmentGate, TestServerState},
 };
@@ -106,8 +106,20 @@ impl TestServerHelper {
         self.signal_url(SignalKind::SawtoothDescending, spec).await
     }
 
+    /// Build and eagerly prepare a URL for a deterministic rhythmic mix.
+    #[must_use]
+    pub async fn rhythmic_mix(&self, spec: &SignalSpec, tracks: &[RhythmicTrack]) -> Url {
+        let path = rhythmic_mix_path(tracks, spec);
+        self.signal_url_from_path(SignalKind::RhythmicMix, spec, path)
+            .await
+    }
+
     async fn signal_url(&self, kind: SignalKind, spec: &SignalSpec) -> Url {
         let path = signal_path(kind, spec);
+        self.signal_url_from_path(kind, spec, path).await
+    }
+
+    async fn signal_url_from_path(&self, kind: SignalKind, spec: &SignalSpec, path: String) -> Url {
         let prefix = format!("/signal/{}/", kind.path_segment());
         let spec_with_ext = path
             .strip_prefix(&prefix)

@@ -1,13 +1,15 @@
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use serde::Serialize;
 
-pub use crate::signal_pcm::SweepMode;
+pub use crate::signal_pcm::{SweepMode, signal::RhythmicTrack};
 
 /// Public signal route kind used by [`crate::TestServerHelper`].
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[non_exhaustive]
 pub enum SignalKind {
     Sawtooth,
     SawtoothDescending,
+    RhythmicMix,
     Sine {
         freq_hz: f64,
     },
@@ -25,6 +27,7 @@ impl SignalKind {
         match self {
             Self::Sawtooth => "sawtooth",
             Self::SawtoothDescending => "sawtooth-desc",
+            Self::RhythmicMix => "rhythmic-mix",
             Self::Sine { .. } => "sine",
             Self::Sweep { .. } => "sweep",
             Self::Silence => "silence",
@@ -94,6 +97,8 @@ struct SignalPathPayload {
     #[serde(skip_serializing_if = "Option::is_none")]
     start_freq: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    tracks: Option<Vec<RhythmicTrackPayload>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     sweep_mode: Option<&'static str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     bit_rate: Option<u64>,
@@ -101,9 +106,31 @@ struct SignalPathPayload {
     sample_rate: u32,
 }
 
+#[derive(Debug, Serialize)]
+struct RhythmicTrackPayload {
+    bpm: f64,
+    muted_beat: Option<usize>,
+    phase_frames: usize,
+    tone_hz: f64,
+}
+
 /// Build a `/signal/...` path from a public spec.
 #[must_use]
 pub fn signal_path(kind: SignalKind, spec: &SignalSpec) -> String {
+    signal_path_with_tracks(kind, spec, None)
+}
+
+/// Build a prepared rhythmic-mix signal path from explicit track parameters.
+#[must_use]
+pub fn rhythmic_mix_path(tracks: &[RhythmicTrack], spec: &SignalSpec) -> String {
+    signal_path_with_tracks(SignalKind::RhythmicMix, spec, Some(tracks))
+}
+
+fn signal_path_with_tracks(
+    kind: SignalKind,
+    spec: &SignalSpec,
+    tracks: Option<&[RhythmicTrack]>,
+) -> String {
     if matches!(kind, SignalKind::Sweep { .. }) {
         debug_assert!(matches!(
             spec.length,
@@ -134,6 +161,7 @@ pub fn signal_path(kind: SignalKind, spec: &SignalSpec) -> String {
             SignalKind::Sine { freq_hz } => Some(freq_hz),
             SignalKind::Sawtooth
             | SignalKind::SawtoothDescending
+            | SignalKind::RhythmicMix
             | SignalKind::Sweep { .. }
             | SignalKind::Silence => None,
         },
@@ -141,6 +169,7 @@ pub fn signal_path(kind: SignalKind, spec: &SignalSpec) -> String {
             SignalKind::Sweep { start_hz, .. } => Some(start_hz),
             SignalKind::Sawtooth
             | SignalKind::SawtoothDescending
+            | SignalKind::RhythmicMix
             | SignalKind::Sine { .. }
             | SignalKind::Silence => None,
         },
@@ -148,6 +177,7 @@ pub fn signal_path(kind: SignalKind, spec: &SignalSpec) -> String {
             SignalKind::Sweep { end_hz, .. } => Some(end_hz),
             SignalKind::Sawtooth
             | SignalKind::SawtoothDescending
+            | SignalKind::RhythmicMix
             | SignalKind::Sine { .. }
             | SignalKind::Silence => None,
         },
@@ -158,9 +188,21 @@ pub fn signal_path(kind: SignalKind, spec: &SignalSpec) -> String {
             }),
             SignalKind::Sawtooth
             | SignalKind::SawtoothDescending
+            | SignalKind::RhythmicMix
             | SignalKind::Sine { .. }
             | SignalKind::Silence => None,
         },
+        tracks: tracks.map(|tracks| {
+            tracks
+                .iter()
+                .map(|track| RhythmicTrackPayload {
+                    bpm: track.bpm,
+                    muted_beat: track.muted_beat,
+                    phase_frames: track.phase_frames,
+                    tone_hz: track.tone_hz,
+                })
+                .collect()
+        }),
         bit_rate: spec.bit_rate,
     };
     let json = serde_json::to_vec(&payload).expect("signal path payload must serialize");

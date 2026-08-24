@@ -125,7 +125,8 @@ pub use rng::*;
 pub use server_url::join_server_url;
 pub use signal_source_utils::*;
 pub use signal_url::{
-    SignalFormat, SignalKind, SignalSpec, SignalSpecLength, SweepMode, signal_path,
+    RhythmicTrack, SignalFormat, SignalKind, SignalSpec, SignalSpecLength, SweepMode,
+    rhythmic_mix_path, signal_path,
 };
 #[cfg(not(target_arch = "wasm32"))]
 pub use test_server::{
