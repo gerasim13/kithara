@@ -68,6 +68,11 @@ impl<'config, A: App> Scenario<'config, A> {
     }
 
     delegate::delegate! {
+        to self.ui {
+            /// Where a control stands, or nothing when nothing stands at that
+            /// path.
+            pub(super) fn rect_of(&self, path: &str) -> Option<Rect>;
+        }
         to self.ui.app() {
             /// The application the scenario is driving.
             #[call(inner)]

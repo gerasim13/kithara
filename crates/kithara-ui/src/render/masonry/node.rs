@@ -1,4 +1,4 @@
-use std::{cell::Cell, rc::Rc};
+use std::rc::Rc;
 
 use kithara_platform::time::Duration;
 use masonry::{
@@ -9,7 +9,7 @@ use masonry::{
         PropertiesRef, QueryCtx, RegisterCtx, TextEvent, Update, UpdateCtx, Widget, WidgetId,
         WidgetPod,
     },
-    kurbo::{Point, Rect as MasonryRect, Size as MasonrySize},
+    kurbo::{Point, Size as MasonrySize},
     vello::Scene,
 };
 use num_traits::cast::AsPrimitive;
@@ -55,7 +55,6 @@ pub(crate) struct Node {
     double_click: bool,
     pointer: Option<(Pt, Pt)>,
     pointer_owner: Option<NodePointerOwner>,
-    geometry: Option<Rc<Cell<MasonryRect>>>,
     engine: Option<Rc<HostedEngine>>,
     transform: Transform,
 }
@@ -80,7 +79,6 @@ impl Node {
             double_click: false,
             pointer: None,
             pointer_owner: None,
-            geometry: None,
             engine: None,
             transform: Transform::IDENTITY,
         }
@@ -454,18 +452,6 @@ impl Node {
         self.engine = Some(engine);
     }
 
-    /// The cell this node publishes its laid-out box into, made on first ask.
-    ///
-    /// A retained engine reads the box to route a pointer, and only a node an
-    /// engine drives is worth tracking, so the cell appears when one asks for
-    /// it rather than on every node.
-    pub(super) fn geometry(&mut self) -> Rc<Cell<MasonryRect>> {
-        Rc::clone(
-            self.geometry
-                .get_or_insert_with(|| Rc::new(Cell::new(MasonryRect::ZERO))),
-        )
-    }
-
     /// Whether this node draws through a pass of its own rather than into the
     /// scene, which is what makes it something the host has to declare.
     pub(super) const fn is_native(&self) -> bool {
@@ -559,14 +545,6 @@ impl Widget for Node {
         {
             leaf.added(ctx);
         }
-        if matches!(event, Update::StashedChanged(true))
-            && let Some(geometry) = &self.geometry
-        {
-            // A stashed node stands aside, so the box it published is no longer
-            // true. Masonry lays it out again when it comes back, which is when
-            // the box is worth having again.
-            geometry.set(MasonryRect::ZERO);
-        }
         if let Update::HoveredChanged(hovered) = event
             && let Some(leaf) = self.layout.leaf()
             && leaf.hover(*hovered)
@@ -623,9 +601,6 @@ impl Widget for Node {
     }
 
     fn compose(&mut self, ctx: &mut ComposeCtx<'_>) {
-        if let Some(geometry) = &self.geometry {
-            geometry.set(ctx.bounding_rect());
-        }
         if let Some(engine) = &self.engine {
             if let Some(area) = local_ime_area(engine, ctx.window_transform()) {
                 ctx.set_ime_area(area);

@@ -26,6 +26,9 @@ use crate::{
 };
 
 /// One control an engine drives: what it is and where it sits.
+///
+/// The box is a carrier, not a truth of its own: the tree owns where a node
+/// stands, and the root fills this cell out of the tree after every event.
 pub(crate) struct EngineTarget {
     pub(super) area: Rc<Cell<MasonryRect>>,
     pub(super) plan: HostedControlPlan,

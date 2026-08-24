@@ -3155,7 +3155,7 @@ fn stashed_continuous_vis_stops_and_unstashing_restarts_animation_frames() {
     };
     let parent = *parent;
     let vis = *vis;
-    let (base, _, _, _, _, _, _): RootParts = output.into();
+    let (base, _, _, _, _, _, _, _): RootParts = output.into();
     let signals = Rc::new(RefCell::new(Vec::new()));
     let sink = Rc::clone(&signals);
     let mut root = RenderRoot::new(

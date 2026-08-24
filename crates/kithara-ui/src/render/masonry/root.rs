@@ -21,7 +21,7 @@ use thiserror::Error;
 use tracing::{Span, trace_span};
 
 use super::{
-    built::{MasonryNode, PopoverRegistration, RootParts, Watched, WindowTracker},
+    built::{MasonryNode, NodeBox, PopoverRegistration, RootParts, Watched, WindowTracker},
     custom::HostAction,
     leaf::cursor_icon,
     node::Node,
@@ -58,6 +58,7 @@ pub struct MasonryRoot<Action> {
     animates: bool,
     platform: Vec<RenderRootSignal>,
     engines: Vec<Rc<HostedEngine>>,
+    boxes: Vec<NodeBox>,
     popovers: Vec<PopoverRegistration>,
     watched: Vec<Watched>,
     native: Vec<WidgetId>,
@@ -94,7 +95,8 @@ where
         node: MasonryNode<Action>,
         options: RenderRootOptions,
     ) -> Result<Self, MasonryRootError> {
-        let (base, layers, popovers, engines, native, window, watched) = RootParts::from(node);
+        let (base, layers, popovers, engines, boxes, native, window, watched) =
+            RootParts::from(node);
         let signals = Rc::new(RefCell::new(VecDeque::new()));
         let sink = Rc::clone(&signals);
         let root = RenderRoot::new(
@@ -107,6 +109,7 @@ where
             animates: false,
             platform: Vec::new(),
             engines,
+            boxes,
             popovers,
             watched,
             native,
@@ -258,6 +261,21 @@ where
         }
     }
 
+    /// Re-reads the box every mounted surface that answers a hand stands in.
+    ///
+    /// A control an engine drives answers the pointer against a box, and that
+    /// box moves without the control being told: Masonry recomputes a whole
+    /// subtree itself when a window above it scrolls and calls no widget back.
+    /// So the boxes are read out of the tree here, after every event, the same
+    /// way a popover reads its anchor.
+    fn sync_boxes(&self) {
+        for stood in &self.boxes {
+            stood
+                .area
+                .set(self.anchor_box(stood.node).unwrap_or(MasonryRect::ZERO));
+        }
+    }
+
     /// Where the node a surface hangs on stands, or nothing when it stands
     /// nowhere.
     ///
@@ -288,6 +306,7 @@ where
     }
 
     fn sync(&mut self) -> Result<(), MasonryRootError> {
+        self.sync_boxes();
         self.sync_menus();
         loop {
             let pending = {

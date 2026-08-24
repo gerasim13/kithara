@@ -67,6 +67,18 @@ pub(crate) enum Watched {
         path: InternId,
     },
 }
+/// Where one node stands, as the root reads it out of the tree.
+///
+/// A mounted surface that answers a hand - a control an engine drives, a
+/// window layer - needs the box its node stands in, and that box moves
+/// without the node being told: Masonry recomputes a whole subtree itself
+/// when a window above it scrolls and calls no widget back. So the node
+/// carries a cell instead of a box, and the root fills it.
+pub(crate) struct NodeBox {
+    pub(crate) area: Rc<Cell<MasonryRect>>,
+    pub(crate) node: WidgetId,
+}
+
 pub(super) type LayerParts = (
     NewWidget<Node>,
     solve::Size<solve::Length>,
@@ -74,6 +86,7 @@ pub(super) type LayerParts = (
     Vec<PopoverRegistration>,
     Vec<EngineTarget>,
     Vec<Rc<HostedEngine>>,
+    Vec<NodeBox>,
     Vec<WidgetId>,
     Option<WindowTracker>,
     Vec<Watched>,
@@ -83,6 +96,7 @@ pub(super) type RootParts = (
     Vec<NewWidget<dyn Widget>>,
     Vec<PopoverRegistration>,
     Vec<Rc<HostedEngine>>,
+    Vec<NodeBox>,
     Vec<WidgetId>,
     Option<WindowTracker>,
     Vec<Watched>,
@@ -100,6 +114,12 @@ pub struct MasonryNode<Action> {
     popovers: Vec<PopoverRegistration>,
     engine_targets: Vec<EngineTarget>,
     engines: Vec<Rc<HostedEngine>>,
+    /// The cell this node's own box is read into, made on first ask. Only a
+    /// node that answers a hand is worth a cell, and one node stands in one
+    /// box however many surfaces it carries, so the cell appears when the
+    /// first of them asks and is shared by the rest.
+    geometry: Option<Rc<Cell<MasonryRect>>>,
+    boxes: Vec<NodeBox>,
     watched: Vec<Watched>,
     native: Vec<WidgetId>,
     window: Option<WindowTracker>,
@@ -121,6 +141,7 @@ impl<Action> MasonryNode<Action> {
         let mut popovers = Vec::new();
         let mut engine_targets = Vec::new();
         let mut engines = Vec::new();
+        let mut boxes = Vec::new();
         let mut watched = Vec::new();
         let mut native = Vec::new();
         let mut window = None;
@@ -131,6 +152,7 @@ impl<Action> MasonryNode<Action> {
             popovers.extend(child.popovers);
             engine_targets.extend(child.engine_targets);
             engines.extend(child.engines);
+            boxes.extend(child.boxes);
             watched.extend(child.watched);
             native.extend(child.native);
             window = merge_window(window, child.window);
@@ -165,6 +187,8 @@ impl<Action> MasonryNode<Action> {
             popovers,
             engine_targets,
             engines,
+            geometry: None,
+            boxes,
             watched,
             native,
             window,
@@ -207,6 +231,8 @@ impl<Action> MasonryNode<Action> {
             popovers: Vec::new(),
             engine_targets: Vec::new(),
             engines: Vec::new(),
+            geometry: None,
+            boxes: Vec::new(),
             watched: Vec::new(),
             native: Vec::new(),
             window: None,
@@ -223,8 +249,6 @@ impl<Action> MasonryNode<Action> {
                 primary: Option<Box<dyn Fn() -> HostAction>>,
                 secondary: Option<Box<dyn Fn() -> HostAction>>,
             );
-            /// The cell this node will publish its laid-out box into.
-            pub(crate) fn geometry(&mut self) -> Rc<Cell<MasonryRect>>;
             /// Offsets everything the mounted leaf draws, without moving the
             /// box the layout gave it or the region that answers the pointer.
             /// Nothing is standing yet at mount, so the answer is discarded.
@@ -247,6 +271,10 @@ impl<Action> MasonryNode<Action> {
         to self.engines {
             #[call(extend)]
             pub(crate) fn append_engines(&mut self, engines: Vec<Rc<HostedEngine>>);
+        }
+        to self.boxes {
+            #[call(extend)]
+            pub(crate) fn append_boxes(&mut self, boxes: Vec<NodeBox>);
         }
         to self.watched {
             #[call(extend)]
@@ -272,6 +300,20 @@ impl<Action> MasonryNode<Action> {
             state,
             dismiss,
         });
+    }
+
+    /// The cell the root fills with the box this node stands in.
+    pub(crate) fn geometry(&mut self) -> Rc<Cell<MasonryRect>> {
+        if let Some(area) = &self.geometry {
+            return Rc::clone(area);
+        }
+        let area = Rc::new(Cell::new(MasonryRect::ZERO));
+        self.geometry = Some(Rc::clone(&area));
+        self.boxes.push(NodeBox {
+            area: Rc::clone(&area),
+            node: self.widget.id(),
+        });
+        area
     }
 
     pub(crate) fn add_engine_control(&mut self, plan: HostedControlPlan, prepend: bool) {
@@ -387,6 +429,7 @@ impl<Action> From<MasonryNode<Action>> for LayerParts {
             node.popovers,
             node.engine_targets,
             node.engines,
+            node.boxes,
             node.native,
             node.window,
             node.watched,
@@ -401,6 +444,7 @@ impl<Action> From<MasonryNode<Action>> for RootParts {
             node.layers,
             node.popovers,
             node.engines,
+            node.boxes,
             node.native,
             node.window,
             node.watched,

@@ -638,8 +638,18 @@ where
         let size = popover.size().map_or_else(|| anchor.declared(), declared);
         let mut output =
             MasonryNode::document(NodeLayout::Stack, size, vec![anchor], false, None, None);
-        let (content, declared, layers, popovers, engine_targets, engines, native, window, watched) =
-            LayerParts::from(content);
+        let (
+            content,
+            declared,
+            layers,
+            popovers,
+            engine_targets,
+            engines,
+            boxes,
+            native,
+            window,
+            watched,
+        ) = LayerParts::from(content);
         let layer = masonry::core::NewWidget::new(PopoverLayer::new(
             content,
             declared,
@@ -654,6 +664,7 @@ where
         output.append_popovers(popovers);
         output.append_engine_targets(engine_targets);
         output.append_engines(engines);
+        output.append_boxes(boxes);
         output.append_native(native);
         output.append_watched(watched);
         if let Some(window) = window {

@@ -1918,3 +1918,122 @@ fn the_host_clock_accumulates_the_steps_it_was_driven_with() {
     }
     assert_eq!(ui.clock().elapsed, Duration::from_millis(100));
 }
+
+/// A registry that answers for whatever tab a page row binds to, so a fixture
+/// can name its rows without listing them twice.
+struct Tabs(EndpointDesc);
+
+impl Default for Tabs {
+    fn default() -> Self {
+        Self(EndpointDesc::new(ValueKind::Bool))
+    }
+}
+
+impl EndpointRegistry for Tabs {
+    fn endpoint(&self, category: EndpointCategory, _id: &EndpointId) -> Option<&EndpointDesc> {
+        (category == EndpointCategory::Model).then_some(&self.0)
+    }
+}
+
+/// An application showing a page list, recording which page was asked for.
+#[derive(Default)]
+struct Pages {
+    opened: Vec<String>,
+}
+
+impl Reads for Pages {
+    fn get(&self, _endpoint: &str) -> Option<ReadValue<'_>> {
+        Some(ReadValue::Bool(false))
+    }
+}
+
+impl App for Pages {
+    fn document(&self) -> &str {
+        "pages.klayout.ron"
+    }
+
+    fn reads<R>(&self, with: impl FnOnce(&dyn Reads) -> R) -> R {
+        with(self)
+    }
+
+    fn update(&mut self, event: UiEvent) {
+        if let UiEvent::Control { path, action } = event
+            && action == ControlAction::Activate
+        {
+            self.opened.push(path);
+        }
+    }
+}
+
+/// A window holding more page rows than it can show at once, each row a module
+/// of its own.
+///
+/// The module is named `gallery-nav` because that name is on the list of
+/// modules whose contents an engine drives from above, and each row is an
+/// `Include` so that the rows the engine drives stand in nodes of their own -
+/// which is what a window moves when it scrolls.
+fn page_list(rows: usize) -> MemResolver {
+    let mut resolver = MemResolver::default();
+    resolver.insert(
+        "pages.klayout.ron",
+        r#"(schema: "kithara.layout", version: 1, id: "pages",
+            root: Module(instance: "pages", source: "pages.kmodule.ron", size: (w: Fill, h: Fill)))"#,
+    );
+    let items = (0..rows)
+        .map(|row| {
+            format!(
+                r#"Include(id: "row{row}", source: "row.kmodule.ron",
+                    with: {{ "label": "ROW {row}", "tab": "page.row{row}" }}),"#
+            )
+        })
+        .collect::<String>();
+    resolver.insert(
+        "pages.kmodule.ron",
+        &format!(
+            r#"(schema: "kithara.module", version: 1, id: "gallery-nav", chrome: Plain,
+                root: Scroll(id: "list", size: (w: Fill, h: Fill),
+                    child: Column(children: [{items}])))"#
+        ),
+    );
+    resolver.insert(
+        "row.kmodule.ron",
+        r#"(schema: "kithara.module", version: 1, id: "gallery-nav-row",
+            parameters: ["label", "tab"],
+            root: NavItem(id: "item", label: "$label", icon: "Disc", read: Model(id: "$tab")))"#,
+    );
+    resolver
+}
+
+/// A row a window had to scroll to show answers the press it is standing
+/// under, not the press aimed at where it used to stand.
+#[kithara::test]
+fn a_row_a_window_scrolled_into_view_answers_its_own_press() {
+    let rows = 20;
+    let last = format!("pages/row{}/item", rows - 1);
+    let endpoints = Tabs::default();
+    let resolver = page_list(rows);
+    let skin = builtin::skin().clone();
+    let mut scenario = Scenario::mount(
+        Pages::default(),
+        Config::builder()
+            .endpoints(&endpoints)
+            .resolver(&resolver)
+            .skin(&skin)
+            .skin_doc(builtin::skin_doc())
+            .text(builtin::text_doc())
+            .build(),
+        (240, 400),
+        1.0,
+    );
+    let standing = scenario.rect_of(&last);
+    assert!(
+        standing.is_none_or(|rect| rect.y >= 400.0),
+        "the fixture must hold more rows than the window shows"
+    );
+    for _ in 0..8 {
+        scenario.wheel("pages/row9/item", -1.0);
+        scenario.scene();
+    }
+    scenario.click(&last);
+    assert_eq!(scenario.app().opened, vec![last]);
+}
