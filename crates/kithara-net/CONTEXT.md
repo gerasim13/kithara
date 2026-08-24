@@ -139,9 +139,13 @@ speed", and a 10s cap raced real fixtures.
 
 `NetOptions` is a `bon` builder with defaults: `compression` all four codings, `inactivity_timeout` 30s, `impersonate`
 `Safari`, `retry_policy` (3 retries / 100ms base / 5s max, exponential ×2), `is_insecure` false, `body_queue_capacity` 32,
-`body_queue_resume_at` 16, `pool_max_idle_per_host` 8, default `byte_pool`. `FromWithParams<Self, BytePool>` injects a
-shared pool without rebuilding the rest. Native clients additionally pin a hard-coded 5s `pool_idle_timeout` and enable
+`body_queue_resume_at` 16, `pool_max_idle_per_host` 8, `pool_idle_timeout` 5s, default `byte_pool`.
+`FromWithParams<Self, BytePool>` injects a shared pool without rebuilding the rest. `pool_idle_timeout` reaches the two
+native client builders only; the Apple backend has no Foundation equivalent for it. Native clients additionally enable
 the cookie store.
+
+`HttpClient::with_observer` rebuilds `NetOptions` by struct update, so a new option is carried over by construction —
+a field-by-field rebuild would silently reset any knob it forgot.
 
 Retryability is decided from the typed `NetError` discriminant, never by substring matching: `Timeout`, `Network`, and
 `Status` with 5xx / 429 / 408 are `Transient`; everything else — including `Decode`, `Cancelled`, and `RetryExhausted` —
