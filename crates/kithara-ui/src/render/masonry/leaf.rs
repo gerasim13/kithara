@@ -322,6 +322,15 @@ where
         }
     }
 
+    /// What this leaf draws and routes over the box its anchor published, or
+    /// nothing at all while the anchor has no box.
+    ///
+    /// A window layer is a root of its own, so Masonry's stashing never reaches
+    /// it and the anchor's box is the only word it gets on whether the branch
+    /// it belongs to is on screen. A branch that was never laid out, or that
+    /// was stashed after it was, leaves an empty box behind, and a program
+    /// handed one would draw its row against the window origin instead of
+    /// standing aside with the branch it came from.
     fn layer(&self, paint: bool) -> HostLayer<WindowCommand> {
         let area = self.geometry.get();
         let bounds = Rect {
@@ -330,6 +339,9 @@ where
             w: area.width().as_(),
             h: area.height().as_(),
         };
+        if bounds.w <= 0.0 || bounds.h <= 0.0 {
+            return HostLayer::new(bounds, DrawList::default(), Vec::new());
+        }
         if paint {
             self.program.layer(&self.state, bounds, self.pointer.get())
         } else {

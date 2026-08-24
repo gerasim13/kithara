@@ -765,6 +765,74 @@ fn a_cell_comes_back_when_the_room_grows_to_reach_it() {
     );
 }
 
+/// The same flow as [`REVEALING_BAR`], holding the window controls in the cell
+/// that waits for a wider window.
+const REVEALING_CONTROLS: &str = r#"Row(id: "bar", measure: Width, size: (w: Fill, h: Fill),
+    gap: 0.0, pad: 0.0, children: [
+        Reveal(from: 200.0, child: WindowControls(id: "controls")),
+    ])"#;
+
+/// Whether the picture the retained host just composed carries anything, read
+/// the way the control census reads it.
+fn composes_a_picture<Action>(root: &mut MasonryRoot<Action>) -> bool
+where
+    Action: std::fmt::Debug + Send + 'static,
+{
+    let (scene, _) = root
+        .redraw()
+        .unwrap_or_else(|error| panic!("the revealing bar must compose: {error}"));
+    let encoding = scene.encoding();
+    !(encoding.is_empty() && encoding.resources.glyphs.is_empty())
+}
+
+/// What [`REVEALING_CONTROLS`] draws on a window of the given width, and again
+/// after the window is resized to each width that follows.
+fn controls_draw(width: u32, resizes: &[u32]) -> Vec<bool> {
+    let registry = fixture_registry();
+    let reads = FixtureReads;
+    let ui = fixture_ui("revealing-controls", REVEALING_CONTROLS, &registry);
+    let output = document::render(
+        &ui.root,
+        ctx(&ui, &reads),
+        MasonryHost::new(ctx(&ui, &reads), builtin::skin()),
+    );
+    let mut root = masonry_root(output, width, 60);
+    let mut drawn = vec![composes_a_picture(&mut root)];
+    for width in resizes {
+        root.handle_window_event(WindowEvent::Resize(PhysicalSize::new(*width, 60)))
+            .unwrap_or_else(|error| panic!("the bar must take a {width}px window: {error}"));
+        drawn.push(composes_a_picture(&mut root));
+    }
+    drawn
+}
+
+#[kithara::test]
+fn window_controls_the_room_never_reached_draw_nothing() {
+    assert_eq!(
+        controls_draw(120, &[]),
+        vec![false],
+        "a window layer is a root of its own, so stashing the cell it belongs to never reaches          it: the box its anchor publishes is the only word it gets, and an anchor that was never          laid out publishes none"
+    );
+}
+
+#[kithara::test]
+fn window_controls_the_room_reaches_draw_their_row() {
+    assert_eq!(
+        controls_draw(240, &[]),
+        vec![true],
+        "a cell the room reaches must still draw the controls it holds"
+    );
+}
+
+#[kithara::test]
+fn window_controls_stop_drawing_when_the_room_shrinks_past_them() {
+    assert_eq!(
+        controls_draw(240, &[120]),
+        vec![true, false],
+        "an anchor that is stashed after it was laid out must take its box back, or the layer          keeps drawing the row where the cell used to stand"
+    );
+}
+
 #[kithara::test]
 fn a_fill_slot_centers_its_fixed_content_like_the_immediate_host() {
     let registry = fixture_registry();

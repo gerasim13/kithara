@@ -559,6 +559,14 @@ impl Widget for Node {
         {
             leaf.added(ctx);
         }
+        if matches!(event, Update::StashedChanged(true))
+            && let Some(geometry) = &self.geometry
+        {
+            // A stashed node stands aside, so the box it published is no longer
+            // true. Masonry lays it out again when it comes back, which is when
+            // the box is worth having again.
+            geometry.set(MasonryRect::ZERO);
+        }
         if let Update::HoveredChanged(hovered) = event
             && let Some(leaf) = self.layout.leaf()
             && leaf.hover(*hovered)
