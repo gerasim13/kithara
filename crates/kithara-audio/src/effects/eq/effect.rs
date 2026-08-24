@@ -540,7 +540,7 @@ mod tests {
         let mut eq = IsolatorEq::new(&bands, 44100);
         for i in 0..3 {
             eq.set_gain(i, GainDb::MIN);
-            eq.force_current_gain(i, 0.0);
+            eq.settle_gain(i);
         }
         assert!(eq.silence_active(), "precondition: silence is active");
 
@@ -561,7 +561,7 @@ mod tests {
         let mut eq = IsolatorEq::new(&bands, 44100);
         for i in 0..3 {
             eq.set_gain(i, GainDb::MIN);
-            eq.force_current_gain(i, 0.0);
+            eq.settle_gain(i);
         }
         assert!(eq.silence_active(), "precondition: silence is active");
 

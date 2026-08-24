@@ -1,3 +1,6 @@
+use std::{num::NonZeroU32, ops::Index};
+
+use firewheel_core::dsp::filter::smoothing_filter::{SmoothingFilter, SmoothingFilterCoeff};
 use num_traits::cast::AsPrimitive;
 
 use super::GainDb;
@@ -5,66 +8,85 @@ use super::GainDb;
 struct Consts;
 
 impl Consts {
-    const MS_PER_SEC: f32 = 1000.0;
+    const SETTLE_EPSILON: f32 = 0.0001;
     const SMOOTH_BLOCK_SIZE: usize = 32;
-    const SMOOTH_CONVERGENCE_THRESHOLD: f32 = 0.0001;
-    const SMOOTH_TIME_MS: f32 = 10.0;
+    const SMOOTH_SECONDS: f32 = 0.01;
 }
 
-struct GainState {
-    current_linear: f32,
-    target_db: GainDb,
+#[derive(fieldwork::Fieldwork)]
+#[fieldwork(opt_in, get)]
+struct SmoothedGain {
+    filter: SmoothingFilter,
+    #[field(get(copy), vis = "pub(crate)")]
+    target: GainDb,
     target_linear: f32,
 }
 
-impl GainState {
-    fn new(gain_db: GainDb) -> Self {
-        let linear = gain_db.linear();
+impl SmoothedGain {
+    fn new(target: GainDb) -> Self {
+        let linear = target.linear();
         Self {
-            target_db: gain_db,
+            filter: SmoothingFilter::new(linear),
+            target,
             target_linear: linear,
-            current_linear: linear,
         }
     }
 
-    fn set_target(&mut self, gain_db: GainDb) {
-        let db = f32::from(gain_db);
-        if (db - f32::from(self.target_db)).abs() < f32::EPSILON {
+    fn current(&self) -> f32 {
+        self.filter.z1
+    }
+
+    #[cfg(test)]
+    fn is_smoothing(&self) -> bool {
+        !self.filter.has_settled(self.target_linear)
+    }
+
+    fn set_target(&mut self, target: GainDb) {
+        if target == self.target {
             return;
         }
-        self.target_db = gain_db;
-        self.target_linear = gain_db.linear();
+        self.target = target;
+        self.target_linear = target.linear();
+    }
+
+    /// Jump to the target without the ramp.
+    #[cfg(test)]
+    fn settle(&mut self) {
+        self.filter = SmoothingFilter::new(self.target_linear);
+    }
+
+    /// Whether this gain is aimed at `target` and has arrived. The fast paths
+    /// need both: a band on its way to unity still has to run the filters.
+    fn settled_at(&self, target: GainDb) -> bool {
+        self.target == target && self.filter.has_settled(self.target_linear)
     }
 
     #[inline]
-    fn smooth(&mut self, coeff: f32) {
-        let diff = self.target_linear - self.current_linear;
-        if diff.abs() < Consts::SMOOTH_CONVERGENCE_THRESHOLD {
-            self.current_linear = self.target_linear;
-        } else {
-            self.current_linear = coeff.mul_add(diff, self.current_linear);
-        }
+    fn smooth(&mut self, coeff: SmoothingFilterCoeff) {
+        self.filter.process(self.target_linear, coeff);
+        self.filter
+            .settle(self.target_linear, Consts::SETTLE_EPSILON);
     }
 }
 
 #[derive(fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
 pub(crate) struct GainBank {
-    gains: Vec<GainState>,
+    gains: Vec<SmoothedGain>,
     #[field(get, vis = "pub(crate)")]
     bypass_active: bool,
     #[field(get, vis = "pub(crate)")]
     silence_active: bool,
-    smooth_coeff: f32,
+    coeff: SmoothingFilterCoeff,
     block_counter: usize,
 }
 
 impl GainBank {
     pub(crate) fn new(gains_db: impl Iterator<Item = GainDb>, sample_rate: f32) -> Self {
-        let gains = gains_db.map(GainState::new).collect();
+        let gains = gains_db.map(SmoothedGain::new).collect();
         let mut bank = Self {
             gains,
-            smooth_coeff: compute_smooth_coeff(sample_rate),
+            coeff: smoothing_coeff(sample_rate),
             block_counter: 0,
             bypass_active: false,
             silence_active: false,
@@ -73,55 +95,50 @@ impl GainBank {
         bank
     }
 
-    #[cfg(test)]
-    pub(crate) fn force_current(&mut self, band: usize, linear: f32) {
-        self.gains[band].current_linear = linear;
-        self.refresh_fastpath();
-    }
-
-    #[cfg(test)]
-    pub(crate) fn is_smoothing(&self) -> bool {
-        self.gains.iter().any(|gain| {
-            (gain.target_linear - gain.current_linear).abs() > Consts::SMOOTH_CONVERGENCE_THRESHOLD
-        })
+    fn all_settled_at(&self, target: GainDb) -> bool {
+        !self.gains.is_empty() && self.gains.iter().all(|gain| gain.settled_at(target))
     }
 
     delegate::delegate! {
         to self.gains {
+            #[cfg(test)]
+            #[expr($.any(SmoothedGain::is_smoothing))]
+            #[call(iter)]
+            pub(crate) fn is_smoothing(&self) -> bool;
             pub(crate) const fn len(&self) -> usize;
-            #[expr($.map(|state| state.target_db))]
+            #[expr($.current())]
+            #[call(index)]
+            pub(crate) fn linear(&self, band: usize) -> f32;
+            #[expr($.map(SmoothedGain::target))]
             #[call(get)]
             pub(crate) fn target(&self, band: usize) -> Option<GainDb>;
         }
     }
 
-    pub(crate) fn linear(&self, band: usize) -> f32 {
-        self.gains[band].current_linear
-    }
-
     fn refresh_fastpath(&mut self) {
-        self.bypass_active = !self.gains.is_empty()
-            && self.gains.iter().all(|gain| {
-                (gain.target_linear - 1.0).abs() < f32::EPSILON
-                    && (gain.current_linear - 1.0).abs() < f32::EPSILON
-            });
-        self.silence_active = !self.gains.is_empty()
-            && self.gains.iter().all(|gain| {
-                gain.target_linear.abs() < f32::EPSILON && gain.current_linear.abs() < f32::EPSILON
-            });
+        self.bypass_active = self.all_settled_at(GainDb::default());
+        self.silence_active = self.all_settled_at(GainDb::MIN);
     }
 
     pub(crate) fn reset(&mut self) {
         for gain in &mut self.gains {
-            *gain = GainState::new(GainDb::default());
+            *gain = SmoothedGain::new(GainDb::default());
         }
         self.block_counter = 0;
         self.refresh_fastpath();
     }
 
     pub(crate) fn set(&mut self, band: usize, gain_db: GainDb) {
-        if let Some(state) = self.gains.get_mut(band) {
-            state.set_target(gain_db);
+        if let Some(gain) = self.gains.get_mut(band) {
+            gain.set_target(gain_db);
+        }
+        self.refresh_fastpath();
+    }
+
+    #[cfg(test)]
+    pub(crate) fn settle(&mut self, band: usize) {
+        if let Some(gain) = self.gains.get_mut(band) {
+            gain.settle();
         }
         self.refresh_fastpath();
     }
@@ -133,19 +150,44 @@ impl GainBank {
         }
         self.block_counter = 0;
         for gain in &mut self.gains {
-            gain.smooth(self.smooth_coeff);
+            gain.smooth(self.coeff);
         }
         self.refresh_fastpath();
     }
 
     pub(crate) fn update_sample_rate(&mut self, sample_rate: f32) {
-        self.smooth_coeff = compute_smooth_coeff(sample_rate);
+        self.coeff = smoothing_coeff(sample_rate);
     }
 }
 
-fn compute_smooth_coeff(sample_rate: f32) -> f32 {
-    let tau = Consts::SMOOTH_TIME_MS / Consts::MS_PER_SEC;
-    let block_size_f32: f32 = Consts::SMOOTH_BLOCK_SIZE.as_();
-    let effective_rate = sample_rate / block_size_f32;
-    1.0 - (-1.0 / (tau * effective_rate)).exp()
+/// Coefficients for a smoother that steps once per [`Consts::SMOOTH_BLOCK_SIZE`]
+/// samples. What shapes the curve is how many steps fit in the smoothing
+/// window, so dividing the window by the block size gives the same curve as
+/// dividing the rate by it - and it leaves the rate an exact integer.
+fn smoothing_coeff(sample_rate: f32) -> SmoothingFilterCoeff {
+    let block_size: f32 = Consts::SMOOTH_BLOCK_SIZE.as_();
+    let rate: u32 = sample_rate.max(1.0).as_();
+    let rate = NonZeroU32::new(rate).unwrap_or(NonZeroU32::MIN);
+    SmoothingFilterCoeff::new(rate, Consts::SMOOTH_SECONDS / block_size)
+}
+
+#[cfg(test)]
+mod tests {
+    use kithara_test_utils::kithara;
+
+    use super::*;
+
+    /// `IsolatorEq::new` takes a plain `u32`, so a caller can hand the bank a
+    /// rate no filter can be built from. The band still has to arrive.
+    #[kithara::test]
+    fn a_bank_built_at_an_unusable_sample_rate_still_reaches_its_target() {
+        let mut bank = GainBank::new([GainDb::default()].into_iter(), 0.0);
+        bank.set(0, GainDb::MAX);
+
+        for _ in 0..Consts::SMOOTH_BLOCK_SIZE * Consts::SMOOTH_BLOCK_SIZE {
+            bank.tick();
+        }
+
+        assert_eq!(bank.linear(0), GainDb::MAX.linear());
+    }
 }

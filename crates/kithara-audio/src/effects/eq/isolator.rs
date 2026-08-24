@@ -36,12 +36,12 @@ impl IsolatorEq {
             #[cfg(test)]
             pub(crate) fn bypass_active(&self) -> bool;
             #[cfg(test)]
-            #[call(force_current)]
-            pub(crate) fn force_current_gain(&mut self, band: usize, linear: f32);
-            #[cfg(test)]
             pub(crate) fn is_smoothing(&self) -> bool;
             #[call(set)]
             pub fn set_gain(&mut self, band: usize, gain_db: GainDb);
+            #[cfg(test)]
+            #[call(settle)]
+            pub(crate) fn settle_gain(&mut self, band: usize);
             #[cfg(test)]
             pub(crate) fn silence_active(&self) -> bool;
         }
