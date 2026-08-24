@@ -162,11 +162,7 @@ where
             TextStyle::VisTitle => self.skin.vis.name_padding_x,
             _ => 0.0,
         };
-        let content = if style == TextStyle::MicroLabel {
-            content.to_uppercase()
-        } else {
-            content
-        };
+        let content = style.cased(content);
         MasonryNode::document(
             NodeLayout::Leaf(Leaf::Text {
                 align: spec.align,

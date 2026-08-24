@@ -42,11 +42,7 @@ where
         let role = self
             .skin
             .text_role(self.style, self.color, self.active_color, self.active);
-        let content = if self.style == TextStyle::MicroLabel {
-            value.to_uppercase()
-        } else {
-            value.to_owned()
-        };
+        let content = self.style.cased(value.to_owned());
         let padding_x = match self.style {
             TextStyle::VisFooter => self.skin.vis.footer_padding_x,
             TextStyle::VisMeta => self.skin.vis.index_padding_x,
