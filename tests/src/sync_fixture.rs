@@ -78,15 +78,15 @@ pub enum SyncFixtureError {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum RepositoryMp3 {
-    Silvercomet,
     Test,
+    Track,
 }
 
 impl RepositoryMp3 {
     const fn asset_name(self) -> &'static str {
         match self {
-            Self::Silvercomet => "sync-silvercomet.mp3",
             Self::Test => "test.mp3",
+            Self::Track => "track.mp3",
         }
     }
 }
@@ -419,7 +419,7 @@ pub async fn repository_mp3(
 
 pub async fn repository_mp3_pair(server: &TestServerHelper) -> SyncFixtureResult<SyncFixturePair> {
     let deck_a = repository_mp3(server, RepositoryMp3::Test).await?;
-    let deck_b = repository_mp3(server, RepositoryMp3::Silvercomet).await?;
+    let deck_b = repository_mp3(server, RepositoryMp3::Track).await?;
     if deck_a.content_digest == deck_b.content_digest {
         return Err(SyncFixtureError::InvalidConfig(
             "repository MP3 fixtures must contain different audio".to_owned(),
