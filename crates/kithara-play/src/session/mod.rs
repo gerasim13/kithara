@@ -4,6 +4,7 @@ mod dispatch;
 mod graph;
 pub mod protocol;
 pub mod state;
+mod sync;
 #[cfg(test)]
 pub(crate) mod testing;
 mod transport;

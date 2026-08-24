@@ -4,8 +4,9 @@ use arc_swap::ArcSwap;
 use kithara_platform::sync::Arc;
 
 use super::{
-    AssetAxis, BeatMap, BeatMapId, BeatMapSnapshot, BeatMapSnapshotData, BeatMapSnapshotError,
-    MapAxis, MapSegment, MapStamp, MapState, SegmentDraft, SegmentError, SegmentSet,
+    AlignmentPlan, AlignmentRequest, AssetAxis, BeatMap, BeatMapId, BeatMapSnapshot,
+    BeatMapSnapshotData, BeatMapSnapshotError, MapAxis, MapSegment, MapStamp, MapState,
+    PlanTransition, PresentationFrontier, SegmentDraft, SegmentError, SegmentSet, SyncError,
 };
 
 #[derive(Debug)]
@@ -124,6 +125,23 @@ impl BeatMap for AssetBeatMap {
 
     fn snapshot(&self) -> BeatMapSnapshot {
         BeatMapSnapshot::wrap(self.owner.current.load_full())
+    }
+
+    fn align_to(
+        &self,
+        target: &dyn BeatMap,
+        request: AlignmentRequest,
+    ) -> Result<AlignmentPlan, SyncError> {
+        self.snapshot().align_to(target, request)
+    }
+
+    fn reconcile_to(
+        &self,
+        target: &dyn BeatMap,
+        active: &AlignmentPlan,
+        frontier: PresentationFrontier,
+    ) -> Result<PlanTransition, SyncError> {
+        self.snapshot().reconcile_to(target, active, frontier)
     }
 }
 

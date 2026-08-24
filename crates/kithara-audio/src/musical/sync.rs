@@ -1,11 +1,25 @@
-use std::{collections::BTreeSet, num::NonZeroU64};
+use std::num::NonZeroU64;
 
-use kithara_platform::sync::Arc;
+use super::{Beat, BeatMap, BeatMapId, MapPoint, MapRegion, MapStamp, SessionFrame};
 
-use super::{
-    Beat, BeatMap, BeatMapId, BeatMapIdAllocationError, BeatMapRevision, BeatMapSnapshot, MapPoint,
-    MapStamp,
+mod applied;
+mod member;
+mod plan;
+mod rejected;
+mod topology;
+pub use applied::SyncApplied;
+pub use member::SyncMember;
+pub use plan::{
+    AlignmentCursor, AlignmentPlan, AlignmentPlanError, AlignmentRequest, AlignmentSource,
+    AlignmentTransition, PlanSpan, PlanSpanSlot, PlanTransition, PlannedRenderSpan, RenderPlan,
+    SourceFrameRange,
 };
+pub use rejected::SyncRejected;
+pub use topology::{SyncGroupSnapshot, SyncGroupTopologyError, SyncMemberSnapshot};
+
+fn checked_next_revision(revision: NonZeroU64) -> Option<NonZeroU64> {
+    revision.get().checked_add(1).and_then(NonZeroU64::new)
+}
 
 /// Monotonic revision of one synchronization-group topology.
 #[derive(
@@ -35,11 +49,135 @@ impl TopologyRevision {
     /// Returns the next owner-assigned revision, or `None` on exhaustion.
     #[must_use]
     pub fn checked_next(self) -> Option<Self> {
-        self.0
-            .get()
-            .checked_add(1)
-            .and_then(NonZeroU64::new)
-            .map(Self)
+        checked_next_revision(self.0).map(Self)
+    }
+}
+
+/// Monotonic identity of one synchronization operation.
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    Hash,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    derive_more::Display,
+    derive_more::Into,
+)]
+#[display("{_0}")]
+#[into(u64)]
+#[repr(transparent)]
+pub struct SyncOperationId(NonZeroU64);
+
+impl SyncOperationId {
+    /// Returns the first operation identity assigned by a group owner.
+    #[must_use]
+    pub const fn first() -> Self {
+        Self(NonZeroU64::MIN)
+    }
+
+    /// Returns the next owner-assigned identity, or `None` on exhaustion.
+    #[must_use]
+    pub fn checked_next(self) -> Option<Self> {
+        checked_next_revision(self.0).map(Self)
+    }
+}
+
+/// Monotonic revision of one immutable alignment plan.
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    Hash,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    derive_more::Display,
+    derive_more::Into,
+)]
+#[display("{_0}")]
+#[into(u64)]
+#[repr(transparent)]
+pub struct AlignmentPlanRevision(NonZeroU64);
+
+impl AlignmentPlanRevision {
+    /// Returns the first revision assigned by a plan owner.
+    #[must_use]
+    pub const fn first() -> Self {
+        Self(NonZeroU64::MIN)
+    }
+
+    /// Returns the next owner-assigned revision, or `None` on exhaustion.
+    #[must_use]
+    pub fn checked_next(self) -> Option<Self> {
+        checked_next_revision(self.0).map(Self)
+    }
+}
+
+/// Monotonic identity of one track load into a stable deck.
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    Hash,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    derive_more::Display,
+    derive_more::Into,
+)]
+#[display("{_0}")]
+#[into(u64)]
+#[repr(transparent)]
+pub struct LoadGeneration(NonZeroU64);
+
+impl LoadGeneration {
+    /// Returns the first generation assigned by a deck owner.
+    #[must_use]
+    pub const fn first() -> Self {
+        Self(NonZeroU64::MIN)
+    }
+
+    /// Returns the next owner-assigned generation, or `None` on exhaustion.
+    #[must_use]
+    pub fn checked_next(self) -> Option<Self> {
+        checked_next_revision(self.0).map(Self)
+    }
+}
+
+/// Monotonic revision of committed session transport state.
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    Hash,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    derive_more::Display,
+    derive_more::Into,
+)]
+#[display("{_0}")]
+#[into(u64)]
+#[repr(transparent)]
+pub struct TransportRevision(NonZeroU64);
+
+impl TransportRevision {
+    /// Returns the first committed transport revision.
+    #[must_use]
+    pub const fn first() -> Self {
+        Self(NonZeroU64::MIN)
+    }
+
+    /// Returns the next committed revision, or `None` on exhaustion.
+    #[must_use]
+    pub fn checked_next(self) -> Option<Self> {
+        checked_next_revision(self.0).map(Self)
     }
 }
 
@@ -71,398 +209,444 @@ impl TopologyStamp {
     }
 }
 
-/// A beat on a group map aligned with a beat on one direct member map.
+/// A beat on a source map aligned with a beat on a target map.
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[non_exhaustive]
-pub struct SyncAlignment {
-    group: MapPoint<Beat>,
-    member: MapPoint<Beat>,
+pub struct BeatAlignment {
+    source: MapPoint<Beat>,
+    target: MapPoint<Beat>,
 }
 
-impl SyncAlignment {
-    /// Creates one immutable alignment edge.
+impl BeatAlignment {
+    /// Creates one directionally explicit alignment edge.
     #[must_use]
-    pub const fn new(group: MapPoint<Beat>, member: MapPoint<Beat>) -> Self {
-        Self { group, member }
+    pub const fn new(source: MapPoint<Beat>, target: MapPoint<Beat>) -> Self {
+        Self { source, target }
     }
 
-    /// Returns the point on the direct parent group.
+    /// Returns the point on the map being aligned.
     #[must_use]
-    pub const fn group(&self) -> MapPoint<Beat> {
-        self.group
+    pub const fn source(&self) -> MapPoint<Beat> {
+        self.source
     }
 
-    /// Returns the corresponding point on the member map.
+    /// Returns the corresponding point on the target map.
     #[must_use]
-    pub const fn member(&self) -> MapPoint<Beat> {
-        self.member
+    pub const fn target(&self) -> MapPoint<Beat> {
+        self.target
     }
 }
 
-/// One direct map or nested-group edge in an immutable topology.
-#[derive(Clone, Debug, PartialEq)]
-#[non_exhaustive]
-pub struct SyncGroupMember {
-    alignment: SyncAlignment,
-    map: BeatMapSnapshot,
-    group: Option<SyncGroupSnapshot>,
-}
-
-impl SyncGroupMember {
-    /// Returns the direct member's frozen map.
-    #[must_use]
-    pub const fn map(&self) -> &BeatMapSnapshot {
-        &self.map
-    }
-
-    /// Returns the alignment edge from the direct parent.
-    #[must_use]
-    pub const fn alignment(&self) -> SyncAlignment {
-        self.alignment
-    }
-
-    /// Returns the frozen nested topology when this member is a group.
-    #[must_use]
-    pub const fn group_topology(&self) -> Option<&SyncGroupSnapshot> {
-        self.group.as_ref()
-    }
-}
-
-/// Freezes one ordinary map behind the shared readable protocol.
-impl From<(&dyn BeatMap, SyncAlignment)> for SyncGroupMember {
-    fn from((map, alignment): (&dyn BeatMap, SyncAlignment)) -> Self {
-        Self {
-            alignment,
-            map: map.snapshot(),
-            group: None,
-        }
-    }
-}
-
-/// Freezes one nested group behind the shared recursive protocol.
-impl From<(&dyn SyncGroup, SyncAlignment)> for SyncGroupMember {
-    fn from((group, alignment): (&dyn SyncGroup, SyncAlignment)) -> Self {
-        let group = group.topology();
-        Self {
-            alignment,
-            map: group.group_map.clone(),
-            group: Some(group),
-        }
-    }
-}
-
-/// One immutable observation of a synchronization group's map and members.
-#[derive(Clone, Debug, PartialEq)]
-#[non_exhaustive]
-pub struct SyncGroupSnapshot {
-    group_map: BeatMapSnapshot,
-    stamp: TopologyStamp,
-    members: Arc<[SyncGroupMember]>,
-}
-
-impl SyncGroupSnapshot {
-    /// Creates and validates a topology tree.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`SyncGroupTopologyError`] when an edge uses stale map stamps,
-    /// repeats a member, or makes the tree recursive.
-    pub fn try_new<I>(
-        group_map: BeatMapSnapshot,
-        revision: TopologyRevision,
-        members: I,
-    ) -> Result<Self, SyncGroupTopologyError>
-    where
-        I: IntoIterator<Item = SyncGroupMember>,
-    {
-        let members: Arc<[SyncGroupMember]> = members.into_iter().collect();
-        validate_edges(&group_map, &members)?;
-        validate_tree(group_map.id(), &members)?;
-        Ok(Self {
-            stamp: TopologyStamp::new(group_map.id(), revision),
-            group_map,
-            members,
-        })
-    }
-
-    /// Returns the group's authoritative musical-coordinate snapshot.
-    #[must_use]
-    pub const fn group_map(&self) -> &BeatMapSnapshot {
-        &self.group_map
-    }
-
-    /// Returns the topology identity and revision.
-    #[must_use]
-    pub const fn stamp(&self) -> TopologyStamp {
-        self.stamp
-    }
-
-    /// Returns the direct members frozen into this topology revision.
-    #[must_use]
-    pub fn members(&self) -> &[SyncGroupMember] {
-        &self.members
-    }
-
-    fn prepare_update(&self, update: &SyncGroupUpdate) -> Result<Self, SyncGroupTopologyError> {
-        if update.base != self.stamp {
-            return Err(SyncGroupTopologyError::StaleTopology {
-                expected: self.stamp,
-                given: update.base,
-            });
-        }
-        let revision = self
-            .stamp
-            .revision()
-            .checked_next()
-            .ok_or(SyncGroupTopologyError::RevisionExhausted)?;
-        let mut members = self.members.to_vec();
-        for edit in update.edits.iter() {
-            match edit {
-                SyncGroupEdit::Add(member) => members.push(member.clone()),
-                SyncGroupEdit::Remove(member_id) => {
-                    let index = direct_member_index(&members, *member_id)?;
-                    members.remove(index);
-                }
-                SyncGroupEdit::Replace {
-                    member_id,
-                    replacement,
-                } => {
-                    let index = direct_member_index(&members, *member_id)?;
-                    members[index] = replacement.clone();
-                }
-            }
-        }
-        Self::try_new(self.group_map.clone(), revision, members)
-    }
-}
-
-/// Promotes any readable map into an independent empty group.
-///
-/// The source geometry is copied into a fresh map identity. The source map is
-/// not retained as a leader, member, or alignment edge.
-impl TryFrom<&dyn BeatMap> for SyncGroupSnapshot {
-    type Error = BeatMapIdAllocationError;
-
-    fn try_from(map: &dyn BeatMap) -> Result<Self, Self::Error> {
-        let group_map = map.snapshot().restamp(MapStamp::new(
-            BeatMapId::allocate()?,
-            BeatMapRevision::first(),
-        ));
-        Ok(Self {
-            stamp: TopologyStamp::new(group_map.id(), TopologyRevision::first()),
-            group_map,
-            members: Arc::from([]),
-        })
-    }
-}
-
-impl BeatMap for SyncGroupSnapshot {
-    delegate::delegate! {
-        to self.group_map {
-            fn id(&self) -> BeatMapId;
-            #[call(clone)]
-            fn snapshot(&self) -> BeatMapSnapshot;
-        }
-    }
-}
-
-/// One topology edit prepared against an immutable base stamp.
-#[derive(Clone, Debug, PartialEq)]
-#[non_exhaustive]
-pub enum SyncGroupEdit {
-    /// Adds one direct map or nested group.
-    Add(SyncGroupMember),
-    /// Removes one direct member by map identity.
-    Remove(BeatMapId),
-    /// Replaces one direct member while preserving edit ordering.
-    Replace {
-        /// Identity of the direct member being replaced.
-        member_id: BeatMapId,
-        /// New direct member edge.
-        replacement: SyncGroupMember,
+/// One operation routed through the live synchronization-group owner.
+#[derive(Debug)]
+pub enum SyncOperation<G: SyncGroup> {
+    /// Applies one ordered ownership-tree transaction against an exact base.
+    Topology {
+        /// Topology identity and revision the caller observed.
+        base: TopologyStamp,
+        /// Ordered operations committed together or not at all.
+        operations: Box<[TopologyOperation<G>]>,
+    },
+    /// Routes one playback transport operation through the resident Deck envelope.
+    Transport {
+        /// Stable Deck or Track map receiving the operation.
+        target: BeatMapId,
+        /// Exact Track load receiving the operation.
+        load: LoadGeneration,
+        /// Exact committed session transport state.
+        transport: TransportRevision,
+        /// Playback operation being routed.
+        operation: TransportOperation,
+    },
+    /// Changes the synchronization intent of one Deck.
+    Sync {
+        /// Stable Deck map receiving the intent.
+        target: BeatMapId,
+        /// Exact Track load receiving the intent.
+        load: LoadGeneration,
+        /// Exact committed session transport state.
+        transport: TransportRevision,
+        /// Whether the affected PCM is prepared or already audible.
+        source: AlignmentSource,
+        /// Exact output frame at which the intent may take effect.
+        activation: SessionFrame,
+        /// Requested synchronization state transition.
+        intent: SyncIntent,
+    },
+    /// Re-evaluates an active plan after one material control-plane change.
+    Reconcile {
+        /// Stable Deck map whose active plan is being re-evaluated.
+        target: BeatMapId,
+        /// Exact Track load whose active plan is being re-evaluated.
+        load: LoadGeneration,
+        /// Exact committed session transport state.
+        transport: TransportRevision,
+        /// Change that requires reconciliation.
+        cause: ReconcileCause,
+        /// Last source/output boundary consumed by the callback.
+        frontier: PresentationFrontier,
     },
 }
 
-/// Atomic candidate edit sequence for one exact topology revision.
-#[derive(Clone, Debug, PartialEq)]
-#[non_exhaustive]
-pub struct SyncGroupUpdate {
-    base: TopologyStamp,
-    edits: Arc<[SyncGroupEdit]>,
-}
-
-impl SyncGroupUpdate {
-    /// Freezes an ordered edit sequence against `base`.
+impl<G: SyncGroup> SyncOperation<G> {
+    /// Returns the unique group or map targeted by this operation.
     #[must_use]
-    pub fn new<I>(base: TopologyStamp, edits: I) -> Self
-    where
-        I: IntoIterator<Item = SyncGroupEdit>,
-    {
-        Self {
-            base,
-            edits: edits.into_iter().collect(),
+    pub const fn target(&self) -> BeatMapId {
+        match self {
+            Self::Topology { base, .. } => base.group_id(),
+            Self::Transport { target, .. }
+            | Self::Sync { target, .. }
+            | Self::Reconcile { target, .. } => *target,
         }
     }
 }
 
-/// A synchronization topology violates tree, identity, or revision rules.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
+/// One atomic ownership-tree operation.
+#[derive(Debug)]
+pub enum TopologyOperation<G: SyncGroup> {
+    /// Attaches one exclusively owned member to a direct parent group.
+    Attach {
+        /// Live member transferred to the receiving group.
+        member: SyncMember<G>,
+    },
+    /// Detaches one direct member from a parent group.
+    Detach {
+        /// Identity of the direct member being detached.
+        member: BeatMapId,
+    },
+    /// Replaces one direct member atomically.
+    Replace {
+        /// Identity of the direct member being replaced.
+        member: BeatMapId,
+        /// New live member transferred to the parent group.
+        replacement: SyncMember<G>,
+    },
+}
+
+/// Runtime member category used by group-specific topology policy.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
-pub enum SyncGroupTopologyError {
-    /// A direct ordinary member is the group map itself.
-    #[error("group map {group_id} cannot be its own member")]
-    SelfMember { group_id: BeatMapId },
-    /// A nested path returns to an ancestor group.
-    #[error("nested group path returns to ancestor map {group_id}")]
-    Cycle { group_id: BeatMapId },
-    /// One nested group appears below more than one parent edge.
-    #[error("nested group {group_id} has multiple parent edges")]
-    MultipleParents { group_id: BeatMapId },
-    /// One ordinary map appears more than once in the same topology tree.
-    #[error("leaf map {member_id} appears more than once")]
-    DuplicateLeaf { member_id: BeatMapId },
-    /// One map identity appears as both a nested group and an ordinary leaf.
-    #[error("map {member_id} appears as both a group and a leaf")]
-    ConflictingMemberKind { member_id: BeatMapId },
-    /// The alignment's parent point belongs to another map revision.
-    #[error("alignment parent stamp is {given:?}, expected {expected:?}")]
-    StaleGroupAlignment { expected: MapStamp, given: MapStamp },
-    /// The alignment's member point belongs to another map revision.
-    #[error("alignment member stamp is {given:?}, expected {expected:?}")]
-    StaleMemberAlignment { expected: MapStamp, given: MapStamp },
-    /// An edit addressed a member absent from the direct topology.
-    #[error("direct member {member_id} does not exist")]
-    MemberNotFound { member_id: BeatMapId },
-    /// An update was prepared against another published topology revision.
-    #[error("topology update base is {given:?}, expected {expected:?}")]
+pub enum SyncMemberKind {
+    /// An ordinary beat map, such as a loaded Track.
+    Map,
+    /// A nested synchronization group, such as a Deck below a Host.
+    Group,
+}
+
+/// One playback operation that must cross the resident Deck envelope.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum TransportOperation {
+    /// Prepare an exact source position before any affected PCM is audible.
+    PrepareStart {
+        /// Exact decoded source-frame destination.
+        source_frame: u64,
+    },
+    /// Begin or resume playback.
+    Play,
+    /// Hold playback at the current frontier.
+    Pause,
+    /// Relocate playback to an exact decoded source-frame destination.
+    Seek {
+        /// Exact decoded source-frame destination.
+        source_frame: u64,
+    },
+    /// End playback and retire the current render state.
+    Stop,
+}
+
+/// Requested synchronization transition for one stable Deck.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum SyncIntent {
+    /// Start following Host tempo and phase.
+    Enable,
+    /// Stop future Host correction and latch the current effective settings.
+    Disable,
+    /// Snap immediately to Host tempo and phase as an explicit user action.
+    AlignNow,
+}
+
+/// Material change that requires an active alignment plan to be reconsidered.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum ReconcileCause {
+    /// A previously unavailable map became usable.
+    MapAvailable,
+    /// A newer map revision materially changed the active relation.
+    MapRefined,
+    /// The authoritative Host transport changed.
+    TransportChanged,
+    /// The recursive ownership tree changed.
+    TopologyChanged,
+}
+
+/// An exact source/output boundary reached by the renderer.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, bon::Builder)]
+#[builder(state_mod(vis = "pub"))]
+#[non_exhaustive]
+pub struct RenderFrontier {
+    /// Exclusive decoded source-frame boundary.
+    source: u64,
+    /// Exclusive session output-frame boundary.
+    output: SessionFrame,
+}
+
+impl RenderFrontier {
+    /// Returns the exclusive decoded source-frame boundary.
+    #[must_use]
+    pub const fn source(self) -> u64 {
+        self.source
+    }
+
+    /// Returns the exclusive session output-frame boundary.
+    #[must_use]
+    pub const fn output(self) -> SessionFrame {
+        self.output
+    }
+}
+
+/// An exact source/output boundary consumed by the audio callback.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, bon::Builder)]
+#[builder(state_mod(vis = "pub"))]
+#[non_exhaustive]
+pub struct PresentationFrontier {
+    /// Exclusive decoded source-frame boundary actually consumed.
+    source: u64,
+    /// Exclusive session output-frame boundary actually consumed.
+    output: SessionFrame,
+}
+
+impl PresentationFrontier {
+    /// Returns the exclusive consumed source-frame boundary.
+    #[must_use]
+    pub const fn source(self) -> u64 {
+        self.source
+    }
+
+    /// Returns the exclusive consumed session output-frame boundary.
+    #[must_use]
+    pub const fn output(self) -> SessionFrame {
+        self.output
+    }
+}
+
+/// A synchronization capability that may be unavailable in one implementation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum SyncCapability {
+    /// Ownership-tree mutation.
+    Topology,
+    /// Play, pause, seek, start preparation, and stop routing.
+    Transport,
+    /// Map-to-map tempo and phase alignment.
+    Alignment,
+    /// Continuity-preserving replacement of an active alignment plan.
+    Reconciliation,
+}
+
+/// Result of validating and admitting one operation on the control plane.
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[must_use]
+#[non_exhaustive]
+pub enum SyncAdmission {
+    /// A control-plane-only topology transaction committed atomically.
+    TopologyChanged {
+        /// Identity assigned to the committed transaction.
+        operation: SyncOperationId,
+        /// Exact topology published by the transaction.
+        topology: TopologyStamp,
+    },
+    /// A validated SYNC-off transport command may enter the existing PCM path.
+    Accepted {
+        /// Identity of the admitted operation.
+        operation: SyncOperationId,
+        /// Topology against which the operation was admitted.
+        topology: TopologyStamp,
+        /// Exact Track load authorized for dispatch.
+        load: LoadGeneration,
+        /// Exact committed session transport state authorized for dispatch.
+        transport: TransportRevision,
+    },
+    /// A stamped plan is prepared for one exact render boundary.
+    Prepared {
+        /// Identity of the admitted operation.
+        operation: SyncOperationId,
+        /// Topology against which the operation was admitted.
+        topology: TopologyStamp,
+        /// Immutable plan prepared by the group.
+        plan: AlignmentPlanRevision,
+        /// Exact output boundary at which the plan takes effect.
+        activation: SessionFrame,
+    },
+    /// The requested operation already matches committed state.
+    Unchanged {
+        /// Identity of the admitted operation.
+        operation: SyncOperationId,
+        /// Topology against which the operation was admitted.
+        topology: TopologyStamp,
+    },
+    /// A later map revision may make the operation admissible.
+    Deferred {
+        /// Identity of the deferred operation.
+        operation: SyncOperationId,
+        /// Topology against which the operation was evaluated.
+        topology: TopologyStamp,
+        /// Map coverage required before the operation can be prepared.
+        required: MapRegion,
+    },
+    /// The current implementation cannot perform this operation.
+    Unavailable {
+        /// Identity of the rejected operation.
+        operation: SyncOperationId,
+        /// Topology against which the operation was evaluated.
+        topology: TopologyStamp,
+        /// Missing synchronization capability.
+        capability: SyncCapability,
+    },
+}
+
+/// Canonical synchronization state observed from one live group.
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[must_use]
+#[non_exhaustive]
+pub enum SyncStatusSnapshot {
+    /// Host correction is disabled inside the resident signal path.
+    Off { topology: TopologyStamp },
+    /// The requested alignment needs map coverage not yet published.
+    WaitingForMap {
+        operation: SyncOperationId,
+        topology: TopologyStamp,
+        required: MapRegion,
+    },
+    /// A plan is admitted but its activation has not been acknowledged.
+    Prepared {
+        operation: SyncOperationId,
+        topology: TopologyStamp,
+        plan: AlignmentPlanRevision,
+        activation: SessionFrame,
+    },
+    /// The requested behavior is not implemented by the current group.
+    Unavailable {
+        operation: SyncOperationId,
+        topology: TopologyStamp,
+        capability: SyncCapability,
+    },
+    /// The renderer has applied a continuity-preserving correction.
+    Converging {
+        applied: SyncApplied,
+        phase_error_frames: f64,
+    },
+    /// The renderer is holding the target tempo and phase.
+    Locked {
+        applied: SyncApplied,
+        phase_error_frames: f64,
+    },
+}
+
+/// A synchronization operation violates the live group contract.
+#[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
+#[non_exhaustive]
+pub enum SyncError {
+    /// This group does not implement the requested operation yet.
+    #[error("synchronization capability {capability:?} is unavailable")]
+    CapabilityUnavailable { capability: SyncCapability },
+    /// A topology transaction was based on another published revision.
+    #[error("topology base is {given:?}, expected {expected:?}")]
     StaleTopology {
         expected: TopologyStamp,
         given: TopologyStamp,
     },
-    /// The topology revision identity space is exhausted.
-    #[error("topology revision space is exhausted")]
-    RevisionExhausted,
+    /// No live group with the requested identity exists in this tree.
+    #[error("synchronization group {group_id} was not found")]
+    GroupNotFound { group_id: BeatMapId },
+    /// A live map snapshot or publication belongs to another stable owner.
+    #[error("map identity is {given}, expected {expected}")]
+    MapIdentityMismatch {
+        expected: BeatMapId,
+        given: BeatMapId,
+    },
+    /// A group-map publication did not advance the owner's current revision.
+    #[error("group map publication {given:?} does not advance {current:?}")]
+    StaleMapRevision { current: MapStamp, given: MapStamp },
+    /// No direct member with the requested identity exists in this group.
+    #[error("member {member_id} was not found in group {group_id}")]
+    MemberNotFound {
+        group_id: BeatMapId,
+        member_id: BeatMapId,
+    },
+    /// A group policy does not admit this category of direct member.
+    #[error("member {member_id} in group {group_id} has kind {given:?}, expected {expected:?}")]
+    InvalidMemberKind {
+        group_id: BeatMapId,
+        member_id: BeatMapId,
+        expected: SyncMemberKind,
+        given: SyncMemberKind,
+    },
+    /// A topology owner cannot mint another revision.
+    #[error("topology revision space is exhausted for group {group_id}")]
+    TopologyRevisionExhausted { group_id: BeatMapId },
+    /// A group owner cannot mint another operation identity.
+    #[error("synchronization operation identity space is exhausted for group {group_id}")]
+    OperationIdExhausted { group_id: BeatMapId },
+    /// No prepared renderer operation can accept an acknowledgement.
+    #[error("synchronization group has no prepared operation")]
+    NoPreparedOperation,
+    /// The renderer repeated an acknowledgement that was already committed.
+    #[error("synchronization operation {operation} was already acknowledged")]
+    DuplicateAcknowledgement { operation: SyncOperationId },
+    /// The renderer acknowledged another operation than the prepared one.
+    #[error("renderer acknowledged operation {given}, expected {expected}")]
+    StaleAcknowledgement {
+        expected: SyncOperationId,
+        given: SyncOperationId,
+    },
+    /// One or more renderer acknowledgement stamps do not match the prepared plan.
+    #[error("renderer acknowledgement {given:?} does not match {expected:?}")]
+    AppliedMismatch {
+        expected: Box<SyncApplied>,
+        given: Box<SyncApplied>,
+    },
+    /// The candidate ownership tree violates a topology invariant.
+    #[error(transparent)]
+    Topology(#[from] SyncGroupTopologyError),
 }
 
-/// Read-only protocol for a recursive group of musical maps.
+/// Live owner protocol for a recursive group of musical maps.
 ///
 /// The topology's group-map stamp must equal `snapshot().stamp()`, and its
 /// group identity must equal `id()`.
 pub trait SyncGroup: BeatMap {
-    /// Returns one immutable topology snapshot for a complete calculation.
-    fn topology(&self) -> SyncGroupSnapshot;
+    /// Concrete synchronization-group type accepted as a direct child.
+    type NestedGroup: SyncGroup;
 
-    /// Validates an atomic edit sequence without mutating the published group.
+    /// Returns one immutable topology snapshot for a complete calculation.
     ///
     /// # Errors
     ///
-    /// Returns [`SyncGroupTopologyError`] when the base stamp is stale or the
-    /// complete candidate violates topology invariants.
-    fn prepare_update(
-        &self,
-        update: &SyncGroupUpdate,
-    ) -> Result<SyncGroupSnapshot, SyncGroupTopologyError> {
-        self.topology().prepare_update(update)
-    }
-}
+    /// Returns [`SyncError`] when a live child violates the recursive topology
+    /// contract while the observation is being materialized.
+    fn topology(&self) -> Result<SyncGroupSnapshot, SyncError>;
 
-impl SyncGroup for SyncGroupSnapshot {
-    fn topology(&self) -> SyncGroupSnapshot {
-        self.clone()
-    }
-}
+    /// Validates and admits one operation without claiming audible application.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SyncRejected`] when the operation is invalid or unsupported;
+    /// the rejected value retains ownership of the complete operation.
+    fn transact(
+        &mut self,
+        operation: SyncOperation<Self::NestedGroup>,
+    ) -> Result<SyncAdmission, SyncRejected<Self::NestedGroup>>;
 
-fn direct_member_index(
-    members: &[SyncGroupMember],
-    member_id: BeatMapId,
-) -> Result<usize, SyncGroupTopologyError> {
-    members
-        .iter()
-        .position(|member| member.map.id() == member_id)
-        .ok_or(SyncGroupTopologyError::MemberNotFound { member_id })
-}
+    /// Returns the canonical control-plane view of this group's sync state.
+    fn status(&self) -> SyncStatusSnapshot;
 
-fn validate_edges(
-    group_map: &BeatMapSnapshot,
-    members: &[SyncGroupMember],
-) -> Result<(), SyncGroupTopologyError> {
-    for member in members {
-        let group_stamp = member.alignment.group().stamp();
-        if group_stamp != group_map.stamp() {
-            return Err(SyncGroupTopologyError::StaleGroupAlignment {
-                expected: group_map.stamp(),
-                given: group_stamp,
-            });
-        }
-        let member_stamp = member.alignment.member().stamp();
-        if member_stamp != member.map.stamp() {
-            return Err(SyncGroupTopologyError::StaleMemberAlignment {
-                expected: member.map.stamp(),
-                given: member_stamp,
-            });
-        }
-    }
-    Ok(())
-}
-
-fn validate_tree(
-    root: BeatMapId,
-    members: &[SyncGroupMember],
-) -> Result<(), SyncGroupTopologyError> {
-    let mut groups = BTreeSet::from([root]);
-    let mut leaves = BTreeSet::new();
-    for member in members {
-        match member.group_topology() {
-            Some(group) => visit_group(group, root, &mut groups, &mut leaves)?,
-            None if member.map.id() == root => {
-                return Err(SyncGroupTopologyError::SelfMember { group_id: root });
-            }
-            None => visit_leaf(member.map.id(), &groups, &mut leaves)?,
-        }
-    }
-    Ok(())
-}
-
-fn visit_group(
-    group: &SyncGroupSnapshot,
-    root: BeatMapId,
-    groups: &mut BTreeSet<BeatMapId>,
-    leaves: &mut BTreeSet<BeatMapId>,
-) -> Result<(), SyncGroupTopologyError> {
-    let group_id = group.group_map.id();
-    if group_id == root {
-        return Err(SyncGroupTopologyError::Cycle { group_id });
-    }
-    if leaves.contains(&group_id) {
-        return Err(SyncGroupTopologyError::ConflictingMemberKind {
-            member_id: group_id,
-        });
-    }
-    if !groups.insert(group_id) {
-        return Err(SyncGroupTopologyError::MultipleParents { group_id });
-    }
-    for member in group.members() {
-        match member.group_topology() {
-            Some(child) => visit_group(child, root, groups, leaves)?,
-            None if member.map.id() == root => {
-                return Err(SyncGroupTopologyError::Cycle { group_id: root });
-            }
-            None => visit_leaf(member.map.id(), groups, leaves)?,
-        }
-    }
-    Ok(())
-}
-
-fn visit_leaf(
-    member_id: BeatMapId,
-    groups: &BTreeSet<BeatMapId>,
-    leaves: &mut BTreeSet<BeatMapId>,
-) -> Result<(), SyncGroupTopologyError> {
-    if groups.contains(&member_id) {
-        return Err(SyncGroupTopologyError::ConflictingMemberKind { member_id });
-    }
-    if !leaves.insert(member_id) {
-        return Err(SyncGroupTopologyError::DuplicateLeaf { member_id });
-    }
-    Ok(())
+    /// Commits an operation as audibly applied after an exact renderer acknowledgement.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SyncError`] when the acknowledgement is stale, duplicate, or
+    /// does not match the currently prepared operation.
+    fn acknowledge(&mut self, applied: SyncApplied) -> Result<(), SyncError>;
 }

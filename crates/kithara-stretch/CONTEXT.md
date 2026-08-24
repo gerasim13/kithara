@@ -94,8 +94,8 @@ sample rate and channel count, so the trait intentionally does not depend on
 
 1. Add `src/backends/<name>.rs` with a concrete adapter implementing `StretchBackend`, re-exported
   from `backends/mod.rs` under the same gate.
-1. Add a feature `stretch-<name>` in `Cargo.toml` and to the `any(...)` guard of the
-  `compile_error!` in `lib.rs` (the crate requires ≥1 backend).
+1. Add a feature `stretch-<name>` in `Cargo.toml` and to the shared backend-module gates in
+  `lib.rs`; the backend-neutral elastic planner must continue to compile with no backend feature.
 1. Gate the adapter module, the `StretchKind` variant, its `all()` entry, its `From`/`u8` arms, and
   the `build_backend` factory arm on `#[cfg(feature = "stretch-<name>")]`; keep the discriminant
   stable.
@@ -108,13 +108,16 @@ sample rate and channel count, so the trait intentionally does not depend on
 
 Do not declare `stretch-native` or add `backends/native.rs` until the pure-Rust engine exists.
 
-## No-backend and wasm builds
+## Planner-only and wasm builds
 
-There is no "no backend" build here: `lib.rs` `compile_error!`s unless at least one `stretch-*`
-feature is set, and the machinery (kind, factory, options, backends) is unconditional. "Stretch is
-absent" lives one level up — `kithara-audio` depends on `kithara-stretch` **optionally** (only its
-`stretch-signalsmith` / `stretch-bungee` features pull it), so a build with no stretch, including
-every wasm build today, simply does not link this crate. Domain types that non-stretch code needs
-(`GridSegment`, `RegionPlan`) therefore live in `kithara-audio`. The C++ backends are native-only
-(`wasm32-unknown-unknown` has no libc++), and `kithara-bufpool` is likewise an optional non-wasm
-dependency pulled in by the backend features.
+The backend-neutral exact-span planner compiles with no `stretch-*` feature. `ElasticSpanPlan`, its
+cursor/request types, capability envelope, latency, and engine traits remain available so
+`kithara-audio` can own one alignment-plan protocol on every target. Streaming backend machinery
+(`StretchBackend`, `StretchOptions`, `StretchKind`, factory, and adapters) exists only when at least
+one backend feature is enabled.
+
+`kithara-audio` therefore links `kithara-stretch` unconditionally for planner contracts and forwards
+its `stretch-signalsmith` / `stretch-bungee` features only to native DSP implementations. The C++
+backends remain native-only (`wasm32-unknown-unknown` has no libc++), and `kithara-bufpool` remains
+an optional non-wasm dependency pulled in by backend features. A planner-only caller declares
+`ElasticCapabilities` explicitly; it does not imply that an engine exists on the target.

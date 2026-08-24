@@ -1,6 +1,6 @@
-use std::num::NonZeroU64;
-
-use kithara_audio::{HostBeatMap, HostEpoch, MapStamp, SessionAnchor, SessionBeat};
+use kithara_audio::{
+    HostBeatMap, HostEpoch, MapStamp, SessionAnchor, SessionBeat, TransportRevision,
+};
 
 const SECONDS_PER_MINUTE: f64 = 60.0;
 
@@ -56,36 +56,6 @@ impl TryFrom<f64> for Tempo {
 #[non_exhaustive]
 pub struct TempoError {
     beats_per_minute: f64,
-}
-
-/// Monotonic generation of a committed session transport configuration.
-#[derive(
-    Clone,
-    Copy,
-    Debug,
-    Eq,
-    Hash,
-    Ord,
-    PartialEq,
-    PartialOrd,
-    derive_more::Display,
-    derive_more::Into,
-)]
-#[display("{_0}")]
-#[into(u64)]
-#[repr(transparent)]
-pub struct TransportRevision(NonZeroU64);
-
-impl TransportRevision {
-    pub(crate) const FIRST: Self = Self(NonZeroU64::MIN);
-
-    pub(crate) fn checked_next(self) -> Option<Self> {
-        self.0
-            .get()
-            .checked_add(1)
-            .and_then(NonZeroU64::new)
-            .map(Self)
-    }
 }
 
 /// The last session transport position processed by the audio graph.
@@ -183,7 +153,7 @@ mod tests {
             SessionBeat::new(8.0).expect("invariant: fixture position is finite"),
             true,
             Tempo::new(120.0).expect("invariant: fixture tempo is in range"),
-            TransportRevision::FIRST,
+            TransportRevision::first(),
             anchor,
             MapStamp::new(
                 BeatMapId::allocate().expect("invariant: fixture map identity space is available"),

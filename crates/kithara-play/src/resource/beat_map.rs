@@ -2,8 +2,9 @@ use std::{collections::HashMap, fmt};
 
 use kithara_assets::AssetScope;
 use kithara_audio::{
-    AssetAxis, AssetBeatMap, AssetMapPublishError, AssetMapPublisher, AssetMapUpdate, BeatMap,
-    BeatMapId, BeatMapSnapshot,
+    AlignmentPlan, AlignmentRequest, AssetAxis, AssetBeatMap, AssetMapPublishError,
+    AssetMapPublisher, AssetMapUpdate, BeatMap, BeatMapId, BeatMapSnapshot, PlanTransition,
+    PresentationFrontier, SyncError,
 };
 use kithara_platform::sync::{Arc, Mutex};
 
@@ -95,6 +96,17 @@ impl BeatMap for AssetMapRegistration {
         to self.map {
             fn id(&self) -> BeatMapId;
             fn snapshot(&self) -> BeatMapSnapshot;
+            fn align_to(
+                &self,
+                target: &dyn BeatMap,
+                request: AlignmentRequest,
+            ) -> Result<AlignmentPlan, SyncError>;
+            fn reconcile_to(
+                &self,
+                target: &dyn BeatMap,
+                active: &AlignmentPlan,
+                frontier: PresentationFrontier,
+            ) -> Result<PlanTransition, SyncError>;
         }
     }
 }
@@ -179,7 +191,7 @@ impl AssetMapRegistry {
         })
     }
 
-    pub(crate) fn reserve_host_id() -> Result<BeatMapId, AssetMapRegistryError> {
+    pub(crate) fn reserve_id() -> Result<BeatMapId, AssetMapRegistryError> {
         BeatMapId::allocate().map_err(|_| AssetMapRegistryError::IdExhausted)
     }
 }
@@ -222,7 +234,7 @@ mod tests {
     fn host_and_asset_maps_share_one_identity_sequence() {
         let registry = AssetMapRegistry::default();
         let store = AssetStore::builder().build();
-        let host = AssetMapRegistry::reserve_host_id()
+        let host = AssetMapRegistry::reserve_id()
             .expect("invariant: fresh registry can reserve a host identity");
         let asset = registry
             .map(&scope(&store), axis())

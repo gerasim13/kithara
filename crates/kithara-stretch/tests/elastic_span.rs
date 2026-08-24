@@ -1,8 +1,6 @@
-#![cfg(feature = "stretch-signalsmith")]
-
 use kithara_stretch::{
-    ElasticConfig, ElasticCursor, ElasticEngine, ElasticError, ElasticSpan, ElasticSpanConfig,
-    ElasticSpanPlan, SignalsmithElastic,
+    ElasticCapabilities, ElasticConfig, ElasticCursor, ElasticError, ElasticLatency,
+    ElasticRateEnvelope, ElasticSpan, ElasticSpanConfig, ElasticSpanPlan,
 };
 use kithara_test_utils::kithara;
 
@@ -12,12 +10,12 @@ const MAX_OUTPUT_FRAMES: usize = 480;
 /// The planner reads capabilities, never an engine, so one declared window is
 /// enough to pin its quantization; every engine renders what it plans, which
 /// the conformance suite covers.
-fn capabilities() -> kithara_stretch::ElasticCapabilities {
+fn capabilities() -> ElasticCapabilities {
     let config = ElasticConfig::try_from((44_100, 2, 960, MAX_OUTPUT_FRAMES))
         .expect("invariant: static exact-span config");
-    SignalsmithElastic::prepare(config)
-        .expect("signalsmith exact-span engine")
-        .capabilities()
+    let rate_envelope = ElasticRateEnvelope::try_from(2.0 / 3.0..=4.0 / 3.0)
+        .expect("invariant: static exact-span rate envelope");
+    ElasticCapabilities::new(config, ElasticLatency::new(0, 0), rate_envelope)
 }
 
 fn span_config() -> ElasticSpanConfig {

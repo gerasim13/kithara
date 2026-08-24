@@ -71,8 +71,8 @@ analysis-waveform = ["dep:realfft"]
 # Native-only C++ time-stretch backends. Default native builds use signalsmith;
 # bungee stays opt-in. Wasm builds pass `--no-default-features`, so they carry
 # no stretch DSP: speed control stays, key-lock is compiled out.
-stretch-signalsmith = ["dep:kithara-stretch", "kithara-stretch/stretch-signalsmith"]
-stretch-bungee = ["dep:kithara-stretch", "kithara-stretch/stretch-bungee"]
+stretch-signalsmith = ["kithara-stretch/stretch-signalsmith"]
+stretch-bungee = ["kithara-stretch/stretch-bungee"]
 # NN beat/downbeat detector (kithara-beat, embedded small model). Native-only
 # in practice: wasm builds simply do not enable it (rten on wasm unverified).
 beat-nn = ["analysis-beat", "dep:kithara-beat", "kithara-beat/embed-small-model"]
@@ -86,7 +86,7 @@ kithara-events = { workspace = true }
 kithara-platform = { workspace = true }
 kithara-resampler = { workspace = true, default-features = false }
 kithara-stream = { workspace = true, default-features = false }
-kithara-stretch = { workspace = true, default-features = false, optional = true }
+kithara-stretch = { workspace = true, default-features = false }
 kithara-test-macros = { workspace = true }
 kithara-test-utils = { workspace = true }
 

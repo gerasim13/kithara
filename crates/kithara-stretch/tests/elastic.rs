@@ -6,6 +6,8 @@
 //! rate window, the declared latency) are asserted next to the engine that
 //! declares them, and nothing else in the suite names a backend.
 
+#![cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
+
 use std::f32::consts::TAU;
 
 use kithara_stretch::{

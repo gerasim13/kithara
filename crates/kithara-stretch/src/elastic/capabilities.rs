@@ -1,4 +1,6 @@
-use super::{ElasticConfig, ElasticError, ElasticLatency, ElasticRateEnvelope, ElasticRequest};
+use super::{ElasticConfig, ElasticLatency, ElasticRateEnvelope};
+#[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
+use super::{ElasticError, ElasticRequest};
 
 /// Immutable limits, latency and rate window of a prepared elastic engine.
 /// Every value is declared by the engine that reports it, so a caller plans
@@ -18,7 +20,9 @@ pub struct ElasticCapabilities {
 }
 
 impl ElasticCapabilities {
-    pub(crate) const fn new(
+    /// Declares the fixed shape, latency, and rate window of an elastic engine.
+    #[must_use]
+    pub const fn new(
         config: ElasticConfig,
         latency: ElasticLatency,
         rate_envelope: ElasticRateEnvelope,
@@ -31,6 +35,7 @@ impl ElasticCapabilities {
     }
 
     /// Interleaved sample count of a frame span at the prepared channel count.
+    #[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
     pub(crate) fn samples(self, frames: usize) -> Result<usize, ElasticError> {
         frames
             .checked_mul(self.channels())
@@ -40,6 +45,7 @@ impl ElasticCapabilities {
     /// Every engine accepts the same requests: inside the prepared block
     /// limits, matching the buffers it was handed, and inside the declared
     /// rate envelope.
+    #[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
     pub(crate) fn validate(
         self,
         request: ElasticRequest,
@@ -64,6 +70,7 @@ impl ElasticCapabilities {
     /// Buffer shape and rate checks shared by rendering and priming; priming
     /// spans are bounded by the declared latency rather than by the block
     /// limits, so it validates these without the limit checks.
+    #[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
     pub(crate) fn validate_spans(
         self,
         request: ElasticRequest,

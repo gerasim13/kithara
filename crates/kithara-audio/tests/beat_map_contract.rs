@@ -1,12 +1,13 @@
 use std::num::NonZeroU32;
 
 use kithara_audio::{
-    AssetAxis, AssetBeatMap, AssetFrame, AssetMapPublishError, AssetMapUpdate, Beat, BeatEvidence,
-    BeatMap, BeatMapId, BeatMapRevision, BeatMapSnapshot, BeatMapSnapshotError, BeatMarker,
-    BeatOrdinal, BeatsPerMinute, FrameUncertainty, HostAxis, HostBeatMap, HostEpoch, MapAxis,
-    MapCoordinateError, MapPoint, MapPosition, MapQuery, MapSegment, MapState, MapUnavailable,
-    Meter, MeterFacts, SegmentDraft, SegmentEndpoint, SegmentError, SegmentFacts, SegmentSet,
-    SessionAnchor, SessionBeat, SessionFrame,
+    AlignmentPlan, AlignmentRequest, AssetAxis, AssetBeatMap, AssetFrame, AssetMapPublishError,
+    AssetMapUpdate, Beat, BeatEvidence, BeatMap, BeatMapId, BeatMapRevision, BeatMapSnapshot,
+    BeatMapSnapshotError, BeatMarker, BeatOrdinal, BeatsPerMinute, FrameUncertainty, HostAxis,
+    HostBeatMap, HostEpoch, MapAxis, MapCoordinateError, MapPoint, MapPosition, MapQuery,
+    MapSegment, MapState, MapUnavailable, Meter, MeterFacts, PlanTransition, PresentationFrontier,
+    SegmentDraft, SegmentEndpoint, SegmentError, SegmentFacts, SegmentSet, SessionAnchor,
+    SessionBeat, SessionFrame, SyncError,
 };
 use kithara_test_utils::kithara;
 
@@ -796,12 +797,69 @@ impl BeatMap for GroupCompatibleFake {
     fn snapshot(&self) -> BeatMapSnapshot {
         self.snapshot.clone()
     }
+
+    fn align_to(
+        &self,
+        target: &dyn BeatMap,
+        request: AlignmentRequest,
+    ) -> Result<AlignmentPlan, SyncError> {
+        self.snapshot.align_to(target, request)
+    }
+
+    fn reconcile_to(
+        &self,
+        target: &dyn BeatMap,
+        active: &AlignmentPlan,
+        frontier: PresentationFrontier,
+    ) -> Result<PlanTransition, SyncError> {
+        self.snapshot.reconcile_to(target, active, frontier)
+    }
 }
 
 fn beat_from(map: &dyn BeatMap, position: MapPosition) -> f64 {
     let snapshot = map.snapshot();
     let estimate = resolved(snapshot.beat_at(MapPoint::new(snapshot.stamp(), position)));
     f64::from(*estimate.value().value())
+}
+
+fn align_maps(
+    source: &dyn BeatMap,
+    target: &dyn BeatMap,
+    request: AlignmentRequest,
+) -> Result<AlignmentPlan, SyncError> {
+    source.align_to(target, request)
+}
+
+fn reconcile_maps(
+    source: &dyn BeatMap,
+    target: &dyn BeatMap,
+    active: &AlignmentPlan,
+    frontier: PresentationFrontier,
+) -> Result<PlanTransition, SyncError> {
+    source.reconcile_to(target, active, frontier)
+}
+
+fn observe_plan_transition(transition: &PlanTransition) {
+    match transition {
+        PlanTransition::Unchanged | PlanTransition::Replace { .. } => {}
+        _ => {}
+    }
+}
+
+#[kithara::test]
+fn beat_map_exposes_object_safe_alignment_and_reconciliation() {
+    let _align_contract: fn(
+        &dyn BeatMap,
+        &dyn BeatMap,
+        AlignmentRequest,
+    ) -> Result<AlignmentPlan, SyncError> = align_maps;
+    let _reconcile_contract: fn(
+        &dyn BeatMap,
+        &dyn BeatMap,
+        &AlignmentPlan,
+        PresentationFrontier,
+    ) -> Result<PlanTransition, SyncError> = reconcile_maps;
+    let _transition_contract: fn(&PlanTransition) = observe_plan_transition;
 }
 
 #[kithara::test]
@@ -934,6 +992,25 @@ fn empty_host_segment_snapshot_reports_a_host_native_gap() {
     };
     assert_eq!(required.start(), MapPosition::Host(SessionFrame::new(0)));
     assert_eq!(required.end(), MapPosition::Host(SessionFrame::new(0)));
+}
+
+#[kithara::test]
+fn unavailable_snapshot_is_an_infallible_external_owner_seed() {
+    let axis = MapAxis::Host(HostAxis::new(sample_rate(), HostEpoch::new(4)));
+    let revision = BeatMapRevision::first();
+    let snapshot = BeatMapSnapshot::unavailable(map_id(), revision, axis);
+    let beat = Beat::new(0.0).expect("invariant: fixture beat is finite");
+
+    assert_eq!(snapshot.revision(), revision);
+    assert_eq!(snapshot.axis(), axis);
+    assert_eq!(
+        snapshot.state(),
+        MapState::Unavailable(MapUnavailable::NoGeometry)
+    );
+    assert!(matches!(
+        snapshot.position_at(MapPoint::new(snapshot.stamp(), beat)),
+        MapQuery::Unavailable(MapUnavailable::NoGeometry)
+    ));
 }
 
 #[kithara::test]

@@ -33,4 +33,6 @@ Feature flags select the compiled backends:
 - `stretch-bungee` enables `bungee-rs` as an opt-in backend.
 
 Both current backends are native-only. See [CONTEXT.md](CONTEXT.md) for the
-backend contract, wasm notes, and the future pure-Rust backend recipe.
+backend contract, wasm notes, and the future pure-Rust backend recipe. With no
+backend feature, the backend-neutral exact-span planner and engine contracts
+remain available without a DSP implementation.

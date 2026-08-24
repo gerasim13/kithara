@@ -121,6 +121,7 @@ impl EngineImpl {
             self.bus.clone(),
             self.eq_layout.lock().clone(),
             self.pcm_pool.clone(),
+            self.config.sample_rate,
         )?;
         *player_id = Some(id);
         drop(player_id);

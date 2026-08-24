@@ -4,9 +4,10 @@ use kithara_platform::sync::Arc;
 use portable_atomic::{AtomicU64, Ordering};
 
 use super::{
-    AssetAxis, Beat, BeatEvidence, BeatsPerMinute, FrameUncertainty, MapAxis, MapPoint,
-    MapPosition, MapRegion, Meter, MeterFacts, SegmentSet, SessionAnchor, SessionBeat,
-    SessionFrame,
+    AlignmentPlan, AlignmentRequest, AssetAxis, Beat, BeatEvidence, BeatsPerMinute,
+    FrameUncertainty, MapAxis, MapPoint, MapPosition, MapRegion, Meter, MeterFacts, PlanTransition,
+    PresentationFrontier, SegmentSet, SessionAnchor, SessionBeat, SessionFrame, SyncCapability,
+    SyncError,
 };
 
 const SECONDS_PER_MINUTE: f64 = 60.0;
@@ -226,6 +227,31 @@ pub trait BeatMap: Send + Sync + 'static {
     /// map identity never move backward, and every published replacement uses
     /// a later revision than the snapshot it replaces.
     fn snapshot(&self) -> BeatMapSnapshot;
+
+    /// Compiles a stamped source-to-target alignment plan.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SyncError`] when map coverage, stamps, coordinates, policy, or
+    /// the implementation's alignment capability cannot satisfy `request`.
+    fn align_to(
+        &self,
+        target: &dyn BeatMap,
+        request: AlignmentRequest,
+    ) -> Result<AlignmentPlan, SyncError>;
+
+    /// Reconciles a newer map observation without changing already audible PCM.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SyncError`] when the active plan or frontier is stale, or a
+    /// continuity-preserving successor cannot be compiled.
+    fn reconcile_to(
+        &self,
+        target: &dyn BeatMap,
+        active: &AlignmentPlan,
+        frontier: PresentationFrontier,
+    ) -> Result<PlanTransition, SyncError>;
 }
 
 /// One immutable, revisioned musical-map observation.
@@ -233,6 +259,38 @@ pub trait BeatMap: Send + Sync + 'static {
 #[non_exhaustive]
 pub struct BeatMapSnapshot {
     pub(crate) data: Arc<BeatMapSnapshotData>,
+}
+
+impl BeatMap for BeatMapSnapshot {
+    delegate::delegate! {
+        to self {
+            #[call(id)]
+            fn id(&self) -> BeatMapId;
+            #[call(clone)]
+            fn snapshot(&self) -> BeatMapSnapshot;
+        }
+    }
+
+    fn align_to(
+        &self,
+        _target: &dyn BeatMap,
+        _request: AlignmentRequest,
+    ) -> Result<AlignmentPlan, SyncError> {
+        Err(SyncError::CapabilityUnavailable {
+            capability: SyncCapability::Alignment,
+        })
+    }
+
+    fn reconcile_to(
+        &self,
+        _target: &dyn BeatMap,
+        _active: &AlignmentPlan,
+        _frontier: PresentationFrontier,
+    ) -> Result<PlanTransition, SyncError> {
+        Err(SyncError::CapabilityUnavailable {
+            capability: SyncCapability::Reconciliation,
+        })
+    }
 }
 
 /// A caller-supplied snapshot violates the public musical-map contract.
@@ -290,18 +348,19 @@ impl TryFrom<(BeatMapId, BeatMapRevision, MapState, SegmentSet)> for BeatMapSnap
 }
 
 impl BeatMapSnapshot {
-    /// Copies this immutable geometry under a caller-owned map stamp.
+    /// Creates an empty map for an external owner that has no usable geometry yet.
+    ///
+    /// The map keeps its declared coordinate axis while every query reports
+    /// [`MapUnavailable::NoGeometry`]. A later owner publication must use a
+    /// newer revision for the same identity.
     #[must_use]
-    pub fn restamp(&self, stamp: MapStamp) -> Self {
-        Self {
-            data: Arc::new(BeatMapSnapshotData {
-                id: stamp.map_id(),
-                revision: stamp.revision(),
-                state: self.state(),
-                axis: self.axis(),
-                geometry: self.data.geometry.clone(),
-            }),
-        }
+    pub fn unavailable(id: BeatMapId, revision: BeatMapRevision, axis: MapAxis) -> Self {
+        Self::new_segments(
+            id,
+            revision,
+            MapState::Unavailable(MapUnavailable::NoGeometry),
+            SegmentSet::empty(axis),
+        )
     }
 
     fn new_segments(

@@ -1,8 +1,11 @@
 use std::ops::RangeInclusive;
 
+#[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
 use num_traits::ToPrimitive;
 
-use super::{ElasticError, ElasticRequest};
+use super::ElasticError;
+#[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
+use super::ElasticRequest;
 
 /// Supported source-frame advance per output frame. Every engine declares its
 /// own window; nothing outside the adapter knows which library is behind it.
@@ -19,6 +22,7 @@ pub struct ElasticRateEnvelope {
 }
 
 impl ElasticRateEnvelope {
+    #[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
     pub(crate) fn contains(self, request: ElasticRequest) -> bool {
         request
             .source_frames()

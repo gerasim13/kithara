@@ -1,6 +1,7 @@
 use super::{
-    BeatMap, BeatMapId, BeatMapRevision, BeatMapSnapshot, HostAxis, HostEpoch, MapAxis, MeterFacts,
-    SessionAnchor,
+    AlignmentPlan, AlignmentRequest, BeatMap, BeatMapId, BeatMapRevision, BeatMapSnapshot,
+    HostAxis, HostEpoch, MapAxis, MeterFacts, PlanTransition, PresentationFrontier, SessionAnchor,
+    SyncError,
 };
 
 /// Immutable ephemeral host-map view over one committed session anchor.
@@ -32,6 +33,17 @@ impl BeatMap for HostBeatMap {
             fn id(&self) -> BeatMapId;
             #[call(clone)]
             fn snapshot(&self) -> BeatMapSnapshot;
+            fn align_to(
+                &self,
+                target: &dyn BeatMap,
+                request: AlignmentRequest,
+            ) -> Result<AlignmentPlan, SyncError>;
+            fn reconcile_to(
+                &self,
+                target: &dyn BeatMap,
+                active: &AlignmentPlan,
+                frontier: PresentationFrontier,
+            ) -> Result<PlanTransition, SyncError>;
         }
     }
 }

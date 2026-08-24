@@ -26,6 +26,11 @@ pub use segment::{
     SegmentDraft, SegmentEndpoint, SegmentError, SegmentFacts, SegmentSet,
 };
 pub use sync::{
-    SyncAlignment, SyncGroup, SyncGroupEdit, SyncGroupMember, SyncGroupSnapshot,
-    SyncGroupTopologyError, SyncGroupUpdate, TopologyRevision, TopologyStamp,
+    AlignmentCursor, AlignmentPlan, AlignmentPlanError, AlignmentPlanRevision, AlignmentRequest,
+    AlignmentSource, AlignmentTransition, BeatAlignment, LoadGeneration, PlanSpan, PlanSpanSlot,
+    PlanTransition, PlannedRenderSpan, PresentationFrontier, ReconcileCause, RenderFrontier,
+    RenderPlan, SourceFrameRange, SyncAdmission, SyncApplied, SyncCapability, SyncError, SyncGroup,
+    SyncGroupSnapshot, SyncGroupTopologyError, SyncIntent, SyncMember, SyncMemberKind,
+    SyncMemberSnapshot, SyncOperation, SyncOperationId, SyncRejected, SyncStatusSnapshot,
+    TopologyOperation, TopologyRevision, TopologyStamp, TransportOperation, TransportRevision,
 };

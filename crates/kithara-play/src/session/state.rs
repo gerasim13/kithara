@@ -1,8 +1,14 @@
+use std::num::NonZeroU32;
+
 use firewheel::{
     FirewheelConfig, FirewheelCtx, backend::AudioBackend, channel_config::ChannelCount, diff::Memo,
     node::NodeID, nodes::volume::VolumeNode,
 };
-use kithara_audio::EqBandConfig;
+use kithara_audio::{
+    BeatMapId, BeatMapRevision, BeatMapSnapshot, EqBandConfig, HostEpoch, SyncAdmission,
+    SyncCapability, SyncError, SyncGroup, SyncMember, SyncOperation, SyncOperationId,
+    TopologyOperation, TopologyRevision,
+};
 use kithara_bufpool::PcmPool;
 use kithara_events::EventBus;
 use tracing::{debug, warn};
@@ -11,6 +17,7 @@ use super::{
     dispatch::{restart_stream, trace_stream_info},
     graph::{ducking_gain, tap},
     protocol::{PlayerId, SessionError, StartStreamFn},
+    sync::{Host, unavailable_map},
     transport::{HostMapGeneration, SessionTransportState, TransportControl, install},
 };
 use crate::{
@@ -28,7 +35,7 @@ pub(super) struct SlotNodes {
     pub(super) slot_id: SlotId,
 }
 
-pub(super) struct PlayerState {
+pub(super) struct Deck {
     pub(super) bus: EventBus,
     pub(super) master_eq_memo: Option<Memo<MasterEqNode>>,
     pub(super) master_eq_node_id: Option<NodeID>,
@@ -36,6 +43,11 @@ pub(super) struct PlayerState {
     pub(super) master_volume_node_id: Option<NodeID>,
     pub(super) pcm_pool: PcmPool,
     pub(super) player_id: PlayerId,
+    pub(super) map: BeatMapSnapshot,
+    pub(super) tracks: Vec<SyncMember<Self>>,
+    pub(super) next_operation: Option<SyncOperationId>,
+    pub(super) topology_revision: TopologyRevision,
+    pub(super) unavailable: Option<(SyncOperationId, SyncCapability)>,
     pub(super) shared_eq: SharedEq,
     pub(super) eq_layout: Vec<EqBandConfig>,
     pub(super) slots: Vec<SlotNodes>,
@@ -44,12 +56,14 @@ pub(super) struct PlayerState {
     pub(super) next_slot_id: u64,
 }
 
-impl PlayerState {
-    fn new(
+impl Deck {
+    pub(super) fn new(
         player_id: PlayerId,
+        id: BeatMapId,
         bus: EventBus,
         eq_layout: Vec<EqBandConfig>,
         pcm_pool: PcmPool,
+        sample_rate: NonZeroU32,
     ) -> Self {
         let (eq_layout, gains) = prepare_eq_layout(eq_layout);
         let band_count = eq_layout.len();
@@ -60,6 +74,11 @@ impl PlayerState {
             eq_layout,
             pcm_pool,
             player_id,
+            map: unavailable_map(id, BeatMapRevision::first(), sample_rate, HostEpoch::new(0)),
+            tracks: Vec::new(),
+            next_operation: Some(SyncOperationId::first()),
+            topology_revision: TopologyRevision::first(),
+            unavailable: None,
             master_eq_memo: None,
             master_eq_node_id: None,
             master_volume: 1.0,
@@ -96,12 +115,12 @@ pub struct SessionState<B: AudioBackend> {
     pub(super) next_player_id: PlayerId,
     pub(super) session_ducking: SessionDuckingMode,
     pub(super) start_stream_fn: StartStreamFn<B>,
-    pub(super) players: Vec<PlayerState>,
     pub(super) stream_needs_restart: bool,
     pub(super) sample_rate_hint: u32,
     pub(super) transport: SessionTransportState,
     beat_maps: AssetMapRegistry,
     pub(super) host_map_generation: Option<HostMapGeneration>,
+    pub(super) host: Option<Host>,
 }
 
 impl<B: AudioBackend> SessionState<B> {
@@ -119,7 +138,6 @@ impl<B: AudioBackend> SessionState<B> {
             transport_control: None,
             mix_tap: None,
             next_player_id: 1,
-            players: Vec::new(),
             sample_rate_hint: Self::DEFAULT_SAMPLE_RATE,
             session_ducking: SessionDuckingMode::Off,
             session_output_memo: None,
@@ -129,6 +147,7 @@ impl<B: AudioBackend> SessionState<B> {
             transport: SessionTransportState::default(),
             beat_maps: AssetMapRegistry::default(),
             host_map_generation: None,
+            host: None,
         }
     }
 
@@ -146,24 +165,111 @@ pub(super) fn register_player<B: AudioBackend>(
     bus: EventBus,
     eq_layout: Vec<EqBandConfig>,
     pcm_pool: PcmPool,
-) -> PlayerId {
+    sample_rate: u32,
+) -> Result<PlayerId, SessionError> {
+    let sample_rate =
+        NonZeroU32::new(sample_rate).ok_or(SessionError::InvalidSampleRate(sample_rate))?;
     let player_id = state.next_player_id;
-    state.next_player_id += 1;
-    state
-        .players
-        .push(PlayerState::new(player_id, bus, eq_layout, pcm_pool));
+    let next_player_id = player_id
+        .checked_add(1)
+        .ok_or(SessionError::PlayerIdExhausted)?;
+    let host_id = if state.host.is_none() {
+        Some(AssetMapRegistry::reserve_id()?)
+    } else {
+        None
+    };
+    let deck_id = AssetMapRegistry::reserve_id()?;
+    let deck = Deck::new(player_id, deck_id, bus, eq_layout, pcm_pool, sample_rate);
+    if let Some(host) = state.host.as_mut() {
+        attach_deck(host, deck)?;
+    } else {
+        let host_id = host_id
+            .ok_or_else(|| SessionError::Graph("session host identity is missing".to_owned()))?;
+        let mut host = Host::new(host_id, sample_rate);
+        attach_deck(&mut host, deck)?;
+        let mut generation = HostMapGeneration::new(host_id);
+        generation.commit_revision(BeatMapRevision::first());
+        state.host_map_generation = Some(generation);
+        state.host = Some(host);
+    }
+    state.next_player_id = next_player_id;
     debug!(
         player_id,
-        players = state.players.len(),
+        players = state.host.as_ref().map_or(0, Host::deck_count),
         "[KITHARA-ROUTE] session player registered"
     );
-    player_id
+    Ok(player_id)
+}
+
+fn attach_deck(host: &mut Host, deck: Deck) -> Result<(), SessionError> {
+    let base = host.topology()?.stamp();
+    let admission = host
+        .transact(SyncOperation::Topology {
+            base,
+            operations: Box::new([TopologyOperation::Attach {
+                member: SyncMember::Group {
+                    alignment: None,
+                    group: Box::new(deck),
+                },
+            }]),
+        })
+        .map_err(|rejected| <(SyncError, SyncOperation<Deck>)>::from(rejected).0)?;
+    if !matches!(admission, SyncAdmission::TopologyChanged { .. }) {
+        return Err(SessionError::Graph(
+            "session host did not publish the registered deck".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+pub(super) fn detach_deck<B: AudioBackend>(
+    state: &mut SessionState<B>,
+    deck_id: BeatMapId,
+) -> Result<(), SessionError> {
+    let host = state
+        .host
+        .as_mut()
+        .ok_or_else(|| SessionError::Graph("session host group is missing".to_owned()))?;
+    let base = host.topology()?.stamp();
+    let admission = host
+        .transact(SyncOperation::Topology {
+            base,
+            operations: Box::new([TopologyOperation::Detach { member: deck_id }]),
+        })
+        .map_err(|rejected| <(SyncError, SyncOperation<Deck>)>::from(rejected).0)?;
+    if matches!(admission, SyncAdmission::TopologyChanged { .. }) {
+        Ok(())
+    } else {
+        Err(SessionError::Graph(
+            "session host did not detach the unregistered deck".to_owned(),
+        ))
+    }
+}
+
+fn ensure_sync_root<B: AudioBackend>(
+    state: &mut SessionState<B>,
+    sample_rate: NonZeroU32,
+) -> Result<(), SessionError> {
+    if state.host.is_some() {
+        return Ok(());
+    }
+    let id = AssetMapRegistry::reserve_id()?;
+    let host = Host::new(id, sample_rate);
+    let mut generation = HostMapGeneration::new(id);
+    generation.commit_revision(BeatMapRevision::first());
+    state.host_map_generation = Some(generation);
+    state.host = Some(host);
+    Ok(())
 }
 
 pub(super) fn ensure_ctx<B: AudioBackend>(
     state: &mut SessionState<B>,
     sample_rate: u32,
 ) -> Result<(), SessionError> {
+    let map_sample_rate = NonZeroU32::new(sample_rate)
+        .or_else(|| NonZeroU32::new(state.sample_rate_hint))
+        .ok_or(SessionError::InvalidSampleRate(sample_rate))?;
+    ensure_sync_root(state, map_sample_rate)?;
     ensure_stream_ready(state, sample_rate)?;
     ensure_session_output(state)
 }
@@ -197,11 +303,10 @@ fn create_firewheel_context<B: AudioBackend>(
         ..FirewheelConfig::default()
     };
     let mut ctx = FirewheelCtx::<B>::new(config);
-    let host_map = if let Some(generation) = state.host_map_generation.take() {
-        generation
-    } else {
-        HostMapGeneration::new(AssetMapRegistry::reserve_host_id()?)
-    };
+    let host_map = state
+        .host_map_generation
+        .take()
+        .ok_or_else(|| SessionError::Graph("session host map generation is missing".to_owned()))?;
     let transport_control = match install(&mut ctx, host_map) {
         Ok(control) => control,
         Err(error) => {

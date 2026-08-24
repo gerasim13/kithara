@@ -74,7 +74,7 @@ master-volume node, removes the old EQ, and submits one graph update. The audio
 thread never allocates, locks, or reconstructs filters for a layout change.
 
 `EngineImpl` owns the current `EqBandConfig` vector before registration and uses
-it for `eq_band_count`; after registration the session's `PlayerState` owns the
+it for `eq_band_count`; after registration the session's canonical `Deck` owns the
 live graph projection. `SharedEq` is the control-plane gain mirror shared by
 the session and slot handles; no audio processor reads it, and the DSP takes its
 gains from the session's node event queue instead. Reading and writing one gain
@@ -268,6 +268,12 @@ cross-platform core (`session/{state,dispatch,protocol,graph}.rs`) carries zero 
 structural gates are the cfg lines around `mod native`, `mod web`, and their re-exports in
 `session/mod.rs`.
 
+`SessionState` owns one `Host`; that `Host` exclusively owns every canonical `Deck`. A `Deck` is
+both the runtime graph state and the per-deck `SyncGroup: BeatMap`, so there is no parallel player
+registry or separate `DeckGroup` wrapper. Any Track map admitted into the session topology is owned
+directly by its `Deck`. This ownership does not replace `StretchControls`: the existing shared
+timestretch handle remains the sole per-deck speed and DSP control described above.
+
 `SessionDispatcher::consumer_wake_mode` is the session's required, object-safe
 consumer capability. Real-time session implementations explicitly return
 `RealtimeDeferred`, preserving the audio callback's no-syscall drain path;
@@ -291,7 +297,7 @@ another snapshot.
 
 Session-input gain has two distinct owners. Each `EngineImpl` owns its *desired* input level
 (`master_volume`, read by `start`). The session `SessionState` owns the *applied* graph gain (each
-`PlayerState.master_volume` and its `VolumeNode` memo). The only transition between them is one
+`Deck.master_volume` and its `VolumeNode` memo). The only transition between them is one
 batch command, `Cmd::SetPlayerMasterVolumes`, which validates the whole vector - every level finite
 and in `0.0..=1.0`, every player present, no player repeated, graph initialised for started players
 

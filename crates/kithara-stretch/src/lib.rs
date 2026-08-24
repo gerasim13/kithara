@@ -1,27 +1,28 @@
-#[cfg(not(any(feature = "stretch-signalsmith", feature = "stretch-bungee")))]
-compile_error!(
-    "kithara-stretch requires at least one backend feature: \
-     enable stretch-signalsmith (default) or stretch-bungee. \
-     A build with no stretch backend should not depend on this crate."
-);
-
+#[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
 mod backend;
-pub use backend::{StretchBackend, StretchBackendError};
 
+#[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
 mod config;
-pub use config::StretchOptions;
 
+#[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
 mod kind;
-pub use kind::StretchKind;
 
+#[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
 mod factory;
-pub use factory::build_backend;
 
+#[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
 mod backends;
 #[cfg(feature = "stretch-bungee")]
 pub use backends::BungeeElastic;
 #[cfg(feature = "stretch-signalsmith")]
 pub use backends::SignalsmithElastic;
+#[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
+pub use {
+    backend::{StretchBackend, StretchBackendError},
+    config::StretchOptions,
+    factory::build_backend,
+    kind::StretchKind,
+};
 
 mod elastic;
 pub use elastic::{

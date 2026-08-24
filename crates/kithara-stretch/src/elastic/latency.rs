@@ -12,7 +12,9 @@ pub struct ElasticLatency {
 }
 
 impl ElasticLatency {
-    pub(crate) const fn new(source_frames: usize, output_frames: usize) -> Self {
+    /// Declares exact source-history and delayed-output frame counts.
+    #[must_use]
+    pub const fn new(source_frames: usize, output_frames: usize) -> Self {
         Self {
             output_frames,
             source_frames,

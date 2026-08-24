@@ -56,6 +56,7 @@ fn register_started_player(session: &ManualRingSession) -> PlayerId {
             bus: EventBus::default(),
             eq_layout: Vec::new(),
             pcm_pool: PcmPool::default(),
+            sample_rate: SAMPLE_RATE,
         })
         .expect("register player command")
     {

@@ -34,7 +34,7 @@ fn sample_rate() -> NonZeroU32 {
 }
 
 fn second_revision() -> TransportRevision {
-    TransportRevision::FIRST
+    TransportRevision::first()
         .checked_next()
         .expect("invariant: second transport revision exists")
 }
@@ -179,18 +179,18 @@ fn active_harness() -> (
 ) {
     let (mut extra, mut output) = proc_extra();
     let mut processor = SessionTransportProcessor;
-    let active = commit(120.0, true, TransportRevision::FIRST);
+    let active = commit(120.0, true, TransportRevision::first());
     let stamp = TransportCommitStamp::new(None, active, SessionFrame::new(0), sample_rate());
     process_node(
         &mut processor,
         &proc_info_at(0),
         &mut extra,
-        Some(apply_event(TransportRevision::FIRST)),
+        Some(apply_event(TransportRevision::first())),
         Some(stage_event(stamp)),
     );
     assert_eq!(
         observation(&mut output).completion(),
-        Some(TransportCommitResult::Applied(TransportRevision::FIRST))
+        Some(TransportCommitResult::Applied(TransportRevision::first()))
     );
     (processor, extra, output, active)
 }
@@ -306,7 +306,7 @@ fn tempo_commit_waits_for_the_matching_render_boundary() {
         None,
     );
     let staged = snapshot(&mut output);
-    assert_eq!(staged.revision(), TransportRevision::FIRST);
+    assert_eq!(staged.revision(), TransportRevision::first());
     assert_eq!(staged.tempo(), active.tempo());
     assert!((f64::from(staged.position()) - 0.04).abs() <= f64::EPSILON);
 
@@ -452,14 +452,14 @@ fn late_transport_commit_is_rejected_without_changing_the_active_commit() {
     let current = rejected
         .snapshot()
         .expect("invariant: rejection keeps the active snapshot");
-    assert_eq!(current.revision(), TransportRevision::FIRST);
+    assert_eq!(current.revision(), TransportRevision::first());
     assert!((f64::from(current.position()) - 0.08).abs() <= f64::EPSILON);
 }
 
 #[kithara::test]
 fn stale_transport_commit_is_rejected_without_breaking_the_clock() {
     let (mut processor, mut extra, mut output, active) = active_harness();
-    let stale = commit(100.0, true, TransportRevision::FIRST);
+    let stale = commit(100.0, true, TransportRevision::first());
     let next = commit(60.0, true, second_revision());
     let stamp = TransportCommitStamp::new(
         Some(stale),
@@ -527,7 +527,7 @@ fn transport_abort_is_idempotent() {
             observation(&mut output).completion(),
             Some(TransportCommitResult::Aborted(second_revision()))
         );
-        assert_eq!(snapshot(&mut output).revision(), TransportRevision::FIRST);
+        assert_eq!(snapshot(&mut output).revision(), TransportRevision::first());
     }
 }
 
@@ -559,7 +559,7 @@ fn route_reset_rejects_pending_commit_and_reanchors_the_active_beat() {
     );
     process_node(&mut processor, &proc_info_at(0), &mut extra, None, None);
     let restarted = snapshot(&mut output);
-    assert_eq!(restarted.revision(), TransportRevision::FIRST);
+    assert_eq!(restarted.revision(), TransportRevision::first());
     assert!((f64::from(restarted.position()) - 0.06).abs() <= f64::EPSILON);
 }
 
@@ -629,7 +629,7 @@ fn repeated_route_reset_preserves_the_beat_until_the_new_axis_renders() {
 #[kithara::test]
 fn duplicate_stage_in_one_block_is_rejected() {
     let (mut extra, _output) = proc_extra();
-    let active = commit(120.0, true, TransportRevision::FIRST);
+    let active = commit(120.0, true, TransportRevision::first());
     let stamp = TransportCommitStamp::new(None, active, SessionFrame::new(0), sample_rate());
     assert_eq!(
         process_result(
