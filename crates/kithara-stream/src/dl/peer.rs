@@ -6,7 +6,7 @@ use kithara_abr::{Abr, AbrHandle, AbrPeerId};
 use kithara_events::{EventBus, RequestPriority};
 use kithara_net::{Headers, NetError};
 use kithara_platform::{
-    CancelGroup, CancelToken,
+    CancelGroup, CancelScope, CancelToken,
     sync::{Arc, RwLock},
     time::Instant,
     tokio::sync::{mpsc, oneshot},
@@ -125,7 +125,8 @@ pub(super) struct PeerInner {
     /// to both the handle's own imperative path and the Registry's
     /// proactive `poll_next` path.
     bus: Arc<RwLock<Option<EventBus>>>,
-    cancel: CancelToken,
+    /// Canonical lifetime owner for this peer's fetches and ABR retries.
+    cancel: CancelScope,
     cmd_tx: mpsc::Sender<InternalCmd>,
 }
 
@@ -213,7 +214,7 @@ impl PeerHandle {
     /// of this handle is dropped.
     #[must_use]
     pub fn cancel(&self) -> CancelToken {
-        self.inner.cancel.clone()
+        self.inner.cancel.token()
     }
 
     /// Submit a single fetch command and await the response.
@@ -248,7 +249,7 @@ impl PeerHandle {
         InternalCmd,
         oneshot::Receiver<Result<CollectedResponse, NetError>>,
     ) {
-        let cancel = CancelGroup::new(vec![self.inner.cancel.child()]);
+        let cancel = CancelGroup::new(vec![self.inner.cancel.token().child()]);
         let (resp_tx, resp_rx) = oneshot::channel();
         let request_id = self.inner._pool.next_request_id();
         let enqueued_at = Instant::now();

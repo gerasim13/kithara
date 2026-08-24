@@ -8,18 +8,13 @@ use std::{
 
 use anyhow::{Context, Result, bail};
 
-use crate::ci::{
-    config::CiConfig,
-    process::{Process, require_os},
-    run::PipelineKind,
-    xcresult,
-};
+use crate::ci::{config::CiConfig, process::Process, xcresult};
 
-/// Every Apple job repeats this preflight instead of inheriting it from a
-/// predecessor. Each one is scheduled on its own and can be retried alone, so
-/// the wrong Xcode has to fail in the job that would have used it.
+/// The two Apple lanes a parameter cannot describe. Both hold something open
+/// for the length of a run - a package cache, a server, a simulator - and one
+/// of them answers with the test's outcome rather than the build's.
 fn preflight(process: &Process, config: &CiConfig) -> Result<()> {
-    require_os("macos", "Apple")?;
+    process.require_os("macos", "Apple")?;
     process.require_tools(&[
         "cargo",
         "just",
@@ -43,115 +38,6 @@ fn preflight(process: &Process, config: &CiConfig) -> Result<()> {
     Ok(())
 }
 
-/// The gate a change is measured by, and the ratchets the default branch keeps.
-///
-/// Both chains run the checks that answer whether a change is acceptable:
-/// formatting, Clippy over the workspace, ast-grep, typos, the architecture
-/// ratchet and the two idiom checks a review is held to. What only the default
-/// branch pays for is the rest of the ratchet family — the full idiom set,
-/// style, the quality scans and this tool's own tests. They guard a baseline
-/// rather than judge a diff, and on one Apple host every one of them is a
-/// minute a review waits.
-fn lint_command(kind: PipelineKind) -> (&'static [&'static str], &'static str) {
-    match kind {
-        PipelineKind::MergeRequest | PipelineKind::Branch | PipelineKind::Quarantine => {
-            (&["lint", "fast"], "review lint gate")
-        }
-        PipelineKind::Main
-        | PipelineKind::Platforms
-        | PipelineKind::Nightly
-        | PipelineKind::Weekly
-        | PipelineKind::Release => (&["lint", "full"], "full lint gate"),
-    }
-}
-
-pub(crate) fn lint(process: &Process, config: &CiConfig, kind: PipelineKind) -> Result<()> {
-    preflight(process, config)?;
-    let (args, label) = lint_command(kind);
-    process.run("just", args, label)
-}
-
-pub(crate) fn msrv(process: &Process, config: &CiConfig) -> Result<()> {
-    preflight(process, config)?;
-    let mut check = process.command("just");
-    check
-        .env("RUSTUP_TOOLCHAIN", &config.pins.msrv_toolchain)
-        .args(["check", "workspace"]);
-    process.run_command(&mut check, "MSRV workspace check")
-}
-
-fn test_command(kind: PipelineKind) -> Result<(&'static [&'static str], &'static str)> {
-    match kind {
-        PipelineKind::Quarantine => Ok((
-            &["test", "run", "--profile", "ci"],
-            "Apple quarantine tests",
-        )),
-        // A review ref asks the same question the default branch asks: what a
-        // reviewer would have to fix anyway is cheaper to learn before merge.
-        PipelineKind::MergeRequest
-        | PipelineKind::Branch
-        | PipelineKind::Main
-        | PipelineKind::Platforms
-        | PipelineKind::Nightly
-        | PipelineKind::Release => Ok((
-            &[
-                "test",
-                "run",
-                "--flash=on",
-                "--no-block=on",
-                "--profile",
-                "ci",
-            ],
-            "Apple flash and no-block gate",
-        )),
-        PipelineKind::Weekly => bail!("weekly pipelines do not run the Apple suite"),
-    }
-}
-
-pub(crate) fn test(process: &Process, config: &CiConfig, kind: PipelineKind) -> Result<()> {
-    preflight(process, config)?;
-    let (args, label) = test_command(kind)?;
-    process.run("just", args, label)
-}
-
-/// The off-flash suite owns its own target directory: the two gates differ by
-/// feature, and sharing one directory makes each run rebuild what the other
-/// just replaced.
-pub(crate) fn test_flash_off(process: &Process, config: &CiConfig) -> Result<()> {
-    preflight(process, config)?;
-    let mut command = process.command("just");
-    command.env("CARGO_TARGET_DIR", "target-flash-off").args([
-        "test",
-        "run",
-        "--flash=off",
-        "--profile",
-        "ci",
-    ]);
-    process.run_command(&mut command, "Apple flash-off gate")
-}
-
-/// End-to-end playback across the resampler axis. Each lane pins one
-/// source-rate conversion shape, and a change to decode, blending or output can
-/// break one of them while every unit test still passes — so the three run
-/// together or the axis is not covered. They share a target directory: the
-/// lanes differ by feature, and the executor keeps the tree warm between them.
-pub(crate) fn e2e(process: &Process, config: &CiConfig) -> Result<()> {
-    preflight(process, config)?;
-    for lane in ["--lane=e2e", "--lane=e2e-fused", "--lane=e2e-glide"] {
-        process.run(
-            "just",
-            &["test", "run", lane, "--profile", "ci"],
-            "Apple end-to-end suite",
-        )?;
-    }
-    Ok(())
-}
-
-pub(crate) fn xcframework(process: &Process, config: &CiConfig) -> Result<()> {
-    preflight(process, config)?;
-    build_xcframework(process)
-}
-
 pub(crate) fn swift_test(process: &Process, config: &CiConfig, swiftpm_cache: &Path) -> Result<()> {
     preflight(process, config)?;
     // The Swift package resolves the framework from the debug build tree, so
@@ -173,15 +59,6 @@ pub(crate) fn swift_test(process: &Process, config: &CiConfig, swiftpm_cache: &P
         .arg("--xunit-output")
         .arg(&report);
     process.run_command(&mut command, "Swift package tests")
-}
-
-pub(crate) fn ios(process: &Process, config: &CiConfig) -> Result<()> {
-    preflight(process, config)?;
-    let mut command = process.command("just");
-    command
-        .env("KITHARA_LOCAL_DEV", "1")
-        .args(["platform", "apple", "ios"]);
-    process.run_command(&mut command, "iOS Simulator build")
 }
 
 /// The `XCTest` suite on a simulator. It reads its fixtures from a hermetic
@@ -226,7 +103,8 @@ impl Consts {
 }
 
 struct TestServer {
-    child: Child,
+    /// Absent when the process only recorded the request to start one.
+    child: Option<Child>,
     url: String,
 }
 
@@ -246,14 +124,14 @@ impl TestServer {
         let binary = process.target_dir().join("debug/test_server");
         let mut command = process.command(&binary);
         command.env("TEST_SERVER_PORT", Consts::TEST_SERVER_PORT.to_string());
-        let child = command
-            .spawn()
-            .with_context(|| format!("starting {}", binary.display()))?;
+        let child = process.spawn(&mut command, "hermetic test server")?;
         let server = Self {
             child,
             url: format!("http://127.0.0.1:{}", Consts::TEST_SERVER_PORT),
         };
-        wait_until_listening()?;
+        if server.child.is_some() {
+            wait_until_listening()?;
+        }
         Ok(server)
     }
 
@@ -281,22 +159,11 @@ fn wait_until_listening() -> Result<()> {
 
 impl Drop for TestServer {
     fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        if let Some(child) = self.child.as_mut() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
     }
-}
-
-/// Safari goes through the repository's wasm recipe for the same reason the
-/// other browsers do: the target rebuilds std for shared memory, and only the
-/// pinned nightly honours that.
-pub(crate) fn safari(process: &Process) -> Result<()> {
-    require_os("macos", "Safari WASM")?;
-    process.require_tools(&["cargo", "just"])?;
-    process.run(
-        "just",
-        &["platform", "wasm", "test", "safari"],
-        "Safari WASM tests",
-    )
 }
 
 fn build_xcframework(process: &Process) -> Result<()> {
@@ -305,58 +172,4 @@ fn build_xcframework(process: &Process) -> Result<()> {
         &["platform", "apple", "xcframework", "--profile", "debug"],
         "Apple XCFramework",
     )
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn review_and_trusted_pipelines_run_the_explicit_flash_and_no_block_gate() {
-        let expected = [
-            "test",
-            "run",
-            "--flash=on",
-            "--no-block=on",
-            "--profile",
-            "ci",
-        ];
-
-        for kind in [
-            PipelineKind::MergeRequest,
-            PipelineKind::Branch,
-            PipelineKind::Main,
-            PipelineKind::Platforms,
-            PipelineKind::Nightly,
-            PipelineKind::Release,
-        ] {
-            let (args, _) = test_command(kind).unwrap();
-            assert_eq!(args, expected);
-        }
-    }
-
-    #[test]
-    fn platform_runs_use_the_default_branch_apple_lint_gate() {
-        let (args, label) = lint_command(PipelineKind::Platforms);
-
-        assert_eq!(args, ["lint", "full"]);
-        assert_eq!(label, "full lint gate");
-    }
-
-    #[test]
-    fn quarantine_keeps_its_plain_profile_probe() {
-        let (args, _) = test_command(PipelineKind::Quarantine).unwrap();
-
-        assert_eq!(args, ["test", "run", "--profile", "ci"]);
-    }
-
-    #[test]
-    fn weekly_pipeline_does_not_claim_to_run_the_apple_suite() {
-        let error = test_command(PipelineKind::Weekly).unwrap_err();
-
-        assert_eq!(
-            error.to_string(),
-            "weekly pipelines do not run the Apple suite"
-        );
-    }
 }

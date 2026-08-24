@@ -1,16 +1,23 @@
 use std::{fmt, ops::Range, path::Path};
 
+use bon::bon;
 use kithara_bufpool::BytePool;
-use kithara_platform::{CancelToken, sync::Arc};
+use kithara_platform::{CancelToken, sync::Arc, time::Duration};
 use kithara_storage::{ResourceStatus, StorageError, StorageResult, WaitOutcome};
 
-use super::{contract::ProcessCtx, gate::ReadinessGate, writer::ProcessedWriter};
+use super::{
+    contract::ProcessCtx,
+    gate::ReadinessGate,
+    writer::{DEFAULT_CHUNK_SIZE, DEFAULT_GATE_POLL_INTERVAL, ProcessedWriter},
+};
 use crate::resource::ReadSide;
 
 /// Read view over a resource that exposes bytes only after processing completes.
 pub struct ProcessedReader<R> {
     readiness: Arc<ReadinessGate>,
     pool: BytePool,
+    chunk_size: usize,
+    gate_poll_interval: Duration,
     processor: Option<ProcessCtx>,
     inner: R,
 }
@@ -23,6 +30,8 @@ where
         Self {
             readiness: Arc::clone(&self.readiness),
             pool: self.pool.clone(),
+            chunk_size: self.chunk_size,
+            gate_poll_interval: self.gate_poll_interval,
             processor: self.processor.clone(),
             inner: self.inner.clone(),
         }
@@ -39,6 +48,7 @@ impl<R: fmt::Debug> fmt::Debug for ProcessedReader<R> {
     }
 }
 
+#[bon]
 impl<R> ProcessedReader<R>
 where
     R: ReadSide,
@@ -60,23 +70,38 @@ where
         readiness: Arc<ReadinessGate>,
         processor: Option<ProcessCtx>,
         pool: BytePool,
+        chunk_size: usize,
+        gate_poll_interval: Duration,
     ) -> Self {
         Self {
             readiness,
             pool,
+            chunk_size,
+            gate_poll_interval,
             processor,
             inner,
         }
     }
 
-    pub(super) fn wrap_ready(inner: R, processor: Option<ProcessCtx>, pool: BytePool) -> Self {
+    /// Wraps an already-committed resource. `chunk_size` and
+    /// `gate_poll_interval` carry the same defaults [`ProcessedWriter`] does.
+    #[builder]
+    pub(super) fn wrap_ready(
+        inner: R,
+        processor: Option<ProcessCtx>,
+        pool: BytePool,
+        #[builder(default = DEFAULT_CHUNK_SIZE)] chunk_size: usize,
+        #[builder(default = DEFAULT_GATE_POLL_INTERVAL)] gate_poll_interval: Duration,
+    ) -> Self {
         let ready =
             processor.is_none() || matches!(inner.status(), ResourceStatus::Committed { .. });
         Self {
             pool,
+            chunk_size,
+            gate_poll_interval,
             processor,
             inner,
-            readiness: Arc::new(ReadinessGate::new(ready)),
+            readiness: Arc::new(ReadinessGate::new(ready, gate_poll_interval)),
         }
     }
 
@@ -117,7 +142,13 @@ where
 
     fn reactivate(self) -> StorageResult<ProcessedWriter<R::Writer>> {
         let inner = self.inner.reactivate()?;
-        Ok(ProcessedWriter::new(inner, self.processor, self.pool))
+        Ok(ProcessedWriter::builder()
+            .inner(inner)
+            .maybe_processor(self.processor)
+            .pool(self.pool)
+            .chunk_size(self.chunk_size)
+            .gate_poll_interval(self.gate_poll_interval)
+            .build())
     }
 
     fn read_at(&self, offset: u64, buf: &mut [u8]) -> StorageResult<usize> {

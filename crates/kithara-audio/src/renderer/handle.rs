@@ -432,9 +432,9 @@ mod tests {
         handle.shutdown();
     }
 
-    // Audible-before-Idle is a pure ordering property of the scheduler's
-    // `slots_order`, not of consumed-chunk counts; verifying it through a live
-    // ring drain is structurally racy. It is locked deterministically in
+    // Audible-before-Idle is a pure ordering property of the scheduler's slot
+    // sequence, not of consumed-chunk counts; verifying it through a live ring
+    // drain is structurally racy. It is locked deterministically in
     // `runtime::scheduler::tests` instead — see
     // `refresh_reorders_live_when_atomic_service_class_changes`.
 

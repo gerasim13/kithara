@@ -21,11 +21,10 @@ fn create_mmap_resource(dir: &TempDir, name: &str) -> MmapResource {
     let path = dir.path().join(name);
     Resource::open(
         CancelToken::never(),
-        MmapOptions {
-            path,
-            mode: OpenMode::ReadWrite,
-            initial_len: Some(4096),
-        },
+        MmapOptions::for_path(path)
+            .mode(OpenMode::ReadWrite)
+            .initial_len(4096)
+            .build(),
     )
     .unwrap()
 }

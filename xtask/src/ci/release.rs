@@ -7,7 +7,7 @@ use anyhow::{Context, Result, bail};
 use kithara_devtools::Ctx;
 use sha2::{Digest, Sha256};
 
-use super::process::{Process, require_os};
+use super::process::Process;
 use crate::{
     config::{KitharaExt, PackageProfile, PublishStep, ReleaseConfig},
     publish, release,
@@ -24,7 +24,7 @@ pub(crate) fn xcframework(
     temp: &Path,
     package: &str,
 ) -> Result<()> {
-    require_os("macos", "Apple release")?;
+    process.require_os("macos", "Apple release")?;
     let profile = ext.release.package(package)?;
     let expected = expected_checksum(profile, &ctx.root.join(&ext.release.manifest))?;
 
@@ -134,7 +134,7 @@ fn expected_checksum(profile: &PackageProfile, manifest_path: &Path) -> Result<O
 }
 
 pub(crate) fn docs(process: &Process, ctx: &Ctx, ext: &KitharaExt) -> Result<()> {
-    require_os("macos", "Apple documentation release")?;
+    process.require_os("macos", "Apple documentation release")?;
     // The documentation is generated against the local Swift package, and the
     // package resolves its binary target from the debug build tree. Without
     // it the manifest itself refuses to load, long before anything is
@@ -154,7 +154,7 @@ pub(crate) fn docs(process: &Process, ctx: &Ctx, ext: &KitharaExt) -> Result<()>
 }
 
 pub(crate) fn wasm(process: &Process, ctx: &Ctx, ext: &KitharaExt) -> Result<()> {
-    require_os("macos", "WASM release")?;
+    process.require_os("macos", "WASM release")?;
     process.run(
         "just",
         &["platform", "wasm", "build", "--profile", "release"],
@@ -169,7 +169,7 @@ pub(crate) fn wasm(process: &Process, ctx: &Ctx, ext: &KitharaExt) -> Result<()>
 }
 
 pub(crate) fn build_android(process: &Process, ctx: &Ctx, ext: &KitharaExt) -> Result<()> {
-    require_os("macos", "Android release")?;
+    process.require_os("macos", "Android release")?;
     // The archive builds the libraries and generates the bindings itself, for
     // the release profile the artifact ships. A native build before it took
     // thirteen minutes for both ABIs in the debug profile, and the archive

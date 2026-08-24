@@ -30,6 +30,7 @@ pub(crate) struct FilePeer {
     /// Current single-writer election handle, if this consumer owns it.
     writer: Mutex<Option<WriterHandle>>,
     session_cancel: CancelToken,
+    source_cancel: CancelToken,
 }
 
 struct WriterSnapshot {
@@ -63,6 +64,7 @@ impl FilePeer {
             panic!("BUG: FilePeer requires a resource lease");
         };
         let session_cancel = lease.session_cancel();
+        let source_cancel = inner.source.cancel.clone();
         let source_cancel_wake = wake_peer_on_cancel(&inner.source.cancel, inner);
         let session_cancel_wake = wake_peer_on_cancel(&session_cancel, inner);
         Self {
@@ -72,6 +74,7 @@ impl FilePeer {
             inner: Arc::downgrade(inner),
             writer: Mutex::new(writer),
             session_cancel,
+            source_cancel,
         }
     }
 
@@ -255,7 +258,11 @@ fn fetch_range(start: u64, end_exclusive: Option<u64>) -> Option<RangeSpec> {
     )
 }
 
-impl Abr for FilePeer {}
+impl Abr for FilePeer {
+    fn cancel(&self) -> CancelToken {
+        self.source_cancel.clone()
+    }
+}
 
 impl Peer for FilePeer {
     fn poll_next(&self, cx: &mut Context<'_>) -> Poll<Option<Vec<FetchCmd>>> {

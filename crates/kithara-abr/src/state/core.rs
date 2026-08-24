@@ -194,19 +194,46 @@ impl AbrState {
         drop(state);
     }
 
-    /// Whether the anti-oscillation interval has elapsed. Before the first
-    /// switch it is measured from the start of the session: that is when the
-    /// throughput estimate rests on the fewest samples, so a fast first segment
-    /// must not be enough to flip the variant out from under a listener who has
-    /// barely started playing.
-    pub(super) fn can_switch_now(&self, now: Instant, min_interval: Duration) -> bool {
+    delegate::delegate! {
+        to self {
+            /// Whether the anti-oscillation interval has elapsed. Before the first
+            /// switch it is measured from the start of the session: that is when the
+            /// throughput estimate rests on the fewest samples, so a fast first segment
+            /// must not be enough to flip the variant out from under a listener who has
+            /// barely started playing.
+            #[expr($.is_zero())]
+            #[call(switch_interval_remaining)]
+            pub(super) fn can_switch_now(&self, now: Instant, min_interval: Duration) -> bool;
+            /// Read-only peek at the pending decision. Returns the
+            /// [`AbrDecision`] that [`apply_decision`](Self::apply_decision)
+            /// would publish, or `None` when:
+            /// - pending slot is empty;
+            /// - state is locked (the seek-no-switch / blender invariant);
+            /// - pending target equals `current` (no-op switch).
+            ///
+            /// Does not mutate. `current` is supplied by the caller to avoid a
+            /// race with concurrent reads of [`current_variant_index`]; pass
+            /// `self.current_variant_index()` if you do not need an externally
+            /// pinned snapshot.
+            #[must_use]
+            #[expr($.map(PendingAbrDecision::decision))]
+            #[call(claim_pending_decision)]
+            pub fn peek_pending_decision(&self, current: VariantIndex) -> Option<AbrDecision>;
+        }
+    }
+
+    pub(crate) fn switch_interval_remaining(
+        &self,
+        now: Instant,
+        min_interval: Duration,
+    ) -> Duration {
         let nanos = self.last_switch_at_nanos.load(Ordering::Acquire);
         let since = if nanos == Self::NO_SWITCH {
             self.reference_instant
         } else {
             self.reference_instant + Duration::from_nanos(nanos)
         };
-        now.duration_since(since) >= min_interval
+        min_interval.saturating_sub(now.duration_since(since))
     }
 
     /// Claim the exact pending request without consuming it.
@@ -361,23 +388,6 @@ impl AbrState {
     #[must_use]
     pub fn mode(&self) -> AbrMode {
         AbrMode::from(self.mode.load(Ordering::Acquire))
-    }
-
-    /// Read-only peek at the pending decision. Returns the
-    /// [`AbrDecision`] that [`apply_decision`](Self::apply_decision)
-    /// would publish, or `None` when:
-    /// - pending slot is empty;
-    /// - state is locked (the seek-no-switch / blender invariant);
-    /// - pending target equals `current` (no-op switch).
-    ///
-    /// Does not mutate. `current` is supplied by the caller to avoid a
-    /// race with concurrent reads of [`current_variant_index`]; pass
-    /// `self.current_variant_index()` if you do not need an externally
-    /// pinned snapshot.
-    #[must_use]
-    pub fn peek_pending_decision(&self, current: VariantIndex) -> Option<AbrDecision> {
-        self.claim_pending_decision(current)
-            .map(PendingAbrDecision::decision)
     }
 
     /// Observe whether an exact pending intent is absent, temporarily locked,

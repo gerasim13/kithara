@@ -1,5 +1,6 @@
 use std::array;
 
+use kithara_bufpool::{PcmBuf, PcmPool};
 use kithara_platform::sync::Arc;
 use num_traits::cast::ToPrimitive;
 use realfft::{RealFftPlanner, RealToComplex, num_complex::Complex};
@@ -29,11 +30,12 @@ impl Consts {
 pub struct WaveformAnalyzer {
     params: AnalysisParams,
     fft: Arc<dyn RealToComplex<f32>>,
-    fft_input: Vec<f32>,
+    fft_input: PcmBuf,
     fft_output: Vec<Complex<f32>>,
     fft_scratch: Vec<Complex<f32>>,
-    fill: Vec<f32>,
-    hann: Vec<f32>,
+    fill: PcmBuf,
+    fill_len: usize,
+    hann: PcmBuf,
     raw_bands: Vec<[f32; Band::COUNT]>,
     band_bin_inv: [f32; Band::COUNT],
     low_mid_bin: usize,
@@ -43,15 +45,16 @@ pub struct WaveformAnalyzer {
 
 impl WaveformAnalyzer {
     #[must_use]
-    pub fn new(sample_rate: u32, params: AnalysisParams) -> Self {
+    pub fn new(sample_rate: u32, params: AnalysisParams, pcm_pool: &PcmPool) -> Self {
         let fft_size = params.fft_size().max(Consts::MIN_FFT_SIZE);
         let mut planner = RealFftPlanner::<f32>::new();
         let fft = planner.plan_fft_forward(fft_size);
-        let fft_input = fft.make_input_vec();
+        let fft_input = pcm_pool.get_with(|buffer| buffer.resize(fft_size, 0.0));
         let fft_output = fft.make_output_vec();
         let fft_scratch = fft.make_scratch_vec();
 
-        let hann = hann_window(fft_size);
+        let hann = hann_window(fft_size, pcm_pool);
+        let fill = pcm_pool.get_with(|buffer| buffer.resize(fft_size, 0.0));
         let bins = fft_output.len();
         let rate = sample_rate.to_f32().unwrap_or(0.0);
         let size_f = fft_size.to_f32().unwrap_or(1.0);
@@ -79,7 +82,8 @@ impl WaveformAnalyzer {
             fft_output,
             fft_scratch,
             window_hop: (fft_size / Consts::HOP_DIVISOR).max(1),
-            fill: Vec::with_capacity(fft_size),
+            fill,
+            fill_len: 0,
             raw_bands: Vec::new(),
         }
     }
@@ -93,7 +97,7 @@ impl WaveformAnalyzer {
             self.flush_partial();
         }
         if buckets == 0 || self.raw_bands.is_empty() {
-            return Waveform::from(Vec::new());
+            return Waveform::default();
         }
 
         let buckets = buckets.min(self.raw_bands.len());
@@ -112,10 +116,10 @@ impl WaveformAnalyzer {
     /// needed for tracks shorter than one FFT window, which never trip the
     /// full-window path and would otherwise analyse to nothing.
     fn flush_partial(&mut self) {
-        if self.fill.is_empty() {
+        if self.fill_len == 0 {
             return;
         }
-        let n = self.fill.len().min(self.fft_input.len());
+        let n = self.fill_len.min(self.fft_input.len());
         for (i, dst) in self.fft_input.iter_mut().enumerate() {
             *dst = if i < n {
                 self.fill[i] * self.hann[i]
@@ -136,8 +140,9 @@ impl WaveformAnalyzer {
 
         for frame in pcm.chunks_exact(channels) {
             let mono: f32 = frame.iter().sum::<f32>() * inv_channels;
-            self.fill.push(mono);
-            if self.fill.len() == self.fft_input.len() {
+            self.fill[self.fill_len] = mono;
+            self.fill_len += 1;
+            if self.fill_len == self.fft_input.len() {
                 self.run_window();
             }
         }
@@ -165,13 +170,15 @@ impl WaveformAnalyzer {
         for ((dst, &sample), &w) in self
             .fft_input
             .iter_mut()
-            .zip(self.fill.iter())
+            .zip(self.fill[..self.fill_len].iter())
             .zip(self.hann.iter())
         {
             *dst = sample * w;
         }
         // Slide by one hop; the retained tail overlaps the next window.
-        self.fill.drain(0..self.window_hop.min(self.fill.len()));
+        let hop = self.window_hop.min(self.fill_len);
+        self.fill.copy_within(hop..self.fill_len, 0);
+        self.fill_len -= hop;
         self.push_window_bands();
     }
 
@@ -199,18 +206,19 @@ impl WaveformAnalyzer {
     }
 }
 
-fn hann_window(size: usize) -> Vec<f32> {
+fn hann_window(size: usize, pcm_pool: &PcmPool) -> PcmBuf {
+    let mut hann = pcm_pool.get_with(|buffer| buffer.resize(size, 0.0));
     if size <= 1 {
-        return vec![1.0; size];
+        hann.fill(1.0);
+        return hann;
     }
     let denom = (size - 1).to_f32().unwrap_or(1.0);
     let scale = std::f32::consts::TAU / denom;
-    (0..size)
-        .map(|n| {
-            let phase = scale * n.to_f32().unwrap_or(0.0);
-            Consts::HANN_A0.mul_add(-phase.cos(), Consts::HANN_A0)
-        })
-        .collect()
+    for (n, sample) in hann.iter_mut().enumerate() {
+        let phase = scale * n.to_f32().unwrap_or(0.0);
+        *sample = Consts::HANN_A0.mul_add(-phase.cos(), Consts::HANN_A0);
+    }
+    hann
 }
 
 fn crossover_bin(hz: f32, bin_hz: f32, bins: usize) -> usize {
@@ -250,6 +258,7 @@ fn normalize_bands(
 
 #[cfg(test)]
 mod tests {
+    use kithara_bufpool::PcmPool;
     use kithara_test_utils::kithara;
     use num_traits::cast::ToPrimitive;
 
@@ -273,7 +282,7 @@ mod tests {
     }
 
     fn analyzer(params: AnalysisParams) -> WaveformAnalyzer {
-        WaveformAnalyzer::new(Consts::SR, params)
+        WaveformAnalyzer::new(Consts::SR, params, &PcmPool::default())
     }
 
     /// Unity gain so normalization/routing tests aren't coupled to the

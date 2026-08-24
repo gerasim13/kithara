@@ -458,6 +458,7 @@ async fn splice_source(variants: Vec<VariantLayout>) -> SpliceFixture {
         None,
     );
     let decode = DecodeInit {
+        byte_pool: BytePool::default(),
         decoder_factory,
         host_sample_rate,
         decoder: initial_decoder,
@@ -465,6 +466,7 @@ async fn splice_source(variants: Vec<VariantLayout>) -> SpliceFixture {
         gapless_mode: GaplessMode::Disabled,
         media_info: Some(media_info(Consts::SLQ_VARIANT)),
         playback_resampler_backend: "none",
+        pcm_pool: PcmPool::default(),
         recreate_on_host_rate_change: false,
     }
     .into_parts(effects, shared_stream.seek_observe().epoch());

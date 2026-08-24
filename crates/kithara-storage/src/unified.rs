@@ -274,11 +274,7 @@ mod tests {
         let path = dir.path().join("test.bin");
         let mmap: MmapResource = Resource::open(
             CancelToken::never(),
-            MmapOptions {
-                path,
-                initial_len: None,
-                mode: OpenMode::Auto,
-            },
+            MmapOptions::for_path(path).mode(OpenMode::Auto).build(),
         )
         .unwrap();
 
@@ -332,11 +328,7 @@ mod tests {
         let path = dir.path().join("conv.bin");
         let mmap: MmapResource = Resource::open(
             CancelToken::never(),
-            MmapOptions {
-                path,
-                initial_len: None,
-                mode: OpenMode::Auto,
-            },
+            MmapOptions::for_path(path).mode(OpenMode::Auto).build(),
         )
         .unwrap();
         let res: StorageResource = mmap.into();

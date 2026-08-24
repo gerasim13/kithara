@@ -1,5 +1,6 @@
 use std::io::SeekFrom;
 
+use kithara_bufpool::{BytePool, PooledOwned};
 #[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
 use kithara_platform::time::Duration;
 use kithara_stream::AudioCodec;
@@ -34,9 +35,10 @@ pub(crate) struct StartupProbe {
 pub(crate) fn scoped_probe(
     source: &mut dyn DecoderInput,
     codec: AudioCodec,
+    byte_pool: &BytePool,
 ) -> crate::error::DecodeResult<Option<GaplessInfo>> {
     source.seek(SeekFrom::Start(0))?;
-    let info = probe_codec_gapless(codec, source);
+    let info = probe_codec_gapless(codec, source, byte_pool);
     source.seek(SeekFrom::Start(0))?;
     Ok(info)
 }
@@ -47,13 +49,14 @@ pub(crate) fn scoped_probe(
 pub(crate) fn scoped_startup_probe(
     source: &mut dyn DecoderInput,
     codec: AudioCodec,
+    byte_pool: &BytePool,
 ) -> crate::error::DecodeResult<StartupProbe> {
     if !matches!(codec, AudioCodec::Mp3) {
         return Ok(StartupProbe::default());
     }
 
     source.seek(SeekFrom::Start(0))?;
-    let buffer = read_mp3_probe_prefix(source);
+    let buffer = read_mp3_probe_prefix(source, byte_pool);
     source.seek(SeekFrom::Start(0))?;
 
     let gapless = read_lame_trim(&buffer).map(|trim| GaplessInfo {
@@ -74,13 +77,14 @@ pub(crate) fn scoped_startup_probe(
 pub(crate) fn probe_codec_gapless(
     codec: AudioCodec,
     source: &mut dyn DecoderInput,
+    byte_pool: &BytePool,
 ) -> Option<GaplessInfo> {
     match codec {
         AudioCodec::AacLc | AudioCodec::AacHe | AudioCodec::AacHeV2 => {
-            probe_mp4_gapless_dyn(source).ok().flatten()
+            probe_mp4_gapless_dyn(source, byte_pool).ok().flatten()
         }
         AudioCodec::Mp3 => {
-            let buffer = read_mp3_probe_prefix(source);
+            let buffer = read_mp3_probe_prefix(source, byte_pool);
             read_lame_trim(&buffer).map(|trim| GaplessInfo {
                 leading_frames: u64::from(trim.enc_delay),
                 trailing_frames: u64::from(trim.enc_padding),
@@ -94,8 +98,11 @@ pub(crate) fn probe_codec_gapless(
 /// push past the probe window: cover art alone reaches hundreds of kilobytes.
 /// The tag declares its own length, so skip to the first audio byte and read
 /// the window there instead of widening it.
-fn read_mp3_probe_prefix(source: &mut dyn DecoderInput) -> Vec<u8> {
-    let buffer = read_probe_window(source);
+fn read_mp3_probe_prefix(
+    source: &mut dyn DecoderInput,
+    byte_pool: &BytePool,
+) -> PooledOwned<32, Vec<u8>> {
+    let buffer = read_probe_window(source, byte_pool);
     let audio_start = skip_id3v2(&buffer);
     // A short window means the source ran out of ready bytes, not that the tag
     // is long, and seeking past the download frontier reads back as EOF. Only a
@@ -104,10 +111,15 @@ fn read_mp3_probe_prefix(source: &mut dyn DecoderInput) -> Vec<u8> {
         return buffer;
     }
 
-    u64::try_from(audio_start)
+    let repositioned = u64::try_from(audio_start)
         .ok()
-        .filter(|offset| source.seek(SeekFrom::Start(*offset)).is_ok())
-        .map_or(buffer, |_| read_probe_window(source))
+        .is_some_and(|offset| source.seek(SeekFrom::Start(offset)).is_ok());
+    if repositioned {
+        drop(buffer);
+        read_probe_window(source, byte_pool)
+    } else {
+        buffer
+    }
 }
 
 struct Consts;
@@ -117,11 +129,14 @@ impl Consts {
     const WINDOW_BYTES: usize = 16 * 1024;
 }
 
-fn read_probe_window(source: &mut dyn DecoderInput) -> Vec<u8> {
+fn read_probe_window(
+    source: &mut dyn DecoderInput,
+    byte_pool: &BytePool,
+) -> PooledOwned<32, Vec<u8>> {
     const WINDOW_BYTES: usize = Consts::WINDOW_BYTES;
     const CHUNK_BYTES: usize = Consts::CHUNK_BYTES;
 
-    let mut buffer = Vec::with_capacity(WINDOW_BYTES);
+    let mut buffer = byte_pool.get_with(|buffer| buffer.reserve(WINDOW_BYTES));
     let mut scratch = [0u8; CHUNK_BYTES];
     while buffer.len() < WINDOW_BYTES {
         let remaining = WINDOW_BYTES - buffer.len();
@@ -140,6 +155,8 @@ fn read_probe_window(source: &mut dyn DecoderInput) -> Vec<u8> {
 mod tests {
     use std::io::Cursor;
 
+    use kithara_test_utils::kithara;
+
     use super::*;
 
     /// An `ID3v2` tag of `payload_len` bytes followed by one MPEG sync word,
@@ -157,34 +174,34 @@ mod tests {
         data
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn probe_window_starts_at_the_audio_behind_an_oversized_id3_tag() {
         let mut source = Cursor::new(mp3_behind_id3(32 * 1024));
 
-        let buffer = read_mp3_probe_prefix(&mut source);
+        let buffer = read_mp3_probe_prefix(&mut source, &BytePool::default());
 
         assert_eq!(buffer.first().copied(), Some(0xFF));
         assert_eq!(buffer.get(1).copied(), Some(0xFB));
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn probe_window_stays_put_when_the_source_ends_inside_the_tag() {
         let mut data = mp3_behind_id3(32 * 1024);
         data.truncate(4 * 1024);
         let mut source = Cursor::new(data);
 
-        let buffer = read_mp3_probe_prefix(&mut source);
+        let buffer = read_mp3_probe_prefix(&mut source, &BytePool::default());
 
         assert_eq!(buffer.first().copied(), Some(b'I'));
         assert_eq!(buffer.len(), 4 * 1024);
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn probe_window_keeps_a_tag_that_fits_it() {
         let tag_bytes = 10 + 1024;
         let mut source = Cursor::new(mp3_behind_id3(1024));
 
-        let buffer = read_mp3_probe_prefix(&mut source);
+        let buffer = read_mp3_probe_prefix(&mut source, &BytePool::default());
 
         assert_eq!(buffer.first().copied(), Some(b'I'));
         assert_eq!(buffer.get(tag_bytes).copied(), Some(0xFF));

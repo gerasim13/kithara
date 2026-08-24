@@ -1,14 +1,16 @@
 use std::{
     num::NonZeroU64,
-    sync::atomic::{AtomicBool, AtomicU64, Ordering},
+    sync::atomic::{AtomicU64, Ordering},
+    task::Waker,
 };
 
 use bon::Builder;
 use dashmap::DashMap;
 use kithara_events::{AbrEvent, AbrMode, EventBus};
 use kithara_platform::{
+    CancelGroup, CancelScope, CancelToken,
     sync::{Arc, Mutex, RwLock},
-    time::{Duration, Instant},
+    time::Duration,
 };
 use kithara_test_utils::kithara;
 
@@ -54,10 +56,15 @@ impl kithara_test_utils::probe::IntoProbeArg for AbrPeerId {
 }
 
 /// ABR controller settings.
-#[derive(Clone, Debug, PartialEq, Builder)]
+#[derive(Clone, Debug, Builder)]
 #[builder(state_mod(vis = "pub"))]
 #[non_exhaustive]
 pub struct AbrSettings {
+    /// Optional parent cancellation token for the controller scope.
+    ///
+    /// `Some` derives a child scope from the supplied parent; `None` gives the
+    /// controller a standalone scope.
+    pub cancel: Option<CancelToken>,
     /// Minimum interval between `AbrEvent::BandwidthEstimate` emits.
     #[builder(default = Defaults::BANDWIDTH_EMIT_MIN_INTERVAL)]
     pub bandwidth_emit_min_interval: Duration,
@@ -77,11 +84,7 @@ pub struct AbrSettings {
     #[builder(default = Defaults::URGENT_DOWNSWITCH_BUFFER)]
     pub urgent_downswitch_buffer: Duration,
     /// Seed throughput estimate (bps) applied at controller construction.
-    #[builder(
-        required,
-        with = Some,
-        default = Some(Defaults::INITIAL_THROUGHPUT_BPS)
-    )]
+    #[builder(required, default = Some(Defaults::INITIAL_THROUGHPUT_BPS))]
     pub initial_throughput_bps: Option<u64>,
     /// Global data-saver cap.
     pub max_bandwidth_bps: Option<u64>,
@@ -115,9 +118,11 @@ impl Default for AbrSettings {
 pub struct AbrController {
     #[field(get)]
     pub(super) settings: AbrSettings,
+    scope: CancelScope,
     pub(super) estimator: Arc<dyn Estimator>,
+    pub(super) tick_waker: Mutex<Option<Waker>>,
     next_peer_id: AtomicU64,
-    peers: DashMap<AbrPeerId, Arc<PeerEntry>>,
+    pub(super) peers: DashMap<AbrPeerId, Arc<PeerEntry>>,
 }
 
 impl AbrController {
@@ -125,9 +130,6 @@ impl AbrController {
     pub(super) const MIN_THROUGHPUT_SAMPLE_INTERVAL: Duration = Duration::from_millis(200);
 
     /// Create a new controller with the default [`ThroughputEstimator`].
-    ///
-    /// `cancel` is the parent token whose subtree gates this controller's
-    /// background incoherence watches.
     #[must_use]
     pub fn new(settings: AbrSettings) -> Arc<Self> {
         Self::with_estimator(settings, Arc::new(ThroughputEstimator::new()))
@@ -152,61 +154,69 @@ impl AbrController {
         }
     }
 
-    pub(crate) fn on_max_bandwidth_cap_changed(&self, peer_id: AbrPeerId, cap: Option<u64>) {
+    pub(crate) fn on_max_bandwidth_cap_changed(
+        self: &Arc<Self>,
+        peer_id: AbrPeerId,
+        cap: Option<u64>,
+    ) {
         if let Some(entry) = self.peer_entry(peer_id)
             && let Some(bus) = entry.bus()
         {
             bus.publish(AbrEvent::MaxBandwidthCapChanged { cap });
         }
-        self.tick(peer_id, Instant::now());
+        self.tick(peer_id);
     }
 
     #[kithara::probe(peer_id, mode)]
-    pub(crate) fn on_mode_changed(&self, peer_id: AbrPeerId, mode: AbrMode) {
+    pub(crate) fn on_mode_changed(self: &Arc<Self>, peer_id: AbrPeerId, mode: AbrMode) {
         if let Some(entry) = self.peer_entry(peer_id)
             && let Some(bus) = entry.bus()
         {
             bus.publish(AbrEvent::ModeChanged { mode });
         }
-        self.tick(peer_id, Instant::now());
+        self.tick(peer_id);
         if let Some(entry) = self.peer_entry(peer_id)
             && let Some(peer) = entry.peer_weak.upgrade()
         {
-            // A mode change is work even when the synchronous decision is
+            // A mode change is work even when the queued decision is
             // temporarily locked by a seek. Re-polling the peer synchronizes
             // that lock; its existing unlock edge then re-evaluates the mode.
             peer.wake();
         }
     }
 
-    pub(crate) fn on_unlocked(&self, peer_id: AbrPeerId) {
+    pub(crate) fn on_unlocked(self: &Arc<Self>, peer_id: AbrPeerId) {
         if let Some(entry) = self.peer_entry(peer_id)
             && let Some(bus) = entry.bus()
         {
             bus.publish(AbrEvent::Unlocked);
         }
-        self.tick(peer_id, Instant::now());
+        self.tick(peer_id);
     }
 
     pub(crate) fn peer_entry(&self, id: AbrPeerId) -> Option<Arc<PeerEntry>> {
-        self.peers.get(&id).map(|r| Arc::clone(r.value()))
+        self.peers
+            .get(&id)
+            .map(|entry| Arc::clone(entry.value()))
+            .filter(|entry| !entry.cancel.is_cancelled())
     }
 
-    /// Register a peer. Returns an [`AbrHandle`] that the caller keeps alive
-    /// for the peer's lifetime; the handle's `Drop` unregisters the peer.
+    /// Register a peer below the controller scope.
+    ///
+    /// The controller observes both its own per-registration child and the
+    /// protocol token returned by [`Abr::cancel`]. Dropping the returned handle
+    /// cancels only the registration child.
     pub fn register(self: &Arc<Self>, peer: &Arc<dyn Abr>) -> AbrHandle {
         let id = self.allocate_peer_id();
         let state = peer.state();
         let peer_weak = Arc::downgrade(peer);
+        let registration_cancel = self.scope.token().child();
+        let cancel = CancelGroup::new(vec![registration_cancel.clone(), peer.cancel()]);
         let bus: Arc<RwLock<Option<EventBus>>> = Arc::new(RwLock::default());
-        let entry = Arc::new(PeerEntry {
-            peer_weak,
-            bus: Arc::clone(&bus),
-            variants_registered_published: AtomicBool::new(false),
-            bytes_downloaded: AtomicU64::new(0),
-            throttle: Mutex::default(),
-            state: state.clone(),
-        });
+        let entry = Arc::new(
+            PeerEntry::new(peer_weak, Arc::clone(&bus), cancel, registration_cancel)
+                .with_state(state.clone()),
+        );
         self.peers.insert(id, entry);
         AbrHandle::new(Arc::clone(self), id, state, bus)
     }
@@ -219,19 +229,30 @@ impl AbrController {
 
     /// Called from [`AbrHandle::drop`].
     pub(crate) fn unregister(&self, id: AbrPeerId) {
-        self.peers.remove(&id);
+        if let Some((_, entry)) = self.peers.remove(&id) {
+            entry.registration_cancel.cancel();
+        }
     }
 
-    /// Create a new controller with a custom estimator. Used in tests to
-    /// inject a mock.
+    /// Create a new controller with a custom estimator. Used in tests to inject
+    /// a mock.
     #[must_use]
     pub fn with_estimator(settings: AbrSettings, estimator: Arc<dyn Estimator>) -> Arc<Self> {
         Self::seed_estimator(&settings, &estimator);
+        let scope = CancelScope::new(settings.cancel.clone());
         Arc::new(Self {
             settings,
+            scope,
             estimator,
+            tick_waker: Mutex::default(),
             next_peer_id: AtomicU64::new(0),
             peers: DashMap::new(),
         })
+    }
+}
+
+impl Drop for AbrController {
+    fn drop(&mut self) {
+        self.scope.cancel();
     }
 }

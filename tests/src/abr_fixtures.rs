@@ -19,7 +19,7 @@ pub const fn auto(idx: usize) -> AbrMode {
 #[kithara::fixture]
 pub fn abr_switch_trigger() -> AbrSettings {
     AbrSettings::builder()
-        .initial_throughput_bps(2_000_000)
+        .initial_throughput_bps(Some(2_000_000))
         .min_buffer_for_up_switch(Duration::ZERO)
         .urgent_downswitch_buffer(Duration::ZERO)
         .min_switch_interval(Duration::ZERO)
@@ -34,7 +34,7 @@ pub fn abr_switch_trigger() -> AbrSettings {
 #[kithara::fixture]
 pub fn abr_fast() -> AbrSettings {
     AbrSettings::builder()
-        .initial_throughput_bps(2_000_000)
+        .initial_throughput_bps(Some(2_000_000))
         .min_buffer_for_up_switch(Duration::ZERO)
         .urgent_downswitch_buffer(Duration::ZERO)
         .min_switch_interval(Duration::from_secs(1))

@@ -119,8 +119,14 @@ pub fn create_test_downloader() -> Downloader {
 
 /// Create a private test [`PeerHandle`] via `Downloader::register`.
 fn create_test_peer_handle() -> PeerHandle {
-    struct TestPeer;
-    impl kithara::abr::Abr for TestPeer {}
+    struct TestPeer {
+        cancel: CancelToken,
+    }
+    impl kithara::abr::Abr for TestPeer {
+        fn cancel(&self) -> CancelToken {
+            self.cancel.clone()
+        }
+    }
     impl Peer for TestPeer {}
     let cancel = CancelToken::never();
     let dl = Downloader::new(
@@ -128,7 +134,9 @@ fn create_test_peer_handle() -> PeerHandle {
             .cancel(cancel.child())
             .build(),
     );
-    dl.register(Arc::new(TestPeer))
+    dl.register(Arc::new(TestPeer {
+        cancel: cancel.clone(),
+    }))
 }
 
 /// Build a test [`PlaylistCache`] backed by the supplied

@@ -2,7 +2,7 @@
 
 use std::{
     env, fs,
-    io::Write,
+    io::{self, ErrorKind, Write},
     os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
     process::{Command, Output, Stdio},
@@ -111,16 +111,29 @@ printf '%s\t%s\n' "${0##*/}" "$*" >> "$FAKE_FORMAT_LOG"
 
     fn run_raw(&self, input: &str) -> Result<Output> {
         let mut child = self.command().spawn()?;
-        child
-            .stdin
-            .take()
-            .context("open hook stdin")?
-            .write_all(input.as_bytes())?;
+        let mut stdin = child.stdin.take().context("open hook stdin")?;
+        let written = stdin.write_all(input.as_bytes());
+        drop(stdin);
+        accept_a_refused_payload(written)?;
         child.wait_with_output().context("wait for agent hook")
     }
 
     fn assert_cargo_not_run(&self) {
         assert!(!self.cargo_log.exists(), "agent hook invoked Cargo");
+    }
+}
+
+// The hook resolves its configuration before it reads stdin, so a broken
+// configuration makes it exit with the read end of the pipe already closed. Who
+// wins that race decides nothing about the contract: the exit status and the
+// stderr each caller asserts on still have to say why the payload was refused.
+// Failing the write instead would make the test's verdict depend on scheduling.
+fn accept_a_refused_payload(written: io::Result<()>) -> Result<()> {
+    match written {
+        Err(error) if error.kind() != ErrorKind::BrokenPipe => {
+            Err(error).context("write the hook payload")
+        }
+        _ => Ok(()),
     }
 }
 

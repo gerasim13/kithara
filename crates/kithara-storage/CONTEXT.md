@@ -25,14 +25,14 @@ An async writer and one or more sync readers share a resource: the downloader wr
 | --- | --- | --- |
 | Backing | `mmap-io::MemoryMappedFile` | `PooledOwned<32, Vec<u8>>` plus an `ArcSwapOption<Vec<u8>>` committed snapshot |
 | Lock-free fast path | Yes — `SegQueue` of ready ranges consumed by `try_fast_check` | No |
-| Growth | 2× on overflow (`MMAP_GROWTH_FACTOR`) | Extend on write, charged against the injected `BytePool` budget |
+| Growth | `growth_factor`× on overflow, 2× by default | Extend on write, charged against the injected `BytePool` budget |
 | `path()` | `Some` | `None` |
 
 Neither driver evicts: `valid_window()` is `None`, so a published committed snapshot implies gap-free coverage of `[0, committed_len)` and `contains_range` takes a lock-free fast path.
 
 Lock-free is only half of what the produce core needs from `contains_range`: an active resource answers from the `available_snapshot` generation, `write_at` publishes a new one on every write, and a read racing that write can end up the *last* owner of the replaced generation — freeing a range tree on the audio thread (`RTSan`: unsafe-library-call in `free`). So a read never drops the snapshot it loaded: it parks the reference in the resource's retire bin, and the write side (`write_at`, `commit`/`seal`) drains the bin and pays the frees. A full bin leaks rather than freeing on the reader, which can only happen while writers are idle — exactly when no generation is being replaced.
 
-Both option types are `#[non_exhaustive]` `bon` builders: `MmapOptions::for_path(path)` (then `mode` / `initial_len`) and `MemOptions::builder()` (`pool`, `initial_data`, `capacity`).
+Both option types are `#[non_exhaustive]` `bon` builders: `MmapOptions::for_path(path)` (then `mode` / `initial_len` / `growth_factor`) and `MemOptions::builder()` (`pool`, `initial_data`, `capacity`). `initial_len` defaults to one 64 KiB block and `growth_factor` to 2; the defaults live in the builder attributes, so the options type is the only place that states them. `initial_len` is also the size a write to an empty mapping creates the file at, so a caller that asks for `0` gets a file sized to the write rather than a default-sized one.
 
 ## Chunked atomic claim
 

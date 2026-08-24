@@ -835,17 +835,14 @@ mod priming_table_tests {
 mod output_rate_tests {
     use std::{fs, path::Path};
 
+    use kithara_bufpool::BytePool;
     use kithara_stream::AudioCodec;
     use kithara_test_utils::kithara;
 
     use super::{
         AppleCodec, build_pcm_output_format, output_frame_capacity, resolve_output_sample_rate,
     };
-    use crate::{
-        codec::FrameCodec,
-        demuxer::TrackInfo,
-        fmp4::parsing::{CodecConfig, parse_init},
-    };
+    use crate::{codec::FrameCodec, demuxer::TrackInfo, fmp4::parsing::parse_init};
 
     struct Consts;
     impl Consts {
@@ -866,10 +863,8 @@ mod output_rate_tests {
 
     fn aac_lc_track() -> TrackInfo {
         let init_bytes = read_fixture("init-slq-a1.mp4");
-        let init = parse_init(&init_bytes).expect("BUG: parse AAC init");
-        let extra_data = match &init.config {
-            CodecConfig::Aac(bytes) | CodecConfig::Flac(bytes) => bytes.clone(),
-        };
+        let init = parse_init(&init_bytes, &BytePool::default()).expect("BUG: parse AAC init");
+        let extra_data = init.config.as_ref().to_vec();
         TrackInfo {
             extra_data,
             codec: AudioCodec::AacLc,
@@ -959,7 +954,7 @@ mod output_rate_tests {
 
 #[cfg(test)]
 mod aac_lc_decode_tests {
-    use kithara_bufpool::PcmPool;
+    use kithara_bufpool::{BytePool, PcmPool};
     use kithara_platform::time::Duration;
     use kithara_stream::AudioCodec;
     use kithara_test_utils::kithara;
@@ -968,7 +963,7 @@ mod aac_lc_decode_tests {
     use crate::{
         codec::FrameCodec,
         demuxer::TrackInfo,
-        fmp4::parsing::{CodecConfig, Fmp4Frame, Fmp4InitInfo, parse_init, parse_segment_frames},
+        fmp4::parsing::{Fmp4Frame, Fmp4InitInfo, parse_init, parse_segment_frames},
     };
 
     fn read_fixture(name: &str) -> Vec<u8> {
@@ -989,9 +984,7 @@ mod aac_lc_decode_tests {
     }
 
     fn track_from_init(init: &Fmp4InitInfo) -> TrackInfo {
-        let extra_data = match &init.config {
-            CodecConfig::Aac(bytes) | CodecConfig::Flac(bytes) => bytes.clone(),
-        };
+        let extra_data = init.config.as_ref().to_vec();
         TrackInfo {
             extra_data,
             codec: init.codec,
@@ -1055,7 +1048,7 @@ mod aac_lc_decode_tests {
     #[kithara::test]
     fn apple_aac_lc_decode_produces_finite_pcm() {
         let init_bytes = read_fixture("init-slq-a1.mp4");
-        let init = parse_init(&init_bytes).expect("BUG: parse AAC init");
+        let init = parse_init(&init_bytes, &BytePool::default()).expect("BUG: parse AAC init");
         assert_eq!(init.codec, AudioCodec::AacLc, "slq fixture must be AAC-LC");
         let track = track_from_init(&init);
 
@@ -1089,7 +1082,7 @@ mod aac_lc_decode_tests {
     #[kithara::test]
     fn apple_aac_lc_resampled_decode_produces_ratio_sized_frames() {
         let init_bytes = read_fixture("init-slq-a1.mp4");
-        let init = parse_init(&init_bytes).expect("BUG: parse AAC init");
+        let init = parse_init(&init_bytes, &BytePool::default()).expect("BUG: parse AAC init");
         assert_eq!(init.codec, AudioCodec::AacLc, "slq fixture must be AAC-LC");
         let track = track_from_init(&init);
         let target_rate = target_rate_for_source(init.sample_rate);
@@ -1159,7 +1152,7 @@ mod aac_lc_decode_tests {
     #[kithara::test]
     fn apple_aac_lc_src_eof_flush_total_output_within_one_frame() {
         let init_bytes = read_fixture("init-slq-a1.mp4");
-        let init = parse_init(&init_bytes).expect("BUG: parse AAC init");
+        let init = parse_init(&init_bytes, &BytePool::default()).expect("BUG: parse AAC init");
         assert_eq!(init.codec, AudioCodec::AacLc, "slq fixture must be AAC-LC");
         let track = track_from_init(&init);
         let target_rate = target_rate_for_source(init.sample_rate);
@@ -1208,7 +1201,7 @@ mod aac_lc_decode_tests {
     #[kithara::test]
     fn apple_aac_lc_passthrough_eof_drain_preserves_length() {
         let init_bytes = read_fixture("init-slq-a1.mp4");
-        let init = parse_init(&init_bytes).expect("BUG: parse AAC init");
+        let init = parse_init(&init_bytes, &BytePool::default()).expect("BUG: parse AAC init");
         assert_eq!(init.codec, AudioCodec::AacLc, "slq fixture must be AAC-LC");
         let track = track_from_init(&init);
 

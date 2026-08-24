@@ -46,6 +46,10 @@ pub(crate) struct FileSourceCtx {
     pub(crate) coord: Arc<FileCoord>,
     pub(crate) cancel: CancelToken,
     pub(crate) bus: EventBus,
+    /// Mirrors `FileConfig::reader_event_capacity`: ring depth the reader
+    /// sink wraps `bus` with. Sits next to the bus because that is the only
+    /// pair it is ever used as.
+    pub(crate) reader_event_capacity: usize,
 }
 
 /// Data-plane handles describing where the file lives and how to fetch it.

@@ -26,6 +26,7 @@ pub(crate) struct FileLocalConfig {
     coord: Arc<FileCoord>,
     bus: EventBus,
     cancel: CancelToken,
+    reader_event_capacity: usize,
     cached_codec: Option<AudioCodec>,
 }
 
@@ -98,6 +99,7 @@ impl FileSource {
             coord,
             bus,
             cancel,
+            reader_event_capacity,
             cached_codec,
         } = config;
         let inner = Arc::new(FileInner::new(
@@ -105,6 +107,7 @@ impl FileSource {
                 coord: Arc::clone(&coord),
                 cancel,
                 bus,
+                reader_event_capacity,
             },
             FileAssetCtx {
                 reader,
@@ -271,6 +274,7 @@ impl kithara_stream::Source for FileSource {
             self.inner.source.bus.clone(),
             Arc::clone(&self.coord),
             self.coord.seek_epoch_handle(),
+            self.inner.source.reader_event_capacity,
         );
         Some(Box::new(hooks))
     }

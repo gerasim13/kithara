@@ -3,6 +3,8 @@ use std::{
     ops::ControlFlow,
 };
 
+use kithara_bufpool::BytePool;
+
 use crate::{
     DecodeResult, GaplessInfo,
     mp4::{ItunSmpb, Mp4EditListEntry, Mp4MediaTiming, Mp4Visitor, scan_mp4},
@@ -20,15 +22,17 @@ use crate::{
 /// than propagated, so callers can fall back to other probes.
 pub fn probe_mp4_gapless<R: Read + Seek + Send + Sync>(
     reader: &mut R,
+    byte_pool: &BytePool,
 ) -> DecodeResult<Option<GaplessInfo>> {
-    probe_mp4_gapless_dyn(reader)
+    probe_mp4_gapless_dyn(reader, byte_pool)
 }
 
 pub(crate) fn probe_mp4_gapless_dyn(
     reader: &mut dyn DecoderInput,
+    byte_pool: &BytePool,
 ) -> DecodeResult<Option<GaplessInfo>> {
     let mut probe = GaplessProbe::default();
-    match scan_mp4(reader, &mut probe) {
+    match scan_mp4(reader, &mut probe, byte_pool) {
         Ok(()) => Ok(probe.into()),
         Err(crate::mp4::Mp4MetadataError::Io(error)) => Err(error.into()),
         Err(crate::mp4::Mp4MetadataError::InvalidData(_)) => Ok(None),
@@ -157,6 +161,7 @@ fn scale_frames(value: u64, numerator: u32, denominator: u32) -> Option<u64> {
 mod tests {
     use std::io::Cursor;
 
+    use kithara_bufpool::BytePool;
     use kithara_test_utils::kithara;
 
     use super::probe_mp4_gapless;
@@ -280,7 +285,7 @@ mod tests {
 
         let mut reader = Cursor::new(atom(*b"moov", &moov));
         assert_eq!(
-            probe_mp4_gapless(&mut reader).expect("BUG: probe"),
+            probe_mp4_gapless(&mut reader, &BytePool::default()).expect("BUG: probe"),
             Some(GaplessInfo {
                 leading_frames: 2_112,
                 trailing_frames: 1_920,
@@ -303,7 +308,7 @@ mod tests {
 
         let mut reader = Cursor::new(atom(*b"moov", &moov));
         assert_eq!(
-            probe_mp4_gapless(&mut reader).expect("BUG: probe"),
+            probe_mp4_gapless(&mut reader, &BytePool::default()).expect("BUG: probe"),
             Some(GaplessInfo {
                 leading_frames: 0x840,
                 trailing_frames: 0x48,
@@ -327,7 +332,7 @@ mod tests {
 
         let mut reader = Cursor::new(atom(*b"moov", &moov));
         assert_eq!(
-            probe_mp4_gapless(&mut reader).expect("BUG: probe"),
+            probe_mp4_gapless(&mut reader, &BytePool::default()).expect("BUG: probe"),
             Some(GaplessInfo {
                 leading_frames: 2_112,
                 trailing_frames: 1_920,
@@ -340,7 +345,10 @@ mod tests {
         let mut moov = Vec::new();
         moov.extend_from_slice(&mvhd(1_000));
         let mut reader = Cursor::new(atom(*b"moov", &moov));
-        assert_eq!(probe_mp4_gapless(&mut reader).expect("BUG: probe"), None);
+        assert_eq!(
+            probe_mp4_gapless(&mut reader, &BytePool::default()).expect("BUG: probe"),
+            None
+        );
     }
 
     #[kithara::test]
@@ -357,6 +365,9 @@ mod tests {
         moov.extend_from_slice(&atom(*b"udta", &atom(*b"meta", &meta_payload)));
 
         let mut reader = Cursor::new(atom(*b"moov", &moov));
-        assert_eq!(probe_mp4_gapless(&mut reader).expect("BUG: probe"), None);
+        assert_eq!(
+            probe_mp4_gapless(&mut reader, &BytePool::default()).expect("BUG: probe"),
+            None
+        );
     }
 }

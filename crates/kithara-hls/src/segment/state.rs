@@ -9,7 +9,7 @@ use kithara_platform::sync::Arc;
 use crate::{
     segment::fetch::{FetchClaim, PlannedFetch},
     signal::SizeSignal,
-    variant::HlsVariant,
+    variant::{HlsVariant, PlanRevision},
 };
 
 bitflags! {
@@ -48,33 +48,65 @@ bitflags! {
 /// the `on_slow` hook), so there is no silent fallback. Reads stay a plain
 /// atomic (no lock) because `download_head` scans every slot on the ABR tick.
 #[derive(Debug)]
-pub(crate) struct SegmentSlotState(AtomicU8);
+pub(crate) struct SegmentSlotState {
+    flags: AtomicU8,
+    /// Consecutive dispatch-side acquire failures on this slot, kept beside
+    /// the flags rather than inside them: [`Self::try_claim`] CAS's the flag
+    /// byte against a bare zero, so a counter packed in there would make the
+    /// slot unclaimable for good. Survives the `Downloading -> Missing`
+    /// requeue — that is the whole point — and is cleared the moment an
+    /// acquire succeeds.
+    acquire_failures: AtomicU8,
+}
 
 impl SegmentSlotState {
     fn flags(&self) -> SlotFlags {
-        SlotFlags::from_bits_truncate(self.0.load(Ordering::Acquire))
+        SlotFlags::from_bits_truncate(self.flags.load(Ordering::Acquire))
     }
 
     pub(crate) fn mark_failed(&self) {
-        self.0.store(SlotFlags::FAILED.bits(), Ordering::Release);
+        self.flags
+            .store(SlotFlags::FAILED.bits(), Ordering::Release);
     }
 
     pub(crate) fn mark_loaded(&self) {
-        self.0.store(SlotFlags::LOADED.bits(), Ordering::Release);
+        self.flags
+            .store(SlotFlags::LOADED.bits(), Ordering::Release);
     }
 
     pub(crate) fn mark_missing(&self) {
-        self.0.store(SlotFlags::empty().bits(), Ordering::Release);
+        self.flags
+            .store(SlotFlags::empty().bits(), Ordering::Release);
     }
 
     /// Mark the in-flight fetch slow (the `on_slow` hook fired). Idempotent;
     /// the next state `store` (terminal transition or fresh claim) clears it.
     pub(crate) fn mark_slow(&self) {
-        self.0.fetch_or(SlotFlags::SLOW.bits(), Ordering::AcqRel);
+        self.flags
+            .fetch_or(SlotFlags::SLOW.bits(), Ordering::AcqRel);
     }
 
     pub(crate) fn missing() -> Arc<Self> {
-        Arc::new(Self(AtomicU8::new(SlotFlags::empty().bits())))
+        Arc::new(Self {
+            flags: AtomicU8::new(SlotFlags::empty().bits()),
+            acquire_failures: AtomicU8::new(0),
+        })
+    }
+
+    /// Record one dispatch-side acquire failure and return the running count.
+    /// Saturates, so a slot retried past the budget keeps reporting the
+    /// budget rather than wrapping back under it.
+    pub(crate) fn note_acquire_failure(&self) -> u8 {
+        let prior = self.acquire_failures.load(Ordering::Acquire);
+        let next = prior.saturating_add(1);
+        self.acquire_failures.store(next, Ordering::Release);
+        next
+    }
+
+    /// Forget the acquire failures: the resource opened, so whatever was in
+    /// the way is gone and the next obstruction starts its own budget.
+    pub(crate) fn clear_acquire_failures(&self) {
+        self.acquire_failures.store(0, Ordering::Release);
     }
 
     /// Atomic `Missing -> Downloading` claim. Returns the owned
@@ -83,10 +115,11 @@ impl SegmentSlotState {
     pub(crate) fn try_claim(
         self: &Arc<Self>,
         planned: PlannedFetch,
+        plan_revision: PlanRevision,
         variant: Weak<HlsVariant>,
         signal: SizeSignal,
     ) -> Option<FetchClaim<Downloading>> {
-        self.0
+        self.flags
             .compare_exchange(
                 SlotFlags::empty().bits(),
                 SlotFlags::DOWNLOADING.bits(),
@@ -94,7 +127,7 @@ impl SegmentSlotState {
                 Ordering::Acquire,
             )
             .ok()
-            .map(|_| FetchClaim::claim(planned, variant, Arc::clone(self), signal))
+            .map(|_| FetchClaim::claim(planned, plan_revision, variant, Arc::clone(self), signal))
     }
 
     delegate::delegate! {

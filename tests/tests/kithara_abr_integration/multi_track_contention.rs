@@ -2,23 +2,28 @@ use kithara::{
     self,
     abr::{AbrController, AbrMode, AbrSettings, AbrState, ThroughputEstimator},
     events::{BandwidthSource, VariantDuration, VariantIndex, VariantInfo},
-    platform::{sync::Arc, time::Duration},
+    platform::{CancelToken, sync::Arc, time::Duration},
 };
 
 fn settings_fast() -> AbrSettings {
     AbrSettings::builder()
-        .initial_throughput_bps(2_000_000)
+        .initial_throughput_bps(Some(2_000_000))
         .min_switch_interval(Duration::ZERO)
         .min_buffer_for_up_switch(Duration::ZERO)
         .build()
 }
 
 struct TestPeer {
+    cancel: CancelToken,
     state: Arc<AbrState>,
     variants: Vec<VariantInfo>,
 }
 
 impl kithara::abr::Abr for TestPeer {
+    fn cancel(&self) -> CancelToken {
+        self.cancel.clone()
+    }
+
     fn variants(&self) -> Vec<VariantInfo> {
         self.variants.clone()
     }
@@ -45,6 +50,7 @@ fn variants(bitrates: &[u64]) -> Vec<VariantInfo> {
 fn new_peer(bitrates: &[u64]) -> (Arc<AbrState>, Arc<dyn kithara::abr::Abr>) {
     let state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0)))));
     let peer: Arc<dyn kithara::abr::Abr> = Arc::new(TestPeer {
+        cancel: CancelToken::never(),
         state: Arc::clone(&state),
         variants: variants(bitrates),
     });

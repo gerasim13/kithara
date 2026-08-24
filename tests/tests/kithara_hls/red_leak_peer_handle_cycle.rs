@@ -20,6 +20,7 @@ use kithara::{
 /// Peer that stashes its own `PeerHandle` clone after registration —
 /// mirroring `HlsPeer` + `SegmentLoader` in production.
 struct SelfReferencingPeer {
+    cancel: CancelToken,
     /// Hidden handle inside the peer's own state. The external caller
     /// has no knowledge of this clone.
     inner_handle: Mutex<Option<PeerHandle>>,
@@ -29,6 +30,7 @@ struct SelfReferencingPeer {
 impl SelfReferencingPeer {
     fn new() -> Self {
         Self {
+            cancel: CancelToken::never(),
             inner_handle: Mutex::new(None),
             _polled: AtomicBool::new(false),
         }
@@ -46,7 +48,11 @@ impl SelfReferencingPeer {
     }
 }
 
-impl Abr for SelfReferencingPeer {}
+impl Abr for SelfReferencingPeer {
+    fn cancel(&self) -> CancelToken {
+        self.cancel.clone()
+    }
+}
 
 impl Peer for SelfReferencingPeer {
     fn poll_next(&self, _cx: &mut Context<'_>) -> Poll<Option<Vec<FetchCmd>>> {

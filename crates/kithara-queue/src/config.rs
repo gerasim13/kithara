@@ -20,11 +20,9 @@ pub(crate) const DEFAULT_PREFETCH_DURATION: f32 = 3.5;
 ///
 /// Holds queue-level defaults plus an optional externally-owned
 /// [`PlayerImpl`] instance. Matches the project-wide pattern where
-/// config structs accept optional built instances (see
-/// [`ResourceConfig::worker`](kithara_play::ResourceConfig::worker) /
-/// [`runtime`](kithara_play::ResourceConfig::runtime) /
-/// [`bus`](kithara_play::ResourceConfig::bus)) rather than re-taking
-/// their own construction parameters.
+/// config structs such as [`ResourceConfig`](kithara_play::ResourceConfig)
+/// accept optional built dependencies rather than re-taking their construction
+/// parameters.
 ///
 /// [`TrackSource::Uri`](crate::TrackSource::Uri) resources share this queue's
 /// store. A caller-supplied [`ResourceConfig`](kithara_play::ResourceConfig)

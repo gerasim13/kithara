@@ -2,7 +2,7 @@
 
 use std::{
     env, fs,
-    io::Write,
+    io::{self, ErrorKind, Write},
     os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
     process::{Command, Output, Stdio},
@@ -205,11 +205,10 @@ exit 98
             .stderr(Stdio::piped());
         let mut child = command.spawn().context("start Just self-cache transport")?;
         if let Some(input) = input {
-            child
-                .stdin
-                .take()
-                .context("open Just transport stdin")?
-                .write_all(input)?;
+            let mut stdin = child.stdin.take().context("open Just transport stdin")?;
+            let written = stdin.write_all(input);
+            drop(stdin);
+            accept_a_refused_payload(written)?;
         }
         child
             .wait_with_output()
@@ -759,6 +758,20 @@ fn write_executable(path: &Path, body: &str) -> Result<()> {
     permissions.set_mode(0o755);
     fs::set_permissions(path, permissions)?;
     Ok(())
+}
+
+// A transport that is unavailable refuses before it reads the payload, so the
+// read end can already be closed when the write lands. Who wins that race
+// decides nothing: the exit status and the stderr each caller asserts on still
+// have to say why. Failing the write instead would make the test's verdict
+// depend on scheduling.
+fn accept_a_refused_payload(written: io::Result<()>) -> Result<()> {
+    match written {
+        Err(error) if error.kind() != ErrorKind::BrokenPipe => {
+            Err(error).context("write the transport payload")
+        }
+        _ => Ok(()),
+    }
 }
 
 fn assert_success(output: &Output) {

@@ -1,3 +1,4 @@
+use kithara_bufpool::PcmPool;
 use kithara_decode::{PcmChunk, PcmSpec};
 
 use crate::{
@@ -8,10 +9,10 @@ use crate::{
 pub(crate) type Config = Option<usize>;
 pub(crate) type Slot = Option<WaveformPass>;
 
-pub(crate) fn build(config: &Config, spec: PcmSpec) -> Slot {
+pub(crate) fn build(config: &Config, spec: PcmSpec, pcm_pool: &PcmPool) -> Slot {
     config
         .as_ref()
-        .map(|buckets| WaveformPass::new(spec.sample_rate.get(), *buckets))
+        .map(|buckets| WaveformPass::new(spec.sample_rate.get(), *buckets, pcm_pool))
 }
 
 pub(crate) const fn config_is_empty(config: &Config) -> bool {

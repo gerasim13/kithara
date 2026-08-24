@@ -1,4 +1,9 @@
-use std::{collections::VecDeque, future::poll_fn, sync::atomic::Ordering, task::Poll};
+use std::{
+    collections::VecDeque,
+    future::{Future, pending, poll_fn},
+    sync::atomic::Ordering,
+    task::Poll,
+};
 
 use kithara_abr::AbrPeerId;
 use kithara_events::{DownloaderEvent, EventBus, RequestId, RequestPriority};
@@ -63,8 +68,8 @@ pub(super) enum FetchProgress {
     /// watchdog must stay silent.
     Idle,
     /// At least one of: a command was drained from a peer's channel, a
-    /// peer yielded a batch, an in-flight fetch completed (inflight
-    /// decremented), or a new fetch was dispatched this tick.
+    /// peer yielded a batch, an ABR tick ran, an in-flight fetch
+    /// completed (inflight decremented), or a new fetch was dispatched.
     Advanced,
     /// Pending work exists (inflight > 0 or slots non-empty) but this
     /// tick observed no forward motion. Consecutive stalls across the
@@ -72,12 +77,11 @@ pub(super) enum FetchProgress {
     Stalled,
 }
 
-/// Counters returned from [`Registry::poll_peers`] so [`Registry::tick`]
-/// can classify the tick as [`FetchProgress::Advanced`] when work actually
-/// moved (channel drain or peer batch) rather than just when `poll_fn` was
-/// woken spuriously by the `fetch_waker`.
+/// Activity accumulated by [`Registry::tick`] so the downloader can classify
+/// real forward motion rather than a spurious `poll_fn` wake.
 #[derive(Default, Clone, Copy)]
 struct PollStats {
+    abr_ticked: bool,
     drained_cmds: usize,
     peer_batches: usize,
 }
@@ -309,11 +313,10 @@ impl Registry {
 
     /// Single tick: poll peers, process urgent, then demand with throttle.
     ///
-    /// Accepts `register_rx` so that new peer registrations are handled
-    /// inside `poll_fn` rather than in a competing `select!` arm.
-    /// This guarantees that `process()` runs to completion — a `select!`
-    /// branch for registrations would drop `tick()` mid-batch, losing
-    /// unspawned `FetchCmd`s.
+    /// New peer registrations, queued ABR ticks, and the nearest ABR deadline
+    /// are handled inside `poll_fn` rather than competing `select!` arms. This
+    /// guarantees that `process()` runs to completion: no readiness source can
+    /// drop `tick()` mid-batch and lose unspawned `FetchCmd`s.
     ///
     /// Returns a [`FetchProgress`] describing whether fetch work moved
     /// forward this tick. Idle returns are possible when `poll_fn` is
@@ -328,21 +331,35 @@ impl Registry {
     ) -> FetchProgress {
         let inflight_enter = inner.inflight.load(Ordering::Relaxed);
         let mut aggregate = PollStats::default();
+        let abr_deadline = inner.abr.next_tick_deadline();
+        let abr_deadline_wait = async move {
+            let Some(deadline) = abr_deadline else {
+                return pending::<()>().await;
+            };
+            kithara_platform::time::sleep(deadline.saturating_duration_since(Instant::now())).await;
+        };
+        tokio::pin!(abr_deadline_wait);
 
         poll_fn(|cx| {
+            let deadline_elapsed = abr_deadline_wait.as_mut().poll(cx).is_ready();
+            aggregate.abr_ticked |= inner.abr.poll_ticks(cx, Instant::now(), deadline_elapsed);
             while let Poll::Ready(Some(entry)) = register_rx.poll_recv(cx) {
                 self.add(entry);
             }
             let stats = self.poll_peers(cx, inner);
             aggregate.drained_cmds += stats.drained_cmds;
             aggregate.peer_batches += stats.peer_batches;
-            if self.has_slot_work() {
+            if aggregate.abr_ticked || self.has_slot_work() {
                 Poll::Ready(())
             } else {
                 Poll::Pending
             }
         })
         .await;
+
+        if aggregate.abr_ticked && !self.has_slot_work() {
+            return FetchProgress::Advanced;
+        }
 
         let mut dispatched: usize = 0;
 
@@ -441,6 +458,7 @@ const fn classify_progress(
     dispatched: usize,
 ) -> FetchProgress {
     let advanced = poll_stats.drained_cmds > 0
+        || poll_stats.abr_ticked
         || poll_stats.peer_batches > 0
         || dispatched > 0
         || inflight_exit < inflight_enter;
@@ -461,9 +479,25 @@ mod classify_progress_tests {
 
     fn stats(drained: usize, batches: usize) -> PollStats {
         PollStats {
+            abr_ticked: false,
             drained_cmds: drained,
             peer_batches: batches,
         }
+    }
+
+    #[kithara::test]
+    fn advanced_when_abr_tick_ran() {
+        let out = classify_progress(
+            0,
+            0,
+            PollStats {
+                abr_ticked: true,
+                drained_cmds: 0,
+                peer_batches: 0,
+            },
+            0,
+        );
+        assert_eq!(out, FetchProgress::Advanced);
     }
 
     #[kithara::test]

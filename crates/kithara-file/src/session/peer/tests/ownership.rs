@@ -1,6 +1,31 @@
 use super::*;
 
 #[kithara::test]
+fn abr_cancel_observes_the_file_source_scope() {
+    let store = AssetStore::builder()
+        .backend(StorageBackend::Memory)
+        .cancel(CancelToken::never())
+        .build();
+    let key = test_key(&store);
+    let coord = make_coord();
+    let (reader, lease, writer) = attach_pending(&store, &key, &coord, Some(4));
+    let source_cancel = CancelToken::never();
+    let inner = make_inner_with_cancel(
+        reader,
+        lease,
+        coord,
+        EventBus::new(16),
+        source_cancel.clone(),
+    );
+    let peer = make_peer(&inner, writer);
+    let observed = Abr::cancel(&peer);
+
+    assert!(!observed.is_cancelled());
+    source_cancel.cancel();
+    assert!(observed.is_cancelled());
+}
+
+#[kithara::test]
 fn cancelled_waiting_source_relinquishes_writer() {
     let store = AssetStore::builder()
         .backend(StorageBackend::Memory)

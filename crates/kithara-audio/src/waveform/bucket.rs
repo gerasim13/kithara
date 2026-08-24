@@ -43,7 +43,7 @@ impl Bucket {
 
 /// A track's analysed waveform: per-bucket band heights in `[0, 1]`, indexed by
 /// normalized track position.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct Waveform(Arc<[Bucket]>);
 
 impl Waveform {

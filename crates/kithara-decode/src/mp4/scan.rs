@@ -3,6 +3,7 @@ use std::{
     ops::ControlFlow,
 };
 
+use kithara_bufpool::{BytePool, PooledOwned};
 use smallvec::SmallVec;
 use thiserror::Error;
 
@@ -135,9 +136,10 @@ pub(crate) enum Mp4MetadataError {
 pub(crate) fn scan_mp4(
     reader: &mut dyn DecoderInput,
     visitor: &mut dyn Mp4Visitor,
+    byte_pool: &BytePool,
 ) -> Result<(), Mp4MetadataError> {
     let position = reader.stream_position()?;
-    let result = Mp4Scanner::new(reader, visitor).scan();
+    let result = Mp4Scanner::new(reader, visitor, byte_pool).scan();
     let restore = reader.seek(SeekFrom::Start(position));
 
     match (result, restore) {
@@ -160,18 +162,27 @@ struct BoxRef {
 }
 
 struct Mp4Scanner<'a> {
+    byte_pool: &'a BytePool,
     reader: &'a mut dyn DecoderInput,
     visitor: &'a mut dyn Mp4Visitor,
 }
 
 impl<'a> Mp4Scanner<'a> {
-    fn new(reader: &'a mut dyn DecoderInput, visitor: &'a mut dyn Mp4Visitor) -> Self {
-        Self { reader, visitor }
+    fn new(
+        reader: &'a mut dyn DecoderInput,
+        visitor: &'a mut dyn Mp4Visitor,
+        byte_pool: &'a BytePool,
+    ) -> Self {
+        Self {
+            byte_pool,
+            reader,
+            visitor,
+        }
     }
 
     fn parse_edts(&mut self, end: u64) -> Result<ControlFlow<()>, Mp4MetadataError> {
         self.walk_payload_child(end, Consts::BOX_ELST, "elst", |this, payload| {
-            let entries = parse_elst(&payload)?;
+            let entries = parse_elst(payload)?;
             Ok(this.visitor.on_track_edit_list(&entries))
         })
     }
@@ -220,7 +231,7 @@ impl<'a> Mp4Scanner<'a> {
         };
 
         self.reader.seek(SeekFrom::Start(data_start))?;
-        let payload = read_payload(self.reader, data_end, "iTunSMPB data")?;
+        let payload = read_payload(self.reader, data_end, "iTunSMPB data", self.byte_pool)?;
         let Some((_data_type, value)) = parse_data_box(&payload) else {
             return Ok(ControlFlow::Continue(()));
         };
@@ -243,7 +254,7 @@ impl<'a> Mp4Scanner<'a> {
     fn parse_mdia(&mut self, end: u64) -> Result<ControlFlow<()>, Mp4MetadataError> {
         self.walk_children(end, |this, header| match header.kind {
             Consts::BOX_MDHD => {
-                let payload = read_payload(this.reader, header.end, "mdhd")?;
+                let payload = read_payload(this.reader, header.end, "mdhd", this.byte_pool)?;
                 if let Some(timing) = parse_mdhd(&payload) {
                     return Ok(this.visitor.on_track_media_timing(timing));
                 }
@@ -283,7 +294,7 @@ impl<'a> Mp4Scanner<'a> {
     fn parse_moov(&mut self, end: u64) -> Result<ControlFlow<()>, Mp4MetadataError> {
         self.walk_children(end, |this, header| match header.kind {
             Consts::BOX_MVHD => {
-                let payload = read_payload(this.reader, header.end, "mvhd")?;
+                let payload = read_payload(this.reader, header.end, "mvhd", this.byte_pool)?;
                 if let Some(timescale) = parse_mvhd_timescale(&payload) {
                     return Ok(this.visitor.on_movie_timescale(timescale));
                 }
@@ -298,12 +309,12 @@ impl<'a> Mp4Scanner<'a> {
 
     fn parse_stbl(&mut self, end: u64) -> Result<ControlFlow<()>, Mp4MetadataError> {
         self.walk_payload_child(end, Consts::BOX_STSD, "stsd", |this, payload| {
-            if let Some(fourcc) = parse_stsd_codec(&payload)
+            if let Some(fourcc) = parse_stsd_codec(payload)
                 && this.visitor.on_track_codec(fourcc).is_break()
             {
                 return Ok(ControlFlow::Break(()));
             }
-            if let Some(sample_rate) = parse_stsd_sample_rate(&payload) {
+            if let Some(sample_rate) = parse_stsd_sample_rate(payload) {
                 return Ok(this.visitor.on_track_sample_rate(sample_rate));
             }
             Ok(ControlFlow::Continue(()))
@@ -340,7 +351,7 @@ impl<'a> Mp4Scanner<'a> {
         header: BoxRef,
         label: &'static str,
     ) -> Result<Option<SmallVec<[u8; 32]>>, Mp4MetadataError> {
-        let payload = read_payload(self.reader, header.end, label)?;
+        let payload = read_payload(self.reader, header.end, label, self.byte_pool)?;
         Ok(read_text_fullbox_bytes(&payload))
     }
 
@@ -403,11 +414,11 @@ impl<'a> Mp4Scanner<'a> {
         mut visit: F,
     ) -> Result<ControlFlow<()>, Mp4MetadataError>
     where
-        F: FnMut(&mut Self, Vec<u8>) -> Result<ControlFlow<()>, Mp4MetadataError>,
+        F: FnMut(&mut Self, &[u8]) -> Result<ControlFlow<()>, Mp4MetadataError>,
     {
         self.walk_matching_child(end, target_kind, |this, header| {
-            let payload = read_payload(this.reader, header.end, label)?;
-            visit(this, payload)
+            let payload = read_payload(this.reader, header.end, label, this.byte_pool)?;
+            visit(this, &payload)
         })
     }
 }
@@ -438,9 +449,12 @@ impl Mp4Visitor for CodecSniffer {
 /// Used by the probe path to disambiguate codecs that share the
 /// `.m4a`/`.mp4` extension (AAC vs ALAC vs FLAC). Reader position is
 /// restored; returns `None` when the container has no parseable `stsd`.
-pub(crate) fn sniff_mp4_codec(reader: &mut dyn DecoderInput) -> Option<[u8; 4]> {
+pub(crate) fn sniff_mp4_codec(
+    reader: &mut dyn DecoderInput,
+    byte_pool: &BytePool,
+) -> Option<[u8; 4]> {
     let mut sniffer = CodecSniffer::default();
-    scan_mp4(reader, &mut sniffer).ok()?;
+    scan_mp4(reader, &mut sniffer, byte_pool).ok()?;
     sniffer.fourcc
 }
 
@@ -665,14 +679,15 @@ fn read_payload(
     reader: &mut dyn DecoderInput,
     end: u64,
     label: &str,
-) -> Result<Vec<u8>, Mp4MetadataError> {
+    byte_pool: &BytePool,
+) -> Result<PooledOwned<32, Vec<u8>>, Mp4MetadataError> {
     let start = reader.stream_position()?;
     let payload_len = end
         .checked_sub(start)
         .and_then(|payload_len| usize::try_from(payload_len).ok())
         .ok_or_else(|| invalid(format!("{label} payload range underflow")))?;
 
-    let mut payload = vec![0; payload_len];
+    let mut payload = byte_pool.get_with(|buffer| buffer.resize(payload_len, 0));
     reader.read_exact(&mut payload)?;
     Ok(payload)
 }

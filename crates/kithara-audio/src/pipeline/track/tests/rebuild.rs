@@ -6,7 +6,7 @@ use std::{
 };
 
 use kithara_abr::{AbrMode, AbrReason, AbrState, VariantIndex};
-use kithara_bufpool::PcmPool;
+use kithara_bufpool::{BytePool, PcmPool};
 use kithara_decode::{
     DecodeError, DecodeResult, Decoder, DecoderChunkOutcome, DecoderSeekOutcome, GaplessInfo,
     GaplessMode, GaplessProfile, PcmChunk, PcmMeta, PcmSpec, duration_for_frames,
@@ -779,6 +779,7 @@ async fn test_source_with_mode(variant: u32, gapless_mode: GaplessMode) -> Rebui
         Err(err) => panic!("test requires tokio runtime: {err}"),
     };
     let decode = DecodeInit {
+        byte_pool: BytePool::default(),
         decoder_factory,
         gapless_mode,
         decoder: Box::new(TestDecoder::new(1, drops.clone())),
@@ -786,6 +787,7 @@ async fn test_source_with_mode(variant: u32, gapless_mode: GaplessMode) -> Rebui
         host_sample_rate: Arc::new(AtomicU32::new(Consts::SAMPLE_RATE)),
         media_info: Some(media_info(0)),
         playback_resampler_backend: "none",
+        pcm_pool: PcmPool::default(),
         recreate_on_host_rate_change: true,
     }
     .into_parts(Vec::new(), shared_stream.seek_observe().epoch());
@@ -954,6 +956,7 @@ async fn route_source(params: RouteParams, effects: Vec<Box<dyn AudioEffect>>) -
         Err(err) => panic!("test requires tokio runtime: {err}"),
     };
     let decode = DecodeInit {
+        byte_pool: BytePool::default(),
         decoder_factory,
         decoder: Box::new(
             RouteSignalDecoder::new(
@@ -974,6 +977,7 @@ async fn route_source(params: RouteParams, effects: Vec<Box<dyn AudioEffect>>) -
         host_sample_rate: host_sample_rate.clone(),
         media_info: Some(media_info(0)),
         playback_resampler_backend: "none",
+        pcm_pool: PcmPool::default(),
         recreate_on_host_rate_change: true,
     }
     .into_parts(effects, shared_stream.seek_observe().epoch());

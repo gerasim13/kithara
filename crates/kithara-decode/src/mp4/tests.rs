@@ -3,6 +3,7 @@ use std::{
     ops::ControlFlow,
 };
 
+use kithara_bufpool::BytePool;
 use kithara_test_utils::kithara;
 
 use super::{
@@ -129,7 +130,7 @@ impl Mp4Visitor for RecordingVisitor {
 
 fn record(reader: &mut dyn super::DecoderInput) -> RecordingVisitor {
     let mut visitor = RecordingVisitor::default();
-    scan_mp4(reader, &mut visitor).expect("BUG: scan");
+    scan_mp4(reader, &mut visitor, &BytePool::default()).expect("BUG: scan");
     visitor
 }
 
@@ -309,21 +310,24 @@ fn make_track_mp4_with_codec(codec: [u8; 4]) -> Vec<u8> {
 #[case(*b"alac")]
 fn sniff_returns_first_audio_sample_entry_codec(#[case] codec: [u8; 4]) {
     let mut reader = Cursor::new(make_track_mp4_with_codec(codec));
-    assert_eq!(sniff_mp4_codec(&mut reader), Some(codec));
+    assert_eq!(
+        sniff_mp4_codec(&mut reader, &BytePool::default()),
+        Some(codec)
+    );
 }
 
 #[kithara::test]
 fn sniff_restores_reader_position() {
     let mut reader = Cursor::new(make_track_mp4_with_codec(*b"fLaC"));
     let before = reader.stream_position().expect("position");
-    let _ = sniff_mp4_codec(&mut reader);
+    let _ = sniff_mp4_codec(&mut reader, &BytePool::default());
     assert_eq!(reader.stream_position().expect("position"), before);
 }
 
 #[kithara::test]
 fn sniff_returns_none_for_non_mp4_bytes() {
     let mut reader = Cursor::new(vec![0u8; 64]);
-    assert_eq!(sniff_mp4_codec(&mut reader), None);
+    assert_eq!(sniff_mp4_codec(&mut reader, &BytePool::default()), None);
 }
 
 fn make_itunsmpb_mp4(text: &str) -> Vec<u8> {
@@ -551,7 +555,7 @@ fn visitor_break_stops_scan_at_track_end() {
 
     let mut visitor = BreakAfterFirstTrack { tracks_seen: 0 };
     let mut reader = Cursor::new(bytes);
-    scan_mp4(&mut reader, &mut visitor).expect("BUG: scan");
+    scan_mp4(&mut reader, &mut visitor, &BytePool::default()).expect("BUG: scan");
     assert_eq!(visitor.tracks_seen, 1);
 }
 
@@ -579,7 +583,7 @@ fn scan_restores_reader_position() {
         .expect("BUG: seek inside mp4");
 
     let mut visitor = RecordingVisitor::default();
-    scan_mp4(&mut reader, &mut visitor).expect("BUG: scan");
+    scan_mp4(&mut reader, &mut visitor, &BytePool::default()).expect("BUG: scan");
 
     assert_eq!(reader.stream_position().expect("BUG: position"), 3);
 }
@@ -628,7 +632,7 @@ fn rejects_child_box_extending_past_parent() {
 
     let mut reader = Cursor::new(file);
     let mut visitor = RecordingVisitor::default();
-    let error = scan_mp4(&mut reader, &mut visitor).expect_err("must fail");
+    let error = scan_mp4(&mut reader, &mut visitor, &BytePool::default()).expect_err("must fail");
     assert!(matches!(error, Mp4MetadataError::InvalidData(_)));
 }
 
@@ -640,7 +644,7 @@ fn rejects_box_smaller_than_header() {
 
     let mut reader = Cursor::new(file);
     let mut visitor = RecordingVisitor::default();
-    let error = scan_mp4(&mut reader, &mut visitor).expect_err("must fail");
+    let error = scan_mp4(&mut reader, &mut visitor, &BytePool::default()).expect_err("must fail");
     assert!(matches!(error, Mp4MetadataError::InvalidData(_)));
 }
 

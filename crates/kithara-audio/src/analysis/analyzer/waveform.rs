@@ -1,3 +1,4 @@
+use kithara_bufpool::PcmPool;
 use kithara_decode::PcmChunk;
 
 use super::track::Analyzer;
@@ -9,10 +10,10 @@ pub(crate) struct WaveformPass {
 }
 
 impl WaveformPass {
-    pub(crate) fn new(sample_rate: u32, buckets: usize) -> Self {
+    pub(crate) fn new(sample_rate: u32, buckets: usize, pcm_pool: &PcmPool) -> Self {
         Self {
             buckets,
-            inner: WaveformAnalyzer::new(sample_rate, AnalysisParams::default()),
+            inner: WaveformAnalyzer::new(sample_rate, AnalysisParams::default(), pcm_pool),
         }
     }
 }

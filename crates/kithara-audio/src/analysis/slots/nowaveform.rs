@@ -1,3 +1,4 @@
+use kithara_bufpool::PcmPool;
 use kithara_decode::{PcmChunk, PcmSpec};
 
 use crate::waveform::bucket::Waveform;
@@ -8,7 +9,7 @@ pub(crate) struct Config;
 #[derive(Default)]
 pub(crate) struct Slot;
 
-pub(crate) fn build(_config: &Config, _spec: PcmSpec) -> Slot {
+pub(crate) fn build(_config: &Config, _spec: PcmSpec, _pcm_pool: &PcmPool) -> Slot {
     Slot
 }
 

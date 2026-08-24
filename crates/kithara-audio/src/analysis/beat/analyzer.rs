@@ -35,6 +35,7 @@ where
     params: GridParams,
     feed: MonoFeed,
     failure: Option<BeatDetectError>,
+    pcm_pool: PcmPool,
     resampler: Option<MonoStream<B>>,
     windows: WindowedBeats,
     source_rate: u32,
@@ -66,6 +67,7 @@ where
                 |r| (MonoFeed::Resample, Some(r)),
             )
         };
+        let windows = WindowedBeats::new(&config, &pcm_pool);
 
         Self {
             params,
@@ -73,7 +75,8 @@ where
             resampler,
             source_rate,
             failure: None,
-            windows: WindowedBeats::new(&config, &pcm_pool),
+            pcm_pool,
+            windows,
         }
     }
 
@@ -101,7 +104,8 @@ where
         })?;
 
         let raw = self.windows.finish(detector)?;
-        Ok(build_grid(&raw, self.source_rate, &self.params))
+        build_grid(&raw, self.source_rate, &self.params, &self.pcm_pool)
+            .map_err(|_| BeatDetectError::Buffer)
     }
 
     pub(crate) fn push_interleaved(

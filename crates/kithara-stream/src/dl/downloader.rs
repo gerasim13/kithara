@@ -86,6 +86,7 @@ pub(super) struct DownloaderInner {
     /// Sender for registering new peers (cold path).
     pub(super) register_tx: mpsc::UnboundedSender<RegisteredPeerEntry>,
     pub(super) max_concurrent: usize,
+    pub(super) peer_cmd_channel_capacity: usize,
     /// Monotonic source of [`kithara_events::RequestId`]s assigned to
     /// every command this Downloader accepts. Starts at 1 (`NonZero`
     /// invariant); never wraps in practice (`u64`).
@@ -119,9 +120,12 @@ impl Downloader {
         #[cfg(not(target_arch = "wasm32"))]
         let runtime = config.runtime;
         // Composed/standalone seam: `Some` parent → child of it; `None` → own
-        // root. The loop, peers, and ABR controller all derive from this token.
+        // root. The loop, peer scopes, and the shared ABR controller derive
+        // from this token.
         let cancel = CancelScope::new(config.cancel).token();
-        let abr = AbrController::new(config.abr_settings);
+        let mut abr_settings = config.abr_settings;
+        abr_settings.cancel = Some(cancel.clone());
+        let abr = AbrController::new(abr_settings);
         Self {
             inner: Arc::new(DownloaderInner {
                 soft_timeout,
@@ -131,6 +135,7 @@ impl Downloader {
                 cancel,
                 client: config.client,
                 max_concurrent: config.max_concurrent,
+                peer_cmd_channel_capacity: config.peer_cmd_channel_capacity,
                 demand_throttle: config.demand_throttle,
                 inflight: Arc::new(AtomicUsize::new(0)),
                 fetch_waker: Arc::new(AtomicWaker::new()),
@@ -158,11 +163,10 @@ impl Downloader {
     /// and ABR state through the shared controller. The returned handle's
     /// `Drop` unregisters both.
     pub fn register(&self, peer: Arc<dyn Peer>) -> PeerHandle {
-        /// Capacity of the per-peer bounded command channel.
-        const PEER_CMD_CHANNEL_CAPACITY: usize = 32;
         self.ensure_spawned();
-        let cancel = self.inner.cancel.child();
-        let (cmd_tx, cmd_rx) = mpsc::channel(PEER_CMD_CHANNEL_CAPACITY);
+        let cancel = CancelScope::new(Some(self.inner.cancel.clone()));
+        let cancel_token = cancel.token();
+        let (cmd_tx, cmd_rx) = mpsc::channel(self.inner.peer_cmd_channel_capacity);
         let bus: Arc<RwLock<Option<EventBus>>> = Arc::new(RwLock::default());
 
         let abr_peer: Arc<dyn Abr> = Arc::clone(&peer) as Arc<dyn Abr>;
@@ -173,7 +177,7 @@ impl Downloader {
             peer,
             cmd_rx,
             peer_id,
-            cancel: cancel.clone(),
+            cancel: cancel_token,
             bus: Arc::clone(&bus),
         };
         self.inner.register_tx.send(entry).ok();

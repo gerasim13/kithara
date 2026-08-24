@@ -34,6 +34,14 @@ pub struct DiskAssetStore {
     availability: AvailabilityIndex,
     cancel: CancelToken,
     root_dir: PathBuf,
+    /// Bytes a fresh segment's temp file is sized to on open. A segment
+    /// arrives in many small chunks, and every time the writes outgrow the
+    /// mapping the driver re-maps the file — the single most expensive step of
+    /// a segment commit. One reservation that covers a typical segment removes
+    /// those re-maps; anything larger still grows, and the surplus is trimmed
+    /// back to `final_len` on commit, so this costs a sparse extent and
+    /// nothing else.
+    segment_reservation: u64,
 }
 
 /// Disk-backed [`AssetDeleter`].
@@ -109,6 +117,7 @@ impl AssetDeleter for DiskAssetDeleter {
     }
 }
 
+#[bon::bon]
 impl DiskAssetStore {
     /// Create a store rooted at `root_dir` with its own unshared
     /// [`AvailabilityIndex`]. Convenient for tests; production
@@ -129,7 +138,12 @@ impl DiskAssetStore {
             pins,
             lru,
         ));
-        Self::with_availability_and_deleter(root_dir, cancel, availability, deleter)
+        Self::with_availability_and_deleter()
+            .root_dir(root_dir)
+            .cancel(cancel)
+            .availability(availability)
+            .deleter(deleter)
+            .call()
     }
 
     /// Persist the current [`AvailabilityIndex`] snapshot to
@@ -170,17 +184,9 @@ impl DiskAssetStore {
         key: &ResourceKey,
         path: PathBuf,
     ) -> AssetsResult<AtomicChunked<MmapDriver>> {
-        /// Bytes reserved for a fresh segment's temp file. A segment arrives
-        /// in many small chunks, and every time the writes outgrow the
-        /// mapping the driver re-maps the file — the single most expensive
-        /// step of a segment commit. One reservation that covers a typical
-        /// segment removes those re-maps; anything larger still grows, and
-        /// the surplus is trimmed back to `final_len` on commit, so this
-        /// costs a sparse extent and nothing else.
-        const SEGMENT_RESERVATION: u64 = 1024 * 1024;
-
         let observer = self.segment_observer(key, path.clone());
         let cancel = self.cancel.clone();
+        let reservation = self.segment_reservation;
         let chunked = AtomicChunked::open_deferred(path, move |target, intent| {
             let mode = match intent {
                 OpenIntent::Fresh => OpenMode::ReadWrite,
@@ -190,7 +196,7 @@ impl DiskAssetStore {
                 cancel.clone(),
                 MmapOptions::for_path(target.to_path_buf())
                     .mode(mode)
-                    .maybe_initial_len((intent == OpenIntent::Fresh).then_some(SEGMENT_RESERVATION))
+                    .maybe_initial_len((intent == OpenIntent::Fresh).then_some(reservation))
                     .build(),
                 Some(Arc::clone(&observer) as Arc<dyn AvailabilityObserver>),
             )
@@ -294,17 +300,22 @@ impl DiskAssetStore {
     /// share one [`Arc<dyn AssetDeleter>`] between the store and the
     /// LRU evictor; tests construct a fresh deleter via
     /// [`Self::new`].
+    /// `segment_reservation` defaults to one mebibyte, which covers a typical
+    /// media segment in a single mapping.
+    #[builder]
     pub(crate) fn with_availability_and_deleter<P: Into<PathBuf>>(
         root_dir: P,
         cancel: CancelToken,
         availability: AvailabilityIndex,
         deleter: Arc<dyn AssetDeleter>,
+        #[builder(default = 1024 * 1024)] segment_reservation: u64,
     ) -> Self {
         Self {
             cancel,
             availability,
             deleter,
             root_dir: root_dir.into(),
+            segment_reservation,
         }
     }
 }
@@ -522,6 +533,60 @@ mod tests {
 
     /// A media segment arrives in many small chunks. If the backing file
     /// starts small and doubles, every crossing re-maps it — the dominant
+    /// Build a store whose fresh segments reserve `reservation` bytes,
+    /// bypassing the [`DiskAssetStore::new`] default.
+    fn store_reserving(root: &Path, reservation: u64) -> DiskAssetStore {
+        let root = root.to_path_buf();
+        let availability = AvailabilityIndex::new();
+        let deleter: Arc<dyn AssetDeleter> = Arc::new(DiskAssetDeleter::new(
+            root.clone(),
+            availability.clone(),
+            PinsIndex::ephemeral(),
+            LruIndex::ephemeral(),
+        ));
+        DiskAssetStore::with_availability_and_deleter()
+            .root_dir(root)
+            .cancel(CancelToken::never())
+            .availability(availability)
+            .deleter(deleter)
+            .segment_reservation(reservation)
+            .call()
+    }
+
+    fn segment_tmp_len(store: &DiskAssetStore, root: &Path) -> u64 {
+        let key = ResourceKey::relative("asset", "segments/0001.bin");
+        let AcquisitionResult::Pending(writer) = store.acquire_resource(&key, None).unwrap() else {
+            panic!("a fresh segment key must acquire a writer");
+        };
+        let len = fs::metadata(root.join("asset").join("segments").join("0001.bin.tmp"))
+            .unwrap()
+            .len();
+        drop(writer);
+        len
+    }
+
+    /// The reservation is the caller's, not a crate constant: a store built
+    /// with a small one sizes its fresh temp file to exactly that.
+    #[kithara::test]
+    fn a_fresh_segment_reserves_the_size_the_store_was_built_with() {
+        const RESERVATION: u64 = 8 * 1024;
+        let dir = tempfile::tempdir().unwrap();
+
+        let reserved = segment_tmp_len(&store_reserving(dir.path(), RESERVATION), dir.path());
+
+        assert_eq!(reserved, RESERVATION);
+    }
+
+    #[kithara::test]
+    fn a_larger_reservation_reaches_the_temp_file_too() {
+        const RESERVATION: u64 = 512 * 1024;
+        let dir = tempfile::tempdir().unwrap();
+
+        let reserved = segment_tmp_len(&store_reserving(dir.path(), RESERVATION), dir.path());
+
+        assert_eq!(reserved, RESERVATION);
+    }
+
     /// cost of a segment commit. Writing a typical segment must leave the
     /// file's size untouched.
     #[kithara::test]

@@ -26,8 +26,8 @@ use kithara_platform::CancelToken;
 
 // Owned at the consumer-crate top (Queue / App / FFI player / PlayerImpl).
 let cancel = CancelToken::root();
-let controller: Arc<AbrController> =
-    AbrController::new(AbrSettings::default(), cancel.child());
+let settings = AbrSettings::builder().cancel(cancel.clone()).build();
+let controller: Arc<AbrController> = AbrController::new(settings);
 
 // Each peer (HLS variant, file source) implements `Abr` and registers itself.
 let handle: AbrHandle = controller.register(&(peer as Arc<dyn Abr>));
@@ -38,7 +38,7 @@ controller.record_bandwidth(peer_id, bytes, duration, source);
 
 `AbrController::new` returns `Arc<Self>`. The controller is registered with multiple peers via `register(peer)`; dropping the returned `AbrHandle` unregisters the peer automatically.
 
-ABR decisions are pull-driven — they fire from the peer's scheduler on each fetch, not on a separate timer.
+ABR decisions are pull-driven from peer activity through the downloader's existing run loop. Tick requests coalesce per peer. When a desired switch is held only by `min_switch_interval`, the controller records its exact eligibility deadline and that same downloader loop runs the canonical tick when it expires; no peer task or second decision path is created.
 
 ## Key Types
 
@@ -54,7 +54,7 @@ ABR decisions are pull-driven — they fire from the peer's scheduler on each fe
 
 <tr><td><code>AbrState</code> / <code>AbrView</code></td><td>structs</td><td>Owned state of a peer's ABR context and the view passed to <code>evaluate()</code></td></tr>
 
-<tr><td><code>AbrSettings</code></td><td>struct</td><td>Configuration: hysteresis ratios, buffer thresholds, mode, initial-throughput seed, min-switch interval</td></tr>
+<tr><td><code>AbrSettings</code></td><td>struct</td><td>Facade configuration: controller parent cancellation, hysteresis ratios, buffer thresholds, initial-throughput seed, min-switch interval</td></tr>
 
 <tr><td><code>AbrMode</code></td><td>enum</td><td><code>Auto(Option&lt;variant_index&gt;)</code> or <code>Manual(variant_index)</code></td></tr>
 

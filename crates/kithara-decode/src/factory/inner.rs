@@ -260,7 +260,8 @@ impl DecoderFactory {
         if matches!(
             probe_hint.container,
             Some(ContainerFormat::Mp4 | ContainerFormat::Fmp4)
-        ) && let Some(codec) = sniff_mp4_codec(&mut source).and_then(codec_from_mp4_fourcc)
+        ) && let Some(codec) =
+            sniff_mp4_codec(&mut source, &config.byte_pool).and_then(codec_from_mp4_fourcc)
         {
             probe_hint.codec = Some(codec);
         }
@@ -394,7 +395,7 @@ where
         "file-symphonia: dispatching to ComposedDecoder<SymphoniaDemuxer, WebCodecsCodec>"
     );
     let probed_gapless = if config.gapless {
-        scoped_probe(&mut *source, codec)?
+        scoped_probe(&mut *source, codec, &config.byte_pool)?
     } else {
         None
     };
@@ -496,12 +497,12 @@ where
         demuxer::Demuxer,
         gapless::{scoped_probe, scoped_startup_probe},
     };
-    let startup_probe = scoped_startup_probe(&mut *source, codec)?;
+    let startup_probe = scoped_startup_probe(&mut *source, codec, &config.byte_pool)?;
     let probed_gapless = if config.gapless {
         if matches!(codec, AudioCodec::Mp3) {
             startup_probe.gapless
         } else {
-            scoped_probe(&mut *source, codec)?
+            scoped_probe(&mut *source, codec, &config.byte_pool)?
         }
     } else {
         None
@@ -511,12 +512,13 @@ where
     } else {
         SourceOpenMode::Complete
     };
-    let mut demuxer = AppleAudioFileDemuxer::open_for_with_mode(
+    let mut demuxer = AppleAudioFileDemuxer::open_for_with_mode_and_pool(
         source,
         codec,
         container,
         open_mode,
         startup_probe.duration,
+        &config.byte_pool,
     )?;
     demuxer.set_byte_len_handle(config.byte_len_handle.clone());
     demuxer.set_gapless(probed_gapless);
@@ -758,7 +760,7 @@ where
     );
 
     let probed_gapless = if config.gapless {
-        scoped_probe(&mut *source, codec)?
+        scoped_probe(&mut *source, codec, &config.byte_pool)?
     } else {
         None
     };
@@ -883,9 +885,11 @@ where
 
 #[cfg(test)]
 mod tests {
+    use kithara_test_utils::kithara;
+
     use super::*;
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn wav_reader_profile_requires_gated_input() {
         let media_info = MediaInfo::builder()
             .maybe_codec(Some(AudioCodec::Pcm))
@@ -897,7 +901,7 @@ mod tests {
         assert_eq!(profile.input(), ReaderInput::InitOnly);
     }
 
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn self_framing_reader_profile_remains_incremental() {
         let media_info = MediaInfo::builder()
             .maybe_codec(Some(AudioCodec::Mp3))
@@ -910,7 +914,7 @@ mod tests {
     }
 
     #[cfg(feature = "resample-rubato")]
-    #[test]
+    #[kithara::test(native, flash(false))]
     fn decoder_resampler_config_keeps_typed_backend() {
         let target_sample_rate = NonZeroU32::new(48_000).expect("test rate");
         let config: DecoderResamplerConfig<RubatoBackend> = DecoderResamplerConfig::builder()

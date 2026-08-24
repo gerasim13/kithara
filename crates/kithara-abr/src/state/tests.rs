@@ -1,15 +1,23 @@
+use std::{
+    future::poll_fn,
+    sync::atomic::{AtomicUsize, Ordering},
+    task::Poll,
+};
+
 use kithara_events::{
-    AbrMode, AbrReason, BandwidthSource, VariantDuration, VariantIndex, VariantInfo,
+    AbrMode, AbrProgressSnapshot, AbrReason, BandwidthSource, VariantDuration, VariantIndex,
+    VariantInfo,
 };
 use kithara_platform::{
-    sync::Arc,
-    time::{Duration, Duration as StdDuration, Instant},
+    CancelToken,
+    sync::{Arc, Notify},
+    time::{self, Duration, Duration as StdDuration, Instant},
 };
 use kithara_test_utils::kithara;
 use proptest::prelude::*;
 
 use super::{AbrDecision, AbrState, AbrView, PendingAbrClaim, PendingAbrDecision};
-use crate::{Abr, AbrController, AbrSettings, ThroughputEstimator};
+use crate::{Abr, AbrController, AbrSettings, Estimator, ThroughputEstimator};
 
 /// Canonical 3-variant fixture used by every test in this module. Private
 /// to the test module so it never leaks into the public API.
@@ -43,11 +51,10 @@ fn test_variants_3() -> Vec<VariantInfo> {
 }
 
 fn settings_fast() -> AbrSettings {
-    AbrSettings {
-        min_switch_interval: Duration::ZERO,
-        min_buffer_for_up_switch: Duration::ZERO,
-        ..AbrSettings::default()
-    }
+    AbrSettings::builder()
+        .min_switch_interval(Duration::ZERO)
+        .min_buffer_for_up_switch(Duration::ZERO)
+        .build()
 }
 
 fn view_with_bw<'a>(
@@ -138,12 +145,11 @@ fn decide_downswitch_when_bandwidth_drops() {
 fn decide_urgent_downswitch_when_buffer_low() {
     let state = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(2))));
     let variants = test_variants_3();
-    let settings = AbrSettings {
-        urgent_downswitch_buffer: Duration::from_secs(5),
-        down_hysteresis_ratio: 0.01,
-        min_switch_interval: Duration::ZERO,
-        ..AbrSettings::default()
-    };
+    let settings = AbrSettings::builder()
+        .urgent_downswitch_buffer(Duration::from_secs(5))
+        .down_hysteresis_ratio(0.01)
+        .min_switch_interval(Duration::ZERO)
+        .build();
     let view = AbrView {
         estimate_bps: Some(700_000),
         buffer_ahead: Some(Duration::from_secs(2)),
@@ -159,11 +165,10 @@ fn decide_urgent_downswitch_when_buffer_low() {
 fn decide_buffer_too_low_for_upswitch() {
     let state = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0))));
     let variants = test_variants_3();
-    let settings = AbrSettings {
-        min_buffer_for_up_switch: Duration::from_secs(10),
-        min_switch_interval: Duration::ZERO,
-        ..AbrSettings::default()
-    };
+    let settings = AbrSettings::builder()
+        .min_buffer_for_up_switch(Duration::from_secs(10))
+        .min_switch_interval(Duration::ZERO)
+        .build();
     let view = AbrView {
         estimate_bps: Some(3_000_000),
         buffer_ahead: Some(Duration::from_secs(2)),
@@ -642,11 +647,10 @@ fn request_target_accepts_manual_pin_target() {
 fn min_switch_interval_prevents_oscillation() {
     let state = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0))));
     let variants = test_variants_3();
-    let settings = AbrSettings {
-        min_switch_interval: Duration::from_secs(30),
-        min_buffer_for_up_switch: Duration::ZERO,
-        ..AbrSettings::default()
-    };
+    let settings = AbrSettings::builder()
+        .min_switch_interval(Duration::from_secs(30))
+        .min_buffer_for_up_switch(Duration::ZERO)
+        .build();
     let now = Instant::now();
     let view = AbrView {
         estimate_bps: Some(3_000_000),
@@ -681,11 +685,10 @@ fn min_switch_interval_prevents_oscillation() {
 fn min_switch_interval_guards_the_first_switch_of_a_session() {
     let state = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0))));
     let variants = test_variants_3();
-    let settings = AbrSettings {
-        min_switch_interval: Duration::from_secs(30),
-        min_buffer_for_up_switch: Duration::ZERO,
-        ..AbrSettings::default()
-    };
+    let settings = AbrSettings::builder()
+        .min_switch_interval(Duration::from_secs(30))
+        .min_buffer_for_up_switch(Duration::ZERO)
+        .build();
     let now = Instant::now();
     let view = AbrView {
         estimate_bps: Some(3_000_000),
@@ -711,11 +714,10 @@ fn min_switch_interval_guards_the_first_switch_of_a_session() {
 fn urgent_down_switch_is_not_held_by_the_switch_interval() {
     let state = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(2))));
     let variants = test_variants_3();
-    let settings = AbrSettings {
-        min_switch_interval: Duration::from_secs(30),
-        urgent_downswitch_buffer: Duration::from_secs(5),
-        ..AbrSettings::default()
-    };
+    let settings = AbrSettings::builder()
+        .min_switch_interval(Duration::from_secs(30))
+        .urgent_downswitch_buffer(Duration::from_secs(5))
+        .build();
     let now = Instant::now();
     let view = AbrView {
         estimate_bps: Some(1),
@@ -764,17 +766,133 @@ fn locked_state_rejects_switch(
 }
 
 struct SeedPeer {
+    cancel: CancelToken,
     state: Arc<AbrState>,
     variants: Vec<VariantInfo>,
 }
 
 impl Abr for SeedPeer {
+    fn cancel(&self) -> CancelToken {
+        self.cancel.clone()
+    }
+
     fn state(&self) -> Option<Arc<AbrState>> {
         Some(Arc::clone(&self.state))
     }
     fn variants(&self) -> Vec<VariantInfo> {
         self.variants.clone()
     }
+}
+
+struct TickPeer {
+    cancel: CancelToken,
+    state: Arc<AbrState>,
+    wake: Arc<Notify>,
+}
+
+struct CountingEstimator {
+    samples: Arc<AtomicUsize>,
+}
+
+impl Estimator for CountingEstimator {
+    fn estimate_bps(&self) -> Option<u64> {
+        Some(2_000_000)
+    }
+
+    fn push_sample(&self, _bytes: u64, _duration: Duration, _source: BandwidthSource) {
+        self.samples.fetch_add(1, Ordering::AcqRel);
+    }
+
+    fn seed_initial_bps(&self, _bps: u64) {}
+}
+
+struct CountingTickPeer {
+    cancel: CancelToken,
+    state: Arc<AbrState>,
+    ticks: Arc<AtomicUsize>,
+}
+
+impl Abr for CountingTickPeer {
+    fn cancel(&self) -> CancelToken {
+        self.cancel.clone()
+    }
+
+    fn progress(&self) -> Option<AbrProgressSnapshot> {
+        self.ticks.fetch_add(1, Ordering::AcqRel);
+        None
+    }
+
+    fn state(&self) -> Option<Arc<AbrState>> {
+        Some(Arc::clone(&self.state))
+    }
+
+    fn variants(&self) -> Vec<VariantInfo> {
+        audio_variants_4tier()
+    }
+}
+
+impl Abr for TickPeer {
+    fn cancel(&self) -> CancelToken {
+        self.cancel.clone()
+    }
+
+    fn state(&self) -> Option<Arc<AbrState>> {
+        Some(Arc::clone(&self.state))
+    }
+
+    fn variants(&self) -> Vec<VariantInfo> {
+        audio_variants_4tier()
+    }
+
+    fn wake(&self) {
+        self.wake.notify_one();
+    }
+}
+
+async fn poll_controller(controller: &Arc<AbrController>, deadline_elapsed: bool) -> bool {
+    poll_fn(|cx| Poll::Ready(controller.poll_ticks(cx, Instant::now(), deadline_elapsed))).await
+}
+
+async fn wait_for_controller_deadline(controller: &Arc<AbrController>) -> bool {
+    let deadline = controller
+        .next_tick_deadline()
+        .expect("interval-gated tick deadline");
+    time::sleep(deadline.saturating_duration_since(Instant::now())).await;
+    poll_controller(controller, true).await
+}
+
+#[kithara::test(tokio)]
+async fn bandwidth_samples_are_preserved_across_immediate_ticks() {
+    const SAMPLES: usize = 64;
+
+    let samples = Arc::new(AtomicUsize::new(0));
+    let ticks = Arc::new(AtomicUsize::new(0));
+    let controller = AbrController::with_estimator(
+        settings_fast(),
+        Arc::new(CountingEstimator {
+            samples: Arc::clone(&samples),
+        }),
+    );
+    let state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0)))));
+    let peer: Arc<dyn Abr> = Arc::new(CountingTickPeer {
+        cancel: CancelToken::never(),
+        state,
+        ticks: Arc::clone(&ticks),
+    });
+    let handle = controller.register(&peer);
+
+    for _ in 0..SAMPLES {
+        controller.record_bandwidth(
+            handle.peer_id(),
+            32 * 1024,
+            Duration::from_millis(50),
+            BandwidthSource::Network,
+        );
+    }
+
+    assert_eq!(samples.load(Ordering::Acquire), SAMPLES);
+    assert_eq!(ticks.load(Ordering::Acquire), SAMPLES);
+    assert!(!poll_controller(&controller, false).await);
 }
 
 fn audio_variants_4tier() -> Vec<VariantInfo> {
@@ -807,11 +925,12 @@ async fn auto_mode_with_default_seed_picks_high_variant_on_cold_start() {
     let controller = AbrController::new(settings);
     let state = Arc::new(AbrState::new(AbrMode::Auto(None)));
     let peer: Arc<dyn Abr> = Arc::new(SeedPeer {
+        cancel: CancelToken::never(),
         state: Arc::clone(&state),
         variants: audio_variants_4tier(),
     });
     let handle = controller.register(&peer);
-    controller.tick(handle.peer_id(), Instant::now());
+    controller.run_tick(handle.peer_id(), Instant::now());
     assert_eq!(
         state.pending_target(),
         Some(VariantIndex::new(3)),
@@ -826,23 +945,231 @@ async fn auto_mode_with_default_seed_picks_high_variant_on_cold_start() {
 /// initial variant (0).
 #[kithara::test(tokio)]
 async fn auto_mode_without_seed_stays_on_initial_variant_on_cold_start() {
-    let settings = AbrSettings {
-        initial_throughput_bps: None,
-        min_switch_interval: Duration::ZERO,
-        min_buffer_for_up_switch: Duration::ZERO,
-        ..AbrSettings::default()
-    };
+    let settings = AbrSettings::builder()
+        .initial_throughput_bps(None)
+        .min_switch_interval(Duration::ZERO)
+        .min_buffer_for_up_switch(Duration::ZERO)
+        .build();
     let controller = AbrController::new(settings);
     let state = Arc::new(AbrState::new(AbrMode::Auto(None)));
     let peer: Arc<dyn Abr> = Arc::new(SeedPeer {
+        cancel: CancelToken::never(),
         state: Arc::clone(&state),
         variants: audio_variants_4tier(),
     });
     let handle = controller.register(&peer);
-    controller.tick(handle.peer_id(), Instant::now());
+    controller.run_tick(handle.peer_id(), Instant::now());
     assert_eq!(state.current_variant_index(), VariantIndex::new(0));
     assert_eq!(state.pending_target(), None);
     drop(handle);
+}
+
+#[kithara::test(tokio, timeout(Duration::from_secs(1)))]
+async fn min_interval_ticks_without_another_bandwidth_sample() {
+    let settings = AbrSettings::builder()
+        .min_switch_interval(Duration::from_millis(20))
+        .min_buffer_for_up_switch(Duration::ZERO)
+        .build();
+    let controller = AbrController::new(settings);
+    let state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0)))));
+    let wake = Arc::new(Notify::default());
+    let peer: Arc<dyn Abr> = Arc::new(TickPeer {
+        cancel: CancelToken::never(),
+        state: Arc::clone(&state),
+        wake: Arc::clone(&wake),
+    });
+    let handle = controller.register(&peer);
+
+    handle.reevaluate();
+    assert!(poll_controller(&controller, false).await);
+    assert_eq!(
+        state.pending_target(),
+        None,
+        "the anti-oscillation interval must hold the first switch"
+    );
+
+    assert!(wait_for_controller_deadline(&controller).await);
+    wake.notified().await;
+    assert_eq!(state.pending_target(), Some(VariantIndex::new(3)));
+}
+
+#[kithara::test(tokio, timeout(Duration::from_secs(1)))]
+async fn peer_cancel_stops_the_scheduled_min_interval_tick() {
+    let settings = AbrSettings::builder()
+        .min_switch_interval(Duration::from_millis(100))
+        .min_buffer_for_up_switch(Duration::ZERO)
+        .build();
+    let controller = AbrController::new(settings);
+    let state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0)))));
+    let wake = Arc::new(Notify::default());
+    let peer_cancel = CancelToken::never();
+    let peer: Arc<dyn Abr> = Arc::new(TickPeer {
+        cancel: peer_cancel.clone(),
+        state: Arc::clone(&state),
+        wake: Arc::clone(&wake),
+    });
+    let handle = controller.register(&peer);
+
+    handle.reevaluate();
+    assert!(poll_controller(&controller, false).await);
+    let deadline = controller.next_tick_deadline().expect("peer tick deadline");
+    peer_cancel.cancel();
+    assert!(controller.peer_entry(handle.peer_id()).is_none());
+
+    time::sleep(deadline.saturating_duration_since(Instant::now())).await;
+    assert!(!poll_controller(&controller, true).await);
+
+    assert!(
+        time::timeout(Duration::from_millis(150), wake.notified())
+            .await
+            .is_err(),
+        "cancelling the peer scope must suppress its delayed wake",
+    );
+    assert_eq!(state.pending_target(), None);
+}
+
+#[kithara::test(tokio, timeout(Duration::from_secs(1)))]
+async fn controller_cancel_stops_the_scheduled_min_interval_tick() {
+    let controller_cancel = CancelToken::never();
+    let settings = AbrSettings::builder()
+        .cancel(controller_cancel.clone())
+        .min_switch_interval(Duration::from_millis(100))
+        .min_buffer_for_up_switch(Duration::ZERO)
+        .build();
+    let controller = AbrController::new(settings);
+    let state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0)))));
+    let wake = Arc::new(Notify::default());
+    let peer: Arc<dyn Abr> = Arc::new(TickPeer {
+        cancel: CancelToken::never(),
+        state: Arc::clone(&state),
+        wake: Arc::clone(&wake),
+    });
+    let handle = controller.register(&peer);
+
+    handle.reevaluate();
+    assert!(poll_controller(&controller, false).await);
+    let deadline = controller
+        .next_tick_deadline()
+        .expect("controller tick deadline");
+    controller_cancel.cancel();
+    assert!(controller.peer_entry(handle.peer_id()).is_none());
+
+    time::sleep(deadline.saturating_duration_since(Instant::now())).await;
+    assert!(!poll_controller(&controller, true).await);
+
+    assert!(
+        time::timeout(Duration::from_millis(150), wake.notified())
+            .await
+            .is_err(),
+        "cancelling the controller parent must suppress delayed peer wakes",
+    );
+    assert_eq!(state.pending_target(), None);
+}
+
+#[kithara::test(tokio, timeout(Duration::from_secs(1)))]
+async fn peer_cancel_does_not_stop_a_sibling_tick() {
+    let settings = AbrSettings::builder()
+        .min_switch_interval(Duration::from_millis(100))
+        .min_buffer_for_up_switch(Duration::ZERO)
+        .build();
+    let controller = AbrController::new(settings);
+    let first_state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0)))));
+    let second_state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0)))));
+    let first_wake = Arc::new(Notify::default());
+    let second_wake = Arc::new(Notify::default());
+    let first_cancel = CancelToken::never();
+    let first_peer: Arc<dyn Abr> = Arc::new(TickPeer {
+        cancel: first_cancel.clone(),
+        state: Arc::clone(&first_state),
+        wake: Arc::clone(&first_wake),
+    });
+    let second_peer: Arc<dyn Abr> = Arc::new(TickPeer {
+        cancel: CancelToken::never(),
+        state: Arc::clone(&second_state),
+        wake: Arc::clone(&second_wake),
+    });
+    let first_handle = controller.register(&first_peer);
+    let second_handle = controller.register(&second_peer);
+
+    first_handle.reevaluate();
+    second_handle.reevaluate();
+    assert!(poll_controller(&controller, false).await);
+    first_cancel.cancel();
+    assert!(controller.peer_entry(first_handle.peer_id()).is_none());
+    assert!(controller.peer_entry(second_handle.peer_id()).is_some());
+
+    assert!(wait_for_controller_deadline(&controller).await);
+    second_wake.notified().await;
+    assert!(
+        time::timeout(Duration::from_millis(50), first_wake.notified())
+            .await
+            .is_err(),
+        "cancelling one peer must not wake it or cancel a sibling tick",
+    );
+    assert_eq!(first_state.pending_target(), None);
+    assert_eq!(second_state.pending_target(), Some(VariantIndex::new(3)));
+}
+
+#[kithara::test(tokio, timeout(Duration::from_secs(1)))]
+async fn dropping_handle_stops_only_its_scheduled_tick() {
+    let settings = AbrSettings::builder()
+        .min_switch_interval(Duration::from_millis(100))
+        .min_buffer_for_up_switch(Duration::ZERO)
+        .build();
+    let controller = AbrController::new(settings);
+    let state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0)))));
+    let wake = Arc::new(Notify::default());
+    let peer: Arc<dyn Abr> = Arc::new(TickPeer {
+        cancel: CancelToken::never(),
+        state: Arc::clone(&state),
+        wake: Arc::clone(&wake),
+    });
+    let handle = controller.register(&peer);
+
+    handle.reevaluate();
+    assert!(poll_controller(&controller, false).await);
+    let deadline = controller
+        .next_tick_deadline()
+        .expect("handle tick deadline");
+    drop(handle);
+
+    time::sleep(deadline.saturating_duration_since(Instant::now())).await;
+    assert!(!poll_controller(&controller, true).await);
+
+    assert!(
+        time::timeout(Duration::from_millis(150), wake.notified())
+            .await
+            .is_err(),
+        "dropping the ABR handle must suppress its scheduled tick",
+    );
+    assert_eq!(state.pending_target(), None);
+}
+
+#[kithara::test(tokio, timeout(Duration::from_secs(1)))]
+async fn dropped_peer_does_not_leave_a_due_tick_deadline_spinning() {
+    let settings = AbrSettings::builder()
+        .min_switch_interval(Duration::from_millis(20))
+        .min_buffer_for_up_switch(Duration::ZERO)
+        .build();
+    let controller = AbrController::new(settings);
+    let state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0)))));
+    let peer: Arc<dyn Abr> = Arc::new(TickPeer {
+        cancel: CancelToken::never(),
+        state,
+        wake: Arc::new(Notify::default()),
+    });
+    let handle = controller.register(&peer);
+
+    handle.reevaluate();
+    assert!(poll_controller(&controller, false).await);
+    let deadline = controller.next_tick_deadline().expect("peer tick deadline");
+    drop(peer);
+
+    let ticked = poll_fn(|cx| Poll::Ready(controller.poll_ticks(cx, deadline, true))).await;
+    assert!(ticked);
+    assert_eq!(controller.next_tick_deadline(), None);
+    let ticked_again = poll_fn(|cx| Poll::Ready(controller.poll_ticks(cx, deadline, true))).await;
+    assert!(!ticked_again);
 }
 
 /// Prod trace (`runtime_manual_switch_works_when_all_segments_cached`): an
@@ -856,6 +1183,7 @@ async fn tick_already_optimal_retracts_stale_throughput_pending() {
     let controller = AbrController::new(settings_fast());
     let state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(2)))));
     let peer: Arc<dyn Abr> = Arc::new(SeedPeer {
+        cancel: CancelToken::never(),
         state: Arc::clone(&state),
         variants: test_variants_3(),
     });
@@ -873,7 +1201,6 @@ async fn tick_already_optimal_retracts_stale_throughput_pending() {
         Duration::from_secs(1),
         BandwidthSource::Network,
     );
-
     assert_eq!(
         state.pending_target(),
         None,
@@ -884,6 +1211,7 @@ async fn tick_already_optimal_retracts_stale_throughput_pending() {
         VariantIndex::new(2),
         "retraction drops the intent, never the audible variant"
     );
+    assert!(!poll_controller(&controller, false).await);
     drop(handle);
 }
 
@@ -891,14 +1219,14 @@ async fn tick_already_optimal_retracts_stale_throughput_pending() {
 // construction: both must come from the same clock, so this one opts out
 #[kithara::test(flash(false))]
 fn tick_min_interval_hold_preserves_pending() {
-    let settings = AbrSettings {
-        min_switch_interval: Duration::from_secs(30),
-        min_buffer_for_up_switch: Duration::ZERO,
-        ..AbrSettings::default()
-    };
+    let settings = AbrSettings::builder()
+        .min_switch_interval(Duration::from_secs(30))
+        .min_buffer_for_up_switch(Duration::ZERO)
+        .build();
     let controller = AbrController::new(settings);
     let state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0)))));
     let peer: Arc<dyn Abr> = Arc::new(SeedPeer {
+        cancel: CancelToken::never(),
         state: Arc::clone(&state),
         variants: audio_variants_4tier(),
     });
@@ -907,7 +1235,7 @@ fn tick_min_interval_hold_preserves_pending() {
 
     // The 2 Mbps seed still wants the up-switch; only the interval holds it,
     // so `evaluate()` reports `Stay { MinInterval }` on this tick.
-    controller.tick(handle.peer_id(), Instant::now());
+    controller.run_tick(handle.peer_id(), Instant::now());
 
     assert_eq!(
         state.pending_target(),
@@ -928,6 +1256,7 @@ async fn set_mode_back_to_current_kills_queued_switch() {
     let controller = AbrController::new(settings_fast());
     let state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0)))));
     let peer: Arc<dyn Abr> = Arc::new(SeedPeer {
+        cancel: CancelToken::never(),
         state: Arc::clone(&state),
         variants: test_variants_3(),
     });
@@ -935,6 +1264,7 @@ async fn set_mode_back_to_current_kills_queued_switch() {
     handle
         .set_mode(AbrMode::Manual(VariantIndex::new(2)))
         .expect("variant 2 exists");
+    assert!(poll_controller(&controller, false).await);
     assert_eq!(
         state.pending_target(),
         Some(VariantIndex::new(2)),
@@ -959,10 +1289,15 @@ async fn lock_refcount_holds_across_record_bandwidth() {
         AbrController::with_estimator(settings, Arc::new(ThroughputEstimator::new()) as Arc<_>);
 
     struct LockedPeer {
+        cancel: CancelToken,
         state: Arc<AbrState>,
         variants: Vec<VariantInfo>,
     }
     impl Abr for LockedPeer {
+        fn cancel(&self) -> CancelToken {
+            self.cancel.clone()
+        }
+
         fn state(&self) -> Option<Arc<AbrState>> {
             Some(Arc::clone(&self.state))
         }
@@ -973,6 +1308,7 @@ async fn lock_refcount_holds_across_record_bandwidth() {
     let state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0)))));
     state.lock();
     let peer: Arc<dyn Abr> = Arc::new(LockedPeer {
+        cancel: CancelToken::never(),
         state: Arc::clone(&state),
         variants: test_variants_3(),
     });

@@ -5,6 +5,7 @@ use std::{
     sync::atomic::{AtomicU32, Ordering},
 };
 
+use kithara_bufpool::{BytePool, PcmPool};
 use kithara_decode::{
     BlenderProfile, ChunkRetire, DecodeError, DecodeResult, Decoder, DecoderChunkOutcome,
     DecoderFactory as BackendDecoderFactory, DecoderSeekOutcome, GaplessMode, PcmChunk,
@@ -91,6 +92,7 @@ impl DecoderFactory {
 
 /// Decoder construction state shared by initial installation and later rebuilds.
 pub(crate) struct DecodeInit {
+    pub(crate) byte_pool: BytePool,
     pub(crate) playback_resampler_backend: &'static str,
     pub(crate) host_sample_rate: Arc<AtomicU32>,
     pub(crate) decoder: Box<dyn Decoder>,
@@ -98,6 +100,7 @@ pub(crate) struct DecodeInit {
     pub(crate) decoder_factory: DecoderFactory,
     pub(crate) gapless_mode: GaplessMode,
     pub(crate) media_info: Option<MediaInfo>,
+    pub(crate) pcm_pool: PcmPool,
     pub(crate) recreate_on_host_rate_change: bool,
 }
 
@@ -123,12 +126,14 @@ impl DecodeInit {
     ) -> DecodeParts {
         let decoder_host_sample_rate = self.decoder_host_sample_rate();
         let Self {
+            byte_pool,
             decoder,
             decoder_factory,
             decoder_backend,
             gapless_mode,
             host_sample_rate,
             media_info,
+            pcm_pool,
             playback_resampler_backend,
             recreate_on_host_rate_change,
         } = self;
@@ -146,7 +151,7 @@ impl DecodeInit {
             decoder_host_sample_rate,
             decoder_backend,
             playback_resampler_backend,
-            active: ActiveDecode::new(active, gapless_mode, effects),
+            active: ActiveDecode::new(active, gapless_mode, effects, &byte_pool, &pcm_pool),
             factory: decoder_factory,
         }
     }
@@ -195,9 +200,11 @@ impl ActiveDecode {
         active: DecoderGeneration,
         gapless_mode: GaplessMode,
         effects: Vec<Box<dyn AudioEffect>>,
+        byte_pool: &BytePool,
+        pcm_pool: &PcmPool,
     ) -> Self {
-        let drain = EofDrain::new(effects.len());
-        let blender = PcmBlender::new(active.blender_profile());
+        let drain = EofDrain::new(effects.len(), byte_pool);
+        let blender = PcmBlender::new(active.blender_profile(), pcm_pool);
         Self {
             active,
             gapless_mode,
@@ -425,7 +432,7 @@ mod tests {
     use std::num::NonZeroU32;
 
     use kithara_abr::{AbrMode, AbrReason, AbrState, VariantIndex};
-    use kithara_bufpool::PcmPool;
+    use kithara_bufpool::{BytePool, PcmPool};
     use kithara_decode::{BlenderProfile, DecoderSeekOutcome, PcmMeta, PcmSpec};
     use kithara_platform::time::Duration;
     use kithara_stream::{
@@ -435,6 +442,16 @@ mod tests {
 
     use super::*;
     use crate::pipeline::decode::transition::IncomingPrime;
+
+    fn active_decode(
+        active: DecoderGeneration,
+        gapless_mode: GaplessMode,
+        effects: Vec<Box<dyn AudioEffect>>,
+    ) -> ActiveDecode {
+        let byte_pool = BytePool::default();
+        let pcm_pool = PcmPool::default();
+        ActiveDecode::new(active, gapless_mode, effects, &byte_pool, &pcm_pool)
+    }
 
     #[kithara::test]
     fn configured_container_selects_the_incoming_reader_profile() {
@@ -462,7 +479,7 @@ mod tests {
     #[kithara::test]
     fn steady_output_bypasses_transition_staging() {
         let spec = PcmSpec::new(2, NonZeroU32::new(44_100).expect("test rate"));
-        let mut decode = ActiveDecode::new(generation(spec), GaplessMode::Disabled, Vec::new());
+        let mut decode = active_decode(generation(spec), GaplessMode::Disabled, Vec::new());
         let initial_capacity = decode.active().staged_capacity();
         let mut cursor = ResumeCursor::new(
             Arc::new(AtomicU32::new(spec.sample_rate.get())),
@@ -506,7 +523,7 @@ mod tests {
             VariantIndex::new(0),
             VariantIndex::new(1),
         );
-        let mut decode = ActiveDecode::new(active, GaplessMode::Disabled, Vec::new());
+        let mut decode = active_decode(active, GaplessMode::Disabled, Vec::new());
         decode.incoming = Some(IncomingDecode::Priming {
             transition,
             generation: incoming,
@@ -574,7 +591,7 @@ mod tests {
             VariantIndex::new(0),
             VariantIndex::new(1),
         );
-        let mut decode = ActiveDecode::new(active, GaplessMode::Disabled, Vec::new());
+        let mut decode = active_decode(active, GaplessMode::Disabled, Vec::new());
         decode.incoming = Some(IncomingDecode::Priming {
             transition,
             generation: incoming,
@@ -616,7 +633,7 @@ mod tests {
             VariantIndex::new(0),
             VariantIndex::new(1),
         );
-        let mut decode = ActiveDecode::new(active, GaplessMode::Disabled, Vec::new());
+        let mut decode = active_decode(active, GaplessMode::Disabled, Vec::new());
         decode.incoming = Some(IncomingDecode::Priming {
             transition,
             generation: incoming,
@@ -690,7 +707,7 @@ mod tests {
                     .saturating_mul(usize::from(spec.channels))
             ]),
         ));
-        let mut decode = ActiveDecode::new(generation(spec), GaplessMode::Disabled, Vec::new());
+        let mut decode = active_decode(generation(spec), GaplessMode::Disabled, Vec::new());
         decode.incoming = Some(IncomingDecode::Priming {
             transition,
             generation: incoming,
@@ -760,7 +777,7 @@ mod tests {
         active.stage(make_chunk(0));
         let mut incoming = generation(spec);
         incoming.stage(make_chunk(LANDED));
-        let mut decode = ActiveDecode::new(active, GaplessMode::Disabled, Vec::new());
+        let mut decode = active_decode(active, GaplessMode::Disabled, Vec::new());
         decode.incoming = Some(IncomingDecode::Priming {
             transition,
             generation: incoming,
@@ -806,7 +823,7 @@ mod tests {
             None,
             GaplessMode::Disabled,
         );
-        let mut decode = ActiveDecode::new(generation(spec), GaplessMode::Disabled, Vec::new());
+        let mut decode = active_decode(generation(spec), GaplessMode::Disabled, Vec::new());
         decode.incoming = Some(IncomingDecode::Priming {
             transition,
             generation: incoming,
@@ -840,7 +857,7 @@ mod tests {
             VariantIndex::new(0),
             VariantIndex::new(1),
         );
-        let mut decode = ActiveDecode::new(generation(spec), GaplessMode::Disabled, Vec::new());
+        let mut decode = active_decode(generation(spec), GaplessMode::Disabled, Vec::new());
         let frames = u32::try_from(decode.blender.join_frame_count()).expect("test join fits u32");
         let samples = usize::try_from(frames)
             .expect("test join fits usize")
@@ -898,7 +915,7 @@ mod tests {
             VariantIndex::new(0),
             VariantIndex::new(1),
         );
-        let mut decode = ActiveDecode::new(generation(spec), GaplessMode::Disabled, Vec::new());
+        let mut decode = active_decode(generation(spec), GaplessMode::Disabled, Vec::new());
         decode.active.stage(PcmChunk::new(
             PcmMeta {
                 spec,
