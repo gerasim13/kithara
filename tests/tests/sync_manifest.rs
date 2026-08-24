@@ -4,7 +4,7 @@ use std::collections::BTreeSet;
 
 use kithara_integration_tests::{
     kithara,
-    sync_manifest::{ActivationWave, OracleState, registrations},
+    sync_manifest::{ActivationWave, OracleSource, OracleState, registrations},
 };
 
 #[kithara::test]
@@ -53,4 +53,16 @@ fn sync_oracle_manifest_is_complete_and_unique() {
         135,
         "manifest lost or silently added a frozen product, lower-level, or active oracle row"
     );
+    let Some(app_toggle) = rows
+        .iter()
+        .find(|row| row.oracle_id() == "SYNC-PRODUCT-UI-001")
+    else {
+        panic!("the application sync-toggle acceptance gap must stay registered");
+    };
+    assert!(matches!(
+        app_toggle.source(),
+        OracleSource::ConfirmedGap { .. }
+    ));
+    assert_eq!(app_toggle.state(), OracleState::BlockedProduct);
+    assert_eq!(app_toggle.activation_wave(), ActivationWave::AppToggle);
 }

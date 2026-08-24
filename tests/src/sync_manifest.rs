@@ -64,6 +64,12 @@ impl OracleRegistration {
         self.activation_wave
     }
 
+    /// Returns the frozen source or confirmed coverage gap.
+    #[must_use]
+    pub const fn source(&self) -> &OracleSource {
+        &self.source
+    }
+
     #[must_use]
     pub fn has_complete_provenance(&self) -> bool {
         let source_complete = match &self.source {
@@ -580,18 +586,20 @@ fn cochlea_product_rows() -> Vec<OracleRegistration> {
             activation_wave: ActivationWave::ResidentPlan,
         }));
     }
-    rows.push(frozen_owned_test(FrozenProductRegistration {
+    rows.push(OracleRegistration {
         oracle_id: "SYNC-PRODUCT-UI-001".to_owned(),
-        sha: COCHLEA_SHA,
-        path: "crates/kithara-app/tests/gui_sync/mod.rs",
-        test: "raw_sync_controls_adopt_one_grid_and_bind_the_actual_tracks".to_owned(),
+        source: OracleSource::ConfirmedGap {
+            gap: "the application has no public AppToggle contract or sync state endpoint",
+        },
         observable:
             "raw UI controls create and reuse one Session-owned group without replacing tracks",
         preserved_contract:
-            "real Queue/Player path; two analysed WAVs; sync lights; Cochlea deck and mix captures",
+            "real Queue/Player path; two analysed tracks; sync lights; Cochlea deck and mix captures",
+        destination_path: "tests/tests/kithara_app/sync.rs",
+        destination_test: "raw_sync_controls_adopt_one_grid_and_bind_the_actual_tracks".to_owned(),
         state: OracleState::BlockedProduct,
         activation_wave: ActivationWave::AppToggle,
-    }));
+    });
     rows
 }
 
