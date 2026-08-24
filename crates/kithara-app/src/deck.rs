@@ -9,9 +9,6 @@ use kithara_queue::{Queue, QueueConfig};
 
 use crate::{config::AppConfig, mix::MixState};
 
-/// Band count used by the non-interactive player graph.
-const DEFAULT_EQ_BANDS: usize = 3;
-
 /// EQ topology shared by every deck and its player graph.
 #[cfg(feature = "gui")]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -88,7 +85,7 @@ impl Deck {
             PlayerConfig::builder()
                 .cancel(config.shutdown.child())
                 .crossfade_duration(config.crossfade_seconds)
-                .eq_layout(generate_log_spaced_bands(DEFAULT_EQ_BANDS))
+                .eq_layout(generate_log_spaced_bands(config.eq_bands))
                 .byte_pool(config.byte_pool.clone())
                 .pcm_pool(config.pcm_pool.clone())
                 .session(session.dispatcher())

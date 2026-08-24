@@ -97,6 +97,13 @@ pub struct AppConfig {
     /// Crossfade duration in seconds.
     #[builder(default = baked::BAKED_CROSSFADE_SECONDS)]
     pub crossfade_seconds: f32,
+    /// Upper bound on waveform buckets (native = one per FFT window). Only
+    /// caps very long tracks, to bound the cached blob.
+    #[builder(default = 96_000)]
+    pub waveform_max_buckets: usize,
+    /// Band count of the EQ layout every deck's player graph is built with.
+    #[builder(default = 3)]
+    pub eq_bands: usize,
 }
 
 fn default_tracks() -> Vec<String> {
@@ -120,6 +127,8 @@ impl fmt::Debug for AppConfig {
                 &self.should_accept_invalid_certs,
             )
             .field("crossfade_seconds", &self.crossfade_seconds)
+            .field("waveform_max_buckets", &self.waveform_max_buckets)
+            .field("eq_bands", &self.eq_bands)
             .field("beat_analysis", &self.beat_analysis)
             .field("size_probe_method", &self.size_probe_method)
             .finish_non_exhaustive()
