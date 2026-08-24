@@ -2,7 +2,7 @@ use firewheel::{
     FirewheelConfig, FirewheelCtx, backend::AudioBackend, channel_config::ChannelCount, diff::Memo,
     node::NodeID, nodes::volume::VolumeNode,
 };
-use kithara_audio::EqBandConfig;
+use kithara_audio::{EqBandConfig, effects::eq::GainDb};
 use kithara_bufpool::PcmPool;
 use kithara_events::EventBus;
 use tracing::{debug, warn};
@@ -72,10 +72,7 @@ impl PlayerState {
     }
 }
 
-pub(super) fn prepare_eq_layout(mut eq_layout: Vec<EqBandConfig>) -> (Vec<EqBandConfig>, Vec<f32>) {
-    for band in &mut eq_layout {
-        band.set_gain_db(band.gain_db());
-    }
+pub(super) fn prepare_eq_layout(eq_layout: Vec<EqBandConfig>) -> (Vec<EqBandConfig>, Vec<GainDb>) {
     let gains = eq_layout.iter().map(EqBandConfig::gain_db).collect();
     (eq_layout, gains)
 }

@@ -1,3 +1,4 @@
+use kithara::audio::effects::eq::GainDb;
 use kithara_ui::render::{Node, ReadValue, Scope, WaveformView};
 use num_traits::cast::AsPrimitive;
 
@@ -8,7 +9,6 @@ use crate::{
         deck::{DeckView, TEMPO_RANGE, TimestretchState},
         ui::{
             cache::{DeckCache, analysis_bpm},
-            endpoints::knob_from_db,
             scope::deck_index,
         },
         view::playhead,
@@ -283,6 +283,6 @@ fn title(ui: &UiState) -> Option<&str> {
     (!ui.track_name.trim().is_empty()).then_some(ui.track_name.as_str())
 }
 
-fn eq_value(db: Option<&f32>) -> Option<ReadValue<'static>> {
-    Some(ReadValue::Scalar(f64::from(knob_from_db(*db?))))
+fn eq_value(db: Option<&GainDb>) -> Option<ReadValue<'static>> {
+    Some(ReadValue::Scalar(f64::from(db?.knob())))
 }

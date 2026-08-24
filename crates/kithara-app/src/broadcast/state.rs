@@ -24,6 +24,7 @@ pub(crate) trait Packager: 'static {
     fn start(
         session: &SessionHandle,
         shutdown: &CancelToken,
+        tap_lead: Duration,
     ) -> BroadcastResult<Option<Self::Live>>;
 
     /// Drains the stream and shuts it down. Blocking.
@@ -36,6 +37,7 @@ pub(crate) struct Broadcaster<P: Packager> {
     shutdown: CancelToken,
     phase: Phase<P>,
     session: SessionHandle,
+    tap_lead: Duration,
 }
 
 enum Phase<P: Packager> {
@@ -49,11 +51,16 @@ enum Phase<P: Packager> {
 pub(crate) struct BroadcastStop<P: Packager>(P::Live);
 
 impl<P: Packager> Broadcaster<P> {
-    pub(crate) const fn new(session: SessionHandle, shutdown: CancelToken) -> Self {
+    pub(crate) const fn new(
+        session: SessionHandle,
+        shutdown: CancelToken,
+        tap_lead: Duration,
+    ) -> Self {
         Self {
             session,
             shutdown,
             phase: Phase::Off,
+            tap_lead,
         }
     }
 
@@ -80,7 +87,7 @@ impl<P: Packager> Broadcaster<P> {
         if !matches!(self.phase, Phase::Requested) {
             return;
         }
-        match P::start(&self.session, &self.shutdown) {
+        match P::start(&self.session, &self.shutdown, self.tap_lead) {
             Ok(Some(live)) => {
                 tracing::info!(url = P::url(&live), "broadcast is live");
                 self.phase = Phase::Running { live };
@@ -158,8 +165,14 @@ mod tests {
         }
     }
 
+    /// The phase machine only carries the lead to its packager, so the
+    /// value is arbitrary here; the sizing it drives is pinned in `live.rs`.
     fn broadcaster<P: Packager>() -> Broadcaster<P> {
-        Broadcaster::new(SessionHandle::new(Arc::new(NoSession)), CancelToken::root())
+        Broadcaster::new(
+            SessionHandle::new(Arc::new(NoSession)),
+            CancelToken::root(),
+            Duration::from_secs(2),
+        )
     }
 
     struct Stream(String);
@@ -189,6 +202,7 @@ mod tests {
         fn start(
             _session: &SessionHandle,
             _shutdown: &CancelToken,
+            _tap_lead: Duration,
         ) -> BroadcastResult<Option<Stream>> {
             LIVE.store(true, Ordering::Relaxed);
             Ok(Some(Self::stream()))
@@ -215,6 +229,7 @@ mod tests {
         fn start(
             _session: &SessionHandle,
             _shutdown: &CancelToken,
+            _tap_lead: Duration,
         ) -> BroadcastResult<Option<Stream>> {
             Ok(None)
         }
@@ -240,6 +255,7 @@ mod tests {
         fn start(
             _session: &SessionHandle,
             _shutdown: &CancelToken,
+            _tap_lead: Duration,
         ) -> BroadcastResult<Option<Stream>> {
             Err("no packager in this build".into())
         }

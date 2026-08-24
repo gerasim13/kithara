@@ -33,6 +33,7 @@ impl Defaults {
     const MIN_BUFFER_FOR_UP_SWITCH: Duration = Duration::from_secs(10);
     const MIN_SWITCH_INTERVAL: Duration = Duration::from_secs(30);
     const THROUGHPUT_SAFETY_FACTOR: f64 = 1.5;
+    const THROUGHPUT_SAMPLE_MIN_INTERVAL: Duration = Duration::from_millis(200);
     const UP_HYSTERESIS_RATIO: f64 = 1.3;
     const URGENT_DOWNSWITCH_BUFFER: Duration = Duration::from_secs(5);
 }
@@ -74,6 +75,11 @@ pub struct AbrSettings {
     /// Minimum interval between `AbrEvent::BufferAhead` emits.
     #[builder(default = Defaults::BUFFER_EMIT_MIN_INTERVAL)]
     pub buffer_emit_min_interval: Duration,
+    /// Minimum interval between `AbrEvent::ThroughputSample` emits. Every
+    /// sample still reaches the estimator; this bounds only how often the
+    /// raw per-fetch rate is published to the bus.
+    #[builder(default = Defaults::THROUGHPUT_SAMPLE_MIN_INTERVAL)]
+    pub throughput_sample_min_interval: Duration,
     /// Minimum buffer-ahead required before an up-switch is allowed.
     #[builder(default = Defaults::MIN_BUFFER_FOR_UP_SWITCH)]
     pub min_buffer_for_up_switch: Duration,
@@ -126,9 +132,6 @@ pub struct AbrController {
 }
 
 impl AbrController {
-    /// Minimum delay between `AbrEvent::ThroughputSample` emits (fixed).
-    pub(super) const MIN_THROUGHPUT_SAMPLE_INTERVAL: Duration = Duration::from_millis(200);
-
     /// Create a new controller with the default [`ThroughputEstimator`].
     #[must_use]
     pub fn new(settings: AbrSettings) -> Arc<Self> {

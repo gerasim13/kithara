@@ -127,6 +127,7 @@ struct Worker<F> {
     token: CancelToken,
     stop: Arc<AtomicBool>,
     samples: Vec<f32>,
+    poll_interval: Duration,
 }
 
 #[derive(Debug, Default)]
@@ -136,8 +137,6 @@ struct Counters {
 }
 
 impl<F: LivePcmFeed> Worker<F> {
-    const POLL: Duration = Duration::from_millis(2);
-
     fn new(
         config: &BroadcastConfig,
         feed: F,
@@ -168,6 +167,7 @@ impl<F: LivePcmFeed> Worker<F> {
             token,
             stop,
             samples: Vec::new(),
+            poll_interval: config.poll_interval,
         })
     }
 
@@ -184,7 +184,7 @@ impl<F: LivePcmFeed> Worker<F> {
                 break;
             }
             if self.samples.is_empty() {
-                thread::paced_backoff(Self::POLL);
+                thread::paced_backoff(self.poll_interval);
             }
         }
 
@@ -241,7 +241,7 @@ impl<F: LivePcmFeed> Worker<F> {
                 Ok(true) => return true,
                 Ok(false) => {
                     if self.samples.is_empty() {
-                        thread::paced_backoff(Self::POLL);
+                        thread::paced_backoff(self.poll_interval);
                     }
                 }
                 Err(error) => {
@@ -410,7 +410,7 @@ mod tests {
     }
 
     fn pcm(frames: usize) -> Vec<f32> {
-        (0..frames * usize::from(BroadcastConfig::CHANNELS))
+        (0..frames * usize::from(config().channels))
             .map(|index| {
                 if index.is_multiple_of(2) {
                     Consts::AMPLITUDE

@@ -28,10 +28,6 @@ use crate::{
 type AppBeatAnalysisConfig = BeatAnalysisConfig<PlaybackResamplerBackend>;
 type AppResourceConfig = ResourceConfig<PlaybackResamplerBackend>;
 
-/// Upper bound on waveform buckets (native = one per FFT window); only caps very
-/// long tracks to bound the cached blob.
-const WAVEFORM_MAX_BUCKETS: usize = 96_000;
-
 /// Analysis-aware state listener: mirrors queue events into [`UiState`] and
 /// drives the background [`AnalysisController`]. Starts analysing the already
 /// loaded library immediately — independent of which UI is open.
@@ -42,8 +38,12 @@ pub(crate) async fn listen(
     cancel: CancelToken,
     mut rx: EventReceiver,
 ) {
-    let mut driver =
-        AnalysisController::new(&cancel, &config.beat_analysis, config.pcm_pool.clone());
+    let mut driver = AnalysisController::new(
+        &cancel,
+        &config.beat_analysis,
+        config.pcm_pool.clone(),
+        config.waveform_max_buckets,
+    );
 
     // Analyse whatever is already loaded; later tracks arrive as events.
     driver.on_tracks_changed(&queue, &state, &config);
@@ -111,15 +111,16 @@ impl AnalysisController {
         cancel: &CancelToken,
         beat_config: &AppBeatAnalysisConfig,
         pcm_pool: PcmPool,
+        waveform_max_buckets: usize,
     ) -> Self {
         Self {
             runner: TrackAnalysisRunner::new(
                 cancel,
-                WAVEFORM_MAX_BUCKETS,
+                waveform_max_buckets,
                 beat_config.clone(),
                 pcm_pool,
             ),
-            cache: TrackAnalysisCache::new(analysis_fingerprint(beat_config)),
+            cache: TrackAnalysisCache::new(analysis_fingerprint(beat_config, waveform_max_buckets)),
             current: None,
             displayed: None,
             pending: VecDeque::new(),
@@ -323,9 +324,9 @@ impl AnalysisController {
 
 /// Fingerprint of the active analysis configuration, stored inside each durable blob.
 /// A mismatch is a cache miss, so config changes re-analyse.
-fn analysis_fingerprint(beat_config: &AppBeatAnalysisConfig) -> String {
+fn analysis_fingerprint(beat_config: &AppBeatAnalysisConfig, max_buckets: usize) -> String {
     let beat = beat_config.cache_tag().unwrap_or_else(|| "off".to_string());
-    format!("wave=native:max{WAVEFORM_MAX_BUCKETS};beat={beat}")
+    format!("wave=native:max{max_buckets};beat={beat}")
 }
 
 /// What [`AnalysisController::pump`] should do for a track.
@@ -427,12 +428,18 @@ mod tests {
     use kithara_queue::{Queue, QueueConfig};
     use kithara_test_utils::kithara;
 
-    use super::{AnalysisController, Plan, Run, pending_order, plan_analysis};
+    use super::{
+        AnalysisController, Plan, Run, analysis_fingerprint, pending_order, plan_analysis,
+    };
     use crate::{
         state::UiState,
         wave_cache::{AnalysisTarget, TrackAnalysisCache},
         waveform::TrackAnalysis,
     };
+
+    /// Bucket cap the controller tests run with; small so the value is
+    /// obviously the test's own and not a default leaking back in.
+    const MAX_BUCKETS: usize = 1_024;
 
     fn one_bucket_wave() -> Waveform {
         // version 1 + one bucket of three 0.5 band heights (0.5 = 0x3F000000).
@@ -485,6 +492,7 @@ mod tests {
             &cancel,
             &BeatAnalysisConfig::<PlaybackResamplerBackend>::default(),
             PcmPool::default(),
+            MAX_BUCKETS,
         );
         let (tx, rx) = watch::channel(value);
         controller.current = Some(Run {
@@ -672,6 +680,7 @@ mod tests {
             &cancel,
             &BeatAnalysisConfig::<PlaybackResamplerBackend>::default(),
             PcmPool::default(),
+            MAX_BUCKETS,
         );
         controller.displayed = Some(target("previous"));
 
@@ -679,5 +688,19 @@ mod tests {
 
         assert!(state.lock().analysis.is_none());
         assert!(controller.displayed.is_none());
+    }
+
+    /// The bucket cap shapes the waveform that lands in the durable blob, so
+    /// it belongs in the fingerprint that decides whether a blob may be
+    /// reused. Two apps configured with different caps must not read each
+    /// other's cached analysis.
+    #[kithara::test]
+    fn a_different_bucket_cap_is_a_different_fingerprint() {
+        let beat = BeatAnalysisConfig::<PlaybackResamplerBackend>::default();
+
+        assert_ne!(
+            analysis_fingerprint(&beat, MAX_BUCKETS),
+            analysis_fingerprint(&beat, MAX_BUCKETS * 2)
+        );
     }
 }

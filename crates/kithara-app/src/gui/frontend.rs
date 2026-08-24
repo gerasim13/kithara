@@ -151,7 +151,11 @@ impl GuiFrontend {
         session: kithara::play::SessionHandle,
         shutdown: kithara_platform::CancelToken,
     ) {
-        self.broadcast = Some(crate::broadcast::Broadcaster::new(session, shutdown));
+        self.broadcast = Some(crate::broadcast::Broadcaster::new(
+            session,
+            shutdown,
+            self.config.broadcast_tap_lead,
+        ));
     }
 
     /// Runs the GUI event loop until the application exits.
