@@ -1,6 +1,6 @@
 use kithara_decode::PcmChunk;
 
-use super::{EqBandConfig, IsolatorEq};
+use super::{EqBandConfig, GainDb, IsolatorEq};
 use crate::AudioEffect;
 
 pub struct EqEffect {
@@ -32,7 +32,7 @@ impl EqEffect {
             .enumerate()
             .map(|(index, band)| {
                 let mut band = *band;
-                band.set_gain_db(self.eq_l.target_gain(index).unwrap_or(0.0));
+                band.set_gain_db(self.eq_l.target_gain(index).unwrap_or_default());
                 band
             })
             .collect()
@@ -45,12 +45,12 @@ impl EqEffect {
             fn is_smoothing(&self) -> bool;
             /// Get the target gain for a specific band.
             #[must_use]
-            pub fn target_gain(&self, band_index: usize) -> Option<f32>;
+            pub fn target_gain(&self, band_index: usize) -> Option<GainDb>;
         }
     }
 
-    /// Set the gain for a specific band (clamped to min/max dB).
-    pub fn set_gain(&mut self, band_index: usize, gain_db: f32) {
+    /// Set the gain for a specific band.
+    pub fn set_gain(&mut self, band_index: usize, gain_db: GainDb) {
         self.eq_l.set_gain(band_index, gain_db);
         self.eq_r.set_gain(band_index, gain_db);
     }
@@ -151,23 +151,23 @@ mod tests {
         let bands = generate_log_spaced_bands(3);
         let mut eq = EqEffect::new(bands, 44100, 2);
 
-        eq.set_gain(0, 100.0);
-        assert!((eq.target_gain(0).unwrap() - MAX_GAIN_DB).abs() < f32::EPSILON);
+        eq.set_gain(0, GainDb::from(100.0));
+        assert_eq!(eq.target_gain(0).unwrap(), GainDb::MAX);
 
-        eq.set_gain(0, -100.0);
-        assert!((eq.target_gain(0).unwrap() - MIN_GAIN_DB).abs() < f32::EPSILON);
+        eq.set_gain(0, GainDb::from(-100.0));
+        assert_eq!(eq.target_gain(0).unwrap(), GainDb::MIN);
 
-        eq.set_gain(0, 3.0);
-        assert!((eq.target_gain(0).unwrap() - 3.0).abs() < f32::EPSILON);
+        eq.set_gain(0, GainDb::from(3.0));
+        assert_eq!(eq.target_gain(0).unwrap(), GainDb::from(3.0));
     }
 
     #[kithara::test]
     fn eq_set_gain_out_of_bounds_band_is_noop() {
         let bands = generate_log_spaced_bands(3);
         let mut eq = EqEffect::new(bands, 44100, 2);
-        eq.set_gain(99, 5.0);
+        eq.set_gain(99, GainDb::from(5.0));
         for i in 0..3 {
-            assert!(eq.target_gain(i).unwrap().abs() < f32::EPSILON);
+            assert_eq!(eq.target_gain(i).unwrap(), GainDb::DEFAULT);
         }
     }
 
@@ -176,7 +176,7 @@ mod tests {
         let bands = generate_log_spaced_bands(3);
         let mut eq = EqEffect::new(bands, 44100, 2);
 
-        eq.set_gain(0, 6.0);
+        eq.set_gain(0, GainDb::MAX);
         let spec = EqFixture::spec(2, 44100);
         let pcm = vec![0.5f32; 256];
         let chunk = test_chunk(spec, pcm);
@@ -185,9 +185,10 @@ mod tests {
         eq.reset();
 
         for i in 0..3 {
-            assert!(
-                eq.target_gain(i).unwrap().abs() < f32::EPSILON,
-                "target should be 0 after reset"
+            assert_eq!(
+                eq.target_gain(i).unwrap(),
+                GainDb::DEFAULT,
+                "target should be unity after reset"
             );
         }
     }
@@ -197,7 +198,7 @@ mod tests {
         let bands = vec![EqBandConfig::builder().frequency(1000.0).build()];
         let spec = EqFixture::spec(1, 44100);
         let mut eq = EqEffect::new(bands, spec.sample_rate.get(), spec.channels);
-        eq.set_gain(0, MIN_GAIN_DB);
+        eq.set_gain(0, GainDb::MIN);
         converge_smoother(&mut eq, spec);
 
         let gain = measure_sine_gain(&mut eq, 1000.0, spec);
@@ -212,7 +213,7 @@ mod tests {
         let bands = generate_log_spaced_bands(3);
         let spec = EqFixture::spec(1, 44100);
         let mut eq = EqEffect::new(bands, spec.sample_rate.get(), spec.channels);
-        eq.set_gain(0, MIN_GAIN_DB);
+        eq.set_gain(0, GainDb::MIN);
         converge_smoother(&mut eq, spec);
 
         let gain_bass = measure_sine_gain(&mut eq, 40.0, spec);
@@ -232,7 +233,7 @@ mod tests {
         let bands = generate_log_spaced_bands(3);
         let spec = EqFixture::spec(1, 44100);
         let mut eq = EqEffect::new(bands, spec.sample_rate.get(), spec.channels);
-        eq.set_gain(2, MIN_GAIN_DB);
+        eq.set_gain(2, GainDb::MIN);
         converge_smoother(&mut eq, spec);
 
         let gain_treble = measure_sine_gain(&mut eq, 15000.0, spec);
@@ -250,7 +251,7 @@ mod tests {
         let spec = EqFixture::spec(1, 44100);
         let mut eq = EqEffect::new(bands, spec.sample_rate.get(), spec.channels);
         for i in 0..3 {
-            eq.set_gain(i, MIN_GAIN_DB);
+            eq.set_gain(i, GainDb::MIN);
         }
         converge_smoother(&mut eq, spec);
 
@@ -268,7 +269,7 @@ mod tests {
         let bands = generate_log_spaced_bands(3);
         let spec = EqFixture::spec(1, 44100);
         let mut eq = EqEffect::new(bands, spec.sample_rate.get(), spec.channels);
-        eq.set_gain(0, MAX_GAIN_DB);
+        eq.set_gain(0, GainDb::MAX);
         converge_smoother(&mut eq, spec);
 
         let gain_bass = measure_sine_gain(&mut eq, 40.0, spec);
@@ -283,7 +284,7 @@ mod tests {
         let bands = generate_log_spaced_bands(3);
         let spec = EqFixture::spec(1, 44100);
         let mut eq = EqEffect::new(bands, spec.sample_rate.get(), spec.channels);
-        eq.set_gain(2, MAX_GAIN_DB);
+        eq.set_gain(2, GainDb::MAX);
         converge_smoother(&mut eq, spec);
 
         let gain_treble = measure_sine_gain(&mut eq, 15000.0, spec);
@@ -299,7 +300,7 @@ mod tests {
         let mut eq = EqEffect::new(bands, 44100, 2);
 
         assert!(!eq.is_smoothing(), "should not be smoothing initially");
-        eq.set_gain(0, 6.0);
+        eq.set_gain(0, GainDb::MAX);
         assert!(eq.is_smoothing(), "should be smoothing after set_gain");
     }
 
@@ -308,7 +309,7 @@ mod tests {
         let bands = generate_log_spaced_bands(3);
         let spec = EqFixture::spec(1, 44100);
         let mut eq = EqEffect::new(bands, spec.sample_rate.get(), spec.channels);
-        eq.set_gain(0, 6.0);
+        eq.set_gain(0, GainDb::MAX);
 
         converge_smoother(&mut eq, spec);
 
@@ -330,7 +331,7 @@ mod tests {
         let chunk = test_chunk(spec, warmup);
         let _ = eq.process(chunk);
 
-        eq.set_gain(0, MAX_GAIN_DB);
+        eq.set_gain(0, GainDb::MAX);
 
         let signal: Vec<f32> = (0u16..4096)
             .map(|i| (2.0 * PI * 1000.0 * f32::from(i + 4096) / 44100.0).sin())
@@ -362,7 +363,7 @@ mod tests {
         let spec = EqFixture::spec(channels, 44100);
         let mut eq = EqEffect::new(bands, spec.sample_rate.get(), spec.channels);
         if let Some((band, gain_db)) = gain {
-            eq.set_gain(band, gain_db);
+            eq.set_gain(band, GainDb::from(gain_db));
         }
 
         let pcm = vec![0.5f32; sample_len];
@@ -387,9 +388,9 @@ mod tests {
 
         for round in 0..100 {
             let gain = if round % 2 == 0 {
-                MAX_GAIN_DB
+                GainDb::MAX
             } else {
-                MIN_GAIN_DB
+                GainDb::MIN
             };
             for band in 0..10 {
                 eq.set_gain(band, gain);
@@ -409,7 +410,7 @@ mod tests {
         let bands = generate_log_spaced_bands(3);
         let spec = EqFixture::spec(1, 44100);
         let mut eq = EqEffect::new(bands, spec.sample_rate.get(), spec.channels);
-        eq.set_gain(0, 6.0);
+        eq.set_gain(0, GainDb::MAX);
         converge_smoother(&mut eq, spec);
 
         let mut pcm = vec![0.5f32; 256];
@@ -432,12 +433,15 @@ mod tests {
 
         for round in 0..200 {
             let gain = if round % 2 == 0 {
-                MAX_GAIN_DB
+                GainDb::MAX
             } else {
-                MIN_GAIN_DB
+                GainDb::MIN
             };
+            // The range is asymmetric, so the opposite of the floor is not
+            // the ceiling: it clamps back down to it.
+            let opposite = GainDb::from(-f32::from(gain));
             eq.set_gain(0, gain);
-            eq.set_gain(1, -gain);
+            eq.set_gain(1, opposite);
             eq.set_gain(2, gain);
 
             let pcm: Vec<f32> = (0u16..512).map(|i| (f32::from(i) * 0.3).sin()).collect();
@@ -466,7 +470,7 @@ mod tests {
         let mut eq = IsolatorEq::new(&bands, 44100);
         assert!(eq.bypass_active(), "precondition: fresh EQ is in bypass");
 
-        eq.set_gain(0, 3.0);
+        eq.set_gain(0, GainDb::from(3.0));
 
         assert!(
             !eq.bypass_active(),
@@ -481,11 +485,11 @@ mod tests {
         let spec = EqFixture::spec(1, 44100);
         let mut eq_effect = EqEffect::new(bands, spec.sample_rate.get(), spec.channels);
 
-        eq_effect.set_gain(0, 6.0);
+        eq_effect.set_gain(0, GainDb::MAX);
         converge_smoother(&mut eq_effect, spec);
         assert!(!eq_effect.eq_l.bypass_active());
 
-        eq_effect.set_gain(0, 0.0);
+        eq_effect.set_gain(0, GainDb::default());
         converge_smoother(&mut eq_effect, spec);
         converge_smoother(&mut eq_effect, spec);
 
@@ -519,13 +523,13 @@ mod tests {
         let mut eq_effect = EqEffect::new(bands, spec.sample_rate.get(), spec.channels);
 
         for i in 0..3 {
-            eq_effect.set_gain(i, MIN_GAIN_DB);
+            eq_effect.set_gain(i, GainDb::MIN);
         }
         converge_smoother(&mut eq_effect, spec);
 
         assert!(
             eq_effect.eq_l.silence_active(),
-            "all bands at MIN_GAIN_DB after smoother converges must activate \
+            "all bands at the floor of the range after the smoother converges must \
              the silence fast path so the filter chain is skipped entirely"
         );
     }
@@ -535,8 +539,8 @@ mod tests {
         let bands = generate_log_spaced_bands(3);
         let mut eq = IsolatorEq::new(&bands, 44100);
         for i in 0..3 {
-            eq.set_gain(i, MIN_GAIN_DB);
-            eq.force_current_gain(i, 0.0);
+            eq.set_gain(i, GainDb::MIN);
+            eq.settle_gain(i);
         }
         assert!(eq.silence_active(), "precondition: silence is active");
 
@@ -556,16 +560,16 @@ mod tests {
         let bands = generate_log_spaced_bands(3);
         let mut eq = IsolatorEq::new(&bands, 44100);
         for i in 0..3 {
-            eq.set_gain(i, MIN_GAIN_DB);
-            eq.force_current_gain(i, 0.0);
+            eq.set_gain(i, GainDb::MIN);
+            eq.settle_gain(i);
         }
         assert!(eq.silence_active(), "precondition: silence is active");
 
-        eq.set_gain(1, -3.0);
+        eq.set_gain(1, GainDb::from(-3.0));
 
         assert!(
             !eq.silence_active(),
-            "raising any band above MIN_GAIN_DB must disable silence so the \
+            "raising any band above the floor must disable silence so the \
              filter chain re-engages via smoother ramp-up"
         );
     }

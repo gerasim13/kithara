@@ -1,7 +1,7 @@
 use kithara_decode::sanitize_sample;
 use num_traits::cast::AsPrimitive;
 
-use super::{EqBandConfig, filter::CrossoverFilters, gain::GainBank};
+use super::{EqBandConfig, GainDb, filter::CrossoverFilters, gain::GainBank};
 
 /// Single-channel isolator crossover EQ.
 pub struct IsolatorEq {
@@ -32,16 +32,16 @@ impl IsolatorEq {
             pub const fn band_count(&self) -> usize;
             #[must_use]
             #[call(target)]
-            pub fn target_gain(&self, band: usize) -> Option<f32>;
+            pub fn target_gain(&self, band: usize) -> Option<GainDb>;
             #[cfg(test)]
             pub(crate) fn bypass_active(&self) -> bool;
             #[cfg(test)]
-            #[call(force_current)]
-            pub(crate) fn force_current_gain(&mut self, band: usize, linear: f32);
-            #[cfg(test)]
             pub(crate) fn is_smoothing(&self) -> bool;
             #[call(set)]
-            pub fn set_gain(&mut self, band: usize, gain_db: f32);
+            pub fn set_gain(&mut self, band: usize, gain_db: GainDb);
+            #[cfg(test)]
+            #[call(settle)]
+            pub(crate) fn settle_gain(&mut self, band: usize);
             #[cfg(test)]
             pub(crate) fn silence_active(&self) -> bool;
         }
@@ -100,7 +100,7 @@ mod tests {
         let bands = super::super::band::generate_log_spaced_bands(3);
         let mut eq = IsolatorEq::new(&bands, SAMPLE_RATE);
         for band in 0..bands.len() {
-            eq.set_gain(band, 6.0);
+            eq.set_gain(band, GainDb::MAX);
         }
 
         let _ = eq.process_sample(1.0);

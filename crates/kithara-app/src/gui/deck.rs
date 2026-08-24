@@ -1,4 +1,4 @@
-use kithara::{abr::AbrMode, events::AdvanceReason};
+use kithara::{abr::AbrMode, audio::effects::eq::GainDb, events::AdvanceReason};
 use kithara_platform::sync::Arc;
 use kithara_queue::{TrackId, Transition};
 use tracing::{debug, error};
@@ -63,7 +63,7 @@ pub(crate) enum DeckMsg {
     Next,
     Prev,
     SeekTo(f64),
-    EqBandChanged(usize, f32),
+    EqBandChanged(usize, GainDb),
     DeleteTrack,
     SetTempo(f32),
     SetQuality(Option<usize>),
@@ -128,7 +128,7 @@ fn seek(deck: &DeckUi, target: f64) {
     }
 }
 
-fn eq_band_changed(deck: &DeckUi, band: usize, db: f32) {
+fn eq_band_changed(deck: &DeckUi, band: usize, db: GainDb) {
     // `eq_bands` is the user's desired EQ and the source of truth: record it
     // regardless of whether a playback slot exists yet. The listener re-applies
     // it to the engine once a track becomes active.
@@ -142,7 +142,7 @@ fn eq_band_changed(deck: &DeckUi, band: usize, db: f32) {
     if !known {
         return;
     }
-    if let Err(e) = deck.controller.queue().set_eq_gain(band, db) {
+    if let Err(e) = deck.controller.queue().set_eq_gain(band, f32::from(db)) {
         // Expected before playback starts (no active slot yet); the gain is
         // retained in `eq_bands` and pushed down when playback begins.
         debug!("set EQ gain band={band} db={db:.1} deferred: {e:?}");

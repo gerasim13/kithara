@@ -1,4 +1,4 @@
-use kithara_audio::EqBandConfig;
+use kithara_audio::{EqBandConfig, effects::eq::GainDb};
 use kithara_events::RouteDescription;
 
 use super::super::core::PlayerImpl;
@@ -79,8 +79,11 @@ impl PlayerImpl {
             .engine
             .slot_eq(slot_id)
             .ok_or(PlayError::SlotNotFound(slot_id))?;
-        let clamped = eq.set_gain(band, gain_db)?;
-        self.core.engine.set_master_eq_gain(band, clamped)
+        let gain_db = GainDb::from(gain_db);
+        eq.set_gain(band, gain_db)?;
+        self.core
+            .engine
+            .set_master_eq_gain(band, f32::from(gain_db))
     }
 
     delegate::delegate! {

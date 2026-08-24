@@ -393,18 +393,7 @@ impl HttpClient {
 
     #[must_use]
     pub fn with_observer(&self, observer: Option<Observer>) -> Self {
-        let options = NetOptions::builder()
-            .compression(self.options.compression)
-            .inactivity_timeout(self.options.inactivity_timeout)
-            .impersonate(self.options.impersonate)
-            .byte_pool(self.options.byte_pool.clone())
-            .retry_policy(self.options.retry_policy.clone())
-            .is_insecure(self.options.is_insecure)
-            .body_queue_capacity(self.options.body_queue_capacity)
-            .body_queue_resume_at(self.options.body_queue_resume_at)
-            .pool_max_idle_per_host(self.options.pool_max_idle_per_host)
-            .maybe_observer(observer)
-            .build();
+        let options = self.options.with_observer(observer);
         let raw = RawHttp {
             inner: self.inner.clone(),
             options: options.clone(),
@@ -1179,6 +1168,22 @@ mod tests {
             counter.load(Ordering::SeqCst),
             2,
             "exactly 2 attempts: 1 failed (503) + 1 ok"
+        );
+    }
+
+    /// `with_observer` rebuilds the options around the new observer. A field
+    /// it fails to carry over is a knob that silently reverts to its default
+    /// the moment the downloader attaches an observer to the client.
+    #[kithara::test]
+    fn attaching_an_observer_carries_the_options_over() {
+        let options = NetOptions::builder()
+            .pool_idle_timeout(Duration::from_secs(77))
+            .build();
+        let client = HttpClient::new(options, CancelToken::never());
+
+        assert_eq!(
+            client.with_observer(None).options().pool_idle_timeout,
+            Duration::from_secs(77)
         );
     }
 }

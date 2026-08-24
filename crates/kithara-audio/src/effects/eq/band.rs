@@ -1,6 +1,8 @@
 use bon::Builder;
 use num_traits::cast::AsPrimitive;
 
+use super::GainDb;
+
 struct Consts;
 
 impl Consts {
@@ -13,12 +15,6 @@ impl Consts {
     const Q_REFERENCE_BANDS: f32 = 10.0;
     const Q_SCALE_FACTOR: f32 = 1.4;
 }
-
-/// Maximum EQ band gain in dB.
-pub const MAX_GAIN_DB: f32 = 6.0;
-
-/// Minimum EQ band gain in dB. At this value the band is fully killed.
-pub const MIN_GAIN_DB: f32 = -24.0;
 
 /// The type of biquad filter used for an EQ band.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -52,14 +48,15 @@ pub struct EqBandConfig {
     #[builder(default = Consts::DEFAULT_FREQ)]
     frequency: f32,
     #[builder(default)]
-    gain_db: f32,
+    #[field(get(copy))]
+    gain_db: GainDb,
     #[builder(default = std::f32::consts::FRAC_1_SQRT_2)]
     q_factor: f32,
 }
 
 impl EqBandConfig {
-    pub const fn set_gain_db(&mut self, gain_db: f32) {
-        self.gain_db = gain_db.clamp(MIN_GAIN_DB, MAX_GAIN_DB);
+    pub const fn set_gain_db(&mut self, gain_db: GainDb) {
+        self.gain_db = gain_db;
     }
 }
 
@@ -142,7 +139,11 @@ mod tests {
                         .windows(2)
                         .all(|pair| pair[1].frequency() > pair[0].frequency())
                 );
-                assert!(bands.iter().all(|band| band.gain_db().abs() < f32::EPSILON));
+                assert!(
+                    bands
+                        .iter()
+                        .all(|band| f32::from(band.gain_db()).abs() < f32::EPSILON)
+                );
             }
             _ => {}
         }
@@ -176,11 +177,11 @@ mod tests {
     }
 
     #[kithara::test]
-    fn set_gain_db_clamps_to_public_range() {
+    fn a_band_cannot_hold_a_gain_outside_the_range() {
         let mut band = EqBandConfig::default();
-        band.set_gain_db(100.0);
-        assert_eq!(band.gain_db(), MAX_GAIN_DB);
-        band.set_gain_db(-100.0);
-        assert_eq!(band.gain_db(), MIN_GAIN_DB);
+        band.set_gain_db(GainDb::from(100.0));
+        assert_eq!(band.gain_db(), GainDb::MAX);
+        band.set_gain_db(GainDb::from(-100.0));
+        assert_eq!(band.gain_db(), GainDb::MIN);
     }
 }
