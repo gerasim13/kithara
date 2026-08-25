@@ -4,6 +4,7 @@ mod wire {
     use kithara_bufpool::PcmPool;
     use kithara_events::EventBus;
     use kithara_platform::sync::mpsc;
+    use kithara_warp::{BeatMapIdAllocationError, SyncError};
 
     use crate::{
         api::{SessionBeat, SessionDuckingMode, SessionTransportSnapshot, SlotId, Tempo},
@@ -20,6 +21,10 @@ mod wire {
     pub enum SessionError {
         #[error("player not found: {0}")]
         PlayerNotFound(PlayerId),
+        #[error("invalid session sample rate: {0}")]
+        InvalidSampleRate(u32),
+        #[error("player identity space is exhausted")]
+        PlayerIdExhausted,
         #[error("player already started: {0}")]
         AlreadyStarted(PlayerId),
         #[error("player not running: {0}")]
@@ -50,6 +55,10 @@ mod wire {
         TransportFrameExhausted,
         #[error("session transport revision is exhausted")]
         TransportRevisionExhausted,
+        #[error(transparent)]
+        Sync(#[from] SyncError),
+        #[error(transparent)]
+        BeatMapIdAllocation(#[from] BeatMapIdAllocationError),
         #[error("stream stopped: {reason}; restart failed: {source}")]
         RestartFailed { reason: String, r#source: String },
     }
@@ -60,6 +69,7 @@ mod wire {
             bus: EventBus,
             eq_layout: Vec<EqBandConfig>,
             pcm_pool: PcmPool,
+            sample_rate: u32,
         },
         UnregisterPlayer {
             player_id: PlayerId,
@@ -265,11 +275,13 @@ mod handle {
             bus: EventBus,
             eq_layout: Vec<EqBandConfig>,
             pcm_pool: PcmPool,
+            sample_rate: u32,
         ) -> Result<PlayerId, PlayError> {
             match self.exec_ok(Cmd::RegisterPlayer {
                 bus,
                 eq_layout,
                 pcm_pool,
+                sample_rate,
             })? {
                 Reply::PlayerRegistered(id) => Ok(id),
                 _ => Err(PlayError::Internal(

@@ -30,8 +30,9 @@ pub use sync::{
     AlignmentCursor, AlignmentPlan, AlignmentPlanError, AlignmentPlanRevision, AlignmentRequest,
     AlignmentSource, AlignmentTransition, BeatAlignment, LoadGeneration, PlanSpan, PlanSpanSlot,
     PlanTransition, PlannedRenderSpan, PresentationFrontier, ReconcileCause, RenderFrontier,
-    RenderPlan, SourceFrameRange, SyncAdmission, SyncApplied, SyncCapability, SyncError, SyncGroup,
+    SourceFrameRange, SyncAdmission, SyncApplied, SyncCapability, SyncError, SyncGroup,
     SyncGroupSnapshot, SyncGroupTopologyError, SyncIntent, SyncMember, SyncMemberKind,
     SyncMemberSnapshot, SyncOperation, SyncOperationId, SyncRejected, SyncStatusSnapshot,
     TopologyOperation, TopologyRevision, TopologyStamp, TransportOperation, TransportRevision,
+    WarpPlan,
 };

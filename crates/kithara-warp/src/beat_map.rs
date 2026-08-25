@@ -6,9 +6,10 @@ use kithara_platform::sync::Arc;
 use portable_atomic::{AtomicU64, Ordering};
 
 use super::{
-    AlignmentPlan, AlignmentRequest, Beat, BeatEvidence, BeatsPerMinute, FrameUncertainty, MapAxis,
-    MapPoint, MapPosition, MapRegion, Meter, MeterFacts, PlanTransition, PresentationFrontier,
-    SegmentSet, SessionAnchor, SessionBeat, SessionFrame, SyncCapability, SyncError,
+    AlignmentPlan, AlignmentRequest, Beat, BeatEvidence, BeatsPerMinute, FrameUncertainty,
+    HostAxis, HostEpoch, MapAxis, MapPoint, MapPosition, MapRegion, Meter, MeterFacts,
+    PlanTransition, PresentationFrontier, SegmentSet, SessionAnchor, SessionBeat, SessionFrame,
+    SyncError,
 };
 
 const SECONDS_PER_MINUTE: f64 = 60.0;
@@ -97,10 +98,15 @@ impl BeatMapRevision {
 }
 
 /// Identity and immutable revision of one map snapshot.
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, fieldwork::Fieldwork)]
+#[fieldwork(opt_in, get)]
 #[non_exhaustive]
 pub struct MapStamp {
+    /// Returns the stable map identity.
+    #[field(get, copy)]
     map_id: BeatMapId,
+    /// Returns the immutable map revision.
+    #[field(get, copy)]
     revision: BeatMapRevision,
 }
 
@@ -109,18 +115,6 @@ impl MapStamp {
     #[must_use]
     pub const fn new(map_id: BeatMapId, revision: BeatMapRevision) -> Self {
         Self { map_id, revision }
-    }
-
-    /// Returns the stable map identity.
-    #[must_use]
-    pub const fn map_id(self) -> BeatMapId {
-        self.map_id
-    }
-
-    /// Returns the immutable map revision.
-    #[must_use]
-    pub const fn revision(self) -> BeatMapRevision {
-        self.revision
     }
 }
 
@@ -151,12 +145,21 @@ pub enum MapState {
 }
 
 /// A resolved value and the evidence supporting it.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, fieldwork::Fieldwork)]
+#[fieldwork(opt_in, get)]
 #[non_exhaustive]
 pub struct BeatEstimate<T> {
+    /// Returns the resolved value.
+    #[field(get)]
     value: T,
+    /// Returns how the value was established.
+    #[field(get, copy)]
     evidence: BeatEvidence,
+    /// Returns maximum absolute error in map-native frames.
+    #[field(get, copy)]
     uncertainty: FrameUncertainty,
+    /// Returns the snapshot identity and revision used by the estimate.
+    #[field(get, copy)]
     stamp: MapStamp,
 }
 
@@ -173,30 +176,6 @@ impl<T> BeatEstimate<T> {
             uncertainty,
             stamp,
         }
-    }
-
-    /// Returns the resolved value.
-    #[must_use]
-    pub const fn value(&self) -> &T {
-        &self.value
-    }
-
-    /// Returns how the value was established.
-    #[must_use]
-    pub const fn evidence(&self) -> BeatEvidence {
-        self.evidence
-    }
-
-    /// Returns maximum absolute error in map-native frames.
-    #[must_use]
-    pub const fn uncertainty(&self) -> FrameUncertainty {
-        self.uncertainty
-    }
-
-    /// Returns the snapshot identity and revision used by the estimate.
-    #[must_use]
-    pub const fn stamp(&self) -> MapStamp {
-        self.stamp
     }
 }
 
@@ -262,38 +241,6 @@ pub struct BeatMapSnapshot {
     pub(crate) data: Arc<BeatMapSnapshotData>,
 }
 
-impl BeatMap for BeatMapSnapshot {
-    delegate::delegate! {
-        to self {
-            #[call(id)]
-            fn id(&self) -> BeatMapId;
-            #[call(clone)]
-            fn snapshot(&self) -> BeatMapSnapshot;
-        }
-    }
-
-    fn align_to(
-        &self,
-        _target: &dyn BeatMap,
-        _request: AlignmentRequest,
-    ) -> Result<AlignmentPlan, SyncError> {
-        Err(SyncError::CapabilityUnavailable {
-            capability: SyncCapability::Alignment,
-        })
-    }
-
-    fn reconcile_to(
-        &self,
-        _target: &dyn BeatMap,
-        _active: &AlignmentPlan,
-        _frontier: PresentationFrontier,
-    ) -> Result<PlanTransition, SyncError> {
-        Err(SyncError::CapabilityUnavailable {
-            capability: SyncCapability::Reconciliation,
-        })
-    }
-}
-
 /// A caller-supplied snapshot violates the public musical-map contract.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
 #[non_exhaustive]
@@ -304,15 +251,18 @@ pub enum BeatMapSnapshotError {
     /// A successor changed its native coordinate axis outside a host restart.
     #[error("beat map successor changed axis from {expected:?} to {given:?}")]
     AxisChanged { expected: MapAxis, given: MapAxis },
+    /// A proposed successor did not advance the owner's published revision.
+    #[error("beat map revision {given} does not advance {current}")]
+    RevisionNotAdvanced {
+        current: BeatMapRevision,
+        given: BeatMapRevision,
+    },
     /// The lifecycle state is incompatible with the snapshot coordinate axis.
     #[error("state {state:?} is invalid for segment geometry on axis {axis:?}")]
     InvalidState { axis: MapAxis, state: MapState },
     /// A complete bounded map cannot return to an incomplete lifecycle state.
     #[error("beat map cannot transition from {from:?} to {to:?}")]
     InvalidTransition { from: MapState, to: MapState },
-    /// The map exhausted its monotonic revision space.
-    #[error("beat map revision space is exhausted")]
-    RevisionExhausted,
 }
 
 #[derive(Debug)]
@@ -346,6 +296,112 @@ impl BeatMapSnapshot {
         segments: SegmentSet,
     ) -> Result<Self, BeatMapSnapshotError> {
         Self::try_new_segments(id, BeatMapRevision::first(), state, segments)
+    }
+
+    /// Creates the first empty snapshot for a map owner without geometry.
+    #[must_use]
+    pub fn unavailable(id: BeatMapId, axis: MapAxis) -> Self {
+        Self::new_segments(
+            id,
+            BeatMapRevision::first(),
+            MapState::Unavailable(MapUnavailable::NoGeometry),
+            SegmentSet::empty(axis),
+        )
+    }
+
+    /// Advances to a newer unavailable snapshot, optionally entering a newer host epoch.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BeatMapSnapshotError`] for a stale base, a non-advancing
+    /// revision, an asset-axis change, a non-advancing host-axis change, or a
+    /// terminal-map transition.
+    pub fn unavailable_successor(
+        &self,
+        base: MapStamp,
+        revision: BeatMapRevision,
+        axis: MapAxis,
+    ) -> Result<Self, BeatMapSnapshotError> {
+        let expected = self.stamp();
+        if base != expected {
+            return Err(BeatMapSnapshotError::Stale {
+                expected,
+                given: base,
+            });
+        }
+        if revision <= self.revision() {
+            return Err(BeatMapSnapshotError::RevisionNotAdvanced {
+                current: self.revision(),
+                given: revision,
+            });
+        }
+        if self.state() == MapState::Complete {
+            return Err(BeatMapSnapshotError::InvalidTransition {
+                from: self.state(),
+                to: MapState::Unavailable(MapUnavailable::NoGeometry),
+            });
+        }
+        let axis_is_valid = self.axis() == axis
+            || matches!(
+                (self.axis(), axis),
+                (MapAxis::Host(current), MapAxis::Host(next))
+                    if next.epoch() > current.epoch()
+            );
+        if !axis_is_valid {
+            return Err(BeatMapSnapshotError::AxisChanged {
+                expected: self.axis(),
+                given: axis,
+            });
+        }
+        Ok(Self::new_segments(
+            self.id(),
+            revision,
+            MapState::Unavailable(MapUnavailable::NoGeometry),
+            SegmentSet::empty(axis),
+        ))
+    }
+
+    /// Derives a newer live host snapshot from this owner's current state.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BeatMapSnapshotError`] for a stale base, a non-advancing
+    /// revision, or a non-host or non-advancing host axis.
+    pub fn host_successor(
+        &self,
+        base: MapStamp,
+        revision: BeatMapRevision,
+        epoch: HostEpoch,
+        anchor: SessionAnchor,
+        meter: Option<MeterFacts>,
+    ) -> Result<Self, BeatMapSnapshotError> {
+        let expected = self.stamp();
+        if base != expected {
+            return Err(BeatMapSnapshotError::Stale {
+                expected,
+                given: base,
+            });
+        }
+        if revision <= self.revision() {
+            return Err(BeatMapSnapshotError::RevisionNotAdvanced {
+                current: self.revision(),
+                given: revision,
+            });
+        }
+        let axis = MapAxis::Host(HostAxis::new(anchor.sample_rate(), epoch));
+        let axis_is_valid = self.axis() == axis
+            || matches!(
+                (self.axis(), axis),
+                (MapAxis::Host(current), MapAxis::Host(next))
+                    if next.epoch() > current.epoch()
+            );
+        if !axis_is_valid {
+            return Err(BeatMapSnapshotError::AxisChanged {
+                expected: self.axis(),
+                given: axis,
+            });
+        }
+        Ok(Self::new_host(self.id(), revision, axis, anchor, meter))
     }
 
     fn try_new_segments(

@@ -1,7 +1,9 @@
 use std::fmt;
 
-use super::{BeatAlignment, SyncGroup, SyncMemberKind};
-use crate::{BeatMap, BeatMapId};
+use super::{
+    BeatAlignment, SyncError, SyncGroup, SyncGroupTopologyError, SyncMemberKind, SyncMemberSnapshot,
+};
+use crate::{BeatMap, BeatMapId, BeatMapSnapshot, MapPoint, MapStamp};
 
 /// One exclusively owned live map or statically typed nested synchronization group.
 pub enum SyncMember<G: SyncGroup> {
@@ -63,6 +65,42 @@ impl<G: SyncGroup> SyncMember<G> {
             Self::Group { .. } => SyncMemberKind::Group,
         }
     }
+
+    /// Materializes the current member and restamps an established alignment
+    /// to the current child and parent revisions.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SyncError`] for an identity or nested-topology violation.
+    pub fn snapshot_for(&self, parent: &BeatMapSnapshot) -> Result<SyncMemberSnapshot, SyncError> {
+        match self {
+            Self::Map { alignment, map } => {
+                let expected = map.id();
+                let map = map.snapshot();
+                if map.id() != expected {
+                    return Err(SyncError::MapIdentityMismatch {
+                        expected,
+                        given: map.id(),
+                    });
+                }
+                let alignment = restamp_alignment(*alignment, map.stamp(), parent.stamp())?;
+                Ok(SyncMemberSnapshot::new_map(map, alignment))
+            }
+            Self::Group { alignment, group } => {
+                let expected = group.id();
+                let group = group.topology()?;
+                if group.stamp().group_id() != expected {
+                    return Err(SyncError::MapIdentityMismatch {
+                        expected,
+                        given: group.stamp().group_id(),
+                    });
+                }
+                let alignment =
+                    restamp_alignment(*alignment, group.group_map().stamp(), parent.stamp())?;
+                Ok(SyncMemberSnapshot::new_group(group, alignment))
+            }
+        }
+    }
 }
 
 impl<G: SyncGroup> From<&SyncMember<G>> for BeatMapId {
@@ -72,4 +110,35 @@ impl<G: SyncGroup> From<&SyncMember<G>> for BeatMapId {
             SyncMember::Group { group, .. } => group.id(),
         }
     }
+}
+
+fn restamp_alignment(
+    alignment: Option<BeatAlignment>,
+    source: MapStamp,
+    target: MapStamp,
+) -> Result<Option<BeatAlignment>, SyncError> {
+    alignment
+        .map(|alignment| {
+            let given_source = alignment.source().stamp();
+            if given_source.map_id() != source.map_id() {
+                return Err(SyncGroupTopologyError::StaleSourceAlignment {
+                    expected: source,
+                    given: given_source,
+                }
+                .into());
+            }
+            let given_target = alignment.target().stamp();
+            if given_target.map_id() != target.map_id() {
+                return Err(SyncGroupTopologyError::StaleTargetAlignment {
+                    expected: target,
+                    given: given_target,
+                }
+                .into());
+            }
+            Ok(BeatAlignment::new(
+                MapPoint::new(source, *alignment.source().value()),
+                MapPoint::new(target, *alignment.target().value()),
+            ))
+        })
+        .transpose()
 }

@@ -1,6 +1,6 @@
-use std::num::NonZeroU64;
-
-use kithara_audio::{SessionAnchor, SessionBeat};
+use kithara_warp::{
+    HostBeatMap, HostEpoch, MapStamp, SessionAnchor, SessionBeat, TransportRevision,
+};
 
 const SECONDS_PER_MINUTE: f64 = 60.0;
 
@@ -58,44 +58,20 @@ pub struct TempoError {
     beats_per_minute: f64,
 }
 
-/// Monotonic generation of a committed session transport configuration.
-#[derive(
-    Clone,
-    Copy,
-    Debug,
-    Eq,
-    Hash,
-    Ord,
-    PartialEq,
-    PartialOrd,
-    derive_more::Display,
-    derive_more::Into,
-)]
-#[display("{_0}")]
-#[into(u64)]
-#[repr(transparent)]
-pub struct TransportRevision(NonZeroU64);
-
-impl TransportRevision {
-    pub(crate) const FIRST: Self = Self(NonZeroU64::MIN);
-
-    pub(crate) fn checked_next(self) -> Option<Self> {
-        self.0
-            .get()
-            .checked_add(1)
-            .and_then(NonZeroU64::new)
-            .map(Self)
-    }
-}
-
 /// The last session transport position processed by the audio graph.
 #[derive(Clone, Copy, Debug, PartialEq, fieldwork::Fieldwork)]
 #[fieldwork(get)]
 #[non_exhaustive]
 pub struct SessionTransportSnapshot {
-    /// Returns the session-clock relation used by this observation.
-    #[field(get, copy)]
+    /// Session-clock relation used to construct the public host-map view.
+    #[field(skip)]
     anchor: SessionAnchor,
+    /// Returns the host-map generation defining the live frame axis.
+    #[field(get, copy)]
+    host_epoch: HostEpoch,
+    /// Returns the exact host-map identity and geometry revision.
+    #[field(get, copy)]
+    host_map_stamp: MapStamp,
     /// Returns the processed position on the session beat grid.
     #[field(get, copy)]
     position: SessionBeat,
@@ -117,14 +93,39 @@ impl SessionTransportSnapshot {
         tempo: Tempo,
         revision: TransportRevision,
         anchor: SessionAnchor,
+        host_map_stamp: MapStamp,
+        host_epoch: HostEpoch,
     ) -> Self {
         Self {
             anchor,
+            host_epoch,
+            host_map_stamp,
             position,
             tempo,
             revision,
             playing,
         }
+    }
+
+    /// Builds a read-only host map from this single atomic observation.
+    ///
+    /// Construction happens on the control side after reading the Copy-only
+    /// transport snapshot; the audio callback never publishes or drops an
+    /// allocated map handle.
+    #[must_use]
+    pub fn host_map(self) -> HostBeatMap {
+        HostBeatMap::new(
+            self.host_map_stamp.map_id(),
+            self.host_map_stamp.revision(),
+            self.host_epoch,
+            self.anchor,
+            None,
+        )
+    }
+
+    #[cfg(test)]
+    pub(crate) const fn anchor(self) -> SessionAnchor {
+        self.anchor
     }
 }
 
@@ -132,8 +133,10 @@ impl SessionTransportSnapshot {
 mod tests {
     use std::num::NonZeroU32;
 
-    use kithara_audio::{SessionAnchor, SessionBeat, SessionFrame};
     use kithara_test_utils::kithara;
+    use kithara_warp::{
+        BeatMapId, BeatMapRevision, HostEpoch, MapStamp, SessionAnchor, SessionBeat, SessionFrame,
+    };
 
     use super::{SessionTransportSnapshot, Tempo, TransportRevision};
 
@@ -150,8 +153,13 @@ mod tests {
             SessionBeat::new(8.0).expect("invariant: fixture position is finite"),
             true,
             Tempo::new(120.0).expect("invariant: fixture tempo is in range"),
-            TransportRevision::FIRST,
+            TransportRevision::first(),
             anchor,
+            MapStamp::new(
+                BeatMapId::allocate().expect("invariant: fixture map identity space is available"),
+                BeatMapRevision::first(),
+            ),
+            HostEpoch::new(0),
         );
         let target = SessionBeat::new(11.0).expect("invariant: fixture target is finite");
 

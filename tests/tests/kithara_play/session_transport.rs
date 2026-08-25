@@ -38,6 +38,7 @@ fn register_transport_events(session: &ManualRingSession) -> EventReceiver {
             bus,
             eq_layout: Vec::new(),
             pcm_pool: PcmPool::default(),
+            sample_rate: SAMPLE_RATE,
         })
         .expect("invariant: player registration reaches the session")
     {

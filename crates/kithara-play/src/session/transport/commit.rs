@@ -1,8 +1,64 @@
 use std::num::NonZeroU32;
 
-use kithara_audio::SessionFrame;
+use kithara_warp::{BeatMapId, BeatMapRevision, HostEpoch, MapStamp, SessionFrame};
 
 use crate::api::{SessionBeat, SessionTransportSnapshot, Tempo, TransportRevision};
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct HostMapGeneration {
+    id: BeatMapId,
+    epoch: HostEpoch,
+    revision: Option<BeatMapRevision>,
+}
+
+impl HostMapGeneration {
+    pub(crate) const fn new(id: BeatMapId) -> Self {
+        Self {
+            id,
+            epoch: HostEpoch::new(0),
+            revision: None,
+        }
+    }
+
+    pub(crate) fn next_revision(self) -> Result<BeatMapRevision, TransportProcessError> {
+        self.revision
+            .map_or(Ok(BeatMapRevision::first()), |revision| {
+                revision
+                    .checked_next()
+                    .ok_or(TransportProcessError::HostMapGenerationExhausted)
+            })
+    }
+
+    pub(crate) fn commit_revision(&mut self, revision: BeatMapRevision) {
+        self.revision = Some(revision);
+    }
+
+    pub(crate) fn advance_restart(&mut self) -> Result<(), TransportProcessError> {
+        let epoch = u64::from(self.epoch)
+            .checked_add(1)
+            .map(HostEpoch::new)
+            .ok_or(TransportProcessError::HostMapGenerationExhausted)?;
+        let revision = Some(match self.revision {
+            Some(revision) => revision
+                .checked_next()
+                .ok_or(TransportProcessError::HostMapGenerationExhausted)?,
+            None => BeatMapRevision::first(),
+        });
+        self.epoch = epoch;
+        self.revision = revision;
+        Ok(())
+    }
+
+    pub(crate) fn stamp(self) -> Result<MapStamp, TransportProcessError> {
+        self.revision
+            .map(|revision| MapStamp::new(self.id, revision))
+            .ok_or(TransportProcessError::MissingHostMapRevision)
+    }
+
+    pub(crate) const fn epoch(self) -> HostEpoch {
+        self.epoch
+    }
+}
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub(crate) enum TransportBoundary {
@@ -92,23 +148,27 @@ pub(crate) enum TransportCommitResult {
     Rejected(#[field(rename = revision, copy)] TransportRevision),
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, fieldwork::Fieldwork)]
+#[derive(Clone, Copy, Debug, PartialEq, fieldwork::Fieldwork)]
 #[fieldwork(get, vis = "pub(crate)")]
 pub(crate) struct TransportObservation {
     #[field(get, copy)]
     completion: Option<TransportCommitResult>,
     #[field(get, copy)]
     snapshot: Option<SessionTransportSnapshot>,
+    #[field(get, copy)]
+    host_map: HostMapGeneration,
 }
 
 impl TransportObservation {
     pub(crate) const fn new(
         completion: Option<TransportCommitResult>,
         snapshot: Option<SessionTransportSnapshot>,
+        host_map: HostMapGeneration,
     ) -> Self {
         Self {
             completion,
             snapshot,
+            host_map,
         }
     }
 }
@@ -131,8 +191,12 @@ pub(crate) enum TransportProcessError {
     DuplicateEvent,
     #[error("{}", Self::FrameDiscontinuity.message())]
     FrameDiscontinuity,
+    #[error("{}", Self::HostMapGenerationExhausted.message())]
+    HostMapGenerationExhausted,
     #[error("{}", Self::InvalidBeatRange.message())]
     InvalidBeatRange,
+    #[error("{}", Self::MissingHostMapRevision.message())]
+    MissingHostMapRevision,
     #[error("{}", Self::MissingObservation.message())]
     MissingObservation,
     #[error("{}", Self::MissingState.message())]
@@ -147,7 +211,9 @@ impl TransportProcessError {
             Self::AbortMismatch => "transport abort targets an applied revision",
             Self::DuplicateEvent => "session transport received duplicate events in one block",
             Self::FrameDiscontinuity => "graph render clock is discontinuous",
+            Self::HostMapGenerationExhausted => "host beat map generation space is exhausted",
             Self::InvalidBeatRange => "session transport produced an invalid beat range",
+            Self::MissingHostMapRevision => "active transport has no host beat map revision",
             Self::MissingObservation => "transport observation store slot is missing",
             Self::MissingState => "transport commit state store slot is missing",
             Self::UnexpectedEvent => "session transport received an unexpected event",

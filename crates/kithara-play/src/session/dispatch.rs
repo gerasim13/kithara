@@ -4,7 +4,7 @@ use tracing::{debug, trace, warn};
 use super::{
     graph::{controls, lifecycle, player_index, slots, tap},
     protocol::{Cmd, PlayerId, Reply, SessionError, SessionSampleRate},
-    state::{SessionState, register_player},
+    state::{SessionState, detach_deck, register_player},
     transport,
 };
 
@@ -14,7 +14,11 @@ pub fn run_cmd<B: AudioBackend>(state: &mut SessionState<B>, cmd: Cmd) -> Reply 
             bus,
             eq_layout,
             pcm_pool,
-        } => Reply::PlayerRegistered(register_player(state, bus, eq_layout, pcm_pool)),
+            sample_rate,
+        } => match register_player(state, bus, eq_layout, pcm_pool, sample_rate) {
+            Ok(player_id) => Reply::PlayerRegistered(player_id),
+            Err(error) => Reply::Err(error),
+        },
         Cmd::UnregisterPlayer { player_id } => match unregister_player(state, player_id) {
             Ok(()) => Reply::Ok,
             Err(err) => Reply::Err(err),
@@ -140,13 +144,26 @@ fn unregister_player<B: AudioBackend>(
 ) -> Result<(), SessionError> {
     debug!(player_id, "[KITHARA-ROUTE] unregistering player");
     let idx = player_index(state, player_id)?;
-    if state.players[idx].started {
+    let started = state
+        .host
+        .as_ref()
+        .and_then(|host| host.deck(idx))
+        .ok_or_else(|| SessionError::Graph("registered deck is missing".to_owned()))?
+        .started;
+    if started {
         lifecycle::stop_player(state, player_id)?;
     }
-    state.players.remove(idx);
+    let deck_id = state
+        .host
+        .as_ref()
+        .and_then(|host| host.deck(idx))
+        .ok_or_else(|| SessionError::Graph("registered deck is missing".to_owned()))?
+        .map
+        .id();
+    detach_deck(state, deck_id)?;
     debug!(
         player_id,
-        players = state.players.len(),
+        players = state.host.as_ref().map_or(0, super::sync::Host::deck_count),
         "[KITHARA-ROUTE] player unregistered"
     );
     Ok(())
@@ -264,6 +281,7 @@ mod tests {
     use kithara_events::EventBus;
     use kithara_platform::sync::Arc;
     use kithara_test_utils::kithara;
+    use kithara_warp::{BeatMap, SyncGroup};
     use ringbuf::{HeapRb, traits::Split};
 
     use super::*;
@@ -271,7 +289,8 @@ mod tests {
         bridge::MixTapWriter,
         session::{
             protocol::{Cmd, PlayerLevel, Reply, SessionError},
-            state::{MixTap, SessionState},
+            state::{Deck, MixTap, SessionState},
+            sync::Host,
         },
     };
 
@@ -381,19 +400,141 @@ mod tests {
             .map_err(|err| err.to_string())
     }
 
+    fn register_command(sample_rate: u32) -> Cmd {
+        Cmd::RegisterPlayer {
+            bus: EventBus::default(),
+            eq_layout: Vec::new(),
+            pcm_pool: PcmPool::default(),
+            sample_rate,
+        }
+    }
+
     fn register_player(state: &mut SessionState<RouteLossBackend>) -> u64 {
         match run_cmd(
             state,
-            Cmd::RegisterPlayer {
-                bus: EventBus::default(),
-                eq_layout: Vec::new(),
-                pcm_pool: PcmPool::default(),
-            },
+            register_command(SessionState::<RouteLossBackend>::DEFAULT_SAMPLE_RATE),
         ) {
             Reply::PlayerRegistered(id) => id,
             Reply::Err(err) => panic!("player registration failed: {err}"),
             _ => panic!("player registration returned unexpected reply"),
         }
+    }
+
+    fn deck(state: &SessionState<RouteLossBackend>, index: usize) -> &Deck {
+        state
+            .host
+            .as_ref()
+            .and_then(|host| host.deck(index))
+            .expect("the registered deck is present under the host")
+    }
+
+    fn deck_count(state: &SessionState<RouteLossBackend>) -> usize {
+        state.host.as_ref().map_or(0, Host::deck_count)
+    }
+
+    fn deck_by_player_id(state: &SessionState<RouteLossBackend>, player_id: u64) -> &Deck {
+        let host = state.host.as_ref().expect("the host is present");
+        let index = host
+            .deck_index(player_id)
+            .expect("the player has a registered deck");
+        host.deck(index).expect("the registered deck is present")
+    }
+
+    #[kithara::test]
+    fn registration_places_the_canonical_deck_under_the_host() {
+        route_loss(RouteLossProbe::reset);
+        let mut state = SessionState::<RouteLossBackend>::new(start_route_loss_stream);
+        assert!(state.host.is_none());
+
+        let player_id = register_player(&mut state);
+        let host = state.host.as_ref().expect("registration creates the host");
+        let registered = host.topology().expect("the host topology is valid");
+        let host_id = registered.group_map().id();
+        let deck = deck_by_player_id(&state, player_id);
+        let group: &dyn SyncGroup<NestedGroup = Deck> = deck;
+        let deck_topology = group.topology().expect("the deck topology is valid");
+        assert_eq!(registered.members().len(), 1);
+        assert_eq!(registered.members()[0].map().id(), deck.id());
+        assert_eq!(
+            registered.members()[0].group_topology(),
+            Some(&deck_topology)
+        );
+
+        assert!(matches!(
+            run_cmd(
+                &mut state,
+                Cmd::StartPlayer {
+                    player_id,
+                    sample_rate: SessionState::<RouteLossBackend>::DEFAULT_SAMPLE_RATE,
+                    master_volume: 1.0,
+                },
+            ),
+            Reply::Ok
+        ));
+        let host = state.host.as_ref().expect("the host remains installed");
+        assert!(deck_by_player_id(&state, player_id).started);
+        assert_eq!(
+            host.topology().expect("the host topology remains valid"),
+            registered
+        );
+
+        assert!(matches!(
+            run_cmd(&mut state, Cmd::UnregisterPlayer { player_id }),
+            Reply::Ok
+        ));
+
+        let host = state
+            .host
+            .as_ref()
+            .expect("the root owner outlives its last deck");
+        assert_eq!(host.id(), host_id);
+        let detached = host
+            .topology()
+            .expect("the detached session topology is valid");
+        assert!(detached.members().is_empty());
+        assert_eq!(
+            detached.stamp().revision(),
+            registered
+                .stamp()
+                .revision()
+                .checked_next()
+                .expect("the fixture topology revision can advance")
+        );
+        assert_eq!(deck_count(&state), 0);
+    }
+
+    #[kithara::test]
+    fn invalid_registration_leaves_the_session_owner_uninitialized() {
+        let mut state = SessionState::<RouteLossBackend>::new(start_route_loss_stream);
+        let next_player_id = state.next_player_id;
+
+        let reply = run_cmd(&mut state, register_command(0));
+
+        assert!(matches!(
+            reply,
+            Reply::Err(SessionError::InvalidSampleRate(0))
+        ));
+        assert_eq!(state.next_player_id, next_player_id);
+        assert_eq!(deck_count(&state), 0);
+        assert!(state.host.is_none());
+        assert!(state.host_map_generation.is_none());
+    }
+
+    #[kithara::test]
+    fn exhausted_player_identity_leaves_the_session_owner_uninitialized() {
+        let mut state = SessionState::<RouteLossBackend>::new(start_route_loss_stream);
+        state.next_player_id = u64::MAX;
+
+        let reply = run_cmd(
+            &mut state,
+            register_command(SessionState::<RouteLossBackend>::DEFAULT_SAMPLE_RATE),
+        );
+
+        assert!(matches!(reply, Reply::Err(SessionError::PlayerIdExhausted)));
+        assert_eq!(state.next_player_id, u64::MAX);
+        assert_eq!(deck_count(&state), 0);
+        assert!(state.host.is_none());
+        assert!(state.host_map_generation.is_none());
     }
 
     #[kithara::test]
@@ -482,11 +623,11 @@ mod tests {
             "route invalidation must keep the graph context"
         );
         assert!(
-            state.players[0].started,
+            deck(&state, 0).started,
             "route invalidation must keep the player graph logically started"
         );
         assert_eq!(
-            state.players[0].slots.len(),
+            deck(&state, 0).slots.len(),
             1,
             "route invalidation must not drop active slots"
         );
@@ -495,7 +636,7 @@ mod tests {
             Reply::SlotAllocated(..)
         ));
         assert_eq!(
-            state.players[0].slots.len(),
+            deck(&state, 0).slots.len(),
             2,
             "session must accept future slots after explicit route restart"
         );
@@ -521,7 +662,7 @@ mod tests {
             Reply::Ok
         ));
         assert!(state.ctx.is_some());
-        assert!(state.players[0].started);
+        assert!(deck(&state, 0).started);
         assert_eq!(
             route_loss(|probe| probe.start_count.load(Ordering::SeqCst)),
             1
@@ -530,7 +671,7 @@ mod tests {
             run_cmd(&mut state, Cmd::AllocateSlot { player_id }),
             Reply::SlotAllocated(..)
         ));
-        assert_eq!(state.players[0].slots.len(), 1);
+        assert_eq!(deck(&state, 0).slots.len(), 1);
 
         route_loss(|probe| probe.fail_next_poll.store(true, Ordering::SeqCst));
         assert!(matches!(run_cmd(&mut state, Cmd::Tick), Reply::Ok));
@@ -549,11 +690,11 @@ mod tests {
             "session output node id must survive stream restart"
         );
         assert!(
-            state.players[0].started,
+            deck(&state, 0).started,
             "player graph must remain logically started after stream restart"
         );
         assert_eq!(
-            state.players[0].slots.len(),
+            deck(&state, 0).slots.len(),
             1,
             "active slot graph must survive stream restart"
         );
@@ -562,7 +703,7 @@ mod tests {
             Reply::SlotAllocated(..)
         ));
         assert_eq!(
-            state.players[0].slots.len(),
+            deck(&state, 0).slots.len(),
             2,
             "session must accept a future slot after route-loss reinit"
         );
@@ -620,7 +761,7 @@ mod tests {
             "next tick must retry the stream restart"
         );
         assert!(!state.stream_needs_restart);
-        assert!(state.players[0].started);
+        assert!(deck(&state, 0).started);
     }
 
     fn start_player_cmd(state: &mut SessionState<RouteLossBackend>, player_id: u64) {
@@ -639,8 +780,10 @@ mod tests {
 
     fn master_volume_of(state: &SessionState<RouteLossBackend>, player_id: u64) -> f32 {
         state
-            .players
-            .iter()
+            .host
+            .as_ref()
+            .expect("the session host is present")
+            .decks()
             .find(|player| player.player_id == player_id)
             .expect("player present")
             .master_volume

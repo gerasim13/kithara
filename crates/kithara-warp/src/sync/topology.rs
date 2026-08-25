@@ -2,47 +2,60 @@ use std::collections::BTreeSet;
 
 use kithara_platform::sync::Arc;
 
-use super::{
-    AlignmentPlan, AlignmentRequest, BeatAlignment, PlanTransition, PresentationFrontier,
-    SyncError, TopologyRevision, TopologyStamp,
-};
-use crate::{BeatMap, BeatMapId, BeatMapSnapshot, MapStamp};
+use super::{BeatAlignment, TopologyRevision, TopologyStamp};
+use crate::{BeatMapId, BeatMapSnapshot, MapStamp};
 
 /// One immutable observation of a direct live member.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, fieldwork::Fieldwork)]
+#[fieldwork(opt_in, get)]
 #[non_exhaustive]
 pub struct SyncMemberSnapshot {
+    /// Returns the alignment edge from the direct parent.
+    #[field(get, copy)]
     alignment: Option<BeatAlignment>,
+    /// Returns the direct member's frozen map.
+    #[field(get)]
     map: BeatMapSnapshot,
+    /// Returns the frozen nested topology when this member is a group.
+    #[field(get = group_topology)]
     group: Option<SyncGroupSnapshot>,
 }
 
 impl SyncMemberSnapshot {
-    /// Returns the direct member's frozen map.
+    /// Freezes one ordinary map edge, including a pending edge without alignment.
     #[must_use]
-    pub const fn map(&self) -> &BeatMapSnapshot {
-        &self.map
+    pub const fn new_map(map: BeatMapSnapshot, alignment: Option<BeatAlignment>) -> Self {
+        Self {
+            alignment,
+            map,
+            group: None,
+        }
     }
 
-    /// Returns the alignment edge from the direct parent.
+    /// Freezes one nested group edge, including a pending edge without alignment.
     #[must_use]
-    pub const fn alignment(&self) -> Option<BeatAlignment> {
-        self.alignment
-    }
-
-    /// Returns the frozen nested topology when this member is a group.
-    #[must_use]
-    pub const fn group_topology(&self) -> Option<&SyncGroupSnapshot> {
-        self.group.as_ref()
+    pub fn new_group(group: SyncGroupSnapshot, alignment: Option<BeatAlignment>) -> Self {
+        Self {
+            alignment,
+            map: group.group_map.clone(),
+            group: Some(group),
+        }
     }
 }
 
 /// One immutable observation of a synchronization group's map and members.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, fieldwork::Fieldwork)]
+#[fieldwork(opt_in, get)]
 #[non_exhaustive]
 pub struct SyncGroupSnapshot {
+    /// Returns the group's authoritative musical-coordinate snapshot.
+    #[field(get)]
     group_map: BeatMapSnapshot,
+    /// Returns the topology identity and revision.
+    #[field(get, copy)]
     stamp: TopologyStamp,
+    /// Returns the direct members frozen into this topology revision.
+    #[field(get)]
     members: Arc<[SyncMemberSnapshot]>,
 }
 
@@ -69,45 +82,6 @@ impl SyncGroupSnapshot {
             group_map,
             members,
         })
-    }
-
-    /// Returns the group's authoritative musical-coordinate snapshot.
-    #[must_use]
-    pub const fn group_map(&self) -> &BeatMapSnapshot {
-        &self.group_map
-    }
-
-    /// Returns the topology identity and revision.
-    #[must_use]
-    pub const fn stamp(&self) -> TopologyStamp {
-        self.stamp
-    }
-
-    /// Returns the direct members frozen into this topology revision.
-    #[must_use]
-    pub fn members(&self) -> &[SyncMemberSnapshot] {
-        &self.members
-    }
-}
-
-impl BeatMap for SyncGroupSnapshot {
-    delegate::delegate! {
-        to self.group_map {
-            fn id(&self) -> BeatMapId;
-            #[call(clone)]
-            fn snapshot(&self) -> BeatMapSnapshot;
-            fn align_to(
-                &self,
-                target: &dyn BeatMap,
-                request: AlignmentRequest,
-            ) -> Result<AlignmentPlan, SyncError>;
-            fn reconcile_to(
-                &self,
-                target: &dyn BeatMap,
-                active: &AlignmentPlan,
-                frontier: PresentationFrontier,
-            ) -> Result<PlanTransition, SyncError>;
-        }
     }
 }
 

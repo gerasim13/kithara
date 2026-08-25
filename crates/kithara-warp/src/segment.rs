@@ -33,11 +33,25 @@ impl BeatsPerMinute {
 }
 
 /// A beats-per-bar relation anchored to one canonical downbeat ordinal.
-#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, derive_more::Display)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    Hash,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    derive_more::Display,
+    fieldwork::Fieldwork,
+)]
 #[display("{beats_per_bar}@{downbeat}")]
+#[fieldwork(opt_in, get)]
 #[non_exhaustive]
 pub struct Meter {
     beats_per_bar: NonZeroU16,
+    /// Returns the beat ordinal defining bar phase for this meter region.
+    #[field(get, copy)]
     downbeat: BeatOrdinal,
 }
 
@@ -74,12 +88,6 @@ impl Meter {
     pub const fn beats_per_bar(self) -> u16 {
         self.beats_per_bar.get()
     }
-
-    /// Returns the beat ordinal defining bar phase for this meter region.
-    #[must_use]
-    pub const fn downbeat(self) -> BeatOrdinal {
-        self.downbeat
-    }
 }
 
 /// A meter cannot contain zero beats per bar.
@@ -88,10 +96,15 @@ impl Meter {
 pub struct MeterError;
 
 /// An endpoint supplied by an analyzer before segment validation.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, fieldwork::Fieldwork)]
+#[fieldwork(opt_in, get)]
 #[non_exhaustive]
 pub struct BeatMarker {
+    /// Returns the map-native marker position.
+    #[field(get, copy)]
     position: MapPosition,
+    /// Returns the explicit musical ordinal, when known.
+    #[field(get, copy)]
     ordinal: Option<BeatOrdinal>,
     evidence: BeatEvidence,
     uncertainty: FrameUncertainty,
@@ -115,18 +128,6 @@ impl BeatMarker {
             evidence,
             uncertainty,
         }
-    }
-
-    /// Returns the map-native marker position.
-    #[must_use]
-    pub const fn position(self) -> MapPosition {
-        self.position
-    }
-
-    /// Returns the explicit musical ordinal, when known.
-    #[must_use]
-    pub const fn ordinal(self) -> Option<BeatOrdinal> {
-        self.ordinal
     }
 }
 
@@ -405,26 +406,19 @@ impl MapSegment {
 }
 
 /// An inclusive map-native position region.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, fieldwork::Fieldwork)]
+#[fieldwork(opt_in, get)]
 #[non_exhaustive]
 pub struct MapRegion {
+    /// Returns the first position in the region.
+    #[field(get, copy)]
     start: MapPosition,
+    /// Returns the last position in the region.
+    #[field(get, copy)]
     end: MapPosition,
 }
 
 impl MapRegion {
-    /// Returns the first position in the region.
-    #[must_use]
-    pub const fn start(self) -> MapPosition {
-        self.start
-    }
-
-    /// Returns the last position in the region.
-    #[must_use]
-    pub const fn end(self) -> MapPosition {
-        self.end
-    }
-
     pub(crate) const fn point(position: MapPosition) -> Self {
         Self {
             start: position,
@@ -447,6 +441,8 @@ impl MapRegion {
 pub struct SegmentSet {
     #[field(get, vis = "pub(crate)", copy)]
     axis: MapAxis,
+    /// Returns all validated segments in coordinate order.
+    #[field(get)]
     segments: Arc<[MapSegment]>,
 }
 
@@ -503,10 +499,11 @@ impl SegmentSet {
         })
     }
 
-    /// Returns all validated segments in coordinate order.
-    #[must_use]
-    pub fn segments(&self) -> &[MapSegment] {
-        &self.segments
+    pub(crate) fn empty(axis: MapAxis) -> Self {
+        Self {
+            axis,
+            segments: Arc::from([]),
+        }
     }
 
     pub(crate) fn by_position(&self, position: MapPosition) -> Option<&MapSegment> {

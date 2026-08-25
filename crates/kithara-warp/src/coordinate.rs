@@ -317,10 +317,15 @@ impl From<SessionFrame> for MapPosition {
 }
 
 /// A coordinate value tied to one exact map identity and revision.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, fieldwork::Fieldwork)]
+#[fieldwork(opt_in, get)]
 #[non_exhaustive]
 pub struct MapPoint<T> {
+    /// Returns the map identity and revision carried by this point.
+    #[field(get, copy)]
     stamp: MapStamp,
+    /// Returns the stamped value.
+    #[field(get)]
     value: T,
 }
 
@@ -329,18 +334,6 @@ impl<T> MapPoint<T> {
     #[must_use]
     pub const fn new(stamp: MapStamp, value: T) -> Self {
         Self { stamp, value }
-    }
-
-    /// Returns the map identity and revision carried by this point.
-    #[must_use]
-    pub const fn stamp(&self) -> MapStamp {
-        self.stamp
-    }
-
-    /// Returns the stamped value.
-    #[must_use]
-    pub const fn value(&self) -> &T {
-        &self.value
     }
 }
 

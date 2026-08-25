@@ -9,26 +9,19 @@ use super::{
 use crate::SessionFrame;
 
 /// Exact half-open decoded source-frame range.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, fieldwork::Fieldwork)]
+#[fieldwork(opt_in, get)]
 #[non_exhaustive]
 pub struct SourceFrameRange {
+    /// Returns the inclusive source-frame boundary.
+    #[field(get, copy)]
     start: u64,
+    /// Returns the exclusive source-frame boundary.
+    #[field(get, copy)]
     end: u64,
 }
 
 impl SourceFrameRange {
-    /// Returns the inclusive source-frame boundary.
-    #[must_use]
-    pub const fn start(self) -> u64 {
-        self.start
-    }
-
-    /// Returns the exclusive source-frame boundary.
-    #[must_use]
-    pub const fn end(self) -> u64 {
-        self.end
-    }
-
     fn len(self) -> u64 {
         self.end - self.start
     }
@@ -74,86 +67,56 @@ pub enum AlignmentTransition {
 }
 
 /// Facts required to align one map with another at a stamped render boundary.
-#[derive(Clone, Copy, Debug, PartialEq, Builder)]
+#[derive(Clone, Copy, Debug, PartialEq, Builder, fieldwork::Fieldwork)]
 #[builder(state_mod(vis = "pub"))]
+#[fieldwork(opt_in, get)]
 #[non_exhaustive]
 pub struct AlignmentRequest {
     /// Synchronization operation being planned.
+    #[field(get, copy)]
     operation: SyncOperationId,
     /// Stable-deck load generation being planned.
+    #[field(get, copy)]
     load: LoadGeneration,
     /// Exact group topology being planned.
+    #[field(get, copy)]
     topology: TopologyStamp,
     /// Exact session transport revision being planned.
+    #[field(get, copy)]
     transport: TransportRevision,
     /// Stamped source-to-target beat correspondence.
+    #[field(get, copy)]
     alignment: BeatAlignment,
     /// Whether the source is prepared or already audible.
+    #[field(get, copy)]
     source: AlignmentSource,
     /// Exact output frame at which the plan may take effect.
+    #[field(get, copy)]
     activation: SessionFrame,
     /// Required continuity behavior.
+    #[field(get, copy)]
     transition: AlignmentTransition,
 }
 
-impl AlignmentRequest {
-    /// Returns the synchronization operation being planned.
-    #[must_use]
-    pub const fn operation(self) -> SyncOperationId {
-        self.operation
-    }
-
-    /// Returns the stable-deck load generation being planned.
-    #[must_use]
-    pub const fn load(self) -> LoadGeneration {
-        self.load
-    }
-
-    /// Returns the exact group topology being planned.
-    #[must_use]
-    pub const fn topology(self) -> TopologyStamp {
-        self.topology
-    }
-
-    /// Returns the exact session transport revision being planned.
-    #[must_use]
-    pub const fn transport(self) -> TransportRevision {
-        self.transport
-    }
-
-    /// Returns the source-to-target beat correspondence.
-    #[must_use]
-    pub const fn alignment(self) -> BeatAlignment {
-        self.alignment
-    }
-
-    /// Returns whether PCM is prepared or already audible.
-    #[must_use]
-    pub const fn source(self) -> AlignmentSource {
-        self.source
-    }
-
-    /// Returns the exact output frame at which the plan may take effect.
-    #[must_use]
-    pub const fn activation(self) -> SessionFrame {
-        self.activation
-    }
-
-    /// Returns the required continuity behavior.
-    #[must_use]
-    pub const fn transition(self) -> AlignmentTransition {
-        self.transition
-    }
-}
-
 /// One immutable finite map-to-map render plan.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, fieldwork::Fieldwork)]
+#[fieldwork(opt_in, get)]
 #[non_exhaustive]
 pub struct AlignmentPlan {
+    /// Returns the complete stamped request compiled into this plan.
+    #[field(get, copy)]
     request: AlignmentRequest,
+    /// Returns the immutable plan revision.
+    #[field(get, copy)]
     revision: AlignmentPlanRevision,
+    /// Returns the finite decoded-source coverage of this plan.
+    #[field(get, copy)]
     source: SourceFrameRange,
+    /// Returns the finite session-output coverage of this plan.
+    #[field(get)]
     output: Range<SessionFrame>,
+    /// Returns a fresh renderer-local cursor at the plan's first boundary.
+    #[field(get, copy)]
     cursor: AlignmentCursor,
 }
 
@@ -170,7 +133,7 @@ pub enum PlanTransition {
 
 /// Immutable allocation-free frame-span protocol for a resident renderer.
 /// The caller owns mutable progress and reusable span storage.
-pub trait RenderPlan {
+pub trait WarpPlan {
     /// Peeks the next exact render span without advancing `cursor`.
     ///
     /// # Errors
@@ -260,39 +223,9 @@ impl AlignmentPlan {
             cursor,
         })
     }
-
-    /// Returns a fresh renderer-local cursor at the plan's first boundary.
-    #[must_use]
-    pub const fn cursor(&self) -> AlignmentCursor {
-        self.cursor
-    }
-
-    /// Returns the immutable plan revision.
-    #[must_use]
-    pub const fn revision(&self) -> AlignmentPlanRevision {
-        self.revision
-    }
-
-    /// Returns the complete stamped request compiled into this plan.
-    #[must_use]
-    pub const fn request(&self) -> AlignmentRequest {
-        self.request
-    }
-
-    /// Returns the finite decoded-source coverage of this plan.
-    #[must_use]
-    pub const fn source(&self) -> SourceFrameRange {
-        self.source
-    }
-
-    /// Returns the finite session-output coverage of this plan.
-    #[must_use]
-    pub const fn output(&self) -> &Range<SessionFrame> {
-        &self.output
-    }
 }
 
-impl RenderPlan for AlignmentPlan {
+impl WarpPlan for AlignmentPlan {
     fn next_span<'a>(
         &self,
         cursor: &AlignmentCursor,
@@ -398,45 +331,33 @@ pub enum PlanSpan<'a> {
 }
 
 /// One bounded exact-span request ready for the RT renderer.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, fieldwork::Fieldwork)]
+#[fieldwork(opt_in, get)]
 #[non_exhaustive]
 pub struct PlannedRenderSpan {
     request: AlignmentRequest,
     plan: AlignmentPlanRevision,
+    /// Returns the exact session output-frame range.
+    #[field(get)]
     output: Range<SessionFrame>,
+    /// Returns the required half-open decoded source-frame range.
+    #[field(get, copy)]
     source: SourceFrameRange,
 }
 
-impl PlannedRenderSpan {
-    /// Returns the exact session output-frame range.
-    #[must_use]
-    pub const fn output(&self) -> &Range<SessionFrame> {
-        &self.output
-    }
-
-    /// Returns the required half-open decoded source-frame range.
-    #[must_use]
-    pub const fn source(&self) -> SourceFrameRange {
-        self.source
-    }
-}
-
 /// The only mutable renderer-local progress through one immutable alignment plan.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, fieldwork::Fieldwork)]
+#[fieldwork(opt_in, get)]
 #[non_exhaustive]
 pub struct AlignmentCursor {
+    /// Returns the exact committed source/output boundary.
+    #[field(get, copy)]
     frontier: RenderFrontier,
     request: AlignmentRequest,
     revision: AlignmentPlanRevision,
 }
 
 impl AlignmentCursor {
-    /// Returns the exact committed source/output boundary.
-    #[must_use]
-    pub const fn frontier(&self) -> RenderFrontier {
-        self.frontier
-    }
-
     /// Advances only renderer-local progress after a complete final-ring push.
     /// This is rendered progress, not callback presentation proof.
     ///

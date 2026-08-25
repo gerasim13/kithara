@@ -1,7 +1,7 @@
 use super::{
     AlignmentPlan, AlignmentRequest, BeatMap, BeatMapId, BeatMapRevision, BeatMapSnapshot,
     HostAxis, HostEpoch, MapAxis, MapStamp, MeterFacts, PlanTransition, PresentationFrontier,
-    SessionAnchor, SyncError,
+    SessionAnchor, SyncCapability, SyncError,
 };
 use crate::beat_map::BeatMapGeometry;
 
@@ -71,17 +71,27 @@ impl BeatMap for HostBeatMap {
             fn id(&self) -> BeatMapId;
             #[call(clone)]
             fn snapshot(&self) -> BeatMapSnapshot;
-            fn align_to(
-                &self,
-                target: &dyn BeatMap,
-                request: AlignmentRequest,
-            ) -> Result<AlignmentPlan, SyncError>;
-            fn reconcile_to(
-                &self,
-                target: &dyn BeatMap,
-                active: &AlignmentPlan,
-                frontier: PresentationFrontier,
-            ) -> Result<PlanTransition, SyncError>;
         }
+    }
+
+    fn align_to(
+        &self,
+        _target: &dyn BeatMap,
+        _request: AlignmentRequest,
+    ) -> Result<AlignmentPlan, SyncError> {
+        Err(SyncError::CapabilityUnavailable {
+            capability: SyncCapability::Alignment,
+        })
+    }
+
+    fn reconcile_to(
+        &self,
+        _target: &dyn BeatMap,
+        _active: &AlignmentPlan,
+        _frontier: PresentationFrontier,
+    ) -> Result<PlanTransition, SyncError> {
+        Err(SyncError::CapabilityUnavailable {
+            capability: SyncCapability::Reconciliation,
+        })
     }
 }

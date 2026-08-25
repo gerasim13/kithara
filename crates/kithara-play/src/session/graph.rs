@@ -1,3 +1,5 @@
+use std::num::NonZeroU32;
+
 use firewheel::{
     FirewheelCtx, Volume, backend::AudioBackend, diff::Memo,
     dsp::volume::amp_to_linear_volume_clamped, node::NodeID, nodes::volume::VolumeNode,
@@ -7,7 +9,8 @@ use tracing::{debug, warn};
 
 use super::{
     protocol::{AllocatedSlot, PlayerId, PlayerLevel, Reply, SessionError},
-    state::{MixTap, PlayerState, SessionState, SlotNodes, ensure_ctx, prepare_eq_layout},
+    state::{Deck, MixTap, SessionState, SlotNodes, ensure_ctx, prepare_eq_layout},
+    sync::Host,
     transport::SessionTransportState,
 };
 use crate::{
@@ -32,13 +35,27 @@ pub(super) fn player_index<B: AudioBackend>(
     player_id: PlayerId,
 ) -> Result<usize, SessionError> {
     state
-        .players
-        .iter()
-        .position(|player| player.player_id == player_id)
+        .host
+        .as_ref()
+        .and_then(|host| host.deck_index(player_id))
         .ok_or(SessionError::PlayerNotFound(player_id))
 }
 fn graph_state(message: &'static str) -> SessionError {
     SessionError::Graph(message.into())
+}
+
+fn deck_at<B: AudioBackend>(state: &SessionState<B>, index: usize) -> Result<&Deck, SessionError> {
+    state
+        .host
+        .as_ref()
+        .and_then(|host| host.deck(index))
+        .ok_or_else(|| graph_state("player index out of range"))
+}
+
+fn deck_at_mut(host: &mut Option<Host>, index: usize) -> Result<&mut Deck, SessionError> {
+    host.as_mut()
+        .and_then(|host| host.deck_mut(index))
+        .ok_or_else(|| graph_state("player index out of range"))
 }
 fn connect_stereo<B: AudioBackend>(
     fw_ctx: &mut FirewheelCtx<B>,
@@ -131,11 +148,12 @@ pub(super) mod lifecycle {
         );
         ensure_ctx(state, sample_rate)?;
         let idx = player_index(state, player_id)?;
-        let fw_ctx = state.ctx.as_mut().ok_or(SessionError::NoContext)?;
         let Some(session_output_id) = state.session_output_node_id else {
             return Err(graph_state("session output node is not initialised"));
         };
-        let player = &mut state.players[idx];
+        let (ctx, host) = (&mut state.ctx, &mut state.host);
+        let fw_ctx = ctx.as_mut().ok_or(SessionError::NoContext)?;
+        let player = deck_at_mut(host, idx)?;
         if player.started {
             return Err(SessionError::AlreadyStarted(player_id));
         }
@@ -189,15 +207,13 @@ pub(super) mod lifecycle {
         state: &mut SessionState<B>,
         idx: usize,
     ) -> Result<(), SessionError> {
-        if idx >= state.players.len() {
-            return Err(graph_state("player index out of range"));
-        }
         {
-            let player = &mut state.players[idx];
+            let (ctx, host) = (&mut state.ctx, &mut state.host);
+            let player = deck_at_mut(host, idx)?;
             if !player.started {
                 return Err(SessionError::NotRunning(player.player_id));
             }
-            if let Some(ref mut fw_ctx) = state.ctx {
+            if let Some(fw_ctx) = ctx {
                 remove_player_graph(fw_ctx, player);
                 if let Err(err) = fw_ctx.update() {
                     warn!(
@@ -210,19 +226,55 @@ pub(super) mod lifecycle {
             }
             player.started = false;
         }
-        shutdown_if_idle(state);
+        shutdown_if_idle(state)?;
         debug!("[KITHARA-ROUTE] player stopped");
         Ok(())
     }
     /// Release the output device once no player is left to feed it. A media
     /// app that has stopped playing must not keep the platform's output
     /// engaged; the next `start_player` builds a fresh context.
-    fn shutdown_if_idle<B: AudioBackend>(state: &mut SessionState<B>) {
-        if state.players.iter().all(|player| !player.started) {
+    fn shutdown_if_idle<B: AudioBackend>(state: &mut SessionState<B>) -> Result<(), SessionError> {
+        let idle = state
+            .host
+            .as_ref()
+            .is_none_or(|host| host.decks().all(|deck| !deck.started));
+        if idle {
             debug!("[KITHARA-ROUTE] shutting down idle session stream");
-            if let Some(ref mut fw_ctx) = state.ctx {
-                fw_ctx.stop_stream();
+            if state.ctx.is_none() {
+                return Err(SessionError::NoContext);
             }
+            let mut host_map_generation = state
+                .transport_control
+                .as_mut()
+                .ok_or_else(|| {
+                    graph_state("session transport control is missing during idle shutdown")
+                })?
+                .observation()
+                .host_map();
+            // Backends may defer processor drop after `stop_stream`. Reserve a
+            // successor before stopping so teardown never depends on the RT
+            // `stream_stopped` callback reaching this control handle. Control
+            // admits at most one unobserved commit; the next context advances
+            // once more before publishing.
+            host_map_generation
+                .advance_restart()
+                .map_err(|error| graph_state(error.message()))?;
+            let host_stamp = host_map_generation
+                .stamp()
+                .map_err(|error| graph_state(error.message()))?;
+            let sample_rate = NonZeroU32::new(state.sample_rate_hint)
+                .ok_or(SessionError::InvalidSampleRate(state.sample_rate_hint))?;
+            state
+                .host
+                .as_mut()
+                .ok_or_else(|| graph_state("session host group is missing during idle shutdown"))?
+                .publish_unavailable(host_stamp, sample_rate, host_map_generation.epoch())?;
+            state.host_map_generation = Some(host_map_generation);
+            state
+                .ctx
+                .as_mut()
+                .ok_or(SessionError::NoContext)?
+                .stop_stream();
             state.ctx = None;
             state.transport_control = None;
             state.mix_tap = None;
@@ -231,10 +283,11 @@ pub(super) mod lifecycle {
             state.session_output_memo = None;
             state.session_limiter_node_id = None;
         }
+        Ok(())
     }
     pub(super) fn remove_player_graph<B: AudioBackend>(
         fw_ctx: &mut FirewheelCtx<B>,
-        player: &mut PlayerState,
+        player: &mut Deck,
     ) {
         let player_id = player.player_id;
         for slot in player.slots.drain(..) {
@@ -257,7 +310,7 @@ pub(super) mod lifecycle {
         }
         clear_player_graph_state(player);
     }
-    pub(super) fn clear_player_graph_state(player: &mut PlayerState) {
+    pub(super) fn clear_player_graph_state(player: &mut Deck) {
         player.master_eq_memo = None;
         player.master_volume_memo = None;
     }
@@ -272,19 +325,21 @@ pub(super) mod slots {
     ) -> Result<Reply, SessionError> {
         debug!(player_id, "[KITHARA-ROUTE] allocating player slot");
         let idx = player_index(state, player_id)?;
-        if !state.players[idx].started {
+        if !deck_at(state, idx)?.started {
             return Err(SessionError::NotRunning(player_id));
         }
-        let (fw_ctx, master_eq_id) = match (&mut state.ctx, state.players[idx].master_eq_node_id) {
+        let master_eq_id = deck_at(state, idx)?.master_eq_node_id;
+        let (fw_ctx, master_eq_id) = match (&mut state.ctx, master_eq_id) {
             (None, _) => return Err(SessionError::NoContext),
             (Some(_), None) => return Err(graph_state("player master eq node is not initialised")),
             (Some(fw_ctx), Some(master_eq_id)) => (fw_ctx, master_eq_id),
         };
-        let slot_id = SlotId::new(state.players[idx].next_slot_id);
-        state.players[idx].next_slot_id += 1;
-        let shared_eq = state.players[idx].shared_eq.clone();
+        let player = deck_at_mut(&mut state.host, idx)?;
+        let slot_id = SlotId::new(player.next_slot_id);
+        player.next_slot_id += 1;
+        let shared_eq = player.shared_eq.clone();
         let (inputs, control) = slot_channels(shared_eq);
-        let player_node = PlayerNode::new(inputs, state.players[idx].pcm_pool.clone());
+        let player_node = PlayerNode::new(inputs, player.pcm_pool.clone());
         let player_node_id = fw_ctx.add_node(player_node, None);
         let slot_volume = VolumeNode::from_linear(1.0);
         let slot_volume_memo = Memo::new(slot_volume);
@@ -300,7 +355,7 @@ pub(super) mod slots {
                 "graph update after slot allocate failed: {err:?}"
             );
         }
-        state.players[idx].slots.push(SlotNodes {
+        player.slots.push(SlotNodes {
             slot_id,
             player_node_id,
             volume_memo: slot_volume_memo,
@@ -311,7 +366,7 @@ pub(super) mod slots {
             ?slot_id,
             ?player_node_id,
             ?slot_volume_id,
-            slots = state.players[idx].slots.len(),
+            slots = player.slots.len(),
             "[KITHARA-ROUTE] player slot allocated"
         );
         let reply = Reply::SlotAllocated(AllocatedSlot {
@@ -328,7 +383,7 @@ pub(super) mod slots {
         debug!(player_id, ?slot, "[KITHARA-ROUTE] releasing player slot");
         let idx = player_index(state, player_id)?;
         let slot_nodes = {
-            let player = &mut state.players[idx];
+            let player = deck_at_mut(&mut state.host, idx)?;
             if !player.started {
                 return Err(SessionError::NotRunning(player_id));
             }
@@ -343,10 +398,7 @@ pub(super) mod slots {
         );
         Ok(())
     }
-    pub(super) fn take_slot(
-        player: &mut PlayerState,
-        slot: SlotId,
-    ) -> Result<SlotNodes, SessionError> {
+    pub(super) fn take_slot(player: &mut Deck, slot: SlotId) -> Result<SlotNodes, SessionError> {
         let Some(slot_idx) = player.slots.iter().position(|s| s.slot_id == slot) else {
             return Err(SessionError::SlotNotFound(slot));
         };
@@ -389,7 +441,7 @@ pub(super) mod controls {
             }
             // Checked here so the apply pass below is infallible
             // (all-or-nothing).
-            let player = &state.players[idx];
+            let player = deck_at(state, idx)?;
             if player.started
                 && (state.ctx.is_none()
                     || player.master_volume_node_id.is_none()
@@ -400,16 +452,21 @@ pub(super) mod controls {
             resolved.push((idx, level));
         }
         for &(idx, level) in &resolved {
-            apply_master_volume(state, idx, level);
+            apply_master_volume(state, idx, level)?;
         }
         Ok(())
     }
 
-    fn apply_master_volume<B: AudioBackend>(state: &mut SessionState<B>, idx: usize, volume: f32) {
-        state.players[idx].master_volume = volume;
-        let player = &mut state.players[idx];
+    fn apply_master_volume<B: AudioBackend>(
+        state: &mut SessionState<B>,
+        idx: usize,
+        volume: f32,
+    ) -> Result<(), SessionError> {
+        let (ctx, host) = (&mut state.ctx, &mut state.host);
+        let player = deck_at_mut(host, idx)?;
+        player.master_volume = volume;
         if let (Some(fw_ctx), Some(master_id), Some(memo)) = (
-            &mut state.ctx,
+            ctx,
             player.master_volume_node_id,
             &mut player.master_volume_memo,
         ) {
@@ -417,6 +474,7 @@ pub(super) mod controls {
             let mut queue = fw_ctx.event_queue(master_id);
             memo.update_memo(&mut queue);
         }
+        Ok(())
     }
     pub(in crate::session) fn set_player_slot_volume<B: AudioBackend>(
         state: &mut SessionState<B>,
@@ -425,17 +483,18 @@ pub(super) mod controls {
         volume: f32,
     ) -> Result<(), SessionError> {
         let idx = player_index(state, player_id)?;
-        if !state.players[idx].started {
+        if !deck_at(state, idx)?.started {
             return Err(SessionError::NotRunning(player_id));
         }
-        let Some(slot_nodes) = state.players[idx]
+        let (ctx, host) = (&mut state.ctx, &mut state.host);
+        let Some(slot_nodes) = deck_at_mut(host, idx)?
             .slots
             .iter_mut()
             .find(|s| s.slot_id == slot)
         else {
             return Err(SessionError::SlotNotFound(slot));
         };
-        let fw_ctx = state.ctx.as_mut().ok_or(SessionError::NoContext)?;
+        let fw_ctx = ctx.as_mut().ok_or(SessionError::NoContext)?;
         slot_nodes.volume_memo.volume = Volume::Linear(volume.clamp(0.0, 1.0));
         let mut queue = fw_ctx.event_queue(slot_nodes.volume_node_id);
         slot_nodes.volume_memo.update_memo(&mut queue);
@@ -448,11 +507,12 @@ pub(super) mod controls {
         gain_db: f32,
     ) -> Result<(), SessionError> {
         let idx = player_index(state, player_id)?;
-        if !state.players[idx].started {
+        if !deck_at(state, idx)?.started {
             return Err(SessionError::NotRunning(player_id));
         }
-        let player = &mut state.players[idx];
-        let fw_ctx = state.ctx.as_mut().ok_or(SessionError::NoContext)?;
+        let (ctx, host) = (&mut state.ctx, &mut state.host);
+        let player = deck_at_mut(host, idx)?;
+        let fw_ctx = ctx.as_mut().ok_or(SessionError::NoContext)?;
         let Some(master_eq_id) = player.master_eq_node_id else {
             return Err(graph_state("player master eq node is not initialised"));
         };
@@ -477,15 +537,15 @@ pub(super) mod controls {
     ) -> Result<(), SessionError> {
         let idx = player_index(state, player_id)?;
         let (eq_layout, gains) = prepare_eq_layout(eq_layout);
-        if !state.players[idx].started {
-            let player = &mut state.players[idx];
+        if !deck_at(state, idx)?.started {
+            let player = deck_at_mut(&mut state.host, idx)?;
             player.eq_layout = eq_layout;
             player.shared_eq.replace(&gains);
             return Ok(());
         }
 
         let (old_eq_id, master_volume_id, slot_volume_ids) = {
-            let player = &state.players[idx];
+            let player = deck_at(state, idx)?;
             let old_eq_id = player
                 .master_eq_node_id
                 .ok_or_else(|| graph_state("player master eq node is not initialised"))?;
@@ -544,7 +604,7 @@ pub(super) mod controls {
             );
         }
 
-        let player = &mut state.players[idx];
+        let player = deck_at_mut(&mut state.host, idx)?;
         player.eq_layout = eq_layout;
         player.shared_eq.replace(&gains);
         player.master_eq_node_id = Some(master_eq_id);
@@ -580,9 +640,19 @@ mod tests {
     use kithara_events::EventBus;
     use kithara_platform::time::{Duration, Instant};
     use kithara_test_utils::kithara;
+    use kithara_warp::{
+        Beat, BeatMap, BeatMapRevision, HostAxis, HostEpoch, MapAxis, MapPoint, MapQuery, MapState,
+        MapUnavailable,
+    };
 
     use super::*;
-    use crate::session::{dispatch::run_cmd, protocol::Cmd};
+    use crate::{
+        api::{SessionTransportSnapshot, Tempo},
+        session::{
+            dispatch::{invalidate_audio_route, run_cmd},
+            protocol::Cmd,
+        },
+    };
 
     const BLOCK_FRAMES: usize = 128;
 
@@ -590,6 +660,8 @@ mod tests {
     #[derive(Default)]
     struct AudioDevice {
         processor: Option<FirewheelProcessor<TestBackend>>,
+        retired_processors: Vec<FirewheelProcessor<TestBackend>>,
+        defer_processor_drop: bool,
         next_stream: u64,
         owner: u64,
     }
@@ -610,7 +682,10 @@ mod tests {
         fn drop(&mut self) {
             device(|dev| {
                 if dev.owner == self.stream {
-                    dev.processor = None;
+                    let processor = dev.processor.take();
+                    if dev.defer_processor_drop {
+                        dev.retired_processors.extend(processor);
+                    }
                 }
             });
         }
@@ -729,6 +804,7 @@ mod tests {
                 bus: EventBus::default(),
                 eq_layout: generate_log_spaced_bands(5),
                 pcm_pool: PcmPool::default(),
+                sample_rate: SessionState::<TestBackend>::DEFAULT_SAMPLE_RATE,
             },
         ) {
             Reply::PlayerRegistered(id) => id,
@@ -760,6 +836,26 @@ mod tests {
         }
     }
 
+    fn set_tempo_and_read_host_map(
+        state: &mut SessionState<TestBackend>,
+    ) -> SessionTransportSnapshot {
+        assert!(matches!(
+            run_cmd(
+                state,
+                Cmd::SetSessionTempo {
+                    tempo: Tempo::new(120.0).expect("invariant: fixture tempo is valid"),
+                },
+            ),
+            Reply::Ok
+        ));
+        assert!(deliver_one_block(), "transport commit must be rendered");
+        match run_cmd(state, Cmd::QuerySessionTransport) {
+            Reply::SessionTransport(snapshot) => snapshot,
+            Reply::Err(error) => panic!("transport snapshot failed: {error}"),
+            _ => panic!("transport query returned an unexpected reply"),
+        }
+    }
+
     #[kithara::test]
     fn a_running_player_replaces_its_eq_layout_without_releasing_slots() {
         device(|dev| *dev = AudioDevice::default());
@@ -771,8 +867,12 @@ mod tests {
             Reply::Err(err) => panic!("slot allocation failed: {err}"),
             _ => panic!("slot allocation returned unexpected reply"),
         };
-        let previous_eq = state.players[0].master_eq_node_id;
-        let previous_volume = state.players[0].master_volume_node_id;
+        let previous_eq = deck_at(&state, 0)
+            .expect("the registered deck is present")
+            .master_eq_node_id;
+        let previous_volume = deck_at(&state, 0)
+            .expect("the registered deck is present")
+            .master_volume_node_id;
         let mut layout = generate_log_spaced_bands(4);
         for (band, gain) in layout.iter_mut().zip([-6.0, -3.0, 1.5, 4.0]) {
             band.set_gain_db(GainDb::from(gain));
@@ -789,7 +889,7 @@ mod tests {
             Reply::Ok
         ));
 
-        let player = &state.players[0];
+        let player = deck_at(&state, 0).expect("the registered deck is present");
         assert_eq!(player.eq_layout.len(), 4);
         assert_eq!(player.shared_eq.snapshot(), vec![-6.0, -3.0, 1.5, 4.0]);
         assert_eq!(player.slots.len(), 1);
@@ -848,5 +948,177 @@ mod tests {
             processed_frames(&state) > before,
             "the second player's stream delivered no processed callback"
         );
+    }
+
+    #[kithara::test]
+    fn idle_context_recreation_advances_generation_before_deferred_processor_drop() {
+        device(|dev| {
+            *dev = AudioDevice::default();
+            dev.defer_processor_drop = true;
+        });
+        let mut state = SessionState::<TestBackend>::new(start_test_stream);
+        let first_player = register(&mut state);
+        let initial = state
+            .host
+            .as_ref()
+            .expect("registration creates the host owner")
+            .snapshot();
+        assert_eq!(initial.revision(), BeatMapRevision::first());
+        assert_eq!(
+            initial.state(),
+            MapState::Unavailable(MapUnavailable::NoGeometry)
+        );
+        assert_eq!(
+            initial.axis(),
+            MapAxis::Host(HostAxis::new(
+                NonZeroU32::new(SessionState::<TestBackend>::DEFAULT_SAMPLE_RATE)
+                    .expect("the fixture sample rate is non-zero"),
+                HostEpoch::new(0),
+            ))
+        );
+        assert_eq!(
+            state
+                .host_map_generation
+                .expect("registration seeds host-map generation")
+                .stamp()
+                .expect("the initial host-map revision is committed"),
+            initial.stamp()
+        );
+        start(&mut state, first_player);
+        let before = set_tempo_and_read_host_map(&mut state);
+        let first_live = state
+            .host
+            .as_ref()
+            .expect("the host owner remains installed")
+            .snapshot();
+        assert_eq!(first_live, before.host_map().snapshot());
+        assert_eq!(
+            first_live.revision(),
+            initial
+                .revision()
+                .checked_next()
+                .expect("the fixture map revision can advance")
+        );
+        let old_beat = MapPoint::new(
+            before.host_map_stamp(),
+            Beat::new(1.0).expect("invariant: fixture beat is finite"),
+        );
+
+        unregister(&mut state, first_player);
+        let unavailable = state
+            .host
+            .as_ref()
+            .expect("idle teardown preserves the host owner")
+            .snapshot();
+        assert_eq!(
+            unavailable.revision(),
+            first_live
+                .revision()
+                .checked_next()
+                .expect("the fixture map revision can advance")
+        );
+        assert_eq!(
+            unavailable.state(),
+            MapState::Unavailable(MapUnavailable::NoGeometry)
+        );
+        assert_eq!(
+            unavailable.axis(),
+            MapAxis::Host(HostAxis::new(
+                NonZeroU32::new(SessionState::<TestBackend>::DEFAULT_SAMPLE_RATE)
+                    .expect("the fixture sample rate is non-zero"),
+                HostEpoch::new(1),
+            ))
+        );
+        assert_eq!(
+            state
+                .host_map_generation
+                .expect("idle teardown returns host-map generation")
+                .stamp()
+                .expect("the restart boundary has a reserved revision"),
+            unavailable.stamp()
+        );
+        assert!(
+            state.ctx.is_none(),
+            "idle teardown must destroy the context"
+        );
+        device(|dev| {
+            assert_eq!(
+                dev.retired_processors.len(),
+                1,
+                "old processor must still be alive while the new context starts"
+            );
+        });
+
+        let second_player = register(&mut state);
+        start(&mut state, second_player);
+        let after = set_tempo_and_read_host_map(&mut state);
+        let second_live = state
+            .host
+            .as_ref()
+            .expect("the restarted stream reuses the host owner")
+            .snapshot();
+        assert_eq!(second_live, after.host_map().snapshot());
+        assert_eq!(
+            second_live.revision(),
+            unavailable
+                .revision()
+                .checked_next()
+                .expect("the fixture map revision can advance")
+        );
+
+        assert_eq!(
+            before.host_map_stamp().map_id(),
+            after.host_map_stamp().map_id(),
+            "one session keeps one host-map identity"
+        );
+        assert!(after.host_epoch() > before.host_epoch());
+        assert!(after.host_map_stamp().revision() > before.host_map_stamp().revision());
+        assert!(matches!(
+            after.host_map().snapshot().position_at(old_beat),
+            MapQuery::Stale { expected, given }
+                if expected == after.host_map_stamp() && given == before.host_map_stamp()
+        ));
+        device(|dev| {
+            assert_eq!(dev.retired_processors.len(), 1);
+            dev.retired_processors.clear();
+            dev.defer_processor_drop = false;
+        });
+    }
+
+    #[kithara::test]
+    fn idle_shutdown_accepts_an_unrendered_route_restart_generation() {
+        device(|dev| *dev = AudioDevice::default());
+        let mut state = SessionState::<TestBackend>::new(start_test_stream);
+        let player = register(&mut state);
+        start(&mut state, player);
+        let live = set_tempo_and_read_host_map(&mut state);
+
+        assert!(matches!(
+            invalidate_audio_route(&mut state, "test route restart"),
+            Reply::Ok
+        ));
+        let restarted = state
+            .transport_control
+            .as_mut()
+            .expect("the restarted stream keeps transport control")
+            .observation()
+            .host_map()
+            .stamp()
+            .expect("the route restart reserves a host-map revision");
+        assert!(restarted.revision() > live.host_map_stamp().revision());
+
+        unregister(&mut state, player);
+
+        let unavailable = state
+            .host
+            .as_ref()
+            .expect("idle shutdown preserves the host owner")
+            .snapshot();
+        assert!(unavailable.revision() > restarted.revision());
+        assert_eq!(
+            unavailable.state(),
+            MapState::Unavailable(MapUnavailable::NoGeometry)
+        );
+        assert!(state.ctx.is_none());
     }
 }

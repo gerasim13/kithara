@@ -13,8 +13,8 @@ pub use applied::SyncApplied;
 pub use member::SyncMember;
 pub use plan::{
     AlignmentCursor, AlignmentPlan, AlignmentPlanError, AlignmentRequest, AlignmentSource,
-    AlignmentTransition, PlanSpan, PlanSpanSlot, PlanTransition, PlannedRenderSpan, RenderPlan,
-    SourceFrameRange,
+    AlignmentTransition, PlanSpan, PlanSpanSlot, PlanTransition, PlannedRenderSpan,
+    SourceFrameRange, WarpPlan,
 };
 pub use rejected::SyncRejected;
 pub use topology::{SyncGroupSnapshot, SyncGroupTopologyError, SyncMemberSnapshot};
@@ -184,10 +184,15 @@ impl TransportRevision {
 }
 
 /// Identity and immutable revision of one group topology snapshot.
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, fieldwork::Fieldwork)]
+#[fieldwork(opt_in, get)]
 #[non_exhaustive]
 pub struct TopologyStamp {
+    /// Returns the stable identity of the group map.
+    #[field(get, copy)]
     group_id: BeatMapId,
+    /// Returns the immutable topology revision.
+    #[field(get, copy)]
     revision: TopologyRevision,
 }
 
@@ -197,25 +202,18 @@ impl TopologyStamp {
     pub const fn new(group_id: BeatMapId, revision: TopologyRevision) -> Self {
         Self { group_id, revision }
     }
-
-    /// Returns the stable identity of the group map.
-    #[must_use]
-    pub const fn group_id(self) -> BeatMapId {
-        self.group_id
-    }
-
-    /// Returns the immutable topology revision.
-    #[must_use]
-    pub const fn revision(self) -> TopologyRevision {
-        self.revision
-    }
 }
 
 /// A beat on a source map aligned with a beat on a target map.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, fieldwork::Fieldwork)]
+#[fieldwork(opt_in, get)]
 #[non_exhaustive]
 pub struct BeatAlignment {
+    /// Returns the point on the map being aligned.
+    #[field(get, copy)]
     source: MapPoint<Beat>,
+    /// Returns the corresponding point on the target map.
+    #[field(get, copy)]
     target: MapPoint<Beat>,
 }
 
@@ -224,18 +222,6 @@ impl BeatAlignment {
     #[must_use]
     pub const fn new(source: MapPoint<Beat>, target: MapPoint<Beat>) -> Self {
         Self { source, target }
-    }
-
-    /// Returns the point on the map being aligned.
-    #[must_use]
-    pub const fn source(&self) -> MapPoint<Beat> {
-        self.source
-    }
-
-    /// Returns the corresponding point on the target map.
-    #[must_use]
-    pub const fn target(&self) -> MapPoint<Beat> {
-        self.target
     }
 }
 
@@ -295,7 +281,7 @@ impl<G: SyncGroup> SyncOperation<G> {
     #[must_use]
     pub const fn target(&self) -> BeatMapId {
         match self {
-            Self::Topology { base, .. } => base.group_id(),
+            Self::Topology { base, .. } => base.group_id,
             Self::Transport { target, .. }
             | Self::Sync { target, .. }
             | Self::Reconcile { target, .. } => *target,
@@ -384,53 +370,31 @@ pub enum ReconcileCause {
 }
 
 /// An exact source/output boundary reached by the renderer.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, bon::Builder)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, bon::Builder, fieldwork::Fieldwork)]
 #[builder(state_mod(vis = "pub"))]
+#[fieldwork(opt_in, get)]
 #[non_exhaustive]
 pub struct RenderFrontier {
     /// Exclusive decoded source-frame boundary.
+    #[field(get, copy)]
     source: u64,
     /// Exclusive session output-frame boundary.
+    #[field(get, copy)]
     output: SessionFrame,
-}
-
-impl RenderFrontier {
-    /// Returns the exclusive decoded source-frame boundary.
-    #[must_use]
-    pub const fn source(self) -> u64 {
-        self.source
-    }
-
-    /// Returns the exclusive session output-frame boundary.
-    #[must_use]
-    pub const fn output(self) -> SessionFrame {
-        self.output
-    }
 }
 
 /// An exact source/output boundary consumed by the audio callback.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, bon::Builder)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, bon::Builder, fieldwork::Fieldwork)]
 #[builder(state_mod(vis = "pub"))]
+#[fieldwork(opt_in, get)]
 #[non_exhaustive]
 pub struct PresentationFrontier {
     /// Exclusive decoded source-frame boundary actually consumed.
+    #[field(get, copy)]
     source: u64,
     /// Exclusive session output-frame boundary actually consumed.
+    #[field(get, copy)]
     output: SessionFrame,
-}
-
-impl PresentationFrontier {
-    /// Returns the exclusive consumed source-frame boundary.
-    #[must_use]
-    pub const fn source(self) -> u64 {
-        self.source
-    }
-
-    /// Returns the exclusive consumed session output-frame boundary.
-    #[must_use]
-    pub const fn output(self) -> SessionFrame {
-        self.output
-    }
 }
 
 /// A synchronization capability that may be unavailable in one implementation.
@@ -571,9 +535,6 @@ pub enum SyncError {
     /// A group-map publication did not advance the owner's current revision.
     #[error("group map publication {given:?} does not advance {current:?}")]
     StaleMapRevision { current: MapStamp, given: MapStamp },
-    /// A group-map publication skipped the owner's exact next revision.
-    #[error("group map publication is {given:?}, expected {expected:?}")]
-    MapRevisionMismatch { expected: MapStamp, given: MapStamp },
     /// A map owner attempted an invalid immutable snapshot transition.
     #[error(transparent)]
     BeatMapSnapshot(#[from] BeatMapSnapshotError),
@@ -650,11 +611,11 @@ pub trait SyncGroup: BeatMap {
     /// Returns the canonical control-plane view of this group's sync state.
     fn status(&self) -> SyncStatusSnapshot;
 
-    /// Commits an operation as audibly applied after an exact renderer acknowledgement.
+    /// Commits an operation as audibly applied and returns the resulting sync state.
     ///
     /// # Errors
     ///
     /// Returns [`SyncError`] when the acknowledgement is stale, duplicate, or
     /// does not match the currently prepared operation.
-    fn acknowledge(&mut self, applied: SyncApplied) -> Result<(), SyncError>;
+    fn acknowledge(&mut self, applied: SyncApplied) -> Result<SyncStatusSnapshot, SyncError>;
 }

@@ -11,15 +11,15 @@ use firewheel::{
         ProcStore, ProcStreamCtx, ProcessStatus, StreamStatus,
     },
 };
-use kithara_audio::SessionFrame;
 use kithara_platform::time::Duration;
 use kithara_test_utils::kithara;
+use kithara_warp::{Beat, BeatMap, BeatMapId, MapPoint, MapPosition, MapQuery, SessionFrame};
 use triple_buffer::{Output, triple_buffer};
 
 use super::{
     commit::{
-        SessionTransportCommit, TransportCommitEvent, TransportCommitResult, TransportCommitStamp,
-        TransportObservation, TransportProcessError,
+        HostMapGeneration, SessionTransportCommit, TransportCommitEvent, TransportCommitResult,
+        TransportCommitStamp, TransportObservation, TransportProcessError,
     },
     node::SessionTransportProcessor,
     process::{TransportCommitState, TransportObservationInput, process_transport},
@@ -34,7 +34,7 @@ fn sample_rate() -> NonZeroU32 {
 }
 
 fn second_revision() -> TransportRevision {
-    TransportRevision::FIRST
+    TransportRevision::first()
         .checked_next()
         .expect("invariant: second transport revision exists")
 }
@@ -72,9 +72,13 @@ fn block_frame(blocks: usize) -> i64 {
 
 fn proc_extra() -> (ProcExtra, Output<TransportObservation>) {
     let (logger, _logger_rx) = realtime_logger(RealtimeLoggerConfig::default());
-    let (observation_input, observation_output) = triple_buffer(&TransportObservation::default());
+    let host_map = HostMapGeneration::new(
+        BeatMapId::allocate().expect("invariant: fixture map identity space is available"),
+    );
+    let initial = TransportObservation::new(None, None, host_map);
+    let (observation_input, observation_output) = triple_buffer(&initial);
     let mut store = ProcStore::with_capacity(2);
-    assert!(store.insert(TransportCommitState::default()).is_ok());
+    assert!(store.insert(TransportCommitState::new(host_map)).is_ok());
     assert!(
         store
             .insert(TransportObservationInput::new(observation_input))
@@ -175,20 +179,112 @@ fn active_harness() -> (
 ) {
     let (mut extra, mut output) = proc_extra();
     let mut processor = SessionTransportProcessor;
-    let active = commit(120.0, true, TransportRevision::FIRST);
+    let active = commit(120.0, true, TransportRevision::first());
     let stamp = TransportCommitStamp::new(None, active, SessionFrame::new(0), sample_rate());
     process_node(
         &mut processor,
         &proc_info_at(0),
         &mut extra,
-        Some(apply_event(TransportRevision::FIRST)),
+        Some(apply_event(TransportRevision::first())),
         Some(stage_event(stamp)),
     );
     assert_eq!(
         observation(&mut output).completion(),
-        Some(TransportCommitResult::Applied(TransportRevision::FIRST))
+        Some(TransportCommitResult::Applied(TransportRevision::first()))
     );
     (processor, extra, output, active)
+}
+
+#[kithara::test]
+fn transport_commit_publishes_anchor_and_map_stamp_atomically() {
+    let (mut processor, mut extra, mut output, active) = active_harness();
+    let before = snapshot(&mut output);
+    let target = SessionBeat::new(3.25).expect("invariant: relocation target is finite");
+    let next = SessionTransportCommit::relocate(active.tempo(), true, second_revision(), target);
+    let stamp = TransportCommitStamp::new(
+        Some(active),
+        next,
+        SessionFrame::new(block_frame(2)),
+        sample_rate(),
+    );
+
+    process_node(
+        &mut processor,
+        &proc_info_at(block_frame(1)),
+        &mut extra,
+        Some(stage_event(stamp)),
+        None,
+    );
+    let staged = snapshot(&mut output);
+    assert_eq!(staged.anchor(), before.anchor());
+    assert_eq!(staged.host_map_stamp(), before.host_map_stamp());
+    assert_eq!(staged.host_epoch(), before.host_epoch());
+
+    process_node(
+        &mut processor,
+        &proc_info_at(block_frame(2)),
+        &mut extra,
+        Some(apply_event(second_revision())),
+        None,
+    );
+    let applied = snapshot(&mut output);
+    assert_eq!(applied.revision(), second_revision());
+    assert_eq!(
+        applied.host_map_stamp().map_id(),
+        before.host_map_stamp().map_id()
+    );
+    assert!(applied.host_map_stamp().revision() > before.host_map_stamp().revision());
+    assert_eq!(applied.host_epoch(), before.host_epoch());
+
+    let host = applied.host_map();
+    let host_snapshot = host.snapshot();
+    assert_eq!(host_snapshot.stamp(), applied.host_map_stamp());
+    let resolved = host_snapshot.position_at(MapPoint::new(
+        host_snapshot.stamp(),
+        Beat::new(3.25).expect("invariant: relocation beat is finite"),
+    ));
+    let MapQuery::Resolved(position) = resolved else {
+        panic!("expected relocated beat to resolve on the published host map")
+    };
+    assert_eq!(
+        *position.value().value(),
+        MapPosition::Host(SessionFrame::new(block_frame(2)))
+    );
+}
+
+#[kithara::test]
+fn route_restart_advances_host_epoch_and_map_revision() {
+    let (mut processor, mut extra, mut output, _active) = active_harness();
+    process_node(
+        &mut processor,
+        &proc_info_at(block_frame(1)),
+        &mut extra,
+        None,
+        None,
+    );
+    let before = snapshot(&mut output);
+
+    processor.stream_stopped(&mut ProcStreamCtx {
+        store: &mut extra.store,
+        logger: &mut extra.logger,
+    });
+    assert_eq!(observation(&mut output).snapshot(), None);
+
+    process_node(&mut processor, &proc_info_at(0), &mut extra, None, None);
+    let restarted = snapshot(&mut output);
+    assert_eq!(restarted.revision(), before.revision());
+    assert_eq!(
+        restarted.host_map_stamp().map_id(),
+        before.host_map_stamp().map_id()
+    );
+    assert!(restarted.host_epoch() > before.host_epoch());
+    assert!(restarted.host_map_stamp().revision() > before.host_map_stamp().revision());
+
+    let stale = restarted.host_map().snapshot().beat_at(MapPoint::new(
+        before.host_map_stamp(),
+        MapPosition::Host(SessionFrame::new(0)),
+    ));
+    assert!(matches!(stale, MapQuery::Stale { .. }));
 }
 
 #[kithara::test]
@@ -210,7 +306,7 @@ fn tempo_commit_waits_for_the_matching_render_boundary() {
         None,
     );
     let staged = snapshot(&mut output);
-    assert_eq!(staged.revision(), TransportRevision::FIRST);
+    assert_eq!(staged.revision(), TransportRevision::first());
     assert_eq!(staged.tempo(), active.tempo());
     assert!((f64::from(staged.position()) - 0.04).abs() <= f64::EPSILON);
 
@@ -356,14 +452,14 @@ fn late_transport_commit_is_rejected_without_changing_the_active_commit() {
     let current = rejected
         .snapshot()
         .expect("invariant: rejection keeps the active snapshot");
-    assert_eq!(current.revision(), TransportRevision::FIRST);
+    assert_eq!(current.revision(), TransportRevision::first());
     assert!((f64::from(current.position()) - 0.08).abs() <= f64::EPSILON);
 }
 
 #[kithara::test]
 fn stale_transport_commit_is_rejected_without_breaking_the_clock() {
     let (mut processor, mut extra, mut output, active) = active_harness();
-    let stale = commit(100.0, true, TransportRevision::FIRST);
+    let stale = commit(100.0, true, TransportRevision::first());
     let next = commit(60.0, true, second_revision());
     let stamp = TransportCommitStamp::new(
         Some(stale),
@@ -431,7 +527,7 @@ fn transport_abort_is_idempotent() {
             observation(&mut output).completion(),
             Some(TransportCommitResult::Aborted(second_revision()))
         );
-        assert_eq!(snapshot(&mut output).revision(), TransportRevision::FIRST);
+        assert_eq!(snapshot(&mut output).revision(), TransportRevision::first());
     }
 }
 
@@ -463,7 +559,7 @@ fn route_reset_rejects_pending_commit_and_reanchors_the_active_beat() {
     );
     process_node(&mut processor, &proc_info_at(0), &mut extra, None, None);
     let restarted = snapshot(&mut output);
-    assert_eq!(restarted.revision(), TransportRevision::FIRST);
+    assert_eq!(restarted.revision(), TransportRevision::first());
     assert!((f64::from(restarted.position()) - 0.06).abs() <= f64::EPSILON);
 }
 
@@ -533,7 +629,7 @@ fn repeated_route_reset_preserves_the_beat_until_the_new_axis_renders() {
 #[kithara::test]
 fn duplicate_stage_in_one_block_is_rejected() {
     let (mut extra, _output) = proc_extra();
-    let active = commit(120.0, true, TransportRevision::FIRST);
+    let active = commit(120.0, true, TransportRevision::first());
     let stamp = TransportCommitStamp::new(None, active, SessionFrame::new(0), sample_rate());
     assert_eq!(
         process_result(

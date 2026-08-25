@@ -1,8 +1,8 @@
 use std::num::NonZeroU32;
 
 use firewheel::{FirewheelCtx, backend::AudioBackend, error::UpdateError};
-use kithara_audio::SessionFrame;
 use kithara_events::TransportEvent;
+use kithara_warp::SessionFrame;
 
 use super::commit::{
     SessionTransportCommit, TransportBoundary, TransportCommitResult, TransportCommitStamp,
@@ -168,7 +168,7 @@ fn next_revision<B: AudioBackend>(
         .transport
         .ledger()
         .last
-        .map_or(Ok(TransportRevision::FIRST), |revision| {
+        .map_or(Ok(TransportRevision::first()), |revision| {
             revision
                 .checked_next()
                 .ok_or(SessionError::TransportRevisionExhausted)
@@ -307,6 +307,13 @@ fn refresh_observation<B: AudioBackend>(
         .as_mut()
         .ok_or_else(|| SessionError::Graph("session transport control is missing".to_owned()))?
         .observation();
+    if let Some(snapshot) = observation.snapshot() {
+        state
+            .host
+            .as_mut()
+            .ok_or_else(|| SessionError::Graph("session host group is missing".to_owned()))?
+            .publish_map(&snapshot.host_map())?;
+    }
     if let Some(completion) = observation.completion() {
         apply_completion(state, completion);
     }
@@ -418,7 +425,9 @@ fn transport_events(
 }
 
 fn publish_transport_event<B: AudioBackend>(state: &SessionState<B>, event: &TransportEvent) {
-    for player in &state.players {
-        player.bus.publish(event.clone());
+    if let Some(host) = &state.host {
+        for deck in host.decks() {
+            deck.bus.publish(event.clone());
+        }
     }
 }

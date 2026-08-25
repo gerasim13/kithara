@@ -376,6 +376,7 @@ fn bootstrap(
             bus: EventBus::default(),
             eq_layout: Vec::new(),
             pcm_pool: PcmPool::default(),
+            sample_rate: session_rate.get(),
         },
     ) {
         Reply::PlayerRegistered(player_id) => player_id,

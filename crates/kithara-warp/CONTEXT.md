@@ -20,3 +20,12 @@ crate the owner of the live Host, playback session, audio graph, or worker.
 
 The crate must not depend on audio, play, host, assets, or analyzer runtime
 types. Runtime owners consume immutable plans produced through these contracts.
+
+## Configuration
+
+The current crate contains only pure contracts, so it must not expose an empty
+or unused runtime config. The first concrete Warp runtime consumer introduces a
+`WarpConfig` facade in the same change. That config is built with `bon`, uses
+`fieldwork` for read access, and contains only values consumed by that runtime.
+Decoded-source ownership, PCM format, shared pools, cancellation, and worker
+resources remain in their canonical configs and are not duplicated here.
