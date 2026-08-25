@@ -562,6 +562,29 @@ mod tests {
     }
 
     #[kithara::test]
+    fn vinyl_speed_above_two_is_applied_without_clamping() {
+        let channels = usize::from(Consts::CH);
+        let in_frames = usize::try_from(Consts::SR).unwrap() * 2;
+        let out = run_vinyl(StretchKind::default(), 4.0, in_frames);
+        let out_frames = out.len() / channels;
+        assert!(
+            out_frames * 10 >= in_frames * 2 && out_frames * 10 <= in_frames * 3,
+            "vinyl 4x should roughly quarter duration, got {out_frames} from {in_frames}"
+        );
+        let mono: Vec<f32> = out.iter().step_by(channels).copied().collect();
+        assert!(
+            mono.len() >= Consts::N,
+            "not enough 4x vinyl output for the FFT window"
+        );
+        let peak = dominant_bin(&mono);
+        let want = expected_bin(Consts::F0 * 4.0);
+        assert!(
+            peak.abs_diff(want) <= 6,
+            "vinyl pitch was clamped above 2x: peak bin {peak}, expected {want}"
+        );
+    }
+
+    #[kithara::test]
     fn live_speed_change_updates_stretch_duration() {
         let controls = StretchControls::new(1.0);
         controls.set_keylock(true);
