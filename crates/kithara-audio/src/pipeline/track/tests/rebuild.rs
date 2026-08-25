@@ -68,9 +68,9 @@ pub(super) fn produced_data(fetch: Fetch<PcmChunk>) -> PcmChunk {
 pub(super) struct Consts;
 
 impl Consts {
-    const CHANNELS: u16 = 2;
+    pub(super) const CHANNELS: u16 = 2;
     pub(super) const ROUTE_CHUNK_FRAMES: usize = 256;
-    const ROUTE_SAMPLE_RATE: u32 = 48_000;
+    pub(super) const ROUTE_SAMPLE_RATE: u32 = 48_000;
     pub(super) const SAMPLE_RATE: u32 = 44_100;
     const TONE_HZ: f64 = 440.0;
 }
@@ -185,6 +185,7 @@ struct RouteSignalDecoder {
     gapless: Option<GaplessInfo>,
     id: u64,
     next_frame: u64,
+    pcm_pool: PcmPool,
     remaining_chunks: Option<usize>,
     sample_rate: u32,
     timeline_gap: u64,
@@ -198,11 +199,30 @@ impl RouteSignalDecoder {
         remaining_chunks: Option<usize>,
         drops: Arc<Mutex<Vec<u64>>>,
     ) -> Self {
+        Self::with_pool(
+            id,
+            sample_rate,
+            gapless,
+            remaining_chunks,
+            drops,
+            PcmPool::default(),
+        )
+    }
+
+    fn with_pool(
+        id: u64,
+        sample_rate: u32,
+        gapless: Option<GaplessInfo>,
+        remaining_chunks: Option<usize>,
+        drops: Arc<Mutex<Vec<u64>>>,
+        pcm_pool: PcmPool,
+    ) -> Self {
         Self {
             drops,
             gapless,
             id,
             next_frame: 0,
+            pcm_pool,
             remaining_chunks,
             sample_rate,
             timeline_gap: 0,
@@ -243,7 +263,7 @@ impl Decoder for RouteSignalDecoder {
         let spec = self.pcm_spec();
         let channels = usize::from(Consts::CHANNELS);
         let frames = Consts::ROUTE_CHUNK_FRAMES;
-        let mut samples = PcmPool::default().get();
+        let mut samples = self.pcm_pool.get();
         samples
             .ensure_len(frames.saturating_mul(channels))
             .expect("route signal fixture fits PCM pool budget");
@@ -831,7 +851,15 @@ pub(super) async fn route_signal_source_with_effects(
     initial_host_rate: u32,
     effects: Vec<Box<dyn AudioEffect>>,
 ) -> RouteFixture {
-    route_source(
+    route_signal_source_with_effects_and_pool(initial_host_rate, effects, PcmPool::default()).await
+}
+
+pub(super) async fn route_signal_source_with_effects_and_pool(
+    initial_host_rate: u32,
+    effects: Vec<Box<dyn AudioEffect>>,
+    pcm_pool: PcmPool,
+) -> RouteFixture {
+    route_source_with_pool(
         RouteParams {
             chunks_before_eof: None,
             gapless: None,
@@ -842,6 +870,7 @@ pub(super) async fn route_signal_source_with_effects(
             segmented: false,
         },
         effects,
+        pcm_pool,
     )
     .await
 }
@@ -905,6 +934,14 @@ pub(super) async fn route_signal_source_with_finite_incoming(
 }
 
 async fn route_source(params: RouteParams, effects: Vec<Box<dyn AudioEffect>>) -> RouteFixture {
+    route_source_with_pool(params, effects, PcmPool::default()).await
+}
+
+async fn route_source_with_pool(
+    params: RouteParams,
+    effects: Vec<Box<dyn AudioEffect>>,
+    pcm_pool: PcmPool,
+) -> RouteFixture {
     let control = Arc::new(TestControl::new(media_info(0)));
     let drops = Arc::new(Mutex::new(Vec::new()));
     let host_sample_rate = Arc::new(AtomicU32::new(params.initial_host_rate));
@@ -930,6 +967,7 @@ async fn route_source(params: RouteParams, effects: Vec<Box<dyn AudioEffect>>) -
     let container_byte_len = shared_stream.len();
     let factory_drops = drops.clone();
     let factory_host_rate = host_sample_rate.clone();
+    let factory_pcm_pool = pcm_pool.clone();
     let decoder_factory = DecoderFactory::new(
         move |reader, _info| {
             if segmented && reader.byte_len() != container_byte_len {
@@ -939,12 +977,13 @@ async fn route_source(params: RouteParams, effects: Vec<Box<dyn AudioEffect>>) -
             }
             let rate = factory_host_rate.load(Ordering::Acquire);
             Ok(Box::new(
-                RouteSignalDecoder::new(
+                RouteSignalDecoder::with_pool(
                     99,
                     rate,
                     gapless,
                     incoming_chunks_before_eof,
                     factory_drops.clone(),
+                    factory_pcm_pool.clone(),
                 )
                 .with_timeline_gap(incoming_timeline_gap),
             ))
@@ -959,12 +998,13 @@ async fn route_source(params: RouteParams, effects: Vec<Box<dyn AudioEffect>>) -
         byte_pool: BytePool::default(),
         decoder_factory,
         decoder: Box::new(
-            RouteSignalDecoder::new(
+            RouteSignalDecoder::with_pool(
                 1,
                 Consts::SAMPLE_RATE,
                 gapless,
                 chunks_before_eof,
                 drops.clone(),
+                pcm_pool.clone(),
             )
             .with_timeline_gap(active_timeline_gap),
         ),
@@ -977,7 +1017,7 @@ async fn route_source(params: RouteParams, effects: Vec<Box<dyn AudioEffect>>) -
         host_sample_rate: host_sample_rate.clone(),
         media_info: Some(media_info(0)),
         playback_resampler_backend: "none",
-        pcm_pool: PcmPool::default(),
+        pcm_pool,
         recreate_on_host_rate_change: true,
     }
     .into_parts(effects, shared_stream.seek_observe().epoch());
@@ -1045,7 +1085,7 @@ fn peak_first_diff(left: &[f32], center: usize, half: usize) -> f32 {
     peak
 }
 
-fn next_test_chunk(
+pub(super) fn next_test_chunk(
     source: &mut StreamAudioSource<TestStream>,
     route_recreated: &mut bool,
 ) -> PcmChunk {
