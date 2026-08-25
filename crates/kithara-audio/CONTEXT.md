@@ -111,7 +111,24 @@ mutator of track state through `update_state`. Sub-owners never take
 `DecodeCtx`, `RouteCtx`) and return decision values for the coordinator to apply.
 
 - `SharedStream<T>` — byte-space ground truth (position, len, phase, byte map,
-  anchors, init range). No other owner clones byte-range policy.
+  anchors, init range). No other owner clones byte-range policy. Every RT
+  byte-space call — `phase`/`phase_at`, `position`/`set_position`, `len`,
+  `byte_map`, `probe_seek` — answers from the source's narrow `SourceProbe`
+  handle, and the fixed-at-open handles (`abr_handle`,
+  `format_change_segment_range`, `peer_wake`) from clones resolved once in
+  `SharedStream::new`; none of them take the control mutex. Off-RT holders (a
+  construction reader parked in `Stream::read`, a consumer query) hold that
+  mutex across waits, and a contended acquire on the forbid-blocking produce
+  core is an RTSan violation (`sched_yield` in `parking_lot`'s contended
+  path). The probe answers from the source's self-synchronizing state and
+  must not take locks a reader wait can hold. Three calls still lock on RT
+  frames — `probe_read` (steady-state `Read`), `media_info`, and
+  `seek_time_anchor` — which is safe only because the sole off-RT holder
+  that parks under the mutex is the replacement rebuild reader, and it
+  exists exclusively while the FSM sits in `RebuildingDecoder`, a phase
+  whose tick touches none of those calls. The same window is the only time
+  the off-RT reader moves the byte cursor, which keeps `probe_seek`'s
+  non-atomic load→resolve→store single-writer.
 - `ActiveDecode` — the authoritative active `DecoderGeneration`, the optional
   `IncomingDecode`, the always-on `PcmBlender`, the effect chain, the EOF drain.
   Each `DecoderGeneration` owns its decoder facts, base offset, install epoch,

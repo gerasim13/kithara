@@ -9,10 +9,11 @@ use kithara_platform::{CancelScope, sync::Arc, time::Duration};
 use kithara_storage::WaitOutcome;
 use kithara_stream::{
     Activity, BoxedEventSink, ByteMap, DeferredWake, MediaInfo, PlayheadRead, PlayheadWrite,
-    ReadOutcome, SeekControl, SeekObserve, SeekPrepare, Source, SourcePhase, StreamResult,
+    ReadOutcome, SeekControl, SeekObserve, SeekPrepare, Source, SourcePhase, SourceProbe,
+    StreamResult,
 };
 
-use super::coord::HlsCoord;
+use super::coord::{HlsCoord, HlsProbe};
 use crate::{peer::HlsPeer, reader::HlsReaderEventSink};
 
 /// HLS source: thin façade over [`HlsCoord`].
@@ -130,6 +131,10 @@ impl Source for HlsSource {
             self.coord.seek_epoch_handle(),
         );
         Some(Box::new(sink))
+    }
+
+    fn probe(&self) -> Arc<dyn SourceProbe> {
+        Arc::new(HlsProbe::new(Arc::clone(&self.coord)))
     }
 
     fn variant_control(&self) -> Option<Arc<dyn kithara_stream::VariantControl>> {
