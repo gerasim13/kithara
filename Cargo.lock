@@ -4216,6 +4216,7 @@ dependencies = [
  "kithara-storage",
  "kithara-stream",
  "kithara-test-utils",
+ "kithara-warp",
  "kithara-workspace-hack",
  "tracing",
  "tracing-subscriber",
@@ -5032,6 +5033,22 @@ dependencies = [
  "pollster",
  "ron",
  "serde",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "kithara-warp"
+version = "0.0.1-alpha4"
+dependencies = [
+ "bon",
+ "delegate",
+ "derive_more",
+ "fieldwork",
+ "kithara-platform",
+ "kithara-test-utils",
+ "kithara-workspace-hack",
+ "num-traits",
+ "portable-atomic",
  "thiserror 2.0.18",
 ]
 

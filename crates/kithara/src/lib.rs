@@ -70,6 +70,10 @@ pub mod stream {
     pub use kithara_stream::*;
 }
 
+pub mod warp {
+    pub use kithara_warp::*;
+}
+
 #[cfg(feature = "file")]
 pub mod file {
     pub use kithara_file::*;

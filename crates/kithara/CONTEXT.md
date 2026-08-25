@@ -51,6 +51,8 @@ are no-ops in production builds).
   sit *above* it; `kithara-abr`, `kithara-events`, `kithara-net`, and `kithara-storage` sit *below*.
 - **`kithara-assets`** sits beside storage (over storage/bufpool/drm/events) and is consumed by the protocol crates and
   everything above them. `kithara-stream` does **not** depend on it.
+- **`kithara-warp`** is the pure synchronization contract beside the current playback stack. It owns musical
+  coordinates, immutable beat-map snapshots, group topology, and alignment plans without owning runtime state.
 - **`kithara`** is the facade aggregating protocols + storage + net behind feature flags; `kithara-ffi` and `kithara-app`
   consume it rather than reaching into protocol crates for the playback path.
 - **Side branches:** `kithara-stretch` and `kithara-beat` are optional DSP for `kithara-audio`; `kithara-resampler` serves

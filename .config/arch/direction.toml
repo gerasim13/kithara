@@ -36,7 +36,7 @@ crates = ["kithara-decode", "kithara-encode", "kithara-file", "kithara-hls"]
 [[layer]]
 index = 6
 name = "engine"
-crates = ["kithara-audio"]
+crates = ["kithara-audio", "kithara-warp"]
 
 [[layer]]
 index = 7

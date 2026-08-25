@@ -112,7 +112,7 @@ sits in the audio path.
 
 Each engine layer is re-exported as a module: `kithara::audio`, `kithara::bufpool`,
 `kithara::decode`, `kithara::events`, `kithara::platform`, `kithara::play`,
-`kithara::stream`. The `file`/`hls`/`assets`/`net`/`storage`/`queue` modules are
+`kithara::stream`, `kithara::warp`. The `file`/`hls`/`assets`/`net`/`storage`/`queue` modules are
 feature-gated; `kithara::abr` and `kithara::drm` are exposed with `hls`. For
 advanced control — multi-slot engine, crossfade, EQ — reach into
 `kithara::play` (`Engine`, `Player`, `CrossfadeConfig`, `Equalizer`). The

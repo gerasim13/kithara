@@ -28,7 +28,7 @@ pro-audio apps.
 - **DRM** — AES-128 decryption for protected HLS.
 
 `kithara` is the facade crate: it aggregates the engine layers
-(`audio`, `bufpool`, `decode`, `events`, `platform`, `play`, `stream`, and the
+(`audio`, `bufpool`, `decode`, `events`, `platform`, `play`, `stream`, `warp`, and the
 feature-gated `file`/`hls`/`assets`/`net`/`storage`/`queue` pipelines) behind one
 dependency and a single `Resource` entry point. The `abr` and `drm` modules are
 available when `hls` is enabled.
