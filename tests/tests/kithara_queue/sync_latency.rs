@@ -1,10 +1,7 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 use std::{
-    f64::consts::TAU,
-    fs,
     num::NonZeroU32,
-    path::{Path, PathBuf},
     sync::atomic::{AtomicU64, Ordering},
 };
 
@@ -18,28 +15,30 @@ use kithara::{
     platform::{
         sync::{Arc, Mutex},
         time::Duration,
-        tokio::sync::broadcast::error::TryRecvError,
+        tokio::{sync::broadcast::error::TryRecvError, task},
     },
-    play::{Cmd, PlayerConfig, PlayerImpl, Reply, SessionDispatcher, Tempo},
-    queue::{Queue, QueueConfig},
+    play::{Cmd, PlayerConfig, PlayerImpl, Reply, SessionDispatcher, Tempo, apply_mix},
+    queue::{Queue, QueueConfig, TrackSource},
 };
 use kithara_integration_tests::{
-    TestTempDir,
+    RhythmicTrack, SignalFormat, SignalSpec, SignalSpecLength, SweepMode, TestServerHelper,
     cochlea::{CochleaReport, assert_oracle_load_bearing, continuity_failures},
     kithara,
     ring::{ManualRingConfig, ManualRingSession},
-    signal_pcm::{Finite, SignalPcm, signal::SignalFn},
     sync_artifact::{
         ArtifactAudio, ArtifactFrame, ArtifactSource, SyncArtifactMetadata, write_sync_artifact,
     },
     sync_control::{SyncDeckControl, SyncQuantum},
-    sync_fixture::analysis_map,
-    wav::create_wav_from_signal,
+    sync_fixture::{SyncFixtureResources, analysis_map},
 };
 use num_traits::ToPrimitive;
+use reqwest::{Client, StatusCode, header::RANGE};
 
 const CHANNELS: u16 = 2;
+const CHIRP_PEAK: f32 = 0.35;
 const LOAD_PULL_LIMIT: usize = 16_000;
+const PULSE_PEAK: f32 = 0.55;
+const RHYTHMIC_MIX_PEAK: f32 = 0.6;
 const SAMPLE_RATE: u32 = 48_000;
 const SESSION_BPM: f64 = 120.0;
 const TRACK_FRAMES: usize = 48_000 * 24;
@@ -74,68 +73,70 @@ impl TaggedSignalPhase {
     }
 }
 
-#[derive(Clone, Copy)]
-struct ChirpTrack;
-
-impl SignalFn for ChirpTrack {
-    fn sample(&self, frame: usize, sample_rate: u32) -> i16 {
-        let seconds = frame.to_f64().expect("fixture frame fits f64") / f64::from(sample_rate);
-        let phase = TAU * 220.0_f64.mul_add(seconds, 20.0 * seconds * seconds);
-        (phase.sin() * f64::from(i16::MAX) * 0.35)
-            .to_i16()
-            .expect("attenuated chirp fits i16")
-    }
-}
-
-#[derive(Clone, Copy)]
-struct PulseTrack;
-
-impl SignalFn for PulseTrack {
-    fn sample(&self, frame: usize, sample_rate: u32) -> i16 {
-        let beat_frames = beat_frames(sample_rate);
-        let into_beat = frame % beat_frames;
-        let burst_frames = beat_frames / 10;
-        if into_beat >= burst_frames {
-            return 0;
-        }
-        let decay = 1.0
-            - into_beat.to_f64().expect("beat offset fits f64")
-                / burst_frames.to_f64().expect("burst length fits f64");
-        let phase = TAU * 880.0 * into_beat.to_f64().expect("beat offset fits f64")
-            / f64::from(sample_rate);
-        (phase.sin() * decay * decay * f64::from(i16::MAX) * 0.55)
-            .to_i16()
-            .expect("attenuated pulse fits i16")
-    }
-}
-
 pub(super) struct SyncFixture {
-    _temp: TestTempDir,
-    chirp: PathBuf,
-    pulse: PathBuf,
+    _server: TestServerHelper,
+    chirp: SignalAsset,
+    pulse: SignalAsset,
+    resources: SyncFixtureResources,
+}
+
+pub(super) struct SignalAsset {
+    gain: f32,
+    source: TrackSource,
+}
+
+impl SignalAsset {
+    pub(super) fn uri(&self) -> &str {
+        self.source
+            .uri()
+            .expect("prepared signal always uses a UTF-8 URL")
+    }
 }
 
 impl SyncFixture {
-    pub(super) fn new() -> Self {
-        let temp = TestTempDir::new();
-        let chirp = temp.path().join("sync-latency-chirp.wav");
-        let pulse = temp.path().join("sync-latency-pulse.wav");
-        write_signal(&chirp, ChirpTrack);
-        write_signal(&pulse, PulseTrack);
+    pub(super) async fn new(resources: SyncFixtureResources) -> Self {
+        let server = TestServerHelper::new().await;
+        let spec = SignalSpec {
+            format: SignalFormat::Wav,
+            length: SignalSpecLength::Frames(TRACK_FRAMES),
+            channels: CHANNELS,
+            sample_rate: SAMPLE_RATE,
+            bit_rate: None,
+        };
+        let chirp = server.sweep(&spec, 220.0, 1_180.0, SweepMode::Linear).await;
+        let pulse = server
+            .rhythmic_mix(&spec, &[RhythmicTrack::new(SESSION_BPM, 880.0)])
+            .await;
         Self {
-            _temp: temp,
-            chirp,
-            pulse,
+            _server: server,
+            chirp: SignalAsset {
+                gain: CHIRP_PEAK,
+                source: chirp.to_string().into(),
+            },
+            pulse: SignalAsset {
+                gain: PULSE_PEAK / RHYTHMIC_MIX_PEAK,
+                source: pulse.to_string().into(),
+            },
+            resources,
         }
     }
 
-    pub(super) fn chirp(&self) -> &Path {
+    pub(super) const fn chirp(&self) -> &SignalAsset {
         &self.chirp
     }
 
-    pub(super) fn pulse(&self) -> &Path {
+    pub(super) const fn pulse(&self) -> &SignalAsset {
         &self.pulse
     }
+
+    pub(super) const fn resources(&self) -> &SyncFixtureResources {
+        &self.resources
+    }
+}
+
+pub(super) fn sync_fixture_resources(case: &str) -> SyncFixtureResources {
+    SyncFixtureResources::new(case, BytePool::default(), PcmPool::default())
+        .expect("initialize sync fixture resources")
 }
 
 pub(super) struct RingDeck {
@@ -144,12 +145,17 @@ pub(super) struct RingDeck {
     failures: Mutex<Vec<String>>,
     player: Arc<PlayerImpl>,
     queue: Arc<Queue>,
+    resources: SyncFixtureResources,
     session: Arc<ManualRingSession>,
     underruns: AtomicU64,
 }
 
 impl RingDeck {
-    pub(super) async fn load(path: &Path, block_frames: usize) -> Self {
+    pub(super) async fn load(
+        resources: &SyncFixtureResources,
+        signal: &SignalAsset,
+        block_frames: usize,
+    ) -> Self {
         let rate = NonZeroU32::new(SAMPLE_RATE).expect("fixture sample rate is non-zero");
         let block_u32 = u32::try_from(block_frames).expect("fixture block size fits u32");
         let session = Arc::new(
@@ -162,28 +168,34 @@ impl RingDeck {
         controls.set_keylock(true);
         let player = Arc::new(PlayerImpl::new(
             PlayerConfig::builder()
-                .byte_pool(BytePool::default())
-                .pcm_pool(PcmPool::default())
+                .byte_pool(resources.byte_pool().clone())
+                .pcm_pool(resources.pcm_pool().clone())
                 .sample_rate(SAMPLE_RATE)
                 .session(dispatcher)
                 .timestretch(controls)
                 .crossfade_duration(0.0)
                 .build(),
         ));
+        apply_mix([(player.as_ref(), signal.gain)])
+            .expect("latency fixture linear signal level is valid");
         player
             .ensure_engine_started()
             .expect("latency deck engine starts");
         let queue = Arc::new(Queue::new(
-            QueueConfig::builder().player(Arc::clone(&player)).build(),
+            QueueConfig::builder()
+                .player(Arc::clone(&player))
+                .store(resources.store().clone())
+                .build(),
         ));
         let events = Mutex::new(player.subscribe());
-        let _ = queue.append(path.to_string_lossy().into_owned());
+        let _ = queue.append(signal.source.clone());
         let deck = Self {
             block_frames,
             events,
             failures: Mutex::new(Vec::new()),
             player,
             queue,
+            resources: resources.clone(),
             session,
             underruns: AtomicU64::new(0),
         };
@@ -198,8 +210,14 @@ impl RingDeck {
                 return deck;
             }
         }
-        deck.record_failure("real WAV did not become audible within the manual-ring pull budget");
+        deck.record_failure(
+            "prepared WAV did not become audible within the manual-ring pull budget",
+        );
         deck
+    }
+
+    pub(super) const fn resources(&self) -> &SyncFixtureResources {
+        &self.resources
     }
 
     pub(super) fn bind(&self, analysis: &TrackAnalysis) -> Result<(), String> {
@@ -239,7 +257,7 @@ impl RingDeck {
             self.record_failure(format!("latency queue tick failed: {error}"));
         }
         self.drain_events();
-        kithara::platform::tokio::task::yield_now().await;
+        task::yield_now().await;
         pcm
     }
 
@@ -369,12 +387,13 @@ struct AlignedPcm {
 }
 
 async fn retarget_run(
-    path: &Path,
+    resources: &SyncFixtureResources,
+    signal: &SignalAsset,
     block_frames: usize,
     phase: TaggedSignalPhase,
     retarget: bool,
 ) -> PcmRun {
-    let deck = RingDeck::load(path, block_frames).await;
+    let deck = RingDeck::load(resources, signal, block_frames).await;
     let _ = deck.bind(&analysis(0));
     for _ in 0..phase.warm_blocks() {
         let _ = deck.pull().await;
@@ -497,15 +516,78 @@ fn first_sustained_delta(
     None
 }
 
+#[kithara::test(tokio, multi_thread)]
+async fn latency_signals_are_eager_prepared_and_range_readable() {
+    let fixture = SyncFixture::new(sync_fixture_resources("latency-signal-preparation")).await;
+    let client = Client::new();
+
+    for signal in [fixture.chirp(), fixture.pulse()] {
+        let response = client
+            .get(signal.uri())
+            .header(RANGE, "bytes=0-43")
+            .send()
+            .await
+            .expect("prepared signal range request succeeds");
+        assert_eq!(response.status(), StatusCode::PARTIAL_CONTENT);
+        let bytes = response
+            .bytes()
+            .await
+            .expect("prepared signal range response is readable");
+        assert_eq!(&bytes[..4], b"RIFF");
+    }
+}
+
+#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(300)))]
+async fn latency_signals_preserve_levels_through_player_and_queue() {
+    let fixture = SyncFixture::new(sync_fixture_resources("latency-signal-levels")).await;
+
+    assert_player_peak(fixture.resources(), fixture.chirp(), CHIRP_PEAK).await;
+    assert_player_peak(fixture.resources(), fixture.pulse(), PULSE_PEAK).await;
+}
+
+async fn assert_player_peak(resources: &SyncFixtureResources, signal: &SignalAsset, expected: f32) {
+    const BLOCK_FRAMES: usize = 256;
+    const PEAK_TOLERANCE: f32 = 0.02;
+
+    let deck = RingDeck::load(resources, signal, BLOCK_FRAMES).await;
+    let blocks = (SAMPLE_RATE as usize).div_ceil(BLOCK_FRAMES);
+    let pcm = deck.capture_blocks(blocks).await;
+    let peak = pcm.iter().copied().map(f32::abs).fold(0.0, f32::max);
+
+    assert!(
+        deck.failures().is_empty(),
+        "prepared signal failed in Player/Queue: {:?}",
+        deck.failures(),
+    );
+    assert!(
+        (peak - expected).abs() <= PEAK_TOLERANCE,
+        "Player/Queue peak {peak:.6} differs from expected {expected:.6}",
+    );
+}
+
 #[kithara::test(tokio, multi_thread, serial, timeout(Duration::from_secs(300)))]
 #[ignore = "SYNC-ORACLE SYNC-PRODUCT-LATENCY-001: waiting for Wave ResidentPlan"]
 async fn bound_tempo_retarget_reaches_pcm_within_twenty_ms() {
-    let fixture = SyncFixture::new();
+    let fixture = SyncFixture::new(sync_fixture_resources("latency-bound-retarget")).await;
     for block_frames in [128_usize, 256, 512] {
         for phase in TaggedSignalPhase::ALL {
-            let control = retarget_run(fixture.chirp(), block_frames, phase, false).await;
+            let control = retarget_run(
+                fixture.resources(),
+                fixture.chirp(),
+                block_frames,
+                phase,
+                false,
+            )
+            .await;
             let control_report = CochleaReport::measure(&control.samples, CHANNELS, SAMPLE_RATE);
-            let candidate = retarget_run(fixture.chirp(), block_frames, phase, true).await;
+            let candidate = retarget_run(
+                fixture.resources(),
+                fixture.chirp(),
+                block_frames,
+                phase,
+                true,
+            )
+            .await;
             let aligned = align_runs(&candidate, &control);
             let candidate_report =
                 CochleaReport::measure(&aligned.candidate, CHANNELS, SAMPLE_RATE);
@@ -557,10 +639,7 @@ async fn bound_tempo_retarget_reaches_pcm_within_twenty_ms() {
             }
             let case = format!("bound-retarget-{block_frames}-{}", phase.label(),);
             let mut metadata = SyncArtifactMetadata::new(case, SAMPLE_RATE, CHANNELS, block_frames);
-            metadata.add_source(ArtifactSource::new(
-                "deck-a",
-                fixture.chirp().display().to_string(),
-            ));
+            metadata.add_source(ArtifactSource::new("deck-a", fixture.chirp().uri()));
             metadata.set_operation(format!(
                 "bound 120->132 BPM retarget at {} tagged-signal phase",
                 phase.label(),
@@ -596,6 +675,7 @@ async fn bound_tempo_retarget_reaches_pcm_within_twenty_ms() {
             metadata.add_threshold("pre_command_rms", 0.002);
             metadata.add_failures(failures.clone());
             write_sync_artifact(
+                fixture.resources().byte_pool(),
                 &metadata,
                 &[
                     ArtifactAudio::new("deck-a-stem", &aligned.candidate),
@@ -619,9 +699,9 @@ async fn bound_tempo_retarget_reaches_pcm_within_twenty_ms() {
 #[kithara::test(tokio, multi_thread, serial, timeout(Duration::from_secs(300)))]
 #[ignore = "SYNC-ORACLE SYNC-PRODUCT-LATENCY-002: waiting for Wave ResidentPlan"]
 async fn running_sync_command_changes_audible_pcm_within_one_block() {
-    let fixture = SyncFixture::new();
+    let fixture = SyncFixture::new(sync_fixture_resources("latency-running-sync")).await;
     for block_frames in [128_usize, 256, 512] {
-        let control_deck = RingDeck::load(fixture.pulse(), block_frames).await;
+        let control_deck = RingDeck::load(fixture.resources(), fixture.pulse(), block_frames).await;
         let pre_blocks = (SAMPLE_RATE as usize).div_ceil(block_frames);
         let mut control_samples = control_deck.capture_blocks(pre_blocks).await;
         let control_command_index = control_samples.len() / usize::from(CHANNELS);
@@ -637,7 +717,8 @@ async fn running_sync_command_changes_audible_pcm_within_one_block() {
             samples: control_samples,
             start_frame: 0,
         };
-        let candidate_deck = RingDeck::load(fixture.pulse(), block_frames).await;
+        let candidate_deck =
+            RingDeck::load(fixture.resources(), fixture.pulse(), block_frames).await;
         let mut candidate = candidate_deck.capture_blocks(pre_blocks).await;
         let command_index = candidate.len() / usize::from(CHANNELS);
         let command_frame = candidate_deck.committed_frames();
@@ -653,7 +734,7 @@ async fn running_sync_command_changes_audible_pcm_within_one_block() {
                 command_index,
                 failures: candidate_deck.failures(),
                 samples: candidate,
-                start_frame: command_frame.saturating_sub(SAMPLE_RATE as u64),
+                start_frame: command_frame.saturating_sub(u64::from(SAMPLE_RATE)),
             },
             &control,
         );
@@ -694,10 +775,7 @@ async fn running_sync_command_changes_audible_pcm_within_one_block() {
             CHANNELS,
             block_frames,
         );
-        metadata.add_source(ArtifactSource::new(
-            "deck-a",
-            fixture.pulse().display().to_string(),
-        ));
+        metadata.add_source(ArtifactSource::new("deck-a", fixture.pulse().uri()));
         metadata.set_operation("issue SYNC to an audible running Queue/Player deck");
         metadata.add_frame(ArtifactFrame::new(command_frame, "sync-command"));
         if let Some(frame) = transition {
@@ -714,6 +792,7 @@ async fn running_sync_command_changes_audible_pcm_within_one_block() {
         );
         metadata.add_failures(failures.clone());
         write_sync_artifact(
+            fixture.resources().byte_pool(),
             &metadata,
             &[
                 ArtifactAudio::new("deck-a-stem", &aligned.candidate),
@@ -739,9 +818,13 @@ struct PhaseCapture {
     start_frame: u64,
 }
 
-async fn capture_sync_sequence(path: &Path, offsets: &[u64]) -> PhaseCapture {
+async fn capture_sync_sequence(
+    resources: &SyncFixtureResources,
+    signal: &SignalAsset,
+    offsets: &[u64],
+) -> PhaseCapture {
     const BLOCK_FRAMES: usize = 512;
-    let deck = RingDeck::load(path, BLOCK_FRAMES).await;
+    let deck = RingDeck::load(resources, signal, BLOCK_FRAMES).await;
     for offset in offsets {
         let _ = deck.bind(&analysis(*offset));
     }
@@ -762,16 +845,18 @@ async fn capture_sync_sequence(path: &Path, offsets: &[u64]) -> PhaseCapture {
 #[ignore = "SYNC-ORACLE SYNC-PRODUCT-LATENCY-003: waiting for Wave ResidentPlan"]
 async fn latest_sync_target_wins_in_pcm() {
     const BLOCK_FRAMES: usize = 512;
-    let fixture = SyncFixture::new();
+    let fixture = SyncFixture::new(sync_fixture_resources("latency-latest-target")).await;
     let beat = beat_frames(SAMPLE_RATE) as u64;
     let first = beat / 3;
     let second = beat * 2 / 3;
 
-    let first_control = capture_sync_sequence(fixture.pulse(), &[first]).await;
-    let second_control = capture_sync_sequence(fixture.pulse(), &[second]).await;
-    let latest_control = capture_sync_sequence(fixture.pulse(), &[0]).await;
+    let first_control = capture_sync_sequence(fixture.resources(), fixture.pulse(), &[first]).await;
+    let second_control =
+        capture_sync_sequence(fixture.resources(), fixture.pulse(), &[second]).await;
+    let latest_control = capture_sync_sequence(fixture.resources(), fixture.pulse(), &[0]).await;
     let latest_report = CochleaReport::measure(&latest_control.samples, CHANNELS, SAMPLE_RATE);
-    let candidate = capture_sync_sequence(fixture.pulse(), &[first, second, 0]).await;
+    let candidate =
+        capture_sync_sequence(fixture.resources(), fixture.pulse(), &[first, second, 0]).await;
     let candidate_report = CochleaReport::measure(&candidate.samples, CHANNELS, SAMPLE_RATE);
     let mut failures = continuity_failures("latest target", &candidate_report, &latest_report);
     for (label, capture) in [
@@ -818,10 +903,7 @@ async fn latest_sync_target_wins_in_pcm() {
         CHANNELS,
         BLOCK_FRAMES,
     );
-    metadata.add_source(ArtifactSource::new(
-        "deck-a",
-        fixture.pulse().display().to_string(),
-    ));
+    metadata.add_source(ArtifactSource::new("deck-a", fixture.pulse().uri()));
     metadata.set_operation("publish stale-A, stale-B, latest-C before the next render callback");
     metadata.add_frame(ArtifactFrame::new(
         candidate.start_frame,
@@ -836,6 +918,7 @@ async fn latest_sync_target_wins_in_pcm() {
     );
     metadata.add_failures(failures.clone());
     write_sync_artifact(
+        fixture.resources().byte_pool(),
         &metadata,
         &[
             ArtifactAudio::new("deck-a-stem", &candidate.samples),
@@ -853,11 +936,6 @@ async fn latest_sync_target_wins_in_pcm() {
         "latest target PCM contract failed: {}\nlatest={latest_report:?}\ncandidate={candidate_report:?}",
         failures.join("; "),
     );
-}
-
-fn write_signal(path: &Path, signal: impl SignalFn) {
-    let pcm = SignalPcm::new(signal, SAMPLE_RATE, CHANNELS, Finite::new(TRACK_FRAMES));
-    fs::write(path, create_wav_from_signal(pcm)).expect("write deterministic sync WAV");
 }
 
 fn beat_frames(sample_rate: u32) -> usize {

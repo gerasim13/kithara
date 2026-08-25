@@ -1,3 +1,8 @@
+use kithara::{
+    audio::{BeatOrdinal, MapStamp, Meter},
+    bufpool::BytePool,
+};
+
 #[derive(Clone, Debug)]
 pub(super) struct PcmCapture {
     pub(super) channels: u16,
@@ -89,6 +94,7 @@ impl SignalEvidence {
 #[derive(Clone, Debug)]
 #[non_exhaustive]
 pub struct CaptureBundle {
+    pub(super) byte_pool: BytePool,
     pub(super) capture_failures: Vec<String>,
     pub(super) facts: ScenarioFacts,
     pub(super) ledger: Vec<LedgerEntry>,
@@ -103,4 +109,3 @@ impl CaptureBundle {
         self.signal.audio()
     }
 }
-use kithara::audio::{BeatOrdinal, MapStamp, Meter};

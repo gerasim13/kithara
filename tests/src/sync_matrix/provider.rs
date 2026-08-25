@@ -3,7 +3,6 @@ use std::num::NonZeroU32;
 use anyhow::{Context, Result, bail};
 use kithara::{
     audio::{BeatMapId, BeatMapRevision, BeatOrdinal, MapStamp, Meter, ReadOutcome},
-    bufpool::{BytePool, PcmPool},
     platform::time::{self, Duration},
     play::{Resource, ResourceConfig, ResourceSrc},
 };
@@ -13,7 +12,10 @@ use super::{
     PcmCapture, RENDER_FRAMES, RhythmicTrack, SignalEvidence, SignalOracle, SignalOracleReport,
     SyncCase, run_synthetic_behavioral_row,
 };
-use crate::{SignalFormat, SignalSpec, SignalSpecLength, TestServerHelper, memory_asset_store};
+use crate::{
+    SignalFormat, SignalSpec, SignalSpecLength, TestServerHelper,
+    sync_fixture::SyncFixtureResources,
+};
 
 const ASSET_TIMEOUT: Duration = Duration::from_secs(30);
 const OUT_OF_SYNC_OFFSET_FRAMES: usize = COCHLEA_PHASE_SPREAD_BUDGET_FRAMES as usize * 2;
@@ -88,13 +90,21 @@ impl SignalCapture {
 /// Produces oracle-ready signal evidence for one behavioral matrix case.
 #[async_trait::async_trait]
 pub trait SignalProvider {
-    async fn capture(self, case: SyncCase) -> Result<SignalCapture>;
+    async fn capture(
+        self,
+        case: SyncCase,
+        resources: SyncFixtureResources,
+    ) -> Result<SignalCapture>;
 }
 
 #[async_trait::async_trait]
 impl SignalProvider for PlayerQueueProvider {
-    async fn capture(self, case: SyncCase) -> Result<SignalCapture> {
-        run_synthetic_behavioral_row(case)
+    async fn capture(
+        self,
+        case: SyncCase,
+        resources: SyncFixtureResources,
+    ) -> Result<SignalCapture> {
+        run_synthetic_behavioral_row(case, resources)
             .await
             .map(SignalCapture::from_player_queue)
     }
@@ -102,10 +112,12 @@ impl SignalProvider for PlayerQueueProvider {
 
 #[async_trait::async_trait]
 impl SignalProvider for AssetProvider {
-    async fn capture(self, case: SyncCase) -> Result<SignalCapture> {
+    async fn capture(
+        self,
+        case: SyncCase,
+        resources: SyncFixtureResources,
+    ) -> Result<SignalCapture> {
         let server = TestServerHelper::new().await;
-        let byte_pool = BytePool::default();
-        let pcm_pool = PcmPool::default();
         let control_tracks = aligned_tracks(case);
         let candidate_tracks = defective_tracks(case, self.defect);
         let continuity_tracks = match self.defect {
@@ -123,8 +135,7 @@ impl SignalProvider for AssetProvider {
             case,
             "asset-control-mix",
             continuity_tracks,
-            &byte_pool,
-            &pcm_pool,
+            &resources,
         )
         .await?;
         let mix = capture_prepared(
@@ -132,8 +143,7 @@ impl SignalProvider for AssetProvider {
             case,
             "asset-candidate-mix",
             &candidate_tracks,
-            &byte_pool,
-            &pcm_pool,
+            &resources,
         )
         .await?;
         let control_replays = capture_tracks(
@@ -141,8 +151,7 @@ impl SignalProvider for AssetProvider {
             case,
             "asset-control-deck",
             continuity_tracks,
-            &byte_pool,
-            &pcm_pool,
+            &resources,
         )
         .await?;
         let deck_replays = capture_tracks(
@@ -150,8 +159,7 @@ impl SignalProvider for AssetProvider {
             case,
             "asset-candidate-deck",
             &candidate_tracks,
-            &byte_pool,
-            &pcm_pool,
+            &resources,
         )
         .await?;
         let pre_sync_replays = capture_tracks(
@@ -159,8 +167,7 @@ impl SignalProvider for AssetProvider {
             case,
             "asset-pre-sync-deck",
             &pre_sync_tracks,
-            &byte_pool,
-            &pcm_pool,
+            &resources,
         )
         .await?;
 
@@ -176,11 +183,15 @@ impl SignalProvider for AssetProvider {
 }
 
 /// Capture a case through a provider and evaluate its shared signal evidence.
-pub async fn evaluate_signal<P>(provider: P, case: SyncCase) -> Result<SignalOracleReport>
+pub async fn evaluate_signal<P>(
+    provider: P,
+    case: SyncCase,
+    resources: SyncFixtureResources,
+) -> Result<SignalOracleReport>
 where
     P: SignalProvider,
 {
-    let capture = provider.capture(case).await?;
+    let capture = provider.capture(case, resources).await?;
     Ok(SignalOracle::evaluate(case, capture.evidence()))
 }
 
@@ -238,8 +249,7 @@ async fn capture_tracks(
     case: SyncCase,
     label: &str,
     tracks: &[RhythmicTrack],
-    byte_pool: &BytePool,
-    pcm_pool: &PcmPool,
+    resources: &SyncFixtureResources,
 ) -> Result<Vec<PcmCapture>> {
     let mut captures = Vec::with_capacity(tracks.len());
     for (deck, track) in tracks.iter().copied().enumerate() {
@@ -249,8 +259,7 @@ async fn capture_tracks(
                 case,
                 &format!("{label}-{deck}"),
                 &[track],
-                byte_pool,
-                pcm_pool,
+                resources,
             )
             .await?,
         );
@@ -263,8 +272,7 @@ async fn capture_prepared(
     case: SyncCase,
     label: &str,
     tracks: &[RhythmicTrack],
-    byte_pool: &BytePool,
-    pcm_pool: &PcmPool,
+    resources: &SyncFixtureResources,
 ) -> Result<PcmCapture> {
     let spec = SignalSpec {
         format: SignalFormat::Flac,
@@ -275,9 +283,9 @@ async fn capture_prepared(
     };
     let url = server.rhythmic_mix(&spec, tracks).await;
     let config: ResourceConfig = ResourceConfig::for_src(ResourceSrc::Url(url))
-        .store(memory_asset_store())
-        .byte_pool(byte_pool.clone())
-        .pcm_pool(pcm_pool.clone())
+        .store(resources.store().clone())
+        .byte_pool(resources.byte_pool().clone())
+        .pcm_pool(resources.pcm_pool().clone())
         .host_sample_rate(
             NonZeroU32::new(case.sample_rate).context("asset sample rate must be non-zero")?,
         )

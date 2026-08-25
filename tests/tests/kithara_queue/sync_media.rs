@@ -8,10 +8,11 @@ use kithara::{
     play::ResourceConfig,
 };
 use kithara_integration_tests::{
-    TestServerHelper, kithara, memory_asset_store, rt_cancel,
+    TestServerHelper, kithara, rt_cancel,
     sync_fixture::{
-        RepositoryMp3, SyncAnalysisFixtures, SyncTrackFixture as AnalysisTrackFixture,
-        repository_mp3, repository_mp3_pair, silvercomet_hls,
+        RepositoryMp3, SyncAnalysisFixtures, SyncFixtureResources,
+        SyncTrackFixture as AnalysisTrackFixture, repository_mp3, repository_mp3_pair,
+        silvercomet_hls,
     },
     sync_matrix::{SyncMedia, SyncTrackFixture, assert_behavioral_row},
 };
@@ -104,10 +105,16 @@ async fn media_source_axis_runs_the_full_behavioral_row(
     #[case] case: kithara_integration_tests::sync_matrix::SyncCase,
 ) -> Result<()> {
     let server = TestServerHelper::new().await;
-    let analysis = SyncAnalysisFixtures::production()
+    let resources = SyncFixtureResources::new(
+        &format!("{}-{}", row.id, case.id),
+        BytePool::default(),
+        PcmPool::default(),
+    )
+    .with_context(|| format!("{}: initialize fixture resources", row.id))?;
+    let analysis = SyncAnalysisFixtures::production(&resources)
         .with_context(|| format!("{}: initialize production analysis", row.id))?;
-    let inputs = media_inputs(row, &server).await?;
-    let media = analyzed_media(row.id, &analysis, &rt_cancel, inputs).await?;
+    let inputs = media_inputs(&resources, row, &server).await?;
+    let media = analyzed_media(row.id, &resources, &analysis, &rt_cancel, inputs).await?;
     let _report = assert_behavioral_row(case, media)
         .await
         .with_context(|| format!("{}: run full behavioral case {}", row.id, case.id))?;
@@ -115,28 +122,38 @@ async fn media_source_axis_runs_the_full_behavioral_row(
 }
 
 async fn media_inputs(
+    resources: &SyncFixtureResources,
     row: MediaRow,
     server: &TestServerHelper,
 ) -> Result<Vec<(&'static str, AnalysisTrackFixture)>> {
     let inputs = match row.kind {
         MediaKind::HlsSame => vec![
-            ("deck-a", silvercomet_hls(server).await?),
-            ("deck-b", silvercomet_hls(server).await?),
+            ("deck-a", silvercomet_hls(resources, server).await?),
+            ("deck-b", silvercomet_hls(resources, server).await?),
         ],
         MediaKind::Mp3Same => vec![
-            ("deck-a", repository_mp3(server, RepositoryMp3::Test).await?),
-            ("deck-b", repository_mp3(server, RepositoryMp3::Test).await?),
+            (
+                "deck-a",
+                repository_mp3(resources, server, RepositoryMp3::Test).await?,
+            ),
+            (
+                "deck-b",
+                repository_mp3(resources, server, RepositoryMp3::Test).await?,
+            ),
         ],
         MediaKind::Mp3Distinct => {
-            let pair = repository_mp3_pair(server).await?;
+            let pair = repository_mp3_pair(resources, server).await?;
             vec![
                 ("deck-a", pair.deck_a().clone()),
                 ("deck-b", pair.deck_b().clone()),
             ]
         }
         MediaKind::HlsWithMp3 => vec![
-            ("deck-a", silvercomet_hls(server).await?),
-            ("deck-b", repository_mp3(server, RepositoryMp3::Test).await?),
+            ("deck-a", silvercomet_hls(resources, server).await?),
+            (
+                "deck-b",
+                repository_mp3(resources, server, RepositoryMp3::Test).await?,
+            ),
         ],
     };
     Ok(inputs)
@@ -144,6 +161,7 @@ async fn media_inputs(
 
 pub(super) async fn analyzed_media(
     id: &'static str,
+    resources: &SyncFixtureResources,
     analysis: &SyncAnalysisFixtures,
     cancel: &CancelToken,
     inputs: Vec<(&'static str, AnalysisTrackFixture)>,
@@ -157,9 +175,9 @@ pub(super) async fn analyzed_media(
         let analysis_key = cached.key().to_owned();
         let playback = ResourceConfig::for_src(input.source().clone())
             .initial_abr_mode(AbrMode::manual(0))
-            .store(memory_asset_store())
-            .byte_pool(BytePool::default())
-            .pcm_pool(PcmPool::default())
+            .store(resources.store().clone())
+            .byte_pool(resources.byte_pool().clone())
+            .pcm_pool(resources.pcm_pool().clone())
             .build();
         let track = SyncTrackFixture::new(
             format!("{deck}:{}", input.media()),
@@ -173,5 +191,5 @@ pub(super) async fn analyzed_media(
             track
         });
     }
-    Ok(SyncMedia::new(id, tracks))
+    Ok(SyncMedia::with_resources(id, tracks, resources.clone()))
 }

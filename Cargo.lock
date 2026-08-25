@@ -5006,7 +5006,6 @@ dependencies = [
  "rtsan-standalone",
  "serde",
  "serde_json",
- "tempfile",
  "tracing",
  "tracing-subscriber",
  "tracing-wasm",

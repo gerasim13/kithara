@@ -2,7 +2,7 @@ use std::{
     fmt::Write as _,
     fs,
     fs::OpenOptions,
-    io::Write,
+    io::{self, Write},
     path::{Path, PathBuf},
 };
 
@@ -38,6 +38,11 @@ fn resolve_cache_dir(root: Option<PathBuf>) -> PathBuf {
     root.join(env!("KITHARA_FIXTURE_BUILD"))
 }
 
+/// Returns the build-fingerprinted root shared by generated integration fixtures.
+pub(crate) fn fixture_cache_dir() -> PathBuf {
+    resolve_cache_dir(std::env::var_os(CACHE_ENV).map(PathBuf::from))
+}
+
 /// Overrides the default cache root; the build fingerprint is always appended.
 pub(crate) const CACHE_ENV: &str = "KITHARA_FIXTURE_CACHE";
 
@@ -50,6 +55,7 @@ pub(crate) struct FixtureCache {
     dir: Option<PathBuf>,
 }
 
+#[derive(Debug)]
 #[must_use = "the cache entry lock must be held while producing the entry"]
 pub(crate) struct FixtureCacheLock {
     _file: Option<fs::File>,
@@ -57,9 +63,7 @@ pub(crate) struct FixtureCacheLock {
 
 impl FixtureCache {
     pub(crate) fn from_env() -> Self {
-        let root = std::env::var_os(CACHE_ENV).map(PathBuf::from);
-        let dir = resolve_cache_dir(root);
-        Self::from_dir(Some(dir))
+        Self::from_dir(Some(fixture_cache_dir()))
     }
 
     pub(crate) const fn from_dir(dir: Option<PathBuf>) -> Self {
@@ -82,20 +86,19 @@ impl FixtureCache {
 
     /// Serialize one cache miss across nextest processes. Callers must re-check
     /// the entry after acquiring the lock before producing it.
-    pub(crate) fn lock_entry(&self, domain: &str, spec: &[u8]) -> FixtureCacheLock {
-        let file = self.dir.as_ref().and_then(|dir| {
-            fs::create_dir_all(dir).ok()?;
-            let file = OpenOptions::new()
-                .read(true)
-                .write(true)
-                .create(true)
-                .truncate(false)
-                .open(Self::lock_path(dir, domain, spec))
-                .ok()?;
-            file.lock().ok()?;
-            Some(file)
-        });
-        FixtureCacheLock { _file: file }
+    pub(crate) fn lock_entry(&self, domain: &str, spec: &[u8]) -> io::Result<FixtureCacheLock> {
+        let Some(dir) = self.dir.as_ref() else {
+            return Ok(FixtureCacheLock { _file: None });
+        };
+        fs::create_dir_all(dir)?;
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(Self::lock_path(dir, domain, spec))?;
+        file.lock()?;
+        Ok(FixtureCacheLock { _file: Some(file) })
     }
 
     pub(crate) fn store(&self, domain: &str, spec: &[u8], payload: &[u8]) {
@@ -111,7 +114,7 @@ impl FixtureCache {
             cache_key(domain, spec),
             std::process::id()
         ));
-        let write_ok = (|| -> std::io::Result<()> {
+        let write_ok = (|| -> io::Result<()> {
             let mut f = fs::File::create(&tmp_path)?;
             f.write_all(payload)?;
             f.sync_all()
@@ -219,7 +222,9 @@ mod tests {
     fn entry_lock_is_exclusive_and_released_on_drop() {
         let dir = std::env::temp_dir().join(format!("fixcache-lock-{}", uuid::Uuid::new_v4()));
         let store = FixtureCache::from_dir(Some(dir.clone()));
-        let held = store.lock_entry("signal", b"spec");
+        let held = store
+            .lock_entry("signal", b"spec")
+            .expect("lock fixture cache entry");
         let contender = OpenOptions::new()
             .read(true)
             .write(true)
@@ -236,6 +241,16 @@ mod tests {
             .expect("entry lock must release with its file handle");
         drop(contender);
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn configured_cache_root_file_makes_entry_lock_fail_closed() {
+        let parent = tempfile::tempdir().expect("cache-root parent temp dir");
+        let root = parent.path().join("not-a-directory");
+        fs::write(&root, b"ordinary file").expect("create invalid cache root");
+        let cache = FixtureCache::from_dir(Some(root));
+
+        assert!(cache.lock_entry("signal", b"spec").is_err());
     }
 
     #[kithara::test(native, flash(false))]

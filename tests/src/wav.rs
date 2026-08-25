@@ -94,7 +94,9 @@ pub fn prepare_sine_wav(
     if let Some(bytes) = cache.get(SINE_WAV_CACHE_DOMAIN, &spec) {
         return bytes;
     }
-    let _lock = cache.lock_entry(SINE_WAV_CACHE_DOMAIN, &spec);
+    let _lock = cache
+        .lock_entry(SINE_WAV_CACHE_DOMAIN, &spec)
+        .expect("lock sine WAV fixture cache entry");
     if let Some(bytes) = cache.get(SINE_WAV_CACHE_DOMAIN, &spec) {
         return bytes;
     }

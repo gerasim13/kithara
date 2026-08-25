@@ -2,14 +2,11 @@ use std::{num::NonZeroU32, ops::Range};
 
 use kithara_audio::{
     AlignmentCursor, AlignmentPlan, AlignmentPlanError, AlignmentPlanRevision, AlignmentRequest,
-    AlignmentSource, AlignmentTransition, AssetBeatMap, Beat, BeatAlignment, BeatMap, BeatMapId,
-    BeatMapRevision, HostBeatMap, HostEpoch, LoadGeneration, MapPoint, PlanSpan, PlanSpanSlot,
-    PlannedRenderSpan, PresentationFrontier, RenderFrontier, RenderPlan, SessionAnchor,
-    SessionBeat, SessionFrame, SourceFrameRange, SyncOperationId, TopologyRevision, TopologyStamp,
-    TransportRevision,
-};
-use kithara_stretch::{
-    ElasticCapabilities, ElasticConfig, ElasticLatency, ElasticRateEnvelope, ElasticSpanConfig,
+    AlignmentSource, AlignmentTransition, AssetAxis, Beat, BeatAlignment, BeatMap, BeatMapId,
+    BeatMapRevision, BeatMapSnapshot, HostBeatMap, HostEpoch, LoadGeneration, MapAxis, MapPoint,
+    PlanSpan, PlanSpanSlot, PlannedRenderSpan, PresentationFrontier, RenderFrontier, RenderPlan,
+    SessionAnchor, SessionBeat, SessionFrame, SourceFrameRange, SyncOperationId, TopologyRevision,
+    TopologyStamp, TransportRevision,
 };
 use kithara_test_utils::kithara;
 
@@ -46,8 +43,10 @@ fn alignment_context() -> (BeatAlignment, TopologyStamp) {
     let host_snapshot = host.snapshot();
     let source_frames = u64::try_from(FRAME_LIMIT)
         .expect("invariant: fixture source extent fits the asset frame domain");
-    let (asset, _) = AssetBeatMap::new(map_id(), sample_rate(), source_frames);
-    let asset_snapshot = asset.snapshot();
+    let asset_snapshot = BeatMapSnapshot::unavailable(
+        map_id(),
+        MapAxis::Asset(AssetAxis::new(sample_rate(), source_frames)),
+    );
     let zero = Beat::new(0.0).expect("invariant: zero beat is finite");
     let alignment = BeatAlignment::new(
         MapPoint::new(asset_snapshot.stamp(), zero),
@@ -94,19 +93,6 @@ fn request_for_operation(
         .build()
 }
 
-fn capabilities() -> ElasticCapabilities {
-    let config = ElasticConfig::try_from((sample_rate().get(), 2, FRAME_LIMIT, FRAME_LIMIT))
-        .expect("invariant: elastic engine shape is valid");
-    let rate_envelope = ElasticRateEnvelope::try_from(0.5..=2.0)
-        .expect("invariant: static planner rate envelope is valid");
-    ElasticCapabilities::new(config, ElasticLatency::new(0, 0), rate_envelope)
-}
-
-fn span_config() -> ElasticSpanConfig {
-    ElasticSpanConfig::try_from((1.0e-6, 1.0, 1.0))
-        .expect("invariant: finite positive exact-span policy")
-}
-
 fn source(range: Range<u64>) -> SourceFrameRange {
     SourceFrameRange::try_from(range).expect("invariant: fixture source range is ordered")
 }
@@ -121,8 +107,6 @@ fn plan(request: AlignmentRequest, revision: AlignmentPlanRevision, end: u64) ->
         revision,
         source(0..end),
         output(i64::try_from(end).expect("invariant: fixture end fits the session clock")),
-        capabilities(),
-        span_config(),
     )
     .expect("invariant: identity plan fixture is valid")
 }
@@ -149,7 +133,7 @@ fn presented(source: u64, output: i64) -> PresentationFrontier {
 }
 
 #[kithara::test]
-fn public_consumers_can_read_alignment_request_and_plan_coverage() {
+fn public_consumers_can_build_identity_plan_without_backend_capabilities() {
     let (alignment, topology) = alignment_context();
     let operation = SyncOperationId::first();
     let load = LoadGeneration::first();
@@ -184,8 +168,6 @@ fn public_consumers_can_read_alignment_request_and_plan_coverage() {
         AlignmentPlanRevision::first(),
         source_coverage,
         output_coverage.clone(),
-        capabilities(),
-        span_config(),
     )
     .expect("invariant: readable identity plan fixture is valid");
 
@@ -209,8 +191,6 @@ fn identity_plan_requires_its_exact_activation_as_the_first_output_frame() {
         AlignmentPlanRevision::first(),
         source(0..8),
         output(8),
-        capabilities(),
-        span_config(),
     )
     .expect_err("an activation inside plan coverage would be rounded to a block boundary");
 
@@ -245,15 +225,20 @@ fn peek_is_pure_and_render_commit_advances_only_the_rendered_frontier() {
     let mut repeated_slot = PlanSpanSlot::new();
 
     let first = ready(
-        plan.next_span(&cursor, BLOCK_FRAMES, retained.clone(), &mut first_slot)
+        plan.next_span(&cursor, BLOCK_FRAMES, retained, &mut first_slot)
             .expect("invariant: the first identity span is plannable"),
     );
     let repeated = ready(
-        plan.next_span(&cursor, BLOCK_FRAMES, retained.clone(), &mut repeated_slot)
+        plan.next_span(&cursor, BLOCK_FRAMES, retained, &mut repeated_slot)
             .expect("invariant: peeking twice remains plannable"),
     );
 
     assert_eq!(first, repeated);
+    assert_eq!(first.source(), source(0..4));
+    assert_eq!(
+        first.output(),
+        &(SessionFrame::new(0)..SessionFrame::new(4))
+    );
     assert_eq!(cursor.frontier(), initial);
 
     let rendered = plan
@@ -293,12 +278,11 @@ fn missing_future_source_is_pending_without_progress() {
     let initial = cursor.frontier();
     let mut slot = PlanSpanSlot::new();
 
-    let required = match plan
+    let PlanSpan::Pending { required } = plan
         .next_span(&cursor, BLOCK_FRAMES, source(0..2), &mut slot)
         .expect("missing future source is a non-terminal plan state")
-    {
-        PlanSpan::Pending { required } => required,
-        _ => panic!("expected a pending source range"),
+    else {
+        panic!("expected a pending source range");
     };
 
     assert_eq!(required, source(0..4));
@@ -325,12 +309,11 @@ fn empty_retained_source_is_pending_without_progress() {
         .expect("an empty retained window is a valid decoder state");
     let mut slot = PlanSpanSlot::new();
 
-    let required = match plan
+    let PlanSpan::Pending { required } = plan
         .next_span(&cursor, BLOCK_FRAMES, retained, &mut slot)
         .expect("an empty retained window is a non-terminal plan state")
-    {
-        PlanSpan::Pending { required } => required,
-        _ => panic!("expected a pending source range"),
+    else {
+        panic!("expected a pending source range");
     };
 
     assert_eq!(required, source(0..4));
@@ -509,8 +492,6 @@ fn identity_plan_rejects_alignment_transitions() {
             AlignmentPlanRevision::first(),
             source(0..8),
             output(8),
-            capabilities(),
-            span_config(),
         )
         .expect_err("identity correction cannot implement a sync transition");
 
@@ -541,13 +522,13 @@ fn finite_coverage_distinguishes_exhaustion_from_completion() {
     let mut slot = PlanSpanSlot::new();
 
     let error = plan
-        .next_span(&cursor, 9, retained.clone(), &mut slot)
+        .next_span(&cursor, 9, retained, &mut slot)
         .expect_err("a block extending beyond finite coverage is exhausted");
     assert!(matches!(error, AlignmentPlanError::PlanExhausted { .. }));
     assert_eq!(cursor.frontier(), initial);
 
     let final_span = ready(
-        plan.next_span(&cursor, 8, retained.clone(), &mut slot)
+        plan.next_span(&cursor, 8, retained, &mut slot)
             .expect("the exact remaining coverage is plannable"),
     );
     plan.commit_rendered(&mut cursor, final_span)

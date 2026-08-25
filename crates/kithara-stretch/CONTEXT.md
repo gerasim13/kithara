@@ -16,7 +16,7 @@ default or global pool.
   compiled-in backend, which is also `Default`.
 - `StretchOptions` (a `#[non_exhaustive]` `bon` builder) owns backend construction settings: source
   sample rate, channel count, `max_input_frames` (default 8192), and the injected `PcmPool`.
-- `build_backend(kind, &options)` dispatches selector → concrete backend.
+- `build_backend(kind, &options)` dispatches selector to concrete backend.
 - `ElasticEngine` / `ElasticPriming` define the exact-span contract, and `ElasticCapabilities` is
   how an engine declares its shape, latency and rate window. Nothing above the adapter names a
   library: the planner, the request and the conformance suite read capabilities only.
@@ -43,7 +43,7 @@ implement the trait.
 
 ## Backend contract
 
-Backends process interleaved `f32` PCM. `set_ratio` and `set_pitch` are independent controls — that
+Backends process interleaved `f32` PCM. `set_ratio` and `set_pitch` are independent controls; that
 decoupling is what makes keylock real. `set_ratio(stretch)` is the time factor
 `output_frames / input_frames` (above `1.0` lengthens the output); `set_pitch(scale)` is the pitch
 factor (`1.0` keeps pitch locked). Both reject non-finite or non-positive values with
@@ -65,6 +65,8 @@ sample rate and channel count, so the trait intentionally does not depend on
 
 ## Backend limitations
 
+- Signalsmith is unavailable on wasm targets.
+- Bungee is unavailable on wasm and Windows MSVC targets.
 - Bungee has no tail drain (its high-level `Stream` exposes none, and feeding muted input would emit
   stretched silence instead of the buffered tail, inflating duration): `flush` is a no-op and roughly
   one latency of audio is dropped at end of stream. A real drain needs the low-level granular
@@ -92,13 +94,16 @@ sample rate and channel count, so the trait intentionally does not depend on
 
 ## Adding a backend
 
-1. Add `src/backends/<name>.rs` with a concrete adapter implementing `StretchBackend`, re-exported
-  from `backends/mod.rs` under the same gate.
-1. Add a feature `stretch-<name>` in `Cargo.toml` and to the shared backend-module gates in
-  `lib.rs`; the backend-neutral elastic planner must continue to compile with no backend feature.
-1. Gate the adapter module, the `StretchKind` variant, its `all()` entry, its `From`/`u8` arms, and
-  the `build_backend` factory arm on `#[cfg(feature = "stretch-<name>")]`; keep the discriminant
-  stable.
+1. Add `src/backends/<name>.rs` with a concrete adapter implementing `StretchBackend`. Define one
+  target-aware gate that combines the feature with its supported targets, then apply that same
+  condition to the module and re-export in `backends/mod.rs`.
+1. Add a feature `stretch-<name>` in `Cargo.toml` and to the `any(...)` guard of the
+  `compile_error!` in `lib.rs` (the crate requires at least one backend).
+1. Add an explicit `compile_error!` for every unsupported target whenever `stretch-<name>` is
+  enabled. Use the backend's target-aware condition for the adapter module and re-export,
+  `StretchKind` variant, its `all()` entry, its `From`/`u8` arms, and the `build_backend` factory
+  arm. Shared contracts and crate-root re-exports remain unconditional; invalid combinations stop
+  at the explicit diagnostic. Keep the discriminant stable.
 1. Add a `<Name>Elastic` engine in the same file when the library can render exact spans: declare
   its rate window and latency, implement `ElasticEngine`, implement `ElasticPriming` only if it can
   absorb history without emitting it, and add one `elastic_engine_conformance!` line (plus
@@ -108,16 +113,15 @@ sample rate and channel count, so the trait intentionally does not depend on
 
 Do not declare `stretch-native` or add `backends/native.rs` until the pure-Rust engine exists.
 
-## Planner-only and wasm builds
+## No-backend and unsupported-target builds
 
-The backend-neutral exact-span planner compiles with no `stretch-*` feature. `ElasticSpanPlan`, its
-cursor/request types, capability envelope, latency, and engine traits remain available so
-`kithara-audio` can own one alignment-plan protocol on every target. Streaming backend machinery
-(`StretchBackend`, `StretchOptions`, `StretchKind`, factory, and adapters) exists only when at least
-one backend feature is enabled.
-
-`kithara-audio` therefore links `kithara-stretch` unconditionally for planner contracts and forwards
-its `stretch-signalsmith` / `stretch-bungee` features only to native DSP implementations. The C++
-backends remain native-only (`wasm32-unknown-unknown` has no libc++), and `kithara-bufpool` remains
-an optional non-wasm dependency pulled in by backend features. A planner-only caller declares
-`ElasticCapabilities` explicitly; it does not imply that an engine exists on the target.
+There is no "no backend" build here: `lib.rs` `compile_error!`s unless at least one `stretch-*`
+feature is set. It also rejects Signalsmith on wasm and Bungee on wasm or Windows MSVC. The public
+contracts are not hidden behind an aggregate backend gate; concrete adapters and selector variants
+alone use their target-aware feature conditions. "Stretch is absent" lives one level up:
+`kithara-audio` depends on `kithara-stretch` optionally (only its `stretch-signalsmith` /
+`stretch-bungee` features pull it), so a build with no stretch, including every wasm build today,
+simply does not link this crate. Domain types that non-stretch code needs (`GridSegment`,
+`RegionPlan`) therefore live in `kithara-audio`. The C++ backends are native-only
+(`wasm32-unknown-unknown` has no libc++); `kithara-bufpool` remains a common dependency because
+`StretchOptions` always carries the caller-injected pool.

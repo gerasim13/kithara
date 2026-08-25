@@ -11,6 +11,7 @@ mod runtime;
 use std::{num::NonZeroU32, path::PathBuf};
 
 use kithara::{
+    assets::{AssetStore, StorageBackend},
     audio::{StretchControls, StretchKind},
     bufpool::{BytePool, PcmPool},
     events::EventBus,
@@ -27,7 +28,7 @@ use kithara::{
 };
 use kithara_integration_tests::{
     TestServerHelper, audio_artifact::write_audio_artifact, cochlea::CochleaReport,
-    memory_asset_store, offline::OfflineSession,
+    offline::OfflineSession,
 };
 use oracle::{AudioLevelReport, AudioRole, MatchedMixReport, SampleContinuityReport};
 use reference::capture_references;
@@ -201,12 +202,23 @@ async fn run_real_media_matrix(record_artifacts: bool) {
 }
 
 async fn run_case(case: &Case, server: &TestServerHelper, record_artifacts: bool) -> Vec<String> {
+    let byte_pool = BytePool::default();
+    let pcm_pool = PcmPool::default();
+    let store = AssetStore::builder()
+        .backend(StorageBackend::Memory)
+        .pool(byte_pool.clone())
+        .build();
     let session = Arc::new(OfflineSession::new_manual());
     let mut failures = Vec::new();
 
     let mut decks = Vec::with_capacity(case.media.len());
     for (deck_index, media) in case.media.iter().copied().enumerate() {
-        decks.push(prepare_deck(case, deck_index, media, server, &session).await);
+        decks.push(
+            prepare_deck(
+                case, deck_index, media, server, &session, &store, &byte_pool, &pcm_pool,
+            )
+            .await,
+        );
     }
 
     load_decks(case, &decks, &mut failures);
@@ -334,6 +346,7 @@ async fn run_case(case: &Case, server: &TestServerHelper, record_artifacts: bool
             .map(|(label, pcm)| (label.as_str(), *pcm))
             .collect::<Vec<_>>();
         let written = write_audio_artifact(
+            &byte_pool,
             case.label,
             case.host_rate,
             CHANNELS,
@@ -759,6 +772,9 @@ async fn prepare_deck(
     media: Media,
     server: &TestServerHelper,
     session: &Arc<OfflineSession>,
+    store: &AssetStore,
+    byte_pool: &BytePool,
+    pcm_pool: &PcmPool,
 ) -> Deck {
     let controls = StretchControls::new(1.0);
     controls.set_backend(StretchKind::Signalsmith);
@@ -767,8 +783,8 @@ async fn prepare_deck(
     let dispatcher: Arc<dyn SessionDispatcher> = session.clone();
     let player = Arc::new(PlayerImpl::new(
         PlayerConfig::builder()
-            .byte_pool(BytePool::default())
-            .pcm_pool(PcmPool::default())
+            .byte_pool(byte_pool.clone())
+            .pcm_pool(pcm_pool.clone())
             .bus(bus)
             .sample_rate(case.host_rate)
             .crossfade_duration(0.0)
@@ -788,7 +804,7 @@ async fn prepare_deck(
         ResourceConfig::for_src(ResourceConfig::parse_src(&src).unwrap_or_else(|error| {
             panic!("{} deck {deck_index}: parse {src}: {error}", case.label)
         }))
-        .store(memory_asset_store())
+        .store(store.clone())
         .byte_pool(player.byte_pool().clone())
         .pcm_pool(player.pcm_pool().clone())
         .initial_abr_mode(AbrMode::manual(0))
@@ -806,7 +822,7 @@ async fn prepare_deck(
         ResourceConfig::for_src(ResourceConfig::parse_src(&src).unwrap_or_else(|error| {
             panic!("{} deck {deck_index}: parse {src}: {error}", case.label)
         }))
-        .store(memory_asset_store())
+        .store(store.clone())
         .byte_pool(player.byte_pool().clone())
         .pcm_pool(player.pcm_pool().clone())
         .initial_abr_mode(AbrMode::manual(0))

@@ -5,6 +5,7 @@ use kithara::{
         Audio, AudioConfig, AudioEffect, AudioWorkerHandle, PcmSession, StretchControls,
         StretchKind,
     },
+    bufpool::{BytePool, PcmPool},
     decode::PcmChunk,
     platform::{
         CancelToken,
@@ -212,6 +213,8 @@ fn measure_quiet_sine(samples: &[f32]) -> SineFit {
 
 fn audio_config(
     source: &[u8],
+    byte_pool: &BytePool,
+    pcm_pool: &PcmPool,
     worker: AudioWorkerHandle,
     stretch: bool,
     effects: Vec<Box<dyn AudioEffect>>,
@@ -228,8 +231,8 @@ fn audio_config(
     });
 
     AudioConfig::<MemStream>::for_stream(stream)
-        .byte_pool(kithara::bufpool::BytePool::default())
-        .pcm_pool(kithara::bufpool::PcmPool::default())
+        .byte_pool(byte_pool.clone())
+        .pcm_pool(pcm_pool.clone())
         .maybe_stretch(stretch)
         .worker(worker)
         .effects(effects)
@@ -249,19 +252,33 @@ async fn wait_for_preload(audio: &Audio<Stream<MemStream>>) {
     .expect("audio preload gate must open");
 }
 
-async fn render_passthrough(source: &[u8], stretch: bool, with_load: bool) -> RealtimeCapture {
+async fn render_passthrough(
+    source: &[u8],
+    byte_pool: &BytePool,
+    pcm_pool: &PcmPool,
+    stretch: bool,
+    with_load: bool,
+) -> RealtimeCapture {
     let load_probe = Arc::new(LoadProbe::new());
     let worker = AudioWorkerHandle::with_cancel(CancelToken::never());
-    let mut target_audio =
-        Audio::<Stream<MemStream>>::new(audio_config(source, worker.clone(), stretch, Vec::new()))
-            .await
-            .expect("target audio construction");
+    let mut target_audio = Audio::<Stream<MemStream>>::new(audio_config(
+        source,
+        byte_pool,
+        pcm_pool,
+        worker.clone(),
+        stretch,
+        Vec::new(),
+    ))
+    .await
+    .expect("target audio construction");
     wait_for_preload(&target_audio).await;
     target_audio.preload().expect("target preload");
 
     let mut load_audio = if with_load {
         let mut audio = Audio::<Stream<MemStream>>::new(audio_config(
             source,
+            byte_pool,
+            pcm_pool,
             worker,
             false,
             vec![Box::new(BurstLoadEffect::new(Arc::clone(&load_probe)))],
@@ -364,6 +381,8 @@ async fn record_no_sync_unity_playback_artifacts() {
 }
 
 async fn run_no_sync_passthrough(record_artifacts: bool) {
+    let byte_pool = BytePool::default();
+    let pcm_pool = PcmPool::default();
     let channels = usize::from(CHANNELS);
     let source = prepare_sine_wav(
         440.0,
@@ -372,12 +391,12 @@ async fn run_no_sync_passthrough(record_artifacts: bool) {
         SAMPLE_RATE,
         CHANNELS,
     );
-    let baseline = render_passthrough(&source, false, false).await;
+    let baseline = render_passthrough(&source, &byte_pool, &pcm_pool, false, false).await;
     let baseline_report = CochleaReport::measure(&baseline.pcm, CHANNELS, SAMPLE_RATE);
     let baseline_source_fit = measure_quiet_sine(&baseline.pcm);
-    let unity = render_passthrough(&source, true, false).await;
+    let unity = render_passthrough(&source, &byte_pool, &pcm_pool, true, false).await;
     let unity_report = CochleaReport::measure(&unity.pcm, CHANNELS, SAMPLE_RATE);
-    let loaded = render_passthrough(&source, true, true).await;
+    let loaded = render_passthrough(&source, &byte_pool, &pcm_pool, true, true).await;
     let loaded_report = CochleaReport::measure(&loaded.pcm, CHANNELS, SAMPLE_RATE);
     let mut failures = Vec::new();
     if !baseline.pcm.iter().any(|sample| sample.abs() > 0.25) {
@@ -467,6 +486,7 @@ async fn run_no_sync_passthrough(record_artifacts: bool) {
     };
     if record_artifacts {
         let written = write_audio_artifact(
+            &byte_pool,
             "no-sync-unity-passthrough",
             SAMPLE_RATE,
             CHANNELS,

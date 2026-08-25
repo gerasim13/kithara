@@ -6,12 +6,11 @@
 //! rate window, the declared latency) are asserted next to the engine that
 //! declares them, and nothing else in the suite names a backend.
 
-#![cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
-
 use std::f32::consts::TAU;
 
 use kithara_stretch::{
-    ElasticEngine, ElasticError, ElasticRateEnvelope, ElasticRequest, ElasticSpanConfig,
+    ElasticCapabilities, ElasticConfig, ElasticEngine, ElasticError, ElasticLatency,
+    ElasticRateEnvelope, ElasticRequest, ElasticSpanConfig,
 };
 use kithara_test_utils::kithara;
 use num_traits::ToPrimitive;
@@ -20,14 +19,83 @@ const CHANNELS: usize = 2;
 const SAMPLE_RATE: u32 = 48_000;
 const TONE_HZ: f64 = 440.0;
 
+struct ExternalIdentityEngine {
+    capabilities: ElasticCapabilities,
+}
+
+impl ElasticEngine for ExternalIdentityEngine {
+    fn prepare(config: ElasticConfig) -> Result<Self, ElasticError> {
+        let latency = ElasticLatency::new(0, 0);
+        let rate_envelope = ElasticRateEnvelope::try_from(1.0..=1.0)?;
+        Ok(Self {
+            capabilities: ElasticCapabilities::new(config, latency, rate_envelope),
+        })
+    }
+
+    fn capabilities(&self) -> ElasticCapabilities {
+        self.capabilities
+    }
+
+    fn process(
+        &mut self,
+        request: ElasticRequest,
+        source: &[f32],
+        output: &mut [f32],
+    ) -> Result<(), ElasticError> {
+        let expected_source = request
+            .source_frames()
+            .checked_mul(self.capabilities.channels())
+            .ok_or(ElasticError::SampleCountOverflow)?;
+        if source.len() != expected_source {
+            return Err(ElasticError::SourceSampleCount {
+                actual: source.len(),
+                expected: expected_source,
+            });
+        }
+        let expected_output = request
+            .output_frames()
+            .checked_mul(self.capabilities.channels())
+            .ok_or(ElasticError::SampleCountOverflow)?;
+        if output.len() != expected_output {
+            return Err(ElasticError::OutputSampleCount {
+                actual: output.len(),
+                expected: expected_output,
+            });
+        }
+        if request.source_frames() != request.output_frames() {
+            return Err(ElasticError::RateOutsideEnvelope {
+                source_frames: request.source_frames(),
+                output_frames: request.output_frames(),
+            });
+        }
+        output.copy_from_slice(source);
+        Ok(())
+    }
+
+    fn reset(&mut self) -> Result<(), ElasticError> {
+        Ok(())
+    }
+}
+
+#[kithara::test]
+fn external_crate_can_implement_the_public_engine_contract() {
+    let mut engine: ExternalIdentityEngine = prepared(64, 64);
+    let request = ElasticRequest::new(64, 64).expect("invariant: the fixture span is non-empty");
+    let source = interleaved_signal(64);
+    let mut output = vec![0.0; source.len()];
+
+    engine
+        .process(request, &source, &mut output)
+        .expect("the external identity engine accepts its declared unity rate");
+
+    assert_eq!(output, source);
+    assert_eq!(engine.capabilities().latency(), ElasticLatency::new(0, 0));
+}
+
 fn prepared<E: ElasticEngine>(max_source_frames: usize, max_output_frames: usize) -> E {
-    let config = kithara_stretch::ElasticConfig::try_from((
-        SAMPLE_RATE,
-        CHANNELS,
-        max_source_frames,
-        max_output_frames,
-    ))
-    .expect("the test configuration is valid");
+    let config =
+        ElasticConfig::try_from((SAMPLE_RATE, CHANNELS, max_source_frames, max_output_frames))
+            .expect("the test configuration is valid");
     E::prepare(config).expect("the engine prepares for a valid shape")
 }
 
@@ -427,6 +495,7 @@ macro_rules! elastic_engine_conformance {
     };
 }
 
+#[cfg(feature = "stretch-signalsmith")]
 macro_rules! elastic_priming_conformance {
     ($module:ident, $engine:ty) => {
         mod $module {

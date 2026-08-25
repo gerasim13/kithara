@@ -7,11 +7,15 @@ use kithara::{
 };
 
 use super::{CHANNELS, SyncCase};
-use crate::{SignalFormat, SignalSpec, SignalSpecLength, TestServerHelper};
+use crate::{
+    SignalFormat, SignalSpec, SignalSpecLength, TestServerHelper,
+    sync_fixture::SyncFixtureResources,
+};
 
 pub(super) struct SyntheticFixture {
     _server: TestServerHelper,
     tracks: Vec<SyntheticTrack>,
+    resources: SyncFixtureResources,
 }
 
 struct SyntheticTrack {
@@ -22,7 +26,7 @@ struct SyntheticTrack {
 }
 
 impl SyntheticFixture {
-    pub(super) async fn new(case: SyncCase) -> Result<Self> {
+    pub(super) async fn new(case: SyncCase, resources: SyncFixtureResources) -> Result<Self> {
         if case.signal_tracks.len() < 2 {
             bail!("{case}: synthetic matrix requires at least two signal tracks");
         }
@@ -47,11 +51,12 @@ impl SyntheticFixture {
         Ok(Self {
             _server: server,
             tracks,
+            resources,
         })
     }
 
     pub(super) fn media(&self) -> SyncMedia {
-        SyncMedia::new(
+        SyncMedia::with_resources(
             "synthetic-pulse",
             self.tracks
                 .iter()
@@ -64,6 +69,7 @@ impl SyntheticFixture {
                     )
                 })
                 .collect(),
+            self.resources.clone(),
         )
     }
 }
@@ -112,15 +118,21 @@ pub struct SyncMedia {
     pub(super) id: String,
     pub(super) library_seed: Option<u64>,
     pub(super) tracks: Vec<SyncTrackFixture>,
+    pub(super) resources: SyncFixtureResources,
 }
 
 impl SyncMedia {
     #[must_use]
-    pub fn new(id: impl Into<String>, tracks: Vec<SyncTrackFixture>) -> Self {
+    pub fn with_resources(
+        id: impl Into<String>,
+        tracks: Vec<SyncTrackFixture>,
+        resources: SyncFixtureResources,
+    ) -> Self {
         Self {
             id: id.into(),
             library_seed: None,
             tracks,
+            resources,
         }
     }
 

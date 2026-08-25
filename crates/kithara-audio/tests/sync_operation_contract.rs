@@ -1,13 +1,13 @@
 use std::num::NonZeroU32;
 
 use kithara_audio::{
-    AlignmentPlan, AlignmentRequest, AlignmentSource, AssetBeatMap, Beat, BeatAlignment, BeatMap,
-    BeatMapId, BeatMapRevision, BeatMapSnapshot, HostBeatMap, HostEpoch, LoadGeneration, MapPoint,
-    PlanTransition, PresentationFrontier, ReconcileCause, SessionAnchor, SessionBeat, SessionFrame,
-    SyncAdmission, SyncApplied, SyncCapability, SyncError, SyncGroup, SyncGroupSnapshot,
-    SyncGroupTopologyError, SyncIntent, SyncMember, SyncMemberKind, SyncOperation, SyncOperationId,
-    SyncRejected, SyncStatusSnapshot, TopologyOperation, TopologyRevision, TopologyStamp,
-    TransportOperation, TransportRevision,
+    AlignmentPlan, AlignmentRequest, AlignmentSource, AssetAxis, Beat, BeatAlignment, BeatMap,
+    BeatMapId, BeatMapRevision, BeatMapSnapshot, BeatMapSnapshotError, HostBeatMap, HostEpoch,
+    LoadGeneration, MapAxis, MapPoint, MapStamp, MapState, PlanTransition, PresentationFrontier,
+    ReconcileCause, SessionAnchor, SessionBeat, SessionFrame, SyncAdmission, SyncApplied,
+    SyncCapability, SyncError, SyncGroup, SyncGroupSnapshot, SyncIntent, SyncMember,
+    SyncMemberKind, SyncOperation, SyncOperationId, SyncRejected, SyncStatusSnapshot,
+    TopologyOperation, TopologyRevision, TopologyStamp, TransportOperation, TransportRevision,
 };
 use kithara_test_utils::kithara;
 
@@ -105,11 +105,13 @@ fn zero(map: &BeatMapSnapshot) -> MapPoint<Beat> {
 
 fn member(parent: &dyn BeatMap) -> SyncMember<ContractGroup> {
     let parent = parent.snapshot();
-    let (map, _publisher) = AssetBeatMap::new(map_id(), sample_rate(), 48_001);
-    let source = map.snapshot();
+    let source = BeatMapSnapshot::unavailable(
+        map_id(),
+        MapAxis::Asset(AssetAxis::new(sample_rate(), 48_001)),
+    );
     SyncMember::Map {
         alignment: Some(BeatAlignment::new(zero(&source), zero(&parent))),
-        map: Box::new(map),
+        map: Box::new(source),
     }
 }
 
@@ -266,14 +268,15 @@ fn accepted_transport_preserves_every_dispatch_stamp() {
     }
 }
 
-fn observe_transport_operation(operation: &TransportOperation) {
+fn observe_transport_operation(operation: &TransportOperation) -> bool {
     match operation {
         TransportOperation::PrepareStart { source_frame }
         | TransportOperation::Seek { source_frame } => {
             let _: &u64 = source_frame;
+            true
         }
-        TransportOperation::Play | TransportOperation::Pause | TransportOperation::Stop => {}
-        _ => {}
+        TransportOperation::Play | TransportOperation::Pause | TransportOperation::Stop => true,
+        _ => false,
     }
 }
 
@@ -314,7 +317,7 @@ fn transport_shape_exposes_each_operation_and_target() {
                 assert_eq!(*observed_target, target);
                 assert_eq!(*observed_load, load);
                 assert_eq!(*observed_transport, transport);
-                observe_transport_operation(operation);
+                assert!(observe_transport_operation(operation));
                 match operation {
                     TransportOperation::PrepareStart { source_frame } => {
                         assert_eq!(*source_frame, prepared_source);
@@ -330,11 +333,11 @@ fn transport_shape_exposes_each_operation_and_target() {
     }
 }
 
-fn observe_sync_intent(intent: &SyncIntent) {
-    match intent {
-        SyncIntent::Enable | SyncIntent::Disable | SyncIntent::AlignNow => {}
-        _ => {}
-    }
+fn observe_sync_intent(intent: SyncIntent) -> bool {
+    matches!(
+        intent,
+        SyncIntent::Enable | SyncIntent::Disable | SyncIntent::AlignNow
+    )
 }
 
 #[kithara::test]
@@ -374,21 +377,21 @@ fn sync_shape_exposes_each_intent_and_target() {
                 assert_eq!(*observed_transport, transport);
                 assert_eq!(*observed_source, source);
                 assert_eq!(*observed_activation, activation);
-                observe_sync_intent(intent);
+                assert!(observe_sync_intent(*intent));
             }
             _ => panic!("expected sync operation"),
         }
     }
 }
 
-fn observe_reconcile_cause(cause: &ReconcileCause) {
-    match cause {
+fn observe_reconcile_cause(cause: ReconcileCause) -> bool {
+    matches!(
+        cause,
         ReconcileCause::MapAvailable
-        | ReconcileCause::MapRefined
-        | ReconcileCause::TransportChanged
-        | ReconcileCause::TopologyChanged => {}
-        _ => {}
-    }
+            | ReconcileCause::MapRefined
+            | ReconcileCause::TransportChanged
+            | ReconcileCause::TopologyChanged
+    )
 }
 
 #[kithara::test]
@@ -425,58 +428,37 @@ fn reconcile_shape_exposes_each_cause_and_target() {
                 assert_eq!(*observed_load, load);
                 assert_eq!(*observed_transport, transport);
                 assert_eq!(*observed_frontier, frontier);
-                observe_reconcile_cause(cause);
+                assert!(observe_reconcile_cause(*cause));
             }
             _ => panic!("expected reconcile operation"),
         }
     }
 }
 
-fn observe_sync_error(error: &SyncError) {
-    match error {
-        SyncError::StaleTopology { expected, given } => {
-            let _: (&TopologyStamp, &TopologyStamp) = (expected, given);
-        }
-        SyncError::GroupNotFound { group_id }
-        | SyncError::TopologyRevisionExhausted { group_id }
-        | SyncError::OperationIdExhausted { group_id } => {
-            let _: &BeatMapId = group_id;
-        }
-        SyncError::NoPreparedOperation => {}
-        SyncError::MemberNotFound {
-            group_id,
-            member_id,
-        } => {
-            let _: (&BeatMapId, &BeatMapId) = (group_id, member_id);
-        }
-        SyncError::InvalidMemberKind {
-            group_id,
-            member_id,
-            expected,
-            given,
-        } => {
-            let _: (&BeatMapId, &BeatMapId, &SyncMemberKind, &SyncMemberKind) =
-                (group_id, member_id, expected, given);
-        }
-        SyncError::DuplicateAcknowledgement { operation } => {
-            let _: &SyncOperationId = operation;
-        }
-        SyncError::StaleAcknowledgement { expected, given } => {
-            let _: (&SyncOperationId, &SyncOperationId) = (expected, given);
-        }
-        SyncError::AppliedMismatch { expected, given } => {
-            let _: (&SyncApplied, &SyncApplied) = (expected, given);
-        }
-        SyncError::Topology(error) => {
-            let _: &SyncGroupTopologyError = error;
-        }
-        _ => {}
-    }
+#[kithara::test]
+fn map_revision_mismatch_preserves_expected_and_given_stamps() {
+    let id = map_id();
+    let expected = MapStamp::new(id, BeatMapRevision::first());
+    let given = MapStamp::new(
+        id,
+        BeatMapRevision::first()
+            .checked_next()
+            .expect("invariant: the first map revision has a successor"),
+    );
+    let error = SyncError::MapRevisionMismatch { expected, given };
+
+    assert_eq!(error, SyncError::MapRevisionMismatch { expected, given });
 }
 
 #[kithara::test]
-fn sync_errors_expose_typed_failure_context() {
-    let _contract: fn(&SyncError) = observe_sync_error;
+fn snapshot_transition_error_remains_typed_through_sync_error() {
+    let source = BeatMapSnapshotError::InvalidTransition {
+        from: MapState::Complete,
+        to: MapState::Building,
+    };
+    let error = SyncError::from(source);
+
+    assert_eq!(error, SyncError::BeatMapSnapshot(source));
 }
 
 #[kithara::test]
@@ -489,11 +471,11 @@ fn group_scoped_errors_preserve_group_identity() {
     ];
 
     for error in errors {
-        let observed = match error {
-            SyncError::GroupNotFound { group_id }
-            | SyncError::TopologyRevisionExhausted { group_id }
-            | SyncError::OperationIdExhausted { group_id } => group_id,
-            _ => panic!("expected a group-scoped synchronization error"),
+        let (SyncError::GroupNotFound { group_id: observed }
+        | SyncError::TopologyRevisionExhausted { group_id: observed }
+        | SyncError::OperationIdExhausted { group_id: observed }) = error
+        else {
+            panic!("expected a group-scoped synchronization error");
         };
         assert_eq!(observed, group_id);
     }

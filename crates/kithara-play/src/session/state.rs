@@ -73,7 +73,7 @@ impl Deck {
             eq_layout,
             pcm_pool,
             player_id,
-            map: unavailable_map(id, BeatMapRevision::first(), sample_rate, HostEpoch::new(0)),
+            map: unavailable_map(id, sample_rate, HostEpoch::new(0)),
             tracks: Vec::new(),
             next_operation: Some(SyncOperationId::first()),
             topology_revision: TopologyRevision::first(),

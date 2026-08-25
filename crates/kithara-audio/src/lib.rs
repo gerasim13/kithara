@@ -32,26 +32,33 @@ pub use effects::{
     limiter::{LimiterError, PeakLimiter},
     timestretch::StretchControls,
 };
+#[cfg(any(
+    feature = "analysis-waveform",
+    feature = "resample-glide",
+    feature = "resample-rubato",
+    all(
+        not(target_arch = "wasm32"),
+        any(feature = "stretch-signalsmith", feature = "stretch-bungee")
+    )
+))]
 pub use exports::*;
 pub use kithara_resampler::{
     NoResamplerBackend, ResamplerBackend, ResamplerOptions, ResamplerQuality,
 };
 pub use musical::{
     AlignmentCursor, AlignmentPlan, AlignmentPlanError, AlignmentPlanRevision, AlignmentRequest,
-    AlignmentSource, AlignmentTransition, AssetAxis, AssetBeatMap, AssetFrame,
-    AssetMapPublishError, AssetMapPublisher, AssetMapUpdate, Beat, BeatAlignment, BeatEstimate,
+    AlignmentSource, AlignmentTransition, AssetAxis, AssetFrame, Beat, BeatAlignment, BeatEstimate,
     BeatEvidence, BeatMap, BeatMapId, BeatMapIdAllocationError, BeatMapRevision, BeatMapSnapshot,
     BeatMapSnapshotError, BeatMarker, BeatOrdinal, BeatsPerMinute, CoordinateError,
     FrameUncertainty, HostAxis, HostBeatMap, HostEpoch, LoadGeneration, MapAxis,
     MapCoordinateError, MapPoint, MapPosition, MapQuery, MapRegion, MapSegment, MapStamp, MapState,
     MapUnavailable, Meter, MeterError, MeterFacts, PlanSpan, PlanSpanSlot, PlanTransition,
     PlannedRenderSpan, PresentationFrontier, ReconcileCause, RenderFrontier, RenderPlan,
-    SegmentDraft, SegmentEndpoint, SegmentError, SegmentFacts, SegmentSet, SessionAnchor,
-    SessionBeat, SessionFrame, SourceFrameRange, SyncAdmission, SyncApplied, SyncCapability,
-    SyncError, SyncGroup, SyncGroupSnapshot, SyncGroupTopologyError, SyncIntent, SyncMember,
-    SyncMemberKind, SyncMemberSnapshot, SyncOperation, SyncOperationId, SyncRejected,
-    SyncStatusSnapshot, TopologyOperation, TopologyRevision, TopologyStamp, TransportOperation,
-    TransportRevision,
+    SegmentEndpoint, SegmentError, SegmentFacts, SegmentSet, SessionAnchor, SessionBeat,
+    SessionFrame, SourceFrameRange, SyncAdmission, SyncApplied, SyncCapability, SyncError,
+    SyncGroup, SyncGroupSnapshot, SyncGroupTopologyError, SyncIntent, SyncMember, SyncMemberKind,
+    SyncMemberSnapshot, SyncOperation, SyncOperationId, SyncRejected, SyncStatusSnapshot,
+    TopologyOperation, TopologyRevision, TopologyStamp, TransportOperation, TransportRevision,
 };
 pub use pipeline::{
     config::{AudioConfig, AudioDecoderConfig, ConsumerWakeMode, DecoderResamplerSettings},

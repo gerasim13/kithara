@@ -78,7 +78,7 @@ where
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "resample-rubato"))]
 mod tests {
     use kithara_resampler::rubato::RubatoBackend;
     use kithara_test_utils::kithara;

@@ -292,7 +292,7 @@ pub fn persist_then_assert(
         .audio()
         .map(|capture| ArtifactAudio::new(&capture.label, &capture.samples))
         .collect::<Vec<_>>();
-    let _ = write_sync_artifact(&metadata, &audio)?;
+    let _ = write_sync_artifact(&bundle.byte_pool, &metadata, &audio)?;
 
     assert_rhythmic_oracle_load_bearing();
     if !report.failures.is_empty() {

@@ -10,7 +10,9 @@ use super::{
     ScenarioFacts, SignalEvidence, SyncCase, SyncHarness, SyncMedia, SyncOracle, SyncOracleReport,
     persist_then_assert,
 };
-use crate::{offline::MixTapProbe, sync_control::SyncDeckControl};
+use crate::{
+    offline::MixTapProbe, sync_control::SyncDeckControl, sync_fixture::SyncFixtureResources,
+};
 
 const LIFECYCLE_CAPTURE_MULTIPLIER: usize = 32;
 
@@ -206,6 +208,13 @@ impl SyncHarness {
     }
 
     async fn capture_replays(mut self) -> Result<CaptureBundle> {
+        let byte_pool = self
+            .decks
+            .first()
+            .context("behavioral capture has no player resource owner")?
+            .player
+            .byte_pool()
+            .clone();
         let mix = self.capture_candidate_lifecycle().await?;
         let deck_replays = self.capture_synced_windows().await?;
         let facts = self.facts()?;
@@ -234,6 +243,7 @@ impl SyncHarness {
             })
             .collect();
         Ok(CaptureBundle {
+            byte_pool,
             capture_failures,
             facts,
             ledger,
@@ -369,8 +379,14 @@ async fn run_behavioral_row(case: SyncCase, media: SyncMedia) -> Result<CaptureB
         .await
 }
 
-pub async fn run_synthetic_behavioral_row(case: SyncCase) -> Result<CaptureBundle> {
-    SyncHarness::synthetic(case).await?.capture_replays().await
+pub async fn run_synthetic_behavioral_row(
+    case: SyncCase,
+    resources: SyncFixtureResources,
+) -> Result<CaptureBundle> {
+    SyncHarness::synthetic(case, resources)
+        .await?
+        .capture_replays()
+        .await
 }
 
 pub async fn assert_behavioral_row(case: SyncCase, media: SyncMedia) -> Result<SyncOracleReport> {

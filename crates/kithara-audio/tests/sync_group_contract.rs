@@ -1,12 +1,15 @@
-use std::num::NonZeroU32;
+use std::{
+    num::NonZeroU32,
+    sync::{Arc, RwLock},
+};
 
 use kithara_audio::{
-    AlignmentPlan, AlignmentRequest, AssetBeatMap, AssetMapUpdate, Beat, BeatAlignment, BeatMap,
-    BeatMapId, BeatMapRevision, BeatMapSnapshot, HostBeatMap, HostEpoch, MapAxis, MapPoint,
-    MapState, PlanTransition, PresentationFrontier, SessionAnchor, SessionBeat, SessionFrame,
-    SyncAdmission, SyncApplied, SyncCapability, SyncError, SyncGroup, SyncGroupSnapshot,
-    SyncGroupTopologyError, SyncMember, SyncMemberKind, SyncMemberSnapshot, SyncOperation,
-    SyncRejected, SyncStatusSnapshot, TopologyOperation, TopologyRevision,
+    AlignmentPlan, AlignmentRequest, Beat, BeatAlignment, BeatMap, BeatMapId, BeatMapRevision,
+    BeatMapSnapshot, HostBeatMap, HostEpoch, MapAxis, MapPoint, PlanTransition,
+    PresentationFrontier, SessionAnchor, SessionBeat, SessionFrame, SyncAdmission, SyncApplied,
+    SyncCapability, SyncError, SyncGroup, SyncGroupSnapshot, SyncGroupTopologyError, SyncMember,
+    SyncMemberKind, SyncMemberSnapshot, SyncOperation, SyncRejected, SyncStatusSnapshot,
+    TopologyOperation, TopologyRevision,
 };
 use kithara_test_utils::kithara;
 
@@ -61,6 +64,62 @@ impl BeatMap for FrozenMap {
         frontier: PresentationFrontier,
     ) -> Result<PlanTransition, SyncError> {
         self.0.reconcile_to(target, active, frontier)
+    }
+}
+
+#[derive(Clone, Debug)]
+struct LiveMap {
+    id: BeatMapId,
+    current: Arc<RwLock<BeatMapSnapshot>>,
+}
+
+impl LiveMap {
+    fn new(snapshot: BeatMapSnapshot) -> Self {
+        Self {
+            id: snapshot.id(),
+            current: Arc::new(RwLock::new(snapshot)),
+        }
+    }
+
+    fn replace(&self, snapshot: BeatMapSnapshot) {
+        assert_eq!(snapshot.id(), self.id);
+        let mut current = self
+            .current
+            .write()
+            .expect("invariant: fixture map lock is not poisoned");
+        assert!(snapshot.revision() > current.revision());
+        assert_eq!(snapshot.axis(), current.axis());
+        *current = snapshot;
+    }
+}
+
+impl BeatMap for LiveMap {
+    fn id(&self) -> BeatMapId {
+        self.id
+    }
+
+    fn snapshot(&self) -> BeatMapSnapshot {
+        self.current
+            .read()
+            .expect("invariant: fixture map lock is not poisoned")
+            .clone()
+    }
+
+    fn align_to(
+        &self,
+        target: &dyn BeatMap,
+        request: AlignmentRequest,
+    ) -> Result<AlignmentPlan, SyncError> {
+        self.snapshot().align_to(target, request)
+    }
+
+    fn reconcile_to(
+        &self,
+        target: &dyn BeatMap,
+        active: &AlignmentPlan,
+        frontier: PresentationFrontier,
+    ) -> Result<PlanTransition, SyncError> {
+        self.snapshot().reconcile_to(target, active, frontier)
     }
 }
 
@@ -186,28 +245,33 @@ fn status_and_acknowledge<G: SyncGroup>(
     group.acknowledge(applied)
 }
 
-fn observe_status_variant(status: &SyncStatusSnapshot) {
-    match status {
+fn observe_status_variant(status: &SyncStatusSnapshot) -> bool {
+    matches!(
+        status,
         SyncStatusSnapshot::Off { .. }
-        | SyncStatusSnapshot::WaitingForMap { .. }
-        | SyncStatusSnapshot::Prepared { .. }
-        | SyncStatusSnapshot::Unavailable { .. }
-        | SyncStatusSnapshot::Converging { .. }
-        | SyncStatusSnapshot::Locked { .. } => {}
-        _ => {}
-    }
+            | SyncStatusSnapshot::WaitingForMap { .. }
+            | SyncStatusSnapshot::Prepared { .. }
+            | SyncStatusSnapshot::Unavailable { .. }
+            | SyncStatusSnapshot::Converging { .. }
+            | SyncStatusSnapshot::Locked { .. }
+    )
 }
 
 #[kithara::test]
-fn attached_member_observes_later_asset_map_revision() {
+fn attached_member_observes_later_host_map_revision() {
     let group = host_map();
     let group_snapshot = group.snapshot();
-    let (map, mut publisher) = AssetBeatMap::new(
-        map_id(),
-        NonZeroU32::new(48_000).expect("invariant: sample rate is non-zero"),
-        48_001,
+    let id = map_id();
+    let revision = BeatMapRevision::first();
+    let initial = host_snapshot(id, revision);
+    let map = LiveMap::new(initial.clone());
+    let map_control = map.clone();
+    let published = host_snapshot(
+        id,
+        revision
+            .checked_next()
+            .expect("invariant: the fixture host revision can advance"),
     );
-    let initial = map.snapshot();
     let member: SyncMember<FrozenGroup> = SyncMember::Map {
         alignment: Some(BeatAlignment::new(zero(&initial), zero(&group_snapshot))),
         map: Box::new(map),
@@ -222,13 +286,7 @@ fn attached_member_observes_later_asset_map_revision() {
         initial.stamp()
     );
 
-    let published = publisher
-        .publish(AssetMapUpdate::new(
-            initial.stamp(),
-            MapState::Building,
-            Vec::new(),
-        ))
-        .expect("invariant: a live asset map may publish its next building revision");
+    map_control.replace(published.clone());
 
     let current = member
         .snapshot_for(&group_snapshot)
@@ -245,7 +303,7 @@ fn attached_member_observes_later_asset_map_revision() {
 
     let _attach_contract = attach::<FrozenGroup>;
     let _applied_contract = status_and_acknowledge::<FrozenGroup>;
-    let _status_contract: fn(&SyncStatusSnapshot) = observe_status_variant;
+    let _status_contract: fn(&SyncStatusSnapshot) -> bool = observe_status_variant;
 }
 
 fn align(parent: &BeatMapSnapshot, member: &BeatMapSnapshot) -> BeatAlignment {
@@ -343,8 +401,8 @@ fn unavailable_members_join_without_a_fabricated_alignment() {
         NonZeroU32::new(48_000).expect("invariant: fixture sample rate is non-zero"),
         HostEpoch::new(0),
     ));
-    let parent = BeatMapSnapshot::unavailable(map_id(), BeatMapRevision::first(), axis);
-    let member = BeatMapSnapshot::unavailable(map_id(), BeatMapRevision::first(), axis);
+    let parent = BeatMapSnapshot::unavailable(map_id(), axis);
+    let member = BeatMapSnapshot::unavailable(map_id(), axis);
     let live: SyncMember<FrozenGroup> = SyncMember::Map {
         alignment: None,
         map: Box::new(FrozenMap(member.clone())),

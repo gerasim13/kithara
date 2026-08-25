@@ -1,6 +1,8 @@
 use std::num::NonZeroU64;
 
-use super::{Beat, BeatMap, BeatMapId, MapPoint, MapRegion, MapStamp, SessionFrame};
+use super::{
+    Beat, BeatMap, BeatMapId, BeatMapSnapshotError, MapPoint, MapRegion, MapStamp, SessionFrame,
+};
 
 mod applied;
 mod member;
@@ -569,6 +571,12 @@ pub enum SyncError {
     /// A group-map publication did not advance the owner's current revision.
     #[error("group map publication {given:?} does not advance {current:?}")]
     StaleMapRevision { current: MapStamp, given: MapStamp },
+    /// A group-map publication skipped the owner's exact next revision.
+    #[error("group map publication is {given:?}, expected {expected:?}")]
+    MapRevisionMismatch { expected: MapStamp, given: MapStamp },
+    /// A map owner attempted an invalid immutable snapshot transition.
+    #[error(transparent)]
+    BeatMapSnapshot(#[from] BeatMapSnapshotError),
     /// No direct member with the requested identity exists in this group.
     #[error("member {member_id} was not found in group {group_id}")]
     MemberNotFound {

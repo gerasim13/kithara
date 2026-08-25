@@ -1,11 +1,6 @@
 use std::ops::Range;
 
 use bon::Builder;
-use kithara_stretch::{
-    ElasticCapabilities, ElasticCursor, ElasticError, ElasticSpan, ElasticSpanConfig,
-    ElasticSpanPlan,
-};
-use num_traits::ToPrimitive;
 
 use super::{
     AlignmentPlanRevision, BeatAlignment, LoadGeneration, PresentationFrontier, RenderFrontier,
@@ -159,8 +154,6 @@ pub struct AlignmentPlan {
     revision: AlignmentPlanRevision,
     source: SourceFrameRange,
     output: Range<SessionFrame>,
-    capabilities: ElasticCapabilities,
-    span_config: ElasticSpanConfig,
     cursor: AlignmentCursor,
 }
 
@@ -183,7 +176,7 @@ pub trait RenderPlan {
     /// # Errors
     ///
     /// Returns [`AlignmentPlanError`] for stale progress, evicted input,
-    /// exhausted finite coverage, arithmetic failure, or elastic-plan failure.
+    /// exhausted finite coverage, or arithmetic failure.
     fn next_span<'a>(
         &self,
         cursor: &AlignmentCursor,
@@ -217,8 +210,6 @@ impl AlignmentPlan {
         revision: AlignmentPlanRevision,
         source: SourceFrameRange,
         output: Range<SessionFrame>,
-        capabilities: ElasticCapabilities,
-        span_config: ElasticSpanConfig,
     ) -> Result<Self, AlignmentPlanError> {
         if request.transition != AlignmentTransition::Immediate {
             return Err(AlignmentPlanError::NonIdentityTransition {
@@ -240,8 +231,6 @@ impl AlignmentPlan {
                 output_start: output.start,
             });
         }
-        let source_start = exact_source_coordinate(source.start)?;
-        exact_source_coordinate(source.end)?;
         let presentation = PresentationFrontier::builder()
             .source(source.start)
             .output(output.start)
@@ -258,9 +247,7 @@ impl AlignmentPlan {
             .source(source.start)
             .output(output.start)
             .build();
-        let elastic = ElasticCursor::try_from(source_start)?;
         let cursor = AlignmentCursor {
-            elastic,
             frontier,
             request,
             revision,
@@ -270,8 +257,6 @@ impl AlignmentPlan {
             revision,
             source,
             output,
-            capabilities,
-            span_config,
             cursor,
         })
     }
@@ -366,22 +351,11 @@ impl RenderPlan for AlignmentPlan {
         if required.end > retained.end {
             return Ok(PlanSpan::Pending { required });
         }
-        let elastic_span = ElasticSpan::try_from((
-            exact_source_coordinate(source_start)?..exact_source_coordinate(source_end)?,
-            output_frames,
-        ))?;
-        let elastic = ElasticSpanPlan::new(
-            [elastic_span],
-            Some(cursor.elastic),
-            self.capabilities,
-            self.span_config,
-        )?;
         let ready = slot.ready.insert(PlannedRenderSpan {
             request: self.request,
             plan: self.revision,
             output: output_start..output_end,
             source: required,
-            elastic,
         });
         Ok(PlanSpan::Ready(ready))
     }
@@ -431,7 +405,6 @@ pub struct PlannedRenderSpan {
     plan: AlignmentPlanRevision,
     output: Range<SessionFrame>,
     source: SourceFrameRange,
-    elastic: ElasticSpanPlan,
 }
 
 impl PlannedRenderSpan {
@@ -446,19 +419,12 @@ impl PlannedRenderSpan {
     pub const fn source(&self) -> SourceFrameRange {
         self.source
     }
-
-    /// Returns the bounded exact-span DSP plan.
-    #[must_use]
-    pub const fn elastic(&self) -> &ElasticSpanPlan {
-        &self.elastic
-    }
 }
 
 /// The only mutable renderer-local progress through one immutable alignment plan.
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct AlignmentCursor {
-    elastic: ElasticCursor,
     frontier: RenderFrontier,
     request: AlignmentRequest,
     revision: AlignmentPlanRevision,
@@ -508,16 +474,6 @@ impl AlignmentCursor {
                 output: span.output.clone(),
             });
         }
-        let elastic = span.elastic.cursor();
-        let elastic_source = u64::try_from(elastic.integer())
-            .map_err(|_| AlignmentPlanError::FrameArithmeticOverflow)?;
-        if elastic_source != span.source.end {
-            return Err(AlignmentPlanError::ElasticFrontierMismatch {
-                expected: span.source.end,
-                given: elastic_source,
-            });
-        }
-        self.elastic = elastic;
         self.frontier = RenderFrontier::builder()
             .source(span.source.end)
             .output(span.output.end)
@@ -557,9 +513,6 @@ pub enum AlignmentPlanError {
         activation: SessionFrame,
         output_start: SessionFrame,
     },
-    /// A source coordinate cannot be represented exactly by the elastic cursor.
-    #[error("decoded source frame {frame} cannot be represented exactly")]
-    SourceCoordinatePrecision { frame: u64 },
     /// Frame arithmetic overflowed a coordinate domain.
     #[error("alignment frame arithmetic overflowed")]
     FrameArithmeticOverflow,
@@ -604,12 +557,6 @@ pub enum AlignmentPlanError {
         source_range: SourceFrameRange,
         output: Range<SessionFrame>,
     },
-    /// The nested elastic plan ended at another decoded source boundary.
-    #[error("elastic source frontier is {given}, expected {expected}")]
-    ElasticFrontierMismatch { expected: u64, given: u64 },
-    /// The existing exact-span planner rejected the requested block.
-    #[error(transparent)]
-    Elastic(#[from] ElasticError),
 }
 
 fn output_frames(output: &Range<SessionFrame>) -> Result<usize, AlignmentPlanError> {
@@ -633,11 +580,4 @@ fn advance_output(
         .checked_add(frames)
         .map(SessionFrame::new)
         .ok_or(AlignmentPlanError::FrameArithmeticOverflow)
-}
-
-fn exact_source_coordinate(frame: u64) -> Result<f64, AlignmentPlanError> {
-    frame
-        .to_f64()
-        .filter(|coordinate| coordinate.to_u64() == Some(frame))
-        .ok_or(AlignmentPlanError::SourceCoordinatePrecision { frame })
 }

@@ -1,10 +1,13 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 use anyhow::{Context, Result};
-use kithara::platform::{CancelToken, time::Duration};
+use kithara::{
+    bufpool::{BytePool, PcmPool},
+    platform::{CancelToken, time::Duration},
+};
 use kithara_integration_tests::{
     kithara, rt_cancel,
-    sync_fixture::{SyncAnalysisFixtures, library_pair_from_env},
+    sync_fixture::{SyncAnalysisFixtures, SyncFixtureResources, library_pair_from_env},
     sync_matrix::assert_behavioral_row,
 };
 
@@ -35,14 +38,21 @@ async fn opt_in_library_pair_runs_the_full_behavioral_row(
     rt_cancel: CancelToken,
     #[case] case: kithara_integration_tests::sync_matrix::SyncCase,
 ) -> Result<()> {
-    let pair = library_pair_from_env()
+    let resources = SyncFixtureResources::new(
+        &format!("{LIBRARY_ROW_ID}-{}", case.id),
+        BytePool::default(),
+        PcmPool::default(),
+    )
+    .context("initialize opt-in library fixture resources")?;
+    let pair = library_pair_from_env(&resources)
         .await
         .context("resolve explicitly configured sync music library")?
         .context("ignored library matrix requires KITHARA_SYNC_LIBRARY")?;
-    let analysis = SyncAnalysisFixtures::production()
+    let analysis = SyncAnalysisFixtures::production(&resources)
         .context("initialize production analysis for opt-in library")?;
     let mut media = analyzed_media(
         LIBRARY_ROW_ID,
+        &resources,
         &analysis,
         &rt_cancel,
         vec![

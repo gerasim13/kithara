@@ -1,6 +1,10 @@
-#[cfg(feature = "stretch-bungee")]
+#[cfg(all(
+    feature = "stretch-bungee",
+    not(target_arch = "wasm32"),
+    not(all(target_os = "windows", target_env = "msvc"))
+))]
 use crate::backends::BungeeBackend;
-#[cfg(feature = "stretch-signalsmith")]
+#[cfg(all(feature = "stretch-signalsmith", not(target_arch = "wasm32")))]
 use crate::backends::SignalsmithBackend;
 use crate::{StretchBackend, StretchKind, StretchOptions};
 
@@ -9,9 +13,13 @@ use crate::{StretchBackend, StretchKind, StretchOptions};
 #[must_use]
 pub fn build_backend(kind: StretchKind, options: &StretchOptions) -> Box<dyn StretchBackend> {
     match kind {
-        #[cfg(feature = "stretch-signalsmith")]
+        #[cfg(all(feature = "stretch-signalsmith", not(target_arch = "wasm32")))]
         StretchKind::Signalsmith => Box::new(SignalsmithBackend::new(options)),
-        #[cfg(feature = "stretch-bungee")]
+        #[cfg(all(
+            feature = "stretch-bungee",
+            not(target_arch = "wasm32"),
+            not(all(target_os = "windows", target_env = "msvc"))
+        ))]
         StretchKind::Bungee => Box::new(BungeeBackend::new(options)),
     }
 }

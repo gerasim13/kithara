@@ -1,7 +1,8 @@
 use std::num::NonZeroU32;
 
 use kithara_audio::{
-    AlignmentSource, BeatMap, BeatMapId, BeatMapRevision, HostBeatMap, HostEpoch, LoadGeneration,
+    AlignmentSource, BeatEvidence, BeatMap, BeatMapId, BeatMapRevision, BeatMapSnapshotError,
+    FrameUncertainty, HostBeatMap, HostEpoch, LoadGeneration, MapStamp, Meter, MeterFacts,
     SessionAnchor, SessionBeat, SessionFrame, SyncAdmission, SyncCapability, SyncError, SyncGroup,
     SyncGroupSnapshot, SyncGroupTopologyError, SyncIntent, SyncMember, SyncMemberKind,
     SyncOperation, SyncOperationId, SyncStatusSnapshot, TopologyOperation, TopologyStamp,
@@ -42,20 +43,28 @@ fn track() -> HostBeatMap {
 }
 
 fn track_with_id(id: BeatMapId) -> HostBeatMap {
+    host_observation(
+        id,
+        BeatMapRevision::first(),
+        HostEpoch::new(1),
+        sample_rate(),
+    )
+}
+
+fn host_observation(
+    id: BeatMapId,
+    revision: BeatMapRevision,
+    epoch: HostEpoch,
+    rate: NonZeroU32,
+) -> HostBeatMap {
     let anchor = SessionAnchor::new(
         SessionFrame::new(0),
         SessionBeat::new(0.0).expect("invariant: track beat is finite"),
         2.0,
-        sample_rate(),
+        rate,
     )
     .expect("invariant: track relation is valid");
-    HostBeatMap::new(
-        id,
-        BeatMapRevision::first(),
-        HostEpoch::new(1),
-        anchor,
-        None,
-    )
+    HostBeatMap::new(id, revision, epoch, anchor, None)
 }
 
 fn map_member(map: HostBeatMap) -> (BeatMapId, SyncMember<Deck>) {
@@ -679,14 +688,46 @@ fn duplicate_leaf_across_sibling_decks_leaves_the_root_unchanged() {
 }
 
 #[kithara::test]
+fn exact_next_host_observation_publishes_canonical_anchor_and_meter() {
+    let id = map_id();
+    let mut host = Host::new(id, sample_rate());
+    let before = host.snapshot();
+    let revision = before
+        .revision()
+        .checked_next()
+        .expect("the fixture map can advance");
+    let anchor = SessionAnchor::new(
+        SessionFrame::new(512),
+        SessionBeat::new(1.25).expect("the fixture beat is finite"),
+        2.5,
+        sample_rate(),
+    )
+    .expect("the fixture host relation is valid");
+    let meter = MeterFacts::new(
+        Meter::new(4).expect("the fixture meter is valid"),
+        BeatEvidence::Declared,
+        FrameUncertainty::new(0.0).expect("the fixture meter is exact"),
+    );
+    let observation = HostBeatMap::new(id, revision, HostEpoch::new(0), anchor, Some(meter));
+    let expected = observation.snapshot();
+
+    host.publish_map(&observation)
+        .expect("an exact-next observation is derived from the current owner snapshot");
+
+    assert_eq!(host.snapshot().stamp(), MapStamp::new(id, revision));
+    assert_eq!(host.snapshot(), expected);
+    assert_ne!(host.snapshot(), before);
+}
+
+#[kithara::test]
 fn same_stamp_with_different_map_content_is_not_idempotent() {
     let id = map_id();
     let mut host = Host::new(id, sample_rate());
     let current = host.snapshot();
-    let conflicting = track_with_id(id).snapshot();
+    let conflicting = track_with_id(id);
 
     let error = host
-        .publish_map(conflicting)
+        .publish_map(&conflicting)
         .expect_err("one immutable map stamp cannot name different geometry");
 
     assert_eq!(
@@ -696,6 +737,57 @@ fn same_stamp_with_different_map_content_is_not_idempotent() {
             given: current.stamp(),
         }
     );
+    assert_eq!(host.snapshot(), current);
+}
+
+#[kithara::test]
+fn skipped_map_revision_is_rejected_without_replacing_the_current_snapshot() {
+    let id = map_id();
+    let mut host = Host::new(id, sample_rate());
+    let current = host.snapshot();
+    let next_revision = current
+        .revision()
+        .checked_next()
+        .expect("the fixture map can advance once");
+    let skipped_revision = next_revision
+        .checked_next()
+        .expect("the fixture map can advance twice");
+    let skipped = host_observation(id, skipped_revision, HostEpoch::new(1), sample_rate());
+
+    let error = host
+        .publish_map(&skipped)
+        .expect_err("a publisher cannot skip an immutable map revision");
+
+    assert_eq!(
+        error,
+        SyncError::MapRevisionMismatch {
+            expected: MapStamp::new(id, next_revision),
+            given: skipped.stamp(),
+        }
+    );
+    assert_eq!(host.snapshot(), current);
+}
+
+#[kithara::test]
+fn host_publication_derives_from_the_owner_axis_instead_of_replacing_its_snapshot() {
+    let id = map_id();
+    let mut host = Host::new(id, sample_rate());
+    let current = host.snapshot();
+    let next_revision = current
+        .revision()
+        .checked_next()
+        .expect("the fixture map can advance");
+    let incompatible_rate = NonZeroU32::new(44_100).expect("fixture rate is non-zero");
+    let observation = host_observation(id, next_revision, HostEpoch::new(0), incompatible_rate);
+
+    let error = host
+        .publish_map(&observation)
+        .expect_err("one host epoch cannot replace its frame axis");
+
+    assert!(matches!(
+        error,
+        SyncError::BeatMapSnapshot(BeatMapSnapshotError::AxisChanged { .. })
+    ));
     assert_eq!(host.snapshot(), current);
 }
 

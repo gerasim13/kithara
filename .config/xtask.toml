@@ -127,9 +127,9 @@ lockbud_exclude = [
 ]
 
 # Groups a crate refuses to be built without, and says so with compile_error!.
-# A crate is matched by declaring `when_feature`, so these follow the workspace
-# instead of naming crates twice. A crate carrying two of them gets both in one
-# invocation: meeting one while leaving the other empty still builds nothing.
+# Most rules follow every crate declaring `when_feature`; `package` narrows a
+# rule when forwarder crates expose the same feature without owning the
+# invariant. A crate carrying two rules gets both in one invocation.
 
 [[health.feature_invariants]]
 when_feature = "client-reqwest"
@@ -145,6 +145,7 @@ at_least_one_of = [
 ]
 
 [[health.feature_invariants]]
+package = "kithara-stretch"
 when_feature = "stretch-signalsmith"
 at_least_one_of = [["stretch-signalsmith", "stretch-bungee"]]
 

@@ -287,12 +287,14 @@ pub struct HealthConfig {
 
 /// A rule some crates state with `compile_error!`: this build needs a backend.
 ///
-/// The crate it applies to is not named here. It is found by the feature that
-/// names the group, so the rule follows the workspace rather than being
-/// repeated beside it.
+/// By default the rule follows every crate declaring the feature that names
+/// the group. `package` narrows it to the canonical owner when forwarder crates
+/// expose the same feature without sharing the invariant.
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct FeatureInvariant {
+    /// Canonical package carrying this invariant, or every matching package.
+    pub package: Option<String>,
     /// Feature whose presence marks a crate as carrying this rule.
     pub when_feature: String,
     /// Features every combination carries. A group of one is expressed here:

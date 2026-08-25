@@ -1,5 +1,4 @@
 mod anchor;
-mod asset;
 mod beat_map;
 mod coordinate;
 mod host;
@@ -8,8 +7,6 @@ mod segment;
 mod sync;
 
 pub use anchor::{SessionAnchor, SessionBeat, SessionFrame};
-pub use asset::{AssetBeatMap, AssetMapPublishError, AssetMapPublisher, AssetMapUpdate};
-pub(crate) use beat_map::BeatMapSnapshotData;
 pub use beat_map::{
     BeatEstimate, BeatMap, BeatMapId, BeatMapIdAllocationError, BeatMapRevision, BeatMapSnapshot,
     BeatMapSnapshotError, MapQuery, MapStamp, MapState, MapUnavailable,
@@ -23,7 +20,7 @@ pub use host::HostBeatMap;
 pub use map::CoordinateError;
 pub use segment::{
     BeatEvidence, BeatMarker, BeatsPerMinute, MapRegion, MapSegment, Meter, MeterError, MeterFacts,
-    SegmentDraft, SegmentEndpoint, SegmentError, SegmentFacts, SegmentSet,
+    SegmentEndpoint, SegmentError, SegmentFacts, SegmentSet,
 };
 pub use sync::{
     AlignmentCursor, AlignmentPlan, AlignmentPlanError, AlignmentPlanRevision, AlignmentRequest,

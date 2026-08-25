@@ -1,7 +1,7 @@
 use std::num::NonZeroU32;
 
 use firewheel::{FirewheelCtx, backend::AudioBackend, error::UpdateError};
-use kithara_audio::{BeatMap, SessionFrame};
+use kithara_audio::SessionFrame;
 use kithara_events::TransportEvent;
 
 use super::commit::{
@@ -312,7 +312,7 @@ fn refresh_observation<B: AudioBackend>(
             .host
             .as_mut()
             .ok_or_else(|| SessionError::Graph("session host group is missing".to_owned()))?
-            .publish_map(snapshot.host_map().snapshot())?;
+            .publish_map(&snapshot.host_map())?;
     }
     if let Some(completion) = observation.completion() {
         apply_completion(state, completion);

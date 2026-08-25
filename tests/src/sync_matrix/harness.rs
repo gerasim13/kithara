@@ -1,7 +1,6 @@
 use anyhow::{Context, Result, bail};
 use kithara::{
     audio::{Beat, StretchControls, StretchKind, analysis::TrackAnalysis},
-    bufpool::{BytePool, PcmPool},
     events::{AbrEvent, AudioEvent, DecoderEvent, Event, EventReceiver, TrackId},
     hls::AbrMode,
     platform::{
@@ -20,7 +19,7 @@ use super::{
 use crate::{
     offline::OfflineSession,
     sync_control::{SyncControlError, SyncDeckControl, SyncQuantum},
-    sync_fixture::{analysis_map, unavailable_analysis_map},
+    sync_fixture::{SyncFixtureResources, analysis_map, unavailable_analysis_map},
 };
 
 const LOAD_PULL_LIMIT: usize = 4_000;
@@ -67,8 +66,8 @@ pub(super) struct SyncHarness {
 }
 
 impl SyncHarness {
-    pub(super) async fn synthetic(case: SyncCase) -> Result<Self> {
-        let fixture = SyntheticFixture::new(case).await?;
+    pub(super) async fn synthetic(case: SyncCase, resources: SyncFixtureResources) -> Result<Self> {
+        let fixture = SyntheticFixture::new(case, resources).await?;
         let media = fixture.media();
         Self::open_inner(case, media, Some(fixture)).await
     }
@@ -89,6 +88,8 @@ impl SyncHarness {
         let session = Arc::new(OfflineSession::new_manual());
         let dispatcher = Arc::clone(&session) as Arc<dyn SessionDispatcher>;
         let mut decks = Vec::with_capacity(case.decks);
+        let byte_pool = media.resources.byte_pool().clone();
+        let pcm_pool = media.resources.pcm_pool().clone();
 
         for deck_index in 0..case.decks {
             let track = media.for_deck(deck_index);
@@ -97,8 +98,8 @@ impl SyncHarness {
             controls.set_keylock(true);
             let player = Arc::new(PlayerImpl::new(
                 PlayerConfig::builder()
-                    .byte_pool(BytePool::default())
-                    .pcm_pool(PcmPool::default())
+                    .byte_pool(byte_pool.clone())
+                    .pcm_pool(pcm_pool.clone())
                     .sample_rate(case.sample_rate)
                     .session(Arc::clone(&dispatcher))
                     .timestretch(controls)
@@ -109,7 +110,10 @@ impl SyncHarness {
                 .ensure_engine_started()
                 .with_context(|| format!("{case}: start offline player engine"))?;
             let queue = Arc::new(Queue::new(
-                QueueConfig::builder().player(Arc::clone(&player)).build(),
+                QueueConfig::builder()
+                    .player(Arc::clone(&player))
+                    .store(media.resources.store().clone())
+                    .build(),
             ));
             let _ = queue.append(track.source.clone());
             let reload_id = queue.append(track.source.clone());

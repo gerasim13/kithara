@@ -30,6 +30,13 @@ through `NestedGroup`. `SyncMember<G>` therefore keeps ordinary maps erased as
 member into exactly one owner. `SyncGroupSnapshot` and `SyncMemberSnapshot` are
 immutable observations, never alternate live owners. Concrete Host/Deck/Track
 ownership belongs to `kithara-play` and must not be duplicated in this crate.
+`BeatMapSnapshot::initial` and `BeatMapSnapshot::unavailable` establish the first
+immutable observation for a map identity. This foundation does not expose a
+detached asset-map successor protocol: analyzer publication must be added at the
+canonical Track owner so stale results cannot create a parallel same-id chain.
+Host observations advance through the Host owner and the validated
+`host_successor` path. Durable analyzer geometry belongs to the Track's
+`AssetStore`; `kithara-audio` neither stores nor registers asset payloads.
 `SyncMember`, `SyncOperation`, and `TopologyOperation` are deliberately
 exhaustive closed protocols: adding a member or command must fail compilation
 until every live owner handles it atomically; a wildcard fallback is forbidden.
@@ -40,8 +47,10 @@ Deck. The foundation actively publishes only `Off`, `Accepted`,
 `Prepared`, `Converging`, and `Locked` remain reserved until a real plan-delivery
 and presentation path exists.
 `RenderPlan` is the frame-span consumption contract; `AlignmentPlan` is its
-single immutable implementation. This foundation does not connect it to the
-production PCM path. A resident RT consumer must keep one reusable
+single immutable implementation. `AlignmentPlan::identity` owns only its exact
+one-to-one source/output coverage; it neither selects nor fabricates stretch
+backend capabilities. This foundation does not connect it to the production PCM
+path. A resident RT consumer must keep one reusable
 `PlanSpanSlot`; `PlanSpan::Ready` borrows that storage and never allocates a
 per-block `PlannedRenderSpan`. `RenderFrontier` is renderer progress and never
 audible proof. `SyncApplied` intentionally has no public constructor until a
@@ -488,18 +497,17 @@ that state so its latency buffer is not emitted as trailing zeros. A live backen
 change, or a source `PcmSpec` change, rebuilds the backend in place. Key-lock
 defaults to **off** (`StretchControls::new`).
 
-**Backend seam.** `kithara-stretch` always supplies the backend-neutral exact-span
-planner contracts. Its streaming DSP surface is behind `stretch-signalsmith` /
-`stretch-bungee` (native only); it owns `StretchBackend` and its companion
-types. The trait is DSP-only (interleaved sample buffers), so
+**Backend seam.** `kithara-stretch` is the optional DSP backend crate, behind
+`stretch-signalsmith` / `stretch-bungee` (native only); it owns `StretchBackend`
+and its companion types. The trait is DSP-only (interleaved sample buffers), so
 all `PcmChunk`/pool/timeline plumbing stays here. `set_ratio` is the time factor
 (`output/input`, >1 = slower) and `set_pitch` is independent (1.0 = pitch
-locked) — the decoupling key-lock depends on. `StretchKind::all()` lists exactly
+locked); key-lock depends on that decoupling. `StretchKind::all()` lists exactly
 the backends compiled into the current target (default `all()[0]`; discriminants
 are stable: 1 = Signalsmith, 2 = Bungee), so an absent backend is
 un-representable rather than a runtime error. With no `stretch-*` feature the
-planner types remain linked while kind/backend/processor re-exports compile
-out; `StretchControls` still exposes speed and region-plan storage.
+dependency is not linked and the kind/backend/processor re-exports compile out;
+`StretchControls` still exposes speed and region-plan storage.
 
 **Region plan (beat-aligned stretch).** The pure region types live in
 `kithara_audio::region` and are re-exported unconditionally. Plans are sorted,

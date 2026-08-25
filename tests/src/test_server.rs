@@ -588,11 +588,11 @@ mod tests {
     use crate::{
         fixture_protocol::{DataMode, InitMode},
         kithara,
-        signal_url::{SignalFormat, SignalSpec, SignalSpecLength},
+        signal_url::{SignalFormat, SignalSpec, SignalSpecLength, SweepMode},
     };
 
     #[kithara::test(tokio)]
-    async fn signal_helper_builds_expected_url() {
+    async fn signal_helpers_build_expected_urls() {
         let spec = SignalSpec {
             sample_rate: 44_100,
             channels: 2,
@@ -602,9 +602,12 @@ mod tests {
         };
         let helper = TestServerHelper::new().await;
         let url = helper.sine(&spec, 440.0).await;
+        let sweep = helper.sweep(&spec, 220.0, 1_180.0, SweepMode::Linear).await;
 
         assert!(url.path().starts_with("/signal/sine/"));
         assert!(url.path().ends_with(".wav"));
+        assert!(sweep.path().starts_with("/signal/sweep/"));
+        assert!(sweep.path().ends_with(".wav"));
     }
 
     #[kithara::test]

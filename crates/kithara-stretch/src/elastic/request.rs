@@ -1,4 +1,3 @@
-#[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
 use num_traits::ToPrimitive;
 
 use super::ElasticError;
@@ -33,7 +32,6 @@ impl ElasticRequest {
         })
     }
 
-    #[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
     pub(crate) fn source_frames_per_output(self) -> Result<f64, ElasticError> {
         let source_frames = self
             .source_frames

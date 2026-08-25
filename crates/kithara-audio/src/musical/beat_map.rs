@@ -1,13 +1,15 @@
+mod query;
+
 use std::num::NonZeroU64;
 
 use kithara_platform::sync::Arc;
 use portable_atomic::{AtomicU64, Ordering};
 
 use super::{
-    AlignmentPlan, AlignmentRequest, AssetAxis, Beat, BeatEvidence, BeatsPerMinute,
-    FrameUncertainty, MapAxis, MapPoint, MapPosition, MapRegion, Meter, MeterFacts, PlanTransition,
-    PresentationFrontier, SegmentSet, SessionAnchor, SessionBeat, SessionFrame, SyncCapability,
-    SyncError,
+    AlignmentPlan, AlignmentRequest, Beat, BeatEvidence, BeatsPerMinute, FrameUncertainty,
+    HostAxis, HostEpoch, MapAxis, MapPoint, MapPosition, MapRegion, Meter, MeterFacts,
+    PlanTransition, PresentationFrontier, SegmentSet, SessionAnchor, SessionBeat, SessionFrame,
+    SyncCapability, SyncError,
 };
 
 const SECONDS_PER_MINUTE: f64 = 60.0;
@@ -297,9 +299,21 @@ impl BeatMap for BeatMapSnapshot {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
 #[non_exhaustive]
 pub enum BeatMapSnapshotError {
+    /// The proposed replacement was derived from any snapshot but the current one.
+    #[error("beat map successor is stale: expected {expected:?}, got {given:?}")]
+    Stale { expected: MapStamp, given: MapStamp },
+    /// A successor changed its native coordinate axis outside a host restart.
+    #[error("beat map successor changed axis from {expected:?} to {given:?}")]
+    AxisChanged { expected: MapAxis, given: MapAxis },
     /// The lifecycle state is incompatible with the snapshot coordinate axis.
     #[error("state {state:?} is invalid for segment geometry on axis {axis:?}")]
     InvalidState { axis: MapAxis, state: MapState },
+    /// A complete bounded map cannot return to an incomplete lifecycle state.
+    #[error("beat map cannot transition from {from:?} to {to:?}")]
+    InvalidTransition { from: MapState, to: MapState },
+    /// The map exhausted its monotonic revision space.
+    #[error("beat map revision space is exhausted")]
+    RevisionExhausted,
 }
 
 #[derive(Debug)]
@@ -320,47 +334,137 @@ pub(crate) enum BeatMapGeometry {
     },
 }
 
-/// Creates a snapshot from independently owned, validated segment geometry.
-///
-/// This is the construction boundary for external [`BeatMap`] owners such as
-/// synchronization groups. The segment set preserves its validated axis, so a
-/// caller cannot pair topology with a different coordinate domain.
-impl TryFrom<(BeatMapId, BeatMapRevision, MapState, SegmentSet)> for BeatMapSnapshot {
-    type Error = BeatMapSnapshotError;
+impl BeatMapSnapshot {
+    /// Creates the first validated segment-backed snapshot for a map owner.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BeatMapSnapshotError`] when `state` is invalid for the
+    /// coordinate axis carried by `segments`.
+    pub fn initial(
+        id: BeatMapId,
+        state: MapState,
+        segments: SegmentSet,
+    ) -> Result<Self, BeatMapSnapshotError> {
+        Self::try_new_segments(id, BeatMapRevision::first(), state, segments)
+    }
 
-    fn try_from(
-        (id, revision, state, segments): (BeatMapId, BeatMapRevision, MapState, SegmentSet),
-    ) -> Result<Self, Self::Error> {
+    /// Creates the first empty snapshot for a map owner without geometry.
+    #[must_use]
+    pub fn unavailable(id: BeatMapId, axis: MapAxis) -> Self {
+        Self::new_segments(
+            id,
+            BeatMapRevision::first(),
+            MapState::Unavailable(MapUnavailable::NoGeometry),
+            SegmentSet::empty(axis),
+        )
+    }
+
+    /// Advances to an unavailable snapshot, optionally entering a newer host epoch.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BeatMapSnapshotError`] for a stale base, an asset-axis change,
+    /// a non-advancing host-axis change, a terminal-map transition, or revision
+    /// exhaustion.
+    pub fn unavailable_successor(
+        &self,
+        base: MapStamp,
+        axis: MapAxis,
+    ) -> Result<Self, BeatMapSnapshotError> {
+        let expected = self.stamp();
+        if base != expected {
+            return Err(BeatMapSnapshotError::Stale {
+                expected,
+                given: base,
+            });
+        }
+        if self.state() == MapState::Complete {
+            return Err(BeatMapSnapshotError::InvalidTransition {
+                from: self.state(),
+                to: MapState::Unavailable(MapUnavailable::NoGeometry),
+            });
+        }
+        let axis_is_valid = self.axis() == axis
+            || matches!(
+                (self.axis(), axis),
+                (MapAxis::Host(current), MapAxis::Host(next))
+                    if next.epoch() > current.epoch()
+            );
+        if !axis_is_valid {
+            return Err(BeatMapSnapshotError::AxisChanged {
+                expected: self.axis(),
+                given: axis,
+            });
+        }
+        let revision = self
+            .revision()
+            .checked_next()
+            .ok_or(BeatMapSnapshotError::RevisionExhausted)?;
+        Ok(Self::new_segments(
+            self.id(),
+            revision,
+            MapState::Unavailable(MapUnavailable::NoGeometry),
+            SegmentSet::empty(axis),
+        ))
+    }
+
+    /// Derives the next live host snapshot from this owner's current state.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BeatMapSnapshotError`] for a stale base, a non-host or
+    /// non-advancing host axis, or revision exhaustion.
+    pub fn host_successor(
+        &self,
+        base: MapStamp,
+        epoch: HostEpoch,
+        anchor: SessionAnchor,
+        meter: Option<MeterFacts>,
+    ) -> Result<Self, BeatMapSnapshotError> {
+        let expected = self.stamp();
+        if base != expected {
+            return Err(BeatMapSnapshotError::Stale {
+                expected,
+                given: base,
+            });
+        }
+        let axis = MapAxis::Host(HostAxis::new(anchor.sample_rate(), epoch));
+        let axis_is_valid = self.axis() == axis
+            || matches!(
+                (self.axis(), axis),
+                (MapAxis::Host(current), MapAxis::Host(next))
+                    if next.epoch() > current.epoch()
+            );
+        if !axis_is_valid {
+            return Err(BeatMapSnapshotError::AxisChanged {
+                expected: self.axis(),
+                given: axis,
+            });
+        }
+        let revision = self
+            .revision()
+            .checked_next()
+            .ok_or(BeatMapSnapshotError::RevisionExhausted)?;
+        Ok(Self::new_host(self.id(), revision, axis, anchor, meter))
+    }
+
+    fn try_new_segments(
+        id: BeatMapId,
+        revision: BeatMapRevision,
+        state: MapState,
+        segments: SegmentSet,
+    ) -> Result<Self, BeatMapSnapshotError> {
         let axis = segments.axis();
         if matches!(
             (axis, state),
             (MapAxis::Asset(_), MapState::Live)
                 | (MapAxis::Host(_), MapState::Complete)
-                | (
-                    _,
-                    MapState::Unavailable(MapUnavailable::AxisMismatch | MapUnavailable::NoMeter)
-                )
+                | (_, MapState::Unavailable(_))
         ) {
             return Err(BeatMapSnapshotError::InvalidState { axis, state });
         }
         Ok(Self::new_segments(id, revision, state, segments))
-    }
-}
-
-impl BeatMapSnapshot {
-    /// Creates an empty map for an external owner that has no usable geometry yet.
-    ///
-    /// The map keeps its declared coordinate axis while every query reports
-    /// [`MapUnavailable::NoGeometry`]. A later owner publication must use a
-    /// newer revision for the same identity.
-    #[must_use]
-    pub fn unavailable(id: BeatMapId, revision: BeatMapRevision, axis: MapAxis) -> Self {
-        Self::new_segments(
-            id,
-            revision,
-            MapState::Unavailable(MapUnavailable::NoGeometry),
-            SegmentSet::empty(axis),
-        )
     }
 
     fn new_segments(
@@ -381,15 +485,6 @@ impl BeatMapSnapshot {
         }
     }
 
-    pub(crate) fn new_empty_asset(id: BeatMapId, axis: AssetAxis) -> Self {
-        Self::new_segments(
-            id,
-            BeatMapRevision::first(),
-            MapState::Building,
-            SegmentSet::empty(MapAxis::Asset(axis)),
-        )
-    }
-
     pub(crate) fn new_host(
         id: BeatMapId,
         revision: BeatMapRevision,
@@ -405,283 +500,6 @@ impl BeatMapSnapshot {
                 axis,
                 geometry: BeatMapGeometry::Host { anchor, meter },
             }),
-        }
-    }
-
-    pub(crate) fn wrap(data: Arc<BeatMapSnapshotData>) -> Self {
-        Self { data }
-    }
-
-    delegate::delegate! {
-        to self.data {
-            /// Returns the stable map identity.
-            #[must_use]
-            #[field]
-            pub fn id(&self) -> BeatMapId;
-            /// Returns the immutable map revision.
-            #[must_use]
-            #[field]
-            pub fn revision(&self) -> BeatMapRevision;
-            /// Returns the snapshot lifecycle state.
-            #[must_use]
-            #[field]
-            pub fn state(&self) -> MapState;
-            /// Returns the typed coordinate axis used by this snapshot.
-            #[must_use]
-            #[field]
-            pub fn axis(&self) -> MapAxis;
-        }
-    }
-
-    /// Returns the composite identity and revision.
-    #[must_use]
-    pub fn stamp(&self) -> MapStamp {
-        MapStamp::new(self.id(), self.revision())
-    }
-
-    /// Returns the validated immutable segment collection for a segment-backed map.
-    #[must_use]
-    pub fn segments(&self) -> Option<&SegmentSet> {
-        match &self.data.geometry {
-            BeatMapGeometry::Segments(segments) => Some(segments),
-            BeatMapGeometry::Host { .. } => None,
-        }
-    }
-
-    /// Resolves a stamped map-native position to a stamped beat.
-    pub fn beat_at(
-        &self,
-        position: MapPoint<MapPosition>,
-    ) -> MapQuery<BeatEstimate<MapPoint<Beat>>> {
-        if let Some(stale) = self.stale(position.stamp()) {
-            return stale;
-        }
-        if position.value().kind() != self.axis().kind() {
-            return MapQuery::Unavailable(MapUnavailable::AxisMismatch);
-        }
-        if let MapState::Unavailable(reason) = self.state() {
-            return MapQuery::Unavailable(reason);
-        }
-        if self.outside_asset_extent(*position.value()) {
-            return MapQuery::OutsideDomain;
-        }
-        match &self.data.geometry {
-            BeatMapGeometry::Segments(segments) => {
-                let Some((beat, evidence, uncertainty)) = segments
-                    .by_position(*position.value())
-                    .and_then(|segment| segment.beat_at(*position.value()))
-                else {
-                    return self.missing_position(*position.value());
-                };
-                MapQuery::Resolved(BeatEstimate::new(
-                    MapPoint::new(self.stamp(), beat),
-                    evidence,
-                    uncertainty,
-                    self.stamp(),
-                ))
-            }
-            BeatMapGeometry::Host { anchor, .. } => {
-                let MapPosition::Host(frame) = *position.value() else {
-                    return MapQuery::Unavailable(MapUnavailable::AxisMismatch);
-                };
-                let Ok(session_beat) = anchor.beat_at(frame) else {
-                    return MapQuery::OutsideDomain;
-                };
-                let Ok(beat) = Beat::new(f64::from(session_beat)) else {
-                    return MapQuery::OutsideDomain;
-                };
-                MapQuery::Resolved(BeatEstimate::new(
-                    MapPoint::new(self.stamp(), beat),
-                    BeatEvidence::Declared,
-                    FrameUncertainty::ZERO,
-                    self.stamp(),
-                ))
-            }
-        }
-    }
-
-    /// Resolves a stamped beat to a stamped map-native position.
-    pub fn position_at(
-        &self,
-        beat: MapPoint<Beat>,
-    ) -> MapQuery<BeatEstimate<MapPoint<MapPosition>>> {
-        if let Some(stale) = self.stale(beat.stamp()) {
-            return stale;
-        }
-        if let MapState::Unavailable(reason) = self.state() {
-            return MapQuery::Unavailable(reason);
-        }
-        match &self.data.geometry {
-            BeatMapGeometry::Segments(segments) => {
-                let Some((position, evidence, uncertainty)) = segments
-                    .by_beat(*beat.value())
-                    .and_then(|segment| segment.position_at(*beat.value()))
-                else {
-                    return self.missing_beat(*beat.value());
-                };
-                MapQuery::Resolved(BeatEstimate::new(
-                    MapPoint::new(self.stamp(), position),
-                    evidence,
-                    uncertainty,
-                    self.stamp(),
-                ))
-            }
-            BeatMapGeometry::Host { anchor, .. } => {
-                let Ok(session_beat) = SessionBeat::new(f64::from(*beat.value())) else {
-                    return MapQuery::OutsideDomain;
-                };
-                let Ok(frame) = anchor.frame_at(session_beat) else {
-                    return MapQuery::OutsideDomain;
-                };
-                let Ok(rounded_beat) = anchor.beat_at(frame) else {
-                    return MapQuery::OutsideDomain;
-                };
-                let residual_frames = ((f64::from(session_beat) - f64::from(rounded_beat))
-                    / anchor.beats_per_frame())
-                .abs();
-                let Ok(uncertainty) = FrameUncertainty::new(residual_frames) else {
-                    return MapQuery::OutsideDomain;
-                };
-                MapQuery::Resolved(BeatEstimate::new(
-                    MapPoint::new(self.stamp(), MapPosition::Host(frame)),
-                    BeatEvidence::Declared,
-                    uncertainty,
-                    self.stamp(),
-                ))
-            }
-        }
-    }
-
-    /// Resolves the local tempo derived from the same segment topology.
-    pub fn tempo_at(
-        &self,
-        position: MapPoint<MapPosition>,
-    ) -> MapQuery<BeatEstimate<BeatsPerMinute>> {
-        if let Some(stale) = self.stale(position.stamp()) {
-            return stale;
-        }
-        if position.value().kind() != self.axis().kind() {
-            return MapQuery::Unavailable(MapUnavailable::AxisMismatch);
-        }
-        if let MapState::Unavailable(reason) = self.state() {
-            return MapQuery::Unavailable(reason);
-        }
-        if self.outside_asset_extent(*position.value()) {
-            return MapQuery::OutsideDomain;
-        }
-        match &self.data.geometry {
-            BeatMapGeometry::Segments(segments) => {
-                let Some((tempo, evidence, uncertainty)) = segments
-                    .by_position(*position.value())
-                    .and_then(|segment| segment.tempo_at(self.axis(), *position.value()))
-                else {
-                    return self.missing_position(*position.value());
-                };
-                MapQuery::Resolved(BeatEstimate::new(
-                    tempo,
-                    evidence,
-                    uncertainty,
-                    self.stamp(),
-                ))
-            }
-            BeatMapGeometry::Host { anchor, .. } => {
-                let bpm = anchor.beats_per_second() * SECONDS_PER_MINUTE;
-                let Some(tempo) = BeatsPerMinute::new(bpm) else {
-                    return MapQuery::Unavailable(MapUnavailable::NoGeometry);
-                };
-                MapQuery::Resolved(BeatEstimate::new(
-                    tempo,
-                    BeatEvidence::Declared,
-                    FrameUncertainty::ZERO,
-                    self.stamp(),
-                ))
-            }
-        }
-    }
-
-    /// Resolves the meter carried by the segment containing `beat`.
-    pub fn meter_at(&self, beat: MapPoint<Beat>) -> MapQuery<BeatEstimate<Meter>> {
-        if let Some(stale) = self.stale(beat.stamp()) {
-            return stale;
-        }
-        if let MapState::Unavailable(reason) = self.state() {
-            return MapQuery::Unavailable(reason);
-        }
-        match &self.data.geometry {
-            BeatMapGeometry::Segments(segments) => {
-                let Some(segment) = segments.by_beat(*beat.value()) else {
-                    return self.missing_beat(*beat.value());
-                };
-                let Some((meter, evidence, uncertainty)) = segment.meter_at(*beat.value()) else {
-                    return self.missing_meter(segment.region());
-                };
-                MapQuery::Resolved(BeatEstimate::new(
-                    meter,
-                    evidence,
-                    uncertainty,
-                    self.stamp(),
-                ))
-            }
-            BeatMapGeometry::Host { meter, .. } => {
-                let Some(meter) = *meter else {
-                    return MapQuery::Unavailable(MapUnavailable::NoMeter);
-                };
-                let (value, evidence, uncertainty) = meter.into_parts();
-                MapQuery::Resolved(BeatEstimate::new(
-                    value,
-                    evidence,
-                    uncertainty,
-                    self.stamp(),
-                ))
-            }
-        }
-    }
-
-    fn stale<T>(&self, given: MapStamp) -> Option<MapQuery<T>> {
-        let expected = self.stamp();
-        (given != expected).then_some(MapQuery::Stale { expected, given })
-    }
-
-    fn missing_position<T>(&self, position: MapPosition) -> MapQuery<T> {
-        match self.state() {
-            MapState::Complete => MapQuery::OutsideDomain,
-            MapState::Building | MapState::Live => MapQuery::Uncovered {
-                required: match &self.data.geometry {
-                    BeatMapGeometry::Segments(segments) => segments.uncovered_region(position),
-                    BeatMapGeometry::Host { .. } => MapRegion::point(position),
-                },
-            },
-            MapState::Unavailable(reason) => MapQuery::Unavailable(reason),
-        }
-    }
-
-    fn missing_beat<T>(&self, beat: Beat) -> MapQuery<T> {
-        match self.state() {
-            MapState::Complete => MapQuery::OutsideDomain,
-            MapState::Building | MapState::Live => MapQuery::Uncovered {
-                required: match &self.data.geometry {
-                    BeatMapGeometry::Segments(segments) => segments.uncovered_region_by_beat(beat),
-                    BeatMapGeometry::Host { .. } => {
-                        MapRegion::point(MapPosition::Host(SessionFrame::new(0)))
-                    }
-                },
-            },
-            MapState::Unavailable(reason) => MapQuery::Unavailable(reason),
-        }
-    }
-
-    fn missing_meter<T>(&self, required: MapRegion) -> MapQuery<T> {
-        match self.state() {
-            MapState::Building => MapQuery::Uncovered { required },
-            MapState::Complete | MapState::Live => MapQuery::Unavailable(MapUnavailable::NoMeter),
-            MapState::Unavailable(reason) => MapQuery::Unavailable(reason),
-        }
-    }
-
-    fn outside_asset_extent(&self, position: MapPosition) -> bool {
-        match (self.axis(), position) {
-            (MapAxis::Asset(axis), MapPosition::Asset(frame)) => !axis.contains(frame),
-            _ => false,
         }
     }
 }

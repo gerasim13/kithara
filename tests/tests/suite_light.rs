@@ -6,6 +6,8 @@
 
 mod common;
 
+#[path = "../fingerprint.rs"]
+mod fingerprint;
 #[path = "sync_manifest.rs"]
 mod sync_manifest;
 

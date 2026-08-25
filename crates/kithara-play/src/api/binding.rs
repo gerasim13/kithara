@@ -97,10 +97,10 @@ mod tests {
     use std::num::NonZeroU32;
 
     use kithara_audio::{
-        AssetBeatMap, AssetFrame, AssetMapUpdate, Beat, BeatEvidence, BeatMap, BeatMapId,
+        AssetAxis, AssetFrame, Beat, BeatEvidence, BeatMap, BeatMapId, BeatMapRevision,
         BeatMapSnapshot, BeatMarker, BeatOrdinal, FrameUncertainty, HostBeatMap, HostEpoch,
-        MapPoint, MapPosition, MapQuery, MapSegment, MapState, MapUnavailable, SegmentFacts,
-        SessionAnchor, SessionFrame,
+        MapAxis, MapPoint, MapPosition, MapQuery, MapSegment, MapState, MapUnavailable,
+        SegmentFacts, SegmentSet, SessionAnchor, SessionFrame,
     };
     use kithara_events::PlaybackDirection;
     use kithara_test_utils::kithara;
@@ -135,7 +135,6 @@ mod tests {
     }
 
     fn snapshot() -> BeatMapSnapshot {
-        let (map, mut publisher) = AssetBeatMap::new(map_id(), sample_rate(), 144_001);
         let segment = MapSegment::new(
             marker(0.0, 0),
             marker(96_000.0, 2),
@@ -146,12 +145,12 @@ mod tests {
             ),
         )
         .expect("invariant: fixture segment is valid");
-        publisher
-            .publish(AssetMapUpdate::new(
-                map.snapshot().stamp(),
-                MapState::Complete,
-                vec![segment],
-            ))
+        let segments = SegmentSet::new(
+            MapAxis::Asset(AssetAxis::new(sample_rate(), 144_001)),
+            vec![segment],
+        )
+        .expect("invariant: fixture asset topology is valid");
+        BeatMapSnapshot::initial(map_id(), MapState::Complete, segments)
             .expect("invariant: fixture asset map is valid")
     }
 
@@ -215,7 +214,7 @@ mod tests {
                 .expect("invariant: fixture host anchor is valid");
         let host = HostBeatMap::new(
             map_id(),
-            kithara_audio::BeatMapRevision::first(),
+            BeatMapRevision::first(),
             HostEpoch::new(0),
             anchor,
             None,
@@ -234,15 +233,12 @@ mod tests {
 
     #[kithara::test]
     fn binding_rejects_old_and_foreign_track_anchor_stamps() {
-        let (map, mut publisher) = AssetBeatMap::new(map_id(), sample_rate(), 96_001);
-        let old = map.snapshot();
-        let current = publisher
-            .publish(AssetMapUpdate::new(
-                old.stamp(),
-                MapState::Building,
-                Vec::new(),
-            ))
-            .expect("invariant: empty building refinement is valid");
+        let id = map_id();
+        let axis = MapAxis::Asset(AssetAxis::new(sample_rate(), 96_001));
+        let old = BeatMapSnapshot::unavailable(id, axis);
+        let current = old
+            .unavailable_successor(old.stamp(), axis)
+            .expect("invariant: fixture unavailable successor is valid");
         let old_anchor = MapPoint::new(old.stamp(), beat(1.0));
 
         assert!(matches!(
@@ -256,8 +252,7 @@ mod tests {
                 if expected == current.stamp() && given == old.stamp()
         ));
 
-        let (foreign, _) = AssetBeatMap::new(map_id(), sample_rate(), 96_001);
-        let foreign = foreign.snapshot();
+        let foreign = BeatMapSnapshot::unavailable(map_id(), axis);
         assert!(matches!(
             TrackBinding::new(
                 current.clone(),
@@ -272,14 +267,10 @@ mod tests {
 
     #[kithara::test]
     fn unavailable_geometry_stays_a_typed_binding_query_result() {
-        let (map, mut publisher) = AssetBeatMap::new(map_id(), sample_rate(), 96_001);
-        let unavailable = publisher
-            .publish(AssetMapUpdate::new(
-                map.snapshot().stamp(),
-                MapState::Unavailable(MapUnavailable::NoGeometry),
-                Vec::new(),
-            ))
-            .expect("invariant: no-geometry asset state is valid");
+        let unavailable = BeatMapSnapshot::unavailable(
+            map_id(),
+            MapAxis::Asset(AssetAxis::new(sample_rate(), 96_001)),
+        );
         let binding = TrackBinding::new(
             unavailable.clone(),
             session_beat(0.0),

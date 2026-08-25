@@ -12,6 +12,7 @@
 
 #[path = "src/encoder_crates.rs"]
 mod encoder_crates;
+mod fingerprint;
 
 use std::{
     collections::hash_map::DefaultHasher,
@@ -21,27 +22,7 @@ use std::{
 };
 
 use encoder_crates::Lockfile;
-
-/// Hash every `.rs` file under `dir` (path + contents) and register each for
-/// change-tracking so the fingerprint refreshes whenever encoding code changes.
-fn hash_rs_tree(dir: &Path, hasher: &mut DefaultHasher) {
-    let Ok(entries) = fs::read_dir(dir) else {
-        return;
-    };
-    let mut paths: Vec<_> = entries.flatten().map(|entry| entry.path()).collect();
-    paths.sort();
-    for path in paths {
-        if path.is_dir() {
-            hash_rs_tree(&path, hasher);
-        } else if path.extension().is_some_and(|ext| ext == "rs") {
-            if let Ok(bytes) = fs::read(&path) {
-                path.to_string_lossy().hash(hasher);
-                bytes.hash(hasher);
-            }
-            println!("cargo:rerun-if-changed={}", path.display());
-        }
-    }
-}
+use fingerprint::hash_rs_tree;
 
 fn hash_file(path: &Path, hasher: &mut DefaultHasher) {
     if let Ok(bytes) = fs::read(path) {
@@ -120,6 +101,7 @@ fn main() {
         "../crates/kithara-hls/src",
         "../crates/kithara-play/src/resource",
         "../crates/kithara-resampler/src",
+        "src/sync_fixture",
     ] {
         println!("cargo:rerun-if-changed={dir}");
         hash_rs_tree(Path::new(dir), &mut analysis_hasher);
@@ -128,7 +110,6 @@ fn main() {
         "../crates/kithara-app/src/waveform.rs",
         "../crates/kithara-audio/src/blob.rs",
         "../crates/kithara-audio/src/region.rs",
-        "src/sync_fixture.rs",
         LOCKFILE,
     ] {
         hash_file(Path::new(file), &mut analysis_hasher);

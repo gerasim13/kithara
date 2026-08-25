@@ -97,6 +97,8 @@ fn handle_signal(
     spec_with_ext: &str,
     headers: &HeaderMap,
 ) -> Response {
+    let (candidate, _) = split_token_candidate(spec_with_ext);
+    let tokenized = is_token(candidate);
     let request = match resolve_signal_request(state, kind, spec_with_ext) {
         Ok(request) => request,
         Err(error) => return (StatusCode::BAD_REQUEST, error.to_string()).into_response(),
@@ -111,6 +113,12 @@ fn handle_signal(
     let cache_key = encoded_signal_cache_key(kind, spec_with_ext);
     let encoded = if let Some(hit) = state.get_encoded_signal(&cache_key) {
         hit
+    } else if tokenized {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "registered signal was not eagerly prepared",
+        )
+            .into_response();
     } else {
         // Direct-spec URLs (no token) bypass the helper pre-encode
         // path. Encode here on first hit and memoize so later range
@@ -164,7 +172,9 @@ fn encode_signal_payload_with_cache(
     {
         return Some(hit);
     }
-    let _lock = cache.lock_entry("signal", spec_key.as_bytes());
+    let _lock = cache
+        .lock_entry("signal", spec_key.as_bytes())
+        .expect("lock encoded signal fixture cache entry");
     if let Some(blob) = cache.get("signal", spec_key.as_bytes())
         && let Some(hit) = decode_l2_blob(&blob)
     {
@@ -506,6 +516,24 @@ mod tests {
         let mut blob = b"audio/exotic\n".to_vec();
         blob.extend_from_slice(b"data");
         assert!(decode_l2_blob(&blob).is_none());
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn token_route_cache_miss_fails_closed_without_inline_encoding() {
+        let state = TestServerState::new();
+        let spec = encode(r#"{"frames":1024,"sample_rate":44100,"channels":2}"#);
+        let request = parse_signal_request(SignalKind::Sawtooth, &format!("{spec}.wav"))
+            .expect("valid token signal request");
+        let token = state.insert_signal(request);
+
+        let response = handle_signal(
+            &state,
+            SignalKind::Sawtooth,
+            &format!("{token}.wav"),
+            &HeaderMap::new(),
+        );
+
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
     }
 
     #[kithara::test(native, flash(false))]

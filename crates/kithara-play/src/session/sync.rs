@@ -1,11 +1,12 @@
 use std::num::NonZeroU32;
 
 use kithara_audio::{
-    AlignmentPlan, AlignmentRequest, BeatMap, BeatMapId, BeatMapRevision, BeatMapSnapshot,
-    HostAxis, HostEpoch, MapAxis, MapStamp, PlanTransition, PresentationFrontier, SyncAdmission,
-    SyncApplied, SyncCapability, SyncError, SyncGroup, SyncGroupSnapshot, SyncGroupTopologyError,
-    SyncIntent, SyncMember, SyncMemberKind, SyncMemberSnapshot, SyncOperation, SyncOperationId,
-    SyncRejected, SyncStatusSnapshot, TopologyOperation, TopologyRevision, TopologyStamp,
+    AlignmentPlan, AlignmentRequest, BeatMap, BeatMapId, BeatMapSnapshot, BeatMapSnapshotError,
+    HostAxis, HostBeatMap, HostEpoch, MapAxis, MapStamp, PlanTransition, PresentationFrontier,
+    SyncAdmission, SyncApplied, SyncCapability, SyncError, SyncGroup, SyncGroupSnapshot,
+    SyncGroupTopologyError, SyncIntent, SyncMember, SyncMemberKind, SyncMemberSnapshot,
+    SyncOperation, SyncOperationId, SyncRejected, SyncStatusSnapshot, TopologyOperation,
+    TopologyRevision, TopologyStamp,
 };
 
 use super::state::Deck;
@@ -27,7 +28,7 @@ enum GroupKind {
 impl Host {
     pub(super) fn new(id: BeatMapId, sample_rate: NonZeroU32) -> Self {
         Self {
-            map: unavailable_map(id, BeatMapRevision::first(), sample_rate, HostEpoch::new(0)),
+            map: unavailable_map(id, sample_rate, HostEpoch::new(0)),
             decks: Vec::new(),
             next_operation: Some(SyncOperationId::first()),
             topology_revision: TopologyRevision::first(),
@@ -35,8 +36,37 @@ impl Host {
         }
     }
 
-    pub(super) fn publish_map(&mut self, map: BeatMapSnapshot) -> Result<(), SyncError> {
-        publish_map(&mut self.map, map)
+    pub(super) fn publish_map(&mut self, map: &HostBeatMap) -> Result<(), SyncError> {
+        let given = map.stamp();
+        if given.map_id() != self.map.id() {
+            return Err(SyncError::MapIdentityMismatch {
+                expected: self.map.id(),
+                given: given.map_id(),
+            });
+        }
+        let observed = map.snapshot();
+        if observed == self.map {
+            return Ok(());
+        }
+        if given.revision() <= self.map.revision() {
+            return Err(SyncError::StaleMapRevision {
+                current: self.map.stamp(),
+                given,
+            });
+        }
+        let expected_revision = self
+            .map
+            .revision()
+            .checked_next()
+            .ok_or(BeatMapSnapshotError::RevisionExhausted)?;
+        let expected = MapStamp::new(self.map.id(), expected_revision);
+        if given != expected {
+            return Err(SyncError::MapRevisionMismatch { expected, given });
+        }
+        self.map =
+            self.map
+                .host_successor(self.map.stamp(), map.epoch(), map.anchor(), map.meter())?;
+        Ok(())
     }
 
     pub(super) fn publish_unavailable(
@@ -45,12 +75,24 @@ impl Host {
         sample_rate: NonZeroU32,
         epoch: HostEpoch,
     ) -> Result<(), SyncError> {
-        self.publish_map(unavailable_map(
-            stamp.map_id(),
-            stamp.revision(),
-            sample_rate,
-            epoch,
-        ))
+        if stamp.map_id() != self.map.id() {
+            return Err(SyncError::MapIdentityMismatch {
+                expected: self.map.id(),
+                given: stamp.map_id(),
+            });
+        }
+        let next = self.map.unavailable_successor(
+            self.map.stamp(),
+            MapAxis::Host(HostAxis::new(sample_rate, epoch)),
+        )?;
+        if next.stamp() != stamp {
+            return Err(SyncError::MapRevisionMismatch {
+                expected: next.stamp(),
+                given: stamp,
+            });
+        }
+        self.map = next;
+        Ok(())
     }
 
     pub(super) fn deck_count(&self) -> usize {
@@ -87,35 +129,10 @@ impl Host {
 
 pub(super) fn unavailable_map(
     id: BeatMapId,
-    revision: BeatMapRevision,
     sample_rate: NonZeroU32,
     epoch: HostEpoch,
 ) -> BeatMapSnapshot {
-    BeatMapSnapshot::unavailable(
-        id,
-        revision,
-        MapAxis::Host(HostAxis::new(sample_rate, epoch)),
-    )
-}
-
-fn publish_map(current: &mut BeatMapSnapshot, next: BeatMapSnapshot) -> Result<(), SyncError> {
-    if next.id() != current.id() {
-        return Err(SyncError::MapIdentityMismatch {
-            expected: current.id(),
-            given: next.id(),
-        });
-    }
-    if next == *current {
-        return Ok(());
-    }
-    if next.revision() <= current.revision() {
-        return Err(SyncError::StaleMapRevision {
-            current: current.stamp(),
-            given: next.stamp(),
-        });
-    }
-    *current = next;
-    Ok(())
+    BeatMapSnapshot::unavailable(id, MapAxis::Host(HostAxis::new(sample_rate, epoch)))
 }
 
 impl BeatMap for Host {

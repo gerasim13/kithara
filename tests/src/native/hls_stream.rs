@@ -337,7 +337,14 @@ fn materialize_body(spec: &ResolvedHlsSpec) -> Result<MaterializedHlsBody, HlsSp
                         {
                             return Ok(data);
                         }
-                        let _lock = cache.lock_entry("hls-variant", key.as_bytes());
+                        let _lock =
+                            cache
+                                .lock_entry("hls-variant", key.as_bytes())
+                                .map_err(|error| {
+                                    HlsSpecError::PackagedAudio(format!(
+                                        "lock HLS fixture cache entry: {error}"
+                                    ))
+                                })?;
                         if let Some(data) = cache
                             .get("hls-variant", key.as_bytes())
                             .and_then(|blob| decode_variant_blob(&blob))

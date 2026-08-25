@@ -1,13 +1,12 @@
 use std::num::NonZeroU32;
 
 use kithara_audio::{
-    AlignmentPlan, AlignmentRequest, AssetAxis, AssetBeatMap, AssetFrame, AssetMapPublishError,
-    AssetMapUpdate, Beat, BeatEvidence, BeatMap, BeatMapId, BeatMapRevision, BeatMapSnapshot,
-    BeatMapSnapshotError, BeatMarker, BeatOrdinal, BeatsPerMinute, FrameUncertainty, HostAxis,
-    HostBeatMap, HostEpoch, MapAxis, MapCoordinateError, MapPoint, MapPosition, MapQuery,
-    MapSegment, MapState, MapUnavailable, Meter, MeterFacts, PlanTransition, PresentationFrontier,
-    SegmentDraft, SegmentEndpoint, SegmentError, SegmentFacts, SegmentSet, SessionAnchor,
-    SessionBeat, SessionFrame, SyncError,
+    AlignmentPlan, AlignmentRequest, AssetAxis, AssetFrame, Beat, BeatEvidence, BeatMap, BeatMapId,
+    BeatMapRevision, BeatMapSnapshot, BeatMapSnapshotError, BeatMarker, BeatOrdinal,
+    BeatsPerMinute, FrameUncertainty, HostAxis, HostBeatMap, HostEpoch, MapAxis,
+    MapCoordinateError, MapPoint, MapPosition, MapQuery, MapSegment, MapStamp, MapState,
+    MapUnavailable, Meter, MeterFacts, PlanTransition, PresentationFrontier, SegmentEndpoint,
+    SegmentError, SegmentFacts, SegmentSet, SessionAnchor, SessionBeat, SessionFrame, SyncError,
 };
 use kithara_test_utils::kithara;
 
@@ -65,10 +64,38 @@ fn resolved<T: std::fmt::Debug>(query: MapQuery<T>) -> T {
     }
 }
 
+fn asset_snapshot(
+    id: BeatMapId,
+    state: MapState,
+    frame_count: u64,
+    segments: Vec<MapSegment>,
+) -> BeatMapSnapshot {
+    asset_snapshot_at_rate(id, state, sample_rate(), frame_count, segments)
+}
+
+fn asset_snapshot_at_rate(
+    id: BeatMapId,
+    state: MapState,
+    sample_rate: NonZeroU32,
+    frame_count: u64,
+    segments: Vec<MapSegment>,
+) -> BeatMapSnapshot {
+    let axis = MapAxis::Asset(AssetAxis::new(sample_rate, frame_count));
+    let segments =
+        SegmentSet::new(axis, segments).expect("invariant: fixture segment topology is valid");
+    BeatMapSnapshot::initial(id, state, segments)
+        .expect("invariant: fixture snapshot state is valid")
+}
+
+fn next_revision(revision: BeatMapRevision) -> BeatMapRevision {
+    revision
+        .checked_next()
+        .expect("invariant: fixture map revision space is available")
+}
+
 #[kithara::test]
 fn two_beat_gap_preserves_musical_distance() {
     let period = 24_000.0;
-    let (map, mut publisher) = AssetBeatMap::new(map_id(), sample_rate(), 72_001);
     let segment = MapSegment::new(
         observed(0.0, 0),
         observed(2.0 * period, 2),
@@ -78,15 +105,7 @@ fn two_beat_gap_preserves_musical_distance() {
         ),
     )
     .expect("invariant: explicit two-beat span is valid");
-    let initial = map.snapshot();
-
-    let snapshot = publisher
-        .publish(AssetMapUpdate::new(
-            initial.stamp(),
-            MapState::Building,
-            vec![segment],
-        ))
-        .expect("invariant: first partial map publication is valid");
+    let snapshot = asset_snapshot(map_id(), MapState::Building, 72_001, vec![segment]);
 
     let start = resolved(snapshot.beat_at(MapPoint::new(snapshot.stamp(), asset_frame(0.0))));
     let midpoint = resolved(snapshot.beat_at(MapPoint::new(snapshot.stamp(), asset_frame(period))));
@@ -118,20 +137,13 @@ fn pickup_ordinals_keep_canonical_downbeat_zero() {
         Beat::try_from(BeatOrdinal::new(9_007_199_254_740_993)),
         Err(MapCoordinateError::InexactBeatOrdinal)
     );
-    let (map, mut publisher) = AssetBeatMap::new(map_id(), sample_rate(), 96_001);
     let segment = MapSegment::new(
         observed(0.0, -2),
         observed(96_000.0, 2),
         metered(BeatEvidence::Interpolated, meter),
     )
     .expect("invariant: pickup fixture topology is valid");
-    let snapshot = publisher
-        .publish(AssetMapUpdate::new(
-            map.snapshot().stamp(),
-            MapState::Building,
-            vec![segment],
-        ))
-        .expect("invariant: pickup map publication is valid");
+    let snapshot = asset_snapshot(map_id(), MapState::Building, 96_001, vec![segment]);
 
     let pickup = resolved(snapshot.beat_at(MapPoint::new(snapshot.stamp(), asset_frame(0.0))));
     let downbeat =
@@ -152,16 +164,12 @@ fn pickup_ordinals_keep_canonical_downbeat_zero() {
 
 #[kithara::test]
 fn analyzer_snapshot_requires_marker_span_evidence() {
-    let (map, mut publisher) = AssetBeatMap::new(map_id(), sample_rate(), 72_001);
     let facts = metered(
         BeatEvidence::Interpolated,
         Meter::new(4).expect("invariant: fixture meter is valid"),
     );
     let unresolved = BeatMarker::new(asset_frame(48_000.0), None, BeatEvidence::Observed, exact());
-    let draft = SegmentDraft::new(observed(0.0, 0), unresolved, facts);
-
-    let result =
-        AssetMapUpdate::try_from((map.snapshot().stamp(), MapState::Building, vec![draft]));
+    let result = MapSegment::new(observed(0.0, 0), unresolved, facts);
 
     assert!(matches!(
         result,
@@ -170,13 +178,9 @@ fn analyzer_snapshot_requires_marker_span_evidence() {
         })
     ));
 
-    let explicit = SegmentDraft::new(observed(0.0, 0), observed(48_000.0, 2), facts);
-    let update =
-        AssetMapUpdate::try_from((map.snapshot().stamp(), MapState::Building, vec![explicit]))
-            .expect("explicit musical span must normalize");
-    let snapshot = publisher
-        .publish(update)
-        .expect("explicit musical span must publish");
+    let explicit = MapSegment::new(observed(0.0, 0), observed(48_000.0, 2), facts)
+        .expect("explicit musical span must normalize");
+    let snapshot = asset_snapshot(map_id(), MapState::Building, 72_001, vec![explicit]);
     let midpoint =
         resolved(snapshot.beat_at(MapPoint::new(snapshot.stamp(), asset_frame(24_000.0))));
     assert_eq!(f64::from(*midpoint.value().value()), 1.0);
@@ -185,23 +189,21 @@ fn analyzer_snapshot_requires_marker_span_evidence() {
 
 #[kithara::test]
 fn scalar_tempo_and_segments_share_declared_topology() {
-    let (map, mut publisher) = AssetBeatMap::new(map_id(), sample_rate(), 96_001);
     let facts = metered(
         BeatEvidence::Observed,
         Meter::new(4).expect("invariant: fixture meter is valid"),
     );
-    let snapshot = publisher
-        .publish(AssetMapUpdate::new(
-            map.snapshot().stamp(),
-            MapState::Building,
-            vec![
-                MapSegment::new(observed(0.0, 0), observed(48_000.0, 2), facts)
-                    .expect("invariant: first fixture slope is valid"),
-                MapSegment::new(observed(48_000.0, 2), observed(96_000.0, 3), facts)
-                    .expect("invariant: second fixture slope is valid"),
-            ],
-        ))
-        .expect("invariant: topology publication is valid");
+    let snapshot = asset_snapshot(
+        map_id(),
+        MapState::Building,
+        96_001,
+        vec![
+            MapSegment::new(observed(0.0, 0), observed(48_000.0, 2), facts)
+                .expect("invariant: first fixture slope is valid"),
+            MapSegment::new(observed(48_000.0, 2), observed(96_000.0, 3), facts)
+                .expect("invariant: second fixture slope is valid"),
+        ],
+    );
 
     let first = resolved(snapshot.tempo_at(MapPoint::new(snapshot.stamp(), asset_frame(24_000.0))));
     let second =
@@ -220,20 +222,13 @@ fn scalar_tempo_and_segments_share_declared_topology() {
 
 #[kithara::test]
 fn tempo_only_geometry_does_not_fabricate_meter() {
-    let (map, mut publisher) = AssetBeatMap::new(map_id(), sample_rate(), 48_001);
     let segment = MapSegment::new(
         observed(0.0, 0),
         observed(48_000.0, 2),
         SegmentFacts::new(BeatEvidence::Observed, exact(), None),
     )
     .expect("invariant: tempo-only fixture topology is valid");
-    let building = publisher
-        .publish(AssetMapUpdate::new(
-            map.snapshot().stamp(),
-            MapState::Building,
-            vec![segment.clone()],
-        ))
-        .expect("invariant: tempo-only building map is valid");
+    let building = asset_snapshot(map_id(), MapState::Building, 48_001, vec![segment.clone()]);
     let beat = Beat::new(1.0).expect("invariant: fixture beat is finite");
 
     assert!(matches!(
@@ -248,13 +243,7 @@ fn tempo_only_geometry_does_not_fabricate_meter() {
         other => panic!("expected pending meter evidence, got {other:?}"),
     }
 
-    let complete = publisher
-        .publish(AssetMapUpdate::new(
-            building.stamp(),
-            MapState::Complete,
-            vec![segment],
-        ))
-        .expect("invariant: tempo-only complete map is valid");
+    let complete = asset_snapshot(map_id(), MapState::Complete, 48_001, vec![segment]);
     assert!(matches!(
         complete.meter_at(MapPoint::new(complete.stamp(), beat)),
         MapQuery::Unavailable(MapUnavailable::NoMeter)
@@ -263,7 +252,6 @@ fn tempo_only_geometry_does_not_fabricate_meter() {
 
 #[kithara::test]
 fn segment_derived_values_report_segment_evidence() {
-    let (map, mut publisher) = AssetBeatMap::new(map_id(), sample_rate(), 48_001);
     let meter = Meter::new(4).expect("invariant: fixture meter is valid");
     let segment = MapSegment::new(
         observed(0.0, 0),
@@ -279,13 +267,7 @@ fn segment_derived_values_report_segment_evidence() {
         ),
     )
     .expect("invariant: fixture topology is valid");
-    let snapshot = publisher
-        .publish(AssetMapUpdate::new(
-            map.snapshot().stamp(),
-            MapState::Building,
-            vec![segment],
-        ))
-        .expect("invariant: topology publication is valid");
+    let snapshot = asset_snapshot(map_id(), MapState::Building, 48_001, vec![segment]);
 
     let tempo = resolved(snapshot.tempo_at(MapPoint::new(snapshot.stamp(), asset_frame(0.0))));
     let meter = resolved(snapshot.meter_at(MapPoint::new(
@@ -300,7 +282,6 @@ fn segment_derived_values_report_segment_evidence() {
 
 #[kithara::test]
 fn building_gap_is_uncovered_but_complete_extent_is_outside_domain() {
-    let (map, mut publisher) = AssetBeatMap::new(map_id(), sample_rate(), 120_001);
     let facts = metered(
         BeatEvidence::Observed,
         Meter::new(4).expect("invariant: fixture meter is valid"),
@@ -311,13 +292,7 @@ fn building_gap_is_uncovered_but_complete_extent_is_outside_domain() {
         MapSegment::new(observed(72_000.0, 3), observed(120_000.0, 5), facts)
             .expect("invariant: second fixture region is valid"),
     ];
-    let building = publisher
-        .publish(AssetMapUpdate::new(
-            map.snapshot().stamp(),
-            MapState::Building,
-            segments.clone(),
-        ))
-        .expect("invariant: sparse building map is valid");
+    let building = asset_snapshot(map_id(), MapState::Building, 120_001, segments.clone());
 
     match building.beat_at(MapPoint::new(building.stamp(), asset_frame(48_000.0))) {
         MapQuery::Uncovered { required } => {
@@ -327,13 +302,7 @@ fn building_gap_is_uncovered_but_complete_extent_is_outside_domain() {
         other => panic!("expected the sparse gap to be uncovered, got {other:?}"),
     }
 
-    let complete = publisher
-        .publish(AssetMapUpdate::new(
-            building.stamp(),
-            MapState::Complete,
-            segments,
-        ))
-        .expect("invariant: complete sparse map is valid");
+    let complete = asset_snapshot(map_id(), MapState::Complete, 120_001, segments);
 
     assert!(matches!(
         complete.beat_at(MapPoint::new(complete.stamp(), asset_frame(48_000.0))),
@@ -347,23 +316,21 @@ fn building_gap_is_uncovered_but_complete_extent_is_outside_domain() {
 
 #[kithara::test]
 fn missing_beat_reports_the_corresponding_position_gap() {
-    let (map, mut publisher) = AssetBeatMap::new(map_id(), sample_rate(), 120_001);
     let facts = metered(
         BeatEvidence::Interpolated,
         Meter::new(4).expect("invariant: fixture meter is valid"),
     );
-    let snapshot = publisher
-        .publish(AssetMapUpdate::new(
-            map.snapshot().stamp(),
-            MapState::Building,
-            vec![
-                MapSegment::new(observed(0.0, 0), observed(24_000.0, 1), facts)
-                    .expect("invariant: first fixture segment is valid"),
-                MapSegment::new(observed(72_000.0, 3), observed(120_000.0, 5), facts)
-                    .expect("invariant: second fixture segment is valid"),
-            ],
-        ))
-        .expect("invariant: sparse fixture map is valid");
+    let snapshot = asset_snapshot(
+        map_id(),
+        MapState::Building,
+        120_001,
+        vec![
+            MapSegment::new(observed(0.0, 0), observed(24_000.0, 1), facts)
+                .expect("invariant: first fixture segment is valid"),
+            MapSegment::new(observed(72_000.0, 3), observed(120_000.0, 5), facts)
+                .expect("invariant: second fixture segment is valid"),
+        ],
+    );
     let missing = MapPoint::new(
         snapshot.stamp(),
         Beat::new(2.0).expect("invariant: fixture beat is finite"),
@@ -379,102 +346,8 @@ fn missing_beat_reports_the_corresponding_position_gap() {
 }
 
 #[kithara::test]
-fn map_revision_publish_is_monotonic_and_old_snapshots_stay_immutable() {
-    let (map, mut publisher) = AssetBeatMap::new(map_id(), sample_rate(), 72_001);
-    let facts = metered(
-        BeatEvidence::Interpolated,
-        Meter::new(4).expect("invariant: fixture meter is valid"),
-    );
-    let first = publisher
-        .publish(AssetMapUpdate::new(
-            map.snapshot().stamp(),
-            MapState::Building,
-            vec![
-                MapSegment::new(observed(0.0, 0), observed(48_000.0, 2), facts)
-                    .expect("invariant: first topology is valid"),
-            ],
-        ))
-        .expect("invariant: first revision is valid");
-    let first_answer = resolved(first.beat_at(MapPoint::new(first.stamp(), asset_frame(24_000.0))));
-
-    let second = publisher
-        .publish(AssetMapUpdate::new(
-            first.stamp(),
-            MapState::Building,
-            vec![
-                MapSegment::new(observed(0.0, 0), observed(47_000.0, 2), facts)
-                    .expect("invariant: refined topology is valid"),
-            ],
-        ))
-        .expect("invariant: second revision is valid");
-
-    assert!(second.revision() > first.revision());
-    assert_eq!(map.snapshot(), second);
-    assert_eq!(
-        f64::from(
-            *resolved(first.beat_at(MapPoint::new(first.stamp(), asset_frame(24_000.0),)))
-                .value()
-                .value()
-        ),
-        f64::from(*first_answer.value().value())
-    );
-    assert_ne!(
-        f64::from(
-            *resolved(second.beat_at(MapPoint::new(second.stamp(), asset_frame(24_000.0),)))
-                .value()
-                .value()
-        ),
-        f64::from(*first_answer.value().value())
-    );
-}
-
-#[kithara::test]
-fn stale_asset_updates_do_not_publish() {
-    let (map, mut publisher) = AssetBeatMap::new(map_id(), sample_rate(), 48_001);
-    let (foreign, _) = AssetBeatMap::new(map_id(), sample_rate(), 48_001);
-    let initial = map.snapshot();
-    let segment = MapSegment::new(
-        observed(0.0, 0),
-        observed(48_000.0, 2),
-        metered(
-            BeatEvidence::Interpolated,
-            Meter::new(4).expect("invariant: fixture meter is valid"),
-        ),
-    )
-    .expect("invariant: fixture segment is valid");
-    let current = publisher
-        .publish(AssetMapUpdate::new(
-            initial.stamp(),
-            MapState::Building,
-            vec![segment.clone()],
-        ))
-        .expect("invariant: first publication is valid");
-
-    for given in [initial.stamp(), foreign.snapshot().stamp()] {
-        let result = publisher.publish(AssetMapUpdate::new(
-            given,
-            MapState::Building,
-            vec![segment.clone()],
-        ));
-
-        assert!(matches!(
-            result,
-            Err(AssetMapPublishError::Stale { expected, given: rejected })
-                if expected == current.stamp() && rejected == given
-        ));
-        assert_eq!(map.snapshot(), current);
-    }
-}
-
-#[kithara::test]
-fn stamped_point_from_old_revision_is_stale() {
-    let (map, mut publisher) = AssetBeatMap::new(map_id(), sample_rate(), 72_001);
-    let initial = map.snapshot();
-    let old_point = MapPoint::new(initial.stamp(), asset_frame(24_000.0));
-    let old_beat = MapPoint::new(
-        initial.stamp(),
-        Beat::new(1.0).expect("invariant: fixture beat is finite"),
-    );
+fn stamped_point_from_another_revision_is_stale() {
+    let id = map_id();
     let segment = MapSegment::new(
         observed(0.0, 0),
         observed(48_000.0, 2),
@@ -484,56 +357,49 @@ fn stamped_point_from_old_revision_is_stale() {
         ),
     )
     .expect("invariant: fixture topology is valid");
-    let current = publisher
-        .publish(AssetMapUpdate::new(
-            initial.stamp(),
-            MapState::Building,
-            vec![segment],
-        ))
-        .expect("invariant: publication is valid");
+    let current = asset_snapshot(id, MapState::Building, 72_001, vec![segment]);
+    let other_stamp = MapStamp::new(id, next_revision(current.revision()));
+    let other_point = MapPoint::new(other_stamp, asset_frame(24_000.0));
+    let other_beat = MapPoint::new(
+        other_stamp,
+        Beat::new(1.0).expect("invariant: fixture beat is finite"),
+    );
 
     assert!(matches!(
-        current.beat_at(old_point),
+        current.beat_at(other_point),
         MapQuery::Stale { expected, given }
-            if expected == current.stamp() && given == initial.stamp()
+            if expected == current.stamp() && given == other_stamp
     ));
     assert!(matches!(
-        current.position_at(old_beat),
+        current.position_at(other_beat),
         MapQuery::Stale { expected, given }
-            if expected == current.stamp() && given == initial.stamp()
+            if expected == current.stamp() && given == other_stamp
     ));
 }
 
 #[kithara::test]
-fn overlapping_segments_are_rejected_without_publication() {
-    let (map, mut publisher) = AssetBeatMap::new(map_id(), sample_rate(), 96_001);
-    let base = map.snapshot();
+fn overlapping_segments_are_rejected() {
+    let axis = MapAxis::Asset(AssetAxis::new(sample_rate(), 96_001));
     let facts = metered(
         BeatEvidence::Observed,
         Meter::new(4).expect("invariant: fixture meter is valid"),
     );
-    let result = publisher.publish(AssetMapUpdate::new(
-        base.stamp(),
-        MapState::Building,
+    let result = SegmentSet::new(
+        axis,
         vec![
             MapSegment::new(observed(0.0, 0), observed(48_000.0, 2), facts)
                 .expect("invariant: first segment is valid alone"),
             MapSegment::new(observed(24_000.0, 1), observed(72_000.0, 3), facts)
                 .expect("invariant: second segment is valid alone"),
         ],
-    ));
+    );
 
-    assert!(matches!(
-        result,
-        Err(AssetMapPublishError::InvalidSegments(
-            SegmentError::Overlap { index: 1 }
-        ))
-    ));
-    assert_eq!(map.snapshot(), base);
+    assert!(matches!(result, Err(SegmentError::Overlap { index: 1 })));
 }
 
 #[kithara::test]
-fn one_sided_segment_boundaries_are_rejected_without_publication() {
+fn one_sided_segment_boundaries_are_rejected() {
+    let axis = MapAxis::Asset(AssetAxis::new(sample_rate(), 96_001));
     let facts = metered(
         BeatEvidence::Interpolated,
         Meter::new(4).expect("invariant: fixture meter is valid"),
@@ -547,49 +413,37 @@ fn one_sided_segment_boundaries_are_rejected_without_publication() {
         MapSegment::new(observed(48_000.0, 1), observed(72_000.0, 2), facts)
             .expect("invariant: repeated-beat segment is valid alone"),
     ] {
-        let (map, mut publisher) = AssetBeatMap::new(map_id(), sample_rate(), 96_001);
-        let base = map.snapshot();
-
-        let result = publisher.publish(AssetMapUpdate::new(
-            base.stamp(),
-            MapState::Building,
-            vec![first.clone(), second],
-        ));
+        let result = SegmentSet::new(axis, vec![first.clone(), second]);
 
         assert!(matches!(
             result,
-            Err(AssetMapPublishError::InvalidSegments(
-                SegmentError::NonInvertibleBoundary { index: 1 }
-            ))
+            Err(SegmentError::NonInvertibleBoundary { index: 1 })
         ));
-        assert_eq!(map.snapshot(), base);
     }
 }
 
 #[kithara::test]
 fn sparse_snapshot_is_honest_and_invertible() {
-    let (map, mut publisher) = AssetBeatMap::new(map_id(), sample_rate(), 120_001);
     let meter = Meter::new(4).expect("invariant: fixture meter is valid");
-    let snapshot = publisher
-        .publish(AssetMapUpdate::new(
-            map.snapshot().stamp(),
-            MapState::Building,
-            vec![
-                MapSegment::new(
-                    observed(0.0, 0),
-                    observed(48_000.0, 2),
-                    metered(BeatEvidence::Interpolated, meter),
-                )
-                .expect("invariant: interpolated fixture segment is valid"),
-                MapSegment::new(
-                    marker(72_000.0, 3, BeatEvidence::Extrapolated),
-                    marker(120_000.0, 5, BeatEvidence::Extrapolated),
-                    metered(BeatEvidence::Extrapolated, meter),
-                )
-                .expect("invariant: extrapolated fixture segment is valid"),
-            ],
-        ))
-        .expect("invariant: sparse fixture map is valid");
+    let snapshot = asset_snapshot(
+        map_id(),
+        MapState::Building,
+        120_001,
+        vec![
+            MapSegment::new(
+                observed(0.0, 0),
+                observed(48_000.0, 2),
+                metered(BeatEvidence::Interpolated, meter),
+            )
+            .expect("invariant: interpolated fixture segment is valid"),
+            MapSegment::new(
+                marker(72_000.0, 3, BeatEvidence::Extrapolated),
+                marker(120_000.0, 5, BeatEvidence::Extrapolated),
+                metered(BeatEvidence::Extrapolated, meter),
+            )
+            .expect("invariant: extrapolated fixture segment is valid"),
+        ],
+    );
 
     for (frame, expected_beat, evidence) in [
         (0.0, 0.0, BeatEvidence::Observed),
@@ -617,170 +471,87 @@ fn sparse_snapshot_is_honest_and_invertible() {
 }
 
 #[kithara::test]
-fn progressive_extrapolation_is_immediate_and_refines_immutably() {
-    let (map, mut publisher) = AssetBeatMap::new(map_id(), sample_rate(), 144_001);
+fn progressive_extrapolation_is_immediately_queryable() {
     let meter = Meter::new(4).expect("invariant: fixture meter is valid");
     let low = uncertainty(2.0);
     let high = uncertainty(480.0);
-    let first = publisher
-        .publish(AssetMapUpdate::new(
-            map.snapshot().stamp(),
-            MapState::Building,
-            vec![
-                MapSegment::new(
-                    observed(0.0, 0),
-                    observed(48_000.0, 2),
-                    SegmentFacts::new(
-                        BeatEvidence::Observed,
-                        low,
-                        Some(MeterFacts::new(meter, BeatEvidence::Observed, low)),
-                    ),
-                )
-                .expect("invariant: observed fixture segment is valid"),
-                MapSegment::new(
-                    marker(48_000.0, 2, BeatEvidence::Extrapolated),
-                    marker(144_000.0, 6, BeatEvidence::Extrapolated),
-                    SegmentFacts::new(
-                        BeatEvidence::Extrapolated,
-                        high,
-                        Some(MeterFacts::new(meter, BeatEvidence::Extrapolated, high)),
-                    ),
-                )
-                .expect("invariant: extrapolated fixture segment is valid"),
-            ],
-        ))
-        .expect("invariant: first progressive fixture revision is valid");
-    let probe = asset_frame(72_000.0);
-    let first_estimate = resolved(first.beat_at(MapPoint::new(first.stamp(), probe)));
-    assert_eq!(f64::from(*first_estimate.value().value()), 3.0);
-    assert_eq!(first_estimate.evidence(), BeatEvidence::Extrapolated);
-    assert_eq!(first_estimate.uncertainty(), high);
-
-    let refined = publisher
-        .publish(AssetMapUpdate::new(
-            first.stamp(),
-            MapState::Building,
-            vec![
-                MapSegment::new(
-                    observed(0.0, 0),
-                    observed(48_000.0, 2),
-                    SegmentFacts::new(
-                        BeatEvidence::Observed,
-                        low,
-                        Some(MeterFacts::new(meter, BeatEvidence::Observed, low)),
-                    ),
-                )
-                .expect("invariant: retained observed fixture segment is valid"),
-                MapSegment::new(
-                    observed(48_000.0, 2),
-                    observed(96_000.0, 4),
-                    SegmentFacts::new(
-                        BeatEvidence::Observed,
-                        low,
-                        Some(MeterFacts::new(meter, BeatEvidence::Observed, low)),
-                    ),
-                )
-                .expect("invariant: refined observed fixture segment is valid"),
-                MapSegment::new(
-                    marker(96_000.0, 4, BeatEvidence::Extrapolated),
-                    marker(144_000.0, 6, BeatEvidence::Extrapolated),
-                    SegmentFacts::new(
-                        BeatEvidence::Extrapolated,
-                        high,
-                        Some(MeterFacts::new(meter, BeatEvidence::Extrapolated, high)),
-                    ),
-                )
-                .expect("invariant: retained extrapolated fixture segment is valid"),
-            ],
-        ))
-        .expect("invariant: refined progressive fixture revision is valid");
-    let refined_estimate = resolved(refined.beat_at(MapPoint::new(refined.stamp(), probe)));
-    assert_eq!(f64::from(*refined_estimate.value().value()), 3.0);
-    assert_eq!(refined_estimate.evidence(), BeatEvidence::Observed);
-    assert_eq!(refined_estimate.uncertainty(), low);
-
-    let old_estimate = resolved(first.beat_at(MapPoint::new(first.stamp(), probe)));
-    assert_eq!(old_estimate.evidence(), BeatEvidence::Extrapolated);
-    assert_eq!(old_estimate.uncertainty(), high);
-    assert_eq!(old_estimate.stamp(), first.stamp());
-}
-
-#[kithara::test]
-fn late_meter_lane_rebases_over_latest_beat_revision() {
-    let (map, mut publisher) = AssetBeatMap::new(map_id(), sample_rate(), 48_001);
-    let base = map.snapshot();
-    let tempo_only = publisher
-        .publish(AssetMapUpdate::new(
-            base.stamp(),
-            MapState::Building,
-            vec![
-                MapSegment::new(
-                    observed(0.0, 0),
-                    observed(48_000.0, 2),
-                    SegmentFacts::new(BeatEvidence::Interpolated, exact(), None),
-                )
-                .expect("invariant: tempo-only fixture segment is valid"),
-            ],
-        ))
-        .expect("invariant: tempo-only fixture revision is valid");
-    let meter = Meter::new(4).expect("invariant: fixture meter is valid");
-    let stale_result = publisher.publish(AssetMapUpdate::new(
-        base.stamp(),
+    let snapshot = asset_snapshot(
+        map_id(),
         MapState::Building,
+        144_001,
         vec![
             MapSegment::new(
                 observed(0.0, 0),
                 observed(48_000.0, 2),
-                metered(BeatEvidence::Interpolated, meter),
+                SegmentFacts::new(
+                    BeatEvidence::Observed,
+                    low,
+                    Some(MeterFacts::new(meter, BeatEvidence::Observed, low)),
+                ),
             )
-            .expect("invariant: stale metered fixture segment is valid"),
+            .expect("invariant: observed fixture segment is valid"),
+            MapSegment::new(
+                marker(48_000.0, 2, BeatEvidence::Extrapolated),
+                marker(144_000.0, 6, BeatEvidence::Extrapolated),
+                SegmentFacts::new(
+                    BeatEvidence::Extrapolated,
+                    high,
+                    Some(MeterFacts::new(meter, BeatEvidence::Extrapolated, high)),
+                ),
+            )
+            .expect("invariant: extrapolated fixture segment is valid"),
         ],
-    ));
+    );
+    let estimate =
+        resolved(snapshot.beat_at(MapPoint::new(snapshot.stamp(), asset_frame(72_000.0))));
+
+    assert_eq!(f64::from(*estimate.value().value()), 3.0);
+    assert_eq!(estimate.evidence(), BeatEvidence::Extrapolated);
+    assert_eq!(estimate.uncertainty(), high);
+    assert_eq!(estimate.stamp(), snapshot.stamp());
+}
+
+#[kithara::test]
+fn unavailable_successor_regulates_host_restart_and_asset_identity() {
+    let id = map_id();
+    let initial_axis = MapAxis::Host(HostAxis::new(sample_rate(), HostEpoch::new(4)));
+    let initial = BeatMapSnapshot::unavailable(id, initial_axis);
+    let next_axis = MapAxis::Host(HostAxis::new(sample_rate(), HostEpoch::new(5)));
+    let restarted = initial
+        .unavailable_successor(initial.stamp(), next_axis)
+        .expect("a newer host epoch is a valid unavailable successor");
+
+    assert_eq!(restarted.id(), id);
+    assert_eq!(restarted.axis(), next_axis);
+    assert_eq!(restarted.revision(), next_revision(initial.revision()));
     assert_eq!(
-        stale_result,
-        Err(AssetMapPublishError::Stale {
-            expected: tempo_only.stamp(),
-            given: base.stamp(),
+        restarted.state(),
+        MapState::Unavailable(MapUnavailable::NoGeometry)
+    );
+    assert_eq!(
+        restarted.unavailable_successor(initial.stamp(), next_axis),
+        Err(BeatMapSnapshotError::Stale {
+            expected: restarted.stamp(),
+            given: initial.stamp(),
         })
     );
-    assert_eq!(map.snapshot(), tempo_only);
 
-    let probe = asset_frame(24_000.0);
-    let tempo_before = resolved(tempo_only.tempo_at(MapPoint::new(tempo_only.stamp(), probe)));
-    let rebased = publisher
-        .publish(AssetMapUpdate::new(
-            tempo_only.stamp(),
-            MapState::Building,
-            vec![
-                MapSegment::new(
-                    observed(0.0, 0),
-                    observed(48_000.0, 2),
-                    metered(BeatEvidence::Interpolated, meter),
-                )
-                .expect("invariant: rebased metered fixture segment is valid"),
-            ],
-        ))
-        .expect("invariant: rebased meter revision is valid");
-    let tempo_after = resolved(rebased.tempo_at(MapPoint::new(rebased.stamp(), probe)));
-    assert_eq!(tempo_before.value(), tempo_after.value());
+    let asset_axis = MapAxis::Asset(AssetAxis::new(sample_rate(), 48_001));
+    let asset = BeatMapSnapshot::unavailable(map_id(), asset_axis);
+    let changed_asset_axis = MapAxis::Asset(AssetAxis::new(sample_rate(), 96_001));
     assert_eq!(
-        *resolved(rebased.meter_at(MapPoint::new(
-            rebased.stamp(),
-            Beat::new(1.0).expect("invariant: fixture beat is finite"),
-        )))
-        .value(),
-        meter
+        asset.unavailable_successor(asset.stamp(), changed_asset_axis),
+        Err(BeatMapSnapshotError::AxisChanged {
+            expected: asset_axis,
+            given: changed_asset_axis,
+        })
     );
     assert_eq!(
-        tempo_only
-            .segments()
-            .map(SegmentSet::segments)
-            .map(<[_]>::len),
-        Some(1)
-    );
-    assert_eq!(
-        rebased.segments().map(SegmentSet::segments).map(<[_]>::len),
-        Some(1)
+        restarted.unavailable_successor(restarted.stamp(), initial_axis),
+        Err(BeatMapSnapshotError::AxisChanged {
+            expected: next_axis,
+            given: initial_axis,
+        })
     );
 }
 
@@ -839,47 +610,45 @@ fn reconcile_maps(
     source.reconcile_to(target, active, frontier)
 }
 
-fn observe_plan_transition(transition: &PlanTransition) {
-    match transition {
-        PlanTransition::Unchanged | PlanTransition::Replace { .. } => {}
-        _ => {}
-    }
+type AlignContract =
+    fn(&dyn BeatMap, &dyn BeatMap, AlignmentRequest) -> Result<AlignmentPlan, SyncError>;
+type ReconcileContract = fn(
+    &dyn BeatMap,
+    &dyn BeatMap,
+    &AlignmentPlan,
+    PresentationFrontier,
+) -> Result<PlanTransition, SyncError>;
+
+fn observe_plan_transition(transition: &PlanTransition) -> bool {
+    matches!(
+        transition,
+        PlanTransition::Unchanged | PlanTransition::Replace { .. }
+    )
 }
 
 #[kithara::test]
 fn beat_map_exposes_object_safe_alignment_and_reconciliation() {
-    let _align_contract: fn(
-        &dyn BeatMap,
-        &dyn BeatMap,
-        AlignmentRequest,
-    ) -> Result<AlignmentPlan, SyncError> = align_maps;
-    let _reconcile_contract: fn(
-        &dyn BeatMap,
-        &dyn BeatMap,
-        &AlignmentPlan,
-        PresentationFrontier,
-    ) -> Result<PlanTransition, SyncError> = reconcile_maps;
-    let _transition_contract: fn(&PlanTransition) = observe_plan_transition;
+    let _align_contract: AlignContract = align_maps;
+    let _reconcile_contract: ReconcileContract = reconcile_maps;
+    let _transition_contract: fn(&PlanTransition) -> bool = observe_plan_transition;
 }
 
 #[kithara::test]
 fn asset_host_and_group_fake_satisfy_one_object_safe_contract() {
     let meter = Meter::new(4).expect("invariant: fixture meter is valid");
-    let (asset, mut publisher) = AssetBeatMap::new(map_id(), sample_rate(), 48_001);
-    let asset_snapshot = publisher
-        .publish(AssetMapUpdate::new(
-            asset.snapshot().stamp(),
-            MapState::Building,
-            vec![
-                MapSegment::new(
-                    observed(0.0, 0),
-                    observed(48_000.0, 2),
-                    metered(BeatEvidence::Interpolated, meter),
-                )
-                .expect("invariant: fixture asset topology is valid"),
-            ],
-        ))
-        .expect("invariant: fixture asset map is valid");
+    let asset = asset_snapshot(
+        map_id(),
+        MapState::Building,
+        48_001,
+        vec![
+            MapSegment::new(
+                observed(0.0, 0),
+                observed(48_000.0, 2),
+                metered(BeatEvidence::Interpolated, meter),
+            )
+            .expect("invariant: fixture asset topology is valid"),
+        ],
+    );
     let anchor = SessionAnchor::new(
         SessionFrame::new(0),
         SessionBeat::new(0.0).expect("invariant: fixture host beat is finite"),
@@ -894,30 +663,21 @@ fn asset_host_and_group_fake_satisfy_one_object_safe_contract() {
         anchor,
         Some(host_meter(meter)),
     );
-    let group_id = map_id();
-    let group_axis = MapAxis::Asset(AssetAxis::new(sample_rate(), 48_001));
-    let group_snapshot = BeatMapSnapshot::try_from((
-        group_id,
-        BeatMapRevision::first()
-            .checked_next()
-            .expect("invariant: the second group-map revision exists"),
+    let group_snapshot = asset_snapshot(
+        map_id(),
         MapState::Building,
-        SegmentSet::new(
-            group_axis,
-            vec![
-                MapSegment::new(
-                    observed(0.0, 0),
-                    observed(48_000.0, 2),
-                    metered(BeatEvidence::Interpolated, meter),
-                )
-                .expect("invariant: fixture group topology is valid"),
-            ],
-        )
-        .expect("invariant: fixture group segment set is valid"),
-    ))
-    .expect("invariant: fixture group snapshot is valid");
-    assert_ne!(group_snapshot.id(), asset_snapshot.id());
-    assert_ne!(group_snapshot.stamp(), asset_snapshot.stamp());
+        48_001,
+        vec![
+            MapSegment::new(
+                observed(0.0, 0),
+                observed(48_000.0, 2),
+                metered(BeatEvidence::Interpolated, meter),
+            )
+            .expect("invariant: fixture group topology is valid"),
+        ],
+    );
+    assert_ne!(group_snapshot.id(), asset.id());
+    assert_ne!(group_snapshot.stamp(), asset.stamp());
     let group_fake = GroupCompatibleFake {
         snapshot: group_snapshot,
     };
@@ -941,16 +701,12 @@ fn external_segment_snapshots_reject_incompatible_states() {
 
     for state in [
         MapState::Live,
+        MapState::Unavailable(MapUnavailable::NoGeometry),
         MapState::Unavailable(MapUnavailable::AxisMismatch),
         MapState::Unavailable(MapUnavailable::NoMeter),
     ] {
         assert_eq!(
-            BeatMapSnapshot::try_from((
-                map_id(),
-                BeatMapRevision::first(),
-                state,
-                segments.clone(),
-            )),
+            BeatMapSnapshot::initial(map_id(), state, segments.clone()),
             Err(BeatMapSnapshotError::InvalidState { axis, state })
         );
     }
@@ -959,12 +715,7 @@ fn external_segment_snapshots_reject_incompatible_states() {
     let host_segments = SegmentSet::new(host_axis, Vec::new())
         .expect("invariant: an empty host fixture segment set is valid");
     assert_eq!(
-        BeatMapSnapshot::try_from((
-            map_id(),
-            BeatMapRevision::first(),
-            MapState::Complete,
-            host_segments,
-        )),
+        BeatMapSnapshot::initial(map_id(), MapState::Complete, host_segments),
         Err(BeatMapSnapshotError::InvalidState {
             axis: host_axis,
             state: MapState::Complete,
@@ -975,13 +726,12 @@ fn external_segment_snapshots_reject_incompatible_states() {
 #[kithara::test]
 fn empty_host_segment_snapshot_reports_a_host_native_gap() {
     let axis = MapAxis::Host(HostAxis::new(sample_rate(), HostEpoch::new(3)));
-    let snapshot = BeatMapSnapshot::try_from((
+    let snapshot = BeatMapSnapshot::initial(
         map_id(),
-        BeatMapRevision::first(),
         MapState::Building,
         SegmentSet::new(axis, Vec::new())
             .expect("invariant: an empty host fixture segment set is valid"),
-    ))
+    )
     .expect("invariant: a building host snapshot is valid");
     let beat = Beat::new(0.0).expect("invariant: fixture beat is finite");
 
@@ -998,7 +748,7 @@ fn empty_host_segment_snapshot_reports_a_host_native_gap() {
 fn unavailable_snapshot_is_an_infallible_external_owner_seed() {
     let axis = MapAxis::Host(HostAxis::new(sample_rate(), HostEpoch::new(4)));
     let revision = BeatMapRevision::first();
-    let snapshot = BeatMapSnapshot::unavailable(map_id(), revision, axis);
+    let snapshot = BeatMapSnapshot::unavailable(map_id(), axis);
     let beat = Beat::new(0.0).expect("invariant: fixture beat is finite");
 
     assert_eq!(snapshot.revision(), revision);
@@ -1017,27 +767,25 @@ fn unavailable_snapshot_is_an_infallible_external_owner_seed() {
 fn touching_segment_seams_belong_to_the_following_segment() {
     let first_meter = Meter::new(4).expect("invariant: fixture meter is valid");
     let second_meter = Meter::new(3).expect("invariant: fixture meter is valid");
-    let (map, mut publisher) = AssetBeatMap::new(map_id(), sample_rate(), 96_001);
-    let snapshot = publisher
-        .publish(AssetMapUpdate::new(
-            map.snapshot().stamp(),
-            MapState::Building,
-            vec![
-                MapSegment::new(
-                    observed(0.0, 0),
-                    observed(48_000.0, 2),
-                    metered(BeatEvidence::Interpolated, first_meter),
-                )
-                .expect("invariant: first fixture segment is valid"),
-                MapSegment::new(
-                    marker(48_000.0, 2, BeatEvidence::Extrapolated),
-                    marker(96_000.0, 4, BeatEvidence::Extrapolated),
-                    metered(BeatEvidence::Extrapolated, second_meter),
-                )
-                .expect("invariant: second fixture segment is valid"),
-            ],
-        ))
-        .expect("invariant: touching fixture segments are valid");
+    let snapshot = asset_snapshot(
+        map_id(),
+        MapState::Building,
+        96_001,
+        vec![
+            MapSegment::new(
+                observed(0.0, 0),
+                observed(48_000.0, 2),
+                metered(BeatEvidence::Interpolated, first_meter),
+            )
+            .expect("invariant: first fixture segment is valid"),
+            MapSegment::new(
+                marker(48_000.0, 2, BeatEvidence::Extrapolated),
+                marker(96_000.0, 4, BeatEvidence::Extrapolated),
+                metered(BeatEvidence::Extrapolated, second_meter),
+            )
+            .expect("invariant: second fixture segment is valid"),
+        ],
+    );
     let seam_position = MapPoint::new(snapshot.stamp(), asset_frame(48_000.0));
     let seam_beat = MapPoint::new(
         snapshot.stamp(),
@@ -1149,24 +897,23 @@ fn host_without_meter_keeps_beat_queries_live_but_meter_is_unavailable() {
 #[kithara::test]
 fn asset_axis_is_independent_of_host_sample_rate() {
     let source_rate = NonZeroU32::new(44_100).expect("invariant: source rate is non-zero");
-    let (asset, mut publisher) = AssetBeatMap::new(map_id(), source_rate, 44_101);
-    let asset_snapshot = publisher
-        .publish(AssetMapUpdate::new(
-            asset.snapshot().stamp(),
-            MapState::Complete,
-            vec![
-                MapSegment::new(
-                    observed(0.0, 0),
-                    observed(44_100.0, 2),
-                    metered(
-                        BeatEvidence::Interpolated,
-                        Meter::new(4).expect("invariant: fixture meter is valid"),
-                    ),
-                )
-                .expect("invariant: source-native segment is valid"),
-            ],
-        ))
-        .expect("invariant: source-native map is valid");
+    let asset = asset_snapshot_at_rate(
+        map_id(),
+        MapState::Complete,
+        source_rate,
+        44_101,
+        vec![
+            MapSegment::new(
+                observed(0.0, 0),
+                observed(44_100.0, 2),
+                metered(
+                    BeatEvidence::Interpolated,
+                    Meter::new(4).expect("invariant: fixture meter is valid"),
+                ),
+            )
+            .expect("invariant: source-native segment is valid"),
+        ],
+    );
     let host_anchor = SessionAnchor::new(
         SessionFrame::new(0),
         SessionBeat::new(0.0).expect("invariant: host beat is finite"),
@@ -1185,7 +932,7 @@ fn asset_axis_is_independent_of_host_sample_rate() {
     );
 
     assert!(matches!(
-        asset_snapshot.axis(),
+        asset.axis(),
         MapAxis::Asset(axis) if axis.sample_rate() == source_rate
     ));
     assert_eq!(beat_from(&asset, asset_frame(22_050.0)), 1.0);
@@ -1200,9 +947,8 @@ fn asset_axis_is_independent_of_host_sample_rate() {
 }
 
 #[kithara::test]
-fn marker_beyond_asset_extent_is_rejected_without_publication() {
-    let (map, mut publisher) = AssetBeatMap::new(map_id(), sample_rate(), 48_000);
-    let base = map.snapshot();
+fn marker_beyond_asset_extent_is_rejected() {
+    let axis = MapAxis::Asset(AssetAxis::new(sample_rate(), 48_000));
     let segment = MapSegment::new(
         observed(0.0, 0),
         observed(48_000.0, 2),
@@ -1213,19 +959,12 @@ fn marker_beyond_asset_extent_is_rejected_without_publication() {
     )
     .expect("invariant: segment is valid before bounded-axis validation");
 
-    let result = publisher.publish(AssetMapUpdate::new(
-        base.stamp(),
-        MapState::Building,
-        vec![segment],
-    ));
+    let result = SegmentSet::new(axis, vec![segment]);
 
     assert!(matches!(
         result,
-        Err(AssetMapPublishError::InvalidSegments(
-            SegmentError::OutsideExtent { index: 0 }
-        ))
+        Err(SegmentError::OutsideExtent { index: 0 })
     ));
-    assert_eq!(map.snapshot(), base);
 }
 
 #[kithara::test]
@@ -1233,7 +972,7 @@ fn large_asset_extent_uses_exact_integer_boundary_semantics() {
     const FIRST_INEXACT_U64: u64 = 9_007_199_254_740_993;
     const LAST_REPRESENTABLE_BELOW: f64 = 9_007_199_254_740_992.0;
     const FIRST_REPRESENTABLE_ABOVE: f64 = 9_007_199_254_740_994.0;
-    let (map, mut publisher) = AssetBeatMap::new(map_id(), sample_rate(), FIRST_INEXACT_U64);
+    let axis = MapAxis::Asset(AssetAxis::new(sample_rate(), FIRST_INEXACT_U64));
     let facts = metered(
         BeatEvidence::Interpolated,
         Meter::new(4).expect("invariant: fixture meter is valid"),
@@ -1244,12 +983,7 @@ fn large_asset_extent_uses_exact_integer_boundary_semantics() {
         facts,
     )
     .expect("invariant: representable segment is valid alone");
-    let snapshot = publisher
-        .publish(AssetMapUpdate::new(
-            map.snapshot().stamp(),
-            MapState::Building,
-            vec![valid],
-        ))
+    SegmentSet::new(axis, vec![valid])
         .expect("the last representable frame below the extent must remain valid");
     let outside = MapSegment::new(
         observed(0.0, 0),
@@ -1258,25 +992,17 @@ fn large_asset_extent_uses_exact_integer_boundary_semantics() {
     )
     .expect("invariant: outside segment is valid before extent validation");
 
-    let result = publisher.publish(AssetMapUpdate::new(
-        snapshot.stamp(),
-        MapState::Building,
-        vec![outside],
-    ));
+    let result = SegmentSet::new(axis, vec![outside]);
 
     assert!(matches!(
         result,
-        Err(AssetMapPublishError::InvalidSegments(
-            SegmentError::OutsideExtent { index: 0 }
-        ))
+        Err(SegmentError::OutsideExtent { index: 0 })
     ));
-    assert_eq!(map.snapshot(), snapshot);
 }
 
 #[kithara::test]
-fn segment_with_unrepresentable_tempo_is_rejected_without_publication() {
-    let (map, mut publisher) = AssetBeatMap::new(map_id(), sample_rate(), 1);
-    let base = map.snapshot();
+fn segment_with_unrepresentable_tempo_is_rejected() {
+    let axis = MapAxis::Asset(AssetAxis::new(sample_rate(), 1));
     let segment = MapSegment::new(
         observed(0.0, 0),
         observed(f64::MIN_POSITIVE, 1),
@@ -1287,143 +1013,12 @@ fn segment_with_unrepresentable_tempo_is_rejected_without_publication() {
     )
     .expect("invariant: tiny-span segment is ordered before topology validation");
 
-    let result = publisher.publish(AssetMapUpdate::new(
-        base.stamp(),
-        MapState::Building,
-        vec![segment],
-    ));
+    let result = SegmentSet::new(axis, vec![segment]);
 
     assert!(matches!(
         result,
-        Err(AssetMapPublishError::InvalidSegments(
-            SegmentError::InvalidTempo { index: 0 }
-        ))
+        Err(SegmentError::InvalidTempo { index: 0 })
     ));
-    assert_eq!(map.snapshot(), base);
-}
-
-#[kithara::test]
-fn bounded_asset_map_rejects_incompatible_states_without_publication() {
-    let (map, mut publisher) = AssetBeatMap::new(map_id(), sample_rate(), 48_001);
-    let base = map.snapshot();
-    let segment = MapSegment::new(
-        observed(0.0, 0),
-        observed(48_000.0, 2),
-        metered(
-            BeatEvidence::Interpolated,
-            Meter::new(4).expect("invariant: fixture meter is valid"),
-        ),
-    )
-    .expect("invariant: fixture segment is valid");
-
-    for state in [
-        MapState::Live,
-        MapState::Unavailable(MapUnavailable::AxisMismatch),
-        MapState::Unavailable(MapUnavailable::NoMeter),
-    ] {
-        let result = publisher.publish(AssetMapUpdate::new(
-            base.stamp(),
-            state,
-            vec![segment.clone()],
-        ));
-
-        assert!(matches!(
-            result,
-            Err(AssetMapPublishError::InvalidState { state: rejected }) if rejected == state
-        ));
-        assert_eq!(map.snapshot(), base);
-    }
-}
-
-#[kithara::test]
-fn complete_asset_map_cannot_return_to_building() {
-    let (map, mut publisher) = AssetBeatMap::new(map_id(), sample_rate(), 48_001);
-    let segment = MapSegment::new(
-        observed(0.0, 0),
-        observed(48_000.0, 2),
-        metered(
-            BeatEvidence::Interpolated,
-            Meter::new(4).expect("invariant: fixture meter is valid"),
-        ),
-    )
-    .expect("invariant: fixture segment is valid");
-    let complete = publisher
-        .publish(AssetMapUpdate::new(
-            map.snapshot().stamp(),
-            MapState::Complete,
-            vec![segment.clone()],
-        ))
-        .expect("invariant: complete map publication is valid");
-
-    let result = publisher.publish(AssetMapUpdate::new(
-        complete.stamp(),
-        MapState::Building,
-        vec![segment],
-    ));
-
-    assert!(matches!(
-        result,
-        Err(AssetMapPublishError::InvalidTransition {
-            from: MapState::Complete,
-            to: MapState::Building,
-        })
-    ));
-    assert_eq!(map.snapshot(), complete);
-}
-
-#[kithara::test]
-fn complete_asset_map_can_refine_but_cannot_change_coverage() {
-    let (map, mut publisher) = AssetBeatMap::new(map_id(), sample_rate(), 96_001);
-    let facts = metered(
-        BeatEvidence::Interpolated,
-        Meter::new(4).expect("invariant: fixture meter is valid"),
-    );
-    let complete = publisher
-        .publish(AssetMapUpdate::new(
-            map.snapshot().stamp(),
-            MapState::Complete,
-            vec![
-                MapSegment::new(observed(0.0, 0), observed(48_000.0, 2), facts)
-                    .expect("invariant: initial complete segment is valid"),
-            ],
-        ))
-        .expect("invariant: initial complete map is valid");
-    let expanded = MapSegment::new(observed(0.0, 0), observed(96_000.0, 4), facts)
-        .expect("invariant: expanded segment is valid alone");
-
-    let result = publisher.publish(AssetMapUpdate::new(
-        complete.stamp(),
-        MapState::Complete,
-        vec![expanded],
-    ));
-
-    assert!(matches!(result, Err(AssetMapPublishError::CoverageChanged)));
-    assert_eq!(map.snapshot(), complete);
-
-    let reshaped = MapSegment::new(observed(0.0, 0), observed(48_000.0, 3), facts)
-        .expect("invariant: beat-domain expansion is valid alone");
-    let result = publisher.publish(AssetMapUpdate::new(
-        complete.stamp(),
-        MapState::Complete,
-        vec![reshaped],
-    ));
-
-    assert!(matches!(result, Err(AssetMapPublishError::CoverageChanged)));
-    assert_eq!(map.snapshot(), complete);
-
-    let refined = publisher
-        .publish(AssetMapUpdate::new(
-            complete.stamp(),
-            MapState::Complete,
-            vec![
-                MapSegment::new(observed(0.0, 0), observed(24_000.0, 1), facts)
-                    .expect("invariant: first refined segment is valid"),
-                MapSegment::new(observed(24_000.0, 1), observed(48_000.0, 2), facts)
-                    .expect("invariant: second refined segment is valid"),
-            ],
-        ))
-        .expect("same-coverage refinement must remain publishable");
-    assert!(refined.revision() > complete.revision());
 }
 
 #[kithara::test]

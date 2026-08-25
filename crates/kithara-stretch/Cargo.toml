@@ -11,20 +11,15 @@ categories = ["multimedia::audio"]
 
 [features]
 default = ["stretch-signalsmith"]
-stretch-signalsmith = ["dep:bon", "dep:derive_more", "dep:kithara-bufpool", "dep:signalsmith-stretch"]
-stretch-bungee = [
-    "dep:bon",
-    "dep:bungee-rs",
-    "dep:derive_more",
-    "dep:fast-interleave",
-    "dep:kithara-bufpool",
-    "dep:tracing",
-]
+stretch-signalsmith = ["dep:signalsmith-stretch"]
+stretch-bungee = ["dep:bungee-rs", "dep:fast-interleave", "dep:tracing"]
 
 [dependencies]
-bon = { workspace = true, optional = true }
+kithara-bufpool = { workspace = true }
+
+bon = { workspace = true }
 delegate = { workspace = true }
-derive_more = { workspace = true, optional = true }
+derive_more = { workspace = true }
 fieldwork = { workspace = true }
 num-traits = { workspace = true }
 smallvec = { workspace = true }
@@ -45,7 +40,6 @@ fast-interleave = { workspace = true, optional = true }
 kithara-workspace-hack = { version = "0.0.1-alpha4", path = "../kithara-workspace-hack" }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-kithara-bufpool = { workspace = true, optional = true }
 signalsmith-stretch = { workspace = true, optional = true }
 
 [dev-dependencies]

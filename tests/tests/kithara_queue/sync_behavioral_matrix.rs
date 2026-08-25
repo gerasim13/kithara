@@ -3,9 +3,13 @@
 use std::collections::BTreeSet;
 
 use anyhow::Result;
-use kithara::platform::time::Duration;
+use kithara::{
+    bufpool::{BytePool, PcmPool},
+    platform::time::Duration,
+};
 use kithara_integration_tests::{
     kithara,
+    sync_fixture::SyncFixtureResources,
     sync_matrix::{
         AssetProvider, OperationOrder, PlayerQueueProvider, RhythmicTrack, SignalDefect,
         SignalFailureKind, SignalOracleReport, SignalProvider, SyncCase, SyncOracle, TempoRide,
@@ -150,7 +154,11 @@ async fn synthetic_behavioral_matrix_uses_final_pcm_and_cochlea(
     #[case] provider: PlayerQueueProvider,
     #[case] case: SyncCase,
 ) -> Result<()> {
-    let bundle = provider.capture(case).await?.into_player_queue()?;
+    let resources = matrix_resources(case, "player-queue")?;
+    let bundle = provider
+        .capture(case, resources)
+        .await?
+        .into_player_queue()?;
     let report = SyncOracle::evaluate(case, &bundle);
 
     persist_then_assert(case, &bundle, &report)
@@ -172,7 +180,8 @@ async fn prepared_assets_validate_each_behavioral_oracle_case(
     #[case] provider: AssetProvider,
     #[case] case: SyncCase,
 ) -> Result<()> {
-    let report = evaluate_signal(provider, case).await?;
+    let resources = matrix_resources(case, "aligned-asset")?;
+    let report = evaluate_signal(provider, case, resources).await?;
     assert!(
         report.is_success(),
         "{}: prepared aligned assets were rejected:\n{}",
@@ -203,7 +212,8 @@ async fn prepared_unsynced_assets_are_rejected_for_each_behavioral_oracle_case(
     #[case] provider: AssetProvider,
     #[case] case: SyncCase,
 ) -> Result<()> {
-    let report = evaluate_signal(provider, case).await?;
+    let resources = matrix_resources(case, "out-of-sync-asset")?;
+    let report = evaluate_signal(provider, case, resources).await?;
     assert_rejected_for(case, &report, OUT_OF_SYNC_REQUIRED, OUT_OF_SYNC_ALLOWED);
     Ok(())
 }
@@ -235,9 +245,19 @@ async fn signal_oracle_negative_controls_are_rejected_for_the_intended_reason(
     #[case] required: &[SignalFailureKind],
     #[case] allowed: &[SignalFailureKind],
 ) -> Result<()> {
-    let report = evaluate_signal(provider, PLAY_SYNC_SEEK).await?;
+    let resources = matrix_resources(PLAY_SYNC_SEEK, "negative-control")?;
+    let report = evaluate_signal(provider, PLAY_SYNC_SEEK, resources).await?;
     assert_rejected_for(PLAY_SYNC_SEEK, &report, required, allowed);
     Ok(())
+}
+
+fn matrix_resources(case: SyncCase, provider: &str) -> Result<SyncFixtureResources> {
+    SyncFixtureResources::new(
+        &format!("{}-{provider}", case.id),
+        BytePool::default(),
+        PcmPool::default(),
+    )
+    .map_err(Into::into)
 }
 
 fn assert_rejected_for(

@@ -148,27 +148,6 @@ pub struct MeterFacts {
     uncertainty: FrameUncertainty,
 }
 
-/// Unvalidated analyzer input for one candidate musical segment.
-#[derive(Clone, Copy, Debug, PartialEq)]
-#[non_exhaustive]
-pub struct SegmentDraft {
-    start: BeatMarker,
-    end: BeatMarker,
-    facts: SegmentFacts,
-}
-
-impl SegmentDraft {
-    /// Creates a draft whose marker ordinals are validated during normalization.
-    #[must_use]
-    pub const fn new(start: BeatMarker, end: BeatMarker, facts: SegmentFacts) -> Self {
-        Self { start, end, facts }
-    }
-
-    pub(crate) fn validate(self) -> Result<MapSegment, SegmentError> {
-        MapSegment::new(self.start, self.end, self.facts)
-    }
-}
-
 impl SegmentFacts {
     /// Creates the beat-geometry facts used inside a segment.
     ///
@@ -433,12 +412,6 @@ pub struct MapRegion {
     end: MapPosition,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
-struct BeatRegion {
-    start: Beat,
-    end: Beat,
-}
-
 impl MapRegion {
     /// Returns the first position in the region.
     #[must_use]
@@ -602,43 +575,5 @@ impl SegmentSet {
             MapAxis::Asset(_) => MapPosition::Asset(AssetFrame::ZERO),
             MapAxis::Host(_) => MapPosition::Host(SessionFrame::new(0)),
         }
-    }
-
-    pub(crate) fn has_same_coverage(&self, other: &Self) -> bool {
-        self.merged_regions() == other.merged_regions()
-            && self.merged_beat_regions() == other.merged_beat_regions()
-    }
-
-    fn merged_regions(&self) -> Vec<MapRegion> {
-        let mut regions: Vec<MapRegion> = Vec::new();
-        for segment in self.segments.iter() {
-            let region = segment.region();
-            if let Some(previous) = regions.last_mut()
-                && previous.end == region.start
-            {
-                previous.end = region.end;
-            } else {
-                regions.push(region);
-            }
-        }
-        regions
-    }
-
-    fn merged_beat_regions(&self) -> Vec<BeatRegion> {
-        let mut regions: Vec<BeatRegion> = Vec::new();
-        for segment in self.segments.iter() {
-            let region = BeatRegion {
-                start: segment.start_beat(),
-                end: segment.end_beat(),
-            };
-            if let Some(previous) = regions.last_mut()
-                && previous.end == region.start
-            {
-                previous.end = region.end;
-            } else {
-                regions.push(region);
-            }
-        }
-        regions
     }
 }

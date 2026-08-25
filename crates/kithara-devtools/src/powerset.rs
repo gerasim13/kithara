@@ -96,7 +96,13 @@ fn declaring_crates(ctx: &Ctx) -> Result<Vec<(String, Vec<&FeatureInvariant>)>> 
             .health
             .feature_invariants
             .iter()
-            .filter(|invariant| package.features.contains_key(&invariant.when_feature))
+            .filter(|invariant| {
+                applies_to_package(
+                    invariant,
+                    &name,
+                    package.features.contains_key(&invariant.when_feature),
+                )
+            })
             .collect::<Vec<_>>();
         if !invariants.is_empty() {
             declaring.push((name, invariants));
@@ -106,12 +112,21 @@ fn declaring_crates(ctx: &Ctx) -> Result<Vec<(String, Vec<&FeatureInvariant>)>> 
     Ok(declaring)
 }
 
+fn applies_to_package(invariant: &FeatureInvariant, package: &str, declares_feature: bool) -> bool {
+    declares_feature
+        && invariant
+            .package
+            .as_deref()
+            .is_none_or(|owner| owner == package)
+}
+
 #[cfg(test)]
 mod tests {
     use crate::common::project::FeatureInvariant;
 
     fn invariant(when: &str, groups: &[&[&str]], always: &[&str]) -> FeatureInvariant {
         FeatureInvariant {
+            package: None,
             when_feature: when.to_owned(),
             at_least_one_of: groups
                 .iter()
@@ -119,6 +134,24 @@ mod tests {
                 .collect(),
             always: always.iter().map(|name| (*name).to_owned()).collect(),
         }
+    }
+
+    #[test]
+    fn package_scope_excludes_feature_forwarders() {
+        let mut scoped = invariant(
+            "stretch-signalsmith",
+            &[&["stretch-signalsmith", "stretch-bungee"]],
+            &[],
+        );
+        scoped.package = Some("kithara-stretch".to_owned());
+
+        assert!(super::applies_to_package(&scoped, "kithara-stretch", true));
+        assert!(!super::applies_to_package(&scoped, "kithara-audio", true));
+        assert!(!super::applies_to_package(
+            &scoped,
+            "kithara-stretch",
+            false
+        ));
     }
 
     /// `--at-least-one-of` needs two or more names; cargo-hack rejects a

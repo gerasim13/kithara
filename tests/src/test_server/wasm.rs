@@ -3,7 +3,9 @@ use url::Url;
 use crate::{
     hls_url::HlsSpec,
     server_url::join_server_url,
-    signal_url::{RhythmicTrack, SignalKind, SignalSpec, rhythmic_mix_path, signal_path},
+    signal_url::{
+        RhythmicTrack, SignalKind, SignalSpec, SweepMode, rhythmic_mix_path, signal_path,
+    },
     test_server::{CreateHlsError, CreatedHls, HlsFixtureBuilder, post_token},
     token_store::{TokenRequest, TokenRoute},
 };
@@ -113,6 +115,26 @@ impl TestServerHelper {
     #[must_use]
     pub async fn sine(&self, spec: &SignalSpec, freq_hz: f64) -> Url {
         self.signal_url(SignalKind::Sine { freq_hz }, spec).await
+    }
+
+    /// Build a URL for a deterministic frequency sweep.
+    #[must_use]
+    pub async fn sweep(
+        &self,
+        spec: &SignalSpec,
+        start_hz: f64,
+        end_hz: f64,
+        mode: SweepMode,
+    ) -> Url {
+        self.signal_url(
+            SignalKind::Sweep {
+                start_hz,
+                end_hz,
+                mode,
+            },
+            spec,
+        )
+        .await
     }
 
     /// Build an arbitrary URL on this server.

@@ -12,7 +12,7 @@ pub struct ElasticLatency {
 }
 
 impl ElasticLatency {
-    /// Declares exact source-history and delayed-output frame counts.
+    /// Declares source-history and delayed-output latency in frames.
     #[must_use]
     pub const fn new(source_frames: usize, output_frames: usize) -> Self {
         Self {

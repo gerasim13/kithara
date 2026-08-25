@@ -158,6 +158,7 @@ impl PcmControl for FakeReader {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 mod node {
     #[cfg(feature = "analysis-waveform")]
     use kithara_bufpool::PcmPool;

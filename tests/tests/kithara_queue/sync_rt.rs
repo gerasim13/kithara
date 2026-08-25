@@ -1,9 +1,6 @@
 #![cfg(not(target_arch = "wasm32"))]
 
-use std::{
-    path::Path,
-    sync::mpsc::{Receiver, SyncSender, sync_channel},
-};
+use std::sync::mpsc::{Receiver, SyncSender, sync_channel};
 
 use kithara::{
     audio::{Audio, AudioConfig, AudioEffect, PcmSession},
@@ -22,7 +19,7 @@ use kithara_integration_tests::{
 };
 use num_traits::ToPrimitive;
 
-use super::sync_latency::{RingDeck, SyncFixture, analysis};
+use super::sync_latency::{RingDeck, SignalAsset, SyncFixture, analysis, sync_fixture_resources};
 
 const BLOCK_FRAMES: usize = 512;
 const CAPTURE_BLOCKS: usize = 188;
@@ -69,7 +66,10 @@ impl AudioEffect for BurstLoadEffect {
     }
 }
 
-async fn load_player(deck: &RingDeck) -> (OfflinePlayer, Receiver<()>) {
+async fn load_player(
+    deck: &RingDeck,
+    resources: &kithara_integration_tests::sync_fixture::SyncFixtureResources,
+) -> (OfflinePlayer, Receiver<()>) {
     let (observed_tx, observed_rx) = sync_channel(1);
     let stream = MemStreamConfig {
         source: Some(MemorySource::new(create_test_wav(
@@ -80,8 +80,8 @@ async fn load_player(deck: &RingDeck) -> (OfflinePlayer, Receiver<()>) {
         event_bus: None,
     };
     let config = AudioConfig::<MemStream>::for_stream(stream)
-        .byte_pool(kithara::bufpool::BytePool::default())
-        .pcm_pool(kithara::bufpool::PcmPool::default())
+        .byte_pool(resources.byte_pool().clone())
+        .pcm_pool(resources.pcm_pool().clone())
         .worker(deck.worker())
         .effects(vec![Box::new(BurstLoadEffect::new(observed_tx))])
         .hint("wav".to_owned())
@@ -105,12 +105,14 @@ async fn load_player(deck: &RingDeck) -> (OfflinePlayer, Receiver<()>) {
     (player, observed_rx)
 }
 
-async fn capture_paced_bound(with_load: bool) -> (Vec<f32>, u64, bool, Vec<String>) {
-    let fixture = SyncFixture::new();
-    let deck = RingDeck::load(fixture.chirp(), BLOCK_FRAMES).await;
+async fn capture_paced_bound(
+    fixture: &SyncFixture,
+    with_load: bool,
+) -> (Vec<f32>, u64, bool, Vec<String>) {
+    let deck = RingDeck::load(fixture.resources(), fixture.chirp(), BLOCK_FRAMES).await;
     let _ = deck.bind(&analysis(0));
     let (mut load, observed) = if with_load {
-        let (player, observed) = load_player(&deck).await;
+        let (player, observed) = load_player(&deck, deck.resources()).await;
         (Some(player), Some(observed))
     } else {
         (None, None)
@@ -154,8 +156,12 @@ struct BoundCapture {
     start_frame: u64,
 }
 
-async fn capture_bound(path: &Path, retarget_bpm: Option<f64>) -> BoundCapture {
-    let deck = RingDeck::load(path, BLOCK_FRAMES).await;
+async fn capture_bound(
+    fixture: &SyncFixture,
+    signal: &SignalAsset,
+    retarget_bpm: Option<f64>,
+) -> BoundCapture {
+    let deck = RingDeck::load(fixture.resources(), signal, BLOCK_FRAMES).await;
     let _ = deck.bind(&analysis(0));
     let _ = deck.capture_blocks(16).await;
     if let Some(bpm) = retarget_bpm {
@@ -174,9 +180,9 @@ async fn capture_bound(path: &Path, retarget_bpm: Option<f64>) -> BoundCapture {
 #[kithara::test(tokio, multi_thread, serial, timeout(Duration::from_secs(180)))]
 #[ignore = "SYNC-ORACLE SYNC-PRODUCT-RT-001: waiting for Wave ResidentPlan"]
 async fn bound_sync_render_is_rtsan_clean() {
-    let fixture = SyncFixture::new();
-    let control = capture_bound(fixture.chirp(), None).await;
-    let candidate = capture_bound(fixture.chirp(), Some(132.0)).await;
+    let fixture = SyncFixture::new(sync_fixture_resources("rt-bound-render")).await;
+    let control = capture_bound(&fixture, fixture.chirp(), None).await;
+    let candidate = capture_bound(&fixture, fixture.chirp(), Some(132.0)).await;
     let control_report = CochleaReport::measure(&control.pcm, CHANNELS, SAMPLE_RATE);
     let candidate_report = CochleaReport::measure(&candidate.pcm, CHANNELS, SAMPLE_RATE);
     let mut failures =
@@ -193,10 +199,7 @@ async fn bound_sync_render_is_rtsan_clean() {
     }
     let mut metadata =
         SyncArtifactMetadata::new("bound-sync-rtsan", SAMPLE_RATE, CHANNELS, BLOCK_FRAMES);
-    metadata.add_source(ArtifactSource::new(
-        "deck-a",
-        fixture.chirp().display().to_string(),
-    ));
+    metadata.add_source(ArtifactSource::new("deck-a", fixture.chirp().uri()));
     metadata.set_operation("render a resident bound deck across a session-tempo retarget");
     metadata.add_frame(ArtifactFrame::new(
         control.start_frame,
@@ -209,6 +212,7 @@ async fn bound_sync_render_is_rtsan_clean() {
     metadata.add_threshold("candidate_extra_continuity_failures", 0.0);
     metadata.add_failures(failures.clone());
     write_sync_artifact(
+        fixture.resources().byte_pool(),
         &metadata,
         &[
             ArtifactAudio::new("deck-a-stem", &candidate.pcm),
@@ -235,9 +239,11 @@ async fn bound_sync_render_is_rtsan_clean() {
 )]
 #[ignore = "SYNC-ORACLE SYNC-PRODUCT-RT-002: waiting for Wave ResidentPlan"]
 async fn bound_sync_pcm_stays_clean_under_shared_worker_deadline_load() {
-    let (control, control_underruns, _, control_failures) = capture_paced_bound(false).await;
+    let fixture = SyncFixture::new(sync_fixture_resources("rt-shared-worker-load")).await;
+    let (control, control_underruns, _, control_failures) =
+        capture_paced_bound(&fixture, false).await;
     let (candidate, candidate_underruns, load_observed, candidate_failures) =
-        capture_paced_bound(true).await;
+        capture_paced_bound(&fixture, true).await;
     let control_report = CochleaReport::measure(&control, CHANNELS, SAMPLE_RATE);
     let candidate_report = CochleaReport::measure(&candidate, CHANNELS, SAMPLE_RATE);
     let mut failures = continuity_failures(
@@ -271,7 +277,7 @@ async fn bound_sync_pcm_stays_clean_under_shared_worker_deadline_load() {
         CHANNELS,
         BLOCK_FRAMES,
     );
-    metadata.add_source(ArtifactSource::new("deck-a", "generated-chirp-wav"));
+    metadata.add_source(ArtifactSource::new("deck-a", fixture.chirp().uri()));
     metadata.add_source(ArtifactSource::new(
         "load",
         "generated-wav-18ms-worker-bursts",
@@ -282,6 +288,7 @@ async fn bound_sync_pcm_stays_clean_under_shared_worker_deadline_load() {
     metadata.add_threshold("extra_cochlea_failures", 0.0);
     metadata.add_failures(failures.clone());
     write_sync_artifact(
+        fixture.resources().byte_pool(),
         &metadata,
         &[
             ArtifactAudio::new("deck-a-stem", &candidate),
