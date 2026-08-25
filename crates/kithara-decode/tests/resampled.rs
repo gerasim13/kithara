@@ -316,7 +316,6 @@ fn standalone_decoder_adapter_flushes_backend_delay_at_eof() {
 }
 
 #[kithara::test(native, flash(false))]
-#[ignore = "waiting for resampled seek reanchor timeline contract"]
 fn standalone_decoder_seek_reanchors_output_to_trimmed_target() {
     const TARGET: Duration = Duration::from_millis(30);
     const WAV_FRAMES: usize = 4_096;
@@ -353,7 +352,6 @@ fn standalone_decoder_seek_reanchors_output_to_trimmed_target() {
 }
 
 #[kithara::test(native, flash(false))]
-#[ignore = "waiting for resampled seek half-up timeline contract"]
 fn standalone_decoder_seek_rounds_timeline_frames_half_up() {
     const SOURCE_TARGET_FRAME: u64 = 1_441;
     const ROUNDING_TARGET_RATE: u32 = 44_085;
