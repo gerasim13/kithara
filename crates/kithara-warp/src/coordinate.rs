@@ -192,6 +192,14 @@ impl AssetAxis {
             .to_u64()
             .is_some_and(|whole_frame| whole_frame < self.frame_count)
     }
+
+    pub(crate) fn contains_or_eof(self, frame: AssetFrame) -> bool {
+        if self.contains(frame) {
+            return true;
+        }
+        let frame = f64::from(frame);
+        frame.fract() == 0.0 && frame.to_u64() == Some(self.frame_count)
+    }
 }
 
 /// The signed live coordinate axis of a session host.
@@ -341,4 +349,36 @@ impl<T> MapPoint<T> {
 pub(crate) enum AxisKind {
     Asset,
     Host,
+}
+
+#[cfg(test)]
+mod tests {
+    use kithara_test_utils::kithara;
+
+    use super::{AssetFrame, Beat, MapCoordinateError};
+
+    #[kithara::test]
+    fn musical_coordinates_preserve_the_validated_domain() {
+        assert_eq!(Beat::new(f64::NAN), Err(MapCoordinateError::NonFinite));
+        assert_eq!(Beat::new(f64::INFINITY), Err(MapCoordinateError::NonFinite));
+        assert_eq!(
+            AssetFrame::new(f64::NAN),
+            Err(MapCoordinateError::NonFinite)
+        );
+        assert_eq!(
+            AssetFrame::new(f64::NEG_INFINITY),
+            Err(MapCoordinateError::NonFinite)
+        );
+        assert_eq!(
+            AssetFrame::new(-1.0),
+            Err(MapCoordinateError::NegativeAssetFrame)
+        );
+        assert_eq!(
+            f64::from(
+                Beat::new(-1.0)
+                    .expect("invariant: negative beats are part of the coordinate domain")
+            ),
+            -1.0
+        );
+    }
 }

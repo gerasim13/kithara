@@ -277,6 +277,11 @@ cross-platform core (`session/{state,dispatch,protocol,graph}.rs`) carries zero 
 structural gates are the cfg lines around `mod native`, `mod web`, and their re-exports in
 `session/mod.rs`.
 
+`kithara-warp` owns musical coordinates and the BeatMap/SyncGroup protocol;
+`kithara-play` owns the live Host, session, and Player instances that consume it.
+`TrackBinding` captures an owner-published `BeatMapSnapshot`; it neither creates
+a map identity nor converts analysis facts into a second map representation.
+
 `SessionDispatcher::consumer_wake_mode` is the session's required, object-safe
 consumer capability. Real-time session implementations explicitly return
 `RealtimeDeferred`, preserving the audio callback's no-syscall drain path;

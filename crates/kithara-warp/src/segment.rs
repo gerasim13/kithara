@@ -216,7 +216,7 @@ pub enum SegmentError {
     /// A segment does not match the snapshot axis.
     #[error("segment {index} does not match the snapshot coordinate axis")]
     AxisMismatch { index: usize },
-    /// A segment reaches or exceeds the bounded asset extent.
+    /// A segment ends beyond the bounded asset extent.
     #[error("segment {index} is outside the bounded asset extent")]
     OutsideExtent { index: usize },
     /// The segment slope cannot produce a finite positive tempo.
@@ -461,7 +461,7 @@ impl SegmentSet {
             }
             if let MapAxis::Asset(asset) = axis {
                 let inside = match segment.end_position() {
-                    MapPosition::Asset(frame) => asset.contains(frame),
+                    MapPosition::Asset(frame) => asset.contains_or_eof(frame),
                     MapPosition::Host(_) => false,
                 };
                 if !inside {

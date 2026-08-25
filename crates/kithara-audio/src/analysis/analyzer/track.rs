@@ -38,8 +38,8 @@ pub struct TrackAnalysis {
 impl TrackAnalysis {
     /// Creates a snapshot without a decoded-source sample-rate axis.
     ///
-    /// Use [`Self::with_source_rate`] when beat markers must form a
-    /// [`crate::TrackBeatMap`].
+    /// Use [`Self::with_source_rate`] when beat markers must retain their
+    /// decoded-source timebase.
     #[must_use]
     pub const fn new(
         beat: Option<BeatGrid>,

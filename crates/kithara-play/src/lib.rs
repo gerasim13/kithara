@@ -37,8 +37,7 @@ pub use engine::{EngineConfig, EngineImpl, apply_mix};
 pub use error::PlayError;
 pub use kithara_assets::{AssetLayout, DefaultLayout};
 pub use kithara_audio::{
-    AudioWorkerHandle, CoordinateError, EngineLoadSnapshot, EqBandConfig, SeekOutcome,
-    ServiceClass, StretchControls,
+    AudioWorkerHandle, EngineLoadSnapshot, EqBandConfig, SeekOutcome, ServiceClass, StretchControls,
 };
 pub use kithara_net::Headers;
 pub use player::{PlayerConfig, PlayerImpl, SelectTransition};

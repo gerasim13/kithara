@@ -14,12 +14,13 @@ calls inside the node's step, never separate nodes with rings between them.
 handle captured in `Audio::new`. **Downloader** — owned by `kithara-stream`; this
 crate never spawns it and never reconstructs HLS/file protocol policy.
 
-### Session coordinates
+### Musical-coordinate ownership
 
-`SessionAnchor` is the canonical relation between a continuous `SessionBeat`
-and an absolute `SessionFrame`. It carries the committed beat-rate slope and
-sample rate, and owns both `beat_at` and its inverse `frame_at`; consumers do
-not rebuild that arithmetic from a tempo scalar.
+`kithara-warp` is the canonical owner of beat maps, session coordinates, and
+the synchronization protocol. This crate publishes decoded signal and analysis
+facts only; it neither defines Warp coordinates nor converts between parallel
+map representations. Playback consumes a canonical map snapshot once a map
+owner has published it.
 
 Transport (`runtime/ports.rs`): SPSC `ringbuf::HeapRb` plus a one-slot overflow
 (`Outlet`/`Inlet`).
@@ -518,9 +519,9 @@ selector (`with_waveform`, `with_beat` — which requires `B: Default` —
 `with_beat_config`, `with_pcm_pool`), and `is_empty()` lets callers skip
 scheduling a pass entirely. `TrackAnalyzers` is the crate-private per-track set;
 each analyzer is fed every decoded chunk once.
-`TrackAnalysis { beat, waveform, source_frames }` is the public artifact,
+`TrackAnalysis { beat, waveform, source_frames }` is the public facts artifact,
 `source_frames` being the denominator that turns a `BeatGrid` frame into a
-fraction.
+fraction. It is not a beat-map owner.
 
 `BeatAnalysisConfig<B>` carries the implementation-affecting beat tunables and a
 standalone resampler backend handle. Defaults: 1024-frame mono resampler blocks,

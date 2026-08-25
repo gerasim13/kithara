@@ -274,8 +274,146 @@ impl BeatMapSnapshot {
 
     fn outside_asset_extent(&self, position: MapPosition) -> bool {
         match (self.axis(), position) {
-            (MapAxis::Asset(axis), MapPosition::Asset(frame)) => !axis.contains(frame),
+            (MapAxis::Asset(axis), MapPosition::Asset(frame)) => !axis.contains_or_eof(frame),
             _ => false,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::num::NonZeroU32;
+
+    use kithara_test_utils::kithara;
+
+    use crate::{
+        AssetAxis, AssetFrame, Beat, BeatEvidence, BeatMapId, BeatMapSnapshot, BeatMarker,
+        BeatOrdinal, FrameUncertainty, MapAxis, MapPoint, MapPosition, MapQuery, MapSegment,
+        MapState, SegmentError, SegmentFacts, SegmentSet,
+    };
+
+    struct Consts;
+
+    impl Consts {
+        const FRAME_COUNT: u64 = 48_000;
+        const SAMPLE_RATE: u32 = 48_000;
+        const EOF_FRAME: f64 = 48_000.0;
+        const AFTER_EOF_FRAME: f64 = 48_000.5;
+    }
+
+    fn asset_frame(value: f64) -> AssetFrame {
+        AssetFrame::new(value).expect("invariant: fixture asset frame is finite and non-negative")
+    }
+
+    fn marker(frame: f64, ordinal: i64) -> BeatMarker {
+        BeatMarker::new(
+            MapPosition::Asset(asset_frame(frame)),
+            Some(BeatOrdinal::new(ordinal)),
+            BeatEvidence::Observed,
+            FrameUncertainty::ZERO,
+        )
+    }
+
+    #[kithara::test]
+    fn complete_asset_map_round_trips_a_segment_endpoint_at_eof() {
+        let sample_rate = NonZeroU32::new(Consts::SAMPLE_RATE)
+            .expect("invariant: fixture sample rate is non-zero");
+        let asset_axis = AssetAxis::new(sample_rate, Consts::FRAME_COUNT);
+        let eof = asset_frame(Consts::EOF_FRAME);
+        assert!(
+            !asset_axis.contains(eof),
+            "the EOF boundary is not an addressable source sample"
+        );
+        let segment = MapSegment::new(
+            marker(0.0, 0),
+            marker(Consts::EOF_FRAME, 2),
+            SegmentFacts::new(BeatEvidence::Interpolated, FrameUncertainty::ZERO, None),
+        )
+        .expect("invariant: fixture markers form an increasing affine relation");
+        let segments = SegmentSet::new(MapAxis::Asset(asset_axis), vec![segment])
+            .expect("a continuous segment may end exactly at the exclusive asset boundary");
+        let map = BeatMapSnapshot::initial(
+            BeatMapId::allocate().expect("invariant: fixture map id can be allocated"),
+            MapState::Complete,
+            segments,
+        )
+        .expect("invariant: complete state is valid for a bounded asset map");
+        let endpoint_beat = Beat::new(2.0).expect("invariant: fixture beat is finite");
+
+        let MapQuery::Resolved(position) =
+            map.position_at(MapPoint::new(map.stamp(), endpoint_beat))
+        else {
+            panic!("the endpoint beat must resolve to the EOF boundary");
+        };
+        assert_eq!(*position.value().value(), MapPosition::Asset(eof));
+
+        let MapQuery::Resolved(round_tripped) = map.beat_at(*position.value()) else {
+            panic!("the EOF boundary must resolve through its segment geometry");
+        };
+        assert_eq!(*round_tripped.value().value(), endpoint_beat);
+
+        let beyond_eof = asset_frame(Consts::AFTER_EOF_FRAME);
+        assert!(matches!(
+            map.beat_at(MapPoint::new(map.stamp(), MapPosition::Asset(beyond_eof),)),
+            MapQuery::OutsideDomain
+        ));
+        let beyond_segment = MapSegment::new(
+            marker(0.0, 0),
+            marker(Consts::AFTER_EOF_FRAME, 2),
+            SegmentFacts::new(BeatEvidence::Interpolated, FrameUncertainty::ZERO, None),
+        )
+        .expect("invariant: the overlong fixture remains an affine relation");
+        assert_eq!(
+            SegmentSet::new(MapAxis::Asset(asset_axis), vec![beyond_segment]),
+            Err(SegmentError::OutsideExtent { index: 0 })
+        );
+    }
+
+    #[kithara::test]
+    fn uncovered_eof_uses_the_map_lifecycle_instead_of_current_geometry() {
+        let sample_rate = NonZeroU32::new(Consts::SAMPLE_RATE)
+            .expect("invariant: fixture sample rate is non-zero");
+        let asset_axis = AssetAxis::new(sample_rate, Consts::FRAME_COUNT);
+        let axis = MapAxis::Asset(asset_axis);
+        let eof = MapPosition::Asset(asset_frame(Consts::EOF_FRAME));
+        let beyond_eof = MapPosition::Asset(asset_frame(Consts::AFTER_EOF_FRAME));
+        let building = BeatMapSnapshot::initial(
+            BeatMapId::allocate().expect("invariant: fixture map id can be allocated"),
+            MapState::Building,
+            SegmentSet::empty(axis),
+        )
+        .expect("invariant: a bounded asset map may begin without geometry");
+
+        assert!(matches!(
+            building.beat_at(MapPoint::new(building.stamp(), eof)),
+            MapQuery::Uncovered { .. }
+        ));
+        assert!(matches!(
+            building.tempo_at(MapPoint::new(building.stamp(), eof)),
+            MapQuery::Uncovered { .. }
+        ));
+        assert!(matches!(
+            building.beat_at(MapPoint::new(building.stamp(), beyond_eof)),
+            MapQuery::OutsideDomain
+        ));
+        assert!(matches!(
+            building.tempo_at(MapPoint::new(building.stamp(), beyond_eof)),
+            MapQuery::OutsideDomain
+        ));
+
+        let complete = BeatMapSnapshot::initial(
+            BeatMapId::allocate().expect("invariant: fixture map id can be allocated"),
+            MapState::Complete,
+            SegmentSet::empty(axis),
+        )
+        .expect("invariant: a complete empty asset map has no covered positions");
+        assert!(matches!(
+            complete.beat_at(MapPoint::new(complete.stamp(), eof)),
+            MapQuery::OutsideDomain
+        ));
+        assert!(matches!(
+            complete.tempo_at(MapPoint::new(complete.stamp(), eof)),
+            MapQuery::OutsideDomain
+        ));
     }
 }

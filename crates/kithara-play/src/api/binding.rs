@@ -1,7 +1,7 @@
-use std::num::NonZeroU32;
-
-use kithara_audio::{BeatMapError, SourceFrame, TrackBeat, TrackBeatMap, analysis::TrackAnalysis};
 use kithara_events::PlaybackDirection;
+use kithara_warp::{
+    Beat, BeatEstimate, BeatMapSnapshot, MapAxis, MapPoint, MapPosition, MapQuery, MapStamp,
+};
 
 use super::SessionBeat;
 
@@ -9,25 +9,19 @@ use super::SessionBeat;
 #[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
 #[non_exhaustive]
 pub enum SyncUnavailable {
-    /// The track has no valid analysed beat-to-source map.
-    #[error("track beat map unavailable: {reason}")]
-    BeatMap {
-        #[source]
-        reason: BeatMapError,
-    },
+    /// A host-native map cannot be used as bounded track geometry.
+    #[error("track binding requires an asset-native beat map")]
+    AxisMismatch,
+    /// The track anchor belongs to another map identity or revision.
+    #[error("track anchor belongs to another map identity or revision")]
+    StaleAnchor { expected: MapStamp, given: MapStamp },
     /// Composing the binding anchors produced a non-finite coordinate.
     #[error("binding coordinate overflow")]
     CoordinateOverflow,
 }
 
-impl From<BeatMapError> for SyncUnavailable {
-    fn from(reason: BeatMapError) -> Self {
-        Self::BeatMap { reason }
-    }
-}
-
-/// Immutable relationship between one session beat anchor and one analysed track.
-#[derive(Clone, Debug, PartialEq, fieldwork::Fieldwork)]
+/// Immutable relationship between a session beat anchor and an asset-native track map.
+#[derive(Clone, Debug, fieldwork::Fieldwork)]
 #[fieldwork(get)]
 #[non_exhaustive]
 pub struct TrackBinding {
@@ -39,48 +33,62 @@ pub struct TrackBinding {
     session_anchor: SessionBeat,
     /// Track beat anchoring this binding.
     #[field(get, copy)]
-    track_anchor: TrackBeat,
-    /// Immutable analysed map used by this binding.
-    map: TrackBeatMap,
+    track_anchor: MapPoint<Beat>,
+    /// Immutable asset-map snapshot used by every binding calculation.
+    snapshot: BeatMapSnapshot,
 }
 
 impl TrackBinding {
-    /// Builds a binding from real analysed markers.
+    /// Captures one asset-map revision for a stable multi-step calculation.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SyncUnavailable::AxisMismatch`] for a host snapshot or
+    /// [`SyncUnavailable::StaleAnchor`] when the anchor stamp is not exact.
     pub fn new(
-        analysis: &TrackAnalysis,
-        host_sample_rate: NonZeroU32,
+        snapshot: BeatMapSnapshot,
         session_anchor: SessionBeat,
-        track_anchor: TrackBeat,
+        track_anchor: MapPoint<Beat>,
         direction: PlaybackDirection,
     ) -> Result<Self, SyncUnavailable> {
+        if !matches!(snapshot.axis(), MapAxis::Asset(_)) {
+            return Err(SyncUnavailable::AxisMismatch);
+        }
+        let expected = snapshot.stamp();
+        let given = track_anchor.stamp();
+        if given != expected {
+            return Err(SyncUnavailable::StaleAnchor { expected, given });
+        }
         Ok(Self {
             direction,
             session_anchor,
             track_anchor,
-            map: TrackBeatMap::new(analysis, host_sample_rate)?,
+            snapshot,
         })
     }
 
-    /// Resolves a session beat through the binding and analysed source map.
-    ///
-    /// Returns `Ok(None)` when the resolved track beat is outside the analysed
-    /// marker domain.
-    pub fn source_frame_at(
+    /// Resolves a session beat through the captured asset-map revision.
+    pub fn position_at(
         &self,
         session_beat: SessionBeat,
-    ) -> Result<Option<SourceFrame>, SyncUnavailable> {
-        Ok(self.map.source_frame_at(self.track_beat_at(session_beat)?))
+    ) -> Result<MapQuery<BeatEstimate<MapPoint<MapPosition>>>, SyncUnavailable> {
+        Ok(self.snapshot.position_at(self.track_beat_at(session_beat)?))
     }
 
-    /// Returns the track beat corresponding to this session beat.
-    pub fn track_beat_at(&self, session_beat: SessionBeat) -> Result<TrackBeat, SyncUnavailable> {
+    /// Returns the stamped asset-map beat corresponding to this session beat.
+    pub fn track_beat_at(
+        &self,
+        session_beat: SessionBeat,
+    ) -> Result<MapPoint<Beat>, SyncUnavailable> {
         let delta = f64::from(session_beat) - f64::from(self.session_anchor);
-        let anchor = f64::from(self.track_anchor);
+        let anchor = f64::from(*self.track_anchor.value());
         let value = match self.direction {
             PlaybackDirection::Forward => anchor + delta,
             PlaybackDirection::Reverse => anchor - delta,
         };
-        TrackBeat::new(value).map_err(|_| SyncUnavailable::CoordinateOverflow)
+        Beat::new(value)
+            .map(|beat| MapPoint::new(self.track_anchor.stamp(), beat))
+            .map_err(|_| SyncUnavailable::CoordinateOverflow)
     }
 }
 
@@ -88,9 +96,14 @@ impl TrackBinding {
 mod tests {
     use std::num::NonZeroU32;
 
-    use kithara_audio::{BeatGrid, BeatMapError, TrackBeat, analysis::TrackAnalysis};
     use kithara_events::PlaybackDirection;
     use kithara_test_utils::kithara;
+    use kithara_warp::{
+        AssetAxis, AssetFrame, Beat, BeatEvidence, BeatMap, BeatMapId, BeatMapRevision,
+        BeatMapSnapshot, BeatMarker, BeatOrdinal, FrameUncertainty, HostBeatMap, HostEpoch,
+        MapAxis, MapPoint, MapPosition, MapQuery, MapSegment, MapState, MapUnavailable,
+        SegmentFacts, SegmentSet, SessionAnchor, SessionFrame,
+    };
 
     use super::{SessionBeat, SyncUnavailable, TrackBinding};
 
@@ -98,107 +111,216 @@ mod tests {
         NonZeroU32::new(48_000).expect("invariant: fixture sample rate is non-zero")
     }
 
-    fn analysis_with_grid() -> TrackAnalysis {
-        TrackAnalysis::with_source_rate(
-            Some(BeatGrid::new(
-                120.0,
-                vec![0, 48_000, 96_000],
-                vec![0],
-                Vec::new(),
-            )),
-            None,
-            144_000,
-            sample_rate(),
-        )
+    fn map_id() -> BeatMapId {
+        BeatMapId::allocate().expect("invariant: fixture map identity space is available")
     }
 
     fn session_beat(value: f64) -> SessionBeat {
         SessionBeat::new(value).expect("invariant: fixture session beat is finite")
     }
 
-    fn track_beat(value: f64) -> TrackBeat {
-        TrackBeat::new(value).expect("invariant: fixture track beat is finite")
+    fn beat(value: f64) -> Beat {
+        Beat::new(value).expect("invariant: fixture beat is finite")
+    }
+
+    fn marker(frame: f64, ordinal: i64) -> BeatMarker {
+        BeatMarker::new(
+            AssetFrame::new(frame)
+                .expect("invariant: fixture asset frame is valid")
+                .into(),
+            Some(BeatOrdinal::new(ordinal)),
+            BeatEvidence::Observed,
+            FrameUncertainty::new(0.0).expect("invariant: exact fixture uncertainty is valid"),
+        )
+    }
+
+    fn snapshot() -> BeatMapSnapshot {
+        let segment = MapSegment::new(
+            marker(0.0, 0),
+            marker(96_000.0, 2),
+            SegmentFacts::new(
+                BeatEvidence::Interpolated,
+                FrameUncertainty::new(0.0).expect("invariant: exact fixture uncertainty is valid"),
+                None,
+            ),
+        )
+        .expect("invariant: fixture segment is valid");
+        let segments = SegmentSet::new(
+            MapAxis::Asset(AssetAxis::new(sample_rate(), 144_001)),
+            vec![segment],
+        )
+        .expect("invariant: fixture asset topology is valid");
+        BeatMapSnapshot::initial(map_id(), MapState::Complete, segments)
+            .expect("invariant: fixture asset map is valid")
     }
 
     fn binding(direction: PlaybackDirection) -> TrackBinding {
-        TrackBinding::new(
-            &analysis_with_grid(),
-            sample_rate(),
-            session_beat(10.0),
-            track_beat(1.0),
-            direction,
-        )
-        .expect("invariant: fixture beat map is valid")
+        let snapshot = snapshot();
+        let track_anchor = MapPoint::new(snapshot.stamp(), beat(1.0));
+        TrackBinding::new(snapshot, session_beat(10.0), track_anchor, direction)
+            .expect("invariant: fixture binding uses an asset map")
     }
 
     #[kithara::test]
-    fn forward_binding_increases_track_beats() {
+    fn forward_and_reverse_binding_preserve_existing_coordinate_behavior() {
+        let forward = binding(PlaybackDirection::Forward);
+
+        assert_eq!(
+            forward
+                .track_beat_at(session_beat(9.5))
+                .map(|point| *point.value()),
+            Ok(beat(0.5))
+        );
+        assert_eq!(
+            forward
+                .track_beat_at(session_beat(10.5))
+                .map(|point| *point.value()),
+            Ok(beat(1.5))
+        );
+        let reverse = binding(PlaybackDirection::Reverse);
+
+        assert_eq!(
+            reverse
+                .track_beat_at(session_beat(9.5))
+                .map(|point| *point.value()),
+            Ok(beat(1.5))
+        );
+        assert_eq!(
+            reverse
+                .track_beat_at(session_beat(10.5))
+                .map(|point| *point.value()),
+            Ok(beat(0.5))
+        );
+    }
+
+    #[kithara::test]
+    fn map_queries_keep_typed_outside_domain_results() {
         let binding = binding(PlaybackDirection::Forward);
 
-        assert_eq!(
-            binding.track_beat_at(session_beat(9.5)),
-            Ok(track_beat(0.5))
-        );
-        assert_eq!(
-            binding.track_beat_at(session_beat(10.5)),
-            Ok(track_beat(1.5))
-        );
+        assert!(matches!(
+            binding.position_at(session_beat(8.0)),
+            Ok(MapQuery::OutsideDomain)
+        ));
+        assert!(matches!(
+            binding.position_at(session_beat(12.0)),
+            Ok(MapQuery::OutsideDomain)
+        ));
     }
 
     #[kithara::test]
-    fn reverse_binding_decreases_track_beats() {
-        let binding = binding(PlaybackDirection::Reverse);
-
-        assert_eq!(
-            binding.track_beat_at(session_beat(9.5)),
-            Ok(track_beat(1.5))
+    fn host_map_cannot_become_an_asset_track_binding() {
+        let anchor =
+            SessionAnchor::new(SessionFrame::new(0), session_beat(0.0), 2.0, sample_rate())
+                .expect("invariant: fixture host anchor is valid");
+        let host = HostBeatMap::new(
+            map_id(),
+            BeatMapRevision::first(),
+            HostEpoch::new(0),
+            anchor,
+            None,
         );
-        assert_eq!(
-            binding.track_beat_at(session_beat(10.5)),
-            Ok(track_beat(0.5))
-        );
-    }
-
-    #[kithara::test]
-    fn source_frame_outside_analysed_domain_is_none() {
-        let binding = binding(PlaybackDirection::Forward);
-
-        assert_eq!(binding.source_frame_at(session_beat(8.0)), Ok(None));
-        assert_eq!(binding.source_frame_at(session_beat(12.0)), Ok(None));
-    }
-
-    #[kithara::test]
-    fn missing_beat_grid_is_unavailable() {
-        let analysis = TrackAnalysis::with_source_rate(None, None, 0, sample_rate());
 
         assert!(matches!(
             TrackBinding::new(
-                &analysis,
-                sample_rate(),
+                host.snapshot(),
                 session_beat(0.0),
-                track_beat(0.0),
+                MapPoint::new(host.snapshot().stamp(), beat(0.0)),
                 PlaybackDirection::Forward,
             ),
-            Err(SyncUnavailable::BeatMap {
-                reason: BeatMapError::Missing
-            })
+            Err(SyncUnavailable::AxisMismatch)
+        ));
+    }
+
+    #[kithara::test]
+    fn binding_rejects_old_and_foreign_track_anchor_stamps() {
+        let id = map_id();
+        let axis = MapAxis::Asset(AssetAxis::new(sample_rate(), 96_001));
+        let old = BeatMapSnapshot::unavailable(id, axis);
+        let revision = old
+            .revision()
+            .checked_next()
+            .expect("invariant: fixture revision can advance");
+        let current = old
+            .unavailable_successor(old.stamp(), revision, axis)
+            .expect("invariant: fixture unavailable successor is valid");
+        let old_anchor = MapPoint::new(old.stamp(), beat(1.0));
+
+        assert!(matches!(
+            TrackBinding::new(
+                current.clone(),
+                session_beat(0.0),
+                old_anchor,
+                PlaybackDirection::Forward,
+            ),
+            Err(SyncUnavailable::StaleAnchor { expected, given })
+                if expected == current.stamp() && given == old.stamp()
+        ));
+
+        let foreign = BeatMapSnapshot::unavailable(map_id(), axis);
+        assert!(matches!(
+            TrackBinding::new(
+                current.clone(),
+                session_beat(0.0),
+                MapPoint::new(foreign.stamp(), beat(1.0)),
+                PlaybackDirection::Forward,
+            ),
+            Err(SyncUnavailable::StaleAnchor { expected, given })
+                if expected == current.stamp() && given == foreign.stamp()
+        ));
+    }
+
+    #[kithara::test]
+    fn unavailable_geometry_stays_a_typed_binding_query_result() {
+        let unavailable = BeatMapSnapshot::unavailable(
+            map_id(),
+            MapAxis::Asset(AssetAxis::new(sample_rate(), 96_001)),
+        );
+        let binding = TrackBinding::new(
+            unavailable.clone(),
+            session_beat(0.0),
+            MapPoint::new(unavailable.stamp(), beat(0.0)),
+            PlaybackDirection::Forward,
+        )
+        .expect("invariant: unavailable geometry still has an asset axis");
+
+        assert!(matches!(
+            binding.position_at(session_beat(0.0)),
+            Ok(MapQuery::Unavailable(MapUnavailable::NoGeometry))
         ));
     }
 
     #[kithara::test]
     fn non_finite_composition_is_coordinate_overflow() {
+        let snapshot = snapshot();
         let binding = TrackBinding::new(
-            &analysis_with_grid(),
-            sample_rate(),
+            snapshot.clone(),
             session_beat(-f64::MAX),
-            track_beat(0.0),
+            MapPoint::new(snapshot.stamp(), beat(0.0)),
             PlaybackDirection::Forward,
         )
-        .expect("invariant: fixture beat map is valid");
+        .expect("invariant: fixture binding uses an asset map");
 
         assert_eq!(
             binding.track_beat_at(session_beat(f64::MAX)),
             Err(SyncUnavailable::CoordinateOverflow)
+        );
+    }
+
+    #[kithara::test]
+    fn resolved_position_stays_on_the_captured_asset_axis() {
+        let binding = binding(PlaybackDirection::Forward);
+        let result = binding
+            .position_at(session_beat(10.5))
+            .expect("invariant: fixture composition is finite");
+        let MapQuery::Resolved(estimate) = result else {
+            panic!("expected resolved asset position")
+        };
+
+        assert_eq!(
+            *estimate.value().value(),
+            MapPosition::Asset(
+                AssetFrame::new(72_000.0).expect("invariant: fixture asset frame is valid")
+            )
         );
     }
 }
