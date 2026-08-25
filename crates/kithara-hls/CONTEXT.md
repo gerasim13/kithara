@@ -154,12 +154,39 @@ mutations. `publication_seq` is a seqlock (odd while publishing) and every layou
 `try_published`, which returns `None` when a writer was in flight or the publication changed —
 callers then keep their gate closed and retry next tick rather than spinning.
 
-`is_canonical_complete` (behind `layout_seek_invariant`) is true when the frame is already canonical
-single-variant full-range geometry *and* every served size is exact; `HlsCoord::prepare_for_seek`
-then skips the O(N) layout reset, while ABR invalidation and the reader wake stay unconditional.
+`layout_seek_invariant` is the one formula for "a layout reset would change nothing worth a
+re-mint": the frame is canonical single-variant full-range geometry (`is_canonical_complete`,
+every served size exact) and nothing is parked in `deferred_prefix`. A live seek tail alone does
+not force the reset — against a canonical table it freezes nothing and only helps the EOF gate,
+so fully-cached segment-aware seeks keep skipping the O(N) rebuild. The formula gates both
+`HlsCoord::prepare_for_seek`'s reset call (a fully-cached seek must not touch the layout at all —
+pinned by `stress_seek_audio`'s reset-counter assertion) and the re-mint inside
+`reset_layout_to_full_range`; ABR invalidation and the reader wake stay unconditional.
 `HlsCoord::reset_for_seek` is layout-only (`reset_layout_to_full_range`) and does not cancel
 in-flight body fetches; `HlsVariant::reset_to_full_range` (from `prepare_reader`) also clears the
-seek alias, the exact-seek/exact-byte demands, and the segment-aware tail.
+seek alias and the exact-seek/exact-byte demands.
+
+### Post-seek frame freeze
+
+While a segment-aware seek tail is live (`VariantSeek::segment_aware_tail != NO_SEEK_TAIL`, set
+only for containers not needing exact byte sizes), the reader, the demuxer's byte map, and the
+peer's cursor all hold bytes minted on the frame the seek anchored. A settle for a media segment
+behind the tail therefore must not re-key that space: `HlsVariant::apply_commit` parks its size in
+`VariantSeek::deferred_prefix` instead of storing it, and the next byte-space re-mint
+(`reset_layout_to_full_range`) retires the tail and applies the parked sizes atomically with the
+fresh frame. The init is never parked — init reads gate on its size being exact, so a parked init
+starves every consumer still waiting for its bytes (the demuxer probe of an ABR pending variant
+deadlocks before activation could drain it). The byte-space shift an init settle causes is not
+observable by a post-seek reader for the same reason: `init_read_at` / `init_contains` refuse
+until the init size is exact, so the demuxer cannot advance off the seek alias' anchor before the
+init lands — weakening that gate (e.g. optimistic init reads) would silently reopen the shift
+window. Both the freeze decision and the drain run inside the `Layout` write lock, so a
+settle can never park behind a tail whose space is already gone, and a parked size can never be
+lost or applied twice. While parked, the real size lives only in `deferred_prefix` — the
+segment's size atom still reads placeholder; that transitional split of truth ends at the next
+re-mint. Pinned by the freeze tests in `variant/tests.rs`
+(`post_seek_prefix_settle_does_not_move_the_frame` and neighbours) and by
+`tests/tests/kithara_queue/hls_seek_cancels_stale_fetches.rs`.
 
 ## Seek Ownership
 

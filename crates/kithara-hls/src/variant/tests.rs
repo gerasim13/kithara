@@ -2474,3 +2474,249 @@ fn requeue_planned_reenters_in_plan_order() {
         "requeued fetches must land between their plan-order neighbours"
     );
 }
+
+/// Near-end time seek on a segment-aware (fMP4) variant whose segments are
+/// still placeholder-sized: the anchor byte is minted against the placeholder
+/// frame, so a late prefix size commit would re-key every raw offset under it.
+fn drifting_seek_session() -> (PlanCtx, Arc<HlsVariant>, HlsSession, u64) {
+    let ctx = test_ctx(3);
+    let seek = Arc::new(SeekState::new());
+    let segments: Vec<Segment> = (0..12)
+        .map(|idx| make_placeholder_seg(idx, 100, &ctx.scope))
+        .collect();
+    let v = VariantParts {
+        segments,
+        init: None,
+        seek_obs: Arc::clone(&seek) as Arc<dyn SeekObserve>,
+        codec: Some(AudioCodec::AacLc),
+        container: Some(ContainerFormat::Fmp4),
+    }
+    .into_variant(0, &ctx);
+    let anchor = v
+        .prepare_seek_time_anchor(Duration::from_secs(21))
+        .expect("seek point")
+        .expect("anchor")
+        .byte_offset;
+    assert_eq!(anchor, 1000, "segment 10 anchor on the placeholder frame");
+    let session = HlsSession::active(
+        CancelToken::never(),
+        seek,
+        ctx.signal.clone(),
+        0,
+        Arc::clone(&v),
+        anchor,
+    );
+    (ctx, v, session, anchor)
+}
+
+/// Settle a segment through the production path (`into_loaded` →
+/// `HlsVariant::apply_commit`), exactly like a fetch completing.
+fn settle_seg(v: &Arc<HlsVariant>, ctx: &PlanCtx, idx: u32, len: u64) {
+    let claim = v.segments()[idx as usize]
+        .state()
+        .try_claim(
+            PlannedFetch::Segment(idx),
+            v.flow.queue.revision(),
+            Arc::downgrade(v),
+            ctx.signal.clone(),
+        )
+        .expect("segment claim");
+    claim.into_loaded(len);
+}
+
+#[kithara::test]
+fn post_seek_prefix_settle_does_not_move_the_frame() {
+    let (ctx, v, session, anchor) = drifting_seek_session();
+
+    // A stale in-flight prefix fetch (planned before the seek — a rebuild
+    // never cancels in-flight work) settles after the anchor was minted.
+    settle_seg(&v, &ctx, 1, 600);
+    session.advance(64);
+
+    assert_eq!(
+        v.segment_byte_offset(10),
+        Some(anchor),
+        "a settle behind the seek tail must not re-key the byte space under \
+         the anchor the reader lives in"
+    );
+    let resolved = v.find_at_offset(anchor + 64).map(|(idx, ..)| idx);
+    assert_eq!(
+        resolved,
+        Some(10),
+        "the post-seek cursor keeps naming the seek target, not a prefix \
+         segment slid under it"
+    );
+}
+
+#[kithara::test]
+fn eof_mints_at_the_anchored_frame_end_despite_a_late_prefix_settle() {
+    let (ctx, v, session, anchor) = drifting_seek_session();
+
+    // The planned tail (readahead 9, target 10, last 11) settles exact...
+    for idx in 9..12 {
+        settle_seg(&v, &ctx, idx, 100);
+    }
+    // ...while a stale prefix settle lands behind the seek tail.
+    settle_seg(&v, &ctx, 1, 600);
+    session.advance(200);
+
+    let end = anchor + 200;
+    let mut buf = [0_u8; 1];
+    assert!(
+        matches!(
+            v.read_at(end, &mut buf).expect("end read"),
+            ReadOutcome::Eof
+        ),
+        "the byte after the last tail segment is the stream end on the \
+         anchored frame; the parked prefix size must not push it out"
+    );
+    assert!(
+        matches!(
+            v.wait_range(end..end + 1, Some(Duration::ZERO)),
+            Ok(WaitOutcome::Eof)
+        ),
+        "wait at the anchored frame end must report EOF, not park on a \
+         phantom gap opened by the parked prefix size"
+    );
+}
+
+#[kithara::test]
+fn the_next_space_re_mint_applies_the_deferred_prefix_settle() {
+    let (ctx, v, _session, _anchor) = drifting_seek_session();
+
+    settle_seg(&v, &ctx, 1, 600);
+    assert_eq!(
+        v.segment_byte_offset(2),
+        Some(200),
+        "the real size stays parked while the seek tail is active"
+    );
+
+    v.reset_for_seek();
+
+    assert_eq!(
+        v.segment_byte_offset(2),
+        Some(700),
+        "the space re-mint publishes the parked real size with the fresh frame"
+    );
+}
+
+/// Settle the init through the production path, like `settle_seg`.
+fn settle_init(v: &Arc<HlsVariant>, ctx: &PlanCtx, len: u64) {
+    let claim = v
+        .segments
+        .init
+        .as_ref()
+        .expect("init slot")
+        .state()
+        .try_claim(
+            PlannedFetch::Init,
+            v.flow.queue.revision(),
+            Arc::downgrade(v),
+            ctx.signal.clone(),
+        )
+        .expect("init claim");
+    claim.into_loaded(len);
+}
+
+#[kithara::test]
+fn an_init_settle_lands_immediately_while_a_seek_tail_is_live() {
+    // Init reads gate on the size being exact, so the freeze must never
+    // park an init settle: a parked init starves the demuxer probe of an
+    // ABR pending variant, which deadlocks before activation could drain
+    // it. The byte-space shift it causes is the accepted cost.
+    let ctx = test_ctx(3);
+    let seek = Arc::new(SeekState::new());
+    let segments: Vec<Segment> = (0..12).map(|idx| make_seg(idx, 100, &ctx.scope)).collect();
+    let v = VariantParts {
+        segments,
+        init: Some(make_placeholder_init(256, &ctx.scope)),
+        seek_obs: Arc::clone(&seek) as Arc<dyn SeekObserve>,
+        codec: Some(AudioCodec::AacLc),
+        container: Some(ContainerFormat::Fmp4),
+    }
+    .into_variant(0, &ctx);
+    v.prepare_seek_time_anchor(Duration::from_secs(21))
+        .expect("seek point")
+        .expect("anchor");
+
+    settle_init(&v, &ctx, 700);
+
+    assert_eq!(
+        v.segment_byte_offset(0),
+        Some(700),
+        "the init settle keys the frame immediately despite the live tail"
+    );
+    assert!(
+        v.segments
+            .init
+            .as_ref()
+            .expect("init slot")
+            .size()
+            .is_exact(),
+        "the init size atom reads exact right after the settle"
+    );
+}
+
+#[kithara::test]
+fn an_exact_size_revision_parks_and_fails_the_skip_formula() {
+    // Fully exact fMP4 track (canonical-complete layout) with a live seek
+    // tail: a revision settle of an already-exact prefix size (DRM-style
+    // plaintext length over a byterange seed) parks while the size atom
+    // stays exact, so only the emptiness check in the skip formula can
+    // force the re-mint that lands it.
+    let ctx = test_ctx(3);
+    let seek = Arc::new(SeekState::new());
+    let segments: Vec<Segment> = (0..12).map(|idx| make_seg(idx, 100, &ctx.scope)).collect();
+    let v = VariantParts {
+        segments,
+        init: None,
+        seek_obs: Arc::clone(&seek) as Arc<dyn SeekObserve>,
+        codec: Some(AudioCodec::AacLc),
+        container: Some(ContainerFormat::Fmp4),
+    }
+    .into_variant(0, &ctx);
+    v.prepare_seek_time_anchor(Duration::from_secs(21))
+        .expect("seek point")
+        .expect("anchor");
+
+    // Canonical table, nothing parked: the re-mint is skipped and the
+    // stale tail stays live (and inert) behind it.
+    v.reset_to_full_range();
+
+    settle_seg(&v, &ctx, 1, 600);
+    assert_eq!(
+        v.segment_byte_offset(2),
+        Some(200),
+        "the revision parks behind the still-live tail"
+    );
+    assert!(
+        !v.layout_seek_invariant(),
+        "a parked size fails the skip formula even though the table still \
+         reads canonical"
+    );
+
+    v.reset_for_seek();
+
+    assert_eq!(
+        v.segment_byte_offset(2),
+        Some(700),
+        "the forced re-mint lands the parked revision"
+    );
+}
+
+#[kithara::test]
+fn a_settle_after_the_space_re_mint_applies_immediately() {
+    let (ctx, v, _session, _anchor) = drifting_seek_session();
+
+    // The re-mint retires the seek tail together with the frozen space...
+    v.reset_for_seek();
+    // ...so a settle landing right after applies to the fresh frame instead
+    // of parking behind a tail whose space is already gone.
+    settle_seg(&v, &ctx, 1, 600);
+
+    assert_eq!(
+        v.segment_byte_offset(2),
+        Some(700),
+        "a settle after the re-mint keys the fresh frame immediately"
+    );
+}
