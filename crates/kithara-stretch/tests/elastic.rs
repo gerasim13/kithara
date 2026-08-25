@@ -724,6 +724,56 @@ macro_rules! elastic_priming_conformance {
                 assert_exact_samples(&reused_discarded, &fresh_discarded);
                 assert_exact_samples(&reused_output, &fresh_output);
             }
+
+            #[kithara::test]
+            fn primed_output_is_independent_of_unity_request_partitioning() {
+                const FRAMES: usize = 4096;
+                const PARTITION_FRAMES: usize = 512;
+
+                let mut whole: $engine = prepared(FRAMES, FRAMES);
+                let mut partitioned: $engine = prepared(FRAMES, FRAMES);
+                let capabilities = whole.capabilities();
+                let history_frames = capabilities.latency().source_frames();
+                let warmup = warmup_request(capabilities, 1.0);
+                let history = impulse_markers(history_frames, 0);
+                let warm_source = impulse_markers(warmup.source_frames(), history_frames);
+                let source = impulse_markers(FRAMES, history_frames + warmup.source_frames());
+                let mut whole_discarded = vec![0.0; warmup.output_frames() * CHANNELS];
+                let mut partitioned_discarded = vec![0.0; warmup.output_frames() * CHANNELS];
+                whole
+                    .prime(warmup, &history, &warm_source, &mut whole_discarded)
+                    .expect("whole engine primes");
+                partitioned
+                    .prime(warmup, &history, &warm_source, &mut partitioned_discarded)
+                    .expect("partitioned engine primes");
+
+                let mut whole_output = vec![0.0; FRAMES * CHANNELS];
+                whole
+                    .process(
+                        ElasticRequest::new(FRAMES, FRAMES).expect("whole unity request"),
+                        &source,
+                        &mut whole_output,
+                    )
+                    .expect("whole engine renders");
+                let mut partitioned_output = vec![0.0; FRAMES * CHANNELS];
+                for (source, output) in source
+                    .chunks_exact(PARTITION_FRAMES * CHANNELS)
+                    .zip(partitioned_output.chunks_exact_mut(PARTITION_FRAMES * CHANNELS))
+                {
+                    partitioned
+                        .process(
+                            ElasticRequest::new(PARTITION_FRAMES, PARTITION_FRAMES)
+                                .expect("partition unity request"),
+                            source,
+                            output,
+                        )
+                        .expect("partitioned engine renders");
+                }
+
+                assert_exact_samples(&partitioned_discarded, &whole_discarded);
+                assert_exact_samples(&partitioned_output, &whole_output);
+                assert_eq!(first_audible_frame(&partitioned_output, CHANNELS), Some(0));
+            }
         }
     };
 }
