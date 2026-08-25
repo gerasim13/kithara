@@ -4,6 +4,7 @@ use kithara_test_utils::kithara;
 use tracing::debug;
 
 use super::HlsVariant;
+use crate::segment::PlannedFetch;
 
 impl HlsVariant {
     pub(crate) fn authoritative_len(&self) -> Option<u64> {
@@ -121,16 +122,6 @@ impl HlsVariant {
         self.layout.is_shrunk(self.num_segments())
     }
 
-    /// True when a same-variant seek needs no layout reset: the offset table
-    /// is already the canonical full-range geometry and every served size is
-    /// exact, so [`Self::reset_layout_to_full_range`] would reproduce the
-    /// identical table. Lets [`HlsCoord::prepare_for_seek`] skip the reset on
-    /// a fully-resolved single-variant track. Cross-variant (shifted/shrunk)
-    /// or size-incomplete layouts return `false` and keep their reset.
-    pub(crate) fn layout_seek_invariant(&self) -> bool {
-        self.layout.is_canonical_complete(&self.segments)
-    }
-
     /// Replace the per-variant fetch queue with `[from_seg .. num_segments)`
     /// (plus `Init` if applicable). Does NOT cancel in-flight fetches —
     /// dedup is handled at `dispatch` time via the `Downloading` state.
@@ -151,7 +142,39 @@ impl HlsVariant {
         u32::try_from(self.segments.len()).unwrap_or(u32::MAX)
     }
 
+    /// True when a layout reset would change nothing worth a re-mint:
+    /// canonical full-range geometry with every served size exact, and
+    /// nothing parked behind a seek tail. A live tail alone does not force
+    /// the reset — against a canonical table it freezes nothing (every
+    /// settle already landed) and only helps the EOF gate — so fully-cached
+    /// segment-aware seeks keep skipping the O(N) rebuild. Gates both
+    /// [`HlsCoord::prepare_for_seek`]'s reset call (a fully-cached seek
+    /// must not touch the layout at all) and the re-mint in
+    /// [`Self::reset_layout_to_full_range`]. The emptiness check is load
+    /// bearing, not belt-and-braces: a revision settle of an already-exact
+    /// size (DRM plaintext length over a byterange seed) parks while the
+    /// size atom stays exact, so the layout still reads canonical and only
+    /// this check forces the re-mint that lands it. Takes the
+    /// `deferred_prefix` mutex — off-RT callers only.
+    pub(crate) fn layout_seek_invariant(&self) -> bool {
+        self.layout.is_canonical_complete(&self.segments)
+            && self.seek.deferred_prefix.lock().is_empty()
+    }
+
     pub(super) fn reset_layout_to_full_range(&self) {
-        self.layout.reset(self.init_route_size(), &self.segments);
+        if self.layout_seek_invariant() {
+            return;
+        }
+        // The reset re-mints the byte space: the seek tail that froze it
+        // retires and the sizes parked behind that tail land here, all
+        // atomically with the fresh frame (the closure runs under the same
+        // Layout write lock the settle-side freeze decision takes).
+        self.layout.reset(&self.segments, || {
+            self.clear_segment_aware_seek_tail();
+            for (idx, len) in self.seek.deferred_prefix.lock().drain(..) {
+                self.apply_loaded_size(PlannedFetch::Segment(idx), len);
+            }
+            self.init_route_size()
+        });
     }
 }

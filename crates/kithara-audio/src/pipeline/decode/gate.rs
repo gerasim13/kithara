@@ -111,7 +111,7 @@ impl ReadinessGate {
         stream: &SharedStream<T>,
         range: Range<u64>,
     ) -> bool {
-        let phase = stream.phase_at(range);
+        let phase = demand_phase(stream, range);
         if self.source_park(stream, phase).is_some() {
             return false;
         }
@@ -158,7 +158,7 @@ pub(crate) fn recreate_phase<T: StreamType>(
     stream: &SharedStream<T>,
     recreate: &RecreateState,
 ) -> SourcePhase {
-    stream.phase_at(recreate_ready_range(stream, recreate))
+    demand_phase(stream, recreate_ready_range(stream, recreate))
 }
 
 fn source_phase_for_seek_landing<T: StreamType>(
@@ -166,7 +166,32 @@ fn source_phase_for_seek_landing<T: StreamType>(
     byte: u64,
 ) -> SourcePhase {
     let end = seek_landing_end(stream, byte);
-    stream.phase_at(byte..end)
+    demand_phase(stream, byte..end)
+}
+
+/// Phase poll that arms the polled range as reader demand when it parks.
+///
+/// A phase snapshot alone leaves a parked decoder invisible to the source:
+/// dispatch budgets cover only ranges the source knows a reader waits on
+/// ([`Source::wait_range`]'s side of the contract), and a variant transition
+/// caps the audible variant at that owed window — a parked forward window
+/// nobody filed starves one segment past the cap forever. Ready, EOF, and
+/// seek polls stay pure snapshots.
+///
+/// The filing call itself locks source state (`Source::wait_range`), so this
+/// poll only arms the wait-free demand cell; the scheduler shell delivers it
+/// via `SharedStream::flush_demand` — same core/shell split as `DeferredWake`.
+///
+/// [`Source::wait_range`]: kithara_stream::Source::wait_range
+fn demand_phase<T: StreamType>(stream: &SharedStream<T>, range: Range<u64>) -> SourcePhase {
+    let phase = stream.phase_at(range.clone());
+    if matches!(
+        phase,
+        SourcePhase::Waiting | SourcePhase::WaitingDemand | SourcePhase::WaitingMetadata
+    ) {
+        stream.arm_demand(range);
+    }
+    phase
 }
 
 pub(crate) fn source_phase_for_wait_context<T: StreamType>(
@@ -200,7 +225,7 @@ pub(crate) fn source_phase_for_wait_context<T: StreamType>(
         WaitContext::Recreation(recreate) => recreate_phase(stream, recreate),
         WaitContext::PostSeek(resume) => post_seek_anchor_offset(stream, resume).map_or_else(
             || stream.phase(),
-            |byte| stream.phase_at(chunk_lookahead_range(stream, byte)),
+            |byte| demand_phase(stream, chunk_lookahead_range(stream, byte)),
         ),
         WaitContext::Playback => source_phase_forward(stream),
         WaitContext::Seek(_) => stream.phase(),
@@ -270,7 +295,7 @@ fn source_phase_forward<T: StreamType>(stream: &SharedStream<T>) -> SourcePhase 
     let pos = stream.position();
     let end = pos.saturating_add(DEFAULT_READ_AHEAD_BYTES);
     let end = stream.len().map_or(end, |len| end.min(len));
-    stream.phase_at(pos..end)
+    demand_phase(stream, pos..end)
 }
 
 fn boundary_end<T: StreamType>(stream: &SharedStream<T>, start: u64) -> u64 {

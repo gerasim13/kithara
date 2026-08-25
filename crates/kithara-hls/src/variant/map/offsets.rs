@@ -249,17 +249,15 @@ impl Layout {
         store: impl FnOnce() -> u64,
         before_publish: impl FnOnce(),
     ) {
-        let mut retired = self.write_lock.lock();
-        self.begin_publication();
-        let init_size = store();
-        before_publish();
-        let mut frame = (**self.frame.load()).clone();
-        frame.recompute(init_size, segments);
-        let snapshot = frame.snapshot(segments, init_size);
-        Self::retire_current(&mut retired, &self.frame);
-        self.frame.store(Arc::new(frame));
-        self.republish(snapshot);
-        self.finish_publication();
+        self.mutate_frame(
+            segments,
+            || {
+                let init_size = store();
+                before_publish();
+                init_size
+            },
+            |frame, init_size| frame.recompute(init_size, segments),
+        );
     }
 
     fn begin_publication(&self) {
@@ -274,9 +272,10 @@ impl Layout {
     /// full-range layout (`byte_shift == 0`, `served = [0, num)`, no
     /// `init_seed`, offsets sized to `segments`) AND every served size is
     /// already exact. In that state a [`Self::reset`] would recompute the
-    /// identical offset table, so a same-variant seek can skip the O(N)
-    /// rebuild. A shifted/shrunk/size-incomplete frame returns `false` and
-    /// is recomputed as before — cross-variant and partial-download seeks
+    /// identical offset table; the skip decision lives in
+    /// `HlsVariant::layout_seek_invariant`, which also weighs the parked
+    /// settles this type cannot see. A shifted/shrunk/size-incomplete
+    /// frame returns `false` — cross-variant and partial-download seeks
     /// keep their reset.
     pub(super) fn is_canonical_complete(&self, segments: &[Segment]) -> bool {
         if !self.sizes_complete.load(Ordering::Acquire) {
@@ -299,16 +298,23 @@ impl Layout {
         frame.served_from > 0 || frame.served_until < num_segments
     }
 
-    /// Serialized load-clone-mutate-store for off-RT writers with a known
-    /// `init_size`. Takes `write_lock`, clones the live frame, applies `f` to
-    /// the owned copy, materialises the EOF snapshot, swaps the new frame in,
-    /// and republishes the atomics. Concurrent writers cannot lose an update
-    /// because each runs the whole cycle under `write_lock`.
-    fn mutate_frame(&self, segments: &[Segment], init_size: u64, f: impl FnOnce(&mut Frame)) {
+    /// Serialized load-clone-mutate-store for off-RT writers. Takes
+    /// `write_lock`, runs the caller-owned `store` (size stores + the
+    /// post-store `init_size`) under it, clones the live frame, applies `f`
+    /// to the owned copy, materialises the EOF snapshot, swaps the new frame
+    /// in, and republishes the atomics. Concurrent writers cannot lose an
+    /// update because each runs the whole cycle under `write_lock`.
+    fn mutate_frame(
+        &self,
+        segments: &[Segment],
+        store: impl FnOnce() -> u64,
+        f: impl FnOnce(&mut Frame, u64),
+    ) {
         let mut retired = self.write_lock.lock();
         self.begin_publication();
+        let init_size = store();
         let mut frame = (**self.frame.load()).clone();
-        f(&mut frame);
+        f(&mut frame, init_size);
         let snapshot = frame.snapshot(segments, init_size);
         Self::retire_current(&mut retired, &self.frame);
         self.frame.store(Arc::new(frame));
@@ -338,13 +344,13 @@ impl Layout {
 
     /// Collapse to a single-variant layout: `byte_shift = 0`,
     /// `served = [0, num_segments)`, offsets recomputed from the existing
-    /// seed.
-    pub(super) fn reset(&self, init_size: u64, segments: &[Segment]) {
-        if self.is_canonical_complete(segments) {
-            return;
-        }
+    /// seed. `store` runs under the write lock before the recompute — the
+    /// caller applies size stores deferred while the old byte space was
+    /// live (see `HlsVariant::apply_commit`) and returns the post-store
+    /// `init_size`, so the fresh frame and those sizes publish atomically.
+    pub(super) fn reset(&self, segments: &[Segment], store: impl FnOnce() -> u64) {
         let num = u32::try_from(segments.len()).unwrap_or(u32::MAX);
-        self.mutate_frame(segments, init_size, |frame| {
+        self.mutate_frame(segments, store, |frame, init_size| {
             frame.byte_shift = 0;
             frame.served_from = 0;
             frame.served_until = num;
@@ -427,7 +433,7 @@ mod tests {
         let layout = Layout::new(0, &[]);
         let displaced: Weak<Frame> = Arc::downgrade(&layout.frame.load_full());
 
-        layout.mutate_frame(&[], 0, |_| {});
+        layout.mutate_frame(&[], || 0, |_, _| {});
         assert!(displaced.upgrade().is_some());
     }
 

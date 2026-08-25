@@ -288,10 +288,6 @@ impl kithara_stream::Source for FileSource {
         self.ensure_not_cancelled()?;
         if timeout.is_some() {
             self.ensure_realtime_not_terminal()?;
-            if !self.inner.is_complete() {
-                self.update_read_demand(&range, u64::MAX);
-                return Err(StreamError::Source(StreamSourceError::WaitBudgetExceeded));
-            }
         } else {
             self.ensure_storage_not_terminal()?;
         }

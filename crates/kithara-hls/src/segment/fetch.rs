@@ -252,8 +252,10 @@ impl Drop for DownloadClaim {
 
 /// One unit of pending fetch work for the variant. `Init` is the only
 /// non-segment entry — placed at the front of the queue by `rebuild` so
-/// the fMP4 init prefix is fetched before any media segment.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// the fMP4 init prefix is fetched before any media segment. The derived
+/// order (`Init` first, segments ascending) is the plan order the queue
+/// keeps.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum PlannedFetch {
     Init,
     Segment(u32),
@@ -316,10 +318,17 @@ impl FetchSlot {
             handle,
             writer,
             reader,
+            signal,
             ..
         } = self;
         let committed = matches!(reader.status(), ResourceStatus::Committed { .. });
-        debug!(target: "kithara_hls::settle", bytes_written, committed, "stale (cancelled)");
+        debug!(
+            target: "kithara_hls::settle",
+            planned = ?handle.planned(),
+            bytes_written,
+            committed,
+            "stale (cancelled)"
+        );
         if committed {
             // Committed by the new epoch's writer — dropping our (stale)
             // writer fails only its own generation's gate; the cleanup is
@@ -329,13 +338,24 @@ impl FetchSlot {
         } else {
             // Release without stamping. The stamp lives on the shared resource,
             // not on this writer, so it would fail the first `write_at` of
-            // whoever refills the slot — and on this path someone always does:
-            // the epoch rebuild that cancelled us owns the re-dispatch. Stamping
-            // here made a cancel indistinguishable from a broken sink, and the
-            // successor's error came back as a fatal `Decode`, parking the slot
-            // `Failed` for good.
+            // whoever refills the slot. Stamping here made a cancel
+            // indistinguishable from a broken sink, and the successor's error
+            // came back as a fatal `Decode`, parking the slot `Failed` for
+            // good. The work itself goes back on the plan it came from — a
+            // transition's look-ahead retire cancels without rebuilding, so
+            // nobody else re-plans the entry dispatch popped; a settle that
+            // outlived a rebuild carries a superseded revision and the
+            // requeue refuses it, leaving the re-dispatch to that rebuild.
+            let planned = handle.planned();
+            let plan_revision = handle.plan_revision();
+            let variant = handle.variant();
             writer.abandon();
             handle.into_missing();
+            if let Some(variant) = variant
+                && variant.requeue_planned(planned, plan_revision)
+            {
+                signal.wake_peer();
+            }
         }
     }
 

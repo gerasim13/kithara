@@ -9,6 +9,15 @@ use tracing::{debug, warn};
 use super::{HlsVariant, PlanCtx, PlanRevision, core::NO_PREFETCH_DEFERRAL};
 use crate::segment::{Downloading, FetchClaim, PlannedFetch, Segment};
 
+/// The cancel pair one dispatch rides. `fetch` covers owed work — inits,
+/// size demands, and segments inside the owed window; `lookahead` covers an
+/// audible session's prefetches past it, so a variant transition can retire
+/// them without touching what playback waits on.
+pub(crate) struct DispatchTokens {
+    pub(crate) fetch: CancelToken,
+    pub(crate) lookahead: CancelToken,
+}
+
 /// What a dispatch-side acquire failure does to the slot.
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 enum AcquireSettle {
@@ -46,9 +55,19 @@ impl HlsVariant {
     #[kithara::probe(
         variant = self.variant as u64,
         budget = budget as u64,
-        queue_len = self.flow.queue.lock().len() as u64
+        queue_len = self.flow.queue.lock().len() as u64,
+        queue_head = self.flow.queue.lock().front().map_or(u64::MAX, |f| match f {
+            PlannedFetch::Init => u64::MAX - 1,
+            PlannedFetch::Segment(idx) => u64::from(*idx),
+        }),
+        cap = construction_segment_end.map_or(u64::MAX, u64::from)
     )]
     /// Emits prioritized fetches within construction and look-ahead bounds.
+    ///
+    /// Owed fetches ride `tokens.fetch`; an audible session's prefetches past
+    /// the owed window (the playing segment and the next) ride
+    /// `tokens.lookahead`, which a variant transition retires to free
+    /// downloader capacity without touching what playback waits on.
     #[kithara::hang_watchdog]
     pub(crate) fn dispatch_from(
         self: &Arc<Self>,
@@ -57,22 +76,39 @@ impl HlsVariant {
         position: u64,
         construction_segment_end: Option<u32>,
         audible: bool,
-        cancel: CancelToken,
+        tokens: DispatchTokens,
     ) -> Vec<FetchCmd> {
+        let DispatchTokens {
+            fetch: cancel,
+            lookahead,
+        } = tokens;
         let mut out = Vec::new();
         let mut deferred: Vec<(PlannedFetch, PlanRevision)> = Vec::new();
         let owed_through = audible
             .then(|| self.find_at_offset(position).map(|(seg_idx, _, _)| seg_idx))
             .flatten();
         let owed = |seg_idx: u32| !audible || owed_through.is_some_and(|last| seg_idx <= last);
+        let beyond_owed = |seg_idx: u32| {
+            audible && owed_through.is_some_and(|last| seg_idx > last.saturating_add(1))
+        };
         let mut remaining = budget;
         self.dispatch_size_demands(ctx, &mut out, &mut remaining, &cancel);
         let prefetch_base = position.max(self.prefetch_anchor());
-        let prefetch_byte_cap = ctx
-            .config
-            .look_ahead_bytes
-            .map(|n| prefetch_base.saturating_add(n));
-        let prefetch_segment_cap = self.prefetch_segment_cap(ctx, prefetch_base);
+        // A construction bound names a debt: everything up to it must land for
+        // the splice or build to finish. Look-ahead trims optional prefetch
+        // only, so inside a bounded window the caps step aside.
+        let prefetch_byte_cap = construction_segment_end
+            .is_none()
+            .then(|| {
+                ctx.config
+                    .look_ahead_bytes
+                    .map(|n| prefetch_base.saturating_add(n))
+            })
+            .flatten();
+        let prefetch_segment_cap = construction_segment_end
+            .is_none()
+            .then(|| self.prefetch_segment_cap(ctx, prefetch_base))
+            .flatten();
         let mut resume_at: Option<u64> = None;
         while remaining > 0 {
             hang_tick!();
@@ -163,8 +199,12 @@ impl HlsVariant {
                         ctx.signal.fire();
                         continue;
                     }
-                    let Some(mut cmd) = self.emit_fetch_cmd(ctx, seg_idx, handle, cancel.clone())
-                    else {
+                    let token = if beyond_owed(seg_idx) {
+                        lookahead.clone()
+                    } else {
+                        cancel.clone()
+                    };
+                    let Some(mut cmd) = self.emit_fetch_cmd(ctx, seg_idx, handle, token) else {
                         // WHY: A reverted claim must remain queued for another acquisition attempt.
                         deferred.push((planned, plan_revision));
                         continue;
@@ -179,11 +219,11 @@ impl HlsVariant {
         }
         if !deferred.is_empty() {
             let mut queue = self.flow.queue.lock();
-            for (planned, revision) in deferred.into_iter().rev() {
+            for (planned, revision) in deferred {
                 // A concurrent claim's Drop may have requeued this entry
                 // between the pop above and this write-back (a downloader
                 // teardown racing the dispatch) — never double-plan it.
-                queue.push_front_if_current(planned, revision);
+                queue.requeue_if_current(planned, revision);
             }
         }
         self.defer_prefetch_until(resume_at.unwrap_or(NO_PREFETCH_DEFERRAL));

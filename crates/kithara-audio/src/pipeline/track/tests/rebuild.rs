@@ -364,7 +364,7 @@ pub(super) struct TestControl {
 }
 
 impl TestControl {
-    fn new(media_info: MediaInfo) -> Self {
+    pub(super) fn new(media_info: MediaInfo) -> Self {
         Self {
             aborted_transition: Mutex::new(None),
             byte_map_enabled: AtomicBool::new(false),
@@ -544,25 +544,37 @@ impl VariantControl for TestControl {
 pub(super) struct TestSource {
     byte_map: Arc<TestByteMap>,
     control: Arc<TestControl>,
+    phase: Arc<Mutex<SourcePhase>>,
     playhead: Arc<PlayheadState>,
     position: Arc<AtomicU64>,
     seek: Arc<SeekState>,
+    waits: Arc<Mutex<Vec<Range<u64>>>>,
 }
 
 impl TestSource {
-    fn new(control: Arc<TestControl>) -> Self {
+    pub(super) fn new(control: Arc<TestControl>) -> Self {
         Self {
             control,
             byte_map: Arc::new(TestByteMap),
+            phase: Arc::new(Mutex::new(SourcePhase::Ready)),
             playhead: Arc::new(PlayheadState::new()),
             position: Arc::new(AtomicU64::new(0)),
             seek: Arc::new(SeekState::new()),
+            waits: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
     fn segmented(control: Arc<TestControl>) -> Self {
         control.enable_byte_map();
         Self::new(control)
+    }
+
+    pub(super) fn phase_handle(&self) -> Arc<Mutex<SourcePhase>> {
+        Arc::clone(&self.phase)
+    }
+
+    pub(super) fn waits_handle(&self) -> Arc<Mutex<Vec<Range<u64>>>> {
+        Arc::clone(&self.waits)
     }
 }
 
@@ -592,7 +604,7 @@ impl Source for TestSource {
     }
 
     fn phase_at(&self, _range: Range<u64>) -> SourcePhase {
-        SourcePhase::Ready
+        *self.phase.lock()
     }
 
     fn playhead_read(&self) -> Arc<dyn PlayheadRead> {
@@ -629,10 +641,15 @@ impl Source for TestSource {
 
     fn wait_range(
         &mut self,
-        _range: Range<u64>,
+        range: Range<u64>,
         _timeout: Option<Duration>,
     ) -> StreamResult<WaitOutcome> {
-        Ok(WaitOutcome::Ready)
+        self.waits.lock().push(range);
+        match *self.phase.lock() {
+            SourcePhase::Ready => Ok(WaitOutcome::Ready),
+            SourcePhase::Eof => Ok(WaitOutcome::Eof),
+            _ => Err(StreamError::Source(SourceError::WaitBudgetExceeded)),
+        }
     }
 }
 
@@ -692,7 +709,7 @@ impl ByteMap for TestByteMap {
 }
 
 pub(super) struct TestConfig {
-    source: TestSource,
+    pub(super) source: TestSource,
 }
 
 impl Default for TestConfig {

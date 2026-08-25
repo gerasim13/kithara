@@ -22,8 +22,11 @@ struct Consts;
 impl Consts {
     const SAMPLE_RATE: u32 = Shared::SAMPLE_RATE;
     const BLOCK_FRAMES: usize = Shared::OFFLINE_BLOCK_FRAMES;
-    const PRE_SEEK_POSITION_SECS: f64 = 0.2;
     const PRE_SEEK_RENDER_SECS: f64 = 1.5;
+    /// Warm-up success gate: the decoder has demonstrably produced PCM.
+    const PRE_SEEK_MIN_POSITION_SECS: f64 = 0.25;
+    /// No-progress watchdog budget for the warm-up render (same sizing as
+    /// the `hls_seek_middle_stress` warm-up over the same packaged server).
     const PRE_SEEK_WALL_MS: u64 = 1_500;
     const POST_SEEK_RENDER_SECS: f64 = 6.0;
     /// Far past the 12 s fixture duration. The decoder must reject this
@@ -85,17 +88,22 @@ async fn hls_seek_past_end_terminates_in_bounded_time() {
     let mut player = OfflinePlayer::new(Consts::SAMPLE_RATE);
     player.load_and_fadein(resource, "t0");
 
+    // Warm-up is state-driven, not a fixed-size burst: the render races the
+    // REAL network + decode pipeline, and under flash the burst's virtual
+    // sleeps grant almost no real time, so a fixed block budget loses to
+    // host-scheduler perturbation before the first PCM lands. The helper's
+    // no-progress watchdog still bounds a genuinely wedged pipeline.
     render_until_position(
         &mut player,
         blocks_for_seconds(Consts::PRE_SEEK_RENDER_SECS),
-        Consts::PRE_SEEK_POSITION_SECS,
+        Consts::PRE_SEEK_MIN_POSITION_SECS,
         Consts::BLOCK_FRAMES,
         Consts::PRE_SEEK_WALL_MS,
     )
     .await;
     let pos_before = player.position();
     assert!(
-        pos_before > Consts::PRE_SEEK_POSITION_SECS,
+        pos_before > 0.2,
         "decoder never produced PCM before the seek (pos={pos_before:.3}s)"
     );
     let _ = player.take_notification_kinds();

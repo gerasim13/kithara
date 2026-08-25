@@ -1369,6 +1369,31 @@ fn a_seek_supersedes_claims_from_the_previous_plan() {
 }
 
 #[kithara::test]
+fn a_noop_rebuild_disowns_a_cancelled_fetch() {
+    // A rebuild that changes nothing (the queue already matches the plan)
+    // still claims plan ownership: the fetch the triggering rearm cancelled
+    // settles into a superseded plan and stays off it, instead of
+    // re-entering as the new queue head.
+    let ctx = test_ctx(3);
+    let v = make_var(0, 0, &[100, 100], &ctx);
+    v.segments()[1].state().mark_loaded();
+    let claim = v.segments()[0]
+        .state()
+        .try_claim(
+            PlannedFetch::Segment(0),
+            v.flow.queue.revision(),
+            Arc::downgrade(&v),
+            ctx.signal.clone(),
+        )
+        .expect("segment claim");
+    v.rebuild(&ctx, 1);
+
+    drop(claim);
+
+    assert!(!v.flow.queue.planned(PlannedFetch::Segment(0)));
+}
+
+#[kithara::test]
 fn phase_at_reports_waiting_demand_for_claimed_segment() {
     let ctx = test_ctx(3);
     let v = make_var(0, 0, &[100, 100], &ctx);
@@ -2181,5 +2206,517 @@ fn wait_range_flush_short_circuits_without_sleeping() {
     assert!(
         elapsed < Duration::from_millis(2),
         "flush short-circuit must not sleep; took {elapsed:?}"
+    );
+}
+
+fn seg_idx_by_url(v: &HlsVariant, url: &Url) -> u32 {
+    let idx = v
+        .segments()
+        .iter()
+        .position(|seg| seg.url() == url)
+        .expect("cmd url belongs to the variant");
+    u32::try_from(idx).expect("segment index fits u32")
+}
+
+/// While a variant transition is building, the audible session may hold only
+/// its owed window — the playing segment and the next. The look-ahead it
+/// would otherwise queue is what starves the incoming construction. A latch
+/// inside the playing segment adds nothing to that window.
+#[kithara::test]
+fn dispatch_owed_stops_after_the_next_segment() {
+    let ctx = test_ctx(8);
+    let v = make_var(0, 0, &[100, 100, 100, 100, 100, 100], &ctx);
+    v.rebuild(&ctx, 0);
+    let session = active_session(&v, &ctx, 0);
+
+    let cmds = session.dispatch_owed(&ctx, 10, Duration::ZERO);
+
+    let got: Vec<Url> = cmds.iter().map(|cmd| cmd.url().clone()).collect();
+    assert_eq!(
+        got,
+        vec![v.segments()[0].url().clone(), v.segments()[1].url().clone(),],
+        "position 0 owes segment 0 and its successor, nothing further"
+    );
+}
+
+/// The look-ahead caps are an option, the owed window is a debt: while a
+/// transition builds, the outgoing must still fetch every segment up to the
+/// latch even when the prefetch segment window is narrower — the splice
+/// cannot land without those bytes.
+#[kithara::test]
+fn dispatch_owed_overrides_the_segment_lookahead_cap() {
+    let mut ctx = test_ctx(10);
+    ctx.config.look_ahead_segments = Some(2);
+    let v = make_var(0, 0, &[100, 100, 100, 100, 100, 100], &ctx);
+    v.rebuild(&ctx, 0);
+    let session = active_session(&v, &ctx, 0);
+
+    let cmds = session.dispatch_owed(&ctx, 10, Duration::from_secs(5));
+
+    let got: Vec<Url> = cmds.iter().map(|cmd| cmd.url().clone()).collect();
+    assert_eq!(
+        got,
+        vec![
+            v.segments()[0].url().clone(),
+            v.segments()[1].url().clone(),
+            v.segments()[2].url().clone(),
+            v.segments()[3].url().clone(),
+        ],
+        "the owed debt runs to the latch through a narrower segment window"
+    );
+}
+
+/// Same debt against the byte-sized prefetch window: bytes the splice still
+/// needs dispatch even when they lie past `look_ahead_bytes`.
+#[kithara::test]
+fn dispatch_owed_overrides_the_byte_lookahead_cap() {
+    let mut ctx = test_ctx(10);
+    ctx.config.look_ahead_bytes = Some(150);
+    let v = make_var(0, 0, &[100, 100, 100, 100, 100, 100], &ctx);
+    v.rebuild(&ctx, 0);
+    let session = active_session(&v, &ctx, 0);
+
+    let cmds = session.dispatch_owed(&ctx, 10, Duration::from_secs(5));
+
+    let got: Vec<Url> = cmds.iter().map(|cmd| cmd.url().clone()).collect();
+    assert_eq!(
+        got,
+        vec![
+            v.segments()[0].url().clone(),
+            v.segments()[1].url().clone(),
+            v.segments()[2].url().clone(),
+            v.segments()[3].url().clone(),
+        ],
+        "the owed debt runs to the latch through a narrower byte window"
+    );
+}
+
+/// The owed window follows the transition latch when the cut lies ahead of
+/// the reader: the outgoing must decode every byte up to the cut, and a seek
+/// can park its reads segments ahead of the byte cursor. Starving those
+/// fetches parks the outgoing decoder forever, and the incoming prime waits
+/// on its frontier just as long.
+#[kithara::test]
+fn dispatch_owed_reaches_the_transition_latch() {
+    let ctx = test_ctx(8);
+    let v = make_var(0, 0, &[100, 100, 100, 100, 100, 100], &ctx);
+    v.rebuild(&ctx, 0);
+    let session = active_session(&v, &ctx, 0);
+
+    // Reader at segment 0; the latch sits at 5s, inside segment 2.
+    let cmds = session.dispatch_owed(&ctx, 10, Duration::from_secs(5));
+
+    let got: Vec<Url> = cmds.iter().map(|cmd| cmd.url().clone()).collect();
+    assert_eq!(
+        got,
+        vec![
+            v.segments()[0].url().clone(),
+            v.segments()[1].url().clone(),
+            v.segments()[2].url().clone(),
+            v.segments()[3].url().clone(),
+        ],
+        "the owed window runs through the latch segment and its successor"
+    );
+}
+
+/// A parked read is owed no matter where the projection points: the outgoing
+/// demuxer consumes past the projected byte cursor and waits on segments the
+/// stale owed window refuses to dispatch, leaving the queue head one past the
+/// cap forever (the phase_continuity livelock: `queue_head=27 cap=26`). The
+/// range the reader waits on is what the splice still consumes, so the owed
+/// window must run through it.
+#[kithara::test]
+fn dispatch_owed_covers_the_range_the_reader_waits_on() {
+    let ctx = test_ctx(8);
+    let v = make_var(0, 0, &[100, 100, 100, 100, 100, 100], &ctx);
+    v.rebuild(&ctx, 0);
+    let session = active_session(&v, &ctx, 0);
+    // The demuxer parked on bytes 300..500 (segments 3 and 4), past the owed
+    // window of a reader projected at byte 0 with the latch inside segment 0.
+    let parked = v.wait_range(300..500, Some(Duration::ZERO));
+    assert!(
+        matches!(
+            parked,
+            Err(StreamError::Source(SourceError::WaitBudgetExceeded))
+        ),
+        "the unloaded range must park the reader first: {parked:?}"
+    );
+
+    let cmds = session.dispatch_owed(&ctx, 10, Duration::ZERO);
+
+    let got: Vec<Url> = cmds.iter().map(|cmd| cmd.url().clone()).collect();
+    assert_eq!(
+        got,
+        vec![
+            v.segments()[0].url().clone(),
+            v.segments()[1].url().clone(),
+            v.segments()[2].url().clone(),
+            v.segments()[3].url().clone(),
+            v.segments()[4].url().clone(),
+        ],
+        "the owed window runs through the segments the parked read waits on"
+    );
+}
+
+/// A session seek retires the parked-read debt: the wait belonged to reads
+/// the seek abandoned, and dragging it forward would hold look-ahead capacity
+/// against the new position.
+#[kithara::test]
+fn a_session_seek_clears_the_parked_read_debt() {
+    let ctx = test_ctx(8);
+    let v = make_var(0, 0, &[100, 100, 100, 100, 100, 100], &ctx);
+    v.rebuild(&ctx, 0);
+    let session = active_session(&v, &ctx, 0);
+    let _ = v.wait_range(300..500, Some(Duration::ZERO));
+
+    session.seek_to_byte(100);
+    let cmds = session.dispatch_owed(&ctx, 10, Duration::ZERO);
+
+    // The plan itself is the peer rebuild's job; this session-level pass
+    // still drains the queue from its head. The property is the cap: with
+    // the wait retired it ends at the new position's owed window (segment 2),
+    // not at the abandoned wait's segment 4.
+    let got: Vec<Url> = cmds.iter().map(|cmd| cmd.url().clone()).collect();
+    assert_eq!(
+        got,
+        vec![
+            v.segments()[0].url().clone(),
+            v.segments()[1].url().clone(),
+            v.segments()[2].url().clone(),
+        ],
+        "a seek retires the old wait; the owed cap follows the new position"
+    );
+}
+
+/// Retiring the look-ahead burns the tokens of fetches past the owed window,
+/// so the downloader frees their slots instead of finishing bytes the latched
+/// cut already declared dead.
+#[kithara::test]
+fn retire_lookahead_burns_fetches_beyond_the_owed_window() {
+    let ctx = test_ctx(8);
+    let v = make_var(0, 0, &[100, 100, 100, 100, 100, 100], &ctx);
+    v.rebuild(&ctx, 0);
+    let session = active_session(&v, &ctx, 0);
+    let cmds = session.dispatch(&ctx, 10);
+    assert_eq!(cmds.len(), 6, "precondition: every segment dispatches");
+
+    session.retire_lookahead();
+
+    for cmd in &cmds {
+        let seg = seg_idx_by_url(&v, cmd.url());
+        if seg <= 1 {
+            continue;
+        }
+        assert!(
+            cmd.cancel()
+                .expect("segment cmd carries a cancel token")
+                .is_cancelled(),
+            "look-ahead fetch for segment {seg} must be retired"
+        );
+    }
+}
+
+/// The owed window survives a look-ahead retire: the reader is still
+/// consuming those bytes and cancelling them would underrun the splice.
+#[kithara::test]
+fn retire_lookahead_spares_the_owed_window() {
+    let ctx = test_ctx(8);
+    let v = make_var(0, 0, &[100, 100, 100, 100, 100, 100], &ctx);
+    v.rebuild(&ctx, 0);
+    let session = active_session(&v, &ctx, 0);
+    let cmds = session.dispatch(&ctx, 10);
+    assert_eq!(cmds.len(), 6, "precondition: every segment dispatches");
+
+    session.retire_lookahead();
+
+    for cmd in &cmds {
+        let seg = seg_idx_by_url(&v, cmd.url());
+        if seg > 1 {
+            continue;
+        }
+        assert!(
+            !cmd.cancel()
+                .expect("segment cmd carries a cancel token")
+                .is_cancelled(),
+            "owed fetch for segment {seg} must stay live"
+        );
+    }
+}
+
+/// A recoverably failed fetch re-enters the plan in plan order, not at the
+/// front: dispatch caps read the queue head, and a far look-ahead entry
+/// parked there would wall off every nearer segment behind it.
+#[kithara::test]
+fn requeue_planned_reenters_in_plan_order() {
+    let ctx = test_ctx(3);
+    let v = make_var(0, 0, &[100, 100, 100, 100], &ctx);
+    v.rebuild(&ctx, 0);
+    let revision = {
+        let mut queue = v.flow.queue.lock();
+        let (_, revision) = queue.pop_front().expect("planned fetch");
+        for _ in 0..2 {
+            queue.pop_front();
+        }
+        revision
+    };
+
+    assert!(v.requeue_planned(PlannedFetch::Segment(0), revision));
+    assert!(v.requeue_planned(PlannedFetch::Segment(2), revision));
+
+    let queue: Vec<_> = v.flow.queue.lock().iter().copied().collect();
+    assert_eq!(
+        queue,
+        vec![
+            PlannedFetch::Segment(0),
+            PlannedFetch::Segment(2),
+            PlannedFetch::Segment(3),
+        ],
+        "requeued fetches must land between their plan-order neighbours"
+    );
+}
+
+/// Near-end time seek on a segment-aware (fMP4) variant whose segments are
+/// still placeholder-sized: the anchor byte is minted against the placeholder
+/// frame, so a late prefix size commit would re-key every raw offset under it.
+fn drifting_seek_session() -> (PlanCtx, Arc<HlsVariant>, HlsSession, u64) {
+    let ctx = test_ctx(3);
+    let seek = Arc::new(SeekState::new());
+    let segments: Vec<Segment> = (0..12)
+        .map(|idx| make_placeholder_seg(idx, 100, &ctx.scope))
+        .collect();
+    let v = VariantParts {
+        segments,
+        init: None,
+        seek_obs: Arc::clone(&seek) as Arc<dyn SeekObserve>,
+        codec: Some(AudioCodec::AacLc),
+        container: Some(ContainerFormat::Fmp4),
+    }
+    .into_variant(0, &ctx);
+    let anchor = v
+        .prepare_seek_time_anchor(Duration::from_secs(21))
+        .expect("seek point")
+        .expect("anchor")
+        .byte_offset;
+    assert_eq!(anchor, 1000, "segment 10 anchor on the placeholder frame");
+    let session = HlsSession::active(
+        CancelToken::never(),
+        seek,
+        ctx.signal.clone(),
+        0,
+        Arc::clone(&v),
+        anchor,
+    );
+    (ctx, v, session, anchor)
+}
+
+/// Settle a segment through the production path (`into_loaded` →
+/// `HlsVariant::apply_commit`), exactly like a fetch completing.
+fn settle_seg(v: &Arc<HlsVariant>, ctx: &PlanCtx, idx: u32, len: u64) {
+    let claim = v.segments()[idx as usize]
+        .state()
+        .try_claim(
+            PlannedFetch::Segment(idx),
+            v.flow.queue.revision(),
+            Arc::downgrade(v),
+            ctx.signal.clone(),
+        )
+        .expect("segment claim");
+    claim.into_loaded(len);
+}
+
+#[kithara::test]
+fn post_seek_prefix_settle_does_not_move_the_frame() {
+    let (ctx, v, session, anchor) = drifting_seek_session();
+
+    // A stale in-flight prefix fetch (planned before the seek — a rebuild
+    // never cancels in-flight work) settles after the anchor was minted.
+    settle_seg(&v, &ctx, 1, 600);
+    session.advance(64);
+
+    assert_eq!(
+        v.segment_byte_offset(10),
+        Some(anchor),
+        "a settle behind the seek tail must not re-key the byte space under \
+         the anchor the reader lives in"
+    );
+    let resolved = v.find_at_offset(anchor + 64).map(|(idx, ..)| idx);
+    assert_eq!(
+        resolved,
+        Some(10),
+        "the post-seek cursor keeps naming the seek target, not a prefix \
+         segment slid under it"
+    );
+}
+
+#[kithara::test]
+fn eof_mints_at_the_anchored_frame_end_despite_a_late_prefix_settle() {
+    let (ctx, v, session, anchor) = drifting_seek_session();
+
+    // The planned tail (readahead 9, target 10, last 11) settles exact...
+    for idx in 9..12 {
+        settle_seg(&v, &ctx, idx, 100);
+    }
+    // ...while a stale prefix settle lands behind the seek tail.
+    settle_seg(&v, &ctx, 1, 600);
+    session.advance(200);
+
+    let end = anchor + 200;
+    let mut buf = [0_u8; 1];
+    assert!(
+        matches!(
+            v.read_at(end, &mut buf).expect("end read"),
+            ReadOutcome::Eof
+        ),
+        "the byte after the last tail segment is the stream end on the \
+         anchored frame; the parked prefix size must not push it out"
+    );
+    assert!(
+        matches!(
+            v.wait_range(end..end + 1, Some(Duration::ZERO)),
+            Ok(WaitOutcome::Eof)
+        ),
+        "wait at the anchored frame end must report EOF, not park on a \
+         phantom gap opened by the parked prefix size"
+    );
+}
+
+#[kithara::test]
+fn the_next_space_re_mint_applies_the_deferred_prefix_settle() {
+    let (ctx, v, _session, _anchor) = drifting_seek_session();
+
+    settle_seg(&v, &ctx, 1, 600);
+    assert_eq!(
+        v.segment_byte_offset(2),
+        Some(200),
+        "the real size stays parked while the seek tail is active"
+    );
+
+    v.reset_for_seek();
+
+    assert_eq!(
+        v.segment_byte_offset(2),
+        Some(700),
+        "the space re-mint publishes the parked real size with the fresh frame"
+    );
+}
+
+/// Settle the init through the production path, like `settle_seg`.
+fn settle_init(v: &Arc<HlsVariant>, ctx: &PlanCtx, len: u64) {
+    let claim = v
+        .segments
+        .init
+        .as_ref()
+        .expect("init slot")
+        .state()
+        .try_claim(
+            PlannedFetch::Init,
+            v.flow.queue.revision(),
+            Arc::downgrade(v),
+            ctx.signal.clone(),
+        )
+        .expect("init claim");
+    claim.into_loaded(len);
+}
+
+#[kithara::test]
+fn an_init_settle_lands_immediately_while_a_seek_tail_is_live() {
+    // Init reads gate on the size being exact, so the freeze must never
+    // park an init settle: a parked init starves the demuxer probe of an
+    // ABR pending variant, which deadlocks before activation could drain
+    // it. The byte-space shift it causes is the accepted cost.
+    let ctx = test_ctx(3);
+    let seek = Arc::new(SeekState::new());
+    let segments: Vec<Segment> = (0..12).map(|idx| make_seg(idx, 100, &ctx.scope)).collect();
+    let v = VariantParts {
+        segments,
+        init: Some(make_placeholder_init(256, &ctx.scope)),
+        seek_obs: Arc::clone(&seek) as Arc<dyn SeekObserve>,
+        codec: Some(AudioCodec::AacLc),
+        container: Some(ContainerFormat::Fmp4),
+    }
+    .into_variant(0, &ctx);
+    v.prepare_seek_time_anchor(Duration::from_secs(21))
+        .expect("seek point")
+        .expect("anchor");
+
+    settle_init(&v, &ctx, 700);
+
+    assert_eq!(
+        v.segment_byte_offset(0),
+        Some(700),
+        "the init settle keys the frame immediately despite the live tail"
+    );
+    assert!(
+        v.segments
+            .init
+            .as_ref()
+            .expect("init slot")
+            .size()
+            .is_exact(),
+        "the init size atom reads exact right after the settle"
+    );
+}
+
+#[kithara::test]
+fn an_exact_size_revision_parks_and_fails_the_skip_formula() {
+    // Fully exact fMP4 track (canonical-complete layout) with a live seek
+    // tail: a revision settle of an already-exact prefix size (DRM-style
+    // plaintext length over a byterange seed) parks while the size atom
+    // stays exact, so only the emptiness check in the skip formula can
+    // force the re-mint that lands it.
+    let ctx = test_ctx(3);
+    let seek = Arc::new(SeekState::new());
+    let segments: Vec<Segment> = (0..12).map(|idx| make_seg(idx, 100, &ctx.scope)).collect();
+    let v = VariantParts {
+        segments,
+        init: None,
+        seek_obs: Arc::clone(&seek) as Arc<dyn SeekObserve>,
+        codec: Some(AudioCodec::AacLc),
+        container: Some(ContainerFormat::Fmp4),
+    }
+    .into_variant(0, &ctx);
+    v.prepare_seek_time_anchor(Duration::from_secs(21))
+        .expect("seek point")
+        .expect("anchor");
+
+    // Canonical table, nothing parked: the re-mint is skipped and the
+    // stale tail stays live (and inert) behind it.
+    v.reset_to_full_range();
+
+    settle_seg(&v, &ctx, 1, 600);
+    assert_eq!(
+        v.segment_byte_offset(2),
+        Some(200),
+        "the revision parks behind the still-live tail"
+    );
+    assert!(
+        !v.layout_seek_invariant(),
+        "a parked size fails the skip formula even though the table still \
+         reads canonical"
+    );
+
+    v.reset_for_seek();
+
+    assert_eq!(
+        v.segment_byte_offset(2),
+        Some(700),
+        "the forced re-mint lands the parked revision"
+    );
+}
+
+#[kithara::test]
+fn a_settle_after_the_space_re_mint_applies_immediately() {
+    let (ctx, v, _session, _anchor) = drifting_seek_session();
+
+    // The re-mint retires the seek tail together with the frozen space...
+    v.reset_for_seek();
+    // ...so a settle landing right after applies to the fresh frame instead
+    // of parking behind a tail whose space is already gone.
+    settle_seg(&v, &ctx, 1, 600);
+
+    assert_eq!(
+        v.segment_byte_offset(2),
+        Some(700),
+        "a settle after the re-mint keys the fresh frame immediately"
     );
 }
