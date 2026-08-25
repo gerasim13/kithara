@@ -337,7 +337,7 @@ fn file_source_probe_wait_range_does_not_block_on_missing_bytes() {
 }
 
 #[kithara::test]
-fn file_source_probe_waits_for_commit_even_when_active_bytes_are_present() {
+fn file_source_probe_is_ready_on_written_bytes_before_commit() {
     let (reader, _writer) = create_active_resource(b"hello");
     let coord = make_coord();
     coord.set_total_bytes(Some(5));
@@ -345,10 +345,7 @@ fn file_source_probe_waits_for_commit_even_when_active_bytes_are_present() {
 
     let result = Source::wait_range(&mut source, 0..5, Some(Duration::from_millis(1)));
 
-    assert!(matches!(
-        result,
-        Err(StreamError::Source(StreamSourceError::WaitBudgetExceeded))
-    ));
+    assert_eq!(result.unwrap(), WaitOutcome::Ready);
 }
 
 #[kithara::test]
