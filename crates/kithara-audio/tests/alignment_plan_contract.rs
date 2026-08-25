@@ -347,6 +347,46 @@ fn evicted_required_source_is_behind_window_without_progress() {
 }
 
 #[kithara::test]
+fn a_plan_behind_the_retained_source_is_typed() {
+    let (alignment, topology) = alignment_context();
+    let plan = plan(
+        request(
+            alignment,
+            topology,
+            AlignmentSource::Prepared,
+            0,
+            AlignmentTransition::Immediate,
+        ),
+        AlignmentPlanRevision::first(),
+        12,
+    );
+    let cursor = plan.cursor();
+    let initial = cursor.frontier();
+    let retained = source(1..12);
+    let mut slot = PlanSpanSlot::new();
+
+    let error = plan
+        .next_span(&cursor, BLOCK_FRAMES, retained, &mut slot)
+        .expect_err("reaching behind retained source must stay typed");
+
+    assert_eq!(
+        error,
+        AlignmentPlanError::BehindWindow {
+            required: source(0..4),
+            retained,
+        }
+    );
+    assert_eq!(cursor.frontier(), initial);
+
+    let span = ready(
+        plan.next_span(&cursor, BLOCK_FRAMES, source(0..12), &mut slot)
+            .expect("the same plan is ready when its required source is retained"),
+    );
+    assert_eq!(span.source(), source(0..4));
+    assert_eq!(cursor.frontier(), initial);
+}
+
+#[kithara::test]
 fn cursor_from_another_plan_revision_is_stale() {
     let (alignment, topology) = alignment_context();
     let first_revision = AlignmentPlanRevision::first();

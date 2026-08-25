@@ -57,6 +57,62 @@ fn marker(frame: f64, ordinal: i64, evidence: BeatEvidence) -> BeatMarker {
     )
 }
 
+fn observed_segment(
+    start_frame: f64,
+    start_ordinal: i64,
+    end_frame: f64,
+    end_ordinal: i64,
+) -> MapSegment {
+    segment(
+        observed(start_frame, start_ordinal),
+        observed(end_frame, end_ordinal),
+        BeatEvidence::Interpolated,
+    )
+}
+
+fn segment(start: BeatMarker, end: BeatMarker, evidence: BeatEvidence) -> MapSegment {
+    MapSegment::new(
+        start,
+        end,
+        metered(
+            evidence,
+            Meter::new(4).expect("invariant: fixture meter is valid"),
+        ),
+    )
+    .expect("invariant: fixture segment is valid")
+}
+
+fn playhead_snapshot() -> BeatMapSnapshot {
+    const END_FRAME: u64 = 1_536_000;
+    asset_snapshot(
+        map_id(),
+        MapState::Complete,
+        END_FRAME + 1,
+        vec![observed_segment(0.0, 0, 1_536_000.0, 64)],
+    )
+}
+
+fn seeded_snapshot() -> BeatMapSnapshot {
+    asset_snapshot(
+        map_id(),
+        MapState::Complete,
+        401,
+        vec![
+            segment(
+                marker(0.0, -1, BeatEvidence::Extrapolated),
+                observed(100.0, 0),
+                BeatEvidence::Extrapolated,
+            ),
+            observed_segment(100.0, 0, 300.0, 2),
+            segment(
+                observed(300.0, 2),
+                marker(400.0, 3, BeatEvidence::Extrapolated),
+                BeatEvidence::Extrapolated,
+            ),
+        ],
+    )
+}
+
 fn resolved<T: std::fmt::Debug>(query: MapQuery<T>) -> T {
     match query {
         MapQuery::Resolved(value) => value,
@@ -1039,4 +1095,308 @@ fn ordinal_outside_exact_beat_range_is_rejected() {
             endpoint: SegmentEndpoint::End,
         })
     ));
+}
+
+#[kithara::test]
+fn a_record_with_no_grid_at_all_names_no_tempo() {
+    let unavailable = BeatMapSnapshot::unavailable(
+        map_id(),
+        MapAxis::Asset(AssetAxis::new(sample_rate(), 24_001)),
+    );
+    assert!(matches!(
+        unavailable.tempo_at(MapPoint::new(unavailable.stamp(), asset_frame(0.0))),
+        MapQuery::Unavailable(MapUnavailable::NoGeometry)
+    ));
+
+    let complete = asset_snapshot(
+        map_id(),
+        MapState::Complete,
+        24_001,
+        vec![observed_segment(0.0, 0, 24_000.0, 1)],
+    );
+    assert!(matches!(
+        complete.tempo_at(MapPoint::new(complete.stamp(), asset_frame(12_000.0))),
+        MapQuery::Resolved(_)
+    ));
+}
+
+#[kithara::test]
+fn a_beat_before_the_seeded_start_resolves_to_no_source_frame() {
+    let snapshot = seeded_snapshot();
+    let before = MapPoint::new(
+        snapshot.stamp(),
+        Beat::new(-1.5).expect("invariant: negative fixture beat is finite"),
+    );
+    assert!(matches!(
+        snapshot.position_at(before),
+        MapQuery::OutsideDomain
+    ));
+
+    let start = MapPoint::new(
+        snapshot.stamp(),
+        Beat::new(-1.0).expect("invariant: seeded start beat is finite"),
+    );
+    assert!(matches!(snapshot.position_at(start), MapQuery::Resolved(_)));
+}
+
+#[kithara::test]
+fn a_beat_past_the_seeded_end_resolves_to_no_source_frame() {
+    let snapshot = seeded_snapshot();
+    let end = MapPoint::new(
+        snapshot.stamp(),
+        Beat::new(3.0).expect("invariant: seeded end beat is finite"),
+    );
+    assert!(matches!(snapshot.position_at(end), MapQuery::Resolved(_)));
+
+    let after = MapPoint::new(
+        snapshot.stamp(),
+        Beat::new(3.5).expect("invariant: post-domain beat is finite"),
+    );
+    assert!(matches!(
+        snapshot.position_at(after),
+        MapQuery::OutsideDomain
+    ));
+}
+
+#[kithara::test]
+fn a_position_before_the_first_detected_beat_resolves_to_a_track_beat() {
+    let snapshot = seeded_snapshot();
+    let estimate = resolved(snapshot.beat_at(MapPoint::new(snapshot.stamp(), asset_frame(50.0))));
+
+    assert_eq!(f64::from(*estimate.value().value()), -0.5);
+    assert_eq!(estimate.evidence(), BeatEvidence::Extrapolated);
+}
+
+#[kithara::test]
+fn a_position_after_the_last_detected_beat_resolves_to_a_track_beat() {
+    let snapshot = seeded_snapshot();
+    let estimate = resolved(snapshot.beat_at(MapPoint::new(snapshot.stamp(), asset_frame(350.0))));
+
+    assert_eq!(f64::from(*estimate.value().value()), 2.5);
+    assert_eq!(estimate.evidence(), BeatEvidence::Extrapolated);
+}
+
+#[kithara::test]
+fn the_beat_ordinal_of_every_detected_beat_is_unchanged_by_the_seeding() {
+    let snapshot = asset_snapshot(
+        map_id(),
+        MapState::Complete,
+        501,
+        vec![
+            segment(
+                marker(0.0, -3, BeatEvidence::Extrapolated),
+                observed(100.0, -2),
+                BeatEvidence::Extrapolated,
+            ),
+            observed_segment(100.0, -2, 200.0, -1),
+            observed_segment(200.0, -1, 300.0, 0),
+            observed_segment(300.0, 0, 400.0, 1),
+            segment(
+                observed(400.0, 1),
+                marker(500.0, 2, BeatEvidence::Extrapolated),
+                BeatEvidence::Extrapolated,
+            ),
+        ],
+    );
+
+    for (frame, expected) in [(100.0, -2.0), (200.0, -1.0), (300.0, 0.0), (400.0, 1.0)] {
+        let estimate =
+            resolved(snapshot.beat_at(MapPoint::new(snapshot.stamp(), asset_frame(frame))));
+        assert_eq!(f64::from(*estimate.value().value()), expected);
+    }
+}
+
+#[kithara::test]
+fn a_position_outside_the_source_extent_still_resolves_to_nothing() {
+    let snapshot = seeded_snapshot();
+    assert!(matches!(
+        snapshot.beat_at(MapPoint::new(snapshot.stamp(), asset_frame(401.0))),
+        MapQuery::OutsideDomain
+    ));
+
+    assert!(matches!(
+        snapshot.beat_at(MapPoint::new(snapshot.stamp(), asset_frame(400.0))),
+        MapQuery::Resolved(_)
+    ));
+}
+
+#[kithara::test]
+fn the_playhead_reads_the_beat_the_analysis_put_under_it() {
+    let snapshot = playhead_snapshot();
+    let estimate =
+        resolved(snapshot.beat_at(MapPoint::new(snapshot.stamp(), asset_frame(192_000.0))));
+
+    assert_eq!(f64::from(*estimate.value().value()), 8.0);
+}
+
+#[kithara::test]
+fn a_playhead_between_markers_reads_a_fractional_beat() {
+    let snapshot = playhead_snapshot();
+    let estimate =
+        resolved(snapshot.beat_at(MapPoint::new(snapshot.stamp(), asset_frame(204_000.0))));
+
+    assert_eq!(f64::from(*estimate.value().value()), 8.5);
+}
+
+#[kithara::test]
+fn a_playhead_past_the_analysed_markers_reads_no_beat() {
+    let snapshot = playhead_snapshot();
+    let end = resolved(snapshot.beat_at(MapPoint::new(snapshot.stamp(), asset_frame(1_536_000.0))));
+    assert_eq!(f64::from(*end.value().value()), 64.0);
+
+    assert!(matches!(
+        snapshot.beat_at(MapPoint::new(snapshot.stamp(), asset_frame(1_536_001.0),)),
+        MapQuery::OutsideDomain
+    ));
+}
+
+#[kithara::test]
+fn a_beat_of_advance_consumes_its_own_marker_span() {
+    const BEAT_FRAMES: f64 = 24_000.0;
+    let snapshot = asset_snapshot(
+        map_id(),
+        MapState::Complete,
+        192_001,
+        vec![observed_segment(0.0, 0, 192_000.0, 8)],
+    );
+
+    for beat in 0_i32..8 {
+        let point = MapPoint::new(
+            snapshot.stamp(),
+            Beat::new(f64::from(beat)).expect("invariant: fixture beat is finite"),
+        );
+        let position = resolved(snapshot.position_at(point));
+
+        assert_eq!(
+            *position.value().value(),
+            asset_frame(f64::from(beat) * BEAT_FRAMES),
+            "beat {beat} must land on its own source frame",
+        );
+    }
+}
+
+#[kithara::test]
+fn drifting_grid_follows_the_local_slope() {
+    let slow = sample_rate().get() * 60 / 118;
+    let fast = sample_rate().get() * 60 / 122;
+    let boundary = slow * 4;
+    let end = boundary + fast * 4;
+    let snapshot = asset_snapshot(
+        map_id(),
+        MapState::Complete,
+        u64::from(end) + 1,
+        vec![
+            observed_segment(0.0, 0, f64::from(boundary), 4),
+            observed_segment(f64::from(boundary), 4, f64::from(end), 8),
+        ],
+    );
+    let position = |beat: f64| {
+        let estimate = resolved(snapshot.position_at(MapPoint::new(
+            snapshot.stamp(),
+            Beat::new(beat).expect("invariant: fixture beat is finite"),
+        )));
+        f64::try_from(*estimate.value().value())
+            .expect("invariant: fixture position is on a numeric asset axis")
+    };
+
+    let early = position(1.0) - position(0.0);
+    let late = position(7.0) - position(6.0);
+
+    assert_eq!(early, f64::from(slow));
+    assert_eq!(late, f64::from(fast));
+    assert_ne!(early, late, "the local slopes must remain distinguishable");
+}
+
+#[kithara::test]
+fn advance_past_the_analysed_domain_is_typed() {
+    let snapshot = asset_snapshot(
+        map_id(),
+        MapState::Complete,
+        72_001,
+        vec![observed_segment(0.0, 0, 72_000.0, 3)],
+    );
+    let inside = MapPoint::new(
+        snapshot.stamp(),
+        Beat::new(2.0).expect("invariant: fixture beat is finite"),
+    );
+    assert!(matches!(
+        snapshot.position_at(inside),
+        MapQuery::Resolved(_)
+    ));
+
+    let outside = MapPoint::new(
+        snapshot.stamp(),
+        Beat::new(100.0).expect("invariant: fixture beat is finite"),
+    );
+    assert!(matches!(
+        snapshot.position_at(outside),
+        MapQuery::OutsideDomain
+    ));
+}
+
+#[kithara::test]
+fn a_deck_with_no_committed_grid_has_no_beat_advance() {
+    let axis = MapAxis::Host(HostAxis::new(sample_rate(), HostEpoch::new(1)));
+    let unavailable = BeatMapSnapshot::unavailable(map_id(), axis);
+    let zero = Beat::new(0.0).expect("invariant: fixture beat is finite");
+    assert!(matches!(
+        unavailable.position_at(MapPoint::new(unavailable.stamp(), zero)),
+        MapQuery::Unavailable(MapUnavailable::NoGeometry)
+    ));
+
+    let anchor = SessionAnchor::new(
+        SessionFrame::new(0),
+        SessionBeat::default(),
+        2.0,
+        sample_rate(),
+    )
+    .expect("invariant: fixture host relation is valid");
+    let committed = HostBeatMap::new(
+        map_id(),
+        BeatMapRevision::first(),
+        HostEpoch::new(1),
+        anchor,
+        None,
+    )
+    .snapshot();
+    assert!(matches!(
+        committed.position_at(MapPoint::new(committed.stamp(), zero)),
+        MapQuery::Resolved(_)
+    ));
+}
+
+#[kithara::test]
+fn the_beat_advance_follows_a_tempo_commit() {
+    let first_anchor = SessionAnchor::new(
+        SessionFrame::new(0),
+        SessionBeat::default(),
+        2.0,
+        sample_rate(),
+    )
+    .expect("invariant: initial host relation is valid");
+    let first = HostBeatMap::new(
+        map_id(),
+        BeatMapRevision::first(),
+        HostEpoch::new(1),
+        first_anchor,
+        None,
+    )
+    .snapshot();
+    let next_anchor = SessionAnchor::new(
+        SessionFrame::new(0),
+        SessionBeat::default(),
+        4.0,
+        sample_rate(),
+    )
+    .expect("invariant: recommitted host relation is valid");
+    let next = first
+        .host_successor(first.stamp(), HostEpoch::new(1), next_anchor, None)
+        .expect("invariant: transport owner can publish the next host relation");
+    let at_one_beat = MapPosition::Host(SessionFrame::new(24_000));
+    let before = resolved(first.beat_at(MapPoint::new(first.stamp(), at_one_beat)));
+    let after = resolved(next.beat_at(MapPoint::new(next.stamp(), at_one_beat)));
+
+    assert_eq!(f64::from(*before.value().value()), 1.0);
+    assert_eq!(f64::from(*after.value().value()), 2.0);
+    assert_eq!(next.revision(), next_revision(first.revision()));
 }
