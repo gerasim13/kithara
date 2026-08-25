@@ -17,8 +17,9 @@ use kithara::platform::{
 /// published after the waiter's snapshot wakes that waiter; a correct gate
 /// returns as soon as the signal lands, so this deadline never becomes runtime.
 /// Under the flash engine the deadline is virtual: the clock jumps straight to
-/// it whenever every engine-visible thread is parked, so any thread the waiter
-/// depends on must be spawned with `thread::spawn_named` to stay visible.
+/// it the moment no counted participant is left running. The test body itself
+/// is NOT counted, so every peer a waiter depends on must be spawned (its slot
+/// reserved) BEFORE the waiter can park — otherwise the jump fires in the gap.
 #[cfg(feature = "flash")]
 const SIGNAL_BACKSTOP: Duration = Duration::from_secs(5);
 
@@ -128,18 +129,23 @@ fn thread_gate_refreshes_waiter_after_thread_handoff() {
     assert!(matches!(first.join(), Ok(true)));
 
     let (snapshot_tx, snapshot_rx) = mpsc::channel();
+    // Spawn the signaller FIRST: the spawn reserves its engine slot on this
+    // (engine-invisible) thread, so from here until the signal there is always
+    // a counted participant and the clock cannot burn the backstop while the
+    // rendezvous is still assembling. With the waiter spawned first, it can
+    // park inside the spawn→spawn gap where nothing is counted, and the jump
+    // fires the backstop before the signaller even exists.
     let second_gate = Arc::clone(&gate);
+    let signaller = thread::spawn_named("threadgate-handoff-signaller", move || {
+        assert_eq!(snapshot_rx.recv(), Ok(()));
+        gate.signal();
+    });
     let second = thread::spawn(move || {
         let since = second_gate.current();
         if snapshot_tx.send(()).is_err() {
             return false;
         }
         second_gate.wait_timeout(since, SIGNAL_BACKSTOP)
-    });
-
-    let signaller = thread::spawn_named("threadgate-handoff-signaller", move || {
-        assert_eq!(snapshot_rx.recv(), Ok(()));
-        gate.signal();
     });
     assert!(matches!(second.join(), Ok(true)));
     assert!(signaller.join().is_ok());
