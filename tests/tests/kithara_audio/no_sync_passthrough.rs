@@ -571,7 +571,6 @@ async fn run_no_sync_passthrough(record_artifacts: bool) {
     };
     if record_artifacts {
         let written = write_audio_artifact(
-            &byte_pool,
             "no-sync-unity-passthrough",
             SAMPLE_RATE,
             CHANNELS,

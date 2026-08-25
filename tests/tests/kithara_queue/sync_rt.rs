@@ -212,7 +212,6 @@ async fn bound_sync_render_is_rtsan_clean() {
     metadata.add_threshold("candidate_extra_continuity_failures", 0.0);
     metadata.add_failures(failures.clone());
     write_sync_artifact(
-        fixture.resources().byte_pool(),
         &metadata,
         &[
             ArtifactAudio::new("deck-a-stem", &candidate.pcm),
@@ -288,7 +287,6 @@ async fn bound_sync_pcm_stays_clean_under_shared_worker_deadline_load() {
     metadata.add_threshold("extra_cochlea_failures", 0.0);
     metadata.add_failures(failures.clone());
     write_sync_artifact(
-        fixture.resources().byte_pool(),
         &metadata,
         &[
             ArtifactAudio::new("deck-a-stem", &candidate),

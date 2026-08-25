@@ -87,7 +87,7 @@ impl SyncHarness {
         Ok(self.finish_pcm_capture("free-control-lifecycle-mix", start_session_frame, &mut tap))
     }
 
-    fn start_pcm_capture(&mut self) -> Result<(i64, MixTapProbe)> {
+    pub(super) fn start_pcm_capture(&mut self) -> Result<(i64, MixTapProbe)> {
         let start_session_frame = self.current_session_frame()?;
         let capacity = self
             .case
@@ -102,7 +102,7 @@ impl SyncHarness {
         Ok((start_session_frame, tap))
     }
 
-    fn finish_pcm_capture(
+    pub(super) fn finish_pcm_capture(
         &mut self,
         label: impl Into<String>,
         start_session_frame: i64,
@@ -208,13 +208,6 @@ impl SyncHarness {
     }
 
     async fn capture_replays(mut self) -> Result<CaptureBundle> {
-        let byte_pool = self
-            .decks
-            .first()
-            .context("behavioral capture has no player resource owner")?
-            .player
-            .byte_pool()
-            .clone();
         let mix = self.capture_candidate_lifecycle().await?;
         let deck_replays = self.capture_synced_windows().await?;
         let facts = self.facts()?;
@@ -243,7 +236,6 @@ impl SyncHarness {
             })
             .collect();
         Ok(CaptureBundle {
-            byte_pool,
             capture_failures,
             facts,
             ledger,

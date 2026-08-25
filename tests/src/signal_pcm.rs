@@ -26,14 +26,24 @@ pub mod signal {
         fn sample(&self, frame: usize, sample_rate: u32) -> i16;
     }
 
+    /// Oscillator shape used by one rhythmic fixture track.
+    #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+    pub enum RhythmicWaveform {
+        #[default]
+        Sine,
+        Square,
+    }
+
     /// One deterministic rhythmic component used by encoded signal fixtures.
     #[derive(Debug, Clone, Copy, PartialEq)]
     #[non_exhaustive]
     pub struct RhythmicTrack {
         pub bpm: f64,
+        pub burst_of_beat: f64,
         pub tone_hz: f64,
         pub phase_frames: usize,
         pub muted_beat: Option<usize>,
+        pub waveform: RhythmicWaveform,
     }
 
     impl RhythmicTrack {
@@ -41,9 +51,11 @@ pub mod signal {
         pub const fn new(bpm: f64, tone_hz: f64) -> Self {
             Self {
                 bpm,
+                burst_of_beat: 0.1,
                 tone_hz,
                 phase_frames: 0,
                 muted_beat: None,
+                waveform: RhythmicWaveform::Sine,
             }
         }
 
@@ -56,6 +68,18 @@ pub mod signal {
         #[must_use]
         pub const fn with_muted_beat(mut self, beat: usize) -> Self {
             self.muted_beat = Some(beat);
+            self
+        }
+
+        #[must_use]
+        pub const fn with_square_wave(mut self) -> Self {
+            self.waveform = RhythmicWaveform::Square;
+            self
+        }
+
+        #[must_use]
+        pub const fn with_burst_of_beat(mut self, fraction: f64) -> Self {
+            self.burst_of_beat = fraction;
             self
         }
 
@@ -72,13 +96,24 @@ pub mod signal {
                 return 0.0;
             }
             let into_beat = local_frame % beat_frames;
-            let burst_frames = (beat_frames / 10).max(1);
+            let burst_frames = (beat_frames as f64 * self.burst_of_beat).round() as usize;
+            let burst_frames = burst_frames.max(1);
             if into_beat >= burst_frames {
                 return 0.0;
             }
             let decay = 1.0 - into_beat as f64 / burst_frames as f64;
             let phase = TAU * self.tone_hz * into_beat as f64 / f64::from(sample_rate);
-            phase.sin() * decay * decay * 0.6
+            let oscillator = match self.waveform {
+                RhythmicWaveform::Sine => phase.sin(),
+                RhythmicWaveform::Square => {
+                    if phase.sin() >= 0.0 {
+                        1.0
+                    } else {
+                        -1.0
+                    }
+                }
+            };
+            oscillator * decay * decay * 0.6
         }
     }
 
@@ -563,6 +598,27 @@ mod tests {
         let mut buf = [0u8; 2];
         assert_eq!(pcm.read_pcm_at(0, &mut buf), 2);
         assert_eq!(i16::from_le_bytes(buf), 0);
+    }
+
+    #[kithara::test]
+    fn rhythmic_square_wave_keeps_the_legacy_marker_timbre_distinct() {
+        let sine = signal::RhythmicTrack::new(120.0, 440.0);
+        let square = sine.with_square_wave();
+
+        let sine_sample = sine.sample(1, SAMPLE_RATE).abs();
+        let square_sample = square.sample(1, SAMPLE_RATE).abs();
+
+        assert!(square_sample > sine_sample.saturating_mul(10));
+    }
+
+    #[kithara::test]
+    fn rhythmic_burst_fraction_controls_the_audible_beat_window() {
+        let short = signal::RhythmicTrack::new(60.0, 440.0).with_square_wave();
+        let legacy = short.with_burst_of_beat(0.12);
+        let inside_legacy_tail = SAMPLE_RATE as usize * 11 / 100;
+
+        assert_eq!(short.sample(inside_legacy_tail, SAMPLE_RATE), 0);
+        assert_ne!(legacy.sample(inside_legacy_tail, SAMPLE_RATE), 0);
     }
 
     #[kithara::test]

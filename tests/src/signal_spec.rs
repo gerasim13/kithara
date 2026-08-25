@@ -158,11 +158,27 @@ struct SignalSpecPayload {
 #[serde(deny_unknown_fields)]
 struct RhythmicTrackPayload {
     bpm: f64,
+    #[serde(default = "default_burst_of_beat")]
+    burst_of_beat: f64,
     #[serde(default)]
     muted_beat: Option<usize>,
     #[serde(default)]
     phase_frames: usize,
     tone_hz: f64,
+    #[serde(default)]
+    waveform: RhythmicWaveformPayload,
+}
+
+const fn default_burst_of_beat() -> f64 {
+    0.1
+}
+
+#[derive(Debug, Clone, Copy, Default, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+enum RhythmicWaveformPayload {
+    #[default]
+    Sine,
+    Square,
 }
 
 pub(crate) fn parse_signal_request(
@@ -441,6 +457,15 @@ fn normalize_rhythmic_tracks(
                     message: "must be finite and between 30 and 300 BPM",
                 });
             }
+            if !track.burst_of_beat.is_finite()
+                || !(0.0..=1.0).contains(&track.burst_of_beat)
+                || track.burst_of_beat == 0.0
+            {
+                return Err(SignalRequestError::InvalidField {
+                    field: "tracks.burst_of_beat",
+                    message: "must be finite, positive, and at most one beat",
+                });
+            }
             if !track.tone_hz.is_finite()
                 || track.tone_hz <= 0.0
                 || track.tone_hz >= f64::from(payload.sample_rate) / 2.0
@@ -456,8 +481,13 @@ fn normalize_rhythmic_tracks(
                     message: "must be inside the finite signal",
                 });
             }
-            let resolved =
-                RhythmicTrack::new(track.bpm, track.tone_hz).with_phase_frames(track.phase_frames);
+            let resolved = RhythmicTrack::new(track.bpm, track.tone_hz)
+                .with_burst_of_beat(track.burst_of_beat)
+                .with_phase_frames(track.phase_frames);
+            let resolved = match track.waveform {
+                RhythmicWaveformPayload::Sine => resolved,
+                RhythmicWaveformPayload::Square => resolved.with_square_wave(),
+            };
             Ok(match track.muted_beat {
                 Some(beat) => resolved.with_muted_beat(beat),
                 None => resolved,

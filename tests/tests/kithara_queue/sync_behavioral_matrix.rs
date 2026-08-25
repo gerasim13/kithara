@@ -13,7 +13,7 @@ use kithara_integration_tests::{
     sync_matrix::{
         AssetProvider, OperationOrder, PlayerQueueProvider, RhythmicTrack, SignalDefect,
         SignalFailureKind, SignalOracleReport, SignalProvider, SyncCase, SyncOracle, TempoRide,
-        evaluate_signal, persist_then_assert,
+        evaluate_signal, persist_then_assert, write_sync_listening_dump,
     },
 };
 
@@ -27,6 +27,35 @@ const FOUR_TRACKS: &[RhythmicTrack] = &[
     RhythmicTrack::new(132.0, 1_760.0),
     RhythmicTrack::new(144.0, 3_520.0),
 ];
+const LISTENING_TRACKS: &[RhythmicTrack] = &[
+    RhythmicTrack::new(96.0, 220.0).with_burst_of_beat(0.12),
+    RhythmicTrack::new(128.0, 440.0)
+        .with_burst_of_beat(0.12)
+        .with_square_wave(),
+];
+const LISTENING_SWEEP_TRACKS: &[RhythmicTrack] = &[
+    RhythmicTrack::new(110.0, 220.0).with_burst_of_beat(0.12),
+    RhythmicTrack::new(130.0, 440.0)
+        .with_burst_of_beat(0.12)
+        .with_square_wave(),
+];
+const LISTENING_STEADY: SyncCase = SyncCase::running(
+    "legacy-sync-listening-steady",
+    48_000,
+    OperationOrder::SequentialSync,
+    60,
+    LISTENING_TRACKS,
+)
+.with_capture_beats(64);
+const LISTENING_SWEEP: SyncCase = SyncCase::running(
+    "legacy-sync-listening-sweep",
+    48_000,
+    OperationOrder::SequentialSync,
+    60,
+    LISTENING_SWEEP_TRACKS,
+)
+.with_session_bpm(90.0)
+.with_capture_beats(15);
 const ASSET: AssetProvider = AssetProvider::new(SignalDefect::None);
 const OUT_OF_SYNC: AssetProvider = AssetProvider::new(SignalDefect::OutOfSync);
 const PLAYER_QUEUE: PlayerQueueProvider = PlayerQueueProvider;
@@ -248,6 +277,24 @@ async fn signal_oracle_negative_controls_are_rejected_for_the_intended_reason(
     let resources = matrix_resources(PLAY_SYNC_SEEK, "negative-control")?;
     let report = evaluate_signal(provider, PLAY_SYNC_SEEK, resources).await?;
     assert_rejected_for(PLAY_SYNC_SEEK, &report, required, allowed);
+    Ok(())
+}
+
+#[kithara::test(tokio, multi_thread, serial, timeout(Duration::from_secs(600)))]
+#[ignore = "SYNC-ORACLE waiting for QueueAdapter; then writes five PR150 listening WAVs"]
+async fn dump_the_mix_for_listening() -> Result<()> {
+    let resources = matrix_resources(LISTENING_STEADY, "listening-dump")?;
+    let directory = write_sync_listening_dump(
+        resources,
+        LISTENING_STEADY,
+        LISTENING_SWEEP,
+        126.0,
+        145.0,
+        32,
+    )
+    .await?
+    .expect("KITHARA_AUDIO_ARTIFACT_DIR must be set for the listening dump");
+    eprintln!("sync listening WAVs: {}", directory.display());
     Ok(())
 }
 

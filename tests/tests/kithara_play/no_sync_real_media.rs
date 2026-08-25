@@ -346,7 +346,6 @@ async fn run_case(case: &Case, server: &TestServerHelper, record_artifacts: bool
             .map(|(label, pcm)| (label.as_str(), *pcm))
             .collect::<Vec<_>>();
         let written = write_audio_artifact(
-            &byte_pool,
             case.label,
             case.host_rate,
             CHANNELS,

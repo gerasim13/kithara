@@ -675,7 +675,6 @@ async fn bound_tempo_retarget_reaches_pcm_within_twenty_ms() {
             metadata.add_threshold("pre_command_rms", 0.002);
             metadata.add_failures(failures.clone());
             write_sync_artifact(
-                fixture.resources().byte_pool(),
                 &metadata,
                 &[
                     ArtifactAudio::new("deck-a-stem", &aligned.candidate),
@@ -792,7 +791,6 @@ async fn running_sync_command_changes_audible_pcm_within_one_block() {
         );
         metadata.add_failures(failures.clone());
         write_sync_artifact(
-            fixture.resources().byte_pool(),
             &metadata,
             &[
                 ArtifactAudio::new("deck-a-stem", &aligned.candidate),
@@ -918,7 +916,6 @@ async fn latest_sync_target_wins_in_pcm() {
     );
     metadata.add_failures(failures.clone());
     write_sync_artifact(
-        fixture.resources().byte_pool(),
         &metadata,
         &[
             ArtifactAudio::new("deck-a-stem", &candidate.samples),

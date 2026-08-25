@@ -1,7 +1,10 @@
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use serde::Serialize;
 
-pub use crate::signal_pcm::{SweepMode, signal::RhythmicTrack};
+pub use crate::signal_pcm::{
+    SweepMode,
+    signal::{RhythmicTrack, RhythmicWaveform},
+};
 
 /// Public signal route kind used by [`crate::TestServerHelper`].
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -109,9 +112,23 @@ struct SignalPathPayload {
 #[derive(Debug, Serialize)]
 struct RhythmicTrackPayload {
     bpm: f64,
+    burst_of_beat: f64,
     muted_beat: Option<usize>,
     phase_frames: usize,
     tone_hz: f64,
+    #[serde(skip_serializing_if = "is_sine")]
+    waveform: RhythmicWaveformPayload,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "kebab-case")]
+enum RhythmicWaveformPayload {
+    Sine,
+    Square,
+}
+
+fn is_sine(waveform: &RhythmicWaveformPayload) -> bool {
+    matches!(waveform, RhythmicWaveformPayload::Sine)
 }
 
 /// Build a `/signal/...` path from a public spec.
@@ -197,9 +214,14 @@ fn signal_path_with_tracks(
                 .iter()
                 .map(|track| RhythmicTrackPayload {
                     bpm: track.bpm,
+                    burst_of_beat: track.burst_of_beat,
                     muted_beat: track.muted_beat,
                     phase_frames: track.phase_frames,
                     tone_hz: track.tone_hz,
+                    waveform: match track.waveform {
+                        RhythmicWaveform::Sine => RhythmicWaveformPayload::Sine,
+                        RhythmicWaveform::Square => RhythmicWaveformPayload::Square,
+                    },
                 })
                 .collect()
         }),

@@ -187,6 +187,18 @@ impl SyncCase {
     }
 
     #[must_use]
+    pub const fn with_capture_beats(mut self, capture_beats: usize) -> Self {
+        self.capture_beats = capture_beats;
+        self
+    }
+
+    #[must_use]
+    pub const fn with_session_bpm(mut self, session_bpm: f64) -> Self {
+        self.session_bpm = session_bpm;
+        self
+    }
+
+    #[must_use]
     pub(super) fn capture_frames(self) -> usize {
         (f64::from(self.sample_rate) * 60.0 / self.session_bpm * self.capture_beats as f64).round()
             as usize

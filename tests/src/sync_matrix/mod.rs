@@ -1,6 +1,7 @@
 mod capture;
 mod case;
 mod harness;
+mod listening;
 mod media;
 mod oracle;
 mod provider;
@@ -17,6 +18,7 @@ use case::{
 };
 pub use case::{OperationOrder, SyncCase, TempoRide};
 use harness::SyncHarness;
+pub use listening::write_sync_listening_dump;
 pub use media::{SyncMedia, SyncTrackFixture};
 pub use oracle::{SyncOracle, SyncOracleReport, persist_then_assert};
 pub use provider::{

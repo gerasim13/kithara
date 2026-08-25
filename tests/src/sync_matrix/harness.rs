@@ -499,7 +499,7 @@ impl SyncHarness {
         Ok((updates_hz, updates_hz / 2))
     }
 
-    fn attempt_ride_tempo(&mut self, bpm: f64) -> Result<bool> {
+    pub(super) fn attempt_ride_tempo(&mut self, bpm: f64) -> Result<bool> {
         let tempo = Tempo::new(bpm).context("valid session tempo")?;
         self.tempo_ride_requests = self.tempo_ride_requests.saturating_add(1);
         self.record("tempo-ride-request");
@@ -734,7 +734,7 @@ impl SyncHarness {
         Ok(())
     }
 
-    async fn wait_all_playing(&mut self) -> Result<()> {
+    pub(super) async fn wait_all_playing(&mut self) -> Result<()> {
         for _ in 0..SETTLE_PULL_LIMIT {
             if self.decks.iter().all(|deck| deck.player.is_playing()) {
                 return Ok(());

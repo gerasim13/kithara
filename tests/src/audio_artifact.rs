@@ -1,56 +1,46 @@
-#[cfg(test)]
-use std::collections::BTreeMap;
 use std::{
     collections::BTreeSet,
-    env, io,
+    env,
+    fs::{self, OpenOptions},
+    io::{self, BufWriter, Write},
     mem::{size_of, size_of_val},
     path::{Path, PathBuf},
 };
 
-use kithara::{
-    assets::{
-        AcquisitionResult, AssetReader, AssetResource, AssetScope, AssetSource, AssetStore,
-        AssetWriter, DefaultLayout, ReadSide, StorageBackend, WriteSide,
-    },
-    bufpool::BytePool,
-};
 use serde::Serialize;
-use url::Url;
 use uuid::Uuid;
 
 pub(crate) const AUDIO_ARTIFACT_DIR_ENV: &str = "KITHARA_AUDIO_ARTIFACT_DIR";
 
-const ARTIFACT_NAMESPACE: &str = "test-artifact";
-const ARTIFACT_SOURCE_URL: &str = "https://artifacts.kithara.invalid/";
 const WAV_BATCH_SAMPLES: usize = 4 * 1024;
 
-#[derive(Debug)]
-pub(crate) struct WrittenAudioArtifact {
-    directory: PathBuf,
-    #[cfg(test)]
-    readers: BTreeMap<String, AssetReader>,
-}
-
-impl WrittenAudioArtifact {
-    #[must_use]
-    pub(crate) fn directory(&self) -> &Path {
-        &self.directory
-    }
-
-    #[cfg(test)]
-    #[must_use]
-    pub(crate) fn reader(&self, name: &str) -> Option<&AssetReader> {
-        self.readers.get(name)
-    }
+/// Write listening WAV files when the artifact directory is set.
+/// Returns `Ok(None)` when unset.
+///
+/// Each label becomes the exact filename `<label>.wav` inside a unique case
+/// directory under `KITHARA_AUDIO_ARTIFACT_DIR`.
+///
+/// # Errors
+/// Returns an error for an invalid directory, case, label, or audio payload, or
+/// when a filesystem write fails.
+pub(crate) fn write_audio_dump(
+    case: &str,
+    sample_rate: u32,
+    channels: u16,
+    audio: &[(&str, &[f32])],
+) -> io::Result<Option<PathBuf>> {
+    let Some(root) = env::var_os(AUDIO_ARTIFACT_DIR_ENV).map(PathBuf::from) else {
+        return Ok(None);
+    };
+    write_audio_dump_to(&root, case, sample_rate, channels, audio).map(Some)
 }
 
 /// Write listening WAV files and a manifest when the artifact directory is set.
 /// Returns `Ok(None)` when unset.
 ///
 /// # Errors
-/// Returns an error for invalid audio, serialization, or asset-store failure.
+/// Returns an error for invalid audio, serialization, or filesystem failure.
 pub fn write_audio_artifact<T: Serialize>(
-    pool: &BytePool,
     case: &str,
     sample_rate: u32,
     channels: u16,
@@ -60,19 +50,37 @@ pub fn write_audio_artifact<T: Serialize>(
     let Some(root) = env::var_os(AUDIO_ARTIFACT_DIR_ENV).map(PathBuf::from) else {
         return Ok(None);
     };
-    write_audio_artifact_to(&root, pool, case, sample_rate, channels, audio, manifest)
-        .map(|written| Some(written.directory))
+    write_audio_artifact_to(&root, case, sample_rate, channels, audio, manifest).map(Some)
 }
 
 pub(crate) fn write_audio_artifact_to<T: Serialize>(
     root: &Path,
-    pool: &BytePool,
     case: &str,
     sample_rate: u32,
     channels: u16,
     audio: &[(&str, &[f32])],
     manifest: &T,
-) -> io::Result<WrittenAudioArtifact> {
+) -> io::Result<PathBuf> {
+    let directory = write_audio_dump_to(root, case, sample_rate, channels, audio)?;
+    let manifest_path = directory.join("manifest.json");
+    let manifest_file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(manifest_path)?;
+    let mut writer = BufWriter::new(manifest_file);
+    serde_json::to_writer_pretty(&mut writer, manifest).map_err(io::Error::other)?;
+    writer.write_all(b"\n")?;
+    writer.flush()?;
+    Ok(directory)
+}
+
+pub(crate) fn write_audio_dump_to(
+    root: &Path,
+    case: &str,
+    sample_rate: u32,
+    channels: u16,
+    audio: &[(&str, &[f32])],
+) -> io::Result<PathBuf> {
     if !root.is_absolute() {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -92,81 +100,16 @@ pub(crate) fn write_audio_artifact_to<T: Serialize>(
         }
     }
 
-    let store = AssetStore::builder()
-        .backend(StorageBackend::Disk {
-            root: root.join(format!("{case}-{}", Uuid::new_v4())),
-        })
-        .pool(pool.clone())
-        .build();
-    let (scope, manifest_writer) = claim_bundle(&store, case)?;
-    let directory = manifest_writer
-        .reader()
-        .path()
-        .and_then(Path::parent)
-        .map(Path::to_path_buf)
-        .ok_or_else(|| io::Error::other("disk artifact has no directory path"))?;
+    fs::create_dir_all(root)?;
+    let directory = root.join(format!("{case}-{}", Uuid::new_v4()));
+    fs::create_dir(&directory)?;
 
-    #[cfg(test)]
-    let mut readers = BTreeMap::new();
     for (label, samples) in audio {
         let filename = format!("{label}.wav");
-        let reader = write_float_wav(&scope, &filename, samples, sample_rate, channels)?;
-        #[cfg(test)]
-        readers.insert(filename, reader);
-        #[cfg(not(test))]
-        drop(reader);
+        write_float_wav(&directory.join(filename), samples, sample_rate, channels)?;
     }
 
-    let manifest_bytes = serde_json::to_vec_pretty(manifest).map_err(io::Error::other)?;
-    manifest_writer
-        .write_at(0, &manifest_bytes)
-        .map_err(io::Error::other)?;
-    let manifest_len = u64::try_from(manifest_bytes.len())
-        .map_err(|_| io::Error::other("artifact manifest length exceeds u64"))?;
-    let manifest_reader = manifest_writer
-        .commit(Some(manifest_len))
-        .map_err(io::Error::other)?;
-    #[cfg(test)]
-    readers.insert("manifest.json".to_owned(), manifest_reader);
-    #[cfg(not(test))]
-    drop(manifest_reader);
-    store.checkpoint().map_err(io::Error::other)?;
-
-    Ok(WrittenAudioArtifact {
-        directory,
-        #[cfg(test)]
-        readers,
-    })
-}
-
-fn claim_bundle(store: &AssetStore, case: &str) -> io::Result<(AssetScope, AssetWriter)> {
-    let url = Url::parse(ARTIFACT_SOURCE_URL).map_err(io::Error::other)?;
-    let source = AssetSource::Remote {
-        url,
-        discriminator: Some(case.to_owned()),
-    };
-    let scope = store
-        .scope::<DefaultLayout>(&source)
-        .map_err(io::Error::other)?;
-    let key = scope
-        .key(&artifact_resource("manifest.json"))
-        .map_err(io::Error::other)?;
-    match store
-        .acquire_resource(&key, None)
-        .map_err(io::Error::other)?
-    {
-        AcquisitionResult::Pending(writer) => Ok((scope, writer)),
-        state => Err(io::Error::other(format!(
-            "new artifact store returned unexpected manifest acquisition state: {state:?}"
-        ))),
-    }
-}
-
-fn artifact_resource(name: &str) -> AssetResource {
-    AssetResource::Named {
-        namespace: ARTIFACT_NAMESPACE.to_owned(),
-        name: name.to_owned(),
-    }
+    Ok(directory)
 }
 
 fn validate_label(label: &str) -> io::Result<()> {
@@ -200,47 +143,25 @@ fn validate_audio(samples: &[f32], sample_rate: u32, channels: u16) -> io::Resul
 }
 
 fn write_float_wav(
-    scope: &AssetScope,
-    filename: &str,
+    path: &Path,
     samples: &[f32],
     sample_rate: u32,
     channels: u16,
-) -> io::Result<AssetReader> {
+) -> io::Result<()> {
     let header = wav_header(samples.len(), sample_rate, channels)?;
-    let key = scope
-        .key(&artifact_resource(filename))
-        .map_err(io::Error::other)?;
-    let AcquisitionResult::Pending(writer) = scope
-        .store()
-        .acquire_resource(&key, None)
-        .map_err(io::Error::other)?
-    else {
-        return Err(io::Error::new(
-            io::ErrorKind::AlreadyExists,
-            format!("artifact resource already exists: {filename}"),
-        ));
-    };
-    writer.write_at(0, &header).map_err(io::Error::other)?;
+    let file = OpenOptions::new().write(true).create_new(true).open(path)?;
+    let mut writer = BufWriter::with_capacity(WAV_BATCH_SAMPLES * size_of::<f32>(), file);
+    writer.write_all(&header)?;
 
-    let mut offset = u64::try_from(header.len())
-        .map_err(|_| io::Error::other("WAV header length exceeds u64"))?;
     let mut encoded = [0_u8; WAV_BATCH_SAMPLES * size_of::<f32>()];
     for batch in samples.chunks(WAV_BATCH_SAMPLES) {
         for (sample, bytes) in batch.iter().zip(encoded.chunks_exact_mut(size_of::<f32>())) {
             bytes.copy_from_slice(&sample.to_le_bytes());
         }
         let byte_len = size_of_val(batch);
-        writer
-            .write_at(offset, &encoded[..byte_len])
-            .map_err(io::Error::other)?;
-        offset = offset
-            .checked_add(
-                u64::try_from(byte_len)
-                    .map_err(|_| io::Error::other("WAV batch length exceeds u64"))?,
-            )
-            .ok_or_else(|| io::Error::other("WAV payload offset exceeds u64"))?;
+        writer.write_all(&encoded[..byte_len])?;
     }
-    writer.commit(Some(offset)).map_err(io::Error::other)
+    writer.flush()
 }
 
 fn wav_header(samples: usize, sample_rate: u32, channels: u16) -> io::Result<[u8; 44]> {
@@ -287,7 +208,6 @@ fn wav_header(samples: usize, sample_rate: u32, channels: u16) -> io::Result<[u8
 
 #[cfg(test)]
 mod tests {
-    use kithara::assets::ReadSide;
     use serde::Serialize;
 
     use super::*;
@@ -299,13 +219,12 @@ mod tests {
     }
 
     #[kithara::test(native, flash(false))]
-    fn artifact_bytes_roundtrip_through_asset_store_readers() {
+    fn artifact_bytes_roundtrip_through_direct_filesystem_files() {
         let root = tempfile::tempdir().expect("artifact temp dir");
         let samples = [0.25, -0.25, 0.5, -0.5];
-        let written = write_audio_artifact_to(
+        let directory = write_audio_artifact_to(
             root.path(),
-            &BytePool::default(),
-            "asset-store-roundtrip",
+            "filesystem-roundtrip",
             48_000,
             2,
             &[("mix", samples.as_slice())],
@@ -313,47 +232,27 @@ mod tests {
         )
         .expect("write artifact bundle");
 
-        let mut wav = Vec::new();
-        written
-            .reader("mix.wav")
-            .expect("WAV reader")
-            .read_into(&mut wav)
-            .expect("read WAV through AssetStore");
+        let wav = fs::read(directory.join("mix.wav")).expect("read direct WAV file");
         assert_eq!(&wav[..4], b"RIFF");
         assert_eq!(&wav[8..12], b"WAVE");
         assert_eq!(wav.len(), 44 + samples.len() * size_of::<f32>());
 
-        let mut manifest = Vec::new();
-        written
-            .reader("manifest.json")
-            .expect("manifest reader")
-            .read_into(&mut manifest)
-            .expect("read manifest through AssetStore");
-        assert!(
-            String::from_utf8(manifest)
-                .expect("manifest UTF-8")
-                .contains("roundtrip")
-        );
-
-        assert!(written.directory().starts_with(root.path()));
-        let wav_path = written.directory().join("mix.wav");
-        assert_eq!(
-            written.reader("mix.wav").and_then(ReadSide::path),
-            Some(wav_path.as_path()),
-        );
+        let manifest =
+            fs::read_to_string(directory.join("manifest.json")).expect("read direct manifest file");
+        assert!(manifest.contains("roundtrip"));
+        assert!(directory.starts_with(root.path()));
     }
 
     #[kithara::test(native, flash(false))]
-    fn wav_payload_survives_an_asset_store_batch_boundary() {
+    fn wav_payload_survives_a_buffered_batch_boundary() {
         let root = tempfile::tempdir().expect("artifact temp dir");
         let samples = (0..WAV_BATCH_SAMPLES + 2)
             .map(|index| {
                 f32::from_bits(0x3e80_0000 + u32::try_from(index).expect("sample index fits u32"))
             })
             .collect::<Vec<_>>();
-        let written = write_audio_artifact_to(
+        let directory = write_audio_artifact_to(
             root.path(),
-            &BytePool::default(),
             "batch-boundary",
             48_000,
             1,
@@ -362,12 +261,7 @@ mod tests {
         )
         .expect("write artifact bundle");
 
-        let mut wav = Vec::new();
-        written
-            .reader("mix.wav")
-            .expect("WAV reader")
-            .read_into(&mut wav)
-            .expect("read WAV through AssetStore");
+        let wav = fs::read(directory.join("mix.wav")).expect("read direct WAV file");
         let expected = samples
             .iter()
             .flat_map(|sample| sample.to_le_bytes())
@@ -378,12 +272,10 @@ mod tests {
     #[kithara::test(native, flash(false))]
     fn repeated_case_writes_use_distinct_bundle_roots() {
         let root = tempfile::tempdir().expect("artifact temp dir");
-        let pool = BytePool::default();
         let samples = [0.25, -0.25];
         let write = || {
             write_audio_artifact_to(
                 root.path(),
-                &pool,
                 "repeated-case",
                 48_000,
                 1,
@@ -396,8 +288,64 @@ mod tests {
         let first = write();
         let second = write();
 
-        assert_ne!(first.directory(), second.directory());
-        assert!(first.reader("mix.wav").is_some());
-        assert!(second.reader("mix.wav").is_some());
+        assert_ne!(first, second);
+        assert!(first.join("mix.wav").is_file());
+        assert!(second.join("mix.wav").is_file());
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn listening_dump_uses_exact_wav_filenames_without_a_manifest() {
+        let root = tempfile::tempdir().expect("artifact temp dir");
+        let samples = [0.25, -0.25];
+        let directory = write_audio_dump_to(
+            root.path(),
+            "legacy-listening-dump",
+            48_000,
+            1,
+            &[
+                ("01_deck_a_96bpm_sine", samples.as_slice()),
+                ("02_deck_b_128bpm_square", samples.as_slice()),
+                ("03_mix_on_a_120bpm_grid", samples.as_slice()),
+                ("04_mix_riding_120_to_126", samples.as_slice()),
+                ("05_mix_sweeping_90_to_145", samples.as_slice()),
+            ],
+        )
+        .expect("write WAV-only listening dump");
+
+        let filenames = fs::read_dir(&directory)
+            .expect("read listening dump directory")
+            .map(|entry| {
+                entry
+                    .expect("read listening dump entry")
+                    .file_name()
+                    .into_string()
+                    .expect("artifact filename is UTF-8")
+            })
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            filenames,
+            BTreeSet::from([
+                "01_deck_a_96bpm_sine.wav".to_owned(),
+                "02_deck_b_128bpm_square.wav".to_owned(),
+                "03_mix_on_a_120bpm_grid.wav".to_owned(),
+                "04_mix_riding_120_to_126.wav".to_owned(),
+                "05_mix_sweeping_90_to_145.wav".to_owned(),
+            ])
+        );
+        assert!(!directory.join("manifest.json").exists());
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn relative_artifact_root_is_rejected_before_writing() {
+        let error = write_audio_dump_to(
+            Path::new("relative-artifacts"),
+            "invalid-root",
+            48_000,
+            1,
+            &[],
+        )
+        .expect_err("artifact root must be absolute");
+
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
     }
 }

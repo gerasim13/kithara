@@ -1,16 +1,13 @@
+#[cfg(test)]
+use std::fs;
 use std::{
     collections::BTreeMap,
     io,
     path::{Path, PathBuf},
 };
 
-#[cfg(test)]
-use kithara::assets::AssetReader;
-use kithara::bufpool::BytePool;
 use serde::Serialize;
 
-#[cfg(test)]
-use crate::audio_artifact::WrittenAudioArtifact;
 use crate::{
     audio_artifact::{AUDIO_ARTIFACT_DIR_ENV, write_audio_artifact_to},
     cochlea::CochleaReport,
@@ -146,8 +143,6 @@ impl<'a> ArtifactAudio<'a> {
 pub struct WrittenSyncArtifact {
     directory: PathBuf,
     #[cfg(test)]
-    artifact: WrittenAudioArtifact,
-    #[cfg(test)]
     reports: BTreeMap<String, CochleaReport>,
 }
 
@@ -162,12 +157,6 @@ impl WrittenSyncArtifact {
     #[must_use]
     fn reports(&self) -> &BTreeMap<String, CochleaReport> {
         &self.reports
-    }
-
-    #[cfg(test)]
-    #[must_use]
-    fn reader(&self, name: &str) -> Option<&AssetReader> {
-        self.artifact.reader(name)
     }
 }
 
@@ -184,20 +173,23 @@ struct ManifestAudio {
     cochlea: CochleaReport,
 }
 
+/// Write sync evidence when the artifact directory is set.
+/// Returns `Ok(None)` when unset.
+///
+/// # Errors
+/// Returns an error for invalid audio, serialization, or filesystem failure.
 pub fn write_sync_artifact(
-    pool: &BytePool,
     metadata: &SyncArtifactMetadata,
     audio: &[ArtifactAudio<'_>],
 ) -> io::Result<Option<WrittenSyncArtifact>> {
     let Some(root) = std::env::var_os(AUDIO_ARTIFACT_DIR_ENV).map(PathBuf::from) else {
         return Ok(None);
     };
-    write_sync_artifact_to(&root, pool, metadata, audio).map(Some)
+    write_sync_artifact_to(&root, metadata, audio).map(Some)
 }
 
 fn write_sync_artifact_to(
     root: &Path,
-    pool: &BytePool,
     metadata: &SyncArtifactMetadata,
     audio: &[ArtifactAudio<'_>],
 ) -> io::Result<WrittenSyncArtifact> {
@@ -232,20 +224,16 @@ fn write_sync_artifact_to(
         .iter()
         .map(|(label, samples)| (label.as_str(), *samples))
         .collect::<Vec<_>>();
-    let artifact = write_audio_artifact_to(
+    let directory = write_audio_artifact_to(
         root,
-        pool,
         &sanitize_component(&metadata.case),
         metadata.sample_rate,
         metadata.channels,
         &artifact_audio,
         &manifest,
     )?;
-    let directory = artifact.directory().to_path_buf();
     Ok(WrittenSyncArtifact {
         directory,
-        #[cfg(test)]
-        artifact,
         #[cfg(test)]
         reports,
     })
@@ -306,7 +294,6 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::kithara::assets::ReadSide;
 
     #[kithara::test]
     fn artifact_bundle_writes_listenable_pcm_and_manifest() {
@@ -325,27 +312,17 @@ mod tests {
 
         let written = write_sync_artifact_to(
             root.path(),
-            &BytePool::default(),
             &metadata,
             &[ArtifactAudio::new("final mix", &pcm)],
         )
         .expect("write artifact bundle");
 
-        let mut wav = Vec::new();
-        written
-            .reader("final-mix.wav")
-            .expect("WAV reader")
-            .read_into(&mut wav)
-            .expect("read WAV through AssetStore");
+        let wav =
+            fs::read(written.directory().join("final-mix.wav")).expect("read direct WAV file");
         assert_eq!(&wav[..4], b"RIFF");
         assert_eq!(&wav[8..12], b"WAVE");
-        let mut manifest = Vec::new();
-        written
-            .reader("manifest.json")
-            .expect("manifest reader")
-            .read_into(&mut manifest)
-            .expect("read manifest through AssetStore");
-        let manifest = String::from_utf8(manifest).expect("manifest UTF-8");
+        let manifest = fs::read_to_string(written.directory().join("manifest.json"))
+            .expect("read direct manifest file");
         assert!(manifest.contains("local-hls"));
         assert!(manifest.contains("sync_frame_budget"));
         assert!(manifest.contains("example red verdict"));
@@ -357,23 +334,15 @@ mod tests {
         let root = tempfile::tempdir().expect("artifact temp dir");
         let metadata = SyncArtifactMetadata::new("same-case", 48_000, 2, 512);
         let pcm = vec![0.0; 1_024];
-        let first = write_sync_artifact_to(
-            root.path(),
-            &BytePool::default(),
-            &metadata,
-            &[ArtifactAudio::new("mix", &pcm)],
-        )
-        .expect("first artifact");
-        let second = write_sync_artifact_to(
-            root.path(),
-            &BytePool::default(),
-            &metadata,
-            &[ArtifactAudio::new("mix", &pcm)],
-        )
-        .expect("second artifact");
+        let first =
+            write_sync_artifact_to(root.path(), &metadata, &[ArtifactAudio::new("mix", &pcm)])
+                .expect("first artifact");
+        let second =
+            write_sync_artifact_to(root.path(), &metadata, &[ArtifactAudio::new("mix", &pcm)])
+                .expect("second artifact");
 
         assert_ne!(first.directory(), second.directory());
-        assert!(first.reader("mix.wav").is_some());
-        assert!(second.reader("mix.wav").is_some());
+        assert!(first.directory().join("mix.wav").is_file());
+        assert!(second.directory().join("mix.wav").is_file());
     }
 }
