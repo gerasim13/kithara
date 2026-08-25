@@ -29,6 +29,18 @@ pub fn frames_for_duration(sample_rate: u32, duration: Duration) -> usize {
     usize::try_from(frames).unwrap_or(usize::MAX)
 }
 
+/// Absolute sample frame a PTS falls on. Rounds the sub-second part to the
+/// nearest frame (half-up) so this map stays consistent with PCM head trimming.
+#[must_use]
+pub(crate) fn frame_offset_for(at: Duration, sample_rate: u32) -> u64 {
+    let secs = at.as_secs();
+    let subsec_frames = (u64::from(at.subsec_nanos()) * u64::from(sample_rate))
+        .saturating_add(500_000_000)
+        / 1_000_000_000;
+    secs.saturating_mul(u64::from(sample_rate))
+        .saturating_add(subsec_frames)
+}
+
 #[cfg(test)]
 mod tests {
     use kithara_platform::time::Duration;
