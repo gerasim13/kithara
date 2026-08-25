@@ -62,6 +62,19 @@ underran worker re-ticks the instant bytes land); sources whose data is always
 resident have neither. `take_reader_event_sink` must return a **fresh** sink on
 every call — decoder recreation (ABR / format change) needs a clean state cursor.
 
+`probe` is the narrow byte-space handle (`SourceProbe`): phase, cursor
+(`position`/`set_position`), `len`, and `byte_map` behind an `Arc`, so a caller
+that keeps `Stream` behind a mutex (the audio worker's shared stream) serves its
+real-time polls and cursor moves without that lock — an off-thread holder parked
+in a blocking `read`/`seek` would otherwise turn the poll into a wait.
+Implementations answer from self-synchronizing state (HLS: the coord; file: the
+shared inner) and must not take locks a reader wait can hold — the file probe's
+`phase_at` and `len` may take the storage gate lock on the uncommitted path, a
+short acquire the storage wait releases before parking, never one held across a
+wait. `resolve_seek_target` is the shared cursor math: `Stream::seek` and the
+probe-side `probe_seek` resolve a `SeekFrom` against the same position/length
+answers.
+
 ## End-of-stream contract
 
 `Stream::try_read` surfaces `StreamReadOutcome::Eof` only from a `Source` proving
