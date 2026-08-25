@@ -16,7 +16,9 @@ use kithara::platform::{
 /// A backstop, not a scheduling budget. The gate tests assert that a signal
 /// published after the waiter's snapshot wakes that waiter; a correct gate
 /// returns as soon as the signal lands, so this deadline never becomes runtime.
-/// It only has to outlive thread scheduling on a loaded host.
+/// Under the flash engine the deadline is virtual: the clock jumps straight to
+/// it whenever every engine-visible thread is parked, so any thread the waiter
+/// depends on must be spawned with `thread::spawn_named` to stay visible.
 #[cfg(feature = "flash")]
 const SIGNAL_BACKSTOP: Duration = Duration::from_secs(5);
 
@@ -135,7 +137,7 @@ fn thread_gate_refreshes_waiter_after_thread_handoff() {
         second_gate.wait_timeout(since, SIGNAL_BACKSTOP)
     });
 
-    let signaller = thread::spawn(move || {
+    let signaller = thread::spawn_named("threadgate-handoff-signaller", move || {
         assert_eq!(snapshot_rx.recv(), Ok(()));
         gate.signal();
     });
