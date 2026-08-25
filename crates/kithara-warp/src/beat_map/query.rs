@@ -1,9 +1,13 @@
 use super::{
-    Beat, BeatEstimate, BeatEvidence, BeatMapGeometry, BeatMapId, BeatMapRevision, BeatMapSnapshot,
-    BeatsPerMinute, FrameUncertainty, MapAxis, MapPoint, MapPosition, MapQuery, MapRegion,
-    MapStamp, MapState, MapUnavailable, Meter, SECONDS_PER_MINUTE, SegmentSet, SessionBeat,
-    SessionFrame,
+    BeatEstimate, BeatMapGeometry, BeatMapId, BeatMapRevision, BeatMapSnapshot, MapQuery, MapStamp,
+    MapState, MapUnavailable,
 };
+use crate::{
+    Beat, BeatEvidence, BeatsPerMinute, FrameUncertainty, MapAxis, MapPoint, MapPosition,
+    MapRegion, Meter, SegmentSet, SessionBeat, SessionFrame,
+};
+
+const SECONDS_PER_MINUTE: f64 = 60.0;
 
 impl BeatMapSnapshot {
     delegate::delegate! {

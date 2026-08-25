@@ -6,11 +6,10 @@ mod anchor;
 mod beat_map;
 mod coordinate;
 mod host;
-mod map;
 mod segment;
 mod sync;
 
-pub use anchor::{SessionAnchor, SessionBeat, SessionFrame};
+pub use anchor::{CoordinateError, SessionAnchor, SessionBeat, SessionFrame};
 pub use beat_map::{
     BeatEstimate, BeatMap, BeatMapId, BeatMapIdAllocationError, BeatMapRevision, BeatMapSnapshot,
     BeatMapSnapshotError, MapQuery, MapStamp, MapState, MapUnavailable,
@@ -21,7 +20,6 @@ pub use coordinate::{
     MapCoordinateError, MapPoint, MapPosition,
 };
 pub use host::HostBeatMap;
-pub use map::CoordinateError;
 pub use segment::{
     BeatEvidence, BeatMarker, BeatsPerMinute, MapRegion, MapSegment, Meter, MeterError, MeterFacts,
     SegmentEndpoint, SegmentError, SegmentFacts, SegmentSet,
