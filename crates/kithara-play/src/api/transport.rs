@@ -1,5 +1,5 @@
 use kithara_warp::{
-    HostBeatMap, HostEpoch, MapStamp, SessionAnchor, SessionBeat, TransportRevision,
+    BeatGridSnapshot, BeatGridStamp, SessionAnchor, SessionBeat, SessionEpoch, TransportRevision,
 };
 
 const SECONDS_PER_MINUTE: f64 = 60.0;
@@ -63,15 +63,15 @@ pub struct TempoError {
 #[fieldwork(get)]
 #[non_exhaustive]
 pub struct SessionTransportSnapshot {
-    /// Session-clock relation used to construct the public host-map view.
+    /// Session-clock relation used to construct the public session-grid view.
     #[field(skip)]
     anchor: SessionAnchor,
-    /// Returns the host-map generation defining the live frame axis.
+    /// Returns the session-grid generation defining the live frame axis.
     #[field(get, copy)]
-    host_epoch: HostEpoch,
-    /// Returns the exact host-map identity and geometry revision.
+    session_epoch: SessionEpoch,
+    /// Returns the exact session-grid identity and geometry revision.
     #[field(get, copy)]
-    host_map_stamp: MapStamp,
+    session_grid_stamp: BeatGridStamp,
     /// Returns the processed position on the session beat grid.
     #[field(get, copy)]
     position: SessionBeat,
@@ -93,13 +93,13 @@ impl SessionTransportSnapshot {
         tempo: Tempo,
         revision: TransportRevision,
         anchor: SessionAnchor,
-        host_map_stamp: MapStamp,
-        host_epoch: HostEpoch,
+        session_grid_stamp: BeatGridStamp,
+        session_epoch: SessionEpoch,
     ) -> Self {
         Self {
             anchor,
-            host_epoch,
-            host_map_stamp,
+            session_epoch,
+            session_grid_stamp,
             position,
             tempo,
             revision,
@@ -107,17 +107,17 @@ impl SessionTransportSnapshot {
         }
     }
 
-    /// Builds a read-only host map from this single atomic observation.
+    /// Builds a read-only session grid from this single atomic observation.
     ///
     /// Construction happens on the control side after reading the Copy-only
     /// transport snapshot; the audio callback never publishes or drops an
-    /// allocated map handle.
+    /// allocated grid handle.
     #[must_use]
-    pub fn host_map(self) -> HostBeatMap {
-        HostBeatMap::new(
-            self.host_map_stamp.map_id(),
-            self.host_map_stamp.revision(),
-            self.host_epoch,
+    pub fn session_grid(self) -> BeatGridSnapshot {
+        BeatGridSnapshot::session(
+            self.session_grid_stamp.grid_id(),
+            self.session_grid_stamp.revision(),
+            self.session_epoch,
             self.anchor,
             None,
         )
@@ -135,7 +135,8 @@ mod tests {
 
     use kithara_test_utils::kithara;
     use kithara_warp::{
-        BeatMapId, BeatMapRevision, HostEpoch, MapStamp, SessionAnchor, SessionBeat, SessionFrame,
+        BeatGridId, BeatGridRevision, BeatGridStamp, SessionAnchor, SessionBeat, SessionEpoch,
+        SessionFrame,
     };
 
     use super::{SessionTransportSnapshot, Tempo, TransportRevision};
@@ -155,11 +156,12 @@ mod tests {
             Tempo::new(120.0).expect("invariant: fixture tempo is in range"),
             TransportRevision::first(),
             anchor,
-            MapStamp::new(
-                BeatMapId::allocate().expect("invariant: fixture map identity space is available"),
-                BeatMapRevision::first(),
+            BeatGridStamp::new(
+                BeatGridId::allocate()
+                    .expect("invariant: fixture grid identity space is available"),
+                BeatGridRevision::first(),
             ),
-            HostEpoch::new(0),
+            SessionEpoch::new(0),
         );
         let target = SessionBeat::new(11.0).expect("invariant: fixture target is finite");
 

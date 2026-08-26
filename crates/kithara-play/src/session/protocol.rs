@@ -4,7 +4,7 @@ mod wire {
     use kithara_bufpool::PcmPool;
     use kithara_events::EventBus;
     use kithara_platform::sync::mpsc;
-    use kithara_warp::{BeatMapIdAllocationError, SyncError};
+    use kithara_warp::{BeatGridIdAllocationError, SyncError};
 
     use crate::{
         api::{SessionBeat, SessionDuckingMode, SessionTransportSnapshot, SlotId, Tempo},
@@ -58,7 +58,7 @@ mod wire {
         #[error(transparent)]
         Sync(#[from] SyncError),
         #[error(transparent)]
-        BeatMapIdAllocation(#[from] BeatMapIdAllocationError),
+        BeatGridIdAllocation(#[from] BeatGridIdAllocationError),
         #[error("stream stopped: {reason}; restart failed: {source}")]
         RestartFailed { reason: String, r#source: String },
     }
@@ -167,7 +167,7 @@ mod wire {
     #[derive(Clone, Copy)]
     #[non_exhaustive]
     pub struct SessionSampleRate {
-        /// The rate the output stream runs at, once a stream exists.
+        /// The current Firewheel output rate; `None` means no output is measured.
         pub measured: Option<u32>,
         /// The rate the session last asked the device for.
         pub requested: u32,

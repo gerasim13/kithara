@@ -1,8 +1,8 @@
 use super::{
-    AlignmentPlanRevision, LoadGeneration, PresentationFrontier, SyncOperationId, TopologyStamp,
-    TransportRevision,
+    LoadGeneration, PresentationFrontier, SyncOperationId, TopologyStamp, TransportRevision,
+    WarpMapRevision,
 };
-use crate::MapStamp;
+use crate::BeatGridStamp;
 
 /// An audible acknowledgement tied to every admission axis.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, fieldwork::Fieldwork)]
@@ -12,21 +12,21 @@ pub struct SyncApplied {
     /// Synchronization operation whose activation became audible.
     #[field(get, copy)]
     operation: SyncOperationId,
-    /// Track load for which the plan was admitted.
+    /// Track load for which the warp map was admitted.
     #[field(get, copy)]
     load: LoadGeneration,
-    /// Exact group-map identity and revision used by the plan.
+    /// Exact group-grid identity and revision used by the warp map.
     #[field(get, copy)]
-    group: MapStamp,
-    /// Exact ownership tree used by the plan.
+    group: BeatGridStamp,
+    /// Exact ownership tree used by the warp map.
     #[field(get, copy)]
     topology: TopologyStamp,
-    /// Exact session transport state used by the plan.
+    /// Exact session transport state used by the warp map.
     #[field(get, copy)]
     transport: TransportRevision,
-    /// Exact immutable alignment plan consumed by the callback.
+    /// Exact immutable warp map consumed by the callback.
     #[field(get, copy)]
-    plan: AlignmentPlanRevision,
+    warp_map: WarpMapRevision,
     /// Actual source/output frontier consumed by the callback.
     #[field(get, copy)]
     frontier: PresentationFrontier,

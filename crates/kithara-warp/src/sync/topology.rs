@@ -3,7 +3,7 @@ use std::collections::BTreeSet;
 use kithara_platform::sync::Arc;
 
 use super::{BeatAlignment, TopologyRevision, TopologyStamp};
-use crate::{BeatMapId, BeatMapSnapshot, MapStamp};
+use crate::{BeatGridId, BeatGridSnapshot, BeatGridStamp};
 
 /// One immutable observation of a direct live member.
 #[derive(Clone, Debug, PartialEq, fieldwork::Fieldwork)]
@@ -13,21 +13,21 @@ pub struct SyncMemberSnapshot {
     /// Returns the alignment edge from the direct parent.
     #[field(get, copy)]
     alignment: Option<BeatAlignment>,
-    /// Returns the direct member's frozen map.
+    /// Returns the direct member's frozen grid.
     #[field(get)]
-    map: BeatMapSnapshot,
+    grid: BeatGridSnapshot,
     /// Returns the frozen nested topology when this member is a group.
     #[field(get = group_topology)]
     group: Option<SyncGroupSnapshot>,
 }
 
 impl SyncMemberSnapshot {
-    /// Freezes one ordinary map edge, including a pending edge without alignment.
+    /// Freezes one ordinary grid edge, including a pending edge without alignment.
     #[must_use]
-    pub const fn new_map(map: BeatMapSnapshot, alignment: Option<BeatAlignment>) -> Self {
+    pub const fn new_grid(grid: BeatGridSnapshot, alignment: Option<BeatAlignment>) -> Self {
         Self {
             alignment,
-            map,
+            grid,
             group: None,
         }
     }
@@ -37,20 +37,20 @@ impl SyncMemberSnapshot {
     pub fn new_group(group: SyncGroupSnapshot, alignment: Option<BeatAlignment>) -> Self {
         Self {
             alignment,
-            map: group.group_map.clone(),
+            grid: group.group_grid.clone(),
             group: Some(group),
         }
     }
 }
 
-/// One immutable observation of a synchronization group's map and members.
+/// One immutable observation of a synchronization group's grid and members.
 #[derive(Clone, Debug, PartialEq, fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
 #[non_exhaustive]
 pub struct SyncGroupSnapshot {
     /// Returns the group's authoritative musical-coordinate snapshot.
     #[field(get)]
-    group_map: BeatMapSnapshot,
+    group_grid: BeatGridSnapshot,
     /// Returns the topology identity and revision.
     #[field(get, copy)]
     stamp: TopologyStamp,
@@ -64,10 +64,10 @@ impl SyncGroupSnapshot {
     ///
     /// # Errors
     ///
-    /// Returns [`SyncGroupTopologyError`] when an edge uses stale map stamps,
+    /// Returns [`SyncGroupTopologyError`] when an edge uses stale grid stamps,
     /// repeats a member, or makes the tree recursive.
     pub fn try_new<I>(
-        group_map: BeatMapSnapshot,
+        group_grid: BeatGridSnapshot,
         revision: TopologyRevision,
         members: I,
     ) -> Result<Self, SyncGroupTopologyError>
@@ -75,11 +75,11 @@ impl SyncGroupSnapshot {
         I: IntoIterator<Item = SyncMemberSnapshot>,
     {
         let members: Arc<[SyncMemberSnapshot]> = members.into_iter().collect();
-        validate_edges(&group_map, &members)?;
-        validate_tree(group_map.id(), &members)?;
+        validate_edges(&group_grid, &members)?;
+        validate_tree(group_grid.id(), &members)?;
         Ok(Self {
-            stamp: TopologyStamp::new(group_map.id(), revision),
-            group_map,
+            stamp: TopologyStamp::new(group_grid.id(), revision),
+            group_grid,
             members,
         })
     }
@@ -89,46 +89,52 @@ impl SyncGroupSnapshot {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
 #[non_exhaustive]
 pub enum SyncGroupTopologyError {
-    /// A direct ordinary member is the group map itself.
-    #[error("group map {group_id} cannot be its own member")]
-    SelfMember { group_id: BeatMapId },
+    /// A direct ordinary member is the group grid itself.
+    #[error("group grid {group_id} cannot be its own member")]
+    SelfMember { group_id: BeatGridId },
     /// A nested path returns to an ancestor group.
-    #[error("nested group path returns to ancestor map {group_id}")]
-    Cycle { group_id: BeatMapId },
+    #[error("nested group path returns to ancestor grid {group_id}")]
+    Cycle { group_id: BeatGridId },
     /// One nested group appears below more than one parent edge.
     #[error("nested group {group_id} has multiple parent edges")]
-    MultipleParents { group_id: BeatMapId },
-    /// One ordinary map appears more than once in the same topology tree.
-    #[error("leaf map {member_id} appears more than once")]
-    DuplicateLeaf { member_id: BeatMapId },
-    /// One map identity appears as both a nested group and an ordinary leaf.
-    #[error("map {member_id} appears as both a group and a leaf")]
-    ConflictingMemberKind { member_id: BeatMapId },
-    /// The alignment's target point belongs to another map revision.
+    MultipleParents { group_id: BeatGridId },
+    /// One ordinary grid appears more than once in the same topology tree.
+    #[error("leaf grid {member_id} appears more than once")]
+    DuplicateLeaf { member_id: BeatGridId },
+    /// One grid identity appears as both a nested group and an ordinary leaf.
+    #[error("grid {member_id} appears as both a group and a leaf")]
+    ConflictingMemberKind { member_id: BeatGridId },
+    /// The alignment's target point belongs to another grid revision.
     #[error("alignment target stamp is {given:?}, expected {expected:?}")]
-    StaleTargetAlignment { expected: MapStamp, given: MapStamp },
-    /// The alignment's source point belongs to another map revision.
+    StaleTargetAlignment {
+        expected: BeatGridStamp,
+        given: BeatGridStamp,
+    },
+    /// The alignment's source point belongs to another grid revision.
     #[error("alignment source stamp is {given:?}, expected {expected:?}")]
-    StaleSourceAlignment { expected: MapStamp, given: MapStamp },
+    StaleSourceAlignment {
+        expected: BeatGridStamp,
+        given: BeatGridStamp,
+    },
 }
 
 fn validate_edges(
-    group_map: &BeatMapSnapshot,
+    group_grid: &BeatGridSnapshot,
     members: &[SyncMemberSnapshot],
 ) -> Result<(), SyncGroupTopologyError> {
     for member in members {
         if let Some(alignment) = member.alignment {
             let target_stamp = alignment.target().stamp();
-            if target_stamp != group_map.stamp() {
+            if target_stamp != group_grid.stamp() {
                 return Err(SyncGroupTopologyError::StaleTargetAlignment {
-                    expected: group_map.stamp(),
+                    expected: group_grid.stamp(),
                     given: target_stamp,
                 });
             }
             let source_stamp = alignment.source().stamp();
-            if source_stamp != member.map.stamp() {
+            if source_stamp != member.grid.stamp() {
                 return Err(SyncGroupTopologyError::StaleSourceAlignment {
-                    expected: member.map.stamp(),
+                    expected: member.grid.stamp(),
                     given: source_stamp,
                 });
             }
@@ -138,7 +144,7 @@ fn validate_edges(
 }
 
 fn validate_tree(
-    root: BeatMapId,
+    root: BeatGridId,
     members: &[SyncMemberSnapshot],
 ) -> Result<(), SyncGroupTopologyError> {
     let mut groups = BTreeSet::from([root]);
@@ -146,10 +152,10 @@ fn validate_tree(
     for member in members {
         match member.group_topology() {
             Some(group) => visit_group(group, root, &mut groups, &mut leaves)?,
-            None if member.map.id() == root => {
+            None if member.grid.id() == root => {
                 return Err(SyncGroupTopologyError::SelfMember { group_id: root });
             }
-            None => visit_leaf(member.map.id(), &groups, &mut leaves)?,
+            None => visit_leaf(member.grid.id(), &groups, &mut leaves)?,
         }
     }
     Ok(())
@@ -157,11 +163,11 @@ fn validate_tree(
 
 fn visit_group(
     group: &SyncGroupSnapshot,
-    root: BeatMapId,
-    groups: &mut BTreeSet<BeatMapId>,
-    leaves: &mut BTreeSet<BeatMapId>,
+    root: BeatGridId,
+    groups: &mut BTreeSet<BeatGridId>,
+    leaves: &mut BTreeSet<BeatGridId>,
 ) -> Result<(), SyncGroupTopologyError> {
-    let group_id = group.group_map.id();
+    let group_id = group.group_grid.id();
     if group_id == root {
         return Err(SyncGroupTopologyError::Cycle { group_id });
     }
@@ -176,19 +182,19 @@ fn visit_group(
     for member in group.members() {
         match member.group_topology() {
             Some(child) => visit_group(child, root, groups, leaves)?,
-            None if member.map.id() == root => {
+            None if member.grid.id() == root => {
                 return Err(SyncGroupTopologyError::Cycle { group_id: root });
             }
-            None => visit_leaf(member.map.id(), groups, leaves)?,
+            None => visit_leaf(member.grid.id(), groups, leaves)?,
         }
     }
     Ok(())
 }
 
 fn visit_leaf(
-    member_id: BeatMapId,
-    groups: &BTreeSet<BeatMapId>,
-    leaves: &mut BTreeSet<BeatMapId>,
+    member_id: BeatGridId,
+    groups: &BTreeSet<BeatGridId>,
+    leaves: &mut BTreeSet<BeatGridId>,
 ) -> Result<(), SyncGroupTopologyError> {
     if groups.contains(&member_id) {
         return Err(SyncGroupTopologyError::ConflictingMemberKind { member_id });

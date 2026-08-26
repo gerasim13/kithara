@@ -1,28 +1,30 @@
 use super::{
-    AlignmentPlanRevision, SyncAdmission, SyncApplied, SyncCapability, SyncGroupSnapshot,
-    SyncGroupTopologyError, SyncMemberKind, SyncOperation, SyncOperationId, SyncRejected,
-    TopologyStamp,
+    SyncAdmission, SyncApplied, SyncCapability, SyncGroupSnapshot, SyncGroupTopologyError,
+    SyncMemberKind, SyncOperation, SyncOperationId, SyncRejected, TopologyStamp, WarpMapRevision,
 };
-use crate::{BeatMap, BeatMapId, BeatMapSnapshotError, MapRegion, MapStamp, SessionFrame};
+use crate::{
+    BeatGrid, BeatGridId, BeatGridSnapshotError, BeatGridStamp, BeatGridState, MapAxis, MapRegion,
+    SessionFrame,
+};
 
 /// Canonical synchronization state observed from one live group.
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[must_use]
 #[non_exhaustive]
 pub enum SyncStatusSnapshot {
-    /// Host correction is disabled inside the resident signal path.
+    /// Parent-group correction is disabled inside the resident signal path.
     Off { topology: TopologyStamp },
-    /// The requested alignment needs map coverage not yet published.
-    WaitingForMap {
+    /// The requested alignment needs grid coverage not yet published.
+    WaitingForGrid {
         operation: SyncOperationId,
         topology: TopologyStamp,
         required: MapRegion,
     },
-    /// A plan is admitted but its activation has not been acknowledged.
+    /// A warp map is admitted but its activation has not been acknowledged.
     Prepared {
         operation: SyncOperationId,
         topology: TopologyStamp,
-        plan: AlignmentPlanRevision,
+        warp_map: WarpMapRevision,
         activation: SessionFrame,
     },
     /// The requested behavior is not implemented by the current group.
@@ -58,39 +60,54 @@ pub enum SyncError {
     },
     /// No live group with the requested identity exists in this tree.
     #[error("synchronization group {group_id} was not found")]
-    GroupNotFound { group_id: BeatMapId },
-    /// A live map snapshot or publication belongs to another stable owner.
-    #[error("map identity is {given}, expected {expected}")]
-    MapIdentityMismatch {
-        expected: BeatMapId,
-        given: BeatMapId,
+    GroupNotFound { group_id: BeatGridId },
+    /// A live grid snapshot or publication belongs to another stable owner.
+    #[error("grid identity is {given}, expected {expected}")]
+    GridIdentityMismatch {
+        expected: BeatGridId,
+        given: BeatGridId,
     },
-    /// A group-map publication did not advance the owner's current revision.
-    #[error("group map publication {given:?} does not advance {current:?}")]
-    StaleMapRevision { current: MapStamp, given: MapStamp },
-    /// A map owner attempted an invalid immutable snapshot transition.
+    /// A group-grid publication did not advance the owner's current revision.
+    #[error("group grid publication {given:?} does not advance {current:?}")]
+    StaleGridRevision {
+        current: BeatGridStamp,
+        given: BeatGridStamp,
+    },
+    /// A group-grid publication changed its native axis outside a session restart.
+    #[error("group grid publication changed axis from {expected:?} to {given:?}")]
+    GridAxisChanged { expected: MapAxis, given: MapAxis },
+    /// A group grid used a bounded-analysis lifecycle state.
+    #[error("state {state:?} is invalid for a synchronization-group grid")]
+    InvalidGroupGridState { state: BeatGridState },
+    /// A group-grid lifecycle change requires a new session epoch.
+    #[error("group grid cannot transition from {from:?} to {to:?} in one session epoch")]
+    InvalidGroupGridTransition {
+        from: BeatGridState,
+        to: BeatGridState,
+    },
+    /// A grid owner attempted an invalid immutable snapshot transition.
     #[error(transparent)]
-    BeatMapSnapshot(#[from] BeatMapSnapshotError),
+    BeatGridSnapshot(#[from] BeatGridSnapshotError),
     /// No direct member with the requested identity exists in this group.
     #[error("member {member_id} was not found in group {group_id}")]
     MemberNotFound {
-        group_id: BeatMapId,
-        member_id: BeatMapId,
+        group_id: BeatGridId,
+        member_id: BeatGridId,
     },
     /// A group policy does not admit this category of direct member.
     #[error("member {member_id} in group {group_id} has kind {given:?}, expected {expected:?}")]
     InvalidMemberKind {
-        group_id: BeatMapId,
-        member_id: BeatMapId,
+        group_id: BeatGridId,
+        member_id: BeatGridId,
         expected: SyncMemberKind,
         given: SyncMemberKind,
     },
     /// A topology owner cannot mint another revision.
     #[error("topology revision space is exhausted for group {group_id}")]
-    TopologyRevisionExhausted { group_id: BeatMapId },
+    TopologyRevisionExhausted { group_id: BeatGridId },
     /// A group owner cannot mint another operation identity.
     #[error("synchronization operation identity space is exhausted for group {group_id}")]
-    OperationIdExhausted { group_id: BeatMapId },
+    OperationIdExhausted { group_id: BeatGridId },
     /// No prepared renderer operation can accept an acknowledgement.
     #[error("synchronization group has no prepared operation")]
     NoPreparedOperation,
@@ -103,7 +120,7 @@ pub enum SyncError {
         expected: SyncOperationId,
         given: SyncOperationId,
     },
-    /// One or more renderer acknowledgement stamps do not match the prepared plan.
+    /// One or more renderer acknowledgement stamps do not match the prepared warp map.
     #[error("renderer acknowledgement {given:?} does not match {expected:?}")]
     AppliedMismatch {
         expected: Box<SyncApplied>,
@@ -114,11 +131,11 @@ pub enum SyncError {
     Topology(#[from] SyncGroupTopologyError),
 }
 
-/// Live owner protocol for a recursive group of musical maps.
+/// Live owner protocol for a recursive group of beat grids.
 ///
-/// The topology's group-map stamp must equal `snapshot().stamp()`, and its
+/// The topology's group-grid stamp must equal `snapshot().stamp()`, and its
 /// group identity must equal `id()`.
-pub trait SyncGroup: BeatMap {
+pub trait SyncGroup: BeatGrid {
     /// Concrete synchronization-group type accepted as a direct child.
     type NestedGroup: SyncGroup;
 

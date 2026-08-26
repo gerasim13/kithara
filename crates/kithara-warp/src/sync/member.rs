@@ -3,21 +3,21 @@ use std::fmt;
 use super::{
     BeatAlignment, SyncError, SyncGroup, SyncGroupTopologyError, SyncMemberKind, SyncMemberSnapshot,
 };
-use crate::{BeatMap, BeatMapId, BeatMapSnapshot, MapPoint, MapStamp};
+use crate::{BeatGrid, BeatGridId, BeatGridSnapshot, BeatGridStamp, MapPoint};
 
-/// One exclusively owned live map or statically typed nested synchronization group.
+/// One exclusively owned live grid or statically typed nested synchronization group.
 pub enum SyncMember<G: SyncGroup> {
-    /// A readable live map.
-    Map {
-        /// Alignment from this member to its direct parent, once both maps
+    /// A readable live grid.
+    Grid {
+        /// Alignment from this member to its direct parent, once both grids
         /// expose usable geometry.
         alignment: Option<BeatAlignment>,
-        /// Live map handle owned by the parent group.
-        map: Box<dyn BeatMap>,
+        /// Live grid handle owned by the parent group.
+        grid: Box<dyn BeatGrid>,
     },
     /// A live nested synchronization group.
     Group {
-        /// Alignment from this member to its direct parent, once both maps
+        /// Alignment from this member to its direct parent, once both grids
         /// expose usable geometry.
         alignment: Option<BeatAlignment>,
         /// Live group owned by the parent group.
@@ -28,10 +28,10 @@ pub enum SyncMember<G: SyncGroup> {
 impl<G: SyncGroup> fmt::Debug for SyncMember<G> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Map { alignment, map } => formatter
-                .debug_struct("SyncMember::Map")
+            Self::Grid { alignment, grid } => formatter
+                .debug_struct("SyncMember::Grid")
                 .field("alignment", alignment)
-                .field("map_id", &map.id())
+                .field("grid_id", &grid.id())
                 .finish(),
             Self::Group { alignment, group } => formatter
                 .debug_struct("SyncMember::Group")
@@ -45,7 +45,7 @@ impl<G: SyncGroup> fmt::Debug for SyncMember<G> {
 impl<G: SyncGroup> SyncMember<G> {
     /// Returns the stable identity of this live member.
     #[must_use]
-    pub fn id(&self) -> BeatMapId {
+    pub fn id(&self) -> BeatGridId {
         self.into()
     }
 
@@ -53,15 +53,15 @@ impl<G: SyncGroup> SyncMember<G> {
     #[must_use]
     pub const fn alignment(&self) -> Option<BeatAlignment> {
         match self {
-            Self::Map { alignment, .. } | Self::Group { alignment, .. } => *alignment,
+            Self::Grid { alignment, .. } | Self::Group { alignment, .. } => *alignment,
         }
     }
 
-    /// Returns whether this member is an ordinary map or a nested group.
+    /// Returns whether this member is an ordinary grid or a nested group.
     #[must_use]
     pub const fn kind(&self) -> SyncMemberKind {
         match self {
-            Self::Map { .. } => SyncMemberKind::Map,
+            Self::Grid { .. } => SyncMemberKind::Grid,
             Self::Group { .. } => SyncMemberKind::Group,
         }
     }
@@ -72,41 +72,41 @@ impl<G: SyncGroup> SyncMember<G> {
     /// # Errors
     ///
     /// Returns [`SyncError`] for an identity or nested-topology violation.
-    pub fn snapshot_for(&self, parent: &BeatMapSnapshot) -> Result<SyncMemberSnapshot, SyncError> {
+    pub fn snapshot_for(&self, parent: &BeatGridSnapshot) -> Result<SyncMemberSnapshot, SyncError> {
         match self {
-            Self::Map { alignment, map } => {
-                let expected = map.id();
-                let map = map.snapshot();
-                if map.id() != expected {
-                    return Err(SyncError::MapIdentityMismatch {
+            Self::Grid { alignment, grid } => {
+                let expected = grid.id();
+                let grid = grid.snapshot();
+                if grid.id() != expected {
+                    return Err(SyncError::GridIdentityMismatch {
                         expected,
-                        given: map.id(),
+                        given: grid.id(),
                     });
                 }
-                let alignment = restamp_alignment(*alignment, map.stamp(), parent.stamp())?;
-                Ok(SyncMemberSnapshot::new_map(map, alignment))
+                let alignment = restamp_alignment(*alignment, grid.stamp(), parent.stamp())?;
+                Ok(SyncMemberSnapshot::new_grid(grid, alignment))
             }
             Self::Group { alignment, group } => {
                 let expected = group.id();
                 let group = group.topology()?;
                 if group.stamp().group_id() != expected {
-                    return Err(SyncError::MapIdentityMismatch {
+                    return Err(SyncError::GridIdentityMismatch {
                         expected,
                         given: group.stamp().group_id(),
                     });
                 }
                 let alignment =
-                    restamp_alignment(*alignment, group.group_map().stamp(), parent.stamp())?;
+                    restamp_alignment(*alignment, group.group_grid().stamp(), parent.stamp())?;
                 Ok(SyncMemberSnapshot::new_group(group, alignment))
             }
         }
     }
 }
 
-impl<G: SyncGroup> From<&SyncMember<G>> for BeatMapId {
+impl<G: SyncGroup> From<&SyncMember<G>> for BeatGridId {
     fn from(member: &SyncMember<G>) -> Self {
         match member {
-            SyncMember::Map { map, .. } => map.id(),
+            SyncMember::Grid { grid, .. } => grid.id(),
             SyncMember::Group { group, .. } => group.id(),
         }
     }
@@ -114,13 +114,13 @@ impl<G: SyncGroup> From<&SyncMember<G>> for BeatMapId {
 
 fn restamp_alignment(
     alignment: Option<BeatAlignment>,
-    source: MapStamp,
-    target: MapStamp,
+    source: BeatGridStamp,
+    target: BeatGridStamp,
 ) -> Result<Option<BeatAlignment>, SyncError> {
     alignment
         .map(|alignment| {
             let given_source = alignment.source().stamp();
-            if given_source.map_id() != source.map_id() {
+            if given_source.grid_id() != source.grid_id() {
                 return Err(SyncGroupTopologyError::StaleSourceAlignment {
                     expected: source,
                     given: given_source,
@@ -128,7 +128,7 @@ fn restamp_alignment(
                 .into());
             }
             let given_target = alignment.target().stamp();
-            if given_target.map_id() != target.map_id() {
+            if given_target.grid_id() != target.grid_id() {
                 return Err(SyncGroupTopologyError::StaleTargetAlignment {
                     expected: target,
                     given: given_target,

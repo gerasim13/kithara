@@ -8,7 +8,7 @@ use kithara_warp::{SessionAnchor, SessionBeat, SessionFrame};
 use triple_buffer::Input;
 
 use super::commit::{
-    HostMapGeneration, SessionTransportCommit, TransportBoundary, TransportCommitEvent,
+    SessionGridGeneration, SessionTransportCommit, TransportBoundary, TransportCommitEvent,
     TransportCommitResult, TransportCommitStamp, TransportObservation, TransportProcessError,
 };
 use crate::api::{SessionTransportSnapshot, Tempo, TransportRevision};
@@ -28,7 +28,7 @@ pub(crate) struct TransportCommitState {
     pending: Option<TransportCommitStamp>,
     reanchor_beat: Option<SessionBeat>,
     snapshot: Option<SessionTransportSnapshot>,
-    host_map: HostMapGeneration,
+    session_grid: SessionGridGeneration,
 }
 
 #[derive(Debug)]
@@ -76,12 +76,24 @@ pub(crate) fn restart_transport(store: &mut ProcStore) -> Result<(), TransportPr
     result
 }
 
+pub(crate) fn converge_transport_restart(
+    store: &mut ProcStore,
+    target: SessionGridGeneration,
+) -> Result<SessionGridGeneration, TransportProcessError> {
+    let result = store
+        .try_get_mut::<TransportCommitState>()
+        .ok_or(TransportProcessError::MissingState)?
+        .converge_restart(target);
+    publish_observation(store)?;
+    result
+}
+
 fn publish_observation(store: &mut ProcStore) -> Result<(), TransportProcessError> {
     let observation = {
         let state = store
             .try_get::<TransportCommitState>()
             .ok_or(TransportProcessError::MissingState)?;
-        TransportObservation::new(state.completion, state.snapshot, state.host_map)
+        TransportObservation::new(state.completion, state.snapshot, state.session_grid)
     };
     store
         .try_get_mut::<TransportObservationInput>()
@@ -91,7 +103,7 @@ fn publish_observation(store: &mut ProcStore) -> Result<(), TransportProcessErro
 }
 
 impl TransportCommitState {
-    pub(crate) const fn new(host_map: HostMapGeneration) -> Self {
+    pub(crate) const fn new(session_grid: SessionGridGeneration) -> Self {
         Self {
             active: None,
             anchor: None,
@@ -101,7 +113,7 @@ impl TransportCommitState {
             pending: None,
             reanchor_beat: None,
             snapshot: None,
-            host_map,
+            session_grid,
         }
     }
 
@@ -178,10 +190,10 @@ impl TransportCommitState {
             stamp.next().tempo(),
             stamp.sample_rate(),
         )?;
-        let host_map_revision = self.host_map.next_revision()?;
+        let session_grid_revision = self.session_grid.next_revision()?;
         self.active = Some(stamp.next());
         self.anchor = Some(anchor);
-        self.host_map.commit_revision(host_map_revision);
+        self.session_grid.commit_revision(session_grid_revision);
         self.pending = None;
         self.completion = Some(TransportCommitResult::Applied(revision));
         Ok(())
@@ -285,8 +297,8 @@ impl TransportCommitState {
             commit.tempo(),
             commit.revision(),
             anchor,
-            self.host_map.stamp()?,
-            self.host_map.epoch(),
+            self.session_grid.stamp()?,
+            self.session_grid.epoch(),
         )))
     }
 
@@ -315,8 +327,10 @@ impl TransportCommitState {
             commit.tempo(),
             info.sample_rate,
         )?;
+        let revision = self.session_grid.next_revision()?;
         self.anchor = Some(anchor);
         self.boundary = None;
+        self.session_grid.commit_revision(revision);
         Ok(())
     }
 
@@ -345,13 +359,42 @@ impl TransportCommitState {
         if let Some(snapshot) = self.snapshot.take() {
             self.reanchor_beat = Some(snapshot.position());
         }
-        let generation = self.host_map.advance_restart();
+        let generation = self.session_grid.advance_restart();
         if generation.is_err() {
             self.reanchor_beat = None;
         }
         self.anchor = None;
         self.boundary = None;
         generation
+    }
+
+    fn converge_restart(
+        &mut self,
+        target: SessionGridGeneration,
+    ) -> Result<SessionGridGeneration, TransportProcessError> {
+        let target_stamp = target.stamp()?;
+        let current_stamp = self.session_grid.stamp()?;
+        if current_stamp.grid_id() != target_stamp.grid_id() {
+            return Err(TransportProcessError::SessionGridGenerationMismatch);
+        }
+        if self.session_grid.epoch() < target.epoch() {
+            let mut successor = self.session_grid;
+            successor.advance_restart()?;
+            if successor.epoch() != target.epoch() {
+                return Err(TransportProcessError::SessionGridGenerationMismatch);
+            }
+            self.restart()?;
+        } else if self.session_grid.epoch() > target.epoch() {
+            return Err(TransportProcessError::SessionGridGenerationMismatch);
+        }
+        let actual_stamp = self.session_grid.stamp()?;
+        if self.session_grid.epoch() == target.epoch()
+            && actual_stamp.revision() >= target_stamp.revision()
+        {
+            Ok(self.session_grid)
+        } else {
+            Err(TransportProcessError::SessionGridGenerationMismatch)
+        }
     }
 
     fn session_beats(

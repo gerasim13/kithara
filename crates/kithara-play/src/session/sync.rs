@@ -1,17 +1,17 @@
 use std::num::NonZeroU32;
 
 use kithara_warp::{
-    AlignmentPlan, AlignmentRequest, BeatMap, BeatMapId, BeatMapSnapshot, HostAxis, HostBeatMap,
-    HostEpoch, MapAxis, MapStamp, PlanTransition, PresentationFrontier, SyncAdmission, SyncApplied,
-    SyncCapability, SyncError, SyncGroup, SyncGroupSnapshot, SyncGroupTopologyError, SyncIntent,
-    SyncMember, SyncMemberKind, SyncMemberSnapshot, SyncOperation, SyncOperationId, SyncRejected,
-    SyncStatusSnapshot, TopologyOperation, TopologyRevision, TopologyStamp,
+    BeatGrid, BeatGridId, BeatGridRevision, BeatGridSnapshot, BeatGridStamp, BeatGridState,
+    MapAxis, SessionAxis, SessionEpoch, SyncAdmission, SyncApplied, SyncCapability, SyncError,
+    SyncGroup, SyncGroupSnapshot, SyncGroupTopologyError, SyncIntent, SyncMember, SyncMemberKind,
+    SyncMemberSnapshot, SyncOperation, SyncOperationId, SyncRejected, SyncStatusSnapshot,
+    TopologyOperation, TopologyRevision, TopologyStamp,
 };
 
 use super::state::Deck;
 
 pub(super) struct Host {
-    map: BeatMapSnapshot,
+    grid: BeatGridSnapshot,
     decks: Vec<SyncMember<Deck>>,
     next_operation: Option<SyncOperationId>,
     topology_revision: TopologyRevision,
@@ -25,9 +25,9 @@ enum GroupKind {
 }
 
 impl Host {
-    pub(super) fn new(id: BeatMapId, sample_rate: NonZeroU32) -> Self {
+    pub(super) fn new(id: BeatGridId, sample_rate: NonZeroU32) -> Self {
         Self {
-            map: unavailable_map(id, sample_rate, HostEpoch::new(0)),
+            grid: unavailable_grid(id, sample_rate, SessionEpoch::new(0)),
             decks: Vec::new(),
             next_operation: Some(SyncOperationId::first()),
             topology_revision: TopologyRevision::first(),
@@ -35,52 +35,83 @@ impl Host {
         }
     }
 
-    pub(super) fn publish_map(&mut self, map: &HostBeatMap) -> Result<(), SyncError> {
-        let given = map.stamp();
-        if given.map_id() != self.map.id() {
-            return Err(SyncError::MapIdentityMismatch {
-                expected: self.map.id(),
-                given: given.map_id(),
+    pub(super) fn publish_grid(&mut self, candidate: BeatGridSnapshot) -> Result<(), SyncError> {
+        let given = candidate.stamp();
+        if given.grid_id() != self.grid.id() {
+            return Err(SyncError::GridIdentityMismatch {
+                expected: self.grid.id(),
+                given: given.grid_id(),
             });
         }
-        let observed = map.snapshot();
-        if observed == self.map {
+        let candidate_state = candidate.state();
+        let candidate_axis = candidate.axis();
+        let current_state = self.grid.state();
+        let expected_axis = self.grid.axis();
+        if given == self.grid.stamp() {
             return Ok(());
         }
-        if given.revision() <= self.map.revision() {
-            return Err(SyncError::StaleMapRevision {
-                current: self.map.stamp(),
+        if given.revision() <= self.grid.revision() {
+            return Err(SyncError::StaleGridRevision {
+                current: self.grid.stamp(),
                 given,
             });
         }
-        self.map = self.map.host_successor(
-            self.map.stamp(),
-            given.revision(),
-            map.epoch(),
-            map.anchor(),
-            map.meter(),
-        )?;
+        if !matches!(
+            candidate_state,
+            BeatGridState::Live | BeatGridState::Unavailable(_)
+        ) {
+            return Err(SyncError::InvalidGroupGridState {
+                state: candidate_state,
+            });
+        }
+        let axis_is_valid = match (expected_axis, candidate_axis) {
+            (MapAxis::Session(current), MapAxis::Session(next))
+                if is_successor_epoch(current.epoch(), next.epoch())
+                    && matches!(candidate_state, BeatGridState::Unavailable(_)) =>
+            {
+                true
+            }
+            (MapAxis::Session(current), MapAxis::Session(next))
+                if next.epoch() == current.epoch() =>
+            {
+                match (current_state, candidate_state) {
+                    (BeatGridState::Live, BeatGridState::Live)
+                    | (BeatGridState::Unavailable(_), BeatGridState::Unavailable(_)) => {
+                        current.sample_rate() == next.sample_rate()
+                    }
+                    (BeatGridState::Unavailable(_), BeatGridState::Live) => true,
+                    (BeatGridState::Live, BeatGridState::Unavailable(_)) => {
+                        return Err(SyncError::InvalidGroupGridTransition {
+                            from: current_state,
+                            to: candidate_state,
+                        });
+                    }
+                    _ => false,
+                }
+            }
+            _ => false,
+        };
+        if !axis_is_valid {
+            return Err(SyncError::GridAxisChanged {
+                expected: expected_axis,
+                given: candidate_axis,
+            });
+        }
+        self.grid = candidate;
         Ok(())
     }
 
-    pub(super) fn publish_unavailable(
+    pub(super) fn publish_unavailable_grid(
         &mut self,
-        stamp: MapStamp,
+        stamp: BeatGridStamp,
         sample_rate: NonZeroU32,
-        epoch: HostEpoch,
+        epoch: SessionEpoch,
     ) -> Result<(), SyncError> {
-        if stamp.map_id() != self.map.id() {
-            return Err(SyncError::MapIdentityMismatch {
-                expected: self.map.id(),
-                given: stamp.map_id(),
-            });
-        }
-        self.map = self.map.unavailable_successor(
-            self.map.stamp(),
+        self.publish_grid(BeatGridSnapshot::unavailable(
+            stamp.grid_id(),
             stamp.revision(),
-            MapAxis::Host(HostAxis::new(sample_rate, epoch)),
-        )?;
-        Ok(())
+            MapAxis::Session(SessionAxis::new(sample_rate, epoch)),
+        ))
     }
 
     pub(super) fn deck_count(&self) -> usize {
@@ -90,14 +121,14 @@ impl Host {
     pub(super) fn deck(&self, index: usize) -> Option<&Deck> {
         match self.decks.get(index)? {
             SyncMember::Group { group, .. } => Some(group),
-            SyncMember::Map { .. } => None,
+            SyncMember::Grid { .. } => None,
         }
     }
 
     pub(super) fn deck_mut(&mut self, index: usize) -> Option<&mut Deck> {
         match self.decks.get_mut(index)? {
             SyncMember::Group { group, .. } => Some(group),
-            SyncMember::Map { .. } => None,
+            SyncMember::Grid { .. } => None,
         }
     }
 
@@ -110,78 +141,46 @@ impl Host {
     pub(super) fn decks(&self) -> impl Iterator<Item = &Deck> {
         self.decks.iter().filter_map(|member| match member {
             SyncMember::Group { group, .. } => Some(group.as_ref()),
-            SyncMember::Map { .. } => None,
+            SyncMember::Grid { .. } => None,
         })
     }
 }
 
-pub(super) fn unavailable_map(
-    id: BeatMapId,
+fn is_successor_epoch(current: SessionEpoch, next: SessionEpoch) -> bool {
+    u64::from(current)
+        .checked_add(1)
+        .is_some_and(|successor| successor == u64::from(next))
+}
+
+pub(super) fn unavailable_grid(
+    id: BeatGridId,
     sample_rate: NonZeroU32,
-    epoch: HostEpoch,
-) -> BeatMapSnapshot {
-    BeatMapSnapshot::unavailable(id, MapAxis::Host(HostAxis::new(sample_rate, epoch)))
+    epoch: SessionEpoch,
+) -> BeatGridSnapshot {
+    BeatGridSnapshot::unavailable(
+        id,
+        BeatGridRevision::first(),
+        MapAxis::Session(SessionAxis::new(sample_rate, epoch)),
+    )
 }
 
-impl BeatMap for Host {
+impl BeatGrid for Host {
     delegate::delegate! {
-        to self.map {
-            fn id(&self) -> BeatMapId;
+        to self.grid {
+            fn id(&self) -> BeatGridId;
             #[call(clone)]
-            fn snapshot(&self) -> BeatMapSnapshot;
+            fn snapshot(&self) -> BeatGridSnapshot;
         }
-    }
-
-    fn align_to(
-        &self,
-        _target: &dyn BeatMap,
-        _request: AlignmentRequest,
-    ) -> Result<AlignmentPlan, SyncError> {
-        Err(SyncError::CapabilityUnavailable {
-            capability: SyncCapability::Alignment,
-        })
-    }
-
-    fn reconcile_to(
-        &self,
-        _target: &dyn BeatMap,
-        _active: &AlignmentPlan,
-        _frontier: PresentationFrontier,
-    ) -> Result<PlanTransition, SyncError> {
-        Err(SyncError::CapabilityUnavailable {
-            capability: SyncCapability::Reconciliation,
-        })
     }
 }
 
-impl BeatMap for Deck {
+impl BeatGrid for Deck {
     delegate::delegate! {
-        to self.map {
-            fn id(&self) -> BeatMapId;
+        to self.grid {
+            fn id(&self) -> BeatGridId;
             #[call(clone)]
-            fn snapshot(&self) -> BeatMapSnapshot;
+            fn snapshot(&self) -> BeatGridSnapshot;
         }
-    }
-
-    fn align_to(
-        &self,
-        _target: &dyn BeatMap,
-        _request: AlignmentRequest,
-    ) -> Result<AlignmentPlan, SyncError> {
-        Err(SyncError::CapabilityUnavailable {
-            capability: SyncCapability::Alignment,
-        })
-    }
-
-    fn reconcile_to(
-        &self,
-        _target: &dyn BeatMap,
-        _active: &AlignmentPlan,
-        _frontier: PresentationFrontier,
-    ) -> Result<PlanTransition, SyncError> {
-        Err(SyncError::CapabilityUnavailable {
-            capability: SyncCapability::Reconciliation,
-        })
     }
 }
 
@@ -189,7 +188,7 @@ impl SyncGroup for Host {
     type NestedGroup = Deck;
 
     fn topology(&self) -> Result<SyncGroupSnapshot, SyncError> {
-        materialize_topology(&self.map, self.topology_revision, &self.decks)
+        materialize_topology(&self.grid, self.topology_revision, &self.decks)
     }
 
     fn transact(
@@ -197,7 +196,7 @@ impl SyncGroup for Host {
         operation: SyncOperation<Deck>,
     ) -> Result<SyncAdmission, SyncRejected<Deck>> {
         transact(
-            &self.map,
+            &self.grid,
             &mut self.topology_revision,
             &mut self.decks,
             &mut self.next_operation,
@@ -209,7 +208,7 @@ impl SyncGroup for Host {
 
     fn status(&self) -> SyncStatusSnapshot {
         status(
-            TopologyStamp::new(self.map.id(), self.topology_revision),
+            TopologyStamp::new(self.grid.id(), self.topology_revision),
             self.unavailable,
         )
     }
@@ -223,7 +222,7 @@ impl SyncGroup for Deck {
     type NestedGroup = Self;
 
     fn topology(&self) -> Result<SyncGroupSnapshot, SyncError> {
-        materialize_topology(&self.map, self.topology_revision, &self.tracks)
+        materialize_topology(&self.grid, self.topology_revision, &self.tracks)
     }
 
     fn transact(
@@ -231,7 +230,7 @@ impl SyncGroup for Deck {
         operation: SyncOperation<Self>,
     ) -> Result<SyncAdmission, SyncRejected<Self>> {
         transact(
-            &self.map,
+            &self.grid,
             &mut self.topology_revision,
             &mut self.tracks,
             &mut self.next_operation,
@@ -243,7 +242,7 @@ impl SyncGroup for Deck {
 
     fn status(&self) -> SyncStatusSnapshot {
         status(
-            TopologyStamp::new(self.map.id(), self.topology_revision),
+            TopologyStamp::new(self.grid.id(), self.topology_revision),
             self.unavailable,
         )
     }
@@ -254,15 +253,15 @@ impl SyncGroup for Deck {
 }
 
 fn materialize_topology(
-    map: &BeatMapSnapshot,
+    grid: &BeatGridSnapshot,
     revision: TopologyRevision,
     members: &[SyncMember<Deck>],
 ) -> Result<SyncGroupSnapshot, SyncError> {
     let members = members
         .iter()
-        .map(|member| member.snapshot_for(map))
+        .map(|member| member.snapshot_for(grid))
         .collect::<Result<Vec<_>, _>>()?;
-    Ok(SyncGroupSnapshot::try_new(map.clone(), revision, members)?)
+    Ok(SyncGroupSnapshot::try_new(grid.clone(), revision, members)?)
 }
 
 fn status(
@@ -280,7 +279,7 @@ fn status(
 }
 
 fn transact(
-    map: &BeatMapSnapshot,
+    grid: &BeatGridSnapshot,
     topology_revision: &mut TopologyRevision,
     members: &mut Vec<SyncMember<Deck>>,
     next_operation: &mut Option<SyncOperationId>,
@@ -290,9 +289,9 @@ fn transact(
 ) -> Result<SyncAdmission, SyncRejected<Deck>> {
     let target = operation.target();
     let topology_operation = matches!(&operation, SyncOperation::Topology { .. });
-    if target == map.id() || (!topology_operation && owns_direct_map(members, target)) {
+    if target == grid.id() || (!topology_operation && owns_direct_grid(members, target)) {
         return transact_local(
-            map,
+            grid,
             topology_revision,
             members,
             next_operation,
@@ -307,7 +306,7 @@ fn transact(
         SyncOperation::Topology { operations, .. } if !operations.is_empty()
     );
     if let SyncOperation::Topology { base, operations } = &operation {
-        let root = match materialize_topology(map, *topology_revision, members) {
+        let root = match materialize_topology(grid, *topology_revision, members) {
             Ok(root) => root,
             Err(error) => return Err(SyncRejected::new(error, operation)),
         };
@@ -316,7 +315,7 @@ fn transact(
         }
     }
     let parent_revision = match topology_change
-        .then(|| next_topology_revision(map.id(), *topology_revision))
+        .then(|| next_topology_revision(grid.id(), *topology_revision))
         .transpose()
     {
         Ok(revision) => revision,
@@ -342,7 +341,7 @@ fn transact(
 }
 
 fn transact_local(
-    map: &BeatMapSnapshot,
+    grid: &BeatGridSnapshot,
     topology_revision: &mut TopologyRevision,
     members: &mut Vec<SyncMember<Deck>>,
     next_operation: &mut Option<SyncOperationId>,
@@ -352,7 +351,7 @@ fn transact_local(
 ) -> Result<SyncAdmission, SyncRejected<Deck>> {
     match &operation {
         SyncOperation::Topology { .. } => transact_topology(
-            map,
+            grid,
             topology_revision,
             members,
             next_operation,
@@ -363,14 +362,14 @@ fn transact_local(
             intent: SyncIntent::Disable,
             ..
         } => {
-            let operation_id = match take_operation(map.id(), next_operation) {
+            let operation_id = match take_operation(grid.id(), next_operation) {
                 Ok(operation_id) => operation_id,
                 Err(error) => return Err(SyncRejected::new(error, operation)),
             };
             *unavailable = None;
             Ok(SyncAdmission::Unchanged {
                 operation: operation_id,
-                topology: TopologyStamp::new(map.id(), *topology_revision),
+                topology: TopologyStamp::new(grid.id(), *topology_revision),
             })
         }
         SyncOperation::Transport {
@@ -378,21 +377,21 @@ fn transact_local(
         } => {
             let load = *load;
             let transport = *transport;
-            let operation_id = match take_operation(map.id(), next_operation) {
+            let operation_id = match take_operation(grid.id(), next_operation) {
                 Ok(operation_id) => operation_id,
                 Err(error) => return Err(SyncRejected::new(error, operation)),
             };
             *unavailable = None;
             Ok(SyncAdmission::Accepted {
                 operation: operation_id,
-                topology: TopologyStamp::new(map.id(), *topology_revision),
+                topology: TopologyStamp::new(grid.id(), *topology_revision),
                 load,
                 transport,
             })
         }
         SyncOperation::Sync { .. } => preserve_rejected(
             unavailable_admission(
-                map.id(),
+                grid.id(),
                 *topology_revision,
                 next_operation,
                 unavailable,
@@ -402,7 +401,7 @@ fn transact_local(
         ),
         SyncOperation::Reconcile { .. } => preserve_rejected(
             unavailable_admission(
-                map.id(),
+                grid.id(),
                 *topology_revision,
                 next_operation,
                 unavailable,
@@ -421,7 +420,7 @@ fn preserve_rejected(
 }
 
 fn unavailable_admission(
-    group_id: BeatMapId,
+    group_id: BeatGridId,
     topology_revision: TopologyRevision,
     next_operation: &mut Option<SyncOperationId>,
     unavailable: &mut Option<(SyncOperationId, SyncCapability)>,
@@ -438,7 +437,7 @@ fn unavailable_admission(
 }
 
 fn transact_topology(
-    map: &BeatMapSnapshot,
+    grid: &BeatGridSnapshot,
     topology_revision: &mut TopologyRevision,
     members: &mut Vec<SyncMember<Deck>>,
     next_operation: &mut Option<SyncOperationId>,
@@ -458,7 +457,7 @@ fn transact_topology(
     };
     let reject =
         |error, operations| SyncRejected::new(error, SyncOperation::Topology { base, operations });
-    let expected = TopologyStamp::new(map.id(), *topology_revision);
+    let expected = TopologyStamp::new(grid.id(), *topology_revision);
     if base != expected {
         return Err(reject(
             SyncError::StaleTopology {
@@ -469,9 +468,9 @@ fn transact_topology(
         ));
     }
 
-    let operation_id = match (*next_operation)
-        .ok_or_else(|| SyncError::OperationIdExhausted { group_id: map.id() })
-    {
+    let operation_id = match (*next_operation).ok_or_else(|| SyncError::OperationIdExhausted {
+        group_id: grid.id(),
+    }) {
         Ok(operation_id) => operation_id,
         Err(error) => return Err(reject(error, operations)),
     };
@@ -483,11 +482,11 @@ fn transact_topology(
         });
     }
 
-    let revision = match next_topology_revision(map.id(), *topology_revision) {
+    let revision = match next_topology_revision(grid.id(), *topology_revision) {
         Ok(revision) => revision,
         Err(error) => return Err(reject(error, operations)),
     };
-    if let Err(error) = validate_topology_candidate(map, revision, members, &operations, kind) {
+    if let Err(error) = validate_topology_candidate(grid, revision, members, &operations, kind) {
         return Err(reject(error, operations));
     }
     apply_topology_operations(members, operations);
@@ -495,12 +494,12 @@ fn transact_topology(
     advance_operation(next_operation);
     Ok(SyncAdmission::TopologyChanged {
         operation: operation_id,
-        topology: TopologyStamp::new(map.id(), revision),
+        topology: TopologyStamp::new(grid.id(), revision),
     })
 }
 
 fn validate_topology_candidate(
-    map: &BeatMapSnapshot,
+    grid: &BeatGridSnapshot,
     revision: TopologyRevision,
     members: &[SyncMember<Deck>],
     operations: &[TopologyOperation<Deck>],
@@ -508,41 +507,41 @@ fn validate_topology_candidate(
 ) -> Result<(), SyncError> {
     let mut candidate: Vec<SyncMemberSnapshot> = members
         .iter()
-        .map(|member| member.snapshot_for(map))
+        .map(|member| member.snapshot_for(grid))
         .collect::<Result<_, _>>()?;
 
     for operation in operations {
         match operation {
             TopologyOperation::Attach { member } => {
-                let snapshot = validate_incoming_member(map, member, kind)?;
+                let snapshot = validate_incoming_member(grid, member, kind)?;
                 candidate.push(snapshot);
             }
             TopologyOperation::Detach { member } => {
-                let index = member_index(map.id(), &candidate, *member)?;
+                let index = member_index(grid.id(), &candidate, *member)?;
                 candidate.remove(index);
             }
             TopologyOperation::Replace {
                 member,
                 replacement,
             } => {
-                let index = member_index(map.id(), &candidate, *member)?;
-                candidate[index] = validate_incoming_member(map, replacement, kind)?;
+                let index = member_index(grid.id(), &candidate, *member)?;
+                candidate[index] = validate_incoming_member(grid, replacement, kind)?;
             }
         }
     }
 
-    SyncGroupSnapshot::try_new(map.clone(), revision, candidate)?;
+    SyncGroupSnapshot::try_new(grid.clone(), revision, candidate)?;
     Ok(())
 }
 
 fn validate_incoming_member(
-    parent: &BeatMapSnapshot,
+    parent: &BeatGridSnapshot,
     member: &SyncMember<Deck>,
     kind: GroupKind,
 ) -> Result<SyncMemberSnapshot, SyncError> {
     let expected = match kind {
         GroupKind::Host => SyncMemberKind::Group,
-        GroupKind::Deck => SyncMemberKind::Map,
+        GroupKind::Deck => SyncMemberKind::Grid,
     };
     let given = member.kind();
     if given != expected {
@@ -562,9 +561,9 @@ fn validate_incoming_member(
             }
             .into());
         }
-        if alignment.source().stamp() != snapshot.map().stamp() {
+        if alignment.source().stamp() != snapshot.grid().stamp() {
             return Err(SyncGroupTopologyError::StaleSourceAlignment {
-                expected: snapshot.map().stamp(),
+                expected: snapshot.grid().stamp(),
                 given: alignment.source().stamp(),
             }
             .into());
@@ -574,13 +573,13 @@ fn validate_incoming_member(
 }
 
 fn member_index(
-    group_id: BeatMapId,
+    group_id: BeatGridId,
     members: &[SyncMemberSnapshot],
-    member_id: BeatMapId,
+    member_id: BeatGridId,
 ) -> Result<usize, SyncError> {
     members
         .iter()
-        .position(|member| member.map().id() == member_id)
+        .position(|member| member.grid().id() == member_id)
         .ok_or(SyncError::MemberNotFound {
             group_id,
             member_id,
@@ -638,7 +637,7 @@ fn preview_topology(
             match operation {
                 TopologyOperation::Attach { member } => {
                     members.push(validate_incoming_member(
-                        topology.group_map(),
+                        topology.group_grid(),
                         member,
                         kind,
                     )?);
@@ -653,12 +652,12 @@ fn preview_topology(
                 } => {
                     let index = member_index(base.group_id(), &members, *member)?;
                     members[index] =
-                        validate_incoming_member(topology.group_map(), replacement, kind)?;
+                        validate_incoming_member(topology.group_grid(), replacement, kind)?;
                 }
             }
         }
         let candidate =
-            SyncGroupSnapshot::try_new(topology.group_map().clone(), revision, members)?;
+            SyncGroupSnapshot::try_new(topology.group_grid().clone(), revision, members)?;
         return Ok((candidate, true));
     }
 
@@ -685,19 +684,19 @@ fn preview_topology(
         next_topology_revision(topology.stamp().group_id(), topology.stamp().revision())?;
     let mut members = topology.members().to_vec();
     members[index] = SyncMemberSnapshot::new_group(child, member.alignment());
-    let candidate = SyncGroupSnapshot::try_new(topology.group_map().clone(), revision, members)?;
+    let candidate = SyncGroupSnapshot::try_new(topology.group_grid().clone(), revision, members)?;
     Ok((candidate, true))
 }
 
-fn owns_direct_map(members: &[SyncMember<Deck>], target: BeatMapId) -> bool {
+fn owns_direct_grid(members: &[SyncMember<Deck>], target: BeatGridId) -> bool {
     members
         .iter()
-        .any(|member| matches!(member, SyncMember::Map { map, .. } if map.id() == target))
+        .any(|member| matches!(member, SyncMember::Grid { grid, .. } if grid.id() == target))
 }
 
 fn routed_group(
     members: &mut [SyncMember<Deck>],
-    target: BeatMapId,
+    target: BeatGridId,
 ) -> Result<Option<&mut Deck>, SyncError> {
     for member in members {
         let SyncMember::Group { group, .. } = member else {
@@ -706,7 +705,7 @@ fn routed_group(
         let group_id = group.id();
         let topology = group.topology()?;
         if topology.stamp().group_id() != group_id {
-            return Err(SyncError::MapIdentityMismatch {
+            return Err(SyncError::GridIdentityMismatch {
                 expected: group_id,
                 given: topology.stamp().group_id(),
             });
@@ -718,9 +717,9 @@ fn routed_group(
     Ok(None)
 }
 
-fn topology_contains(topology: &SyncGroupSnapshot, target: BeatMapId) -> bool {
+fn topology_contains(topology: &SyncGroupSnapshot, target: BeatGridId) -> bool {
     topology.members().iter().any(|member| {
-        member.map().id() == target
+        member.grid().id() == target
             || member
                 .group_topology()
                 .is_some_and(|group| topology_contains(group, target))
@@ -728,7 +727,7 @@ fn topology_contains(topology: &SyncGroupSnapshot, target: BeatMapId) -> bool {
 }
 
 fn next_topology_revision(
-    group_id: BeatMapId,
+    group_id: BeatGridId,
     current: TopologyRevision,
 ) -> Result<TopologyRevision, SyncError> {
     current
@@ -737,7 +736,7 @@ fn next_topology_revision(
 }
 
 fn take_operation(
-    group_id: BeatMapId,
+    group_id: BeatGridId,
     next: &mut Option<SyncOperationId>,
 ) -> Result<SyncOperationId, SyncError> {
     let operation = (*next).ok_or(SyncError::OperationIdExhausted { group_id })?;
@@ -752,40 +751,251 @@ fn advance_operation(next: &mut Option<SyncOperationId>) {
 #[cfg(test)]
 mod tests {
     use kithara_test_utils::kithara;
-    use kithara_warp::{SessionAnchor, SessionBeat, SessionFrame};
+    use kithara_warp::{AssetAxis, BeatGridUnavailable, SessionAnchor, SessionBeat, SessionFrame};
 
     use super::*;
 
-    #[kithara::test]
-    fn host_accepts_latest_map_after_unpublished_revisions() {
-        const BEATS_PER_SECOND: f64 = 2.0;
-        const SAMPLE_RATE: u32 = 48_000;
+    fn session_grid(
+        id: BeatGridId,
+        revision: BeatGridRevision,
+        epoch: SessionEpoch,
+        beats_per_second: f64,
+    ) -> BeatGridSnapshot {
+        session_grid_at_rate(id, revision, epoch, beats_per_second, 48_000)
+    }
 
+    fn session_grid_at_rate(
+        id: BeatGridId,
+        revision: BeatGridRevision,
+        epoch: SessionEpoch,
+        beats_per_second: f64,
+        sample_rate: u32,
+    ) -> BeatGridSnapshot {
         let sample_rate =
-            NonZeroU32::new(SAMPLE_RATE).expect("invariant: fixture sample rate is non-zero");
-        let id = BeatMapId::allocate().expect("invariant: fixture host id is available");
-        let mut host = Host::new(id, sample_rate);
-        let skipped = host
-            .snapshot()
-            .revision()
-            .checked_next()
-            .expect("invariant: fixture map revision can advance");
-        let published = skipped
-            .checked_next()
-            .expect("invariant: fixture map revision can advance twice");
+            NonZeroU32::new(sample_rate).expect("invariant: fixture sample rate is non-zero");
         let anchor = SessionAnchor::new(
             SessionFrame::new(0),
             SessionBeat::new(0.0).expect("invariant: fixture beat is finite"),
-            BEATS_PER_SECOND,
+            beats_per_second,
             sample_rate,
         )
-        .expect("invariant: fixture anchor is valid");
-        let map = HostBeatMap::new(id, published, HostEpoch::new(2), anchor, None);
+        .expect("invariant: fixture session anchor is valid");
+        BeatGridSnapshot::session(id, revision, epoch, anchor, None)
+    }
 
-        host.publish_map(&map)
+    fn fixture_host() -> Host {
+        Host::new(
+            BeatGridId::allocate().expect("invariant: fixture host id is available"),
+            NonZeroU32::new(48_000).expect("invariant: fixture sample rate is non-zero"),
+        )
+    }
+
+    #[kithara::test]
+    fn host_rejects_foreign_grid_identity() {
+        let mut host = fixture_host();
+        let before = host.snapshot();
+        let foreign = session_grid(
+            BeatGridId::allocate().expect("invariant: foreign grid id is available"),
+            before
+                .revision()
+                .checked_next()
+                .expect("invariant: fixture grid revision can advance"),
+            SessionEpoch::new(0),
+            2.0,
+        );
+
+        assert_eq!(
+            host.publish_grid(foreign.clone()),
+            Err(SyncError::GridIdentityMismatch {
+                expected: before.id(),
+                given: foreign.id(),
+            })
+        );
+        assert_eq!(host.snapshot(), before);
+    }
+
+    #[kithara::test]
+    fn host_enforces_grid_successors() {
+        let mut host = fixture_host();
+        let initial = host.snapshot();
+        let published_revision = initial
+            .revision()
+            .checked_next()
+            .expect("invariant: fixture grid revision can advance");
+        let published = session_grid(initial.id(), published_revision, SessionEpoch::new(0), 2.0);
+        host.publish_grid(published.clone())
+            .expect("invariant: newer fixture publication is valid");
+        let stale = session_grid(initial.id(), initial.revision(), SessionEpoch::new(0), 1.5);
+
+        assert_eq!(
+            host.publish_grid(stale.clone()),
+            Err(SyncError::StaleGridRevision {
+                current: published.stamp(),
+                given: stale.stamp(),
+            })
+        );
+        assert_eq!(host.snapshot(), published);
+
+        let withdrawn_revision = published_revision
+            .checked_next()
+            .expect("invariant: fixture grid revision can advance twice");
+        let withdrawn =
+            BeatGridSnapshot::unavailable(initial.id(), withdrawn_revision, published.axis());
+        assert_eq!(
+            host.publish_grid(withdrawn.clone()),
+            Err(SyncError::InvalidGroupGridTransition {
+                from: BeatGridState::Live,
+                to: BeatGridState::Unavailable(BeatGridUnavailable::NoGeometry),
+            })
+        );
+        assert_eq!(host.snapshot(), published);
+
+        let wrong_axis_revision = published_revision
+            .checked_next()
+            .expect("invariant: fixture grid revision can advance twice");
+        let sample_rate =
+            NonZeroU32::new(48_000).expect("invariant: fixture sample rate is non-zero");
+        let wrong_axis = BeatGridSnapshot::unavailable(
+            initial.id(),
+            wrong_axis_revision,
+            MapAxis::Asset(AssetAxis::new(sample_rate, 0)),
+        );
+        assert_eq!(
+            host.publish_grid(wrong_axis.clone()),
+            Err(SyncError::GridAxisChanged {
+                expected: published.axis(),
+                given: wrong_axis.axis(),
+            })
+        );
+        assert_eq!(host.snapshot(), published);
+
+        let mut negotiated = fixture_host();
+        let initial = negotiated.snapshot();
+        let live_revision = initial
+            .revision()
+            .checked_next()
+            .expect("invariant: fixture grid revision can advance");
+        let observed = session_grid_at_rate(
+            initial.id(),
+            live_revision,
+            SessionEpoch::new(0),
+            2.0,
+            44_100,
+        );
+        negotiated
+            .publish_grid(observed.clone())
+            .expect("an unavailable axis admits the negotiated live sample rate");
+        assert_eq!(negotiated.snapshot(), observed);
+
+        let changed_rate = session_grid_at_rate(
+            initial.id(),
+            live_revision
+                .checked_next()
+                .expect("invariant: fixture grid revision can advance twice"),
+            SessionEpoch::new(0),
+            2.0,
+            32_000,
+        );
+        assert_eq!(
+            negotiated.publish_grid(changed_rate.clone()),
+            Err(SyncError::GridAxisChanged {
+                expected: observed.axis(),
+                given: changed_rate.axis(),
+            })
+        );
+        assert_eq!(negotiated.snapshot(), observed);
+    }
+
+    #[kithara::test]
+    fn host_treats_same_grid_stamp_as_idempotent_publication() {
+        let mut host = fixture_host();
+        let current = host.snapshot();
+        let revision = current
+            .revision()
+            .checked_next()
+            .expect("invariant: fixture grid revision can advance");
+        let published = session_grid(current.id(), revision, SessionEpoch::new(0), 2.0);
+        host.publish_grid(published.clone())
+            .expect("invariant: newer fixture publication is valid");
+
+        host.publish_grid(published.clone())
+            .expect("publishing the same immutable grid revision is idempotent");
+
+        assert_eq!(host.snapshot(), published);
+    }
+
+    #[kithara::test]
+    fn host_accepts_latest_grid_after_unpublished_revisions() {
+        let mut host = fixture_host();
+        let current = host.snapshot();
+        let skipped = current
+            .revision()
+            .checked_next()
+            .expect("invariant: fixture grid revision can advance");
+        let published_revision = skipped
+            .checked_next()
+            .expect("invariant: fixture grid revision can advance twice");
+        let published = session_grid(current.id(), published_revision, SessionEpoch::new(0), 2.0);
+
+        host.publish_grid(published.clone())
             .expect("a newer published observation may skip invisible revisions");
 
-        assert_eq!(host.snapshot(), map.snapshot());
-        assert_eq!(host.snapshot().revision(), published);
+        assert_eq!(host.snapshot(), published);
+        assert_eq!(host.snapshot().revision(), published_revision);
+    }
+
+    #[kithara::test]
+    fn host_requires_each_unavailable_route_boundary() {
+        let mut host = fixture_host();
+        let initial = host.snapshot();
+        let live_revision = initial
+            .revision()
+            .checked_next()
+            .expect("invariant: fixture grid revision can advance");
+        let live = session_grid(initial.id(), live_revision, SessionEpoch::new(0), 2.0);
+        host.publish_grid(live.clone())
+            .expect("the initial session grid becomes live in its current epoch");
+
+        let boundary_revision = live_revision
+            .checked_next()
+            .expect("invariant: fixture grid revision can advance twice");
+        let sample_rate =
+            NonZeroU32::new(48_000).expect("invariant: fixture sample rate is non-zero");
+        let skipped_axis = MapAxis::Session(SessionAxis::new(sample_rate, SessionEpoch::new(2)));
+        let skipped = BeatGridSnapshot::unavailable(live.id(), boundary_revision, skipped_axis);
+        assert_eq!(
+            host.publish_grid(skipped),
+            Err(SyncError::GridAxisChanged {
+                expected: live.axis(),
+                given: skipped_axis,
+            })
+        );
+
+        let successor_live = session_grid(live.id(), boundary_revision, SessionEpoch::new(1), 2.0);
+        assert_eq!(
+            host.publish_grid(successor_live.clone()),
+            Err(SyncError::GridAxisChanged {
+                expected: live.axis(),
+                given: successor_live.axis(),
+            })
+        );
+
+        let boundary_axis = MapAxis::Session(SessionAxis::new(sample_rate, SessionEpoch::new(1)));
+        let boundary = BeatGridSnapshot::unavailable(live.id(), boundary_revision, boundary_axis);
+        host.publish_grid(boundary.clone())
+            .expect("the exact successor epoch is admitted through an unavailable boundary");
+
+        let next_live = session_grid_at_rate(
+            live.id(),
+            boundary_revision
+                .checked_next()
+                .expect("invariant: fixture grid revision can advance three times"),
+            SessionEpoch::new(1),
+            2.0,
+            44_100,
+        );
+        host.publish_grid(next_live.clone())
+            .expect("the unavailable boundary admits the negotiated live axis");
+        assert_eq!(host.snapshot(), next_live);
     }
 }

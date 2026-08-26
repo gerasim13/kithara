@@ -20,11 +20,22 @@ pub enum BeatEvidence {
 #[derive(Clone, Copy, Debug, PartialEq, PartialOrd, derive_more::Into)]
 pub struct BeatsPerMinute(f64);
 
-impl BeatsPerMinute {
-    pub(crate) fn new(value: f64) -> Option<Self> {
-        (value.is_finite() && value > 0.0).then_some(Self(value))
+impl TryFrom<f64> for BeatsPerMinute {
+    type Error = BeatsPerMinuteError;
+
+    fn try_from(value: f64) -> Result<Self, Self::Error> {
+        if value.is_finite() && value > 0.0 {
+            Ok(Self(value))
+        } else {
+            Err(BeatsPerMinuteError)
+        }
     }
 }
+
+/// A tempo must be finite and greater than zero.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
+#[error("tempo must be finite and greater than zero")]
+pub struct BeatsPerMinuteError;
 
 /// A beats-per-bar relation anchored to one canonical downbeat ordinal.
 #[derive(
@@ -94,7 +105,7 @@ pub struct MeterError;
 #[fieldwork(opt_in, get)]
 #[non_exhaustive]
 pub struct BeatMarker {
-    /// Returns the map-native marker position.
+    /// Returns the grid-native marker position.
     #[field(get, copy)]
     pub(super) position: MapPosition,
     /// Returns the explicit musical ordinal, when known.
@@ -125,7 +136,7 @@ impl BeatMarker {
     }
 }
 
-/// Evidence shared by the interior of one map segment.
+/// Evidence shared by the interior of one grid segment.
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct SegmentFacts {

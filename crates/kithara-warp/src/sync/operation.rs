@@ -1,18 +1,18 @@
 use super::{
-    AlignmentPlanRevision, AlignmentSource, LoadGeneration, PresentationFrontier, SyncGroup,
-    SyncMember, SyncOperationId, TopologyStamp, TransportRevision,
+    LoadGeneration, PresentationFrontier, SyncGroup, SyncMember, SyncOperationId, TopologyStamp,
+    TransportRevision, WarpMapRevision,
 };
-use crate::{Beat, BeatMapId, MapPoint, MapRegion, SessionFrame};
+use crate::{Beat, BeatGridId, MapPoint, MapRegion, SessionFrame};
 
-/// A beat on a source map aligned with a beat on a target map.
+/// A beat on a source grid aligned with a beat on a target grid.
 #[derive(Clone, Copy, Debug, PartialEq, fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
 #[non_exhaustive]
 pub struct BeatAlignment {
-    /// Returns the point on the map being aligned.
+    /// Returns the point on the grid being aligned.
     #[field(get, copy)]
     source: MapPoint<Beat>,
-    /// Returns the corresponding point on the target map.
+    /// Returns the corresponding point on the target grid.
     #[field(get, copy)]
     target: MapPoint<Beat>,
 }
@@ -23,6 +23,16 @@ impl BeatAlignment {
     pub const fn new(source: MapPoint<Beat>, target: MapPoint<Beat>) -> Self {
         Self { source, target }
     }
+}
+
+/// Playback state from which synchronization is requested.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum AlignmentSource {
+    /// PCM has not become audible and may be positioned before playback.
+    Prepared,
+    /// PCM is already audible at the stated exact presentation frontier.
+    Audible(PresentationFrontier),
 }
 
 /// One operation routed through the live synchronization-group owner.
@@ -37,8 +47,8 @@ pub enum SyncOperation<G: SyncGroup> {
     },
     /// Routes one playback transport operation through the resident Deck envelope.
     Transport {
-        /// Stable Deck or Track map receiving the operation.
-        target: BeatMapId,
+        /// Stable Deck or Track grid receiving the operation.
+        target: BeatGridId,
         /// Exact Track load receiving the operation.
         load: LoadGeneration,
         /// Exact committed session transport state.
@@ -48,8 +58,8 @@ pub enum SyncOperation<G: SyncGroup> {
     },
     /// Changes the synchronization intent of one Deck.
     Sync {
-        /// Stable Deck map receiving the intent.
-        target: BeatMapId,
+        /// Stable Deck grid receiving the intent.
+        target: BeatGridId,
         /// Exact Track load receiving the intent.
         load: LoadGeneration,
         /// Exact committed session transport state.
@@ -61,11 +71,11 @@ pub enum SyncOperation<G: SyncGroup> {
         /// Requested synchronization state transition.
         intent: SyncIntent,
     },
-    /// Re-evaluates an active plan after one material control-plane change.
+    /// Re-evaluates an active warp map after one material control-plane change.
     Reconcile {
-        /// Stable Deck map whose active plan is being re-evaluated.
-        target: BeatMapId,
-        /// Exact Track load whose active plan is being re-evaluated.
+        /// Stable Deck grid whose active warp map is being re-evaluated.
+        target: BeatGridId,
+        /// Exact Track load whose active warp map is being re-evaluated.
         load: LoadGeneration,
         /// Exact committed session transport state.
         transport: TransportRevision,
@@ -77,9 +87,9 @@ pub enum SyncOperation<G: SyncGroup> {
 }
 
 impl<G: SyncGroup> SyncOperation<G> {
-    /// Returns the unique group or map targeted by this operation.
+    /// Returns the unique group or grid targeted by this operation.
     #[must_use]
-    pub const fn target(&self) -> BeatMapId {
+    pub const fn target(&self) -> BeatGridId {
         match self {
             Self::Topology { base, .. } => base.group_id,
             Self::Transport { target, .. }
@@ -100,12 +110,12 @@ pub enum TopologyOperation<G: SyncGroup> {
     /// Detaches one direct member from a parent group.
     Detach {
         /// Identity of the direct member being detached.
-        member: BeatMapId,
+        member: BeatGridId,
     },
     /// Replaces one direct member atomically.
     Replace {
         /// Identity of the direct member being replaced.
-        member: BeatMapId,
+        member: BeatGridId,
         /// New live member transferred to the parent group.
         replacement: SyncMember<G>,
     },
@@ -115,9 +125,9 @@ pub enum TopologyOperation<G: SyncGroup> {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum SyncMemberKind {
-    /// An ordinary beat map, such as a loaded Track.
-    Map,
-    /// A nested synchronization group, such as a Deck below a Host.
+    /// An ordinary beat grid, such as a loaded Track.
+    Grid,
+    /// A nested synchronization group owned by another group.
     Group,
 }
 
@@ -147,23 +157,23 @@ pub enum TransportOperation {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum SyncIntent {
-    /// Start following Host tempo and phase.
+    /// Start following the parent group's tempo and phase.
     Enable,
-    /// Stop future Host correction and latch the current effective settings.
+    /// Stop future parent-group correction and latch the current settings.
     Disable,
-    /// Snap immediately to Host tempo and phase as an explicit user action.
+    /// Snap immediately to the parent group's tempo and phase.
     AlignNow,
 }
 
-/// Material change that requires an active alignment plan to be reconsidered.
+/// Material change that requires an active warp map to be reconsidered.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum ReconcileCause {
-    /// A previously unavailable map became usable.
-    MapAvailable,
-    /// A newer map revision materially changed the active relation.
-    MapRefined,
-    /// The authoritative Host transport changed.
+    /// A previously unavailable grid became usable.
+    GridAvailable,
+    /// A newer grid revision materially changed the active relation.
+    GridRefined,
+    /// The authoritative session transport changed.
     TransportChanged,
     /// The recursive ownership tree changed.
     TopologyChanged,
@@ -177,9 +187,9 @@ pub enum SyncCapability {
     Topology,
     /// Play, pause, seek, start preparation, and stop routing.
     Transport,
-    /// Map-to-map tempo and phase alignment.
+    /// Grid-to-grid tempo and phase alignment.
     Alignment,
-    /// Continuity-preserving replacement of an active alignment plan.
+    /// Continuity-preserving replacement of an active warp map.
     Reconciliation,
 }
 
@@ -206,15 +216,15 @@ pub enum SyncAdmission {
         /// Exact committed session transport state authorized for dispatch.
         transport: TransportRevision,
     },
-    /// A stamped plan is prepared for one exact render boundary.
+    /// A stamped warp map is prepared for one exact render boundary.
     Prepared {
         /// Identity of the admitted operation.
         operation: SyncOperationId,
         /// Topology against which the operation was admitted.
         topology: TopologyStamp,
-        /// Immutable plan prepared by the group.
-        plan: AlignmentPlanRevision,
-        /// Exact output boundary at which the plan takes effect.
+        /// Immutable warp map prepared by the group.
+        warp_map: WarpMapRevision,
+        /// Exact output boundary at which the warp map takes effect.
         activation: SessionFrame,
     },
     /// The requested operation already matches committed state.
@@ -224,13 +234,13 @@ pub enum SyncAdmission {
         /// Topology against which the operation was admitted.
         topology: TopologyStamp,
     },
-    /// A later map revision may make the operation admissible.
+    /// A later grid revision may make the operation admissible.
     Deferred {
         /// Identity of the deferred operation.
         operation: SyncOperationId,
         /// Topology against which the operation was evaluated.
         topology: TopologyStamp,
-        /// Map coverage required before the operation can be prepared.
+        /// Grid coverage required before the operation can be prepared.
         required: MapRegion,
     },
     /// The current implementation cannot perform this operation.

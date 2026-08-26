@@ -13,16 +13,21 @@ use firewheel::{
 };
 use kithara_platform::time::Duration;
 use kithara_test_utils::kithara;
-use kithara_warp::{Beat, BeatMap, BeatMapId, MapPoint, MapPosition, MapQuery, SessionFrame};
+use kithara_warp::{
+    Beat, BeatGridId, BeatGridQuery, BeatsPerMinute, MapPoint, MapPosition, SessionFrame,
+};
 use triple_buffer::{Output, triple_buffer};
 
 use super::{
     commit::{
-        HostMapGeneration, SessionTransportCommit, TransportCommitEvent, TransportCommitResult,
+        SessionGridGeneration, SessionTransportCommit, TransportCommitEvent, TransportCommitResult,
         TransportCommitStamp, TransportObservation, TransportProcessError,
     },
     node::SessionTransportProcessor,
-    process::{TransportCommitState, TransportObservationInput, process_transport},
+    process::{
+        TransportCommitState, TransportObservationInput, converge_transport_restart,
+        process_transport,
+    },
 };
 use crate::api::{SessionBeat, SessionTransportSnapshot, Tempo, TransportRevision};
 
@@ -72,13 +77,17 @@ fn block_frame(blocks: usize) -> i64 {
 
 fn proc_extra() -> (ProcExtra, Output<TransportObservation>) {
     let (logger, _logger_rx) = realtime_logger(RealtimeLoggerConfig::default());
-    let host_map = HostMapGeneration::new(
-        BeatMapId::allocate().expect("invariant: fixture map identity space is available"),
+    let session_grid = SessionGridGeneration::new(
+        BeatGridId::allocate().expect("invariant: fixture grid identity space is available"),
     );
-    let initial = TransportObservation::new(None, None, host_map);
+    let initial = TransportObservation::new(None, None, session_grid);
     let (observation_input, observation_output) = triple_buffer(&initial);
     let mut store = ProcStore::with_capacity(2);
-    assert!(store.insert(TransportCommitState::new(host_map)).is_ok());
+    assert!(
+        store
+            .insert(TransportCommitState::new(session_grid))
+            .is_ok()
+    );
     assert!(
         store
             .insert(TransportObservationInput::new(observation_input))
@@ -196,7 +205,7 @@ fn active_harness() -> (
 }
 
 #[kithara::test]
-fn transport_commit_publishes_anchor_and_map_stamp_atomically() {
+fn transport_commit_publishes_anchor_and_grid_stamp_atomically() {
     let (mut processor, mut extra, mut output, active) = active_harness();
     let before = snapshot(&mut output);
     let target = SessionBeat::new(3.25).expect("invariant: relocation target is finite");
@@ -217,8 +226,8 @@ fn transport_commit_publishes_anchor_and_map_stamp_atomically() {
     );
     let staged = snapshot(&mut output);
     assert_eq!(staged.anchor(), before.anchor());
-    assert_eq!(staged.host_map_stamp(), before.host_map_stamp());
-    assert_eq!(staged.host_epoch(), before.host_epoch());
+    assert_eq!(staged.session_grid_stamp(), before.session_grid_stamp());
+    assert_eq!(staged.session_epoch(), before.session_epoch());
 
     process_node(
         &mut processor,
@@ -230,30 +239,29 @@ fn transport_commit_publishes_anchor_and_map_stamp_atomically() {
     let applied = snapshot(&mut output);
     assert_eq!(applied.revision(), second_revision());
     assert_eq!(
-        applied.host_map_stamp().map_id(),
-        before.host_map_stamp().map_id()
+        applied.session_grid_stamp().grid_id(),
+        before.session_grid_stamp().grid_id()
     );
-    assert!(applied.host_map_stamp().revision() > before.host_map_stamp().revision());
-    assert_eq!(applied.host_epoch(), before.host_epoch());
+    assert!(applied.session_grid_stamp().revision() > before.session_grid_stamp().revision());
+    assert_eq!(applied.session_epoch(), before.session_epoch());
 
-    let host = applied.host_map();
-    let host_snapshot = host.snapshot();
-    assert_eq!(host_snapshot.stamp(), applied.host_map_stamp());
-    let resolved = host_snapshot.position_at(MapPoint::new(
-        host_snapshot.stamp(),
+    let session_grid = applied.session_grid();
+    assert_eq!(session_grid.stamp(), applied.session_grid_stamp());
+    let resolved = session_grid.position_at(MapPoint::new(
+        session_grid.stamp(),
         Beat::new(3.25).expect("invariant: relocation beat is finite"),
     ));
-    let MapQuery::Resolved(position) = resolved else {
-        panic!("expected relocated beat to resolve on the published host map")
+    let BeatGridQuery::Resolved(position) = resolved else {
+        panic!("expected relocated beat to resolve on the published session grid")
     };
     assert_eq!(
         *position.value().value(),
-        MapPosition::Host(SessionFrame::new(block_frame(2)))
+        MapPosition::Session(SessionFrame::new(block_frame(2)))
     );
 }
 
 #[kithara::test]
-fn route_restart_advances_host_epoch_and_map_revision() {
+fn route_restart_advances_session_epoch_and_grid_revision() {
     let (mut processor, mut extra, mut output, _active) = active_harness();
     process_node(
         &mut processor,
@@ -268,28 +276,101 @@ fn route_restart_advances_host_epoch_and_map_revision() {
         store: &mut extra.store,
         logger: &mut extra.logger,
     });
-    assert_eq!(observation(&mut output).snapshot(), None);
+    let boundary = observation(&mut output);
+    assert_eq!(boundary.snapshot(), None);
+    let boundary_generation = boundary.session_grid();
+    let boundary_stamp = boundary_generation
+        .stamp()
+        .expect("the route boundary has a grid revision");
+    assert!(boundary_generation.epoch() > before.session_epoch());
+    assert!(boundary_stamp.revision() > before.session_grid_stamp().revision());
 
     process_node(&mut processor, &proc_info_at(0), &mut extra, None, None);
     let restarted = snapshot(&mut output);
     assert_eq!(restarted.revision(), before.revision());
     assert_eq!(
-        restarted.host_map_stamp().map_id(),
-        before.host_map_stamp().map_id()
+        restarted.session_grid_stamp().grid_id(),
+        before.session_grid_stamp().grid_id()
     );
-    assert!(restarted.host_epoch() > before.host_epoch());
-    assert!(restarted.host_map_stamp().revision() > before.host_map_stamp().revision());
+    assert_eq!(restarted.session_epoch(), boundary_generation.epoch());
+    assert!(restarted.session_grid_stamp().revision() > boundary_stamp.revision());
 
-    let stale = restarted.host_map().snapshot().beat_at(MapPoint::new(
-        before.host_map_stamp(),
-        MapPosition::Host(SessionFrame::new(0)),
+    let stale = restarted.session_grid().beat_at(MapPoint::new(
+        before.session_grid_stamp(),
+        MapPosition::Session(SessionFrame::new(0)),
     ));
-    assert!(matches!(stale, MapQuery::Stale { .. }));
+    assert!(matches!(stale, BeatGridQuery::Stale { .. }));
+}
+
+#[kithara::test]
+fn reserved_route_restart_promotes_a_commit_rendered_before_stop() {
+    let (mut processor, mut extra, mut output, active) = active_harness();
+    let before = observation(&mut output).session_grid();
+    let mut reserved = before;
+    reserved
+        .advance_restart()
+        .expect("invariant: fixture route generation can advance");
+
+    let next = commit(60.0, true, second_revision());
+    let stamp = TransportCommitStamp::new(
+        Some(active),
+        next,
+        SessionFrame::new(block_frame(2)),
+        sample_rate(),
+    );
+    process_node(
+        &mut processor,
+        &proc_info_at(block_frame(1)),
+        &mut extra,
+        Some(stage_event(stamp)),
+        None,
+    );
+    process_node(
+        &mut processor,
+        &proc_info_at(block_frame(2)),
+        &mut extra,
+        Some(apply_event(second_revision())),
+        None,
+    );
+
+    processor.stream_stopped(&mut ProcStreamCtx {
+        store: &mut extra.store,
+        logger: &mut extra.logger,
+    });
+    let stopped = observation(&mut output).session_grid();
+    assert_eq!(stopped.epoch(), reserved.epoch());
+    assert!(
+        stopped
+            .stamp()
+            .expect("the stopped generation has a revision")
+            .revision()
+            > reserved
+                .stamp()
+                .expect("the reserved generation has a revision")
+                .revision()
+    );
+
+    let converged = converge_transport_restart(&mut extra.store, reserved)
+        .expect("the reserved restart accepts a newer revision in its target epoch");
+    assert_eq!(converged, stopped);
+    assert_eq!(observation(&mut output).session_grid(), stopped);
 }
 
 #[kithara::test]
 fn tempo_commit_waits_for_the_matching_render_boundary() {
     let (mut processor, mut extra, mut output, active) = active_harness();
+    let before = snapshot(&mut output);
+    let old_grid = before.session_grid();
+    let old_position = MapPoint::new(
+        old_grid.stamp(),
+        MapPosition::Session(SessionFrame::new(block_frame(1))),
+    );
+    let old_tempo = BeatsPerMinute::try_from(120.0)
+        .expect("invariant: fixture tempo is a positive finite value");
+    assert!(matches!(
+        old_grid.tempo_at(old_position),
+        BeatGridQuery::Resolved(estimate) if *estimate.value() == old_tempo
+    ));
     let next = commit(60.0, true, second_revision());
     let stamp = TransportCommitStamp::new(
         Some(active),
@@ -308,6 +389,12 @@ fn tempo_commit_waits_for_the_matching_render_boundary() {
     let staged = snapshot(&mut output);
     assert_eq!(staged.revision(), TransportRevision::first());
     assert_eq!(staged.tempo(), active.tempo());
+    let staged_grid = staged.session_grid();
+    assert_eq!(staged_grid, old_grid);
+    assert!(matches!(
+        staged_grid.tempo_at(old_position),
+        BeatGridQuery::Resolved(estimate) if *estimate.value() == old_tempo
+    ));
     assert!((f64::from(staged.position()) - 0.04).abs() <= f64::EPSILON);
 
     process_node(
@@ -328,6 +415,27 @@ fn tempo_commit_waits_for_the_matching_render_boundary() {
     assert_eq!(applied.revision(), second_revision());
     assert_eq!(applied.tempo(), next.tempo());
     assert!((f64::from(applied.position()) - 0.05).abs() <= f64::EPSILON);
+    let new_grid = applied.session_grid();
+    assert!(new_grid.revision() > old_grid.revision());
+    assert_eq!(old_grid.revision(), before.session_grid_stamp().revision());
+    assert!(matches!(
+        old_grid.tempo_at(old_position),
+        BeatGridQuery::Resolved(estimate) if *estimate.value() == old_tempo
+    ));
+    assert!(matches!(
+        new_grid.tempo_at(old_position),
+        BeatGridQuery::Stale { expected, given }
+            if expected == new_grid.stamp() && given == old_grid.stamp()
+    ));
+    let new_tempo = BeatsPerMinute::try_from(60.0)
+        .expect("invariant: fixture tempo is a positive finite value");
+    assert!(matches!(
+        new_grid.tempo_at(MapPoint::new(
+            new_grid.stamp(),
+            MapPosition::Session(SessionFrame::new(block_frame(2))),
+        )),
+        BeatGridQuery::Resolved(estimate) if *estimate.value() == new_tempo
+    ));
     let transition = SessionBeat::new(0.04).expect("invariant: transition beat is finite");
     assert_eq!(
         applied

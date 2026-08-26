@@ -12,7 +12,9 @@ use kithara_test_utils::kithara::rtsan_forbid_blocking;
 use triple_buffer::{Output, triple_buffer};
 
 use super::{
-    commit::{HostMapGeneration, TransportCommitEvent, TransportCommitStamp, TransportObservation},
+    commit::{
+        SessionGridGeneration, TransportCommitEvent, TransportCommitStamp, TransportObservation,
+    },
     process::{
         TransportCommitState, TransportObservationInput, process_transport, restart_transport,
     },
@@ -21,15 +23,15 @@ use crate::api::TransportRevision;
 
 pub(crate) fn install<B: AudioBackend>(
     ctx: &mut FirewheelCtx<B>,
-    host_map: HostMapGeneration,
+    session_grid: SessionGridGeneration,
 ) -> Result<TransportControl, &'static str> {
-    let initial = TransportObservation::new(None, None, host_map);
+    let initial = TransportObservation::new(None, None, session_grid);
     let (observation_input, observation_output) = triple_buffer(&initial);
     let store = ctx
         .proc_store_mut()
         .ok_or("session transport store is unavailable while the stream is running")?;
     store
-        .insert(TransportCommitState::new(host_map))
+        .insert(TransportCommitState::new(session_grid))
         .map_err(|_| "session transport state store slot already exists")?;
     store
         .insert(TransportObservationInput::new(observation_input))

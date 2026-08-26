@@ -1,62 +1,88 @@
 use std::num::NonZeroU32;
 
-use kithara_warp::{BeatMapId, BeatMapRevision, HostEpoch, MapStamp, SessionFrame};
+use kithara_warp::{BeatGridId, BeatGridRevision, BeatGridStamp, SessionEpoch, SessionFrame};
 
 use crate::api::{SessionBeat, SessionTransportSnapshot, Tempo, TransportRevision};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct HostMapGeneration {
-    id: BeatMapId,
-    epoch: HostEpoch,
-    revision: Option<BeatMapRevision>,
+pub(crate) struct SessionGridGeneration {
+    id: BeatGridId,
+    epoch: SessionEpoch,
+    revision: Option<BeatGridRevision>,
 }
 
-impl HostMapGeneration {
-    pub(crate) const fn new(id: BeatMapId) -> Self {
+impl SessionGridGeneration {
+    pub(crate) const fn new(id: BeatGridId) -> Self {
         Self {
             id,
-            epoch: HostEpoch::new(0),
+            epoch: SessionEpoch::new(0),
             revision: None,
         }
     }
 
-    pub(crate) fn next_revision(self) -> Result<BeatMapRevision, TransportProcessError> {
+    pub(crate) fn next_revision(self) -> Result<BeatGridRevision, TransportProcessError> {
         self.revision
-            .map_or(Ok(BeatMapRevision::first()), |revision| {
+            .map_or(Ok(BeatGridRevision::first()), |revision| {
                 revision
                     .checked_next()
-                    .ok_or(TransportProcessError::HostMapGenerationExhausted)
+                    .ok_or(TransportProcessError::SessionGridGenerationExhausted)
             })
     }
 
-    pub(crate) fn commit_revision(&mut self, revision: BeatMapRevision) {
+    pub(crate) fn commit_revision(&mut self, revision: BeatGridRevision) {
         self.revision = Some(revision);
     }
 
     pub(crate) fn advance_restart(&mut self) -> Result<(), TransportProcessError> {
         let epoch = u64::from(self.epoch)
             .checked_add(1)
-            .map(HostEpoch::new)
-            .ok_or(TransportProcessError::HostMapGenerationExhausted)?;
+            .map(SessionEpoch::new)
+            .ok_or(TransportProcessError::SessionGridGenerationExhausted)?;
         let revision = Some(match self.revision {
             Some(revision) => revision
                 .checked_next()
-                .ok_or(TransportProcessError::HostMapGenerationExhausted)?,
-            None => BeatMapRevision::first(),
+                .ok_or(TransportProcessError::SessionGridGenerationExhausted)?,
+            None => BeatGridRevision::first(),
         });
         self.epoch = epoch;
         self.revision = revision;
         Ok(())
     }
 
-    pub(crate) fn stamp(self) -> Result<MapStamp, TransportProcessError> {
+    pub(crate) fn stamp(self) -> Result<BeatGridStamp, TransportProcessError> {
         self.revision
-            .map(|revision| MapStamp::new(self.id, revision))
-            .ok_or(TransportProcessError::MissingHostMapRevision)
+            .map(|revision| BeatGridStamp::new(self.id, revision))
+            .ok_or(TransportProcessError::MissingSessionGridRevision)
     }
 
-    pub(crate) const fn epoch(self) -> HostEpoch {
+    pub(crate) const fn epoch(self) -> SessionEpoch {
         self.epoch
+    }
+
+    pub(crate) fn promote(self, observed: Self) -> Result<Self, TransportProcessError> {
+        let reserved_stamp = self.stamp()?;
+        let observed_stamp = observed.stamp()?;
+        if observed_stamp.grid_id() != reserved_stamp.grid_id() {
+            return Err(TransportProcessError::SessionGridGenerationMismatch);
+        }
+        if observed.epoch == self.epoch {
+            return if observed_stamp.revision() >= reserved_stamp.revision() {
+                Ok(observed)
+            } else {
+                Err(TransportProcessError::SessionGridGenerationMismatch)
+            };
+        }
+        let mut successor = observed;
+        successor.advance_restart()?;
+        if successor.epoch != self.epoch {
+            return Err(TransportProcessError::SessionGridGenerationMismatch);
+        }
+        let successor_stamp = successor.stamp()?;
+        if successor_stamp.revision() > reserved_stamp.revision() {
+            Ok(successor)
+        } else {
+            Ok(self)
+        }
     }
 }
 
@@ -156,19 +182,19 @@ pub(crate) struct TransportObservation {
     #[field(get, copy)]
     snapshot: Option<SessionTransportSnapshot>,
     #[field(get, copy)]
-    host_map: HostMapGeneration,
+    session_grid: SessionGridGeneration,
 }
 
 impl TransportObservation {
     pub(crate) const fn new(
         completion: Option<TransportCommitResult>,
         snapshot: Option<SessionTransportSnapshot>,
-        host_map: HostMapGeneration,
+        session_grid: SessionGridGeneration,
     ) -> Self {
         Self {
             completion,
             snapshot,
-            host_map,
+            session_grid,
         }
     }
 }
@@ -191,12 +217,14 @@ pub(crate) enum TransportProcessError {
     DuplicateEvent,
     #[error("{}", Self::FrameDiscontinuity.message())]
     FrameDiscontinuity,
-    #[error("{}", Self::HostMapGenerationExhausted.message())]
-    HostMapGenerationExhausted,
+    #[error("{}", Self::SessionGridGenerationExhausted.message())]
+    SessionGridGenerationExhausted,
+    #[error("{}", Self::SessionGridGenerationMismatch.message())]
+    SessionGridGenerationMismatch,
     #[error("{}", Self::InvalidBeatRange.message())]
     InvalidBeatRange,
-    #[error("{}", Self::MissingHostMapRevision.message())]
-    MissingHostMapRevision,
+    #[error("{}", Self::MissingSessionGridRevision.message())]
+    MissingSessionGridRevision,
     #[error("{}", Self::MissingObservation.message())]
     MissingObservation,
     #[error("{}", Self::MissingState.message())]
@@ -211,9 +239,16 @@ impl TransportProcessError {
             Self::AbortMismatch => "transport abort targets an applied revision",
             Self::DuplicateEvent => "session transport received duplicate events in one block",
             Self::FrameDiscontinuity => "graph render clock is discontinuous",
-            Self::HostMapGenerationExhausted => "host beat map generation space is exhausted",
+            Self::SessionGridGenerationExhausted => {
+                "session beat grid generation space is exhausted"
+            }
+            Self::SessionGridGenerationMismatch => {
+                "session beat grid generation does not match the reserved route boundary"
+            }
             Self::InvalidBeatRange => "session transport produced an invalid beat range",
-            Self::MissingHostMapRevision => "active transport has no host beat map revision",
+            Self::MissingSessionGridRevision => {
+                "active transport has no session beat grid revision"
+            }
             Self::MissingObservation => "transport observation store slot is missing",
             Self::MissingState => "transport commit state store slot is missing",
             Self::UnexpectedEvent => "session transport received an unexpected event",

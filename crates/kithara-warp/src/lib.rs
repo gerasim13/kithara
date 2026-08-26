@@ -1,36 +1,33 @@
 #![forbid(unsafe_code)]
 
-//! Beat-map alignment and synchronization contracts.
+//! Beat-grid warping and synchronization contracts.
 
 mod anchor;
-mod beat_map;
+mod beat_grid;
 mod coordinate;
-mod host;
 mod segment;
 mod sync;
 
 pub use anchor::{CoordinateError, SessionAnchor, SessionBeat, SessionFrame};
-pub use beat_map::{
-    BeatEstimate, BeatMap, BeatMapId, BeatMapIdAllocationError, BeatMapRevision, BeatMapSnapshot,
-    BeatMapSnapshotError, MapQuery, MapStamp, MapState, MapUnavailable,
+pub use beat_grid::{
+    BeatEstimate, BeatGrid, BeatGridId, BeatGridIdAllocationError, BeatGridQuery, BeatGridRegion,
+    BeatGridRevision, BeatGridSnapshot, BeatGridSnapshotError, BeatGridStamp, BeatGridState,
+    BeatGridUnavailable, BeatGridView,
 };
 pub(crate) use coordinate::AxisKind;
 pub use coordinate::{
-    AssetAxis, AssetFrame, Beat, BeatOrdinal, FrameUncertainty, HostAxis, HostEpoch, MapAxis,
-    MapCoordinateError, MapPoint, MapPosition,
+    AssetAxis, AssetFrame, Beat, BeatOrdinal, FrameUncertainty, MapAxis, MapCoordinateError,
+    MapPoint, MapPosition, SessionAxis, SessionEpoch,
 };
-pub use host::HostBeatMap;
 pub use segment::{
-    BeatEvidence, BeatMarker, BeatsPerMinute, MapRegion, MapSegment, Meter, MeterError, MeterFacts,
-    SegmentEndpoint, SegmentError, SegmentFacts, SegmentSet,
+    BeatEvidence, BeatMarker, BeatsPerMinute, BeatsPerMinuteError, MapRegion, MapRegionError,
+    MapSegment, Meter, MeterError, MeterFacts, SegmentEndpoint, SegmentError, SegmentFacts,
+    SegmentSet,
 };
 pub use sync::{
-    AlignmentCursor, AlignmentPlan, AlignmentPlanError, AlignmentPlanRevision, AlignmentRequest,
-    AlignmentSource, AlignmentTransition, BeatAlignment, LoadGeneration, PlanSpan, PlanSpanSlot,
-    PlanTransition, PlannedRenderSpan, PresentationFrontier, ReconcileCause, RenderFrontier,
-    SourceFrameRange, SyncAdmission, SyncApplied, SyncCapability, SyncError, SyncGroup,
-    SyncGroupSnapshot, SyncGroupTopologyError, SyncIntent, SyncMember, SyncMemberKind,
-    SyncMemberSnapshot, SyncOperation, SyncOperationId, SyncRejected, SyncStatusSnapshot,
-    TopologyOperation, TopologyRevision, TopologyStamp, TransportOperation, TransportRevision,
-    WarpPlan,
+    AlignmentSource, BeatAlignment, LoadGeneration, PresentationFrontier, ReconcileCause,
+    SyncAdmission, SyncApplied, SyncCapability, SyncError, SyncGroup, SyncGroupSnapshot,
+    SyncGroupTopologyError, SyncIntent, SyncMember, SyncMemberKind, SyncMemberSnapshot,
+    SyncOperation, SyncOperationId, SyncRejected, SyncStatusSnapshot, TopologyOperation,
+    TopologyRevision, TopologyStamp, TransportOperation, TransportRevision, WarpMapRevision,
 };

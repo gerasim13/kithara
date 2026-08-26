@@ -1,10 +1,9 @@
-use std::num::NonZeroU32;
-
 use firewheel::{
     FirewheelCtx, Volume, backend::AudioBackend, diff::Memo,
     dsp::volume::amp_to_linear_volume_clamped, node::NodeID, nodes::volume::VolumeNode,
 };
 use kithara_audio::{EqBandConfig, effects::eq::GainDb};
+use kithara_warp::{BeatGrid, MapAxis};
 use tracing::{debug, warn};
 
 use super::{
@@ -243,33 +242,51 @@ pub(super) mod lifecycle {
             if state.ctx.is_none() {
                 return Err(SessionError::NoContext);
             }
-            let mut host_map_generation = state
+            let observed_session_grid = state
                 .transport_control
                 .as_mut()
                 .ok_or_else(|| {
                     graph_state("session transport control is missing during idle shutdown")
                 })?
                 .observation()
-                .host_map();
+                .session_grid();
+            let mut session_grid_generation = match state.reserved_session_grid {
+                Some(reserved) => reserved
+                    .promote(observed_session_grid)
+                    .map_err(|error| graph_state(error.message()))?,
+                None => observed_session_grid,
+            };
             // Backends may defer processor drop after `stop_stream`. Reserve a
             // successor before stopping so teardown never depends on the RT
             // `stream_stopped` callback reaching this control handle. Control
             // admits at most one unobserved commit; the next context advances
             // once more before publishing.
-            host_map_generation
+            session_grid_generation
                 .advance_restart()
                 .map_err(|error| graph_state(error.message()))?;
-            let host_stamp = host_map_generation
+            let session_stamp = session_grid_generation
                 .stamp()
                 .map_err(|error| graph_state(error.message()))?;
-            let sample_rate = NonZeroU32::new(state.sample_rate_hint)
-                .ok_or(SessionError::InvalidSampleRate(state.sample_rate_hint))?;
+            let host = state
+                .host
+                .as_ref()
+                .ok_or_else(|| graph_state("session host group is missing during idle shutdown"))?;
+            let MapAxis::Session(axis) = host.snapshot().axis() else {
+                return Err(graph_state(
+                    "session host published a non-session grid during idle shutdown",
+                ));
+            };
+            let sample_rate = axis.sample_rate();
             state
                 .host
                 .as_mut()
                 .ok_or_else(|| graph_state("session host group is missing during idle shutdown"))?
-                .publish_unavailable(host_stamp, sample_rate, host_map_generation.epoch())?;
-            state.host_map_generation = Some(host_map_generation);
+                .publish_unavailable_grid(
+                    session_stamp,
+                    sample_rate,
+                    session_grid_generation.epoch(),
+                )?;
+            state.reserved_session_grid = Some(session_grid_generation);
             state
                 .ctx
                 .as_mut()
@@ -641,8 +658,8 @@ mod tests {
     use kithara_platform::time::{Duration, Instant};
     use kithara_test_utils::kithara;
     use kithara_warp::{
-        Beat, BeatMap, BeatMapRevision, HostAxis, HostEpoch, MapAxis, MapPoint, MapQuery, MapState,
-        MapUnavailable,
+        Beat, BeatGrid, BeatGridQuery, BeatGridRevision, BeatGridState, BeatGridUnavailable,
+        MapAxis, MapPoint, MapPosition, SessionAxis, SessionEpoch, SessionFrame,
     };
 
     use super::*;
@@ -739,11 +756,14 @@ mod tests {
                 dev.next_stream += 1;
                 dev.next_stream
             });
-            let sample_rate = NonZeroU32::new(config.sample_rate).ok_or(TestBackendError)?;
+            let sample_rate = NonZeroU32::new(config.sample_rate).unwrap_or(
+                NonZeroU32::new(SessionState::<TestBackend>::DEFAULT_SAMPLE_RATE)
+                    .expect("invariant: fixture default sample rate is non-zero"),
+            );
             let max_block_frames = NonZeroU32::new(512).ok_or(TestBackendError)?;
             let stream_info = StreamInfo {
                 sample_rate,
-                sample_rate_recip: 1.0 / f64::from(config.sample_rate),
+                sample_rate_recip: 1.0 / f64::from(sample_rate.get()),
                 prev_sample_rate: sample_rate,
                 max_block_frames,
                 num_stream_in_channels: 0,
@@ -813,12 +833,12 @@ mod tests {
         }
     }
 
-    fn start(state: &mut SessionState<TestBackend>, player_id: PlayerId) {
+    fn start_at(state: &mut SessionState<TestBackend>, player_id: PlayerId, sample_rate: u32) {
         match run_cmd(
             state,
             Cmd::StartPlayer {
                 player_id,
-                sample_rate: SessionState::<TestBackend>::DEFAULT_SAMPLE_RATE,
+                sample_rate,
                 master_volume: 1.0,
             },
         ) {
@@ -826,6 +846,14 @@ mod tests {
             Reply::Err(err) => panic!("player {player_id} failed to start: {err}"),
             _ => panic!("player start returned unexpected reply"),
         }
+    }
+
+    fn start(state: &mut SessionState<TestBackend>, player_id: PlayerId) {
+        start_at(
+            state,
+            player_id,
+            SessionState::<TestBackend>::DEFAULT_SAMPLE_RATE,
+        );
     }
 
     fn unregister(state: &mut SessionState<TestBackend>, player_id: PlayerId) {
@@ -836,7 +864,7 @@ mod tests {
         }
     }
 
-    fn set_tempo_and_read_host_map(
+    fn set_tempo_and_read_session_grid(
         state: &mut SessionState<TestBackend>,
     ) -> SessionTransportSnapshot {
         assert!(matches!(
@@ -963,46 +991,65 @@ mod tests {
             .as_ref()
             .expect("registration creates the host owner")
             .snapshot();
-        assert_eq!(initial.revision(), BeatMapRevision::first());
+        assert_eq!(initial.revision(), BeatGridRevision::first());
         assert_eq!(
             initial.state(),
-            MapState::Unavailable(MapUnavailable::NoGeometry)
+            BeatGridState::Unavailable(BeatGridUnavailable::NoGeometry)
         );
         assert_eq!(
             initial.axis(),
-            MapAxis::Host(HostAxis::new(
+            MapAxis::Session(SessionAxis::new(
                 NonZeroU32::new(SessionState::<TestBackend>::DEFAULT_SAMPLE_RATE)
                     .expect("the fixture sample rate is non-zero"),
-                HostEpoch::new(0),
+                SessionEpoch::new(0),
             ))
         );
         assert_eq!(
             state
-                .host_map_generation
-                .expect("registration seeds host-map generation")
+                .reserved_session_grid
+                .expect("registration seeds session-grid generation")
                 .stamp()
-                .expect("the initial host-map revision is committed"),
+                .expect("the initial session-grid revision is committed"),
             initial.stamp()
         );
-        start(&mut state, first_player);
-        let before = set_tempo_and_read_host_map(&mut state);
+        start_at(&mut state, first_player, 0);
+        let before = set_tempo_and_read_session_grid(&mut state);
         let first_live = state
             .host
             .as_ref()
             .expect("the host owner remains installed")
             .snapshot();
-        assert_eq!(first_live, before.host_map().snapshot());
+        assert_eq!(first_live, before.session_grid());
         assert_eq!(
             first_live.revision(),
             initial
                 .revision()
                 .checked_next()
-                .expect("the fixture map revision can advance")
+                .expect("the fixture grid revision can advance")
         );
         let old_beat = MapPoint::new(
-            before.host_map_stamp(),
+            before.session_grid_stamp(),
             Beat::new(1.0).expect("invariant: fixture beat is finite"),
         );
+
+        assert!(matches!(
+            invalidate_audio_route(&mut state, "deferred route before idle teardown"),
+            Reply::Ok
+        ));
+        let route_boundary = state
+            .host
+            .as_ref()
+            .expect("the route restart preserves the host owner")
+            .snapshot();
+        assert_eq!(
+            state
+                .reserved_session_grid
+                .expect("the deferred route owns a reserved generation")
+                .stamp()
+                .expect("the deferred route reservation has a revision"),
+            route_boundary.stamp()
+        );
+        assert!(state.stream_needs_restart);
 
         unregister(&mut state, first_player);
         let unavailable = state
@@ -1015,24 +1062,25 @@ mod tests {
             first_live
                 .revision()
                 .checked_next()
-                .expect("the fixture map revision can advance")
+                .and_then(BeatGridRevision::checked_next)
+                .expect("the fixture grid revision can advance twice")
         );
         assert_eq!(
             unavailable.state(),
-            MapState::Unavailable(MapUnavailable::NoGeometry)
+            BeatGridState::Unavailable(BeatGridUnavailable::NoGeometry)
         );
         assert_eq!(
             unavailable.axis(),
-            MapAxis::Host(HostAxis::new(
+            MapAxis::Session(SessionAxis::new(
                 NonZeroU32::new(SessionState::<TestBackend>::DEFAULT_SAMPLE_RATE)
                     .expect("the fixture sample rate is non-zero"),
-                HostEpoch::new(1),
+                SessionEpoch::new(2),
             ))
         );
         assert_eq!(
             state
-                .host_map_generation
-                .expect("idle teardown returns host-map generation")
+                .reserved_session_grid
+                .expect("idle teardown returns session-grid generation")
                 .stamp()
                 .expect("the restart boundary has a reserved revision"),
             unavailable.stamp()
@@ -1050,33 +1098,34 @@ mod tests {
         });
 
         let second_player = register(&mut state);
-        start(&mut state, second_player);
-        let after = set_tempo_and_read_host_map(&mut state);
+        start_at(&mut state, second_player, 0);
+        let after = set_tempo_and_read_session_grid(&mut state);
         let second_live = state
             .host
             .as_ref()
             .expect("the restarted stream reuses the host owner")
             .snapshot();
-        assert_eq!(second_live, after.host_map().snapshot());
+        assert_eq!(second_live, after.session_grid());
         assert_eq!(
             second_live.revision(),
             unavailable
                 .revision()
                 .checked_next()
-                .expect("the fixture map revision can advance")
+                .expect("the fixture grid revision can advance")
         );
 
         assert_eq!(
-            before.host_map_stamp().map_id(),
-            after.host_map_stamp().map_id(),
-            "one session keeps one host-map identity"
+            before.session_grid_stamp().grid_id(),
+            after.session_grid_stamp().grid_id(),
+            "one session keeps one session-grid identity"
         );
-        assert!(after.host_epoch() > before.host_epoch());
-        assert!(after.host_map_stamp().revision() > before.host_map_stamp().revision());
+        assert!(after.session_epoch() > before.session_epoch());
+        assert!(after.session_grid_stamp().revision() > before.session_grid_stamp().revision());
         assert!(matches!(
-            after.host_map().snapshot().position_at(old_beat),
-            MapQuery::Stale { expected, given }
-                if expected == after.host_map_stamp() && given == before.host_map_stamp()
+            after.session_grid().position_at(old_beat),
+            BeatGridQuery::Stale { expected, given }
+                if expected == after.session_grid_stamp()
+                    && given == before.session_grid_stamp()
         ));
         device(|dev| {
             assert_eq!(dev.retired_processors.len(), 1);
@@ -1086,26 +1135,137 @@ mod tests {
     }
 
     #[kithara::test]
-    fn idle_shutdown_accepts_an_unrendered_route_restart_generation() {
-        device(|dev| *dev = AudioDevice::default());
+    fn deferred_route_restart_converges_before_unrendered_idle_shutdown() {
+        device(|dev| {
+            *dev = AudioDevice::default();
+            dev.defer_processor_drop = true;
+        });
         let mut state = SessionState::<TestBackend>::new(start_test_stream);
         let player = register(&mut state);
-        start(&mut state, player);
-        let live = set_tempo_and_read_host_map(&mut state);
+        start_at(&mut state, player, 0);
+        let live = set_tempo_and_read_session_grid(&mut state);
 
         assert!(matches!(
             invalidate_audio_route(&mut state, "test route restart"),
             Reply::Ok
         ));
-        let restarted = state
+        let reserved = state
+            .host
+            .as_ref()
+            .expect("the route restart keeps the host owner")
+            .snapshot();
+        assert!(reserved.revision() > live.session_grid_stamp().revision());
+        assert_eq!(
+            state
+                .reserved_session_grid
+                .expect("the delayed processor keeps an exact route reservation")
+                .stamp()
+                .expect("the route reservation has a revision"),
+            reserved.stamp()
+        );
+        assert!(state.stream_needs_restart);
+        let Reply::SampleRate(rate) = run_cmd(&mut state, Cmd::QuerySampleRate) else {
+            panic!("the pending route restart must answer the sample-rate query")
+        };
+        assert_eq!(rate.measured, None);
+        assert_eq!(rate.requested, 0);
+        assert!(matches!(
+            run_cmd(&mut state, Cmd::QuerySessionTransport),
+            Reply::Err(SessionError::TransportNotProcessed)
+        ));
+        assert_eq!(
+            state
+                .host
+                .as_ref()
+                .expect("the pending restart keeps the host owner")
+                .snapshot(),
+            reserved,
+            "a stale transport observation must not replace the route reservation"
+        );
+        assert!(matches!(
+            run_cmd(
+                &mut state,
+                Cmd::SetSessionTempo {
+                    tempo: Tempo::new(121.0).expect("invariant: fixture tempo is valid"),
+                },
+            ),
+            Reply::Err(SessionError::TransportNotProcessed)
+        ));
+        assert_eq!(
+            state
+                .host
+                .as_ref()
+                .expect("the pending restart keeps the host owner")
+                .snapshot(),
+            reserved,
+            "a transport command must not cross an unfinished route boundary"
+        );
+        device(|dev| {
+            assert_eq!(dev.retired_processors.len(), 1);
+            dev.retired_processors.clear();
+            dev.defer_processor_drop = false;
+        });
+        assert!(matches!(run_cmd(&mut state, Cmd::Tick), Reply::Ok));
+        assert!(!state.stream_needs_restart);
+        assert!(state.reserved_session_grid.is_none());
+        let converged = state
             .transport_control
             .as_mut()
             .expect("the restarted stream keeps transport control")
             .observation()
-            .host_map()
+            .session_grid()
             .stamp()
-            .expect("the route restart reserves a host-map revision");
-        assert!(restarted.revision() > live.host_map_stamp().revision());
+            .expect("the restarted transport has a grid revision");
+        assert_eq!(converged, reserved.stamp());
+        let restart_frame = SessionFrame::new(
+            state
+                .ctx
+                .as_ref()
+                .expect("the restarted stream keeps its context")
+                .audio_clock()
+                .samples
+                .0,
+        );
+
+        assert!(
+            deliver_one_block(),
+            "the restarted processor must render its preserved transport"
+        );
+        let restarted = match run_cmd(&mut state, Cmd::QuerySessionTransport) {
+            Reply::SessionTransport(snapshot) => snapshot,
+            Reply::Err(error) => panic!("restarted transport snapshot failed: {error}"),
+            _ => panic!("restarted transport query returned an unexpected reply"),
+        };
+        let published = state
+            .host
+            .as_ref()
+            .expect("the restarted stream keeps the host owner")
+            .snapshot();
+        assert_eq!(published.state(), BeatGridState::Live);
+        let MapAxis::Session(reserved_axis) = reserved.axis() else {
+            panic!("the route reservation uses the session axis")
+        };
+        let MapAxis::Session(published_axis) = published.axis() else {
+            panic!("the restarted grid uses the session axis")
+        };
+        assert_eq!(published_axis.epoch(), reserved_axis.epoch());
+        assert!(published.revision() > reserved.revision());
+        assert_eq!(published, restarted.session_grid());
+        assert_eq!(
+            restarted
+                .anchor()
+                .frame_at(live.position())
+                .expect("the preserved beat is representable on the restarted axis"),
+            restart_frame
+        );
+        let old_position = MapPoint::new(
+            live.session_grid_stamp(),
+            MapPosition::Session(SessionFrame::new(0)),
+        );
+        assert!(matches!(
+            published.beat_at(old_position),
+            BeatGridQuery::Stale { .. }
+        ));
 
         unregister(&mut state, player);
 
@@ -1114,10 +1274,10 @@ mod tests {
             .as_ref()
             .expect("idle shutdown preserves the host owner")
             .snapshot();
-        assert!(unavailable.revision() > restarted.revision());
+        assert!(unavailable.revision() > reserved.revision());
         assert_eq!(
             unavailable.state(),
-            MapState::Unavailable(MapUnavailable::NoGeometry)
+            BeatGridState::Unavailable(BeatGridUnavailable::NoGeometry)
         );
         assert!(state.ctx.is_none());
     }

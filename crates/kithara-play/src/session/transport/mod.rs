@@ -6,6 +6,9 @@ mod process;
 #[cfg(test)]
 mod tests;
 
-pub(crate) use commit::HostMapGeneration;
-pub(crate) use control::{SessionTransportState, seek, set_playing, set_tempo, snapshot};
+pub(crate) use commit::SessionGridGeneration;
+pub(crate) use control::{
+    RouteRestartStatus, SessionTransportState, prepare_route_restart, seek, set_playing, set_tempo,
+    snapshot,
+};
 pub(crate) use node::{TransportControl, install};

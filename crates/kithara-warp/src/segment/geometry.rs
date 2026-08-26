@@ -1,4 +1,4 @@
-use std::cmp::Ordering;
+use std::{cmp::Ordering, ops::RangeInclusive};
 
 use kithara_platform::sync::Arc;
 
@@ -59,7 +59,7 @@ pub enum SegmentError {
     NonInvertibleBoundary { index: usize },
 }
 
-/// One validated affine relation between map positions and musical beats.
+/// One validated affine relation between grid positions and musical beats.
 #[derive(Clone, Debug, PartialEq, fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
 #[non_exhaustive]
@@ -216,7 +216,7 @@ impl MapSegment {
             f64::try_from(self.end_position).ok()? - f64::try_from(self.start_position).ok()?;
         let beats = f64::from(self.end_beat) - f64::from(self.start_beat);
         let bpm = beats * f64::from(axis.sample_rate().get()) * SECONDS_PER_MINUTE / frames;
-        BeatsPerMinute::new(bpm)
+        BeatsPerMinute::try_from(bpm).ok()
     }
 
     pub(crate) fn meter_at(&self, beat: Beat) -> Option<(Meter, BeatEvidence, FrameUncertainty)> {
@@ -228,7 +228,7 @@ impl MapSegment {
     }
 }
 
-/// An inclusive map-native position region.
+/// An inclusive grid-native position region.
 #[derive(Clone, Copy, Debug, PartialEq, fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
 #[non_exhaustive]
@@ -241,20 +241,51 @@ pub struct MapRegion {
     end: MapPosition,
 }
 
+/// An inclusive native-position region is not ordered on one coordinate axis.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
+#[non_exhaustive]
+pub enum MapRegionError {
+    /// Region endpoints use different coordinate axes.
+    #[error("region endpoints must use the same coordinate axis")]
+    MixedAxes,
+    /// The end precedes the start on their shared coordinate axis.
+    #[error("region end must not precede its start")]
+    Reversed,
+}
+
 impl MapRegion {
-    pub(crate) const fn point(position: MapPosition) -> Self {
+    /// Creates a region containing one native position.
+    #[must_use]
+    pub const fn point(position: MapPosition) -> Self {
         Self {
             start: position,
             end: position,
         }
     }
 
+    /// Creates an inclusive native-position region from trusted ordered facts.
+    #[must_use]
     pub(crate) const fn between(start: MapPosition, end: MapPosition) -> Self {
         Self { start, end }
     }
 }
 
-/// An immutable ordered collection of non-overlapping map segments.
+impl TryFrom<RangeInclusive<MapPosition>> for MapRegion {
+    type Error = MapRegionError;
+
+    fn try_from(range: RangeInclusive<MapPosition>) -> Result<Self, Self::Error> {
+        let (start, end) = range.into_inner();
+        if start.kind() != end.kind() {
+            return Err(MapRegionError::MixedAxes);
+        }
+        if start > end {
+            return Err(MapRegionError::Reversed);
+        }
+        Ok(Self { start, end })
+    }
+}
+
+/// An immutable ordered collection of non-overlapping grid segments.
 ///
 /// When two segments touch in both coordinate spaces, their shared seam belongs
 /// to the following segment. Forward and inverse queries therefore select the
@@ -285,7 +316,7 @@ impl SegmentSet {
             if let MapAxis::Asset(asset) = axis {
                 let inside = match segment.end_position() {
                     MapPosition::Asset(frame) => asset.contains_or_eof(frame),
-                    MapPosition::Host(_) => false,
+                    MapPosition::Session(_) => false,
                 };
                 if !inside {
                     return Err(SegmentError::OutsideExtent { index });
@@ -320,13 +351,6 @@ impl SegmentSet {
             axis,
             segments: segments.into(),
         })
-    }
-
-    pub(crate) fn empty(axis: MapAxis) -> Self {
-        Self {
-            axis,
-            segments: Arc::from([]),
-        }
     }
 
     pub(crate) fn by_position(&self, position: MapPosition) -> Option<&MapSegment> {
@@ -386,7 +410,7 @@ impl SegmentSet {
     fn zero_position(&self) -> MapPosition {
         match self.axis {
             MapAxis::Asset(_) => MapPosition::Asset(AssetFrame::ZERO),
-            MapAxis::Host(_) => MapPosition::Host(SessionFrame::new(0)),
+            MapAxis::Session(_) => MapPosition::Session(SessionFrame::new(0)),
         }
     }
 }

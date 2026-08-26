@@ -129,6 +129,9 @@ pub(super) fn tick_session<B: AudioBackend>(state: &mut SessionState<B>) -> Repl
                 });
             }
         }
+        if state.stream_needs_restart {
+            return Reply::Ok;
+        }
     }
 
     let update = state.ctx.as_mut().map(FirewheelCtx::update);
@@ -158,7 +161,7 @@ fn unregister_player<B: AudioBackend>(
         .as_ref()
         .and_then(|host| host.deck(idx))
         .ok_or_else(|| SessionError::Graph("registered deck is missing".to_owned()))?
-        .map
+        .grid
         .id();
     detach_deck(state, deck_id)?;
     debug!(
@@ -227,15 +230,19 @@ pub(super) fn restart_stream<B: AudioBackend>(
     state: &mut SessionState<B>,
     sample_rate: u32,
 ) -> Result<(), SessionError> {
-    let Some(ref mut fw_ctx) = state.ctx else {
+    if state.ctx.is_none() {
         return Err(SessionError::NoContext);
-    };
-    debug!(sample_rate, "[KITHARA-ROUTE] restarting firewheel stream");
-    if fw_ctx.is_audio_stream_running() {
-        trace!("[KITHARA-ROUTE] stopping existing stream before restart");
-        fw_ctx.stop_stream();
     }
+    debug!(sample_rate, "[KITHARA-ROUTE] restarting firewheel stream");
+    if transport::prepare_route_restart(state, sample_rate)?
+        == transport::RouteRestartStatus::Pending
+    {
+        trace!("[KITHARA-ROUTE] waiting for the previous stream processor to stop");
+        return Ok(());
+    }
+    let fw_ctx = state.ctx.as_mut().ok_or(SessionError::NoContext)?;
     (state.start_stream_fn)(fw_ctx, sample_rate).map_err(SessionError::StreamStart)?;
+    state.reserved_session_grid = None;
     state.sample_rate_hint = sample_rate;
     state.stream_needs_restart = false;
     trace_stream_info(state, "restart-stream");
@@ -281,7 +288,9 @@ mod tests {
     use kithara_events::EventBus;
     use kithara_platform::sync::Arc;
     use kithara_test_utils::kithara;
-    use kithara_warp::{BeatMap, SyncGroup};
+    use kithara_warp::{
+        BeatGrid, BeatGridSnapshot, BeatGridState, BeatGridUnavailable, MapAxis, SyncGroup,
+    };
     use ringbuf::{HeapRb, traits::Split};
 
     use super::*;
@@ -374,11 +383,14 @@ mod tests {
                 return Err(RouteLossError);
             }
 
-            let sample_rate = NonZeroU32::new(config.sample_rate).ok_or(RouteLossError)?;
+            let sample_rate = NonZeroU32::new(config.sample_rate).unwrap_or(
+                NonZeroU32::new(SessionState::<RouteLossBackend>::DEFAULT_SAMPLE_RATE)
+                    .expect("invariant: fixture default sample rate is non-zero"),
+            );
             let max_block_frames = NonZeroU32::new(512).ok_or(RouteLossError)?;
             let stream_info = StreamInfo {
                 sample_rate,
-                sample_rate_recip: 1.0 / f64::from(config.sample_rate),
+                sample_rate_recip: 1.0 / f64::from(sample_rate.get()),
                 prev_sample_rate: sample_rate,
                 max_block_frames,
                 num_stream_in_channels: 0,
@@ -432,6 +444,29 @@ mod tests {
         state.host.as_ref().map_or(0, Host::deck_count)
     }
 
+    fn host_grid(state: &SessionState<RouteLossBackend>) -> BeatGridSnapshot {
+        state
+            .host
+            .as_ref()
+            .expect("the session host is present")
+            .snapshot()
+    }
+
+    fn assert_route_boundary(before: &BeatGridSnapshot, boundary: &BeatGridSnapshot) {
+        assert_eq!(
+            boundary.state(),
+            BeatGridState::Unavailable(BeatGridUnavailable::NoGeometry)
+        );
+        assert!(boundary.revision() > before.revision());
+        let MapAxis::Session(before_axis) = before.axis() else {
+            panic!("the previous host grid uses the session axis")
+        };
+        let MapAxis::Session(boundary_axis) = boundary.axis() else {
+            panic!("the route boundary uses the session axis")
+        };
+        assert!(boundary_axis.epoch() > before_axis.epoch());
+    }
+
     fn deck_by_player_id(state: &SessionState<RouteLossBackend>, player_id: u64) -> &Deck {
         let host = state.host.as_ref().expect("the host is present");
         let index = host
@@ -449,12 +484,12 @@ mod tests {
         let player_id = register_player(&mut state);
         let host = state.host.as_ref().expect("registration creates the host");
         let registered = host.topology().expect("the host topology is valid");
-        let host_id = registered.group_map().id();
+        let host_id = registered.group_grid().id();
         let deck = deck_by_player_id(&state, player_id);
         let group: &dyn SyncGroup<NestedGroup = Deck> = deck;
         let deck_topology = group.topology().expect("the deck topology is valid");
         assert_eq!(registered.members().len(), 1);
-        assert_eq!(registered.members()[0].map().id(), deck.id());
+        assert_eq!(registered.members()[0].grid().id(), deck.id());
         assert_eq!(
             registered.members()[0].group_topology(),
             Some(&deck_topology)
@@ -517,7 +552,7 @@ mod tests {
         assert_eq!(state.next_player_id, next_player_id);
         assert_eq!(deck_count(&state), 0);
         assert!(state.host.is_none());
-        assert!(state.host_map_generation.is_none());
+        assert!(state.reserved_session_grid.is_none());
     }
 
     #[kithara::test]
@@ -534,7 +569,7 @@ mod tests {
         assert_eq!(state.next_player_id, u64::MAX);
         assert_eq!(deck_count(&state), 0);
         assert!(state.host.is_none());
-        assert!(state.host_map_generation.is_none());
+        assert!(state.reserved_session_grid.is_none());
     }
 
     #[kithara::test]
@@ -556,6 +591,13 @@ mod tests {
         );
 
         let player_id = register_player(&mut state);
+        assert!(matches!(
+            run_cmd(&mut state, Cmd::QuerySampleRate),
+            Reply::SampleRate(SessionSampleRate {
+                measured: None,
+                requested: SessionState::<RouteLossBackend>::DEFAULT_SAMPLE_RATE,
+            })
+        ));
         assert!(matches!(
             run_cmd(
                 &mut state,
@@ -588,11 +630,18 @@ mod tests {
                 &mut state,
                 Cmd::StartPlayer {
                     player_id,
-                    sample_rate: 44_100,
+                    sample_rate: 0,
                     master_volume: 1.0,
                 },
             ),
             Reply::Ok
+        ));
+        assert!(matches!(
+            run_cmd(&mut state, Cmd::QuerySampleRate),
+            Reply::SampleRate(SessionSampleRate {
+                measured: Some(44_100),
+                requested: 0,
+            })
         ));
         assert!(matches!(
             run_cmd(&mut state, Cmd::AllocateSlot { player_id }),
@@ -602,6 +651,7 @@ mod tests {
             route_loss(|probe| probe.start_count.load(Ordering::SeqCst)),
             1
         );
+        let before_route = host_grid(&state);
 
         assert!(matches!(
             run_cmd(
@@ -618,6 +668,23 @@ mod tests {
             2,
             "explicit platform route invalidation must restart the audio stream"
         );
+        assert_route_boundary(&before_route, &host_grid(&state));
+        let first_boundary = host_grid(&state);
+        assert!(matches!(
+            run_cmd(
+                &mut state,
+                Cmd::InvalidateAudioRoute {
+                    reason: String::from("newDeviceAvailable"),
+                },
+            ),
+            Reply::Ok
+        ));
+        assert_eq!(
+            route_loss(|probe| probe.start_count.load(Ordering::SeqCst)),
+            3,
+            "a second physical route invalidation must start a new stream generation"
+        );
+        assert_route_boundary(&first_boundary, &host_grid(&state));
         assert!(
             state.ctx.is_some(),
             "route invalidation must keep the graph context"
@@ -655,7 +722,7 @@ mod tests {
                 &mut state,
                 Cmd::StartPlayer {
                     player_id,
-                    sample_rate: 44_100,
+                    sample_rate: 0,
                     master_volume: 1.0,
                 },
             ),
@@ -672,6 +739,7 @@ mod tests {
             Reply::SlotAllocated(..)
         ));
         assert_eq!(deck(&state, 0).slots.len(), 1);
+        let before_route = host_grid(&state);
 
         route_loss(|probe| probe.fail_next_poll.store(true, Ordering::SeqCst));
         assert!(matches!(run_cmd(&mut state, Cmd::Tick), Reply::Ok));
@@ -681,6 +749,7 @@ mod tests {
             2,
             "stream loss must restart the audio stream immediately"
         );
+        assert_route_boundary(&before_route, &host_grid(&state));
         assert!(
             state.ctx.is_some(),
             "session must keep the graph context across stream restart"
@@ -732,6 +801,7 @@ mod tests {
             route_loss(|probe| probe.start_count.load(Ordering::SeqCst)),
             1
         );
+        let before_route = host_grid(&state);
 
         route_loss(|probe| {
             probe.fail_next_poll.store(true, Ordering::SeqCst);
@@ -753,6 +823,8 @@ mod tests {
             route_loss(|probe| probe.start_count.load(Ordering::SeqCst)),
             2
         );
+        let boundary = host_grid(&state);
+        assert_route_boundary(&before_route, &boundary);
 
         assert!(matches!(run_cmd(&mut state, Cmd::Tick), Reply::Ok));
         assert_eq!(
@@ -760,6 +832,9 @@ mod tests {
             3,
             "next tick must retry the stream restart"
         );
+        let retried = host_grid(&state);
+        assert_eq!(retried.stamp(), boundary.stamp());
+        assert_eq!(retried.axis(), boundary.axis());
         assert!(!state.stream_needs_restart);
         assert!(deck(&state, 0).started);
     }

@@ -2,11 +2,14 @@ use std::num::NonZeroU32;
 
 use firewheel::{FirewheelCtx, backend::AudioBackend, error::UpdateError};
 use kithara_events::TransportEvent;
-use kithara_warp::SessionFrame;
+use kithara_warp::{BeatGrid, BeatGridState, MapAxis, SessionFrame};
 
-use super::commit::{
-    SessionTransportCommit, TransportBoundary, TransportCommitResult, TransportCommitStamp,
-    TransportObservation,
+use super::{
+    commit::{
+        SessionGridGeneration, SessionTransportCommit, TransportBoundary, TransportCommitResult,
+        TransportCommitStamp, TransportObservation,
+    },
+    process::converge_transport_restart,
 };
 use crate::{
     api::{SessionBeat, SessionTransportSnapshot, Tempo, TransportRevision},
@@ -152,6 +155,139 @@ pub(crate) fn snapshot<B: AudioBackend>(
     refresh_observation(state)?
         .snapshot()
         .ok_or(SessionError::TransportNotProcessed)
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum RouteRestartStatus {
+    Pending,
+    Ready,
+}
+
+pub(crate) fn prepare_route_restart<B: AudioBackend>(
+    state: &mut SessionState<B>,
+    sample_rate: u32,
+) -> Result<RouteRestartStatus, SessionError> {
+    let was_running = state
+        .ctx
+        .as_ref()
+        .ok_or(SessionError::NoContext)?
+        .is_audio_stream_running();
+    let current = state
+        .host
+        .as_ref()
+        .ok_or_else(|| SessionError::Graph("session host group is missing".to_owned()))?
+        .snapshot();
+    let MapAxis::Session(axis) = current.axis() else {
+        return Err(SessionError::Graph(
+            "session host published a non-session grid axis".to_owned(),
+        ));
+    };
+    let target = if let Some(target) = state.reserved_session_grid {
+        let target_stamp = target
+            .stamp()
+            .map_err(|error| SessionError::Graph(error.message().to_owned()))?;
+        if was_running
+            || !matches!(current.state(), BeatGridState::Unavailable(_))
+            || current.stamp() != target_stamp
+            || axis.epoch() != target.epoch()
+        {
+            return Err(SessionError::Graph(
+                "reserved route boundary does not match the stopped session".to_owned(),
+            ));
+        }
+        target
+    } else {
+        let observed = state
+            .transport_control
+            .as_mut()
+            .ok_or_else(|| SessionError::Graph("session transport control is missing".to_owned()))?
+            .observation()
+            .session_grid();
+        if observed.epoch() < axis.epoch() {
+            return Err(SessionError::Graph(
+                "session transport generation trails the published host grid".to_owned(),
+            ));
+        }
+        let mut target = observed;
+        if was_running || observed.epoch() == axis.epoch() {
+            target
+                .advance_restart()
+                .map_err(|error| SessionError::Graph(error.message().to_owned()))?;
+        }
+        let stamp = target
+            .stamp()
+            .map_err(|error| SessionError::Graph(error.message().to_owned()))?;
+        // Zero remains a backend-default request; the grid axis is always concrete.
+        let sample_rate = NonZeroU32::new(sample_rate).unwrap_or_else(|| axis.sample_rate());
+        state
+            .host
+            .as_mut()
+            .ok_or_else(|| SessionError::Graph("session host group is missing".to_owned()))?
+            .publish_unavailable_grid(stamp, sample_rate, target.epoch())?;
+        state.reserved_session_grid = Some(target);
+        target
+    };
+
+    if was_running {
+        state
+            .ctx
+            .as_mut()
+            .ok_or(SessionError::NoContext)?
+            .stop_stream();
+    }
+    finish_route_restart(state, target)
+}
+
+fn finish_route_restart<B: AudioBackend>(
+    state: &mut SessionState<B>,
+    target: SessionGridGeneration,
+) -> Result<RouteRestartStatus, SessionError> {
+    let Some(store) = state
+        .ctx
+        .as_mut()
+        .ok_or(SessionError::NoContext)?
+        .proc_store_mut()
+    else {
+        return Ok(RouteRestartStatus::Pending);
+    };
+    let actual = converge_transport_restart(store, target)
+        .map_err(|error| SessionError::Graph(error.message().to_owned()))?;
+    let promoted = target
+        .promote(actual)
+        .map_err(|error| SessionError::Graph(error.message().to_owned()))?;
+    if promoted != target {
+        let published = state
+            .host
+            .as_ref()
+            .ok_or_else(|| SessionError::Graph("session host group is missing".to_owned()))?
+            .snapshot();
+        let MapAxis::Session(published_axis) = published.axis() else {
+            return Err(SessionError::Graph(
+                "session host published a non-session grid axis".to_owned(),
+            ));
+        };
+        let stamp = promoted
+            .stamp()
+            .map_err(|error| SessionError::Graph(error.message().to_owned()))?;
+        state
+            .host
+            .as_mut()
+            .ok_or_else(|| SessionError::Graph("session host group is missing".to_owned()))?
+            .publish_unavailable_grid(stamp, published_axis.sample_rate(), promoted.epoch())?;
+        state.reserved_session_grid = Some(promoted);
+    }
+    let observed = state
+        .transport_control
+        .as_mut()
+        .ok_or_else(|| SessionError::Graph("session transport control is missing".to_owned()))?
+        .observation()
+        .session_grid();
+    if observed != promoted {
+        return Err(SessionError::Graph(
+            "session transport did not converge to the reserved route boundary".to_owned(),
+        ));
+    }
+    Ok(RouteRestartStatus::Ready)
 }
 
 fn ensure_no_pending_commit<B: AudioBackend>(state: &SessionState<B>) -> Result<(), SessionError> {
@@ -302,17 +438,22 @@ where
 fn refresh_observation<B: AudioBackend>(
     state: &mut SessionState<B>,
 ) -> Result<TransportObservation, SessionError> {
+    if state.reserved_session_grid.is_some() {
+        return Err(SessionError::TransportNotProcessed);
+    }
     let observation = state
         .transport_control
         .as_mut()
         .ok_or_else(|| SessionError::Graph("session transport control is missing".to_owned()))?
         .observation();
     if let Some(snapshot) = observation.snapshot() {
-        state
+        let host = state
             .host
             .as_mut()
-            .ok_or_else(|| SessionError::Graph("session host group is missing".to_owned()))?
-            .publish_map(&snapshot.host_map())?;
+            .ok_or_else(|| SessionError::Graph("session host group is missing".to_owned()))?;
+        if host.snapshot().stamp() != snapshot.session_grid_stamp() {
+            host.publish_grid(snapshot.session_grid())?;
+        }
     }
     if let Some(completion) = observation.completion() {
         apply_completion(state, completion);

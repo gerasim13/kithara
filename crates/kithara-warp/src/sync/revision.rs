@@ -1,6 +1,6 @@
 use std::num::NonZeroU64;
 
-use crate::BeatMapId;
+use crate::BeatGridId;
 
 fn checked_next_revision(revision: NonZeroU64) -> Option<NonZeroU64> {
     revision.get().checked_add(1).and_then(NonZeroU64::new)
@@ -70,7 +70,7 @@ impl SyncOperationId {
     }
 }
 
-/// Monotonic revision of one immutable alignment plan.
+/// Monotonic revision of one immutable warp map.
 #[derive(
     Clone,
     Copy,
@@ -86,10 +86,10 @@ impl SyncOperationId {
 #[display("{_0}")]
 #[into(u64)]
 #[repr(transparent)]
-pub struct AlignmentPlanRevision(NonZeroU64);
+pub struct WarpMapRevision(NonZeroU64);
 
-impl AlignmentPlanRevision {
-    /// Returns the first revision assigned by a plan owner.
+impl WarpMapRevision {
+    /// Returns the first revision assigned by a warp-map owner.
     #[must_use]
     pub const fn first() -> Self {
         Self(NonZeroU64::MIN)
@@ -171,9 +171,9 @@ impl TransportRevision {
 #[fieldwork(opt_in, get)]
 #[non_exhaustive]
 pub struct TopologyStamp {
-    /// Returns the stable identity of the group map.
+    /// Returns the stable identity of the group grid.
     #[field(get, copy)]
-    pub(super) group_id: BeatMapId,
+    pub(super) group_id: BeatGridId,
     /// Returns the immutable topology revision.
     #[field(get, copy)]
     revision: TopologyRevision,
@@ -182,7 +182,7 @@ pub struct TopologyStamp {
 impl TopologyStamp {
     /// Creates a composite topology stamp.
     #[must_use]
-    pub const fn new(group_id: BeatMapId, revision: TopologyRevision) -> Self {
+    pub const fn new(group_id: BeatGridId, revision: TopologyRevision) -> Self {
         Self { group_id, revision }
     }
 }
