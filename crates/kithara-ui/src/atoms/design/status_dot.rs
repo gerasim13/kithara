@@ -8,6 +8,7 @@ use crate::{
 };
 
 /// A coloured dot with a word beside it.
+#[derive(Clone, PartialEq)]
 pub(crate) struct StatusDot {
     active_dot: Option<Rgba>,
     dot: Rgba,
@@ -18,6 +19,7 @@ pub(crate) struct StatusDot {
 }
 
 /// The caption and whether the document marks this dot active.
+#[derive(Clone, PartialEq)]
 pub(crate) struct StatusDotData {
     pub(crate) active: bool,
     pub(crate) label: String,

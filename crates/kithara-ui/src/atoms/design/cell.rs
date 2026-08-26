@@ -7,6 +7,7 @@ use crate::{
 };
 
 /// A framed box with a caption under it.
+#[derive(Clone, PartialEq)]
 pub(crate) struct Cell {
     background: Rgba,
     highlighted: Face,
@@ -17,6 +18,7 @@ pub(crate) struct Cell {
 
 /// How the cell looks in one of its two states, resolved from the skin when the
 /// cell is built.
+#[derive(Clone, PartialEq)]
 struct Face {
     border: Rgba,
     frame: FrameSkin,

@@ -6,6 +6,7 @@ use crate::{
     solve::{Length, Size},
 };
 
+#[derive(Clone, PartialEq)]
 pub(crate) struct TabLarge {
     active_color: Rgba,
     idle_color: Rgba,

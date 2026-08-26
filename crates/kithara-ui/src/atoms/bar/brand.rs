@@ -12,6 +12,7 @@ use crate::{
 /// between them is what makes it a wordmark instead of a caption.
 const LETTERS: [&str; 7] = ["K", "I", "T", "H", "A", "R", "A"];
 
+#[derive(Clone, PartialEq)]
 pub(crate) struct Brand {
     metrics: GlobalBarSkin,
     panel: Rgba,

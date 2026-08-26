@@ -5,6 +5,7 @@ use crate::{
     skin::KnobSkin,
 };
 
+#[derive(Clone, PartialEq)]
 pub(crate) struct Knob {
     body_border: Rgba,
     body_fill: Rgba,

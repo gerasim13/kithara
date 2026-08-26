@@ -1,6 +1,6 @@
 use crate::render::{WaveBucket, WaveformView};
 
-#[derive(PartialEq)]
+#[derive(Clone, PartialEq)]
 pub(crate) struct WaveformData {
     pub(crate) buckets: Box<[WaveBucket]>,
     pub(crate) revision: u64,
@@ -89,7 +89,7 @@ mod tests {
     }
 }
 
-#[derive(PartialEq)]
+#[derive(Clone, PartialEq)]
 pub(crate) struct OverlayData {
     pub(crate) title: String,
     pub(crate) artist: String,

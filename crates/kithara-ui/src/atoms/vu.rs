@@ -7,6 +7,7 @@ use crate::{
     skin::VuVerticalSkin,
 };
 
+#[derive(Clone, PartialEq)]
 pub(crate) struct VerticalVu {
     metrics: VuVerticalSkin,
     palette: RenderPalette,

@@ -9,6 +9,7 @@ use crate::{
 };
 
 /// A block of one palette colour, captioned with its name and its hex.
+#[derive(Clone, PartialEq)]
 pub(crate) struct Swatch {
     border: Rgba,
     fill: Rgba,

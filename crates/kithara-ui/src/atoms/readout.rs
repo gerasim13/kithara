@@ -8,6 +8,7 @@ use crate::{
 };
 
 /// A caption stacked over the value it names, framed or bare.
+#[derive(Clone, PartialEq)]
 pub(crate) struct Readout {
     framed: bool,
     label_color: Rgba,
@@ -20,6 +21,7 @@ pub(crate) struct Readout {
 
 /// What a readout is handed each frame: the word it names and the word it
 /// shows.
+#[derive(Clone, PartialEq)]
 pub(crate) struct ReadoutData {
     pub(crate) label: String,
     pub(crate) value: String,

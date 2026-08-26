@@ -6,6 +6,7 @@ use crate::{
     skin::VuStereoSkin,
 };
 
+#[derive(Clone, PartialEq)]
 pub(crate) struct StereoMeter {
     metrics: VuStereoSkin,
     palette: RenderPalette,

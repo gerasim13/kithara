@@ -6,6 +6,7 @@ use crate::{
     skin::{ColorRole, FontFamily, FontWeight, NavSkin, TextRoleSkin},
 };
 
+#[derive(Clone, PartialEq)]
 pub(crate) struct NavItem {
     active: Face,
     idle: Face,
@@ -16,6 +17,7 @@ pub(crate) struct NavItem {
 /// How the item looks in one of its two states. Both are resolved from the skin
 /// when the item is built, so the page it points at becoming the current one is
 /// a paint-time choice rather than a reason to rebuild the control.
+#[derive(Clone, PartialEq)]
 struct Face {
     background: Rgba,
     content: Rgba,

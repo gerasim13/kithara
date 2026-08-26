@@ -7,6 +7,7 @@ use crate::{
     skin::{ColorRole, FontFamily, FontSkin, FrameSkin, TextRoleSkin},
 };
 
+#[derive(Clone, PartialEq)]
 pub(crate) struct Chip {
     active: Face,
     idle: Face,
@@ -17,6 +18,7 @@ pub(crate) struct Chip {
 /// How the chip looks in one of its two states. Both are resolved from the skin
 /// when the chip is built, so switching states is a paint-time choice rather
 /// than a reason to rebuild the control.
+#[derive(Clone, PartialEq)]
 struct Face {
     border: Rgba,
     fill: Rgba,

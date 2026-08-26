@@ -60,10 +60,10 @@ pub(crate) struct IndexedVisual {
 /// while it is mounted arrives as `Data`. A host that keeps its widgets also
 /// needs to be told when that data changes — see the `Retained` half of the
 /// contract, which only such a host implements.
-pub(crate) trait ControlPainter {
+pub(crate) trait ControlPainter: Clone + PartialEq {
     /// What the host hands the painter each frame: a word for most, the pair a
     /// button swaps between while active, a value for a meter.
-    type Data;
+    type Data: Clone + PartialEq;
 
     /// Whether the pointer resting on or pressing the control changes what it
     /// draws, which decides if a host tracks those edges and repaints on them.
@@ -127,6 +127,7 @@ pub(crate) trait ControlPainter {
 }
 
 /// What a control that shows one word and a state is handed each frame.
+#[derive(Clone, PartialEq)]
 pub(crate) struct Labelled {
     pub(crate) active: bool,
     pub(crate) label: String,
@@ -153,6 +154,7 @@ impl ControlPainter for Chip {
 /// The mark travels with the word rather than with the skin because reading an
 /// authored icon can fail, and a control whose art cannot be read draws nothing
 /// at all rather than a row with a hole in it.
+#[derive(Clone, PartialEq)]
 pub(crate) struct NavData {
     pub(crate) active: bool,
     pub(crate) label: String,
@@ -217,6 +219,7 @@ impl ControlPainter for TabLarge {
 }
 
 /// What a control that sets one fraction and captions it is handed each frame.
+#[derive(Clone, PartialEq)]
 pub(crate) struct Captioned {
     pub(crate) label: Option<String>,
     pub(crate) value: f32,
@@ -303,6 +306,7 @@ impl ControlPainter for StereoMeter {
 
 /// What a button is handed each frame: the word for each of its states, and
 /// which state it is in.
+#[derive(Clone, PartialEq)]
 pub(crate) struct ButtonData {
     pub(crate) active: bool,
     pub(crate) label: ButtonLabel<String>,
@@ -416,6 +420,7 @@ impl ControlPainter for StatusDot {
 
 /// What a cell is handed each frame: its caption, and whether it is the one
 /// picked out.
+#[derive(Clone, PartialEq)]
 pub(crate) struct CellData {
     pub(crate) highlighted: bool,
     pub(crate) label: Option<String>,

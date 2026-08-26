@@ -10,6 +10,7 @@ use crate::{
 const ELAPSED: &str = "TIME";
 
 /// The deck's tempo, or where it is when no tempo has been measured.
+#[derive(Clone, PartialEq)]
 pub(crate) struct Tempo {
     caption: Rgba,
     caption_role: TextRoleSkin,

@@ -11,6 +11,7 @@ use crate::{
 const SECONDS_PER_MINUTE: u64 = 60;
 
 /// A pair of clock readings, centred on the deep panel behind them.
+#[derive(Clone, PartialEq)]
 pub(crate) struct Clock {
     deep: Rgba,
     reading: Rgba,

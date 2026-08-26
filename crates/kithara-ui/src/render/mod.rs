@@ -51,7 +51,7 @@ pub(crate) use text_input::text_input_layout;
 pub(crate) use window::{DragGhost, TitleBar, WindowControls, WindowSurface};
 #[cfg(feature = "iced")]
 pub(crate) use {
-    controls::{ChromeLeaf, chrome_leaf, header_chevron, tree_rows},
+    controls::{ChromeLeaf, Marked, Marks, chrome_leaf, header_chevron, tree_rows},
     immediate::{
         Anchored, DropZone, MiniWave, ModuleChrome, Placement, Text, Tree, Viewport, WheelSurface,
         frame_overlay,

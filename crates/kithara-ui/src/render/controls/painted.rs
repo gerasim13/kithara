@@ -10,7 +10,7 @@ use iced::{
         widget::{self, Tree},
     },
     mouse::{self, Cursor},
-    widget::canvas::{self, Action},
+    widget::canvas::Action,
 };
 use kithara_platform::time::Instant;
 
@@ -29,7 +29,9 @@ use crate::{
     },
     render::{
         Skin, UiEvent, activate, command,
-        controls::{Drag, Grip, IndexEvent, IndexPress, Indexing, Press, Span, snapped},
+        controls::{
+            Drag, Grip, IndexEvent, IndexPress, Indexing, Marked, Marks, Press, Span, snapped,
+        },
         publish, scalar, span_event,
     },
     shaping::{TextContext, TextResources},
@@ -52,35 +54,65 @@ where
     transform: Transform,
 }
 
-/// What one painted canvas keeps between frames: the shaping context, the
-/// geometry it last tessellated, and the list that geometry was drawn from.
-#[derive(Default)]
-pub(crate) struct PaintState {
-    drawn: RefCell<Option<DrawList>>,
-    geometry: canvas::Cache,
+/// What the pointer made of a control this frame: one state for the whole of
+/// it, or one per cell for a control drawn in cells.
+#[derive(Clone, Copy, PartialEq)]
+pub(crate) enum Visual {
+    Indexed(IndexedVisual),
+    Whole(VisualState),
+}
+
+/// Everything the picture a painter draws is a function of: the painter, what
+/// the host handed it this frame, the box it was given, what the pointer made
+/// of it, and the pose an object put it under.
+///
+/// These are the arguments [`ControlPainter::draw`] receives rather than a
+/// digest of them, so a painter that starts reading one more thing cannot leave
+/// the key behind: whatever it reads, it reads through one of these, and
+/// equality is derived from all of them at once.
+#[derive(PartialEq)]
+pub(crate) struct PaintKey<Painter>
+where
+    Painter: ControlPainter,
+{
+    bounds: Rect,
+    data: Painter::Data,
+    painter: Painter,
+    transform: Transform,
+    visual: Visual,
+}
+
+/// What one painted canvas keeps between frames: the shaping context, and the
+/// picture it drew kept beside the key it was drawn from.
+pub(crate) struct PaintState<Key>
+where
+    Key: PartialEq,
+{
+    marks: Marks<Key>,
     text: RefCell<Option<TextContext>>,
 }
 
-impl PaintState {
-    /// Drops the kept geometry when the list behind it changed, and reports
-    /// whether it had to. That answer is the whole of this cache, so it is
-    /// returned rather than inferred from the pixels.
-    ///
-    /// The key is the drawn list itself and not a hash of what went into it.
-    /// An input hash has to name everything a painter reads — the value, the
-    /// box, and the shape the skin gave it — and anything it forgets freezes a
-    /// control on the screen. Two equal lists draw the same picture by
-    /// construction, and equality also settles the floats for free: `-0.0`
-    /// compares equal to `0.0`, which is the normalisation the lsq wheel spells
-    /// out with `OrderedFloat` for its own path caches.
-    pub(crate) fn refresh(&self, list: &DrawList) -> bool {
-        let mut drawn = self.drawn.borrow_mut();
-        if drawn.as_ref() == Some(list) {
-            return false;
+impl<Key> Default for PaintState<Key>
+where
+    Key: PartialEq,
+{
+    fn default() -> Self {
+        Self {
+            marks: Marks::default(),
+            text: RefCell::default(),
         }
-        self.geometry.clear();
-        *drawn = Some(list.clone());
-        true
+    }
+}
+
+impl<Key> PaintState<Key>
+where
+    Key: PartialEq,
+{
+    /// Builds the picture only when the key it hangs on moved, and reports what
+    /// the frame cost. A control nothing touched is not drawn again at all,
+    /// which is the saving the retained host gets from its own invalidation.
+    pub(crate) fn mark(&self, key: Key, build: impl FnOnce() -> DrawList) -> Marked {
+        self.marks.mark(key, build)
     }
 
     /// The shaping context this widget keeps between frames, made on first ask.
@@ -93,38 +125,41 @@ impl PaintState {
         with(text.get_or_insert_with(|| resources.into()))
     }
 
-    /// Replays one list at `bounds`, tessellating it only when it differs from
-    /// the list the kept geometry was built from.
+    /// Replays the kept picture at `bounds`, tessellating it only when the
+    /// geometry behind it was dropped. Nothing at all before the first
+    /// [`Self::mark`].
     ///
-    /// `region` is the part of the box the list may put ink in, which is the
-    /// box itself unless something moved the drawing out of it.
+    /// `region` carves the part of the box the picture may put ink in, which is
+    /// the box itself unless something moved the drawing out of it.
     pub(crate) fn replay(
         &self,
         renderer: &mut Renderer,
         bounds: Rectangle,
-        region: Rectangle,
-        list: &DrawList,
+        region: impl FnOnce(&DrawList) -> Rectangle,
         resources: &TextResources,
     ) {
-        self.refresh(list);
-        let inner = Rect {
-            h: region.height,
-            w: region.width,
-            x: region.x,
-            y: region.y,
-        };
-        renderer.with_translation(Vector::new(bounds.x, bounds.y), |renderer| {
-            let geometry = self.geometry.draw_with_bounds(renderer, region, |frame| {
-                replay_ordered_in(list, frame, resources, inner);
+        self.marks.drawn(|geometry, list| {
+            let region = region(list);
+            let inner = Rect {
+                h: region.height,
+                w: region.width,
+                x: region.x,
+                y: region.y,
+            };
+            renderer.with_translation(Vector::new(bounds.x, bounds.y), |renderer| {
+                let drawn = geometry.draw_with_bounds(renderer, region, |frame| {
+                    replay_ordered_in(list, frame, resources, inner);
+                });
+                renderer.draw_geometry(drawn);
             });
-            renderer.draw_geometry(geometry);
         });
     }
 }
 
 impl<'skin, Painter> Paint<'skin, Painter>
 where
-    Painter: ControlPainter + 'skin,
+    Painter: ControlPainter + 'static,
+    Painter::Data: 'static,
 {
     #[cfg(test)]
     pub(crate) fn new(painter: Painter, data: Painter::Data, skin: &'skin Skin) -> Self {
@@ -179,7 +214,7 @@ where
 
     /// The box the toolkit settles on: what the painter asks for, resolved
     /// against the room it is offered and the size it measures for itself.
-    fn node(&self, state: &PaintState, limits: &layout::Limits) -> layout::Node {
+    fn node(&self, state: &PaintState<PaintKey<Painter>>, limits: &layout::Limits) -> layout::Node {
         let (width, height) = self.length();
         let mut text = state.text.borrow_mut();
         let text = text.get_or_insert_with(|| self.text_resources.into());
@@ -200,9 +235,21 @@ where
         self.painter.index_at(&self.data, hit, count)
     }
 
+    /// The arguments this painter is about to draw from, kept whole so that the
+    /// next frame can ask whether any of them moved.
+    fn key(&self, bounds: Rect, visual: Visual) -> PaintKey<Painter> {
+        PaintKey {
+            bounds,
+            data: self.data.clone(),
+            painter: self.painter.clone(),
+            transform: self.transform,
+            visual,
+        }
+    }
+
     pub(crate) fn draw_list(
         &self,
-        state: &PaintState,
+        state: &PaintState<PaintKey<Painter>>,
         bounds: Rect,
         visual: VisualState,
     ) -> DrawList {
@@ -220,7 +267,7 @@ where
 
     pub(crate) fn indexed_draw_list(
         &self,
-        state: &PaintState,
+        state: &PaintState<PaintKey<Painter>>,
         bounds: Rect,
         visual: IndexedVisual,
     ) -> DrawList {
@@ -244,7 +291,7 @@ where
     #[cfg_attr(feature = "perf", hotpath::measure(label = "iced.control.paint"))]
     fn paint_into(
         &self,
-        state: &PaintState,
+        state: &PaintState<PaintKey<Painter>>,
         renderer: &mut Renderer,
         bounds: Rectangle,
         visual: VisualState,
@@ -253,23 +300,17 @@ where
             return;
         }
         let bounds = snapped(bounds);
-        let list = self.draw_list(
-            state,
-            Rect {
-                h: bounds.height,
-                w: bounds.width,
-                x: 0.0,
-                y: 0.0,
-            },
-            visual,
-        );
-        self.replay_into(state, renderer, bounds, &list);
+        let local = local(bounds);
+        state.mark(self.key(local, Visual::Whole(visual)), || {
+            self.draw_list(state, local, visual)
+        });
+        self.replay_into(state, renderer, bounds);
     }
 
     #[cfg_attr(feature = "perf", hotpath::measure(label = "iced.control.paint"))]
     fn paint_indexed_into(
         &self,
-        state: &PaintState,
+        state: &PaintState<PaintKey<Painter>>,
         renderer: &mut Renderer,
         bounds: Rectangle,
         visual: IndexedVisual,
@@ -278,28 +319,25 @@ where
             return;
         }
         let bounds = snapped(bounds);
-        let list = self.indexed_draw_list(
-            state,
-            Rect {
-                h: bounds.height,
-                w: bounds.width,
-                x: 0.0,
-                y: 0.0,
-            },
-            visual,
-        );
-        self.replay_into(state, renderer, bounds, &list);
+        let local = local(bounds);
+        state.mark(self.key(local, Visual::Indexed(visual)), || {
+            self.indexed_draw_list(state, local, visual)
+        });
+        self.replay_into(state, renderer, bounds);
     }
 
     fn replay_into(
         &self,
-        state: &PaintState,
+        state: &PaintState<PaintKey<Painter>>,
         renderer: &mut Renderer,
         bounds: Rectangle,
-        list: &DrawList,
     ) {
-        let region = self.region(bounds.size(), list);
-        state.replay(renderer, bounds, region, list, self.text_resources);
+        state.replay(
+            renderer,
+            bounds,
+            |list| self.region(bounds.size(), list),
+            self.text_resources,
+        );
     }
 
     /// Where this control may put ink, in the coordinates its box was handed.
@@ -340,6 +378,16 @@ fn hovered(reads_pointer: bool, bounds: Rectangle, cursor: Cursor) -> VisualStat
     }
 }
 
+/// The box a control was given, in the coordinates its painter draws in.
+const fn local(bounds: Rectangle) -> Rect {
+    Rect {
+        h: bounds.height,
+        w: bounds.width,
+        x: 0.0,
+        y: 0.0,
+    }
+}
+
 /// The solver's length in the toolkit's words. The two vocabularies agree case
 /// for case; only the solver's can be spoken by a painter.
 fn iced_length(length: solve::Length) -> Length {
@@ -353,7 +401,8 @@ fn iced_length(length: solve::Length) -> Length {
 
 impl<Painter> IcedWidget<UiEvent, Theme, Renderer> for Paint<'_, Painter>
 where
-    Painter: ControlPainter,
+    Painter: ControlPainter + 'static,
+    Painter::Data: 'static,
 {
     fn size(&self) -> IcedSize<Length> {
         let (width, height) = self.length();
@@ -361,11 +410,11 @@ where
     }
 
     fn tag(&self) -> widget::tree::Tag {
-        widget::tree::Tag::of::<PaintState>()
+        widget::tree::Tag::of::<PaintState<PaintKey<Painter>>>()
     }
 
     fn state(&self) -> widget::tree::State {
-        widget::tree::State::new(PaintState::default())
+        widget::tree::State::new(PaintState::<PaintKey<Painter>>::default())
     }
 
     fn layout(
@@ -374,7 +423,10 @@ where
         _renderer: &Renderer,
         limits: &layout::Limits,
     ) -> layout::Node {
-        self.node(tree.state.downcast_ref::<PaintState>(), limits)
+        self.node(
+            tree.state.downcast_ref::<PaintState<PaintKey<Painter>>>(),
+            limits,
+        )
     }
 
     fn draw(
@@ -389,7 +441,7 @@ where
     ) {
         let bounds = layout.bounds();
         self.paint_into(
-            tree.state.downcast_ref::<PaintState>(),
+            tree.state.downcast_ref::<PaintState<PaintKey<Painter>>>(),
             renderer,
             bounds,
             hovered(Painter::READS_POINTER, bounds, cursor),
@@ -399,7 +451,8 @@ where
 
 impl<'skin, Painter> From<Paint<'skin, Painter>> for Element<'skin, UiEvent>
 where
-    Painter: ControlPainter + 'skin,
+    Painter: ControlPainter + 'static,
+    Painter::Data: 'static,
 {
     fn from(paint: Paint<'skin, Painter>) -> Self {
         Self::new(paint)
@@ -443,19 +496,38 @@ struct Dragging {
 
 /// What a gesturing canvas keeps between frames: the gesture, and the shaping
 /// context the painter draws through.
-#[derive(Default)]
-pub(crate) struct GestureState {
+pub(crate) struct GestureState<Painter>
+where
+    Painter: ControlPainter,
+{
     crossing: Crossing,
     drag: ScalarState,
-    paint: PaintState,
+    paint: PaintState<PaintKey<Painter>>,
     press: Press,
     index: IndexPress,
     span: SpanState,
 }
 
+impl<Painter> Default for GestureState<Painter>
+where
+    Painter: ControlPainter,
+{
+    fn default() -> Self {
+        Self {
+            crossing: Crossing::default(),
+            drag: ScalarState::default(),
+            paint: PaintState::default(),
+            press: Press::default(),
+            index: IndexPress::default(),
+            span: SpanState::default(),
+        }
+    }
+}
+
 impl<'skin, Painter> Gesture<'skin, Painter>
 where
-    Painter: ControlPainter + 'skin,
+    Painter: ControlPainter + 'static,
+    Painter::Data: 'static,
 {
     pub(crate) fn press(path: &str, paint: Paint<'skin, Painter>) -> Self {
         Self {
@@ -546,7 +618,7 @@ where
     /// without a shell.
     pub(crate) fn on_input(
         &self,
-        state: &mut GestureState,
+        state: &mut GestureState<Painter>,
         event: &Event,
         bounds: Rectangle,
         cursor: Cursor,
@@ -581,7 +653,7 @@ where
 
     fn indexed_input(
         &self,
-        state: &mut GestureState,
+        state: &mut GestureState<Painter>,
         input: Input<'_>,
         hit: &Hit,
         count: usize,
@@ -606,18 +678,19 @@ where
 
 impl<Painter> IcedWidget<UiEvent, Theme, Renderer> for Gesture<'_, Painter>
 where
-    Painter: ControlPainter,
+    Painter: ControlPainter + 'static,
+    Painter::Data: 'static,
 {
     fn size(&self) -> IcedSize<Length> {
         IcedWidget::<UiEvent, Theme, Renderer>::size(&self.paint)
     }
 
     fn tag(&self) -> widget::tree::Tag {
-        widget::tree::Tag::of::<GestureState>()
+        widget::tree::Tag::of::<GestureState<Painter>>()
     }
 
     fn state(&self) -> widget::tree::State {
-        widget::tree::State::new(GestureState::default())
+        widget::tree::State::new(GestureState::<Painter>::default())
     }
 
     fn layout(
@@ -626,8 +699,10 @@ where
         _renderer: &Renderer,
         limits: &layout::Limits,
     ) -> layout::Node {
-        self.paint
-            .node(&tree.state.downcast_ref::<GestureState>().paint, limits)
+        self.paint.node(
+            &tree.state.downcast_ref::<GestureState<Painter>>().paint,
+            limits,
+        )
     }
 
     fn draw(
@@ -640,7 +715,7 @@ where
         _cursor: Cursor,
         _viewport: &Rectangle,
     ) {
-        let state = tree.state.downcast_ref::<GestureState>();
+        let state = tree.state.downcast_ref::<GestureState<Painter>>();
         match &self.recognize {
             Recognize::Index { .. } => self.paint.paint_indexed_into(
                 &state.paint,
@@ -665,7 +740,7 @@ where
         _viewport: &Rectangle,
         _renderer: &Renderer,
     ) -> mouse::Interaction {
-        let state = tree.state.downcast_ref::<GestureState>();
+        let state = tree.state.downcast_ref::<GestureState<Painter>>();
         let hit = iced_interact::hit(layout.bounds(), cursor);
         match &self.recognize {
             Recognize::Press | Recognize::Command(_) => Hover::new(CursorShape::Pointer)
@@ -691,7 +766,7 @@ where
         shell: &mut Shell<'_, UiEvent>,
         _viewport: &Rectangle,
     ) {
-        let state = tree.state.downcast_mut::<GestureState>();
+        let state = tree.state.downcast_mut::<GestureState<Painter>>();
         let Some(action) = self.on_input(state, event, layout.bounds(), cursor) else {
             return;
         };
@@ -708,14 +783,18 @@ where
 
 impl<'skin, Painter> From<Gesture<'skin, Painter>> for Element<'skin, UiEvent>
 where
-    Painter: ControlPainter + 'skin,
+    Painter: ControlPainter + 'static,
+    Painter::Data: 'static,
 {
     fn from(gesture: Gesture<'skin, Painter>) -> Self {
         Self::new(gesture)
     }
 }
 
-impl GestureState {
+impl<Painter> GestureState<Painter>
+where
+    Painter: ControlPainter,
+{
     /// Follows the pointer over and onto the control, answering whether the
     /// painter now draws something else. Crossing and pressing are recognised
     /// rather than read off the raw event, so a leaf agrees with the engine
@@ -1470,12 +1549,13 @@ mod indexed {
 
     fn event<Painter>(
         gesture: &Gesture<'_, Painter>,
-        state: &mut GestureState,
+        state: &mut GestureState<Painter>,
         event: &Event,
         point: Option<Point>,
     ) -> (Option<UiEvent>, Status)
     where
-        Painter: ControlPainter,
+        Painter: ControlPainter + 'static,
+        Painter::Data: 'static,
     {
         gesture
             .on_input(
@@ -2407,37 +2487,49 @@ mod cached {
     /// One frame of the immediate-mode host: the element is built afresh, and
     /// the canvas state is the one thing that survived the last frame.
     fn frame<Painter>(
-        state: &PaintState,
+        state: &PaintState<PaintKey<Painter>>,
         painter: Painter,
         data: Painter::Data,
         bounds: Rect,
-    ) -> bool
+    ) -> Marked
     where
-        Painter: ControlPainter,
+        Painter: ControlPainter + 'static,
+        Painter::Data: 'static,
     {
         let paint = Paint::new(painter, data, builtin::skin());
-        state.refresh(&paint.draw_list(state, bounds, VisualState::Idle))
+        state.mark(paint.key(bounds, Visual::Whole(VisualState::Idle)), || {
+            paint.draw_list(state, bounds, VisualState::Idle)
+        })
     }
 
-    /// The host rebuilds the whole element tree every frame. A control whose
-    /// value did not move must not be tessellated again — and must be the
-    /// moment it does.
+    /// The host rebuilds the whole element tree every frame, so without a key
+    /// every control on the page is drawn from again for every frame of every
+    /// other one. A control nothing touched must cost nothing at all.
     #[kithara::test]
-    fn an_unchanged_control_keeps_the_geometry_it_drew() {
+    fn an_unchanged_control_is_not_drawn_again() {
         let skin = builtin::skin();
         let state = PaintState::default();
+        frame(&state, Meter::new(skin), 0.5, BOX);
 
-        assert!(
+        assert_eq!(
             frame(&state, Meter::new(skin), 0.5, BOX),
-            "the first frame draws"
+            Marked::Kept,
+            "an unchanged control must not be drawn from at all"
         );
-        assert!(
-            !frame(&state, Meter::new(skin), 0.5, BOX),
-            "an unchanged control must keep what it drew"
-        );
-        assert!(
+    }
+
+    /// The other half of the same contract: what a control drew must not
+    /// outlive the value it was drawn from.
+    #[kithara::test]
+    fn a_control_whose_value_moved_draws_again() {
+        let skin = builtin::skin();
+        let state = PaintState::default();
+        frame(&state, Meter::new(skin), 0.5, BOX);
+
+        assert_eq!(
             frame(&state, Meter::new(skin), 0.75, BOX),
-            "a control whose value moved must draw again"
+            Marked::Changed,
+            "a control must not be left showing the value it no longer holds"
         );
     }
 
@@ -2450,23 +2542,25 @@ mod cached {
             w: BOX.w + 1.0,
             ..BOX
         };
+        frame(&state, Meter::new(skin), 0.5, BOX);
 
-        assert!(frame(&state, Meter::new(skin), 0.5, BOX));
-        assert!(frame(&state, Meter::new(skin), 0.5, wider));
+        assert_eq!(frame(&state, Meter::new(skin), 0.5, wider), Marked::Changed);
     }
 
     /// The canvas state belongs to a place in the tree, not to a control, so a
     /// document that puts a different control there must get a different
     /// picture. Keying on what a painter *reads* would miss this: a switch and
-    /// a checkbox are one painter type and read the same `false`.
+    /// a checkbox are one painter type and read the same `false`. The painter
+    /// itself is part of the key for exactly this reason.
     #[kithara::test]
     fn a_control_replaced_by_another_does_not_keep_its_picture() {
         let skin = builtin::skin();
         let state = PaintState::default();
+        frame(&state, Binary::toggle(skin), false, BOX);
 
-        assert!(frame(&state, Binary::toggle(skin), false, BOX));
-        assert!(
+        assert_eq!(
             frame(&state, Binary::checkbox(skin), false, BOX),
+            Marked::Changed,
             "a checkbox must not be left showing a switch"
         );
     }

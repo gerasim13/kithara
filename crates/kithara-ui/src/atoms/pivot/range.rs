@@ -5,6 +5,7 @@ use crate::{
 };
 
 /// A rail with a handle at each end, marking the interval between them.
+#[derive(Clone, PartialEq)]
 pub(crate) struct Range {
     metrics: RangeSkin,
     rail: Rgba,

@@ -173,7 +173,7 @@ mod art {
 ///
 /// Both halves reach the draw list: a glyph as shaped text, an outline as a
 /// filled path. Neither needs a toolkit of its own.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) enum Mark {
     Glyph(char),
     Outline(&'static Outline),

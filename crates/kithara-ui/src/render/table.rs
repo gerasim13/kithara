@@ -347,7 +347,7 @@ mod tests {
     use iced_tiny_skia::Renderer as TinySkiaRenderer;
     use kithara_test_utils::kithara;
 
-    use super::{paint::Marked, *};
+    use super::{super::Marked, *};
     use crate::{
         atoms::table::{TableCell, face::Drawn, table_body, table_row_rect},
         builtin,

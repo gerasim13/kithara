@@ -5,6 +5,7 @@ use crate::{
 
 /// Empty room that pushes its neighbours apart. It draws nothing but the
 /// panel behind it, which is what keeps the bar continuous across the gap.
+#[derive(Clone, PartialEq)]
 pub(crate) struct Spacer {
     panel: Rgba,
 }

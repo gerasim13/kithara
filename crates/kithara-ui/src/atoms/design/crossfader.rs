@@ -7,6 +7,7 @@ use crate::{
     skin::{ColorRole, CrossfaderSkin, FontFamily, FontSkin, TextRoleSkin, TickSkin},
 };
 
+#[derive(Clone, PartialEq)]
 pub(crate) struct Crossfader {
     arrow_color: Rgba,
     arrows: (char, char),
@@ -184,12 +185,13 @@ const fn role(font: FontSkin) -> TextRoleSkin {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq)]
 pub(crate) enum TickAxis {
     Horizontal,
     Vertical,
 }
 
+#[derive(Clone, PartialEq)]
 pub(crate) struct TickRail {
     center_color: Rgba,
     color: Rgba,

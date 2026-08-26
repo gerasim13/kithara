@@ -7,6 +7,7 @@ use crate::{
 
 /// A switch with two states and nothing else: the toggle and the checkbox are
 /// the same picture, one of them with a thumb sliding across it.
+#[derive(Clone, PartialEq)]
 pub(crate) struct Binary {
     active: Face,
     idle: Face,
@@ -16,6 +17,7 @@ pub(crate) struct Binary {
 /// How the switch looks in one of its states. Both are resolved from the skin
 /// when the switch is built, so flipping it is a repaint rather than a reason
 /// to rebuild the control.
+#[derive(Clone, PartialEq)]
 struct Face {
     border: Rgba,
     /// The idle switch has no body of its own: it is a frame around nothing.
@@ -24,7 +26,7 @@ struct Face {
     thumb: Rgba,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq)]
 struct Thumb {
     inset: f32,
     radius: f32,

@@ -14,7 +14,7 @@ use crate::{
     skin::{FrameSkin, WaveSkin},
 };
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq)]
 pub(crate) struct WavePalette {
     pub(crate) bg_deep: Rgba,
     pub(crate) line: Rgba,

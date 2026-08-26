@@ -10,7 +10,7 @@ use iced::{
 
 use crate::{
     atoms::text::Text as TextAtom,
-    draw::{DrawList, DrawListBuilder, Rect},
+    draw::{DrawList, DrawListBuilder, Rect, Rgba},
     module::TextStyle,
     render::{ReadValue, Skin, UiEvent, Widget, controls::PaintState},
     skin::{ColorRole, TextRoleSkin},
@@ -66,9 +66,37 @@ struct Painted<'skin> {
     skin: &'skin Skin,
 }
 
+/// Everything a paragraph's picture is a function of: the words, the role they
+/// are shaped through, the padding that insets them, the colour the skin gave
+/// that role, and the box they were given.
+///
+/// The colour rather than the skin it came out of, because a paragraph reads
+/// exactly one value from the skin and keying on the whole of it would compare
+/// a page's worth of resolved style to answer one question.
+#[derive(PartialEq)]
+struct TextKey {
+    bounds: Rect,
+    colour: Rgba,
+    content: String,
+    padding_x: f32,
+    role: TextRoleSkin,
+}
+
 impl Painted<'_> {
+    /// The words this paragraph is about to draw from, kept whole so that the
+    /// next frame can ask whether any of them moved.
+    fn key(&self, bounds: Rect) -> TextKey {
+        TextKey {
+            bounds,
+            colour: self.skin.rgba(self.role.color),
+            content: self.content.clone(),
+            padding_x: self.padding_x,
+            role: self.role,
+        }
+    }
+
     /// What this paragraph draws in the box it was given.
-    fn list(&self, state: &PaintState, bounds: Rect) -> DrawList {
+    fn list(&self, state: &PaintState<TextKey>, bounds: Rect) -> DrawList {
         state.shaped(self.skin.text_resources(), |text| {
             let mut builder = DrawListBuilder::default();
             TextAtom::new(&self.content, self.role, self.padding_x, self.skin).paint(
@@ -87,11 +115,11 @@ impl IcedWidget<UiEvent, Theme, Renderer> for Painted<'_> {
     }
 
     fn tag(&self) -> widget::tree::Tag {
-        widget::tree::Tag::of::<PaintState>()
+        widget::tree::Tag::of::<PaintState<TextKey>>()
     }
 
     fn state(&self) -> widget::tree::State {
-        widget::tree::State::new(PaintState::default())
+        widget::tree::State::new(PaintState::<TextKey>::default())
     }
 
     fn layout(
@@ -100,7 +128,7 @@ impl IcedWidget<UiEvent, Theme, Renderer> for Painted<'_> {
         _renderer: &Renderer,
         limits: &layout::Limits,
     ) -> layout::Node {
-        let state = tree.state.downcast_mut::<PaintState>();
+        let state = tree.state.downcast_mut::<PaintState<TextKey>>();
         let (width, height) = state.shaped(self.skin.text_resources(), |text| {
             TextAtom::new(&self.content, self.role, self.padding_x, self.skin).measure(text)
         });
@@ -128,21 +156,18 @@ impl IcedWidget<UiEvent, Theme, Renderer> for Painted<'_> {
             return;
         }
 
-        let state = tree.state.downcast_ref::<PaintState>();
-        let list = self.list(
-            state,
-            Rect {
-                h: bounds.height,
-                w: bounds.width,
-                x: 0.0,
-                y: 0.0,
-            },
-        );
+        let state = tree.state.downcast_ref::<PaintState<TextKey>>();
+        let local = Rect {
+            h: bounds.height,
+            w: bounds.width,
+            x: 0.0,
+            y: 0.0,
+        };
+        state.mark(self.key(local), || self.list(state, local));
         state.replay(
             renderer,
             bounds,
-            Rectangle::with_size(bounds.size()),
-            &list,
+            |_| Rectangle::with_size(bounds.size()),
             self.skin.text_resources(),
         );
     }
@@ -160,7 +185,7 @@ mod cached {
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::builtin;
+    use crate::{builtin, render::Marked};
 
     const BOX: Rect = Rect {
         h: 20.0,
@@ -171,41 +196,48 @@ mod cached {
 
     /// One frame of the immediate-mode host: the paragraph is built afresh, and
     /// the canvas state is the one thing that survived the last frame.
-    fn frame(state: &PaintState, content: &str, skin: &Skin) -> bool {
+    fn frame(state: &PaintState<TextKey>, content: &str, skin: &Skin) -> Marked {
         let painted = Painted {
             content: content.to_owned(),
             padding_x: 0.0,
             role: skin.text_role(TextStyle::Body, None, None, false),
             skin,
         };
-        state.refresh(&painted.list(state, BOX))
+        state.mark(painted.key(BOX), || painted.list(state, BOX))
     }
 
-    /// Glyph outlines are the most expensive thing on a page of prose to
-    /// tessellate. The host rebuilds every paragraph each frame, so a paragraph
-    /// whose words did not change must keep the geometry it drew.
+    /// Shaping a paragraph and tessellating its outlines is the most expensive
+    /// thing on a page of prose. The host rebuilds the widget every frame, so a
+    /// paragraph whose words did not move must not be drawn from again at all.
     #[kithara::test]
-    fn unchanged_words_keep_the_glyphs_they_drew() {
+    fn unchanged_words_are_not_drawn_again() {
         let skin = builtin::skin();
         let state = PaintState::default();
 
-        assert!(frame(&state, "ZVUK", skin), "the first frame draws");
-        assert!(
-            !frame(&state, "ZVUK", skin),
-            "words that did not change must keep what they drew"
+        assert_eq!(
+            frame(&state, "ZVUK", skin),
+            Marked::Changed,
+            "the first frame draws"
+        );
+        assert_eq!(
+            frame(&state, "ZVUK", skin),
+            Marked::Kept,
+            "words that did not change must cost nothing to draw"
         );
     }
 
-    /// The other half of the same contract: kept geometry must not outlive the
+    /// The other half of the same contract: what was drawn must not outlive the
     /// words it was built from.
     #[kithara::test]
     fn changed_words_draw_again() {
         let skin = builtin::skin();
         let state = PaintState::default();
 
-        assert!(frame(&state, "ZVUK", skin));
-        assert!(
+        frame(&state, "ZVUK", skin);
+
+        assert_eq!(
             frame(&state, "LOCAL", skin),
+            Marked::Changed,
             "a paragraph must not be left showing the words it no longer says"
         );
     }

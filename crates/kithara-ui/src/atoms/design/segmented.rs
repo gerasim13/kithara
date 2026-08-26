@@ -9,6 +9,7 @@ use crate::{
 };
 
 /// A row of equal cells, one of them picked out.
+#[derive(Clone, PartialEq)]
 pub(crate) struct Segmented {
     active_background: Rgba,
     active_text: Rgba,
@@ -21,6 +22,7 @@ pub(crate) struct Segmented {
 
 /// What a segmented control is handed each frame: its words, and which of them
 /// is the one picked.
+#[derive(Clone, PartialEq)]
 pub(crate) struct SegmentedData {
     pub(crate) active: Option<usize>,
     pub(crate) items: Vec<String>,

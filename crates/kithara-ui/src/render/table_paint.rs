@@ -6,7 +6,7 @@ use iced::{
     widget::canvas::{self, Frame, Geometry},
 };
 
-use super::super::{Skin, UiEvent, controls::RetainedCanvasState};
+use super::super::{Marked, Marks, Skin, UiEvent, controls::RetainedCanvasState};
 use crate::{
     atoms::table::{
         ColumnLayout, TableRowData, column_resizable,
@@ -14,7 +14,7 @@ use crate::{
         minimum_table_width, table_content_height, table_row_at,
     },
     backends::replay_ordered,
-    draw::{CachedValue, DrawList, Pt, Rect},
+    draw::{DrawList, Pt, Rect},
     engine::{ScrollConfig, ScrollState},
     interact::{
         ScrollAxis,
@@ -78,15 +78,12 @@ impl TablePaint {
         state.mark(bounds, &drawn, &self.face, || {
             self.commands(text, bounds, &drawn)
         });
-        let marks = state.marks.borrow();
-        let Some(list) = marks.value() else {
-            return Vec::new();
-        };
-        vec![
-            state
-                .geometry
-                .draw(renderer, size, |frame| self.tessellate(frame, list)),
-        ]
+        state
+            .marks
+            .drawn(|geometry, list| {
+                vec![geometry.draw(renderer, size, |frame| self.tessellate(frame, list))]
+            })
+            .unwrap_or_default()
     }
 
     /// The marks the table's rows, header and footer come to, built afresh.
@@ -149,8 +146,7 @@ pub(super) struct TableState {
     /// tessellated from them. A table is the one canvas this host drew from
     /// scratch every frame; a painted control has held both since it learned
     /// not to.
-    marks: RefCell<CachedValue<Option<Marks>, DrawList>>,
-    geometry: canvas::Cache,
+    marks: Marks<TableKey>,
     pub(super) drag_index: Option<usize>,
     pub(super) pressed_index: Option<usize>,
     pub(super) row_drag: ItemDrag,
@@ -161,21 +157,10 @@ pub(super) struct TableState {
 /// The state the table's marks were built from, kept whole so that the next
 /// frame can ask whether any of it moved.
 #[derive(PartialEq)]
-struct Marks {
+struct TableKey {
     bounds: Rect,
     drawn: Drawn,
     face: Rc<TableFace>,
-}
-
-/// What a frame cost the table.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub(super) enum Marked {
-    /// The key held: no marks were built and the geometry stands.
-    Kept,
-    /// The marks were built and came out the same: the geometry stands.
-    Same,
-    /// The marks came out different: the geometry was dropped.
-    Changed,
 }
 
 #[derive(Clone)]
@@ -188,15 +173,9 @@ pub(super) struct TableConfig {
 }
 
 impl TableState {
-    /// Builds the marks only when the state they come from moved, drops the
-    /// kept geometry only when the marks that came out differ, and reports
-    /// which of the two it had to do. Those answers are the whole of this
-    /// cache, so they are returned rather than inferred from the pixels.
-    ///
-    /// The key is the three things [`TablePaint::commands`] reads, compared
-    /// whole. A hash would be cheaper to carry, but it would have to be taught
-    /// every field of the skin, and a skin field it was never taught freezes
-    /// the table on the old colour; derived equality cannot forget one.
+    /// The key is the three things [`TablePaint::commands`] reads, named whole
+    /// so that a skin field the drawing starts reading cannot be left out of
+    /// it.
     pub(super) fn mark(
         &self,
         bounds: Rect,
@@ -204,32 +183,14 @@ impl TableState {
         face: &Rc<TableFace>,
         build: impl FnOnce() -> DrawList,
     ) -> Marked {
-        let mut marks = self.marks.borrow_mut();
-        let held = marks
-            .key()
-            .as_ref()
-            .is_some_and(|key| key.bounds == bounds && &key.drawn == drawn && &key.face == face);
-        if held && marks.value().is_some() {
-            return Marked::Kept;
-        }
-        let list = build();
-        let changed = marks.value() != Some(&list);
-        if changed {
-            self.geometry.clear();
-        }
-        marks.update(
-            Some(Marks {
+        self.marks.mark(
+            TableKey {
                 bounds,
                 drawn: drawn.clone(),
                 face: Rc::clone(face),
-            }),
-            Some(list),
-        );
-        if changed {
-            Marked::Changed
-        } else {
-            Marked::Same
-        }
+            },
+            build,
+        )
     }
 
     pub(super) fn reconcile(&mut self, path: &str, config: &TableConfig) {

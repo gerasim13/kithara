@@ -16,7 +16,7 @@ pub(crate) struct Overlay<'a> {
     pub(crate) palette: OverlayPalette,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq)]
 pub(crate) struct OverlayPalette {
     pub(crate) background: Rgba,
     pub(crate) art_background: Rgba,

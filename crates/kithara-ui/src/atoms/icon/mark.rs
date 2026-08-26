@@ -9,7 +9,7 @@ use crate::{
 ///
 /// Every control that shows an icon draws it the same way and differs only in
 /// where it puts it, so the placement is the caller's and the drawing is here.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq)]
 pub(crate) struct Marked {
     mark: Mark,
     size: f32,

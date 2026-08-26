@@ -14,6 +14,7 @@ const SEPARATOR: &str = "\u{203a}";
 
 /// The strip under the tree: what is in view, and — when the document offers
 /// more than one — which scope it is in view of.
+#[derive(Clone, PartialEq)]
 pub(crate) struct Context {
     breadcrumb: Rgba,
     breadcrumb_role: TextRoleSkin,
@@ -34,12 +35,14 @@ pub(crate) struct Context {
 
 /// What the strip is handed each frame: the path in view, and the scope picker
 /// beside it when the document declared one.
+#[derive(Clone, PartialEq)]
 pub(crate) struct Viewed {
     pub(crate) breadcrumb: String,
     pub(crate) scope: Option<Scope>,
 }
 
 /// The words a scope picker offers, and which of them is picked.
+#[derive(Clone, PartialEq)]
 pub(crate) struct Scope {
     pub(crate) items: Vec<String>,
     pub(crate) selected: Option<usize>,

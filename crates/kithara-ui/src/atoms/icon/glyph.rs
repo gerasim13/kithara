@@ -10,6 +10,7 @@ use crate::{
 /// Unlike the icon inside a button or a rail item, this one is the whole
 /// control: nothing sits beside it, so it has the middle of the box rather than
 /// a left edge to start from.
+#[derive(Clone, PartialEq)]
 pub(crate) struct Glyph {
     active_color: Rgba,
     color: Rgba,
@@ -22,6 +23,7 @@ pub(crate) struct Glyph {
 /// Both marks travel together because a document may name a different icon for
 /// the active state, and reading authored art can fail — so the choice is made
 /// once, where it can still answer "nothing to draw".
+#[derive(Clone, PartialEq)]
 pub(crate) struct GlyphData {
     pub(crate) active: bool,
     pub(crate) active_mark: Option<Mark>,

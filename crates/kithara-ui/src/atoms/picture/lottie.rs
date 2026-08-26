@@ -1,3 +1,5 @@
+use std::ptr;
+
 use num_traits::cast::AsPrimitive;
 
 use crate::{
@@ -18,6 +20,20 @@ pub(crate) struct Standing {
     pub(crate) frame: f64,
 }
 
+/// An artwork is parsed once for the life of the process, so which one is
+/// standing is a question about identity. Comparing the parsed document instead
+/// would walk every layer of it to answer what one address already answers.
+impl PartialEq for Standing {
+    fn eq(&self, other: &Self) -> bool {
+        let same_artwork = match (self.artwork, other.artwork) {
+            (Some(ours), Some(theirs)) => ptr::eq(ours, theirs),
+            (None, None) => true,
+            _ => false,
+        };
+        same_artwork && self.frame == other.frame
+    }
+}
+
 /// Draws one frame of an artwork, fitted to its box without stretching it.
 ///
 /// The frame arrives already chosen: which one to show is a reading, and this
@@ -25,6 +41,7 @@ pub(crate) struct Standing {
 /// authored in and sits in the middle of what it was given, because a drawing
 /// fitted to a box of another shape would otherwise be squashed differently by
 /// every layout that holds it.
+#[derive(Clone, PartialEq)]
 pub(crate) struct Lottie;
 
 impl ControlPainter for Lottie {

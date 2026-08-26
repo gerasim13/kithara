@@ -10,6 +10,7 @@ use crate::{
 const CHEVRON: &str = "\u{2304}";
 
 /// A framed box with a word on one edge and a chevron on the other.
+#[derive(Clone, PartialEq)]
 pub(crate) struct Select {
     background: Rgba,
     chevron: Rgba,

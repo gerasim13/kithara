@@ -10,6 +10,7 @@ use crate::{
 ///
 /// The open menu is a layer each host raises for itself; the face is part of
 /// the bar it sits in, so it is drawn wherever that bar is drawn.
+#[derive(Clone, PartialEq)]
 pub(crate) struct Picker {
     background: Rgba,
     chevron: Rgba,

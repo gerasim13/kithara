@@ -3,6 +3,8 @@ mod chrome;
 mod contract;
 mod grip;
 #[cfg(feature = "iced")]
+mod marks;
+#[cfg(feature = "iced")]
 mod painted;
 mod press;
 #[cfg(feature = "iced")]
@@ -22,6 +24,7 @@ pub(super) use scroll::{RetainedCanvas, RetainedCanvasState};
 #[cfg(feature = "iced")]
 pub(crate) use {
     chrome::{ChromeLeaf, chrome_leaf, header_chevron},
+    marks::{Marked, Marks},
     painted::{Gesture, Paint, PaintState},
     snap::snapped,
     tree::{sync_tree_scroll, tree_rows},

@@ -10,6 +10,7 @@ use crate::{
 
 /// One formatted number, centred in its box and framed only when the document
 /// asked for it.
+#[derive(Clone, PartialEq)]
 pub(crate) struct Telemetry {
     format: ScalarFormat,
     framed: bool,

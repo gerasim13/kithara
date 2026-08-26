@@ -20,12 +20,13 @@ pub(crate) struct ButtonConfig {
 /// The word a button shows, and the word it swaps in while it is active. A
 /// host that draws straight through borrows them; one that retains the control
 /// owns them.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq)]
 pub(crate) struct ButtonLabel<Words> {
     pub(crate) active: Option<Words>,
     pub(crate) label: Words,
 }
 
+#[derive(Clone, PartialEq)]
 pub(crate) struct Button {
     active: Face,
     idle: Face,
@@ -34,7 +35,7 @@ pub(crate) struct Button {
 
 /// What settles a button's width: a share of the row it sits in, a number the
 /// skin fixes, or the word it is currently showing.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq)]
 enum Width {
     Content,
     Fixed(f32),
@@ -44,6 +45,7 @@ enum Width {
 /// How the button looks in one of its two states. Both are resolved from the
 /// skin when the button is built, so the endpoint behind it flipping is a
 /// repaint rather than a reason to rebuild the control.
+#[derive(Clone, PartialEq)]
 struct Face {
     active: bool,
     art: Option<Art>,
@@ -55,20 +57,21 @@ struct Face {
     role: TextRoleSkin,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq)]
 pub(crate) enum VisualState {
     Idle,
     Hovered,
     Pressed,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq)]
 struct Fill {
     hovered: Rgba,
     idle: Rgba,
     pressed: Rgba,
 }
 
+#[derive(Clone, PartialEq)]
 enum Frame {
     Border {
         color: Rgba,
@@ -83,13 +86,14 @@ enum Frame {
 }
 
 /// The icon a button shows: what it draws, and where it sits.
+#[derive(Clone, PartialEq)]
 struct Art {
     marked: Marked,
     placement: Placement,
     solo_color: Rgba,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq)]
 enum Placement {
     Alone,
     AloneIfUnlabelled,

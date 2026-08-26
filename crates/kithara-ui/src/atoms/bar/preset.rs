@@ -25,6 +25,7 @@ pub(crate) struct PresetData {
     pub(crate) items: &'static [PresetItem],
 }
 
+#[derive(Clone, PartialEq)]
 pub(crate) struct Preset {
     active: Rgba,
     active_hovered: Rgba,

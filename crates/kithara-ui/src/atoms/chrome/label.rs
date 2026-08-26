@@ -27,6 +27,7 @@ pub(crate) fn footer_role(skin: &Skin) -> TextRoleSkin {
 /// Every number the skin settles is resolved when the label is built, so the
 /// two hosts draw the same box from the same figures instead of each reading
 /// the skin its own way.
+#[derive(Clone, PartialEq)]
 pub(crate) struct ChromeLabel {
     background: Rgba,
     border: Rgba,

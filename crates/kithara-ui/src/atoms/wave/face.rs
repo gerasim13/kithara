@@ -16,6 +16,7 @@ use crate::{
 
 /// The waveform a deck shows: the track's shape, where the playhead is in it,
 /// and — on the hero wave — the panel naming what is loaded.
+#[derive(Clone, PartialEq)]
 pub(crate) struct Wave {
     background: Rgba,
     border: Rgba,
@@ -29,6 +30,7 @@ pub(crate) struct Wave {
 }
 
 /// What the wave is handed each frame.
+#[derive(Clone, PartialEq)]
 pub(crate) struct Drawn {
     /// How far the host says the track is held, as a share of its length.
     pub(crate) cached: f32,

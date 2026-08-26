@@ -11,6 +11,7 @@ use crate::{
 /// The cell is measured from the right edge of whatever box this is given, so
 /// a host that hands it the whole header and a host that hands it just the
 /// cell draw the same mark in the same place.
+#[derive(Clone, PartialEq)]
 pub(crate) struct ChromeChevron {
     cell_width: f32,
     color: Rgba,

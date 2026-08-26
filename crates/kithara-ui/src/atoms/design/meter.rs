@@ -4,6 +4,7 @@ use crate::{
 };
 
 /// A horizontal bar filled from the left to show one fraction.
+#[derive(Clone, PartialEq)]
 pub(crate) struct Meter {
     background: Rgba,
     border: Rgba,

@@ -7,6 +7,7 @@ use crate::{
 };
 
 /// The global bar's own button: a framed panel with one mark centred in it.
+#[derive(Clone, PartialEq)]
 pub(crate) struct Settings {
     frame: FrameSkin,
     hovered: Rgba,

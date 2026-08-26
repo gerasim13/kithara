@@ -6,6 +6,7 @@ use crate::{
 };
 
 /// A tempo axis with one arc from the master tempo to each target.
+#[derive(Clone, PartialEq)]
 pub(crate) struct PortalMap {
     accent: Rgba,
     background: Rgba,

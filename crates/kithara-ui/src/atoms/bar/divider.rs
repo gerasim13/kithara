@@ -5,6 +5,7 @@ use crate::{
 
 /// A hairline separating two runs of a bar: one filled rectangle, the whole of
 /// the box it was given.
+#[derive(Clone, PartialEq)]
 pub(crate) struct Divider {
     color: Rgba,
 }
