@@ -4,7 +4,7 @@ use std::{
     sync::atomic::{AtomicBool, AtomicU64, Ordering},
 };
 
-use kithara_assets::{ReadSide, WriterEpoch};
+use kithara_assets::WriterEpoch;
 use kithara_events::{FileError, FileEvent, TotalBytesSource};
 use kithara_net::{Headers, NetError, Retryability};
 use kithara_platform::{
@@ -97,18 +97,6 @@ impl FileInner {
         true
     }
 
-    fn commit_completed_epoch(&self, epoch: &WriterEpoch, final_len: u64) {
-        if let Some(result) = epoch.commit(Some(final_len)).current() {
-            if let Err(error) = result {
-                self.source.bus.publish(FileEvent::Error {
-                    error: FileError::Io(error.to_string()),
-                });
-            } else {
-                self.observe_committed();
-            }
-        }
-    }
-
     pub(super) fn complete_fetch(&self, epoch: &WriterEpoch, completion: FetchCompletion<'_>) {
         if completion.invalid_response && !matches!(completion.error, Some(NetError::Cancelled)) {
             self.fail_current_epoch(
@@ -144,13 +132,9 @@ impl FileInner {
         if !epoch.is_current() {
             return;
         }
-        let Some(final_len) = self.resolved_final_len(completion) else {
-            return;
-        };
-        if self.asset.reader.next_gap(0, final_len).is_some() {
-            return;
+        if let Some(final_len) = self.resolved_final_len(completion) {
+            self.commit_if_complete(epoch, final_len);
         }
-        self.commit_completed_epoch(epoch, final_len);
     }
 
     fn resolved_final_len(&self, completion: FetchCompletion<'_>) -> Option<u64> {

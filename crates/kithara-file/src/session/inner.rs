@@ -6,8 +6,10 @@ use std::{
     task::{Wake, Waker},
 };
 
-use kithara_assets::{AssetReader, ReadSide, ResourceLease};
-use kithara_events::{AudioCodecKind, ContainerKind, EventBus, FileEvent, TotalBytesSource};
+use kithara_assets::{AssetReader, ReadSide, ResourceLease, WriterEpoch};
+use kithara_events::{
+    AudioCodecKind, ContainerKind, EventBus, FileError, FileEvent, TotalBytesSource,
+};
 use kithara_net::Headers;
 use kithara_platform::{
     CancelToken,
@@ -255,6 +257,27 @@ impl FileInner {
         );
         self.mark_complete();
         true
+    }
+
+    /// Commit the epoch once every byte up to `final_len` has landed.
+    /// Returns whether the resource committed through this epoch.
+    pub(crate) fn commit_if_complete(&self, epoch: &WriterEpoch, final_len: u64) -> bool {
+        if self.asset.reader.next_gap(0, final_len).is_some() {
+            return false;
+        }
+        match epoch.commit(Some(final_len)).current() {
+            Some(Ok(())) => {
+                self.observe_committed();
+                true
+            }
+            Some(Err(error)) => {
+                self.source.bus.publish(FileEvent::Error {
+                    error: FileError::Io(error.to_string()),
+                });
+                false
+            }
+            None => false,
+        }
     }
 
     /// One-shot fragmented-mp4 parse from the fully cached file bytes.
