@@ -1027,15 +1027,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "72f5acc6cb2ba439de613abc23857ec3d78374d8ed5ac84e9d11336e87da8649"
 
 [[package]]
-name = "bungee-rs"
-version = "0.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3427082c1e04975524fe281c83f53231efc163006e546684f06a8fa677fd3484"
-dependencies = [
- "bungee-sys",
-]
-
-[[package]]
 name = "bungee-sys"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4968,10 +4959,9 @@ name = "kithara-stretch"
 version = "0.0.1-alpha4"
 dependencies = [
  "bon",
- "bungee-rs",
+ "bungee-sys",
  "delegate",
  "derive_more",
- "fast-interleave",
  "fieldwork",
  "kithara-bufpool",
  "kithara-test-utils",

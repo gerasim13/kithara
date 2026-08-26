@@ -5,6 +5,7 @@ mod config;
 pub use config::{ElasticConfig, ElasticSpanConfig};
 
 mod engine;
+pub(crate) use engine::PitchRange;
 pub use engine::{ElasticEngine, ElasticPriming};
 
 mod error;

@@ -10,20 +10,28 @@ use crate::elastic::config::ElasticShape;
 pub struct ElasticCapabilities {
     #[field(skip)]
     shape: ElasticShape,
-    /// Fixed algorithmic latency in both coordinate spaces.
+    /// Unity-rate algorithmic latency in both coordinate spaces.
     #[field(get, copy)]
     latency: ElasticLatency,
+    /// Fixed caller-owned storage span for one terminal-drain chunk.
+    #[field(get, copy)]
+    terminal_chunk_frames: usize,
     /// Supported source-frame advance range.
     #[field(get, copy)]
     rate_envelope: ElasticRateEnvelope,
 }
 
 impl ElasticCapabilities {
-    pub(crate) fn new(shape: ElasticShape, latency: ElasticLatency) -> Result<Self, ElasticError> {
+    pub(crate) fn new(
+        shape: ElasticShape,
+        latency: ElasticLatency,
+        terminal_chunk_frames: usize,
+    ) -> Result<Self, ElasticError> {
         Ok(Self {
             shape,
             latency,
             rate_envelope: shape.rate_envelope()?,
+            terminal_chunk_frames,
         })
     }
 

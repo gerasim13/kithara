@@ -5,7 +5,7 @@ use signalsmith_stretch::Stretch;
 
 use crate::{
     ElasticCapabilities, ElasticConfig, ElasticEngine, ElasticError, ElasticLatency,
-    ElasticPriming, ElasticRequest,
+    ElasticPriming, ElasticRequest, elastic::PitchRange,
 };
 
 const CHANNEL_COUNT_LIMIT: u32 = u32::MAX;
@@ -45,7 +45,11 @@ impl ElasticEngine for SignalsmithElastic {
         inner.set_transpose_factor(1.0, None);
         Ok(Self {
             inner,
-            capabilities: ElasticCapabilities::new(config.shape(), latency)?,
+            capabilities: ElasticCapabilities::new(
+                config.shape(),
+                latency,
+                latency.output_frames(),
+            )?,
             tail_armed: false,
         })
     }
@@ -68,9 +72,8 @@ impl ElasticEngine for SignalsmithElastic {
     }
 
     fn set_pitch(&mut self, scale: f64) -> Result<(), ElasticError> {
-        let factor = scale
+        let factor = PitchRange::validate(scale)?
             .to_f32()
-            .filter(|factor| factor.is_finite() && *factor > 0.0)
             .ok_or(ElasticError::InvalidPitch(scale))?;
         self.inner.set_transpose_factor(factor, None);
         Ok(())
@@ -80,7 +83,7 @@ impl ElasticEngine for SignalsmithElastic {
         if !self.tail_armed {
             return Ok(0);
         }
-        let tail_frames = self.capabilities.latency().output_frames();
+        let tail_frames = self.capabilities.terminal_chunk_frames();
         let expected = self.capabilities.samples(tail_frames)?;
         if output.len() != expected {
             return Err(ElasticError::OutputSampleCount {

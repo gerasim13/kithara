@@ -1,5 +1,20 @@
 use super::{ElasticCapabilities, ElasticConfig, ElasticError, ElasticRequest};
 
+pub(crate) struct PitchRange;
+
+impl PitchRange {
+    const MIN: f64 = 0.25;
+    const MAX: f64 = 4.0;
+
+    pub(crate) fn validate(scale: f64) -> Result<f64, ElasticError> {
+        if scale.is_finite() && (Self::MIN..=Self::MAX).contains(&scale) {
+            Ok(scale)
+        } else {
+            Err(ElasticError::InvalidPitch(scale))
+        }
+    }
+}
+
 /// Exact-span time-stretch engine.
 ///
 /// The caller owns the transport: every call names the source span and the
@@ -37,18 +52,18 @@ pub trait ElasticEngine: Send + 'static {
     /// Sets pitch independently from source-to-output frame advance.
     ///
     /// # Errors
-    /// Returns [`ElasticError`] when `scale` is not finite, positive, or
-    /// representable by the engine.
+    /// Returns [`ElasticError`] when `scale` is outside the common native
+    /// range `0.25..=4.0` or is not finite.
     fn set_pitch(&mut self, scale: f64) -> Result<(), ElasticError>;
 
-    /// Writes the terminal buffered tail at most once per stream into caller-owned storage.
+    /// Writes the next portion of terminal buffered audio into caller-owned storage.
     ///
     /// The caller supplies storage for
-    /// `capabilities().latency().output_frames() * channels` samples. Returns
-    /// the number of interleaved frames written. Fresh or reset engines, and
-    /// engines without a true tail drain, may ignore that storage and return
-    /// zero. A successful repeat without an intervening
-    /// [`process`](Self::process) is idempotent.
+    /// `capabilities().terminal_chunk_frames() * channels` samples and repeats
+    /// until this method returns zero. Each non-zero result is the next
+    /// contiguous tail portion; active engines must expose their real tail and
+    /// converge to zero. Fresh and reset engines return zero, and a completed
+    /// drain stays idempotently empty until [`process`](Self::process).
     ///
     /// # Errors
     /// Returns [`ElasticError`] when `output` does not match the engine's
@@ -58,8 +73,7 @@ pub trait ElasticEngine: Send + 'static {
     /// Clears stream history while retaining the prepared shape and latency.
     ///
     /// # Errors
-    /// Returns [`ElasticError`] when an engine that clears state by rebuilding
-    /// itself cannot be rebuilt.
+    /// Returns [`ElasticError`] when the resident backend state cannot be cleared.
     fn reset(&mut self) -> Result<(), ElasticError>;
 }
 

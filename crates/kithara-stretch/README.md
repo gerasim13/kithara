@@ -29,7 +29,7 @@ plan against capabilities rather than against a named library.
 Feature flags select the compiled backends:
 
 - `stretch-signalsmith` enables `signalsmith-stretch` and is the default.
-- `stretch-bungee` enables `bungee-rs` as an opt-in backend.
+- `stretch-bungee` enables the private `bungee-sys` adapter as an opt-in backend.
 
 Both current backends are native-only. See [CONTEXT.md](CONTEXT.md) for the
 backend contract, wasm notes, and the future pure-Rust backend recipe.

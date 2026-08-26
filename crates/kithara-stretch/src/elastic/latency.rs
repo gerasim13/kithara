@@ -1,12 +1,12 @@
-/// Algorithmic latency in the source and output coordinate spaces.
+/// Unity-rate algorithmic latency in the source and output coordinate spaces.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, fieldwork::Fieldwork)]
 #[fieldwork(get)]
 #[non_exhaustive]
 pub struct ElasticLatency {
-    /// Delayed output in frames.
+    /// Unity-rate delayed output in frames.
     #[field(get, copy)]
     output_frames: usize,
-    /// Required source history in frames.
+    /// Unity-rate source history in frames.
     #[field(get, copy)]
     source_frames: usize,
 }

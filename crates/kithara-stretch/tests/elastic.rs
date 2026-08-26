@@ -23,7 +23,7 @@ const SAMPLE_RATE: u32 = 48_000;
 const TONE_HZ: f64 = 440.0;
 
 fn prepared<E: ElasticEngine>(max_source_frames: usize, max_output_frames: usize) -> E {
-    let config = kithara_stretch::ElasticConfig::builder()
+    let config = ElasticConfig::builder()
         .pool(PcmPool::default())
         .sample_rate(SAMPLE_RATE)
         .channels(CHANNELS)
@@ -58,6 +58,24 @@ fn interleaved_signal(frames: usize) -> Vec<f32> {
             [sample, -sample]
         })
         .collect()
+}
+
+fn drain_terminal(engine: &mut dyn ElasticEngine) -> Vec<f32> {
+    const MAX_CHUNKS: usize = 32;
+
+    let chunk_frames = engine.capabilities().terminal_chunk_frames();
+    let mut chunk = vec![0.0; chunk_frames * CHANNELS];
+    let mut drained = Vec::new();
+    for _ in 0..MAX_CHUNKS {
+        chunk.fill(0.0);
+        let frames = engine.flush(&mut chunk).expect("terminal flush");
+        if frames == 0 {
+            assert_eq!(engine.flush(&mut chunk).expect("completed drain"), 0);
+            return drained;
+        }
+        drained.extend_from_slice(&chunk[..frames * CHANNELS]);
+    }
+    panic!("terminal drain must converge to an empty flush");
 }
 
 fn impulse_markers(frames: usize, offset: usize) -> Vec<f32> {
@@ -293,13 +311,31 @@ macro_rules! elastic_engine_conformance {
             )]
             #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
             fn rejects_invalid_pitch_scales(#[case] backend: StretchKind) {
+                const MIN_NATIVE_RANGE: f64 = 0.25;
+                const MAX_NATIVE_RANGE: f64 = 4.0;
+                const BELOW_NATIVE_RANGE: f64 = 0.249;
+                const ABOVE_NATIVE_RANGE: f64 = 4.001;
+
                 let mut engine = prepared_backend(backend, 8192, 8192);
 
-                for scale in [0.0, -1.0, f64::NAN, f64::INFINITY] {
+                for scale in [
+                    0.0,
+                    -1.0,
+                    f64::NAN,
+                    f64::INFINITY,
+                    BELOW_NATIVE_RANGE,
+                    ABOVE_NATIVE_RANGE,
+                ] {
                     assert!(matches!(
                         engine.set_pitch(scale),
                         Err(ElasticError::InvalidPitch(_))
                     ));
+                }
+
+                for scale in [MIN_NATIVE_RANGE, MAX_NATIVE_RANGE] {
+                    engine
+                        .set_pitch(scale)
+                        .expect("the common native pitch boundary is supported");
                 }
             }
 
@@ -309,7 +345,47 @@ macro_rules! elastic_engine_conformance {
                 case::signalsmith(StretchKind::Signalsmith)
             )]
             #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
-            fn terminal_flush_is_idempotent(#[case] backend: StretchKind) {
+            fn terminal_flush_drains_real_audio_to_completion(#[case] backend: StretchKind) {
+                const FRAMES: usize = 8192;
+
+                for request in [
+                    ElasticRequest::new(FRAMES / 2, FRAMES).expect("half-speed request"),
+                    ElasticRequest::new(FRAMES, FRAMES).expect("unity request"),
+                    ElasticRequest::new(FRAMES, FRAMES / 2).expect("double-speed request"),
+                ] {
+                    let mut engine = prepared_backend(backend, FRAMES, FRAMES);
+                    let source = interleaved_signal(request.source_frames());
+                    let mut output = vec![0.0; request.output_frames() * CHANNELS];
+                    engine
+                        .process(request, &source, &mut output)
+                        .expect("the source block renders");
+                    let terminal = drain_terminal(engine.as_mut());
+                    let drained = terminal.len() / CHANNELS;
+                    let terminal_peak = terminal
+                        .iter()
+                        .map(|sample| sample.abs())
+                        .fold(0.0_f32, f32::max);
+
+                    assert!(
+                        drained > 0,
+                        "an active engine must drain its buffered terminal audio"
+                    );
+                    assert!(
+                        terminal_peak > f32::EPSILON,
+                        "the complete drain must contain real terminal audio: backend={backend:?}, request={request:?}, drained={drained}, peak={terminal_peak}"
+                    );
+                }
+            }
+
+            #[kithara::test]
+            #[cfg_attr(
+                feature = "stretch-signalsmith",
+                case::signalsmith(StretchKind::Signalsmith)
+            )]
+            #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
+            fn flush_rejects_wrong_storage_without_disarming_tail(
+                #[case] backend: StretchKind,
+            ) {
                 const FRAMES: usize = 8192;
 
                 let mut engine = prepared_backend(backend, FRAMES, FRAMES);
@@ -319,17 +395,27 @@ macro_rules! elastic_engine_conformance {
                 engine
                     .process(request, &source, &mut output)
                     .expect("the source block renders");
-                let terminal_samples =
-                    engine.capabilities().latency().output_frames() * CHANNELS;
-                let mut terminal = vec![0.0; terminal_samples];
+                let tail_frames = engine.capabilities().terminal_chunk_frames();
+                let tail_samples = tail_frames * CHANNELS;
+                let mut short = vec![0.0; tail_samples - CHANNELS];
 
-                let first = engine.flush(&mut terminal).expect("first terminal flush");
-                let repeated = engine
+                let error = engine
+                    .flush(&mut short)
+                    .expect_err("an armed tail requires latency-sized storage");
+
+                assert_eq!(
+                    error,
+                    ElasticError::OutputSampleCount {
+                        actual: short.len(),
+                        expected: tail_samples,
+                    }
+                );
+                let mut terminal = vec![0.0; tail_samples];
+                let drained = engine
                     .flush(&mut terminal)
-                    .expect("repeated terminal flush");
-
-                assert!(first <= engine.capabilities().latency().output_frames());
-                assert_eq!(repeated, 0);
+                    .expect("the rejected call keeps the tail armed");
+                assert!(drained > 0);
+                assert!(drained <= tail_frames);
             }
 
             #[kithara::test]
@@ -341,7 +427,7 @@ macro_rules! elastic_engine_conformance {
             fn fresh_engine_has_no_terminal_tail(#[case] backend: StretchKind) {
                 let mut engine = prepared_backend(backend, 8192, 8192);
                 let terminal_samples =
-                    engine.capabilities().latency().output_frames() * CHANNELS;
+                    engine.capabilities().terminal_chunk_frames() * CHANNELS;
                 let mut terminal = vec![0.0; terminal_samples];
 
                 let frames = engine.flush(&mut terminal).expect("fresh terminal drain");
@@ -367,7 +453,7 @@ macro_rules! elastic_engine_conformance {
                     .expect("the source block renders");
                 engine.reset().expect("the engine clears its history");
                 let terminal_samples =
-                    engine.capabilities().latency().output_frames() * CHANNELS;
+                    engine.capabilities().terminal_chunk_frames() * CHANNELS;
                 let mut terminal = vec![0.0; terminal_samples];
 
                 let frames = engine.flush(&mut terminal).expect("reset terminal drain");
@@ -865,6 +951,36 @@ macro_rules! elastic_priming_conformance {
 
 elastic_engine_conformance!(facade);
 
+#[cfg(feature = "stretch-bungee")]
+#[kithara::test]
+fn bungee_half_speed_flush_reaches_the_last_source_marker() {
+    const FRAMES: usize = 8192;
+    const MARKER_FRAMES: usize = 1024;
+
+    let request = ElasticRequest::new(FRAMES / 2, FRAMES).expect("half-speed request");
+    let mut engine = prepared_backend(StretchKind::Bungee, FRAMES, FRAMES);
+    let mut source = vec![0.0; request.source_frames() * CHANNELS];
+    let marker_start = request.source_frames() - MARKER_FRAMES;
+    for frame in marker_start..request.source_frames() {
+        for channel in 0..CHANNELS {
+            source[frame * CHANNELS + channel] = 0.5;
+        }
+    }
+    let mut output = vec![0.0; request.output_frames() * CHANNELS];
+    engine
+        .process(request, &source, &mut output)
+        .expect("the source block renders");
+    let terminal_peak = drain_terminal(engine.as_mut())
+        .iter()
+        .map(|sample| sample.abs())
+        .fold(0.0_f32, f32::max);
+
+    assert!(
+        terminal_peak > f32::EPSILON,
+        "the complete drain must reach audio at the end of the source"
+    );
+}
+
 #[cfg(feature = "stretch-signalsmith")]
 elastic_priming_conformance!(signalsmith_priming, kithara_stretch::SignalsmithElastic);
 
@@ -924,7 +1040,7 @@ fn signalsmith_flush_drains_a_real_tail_once() {
     engine
         .process(request, &source, &mut output)
         .expect("the source block renders");
-    let tail_frames = engine.capabilities().latency().output_frames();
+    let tail_frames = engine.capabilities().terminal_chunk_frames();
     let mut terminal = vec![0.0; tail_frames * CHANNELS];
 
     let first = engine.flush(&mut terminal).expect("terminal tail drains");
@@ -935,42 +1051,6 @@ fn signalsmith_flush_drains_a_real_tail_once() {
     assert_eq!(first, tail_frames);
     assert_eq!(repeated, 0);
     assert!(terminal.iter().any(|sample| sample.abs() > f32::EPSILON));
-}
-
-#[cfg(feature = "stretch-signalsmith")]
-#[kithara::test]
-fn signalsmith_flush_rejects_wrong_storage_without_disarming_tail() {
-    const FRAMES: usize = 8192;
-
-    let mut engine: kithara_stretch::SignalsmithElastic = prepared(FRAMES, FRAMES);
-    let request = ElasticRequest::new(FRAMES, FRAMES).expect("unity request");
-    let source = interleaved_signal(FRAMES);
-    let mut output = vec![0.0; FRAMES * CHANNELS];
-    engine
-        .process(request, &source, &mut output)
-        .expect("the source block renders");
-    let tail_frames = engine.capabilities().latency().output_frames();
-    let tail_samples = tail_frames * CHANNELS;
-    let mut short = vec![0.0; tail_samples - CHANNELS];
-
-    let error = engine
-        .flush(&mut short)
-        .expect_err("an armed tail requires latency-sized storage");
-
-    assert_eq!(
-        error,
-        ElasticError::OutputSampleCount {
-            actual: short.len(),
-            expected: tail_samples,
-        }
-    );
-    let mut terminal = vec![0.0; tail_samples];
-    assert_eq!(
-        engine
-            .flush(&mut terminal)
-            .expect("the rejected call keeps the tail armed"),
-        tail_frames
-    );
 }
 
 #[cfg(feature = "stretch-bungee")]
@@ -997,19 +1077,8 @@ fn bungee_declares_the_prepared_domain_and_latency() {
 
 #[cfg(feature = "stretch-bungee")]
 #[kithara::test]
-fn bungee_flush_honestly_emits_no_synthetic_tail() {
-    let mut engine: kithara_stretch::BungeeElastic = prepared(8192, 8192);
-    let mut terminal = vec![0.0; engine.capabilities().latency().output_frames() * CHANNELS];
-
-    let frames = engine.flush(&mut terminal).expect("no-op flush succeeds");
-
-    assert_eq!(frames, 0);
-}
-
-#[cfg(feature = "stretch-bungee")]
-#[kithara::test]
 fn bungee_prepare_uses_the_injected_pcm_pool_budget() {
-    let config = kithara_stretch::ElasticConfig::builder()
+    let config = ElasticConfig::builder()
         .pool(PcmPool::with_byte_budget(8, 8192, ByteBudget(0)))
         .sample_rate(SAMPLE_RATE)
         .channels(CHANNELS)
@@ -1022,4 +1091,34 @@ fn bungee_prepare_uses_the_injected_pcm_pool_budget() {
         .expect_err("zero pool budget cannot prepare planar PCM scratch");
 
     assert_eq!(error, ElasticError::PcmPoolBudgetExhausted);
+}
+
+#[cfg(feature = "stretch-bungee")]
+#[kithara::test]
+fn bungee_pool_usage_scales_with_the_prepared_source_limit() {
+    fn allocated_bytes(max_source_frames: usize) -> usize {
+        let pool = PcmPool::with_byte_budget(8, 8192, ByteBudget(usize::MAX));
+        let config = ElasticConfig::builder()
+            .backend(StretchKind::Bungee)
+            .pool(pool.clone())
+            .sample_rate(SAMPLE_RATE)
+            .channels(CHANNELS)
+            .max_source_frames(max_source_frames)
+            .max_output_frames(8192)
+            .build()
+            .expect("the numeric preparation shape is valid");
+        let engine = kithara_stretch::BungeeElastic::prepare(config)
+            .expect("the prepared shape fits an unlimited pool");
+        let allocated = pool.allocated_bytes();
+        drop(engine);
+        allocated
+    }
+
+    let one_frame = allocated_bytes(1);
+    let full_block = allocated_bytes(8192);
+
+    assert!(
+        one_frame < full_block,
+        "latency probing must not inflate every shape to an 8192-frame allocation"
+    );
 }

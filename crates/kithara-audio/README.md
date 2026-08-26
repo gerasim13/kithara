@@ -43,7 +43,7 @@ processed chunks to the caller through lock-free rings.
 
 <tr><td><code>beat-nn</code></td><td>no</td><td>Enable NN beat/downbeat analysis through <code>kithara-beat</code></td></tr>
 
-<tr><td><code>stretch-bungee</code></td><td>no</td><td>Native <code>bungee-rs</code> key-lock backend through <code>kithara-stretch</code></td></tr>
+<tr><td><code>stretch-bungee</code></td><td>no</td><td>Native Bungee key-lock backend through <code>kithara-stretch</code>'s private <code>bungee-sys</code> adapter</td></tr>
 
 <tr><td><code>client-wreq</code></td><td>no</td><td>Forward the native <code>wreq</code> HTTP backend selection to network-reaching deps</td></tr>
 

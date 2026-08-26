@@ -53,35 +53,39 @@ The produce path must stay allocation-free. Callers provide fixed output slices 
 reserved before the checked render call, and an engine that needs planar scratch checks it out from
 the `PcmPool` supplied in `ElasticConfig`; no engine owns a default or global pool.
 
-`flush(out)` writes the buffered tail into caller-owned storage and returns the number of interleaved
-frames written. It is a one-shot tail drain: repeated flushes without new input or `reset` return
-zero, so an EOF drain can loop until the engine reports no frames. A rate change between adjacent
-exact requests preserves history and is not a flush or reset boundary. A backend that cannot expose
-a true tail drain must document that in its adapter.
+`flush(out)` writes the next buffered-tail portion into caller-owned storage sized from
+`terminal_chunk_frames` and returns the number of interleaved frames written. EOF repeats the call
+until zero; a completed drain stays empty until new input. This streaming contract lets a
+rate-dependent tail span several fixed-size chunks without loss. A rate change between adjacent
+exact requests preserves history and is not a flush or reset boundary. Every backend must expose the
+same real terminal-drain behavior; a no-op or synthetic-silence flush is not conforming.
 `reset()` clears buffered state after seek; source-spec and backend changes are handled by the
 caller preparing a replacement outside its checked render core. The trait intentionally does not
 depend on `kithara-decode::PcmSpec`.
 
 ## Backend limitations
 
-- Bungee has no tail drain (its high-level `Stream` exposes none, and feeding muted input would emit
-  stretched silence instead of the buffered tail, inflating duration): `flush` is a no-op and roughly
-  one latency of audio is dropped at end of stream. A real drain needs the low-level granular
-  `Stretcher` API.
+- Bungee uses the low-level `bungee-sys` granular `Stretcher` API behind a private RAII owner. Native
+  planar output is validated and copied immediately into pooled Rust storage; no native pointer or
+  mutable slice escapes the call that produced it.
+- Bungee retains the source lookahead and output remainder required by its overlapping grains. EOF
+  first advances finite requests to the exact source end, clips output by native request timestamps,
+  then clears the four-grain pipeline with invalid requests. `flush` therefore returns real terminal
+  audio across one or more chunks instead of dropping roughly one latency of the track.
 - Bungee preparation fails when the injected pool budget cannot cover its planar scratch or
-  `Stream::new` fails; the audio adapter warns once and marks the engine unavailable.
+  native stretcher construction fails; the audio adapter warns once and marks the engine unavailable.
 - `BungeeElastic` does not implement `ElasticPriming`, for the same root cause as the missing tail
-  drain. Its `Stream` emits with a fixed lag: the input-frame coordinate of the next output frame is
-  always `emitted_output_frames - latency`, so absorbing history costs exactly as much emitted
-  output as it consumes input, and no history/warmup pair leaves the engine aligned. A primed
-  Bungee engine needs the low-level granular `Stretcher` API, whose `Request::position` is a source
-  coordinate.
-- `BungeeElastic::reset` rebuilds the stream (the high-level `Stream` has no reset), so it
-  allocates and can fail; `SignalsmithElastic::reset` is allocation-free. Callers perform reset
-  from their off-core lifecycle seam.
-- Bungee reports its latency only once a grain has been analysed, and the value keeps growing until
-  the pipeline is full; it also moves with the rate. `BungeeElastic` therefore saturates the number
-  on a throwaway stream at prepare and reports that unity steady-state value for its lifetime.
+  drain in the former high-level adapter. The new low-level state machine now provides the necessary
+  source coordinates and preroll primitive, but priming remains outside the common contract until
+  the shared facade conformance matrix covers it for both engines.
+- `BungeeElastic::reset` clears and drains the resident native pipeline without rebuilding it; its
+  Rust-side input/output storage remains the buffers reserved from the injected pool at prepare.
+- Bungee reports its unity latency only after its pipeline is warm, and runtime latency moves with
+  the rate. Preparation measures the unity reference on the resident, shape-sized core, resets that
+  same core in place, and separately declares a safe fixed terminal chunk from the native maximum
+  input-grain span; no probe engine or extra pool allocation is retained.
+- Both engines accept the same pitch range, `0.25..=4.0`; this is the range covered by Bungee's
+  native sizing and prevents a backend selector from changing validation semantics.
 - Both engines expose the complete non-empty rate domain implied by their prepared source/output
   frame limits; the conformance suite exercises its minimum, unity and maximum requests.
 - Bungee on iOS is opt-in. Its CMake C++ build must see `IPHONEOS_DEPLOYMENT_TARGET`; `xtask apple`
@@ -98,9 +102,9 @@ depend on `kithara-decode::PcmSpec`.
   the `build_engine` factory arm on `#[cfg(feature = "stretch-<name>")]`; keep the discriminant
   stable.
 1. Declare latency, implement `ElasticPriming` only if the engine can absorb history without
-  emitting it, and add one `elastic_engine_conformance!` line (plus
-  `elastic_priming_conformance!` when it primes) in `tests/elastic.rs`. The suite is the contract;
-  backend-specific tests cover only real capability differences such as latency and terminal drain.
+  emitting it, and add the backend as a named case in the shared facade conformance matrix (plus the
+  priming matrix when it primes) in `tests/elastic.rs`. The suite is the contract; backend-specific
+  tests cover only preparation mechanics and measured latency.
 1. Document any target, tail-drain or priming limitation above.
 
 Do not declare `stretch-native` or add `backends/native.rs` until the pure-Rust engine exists.

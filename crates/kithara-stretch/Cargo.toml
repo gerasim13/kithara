@@ -12,7 +12,7 @@ categories = ["multimedia::audio"]
 [features]
 default = ["stretch-signalsmith"]
 stretch-signalsmith = ["dep:bon", "dep:kithara-bufpool", "dep:signalsmith-stretch"]
-stretch-bungee = ["dep:bon", "dep:bungee-rs", "dep:fast-interleave", "dep:kithara-bufpool"]
+stretch-bungee = ["dep:bon", "dep:bungee-sys", "dep:kithara-bufpool"]
 
 [dependencies]
 bon = { workspace = true, optional = true }
@@ -30,8 +30,7 @@ thiserror = { workspace = true }
 # exist for that target either; Windows/MSVC gets the same treatment for
 # bungee specifically, so `stretch-signalsmith` keeps working there.
 [target.'cfg(all(not(target_arch = "wasm32"), not(all(target_os = "windows", target_env = "msvc"))))'.dependencies]
-bungee-rs = { workspace = true, optional = true }
-fast-interleave = { workspace = true, optional = true }
+bungee-sys = { workspace = true, optional = true }
 
 [target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))'.dependencies]
 kithara-workspace-hack = { version = "0.0.1-alpha4", path = "../kithara-workspace-hack" }

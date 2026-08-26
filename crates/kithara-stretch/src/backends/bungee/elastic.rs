@@ -1,135 +1,44 @@
-use std::{fmt, num::NonZeroUsize};
+use std::fmt;
 
-use bungee_rs::Stream;
-use fast_interleave::{deinterleave_variable, interleave_variable};
-use kithara_bufpool::{BudgetExhausted, PcmPool};
-use num_traits::{ToPrimitive, cast::AsPrimitive};
+use num_traits::ToPrimitive;
 
+use super::stream::StreamCore;
 use crate::{
-    ElasticCapabilities, ElasticConfig, ElasticEngine, ElasticError, ElasticLatency, ElasticRequest,
+    ElasticCapabilities, ElasticConfig, ElasticEngine, ElasticError, ElasticLatency,
+    ElasticRequest, elastic::PitchRange,
 };
 
-fn stream(
-    sample_rate: u32,
-    channels: usize,
-    max_input_frames: usize,
-) -> Result<Stream, ElasticError> {
-    let sample_rate: usize = sample_rate.as_();
-    Stream::new(sample_rate, channels, max_input_frames).map_err(ElasticError::EnginePreparation)
-}
-
-#[derive(fieldwork::Fieldwork)]
-#[fieldwork(opt_in, get, get_mut)]
-struct PooledPlanar {
-    pool: PcmPool,
-    #[field(get, get_mut)]
-    channels: Vec<Vec<f32>>,
-}
-
-impl PooledPlanar {
-    fn new(pool: &PcmPool, channels: usize, capacity: usize) -> Result<Self, BudgetExhausted> {
-        let mut planar = Self {
-            channels: Vec::with_capacity(channels),
-            pool: pool.clone(),
-        };
-        for _ in 0..channels {
-            let mut samples = pool.get();
-            samples.ensure_len(capacity)?;
-            samples.clear();
-            planar.channels.push(samples.into_inner());
-        }
-        Ok(planar)
-    }
-
-    fn ensure_len(&mut self, frames: usize) -> Result<(), BudgetExhausted> {
-        for samples in &mut self.channels {
-            let mut pooled = self.pool.attach(std::mem::take(samples));
-            let result = pooled.ensure_len(frames);
-            *samples = pooled.into_inner();
-            result?;
-        }
-        Ok(())
-    }
-
-    fn fill_interleaved(
-        &mut self,
-        input: &[f32],
-        frames: usize,
-        channels: NonZeroUsize,
-    ) -> Result<(), BudgetExhausted> {
-        self.ensure_len(frames)?;
-        deinterleave_variable(input, channels, self.channels_mut(), 0..frames);
-        Ok(())
-    }
-}
-
-impl Drop for PooledPlanar {
-    fn drop(&mut self) {
-        for samples in self.channels.drain(..) {
-            self.pool.recycle(samples);
-        }
-    }
-}
-
 /// Exact-span Bungee engine.
-///
-/// Bungee has no history-only priming or true tail-drain operation, so this
-/// engine implements neither [`crate::ElasticPriming`] nor terminal output in
-/// [`ElasticEngine::flush`].
 #[non_exhaustive]
 pub struct BungeeElastic {
-    stream: Stream,
     capabilities: ElasticCapabilities,
-    source: PooledPlanar,
-    output: PooledPlanar,
+    core: StreamCore,
     pitch: f64,
+    tail_armed: bool,
 }
 
 impl BungeeElastic {
     const LATENCY_PROBE_BLOCKS: usize = 4;
-    const LATENCY_PROBE_FRAMES: usize = 8192;
 
-    fn pooled(
-        pool: &PcmPool,
-        channels: usize,
-        frames: usize,
-    ) -> Result<PooledPlanar, ElasticError> {
-        PooledPlanar::new(pool, channels, frames).map_err(|_| ElasticError::PcmPoolBudgetExhausted)
-    }
-
-    fn latency(config: &ElasticConfig) -> Result<ElasticLatency, ElasticError> {
-        let mut probe = stream(
-            config.sample_rate(),
-            config.channels(),
-            Self::LATENCY_PROBE_FRAMES,
-        )?;
-        let mut source =
-            Self::pooled(config.pool(), config.channels(), Self::LATENCY_PROBE_FRAMES)?;
-        let mut output =
-            Self::pooled(config.pool(), config.channels(), Self::LATENCY_PROBE_FRAMES)?;
-        source
-            .ensure_len(Self::LATENCY_PROBE_FRAMES)
-            .map_err(|_| ElasticError::PcmPoolBudgetExhausted)?;
-        output
-            .ensure_len(Self::LATENCY_PROBE_FRAMES)
-            .map_err(|_| ElasticError::PcmPoolBudgetExhausted)?;
-        let frames = Self::LATENCY_PROBE_FRAMES
-            .to_f64()
-            .ok_or(ElasticError::SampleCountOverflow)?;
+    fn latency(
+        core: &mut StreamCore,
+        config: &ElasticConfig,
+    ) -> Result<ElasticLatency, ElasticError> {
+        let probe_frames = config.max_source_frames().min(config.max_output_frames());
+        let request = ElasticRequest::new(probe_frames, probe_frames)?;
         for _ in 0..Self::LATENCY_PROBE_BLOCKS {
-            probe.process(
-                Some(source.channels()),
-                output.channels_mut(),
-                Self::LATENCY_PROBE_FRAMES,
-                frames,
-                1.0,
-            );
+            core.probe_silence(request)?;
         }
-        let frames = probe
-            .latency()
+        let output_position = core
+            .output_position()
+            .ok_or(ElasticError::EnginePreparation(
+                "Bungee latency probe produced no timed output",
+            ))?;
+        let frames = (f64::from(core.source_end()) - output_position)
             .ceil()
             .to_usize()
             .ok_or(ElasticError::SampleCountOverflow)?;
+        core.discard()?;
         Ok(ElasticLatency::new(frames, frames))
     }
 }
@@ -145,20 +54,16 @@ impl fmt::Debug for BungeeElastic {
 
 impl ElasticEngine for BungeeElastic {
     fn prepare(config: ElasticConfig) -> Result<Self, ElasticError> {
-        let latency = Self::latency(&config)?;
-        let capabilities = ElasticCapabilities::new(config.shape(), latency)?;
-        let source = Self::pooled(config.pool(), config.channels(), config.max_source_frames())?;
-        let output = Self::pooled(config.pool(), config.channels(), config.max_output_frames())?;
+        let mut core = StreamCore::new(&config, config.max_source_frames())?;
+        let latency = Self::latency(&mut core, &config)?;
+        let terminal_chunk_frames = core.max_input_frames();
+        let capabilities =
+            ElasticCapabilities::new(config.shape(), latency, terminal_chunk_frames)?;
         Ok(Self {
-            stream: stream(
-                config.sample_rate(),
-                config.channels(),
-                config.max_source_frames(),
-            )?,
+            core,
             capabilities,
-            source,
-            output,
             pitch: 1.0,
+            tail_armed: false,
         })
     }
 
@@ -174,53 +79,37 @@ impl ElasticEngine for BungeeElastic {
     ) -> Result<(), ElasticError> {
         self.capabilities
             .validate(request, source.len(), output.len())?;
-        let channels = NonZeroUsize::new(self.capabilities.channels())
-            .ok_or(ElasticError::InvalidChannelCount)?;
-        let output_frames = request.output_frames();
-        let requested = output_frames
-            .to_f64()
-            .ok_or(ElasticError::SampleCountOverflow)?;
-        self.source
-            .fill_interleaved(source, request.source_frames(), channels)
-            .map_err(|_| ElasticError::PcmPoolBudgetExhausted)?;
-        self.output
-            .ensure_len(output_frames)
-            .map_err(|_| ElasticError::PcmPoolBudgetExhausted)?;
-        let rendered = self.stream.process(
-            Some(self.source.channels()),
-            self.output.channels_mut(),
-            request.source_frames(),
-            requested,
-            self.pitch,
-        );
-        if rendered != output_frames {
-            return Err(ElasticError::EngineOutputFrameCount {
-                actual: rendered,
-                expected: output_frames,
-            });
-        }
-        interleave_variable(self.output.channels(), 0..output_frames, output, channels);
+        self.core
+            .render(Some(source), request, self.pitch, Some(output))?;
+        self.tail_armed = true;
         Ok(())
     }
 
     fn set_pitch(&mut self, scale: f64) -> Result<(), ElasticError> {
-        if !scale.is_finite() || scale <= 0.0 {
-            return Err(ElasticError::InvalidPitch(scale));
-        }
-        self.pitch = scale;
+        self.pitch = PitchRange::validate(scale)?;
         Ok(())
     }
 
-    fn flush(&mut self, _output: &mut [f32]) -> Result<usize, ElasticError> {
-        Ok(0)
+    fn flush(&mut self, output: &mut [f32]) -> Result<usize, ElasticError> {
+        if !self.tail_armed {
+            return Ok(0);
+        }
+        let tail_frames = self.capabilities.terminal_chunk_frames();
+        let expected = self.capabilities.samples(tail_frames)?;
+        if output.len() != expected {
+            return Err(ElasticError::OutputSampleCount {
+                actual: output.len(),
+                expected,
+            });
+        }
+        let chunk = self.core.terminal_tail(output, tail_frames)?;
+        self.tail_armed = !chunk.complete();
+        Ok(chunk.frames())
     }
 
     fn reset(&mut self) -> Result<(), ElasticError> {
-        self.stream = stream(
-            self.capabilities.sample_rate(),
-            self.capabilities.channels(),
-            self.capabilities.max_source_frames(),
-        )?;
+        self.core.discard()?;
+        self.tail_armed = false;
         Ok(())
     }
 }
