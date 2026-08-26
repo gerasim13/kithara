@@ -25,17 +25,15 @@ use crate::{
 /// sample rate, so it is already in the domain the decoder emits in: an
 /// SBR codec whose access unit is 1024 core frames but 2048 output frames
 /// is measured against 2048, not against a core-rate constant.
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, fieldwork::Fieldwork)]
+#[fieldwork(opt_in, get)]
 struct HeadStrip {
     settled: bool,
+    #[field(get, copy)]
     frames: u64,
 }
 
 impl HeadStrip {
-    const fn frames(self) -> u64 {
-        self.frames
-    }
-
     /// Stops once a packet comes back whole: from there on the decoder is
     /// through its delay, and a short packet is the stream's own tail
     /// rather than more strip.
