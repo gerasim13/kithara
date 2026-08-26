@@ -35,8 +35,34 @@ pub trait ElasticEngine: Send + 'static {
     /// Immutable limits, latency and rate window of this engine.
     fn capabilities(&self) -> ElasticCapabilities;
 
+    /// Clears prior stream state, absorbs source history and lookahead, then
+    /// renders one latency-sized warmup span into caller-owned discard storage.
+    ///
+    /// `source_lookahead` contains exactly the declared source latency starting
+    /// at the audible cue; `source` follows it at the rate named by `request`.
+    /// Source passed to the next [`process`](Self::process) follows `source`,
+    /// while its first output resumes at the start of `source_lookahead` after
+    /// the engine latency has been absorbed.
+    ///
+    /// # Errors
+    /// Returns [`ElasticError`] when the warmup request does not match the
+    /// declared latency, when a buffer length does not match the request, or
+    /// when the rate is outside the declared envelope.
+    fn prime(
+        &mut self,
+        request: ElasticRequest,
+        source_history: &[f32],
+        source_lookahead: &[f32],
+        source: &[f32],
+        discarded_output: &mut [f32],
+    ) -> Result<(), ElasticError>;
+
     /// Renders exactly `request.output_frames()` interleaved output frames
     /// from exactly `request.source_frames()` interleaved source frames.
+    /// Across this and any immediately adjacent calls, a changed ratio must
+    /// affect emitted audio within `capabilities().latency().output_frames()`
+    /// frames. Engines must not add software-buffering delay beyond their
+    /// declared native latency.
     ///
     /// # Errors
     /// Returns [`ElasticError`] when the request is outside the prepared
@@ -49,7 +75,10 @@ pub trait ElasticEngine: Send + 'static {
         output: &mut [f32],
     ) -> Result<(), ElasticError>;
 
-    /// Sets pitch independently from source-to-output frame advance.
+    /// Sets pitch independently from source-to-output frame advance. Across
+    /// immediately adjacent [`process`](Self::process) calls, a changed pitch
+    /// must affect emitted audio within the declared output latency; engines
+    /// must not add a second software-buffering delay.
     ///
     /// # Errors
     /// Returns [`ElasticError`] when `scale` is outside the common native
@@ -63,11 +92,13 @@ pub trait ElasticEngine: Send + 'static {
     /// until this method returns zero. Each non-zero result is the next
     /// contiguous tail portion; active engines must expose their real tail and
     /// converge to zero. Fresh and reset engines return zero, and a completed
-    /// drain stays idempotently empty until [`process`](Self::process).
+    /// drain stays idempotently empty until [`prime`](Self::prime) or
+    /// [`process`](Self::process).
     ///
     /// # Errors
-    /// Returns [`ElasticError`] when `output` does not match the engine's
-    /// declared terminal span or when sizing that span overflows.
+    /// While a drain is active, returns [`ElasticError`] when `output` does not
+    /// match the engine's declared terminal span or when sizing that span
+    /// overflows. An inactive drain returns zero without accessing `output`.
     fn flush(&mut self, output: &mut [f32]) -> Result<usize, ElasticError>;
 
     /// Clears stream history while retaining the prepared shape and latency.
@@ -75,23 +106,4 @@ pub trait ElasticEngine: Send + 'static {
     /// # Errors
     /// Returns [`ElasticError`] when the resident backend state cannot be cleared.
     fn reset(&mut self) -> Result<(), ElasticError>;
-}
-
-/// Engine capability for absorbing source history without emitting it.
-/// Priming leaves the next render aligned after the supplied warmup span.
-pub trait ElasticPriming: ElasticEngine {
-    /// Resets state and seeds exact history and warmup spans into
-    /// `discarded_output`.
-    ///
-    /// # Errors
-    /// Returns [`ElasticError`] when the warmup request does not match the
-    /// declared latency, when a buffer length does not match the request, or
-    /// when the rate is outside the declared envelope.
-    fn prime(
-        &mut self,
-        request: ElasticRequest,
-        source_history: &[f32],
-        source: &[f32],
-        discarded_output: &mut [f32],
-    ) -> Result<(), ElasticError>;
 }

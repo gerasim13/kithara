@@ -1,16 +1,13 @@
 //! Conformance suite for the exact-span elastic contract.
 //!
 //! Every compiled-in engine runs the same bodies through
-//! `elastic_engine_conformance!`; engines that can absorb source history also
-//! run `elastic_priming_conformance!`. Backend-specific numbers (the declared
-//! prepared frame domain and backend latency are asserted next to each engine,
-//! and nothing else in the suite names a backend.
+//! `elastic_engine_conformance!`, including the mandatory priming lifecycle.
+//! Backend-specific prepared limits and latency are asserted next to each
+//! engine; nothing else in the suite names a backend.
 
 use std::f32::consts::TAU;
 
-#[cfg(feature = "stretch-bungee")]
-use kithara_bufpool::ByteBudget;
-use kithara_bufpool::PcmPool;
+use kithara_bufpool::{ByteBudget, PcmPool};
 use kithara_stretch::{
     ElasticCapabilities, ElasticConfig, ElasticEngine, ElasticError, ElasticRequest,
     ElasticSpanConfig, StretchKind, build_engine,
@@ -19,6 +16,7 @@ use kithara_test_utils::kithara;
 use num_traits::ToPrimitive;
 
 const CHANNELS: usize = 2;
+const CONTROL_QUANTUM: usize = 64;
 const SAMPLE_RATE: u32 = 48_000;
 const TONE_HZ: f64 = 440.0;
 
@@ -120,7 +118,6 @@ fn assert_exact_samples(actual: &[f32], expected: &[f32]) {
 /// The source span an engine accepts at a declared envelope edge: the planner
 /// quantizes the same way, so a conformance request is never a rounding step
 /// outside the window it is meant to exercise.
-#[cfg(feature = "stretch-signalsmith")]
 fn source_frames_at(rate: f64, output_frames: usize, round_up: bool) -> usize {
     let frames = output_frames
         .to_f64()
@@ -140,10 +137,11 @@ fn edge_requests(capabilities: ElasticCapabilities) -> [ElasticRequest; 3] {
     let unity_frames = capabilities
         .max_source_frames()
         .min(capabilities.max_output_frames());
+    let slow_output_frames = unity_frames - unity_frames % 20;
     [
-        (1, capabilities.max_output_frames()),
+        (slow_output_frames / 20, slow_output_frames),
         (unity_frames, unity_frames),
-        (capabilities.max_source_frames(), 1),
+        (unity_frames, unity_frames / 4),
     ]
     .map(|(source_frames, output_frames)| {
         ElasticRequest::new(source_frames, output_frames)
@@ -565,27 +563,12 @@ macro_rules! elastic_engine_conformance {
                 case::signalsmith(StretchKind::Signalsmith)
             )]
             #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
-            fn rate_envelope_is_the_complete_prepared_non_empty_domain(#[case] backend: StretchKind) {
+            fn rate_envelope_is_the_configured_practical_domain(#[case] backend: StretchKind) {
                 let engine = prepared_backend(backend, 8192, 4096);
-                let capabilities = engine.capabilities();
-                let envelope = capabilities.rate_envelope();
-                let max_output_frames = capabilities
-                    .max_output_frames()
-                    .to_f64()
-                    .expect("prepared output limit fits f64");
-                let max_source_frames = capabilities
-                    .max_source_frames()
-                    .to_f64()
-                    .expect("prepared source limit fits f64");
+                let envelope = engine.capabilities().rate_envelope();
 
-                assert_eq!(
-                    envelope.min_source_frames_per_output(),
-                    1.0 / max_output_frames
-                );
-                assert_eq!(
-                    envelope.max_source_frames_per_output(),
-                    max_source_frames
-                );
+                assert_eq!(envelope.min_source_frames_per_output(), 0.05);
+                assert_eq!(envelope.max_source_frames_per_output(), 4.0);
                 assert!(
                     !envelope.contains_rate(envelope.min_source_frames_per_output() / 2.0)
                 );
@@ -662,6 +645,19 @@ macro_rules! elastic_engine_conformance {
                         limit: MAX_OUTPUT_FRAMES,
                     })
                 );
+
+                let request = ElasticRequest::new(32, 1).expect("non-empty extreme-rate request");
+                assert_eq!(
+                    engine.process(
+                        request,
+                        &source[..request.source_frames() * CHANNELS],
+                        &mut output[..request.output_frames() * CHANNELS],
+                    ),
+                    Err(ElasticError::RateOutsideEnvelope {
+                        source_frames: 32,
+                        output_frames: 1,
+                    })
+                );
             }
 
             #[kithara::test]
@@ -716,12 +712,9 @@ macro_rules! elastic_engine_conformance {
     };
 }
 
-#[cfg(feature = "stretch-signalsmith")]
 macro_rules! elastic_priming_conformance {
-    ($module:ident, $engine:ty) => {
+    ($module:ident) => {
         mod $module {
-            use kithara_stretch::{ElasticCapabilities, ElasticPriming};
-
             use super::*;
 
             fn indexed_markers(frames: usize, offset: usize) -> Vec<f32> {
@@ -730,6 +723,26 @@ macro_rules! elastic_priming_conformance {
                         .expect("invariant: marker index is bounded below 997");
                     (f32::from(marker_index) / 997.0) * 1.5 - 0.75
                 })
+            }
+
+            fn continuous_tone(frames: usize, offset: usize) -> Vec<f32> {
+                let phase_step = TAU
+                    * TONE_HZ.to_f32().expect("the fixture frequency fits in f32")
+                    / SAMPLE_RATE
+                        .to_f32()
+                        .expect("the fixture sample rate fits in f32");
+                marker_signal(frames, offset, |index| {
+                    (index.to_f32().expect("the fixture timeline fits in f32") * phase_step).sin()
+                        * 0.5
+                })
+            }
+
+            fn mean(samples: &[f32]) -> f32 {
+                samples.iter().sum::<f32>()
+                    / samples
+                        .len()
+                        .to_f32()
+                        .expect("the sample window fits in f32")
             }
 
             fn warmup_request(
@@ -749,21 +762,152 @@ macro_rules! elastic_priming_conformance {
                     .expect("invariant: warmup request is valid")
             }
 
+            fn primed_playing_pair(
+                backend: StretchKind,
+            ) -> (
+                Box<dyn ElasticEngine>,
+                Box<dyn ElasticEngine>,
+                ElasticCapabilities,
+                usize,
+            ) {
+                const MAX_FRAMES: usize = 65_536;
+
+                let mut reference = prepared_backend(backend, MAX_FRAMES, MAX_FRAMES);
+                let mut changed = prepared_backend(backend, MAX_FRAMES, MAX_FRAMES);
+                let capabilities = reference.capabilities();
+                assert_eq!(changed.capabilities(), capabilities);
+                let latency = capabilities.latency();
+                let warmup = warmup_request(capabilities, 1.0);
+                let history = indexed_markers(latency.source_frames(), 0);
+                let lookahead = indexed_markers(latency.source_frames(), latency.source_frames());
+                let warm_source = indexed_markers(
+                    warmup.source_frames(),
+                    latency.source_frames().saturating_mul(2),
+                );
+                let mut reference_discard = vec![0.0; warmup.output_frames() * CHANNELS];
+                let mut changed_discard = vec![0.0; warmup.output_frames() * CHANNELS];
+                reference
+                    .prime(
+                        warmup,
+                        &history,
+                        &lookahead,
+                        &warm_source,
+                        &mut reference_discard,
+                    )
+                    .expect("reference engine primes");
+                changed
+                    .prime(
+                        warmup,
+                        &history,
+                        &lookahead,
+                        &warm_source,
+                        &mut changed_discard,
+                    )
+                    .expect("changed engine primes");
+
+                let continuation = latency
+                    .source_frames()
+                    .saturating_mul(2)
+                    .saturating_add(warmup.source_frames());
+                let source = indexed_markers(CONTROL_QUANTUM, continuation);
+                let request = ElasticRequest::new(CONTROL_QUANTUM, CONTROL_QUANTUM)
+                    .expect("lead quantum is non-empty");
+                let mut reference_output = vec![f32::NAN; CONTROL_QUANTUM * CHANNELS];
+                let mut changed_output = vec![f32::NAN; CONTROL_QUANTUM * CHANNELS];
+                reference
+                    .process(request, &source, &mut reference_output)
+                    .expect("reference lead quantum renders");
+                changed
+                    .process(request, &source, &mut changed_output)
+                    .expect("changed lead quantum renders");
+                assert_exact_samples(&changed_output, &reference_output);
+
+                (
+                    reference,
+                    changed,
+                    capabilities,
+                    continuation + CONTROL_QUANTUM,
+                )
+            }
+
+            fn assert_control_response(
+                reference: &mut dyn ElasticEngine,
+                changed: &mut dyn ElasticEngine,
+                capabilities: ElasticCapabilities,
+                continuation: usize,
+                changed_rate: f64,
+                changed_pitch: f64,
+            ) {
+                changed
+                    .set_pitch(changed_pitch)
+                    .expect("the changed pitch is supported");
+                let mut reference_position = continuation;
+                let mut changed_position = continuation;
+                let mut remaining = capabilities.latency().output_frames();
+                while remaining > 0 {
+                    let output_frames = remaining.min(CONTROL_QUANTUM);
+                    let reference_request = ElasticRequest::new(output_frames, output_frames)
+                        .expect("reference quantum is non-empty");
+                    let changed_source_frames =
+                        source_frames_at(changed_rate, output_frames, false);
+                    let changed_request =
+                        ElasticRequest::new(changed_source_frames, output_frames)
+                            .expect("changed quantum is non-empty");
+                    let reference_source = indexed_markers(output_frames, reference_position);
+                    let changed_source =
+                        indexed_markers(changed_source_frames, changed_position);
+                    let mut reference_output = vec![f32::NAN; output_frames * CHANNELS];
+                    let mut changed_output = vec![f32::NAN; output_frames * CHANNELS];
+                    reference
+                        .process(
+                            reference_request,
+                            &reference_source,
+                            &mut reference_output,
+                        )
+                        .expect("reference control quantum renders");
+                    changed
+                        .process(changed_request, &changed_source, &mut changed_output)
+                        .expect("changed control quantum renders");
+                    assert!(reference_output.iter().all(|sample| sample.is_finite()));
+                    assert!(changed_output.iter().all(|sample| sample.is_finite()));
+                    if changed_output != reference_output {
+                        return;
+                    }
+                    reference_position += output_frames;
+                    changed_position += changed_source_frames;
+                    remaining -= output_frames;
+                }
+
+                panic!("a control change must affect output within the declared native latency");
+            }
+
             #[kithara::test]
-            fn history_and_output_warmup_remove_the_initial_gap() {
+            #[cfg_attr(
+                feature = "stretch-signalsmith",
+                case::signalsmith(StretchKind::Signalsmith)
+            )]
+            #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
+            fn history_and_output_warmup_remove_the_initial_gap(#[case] backend: StretchKind) {
                 const FRAMES: usize = 512;
 
-                let mut engine: $engine = prepared(FRAMES * 2, FRAMES);
+                let mut engine = prepared_backend(backend, FRAMES * 2, FRAMES);
                 let capabilities = engine.capabilities();
                 let history_frames = capabilities.latency().source_frames();
-                let history = impulse_markers(history_frames, 0);
+                let history = vec![0.25; history_frames * CHANNELS];
+                let lookahead = vec![0.25; history.len()];
                 let warmup = warmup_request(capabilities, 1.0);
-                let warm_source = impulse_markers(warmup.source_frames(), history_frames);
+                let warm_source = vec![0.25; warmup.source_frames() * CHANNELS];
                 let mut discarded = vec![0.0; warmup.output_frames() * CHANNELS];
                 engine
-                    .prime(warmup, &history, &warm_source, &mut discarded)
+                    .prime(
+                        warmup,
+                        &history,
+                        &lookahead,
+                        &warm_source,
+                        &mut discarded,
+                    )
                     .expect("history and output latency warmup");
-                let source = impulse_markers(FRAMES, history_frames + warmup.source_frames());
+                let source = vec![0.25; FRAMES * CHANNELS];
                 let mut output = vec![0.0; FRAMES * CHANNELS];
 
                 engine
@@ -778,43 +922,268 @@ macro_rules! elastic_priming_conformance {
             }
 
             #[kithara::test]
-            fn non_unity_warmup_aligns_the_first_audible_frame() {
-                const SOURCE_FRAMES: usize = 600;
-                const OUTPUT_FRAMES: usize = 500;
+            #[cfg_attr(
+                feature = "stretch-signalsmith",
+                case::signalsmith(StretchKind::Signalsmith)
+            )]
+            #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
+            fn post_prime_pitch_change_responds_within_declared_latency(
+                #[case] backend: StretchKind,
+            ) {
+                let (mut reference, mut changed, capabilities, continuation) =
+                    primed_playing_pair(backend);
 
-                let mut engine: $engine = prepared(SOURCE_FRAMES, OUTPUT_FRAMES);
-                let capabilities = engine.capabilities();
-                let history_frames = capabilities.latency().source_frames();
-                let history = impulse_markers(history_frames, 0);
-                let warmup = warmup_request(capabilities, 1.2);
-                let warm_source = impulse_markers(warmup.source_frames(), history_frames);
-                let mut discarded = vec![0.0; warmup.output_frames() * CHANNELS];
-                engine
-                    .prime(warmup, &history, &warm_source, &mut discarded)
-                    .expect("non-unity history and output latency warmup");
-                let source =
-                    impulse_markers(SOURCE_FRAMES, history_frames + warmup.source_frames());
-                let mut output = vec![f32::NAN; OUTPUT_FRAMES * CHANNELS];
-
-                engine
-                    .process(
-                        ElasticRequest::new(SOURCE_FRAMES, OUTPUT_FRAMES)
-                            .expect("non-unity request"),
-                        &source,
-                        &mut output,
-                    )
-                    .expect("primed non-unity request");
-
-                assert!(output.iter().all(|sample| sample.is_finite()));
-                assert_eq!(first_audible_frame(&output, CHANNELS), Some(0));
+                assert_control_response(
+                    reference.as_mut(),
+                    changed.as_mut(),
+                    capabilities,
+                    continuation,
+                    1.0,
+                    1.5,
+                );
             }
 
             #[kithara::test]
-            fn prime_rejects_every_ambiguous_buffer_count() {
-                let mut engine: $engine = prepared(1024, 512);
+            #[cfg_attr(
+                feature = "stretch-signalsmith",
+                case::signalsmith(StretchKind::Signalsmith)
+            )]
+            #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
+            fn post_prime_rate_change_responds_within_declared_latency(
+                #[case] backend: StretchKind,
+            ) {
+                let (mut reference, mut changed, capabilities, continuation) =
+                    primed_playing_pair(backend);
+
+                assert_control_response(
+                    reference.as_mut(),
+                    changed.as_mut(),
+                    capabilities,
+                    continuation,
+                    2.0,
+                    1.0,
+                );
+            }
+
+            #[kithara::test]
+            #[cfg_attr(
+                feature = "stretch-signalsmith",
+                case::signalsmith(StretchKind::Signalsmith)
+            )]
+            #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
+            fn source_history_conditions_the_cue_boundary(#[case] backend: StretchKind) {
+                const MAX_FRAMES: usize = 65_536;
+
+                let mut conditioned = prepared_backend(backend, MAX_FRAMES, MAX_FRAMES);
+                let mut zero_padded = prepared_backend(backend, MAX_FRAMES, MAX_FRAMES);
+                let capabilities = conditioned.capabilities();
+                assert_eq!(zero_padded.capabilities(), capabilities);
+                let latency = capabilities.latency();
+                let warmup = warmup_request(capabilities, 1.0);
+                let history = continuous_tone(latency.source_frames(), 0);
+                let empty_history = vec![0.0; history.len()];
+                let lookahead = continuous_tone(latency.source_frames(), latency.source_frames());
+                let warm_source = continuous_tone(
+                    warmup.source_frames(),
+                    latency.source_frames().saturating_mul(2),
+                );
+                let mut conditioned_discard = vec![0.0; warmup.output_frames() * CHANNELS];
+                let mut zero_padded_discard = vec![0.0; warmup.output_frames() * CHANNELS];
+                conditioned
+                    .prime(
+                        warmup,
+                        &history,
+                        &lookahead,
+                        &warm_source,
+                        &mut conditioned_discard,
+                    )
+                    .expect("conditioned engine primes");
+                zero_padded
+                    .prime(
+                        warmup,
+                        &empty_history,
+                        &lookahead,
+                        &warm_source,
+                        &mut zero_padded_discard,
+                    )
+                    .expect("zero-padded engine primes");
+
+                let quantum = latency.output_frames();
+                let source = continuous_tone(
+                    quantum,
+                    latency
+                        .source_frames()
+                        .saturating_mul(2)
+                        .saturating_add(warmup.source_frames()),
+                );
+                let request =
+                    ElasticRequest::new(quantum, quantum).expect("next quantum is non-empty");
+                let mut conditioned_output = vec![f32::NAN; quantum * CHANNELS];
+                let mut zero_padded_output = vec![f32::NAN; quantum * CHANNELS];
+                conditioned
+                    .process(request, &source, &mut conditioned_output)
+                    .expect("conditioned next quantum renders");
+                zero_padded
+                    .process(request, &source, &mut zero_padded_output)
+                    .expect("zero-padded next quantum renders");
+
+                assert!(conditioned_output.iter().all(|sample| sample.is_finite()));
+                assert!(zero_padded_output.iter().all(|sample| sample.is_finite()));
+                assert!(
+                    conditioned_output != zero_padded_output,
+                    "pre-cue history must condition the cue boundary without becoming audible source"
+                );
+            }
+
+            #[kithara::test]
+            #[cfg_attr(
+                feature = "stretch-signalsmith",
+                case::signalsmith_slow(StretchKind::Signalsmith, 0.05)
+            )]
+            #[cfg_attr(
+                feature = "stretch-signalsmith",
+                case::signalsmith_fast(StretchKind::Signalsmith, 4.0)
+            )]
+            #[cfg_attr(
+                feature = "stretch-bungee",
+                case::bungee_slow(StretchKind::Bungee, 0.05)
+            )]
+            #[cfg_attr(
+                feature = "stretch-bungee",
+                case::bungee_fast(StretchKind::Bungee, 4.0)
+            )]
+            fn prime_accepts_declared_rate_edges(
+                #[case] backend: StretchKind,
+                #[case] rate: f64,
+            ) {
+                const FRAMES: usize = 512;
+
+                let mut engine = prepared_backend(backend, FRAMES * 2, FRAMES);
+                let capabilities = engine.capabilities();
+                let history_frames = capabilities.latency().source_frames();
+                let output_frames = capabilities.latency().output_frames();
+                let source_frames = source_frames_at(rate, output_frames, rate < 1.0);
+                let request = ElasticRequest::new(source_frames, output_frames)
+                    .expect("the declared edge request is non-empty");
+                let history = vec![0.25; history_frames * CHANNELS];
+                let lookahead = vec![0.25; history.len()];
+                let source = vec![0.25; source_frames * CHANNELS];
+                let mut discarded = vec![f32::NAN; output_frames * CHANNELS];
+
+                engine
+                    .prime(request, &history, &lookahead, &source, &mut discarded)
+                    .expect("the declared prime rate edge is supported");
+
+                assert!(discarded.iter().all(|sample| sample.is_finite()));
+            }
+
+            #[kithara::test]
+            #[cfg_attr(
+                feature = "stretch-signalsmith",
+                case::signalsmith_unity(StretchKind::Signalsmith, 1.0)
+            )]
+            #[cfg_attr(
+                feature = "stretch-signalsmith",
+                case::signalsmith_non_unity(StretchKind::Signalsmith, 1.2)
+            )]
+            #[cfg_attr(
+                feature = "stretch-bungee",
+                case::bungee_unity(StretchKind::Bungee, 1.0)
+            )]
+            #[cfg_attr(
+                feature = "stretch-bungee",
+                case::bungee_non_unity(StretchKind::Bungee, 1.2)
+            )]
+            fn priming_hides_history_and_preserves_source_order(
+                #[case] backend: StretchKind,
+                #[case] source_frames_per_output: f64,
+            ) {
+                const MAX_FRAMES: usize = 65_536;
+                const FOLLOWING_FRAMES: usize = 4096;
+
+                let mut engine = prepared_backend(backend, MAX_FRAMES, MAX_FRAMES);
+                let capabilities = engine.capabilities();
+                let history_frames = capabilities.latency().source_frames();
+                let warmup = warmup_request(capabilities, source_frames_per_output);
+                let history = vec![0.9; history_frames * CHANNELS];
+                let lookahead = vec![0.2; history.len()];
+                let warm_source = vec![0.5; warmup.source_frames() * CHANNELS];
+                let mut discarded = vec![0.0; warmup.output_frames() * CHANNELS];
+                engine
+                    .prime(
+                        warmup,
+                        &history,
+                        &lookahead,
+                        &warm_source,
+                        &mut discarded,
+                    )
+                    .expect("the engine absorbs the complete preroll");
+
+                let render_output_frames = warmup
+                    .output_frames()
+                    .checked_mul(3)
+                    .and_then(|frames| frames.checked_add(FOLLOWING_FRAMES))
+                    .expect("the continuation span fits in usize");
+                let render_source_frames = source_frames_at(
+                    source_frames_per_output,
+                    render_output_frames,
+                    false,
+                );
+                assert!(render_source_frames <= MAX_FRAMES);
+                assert!(render_output_frames <= MAX_FRAMES);
+                let source = vec![0.8; render_source_frames * CHANNELS];
+                let mut output = vec![f32::NAN; render_output_frames * CHANNELS];
+                engine
+                    .process(
+                        ElasticRequest::new(render_source_frames, render_output_frames)
+                            .expect("continuation request"),
+                        &source,
+                        &mut output,
+                    )
+                    .expect("the primed stream continues");
+
+                let lookahead_output_frames = history_frames
+                    .to_f64()
+                    .map(|frames| (frames / source_frames_per_output).round())
+                    .and_then(|frames| frames.to_usize())
+                    .expect("the lookahead output span fits in usize");
+                let lookahead_begin = lookahead_output_frames / 4;
+                let lookahead_end = lookahead_output_frames * 3 / 4;
+                let lookahead_mean = mean(
+                    &output[lookahead_begin * CHANNELS..lookahead_end * CHANNELS],
+                );
+                let warm_begin = lookahead_output_frames + warmup.output_frames() / 4;
+                let warm_end = lookahead_output_frames + warmup.output_frames() * 3 / 4;
+                let warm_mean = mean(&output[warm_begin * CHANNELS..warm_end * CHANNELS]);
+                let following_begin = render_output_frames - FOLLOWING_FRAMES / 2;
+                let following_mean = mean(&output[following_begin * CHANNELS..]);
+
+                assert!(
+                    lookahead_mean.is_finite() && lookahead_mean > 0.01,
+                    "the post-cue lookahead must be audible, mean={lookahead_mean}"
+                );
+                assert!(
+                    lookahead_mean + 0.02 < warm_mean,
+                    "pre-cue history leaked or the warmer region was skipped: lookahead={lookahead_mean}, warm={warm_mean}"
+                );
+                assert!(
+                    warm_mean + 0.1 < following_mean,
+                    "the warmup was duplicated or following source was skipped: warm={warm_mean}, following={following_mean}"
+                );
+            }
+
+            #[kithara::test]
+            #[cfg_attr(
+                feature = "stretch-signalsmith",
+                case::signalsmith(StretchKind::Signalsmith)
+            )]
+            #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
+            fn prime_rejects_every_ambiguous_buffer_count(#[case] backend: StretchKind) {
+                let mut engine = prepared_backend(backend, 1024, 512);
                 let capabilities = engine.capabilities();
                 let warmup = warmup_request(capabilities, 1.0);
                 let history = vec![0.25; capabilities.latency().source_frames() * CHANNELS];
+                let lookahead = vec![0.25; history.len()];
                 let source = vec![0.25; warmup.source_frames() * CHANNELS];
                 let mut discarded = vec![0.0; warmup.output_frames() * CHANNELS];
 
@@ -822,6 +1191,7 @@ macro_rules! elastic_priming_conformance {
                     engine.prime(
                         warmup,
                         &history[..history.len() - 1],
+                        &lookahead,
                         &source,
                         &mut discarded
                     ),
@@ -834,6 +1204,20 @@ macro_rules! elastic_priming_conformance {
                     engine.prime(
                         warmup,
                         &history,
+                        &lookahead[..lookahead.len() - 1],
+                        &source,
+                        &mut discarded,
+                    ),
+                    Err(ElasticError::LookaheadSampleCount {
+                        actual: lookahead.len() - 1,
+                        expected: lookahead.len(),
+                    })
+                );
+                assert_eq!(
+                    engine.prime(
+                        warmup,
+                        &history,
+                        &lookahead,
                         &source[..source.len() - 1],
                         &mut discarded
                     ),
@@ -847,6 +1231,7 @@ macro_rules! elastic_priming_conformance {
                     engine.prime(
                         warmup,
                         &history,
+                        &lookahead,
                         &source,
                         &mut discarded[..discarded_len - 1]
                     ),
@@ -859,7 +1244,13 @@ macro_rules! elastic_priming_conformance {
                     ElasticRequest::new(warmup.source_frames(), warmup.output_frames() - 1)
                         .expect("non-empty mismatched warmup request");
                 assert_eq!(
-                    engine.prime(wrong_output, &history, &source, &mut discarded),
+                    engine.prime(
+                        wrong_output,
+                        &history,
+                        &lookahead,
+                        &source,
+                        &mut discarded,
+                    ),
                     Err(ElasticError::WarmupOutputFrameCount {
                         actual: warmup.output_frames() - 1,
                         expected: warmup.output_frames(),
@@ -868,14 +1259,20 @@ macro_rules! elastic_priming_conformance {
             }
 
             #[kithara::test]
-            fn reset_reprime_keeps_the_first_frame_aligned() {
+            #[cfg_attr(
+                feature = "stretch-signalsmith",
+                case::signalsmith(StretchKind::Signalsmith)
+            )]
+            #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
+            fn reset_reprime_keeps_the_first_frame_aligned(#[case] backend: StretchKind) {
                 const SOURCE_FRAMES: usize = 600;
                 const OUTPUT_FRAMES: usize = 500;
 
-                let mut engine: $engine = prepared(SOURCE_FRAMES, OUTPUT_FRAMES);
+                let mut engine = prepared_backend(backend, SOURCE_FRAMES, OUTPUT_FRAMES);
                 let capabilities = engine.capabilities();
                 let warmup = warmup_request(capabilities, 1.2);
                 let history = vec![0.25; capabilities.latency().source_frames() * CHANNELS];
+                let lookahead = vec![0.25; history.len()];
                 let warm_source = vec![0.25; warmup.source_frames() * CHANNELS];
                 let source = vec![0.25; SOURCE_FRAMES * CHANNELS];
                 let request =
@@ -888,7 +1285,13 @@ macro_rules! elastic_priming_conformance {
                         engine.reset().expect("the engine clears its history");
                     }
                     engine
-                        .prime(warmup, &history, &warm_source, &mut discarded)
+                        .prime(
+                            warmup,
+                            &history,
+                            &lookahead,
+                            &warm_source,
+                            &mut discarded,
+                        )
                         .expect("reset engine primes again");
                     engine
                         .process(request, &source, &mut output)
@@ -906,17 +1309,26 @@ macro_rules! elastic_priming_conformance {
             }
 
             #[kithara::test]
-            fn prime_discards_previous_stream_state() {
+            #[cfg_attr(
+                feature = "stretch-signalsmith",
+                case::signalsmith(StretchKind::Signalsmith)
+            )]
+            #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
+            fn prime_discards_previous_stream_state(#[case] backend: StretchKind) {
                 const FRAMES: usize = 4096;
 
-                let mut fresh: $engine = prepared(FRAMES, FRAMES);
-                let mut reused: $engine = prepared(FRAMES, FRAMES);
+                let mut fresh = prepared_backend(backend, FRAMES, FRAMES);
+                let mut reused = prepared_backend(backend, FRAMES, FRAMES);
                 let capabilities = fresh.capabilities();
                 let warmup = warmup_request(capabilities, 1.0);
-                let history = indexed_markers(capabilities.latency().source_frames(), 0);
-                let warm_source = indexed_markers(warmup.source_frames(), history.len() / CHANNELS);
-                let source =
-                    indexed_markers(FRAMES, (history.len() + warm_source.len()) / CHANNELS);
+                let history_frames = capabilities.latency().source_frames();
+                let history = indexed_markers(history_frames, 0);
+                let lookahead = indexed_markers(history_frames, history_frames);
+                let warm_source = indexed_markers(warmup.source_frames(), history_frames * 2);
+                let source = indexed_markers(
+                    FRAMES,
+                    history_frames * 2 + warmup.source_frames(),
+                );
                 let dirty_source = interleaved_signal(FRAMES);
                 let request = ElasticRequest::new(FRAMES, FRAMES).expect("unity request");
                 let mut dirty_output = vec![0.0; FRAMES * CHANNELS];
@@ -927,10 +1339,22 @@ macro_rules! elastic_priming_conformance {
                 let mut fresh_discarded = vec![0.0; warmup.output_frames() * CHANNELS];
                 let mut reused_discarded = vec![0.0; warmup.output_frames() * CHANNELS];
                 fresh
-                    .prime(warmup, &history, &warm_source, &mut fresh_discarded)
+                    .prime(
+                        warmup,
+                        &history,
+                        &lookahead,
+                        &warm_source,
+                        &mut fresh_discarded,
+                    )
                     .expect("fresh engine primes");
                 reused
-                    .prime(warmup, &history, &warm_source, &mut reused_discarded)
+                    .prime(
+                        warmup,
+                        &history,
+                        &lookahead,
+                        &warm_source,
+                        &mut reused_discarded,
+                    )
                     .expect("reused engine primes");
 
                 let mut fresh_output = vec![0.0; FRAMES * CHANNELS];
@@ -981,8 +1405,7 @@ fn bungee_half_speed_flush_reaches_the_last_source_marker() {
     );
 }
 
-#[cfg(feature = "stretch-signalsmith")]
-elastic_priming_conformance!(signalsmith_priming, kithara_stretch::SignalsmithElastic);
+elastic_priming_conformance!(priming);
 
 #[cfg(feature = "stretch-signalsmith")]
 #[kithara::test]
@@ -994,11 +1417,11 @@ fn signalsmith_declares_its_prepared_domain_and_latency() {
     assert_eq!(capabilities.channels(), CHANNELS);
     assert_eq!(
         capabilities.rate_envelope().min_source_frames_per_output(),
-        1.0 / 8192.0
+        0.05
     );
     assert_eq!(
         capabilities.rate_envelope().max_source_frames_per_output(),
-        8192.0
+        4.0
     );
     assert_eq!(capabilities.latency().source_frames(), 2880);
     assert_eq!(capabilities.latency().output_frames(), 2880);
@@ -1063,11 +1486,11 @@ fn bungee_declares_the_prepared_domain_and_latency() {
     assert_eq!(capabilities.channels(), CHANNELS);
     assert_eq!(
         capabilities.rate_envelope().min_source_frames_per_output(),
-        1.0 / 8192.0
+        0.05
     );
     assert_eq!(
         capabilities.rate_envelope().max_source_frames_per_output(),
-        8192.0
+        4.0
     );
     assert!(
         capabilities.latency().output_frames() > 0,
@@ -1075,10 +1498,15 @@ fn bungee_declares_the_prepared_domain_and_latency() {
     );
 }
 
-#[cfg(feature = "stretch-bungee")]
 #[kithara::test]
-fn bungee_prepare_uses_the_injected_pcm_pool_budget() {
+#[cfg_attr(
+    feature = "stretch-signalsmith",
+    case::signalsmith(StretchKind::Signalsmith)
+)]
+#[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
+fn prepare_uses_the_injected_pcm_pool_budget(#[case] backend: StretchKind) {
     let config = ElasticConfig::builder()
+        .backend(backend)
         .pool(PcmPool::with_byte_budget(8, 8192, ByteBudget(0)))
         .sample_rate(SAMPLE_RATE)
         .channels(CHANNELS)
@@ -1087,8 +1515,10 @@ fn bungee_prepare_uses_the_injected_pcm_pool_budget() {
         .build()
         .expect("the numeric preparation shape is valid");
 
-    let error = kithara_stretch::BungeeElastic::prepare(config)
-        .expect_err("zero pool budget cannot prepare planar PCM scratch");
+    let error = match build_engine(config) {
+        Ok(_) => panic!("zero pool budget cannot prepare resident PCM scratch"),
+        Err(error) => error,
+    };
 
     assert_eq!(error, ElasticError::PcmPoolBudgetExhausted);
 }

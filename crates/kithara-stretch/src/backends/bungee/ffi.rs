@@ -22,7 +22,16 @@ pub(super) struct NativeOutput {
 pub(super) struct NativeStretcher {
     inner: NonNull<BungeeStretcher>,
     channels: usize,
+    #[cfg(test)]
+    fault: Option<NativeFault>,
     not_sync: PhantomData<Cell<()>>,
+}
+
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum NativeFault {
+    Analyse,
+    Synthesise,
 }
 
 // SAFETY: the native handle has unique ownership and every operation requires
@@ -52,6 +61,8 @@ impl NativeStretcher {
             channels: usize::try_from(channels).map_err(|_| {
                 ElasticError::EnginePreparation("Bungee channel count is out of range")
             })?,
+            #[cfg(test)]
+            fault: None,
             not_sync: PhantomData,
         })
     }
@@ -65,6 +76,10 @@ impl NativeStretcher {
             ))
     }
 
+    pub(super) fn preroll(&mut self, request: &mut Request) {
+        stretcher::preroll(self.inner.as_ptr(), request);
+    }
+
     pub(super) fn specify(&mut self, request: &Request) -> InputChunk {
         stretcher::specify_grain(self.inner.as_ptr(), request, 0.0)
     }
@@ -73,7 +88,22 @@ impl NativeStretcher {
         stretcher::next(self.inner.as_ptr(), request);
     }
 
+    #[cfg(not(test))]
     pub(super) fn analyse(&mut self, input: AnalysisInput<'_>) -> Result<(), ElasticError> {
+        self.analyse_native(input)
+    }
+
+    #[cfg(test)]
+    pub(super) fn analyse(&mut self, input: AnalysisInput<'_>) -> Result<(), ElasticError> {
+        if self.take_fault(NativeFault::Analyse) {
+            return Err(ElasticError::EnginePreparation(
+                "injected Bungee analysis failure",
+            ));
+        }
+        self.analyse_native(input)
+    }
+
+    fn analyse_native(&mut self, input: AnalysisInput<'_>) -> Result<(), ElasticError> {
         let required = planar_len(self.channels, input.channel_stride)?;
         if input.samples.len() < required {
             return Err(ElasticError::EnginePreparation(
@@ -99,11 +129,32 @@ impl NativeStretcher {
         Ok(())
     }
 
+    #[cfg(not(test))]
     pub(super) fn synthesise(
         &mut self,
         destination: &mut [f32],
         destination_stride: usize,
     ) -> Result<NativeOutput, ElasticError> {
+        let output = self.synthesise_native();
+        self.copy_native_output(&output, destination, destination_stride)
+    }
+
+    #[cfg(test)]
+    pub(super) fn synthesise(
+        &mut self,
+        destination: &mut [f32],
+        destination_stride: usize,
+    ) -> Result<NativeOutput, ElasticError> {
+        let output = self.synthesise_native();
+        if self.take_fault(NativeFault::Synthesise) {
+            return Err(ElasticError::EnginePreparation(
+                "injected Bungee synthesis failure",
+            ));
+        }
+        self.copy_native_output(&output, destination, destination_stride)
+    }
+
+    fn synthesise_native(&mut self) -> OutputChunk {
         let mut output = OutputChunk {
             data: std::ptr::null_mut(),
             frame_count: i32::default(),
@@ -111,7 +162,15 @@ impl NativeStretcher {
             request: [std::ptr::null(); Self::OUTPUT_ENDPOINT_COUNT],
         };
         stretcher::synthesise_grain(self.inner.as_ptr(), &mut output);
+        output
+    }
 
+    fn copy_native_output(
+        &self,
+        output: &OutputChunk,
+        destination: &mut [f32],
+        destination_stride: usize,
+    ) -> Result<NativeOutput, ElasticError> {
         let frames = usize::try_from(output.frame_count).map_err(|_| {
             ElasticError::EnginePreparation("Bungee reported a negative output frame count")
         })?;
@@ -161,6 +220,21 @@ impl NativeStretcher {
 
     pub(super) fn is_flushed(&self) -> bool {
         stretcher::is_flushed(self.inner.as_ptr()) != 0
+    }
+
+    #[cfg(test)]
+    pub(super) fn fail_next(&mut self, fault: NativeFault) {
+        self.fault = Some(fault);
+    }
+
+    #[cfg(test)]
+    fn take_fault(&mut self, fault: NativeFault) -> bool {
+        if self.fault == Some(fault) {
+            self.fault = None;
+            true
+        } else {
+            false
+        }
     }
 }
 

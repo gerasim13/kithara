@@ -4,8 +4,8 @@ use super::{ElasticError, ElasticRequest};
 
 /// Supported source-frame advance per output frame.
 ///
-/// The envelope spans every ratio constructible from one non-empty exact
-/// request inside the prepared source and output frame limits.
+/// The envelope is the configured playback-rate policy restricted to ratios
+/// representable by the prepared source and output frame limits.
 #[derive(Clone, Copy, Debug, PartialEq, fieldwork::Fieldwork)]
 #[fieldwork(get)]
 #[non_exhaustive]

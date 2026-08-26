@@ -16,8 +16,8 @@
 
 Pure time-stretch DSP contracts and backend adapters for Kithara.
 
-This crate owns the `ElasticEngine` / `ElasticPriming` exact-span contracts, the
-backend selector and factory, and the native C++ adapters that implement them.
+This crate owns the `ElasticEngine` exact-span and stream-lifecycle contract,
+the backend selector and factory, and the native C++ adapters that implement it.
 Backend features depend downward on `kithara-bufpool` for scratch storage, and
 native builds include `kithara-workspace-hack`; audio graph plumbing, region
 planning, chunk metadata, and resampler routing stay in `kithara-audio`.

@@ -10,17 +10,18 @@ which passes its existing `PcmPool` through `ElasticConfig`; `kithara-stretch` m
 default or global pool.
 
 - `ElasticEngine` is the sole backend contract. Exact source/output frame counts control time;
-  `set_pitch` remains independent, and `flush` / `reset` define stream lifecycle.
+  `set_pitch` remains independent, and `prime` / `flush` / `reset` define stream lifecycle.
 - `StretchKind` is the compiled backend selector. Persisted discriminants are stable regardless of
   which variants are compiled in: `1 = Signalsmith`, `2 = Bungee`; `3` is reserved for a future
   pure-Rust native backend. An unknown discriminant decodes to `StretchKind::all()[0]`, the first
   compiled-in backend, which is also `Default`.
 - `ElasticConfig` is the single fallible `#[non_exhaustive]` `bon` root config. It owns the
   `StretchKind` selection, sample rate, channel count, maximum source/output frame spans and the
-  injected `PcmPool`; the selector is not a second factory argument.
+  practical playback-rate envelope, plus the injected `PcmPool`; the selector is not a second
+  factory argument.
 - `build_engine(config)` dispatches the config-owned selector to `Box<dyn ElasticEngine>`.
-- `ElasticPriming` is an optional capability for engines that can absorb history without emitting
-  it. Nothing above an adapter names a concrete DSP library.
+- Every backend must implement priming; callers may still render a fresh unprimed stream. Nothing
+  above an adapter names a concrete DSP library.
 
 ## Exact-span contract
 
@@ -30,16 +31,19 @@ same plan advance through the source identically. `prepare` allocates outside th
 `capabilities()` is fixed for the engine's lifetime; `reset()` clears history and may fail for an
 engine that clears state by rebuilding itself.
 
-Each engine reports an `ElasticRateEnvelope` spanning every non-empty request representable by its
-prepared source/output frame limits, plus its own `ElasticLatency`. Request shape, buffer lengths,
-prepared limits and the rate window are checked once by `ElasticCapabilities`, so every engine
-accepts and rejects the same requests.
+Each engine reports one common `ElasticRateEnvelope` plus its own `ElasticLatency`. The configured
+rate policy defaults to the practical `0.05..=4.0` range and preparation intersects it with ratios
+representable by the fixed source/output frame limits. Request shape, buffer lengths, prepared
+limits and the rate window are checked once by `ElasticCapabilities`, so every engine accepts and
+rejects the same requests before entering backend code.
 
-`ElasticPriming` is separate because it is not universal. Priming resets the engine, absorbs the
-declared source history **without emitting it**, and discards exactly the declared output latency,
-so the next `process` starts at the source frame after the warmup span with no leading gap. An
-engine whose pipeline can only emit what it has already consumed cannot do this and does not
-implement the trait.
+For a cue at source frame `C`, `prime` consumes four adjacent regions with no hidden coordinate
+change: history `[C-H, C)`, lookahead `[C, C+H)`, warm source
+`[C+H, C+H+rate*O)`, then the next `process` source. `H` and `O` are the declared source and output
+latencies; the warm request therefore contains exactly `rate*O` source frames and `O` output
+frames. Priming clears old state and writes its `O` warmup frames into caller-owned discard storage,
+but the first subsequent audible output starts at `C`, not after the warm source. A backend that
+cannot preserve this ordering does not implement `ElasticEngine`.
 
 ## Engine contract
 
@@ -59,6 +63,8 @@ until zero; a completed drain stays empty until new input. This streaming contra
 rate-dependent tail span several fixed-size chunks without loss. A rate change between adjacent
 exact requests preserves history and is not a flush or reset boundary. Every backend must expose the
 same real terminal-drain behavior; a no-op or synthetic-silence flush is not conforming.
+Rate and pitch changes must affect audio within one declared output-latency window across adjacent
+render calls; a backend must not hide already-rendered PCM behind an additional software delay.
 `reset()` clears buffered state after seek; source-spec and backend changes are handled by the
 caller preparing a replacement outside its checked render core. The trait intentionally does not
 depend on `kithara-decode::PcmSpec`.
@@ -74,10 +80,12 @@ depend on `kithara-decode::PcmSpec`.
   audio across one or more chunks instead of dropping roughly one latency of the track.
 - Bungee preparation fails when the injected pool budget cannot cover its planar scratch or
   native stretcher construction fails; the audio adapter warns once and marks the engine unavailable.
-- `BungeeElastic` does not implement `ElasticPriming`, for the same root cause as the missing tail
-  drain in the former high-level adapter. The new low-level state machine now provides the necessary
-  source coordinates and preroll primitive, but priming remains outside the common contract until
-  the shared facade conformance matrix covers it for both engines.
+- Bungee priming drains old resident state, stages history, lookahead and warm source in the
+  injected pooled rolling source buffer, and performs native preroll without rebuilding the
+  stretcher. Preroll discards only native output ending at or before the cue and stops before
+  scheduling the cue grain. The next `process` applies its current rate and pitch when it schedules
+  that grain; only the unconsumed remainder of one native output chunk may cross a render boundary.
+  There is no software post-cue PCM queue, and the render path allocates nothing.
 - `BungeeElastic::reset` clears and drains the resident native pipeline without rebuilding it; its
   Rust-side input/output storage remains the buffers reserved from the injected pool at prepare.
 - Bungee reports its unity latency only after its pipeline is warm, and runtime latency moves with
@@ -86,8 +94,9 @@ depend on `kithara-decode::PcmSpec`.
   input-grain span; no probe engine or extra pool allocation is retained.
 - Both engines accept the same pitch range, `0.25..=4.0`; this is the range covered by Bungee's
   native sizing and prevents a backend selector from changing validation semantics.
-- Both engines expose the complete non-empty rate domain implied by their prepared source/output
-  frame limits; the conformance suite exercises its minimum, unity and maximum requests.
+- Both engines expose the configured practical rate policy after intersection with their prepared
+  source/output frame limits; the conformance suite exercises its minimum, unity and maximum
+  requests and rejects extreme in-shape ratios before backend access.
 - Bungee on iOS is opt-in. Its CMake C++ build must see `IPHONEOS_DEPLOYMENT_TARGET`; `xtask apple`
   exports the value from `[workspace.metadata.apple] deployment-target` before invoking
   `cargo swift package`. Preserve the same env for manual `-F stretch-bungee` Apple builds.
@@ -101,10 +110,9 @@ depend on `kithara-decode::PcmSpec`.
 1. Gate the adapter module, the `StretchKind` variant, its `all()` entry, its `From`/`u8` arms, and
   the `build_engine` factory arm on `#[cfg(feature = "stretch-<name>")]`; keep the discriminant
   stable.
-1. Declare latency, implement `ElasticPriming` only if the engine can absorb history without
-  emitting it, and add the backend as a named case in the shared facade conformance matrix (plus the
-  priming matrix when it primes) in `tests/elastic.rs`. The suite is the contract; backend-specific
-  tests cover only preparation mechanics and measured latency.
+1. Declare latency, implement the complete `ElasticEngine` lifecycle, and add the backend as a named
+  case in the shared facade and priming matrices in `tests/elastic.rs`. The suite is the contract;
+  backend-specific tests cover only preparation mechanics and measured latency.
 1. Document any target, tail-drain or priming limitation above.
 
 Do not declare `stretch-native` or add `backends/native.rs` until the pure-Rust engine exists.

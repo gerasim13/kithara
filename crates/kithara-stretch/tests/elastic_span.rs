@@ -154,9 +154,9 @@ fn one_frame_error_is_continuous_but_larger_error_requires_relocation() {
 }
 
 #[kithara::test]
-fn correction_respects_prepared_domain_rate_headroom() {
+fn correction_respects_configured_rate_headroom() {
     let cursor = Some(source_cursor(0.0));
-    let error = plan(&[span(0.75, 960.75, 1)], cursor)
+    let error = plan(&[span(0.75, 4.75, 1)], cursor)
         .expect_err("maximum nominal rate has no positive headroom");
     assert!(matches!(
         error,
@@ -164,12 +164,12 @@ fn correction_respects_prepared_domain_rate_headroom() {
             if (error - 0.75).abs() <= CONTINUITY_EPSILON
     ));
 
-    let corrected = plan(&[span(0.75, 960.749, 1)], cursor)
-        .expect("partial headroom permits partial correction");
+    let corrected =
+        plan(&[span(0.75, 4.749, 1)], cursor).expect("partial headroom permits partial correction");
     let segment = corrected.segments()[0];
-    assert_eq!(segment.source_end() - segment.source_start(), 960);
-    assert_close(corrected.cursor().continuous(), 960.0);
-    assert_close(960.749 - corrected.cursor().continuous(), 0.749);
+    assert_eq!(segment.source_end() - segment.source_start(), 4);
+    assert_close(corrected.cursor().continuous(), 4.0);
+    assert_close(4.749 - corrected.cursor().continuous(), 0.749);
 }
 
 #[kithara::test]

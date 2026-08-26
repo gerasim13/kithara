@@ -16,9 +16,6 @@ pub struct ElasticCapabilities {
     /// Fixed caller-owned storage span for one terminal-drain chunk.
     #[field(get, copy)]
     terminal_chunk_frames: usize,
-    /// Supported source-frame advance range.
-    #[field(get, copy)]
-    rate_envelope: ElasticRateEnvelope,
 }
 
 impl ElasticCapabilities {
@@ -26,13 +23,12 @@ impl ElasticCapabilities {
         shape: ElasticShape,
         latency: ElasticLatency,
         terminal_chunk_frames: usize,
-    ) -> Result<Self, ElasticError> {
-        Ok(Self {
+    ) -> Self {
+        Self {
             shape,
             latency,
-            rate_envelope: shape.rate_envelope()?,
             terminal_chunk_frames,
-        })
+        }
     }
 
     /// Interleaved sample count of a frame span at the prepared channel count.
@@ -66,10 +62,59 @@ impl ElasticCapabilities {
         self.validate_spans(request, source_samples, output_samples)
     }
 
+    /// Priming uses the declared latency rather than the ordinary block limits.
+    pub(crate) fn validate_prime(
+        self,
+        request: ElasticRequest,
+        history_samples: usize,
+        lookahead_samples: usize,
+        source_samples: usize,
+        output_samples: usize,
+    ) -> Result<(), ElasticError> {
+        let latency = self.latency();
+        if request.output_frames() != latency.output_frames() {
+            return Err(ElasticError::WarmupOutputFrameCount {
+                actual: request.output_frames(),
+                expected: latency.output_frames(),
+            });
+        }
+        let expected_history_samples = self.samples(latency.source_frames())?;
+        if history_samples != expected_history_samples {
+            return Err(ElasticError::HistorySampleCount {
+                actual: history_samples,
+                expected: expected_history_samples,
+            });
+        }
+        if lookahead_samples != expected_history_samples {
+            return Err(ElasticError::LookaheadSampleCount {
+                actual: lookahead_samples,
+                expected: expected_history_samples,
+            });
+        }
+        self.validate_spans(request, source_samples, output_samples)
+    }
+
     /// Buffer shape and rate checks shared by rendering and priming; priming
     /// spans are bounded by the declared latency rather than by the block
     /// limits, so it validates these without the limit checks.
     pub(crate) fn validate_spans(
+        self,
+        request: ElasticRequest,
+        source_samples: usize,
+        output_samples: usize,
+    ) -> Result<(), ElasticError> {
+        self.validate_samples(request, source_samples, output_samples)?;
+        if self.rate_envelope().contains(request) {
+            Ok(())
+        } else {
+            Err(ElasticError::RateOutsideEnvelope {
+                source_frames: request.source_frames(),
+                output_frames: request.output_frames(),
+            })
+        }
+    }
+
+    fn validate_samples(
         self,
         request: ElasticRequest,
         source_samples: usize,
@@ -89,14 +134,7 @@ impl ElasticCapabilities {
                 expected: expected_output_samples,
             });
         }
-        if self.rate_envelope().contains(request) {
-            Ok(())
-        } else {
-            Err(ElasticError::RateOutsideEnvelope {
-                source_frames: request.source_frames(),
-                output_frames: request.output_frames(),
-            })
-        }
+        Ok(())
     }
 
     delegate::delegate! {
@@ -113,6 +151,42 @@ impl ElasticCapabilities {
             /// Prepared source sample rate in Hz.
             #[must_use]
             pub fn sample_rate(&self) -> u32;
+            /// Supported source-frame advance range.
+            #[must_use]
+            pub fn rate_envelope(&self) -> ElasticRateEnvelope;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use kithara_bufpool::PcmPool;
+    use kithara_test_utils::kithara;
+
+    use super::*;
+    use crate::ElasticConfig;
+
+    #[kithara::test]
+    fn common_validation_rejects_an_extreme_rate_before_backend_access() {
+        let config = ElasticConfig::builder()
+            .pool(PcmPool::default())
+            .sample_rate(48_000)
+            .channels(2)
+            .max_source_frames(64)
+            .max_output_frames(64)
+            .build()
+            .expect("valid elastic config");
+        let capabilities = ElasticCapabilities::new(config.shape(), ElasticLatency::new(1, 1), 64);
+        let request = ElasticRequest::new(32, 1).expect("non-empty request");
+
+        let result = capabilities.validate(request, 64, 2);
+
+        assert_eq!(
+            result,
+            Err(ElasticError::RateOutsideEnvelope {
+                source_frames: 32,
+                output_frames: 1,
+            })
+        );
     }
 }

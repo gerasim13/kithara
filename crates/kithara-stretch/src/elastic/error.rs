@@ -58,6 +58,9 @@ pub enum ElasticError {
     /// The priming history did not match the backend latency and channel count.
     #[error("elastic priming history has {actual} samples; expected {expected}")]
     HistorySampleCount { actual: usize, expected: usize },
+    /// The priming source lookahead did not match the backend latency and channel count.
+    #[error("elastic priming lookahead has {actual} samples; expected {expected}")]
+    LookaheadSampleCount { actual: usize, expected: usize },
     /// A priming request did not produce exactly the declared output latency.
     #[error("elastic warmup has {actual} output frames; expected {expected}")]
     WarmupOutputFrameCount { actual: usize, expected: usize },
@@ -67,6 +70,9 @@ pub enum ElasticError {
     /// The injected PCM pool could not reserve an engine scratch buffer.
     #[error("elastic PCM pool budget exhausted")]
     PcmPoolBudgetExhausted,
+    /// The resident input history exceeded its prepared rolling storage.
+    #[error("elastic input history needs {required} frames; prepared capacity is {capacity}")]
+    InputStorage { required: usize, capacity: usize },
     /// A prepared frame domain produced a rate window that cannot bound a rate.
     #[error("elastic rate envelope {min}..={max} is not a finite positive range")]
     InvalidRateEnvelope { min: f64, max: f64 },

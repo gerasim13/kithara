@@ -595,7 +595,7 @@ impl AudioEffect for TimeStretchProcessor {
 
 #[cfg(test)]
 mod tests {
-    use std::{mem::size_of, num::NonZero};
+    use std::num::NonZero;
 
     use kithara_bufpool::{ByteBudget, PcmPool};
     use kithara_decode::{PcmMeta, PcmSpec};
@@ -1241,24 +1241,34 @@ mod tests {
     #[cfg(feature = "stretch-signalsmith")]
     #[kithara::test]
     fn target_rebuild_reuses_one_target_pool_budget() {
-        let channels = usize::from(Consts::CH);
-        let target_samples = (TimeStretchProcessor::MAX_SOURCE_FRAMES
-            + TimeStretchProcessor::MAX_OUTPUT_FRAMES)
-            * channels;
-        let pool = PcmPool::with_byte_budget(8, 0, ByteBudget(target_samples * size_of::<f32>()));
+        let initial = spec();
+        let rebuilt = PcmSpec {
+            sample_rate: NonZero::new(48_000).unwrap(),
+            ..initial
+        };
+        let target_bytes = [initial, rebuilt]
+            .map(|target_spec| {
+                let pool = PcmPool::new(8, 0);
+                let controls = StretchControls::new(0.5);
+                controls.set_keylock(true);
+                controls.set_backend(StretchKind::Signalsmith);
+                let target = TimeStretchProcessor::new(controls, target_spec, pool.clone());
+                assert!(target.engine.is_some());
+                pool.stats().allocated_bytes
+            })
+            .into_iter()
+            .max()
+            .expect("the target matrix is non-empty");
+
+        let pool = PcmPool::with_byte_budget(8, 0, ByteBudget(target_bytes));
         let controls = StretchControls::new(0.5);
         controls.set_keylock(true);
         controls.set_backend(StretchKind::Signalsmith);
-        let initial = spec();
         let mut fx = TimeStretchProcessor::new(controls, initial, pool.clone());
         assert!(fx.engine.is_some());
         assert!(fx.pending_source.is_some());
         assert!(fx.scratch.is_some());
 
-        let rebuilt = PcmSpec {
-            sample_rate: NonZero::new(48_000).unwrap(),
-            ..initial
-        };
         let overshoots = pool.stats().budget_overshoots;
         fx.service_deferred(rebuilt);
 

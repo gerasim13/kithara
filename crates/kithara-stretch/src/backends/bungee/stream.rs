@@ -1,13 +1,17 @@
-use std::cmp::Ordering;
-
 use bungee_sys::Request;
-use num_traits::ToPrimitive;
 
 use super::{
     buffer::{InputBuffer, PooledPlanar},
     ffi::{NativeOutput, NativeStretcher},
 };
-use crate::{ElasticConfig, ElasticError, ElasticRequest};
+use crate::{ElasticConfig, ElasticError};
+
+#[path = "drain.rs"]
+mod drain;
+#[path = "prime.rs"]
+mod prime;
+#[path = "render.rs"]
+mod render;
 
 #[derive(fieldwork::Fieldwork)]
 #[fieldwork(get, copy, vis = "pub(super)")]
@@ -19,6 +23,8 @@ pub(super) struct TerminalChunk {
 #[derive(fieldwork::Fieldwork)]
 #[fieldwork(opt_in)]
 pub(super) struct StreamCore {
+    anchor: Option<f64>,
+    cue_grain_pending: bool,
     input: InputBuffer,
     #[field(get, copy, vis = "pub(super)")]
     max_input_frames: usize,
@@ -43,6 +49,8 @@ impl StreamCore {
         let native = NativeStretcher::new(config.sample_rate(), config.channels())?;
         let max_input_frames = native.max_input_frames()?;
         Ok(Self {
+            anchor: None,
+            cue_grain_pending: false,
             input: InputBuffer::new(config, max_input_frames, max_source_frames)?,
             max_input_frames,
             native,
@@ -60,278 +68,71 @@ impl StreamCore {
         })
     }
 
-    pub(super) fn render(
-        &mut self,
-        source: Option<&[f32]>,
-        request: ElasticRequest,
-        pitch: f64,
-        output: Option<&mut [f32]>,
-    ) -> Result<(), ElasticError> {
-        self.render_inner(source, request, pitch, output, false)
-    }
-
-    pub(super) fn probe_silence(&mut self, request: ElasticRequest) -> Result<(), ElasticError> {
-        self.render_inner(None, request, 1.0, None, true)
-    }
-
-    fn render_inner(
-        &mut self,
-        source: Option<&[f32]>,
-        request: ElasticRequest,
-        pitch: f64,
-        mut output: Option<&mut [f32]>,
-        end_of_input: bool,
-    ) -> Result<(), ElasticError> {
-        let input_frames = request.source_frames();
-        let output_frames = request.output_frames();
-        self.input.append(source, input_frames)?;
-        let input = input_frames
-            .to_f64()
-            .ok_or(ElasticError::SampleCountOverflow)?;
-        let output_count = output_frames
-            .to_f64()
-            .ok_or(ElasticError::SampleCountOverflow)?;
-        self.request.speed = input / output_count;
-        self.request.pitch = pitch;
-        self.samples_needed += output_count;
-        let target = self
-            .samples_needed
-            .round()
-            .to_usize()
-            .ok_or(ElasticError::SampleCountOverflow)?;
-        let mut rendered = 0;
-        while rendered != target {
-            rendered += self.consume(target - rendered, output.as_deref_mut(), rendered);
-            if rendered == target {
-                break;
-            }
-            let remaining = (target - rendered)
-                .to_f64()
-                .ok_or(ElasticError::SampleCountOverflow)?;
-            let position = f64::from(self.input.end())
-                - self
-                    .max_input_frames
-                    .to_f64()
-                    .ok_or(ElasticError::SampleCountOverflow)?
-                    / Self::INPUT_LOOKAHEAD_DIVISOR
-                - input * remaining / output_count;
-            self.request.reset =
-                u8::from(position.partial_cmp(&self.request.position) != Some(Ordering::Greater));
-            self.request.position = position;
-            self.input.set_requested(self.native.specify(&self.request));
-            self.request_pending = true;
-            self.synthesise(true, end_of_input)?;
-        }
-        self.samples_needed -= rendered.to_f64().ok_or(ElasticError::SampleCountOverflow)?;
-        Ok(())
-    }
-
-    fn synthesise(&mut self, valid: bool, end_of_input: bool) -> Result<(), ElasticError> {
-        if !self.request_pending {
-            return Err(ElasticError::EnginePreparation(
-                "Bungee synthesis has no specified input grain",
-            ));
-        }
-        self.input.analyse(&mut self.native, valid, end_of_input)?;
-        self.output_chunk = Some(
-            self.native
-                .synthesise(&mut self.output.samples, self.output.stride)?,
-        );
-        self.output_consumed = 0;
-        self.request_pending = false;
-        Ok(())
-    }
-
-    fn consume(&mut self, wanted: usize, output: Option<&mut [f32]>, output_frame: usize) -> usize {
-        let Some(chunk) = self.output_chunk.as_ref().filter(|chunk| chunk.valid) else {
-            return 0;
-        };
-        let frames = wanted.min(chunk.frames.saturating_sub(self.output_consumed));
-        if let Some(output) = output {
-            self.output.copy_interleaved(
-                self.output_consumed..self.output_consumed + frames,
-                output,
-                output_frame,
-            );
-        }
-        self.output_consumed += frames;
-        frames
-    }
-
-    pub(super) fn output_position(&self) -> Option<f64> {
-        let chunk = self
-            .output_chunk
-            .as_ref()
-            .filter(|chunk| chunk.valid && chunk.end.is_finite() && chunk.frames > 0)?;
-        let consumed = self
-            .output_consumed
-            .to_f64()
-            .zip(chunk.frames.to_f64())
-            .map(|(consumed, frames)| consumed / frames)?;
-        Some(chunk.begin + consumed * (chunk.end - chunk.begin))
-    }
-
-    fn consume_to_end(
-        &mut self,
-        source_end: f64,
-        capacity: usize,
-        output: Option<&mut [f32]>,
-        output_frame: usize,
-    ) -> Result<usize, ElasticError> {
-        let Some(chunk) = self
-            .output_chunk
-            .as_ref()
-            .filter(|chunk| chunk.valid && chunk.end.is_finite() && chunk.frames > 0)
-        else {
-            return Ok(0);
-        };
-        let until_end = if chunk.end <= chunk.begin {
-            0
-        } else {
-            let chunk_frames = chunk
-                .frames
-                .to_f64()
-                .ok_or(ElasticError::SampleCountOverflow)?;
-            ((source_end - chunk.begin) * chunk_frames / (chunk.end - chunk.begin))
-                .ceil()
-                .clamp(0.0, chunk_frames)
-                .to_usize()
-                .ok_or(ElasticError::SampleCountOverflow)?
-        };
-        let available = until_end.saturating_sub(self.output_consumed);
-        Ok(self.consume(available.min(capacity), output, output_frame))
-    }
-
-    pub(super) fn terminal_tail(
-        &mut self,
-        output: &mut [f32],
-        capacity: usize,
-    ) -> Result<TerminalChunk, ElasticError> {
-        let source_end = f64::from(self.input.end());
-        let mut drained = 0usize;
-        let mut grains = 0;
-        let mut stalled = 0;
-        loop {
-            drained = drained
-                .checked_add(self.consume_to_end(
-                    source_end,
-                    capacity.saturating_sub(drained),
-                    Some(output),
-                    drained,
-                )?)
-                .ok_or(ElasticError::SampleCountOverflow)?;
-            if self
-                .output_position()
-                .is_some_and(|position| position >= source_end)
-            {
-                if self.request_pending {
-                    self.synthesise(true, true)?;
-                }
-                self.flush_invalid()?;
-                self.clear();
-                return Ok(TerminalChunk {
-                    frames: drained,
-                    complete: true,
-                });
-            }
-            if drained == capacity {
-                return Ok(TerminalChunk {
-                    frames: drained,
-                    complete: false,
-                });
-            }
-            if grains == Self::TERMINAL_GRAIN_LIMIT {
-                return Err(ElasticError::EnginePreparation(
-                    "Bungee terminal output exceeded its fixed grain bound",
-                ));
-            }
-            if !self.request_pending {
-                self.native.next(&mut self.request);
-                self.input.set_requested(self.native.specify(&self.request));
-                self.request_pending = true;
-            }
-            let previous_end = self.output_chunk.as_ref().and_then(|chunk| {
-                (chunk.valid && chunk.frames > 0 && chunk.end.is_finite()).then_some(chunk.end)
-            });
-            self.synthesise(true, true)?;
-            if self.output_advances(previous_end) {
-                stalled = 0;
-            } else {
-                stalled += 1;
-            }
-            if stalled > Self::PIPELINE_GRAINS {
-                return Err(ElasticError::EnginePreparation(
-                    "Bungee terminal output stopped advancing",
-                ));
-            }
-            grains += 1;
-        }
-    }
-
-    pub(super) fn discard(&mut self) -> Result<(), ElasticError> {
-        if self.request_pending {
-            self.synthesise(true, true)?;
-        }
-        self.flush_invalid()?;
-        self.clear();
-        Ok(())
-    }
-
-    fn flush_invalid(&mut self) -> Result<(), ElasticError> {
-        for _ in 0..Self::PIPELINE_GRAINS {
-            if self.native.is_flushed() {
-                return Ok(());
-            }
-            self.request.position = f64::NAN;
-            self.request.reset = 0;
-            self.input.set_requested(self.native.specify(&self.request));
-            self.request_pending = true;
-            self.synthesise(false, true)?;
-        }
-        if self.native.is_flushed() {
-            Ok(())
-        } else {
-            Err(ElasticError::EnginePreparation(
-                "Bungee did not flush within its four-grain pipeline",
-            ))
-        }
-    }
-
-    pub(super) fn source_end(&self) -> i32 {
-        self.input.end()
-    }
-
-    fn output_advances(&self, previous_end: Option<f64>) -> bool {
-        self.output_chunk.as_ref().is_some_and(|chunk| {
-            chunk.valid
-                && chunk.frames > 0
-                && chunk.end.is_finite()
-                && chunk.end > chunk.begin
-                && previous_end.is_none_or(|end| chunk.end > end)
-        })
-    }
-
-    pub(super) fn clear(&mut self) {
-        self.input.clear();
-        self.output_chunk = None;
-        self.output_consumed = 0;
-        self.request.position = f64::NAN;
-        self.request.speed = 1.0;
-        self.request.reset = 0;
-        self.request_pending = false;
-        self.samples_needed = 0.0;
+    pub(super) fn prepare_input_capacity(&mut self, capacity: usize) -> Result<(), ElasticError> {
+        self.input.prepare_source_capacity(capacity)
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::f32::consts::TAU;
+
     use kithara_bufpool::PcmPool;
     use kithara_test_utils::kithara;
 
     use super::*;
+    use crate::{ElasticRequest, backends::bungee::ffi::NativeFault};
+
+    struct Fixture;
+
+    impl Fixture {
+        const CHANNELS: usize = 2;
+        const CONTEXT_FRAMES: usize = 8192;
+        const SAMPLE_RATE: u32 = 48_000;
+    }
+
+    fn signal(frames: usize, offset: usize) -> Vec<f32> {
+        (0..frames)
+            .flat_map(|frame| {
+                let phase = (offset + frame) as f32 * TAU * 440.0 / Fixture::SAMPLE_RATE as f32;
+                let sample = phase.sin() * 0.5;
+                [sample, sample * -0.5]
+            })
+            .collect()
+    }
+
+    fn anchored_core() -> StreamCore {
+        let config = ElasticConfig::builder()
+            .pool(PcmPool::default())
+            .sample_rate(Fixture::SAMPLE_RATE)
+            .channels(Fixture::CHANNELS)
+            .max_source_frames(Fixture::CONTEXT_FRAMES)
+            .max_output_frames(Fixture::CONTEXT_FRAMES)
+            .build()
+            .expect("the fixture shape is valid");
+        let mut core = StreamCore::new(&config, Fixture::CONTEXT_FRAMES)
+            .expect("the anchored fixture core prepares");
+        core.prepare_input_capacity(Fixture::CONTEXT_FRAMES * 4)
+            .expect("the fixture reserves its complete prime context");
+        let history = signal(Fixture::CONTEXT_FRAMES, 0);
+        let lookahead = signal(Fixture::CONTEXT_FRAMES, Fixture::CONTEXT_FRAMES);
+        let warm_source = signal(Fixture::CONTEXT_FRAMES, Fixture::CONTEXT_FRAMES * 2);
+        let mut discarded = vec![0.0; Fixture::CONTEXT_FRAMES * Fixture::CHANNELS];
+        core.prime(
+            &history,
+            &lookahead,
+            ElasticRequest::new(Fixture::CONTEXT_FRAMES, Fixture::CONTEXT_FRAMES)
+                .expect("the warmup request is valid"),
+            &warm_source,
+            1.0,
+            &mut discarded,
+        )
+        .expect("the fixture primes at the cue");
+        core
+    }
 
     #[kithara::test]
-    fn render_quantum_does_not_prefetch_the_next_control_grain() {
+    fn render_call_does_not_prefetch_a_grain_with_stale_controls() {
         const FRAMES: usize = 8192;
 
         let config = ElasticConfig::builder()
@@ -352,7 +153,91 @@ mod tests {
 
         assert!(
             !core.request_pending,
-            "the next quantum must schedule its grain with its own rate and pitch"
+            "no grain may remain specified with controls from a previous render call"
         );
+    }
+
+    #[kithara::test]
+    fn adjacent_control_changes_keep_the_original_anchor_and_native_history() {
+        const QUANTUM: usize = 64;
+        const TRANSITIONS: usize = 32;
+
+        let mut core = anchored_core();
+        let mut source_position = Fixture::CONTEXT_FRAMES * 3;
+        let mut previous: Option<[f32; Fixture::CHANNELS]> = None;
+        for transition in 0..TRANSITIONS {
+            let fast = transition.is_multiple_of(2);
+            let source_frames = if fast { QUANTUM * 2 } else { QUANTUM };
+            let pitch = if fast { 1.5 } else { 1.0 };
+            let source = signal(source_frames, source_position);
+            let mut output = vec![f32::NAN; QUANTUM * Fixture::CHANNELS];
+            core.render(
+                Some(&source),
+                ElasticRequest::new(source_frames, QUANTUM)
+                    .expect("the alternating request is non-empty"),
+                pitch,
+                Some(&mut output),
+            )
+            .expect("the adjacent control quantum renders");
+
+            assert_eq!(core.anchor, Some(0.0));
+            assert_eq!(core.request.reset, 0);
+            assert!(!core.native.is_flushed());
+            assert!(output.iter().all(|sample| sample.is_finite()));
+            if let Some(previous) = previous {
+                for channel in 0..Fixture::CHANNELS {
+                    let after = output[channel];
+                    assert!(
+                        (after - previous[channel]).abs() <= 0.1,
+                        "transition {transition} must preserve phase continuity on channel {channel}"
+                    );
+                }
+            }
+            previous = Some([
+                output[(QUANTUM - 1) * Fixture::CHANNELS],
+                output[QUANTUM * Fixture::CHANNELS - 1],
+            ]);
+            source_position += source_frames;
+        }
+    }
+
+    #[kithara::test]
+    #[case::analyse(NativeFault::Analyse)]
+    #[case::synthesise(NativeFault::Synthesise)]
+    fn native_failure_clears_the_request_and_remains_reusable(#[case] fault: NativeFault) {
+        const QUANTUM: usize = 64;
+
+        let mut core = anchored_core();
+        core.native.fail_next(fault);
+        let source = signal(QUANTUM, Fixture::CONTEXT_FRAMES * 3);
+        let request = ElasticRequest::new(QUANTUM, QUANTUM).expect("unity request");
+        let mut output = vec![f32::NAN; QUANTUM * Fixture::CHANNELS];
+
+        assert!(
+            core.render(Some(&source), request, 1.0, Some(&mut output))
+                .is_err(),
+            "the injected native failure must cross the stream boundary"
+        );
+        assert!(
+            !core.request_pending,
+            "no failed request may remain pending"
+        );
+        assert_eq!(core.samples_needed, 0.0);
+        assert!(core.output_chunk.is_none());
+        assert!(output.iter().all(|sample| sample.is_nan()));
+
+        let recovery_source = signal(
+            Fixture::CONTEXT_FRAMES,
+            Fixture::CONTEXT_FRAMES * 3 + QUANTUM,
+        );
+        let mut recovery_output = vec![0.0; Fixture::CONTEXT_FRAMES * Fixture::CHANNELS];
+        core.render(
+            Some(&recovery_source),
+            ElasticRequest::new(Fixture::CONTEXT_FRAMES, Fixture::CONTEXT_FRAMES)
+                .expect("the recovery request is valid"),
+            1.0,
+            Some(&mut recovery_output),
+        )
+        .expect("the explicitly cleared stream accepts a new request");
     }
 }

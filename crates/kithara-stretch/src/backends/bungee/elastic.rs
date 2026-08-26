@@ -56,9 +56,28 @@ impl ElasticEngine for BungeeElastic {
     fn prepare(config: ElasticConfig) -> Result<Self, ElasticError> {
         let mut core = StreamCore::new(&config, config.max_source_frames())?;
         let latency = Self::latency(&mut core, &config)?;
+        let maximum_warm_source = config.rate_envelope().max_source_frames_per_output()
+            * latency
+                .output_frames()
+                .to_f64()
+                .ok_or(ElasticError::SampleCountOverflow)?;
+        let maximum_warm_source = maximum_warm_source
+            .ceil()
+            .to_usize()
+            .ok_or(ElasticError::SampleCountOverflow)?;
+        let prime_context = latency
+            .source_frames()
+            .checked_add(latency.source_frames())
+            .and_then(|frames| frames.checked_add(maximum_warm_source))
+            .ok_or(ElasticError::SampleCountOverflow)?;
+        let retained = core.max_input_frames().max(prime_context);
+        let input_capacity = config
+            .max_source_frames()
+            .checked_add(retained)
+            .ok_or(ElasticError::SampleCountOverflow)?;
+        core.prepare_input_capacity(input_capacity)?;
         let terminal_chunk_frames = core.max_input_frames();
-        let capabilities =
-            ElasticCapabilities::new(config.shape(), latency, terminal_chunk_frames)?;
+        let capabilities = ElasticCapabilities::new(config.shape(), latency, terminal_chunk_frames);
         Ok(Self {
             core,
             capabilities,
@@ -69,6 +88,34 @@ impl ElasticEngine for BungeeElastic {
 
     fn capabilities(&self) -> ElasticCapabilities {
         self.capabilities
+    }
+
+    fn prime(
+        &mut self,
+        request: ElasticRequest,
+        source_history: &[f32],
+        source_lookahead: &[f32],
+        source: &[f32],
+        discarded_output: &mut [f32],
+    ) -> Result<(), ElasticError> {
+        self.capabilities.validate_prime(
+            request,
+            source_history.len(),
+            source_lookahead.len(),
+            source.len(),
+            discarded_output.len(),
+        )?;
+        self.tail_armed = false;
+        self.core.prime(
+            source_history,
+            source_lookahead,
+            request,
+            source,
+            self.pitch,
+            discarded_output,
+        )?;
+        self.tail_armed = true;
+        Ok(())
     }
 
     fn process(

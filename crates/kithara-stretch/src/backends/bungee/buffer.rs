@@ -6,7 +6,10 @@ use kithara_bufpool::PcmPool;
 use super::ffi::{AnalysisInput, NativeStretcher};
 use crate::{ElasticConfig, ElasticError};
 
+#[derive(fieldwork::Fieldwork)]
+#[fieldwork(opt_in)]
 pub(super) struct PooledPlanar {
+    #[field(get, copy, vis = "pub(super)")]
     channels: usize,
     pool: PcmPool,
     pub(super) samples: Vec<f32>,
@@ -56,6 +59,20 @@ impl PooledPlanar {
                     self.channel(channel)[frame];
             }
         }
+    }
+
+    fn prepare_stride(&mut self, stride: usize) -> Result<(), ElasticError> {
+        let samples = self
+            .channels
+            .checked_mul(stride)
+            .ok_or(ElasticError::SampleCountOverflow)?;
+        let mut storage = self.pool.attach(std::mem::take(&mut self.samples));
+        storage
+            .ensure_len(samples)
+            .map_err(|_| ElasticError::PcmPoolBudgetExhausted)?;
+        self.samples = storage.into_inner();
+        self.stride = stride;
+        Ok(())
     }
 }
 
@@ -135,9 +152,10 @@ impl InputBuffer {
             .checked_add(appended)
             .ok_or(ElasticError::SampleCountOverflow)?;
         if required > self.audio.stride {
-            return Err(ElasticError::EnginePreparation(
-                "Bungee rolling input exceeded its prepared storage",
-            ));
+            return Err(ElasticError::InputStorage {
+                required,
+                capacity: self.audio.stride,
+            });
         }
         let channels = self.audio.channels;
         for channel in 0..channels {
@@ -159,6 +177,10 @@ impl InputBuffer {
             .checked_add(input_frames_i32)
             .ok_or(ElasticError::SampleCountOverflow)?;
         Ok(())
+    }
+
+    pub(super) fn prepare_source_capacity(&mut self, capacity: usize) -> Result<(), ElasticError> {
+        self.audio.prepare_stride(capacity)
     }
 
     pub(super) fn analyse(
@@ -197,22 +219,24 @@ impl InputBuffer {
                 .ok_or(ElasticError::SampleCountOverflow)?,
         )
         .map_err(|_| ElasticError::SampleCountOverflow)?;
-        let source_begin = usize::try_from(
-            available_begin
-                .checked_sub(self.begin)
-                .ok_or(ElasticError::SampleCountOverflow)?,
-        )
-        .map_err(|_| ElasticError::SampleCountOverflow)?;
-        let destination_begin = usize::try_from(
-            available_begin
-                .checked_sub(self.requested.begin)
-                .ok_or(ElasticError::SampleCountOverflow)?,
-        )
-        .map_err(|_| ElasticError::SampleCountOverflow)?;
-        for channel in 0..self.audio.channels {
-            let source = &self.audio.channel(channel)[source_begin..source_begin + copied];
-            self.analysis.channel_mut(channel)[destination_begin..destination_begin + copied]
-                .copy_from_slice(source);
+        if copied > 0 {
+            let source_begin = usize::try_from(
+                available_begin
+                    .checked_sub(self.begin)
+                    .ok_or(ElasticError::SampleCountOverflow)?,
+            )
+            .map_err(|_| ElasticError::SampleCountOverflow)?;
+            let destination_begin = usize::try_from(
+                available_begin
+                    .checked_sub(self.requested.begin)
+                    .ok_or(ElasticError::SampleCountOverflow)?,
+            )
+            .map_err(|_| ElasticError::SampleCountOverflow)?;
+            for channel in 0..self.audio.channels {
+                let source = &self.audio.channel(channel)[source_begin..source_begin + copied];
+                self.analysis.channel_mut(channel)[destination_begin..destination_begin + copied]
+                    .copy_from_slice(source);
+            }
         }
         let mute_head =
             usize::try_from((i64::from(self.begin) - i64::from(self.requested.begin)).max(0))
@@ -236,8 +260,15 @@ impl InputBuffer {
     }
 
     pub(super) fn clear(&mut self) {
-        self.begin = 0;
-        self.end = 0;
-        self.requested = InputChunk { begin: 0, end: 0 };
+        self.set_position(0);
+    }
+
+    pub(super) fn set_position(&mut self, position: i32) {
+        self.begin = position;
+        self.end = position;
+        self.requested = InputChunk {
+            begin: position,
+            end: position,
+        };
     }
 }

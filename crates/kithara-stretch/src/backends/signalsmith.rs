@@ -1,11 +1,12 @@
 use std::fmt;
 
+use kithara_bufpool::PcmBuf;
 use num_traits::ToPrimitive;
 use signalsmith_stretch::Stretch;
 
 use crate::{
     ElasticCapabilities, ElasticConfig, ElasticEngine, ElasticError, ElasticLatency,
-    ElasticPriming, ElasticRequest, elastic::PitchRange,
+    ElasticRequest, elastic::PitchRange,
 };
 
 const CHANNEL_COUNT_LIMIT: u32 = u32::MAX;
@@ -25,6 +26,7 @@ fn engine(sample_rate: u32, channels: usize) -> (Stretch, ElasticLatency) {
 pub struct SignalsmithElastic {
     inner: Stretch,
     capabilities: ElasticCapabilities,
+    prime_input: PcmBuf,
     tail_armed: bool,
 }
 
@@ -43,19 +45,56 @@ impl ElasticEngine for SignalsmithElastic {
             .map_err(|_| ElasticError::ChannelCountOutOfRange(config.channels()))?;
         let (mut inner, latency) = engine(config.sample_rate(), config.channels());
         inner.set_transpose_factor(1.0, None);
+        let capabilities =
+            ElasticCapabilities::new(config.shape(), latency, latency.output_frames());
+        let prime_window_samples = capabilities.samples(latency.source_frames())?;
+        let prime_samples = prime_window_samples
+            .checked_add(prime_window_samples)
+            .ok_or(ElasticError::SampleCountOverflow)?;
+        let mut prime_input = config.pool().get();
+        prime_input
+            .ensure_len(prime_samples)
+            .map_err(|_| ElasticError::PcmPoolBudgetExhausted)?;
         Ok(Self {
             inner,
-            capabilities: ElasticCapabilities::new(
-                config.shape(),
-                latency,
-                latency.output_frames(),
-            )?,
+            capabilities,
+            prime_input,
             tail_armed: false,
         })
     }
 
     fn capabilities(&self) -> ElasticCapabilities {
         self.capabilities
+    }
+
+    fn prime(
+        &mut self,
+        request: ElasticRequest,
+        source_history: &[f32],
+        source_lookahead: &[f32],
+        source: &[f32],
+        discarded_output: &mut [f32],
+    ) -> Result<(), ElasticError> {
+        self.capabilities.validate_prime(
+            request,
+            source_history.len(),
+            source_lookahead.len(),
+            source.len(),
+            discarded_output.len(),
+        )?;
+        let playback_rate = request.source_frames_per_output()?;
+        let history_end = source_history.len();
+        let input_end = history_end
+            .checked_add(source_lookahead.len())
+            .ok_or(ElasticError::SampleCountOverflow)?;
+        self.prime_input[..history_end].copy_from_slice(source_history);
+        self.prime_input[history_end..input_end].copy_from_slice(source_lookahead);
+        self.inner.reset();
+        self.inner
+            .seek(&self.prime_input[..input_end], playback_rate);
+        self.inner.process(source, discarded_output);
+        self.tail_armed = true;
+        Ok(())
     }
 
     fn process(
@@ -99,39 +138,6 @@ impl ElasticEngine for SignalsmithElastic {
     fn reset(&mut self) -> Result<(), ElasticError> {
         self.inner.reset();
         self.tail_armed = false;
-        Ok(())
-    }
-}
-
-impl ElasticPriming for SignalsmithElastic {
-    fn prime(
-        &mut self,
-        request: ElasticRequest,
-        source_history: &[f32],
-        source: &[f32],
-        discarded_output: &mut [f32],
-    ) -> Result<(), ElasticError> {
-        let latency = self.capabilities.latency();
-        if request.output_frames() != latency.output_frames() {
-            return Err(ElasticError::WarmupOutputFrameCount {
-                actual: request.output_frames(),
-                expected: latency.output_frames(),
-            });
-        }
-        let expected_history_samples = self.capabilities.samples(latency.source_frames())?;
-        if source_history.len() != expected_history_samples {
-            return Err(ElasticError::HistorySampleCount {
-                actual: source_history.len(),
-                expected: expected_history_samples,
-            });
-        }
-        self.capabilities
-            .validate_spans(request, source.len(), discarded_output.len())?;
-        let playback_rate = request.source_frames_per_output()?;
-        self.inner.reset();
-        self.inner.seek(source_history, playback_rate);
-        self.inner.process(source, discarded_output);
-        self.tail_armed = true;
         Ok(())
     }
 }
