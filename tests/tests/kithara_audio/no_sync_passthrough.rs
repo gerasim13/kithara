@@ -18,11 +18,14 @@ use kithara::{
 };
 use kithara_integration_tests::{
     audio_artifact::write_audio_artifact,
-    cochlea::{CochleaReport, assert_oracle_load_bearing, continuity_failures},
+    cochlea::{
+        CochleaReport, assert_oracle_load_bearing, continuity_failures, time_stretch_failures,
+    },
+    goertzel::goertzel_magnitude,
     kithara,
     memory_source::{MemStream, MemStreamConfig, MemorySource},
     offline::{OfflinePlayer, resource_from_reader},
-    wav::prepare_sine_wav,
+    wav::{prepare_marked_sine_wav, prepare_sine_wav},
 };
 use num_traits::ToPrimitive;
 use serde::Serialize;
@@ -35,6 +38,19 @@ const WARMUP_BLOCKS: usize = 32;
 const CAPTURE_BLOCKS: usize = 96;
 const LOAD_INTERVAL_BLOCKS: usize = 8;
 const LOAD_BURST: Duration = Duration::from_millis(18);
+const ACTIVE_SPEED: f32 = 0.8;
+const TONE_HZ: f64 = 440.0;
+const PITCH_SHIFTED_TONE_HZ: f64 = 352.0;
+const TONE_DOMINANCE_RATIO: f64 = 8.0;
+const CONTINUITY_RATIO: f32 = 3.0;
+const CONTINUITY_SLACK: f32 = 2.0e-3;
+const MAX_ACTIVE_STEREO_DELTA: f32 = 1.0e-3;
+const RATE_MARKER_START_FRAMES: [usize; 2] = [17_640, 35_280];
+const RATE_MARKER_FRAMES: usize = 2_205;
+const RATE_MARKER_PEAK: i16 = 2_000;
+const RATE_WINDOW_FRAMES: usize = 256;
+const RATE_MARKER_JOIN_FRAMES: usize = RATE_WINDOW_FRAMES * 2;
+const RATE_TIMING_TOLERANCE_FRAMES: usize = BLOCK_FRAMES * 2;
 
 const LOAD_WARMUP: u8 = 0;
 const LOAD_CAPTURE: u8 = 1;
@@ -130,6 +146,27 @@ struct SineFit {
     non_finite_samples: usize,
     residual_ratio: f64,
     stereo_mismatches: usize,
+    max_stereo_delta: f32,
+}
+
+#[derive(Debug, Serialize)]
+struct ChannelContinuity {
+    channel: usize,
+    peak_step: f32,
+    background_step: f32,
+    step_limit: f32,
+    peak_residual: f32,
+    background_residual: f32,
+    residual_limit: f32,
+}
+
+#[derive(Debug, Serialize)]
+struct MarkerTiming {
+    background_rms: f32,
+    expected_interval_frames: usize,
+    marker_frames: [usize; 2],
+    marker_rms: f32,
+    measured_interval_frames: usize,
 }
 
 impl From<&RealtimeCapture> for CaptureMetrics {
@@ -147,6 +184,7 @@ impl From<&RealtimeCapture> for CaptureMetrics {
 #[derive(Serialize)]
 struct PassthroughManifest<'a> {
     case: &'static str,
+    backend: &'a str,
     sample_rate: u32,
     channels: u16,
     block_frames: usize,
@@ -160,11 +198,30 @@ struct PassthroughManifest<'a> {
     failures: &'a [String],
 }
 
+#[derive(Serialize)]
+struct ActiveStretchManifest<'a> {
+    case: &'static str,
+    backend: &'a str,
+    speed: f32,
+    sample_rate: u32,
+    channels: u16,
+    control: CaptureMetrics,
+    candidate: CaptureMetrics,
+    control_cochlea: &'a CochleaReport,
+    candidate_cochlea: &'a CochleaReport,
+    candidate_sine_fit: &'a SineFit,
+    candidate_continuity: &'a [ChannelContinuity],
+    rate_control: &'a MarkerTiming,
+    rate_candidate: &'a MarkerTiming,
+    failures: &'a [String],
+}
+
 fn measure_quiet_sine(samples: &[f32]) -> SineFit {
     let channels = usize::from(CHANNELS);
     let frames = samples.len() / channels;
     let mut non_finite_samples = 0;
     let mut stereo_mismatches = 0;
+    let mut max_stereo_delta = 0.0_f32;
     let mut sum = 0.0;
     let mut sum_sin = 0.0;
     let mut sum_cos = 0.0;
@@ -172,12 +229,13 @@ fn measure_quiet_sine(samples: &[f32]) -> SineFit {
     for frame in 0..frames {
         let left = samples[frame * channels];
         non_finite_samples += usize::from(!left.is_finite());
-        stereo_mismatches += samples[frame * channels + 1..(frame + 1) * channels]
-            .iter()
-            .filter(|sample| sample.to_bits() != left.to_bits())
-            .count();
-        let phase = std::f64::consts::TAU * 440.0 * frame.to_f64().expect("capture frame fits f64")
-            / f64::from(SAMPLE_RATE);
+        for sample in &samples[frame * channels + 1..(frame + 1) * channels] {
+            stereo_mismatches += usize::from(sample.to_bits() != left.to_bits());
+            max_stereo_delta = max_stereo_delta.max((*sample - left).abs());
+        }
+        let phase =
+            std::f64::consts::TAU * TONE_HZ * frame.to_f64().expect("capture frame fits f64")
+                / f64::from(SAMPLE_RATE);
         let sample = f64::from(left);
         sum += sample;
         sum_sin += sample * phase.sin();
@@ -192,8 +250,9 @@ fn measure_quiet_sine(samples: &[f32]) -> SineFit {
     let mut signal_energy = 0.0;
     let mut residual_energy = 0.0;
     for frame in 0..frames {
-        let phase = std::f64::consts::TAU * 440.0 * frame.to_f64().expect("capture frame fits f64")
-            / f64::from(SAMPLE_RATE);
+        let phase =
+            std::f64::consts::TAU * TONE_HZ * frame.to_f64().expect("capture frame fits f64")
+                / f64::from(SAMPLE_RATE);
         let sample = f64::from(samples[frame * channels]);
         let centered = sample - dc;
         let fitted = sin_coefficient * phase.sin() + cos_coefficient * phase.cos();
@@ -207,22 +266,23 @@ fn measure_quiet_sine(samples: &[f32]) -> SineFit {
         non_finite_samples,
         residual_ratio: (residual_energy / signal_energy).sqrt(),
         stereo_mismatches,
+        max_stereo_delta,
     }
 }
 
 fn audio_config(
     source: &[u8],
     worker: AudioWorkerHandle,
-    stretch: bool,
+    stretch: Option<(StretchKind, f32)>,
     effects: Vec<Box<dyn AudioEffect>>,
 ) -> AudioConfig<MemStream> {
     let stream = MemStreamConfig {
         source: Some(MemorySource::new(source.to_vec())),
         event_bus: None,
     };
-    let stretch = stretch.then(|| {
-        let controls = StretchControls::new(1.0);
-        controls.set_backend(StretchKind::Signalsmith);
+    let stretch = stretch.map(|(backend, speed)| {
+        let controls = StretchControls::new(speed);
+        controls.set_backend(backend);
         controls.set_keylock(true);
         controls
     });
@@ -249,7 +309,11 @@ async fn wait_for_preload(audio: &Audio<Stream<MemStream>>) {
     .expect("audio preload gate must open");
 }
 
-async fn render_passthrough(source: &[u8], stretch: bool, with_load: bool) -> RealtimeCapture {
+async fn render_passthrough(
+    source: &[u8],
+    stretch: Option<(StretchKind, f32)>,
+    with_load: bool,
+) -> RealtimeCapture {
     let load_probe = Arc::new(LoadProbe::new());
     let worker = AudioWorkerHandle::with_cancel(CancelToken::never());
     let mut target_audio =
@@ -263,7 +327,7 @@ async fn render_passthrough(source: &[u8], stretch: bool, with_load: bool) -> Re
         let mut audio = Audio::<Stream<MemStream>>::new(audio_config(
             source,
             worker,
-            false,
+            None,
             vec![Box::new(BurstLoadEffect::new(Arc::clone(&load_probe)))],
         ))
         .await
@@ -340,6 +404,253 @@ fn first_sample_mismatch(candidate: &[f32], control: &[f32]) -> Option<usize> {
         .or_else(|| (candidate.len() != control.len()).then(|| candidate.len().min(control.len())))
 }
 
+fn first_channel(samples: &[f32]) -> Vec<f32> {
+    samples
+        .chunks_exact(usize::from(CHANNELS))
+        .map(|frame| frame[0])
+        .collect()
+}
+
+fn tone_dominates(samples: &[f32], tone_hz: f64, competing_hz: f64) -> bool {
+    let tone = goertzel_magnitude(samples, tone_hz, SAMPLE_RATE);
+    let competing = goertzel_magnitude(samples, competing_hz, SAMPLE_RATE);
+    tone > competing * TONE_DOMINANCE_RATIO
+}
+
+fn tone_fixture(frequency_hz: f64, frames: usize) -> Vec<f32> {
+    let phase_step = std::f64::consts::TAU * frequency_hz / f64::from(SAMPLE_RATE);
+    (0..frames)
+        .map(|frame| {
+            (phase_step * frame.to_f64().expect("fixture frame fits f64"))
+                .sin()
+                .to_f32()
+                .expect("unit sine sample fits f32")
+                * 0.5
+        })
+        .collect()
+}
+
+fn expected_marker_interval(speed: f32) -> usize {
+    let source_interval = RATE_MARKER_START_FRAMES[1]
+        .checked_sub(RATE_MARKER_START_FRAMES[0])
+        .expect("rate markers are ordered");
+    (source_interval.to_f64().expect("marker interval fits f64") / f64::from(speed))
+        .round()
+        .to_usize()
+        .expect("scaled marker interval fits usize")
+}
+
+fn marker_timing(samples: &[f32], speed: f32) -> MarkerTiming {
+    let channels = usize::from(CHANNELS);
+    let window_samples = RATE_WINDOW_FRAMES
+        .checked_mul(channels)
+        .expect("rate-marker window fits usize");
+    let windows: Vec<(usize, f32)> = samples
+        .chunks_exact(window_samples)
+        .enumerate()
+        .map(|(window, samples)| {
+            let energy = samples
+                .chunks_exact(channels)
+                .map(|frame| frame[0] * frame[0])
+                .sum::<f32>();
+            let rms = (energy
+                / RATE_WINDOW_FRAMES
+                    .to_f32()
+                    .expect("rate-marker window fits f32"))
+            .sqrt();
+            (window * RATE_WINDOW_FRAMES + RATE_WINDOW_FRAMES / 2, rms)
+        })
+        .collect();
+    assert!(!windows.is_empty(), "rate-marker capture has RMS windows");
+    let mut rms_values: Vec<f32> = windows.iter().map(|(_, rms)| *rms).collect();
+    rms_values.sort_by(f32::total_cmp);
+    let background_rms = rms_values[rms_values.len() / 2];
+    let marker_threshold = background_rms / 4.0;
+    let mut groups: Vec<Vec<(usize, f32)>> = Vec::new();
+    for window in windows
+        .iter()
+        .copied()
+        .filter(|(_, rms)| *rms < marker_threshold)
+    {
+        let contiguous = groups
+            .last()
+            .and_then(|group| group.last())
+            .is_some_and(|(frame, _)| frame.saturating_add(RATE_MARKER_JOIN_FRAMES) >= window.0);
+        if contiguous {
+            groups
+                .last_mut()
+                .expect("a contiguous marker group exists")
+                .push(window);
+        } else {
+            groups.push(vec![window]);
+        }
+    }
+    assert_eq!(
+        groups.len(),
+        RATE_MARKER_START_FRAMES.len(),
+        "rate oracle must resolve exactly two source-time markers: groups={groups:?}, background_rms={background_rms}"
+    );
+    let marker_frames = std::array::from_fn(|index| {
+        let group = &groups[index];
+        let first = group.first().expect("marker group is non-empty").0;
+        let last = group.last().expect("marker group is non-empty").0;
+        first + last.saturating_sub(first) / 2
+    });
+    let marker_rms = groups
+        .iter()
+        .map(|group| {
+            group
+                .iter()
+                .map(|(_, rms)| *rms)
+                .min_by(f32::total_cmp)
+                .expect("marker group has an RMS minimum")
+        })
+        .fold(0.0_f32, f32::max);
+    let measured_interval_frames = marker_frames[1]
+        .checked_sub(marker_frames[0])
+        .expect("detected rate markers are ordered");
+    MarkerTiming {
+        background_rms,
+        expected_interval_frames: expected_marker_interval(speed),
+        marker_frames,
+        marker_rms,
+        measured_interval_frames,
+    }
+}
+
+fn marker_timing_failures(label: &str, timing: &MarkerTiming) -> Vec<String> {
+    let mut failures = Vec::new();
+    if timing.marker_rms * 4.0 >= timing.background_rms {
+        failures.push(format!(
+            "{label}: source-time marker is not distinct: marker_rms={:.6}, background_rms={:.6}",
+            timing.marker_rms, timing.background_rms,
+        ));
+    }
+    let error = timing
+        .measured_interval_frames
+        .abs_diff(timing.expected_interval_frames);
+    if error > RATE_TIMING_TOLERANCE_FRAMES {
+        failures.push(format!(
+            "{label}: source-time marker interval is {error} frames from the expected scale: measured={}, expected={}, markers={:?}, tolerance={RATE_TIMING_TOLERANCE_FRAMES}",
+            timing.measured_interval_frames, timing.expected_interval_frames, timing.marker_frames,
+        ));
+    }
+    failures
+}
+
+fn percentile(values: &mut [f32], numerator: usize, denominator: usize) -> f32 {
+    assert!(!values.is_empty(), "percentile input must not be empty");
+    values.sort_by(f32::total_cmp);
+    let index = values.len().saturating_sub(1).saturating_mul(numerator) / denominator;
+    values[index]
+}
+
+fn frame_continuity(samples: &[f32]) -> (Vec<ChannelContinuity>, Vec<String>) {
+    let channels = usize::from(CHANNELS);
+    let frames = samples.len() / channels;
+    assert!(frames >= 3, "continuity oracle needs at least three frames");
+    let omega = std::f32::consts::TAU * TONE_HZ.to_f32().expect("fixture frequency fits f32")
+        / SAMPLE_RATE.to_f32().expect("fixture sample rate fits f32");
+    let recurrence = 2.0 * omega.cos();
+    let mut reports = Vec::with_capacity(channels);
+    let mut failures = Vec::new();
+
+    for channel in 0..channels {
+        let sample = |frame: usize| samples[frame * channels + channel];
+        let mut steps = Vec::with_capacity(frames.saturating_sub(1));
+        let mut residuals = Vec::with_capacity(frames.saturating_sub(2));
+        let mut peak_step = 0.0_f32;
+        let mut peak_residual = 0.0_f32;
+        for frame in 1..frames {
+            let step = (sample(frame) - sample(frame - 1)).abs();
+            peak_step = peak_step.max(step);
+            steps.push(step);
+            if frame >= 2 {
+                let residual =
+                    (sample(frame) - recurrence * sample(frame - 1) + sample(frame - 2)).abs();
+                peak_residual = peak_residual.max(residual);
+                residuals.push(residual);
+            }
+        }
+        let background_step = percentile(&mut steps, 99, 100);
+        let background_residual = percentile(&mut residuals, 99, 100);
+        let step_limit = background_step.mul_add(CONTINUITY_RATIO, CONTINUITY_SLACK);
+        let residual_limit = background_residual.mul_add(CONTINUITY_RATIO, CONTINUITY_SLACK);
+        if peak_step > step_limit {
+            failures.push(format!(
+                "channel {channel}: sample step {peak_step:.6} exceeds {step_limit:.6}",
+            ));
+        }
+        if peak_residual > residual_limit {
+            failures.push(format!(
+                "channel {channel}: sine residual {peak_residual:.6} exceeds {residual_limit:.6}",
+            ));
+        }
+        reports.push(ChannelContinuity {
+            channel,
+            peak_step,
+            background_step,
+            step_limit,
+            peak_residual,
+            background_residual,
+            residual_limit,
+        });
+    }
+
+    (reports, failures)
+}
+
+fn assert_frame_oracle_load_bearing(control: &[f32]) {
+    let channels = usize::from(CHANNELS);
+    let frames = control.len() / channels;
+    assert!(
+        frame_continuity(control).1.is_empty(),
+        "frame oracle control must be continuous"
+    );
+
+    let search_start = frames / 3;
+    let search_end = frames * 2 / 3;
+    let click_frame = (search_start..search_end)
+        .find(|&frame| (0.2..=0.4).contains(&control[frame * channels].abs()))
+        .expect("active fixture contains a sub-clipping click position");
+    let mut clicked = control.to_vec();
+    for sample in &mut clicked[click_frame * channels..(click_frame + 1) * channels] {
+        *sample = -*sample;
+    }
+    assert!(
+        !frame_continuity(&clicked).1.is_empty(),
+        "frame oracle accepted an injected sub-clipping one-frame click"
+    );
+
+    let mut comb = control.to_vec();
+    for frame in (BLOCK_FRAMES..frames).step_by(BLOCK_FRAMES) {
+        for sample in &mut comb[frame * channels..(frame + 1) * channels] {
+            *sample = -*sample;
+        }
+    }
+    assert!(
+        !frame_continuity(&comb).1.is_empty(),
+        "frame oracle accepted recurring block-boundary clicks"
+    );
+
+    let held_frame = frames / 2;
+    let mut held = control.to_vec();
+    for channel in 0..channels {
+        held[held_frame * channels + channel] = held[(held_frame - 1) * channels + channel];
+    }
+    assert!(
+        !frame_continuity(&held).1.is_empty(),
+        "frame oracle accepted one held PCM frame"
+    );
+
+    let mut divergent = control.to_vec();
+    divergent[held_frame * channels + 1] += MAX_ACTIVE_STEREO_DELTA * 2.0;
+    assert!(
+        measure_quiet_sine(&divergent).max_stereo_delta > MAX_ACTIVE_STEREO_DELTA,
+        "stereo oracle accepted a channel-only frame error"
+    );
+}
+
 #[kithara::test(
     tokio,
     flash(false),
@@ -347,8 +658,31 @@ fn first_sample_mismatch(candidate: &[f32], control: &[f32]) -> Option<usize> {
     timeout(Duration::from_secs(30)),
     hang_timeout_secs(5)
 )]
-async fn no_sync_unity_playback_is_bit_exact_and_cochlea_clean_under_load() {
-    run_no_sync_passthrough(false).await;
+#[case(StretchKind::Signalsmith)]
+#[cfg_attr(
+    not(all(target_os = "windows", target_env = "msvc")),
+    case(StretchKind::Bungee)
+)]
+async fn no_sync_unity_playback_is_bit_exact_and_cochlea_clean_under_load(
+    #[case] backend: StretchKind,
+) {
+    run_no_sync_passthrough(backend, false).await;
+}
+
+#[kithara::test(
+    tokio,
+    flash(false),
+    serial,
+    timeout(Duration::from_secs(30)),
+    hang_timeout_secs(5)
+)]
+#[case(StretchKind::Signalsmith)]
+#[cfg_attr(
+    not(all(target_os = "windows", target_env = "msvc")),
+    case(StretchKind::Bungee)
+)]
+async fn no_sync_active_keylock_is_continuous_and_preserves_pitch(#[case] backend: StretchKind) {
+    run_active_stretch(backend, false).await;
 }
 
 #[kithara::test(
@@ -358,26 +692,48 @@ async fn no_sync_unity_playback_is_bit_exact_and_cochlea_clean_under_load() {
     timeout(Duration::from_secs(60)),
     hang_timeout_secs(5)
 )]
+#[case(StretchKind::Signalsmith)]
+#[cfg_attr(
+    not(all(target_os = "windows", target_env = "msvc")),
+    case(StretchKind::Bungee)
+)]
 #[ignore = "writes opt-in listening artifacts; run explicitly with KITHARA_AUDIO_ARTIFACT_DIR"]
-async fn record_no_sync_unity_playback_artifacts() {
-    run_no_sync_passthrough(true).await;
+async fn record_no_sync_unity_playback_artifacts(#[case] backend: StretchKind) {
+    run_no_sync_passthrough(backend, true).await;
 }
 
-async fn run_no_sync_passthrough(record_artifacts: bool) {
+#[kithara::test(
+    tokio,
+    flash(false),
+    serial,
+    timeout(Duration::from_secs(60)),
+    hang_timeout_secs(5)
+)]
+#[case(StretchKind::Signalsmith)]
+#[cfg_attr(
+    not(all(target_os = "windows", target_env = "msvc")),
+    case(StretchKind::Bungee)
+)]
+#[ignore = "writes opt-in listening artifacts; run explicitly with KITHARA_AUDIO_ARTIFACT_DIR"]
+async fn record_no_sync_active_keylock_artifacts(#[case] backend: StretchKind) {
+    run_active_stretch(backend, true).await;
+}
+
+async fn run_no_sync_passthrough(backend: StretchKind, record_artifacts: bool) {
     let channels = usize::from(CHANNELS);
     let source = prepare_sine_wav(
-        440.0,
+        TONE_HZ,
         16_000,
         usize::try_from(SAMPLE_RATE).expect("sample rate fits usize") * SOURCE_SECONDS,
         SAMPLE_RATE,
         CHANNELS,
     );
-    let baseline = render_passthrough(&source, false, false).await;
+    let baseline = render_passthrough(&source, None, false).await;
     let baseline_report = CochleaReport::measure(&baseline.pcm, CHANNELS, SAMPLE_RATE);
     let baseline_source_fit = measure_quiet_sine(&baseline.pcm);
-    let unity = render_passthrough(&source, true, false).await;
+    let unity = render_passthrough(&source, Some((backend, 1.0)), false).await;
     let unity_report = CochleaReport::measure(&unity.pcm, CHANNELS, SAMPLE_RATE);
-    let loaded = render_passthrough(&source, true, true).await;
+    let loaded = render_passthrough(&source, Some((backend, 1.0)), true).await;
     let loaded_report = CochleaReport::measure(&loaded.pcm, CHANNELS, SAMPLE_RATE);
     let mut failures = Vec::new();
     if !baseline.pcm.iter().any(|sample| sample.abs() > 0.25) {
@@ -451,8 +807,10 @@ async fn run_no_sync_passthrough(record_artifacts: bool) {
         failures.push("unity+load: no bounded shared-worker burst began during capture".to_owned());
     }
 
+    let backend_label = backend.to_string().to_ascii_lowercase();
     let manifest = PassthroughManifest {
         case: "no-sync-unity-passthrough",
+        backend: &backend_label,
         sample_rate: SAMPLE_RATE,
         channels: CHANNELS,
         block_frames: BLOCK_FRAMES,
@@ -466,8 +824,9 @@ async fn run_no_sync_passthrough(record_artifacts: bool) {
         failures: &failures,
     };
     if record_artifacts {
+        let artifact_case = format!("no-sync-unity-passthrough-{backend_label}");
         let written = write_audio_artifact(
-            "no-sync-unity-passthrough",
+            &artifact_case,
             SAMPLE_RATE,
             CHANNELS,
             &[
@@ -488,6 +847,151 @@ async fn run_no_sync_passthrough(record_artifacts: bool) {
     assert!(
         failures.is_empty(),
         "no-SYNC playback was not transparent: {}\nbaseline={baseline_report:?}\nunity={unity_report:?}\nunity+load={loaded_report:?}",
+        failures.join("; "),
+    );
+}
+
+async fn run_active_stretch(backend: StretchKind, record_artifacts: bool) {
+    let source_frames =
+        usize::try_from(SAMPLE_RATE).expect("sample rate fits usize") * SOURCE_SECONDS;
+    let source = prepare_sine_wav(TONE_HZ, 16_000, source_frames, SAMPLE_RATE, CHANNELS);
+    let marker_source = prepare_marked_sine_wav(
+        TONE_HZ,
+        16_000,
+        RATE_MARKER_PEAK,
+        RATE_MARKER_START_FRAMES.map(|start| start..start + RATE_MARKER_FRAMES),
+        source_frames,
+        SAMPLE_RATE,
+        CHANNELS,
+    );
+    let control = render_passthrough(&source, None, false).await;
+    let candidate = render_passthrough(&source, Some((backend, ACTIVE_SPEED)), false).await;
+    let rate_control = render_passthrough(&marker_source, None, false).await;
+    let rate_candidate =
+        render_passthrough(&marker_source, Some((backend, ACTIVE_SPEED)), false).await;
+    let control_report = CochleaReport::measure(&control.pcm, CHANNELS, SAMPLE_RATE);
+    let candidate_report = CochleaReport::measure(&candidate.pcm, CHANNELS, SAMPLE_RATE);
+    let candidate_sine_fit = measure_quiet_sine(&candidate.pcm);
+    let (candidate_continuity, continuity_failures) = frame_continuity(&candidate.pcm);
+    let mut failures = time_stretch_failures("active keylock", &candidate_report, &control_report);
+    failures.extend(continuity_failures);
+    let rate_control_timing = marker_timing(&rate_control.pcm, 1.0);
+    let rate_candidate_timing = marker_timing(&rate_candidate.pcm, ACTIVE_SPEED);
+    failures.extend(marker_timing_failures(
+        "unity rate control",
+        &rate_control_timing,
+    ));
+    failures.extend(marker_timing_failures(
+        "active keylock rate",
+        &rate_candidate_timing,
+    ));
+    let unchanged_rate_negative = marker_timing(&rate_control.pcm, ACTIVE_SPEED);
+    assert!(
+        !marker_timing_failures("unchanged-rate negative control", &unchanged_rate_negative)
+            .is_empty(),
+        "rate oracle accepted unity playback as {ACTIVE_SPEED}x"
+    );
+
+    for (label, capture) in [
+        ("effect-free", &control),
+        ("active keylock", &candidate),
+        ("rate control", &rate_control),
+        ("active rate", &rate_candidate),
+    ] {
+        let non_finite = capture
+            .pcm
+            .iter()
+            .filter(|sample| !sample.is_finite())
+            .count();
+        if non_finite != 0 {
+            failures.push(format!("{label}: {non_finite} non-finite PCM sample(s)"));
+        }
+        if capture.warmup_decode_errors != 0 || capture.decode_errors != 0 {
+            failures.push(format!(
+                "{label}: decode errors warmup={}, capture={}",
+                capture.warmup_decode_errors, capture.decode_errors,
+            ));
+        }
+        if capture.warmup_underruns != 0 || capture.underruns != 0 {
+            failures.push(format!(
+                "{label}: underruns warmup={}, capture={}",
+                capture.warmup_underruns, capture.underruns,
+            ));
+        }
+    }
+
+    if first_sample_mismatch(&candidate.pcm, &control.pcm).is_none() {
+        failures.push("active keylock remained on the unity passthrough path".to_owned());
+    }
+    if candidate_sine_fit.non_finite_samples != 0
+        || candidate_sine_fit.max_stereo_delta > MAX_ACTIVE_STEREO_DELTA
+        || !(0.47..=0.51).contains(&candidate_sine_fit.amplitude)
+        || candidate_sine_fit.dc.abs() > 0.002
+        || candidate_sine_fit.residual_ratio > 0.01
+    {
+        failures.push(format!(
+            "active keylock violates the independent 440 Hz signal oracle: {candidate_sine_fit:?}",
+        ));
+    }
+    let candidate_mono = first_channel(&candidate.pcm);
+    if !tone_dominates(&candidate_mono, TONE_HZ, PITCH_SHIFTED_TONE_HZ) {
+        failures.push(format!(
+            "active keylock did not preserve {TONE_HZ} Hz over the pitch-shifted {PITCH_SHIFTED_TONE_HZ} Hz control",
+        ));
+    }
+    let wrong_pitch = tone_fixture(PITCH_SHIFTED_TONE_HZ, candidate_mono.len());
+    assert!(
+        tone_dominates(&wrong_pitch, PITCH_SHIFTED_TONE_HZ, TONE_HZ),
+        "wrong-pitch negative control does not contain its declared frequency"
+    );
+    assert!(
+        !tone_dominates(&wrong_pitch, TONE_HZ, PITCH_SHIFTED_TONE_HZ),
+        "pitch oracle accepted a deliberately wrong 352 Hz fixture as 440 Hz"
+    );
+
+    assert_oracle_load_bearing(&control.pcm, CHANNELS, SAMPLE_RATE, BLOCK_FRAMES);
+    assert_oracle_load_bearing(&candidate.pcm, CHANNELS, SAMPLE_RATE, BLOCK_FRAMES);
+    assert_frame_oracle_load_bearing(&candidate.pcm);
+    if record_artifacts {
+        let backend_label = backend.to_string().to_ascii_lowercase();
+        let artifact_case = format!("no-sync-active-keylock-{backend_label}");
+        let manifest = ActiveStretchManifest {
+            case: "no-sync-active-keylock",
+            backend: &backend_label,
+            speed: ACTIVE_SPEED,
+            sample_rate: SAMPLE_RATE,
+            channels: CHANNELS,
+            control: CaptureMetrics::from(&control),
+            candidate: CaptureMetrics::from(&candidate),
+            control_cochlea: &control_report,
+            candidate_cochlea: &candidate_report,
+            candidate_sine_fit: &candidate_sine_fit,
+            candidate_continuity: &candidate_continuity,
+            rate_control: &rate_control_timing,
+            rate_candidate: &rate_candidate_timing,
+            failures: &failures,
+        };
+        let written = write_audio_artifact(
+            &artifact_case,
+            SAMPLE_RATE,
+            CHANNELS,
+            &[
+                ("effect-free-control", &control.pcm),
+                ("active", &candidate.pcm),
+                ("rate-marker-control", &rate_control.pcm),
+                ("rate-marker-active", &rate_candidate.pcm),
+            ],
+            &manifest,
+        )
+        .expect("active no-SYNC audio artifact write");
+        assert!(
+            written.is_some(),
+            "KITHARA_AUDIO_ARTIFACT_DIR must be set for the artifact recorder"
+        );
+    }
+    assert!(
+        failures.is_empty(),
+        "active no-SYNC stretch failed for {backend}: {}\ncontrol={control_report:?}\ncandidate={candidate_report:?}",
         failures.join("; "),
     );
 }

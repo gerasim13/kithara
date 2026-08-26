@@ -74,6 +74,26 @@ pub fn continuity_failures(
     candidate: &CochleaReport,
     control: &CochleaReport,
 ) -> Vec<String> {
+    cochlea_failures(label, candidate, control, true)
+}
+
+/// Compare invariant Cochlea fields during active stretching; granular onset
+/// changes are excluded and must be guarded by a separate frame-level oracle.
+#[must_use]
+pub fn time_stretch_failures(
+    label: &str,
+    candidate: &CochleaReport,
+    control: &CochleaReport,
+) -> Vec<String> {
+    cochlea_failures(label, candidate, control, false)
+}
+
+fn cochlea_failures(
+    label: &str,
+    candidate: &CochleaReport,
+    control: &CochleaReport,
+    compare_onsets: bool,
+) -> Vec<String> {
     let mut failures = Vec::new();
     if candidate.silent_segments > control.silent_segments {
         failures.push(format!(
@@ -81,7 +101,7 @@ pub fn continuity_failures(
             candidate.silent_segments, control.silent_segments,
         ));
     }
-    if candidate.onset_count() != control.onset_count() {
+    if compare_onsets && candidate.onset_count() != control.onset_count() {
         failures.push(format!(
             "{label}: onset count changed: candidate={}, control={}, candidate_times_ms={:?}, control_times_ms={:?}",
             candidate.onset_count(),
