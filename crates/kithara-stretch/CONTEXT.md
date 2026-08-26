@@ -104,8 +104,9 @@ depend on `kithara-decode::PcmSpec`.
 
 ## Adding a backend
 
-1. Add `src/backends/<name>.rs` with a concrete adapter implementing `ElasticEngine`, re-exported
-  from `backends/mod.rs` under the same gate.
+1. Add `src/backends/<name>.rs` with a concrete adapter implementing `ElasticEngine`; expose it only
+  to the crate-owned factory through a `pub(crate)` re-export in `backends/mod.rs` under the same
+  gate.
 1. Add a feature `stretch-<name>` in `Cargo.toml` and to the `any(...)` guard of the
   `compile_error!` in `lib.rs` (the crate requires ≥1 backend).
 1. Gate the adapter module, the `StretchKind` variant, its `all()` entry, its `From`/`u8` arms, and
