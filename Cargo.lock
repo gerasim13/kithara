@@ -4699,6 +4699,7 @@ dependencies = [
  "kithara-app",
  "kithara-devtools",
  "kithara-encode",
+ "kithara-stretch",
  "kithara-test-utils",
  "memory-stats",
  "mmap-io",

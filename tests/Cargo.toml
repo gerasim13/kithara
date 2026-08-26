@@ -150,6 +150,7 @@ kithara-devtools = { workspace = true }
 # stress-seek tests decode through the symphonia path, and without fdk-aac
 # they are reported as LC-only, so add it explicitly.
 kithara-encode = { workspace = true, features = ["client-reqwest", "fdk-aac", "ffmpeg", "tls-rustls"] }
+kithara-stretch = { workspace = true, default-features = false, features = ["stretch-bungee"] }
 
 assert_no_alloc = { workspace = true }
 axum = { workspace = true }
@@ -210,6 +211,7 @@ kithara = { workspace = true, features = [
     "tokio-rt-multi-thread",
 ] }
 kithara-app = { workspace = true, default-features = false, features = ["analysis-waveform", "beat-nn", "lib-only"] }
+kithara-stretch = { workspace = true, default-features = false, features = ["stretch-signalsmith"] }
 
 # --- WASM-only dependencies ---
 [target.'cfg(target_arch = "wasm32")'.dependencies]
