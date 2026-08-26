@@ -623,6 +623,11 @@ impl ControlPainter for Summary {
         let size = self.metrics().summary_size;
         Size::new(length(size.w), length(size.h))
     }
+
+    /// Only the width: a headline fills the height of the panel it sits in.
+    fn measure(&self, text: &mut TextContext, data: &Self::Data) -> Size {
+        Size::new(self.intrinsic_width(text, data), 0.0)
+    }
 }
 
 impl ControlPainter for Tempo {

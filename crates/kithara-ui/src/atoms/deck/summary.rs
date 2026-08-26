@@ -60,6 +60,15 @@ impl Summary {
         }
     }
 
+    /// As wide as the wider of the two words it stacks, plus the inset it
+    /// draws them at. A summary shrinks to this, so measuring nothing would
+    /// lay it out into a box with no width at all.
+    pub(crate) fn intrinsic_width(&self, text: &mut TextContext, data: &Loaded) -> f32 {
+        let title = text.shape(&data.title, self.title_role, None).width();
+        let source = text.shape(&data.source, self.source_role, None).width();
+        title.max(source) + self.metrics.summary_padding_x * 2.0
+    }
+
     pub(crate) fn paint(
         &self,
         list: &mut DrawListBuilder,
@@ -122,7 +131,7 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::{DeckSummaryStyle, DrawListBuilder, Loaded, Rect, Summary, TextContext};
-    use crate::{builtin, draw::DrawList};
+    use crate::{atoms::painter::ControlPainter, builtin, draw::DrawList};
 
     const BOUNDS: Rect = Rect {
         h: 44.0,
@@ -130,6 +139,20 @@ mod tests {
         x: 2.0,
         y: 4.0,
     };
+
+    fn loaded(title: &str) -> Loaded {
+        Loaded {
+            source: "FILE".to_owned(),
+            title: title.to_owned(),
+        }
+    }
+
+    /// The width a summary settles for itself, asked the way a row asks it.
+    fn measured(title: &str) -> f32 {
+        let skin = builtin::skin();
+        let mut text = TextContext::from(skin.text_resources());
+        Summary::new(DeckSummaryStyle::Default, skin).intrinsic_width(&mut text, &loaded(title))
+    }
 
     fn drawn(style: DeckSummaryStyle) -> DrawList {
         let skin = builtin::skin();
@@ -155,6 +178,55 @@ mod tests {
             drawn(DeckSummaryStyle::Micro),
             drawn(DeckSummaryStyle::Default)
         );
+    }
+
+    /// A summary shrinks to its own width, so it has to name one. A painter
+    /// that measures nothing on the axis it shrinks along is laid out into a
+    /// box of no width, and the control is gone from the page.
+    #[kithara::test]
+    fn a_summary_measures_a_width_of_its_own() {
+        let width = measured("Midnight Circuit");
+
+        assert!(
+            width > 0.0,
+            "a summary that shrinks and measures nothing has no box to draw in: {width}"
+        );
+    }
+
+    /// And the width is the words, not a number the skin settled: two titles
+    /// of different lengths must not measure alike.
+    #[kithara::test]
+    fn a_longer_title_measures_wider() {
+        assert!(measured("Midnight Circuit Extended Mix") > measured("Ok"));
+    }
+
+    /// And the row asks the painter, not the atom: a width the atom knows and
+    /// the painter does not report is a width the layout never sees.
+    #[kithara::test]
+    fn a_summary_measures_through_its_painter() {
+        let skin = builtin::skin();
+        let mut text = TextContext::from(skin.text_resources());
+
+        let size = Summary::new(DeckSummaryStyle::Default, skin)
+            .measure(&mut text, &loaded("Midnight Circuit"));
+
+        assert!(
+            size.width > 0.0,
+            "the layout asks the painter for the width, and it answered nothing: {size:?}"
+        );
+    }
+
+    /// Height stays the row's to give: a headline fills the panel it stands
+    /// in, and a painter with no opinion on an axis reports zero there.
+    #[kithara::test]
+    fn a_summary_leaves_its_height_to_the_row() {
+        let skin = builtin::skin();
+        let mut text = TextContext::from(skin.text_resources());
+
+        let size = Summary::new(DeckSummaryStyle::Default, skin)
+            .measure(&mut text, &loaded("Midnight Circuit"));
+
+        assert_eq!(size.height, 0.0);
     }
 
     /// A title longer than its box is cut off rather than spilling over the

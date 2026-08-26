@@ -6,12 +6,12 @@ deck-a 0.000 0.000 1280.000 720.000
         deck-a/bar/menu/pop 0.000 0.000 40.000 44.000
       deck-a/column[0]/row[0]/play-cell 40.000 0.000 38.000 44.000
         deck-a/bar/play 40.000 0.000 38.000 44.000
-      deck-a/column[0]/row[0]/now-cell 78.000 0.000 0.000 44.000
-        deck-a/bar/summary 78.000 0.000 0.000 44.000
+      deck-a/column[0]/row[0]/now-cell 78.000 0.000 109.041 44.000
+        deck-a/bar/summary 78.000 0.000 109.041 44.000
       deck-a/column[0]/row[0]/drag-cell -
         deck-a/bar/drag -
-      deck-a/column[0]/row[0]/wave-cell 78.000 0.000 639.000 44.000
-        deck-a/bar/wave 78.000 0.000 639.000 44.000
+      deck-a/column[0]/row[0]/wave-cell 187.041 0.000 529.959 44.000
+        deck-a/bar/wave 187.041 0.000 529.959 44.000
       deck-a/column[0]/row[0]/volume-cell 717.000 0.000 99.000 44.000
         deck-a/bar/speaker 726.000 0.000 11.000 44.000
         deck-a/bar/vu 743.000 11.000 64.000 22.000
@@ -57,12 +57,12 @@ deck-a 0.000 0.000 960.000 600.000
         deck-a/bar/menu/pop 0.000 0.000 40.000 44.000
       deck-a/column[0]/row[0]/play-cell 40.000 0.000 38.000 44.000
         deck-a/bar/play 40.000 0.000 38.000 44.000
-      deck-a/column[0]/row[0]/now-cell 78.000 0.000 0.000 44.000
-        deck-a/bar/summary 78.000 0.000 0.000 44.000
+      deck-a/column[0]/row[0]/now-cell 78.000 0.000 109.041 44.000
+        deck-a/bar/summary 78.000 0.000 109.041 44.000
       deck-a/column[0]/row[0]/drag-cell -
         deck-a/bar/drag -
-      deck-a/column[0]/row[0]/wave-cell 78.000 0.000 399.000 44.000
-        deck-a/bar/wave 78.000 0.000 399.000 44.000
+      deck-a/column[0]/row[0]/wave-cell 187.041 0.000 289.959 44.000
+        deck-a/bar/wave 187.041 0.000 289.959 44.000
       deck-a/column[0]/row[0]/volume-cell 477.000 0.000 99.000 44.000
         deck-a/bar/speaker 486.000 0.000 11.000 44.000
         deck-a/bar/vu 503.000 11.000 64.000 22.000
