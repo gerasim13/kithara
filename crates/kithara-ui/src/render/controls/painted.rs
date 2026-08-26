@@ -30,7 +30,8 @@ use crate::{
     render::{
         Skin, UiEvent, activate, command,
         controls::{
-            Drag, Grip, IndexEvent, IndexPress, Indexing, Marked, Marks, Press, Span, snapped,
+            Drag, Grip, IndexEvent, IndexPress, Indexing, Marked, Marks, Press, Probe, Span,
+            snapped,
         },
         publish, scalar, span_event,
     },
@@ -70,16 +71,61 @@ pub(crate) enum Visual {
 /// digest of them, so a painter that starts reading one more thing cannot leave
 /// the key behind: whatever it reads, it reads through one of these, and
 /// equality is derived from all of them at once.
+///
+/// The painter and its data are a type parameter each so that the same fields
+/// serve as both the probe a frame asks with and the key a miss keeps: the two
+/// are `PaintKey<&Painter, &Data>` and `PaintKey<Painter, Data>`, and every way
+/// across is a struct literal, which the compiler will not let name fewer
+/// fields than there are.
 #[derive(PartialEq)]
-pub(crate) struct PaintKey<Painter>
-where
-    Painter: ControlPainter,
-{
+pub(crate) struct PaintKey<Painter, Data> {
     bounds: Rect,
-    data: Painter::Data,
+    data: Data,
     painter: Painter,
     transform: Transform,
     visual: Visual,
+}
+
+/// The key a painted control keeps between frames.
+pub(crate) type ControlKey<Painter> = PaintKey<Painter, <Painter as ControlPainter>::Data>;
+
+/// The same key made of borrows, which is what a frame asks with.
+type ControlProbe<'a, Painter> = PaintKey<&'a Painter, &'a <Painter as ControlPainter>::Data>;
+
+impl<Painter, Data> PaintKey<Painter, Data> {
+    /// This kept key seen as a probe, so that both sides of the comparison are
+    /// the same type and can derive their equality.
+    fn probe(&self) -> PaintKey<&Painter, &Data> {
+        PaintKey {
+            bounds: self.bounds,
+            data: &self.data,
+            painter: &self.painter,
+            transform: self.transform,
+            visual: self.visual,
+        }
+    }
+}
+
+impl<Painter, Data> Probe for PaintKey<&Painter, &Data>
+where
+    Painter: Clone + PartialEq,
+    Data: Clone + PartialEq,
+{
+    type Key = PaintKey<Painter, Data>;
+
+    fn holds(&self, key: &Self::Key) -> bool {
+        *self == key.probe()
+    }
+
+    fn keep(self) -> Self::Key {
+        PaintKey {
+            bounds: self.bounds,
+            data: self.data.clone(),
+            painter: self.painter.clone(),
+            transform: self.transform,
+            visual: self.visual,
+        }
+    }
 }
 
 /// What one painted canvas keeps between frames: the shaping context, and the
@@ -111,8 +157,11 @@ where
     /// Builds the picture only when the key it hangs on moved, and reports what
     /// the frame cost. A control nothing touched is not drawn again at all,
     /// which is the saving the retained host gets from its own invalidation.
-    pub(crate) fn mark(&self, key: Key, build: impl FnOnce() -> DrawList) -> Marked {
-        self.marks.mark(key, build)
+    pub(crate) fn mark<Asked>(&self, probe: Asked, build: impl FnOnce() -> DrawList) -> Marked
+    where
+        Asked: Probe<Key = Key>,
+    {
+        self.marks.mark(probe, build)
     }
 
     /// The shaping context this widget keeps between frames, made on first ask.
@@ -214,7 +263,11 @@ where
 
     /// The box the toolkit settles on: what the painter asks for, resolved
     /// against the room it is offered and the size it measures for itself.
-    fn node(&self, state: &PaintState<PaintKey<Painter>>, limits: &layout::Limits) -> layout::Node {
+    fn node(
+        &self,
+        state: &PaintState<ControlKey<Painter>>,
+        limits: &layout::Limits,
+    ) -> layout::Node {
         let (width, height) = self.length();
         let mut text = state.text.borrow_mut();
         let text = text.get_or_insert_with(|| self.text_resources.into());
@@ -235,13 +288,15 @@ where
         self.painter.index_at(&self.data, hit, count)
     }
 
-    /// The arguments this painter is about to draw from, kept whole so that the
-    /// next frame can ask whether any of them moved.
-    fn key(&self, bounds: Rect, visual: Visual) -> PaintKey<Painter> {
+    /// The arguments this painter is about to draw from, named whole so that
+    /// the next frame can ask whether any of them moved. Borrowed rather than
+    /// copied: the frame that holds must not pay for what it drew from just to
+    /// learn that it held.
+    fn key(&self, bounds: Rect, visual: Visual) -> ControlProbe<'_, Painter> {
         PaintKey {
             bounds,
-            data: self.data.clone(),
-            painter: self.painter.clone(),
+            data: &self.data,
+            painter: &self.painter,
             transform: self.transform,
             visual,
         }
@@ -249,7 +304,7 @@ where
 
     pub(crate) fn draw_list(
         &self,
-        state: &PaintState<PaintKey<Painter>>,
+        state: &PaintState<ControlKey<Painter>>,
         bounds: Rect,
         visual: VisualState,
     ) -> DrawList {
@@ -267,7 +322,7 @@ where
 
     pub(crate) fn indexed_draw_list(
         &self,
-        state: &PaintState<PaintKey<Painter>>,
+        state: &PaintState<ControlKey<Painter>>,
         bounds: Rect,
         visual: IndexedVisual,
     ) -> DrawList {
@@ -291,7 +346,7 @@ where
     #[cfg_attr(feature = "perf", hotpath::measure(label = "iced.control.paint"))]
     fn paint_into(
         &self,
-        state: &PaintState<PaintKey<Painter>>,
+        state: &PaintState<ControlKey<Painter>>,
         renderer: &mut Renderer,
         bounds: Rectangle,
         visual: VisualState,
@@ -310,7 +365,7 @@ where
     #[cfg_attr(feature = "perf", hotpath::measure(label = "iced.control.paint"))]
     fn paint_indexed_into(
         &self,
-        state: &PaintState<PaintKey<Painter>>,
+        state: &PaintState<ControlKey<Painter>>,
         renderer: &mut Renderer,
         bounds: Rectangle,
         visual: IndexedVisual,
@@ -328,7 +383,7 @@ where
 
     fn replay_into(
         &self,
-        state: &PaintState<PaintKey<Painter>>,
+        state: &PaintState<ControlKey<Painter>>,
         renderer: &mut Renderer,
         bounds: Rectangle,
     ) {
@@ -410,11 +465,11 @@ where
     }
 
     fn tag(&self) -> widget::tree::Tag {
-        widget::tree::Tag::of::<PaintState<PaintKey<Painter>>>()
+        widget::tree::Tag::of::<PaintState<ControlKey<Painter>>>()
     }
 
     fn state(&self) -> widget::tree::State {
-        widget::tree::State::new(PaintState::<PaintKey<Painter>>::default())
+        widget::tree::State::new(PaintState::<ControlKey<Painter>>::default())
     }
 
     fn layout(
@@ -424,7 +479,7 @@ where
         limits: &layout::Limits,
     ) -> layout::Node {
         self.node(
-            tree.state.downcast_ref::<PaintState<PaintKey<Painter>>>(),
+            tree.state.downcast_ref::<PaintState<ControlKey<Painter>>>(),
             limits,
         )
     }
@@ -441,7 +496,7 @@ where
     ) {
         let bounds = layout.bounds();
         self.paint_into(
-            tree.state.downcast_ref::<PaintState<PaintKey<Painter>>>(),
+            tree.state.downcast_ref::<PaintState<ControlKey<Painter>>>(),
             renderer,
             bounds,
             hovered(Painter::READS_POINTER, bounds, cursor),
@@ -502,7 +557,7 @@ where
 {
     crossing: Crossing,
     drag: ScalarState,
-    paint: PaintState<PaintKey<Painter>>,
+    paint: PaintState<ControlKey<Painter>>,
     press: Press,
     index: IndexPress,
     span: SpanState,
@@ -2487,7 +2542,7 @@ mod cached {
     /// One frame of the immediate-mode host: the element is built afresh, and
     /// the canvas state is the one thing that survived the last frame.
     fn frame<Painter>(
-        state: &PaintState<PaintKey<Painter>>,
+        state: &PaintState<ControlKey<Painter>>,
         painter: Painter,
         data: Painter::Data,
         bounds: Rect,

@@ -12,7 +12,10 @@ use crate::{
     atoms::text::Text as TextAtom,
     draw::{DrawList, DrawListBuilder, Rect, Rgba},
     module::TextStyle,
-    render::{ReadValue, Skin, UiEvent, Widget, controls::PaintState},
+    render::{
+        ReadValue, Skin, UiEvent, Widget,
+        controls::{PaintState, Probe},
+    },
     skin::{ColorRole, TextRoleSkin},
 };
 
@@ -73,30 +76,69 @@ struct Painted<'skin> {
 /// The colour rather than the skin it came out of, because a paragraph reads
 /// exactly one value from the skin and keying on the whole of it would compare
 /// a page's worth of resolved style to answer one question.
+///
+/// The words are a type parameter so that the probe a frame asks with borrows
+/// them and only a miss copies them: a paragraph whose words did not move must
+/// not copy them to find out that they did not.
 #[derive(PartialEq)]
-struct TextKey {
+struct TextKey<Content> {
     bounds: Rect,
     colour: Rgba,
-    content: String,
+    content: Content,
     padding_x: f32,
     role: TextRoleSkin,
+}
+
+/// The key a paragraph keeps between frames.
+type Words = TextKey<String>;
+
+impl Words {
+    /// This kept key seen as a probe, so that both sides of the comparison are
+    /// the same type and can derive their equality.
+    fn probe(&self) -> TextKey<&str> {
+        TextKey {
+            bounds: self.bounds,
+            colour: self.colour,
+            content: &self.content,
+            padding_x: self.padding_x,
+            role: self.role,
+        }
+    }
+}
+
+impl Probe for TextKey<&str> {
+    type Key = Words;
+
+    fn holds(&self, key: &Self::Key) -> bool {
+        *self == key.probe()
+    }
+
+    fn keep(self) -> Self::Key {
+        TextKey {
+            bounds: self.bounds,
+            colour: self.colour,
+            content: self.content.to_owned(),
+            padding_x: self.padding_x,
+            role: self.role,
+        }
+    }
 }
 
 impl Painted<'_> {
     /// The words this paragraph is about to draw from, kept whole so that the
     /// next frame can ask whether any of them moved.
-    fn key(&self, bounds: Rect) -> TextKey {
+    fn key(&self, bounds: Rect) -> TextKey<&str> {
         TextKey {
             bounds,
             colour: self.skin.rgba(self.role.color),
-            content: self.content.clone(),
+            content: &self.content,
             padding_x: self.padding_x,
             role: self.role,
         }
     }
 
     /// What this paragraph draws in the box it was given.
-    fn list(&self, state: &PaintState<TextKey>, bounds: Rect) -> DrawList {
+    fn list(&self, state: &PaintState<Words>, bounds: Rect) -> DrawList {
         state.shaped(self.skin.text_resources(), |text| {
             let mut builder = DrawListBuilder::default();
             TextAtom::new(&self.content, self.role, self.padding_x, self.skin).paint(
@@ -115,11 +157,11 @@ impl IcedWidget<UiEvent, Theme, Renderer> for Painted<'_> {
     }
 
     fn tag(&self) -> widget::tree::Tag {
-        widget::tree::Tag::of::<PaintState<TextKey>>()
+        widget::tree::Tag::of::<PaintState<Words>>()
     }
 
     fn state(&self) -> widget::tree::State {
-        widget::tree::State::new(PaintState::<TextKey>::default())
+        widget::tree::State::new(PaintState::<Words>::default())
     }
 
     fn layout(
@@ -128,7 +170,7 @@ impl IcedWidget<UiEvent, Theme, Renderer> for Painted<'_> {
         _renderer: &Renderer,
         limits: &layout::Limits,
     ) -> layout::Node {
-        let state = tree.state.downcast_mut::<PaintState<TextKey>>();
+        let state = tree.state.downcast_mut::<PaintState<Words>>();
         let (width, height) = state.shaped(self.skin.text_resources(), |text| {
             TextAtom::new(&self.content, self.role, self.padding_x, self.skin).measure(text)
         });
@@ -156,7 +198,7 @@ impl IcedWidget<UiEvent, Theme, Renderer> for Painted<'_> {
             return;
         }
 
-        let state = tree.state.downcast_ref::<PaintState<TextKey>>();
+        let state = tree.state.downcast_ref::<PaintState<Words>>();
         let local = Rect {
             h: bounds.height,
             w: bounds.width,
@@ -196,7 +238,7 @@ mod cached {
 
     /// One frame of the immediate-mode host: the paragraph is built afresh, and
     /// the canvas state is the one thing that survived the last frame.
-    fn frame(state: &PaintState<TextKey>, content: &str, skin: &Skin) -> Marked {
+    fn frame(state: &PaintState<Words>, content: &str, skin: &Skin) -> Marked {
         let painted = Painted {
             content: content.to_owned(),
             padding_x: 0.0,

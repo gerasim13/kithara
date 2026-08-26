@@ -6,7 +6,7 @@ use iced::{
     widget::canvas::{self, Frame, Geometry},
 };
 
-use super::super::{Marked, Marks, Skin, UiEvent, controls::RetainedCanvasState};
+use super::super::{Marked, Marks, Probe, Skin, UiEvent, controls::RetainedCanvasState};
 use crate::{
     atoms::table::{
         ColumnLayout, TableRowData, column_resizable,
@@ -146,7 +146,7 @@ pub(super) struct TableState {
     /// tessellated from them. A table is the one canvas this host drew from
     /// scratch every frame; a painted control has held both since it learned
     /// not to.
-    marks: Marks<TableKey>,
+    marks: Marks<TableMarks>,
     pub(super) drag_index: Option<usize>,
     pub(super) pressed_index: Option<usize>,
     pub(super) row_drag: ItemDrag,
@@ -156,11 +156,47 @@ pub(super) struct TableState {
 
 /// The state the table's marks were built from, kept whole so that the next
 /// frame can ask whether any of it moved.
+///
+/// What the table drew and the face it drew from are a type parameter each, so
+/// that the probe a frame asks with borrows both and only a miss copies them:
+/// the rows are a vector, and a table nothing touched must not copy it to find
+/// out that nothing did.
 #[derive(PartialEq)]
-struct TableKey {
+struct TableKey<Drawing, Face> {
     bounds: Rect,
-    drawn: Drawn,
-    face: Rc<TableFace>,
+    drawn: Drawing,
+    face: Face,
+}
+
+/// The key a table keeps between frames.
+type TableMarks = TableKey<Drawn, Rc<TableFace>>;
+
+impl TableMarks {
+    /// This kept key seen as a probe, so that both sides of the comparison are
+    /// the same type and can derive their equality.
+    fn probe(&self) -> TableKey<&Drawn, &Rc<TableFace>> {
+        TableKey {
+            bounds: self.bounds,
+            drawn: &self.drawn,
+            face: &self.face,
+        }
+    }
+}
+
+impl Probe for TableKey<&Drawn, &Rc<TableFace>> {
+    type Key = TableMarks;
+
+    fn holds(&self, key: &Self::Key) -> bool {
+        *self == key.probe()
+    }
+
+    fn keep(self) -> Self::Key {
+        TableKey {
+            bounds: self.bounds,
+            drawn: self.drawn.clone(),
+            face: Rc::clone(self.face),
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -186,8 +222,8 @@ impl TableState {
         self.marks.mark(
             TableKey {
                 bounds,
-                drawn: drawn.clone(),
-                face: Rc::clone(face),
+                drawn,
+                face,
             },
             build,
         )
