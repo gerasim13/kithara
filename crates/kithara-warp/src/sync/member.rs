@@ -6,11 +6,14 @@ use super::{
 use crate::{BeatGrid, BeatGridId, BeatGridSnapshot, BeatGridStamp, MapPoint};
 
 /// One exclusively owned live grid or statically typed nested synchronization group.
+#[derive(fieldwork::Fieldwork)]
+#[fieldwork(opt_in, get)]
 pub enum SyncMember<G: SyncGroup> {
     /// A readable live grid.
     Grid {
         /// Alignment from this member to its direct parent, once both grids
         /// expose usable geometry.
+        #[field(get, copy)]
         alignment: Option<BeatAlignment>,
         /// Live grid handle owned by the parent group.
         grid: Box<dyn BeatGrid>,
@@ -47,14 +50,6 @@ impl<G: SyncGroup> SyncMember<G> {
     #[must_use]
     pub fn id(&self) -> BeatGridId {
         self.into()
-    }
-
-    /// Returns the direct alignment from this member to its parent.
-    #[must_use]
-    pub const fn alignment(&self) -> Option<BeatAlignment> {
-        match self {
-            Self::Grid { alignment, .. } | Self::Group { alignment, .. } => *alignment,
-        }
     }
 
     /// Returns whether this member is an ordinary grid or a nested group.

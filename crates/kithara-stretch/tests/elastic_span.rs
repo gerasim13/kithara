@@ -28,7 +28,11 @@ fn capabilities() -> kithara_stretch::ElasticCapabilities {
 }
 
 fn span_config() -> ElasticSpanConfig {
-    ElasticSpanConfig::try_from((CONTINUITY_EPSILON, 1.0, 1.0))
+    ElasticSpanConfig::builder()
+        .continuity_tolerance(CONTINUITY_EPSILON)
+        .max_phase_error(1.0)
+        .max_correction_per_block(1.0)
+        .build()
         .expect("invariant: static span policy")
 }
 
@@ -49,8 +53,12 @@ fn source_cursor(source: f64) -> ElasticCursor {
 
 #[kithara::test]
 fn configured_phase_limit_rejects_a_larger_cursor_error() {
-    let config =
-        ElasticSpanConfig::try_from((1.0e-6, 0.25, 1.0)).expect("finite positive span policy");
+    let config = ElasticSpanConfig::builder()
+        .continuity_tolerance(1.0e-6)
+        .max_phase_error(0.25)
+        .max_correction_per_block(1.0)
+        .build()
+        .expect("finite positive span policy");
     let error = ElasticSpanPlan::new(
         [span(0.5, 480.5, MAX_OUTPUT_FRAMES)],
         Some(source_cursor(0.0)),

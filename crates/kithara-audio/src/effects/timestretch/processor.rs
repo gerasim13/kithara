@@ -17,29 +17,15 @@ use crate::{
     traits::AudioEffect,
 };
 
+#[derive(Default)]
 struct PreparedTarget {
     engine: Option<Box<dyn ElasticEngine>>,
     pending_source: Option<PcmBuf>,
     scratch: Option<PcmBuf>,
 }
 
-/// Pre-resampler time-stretch slot. Reads live key-lock and speed from the
-/// shared [`StretchControls`] each chunk; backend changes are prepared by the
-/// scheduler shell between checked ticks:
-///
-/// - key-lock **on**: renders exact output spans at `1 / speed` and holds
-///   pitch at `1.0`;
-/// - key-lock **off**: renders the same spans and sets pitch to `speed` for
-///   vinyl-style playback.
-///
-/// At unity speed with no region plan the slot is a byte-identical
-/// passthrough, so default playback keeps the old no-DSP behavior.
-///
-/// An optional [`RegionPlan`] (also on the controls) maps
-/// `frame_offset` to per-region ratio corrections: chunks split at segment
-/// boundaries and the effective stretch is `1/speed × ratio_correction`.
-/// Consecutive exact requests preserve backend history across those boundaries.
-///
+/// Source-timeline exact-span time-stretch driven by shared live controls.
+/// Unity speed without a region plan is a byte-identical passthrough.
 pub struct TimeStretchProcessor {
     controls: Arc<StretchControls>,
     engine: Option<Box<dyn ElasticEngine>>,
@@ -155,11 +141,7 @@ impl TimeStretchProcessor {
             },
             Err(error) => {
                 warn!(%kind, %error, "time-stretch engine preparation failed");
-                PreparedTarget {
-                    engine: None,
-                    pending_source: None,
-                    scratch: None,
-                }
+                PreparedTarget::default()
             }
         }
     }

@@ -6,26 +6,29 @@ use super::{ElasticError, ElasticRateEnvelope};
 
 /// Numeric continuity policy for exact-span planning.
 #[derive(Clone, Copy, Debug, PartialEq, fieldwork::Fieldwork)]
-#[fieldwork(get)]
+#[fieldwork(get, copy)]
 #[non_exhaustive]
 pub struct ElasticSpanConfig {
     /// Source-frame tolerance used when comparing adjacent continuous spans.
-    #[field(get, copy)]
     continuity_tolerance: f64,
     /// Maximum source-frame correction applied over one render block.
-    #[field(get, copy)]
     max_correction_per_block: f64,
     /// Maximum source-frame phase error accepted at a block boundary.
-    #[field(get, copy)]
     max_phase_error: f64,
 }
 
-impl TryFrom<(f64, f64, f64)> for ElasticSpanConfig {
-    type Error = ElasticError;
-
-    fn try_from(
-        (continuity_tolerance, max_phase_error, max_correction_per_block): (f64, f64, f64),
-    ) -> Result<Self, Self::Error> {
+#[bon]
+impl ElasticSpanConfig {
+    #[builder(
+        builder_type(vis = "pub"),
+        start_fn(name = builder, vis = "pub"),
+        finish_fn(vis = "pub")
+    )]
+    fn new(
+        continuity_tolerance: f64,
+        max_phase_error: f64,
+        max_correction_per_block: f64,
+    ) -> Result<Self, ElasticError> {
         if let Some((field, value)) = [
             ("continuity_tolerance", continuity_tolerance),
             ("max_phase_error", max_phase_error),
@@ -50,6 +53,7 @@ impl TryFrom<(f64, f64, f64)> for ElasticSpanConfig {
 #[non_exhaustive]
 pub struct ElasticConfig {
     /// Shared PCM pool used by engines that need planar scratch.
+    #[field(get)]
     pool: PcmPool,
     #[field(get(copy), vis = "pub(crate)")]
     shape: ElasticShape,
@@ -106,27 +110,22 @@ impl ElasticConfig {
         to self.shape {
             /// Prepared interleaved channel count.
             #[must_use]
-            pub const fn channels(&self) -> usize;
+            pub fn channels(&self) -> usize;
             /// Largest accepted output block in frames.
             #[must_use]
-            pub const fn max_output_frames(&self) -> usize;
+            pub fn max_output_frames(&self) -> usize;
             /// Largest accepted source block in frames.
             #[must_use]
-            pub const fn max_source_frames(&self) -> usize;
+            pub fn max_source_frames(&self) -> usize;
             /// Prepared source sample rate in Hz.
             #[must_use]
-            pub const fn sample_rate(&self) -> u32;
+            pub fn sample_rate(&self) -> u32;
         }
-    }
-
-    /// Shared PCM pool used by engines that need planar scratch.
-    #[must_use]
-    pub const fn pool(&self) -> &PcmPool {
-        &self.pool
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, fieldwork::Fieldwork)]
+#[fieldwork(get, copy, vis = "pub(crate)")]
 pub(crate) struct ElasticShape {
     channels: usize,
     max_output_frames: usize,
@@ -149,22 +148,6 @@ impl ElasticShape {
                     self.max_source_frames,
                 ))?;
         ElasticRateEnvelope::try_from((1.0 / max_output_frames)..=max_source_frames)
-    }
-
-    pub(crate) const fn channels(self) -> usize {
-        self.channels
-    }
-
-    pub(crate) const fn max_output_frames(self) -> usize {
-        self.max_output_frames
-    }
-
-    pub(crate) const fn max_source_frames(self) -> usize {
-        self.max_source_frames
-    }
-
-    pub(crate) const fn sample_rate(self) -> u32 {
-        self.sample_rate
     }
 }
 
@@ -190,13 +173,18 @@ mod tests {
 
     #[kithara::test]
     fn span_config_requires_finite_positive_values() {
-        for values in [
+        for (continuity_tolerance, max_phase_error, max_correction_per_block) in [
             (0.0, 1.0, 1.0),
             (1.0e-6, f64::NAN, 1.0),
             (1.0e-6, 1.0, f64::INFINITY),
         ] {
+            let result = ElasticSpanConfig::builder()
+                .continuity_tolerance(continuity_tolerance)
+                .max_phase_error(max_phase_error)
+                .max_correction_per_block(max_correction_per_block)
+                .build();
             assert!(matches!(
-                ElasticSpanConfig::try_from(values),
+                result,
                 Err(ElasticError::InvalidSpanConfig { .. })
             ));
         }
@@ -204,7 +192,11 @@ mod tests {
 
     #[kithara::test]
     fn span_config_preserves_valid_policy_values() {
-        let config = ElasticSpanConfig::try_from((1.0e-5, 0.5, 0.25))
+        let config = ElasticSpanConfig::builder()
+            .continuity_tolerance(1.0e-5)
+            .max_phase_error(0.5)
+            .max_correction_per_block(0.25)
+            .build()
             .expect("invariant: finite positive span policy");
 
         assert_eq!(config.continuity_tolerance(), 1.0e-5);

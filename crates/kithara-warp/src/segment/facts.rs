@@ -51,12 +51,12 @@ pub struct BeatsPerMinuteError;
     fieldwork::Fieldwork,
 )]
 #[display("{beats_per_bar}@{downbeat}")]
-#[fieldwork(opt_in, get)]
+#[fieldwork(opt_in, get, with)]
 #[non_exhaustive]
 pub struct Meter {
     beats_per_bar: NonZeroU16,
     /// Returns the beat ordinal defining bar phase for this meter region.
-    #[field(get, copy)]
+    #[field(get, copy, with)]
     downbeat: BeatOrdinal,
 }
 
@@ -67,22 +67,10 @@ impl Meter {
     ///
     /// Returns [`MeterError`] when `beats_per_bar` is zero.
     pub const fn new(beats_per_bar: u16) -> Result<Self, MeterError> {
-        Self::with_downbeat(beats_per_bar, BeatOrdinal::new(0))
-    }
-
-    /// Creates a meter anchored to an explicit canonical downbeat.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`MeterError`] when `beats_per_bar` is zero.
-    pub const fn with_downbeat(
-        beats_per_bar: u16,
-        downbeat: BeatOrdinal,
-    ) -> Result<Self, MeterError> {
         match NonZeroU16::new(beats_per_bar) {
             Some(beats_per_bar) => Ok(Self {
                 beats_per_bar,
-                downbeat,
+                downbeat: BeatOrdinal::new(0),
             }),
             None => Err(MeterError),
         }

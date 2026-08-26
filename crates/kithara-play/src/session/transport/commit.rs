@@ -4,9 +4,11 @@ use kithara_warp::{BeatGridId, BeatGridRevision, BeatGridStamp, SessionEpoch, Se
 
 use crate::api::{SessionBeat, SessionTransportSnapshot, Tempo, TransportRevision};
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, fieldwork::Fieldwork)]
+#[fieldwork(opt_in, get)]
 pub(crate) struct SessionGridGeneration {
     id: BeatGridId,
+    #[field(get, copy, vis = "pub(crate)")]
     epoch: SessionEpoch,
     revision: Option<BeatGridRevision>,
 }
@@ -53,10 +55,6 @@ impl SessionGridGeneration {
         self.revision
             .map(|revision| BeatGridStamp::new(self.id, revision))
             .ok_or(TransportProcessError::MissingSessionGridRevision)
-    }
-
-    pub(crate) const fn epoch(self) -> SessionEpoch {
-        self.epoch
     }
 
     pub(crate) fn promote(self, observed: Self) -> Result<Self, TransportProcessError> {

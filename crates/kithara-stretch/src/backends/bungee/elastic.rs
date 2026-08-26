@@ -18,8 +18,11 @@ fn stream(
     Stream::new(sample_rate, channels, max_input_frames).map_err(ElasticError::EnginePreparation)
 }
 
+#[derive(fieldwork::Fieldwork)]
+#[fieldwork(opt_in, get, get_mut)]
 struct PooledPlanar {
     pool: PcmPool,
+    #[field(get, get_mut)]
     channels: Vec<Vec<f32>>,
 }
 
@@ -55,20 +58,8 @@ impl PooledPlanar {
         channels: NonZeroUsize,
     ) -> Result<(), BudgetExhausted> {
         self.ensure_len(frames)?;
-        deinterleave_variable(input, channels, &mut self.channels, 0..frames);
+        deinterleave_variable(input, channels, self.channels_mut(), 0..frames);
         Ok(())
-    }
-}
-
-impl AsRef<[Vec<f32>]> for PooledPlanar {
-    fn as_ref(&self) -> &[Vec<f32>] {
-        &self.channels
-    }
-}
-
-impl AsMut<[Vec<f32>]> for PooledPlanar {
-    fn as_mut(&mut self) -> &mut [Vec<f32>] {
-        &mut self.channels
     }
 }
 
@@ -127,8 +118,8 @@ impl BungeeElastic {
             .ok_or(ElasticError::SampleCountOverflow)?;
         for _ in 0..Self::LATENCY_PROBE_BLOCKS {
             probe.process(
-                Some(source.as_ref()),
-                output.as_mut(),
+                Some(source.channels()),
+                output.channels_mut(),
                 Self::LATENCY_PROBE_FRAMES,
                 frames,
                 1.0,
@@ -196,8 +187,8 @@ impl ElasticEngine for BungeeElastic {
             .ensure_len(output_frames)
             .map_err(|_| ElasticError::PcmPoolBudgetExhausted)?;
         let rendered = self.stream.process(
-            Some(self.source.as_ref()),
-            self.output.as_mut(),
+            Some(self.source.channels()),
+            self.output.channels_mut(),
             request.source_frames(),
             requested,
             self.pitch,
@@ -208,7 +199,7 @@ impl ElasticEngine for BungeeElastic {
                 expected: output_frames,
             });
         }
-        interleave_variable(self.output.as_ref(), 0..output_frames, output, channels);
+        interleave_variable(self.output.channels(), 0..output_frames, output, channels);
         Ok(())
     }
 
