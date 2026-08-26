@@ -12,7 +12,8 @@ use std::f32::consts::TAU;
 use kithara_bufpool::ByteBudget;
 use kithara_bufpool::PcmPool;
 use kithara_stretch::{
-    ElasticCapabilities, ElasticEngine, ElasticError, ElasticRequest, ElasticSpanConfig,
+    ElasticCapabilities, ElasticConfig, ElasticEngine, ElasticError, ElasticRequest,
+    ElasticSpanConfig, StretchKind, build_engine,
 };
 use kithara_test_utils::kithara;
 use num_traits::ToPrimitive;
@@ -31,6 +32,23 @@ fn prepared<E: ElasticEngine>(max_source_frames: usize, max_output_frames: usize
         .build()
         .expect("the test configuration is valid");
     E::prepare(config).expect("the engine prepares for a valid shape")
+}
+
+fn prepared_backend(
+    backend: StretchKind,
+    max_source_frames: usize,
+    max_output_frames: usize,
+) -> Box<dyn ElasticEngine> {
+    let config = ElasticConfig::builder()
+        .backend(backend)
+        .pool(PcmPool::default())
+        .sample_rate(SAMPLE_RATE)
+        .channels(CHANNELS)
+        .max_source_frames(max_source_frames)
+        .max_output_frames(max_output_frames)
+        .build()
+        .expect("the test configuration is valid");
+    build_engine(config).expect("the selected engine prepares for a valid shape")
 }
 
 fn interleaved_signal(frames: usize) -> Vec<f32> {
@@ -116,13 +134,18 @@ fn edge_requests(capabilities: ElasticCapabilities) -> [ElasticRequest; 3] {
 }
 
 macro_rules! elastic_engine_conformance {
-    ($module:ident, $engine:ty) => {
+    ($module:ident) => {
         mod $module {
             use super::*;
 
             #[kithara::test]
-            fn renders_the_requested_output_frame_count() {
-                let mut engine: $engine = prepared(8192, 8192);
+            #[cfg_attr(
+                feature = "stretch-signalsmith",
+                case::signalsmith(StretchKind::Signalsmith)
+            )]
+            #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
+            fn renders_the_requested_output_frame_count(#[case] backend: StretchKind) {
+                let mut engine = prepared_backend(backend, 8192, 8192);
                 let request = ElasticRequest::new(4800, 4000).expect("the request is non-empty");
                 let source = interleaved_signal(request.source_frames());
                 let mut output = vec![f32::NAN; request.output_frames() * CHANNELS];
@@ -136,8 +159,13 @@ macro_rules! elastic_engine_conformance {
             }
 
             #[kithara::test]
-            fn renders_exact_spans_at_both_declared_rate_edges() {
-                let mut engine: $engine = prepared(8192, 4096);
+            #[cfg_attr(
+                feature = "stretch-signalsmith",
+                case::signalsmith(StretchKind::Signalsmith)
+            )]
+            #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
+            fn renders_exact_spans_at_both_declared_rate_edges(#[case] backend: StretchKind) {
+                let mut engine = prepared_backend(backend, 8192, 4096);
                 let capabilities = engine.capabilities();
 
                 for request in edge_requests(capabilities) {
@@ -154,12 +182,17 @@ macro_rules! elastic_engine_conformance {
             }
 
             #[kithara::test]
-            fn output_is_independent_of_request_partitioning() {
+            #[cfg_attr(
+                feature = "stretch-signalsmith",
+                case::signalsmith(StretchKind::Signalsmith)
+            )]
+            #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
+            fn output_is_independent_of_request_partitioning(#[case] backend: StretchKind) {
                 const FRAMES: usize = 16_384;
                 const PARTITION_FRAMES: usize = 512;
 
-                let mut whole: $engine = prepared(FRAMES, FRAMES);
-                let mut partitioned: $engine = prepared(FRAMES, FRAMES);
+                let mut whole = prepared_backend(backend, FRAMES, FRAMES);
+                let mut partitioned = prepared_backend(backend, FRAMES, FRAMES);
                 let source = impulse_markers(FRAMES, 0);
                 let mut whole_output = vec![0.0; FRAMES * CHANNELS];
                 whole
@@ -193,8 +226,13 @@ macro_rules! elastic_engine_conformance {
             }
 
             #[kithara::test]
-            fn keeps_capabilities_stable_through_rate_changes() {
-                let mut engine: $engine = prepared(8192, 8192);
+            #[cfg_attr(
+                feature = "stretch-signalsmith",
+                case::signalsmith(StretchKind::Signalsmith)
+            )]
+            #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
+            fn keeps_capabilities_stable_through_rate_changes(#[case] backend: StretchKind) {
+                let mut engine = prepared_backend(backend, 8192, 8192);
                 let capabilities = engine.capabilities();
 
                 for request in [
@@ -215,9 +253,14 @@ macro_rules! elastic_engine_conformance {
             }
 
             #[kithara::test]
-            fn pitch_control_is_independent_of_exact_frame_advance() {
-                let mut reference: $engine = prepared(8192, 8192);
-                let mut pitched: $engine = prepared(8192, 8192);
+            #[cfg_attr(
+                feature = "stretch-signalsmith",
+                case::signalsmith(StretchKind::Signalsmith)
+            )]
+            #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
+            fn pitch_control_is_independent_of_exact_frame_advance(#[case] backend: StretchKind) {
+                let mut reference = prepared_backend(backend, 8192, 8192);
+                let mut pitched = prepared_backend(backend, 8192, 8192);
                 let request = ElasticRequest::new(4096, 4096).expect("unity request");
                 let mut changed = false;
 
@@ -244,8 +287,13 @@ macro_rules! elastic_engine_conformance {
             }
 
             #[kithara::test]
-            fn rejects_invalid_pitch_scales() {
-                let mut engine: $engine = prepared(8192, 8192);
+            #[cfg_attr(
+                feature = "stretch-signalsmith",
+                case::signalsmith(StretchKind::Signalsmith)
+            )]
+            #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
+            fn rejects_invalid_pitch_scales(#[case] backend: StretchKind) {
+                let mut engine = prepared_backend(backend, 8192, 8192);
 
                 for scale in [0.0, -1.0, f64::NAN, f64::INFINITY] {
                     assert!(matches!(
@@ -256,10 +304,15 @@ macro_rules! elastic_engine_conformance {
             }
 
             #[kithara::test]
-            fn terminal_flush_is_idempotent() {
+            #[cfg_attr(
+                feature = "stretch-signalsmith",
+                case::signalsmith(StretchKind::Signalsmith)
+            )]
+            #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
+            fn terminal_flush_is_idempotent(#[case] backend: StretchKind) {
                 const FRAMES: usize = 8192;
 
-                let mut engine: $engine = prepared(FRAMES, FRAMES);
+                let mut engine = prepared_backend(backend, FRAMES, FRAMES);
                 let request = ElasticRequest::new(FRAMES, FRAMES).expect("unity request");
                 let source = interleaved_signal(FRAMES);
                 let mut output = vec![0.0; FRAMES * CHANNELS];
@@ -280,8 +333,13 @@ macro_rules! elastic_engine_conformance {
             }
 
             #[kithara::test]
-            fn fresh_engine_has_no_terminal_tail() {
-                let mut engine: $engine = prepared(8192, 8192);
+            #[cfg_attr(
+                feature = "stretch-signalsmith",
+                case::signalsmith(StretchKind::Signalsmith)
+            )]
+            #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
+            fn fresh_engine_has_no_terminal_tail(#[case] backend: StretchKind) {
+                let mut engine = prepared_backend(backend, 8192, 8192);
                 let terminal_samples =
                     engine.capabilities().latency().output_frames() * CHANNELS;
                 let mut terminal = vec![0.0; terminal_samples];
@@ -292,10 +350,15 @@ macro_rules! elastic_engine_conformance {
             }
 
             #[kithara::test]
-            fn reset_engine_has_no_terminal_tail() {
+            #[cfg_attr(
+                feature = "stretch-signalsmith",
+                case::signalsmith(StretchKind::Signalsmith)
+            )]
+            #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
+            fn reset_engine_has_no_terminal_tail(#[case] backend: StretchKind) {
                 const FRAMES: usize = 8192;
 
-                let mut engine: $engine = prepared(FRAMES, FRAMES);
+                let mut engine = prepared_backend(backend, FRAMES, FRAMES);
                 let request = ElasticRequest::new(FRAMES, FRAMES).expect("unity request");
                 let source = interleaved_signal(FRAMES);
                 let mut output = vec![0.0; FRAMES * CHANNELS];
@@ -313,11 +376,16 @@ macro_rules! elastic_engine_conformance {
             }
 
             #[kithara::test]
-            fn reset_clears_stream_history_without_changing_capabilities() {
+            #[cfg_attr(
+                feature = "stretch-signalsmith",
+                case::signalsmith(StretchKind::Signalsmith)
+            )]
+            #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
+            fn reset_clears_stream_history_without_changing_capabilities(#[case] backend: StretchKind) {
                 const LONG_FRAMES: usize = 16_384;
                 const SHORT_FRAMES: usize = 4096;
 
-                let mut engine: $engine = prepared(LONG_FRAMES, LONG_FRAMES);
+                let mut engine = prepared_backend(backend, LONG_FRAMES, LONG_FRAMES);
                 let capabilities = engine.capabilities();
                 let source = interleaved_signal(LONG_FRAMES);
                 let mut output = vec![0.0; LONG_FRAMES * CHANNELS];
@@ -350,11 +418,17 @@ macro_rules! elastic_engine_conformance {
             }
 
             #[kithara::test]
-            fn preserves_tone_pitch_when_source_advance_changes() {
+            #[cfg_attr(
+                feature = "stretch-signalsmith",
+                case::signalsmith(StretchKind::Signalsmith)
+            )]
+            #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
+            fn preserves_tone_pitch_when_source_advance_changes(#[case] backend: StretchKind) {
                 const SOURCE_FRAMES: usize = 19_200;
                 const OUTPUT_FRAMES: usize = 16_000;
 
-                let config = kithara_stretch::ElasticConfig::builder()
+                let config = ElasticConfig::builder()
+                    .backend(backend)
                     .pool(PcmPool::default())
                     .sample_rate(SAMPLE_RATE)
                     .channels(1)
@@ -362,8 +436,7 @@ macro_rules! elastic_engine_conformance {
                     .max_output_frames(OUTPUT_FRAMES)
                     .build()
                     .expect("the test configuration is valid");
-                let mut engine =
-                    <$engine as ElasticEngine>::prepare(config).expect("the engine prepares");
+                let mut engine = build_engine(config).expect("the selected engine prepares");
                 let request =
                     ElasticRequest::new(SOURCE_FRAMES, OUTPUT_FRAMES).expect("non-empty request");
                 let phase_step = TAU * 440.0 / 48_000.0;
@@ -401,8 +474,13 @@ macro_rules! elastic_engine_conformance {
             }
 
             #[kithara::test]
-            fn rate_envelope_is_the_complete_prepared_non_empty_domain() {
-                let engine: $engine = prepared(8192, 4096);
+            #[cfg_attr(
+                feature = "stretch-signalsmith",
+                case::signalsmith(StretchKind::Signalsmith)
+            )]
+            #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
+            fn rate_envelope_is_the_complete_prepared_non_empty_domain(#[case] backend: StretchKind) {
+                let engine = prepared_backend(backend, 8192, 4096);
                 let capabilities = engine.capabilities();
                 let envelope = capabilities.rate_envelope();
                 let max_output_frames = capabilities
@@ -431,8 +509,13 @@ macro_rules! elastic_engine_conformance {
             }
 
             #[kithara::test]
-            fn rejects_buffers_that_do_not_match_the_request() {
-                let mut engine: $engine = prepared(8192, 8192);
+            #[cfg_attr(
+                feature = "stretch-signalsmith",
+                case::signalsmith(StretchKind::Signalsmith)
+            )]
+            #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
+            fn rejects_buffers_that_do_not_match_the_request(#[case] backend: StretchKind) {
+                let mut engine = prepared_backend(backend, 8192, 8192);
                 let request = ElasticRequest::new(4800, 4000).expect("non-empty request");
                 let source = interleaved_signal(request.source_frames());
                 let mut output = vec![0.0; request.output_frames() * CHANNELS];
@@ -456,11 +539,16 @@ macro_rules! elastic_engine_conformance {
             }
 
             #[kithara::test]
-            fn rejects_spans_beyond_the_prepared_block_limits() {
+            #[cfg_attr(
+                feature = "stretch-signalsmith",
+                case::signalsmith(StretchKind::Signalsmith)
+            )]
+            #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
+            fn rejects_spans_beyond_the_prepared_block_limits(#[case] backend: StretchKind) {
                 const MAX_SOURCE_FRAMES: usize = 2048;
                 const MAX_OUTPUT_FRAMES: usize = 2048;
 
-                let mut engine: $engine = prepared(MAX_SOURCE_FRAMES, MAX_OUTPUT_FRAMES);
+                let mut engine = prepared_backend(backend, MAX_SOURCE_FRAMES, MAX_OUTPUT_FRAMES);
                 let mut output = vec![0.0; MAX_OUTPUT_FRAMES * CHANNELS];
                 let source = interleaved_signal(MAX_SOURCE_FRAMES + 1);
 
@@ -491,12 +579,17 @@ macro_rules! elastic_engine_conformance {
             }
 
             #[kithara::test]
-            fn plans_and_renders_one_block_of_continuous_source_spans() {
+            #[cfg_attr(
+                feature = "stretch-signalsmith",
+                case::signalsmith(StretchKind::Signalsmith)
+            )]
+            #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
+            fn plans_and_renders_one_block_of_continuous_source_spans(#[case] backend: StretchKind) {
                 use kithara_stretch::{ElasticSpan, ElasticSpanPlan};
 
                 const OUTPUT_FRAMES: usize = 512;
 
-                let mut engine: $engine = prepared(4096, 4096);
+                let mut engine = prepared_backend(backend, 4096, 4096);
                 let capabilities = engine.capabilities();
                 let span_config = ElasticSpanConfig::builder()
                     .build()
@@ -770,12 +863,10 @@ macro_rules! elastic_priming_conformance {
     };
 }
 
-#[cfg(feature = "stretch-signalsmith")]
-elastic_engine_conformance!(signalsmith, kithara_stretch::SignalsmithElastic);
+elastic_engine_conformance!(facade);
+
 #[cfg(feature = "stretch-signalsmith")]
 elastic_priming_conformance!(signalsmith_priming, kithara_stretch::SignalsmithElastic);
-#[cfg(feature = "stretch-bungee")]
-elastic_engine_conformance!(bungee, kithara_stretch::BungeeElastic);
 
 #[cfg(feature = "stretch-signalsmith")]
 #[kithara::test]
