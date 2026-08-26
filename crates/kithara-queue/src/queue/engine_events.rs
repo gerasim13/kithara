@@ -144,20 +144,12 @@ impl Queue {
         let _ = self.advance_to_next(Transition::None, AdvanceReason::TrackFailed);
     }
 
-    /// Decide whether `ItemDidPlayToEnd` advances the queue or is
-    /// filtered as a stale crossfade fade-out signal.
-    ///
-    /// `src` identifies the underlying audio source of the track that
-    /// just hit EOF. The player only emits `TrackPlaybackStopped` from
-    /// its natural-EOF path (`handle_eof`), so a non-empty `src` is the
-    /// authoritative end-of-track signal: advance unconditionally
-    /// (subject to crossfade pre-arm consumption).
-    ///
-    /// The empty-`src` arm preserves backward compatibility for
-    /// pre-PR-#64 callers and acts as a defensive fallback when the
-    /// player has not yet wired the src through; it falls back to the
-    /// pos/dur tolerance heuristic to filter spurious events.
-    pub(super) fn handle_item_did_play_to_end(&self, src: &Arc<str>) {
+    /// `from_current_item` is the player's verdict on whether the slot
+    /// that ended is the one being heard. The player walks every active
+    /// slot, so a preloaded successor or a lingering predecessor that
+    /// decodes ahead reports its own end while the current track still
+    /// has minutes left; advancing on that end cuts the current track.
+    pub(super) fn handle_item_did_play_to_end(&self, src: &Arc<str>, from_current_item: bool) {
         let snap = self.player.playback_snapshot();
         let pos = snap.map_or(0.0, |s| s.position());
         let dur = snap.map_or(0.0, |s| s.duration());
@@ -174,6 +166,10 @@ impl Queue {
         if self.consume_armed_advance(ended_id, pos, dur) {
             return;
         }
+        if !from_current_item {
+            debug!(%src, pos, dur, "filtered ItemDidPlayToEnd from a background slot");
+            return;
+        }
         if src.is_empty() {
             self.dispatch_real_or_spurious(pos, dur);
         } else {
@@ -183,8 +179,12 @@ impl Queue {
 
     pub(super) fn process_player_event(&self, ev: &Event) {
         match ev {
-            Event::Player(PlayerEvent::ItemDidPlayToEnd { src, .. }) => {
-                self.handle_item_did_play_to_end(src);
+            Event::Player(PlayerEvent::ItemDidPlayToEnd {
+                src,
+                from_current_item,
+                ..
+            }) => {
+                self.handle_item_did_play_to_end(src, *from_current_item);
             }
             Event::Player(PlayerEvent::ItemDidFail { src, .. }) => {
                 self.handle_item_did_fail(src);

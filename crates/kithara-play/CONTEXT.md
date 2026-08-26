@@ -93,6 +93,15 @@ The `PlayerEvent` / `ItemEvent` / `EngineEvent` / `SessionEvent` / `DjEvent` enu
 `SessionDuckingMode` is owned by this crate and maps `Off` / `Soft` / `Hard` to session-output
 gains `1.0` / `0.4` / `0.2`.
 
+**`ItemDidPlayToEnd` carries which slot ended.** `process_notifications` drains *every* active
+slot, so a preloaded successor or a lingering predecessor decoding ahead publishes its own natural
+end while the current track is seconds old. Only this crate knows which slot the phase holds, so
+the event carries the answer as `from_current_item` (`slot() == Some(ended_slot)`), taken in
+`dispatch_notification` before `finalize_handover_if_armed` can move the phase. Consumers must key
+auto-advance on that flag, never on `src`: `src` identifies a rendered resource, not a queue entry.
+With a crossfade the incoming slot was already promoted by `commit_next`, so the outgoing end
+reports `false` and the queue advances on its own pre-arm instead.
+
 ## Queue Auto-Advance
 
 `PlayerImpl` exposes a handover API for external orchestrators and internal tests:

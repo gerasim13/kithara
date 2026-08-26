@@ -260,6 +260,7 @@ mod tests {
             .publish(Event::Player(PlayerEvent::ItemDidPlayToEnd {
                 src: Arc::from(""),
                 item_id: None,
+                from_current_item: true,
             }));
 
         queue
@@ -285,6 +286,7 @@ mod tests {
             .publish(Event::Player(PlayerEvent::ItemDidPlayToEnd {
                 src: Arc::from(format!("test://memory/{}", b.as_u64())),
                 item_id: None,
+                from_current_item: true,
             }));
 
         queue

@@ -317,9 +317,18 @@ pub enum PlayerEvent {
     /// promoted the next track. `item_id` is the optional caller-side
     /// item identifier (FFI bindings tag tracks with stable UUIDs;
     /// internal callers may leave it `None`).
+    ///
+    /// `from_current_item` is the player's own answer to "was this the
+    /// track the listener was hearing?". The player walks every active
+    /// slot, so a preloaded successor or a lingering predecessor that
+    /// decodes ahead publishes its own end while the current track is
+    /// seconds old; only the player knows which slot is current, and
+    /// `src` alone cannot be compared against a queue entry reliably.
+    /// Auto-advance must key on this flag, not on `src`.
     ItemDidPlayToEnd {
         src: Arc<str>,
         item_id: Option<Arc<str>>,
+        from_current_item: bool,
     },
     /// A track aborted mid-stream because the underlying decoder /
     /// source reported a non-recoverable error. Distinct from
