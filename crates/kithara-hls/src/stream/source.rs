@@ -178,7 +178,7 @@ mod tests {
         segment::{MediaSegment, Segment, SegmentContent, SegmentSize, SegmentSlotState},
         signal::SizeSignal,
         stream::HlsCoordEnv,
-        variant::{HlsVariant, PlanConfig, PlanCtx, VariantParts},
+        variant::{DispatchTokens, HlsVariant, PlanConfig, PlanCtx, VariantParts},
     };
 
     struct TestAbrPeer {
@@ -360,7 +360,10 @@ mod tests {
             fixture.source.position(),
             None,
             true,
-            fixture.cancel.clone(),
+            DispatchTokens {
+                fetch: fixture.cancel.clone(),
+                lookahead: fixture.cancel.clone(),
+            },
         );
         assert_eq!(
             opening.len(),
@@ -384,7 +387,10 @@ mod tests {
             fixture.source.position(),
             None,
             true,
-            fixture.cancel.clone(),
+            DispatchTokens {
+                fetch: fixture.cancel.clone(),
+                lookahead: fixture.cancel.clone(),
+            },
         );
         assert_eq!(
             after_consumption.len(),

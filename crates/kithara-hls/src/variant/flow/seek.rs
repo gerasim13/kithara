@@ -20,7 +20,10 @@ impl ResolvedSeekProjection {
 }
 
 impl HlsVariant {
-    fn clear_segment_aware_seek_tail(&self) {
+    /// Called from `reset_layout_to_full_range` inside the Layout write
+    /// lock: the tail retires atomically with the byte-space re-mint, so a
+    /// settle can never park behind a tail whose space is already gone.
+    pub(in crate::variant) fn clear_segment_aware_seek_tail(&self) {
         self.seek
             .segment_aware_tail
             .store(Self::NO_SEEK_TAIL, Ordering::Release);
@@ -87,7 +90,6 @@ impl HlsVariant {
         self.clear_seek_alias();
         self.clear_exact_seek();
         self.clear_exact_byte_seek();
-        self.clear_segment_aware_seek_tail();
         self.reset_layout_to_full_range();
     }
 

@@ -254,10 +254,11 @@ async fn partial_cache_resume_works() {
         stream1
     });
 
-    let stream1 = time::timeout(Duration::from_secs(3), phase1)
-        .await
-        .expect("Phase 1 timed out")
-        .expect("Phase 1 panicked");
+    // Await the join directly, bounded by the harness watchdogs: the blocking
+    // read performs REAL network I/O against the test server, while a
+    // `time::timeout` here is virtual under flash — its deadline can burn to
+    // zero in collapsed time and fire while the read is still doing real work.
+    let stream1 = phase1.await.expect("Phase 1 panicked");
 
     // Keep `stream1` alive and wait on the real state: the sequential
     // download terminating means the look-ahead has flushed every available

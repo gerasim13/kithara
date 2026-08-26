@@ -565,6 +565,21 @@ impl<T: StreamType> Stream<T> {
         }
     }
 
+    /// Single wake-free readiness probe for `range` that also files it as
+    /// reader demand ([`Source::wait_range`] with a zero budget). The demand
+    /// side is the point: dispatch budgets follow the ranges the source knows
+    /// a reader waits on, and a phase snapshot alone leaves a parked reader
+    /// invisible. Never blocks — the audio worker's readiness gate calls it
+    /// from the produce core when a phase poll parks the decoder.
+    ///
+    /// # Errors
+    ///
+    /// A not-ready range surfaces as the source's typed budget-exceeded
+    /// error; cancel and storage failures pass through unchanged.
+    pub fn probe_wait(&mut self, range: Range<u64>) -> StreamResult<WaitOutcome> {
+        self.source.wait_range(range, Some(Duration::ZERO))
+    }
+
     /// Real-time on-core seek: resolve + cursor set, with NO `prime_seek_range`
     /// spin — no `yield_now`/`notify_one` on the forbid-blocking produce core.
     /// The audio worker (the FSM's recreate/boundary seeks and the decoder's
@@ -1046,6 +1061,36 @@ mod tests {
             let _ = SeekControl::begin(&*self.seek, Duration::from_millis(10));
             Ok(WaitOutcome::Ready)
         }
+    }
+
+    #[kithara::test]
+    fn probe_wait_probes_the_source_without_reading() {
+        // The parked reader's demand channel: a single zero-budget
+        // `Source::wait_range` probe — readiness without blocking, and the
+        // cursor stays put so it can never masquerade as a read.
+        let source = ScriptSource::new(Arc::new(SeekState::new()), [], [], Vec::new())
+            .with_segments([0..8], 4);
+        let mut stream = Stream::<DummyType> { source };
+
+        let ready = stream.probe_wait(0..4);
+        assert!(
+            matches!(ready, Ok(WaitOutcome::Ready)),
+            "a resident range answers Ready: {ready:?}"
+        );
+
+        let parked = stream.probe_wait(0..8);
+        assert!(
+            matches!(
+                parked,
+                Err(StreamError::Source(SourceError::WaitBudgetExceeded))
+            ),
+            "a not-ready range surfaces the typed budget error: {parked:?}"
+        );
+        assert_eq!(
+            stream.source.position.load(Ordering::Acquire),
+            0,
+            "a wait probe never advances the cursor"
+        );
     }
 
     #[kithara::test]
