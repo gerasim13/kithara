@@ -393,10 +393,10 @@ a concurrent play-then-seek is applied by the post-construction seek path — a
 ## Effect chain and coordinate space
 
 `create_effects` builds `[TimeStretchProcessor?, ..custom]`. There is no
-resampler stage in the chain — fixed-ratio conversion is decoder-owned — and the
-stretch slot exists only when a stretch backend is compiled in and
-`AudioConfig::stretch` is set; without one, including wasm, no speed DSP is
-inserted and PCM output is pinned to 1.0.
+resampler stage in the chain — fixed-ratio conversion is decoder-owned. Native
+builds require at least one stretch backend, but insert the slot only when
+`AudioConfig::stretch` is set. Wasm has no native stretch DSP and pins PCM output
+to 1.0.
 
 **Coordinate space.** The whole pipeline runs in decoder/song time
 (`PcmMeta.timestamp` / `end_timestamp` / `frame_offset`, the seek target, the UI
@@ -464,8 +464,9 @@ next checked tick; it prepares backend or `PcmSpec` replacements, performs
 resets, and destroys retired engines there. Key-lock defaults to **off**
 (`StretchControls::new`).
 
-**Backend seam.** `kithara-stretch` is the optional DSP backend crate, behind
-`stretch-signalsmith` / `stretch-bungee` (native only); it owns the exact-span
+**Backend seam.** `kithara-stretch` is the native DSP backend crate; the
+`stretch-signalsmith` / `stretch-bungee` features select its compiled adapters.
+It owns the exact-span
 `ElasticEngine` contract and its companion types. The trait is DSP-only
 (interleaved sample buffers), so all `PcmChunk`/timeline plumbing stays here;
 the shared `PcmPool` is injected through `ElasticConfig`. Source/output frame
@@ -473,9 +474,9 @@ counts control tempo and `set_pitch` is independent (1.0 = pitch locked) - the
 decoupling key-lock depends on. `StretchKind::all()` lists exactly
 the backends compiled into the current target (default `all()[0]`; discriminants
 are stable: 1 = Signalsmith, 2 = Bungee), so an absent backend is
-un-representable rather than a runtime error. With no `stretch-*` feature the
-dependency is not linked and the kind/engine/processor re-exports compile out;
-`StretchControls` still exposes speed and region-plan storage.
+un-representable rather than a runtime error. A native build with no
+`stretch-*` feature is rejected by `kithara-stretch`; wasm does not link the
+native crate and retains only speed and region-plan storage in `StretchControls`.
 
 **Region plan (beat-aligned stretch).** The pure region types live in
 `kithara_audio::region` and are re-exported unconditionally. Plans are sorted,

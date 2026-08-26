@@ -2,10 +2,7 @@ use kithara_bufpool::PcmPool;
 use kithara_decode::PcmSpec;
 use kithara_platform::sync::Arc;
 
-#[cfg(all(
-    not(target_arch = "wasm32"),
-    any(feature = "stretch-signalsmith", feature = "stretch-bungee")
-))]
+#[cfg(not(target_arch = "wasm32"))]
 use crate::effects::timestretch::TimeStretchProcessor;
 use crate::{effects::timestretch::StretchControls, traits::AudioEffect};
 
@@ -25,10 +22,7 @@ pub(crate) fn create_effects(
 }
 
 /// Tempo mode with a compiled-in backend: prepend the stretch slot.
-#[cfg(all(
-    not(target_arch = "wasm32"),
-    any(feature = "stretch-signalsmith", feature = "stretch-bungee")
-))]
+#[cfg(not(target_arch = "wasm32"))]
 fn append_stretch_slot(
     controls: Option<&Arc<StretchControls>>,
     chain: &mut Vec<Box<dyn AudioEffect>>,
@@ -47,10 +41,7 @@ fn append_stretch_slot(
 
 /// No stretch backend compiled in: speed DSP is absent and playback is pinned
 /// to unity.
-#[cfg(not(all(
-    not(target_arch = "wasm32"),
-    any(feature = "stretch-signalsmith", feature = "stretch-bungee")
-)))]
+#[cfg(target_arch = "wasm32")]
 fn append_stretch_slot(
     _controls: Option<&Arc<StretchControls>>,
     _chain: &mut Vec<Box<dyn AudioEffect>>,

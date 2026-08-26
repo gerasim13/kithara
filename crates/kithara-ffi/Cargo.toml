@@ -30,7 +30,7 @@ required-features = ["uniffi-bindgen-cli"]
 # Device builds compile with `--no-default-features` (see `xtask apple`/
 # `xtask android`), so `symphonia` is never pulled into apple/android — the
 # hardware backend is the sole decoder there.
-default = ["uniffi", "symphonia", "client-reqwest", "tls-rustls"]
+default = ["uniffi", "symphonia", "stretch-signalsmith", "client-reqwest", "tls-rustls"]
 uniffi = ["dep:uniffi"]
 uniffi-bindgen-cli = ["uniffi", "uniffi/cli", "uniffi/cargo-metadata"]
 apple = [
@@ -38,16 +38,21 @@ apple = [
     "kithara/apple-net",
     "kithara-play/apple-fused-src",
     "kithara-queue/apple-fused-src",
+    "stretch-signalsmith",
 ]
-android = ["kithara/android"]
+android = ["kithara/android", "stretch-signalsmith"]
 # Cross-platform software decode backend. Not part of apple/android
 # (those own hardware decode on-device). Used for the host-side
 # uniffi-bindgen build, where neither the apple nor the android
 # (target_os-gated) DecoderBackend variant exists, so without a
 # backend feature `DecoderBackend` would be an empty enum.
 symphonia = ["kithara/symphonia", "kithara-queue/symphonia"]
-stretch-signalsmith = ["kithara/stretch-signalsmith"]
-stretch-bungee = ["kithara/stretch-bungee"]
+stretch-signalsmith = [
+    "kithara/stretch-signalsmith",
+    "kithara-play/stretch-signalsmith",
+    "kithara-queue/stretch-signalsmith",
+]
+stretch-bungee = ["kithara/stretch-bungee", "kithara-play/stretch-bungee", "kithara-queue/stretch-bungee"]
 # Marker feature for wasm32 build matrix (parallel to apple/android).
 # Actual wasm-only deps live under [target.'cfg(target_arch = "wasm32")'].
 # Forwards the reqwest stack so the wasm build (which runs with

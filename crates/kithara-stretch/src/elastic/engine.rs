@@ -1,19 +1,11 @@
+use kithara_platform::ranged;
+
 use super::{ElasticCapabilities, ElasticConfig, ElasticError, ElasticRequest};
 
-pub(crate) struct PitchRange;
-
-impl PitchRange {
-    const MIN: f64 = 0.25;
-    const MAX: f64 = 4.0;
-
-    pub(crate) fn validate(scale: f64) -> Result<f64, ElasticError> {
-        if scale.is_finite() && (Self::MIN..=Self::MAX).contains(&scale) {
-            Ok(scale)
-        } else {
-            Err(ElasticError::InvalidPitch(scale))
-        }
-    }
-}
+ranged!(
+    /// Valid native pitch factor shared by every elastic backend.
+    pub(crate) struct PitchScale(f64, 0.25, 4.0, 1.0)
+);
 
 /// Exact-span time-stretch engine.
 ///

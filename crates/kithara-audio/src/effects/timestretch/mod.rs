@@ -1,27 +1,18 @@
-#[cfg(all(
-    not(target_arch = "wasm32"),
-    any(feature = "stretch-signalsmith", feature = "stretch-bungee")
-))]
-#[path = "backend.rs"]
-mod backend;
-#[cfg(not(all(
-    not(target_arch = "wasm32"),
-    any(feature = "stretch-signalsmith", feature = "stretch-bungee")
-)))]
-#[path = "controls.rs"]
-mod backend;
-#[cfg(all(
-    not(target_arch = "wasm32"),
-    any(feature = "stretch-signalsmith", feature = "stretch-bungee")
-))]
+mod controls;
+#[cfg(not(target_arch = "wasm32"))]
 mod processor;
-#[cfg(all(
-    test,
-    not(target_arch = "wasm32"),
-    any(feature = "stretch-signalsmith", feature = "stretch-bungee")
-))]
+#[cfg(not(target_arch = "wasm32"))]
+mod processor_effect;
+#[cfg(not(target_arch = "wasm32"))]
+mod processor_render;
+#[cfg(not(target_arch = "wasm32"))]
+mod processor_target;
+#[cfg(all(test, not(target_arch = "wasm32")))]
 mod region_tests;
-
-pub use backend::*;
+pub use controls::StretchControls;
+#[cfg(not(target_arch = "wasm32"))]
+pub use kithara_stretch::{ElasticEngine, ElasticError, StretchKind};
+#[cfg(not(target_arch = "wasm32"))]
+pub use processor::TimeStretchProcessor;
 
 pub use crate::region::{RegionPlan, RegionPlanError};

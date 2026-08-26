@@ -1,10 +1,13 @@
+#[cfg(test)]
+use kithara_test_utils::kithara;
 use num_traits::ToPrimitive;
 
-use super::StreamCore;
+use super::stream::StreamCore;
 use crate::{ElasticError, ElasticRequest};
 
 impl StreamCore {
-    pub(in super::super) fn prime(
+    #[cfg_attr(test, kithara::hang_watchdog)]
+    pub(super) fn prime(
         &mut self,
         source_history: &[f32],
         source_lookahead: &[f32],
@@ -54,6 +57,15 @@ impl StreamCore {
         let grain_count = discard_grains
             .checked_add(Self::PIPELINE_GRAINS)
             .ok_or(ElasticError::SampleCountOverflow)?;
+        let grain_limit = request
+            .output_frames()
+            .checked_add(Self::PIPELINE_GRAINS)
+            .ok_or(ElasticError::SampleCountOverflow)?;
+        if grain_count > grain_limit {
+            return Err(ElasticError::EnginePreparation(
+                "Bungee preroll exceeded its output-derived grain bound",
+            ));
+        }
         let grain_count_f64 = grain_count
             .to_f64()
             .ok_or(ElasticError::SampleCountOverflow)?;
@@ -62,6 +74,10 @@ impl StreamCore {
 
         let mut discarded_frames = 0;
         for grain in 0..grain_count {
+            #[cfg(test)]
+            hang_tick!();
+            #[cfg(test)]
+            let previous_discarded = discarded_frames;
             self.input.set_requested(self.native.specify(&self.request));
             self.request_pending = true;
             self.synthesise(true, false)?;
@@ -70,6 +86,10 @@ impl StreamCore {
                 request.output_frames(),
                 &mut discarded_frames,
             )?;
+            #[cfg(test)]
+            if discarded_frames > previous_discarded {
+                hang_reset!();
+            }
             if grain + 1 < grain_count {
                 self.native.next(&mut self.request);
             }

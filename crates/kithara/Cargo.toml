@@ -109,10 +109,14 @@ resample-rubato = [
 ]
 analysis-beat = ["kithara-audio/analysis-beat", "kithara-play/analysis-beat"]
 analysis-waveform = ["kithara-audio/analysis-waveform", "kithara-play/analysis-waveform"]
-# Native-only C++ time-stretch backends (selectable at runtime in the DJ
-# deck). Each pulls a C++ toolchain; without one, key-lock is compiled out.
-stretch-signalsmith = ["kithara-audio/stretch-signalsmith"]
-stretch-bungee = ["kithara-audio/stretch-bungee"]
+# Native-only C++ time-stretch backends. Native builds require at least one;
+# enabling both makes them selectable at runtime in the DJ deck.
+stretch-signalsmith = [
+    "kithara-audio/stretch-signalsmith",
+    "kithara-play/stretch-signalsmith",
+    "kithara-queue?/stretch-signalsmith",
+]
+stretch-bungee = ["kithara-audio/stretch-bungee", "kithara-play/stretch-bungee", "kithara-queue?/stretch-bungee"]
 # NN beat/downbeat detector (kithara-beat, embedded small model) in the
 # analysis registry.
 beat-nn = ["kithara-audio/beat-nn"]

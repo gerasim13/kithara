@@ -89,9 +89,9 @@ and under `flash` it is the virtual clock. `web_time` is internal to this crate 
 ## Ranged Values
 
 `ranged!` declares a float newtype that cannot hold a value outside its range: the type
-carries `MIN`, `MAX` and `DEFAULT` as values of itself, and the only way in is `From`,
-which clamps. `NaN` is in no range and yields `DEFAULT` rather than propagating through
-every later comparison.
+carries `MIN`, `MAX` and `DEFAULT` as values of itself. `From` clamps, while `checked`
+rejects non-finite and out-of-range values. `From` maps `NaN` to `DEFAULT` rather than
+propagating it through every later comparison.
 
 It exists so a bound crosses a crate boundary as a type rather than as a pair of loose
 constants a caller has to import and remember to clamp against. The owning crate declares

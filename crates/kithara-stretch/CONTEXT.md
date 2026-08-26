@@ -60,11 +60,17 @@ the `PcmPool` supplied in `ElasticConfig`; no engine owns a default or global po
 `flush(out)` writes the next buffered-tail portion into caller-owned storage sized from
 `terminal_chunk_frames` and returns the number of interleaved frames written. EOF repeats the call
 until zero; a completed drain stays empty until new input. This streaming contract lets a
-rate-dependent tail span several fixed-size chunks without loss. A rate change between adjacent
-exact requests preserves history and is not a flush or reset boundary. Every backend must expose the
-same real terminal-drain behavior; a no-op or synthetic-silence flush is not conforming.
-Rate and pitch changes must affect audio within one declared output-latency window across adjacent
-render calls; a backend must not hide already-rendered PCM behind an additional software delay.
+rate-dependent tail span several fixed-size chunks without loss. At a steady rate `r`, the complete
+terminal span is `ceil(H / r) + O` frames, where `H` and `O` are the declared source and output
+latencies. The same formula applies after a rate change has rendered `O` frames and reached its new
+latency mapping. EOF during that bounded transition drains the real accumulated state, whose span is
+history-dependent; it must not reset, replay, reverse, drop, or synthesize source audio to imitate the
+settled formula. Every backend must expose this real terminal-drain behavior; a no-op or
+synthetic-silence flush is not conforming.
+A rate change between adjacent exact requests preserves history, moves monotonically, and reaches
+the requested mapping within one declared output-latency window. Pitch changes must affect audio
+within the same bound. A backend must not hide already-rendered PCM behind an additional software
+delay.
 `reset()` clears buffered state after seek; source-spec and backend changes are handled by the
 caller preparing a replacement outside its checked render core. The trait intentionally does not
 depend on `kithara-decode::PcmSpec`.
@@ -92,7 +98,12 @@ depend on `kithara-decode::PcmSpec`.
 - Bungee reports its unity latency only after its pipeline is warm, and runtime latency moves with
   the rate. Preparation measures the unity reference on the resident, shape-sized core, resets that
   same core in place, and separately declares a safe fixed terminal chunk from the native maximum
-  input-grain span; no probe engine or extra pool allocation is retained.
+  input-grain span; no probe engine or extra pool allocation is retained. An unprimed stream converts
+  the larger native processing center into the measured source/output latency split while its cold
+  pipeline fills. Once output starts, rate changes slew that center toward the new mapping with grain
+  positions clamped to the configured rate envelope. Positions therefore remain strictly monotone,
+  phase history survives without a native reset, and the settled terminal timing reaches the final
+  request's `ceil(H / r) + O` split within `O` output frames.
 - Both engines accept the same pitch range, `0.25..=4.0`; this is the range covered by Bungee's
   native sizing and prevents a backend selector from changing validation semantics.
 - Both engines expose the configured practical rate policy after intersection with their prepared
@@ -122,10 +133,11 @@ Do not declare `stretch-native` or add `backends/native.rs` until the pure-Rust 
 ## No-backend and wasm builds
 
 There is no "no backend" build here: `lib.rs` `compile_error!`s unless at least one `stretch-*`
-feature is set, and the machinery (kind, factory, config, backends) is unconditional. "Stretch is
-absent" lives one level up — `kithara-audio` depends on `kithara-stretch` **optionally** (only its
-`stretch-signalsmith` / `stretch-bungee` features pull it), so a build with no stretch, including
-every wasm build today, simply does not link this crate. Domain types that non-stretch code needs
-(`GridSegment`, `RegionPlan`) therefore live in `kithara-audio`. The C++ backends are native-only
-(`wasm32-unknown-unknown` has no libc++), and `kithara-bufpool` is likewise an optional non-wasm
-dependency pulled in by the backend features.
+feature is set, and the machinery (kind, factory, config, backends) is unconditional. Native
+`kithara-audio` always links this crate and forwards its `stretch-signalsmith` / `stretch-bungee`
+features; its default selects Signalsmith. A native facade that disables default features must
+therefore forward at least one of those features explicitly. Wasm excludes the dependency at the
+target edge and keeps only the transport controls, because the C++ backends cannot build for
+`wasm32-unknown-unknown`. Domain types that wasm and non-stretch code need (`GridSegment`,
+`RegionPlan`) remain in `kithara-audio`; `kithara-bufpool` is an unconditional dependency of this
+crate and never enters the wasm closure.

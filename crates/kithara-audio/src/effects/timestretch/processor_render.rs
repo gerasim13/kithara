@@ -2,9 +2,37 @@ use kithara_decode::PcmMeta;
 use kithara_stretch::{ElasticError, ElasticRequest};
 use num_traits::ToPrimitive;
 
-use super::TimeStretchProcessor;
+use super::processor::TimeStretchProcessor;
 
 impl TimeStretchProcessor {
+    pub(super) fn source_block_limit(
+        stretch: f64,
+        max_source_frames: usize,
+        max_output_frames: usize,
+    ) -> Result<usize, ElasticError> {
+        if !stretch.is_finite() || stretch <= 0.0 {
+            return Err(ElasticError::InvalidRate(stretch));
+        }
+        let output_limit = max_output_frames
+            .to_f64()
+            .ok_or(ElasticError::SampleCountOverflow)?;
+        let output_budget = (output_limit - Self::OUTPUT_ROUNDING_MARGIN).max(1.0);
+        let source_limit = (output_budget / stretch)
+            .floor()
+            .to_usize()
+            .ok_or(ElasticError::SampleCountOverflow)?;
+        let source_limit = source_limit.min(max_source_frames);
+        if source_limit == 0 {
+            return Err(ElasticError::InvalidRate(1.0 / stretch));
+        }
+        Ok(source_limit)
+    }
+
+    pub(super) fn balanced_source_block(remaining: usize, limit: usize) -> usize {
+        let partitions = remaining.div_ceil(limit);
+        remaining.div_ceil(partitions)
+    }
+
     fn append_pending_source(
         &mut self,
         source: &[f32],
@@ -187,10 +215,13 @@ impl TimeStretchProcessor {
         } else {
             f64::from(speed)
         };
-        let mut consumed = 0_usize;
+        let mut consumed = 0usize;
         let mut frame = meta.frame_offset;
         self.apply_pitch(pitch)?;
-        while consumed < frames {
+        for _ in 0..frames {
+            if consumed == frames {
+                return Ok(());
+            }
             let region = self.region_for(frame);
             let left = u64::try_from(frames - consumed).unwrap_or(u64::MAX);
             let span = region.end().saturating_sub(frame).min(left).max(1);
@@ -294,6 +325,12 @@ impl TimeStretchProcessor {
             frame = frame
                 .saturating_add(u64::try_from(sub).map_err(|_| ElasticError::SampleCountOverflow)?);
         }
-        Ok(())
+        if consumed == frames {
+            Ok(())
+        } else {
+            Err(ElasticError::EnginePreparation(
+                "time-stretch render exceeded its source-frame iteration bound",
+            ))
+        }
     }
 }

@@ -1,12 +1,13 @@
-/// Unity-rate algorithmic latency in the source and output coordinate spaces.
+/// Unity-rate latency split between source and output coordinates. Unprimed
+/// startup is their sum; [`prime`](crate::ElasticEngine::prime) absorbs it.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, fieldwork::Fieldwork)]
 #[fieldwork(get)]
 #[non_exhaustive]
 pub struct ElasticLatency {
-    /// Unity-rate delayed output in frames.
+    /// Output frames between the native processing center and emitted audio.
     #[field(get, copy)]
     output_frames: usize,
-    /// Unity-rate source history in frames.
+    /// Source frames of native history/lookahead around the processing center.
     #[field(get, copy)]
     source_frames: usize,
 }

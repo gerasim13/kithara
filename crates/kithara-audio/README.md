@@ -14,7 +14,7 @@
 
 # kithara-audio
 
-Audio pipeline with decoding, effects, resampling, optional time-stretch, and
+Audio pipeline with decoding, effects, resampling, native time-stretch, and
 source-signal analysis. `Audio<S>` is the PCM reader surface; an
 `AudioWorkerHandle` runs decode/effects work on a shared OS thread and hands
 processed chunks to the caller through lock-free rings.
@@ -69,8 +69,8 @@ processed chunks to the caller through lock-free rings.
   per-track source contract.
 - `ResamplerQuality` / `ResamplerOptions` — sample-rate-conversion config
   threaded into the decoder-owned resampler plan.
-- `StretchControls` / `TimeStretchProcessor` — preserve-pitch tempo mode when a
-  `kithara-stretch` backend is compiled.
+- `StretchControls` / `TimeStretchProcessor` — preserve-pitch tempo mode on
+  native targets; native builds require at least one `kithara-stretch` backend.
 - `AnalyzerBuilder` / `AnalysisWorker` / `TrackAnalysis` — source-signal
   waveform and optional beat analysis.
 - `Waveform` / `BeatGrid` — analysis artifacts; public blob I/O uses
@@ -107,8 +107,8 @@ let mut audio = Audio::<Stream<Hls>>::new(audio_config).await?;
 
 `kithara-audio` sits between `kithara-decode` and playback consumers. The
 downloader lives in `kithara-stream`; audio consumes stream/storage contracts
-without reconstructing protocol policy. Time-stretch DSP backends live in
-`kithara-stretch` and are re-exported only when a stretch feature is compiled.
+without reconstructing protocol policy. Native time-stretch DSP backends live
+in `kithara-stretch`; wasm retains the control surface without native DSP.
 Analysis runs on decoded source PCM, not post-EQ, post-stretch, or post-resample
 output.
 

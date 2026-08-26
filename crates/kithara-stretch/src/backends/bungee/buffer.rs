@@ -1,7 +1,8 @@
 use std::ops::Range;
 
 use bungee_sys::InputChunk;
-use kithara_bufpool::PcmPool;
+use kithara_bufpool::{PcmBuf, PcmPool};
+use num_traits::ToPrimitive;
 
 use super::ffi::{AnalysisInput, NativeStretcher};
 use crate::{ElasticConfig, ElasticError};
@@ -11,8 +12,7 @@ use crate::{ElasticConfig, ElasticError};
 pub(super) struct PooledPlanar {
     #[field(get, copy, vis = "pub(super)")]
     channels: usize,
-    pool: PcmPool,
-    pub(super) samples: Vec<f32>,
+    pub(super) samples: PcmBuf,
     pub(super) stride: usize,
 }
 
@@ -31,8 +31,7 @@ impl PooledPlanar {
             .map_err(|_| ElasticError::PcmPoolBudgetExhausted)?;
         Ok(Self {
             channels,
-            pool: pool.clone(),
-            samples: storage.into_inner(),
+            samples: storage,
             stride,
         })
     }
@@ -66,19 +65,11 @@ impl PooledPlanar {
             .channels
             .checked_mul(stride)
             .ok_or(ElasticError::SampleCountOverflow)?;
-        let mut storage = self.pool.attach(std::mem::take(&mut self.samples));
-        storage
+        self.samples
             .ensure_len(samples)
             .map_err(|_| ElasticError::PcmPoolBudgetExhausted)?;
-        self.samples = storage.into_inner();
         self.stride = stride;
         Ok(())
-    }
-}
-
-impl Drop for PooledPlanar {
-    fn drop(&mut self) {
-        self.pool.recycle(std::mem::take(&mut self.samples));
     }
 }
 
@@ -183,6 +174,38 @@ impl InputBuffer {
         self.audio.prepare_stride(capacity)
     }
 
+    fn requested_frames(&self) -> Result<usize, ElasticError> {
+        usize::try_from(
+            self.requested
+                .end
+                .checked_sub(self.requested.begin)
+                .ok_or(ElasticError::SampleCountOverflow)?,
+        )
+        .map_err(|_| ElasticError::EnginePreparation("Bungee requested an invalid input grain"))
+    }
+
+    pub(super) fn requested_window(&self, position: f64) -> Result<(usize, usize), ElasticError> {
+        let position = position
+            .to_i32()
+            .filter(|converted| f64::from(*converted) == position)
+            .ok_or(ElasticError::EnginePreparation(
+                "Bungee reported an invalid processing center",
+            ))?;
+        let history = position
+            .checked_sub(self.requested.begin)
+            .and_then(|frames| usize::try_from(frames).ok());
+        let lookahead = self
+            .requested
+            .end
+            .checked_sub(position)
+            .and_then(|frames| usize::try_from(frames).ok());
+        history
+            .zip(lookahead)
+            .ok_or(ElasticError::EnginePreparation(
+                "Bungee reported an input window outside its processing center",
+            ))
+    }
+
     pub(super) fn analyse(
         &mut self,
         native: &mut NativeStretcher,
@@ -199,13 +222,7 @@ impl InputBuffer {
             });
         }
 
-        let requested_frames = usize::try_from(
-            self.requested
-                .end
-                .checked_sub(self.requested.begin)
-                .ok_or(ElasticError::SampleCountOverflow)?,
-        )
-        .map_err(|_| ElasticError::EnginePreparation("Bungee requested an invalid input grain"))?;
+        let requested_frames = self.requested_frames()?;
         if requested_frames > self.analysis.stride {
             return Err(ElasticError::EnginePreparation(
                 "Bungee requested an oversized input grain",

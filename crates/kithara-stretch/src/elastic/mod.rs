@@ -6,7 +6,7 @@ pub use config::{ElasticConfig, ElasticSpanConfig};
 
 mod engine;
 pub use engine::ElasticEngine;
-pub(crate) use engine::PitchRange;
+pub(crate) use engine::PitchScale;
 
 mod error;
 pub use error::ElasticError;

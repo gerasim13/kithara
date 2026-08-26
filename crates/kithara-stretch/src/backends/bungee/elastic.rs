@@ -5,7 +5,7 @@ use num_traits::ToPrimitive;
 use super::stream::StreamCore;
 use crate::{
     ElasticCapabilities, ElasticConfig, ElasticEngine, ElasticError, ElasticLatency,
-    ElasticRequest, elastic::PitchRange,
+    ElasticRequest, elastic::PitchScale,
 };
 
 /// Exact-span Bungee engine.
@@ -28,17 +28,26 @@ impl BungeeElastic {
         for _ in 0..Self::LATENCY_PROBE_BLOCKS {
             core.probe_silence(request)?;
         }
+        let source_frames = core.source_latency_frames()?;
         let output_position = core
             .output_position()
             .ok_or(ElasticError::EnginePreparation(
                 "Bungee latency probe produced no timed output",
             ))?;
-        let frames = (f64::from(core.source_end()) - output_position)
+        let total_latency = f64::from(core.source_end()) - output_position;
+        let total_frames = total_latency
             .ceil()
             .to_usize()
             .ok_or(ElasticError::SampleCountOverflow)?;
+        let output_frames = total_frames
+            .checked_sub(source_frames)
+            .filter(|frames| *frames > 0)
+            .ok_or(ElasticError::EnginePreparation(
+                "Bungee latency probe produced no output-side latency",
+            ))?;
+        core.set_source_latency_frames(source_frames)?;
         core.discard()?;
-        Ok(ElasticLatency::new(frames, frames))
+        Ok(ElasticLatency::new(source_frames, output_frames))
     }
 }
 
@@ -132,7 +141,8 @@ impl ElasticEngine for BungeeElastic {
     }
 
     fn set_pitch(&mut self, scale: f64) -> Result<(), ElasticError> {
-        self.pitch = PitchRange::validate(scale)?;
+        self.pitch =
+            f64::from(PitchScale::checked(scale).ok_or(ElasticError::InvalidPitch(scale))?);
         Ok(())
     }
 

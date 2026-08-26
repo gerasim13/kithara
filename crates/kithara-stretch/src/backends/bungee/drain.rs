@@ -1,10 +1,12 @@
+#[cfg(test)]
+use kithara_test_utils::kithara;
 use num_traits::ToPrimitive;
 
-use super::{StreamCore, TerminalChunk};
+use super::stream::{StreamCore, TerminalChunk};
 use crate::ElasticError;
 
 impl StreamCore {
-    pub(in super::super) fn output_position(&self) -> Option<f64> {
+    pub(super) fn output_position(&self) -> Option<f64> {
         let chunk = self
             .output_chunk
             .as_ref()
@@ -48,27 +50,34 @@ impl StreamCore {
         Ok(self.consume(available.min(capacity), output, output_frame))
     }
 
-    pub(in super::super) fn terminal_tail(
+    #[cfg_attr(test, kithara::hang_watchdog)]
+    pub(super) fn terminal_tail(
         &mut self,
         output: &mut [f32],
         capacity: usize,
     ) -> Result<TerminalChunk, ElasticError> {
         let source_end = f64::from(self.input.end());
         let mut drained = 0usize;
-        let mut grains = 0;
-        let mut stalled = 0;
-        loop {
+        let mut stalled = 0usize;
+        for grain in 0..=Self::TERMINAL_GRAIN_LIMIT {
+            #[cfg(test)]
+            hang_tick!();
             if let Some(anchor) = self.anchor {
                 self.discard_before(anchor)?;
             }
+            let consumed = self.consume_to_end(
+                source_end,
+                capacity.saturating_sub(drained),
+                Some(output),
+                drained,
+            )?;
             drained = drained
-                .checked_add(self.consume_to_end(
-                    source_end,
-                    capacity.saturating_sub(drained),
-                    Some(output),
-                    drained,
-                )?)
+                .checked_add(consumed)
                 .ok_or(ElasticError::SampleCountOverflow)?;
+            if consumed > 0 {
+                #[cfg(test)]
+                hang_reset!();
+            }
             if self
                 .output_position()
                 .is_some_and(|position| position >= source_end)
@@ -78,21 +87,13 @@ impl StreamCore {
                 }
                 self.flush_invalid()?;
                 self.clear();
-                return Ok(TerminalChunk {
-                    frames: drained,
-                    complete: true,
-                });
+                return Ok(TerminalChunk::new(drained, true));
             }
             if drained == capacity {
-                return Ok(TerminalChunk {
-                    frames: drained,
-                    complete: false,
-                });
+                return Ok(TerminalChunk::new(drained, false));
             }
-            if grains == Self::TERMINAL_GRAIN_LIMIT {
-                return Err(ElasticError::EnginePreparation(
-                    "Bungee terminal output exceeded its fixed grain bound",
-                ));
+            if grain == Self::TERMINAL_GRAIN_LIMIT {
+                break;
             }
             let previous_end = self.output_chunk.as_ref().and_then(|chunk| {
                 (chunk.valid && chunk.frames > 0 && chunk.end.is_finite()).then_some(chunk.end)
@@ -109,6 +110,8 @@ impl StreamCore {
             }
             if self.output_advances(previous_end) {
                 stalled = 0;
+                #[cfg(test)]
+                hang_reset!();
             } else {
                 stalled += 1;
             }
@@ -117,11 +120,13 @@ impl StreamCore {
                     "Bungee terminal output stopped advancing",
                 ));
             }
-            grains += 1;
         }
+        Err(ElasticError::EnginePreparation(
+            "Bungee terminal output exceeded its fixed grain bound",
+        ))
     }
 
-    pub(in super::super) fn discard(&mut self) -> Result<(), ElasticError> {
+    pub(super) fn discard(&mut self) -> Result<(), ElasticError> {
         if self.request_pending {
             self.synthesise(true, true)?;
         }
@@ -169,7 +174,7 @@ impl StreamCore {
         Ok(())
     }
 
-    pub(in super::super) fn source_end(&self) -> i32 {
+    pub(super) fn source_end(&self) -> i32 {
         self.input.end()
     }
 
@@ -194,5 +199,6 @@ impl StreamCore {
         self.request.reset = 0;
         self.request_pending = false;
         self.samples_needed = 0.0;
+        self.unprimed_started = false;
     }
 }

@@ -83,10 +83,7 @@ mod native {
     }
 }
 
-#[cfg(not(all(
-    not(target_arch = "wasm32"),
-    any(feature = "stretch-signalsmith", feature = "stretch-bungee")
-)))]
+#[cfg(target_arch = "wasm32")]
 mod no_stretch {
     use super::*;
 
@@ -101,12 +98,10 @@ mod no_stretch {
     }
 }
 
-#[cfg(all(
-    not(target_arch = "wasm32"),
-    any(feature = "stretch-signalsmith", feature = "stretch-bungee")
-))]
+#[cfg(not(target_arch = "wasm32"))]
 mod stretch {
     use kithara_decode::PcmMeta;
+    use kithara_stretch::StretchKind;
 
     use super::*;
 
@@ -125,9 +120,15 @@ mod stretch {
 
     /// Key-lock off in tempo mode is still handled by the stretch slot.
     #[kithara::test]
-    fn create_effects_tempo_vinyl_uses_stretch_slot() {
+    #[cfg_attr(
+        feature = "stretch-signalsmith",
+        case::signalsmith(StretchKind::Signalsmith)
+    )]
+    #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
+    fn create_effects_tempo_vinyl_uses_stretch_slot(#[case] backend: StretchKind) {
         let controls = StretchControls::new(1.5);
         controls.set_keylock(false);
+        controls.set_backend(backend);
         let pool = pool();
         let mut effects = create_effects(spec(), Some(&controls), &pool, Vec::new());
         // Drive one chunk through the stretch slot (index 0).

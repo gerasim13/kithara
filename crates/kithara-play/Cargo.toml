@@ -19,6 +19,7 @@ default = [
     "resample-rubato",
     "analysis-beat",
     "analysis-waveform",
+    "stretch-signalsmith",
     "client-reqwest",
     "tls-rustls",
 ]
@@ -79,6 +80,8 @@ resample-glide = ["kithara-audio/resample-glide", "kithara-decode/resample-glide
 resample-rubato = ["kithara-audio/resample-rubato", "kithara-decode/resample-rubato"]
 analysis-beat = ["kithara-audio/analysis-beat"]
 analysis-waveform = ["kithara-audio/analysis-waveform"]
+stretch-signalsmith = ["kithara-audio/stretch-signalsmith"]
+stretch-bungee = ["kithara-audio/stretch-bungee"]
 # Re-export of testing helpers (engine module + macro mocks).
 # Offline backend lives in `kithara-integration-tests::offline` since 2026-05-07.
 probe = []

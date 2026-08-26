@@ -3,10 +3,7 @@ pub use kithara_resampler::glide::{GlideBackend, GlideConfig, GlideInterpolation
 #[cfg(feature = "resample-rubato")]
 pub use kithara_resampler::rubato::{RubatoAlgorithm, RubatoBackend, RubatoConfig};
 
-#[cfg(all(
-    not(target_arch = "wasm32"),
-    any(feature = "stretch-signalsmith", feature = "stretch-bungee")
-))]
+#[cfg(not(target_arch = "wasm32"))]
 pub use crate::effects::timestretch::{
     ElasticEngine, ElasticError, StretchKind, TimeStretchProcessor,
 };

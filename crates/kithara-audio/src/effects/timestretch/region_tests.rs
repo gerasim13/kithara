@@ -94,12 +94,13 @@ fn add_click(buf: &mut [f32], frame: usize) {
     }
 }
 
-/// Render `source` through a key-locked Signalsmith processor with `plan`,
-/// feeding 4096-frame chunks with advancing `frame_offset` (source frames).
-fn render(speed: f32, plan: Option<RegionPlan>, source: &[f32]) -> Vec<f32> {
+/// Render `source` through a key-locked processor with `plan`, feeding
+/// 4096-frame chunks with advancing `frame_offset` (source frames).
+#[kithara::hang_watchdog]
+fn render(backend: StretchKind, speed: f32, plan: Option<RegionPlan>, source: &[f32]) -> Vec<f32> {
     let controls = StretchControls::new(speed);
     controls.set_keylock(true);
-    controls.set_backend(StretchKind::Signalsmith);
+    controls.set_backend(backend);
     controls.set_region_plan(plan.map(Arc::new));
     let mut fx = TimeStretchProcessor::new(controls, spec(), PcmPool::default());
     let mut out = Vec::new();
@@ -151,16 +152,40 @@ fn max_step(window: &[f32]) -> f32 {
         .fold(0.0, f32::max)
 }
 
-/// (min, median) of non-overlapping 2048-sample RMS windows, skipping 8192
-/// samples of backend latency edges on both sides.
+/// (min, median) of non-overlapping RMS windows inside the audible body.
 fn rms_profile(mono: &[f32]) -> (f32, f32) {
     const WIN: usize = 2048;
-    const SKIP: usize = 8192;
-    let body = &mono[SKIP..mono.len() - SKIP];
+    const EDGE_WINDOWS: usize = 4;
+    const AUDIBLE: f32 = 1.0e-4;
+
+    let first = mono
+        .iter()
+        .position(|sample| sample.abs() >= AUDIBLE)
+        .expect("the stretched fixture must become audible");
+    let last = mono
+        .iter()
+        .rposition(|sample| sample.abs() >= AUDIBLE)
+        .and_then(|index| index.checked_add(1))
+        .expect("the stretched fixture must have an audible end");
+    let edge = WIN
+        .checked_mul(EDGE_WINDOWS)
+        .expect("the edge exclusion fits in usize");
+    let start = first
+        .checked_add(edge)
+        .expect("the audible body start fits in usize");
+    let end = last
+        .checked_sub(edge)
+        .expect("the audible fixture outlasts both edge windows");
+    assert!(
+        end >= start.saturating_add(WIN),
+        "the audible fixture must contain at least one steady RMS window"
+    );
+    let body = &mono[start..end];
     let mut rms: Vec<f32> = body
         .chunks_exact(WIN)
         .map(|w| (w.iter().map(|s| s * s).sum::<f32>() / f32_of(f64_of(WIN))).sqrt())
         .collect();
+    assert!(!rms.is_empty(), "the steady audible body has an RMS window");
     rms.sort_by(f32::total_cmp);
     (rms[0], rms[rms.len() / 2])
 }
@@ -221,7 +246,12 @@ fn region_lookup_covers_segments_and_gaps() {
 /// slow region) must land back on the nominal grid once the plan's per-region
 /// corrections are applied: every output click interval ~= NOMINAL.
 #[kithara::test]
-fn corrections_align_drifting_clicks_to_nominal_grid() {
+#[cfg_attr(
+    feature = "stretch-signalsmith",
+    case::signalsmith(StretchKind::Signalsmith)
+)]
+#[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
+fn corrections_align_drifting_clicks_to_nominal_grid(#[case] backend: StretchKind) {
     let mut src = silence(TOTAL);
     for k in 0..BARS {
         add_click(&mut src, k * P1 + 8192);
@@ -235,7 +265,21 @@ fn corrections_align_drifting_clicks_to_nominal_grid() {
     ])
     .expect("valid plan");
 
-    let out = render(1.0, Some(plan), &src);
+    let raw_clicks = click_positions(&mono(&src));
+    assert_eq!(
+        raw_clicks.len(),
+        BARS * 2,
+        "the source fixture has every click"
+    );
+    let tol = NOMINAL / 20;
+    assert!(
+        raw_clicks
+            .windows(2)
+            .any(|pair| pair[1].abs_diff(pair[0]).abs_diff(NOMINAL) > tol),
+        "the uncorrected fixture must visibly drift from the nominal grid"
+    );
+
+    let out = render(backend, 1.0, Some(plan), &src);
     let clicks = click_positions(&mono(&out));
     assert_eq!(
         clicks.len(),
@@ -244,7 +288,6 @@ fn corrections_align_drifting_clicks_to_nominal_grid() {
     );
 
     // ±5% of a bar; the drifted spacings (P1, P2) are off by 10% and must fail.
-    let tol = NOMINAL / 20;
     for (i, pair) in clicks.windows(2).enumerate() {
         if i == BARS - 1 {
             continue; // spans the boundary reset transient
@@ -260,11 +303,16 @@ fn corrections_align_drifting_clicks_to_nominal_grid() {
 /// A ratio change at a segment boundary must not click: the max sample step
 /// around the boundary stays comparable to the steady-state background.
 #[kithara::test]
-fn ratio_change_boundary_has_no_transient_burst() {
+#[cfg_attr(
+    feature = "stretch-signalsmith",
+    case::signalsmith(StretchKind::Signalsmith)
+)]
+#[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
+fn ratio_change_boundary_has_no_transient_burst(#[case] backend: StretchKind) {
     let src = sine(TOTAL);
     let plan = RegionPlan::new(vec![seg(0, BOUNDARY, 1.0), seg(BOUNDARY, TOTAL, 1.04)])
         .expect("valid plan");
-    let out = mono(&render(1.0, Some(plan), &src));
+    let out = mono(&render(backend, 1.0, Some(plan), &src));
     assert!(out.len() > BOUNDARY + 16_384, "output too short");
 
     // Region 1 runs at ratio 1.0, so the boundary sits near BOUNDARY frames.
@@ -283,13 +331,18 @@ fn ratio_change_boundary_has_no_transient_burst() {
 /// are output sizing (a spurious boundary `flush` appends a latency tail)
 /// and signal continuity (a spurious `reset` dents the RMS envelope).
 #[kithara::test]
-fn equal_ratio_boundary_is_seamless() {
+#[cfg_attr(
+    feature = "stretch-signalsmith",
+    case::signalsmith(StretchKind::Signalsmith)
+)]
+#[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
+fn equal_ratio_boundary_is_seamless(#[case] backend: StretchKind) {
     let src = sine(TOTAL);
     let merged = RegionPlan::new(vec![seg(0, TOTAL, 1.05)]).expect("valid plan");
     let split = RegionPlan::new(vec![seg(0, BOUNDARY, 1.05), seg(BOUNDARY, TOTAL, 1.05)])
         .expect("valid plan");
-    let a = render(1.0, Some(merged), &src);
-    let b = render(1.0, Some(split), &src);
+    let a = render(backend, 1.0, Some(merged), &src);
+    let b = render(backend, 1.0, Some(split), &src);
     assert_eq!(
         a.len(),
         b.len(),
@@ -306,11 +359,16 @@ fn equal_ratio_boundary_is_seamless() {
 /// deterministic observables as above (the backend's random per-instance
 /// seed rules out bit-for-bit comparison): identical sizing, steady envelope.
 #[kithara::test]
-fn empty_plan_matches_no_plan() {
+#[cfg_attr(
+    feature = "stretch-signalsmith",
+    case::signalsmith(StretchKind::Signalsmith)
+)]
+#[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
+fn empty_plan_matches_no_plan(#[case] backend: StretchKind) {
     let src = sine(TOTAL / 4);
     let empty = RegionPlan::new(Vec::new()).expect("empty plan is valid");
-    let with = render(0.5, Some(empty), &src);
-    let without = render(0.5, None, &src);
+    let with = render(backend, 0.5, Some(empty), &src);
+    let without = render(backend, 0.5, None, &src);
     assert_eq!(
         with.len(),
         without.len(),

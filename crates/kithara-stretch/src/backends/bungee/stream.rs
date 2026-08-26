@@ -4,14 +4,7 @@ use super::{
     buffer::{InputBuffer, PooledPlanar},
     ffi::{NativeOutput, NativeStretcher},
 };
-use crate::{ElasticConfig, ElasticError};
-
-#[path = "drain.rs"]
-mod drain;
-#[path = "prime.rs"]
-mod prime;
-#[path = "render.rs"]
-mod render;
+use crate::{ElasticConfig, ElasticError, ElasticRateEnvelope};
 
 #[derive(fieldwork::Fieldwork)]
 #[fieldwork(get, copy, vis = "pub(super)")]
@@ -20,27 +13,35 @@ pub(super) struct TerminalChunk {
     complete: bool,
 }
 
+impl TerminalChunk {
+    pub(super) fn new(frames: usize, complete: bool) -> Self {
+        Self { frames, complete }
+    }
+}
+
 #[derive(fieldwork::Fieldwork)]
 #[fieldwork(opt_in)]
 pub(super) struct StreamCore {
-    anchor: Option<f64>,
-    cue_grain_pending: bool,
-    input: InputBuffer,
+    pub(super) anchor: Option<f64>,
+    pub(super) cue_grain_pending: bool,
+    pub(super) input: InputBuffer,
     #[field(get, copy, vis = "pub(super)")]
     max_input_frames: usize,
-    native: NativeStretcher,
-    output: PooledPlanar,
-    output_chunk: Option<NativeOutput>,
-    output_consumed: usize,
-    request: Request,
-    request_pending: bool,
-    samples_needed: f64,
+    pub(super) native: NativeStretcher,
+    pub(super) output: PooledPlanar,
+    pub(super) output_chunk: Option<NativeOutput>,
+    pub(super) output_consumed: usize,
+    pub(super) request: Request,
+    pub(super) request_pending: bool,
+    pub(super) rate_envelope: ElasticRateEnvelope,
+    pub(super) samples_needed: f64,
+    pub(super) source_latency_frames: usize,
+    pub(super) unprimed_started: bool,
 }
 
 impl StreamCore {
-    const INPUT_LOOKAHEAD_DIVISOR: f64 = 2.0;
-    const PIPELINE_GRAINS: usize = 4;
-    const TERMINAL_GRAIN_LIMIT: usize = 64;
+    pub(super) const PIPELINE_GRAINS: usize = 4;
+    pub(super) const TERMINAL_GRAIN_LIMIT: usize = 64;
 
     pub(super) fn new(
         config: &ElasticConfig,
@@ -48,6 +49,7 @@ impl StreamCore {
     ) -> Result<Self, ElasticError> {
         let native = NativeStretcher::new(config.sample_rate(), config.channels())?;
         let max_input_frames = native.max_input_frames()?;
+        let source_latency_frames = max_input_frames / 2;
         Ok(Self {
             anchor: None,
             cue_grain_pending: false,
@@ -64,12 +66,35 @@ impl StreamCore {
                 reset: 0,
             },
             request_pending: false,
+            rate_envelope: config.rate_envelope(),
             samples_needed: 0.0,
+            source_latency_frames,
+            unprimed_started: false,
         })
     }
 
     pub(super) fn prepare_input_capacity(&mut self, capacity: usize) -> Result<(), ElasticError> {
         self.input.prepare_source_capacity(capacity)
+    }
+
+    pub(super) fn source_latency_frames(&self) -> Result<usize, ElasticError> {
+        let (history, lookahead) = self.input.requested_window(self.request.position)?;
+        if history > 0 && history == lookahead {
+            return Ok(history);
+        }
+        Err(ElasticError::EnginePreparation(
+            "Bungee reported an unsupported asymmetric input window",
+        ))
+    }
+
+    pub(super) fn set_source_latency_frames(&mut self, frames: usize) -> Result<(), ElasticError> {
+        if frames == 0 || frames > self.max_input_frames / 2 {
+            return Err(ElasticError::EnginePreparation(
+                "Bungee reported an invalid source latency",
+            ));
+        }
+        self.source_latency_frames = frames;
+        Ok(())
     }
 }
 
@@ -79,6 +104,7 @@ mod tests {
 
     use kithara_bufpool::PcmPool;
     use kithara_test_utils::kithara;
+    use num_traits::ToPrimitive;
 
     use super::*;
     use crate::{ElasticRequest, backends::bungee::ffi::NativeFault};
@@ -88,13 +114,20 @@ mod tests {
     impl Fixture {
         const CHANNELS: usize = 2;
         const CONTEXT_FRAMES: usize = 8192;
+        const LATENCY_PROBE_BLOCKS: usize = 4;
         const SAMPLE_RATE: u32 = 48_000;
     }
 
     fn signal(frames: usize, offset: usize) -> Vec<f32> {
+        let sample_rate = Fixture::SAMPLE_RATE
+            .to_f32()
+            .expect("the fixture sample rate fits f32 exactly");
         (0..frames)
             .flat_map(|frame| {
-                let phase = (offset + frame) as f32 * TAU * 440.0 / Fixture::SAMPLE_RATE as f32;
+                let position = (offset + frame)
+                    .to_f32()
+                    .expect("the fixture position fits f32 exactly");
+                let phase = position * TAU * 440.0 / sample_rate;
                 let sample = phase.sin() * 0.5;
                 [sample, sample * -0.5]
             })
@@ -155,6 +188,55 @@ mod tests {
             !core.request_pending,
             "no grain may remain specified with controls from a previous render call"
         );
+    }
+
+    #[kithara::test]
+    fn adjacent_unprimed_rate_extremes_do_not_reset_native_continuity() {
+        const FAST_OUTPUT_FRAMES: usize = 2048;
+        const FAST_SOURCE_FRAMES: usize = 8192;
+        const SLOW_OUTPUT_FRAMES: usize = 8000;
+        const SLOW_SOURCE_FRAMES: usize = 400;
+
+        let config = ElasticConfig::builder()
+            .pool(PcmPool::default())
+            .sample_rate(Fixture::SAMPLE_RATE)
+            .channels(Fixture::CHANNELS)
+            .max_source_frames(Fixture::CONTEXT_FRAMES)
+            .max_output_frames(Fixture::CONTEXT_FRAMES)
+            .build()
+            .expect("the fixture shape is valid");
+        let mut core =
+            StreamCore::new(&config, Fixture::CONTEXT_FRAMES).expect("the fixture core prepares");
+        let probe = ElasticRequest::new(Fixture::CONTEXT_FRAMES, Fixture::CONTEXT_FRAMES)
+            .expect("the latency probe request is valid");
+        for _ in 0..Fixture::LATENCY_PROBE_BLOCKS {
+            core.probe_silence(probe)
+                .expect("the latency probe renders");
+        }
+        let source_latency = core
+            .source_latency_frames()
+            .expect("the native source window is measurable");
+        core.set_source_latency_frames(source_latency)
+            .expect("the measured source latency is valid");
+        core.discard().expect("the latency probe clears");
+        let slow = ElasticRequest::new(SLOW_SOURCE_FRAMES, SLOW_OUTPUT_FRAMES)
+            .expect("the slow request is valid");
+        let slow_source = signal(SLOW_SOURCE_FRAMES, 0);
+        let mut slow_output = vec![0.0; SLOW_OUTPUT_FRAMES * Fixture::CHANNELS];
+        core.render(Some(&slow_source), slow, 1.0, Some(&mut slow_output))
+            .expect("the slow request renders");
+        let slow_position = core.request.position;
+
+        let fast = ElasticRequest::new(FAST_SOURCE_FRAMES, FAST_OUTPUT_FRAMES)
+            .expect("the fast request is valid");
+        let fast_source = signal(FAST_SOURCE_FRAMES, SLOW_SOURCE_FRAMES);
+        let mut fast_output = vec![0.0; FAST_OUTPUT_FRAMES * Fixture::CHANNELS];
+        core.render(Some(&fast_source), fast, 1.0, Some(&mut fast_output))
+            .expect("the adjacent fast request renders");
+
+        assert_eq!(core.request.reset, 0);
+        assert!(core.request.position > slow_position);
+        assert!(fast_output.iter().all(|sample| sample.is_finite()));
     }
 
     #[kithara::test]

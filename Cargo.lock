@@ -4964,6 +4964,7 @@ dependencies = [
  "derive_more",
  "fieldwork",
  "kithara-bufpool",
+ "kithara-platform",
  "kithara-test-utils",
  "kithara-workspace-hack",
  "num-traits",
