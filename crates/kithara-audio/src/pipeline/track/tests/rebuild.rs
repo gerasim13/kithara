@@ -860,6 +860,7 @@ pub(super) struct RouteFixture {
     pub(super) control: Arc<TestControl>,
     pub(super) drops: Arc<Mutex<Vec<u64>>>,
     pub(super) host_sample_rate: Arc<AtomicU32>,
+    pub(super) phase: Arc<Mutex<SourcePhase>>,
     pub(super) source: StreamAudioSource<TestStream>,
 }
 
@@ -983,6 +984,25 @@ pub(super) async fn route_signal_source_with_effects(
     .await
 }
 
+pub(super) async fn route_signal_source_with_eof(
+    initial_host_rate: u32,
+    chunks_before_eof: usize,
+) -> RouteFixture {
+    route_source(
+        RouteParams {
+            chunks_before_eof: Some(chunks_before_eof),
+            gapless: None,
+            incoming_chunks_before_eof: None,
+            active_timeline_gap: 0,
+            incoming_timeline_gap: 0,
+            initial_host_rate,
+            segmented: false,
+        },
+        Vec::new(),
+    )
+    .await
+}
+
 pub(super) async fn route_signal_source_with_gapless(
     initial_host_rate: u32,
     gapless: GaplessInfo,
@@ -1051,12 +1071,14 @@ async fn route_source(params: RouteParams, effects: Vec<Box<dyn AudioEffect>>) -
     let active_timeline_gap = params.active_timeline_gap;
     let incoming_timeline_gap = params.incoming_timeline_gap;
     let segmented = params.segmented;
+    let test_source = if segmented {
+        TestSource::segmented(control.clone())
+    } else {
+        TestSource::new(control.clone())
+    };
+    let phase = test_source.phase_handle();
     let stream = match Stream::<TestStream>::new(TestConfig {
-        source: if segmented {
-            TestSource::segmented(control.clone())
-        } else {
-            TestSource::new(control.clone())
-        },
+        source: test_source,
     })
     .await
     {
@@ -1132,6 +1154,7 @@ async fn route_source(params: RouteParams, effects: Vec<Box<dyn AudioEffect>>) -
         control,
         drops,
         host_sample_rate,
+        phase,
         source: StreamAudioSource::new(shared_stream, parts),
     }
 }

@@ -160,6 +160,14 @@ stages per step: seek preemption (`preempt_target`), skipped while
 change (`start_route_change_recreate_if_needed`), skipped in
 recreate/rebuild/terminal phases; then the phase's own `step`.
 
+`AtEof` has exactly two owners, both semantic (PCM/timeline), never byte-space:
+the decode path's exhausted finalization (`decode/step.rs`) and a seek landing
+at-or-past `duration` (`SeekTransition::AtEof`). Byte-space `SourcePhase::Eof`
+is a readiness answer, not an end of track — the demuxer may still hold
+buffered frames past the last byte (a seek into the final segment parks the
+reader at the stream total with the tail undecoded) — so wait states resume
+into their `WaitContext` on it, exactly like `Ready`.
+
 `update_state` publishes the phase to the shared `Activity` PLAYING flag: every
 non-terminal phase keeps it set (the downloader peer's `priority()` reads it, and
 buffering / mid-seek / rebuild windows are still "listened to"); `AtEof` and

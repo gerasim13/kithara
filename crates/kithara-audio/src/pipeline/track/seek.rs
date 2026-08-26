@@ -3,7 +3,7 @@ use kithara_stream::{SourcePhase, StreamType};
 use tracing::trace;
 
 use super::{
-    AtEof, CurrentFsm, Decoding, Failed, RecreatingDecoder, TrackFailure, TrackStep,
+    CurrentFsm, Decoding, Failed, RecreatingDecoder, TrackFailure, TrackStep,
     decode::{DecodeStep, decode_step},
     fsm::apply_seek_transition,
     phase::{Track, TrackPhase, sealed},
@@ -279,19 +279,14 @@ impl Track<WaitingForSource> {
             return TrackStep::Blocked(reason);
         }
 
-        match phase {
-            SourcePhase::Cancelled => {
-                src.update_state(Track::<Failed>::new(TrackFailure::SourceCancelled).erase());
-                return TrackStep::Failed;
-            }
-            SourcePhase::Eof => {
-                src.update_state(Track::<AtEof>::new(()).erase());
-                return TrackStep::Eof;
-            }
-            _ => {}
+        if phase == SourcePhase::Cancelled {
+            src.update_state(Track::<Failed>::new(TrackFailure::SourceCancelled).erase());
+            return TrackStep::Failed;
         }
 
-        // Source ready — resume into the phase that initiated the wait.
+        // Source ready — resume into the phase that initiated the wait. `Eof`
+        // resumes like `Ready`: byte-space EOF is not end of PCM, only the
+        // decode path finalizes `AtEof` (see CONTEXT.md, "Track FSM").
         match context {
             WaitContext::Playback => src.update_state(Track::<Decoding>::new(()).erase()),
             WaitContext::Seek(ctx) => src.update_state(Track::<SeekRequested>::new(ctx).erase()),
