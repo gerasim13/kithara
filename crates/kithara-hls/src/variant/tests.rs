@@ -29,8 +29,8 @@ use super::{HlsVariant, PlanConfig, PlanCtx, SizeDemand, VariantParts, segment_p
 use crate::{
     playlist::{PlaylistState, SegmentState, VariantState},
     segment::{
-        InitSegment, MediaSegment, PlannedFetch, Segment, SegmentContent, SegmentSize,
-        SegmentSlotState,
+        Downloading, FetchClaim, InitSegment, MediaSegment, PlannedFetch, Segment, SegmentContent,
+        SegmentSize, SegmentSlotState,
     },
     signal::SizeSignal,
     stream::HlsSession,
@@ -1421,6 +1421,112 @@ fn phase_at_reports_waiting_demand_for_queued_segment() {
     push_planned(&v, 0);
 
     assert_eq!(v.phase_at(0..16), SourcePhase::WaitingDemand);
+}
+
+fn claim_segment_zero(v: &Arc<HlsVariant>, ctx: &PlanCtx) -> FetchClaim<Downloading> {
+    v.segments()[0]
+        .state()
+        .try_claim(
+            PlannedFetch::Segment(0),
+            v.flow.queue.revision(),
+            Arc::downgrade(v),
+            ctx.signal.clone(),
+        )
+        .expect("segment claim")
+}
+
+#[kithara::test]
+fn a_parked_wait_files_demand_on_the_claimed_segment() {
+    let ctx = test_ctx(3);
+    let v = make_var(0, 0, &[100, 100], &ctx);
+    let _claim = claim_segment_zero(&v, &ctx);
+    assert!(
+        !v.segments()[0].state().is_reader_demanded(),
+        "an in-flight fetch nobody waits on must not be escalated"
+    );
+
+    assert!(v.wait_range(0..16, None).is_err(), "the range is not ready");
+
+    assert!(
+        v.segments()[0].state().is_reader_demanded(),
+        "the wait parking on the claimed segment must escalate its fetch"
+    );
+}
+
+#[kithara::test]
+fn a_phase_query_leaves_demand_unfiled() {
+    let ctx = test_ctx(3);
+    let v = make_var(0, 0, &[100, 100], &ctx);
+    let _claim = claim_segment_zero(&v, &ctx);
+
+    assert_eq!(v.phase_at(0..16), SourcePhase::WaitingDemand);
+
+    assert!(
+        !v.segments()[0].state().is_reader_demanded(),
+        "a phase query observes the slot; only a parked wait escalates it"
+    );
+}
+
+#[kithara::test]
+fn a_settled_slot_answers_no_demand() {
+    let ctx = test_ctx(3);
+    let v = make_var(0, 0, &[100, 100], &ctx);
+    let claim = claim_segment_zero(&v, &ctx);
+    assert!(v.wait_range(0..16, None).is_err(), "the range is not ready");
+
+    claim.into_missing();
+
+    assert!(
+        !v.segments()[0].state().is_reader_demanded(),
+        "a settled slot has no in-flight fetch left to escalate"
+    );
+
+    let _claim = claim_segment_zero(&v, &ctx);
+
+    assert!(
+        !v.segments()[0].state().is_reader_demanded(),
+        "the settle must clear the filing: a fresh claim starts unescalated"
+    );
+}
+
+#[kithara::test]
+fn a_readiness_poll_leaves_demand_unfiled() {
+    let ctx = test_ctx(3);
+    let v = make_var(0, 0, &[100, 100], &ctx);
+    let profile = ReaderProfile::new(
+        ReaderInput::Incremental,
+        ReaderWarmup::None,
+        NonZeroU64::new(16).expect("non-zero read ahead"),
+    );
+    let preparation = v
+        .prepare_reader(profile, Duration::ZERO)
+        .expect("reader preparation");
+    let _claim = claim_segment_zero(&v, &ctx);
+
+    assert!(
+        !v.reader_is_ready(&preparation).expect("readiness poll"),
+        "the claimed segment is not loaded"
+    );
+
+    assert!(
+        !v.segments()[0].state().is_reader_demanded(),
+        "a readiness poll is not a read; only a parked wait escalates the fetch"
+    );
+}
+
+#[kithara::test]
+fn a_planned_segment_is_owed_not_escalated() {
+    let ctx = test_ctx(3);
+    let v = make_var(0, 0, &[100, 100], &ctx);
+    push_planned(&v, 0);
+    assert!(v.wait_range(0..16, None).is_err(), "the range is not ready");
+
+    let _claim = claim_segment_zero(&v, &ctx);
+
+    assert!(
+        !v.segments()[0].state().is_reader_demanded(),
+        "a wait parked before the claim must not carry into the fresh fetch: the owed dispatch stamps it High at emit"
+    );
 }
 
 fn exact_seek_session() -> (Arc<HlsVariant>, HlsSession, u64) {

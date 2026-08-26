@@ -197,12 +197,27 @@ impl HlsVariant {
     }
 
     fn range_wait_phase(&self, range: &Range<u64>) -> SourcePhase {
+        self.range_wait_phase_with(range, |_| {})
+    }
+
+    /// Wait phase of `range`; `on_demand` sees every planned or in-flight
+    /// fetch the range still needs bytes from. The query itself is pure —
+    /// only the wait filing in `wait_range` passes a writing visitor.
+    pub(super) fn range_wait_phase_with(
+        &self,
+        range: &Range<u64>,
+        on_demand: impl FnMut(PlannedFetch),
+    ) -> SourcePhase {
         self.layout
-            .try_published(|| Some(self.range_wait_phase_published(range)))
+            .try_published(|| Some(self.range_wait_phase_published(range, on_demand)))
             .unwrap_or(SourcePhase::WaitingDemand)
     }
 
-    fn range_wait_phase_published(&self, range: &Range<u64>) -> SourcePhase {
+    fn range_wait_phase_published(
+        &self,
+        range: &Range<u64>,
+        mut on_demand: impl FnMut(PlannedFetch),
+    ) -> SourcePhase {
         let total = self.total_bytes();
         let uses_seek_alias = self.seek_alias_at(range.start).is_some();
         let clamp_alias_to_eof = uses_seek_alias
@@ -211,6 +226,7 @@ impl HlsVariant {
         if !uses_seek_alias && total > 0 && range.start >= total && !self.sizes_complete() {
             let head = self.download_head();
             return if self.segment_has_demand(head) {
+                on_demand(PlannedFetch::Segment(head));
                 SourcePhase::WaitingDemand
             } else {
                 SourcePhase::Waiting
@@ -238,6 +254,7 @@ impl HlsVariant {
                 if !self.init_has_demand() {
                     return SourcePhase::Waiting;
                 }
+                on_demand(PlannedFetch::Init);
                 waiting_on_demand = true;
             }
             cursor = slice_end;
@@ -262,6 +279,7 @@ impl HlsVariant {
                 if !self.segment_has_demand(seg_idx) {
                     return SourcePhase::Waiting;
                 }
+                on_demand(PlannedFetch::Segment(seg_idx));
                 waiting_on_demand = true;
             }
             cursor = slice_end;
