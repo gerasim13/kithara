@@ -9,11 +9,8 @@ use crate::{ElasticConfig, ElasticEngine, ElasticError, StretchKind};
 /// # Errors
 /// Returns [`ElasticError`] when the config cannot prepare the selected
 /// engine.
-pub fn build_engine(
-    kind: StretchKind,
-    config: ElasticConfig,
-) -> Result<Box<dyn ElasticEngine>, ElasticError> {
-    match kind {
+pub fn build_engine(config: ElasticConfig) -> Result<Box<dyn ElasticEngine>, ElasticError> {
+    match config.backend() {
         #[cfg(feature = "stretch-signalsmith")]
         StretchKind::Signalsmith => SignalsmithElastic::prepare(config)
             .map(|engine| Box::new(engine) as Box<dyn ElasticEngine>),

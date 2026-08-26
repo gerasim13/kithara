@@ -113,8 +113,8 @@ impl TimeStretchProcessor {
         reusable_pending: Option<PcmBuf>,
         reusable_scratch: Option<PcmBuf>,
     ) -> PreparedTarget {
-        let result = Self::config_for(spec, pool)
-            .and_then(|config| build_engine(kind, config))
+        let result = Self::config_for(kind, spec, pool)
+            .and_then(build_engine)
             .and_then(|engine| {
                 let channels = usize::from(spec.channels.max(1));
                 let pending_samples = Self::MAX_SOURCE_FRAMES
@@ -224,8 +224,13 @@ impl TimeStretchProcessor {
         }
     }
 
-    fn config_for(spec: PcmSpec, pool: &PcmPool) -> Result<ElasticConfig, ElasticError> {
+    fn config_for(
+        backend: StretchKind,
+        spec: PcmSpec,
+        pool: &PcmPool,
+    ) -> Result<ElasticConfig, ElasticError> {
         ElasticConfig::builder()
+            .backend(backend)
             .sample_rate(spec.sample_rate.get())
             .channels(usize::from(spec.channels.max(1)))
             .pool(pool.clone())
@@ -1012,18 +1017,15 @@ mod tests {
         assert_eq!(out, input, "{kind:?}: unity speed must bypass byte-exact");
     }
 
-    #[cfg(feature = "stretch-signalsmith")]
     #[kithara::test]
-    fn signalsmith_half_speed_and_unity_contracts() {
-        assert_half_speed_contract(StretchKind::Signalsmith);
-        assert_unity_contract(StretchKind::Signalsmith);
-    }
-
-    #[cfg(feature = "stretch-bungee")]
-    #[kithara::test]
-    fn bungee_half_speed_and_unity_contracts() {
-        assert_half_speed_contract(StretchKind::Bungee);
-        assert_unity_contract(StretchKind::Bungee);
+    #[cfg_attr(
+        feature = "stretch-signalsmith",
+        case::signalsmith(StretchKind::Signalsmith)
+    )]
+    #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
+    fn half_speed_and_unity_contracts(#[case] backend: StretchKind) {
+        assert_half_speed_contract(backend);
+        assert_unity_contract(backend);
     }
 
     #[kithara::test]

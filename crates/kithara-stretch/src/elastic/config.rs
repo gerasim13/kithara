@@ -3,6 +3,7 @@ use kithara_bufpool::PcmPool;
 use num_traits::ToPrimitive;
 
 use super::{ElasticError, ElasticRateEnvelope};
+use crate::StretchKind;
 
 struct Consts;
 
@@ -60,6 +61,9 @@ impl ElasticSpanConfig {
 #[fieldwork(opt_in, get)]
 #[non_exhaustive]
 pub struct ElasticConfig {
+    /// Selected compiled implementation.
+    #[field(get(copy))]
+    backend: StretchKind,
     /// Shared PCM pool used by engines that need planar scratch.
     #[field(get)]
     pool: PcmPool,
@@ -80,6 +84,7 @@ impl ElasticConfig {
         finish_fn(vis = "pub")
     )]
     fn new(
+        #[builder(default)] backend: StretchKind,
         pool: PcmPool,
         sample_rate: u32,
         channels: usize,
@@ -111,7 +116,11 @@ impl ElasticConfig {
             sample_rate,
         };
         shape.rate_envelope()?;
-        Ok(Self { pool, shape })
+        Ok(Self {
+            backend,
+            pool,
+            shape,
+        })
     }
 
     delegate::delegate! {
@@ -269,6 +278,7 @@ mod tests {
             .expect("valid elastic config");
         let envelope = config.shape().rate_envelope().expect("valid frame domain");
 
+        assert_eq!(config.backend(), StretchKind::default());
         assert_eq!(envelope.min_source_frames_per_output(), 1.0 / 480.0);
         assert_eq!(envelope.max_source_frames_per_output(), 960.0);
     }

@@ -15,9 +15,10 @@ default or global pool.
   which variants are compiled in: `1 = Signalsmith`, `2 = Bungee`; `3` is reserved for a future
   pure-Rust native backend. An unknown discriminant decodes to `StretchKind::all()[0]`, the first
   compiled-in backend, which is also `Default`.
-- `ElasticConfig` is a fallible `#[non_exhaustive]` `bon` builder carrying sample rate, channel
-  count, maximum source/output frame spans, and the injected `PcmPool`.
-- `build_engine(kind, config)` dispatches selector to `Box<dyn ElasticEngine>`.
+- `ElasticConfig` is the single fallible `#[non_exhaustive]` `bon` root config. It owns the
+  `StretchKind` selection, sample rate, channel count, maximum source/output frame spans and the
+  injected `PcmPool`; the selector is not a second factory argument.
+- `build_engine(config)` dispatches the config-owned selector to `Box<dyn ElasticEngine>`.
 - `ElasticPriming` is an optional capability for engines that can absorb history without emitting
   it. Nothing above an adapter names a concrete DSP library.
 

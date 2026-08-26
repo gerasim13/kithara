@@ -7,8 +7,9 @@ use crate::{ElasticConfig, ElasticRequest, StretchKind};
 const CHANNELS: usize = 2;
 const FRAMES: usize = 4096;
 
-fn config() -> ElasticConfig {
+fn config(backend: StretchKind) -> ElasticConfig {
     ElasticConfig::builder()
+        .backend(backend)
         .pool(PcmPool::default())
         .sample_rate(44_100)
         .channels(CHANNELS)
@@ -27,8 +28,14 @@ fn interleaved_stereo() -> Vec<f32> {
         .collect()
 }
 
-fn smoke(kind: StretchKind) {
-    let mut engine = build_engine(kind, config()).expect("selected engine prepares");
+#[kithara::test(native, flash(false))]
+#[cfg_attr(
+    feature = "stretch-signalsmith",
+    case::signalsmith(StretchKind::Signalsmith)
+)]
+#[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
+fn configured_engine_processes_an_exact_request(#[case] backend: StretchKind) {
+    let mut engine = build_engine(config(backend)).expect("selected engine prepares");
     engine.set_pitch(1.0).expect("unity pitch is valid");
     let input = interleaved_stereo();
     let mut output = vec![f32::NAN; FRAMES * CHANNELS];
@@ -41,16 +48,4 @@ fn smoke(kind: StretchKind) {
         .expect("selected engine processes an exact request");
 
     assert!(output.iter().all(|sample| sample.is_finite()));
-}
-
-#[cfg(feature = "stretch-signalsmith")]
-#[kithara::test(native, flash(false))]
-fn builds_and_processes_signalsmith_engine() {
-    smoke(StretchKind::Signalsmith);
-}
-
-#[cfg(feature = "stretch-bungee")]
-#[kithara::test(native, flash(false))]
-fn builds_and_processes_bungee_engine() {
-    smoke(StretchKind::Bungee);
 }
