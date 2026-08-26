@@ -3,6 +3,7 @@ use std::num::{NonZeroU32, NonZeroUsize};
 use assert_no_alloc::*;
 use kithara::{
     self,
+    audio::{AudioEffect, StretchControls, StretchKind, TimeStretchProcessor},
     bufpool::PcmPool,
     decode::{PcmChunk, PcmMeta, PcmSpec},
     resampler::{
@@ -241,5 +242,120 @@ fn test_resampler_passthrough_allocation_free() {
     assert_no_alloc(|| {
         let frames = process_planar(&mut resampler, &input, &mut output);
         assert!(frames > 0);
+    });
+}
+
+#[kithara::test]
+#[case(StretchKind::Signalsmith)]
+#[cfg_attr(
+    not(all(target_os = "windows", target_env = "msvc")),
+    case(StretchKind::Bungee)
+)]
+fn timestretch_active_process_and_terminal_flush_are_allocation_free(#[case] kind: StretchKind) {
+    const FRAMES: usize = 8_192;
+    let pool = make_pool();
+    let spec = PcmSpec::new(2, NonZeroU32::new(44_100).expect("test rate"));
+    let (mut effect, first, second) = permit_alloc(|| {
+        let controls = StretchControls::new(0.5);
+        controls.set_keylock(true);
+        controls.set_backend(kind);
+        let mut effect = TimeStretchProcessor::new(controls, spec, pool.clone());
+        effect.service_deferred(spec);
+        let first = make_chunk(&pool, FRAMES, 2);
+        let second = make_chunk(&pool, FRAMES, 2);
+        (effect, first, second)
+    });
+
+    let misses = pool.stats().alloc_misses;
+    let first_output = assert_no_alloc(|| {
+        effect
+            .process(first)
+            .unwrap_or_else(|| panic!("active stretch must render"))
+    });
+    assert_eq!(pool.stats().alloc_misses, misses);
+    permit_alloc(|| {
+        effect.service_deferred(spec);
+        drop(first_output);
+    });
+
+    let misses = pool.stats().alloc_misses;
+    let second_output = assert_no_alloc(|| {
+        effect
+            .process(second)
+            .unwrap_or_else(|| panic!("serviced stretch must render again"))
+    });
+    assert_eq!(pool.stats().alloc_misses, misses);
+    permit_alloc(|| {
+        effect.service_deferred(spec);
+        drop(second_output);
+    });
+
+    let misses = pool.stats().alloc_misses;
+    let terminal = assert_no_alloc(|| effect.flush());
+    assert_eq!(pool.stats().alloc_misses, misses);
+    permit_alloc(|| {
+        effect.service_deferred(spec);
+        drop(terminal);
+    });
+}
+
+#[kithara::test]
+#[case(StretchKind::Signalsmith)]
+#[cfg_attr(
+    not(all(target_os = "windows", target_env = "msvc")),
+    case(StretchKind::Bungee)
+)]
+fn timestretch_pending_and_maximum_output_are_allocation_free(#[case] kind: StretchKind) {
+    const FRAMES: usize = 8_192;
+    let pool = make_pool();
+    let spec = PcmSpec::new(2, NonZeroU32::new(44_100).expect("test rate"));
+    let (mut maximum, input) = permit_alloc(|| {
+        let controls = StretchControls::new(0.05);
+        controls.set_keylock(true);
+        controls.set_backend(kind);
+        let mut maximum = TimeStretchProcessor::new(controls, spec, pool.clone());
+        maximum.service_deferred(spec);
+        let input = make_chunk(&pool, FRAMES, 2);
+        (maximum, input)
+    });
+    let misses = pool.stats().alloc_misses;
+    let maximum_output = assert_no_alloc(|| {
+        maximum
+            .process(input)
+            .unwrap_or_else(|| panic!("maximum prepared output must render"))
+    });
+    assert_eq!(maximum_output.frames(), 163_840);
+    assert_eq!(pool.stats().alloc_misses, misses);
+    permit_alloc(|| {
+        maximum.service_deferred(spec);
+        drop(maximum_output);
+    });
+
+    let (mut pending, input) = permit_alloc(|| {
+        let controls = StretchControls::new(2.0);
+        controls.set_keylock(true);
+        controls.set_backend(kind);
+        let mut pending = TimeStretchProcessor::new(controls, spec, pool.clone());
+        pending.service_deferred(spec);
+        let input = make_chunk(&pool, 1, 2);
+        (pending, input)
+    });
+    let misses = pool.stats().alloc_misses;
+    assert_no_alloc(|| {
+        assert!(pending.process(input).is_none());
+    });
+    assert_eq!(pool.stats().alloc_misses, misses);
+    permit_alloc(|| pending.service_deferred(spec));
+
+    let misses = pool.stats().alloc_misses;
+    let terminal = assert_no_alloc(|| {
+        pending
+            .flush()
+            .unwrap_or_else(|| panic!("pending frame plus terminal tail must render"))
+    });
+    assert_eq!(pool.stats().alloc_misses, misses);
+    permit_alloc(|| {
+        pending.service_deferred(spec);
+        drop(terminal);
     });
 }

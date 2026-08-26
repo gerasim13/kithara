@@ -106,12 +106,19 @@ fn render(speed: f32, plan: Option<RegionPlan>, source: &[f32]) -> Vec<f32> {
     let mut offset = 0_u64;
     for data in source.chunks(4096 * CH) {
         let frames = data.len() / CH;
-        if let Some(o) = fx.process(chunk(data, offset)) {
+        let output = fx.process(chunk(data, offset));
+        fx.service_deferred(spec());
+        if let Some(o) = output {
             out.extend_from_slice(&o.samples);
         }
         offset += u64_of(frames);
     }
-    while let Some(o) = fx.flush() {
+    loop {
+        let output = fx.flush();
+        fx.service_deferred(spec());
+        let Some(o) = output else {
+            break;
+        };
         out.extend_from_slice(&o.samples);
     }
     out

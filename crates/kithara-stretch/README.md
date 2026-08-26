@@ -16,16 +16,15 @@
 
 Pure time-stretch DSP contracts and backend adapters for Kithara.
 
-This crate owns the `StretchBackend` trait for the streaming stretch slot, the
-`ElasticEngine` / `ElasticPriming` traits for exact-span rendering, the backend
-selector and factory, and the native C++ adapters that implement them. Backend
-features depend downward on `kithara-bufpool` for scratch storage, and native
-builds include `kithara-workspace-hack`; audio graph plumbing, region planning,
-chunk metadata, and resampler routing stay in `kithara-audio`.
+This crate owns the `ElasticEngine` / `ElasticPriming` exact-span contracts, the
+backend selector and factory, and the native C++ adapters that implement them.
+Backend features depend downward on `kithara-bufpool` for scratch storage, and
+native builds include `kithara-workspace-hack`; audio graph plumbing, region
+planning, chunk metadata, and resampler routing stay in `kithara-audio`.
 
-Every compiled-in engine runs the same exact-span conformance suite, and each
-declares its own rate window and latency through `ElasticCapabilities`, so
-callers plan against capabilities rather than against a named library.
+Every compiled-in engine runs the same exact-span conformance suite and reports
+its prepared frame limits and latency through `ElasticCapabilities`, so callers
+plan against capabilities rather than against a named library.
 
 Feature flags select the compiled backends:
 

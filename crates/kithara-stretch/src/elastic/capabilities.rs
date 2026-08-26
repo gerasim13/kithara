@@ -1,4 +1,5 @@
-use super::{ElasticConfig, ElasticError, ElasticLatency, ElasticRateEnvelope, ElasticRequest};
+use super::{ElasticError, ElasticLatency, ElasticRateEnvelope, ElasticRequest};
+use crate::elastic::config::ElasticShape;
 
 /// Immutable limits, latency and rate window of a prepared elastic engine.
 /// Every value is declared by the engine that reports it, so a caller plans
@@ -8,7 +9,7 @@ use super::{ElasticConfig, ElasticError, ElasticLatency, ElasticRateEnvelope, El
 #[non_exhaustive]
 pub struct ElasticCapabilities {
     #[field(skip)]
-    config: ElasticConfig,
+    shape: ElasticShape,
     /// Fixed algorithmic latency in both coordinate spaces.
     #[field(get, copy)]
     latency: ElasticLatency,
@@ -18,16 +19,12 @@ pub struct ElasticCapabilities {
 }
 
 impl ElasticCapabilities {
-    pub(crate) const fn new(
-        config: ElasticConfig,
-        latency: ElasticLatency,
-        rate_envelope: ElasticRateEnvelope,
-    ) -> Self {
-        Self {
-            config,
+    pub(crate) fn new(shape: ElasticShape, latency: ElasticLatency) -> Result<Self, ElasticError> {
+        Ok(Self {
+            shape,
             latency,
-            rate_envelope,
-        }
+            rate_envelope: shape.rate_envelope()?,
+        })
     }
 
     /// Interleaved sample count of a frame span at the prepared channel count.
@@ -95,7 +92,7 @@ impl ElasticCapabilities {
     }
 
     delegate::delegate! {
-        to self.config {
+        to self.shape {
             /// Prepared interleaved channel count.
             #[must_use]
             pub fn channels(&self) -> usize;

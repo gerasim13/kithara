@@ -1,4 +1,8 @@
-use super::ElasticError;
+use bon::bon;
+use kithara_bufpool::PcmPool;
+use num_traits::ToPrimitive;
+
+use super::{ElasticError, ElasticRateEnvelope};
 
 /// Numeric continuity policy for exact-span planning.
 #[derive(Clone, Copy, Debug, PartialEq, fieldwork::Fieldwork)]
@@ -40,31 +44,36 @@ impl TryFrom<(f64, f64, f64)> for ElasticSpanConfig {
     }
 }
 
-/// Immutable engine preparation shape.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, fieldwork::Fieldwork)]
-#[fieldwork(get)]
+/// Engine preparation resources and fixed frame limits.
+#[derive(Clone, Debug, fieldwork::Fieldwork)]
+#[fieldwork(opt_in, get)]
 #[non_exhaustive]
 pub struct ElasticConfig {
-    /// Source sample rate in Hz.
-    #[field(get, copy)]
-    sample_rate: u32,
-    /// Interleaved channel count.
-    #[field(get, copy)]
-    channels: usize,
-    /// Largest accepted output block in frames.
-    #[field(get, copy)]
-    max_output_frames: usize,
-    /// Largest accepted source block in frames.
-    #[field(get, copy)]
-    max_source_frames: usize,
+    /// Shared PCM pool used by engines that need planar scratch.
+    pool: PcmPool,
+    #[field(get(copy), vis = "pub(crate)")]
+    shape: ElasticShape,
 }
 
-impl TryFrom<(u32, usize, usize, usize)> for ElasticConfig {
-    type Error = ElasticError;
-
-    fn try_from(
-        (sample_rate, channels, max_source_frames, max_output_frames): (u32, usize, usize, usize),
-    ) -> Result<Self, Self::Error> {
+#[bon]
+impl ElasticConfig {
+    /// Builds a validated preparation config with its shared PCM pool.
+    ///
+    /// # Errors
+    /// Returns [`ElasticError`] when a scalar is zero or cannot be represented
+    /// by the native engines.
+    #[builder(
+        builder_type(vis = "pub"),
+        start_fn(name = builder, vis = "pub"),
+        finish_fn(vis = "pub")
+    )]
+    fn new(
+        pool: PcmPool,
+        sample_rate: u32,
+        channels: usize,
+        max_source_frames: usize,
+        max_output_frames: usize,
+    ) -> Result<Self, ElasticError> {
         if sample_rate == 0 {
             return Err(ElasticError::InvalidSampleRate);
         }
@@ -83,12 +92,79 @@ impl TryFrom<(u32, usize, usize, usize)> for ElasticConfig {
             ElasticError::InvalidOutputFrameLimit,
             ElasticError::OutputFrameLimitOutOfRange,
         )?;
-        Ok(Self {
-            sample_rate,
+        let shape = ElasticShape {
             channels,
             max_output_frames,
             max_source_frames,
-        })
+            sample_rate,
+        };
+        shape.rate_envelope()?;
+        Ok(Self { pool, shape })
+    }
+
+    delegate::delegate! {
+        to self.shape {
+            /// Prepared interleaved channel count.
+            #[must_use]
+            pub const fn channels(&self) -> usize;
+            /// Largest accepted output block in frames.
+            #[must_use]
+            pub const fn max_output_frames(&self) -> usize;
+            /// Largest accepted source block in frames.
+            #[must_use]
+            pub const fn max_source_frames(&self) -> usize;
+            /// Prepared source sample rate in Hz.
+            #[must_use]
+            pub const fn sample_rate(&self) -> u32;
+        }
+    }
+
+    /// Shared PCM pool used by engines that need planar scratch.
+    #[must_use]
+    pub const fn pool(&self) -> &PcmPool {
+        &self.pool
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct ElasticShape {
+    channels: usize,
+    max_output_frames: usize,
+    max_source_frames: usize,
+    sample_rate: u32,
+}
+
+impl ElasticShape {
+    pub(crate) fn rate_envelope(self) -> Result<ElasticRateEnvelope, ElasticError> {
+        let max_output_frames =
+            self.max_output_frames
+                .to_f64()
+                .ok_or(ElasticError::OutputFrameLimitOutOfRange(
+                    self.max_output_frames,
+                ))?;
+        let max_source_frames =
+            self.max_source_frames
+                .to_f64()
+                .ok_or(ElasticError::SourceFrameLimitOutOfRange(
+                    self.max_source_frames,
+                ))?;
+        ElasticRateEnvelope::try_from((1.0 / max_output_frames)..=max_source_frames)
+    }
+
+    pub(crate) const fn channels(self) -> usize {
+        self.channels
+    }
+
+    pub(crate) const fn max_output_frames(self) -> usize {
+        self.max_output_frames
+    }
+
+    pub(crate) const fn max_source_frames(self) -> usize {
+        self.max_source_frames
+    }
+
+    pub(crate) const fn sample_rate(self) -> u32 {
+        self.sample_rate
     }
 }
 
@@ -140,7 +216,7 @@ mod tests {
     fn config_names_the_shape_field_it_rejects() {
         let out_of_range = usize::try_from(i32::MAX).map_or(usize::MAX, |limit| limit + 1);
 
-        for (shape, expected) in [
+        for ((sample_rate, channels, max_source_frames, max_output_frames), expected) in [
             ((0, 2, 512, 512), ElasticError::InvalidSampleRate),
             ((48_000, 0, 512, 512), ElasticError::InvalidChannelCount),
             (
@@ -158,7 +234,31 @@ mod tests {
                 ElasticError::OutputFrameLimitOutOfRange(out_of_range),
             ),
         ] {
-            assert_eq!(ElasticConfig::try_from(shape), Err(expected));
+            let actual = ElasticConfig::builder()
+                .pool(PcmPool::default())
+                .sample_rate(sample_rate)
+                .channels(channels)
+                .max_source_frames(max_source_frames)
+                .max_output_frames(max_output_frames)
+                .build();
+
+            assert!(matches!(actual, Err(error) if error == expected));
         }
+    }
+
+    #[kithara::test]
+    fn config_declares_the_complete_non_empty_frame_domain() {
+        let config = ElasticConfig::builder()
+            .pool(PcmPool::default())
+            .sample_rate(48_000)
+            .channels(2)
+            .max_source_frames(960)
+            .max_output_frames(480)
+            .build()
+            .expect("valid elastic config");
+        let envelope = config.shape().rate_envelope().expect("valid frame domain");
+
+        assert_eq!(envelope.min_source_frames_per_output(), 1.0 / 480.0);
+        assert_eq!(envelope.max_source_frames_per_output(), 960.0);
     }
 }

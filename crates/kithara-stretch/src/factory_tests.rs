@@ -1,67 +1,56 @@
 use kithara_bufpool::PcmPool;
 use kithara_test_utils::kithara;
 
-use super::build_backend;
-use crate::{StretchKind, StretchOptions};
+use super::build_engine;
+use crate::{ElasticConfig, ElasticRequest, StretchKind};
 
 const CHANNELS: usize = 2;
-const INPUT_FRAMES: usize = 4096;
+const FRAMES: usize = 4096;
 
-fn options() -> StretchOptions {
-    StretchOptions::builder()
+fn config() -> ElasticConfig {
+    ElasticConfig::builder()
+        .pool(PcmPool::default())
         .sample_rate(44_100)
         .channels(CHANNELS)
-        .max_input_frames(INPUT_FRAMES)
-        .pool(PcmPool::default())
+        .max_source_frames(FRAMES)
+        .max_output_frames(FRAMES)
         .build()
+        .expect("valid factory config")
 }
 
 fn interleaved_stereo() -> Vec<f32> {
-    let mut input = Vec::with_capacity(INPUT_FRAMES * CHANNELS);
-    for frame in 0..INPUT_FRAMES {
-        let left = if frame % 2 == 0 { 0.25 } else { -0.25 };
-        input.push(left);
-        input.push(-left);
-    }
-    input
+    (0..FRAMES)
+        .flat_map(|frame| {
+            let left = if frame % 2 == 0 { 0.25 } else { -0.25 };
+            [left, -left]
+        })
+        .collect()
 }
 
 fn smoke(kind: StretchKind) {
-    let options = options();
-    let mut backend = build_backend(kind, &options);
-    if let Err(error) = backend.set_ratio(1.0) {
-        panic!("{kind}: set_ratio(1.0) failed: {error}");
-    }
-
-    let max_output_samples = backend.max_output_samples(INPUT_FRAMES);
+    let mut engine = build_engine(kind, config()).expect("selected engine prepares");
+    engine.set_pitch(1.0).expect("unity pitch is valid");
     let input = interleaved_stereo();
-    let mut out = Vec::with_capacity(max_output_samples);
-    if let Err(error) = backend.process(&input, &mut out) {
-        panic!("{kind}: process failed: {error}");
-    }
+    let mut output = vec![f32::NAN; FRAMES * CHANNELS];
+    engine
+        .process(
+            ElasticRequest::new(FRAMES, FRAMES).expect("unity request"),
+            &input,
+            &mut output,
+        )
+        .expect("selected engine processes an exact request");
 
-    assert!(!out.is_empty(), "{kind}: process emitted no samples");
-    assert_eq!(
-        out.len() % CHANNELS,
-        0,
-        "{kind}: output must stay channel-aligned"
-    );
-    assert!(
-        out.len() <= max_output_samples,
-        "{kind}: emitted {} samples above max_output_samples {}",
-        out.len(),
-        max_output_samples
-    );
+    assert!(output.iter().all(|sample| sample.is_finite()));
 }
 
 #[cfg(feature = "stretch-signalsmith")]
 #[kithara::test(native, flash(false))]
-fn builds_and_processes_signalsmith_backend() {
+fn builds_and_processes_signalsmith_engine() {
     smoke(StretchKind::Signalsmith);
 }
 
 #[cfg(feature = "stretch-bungee")]
 #[kithara::test(native, flash(false))]
-fn builds_and_processes_bungee_backend() {
+fn builds_and_processes_bungee_engine() {
     smoke(StretchKind::Bungee);
 }

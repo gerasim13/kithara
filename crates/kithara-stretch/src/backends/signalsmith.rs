@@ -1,12 +1,11 @@
 use std::fmt;
 
-use num_traits::cast::AsPrimitive;
+use num_traits::ToPrimitive;
 use signalsmith_stretch::Stretch;
 
 use crate::{
     ElasticCapabilities, ElasticConfig, ElasticEngine, ElasticError, ElasticLatency,
-    ElasticPriming, ElasticRateEnvelope, ElasticRequest, StretchBackend, StretchBackendError,
-    StretchOptions,
+    ElasticPriming, ElasticRequest,
 };
 
 const CHANNEL_COUNT_LIMIT: u32 = u32::MAX;
@@ -20,53 +19,13 @@ fn engine(sample_rate: u32, channels: usize) -> (Stretch, ElasticLatency) {
     (inner, latency)
 }
 
-/// Streaming Signalsmith adapter behind the audio-graph stretch slot.
-pub(crate) struct SignalsmithBackend {
-    inner: Stretch,
-    latency: ElasticLatency,
-    channels: usize,
-    flushed: bool,
-    ratio: f64,
-}
-
-impl SignalsmithBackend {
-    pub(crate) fn new(options: &StretchOptions) -> Self {
-        let channels = options.channels.max(1);
-        let (inner, latency) = engine(options.sample_rate, channels);
-        Self {
-            inner,
-            latency,
-            channels,
-            flushed: false,
-            ratio: 1.0,
-        }
-    }
-
-    fn out_frames(&self, in_frames: usize) -> usize {
-        let frames_f64: f64 = in_frames.as_();
-        num_traits::cast((frames_f64 * self.ratio).round()).unwrap_or(0)
-    }
-}
-
 /// Exact-span Signalsmith engine, prepared for fixed maximum source and output
 /// blocks.
 #[non_exhaustive]
 pub struct SignalsmithElastic {
     inner: Stretch,
     capabilities: ElasticCapabilities,
-}
-
-impl SignalsmithElastic {
-    /// Source advance per output frame that Signalsmith renders without
-    /// audible artifacts inside one block.
-    const MAX_SOURCE_FRAMES_PER_OUTPUT: f64 = 4.0 / 3.0;
-    const MIN_SOURCE_FRAMES_PER_OUTPUT: f64 = 2.0 / 3.0;
-
-    fn rate_envelope() -> Result<ElasticRateEnvelope, ElasticError> {
-        ElasticRateEnvelope::try_from(
-            Self::MIN_SOURCE_FRAMES_PER_OUTPUT..=Self::MAX_SOURCE_FRAMES_PER_OUTPUT,
-        )
-    }
+    tail_armed: bool,
 }
 
 impl fmt::Debug for SignalsmithElastic {
@@ -82,12 +41,12 @@ impl ElasticEngine for SignalsmithElastic {
     fn prepare(config: ElasticConfig) -> Result<Self, ElasticError> {
         u32::try_from(config.channels())
             .map_err(|_| ElasticError::ChannelCountOutOfRange(config.channels()))?;
-        let rate_envelope = Self::rate_envelope()?;
         let (mut inner, latency) = engine(config.sample_rate(), config.channels());
         inner.set_transpose_factor(1.0, None);
         Ok(Self {
             inner,
-            capabilities: ElasticCapabilities::new(config, latency, rate_envelope),
+            capabilities: ElasticCapabilities::new(config.shape(), latency)?,
+            tail_armed: false,
         })
     }
 
@@ -104,11 +63,39 @@ impl ElasticEngine for SignalsmithElastic {
         self.capabilities
             .validate(request, source.len(), output.len())?;
         self.inner.process(source, output);
+        self.tail_armed = true;
         Ok(())
+    }
+
+    fn set_pitch(&mut self, scale: f64) -> Result<(), ElasticError> {
+        let factor = scale
+            .to_f32()
+            .filter(|factor| factor.is_finite() && *factor > 0.0)
+            .ok_or(ElasticError::InvalidPitch(scale))?;
+        self.inner.set_transpose_factor(factor, None);
+        Ok(())
+    }
+
+    fn flush(&mut self, output: &mut [f32]) -> Result<usize, ElasticError> {
+        if !self.tail_armed {
+            return Ok(0);
+        }
+        let tail_frames = self.capabilities.latency().output_frames();
+        let expected = self.capabilities.samples(tail_frames)?;
+        if output.len() != expected {
+            return Err(ElasticError::OutputSampleCount {
+                actual: output.len(),
+                expected,
+            });
+        }
+        self.inner.flush(output);
+        self.tail_armed = false;
+        Ok(tail_frames)
     }
 
     fn reset(&mut self) -> Result<(), ElasticError> {
         self.inner.reset();
+        self.tail_armed = false;
         Ok(())
     }
 }
@@ -141,61 +128,7 @@ impl ElasticPriming for SignalsmithElastic {
         self.inner.reset();
         self.inner.seek(source_history, playback_rate);
         self.inner.process(source, discarded_output);
-        Ok(())
-    }
-}
-
-impl StretchBackend for SignalsmithBackend {
-    fn flush(&mut self, out: &mut Vec<f32>) -> Result<(), StretchBackendError> {
-        if self.flushed {
-            return Ok(());
-        }
-        self.flushed = true;
-        let tail = self.latency.output_frames().saturating_mul(self.channels);
-        let start = out.len();
-        out.resize(start + tail, 0.0);
-        self.inner.flush(&mut out[start..]);
-        Ok(())
-    }
-
-    fn max_output_samples(&self, input_frames: usize) -> usize {
-        self.out_frames(input_frames).saturating_mul(self.channels)
-    }
-
-    fn process(&mut self, input: &[f32], out: &mut Vec<f32>) -> Result<(), StretchBackendError> {
-        let in_frames = input.len() / self.channels;
-        if in_frames == 0 {
-            return Ok(());
-        }
-        self.flushed = false;
-        let start = out.len();
-        let want = self.out_frames(in_frames).saturating_mul(self.channels);
-        out.resize(start + want, 0.0);
-        self.inner.process(input, &mut out[start..]);
-        Ok(())
-    }
-
-    fn reset(&mut self) {
-        self.inner.reset();
-        self.flushed = false;
-    }
-
-    fn set_pitch(&mut self, scale: f64) -> Result<(), StretchBackendError> {
-        if !scale.is_finite() || scale <= 0.0 {
-            return Err(StretchBackendError::Param(format!("pitch scale {scale}")));
-        }
-        let mult: f32 = num_traits::cast(scale).unwrap_or(1.0);
-        self.inner.set_transpose_factor(mult, None);
-        Ok(())
-    }
-
-    fn set_ratio(&mut self, stretch: f64) -> Result<(), StretchBackendError> {
-        if !stretch.is_finite() || stretch <= 0.0 {
-            return Err(StretchBackendError::Param(format!(
-                "stretch ratio {stretch}"
-            )));
-        }
-        self.ratio = stretch;
+        self.tail_armed = true;
         Ok(())
     }
 }

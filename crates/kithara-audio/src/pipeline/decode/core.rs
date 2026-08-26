@@ -223,6 +223,13 @@ impl ActiveDecode {
         self.flush_incoming_reader_signals();
     }
 
+    pub(crate) fn service_effects_deferred(&mut self) {
+        let spec = self.active.blender_profile().spec();
+        for effect in &mut self.effects {
+            effect.service_deferred(spec);
+        }
+    }
+
     #[kithara::rtsan_allow_blocking]
     pub(crate) fn next_chunk(&mut self, stream_position: u64) -> DecodeResult<DecoderChunkOutcome> {
         let outcome = self.active.next_chunk();
@@ -443,6 +450,30 @@ mod tests {
     use super::*;
     use crate::pipeline::decode::transition::IncomingPrime;
 
+    struct DeferredSpecEffect {
+        channels: Arc<AtomicU32>,
+        sample_rate: Arc<AtomicU32>,
+    }
+
+    impl AudioEffect for DeferredSpecEffect {
+        fn service_deferred(&mut self, spec: PcmSpec) {
+            self.channels
+                .store(u32::from(spec.channels), Ordering::Release);
+            self.sample_rate
+                .store(spec.sample_rate.get(), Ordering::Release);
+        }
+
+        fn flush(&mut self) -> Option<PcmChunk> {
+            None
+        }
+
+        fn process(&mut self, chunk: PcmChunk) -> Option<PcmChunk> {
+            Some(chunk)
+        }
+
+        fn reset(&mut self) {}
+    }
+
     fn active_decode(
         active: DecoderGeneration,
         gapless_mode: GaplessMode,
@@ -474,6 +505,23 @@ mod tests {
         let profile = factory.reader_profile(&playlist_info, None);
 
         assert_eq!(profile.input(), ReaderInput::InitOnly);
+    }
+
+    #[kithara::test]
+    fn deferred_effect_service_receives_the_active_spec() {
+        let spec = PcmSpec::new(2, NonZeroU32::new(48_000).expect("test rate"));
+        let channels = Arc::new(AtomicU32::new(0));
+        let sample_rate = Arc::new(AtomicU32::new(0));
+        let effects: Vec<Box<dyn AudioEffect>> = vec![Box::new(DeferredSpecEffect {
+            channels: Arc::clone(&channels),
+            sample_rate: Arc::clone(&sample_rate),
+        })];
+        let mut decode = active_decode(generation(spec), GaplessMode::Disabled, effects);
+
+        decode.service_effects_deferred();
+
+        assert_eq!(channels.load(Ordering::Acquire), u32::from(spec.channels));
+        assert_eq!(sample_rate.load(Ordering::Acquire), spec.sample_rate.get());
     }
 
     #[kithara::test]

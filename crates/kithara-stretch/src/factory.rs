@@ -1,18 +1,26 @@
 #[cfg(feature = "stretch-bungee")]
-use crate::backends::BungeeBackend;
+use crate::backends::BungeeElastic;
 #[cfg(feature = "stretch-signalsmith")]
-use crate::backends::SignalsmithBackend;
-use crate::{StretchBackend, StretchKind, StretchOptions};
+use crate::backends::SignalsmithElastic;
+use crate::{ElasticConfig, ElasticEngine, ElasticError, StretchKind};
 
-/// Construct the backend for `kind` at the configured source shape. Called once
-/// per chain build and on a source-spec change inside the audio processor.
-#[must_use]
-pub fn build_backend(kind: StretchKind, options: &StretchOptions) -> Box<dyn StretchBackend> {
+/// Prepares the selected exact-span engine.
+///
+/// # Errors
+/// Returns [`ElasticError`] when the config cannot prepare the selected
+/// engine.
+pub fn build_engine(
+    kind: StretchKind,
+    config: ElasticConfig,
+) -> Result<Box<dyn ElasticEngine>, ElasticError> {
     match kind {
         #[cfg(feature = "stretch-signalsmith")]
-        StretchKind::Signalsmith => Box::new(SignalsmithBackend::new(options)),
+        StretchKind::Signalsmith => SignalsmithElastic::prepare(config)
+            .map(|engine| Box::new(engine) as Box<dyn ElasticEngine>),
         #[cfg(feature = "stretch-bungee")]
-        StretchKind::Bungee => Box::new(BungeeBackend::new(options)),
+        StretchKind::Bungee => {
+            BungeeElastic::prepare(config).map(|engine| Box::new(engine) as Box<dyn ElasticEngine>)
+        }
     }
 }
 

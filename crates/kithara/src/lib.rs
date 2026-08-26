@@ -113,13 +113,8 @@ pub mod storage {
     not(target_arch = "wasm32"),
     any(feature = "stretch-signalsmith", feature = "stretch-bungee")
 ))]
-pub use kithara_audio::effects::{StretchBackend, StretchBackendError};
+pub use kithara_audio::{ElasticEngine, ElasticError, StretchKind, TimeStretchProcessor};
 pub use kithara_audio::{GridSegment, RegionPlan, RegionPlanError, StretchControls};
-#[cfg(all(
-    not(target_arch = "wasm32"),
-    any(feature = "stretch-signalsmith", feature = "stretch-bungee")
-))]
-pub use kithara_audio::{StretchKind, TimeStretchProcessor};
 pub use kithara_test_utils::{kithara::mock, no_block};
 #[cfg(feature = "probe")]
 pub use kithara_test_utils::{
@@ -147,10 +142,7 @@ pub mod prelude {
         not(target_arch = "wasm32"),
         any(feature = "stretch-signalsmith", feature = "stretch-bungee")
     ))]
-    pub use kithara_audio::{
-        StretchKind, TimeStretchProcessor,
-        effects::{StretchBackend, StretchBackendError},
-    };
+    pub use kithara_audio::{ElasticEngine, ElasticError, StretchKind, TimeStretchProcessor};
     pub use kithara_decode::{
         DecodeError, DecodeResult, DecoderTrackInfo, PcmMeta, PcmSpec, TrackMetadata,
     };

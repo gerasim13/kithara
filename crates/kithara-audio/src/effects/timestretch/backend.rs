@@ -2,7 +2,7 @@ use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
 use arc_swap::ArcSwapOption;
 use kithara_platform::sync::Arc;
-pub use kithara_stretch::{StretchBackend, StretchBackendError, StretchKind};
+pub use kithara_stretch::{ElasticEngine, ElasticError, StretchKind};
 use portable_atomic::AtomicF32;
 
 pub use super::processor::TimeStretchProcessor;

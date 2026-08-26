@@ -118,7 +118,7 @@ advanced control — multi-slot engine, crossfade, EQ — reach into
 `kithara::play` (`Engine`, `Player`, `CrossfadeConfig`, `Equalizer`). The
 speed-control type `StretchControls` is re-exported even when no stretch backend
 is compiled; backend-specific `StretchKind`, `TimeStretchProcessor`, and
-`StretchBackend` are gated on a native stretch backend.
+`ElasticEngine` are gated on a native stretch backend.
 `mock` macro is re-exported unconditionally; `test`, `fixture`, and `flash` are
 gated behind `probe`. The facade `flash` macro emits `kithara::platform::flash`
 paths so integration tests do not need a direct `kithara-platform` dependency.

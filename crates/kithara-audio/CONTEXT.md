@@ -448,30 +448,33 @@ in the ceil frame domain and the decoder adapter sizes buffers from that.
 Playback speed lives in the source-domain `TimeStretchProcessor`; the resampler
 plan is strictly fixed-ratio (source rate → host rate) and never carries speed.
 `StretchControls` is the single source of truth, shared (`Arc`) between the
-consumer/UI and the slot, and read **every chunk** — speed, key-lock, backend,
-and region plan all apply live, mid-track, with no reload:
+consumer/UI and the slot. Speed, key-lock, and region plan are read every chunk;
+backend selection is serviced between checked ticks:
 
 | key-lock | slot behaviour |
 |---|---|
-| on | `set_ratio(1/speed)`, `set_pitch(1.0)` — tempo moves, pitch held |
-| off | `set_ratio(1/speed)`, `set_pitch(speed)` — vinyl-style speed and pitch |
+| on | exact output span `input/speed`, `set_pitch(1.0)` - tempo moves, pitch held |
+| off | exact output span `input/speed`, `set_pitch(speed)` - vinyl-style speed and pitch |
 
 Speed is floored at `MIN_SPEED` = 0.05. At speed 1.0 with no region plan the slot
-is a byte-identical passthrough and the backend is reset; `flush` is skipped in
-that state so its latency buffer is not emitted as trailing zeros. A live backend
-change, or a source `PcmSpec` change, rebuilds the backend in place. Key-lock
-defaults to **off** (`StretchControls::new`).
+is a byte-identical passthrough. Its reset is deferred, and `flush` is skipped in
+that state so no latency buffer is emitted as trailing zeros. `AudioEffect::service_deferred`
+runs from the existing scheduler shell after decoder promotion and before the
+next checked tick; it prepares backend or `PcmSpec` replacements, performs
+resets, and destroys retired engines there. Key-lock defaults to **off**
+(`StretchControls::new`).
 
 **Backend seam.** `kithara-stretch` is the optional DSP backend crate, behind
-`stretch-signalsmith` / `stretch-bungee` (native only); it owns `StretchBackend`
-and its companion types. The trait is DSP-only (interleaved sample buffers), so
-all `PcmChunk`/pool/timeline plumbing stays here. `set_ratio` is the time factor
-(`output/input`, >1 = slower) and `set_pitch` is independent (1.0 = pitch
-locked) — the decoupling key-lock depends on. `StretchKind::all()` lists exactly
+`stretch-signalsmith` / `stretch-bungee` (native only); it owns the exact-span
+`ElasticEngine` contract and its companion types. The trait is DSP-only
+(interleaved sample buffers), so all `PcmChunk`/timeline plumbing stays here;
+the shared `PcmPool` is injected through `ElasticConfig`. Source/output frame
+counts control tempo and `set_pitch` is independent (1.0 = pitch locked) - the
+decoupling key-lock depends on. `StretchKind::all()` lists exactly
 the backends compiled into the current target (default `all()[0]`; discriminants
 are stable: 1 = Signalsmith, 2 = Bungee), so an absent backend is
 un-representable rather than a runtime error. With no `stretch-*` feature the
-dependency is not linked and the kind/backend/processor re-exports compile out;
+dependency is not linked and the kind/engine/processor re-exports compile out;
 `StretchControls` still exposes speed and region-plan storage.
 
 **Region plan (beat-aligned stretch).** The pure region types live in
@@ -481,18 +484,26 @@ non-overlapping `[start_frame, end_frame)` segments in **source frames**
 `ratio_correction`, validated in `RegionPlan::new`. The processor maps each
 chunk's `frame_offset` to its region (cached cursor, binary search on a miss
 after seek/swap), splits chunks at boundaries, and drives the backend at
-`1/speed * ratio_correction`. It `flush`es (tail drained at the old ratio) and
-`reset`s **only** when a boundary moves the effective ratio beyond `RATIO_EPS`
-(1e-4); equal-ratio boundaries and gaps between segments (correction 1.0) cost
-nothing, and live speed moves inside one region glide via `set_ratio` alone. An
-empty or absent plan is exactly the planless path. Prefer `signalsmith` for
-region work — `bungee`'s `flush` is a no-op and drops the tail at every real
-ratio boundary.
+`1/speed * ratio_correction` through exact source/output frame counts. Adjacent
+ratio requests preserve engine history: a region boundary is not a stream
+discontinuity and never flushes or resets the backend. Sub-frame output spans
+accumulate in one buffer reserved from the injected `PcmPool`; only a portable
+non-empty `ElasticRequest` reaches a backend. An empty or absent plan is exactly
+the planless path. One checked `process` emits at most the prepared 163,840
+output frames; this cumulative bound includes every region request in the input
+chunk. The prepared pooled scratch becomes the produced `PcmChunk`, while the
+consumed input buffer is resized into its replacement by `service_deferred`
+between scheduler ticks. Checked render and terminal drain therefore neither
+grow a buffer nor check a new buffer out of the pool.
 
 **Timeline.** A stretch changes the output frame *count*, not the rate: each
 emitted chunk recomputes `meta.frames` and forces `meta.spec` to the live source
-spec, but preserves `timestamp`/`end_timestamp` verbatim, so the playhead stays
-in source-track time. A non-empty flush chunk must never carry the
+spec. A composite output starts at the earliest still-unemitted source frame
+and carries the latest consumed decoder `end_timestamp`; this keeps its source
+interval and playhead frontier monotonic across sub-frame accumulation. Byte
+coordinates are cleared when one output spans multiple source chunks because
+there is no exact compressed-byte attribution for that composite. A non-empty
+flush chunk must never carry the
 `PcmMeta::default()` sentinel spec (0 channels): downstream stages divide by
 `spec.channels`.
 

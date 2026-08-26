@@ -587,6 +587,7 @@ impl<T: StreamType> AudioWorkerSource for StreamAudioSource<T> {
         }
         self.route_build_completions();
         self.progress_variant_transition();
+        self.decode.service_effects_deferred();
         self.retired.drain();
         self.rebuild.submit();
         // Publish the FSM lifecycle events the produce core enqueued this pass,

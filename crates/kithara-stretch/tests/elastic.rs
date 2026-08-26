@@ -3,13 +3,16 @@
 //! Every compiled-in engine runs the same bodies through
 //! `elastic_engine_conformance!`; engines that can absorb source history also
 //! run `elastic_priming_conformance!`. Backend-specific numbers (the declared
-//! rate window, the declared latency) are asserted next to the engine that
-//! declares them, and nothing else in the suite names a backend.
+//! prepared frame domain and backend latency are asserted next to each engine,
+//! and nothing else in the suite names a backend.
 
 use std::f32::consts::TAU;
 
+#[cfg(feature = "stretch-bungee")]
+use kithara_bufpool::ByteBudget;
+use kithara_bufpool::PcmPool;
 use kithara_stretch::{
-    ElasticEngine, ElasticError, ElasticRateEnvelope, ElasticRequest, ElasticSpanConfig,
+    ElasticCapabilities, ElasticEngine, ElasticError, ElasticRequest, ElasticSpanConfig,
 };
 use kithara_test_utils::kithara;
 use num_traits::ToPrimitive;
@@ -19,13 +22,14 @@ const SAMPLE_RATE: u32 = 48_000;
 const TONE_HZ: f64 = 440.0;
 
 fn prepared<E: ElasticEngine>(max_source_frames: usize, max_output_frames: usize) -> E {
-    let config = kithara_stretch::ElasticConfig::try_from((
-        SAMPLE_RATE,
-        CHANNELS,
-        max_source_frames,
-        max_output_frames,
-    ))
-    .expect("the test configuration is valid");
+    let config = kithara_stretch::ElasticConfig::builder()
+        .pool(PcmPool::default())
+        .sample_rate(SAMPLE_RATE)
+        .channels(CHANNELS)
+        .max_source_frames(max_source_frames)
+        .max_output_frames(max_output_frames)
+        .build()
+        .expect("the test configuration is valid");
     E::prepare(config).expect("the engine prepares for a valid shape")
 }
 
@@ -80,6 +84,7 @@ fn assert_exact_samples(actual: &[f32], expected: &[f32]) {
 /// The source span an engine accepts at a declared envelope edge: the planner
 /// quantizes the same way, so a conformance request is never a rounding step
 /// outside the window it is meant to exercise.
+#[cfg(feature = "stretch-signalsmith")]
 fn source_frames_at(rate: f64, output_frames: usize, round_up: bool) -> usize {
     let frames = output_frames
         .to_f64()
@@ -95,18 +100,18 @@ fn source_frames_at(rate: f64, output_frames: usize, round_up: bool) -> usize {
         .expect("invariant: the edge span fits in usize")
 }
 
-fn edge_requests(envelope: ElasticRateEnvelope, output_frames: usize) -> [ElasticRequest; 3] {
+fn edge_requests(capabilities: ElasticCapabilities) -> [ElasticRequest; 3] {
+    let unity_frames = capabilities
+        .max_source_frames()
+        .min(capabilities.max_output_frames());
     [
-        source_frames_at(envelope.min_source_frames_per_output(), output_frames, true),
-        output_frames,
-        source_frames_at(
-            envelope.max_source_frames_per_output(),
-            output_frames,
-            false,
-        ),
+        (1, capabilities.max_output_frames()),
+        (unity_frames, unity_frames),
+        (capabilities.max_source_frames(), 1),
     ]
-    .map(|source_frames| {
-        ElasticRequest::new(source_frames, output_frames).expect("invariant: edge request is valid")
+    .map(|(source_frames, output_frames)| {
+        ElasticRequest::new(source_frames, output_frames)
+            .expect("invariant: prepared-domain request is non-empty")
     })
 }
 
@@ -132,12 +137,10 @@ macro_rules! elastic_engine_conformance {
 
             #[kithara::test]
             fn renders_exact_spans_at_both_declared_rate_edges() {
-                const OUTPUT_FRAMES: usize = 2048;
-
                 let mut engine: $engine = prepared(8192, 4096);
-                let envelope = engine.capabilities().rate_envelope();
+                let capabilities = engine.capabilities();
 
-                for request in edge_requests(envelope, OUTPUT_FRAMES) {
+                for request in edge_requests(capabilities) {
                     let source = interleaved_signal(request.source_frames());
                     let mut output = vec![f32::NAN; request.output_frames() * CHANNELS];
 
@@ -145,7 +148,7 @@ macro_rules! elastic_engine_conformance {
                         .process(request, &source, &mut output)
                         .expect("a declared edge rate is supported");
 
-                    assert_eq!(output.len(), OUTPUT_FRAMES * CHANNELS);
+                    assert_eq!(output.len(), request.output_frames() * CHANNELS);
                     assert!(output.iter().all(|sample| sample.is_finite()));
                 }
             }
@@ -212,6 +215,104 @@ macro_rules! elastic_engine_conformance {
             }
 
             #[kithara::test]
+            fn pitch_control_is_independent_of_exact_frame_advance() {
+                let mut reference: $engine = prepared(8192, 8192);
+                let mut pitched: $engine = prepared(8192, 8192);
+                let request = ElasticRequest::new(4096, 4096).expect("unity request");
+                let mut changed = false;
+
+                pitched.set_pitch(1.25).expect("positive pitch scale");
+                for block in 0..4 {
+                    let source = marker_signal(request.source_frames(), block * 4096, |index| {
+                        f32::from(u16::try_from(index % 997).expect("marker index fits")) / 997.0
+                            - 0.5
+                    });
+                    let mut reference_output = vec![f32::NAN; request.output_frames() * CHANNELS];
+                    let mut pitched_output = vec![f32::NAN; request.output_frames() * CHANNELS];
+                    reference
+                        .process(request, &source, &mut reference_output)
+                        .expect("reference engine renders the exact span");
+                    pitched
+                        .process(request, &source, &mut pitched_output)
+                        .expect("pitch does not replace exact frame control");
+
+                    assert!(pitched_output.iter().all(|sample| sample.is_finite()));
+                    changed |= pitched_output != reference_output;
+                }
+
+                assert!(changed, "pitch control must alter rendered samples");
+            }
+
+            #[kithara::test]
+            fn rejects_invalid_pitch_scales() {
+                let mut engine: $engine = prepared(8192, 8192);
+
+                for scale in [0.0, -1.0, f64::NAN, f64::INFINITY] {
+                    assert!(matches!(
+                        engine.set_pitch(scale),
+                        Err(ElasticError::InvalidPitch(_))
+                    ));
+                }
+            }
+
+            #[kithara::test]
+            fn terminal_flush_is_idempotent() {
+                const FRAMES: usize = 8192;
+
+                let mut engine: $engine = prepared(FRAMES, FRAMES);
+                let request = ElasticRequest::new(FRAMES, FRAMES).expect("unity request");
+                let source = interleaved_signal(FRAMES);
+                let mut output = vec![0.0; FRAMES * CHANNELS];
+                engine
+                    .process(request, &source, &mut output)
+                    .expect("the source block renders");
+                let terminal_samples =
+                    engine.capabilities().latency().output_frames() * CHANNELS;
+                let mut terminal = vec![0.0; terminal_samples];
+
+                let first = engine.flush(&mut terminal).expect("first terminal flush");
+                let repeated = engine
+                    .flush(&mut terminal)
+                    .expect("repeated terminal flush");
+
+                assert!(first <= engine.capabilities().latency().output_frames());
+                assert_eq!(repeated, 0);
+            }
+
+            #[kithara::test]
+            fn fresh_engine_has_no_terminal_tail() {
+                let mut engine: $engine = prepared(8192, 8192);
+                let terminal_samples =
+                    engine.capabilities().latency().output_frames() * CHANNELS;
+                let mut terminal = vec![0.0; terminal_samples];
+
+                let frames = engine.flush(&mut terminal).expect("fresh terminal drain");
+
+                assert_eq!(frames, 0);
+            }
+
+            #[kithara::test]
+            fn reset_engine_has_no_terminal_tail() {
+                const FRAMES: usize = 8192;
+
+                let mut engine: $engine = prepared(FRAMES, FRAMES);
+                let request = ElasticRequest::new(FRAMES, FRAMES).expect("unity request");
+                let source = interleaved_signal(FRAMES);
+                let mut output = vec![0.0; FRAMES * CHANNELS];
+                engine
+                    .process(request, &source, &mut output)
+                    .expect("the source block renders");
+                engine.reset().expect("the engine clears its history");
+                let terminal_samples =
+                    engine.capabilities().latency().output_frames() * CHANNELS;
+                let mut terminal = vec![0.0; terminal_samples];
+
+                let frames = engine.flush(&mut terminal).expect("reset terminal drain");
+
+                assert_eq!(frames, 0);
+            }
+
+            #[kithara::test]
             fn reset_clears_stream_history_without_changing_capabilities() {
                 const LONG_FRAMES: usize = 16_384;
                 const SHORT_FRAMES: usize = 4096;
@@ -253,9 +354,14 @@ macro_rules! elastic_engine_conformance {
                 const SOURCE_FRAMES: usize = 19_200;
                 const OUTPUT_FRAMES: usize = 16_000;
 
-                let config =
-                    kithara_stretch::ElasticConfig::try_from((SAMPLE_RATE, 1, SOURCE_FRAMES, OUTPUT_FRAMES))
-                        .expect("the test configuration is valid");
+                let config = kithara_stretch::ElasticConfig::builder()
+                    .pool(PcmPool::default())
+                    .sample_rate(SAMPLE_RATE)
+                    .channels(1)
+                    .max_source_frames(SOURCE_FRAMES)
+                    .max_output_frames(OUTPUT_FRAMES)
+                    .build()
+                    .expect("the test configuration is valid");
                 let mut engine =
                     <$engine as ElasticEngine>::prepare(config).expect("the engine prepares");
                 let request =
@@ -295,27 +401,32 @@ macro_rules! elastic_engine_conformance {
             }
 
             #[kithara::test]
-            fn rejects_requests_outside_the_declared_rate_envelope() {
-                const OUTPUT_FRAMES: usize = 2000;
-
-                let mut engine: $engine = prepared(8192, 8192);
-                let outside = engine
-                    .capabilities()
-                    .rate_envelope()
-                    .max_source_frames_per_output()
-                    * 1.5;
-                let source_frames = source_frames_at(outside, OUTPUT_FRAMES, true);
-                let request = ElasticRequest::new(source_frames, OUTPUT_FRAMES)
-                    .expect("non-empty request");
-                let source = interleaved_signal(request.source_frames());
-                let mut output = vec![0.0; request.output_frames() * CHANNELS];
+            fn rate_envelope_is_the_complete_prepared_non_empty_domain() {
+                let engine: $engine = prepared(8192, 4096);
+                let capabilities = engine.capabilities();
+                let envelope = capabilities.rate_envelope();
+                let max_output_frames = capabilities
+                    .max_output_frames()
+                    .to_f64()
+                    .expect("prepared output limit fits f64");
+                let max_source_frames = capabilities
+                    .max_source_frames()
+                    .to_f64()
+                    .expect("prepared source limit fits f64");
 
                 assert_eq!(
-                    engine.process(request, &source, &mut output),
-                    Err(ElasticError::RateOutsideEnvelope {
-                        source_frames,
-                        output_frames: OUTPUT_FRAMES,
-                    })
+                    envelope.min_source_frames_per_output(),
+                    1.0 / max_output_frames
+                );
+                assert_eq!(
+                    envelope.max_source_frames_per_output(),
+                    max_source_frames
+                );
+                assert!(
+                    !envelope.contains_rate(envelope.min_source_frames_per_output() / 2.0)
+                );
+                assert!(
+                    !envelope.contains_rate(envelope.max_source_frames_per_output() * 2.0)
                 );
             }
 
@@ -425,6 +536,7 @@ macro_rules! elastic_engine_conformance {
     };
 }
 
+#[cfg(feature = "stretch-signalsmith")]
 macro_rules! elastic_priming_conformance {
     ($module:ident, $engine:ty) => {
         mod $module {
@@ -666,7 +778,7 @@ elastic_engine_conformance!(bungee, kithara_stretch::BungeeElastic);
 
 #[cfg(feature = "stretch-signalsmith")]
 #[kithara::test]
-fn signalsmith_declares_its_rate_window_and_latency() {
+fn signalsmith_declares_its_prepared_domain_and_latency() {
     let engine: kithara_stretch::SignalsmithElastic = prepared(8192, 8192);
     let capabilities = engine.capabilities();
 
@@ -674,11 +786,11 @@ fn signalsmith_declares_its_rate_window_and_latency() {
     assert_eq!(capabilities.channels(), CHANNELS);
     assert_eq!(
         capabilities.rate_envelope().min_source_frames_per_output(),
-        2.0 / 3.0
+        1.0 / 8192.0
     );
     assert_eq!(
         capabilities.rate_envelope().max_source_frames_per_output(),
-        4.0 / 3.0
+        8192.0
     );
     assert_eq!(capabilities.latency().source_frames(), 2880);
     assert_eq!(capabilities.latency().output_frames(), 2880);
@@ -708,9 +820,70 @@ fn signalsmith_unity_render_exposes_the_declared_latency() {
     );
 }
 
+#[cfg(feature = "stretch-signalsmith")]
+#[kithara::test]
+fn signalsmith_flush_drains_a_real_tail_once() {
+    const FRAMES: usize = 8192;
+
+    let mut engine: kithara_stretch::SignalsmithElastic = prepared(FRAMES, FRAMES);
+    let request = ElasticRequest::new(FRAMES, FRAMES).expect("unity request");
+    let source = interleaved_signal(FRAMES);
+    let mut output = vec![0.0; FRAMES * CHANNELS];
+    engine
+        .process(request, &source, &mut output)
+        .expect("the source block renders");
+    let tail_frames = engine.capabilities().latency().output_frames();
+    let mut terminal = vec![0.0; tail_frames * CHANNELS];
+
+    let first = engine.flush(&mut terminal).expect("terminal tail drains");
+    let repeated = engine
+        .flush(&mut terminal)
+        .expect("terminal drain is one-shot");
+
+    assert_eq!(first, tail_frames);
+    assert_eq!(repeated, 0);
+    assert!(terminal.iter().any(|sample| sample.abs() > f32::EPSILON));
+}
+
+#[cfg(feature = "stretch-signalsmith")]
+#[kithara::test]
+fn signalsmith_flush_rejects_wrong_storage_without_disarming_tail() {
+    const FRAMES: usize = 8192;
+
+    let mut engine: kithara_stretch::SignalsmithElastic = prepared(FRAMES, FRAMES);
+    let request = ElasticRequest::new(FRAMES, FRAMES).expect("unity request");
+    let source = interleaved_signal(FRAMES);
+    let mut output = vec![0.0; FRAMES * CHANNELS];
+    engine
+        .process(request, &source, &mut output)
+        .expect("the source block renders");
+    let tail_frames = engine.capabilities().latency().output_frames();
+    let tail_samples = tail_frames * CHANNELS;
+    let mut short = vec![0.0; tail_samples - CHANNELS];
+
+    let error = engine
+        .flush(&mut short)
+        .expect_err("an armed tail requires latency-sized storage");
+
+    assert_eq!(
+        error,
+        ElasticError::OutputSampleCount {
+            actual: short.len(),
+            expected: tail_samples,
+        }
+    );
+    let mut terminal = vec![0.0; tail_samples];
+    assert_eq!(
+        engine
+            .flush(&mut terminal)
+            .expect("the rejected call keeps the tail armed"),
+        tail_frames
+    );
+}
+
 #[cfg(feature = "stretch-bungee")]
 #[kithara::test]
-fn bungee_declares_the_rate_window_the_suite_verifies() {
+fn bungee_declares_the_prepared_domain_and_latency() {
     let engine: kithara_stretch::BungeeElastic = prepared(8192, 8192);
     let capabilities = engine.capabilities();
 
@@ -718,14 +891,43 @@ fn bungee_declares_the_rate_window_the_suite_verifies() {
     assert_eq!(capabilities.channels(), CHANNELS);
     assert_eq!(
         capabilities.rate_envelope().min_source_frames_per_output(),
-        0.5
+        1.0 / 8192.0
     );
     assert_eq!(
         capabilities.rate_envelope().max_source_frames_per_output(),
-        2.0
+        8192.0
     );
     assert!(
         capabilities.latency().output_frames() > 0,
         "the engine must report the lag its pipeline carries"
     );
+}
+
+#[cfg(feature = "stretch-bungee")]
+#[kithara::test]
+fn bungee_flush_honestly_emits_no_synthetic_tail() {
+    let mut engine: kithara_stretch::BungeeElastic = prepared(8192, 8192);
+    let mut terminal = vec![0.0; engine.capabilities().latency().output_frames() * CHANNELS];
+
+    let frames = engine.flush(&mut terminal).expect("no-op flush succeeds");
+
+    assert_eq!(frames, 0);
+}
+
+#[cfg(feature = "stretch-bungee")]
+#[kithara::test]
+fn bungee_prepare_uses_the_injected_pcm_pool_budget() {
+    let config = kithara_stretch::ElasticConfig::builder()
+        .pool(PcmPool::with_byte_budget(8, 8192, ByteBudget(0)))
+        .sample_rate(SAMPLE_RATE)
+        .channels(CHANNELS)
+        .max_source_frames(8192)
+        .max_output_frames(8192)
+        .build()
+        .expect("the numeric preparation shape is valid");
+
+    let error = kithara_stretch::BungeeElastic::prepare(config)
+        .expect_err("zero pool budget cannot prepare planar PCM scratch");
+
+    assert_eq!(error, ElasticError::PcmPoolBudgetExhausted);
 }
