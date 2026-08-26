@@ -90,43 +90,38 @@ impl<T: StreamType> SharedStream<T> {
         }
     }
 
-    /// Overall source readiness at current position — answered by the
-    /// narrow [`SourceProbe`], never the control mutex.
-    pub(crate) fn phase(&self) -> SourcePhase {
-        self.probe.phase()
-    }
-
-    /// Point-in-time readiness for a specific byte range — same contract
-    /// as [`Self::phase`].
-    pub(crate) fn phase_at(&self, range: Range<u64>) -> SourcePhase {
-        self.probe.phase_at(range)
-    }
-
-    /// Current read position — the source's atomic cursor via the probe.
-    pub(crate) fn position(&self) -> u64 {
-        self.probe.position()
-    }
-
-    /// Absolute byte cursor set — forwards to the inner source's atomic,
-    /// used post-seek when the audio FSM lands at a known byte position.
-    pub(crate) fn set_position(&self, pos: u64) {
-        self.probe.set_position(pos);
-    }
-
-    /// Total length if known — answered by the probe.
-    pub(crate) fn len(&self) -> Option<u64> {
-        self.probe.len()
-    }
-
-    /// Optional byte-map handle — answered by the probe; the decoder
-    /// factory uses it to activate the segment-by-segment fMP4 path.
-    pub(crate) fn byte_map(&self) -> Option<Arc<dyn ByteMap>> {
-        self.probe.byte_map()
-    }
-
-    /// Runtime ABR handle — `Some` for adaptive sources (HLS).
-    pub(crate) fn abr_handle(&self) -> Option<AbrHandle> {
-        self.abr.clone()
+    delegate! {
+        // Byte-space polls answered by the narrow probe, never the control
+        // mutex: RT-safe on the forbid-blocking produce core.
+        to self.probe {
+            /// Overall source readiness at current position.
+            pub(crate) fn phase(&self) -> SourcePhase;
+            /// Point-in-time readiness for a specific byte range — same
+            /// contract as [`Self::phase`].
+            pub(crate) fn phase_at(&self, range: Range<u64>) -> SourcePhase;
+            /// Current read position — the source's atomic cursor.
+            pub(crate) fn position(&self) -> u64;
+            /// Absolute byte cursor set — forwards to the inner source's
+            /// atomic, used post-seek when the audio FSM lands at a known
+            /// byte position.
+            pub(crate) fn set_position(&self, pos: u64);
+            /// Total length if known.
+            pub(crate) fn len(&self) -> Option<u64>;
+            /// Optional byte-map handle; the decoder factory uses it to
+            /// activate the segment-by-segment fMP4 path.
+            pub(crate) fn byte_map(&self) -> Option<Arc<dyn ByteMap>>;
+        }
+        to self.abr {
+            /// Runtime ABR handle — `Some` for adaptive sources (HLS).
+            #[call(clone)]
+            pub(crate) fn abr_handle(&self) -> Option<AbrHandle>;
+        }
+        to self.peer_wake {
+            /// The reader→peer wake handle — `Some` for segmented sources
+            /// (HLS) that push a downloader peer.
+            #[call(clone)]
+            pub(crate) fn peer_wake(&self) -> Option<Arc<DeferredWake>>;
+        }
     }
 
     /// Header byte range for decoder recreate after a format change — via
@@ -134,12 +129,6 @@ impl<T: StreamType> SharedStream<T> {
     /// [`Stream::format_change_segment_range`].
     pub(crate) fn format_change_segment_range(&self) -> StreamResult<Range<u64>> {
         format_change_segment_range(self.variants.as_deref())
-    }
-
-    /// The reader→peer wake handle — `Some` for segmented sources (HLS)
-    /// that push a downloader peer.
-    pub(crate) fn peer_wake(&self) -> Option<Arc<DeferredWake>> {
-        self.peer_wake.clone()
     }
 
     /// Real-time on-core seek (FSM recreate/boundary, decoder
