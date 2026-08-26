@@ -20,18 +20,6 @@ const CONTROL_QUANTUM: usize = 64;
 const SAMPLE_RATE: u32 = 48_000;
 const TONE_HZ: f64 = 440.0;
 
-fn prepared<E: ElasticEngine>(max_source_frames: usize, max_output_frames: usize) -> E {
-    let config = ElasticConfig::builder()
-        .pool(PcmPool::default())
-        .sample_rate(SAMPLE_RATE)
-        .channels(CHANNELS)
-        .max_source_frames(max_source_frames)
-        .max_output_frames(max_output_frames)
-        .build()
-        .expect("the test configuration is valid");
-    E::prepare(config).expect("the engine prepares for a valid shape")
-}
-
 fn prepared_backend(
     backend: StretchKind,
     max_source_frames: usize,
@@ -1410,7 +1398,7 @@ elastic_priming_conformance!(priming);
 #[cfg(feature = "stretch-signalsmith")]
 #[kithara::test]
 fn signalsmith_declares_its_prepared_domain_and_latency() {
-    let engine: kithara_stretch::SignalsmithElastic = prepared(8192, 8192);
+    let engine = prepared_backend(StretchKind::Signalsmith, 8192, 8192);
     let capabilities = engine.capabilities();
 
     assert_eq!(capabilities.sample_rate(), SAMPLE_RATE);
@@ -1432,7 +1420,7 @@ fn signalsmith_declares_its_prepared_domain_and_latency() {
 fn signalsmith_unity_render_exposes_the_declared_latency() {
     const FRAMES: usize = 8192;
 
-    let mut engine: kithara_stretch::SignalsmithElastic = prepared(FRAMES, FRAMES);
+    let mut engine = prepared_backend(StretchKind::Signalsmith, FRAMES, FRAMES);
     let latency = engine.capabilities().latency();
     let source = impulse_markers(FRAMES, 0);
     let mut output = vec![f32::NAN; FRAMES * CHANNELS];
@@ -1456,7 +1444,7 @@ fn signalsmith_unity_render_exposes_the_declared_latency() {
 fn signalsmith_flush_drains_a_real_tail_once() {
     const FRAMES: usize = 8192;
 
-    let mut engine: kithara_stretch::SignalsmithElastic = prepared(FRAMES, FRAMES);
+    let mut engine = prepared_backend(StretchKind::Signalsmith, FRAMES, FRAMES);
     let request = ElasticRequest::new(FRAMES, FRAMES).expect("unity request");
     let source = interleaved_signal(FRAMES);
     let mut output = vec![0.0; FRAMES * CHANNELS];
@@ -1479,7 +1467,7 @@ fn signalsmith_flush_drains_a_real_tail_once() {
 #[cfg(feature = "stretch-bungee")]
 #[kithara::test]
 fn bungee_declares_the_prepared_domain_and_latency() {
-    let engine: kithara_stretch::BungeeElastic = prepared(8192, 8192);
+    let engine = prepared_backend(StretchKind::Bungee, 8192, 8192);
     let capabilities = engine.capabilities();
 
     assert_eq!(capabilities.sample_rate(), SAMPLE_RATE);
@@ -1537,8 +1525,7 @@ fn bungee_pool_usage_scales_with_the_prepared_source_limit() {
             .max_output_frames(8192)
             .build()
             .expect("the numeric preparation shape is valid");
-        let engine = kithara_stretch::BungeeElastic::prepare(config)
-            .expect("the prepared shape fits an unlimited pool");
+        let engine = build_engine(config).expect("the prepared shape fits an unlimited pool");
         let allocated = pool.allocated_bytes();
         drop(engine);
         allocated

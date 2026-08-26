@@ -1,9 +1,7 @@
-#![cfg(feature = "stretch-signalsmith")]
-
 use kithara_bufpool::PcmPool;
 use kithara_stretch::{
-    ElasticConfig, ElasticCursor, ElasticEngine, ElasticError, ElasticSpan, ElasticSpanConfig,
-    ElasticSpanPlan, SignalsmithElastic,
+    ElasticCapabilities, ElasticConfig, ElasticCursor, ElasticError, ElasticSpan,
+    ElasticSpanConfig, ElasticSpanPlan, build_engine,
 };
 use kithara_test_utils::kithara;
 
@@ -13,7 +11,7 @@ const MAX_OUTPUT_FRAMES: usize = 480;
 /// The planner reads capabilities, never an engine, so one declared window is
 /// enough to pin its quantization; every engine renders what it plans, which
 /// the conformance suite covers.
-fn capabilities() -> kithara_stretch::ElasticCapabilities {
+fn capabilities() -> ElasticCapabilities {
     let config = ElasticConfig::builder()
         .pool(PcmPool::default())
         .sample_rate(44_100)
@@ -22,8 +20,8 @@ fn capabilities() -> kithara_stretch::ElasticCapabilities {
         .max_output_frames(MAX_OUTPUT_FRAMES)
         .build()
         .expect("invariant: static exact-span config");
-    SignalsmithElastic::prepare(config)
-        .expect("signalsmith exact-span engine")
+    build_engine(config)
+        .expect("the configured exact-span engine prepares")
         .capabilities()
 }
 

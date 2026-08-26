@@ -9,8 +9,7 @@ use crate::{
 };
 
 /// Exact-span Bungee engine.
-#[non_exhaustive]
-pub struct BungeeElastic {
+pub(crate) struct BungeeElastic {
     capabilities: ElasticCapabilities,
     core: StreamCore,
     pitch: f64,

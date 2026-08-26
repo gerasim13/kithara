@@ -22,8 +22,7 @@ fn engine(sample_rate: u32, channels: usize) -> (Stretch, ElasticLatency) {
 
 /// Exact-span Signalsmith engine, prepared for fixed maximum source and output
 /// blocks.
-#[non_exhaustive]
-pub struct SignalsmithElastic {
+pub(crate) struct SignalsmithElastic {
     inner: Stretch,
     capabilities: ElasticCapabilities,
     prime_input: PcmBuf,

@@ -4,6 +4,6 @@ mod bungee;
 mod signalsmith;
 
 #[cfg(feature = "stretch-bungee")]
-pub use bungee::BungeeElastic;
+pub(crate) use bungee::BungeeElastic;
 #[cfg(feature = "stretch-signalsmith")]
-pub use signalsmith::SignalsmithElastic;
+pub(crate) use signalsmith::SignalsmithElastic;

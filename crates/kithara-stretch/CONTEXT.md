@@ -86,8 +86,9 @@ depend on `kithara-decode::PcmSpec`.
   scheduling the cue grain. The next `process` applies its current rate and pitch when it schedules
   that grain; only the unconsumed remainder of one native output chunk may cross a render boundary.
   There is no software post-cue PCM queue, and the render path allocates nothing.
-- `BungeeElastic::reset` clears and drains the resident native pipeline without rebuilding it; its
-  Rust-side input/output storage remains the buffers reserved from the injected pool at prepare.
+- The private Bungee adapter clears and drains the resident native pipeline on `reset` without
+  rebuilding it; its Rust-side input/output storage remains the buffers reserved from the injected
+  pool at prepare.
 - Bungee reports its unity latency only after its pipeline is warm, and runtime latency moves with
   the rate. Preparation measures the unity reference on the resident, shape-sized core, resets that
   same core in place, and separately declares a safe fixed terminal chunk from the native maximum
