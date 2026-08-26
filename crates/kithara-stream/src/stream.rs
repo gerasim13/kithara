@@ -738,6 +738,14 @@ impl<T: StreamType> Seek for Stream<T> {
         }
         let new_pos = self.resolve_seek_target(pos, self.source.len())?;
 
+        // Publish the cursor before priming. `prime_seek_range` blocks on the
+        // bytes at the new position after waking the peer to re-aim at it, and
+        // the peer aims by reading the cursor — published afterwards it would
+        // read the old one and keep the wait waiting on a fetch that is walking
+        // there byte by byte. Past-EOF is only known once priming has settled a
+        // length, so that check restores the cursor rather than preceding it.
+        self.source.set_position(new_pos);
+
         let wait_range = match self.format_change_segment_range() {
             Ok(range) if range.start == new_pos => range,
             _ => new_pos..new_pos.saturating_add(1),
@@ -747,6 +755,7 @@ impl<T: StreamType> Seek for Stream<T> {
         if let Some(len) = self.source.len()
             && new_pos > len
         {
+            self.source.set_position(current);
             return Err(IoError::new(
                 ErrorKind::InvalidInput,
                 StreamSeekPastEof {
@@ -757,7 +766,6 @@ impl<T: StreamType> Seek for Stream<T> {
             ));
         }
 
-        self.source.set_position(new_pos);
         Ok(new_pos)
     }
 }
