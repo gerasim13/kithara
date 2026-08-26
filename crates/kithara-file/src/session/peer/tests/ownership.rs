@@ -134,7 +134,7 @@ fn cancelled_active_session_does_not_start_another_fetch() {
         &epoch,
         completion(0, 0, Some(4), Some(&NetError::Cancelled)),
     );
-    peer.inflight.store(false, Ordering::Release);
+    *peer.inflight.lock() = None;
 
     assert!(matches!(Peer::poll_next(&peer, &mut cx), Poll::Ready(None)));
     assert!(peer.writer.lock().is_none());

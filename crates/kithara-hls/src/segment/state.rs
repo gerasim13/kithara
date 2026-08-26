@@ -112,6 +112,8 @@ impl SegmentSlotState {
     /// Atomic `Missing -> Downloading` claim. Returns the owned
     /// [`FetchClaim<Downloading>`](FetchClaim) handle when the caller now owns
     /// the in-flight slot, `None` when another caller already claimed it.
+    /// `plan_revision` records the plan the fetch was taken from, so a
+    /// cancelled settle can tell a still-current plan from a superseded one.
     pub(crate) fn try_claim(
         self: &Arc<Self>,
         planned: PlannedFetch,

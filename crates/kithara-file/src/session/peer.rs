@@ -2,12 +2,13 @@ mod response;
 
 use std::{
     io,
+    ops::Range,
     sync::atomic::{AtomicBool, AtomicU64, Ordering},
     task::{Context, Poll},
 };
 
 use kithara_abr::Abr;
-use kithara_assets::{ReadSide, ResourceLease, WriterEpoch, WriterHandle};
+use kithara_assets::{AssetReader, ReadSide, ResourceLease, WriterEpoch, WriterHandle};
 use kithara_net::{Headers, NetError, RangeSpec};
 use kithara_platform::{
     CancelToken, CancelWakerGuard,
@@ -17,20 +18,30 @@ use kithara_storage::ResourceStatus;
 use kithara_stream::dl::{FetchCmd, Peer, RequestPriority, reject_html_response};
 
 use self::response::{FetchCompletion, FetchWriter, response_contract};
-use crate::session::inner::FileInner;
+use crate::{coord::FileCoord, session::inner::FileInner};
 
 /// Gap-driven downloader for one remote file session.
 /// It emits at most one fetch and waits when finite demand is already present.
 pub(crate) struct FilePeer {
     _session_cancel_wake: CancelWakerGuard,
     _source_cancel_wake: CancelWakerGuard,
-    /// Whether this peer has an in-flight fetch.
-    inflight: Arc<AtomicBool>,
+    /// The fetch this peer has in flight, if any.
+    inflight: Arc<Mutex<Option<Inflight>>>,
     inner: Weak<FileInner>,
     /// Current single-writer election handle, if this consumer owns it.
     writer: Mutex<Option<WriterHandle>>,
     session_cancel: CancelToken,
     source_cancel: CancelToken,
+}
+
+/// The fetch a peer is currently streaming.
+struct Inflight {
+    /// Cancels exactly this fetch.
+    cancel: CancelToken,
+    /// End of the span this fetch was planned to deliver, if bounded.
+    end_exclusive: Option<u64>,
+    /// Live write cursor: how far this fetch has landed bytes.
+    offset: Arc<AtomicU64>,
 }
 
 struct WriterSnapshot {
@@ -70,7 +81,7 @@ impl FilePeer {
         Self {
             _session_cancel_wake: session_cancel_wake,
             _source_cancel_wake: source_cancel_wake,
-            inflight: Arc::new(AtomicBool::new(false)),
+            inflight: Arc::new(Mutex::new(None)),
             inner: Arc::downgrade(inner),
             writer: Mutex::new(writer),
             session_cancel,
@@ -116,6 +127,12 @@ impl FilePeer {
             }
         });
 
+        *self.inflight.lock() = Some(Inflight {
+            cancel: fetch_cancel.clone(),
+            end_exclusive,
+            offset: Arc::clone(&offset),
+        });
+
         let weak_for_complete = Arc::downgrade(inner);
         let invalid_for_complete = Arc::clone(&invalid_response);
         let inflight = Arc::clone(&self.inflight);
@@ -124,7 +141,8 @@ impl FilePeer {
             move |_reported_total: u64, _headers: Option<&Headers>, err: Option<&NetError>| {
                 drop(source_cancel_guard);
                 let written = cb_offset.load(Ordering::Acquire).saturating_sub(start);
-                if let Some(inner) = weak_for_complete.upgrade() {
+                let inner = weak_for_complete.upgrade();
+                if let Some(inner) = inner.as_ref() {
                     inner.complete_fetch(
                         &epoch,
                         FetchCompletion {
@@ -136,7 +154,17 @@ impl FilePeer {
                         },
                     );
                 }
-                inflight.store(false, Ordering::Release);
+                // Only now may a replacement fetch start, so the settled epoch
+                // is never raced. The peer parks on its own waker while a fetch
+                // is in flight, so it has to be woken here or a superseded
+                // fetch would leave it parked with nothing left to complete it.
+                *inflight.lock() = None;
+                if let Some(lease) = inner
+                    .as_ref()
+                    .and_then(|inner| inner.resource_lease.as_ref())
+                {
+                    lease.wake_peer();
+                }
             },
         );
 
@@ -201,6 +229,32 @@ impl FilePeer {
         snapshot
     }
 
+    /// Whether the peer has to park on a fetch that is already running, having
+    /// first cancelled that fetch if the reader cursor has overtaken it. A
+    /// fetch streams forward from where it started, so a cursor that sits
+    /// inside its span but ahead of its write offset can only be served by a
+    /// new request — this one would deliver the whole skipped span first. The
+    /// completion path releases the writer and the next plan anchors on the new
+    /// cursor. A fetch whose span ends before the cursor is a backfill and is
+    /// left alone: it never promised the cursor anything, and neither is a
+    /// fetch the cursor cannot steer, which would be cancelled for a
+    /// replacement anchored right back where it started.
+    fn park_on_running_fetch(&self, inner: &Arc<FileInner>) -> bool {
+        let cursor = steering_cursor(&inner.source.coord);
+        let Some(overtaken) = self.inflight.lock().as_ref().map(|fetch| {
+            cursor
+                .filter(|cursor| fetch.end_exclusive.is_none_or(|end| *cursor < end))
+                .filter(|cursor| *cursor > fetch.offset.load(Ordering::Acquire))
+                .map(|_| fetch.cancel.clone())
+        }) else {
+            return false;
+        };
+        if let Some(cancel) = overtaken {
+            cancel.cancel();
+        }
+        true
+    }
+
     fn drop_writer(&self) {
         let writer = self.writer.lock().take();
         drop(writer);
@@ -223,7 +277,8 @@ impl FilePeer {
         };
         let total = inner.source.coord.total_bytes();
         let upper = total.map_or(writer.watermark, |total| total.min(writer.watermark));
-        let Some(gap) = inner.asset.reader.next_gap(0, upper) else {
+        let cursor = steering_cursor(&inner.source.coord);
+        let Some(gap) = next_gap_from_cursor(&inner.asset.reader, cursor, upper) else {
             return PeerAction::Pending;
         };
         let end_exclusive = (total.is_some() || writer.watermark != u64::MAX).then_some(gap.end);
@@ -247,6 +302,32 @@ fn wake_peer_on_cancel(cancel: &CancelToken, inner: &Arc<FileInner>) -> CancelWa
     })
 }
 
+/// Where the peer fetches next. The reader cursor comes first: after a seek the
+/// listener waits on the bytes under it, and a range request delivers them
+/// without walking the span they skipped. Once nothing is missing ahead of the
+/// cursor the peer fills the earlier gaps, so the resource still commits.
+fn next_gap_from_cursor(
+    reader: &AssetReader,
+    cursor: Option<u64>,
+    upper: u64,
+) -> Option<Range<u64>> {
+    cursor
+        .and_then(|cursor| reader.next_gap(cursor, upper))
+        .or_else(|| reader.next_gap(0, upper))
+}
+
+/// The reader cursor, when it is allowed to steer fetching. A range request
+/// needs the resource extent: before the first response has answered how long
+/// the resource is, a cursor past the end would anchor a fetch on bytes that do
+/// not exist — and the request that would have reported the real length is the
+/// one being replaced. A cursor outside a known extent has nothing to fetch
+/// either. Both leave the head fetch to establish the resource.
+fn steering_cursor(coord: &FileCoord) -> Option<u64> {
+    let total = coord.total_bytes()?;
+    let cursor = coord.position();
+    (cursor < total).then_some(cursor)
+}
+
 fn fetch_range(start: u64, end_exclusive: Option<u64>) -> Option<RangeSpec> {
     end_exclusive.map_or_else(
         || (start > 0).then(|| RangeSpec::new(start, None)),
@@ -266,9 +347,6 @@ impl Abr for FilePeer {
 
 impl Peer for FilePeer {
     fn poll_next(&self, cx: &mut Context<'_>) -> Poll<Option<Vec<FetchCmd>>> {
-        if self.inflight.load(Ordering::Acquire) {
-            return Poll::Pending;
-        }
         let Some(inner) = self.inner.upgrade() else {
             return Poll::Ready(None);
         };
@@ -277,6 +355,9 @@ impl Peer for FilePeer {
         };
 
         lease.register_peer_waker(cx.waker());
+        if self.park_on_running_fetch(&inner) {
+            return Poll::Pending;
+        }
         match self.next_action(&inner, lease) {
             PeerAction::Pending => Poll::Pending,
             PeerAction::Done => {
@@ -285,7 +366,6 @@ impl Peer for FilePeer {
             }
             PeerAction::Fetch(plan) => {
                 lease.clear_peer_waker(cx.waker());
-                self.inflight.store(true, Ordering::Release);
                 Poll::Ready(Some(vec![self.build_fetch_cmd(&inner, plan)]))
             }
         }

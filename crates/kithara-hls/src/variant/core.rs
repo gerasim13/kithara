@@ -148,6 +148,18 @@ pub(super) struct VariantSeek {
     /// CAS-consume the generation.
     pub(super) exact_seek: CasAnchorCell,
     pub(super) size_demand: Mutex<SizeDemandState>,
+    /// `(segment_idx, size)` settles parked while a segment-aware seek
+    /// tail is active: a media settle landing behind the tail must not
+    /// re-key the byte space the post-seek reader lives in, so its size
+    /// store is deferred here until a space re-mint actually runs
+    /// ([`HlsVariant::reset_layout_to_full_range`] — its skip formula
+    /// treats a non-empty park as "not a no-op", so a parked size cannot
+    /// be stranded). Media-only by type: the init is never parked (its
+    /// reads gate on an exact size, so parking it starves init consumers).
+    /// Pushed and drained only inside the [`Layout`] write lock, so the
+    /// freeze decision and the drain serialize with every frame
+    /// publication.
+    pub(super) deferred_prefix: Mutex<Vec<(u32, u64)>>,
 }
 
 #[derive(derive_more::Deref)]
@@ -206,6 +218,7 @@ impl VariantSeek {
             exact_byte_seek: AtomicOptU64::none(),
             segment_aware_tail: AtomicU32::new(no_seek_tail),
             size_demand: Mutex::default(),
+            deferred_prefix: Mutex::default(),
         }
     }
 }

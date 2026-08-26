@@ -53,8 +53,12 @@ matching.
 `Seek::seek` runs on the consumer thread and primes through `prime_seek_range`,
 which returns immediately when `phase_at` already reports `Ready`/`Eof` (a re-seek
 into resident bytes fires no cross-thread peer wake) and otherwise wakes the peer
-once to re-aim the prefetch window, then blocks in `wait_range(_, None)`. Priming
-is advisory; `seek` re-checks `source.len()` afterwards. `probe_seek` is the
+once to re-aim the prefetch window, then blocks in `wait_range(_, None)`. The cursor
+is published with `set_position` **before** priming: a peer re-aims by reading the
+cursor, so priming ahead of it would wake the peer onto the old position and then
+block on bytes nothing is fetching. Priming is advisory; `seek` re-checks
+`source.len()` afterwards and restores the previous cursor when the target turns out
+to be past EOF. `probe_seek` is the
 real-time counterpart and never primes. The wake pair belongs to the source:
 `peer_wake` is reader→peer (armed on the produce core, `notify_now` off-core),
 `set_worker_wake` is peer→worker (fired from off-RT write/commit sites so an

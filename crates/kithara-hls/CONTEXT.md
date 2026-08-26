@@ -65,12 +65,42 @@ alternate (`SessionTurns`). `dispatch_constructing` caps an incoming session at
 cannot disagree; the cap ends when the reader is transferred — a priming decoder must not stay
 inside a build-sized window. `dispatch_from` anchors the look-ahead on
 `max(session position, prefetch anchor)` and stops at the first segment past `look_ahead_bytes` or
-`look_ahead_segments`, with `Init` exempt from both; it publishes `prefetch_resume_at`, the cursor
+`look_ahead_segments`, with `Init` exempt from both; a `construction_segment_end` bound disables
+both look-ahead caps — the bound names a debt (an owed window or a construction window) that must
+land in full, and look-ahead only trims optional prefetch, so an option must never cut a debt.
+`dispatch_from` publishes `prefetch_resume_at`, the cursor
 byte at which the deferred segment enters the window, so `Source::advance` (`take_prefetch_resume`)
 wakes the peer once per deferred segment rather than once per read — the window is cursor-anchored,
 so only the reader's consumption can make it stale and only that consumption may re-open it.
 Popped-but-undispatchable non-terminal entries are pushed back to the queue front, so an orphaned
 `Downloading` slot is re-claimed, never dropped.
+
+While a variant transition is building, the outgoing session yields the downloader to the
+construction. An audible session's prefetches past the owed window (the playing segment and the
+next) ride a rotating `lookahead` cancel token — a child of the session's fetch token, so a seek's
+rearm still burns both. Installing the incoming slot (`prepare_planned_variant_reader`) retires
+that token: queued look-ahead packs deliver cancelled and in-flight ones abort, freeing capacity
+the construction is otherwise starved of — those bytes lie past the cut the transition latches and
+are dead to the splice anyway. Until the transition resolves, `dispatch_active` holds the audible
+session to the owed window (`dispatch_owed`), or the next poll would refill the look-ahead. That
+window is everything the splice still consumes: the reader's segment and the next, extended
+through the latch segment plus one when the cut lies further ahead — a seek can park the outgoing
+decoder's reads segments past the byte cursor, and starving those fetches parks the decoder
+forever while the incoming prime waits on its frontier just as long. A retire that burned a fetch
+the wider window still owes is recovered by the cancelled-settle requeue: the fetch re-enters the
+current plan and the next owed dispatch re-issues it.
+Retired and recovering fetches re-enter the plan in plan order (`requeue_planned` is an ordered
+insert): dispatch caps read the queue head, and a far look-ahead entry parked at the front would
+wall off every nearer segment behind it.
+
+A fetch cancelled in flight settles back toward the plan it was popped from, gated by the plan
+revision. The revision supersedes on every rebuild — including the short-circuit rebuild that
+changes nothing, because that rebuild still claims plan ownership. A claim captures the revision
+at pop (`dispatch_from`), and `settle_cancelled` re-inserts (`requeue_planned`) only when the
+revision is still current and the entry is absent: a look-ahead retire rebuilds nothing, so its
+cancels re-enter and the reader is never left waiting on work nobody holds; a seek's rearm
+rebuilds, so its cancels fail the compare and drop — the rebuilt plan owns the re-dispatch, and a
+stale prefix must not resurrect behind the target.
 
 When the downloader's `soft_timeout` marks an in-flight slot stalled, it wakes the peer immediately
 so `reconcile_escape` can move away from that variant; a stalled reader produces no progress wake.
@@ -124,12 +154,39 @@ mutations. `publication_seq` is a seqlock (odd while publishing) and every layou
 `try_published`, which returns `None` when a writer was in flight or the publication changed —
 callers then keep their gate closed and retry next tick rather than spinning.
 
-`is_canonical_complete` (behind `layout_seek_invariant`) is true when the frame is already canonical
-single-variant full-range geometry *and* every served size is exact; `HlsCoord::prepare_for_seek`
-then skips the O(N) layout reset, while ABR invalidation and the reader wake stay unconditional.
+`layout_seek_invariant` is the one formula for "a layout reset would change nothing worth a
+re-mint": the frame is canonical single-variant full-range geometry (`is_canonical_complete`,
+every served size exact) and nothing is parked in `deferred_prefix`. A live seek tail alone does
+not force the reset — against a canonical table it freezes nothing and only helps the EOF gate,
+so fully-cached segment-aware seeks keep skipping the O(N) rebuild. The formula gates both
+`HlsCoord::prepare_for_seek`'s reset call (a fully-cached seek must not touch the layout at all —
+pinned by `stress_seek_audio`'s reset-counter assertion) and the re-mint inside
+`reset_layout_to_full_range`; ABR invalidation and the reader wake stay unconditional.
 `HlsCoord::reset_for_seek` is layout-only (`reset_layout_to_full_range`) and does not cancel
 in-flight body fetches; `HlsVariant::reset_to_full_range` (from `prepare_reader`) also clears the
-seek alias, the exact-seek/exact-byte demands, and the segment-aware tail.
+seek alias and the exact-seek/exact-byte demands.
+
+### Post-seek frame freeze
+
+While a segment-aware seek tail is live (`VariantSeek::segment_aware_tail != NO_SEEK_TAIL`, set
+only for containers not needing exact byte sizes), the reader, the demuxer's byte map, and the
+peer's cursor all hold bytes minted on the frame the seek anchored. A settle for a media segment
+behind the tail therefore must not re-key that space: `HlsVariant::apply_commit` parks its size in
+`VariantSeek::deferred_prefix` instead of storing it, and the next byte-space re-mint
+(`reset_layout_to_full_range`) retires the tail and applies the parked sizes atomically with the
+fresh frame. The init is never parked — init reads gate on its size being exact, so a parked init
+starves every consumer still waiting for its bytes (the demuxer probe of an ABR pending variant
+deadlocks before activation could drain it). The byte-space shift an init settle causes is not
+observable by a post-seek reader for the same reason: `init_read_at` / `init_contains` refuse
+until the init size is exact, so the demuxer cannot advance off the seek alias' anchor before the
+init lands — weakening that gate (e.g. optimistic init reads) would silently reopen the shift
+window. Both the freeze decision and the drain run inside the `Layout` write lock, so a
+settle can never park behind a tail whose space is already gone, and a parked size can never be
+lost or applied twice. While parked, the real size lives only in `deferred_prefix` — the
+segment's size atom still reads placeholder; that transitional split of truth ends at the next
+re-mint. Pinned by the freeze tests in `variant/tests.rs`
+(`post_seek_prefix_settle_does_not_move_the_frame` and neighbours) and by
+`tests/tests/kithara_queue/hls_seek_cancels_stale_fetches.rs`.
 
 ## Seek Ownership
 

@@ -17,6 +17,7 @@ use kithara_stream::{
     ByteMap, ConstructionGate, PendingReason, ReaderProfile, SeekObserve, SegmentDescriptor,
     SourceError, SourcePhase, SourceSeekAnchor, StreamError, StreamResult, VariantTransition,
 };
+use tracing::debug;
 
 use self::cancel::SessionCancel;
 pub(super) use self::reader::HlsSessionReader;
@@ -58,10 +59,6 @@ struct SessionPosition {
 }
 
 impl HlsSession {
-    pub(crate) fn abort(&self) {
-        self.cancel.abort();
-    }
-
     pub(crate) fn activate(&self) {
         self.active.store(true, Ordering::Release);
     }
@@ -107,6 +104,15 @@ impl HlsSession {
     }
 
     delegate::delegate! {
+        to self.cancel {
+            pub(crate) fn abort(&self);
+            /// Retire this session's look-ahead fetches — queued and in
+            /// flight — while keeping the owed window live. Called when an
+            /// incoming variant slot is installed: the capacity those fetches
+            /// hold is what the construction needs, and their bytes lie past
+            /// the cut the transition latches.
+            pub(crate) fn retire_lookahead(&self);
+        }
         to self.signal {
             pub(crate) fn arm_peer(&self);
             /// Ask the peer to plan for a session that answered [`Self::is_ready`] with
@@ -169,8 +175,41 @@ impl HlsSession {
             self.projected_position().byte,
             construction_segment_end,
             self.active.load(Ordering::Acquire),
-            self.cancel.handle(),
+            self.cancel.dispatch_tokens(),
         )
+    }
+
+    /// Fetches for the audible session while a variant transition is building.
+    ///
+    /// Capped at the owed window, so the outgoing look-ahead cannot hold
+    /// downloader capacity the incoming construction is waiting on. Owed is
+    /// everything the splice still consumes: the reader's own segment and the
+    /// next; every segment up to a latched cut that lies further ahead, plus
+    /// one for the frame that straddles it; and every segment of a range the
+    /// reader is parked on — the demuxer consumes past the projected cursor,
+    /// and a window sized to the projection alone leaves the queue head one
+    /// past the cap forever. Only bytes past all of that are dead to the
+    /// splice.
+    pub(crate) fn dispatch_owed(
+        &self,
+        ctx: &crate::variant::PlanCtx,
+        budget: usize,
+        latch: Duration,
+    ) -> Vec<kithara_stream::dl::FetchCmd> {
+        let read_end = self
+            .find_at_offset(self.projected_position().byte)
+            .map(|(seg_idx, _, _)| seg_idx.saturating_add(1));
+        let latch_end = self
+            .variant
+            .segment_index_at_time(latch)
+            .map(|seg_idx| seg_idx.saturating_add(1));
+        let wait_end = self
+            .variant
+            .read_wait_end()
+            .and_then(|end| self.find_at_offset(end.saturating_sub(1)))
+            .map(|(seg_idx, _, _)| seg_idx);
+        let owed_end = [read_end, latch_end, wait_end].into_iter().flatten().max();
+        self.dispatch_capped(ctx, budget, owed_end)
     }
 
     /// Fetches for an incoming session whose reader has not been handed to a
@@ -351,6 +390,14 @@ impl HlsSession {
                     outcome,
                     Err(StreamError::Source(SourceError::WaitBudgetExceeded))
                 ) {
+                    debug!(
+                        target: "kithara_hls::wait",
+                        variant = self.variant.variant_index_u32(),
+                        start = range.start,
+                        end = range.end,
+                        phase = ?self.variant.phase_at(range.clone()),
+                        "construction wait parked on an unready range"
+                    );
                     self.signal.wake_peer();
                 }
                 outcome

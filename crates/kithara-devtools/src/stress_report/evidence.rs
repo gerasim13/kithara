@@ -50,6 +50,9 @@ struct AttemptDossier {
     /// first. Ordered evidence, not a set: the last firing before the dump is
     /// the verdict, and its `(xN)` count is the starvation streak.
     flight_tail: Vec<String>,
+    /// Newest run-length groups of the attempt envelope's DEBUG-event tail,
+    /// oldest first — the state transitions immediately preceding the failure.
+    event_tail: Vec<String>,
     pressure: String,
     co_runners: BTreeSet<String>,
 }
@@ -480,12 +483,12 @@ fn render_attempt_dossiers(
         return;
     }
     out.push_str(
-        "\n## Failed-attempt evidence overlay\n\nEach bounded example row joins the terminal symptom with same-attempt runtime evidence; raw artifacts remain exhaustive. Empty cells mean that source emitted no attributable record. The flight tail is ordered, oldest first, with `(xN)` marking consecutive repeats of one probe. Co-runners and pressure are correlation candidates, not causes.\n\n| attempt | symptom | project frames | wait graph | line evidence | envelope | flight tail | pressure | co-running tests |\n|---|---|---|---|---|---|---|---|---|\n",
+        "\n## Failed-attempt evidence overlay\n\nEach bounded example row joins the terminal symptom with same-attempt runtime evidence; raw artifacts remain exhaustive. Empty cells mean that source emitted no attributable record. The flight and event tails are ordered, oldest first, with `(xN)` marking consecutive repeats of one line; each group shows its last firing's field values, so the newest group carries the exact state the attempt died in. Co-runners and pressure are correlation candidates, not causes.\n\n| attempt | symptom | project frames | wait graph | line evidence | envelope | flight tail | event tail | pressure | co-running tests |\n|---|---|---|---|---|---|---|---|---|---|\n",
     );
     for dossier in dossiers.values().take(MAX_FAILURE_ROWS) {
         let _ = writeln!(
             out,
-            "| `{}`<br>{} | {} | {} | {} | {} | {} | {} | {} | {} |",
+            "| `{}`<br>{} | {} | {} | {} | {} | {} | {} | {} | {} | {} |",
             markdown_cell(&dossier.display),
             markdown_cell(&dossier.test),
             markdown_cell(&dossier.symptom),
@@ -494,6 +497,7 @@ fn render_attempt_dossiers(
             render_set(&dossier.lines),
             render_set(&dossier.envelopes),
             render_ordered(&dossier.flight_tail),
+            render_ordered(&dossier.event_tail),
             markdown_cell(&dossier.pressure),
             render_set(&dossier.co_runners),
         );

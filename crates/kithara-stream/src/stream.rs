@@ -565,6 +565,21 @@ impl<T: StreamType> Stream<T> {
         }
     }
 
+    /// Single wake-free readiness probe for `range` that also files it as
+    /// reader demand ([`Source::wait_range`] with a zero budget). The demand
+    /// side is the point: dispatch budgets follow the ranges the source knows
+    /// a reader waits on, and a phase snapshot alone leaves a parked reader
+    /// invisible. Never blocks — the audio worker's readiness gate calls it
+    /// from the produce core when a phase poll parks the decoder.
+    ///
+    /// # Errors
+    ///
+    /// A not-ready range surfaces as the source's typed budget-exceeded
+    /// error; cancel and storage failures pass through unchanged.
+    pub fn probe_wait(&mut self, range: Range<u64>) -> StreamResult<WaitOutcome> {
+        self.source.wait_range(range, Some(Duration::ZERO))
+    }
+
     /// Real-time on-core seek: resolve + cursor set, with NO `prime_seek_range`
     /// spin — no `yield_now`/`notify_one` on the forbid-blocking produce core.
     /// The audio worker (the FSM's recreate/boundary seeks and the decoder's
@@ -715,6 +730,14 @@ impl<T: StreamType> Seek for Stream<T> {
         }
         let new_pos = self.resolve_seek_target(pos, self.source.len())?;
 
+        // Publish the cursor before priming. `prime_seek_range` blocks on the
+        // bytes at the new position after waking the peer to re-aim at it, and
+        // the peer aims by reading the cursor — published afterwards it would
+        // read the old one and keep the wait waiting on a fetch that is walking
+        // there byte by byte. Past-EOF is only known once priming has settled a
+        // length, so that check restores the cursor rather than preceding it.
+        self.source.set_position(new_pos);
+
         let wait_range = match self.format_change_segment_range() {
             Ok(range) if range.start == new_pos => range,
             _ => new_pos..new_pos.saturating_add(1),
@@ -724,6 +747,7 @@ impl<T: StreamType> Seek for Stream<T> {
         if let Some(len) = self.source.len()
             && new_pos > len
         {
+            self.source.set_position(current);
             return Err(IoError::new(
                 ErrorKind::InvalidInput,
                 StreamSeekPastEof {
@@ -734,7 +758,6 @@ impl<T: StreamType> Seek for Stream<T> {
             ));
         }
 
-        self.source.set_position(new_pos);
         Ok(new_pos)
     }
 }
@@ -1046,6 +1069,36 @@ mod tests {
             let _ = SeekControl::begin(&*self.seek, Duration::from_millis(10));
             Ok(WaitOutcome::Ready)
         }
+    }
+
+    #[kithara::test]
+    fn probe_wait_probes_the_source_without_reading() {
+        // The parked reader's demand channel: a single zero-budget
+        // `Source::wait_range` probe — readiness without blocking, and the
+        // cursor stays put so it can never masquerade as a read.
+        let source = ScriptSource::new(Arc::new(SeekState::new()), [], [], Vec::new())
+            .with_segments([0..8], 4);
+        let mut stream = Stream::<DummyType> { source };
+
+        let ready = stream.probe_wait(0..4);
+        assert!(
+            matches!(ready, Ok(WaitOutcome::Ready)),
+            "a resident range answers Ready: {ready:?}"
+        );
+
+        let parked = stream.probe_wait(0..8);
+        assert!(
+            matches!(
+                parked,
+                Err(StreamError::Source(SourceError::WaitBudgetExceeded))
+            ),
+            "a not-ready range surfaces the typed budget error: {parked:?}"
+        );
+        assert_eq!(
+            stream.source.position.load(Ordering::Acquire),
+            0,
+            "a wait probe never advances the cursor"
+        );
     }
 
     #[kithara::test]

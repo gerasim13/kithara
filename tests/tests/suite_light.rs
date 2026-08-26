@@ -55,6 +55,8 @@ mod kithara_file {
     #[cfg(not(target_arch = "wasm32"))]
     mod resume_stall_budget;
     #[cfg(not(target_arch = "wasm32"))]
+    mod seek_issues_range_request;
+    #[cfg(not(target_arch = "wasm32"))]
     mod shared_download;
     #[cfg(not(target_arch = "wasm32"))]
     mod waveform_shared_download;

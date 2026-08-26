@@ -15,4 +15,4 @@ pub use harness::{OfflinePlayerHarness, OfflinePlayerOptions};
 pub use player::{
     NotificationKind, OfflinePlayer, resource_from_reader, resource_from_reader_with_src,
 };
-pub use session::{MixTapProbe, OfflineSession};
+pub use session::{MixTapProbe, OfflineSession, offline_gain_window};

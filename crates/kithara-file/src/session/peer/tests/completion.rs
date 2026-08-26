@@ -153,7 +153,7 @@ fn inflight_clears_after_completion_settlement() {
         on_complete(0, None, Some(&error));
     });
     entered.wait();
-    let inflight_during_settlement = peer.inflight.load(Ordering::Acquire);
+    let inflight_during_settlement = peer.inflight.lock().is_some();
     release.wait();
     completion
         .join()
@@ -163,7 +163,7 @@ fn inflight_clears_after_completion_settlement() {
         inflight_during_settlement,
         "a replacement fetch must not start before the prior callback settles"
     );
-    assert!(!peer.inflight.load(Ordering::Acquire));
+    assert!(peer.inflight.lock().is_none());
 }
 
 #[kithara::test(native, timeout(Duration::from_secs(2)))]

@@ -1,5 +1,6 @@
 use kithara_platform::time::Duration;
 use kithara_test_utils::kithara;
+use tracing::debug;
 
 use super::{HlsVariant, PlanCtx, PlanRevision};
 use crate::segment::PlannedFetch;
@@ -68,6 +69,11 @@ impl HlsVariant {
     )]
     pub(crate) fn rebuild(&self, _ctx: &PlanCtx, from_seg: u32) {
         if self.queue_matches_plan(from_seg) {
+            // Nothing to re-plan, but the rebuild still claims plan
+            // ownership: a fetch the triggering rearm cancelled in flight
+            // must settle into a foreign plan, not resurrect a prefix
+            // behind the target (see `PlanGuard::supersede`).
+            self.flow.queue.lock().supersede();
             return;
         }
         self.rebuild_queue(from_seg, None);
@@ -93,13 +99,22 @@ impl HlsVariant {
     /// sent the fetch, so a slot returned to `Missing` describes work nobody
     /// holds. The peer then wakes to an empty plan and asks for nothing, and
     /// the segment is never fetched again — playback stops at that gap even
-    /// once the network is back. Front of the queue, because playback is
-    /// waiting on it. Only work from the current plan revision may return, and
-    /// only when absent, so a seek cannot resurrect an obsolete prefix or
-    /// duplicate a fetch that its replacement plan already contains.
+    /// once the network is back. In plan order, not at the front: dispatch
+    /// bounds read the queue head, and a retired look-ahead entry parked
+    /// there would wall off every nearer segment behind it. Only work from
+    /// the current plan revision may return, and only when absent, so a seek
+    /// cannot resurrect an obsolete prefix or duplicate a fetch that its
+    /// replacement plan already contains.
     pub(crate) fn requeue_planned(&self, planned: PlannedFetch, revision: PlanRevision) -> bool {
-        let mut queue = self.flow.queue.lock();
-        queue.push_front_if_current(planned, revision)
+        let requeued = self.flow.queue.lock().requeue_if_current(planned, revision);
+        if !requeued {
+            debug!(
+                variant = self.variant,
+                ?planned,
+                "requeue refused: plan superseded or entry already queued"
+            );
+        }
+        requeued
     }
 
     #[kithara::probe]
@@ -118,6 +133,10 @@ impl HlsVariant {
             .queue
             .lock()
             .replace_with(init.chain(probe).chain(tail));
+        debug!(
+            variant = self.variant,
+            from_seg, probe_seg, segs_len, "fetch plan rebuilt"
+        );
     }
 
     /// Same as [`Self::rebuild`] but also enqueues `seg 0` when

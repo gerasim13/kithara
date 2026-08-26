@@ -259,7 +259,15 @@ mod tests {
         let (release_tx, release_rx) = mpsc::channel();
         let (running_tx, running_rx) = mpsc::channel();
 
+        // The pace anchors to real time inside `real_io_enter`, so the 80ms
+        // deadline is owed 80ms of real time from the ANCHOR: real time spent
+        // while the blocker still runs (thread spawns, channel handshakes) is
+        // credit the pacer legally releases the instant quiescence begins.
+        // Measure from the anchor — a post-handshake start is owed less than
+        // the full target by exactly that credit, which host-scheduler
+        // perturbation stretches past the assert's slack.
         flash.real_io_enter();
+        let start = RealInstant::now();
         let blocker = {
             let flash = Arc::clone(&flash);
             thread::spawn(move || {
@@ -272,9 +280,13 @@ mod tests {
         };
         running_rx.recv().expect("receive blocker running");
 
-        let start = RealInstant::now();
         let waiter = spawn_park_for(&flash, Duration::from_millis(80));
         wait_for_timed_count(&flash, 1);
+        assert_eq!(
+            flash.clock.now_nanos(),
+            base,
+            "clock must hold still while a dedicated participant runs"
+        );
         release_tx.send(()).expect("release blocker");
 
         waiter.join().expect("waiter thread panicked");

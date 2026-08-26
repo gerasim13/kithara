@@ -112,7 +112,13 @@ impl PlanGuard<'_> {
         PlanQueue::mark(self.init_planned, self.segments_planned, planned, true);
     }
 
-    pub(in crate::variant) fn push_front_if_current(
+    /// Re-enter work popped off a still-current plan. The insert keeps plan
+    /// order (`Init` first, segments ascending) rather than taking the front:
+    /// dispatch bounds read the queue head, and a retired look-ahead entry
+    /// parked there would wall off every nearer segment behind it. Work from
+    /// a superseded plan is refused, so a seek cannot resurrect an obsolete
+    /// prefix, and an entry the current plan already holds is never doubled.
+    pub(in crate::variant) fn requeue_if_current(
         &mut self,
         planned: PlannedFetch,
         revision: PlanRevision,
@@ -122,11 +128,21 @@ impl PlanGuard<'_> {
         {
             return false;
         }
-        self.push_front(planned);
+        let at = self
+            .queue
+            .iter()
+            .position(|queued| *queued > planned)
+            .unwrap_or(self.queue.len());
+        self.queue.insert(at, planned);
+        PlanQueue::mark(self.init_planned, self.segments_planned, planned, true);
         true
     }
 
-    fn supersede(&mut self) {
+    /// Declare a new plan identity without touching the queue. Every rebuild
+    /// supersedes — including one that leaves the plan as-is — so a fetch
+    /// cancelled by the rearm that triggered it settles into a foreign plan
+    /// and stays off it.
+    pub(in crate::variant) fn supersede(&mut self) {
         self.revision.fetch_add(1, Ordering::Relaxed);
     }
 
@@ -227,10 +243,29 @@ mod tests {
             .lock()
             .replace_with([PlannedFetch::Segment(3)].into_iter());
 
-        assert!(!queue.lock().push_front_if_current(planned, revision));
+        assert!(!queue.lock().requeue_if_current(planned, revision));
         assert_eq!(
             queue.lock().iter().copied().collect::<Vec<_>>(),
             vec![PlannedFetch::Segment(3)]
+        );
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn a_requeued_fetch_reenters_in_plan_order() {
+        let queue = plan();
+        queue
+            .lock()
+            .replace_with([PlannedFetch::Segment(0), PlannedFetch::Segment(3)].into_iter());
+        let (near, revision) = queue.lock().pop_front().expect("near fetch");
+        let (far, _) = queue.lock().pop_front().expect("far fetch");
+
+        assert!(queue.lock().requeue_if_current(near, revision));
+        assert!(queue.lock().requeue_if_current(far, revision));
+
+        assert_eq!(
+            queue.lock().iter().copied().collect::<Vec<_>>(),
+            vec![PlannedFetch::Segment(0), PlannedFetch::Segment(3)],
+            "a returning far entry must not park in front of a nearer one"
         );
     }
 }

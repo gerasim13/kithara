@@ -107,6 +107,22 @@ impl HlsVariant {
         Ok(Self::wrap(written))
     }
 
+    /// Asked only for a segment a wait found no bytes for, so the probe names
+    /// the exact slot state behind a starved wait: a gap with `loaded=1` is a
+    /// state/storage split, one with all-zero flags is work that fell off the
+    /// plan.
+    #[kithara::probe(
+        variant = self.variant as u64,
+        seg = u64::from(seg_idx),
+        loaded = u64::from(
+            self.segments
+                .get(seg_idx as usize)
+                .is_some_and(|s| s.state().is_loaded())
+        ),
+        downloading = u64::from(self.segment_downloading(seg_idx)),
+        failed = u64::from(self.segment_failed(seg_idx)),
+        planned = u64::from(self.fetch_is_planned(PlannedFetch::Segment(seg_idx)))
+    )]
     pub(super) fn segment_has_demand(&self, seg_idx: u32) -> bool {
         self.segment_downloading(seg_idx) || self.fetch_is_planned(PlannedFetch::Segment(seg_idx))
     }
@@ -118,20 +134,27 @@ impl HlsVariant {
         _timeout: Option<Duration>,
     ) -> StreamResult<WaitOutcome> {
         let stable_pending = match self.range_gate(&range) {
-            Some(RangeGate::Eof) => return Ok(WaitOutcome::Eof),
+            Some(RangeGate::Eof) => {
+                self.flow.reader.clear_wait();
+                return Ok(WaitOutcome::Eof);
+            }
             Some(RangeGate::Ready) => {
                 hang_reset!();
+                self.flow.reader.clear_wait();
                 return Ok(WaitOutcome::Ready);
             }
             Some(RangeGate::Metadata(_) | RangeGate::Pending) => true,
             None => false,
         };
         if self.flow.reader.is_flushing() {
+            self.flow.reader.clear_wait();
             return Ok(WaitOutcome::Interrupted);
         }
         if stable_pending && self.range_has_failed(&range) {
+            self.flow.reader.clear_wait();
             return Err(StreamError::Source(HlsError::SegmentUnavailable.into()));
         }
+        self.flow.reader.note_wait(range.end);
         trace!(
             variant = self.variant,
             start = range.start,

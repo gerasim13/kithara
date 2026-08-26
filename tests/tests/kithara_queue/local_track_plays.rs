@@ -21,7 +21,7 @@ use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, TestTempDir, Xorshift64,
     fixture_protocol::EncryptionRequest,
     kithara,
-    offline::OfflineSession,
+    offline::{OfflineSession, offline_gain_window},
     temp_dir,
     waits::{wait_for_loader_done_event, wait_for_position_event, wait_for_position_near_event},
 };
@@ -356,7 +356,7 @@ async fn local_track_plays_end_to_end(
 
     // The `time::sleep` is in the BODY, so the macro virtualizes it; over 2
     // virtual seconds the offline render worker (one 512-frame block per
-    // 10ms virtual park) advances ~2s of audio. BOTH endpoints are
+    // 10ms virtual park) advances ~2.3s of audio. BOTH endpoints are
     // event-sourced on the same `PlaybackProgress` cadence — `start_pos`
     // blocks for the next progress event (parking the virtual clock so the
     // render worker is live), `end_pos` drains the latest progress buffered
@@ -378,10 +378,12 @@ async fn local_track_plays_end_to_end(
             .unwrap_or_else(|e| panic!("window end anchor [{label}]: {e}")),
     };
     let gain = end_pos - start_pos;
+    let gain_window = offline_gain_window(2.0);
     assert!(
-        (0.9..=2.5).contains(&gain),
+        gain_window.contains(&gain),
         "position gain out of offline-realtime window [{label}]: got \
-         {gain:.2}s over 2s wall clock (start={start_pos:.2} end={end_pos:.2})"
+         {gain:.2}s over 2s wall clock (expected {gain_window:?}; \
+         start={start_pos:.2} end={end_pos:.2})"
     );
 
     queue.remove(track_id).expect("remove");
