@@ -339,6 +339,7 @@ pub enum PlayerEvent {
     ItemDidFail {
         src: Arc<str>,
         item_id: Option<Arc<str>>,
+        from_current_item: bool,
     },
     /// Leading track entered the prefetch window — arm the next slot.
     PrefetchRequested,

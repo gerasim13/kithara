@@ -206,9 +206,8 @@ impl PlayerImpl {
     }
 }
 
-/// `from_current_item` answers whether the ending slot is the one the
-/// phase currently holds; it is carried only by
-/// [`PlayerEvent::ItemDidPlayToEnd`].
+/// `from_current_item` answers whether the stopping slot is the one the
+/// phase currently holds.
 pub(crate) fn player_event_from_notification(
     notification: PlayerNotification,
     from_current_item: bool,
@@ -229,7 +228,11 @@ pub(crate) fn player_event_from_notification(
             src,
             item_id,
             ..
-        } => Some(PlayerEvent::ItemDidFail { src, item_id }),
+        } => Some(PlayerEvent::ItemDidFail {
+            src,
+            item_id,
+            from_current_item,
+        }),
         _ => None,
     }
 }
@@ -324,6 +327,26 @@ mod tests {
             event,
             Some(PlayerEvent::ItemDidPlayToEnd {
                 from_current_item: true,
+                ..
+            })
+        ));
+    }
+
+    #[kithara::test]
+    fn failed_playback_stopped_notification_carries_the_current_item_answer() {
+        let event = player_event_from_notification(
+            PlayerNotification::PlaybackStopped {
+                src: Arc::from("track.mp3"),
+                item_id: None,
+                reason: TrackPlaybackStopReason::Failed,
+                seek_epoch: 0,
+            },
+            false,
+        );
+        assert!(matches!(
+            event,
+            Some(PlayerEvent::ItemDidFail {
+                from_current_item: false,
                 ..
             })
         ));

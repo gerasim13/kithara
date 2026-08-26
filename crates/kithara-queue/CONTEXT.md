@@ -145,7 +145,12 @@ seeking — not from `PlayerImpl::current_index`.
   pos/dur heuristic (advance when `pos >= dur - 1.0s`, else log a spurious crossfade
   fade-out).
 - `ItemDidFail` → status `Failed`, `TrackLoadFailed { auto_skipped: true }`, then
-  `advance_to_next(Transition::None, TrackFailed)`.
+  `advance_to_next(Transition::None, TrackFailed)` — gated on `from_current_item` for
+  the same reason as `ItemDidPlayToEnd`. A background slot's failure is dropped
+  outright rather than flagged against a queue entry: the event carries no track
+  identity beyond `src`, so acting on it would take the wrong entry out of selection
+  for the rest of the session. Load-time failures reach the queue through the loader,
+  not through this path.
 - Both handlers publish `QueueEnded` when `current()` is `None`: a stale EOF after
   queue end must not restart from the first track.
 - `tick()` → `maybe_arm_crossfade`: `should_arm_crossfade` requires `crossfade > 0`,

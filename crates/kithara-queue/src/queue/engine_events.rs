@@ -113,7 +113,13 @@ impl Queue {
         self.advance_loaded_successor(entry.id, Transition::Crossfade);
     }
 
-    pub(super) fn handle_item_did_fail(&self, src: &Arc<str>) {
+    /// Gated on `from_current_item` for the same reason as
+    /// [`Self::handle_item_did_play_to_end`]: the player reports the slot
+    /// that aborted, not the one being heard. A background slot's failure
+    /// must neither skip the current track nor flag a queue entry — the
+    /// event carries no track identity beyond `src`, and `track_id_for_src`
+    /// resolves it to the first entry with that source.
+    pub(super) fn handle_item_did_fail(&self, src: &Arc<str>, from_current_item: bool) {
         let snap = self.player.playback_snapshot();
         let pos = snap.map_or(0.0, |s| s.position());
         let dur = snap.map_or(0.0, |s| s.duration());
@@ -128,6 +134,10 @@ impl Queue {
         }
         let ended_id = self.track_id_for_src(src);
         if self.consume_armed_advance(ended_id, pos, dur) {
+            return;
+        }
+        if !from_current_item {
+            debug!(%src, pos, dur, "filtered ItemDidFail from a background slot");
             return;
         }
         if let Some(id) = ended_id {
@@ -186,8 +196,12 @@ impl Queue {
             }) => {
                 self.handle_item_did_play_to_end(src, *from_current_item);
             }
-            Event::Player(PlayerEvent::ItemDidFail { src, .. }) => {
-                self.handle_item_did_fail(src);
+            Event::Player(PlayerEvent::ItemDidFail {
+                src,
+                from_current_item,
+                ..
+            }) => {
+                self.handle_item_did_fail(src, *from_current_item);
             }
             Event::Player(PlayerEvent::CurrentItemChanged) => {
                 self.handle_current_item_changed();
