@@ -4,16 +4,24 @@ use num_traits::ToPrimitive;
 
 use super::{ElasticError, ElasticRateEnvelope};
 
+struct Consts;
+
+impl Consts {
+    const CONTINUITY_TOLERANCE: f64 = 1.0e-6;
+    const MAX_CORRECTION_PER_BLOCK: f64 = 1.0;
+    const MAX_PHASE_ERROR: f64 = 1.0;
+}
+
 /// Numeric continuity policy for exact-span planning.
 #[derive(Clone, Copy, Debug, PartialEq, fieldwork::Fieldwork)]
 #[fieldwork(get, copy)]
 #[non_exhaustive]
 pub struct ElasticSpanConfig {
-    /// Source-frame tolerance used when comparing adjacent continuous spans.
+    /// Source-frame tolerance for adjacent spans; defaults to `1e-6`.
     continuity_tolerance: f64,
-    /// Maximum source-frame correction applied over one render block.
+    /// Per-block source-frame correction limit; defaults to one frame.
     max_correction_per_block: f64,
-    /// Maximum source-frame phase error accepted at a block boundary.
+    /// Accepted boundary phase error; defaults to one source frame.
     max_phase_error: f64,
 }
 
@@ -25,9 +33,9 @@ impl ElasticSpanConfig {
         finish_fn(vis = "pub")
     )]
     fn new(
-        continuity_tolerance: f64,
-        max_phase_error: f64,
-        max_correction_per_block: f64,
+        #[builder(default = Consts::CONTINUITY_TOLERANCE)] continuity_tolerance: f64,
+        #[builder(default = Consts::MAX_PHASE_ERROR)] max_phase_error: f64,
+        #[builder(default = Consts::MAX_CORRECTION_PER_BLOCK)] max_correction_per_block: f64,
     ) -> Result<Self, ElasticError> {
         if let Some((field, value)) = [
             ("continuity_tolerance", continuity_tolerance),
@@ -188,6 +196,17 @@ mod tests {
                 Err(ElasticError::InvalidSpanConfig { .. })
             ));
         }
+    }
+
+    #[kithara::test]
+    fn span_config_uses_runtime_policy_defaults() {
+        let config = ElasticSpanConfig::builder()
+            .build()
+            .expect("invariant: defaults form a valid span policy");
+
+        assert_eq!(config.continuity_tolerance(), 1.0e-6);
+        assert_eq!(config.max_phase_error(), 1.0);
+        assert_eq!(config.max_correction_per_block(), 1.0);
     }
 
     #[kithara::test]

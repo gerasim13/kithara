@@ -499,9 +499,6 @@ macro_rules! elastic_engine_conformance {
                 let mut engine: $engine = prepared(4096, 4096);
                 let capabilities = engine.capabilities();
                 let span_config = ElasticSpanConfig::builder()
-                    .continuity_tolerance(1.0e-6)
-                    .max_phase_error(1.0)
-                    .max_correction_per_block(1.0)
                     .build()
                     .expect("finite positive span policy");
                 let source_end = OUTPUT_FRAMES
