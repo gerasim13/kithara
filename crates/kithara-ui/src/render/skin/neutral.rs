@@ -11,12 +11,10 @@ use crate::{
         LayoutSkin, MenuSkin, MeterSkin, NavSkin, PopSkin, PortalMapSkin, RangeSkin, ReadoutSkin,
         ScrollSkin, SegmentedSkin, SelectSkin, SkinDoc, StatusDotSkin, SwatchSkin, TabLargeSkin,
         TableSkin, TelemetrySkin, TextInputSkin, TextRoleSkin, TextSkin, ToggleSkin, TreeSkin,
-        VisSkin, VuStereoSkin, VuVerticalSkin, WaveSkin, WindowSkin, parse_color,
+        VisSkin, VuStereoSkin, VuVerticalSkin, WaveSkin, WindowSkin,
     },
     text::TextDoc,
 };
-
-const CHANNEL_MAX: f32 = 255.0;
 
 /// The three captions painted around a crossfader track.
 #[derive(Clone, Debug, PartialEq)]
@@ -139,34 +137,7 @@ impl Skin {
     }
 
     pub(crate) fn rgba(&self, role: ColorRole) -> Rgba {
-        match role {
-            ColorRole::Bg => self.palette.bg,
-            ColorRole::BgDeep => self.palette.bg_deep,
-            ColorRole::BgInset => self.palette.bg_inset,
-            ColorRole::BgPanel => self.palette.bg_panel,
-            ColorRole::BgFooter => self.palette.bg_footer,
-            ColorRole::BgPanel2 => self.palette.bg_panel_2,
-            ColorRole::BgSelect => self.palette.bg_select,
-            ColorRole::Line => self.palette.line,
-            ColorRole::LineDim => self.palette.line_dim,
-            ColorRole::LineInner => self.palette.line_inner,
-            ColorRole::LineSoft => self.palette.line_soft,
-            ColorRole::LineHi => self.palette.line_hi,
-            ColorRole::LinePop => self.palette.line_pop,
-            ColorRole::Text => self.palette.text,
-            ColorRole::TextDim => self.palette.text_dim,
-            ColorRole::Muted => self.palette.muted,
-            ColorRole::Accent => self.palette.accent,
-            ColorRole::AccentStrong => self.palette.accent_strong,
-            ColorRole::AccentSoft => self.palette.accent_soft,
-            ColorRole::Danger => self.palette.danger,
-            ColorRole::Success => self.palette.success,
-            ColorRole::Warning => self.palette.warning,
-            ColorRole::WaveLow => self.palette.wave_low,
-            ColorRole::WaveMid => self.palette.wave_mid,
-            ColorRole::WaveHigh => self.palette.wave_high,
-            ColorRole::Shadow => self.palette.shadow,
-        }
+        self.palette[role]
     }
 
     /// Resolves a parsed document into neutral colors and render metrics,
@@ -197,34 +168,7 @@ impl Skin {
         font_policy: FontPolicy,
     ) -> Result<Self, UiDocError> {
         Ok(Self {
-            palette: RenderPalette {
-                bg: color(&document.palette.bg, origin)?,
-                bg_deep: color(&document.palette.bg_deep, origin)?,
-                bg_inset: color(&document.palette.bg_inset, origin)?,
-                bg_panel: color(&document.palette.bg_panel, origin)?,
-                bg_footer: color(&document.palette.bg_footer, origin)?,
-                bg_panel_2: color(&document.palette.bg_panel_2, origin)?,
-                bg_select: color(&document.palette.bg_select, origin)?,
-                line: color(&document.palette.line, origin)?,
-                line_dim: color(&document.palette.line_dim, origin)?,
-                line_inner: color(&document.palette.line_inner, origin)?,
-                line_soft: color(&document.palette.line_soft, origin)?,
-                line_hi: color(&document.palette.line_hi, origin)?,
-                line_pop: color(&document.palette.line_pop, origin)?,
-                text: color(&document.palette.text, origin)?,
-                text_dim: color(&document.palette.text_dim, origin)?,
-                muted: color(&document.palette.muted, origin)?,
-                accent: color(&document.palette.accent, origin)?,
-                accent_strong: color(&document.palette.accent_strong, origin)?,
-                accent_soft: color(&document.palette.accent_soft, origin)?,
-                danger: color(&document.palette.danger, origin)?,
-                success: color(&document.palette.success, origin)?,
-                warning: color(&document.palette.warning, origin)?,
-                wave_low: color(&document.palette.wave_low, origin)?,
-                wave_mid: color(&document.palette.wave_mid, origin)?,
-                wave_high: color(&document.palette.wave_high, origin)?,
-                shadow: color(&document.palette.shadow, origin)?,
-            },
+            palette: RenderPalette::resolve(&document.palette, origin)?,
             layout: document.layout,
             chrome: document.chrome,
             window: document.window,
@@ -285,16 +229,6 @@ fn text_field(catalog: &TextDoc, key: &str, origin: &SourceUri) -> Result<String
             key: key.to_owned(),
             path: format!("skin.{key}"),
         })
-}
-
-fn color(value: &str, origin: &SourceUri) -> Result<Rgba, UiDocError> {
-    let [red, green, blue, alpha] = parse_color(value, origin)?;
-    Ok(Rgba {
-        r: f32::from(red) / CHANNEL_MAX,
-        g: f32::from(green) / CHANNEL_MAX,
-        b: f32::from(blue) / CHANNEL_MAX,
-        a: f32::from(alpha) / CHANNEL_MAX,
-    })
 }
 
 #[cfg(test)]

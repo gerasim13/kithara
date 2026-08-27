@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use super::{
-    document::ColorRole,
+    palette::ColorRole,
     primitives::{FontSkin, FrameSkin, TextRoleSkin, TickSkin},
 };
 use crate::{layout::FrameSides, size::SizeSpec};

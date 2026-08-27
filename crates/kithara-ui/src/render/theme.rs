@@ -1,33 +1,59 @@
-use crate::draw::Rgba;
+use std::ops::Index;
 
-/// Resolved color palette consumed by renderers.
-#[derive(Clone, Copy, Debug, PartialEq)]
-#[non_exhaustive]
-pub struct RenderPalette {
-    pub accent: Rgba,
-    pub accent_soft: Rgba,
-    pub accent_strong: Rgba,
-    pub bg: Rgba,
-    pub bg_deep: Rgba,
-    pub bg_footer: Rgba,
-    pub bg_inset: Rgba,
-    pub bg_panel: Rgba,
-    pub bg_panel_2: Rgba,
-    pub bg_select: Rgba,
-    pub danger: Rgba,
-    pub line: Rgba,
-    pub line_dim: Rgba,
-    pub line_hi: Rgba,
-    pub line_inner: Rgba,
-    pub line_pop: Rgba,
-    pub line_soft: Rgba,
-    pub muted: Rgba,
-    pub shadow: Rgba,
-    pub success: Rgba,
-    pub text: Rgba,
-    pub text_dim: Rgba,
-    pub warning: Rgba,
-    pub wave_high: Rgba,
-    pub wave_low: Rgba,
-    pub wave_mid: Rgba,
+use crate::{
+    draw::Rgba,
+    error::UiDocError,
+    ids::SourceUri,
+    skin::{ColorRole, PaletteDoc, color_roles, parse_color},
+};
+
+const CHANNEL_MAX: f32 = 255.0;
+
+macro_rules! define_render_palette {
+    ($($field:ident => $role:ident),* $(,)?) => {
+        /// Resolved color palette consumed by renderers.
+        #[derive(Clone, Copy, Debug, PartialEq)]
+        #[non_exhaustive]
+        pub struct RenderPalette {
+            $(pub $field: Rgba,)*
+        }
+
+        impl RenderPalette {
+            /// Reads every role the document declared into the color a
+            /// renderer paints with.
+            ///
+            /// # Errors
+            /// Returns [`UiDocError`] when a value is not a valid color.
+            pub(crate) fn resolve(
+                document: &PaletteDoc,
+                origin: &SourceUri,
+            ) -> Result<Self, UiDocError> {
+                Ok(Self {
+                    $($field: color(&document.$field, origin)?,)*
+                })
+            }
+        }
+
+        impl Index<ColorRole> for RenderPalette {
+            type Output = Rgba;
+
+            fn index(&self, role: ColorRole) -> &Rgba {
+                match role {
+                    $(ColorRole::$role => &self.$field,)*
+                }
+            }
+        }
+    };
+}
+
+color_roles!(define_render_palette);
+
+fn color(value: &str, origin: &SourceUri) -> Result<Rgba, UiDocError> {
+    let [red, green, blue, alpha] = parse_color(value, origin)?;
+    Ok(Rgba {
+        r: f32::from(red) / CHANNEL_MAX,
+        g: f32::from(green) / CHANNEL_MAX,
+        b: f32::from(blue) / CHANNEL_MAX,
+        a: f32::from(alpha) / CHANNEL_MAX,
+    })
 }

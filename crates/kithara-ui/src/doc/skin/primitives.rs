@@ -1,6 +1,9 @@
 use serde::{Deserialize, Serialize};
 
-use super::document::{ColorRole, FontFamily, FontWeight};
+use super::{
+    document::{FontFamily, FontWeight},
+    palette::ColorRole,
+};
 use crate::module::WindowControlsStyle;
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
