@@ -150,20 +150,14 @@ fn decoder_node_does_not_republish_exhausted_warp_source_eof() {
     let effects = Vec::new();
     let drain = EffectDrain::new(effects.len(), &BytePool::default());
     let spec = PcmSpec::new(2, NonZeroU32::new(44_100).expect("test sample rate"));
-    #[cfg(all(
-        not(target_arch = "wasm32"),
-        any(feature = "stretch-signalsmith", feature = "stretch-bungee")
-    ))]
+    #[cfg(not(target_arch = "wasm32"))]
     let source = {
         let config = kithara_warp::WarpConfig::builder().build();
         let warp = kithara_warp::Warp::new((), &config);
         let renderer = warp.renderer(spec, PcmPool::default());
         WarpSource::new(source, renderer, effects, drain, spec)
     };
-    #[cfg(any(
-        target_arch = "wasm32",
-        not(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))
-    ))]
+    #[cfg(target_arch = "wasm32")]
     let source = WarpSource::new(source, effects, drain, spec);
     let (port, mut pop) = PcmProducerPort::probe(1);
     let bus = EventBus::new(8);

@@ -25,10 +25,7 @@ impl DrainState {
 /// The sole producer-side Warp/effect stage before the play output ring.
 pub(crate) struct WarpSource<S> {
     source: S,
-    #[cfg(all(
-        not(target_arch = "wasm32"),
-        any(feature = "stretch-signalsmith", feature = "stretch-bungee")
-    ))]
+    #[cfg(not(target_arch = "wasm32"))]
     warp: kithara_warp::WarpRenderer,
     effects: Vec<Box<dyn AudioEffect>>,
     drain: EffectDrain,
@@ -45,11 +42,7 @@ where
 {
     pub(crate) fn new(
         source: S,
-        #[cfg(all(
-            not(target_arch = "wasm32"),
-            any(feature = "stretch-signalsmith", feature = "stretch-bungee")
-        ))]
-        warp: kithara_warp::WarpRenderer,
+        #[cfg(not(target_arch = "wasm32"))] warp: kithara_warp::WarpRenderer,
         effects: Vec<Box<dyn AudioEffect>>,
         drain: EffectDrain,
         spec: PcmSpec,
@@ -58,10 +51,7 @@ where
         let seek = source.seek_observe();
         Self {
             source,
-            #[cfg(all(
-                not(target_arch = "wasm32"),
-                any(feature = "stretch-signalsmith", feature = "stretch-bungee")
-            ))]
+            #[cfg(not(target_arch = "wasm32"))]
             warp,
             effects,
             drain,
@@ -98,20 +88,14 @@ where
     }
 
     fn reset_renderers(&mut self) {
-        #[cfg(all(
-            not(target_arch = "wasm32"),
-            any(feature = "stretch-signalsmith", feature = "stretch-bungee")
-        ))]
+        #[cfg(not(target_arch = "wasm32"))]
         self.warp.reset();
         reset_effects(&mut self.effects);
     }
 
     fn prepare_renderers(&mut self, spec: PcmSpec) {
         self.spec = spec;
-        #[cfg(all(
-            not(target_arch = "wasm32"),
-            any(feature = "stretch-signalsmith", feature = "stretch-bungee")
-        ))]
+        #[cfg(not(target_arch = "wasm32"))]
         self.warp.prepare(spec);
         for effect in &mut self.effects {
             effect.service_deferred(spec);
@@ -139,20 +123,14 @@ where
     }
 
     fn render(&mut self, chunk: PcmChunk) -> Option<PcmChunk> {
-        #[cfg(all(
-            not(target_arch = "wasm32"),
-            any(feature = "stretch-signalsmith", feature = "stretch-bungee")
-        ))]
+        #[cfg(not(target_arch = "wasm32"))]
         let chunk = self.warp.render(chunk)?;
         apply_effects(&mut self.effects, chunk)
     }
 
     fn drain_step(&mut self) -> Option<TrackStep<PcmChunk>> {
         if let DrainState::Warp(epoch) = self.drain_state {
-            #[cfg(all(
-                not(target_arch = "wasm32"),
-                any(feature = "stretch-signalsmith", feature = "stretch-bungee")
-            ))]
+            #[cfg(not(target_arch = "wasm32"))]
             if let Some(chunk) = self.warp.flush() {
                 return Some(
                     apply_effects(&mut self.effects, chunk)
@@ -275,20 +253,14 @@ mod tests {
     where
         S: PcmSource<Chunk = PcmChunk>,
     {
-        #[cfg(all(
-            not(target_arch = "wasm32"),
-            any(feature = "stretch-signalsmith", feature = "stretch-bungee")
-        ))]
+        #[cfg(not(target_arch = "wasm32"))]
         {
             let config = kithara_warp::WarpConfig::builder().build();
             let warp = kithara_warp::Warp::new((), &config);
             let renderer = warp.renderer(spec, PcmPool::default());
             WarpSource::new(source, renderer, effects, drain, spec)
         }
-        #[cfg(any(
-            target_arch = "wasm32",
-            not(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))
-        ))]
+        #[cfg(target_arch = "wasm32")]
         {
             WarpSource::new(source, effects, drain, spec)
         }

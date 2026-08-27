@@ -77,10 +77,7 @@ impl PlayWorker {
             let spec = audio.spec();
             let warp = Warp::new(audio, &warp);
             let drain = EffectDrain::new(effects.len(), self.byte_pool());
-            #[cfg(all(
-                not(target_arch = "wasm32"),
-                any(feature = "stretch-signalsmith", feature = "stretch-bungee")
-            ))]
+            #[cfg(not(target_arch = "wasm32"))]
             let source = WarpSource::new(
                 source,
                 warp.renderer(spec, self.pcm_pool().clone()),
@@ -88,10 +85,7 @@ impl PlayWorker {
                 drain,
                 spec,
             );
-            #[cfg(any(
-                target_arch = "wasm32",
-                not(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))
-            ))]
+            #[cfg(target_arch = "wasm32")]
             let source = WarpSource::new(source, effects, drain, spec);
             (warp, source)
         });
