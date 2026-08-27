@@ -12,11 +12,12 @@ use kithara::{
     stream::{
         Activity, AudioCodec, ContainerFormat, MediaInfo, PlayheadRead, PlayheadState,
         PlayheadWrite, ReadOutcome, SeekControl, SeekObserve, SeekState, Source, SourceError,
-        SourcePhase, Stream, StreamResult, StreamType,
+        SourcePhase, SourceProbe, Stream, StreamResult, StreamType,
     },
 };
 
 use crate::{
+    memory_source::LenPhaseProbe,
     signal_pcm::{SignalPcm, signal},
     wav::WavHeader,
 };
@@ -87,6 +88,14 @@ impl<S: signal::SignalFn + Sync> Source for SignalSource<S> {
         } else {
             SourcePhase::Ready
         }
+    }
+
+    fn probe(&self) -> Arc<dyn SourceProbe> {
+        Arc::new(LenPhaseProbe::new(
+            self.total_byte_len(),
+            self.total_byte_len(),
+            Arc::clone(&self.position),
+        ))
     }
 
     fn position(&self) -> u64 {

@@ -135,11 +135,24 @@ seeking — not from `PlayerImpl::current_index`.
 - `HandoverRequested` → `advance_loaded_successor`, which selects the successor only
   if it is already `Loaded`. The queue never consumes `PrefetchRequested` and never
   calls `arm_next` / `commit_next`.
-- `ItemDidPlayToEnd`: a non-empty `src` is the authoritative natural-EOF signal →
-  `advance_to_next(Crossfade, NaturalEof)`. An empty `src` falls back to the pos/dur
-  heuristic (advance when `pos >= dur - 1.0s`, else log a spurious crossfade fade-out).
+- `ItemDidPlayToEnd`: `PlayerImpl::process_notifications` walks every active slot, so
+  the event names whichever track hit EOF — a preloaded successor or a lingering
+  predecessor decoding ahead reaches its own end while the current track is seconds
+  old. Advance (`advance_to_next(Crossfade, NaturalEof)`) only when the event carries
+  `from_current_item: true`. That flag is the player's own answer (`slot() ==
+  Some(ended_slot)`), and it is the only trustworthy one: `src` is a rendered resource
+  identifier, not a queue key — `file://` URLs arrive as bare paths and `track_id_for_src`
+  returns the first entry carrying a source, so a duplicated or repeat-all track resolves
+  to a sibling. A `from_current_item: true` event with an empty `src` falls back to the
+  pos/dur heuristic (advance when `pos >= dur - 1.0s`, else log a spurious crossfade
+  fade-out).
 - `ItemDidFail` → status `Failed`, `TrackLoadFailed { auto_skipped: true }`, then
-  `advance_to_next(Transition::None, TrackFailed)`.
+  `advance_to_next(Transition::None, TrackFailed)` — gated on `from_current_item` for
+  the same reason as `ItemDidPlayToEnd`. A background slot's failure is dropped
+  outright rather than flagged against a queue entry: the event carries no track
+  identity beyond `src`, so acting on it would take the wrong entry out of selection
+  for the rest of the session. Load-time failures reach the queue through the loader,
+  not through this path.
 - Both handlers publish `QueueEnded` when `current()` is `None`: a stale EOF after
   queue end must not restart from the first track.
 - `tick()` → `maybe_arm_crossfade`: `should_arm_crossfade` requires `crossfade > 0`,

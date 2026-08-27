@@ -16,18 +16,18 @@ use kithara_events::{
     AudioEvent, DecoderChangeCause, DecoderEvent, DeferredBus, Event, EventBus, TrackFailureKind,
 };
 use kithara_platform::{
-    sync::{Arc, Mutex},
+    sync::{Arc, Condvar, Mutex},
     time::Duration,
     tokio::runtime::Handle as RuntimeHandle,
 };
 use kithara_storage::WaitOutcome;
 use kithara_stream::{
-    Activity, AudioCodec, ByteMap, ChunkPosition, ContainerFormat, MediaInfo, OpenedReader,
-    OpenedVariantReader, PlayheadRead, PlayheadState, PlayheadWrite, PrerollHint, ReadOutcome,
-    ReaderProfile, SeekControl, SeekObserve, SeekState, SegmentDescriptor, Source, SourceError,
-    SourcePhase, SourceSeekAnchor, Stream, StreamError, StreamResult, StreamType, VariantControl,
-    VariantPromotion, VariantReaderPlan, VariantReaderTake, VariantTransition, VariantTransitionId,
-    WorkerWake,
+    Activity, AudioCodec, ByteMap, ChunkPosition, ContainerFormat, DeferredWake, MediaInfo,
+    OpenedReader, OpenedVariantReader, PlayheadRead, PlayheadState, PlayheadWrite, PrerollHint,
+    ReadOutcome, ReaderProfile, SeekControl, SeekObserve, SeekState, SegmentDescriptor, Source,
+    SourceError, SourcePhase, SourceProbe, SourceSeekAnchor, Stream, StreamError, StreamResult,
+    StreamType, VariantControl, VariantPromotion, VariantReaderPlan, VariantReaderTake,
+    VariantTransition, VariantTransitionId, WorkerWake,
 };
 use kithara_test_utils::kithara;
 
@@ -526,9 +526,62 @@ impl VariantControl for TestControl {
     }
 }
 
+/// Optional park inside `wait_range`, letting a test hold the stream's
+/// control mutex the way a real construction read does: `Stream::read`
+/// enters `Source::wait_range` under the `SharedStream` mutex and stays
+/// there until data lands. Disarmed by default — no other test changes.
+#[derive(Default)]
+pub(super) struct WaitPark {
+    armed: AtomicBool,
+    state: Mutex<WaitParkState>,
+    condvar: Condvar,
+}
+
+#[derive(Default)]
+struct WaitParkState {
+    entered: bool,
+    released: bool,
+}
+
+impl WaitPark {
+    pub(super) fn arm(&self) {
+        self.armed.store(true, Ordering::Release);
+    }
+
+    /// Block until the holder is inside `wait_range` — i.e. the control
+    /// mutex is held by a parked blocking read.
+    pub(super) fn wait_entered(&self) {
+        let mut state = self.state.lock();
+        while !state.entered {
+            state = self.condvar.wait(state);
+        }
+    }
+
+    pub(super) fn release(&self) {
+        let mut state = self.state.lock();
+        state.released = true;
+        drop(state);
+        self.condvar.notify_all();
+    }
+
+    fn enter_if_armed(&self) {
+        if !self.armed.load(Ordering::Acquire) {
+            return;
+        }
+        let mut state = self.state.lock();
+        state.entered = true;
+        self.condvar.notify_all();
+        while !state.released {
+            state = self.condvar.wait(state);
+        }
+    }
+}
+
 pub(super) struct TestSource {
     byte_map: Arc<TestByteMap>,
     control: Arc<TestControl>,
+    park: Arc<WaitPark>,
+    peer: Option<Arc<DeferredWake>>,
     phase: Arc<Mutex<SourcePhase>>,
     playhead: Arc<PlayheadState>,
     position: Arc<AtomicU64>,
@@ -541,6 +594,8 @@ impl TestSource {
         Self {
             control,
             byte_map: Arc::new(TestByteMap),
+            park: Arc::new(WaitPark::default()),
+            peer: None,
             phase: Arc::new(Mutex::new(SourcePhase::Ready)),
             playhead: Arc::new(PlayheadState::new()),
             position: Arc::new(AtomicU64::new(0)),
@@ -549,9 +604,21 @@ impl TestSource {
         }
     }
 
+    /// Attach a reader→peer wake, as segmented sources vend one. Opt-in:
+    /// a `Some` peer changes `Stream`'s read-path unit clamping, so only
+    /// tests pinning the peer-wake contract install it.
+    pub(super) fn with_peer_wake(mut self, wake: Arc<DeferredWake>) -> Self {
+        self.peer = Some(wake);
+        self
+    }
+
     fn segmented(control: Arc<TestControl>) -> Self {
         control.enable_byte_map();
         Self::new(control)
+    }
+
+    pub(super) fn park_handle(&self) -> Arc<WaitPark> {
+        Arc::clone(&self.park)
     }
 
     pub(super) fn phase_handle(&self) -> Arc<Mutex<SourcePhase>> {
@@ -563,9 +630,52 @@ impl TestSource {
     }
 }
 
+/// Byte-space probe sharing the test source's scripted cells — the same
+/// phase, cursor, and byte-map gating as the `Source` impl below.
+struct SharedPhaseProbe {
+    phase: Arc<Mutex<SourcePhase>>,
+    position: Arc<AtomicU64>,
+    control: Arc<TestControl>,
+    byte_map: Arc<TestByteMap>,
+}
+
+impl SourceProbe for SharedPhaseProbe {
+    fn phase(&self) -> SourcePhase {
+        *self.phase.lock()
+    }
+
+    fn phase_at(&self, _range: Range<u64>) -> SourcePhase {
+        *self.phase.lock()
+    }
+
+    fn position(&self) -> u64 {
+        self.position.load(Ordering::Acquire)
+    }
+
+    fn set_position(&self, pos: u64) {
+        self.position.store(pos, Ordering::Release);
+    }
+
+    fn len(&self) -> Option<u64> {
+        Some(4096)
+    }
+
+    fn byte_map(&self) -> Option<Arc<dyn ByteMap>> {
+        if self.control.byte_map_enabled.load(Ordering::Acquire) {
+            Some(self.byte_map.clone() as Arc<dyn ByteMap>)
+        } else {
+            None
+        }
+    }
+}
+
 impl Source for TestSource {
     fn activity(&self) -> Arc<dyn Activity> {
         Arc::clone(&self.seek) as Arc<dyn Activity>
+    }
+
+    fn peer_wake(&self) -> Option<Arc<DeferredWake>> {
+        self.peer.clone()
     }
 
     fn advance(&self, n: u64) {
@@ -590,6 +700,15 @@ impl Source for TestSource {
 
     fn phase_at(&self, _range: Range<u64>) -> SourcePhase {
         *self.phase.lock()
+    }
+
+    fn probe(&self) -> Arc<dyn SourceProbe> {
+        Arc::new(SharedPhaseProbe {
+            phase: Arc::clone(&self.phase),
+            position: Arc::clone(&self.position),
+            control: Arc::clone(&self.control),
+            byte_map: Arc::clone(&self.byte_map),
+        })
     }
 
     fn playhead_read(&self) -> Arc<dyn PlayheadRead> {
@@ -629,6 +748,7 @@ impl Source for TestSource {
         range: Range<u64>,
         _timeout: Option<Duration>,
     ) -> StreamResult<WaitOutcome> {
+        self.park.enter_if_armed();
         self.waits.lock().push(range);
         match *self.phase.lock() {
             SourcePhase::Ready => Ok(WaitOutcome::Ready),
@@ -745,6 +865,7 @@ pub(super) struct RouteFixture {
     pub(super) control: Arc<TestControl>,
     pub(super) drops: Arc<Mutex<Vec<u64>>>,
     pub(super) host_sample_rate: Arc<AtomicU32>,
+    pub(super) phase: Arc<Mutex<SourcePhase>>,
     pub(super) source: StreamAudioSource<TestStream>,
 }
 
@@ -857,6 +978,22 @@ pub(super) async fn route_signal_source(initial_host_rate: u32) -> RouteFixture 
     .await
 }
 
+pub(super) async fn route_signal_source_with_eof(
+    initial_host_rate: u32,
+    chunks_before_eof: usize,
+) -> RouteFixture {
+    route_source(RouteParams {
+        chunks_before_eof: Some(chunks_before_eof),
+        gapless: None,
+        incoming_chunks_before_eof: None,
+        active_timeline_gap: 0,
+        incoming_timeline_gap: 0,
+        initial_host_rate,
+        segmented: false,
+    })
+    .await
+}
+
 pub(super) async fn route_signal_source_with_gapless(
     initial_host_rate: u32,
     gapless: GaplessInfo,
@@ -916,12 +1053,14 @@ async fn route_source(params: RouteParams) -> RouteFixture {
     let active_timeline_gap = params.active_timeline_gap;
     let incoming_timeline_gap = params.incoming_timeline_gap;
     let segmented = params.segmented;
+    let test_source = if segmented {
+        TestSource::segmented(control.clone())
+    } else {
+        TestSource::new(control.clone())
+    };
+    let phase = test_source.phase_handle();
     let stream = match Stream::<TestStream>::new(TestConfig {
-        source: if segmented {
-            TestSource::segmented(control.clone())
-        } else {
-            TestSource::new(control.clone())
-        },
+        source: test_source,
     })
     .await
     {
@@ -996,6 +1135,7 @@ async fn route_source(params: RouteParams) -> RouteFixture {
         control,
         drops,
         host_sample_rate,
+        phase,
         source: StreamAudioSource::new(shared_stream, parts),
     }
 }

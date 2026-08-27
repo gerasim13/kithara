@@ -234,14 +234,9 @@ impl<T: StreamType> Stream<T> {
     ///
     /// # Errors
     ///
-    /// `Err(SourceError::FormatChangeNotApplicable)` for non-HLS sources
-    /// or HLS variants activated with `served_from > 0` (init prefix
-    /// unreachable via Stream reads).
+    /// See [`format_change_segment_range`].
     pub fn format_change_segment_range(&self) -> StreamResult<Range<u64>> {
-        self.source.variant_control().map_or(
-            Err(StreamError::Source(SourceError::FormatChangeNotApplicable)),
-            |vc| vc.format_change_segment_range(),
-        )
+        format_change_segment_range(self.source.variant_control().as_deref())
     }
 
     pub fn is_empty(&self) -> Option<bool> {
@@ -271,6 +266,12 @@ impl<T: StreamType> Stream<T> {
             pub fn phase(&self) -> SourcePhase;
             /// Point-in-time readiness for a specific byte range.
             pub fn phase_at(&self, range: Range<u64>) -> SourcePhase;
+            /// Narrow byte-space handle — the same snapshots as
+            /// [`Stream::phase_at`] / [`Stream::position`] / [`Stream::len`] /
+            /// [`Stream::byte_map`] for callers that must not take the lock a
+            /// shared stream wrapper puts around `Stream`.
+            #[must_use]
+            pub fn probe(&self) -> Arc<dyn crate::SourceProbe>;
             /// Get current media info if known.
             pub fn media_info(&self) -> Option<MediaInfo>;
             /// Runtime ABR handle — `Some` for adaptive sources (HLS).
@@ -580,61 +581,68 @@ impl<T: StreamType> Stream<T> {
         self.source.wait_range(range, Some(Duration::ZERO))
     }
 
-    /// Real-time on-core seek: resolve + cursor set, with NO `prime_seek_range`
-    /// spin — no `yield_now`/`notify_one` on the forbid-blocking produce core.
-    /// The audio worker (the FSM's recreate/boundary seeks and the decoder's
-    /// `OffsetReader`) seeks through this; the off-RT [`Seek::seek`] adapter
-    /// primes inline instead. The seeked range's readiness is discovered by the
-    /// next `probe_read` (park-on-not-ready), and the armed peer wake — flushed
-    /// by the shell — drives the fetch.
-    ///
-    /// # Errors
-    ///
-    /// See [`Self::resolve_seek_target`].
-    pub fn probe_seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
-        let new_pos = self.resolve_seek_target(pos, self.source.len())?;
-        self.source.set_position(new_pos);
-        // The reader cursor moved on the produce core: arm the peer so it
-        // re-targets fetches around the new position. The shell flushes it.
-        self.arm_peer_wake();
-        Ok(new_pos)
-    }
-
-    /// Resolve a [`SeekFrom`] to an absolute, clamped byte target — the shared
-    /// math behind the off-RT [`Seek::seek`] and the on-core [`Self::probe_seek`].
+    /// Resolve a [`SeekFrom`] against the live cursor — the shared math
+    /// behind the off-RT [`Seek::seek`] and the on-core probe seek
+    /// (the audio worker's shared-stream wrapper).
     ///
     /// `len` is the known source length, resolved by the caller (`seek` primes
-    /// to discover it; `probe_seek` uses the current value); `SeekFrom::End`
-    /// errors when it is `None`. `Current` is relative to the live cursor.
+    /// to discover it; a probe seek uses the current value).
     ///
     /// # Errors
     ///
-    /// `Unsupported` for `SeekFrom::End` without a known length; `InvalidInput`
-    /// for a negative resulting offset.
+    /// See [`resolve_seek_target`].
     fn resolve_seek_target(&self, pos: SeekFrom, len: Option<u64>) -> io::Result<u64> {
-        let new_pos: i128 = match pos {
-            SeekFrom::Start(p) => i128::from(p),
-            SeekFrom::Current(delta) => {
-                i128::from(self.source.position()).saturating_add(i128::from(delta))
-            }
-            SeekFrom::End(delta) => {
-                let Some(len) = len else {
-                    return Err(IoError::new(
-                        ErrorKind::Unsupported,
-                        "seek from end requires known length",
-                    ));
-                };
-                i128::from(len).saturating_add(i128::from(delta))
-            }
-        };
-        if new_pos < 0 {
-            return Err(IoError::new(
-                ErrorKind::InvalidInput,
-                "negative seek position",
-            ));
-        }
-        Ok(u64::try_from(new_pos).unwrap_or(u64::MAX))
+        resolve_seek_target(pos, self.source.position(), len)
     }
+}
+
+/// Resolve a [`SeekFrom`] to an absolute, clamped byte target. `position` is
+/// the live cursor (`Current` is relative to it); `SeekFrom::End` errors when
+/// `len` is `None`. Shared by [`Stream`]'s seek adapters and lock-free
+/// wrappers that seek through a [`crate::SourceProbe`].
+///
+/// # Errors
+///
+/// `Unsupported` for `SeekFrom::End` without a known length; `InvalidInput`
+/// for a negative resulting offset.
+pub fn resolve_seek_target(pos: SeekFrom, position: u64, len: Option<u64>) -> io::Result<u64> {
+    let new_pos: i128 = match pos {
+        SeekFrom::Start(p) => i128::from(p),
+        SeekFrom::Current(delta) => i128::from(position).saturating_add(i128::from(delta)),
+        SeekFrom::End(delta) => {
+            let Some(len) = len else {
+                return Err(IoError::new(
+                    ErrorKind::Unsupported,
+                    "seek from end requires known length",
+                ));
+            };
+            i128::from(len).saturating_add(i128::from(delta))
+        }
+    };
+    if new_pos < 0 {
+        return Err(IoError::new(
+            ErrorKind::InvalidInput,
+            "negative seek position",
+        ));
+    }
+    Ok(u64::try_from(new_pos).unwrap_or(u64::MAX))
+}
+
+/// Header byte range for decoder recreate after a format change — the one
+/// mapping from an optional [`VariantControl`] to the typed answer. Shared
+/// by [`Stream::format_change_segment_range`] and lock-free wrappers that
+/// hold the variant-control handle directly.
+///
+/// # Errors
+///
+/// `Err(SourceError::FormatChangeNotApplicable)` for sources without a
+/// variant surface (non-HLS) or HLS variants activated with
+/// `served_from > 0` (init prefix unreachable via Stream reads).
+pub fn format_change_segment_range(vc: Option<&dyn VariantControl>) -> StreamResult<Range<u64>> {
+    vc.map_or(
+        Err(StreamError::Source(SourceError::FormatChangeNotApplicable)),
+        VariantControl::format_change_segment_range,
+    )
 }
 
 impl<T: StreamType> Read for Stream<T> {
@@ -774,7 +782,9 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::{PlayheadRead, PlayheadState, ReadOutcome, SeekState, Source, SourcePhase};
+    use crate::{
+        PlayheadRead, PlayheadState, ReadOutcome, SeekState, Source, SourcePhase, SourceProbe,
+    };
 
     /// Test helper — script entry that maps to either `Bytes(N)` (with
     /// the source slicing actual `data`) or a terminal `Eof`. Pending
@@ -790,6 +800,36 @@ mod tests {
         let nz = NonZeroUsize::new(count)
             .expect("BUG: ScriptSource::bytes invariant — count must be > 0");
         ReadOutcome::Bytes(nz)
+    }
+
+    /// Constant-phase probe for the scripted test sources below; shares the
+    /// source's cursor cell and mirrors its `len`. The byte map is not
+    /// scripted — nothing in these tests reads it through the probe.
+    struct FixedProbe {
+        phase: SourcePhase,
+        len: Option<u64>,
+        position: Arc<AtomicU64>,
+    }
+
+    impl SourceProbe for FixedProbe {
+        fn phase(&self) -> SourcePhase {
+            self.phase
+        }
+        fn phase_at(&self, _range: Range<u64>) -> SourcePhase {
+            self.phase
+        }
+        fn position(&self) -> u64 {
+            self.position.load(Ordering::Acquire)
+        }
+        fn set_position(&self, pos: u64) {
+            self.position.store(pos, Ordering::Release);
+        }
+        fn len(&self) -> Option<u64> {
+            self.len
+        }
+        fn byte_map(&self) -> Option<Arc<dyn crate::ByteMap>> {
+            None
+        }
     }
 
     struct ScriptSource {
@@ -869,6 +909,14 @@ mod tests {
 
         fn phase_at(&self, _range: Range<u64>) -> SourcePhase {
             SourcePhase::Waiting
+        }
+
+        fn probe(&self) -> Arc<dyn SourceProbe> {
+            Arc::new(FixedProbe {
+                phase: SourcePhase::Waiting,
+                len: Some(self.data.len() as u64),
+                position: Arc::clone(&self.position),
+            })
         }
 
         fn playhead_read(&self) -> Arc<dyn PlayheadRead> {
@@ -1032,6 +1080,14 @@ mod tests {
             SourcePhase::Ready
         }
 
+        fn probe(&self) -> Arc<dyn SourceProbe> {
+            Arc::new(FixedProbe {
+                phase: SourcePhase::Ready,
+                len: Some(4),
+                position: Arc::clone(&self.position),
+            })
+        }
+
         fn playhead_read(&self) -> Arc<dyn PlayheadRead> {
             Arc::clone(&self.playhead) as Arc<dyn PlayheadRead>
         }
@@ -1154,39 +1210,6 @@ mod tests {
         assert!(
             !wake.flush(),
             "the consumer path notifies immediately — nothing is left armed"
-        );
-    }
-
-    #[kithara::test]
-    fn probe_seek_moves_cursor_and_arms_without_priming() {
-        // On-core seek: set the cursor and arm the peer (the shell flushes),
-        // with NO prime_seek_range spin — so it returns immediately even when
-        // the target range is not ready (the wait script is never consulted).
-        let wake = Arc::new(DeferredWake::default());
-        let source = ScriptSource::new(
-            Arc::new(SeekState::new()),
-            [WaitOutcome::Interrupted, WaitOutcome::Interrupted],
-            [],
-            vec![0u8; 100],
-        )
-        .with_peer_wake(Arc::clone(&wake));
-        let mut stream = Stream::<DummyType> { source };
-
-        let started = Instant::now();
-        let pos = stream
-            .probe_seek(SeekFrom::Start(42))
-            .expect("absolute on-core seek within range");
-        let elapsed = started.elapsed();
-
-        assert_eq!(pos, 42);
-        assert_eq!(stream.source.position(), 42, "cursor moved to the target");
-        assert!(
-            elapsed < Duration::from_millis(2),
-            "probe_seek must not prime/spin (the consumer Seek would); took {elapsed:?}"
-        );
-        assert!(
-            wake.flush(),
-            "probe_seek armed the peer wake on the produce core; the shell flushes it"
         );
     }
 

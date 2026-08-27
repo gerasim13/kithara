@@ -16,8 +16,8 @@ use kithara_storage::WaitOutcome;
 use kithara_stream::{
     Activity, AudioCodec, ByteMap, ChunkPosition, ContainerFormat, MediaInfo, PlayheadRead,
     PlayheadState, PlayheadWrite, ReadOutcome, ReaderProfile, SeekControl, SeekObserve, SeekState,
-    SegmentDescriptor, Source, SourceError, SourcePhase, SourceSeekAnchor, Stream, StreamError,
-    StreamResult, StreamType, VariantControl, VariantPromotion, VariantReaderPlan,
+    SegmentDescriptor, Source, SourceError, SourcePhase, SourceProbe, SourceSeekAnchor, Stream,
+    StreamError, StreamResult, StreamType, VariantControl, VariantPromotion, VariantReaderPlan,
     VariantReaderTake, VariantTransition, WorkerWake,
 };
 use kithara_test_utils::kithara;
@@ -230,6 +230,39 @@ impl SpliceSource {
     }
 }
 
+/// Always-ready byte-space probe sharing `SpliceSource`'s cells — same
+/// phase, cursor, length, and byte map as the `Source` impl below.
+struct ReadyProbe {
+    position: Arc<AtomicU64>,
+    state: Arc<SpliceState>,
+}
+
+impl SourceProbe for ReadyProbe {
+    fn phase(&self) -> SourcePhase {
+        SourcePhase::Ready
+    }
+
+    fn phase_at(&self, _range: Range<u64>) -> SourcePhase {
+        SourcePhase::Ready
+    }
+
+    fn position(&self) -> u64 {
+        self.position.load(Ordering::Acquire)
+    }
+
+    fn set_position(&self, pos: u64) {
+        self.position.store(pos, Ordering::Release);
+    }
+
+    fn len(&self) -> Option<u64> {
+        Some(u64::try_from(self.state.active_layout().blob.len()).expect("blob length fits u64"))
+    }
+
+    fn byte_map(&self) -> Option<Arc<dyn ByteMap>> {
+        Some(Arc::clone(&self.state) as Arc<dyn ByteMap>)
+    }
+}
+
 impl Source for SpliceSource {
     fn activity(&self) -> Arc<dyn Activity> {
         Arc::clone(&self.seek) as Arc<dyn Activity>
@@ -253,6 +286,13 @@ impl Source for SpliceSource {
 
     fn phase_at(&self, _range: Range<u64>) -> SourcePhase {
         SourcePhase::Ready
+    }
+
+    fn probe(&self) -> Arc<dyn SourceProbe> {
+        Arc::new(ReadyProbe {
+            position: Arc::clone(&self.position),
+            state: Arc::clone(&self.state),
+        })
     }
 
     fn playhead_read(&self) -> Arc<dyn PlayheadRead> {

@@ -6,6 +6,8 @@ use source_helper::app_track_source;
 mod advance_boundary_provenance;
 mod architecture_flow;
 mod auto_advance;
+mod background_track_eof;
+mod background_track_failure;
 mod cold_seek_middle;
 mod cpal_cold_seek_synthetic;
 mod early_seek_size_withheld_advance;

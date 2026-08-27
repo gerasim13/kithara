@@ -7,7 +7,6 @@
 use std::{
     convert::Infallible,
     io::{Read, Seek, SeekFrom},
-    ops::Range,
     sync::atomic::{AtomicU64, Ordering},
 };
 
@@ -53,23 +52,25 @@ struct RangeState {
     first_range_start: Arc<AtomicU64>,
 }
 
-fn requested_range(headers: &HeaderMap) -> Option<Range<usize>> {
+/// `bytes=start-end` bounds, the inclusive end absent for an open-ended range.
+fn range_bounds(headers: &HeaderMap) -> Option<(u64, Option<u64>)> {
     let value = headers.get(header::RANGE)?.to_str().ok()?;
     let (start, end) = value.strip_prefix("bytes=")?.split_once('-')?;
-    let start = start.parse().ok()?;
     let end = if end.is_empty() {
-        TOTAL
+        None
     } else {
-        end.parse::<usize>().ok()?.saturating_add(1).min(TOTAL)
+        Some(end.parse().ok()?)
     };
-    (start < end).then_some(start..end)
+    Some((start.parse().ok()?, end))
 }
 
 /// The head request stalls after a short prefix and never completes, so the
-/// only way to serve a forward seek is a second, ranged request.
+/// only way to serve a forward seek is a second, ranged request. A ranged
+/// request is served exactly as bounded: the backfill of the skipped span asks
+/// for a closed range, and the client rejects a `206` that overshoots it.
 async fn serve(State(state): State<RangeState>, headers: HeaderMap) -> Response {
     let bytes = body();
-    let Some(range) = requested_range(&headers).filter(|range| range.start > 0) else {
+    let Some((start, end)) = range_bounds(&headers).filter(|(start, _)| *start > 0) else {
         let prefix = Bytes::copy_from_slice(&bytes[..HEAD_PREFIX]);
         let body = Body::from_stream(
             stream::iter(vec![Ok::<_, Infallible>(prefix)]).chain(stream::pending()),
@@ -82,21 +83,28 @@ async fn serve(State(state): State<RangeState>, headers: HeaderMap) -> Response 
             .expect("stalled head response");
     };
 
-    let start = u64::try_from(range.start).expect("range start fits u64");
     let _ = state.first_range_start.compare_exchange(
         u64::MAX,
         start,
         Ordering::SeqCst,
         Ordering::SeqCst,
     );
-    let content_range = format!("bytes {}-{}/{TOTAL}", range.start, range.end - 1);
-    let chunk = &bytes[range];
+    let start = usize::try_from(start).expect("range start fits usize");
+    let end = end.map_or(TOTAL - 1, |end| {
+        usize::try_from(end)
+            .expect("range end fits usize")
+            .min(TOTAL - 1)
+    });
+    let span = &bytes[start..=end];
     Response::builder()
         .status(StatusCode::PARTIAL_CONTENT)
-        .header(header::CONTENT_LENGTH, chunk.len().to_string())
-        .header(header::CONTENT_RANGE, content_range)
+        .header(header::CONTENT_LENGTH, span.len().to_string())
+        .header(
+            header::CONTENT_RANGE,
+            format!("bytes {start}-{end}/{TOTAL}"),
+        )
         .header(header::CONTENT_TYPE, "audio/mpeg")
-        .body(Body::from(Bytes::copy_from_slice(chunk)))
+        .body(Body::from(Bytes::copy_from_slice(span)))
         .expect("ranged response")
 }
 

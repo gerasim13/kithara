@@ -40,8 +40,8 @@ struct Inflight {
     cancel: CancelToken,
     /// End of the span this fetch was planned to deliver, if bounded.
     end_exclusive: Option<u64>,
-    /// Live write cursor: how far this fetch has landed bytes.
-    offset: Arc<AtomicU64>,
+    /// Where this fetch started streaming; it lands bytes forward from here.
+    start: u64,
 }
 
 struct WriterSnapshot {
@@ -130,7 +130,7 @@ impl FilePeer {
         *self.inflight.lock() = Some(Inflight {
             cancel: fetch_cancel.clone(),
             end_exclusive,
-            offset: Arc::clone(&offset),
+            start,
         });
 
         let weak_for_complete = Arc::downgrade(inner);
@@ -230,26 +230,23 @@ impl FilePeer {
     }
 
     /// Whether the peer has to park on a fetch that is already running, having
-    /// first cancelled that fetch if the reader cursor has overtaken it. A
-    /// fetch streams forward from where it started, so a cursor that sits
-    /// inside its span but ahead of its write offset can only be served by a
-    /// new request — this one would deliver the whole skipped span first. The
-    /// completion path releases the writer and the next plan anchors on the new
-    /// cursor. A fetch whose span ends before the cursor is a backfill and is
-    /// left alone: it never promised the cursor anything, and neither is a
-    /// fetch the cursor cannot steer, which would be cancelled for a
-    /// replacement anchored right back where it started.
+    /// first cancelled that fetch if the reader cursor sits inside its span
+    /// past the bytes it has landed. Stored bytes decide, not a write offset
+    /// the fetch publishes. See CONTEXT.md "Fetch targeting".
     fn park_on_running_fetch(&self, inner: &Arc<FileInner>) -> bool {
-        let cursor = steering_cursor(&inner.source.coord);
-        let Some(overtaken) = self.inflight.lock().as_ref().map(|fetch| {
-            cursor
-                .filter(|cursor| fetch.end_exclusive.is_none_or(|end| *cursor < end))
-                .filter(|cursor| *cursor > fetch.offset.load(Ordering::Acquire))
-                .map(|_| fetch.cancel.clone())
-        }) else {
+        let Some((cancel, end_exclusive, start)) = self
+            .inflight
+            .lock()
+            .as_ref()
+            .map(|fetch| (fetch.cancel.clone(), fetch.end_exclusive, fetch.start))
+        else {
             return false;
         };
-        if let Some(cancel) = overtaken {
+        let frontier = landed_frontier(&inner.asset.reader, start, end_exclusive);
+        let overtaken = steering_cursor(&inner.source.coord)
+            .filter(|cursor| end_exclusive.is_none_or(|end| *cursor < end))
+            .is_some_and(|cursor| cursor > frontier);
+        if overtaken {
             cancel.cancel();
         }
         true
@@ -279,6 +276,11 @@ impl FilePeer {
         let upper = total.map_or(writer.watermark, |total| total.min(writer.watermark));
         let cursor = steering_cursor(&inner.source.coord);
         let Some(gap) = next_gap_from_cursor(&inner.asset.reader, cursor, upper) else {
+            // A relinquished fetch may have landed everything; its replacement
+            // has nothing to fetch.
+            if total.is_some_and(|total| inner.commit_if_complete(&writer.epoch, total)) {
+                return PeerAction::Done;
+            }
             return PeerAction::Pending;
         };
         let end_exclusive = (total.is_some() || writer.watermark != u64::MAX).then_some(gap.end);
@@ -314,6 +316,13 @@ fn next_gap_from_cursor(
     cursor
         .and_then(|cursor| reader.next_gap(cursor, upper))
         .or_else(|| reader.next_gap(0, upper))
+}
+
+/// How far a fetch streaming forward from `start` has landed bytes: the first
+/// byte still missing at or after `start`, or the end of its span.
+fn landed_frontier(reader: &AssetReader, start: u64, end_exclusive: Option<u64>) -> u64 {
+    let end = end_exclusive.unwrap_or(u64::MAX);
+    reader.next_gap(start, end).map_or(end, |gap| gap.start)
 }
 
 /// The reader cursor, when it is allowed to steer fetching. A range request

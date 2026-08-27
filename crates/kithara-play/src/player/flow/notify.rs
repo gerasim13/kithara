@@ -35,6 +35,7 @@ impl Notifier<'_> {
             );
             return;
         }
+        let from_current_item = self.slot() == Some(slot_id);
         let emitted = player_events_from_notification(self, &notification);
         let emitted_any = !emitted.is_empty();
         for event in emitted {
@@ -52,10 +53,12 @@ impl Notifier<'_> {
                 reason: TrackPlaybackStopReason::Eof,
                 ..
             } => {
-                self.handle_track_playback_stopped(notification);
+                self.handle_track_playback_stopped(from_current_item, notification);
             }
             _ => {
-                if let Some(event) = player_event_from_notification(notification.clone()) {
+                if let Some(event) =
+                    player_event_from_notification(notification.clone(), from_current_item)
+                {
                     self.core.engine.bus().publish(event);
                 } else if !emitted_any {
                     tracing::trace!(
@@ -130,8 +133,17 @@ impl Notifier<'_> {
         }
     }
 
-    fn handle_track_playback_stopped(&self, notification: PlayerNotification) {
-        if let Some(event) = player_event_from_notification(notification) {
+    /// `from_current_item` is read before `finalize_handover_if_armed`
+    /// runs, so the phase still names the slot that ended. With a
+    /// crossfade the incoming slot was already promoted by `commit_next`,
+    /// so an outgoing end reports `false` — the queue advanced on the
+    /// pre-arm instead.
+    fn handle_track_playback_stopped(
+        &self,
+        from_current_item: bool,
+        notification: PlayerNotification,
+    ) {
+        if let Some(event) = player_event_from_notification(notification, from_current_item) {
             self.core.engine.bus().publish(event);
         }
 
@@ -194,8 +206,11 @@ impl PlayerRuntime {
     }
 }
 
+/// `from_current_item` answers whether the stopping slot is the one the
+/// phase currently holds.
 pub(crate) fn player_event_from_notification(
     notification: PlayerNotification,
+    from_current_item: bool,
 ) -> Option<PlayerEvent> {
     match notification {
         PlayerNotification::PlaybackStopped {
@@ -203,13 +218,21 @@ pub(crate) fn player_event_from_notification(
             src,
             item_id,
             ..
-        } => Some(PlayerEvent::ItemDidPlayToEnd { src, item_id }),
+        } => Some(PlayerEvent::ItemDidPlayToEnd {
+            src,
+            item_id,
+            from_current_item,
+        }),
         PlayerNotification::PlaybackStopped {
             reason: TrackPlaybackStopReason::Failed,
             src,
             item_id,
             ..
-        } => Some(PlayerEvent::ItemDidFail { src, item_id }),
+        } => Some(PlayerEvent::ItemDidFail {
+            src,
+            item_id,
+            from_current_item,
+        }),
         PlayerNotification::RateChanged { rate } => Some(PlayerEvent::RateChanged { rate }),
         _ => None,
     }
@@ -256,30 +279,133 @@ fn player_events_from_notification(
 
 #[cfg(test)]
 mod tests {
+    use kithara_bufpool::{BytePool, PcmPool};
+    use kithara_events::{Envelope, Event, EventReceiver};
     use kithara_platform::sync::Arc;
     use kithara_test_utils::kithara;
 
     use super::*;
+    use crate::{
+        PlayWorker, PlayWorkerConfig,
+        player::{PlayerConfig, PlayerImpl},
+        session::testing,
+    };
+
+    /// A started player holding one slot — the slot the phase calls current.
+    fn player_with_slot() -> (PlayerImpl, SlotId) {
+        let worker = PlayWorker::new(
+            PlayWorkerConfig::for_pools(BytePool::default(), PcmPool::default()).build(),
+        );
+        let player = PlayerImpl::new(
+            PlayerConfig::builder()
+                .worker(worker)
+                .session(testing::test_session())
+                .build(),
+        );
+        player
+            .ensure_engine_started()
+            .expect("engine start must succeed");
+        let slot = player.ensure_slot().expect("slot allocation must succeed");
+        (player, slot)
+    }
+
+    fn eof_notification() -> PlayerNotification {
+        PlayerNotification::PlaybackStopped {
+            src: Arc::from("track.mp3"),
+            item_id: None,
+            reason: TrackPlaybackStopReason::Eof,
+            seek_epoch: 0,
+        }
+    }
+
+    fn published_end_flag(rx: &mut EventReceiver) -> Option<bool> {
+        while let Ok(Envelope { event, .. }) = rx.try_recv() {
+            if let Event::Player(PlayerEvent::ItemDidPlayToEnd {
+                from_current_item, ..
+            }) = event
+            {
+                return Some(from_current_item);
+            }
+        }
+        None
+    }
 
     #[kithara::test]
     fn eof_playback_stopped_notification_maps_to_item_end_event() {
-        let event = player_event_from_notification(PlayerNotification::PlaybackStopped {
-            src: Arc::from("track.mp3"),
-            item_id: Some(Arc::from("item-1")),
-            reason: TrackPlaybackStopReason::Eof,
-            seek_epoch: 0,
-        });
-        assert!(matches!(event, Some(PlayerEvent::ItemDidPlayToEnd { .. })));
+        let event = player_event_from_notification(eof_notification(), true);
+        assert!(matches!(
+            event,
+            Some(PlayerEvent::ItemDidPlayToEnd {
+                from_current_item: true,
+                ..
+            })
+        ));
+    }
+
+    #[kithara::test]
+    fn failed_playback_stopped_notification_carries_the_current_item_answer() {
+        let event = player_event_from_notification(
+            PlayerNotification::PlaybackStopped {
+                src: Arc::from("track.mp3"),
+                item_id: None,
+                reason: TrackPlaybackStopReason::Failed,
+                seek_epoch: 0,
+            },
+            false,
+        );
+        assert!(matches!(
+            event,
+            Some(PlayerEvent::ItemDidFail {
+                from_current_item: false,
+                ..
+            })
+        ));
     }
 
     #[kithara::test]
     fn playback_stopped_notification_does_not_map_to_item_end_event() {
-        let event = player_event_from_notification(PlayerNotification::PlaybackStopped {
-            src: Arc::from("track.mp3"),
-            item_id: Some(Arc::from("item-1")),
-            reason: TrackPlaybackStopReason::Stop,
-            seek_epoch: 0,
-        });
+        let event = player_event_from_notification(
+            PlayerNotification::PlaybackStopped {
+                src: Arc::from("track.mp3"),
+                item_id: None,
+                reason: TrackPlaybackStopReason::Stop,
+                seek_epoch: 0,
+            },
+            true,
+        );
         assert!(event.is_none());
+    }
+
+    #[kithara::test]
+    fn end_of_the_held_slot_is_reported_as_the_current_item() {
+        let (player, slot) = player_with_slot();
+        let mut rx = player.subscribe();
+
+        Notifier::new(&player).dispatch_notification(slot, eof_notification());
+
+        assert_eq!(
+            published_end_flag(&mut rx),
+            Some(true),
+            "the slot the phase holds is the item the listener hears"
+        );
+    }
+
+    /// `process_notifications` drains every active slot. An end minted by a
+    /// slot the phase does not hold — a preloaded successor, or a
+    /// predecessor still decoding after a switch — must not be reported as
+    /// the current item, or the queue advances off a track still playing.
+    #[kithara::test]
+    fn end_of_a_background_slot_is_not_reported_as_the_current_item() {
+        let (player, slot) = player_with_slot();
+        let background = SlotId::new(slot.value() + 1);
+        let mut rx = player.subscribe();
+
+        Notifier::new(&player).dispatch_notification(background, eof_notification());
+
+        assert_eq!(
+            published_end_flag(&mut rx),
+            Some(false),
+            "an end from a slot the phase does not hold is not the current item"
+        );
     }
 }

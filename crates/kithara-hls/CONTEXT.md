@@ -93,6 +93,34 @@ Retired and recovering fetches re-enter the plan in plan order (`requeue_planned
 insert): dispatch caps read the queue head, and a far look-ahead entry parked at the front would
 wall off every nearer segment behind it.
 
+Command priority is stamped at emit against the reader position of that moment, and the
+`Downloading` claim dedupes re-emission — so a prefetch stamped `Low` cannot be re-issued as
+`High` when the reader later catches up with it. The escalation goes through the slot instead.
+`wait_range` is the single filing site of a parked read (the RT `try_read` / `probe_wait` probe
+and the off-RT `Read` park both land there): on a not-ready range it walks the same fetches as
+the wait-phase query and calls `note_reader_demand()` on every claimed slot the read still needs
+bytes from — the whole span, not the first gap, so the downloader serves them concurrently
+rather than one round trip each. `phase_at` stays a pure query: tracing fields, error
+formatting, and the transition's incoming-session probe observe it and must not arm scheduling.
+The readiness poll of a session under construction (`reader_is_ready` → `poll_range`) parks the
+same way, including the `wait_end` filing, but files no demand: it is not a read, the incoming
+variant's fetches are owed already, and escalating its leftover look-ahead would put it back in
+front of the audible variant. The note is set only while the slot is `DOWNLOADING` (a planned
+slot is owed, and the owed dispatch stamps it `High` at emit) and cleared by every terminal
+transition, so a fresh claim starts unescalated and a read still parked re-files on its next
+wait. The `(flags, reader_demand)` pair is not one atomic: a note that saw `DOWNLOADING` just
+before the settle, or a walk whose layout read was torn, can leave a stale note on the next
+claim. Clearing on claim instead would drop a legitimate note; the stale note only escalates
+one fetch, which is the tolerable side. The in-flight command's live demand probe (built in
+`build_cmd`) reads it back, and the downloader's `reschedule` walks the command past
+later-stamped urgent work. `reader_demand` lives beside the flag byte for the same reason as
+`acquire_failures` — a bit inside it would break the claim CAS. It is written by the same filing
+as `ReaderRuntime::wait_end` but owned per slot: the command holds only its slot state, a
+byte-space end alone cannot tell which fetch a read waits on, and the escalation outlives the
+wait that filed it until that fetch settles. Without this, an urgent down-switch starves the
+audible variant's demanded bytes behind the whole construction window and the ring drains dry
+(the UrgentDownSwitch hang).
+
 A fetch cancelled in flight settles back toward the plan it was popped from, gated by the plan
 revision. The revision supersedes on every rebuild — including the short-circuit rebuild that
 changes nothing, because that rebuild still claims plan ownership. A claim captures the revision

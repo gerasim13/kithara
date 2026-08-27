@@ -1,7 +1,7 @@
 use std::{
     convert::Infallible,
     net::SocketAddr,
-    sync::atomic::{AtomicUsize, Ordering},
+    sync::atomic::{AtomicBool, AtomicUsize, Ordering},
     task::{Context, Poll},
 };
 
@@ -28,7 +28,10 @@ use kithara_platform::{
 use kithara_test_utils::kithara;
 use url::Url;
 
-use super::{BodyStream, Downloader, DownloaderConfig, FetchCmd, Peer, RequestPriority};
+use super::{
+    BodyStream, DemandFn, Downloader, DownloaderConfig, FetchCmd, Peer, RequestPriority,
+    cmd::{FetchCmdBuilder, fetch_cmd_builder},
+};
 use crate::{Activity, SeekState};
 
 const CONCURRENCY_TEST_TIMEOUT_SECS: u64 = 30;
@@ -1317,6 +1320,156 @@ async fn active_peer_completes_before_preload_under_contention() {
         "active peer must dominate the first quarter of completions: \
          got {active_in_first_quarter}/{}",
         first_quarter.len()
+    );
+}
+
+type NamedLog = Arc<Mutex<Vec<&'static str>>>;
+
+/// A command whose completion appends `name` to the log and releases the gate.
+fn logged_cmd(
+    url: &Url,
+    log: &NamedLog,
+    gate: &Arc<CompletionGate>,
+    name: &'static str,
+) -> FetchCmdBuilder<
+    fetch_cmd_builder::SetOnComplete<fetch_cmd_builder::SetWriter<fetch_cmd_builder::SetMethod>>,
+> {
+    let log = Arc::clone(log);
+    let gate = Arc::clone(gate);
+    FetchCmd::get(url.clone())
+        .writer(Box::new(|_chunk: &[u8]| Ok(())))
+        .on_complete(Box::new(
+            move |_bytes, _headers: Option<&ResponseHeaders>, _err: Option<&FetchError>| {
+                log.lock().push(name);
+                gate.complete();
+            },
+        ))
+}
+
+fn demand_probe(flag: &Arc<AtomicBool>) -> DemandFn {
+    let probe = Arc::clone(flag);
+    Box::new(move || probe.load(Ordering::Acquire))
+}
+
+/// One fetch in flight at a time over a slow-body server: the lead
+/// command's `on_response` fires before the queue moves again, so a
+/// flag it flips is what the next scheduler pass sees.
+async fn one_slot_downloader() -> (Downloader, Url) {
+    const PER_REQUEST_BODY_DELAY_MS: u64 = 100;
+
+    let url = spawn_slow_body_server(PER_REQUEST_BODY_DELAY_MS).await;
+    let config = DownloaderConfig {
+        max_concurrent: 1,
+        ..test_config()
+    };
+    (Downloader::new(config), url)
+}
+
+/// Emits one pre-built batch, then stays quiet so the queue order alone
+/// decides completion order.
+async fn run_one_batch(dl: &Downloader, gate: &Arc<CompletionGate>, batch: Vec<FetchCmd>) {
+    let peer = Arc::new(QueuedPeer {
+        cancel: CancelToken::never(),
+        cmds: Mutex::new(Some(batch)),
+        yielded: Notify::default(),
+    });
+    let handle = dl.register(peer as Arc<dyn Peer>);
+    gate.wait().await;
+    drop(handle);
+}
+
+/// A prefetch is stamped `Low` against the reader position at emit time;
+/// when the reader then parks on its bytes, the live demand probe must
+/// walk it past urgent work stamped after it — otherwise the audible
+/// track starves behind an entire construction window (the
+/// UrgentDownSwitch hang: v0's demanded bytes queued behind all of v1).
+#[kithara::test(tokio, timeout(Duration::from_secs(30)))]
+async fn a_demanded_prefetch_overtakes_later_stamped_urgent_work() {
+    let (dl, url) = one_slot_downloader().await;
+    let gate = CompletionGate::new(5);
+    let log: NamedLog = Arc::new(Mutex::new(Vec::new()));
+    let demand = Arc::new(AtomicBool::new(false));
+    let arm = Arc::clone(&demand);
+
+    run_one_batch(
+        &dl,
+        &gate,
+        vec![
+            logged_cmd(&url, &log, &gate, "lead")
+                .on_response(Box::new(move |_headers: &ResponseHeaders| {
+                    arm.store(true, Ordering::Release);
+                }))
+                .priority(RequestPriority::High)
+                .build(),
+            logged_cmd(&url, &log, &gate, "prefetch")
+                .demand(demand_probe(&demand))
+                .build(),
+            logged_cmd(&url, &log, &gate, "urgent-1")
+                .priority(RequestPriority::High)
+                .build(),
+            logged_cmd(&url, &log, &gate, "urgent-2")
+                .priority(RequestPriority::High)
+                .build(),
+            logged_cmd(&url, &log, &gate, "urgent-3")
+                .priority(RequestPriority::High)
+                .build(),
+        ],
+    )
+    .await;
+
+    let order = log.lock().clone();
+    assert_eq!(order.len(), 5, "every cmd must complete exactly once");
+    assert_eq!(order[0], "lead", "the in-flight fetch finishes first");
+    assert_eq!(
+        order[1], "prefetch",
+        "the demanded prefetch must overtake urgent work stamped after it: {order:?}"
+    );
+}
+
+/// One scheduler pass can demote and escalate through the same slot. The
+/// command whose demand dropped yields to the queue, and the newly
+/// demanded one takes the front — neither may be confused for the other.
+#[kithara::test(tokio, timeout(Duration::from_secs(30)))]
+async fn a_dropped_demand_yields_to_a_newly_demanded_command() {
+    let (dl, url) = one_slot_downloader().await;
+    let gate = CompletionGate::new(5);
+    let log: NamedLog = Arc::new(Mutex::new(Vec::new()));
+    let stale = Arc::new(AtomicBool::new(true));
+    let fresh = Arc::new(AtomicBool::new(false));
+    let (drop_stale, arm_fresh) = (Arc::clone(&stale), Arc::clone(&fresh));
+
+    run_one_batch(
+        &dl,
+        &gate,
+        vec![
+            logged_cmd(&url, &log, &gate, "lead")
+                .on_response(Box::new(move |_headers: &ResponseHeaders| {
+                    drop_stale.store(false, Ordering::Release);
+                    arm_fresh.store(true, Ordering::Release);
+                }))
+                .priority(RequestPriority::High)
+                .build(),
+            logged_cmd(&url, &log, &gate, "stale")
+                .demand(demand_probe(&stale))
+                .build(),
+            logged_cmd(&url, &log, &gate, "filler-1").build(),
+            logged_cmd(&url, &log, &gate, "filler-2").build(),
+            logged_cmd(&url, &log, &gate, "fresh")
+                .demand(demand_probe(&fresh))
+                .build(),
+        ],
+    )
+    .await;
+
+    let order = log.lock().clone();
+    assert_eq!(order.len(), 5, "every cmd must complete exactly once");
+    assert_eq!(
+        order[1], "fresh",
+        "the newly demanded command takes the front: {order:?}"
+    );
+    assert_eq!(
+        order[4], "stale",
+        "the command whose demand dropped yields to the queue: {order:?}"
     );
 }
 

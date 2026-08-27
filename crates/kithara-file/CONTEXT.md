@@ -51,12 +51,19 @@ peer precisely so the peer re-targets around the new position.
   first; the earlier span still has to land for the resource to commit, so it is filled next. Drop
   the cursor lookup and a forward seek waits for the whole skipped span; drop the byte-0 lookup and
   a seeked-over span never lands and the resource never commits.
-- A fetch streams forward from where it started, so a cursor that sits inside the fetch's span but
-  past its write offset can no longer be served by it — that fetch would deliver the whole skipped
-  span first. The peer cancels it. Cancellation relinquishes the writer epoch, the completion path
-  wakes the peer, and the next plan re-elects a writer and anchors on the new cursor. A fetch whose
-  span ends before the cursor is a backfill: it starts behind the cursor by construction and never
-  promised it anything, so it runs to completion.
+- A fetch streams forward from where it started, so a cursor that sits inside the fetch's span
+  past the bytes it has landed can no longer be served by it — that fetch would deliver the whole
+  skipped span first. The peer cancels it. Stored bytes decide where the fetch has got to (the
+  first gap at or after its start), not a write offset the fetch publishes: that offset lands
+  after `write_at`, and the landing is what wakes the reader, so a reader that consumed the bytes
+  in between sat ahead of the offset without being ahead of the fetch and got its own fetch
+  cancelled. Cancellation relinquishes the writer epoch, the completion path wakes the peer, and
+  the next plan re-elects a writer and anchors on the new cursor. A fetch whose span ends before
+  the cursor is a backfill: it starts behind the cursor by construction and never promised it
+  anything, so it runs to completion.
+- A plan that finds no gap over a known extent commits the resource from the peer. A cancelled
+  fetch relinquishes without committing, and when it had already landed everything its replacement
+  has nothing to fetch; parking there would leave every consumer waiting on a complete resource.
 - The cursor steers nothing until the resource extent is known, and nothing once it sits outside
   it. A range request needs an extent: before the first response answers how long the resource is,
   a cursor past the end is indistinguishable from one inside it, and anchoring there would both ask

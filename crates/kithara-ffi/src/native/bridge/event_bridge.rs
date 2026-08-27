@@ -772,6 +772,7 @@ mod tests {
             .publish(Event::Player(PlayerEvent::ItemDidPlayToEnd {
                 src: Arc::from(format!("test://memory/{}", id.as_u64())),
                 item_id: None,
+                from_current_item: true,
             }));
 
         let cancel = CancelToken::root();

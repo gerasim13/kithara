@@ -15,8 +15,9 @@ use kithara_storage::WaitOutcome;
 use kithara_stream::{
     Activity, ByteMap, DeferredWake, MediaInfo, PlayheadRead, PlayheadState, PlayheadWrite,
     ReadOutcome, ReaderProfile, SeekControl, SeekObserve, SeekPrepare, SeekState,
-    SegmentDescriptor, SourceError, SourcePhase, SourceSeekAnchor, StreamError, StreamResult,
-    VariantControl, VariantPromotion, VariantReaderPlan, VariantReaderTake, VariantTransition,
+    SegmentDescriptor, SourceError, SourcePhase, SourceProbe, SourceSeekAnchor, StreamError,
+    StreamResult, VariantControl, VariantPromotion, VariantReaderPlan, VariantReaderTake,
+    VariantTransition,
 };
 use kithara_test_utils::kithara;
 
@@ -483,6 +484,40 @@ pub(super) fn variant_switch_target_time(
             .unwrap_or_else(|| playhead_read.position());
     }
     landing.unwrap_or_else(|| playhead_read.position())
+}
+
+/// Narrow byte-space handle: the coord is the single owner of phase,
+/// cursor, length, and layout, so the forbid-blocking audio core reads
+/// them here without the stream mutex. Wraps the `Arc` because the byte
+/// map IS the coord — vending it is an allocation-free `Arc` clone.
+pub(crate) struct HlsProbe {
+    coord: Arc<HlsCoord>,
+}
+
+impl HlsProbe {
+    pub(crate) fn new(coord: Arc<HlsCoord>) -> Self {
+        Self { coord }
+    }
+}
+
+impl SourceProbe for HlsProbe {
+    delegate! {
+        to self.coord {
+            fn phase_at(&self, range: Range<u64>) -> SourcePhase;
+            fn position(&self) -> u64;
+            fn set_position(&self, pos: u64);
+            fn len(&self) -> Option<u64>;
+        }
+    }
+
+    fn phase(&self) -> SourcePhase {
+        let pos = self.coord.position();
+        self.coord.phase_at(pos..pos.saturating_add(1))
+    }
+
+    fn byte_map(&self) -> Option<Arc<dyn ByteMap>> {
+        Some(Arc::clone(&self.coord) as Arc<dyn ByteMap>)
+    }
 }
 
 /// `VariantControl` exposes the cross-variant fence/format-change surface

@@ -174,7 +174,7 @@ impl HlsVariant {
     }
 
     fn reader_range_is_ready(&self, range: Range<u64>) -> StreamResult<bool> {
-        match self.wait_range(range, Some(Duration::ZERO)) {
+        match self.poll_range(range) {
             Ok(WaitOutcome::Ready | WaitOutcome::Eof) => Ok(true),
             Ok(WaitOutcome::Interrupted)
             | Err(StreamError::Source(SourceError::WaitBudgetExceeded)) => Ok(false),

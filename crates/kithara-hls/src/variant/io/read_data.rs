@@ -7,7 +7,10 @@ use kithara_test_utils::kithara;
 use tracing::trace;
 
 use super::{HlsVariant, read::RangeGate};
-use crate::{HlsError, segment::PlannedFetch};
+use crate::{
+    HlsError,
+    segment::{PlannedFetch, Segment},
+};
 
 impl HlsVariant {
     #[kithara::hang_watchdog]
@@ -127,11 +130,26 @@ impl HlsVariant {
         self.segment_downloading(seg_idx) || self.fetch_is_planned(PlannedFetch::Segment(seg_idx))
     }
 
-    #[kithara::hang_watchdog]
     pub(crate) fn wait_range(
         &self,
         range: Range<u64>,
         _timeout: Option<Duration>,
+    ) -> StreamResult<WaitOutcome> {
+        self.wait_range_with(range, |planned| self.note_fetch_demand(planned))
+    }
+
+    /// Readiness poll of a session under construction. Parks like a wait but
+    /// files no demand: the poll is not a read, and an incoming variant's
+    /// fetches are owed already.
+    pub(crate) fn poll_range(&self, range: Range<u64>) -> StreamResult<WaitOutcome> {
+        self.wait_range_with(range, |_| {})
+    }
+
+    #[kithara::hang_watchdog]
+    fn wait_range_with(
+        &self,
+        range: Range<u64>,
+        on_demand: impl FnMut(PlannedFetch),
     ) -> StreamResult<WaitOutcome> {
         let stable_pending = match self.range_gate(&range) {
             Some(RangeGate::Eof) => {
@@ -155,13 +173,27 @@ impl HlsVariant {
             return Err(StreamError::Source(HlsError::SegmentUnavailable.into()));
         }
         self.flow.reader.note_wait(range.end);
+        let phase = self.range_wait_phase_with(&range, on_demand);
         trace!(
             variant = self.variant,
             start = range.start,
             end = range.end,
+            ?phase,
             "wait_range: range not ready (budget exceeded)"
         );
         Err(StreamError::Source(HlsError::WaitBudgetExceeded.into()))
+    }
+
+    /// File the parked read on a fetch it needs bytes from, so the in-flight
+    /// command's demand probe escalates it in the downloader queue.
+    fn note_fetch_demand(&self, planned: PlannedFetch) {
+        let state = match planned {
+            PlannedFetch::Init => self.segments.init.as_ref().map(Segment::state),
+            PlannedFetch::Segment(idx) => self.segments.get(idx as usize).map(Segment::state),
+        };
+        if let Some(state) = state {
+            state.note_reader_demand();
+        }
     }
 
     fn wrap(written: usize) -> ReadOutcome {
