@@ -12,7 +12,7 @@ use jni::{
     sys::{jint, jlong},
 };
 use kithara::{
-    audio::{AudioConfig, ReadOutcome},
+    audio::{AudioConfig, PcmControl, PcmRead, ReadOutcome},
     bufpool::{BytePool, PcmPool},
     file::{File as FileSource, FileConfig, FileSrc},
     play::{PlayWorker, PlayWorkerConfig},
