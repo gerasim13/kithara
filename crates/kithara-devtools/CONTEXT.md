@@ -177,14 +177,10 @@ as SKIP instead of a false FAIL. Two stages needed a different answer:
   success. Stating minor is what turns it into a question: 196 checks run on the
   facade instead of none.
 
-  The CI lane in `semver.rs` is the wider form: `--workspace` against `HEAD~1`.
-  There, `--workspace` makes cargo-semver-checks resolve every member by name
-  inside the baseline checkout, and a member the baseline does not have fails the
-  whole run — so adding a crate broke the lane on the commit that added it. The
-  lane reads the baseline's lockfile (path entries carry no `source`, which is
-  what separates the workspace's own crates from its dependencies) and excludes
-  the members missing there, naming each one on stdout. A crate with no earlier
-  surface cannot have broken it; skipping it is the answer, not a gap in it.
+  The standalone lane in `semver.rs` uses the same configured package scope and
+  release type against its requested revision (`HEAD~1` by default). It reads the
+  baseline's lockfile before invoking cargo-semver-checks and skips a configured
+  package that has no earlier surface to compare, naming that package on stdout.
 - `geiger` is rooted at `[health].geiger_package`. A dependency tree has a root
   and this workspace's root manifest is virtual, so the workspace form only ever
   reported that. The census is rooted at the facade, whose closure is what a
