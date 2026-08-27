@@ -2,7 +2,7 @@ use crate::{
     draw::{DrawListBuilder, Pt, Rect, Rgba, Transform},
     render::Skin,
     shaping::{GlyphRun, TextContext},
-    skin::{ColorRole, FontFamily, FontWeight, TabLargeSkin, TextRoleSkin},
+    skin::{TabLargeSkin, TextRoleSkin},
     solve::{Length, Size},
 };
 
@@ -18,17 +18,11 @@ pub(crate) struct TabLarge {
 impl TabLarge {
     pub(crate) fn new(skin: &Skin) -> Self {
         Self {
-            active_color: skin.palette.text,
-            idle_color: skin.palette.text_dim,
+            active_color: skin.rgba(skin.tab_large.text.color),
+            idle_color: skin.rgba(skin.tab_large.idle_text_color),
             metrics: skin.tab_large,
-            role: TextRoleSkin {
-                color: ColorRole::Text,
-                font: FontFamily::Mono,
-                size: skin.tab_large.text_size,
-                spacing: 0.0,
-                weight: FontWeight::Normal,
-            },
-            underline: skin.palette.accent,
+            role: skin.tab_large.text,
+            underline: skin.rgba(skin.tab_large.underline_color),
         }
     }
 

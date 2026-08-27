@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{
     palette::ColorRole,
-    primitives::{FontSkin, FrameSkin, StateColors, TextRoleSkin, TickSkin},
+    primitives::{FaceSkin, FontSkin, FrameSkin, StateColors, TextRoleSkin, TickSkin},
     section::skin_section,
 };
 use crate::{
@@ -160,6 +160,8 @@ skin_section! {
 
 skin_section! {
     pub struct ToggleSkin => TogglePatch {
+        pub active: FaceSkin,
+        pub idle: FaceSkin,
         pub active_frame: FrameSkin,
         pub inactive_frame: FrameSkin,
         pub size: SizeSpec,
@@ -171,6 +173,8 @@ skin_section! {
 
 skin_section! {
     pub struct CheckboxSkin => CheckboxPatch {
+        pub active: FaceSkin,
+        pub idle: FaceSkin,
         pub active_frame: FrameSkin,
         pub inactive_frame: FrameSkin,
         pub size: SizeSpec,
@@ -191,8 +195,12 @@ skin_section! {
 
 skin_section! {
     pub struct ChipSkin => ChipPatch {
-        pub deck_text: FontSkin,
-        pub routing_text: FontSkin,
+        pub deck_text: TextRoleSkin,
+        pub routing_text: TextRoleSkin,
+        pub active: FaceSkin,
+        pub idle: FaceSkin,
+        /// What a pivot chip outlines itself with, whichever face it wears.
+        pub pivot_border: ColorRole,
         pub pivot_family_text: TextRoleSkin,
         pub pivot_multiplier_text: TextRoleSkin,
         pub active_frame: FrameSkin,
@@ -247,7 +255,12 @@ skin_section! {
         pub marker_width: f32,
         pub pad_y: f32,
         pub text_pad_x: f32,
-        pub text_size: f32,
+        pub text: TextRoleSkin,
+        /// What the row the reader is on paints behind itself, and the bar it
+        /// carries on its edge.
+        pub selected_fill: ColorRole,
+        pub marker_color: ColorRole,
+        pub idle_text_color: ColorRole,
     }
 }
 
@@ -256,7 +269,9 @@ skin_section! {
         pub height: f32,
         pub pad_x: f32,
         pub pad_y: f32,
-        pub text_size: f32,
+        pub text: TextRoleSkin,
+        pub idle_text_color: ColorRole,
+        pub underline_color: ColorRole,
         pub underline_width: f32,
     }
 }

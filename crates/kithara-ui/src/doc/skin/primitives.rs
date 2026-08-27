@@ -15,6 +15,17 @@ pub struct FontSkin {
     pub size: f32,
 }
 
+/// One of the two looks a control switches between: what it paints under
+/// itself, and what it draws on top. A face naming no fill paints none, and
+/// sits on the surface it is mounted in.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+#[non_exhaustive]
+pub struct FaceSkin {
+    pub content: ColorRole,
+    pub fill: Option<ColorRole>,
+}
+
 /// What a control paints under itself in each pointer state. A state naming
 /// no colour paints nothing, which is how a control sits on the surface it is
 /// mounted in rather than over it.

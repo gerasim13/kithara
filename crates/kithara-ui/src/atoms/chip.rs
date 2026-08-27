@@ -4,7 +4,7 @@ use crate::{
     module::ChipStyle,
     render::Skin,
     shaping::TextContext,
-    skin::{ColorRole, FontFamily, FontSkin, FrameSkin, TextRoleSkin},
+    skin::{FrameSkin, TextRoleSkin},
 };
 
 #[derive(Clone, PartialEq)]
@@ -29,29 +29,20 @@ struct Face {
 impl Chip {
     pub(crate) fn new(style: ChipStyle, skin: &Skin) -> Self {
         let (role, padding, active_frame, idle_frame, active_border) = match style {
-            ChipStyle::Deck | ChipStyle::Routing => {
-                let font: FontSkin = if style == ChipStyle::Deck {
+            ChipStyle::Deck | ChipStyle::Routing => (
+                if style == ChipStyle::Deck {
                     skin.chip.deck_text
                 } else {
                     skin.chip.routing_text
-                };
-                (
-                    TextRoleSkin {
-                        color: ColorRole::Text,
-                        font: FontFamily::Mono,
-                        size: font.size,
-                        spacing: 0.0,
-                        weight: font.weight,
-                    },
-                    Pt {
-                        x: skin.chip.padding_x,
-                        y: skin.chip.padding_y,
-                    },
-                    skin.chip.active_frame,
-                    skin.chip.inactive_frame,
-                    skin.rgba(skin.chip.active_frame.border),
-                )
-            }
+                },
+                Pt {
+                    x: skin.chip.padding_x,
+                    y: skin.chip.padding_y,
+                },
+                skin.chip.active_frame,
+                skin.chip.inactive_frame,
+                skin.rgba(skin.chip.active_frame.border),
+            ),
             ChipStyle::PivotFamily => (
                 skin.chip.pivot_family_text,
                 Pt {
@@ -60,7 +51,7 @@ impl Chip {
                 },
                 skin.chip.pivot_frame,
                 skin.chip.pivot_frame,
-                skin.palette.accent,
+                skin.rgba(skin.chip.pivot_border),
             ),
             ChipStyle::PivotMultiplier => (
                 skin.chip.pivot_multiplier_text,
@@ -70,26 +61,21 @@ impl Chip {
                 },
                 skin.chip.pivot_frame,
                 skin.chip.pivot_frame,
-                skin.palette.accent,
+                skin.rgba(skin.chip.pivot_border),
             ),
         };
         Self {
             active: Face {
                 border: active_border,
-                fill: skin.palette.accent,
+                fill: skin.tint(skin.chip.active.fill),
                 frame: active_frame,
-                text: skin.palette.bg_deep,
+                text: skin.rgba(skin.chip.active.content),
             },
             idle: Face {
                 border: skin.rgba(idle_frame.border),
-                fill: Rgba {
-                    a: 0.0,
-                    b: 0.0,
-                    g: 0.0,
-                    r: 0.0,
-                },
+                fill: skin.tint(skin.chip.idle.fill),
                 frame: idle_frame,
-                text: skin.palette.text_dim,
+                text: skin.rgba(skin.chip.idle.content),
             },
             padding,
             role,

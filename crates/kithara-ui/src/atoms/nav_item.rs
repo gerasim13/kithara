@@ -1,9 +1,9 @@
 use crate::{
     atoms::{icon::mark::Marked, painter::NavData},
-    draw::{DrawListBuilder, Pt, Rect, Rgba, Transform},
+    draw::{DrawListBuilder, Pt, Rect, Rgba, TRANSPARENT, Transform},
     render::Skin,
     shaping::TextContext,
-    skin::{ColorRole, FontFamily, FontWeight, NavSkin, TextRoleSkin},
+    skin::{NavSkin, TextRoleSkin},
 };
 
 #[derive(Clone, PartialEq)]
@@ -26,31 +26,21 @@ struct Face {
 
 impl NavItem {
     pub(crate) fn new(skin: &Skin) -> Self {
-        let transparent = Rgba {
-            a: 0.0,
-            b: 0.0,
-            g: 0.0,
-            r: 0.0,
-        };
         Self {
             active: Face {
-                background: skin.palette.bg_select,
-                content: skin.palette.text,
-                marker: skin.palette.accent,
+                background: skin.rgba(skin.nav.selected_fill),
+                content: skin.rgba(skin.nav.text.color),
+                marker: skin.rgba(skin.nav.marker_color),
             },
+            // A row nobody is on carries neither ground nor marker: it sits in
+            // the panel it is listed in.
             idle: Face {
-                background: transparent,
-                content: skin.palette.text_dim,
-                marker: transparent,
+                background: TRANSPARENT,
+                content: skin.rgba(skin.nav.idle_text_color),
+                marker: TRANSPARENT,
             },
             metrics: skin.nav,
-            role: TextRoleSkin {
-                color: ColorRole::Text,
-                font: FontFamily::Mono,
-                size: skin.nav.text_size,
-                spacing: 0.0,
-                weight: FontWeight::Normal,
-            },
+            role: skin.nav.text,
         }
     }
 

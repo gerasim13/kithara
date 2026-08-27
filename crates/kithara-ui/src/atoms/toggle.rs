@@ -39,15 +39,15 @@ impl Binary {
         Self {
             active: Face {
                 border: skin.rgba(metrics.active_frame.border),
-                fill: Some(skin.palette.accent),
+                fill: metrics.active.fill.map(|role| skin.rgba(role)),
                 frame: metrics.active_frame,
-                thumb: skin.palette.bg_deep,
+                thumb: skin.rgba(metrics.active.content),
             },
             idle: Face {
                 border: skin.rgba(metrics.inactive_frame.border),
-                fill: None,
+                fill: metrics.idle.fill.map(|role| skin.rgba(role)),
                 frame: metrics.inactive_frame,
-                thumb: skin.palette.muted,
+                thumb: skin.rgba(metrics.idle.content),
             },
             thumb: Some(Thumb {
                 inset: metrics.thumb_inset,
@@ -62,15 +62,15 @@ impl Binary {
         Self {
             active: Face {
                 border: skin.rgba(metrics.active_frame.border),
-                fill: Some(skin.palette.accent),
+                fill: metrics.active.fill.map(|role| skin.rgba(role)),
                 frame: metrics.active_frame,
-                thumb: skin.palette.bg_deep,
+                thumb: skin.rgba(metrics.active.content),
             },
             idle: Face {
                 border: skin.rgba(metrics.inactive_frame.border),
-                fill: None,
+                fill: metrics.idle.fill.map(|role| skin.rgba(role)),
                 frame: metrics.inactive_frame,
-                thumb: skin.palette.muted,
+                thumb: skin.rgba(metrics.idle.content),
             },
             thumb: None,
         }
