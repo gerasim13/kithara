@@ -946,6 +946,37 @@ fn wheel_actions_round_trip_through_the_public_custom_contract() {
     );
 }
 
+/// A press on content the document named by kind must reach the widget the
+/// application registered, and leave as the event that registration maps it to.
+/// The path route (`with_custom`) is tested above; this is the other one.
+#[kithara::test]
+fn a_press_reaches_the_extension_the_document_named_by_kind() {
+    let registry = fixture_registry();
+    let ui = fixture_ui(
+        "custom-kind-fixture",
+        r#"Row(size: (w: Fill, h: Fill), gap: 0.0, pad: 0.0, children: [
+            Custom(id: "custom", kind: "press-extension", size: Some((w: Fixed(40.0), h: Fixed(40.0)))),
+        ])"#,
+        &registry,
+    );
+    let reads = FixtureReads;
+    let kinds = press_kinds();
+    let frame = ctx(&ui, &reads).with_kinds(&kinds);
+    let host = MasonryHost::map_actions(frame, builtin::skin(), TestAction::Document);
+    let output = document::render(&ui.root, frame, host);
+    let mut root = masonry_root(output, 200, 120);
+
+    root.handle_pointer_event(pointer_down(10.0, 50.0))
+        .unwrap_or_else(|error| {
+            panic!("a press on a registered extension must remain typed: {error}")
+        });
+
+    assert_eq!(
+        root.take_actions(),
+        [TestAction::Document(UiEvent::OpenSettings)],
+    );
+}
+
 /// A cell placed at the size it was measured at is not laid out a second time.
 ///
 /// A flow measures a cell by laying it out and then places it by laying it out
@@ -2382,6 +2413,40 @@ impl CustomWidget for CensusExtension {
 
 fn census_kinds() -> CustomKinds {
     CustomKinds::default().with(CENSUS_KIND, || CensusExtension, |()| UiEvent::OpenSettings)
+}
+
+/// The kind the input fixture names. Registered apart from the census one so a
+/// row of the paint census cannot start answering pointers to keep a test
+/// green.
+const PRESS_KIND: &str = "press-extension";
+
+/// An extension that claims a press and answers it with its own action.
+struct PressExtension;
+
+impl CustomWidget for PressExtension {
+    type Action = ();
+
+    fn measure(&mut self, _text: &mut TextMeasurer<'_>, _limits: SizeLimits) -> Size2 {
+        Size2::new(40.0, 40.0)
+    }
+
+    fn input(&mut self, input: Input<'_>, hit: Hit) -> Outcome<Self::Action> {
+        let Input::Pointer(pointer) = input else {
+            return Outcome::IGNORED;
+        };
+        if pointer.phase == PointerPhase::Down && hit.over() {
+            return Outcome::set(()).with_ownership(PointerOwnership::Claim);
+        }
+        Outcome::IGNORED
+    }
+
+    fn paint(&mut self, list: &mut DrawListBuilder, _text: &mut TextMeasurer<'_>, bounds: Rect) {
+        list.fill_rect(bounds, CENSUS_INK);
+    }
+}
+
+fn press_kinds() -> CustomKinds {
+    CustomKinds::default().with(PRESS_KIND, || PressExtension, |()| UiEvent::OpenSettings)
 }
 
 /// The sources the census table names beside the controls themselves. Only the
@@ -3933,7 +3998,11 @@ fn fixture_ui_with_options(
         builtin::skin_doc(),
         builtin::text_doc(),
         &UiConfig::builder()
-            .custom_kinds([CENSUS_KIND.to_owned()].into_iter().collect())
+            .custom_kinds(
+                [CENSUS_KIND.to_owned(), PRESS_KIND.to_owned()]
+                    .into_iter()
+                    .collect(),
+            )
             .build(),
     )
     .unwrap_or_else(|error| panic!("Masonry contract fixture must compile: {error}"))

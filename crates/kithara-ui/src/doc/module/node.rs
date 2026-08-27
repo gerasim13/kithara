@@ -506,11 +506,13 @@ pub enum ControlNode {
     /// Content the toolkit does not own, named by the kind the application
     /// registered it under.
     ///
-    /// Nothing here says what it draws: the document names a kind, the host
-    /// resolves that kind to a registered widget, and an unregistered kind is
-    /// an error at mount rather than a blank box. It binds no endpoint, because
-    /// the widget behind it has no route to read one; what it recognises leaves
-    /// as its own typed action, through the map given at registration.
+    /// Nothing here says what it draws: the document names a kind and the host
+    /// resolves that kind to a registered widget. A kind nothing registered is
+    /// refused while the document compiles, against the set declared to
+    /// `UiConfig`, so no host is handed a name it cannot mount. It binds no
+    /// endpoint, because the widget behind it has no route to read one; what it
+    /// recognises leaves as its own typed action, through the map given at
+    /// registration.
     Custom {
         id: NodeId,
         #[serde(default)]

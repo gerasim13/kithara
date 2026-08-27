@@ -249,3 +249,185 @@ impl<'a> From<Custom<'a>> for Element<'a, UiEvent> {
         Self::new(custom)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use iced::{
+        Pixels, Point, Size,
+        advanced::{
+            clipboard,
+            layout::{Layout, Limits},
+            widget::Tree,
+        },
+        mouse::Button,
+    };
+    use iced_renderer::fallback::Renderer as FallbackRenderer;
+    use iced_tiny_skia::Renderer as TinySkiaRenderer;
+    use kithara_platform::time::Duration;
+    use kithara_test_utils::kithara;
+
+    use super::*;
+    use crate::{
+        builtin,
+        draw::Rgba,
+        interact::{Hit, Input, Outcome, PointerOwnership, PointerPhase},
+        render::{custom::CustomWidget, fonts::SANS},
+    };
+
+    struct Consts;
+
+    impl Consts {
+        const KIND: &'static str = "press-extension";
+        const VIEWPORT: Size = Size {
+            width: 200.0,
+            height: 120.0,
+        };
+    }
+
+    /// An extension that answers a press with its own action and asks for the
+    /// frame schedule the test names.
+    struct PressExtension(Repaint);
+
+    impl CustomWidget for PressExtension {
+        type Action = ();
+
+        fn measure(&mut self, _text: &mut TextMeasurer<'_>, _limits: SizeLimits) -> Size2 {
+            Size2::new(40.0, 40.0)
+        }
+
+        fn input(&mut self, input: Input<'_>, hit: Hit) -> Outcome<Self::Action> {
+            let Input::Pointer(pointer) = input else {
+                return Outcome::IGNORED;
+            };
+            if pointer.phase == PointerPhase::Down && hit.over() {
+                return Outcome::set(()).with_ownership(PointerOwnership::Claim);
+            }
+            Outcome::IGNORED
+        }
+
+        fn paint(
+            &mut self,
+            list: &mut DrawListBuilder,
+            _text: &mut TextMeasurer<'_>,
+            bounds: Rect,
+        ) {
+            list.fill_rect(
+                bounds,
+                Rgba {
+                    a: 1.0,
+                    b: 1.0,
+                    g: 1.0,
+                    r: 1.0,
+                },
+            );
+        }
+
+        fn repaint(&self) -> Repaint {
+            self.0
+        }
+    }
+
+    fn kinds(repaint: Repaint) -> CustomKinds {
+        CustomKinds::default().with(
+            Consts::KIND,
+            move || PressExtension(repaint),
+            |()| UiEvent::OpenSettings,
+        )
+    }
+
+    fn renderer() -> Renderer {
+        FallbackRenderer::Secondary(TinySkiaRenderer::new(SANS, Pixels(14.0)))
+    }
+
+    /// One press delivered to a mounted extension, with what the host published
+    /// and whether it kept the event to itself.
+    fn press(kinds: &CustomKinds) -> (Vec<UiEvent>, bool) {
+        let mut element: Element<'_, UiEvent> =
+            Custom::new(Consts::KIND, Some(kinds), builtin::skin()).into();
+        let renderer = renderer();
+        let mut tree = Tree::new(element.as_widget());
+        let node = element.as_widget_mut().layout(
+            &mut tree,
+            &renderer,
+            &Limits::new(Size::ZERO, Consts::VIEWPORT),
+        );
+        let mut clipboard = clipboard::Null;
+        let mut messages = Vec::new();
+        let mut shell = Shell::new(&mut messages);
+        element.as_widget_mut().update(
+            &mut tree,
+            &Event::Mouse(iced::mouse::Event::ButtonPressed(Button::Left)),
+            Layout::new(&node),
+            Cursor::Available(Point::new(10.0, 10.0)),
+            &renderer,
+            &mut clipboard,
+            &mut shell,
+            &Rectangle::with_size(Consts::VIEWPORT),
+        );
+        let captured = shell.is_event_captured();
+        drop(shell);
+        (messages, captured)
+    }
+
+    /// The frame schedule the host asked for after one delivered animation
+    /// frame.
+    fn after_a_frame(kinds: &CustomKinds) -> window::RedrawRequest {
+        let mut element: Element<'_, UiEvent> =
+            Custom::new(Consts::KIND, Some(kinds), builtin::skin()).into();
+        let renderer = renderer();
+        let mut tree = Tree::new(element.as_widget());
+        let node = element.as_widget_mut().layout(
+            &mut tree,
+            &renderer,
+            &Limits::new(Size::ZERO, Consts::VIEWPORT),
+        );
+        let mut clipboard = clipboard::Null;
+        let mut messages = Vec::new();
+        let mut shell = Shell::new(&mut messages);
+        element.as_widget_mut().update(
+            &mut tree,
+            &Event::Window(window::Event::RedrawRequested(
+                IcedInstant::now() + Duration::from_millis(16),
+            )),
+            Layout::new(&node),
+            Cursor::Unavailable,
+            &renderer,
+            &mut clipboard,
+            &mut shell,
+            &Rectangle::with_size(Consts::VIEWPORT),
+        );
+        let asked = shell.redraw_request();
+        drop(shell);
+        asked
+    }
+
+    #[kithara::test]
+    fn a_press_leaves_as_the_event_the_registry_maps_it_to() {
+        let (messages, _) = press(&kinds(Repaint::None));
+
+        assert_eq!(messages, [UiEvent::OpenSettings]);
+    }
+
+    #[kithara::test]
+    fn a_claimed_press_does_not_reach_the_rest_of_the_tree() {
+        let (_, captured) = press(&kinds(Repaint::None));
+
+        assert!(captured);
+    }
+
+    #[kithara::test]
+    fn a_continuous_extension_keeps_the_loop_awake() {
+        assert_eq!(
+            after_a_frame(&kinds(Repaint::Continuous)),
+            window::RedrawRequest::NextFrame,
+        );
+    }
+
+    #[kithara::test]
+    fn an_extension_that_asks_for_nothing_lets_the_loop_sleep() {
+        assert_ne!(
+            after_a_frame(&kinds(Repaint::None)),
+            window::RedrawRequest::NextFrame,
+        );
+    }
+}
