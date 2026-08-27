@@ -101,11 +101,12 @@ carries `speed` + `region_plan`; with a native backend compiled by
 `keylock` and `backend`. `Queue` delegates the target to the player; key-lock
 and backend are set directly on the same handle.
 
-The canonical controls are seeded before a track is loaded; the `WarpRenderer`
-does not cache a second requested target. Each `PlayerTrack` reads the rate its
-resource currently applies on every render block, so a direct runtime change
-through the shared controls updates its media clock as well as its DSP. The
-leading track publishes the deck's effective rate through `PlaybackShared`.
+The canonical controls are seeded before a track is loaded; the native
+`WarpRenderer` does not cache a second requested target. With a native backend,
+each `PlayerTrack` reads the rate its resource currently applies on every
+render block, so a direct runtime change through the shared controls updates
+its media clock as well as its DSP. The leading track publishes the deck's
+effective rate through `PlaybackShared`.
 `Player::rate()` and `PlayerEvent::RateChanged` expose only that effective
 value: fixed/no-backend resources report `1.0`, while a paused deck or a deck
 without a leading track reports `0.0`. Target controls and the effective
@@ -115,11 +116,11 @@ With a backend compiled in, `WarpRenderer` runs at `ratio = 1/speed`, and:
 - **key-lock off** (the constructed default): `pitch = speed` - speed shifts pitch, vinyl-style.
 - **key-lock on**: `pitch = 1.0` - speed preserves pitch.
 
-At speed 1.0 with no region plan the slot bypasses. Without a backend - including every wasm build,
-where it is cfg'd out regardless of features - no speed DSP is inserted and PCM output stays pinned
-to 1.0. Because the controls are read each chunk, **speed, key-lock, and backend all apply live,
-mid-track - no reload.** Switching backend rebuilds the DSP backend; returning to unity passthrough
-resets buffered stretch state.
+At speed 1.0 with no region plan the slot bypasses. Without a backend - including every wasm build -
+the same Warp slot remains in the producer chain as an exact identity renderer; no speed DSP is
+inserted and PCM output stays pinned to 1.0. With a native backend the controls are read each chunk,
+so **speed, key-lock, and backend all apply live, mid-track - no reload.** Switching backend
+rebuilds the DSP backend; returning to unity passthrough resets buffered stretch state.
 
 Fixed-ratio sample-rate conversion is a separate stage: Apple fused builds use the codec-embedded
 placement, other builds the standalone decode-adapter resampler.

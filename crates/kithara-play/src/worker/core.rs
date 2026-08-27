@@ -77,7 +77,6 @@ impl PlayWorker {
             let spec = audio.spec();
             let warp = Warp::new(audio, &warp);
             let drain = EffectDrain::new(effects.len(), self.byte_pool());
-            #[cfg(not(target_arch = "wasm32"))]
             let source = WarpSource::new(
                 source,
                 warp.renderer(spec, self.pcm_pool().clone()),
@@ -85,8 +84,6 @@ impl PlayWorker {
                 drain,
                 spec,
             );
-            #[cfg(target_arch = "wasm32")]
-            let source = WarpSource::new(source, effects, drain, spec);
             (warp, source)
         });
         self.register(prepared, engine_load)

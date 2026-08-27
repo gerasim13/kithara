@@ -39,9 +39,6 @@ pub use sync::{
 ))]
 pub use temporal::StretchKind;
 pub use temporal::{ActiveRegion, GridSegment, RegionPlan, RegionPlanError, StretchControls};
-#[cfg(all(
-    not(target_arch = "wasm32"),
-    any(feature = "stretch-signalsmith", feature = "stretch-bungee")
-))]
+#[cfg(feature = "render")]
 pub use warp::WarpRenderer;
 pub use warp::{Warp, WarpConfig, WarpCursor, WarpMap, supports_playback_rate};

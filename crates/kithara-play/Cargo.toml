@@ -103,7 +103,7 @@ kithara-platform = { workspace = true }
 kithara-stream = { workspace = true, default-features = false }
 kithara-test-macros = { workspace = true }
 kithara-test-utils = { workspace = true }
-kithara-warp = { workspace = true, default-features = false }
+kithara-warp = { workspace = true, default-features = false, features = ["render"] }
 
 # Utilities
 arc-swap = { workspace = true }

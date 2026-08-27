@@ -11,18 +11,9 @@ categories = ["multimedia::audio"]
 
 [features]
 default = []
-stretch-signalsmith = [
-    "dep:kithara-bufpool",
-    "dep:kithara-decode",
-    "dep:kithara-stretch",
-    "kithara-stretch/stretch-signalsmith",
-]
-stretch-bungee = [
-    "dep:kithara-bufpool",
-    "dep:kithara-decode",
-    "dep:kithara-stretch",
-    "kithara-stretch/stretch-bungee",
-]
+render = ["dep:kithara-bufpool", "dep:kithara-decode"]
+stretch-signalsmith = ["dep:kithara-stretch", "kithara-stretch/stretch-signalsmith", "render"]
+stretch-bungee = ["dep:kithara-stretch", "kithara-stretch/stretch-bungee", "render"]
 
 [dependencies]
 kithara-bufpool = { workspace = true, optional = true }

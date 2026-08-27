@@ -1,15 +1,9 @@
 use kithara_platform::sync::Arc;
-#[cfg(all(
-    not(target_arch = "wasm32"),
-    any(feature = "stretch-signalsmith", feature = "stretch-bungee")
-))]
+#[cfg(feature = "render")]
 use {kithara_bufpool::PcmPool, kithara_decode::PcmSpec};
 
 use super::WarpConfig;
-#[cfg(all(
-    not(target_arch = "wasm32"),
-    any(feature = "stretch-signalsmith", feature = "stretch-bungee")
-))]
+#[cfg(feature = "render")]
 use super::WarpRenderer;
 use crate::StretchControls;
 
@@ -39,10 +33,7 @@ impl<S> Warp<S> {
     }
 
     /// Creates the worker-side renderer paired with this Warp facade.
-    #[cfg(all(
-        not(target_arch = "wasm32"),
-        any(feature = "stretch-signalsmith", feature = "stretch-bungee")
-    ))]
+    #[cfg(feature = "render")]
     #[must_use]
     pub fn renderer(&self, spec: PcmSpec, pool: PcmPool) -> WarpRenderer {
         WarpRenderer::new(Arc::clone(&self.stretch), spec, pool)
