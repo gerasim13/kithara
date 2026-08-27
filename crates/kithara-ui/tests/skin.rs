@@ -31,7 +31,15 @@ fn builtin_skin_parses_every_required_section() {
 fn every_shipped_skin_resolves_under_its_own_name() {
     let names: Vec<&str> = builtin::skins().iter().map(Skin::id).collect();
 
-    assert_eq!(names, ["kithara-dark", "kithara-light", "kithara-neon"]);
+    assert_eq!(
+        names,
+        [
+            "kithara-dark",
+            "kithara-light",
+            "kithara-neon",
+            "kithara-soft"
+        ]
+    );
 }
 
 /// A skin written over another restates only what it changes, so the page

@@ -11,6 +11,7 @@
                 Include(id: "kithara-dark", source: "../nav/item.kmodule.ron", with: { "icon": "Disc", "label": "DARK", "tab": "gallery.skin.kithara-dark" }),
                 Include(id: "kithara-light", source: "../nav/item.kmodule.ron", with: { "icon": "Disc", "label": "LIGHT", "tab": "gallery.skin.kithara-light" }),
                 Include(id: "kithara-neon", source: "../nav/item.kmodule.ron", with: { "icon": "Disc", "label": "NEON", "tab": "gallery.skin.kithara-neon" }),
+                Include(id: "kithara-soft", source: "../nav/item.kmodule.ron", with: { "icon": "Disc", "label": "SOFT", "tab": "gallery.skin.kithara-soft" }),
             ]),
             Text(id: "palette-heading", style: Section, label: "PALETTE", size: (w: Fill, h: Fixed(20.0))),
             Row(gap: Some(20.0), size: (w: Fill, h: Shrink), children: [

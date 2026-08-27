@@ -13,15 +13,23 @@ pub const MICRO_PRESET: &str = "micro.klayout.ron";
 pub const PLAYER_PRESET: &str = "player.klayout.ron";
 pub const DARK_SKIN: &str = include_str!("../assets/kithara-dark.kskin.ron");
 pub const DARK_SKIN_PATH: &str = "kithara-dark.kskin.ron";
-/// Paper and neon: two skins written over the dark one, restating its palette
-/// and nothing else.
+/// Paper, neon and soft: three skins written over the dark one. Paper restates
+/// its palette and nothing else; neon and soft restate measurements and frames
+/// as well, which is where a skin stops being a colour scheme.
 pub const LIGHT_SKIN: &str = include_str!("../assets/kithara-light.kskin.ron");
 pub const LIGHT_SKIN_PATH: &str = "kithara-light.kskin.ron";
 pub const NEON_SKIN: &str = include_str!("../assets/kithara-neon.kskin.ron");
 pub const NEON_SKIN_PATH: &str = "kithara-neon.kskin.ron";
+pub const SOFT_SKIN: &str = include_str!("../assets/kithara-soft.kskin.ron");
+pub const SOFT_SKIN_PATH: &str = "kithara-soft.kskin.ron";
 /// Every skin this crate ships, in the order a picker offers them. The first
 /// is the one a host wears when it names none.
-pub const SKIN_PATHS: [&str; 3] = [DARK_SKIN_PATH, LIGHT_SKIN_PATH, NEON_SKIN_PATH];
+pub const SKIN_PATHS: [&str; 4] = [
+    DARK_SKIN_PATH,
+    LIGHT_SKIN_PATH,
+    NEON_SKIN_PATH,
+    SOFT_SKIN_PATH,
+];
 /// Eight frames of a growing arc, in one row, for the sprite page and its
 /// cross-host proof.
 pub const SPINNER_SHEET: &[u8] = include_bytes!("../assets/sprites/spinner.png");
@@ -33,6 +41,7 @@ pub fn resolver() -> MemResolver {
         (DARK_SKIN_PATH, DARK_SKIN),
         (LIGHT_SKIN_PATH, LIGHT_SKIN),
         (NEON_SKIN_PATH, NEON_SKIN),
+        (SOFT_SKIN_PATH, SOFT_SKIN),
         (MICRO_PRESET, include_str!("../assets/micro.klayout.ron")),
         (PLAYER_PRESET, include_str!("../assets/player.klayout.ron")),
         (

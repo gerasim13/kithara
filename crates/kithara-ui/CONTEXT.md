@@ -36,10 +36,13 @@ them. `app::embed` does that by remounting when `App::skin().id()` changes; a ho
 compiled pages, as the gallery's iced one does, compiles them again itself.
 
 `builtin::skins` is the ordered list of skins the crate ships, and `builtin::skin` is the first of
-them, which is the one worn by anything naming none. `kithara-light` and `kithara-neon` are written
-over `kithara-dark` with a `base:` line and restate only what they change: the light one only the
-palette, the neon one the palette plus a nav metric and a frame, so the patch chain is exercised
-across both kinds of field.
+them, which is the one worn by anything naming none. `kithara-light`, `kithara-neon` and
+`kithara-soft` are written over `kithara-dark` with a `base:` line and restate only what they change:
+the light one only the palette, the neon one the palette plus a nav metric and a frame, the soft one
+the palette plus every frame the design declares, so the same pages come out rounded, and a few text
+roles in another family. A patch restates a whole field, so a frame or a text role is written out in
+full while a section around it is not; a field nested inside another value, as `wave.overlay` is,
+belongs to the value that holds it and is restated with it.
 
 `SkinDoc` owns every configurable rendering metric, including the intrinsic control sizes the
 toolkit-independent compiler reads. With `render`, `Skin::resolve` converts the document to iced
