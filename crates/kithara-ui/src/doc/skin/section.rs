@@ -35,6 +35,24 @@ macro_rules! skin_section {
                 })*
             }
         }
+
+        impl crate::doc::skin::blanket::Frames for $name {
+            fn each_frame(
+                &mut self,
+                visit: &mut dyn FnMut(&mut crate::doc::skin::primitives::FrameSkin),
+            ) {
+                $(crate::doc::skin::blanket::Frames::each_frame(&mut self.$field, visit);)*
+            }
+        }
+
+        impl crate::doc::skin::blanket::Roles for $name {
+            fn each_role(
+                &mut self,
+                visit: &mut dyn FnMut(&mut crate::doc::skin::primitives::TextRoleSkin),
+            ) {
+                $(crate::doc::skin::blanket::Roles::each_role(&mut self.$field, visit);)*
+            }
+        }
     };
 }
 

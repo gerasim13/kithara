@@ -39,10 +39,18 @@ compiled pages, as the gallery's iced one does, compiles them again itself.
 them, which is the one worn by anything naming none. `kithara-light`, `kithara-neon` and
 `kithara-soft` are written over `kithara-dark` with a `base:` line and restate only what they change:
 the light one only the palette, the neon one the palette plus a nav metric and a frame, the soft one
-the palette plus every frame the design declares, so the same pages come out rounded, and a few text
-roles in another family. A patch restates a whole field, so a frame or a text role is written out in
-full while a section around it is not; a field nested inside another value, as `wave.overlay` is,
-belongs to the value that holds it and is restated with it.
+the palette plus two blanket blocks and the handful of controls that differ from them. A patch
+restates a whole field, so a frame or a text role is written out in full while a section around it is
+not; a field nested inside another value, as `wave.overlay` is, belongs to the value that holds it
+and is restated with it.
+
+A patch may open with `frames:` and `text_roles:`, which are the document's two blanket blocks.
+`FramePatch` reaches every `FrameSkin` the document holds and `TextRolePatch` every `TextRoleSkin`,
+including the ones a section owns rather than the `text` block and the ones nested inside another
+value. Both are applied before the patch's own sections, so a stated section always wins over the
+blanket around it: the blanket is the ground the document is written on, not its last word. The reach
+itself is generated - `skin_section!` writes the `Frames` and `Roles` walks for every section it
+declares - so a field added to a section is reached by a blanket without anything else being touched.
 
 `SkinDoc` owns every configurable rendering metric, including the intrinsic control sizes the
 toolkit-independent compiler reads. With `render`, `Skin::resolve` converts the document to iced

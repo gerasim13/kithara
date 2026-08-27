@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use super::{
+    blanket::{FramePatch, Frames, Roles, TextRolePatch},
     controls::{
         ButtonPatch, ButtonSkin, CellPatch, CellSkin, CheckboxPatch, CheckboxSkin, ChipPatch,
         ChipSkin, CrossfaderPatch, CrossfaderSkin, FaderPatch, FaderSkin, KnobPatch, KnobSkin,
@@ -18,8 +19,8 @@ use super::{
         WavePatch, WaveSkin,
     },
     primitives::{
-        ChromePatch, ChromeSkin, LayoutPatch, LayoutSkin, ScrollPatch, ScrollSkin, WindowPatch,
-        WindowSkin,
+        ChromePatch, ChromeSkin, FrameSkin, LayoutPatch, LayoutSkin, ScrollPatch, ScrollSkin,
+        TextRoleSkin, WindowPatch, WindowSkin,
     },
 };
 use crate::{
@@ -105,11 +106,21 @@ macro_rules! define_skin_doc {
             pub version: u32,
             #[serde(default)]
             pub palette: Option<PalettePatch>,
+            /// Restated over every frame the skin inherits, before its own
+            /// sections are applied.
+            #[serde(default)]
+            pub frames: Option<FramePatch>,
+            /// Restated over every typographic role, on the same terms.
+            #[serde(default)]
+            pub text_roles: Option<TextRolePatch>,
             $(#[serde(default)] pub $field: Option<$patch>,)*
         }
 
         impl SkinDoc {
             /// Takes everything the patch restates, keeping the rest.
+            ///
+            /// A blanket comes before the sections it reaches, so a skin that
+            /// rounds every frame and then names one square control gets both.
             pub(crate) fn apply(&mut self, patch: SkinPatch) {
                 self.id = patch.id;
                 self.schema = patch.schema;
@@ -117,9 +128,27 @@ macro_rules! define_skin_doc {
                 if let Some(palette) = patch.palette {
                     self.palette.patch(palette);
                 }
+                if let Some(frames) = patch.frames {
+                    self.each_frame(&mut |frame| frames.apply(frame));
+                }
+                if let Some(roles) = patch.text_roles {
+                    self.each_role(&mut |role| roles.apply(role));
+                }
                 $(if let Some(section) = patch.$field {
                     self.$field.patch(section);
                 })*
+            }
+        }
+
+        impl Frames for SkinDoc {
+            fn each_frame(&mut self, visit: &mut dyn FnMut(&mut FrameSkin)) {
+                $(self.$field.each_frame(visit);)*
+            }
+        }
+
+        impl Roles for SkinDoc {
+            fn each_role(&mut self, visit: &mut dyn FnMut(&mut TextRoleSkin)) {
+                $(self.$field.each_role(visit);)*
             }
         }
     };

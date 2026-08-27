@@ -5,7 +5,7 @@ use kithara_ui::{
     error::UiDocError,
     ids::{DocId, SourceUri},
     render::Skin,
-    skin::parse_skin,
+    skin::{FontFamily, parse_skin},
 };
 
 fn origin() -> SourceUri {
@@ -64,6 +64,64 @@ fn a_skin_may_restate_one_measurement_of_a_section() {
 
     assert_ne!(neon.nav.item_height, dark.nav.item_height);
     assert_eq!(neon.nav.icon_size, dark.nav.icon_size);
+}
+
+/// The soft skin, which is the one written on blanket terms.
+fn soft() -> &'static Skin {
+    builtin::skins()
+        .iter()
+        .find(|skin| skin.id() == "kithara-soft")
+        .unwrap_or_else(|| panic!("the crate must ship the soft skin"))
+}
+
+/// A blanket reaches a frame the skin never names, which is the whole reason
+/// to write one: rounding the design must not mean restating every control.
+#[kithara::test]
+fn a_frame_blanket_reaches_a_frame_the_skin_never_names() {
+    assert_eq!(soft().table.badge_frame.radius, 12.0);
+}
+
+/// A frame nested inside another value is reached on the same terms, so a
+/// blanket cannot leave a hole where a section holds its own structure.
+#[kithara::test]
+fn a_frame_blanket_reaches_a_frame_nested_in_another_value() {
+    assert_eq!(soft().wave.overlay.art_frame.radius, 12.0);
+}
+
+/// The blanket is the ground, not the last word: a control the skin states
+/// keeps what it states.
+#[kithara::test]
+fn a_stated_frame_wins_over_the_blanket_around_it() {
+    assert_eq!(soft().fader.rail_frame.radius, 3.0);
+}
+
+/// One face named once reaches every typographic role, including the ones a
+/// section holds rather than the text block.
+#[kithara::test]
+fn a_role_blanket_reaches_a_role_a_section_holds() {
+    assert_eq!(soft().window.titlebar_text.font, FontFamily::Sans);
+}
+
+/// A blanket states one part of a role and leaves the rest of it where the
+/// base put it, so naming a face does not silently reset every size.
+#[kithara::test]
+fn a_role_blanket_leaves_the_rest_of_the_role_alone() {
+    let [dark, ..] = builtin::skins() else {
+        panic!("the crate must ship a dark skin")
+    };
+
+    assert_eq!(
+        soft().window.titlebar_text.size,
+        dark.window.titlebar_text.size
+    );
+}
+
+/// A role the skin states keeps what it states, on the same terms as a stated
+/// frame: the blanket is the ground the document is written on, not its last
+/// word.
+#[kithara::test]
+fn a_stated_role_wins_over_the_blanket_around_it() {
+    assert_eq!(soft().text.section.font, FontFamily::Display);
 }
 
 #[kithara::test]

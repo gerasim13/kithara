@@ -1,14 +1,17 @@
 // Soft: how far a skin alone can move the look. Nothing here is a new widget
-// or a new document — it is the same pages under a violet palette, rounded
-// frames everywhere a frame is drawn, fatter borders, roomier navigation and
-// a body face in place of the terminal one. Corners are the point: every
-// radius the design declares is restated here, so a skin is shown to own the
-// shape of a control and not only its colour.
+// or a new document — it is the same pages under a violet palette, with every
+// frame rounded, every word reset in the sans face, roomier navigation and
+// fatter borders on the controls that carry one. The two blanket blocks are
+// the point: `frames` and `text_roles` reach every frame and every
+// typographic role the design declares, and the sections below them restate
+// only where this skin differs from the blanket it just laid down.
 (
     schema: "kithara.skin",
     version: 1,
     id: "kithara-soft",
     base: "kithara-dark.kskin.ron",
+    frames: (radius: 12.0),
+    text_roles: (font: Sans, weight: Semibold),
     palette: (
         bg: "#1b1035",
         bg_deep: "#120a24",
@@ -40,53 +43,31 @@
     chrome: (
         frame: (radius: 14.0, border_width: 2.0, border: LineHi),
         secondary_frame: (radius: 12.0, border_width: 2.0, border: Line),
-        header_frame: (radius: 12.0, border_width: 0.0, border: LineInner),
-        chip_frame: (radius: 9.0, border_width: 0.0, border: Accent),
-        title_frame: (radius: 10.0, border_width: 0.0, border: LineInner),
-        chevron_frame: (radius: 13.0, border_width: 0.0, border: LineInner),
-        footer_frame: (radius: 12.0, border_width: 0.0, border: LineInner),
         header_height: 34.0,
-        chip_pad: 9.0,
         footer_height: 26.0,
         corner_size: 0.0,
     ),
-    drag: (
-        frame: (radius: 11.0, border_width: 2.0, border: Accent),
-    ),
-    window: (
-        close_framed: Close(
-            cell_size: 22.0,
-            icon_size: 10.0,
-            frame: (radius: 11.0, border_width: 1.0, border: Line),
-            divider: None,
-        ),
-    ),
-    crossfader: (
-        rail_frame: (radius: 3.0, border_width: 1.0, border: LineSoft),
-    ),
-    vis: (
-        nav_frame: (radius: 12.0, border_width: 2.0, border: LineInner),
+    button: (
+        frame: (radius: 12.0, border_width: 2.0, border: Line),
+        primary_frame: (radius: 12.0, border_width: 2.0, border: Line),
     ),
     toggle: (
-        active_frame: (radius: 11.0, border_width: 0.0, border: Line),
-        inactive_frame: (radius: 11.0, border_width: 2.0, border: Muted),
         thumb_radius: 8.0,
     ),
     checkbox: (
         active_frame: (radius: 6.0, border_width: 2.0, border: Line),
         inactive_frame: (radius: 6.0, border_width: 2.0, border: Muted),
     ),
-    readout: (
-        frame: (radius: 10.0, border_width: 2.0, border: Line),
+    crossfader: (
+        rail_frame: (radius: 3.0, border_width: 1.0, border: LineSoft),
     ),
-    chip: (
-        active_frame: (radius: 10.0, border_width: 0.0, border: Line),
-        inactive_frame: (radius: 10.0, border_width: 2.0, border: Line),
-        pivot_frame: (radius: 10.0, border_width: 2.0, border: Line),
+    fader: (
+        rail_frame: (radius: 3.0, border_width: 1.0, border: LineSoft),
+        handle_frame: (radius: 5.0, border_width: 0.0, border: Accent),
+        strip_frame: (radius: 7.0, border_width: 2.0, border: Line),
     ),
-    button: (
-        frame: (radius: 12.0, border_width: 2.0, border: Line),
-        primary_frame: (radius: 12.0, border_width: 2.0, border: Line),
+    meter: (
+        frame: (radius: 7.0, border_width: 1.0, border: LineInner),
     ),
     nav: (
         item_height: 40.0,
@@ -95,53 +76,6 @@
         icon_gap: 12.0,
     ),
     text: (
-        brand: (font: Sans, weight: Bold, size: 11.0, spacing: 0.0, color: Text),
-        body: (font: Sans, weight: Normal, size: 11.0, spacing: 0.0, color: Text),
-        section: (font: Sans, weight: Medium, size: 9.0, spacing: 0.08, color: Accent),
-        vis_title: (font: Sans, weight: Medium, size: 11.0, spacing: 0.0, color: Text),
-    ),
-    pop: (
-        frame: (radius: 12.0, border_width: 2.0, border: LineHi),
-    ),
-    segmented: (
-        frame: (radius: 11.0, border_width: 2.0, border: Line),
-    ),
-    select: (
-        frame: (radius: 11.0, border_width: 2.0, border: Line),
-    ),
-    swatch: (
-        frame: (radius: 8.0, border_width: 2.0, border: Line),
-    ),
-    cell: (
-        frame: (radius: 9.0, border_width: 2.0, border: Line),
-        highlighted_frame: (radius: 9.0, border_width: 2.0, border: Accent),
-    ),
-    fader: (
-        rail_frame: (radius: 3.0, border_width: 1.0, border: LineSoft),
-        handle_frame: (radius: 5.0, border_width: 0.0, border: Accent),
-        strip_frame: (radius: 7.0, border_width: 2.0, border: Line),
-    ),
-    wave: (
-        frame: (radius: 12.0, border_width: 0.0, border: Line),
-    ),
-    global_bar: (
-        selector_frame: (radius: 11.0, border_width: 2.0, border: Line),
-        chip_frame: (radius: 9.0, border_width: 0.0, border: Line),
-        settings_frame: (radius: 11.0, border_width: 0.0, border: Line),
-    ),
-    meter: (
-        frame: (radius: 7.0, border_width: 1.0, border: LineInner),
-    ),
-    telemetry: (
-        frame: (radius: 11.0, border_width: 2.0, border: Line),
-    ),
-    tree: (
-        scope_frame: (radius: 10.0, border_width: 0.0, border: Line),
-        scope_menu_frame: (radius: 11.0, border_width: 2.0, border: Line),
-    ),
-    table: (
-        row_frame: (radius: 8.0, border_width: 0.0, border: Line),
-        badge_frame: (radius: 8.0, border_width: 2.0, border: Line),
-        metric_badge_frame: (radius: 8.0, border_width: 0.0, border: Line),
+        section: (font: Display, weight: Semibold, size: 9.0, spacing: 0.12, color: Accent),
     ),
 )
