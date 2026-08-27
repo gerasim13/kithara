@@ -1,6 +1,9 @@
 use iced::{
-    Event as IcedEvent, Subscription, Task, Theme, event, event::Status,
-    keyboard::Event as KeyboardEvent, time as iced_time, window,
+    Color, Event as IcedEvent, Subscription, Task, Theme, event,
+    event::Status,
+    keyboard::Event as KeyboardEvent,
+    theme::{Base, Style},
+    time as iced_time, window,
 };
 use kithara_platform::{sync::Arc, time::Duration};
 
@@ -148,6 +151,16 @@ impl Kithara {
     /// The dark + gold theme.
     pub(crate) fn theme(&self, _window: window::Id) -> Theme {
         theme::kithara_theme(&self.palette)
+    }
+
+    /// The window paints no ground of its own: the document lays down the page
+    /// in the shape the skin gives the window, and whatever the shape leaves
+    /// out is the desktop behind it.
+    pub(crate) fn style(_state: &Self, theme: &Theme) -> Style {
+        Style {
+            background_color: Color::TRANSPARENT,
+            text_color: theme.base().text_color,
+        }
     }
 
     /// Window title.

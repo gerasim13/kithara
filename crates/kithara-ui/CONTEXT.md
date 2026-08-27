@@ -1210,6 +1210,23 @@ the layout grid. Collapse state is host-owned: a Full module reads `Bool` from
 `UiEvent::ToggleModule(<module-doc-id>)`, which the renderer neither retains nor mutates; Frame and
 Plain modules ignore that endpoint.
 
+Which of a module's corners are the window's own is not written in a layout: `compile` hands them
+down from the root once the whole tree is built. The root is the window and owns all four corners; a
+split keeps the pair across its axis whole for every cell and gives the pair along it to the cells
+at its two ends; an optional block or an adaptive step inherits its parent's, since it fills the
+same box. What a module receives is `FrameCorners`, carried the same way `FrameSides` already is,
+and the radius it rounds them by is the skin's `chrome.frame.radius`. A cell the host hides at
+runtime does not move the corner to its neighbour: the end of a split is where the document puts it.
+
+The window itself keeps no ground. Both hosts open a transparent window and clear it to nothing, so
+whatever the document does not paint is the desktop behind it - which is what makes a rounded corner
+a corner rather than a differently coloured square. A capture has no desktop behind it and clears to
+the skin's page instead (`Ui::background`). `atoms::design::corner` owns the shape both hosts round
+by: the path a box takes with only its named corners taken off, the ring a frame fills between that
+path and the box it encloses, and the clip that trims the ring where the layout leaves a side out.
+The iced host gives the same corners to its containers as an iced `Radius`; a skin whose radius is
+zero leaves every box square, which is what the shipped dark skin does.
+
 A layout declaring `dragged` names what the pointer is carrying: while that binding reads as
 non-empty text the renderer draws it at the pointer, over everything the layout lays out. The ghost
 paints only - no event captured, no cursor claimed - and asks for a redraw as the pointer moves, so

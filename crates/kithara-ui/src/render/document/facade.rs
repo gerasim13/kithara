@@ -6,7 +6,7 @@ use crate::{
     draw::Transform,
     expand::{Binding, ExpandedNode, MeasureSpec, SurfaceSpec},
     ids::InternId,
-    layout::{Axis, FrameSides},
+    layout::{Axis, FrameCorners, FrameSides},
     module::{ChromeStyle, MeasureAxis, Motion, PopoverAlign, PopoverAt, Pose, TextAlign},
     render::{InputOwner, ReadValue},
     size::{
@@ -77,6 +77,7 @@ where
         Branch {
             owner,
             input_owner: InputOwner::Engine,
+            round: FrameCorners::EMPTY,
             transform: Transform::IDENTITY,
         },
         ctx,
@@ -139,6 +140,7 @@ where
             chrome,
             frame,
             corners,
+            round,
             footer,
             drop,
             collapsed,
@@ -170,6 +172,14 @@ where
                         } else {
                             InputOwner::Leaf
                         },
+                        // A module standing at the window's edge hands its own
+                        // root the corners it stands at: with no shell of its
+                        // own, the root is what draws them.
+                        round: if *chrome == ChromeStyle::Plain {
+                            *round
+                        } else {
+                            FrameCorners::EMPTY
+                        },
                         // A module starts a fresh document: nothing outside it
                         // can pose what it draws.
                         transform: Transform::IDENTITY,
@@ -193,6 +203,7 @@ where
                     chrome: *chrome,
                     frame: *frame,
                     corners: *corners,
+                    round: *round,
                     footer,
                     drop: drop.as_ref(),
                     collapsed,
@@ -208,6 +219,10 @@ where
 struct Branch {
     owner: InternId,
     input_owner: InputOwner,
+    /// The window corners the node this branch mounts stands at. Only a
+    /// module's own root ever carries any: everything under it is inside the
+    /// window, not at its edge.
+    round: FrameCorners,
     /// Every enclosing object's pose, composed and resolved for this frame.
     transform: Transform,
 }
@@ -242,7 +257,7 @@ struct RowNode<'a> {
     size: Option<SizeSpec>,
 }
 
-fn row_group<'a>(node: RowNode<'a>, ctx: Ctx<'_, '_>) -> Group<'a> {
+fn row_group<'a>(node: RowNode<'a>, round: FrameCorners, ctx: Ctx<'_, '_>) -> Group<'a> {
     let active = ctx.flag(node.active);
     let padding = node.pad.unwrap_or(ctx.skin.layout.grid_pad);
     let background = active
@@ -255,6 +270,7 @@ fn row_group<'a>(node: RowNode<'a>, ctx: Ctx<'_, '_>) -> Group<'a> {
         .or(node.frame_color)
         .unwrap_or(ctx.skin.divider.color);
     Group {
+        round,
         axis: Axis::Horizontal,
         measure: node.measure,
         alignment: node.align,
@@ -424,6 +440,7 @@ where
                 surface: surface.as_ref(),
                 size: effective_size(node, ctx.skin, snapshot),
             },
+            branch.round,
             ctx,
         ),
         children,
@@ -466,6 +483,7 @@ where
     let snapshot: &dyn Snapshot = &ctx;
     mount_group(
         Group {
+            round: branch.round,
             axis: Axis::Vertical,
             measure: *measure,
             alignment: *align,
@@ -634,7 +652,18 @@ where
         .iter()
         .enumerate()
         .filter(|(_, child)| !is_hidden(*child, snapshot))
-        .map(|(index, child)| expanded(child, &child_address(address, index), branch, ctx, host))
+        .map(|(index, child)| {
+            expanded(
+                child,
+                &child_address(address, index),
+                Branch {
+                    round: FrameCorners::EMPTY,
+                    ..branch
+                },
+                ctx,
+                host,
+            )
+        })
         .collect()
 }
 
@@ -674,7 +703,16 @@ where
         .map(|(index, child)| GroupMount {
             band: band_of(child),
             minimum: main_minimum(child, axis, ctx.skin, snapshot),
-            output: expanded(child, &child_address(address, index), branch, ctx, host),
+            output: expanded(
+                child,
+                &child_address(address, index),
+                Branch {
+                    round: FrameCorners::EMPTY,
+                    ..branch
+                },
+                ctx,
+                host,
+            ),
         })
         .collect()
 }

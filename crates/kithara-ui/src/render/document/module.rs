@@ -1,4 +1,9 @@
-use crate::{expand::DropSpec, ids::InternId, layout::FrameSides, module::ChromeStyle};
+use crate::{
+    expand::DropSpec,
+    ids::InternId,
+    layout::{FrameCorners, FrameSides},
+    module::ChromeStyle,
+};
 
 /// Resolved toolkit-neutral description of one compiled module shell.
 #[derive(Debug)]
@@ -12,6 +17,7 @@ pub struct Module<'a> {
     pub(super) chrome: ChromeStyle,
     pub(super) frame: FrameSides,
     pub(super) corners: bool,
+    pub(super) round: FrameCorners,
     pub(super) footer: Option<String>,
     pub(super) drop: Option<&'a DropSpec>,
     pub(super) collapsed: bool,
@@ -65,6 +71,13 @@ impl Module<'_> {
     #[must_use]
     pub const fn corners(&self) -> bool {
         self.corners
+    }
+
+    /// The window corners this module stands at, which are the ones its frame
+    /// radius rounds.
+    #[must_use]
+    pub const fn round(&self) -> FrameCorners {
+        self.round
     }
 
     /// Takes the resolved footer text.

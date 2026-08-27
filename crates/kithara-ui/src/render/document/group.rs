@@ -1,6 +1,6 @@
 use crate::{
     expand::SurfaceSpec,
-    layout::{Axis, FrameSides},
+    layout::{Axis, FrameCorners, FrameSides},
     module::{MeasureAxis, TextAlign},
     size::SizeSpec,
     skin::ColorRole,
@@ -19,6 +19,9 @@ pub struct Group<'a> {
     pub(super) padding_x: f32,
     pub(super) padding_y: f32,
     pub(super) frame: Option<FrameSides>,
+    /// The window corners this group stands at, which only the root of a module
+    /// with no shell of its own ever has.
+    pub(super) round: FrameCorners,
     pub(super) background: Option<ColorRole>,
     pub(super) background_alpha: Option<f32>,
     pub(super) frame_color: ColorRole,
@@ -68,6 +71,12 @@ impl Group<'_> {
     #[must_use]
     pub const fn frame(&self) -> Option<FrameSides> {
         self.frame
+    }
+
+    /// The window corners this group stands at.
+    #[must_use]
+    pub const fn round(&self) -> FrameCorners {
+        self.round
     }
 
     /// Resolved background role.

@@ -561,7 +561,9 @@ where
     }
 
     fn module(&mut self, mut module: Module<'_>, content: Option<Self::Output>) -> Self::Output {
-        let mut output = self.mount_module(&mut module, content);
+        let mut output = self
+            .mount_module(&mut module, content)
+            .rounded(module.round(), self.skin.chrome.frame.radius);
         // A module that takes drops reports the pointer crossing it, and the
         // hand carrying a track never belongs to the module: it belongs to the
         // list it came from. So the module observes without capturing, and
@@ -620,6 +622,7 @@ where
             background,
             frame,
         )
+        .rounded(group.round(), self.skin.chrome.frame.radius)
     }
 
     fn popover(

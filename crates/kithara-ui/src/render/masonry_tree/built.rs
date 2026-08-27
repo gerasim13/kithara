@@ -17,7 +17,7 @@ use crate::{
     draw::{Pt, Rgba, Transform},
     expand::Binding,
     ids::InternId,
-    layout::FrameSides,
+    layout::{FrameCorners, FrameSides},
     render::{HostedControlPlan, Skin, UiEvent},
     solve,
 };
@@ -195,6 +195,17 @@ impl<Action> MasonryNode<Action> {
             #[cfg(test)]
             document_ids,
         }
+    }
+
+    /// Rounds the corners of this node's own box that the layout says are the
+    /// window's own.
+    ///
+    /// The shape belongs to the node that paints the box, so it is set on the
+    /// node after it is built rather than threaded through every constructor
+    /// that never rounds anything.
+    pub(super) fn rounded(mut self, round: FrameCorners, radius: f32) -> Self {
+        self.widget.widget.set_round(round, radius);
+        self
     }
 
     /// The module shell's own bars, and whatever they hold.

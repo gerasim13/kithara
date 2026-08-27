@@ -8,7 +8,10 @@ use kithara_platform::{
 use masonry::vello::{
     AaConfig, AaSupport, RenderParams, Renderer, RendererOptions,
     util::{RenderContext, RenderSurface},
-    wgpu::{CommandEncoderDescriptor, PresentMode, SurfaceError, TextureViewDescriptor},
+    wgpu::{
+        CommandEncoderDescriptor, CompositeAlphaMode, PresentMode, SurfaceError,
+        TextureViewDescriptor,
+    },
 };
 use num_traits::cast::AsPrimitive;
 use winit::{
@@ -30,7 +33,7 @@ use super::{
     target,
 };
 use crate::{
-    draw::Pt,
+    draw::{Pt, TRANSPARENT},
     interact::{Input, InputMethod, Key, MOUSE, Modifiers, PointerInput, PointerPhase, Scroll},
     render::{WindowCommand, WindowEdge, shader::ShaderPass, vis::VisPass},
 };
@@ -242,6 +245,28 @@ where
     }
 }
 
+/// How the compositor is asked to take the frame's alpha, or `None` where it
+/// only ever composites an opaque surface.
+///
+/// The window has no ground of its own, so what the document leaves clear has
+/// to reach the desktop behind it. The two names mean the same thing to two
+/// different graphics stacks: Vulkan calls premultiplied contents
+/// `PreMultiplied`, Metal offers only `PostMultiplied` and treats the layer as
+/// premultiplied anyway, so the premultiplied name is asked for first and the
+/// other is what Metal answers with.
+fn alpha_mode(context: &RenderContext, surface: &RenderSurface<'_>) -> Option<CompositeAlphaMode> {
+    let modes = surface
+        .surface
+        .get_capabilities(context.devices[surface.dev_id].adapter())
+        .alpha_modes;
+    [
+        CompositeAlphaMode::PreMultiplied,
+        CompositeAlphaMode::PostMultiplied,
+    ]
+    .into_iter()
+    .find(|mode| modes.contains(mode))
+}
+
 /// Carries out what the document asked its window to do. With the system frame
 /// off, this is the only way the window can be moved, resized, or closed at all.
 const fn resize_direction(edge: WindowEdge) -> ResizeDirection {
@@ -269,9 +294,13 @@ where
             .app
             .take()
             .ok_or_else(|| RunError::Host("the application was already taken".to_owned()))?;
+        // The window keeps no ground of its own: the document paints the page
+        // in the shape the skin gives the window, and whatever the shape leaves
+        // out is the desktop behind it.
         let mut attributes = Window::default_attributes()
             .with_decorations(self.config.decorations)
             .with_title(self.config.title)
+            .with_transparent(true)
             .with_inner_size(LogicalSize::new(self.size.0, self.size.1));
         if let Some((width, height)) = self.config.min_size {
             attributes = attributes.with_min_inner_size(LogicalSize::new(width, height));
@@ -283,13 +312,19 @@ where
         let window = Arc::new(window);
         let size = window.inner_size();
         let mut context = RenderContext::new();
-        let surface = futures_lite::future::block_on(context.create_surface(
+        let mut surface = futures_lite::future::block_on(context.create_surface(
             Arc::clone(&window),
             size.width.max(1),
             size.height.max(1),
             PresentMode::AutoVsync,
         ))
         .map_err(|error| RunError::Host(format!("surface: {error}")))?;
+        if let Some(mode) = alpha_mode(&context, &surface) {
+            surface.config.alpha_mode = mode;
+            surface
+                .surface
+                .configure(&context.devices[surface.dev_id].device, &surface.config);
+        }
         let handle = &context.devices[surface.dev_id];
         let renderer = Renderer::new(
             &handle.device,
@@ -523,7 +558,7 @@ where
             frame.scene(),
             &self.surface.target_view,
             &RenderParams {
-                base_color: self.ui.background().into(),
+                base_color: TRANSPARENT.into(),
                 width: size.width,
                 height: size.height,
                 antialiasing_method: AaConfig::Area,

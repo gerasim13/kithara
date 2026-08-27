@@ -101,12 +101,12 @@ where
         })
     }
 
-    /// What to clear the target to before the scene is painted onto it.
+    /// The page a target that has nothing behind it is cleared to.
     ///
     /// A document paints its own panels and leaves the rest of the rectangle to
-    /// whoever owns it. That bare part is the page, and it is the skin's, not
-    /// the target's: clearing to anything else shows through wherever a
-    /// document does not reach, and the other host does not have that seam.
+    /// whoever owns it. A window leaves it to the desktop it stands on, which
+    /// is what makes a rounded corner a corner at all; a capture has no desktop
+    /// behind it, so it stands the document on the skin's own page instead.
     pub fn background(&self) -> Rgba {
         let skin = self.app.skin();
         skin.rgba(skin.layout.page_background)

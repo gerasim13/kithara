@@ -1,15 +1,19 @@
 use iced::{
     Alignment, Background, Border, Color, Element, Length, Point, Rectangle, Renderer, Size, Theme,
+    border::Radius,
     widget::{
         Canvas, Row, Space, Stack,
-        canvas::{self, Frame, Geometry},
+        canvas::{self, Fill, Frame, Geometry, Style, fill::Rule},
         column, container,
         container::Style as ContainerStyle,
     },
 };
 
 use crate::{
-    layout::FrameSides,
+    atoms::design::corner::{corner_ring, frame_clip},
+    backends::path,
+    draw::{Geom, Rect},
+    layout::{FrameCorners, FrameSides},
     module::ChromeStyle,
     render::{
         ChromeLeaf, IcedSkin, InputOwner, Skin, UiEvent, Widget, chrome_leaf, header_chevron,
@@ -35,6 +39,9 @@ pub(crate) struct ModuleChrome<'a, Content> {
     collapsed: bool,
     #[builder(default)]
     corners: bool,
+    /// The window corners this module stands at.
+    #[builder(default = FrameCorners::EMPTY)]
+    round: FrameCorners,
 }
 
 #[derive(Clone, Copy)]
@@ -82,6 +89,7 @@ where
             Length::Fill,
             chrome.frame,
             chrome.corners,
+            chrome.round,
         ),
         ChromeStyle::Plain => chrome.content.into(),
     };
@@ -138,6 +146,7 @@ where
             Length::Fixed(metrics.header_height),
             chrome.frame,
             chrome.corners,
+            chrome.round,
         );
     }
 
@@ -172,6 +181,7 @@ where
         Length::Fill,
         chrome.frame,
         chrome.corners,
+        chrome.round,
     )
 }
 
@@ -228,6 +238,18 @@ fn header<'a>(
         .into()
 }
 
+/// The radius each corner of a box takes: the window's own where the box stands
+/// at it, and nothing anywhere else.
+pub(crate) fn corner_radius(round: FrameCorners, skin: &Skin) -> Radius {
+    let radius = skin.chrome.frame.radius;
+    let pick = |rounded: bool| if rounded { radius } else { 0.0 };
+    Radius::default()
+        .top_left(pick(round.top_left))
+        .top_right(pick(round.top_right))
+        .bottom_right(pick(round.bottom_right))
+        .bottom_left(pick(round.bottom_left))
+}
+
 fn framed<'a, Message>(
     content: Element<'a, Message>,
     skin: &Skin,
@@ -235,16 +257,20 @@ fn framed<'a, Message>(
     height: Length,
     sides: FrameSides,
     corners: bool,
+    round: FrameCorners,
 ) -> Element<'a, Message>
 where
     Message: 'a,
 {
+    let radius = corner_radius(round, skin);
     let body = container(content)
         .width(Length::Fill)
         .height(height)
-        .style(move |_| panel_style(background));
+        .style(move |_| panel_style(background).border(Border::default().rounded(radius)));
     let frame = Canvas::new(FrameChrome {
         sides,
+        round,
+        radius: skin.chrome.frame.radius,
         frame_color: skin.color(skin.chrome.frame.border),
         frame_width: skin.chrome.frame.border_width,
         corners: corners.then(|| CornerTicks::from(skin)),
@@ -289,6 +315,8 @@ where
     let (width, height) = size;
     let frame = Canvas::new(FrameChrome {
         sides,
+        round: FrameCorners::EMPTY,
+        radius: 0.0,
         frame_color: color,
         frame_width: line_width,
         corners: None,
@@ -307,6 +335,9 @@ struct FrameChrome {
     sides: FrameSides,
     corners: Option<CornerTicks>,
     frame_width: f32,
+    /// The window corners the framed box stands at, and the radius they take.
+    round: FrameCorners,
+    radius: f32,
 }
 
 #[derive(Clone, Copy)]
@@ -358,6 +389,11 @@ impl<Message> canvas::Program<Message> for FrameChrome {
         _cursor: iced::mouse::Cursor,
     ) -> Vec<Geometry> {
         let mut frame = Frame::new(renderer, bounds.size());
+        if self.round.any() && self.radius > 0.0 {
+            self.rounded(&mut frame, bounds);
+            self.ticks(&mut frame, bounds);
+            return vec![frame.into_geometry()];
+        }
         let right = (bounds.width - self.frame_width).max(0.0);
         let bottom = (bounds.height - self.frame_width).max(0.0);
         if self.sides.top {
@@ -388,11 +424,48 @@ impl<Message> canvas::Program<Message> for FrameChrome {
                 self.frame_color,
             );
         }
+        self.ticks(&mut frame, bounds);
+        vec![frame.into_geometry()]
+    }
+}
+
+impl FrameChrome {
+    /// A frame whose window corners are rounded: the band is the box's own
+    /// outline with what it encloses cut out of it, trimmed to the sides the
+    /// layout draws.
+    fn rounded(&self, frame: &mut Frame, bounds: Rectangle) {
+        let box_ = Rect {
+            h: bounds.height,
+            w: bounds.width,
+            x: 0.0,
+            y: 0.0,
+        };
+        let ring = corner_ring(box_, self.radius, self.round, self.frame_width);
+        let clip = frame_clip(box_, self.sides, self.frame_width);
+        frame.with_clip(
+            Rectangle {
+                height: clip.h,
+                width: clip.w,
+                x: clip.x,
+                y: clip.y,
+            },
+            |frame| {
+                frame.fill(
+                    &path(&Geom::Path(ring)),
+                    Fill {
+                        rule: Rule::EvenOdd,
+                        style: Style::Solid(self.frame_color),
+                    },
+                );
+            },
+        );
+    }
+
+    fn ticks(&self, frame: &mut Frame, bounds: Rectangle) {
         if let Some(ticks) = self.corners {
             for (origin, size) in ticks.marks(bounds) {
                 frame.fill_rectangle(origin, size, ticks.color);
             }
         }
-        vec![frame.into_geometry()]
     }
 }

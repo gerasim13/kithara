@@ -1,5 +1,5 @@
 use iced::{
-    Background, Color, Element, Length, Padding, Rectangle,
+    Background, Border, Color, Element, Length, Padding, Rectangle,
     advanced::{layout::Layout, mouse},
     alignment::{Horizontal, Vertical},
     widget::{Container, container, container::Style as ContainerStyle},
@@ -15,11 +15,11 @@ use crate::{
     engine::{Descriptor, Engine, PickerSnapshot, Target},
     expand::ExpandedNode,
     interact::iced as iced_interact,
-    layout::FrameSides,
+    layout::{FrameCorners, FrameSides},
     module::ChromeStyle,
     render::{
-        HostedControlPlan, IcedSkin, Resolving, Skin, UiEvent, document::Ctx, frame_overlay,
-        picker_hits,
+        HostedControlPlan, IcedSkin, Resolving, Skin, UiEvent, corner_radius, document::Ctx,
+        frame_overlay, picker_hits,
     },
     size::{Dim, SizeSpec, Snapshot, branch, is_hidden},
     skin::ColorRole,
@@ -52,6 +52,7 @@ pub(super) fn filled<'a>(
     element: Container<'a, UiEvent>,
     background: Option<ColorRole>,
     alpha: Option<f32>,
+    round: FrameCorners,
     skin: &Skin,
 ) -> Element<'a, UiEvent> {
     let Some(role) = background else {
@@ -61,8 +62,13 @@ pub(super) fn filled<'a>(
         a: alpha.unwrap_or(1.0),
         ..skin.color(role)
     };
+    let radius = corner_radius(round, skin);
     element
-        .style(move |_| ContainerStyle::default().background(Background::Color(color)))
+        .style(move |_| {
+            ContainerStyle::default()
+                .background(Background::Color(color))
+                .border(Border::default().rounded(radius))
+        })
         .into()
 }
 
@@ -789,6 +795,38 @@ mod tests {
             Some(ColorRole::LineHi)
         );
         assert_eq!(active_tone(None, None, true), None);
+    }
+
+    /// A corner the layout says is the window's takes the radius the skin gives
+    /// the window.
+    #[kithara::test]
+    fn a_window_corner_takes_the_skin_radius() {
+        let skin = builtin::skin();
+
+        let radius = corner_radius(
+            FrameCorners {
+                top_left: true,
+                ..FrameCorners::EMPTY
+            },
+            skin,
+        );
+
+        assert_eq!(radius.top_left, skin.chrome.frame.radius);
+    }
+
+    /// Every other corner of the same box stays square, however far the skin
+    /// rounds the window.
+    #[kithara::test]
+    fn a_corner_the_layout_leaves_out_stays_square() {
+        let radius = corner_radius(
+            FrameCorners {
+                top_left: true,
+                ..FrameCorners::EMPTY
+            },
+            builtin::skin(),
+        );
+
+        assert_eq!(radius.top_right, 0.0);
     }
 
     #[kithara::test]

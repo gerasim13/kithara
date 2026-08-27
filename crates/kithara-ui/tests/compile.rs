@@ -6,6 +6,7 @@ use kithara_ui::{
     compile::{CompiledNode, CompiledUi, compile},
     error::UiDocError,
     expand::{Binding, BindingKind, ControlSpec, ExpandedNode, MeasureSpec},
+    layout::FrameCorners,
     module::{ChromeStyle, IconName, PopoverAt},
     registry::{EndpointCategory, EndpointDesc, ValueKind},
     size::{Dim, SizeSpec},
@@ -2383,4 +2384,66 @@ fn a_layout_box_may_not_be_smaller_than_the_node_standing_in_it() {
     for (_, layout) in layouts(120.0) {
         compile_layout(&layout).expect("a box the node fills exactly is a box it fits in");
     }
+}
+
+/// A window split into three stacked modules: a window corner belongs to the
+/// module at one end of the split, and to nothing standing between the ends.
+fn stacked_resolver() -> MemResolver {
+    let mut resolver = block_resolver(
+        r#"(schema: "kithara.module", version: 1, id: "mixer",
+            root: Knob(id: "low"))"#,
+    );
+    resolver.insert(
+        "stacked.klayout.ron",
+        r#"(schema: "kithara.layout", version: 1, id: "stacked",
+            root: Split(axis: Vertical, children: [
+                (node: Module(instance: "top", source: "blocks.kmodule.ron")),
+                (node: Module(instance: "middle", source: "blocks.kmodule.ron")),
+                (node: Module(instance: "bottom", source: "blocks.kmodule.ron")),
+            ]))"#,
+    );
+    resolver
+}
+
+/// The window corners the module in cell `index` of the stacked layout stands
+/// at.
+fn stacked_round(index: usize) -> FrameCorners {
+    let ui = compile_blocks(&stacked_resolver(), "stacked.klayout.ron").unwrap();
+    let CompiledNode::Split { children, .. } = &ui.root else {
+        panic!("expected a split root");
+    };
+    let CompiledNode::Module { round, .. } = &children[index].node else {
+        panic!("expected a module in every cell");
+    };
+    *round
+}
+
+#[kithara::test]
+fn the_module_at_the_top_of_the_window_takes_the_top_corners() {
+    assert_eq!(stacked_round(0), FrameCorners::ALL.top());
+}
+
+#[kithara::test]
+fn the_module_at_the_bottom_of_the_window_takes_the_bottom_corners() {
+    assert_eq!(stacked_round(2), FrameCorners::ALL.bottom());
+}
+
+#[kithara::test]
+fn a_module_between_the_ends_of_a_split_stands_at_no_window_corner() {
+    assert_eq!(stacked_round(1), FrameCorners::EMPTY);
+}
+
+#[kithara::test]
+fn a_layout_of_one_module_gives_it_every_window_corner() {
+    let resolver = block_resolver(
+        r#"(schema: "kithara.module", version: 1, id: "mixer",
+            root: Knob(id: "low"))"#,
+    );
+
+    let ui = compile_blocks(&resolver, "blocks.klayout.ron").unwrap();
+
+    let CompiledNode::Module { round, .. } = &ui.root else {
+        panic!("expected a module root");
+    };
+    assert_eq!(*round, FrameCorners::ALL);
 }

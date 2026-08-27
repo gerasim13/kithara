@@ -1,4 +1,5 @@
 pub(crate) mod cell;
+pub(crate) mod corner;
 pub(crate) mod crossfader;
 pub(crate) mod fader;
 pub(crate) mod meter;

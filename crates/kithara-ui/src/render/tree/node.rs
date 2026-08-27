@@ -110,6 +110,7 @@ impl<'a> DocumentHost for IcedHost<'a, '_> {
             .style(module.chrome())
             .frame(module.frame())
             .corners(module.corners())
+            .round(module.round())
             .maybe_footer(module.take_footer())
             .input_owner(if chrome_hosted {
                 InputOwner::Engine
@@ -170,6 +171,7 @@ impl<'a> DocumentHost for IcedHost<'a, '_> {
                     container(flex).width(size.0).height(size.1),
                     group.background(),
                     group.background_alpha(),
+                    group.round(),
                     self.skin,
                 ),
                 group.frame(),

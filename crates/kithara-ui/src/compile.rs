@@ -9,7 +9,7 @@ use crate::{
         Unprompted, intern_binding, motion_of, substitute_binding, substitute_map,
     },
     ids::{InternId, Interner, SourceUri, StrArena},
-    layout::{Axis, FrameSides, LayoutNode, SplitChild, parse_layout},
+    layout::{Axis, FrameCorners, FrameSides, LayoutNode, SplitChild, parse_layout},
     module::{ChromeStyle, MeasureAxis},
     registry::{BuiltinEndpoints, EndpointRegistry},
     resolve::load_module_graph,
@@ -127,6 +127,9 @@ pub enum CompiledNode {
         chrome: ChromeStyle,
         frame: FrameSides,
         corners: bool,
+        /// The window corners this module stands at, filled in once the whole
+        /// layout is built.
+        round: FrameCorners,
         footer: Option<Binding>,
         drop: Option<DropSpec>,
         collapsed: InternId,
@@ -197,7 +200,7 @@ pub fn compile(
     let mut interner = Interner::new(config.max_arena_bytes);
     let mut includes = Vec::new();
     let mut shaders = ShaderCache::default();
-    let root = Compiler {
+    let mut root = Compiler {
         resolver,
         endpoints,
         skin,
@@ -209,6 +212,7 @@ pub fn compile(
         shaders: &mut shaders,
     }
     .build(&document.root, &loaded.uri)?;
+    round_corners(&mut root, FrameCorners::ALL);
     let size = compiled_node_size(&root);
     let min = compiled_min(&root, skin);
     let dragged = document
@@ -233,6 +237,57 @@ pub fn compile(
         #[cfg(feature = "render")]
         draw_pools: DrawPools::new(config.draw_pools),
     })
+}
+
+/// Hands every module the window corners it stands at.
+///
+/// The root of a layout is the window, so it owns all four; a split keeps the
+/// pair across its axis whole for every cell and gives the pair along it to the
+/// cells at its two ends. A branch that fills its parent's box - an optional
+/// block, an adaptive step - inherits what its parent was given. The corners a
+/// module ends up with are the ones its own frame radius may round, which is
+/// what makes the window round rather than the boxes inside it.
+///
+/// The end of a split is where the document puts it. A cell the host hides at
+/// runtime does not move the corner to its neighbour.
+fn round_corners(node: &mut CompiledNode, corners: FrameCorners) {
+    match node {
+        CompiledNode::Module { round, .. } => *round = corners,
+        CompiledNode::Optional { child, .. } => round_corners(child, corners),
+        CompiledNode::Adaptive { base, steps, .. } => {
+            round_corners(base, corners);
+            for (_, step) in steps {
+                round_corners(step, corners);
+            }
+        }
+        CompiledNode::Split { axis, children, .. } => {
+            let axis = *axis;
+            let last = children.len().saturating_sub(1);
+            for (index, cell) in children.iter_mut().enumerate() {
+                round_corners(&mut cell.node, cell_corners(axis, corners, index, last));
+            }
+        }
+    }
+}
+
+/// The corners one cell of a split inherits: the whole pair across the axis,
+/// and the pair along it only at the end the cell stands at.
+const fn cell_corners(
+    axis: Axis,
+    corners: FrameCorners,
+    index: usize,
+    last: usize,
+) -> FrameCorners {
+    let (start, end) = match axis {
+        Axis::Horizontal => (corners.left(), corners.right()),
+        Axis::Vertical => (corners.top(), corners.bottom()),
+    };
+    match (index == 0, index == last) {
+        (true, true) => corners,
+        (true, false) => start,
+        (false, true) => end,
+        (false, false) => FrameCorners::EMPTY,
+    }
 }
 
 struct Compiler<'a> {
@@ -375,6 +430,7 @@ impl Compiler<'_> {
                     chrome: expanded.chrome,
                     frame: *frame,
                     corners: *corners,
+                    round: FrameCorners::EMPTY,
                     footer: expanded.footer,
                     drop: expanded.drop,
                     collapsed: expanded.collapsed,

@@ -62,6 +62,7 @@ fn immediate(boot: Boot) -> Result<(), FrontendError> {
     )
     .title(Kithara::title)
     .theme(Kithara::theme)
+    .style(Kithara::style)
     .subscription(Kithara::subscription)
     .default_font(fonts::SANS);
     fonts::FONT_BYTES
@@ -112,6 +113,7 @@ pub(crate) fn window_settings(min: Size) -> Settings {
         min_size: Some(min),
         decorations: false,
         exit_on_close_request: false,
+        transparent: true,
         ..Settings::default()
     }
 }

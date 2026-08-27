@@ -14,7 +14,10 @@ mod steady;
 #[cfg(test)]
 mod walk;
 
-use iced::{Element, Size, Subscription, Task, Theme, time as iced_time, window, window::Settings};
+use iced::{
+    Color, Element, Size, Subscription, Task, Theme, theme, theme::Base, time as iced_time, window,
+    window::Settings,
+};
 use kithara_platform::time::Duration;
 use kithara_ui::{
     builtin,
@@ -118,6 +121,7 @@ impl Gallery {
             min_size: Some(Size::new(Consts::MIN_WIDTH, Consts::MIN_HEIGHT)),
             decorations: false,
             exit_on_close_request: false,
+            transparent: true,
             ..Settings::default()
         };
         let (window_id, open) = window::open(settings);
@@ -206,6 +210,7 @@ fn main() -> iced::Result {
     let daemon = iced::daemon(Gallery::new, update, view)
         .title(|_state: &Gallery, _window| "Kithara UI Gallery".to_owned())
         .theme(|state: &Gallery, _window| theme(state.skin()))
+        .style(|_state: &Gallery, theme: &Theme| window_style(theme))
         .subscription(subscription)
         .default_font(fonts::SANS);
     fonts::FONT_BYTES
@@ -314,11 +319,21 @@ fn compiled(
     .unwrap_or_else(|error| panic!("embedded gallery document {entry} must compile: {error}"))
 }
 
+/// The window paints no ground of its own: the document lays down the page in
+/// the shape the skin gives the window, and whatever the shape leaves out is
+/// the desktop behind it.
+fn window_style(theme: &Theme) -> theme::Style {
+    theme::Style {
+        background_color: Color::TRANSPARENT,
+        text_color: theme.base().text_color,
+    }
+}
+
 fn theme(skin: &Skin) -> Theme {
     let palette = skin.palette;
     Theme::custom(
         "Kithara".to_owned(),
-        iced::theme::Palette {
+        theme::Palette {
             background: palette.bg.into(),
             text: palette.text.into(),
             primary: palette.accent.into(),

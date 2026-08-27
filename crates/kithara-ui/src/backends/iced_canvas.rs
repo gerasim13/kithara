@@ -323,7 +323,7 @@ fn rule(geom: &Geom) -> fill::Rule {
     }
 }
 
-fn path(geom: &Geom) -> Path {
+pub(crate) fn path(geom: &Geom) -> Path {
     match geom {
         Geom::Arc {
             center,

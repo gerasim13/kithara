@@ -10,7 +10,7 @@ mod wave;
 mod wheel;
 
 pub(crate) use anchored::{Anchored, Placement};
-pub(crate) use chrome::{DropZone, ModuleChrome, frame_overlay};
+pub(crate) use chrome::{DropZone, ModuleChrome, corner_radius, frame_overlay};
 pub(crate) use custom::Custom;
 pub use preview::LayoutPreview;
 pub(crate) use text::Text;

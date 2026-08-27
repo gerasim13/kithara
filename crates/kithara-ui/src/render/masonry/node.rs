@@ -23,6 +23,7 @@ use super::{
     picker::{HostedEngine, local_ime_area, sync_ime_area},
 };
 use crate::{
+    atoms::design::corner::{corner_frame, corner_path},
     backends::VelloBackend,
     draw::{DrawListBuilder, Pt, Rect, Rgba, Transform, replay},
     interact::{
@@ -32,7 +33,7 @@ use crate::{
             portable_text_input,
         },
     },
-    layout::FrameSides,
+    layout::{FrameCorners, FrameSides},
     render::{ReadValue, document::Ctx, shader::ShaderDeclaration, vis::VisFrame},
     solve,
 };
@@ -52,6 +53,8 @@ pub(crate) struct Node {
     secondary: Option<Box<dyn Fn() -> HostAction>>,
     background: Option<Rgba>,
     frame: Option<(FrameSides, Rgba, f32)>,
+    round: FrameCorners,
+    radius: f32,
     double_click: bool,
     pointer: Option<(Pt, Pt)>,
     pointer_owner: Option<NodePointerOwner>,
@@ -76,6 +79,8 @@ impl Node {
             secondary: None,
             background,
             frame,
+            round: FrameCorners::EMPTY,
+            radius: 0.0,
             double_click: false,
             pointer: None,
             pointer_owner: None,
@@ -376,9 +381,21 @@ impl Node {
     }
 
     fn paint_background(&self, bounds: Rect, list: &mut DrawListBuilder) {
-        if let Some(color) = self.background {
+        let Some(color) = self.background else {
+            return;
+        };
+        if self.rounded() {
+            list.fill_path(corner_path(bounds, self.radius, self.round), color);
+        } else {
             list.fill_rect(bounds, color);
         }
+    }
+
+    /// Whether this node stands at a window corner the skin gives a radius to.
+    /// Everywhere else the box is square, and the square path is the one that
+    /// matches the other host pixel for pixel.
+    const fn rounded(&self) -> bool {
+        self.round.any() && self.radius > 0.0
     }
 
     /// A frame is drawn over whatever the node holds, not under it: a child
@@ -389,6 +406,10 @@ impl Node {
         let Some((sides, color, width)) = self.frame else {
             return;
         };
+        if self.rounded() {
+            corner_frame(list, bounds, self.radius, self.round, sides, color, width);
+            return;
+        }
         // A frame belongs to the box it frames, so each side is filled just
         // inside it. A line stroked along the edge is centred on the edge, so
         // half of it falls outside the box and a width of one pixel lands
@@ -446,6 +467,14 @@ impl Node {
     ) {
         self.primary = primary;
         self.secondary = secondary;
+    }
+
+    /// Which of this node's corners are the window's own, and how far they are
+    /// rounded. Both come from the mount: the corners from where the layout
+    /// puts the node, the radius from the skin.
+    pub(super) const fn set_round(&mut self, round: FrameCorners, radius: f32) {
+        self.round = round;
+        self.radius = radius;
     }
 
     pub(super) fn set_engine(&mut self, engine: Rc<HostedEngine>) {
@@ -785,6 +814,19 @@ mod tests {
         )
     }
 
+    /// The same node, standing at every corner of a window the skin rounds.
+    fn at_a_window_corner() -> Node {
+        let mut node = framed();
+        node.set_round(FrameCorners::ALL, 6.0);
+        node
+    }
+
+    fn painted(node: &Node, paint: impl FnOnce(&Node, &mut DrawListBuilder)) -> Vec<DrawCmd> {
+        let mut list = DrawListBuilder::default();
+        paint(node, &mut list);
+        list.finish().commands().to_vec()
+    }
+
     fn drawn(paint: impl FnOnce(&Node, &mut DrawListBuilder)) -> Vec<DrawCmd> {
         let node = framed();
         let mut list = DrawListBuilder::default();
@@ -850,6 +892,52 @@ mod tests {
             ],
             "each side belongs just inside the box it frames: {commands:?}"
         );
+    }
+
+    /// At a window corner the ground is one path and not a rectangle: a
+    /// rectangle has no corner to take off.
+    #[kithara::test]
+    fn a_node_at_a_window_corner_lays_its_ground_down_as_a_path() {
+        let commands = painted(&at_a_window_corner(), |node, list| {
+            node.paint_background(Fixture::BOX, list);
+        });
+
+        assert!(
+            matches!(
+                commands.as_slice(),
+                [DrawCmd::Fill {
+                    geom: Geom::Path(_),
+                    ..
+                }]
+            ),
+            "a rounded ground is one path: {commands:?}"
+        );
+    }
+
+    /// The frame at a window corner is one band that follows the corner round,
+    /// not the four straight sides a square box is framed with.
+    #[kithara::test]
+    fn a_node_at_a_window_corner_draws_its_frame_as_one_band() {
+        let commands = painted(&at_a_window_corner(), |node, list| {
+            node.paint_frame(Fixture::BOX, list);
+        });
+
+        assert!(
+            matches!(commands.as_slice(), [DrawCmd::Clip { .. }]),
+            "a rounded frame is one clipped band: {commands:?}"
+        );
+    }
+
+    /// A node the skin gives a radius but the layout puts nowhere near a window
+    /// corner is framed with the same four sides as any other box.
+    #[kithara::test]
+    fn a_radius_alone_does_not_round_a_node_away_from_the_window_corner() {
+        let mut node = framed();
+        node.set_round(FrameCorners::EMPTY, 6.0);
+
+        let commands = painted(&node, |node, list| node.paint_frame(Fixture::BOX, list));
+
+        assert_eq!(rects(&commands).len(), 4, "{commands:?}");
     }
 
     #[kithara::test]
