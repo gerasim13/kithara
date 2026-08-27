@@ -11,7 +11,7 @@ use crate::{
         LayoutSkin, MenuSkin, MeterSkin, NavSkin, PopSkin, PortalMapSkin, RangeSkin, ReadoutSkin,
         ScrollSkin, SegmentedSkin, SelectSkin, SkinDoc, StatusDotSkin, SwatchSkin, TabLargeSkin,
         TableSkin, TelemetrySkin, TextRoleSkin, TextSkin, ToggleSkin, TreeSkin, VisSkin,
-        VuStereoSkin, VuVerticalSkin, WaveSkin, WindowSkin,
+        VuStereoSkin, VuVerticalSkin, WaveSkin, WindowSkin, skin_sections,
     },
     text::TextDoc,
 };
@@ -25,57 +25,59 @@ pub struct CrossfaderLabels {
     pub right: String,
 }
 
-/// Resolved skin consumed by renderers.
-#[derive(Clone, Debug, PartialEq, fieldwork::Fieldwork)]
-#[non_exhaustive]
-#[fieldwork(opt_in, get)]
-pub struct Skin {
-    pub button: ButtonSkin,
-    pub cell: CellSkin,
-    pub checkbox: CheckboxSkin,
-    pub chip: ChipSkin,
-    pub chrome: ChromeSkin,
-    pub crossfader: CrossfaderSkin,
-    pub deck: DeckSkin,
-    pub divider: DividerSkin,
-    pub drag: DragSkin,
-    pub fader: FaderSkin,
-    pub global_bar: GlobalBarSkin,
-    pub knob: KnobSkin,
-    pub layout_preview: LayoutPreviewSkin,
-    pub layout: LayoutSkin,
-    pub menu: MenuSkin,
-    pub meter: MeterSkin,
-    pub nav: NavSkin,
-    pub pop: PopSkin,
-    pub portal_map: PortalMapSkin,
-    pub range: RangeSkin,
-    pub readout: ReadoutSkin,
-    pub palette: RenderPalette,
-    pub segmented: SegmentedSkin,
-    pub select: SelectSkin,
-    pub status_dot: StatusDotSkin,
-    pub scroll: ScrollSkin,
-    pub swatch: SwatchSkin,
-    pub tab_large: TabLargeSkin,
-    pub telemetry: TelemetrySkin,
-    pub text: TextSkin,
-    pub toggle: ToggleSkin,
-    pub table: TableSkin,
-    pub tree: TreeSkin,
-    pub crossfader_labels: CrossfaderLabels,
-    pub table_footer_rows: String,
-    pub tree_search_placeholder: String,
-    pub vis: VisSkin,
-    pub vu_stereo: VuStereoSkin,
-    pub vu_vertical: VuVerticalSkin,
-    pub wave: WaveSkin,
-    pub window: WindowSkin,
-    #[field(get, vis = "pub(crate)")]
-    text_resources: TextResources,
-    #[field(get, vis = "pub(crate)")]
-    document: SkinDoc,
+/// Both the resolved skin a renderer reads and the resolve step that fills it
+/// in: one arm per section, expanded from the document's own section list, so
+/// a new section reaches the renderers by being declared once.
+macro_rules! define_skin {
+    ($($field:ident: $section:ident => $patch:ident,)*) => {
+        /// Resolved skin consumed by renderers.
+        #[derive(Clone, Debug, PartialEq, fieldwork::Fieldwork)]
+        #[non_exhaustive]
+        #[fieldwork(opt_in, get)]
+        pub struct Skin {
+            pub palette: RenderPalette,
+            pub crossfader_labels: CrossfaderLabels,
+            pub table_footer_rows: String,
+            pub tree_search_placeholder: String,
+            $(pub $field: $section,)*
+            #[field(get, vis = "pub(crate)")]
+            text_resources: TextResources,
+            #[field(get, vis = "pub(crate)")]
+            document: SkinDoc,
+        }
+
+        impl Skin {
+            /// Resolves a parsed document under an explicit font policy.
+            ///
+            /// # Errors
+            /// Returns [`UiDocError`] when a palette value or embedded font is
+            /// invalid, or [`UiDocError::UnknownTextKey`] when `catalog` is
+            /// missing a caption.
+            pub fn resolve_with_font_policy(
+                document: SkinDoc,
+                catalog: &TextDoc,
+                origin: &SourceUri,
+                font_policy: FontPolicy,
+            ) -> Result<Self, UiDocError> {
+                Ok(Self {
+                    palette: RenderPalette::resolve(&document.palette, origin)?,
+                    crossfader_labels: CrossfaderLabels {
+                        left: text_field(catalog, "crossfader.left_label", origin)?,
+                        center: text_field(catalog, "crossfader.center_label", origin)?,
+                        right: text_field(catalog, "crossfader.right_label", origin)?,
+                    },
+                    table_footer_rows: text_field(catalog, "table.footer_rows", origin)?,
+                    tree_search_placeholder: text_field(catalog, "tree.search_placeholder", origin)?,
+                    $($field: document.$field,)*
+                    text_resources: TextResources::new(font_policy)?,
+                    document,
+                })
+            }
+        }
+    };
 }
+
+skin_sections!(define_skin);
 
 /// The one rule that picks between a node's own colour and its active one.
 ///
@@ -137,68 +139,6 @@ impl Skin {
         origin: &SourceUri,
     ) -> Result<Self, UiDocError> {
         Self::resolve_with_font_policy(document, catalog, origin, FontPolicy::System)
-    }
-
-    /// Resolves a parsed document under an explicit font policy.
-    ///
-    /// # Errors
-    /// Returns [`UiDocError`] when a palette value or embedded font is invalid,
-    /// or [`UiDocError::UnknownTextKey`] when `catalog` is missing a caption.
-    pub fn resolve_with_font_policy(
-        document: SkinDoc,
-        catalog: &TextDoc,
-        origin: &SourceUri,
-        font_policy: FontPolicy,
-    ) -> Result<Self, UiDocError> {
-        Ok(Self {
-            palette: RenderPalette::resolve(&document.palette, origin)?,
-            layout: document.layout,
-            chrome: document.chrome,
-            window: document.window,
-            knob: document.knob,
-            crossfader: document.crossfader,
-            crossfader_labels: CrossfaderLabels {
-                left: text_field(catalog, "crossfader.left_label", origin)?,
-                center: text_field(catalog, "crossfader.center_label", origin)?,
-                right: text_field(catalog, "crossfader.right_label", origin)?,
-            },
-            vu_stereo: document.vu_stereo,
-            vu_vertical: document.vu_vertical,
-            vis: document.vis,
-            toggle: document.toggle,
-            checkbox: document.checkbox,
-            readout: document.readout,
-            chip: document.chip,
-            button: document.button,
-            nav: document.nav,
-            tab_large: document.tab_large,
-            text: document.text,
-            menu: document.menu,
-            pop: document.pop,
-            portal_map: document.portal_map,
-            range: document.range,
-            segmented: document.segmented,
-            select: document.select,
-            status_dot: document.status_dot,
-            scroll: document.scroll,
-            swatch: document.swatch,
-            cell: document.cell,
-            fader: document.fader,
-            wave: document.wave,
-            deck: document.deck,
-            global_bar: document.global_bar,
-            divider: document.divider,
-            drag: document.drag,
-            meter: document.meter,
-            telemetry: document.telemetry,
-            tree: document.tree,
-            tree_search_placeholder: text_field(catalog, "tree.search_placeholder", origin)?,
-            table: document.table,
-            table_footer_rows: text_field(catalog, "table.footer_rows", origin)?,
-            layout_preview: document.layout_preview,
-            text_resources: TextResources::new(font_policy)?,
-            document,
-        })
     }
 }
 

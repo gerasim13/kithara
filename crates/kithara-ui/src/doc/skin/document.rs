@@ -125,6 +125,8 @@ macro_rules! define_skin_doc {
     };
 }
 
+pub(crate) use skin_sections;
+
 skin_sections!(define_skin_doc);
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
