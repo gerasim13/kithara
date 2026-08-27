@@ -207,6 +207,7 @@ where
             media_info: user_media_info,
             pcm_buffer_chunks,
             pcm_pool,
+            observer,
             playback_rate: config_playback_rate,
             stretch,
             engine_load,
@@ -274,7 +275,6 @@ where
             total_duration,
         );
         let wake_stream = shared_stream.clone();
-        let renderer_playhead = shared_stream.playhead_write();
         let preload_gate = Arc::new(super::PreloadGate::default());
         let (data_tx, trash_inlet, ring) = prepare_pcm_ring(
             pcm_buffer_chunks,
@@ -291,7 +291,7 @@ where
                 create_decoder_factory(&deps, &epoch, user_media_info),
                 initial_media_info.clone(),
             )
-            .into_parts(effects, shared_stream.seek_observe().epoch());
+            .into_parts(effects, observer, shared_stream.seek_observe().epoch());
         let parts = SourceParts::new(
             &shared_stream,
             decode,
@@ -310,7 +310,7 @@ where
             outlet: data_tx,
             preload_gate: Arc::clone(&preload_gate),
             preload_chunks: preload_chunks.get(),
-            playhead: renderer_playhead as Arc<dyn PlayheadRead>,
+            playhead: Arc::clone(&playhead) as Arc<dyn PlayheadRead>,
             emit: Arc::clone(&emit),
             service_class: Arc::clone(&service_class),
             engine_load,

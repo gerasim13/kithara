@@ -577,6 +577,10 @@ to consumer crates. Tunables live in `AnalysisParams`.
 - **Source-only invariant**: analysis runs on the decoded SOURCE signal, never
   post-EQ / post-timestretch / post-resample output. Playback-rate and mixer
   transforms remap only the time axis and never re-run analysis.
+- **Playback observation is separate**: the optional `PcmObserver` sees the
+  playback decoder output before playback effects. Its `PcmChunk::meta.spec` is
+  authoritative and may already reflect decoder-side sample-rate conversion;
+  source-rate offline analysis does not consume this feed.
 - **`Bucket { low, mid, high }`** are three independent band heights per bucket,
   each normalized to `[0, 1]` on one shared scale — not a single bar plus a
   colour. The deck paints them as concentric mirrored bars, so the tallest is the

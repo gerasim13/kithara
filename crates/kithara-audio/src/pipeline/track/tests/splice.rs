@@ -469,7 +469,7 @@ async fn splice_source(variants: Vec<VariantLayout>) -> SpliceFixture {
         pcm_pool: PcmPool::default(),
         recreate_on_host_rate_change: false,
     }
-    .into_parts(effects, shared_stream.seek_observe().epoch());
+    .into_parts(effects, None, shared_stream.seek_observe().epoch());
     let parts = SourceParts::new(
         &shared_stream,
         decode,

@@ -43,7 +43,7 @@ pub use pipeline::{
 pub use region::{ActiveRegion, RegionPlan, RegionPlanError};
 pub use renderer::{AudioWorkerHandle, EngineLoad, EngineLoadSnapshot, PreloadGate, ServiceClass};
 pub use traits::{
-    AudioEffect, ChunkOutcome, DecodeError, DecodeResult, PcmControl, PcmRead, PcmReader,
-    PcmSession, PcmSource, PendingReason, ReadOutcome, SeekBegin, SeekOutcome,
+    AudioEffect, ChunkOutcome, DecodeError, DecodeResult, PcmControl, PcmObserveError, PcmObserver,
+    PcmRead, PcmReader, PcmSession, PcmSource, PendingReason, ReadOutcome, SeekBegin, SeekOutcome,
 };
 pub use waveform::{AnalysisParams, BeatGrid, Bucket, GridSegment, bucket::Waveform};

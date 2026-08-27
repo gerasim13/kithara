@@ -37,7 +37,7 @@ use crate::{
         track::{TrackFailure, WaitingReason},
     },
     renderer::{apply_effects, reset_effects},
-    traits::AudioEffect,
+    traits::{AudioEffect, PcmObserver},
 };
 
 type DecoderBuilder =
@@ -122,6 +122,7 @@ impl DecodeInit {
     pub(crate) fn into_parts(
         self,
         effects: Vec<Box<dyn AudioEffect>>,
+        observer: Option<Box<dyn PcmObserver>>,
         installed_at_seek_epoch: u64,
     ) -> DecodeParts {
         let decoder_host_sample_rate = self.decoder_host_sample_rate();
@@ -151,7 +152,14 @@ impl DecodeInit {
             decoder_host_sample_rate,
             decoder_backend,
             playback_resampler_backend,
-            active: ActiveDecode::new(active, gapless_mode, effects, &byte_pool, &pcm_pool),
+            active: ActiveDecode::new(
+                active,
+                gapless_mode,
+                effects,
+                observer,
+                &byte_pool,
+                &pcm_pool,
+            ),
             factory: decoder_factory,
         }
     }
@@ -171,6 +179,7 @@ pub(crate) struct ActiveDecode {
     #[field(get, vis = "pub(crate)", copy)]
     gapless_mode: GaplessMode,
     effects: Vec<Box<dyn AudioEffect>>,
+    observer: Option<Box<dyn PcmObserver>>,
     rejected_chunk: Option<PcmChunk>,
     stage_error: Option<DecodeError>,
 }
@@ -200,6 +209,7 @@ impl ActiveDecode {
         active: DecoderGeneration,
         gapless_mode: GaplessMode,
         effects: Vec<Box<dyn AudioEffect>>,
+        observer: Option<Box<dyn PcmObserver>>,
         byte_pool: &BytePool,
         pcm_pool: &PcmPool,
     ) -> Self {
@@ -210,6 +220,7 @@ impl ActiveDecode {
             gapless_mode,
             blender,
             effects,
+            observer,
             drain,
             incoming: None,
             announced_hold: None,
@@ -295,6 +306,9 @@ impl ActiveDecode {
                 return Ok(None);
             };
             cursor.record(&chunk, epoch);
+            if let Some(observer) = &mut self.observer {
+                let _observation = observer.try_observe(&chunk);
+            }
             let chunk = self.blender.process_active(chunk);
             if let Some(output) = apply_effects(&mut self.effects, chunk) {
                 return Ok(Some(output));
@@ -446,9 +460,13 @@ mod tests {
         AudioCodec, ContainerFormat, PendingReason, PrerollHint, ReaderInput, VariantTransition,
         VariantTransitionId,
     };
+    use unimock::{MockFn, Unimock, matching};
 
     use super::*;
-    use crate::pipeline::decode::transition::IncomingPrime;
+    use crate::{
+        pipeline::decode::transition::IncomingPrime,
+        traits::{AudioEffectMock, PcmObserveError, PcmObserverMock},
+    };
 
     struct DeferredSpecEffect {
         channels: Arc<AtomicU32>,
@@ -479,9 +497,25 @@ mod tests {
         gapless_mode: GaplessMode,
         effects: Vec<Box<dyn AudioEffect>>,
     ) -> ActiveDecode {
+        active_decode_with_observer(active, gapless_mode, effects, None)
+    }
+
+    fn active_decode_with_observer(
+        active: DecoderGeneration,
+        gapless_mode: GaplessMode,
+        effects: Vec<Box<dyn AudioEffect>>,
+        observer: Option<Box<dyn PcmObserver>>,
+    ) -> ActiveDecode {
         let byte_pool = BytePool::default();
         let pcm_pool = PcmPool::default();
-        ActiveDecode::new(active, gapless_mode, effects, &byte_pool, &pcm_pool)
+        ActiveDecode::new(
+            active,
+            gapless_mode,
+            effects,
+            observer,
+            &byte_pool,
+            &pcm_pool,
+        )
     }
 
     #[kithara::test]
@@ -554,6 +588,62 @@ mod tests {
                 .is_some()
         );
         assert_eq!(decode.active().staged_capacity(), initial_capacity);
+    }
+
+    #[kithara::test]
+    #[case(PcmObserveError::Full)]
+    #[case(PcmObserveError::Closed)]
+    fn rejected_pcm_observation_sees_decoder_output_without_rejecting_playback(
+        #[case] rejection: PcmObserveError,
+    ) {
+        let spec = PcmSpec::new(2, NonZeroU32::new(44_100).expect("test rate"));
+        let observer = Unimock::new(
+            PcmObserverMock::try_observe
+                .next_call(matching!((chunk) if
+                    chunk.spec()
+                        == PcmSpec::new(
+                            2,
+                            NonZeroU32::new(44_100).expect("test rate"),
+                        )
+                        && chunk.samples.first() == Some(&0.25)
+                ))
+                .returns(Err(rejection)),
+        );
+        let effect = Unimock::new(AudioEffectMock::process.next_call(matching!(_)).answers(
+            &|_, mut chunk| {
+                chunk.samples.fill(0.5);
+                Some(chunk)
+            },
+        ));
+        let mut decode = active_decode_with_observer(
+            generation(spec),
+            GaplessMode::Disabled,
+            vec![Box::new(effect)],
+            Some(Box::new(observer)),
+        );
+        decode
+            .push(PcmChunk::new(
+                PcmMeta {
+                    spec,
+                    frames: 64,
+                    ..Default::default()
+                },
+                PcmPool::default().attach(vec![0.25; 64 * usize::from(spec.channels)]),
+            ))
+            .expect("fixture PCM is valid");
+        let mut cursor = ResumeCursor::new(
+            Arc::new(AtomicU32::new(spec.sample_rate.get())),
+            false,
+            spec.sample_rate.get(),
+        );
+
+        let output = decode
+            .next_output(&mut cursor, 0)
+            .expect("observer saturation does not fail playback")
+            .expect("observer saturation does not consume playback PCM");
+
+        assert_eq!(output.frames(), 64);
+        assert_eq!(output.samples.first(), Some(&0.5));
     }
 
     #[kithara::test]

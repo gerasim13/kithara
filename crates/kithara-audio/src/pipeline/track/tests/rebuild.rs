@@ -806,7 +806,7 @@ async fn test_source_with_mode(variant: u32, gapless_mode: GaplessMode) -> Rebui
         pcm_pool: PcmPool::default(),
         recreate_on_host_rate_change: true,
     }
-    .into_parts(Vec::new(), shared_stream.seek_observe().epoch());
+    .into_parts(Vec::new(), None, shared_stream.seek_observe().epoch());
     let parts = SourceParts::new(
         &shared_stream,
         decode,
@@ -996,7 +996,7 @@ async fn route_source(params: RouteParams, effects: Vec<Box<dyn AudioEffect>>) -
         pcm_pool: PcmPool::default(),
         recreate_on_host_rate_change: true,
     }
-    .into_parts(effects, shared_stream.seek_observe().epoch());
+    .into_parts(effects, None, shared_stream.seek_observe().epoch());
     let parts = SourceParts::new(
         &shared_stream,
         decode,

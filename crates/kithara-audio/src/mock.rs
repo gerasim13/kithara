@@ -1,3 +1,3 @@
 pub use crate::traits::{
-    AudioEffectMock, PcmControlMock, PcmReadMock, PcmSessionMock, PcmSourceMock,
+    AudioEffectMock, PcmControlMock, PcmObserverMock, PcmReadMock, PcmSessionMock, PcmSourceMock,
 };

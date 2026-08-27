@@ -39,6 +39,7 @@ mod native {
     use kithara_assets::{AssetStore, StorageBackend};
     use kithara_file::{FileConfig, FileSrc};
     use kithara_resampler::NoResamplerBackend;
+    use unimock::Unimock;
 
     use super::*;
     use crate::pipeline::config::{AudioConfig, ConsumerWakeMode};
@@ -80,6 +81,24 @@ mod native {
             config.consumer_wake_mode(),
             ConsumerWakeMode::RealtimeDeferred
         );
+    }
+
+    #[kithara::test]
+    fn audio_config_observer_is_optional_and_configurable() {
+        let default =
+            AudioConfig::<kithara_file::File, NoResamplerBackend>::for_stream(file_config())
+                .byte_pool(BytePool::default())
+                .pcm_pool(PcmPool::default())
+                .build();
+        let config =
+            AudioConfig::<kithara_file::File, NoResamplerBackend>::for_stream(file_config())
+                .byte_pool(BytePool::default())
+                .pcm_pool(PcmPool::default())
+                .observer(Box::new(Unimock::new(())))
+                .build();
+
+        assert!(default.observer.is_none());
+        assert!(config.observer.is_some());
     }
 }
 

@@ -12,7 +12,7 @@ use crate::{
     effects::timestretch::StretchControls,
     pipeline::config::AudioDecoderConfig,
     renderer::{AudioWorkerHandle, EngineLoad},
-    traits::AudioEffect,
+    traits::{AudioEffect, PcmObserver},
 };
 
 struct Consts;
@@ -93,6 +93,10 @@ pub struct AudioConfig<T: StreamType, B = NoResamplerBackend> {
     /// Shared PCM pool for temporary buffers.
     #[field(get)]
     pub(crate) pcm_pool: PcmPool,
+    /// Optional bounded, nonblocking observer of decoder-output PCM.
+    /// [`kithara_decode::PcmChunk::meta`] describes its post-conversion format;
+    /// it runs before playback effects and owns any asynchronous copy.
+    pub(crate) observer: Option<Box<dyn PcmObserver>>,
     /// Additional effects to append after decoder-domain processing.
     #[builder(default)]
     #[field(get)]
