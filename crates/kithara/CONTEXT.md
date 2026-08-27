@@ -18,14 +18,14 @@ Dependencies point strictly **downward**; nothing lower reaches back up into orc
                      |
                kithara-queue   (multi-track queue, auto-advance, pause gate)
                      |
-               kithara-play    (transport, worker, resident Warp/effects, sessions)
-                /      |      \
-     kithara-audio  kithara-warp  kithara-stretch
- (decode lifecycle,   (maps/groups +    (temporal DSP)
-  SRC, readiness,      identity Warp)
-  analysis)
-       /      |      \
- kithara-decode  kithara-beat  kithara-encode
+               kithara-play    (Player/deck, worker/scheduler, effects, sessions)
+                /          \
+     kithara-audio                    kithara-warp
+ (decoded PCM source,             (maps/groups + identity Warp
+  SRC, readiness,                  + synchronous WarpRenderer)
+  analysis input)                            |
+       /      |      \                 kithara-stretch
+ kithara-decode  kithara-beat  kithara-encode  (backend engines)
               |
    kithara-file   kithara-hls       ← protocol Peer/Source implementations
               \      /
@@ -54,15 +54,15 @@ are no-ops in production builds).
   sit *above* it; `kithara-abr`, `kithara-events`, `kithara-net`, and `kithara-storage` sit *below*.
 - **`kithara-assets`** sits beside storage (over storage/bufpool/drm/events) and is consumed by the protocol crates and
   everything above them. `kithara-stream` does **not** depend on it.
-- **`kithara-warp`** owns the pure `WarpMap` / `SyncGroup` synchronization contracts and the resident identity
-  `Warp<S>` wrapper carrying live stretch controls. It does not own source lifecycle, the worker, the Host/session, or
-  presentation acknowledgement; R7 does not yet connect map progress to the production render path.
-  `kithara-audio` consumes its backend-independent grid types, while only feature-enabled `kithara-warp` reaches
-  `kithara-stretch` for the shared backend selector type.
+- **`kithara-warp`** owns the `WarpMap` / `SyncGroup` synchronization contracts, the resident identity `Warp<S>`
+  wrapper carrying live stretch controls, and the synchronous `WarpRenderer` time-stretch stage. It does not own source
+  lifecycle, the worker, the Host/session, or presentation acknowledgement; R7 does not yet connect map progress to the
+  production render path. `kithara-audio` consumes its backend-independent grid types, while feature-enabled
+  `kithara-warp` delegates DSP to the backend engines owned by `kithara-stretch`.
 - **`kithara`** is the facade aggregating protocols + storage + net behind feature flags; `kithara-ffi` and `kithara-app`
   consume it rather than reaching into protocol crates for the playback path.
-- **Side branches:** `kithara-stretch` supplies temporal DSP to `kithara-play`; `kithara-warp` remains the
-  backend-independent temporal-control owner and only forwards an enabled backend selector feature. `kithara-beat`
+- **Side branches:** `kithara-stretch` supplies backend engines to the `kithara-warp` renderer; `kithara-warp` owns the
+  temporal-control protocol and synchronous time-stretch stage. `kithara-beat`
   supplies optional source analysis to `kithara-audio`; `kithara-resampler` serves decode/audio/play; `kithara-encode`
   depends only on `kithara-stream` and serves the integration harness and transcode; `kithara-ui` is the
   toolkit-independent UI model (RON skin/layout/module documents → `CompiledUi`) used by `kithara-app` under its `gui`
@@ -81,8 +81,9 @@ Pull-driven: each layer pulls from the one below; backpressure and wakeups propa
 1. **Decoded source.** `kithara-audio` owns decoder lifecycle, decoder-side sample-rate conversion, readiness,
   seek/recreate state, source analysis, and the worker-neutral prepared producer seam. It does not register playback
   nodes or apply playback effects.
-1. **Play / queue.** `kithara-play` owns `PlayWorker`, the per-track `DecoderNode`, resident identity `Warp<S>`, final
-  output admission, effects/time-stretch, engine-load measurement, transport, crossfade, and session hosting.
+1. **Play / queue.** `kithara-play` owns the Player/deck, `PlayWorker` scheduler, per-track `DecoderNode`, final output
+  admission, ordinary effects, engine-load measurement, transport, crossfade, and session hosting. It composes the
+  resident identity `Warp<S>` and synchronous `kithara-warp::WarpRenderer` time-stretch stage.
   `kithara-queue` stacks Players with auto-advance and a pause gate. R7 keeps `WarpMap` / `SyncGroup` actuation and
   presentation acknowledgement outside the production path.
 1. **Surfaces.** `kithara-ffi` exposes the `AudioPlayer` facade across the FFI / wasm boundary (worker-vs-main-thread
@@ -152,11 +153,13 @@ contracts whose owner is not obvious from the crate name:
 - blocking coordination, Mmap-vs-Mem, chunked atomic claim → `kithara-storage`
 - decoder lifecycle/SRC, source readiness, prepared producer seam, seek-epoch and format-change/recreate state machines
   → `kithara-audio`
-- `WarpMap` / `SyncGroup` contracts and resident identity `Warp<S>` controls → `kithara-warp`
+- `WarpMap` / `SyncGroup` contracts, resident identity `Warp<S>` controls, and synchronous `WarpRenderer` time-stretch
+  → `kithara-warp`; backend engines → `kithara-stretch`
 - gapless priming/trim, seek pre-roll, recreate/no-fallback strategy, read-ahead strand → `kithara-decode`
 - two-mode `wait_range`, variant switch + decoder-probe rebuild, init-segment routing, format-change byte ranges →
   `kithara-hls`
-- playback worker/node/final output, effects/time-stretch/load, atomic engine start, session hosting, announce contract,
+- Player/deck, playback worker/scheduler/node/final output, ordinary effects/load, atomic engine start, session hosting,
+  announce contract,
   RT-audio rtsan rules → `kithara-play`; select serialization race → `kithara-queue`
 - worker-vs-main-thread ownership, cfg-gating boundary, wasm postbuild → `kithara-ffi`; `ANALYSIS_BYTES_VERSION` cache
   identity → `kithara-app`

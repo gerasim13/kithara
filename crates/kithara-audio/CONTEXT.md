@@ -441,9 +441,10 @@ final grid cleanup. PCM windows and grid-cleanup scratch both come from the same
 `PcmPool` injected through `AnalyzerBuilder::with_pcm_pool`; grid cleanup does not
 construct or own a second pool.
 
-`AnalysisWorker<B>` / `AnalysisNode<B>` are a public handle over a second
-`runtime::Scheduler` named `kithara-analysis` with one long-lived `Idle`/`Heavy`
-node (absent on wasm32). Jobs carry caller-owned cancel tokens; `child_token()`
+`AnalysisWorker<B>` is the public handle over the private `AnalysisRunner` and
+its single long-lived `AnalysisNode<B>` on the existing `kithara-analysis`
+thread (absent on wasm32). It neither constructs nor shares the playback
+scheduler. Jobs carry caller-owned cancel tokens; `child_token()`
 hands out children of the worker's own job scope, so there is one cancel
 hierarchy, and the caller keeps at most one job in flight, cancelling the
 previous token to preempt. Results arrive on a `watch` channel: waveform first,
@@ -451,7 +452,7 @@ then waveform+beat when a beat pass is configured; on failure or cancel the
 sender drops without a value. The node owns the job receiver, the task FSM, and
 the single `Box<dyn BeatDetector>` taken at construction — detector ownership is
 never shared or locked. `Decode` consumes at most one chunk per tick. The
-scheduler park is flash-visible and `analyze` wakes it after enqueueing; no
+runner park is flash-visible and `analyze` wakes it after enqueueing; no
 sleep, backoff loop, or poll watcher. `AnalysisObserver` keeps the normal
 no-progress watchdog and separately classifies returned heavy ticks against a
 120-second budget; a detector call is indivisible, so an over-budget call can

@@ -101,7 +101,7 @@ carries `speed` + `region_plan`; with a native backend compiled by
 `keylock` and `backend`. `Queue` delegates the target to the player; key-lock
 and backend are set directly on the same handle.
 
-The canonical controls are seeded before a track is loaded; the RT processor
+The canonical controls are seeded before a track is loaded; the `WarpRenderer`
 does not cache a second requested target. Each `PlayerTrack` reads the rate its
 resource currently applies on every render block, so a direct runtime change
 through the shared controls updates its media clock as well as its DSP. The
@@ -125,7 +125,7 @@ Fixed-ratio sample-rate conversion is a separate stage: Apple fused builds use t
 placement, other builds the standalone decode-adapter resampler.
 
 `RegionPlan` lives in `kithara-warp`. Its sorted, non-overlapping segments are
-expressed in source-frame space; the processor splits chunks at region
+expressed in source-frame space; the renderer splits chunks at region
 boundaries and combines `1/speed` with each segment's finite positive ratio.
 A region boundary preserves backend history and is not a source
 discontinuity. Stretch changes output frame count, not `PcmSpec.sample_rate`,
@@ -503,8 +503,8 @@ resampler fields.
 | `apple-fused-src` | no | Apple fused decode+SRC via decoder-embedded resampler placement |
 | `resample-rubato` | yes | Default fixed-ratio Rubato backend |
 | `resample-glide` | no | Glide resampler backend for explicit config selection |
-| `stretch-signalsmith` | yes | Signalsmith backend for the play-owned time-stretch stage and resident Warp controls |
-| `stretch-bungee` | no | Bungee backend for the play-owned time-stretch stage and resident Warp controls |
+| `stretch-signalsmith` | yes | Forward the Signalsmith engine to the warp-owned time-stretch renderer |
+| `stretch-bungee` | no | Forward the Bungee engine to the warp-owned time-stretch renderer |
 | `analysis-beat` | yes | Beat-analysis pass forwarding; absent from Apple FFI device sets |
 | `analysis-waveform` | yes | RealFFT waveform analyzer forwarding |
 | `client-reqwest` | yes | Forward the reqwest HTTP backend to network-reaching deps |

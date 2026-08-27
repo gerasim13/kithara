@@ -17,11 +17,14 @@ flowchart LR
     PR -->|"read / seek"| APP[Your audio callback]
 ```
 
-`kithara-audio` prepares the decoded source and reader seam. `kithara-play`
-owns the worker, per-track node, resident identity Warp controls, effects, and
-final output admission before `read()` reaches the callback. R7 does not yet
-drive `WarpMap` progress or presentation acknowledgement. The optional
-`EventBus` (`resource.event_bus()`) is a side-channel for observability — decode
+`kithara-audio` prepares the decoded PCM source and analysis input seam.
+`kithara-play` owns the Player/deck, `PlayWorker` scheduler, per-track node,
+ordinary post-Warp effects, and final output admission before `read()` reaches
+the callback. It composes the resident `Warp<S>` and synchronous
+`kithara-warp::WarpRenderer`; `kithara-warp` owns the Warp protocol and
+time-stretch stage, while `kithara-stretch` supplies its backend engines. R7
+does not yet drive `WarpMap` progress or presentation acknowledgement. The
+optional `EventBus` (`resource.event_bus()`) is a side-channel for observability — decode
 progress, buffering, HLS variant switches — and never sits in the audio path.
 
 ## Features
@@ -46,9 +49,9 @@ progress, buffering, HLS variant switches — and never sits in the audio path.
 
 <tr><td><code>analysis-waveform</code></td><td>yes</td><td>RealFFT waveform analyzer in <code>kithara-audio</code>; waveform/blob types remain unconditional</td></tr>
 
-<tr><td><code>stretch-signalsmith</code></td><td>yes</td><td>Signalsmith time-stretch backend through <code>kithara-play</code> / <code>kithara-warp</code> / <code>kithara-stretch</code></td></tr>
+<tr><td><code>stretch-signalsmith</code></td><td>yes</td><td>Feature forwarded by <code>kithara-play</code> to the <code>kithara-warp</code> renderer; the Signalsmith engine lives in <code>kithara-stretch</code></td></tr>
 
-<tr><td><code>stretch-bungee</code></td><td>no</td><td>Bungee time-stretch backend through <code>kithara-play</code> / <code>kithara-warp</code> / <code>kithara-stretch</code></td></tr>
+<tr><td><code>stretch-bungee</code></td><td>no</td><td>Feature forwarded by <code>kithara-play</code> to the <code>kithara-warp</code> renderer; the Bungee engine lives in <code>kithara-stretch</code></td></tr>
 
 <tr><td><code>beat-nn</code></td><td>no</td><td>NN beat/downbeat detector through <code>kithara-audio</code> / <code>kithara-beat</code></td></tr>
 
@@ -125,8 +128,8 @@ feature-gated; `kithara::abr` and `kithara::drm` are exposed with `hls`. For
 advanced control — multi-slot engine, crossfade, EQ — reach into
 `kithara::play` (`Engine`, `Player`, `CrossfadeConfig`, `Equalizer`). The
 speed-control type `StretchControls` is re-exported even when no stretch backend
-is compiled; backend-specific `StretchKind`, `TimeStretchProcessor`, and
-`ElasticEngine` are gated on a native stretch backend.
+is compiled; the flat `StretchKind` re-export and
+`kithara::warp::WarpRenderer` are gated on a native stretch backend.
 `mock` macro is re-exported unconditionally; `test`, `fixture`, and `flash` are
 gated behind `probe`. The facade `flash` macro emits `kithara::platform::flash`
 paths so integration tests do not need a direct `kithara-platform` dependency.

@@ -51,7 +51,7 @@ cannot preserve this ordering does not implement `ElasticEngine`.
 Engines process interleaved `f32` PCM. `ElasticRequest` names exact non-empty source and output
 frame spans; their ratio is the only tempo control. `set_pitch(scale)` is independent (`1.0` keeps
 pitch locked), which preserves keylock without a second streaming API. Invalid preparation,
-requests, pitch or processing return `ElasticError`; the outer `AudioEffect::process` maps failure
+requests, pitch or processing return `ElasticError`; the outer `WarpRenderer::render` maps failure
 to "drop this chunk + warn", never a panic.
 
 The produce path must stay allocation-free. Callers provide fixed output slices from scratch
