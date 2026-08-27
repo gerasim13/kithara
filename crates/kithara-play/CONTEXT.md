@@ -93,15 +93,23 @@ The `PlayerEvent` / `ItemEvent` / `EngineEvent` / `SessionEvent` / `DjEvent` enu
 `SessionDuckingMode` is owned by this crate and maps `Off` / `Soft` / `Hard` to session-output
 gains `1.0` / `0.4` / `0.2`.
 
-**`ItemDidPlayToEnd` and `ItemDidFail` carry which slot stopped.** `process_notifications` drains
-*every* active slot, so a preloaded successor or a lingering predecessor decoding ahead publishes
-its own end — natural or failed — while the current track is seconds old. Only this crate knows
-which slot the phase holds, so both events carry the answer as `from_current_item` (`slot() ==
-Some(stopped_slot)`), taken in `dispatch_notification` before `finalize_handover_if_armed` can move
-the phase. Consumers must key auto-advance on that flag, never on `src`: `src` identifies a
-rendered resource, not a queue entry. With a crossfade the incoming slot was already promoted by
-`commit_next`, so the outgoing end reports `false` and the queue advances on its own pre-arm
-instead.
+**`ItemDidPlayToEnd` and `ItemDidFail` name which track in the arena stopped.**
+`process_notifications` drains *every* active slot, and a slot is a processor holding an arena of
+tracks rather than one track — so a stop says nothing on its own, and only this crate can say what
+it was. Both events carry the answer as `track: StoppedTrack`:
+
+- `Leading` — the track the listener is hearing. The only role that drives auto-advance.
+- `Outgoing` — the outgoing half of a crossfade. `commit_next` promotes the successor *inside* the
+  current slot (`CrossfadeStarted { from: slot, to: slot }`) and leaves it in the phase as the
+  activated `PendingNext`, so the faded-out track ends while its own slot is still the held one.
+  Slot identity alone would call it leading; the promoted `src` under it is what tells them apart.
+- `Background` — a slot the phase no longer holds: an orphan draining the last of its notifications
+  while a different track plays. A preloaded successor or a lingering predecessor decoding ahead
+  reaches its own end this way, seconds into the current track.
+
+The role is taken in `dispatch_notification` before `finalize_handover_if_armed` can move the
+phase, so it describes the arena as it was when the track stopped. Consumers must key auto-advance
+on it, never on `src`: `src` identifies a rendered resource, not a queue entry.
 
 ## Queue Auto-Advance
 

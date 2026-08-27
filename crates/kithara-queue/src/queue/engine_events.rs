@@ -1,8 +1,8 @@
 use std::sync::PoisonError;
 
 use kithara_events::{
-    AdvanceReason, AudioEvent, Envelope, Event, ItemEvent, PlayerEvent, QueueEvent, TrackId,
-    TrackStatus,
+    AdvanceReason, AudioEvent, Envelope, Event, ItemEvent, PlayerEvent, QueueEvent, StoppedTrack,
+    TrackId, TrackStatus,
 };
 use kithara_platform::{sync::Arc, tokio::sync::broadcast::error::TryRecvError};
 use tracing::debug;
@@ -113,13 +113,14 @@ impl Queue {
         self.advance_loaded_successor(entry.id, Transition::Crossfade);
     }
 
-    /// Gated on `from_current_item` for the same reason as
-    /// [`Self::handle_item_did_play_to_end`]: the player reports the slot
-    /// that aborted, not the one being heard. A background slot's failure
-    /// must neither skip the current track nor flag a queue entry — the
-    /// event carries no track identity beyond `src`, and `track_id_for_src`
-    /// resolves it to the first entry with that source.
-    pub(super) fn handle_item_did_fail(&self, src: &Arc<str>, from_current_item: bool) {
+    /// Gated on `track` for the same reason as
+    /// [`Self::handle_item_did_play_to_end`]: the player reports the track
+    /// that aborted, not the one being heard. Only a leading track's
+    /// failure may skip and flag — the event carries no identity the queue
+    /// can resolve, and `track_id_for_src` returns the first entry with a
+    /// matching source, so acting on any other role can take the wrong
+    /// entry out of selection for the rest of the session.
+    pub(super) fn handle_item_did_fail(&self, src: &Arc<str>, track: StoppedTrack) {
         let snap = self.player.playback_snapshot();
         let pos = snap.map_or(0.0, |s| s.position());
         let dur = snap.map_or(0.0, |s| s.duration());
@@ -136,8 +137,8 @@ impl Queue {
         if self.consume_armed_advance(ended_id, pos, dur) {
             return;
         }
-        if !from_current_item {
-            debug!(%src, pos, dur, "filtered ItemDidFail from a background slot");
+        if !track.is_leading() {
+            debug!(%src, pos, dur, ?track, "not the leading track: not failing the queue entry");
             return;
         }
         if let Some(id) = ended_id {
@@ -154,12 +155,12 @@ impl Queue {
         let _ = self.advance_to_next(Transition::None, AdvanceReason::TrackFailed);
     }
 
-    /// `from_current_item` is the player's verdict on whether the slot
-    /// that ended is the one being heard. The player walks every active
-    /// slot, so a preloaded successor or a lingering predecessor that
-    /// decodes ahead reports its own end while the current track still
-    /// has minutes left; advancing on that end cuts the current track.
-    pub(super) fn handle_item_did_play_to_end(&self, src: &Arc<str>, from_current_item: bool) {
+    /// `track` is the player's verdict on which track in its arena ended.
+    /// The player drains every active slot, and one slot holds more than
+    /// one track, so an end says nothing on its own: an orphaned slot or
+    /// the outgoing half of a crossfade reports its own end while the
+    /// track being heard has minutes left. Only `Leading` advances.
+    pub(super) fn handle_item_did_play_to_end(&self, src: &Arc<str>, track: StoppedTrack) {
         let snap = self.player.playback_snapshot();
         let pos = snap.map_or(0.0, |s| s.position());
         let dur = snap.map_or(0.0, |s| s.duration());
@@ -176,8 +177,8 @@ impl Queue {
         if self.consume_armed_advance(ended_id, pos, dur) {
             return;
         }
-        if !from_current_item {
-            debug!(%src, pos, dur, "filtered ItemDidPlayToEnd from a background slot");
+        if !track.is_leading() {
+            debug!(%src, pos, dur, ?track, "not the leading track: not advancing");
             return;
         }
         if src.is_empty() {
@@ -189,19 +190,11 @@ impl Queue {
 
     pub(super) fn process_player_event(&self, ev: &Event) {
         match ev {
-            Event::Player(PlayerEvent::ItemDidPlayToEnd {
-                src,
-                from_current_item,
-                ..
-            }) => {
-                self.handle_item_did_play_to_end(src, *from_current_item);
+            Event::Player(PlayerEvent::ItemDidPlayToEnd { src, track, .. }) => {
+                self.handle_item_did_play_to_end(src, *track);
             }
-            Event::Player(PlayerEvent::ItemDidFail {
-                src,
-                from_current_item,
-                ..
-            }) => {
-                self.handle_item_did_fail(src, *from_current_item);
+            Event::Player(PlayerEvent::ItemDidFail { src, track, .. }) => {
+                self.handle_item_did_fail(src, *track);
             }
             Event::Player(PlayerEvent::CurrentItemChanged) => {
                 self.handle_current_item_changed();

@@ -11,6 +11,6 @@ pub use mix::{CrossfaderBus, crossfader_gain};
 pub use transport::{SessionTransportSnapshot, Tempo, TempoError, TransportRevision};
 pub use types::{
     DjEvent, EngineEvent, InterruptionKind, ItemEvent, ItemStatus, PlaybackDirection, PlayerEvent,
-    PlayerStatus, RouteChangeReason, SessionDuckingMode, SessionEvent, SlotId, TimeControlStatus,
-    TimeRange, TransportEvent, WaitingReason,
+    PlayerStatus, RouteChangeReason, SessionDuckingMode, SessionEvent, SlotId, StoppedTrack,
+    TimeControlStatus, TimeRange, TransportEvent, WaitingReason,
 };

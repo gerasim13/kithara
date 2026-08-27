@@ -16,6 +16,40 @@ pub enum PlayerStatus {
     Failed,
 }
 
+/// Which track in the player's arena a stop notification describes.
+///
+/// A slot is a processor holding an arena of tracks, not a single track:
+/// arming the successor loads it into the *current* slot, and a crossfade
+/// promotes it there (`CrossfadeStarted { from: slot, to: slot }`). So a
+/// stop is placed by two answers — which slot it came from, and which
+/// track inside that slot — and only the player holds both. Neither of the
+/// event's other fields substitutes: `src` names a rendered resource, not a
+/// queue entry, and `item_id` is a caller's label the queue never sets.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum StoppedTrack {
+    /// The track the listener is hearing. The only role that drives
+    /// auto-advance.
+    Leading,
+    /// The outgoing half of a crossfade: still inside the current slot,
+    /// but the incoming track has already been promoted over it. Its end
+    /// is expected and carries no instruction.
+    Outgoing,
+    /// A slot the phase no longer holds — an orphan draining the last of
+    /// its notifications until it is unregistered, while a different
+    /// track plays. Acting on it cuts a track that is still going.
+    Background,
+}
+
+impl StoppedTrack {
+    /// Whether this stop describes the track being heard, and so should
+    /// drive auto-advance.
+    #[must_use]
+    pub const fn is_leading(self) -> bool {
+        matches!(self, Self::Leading)
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum TimeControlStatus {
@@ -311,24 +345,16 @@ pub enum PlayerEvent {
         success: bool,
     },
     /// A track reached natural end-of-stream. `src` is the underlying
-    /// audio source identifier of the track that ended — necessary so
-    /// consumers can distinguish a genuine final-track EOF from a stale
-    /// outgoing-track EOF that fires after a crossfade has already
-    /// promoted the next track. `item_id` is the optional caller-side
-    /// item identifier (FFI bindings tag tracks with stable UUIDs;
-    /// internal callers may leave it `None`).
-    ///
-    /// `from_current_item` is the player's own answer to "was this the
-    /// track the listener was hearing?". The player walks every active
-    /// slot, so a preloaded successor or a lingering predecessor that
-    /// decodes ahead publishes its own end while the current track is
-    /// seconds old; only the player knows which slot is current, and
-    /// `src` alone cannot be compared against a queue entry reliably.
-    /// Auto-advance must key on this flag, not on `src`.
+    /// audio source identifier of the track that ended. `item_id` is the
+    /// optional caller-side item identifier (FFI bindings tag tracks with
+    /// stable UUIDs; internal callers, the queue included, leave it
+    /// `None` — it is a caller's label, never an identity the player can
+    /// resolve). `track` is the player's own answer to which track this
+    /// was; auto-advance must key on it, and never on `src`.
     ItemDidPlayToEnd {
         src: Arc<str>,
         item_id: Option<Arc<str>>,
-        from_current_item: bool,
+        track: StoppedTrack,
     },
     /// A track aborted mid-stream because the underlying decoder /
     /// source reported a non-recoverable error. Distinct from
@@ -339,7 +365,7 @@ pub enum PlayerEvent {
     ItemDidFail {
         src: Arc<str>,
         item_id: Option<Arc<str>>,
-        from_current_item: bool,
+        track: StoppedTrack,
     },
     /// Leading track entered the prefetch window — arm the next slot.
     PrefetchRequested,

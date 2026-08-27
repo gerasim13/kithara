@@ -1,19 +1,19 @@
 #![cfg(not(target_arch = "wasm32"))]
 
-//! `ItemDidPlayToEnd` is published for whichever slot hit EOF, not for
-//! the current one: `PlayerImpl::process_notifications` walks every
-//! active slot. A preloaded successor or a lingering predecessor that
-//! decodes ahead reaches its own end while the current track is seconds
-//! old, and the event names that background track — not the one the
-//! listener is hearing. The player answers which it was in
-//! `from_current_item`; the queue must key auto-advance on that answer.
+//! `ItemDidPlayToEnd` is published for whichever track in the player's
+//! arena hit EOF, not for the one being heard:
+//! `PlayerImpl::process_notifications` walks every active slot, and a slot
+//! holds more than one track. An orphaned slot decoding ahead, or the
+//! outgoing half of a crossfade, reaches its own end while the current
+//! track has minutes left. The player names the role in `track`; only
+//! `StoppedTrack::Leading` may advance the queue.
 
 use std::num::NonZero;
 
 use kithara::{
     self,
     decode::PcmSpec,
-    events::{Event, PlayerEvent, TrackId},
+    events::{Event, PlayerEvent, StoppedTrack, TrackId},
     platform::sync::Arc,
     queue::{Queue, QueueConfig, Transition},
 };
@@ -110,7 +110,7 @@ async fn background_track_eof_does_not_advance_the_queue() {
         .publish(Event::Player(PlayerEvent::ItemDidPlayToEnd {
             src: stale_src,
             item_id: None,
-            from_current_item: false,
+            track: StoppedTrack::Background,
         }));
     let _ = render_loop(&queue, &harness, WARMUP_BLOCKS);
 
@@ -143,7 +143,7 @@ async fn background_track_eof_does_not_cut_the_current_track_audio() {
         .publish(Event::Player(PlayerEvent::ItemDidPlayToEnd {
             src: stale_src,
             item_id: None,
-            from_current_item: false,
+            track: StoppedTrack::Background,
         }));
     let after_pcm = render_loop(&queue, &harness, WARMUP_BLOCKS);
     let after = mean_abs(&after_pcm[after_pcm.len() / 2..]);
@@ -152,5 +152,35 @@ async fn background_track_eof_does_not_cut_the_current_track_audio() {
         after > before / 2.0,
         "the current track must keep sounding through a background track's EOF — \
          the quieter successor took over instead: before={before}, after={after}"
+    );
+}
+
+/// The other non-leading role: `commit_next` promotes the successor inside
+/// the *current* slot, so the faded-out track ends there — its own slot is
+/// still the held one. The queue has already moved on with the pre-arm;
+/// answering that end again would skip a track the listener just started.
+#[kithara::test(tokio)]
+async fn outgoing_crossfade_half_eof_does_not_advance_the_queue() {
+    let (harness, queue, outgoing_src, current) = fixture_with_background_eof();
+
+    queue
+        .select(current, Transition::None)
+        .expect("select the current track");
+    let _ = render_loop(&queue, &harness, WARMUP_BLOCKS);
+
+    harness
+        .player()
+        .bus()
+        .publish(Event::Player(PlayerEvent::ItemDidPlayToEnd {
+            src: outgoing_src,
+            item_id: None,
+            track: StoppedTrack::Outgoing,
+        }));
+    let _ = render_loop(&queue, &harness, WARMUP_BLOCKS);
+
+    assert_eq!(
+        queue.current_index(),
+        Some(1),
+        "the end of a crossfade's outgoing half must leave the promoted track selected"
     );
 }

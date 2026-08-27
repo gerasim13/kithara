@@ -833,7 +833,7 @@ mod tests {
         let event = PlayerEvent::ItemDidFail {
             src: "src".into(),
             item_id: Some("7".into()),
-            from_current_item: true,
+            track: kithara_events::StoppedTrack::Leading,
         };
 
         assert!(matches!(

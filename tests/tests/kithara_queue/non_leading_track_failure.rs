@@ -1,19 +1,19 @@
 #![cfg(not(target_arch = "wasm32"))]
 
-//! The failure twin of [`background_track_eof`]: `ItemDidFail` is
-//! published for whichever slot aborted, and `PlayerImpl::
-//! process_notifications` walks every active slot. A background slot
-//! whose decoder gives up must not skip the track being heard, and must
+//! The failure twin of [`non_leading_track_eof`]: `ItemDidFail` names
+//! whichever track in the player's arena aborted, and
+//! `PlayerImpl::process_notifications` walks every active slot. A track
+//! the listener is not hearing must not skip the one they are, and must
 //! not mark a queue entry failed on its behalf.
 //!
-//! [`background_track_eof`]: super::background_track_eof
+//! [`non_leading_track_eof`]: super::non_leading_track_eof
 
 use std::num::NonZero;
 
 use kithara::{
     self,
     decode::PcmSpec,
-    events::{Event, PlayerEvent, TrackId, TrackStatus},
+    events::{Event, PlayerEvent, StoppedTrack, TrackId, TrackStatus},
     platform::sync::Arc,
     queue::{Queue, QueueConfig, Transition},
 };
@@ -102,7 +102,7 @@ fn publish_background_failure(harness: &OfflinePlayerHarness, src: Arc<str>) {
         .publish(Event::Player(PlayerEvent::ItemDidFail {
             src,
             item_id: None,
-            from_current_item: false,
+            track: StoppedTrack::Background,
         }));
 }
 
