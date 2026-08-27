@@ -16,3 +16,9 @@ compile_error!("kithara-play: wasm32 build requires `resample-rubato` or `resamp
 
 #[cfg(all(not(target_arch = "wasm32"), not(feature = "backend-cpal")))]
 compile_error!("kithara-play: non-wasm build requires `backend-cpal`");
+
+#[cfg(all(
+    not(target_arch = "wasm32"),
+    not(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))
+))]
+compile_error!("kithara-play: non-wasm build requires `stretch-signalsmith` or `stretch-bungee`");
