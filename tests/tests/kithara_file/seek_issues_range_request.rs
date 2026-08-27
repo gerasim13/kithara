@@ -7,6 +7,7 @@
 use std::{
     convert::Infallible,
     io::{Read, Seek, SeekFrom},
+    ops::Range,
     sync::atomic::{AtomicU64, Ordering},
 };
 
@@ -52,17 +53,23 @@ struct RangeState {
     first_range_start: Arc<AtomicU64>,
 }
 
-fn range_start(headers: &HeaderMap) -> Option<u64> {
+fn requested_range(headers: &HeaderMap) -> Option<Range<usize>> {
     let value = headers.get(header::RANGE)?.to_str().ok()?;
-    let (start, _) = value.strip_prefix("bytes=")?.split_once('-')?;
-    start.parse().ok()
+    let (start, end) = value.strip_prefix("bytes=")?.split_once('-')?;
+    let start = start.parse().ok()?;
+    let end = if end.is_empty() {
+        TOTAL
+    } else {
+        end.parse::<usize>().ok()?.saturating_add(1).min(TOTAL)
+    };
+    (start < end).then_some(start..end)
 }
 
 /// The head request stalls after a short prefix and never completes, so the
 /// only way to serve a forward seek is a second, ranged request.
 async fn serve(State(state): State<RangeState>, headers: HeaderMap) -> Response {
     let bytes = body();
-    let Some(start) = range_start(&headers).filter(|start| *start > 0) else {
+    let Some(range) = requested_range(&headers).filter(|range| range.start > 0) else {
         let prefix = Bytes::copy_from_slice(&bytes[..HEAD_PREFIX]);
         let body = Body::from_stream(
             stream::iter(vec![Ok::<_, Infallible>(prefix)]).chain(stream::pending()),
@@ -75,23 +82,21 @@ async fn serve(State(state): State<RangeState>, headers: HeaderMap) -> Response 
             .expect("stalled head response");
     };
 
+    let start = u64::try_from(range.start).expect("range start fits u64");
     let _ = state.first_range_start.compare_exchange(
         u64::MAX,
         start,
         Ordering::SeqCst,
         Ordering::SeqCst,
     );
-    let start = usize::try_from(start).expect("range start fits usize");
-    let tail = &bytes[start..];
+    let content_range = format!("bytes {}-{}/{TOTAL}", range.start, range.end - 1);
+    let chunk = &bytes[range];
     Response::builder()
         .status(StatusCode::PARTIAL_CONTENT)
-        .header(header::CONTENT_LENGTH, tail.len().to_string())
-        .header(
-            header::CONTENT_RANGE,
-            format!("bytes {start}-{}/{TOTAL}", TOTAL - 1),
-        )
+        .header(header::CONTENT_LENGTH, chunk.len().to_string())
+        .header(header::CONTENT_RANGE, content_range)
         .header(header::CONTENT_TYPE, "audio/mpeg")
-        .body(Body::from(Bytes::copy_from_slice(tail)))
+        .body(Body::from(Bytes::copy_from_slice(chunk)))
         .expect("ranged response")
 }
 
