@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{
     palette::ColorRole,
-    primitives::{FontSkin, FrameSkin, ShadowSkin, TextRoleSkin},
+    primitives::{FontSkin, FrameSkin, ShadowSkin, StateColors, TextRoleSkin},
     section::skin_section,
 };
 use crate::size::SizeSpec;
@@ -247,21 +247,30 @@ skin_section! {
 skin_section! {
     pub struct TableSkin => TablePatch {
         pub metric_badge_background: ColorRole,
+        /// The ground the grid, the header strip and the footer strip lay down
+        /// before any row is drawn.
+        pub grid_color: ColorRole,
+        pub header_fill: ColorRole,
+        pub footer_fill: ColorRole,
+        pub badge_fill: ColorRole,
+        pub meter_bar_fill: ColorRole,
+        pub row_fill: StateColors,
+        pub row_selected_fill: ColorRole,
         pub divider_color: ColorRole,
         pub meter_bar_background: ColorRole,
         pub scrollbar_background: ColorRole,
         pub scroller_color: ColorRole,
-        pub secondary_text: FontSkin,
-        pub metric_text: FontSkin,
-        pub badge_text: FontSkin,
-        pub meter_text: FontSkin,
-        pub footer_text: FontSkin,
-        pub header_text: FontSkin,
-        pub index_text: FontSkin,
-        pub mono_text: FontSkin,
-        pub time_text: FontSkin,
-        pub primary_text: FontSkin,
-        pub transition_text: FontSkin,
+        pub secondary_text: TextRoleSkin,
+        pub metric_text: TextRoleSkin,
+        pub badge_text: TextRoleSkin,
+        pub meter_text: TextRoleSkin,
+        pub footer_text: TextRoleSkin,
+        pub header_text: TextRoleSkin,
+        pub index_text: TextRoleSkin,
+        pub mono_text: TextRoleSkin,
+        pub time_text: TextRoleSkin,
+        pub primary_text: TextRoleSkin,
+        pub transition_text: TextRoleSkin,
         pub metric_badge_frame: FrameSkin,
         pub badge_frame: FrameSkin,
         pub row_frame: FrameSkin,

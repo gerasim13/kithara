@@ -351,13 +351,15 @@ mod tests {
     use crate::{
         atoms::table::{TableCell, face::Drawn, table_body, table_row_rect},
         builtin,
-        draw::{DrawCmd, Geom},
+        draw::{DrawCmd, DrawList, Geom, Rgba},
+        ids::SourceUri,
         module::{TableColumn, TableColumnStyle},
         render::{
             ControlAction, DragPhase,
             fonts::{FONT_BYTES, SANS},
         },
         shaping::TextContext,
+        skin::parse_skin_over,
     };
 
     fn rows() -> Vec<TableRowData> {
@@ -546,6 +548,65 @@ mod tests {
             Marked::Changed,
             "a table given another skin must draw again"
         );
+    }
+
+    /// The colour a cell's word is drawn in, wherever the nested clips put it.
+    fn word_color(list: &DrawList, wanted: &str) -> Option<Rgba> {
+        for command in list.commands() {
+            match command {
+                DrawCmd::Text { content, color, .. } if &**content == wanted => {
+                    return Some(*color);
+                }
+                DrawCmd::Clip { list, .. } => {
+                    if let Some(color) = word_color(list, wanted) {
+                        return Some(color);
+                    }
+                }
+                _ => {}
+            }
+        }
+        None
+    }
+
+    fn drawn_word(skin: &Skin, wanted: &str) -> Rgba {
+        let paint = TablePaint::new("library/tracks", rows(), columns(), skin);
+        let mut text = TextContext::from(skin.text_resources());
+        let bounds = Rect {
+            h: 240.0,
+            w: 900.0,
+            x: 0.0,
+            y: 0.0,
+        };
+        let drawn = still(&paint);
+        let list = paint.face.commands(&mut text, bounds, &drawn);
+        word_color(&list, wanted).unwrap_or_else(|| panic!("the table must draw {wanted}"))
+    }
+
+    #[kithara::test]
+    fn a_primary_cell_takes_the_colour_its_skin_role_names() {
+        let skin = builtin::skin();
+
+        assert_eq!(
+            drawn_word(skin, "Row 0"),
+            skin.rgba(skin.table.primary_text.color)
+        );
+    }
+
+    #[kithara::test]
+    fn a_primary_cell_follows_a_skin_written_over_the_builtin_one() {
+        let origin = SourceUri("loud.kskin.ron".to_owned());
+        let text = r##"(
+            schema: "kithara.skin",
+            version: 1,
+            id: "kithara-loud",
+            table: (primary_text: (color: Danger, font: Display, size: 12.0, spacing: 0.0, weight: Medium)),
+        )"##;
+        let document =
+            parse_skin_over(builtin::skin_doc(), text, &origin).expect("the patch parses");
+        let skin = Skin::resolve(document, builtin::text_doc(), &origin)
+            .expect("the patched document resolves");
+
+        assert_eq!(drawn_word(&skin, "Row 0"), skin.palette.danger);
     }
 
     #[kithara::test]

@@ -6,12 +6,12 @@ use crate::{
         table_content_width, table_dividers, table_overflows, table_row_pitch, table_row_rect,
         table_vertical_scrollbar_rect,
     },
-    draw::{DrawList, DrawListBuilder, Pt, Rect, Rgba, Transform},
+    draw::{DrawList, DrawListBuilder, Pt, Rect, Transform},
     interact::ScrollAxis,
     module::TableColumnStyle,
     render::Skin,
     shaping::TextContext,
-    skin::{ColorRole, FontFamily, FontSkin, FrameSkin, TextRoleSkin},
+    skin::{FrameSkin, TextRoleSkin},
 };
 
 #[derive(Clone, Debug, PartialEq, fieldwork::Fieldwork)]
@@ -69,7 +69,7 @@ impl TableFace {
                 x: -horizontal,
                 ..bounds
             },
-            self.skin.palette.line_soft,
+            self.skin.rgba(self.skin.table.grid_color),
         );
         self.paint_header(&mut content, text, bounds, horizontal, &drawn.columns);
         self.paint_body(
@@ -112,7 +112,7 @@ impl TableFace {
             x: -horizontal,
             y: bounds.y,
         };
-        list.fill_rect(header, self.skin.palette.bg_panel);
+        list.fill_rect(header, self.skin.rgba(self.skin.table.header_fill));
         for (column, cell) in column_cells(bounds, columns, horizontal) {
             let align = if column.column.style() == TableColumnStyle::Index {
                 TextAlign::Right
@@ -128,9 +128,8 @@ impl TableFace {
                     ..cell
                 },
                 (
+                    &self.skin,
                     self.skin.table.header_text,
-                    FontFamily::Mono,
-                    self.skin.palette.muted,
                     self.skin.table.cell_padding_x,
                     align,
                 ),
@@ -175,14 +174,15 @@ impl TableFace {
         let (hovered, pressed) = (interaction.0 == Some(index), interaction.1 == Some(index));
         let row = &self.rows()[index];
         let frame = self.skin.table.row_frame;
+        let row_fill = self.skin.table.row_fill;
         let fill = if pressed {
-            self.skin.palette.accent_soft
+            self.skin.tint(row_fill.pressed)
         } else if row.selected() {
-            self.skin.palette.bg_select
+            self.skin.rgba(self.skin.table.row_selected_fill)
         } else if hovered {
-            self.skin.palette.bg_panel_2
+            self.skin.tint(row_fill.hovered)
         } else {
-            self.skin.palette.bg_inset
+            self.skin.tint(row_fill.idle)
         };
         list.fill_rounded_rect(bounds, frame.radius, fill);
         paint_frame(list, bounds, frame, &self.skin);
@@ -243,9 +243,8 @@ impl TableFace {
                 &format!("{:02}", index + 1),
                 bounds,
                 (
+                    &self.skin,
                     self.skin.table.index_text,
-                    FontFamily::Mono,
-                    self.skin.palette.muted,
                     self.skin.table.cell_padding_x,
                     TextAlign::Right,
                 ),
@@ -263,9 +262,8 @@ impl TableFace {
                 optional_or_dash(row.cell(column_index).and_then(TableCell::text)),
                 bounds,
                 (
+                    &self.skin,
                     self.skin.table.primary_text,
-                    FontFamily::Display,
-                    self.skin.palette.text,
                     self.skin.table.cell_padding_x,
                     TextAlign::Left,
                 ),
@@ -276,9 +274,8 @@ impl TableFace {
                 optional_or_dash(row.cell(column_index).and_then(TableCell::text)),
                 bounds,
                 (
+                    &self.skin,
                     self.skin.table.secondary_text,
-                    FontFamily::Sans,
-                    self.skin.palette.text_dim,
                     self.skin.table.cell_padding_x,
                     TextAlign::Left,
                 ),
@@ -296,9 +293,8 @@ impl TableFace {
                 optional_or_dash(row.cell(column_index).and_then(TableCell::text)),
                 bounds,
                 (
+                    &self.skin,
                     self.skin.table.mono_text,
-                    FontFamily::Mono,
-                    self.skin.palette.accent,
                     self.skin.table.cell_padding_x,
                     TextAlign::Left,
                 ),
@@ -309,9 +305,8 @@ impl TableFace {
                 optional_or_dash(row.cell(column_index).and_then(TableCell::text)),
                 bounds,
                 (
+                    &self.skin,
                     self.skin.table.time_text,
-                    FontFamily::Mono,
-                    self.skin.palette.text_dim,
                     self.skin.table.cell_padding_x,
                     TextAlign::Right,
                 ),
@@ -334,9 +329,8 @@ impl TableFace {
                     &transition,
                     bounds,
                     (
+                        &self.skin,
                         self.skin.table.transition_text,
-                        FontFamily::Mono,
-                        self.skin.palette.muted,
                         self.skin.table.cell_padding_x,
                         TextAlign::Left,
                     ),
@@ -363,7 +357,11 @@ fn paint_badge(
         y: bounds.y + (bounds.h - paint.skin.table.badge_height) / 2.0,
     };
     let frame = paint.skin.table.badge_frame;
-    list.fill_rounded_rect(chip, frame.radius, paint.skin.palette.accent);
+    list.fill_rounded_rect(
+        chip,
+        frame.radius,
+        paint.skin.rgba(paint.skin.table.badge_fill),
+    );
     paint_frame(list, chip, frame, &paint.skin);
     paint_text(
         list,
@@ -371,9 +369,8 @@ fn paint_badge(
         marks,
         chip,
         (
+            &paint.skin,
             paint.skin.table.badge_text,
-            FontFamily::Mono,
-            paint.skin.palette.bg_deep,
             0.0,
             TextAlign::Center,
         ),
@@ -388,13 +385,7 @@ fn paint_metric(
     bounds: Rect,
 ) {
     let content = optional_or_dash(value);
-    let run = shape(
-        text,
-        content,
-        paint.skin.table.metric_text,
-        FontFamily::Mono,
-        None,
-    );
+    let run = shape(text, content, paint.skin.table.metric_text, None);
     let badge = Rect {
         h: paint.skin.table.metric_badge_height,
         w: run.width() + paint.skin.table.metric_badge_padding_x * 2.0,
@@ -415,7 +406,7 @@ fn paint_metric(
             x: badge.x + paint.skin.table.metric_badge_padding_x,
             y: badge.y + (badge.h - run.height()) / 2.0,
         }),
-        paint.skin.palette.text,
+        paint.skin.rgba(paint.skin.table.metric_text.color),
     );
 }
 
@@ -440,7 +431,7 @@ fn paint_meter(
             w: bar.w * ratio,
             ..bar
         },
-        paint.skin.palette.accent,
+        paint.skin.rgba(paint.skin.table.meter_bar_fill),
     );
     let label = value.map_or_else(|| "\u{2014}".to_owned(), |value| value.to_string());
     let label_x = bar.x + bar.w + paint.skin.table.meter_bar_gap;
@@ -456,9 +447,8 @@ fn paint_meter(
         &label,
         label_bounds,
         (
+            &paint.skin,
             paint.skin.table.meter_text,
-            FontFamily::Mono,
-            paint.skin.palette.accent,
             0.0,
             TextAlign::Left,
         ),
@@ -479,7 +469,7 @@ fn paint_footer(
         x: -horizontal,
         y: bounds.y + bounds.h - paint.skin.table.footer_height,
     };
-    list.fill_rect(footer, paint.skin.palette.bg_footer);
+    list.fill_rect(footer, paint.skin.rgba(paint.skin.table.footer_fill));
     let label = format!("{} {}", paint.rows().len(), paint.skin.table_footer_rows);
     paint_text(
         list,
@@ -487,9 +477,8 @@ fn paint_footer(
         &label,
         footer,
         (
+            &paint.skin,
             paint.skin.table.footer_text,
-            FontFamily::Mono,
-            paint.skin.palette.muted,
             paint.skin.table.footer_padding_x,
             TextAlign::Left,
         ),
@@ -614,11 +603,11 @@ fn paint_text(
     text: &mut TextContext,
     content: &str,
     bounds: Rect,
-    paint: (FontSkin, FontFamily, Rgba, f32, TextAlign),
+    paint: (&Skin, TextRoleSkin, f32, TextAlign),
 ) {
-    let (font, family, color, padding_x, align) = paint;
+    let (skin, role, padding_x, align) = paint;
     let available = (bounds.w - padding_x * 2.0).max(0.0);
-    let run = shape(text, content, font, family, Some(available));
+    let run = shape(text, content, role, Some(available));
     let x = match align {
         TextAlign::Left => bounds.x + padding_x,
         TextAlign::Center => bounds.x + (bounds.w - run.width()) / 2.0,
@@ -631,28 +620,17 @@ fn paint_text(
             x,
             y: bounds.y + (bounds.h - run.height()) / 2.0,
         }),
-        color,
+        skin.rgba(role.color),
     );
 }
 
 fn shape(
     text: &mut TextContext,
     content: &str,
-    font: FontSkin,
-    family: FontFamily,
+    role: TextRoleSkin,
     max_width: Option<f32>,
 ) -> crate::shaping::GlyphRun {
-    text.shape(
-        content,
-        TextRoleSkin {
-            color: ColorRole::Text,
-            font: family,
-            size: font.size,
-            spacing: 0.0,
-            weight: font.weight,
-        },
-        max_width,
-    )
+    text.shape(content, role, max_width)
 }
 
 fn paint_frame(list: &mut DrawListBuilder, bounds: Rect, frame: FrameSkin, skin: &Skin) {
