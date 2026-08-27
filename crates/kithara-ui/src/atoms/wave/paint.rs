@@ -16,13 +16,13 @@ use crate::{
 
 #[derive(Clone, Copy, PartialEq)]
 pub(crate) struct WavePalette {
-    pub(crate) bg_deep: Rgba,
-    pub(crate) line: Rgba,
-    pub(crate) text_dim: Rgba,
-    pub(crate) accent: Rgba,
-    pub(crate) wave_low: Rgba,
-    pub(crate) wave_mid: Rgba,
-    pub(crate) wave_high: Rgba,
+    pub(crate) trough: Rgba,
+    pub(crate) grid: Rgba,
+    pub(crate) label: Rgba,
+    pub(crate) played: Rgba,
+    pub(crate) band_low: Rgba,
+    pub(crate) band_mid: Rgba,
+    pub(crate) band_high: Rgba,
 }
 
 #[derive(Clone, Copy)]
@@ -97,7 +97,7 @@ impl WavePaint<'_> {
                     bars::Played::new(
                         bounds.x + self.progress.clamp(0.0, 1.0) * bounds.w,
                         self.metrics.overview_played_alpha,
-                        self.palette.bg_deep,
+                        self.palette.trough,
                     )
                 });
                 draw_bars(
@@ -126,7 +126,7 @@ impl WavePaint<'_> {
             }
         };
         fill(bounds.x, bounds.w, self.background);
-        fill(bounds.x, head_x - bounds.x, self.palette.accent);
+        fill(bounds.x, head_x - bounds.x, self.palette.played);
         fill(head_x, cached_x - head_x, self.cache_strip);
     }
 
@@ -144,7 +144,7 @@ impl WavePaint<'_> {
                 bounds,
                 head_x,
                 self.metrics.playhead_width,
-                self.palette.accent,
+                self.palette.played,
             );
             list.fill_rect(
                 Rect {
@@ -153,7 +153,7 @@ impl WavePaint<'_> {
                     w: self.metrics.playhead_marker_width,
                     h: self.metrics.playhead_marker_height,
                 },
-                self.palette.accent,
+                self.palette.played,
             );
             if self.style == WaveStyle::Micro {
                 self.paint_cache_strip(list, bounds, head_x);
@@ -199,7 +199,7 @@ fn draw_bars(
         );
         let column_x: f32 = column.as_();
         let center_x = bounds.x + metrics.content_inset + column_x * step + metrics.bar_width / 2.0;
-        let colors = [palette.wave_low, palette.wave_mid, palette.wave_high];
+        let colors = [palette.band_low, palette.band_mid, palette.band_high];
         bars::draw_column(
             list,
             bounds,
@@ -252,13 +252,13 @@ mod tests {
         let downbeats = [0.5];
         let cues = [0.75];
         let palette = WavePalette {
-            bg_deep: color(0.1),
-            line: color(0.2),
-            text_dim: color(0.3),
-            accent: color(0.4),
-            wave_low: color(0.6),
-            wave_mid: color(0.7),
-            wave_high: color(0.8),
+            trough: color(0.1),
+            grid: color(0.2),
+            label: color(0.3),
+            played: color(0.4),
+            band_low: color(0.6),
+            band_mid: color(0.7),
+            band_high: color(0.8),
         };
         let cue_badge = color(0.9);
         let overlay_palette = overlay_palette();
@@ -314,13 +314,13 @@ mod tests {
             fill_rect(commands, cue_badge).map(|rect| rect.y),
             Some(bounds.y)
         );
-        assert!(has_fill(commands, palette.accent));
+        assert!(has_fill(commands, palette.played));
         assert!(has_fill(commands, overlay_palette.background));
         assert!(has_stroke(commands, paint.border));
         for expected in [
-            palette.wave_low,
-            palette.wave_mid,
-            palette.wave_high,
+            palette.band_low,
+            palette.band_mid,
+            palette.band_high,
             cue_badge,
         ] {
             assert!(has_fill(commands, expected));
@@ -329,32 +329,32 @@ mod tests {
             commands,
             Rgba {
                 a: paint.metrics.loop_fill_alpha,
-                ..palette.accent
+                ..palette.played
             }
         ));
         assert!(!has_fill(
             commands,
             Rgba {
                 a: paint.metrics.played_alpha,
-                ..palette.bg_deep
+                ..palette.trough
             }
         ));
         assert!(has_rule(
             commands,
             Rgba {
                 a: paint.metrics.grid_alpha,
-                ..palette.line
+                ..palette.grid
             }
         ));
         assert!(has_rule(
             commands,
             Rgba {
                 a: paint.metrics.downbeat_alpha,
-                ..palette.text_dim
+                ..palette.label
             }
         ));
-        assert!(has_rule(commands, palette.accent));
-        assert!(has_rule(commands, palette.wave_high));
+        assert!(has_rule(commands, palette.played));
+        assert!(has_rule(commands, palette.band_high));
         assert!(
             commands
                 .iter()
@@ -390,13 +390,13 @@ mod tests {
             high: 0.4,
         }];
         let palette = WavePalette {
-            bg_deep: color(0.1),
-            line: color(0.2),
-            text_dim: color(0.3),
-            accent: color(0.4),
-            wave_low: color(0.6),
-            wave_mid: color(0.7),
-            wave_high: color(0.8),
+            trough: color(0.1),
+            grid: color(0.2),
+            label: color(0.3),
+            played: color(0.4),
+            band_low: color(0.6),
+            band_mid: color(0.7),
+            band_high: color(0.8),
         };
         let metrics = builtin::skin().wave;
         let bounds = Rect {
@@ -437,13 +437,13 @@ mod tests {
 
             let list = list.finish();
             let commands = list.commands();
-            let colors = [palette.wave_low, palette.wave_mid, palette.wave_high];
+            let colors = [palette.band_low, palette.band_mid, palette.band_high];
             let expected = if style == WaveStyle::Default {
                 let center_x = bounds.x + metrics.content_inset + metrics.bar_width / 2.0;
                 bars::Played::new(
                     bounds.x + paint.progress * bounds.w,
                     metrics.overview_played_alpha,
-                    palette.bg_deep,
+                    palette.trough,
                 )
                 .colors(center_x, colors)
             } else {
@@ -452,12 +452,12 @@ mod tests {
             for color in expected {
                 assert!(has_fill(commands, color));
             }
-            assert!(has_rule(commands, palette.accent));
+            assert!(has_rule(commands, palette.played));
             assert!(!has_fill(
                 commands,
                 Rgba {
                     a: metrics.overview_played_alpha,
-                    ..palette.bg_deep
+                    ..palette.trough
                 }
             ));
         }
@@ -491,13 +491,13 @@ mod tests {
             metrics: builtin::skin().wave,
             overlay: None,
             palette: WavePalette {
-                bg_deep: color(0.1),
-                line: color(0.2),
-                text_dim: color(0.3),
-                accent: color(0.4),
-                wave_low: color(0.6),
-                wave_mid: color(0.7),
-                wave_high: color(0.8),
+                trough: color(0.1),
+                grid: color(0.2),
+                label: color(0.3),
+                played: color(0.4),
+                band_low: color(0.6),
+                band_mid: color(0.7),
+                band_high: color(0.8),
             },
             progress: 0.5,
             style,

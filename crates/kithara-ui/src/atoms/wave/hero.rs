@@ -15,7 +15,7 @@ use crate::{
     draw::{DrawListBuilder, Pt, Rect, Rgba, Transform},
     render::WaveBucket,
     shaping::TextContext,
-    skin::{ColorRole, FontFamily, TextRoleSkin, WaveSkin},
+    skin::WaveSkin,
 };
 
 #[derive(Clone, Copy)]
@@ -73,7 +73,7 @@ fn draw_bars(
     let played = bars::Played::new(
         bounds.x + norm_to_x(data.position.clamp(0.0, 1.0), window, bounds.w),
         metrics.played_alpha,
-        palette.bg_deep,
+        palette.trough,
     );
     let available_height = (bounds.h - metrics.content_inset * 2.0).max(0.0);
     let origin_x = bounds.x - window.start / grid.norm_width * step;
@@ -84,7 +84,7 @@ fn draw_bars(
         };
         let bar_f: f32 = bar.as_();
         let center_x = (bar_f + 0.5).mul_add(step, origin_x);
-        let colors = [palette.wave_low, palette.wave_mid, palette.wave_high];
+        let colors = [palette.band_low, palette.band_mid, palette.band_high];
         bars::draw_column(
             list,
             bounds,
@@ -110,7 +110,7 @@ fn draw_grid(
         bounds,
         visible_marks(data.beats, window),
         window,
-        with_alpha(palette.line, metrics.grid_alpha),
+        with_alpha(palette.grid, metrics.grid_alpha),
         metrics.grid_width,
     );
     draw_marks(
@@ -118,7 +118,7 @@ fn draw_grid(
         bounds,
         visible_marks(data.downbeats, window),
         window,
-        with_alpha(palette.text_dim, metrics.downbeat_alpha),
+        with_alpha(palette.label, metrics.downbeat_alpha),
         metrics.grid_width,
     );
 }
@@ -159,13 +159,13 @@ fn draw_loop(
                 x: bounds.x + visible_start,
                 y: bounds.y,
             },
-            with_alpha(palette.accent, metrics.loop_fill_alpha),
+            with_alpha(palette.played, metrics.loop_fill_alpha),
         );
     }
     for x in [start_x, end_x] {
         if (0.0..=bounds.w).contains(&x) {
             let x = bounds.x + x;
-            rule(list, bounds, x, metrics.loop_bound_width, palette.accent);
+            rule(list, bounds, x, metrics.loop_bound_width, palette.played);
         }
     }
 }
@@ -186,7 +186,7 @@ fn draw_cues(
             bounds,
             x,
             metrics.cue_line_width,
-            palette.base.wave_high,
+            palette.base.band_high,
         );
         let badge = Rect {
             h: metrics.cue_badge_size,
@@ -208,17 +208,7 @@ fn draw_cue_text(
     color: Rgba,
 ) {
     let content = index.to_string();
-    let run = text.shape(
-        &content,
-        TextRoleSkin {
-            color: ColorRole::Text,
-            font: FontFamily::Mono,
-            size: metrics.cue_badge_text.size,
-            spacing: 0.0,
-            weight: metrics.cue_badge_text.weight,
-        },
-        Some(bounds.w),
-    );
+    let run = text.shape(&content, metrics.cue_badge_text, Some(bounds.w));
     list.text(
         &run,
         &content,
@@ -239,7 +229,7 @@ fn draw_playhead(
     palette: WavePalette,
 ) {
     let x = bounds.x + norm_to_x(position.clamp(0.0, 1.0), window, bounds.w);
-    rule(list, bounds, x, metrics.playhead_width, palette.accent);
+    rule(list, bounds, x, metrics.playhead_width, palette.played);
     let marker_x = x - metrics.playhead_marker_width / 2.0;
     for y in [
         bounds.y,
@@ -252,7 +242,7 @@ fn draw_playhead(
                 x: marker_x,
                 y,
             },
-            palette.accent,
+            palette.played,
         );
     }
 }
@@ -280,13 +270,13 @@ mod tests {
             r: 1.0,
         };
         WavePalette {
-            bg_deep: ink,
-            line: ink,
-            text_dim: ink,
-            accent: ink,
-            wave_low: ink,
-            wave_mid: ink,
-            wave_high: ink,
+            trough: ink,
+            grid: ink,
+            label: ink,
+            played: ink,
+            band_low: ink,
+            band_mid: ink,
+            band_high: ink,
         }
     }
 

@@ -50,17 +50,17 @@ impl Wave {
                 ..skin.rgba(skin.wave.cache_strip_color)
             },
             cue_badge: skin.rgba(skin.wave.cue_badge_background),
-            cue_text: skin.rgba(skin.wave.cue_badge_text_color),
+            cue_text: skin.rgba(skin.wave.cue_badge_text.color),
             metrics: skin.wave,
             overlay_palette: overlay_palette(skin),
             palette: WavePalette {
-                bg_deep: skin.palette.bg_deep,
-                line: skin.palette.line,
-                text_dim: skin.palette.text_dim,
-                accent: skin.palette.accent,
-                wave_low: skin.palette.wave_low,
-                wave_mid: skin.palette.wave_mid,
-                wave_high: skin.palette.wave_high,
+                trough: skin.rgba(skin.wave.trough_color),
+                grid: skin.rgba(skin.wave.grid_color),
+                label: skin.rgba(skin.wave.label_color),
+                played: skin.rgba(skin.wave.played_color),
+                band_low: skin.rgba(skin.wave.band_low_color),
+                band_mid: skin.rgba(skin.wave.band_mid_color),
+                band_high: skin.rgba(skin.wave.band_high_color),
             },
             style,
         }
@@ -247,18 +247,18 @@ fn overlay_palette(skin: &Skin) -> OverlayPalette {
         background: with_alpha(skin.rgba(metrics.background), metrics.background_alpha),
         art_background: skin.rgba(metrics.art_background),
         art_border: skin.rgba(metrics.art_frame.border),
-        art_label: skin.rgba(metrics.art_label_color),
-        title: skin.rgba(metrics.title_color),
-        artist: skin.rgba(metrics.artist_color),
+        art_label: skin.rgba(metrics.art_label.color),
+        title: skin.rgba(metrics.title.color),
+        artist: skin.rgba(metrics.artist.color),
         readout_background: skin.rgba(metrics.readout_background),
         readout_border: skin.rgba(metrics.readout_frame.border),
-        readout_label: skin.rgba(metrics.readout_label_color),
+        readout_label: skin.rgba(metrics.readout_label.color),
         bpm: skin.rgba(metrics.bpm_color),
         key: skin.rgba(metrics.key_color),
         remain: skin.rgba(metrics.remain_color),
         badge_background: skin.rgba(metrics.badge_background),
         badge_border: skin.rgba(metrics.badge_frame.border),
-        badge_text: skin.rgba(metrics.badge_text_color),
+        badge_text: skin.rgba(metrics.badge_text.color),
     }
 }
 
@@ -293,9 +293,10 @@ mod tests {
     use crate::{
         builtin,
         draw::{DrawCmd, DrawListBuilder, Geom, Paint, Pt, Rgba},
+        ids::SourceUri,
         render::{ReadValue, Reads, WaveBucket, WaveformView},
         shaping::TextContext,
-        skin::ColorRole,
+        skin::parse_skin_over,
     };
 
     struct CacheReads(Option<f64>);
@@ -506,7 +507,7 @@ mod tests {
         )));
         let grid = Rgba {
             a: skin.wave.grid_alpha,
-            ..skin.rgba(ColorRole::Line)
+            ..skin.rgba(skin.wave.grid_color)
         };
         assert!(list.commands().iter().any(|command| matches!(
             command,
@@ -526,6 +527,67 @@ mod tests {
                 DrawCmd::Text { content, .. } if content == "Track"
             ))
         )));
+    }
+
+    /// The playhead of a plain wave, drawn full height at the played edge.
+    fn playhead_color(skin: &Skin) -> Rgba {
+        let reads = reads();
+        let value = reads
+            .get("deck.playback.waveform")
+            .unwrap_or_else(|| panic!("the fixture must report a waveform"));
+        let painter = Wave::new(WaveStyle::Default, skin);
+        let data = Drawn::read(
+            WaveStyle::Default,
+            1.0,
+            Some("A"),
+            Some(&value),
+            &reads,
+            "@deck=a",
+        );
+        let bounds = Rect {
+            h: 60.0,
+            w: 400.0,
+            x: 0.0,
+            y: 0.0,
+        };
+        let mut text = TextContext::from(skin.text_resources());
+        let mut list = DrawListBuilder::default();
+        painter.paint(&mut list, &mut text, &data, bounds, false);
+        let list = list.finish();
+        list.commands()
+            .iter()
+            .find_map(|command| match command {
+                DrawCmd::Fill {
+                    geom: Geom::Rect(rect),
+                    paint: Paint::Solid(color),
+                } if rect.h == bounds.h && rect.w < skin.wave.playhead_marker_width => Some(*color),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("a plain wave must draw its playhead"))
+    }
+
+    #[kithara::test]
+    fn the_playhead_takes_the_colour_its_skin_role_names() {
+        let skin = builtin::skin();
+
+        assert_eq!(playhead_color(skin), skin.rgba(skin.wave.played_color));
+    }
+
+    #[kithara::test]
+    fn the_playhead_follows_a_skin_written_over_the_builtin_one() {
+        let origin = SourceUri("loud.kskin.ron".to_owned());
+        let text = r##"(
+            schema: "kithara.skin",
+            version: 1,
+            id: "kithara-loud",
+            wave: (played_color: Danger),
+        )"##;
+        let document =
+            parse_skin_over(builtin::skin_doc(), text, &origin).expect("the patch parses");
+        let skin = Skin::resolve(document, builtin::text_doc(), &origin)
+            .expect("the patched document resolves");
+
+        assert_eq!(playhead_color(&skin), skin.palette.danger);
     }
 
     /// The panel steps aside for a pointer on it, not for one anywhere on the

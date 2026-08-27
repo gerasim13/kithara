@@ -10,11 +10,19 @@ use crate::size::SizeSpec;
 skin_section! {
     pub struct WaveSkin => WavePatch {
         pub background: ColorRole,
+        /// The three levels a band nests by, the ground under them, the grid
+        /// over them, and the part already played.
+        pub band_low_color: ColorRole,
+        pub band_mid_color: ColorRole,
+        pub band_high_color: ColorRole,
+        pub trough_color: ColorRole,
+        pub grid_color: ColorRole,
+        pub label_color: ColorRole,
+        pub played_color: ColorRole,
         /// Extent cached ahead of the playhead; the played part takes the accent.
         pub cache_strip_color: ColorRole,
         pub cue_badge_background: ColorRole,
-        pub cue_badge_text_color: ColorRole,
-        pub cue_badge_text: FontSkin,
+        pub cue_badge_text: TextRoleSkin,
         pub frame: FrameSkin,
         /// `WaveStyle::Default`.
         pub default_size: SizeSpec,
@@ -50,23 +58,18 @@ skin_section! {
 #[non_exhaustive]
 pub struct WaveOverlaySkin {
     pub art_background: ColorRole,
-    pub art_label_color: ColorRole,
-    pub artist_color: ColorRole,
     pub background: ColorRole,
     pub badge_background: ColorRole,
-    pub badge_text_color: ColorRole,
     pub bpm_color: ColorRole,
     pub key_color: ColorRole,
     pub readout_background: ColorRole,
-    pub readout_label_color: ColorRole,
     pub remain_color: ColorRole,
-    pub title_color: ColorRole,
-    pub art_label: FontSkin,
-    pub artist: FontSkin,
-    pub badge_text: FontSkin,
-    pub readout_label: FontSkin,
-    pub readout_value: FontSkin,
-    pub title: FontSkin,
+    pub art_label: TextRoleSkin,
+    pub artist: TextRoleSkin,
+    pub badge_text: TextRoleSkin,
+    pub readout_label: TextRoleSkin,
+    pub readout_value: TextRoleSkin,
+    pub title: TextRoleSkin,
     pub art_frame: FrameSkin,
     pub badge_frame: FrameSkin,
     pub readout_frame: FrameSkin,

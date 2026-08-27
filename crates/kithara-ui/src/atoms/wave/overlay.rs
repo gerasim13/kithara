@@ -2,7 +2,7 @@ use crate::{
     atoms::design::quad::quad,
     draw::{DrawListBuilder, Pt, Rect, Rgba, Transform},
     shaping::TextContext,
-    skin::{ColorRole, FontFamily, FontSkin, TextRoleSkin, WaveOverlaySkin},
+    skin::{TextRoleSkin, WaveOverlaySkin},
 };
 
 #[derive(Clone, Copy)]
@@ -90,15 +90,7 @@ fn draw_art(
         palette.art_background,
         palette.art_border,
     );
-    draw_centered(
-        list,
-        text,
-        "ART",
-        art,
-        metrics.art_label,
-        FontFamily::Mono,
-        palette.art_label,
-    );
+    draw_centered(list, text, "ART", art, metrics.art_label, palette.art_label);
     art.x + art.w + metrics.gap
 }
 
@@ -133,7 +125,6 @@ fn draw_telemetry(
         data.badge,
         badge,
         metrics.badge_text,
-        FontFamily::Display,
         data.palette.badge_text,
     );
     right = badge.x - metrics.gap;
@@ -201,7 +192,7 @@ fn draw_summary(
             y: title_y,
         },
         bounds.w,
-        (metrics.title, FontFamily::Display),
+        metrics.title,
         data.palette.title,
     );
     draw_left(
@@ -213,7 +204,7 @@ fn draw_summary(
             y: title_y + metrics.title.size + metrics.summary_gap,
         },
         bounds.w,
-        (metrics.artist, FontFamily::Sans),
+        metrics.artist,
         data.palette.artist,
     );
     list.clip(bounds, clipped.finish());
@@ -274,11 +265,10 @@ fn draw_centered(
     text: &mut TextContext,
     content: &str,
     bounds: Rect,
-    skin: FontSkin,
-    family: FontFamily,
+    role: TextRoleSkin,
     color: Rgba,
 ) {
-    let run = text.shape(content, role(skin, family), Some(bounds.w));
+    let run = text.shape(content, role, Some(bounds.w));
     list.text(
         &run,
         content,
@@ -296,10 +286,10 @@ fn draw_left(
     content: &str,
     position: Pt,
     max_width: f32,
-    style: (FontSkin, FontFamily),
+    role: TextRoleSkin,
     color: Rgba,
 ) {
-    let run = text.shape(content, role(style.0, style.1), Some(max_width));
+    let run = text.shape(content, role, Some(max_width));
     list.text(&run, content, Transform::translate(position), color);
 }
 
@@ -309,10 +299,10 @@ fn draw_right(
     content: &str,
     position: Pt,
     max_width: f32,
-    skin: FontSkin,
+    role: TextRoleSkin,
     color: Rgba,
 ) {
-    let run = text.shape(content, role(skin, FontFamily::Mono), Some(max_width));
+    let run = text.shape(content, role, Some(max_width));
     list.text(
         &run,
         content,
@@ -322,14 +312,4 @@ fn draw_right(
         }),
         color,
     );
-}
-
-const fn role(skin: FontSkin, font: FontFamily) -> TextRoleSkin {
-    TextRoleSkin {
-        color: ColorRole::Text,
-        font,
-        size: skin.size,
-        spacing: 0.0,
-        weight: skin.weight,
-    }
 }
