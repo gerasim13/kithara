@@ -5,7 +5,7 @@ use crate::{
     module::ButtonStyle,
     render::{Mark, Skin},
     shaping::{GlyphRun, TextContext},
-    skin::{ColorRole, FontFamily, FontSkin, FrameSkin, TextRoleSkin},
+    skin::{FrameSkin, TextRoleSkin},
     solve::{Length, Size},
 };
 
@@ -189,8 +189,8 @@ impl Width {
         match style {
             ButtonStyle::Default => Self::Content,
             ButtonStyle::MicroPrimary => Self::Fixed(skin.button.micro_size),
-            ButtonStyle::Transport => Self::Portion(skin.button.transport_fill),
-            ButtonStyle::TransportPrimary => Self::Portion(skin.button.primary_fill),
+            ButtonStyle::Transport => Self::Portion(skin.button.transport_portion),
+            ButtonStyle::TransportPrimary => Self::Portion(skin.button.primary_portion),
             ButtonStyle::VisNav => Self::Fixed(skin.vis.nav_cell_size),
         }
     }
@@ -219,7 +219,6 @@ pub(crate) fn declared_width(style: ButtonStyle, skin: &Skin) -> Length {
 impl Face {
     fn new(config: ButtonConfig, active: bool, skin: &Skin) -> Self {
         let ButtonConfig { frame, mark, style } = config;
-        let palette = skin.palette;
         let transport = matches!(
             style,
             ButtonStyle::Transport | ButtonStyle::TransportPrimary
@@ -228,22 +227,26 @@ impl Face {
         // is a cell in a bar, not a lamp that is always lit, so it dims with
         // the rest of the bar while the deck is stopped.
         let highlighted = active;
-        let content: Rgba = if style == ButtonStyle::VisNav {
-            skin.rgba(skin.vis.nav_text_color)
-        } else if highlighted {
-            palette.bg
-        } else if style == ButtonStyle::MicroPrimary {
-            palette.text_dim
-        } else {
-            palette.text
-        };
-        let font: FontSkin = if primary(style) || active {
-            skin.button.primary_text
-        } else if style == ButtonStyle::VisNav {
+        // The word is shaped by the face the style asks for, but coloured by
+        // whether the button is currently the one being read: a primary
+        // button that is not lit still wears the plain text colour.
+        let role: TextRoleSkin = if style == ButtonStyle::VisNav {
             skin.vis.nav_text
+        } else if primary(style) || active {
+            skin.button.primary_text
         } else {
             skin.button.text
         };
+        let color = if style == ButtonStyle::VisNav {
+            skin.vis.nav_text.color
+        } else if highlighted {
+            skin.button.primary_text.color
+        } else if style == ButtonStyle::MicroPrimary {
+            skin.button.dim_text_color
+        } else {
+            skin.button.text.color
+        };
+        let content: Rgba = skin.rgba(color);
         Self {
             active,
             content,
@@ -262,7 +265,7 @@ impl Face {
                 marked: Marked::new(mark, icon_size(style, transport, skin)),
                 placement: placement(style, transport),
                 solo_color: if transport && !highlighted {
-                    palette.text_dim
+                    skin.rgba(skin.button.dim_text_color)
                 } else {
                     content
                 },
@@ -272,13 +275,7 @@ impl Face {
             } else {
                 skin.button.padding_x
             },
-            role: TextRoleSkin {
-                color: ColorRole::Text,
-                font: FontFamily::Mono,
-                size: font.size,
-                spacing: 0.0,
-                weight: font.weight,
-            },
+            role: TextRoleSkin { color, ..role },
         }
     }
 
@@ -512,34 +509,19 @@ impl Placement {
 }
 
 fn fill(style: ButtonStyle, highlighted: bool, transport: bool, skin: &Skin) -> Fill {
-    let palette = skin.palette;
-    if style == ButtonStyle::VisNav {
-        return Fill {
-            hovered: palette.bg_select,
-            idle: skin.rgba(skin.vis.nav_background),
-            pressed: palette.accent_soft,
-        };
-    }
-    if highlighted {
-        return Fill {
-            hovered: palette.accent_strong,
-            idle: palette.accent,
-            pressed: palette.accent_soft,
-        };
-    }
+    let colors = if style == ButtonStyle::VisNav {
+        skin.vis.nav_fill
+    } else if highlighted {
+        skin.button.primary_fill
+    } else if transport {
+        skin.button.transport_fill
+    } else {
+        skin.button.fill
+    };
     Fill {
-        hovered: palette.bg_panel_2,
-        idle: if transport {
-            Rgba {
-                a: 0.0,
-                b: 0.0,
-                g: 0.0,
-                r: 0.0,
-            }
-        } else {
-            palette.bg_panel
-        },
-        pressed: palette.accent_soft,
+        hovered: skin.tint(colors.hovered),
+        idle: skin.tint(colors.idle),
+        pressed: skin.tint(colors.pressed),
     }
 }
 
@@ -593,8 +575,10 @@ mod tests {
     use crate::{
         builtin,
         draw::{DrawCmd, DrawListBuilder, Geom, Paint, Pen, Rect},
+        ids::SourceUri,
         module::ButtonStyle,
         shaping::{FontId, GlyphFace, GlyphSegment, TextContext},
+        skin::parse_skin_over,
     };
 
     fn plain(label: &str) -> ButtonLabel<&str> {
@@ -650,6 +634,61 @@ mod tests {
     #[kithara::test]
     fn a_stopped_micro_button_does_not_take_the_accent() {
         assert_ne!(micro_fill(false), builtin::skin().palette.accent);
+    }
+
+    fn idle_fill(skin: &Skin) -> Rgba {
+        let bounds = Rect {
+            h: 30.0,
+            w: 72.0,
+            x: 0.0,
+            y: 0.0,
+        };
+        let mut text = TextContext::from(skin.text_resources());
+        let mut builder = DrawListBuilder::default();
+        Button::new(
+            ButtonConfig::builder().style(ButtonStyle::Default).build(),
+            None,
+            skin,
+        )
+        .paint(
+            &mut builder,
+            &mut text,
+            &plain("DEFAULT"),
+            false,
+            bounds,
+            VisualState::Idle,
+        );
+        let list = builder.finish();
+        let Some(DrawCmd::Fill {
+            paint: Paint::Solid(color),
+            ..
+        }) = list.commands().first()
+        else {
+            panic!("a button paints its cell first");
+        };
+        *color
+    }
+
+    #[kithara::test]
+    fn a_button_takes_the_idle_fill_a_second_skin_writes_over_it() {
+        let origin = SourceUri("loud.kskin.ron".to_owned());
+        let text = r##"(
+            schema: "kithara.skin",
+            version: 1,
+            id: "kithara-loud",
+            button: (fill: (hovered: BgPanel2, idle: Danger, pressed: AccentSoft)),
+        )"##;
+        let document =
+            parse_skin_over(builtin::skin_doc(), text, &origin).expect("the patch parses");
+        let skin = Skin::resolve(document, builtin::text_doc(), &origin)
+            .expect("the patched document resolves");
+
+        assert_eq!(idle_fill(&skin), skin.palette.danger);
+    }
+
+    #[kithara::test]
+    fn a_button_the_skin_says_nothing_new_about_keeps_its_fill() {
+        assert_eq!(idle_fill(builtin::skin()), builtin::skin().palette.bg_panel);
     }
 
     #[kithara::test]

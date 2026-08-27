@@ -20,6 +20,14 @@ pub struct Rgba {
     pub r: f32,
 }
 
+/// Paints nothing: what a control draws where its skin names no colour.
+pub(crate) const TRANSPARENT: Rgba = Rgba {
+    a: 0.0,
+    b: 0.0,
+    g: 0.0,
+    r: 0.0,
+};
+
 /// A toolkit-neutral rectangle in logical pixels.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Rect {

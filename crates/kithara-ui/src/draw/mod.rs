@@ -14,6 +14,7 @@ pub use backend::{Backend, replay};
 pub(crate) use cached::CachedValue;
 pub use caps::{Caps, Needs, Unsupported};
 pub use image::{Image, ImageId};
+pub(crate) use ir::TRANSPARENT;
 pub use ir::{DrawCmd, Geom, Pt, Rect, Rgba, Transform};
 pub use list::{DrawList, DrawListBuilder};
 pub use path::{FillRule, Outline, Path, PoolPath, Verb};

@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{
     palette::ColorRole,
-    primitives::{FontSkin, FrameSkin, TextRoleSkin, TickSkin},
+    primitives::{FontSkin, FrameSkin, StateColors, TextRoleSkin, TickSkin},
     section::skin_section,
 };
 use crate::{
@@ -112,9 +112,8 @@ skin_section! {
 skin_section! {
     pub struct VisSkin => VisPatch {
         pub icon_color: ColorRole,
-        pub nav_background: ColorRole,
-        pub nav_text_color: ColorRole,
-        pub nav_text: FontSkin,
+        pub nav_fill: StateColors,
+        pub nav_text: TextRoleSkin,
         pub nav_frame: FrameSkin,
         pub size: SizeSpec,
         pub footer_height: f32,
@@ -211,8 +210,14 @@ skin_section! {
 
 skin_section! {
     pub struct ButtonSkin => ButtonPatch {
-        pub primary_text: FontSkin,
-        pub text: FontSkin,
+        pub primary_text: TextRoleSkin,
+        pub text: TextRoleSkin,
+        /// What a button that is present but not asking to be read draws its
+        /// word and its mark in.
+        pub dim_text_color: ColorRole,
+        pub fill: StateColors,
+        pub primary_fill: StateColors,
+        pub transport_fill: StateColors,
         /// A transport cell draws no border of its own; these sides say where the
         /// seam between neighbouring cells goes.
         pub transport_sides: FrameSides,
@@ -226,8 +231,8 @@ skin_section! {
         pub padding_x: f32,
         pub padding_y: f32,
         pub transport_icon_size: f32,
-        pub primary_fill: u16,
-        pub transport_fill: u16,
+        pub primary_portion: u16,
+        pub transport_portion: u16,
     }
 }
 

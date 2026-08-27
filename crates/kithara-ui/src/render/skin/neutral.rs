@@ -1,5 +1,5 @@
 use crate::{
-    draw::Rgba,
+    draw::{Rgba, TRANSPARENT},
     error::UiDocError,
     ids::SourceUri,
     module::TextStyle,
@@ -116,6 +116,12 @@ impl Skin {
 
     pub(crate) fn rgba(&self, role: ColorRole) -> Rgba {
         self.palette[role]
+    }
+
+    /// Resolves one state of a [`StateColors`]: a state naming no role paints
+    /// nothing.
+    pub(crate) fn tint(&self, role: Option<ColorRole>) -> Rgba {
+        role.map_or(TRANSPARENT, |role| self.rgba(role))
     }
 
     /// Resolves a parsed document into neutral colors and render metrics,

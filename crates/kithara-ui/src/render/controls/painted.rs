@@ -2374,11 +2374,11 @@ mod lengths {
 
         assert_eq!(
             paint(ButtonStyle::Transport, skin).length().0,
-            Length::FillPortion(skin.button.transport_fill)
+            Length::FillPortion(skin.button.transport_portion)
         );
         assert_eq!(
             paint(ButtonStyle::TransportPrimary, skin).length().0,
-            Length::FillPortion(skin.button.primary_fill)
+            Length::FillPortion(skin.button.primary_portion)
         );
     }
 
@@ -2502,7 +2502,10 @@ mod lengths {
 
         assert_eq!(
             element.as_widget().size(),
-            iced::Size::new(Length::FillPortion(skin.button.primary_fill), Length::Fill)
+            iced::Size::new(
+                Length::FillPortion(skin.button.primary_portion),
+                Length::Fill
+            )
         );
     }
 
@@ -2516,7 +2519,10 @@ mod lengths {
 
         assert_eq!(
             element.as_widget().size(),
-            iced::Size::new(Length::FillPortion(skin.button.primary_fill), Length::Fill)
+            iced::Size::new(
+                Length::FillPortion(skin.button.primary_portion),
+                Length::Fill
+            )
         );
     }
 }
