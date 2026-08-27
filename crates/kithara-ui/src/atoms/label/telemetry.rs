@@ -27,7 +27,7 @@ impl Telemetry {
         Self {
             format,
             framed,
-            inset: skin.palette.bg_inset,
+            inset: skin.rgba(metrics.inset_color),
             metrics,
             role: metrics.text,
             stroke: skin.rgba(metrics.frame.border),

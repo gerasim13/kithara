@@ -11,9 +11,9 @@ pub(crate) struct Spacer {
 }
 
 impl Spacer {
-    pub(crate) const fn new(skin: &Skin) -> Self {
+    pub(crate) fn new(skin: &Skin) -> Self {
         Self {
-            panel: skin.palette.bg_panel,
+            panel: skin.rgba(skin.global_bar.panel_fill),
         }
     }
 

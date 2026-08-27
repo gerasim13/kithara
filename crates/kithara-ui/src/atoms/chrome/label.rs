@@ -7,19 +7,13 @@ use crate::{
     draw::{DrawListBuilder, Pt, Rect, Rgba, Transform},
     render::Skin,
     shaping::TextContext,
-    skin::{ColorRole, FontFamily, FontWeight, FrameSkin, TextRoleSkin},
+    skin::{ColorRole, FrameSkin, TextRoleSkin},
     solve::{Length, Size},
 };
 
 /// The word a module's footer carries, in the one role both hosts shape it in.
 pub(crate) fn footer_role(skin: &Skin) -> TextRoleSkin {
-    TextRoleSkin {
-        color: skin.chrome.footer_text,
-        font: FontFamily::Mono,
-        size: skin.chrome.footer_text_size,
-        spacing: 0.0,
-        weight: FontWeight::Normal,
-    }
+    skin.chrome.footer_text
 }
 
 /// A chip or a title in a module header: a filled box around a shaped label.
@@ -45,13 +39,7 @@ impl ChromeLabel {
             skin,
             metrics.chip_background,
             metrics.chip_frame,
-            TextRoleSkin {
-                color: metrics.chip_text,
-                font: FontFamily::Mono,
-                size: metrics.chip_text_size,
-                spacing: 0.0,
-                weight: FontWeight::Normal,
-            },
+            metrics.chip_text,
         )
     }
 
@@ -62,13 +50,7 @@ impl ChromeLabel {
             skin,
             metrics.title_background,
             metrics.title_frame,
-            TextRoleSkin {
-                color: metrics.title_text,
-                font: FontFamily::Display,
-                size: metrics.title_text_size,
-                spacing: 0.0,
-                weight: FontWeight::Medium,
-            },
+            metrics.title_text,
         )
     }
 
@@ -191,7 +173,7 @@ mod tests {
         let Some(DrawCmd::Text { color, .. }) = commands.last() else {
             panic!("a chip must set a word: {commands:?}");
         };
-        assert_eq!(*color, skin.rgba(skin.chrome.chip_text));
+        assert_eq!(*color, skin.rgba(skin.chrome.chip_text.color));
     }
 
     #[kithara::test]

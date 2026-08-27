@@ -90,7 +90,7 @@ impl<'config, A: App> Scenario<'config, A> {
             .unwrap_or_else(|error| panic!("the scenario must draw: {error}"))
     }
 
-    pub(super) const fn background(&self) -> Rgba {
+    pub(super) fn background(&self) -> Rgba {
         self.ui.background()
     }
 

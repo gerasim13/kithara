@@ -110,6 +110,8 @@ pub struct TickSkin {
 
 skin_section! {
     pub struct LayoutSkin => LayoutPatch {
+        /// What a host clears the target to wherever no document reaches.
+        pub page_background: ColorRole,
         pub grid_gap: f32,
         pub grid_pad: f32,
     }
@@ -131,15 +133,16 @@ skin_section! {
     pub struct ChromeSkin => ChromePatch {
         pub chevron_color: ColorRole,
         pub chip_background: ColorRole,
-        pub chip_text: ColorRole,
         pub corner_color: ColorRole,
+        pub drop_zone_color: ColorRole,
         pub footer_background: ColorRole,
-        pub footer_text: ColorRole,
         pub header_background: ColorRole,
         pub inner_line: ColorRole,
         pub panel_background: ColorRole,
         pub title_background: ColorRole,
-        pub title_text: ColorRole,
+        pub chip_text: TextRoleSkin,
+        pub footer_text: TextRoleSkin,
+        pub title_text: TextRoleSkin,
         pub chevron_frame: FrameSkin,
         pub chip_frame: FrameSkin,
         pub footer_frame: FrameSkin,
@@ -151,16 +154,13 @@ skin_section! {
         pub chevron_size: f32,
         pub chevron_stroke_width: f32,
         pub chip_pad: f32,
-        pub chip_text_size: f32,
         pub corner_offset: f32,
         pub corner_size: f32,
         pub corner_width: f32,
         pub footer_height: f32,
         pub footer_pad: f32,
-        pub footer_text_size: f32,
         pub header_height: f32,
         pub inner_line_width: f32,
-        pub title_text_size: f32,
     }
 }
 

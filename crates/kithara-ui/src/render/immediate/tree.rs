@@ -55,15 +55,18 @@ fn search_bar<'a>(
     skin: &'a Skin,
     owner: InputOwner,
 ) -> Element<'a, UiEvent> {
-    let icon = container(Icon::Search.view(skin.tree.search_icon_size, skin.palette.muted.into()))
-        .width(Length::Fixed(skin.tree.search_icon_width))
-        .height(Length::Fill)
-        .align_x(Horizontal::Center)
-        .align_y(Vertical::Center)
-        .style({
-            let background = skin.color(skin.tree.search_background);
-            move |_| ContainerStyle::default().background(Background::Color(background))
-        });
+    let icon = container(Icon::Search.view(
+        skin.tree.search_icon_size,
+        skin.color(skin.tree.search_icon_color),
+    ))
+    .width(Length::Fixed(skin.tree.search_icon_width))
+    .height(Length::Fill)
+    .align_x(Horizontal::Center)
+    .align_y(Vertical::Center)
+    .style({
+        let background = skin.color(skin.tree.search_background);
+        move |_| ContainerStyle::default().background(Background::Color(background))
+    });
     let input = search_input(&format!("{path}/search"), query, skin, owner);
 
     container(row![icon, input].spacing(1).height(Length::Fill))

@@ -193,6 +193,7 @@ skin_section! {
 
 skin_section! {
     pub struct TelemetrySkin => TelemetryPatch {
+        pub inset_color: ColorRole,
         pub text: TextRoleSkin,
         pub frame: FrameSkin,
         pub size: SizeSpec,

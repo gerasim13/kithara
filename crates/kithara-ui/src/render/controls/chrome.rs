@@ -418,8 +418,8 @@ mod tests {
         let chip: Element<'_, UiEvent> = container(
             shaped("FX")
                 .font(fonts::mono(FontWeight::Normal))
-                .size(metrics.chip_text_size)
-                .color(skin.color(metrics.chip_text)),
+                .size(metrics.chip_text.size)
+                .color(skin.color(metrics.chip_text.color)),
         )
         .padding([0.0, metrics.chip_pad])
         .height(Length::Fill)
@@ -428,8 +428,8 @@ mod tests {
         let title: Element<'_, UiEvent> = container(
             shaped("DECK")
                 .font(fonts::display(FontWeight::Medium))
-                .size(metrics.title_text_size)
-                .color(skin.color(metrics.title_text)),
+                .size(metrics.title_text.size)
+                .color(skin.color(metrics.title_text.color)),
         )
         .padding([0.0, metrics.chip_pad])
         .height(Length::Fill)

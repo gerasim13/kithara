@@ -107,8 +107,9 @@ where
     /// whoever owns it. That bare part is the page, and it is the skin's, not
     /// the target's: clearing to anything else shows through wherever a
     /// document does not reach, and the other host does not have that seam.
-    pub const fn background(&self) -> Rgba {
-        self.config.skin.palette.bg
+    pub fn background(&self) -> Rgba {
+        let skin = &self.config.skin;
+        skin.rgba(skin.layout.page_background)
     }
 
     /// Current allocation-reuse counters for this mounted document.

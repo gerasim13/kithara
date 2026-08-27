@@ -138,11 +138,11 @@ fn builtin_skin_pins_the_design_canon() {
     assert_eq!(document.palette.bg_footer, "#1b1b32");
     assert_eq!(document.chrome.header_height, 26.0);
     assert_eq!(document.chrome.chip_pad, 9.0);
-    assert_eq!(document.chrome.chip_text_size, 9.0);
-    assert_eq!(document.chrome.title_text_size, 11.0);
+    assert_eq!(document.chrome.chip_text.size, 9.0);
+    assert_eq!(document.chrome.title_text.size, 11.0);
     assert_eq!(document.chrome.chevron_size, 26.0);
     assert_eq!(document.chrome.footer_height, 22.0);
-    assert_eq!(document.chrome.footer_text_size, 9.0);
+    assert_eq!(document.chrome.footer_text.size, 9.0);
     assert_eq!(document.chrome.inner_line, ColorRole::LineInner);
     assert_eq!(document.chrome.footer_background, ColorRole::BgFooter);
     assert_eq!(document.chrome.corner_size, 10.0);
