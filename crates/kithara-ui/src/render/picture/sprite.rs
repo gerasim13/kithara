@@ -1,30 +1,7 @@
-use std::sync::LazyLock;
-
 use kithara_platform::sync::Arc;
 use png::{ColorType, Decoder, Transformations};
 
-use crate::{
-    builtin,
-    draw::{Image, ImageId},
-};
-
-/// The name every sheet this toolkit ships is asked for by.
-const SPINNER: &str = "spinner";
-
-/// One of the sheets the toolkit ships, cut on first use.
-///
-/// A document names a sheet rather than carrying pixels, and this is the whole
-/// list of names it may use. A name nothing answers draws nothing, which is
-/// what an unbound control does everywhere else.
-#[must_use]
-pub fn builtin_sheet(name: &str) -> Option<&'static Sheet> {
-    static SHEET: LazyLock<Option<Sheet>> = LazyLock::new(|| {
-        Sheet::cut(SPINNER, builtin::SPINNER_SHEET, 8, 1)
-            .inspect_err(|error| tracing::error!(%error, "the built-in sprite sheet did not cut"))
-            .ok()
-    });
-    (name == SPINNER).then(|| SHEET.as_ref()).flatten()
-}
+use crate::draw::{Image, ImageId};
 
 /// What a sheet could not be read as.
 #[derive(Debug, thiserror::Error)]
@@ -55,7 +32,7 @@ pub enum SheetError {
 /// with its own identity, so a rasteriser uploads each one once and a drawing
 /// asks for it by index rather than carrying a source rectangle the seam would
 /// then have to describe to two toolkits that spell it differently.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Sheet {
     frames: Vec<Image>,
 }
@@ -154,7 +131,7 @@ fn crop(sheet: &[u8], sheet_width: u32, at: (u32, u32), size: (u32, u32)) -> Vec
 mod tests {
     use kithara_test_utils::kithara;
 
-    use super::{Sheet, builtin_sheet};
+    use super::Sheet;
     use crate::{builtin, draw::Image};
 
     #[kithara::test]
@@ -215,29 +192,5 @@ mod tests {
     #[kithara::test]
     fn something_that_is_not_a_png_is_refused() {
         assert!(Sheet::cut("nonsense", b"not a png", 1, 1).is_err());
-    }
-
-    #[kithara::test]
-    fn the_sheet_the_toolkit_ships_is_reachable_by_name() {
-        assert!(builtin_sheet("spinner").is_some());
-    }
-
-    /// A document naming a sheet nothing ships draws nothing, rather than
-    /// standing in for it with a sheet it did not ask for.
-    #[kithara::test]
-    fn a_sheet_the_toolkit_does_not_ship_answers_nothing() {
-        assert!(builtin_sheet("no-such-sheet").is_none());
-    }
-
-    /// The sheet is cut once, so a frame drawn on one screen and the same frame
-    /// drawn on the next are one picture to whatever uploads it.
-    #[kithara::test]
-    fn asking_twice_gives_back_the_same_cut() {
-        let (first, again) = (builtin_sheet("spinner"), builtin_sheet("spinner"));
-
-        assert_eq!(
-            first.and_then(|sheet| sheet.frame(0)).map(Image::rgba),
-            again.and_then(|sheet| sheet.frame(0)).map(Image::rgba)
-        );
     }
 }

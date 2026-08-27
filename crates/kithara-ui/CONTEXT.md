@@ -69,6 +69,25 @@ already reachable through `self.document`" is structurally correct but the dupli
 not an oversight; collapsing it back to `self.document().button` would put the doc's indirection back
 on every render call.
 
+A skin carries pictures as well as numbers and colours. `SkinDoc.pictures` maps the name a document
+asks for to the file that answers it and the grid it is cut on, and a patch restates one by name the
+way it restates a colour: `kithara-neon` gives the spinner a turning ring of dots, and a skin naming
+none keeps the arc it inherits. A path is written beside the document that names it and rewritten to
+a root-relative one while that document is parsed, so a picture declared by a base skin and inherited
+by a patch elsewhere still points at the file its own skin meant.
+
+Pictures reach the toolkit through a second door on `SourceResolver`: `load` answers text and `bytes`
+answers a source that is not text, because PNG bytes are not valid UTF-8 and would be refused on the
+way in. `Skin::resolve` takes the resolver the document was loaded through and cuts every picture
+once into `Pictures`, a name to `Arc<Sheet>` map, and `Skin::sheet` is the only way anything asks for
+one - there is no second registry behind it, so a document naming a picture the worn skin does not
+carry draws nothing. A picture the skin does name and the resolver cannot answer is an error while
+the skin resolves, not an empty slot at every draw. Each frame becomes its own picture with its own
+identity at that point, because the draw seam carries no source rectangle: a rasteriser uploads a
+frame once and every later frame of an animation is a lookup. `Reading` carries the skin for the same
+reason it carries the document's values - what a control draws can come from the skin, not only how
+it is drawn.
+
 The palette is the single colour vocabulary: a skin section names a `ColorRole`, never a hex, and
 only `PaletteDoc::validate` parses one. Alpha stays a skin field beside the role it applies to. A
 `ColorRole` is an alias for a value, and several role names do not carry the design token they sound

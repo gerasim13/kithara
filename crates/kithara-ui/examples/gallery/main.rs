@@ -355,7 +355,7 @@ mod tests {
         lottie::builtin_artwork,
         module::{ButtonStyle, ChromeStyle, IconName, Motion, Pose, WaveStyle},
         registry::SECONDS,
-        render::{ControlAction, ReadValue, Reads, builtin_sheet},
+        render::{ControlAction, ReadValue, Reads},
     };
     use num_traits::cast::AsPrimitive;
 
@@ -1301,16 +1301,17 @@ mod tests {
         found
     }
 
-    /// A page that names a sheet nothing ships draws an empty row, and the
-    /// capture beside it would agree with itself about nothing at all.
+    /// A page that names a picture the worn skin does not carry draws an empty
+    /// row, and the capture beside it would agree with itself about nothing at
+    /// all.
     #[kithara::test]
-    fn every_sprite_names_a_sheet_the_toolkit_ships() {
+    fn every_sprite_names_a_picture_the_skin_carries() {
         let ui = page(Tab::Sprites);
 
         let missing: Vec<&str> = sprite_sites(&ui)
             .iter()
             .map(|(sheet, _, _)| *sheet)
-            .filter(|sheet| builtin_sheet(sheet).is_none())
+            .filter(|sheet| builtin::skin().sheet(sheet).is_none())
             .collect();
 
         assert_eq!(missing, [""; 0]);

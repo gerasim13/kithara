@@ -123,6 +123,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         builtin::skin_doc().clone(),
         builtin::text_doc(),
         &SourceUri("example:masonry".to_owned()),
+        &builtin::resolver(),
         FontPolicy::Embedded,
     )?;
     let reads = EmptyReads;

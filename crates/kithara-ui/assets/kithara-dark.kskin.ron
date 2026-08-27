@@ -30,6 +30,9 @@
         wave_high: "#2ec7eb",
         shadow: "#000000",
     ),
+    pictures: {
+        "spinner": (source: "sprites/spinner.png", columns: 8, rows: 1),
+    },
     layout: (
         page_background: Bg,
         grid_gap: 1.0,

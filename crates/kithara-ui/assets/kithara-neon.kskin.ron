@@ -6,6 +6,9 @@
     version: 1,
     id: "kithara-neon",
     base: "kithara-dark.kskin.ron",
+    pictures: {
+        "spinner": (source: "sprites/spinner-neon.png", columns: 8, rows: 1),
+    },
     palette: (
         bg: "#05060a",
         bg_deep: "#000103",

@@ -30,9 +30,14 @@ pub const SKIN_PATHS: [&str; 4] = [
     NEON_SKIN_PATH,
     SOFT_SKIN_PATH,
 ];
-/// Eight frames of a growing arc, in one row, for the sprite page and its
-/// cross-host proof.
+/// Eight frames of a growing arc, in one row, named by the dark skin for the
+/// sprite page and its cross-host proof.
 pub const SPINNER_SHEET: &[u8] = include_bytes!("../assets/sprites/spinner.png");
+pub const SPINNER_SHEET_PATH: &str = "sprites/spinner.png";
+/// The same eight frames drawn as a turning ring of dots, named by the neon
+/// skin over the arc it inherits: a skin carries drawings and not only colour.
+pub const NEON_SPINNER_SHEET: &[u8] = include_bytes!("../assets/sprites/spinner-neon.png");
+pub const NEON_SPINNER_SHEET_PATH: &str = "sprites/spinner-neon.png";
 pub const TEXT_EN: &str = include_str!("../assets/kithara-en.ktext.ron");
 
 #[must_use]
@@ -117,9 +122,18 @@ pub fn resolver() -> MemResolver {
             include_str!("../assets/modules/library.kmodule.ron"),
         ),
     ];
+    /// Every picture the shipped skins name, read through the same resolver
+    /// their documents are.
+    const PICTURES: &[(&str, &[u8])] = &[
+        (SPINNER_SHEET_PATH, SPINNER_SHEET),
+        (NEON_SPINNER_SHEET_PATH, NEON_SPINNER_SHEET),
+    ];
     let mut resolver = MemResolver::default();
     for (path, text) in ASSETS {
         resolver.insert(path, text);
+    }
+    for (path, bytes) in PICTURES {
+        resolver.insert_bytes(path, bytes);
     }
     resolver
 }
@@ -161,7 +175,7 @@ pub fn skins() -> &'static [Skin] {
                 let origin = SourceUri((*path).to_owned());
                 let document = load_skin(&resolver, path, &Limits::default())
                     .unwrap_or_else(|error| panic!("embedded skin {path} must be valid: {error}"));
-                Skin::resolve(document, text_doc(), &origin)
+                Skin::resolve(document, text_doc(), &origin, &resolver)
                     .unwrap_or_else(|error| panic!("embedded skin {path} must resolve: {error}"))
             })
             .collect()

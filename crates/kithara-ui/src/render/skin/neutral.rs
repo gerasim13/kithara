@@ -1,9 +1,14 @@
+use kithara_platform::sync::Arc;
+
 use crate::{
     draw::{Rgba, TRANSPARENT},
     error::UiDocError,
     ids::SourceUri,
     module::TextStyle,
-    render::theme::RenderPalette,
+    render::{
+        picture::{Pictures, Sheet},
+        theme::RenderPalette,
+    },
     shaping::{FontPolicy, TextResources},
     skin::{
         ButtonSkin, CellSkin, CheckboxSkin, ChipSkin, ChromeSkin, ColorRole, CrossfaderSkin,
@@ -13,6 +18,7 @@ use crate::{
         TableSkin, TelemetrySkin, TextRoleSkin, TextSkin, ToggleSkin, TreeSkin, VisSkin,
         VuStereoSkin, VuVerticalSkin, WaveSkin, WindowSkin, skin_sections,
     },
+    source::SourceResolver,
     text::TextDoc,
 };
 
@@ -40,6 +46,10 @@ macro_rules! define_skin {
             pub table_footer_rows: String,
             pub tree_search_placeholder: String,
             $(pub $field: $section,)*
+            /// The pictures this skin carries, cut into frames while it
+            /// resolved. A document names a picture; the skin is what answers
+            /// the name, so switching skins switches the drawings.
+            pictures: Pictures,
             #[field(get, vis = "pub(crate)")]
             text_resources: TextResources,
             /// The document this skin was resolved from, which is what a
@@ -52,17 +62,22 @@ macro_rules! define_skin {
         impl Skin {
             /// Resolves a parsed document under an explicit font policy.
             ///
+            /// The resolver is the one the document was loaded through: a skin
+            /// names its pictures, and resolving it is what reads them.
+            ///
             /// # Errors
-            /// Returns [`UiDocError`] when a palette value or embedded font is
-            /// invalid, or [`UiDocError::UnknownTextKey`] when `catalog` is
-            /// missing a caption.
+            /// Returns [`UiDocError`] when a palette value, embedded font or
+            /// named picture is invalid, or [`UiDocError::UnknownTextKey`] when
+            /// `catalog` is missing a caption.
             pub fn resolve_with_font_policy(
                 document: SkinDoc,
                 catalog: &TextDoc,
                 origin: &SourceUri,
+                resolver: &dyn SourceResolver,
                 font_policy: FontPolicy,
             ) -> Result<Self, UiDocError> {
                 Ok(Self {
+                    pictures: Pictures::load(&document.pictures, resolver)?,
                     palette: RenderPalette::resolve(&document.palette, origin)?,
                     crossfader_labels: CrossfaderLabels {
                         left: text_field(catalog, "crossfader.left_label", origin)?,
@@ -135,20 +150,30 @@ impl Skin {
         role.map_or(TRANSPARENT, |role| self.rgba(role))
     }
 
-    /// Resolves a parsed document into neutral colors and render metrics,
-    /// pulling the crossfader, tree search and table footer captions from
-    /// `catalog`.
+    /// Resolves a parsed document into neutral colors, render metrics and the
+    /// pictures it names, pulling the crossfader, tree search and table footer
+    /// captions from `catalog`.
     ///
     /// # Errors
-    /// Returns [`UiDocError`] when a palette value or embedded font is invalid,
-    /// or [`UiDocError::UnknownTextKey`] when `catalog` is missing one of those
-    /// captions.
+    /// Returns [`UiDocError`] when a palette value, embedded font or named
+    /// picture is invalid, or [`UiDocError::UnknownTextKey`] when `catalog` is
+    /// missing one of those captions.
     pub fn resolve(
         document: SkinDoc,
         catalog: &TextDoc,
         origin: &SourceUri,
+        resolver: &dyn SourceResolver,
     ) -> Result<Self, UiDocError> {
-        Self::resolve_with_font_policy(document, catalog, origin, FontPolicy::System)
+        Self::resolve_with_font_policy(document, catalog, origin, resolver, FontPolicy::System)
+    }
+
+    /// The picture one name means in this skin, cut into its frames.
+    ///
+    /// A name this skin carries nothing for draws nothing, which is what an
+    /// unbound control does everywhere else.
+    #[must_use]
+    pub fn sheet(&self, name: &str) -> Option<&Arc<Sheet>> {
+        self.pictures.sheet(name)
     }
 }
 

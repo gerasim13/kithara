@@ -271,4 +271,16 @@ pub enum UiDocError {
     },
     #[error("{origin}: text key {key:?} is defined in more than one catalog")]
     DuplicateTextKey { origin: SourceUri, key: String },
+    /// A picture the skin names, and why it could not be cut into frames.
+    ///
+    /// Only where there is drawing: a build that mounts documents without
+    /// painting them never reads a picture.
+    #[cfg(feature = "render")]
+    #[error("{origin}: picture {name:?} did not cut into frames: {source}")]
+    Picture {
+        origin: SourceUri,
+        name: String,
+        #[source]
+        source: Box<crate::render::SheetError>,
+    },
 }

@@ -66,8 +66,13 @@ mod tests {
     #[kithara::test]
     fn tracking_widens_the_measured_run() {
         let origin = SourceUri("text.kskin.ron".to_owned());
-        let skin =
-            Skin::resolve(builtin::skin_doc().clone(), builtin::text_doc(), &origin).unwrap();
+        let skin = Skin::resolve(
+            builtin::skin_doc().clone(),
+            builtin::text_doc(),
+            &origin,
+            &builtin::resolver(),
+        )
+        .unwrap();
         let role = skin.text.body;
         let mut text = TextContext::from(skin.text_resources());
         let plain = Text::new(
@@ -97,8 +102,13 @@ mod tests {
     #[kithara::test]
     fn an_empty_string_emits_no_command() {
         let origin = SourceUri("text.kskin.ron".to_owned());
-        let skin =
-            Skin::resolve(builtin::skin_doc().clone(), builtin::text_doc(), &origin).unwrap();
+        let skin = Skin::resolve(
+            builtin::skin_doc().clone(),
+            builtin::text_doc(),
+            &origin,
+            &builtin::resolver(),
+        )
+        .unwrap();
         let mut text = TextContext::from(skin.text_resources());
         let mut list = DrawListBuilder::default();
         Text::new("", skin.text.body, 0.0, &skin).paint(
@@ -118,8 +128,13 @@ mod tests {
     #[kithara::test]
     fn text_command_stays_inside_bounds_vertically() {
         let origin = SourceUri("text.kskin.ron".to_owned());
-        let skin =
-            Skin::resolve(builtin::skin_doc().clone(), builtin::text_doc(), &origin).unwrap();
+        let skin = Skin::resolve(
+            builtin::skin_doc().clone(),
+            builtin::text_doc(),
+            &origin,
+            &builtin::resolver(),
+        )
+        .unwrap();
         let mut text = TextContext::from(skin.text_resources());
         let mut list = DrawListBuilder::default();
         let bounds = Rect {

@@ -3,6 +3,7 @@ mod controls;
 mod document;
 mod palette;
 mod panels;
+mod pictures;
 mod primitives;
 mod section;
 
@@ -12,5 +13,6 @@ pub use self::{
     document::*,
     palette::*,
     panels::*,
+    pictures::*,
     primitives::*,
 };

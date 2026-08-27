@@ -195,6 +195,7 @@ fn fixture_skin() -> Skin {
         builtin::skin_doc().clone(),
         builtin::text_doc(),
         &SourceUri("fixture:layout-parity".to_owned()),
+        &builtin::resolver(),
         FontPolicy::Embedded,
     )
     .expect("builtin layout fixture skin must resolve")

@@ -52,9 +52,14 @@ pub(crate) type DataRefresh<Data> = Box<dyn Fn(&mut Data, Ctx<'_, '_>) -> bool>;
 /// Values are reached through [`Ctx`] and nowhere else, so a control cannot be
 /// written that quietly misses what the host answers for itself — the frame's
 /// own clock among it.
+///
+/// The skin is here as well as on [`Draws::painter`] because what a control
+/// draws can come from the skin rather than only how it is drawn: a picture is
+/// named by the document and carried by the skin.
 #[derive(Clone, Copy)]
 pub(crate) struct Reading<'a> {
     pub(crate) ctx: Ctx<'a, 'a>,
     pub(crate) scope: &'a str,
+    pub(crate) skin: &'a Skin,
     pub(crate) value: Option<&'a ReadValue<'a>>,
 }

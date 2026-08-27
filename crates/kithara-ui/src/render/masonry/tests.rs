@@ -601,6 +601,7 @@ fn masonry_layout_rects_equal_snapped_neutral_rects() {
         builtin::skin_doc().clone(),
         builtin::text_doc(),
         &SourceUri("fixture:masonry-layout-parity".to_owned()),
+        &builtin::resolver(),
         FontPolicy::Embedded,
     )
     .unwrap_or_else(|error| panic!("builtin layout fixture skin must resolve: {error}"));
@@ -2477,6 +2478,7 @@ fn masonry_draws_every_control_the_census_claims_it_draws() {
         builtin::skin_doc().clone(),
         builtin::text_doc(),
         &SourceUri("fixture:masonry-control-census".to_owned()),
+        &builtin::resolver(),
         FontPolicy::Embedded,
     )
     .unwrap_or_else(|error| panic!("the census skin must resolve: {error}"));
@@ -2870,6 +2872,7 @@ mod gesture_census {
                     reading: Reading {
                         ctx,
                         scope: ctx.scope(read),
+                        skin,
                         value: value.as_ref(),
                     },
                     skin,
@@ -3002,6 +3005,7 @@ mod gesture_census {
             builtin::skin_doc().clone(),
             builtin::text_doc(),
             &SourceUri("fixture:gesture-census".to_owned()),
+            &builtin::resolver(),
             FontPolicy::Embedded,
         )
         .unwrap_or_else(|error| panic!("the census skin must resolve: {error}"))

@@ -1,3 +1,5 @@
+pub mod library;
 pub mod sprite;
 
-pub use sprite::{Sheet, SheetError, builtin_sheet};
+pub use library::Pictures;
+pub use sprite::{Sheet, SheetError};

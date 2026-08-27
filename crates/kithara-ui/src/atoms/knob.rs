@@ -156,8 +156,13 @@ mod tests {
     #[kithara::test]
     fn knob_emits_ordered_commands_with_optional_text() {
         let origin = SourceUri("knob.kskin.ron".to_owned());
-        let skin =
-            Skin::resolve(builtin::skin_doc().clone(), builtin::text_doc(), &origin).unwrap();
+        let skin = Skin::resolve(
+            builtin::skin_doc().clone(),
+            builtin::text_doc(),
+            &origin,
+            &builtin::resolver(),
+        )
+        .unwrap();
         let labelled = record(Some("GAIN"), &skin);
         let unlabelled = record(None, &skin);
 
@@ -196,8 +201,13 @@ mod tests {
     #[kithara::test]
     fn caption_row_and_outer_inset_are_carved_from_the_bounds() {
         let origin = SourceUri("knob.kskin.ron".to_owned());
-        let skin =
-            Skin::resolve(builtin::skin_doc().clone(), builtin::text_doc(), &origin).unwrap();
+        let skin = Skin::resolve(
+            builtin::skin_doc().clone(),
+            builtin::text_doc(),
+            &origin,
+            &builtin::resolver(),
+        )
+        .unwrap();
         let bounds = Rect {
             h: 39.0,
             w: 28.0,

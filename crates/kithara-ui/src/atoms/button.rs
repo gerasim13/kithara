@@ -680,7 +680,7 @@ mod tests {
         )"##;
         let document =
             parse_skin_over(builtin::skin_doc(), text, &origin).expect("the patch parses");
-        let skin = Skin::resolve(document, builtin::text_doc(), &origin)
+        let skin = Skin::resolve(document, builtin::text_doc(), &origin, &builtin::resolver())
             .expect("the patched document resolves");
 
         assert_eq!(idle_fill(&skin), skin.palette.danger);

@@ -4,7 +4,8 @@ use num_traits::cast::AsPrimitive;
 
 use crate::{ids::InternId, mount::Control, size::SizeSpec, skin::SkinDoc};
 
-/// One frame of a named sheet, played by whatever answers its endpoint.
+/// One frame of a picture the skin carries, played by whatever answers its
+/// endpoint.
 ///
 /// The endpoint hands over seconds, so a document that binds it to the host's
 /// own clock gets an animation without the application owning a timer; one that
@@ -42,6 +43,7 @@ pub(crate) fn frame_at(seconds: f32, pass: f32, frames: usize) -> usize {
 
 #[cfg(feature = "render")]
 mod host {
+    use kithara_platform::sync::Arc;
     use num_traits::cast::AsPrimitive;
 
     use super::{Sprite, frame_at};
@@ -51,7 +53,7 @@ mod host {
         atoms::picture::sprite::Sprite as Face,
         draw::Image,
         render::{
-            ReadValue, Skin, builtin_sheet,
+            ReadValue, Sheet, Skin,
             controls::{Draws, Reading},
         },
     };
@@ -65,7 +67,7 @@ mod host {
 
         fn data(&self, read: Reading<'_>) -> Option<Option<Image>> {
             Some(frame(
-                read.ctx.ui.resolve(self.sheet),
+                read.skin.sheet(read.ctx.ui.resolve(self.sheet)),
                 self.seconds,
                 seconds(read.value),
             ))
@@ -80,11 +82,11 @@ mod host {
             read: Reading<'_>,
             endpoint: Option<&str>,
         ) -> Option<DataRefresh<Option<Image>>> {
-            let sheet = read.ctx.ui.resolve(self.sheet).to_owned();
+            let sheet = read.skin.sheet(read.ctx.ui.resolve(self.sheet)).cloned();
             let endpoint = endpoint?.to_owned();
             let pass = self.seconds;
             Some(Box::new(move |data, ctx| {
-                let next = frame(&sheet, pass, seconds(ctx.get(&endpoint).as_ref()));
+                let next = frame(sheet.as_ref(), pass, seconds(ctx.get(&endpoint).as_ref()));
                 if next.as_ref().map(Image::id) == data.as_ref().map(Image::id) {
                     return false;
                 }
@@ -102,8 +104,8 @@ mod host {
         }
     }
 
-    fn frame(sheet: &str, pass: f32, seconds: f32) -> Option<Image> {
-        let sheet = builtin_sheet(sheet)?;
+    fn frame(sheet: Option<&Arc<Sheet>>, pass: f32, seconds: f32) -> Option<Image> {
+        let sheet = sheet?;
         sheet.frame(frame_at(seconds, pass, sheet.len())).cloned()
     }
 
@@ -114,13 +116,16 @@ mod host {
         use kithara_test_utils::kithara;
 
         use super::frame;
-        use crate::draw::{Image, ImageId};
+        use crate::{
+            builtin,
+            draw::{Image, ImageId},
+        };
 
         /// The pass a document would give a spinner: long enough to read.
         const PASS: f32 = 1.6;
 
         fn at(seconds: f32) -> Option<ImageId> {
-            frame("spinner", PASS, seconds).map(|image| image.id().clone())
+            frame(builtin::skin().sheet("spinner"), PASS, seconds).map(|image| image.id().clone())
         }
 
         #[kithara::test]
@@ -135,9 +140,14 @@ mod host {
             assert_eq!(at(0.0), at(PASS));
         }
 
+        /// A document naming a picture the worn skin does not carry draws
+        /// nothing, rather than a picture it never asked for.
         #[kithara::test]
-        fn a_sheet_the_toolkit_does_not_ship_draws_nothing() {
-            assert_eq!(frame("no-such-sheet", PASS, 0.0), None);
+        fn a_picture_the_skin_does_not_carry_draws_nothing() {
+            assert_eq!(
+                frame(builtin::skin().sheet("no-such-picture"), PASS, 0.0),
+                None
+            );
         }
 
         /// The picture carries its pixels, so a rasteriser is handed everything
@@ -145,7 +155,7 @@ mod host {
         #[kithara::test]
         fn the_frame_a_reading_picks_carries_its_pixels() {
             assert!(
-                frame("spinner", PASS, 0.0)
+                frame(builtin::skin().sheet("spinner"), PASS, 0.0)
                     .as_ref()
                     .and_then(Image::rgba)
                     .is_some()

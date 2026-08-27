@@ -1085,6 +1085,7 @@ fn skin() -> &'static Skin {
             builtin::skin_doc().clone(),
             builtin::text_doc(),
             &SourceUri("fixture:ui-frame-perf".to_owned()),
+            &builtin::resolver(),
             FontPolicy::Embedded,
         )
         .unwrap_or_else(|error| panic!("the frame-perf skin must resolve: {error}"))

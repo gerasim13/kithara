@@ -492,6 +492,15 @@ impl crate::source::SourceResolver for Counted<'_> {
         self.loads.set(self.loads.get() + 1);
         self.inner.load(base, rel)
     }
+
+    fn bytes(
+        &self,
+        base: Option<&SourceUri>,
+        rel: &str,
+    ) -> Result<crate::source::LoadedBytes, crate::error::UiDocError> {
+        self.loads.set(self.loads.get() + 1);
+        self.inner.bytes(base, rel)
+    }
 }
 
 /// The wheel is how a knob is nudged without dragging it, how the hero wave
@@ -891,6 +900,7 @@ fn skin() -> &'static Skin {
             builtin::skin_doc().clone(),
             builtin::text_doc(),
             &SourceUri("fixture:app-input".to_owned()),
+            &builtin::resolver(),
             FontPolicy::Embedded,
         )
         .unwrap_or_else(|error| panic!("the fixture skin must resolve: {error}"))
@@ -917,6 +927,7 @@ fn page_skin(id: &str, bg: &str) -> Skin {
         doc,
         builtin::text_doc(),
         &SourceUri("fixture:app-input".to_owned()),
+        &builtin::resolver(),
         FontPolicy::Embedded,
     )
     .unwrap_or_else(|error| panic!("the fixture skin must resolve: {error}"))

@@ -584,7 +584,7 @@ mod tests {
         )"##;
         let document =
             parse_skin_over(builtin::skin_doc(), text, &origin).expect("the patch parses");
-        let skin = Skin::resolve(document, builtin::text_doc(), &origin)
+        let skin = Skin::resolve(document, builtin::text_doc(), &origin, &builtin::resolver())
             .expect("the patched document resolves");
 
         assert_eq!(playhead_color(&skin), skin.palette.danger);

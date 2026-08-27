@@ -821,6 +821,7 @@ where
     let reading = Reading {
         ctx: host.ctx,
         scope: host.ctx.scope(cx.read),
+        skin: host.skin,
         value: value.as_ref(),
     };
     let Some(data) = control.data(reading) else {

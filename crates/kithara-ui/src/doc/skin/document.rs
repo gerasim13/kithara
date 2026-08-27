@@ -18,6 +18,7 @@ use super::{
         PopSkin, TablePatch, TableSkin, TelemetryPatch, TelemetrySkin, TreePatch, TreeSkin,
         WavePatch, WaveSkin,
     },
+    pictures::{PictureDoc, PicturePatch},
     primitives::{
         ChromePatch, ChromeSkin, FrameSkin, LayoutPatch, LayoutSkin, ScrollPatch, ScrollSkin,
         TextRoleSkin, WindowPatch, WindowSkin,
@@ -86,6 +87,9 @@ macro_rules! define_skin_doc {
         pub struct SkinDoc {
             pub id: DocId,
             pub palette: PaletteDoc,
+            /// The pictures this skin carries, which is the whole set a
+            /// document may name.
+            pub pictures: PictureDoc,
             pub schema: String,
             pub version: u32,
             $(pub $field: $section,)*
@@ -106,6 +110,10 @@ macro_rules! define_skin_doc {
             pub version: u32,
             #[serde(default)]
             pub palette: Option<PalettePatch>,
+            /// Pictures this skin draws instead of the ones it inherits, by
+            /// name.
+            #[serde(default)]
+            pub pictures: Option<PicturePatch>,
             /// Restated over every frame the skin inherits, before its own
             /// sections are applied.
             #[serde(default)]
@@ -127,6 +135,9 @@ macro_rules! define_skin_doc {
                 self.version = patch.version;
                 if let Some(palette) = patch.palette {
                     self.palette.patch(palette);
+                }
+                if let Some(pictures) = patch.pictures {
+                    self.pictures.patch(pictures);
                 }
                 if let Some(frames) = patch.frames {
                     self.each_frame(&mut |frame| frames.apply(frame));
@@ -188,7 +199,7 @@ pub fn parse_skin(text: &str, origin: &SourceUri) -> Result<SkinDoc, UiDocError>
             found: envelope.kind.name(),
         });
     }
-    let document: SkinDoc =
+    let mut document: SkinDoc =
         ron_io::options()
             .from_str(text)
             .map_err(|source| UiDocError::Syntax {
@@ -196,6 +207,7 @@ pub fn parse_skin(text: &str, origin: &SourceUri) -> Result<SkinDoc, UiDocError>
                 source: Box::new(source),
             })?;
     document.palette.validate(origin)?;
+    document.pictures.rebase(origin)?;
     Ok(document)
 }
 
@@ -222,13 +234,16 @@ pub fn parse_skin_over(
             found: envelope.kind.name(),
         });
     }
-    let patch: SkinPatch =
+    let mut patch: SkinPatch =
         ron_io::options()
             .from_str(text)
             .map_err(|source| UiDocError::Syntax {
                 origin: origin.clone(),
                 source: Box::new(source),
             })?;
+    if let Some(pictures) = patch.pictures.as_mut() {
+        pictures.rebase(origin)?;
+    }
     let mut document = base.clone();
     document.apply(patch);
     document.palette.validate(origin)?;
