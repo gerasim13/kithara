@@ -596,6 +596,21 @@ suffix_args = [
   "package(kithara-ui) | (package(kithara-app) & test(/^gui::/))",
 ]
 
+[test.lanes.ui-perf]
+program = "cargo"
+default_features = ["kithara-ui/gpu", "kithara-ui/masonry", "kithara-ui/perf"]
+default_flash = false
+prefix_args = [
+  "nextest",
+  "run",
+  "-p",
+  "kithara-ui",
+  "--cargo-profile",
+  "test-release",
+  "--ignore-default-filter",
+]
+suffix_args = ["-E", "binary(frame_perf) | binary(page_perf)"]
+
 [test.lanes.ui-doc]
 program = "cargo"
 default_features = ["kithara-ui/gpu", "kithara-ui/masonry"]

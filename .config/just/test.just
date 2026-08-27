@@ -146,6 +146,13 @@ e2e-resamplers *ARGS:
 # prices each page, and a page over its price - or missing from a set - ends
 # this non-zero.
 #
+# The frame and page harnesses live behind their own feature, so the lane above
+# does not compile them and the censuses inside them - one row per control the
+# document can name, one per gallery page - were checked by hand or not at all.
+# They run here as their own lane. Nothing in them judges a duration: what they
+# assert is that a run did the thing it claims to measure, so the numbers stay
+# a report and the censuses become a gate.
+#
 # The last step builds the example with the toolkit's default features - iced
 # alone, no retained host - and runs its own tests there. Everything above is
 # one feature set, so a page, a walk or a census that only holds when both
@@ -158,6 +165,7 @@ ui:
     rm -rf "$dir/iced" "$dir/masonry" "$dir/masks" "$dir/scenario" "$dir/studio"
     KITHARA_UI_SCENARIO_CAPTURE="$dir/scenario" just test run --lane=ui
     just test run --lane=ui-doc
+    just test run --lane=ui-perf
     gallery=(cargo run -p kithara-ui --example gallery --features kithara-ui/masonry)
     KITHARA_GALLERY_CAPTURE_OFFSCREEN="$dir/iced" "${gallery[@]}"
     KITHARA_GALLERY_CAPTURE_MASONRY="$dir/masonry" "${gallery[@]}"
