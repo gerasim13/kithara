@@ -97,34 +97,53 @@ pub enum WindowControlsStyle {
     CloseFramed,
 }
 
-#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
-#[non_exhaustive]
-pub enum TextStyle {
-    #[default]
-    Body,
-    Brand,
-    BrandSmall,
-    DeckLetter,
-    TrackTitle,
-    Telemetry,
-    MicroLabel,
-    Section,
-    Mono,
-    PivotArrow,
-    PivotDuration,
-    PivotFooter,
-    PivotLabel,
-    PivotRatio,
-    PivotSmall,
-    PivotTrackArtist,
-    PivotTrackTitle,
-    PivotTitle,
-    PivotValue,
-    Caption,
-    VisFooter,
-    VisMeta,
-    VisTitle,
+/// The typographic roles a document may name, written once and expanded
+/// wherever the set has to appear again: the word a document writes, the entry
+/// a skin gives it, and the lookup that joins the two.
+macro_rules! text_roles {
+    ($expand:ident) => {
+        $expand! {
+            #[default]
+            body => Body,
+            brand => Brand,
+            brand_small => BrandSmall,
+            caption => Caption,
+            deck_letter => DeckLetter,
+            micro_label => MicroLabel,
+            mono => Mono,
+            pivot_arrow => PivotArrow,
+            pivot_duration => PivotDuration,
+            pivot_footer => PivotFooter,
+            pivot_label => PivotLabel,
+            pivot_ratio => PivotRatio,
+            pivot_small => PivotSmall,
+            pivot_track_artist => PivotTrackArtist,
+            pivot_track_title => PivotTrackTitle,
+            pivot_title => PivotTitle,
+            pivot_value => PivotValue,
+            section => Section,
+            telemetry => Telemetry,
+            track_title => TrackTitle,
+            vis_footer => VisFooter,
+            vis_meta => VisMeta,
+            vis_title => VisTitle,
+        }
+    };
 }
+
+pub(crate) use text_roles;
+
+macro_rules! define_text_styles {
+    ($($(#[$attr:meta])* $field:ident => $role:ident),* $(,)?) => {
+        #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+        #[non_exhaustive]
+        pub enum TextStyle {
+            $($(#[$attr])* $role,)*
+        }
+    };
+}
+
+text_roles!(define_text_styles);
 
 impl TextStyle {
     /// The words this style sets, which are not always the words the document

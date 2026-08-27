@@ -106,30 +106,8 @@ impl Skin {
         active_color: Option<ColorRole>,
         active: bool,
     ) -> TextRoleSkin {
-        let (role, skin_active) = match style {
-            TextStyle::Body => (self.text.body, None),
-            TextStyle::Brand => (self.text.brand, None),
-            TextStyle::BrandSmall => (self.text.brand_small, None),
-            TextStyle::Caption => (self.text.caption, None),
-            TextStyle::DeckLetter => (self.text.deck_letter, Some(self.text.deck_letter_active)),
-            TextStyle::MicroLabel => (self.text.micro_label, None),
-            TextStyle::Mono => (self.text.mono, None),
-            TextStyle::PivotArrow => (self.text.pivot_arrow, None),
-            TextStyle::PivotDuration => (self.text.pivot_duration, None),
-            TextStyle::PivotFooter => (self.text.pivot_footer, None),
-            TextStyle::PivotLabel => (self.text.pivot_label, None),
-            TextStyle::PivotRatio => (self.text.pivot_ratio, None),
-            TextStyle::PivotSmall => (self.text.pivot_small, None),
-            TextStyle::PivotTitle => (self.text.pivot_title, None),
-            TextStyle::PivotTrackArtist => (self.text.pivot_track_artist, None),
-            TextStyle::PivotTrackTitle => (self.text.pivot_track_title, None),
-            TextStyle::PivotValue => (self.text.pivot_value, None),
-            TextStyle::Section => (self.text.section, None),
-            TextStyle::Telemetry => (self.text.telemetry, None),
-            TextStyle::TrackTitle => (self.text.track_title, None),
-            TextStyle::VisFooter | TextStyle::VisMeta => (self.vis.meta, None),
-            TextStyle::VisTitle => (self.vis.title, None),
-        };
+        let role = self.text.role(style);
+        let skin_active = (style == TextStyle::DeckLetter).then_some(self.text.deck_letter_active);
         TextRoleSkin {
             color: active_tone(color, active_color.or(skin_active), active).unwrap_or(role.color),
             ..role
@@ -237,39 +215,6 @@ mod tests {
 
     use super::*;
     use crate::{builtin, module::TextStyle, skin::ColorRole};
-
-    #[kithara::test]
-    fn every_text_style_resolves_to_its_own_skin_role() {
-        let skin = builtin::skin();
-
-        for (style, role) in [
-            (TextStyle::Body, skin.text.body),
-            (TextStyle::Brand, skin.text.brand),
-            (TextStyle::BrandSmall, skin.text.brand_small),
-            (TextStyle::DeckLetter, skin.text.deck_letter),
-            (TextStyle::TrackTitle, skin.text.track_title),
-            (TextStyle::Telemetry, skin.text.telemetry),
-            (TextStyle::MicroLabel, skin.text.micro_label),
-            (TextStyle::Section, skin.text.section),
-            (TextStyle::Mono, skin.text.mono),
-            (TextStyle::PivotArrow, skin.text.pivot_arrow),
-            (TextStyle::PivotDuration, skin.text.pivot_duration),
-            (TextStyle::PivotFooter, skin.text.pivot_footer),
-            (TextStyle::PivotLabel, skin.text.pivot_label),
-            (TextStyle::PivotRatio, skin.text.pivot_ratio),
-            (TextStyle::PivotSmall, skin.text.pivot_small),
-            (TextStyle::PivotTrackArtist, skin.text.pivot_track_artist),
-            (TextStyle::PivotTrackTitle, skin.text.pivot_track_title),
-            (TextStyle::PivotTitle, skin.text.pivot_title),
-            (TextStyle::PivotValue, skin.text.pivot_value),
-            (TextStyle::Caption, skin.text.caption),
-            (TextStyle::VisFooter, skin.vis.meta),
-            (TextStyle::VisMeta, skin.vis.meta),
-            (TextStyle::VisTitle, skin.vis.title),
-        ] {
-            assert_eq!(skin.text_role(style, None, None, false), role, "{style:?}");
-        }
-    }
 
     #[kithara::test]
     fn a_node_colour_stands_in_for_the_one_the_role_carries() {

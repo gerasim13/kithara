@@ -222,8 +222,6 @@
         name_padding_x: 10.0,
         index_padding_x: 9.0,
         footer_padding_x: 10.0,
-        title: (font: Display, weight: Normal, size: 11.0, spacing: 0.0, color: Text),
-        meta: (font: Mono, weight: Normal, size: 9.0, spacing: 0.1, color: Muted),
         nav_text: (size: 11.0, weight: Normal),
         nav_frame: (radius: 0.0, border_width: 1.0, border: LineInner),
         nav_background: BgPanel2,
@@ -328,6 +326,9 @@
         section: (font: Mono, weight: Normal, size: 9.0, spacing: 0.0, color: Muted),
         micro_label: (font: Mono, weight: Normal, size: 8.0, spacing: 0.12, color: Muted),
         caption: (font: Mono, weight: Normal, size: 7.0, spacing: 0.08, color: Muted),
+        vis_title: (font: Display, weight: Normal, size: 11.0, spacing: 0.0, color: Text),
+        vis_meta: (font: Mono, weight: Normal, size: 9.0, spacing: 0.1, color: Muted),
+        vis_footer: (font: Mono, weight: Normal, size: 9.0, spacing: 0.1, color: Muted),
     ),
     menu: (
         icon_size: 11.0,

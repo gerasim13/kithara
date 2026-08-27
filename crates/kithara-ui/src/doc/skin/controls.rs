@@ -4,7 +4,11 @@ use super::{
     palette::ColorRole,
     primitives::{FontSkin, FrameSkin, TextRoleSkin, TickSkin},
 };
-use crate::{layout::FrameSides, size::SizeSpec};
+use crate::{
+    layout::FrameSides,
+    module::{TextStyle, text_roles},
+    size::SizeSpec,
+};
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -119,8 +123,6 @@ pub struct VisSkin {
     pub nav_text: FontSkin,
     pub nav_frame: FrameSkin,
     pub size: SizeSpec,
-    pub meta: TextRoleSkin,
-    pub title: TextRoleSkin,
     pub footer_height: f32,
     pub footer_padding_x: f32,
     pub header_height: f32,
@@ -268,33 +270,29 @@ pub struct TabLargeSkin {
     pub underline_width: f32,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-#[non_exhaustive]
-pub struct TextSkin {
-    pub deck_letter_active: ColorRole,
-    pub size: SizeSpec,
-    pub body: TextRoleSkin,
-    pub brand: TextRoleSkin,
-    pub brand_small: TextRoleSkin,
-    pub caption: TextRoleSkin,
-    pub deck_letter: TextRoleSkin,
-    pub micro_label: TextRoleSkin,
-    pub mono: TextRoleSkin,
-    pub pivot_arrow: TextRoleSkin,
-    pub pivot_duration: TextRoleSkin,
-    pub pivot_footer: TextRoleSkin,
-    pub pivot_label: TextRoleSkin,
-    pub pivot_ratio: TextRoleSkin,
-    pub pivot_small: TextRoleSkin,
-    pub pivot_track_artist: TextRoleSkin,
-    pub pivot_track_title: TextRoleSkin,
-    pub pivot_title: TextRoleSkin,
-    pub pivot_value: TextRoleSkin,
-    pub section: TextRoleSkin,
-    pub telemetry: TextRoleSkin,
-    pub track_title: TextRoleSkin,
+macro_rules! define_text_skin {
+    ($($(#[$attr:meta])* $field:ident => $role:ident),* $(,)?) => {
+        #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
+        #[serde(deny_unknown_fields)]
+        #[non_exhaustive]
+        pub struct TextSkin {
+            pub deck_letter_active: ColorRole,
+            pub size: SizeSpec,
+            $(pub $field: TextRoleSkin,)*
+        }
+
+        impl TextSkin {
+            /// The entry this skin gives one typographic role.
+            pub(crate) fn role(&self, style: TextStyle) -> TextRoleSkin {
+                match style {
+                    $(TextStyle::$role => self.$field,)*
+                }
+            }
+        }
+    };
 }
+
+text_roles!(define_text_skin);
 
 /// Menu icon sizes. Row geometry lives in the markup and menu typography in [`TextSkin`].
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]

@@ -4,6 +4,7 @@ mod motion;
 mod node;
 mod style;
 
+pub(crate) use self::style::text_roles;
 pub use self::{
     binding::BindingRef,
     doc::{ChromeStyle, ModuleDoc, ModuleDrop, parse_module},
