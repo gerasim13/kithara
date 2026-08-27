@@ -80,6 +80,9 @@ impl Fader {
         }
     }
 
+    /// The caption, kept inside the band the rail leaves it. A word wider than
+    /// the band is cut at it: line breaking alone never splits one word, so an
+    /// unclipped caption paints straight over the rail it names.
     fn caption(
         &self,
         list: &mut DrawListBuilder,
@@ -88,17 +91,26 @@ impl Fader {
         bounds: Rect,
     ) {
         let metrics = self.metrics;
-        let width = metrics.label_width.min(bounds.w);
-        let run = text.shape(label, self.label_role, Some(width));
-        list.text(
+        let band = Rect {
+            h: bounds.h,
+            w: metrics
+                .label_width
+                .min((bounds.w - metrics.control_padding_x * 2.0).max(0.0)),
+            x: bounds.x + metrics.control_padding_x,
+            y: bounds.y,
+        };
+        let run = text.shape(label, self.label_role, Some(band.w));
+        let mut caption = list.child();
+        caption.text(
             &run,
             label,
             Transform::translate(Pt {
-                x: bounds.x + metrics.control_padding_x,
+                x: band.x,
                 y: bounds.y + (bounds.h - run.height()) / 2.0,
             }),
             self.label_color,
         );
+        list.clip(band, caption.finish());
     }
 
     fn paint_icon(&self, list: &mut DrawListBuilder, text: &mut TextContext, bounds: Rect) {
@@ -241,7 +253,11 @@ pub(crate) fn rail_bounds(
 ) -> Rect {
     let (offset, band, height) = match style {
         FaderStyle::Default => (
-            if labelled { metrics.label_width } else { 0.0 },
+            if labelled {
+                metrics.label_width + metrics.content_gap
+            } else {
+                0.0
+            },
             metrics.ticks_height,
             metrics.slider_height,
         ),
@@ -398,8 +414,14 @@ mod tests {
             rail_bounds(bounds, FaderStyle::Default, true, skin.fader),
             Rect {
                 h: skin.fader.slider_height,
-                w: 220.0 - skin.fader.control_padding_x * 2.0 - skin.fader.label_width,
-                x: 10.0 + skin.fader.control_padding_x + skin.fader.label_width,
+                w: 220.0
+                    - skin.fader.control_padding_x * 2.0
+                    - skin.fader.label_width
+                    - skin.fader.content_gap,
+                x: 10.0
+                    + skin.fader.control_padding_x
+                    + skin.fader.label_width
+                    + skin.fader.content_gap,
                 y: 20.0 + (40.0 - skin.fader.ticks_height) / 2.0,
             }
         );
@@ -441,20 +463,50 @@ mod tests {
         }
     }
 
-    /// A caption is optional, and it costs the rail exactly its own width.
+    /// The band a caption is painted in, or nothing when the fader painted no
+    /// caption at all.
+    fn band(label: &str) -> Option<Rect> {
+        record(FaderStyle::Default, 0.5, Some(label))
+            .commands()
+            .iter()
+            .find_map(|command| match command {
+                DrawCmd::Clip { region, list } => list
+                    .commands()
+                    .iter()
+                    .any(|command| matches!(command, DrawCmd::Text { content, .. } if content == label))
+                    .then_some(*region),
+                _ => None,
+            })
+    }
+
+    /// A caption is optional, and it costs the rail its own width.
     #[kithara::test]
     fn the_caption_pushes_the_rail_aside() {
-        let captioned = record(FaderStyle::Default, 0.5, Some("VOL"));
-
-        assert!(
-            captioned.commands().iter().any(
-                |command| matches!(command, DrawCmd::Text { content, .. } if content == "VOL")
-            ),
-            "the caption must be drawn"
-        );
         assert!(
             handle(0.5, Some("VOL")).x > handle(0.5, None).x,
             "a captioned fader must start its rail to the right of the caption"
+        );
+    }
+
+    #[kithara::test]
+    fn the_caption_is_drawn() {
+        assert!(
+            band("VOL").is_some(),
+            "the caption must be drawn in a band of its own"
+        );
+    }
+
+    /// One word is never broken across lines, so a caption wider than the room
+    /// the skin reserves for it would paint straight over the rail it names.
+    /// The band it is cut at is what keeps the two apart.
+    #[kithara::test]
+    fn a_caption_wider_than_its_band_is_cut_at_it() {
+        let rail = rail_bounds(BOUNDS, FaderStyle::Default, true, builtin::skin().fader);
+        let band = band("SCRUBBING").expect("the caption must be drawn in a band of its own");
+
+        assert!(
+            band.x + band.w <= rail.x,
+            "the caption band {band:?} must end before the rail {rail:?} begins"
         );
     }
 

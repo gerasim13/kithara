@@ -425,7 +425,7 @@
         icon_size: 11.0,
         icon_width: 18.0,
         label: (color: Muted, font: Sans, size: 12.0, spacing: 0.0, weight: Normal),
-        label_width: 28.0,
+        label_width: 44.0,
         rail_width: 6.0,
         segment_count: 12,
         segment_gap: 1.5,
