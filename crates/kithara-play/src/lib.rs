@@ -35,10 +35,6 @@ pub use bridge::{
     SessionHandle, SessionSampleRate, SessionState, SharedEq, SlotControl, StartStreamFn,
     TrackPlaybackStopReason, TrackState, TrackTransition, run_cmd,
 };
-#[cfg(all(
-    not(target_arch = "wasm32"),
-    any(feature = "stretch-signalsmith", feature = "stretch-bungee")
-))]
 pub use effects::eq::EqBandConfig;
 pub use engine::{EngineConfig, EngineImpl, apply_mix};
 pub use error::PlayError;

@@ -4359,7 +4359,6 @@ dependencies = [
  "kithara-warp",
  "kithara-workspace-hack",
  "num-traits",
- "portable-atomic",
  "realfft",
  "ringbuf 0.5.0",
  "serde",
