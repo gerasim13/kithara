@@ -113,8 +113,9 @@ derived artifacts while the original media file stays untouched. `FileSrc::Remot
 - Each fetch uses a child of the writer cancel token. Source cancellation cancels only that fetch
   child; the peer holds non-owning wake guards for both source and session cancellation. Either
   cancellation wakes a parked peer before its next readiness check. Session cancellation ends the
-  peer and forbids writer re-election, while source cancellation relinquishes only this source's
-  epoch. `NetError::Cancelled` never emits `FileEvent::Error`. A fatal error, or an initial
+  peer and forbids writer re-election. Source cancellation that races after a valid response has
+  landed every advertised byte commits the canonical resource; otherwise it relinquishes only this
+  source's epoch. `NetError::Cancelled` never emits `FileEvent::Error`. A fatal error, or an initial
   zero-progress error, fails the current epoch. Other transient completions keep partial coverage
   active, but may commit when every advertised byte already landed. Late stale callbacks cannot
   write, commit, fail, or publish File events for a successor. The peer clears its in-flight flag

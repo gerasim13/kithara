@@ -1,16 +1,21 @@
 use super::*;
 
 #[kithara::test]
-fn cancelled_invalid_response_relinquishes_without_file_error() {
-    let (store, key, inner, writer) = fresh_session(Some(16));
+fn cancelled_full_invalid_response_relinquishes_without_file_error() {
+    let (store, key, inner, writer) = fresh_session(None);
     let epoch = writer.epoch();
     let mut events = inner.source.bus.subscribe();
+    inner.source.coord.set_total_bytes(Some(4));
+    assert!(matches!(
+        epoch.write_at(0, b"done"),
+        WriterOutcome::Current(Ok(()))
+    ));
 
     inner.complete_fetch(
         &epoch,
         FetchCompletion {
             invalid_response: true,
-            ..completion(0, 0, Some(16), Some(&NetError::Cancelled))
+            ..completion(0, 4, None, Some(&NetError::Cancelled))
         },
     );
 
@@ -64,6 +69,43 @@ fn transient_after_full_advertised_body_commits() {
     );
 
     assert_ready_bytes(&store, &key, b"done");
+}
+
+#[kithara::test]
+fn cancellation_after_full_advertised_body_commits() {
+    let (store, key, inner, writer) = fresh_session(None);
+    let epoch = writer.epoch();
+    inner.source.coord.set_total_bytes(Some(4));
+    assert!(matches!(
+        epoch.write_at(0, b"done"),
+        WriterOutcome::Current(Ok(()))
+    ));
+
+    inner.finalize_fetch(&epoch, completion(0, 4, None, Some(&NetError::Cancelled)));
+
+    assert_ready_bytes(&store, &key, b"done");
+}
+
+#[kithara::test]
+fn cancellation_after_incomplete_body_relinquishes_for_successor() {
+    let (store, key, inner, writer) = fresh_session(None);
+    let epoch = writer.epoch();
+    inner.source.coord.set_total_bytes(Some(4));
+    assert!(matches!(
+        epoch.write_at(0, b"not"),
+        WriterOutcome::Current(Ok(()))
+    ));
+
+    inner.finalize_fetch(&epoch, completion(0, 3, None, Some(&NetError::Cancelled)));
+
+    assert!(!writer.is_current());
+    assert!(matches!(
+        store.resource_state(&key).expect("resource state"),
+        AssetResourceState::Active
+    ));
+    let coord = make_coord();
+    let (_reader, _lease, successor) = attach_pending(&store, &key, &coord, None);
+    assert!(successor.is_some_and(|writer| writer.is_current()));
 }
 
 #[kithara::test]
