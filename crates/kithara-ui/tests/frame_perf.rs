@@ -661,7 +661,6 @@ impl Fixture {
             .endpoints(&self.registry)
             .resolver(&self.resolver)
             .skin(skin())
-            .skin_doc(builtin::skin_doc())
             .text(builtin::text_doc())
             .kinds(&self.kinds)
             .build()

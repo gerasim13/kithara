@@ -522,7 +522,6 @@ fn masonry(
             .endpoints(&endpoints)
             .resolver(&resolver)
             .skin(builtin::skin())
-            .skin_doc(builtin::skin_doc())
             .text(&text)
             .build(),
         (geometry.width, geometry.height),

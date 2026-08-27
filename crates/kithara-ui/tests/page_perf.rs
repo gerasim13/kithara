@@ -1119,7 +1119,6 @@ impl Fixture {
             .endpoints(self.registry.as_ref())
             .resolver(&self.resolver)
             .skin(builtin::skin())
-            .skin_doc(builtin::skin_doc())
             .text(builtin::text_doc())
             .build()
     }

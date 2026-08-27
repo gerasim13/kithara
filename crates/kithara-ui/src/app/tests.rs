@@ -291,7 +291,6 @@ fn focused_search<'a>(
         .endpoints(endpoints)
         .resolver(resolver)
         .skin(skin)
-        .skin_doc(builtin::skin_doc())
         .text(builtin::text_doc())
         .build();
     let mut ui = Ui::new(Typed::default(), config, (240, 120), 1.0)
@@ -381,7 +380,6 @@ fn drag(control: &Draggable) -> Dragged {
         .endpoints(&endpoints)
         .resolver(&resolver)
         .skin(&skin)
-        .skin_doc(builtin::skin_doc())
         .text(builtin::text_doc())
         .build();
     let mut ui = Ui::new(Dial::new(stereo), config, (240, 120), 1.0)
@@ -445,7 +443,6 @@ fn a_wheel_notch_over_a_knob_steps_it() {
             .endpoints(&endpoints)
             .resolver(&resolver)
             .skin(&skin)
-            .skin_doc(builtin::skin_doc())
             .text(builtin::text_doc())
             .build(),
         (240, 120),
@@ -516,7 +513,6 @@ fn controls_on_one_page_publish_only_their_own_activation() {
             .endpoints(&endpoints)
             .resolver(&resolver)
             .skin(&skin)
-            .skin_doc(builtin::skin_doc())
             .text(builtin::text_doc())
             .build(),
         (240, 120),
@@ -553,7 +549,6 @@ fn named_press_drag_and_wheel_publish_events_and_leave_a_picture() {
             .endpoints(&endpoints)
             .resolver(&resolver)
             .skin(&skin)
-            .skin_doc(builtin::skin_doc())
             .text(builtin::text_doc())
             .build(),
         SIZE,
@@ -642,7 +637,6 @@ fn a_mounted_ui_takes_its_page_colour_from_the_skin_document() {
             .endpoints(&endpoints)
             .resolver(&resolver)
             .skin(&skin)
-            .skin_doc(&doc)
             .text(builtin::text_doc())
             .build(),
         (240, 120),
@@ -681,7 +675,6 @@ fn moving_a_control_does_not_compile_the_document_again() {
             .endpoints(&endpoints)
             .resolver(&resolver)
             .skin(&skin)
-            .skin_doc(builtin::skin_doc())
             .text(builtin::text_doc())
             .build(),
         (240, 120),
@@ -819,7 +812,6 @@ fn a_hover_hands_the_runner_the_cursor_under_the_pointer() {
             .endpoints(&endpoints)
             .resolver(&resolver)
             .skin(&skin)
-            .skin_doc(builtin::skin_doc())
             .text(builtin::text_doc())
             .build(),
         (240, 120),
@@ -925,7 +917,6 @@ fn with_document(control: &str, check: impl FnOnce(Ui<'_, Menu>)) {
             .endpoints(&endpoints)
             .resolver(&resolver)
             .skin(&skin)
-            .skin_doc(builtin::skin_doc())
             .text(builtin::text_doc())
             .build(),
         (240, 120),
@@ -1025,7 +1016,6 @@ fn with_bars(bars: &[String], check: impl FnOnce(Ui<'_, Menu>)) {
             .endpoints(&endpoints)
             .resolver(&resolver)
             .skin(&skin)
-            .skin_doc(builtin::skin_doc())
             .text(builtin::text_doc())
             .build(),
         (400, 400),
@@ -1289,7 +1279,6 @@ fn with_carry(check: impl FnOnce(Ui<'_, Carry>)) {
             .endpoints(&endpoints)
             .resolver(&resolver)
             .skin(&skin)
-            .skin_doc(builtin::skin_doc())
             .text(builtin::text_doc())
             .build(),
         (240, 120),
@@ -1422,7 +1411,6 @@ fn scene_keeps_the_public_single_redraw_signature() {
         .endpoints(&endpoints)
         .resolver(&resolver)
         .skin(&skin)
-        .skin_doc(builtin::skin_doc())
         .text(builtin::text_doc())
         .build();
     let mut ui = Ui::new(Dial::new(false), config, (240, 120), 1.0)
@@ -1442,7 +1430,6 @@ fn an_idle_ui_skips_its_following_frame() {
         .endpoints(&endpoints)
         .resolver(&resolver)
         .skin(&skin)
-        .skin_doc(builtin::skin_doc())
         .text(builtin::text_doc())
         .build();
     let mut ui = Ui::new(Dial::new(false), config, (240, 120), 1.0)
@@ -1479,7 +1466,6 @@ fn a_tick_refreshes_non_vis_reads_without_remounting() {
         .endpoints(&endpoints)
         .resolver(&resolver)
         .skin(&skin)
-        .skin_doc(builtin::skin_doc())
         .text(builtin::text_doc())
         .build();
     let mut ui = Ui::new(TickingDial { value: 0.25 }, config, (240, 120), 1.0)
@@ -1518,7 +1504,6 @@ fn resize_from_one_to_two_x_keeps_layout_geometry_logical() {
         .endpoints(&endpoints)
         .resolver(&resolver)
         .skin(&skin)
-        .skin_doc(builtin::skin_doc())
         .text(builtin::text_doc())
         .build();
     let mut ui = Ui::new(Dial::new(false), config, (240, 120), 1.0)
@@ -1553,7 +1538,6 @@ fn a_press_on_a_control_reaches_the_application_and_redraws_the_new_document() {
         .endpoints(&endpoints)
         .resolver(&resolver)
         .skin(&skin)
-        .skin_doc(builtin::skin_doc())
         .text(builtin::text_doc())
         .build();
     let mut scenario = Scenario::mount(Swapper::default(), config, (240, 120), 1.0);
@@ -1646,7 +1630,6 @@ fn dragging_a_knob_by_path_publishes_a_run_of_rising_values() {
             .endpoints(&endpoints)
             .resolver(&resolver)
             .skin(&skin)
-            .skin_doc(builtin::skin_doc())
             .text(builtin::text_doc())
             .build(),
         (240, 120),
@@ -1703,7 +1686,6 @@ fn controls_sharing_an_endpoint_move_together_during_the_gesture() {
         .endpoints(&endpoints)
         .resolver(&resolver)
         .skin(&skin)
-        .skin_doc(builtin::skin_doc())
         .text(builtin::text_doc())
         .build();
     let mut ui = Ui::new(Dial::new(false), config, (240, 120), 1.0)
@@ -1757,7 +1739,6 @@ fn a_double_click_resets_the_knob_it_lands_on() {
         .endpoints(&endpoints)
         .resolver(&resolver)
         .skin(&skin)
-        .skin_doc(builtin::skin_doc())
         .text(builtin::text_doc())
         .build();
     let mut ui = Ui::new(Dial::new(false), config, (240, 120), 1.0)
@@ -1887,7 +1868,6 @@ fn each_frame_advances_the_host_clock_by_one() {
         .endpoints(&registry)
         .resolver(&resolver)
         .skin(&skin)
-        .skin_doc(builtin::skin_doc())
         .text(builtin::text_doc())
         .build();
     let mut ui = Ui::new(Typed::default(), config, (240, 120), 1.0)
@@ -1908,7 +1888,6 @@ fn the_host_clock_accumulates_the_steps_it_was_driven_with() {
         .endpoints(&registry)
         .resolver(&resolver)
         .skin(&skin)
-        .skin_doc(builtin::skin_doc())
         .text(builtin::text_doc())
         .build();
     let mut ui = Ui::new(Typed::default(), config, (240, 120), 1.0)
@@ -2019,7 +1998,6 @@ fn a_row_a_window_scrolled_into_view_answers_its_own_press() {
             .endpoints(&endpoints)
             .resolver(&resolver)
             .skin(&skin)
-            .skin_doc(builtin::skin_doc())
             .text(builtin::text_doc())
             .build(),
         (240, 400),
@@ -2104,7 +2082,6 @@ fn reading_ui<'a>(
         .endpoints(endpoints)
         .resolver(resolver)
         .skin(skin)
-        .skin_doc(builtin::skin_doc())
         .text(builtin::text_doc())
         .build();
     let mut ui = Ui::new(Reading::new(moves), config, (240, 120), 1.0)

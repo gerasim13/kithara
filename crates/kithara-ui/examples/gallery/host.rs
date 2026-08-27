@@ -33,7 +33,6 @@ pub(super) fn run() -> bool {
         .endpoints(&endpoints)
         .resolver(&resolver)
         .skin(builtin::skin())
-        .skin_doc(builtin::skin_doc())
         .text(builtin::text_doc())
         .kinds(&kinds)
         .decorations(false)
@@ -131,7 +130,6 @@ mod tests {
             .endpoints(&endpoints)
             .resolver(&resolver)
             .skin(builtin::skin())
-            .skin_doc(builtin::skin_doc())
             .text(builtin::text_doc())
             .kinds(&kinds)
             .build();
@@ -192,7 +190,6 @@ mod fills {
                 .endpoints(&endpoints)
                 .resolver(&resolver)
                 .skin(builtin::skin())
-                .skin_doc(builtin::skin_doc())
                 .text(builtin::text_doc())
                 .kinds(&kinds)
                 .build();

@@ -4,7 +4,6 @@ use crate::{
     error::UiDocError,
     registry::EndpointRegistry,
     render::{Reads, Skin, UiEvent, custom::CustomKinds},
-    skin::SkinDoc,
     source::SourceResolver,
     text::TextDoc,
 };
@@ -43,8 +42,6 @@ pub struct Config<'a> {
     pub resolver: &'a dyn SourceResolver,
     /// The resolved skin the host paints with.
     pub skin: &'a Skin,
-    /// The skin document, which the layout pass still consults.
-    pub skin_doc: &'a SkinDoc,
     /// The caption catalog every `@key` in the document resolves against.
     pub text: &'a TextDoc,
     /// The extensions this application registers, which is what a `Custom`

@@ -181,7 +181,6 @@ fn retained_menus(standing: &str, width: u32, height: u32) -> Vec<Vec<Rect>> {
             .endpoints(&endpoints)
             .resolver(&resolver)
             .skin(&skin)
-            .skin_doc(builtin::skin_doc())
             .text(builtin::text_doc())
             .build(),
         (width, height),
@@ -377,7 +376,6 @@ impl Squeeze {
                 .endpoints(&endpoints)
                 .resolver(&resolver)
                 .skin(&skin)
-                .skin_doc(builtin::skin_doc())
                 .text(builtin::text_doc())
                 .build(),
             (width, Self::HEIGHT),
@@ -558,7 +556,6 @@ impl Extension {
                 .kinds(&kinds)
                 .resolver(&resolver)
                 .skin(&skin)
-                .skin_doc(builtin::skin_doc())
                 .text(builtin::text_doc())
                 .build(),
             (width, height),

@@ -403,7 +403,7 @@ where
         app.document(),
         config.resolver,
         config.endpoints,
-        config.skin_doc,
+        config.skin.document(),
         config.text,
         &doc,
     )?)
@@ -417,7 +417,7 @@ fn frame_ctx<'a, 'r>(
     config: &Config<'a>,
     clock: Clock,
 ) -> Ctx<'a, 'r> {
-    let ctx = Ctx::new(ui, reads, config.skin_doc, clock);
+    let ctx = Ctx::new(ui, reads, config.skin.document(), clock);
     config.kinds.map_or(ctx, |kinds| ctx.with_kinds(kinds))
 }
 

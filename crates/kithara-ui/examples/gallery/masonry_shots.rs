@@ -215,7 +215,6 @@ fn capture(dir: &PathBuf) -> Result<usize, String> {
         .endpoints(&endpoints)
         .resolver(&resolver)
         .skin(builtin::skin())
-        .skin_doc(builtin::skin_doc())
         .text(builtin::text_doc())
         .kinds(&kinds)
         .build();

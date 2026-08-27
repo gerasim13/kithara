@@ -91,7 +91,6 @@ pub(crate) fn run(app: Studio) -> Result<(), RunError> {
             .endpoints(&endpoints)
             .resolver(&resolver)
             .skin(builtin::skin())
-            .skin_doc(builtin::skin_doc())
             .text(&text)
             .decorations(false)
             .min_size(min_size)
@@ -148,7 +147,6 @@ mod tests {
                 .endpoints(&endpoints)
                 .resolver(&resolver)
                 .skin(builtin::skin())
-                .skin_doc(builtin::skin_doc())
                 .text(&text)
                 .build(),
             (1280, 760),
