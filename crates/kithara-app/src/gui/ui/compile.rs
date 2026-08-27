@@ -179,6 +179,7 @@ pub(crate) fn view(state: &Kithara) -> Element<'_, Message> {
         &reads,
         builtin::skin(),
         state.ui.clock,
+        None,
     )
     .map(Message::Ui)
 }

@@ -32,7 +32,7 @@ use crate::{
     atoms::bar::context::Context,
     builtin,
     compile::{CompiledUi, compile},
-    draw::{DrawListBuilder, Pt, Rect},
+    draw::{DrawListBuilder, Pt, Rect, Rgba},
     geom::Transform,
     ids::{EndpointId, SourceUri},
     interact::{Hit, Input, Key as NeutralKey, Outcome, PointerOwnership, PointerPhase, Scroll},
@@ -40,7 +40,9 @@ use crate::{
     render::{
         ControlAction, DragPhase, PortalMapView, PortalTarget, ReadValue, Reads, ScalarRange, Skin,
         StereoLevels, TableCell, TableRow, TreeIcon, TreeRow, UiEvent, WaveBucket, WaveformView,
-        WindowCommand, WindowEdge, WindowLayerProgram, document,
+        WindowCommand, WindowEdge, WindowLayerProgram,
+        custom::CustomKinds,
+        document,
         document::{Clock, Ctx},
         picker_hits,
     },
@@ -2213,6 +2215,13 @@ const CONTROL_CENSUS: &[(&str, Paints, &str)] = &[
         r#"Shader(id: "control", source: "census.wgsl", uniforms: { "level": Model(id: "deck.view.zoom") })"#,
     ),
     (
+        // What it draws is the application's, so this says only that the host
+        // reached the registered widget and replayed what it drew.
+        "Custom",
+        Paints::Yes,
+        r#"Custom(id: "control", kind: "census-extension")"#,
+    ),
+    (
         "Table",
         Paints::Yes,
         r#"Table(id: "control", read: Model(id: "library.visible_tracks"), columns: [(id: "title", label: "TITLE", style: Primary, width: 180.0)])"#,
@@ -2342,6 +2351,39 @@ const CONTROL_CENSUS: &[(&str, Paints, &str)] = &[
     ),
 ];
 
+/// The kind the census document names, registered below so the `Custom` row
+/// draws the extension it stands for rather than the empty box a host falls to
+/// when the registry it was handed does not hold the name.
+const CENSUS_KIND: &str = "census-extension";
+
+/// Opaque, so an empty Vello scene cannot be mistaken for ink nothing can see.
+const CENSUS_INK: Rgba = Rgba {
+    a: 1.0,
+    b: 1.0,
+    g: 1.0,
+    r: 1.0,
+};
+
+/// A registered extension that paints, so the `Custom` row answers for the
+/// mount path rather than for a widget that chose to draw nothing.
+struct CensusExtension;
+
+impl CustomWidget for CensusExtension {
+    type Action = ();
+
+    fn measure(&mut self, _text: &mut TextMeasurer<'_>, _limits: SizeLimits) -> Size2 {
+        Size2::new(40.0, 40.0)
+    }
+
+    fn paint(&mut self, list: &mut DrawListBuilder, _text: &mut TextMeasurer<'_>, bounds: Rect) {
+        list.fill_rect(bounds, CENSUS_INK);
+    }
+}
+
+fn census_kinds() -> CustomKinds {
+    CustomKinds::default().with(CENSUS_KIND, || CensusExtension, |()| UiEvent::OpenSettings)
+}
+
 /// The sources the census table names beside the controls themselves. Only the
 /// shader row needs one; an entry nobody asks for costs the other rows nothing.
 const CENSUS_SOURCES: &[(&str, &str)] = &[(
@@ -2373,6 +2415,7 @@ fn masonry_draws_every_control_the_census_claims_it_draws() {
         FontPolicy::Embedded,
     )
     .unwrap_or_else(|error| panic!("the census skin must resolve: {error}"));
+    let kinds = census_kinds();
     let observed = CONTROL_CENSUS
         .iter()
         .map(|(name, _, control)| {
@@ -2384,11 +2427,8 @@ fn masonry_draws_every_control_the_census_claims_it_draws() {
                 &registry,
                 CENSUS_SOURCES,
             );
-            let output = document::render(
-                &ui.root,
-                ctx(&ui, &reads),
-                MasonryHost::new(ctx(&ui, &reads), &skin),
-            );
+            let frame = ctx(&ui, &reads).with_kinds(&kinds);
+            let output = document::render(&ui.root, frame, MasonryHost::new(frame, &skin));
             let mut root = masonry_root(output, 240, 120);
             let (scene, _) = root.redraw().unwrap_or_else(|error| {
                 panic!("`{name}` must reach a Masonry paint pass: {error}")
@@ -2540,6 +2580,13 @@ mod gesture_census {
         },
         Row {
             name: "Shader",
+            gestures: Gestures::NONE,
+        },
+        Row {
+            // The document binds a custom control to nothing, so the toolkit
+            // recognises nothing over it: whatever it answers, it answers for
+            // itself, through the registry it was mounted from.
+            name: "Custom",
             gestures: Gestures::NONE,
         },
         Row {
@@ -2708,6 +2755,7 @@ mod gesture_census {
     passive!(
         mount::TitleBar,
         mount::Text<'_>,
+        mount::Custom,
         mount::Shader<'_>,
         mount::Vis,
         mount::Table<'_>,
@@ -3884,7 +3932,9 @@ fn fixture_ui_with_options(
         registry,
         builtin::skin_doc(),
         builtin::text_doc(),
-        &UiConfig::default(),
+        &UiConfig::builder()
+            .custom_kinds([CENSUS_KIND.to_owned()].into_iter().collect())
+            .build(),
     )
     .unwrap_or_else(|error| panic!("Masonry contract fixture must compile: {error}"))
 }

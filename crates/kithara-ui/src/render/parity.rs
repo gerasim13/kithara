@@ -228,7 +228,14 @@ fn neutral_menus(width: u32, height: u32) -> Vec<Vec<Rect>> {
     let reads = Bars { open: true };
     let renderer = renderer();
     let viewport = Size::new(width.as_(), height.as_());
-    let mut element = tree::render(&ui.root, &ui, &reads, builtin::skin(), Clock::default());
+    let mut element = tree::render(
+        &ui.root,
+        &ui,
+        &reads,
+        builtin::skin(),
+        Clock::default(),
+        None,
+    );
     let mut state = Tree::new(element.as_widget());
     let node =
         element
@@ -391,7 +398,14 @@ impl Squeeze {
         .unwrap_or_else(|error| panic!("the strip fixture must compile: {error}"));
         let renderer = renderer();
         let viewport = Size::new(width.as_(), Self::HEIGHT.as_());
-        let mut element = tree::render(&ui.root, &ui, &Strip, builtin::skin(), Clock::default());
+        let mut element = tree::render(
+            &ui.root,
+            &ui,
+            &Strip,
+            builtin::skin(),
+            Clock::default(),
+            None,
+        );
         let mut state = Tree::new(element.as_widget());
         let node = element.as_widget_mut().layout(
             &mut state,

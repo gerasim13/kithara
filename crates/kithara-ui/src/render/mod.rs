@@ -1,5 +1,6 @@
 pub mod address;
 pub(crate) mod controls;
+pub mod custom;
 pub mod document;
 pub mod event;
 #[cfg(feature = "iced")]
@@ -53,8 +54,8 @@ pub(crate) use window::{DragGhost, TitleBar, WindowControls, WindowSurface};
 pub(crate) use {
     controls::{ChromeLeaf, Marked, Marks, Probe, chrome_leaf, header_chevron, tree_rows},
     immediate::{
-        Anchored, DropZone, MiniWave, ModuleChrome, Placement, Text, Tree, Viewport, WheelSurface,
-        frame_overlay,
+        Anchored, Custom, DropZone, MiniWave, ModuleChrome, Placement, Text, Tree, Viewport,
+        WheelSurface, frame_overlay,
     },
     layer::{draw_host_layer, window_layer, window_layers},
     picker::{hosted_picker_overlay, scope_picker, sync_picker},

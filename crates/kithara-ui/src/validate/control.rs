@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use super::binding::{BindingSide, binding_parts, check_binding, value_kinds};
 use crate::{
@@ -13,8 +13,10 @@ pub(crate) fn check_controls(
     site: ControlSite<'_>,
     origin: &SourceUri,
     endpoints: &dyn EndpointRegistry,
+    kinds: &BTreeSet<String>,
 ) -> Result<(), UiDocError> {
     check_context_scope(site, origin)?;
+    check_custom_kind(site, origin, kinds)?;
     if matches!(site.control, ControlNode::Table { .. }) {
         check_table(
             site.columns,
@@ -84,6 +86,26 @@ pub(crate) fn check_controls(
         check_binding(binding, side, write_kind, site.path, origin, endpoints)?;
     }
     Ok(())
+}
+
+/// Refuses a document that names an extension the application never
+/// registered, so the kind a host resolves at mount is one it already has.
+fn check_custom_kind(
+    site: ControlSite<'_>,
+    origin: &SourceUri,
+    kinds: &BTreeSet<String>,
+) -> Result<(), UiDocError> {
+    let ControlNode::Custom { kind, .. } = site.control else {
+        return Ok(());
+    };
+    if kinds.contains(kind) {
+        return Ok(());
+    }
+    Err(UiDocError::UnknownCustomKind {
+        origin: origin.clone(),
+        path: site.path.to_owned(),
+        kind: kind.clone(),
+    })
 }
 
 pub(crate) fn shader_uniform_kind(

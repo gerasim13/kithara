@@ -337,6 +337,7 @@ pub(super) const fn control_id(node: &ControlNode) -> Option<&NodeId> {
         | ControlNode::Wave { id, .. }
         | ControlNode::Vis { id, .. }
         | ControlNode::Sprite { id, .. }
+        | ControlNode::Custom { id, .. }
         | ControlNode::Lottie { id, .. }
         | ControlNode::Shader { id, .. }
         | ControlNode::PortalMap { id, .. }

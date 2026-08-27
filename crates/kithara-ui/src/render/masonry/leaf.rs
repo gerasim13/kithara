@@ -50,7 +50,7 @@ pub(super) enum Leaf {
         text: Box<TextContext>,
     },
     Custom {
-        widget: Box<dyn MountedCustom>,
+        widget: Box<dyn MountedCustom<HostAction>>,
         text: Box<TextContext>,
     },
     Shader(ShaderLeaf),

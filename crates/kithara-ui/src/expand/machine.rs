@@ -768,6 +768,7 @@ pub(super) fn walk(
         | ControlNode::Lottie { id, .. }
         | ControlNode::Sprite { id, .. }
         | ControlNode::Shader { id, .. }
+        | ControlNode::Custom { id, .. }
         | ControlNode::PortalMap { id, .. }
         | ControlNode::Range { id, .. }
         | ControlNode::Table { id, .. }

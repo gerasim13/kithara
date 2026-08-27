@@ -48,7 +48,7 @@ use crate::{
 pub struct MasonryHost<'a, Action = UiEvent> {
     pub(super) ctx: Ctx<'a, 'a>,
     pub(super) skin: &'a Skin,
-    custom: BTreeMap<String, Box<dyn MountedCustom>>,
+    custom: BTreeMap<String, Box<dyn MountedCustom<HostAction>>>,
     pub(super) map_event: Rc<dyn Fn(UiEvent) -> HostAction>,
     #[field(with)]
     state: MasonryState,
@@ -180,9 +180,9 @@ where
         )
     }
 
-    fn custom_leaf(
+    pub(super) fn custom_leaf(
         &self,
-        widget: Box<dyn MountedCustom>,
+        widget: Box<dyn MountedCustom<HostAction>>,
         declared: solve::Size<solve::Length>,
     ) -> MasonryNode<Action> {
         MasonryNode::document(

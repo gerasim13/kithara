@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use bon::Builder;
 
@@ -57,6 +57,12 @@ impl Default for Limits {
 #[builder(state_mod(vis = "pub"))]
 #[non_exhaustive]
 pub struct UiConfig {
+    /// The extension kinds the application registers with its hosts.
+    ///
+    /// A document naming a `Custom` kind absent from this set is refused while
+    /// it compiles, so no host is ever handed an extension it cannot mount.
+    #[builder(default)]
+    pub custom_kinds: BTreeSet<String>,
     #[builder(default)]
     pub limits: Limits,
     #[builder(default = 64 * 1024)]

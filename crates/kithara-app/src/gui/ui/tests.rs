@@ -829,6 +829,7 @@ impl BandReads {
             &reads,
             builtin::skin(),
             Clock::default(),
+            None,
         ));
 
         reads.seen.take()

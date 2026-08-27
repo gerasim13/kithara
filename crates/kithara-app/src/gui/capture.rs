@@ -457,7 +457,14 @@ fn iced(
     let skin = builtin::skin();
     let theme = theme::kithara_theme(&Palette::default().into());
     let mut ui = UserInterface::build(
-        tree::render(&compiled.root, &compiled, &reads, skin, Clock::default()),
+        tree::render(
+            &compiled.root,
+            &compiled,
+            &reads,
+            skin,
+            Clock::default(),
+            None,
+        ),
         Size::new(geometry.width as f32, geometry.height as f32),
         Cache::default(),
         renderer,

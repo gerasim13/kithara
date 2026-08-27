@@ -176,6 +176,7 @@ fn bench_view_build(c: &mut Criterion) {
                 &reads,
                 builtin::skin(),
                 Clock::default(),
+                None,
             ));
         });
     });
@@ -193,6 +194,7 @@ fn bench_data_push(c: &mut Criterion) {
                 &reads,
                 builtin::skin(),
                 Clock::default(),
+                None,
             ));
         });
     });
@@ -216,6 +218,7 @@ fn bench_event_apply(c: &mut Criterion) {
                     &reads,
                     builtin::skin(),
                     Clock::default(),
+                    None,
                 ));
             });
         });

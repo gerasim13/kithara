@@ -76,6 +76,7 @@ pub(crate) const fn value_kinds(control: &ControlNode) -> (Option<ValueKind>, Op
         | ControlNode::StatusDot { .. }
         | ControlNode::Swatch { .. }
         | ControlNode::Cell { .. }
+        | ControlNode::Custom { .. }
         | ControlNode::Shader { .. } => (None, None),
     }
 }

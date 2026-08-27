@@ -503,6 +503,20 @@ pub enum ControlNode {
         #[serde(default)]
         uniforms: BTreeMap<String, BindingRef>,
     },
+    /// Content the toolkit does not own, named by the kind the application
+    /// registered it under.
+    ///
+    /// Nothing here says what it draws: the document names a kind, the host
+    /// resolves that kind to a registered widget, and an unregistered kind is
+    /// an error at mount rather than a blank box. It binds no endpoint, because
+    /// the widget behind it has no route to read one; what it recognises leaves
+    /// as its own typed action, through the map given at registration.
+    Custom {
+        id: NodeId,
+        #[serde(default)]
+        size: Option<SizeSpec>,
+        kind: String,
+    },
     PortalMap {
         id: NodeId,
         #[serde(default)]
@@ -764,6 +778,7 @@ impl ControlNode {
             | Self::TitleBar { .. }
             | Self::WindowControls { .. }
             | Self::Swatch { .. }
+            | Self::Custom { .. }
             | Self::Shader { .. } => (None, None),
             Self::DeckSummary { read, write, .. }
             | Self::Brand { read, write, .. }
@@ -844,6 +859,7 @@ impl ControlNode {
             | Self::Vis { size, .. }
             | Self::Sprite { size, .. }
             | Self::Shader { size, .. }
+            | Self::Custom { size, .. }
             | Self::PortalMap { size, .. }
             | Self::Range { size, .. }
             | Self::Table { size, .. }

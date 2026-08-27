@@ -49,6 +49,7 @@ fn rendering_two_decks_reads_scoped_endpoints_for_both() {
         &reads,
         builtin::skin(),
         Clock::default(),
+        None,
     ));
 
     let seen = reads.0.borrow();
@@ -135,6 +136,7 @@ fn rendered_endpoints(ui: &CompiledUi, truthy: BTreeSet<String>) -> BTreeSet<Str
         &reads,
         builtin::skin(),
         Clock::default(),
+        None,
     ));
     reads.seen.into_inner()
 }

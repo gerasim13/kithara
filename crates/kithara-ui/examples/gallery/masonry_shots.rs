@@ -32,6 +32,7 @@ use num_traits::cast::AsPrimitive;
 use super::{
     Consts,
     capture::{Film, Frame, read_frame, write_frame, write_png},
+    custom,
     host::Gallery,
     mock, resolver,
 };
@@ -209,12 +210,14 @@ fn capture(dir: &PathBuf) -> Result<usize, String> {
     let mut off = Offscreen::new(frame.width, frame.height)?;
     let resolver = resolver();
     let endpoints = mock::registry();
+    let kinds = custom::kinds();
     let config = Config::builder()
         .endpoints(&endpoints)
         .resolver(&resolver)
         .skin(builtin::skin())
         .skin_doc(builtin::skin_doc())
         .text(builtin::text_doc())
+        .kinds(&kinds)
         .build();
     write_frame(dir, frame)?;
     let film = Film::requested()?.unwrap_or_else(Film::stills);

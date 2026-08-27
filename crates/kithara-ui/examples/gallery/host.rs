@@ -12,7 +12,7 @@ use kithara_ui::{
     render::{Reads, UiEvent},
 };
 
-use super::{Consts, Tab, capture::Shot, mock, resolver};
+use super::{Consts, Tab, capture::Shot, custom, mock, resolver};
 
 /// Runs the gallery in a window when asked. Returns `false` when the
 /// environment variable is absent, so the caller falls through.
@@ -28,12 +28,14 @@ pub(super) fn run() -> bool {
     );
     // The document carries its own title bar and window buttons, so the system
     // frame stays off, exactly as it does under the other host.
+    let kinds = custom::kinds();
     let config = Config::builder()
         .endpoints(&endpoints)
         .resolver(&resolver)
         .skin(builtin::skin())
         .skin_doc(builtin::skin_doc())
         .text(builtin::text_doc())
+        .kinds(&kinds)
         .decorations(false)
         .min_size(size)
         .title("Kithara UI Gallery")
@@ -107,7 +109,7 @@ mod tests {
         interact::{Input, MOUSE, PointerInput, PointerPhase},
     };
 
-    use super::{App, Config, Gallery, builtin, mock, resolver};
+    use super::{App, Config, Gallery, builtin, custom, mock, resolver};
 
     /// Presses where the nav reads BUTTONS and expects the gallery to turn to
     /// that page. This is the whole chain the window depends on: pointer, leaf,
@@ -124,12 +126,14 @@ mod tests {
     fn turns_the_page_at(scale: f64) {
         let endpoints = mock::registry();
         let resolver = resolver();
+        let kinds = custom::kinds();
         let config = Config::builder()
             .endpoints(&endpoints)
             .resolver(&resolver)
             .skin(builtin::skin())
             .skin_doc(builtin::skin_doc())
             .text(builtin::text_doc())
+            .kinds(&kinds)
             .build();
         let size = (
             num_traits::cast::AsPrimitive::<u32>::as_(1100.0 * scale),
@@ -166,7 +170,7 @@ mod fills {
     use kithara_ui::app::Ui;
     use masonry::vello::peniko::Color;
 
-    use super::{Config, Gallery, builtin, mock, resolver};
+    use super::{Config, Gallery, builtin, custom, mock, resolver};
     use crate::masonry_shots::Offscreen;
 
     /// The document must fill the surface it was handed, at any display scale.
@@ -183,12 +187,14 @@ mod fills {
             let height = num_traits::cast::AsPrimitive::<u32>::as_(720.0 * scale);
             let endpoints = mock::registry();
             let resolver = resolver();
+            let kinds = custom::kinds();
             let config = Config::builder()
                 .endpoints(&endpoints)
                 .resolver(&resolver)
                 .skin(builtin::skin())
                 .skin_doc(builtin::skin_doc())
                 .text(builtin::text_doc())
+                .kinds(&kinds)
                 .build();
             let mut ui = Ui::new(Gallery::default(), config, (width, height), scale)
                 .unwrap_or_else(|error| panic!("the gallery must mount at {scale}x: {error}"));

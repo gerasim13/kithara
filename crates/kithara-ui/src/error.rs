@@ -141,6 +141,14 @@ pub enum UiDocError {
     NotFound { origin: SourceUri, rel: String },
     #[error("{origin}: source {rel:?} escapes configured root")]
     RootEscape { origin: SourceUri, rel: String },
+    #[error(
+        "{origin}: control at {path} names custom kind {kind:?}, which no application registered"
+    )]
+    UnknownCustomKind {
+        origin: SourceUri,
+        path: String,
+        kind: String,
+    },
     #[error("{origin}: shader at {path}: {detail}")]
     Shader {
         origin: SourceUri,

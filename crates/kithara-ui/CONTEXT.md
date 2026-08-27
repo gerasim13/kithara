@@ -1103,6 +1103,54 @@ selected exhaustively from `ControlSpec` and the supplied `SkinDoc` by `size::co
 available in non-render and wasm builds. Renderers match `ControlSpec` directly and resolve no
 runtime control catalog.
 
+## Custom Kinds
+
+`Custom(kind: "...")` is the one open word in the control vocabulary: the document names content
+this crate does not own, and the application says what that name draws. The registry is
+`render::custom::CustomKinds` - one value, built with `with(kind, make, map)`, where `make` produces
+a `CustomWidget` and `map` carries whatever that widget recognises into `UiEvent`. It is not
+`Sync`, deliberately: a factory is a `Box<dyn Fn>`, so the registry is a value a host binds, not a
+process-wide table a second owner could edit behind the first.
+
+The set the registry answers for and the set the compiler admits are the same set, not two lists
+kept beside each other. `CustomKinds::names` is what an application feeds `UiConfig::custom_kinds`,
+and `validate::check_controls` refuses any other name with `UiDocError::UnknownCustomKind`, naming
+the origin, the control path, and the kind. A document that names an unregistered kind therefore
+fails to compile rather than mounting a blank box at that path.
+
+`Ctx` owns the registry for a frame - `Ctx::kinds`, installed by `Ctx::with_kinds` - because `Ctx`
+already exists so that a new thing to hand every node down does not widen every signature on the
+way. Both hosts read that one field: `render::masonry_tree::mount` resolves `host.ctx.kinds`, and
+`render::tree::mount` hands `cx.ctx.kinds` to the iced widget in
+`render/immediate/custom.rs`. The
+entry points that build a `Ctx` take the registry as their own input - `tree::render`'s last
+parameter, and `app::neutral::Config::kinds` for the embedded application, whose `frame_ctx` is the
+single place that installs it for every pass of that host.
+
+Mounting is the one place a missing kind is not a compile error, and it stays a logged, empty box
+rather than a fallback. `NodeControl::leaf` returns a `MasonryNode`, not a `Result`, so there is no
+error channel at that depth; and because compilation already refused unregistered names, reaching
+it means the host was handed a different registry than the one that validated the document. That is
+a wiring defect in the embedder, so the hosts record it with `tracing::error!` carrying the kind
+(and, on the retained side, the control path) and draw nothing. Neither host substitutes a
+different widget, and neither silently succeeds.
+
+What the widget draws is the application's, so the hosts agree only about the box: `measure`
+receives `SizeLimits` and its answer is authoritative on a `Shrink` axis, `paint` receives the
+resolved `Rect`, and frame delivery reads `repaint()` before `frame(elapsed)` on both sides so a
+widget that stops animating during a frame is still painted once more. Pixel-grid agreement between
+the two rasterisers is the widget's own, not the host's: an extension puts both edges of a fill on
+the grid and never rounds a width, the same rule the built-in controls follow through `snapped`.
+The gallery's `level-ladder` extension is the worked example, and its parity budget line prices only
+the caption text and the nav beside it.
+
+The censuses cover the kind rather than any one extension. `render::masonry::tests` registers a
+`census-extension` so the paint census can assert that the retained host reaches a registered widget
+and replays what it drew; `tests/frame_perf.rs` registers the same name so
+`every_control_the_document_can_name_has_a_frame_scenario` has its row; and the gallery's `custom`
+page draws the extension twice, once filling the box the document gave it and once sized by what it
+asked for, so both hosts photograph the same content.
+
 ## Markup Composition
 
 Cross-axis alignment is the container's: a `Row` centres its children, a `Column` leads them, and

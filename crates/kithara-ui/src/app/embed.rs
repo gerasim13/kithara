@@ -37,7 +37,9 @@ use crate::{
     draw::{PoolStats, Rgba},
     interact::{Input, PointerPhase, ScrollAxis, masonry::masonry_text_event},
     render::{
-        UiEvent, WindowCommand, document,
+        Reads, UiEvent, WindowCommand,
+        custom::CustomKinds,
+        document,
         document::{Clock, Ctx},
         masonry::{MasonryHost, MasonryRoot, MasonryState},
     },
@@ -246,7 +248,7 @@ where
             ..
         } = self;
         let clock = *clock;
-        app.reads(|reads| root.refresh(Ctx::new(ui, reads, config.skin_doc, clock)));
+        app.reads(|reads| root.refresh(frame_ctx(ui, reads, config, clock)));
         if let Err(error) = self
             .root
             .handle_window_event(WindowEvent::AnimFrame(elapsed))
@@ -356,7 +358,7 @@ where
                 ..
             } = self;
             let clock = *clock;
-            app.reads(|reads| root.refresh(Ctx::new(ui, reads, config.skin_doc, clock)));
+            app.reads(|reads| root.refresh(frame_ctx(ui, reads, config, clock)));
             return;
         }
         let Ok(ui) = compile_document(&self.app, &self.config)
@@ -394,14 +396,29 @@ fn compile_document<Application>(
 where
     Application: App,
 {
+    let doc = UiConfig::builder()
+        .custom_kinds(config.kinds.map(CustomKinds::names).unwrap_or_default())
+        .build();
     Ok(compile(
         app.document(),
         config.resolver,
         config.endpoints,
         config.skin_doc,
         config.text,
-        &UiConfig::default(),
+        &doc,
     )?)
+}
+
+/// The frame context both this host's passes read, carrying whatever the
+/// application registered.
+fn frame_ctx<'a, 'r>(
+    ui: &'a CompiledUi,
+    reads: &'r dyn Reads,
+    config: &Config<'a>,
+    clock: Clock,
+) -> Ctx<'a, 'r> {
+    let ctx = Ctx::new(ui, reads, config.skin_doc, clock);
+    config.kinds.map_or(ctx, |kinds| ctx.with_kinds(kinds))
 }
 
 fn mount<Application>(
@@ -419,7 +436,7 @@ where
     #[cfg(test)]
     state.clear_paths();
     let node = app.reads(|reads| {
-        let ctx = Ctx::new(ui, reads, config.skin_doc, clock);
+        let ctx = frame_ctx(ui, reads, config, clock);
         let host = MasonryHost::new(ctx, config.skin).with_state(state.clone());
         document::render(&ui.root, ctx, host)
     });

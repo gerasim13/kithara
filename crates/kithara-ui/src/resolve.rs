@@ -173,6 +173,7 @@ fn walk_includes(
         | ControlNode::Vis { .. }
         | ControlNode::Lottie { .. }
         | ControlNode::Sprite { .. }
+        | ControlNode::Custom { .. }
         | ControlNode::PortalMap { .. }
         | ControlNode::Range { .. }
         | ControlNode::Table { .. }

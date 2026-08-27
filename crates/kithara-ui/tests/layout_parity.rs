@@ -266,7 +266,7 @@ fn dump(
     renderer: &iced::Renderer,
     viewport: Size,
 ) -> String {
-    let mut element = tree::render(&ui.root, ui, reads, skin, Clock::default());
+    let mut element = tree::render(&ui.root, ui, reads, skin, Clock::default(), None);
     let mut tree = Tree::new(element.as_widget());
     let node =
         element

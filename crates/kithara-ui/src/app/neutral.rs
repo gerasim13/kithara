@@ -3,7 +3,7 @@ use thiserror::Error;
 use crate::{
     error::UiDocError,
     registry::EndpointRegistry,
-    render::{Reads, Skin, UiEvent},
+    render::{Reads, Skin, UiEvent, custom::CustomKinds},
     skin::SkinDoc,
     source::SourceResolver,
     text::TextDoc,
@@ -47,6 +47,11 @@ pub struct Config<'a> {
     pub skin_doc: &'a SkinDoc,
     /// The caption catalog every `@key` in the document resolves against.
     pub text: &'a TextDoc,
+    /// The extensions this application registers, which is what a `Custom`
+    /// control resolves its kind against. The same set is what the document is
+    /// compiled against, so a kind nothing registered is refused there rather
+    /// than mounted as a blank box.
+    pub kinds: Option<&'a CustomKinds>,
     /// Whether the system draws the window frame. A document that carries its
     /// own title bar, drag region and window buttons wants this off, or the two
     /// frames are drawn one inside the other.

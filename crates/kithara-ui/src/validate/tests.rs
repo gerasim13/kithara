@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use kithara_test_utils::kithara;
 
@@ -661,6 +661,7 @@ fn check_control(body: &str, path: &str, write: Option<&BindingRef>) -> Result<(
         },
         &origin(),
         &registry(),
+        &BTreeSet::new(),
     )
 }
 
@@ -732,6 +733,7 @@ fn tree_query_binding_must_be_text() {
         },
         &origin(),
         &registry(),
+        &BTreeSet::new(),
     )
     .unwrap_err();
 
@@ -901,6 +903,7 @@ fn crossfader_requires_scalar_read_and_write_endpoints() {
         },
         &origin(),
         &registry(),
+        &BTreeSet::new(),
     )
     .unwrap_err();
 

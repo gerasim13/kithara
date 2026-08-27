@@ -1,3 +1,5 @@
+use std::rc::Rc;
+
 use masonry::{
     core::{BoxConstraints, LayoutCtx, WidgetPod},
     kurbo::{Point, Rect, Size as MasonrySize},
@@ -7,6 +9,7 @@ use num_traits::cast::AsPrimitive;
 use super::{
     MasonryHost, MasonryNode, Painted,
     controls::{Retained, TableLeaf, TreeLeaf},
+    custom::Respoken,
     flex::{box_constraints, normalized},
     leaf::{DragProgram, Leaf},
     node::Node,
@@ -205,6 +208,27 @@ impl NodeControl for mount::Shader<'_> {
         output
     }
 }
+impl NodeControl for mount::Custom {
+    fn leaf<A>(&self, host: &MasonryHost<'_, A>, cx: &Cx<'_>) -> MasonryNode<A>
+    where
+        A: std::fmt::Debug + Send + 'static,
+    {
+        let kind = host.ctx.ui.resolve(self.kind);
+        let Some(widget) = host.ctx.kinds.and_then(|kinds| kinds.make(kind)) else {
+            // Compiling the document already refused an unregistered kind, so
+            // reaching here means the host was handed a different registry than
+            // the one that validated it. See `CONTEXT.md`, "Custom Kinds".
+            tracing::error!(kind, path = cx.path, "no registered widget for this kind");
+            return MasonryNode::empty(cx.declared);
+        };
+        let map = Rc::clone(&host.map_event);
+        host.custom_leaf(
+            Box::new(Respoken::new(widget, move |event| map(event))),
+            cx.declared,
+        )
+    }
+}
+
 impl NodeControl for mount::Lottie {
     fn leaf<A>(&self, host: &MasonryHost<'_, A>, cx: &Cx<'_>) -> MasonryNode<A>
     where

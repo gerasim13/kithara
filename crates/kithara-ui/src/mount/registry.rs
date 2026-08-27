@@ -116,6 +116,9 @@ macro_rules! controls {
             $crate::expand::ControlSpec::Shader(spec) => {
                 with.apply(&$crate::mount::Shader::new(spec))
             }
+            $crate::expand::ControlSpec::Custom { kind } => {
+                with.apply(&$crate::mount::Custom::new(*kind))
+            }
             $crate::expand::ControlSpec::Lottie { artwork, seconds } => with.apply(
                 &$crate::mount::Lottie::builder()
                     .artwork(*artwork)

@@ -29,6 +29,7 @@ control_kinds!(
     Chip,
     ContextBar,
     Crossfader,
+    Custom,
     DeckSummary,
     Divider,
     Fader,

@@ -458,6 +458,7 @@ fn insert_page_endpoints(registry: &mut MockRegistry) {
         "gallery.tab.clock",
         "gallery.tab.pivot",
         "gallery.tab.shader",
+        "gallery.tab.custom",
         "gallery.tab.objects",
         "gallery.tab.motion",
         "gallery.tab.sprites",

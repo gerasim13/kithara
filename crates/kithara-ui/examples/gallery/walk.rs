@@ -189,11 +189,10 @@ mod retained {
         builtin,
         compile::compile,
         render::{Reads, UiEvent},
-        source::UiConfig,
     };
 
     use super::{FRAMES, Shot, Walked};
-    use crate::{Consts, host::Gallery, mock, resolver};
+    use crate::{Consts, custom, host::Gallery, mock, resolver};
 
     /// The gallery with its own clock held unless the page says it moves.
     ///
@@ -248,12 +247,14 @@ mod retained {
     fn walked(page: Shot, ticks: bool) -> Walked {
         let endpoints = mock::registry();
         let resolver = resolver();
+        let kinds = custom::kinds();
         let config = Config::builder()
             .endpoints(&endpoints)
             .resolver(&resolver)
             .skin(builtin::skin())
             .skin_doc(builtin::skin_doc())
             .text(builtin::text_doc())
+            .kinds(&kinds)
             .build();
         let size = (
             num_traits::cast::AsPrimitive::<u32>::as_(Consts::WIDTH),
@@ -269,7 +270,7 @@ mod retained {
             &endpoints,
             builtin::skin_doc(),
             builtin::text_doc(),
-            &UiConfig::default(),
+            custom::config(),
         )
         .unwrap_or_else(|error| panic!("page {} must compile: {error}", page.name()))
         .animates;

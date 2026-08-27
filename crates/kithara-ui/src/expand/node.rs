@@ -206,6 +206,12 @@ pub enum ControlSpec {
         seconds: f32,
     },
     Shader(ShaderSpec),
+    /// Content the toolkit does not own. The kind is the document's word,
+    /// resolved against what the application registered by the host that
+    /// mounts it.
+    Custom {
+        kind: InternId,
+    },
     PortalMap,
     Range,
     Table {
@@ -383,7 +389,11 @@ impl ControlSpec {
     pub(crate) const fn paints_every_frame(&self) -> bool {
         match self {
             Self::Vis => true,
+            // A custom widget is not here either: it owns its state, so the
+            // only honest account of when it moves is the `Repaint` it declares
+            // per frame, which the leaf already asks for.
             Self::Shader(_)
+            | Self::Custom { .. }
             | Self::Bpm { .. }
             | Self::Brand
             | Self::Button { .. }

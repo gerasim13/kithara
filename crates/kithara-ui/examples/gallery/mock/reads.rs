@@ -386,6 +386,7 @@ impl MockReads {
             "gallery.tab.clock" => self.active_tab == Tab::Clock,
             "gallery.tab.pivot" => self.active_tab == Tab::Pivot,
             "gallery.tab.shader" => self.active_tab == Tab::Shader,
+            "gallery.tab.custom" => self.active_tab == Tab::Custom,
             "gallery.tab.objects" => self.active_tab == Tab::Objects,
             "gallery.tab.motion" => self.active_tab == Tab::Motion,
             "gallery.tab.sprites" => self.active_tab == Tab::Sprites,

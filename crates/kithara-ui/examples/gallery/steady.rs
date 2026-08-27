@@ -302,7 +302,7 @@ mod retained {
     use masonry::vello::Scene;
 
     use super::{Between, Picture, Shot, physical};
-    use crate::{Consts, host::Gallery, mock, resolver};
+    use crate::{Consts, custom, host::Gallery, mock, resolver};
 
     /// Mounts the page once and repaints it, reading back the scene it handed
     /// the rasteriser. The mount lives across the draws for the same reason the
@@ -311,12 +311,14 @@ mod retained {
     pub(super) fn pictures(page: Shot, draws: usize, between: Between) -> Vec<Picture> {
         let endpoints = mock::registry();
         let resolver = resolver();
+        let kinds = custom::kinds();
         let config = Config::builder()
             .endpoints(&endpoints)
             .resolver(&resolver)
             .skin(builtin::skin())
             .skin_doc(builtin::skin_doc())
             .text(builtin::text_doc())
+            .kinds(&kinds)
             .build();
         let (width, height) = physical();
         let mut ui = Ui::new(Gallery::at(page), config, (width, height), 1.0)

@@ -163,3 +163,11 @@
 # bars and the scroll thumb land on the same pixels in both hosts, so what is
 # priced here is text gamma at the count this page carries.
 25-tablelong.png            3
+
+# Application-drawn content, 2026-08-27. The page holds two of the same
+# registered extension - one filling the box the document gave it, one sized by
+# what it asked for - and a caption above each. The extension puts every bar
+# edge on the pixel grid itself, so the two hosts agree about the fills; what is
+# priced here is the caption text and the nav beside it, the edge-and-text noise
+# every page in this set carries.
+26-custom.png               1

@@ -26,10 +26,11 @@ pub(super) enum Tab {
     Sprites,
     Lottie,
     TableLong,
+    Custom,
 }
 
 impl Tab {
-    pub(super) const ALL: [Self; 26] = [
+    pub(super) const ALL: [Self; 27] = [
         Self::Atoms,
         Self::Buttons,
         Self::Faders,
@@ -56,6 +57,7 @@ impl Tab {
         Self::Sprites,
         Self::Lottie,
         Self::TableLong,
+        Self::Custom,
     ];
 
     pub(super) const fn entry(self) -> &'static str {
@@ -86,6 +88,7 @@ impl Tab {
             Self::Sprites => "gallery-sprites.klayout.ron",
             Self::Lottie => "gallery-lottie.klayout.ron",
             Self::TableLong => "gallery-table-long.klayout.ron",
+            Self::Custom => "gallery-custom.klayout.ron",
         }
     }
 
@@ -117,6 +120,7 @@ impl Tab {
             Self::Sprites => 23,
             Self::Lottie => 24,
             Self::TableLong => 25,
+            Self::Custom => 26,
         }
     }
 }
@@ -156,6 +160,7 @@ impl TryFrom<&str> for Tab {
             "sprites" => Ok(Self::Sprites),
             "lottie" => Ok(Self::Lottie),
             "table_long" => Ok(Self::TableLong),
+            "custom" => Ok(Self::Custom),
             _ => Err(()),
         }
     }

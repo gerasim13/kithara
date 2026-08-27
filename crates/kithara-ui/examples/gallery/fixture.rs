@@ -58,6 +58,10 @@ const ASSETS: &[(&str, &str)] = &[
         include_str!("assets/gallery-shader.klayout.ron"),
     ),
     (
+        "gallery-custom.klayout.ron",
+        include_str!("assets/gallery-custom.klayout.ron"),
+    ),
+    (
         "gallery-objects.klayout.ron",
         include_str!("assets/gallery-objects.klayout.ron"),
     ),
@@ -92,6 +96,10 @@ const ASSETS: &[(&str, &str)] = &[
     (
         "modules/tabs/shader.kmodule.ron",
         include_str!("assets/modules/tabs/shader.kmodule.ron"),
+    ),
+    (
+        "modules/tabs/custom.kmodule.ron",
+        include_str!("assets/modules/tabs/custom.kmodule.ron"),
     ),
     (
         "modules/tabs/field.wgsl",

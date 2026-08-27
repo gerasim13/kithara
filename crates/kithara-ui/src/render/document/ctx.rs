@@ -6,7 +6,7 @@ use crate::{
     compile::CompiledUi,
     expand::{Binding, BindingKind, BlockSpec},
     registry::SECONDS,
-    render::{ReadValue, Reads},
+    render::{ReadValue, Reads, custom::CustomKinds},
     size::Snapshot,
     skin::SkinDoc,
 };
@@ -57,7 +57,8 @@ impl Clock {
 /// The document and the reader are held apart because they do not live the same
 /// length of time: a host compiles once and answers afresh every frame, so what
 /// it draws must not be tied to the reader that frame borrowed.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, fieldwork::Fieldwork)]
+#[fieldwork(opt_in, with)]
 pub struct Ctx<'a, 'r> {
     /// The compiled document being walked.
     pub ui: &'a CompiledUi,
@@ -65,6 +66,12 @@ pub struct Ctx<'a, 'r> {
     pub skin: &'a SkinDoc,
     /// This host's reading of time for the frame being drawn.
     pub clock: Clock,
+    /// The extensions the application registered, which is what a `Custom`
+    /// control resolves its kind against. Nothing registered is the ordinary
+    /// case: a document that names a kind is refused while it compiles unless
+    /// the same set was declared to `UiConfig`.
+    #[field(with, option_set_some, vis = "pub")]
+    pub kinds: Option<&'a CustomKinds>,
     reads: &'r dyn Reads,
 }
 
@@ -80,6 +87,7 @@ impl<'a, 'r> Ctx<'a, 'r> {
             ui,
             skin,
             clock,
+            kinds: None,
             reads,
         }
     }

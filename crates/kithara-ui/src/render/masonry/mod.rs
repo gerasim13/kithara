@@ -27,6 +27,7 @@ pub use built::MasonryNode;
 pub(crate) use controls::{MasonryControl, Painted};
 #[cfg(test)]
 pub(crate) use custom::HostAction;
-pub use custom::{CustomWidget, Repaint, Size2, SizeLimits, TextMeasurer};
 pub use host::{MasonryHost, MasonryState};
 pub use root::{MasonryRoot, MasonryRootError};
+
+pub use crate::render::custom::{CustomWidget, Repaint, Size2, SizeLimits, TextMeasurer};

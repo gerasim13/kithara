@@ -1,5 +1,6 @@
 mod capture;
 mod compare;
+mod custom;
 mod fixture;
 #[cfg(feature = "masonry")]
 mod host;
@@ -18,8 +19,8 @@ use kithara_platform::time::Duration;
 use kithara_ui::{
     builtin,
     compile::{CompiledUi, compile},
-    render::{Clock, Skin, UiEvent, WindowCommand, fonts, tree},
-    source::{MemResolver, UiConfig},
+    render::{Clock, Skin, UiEvent, WindowCommand, custom::CustomKinds, fonts, tree},
+    source::MemResolver,
 };
 
 use self::{
@@ -49,6 +50,9 @@ struct Gallery {
     /// subscription fires at, so a document bound to it moves with the page.
     clock: Clock,
     reads: MockReads,
+    /// The extensions this application registers, offered to whichever host
+    /// draws the page that names one.
+    kinds: CustomKinds,
     layouts: [CompiledUi; Tab::ALL.len()],
     module_layouts: [CompiledUi; ModuleDemo::ALL.len()],
     capture: Option<Capture>,
@@ -68,6 +72,7 @@ impl Gallery {
             skin: builtin::skin(),
             clock: Clock::default(),
             reads: MockReads::default(),
+            kinds: custom::kinds(),
             capture: None,
         }
     }
@@ -105,7 +110,7 @@ impl Gallery {
                 &endpoints,
                 builtin::skin_doc(),
                 builtin::text_doc(),
-                &UiConfig::default(),
+                custom::config(),
             )
             .unwrap_or_else(|error| {
                 panic!(
@@ -121,7 +126,7 @@ impl Gallery {
                 &endpoints,
                 builtin::skin_doc(),
                 builtin::text_doc(),
-                &UiConfig::default(),
+                custom::config(),
             )
             .unwrap_or_else(|error| {
                 panic!(
@@ -152,6 +157,7 @@ impl Gallery {
                 skin: builtin::skin(),
                 clock: Clock::default(),
                 reads: MockReads::default(),
+                kinds: custom::kinds(),
                 capture,
             },
             open.discard().chain(start),
@@ -268,6 +274,7 @@ fn view(state: &Gallery, _window: window::Id) -> Element<'_, Message> {
         &state.reads,
         state.skin,
         state.clock,
+        Some(&state.kinds),
     )
     .map(Message::Ui)
 }
@@ -310,7 +317,7 @@ fn compiled(
         endpoints,
         builtin::skin_doc(),
         builtin::text_doc(),
-        &UiConfig::default(),
+        custom::config(),
     )
     .unwrap_or_else(|error| panic!("embedded gallery document {entry} must compile: {error}"))
 }
@@ -410,7 +417,7 @@ mod tests {
                 &endpoints,
                 builtin::skin_doc(),
                 builtin::text_doc(),
-                &UiConfig::default(),
+                custom::config(),
             )
             .unwrap();
             let CompiledNode::Split { children, .. } = &ui.root else {
@@ -460,7 +467,7 @@ mod tests {
                 &endpoints,
                 builtin::skin_doc(),
                 builtin::text_doc(),
-                &UiConfig::default(),
+                custom::config(),
             )
             .unwrap_or_else(|error| panic!("{} must compile: {error}", tab.entry()));
         }
@@ -486,7 +493,7 @@ mod tests {
                 &endpoints,
                 builtin::skin_doc(),
                 builtin::text_doc(),
-                &UiConfig::default(),
+                custom::config(),
             )
             .unwrap_or_else(|error| panic!("{entry} must compile: {error}"));
             each_control(&ui, &mut |_, spec| {
@@ -672,6 +679,7 @@ mod tests {
                 ("gallery/cells/item", "activation"),
                 ("gallery/chrome/item", "activation"),
                 ("gallery/clock/item", "activation"),
+                ("gallery/custom/item", "activation"),
                 ("gallery/faders/item", "activation"),
                 ("gallery/library2/item", "activation"),
                 ("gallery/lottie/item", "activation"),
@@ -744,7 +752,7 @@ mod tests {
             &mock::registry(),
             builtin::skin_doc(),
             builtin::text_doc(),
-            &UiConfig::default(),
+            custom::config(),
         )
         .unwrap_or_else(|error| panic!("the {tab:?} tab must compile: {error}"));
         let mut claims = Vec::new();
@@ -887,7 +895,7 @@ mod tests {
             &mock::registry(),
             builtin::skin_doc(),
             builtin::text_doc(),
-            &UiConfig::default(),
+            custom::config(),
         )
         .unwrap();
         let mut paths = Vec::new();
@@ -944,7 +952,7 @@ mod tests {
             &endpoints,
             builtin::skin_doc(),
             builtin::text_doc(),
-            &UiConfig::default(),
+            custom::config(),
         )
         .unwrap();
         let mut paths = Vec::new();
@@ -968,7 +976,7 @@ mod tests {
             &endpoints,
             builtin::skin_doc(),
             builtin::text_doc(),
-            &UiConfig::default(),
+            custom::config(),
         )
         .unwrap();
         let mut found = MenuTab::default();
@@ -1068,7 +1076,7 @@ mod tests {
             &mock::registry(),
             builtin::skin_doc(),
             builtin::text_doc(),
-            &UiConfig::default(),
+            custom::config(),
         )
         .unwrap_or_else(|error| panic!("the {tab:?} page must compile: {error}"))
     }
@@ -1521,7 +1529,7 @@ mod tests {
             &endpoints,
             builtin::skin_doc(),
             builtin::text_doc(),
-            &UiConfig::default(),
+            custom::config(),
         )
         .unwrap();
         let mut keys = Vec::new();
@@ -1549,7 +1557,7 @@ mod tests {
             &endpoints,
             builtin::skin_doc(),
             builtin::text_doc(),
-            &UiConfig::default(),
+            custom::config(),
         )
         .unwrap();
         let mut queries = Vec::new();
@@ -1568,7 +1576,7 @@ mod tests {
             &endpoints,
             builtin::skin_doc(),
             builtin::text_doc(),
-            &UiConfig::default(),
+            custom::config(),
         )
         .unwrap();
         let mut contexts = Vec::new();

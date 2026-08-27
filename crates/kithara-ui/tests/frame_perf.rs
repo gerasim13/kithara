@@ -38,7 +38,7 @@ use kithara_ui::{
     app::{App, Config, Ui},
     builtin,
     compile::{CompiledUi, compile},
-    draw::{Pt, Rect},
+    draw::{DrawListBuilder, Pt, Rect, Rgba},
     expand::ControlSpec,
     ids::{EndpointId, SourceUri},
     interact::{Input, MOUSE, PointerInput, PointerPhase},
@@ -46,6 +46,7 @@ use kithara_ui::{
     render::{
         Clock, PortalMapView, PortalTarget, ReadValue, Reads, ScalarRange, Skin, StereoLevels,
         TableCell, TableRow, TreeIcon, TreeRow, UiEvent, WaveBucket, WaveformView,
+        custom::{CustomKinds, CustomWidget, Size2, SizeLimits, TextMeasurer},
         fonts::{FONT_BYTES, SANS},
         tree,
     },
@@ -219,6 +220,11 @@ const SCENARIOS: &[Scenario] = &[
     Scenario {
         name: "Shader",
         control: r#"Shader(id: "control", source: "census.wgsl", uniforms: { "level": Model(id: "deck.view.zoom") })"#,
+        interaction: Interaction::DataChange,
+    },
+    Scenario {
+        name: "Custom",
+        control: r#"Custom(id: "control", kind: "census-extension")"#,
         interaction: Interaction::DataChange,
     },
     Scenario {
@@ -593,8 +599,40 @@ fn models(registry: &mut CensusRegistry) {
 /// Everything a host is handed that is not the host: the documents, the
 /// endpoints they may bind to, and nothing that differs between the two.
 struct Fixture {
+    kinds: CustomKinds,
     registry: CensusRegistry,
     resolver: MemResolver,
+}
+
+/// The kind the `Custom` scenario names, so what is measured is the mount path
+/// through a registered widget rather than the empty box a host falls to when
+/// the registry does not hold the name.
+const CENSUS_KIND: &str = "census-extension";
+
+struct CensusExtension;
+
+impl CustomWidget for CensusExtension {
+    type Action = ();
+
+    fn measure(&mut self, _text: &mut TextMeasurer<'_>, _limits: SizeLimits) -> Size2 {
+        Size2::new(40.0, 40.0)
+    }
+
+    fn paint(&mut self, list: &mut DrawListBuilder, _text: &mut TextMeasurer<'_>, bounds: Rect) {
+        list.fill_rect(
+            bounds,
+            Rgba {
+                a: 1.0,
+                b: 1.0,
+                g: 1.0,
+                r: 1.0,
+            },
+        );
+    }
+}
+
+fn census_kinds() -> CustomKinds {
+    CustomKinds::default().with(CENSUS_KIND, || CensusExtension, |()| UiEvent::OpenSettings)
 }
 
 impl Fixture {
@@ -612,6 +650,7 @@ impl Fixture {
             resolver.insert(name, body);
         }
         Self {
+            kinds: census_kinds(),
             registry: census_registry(),
             resolver,
         }
@@ -624,6 +663,7 @@ impl Fixture {
             .skin(skin())
             .skin_doc(builtin::skin_doc())
             .text(builtin::text_doc())
+            .kinds(&self.kinds)
             .build()
     }
 
@@ -634,7 +674,7 @@ impl Fixture {
             &self.registry,
             builtin::skin_doc(),
             builtin::text_doc(),
-            &UiConfig::default(),
+            &UiConfig::builder().custom_kinds(self.kinds.names()).build(),
         )
         .unwrap_or_else(|error| panic!("the frame-perf fixture must compile: {error}"))
     }
@@ -670,6 +710,7 @@ struct Immediate {
     cache: Cache,
     captured: usize,
     cursor: Cursor,
+    kinds: CustomKinds,
     pending: Vec<(Event, Cursor)>,
     reads: Rc<CensusReads>,
     renderer: iced::Renderer,
@@ -687,6 +728,7 @@ impl Immediate {
             cache: Cache::default(),
             captured: 0,
             cursor: Cursor::Unavailable,
+            kinds: census_kinds(),
             pending: Vec::new(),
             reads,
             renderer: FallbackRenderer::Primary(WgpuRenderer::new(
@@ -732,6 +774,7 @@ impl FrameHost for Immediate {
             self.reads.as_ref(),
             skin(),
             Clock::default(),
+            Some(&self.kinds),
         );
         let mut interface = UserInterface::build(
             element,
@@ -805,7 +848,7 @@ fn redraw_asked(state: &State) -> bool {
 /// the geometry measured here and each is made to prove it was hit.
 fn laid_out_rect(fixture: &Fixture, reads: &CensusReads, renderer: &iced::Renderer) -> Rect {
     let ui = fixture.compiled();
-    let mut element = tree::render(&ui.root, &ui, reads, skin(), Clock::default());
+    let mut element = tree::render(&ui.root, &ui, reads, skin(), Clock::default(), None);
     let mut tree = Tree::new(element.as_widget());
     let bounds = Size::new(f32::from(WIDTH), f32::from(HEIGHT));
     let node =

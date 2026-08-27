@@ -10,7 +10,7 @@ use crate::{
     module::TextAlign,
     mount,
     render::{
-        InputOwner, MiniWave, ReadValue, Skin, Text, Widget, WindowSurface,
+        Custom, InputOwner, MiniWave, ReadValue, Skin, Text, Widget, WindowSurface,
         controls::{Draws, Gesture, Paint, Reading},
         document::Ctx,
         shader,
@@ -199,6 +199,12 @@ impl ViewControl for mount::Vis {
 impl ViewControl for mount::Shader<'_> {
     fn view<'a>(&self, cx: &Cx<'a, '_, '_>) -> Rendered<'a> {
         Rendered::leading(shader::view(self.spec, cx.path, cx.ctx))
+    }
+}
+
+impl ViewControl for mount::Custom {
+    fn view<'a>(&self, cx: &Cx<'a, '_, '_>) -> Rendered<'a> {
+        Rendered::leading(Custom::new(cx.ctx.ui.resolve(self.kind), cx.ctx.kinds, cx.skin).into())
     }
 }
 

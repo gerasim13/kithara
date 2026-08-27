@@ -316,7 +316,12 @@ impl Compiler<'_> {
                     &self.config.limits,
                 )?;
                 let mut visitor = |site: ControlSite<'_>, origin: &SourceUri| {
-                    validate::check_controls(site, origin, self.endpoints)
+                    validate::check_controls(
+                        site,
+                        origin,
+                        self.endpoints,
+                        &self.config.custom_kinds,
+                    )
                 };
                 let document = set
                     .defs
