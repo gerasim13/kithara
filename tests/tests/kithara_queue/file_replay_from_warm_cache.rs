@@ -14,7 +14,7 @@ use kithara::{
         time::{Duration, sleep},
         tokio,
     },
-    play::{PlayerConfig, PlayerImpl, ResourceConfig},
+    play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig},
     queue::{Queue, QueueConfig, TrackSource, Transition},
     stream::dl::{Downloader, DownloaderConfig},
 };
@@ -49,16 +49,20 @@ fn build_session(cache_path: &Path) -> Session {
     // checkpoint (`flush_now`) instead of guessing at the background
     // worker's debounce with a timer.
     let flush_hub = FlushHub::new(CancelToken::never(), FlushPolicy::default());
+    let byte_pool = kithara::bufpool::BytePool::default();
+    let pcm_pool = kithara::bufpool::PcmPool::default();
     let store = AssetStore::builder()
         .backend(StorageBackend::Disk {
             root: cache_path.to_path_buf(),
         })
+        .pool(byte_pool.clone())
         .flush_hub(Arc::clone(&flush_hub))
         .build();
     let player = Arc::new(PlayerImpl::new(
         PlayerConfig::builder()
-            .byte_pool(kithara::bufpool::BytePool::default())
-            .pcm_pool(kithara::bufpool::PcmPool::default())
+            .worker(PlayWorker::new(
+                PlayWorkerConfig::for_pools(byte_pool.clone(), pcm_pool).build(),
+            ))
             .session(OfflineSession::arc_auto())
             .build(),
     ));
@@ -70,8 +74,11 @@ fn build_session(cache_path: &Path) -> Session {
     ));
     let tick = tokio::task::spawn(drive_queue_ticks(Arc::clone(&queue)));
     let downloader = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(NetOptions::default(), CancelToken::never()))
-            .build(),
+        DownloaderConfig::for_client(HttpClient::new(
+            NetOptions::builder().byte_pool(byte_pool).build(),
+            CancelToken::never(),
+        ))
+        .build(),
     );
     Session {
         queue,
@@ -86,8 +93,6 @@ fn track_source(url: &Url, session: &Session) -> TrackSource {
     let cfg = ResourceConfig::for_src(
         ResourceConfig::parse_src(url.as_str()).expect("valid fixture URL"),
     )
-    .byte_pool(kithara::bufpool::BytePool::default())
-    .pcm_pool(kithara::bufpool::PcmPool::default())
     .downloader(session.downloader.clone())
     .store(session.store.clone())
     .decoder(

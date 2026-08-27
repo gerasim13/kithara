@@ -1,6 +1,7 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 use kithara::{
+    assets::{AssetStore, StorageBackend},
     events::{AudioEvent, DownloaderEvent, Event, QueueEvent, TrackId},
     hls::AbrMode,
     net::{HttpClient, NetOptions, RetryPolicy},
@@ -69,6 +70,8 @@ async fn transient_failure_does_not_kill_the_track(temp_dir: TestTempDir) {
     });
     let fallback_url = fallback_fixture.child_url("fallback.mp3");
 
+    let region = kithara::bufpool::Region::default();
+    let byte_pool = region.byte_pool();
     let net = NetOptions::builder()
         .inactivity_timeout(Duration::from_millis(500))
         .retry_policy(
@@ -78,29 +81,40 @@ async fn transient_failure_does_not_kill_the_track(temp_dir: TestTempDir) {
                 .max_delay(Duration::from_millis(200))
                 .build(),
         )
+        .byte_pool(byte_pool.clone())
         .build();
     let downloader = Downloader::new(
         DownloaderConfig::for_client(HttpClient::new(net, CancelToken::never())).build(),
     );
+    let store = AssetStore::builder()
+        .backend(StorageBackend::Disk {
+            root: temp_dir.path().into(),
+        })
+        .pool(byte_pool.clone())
+        .build();
     let player = Arc::new(PlayerImpl::new(
         PlayerConfig::builder()
-            .byte_pool(kithara::bufpool::BytePool::default())
-            .pcm_pool(kithara::bufpool::PcmPool::default())
+            .worker(kithara::play::PlayWorker::new(
+                kithara::play::PlayWorkerConfig::for_pools(byte_pool, region.pcm_pool()).build(),
+            ))
             .session(OfflineSession::arc_auto())
             .build(),
     ));
-    let queue = Arc::new(Queue::new(QueueConfig::builder().player(player).build()));
+    let queue = Arc::new(Queue::new(
+        QueueConfig::builder()
+            .player(player)
+            .store(store.clone())
+            .build(),
+    ));
 
     let target = queue.append(TrackSource::Config(Box::new(
         ResourceConfig::for_src(
             ResourceConfig::parse_src(target_url.as_str()).expect("valid HLS URL"),
         )
-        .byte_pool(kithara::bufpool::BytePool::default())
-        .pcm_pool(kithara::bufpool::PcmPool::default())
         .downloader(downloader.clone())
         .initial_abr_mode(AbrMode::manual(0))
         .look_ahead_bytes(LOOK_AHEAD_BYTES)
-        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
+        .store(store.clone())
         .build(),
     )));
     // A next track is what an auto-skip would move to. Without it the queue
@@ -109,10 +123,8 @@ async fn transient_failure_does_not_kill_the_track(temp_dir: TestTempDir) {
         ResourceConfig::for_src(
             ResourceConfig::parse_src(fallback_url.as_str()).expect("valid fallback URL"),
         )
-        .byte_pool(kithara::bufpool::BytePool::default())
-        .pcm_pool(kithara::bufpool::PcmPool::default())
         .downloader(downloader)
-        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
+        .store(store)
         .build(),
     )));
 

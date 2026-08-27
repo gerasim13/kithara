@@ -1,6 +1,6 @@
 use std::num::NonZeroU32;
 
-use kithara_bufpool::{BytePool, PcmPool};
+use kithara_bufpool::PcmPool;
 use kithara_decode::{PcmChunk, PcmSpec};
 use kithara_test_utils::kithara;
 
@@ -62,8 +62,6 @@ mod native {
             vec![Box::new(PassthroughEffect), Box::new(PassthroughEffect)];
         let config =
             AudioConfig::<kithara_file::File, NoResamplerBackend>::for_stream(file_config())
-                .byte_pool(BytePool::default())
-                .pcm_pool(PcmPool::default())
                 .effects(effects)
                 .build();
         assert_eq!(config.effects().len(), 2);
@@ -73,8 +71,6 @@ mod native {
     fn audio_config_defaults_to_realtime_deferred_consumer_wakes() {
         let config =
             AudioConfig::<kithara_file::File, NoResamplerBackend>::for_stream(file_config())
-                .byte_pool(BytePool::default())
-                .pcm_pool(PcmPool::default())
                 .build();
 
         assert_eq!(
@@ -87,13 +83,9 @@ mod native {
     fn audio_config_observer_is_optional_and_configurable() {
         let default =
             AudioConfig::<kithara_file::File, NoResamplerBackend>::for_stream(file_config())
-                .byte_pool(BytePool::default())
-                .pcm_pool(PcmPool::default())
                 .build();
         let config =
             AudioConfig::<kithara_file::File, NoResamplerBackend>::for_stream(file_config())
-                .byte_pool(BytePool::default())
-                .pcm_pool(PcmPool::default())
                 .observer(Box::new(Unimock::new(())))
                 .build();
 

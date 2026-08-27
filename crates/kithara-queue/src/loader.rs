@@ -87,8 +87,6 @@ impl Loader {
                     .map_err(|e| QueueError::InvalidUrl(format!("{url}: {e}")))?;
                 ResourceConfig::for_src(src)
                     .store(self.store.clone())
-                    .byte_pool(self.player.byte_pool().clone())
-                    .pcm_pool(self.player.pcm_pool().clone())
                     .build()
             }
             TrackSource::Config(boxed) => *boxed,
@@ -238,10 +236,10 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use kithara_assets::{AssetStore, StorageBackend};
-    use kithara_bufpool::{BytePool, PcmPool, Region};
+    use kithara_bufpool::Region;
     use kithara_events::{EventBus, QueueEvent};
     use kithara_platform::time::Duration;
-    use kithara_play::PlayerConfig;
+    use kithara_play::{PlayWorker, PlayWorkerConfig, PlayerConfig};
     use kithara_test_utils::kithara;
 
     use super::*;
@@ -283,20 +281,18 @@ mod tests {
     impl LoaderFixtureSpec {
         fn build(self) -> LoaderFixture {
             let region = Region::default();
+            let worker = PlayWorker::new(
+                PlayWorkerConfig::for_pools(region.byte_pool(), region.pcm_pool()).build(),
+            );
             let player = Arc::new(PlayerImpl::new(
-                PlayerConfig::builder()
-                    .byte_pool(region.byte_pool())
-                    .pcm_pool(region.pcm_pool())
-                    .build(),
+                PlayerConfig::builder().worker(worker).build(),
             ));
             let bus = player.bus().clone();
             let tracks = Arc::new(Tracks::new(bus.clone()));
-            let loader = Arc::new(Loader::new(
-                player,
-                AssetStore::builder().build(),
-                self.cap,
-                Arc::clone(&tracks),
-            ));
+            let store = AssetStore::builder()
+                .pool(player.byte_pool().clone())
+                .build();
+            let loader = Arc::new(Loader::new(player, store, self.cap, Arc::clone(&tracks)));
             LoaderFixture {
                 loader,
                 tracks,
@@ -316,8 +312,6 @@ mod tests {
         };
         let given = ResourceConfig::for_src(src)
             .store(supplied_store.clone())
-            .byte_pool(BytePool::default())
-            .pcm_pool(PcmPool::default())
             .preferred_peak_bitrate(321.0)
             .build();
         let Ok(returned) = loader.build_config(TrackId(1), TrackSource::Config(Box::new(given)))

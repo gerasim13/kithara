@@ -13,10 +13,11 @@ use axum::{Router, body::Body, extract::State, http::header, response::Response,
 use bytes::Bytes;
 use kithara::{
     assets::{AssetStore, StorageBackend},
-    audio::{Audio, AudioConfig, ChunkOutcome, PcmRead, analysis::BeatAnalysisConfig},
-    bufpool::{BytePool, PcmPool},
+    audio::{AudioConfig, ChunkOutcome, PcmControl, PcmRead, analysis::BeatAnalysisConfig},
+    bufpool::Region,
     file::{File, FileConfig, FileSrc},
     platform::{CancelToken, sync::Arc, time::Duration, tokio::task::spawn_blocking},
+    play::{PlayWorker, PlayWorkerConfig, RegisteredAudio},
     prelude::ResourceConfig,
     stream::Stream,
 };
@@ -48,7 +49,7 @@ async fn serve_wav(State(state): State<CountState>) -> Response {
 /// it never returns `Pending`. The park drives the virtual clock forward under
 /// flash (no real-clock re-poll sleep), so the worker advances and the shared
 /// WAV is decoded deterministically.
-fn drain_to_eof(mut audio: Audio<Stream<File>>) -> bool {
+fn drain_to_eof(mut audio: RegisteredAudio<Stream<File>>) -> bool {
     loop {
         match audio.next_chunk() {
             Ok(ChunkOutcome::Chunk(_)) => {}
@@ -73,15 +74,16 @@ async fn waveform_and_player_share_one_get() {
     let server = TestHttpServer::new(app).await;
     let url = server.url("/audio.wav");
 
+    let region = Region::default();
+    let byte_pool = region.byte_pool();
     let store = AssetStore::builder()
         .backend(StorageBackend::Memory)
+        .pool(byte_pool.clone())
         .build();
 
     // Waveform analysis consumer (whole-file) of the shared store.
     let waveform_cfg =
         ResourceConfig::for_src(ResourceConfig::parse_src(url.as_str()).expect("waveform url"))
-            .byte_pool(BytePool::default())
-            .pcm_pool(PcmPool::default())
             .store(store.clone())
             .build();
 
@@ -91,12 +93,12 @@ async fn waveform_and_player_share_one_get() {
     let player_cfg = AudioConfig::<File>::for_stream(
         FileConfig::for_src(FileSrc::Remote(url.clone()))
             .store(store)
+            .pool(byte_pool.clone())
             .build(),
     )
-    .byte_pool(BytePool::default())
-    .pcm_pool(PcmPool::default())
     .block_on_underrun(true)
     .build();
+    let worker = PlayWorker::new(PlayWorkerConfig::for_pools(byte_pool, region.pcm_pool()).build());
 
     // Run both concurrently so they cooperate on one download.
     let master = CancelToken::never();
@@ -104,13 +106,11 @@ async fn waveform_and_player_share_one_get() {
         &master,
         WAVEFORM_BUCKETS,
         BeatAnalysisConfig::default(),
-        PcmPool::default(),
+        region.pcm_pool(),
     );
     let mut analysis_rx = runner.analyze(waveform_cfg);
 
-    let player = Audio::<Stream<File>>::new(player_cfg)
-        .await
-        .expect("open player audio");
+    let player = worker.open(player_cfg).await.expect("open player audio");
     let player_drain = spawn_blocking(move || {
         let mut player = player;
         player.preload().expect("player preload");

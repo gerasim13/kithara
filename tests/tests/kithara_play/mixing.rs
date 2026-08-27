@@ -14,8 +14,8 @@ use kithara::{
         time::{self, Duration},
     },
     play::{
-        Cmd, PlayError, PlayerConfig, PlayerImpl, Reply, SelectTransition, SessionDispatcher,
-        apply_mix,
+        Cmd, PlayError, PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, Reply,
+        SelectTransition, SessionDispatcher, apply_mix,
     },
 };
 use kithara_integration_tests::{
@@ -96,8 +96,10 @@ impl MixHarness {
         let players = (0..count)
             .map(|_| {
                 let config = PlayerConfig::builder()
-                    .byte_pool(BytePool::default())
-                    .pcm_pool(PcmPool::default())
+                    .worker(PlayWorker::new(
+                        PlayWorkerConfig::for_pools(BytePool::default(), PcmPool::default())
+                            .build(),
+                    ))
                     .sample_rate(SAMPLE_RATE)
                     .crossfade_duration(0.0)
                     .session(Arc::clone(&session) as Arc<dyn SessionDispatcher>)

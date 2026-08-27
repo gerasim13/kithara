@@ -67,8 +67,6 @@ fn resource_config(
 ) -> ResourceConfig {
     let url = handle.child_url(name);
     ResourceConfig::for_src(ResourceConfig::parse_src(url.as_str()).expect("valid fixture URL"))
-        .byte_pool(kithara::bufpool::BytePool::default())
-        .pcm_pool(kithara::bufpool::PcmPool::default())
         .downloader(downloader.clone())
         .store(store.clone())
         .build()
@@ -126,14 +124,21 @@ async fn played_tracks_land_in_the_disk_cache(temp_dir: TestTempDir) {
             })
         })
         .collect();
+    let region = kithara::bufpool::Region::default();
+    let byte_pool = region.byte_pool();
     let downloader = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(NetOptions::default(), CancelToken::never()))
-            .build(),
+        DownloaderConfig::for_client(HttpClient::new(
+            NetOptions::builder().byte_pool(byte_pool.clone()).build(),
+            CancelToken::never(),
+        ))
+        .build(),
     );
     let player = Arc::new(PlayerImpl::new(
         PlayerConfig::builder()
-            .byte_pool(kithara::bufpool::BytePool::default())
-            .pcm_pool(kithara::bufpool::PcmPool::default())
+            .worker(kithara::play::PlayWorker::new(
+                kithara::play::PlayWorkerConfig::for_pools(byte_pool.clone(), region.pcm_pool())
+                    .build(),
+            ))
             .session(OfflineSession::arc_auto())
             .build(),
     ));
@@ -141,6 +146,7 @@ async fn played_tracks_land_in_the_disk_cache(temp_dir: TestTempDir) {
         .backend(StorageBackend::Disk {
             root: temp_dir.path().to_path_buf(),
         })
+        .pool(byte_pool)
         .event_bus(player.bus().clone())
         .build();
     let queue = Queue::new(

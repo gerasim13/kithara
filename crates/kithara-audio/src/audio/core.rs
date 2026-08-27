@@ -14,9 +14,8 @@ use kithara_stream::{
 use portable_atomic::AtomicF32;
 
 use super::{
-    AtomicServiceClass, AudioWorkerHandle, ChunkOutcome, DecodeError, PcmControl, PcmRead,
-    PcmSession, PendingReason, PreloadGate, ReadOutcome, SeekOutcome, ServiceClass,
-    StretchControls, TrackId,
+    AtomicServiceClass, ChunkOutcome, DecodeError, PcmControl, PcmRead, PcmSession, PcmTask,
+    PcmWake, PendingReason, PreloadGate, ReadOutcome, SeekOutcome, ServiceClass, StretchControls,
     cursor::ChunkCursor,
     event::AudioEvents,
     ring::{RecvCtx, RingConsumer},
@@ -31,8 +30,29 @@ pub struct Audio<S> {
     controls: Controls,
     _marker: PhantomData<S>,
     ring: RingConsumer,
+    runtime: AudioRuntime,
     session: Session,
-    lease: WorkerLease,
+}
+
+/// Worker-independent audio reader and its opaque producer task.
+///
+/// `kithara-play::PlayWorker` registers the task before exposing the reader.
+#[doc(hidden)]
+pub struct PreparedAudio<S> {
+    audio: Audio<S>,
+    task: PcmTask,
+}
+
+impl<S> PreparedAudio<S> {
+    pub(super) const fn new(audio: Audio<S>, task: PcmTask) -> Self {
+        Self { audio, task }
+    }
+}
+
+impl<S> From<PreparedAudio<S>> for (Audio<S>, PcmTask) {
+    fn from(prepared: PreparedAudio<S>) -> Self {
+        (prepared.audio, prepared.task)
+    }
 }
 
 pub(super) struct AudioParts<S> {
@@ -42,8 +62,8 @@ pub(super) struct AudioParts<S> {
     pub(super) spec: PcmSpec,
     pub(super) marker: PhantomData<S>,
     pub(super) ring: RingConsumer,
+    pub(super) runtime: AudioRuntime,
     pub(super) session: Session,
-    pub(super) lease: WorkerLease,
 }
 
 pub(super) struct Session {
@@ -64,31 +84,21 @@ pub(super) struct Controls {
     pub(super) stretch: Option<Arc<StretchControls>>,
 }
 
-pub(super) struct WorkerLease {
-    pub(super) cancel: Option<CancelToken>,
-    pub(super) track_id: Option<TrackId>,
-    pub(super) worker: Option<AudioWorkerHandle>,
-    pub(super) is_standalone: bool,
+pub(super) struct AudioRuntime {
+    pub(super) cancel: CancelToken,
+    pub(super) wake: PcmWake,
 }
 
-impl Drop for WorkerLease {
+impl Drop for AudioRuntime {
     fn drop(&mut self) {
-        if let Some(cancel) = &self.cancel {
-            cancel.cancel();
-        }
-        if let (Some(worker), Some(track_id)) = (&self.worker, self.track_id.take()) {
-            worker.unregister_track(track_id);
-            if self.is_standalone {
-                worker.shutdown();
-            }
-        }
+        self.cancel.cancel();
     }
 }
 
 impl<S> From<AudioParts<S>> for Audio<S> {
     fn from(parts: AudioParts<S>) -> Self {
         Self {
-            lease: parts.lease,
+            runtime: parts.runtime,
             ring: parts.ring,
             cursor: ChunkCursor::new(&parts.pcm_pool, parts.spec),
             events: AudioEvents::new(parts.emit.bus().clone()),
@@ -124,7 +134,7 @@ impl<S> Audio<S> {
     }
 
     pub(crate) fn fill_buffer(&mut self) -> bool {
-        let recv = recv_ctx(&self.session, &self.lease);
+        let recv = recv_ctx(&self.session, &self.runtime);
         let was_playing = self.ring.phase == super::ConsumerPhase::Playing;
         let filled = self.ring.fill(&mut self.cursor, recv);
         self.events.fill_result(
@@ -175,7 +185,7 @@ impl<S> Audio<S> {
     /// Returns [`DecodeError`] when the producer reports a failure or closes early.
     pub fn read(&mut self, buf: &mut [f32]) -> Result<ReadOutcome, DecodeError> {
         self.sync_seek();
-        let recv = recv_ctx(&self.session, &self.lease);
+        let recv = recv_ctx(&self.session, &self.runtime);
         let read = self.cursor.read(
             &mut self.ring,
             &mut self.events,
@@ -213,7 +223,7 @@ impl<S> Audio<S> {
             playhead: Arc::clone(&self.session.playhead),
             preload_gate: Arc::clone(&self.session.preload_gate),
             seek: Arc::clone(&self.session.seek),
-            worker: self.lease.worker.clone(),
+            wake: self.runtime.wake.clone(),
         }))
     }
 
@@ -230,7 +240,7 @@ impl<S> Audio<S> {
         self.events.reset_underrun();
         let popped = self.ring.begin_seek_epoch(begun, &mut self.cursor);
         if popped {
-            self.ring.wake_worker(self.lease.worker.as_ref());
+            self.ring.wake_worker(Some(&self.runtime.wake));
         }
     }
 
@@ -259,7 +269,7 @@ impl<S: kithara_platform::maybe_send::MaybeSend> PcmRead for Audio<S> {
             let was_playing = self.ring.phase == super::ConsumerPhase::Playing;
             let chunk = self
                 .ring
-                .recv_valid_chunk(recv_ctx(&self.session, &self.lease));
+                .recv_valid_chunk(recv_ctx(&self.session, &self.runtime));
             self.events.fill_result(
                 chunk.is_some(),
                 was_playing,
@@ -298,7 +308,7 @@ impl<S: kithara_platform::maybe_send::MaybeSend> PcmRead for Audio<S> {
             &mut self.ring,
             &mut self.events,
             self.session.playhead.as_ref(),
-            recv_ctx(&self.session, &self.lease),
+            recv_ctx(&self.session, &self.runtime),
             output,
         )?;
         Ok(self
@@ -316,6 +326,7 @@ impl<S: kithara_platform::maybe_send::MaybeSend> PcmSession for Audio<S> {
         to self {
             fn abr_handle(&self) -> Option<kithara_abr::AbrHandle>;
             fn duration(&self) -> Option<Duration>;
+            fn is_preloaded(&self) -> bool;
             fn metadata(&self) -> &TrackMetadata;
         }
     }
@@ -356,7 +367,7 @@ impl<S: kithara_platform::maybe_send::MaybeSend> PcmControl for Audio<S> {
             .host_sample_rate
             .swap(sample_rate.get(), Ordering::AcqRel);
         if previous != sample_rate.get() {
-            defer_worker_wake(self.lease.worker.as_ref());
+            self.runtime.wake.defer();
         }
     }
 
@@ -370,21 +381,15 @@ impl<S: kithara_platform::maybe_send::MaybeSend> PcmControl for Audio<S> {
 
     fn set_service_class(&self, class: ServiceClass) {
         self.controls.service_class.store(class);
-        defer_worker_wake(self.lease.worker.as_ref());
+        self.runtime.wake.defer();
     }
 }
 
-const fn recv_ctx<'a>(session: &'a Session, lease: &'a WorkerLease) -> RecvCtx<'a> {
+const fn recv_ctx<'a>(session: &'a Session, runtime: &'a AudioRuntime) -> RecvCtx<'a> {
     RecvCtx {
-        cancel: lease.cancel.as_ref(),
-        worker: lease.worker.as_ref(),
+        cancel: Some(&runtime.cancel),
+        worker: Some(&runtime.wake),
         abr: session.abr_handle.as_ref(),
-    }
-}
-
-fn defer_worker_wake(worker: Option<&AudioWorkerHandle>) {
-    if let Some(worker) = worker {
-        worker.defer_wake();
     }
 }
 
@@ -410,22 +415,26 @@ fn chunk_outcome(
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::{AtomicU32, AtomicU64};
+    use std::{
+        num::NonZeroUsize,
+        sync::atomic::{AtomicU32, AtomicU64},
+    };
 
     use kithara_bufpool::PcmPool;
     use kithara_decode::{PcmChunk, PcmMeta};
-    use kithara_platform::sync::Arc;
+    use kithara_platform::{CancelScope, sync::Arc};
     use kithara_stream::{PlayheadState, SeekState};
     use kithara_test_utils::kithara;
 
     use super::*;
     use crate::{
-        ConsumerWakeMode,
+        ConsumerWakeMode, PcmScheduler,
         audio::{Fetch, ThreadWake, connect, ring::RingParts},
     };
 
     struct AudioFixture {
         audio: Audio<()>,
+        _scheduler: PcmScheduler,
     }
 
     impl Default for AudioFixture {
@@ -448,16 +457,19 @@ mod tests {
             let pcm_pool = PcmPool::default();
             let bus = EventBus::default();
             let emit = AudioEvents::deferred(&bus);
+            let scheduler = PcmScheduler::start(
+                "kithara-audio-fixture".into(),
+                CancelScope::new(None).token(),
+                NonZeroUsize::new(1).expect("fixture capacity is non-zero"),
+            );
             Self {
                 audio: Audio::from(AudioParts {
                     ring,
                     pcm_pool,
                     emit,
-                    lease: WorkerLease {
-                        cancel: None,
-                        track_id: None,
-                        worker: None,
-                        is_standalone: false,
+                    runtime: AudioRuntime {
+                        cancel: CancelScope::new(None).token(),
+                        wake: scheduler.wake_handle(),
                     },
                     session: Session {
                         playhead,
@@ -478,6 +490,7 @@ mod tests {
                     spec: PcmMeta::default().spec,
                     marker: PhantomData,
                 }),
+                _scheduler: scheduler,
             }
         }
     }

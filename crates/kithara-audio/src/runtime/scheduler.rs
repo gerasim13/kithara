@@ -66,11 +66,10 @@ impl<N: Node, O: SchedulerObserver> Scheduler<N, O> {
     /// Spawn a new scheduler thread and return a handle.
     ///
     /// `cancel` is the externally-owned [`CancelToken`] that drives the run
-    /// loop's shutdown. Callers (e.g.
-    /// [`AudioWorkerHandle`](super::super::renderer::AudioWorkerHandle) derive
-    /// it as a `child()` of the player master so worker shutdown
-    /// participates in the unified cancel hierarchy and the lock-free
-    /// `is_cancelled()` read on the produce-core observes a master cancel.
+    /// loop's shutdown. The playback-owned worker derives it from its configured
+    /// parent, so shutdown participates in the unified cancel hierarchy and the
+    /// lock-free `is_cancelled()` read on the produce core observes a master
+    /// cancel.
     #[must_use]
     pub(crate) fn start(name: String, observer: O, cancel: CancelToken) -> SchedulerHandle<N> {
         let (cmd_tx, cmd_rx) = mpsc::channel();
@@ -634,23 +633,23 @@ mod tests {
             CancelToken::never(),
         );
 
-        handle.register(
+        assert!(handle.register(
             1,
             DummyNode {
                 ticks: 0,
                 max_ticks: 10,
                 panic_at: Some(2),
             },
-        );
+        ));
 
-        handle.register(
+        assert!(handle.register(
             2,
             DummyNode {
                 ticks: 0,
                 max_ticks: 10,
                 panic_at: None,
             },
-        );
+        ));
 
         thread::sleep(Duration::from_millis(100)); // M5: real pacing, replace with teardown signal
         handle.shutdown();
@@ -672,7 +671,7 @@ mod tests {
             CancelToken::never(),
         );
 
-        handle.register(1, BackpressureNode);
+        assert!(handle.register(1, BackpressureNode));
 
         thread::sleep(Duration::from_millis(50)); // M5: real pacing, replace with teardown signal
 

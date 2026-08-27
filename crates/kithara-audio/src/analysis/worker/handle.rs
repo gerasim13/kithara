@@ -43,7 +43,9 @@ where
             AnalysisObserver::default(),
             cancel,
         );
-        scheduler.register(ANALYSIS_NODE_ID, node);
+        if !scheduler.register(ANALYSIS_NODE_ID, node) {
+            warn!("analysis worker stopped before node registration");
+        }
         Self {
             job_scope,
             scheduler,

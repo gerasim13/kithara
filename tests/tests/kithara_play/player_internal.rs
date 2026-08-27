@@ -16,8 +16,8 @@ use kithara::{
     events::{Event, EventBus, EventReceiver},
     platform::sync::Arc,
     play::{
-        PlayError, PlayerConfig, PlayerEvent, PlayerImpl, PlayerStatus, Resource, SeekOutcome,
-        SessionDispatcher,
+        PlayError, PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerEvent, PlayerImpl,
+        PlayerStatus, Resource, SeekOutcome, SessionDispatcher,
     },
 };
 use kithara_integration_tests::{audio_mock::TestPcmReader, offline::OfflineSession};
@@ -64,8 +64,9 @@ fn make_offline_player(crossfade_duration: f32) -> (PlayerImpl, Arc<OfflineSessi
     let player_config = PlayerConfig::builder()
         .bus(bus)
         .crossfade_duration(crossfade_duration)
-        .byte_pool(region.byte_pool())
-        .pcm_pool(region.pcm_pool())
+        .worker(PlayWorker::new(
+            PlayWorkerConfig::for_pools(region.byte_pool(), region.pcm_pool()).build(),
+        ))
         .session(Arc::clone(&session) as Arc<dyn SessionDispatcher>)
         .build();
     let player = PlayerImpl::new(player_config);
@@ -75,8 +76,9 @@ fn make_offline_player(crossfade_duration: f32) -> (PlayerImpl, Arc<OfflineSessi
 fn default_player_config() -> PlayerConfig {
     let region = Region::default();
     PlayerConfig::builder()
-        .byte_pool(region.byte_pool())
-        .pcm_pool(region.pcm_pool())
+        .worker(PlayWorker::new(
+            PlayWorkerConfig::for_pools(region.byte_pool(), region.pcm_pool()).build(),
+        ))
         .build()
 }
 
@@ -293,8 +295,9 @@ async fn player_play_without_audio_hardware_logs_warning() {
     let region = Region::default();
     let player = PlayerImpl::new(
         PlayerConfig::builder()
-            .byte_pool(region.byte_pool())
-            .pcm_pool(region.pcm_pool())
+            .worker(PlayWorker::new(
+                PlayWorkerConfig::for_pools(region.byte_pool(), region.pcm_pool()).build(),
+            ))
             .session(OfflineSession::arc_auto())
             .build(),
     );

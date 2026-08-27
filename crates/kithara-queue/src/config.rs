@@ -18,11 +18,8 @@ pub(crate) const DEFAULT_PREFETCH_DURATION: f32 = 3.5;
 
 /// Configuration for a [`Queue`](crate::Queue).
 ///
-/// Holds queue-level defaults plus an optional externally-owned
-/// [`PlayerImpl`] instance. Matches the project-wide pattern where
-/// config structs such as [`ResourceConfig`](kithara_play::ResourceConfig)
-/// accept optional built dependencies rather than re-taking their construction
-/// parameters.
+/// Holds queue-level defaults plus the externally-owned [`PlayerImpl`]
+/// instance whose item list the queue coordinates.
 ///
 /// [`TrackSource::Uri`](crate::TrackSource::Uri) resources share this queue's
 /// store. A caller-supplied [`ResourceConfig`](kithara_play::ResourceConfig)
@@ -41,8 +38,8 @@ pub struct QueueConfig {
     /// `None` on the production app path.
     pub cancel: Option<CancelToken>,
 
-    /// Externally-owned player. `None` means Queue builds a default.
-    pub player: Option<Arc<PlayerImpl>>,
+    /// Externally-owned player coordinated by this queue.
+    pub player: Arc<PlayerImpl>,
 
     /// Shared store used for bare URI track sources.
     pub store: Option<AssetStore>,
@@ -74,23 +71,25 @@ impl fmt::Debug for QueueConfig {
     }
 }
 
-impl Default for QueueConfig {
-    fn default() -> Self {
-        Self::builder().build()
-    }
-}
-
 #[cfg(test)]
 mod tests {
+    use kithara_bufpool::Region;
+    use kithara_play::{PlayWorker, PlayWorkerConfig, PlayerConfig};
     use kithara_test_utils::kithara;
 
     use super::*;
 
     #[kithara::test]
     fn default_config_has_reasonable_loader_cap() {
-        let cfg = QueueConfig::default();
+        let region = Region::default();
+        let worker = PlayWorker::new(
+            PlayWorkerConfig::for_pools(region.byte_pool(), region.pcm_pool()).build(),
+        );
+        let player = Arc::new(PlayerImpl::new(
+            PlayerConfig::builder().worker(worker).build(),
+        ));
+        let cfg = QueueConfig::builder().player(player).build();
         assert_eq!(cfg.max_concurrent_loads.get(), 3);
-        assert!(cfg.player.is_none());
         assert!(cfg.store.is_none());
         assert!((cfg.prefetch_duration - 3.5).abs() < f32::EPSILON);
     }

@@ -1,6 +1,7 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 use kithara::{
+    assets::{AssetStore, StorageBackend},
     events::{DownloaderEvent, Event},
     net::{HttpClient, NetOptions},
     platform::{
@@ -98,26 +99,41 @@ async fn progressive_download_fills_the_buffer_bar(temp_dir: TestTempDir) {
     let url = handle.child_url("progressive.mp3");
     let body_len = EmbeddedAudio::TEST_MP3_BYTES.len() as u64;
 
+    let region = kithara::bufpool::Region::default();
+    let byte_pool = region.byte_pool();
     let downloader = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(NetOptions::default(), CancelToken::never()))
-            .build(),
+        DownloaderConfig::for_client(HttpClient::new(
+            NetOptions::builder().byte_pool(byte_pool.clone()).build(),
+            CancelToken::never(),
+        ))
+        .build(),
     );
+    let store = AssetStore::builder()
+        .backend(StorageBackend::Disk {
+            root: temp_dir.path().into(),
+        })
+        .pool(byte_pool.clone())
+        .build();
     let player = Arc::new(PlayerImpl::new(
         PlayerConfig::builder()
-            .byte_pool(kithara::bufpool::BytePool::default())
-            .pcm_pool(kithara::bufpool::PcmPool::default())
+            .worker(kithara::play::PlayWorker::new(
+                kithara::play::PlayWorkerConfig::for_pools(byte_pool, region.pcm_pool()).build(),
+            ))
             .session(OfflineSession::arc_auto())
             .build(),
     ));
-    let queue = Arc::new(Queue::new(QueueConfig::builder().player(player).build()));
+    let queue = Arc::new(Queue::new(
+        QueueConfig::builder()
+            .player(player)
+            .store(store.clone())
+            .build(),
+    ));
     let cfg = ResourceConfig::for_src(
         ResourceConfig::parse_src(url.as_str()).expect("valid fixture URL"),
     )
-    .byte_pool(kithara::bufpool::BytePool::default())
-    .pcm_pool(kithara::bufpool::PcmPool::default())
     .downloader(downloader)
     .look_ahead_bytes(LOOK_AHEAD_BYTES)
-    .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
+    .store(store)
     .build();
 
     let ticker = spawn_ticker(Arc::clone(&queue));

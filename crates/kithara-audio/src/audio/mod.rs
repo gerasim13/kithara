@@ -6,14 +6,14 @@ mod park;
 mod ring;
 mod seek;
 
-pub use core::Audio;
+pub use core::{Audio, PreparedAudio};
 
 pub use seek::SeekHandle;
 
 pub(crate) use crate::{
-    AudioConfig, AudioDecoderConfig, AudioWorkerHandle, ChunkOutcome, ConsumerWakeMode,
-    DecodeError, Fetch, PcmControl, PcmRead, PcmSession, PendingReason, PreloadGate, ReadOutcome,
-    SeekOutcome, ServiceClass, StretchControls,
+    AudioConfig, AudioDecoderConfig, ChunkOutcome, ConsumerWakeMode, DecodeError, Fetch,
+    PcmControl, PcmRead, PcmSession, PcmWake, PendingReason, PreloadGate, ReadOutcome, SeekOutcome,
+    ServiceClass, StretchControls,
     pipeline::{
         config::create_effects,
         consumer::{ConsumerPhase, FailureSource},
@@ -24,6 +24,6 @@ pub(crate) use crate::{
             DecodeInit, DecoderFactory as StreamDecoderFactory, SharedStream, StreamAudioSource,
         },
     },
-    renderer::{ThreadWake, TrackId, TrackRegistration, WorkerWakeBridge},
-    runtime::{AtomicServiceClass, Inlet, Outlet, WakeSignal, connect},
+    renderer::{ThreadWake, TrackRegistration},
+    runtime::{AtomicServiceClass, Inlet, Outlet, PcmTask, WakeSignal, connect},
 };

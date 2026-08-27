@@ -15,9 +15,9 @@
 # kithara-audio
 
 Audio pipeline with decoding, effects, resampling, native time-stretch, and
-source-signal analysis. `Audio<S>` is the PCM reader surface; an
-`AudioWorkerHandle` runs decode/effects work on a shared OS thread and hands
-processed chunks to the caller through lock-free rings.
+source-signal analysis. `Audio<S>` is the PCM reader surface. Playback task
+registration and the shared OS thread are owned by `kithara-play::PlayWorker`;
+this crate supplies the PCM task and lock-free reader/runtime capabilities.
 
 ## Features
 
@@ -64,9 +64,8 @@ processed chunks to the caller through lock-free rings.
 - `Audio<S>` — main PCM reader; the consumer reads frames from it and requests
   seeks.
 - `AudioConfig<T>` — `bon` builder for stream config, decode backend,
-  resampling, gapless mode, stretch controls, worker handle, and engine load.
-- `AudioWorkerHandle` / `PcmSource` — shared worker thread handle and the
-  worker-independent per-track decoded PCM source contract.
+  resampling, gapless mode, stretch controls, and engine load.
+- `PcmSource` — worker-independent per-track decoded PCM source contract.
 - `ResamplerQuality` / `ResamplerOptions` — sample-rate-conversion config
   threaded into the decoder-owned resampler plan.
 - `StretchControls` / `TimeStretchProcessor` — preserve-pitch tempo mode on
@@ -81,11 +80,12 @@ processed chunks to the caller through lock-free rings.
 
 ```rust
 use kithara_audio::{
-    Audio, AudioConfig, AudioDecoderConfig, DecoderResamplerSettings, ResamplerQuality,
+    AudioConfig, AudioDecoderConfig, DecoderResamplerSettings, ResamplerQuality,
 };
+use kithara_bufpool::Region;
 use kithara_decode::GaplessMode;
 use kithara_hls::{Hls, HlsConfig};
-use kithara_stream::Stream;
+use kithara_play::{PlayWorker, PlayWorkerConfig};
 
 let decoder_config = AudioDecoderConfig::builder()
     .gapless_mode(GaplessMode::CodecPriming)
@@ -100,7 +100,11 @@ let audio_config = AudioConfig::<Hls>::for_stream(hls_config)
     .decoder(decoder_config)
     .build();
 
-let mut audio = Audio::<Stream<Hls>>::new(audio_config).await?;
+let region = Region::default();
+let worker = PlayWorker::new(
+    PlayWorkerConfig::for_pools(region.byte_pool(), region.pcm_pool()).build(),
+);
+let mut audio = worker.open(audio_config).await?;
 ```
 
 ## Orientation

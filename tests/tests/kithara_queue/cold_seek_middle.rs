@@ -11,7 +11,7 @@ use kithara::{
         tokio,
         tokio::sync::broadcast::error::RecvError,
     },
-    play::{PlayerConfig, PlayerImpl, ResourceConfig},
+    play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig},
     queue::{Queue, QueueConfig, TrackSource, Transition},
     stream::dl::{Downloader, DownloaderConfig},
 };
@@ -75,8 +75,13 @@ fn build_queue_with_tick(
 ) {
     let player = Arc::new(PlayerImpl::new(
         PlayerConfig::builder()
-            .byte_pool(kithara::bufpool::BytePool::default())
-            .pcm_pool(kithara::bufpool::PcmPool::default())
+            .worker(PlayWorker::new(
+                PlayWorkerConfig::for_pools(
+                    kithara::bufpool::BytePool::default(),
+                    kithara::bufpool::PcmPool::default(),
+                )
+                .build(),
+            ))
             .session(OfflineSession::arc_auto())
             .build(),
     ));
@@ -225,8 +230,13 @@ async fn run_seek_scenario(urls: &[&str], select_index: usize, temp: TestTempDir
 
     let player = Arc::new(PlayerImpl::new(
         PlayerConfig::builder()
-            .byte_pool(kithara::bufpool::BytePool::default())
-            .pcm_pool(kithara::bufpool::PcmPool::default())
+            .worker(PlayWorker::new(
+                PlayWorkerConfig::for_pools(
+                    kithara::bufpool::BytePool::default(),
+                    kithara::bufpool::PcmPool::default(),
+                )
+                .build(),
+            ))
             .session(OfflineSession::arc_auto())
             .build(),
     ));
@@ -247,8 +257,6 @@ async fn run_seek_scenario(urls: &[&str], select_index: usize, temp: TestTempDir
         .iter()
         .map(|u| {
             let cfg = ResourceConfig::for_src(ResourceConfig::parse_src(u).expect("valid URL"))
-                .byte_pool(kithara::bufpool::BytePool::default())
-                .pcm_pool(kithara::bufpool::PcmPool::default())
                 .downloader(downloader.clone())
                 .store(store.clone())
                 .build();
@@ -386,8 +394,6 @@ async fn queue_seek_long_cold_cache_far_segment(temp_dir: TestTempDir) {
     let (queue, downloader, store, tick_handle) = build_queue_with_tick(&temp_dir);
     let track_source = |url: &str| -> TrackSource {
         let cfg = ResourceConfig::for_src(ResourceConfig::parse_src(url).expect("valid URL"))
-            .byte_pool(kithara::bufpool::BytePool::default())
-            .pcm_pool(kithara::bufpool::PcmPool::default())
             .downloader(downloader.clone())
             .store(store.clone())
             .build();
@@ -476,8 +482,6 @@ async fn queue_seek_multi_variant_cold_far(temp_dir: TestTempDir) {
     let (queue, downloader, store, tick_handle) = build_queue_with_tick(&temp_dir);
     let track_source = |url: &str| -> TrackSource {
         let cfg = ResourceConfig::for_src(ResourceConfig::parse_src(url).expect("valid URL"))
-            .byte_pool(kithara::bufpool::BytePool::default())
-            .pcm_pool(kithara::bufpool::PcmPool::default())
             .downloader(downloader.clone())
             .store(store.clone())
             .build();

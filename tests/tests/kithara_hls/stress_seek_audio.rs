@@ -2,11 +2,13 @@ use std::num::NonZeroUsize;
 
 use kithara::{
     assets::{AssetStore, StorageBackend},
-    audio::{Audio, AudioConfig, ReadOutcome},
+    audio::{AudioConfig, PcmControl, PcmRead, PcmSession, ReadOutcome},
+    bufpool::Region,
     decode::DecoderBackend,
     hls::{AbrMode, Hls, HlsConfig},
     platform::{CancelToken, sync::Arc, time::Duration, tokio::task::spawn_blocking},
-    stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
+    play::{PlayWorker, PlayWorkerConfig},
+    stream::{AudioCodec, ContainerFormat, MediaInfo},
 };
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, TestTempDir, Xorshift64, create_wav_exact_bytes,
@@ -455,6 +457,12 @@ async fn stress_seek_audio_hls(
 
     let temp_dir = TestTempDir::new();
     let cancel = CancelToken::never();
+    let region = Region::default();
+    let worker = PlayWorker::new(
+        PlayWorkerConfig::for_pools(region.byte_pool(), region.pcm_pool())
+            .cancel(cancel.clone())
+            .build(),
+    );
 
     let storage_backend = if ephemeral {
         StorageBackend::Memory
@@ -467,18 +475,18 @@ async fn stress_seek_audio_hls(
         cache_capacity_override.map(|cap| NonZeroUsize::new(cap).expect("nonzero cache capacity"));
     let store = AssetStore::builder()
         .backend(storage_backend)
+        .pool(worker.byte_pool().clone())
         .maybe_cache_capacity(cache_capacity)
         .build();
 
     let hls_config = HlsConfig::for_url(url)
         .store(store)
+        .pool(worker.byte_pool().clone())
         .cancel(cancel)
         .initial_abr_mode(AbrMode::manual(0))
         .build();
 
     let config = AudioConfig::<Hls>::for_stream(hls_config)
-        .byte_pool(kithara::bufpool::BytePool::default())
-        .pcm_pool(kithara::bufpool::PcmPool::default())
         .media_info(fixture.media_info())
         .decoder(
             kithara::audio::AudioDecoderConfig::builder()
@@ -489,7 +497,8 @@ async fn stress_seek_audio_hls(
         .build();
     let recorder = install_recorder();
 
-    let mut audio = Audio::<Stream<Hls>>::new(config)
+    let mut audio = worker
+        .open(config)
         .await
         .expect("create Audio<Stream<Hls>> pipeline");
 

@@ -1,9 +1,12 @@
 use std::path::Path;
 
 use kithara::{
-    audio::{Audio, AudioConfig},
+    assets::{AssetStore, StorageBackend},
+    audio::AudioConfig,
+    bufpool::Region,
     file::{File, FileConfig},
     platform::{time::Duration, tokio::task::spawn_blocking},
+    play::{PlayWorker, PlayWorkerConfig, RegisteredAudio},
     stream::Stream,
 };
 use kithara_integration_tests::{
@@ -13,16 +16,26 @@ use kithara_integration_tests::{
 use tracing::info;
 
 /// Create an `Audio<Stream<File>>` for a remote MP3 URL.
-async fn create_file_audio(url: url::Url, cache_dir: &Path) -> Audio<Stream<File>> {
+async fn create_file_audio(url: url::Url, cache_dir: &Path) -> RegisteredAudio<Stream<File>> {
+    let region = Region::default();
+    let byte_pool = region.byte_pool();
     let file_config = FileConfig::for_src(url.into())
-        .store(kithara_integration_tests::disk_asset_store(cache_dir))
+        .store(
+            AssetStore::builder()
+                .backend(StorageBackend::Disk {
+                    root: cache_dir.into(),
+                })
+                .pool(byte_pool.clone())
+                .build(),
+        )
+        .pool(byte_pool.clone())
         .build();
     let config = AudioConfig::<File>::for_stream(file_config)
-        .byte_pool(kithara::bufpool::BytePool::default())
-        .pcm_pool(kithara::bufpool::PcmPool::default())
         .hint(("mp3").to_string())
         .build();
-    Audio::<Stream<File>>::new(config)
+    let worker = PlayWorker::new(PlayWorkerConfig::for_pools(byte_pool, region.pcm_pool()).build());
+    worker
+        .open(config)
         .await
         .expect("create Audio<Stream<File>>")
 }

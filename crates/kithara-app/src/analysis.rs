@@ -41,7 +41,7 @@ pub(crate) async fn listen(
     let mut driver = AnalysisController::new(
         &cancel,
         &config.beat_analysis,
-        config.pcm_pool.clone(),
+        config.worker.pcm_pool().clone(),
         config.waveform_max_buckets,
     );
 
@@ -415,9 +415,10 @@ mod tests {
             StorageBackend,
         },
         audio::{Waveform, analysis::BeatAnalysisConfig},
-        bufpool::{BytePool, PcmPool},
+        bufpool::{PcmPool, Region},
         events::TrackId,
         file::File,
+        play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl},
         prelude::{PlaybackResamplerBackend, ResourceConfig},
     };
     use kithara_platform::{
@@ -464,15 +465,20 @@ mod tests {
                 .expect("valid test source"),
         )
         .store(store)
-        .byte_pool(BytePool::default())
-        .pcm_pool(PcmPool::default())
         .discriminator(discriminator)
         .build();
         AnalysisTarget::for_config(&config).expect("test source has an analysis target")
     }
 
     fn state_with_current(ids: &[TrackId], current: usize) -> Mutex<UiState> {
-        let queue = Queue::new(QueueConfig::default());
+        let region = Region::default();
+        let worker = PlayWorker::new(
+            PlayWorkerConfig::for_pools(region.byte_pool(), region.pcm_pool()).build(),
+        );
+        let player = Arc::new(PlayerImpl::new(
+            PlayerConfig::builder().worker(worker).build(),
+        ));
+        let queue = Queue::new(QueueConfig::builder().player(player).build());
         for id in ids {
             queue.append_with_id(*id, format!("file:///tmp/track-{id}.mp3"));
         }
@@ -667,8 +673,6 @@ mod tests {
                 .expect("valid test source"),
         )
         .store(store)
-        .byte_pool(BytePool::default())
-        .pcm_pool(PcmPool::default())
         .build();
         let error = AnalysisTarget::for_config(&config).expect_err("layout must be rejected");
         let current = TrackId::allocate();

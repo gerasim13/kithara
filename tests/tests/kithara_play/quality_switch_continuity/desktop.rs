@@ -190,8 +190,6 @@ async fn prepare_desktop_player(master_url: &url::Url, label: &str) -> DesktopPr
         ResourceConfig::parse_src(master_url.as_str()).expect("fixture master URL must be valid"),
     )
     .store(kithara_integration_tests::disk_asset_store(temp.path()))
-    .byte_pool(harness.player().byte_pool().clone())
-    .pcm_pool(harness.player().pcm_pool().clone())
     .decoder(decoder)
     .initial_abr_mode(AbrMode::manual(AAC_HIGH))
     .events(bus)

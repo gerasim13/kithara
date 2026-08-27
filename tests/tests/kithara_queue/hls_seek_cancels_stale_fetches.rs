@@ -15,7 +15,7 @@ use kithara::{
         tokio,
         tokio::sync::broadcast::error::{RecvError, TryRecvError},
     },
-    play::{PlayerConfig, PlayerImpl, ResourceConfig},
+    play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig},
     queue::{Queue, QueueConfig, TrackSource, Transition},
     stream::dl::{Downloader, DownloaderConfig},
 };
@@ -117,8 +117,13 @@ fn build_queue_with_tick(
     let store = kithara_integration_tests::disk_asset_store(temp_dir.path());
     let player = Arc::new(PlayerImpl::new(
         PlayerConfig::builder()
-            .byte_pool(kithara::bufpool::BytePool::default())
-            .pcm_pool(kithara::bufpool::PcmPool::default())
+            .worker(PlayWorker::new(
+                PlayWorkerConfig::for_pools(
+                    kithara::bufpool::BytePool::default(),
+                    kithara::bufpool::PcmPool::default(),
+                )
+                .build(),
+            ))
             .session(OfflineSession::arc_auto())
             .build(),
     ));
@@ -191,8 +196,6 @@ async fn hls_seek_near_end_skips_prefix(#[case] backend: DecoderBackend) {
     let cfg = ResourceConfig::for_src(
         ResourceConfig::parse_src(url.as_str()).expect("ResourceConfig::parse_src"),
     )
-    .byte_pool(kithara::bufpool::BytePool::default())
-    .pcm_pool(kithara::bufpool::PcmPool::default())
     .downloader(downloader.clone())
     .store(store)
     .initial_abr_mode(AbrMode::Auto(None))
@@ -217,7 +220,7 @@ async fn hls_seek_near_end_skips_prefix(#[case] backend: DecoderBackend) {
     // emitted `AudioEvent::PlaybackProgress` with a non-zero position. This
     // is the discriminating gate: `HlsEvent::SegmentReadStart` only proves
     // the stream layer is reading (it can fire during the up-front blocking
-    // build in `Audio::new`, before the processor has the track in a playing
+    // preparation in `PlayWorker::open`, before the processor has the track in a playing
     // state). The seek path runs through the processor —
     // `apply_seek` only forwards `track.seek` for tracks in
     // `FadingIn`/`Playing`, and only that path reaches `Audio::seek ->

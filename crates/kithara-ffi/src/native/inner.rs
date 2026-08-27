@@ -5,11 +5,10 @@ use dashmap::DashMap;
 use kithara::{
     abr::AbrMode,
     audio::generate_log_spaced_bands,
-    bufpool::Region,
     events::ScopeLabel,
     hls::{KeyOptions, KeyProcessorRegistry},
     net::{HttpClient, NetOptions},
-    play::{PlayerConfig, PlayerImpl, ResourceConfig},
+    play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig},
     stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_assets::BytePool;
@@ -180,8 +179,6 @@ pub(crate) struct NativeInner {
     /// drives the ABR cap unless cellular is tighter; cellular is held
     /// for future network-state-aware switching.
     peak_bitrate: Mutex<PeakBitrate>,
-    /// Store-owned pools shared by cache, network, decode, and playback.
-    region: Region,
 }
 
 impl NativeInner {
@@ -193,12 +190,16 @@ impl NativeInner {
         } = config;
         let cancel = CancelToken::root();
         let region = store.region().clone();
+        let worker = PlayWorker::new(
+            PlayWorkerConfig::for_pools(region.byte_pool(), region.pcm_pool())
+                .cancel(cancel.child())
+                .build(),
+        );
         let player_config = PlayerConfig::builder()
             .eq_layout(generate_log_spaced_bands(eq_band_count as usize))
             .cancel(cancel.child())
-            .byte_pool(region.byte_pool())
-            .pcm_pool(region.pcm_pool())
             .session(super::session::handle().dispatcher())
+            .worker(worker)
             .build();
         let player = Arc::new(PlayerImpl::new(player_config));
         let queue_config = QueueConfig::builder()
@@ -215,7 +216,6 @@ impl NativeInner {
         let player_headers_map: DashMap<String, String> = player_headers.into_iter().collect();
         Self {
             downloader,
-            region,
             store,
             shutdown: cancel,
             key_options: Mutex::new(key_options),
@@ -581,8 +581,6 @@ fn build_source_for_item(
         .maybe_headers(merged_headers_for_item(inner, item).map(Into::into))
         .events(scoped.clone())
         .downloader(inner.downloader.clone())
-        .byte_pool(inner.region.byte_pool())
-        .pcm_pool(inner.region.pcm_pool())
         .store(inner.store.handle().clone())
         .keys(inner.key_options.lock().clone())
         .initial_abr_mode(abr_mode.unwrap_or_default())

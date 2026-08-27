@@ -6,7 +6,7 @@ use kithara::{
         CancelToken,
         time::{Duration, sleep},
     },
-    play::{Resource, ResourceConfig},
+    play::{PlayWorker, PlayWorkerConfig, Resource, ResourceConfig},
     stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_integration_tests::{
@@ -74,8 +74,13 @@ async fn hls_seek_past_end_terminates_in_bounded_time() {
     let cfg: ResourceConfig = ResourceConfig::for_src(
         ResourceConfig::parse_src(master.as_str()).expect("valid master URL"),
     )
-    .byte_pool(kithara::bufpool::BytePool::default())
-    .pcm_pool(kithara::bufpool::PcmPool::default())
+    .worker(PlayWorker::new(
+        PlayWorkerConfig::for_pools(
+            kithara::bufpool::BytePool::default(),
+            kithara::bufpool::PcmPool::default(),
+        )
+        .build(),
+    ))
     .downloader(downloader.clone())
     .discriminator("t0")
     .store(store)

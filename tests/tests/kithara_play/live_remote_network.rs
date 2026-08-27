@@ -13,27 +13,34 @@ use std::num::NonZeroUsize;
 use kithara::{
     assets::{AssetStore, StorageBackend},
     audio::ReadOutcome,
+    bufpool::{BytePool, PcmPool},
     decode::DecoderBackend,
     net::{HttpClient, NetOptions},
     platform::{
         CancelToken,
         time::{Duration, Instant},
     },
-    play::{PlayerConfig, PlayerImpl, Resource, ResourceConfig},
+    play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, Resource, ResourceConfig},
     stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_integration_tests::{TestTempDir, temp_dir};
 use tracing::debug;
 
-fn asset_store(temp_dir: &TestTempDir, ephemeral: bool) -> AssetStore {
+fn asset_store(temp_dir: &TestTempDir, ephemeral: bool, byte_pool: BytePool) -> AssetStore {
     if ephemeral {
         AssetStore::builder()
             .backend(StorageBackend::Memory)
+            .pool(byte_pool)
             .cache_capacity(NonZeroUsize::new(4).expect("nonzero"))
             .max_assets(8)
             .build()
     } else {
-        kithara_integration_tests::disk_asset_store(temp_dir.path())
+        AssetStore::builder()
+            .backend(StorageBackend::Disk {
+                root: temp_dir.path().to_path_buf(),
+            })
+            .pool(byte_pool)
+            .build()
     }
 }
 
@@ -149,8 +156,11 @@ async fn live_remote_resource_decodes_with_duration(
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     kithara_integration_tests::apple_warmup::warm_if_apple(backend);
 
-    let store = asset_store(&temp_dir, true);
+    let byte_pool = BytePool::default();
+    let pcm_pool = PcmPool::default();
+    let store = asset_store(&temp_dir, true, byte_pool.clone());
     let net = NetOptions::builder()
+        .byte_pool(byte_pool.clone())
         .inactivity_timeout(Duration::from_secs(25))
         .build();
     let downloader = Downloader::new(
@@ -158,8 +168,9 @@ async fn live_remote_resource_decodes_with_duration(
     );
     let config: ResourceConfig =
         ResourceConfig::for_src(ResourceConfig::parse_src(url).expect("valid URL"))
-            .byte_pool(kithara::bufpool::BytePool::default())
-            .pcm_pool(kithara::bufpool::PcmPool::default())
+            .worker(PlayWorker::new(
+                PlayWorkerConfig::for_pools(byte_pool, pcm_pool).build(),
+            ))
             .store(store)
             .downloader(downloader)
             .decoder(
@@ -274,19 +285,20 @@ async fn player_mp3_duration_matches_app_flow(
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     kithara_integration_tests::apple_warmup::warm_if_apple(backend);
 
-    let store = asset_store(&temp_dir, true);
+    let byte_pool = BytePool::default();
+    let pcm_pool = PcmPool::default();
+    let store = asset_store(&temp_dir, true, byte_pool.clone());
 
     let player = PlayerImpl::new(
         PlayerConfig::builder()
-            .byte_pool(kithara::bufpool::BytePool::default())
-            .pcm_pool(kithara::bufpool::PcmPool::default())
+            .worker(PlayWorker::new(
+                PlayWorkerConfig::for_pools(byte_pool, pcm_pool).build(),
+            ))
             .build(),
     );
     player.reserve_slots(1);
 
     let mut config = ResourceConfig::for_src(ResourceConfig::parse_src(url).unwrap())
-        .byte_pool(kithara::bufpool::BytePool::default())
-        .pcm_pool(kithara::bufpool::PcmPool::default())
         .store(store)
         .decoder(
             kithara::audio::AudioDecoderConfig::builder()
@@ -319,6 +331,4 @@ async fn player_mp3_duration_matches_app_flow(
     );
     let dur_secs = dur.expect("checked");
     assert!(dur_secs > 30.0, "{url}: expected >30s, got {dur_secs:.1}s");
-
-    player.worker().shutdown();
 }

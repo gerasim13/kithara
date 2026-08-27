@@ -24,7 +24,10 @@ use kithara::{
     events::{AbrMode, PlayerEvent},
     net::{HttpClient, NetOptions},
     platform::{CancelToken, sync::Arc, time::Duration},
-    play::{PlayerConfig, PlayerImpl, Resource, ResourceConfig, SessionDispatcher},
+    play::{
+        PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, Resource, ResourceConfig,
+        SessionDispatcher,
+    },
     queue::{Queue, QueueConfig, Transition},
     stream::dl::{Downloader, DownloaderConfig},
 };
@@ -79,8 +82,9 @@ impl Harness {
         let config = PlayerConfig::builder()
             .crossfade_duration(0.0)
             .sample_rate(SAMPLE_RATE)
-            .byte_pool(region.byte_pool())
-            .pcm_pool(region.pcm_pool())
+            .worker(PlayWorker::new(
+                PlayWorkerConfig::for_pools(region.byte_pool(), region.pcm_pool()).build(),
+            ))
             .session(Arc::clone(&session) as Arc<dyn SessionDispatcher>)
             .build();
         let player = Arc::new(PlayerImpl::new(config));
@@ -109,8 +113,7 @@ async fn build_hls_resource(
             .build(),
     )
     .initial_abr_mode(AbrMode::manual(GATED_VARIANT))
-    .byte_pool(player.byte_pool().clone())
-    .pcm_pool(player.pcm_pool().clone())
+    .worker(player.worker().clone())
     .build();
     Resource::new(cfg).await.expect("create HLS resource")
 }

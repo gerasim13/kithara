@@ -1,10 +1,10 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use kithara_audio::{AudioWorkerHandle, ConsumerWakeMode, EqBandConfig};
+use kithara_audio::{ConsumerWakeMode, EqBandConfig};
 use kithara_bufpool::PcmPool;
 use kithara_events::EventBus;
 use kithara_platform::{
-    CancelScope, CancelToken,
+    CancelToken,
     sync::{Arc, Mutex},
     time::Duration,
     tokio::runtime::Handle as RuntimeHandle,
@@ -28,8 +28,6 @@ type SlotHandle = SlotControl;
 pub struct EngineImpl {
     running: AtomicBool,
     master_volume: AtomicF32,
-    #[field(get)]
-    worker: AudioWorkerHandle,
     config: EngineConfig,
     eq_layout: Mutex<Vec<EqBandConfig>>,
     #[field(get, vis = "pub(crate)")]
@@ -56,8 +54,6 @@ impl EngineImpl {
         let max_slots = config.max_slots;
         let resolved_pool = config.pcm_pool.clone();
         let eq_layout = Mutex::new(std::mem::take(&mut config.eq_layout));
-        let worker_cancel = CancelScope::new(config.cancel.clone()).token();
-
         Self {
             config,
             eq_layout,
@@ -69,7 +65,6 @@ impl EngineImpl {
             running: AtomicBool::new(false),
             start_lock: Mutex::new(()),
             slots: Mutex::new(SlotTable::with_capacity(max_slots)),
-            worker: AudioWorkerHandle::with_cancel(worker_cancel),
             runtime: RuntimeHandle::try_current().ok(),
         }
     }
@@ -233,8 +228,6 @@ impl Drop for EngineImpl {
                 player_id, "failed to unregister player from shared session"
             );
         }
-
-        self.worker.shutdown();
     }
 }
 
@@ -291,7 +284,7 @@ impl EngineImpl {
     ///
     /// Returns the config default if the engine is not running yet.
     /// Used to pre-initialise the resampler in `ResourceConfig` so that
-    /// `make_sincs` runs during `Audio::new()` (off the worker thread)
+    /// `make_sincs` runs while the resource is prepared (off the worker thread)
     /// instead of lazily on the first `step_track()` call.
     pub fn master_sample_rate(&self) -> u32 {
         if !self.running.load(Ordering::Acquire) {
@@ -378,35 +371,5 @@ impl EngineImpl {
 
     pub fn subscribe(&self) -> kithara_events::EventReceiver {
         self.bus.subscribe()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use kithara_test_utils::kithara;
-
-    use super::*;
-
-    #[kithara::test]
-    fn engine_creates_worker() {
-        let engine = EngineImpl::new(EngineConfig::test_builder().build(), EventBus::default());
-        let _w = engine.worker();
-    }
-
-    #[kithara::test]
-    fn engine_worker_is_clonable() {
-        let engine = EngineImpl::new(EngineConfig::test_builder().build(), EventBus::default());
-        let w1 = engine.worker().clone();
-        let w2 = engine.worker().clone();
-        w1.wake();
-        w2.wake();
-    }
-
-    #[kithara::test]
-    fn engine_drop_shuts_down_worker() {
-        let engine = EngineImpl::new(EngineConfig::test_builder().build(), EventBus::default());
-        let worker_clone = engine.worker().clone();
-        drop(engine);
-        worker_clone.wake();
     }
 }

@@ -3,12 +3,13 @@ use std::sync::OnceLock;
 use gloo_timers::future::TimeoutFuture;
 use kithara::{
     assets::{AssetStore, StorageBackend},
-    audio::{Audio, AudioConfig, ReadOutcome},
+    audio::{AudioConfig, PcmControl, PcmRead, PcmSession, ReadOutcome},
     events::{AudioEvent, Event, EventBus, SeekLifecycleStage},
     hls::{Hls, HlsConfig},
     // `Instant` is not imported: the test macro virtualises the clock inside
     // every test body, and naming it here shadows nothing but a warning.
     platform::time::Duration,
+    play::{PlayWorker, PlayWorkerConfig, RegisteredAudio},
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
 use kithara_integration_tests::{
@@ -115,20 +116,23 @@ async fn init() {
     info!("WASM test environment initialized");
 }
 
-/// Create an `Audio<Stream<Hls>>` pipeline in ephemeral mode.
-async fn create_pipeline() -> Audio<Stream<Hls>> {
+/// Create a registered HLS audio pipeline in ephemeral mode.
+async fn create_pipeline() -> RegisteredAudio<Stream<Hls>> {
     create_pipeline_with_url(fixture_url()).await
 }
 
-async fn create_pipeline_with_url(url: Url) -> Audio<Stream<Hls>> {
+async fn create_pipeline_with_url(url: Url) -> RegisteredAudio<Stream<Hls>> {
     const EVENT_BUS_CAPACITY: usize = 4096;
     let bus = EventBus::new(EVENT_BUS_CAPACITY);
+    let byte_pool = kithara::bufpool::BytePool::default();
+    let pcm_pool = kithara::bufpool::PcmPool::default();
 
     let hls_config = HlsConfig::for_url(url)
         .events(bus)
         .store(
             AssetStore::builder()
                 .backend(StorageBackend::Memory)
+                .pool(byte_pool.clone())
                 .build(),
         )
         .initial_abr_mode(auto(0))
@@ -139,18 +143,17 @@ async fn create_pipeline_with_url(url: Url) -> Audio<Stream<Hls>> {
         .maybe_container(Some(ContainerFormat::Wav))
         .build();
     let config = AudioConfig::<Hls>::for_stream(hls_config)
-        .byte_pool(kithara::bufpool::BytePool::default())
-        .pcm_pool(kithara::bufpool::PcmPool::default())
         .media_info(wav_info)
         .build();
-    let mut audio = Audio::<Stream<Hls>>::new(config).await.unwrap();
+    let worker = PlayWorker::new(PlayWorkerConfig::for_pools(byte_pool, pcm_pool).build());
+    let mut audio = worker.open(config).await.unwrap();
     audio
         .preload()
         .expect("start preloading the stress fixture");
     audio
 }
 
-async fn run_seek_pcm_window_check(mut audio: Audio<Stream<Hls>>) {
+async fn run_seek_pcm_window_check(mut audio: RegisteredAudio<Stream<Hls>>) {
     let spec = audio.spec();
     let channels = spec.channels as usize;
     let sample_rate = spec.sample_rate.get() as usize;
@@ -260,14 +263,17 @@ async fn run_seek_pcm_window_check(mut audio: Audio<Stream<Hls>>) {
 /// On wasm32 main thread, `Atomics.wait` is forbidden. The audio pipeline
 /// uses `preload()` mode where `read()` returns 0 when data isn't ready yet.
 /// We yield via `gloo_timers` to let async downloads and Web Workers proceed.
-async fn read_with_yield(audio: &mut Audio<Stream<Hls>>, buf: &mut [f32]) -> Option<usize> {
+async fn read_with_yield(
+    audio: &mut RegisteredAudio<Stream<Hls>>,
+    buf: &mut [f32],
+) -> Option<usize> {
     read_with_yield_limit(audio, buf, 500).await
 }
 
 /// Read with configurable retry limit. `None` is the end of the stream;
 /// `Some(0)` is a reader that stayed pending for the whole budget.
 async fn read_with_yield_limit(
-    audio: &mut Audio<Stream<Hls>>,
+    audio: &mut RegisteredAudio<Stream<Hls>>,
     buf: &mut [f32],
     max_yields: usize,
 ) -> Option<usize> {

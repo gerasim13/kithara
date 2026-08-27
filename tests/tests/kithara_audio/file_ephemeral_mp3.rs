@@ -3,11 +3,12 @@
 
 use kithara::{
     assets::{AssetStore, StorageBackend},
-    audio::{Audio, AudioConfig, ReadOutcome},
+    audio::{AudioConfig, PcmRead, PcmSession, ReadOutcome},
+    bufpool::Region,
     decode::DecoderBackend,
     file::{File, FileConfig},
     platform::{sync::Arc, time::Duration, tokio::task::spawn_blocking},
-    stream::Stream,
+    play::{PlayWorker, PlayWorkerConfig},
 };
 use kithara_integration_tests::{Content, Delivery, FixtureBehavior, TestServerHelper};
 
@@ -46,16 +47,19 @@ async fn audio_file_mp3_decodes_with_duration(
         Some(s) => handle.child_url(s),
         None => handle.url(),
     };
+    let region = Region::default();
+    let worker =
+        PlayWorker::new(PlayWorkerConfig::for_pools(region.byte_pool(), region.pcm_pool()).build());
     let file_config = FileConfig::for_src(url.clone().into())
         .store(
             AssetStore::builder()
                 .backend(StorageBackend::Memory)
+                .pool(worker.byte_pool().clone())
                 .build(),
         )
+        .pool(worker.byte_pool().clone())
         .build();
     let config = AudioConfig::<File>::for_stream(file_config)
-        .byte_pool(kithara::bufpool::BytePool::default())
-        .pcm_pool(kithara::bufpool::PcmPool::default())
         .decoder(
             kithara::audio::AudioDecoderConfig::builder()
                 .backend(backend)
@@ -63,7 +67,8 @@ async fn audio_file_mp3_decodes_with_duration(
         )
         .maybe_hint(hint.map(str::to_owned))
         .build();
-    let mut audio = Audio::<Stream<File>>::new(config)
+    let mut audio = worker
+        .open(config)
         .await
         .unwrap_or_else(|e| panic!("probe failed for url={url} hint={hint:?}: {e}"));
 
@@ -114,7 +119,7 @@ async fn audio_file_mp3_decodes_with_duration(
     );
 }
 
-/// Duration must be correct IMMEDIATELY after `Audio::new` — before any
+/// Duration must be correct IMMEDIATELY after `PlayWorker::open` — before any
 /// decode calls. This is what the GUI reads to show track length.
 ///
 /// Uses throttled server: Content-Length is sent immediately but body
@@ -136,19 +141,23 @@ async fn mp3_duration_correct_before_decode(#[case] hint: Option<&str>) {
         },
     });
     let url = handle.url();
+    let region = Region::default();
+    let worker =
+        PlayWorker::new(PlayWorkerConfig::for_pools(region.byte_pool(), region.pcm_pool()).build());
     let file_config = FileConfig::for_src(url.clone().into())
         .store(
             AssetStore::builder()
                 .backend(StorageBackend::Memory)
+                .pool(worker.byte_pool().clone())
                 .build(),
         )
+        .pool(worker.byte_pool().clone())
         .build();
     let config = AudioConfig::<File>::for_stream(file_config)
-        .byte_pool(kithara::bufpool::BytePool::default())
-        .pcm_pool(kithara::bufpool::PcmPool::default())
         .maybe_hint(hint.map(String::from))
         .build();
-    let audio = Audio::<Stream<File>>::new(config)
+    let audio = worker
+        .open(config)
         .await
         .unwrap_or_else(|e| panic!("creation failed for url={url} hint={hint:?}: {e}"));
 
@@ -175,18 +184,20 @@ async fn audio_file_extensionless_mp3_without_hint_uses_native_probe() {
         },
         delivery: Delivery::Range,
     });
+    let region = Region::default();
+    let worker =
+        PlayWorker::new(PlayWorkerConfig::for_pools(region.byte_pool(), region.pcm_pool()).build());
     let file_config = FileConfig::for_src(handle.url().into())
         .store(
             AssetStore::builder()
                 .backend(StorageBackend::Memory)
+                .pool(worker.byte_pool().clone())
                 .build(),
         )
+        .pool(worker.byte_pool().clone())
         .build();
-    let config = AudioConfig::<File>::for_stream(file_config)
-        .byte_pool(kithara::bufpool::BytePool::default())
-        .pcm_pool(kithara::bufpool::PcmPool::default())
-        .build();
-    let mut audio = Audio::<Stream<File>>::new(config).await.unwrap();
+    let config = AudioConfig::<File>::for_stream(file_config).build();
+    let mut audio = worker.open(config).await.unwrap();
 
     let (samples_read, position, eof) = spawn_blocking(move || {
         let mut total = 0usize;

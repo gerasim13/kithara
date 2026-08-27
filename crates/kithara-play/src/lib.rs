@@ -13,6 +13,7 @@ pub mod policy;
 pub mod resource;
 pub mod rt;
 pub mod session;
+pub mod worker;
 
 #[cfg(target_arch = "wasm32")]
 pub mod wasm;
@@ -37,9 +38,10 @@ pub use engine::{EngineConfig, EngineImpl, apply_mix};
 pub use error::PlayError;
 pub use kithara_assets::{AssetLayout, DefaultLayout};
 pub use kithara_audio::{
-    AudioWorkerHandle, EngineLoadSnapshot, EqBandConfig, SeekOutcome, ServiceClass, StretchControls,
+    EngineLoadSnapshot, EqBandConfig, SeekOutcome, ServiceClass, StretchControls,
 };
 pub use kithara_net::Headers;
 pub use player::{PlayerConfig, PlayerImpl, SelectTransition};
 pub use resource::{PlaybackResamplerBackend, Resource, ResourceConfig, ResourceSrc, SourceType};
 pub use rt::PlayerNode;
+pub use worker::{PlayWorker, PlayWorkerConfig, RegisteredAudio};

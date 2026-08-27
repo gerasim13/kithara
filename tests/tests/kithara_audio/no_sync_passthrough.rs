@@ -1,10 +1,8 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 use kithara::{
-    audio::{
-        Audio, AudioConfig, AudioEffect, AudioWorkerHandle, PcmSession, StretchControls,
-        StretchKind,
-    },
+    audio::{AudioConfig, AudioEffect, PcmControl, PcmSession, StretchControls, StretchKind},
+    bufpool::Region,
     decode::PcmChunk,
     platform::{
         CancelToken,
@@ -14,6 +12,7 @@ use kithara::{
         },
         time::{self, Duration, Instant},
     },
+    play::{PlayWorker, PlayWorkerConfig, RegisteredAudio},
     stream::Stream,
 };
 use kithara_integration_tests::{
@@ -272,7 +271,6 @@ fn measure_quiet_sine(samples: &[f32]) -> SineFit {
 
 fn audio_config(
     source: &[u8],
-    worker: AudioWorkerHandle,
     stretch: Option<(StretchKind, f32)>,
     effects: Vec<Box<dyn AudioEffect>>,
 ) -> AudioConfig<MemStream> {
@@ -288,16 +286,13 @@ fn audio_config(
     });
 
     AudioConfig::<MemStream>::for_stream(stream)
-        .byte_pool(kithara::bufpool::BytePool::default())
-        .pcm_pool(kithara::bufpool::PcmPool::default())
         .maybe_stretch(stretch)
-        .worker(worker)
         .effects(effects)
         .hint("wav".to_owned())
         .build()
 }
 
-async fn wait_for_preload(audio: &Audio<Stream<MemStream>>) {
+async fn wait_for_preload(audio: &RegisteredAudio<Stream<MemStream>>) {
     let gate = audio
         .preload_gate()
         .expect("worker-backed audio exposes a preload gate");
@@ -315,23 +310,28 @@ async fn render_passthrough(
     with_load: bool,
 ) -> RealtimeCapture {
     let load_probe = Arc::new(LoadProbe::new());
-    let worker = AudioWorkerHandle::with_cancel(CancelToken::never());
-    let mut target_audio =
-        Audio::<Stream<MemStream>>::new(audio_config(source, worker.clone(), stretch, Vec::new()))
-            .await
-            .expect("target audio construction");
+    let region = Region::default();
+    let worker = PlayWorker::new(
+        PlayWorkerConfig::for_pools(region.byte_pool(), region.pcm_pool())
+            .cancel(CancelToken::never())
+            .build(),
+    );
+    let mut target_audio = worker
+        .open(audio_config(source, stretch, Vec::new()))
+        .await
+        .expect("target audio construction");
     wait_for_preload(&target_audio).await;
     target_audio.preload().expect("target preload");
 
     let mut load_audio = if with_load {
-        let mut audio = Audio::<Stream<MemStream>>::new(audio_config(
-            source,
-            worker,
-            None,
-            vec![Box::new(BurstLoadEffect::new(Arc::clone(&load_probe)))],
-        ))
-        .await
-        .expect("load audio construction");
+        let mut audio = worker
+            .open(audio_config(
+                source,
+                None,
+                vec![Box::new(BurstLoadEffect::new(Arc::clone(&load_probe)))],
+            ))
+            .await
+            .expect("load audio construction");
         wait_for_preload(&audio).await;
         audio.preload().expect("load preload");
         Some(audio)

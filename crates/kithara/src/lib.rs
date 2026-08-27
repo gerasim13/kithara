@@ -9,17 +9,20 @@
 //! ```ignore
 //! use kithara::{
 //!     assets::AssetStore,
-//!     bufpool::{BytePool, PcmPool},
+//!     bufpool::Region,
 //!     prelude::*,
 //! };
 //!
+//! let region = Region::default();
+//! let worker = PlayWorker::new(
+//!     PlayWorkerConfig::for_pools(region.byte_pool(), region.pcm_pool()).build(),
+//! );
 //! // Auto-detect from URL
 //! let config: ResourceConfig = ResourceConfig::for_src(ResourceConfig::parse_src(
 //!     "https://example.com/song.mp3",
 //! )?)
-//! .store(AssetStore::builder().build())
-//! .byte_pool(BytePool::default())
-//! .pcm_pool(PcmPool::default())
+//! .store(AssetStore::builder().pool(region.byte_pool()).build())
+//! .worker(worker)
 //! .build();
 //! let mut resource = Resource::new(config).await?;
 //!
@@ -148,8 +151,8 @@ pub mod prelude {
     #[cfg(feature = "hls")]
     pub use kithara_hls::{Hls, HlsConfig};
     pub use kithara_play::{
-        AudioWorkerHandle, EngineConfig, EngineImpl, PlaybackResamplerBackend, PlayerConfig,
-        PlayerImpl, Resource, ResourceConfig, ResourceSrc, ServiceClass, SourceType,
+        EngineConfig, EngineImpl, PlayWorker, PlayWorkerConfig, PlaybackResamplerBackend,
+        PlayerConfig, PlayerImpl, Resource, ResourceConfig, ResourceSrc, ServiceClass, SourceType,
     };
     pub use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo, Stream, StreamType};
 }

@@ -3,6 +3,7 @@
 use std::{fs, path::PathBuf};
 
 use kithara::{
+    assets::{AssetStore, StorageBackend},
     events::{AudioEvent, DownloaderEvent, Event},
     hls::AbrMode,
     net::{HttpClient, NetOptions, RetryPolicy},
@@ -160,6 +161,8 @@ async fn resumes_after_outage(
     url: String,
     look_ahead_bytes: u64,
 ) {
+    let region = kithara::bufpool::Region::default();
+    let byte_pool = region.byte_pool();
     let net = NetOptions::builder()
         .inactivity_timeout(Duration::from_millis(500))
         .retry_policy(
@@ -169,26 +172,37 @@ async fn resumes_after_outage(
                 .max_delay(Duration::from_millis(200))
                 .build(),
         )
+        .byte_pool(byte_pool.clone())
         .build();
     let downloader = Downloader::new(
         DownloaderConfig::for_client(HttpClient::new(net, CancelToken::never())).build(),
     );
+    let store = AssetStore::builder()
+        .backend(StorageBackend::Disk {
+            root: temp_dir.path().into(),
+        })
+        .pool(byte_pool.clone())
+        .build();
     let player = Arc::new(PlayerImpl::new(
         PlayerConfig::builder()
-            .byte_pool(kithara::bufpool::BytePool::default())
-            .pcm_pool(kithara::bufpool::PcmPool::default())
+            .worker(kithara::play::PlayWorker::new(
+                kithara::play::PlayWorkerConfig::for_pools(byte_pool, region.pcm_pool()).build(),
+            ))
             .session(OfflineSession::arc_auto())
             .build(),
     ));
-    let queue = Arc::new(Queue::new(QueueConfig::builder().player(player).build()));
+    let queue = Arc::new(Queue::new(
+        QueueConfig::builder()
+            .player(player)
+            .store(store.clone())
+            .build(),
+    ));
     let cfg =
         ResourceConfig::for_src(ResourceConfig::parse_src(url.as_str()).expect("valid HLS URL"))
-            .byte_pool(kithara::bufpool::BytePool::default())
-            .pcm_pool(kithara::bufpool::PcmPool::default())
             .downloader(downloader)
             .initial_abr_mode(AbrMode::manual(0))
             .look_ahead_bytes(look_ahead_bytes)
-            .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
+            .store(store)
             .build();
 
     let ticker = spawn_ticker(Arc::clone(&queue));

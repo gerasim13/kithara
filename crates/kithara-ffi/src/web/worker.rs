@@ -91,11 +91,17 @@ pub(crate) fn worker_main(
     task_spawn(async move {
         let session = wasm::remote_session(session_tx);
         let state = BuildState::default();
+        let worker = kithara_play::PlayWorker::new(
+            kithara_play::PlayWorkerConfig::for_pools(
+                state.region.byte_pool(),
+                state.region.pcm_pool(),
+            )
+            .build(),
+        );
         let player = Arc::new(kithara_play::PlayerImpl::new(
             kithara_play::PlayerConfig::builder()
-                .byte_pool(state.region.byte_pool())
-                .pcm_pool(state.region.pcm_pool())
                 .session(session.dispatcher())
+                .worker(worker)
                 .build(),
         ));
         let queue = Rc::new(Queue::new(
@@ -339,8 +345,6 @@ fn build_source(state: &BuildState, url: String) -> TrackSource {
             let config = ResourceConfig::for_src(src)
                 .keys(state.keys.clone())
                 .maybe_headers(headers.map(Into::into))
-                .byte_pool(state.region.byte_pool())
-                .pcm_pool(state.region.pcm_pool())
                 .store(state.store.clone())
                 .build();
             TrackSource::Config(Box::new(config))

@@ -10,7 +10,7 @@ use kithara::{
         time::{Duration, Instant, timeout},
         tokio,
     },
-    play::{PlayerConfig, PlayerImpl, ResourceConfig},
+    play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig},
     queue::{Queue, QueueConfig, TrackSource, Transition},
     stream::dl::{Downloader, DownloaderConfig},
 };
@@ -96,8 +96,13 @@ async fn cpal_cold_seek_silvercomet_hls(#[case] backend: DecoderBackend) {
 
     let player = Arc::new(PlayerImpl::new(
         PlayerConfig::builder()
-            .byte_pool(kithara::bufpool::BytePool::default())
-            .pcm_pool(kithara::bufpool::PcmPool::default())
+            .worker(PlayWorker::new(
+                PlayWorkerConfig::for_pools(
+                    kithara::bufpool::BytePool::default(),
+                    kithara::bufpool::PcmPool::default(),
+                )
+                .build(),
+            ))
             .build(),
     ));
     let queue = Arc::new(Queue::new(QueueConfig::builder().player(player).build()));
@@ -115,8 +120,6 @@ async fn cpal_cold_seek_silvercomet_hls(#[case] backend: DecoderBackend) {
 
     let cfg =
         ResourceConfig::for_src(ResourceConfig::parse_src(URL).expect("valid silvercomet URL"))
-            .byte_pool(kithara::bufpool::BytePool::default())
-            .pcm_pool(kithara::bufpool::PcmPool::default())
             .downloader(downloader.clone())
             .store(store)
             .decoder(

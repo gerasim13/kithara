@@ -1,7 +1,6 @@
 //! Shared audio renderer — cooperative multi-track scheduler on a dedicated OS thread.
 
 mod gate;
-pub(crate) mod handle;
 mod load;
 mod node;
 mod source;
@@ -9,8 +8,6 @@ mod source;
 mod tests;
 
 pub use gate::PreloadGate;
-pub use handle::AudioWorkerHandle;
-pub(crate) use handle::{TrackId, WorkerWakeBridge};
 pub use load::{EngineLoad, EngineLoadSnapshot};
 pub(crate) use node::{DecoderNode, TrackRegistration};
 pub(crate) use source::{apply_effects, reset_effects};

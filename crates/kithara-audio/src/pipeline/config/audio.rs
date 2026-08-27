@@ -1,7 +1,6 @@
 use std::num::{NonZeroU32, NonZeroUsize};
 
 use bon::Builder;
-use kithara_bufpool::{BytePool, PcmPool};
 use kithara_events::EventBus;
 use kithara_platform::{CancelToken, sync::Arc};
 use kithara_resampler::{NoResamplerBackend, ResamplerBackend};
@@ -11,7 +10,7 @@ use portable_atomic::AtomicF32;
 use crate::{
     effects::timestretch::StretchControls,
     pipeline::config::AudioDecoderConfig,
-    renderer::{AudioWorkerHandle, EngineLoad},
+    renderer::EngineLoad,
     traits::{AudioEffect, PcmObserver},
 };
 
@@ -56,9 +55,6 @@ pub struct AudioConfig<T: StreamType, B = NoResamplerBackend> {
     #[builder(default)]
     #[field(get)]
     pub(crate) decoder: AudioDecoderConfig<B>,
-    /// Shared byte pool for temporary buffers (probe, etc.).
-    #[field(get)]
-    pub(crate) byte_pool: BytePool,
     /// Number of chunks to buffer before signaling preload readiness.
     #[builder(default = NonZeroUsize::new(Consts::PRELOAD_CHUNKS).expect("preload chunk count is non-zero"))]
     #[field(get, copy)]
@@ -88,11 +84,6 @@ pub struct AudioConfig<T: StreamType, B = NoResamplerBackend> {
     /// backend, including wasm, no speed DSP is inserted and playback remains
     /// at unity.
     pub(crate) stretch: Option<Arc<StretchControls>>,
-    /// Optional shared audio worker handle.
-    pub(crate) worker: Option<AudioWorkerHandle>,
-    /// Shared PCM pool for temporary buffers.
-    #[field(get)]
-    pub(crate) pcm_pool: PcmPool,
     /// Optional bounded, nonblocking observer of decoder-output PCM.
     /// [`kithara_decode::PcmChunk::meta`] describes its post-conversion format;
     /// it runs before playback effects and owns any asynchronous copy.
@@ -169,11 +160,5 @@ where
     #[must_use]
     pub const fn stretch(&self) -> Option<&Arc<StretchControls>> {
         self.stretch.as_ref()
-    }
-
-    /// Return the configured audio worker.
-    #[must_use]
-    pub const fn worker(&self) -> Option<&AudioWorkerHandle> {
-        self.worker.as_ref()
     }
 }

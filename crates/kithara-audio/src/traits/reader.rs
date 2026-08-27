@@ -108,6 +108,13 @@ pub trait PcmSession {
     /// Get track metadata.
     fn metadata(&self) -> &TrackMetadata;
 
+    /// Whether this reader has crossed its one-way playback preload latch.
+    ///
+    /// Readers without worker-backed preload keep the default `false`.
+    fn is_preloaded(&self) -> bool {
+        false
+    }
+
     /// Decoder epoch whose preload gate should be observed by async callers.
     ///
     /// Readers without epoch-based seek invalidation keep the default initial

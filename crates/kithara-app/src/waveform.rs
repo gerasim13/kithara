@@ -126,7 +126,7 @@ async fn run_analysis(
 }
 
 /// Open the resource under the run's cancel scope (so preemption and app
-/// shutdown tear the standalone audio worker down top-down) and unwrap the
+/// shutdown tear its registered playback task down top-down) and unwrap the
 /// reader for the analysis worker.
 async fn open_reader(
     mut config: AppResourceConfig,

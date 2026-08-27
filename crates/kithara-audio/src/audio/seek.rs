@@ -3,7 +3,7 @@ use kithara_platform::{sync::Arc, time::Duration};
 use kithara_stream::{DeferredWake, PlayheadWrite, SeekControl, SeekPrepare};
 use tracing::trace;
 
-use super::{AudioWorkerHandle, PreloadGate, SeekOutcome};
+use super::{PcmWake, PreloadGate, SeekOutcome};
 use crate::traits::SeekBegin;
 
 /// The control-plane half of a seek: rebuilds the source's byte space, publishes a lifecycle event,
@@ -16,7 +16,7 @@ pub struct SeekHandle {
     preload_gate: Arc<PreloadGate>,
     seek: Arc<dyn SeekControl>,
     seek_prepare: Option<Arc<dyn SeekPrepare>>,
-    worker: Option<AudioWorkerHandle>,
+    wake: PcmWake,
 }
 
 impl SeekHandle {
@@ -28,7 +28,7 @@ impl SeekHandle {
             preload_gate,
             seek,
             seek_prepare,
-            worker,
+            wake,
         } = parts;
         Self {
             bus,
@@ -37,7 +37,7 @@ impl SeekHandle {
             preload_gate,
             seek,
             seek_prepare,
-            worker,
+            wake,
         }
     }
 }
@@ -58,9 +58,7 @@ impl SeekBegin for SeekHandle {
             wake.notify_now();
         }
         self.preload_gate.rearm();
-        if let Some(worker) = &self.worker {
-            worker.wake();
-        }
+        self.wake.wake();
 
         trace!(?position, epoch, "seek begun");
         match self.playhead.duration() {
@@ -83,5 +81,5 @@ pub(super) struct SeekHandleParts {
     pub(super) preload_gate: Arc<PreloadGate>,
     pub(super) seek: Arc<dyn SeekControl>,
     pub(super) seek_prepare: Option<Arc<dyn SeekPrepare>>,
-    pub(super) worker: Option<AudioWorkerHandle>,
+    pub(super) wake: PcmWake,
 }

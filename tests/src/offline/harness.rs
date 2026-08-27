@@ -7,7 +7,7 @@ use kithara::{
         sync::{Arc, Mutex},
         tokio::sync::broadcast::error::TryRecvError,
     },
-    play::{PlayerConfig, PlayerImpl, SessionDispatcher},
+    play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, SessionDispatcher},
 };
 
 use super::OfflineSession;
@@ -33,13 +33,15 @@ impl OfflinePlayerHarness {
         let session = Arc::new(OfflineSession::new_manual());
         let session_dispatcher = Arc::clone(&session) as Arc<dyn SessionDispatcher>;
         let region = Region::default();
+        let worker = PlayWorker::new(
+            PlayWorkerConfig::for_pools(region.byte_pool(), region.pcm_pool()).build(),
+        );
         let player_config = PlayerConfig::builder()
             .crossfade_duration(options.crossfade_duration)
             .gapless_mode(options.gapless_mode)
             .sample_rate(sample_rate)
             .session(Arc::clone(&session_dispatcher))
-            .byte_pool(region.byte_pool())
-            .pcm_pool(region.pcm_pool())
+            .worker(worker)
             .maybe_eq_layout(options.eq_layout)
             .maybe_timestretch(options.timestretch)
             .build();

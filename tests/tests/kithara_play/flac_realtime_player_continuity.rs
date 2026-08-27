@@ -8,7 +8,7 @@ use kithara::{
         CancelToken,
         time::{Duration, Instant, sleep},
     },
-    play::{Resource, ResourceConfig},
+    play::{PlayWorker, PlayWorkerConfig, Resource, ResourceConfig},
     stream::{
         AudioCodec,
         dl::{Downloader, DownloaderConfig},
@@ -134,8 +134,13 @@ async fn run_case(
     let cfg: ResourceConfig = ResourceConfig::for_src(
         ResourceConfig::parse_src(master.as_str()).expect("valid master URL"),
     )
-    .byte_pool(kithara::bufpool::BytePool::default())
-    .pcm_pool(kithara::bufpool::PcmPool::default())
+    .worker(PlayWorker::new(
+        PlayWorkerConfig::for_pools(
+            kithara::bufpool::BytePool::default(),
+            kithara::bufpool::PcmPool::default(),
+        )
+        .build(),
+    ))
     .downloader(downloader)
     .discriminator("t0")
     .store(store)

@@ -75,10 +75,12 @@ where
 #[cfg(test)]
 mod tests {
     use kithara_audio::ConsumerWakeMode;
+    use kithara_bufpool::{BytePool, PcmPool};
     use kithara_test_utils::kithara;
 
     use super::*;
     use crate::{
+        PlayWorker, PlayWorkerConfig,
         player::PlayerConfig,
         session::{Cmd, Reply, SessionDispatcher, testing::test_session},
     };
@@ -96,7 +98,15 @@ mod tests {
     }
 
     fn player(session: Arc<dyn SessionDispatcher>) -> PlayerImpl {
-        PlayerImpl::new(PlayerConfig::test_builder().session(session).build())
+        let worker = PlayWorker::new(
+            PlayWorkerConfig::for_pools(BytePool::default(), PcmPool::default()).build(),
+        );
+        PlayerImpl::new(
+            PlayerConfig::builder()
+                .worker(worker)
+                .session(session)
+                .build(),
+        )
     }
 
     #[kithara::test]

@@ -15,7 +15,7 @@ use kithara::{
         tokio,
         tokio::sync::broadcast::error::RecvError,
     },
-    play::{PlayerConfig, PlayerImpl, ResourceConfig},
+    play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig},
     queue::{Queue, QueueConfig, TrackSource, Transition},
     stream::dl::{Downloader, DownloaderConfig},
 };
@@ -75,8 +75,13 @@ fn build_queue_with_tick(
     let store = kithara_integration_tests::disk_asset_store(temp_dir.path());
     let player = Arc::new(PlayerImpl::new(
         PlayerConfig::builder()
-            .byte_pool(kithara::bufpool::BytePool::default())
-            .pcm_pool(kithara::bufpool::PcmPool::default())
+            .worker(PlayWorker::new(
+                PlayWorkerConfig::for_pools(
+                    kithara::bufpool::BytePool::default(),
+                    kithara::bufpool::PcmPool::default(),
+                )
+                .build(),
+            ))
             .session(OfflineSession::arc_auto())
             .build(),
     ));
@@ -238,8 +243,6 @@ async fn variant_media_playlists_load_concurrently(#[case] decoder: DecoderBacke
     let cfg = ResourceConfig::for_src(
         ResourceConfig::parse_src(url.as_str()).expect("ResourceConfig::parse_src"),
     )
-    .byte_pool(kithara::bufpool::BytePool::default())
-    .pcm_pool(kithara::bufpool::PcmPool::default())
     .downloader(downloader.clone())
     .store(store)
     .initial_abr_mode(AbrMode::Auto(None))

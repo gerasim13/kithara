@@ -13,7 +13,7 @@ use kithara::{
         time::{self, Duration, sleep},
         tokio,
     },
-    play::{PlayerConfig, PlayerImpl, ResourceConfig},
+    play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig},
     queue::{Queue, QueueConfig, TrackSource, Transition},
     stream::dl::{Downloader, DownloaderConfig},
 };
@@ -38,7 +38,7 @@ use url::Url;
 ///
 /// The DRM case adds the second moving piece: `ProcessedResource` has a
 /// `ReadinessGate` per resource that has to be re-armed for every fresh
-/// `Audio::new`. If the shortcut bypasses re-arming, the new read path
+/// `PlayWorker::open`. If the shortcut bypasses re-arming, the new read path
 /// observes a still-closed gate and never makes progress.
 
 struct Consts;
@@ -134,8 +134,13 @@ fn build_queue_with_tick_cf(
     let store = kithara_integration_tests::disk_asset_store(temp_dir.path());
     let player = Arc::new(PlayerImpl::new(
         PlayerConfig::builder()
-            .byte_pool(kithara::bufpool::BytePool::default())
-            .pcm_pool(kithara::bufpool::PcmPool::default())
+            .worker(PlayWorker::new(
+                PlayWorkerConfig::for_pools(
+                    kithara::bufpool::BytePool::default(),
+                    kithara::bufpool::PcmPool::default(),
+                )
+                .build(),
+            ))
             .session(OfflineSession::arc_auto())
             .crossfade_duration(crossfade_seconds)
             .build(),
@@ -222,8 +227,6 @@ async fn replay_track_after_switch_does_not_hang_loader(#[case] mode: FixtureMod
 
     let mk_cfg = |url: &Url| {
         ResourceConfig::for_src(ResourceConfig::parse_src(url.as_str()).expect("valid fixture URL"))
-            .byte_pool(kithara::bufpool::BytePool::default())
-            .pcm_pool(kithara::bufpool::PcmPool::default())
             .downloader(downloader.clone())
             .store(store.clone())
             .initial_abr_mode(AbrMode::Auto(None))
@@ -260,7 +263,7 @@ async fn replay_track_after_switch_does_not_hang_loader(#[case] mode: FixtureMod
     let status = result.unwrap_or_else(|e| {
         panic!(
             "REGRESSION [{mode:?}]: track A failed to reload after switching B → A: {e}\n\
-             This is the dispatch/asset-store contract bug: a second `Audio::new` \
+             This is the dispatch/asset-store contract bug: a second `PlayWorker::open` \
              on a cache-hot URL short-circuits via `resource_already_committed` \
              without emitting fetches the new read path waits on."
         )
@@ -330,8 +333,6 @@ async fn switch_back_to_mp3_restarts_audio_not_just_ui(
 
     let mk_cfg = |url: &Url| {
         ResourceConfig::for_src(ResourceConfig::parse_src(url.as_str()).expect("valid fixture URL"))
-            .byte_pool(kithara::bufpool::BytePool::default())
-            .pcm_pool(kithara::bufpool::PcmPool::default())
             .downloader(downloader.clone())
             .store(store.clone())
             .initial_abr_mode(AbrMode::Auto(None))

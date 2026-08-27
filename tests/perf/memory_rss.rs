@@ -5,10 +5,12 @@
 
 use hotpath::HotpathGuardBuilder;
 use kithara::{
-    audio::{Audio, AudioConfig},
+    assets::{AssetStore, StorageBackend},
+    audio::AudioConfig,
+    bufpool::Region,
     hls::{Hls, HlsConfig},
     platform::{time::Duration, tokio::task::spawn_blocking},
-    stream::Stream,
+    play::{PlayWorker, PlayWorkerConfig},
 };
 use kithara_integration_tests::{TestServerHelper, TestTempDir, auto, temp_dir};
 use memory_stats::memory_stats;
@@ -46,17 +48,23 @@ async fn test_hls_playback_rss_within_budget(temp_dir: TestTempDir) {
         let server = TestServerHelper::new().await;
         let url = server.asset("hls/master.m3u8");
 
+        let region = Region::default();
+        let byte_pool = region.byte_pool();
+        let store = AssetStore::builder()
+            .backend(StorageBackend::Disk {
+                root: temp_dir.path().into(),
+            })
+            .pool(byte_pool.clone())
+            .build();
         let hls_config = HlsConfig::for_url(url)
-            .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
+            .store(store)
+            .pool(byte_pool.clone())
             .initial_abr_mode(auto(0))
             .build();
-        let config = AudioConfig::<Hls>::for_stream(hls_config)
-            .byte_pool(kithara::bufpool::BytePool::default())
-            .pcm_pool(kithara::bufpool::PcmPool::default())
-            .build();
-        let mut audio = Audio::<Stream<Hls>>::new(config)
-            .await
-            .expect("audio creation");
+        let config = AudioConfig::<Hls>::for_stream(hls_config).build();
+        let worker =
+            PlayWorker::new(PlayWorkerConfig::for_pools(byte_pool, region.pcm_pool()).build());
+        let mut audio = worker.open(config).await.expect("audio creation");
 
         let samples = spawn_blocking(move || {
             let mut buf = vec![0f32; 4096];
@@ -135,17 +143,22 @@ async fn test_hls_playback_no_rss_leak(temp_dir: TestTempDir) {
     let server = TestServerHelper::new().await;
     let url = server.asset("hls/master.m3u8");
 
+    let region = Region::default();
+    let byte_pool = region.byte_pool();
+    let store = AssetStore::builder()
+        .backend(StorageBackend::Disk {
+            root: temp_dir.path().into(),
+        })
+        .pool(byte_pool.clone())
+        .build();
     let hls_config = HlsConfig::for_url(url)
-        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
+        .store(store)
+        .pool(byte_pool.clone())
         .initial_abr_mode(auto(0))
         .build();
-    let config = AudioConfig::<Hls>::for_stream(hls_config)
-        .byte_pool(kithara::bufpool::BytePool::default())
-        .pcm_pool(kithara::bufpool::PcmPool::default())
-        .build();
-    let mut audio = Audio::<Stream<Hls>>::new(config)
-        .await
-        .expect("audio creation");
+    let config = AudioConfig::<Hls>::for_stream(hls_config).build();
+    let worker = PlayWorker::new(PlayWorkerConfig::for_pools(byte_pool, region.pcm_pool()).build());
+    let mut audio = worker.open(config).await.expect("audio creation");
 
     let (warmup_rss, final_rss) = spawn_blocking(move || {
         let mut buf = vec![0f32; 4096];

@@ -382,11 +382,16 @@ impl Drop for EventBridge {
 mod tests {
     use std::sync::{Condvar, Mutex as StdMutex, PoisonError};
 
+    use kithara::{
+        bufpool::Region,
+        play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl},
+    };
     use kithara_events::{
         AdvanceReason, Event, EventBus, FileError, FileEvent, HlsError, HlsEvent, QueueEvent,
         QueueRepeatMode, TrackId, TrackStatus,
     };
     use kithara_platform::sync::{Arc, Mutex};
+    use kithara_queue::QueueConfig;
 
     use super::*;
     use crate::{
@@ -747,7 +752,14 @@ mod tests {
     /// itself.
     #[kithara::test(tokio)]
     async fn polling_thread_reloads_a_consumed_track_after_eof() {
-        let queue = Arc::new(Queue::new(kithara_queue::QueueConfig::default()));
+        let region = Region::default();
+        let worker = PlayWorker::new(
+            PlayWorkerConfig::for_pools(region.byte_pool(), region.pcm_pool()).build(),
+        );
+        let player = Arc::new(PlayerImpl::new(
+            PlayerConfig::builder().worker(worker).build(),
+        ));
+        let queue = Arc::new(Queue::new(QueueConfig::builder().player(player).build()));
         let id = queue.register_for_test();
         queue.mark_played_for_test(id);
         queue.set_repeat(kithara_queue::RepeatMode::One);

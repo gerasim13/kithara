@@ -15,7 +15,10 @@ use kithara::{
     bufpool::{PcmPool, Region},
     events::EventBus,
     platform::sync::Arc,
-    play::{Cmd, PlayerConfig, PlayerId, PlayerImpl, Reply, SessionDispatcher},
+    play::{
+        Cmd, PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerId, PlayerImpl, Reply,
+        SessionDispatcher,
+    },
 };
 use kithara_integration_tests::ring::{
     CountingNode, CountingProbe, DeterministicToneNode, ManualRingConfig, ManualRingSession,
@@ -94,8 +97,9 @@ fn empty_player(session: &Arc<ManualRingSession>) -> PlayerImpl {
     let dispatcher: Arc<dyn SessionDispatcher> = session.clone();
     PlayerImpl::new(
         PlayerConfig::builder()
-            .byte_pool(region.byte_pool())
-            .pcm_pool(region.pcm_pool())
+            .worker(PlayWorker::new(
+                PlayWorkerConfig::for_pools(region.byte_pool(), region.pcm_pool()).build(),
+            ))
             .sample_rate(SAMPLE_RATE)
             .crossfade_duration(0.0)
             .session(dispatcher)

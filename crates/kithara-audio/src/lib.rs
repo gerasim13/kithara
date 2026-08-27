@@ -1,6 +1,6 @@
 //! Audio pipeline library with decoding, effects, and resampling.
 //!
-//! - [`Audio`] — generic audio pipeline running in a separate thread
+//! - [`Audio`] — generic PCM reader prepared for an external playback scheduler
 //! - [`AudioConfig`] — pipeline configuration
 //! - [`ResamplerQuality`] - sample rate conversion quality
 //! - `Audio` implements [`PcmReader`] for pull-based PCM consumers
@@ -24,7 +24,7 @@ mod runtime;
 mod traits;
 mod waveform;
 
-pub use audio::{Audio, SeekHandle};
+pub use audio::{Audio, PreparedAudio, SeekHandle};
 pub use blob::frame::BlobError;
 pub use effects::{
     eq::{EqBandConfig, EqEffect, FilterKind, IsolatorEq, generate_log_spaced_bands},
@@ -41,7 +41,9 @@ pub use pipeline::{
     track::{TrackStep, WaitingReason},
 };
 pub use region::{ActiveRegion, RegionPlan, RegionPlanError};
-pub use renderer::{AudioWorkerHandle, EngineLoad, EngineLoadSnapshot, PreloadGate, ServiceClass};
+pub use renderer::{EngineLoad, EngineLoadSnapshot, PreloadGate, ServiceClass};
+#[doc(hidden)]
+pub use runtime::{PcmScheduler, PcmSchedulerError, PcmTask, PcmTaskId, PcmWake};
 pub use traits::{
     AudioEffect, ChunkOutcome, DecodeError, DecodeResult, PcmControl, PcmObserveError, PcmObserver,
     PcmRead, PcmReader, PcmSession, PcmSource, PendingReason, ReadOutcome, SeekBegin, SeekOutcome,

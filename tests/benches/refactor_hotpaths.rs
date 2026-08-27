@@ -19,8 +19,8 @@ use bytes::Bytes;
 use criterion::{BatchSize, Criterion, SamplingMode, criterion_group, criterion_main};
 use kithara::{
     assets::{AssetStore, StorageBackend},
-    audio::{Audio, AudioConfig},
-    bufpool::{BytePool, PcmPool},
+    audio::{AudioConfig, PcmRead},
+    bufpool::{PcmPool, Region},
     file::{File, FileConfig},
     hls::{Hls, HlsConfig},
     net::{HttpClient, NetOptions},
@@ -29,6 +29,7 @@ use kithara::{
         time::Duration,
         tokio::runtime::{Builder, Runtime},
     },
+    play::{PlayWorker, PlayWorkerConfig},
     resampler::{
         Resampler, ResamplerConfig, ResamplerMode, ResamplerOptions, ResamplerQuality,
         ResamplerSettings, create_resampler, rubato::RubatoBackend,
@@ -317,15 +318,25 @@ fn bench_audio_file_new_and_read(c: &mut Criterion) {
             },
             |(_temp_dir, file_path)| {
                 rt.block_on(async move {
+                    let region = Region::default();
+                    let byte_pool = region.byte_pool();
                     let file_config = FileConfig::for_src(file_path.into())
-                        .store(kithara_integration_tests::memory_asset_store())
+                        .store(
+                            AssetStore::builder()
+                                .backend(StorageBackend::Memory)
+                                .pool(byte_pool.clone())
+                                .build(),
+                        )
+                        .pool(byte_pool.clone())
                         .build();
                     let config = AudioConfig::<File>::for_stream(file_config)
-                        .byte_pool(BytePool::default())
-                        .pcm_pool(PcmPool::default())
                         .hint(("mp3").to_string())
                         .build();
-                    let mut audio = Audio::<Stream<File>>::new(config)
+                    let worker = PlayWorker::new(
+                        PlayWorkerConfig::for_pools(byte_pool, region.pcm_pool()).build(),
+                    );
+                    let mut audio = worker
+                        .open(config)
                         .await
                         .unwrap_or_else(|e| panic!("audio init failed: {e}"));
 

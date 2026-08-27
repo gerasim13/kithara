@@ -3,12 +3,11 @@ use std::fmt;
 use bon::Builder;
 use kithara_abr::AbrController;
 use kithara_audio::{EqBandConfig, StretchControls, generate_log_spaced_bands};
-use kithara_bufpool::{BytePool, PcmPool};
 use kithara_decode::GaplessMode;
 use kithara_events::EventBus;
 use kithara_platform::{CancelToken, sync::Arc};
 
-use crate::session::SessionDispatcher;
+use crate::{PlayWorker, session::SessionDispatcher};
 
 /// Configuration for the player.
 #[derive(Clone, Builder)]
@@ -19,8 +18,9 @@ pub struct PlayerConfig {
     /// worker effect chain (see `kithara_audio::StretchControls`).
     #[builder(default = StretchControls::new(1.0))]
     pub(crate) timestretch: Arc<StretchControls>,
-    /// Byte buffer pool shared by resources created for this player.
-    pub(crate) byte_pool: BytePool,
+    /// Explicit shared playback worker. Its pools and cancellation lifetime
+    /// are configured once in [`crate::PlayWorkerConfig`].
+    pub(crate) worker: PlayWorker,
     /// How resources created for this player trim leading/trailing PCM.
     #[builder(default)]
     pub(crate) gapless_mode: GaplessMode,
@@ -32,8 +32,6 @@ pub struct PlayerConfig {
     pub(crate) cancel: Option<CancelToken>,
     /// Pre-built audio session dispatcher.
     pub(crate) session: Option<Arc<dyn SessionDispatcher>>,
-    /// PCM buffer pool for audio-thread scratch buffers.
-    pub(crate) pcm_pool: PcmPool,
     /// EQ band layout. Default: 10-band log-spaced.
     #[builder(default = generate_log_spaced_bands(10))]
     pub(crate) eq_layout: Vec<EqBandConfig>,
@@ -69,18 +67,7 @@ impl fmt::Debug for PlayerConfig {
             .field("default_rate", &self.default_rate)
             .field("prefetch_duration", &self.prefetch_duration)
             .field("max_slots", &self.max_slots)
-            .field("pcm_pool", &self.pcm_pool)
+            .field("worker", &self.worker)
             .finish_non_exhaustive()
-    }
-}
-
-#[cfg(test)]
-impl PlayerConfig {
-    pub(crate) fn test_builder()
-    -> PlayerConfigBuilder<player_config_builder::SetPcmPool<player_config_builder::SetBytePool>>
-    {
-        Self::builder()
-            .byte_pool(BytePool::default())
-            .pcm_pool(PcmPool::default())
     }
 }

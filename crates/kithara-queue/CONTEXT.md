@@ -18,19 +18,20 @@ Contracts and invariants for `kithara-queue`; the README is the overview.
 
 ## Construction and config
 
-`Queue::new(QueueConfig)`; `QueueConfig` is a `bon` builder (`QueueConfig::builder()`,
-`Default` = `builder().build()`).
+`Queue::new(QueueConfig)`; `QueueConfig` is a `bon` builder. Its required `player`
+field is an explicitly constructed `Arc<PlayerImpl>`; Queue never constructs a
+player, playback worker, or pool region.
 
 - `cancel`: `Some` threads the app master so the queue subtree cascades from one
   owner; `None` falls back to a fresh standalone root (test / library use only, never
-  the production app path). `Queue::drop` cancels it. A queue-built player gets this
-  token as `PlayerConfig::cancel`; a caller-supplied player owns its own master.
+  the production app path). `Queue::drop` cancels it. The caller owns the player's
+  cancellation and worker lifetime separately.
 - `store`: `None` builds an `AssetStore` on the player's byte pool.
   `TrackSource::Uri` resources share it; a caller-supplied `ResourceConfig` keeps its
   own.
 - `max_concurrent_loads` (default 3) sizes the prefetch lane only.
-- `prefetch_duration` (default 3.5) is applied to the player the queue drives — built
-  or caller-supplied — the same way `auto_advance_enabled` is.
+- `prefetch_duration` (default 3.5) is applied to the supplied player the queue drives,
+  the same way `auto_advance_enabled` is.
 - `max_history_size` (default 100) caps `NavigationState`'s history.
 - `should_autoplay` (default `true`) is consumed only by the
   `cfg(any(test, feature = "probe"))` harness. The production append / insert path
@@ -40,9 +41,10 @@ Contracts and invariants for `kithara-queue`; the README is the overview.
 ## Track sources
 
 - `TrackSource::Uri`: the loader parses with `ResourceConfig::parse_src`, then
-  `ResourceConfig::for_src(src).store(queue store).byte_pool(..).pcm_pool(..)`.
+  `ResourceConfig::for_src(src).store(queue store)`.
   `TrackSource::Config(Box<ResourceConfig>)` passes through untouched (DRM keys,
-  headers, format hints preserved). Both then run `PlayerImpl::prepare_config`; a
+  headers, format hints preserved). Both then run `PlayerImpl::prepare_config`, which
+  supplies the player's shared playback worker and its pools; a
   config with no bus gets the player bus `scoped_labeled` with the track id. An
   attempt requires `config.cancel()` to be `Some`; a missing per-track cancel fails
   the load with `QueueError::Resource`.

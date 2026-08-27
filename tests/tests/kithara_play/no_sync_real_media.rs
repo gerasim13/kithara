@@ -20,8 +20,8 @@ use kithara::{
         time::{self, Duration},
     },
     play::{
-        Cmd, PlayerConfig, PlayerImpl, Reply, Resource, ResourceConfig, SeekOutcome,
-        SelectTransition, SessionDispatcher, apply_mix,
+        Cmd, PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, Reply, Resource,
+        ResourceConfig, SeekOutcome, SelectTransition, SessionDispatcher, apply_mix,
     },
 };
 use kithara_integration_tests::{
@@ -771,8 +771,9 @@ async fn prepare_deck(
     let dispatcher: Arc<dyn SessionDispatcher> = session.clone();
     let player = Arc::new(PlayerImpl::new(
         PlayerConfig::builder()
-            .byte_pool(BytePool::default())
-            .pcm_pool(PcmPool::default())
+            .worker(PlayWorker::new(
+                PlayWorkerConfig::for_pools(BytePool::default(), PcmPool::default()).build(),
+            ))
             .bus(bus)
             .sample_rate(case.host_rate)
             .crossfade_duration(0.0)
@@ -793,8 +794,6 @@ async fn prepare_deck(
             panic!("{} deck {deck_index}: parse {src}: {error}", case.label)
         }))
         .store(memory_asset_store())
-        .byte_pool(player.byte_pool().clone())
-        .pcm_pool(player.pcm_pool().clone())
         .initial_abr_mode(AbrMode::manual(0))
         .discriminator(format!("{}-deck-{deck_index}-playback", case.label))
         .build();
@@ -811,8 +810,7 @@ async fn prepare_deck(
             panic!("{} deck {deck_index}: parse {src}: {error}", case.label)
         }))
         .store(memory_asset_store())
-        .byte_pool(player.byte_pool().clone())
-        .pcm_pool(player.pcm_pool().clone())
+        .worker(player.worker().clone())
         .initial_abr_mode(AbrMode::manual(0))
         .host_sample_rate(NonZeroU32::new(case.host_rate).expect("host rate is non-zero"))
         .events(EventBus::new(16_384))

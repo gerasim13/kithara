@@ -2,7 +2,8 @@ use std::num::NonZeroUsize;
 
 use kithara::{
     assets::{AssetStore, StorageBackend},
-    audio::{Audio, AudioConfig, ChunkOutcome, PcmRead},
+    audio::{AudioConfig, ChunkOutcome, PcmControl, PcmRead, PcmSession},
+    bufpool::Region,
     decode::{PcmChunk, PcmMeta},
     hls::{Hls, HlsConfig},
     platform::{
@@ -16,7 +17,8 @@ use kithara::{
         // expires while the run is still seconds of real work from a switch.
         time::{Duration, Instant, Instant as RealInstant, sleep},
     },
-    stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
+    play::{PlayWorker, PlayWorkerConfig},
+    stream::{AudioCodec, ContainerFormat, MediaInfo},
 };
 use kithara_integration_tests::{
     SignalDirection as Direction, TestTempDir, Xorshift64, auto, detect_direction,
@@ -77,8 +79,8 @@ fn intra_chunk_breaks(chunk: &PcmChunk) -> usize {
     breaks
 }
 
-async fn next_chunk_with_timeout(
-    audio: &mut Audio<Stream<Hls>>,
+async fn next_chunk_with_timeout<R: PcmRead>(
+    audio: &mut R,
     timeout: Duration,
     stage: &str,
 ) -> Option<PcmChunk> {
@@ -174,18 +176,31 @@ async fn stress_chunk_integrity(#[case] ephemeral: bool) {
 
     let temp_dir = TestTempDir::new();
     let cancel = CancelToken::never();
+    let region = Region::default();
+    let worker = PlayWorker::new(
+        PlayWorkerConfig::for_pools(region.byte_pool(), region.pcm_pool())
+            .cancel(cancel.clone())
+            .build(),
+    );
 
     let store = if ephemeral {
         AssetStore::builder()
             .backend(StorageBackend::Memory)
+            .pool(worker.byte_pool().clone())
             .cache_capacity(NonZeroUsize::new(Consts::SEGMENT_COUNT * 2 + 10).expect("nonzero"))
             .build()
     } else {
-        kithara_integration_tests::disk_asset_store(temp_dir.path())
+        AssetStore::builder()
+            .backend(StorageBackend::Disk {
+                root: temp_dir.path().to_path_buf(),
+            })
+            .pool(worker.byte_pool().clone())
+            .build()
     };
 
     let hls_config = HlsConfig::for_url(url)
         .store(store)
+        .pool(worker.byte_pool().clone())
         .cancel(cancel)
         .initial_abr_mode(auto(0))
         .build();
@@ -195,11 +210,10 @@ async fn stress_chunk_integrity(#[case] ephemeral: bool) {
         .maybe_container(Some(ContainerFormat::Wav))
         .build();
     let config = AudioConfig::<Hls>::for_stream(hls_config)
-        .byte_pool(kithara::bufpool::BytePool::default())
-        .pcm_pool(kithara::bufpool::PcmPool::default())
         .media_info(wav_info)
         .build();
-    let mut audio = Audio::<Stream<Hls>>::new(config)
+    let mut audio = worker
+        .open(config)
         .await
         .expect("create Audio<Stream<Hls>> pipeline");
 

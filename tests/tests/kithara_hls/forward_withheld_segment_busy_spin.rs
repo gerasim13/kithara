@@ -42,7 +42,8 @@ use std::{
 
 use kithara::{
     assets::{AssetStore, StorageBackend},
-    audio::{Audio, AudioConfig, ReadOutcome},
+    audio::{AudioConfig, PcmRead, ReadOutcome},
+    bufpool::Region,
     hls::{AbrMode, Hls, HlsConfig},
     platform::{
         CancelToken,
@@ -51,7 +52,8 @@ use kithara::{
         tokio,
         tokio::task::spawn_blocking,
     },
-    stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
+    play::{PlayWorker, PlayWorkerConfig},
+    stream::{AudioCodec, ContainerFormat, MediaInfo},
 };
 use kithara_integration_tests::{
     hls_server::{HlsTestServer, HlsTestServerConfig},
@@ -124,13 +126,22 @@ async fn forward_into_withheld_segment_parks_without_busy_spin() {
     // Withhold the BODY of GATED_SEGMENT; its HEAD (size) stays open so the
     // up-front layout is complete and the worker reaches the boundary.
     let (server, gate) = HlsTestServer::with_segment_gate(config, 0, GATED_SEGMENT).await;
+    let cancel = CancelToken::never();
+    let region = Region::default();
+    let worker = PlayWorker::new(
+        PlayWorkerConfig::for_pools(region.byte_pool(), region.pcm_pool())
+            .cancel(cancel.clone())
+            .build(),
+    );
     let store = AssetStore::builder()
         .backend(StorageBackend::Memory)
+        .pool(worker.byte_pool().clone())
         .cache_capacity(NonZeroUsize::new(SEGMENT_COUNT + 10).expect("nonzero"))
         .build();
     let hls_config = HlsConfig::for_url(server.url("/master.m3u8"))
         .store(store)
-        .cancel(CancelToken::never())
+        .pool(worker.byte_pool().clone())
+        .cancel(cancel)
         .initial_abr_mode(AbrMode::manual(0))
         .build();
     let wav_info = MediaInfo::builder()
@@ -138,14 +149,13 @@ async fn forward_into_withheld_segment_parks_without_busy_spin() {
         .maybe_container(Some(ContainerFormat::Wav))
         .build();
     let audio_config = AudioConfig::<Hls>::for_stream(hls_config)
-        .byte_pool(kithara::bufpool::BytePool::default())
-        .pcm_pool(kithara::bufpool::PcmPool::default())
         .media_info(wav_info)
         .build();
 
     let recorder = install_recorder();
 
-    let mut audio = Audio::<Stream<Hls>>::new(audio_config)
+    let mut audio = worker
+        .open(audio_config)
         .await
         .expect("audio creation (segment 0 not withheld)");
 

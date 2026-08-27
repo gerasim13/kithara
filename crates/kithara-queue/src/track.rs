@@ -276,7 +276,6 @@ fn install(record: &mut TrackRecord, generations: &AtomicU64, cancel: CancelToke
 #[cfg(test)]
 mod tests {
     use kithara_assets::AssetStore;
-    use kithara_bufpool::{BytePool, PcmPool};
     use kithara_test_utils::kithara;
 
     use super::*;
@@ -298,8 +297,6 @@ mod tests {
             .expect("BUG: hard-coded URL is valid");
         let cfg = ResourceConfig::for_src(src)
             .store(AssetStore::builder().build())
-            .byte_pool(BytePool::default())
-            .pcm_pool(PcmPool::default())
             .build();
         let src: TrackSource = cfg.into();
         assert!(matches!(src, TrackSource::Config(_)));

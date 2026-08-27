@@ -2,10 +2,12 @@ use std::{io::Write, num::NonZeroUsize};
 
 use kithara::{
     assets::{AssetStore, StorageBackend},
-    audio::{Audio, AudioConfig, ReadOutcome},
-    decode::DecoderBackend,
+    audio::{AudioConfig, PcmControl, PcmRead, PcmSession, ReadOutcome},
+    bufpool::Region,
+    decode::{DecodeResult, DecoderBackend},
     file::{File, FileConfig, FileSrc},
     platform::{time::Duration, tokio::task::spawn_blocking},
+    play::{PlayWorker, PlayWorkerConfig, RegisteredAudio},
     stream::Stream,
 };
 use kithara_integration_tests::{
@@ -35,6 +37,15 @@ const fn format_ext(fmt: SignalFormat) -> Option<&'static str> {
     }
 }
 
+async fn open_audio(
+    config: AudioConfig<File>,
+    region: &Region,
+) -> DecodeResult<RegisteredAudio<Stream<File>>> {
+    let worker =
+        PlayWorker::new(PlayWorkerConfig::for_pools(region.byte_pool(), region.pcm_pool()).build());
+    worker.open(config).await
+}
+
 async fn run_case(
     format: SignalFormat,
     backend: DecoderBackend,
@@ -56,24 +67,29 @@ async fn run_case(
     let url = helper.sine(&spec, FREQ_HZ).await;
 
     let temp_dir = TestTempDir::new();
+    let region = Region::default();
+    let byte_pool = region.byte_pool();
     let store = if ephemeral {
         AssetStore::builder()
             .cache_capacity(NonZeroUsize::new(32).expect("nonzero"))
             .backend(StorageBackend::Memory)
+            .pool(byte_pool.clone())
             .build()
     } else {
         AssetStore::builder()
             .backend(StorageBackend::Disk {
                 root: temp_dir.path().into(),
             })
+            .pool(byte_pool.clone())
             .build()
     };
 
-    let file_config = FileConfig::for_src(url.into()).store(store).build();
+    let file_config = FileConfig::for_src(url.into())
+        .store(store)
+        .pool(byte_pool)
+        .build();
     // Park on ring underrun: the offline scan needs no wall-clock pacing.
     let audio_config = AudioConfig::<File>::for_stream(file_config)
-        .byte_pool(kithara::bufpool::BytePool::default())
-        .pcm_pool(kithara::bufpool::PcmPool::default())
         .decoder(
             kithara::audio::AudioDecoderConfig::builder()
                 .backend(backend)
@@ -82,7 +98,7 @@ async fn run_case(
         .maybe_hint(format_ext(format).map(str::to_owned))
         .block_on_underrun(true)
         .build();
-    let mut audio = Audio::<Stream<File>>::new(audio_config)
+    let mut audio = open_audio(audio_config, &region)
         .await
         .expect("create Audio<Stream<File>>");
 
@@ -179,13 +195,19 @@ async fn local_run_case(format: SignalFormat, backend: DecoderBackend, bit_rate:
 
     let temp_dir = TestTempDir::new();
     let fixture_path = write_sine_fixture_to_disk(&spec, &temp_dir).await;
+    let region = Region::default();
+    let byte_pool = region.byte_pool();
 
     let file_config = FileConfig::for_src(FileSrc::Local(fixture_path))
-        .store(kithara_integration_tests::memory_asset_store())
+        .store(
+            AssetStore::builder()
+                .backend(StorageBackend::Memory)
+                .pool(byte_pool.clone())
+                .build(),
+        )
+        .pool(byte_pool)
         .build();
     let audio_config = AudioConfig::<File>::for_stream(file_config)
-        .byte_pool(kithara::bufpool::BytePool::default())
-        .pcm_pool(kithara::bufpool::PcmPool::default())
         .decoder(
             kithara::audio::AudioDecoderConfig::builder()
                 .backend(backend)
@@ -193,7 +215,7 @@ async fn local_run_case(format: SignalFormat, backend: DecoderBackend, bit_rate:
         )
         .maybe_hint(format_ext(format).map(str::to_owned))
         .build();
-    let mut audio = Audio::<Stream<File>>::new(audio_config)
+    let mut audio = open_audio(audio_config, &region)
         .await
         .expect("create local Audio<Stream<File>>");
 
@@ -252,13 +274,19 @@ async fn local_apple_fused_run_case() {
 
     let temp_dir = TestTempDir::new();
     let fixture_path = write_sine_fixture_to_disk(&spec, &temp_dir).await;
+    let region = Region::default();
+    let byte_pool = region.byte_pool();
 
     let file_config = FileConfig::for_src(FileSrc::Local(fixture_path))
-        .store(kithara_integration_tests::memory_asset_store())
+        .store(
+            AssetStore::builder()
+                .backend(StorageBackend::Memory)
+                .pool(byte_pool.clone())
+                .build(),
+        )
+        .pool(byte_pool)
         .build();
     let audio_config = AudioConfig::<File>::for_stream(file_config)
-        .byte_pool(kithara::bufpool::BytePool::default())
-        .pcm_pool(kithara::bufpool::PcmPool::default())
         .decoder(
             kithara::audio::AudioDecoderConfig::builder()
                 .backend(DecoderBackend::Apple)
@@ -269,7 +297,7 @@ async fn local_apple_fused_run_case() {
         )
         .maybe_hint(Some("m4a".to_owned()))
         .build();
-    let mut audio = Audio::<Stream<File>>::new(audio_config)
+    let mut audio = open_audio(audio_config, &region)
         .await
         .expect("create fused local Audio<Stream<File>>");
 
@@ -393,15 +421,19 @@ async fn decode_pcm_seconds(
         bit_rate,
     };
     let url = helper.sine(&spec, FREQ_HZ).await;
+    let region = Region::default();
+    let byte_pool = region.byte_pool();
     let store = AssetStore::builder()
         .cache_capacity(NonZeroUsize::new(32).expect("nonzero"))
         .backend(StorageBackend::Memory)
+        .pool(byte_pool.clone())
         .build();
-    let file_config = FileConfig::for_src(url.into()).store(store).build();
+    let file_config = FileConfig::for_src(url.into())
+        .store(store)
+        .pool(byte_pool)
+        .build();
     // Park on ring underrun instead of spinning on Pending.
     let audio_config = AudioConfig::<File>::for_stream(file_config)
-        .byte_pool(kithara::bufpool::BytePool::default())
-        .pcm_pool(kithara::bufpool::PcmPool::default())
         .decoder(
             kithara::audio::AudioDecoderConfig::builder()
                 .backend(backend)
@@ -410,7 +442,7 @@ async fn decode_pcm_seconds(
         .maybe_hint(format_ext(format).map(str::to_owned))
         .block_on_underrun(true)
         .build();
-    let mut audio = Audio::<Stream<File>>::new(audio_config)
+    let mut audio = open_audio(audio_config, &region)
         .await
         .expect("create Audio<Stream<File>>");
     let aspec = audio.spec();
@@ -700,14 +732,18 @@ async fn bit_rate_e2e_does_not_hang(#[case] format: SignalFormat, #[case] bit_ra
     };
     let url = helper.sine(&spec, FREQ_HZ).await;
 
+    let region = Region::default();
+    let byte_pool = region.byte_pool();
     let store = AssetStore::builder()
         .cache_capacity(NonZeroUsize::new(32).expect("nonzero"))
         .backend(StorageBackend::Memory)
+        .pool(byte_pool.clone())
         .build();
-    let file_config = FileConfig::for_src(url.into()).store(store).build();
+    let file_config = FileConfig::for_src(url.into())
+        .store(store)
+        .pool(byte_pool)
+        .build();
     let audio_config = AudioConfig::<File>::for_stream(file_config)
-        .byte_pool(kithara::bufpool::BytePool::default())
-        .pcm_pool(kithara::bufpool::PcmPool::default())
         .decoder(
             kithara::audio::AudioDecoderConfig::builder()
                 .backend(DecoderBackend::Symphonia)
@@ -716,7 +752,7 @@ async fn bit_rate_e2e_does_not_hang(#[case] format: SignalFormat, #[case] bit_ra
         .maybe_hint(format_ext(format).map(str::to_owned))
         .build();
 
-    let audio = Audio::<Stream<File>>::new(audio_config)
+    let audio = open_audio(audio_config, &region)
         .await
         .expect("create Audio<Stream<File>>");
     let duration_secs = audio
@@ -951,9 +987,9 @@ async fn phase_continuity_file(
     run_case(format, backend, ephemeral, seek_count, bit_rate).await;
 }
 
-/// Build an ephemeral AAC sine [`Audio`] over a file source. Shared by the
+/// Build an ephemeral AAC sine [`RegisteredAudio`] over a file source. Shared by the
 /// deterministic seek-to-0 warm-up repro below.
-async fn build_aac_sine_audio(backend: DecoderBackend) -> Audio<Stream<File>> {
+async fn build_aac_sine_audio(backend: DecoderBackend) -> RegisteredAudio<Stream<File>> {
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     kithara_integration_tests::apple_warmup::warm_if_apple(backend);
 
@@ -971,16 +1007,20 @@ async fn build_aac_sine_audio(backend: DecoderBackend) -> Audio<Stream<File>> {
     // leaking it: the source reads from `url` (an HTTP path) and only uses
     // the store as an ephemeral cache, so the leaked guard is harmless in
     // this short-lived test and avoids threading a guard through the caller.
+    let region = Region::default();
+    let byte_pool = region.byte_pool();
     let store = AssetStore::builder()
         .cache_capacity(NonZeroUsize::new(32).expect("nonzero"))
         .backend(StorageBackend::Memory)
+        .pool(byte_pool.clone())
         .build();
     std::mem::forget(temp_dir);
-    let file_config = FileConfig::for_src(url.into()).store(store).build();
+    let file_config = FileConfig::for_src(url.into())
+        .store(store)
+        .pool(byte_pool)
+        .build();
     // Park on ring underrun: covers both the cold and seeked handles.
     let audio_config = AudioConfig::<File>::for_stream(file_config)
-        .byte_pool(kithara::bufpool::BytePool::default())
-        .pcm_pool(kithara::bufpool::PcmPool::default())
         .decoder(
             kithara::audio::AudioDecoderConfig::builder()
                 .backend(backend)
@@ -989,7 +1029,7 @@ async fn build_aac_sine_audio(backend: DecoderBackend) -> Audio<Stream<File>> {
         .maybe_hint(Some("aac".to_owned()))
         .block_on_underrun(true)
         .build();
-    Audio::<Stream<File>>::new(audio_config)
+    open_audio(audio_config, &region)
         .await
         .expect("create Audio<Stream<File>>")
 }
@@ -999,7 +1039,7 @@ async fn build_aac_sine_audio(backend: DecoderBackend) -> Audio<Stream<File>> {
 /// absolute frame index it was consumed at. Drives the decoder offline
 /// exactly like the production scan harness (`read_block` semantics).
 fn first_signal_window_phase(
-    audio: &mut Audio<Stream<File>>,
+    audio: &mut RegisteredAudio<Stream<File>>,
     chan: usize,
     delta: f64,
 ) -> (u64, f64) {

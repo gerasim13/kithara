@@ -2,7 +2,7 @@ use std::path::Path;
 
 use kithara::{
     abr::AbrHandle,
-    assets::AssetStore,
+    assets::{AssetStore, StorageBackend},
     decode::DecoderBackend,
     events::{
         AbrMode, AdvanceReason, AudioEvent, Event, EventReceiver, QueueEvent, SeekLifecycleStage,
@@ -16,7 +16,10 @@ use kithara::{
         tokio,
         tokio::sync::broadcast::error::TryRecvError,
     },
-    play::{PlayerConfig, PlayerImpl, ResourceConfig, SeekOutcome, SessionDispatcher},
+    play::{
+        PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig, SeekOutcome,
+        SessionDispatcher,
+    },
     queue::{Queue, QueueConfig, TrackSource, Transition},
     stream::dl::{Downloader, DownloaderConfig},
 };
@@ -128,14 +131,29 @@ impl SimHarness {
     /// to the scenario via `enter_track`.
     pub async fn new(cache_path: &Path, specs: &[TrackSpec]) -> Self {
         let session = Arc::new(OfflineSession::new());
+        let region = kithara::bufpool::Region::default();
+        let byte_pool = region.byte_pool();
+        let store = AssetStore::builder()
+            .backend(StorageBackend::Disk {
+                root: cache_path.into(),
+            })
+            .pool(byte_pool.clone())
+            .build();
+        let worker = PlayWorker::new(
+            PlayWorkerConfig::for_pools(byte_pool.clone(), region.pcm_pool()).build(),
+        );
         let player = Arc::new(PlayerImpl::new(
             PlayerConfig::builder()
-                .byte_pool(kithara::bufpool::BytePool::default())
-                .pcm_pool(kithara::bufpool::PcmPool::default())
+                .worker(worker)
                 .session(Arc::clone(&session) as Arc<dyn SessionDispatcher>)
                 .build(),
         ));
-        let queue = Arc::new(Queue::new(QueueConfig::builder().player(player).build()));
+        let queue = Arc::new(Queue::new(
+            QueueConfig::builder()
+                .player(player)
+                .store(store.clone())
+                .build(),
+        ));
         let queue_for_tick = Arc::clone(&queue);
         // Spawn through the platform chokepoint, NOT raw `tokio::spawn`: under
         // flash this installs the quiescence poll-wrapper + ambient gate so the
@@ -147,20 +165,17 @@ impl SimHarness {
 
         let downloader = Downloader::new(
             DownloaderConfig::for_client(HttpClient::new(
-                NetOptions::default(),
+                NetOptions::builder().byte_pool(byte_pool).build(),
                 CancelToken::never(),
             ))
             .build(),
         );
-        let store = crate::disk_asset_store(cache_path);
 
         let mut track_ids = Vec::with_capacity(specs.len());
         for spec in specs {
             let cfg = ResourceConfig::for_src(
                 ResourceConfig::parse_src(spec.url.as_str()).expect("valid track URL"),
             )
-            .byte_pool(kithara::bufpool::BytePool::default())
-            .pcm_pool(kithara::bufpool::PcmPool::default())
             .downloader(downloader.clone())
             .store(store.clone())
             .decoder(

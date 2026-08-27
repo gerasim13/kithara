@@ -3,6 +3,7 @@
 use std::path::Path;
 
 use kithara::{
+    assets::{AssetStore, StorageBackend},
     events::PlayerEvent,
     platform::time::{self, Duration},
     play::{PlayerImpl, Resource, ResourceConfig},
@@ -10,7 +11,7 @@ use kithara::{
 use kithara_integration_tests::{
     TestTempDir,
     audio_fixture::EmbeddedAudio,
-    create_test_wav, disk_asset_store, kithara,
+    create_test_wav, kithara,
     offline::{OfflinePlayerHarness, OfflinePlayerOptions},
     temp_dir,
 };
@@ -35,9 +36,14 @@ async fn file_resource(player: &PlayerImpl, path: &Path, store_dir: &Path) -> Re
         ResourceConfig::parse_src(path.to_str().expect("utf-8 fixture path"))
             .expect("local media path is a valid resource src"),
     )
-    .store(disk_asset_store(store_dir))
-    .byte_pool(player.byte_pool().clone())
-    .pcm_pool(player.pcm_pool().clone())
+    .store(
+        AssetStore::builder()
+            .backend(StorageBackend::Disk {
+                root: store_dir.into(),
+            })
+            .pool(player.byte_pool().clone())
+            .build(),
+    )
     .build();
     Resource::new(player.prepare_config(config))
         .await

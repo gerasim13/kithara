@@ -9,7 +9,7 @@ use kithara::{
     events::AbrMode,
     net::{HttpClient, NetOptions},
     platform::{CancelToken, sync::Arc, time::Duration, tokio},
-    play::{PlayerConfig, PlayerImpl},
+    play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl},
     queue::{Queue, QueueConfig, TrackSource, Transition},
     stream::{
         AudioCodec,
@@ -402,11 +402,13 @@ async fn user_sim_seek_immediately_after_loaded(#[case] kind: TrackKind, #[case]
             .build(),
     );
     let store = kithara_integration_tests::disk_asset_store(temp.path());
+    let worker = PlayWorker::new(
+        PlayWorkerConfig::for_pools(BytePool::default(), PcmPool::default()).build(),
+    );
     let cfg = kithara::play::ResourceConfig::for_src(
         kithara::play::ResourceConfig::parse_src(spec.url.as_str()).expect("valid track URL"),
     )
-    .byte_pool(BytePool::default())
-    .pcm_pool(PcmPool::default())
+    .worker(worker.clone())
     .downloader(downloader.clone())
     .store(store)
     .decoder(
@@ -418,8 +420,7 @@ async fn user_sim_seek_immediately_after_loaded(#[case] kind: TrackKind, #[case]
     .build();
     let player = Arc::new(PlayerImpl::new(
         PlayerConfig::builder()
-            .byte_pool(BytePool::default())
-            .pcm_pool(PcmPool::default())
+            .worker(worker)
             .session(OfflineSession::arc_auto())
             .build(),
     ));

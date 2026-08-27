@@ -7,12 +7,15 @@ Contracts and invariants. The README owns overview, features, and type inventory
 Four contexts touch one track. **Consumer thread** — `Audio<S>` (`PcmRead` +
 `PcmSession` + `PcmControl`, umbrella `PcmReader`), normally the host audio
 callback: never allocates, frees, or locks. **Renderer worker** — one shared OS
-thread per `AudioWorkerHandle` running `runtime::Scheduler` over `Box<dyn Node>`
-slots; a track is exactly one node (`DecoderNode`), and effects are `AudioEffect`
-calls inside the node's step, never separate nodes with rings between them.
-**Off-RT rebuild** — `RebuildPort::submit` → `spawn_blocking_on` on the tokio
-handle captured in `Audio::new`. **Downloader** — owned by `kithara-stream`; this
-crate never spawns it and never reconstructs HLS/file protocol policy.
+thread per `kithara_play::PlayWorker`, backed by this crate's concrete
+`runtime::Scheduler` port over `Box<dyn Node>` slots. `kithara-play` owns task
+registration and its RAII lease; `Audio<S>` retains only a restricted wake
+capability. A track is exactly one node (`DecoderNode`), and effects are
+`AudioEffect` calls inside the node's step, never separate nodes with rings
+between them. **Off-RT rebuild** — `RebuildPort::submit` → `spawn_blocking_on`
+on the tokio handle captured during audio preparation. **Downloader** — owned
+by `kithara-stream`; this crate never spawns it and never reconstructs HLS/file
+protocol policy.
 
 ### Musical-coordinate ownership
 
@@ -362,7 +365,7 @@ Ramp counters are `u16`, so the per-frame gain is an exact `f32::from`.
 
 ## Construction reads
 
-`Audio::new` builds the initial decoder **exactly once**
+`Audio::prepare` builds the initial decoder **exactly once**
 (`create_initial_decoder`, one `spawn_blocking`), with no retry loop and no
 readiness gate. The construction read goes through the **blocking** off-RT
 `Stream::read` adapter: every `OpenedReader` carries its own `ConstructionGate`,

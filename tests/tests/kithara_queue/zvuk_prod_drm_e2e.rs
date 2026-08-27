@@ -13,7 +13,7 @@ use kithara::{
         tokio,
         tokio::sync::OnceCell,
     },
-    play::{PlayerConfig, PlayerImpl},
+    play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl},
     queue::{Queue, QueueConfig, TrackSource, Transition},
     stream::dl::{Downloader, DownloaderConfig},
 };
@@ -43,13 +43,16 @@ static CTX: OnceCell<Ctx> = OnceCell::const_new();
 
 async fn shared_ctx() -> &'static Ctx {
     CTX.get_or_init(|| async {
-        let net = NetOptions::builder().is_insecure(true).build();
+        let byte_pool = BytePool::default();
+        let net = NetOptions::builder()
+            .byte_pool(byte_pool.clone())
+            .is_insecure(true)
+            .build();
         let downloader = Downloader::new(
             DownloaderConfig::for_client(HttpClient::new(net, CancelToken::never())).build(),
         );
         let flush_hub = FlushHub::new(CancelToken::never(), FlushPolicy::default());
         let shutdown = CancelToken::never();
-        let byte_pool = BytePool::default();
         let store = AssetStore::builder()
             .cancel(shutdown.child())
             .backend(StorageBackend::default())
@@ -57,17 +60,20 @@ async fn shared_ctx() -> &'static Ctx {
             .flush_hub(flush_hub)
             .layouts(baked::build_baked_asset_layouts())
             .build();
+        let worker = PlayWorker::new(
+            PlayWorkerConfig::for_pools(byte_pool, PcmPool::default())
+                .cancel(shutdown.child())
+                .build(),
+        );
         let config = AppConfig::builder()
             .downloader(downloader)
             .shutdown(shutdown)
-            .byte_pool(byte_pool)
-            .pcm_pool(PcmPool::default())
+            .worker(worker.clone())
             .store(store)
             .build();
         let player = Arc::new(PlayerImpl::new(
             PlayerConfig::builder()
-                .byte_pool(BytePool::default())
-                .pcm_pool(PcmPool::default())
+                .worker(worker)
                 .session(OfflineSession::arc_auto())
                 .build(),
         ));

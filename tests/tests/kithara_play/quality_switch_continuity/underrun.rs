@@ -1,8 +1,8 @@
 use cochlea_features::{Audio as ProbeAudio, SegmentOpts, segment_timeline};
 use kithara::{
-    audio::{Audio, AudioConfig, ConsumerWakeMode},
+    audio::{AudioConfig, ConsumerWakeMode, PcmSession},
     hls::{Hls, HlsConfig},
-    stream::Stream,
+    play::{PlayWorker, PlayWorkerConfig},
 };
 use kithara_integration_tests::{
     TestServerHelper, fixture_protocol::DelayRule, offline::resource_from_reader,
@@ -77,9 +77,14 @@ async fn prepare_tiny_ring_player(
         .initial_abr_mode(AbrMode::manual(initial_variant))
         .events(bus.clone())
         .build();
+    let worker = PlayWorker::new(
+        PlayWorkerConfig::for_pools(
+            kithara::bufpool::BytePool::default(),
+            kithara::bufpool::PcmPool::default(),
+        )
+        .build(),
+    );
     let config = AudioConfig::<Hls>::for_stream(hls)
-        .byte_pool(kithara::bufpool::BytePool::default())
-        .pcm_pool(kithara::bufpool::PcmPool::default())
         .decoder(
             kithara::audio::AudioDecoderConfig::builder()
                 .backend(backend)
@@ -89,7 +94,8 @@ async fn prepare_tiny_ring_player(
         .pcm_buffer_chunks(OUTPUT_RING_CHUNKS)
         .consumer_wake_mode(ConsumerWakeMode::ImmediateOffRt)
         .build();
-    let audio = Audio::<Stream<Hls>>::new(config)
+    let audio = worker
+        .open(config)
         .await
         .unwrap_or_else(|error| panic!("open {label} audio: {error:?}"));
     let abr = audio

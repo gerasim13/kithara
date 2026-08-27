@@ -3,10 +3,9 @@ use std::collections::HashMap;
 use std::sync::{Mutex, PoisonError};
 
 use kithara_assets::{AssetStore, StorageBackend};
-use kithara_bufpool::Region;
 use kithara_events::{EventBus, EventReceiver, TrackId};
 use kithara_platform::{CancelScope, CancelToken, sync::Arc};
-use kithara_play::{PlayerConfig, PlayerImpl};
+use kithara_play::PlayerImpl;
 
 use super::types::{
     AtomicCachedPosition, AtomicTrackId, CachedPosition, CrossfadeArm, SelectPhase,
@@ -97,28 +96,17 @@ pub struct Queue {
     /// engine events into queue-level side-effects (auto-advance / current
     /// track change forwarding).
     pub(super) player_rx: Mutex<EventReceiver>,
-    /// Master cancel token for the queue. When the queue creates its
-    /// own [`PlayerImpl`] (no caller-supplied player), this token is
-    /// passed into `PlayerConfig.cancel` so the queue's `Drop` cascades
-    /// shutdown to the player's subsystems. When a caller supplies a
-    /// pre-built player, this token is independent — the caller owns
-    /// the player's master directly.
+    /// Master cancel token for queue-owned loader work. The caller owns the
+    /// separately constructed [`PlayerImpl`] and its worker lifetime.
     pub(super) shutdown: CancelToken,
 }
 
 impl Queue {
     /// Build a queue from a [`QueueConfig`].
     ///
-    /// If `config.player` is `Some`, the caller-supplied
-    /// [`PlayerImpl`] is used (caller retains ownership; must not
-    /// mutate its item list directly — `play`/`pause`/`seek` OK;
-    /// `replace_item`, `reserve_slots`, `select_item`, `remove_at` are
-    /// Queue-owned). If `None`, a default player is built internally.
-    ///
-    /// Matches the project-wide pattern where config structs accept
-    /// optional built instances (see
-    /// [`ResourceConfig`](kithara_play::ResourceConfig)'s `worker` /
-    /// `runtime` / `bus` fields).
+    /// The caller retains ownership of the supplied [`PlayerImpl`] but must
+    /// not mutate its item list directly. Playback controls remain safe;
+    /// item-list operations are queue-owned.
     #[must_use]
     pub fn new(config: QueueConfig) -> Self {
         let QueueConfig {
@@ -133,18 +121,7 @@ impl Queue {
             #[cfg(not(any(test, feature = "probe")))]
                 should_autoplay: _,
         } = config;
-        // App path threads a child of the app master; standalone / test
-        // use falls back to a fresh root (the documented safety net).
         let cancel = CancelScope::new(config_cancel).token();
-        let player = player.unwrap_or_else(|| {
-            let region = Region::default();
-            let config = PlayerConfig::builder()
-                .cancel(cancel.clone())
-                .byte_pool(region.byte_pool())
-                .pcm_pool(region.pcm_pool())
-                .build();
-            Arc::new(PlayerImpl::new(config))
-        });
         let store = store.unwrap_or_else(|| {
             AssetStore::builder()
                 .backend(StorageBackend::default())
@@ -247,14 +224,30 @@ impl Drop for Queue {
 
 #[cfg(test)]
 pub(super) mod tests {
+    use kithara_bufpool::Region;
     use kithara_events::{Envelope, Event, EventReceiver, QueueEvent};
     use kithara_platform::time::{Duration, Instant, timeout};
+    use kithara_play::{PlayWorker, PlayWorkerConfig, PlayerConfig};
     use kithara_test_utils::kithara;
 
     use super::*;
 
     pub(in crate::queue) fn make_queue() -> Queue {
-        Queue::new(QueueConfig::default())
+        Queue::new(queue_config())
+    }
+
+    fn queue_config() -> QueueConfig {
+        QueueConfig::builder().player(player()).build()
+    }
+
+    fn player() -> Arc<PlayerImpl> {
+        let region = Region::default();
+        let worker = PlayWorker::new(
+            PlayWorkerConfig::for_pools(region.byte_pool(), region.pcm_pool()).build(),
+        );
+        Arc::new(PlayerImpl::new(
+            PlayerConfig::builder().worker(worker).build(),
+        ))
     }
 
     pub(in crate::queue) async fn wait_for_queue_event<F>(
@@ -292,7 +285,12 @@ pub(super) mod tests {
     /// the player it drives runs with.
     #[kithara::test]
     fn the_configured_prefetch_lead_reaches_the_player() {
-        let queue = Queue::new(QueueConfig::builder().prefetch_duration(8.0).build());
+        let queue = Queue::new(
+            QueueConfig::builder()
+                .player(player())
+                .prefetch_duration(8.0)
+                .build(),
+        );
 
         assert!((queue.player.prefetch_duration() - 8.0).abs() < f32::EPSILON);
     }

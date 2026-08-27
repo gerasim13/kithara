@@ -10,7 +10,7 @@ use kithara::{
         time::{Duration, sleep},
         tokio::task::yield_now,
     },
-    play::{Resource, ResourceConfig},
+    play::{PlayWorker, PlayWorkerConfig, Resource, ResourceConfig},
     stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_integration_tests::{
@@ -141,8 +141,9 @@ async fn hls_seek_middle_repeated_seeks_long_stress(#[case] backend: DecoderBack
             .build(),
     )
     .initial_abr_mode(AbrMode::manual(Consts::GATED_VARIANT))
-    .byte_pool(BytePool::default())
-    .pcm_pool(PcmPool::default())
+    .worker(PlayWorker::new(
+        PlayWorkerConfig::for_pools(BytePool::default(), PcmPool::default()).build(),
+    ))
     .build();
 
     let resource = Resource::new(cfg)

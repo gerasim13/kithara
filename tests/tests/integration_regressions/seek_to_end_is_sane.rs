@@ -1,6 +1,7 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 use kithara::{
+    assets::{AssetStore, StorageBackend},
     events::{AudioEvent, Event, PlayerEvent},
     net::{HttpClient, NetOptions},
     platform::{CancelToken, sync::Arc, time::Duration},
@@ -80,27 +81,42 @@ async fn run_case(helper: &TestServerHelper, temp_dir: &TestTempDir, target_kind
         .await
         .expect("create HLS fixture");
     let gate = helper.register_segment_gate(fixture.token(), 0, FINAL_SEGMENT);
+    let region = kithara::bufpool::Region::default();
+    let byte_pool = region.byte_pool();
     let downloader = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(NetOptions::default(), CancelToken::never()))
-            .build(),
+        DownloaderConfig::for_client(HttpClient::new(
+            NetOptions::builder().byte_pool(byte_pool.clone()).build(),
+            CancelToken::never(),
+        ))
+        .build(),
     );
+    let store = AssetStore::builder()
+        .backend(StorageBackend::Disk {
+            root: temp_dir.path().into(),
+        })
+        .pool(byte_pool.clone())
+        .build();
     let session = Arc::new(OfflineSession::new_manual());
     let player = Arc::new(PlayerImpl::new(
         PlayerConfig::builder()
             .sample_rate(SAMPLE_RATE)
-            .byte_pool(kithara::bufpool::BytePool::default())
-            .pcm_pool(kithara::bufpool::PcmPool::default())
+            .worker(kithara::play::PlayWorker::new(
+                kithara::play::PlayWorkerConfig::for_pools(byte_pool, region.pcm_pool()).build(),
+            ))
             .session(Arc::clone(&session) as Arc<dyn SessionDispatcher>)
             .build(),
     ));
-    let queue = Queue::new(QueueConfig::builder().player(player).build());
+    let queue = Queue::new(
+        QueueConfig::builder()
+            .player(player)
+            .store(store.clone())
+            .build(),
+    );
     let cfg = ResourceConfig::for_src(
         ResourceConfig::parse_src(fixture.master_url().as_str()).expect("valid HLS URL"),
     )
-    .byte_pool(kithara::bufpool::BytePool::default())
-    .pcm_pool(kithara::bufpool::PcmPool::default())
     .downloader(downloader)
-    .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
+    .store(store)
     .build();
 
     let mut rx = queue.subscribe();

@@ -5,11 +5,13 @@ use std::{
 };
 
 use kithara::{
-    audio::{Audio, AudioConfig},
+    assets::{AssetStore, StorageBackend},
+    audio::{AudioConfig, PcmControl},
+    bufpool::Region,
     events::{Event, EventBus},
     hls::{AbrMode, Hls, HlsConfig},
     platform::{sync::Arc, time::Duration},
-    stream::Stream,
+    play::{PlayWorker, PlayWorkerConfig},
 };
 use kithara_integration_tests::{TestServerHelper, TestTempDir, temp_dir};
 
@@ -58,19 +60,26 @@ async fn idle_does_not_panic_hang_detector(temp_dir: TestTempDir) {
 
     let server = TestServerHelper::new().await;
     let url = server.asset("hls/master.m3u8");
+    let region = Region::default();
+    let worker =
+        PlayWorker::new(PlayWorkerConfig::for_pools(region.byte_pool(), region.pcm_pool()).build());
     let hls_config = HlsConfig::for_url(url)
-        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
+        .store(
+            AssetStore::builder()
+                .backend(StorageBackend::Disk {
+                    root: temp_dir.path().to_path_buf(),
+                })
+                .pool(worker.byte_pool().clone())
+                .build(),
+        )
+        .pool(worker.byte_pool().clone())
         .initial_abr_mode(AbrMode::manual(0))
         .build();
 
-    let mut audio = Audio::<Stream<Hls>>::new(
-        AudioConfig::<Hls>::for_stream(hls_config)
-            .byte_pool(kithara::bufpool::BytePool::default())
-            .pcm_pool(kithara::bufpool::PcmPool::default())
-            .build(),
-    )
-    .await
-    .expect("audio creation");
+    let mut audio = worker
+        .open(AudioConfig::<Hls>::for_stream(hls_config).build())
+        .await
+        .expect("audio creation");
 
     // Mirror the user-facing app: opening the audio handle implicitly
     // arms its scheduler slot via `preload()`. After that no consumer
@@ -147,23 +156,33 @@ async fn idle_prefetch_is_capped(temp_dir: TestTempDir) {
     // still running.
     let bus = EventBus::new(8192);
     let mut rx = bus.subscribe();
+    let region = Region::default();
+    let worker =
+        PlayWorker::new(PlayWorkerConfig::for_pools(region.byte_pool(), region.pcm_pool()).build());
     let hls_config = HlsConfig::for_url(url)
-        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
+        .store(
+            AssetStore::builder()
+                .backend(StorageBackend::Disk {
+                    root: temp_dir.path().to_path_buf(),
+                })
+                .pool(worker.byte_pool().clone())
+                .build(),
+        )
+        .pool(worker.byte_pool().clone())
         .initial_abr_mode(AbrMode::manual(0))
         .download_batch_size(1)
         .look_ahead_bytes(LOOK_AHEAD_BYTES)
         .events(bus.clone())
         .build();
 
-    let _audio = Audio::<Stream<Hls>>::new(
-        AudioConfig::<Hls>::for_stream(hls_config)
-            .byte_pool(kithara::bufpool::BytePool::default())
-            .pcm_pool(kithara::bufpool::PcmPool::default())
-            .events(bus.clone())
-            .build(),
-    )
-    .await
-    .expect("audio creation");
+    let _audio = worker
+        .open(
+            AudioConfig::<Hls>::for_stream(hls_config)
+                .events(bus.clone())
+                .build(),
+        )
+        .await
+        .expect("audio creation");
 
     // Wait for prefetch quiescence on the real signal instead of a fixed
     // wall: each segment fetch emits `DownloaderEvent` (Enqueued/Started/

@@ -61,7 +61,11 @@ impl<N: Node> SchedulerHandle<N> {
         }
     }
 
-    pub(crate) fn register(&self, id: SlotId, node: N) {
+    #[must_use]
+    pub(crate) fn register(&self, id: SlotId, node: N) -> bool {
+        if self.inner.cancel.is_cancelled() {
+            return false;
+        }
         if self
             .inner
             .cmd_tx
@@ -69,8 +73,10 @@ impl<N: Node> SchedulerHandle<N> {
             .is_err()
         {
             warn!(slot_id = id, "register: scheduler channel closed");
+            return false;
         }
         self.inner.wake.wake();
+        !self.inner.cancel.is_cancelled()
     }
 
     pub(crate) fn shutdown(&self) {
@@ -78,6 +84,9 @@ impl<N: Node> SchedulerHandle<N> {
     }
 
     pub(crate) fn unregister(&self, id: SlotId) {
+        if self.inner.cancel.is_cancelled() {
+            return;
+        }
         if self
             .inner
             .cmd_tx

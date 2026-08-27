@@ -1,19 +1,22 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use kithara::{
-    audio::{Audio, AudioConfig, ReadOutcome},
+    assets::{AssetStore, StorageBackend},
+    audio::{AudioConfig, PcmControl, PcmRead, PcmSession, ReadOutcome},
+    bufpool::Region,
     hls::{Hls, HlsConfig},
     platform::{
         sync::Arc,
         time::Duration,
         tokio::task::{spawn, spawn_blocking},
     },
+    play::{PlayWorker, PlayWorkerConfig, RegisteredAudio},
     stream::Stream,
 };
 use kithara_integration_tests::{TestServerHelper, TestTempDir, abr_fast, auto, temp_dir};
 use tracing::info;
 
-fn warmup_until_first_frame(audio: &mut Audio<Stream<Hls>>, buf: &mut [f32]) -> u64 {
+fn warmup_until_first_frame(audio: &mut RegisteredAudio<Stream<Hls>>, buf: &mut [f32]) -> u64 {
     let mut warmup_samples = 0u64;
     while warmup_samples == 0 {
         match audio.read(buf) {
@@ -34,7 +37,7 @@ struct SeekStats {
     dead_seeks: u64,
 }
 
-fn run_rapid_random_seeks(audio: &mut Audio<Stream<Hls>>, buf: &mut [f32]) -> SeekStats {
+fn run_rapid_random_seeks(audio: &mut RegisteredAudio<Stream<Hls>>, buf: &mut [f32]) -> SeekStats {
     let mut stats = SeekStats::default();
     let positions_secs: Vec<f64> = vec![
         147.0, 30.0, 200.0, 5.0, 180.0, 60.0, 210.0, 15.0, 100.0, 0.0, 170.0, 45.0, 195.0, 80.0,
@@ -95,20 +98,26 @@ async fn stress_seek_during_abr_switch_real_decoder(
     let url = server.asset(path);
     info!(label, path, "Opening real stream");
 
+    let region = Region::default();
+    let worker =
+        PlayWorker::new(PlayWorkerConfig::for_pools(region.byte_pool(), region.pcm_pool()).build());
     let hls_config = HlsConfig::for_url(url)
-        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
+        .store(
+            AssetStore::builder()
+                .backend(StorageBackend::Disk {
+                    root: temp_dir.path().to_path_buf(),
+                })
+                .pool(worker.byte_pool().clone())
+                .build(),
+        )
+        .pool(worker.byte_pool().clone())
         .initial_abr_mode(auto(0))
         .build();
-    let config = AudioConfig::<Hls>::for_stream(hls_config)
-        .byte_pool(kithara::bufpool::BytePool::default())
-        .pcm_pool(kithara::bufpool::PcmPool::default())
-        .build();
+    let config = AudioConfig::<Hls>::for_stream(hls_config).build();
 
-    let mut audio = Audio::<Stream<Hls>>::new(config)
-        .await
-        .expect("audio creation");
+    let mut audio = worker.open(config).await.expect("audio creation");
 
-    let mut events_rx = audio.events();
+    let mut events_rx = audio.event_bus().subscribe();
 
     let switches = Arc::new(AtomicUsize::new(0));
     let switches_bg = switches.clone();
@@ -191,17 +200,23 @@ async fn seek_sequence_from_log_real_stream(
 ) {
     let server = TestServerHelper::new().await;
     let url = server.asset(path);
+    let region = Region::default();
+    let worker =
+        PlayWorker::new(PlayWorkerConfig::for_pools(region.byte_pool(), region.pcm_pool()).build());
     let hls_config = HlsConfig::for_url(url)
-        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
+        .store(
+            AssetStore::builder()
+                .backend(StorageBackend::Disk {
+                    root: temp_dir.path().to_path_buf(),
+                })
+                .pool(worker.byte_pool().clone())
+                .build(),
+        )
+        .pool(worker.byte_pool().clone())
         .initial_abr_mode(auto(0))
         .build();
-    let config = AudioConfig::<Hls>::for_stream(hls_config)
-        .byte_pool(kithara::bufpool::BytePool::default())
-        .pcm_pool(kithara::bufpool::PcmPool::default())
-        .build();
-    let mut audio = Audio::<Stream<Hls>>::new(config)
-        .await
-        .expect("audio creation");
+    let config = AudioConfig::<Hls>::for_stream(hls_config).build();
+    let mut audio = worker.open(config).await.expect("audio creation");
 
     let result = spawn_blocking(move || {
         let mut buf = vec![0f32; 4096];

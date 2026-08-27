@@ -11,7 +11,7 @@ use kithara_decode::{
 };
 use kithara_events::{DecoderChangeCause, Event, EventBus, FrameDomain};
 use kithara_platform::{
-    CancelScope, CancelToken,
+    CancelScope,
     sync::Arc,
     tokio::{runtime::Handle as RuntimeHandle, task::spawn_blocking},
 };
@@ -21,11 +21,10 @@ use portable_atomic::AtomicF32;
 use tracing::{debug, info, warn};
 
 use super::{
-    AtomicServiceClass, AudioConfig, AudioDecoderConfig, AudioWorkerHandle, ConsumerWakeMode,
-    DecodeError, DecodeInit, Fetch, PcmSession, RebuildRuntime, ServiceClass, SharedStream,
-    SourceParts, StreamAudioSource, StreamDecoderFactory, ThreadWake, TrackRegistration,
-    WorkerWakeBridge,
-    core::{Audio, AudioParts, Controls, Session, WorkerLease},
+    AtomicServiceClass, AudioConfig, AudioDecoderConfig, ConsumerWakeMode, DecodeError, DecodeInit,
+    Fetch, PcmSession, PcmTask, PcmWake, RebuildRuntime, ServiceClass, SharedStream, SourceParts,
+    StreamAudioSource, StreamDecoderFactory, ThreadWake, TrackRegistration,
+    core::{Audio, AudioParts, AudioRuntime, Controls, PreparedAudio, Session},
     create_effects,
     event::{
         AudioEvents, DecoderChangedEventData, decoder_changed_event, decoder_gapless_event,
@@ -178,35 +177,37 @@ struct StreamSourceRegistration {
     track: TrackRegistration,
 }
 
-struct RegisteredStreamSource {
+struct PreparedStreamSource {
     preload_gate: Arc<super::PreloadGate>,
     ring: RingParts,
     service_class: Arc<AtomicServiceClass>,
-    worker: AudioWorkerHandle,
-    track_id: super::TrackId,
-    is_standalone_worker: bool,
+    task: PcmTask,
 }
 
 impl<T> Audio<Stream<T>>
 where
     T: StreamType<Events = EventBus>,
 {
-    /// Creates a stream-backed audio pipeline and registers its renderer node.
+    /// Prepare a stream-backed audio reader and its opaque producer task.
     ///
     /// # Errors
     ///
     /// Returns [`DecodeError`] when stream, probe, decoder, or runtime setup fails.
-    pub async fn new<B>(config: AudioConfig<T, B>) -> Result<Self, DecodeError>
+    #[doc(hidden)]
+    pub async fn prepare<B>(
+        config: AudioConfig<T, B>,
+        wake: PcmWake,
+        byte_pool: BytePool,
+        pcm_pool: PcmPool,
+    ) -> Result<PreparedAudio<Stream<T>>, DecodeError>
     where
         B: Default + ResamplerBackend,
     {
         let AudioConfig {
-            byte_pool,
             hint,
             host_sample_rate: config_host_sr,
             media_info: user_media_info,
             pcm_buffer_chunks,
-            pcm_pool,
             observer,
             playback_rate: config_playback_rate,
             stretch,
@@ -218,7 +219,6 @@ where
             stream: stream_config,
             bus: config_bus,
             effects: custom_effects,
-            worker: config_worker,
             cancel: config_cancel,
         } = config;
         let cancel = CancelScope::new(config_cancel).token();
@@ -283,8 +283,7 @@ where
             block_on_underrun,
             consumer_wake_mode,
         );
-        let (worker, worker_wake, is_standalone_worker) =
-            resolve_audio_worker(config_worker, &cancel);
+        let worker_wake: Arc<dyn WorkerWake> = Arc::new(wake.clone());
         let decode = deps
             .decode_init(
                 decoder,
@@ -317,24 +316,13 @@ where
         };
         let registration =
             prepare_stream_source_registration(track, ring, preload_gate, service_class);
-        let registered = register_stream_audio_source(
-            registration,
-            &wake_stream,
-            worker,
-            worker_wake,
-            is_standalone_worker,
-        );
+        let prepared = prepare_stream_audio_source(registration, &wake_stream, worker_wake);
 
-        Ok(Self::from(AudioParts {
-            ring: RingConsumer::new(registered.ring),
+        let audio = Self::from(AudioParts {
+            ring: RingConsumer::new(prepared.ring),
             pcm_pool,
             emit,
-            lease: WorkerLease {
-                cancel: Some(cancel),
-                track_id: Some(registered.track_id),
-                worker: Some(registered.worker),
-                is_standalone: registered.is_standalone_worker,
-            },
+            runtime: AudioRuntime { cancel, wake },
             session: Session {
                 playhead,
                 seek,
@@ -343,17 +331,18 @@ where
                 abr_handle,
                 peer_wake,
                 seek_prepare,
-                preload_gate: registered.preload_gate,
+                preload_gate: prepared.preload_gate,
             },
             controls: Controls {
                 playback_rate,
                 stretch,
                 host_sample_rate,
-                service_class: registered.service_class,
+                service_class: prepared.service_class,
             },
             spec: initial_spec,
             marker: PhantomData,
-        }))
+        });
+        Ok(PreparedAudio::new(audio, prepared.task))
     }
 
     #[must_use]
@@ -402,18 +391,6 @@ fn prepare_pcm_ring(
     (data_tx, trash_inlet, ring)
 }
 
-fn resolve_audio_worker(
-    worker: Option<AudioWorkerHandle>,
-    cancel: &CancelToken,
-) -> (AudioWorkerHandle, Arc<dyn WorkerWake>, bool) {
-    let (worker, is_standalone) = worker.map_or_else(
-        || (AudioWorkerHandle::with_cancel(cancel.child()), true),
-        |worker| (worker, false),
-    );
-    let wake: Arc<dyn WorkerWake> = Arc::new(WorkerWakeBridge(worker.clone()));
-    (worker, wake, is_standalone)
-}
-
 fn prepare_stream_source_registration(
     track: TrackRegistration,
     ring: RingParts,
@@ -428,69 +405,21 @@ fn prepare_stream_source_registration(
     }
 }
 
-fn register_stream_audio_source<T>(
+fn prepare_stream_audio_source<T>(
     registration: StreamSourceRegistration,
     shared_stream: &SharedStream<T>,
-    worker: AudioWorkerHandle,
     worker_wake: Arc<dyn WorkerWake>,
-    is_standalone_worker: bool,
-) -> RegisteredStreamSource
+) -> PreparedStreamSource
 where
     T: StreamType,
 {
-    let track_id = worker.register_track(registration.track);
     shared_stream.set_worker_wake(worker_wake);
 
-    RegisteredStreamSource {
-        is_standalone_worker,
+    PreparedStreamSource {
         preload_gate: registration.preload_gate,
         ring: registration.ring,
         service_class: registration.service_class,
-        track_id,
-        worker,
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use kithara_decode::PcmChunk;
-    use kithara_events::DeferredBus;
-    use kithara_stream::{PlayheadRead, PlayheadState};
-    use kithara_test_utils::kithara;
-    use unimock::Unimock;
-
-    use super::*;
-    use crate::{ConsumerWakeMode, traits::PcmSource};
-
-    #[kithara::test]
-    fn prepares_source_registration_without_worker_activity() {
-        let emit = Arc::new(DeferredBus::new(EventBus::new(8), 8));
-        let epoch = Arc::new(AtomicU64::new(0));
-        let (outlet, trash_inlet, ring) =
-            prepare_pcm_ring(1, &emit, &epoch, false, ConsumerWakeMode::RealtimeDeferred);
-        let preload_gate = Arc::new(super::super::PreloadGate::default());
-        let service_class = Arc::new(AtomicServiceClass::new(ServiceClass::default()));
-        let source: Box<dyn PcmSource<Chunk = PcmChunk>> = Box::new(Unimock::new(()));
-        let track = TrackRegistration {
-            trash_inlet,
-            source,
-            outlet,
-            preload_gate: Arc::clone(&preload_gate),
-            preload_chunks: 1,
-            playhead: Arc::new(PlayheadState::new()) as Arc<dyn PlayheadRead>,
-            emit,
-            service_class: Arc::clone(&service_class),
-            engine_load: None,
-        };
-
-        let registration = prepare_stream_source_registration(
-            track,
-            ring,
-            Arc::clone(&preload_gate),
-            service_class,
-        );
-
-        assert!(Arc::ptr_eq(&registration.preload_gate, &preload_gate));
+        task: PcmTask::from(registration.track),
     }
 }
 
@@ -686,5 +615,48 @@ const fn merge_user_and_stream_media_info(
         (Some(user), Some(stream)) => Some(merge_media_info(user, &stream)),
         (Some(user), None) => Some(user),
         (None, stream) => stream,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use kithara_decode::PcmChunk;
+    use kithara_events::DeferredBus;
+    use kithara_stream::{PlayheadRead, PlayheadState};
+    use kithara_test_utils::kithara;
+    use unimock::Unimock;
+
+    use super::*;
+    use crate::{ConsumerWakeMode, traits::PcmSource};
+
+    #[kithara::test]
+    fn prepares_source_registration_without_worker_activity() {
+        let emit = Arc::new(DeferredBus::new(EventBus::new(8), 8));
+        let epoch = Arc::new(AtomicU64::new(0));
+        let (outlet, trash_inlet, ring) =
+            prepare_pcm_ring(1, &emit, &epoch, false, ConsumerWakeMode::RealtimeDeferred);
+        let preload_gate = Arc::new(super::super::PreloadGate::default());
+        let service_class = Arc::new(AtomicServiceClass::new(ServiceClass::default()));
+        let source: Box<dyn PcmSource<Chunk = PcmChunk>> = Box::new(Unimock::new(()));
+        let track = TrackRegistration {
+            trash_inlet,
+            source,
+            outlet,
+            preload_gate: Arc::clone(&preload_gate),
+            preload_chunks: 1,
+            playhead: Arc::new(PlayheadState::new()) as Arc<dyn PlayheadRead>,
+            emit,
+            service_class: Arc::clone(&service_class),
+            engine_load: None,
+        };
+
+        let registration = prepare_stream_source_registration(
+            track,
+            ring,
+            Arc::clone(&preload_gate),
+            service_class,
+        );
+
+        assert!(Arc::ptr_eq(&registration.preload_gate, &preload_gate));
     }
 }

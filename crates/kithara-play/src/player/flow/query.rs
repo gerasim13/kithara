@@ -1,10 +1,10 @@
 use delegate::delegate;
-use kithara_audio::{AudioWorkerHandle, EngineLoadSnapshot};
+use kithara_audio::EngineLoadSnapshot;
 use kithara_events::EventBus;
 use kithara_platform::tokio::runtime::Handle as RuntimeHandle;
 
 use super::super::core::PlayerImpl;
-use crate::{api::PlayerStatus, bridge::PlaybackSnapshot, engine::EngineImpl};
+use crate::{PlayWorker, api::PlayerStatus, bridge::PlaybackSnapshot, engine::EngineImpl};
 
 impl PlayerImpl {
     /// ABR handle of the currently loaded item, if any.
@@ -22,6 +22,10 @@ impl PlayerImpl {
             /// Get a reference to the underlying engine.
             #[field(&engine)]
             pub const fn engine(&self) -> &EngineImpl;
+            /// Shared playback worker configured for this Player.
+            #[field(&worker)]
+            #[must_use]
+            pub const fn worker(&self) -> &PlayWorker;
         }
         to self.core.params {
             /// Whether the built-in linear auto-advance handler is enabled.
@@ -49,9 +53,6 @@ impl PlayerImpl {
             /// Runtime handle captured by this player's engine.
             #[must_use]
             pub const fn runtime(&self) -> Option<&RuntimeHandle>;
-            /// Shared audio worker handle for this player's engine.
-            #[must_use]
-            pub fn worker(&self) -> &AudioWorkerHandle;
         }
         to self {
             /// Returns `true` if the player is in playing state.

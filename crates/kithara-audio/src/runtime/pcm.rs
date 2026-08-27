@@ -1,105 +1,169 @@
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::{
+    num::NonZeroUsize,
+    sync::atomic::{AtomicU64, AtomicUsize, Ordering},
+};
 
-use kithara_platform::{CancelToken, sync::Arc};
+use kithara_platform::CancelToken;
 
-use super::{DecoderNode, HangWatchdogObserver, TrackRegistration};
-use crate::runtime::{Node, Scheduler, SchedulerHandle};
+use super::{Node, Scheduler, SchedulerHandle};
+use crate::renderer::{DecoderNode, HangWatchdogObserver, TrackRegistration};
 
-/// Unique identifier for a track registered with a shared worker.
-pub(crate) type TrackId = u64;
+type TrackId = u64;
 
 /// Monotonic counter for generating unique [`TrackId`] values.
-pub(crate) struct TrackIdGen(AtomicU64);
+struct TrackIdGen(AtomicU64);
 
 impl TrackIdGen {
     // ast-grep-ignore: style.prefer-default-derive
-    pub(crate) const fn new() -> Self {
+    const fn new() -> Self {
         Self(AtomicU64::new(1))
     }
 
-    pub(crate) fn next(&self) -> TrackId {
+    fn next(&self) -> TrackId {
         self.0.fetch_add(1, Ordering::Relaxed)
     }
 }
 
-/// Clonable handle to a shared audio worker.
+/// Opaque PCM producer task prepared by `kithara-audio` and scheduled by
+/// `kithara-play`.
+#[doc(hidden)]
+pub struct PcmTask(Box<dyn Node>);
+
+impl From<TrackRegistration> for PcmTask {
+    fn from(registration: TrackRegistration) -> Self {
+        Self(Box::new(DecoderNode::from(registration)))
+    }
+}
+
+/// Identifier of one registered PCM task.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[doc(hidden)]
+pub struct PcmTaskId(TrackId);
+
+/// Registration failure reported by the low-level PCM scheduler.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
+#[doc(hidden)]
+#[non_exhaustive]
+pub enum PcmSchedulerError {
+    /// The configured task capacity has been reached.
+    #[error("PCM scheduler capacity {capacity} reached")]
+    Capacity { capacity: usize },
+    /// The scheduler loop has already stopped.
+    #[error("PCM scheduler stopped")]
+    Stopped,
+}
+
+/// Wait-free wake capability retained by the prepared audio reader.
 ///
-/// Multiple [`Audio`](crate::Audio) handles can share one worker by cloning
-/// the handle and passing it via [`AudioConfig`](crate::AudioConfig).
-pub struct AudioWorkerHandle {
-    id_gen: Arc<TrackIdGen>,
+/// It can only request a scheduler pass; it cannot register, unregister or
+/// shut down the worker.
+#[derive(Clone)]
+#[doc(hidden)]
+pub struct PcmWake {
     inner: SchedulerHandle<Box<dyn Node>>,
 }
 
-impl Clone for AudioWorkerHandle {
-    fn clone(&self) -> Self {
-        Self {
-            inner: self.inner.clone(),
-            id_gen: Arc::clone(&self.id_gen),
+impl PcmWake {
+    delegate::delegate! {
+        to self.inner {
+            /// Wake immediately from an off-real-time thread.
+            pub fn wake(&self);
+            /// Coalesce a future pass without a syscall from the real-time path.
+            #[call(defer_wake)]
+            pub fn defer(&self);
         }
     }
 }
 
-impl AudioWorkerHandle {
-    /// Register a track. Returns the assigned [`TrackId`].
+impl kithara_stream::WorkerWake for PcmWake {
+    fn wake(&self) {
+        Self::wake(self);
+    }
+}
+
+/// Transitional concrete port over the existing generic scheduler kernel.
+///
+/// `kithara-play::PlayWorker` is the sole owner and public construction path.
+/// This port exists only to keep `kithara-audio` independent of `kithara-play`
+/// while the analyzer still shares the generic scheduler implementation.
+#[doc(hidden)]
+pub struct PcmScheduler {
+    active: AtomicUsize,
+    capacity: NonZeroUsize,
+    id_gen: TrackIdGen,
+    inner: SchedulerHandle<Box<dyn Node>>,
+}
+
+impl PcmScheduler {
+    /// Register one opaque task without exposing the generic runtime.
     ///
-    /// If the worker thread has already exited (e.g. after shutdown), the
-    /// registration is silently lost and the returned track will produce no
-    /// data. Callers must ensure the worker is alive before registering.
-    pub(crate) fn register_track(&self, reg: TrackRegistration) -> TrackId {
+    /// # Errors
+    ///
+    /// Returns [`PcmSchedulerError::Capacity`] when the configured task limit
+    /// has been reached, or [`PcmSchedulerError::Stopped`] after the scheduler
+    /// loop has stopped.
+    pub fn register(&self, task: PcmTask) -> Result<PcmTaskId, PcmSchedulerError> {
+        self.active
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |active| {
+                (active < self.capacity.get()).then_some(active + 1)
+            })
+            .map_err(|_| PcmSchedulerError::Capacity {
+                capacity: self.capacity.get(),
+            })?;
+
         let id = self.id_gen.next();
-        let node: Box<dyn Node> = Box::new(DecoderNode::from(reg));
-        self.inner.register(id, node);
-        id
+        if !self.inner.register(id, task.0) {
+            self.active.fetch_sub(1, Ordering::AcqRel);
+            return Err(PcmSchedulerError::Stopped);
+        }
+        Ok(PcmTaskId(id))
     }
 
-    /// Spawn a new shared worker thread bound to the given [`CancelToken`] and
-    /// return a handle. Production callers (e.g. `EngineImpl`) pass a
-    /// `child()` of the player master so worker shutdown participates in
-    /// the unified cancel hierarchy and the produce-core's lock-free
-    /// `is_cancelled()` read observes a master cancel.
+    /// Start the existing scheduler loop for a play-owned worker.
     #[must_use]
-    pub fn with_cancel(cancel: CancelToken) -> Self {
-        let id_gen = Arc::new(TrackIdGen::new());
-        let id = Arc::as_ptr(&id_gen);
+    pub fn start(name: String, cancel: CancelToken, capacity: NonZeroUsize) -> Self {
+        let id_gen = TrackIdGen::new();
         let inner = Scheduler::<Box<dyn Node>, HangWatchdogObserver>::start(
-            format!("kithara-audio-worker-{id:p}"),
+            name,
             HangWatchdogObserver::new(),
             cancel,
         );
 
-        Self { id_gen, inner }
+        Self {
+            active: AtomicUsize::new(0),
+            capacity,
+            id_gen,
+            inner,
+        }
     }
 
-    delegate::delegate! {
-        to self.inner {
-            /// Request graceful shutdown and cancel the worker.
-            pub fn shutdown(&self);
-            /// Remove a track by ID.
-            #[call(unregister)]
-            pub(crate) fn unregister_track(&self, track_id: TrackId);
-            /// Wake the worker immediately from an off-RT control or downloader
-            /// thread. Uses `ThreadGate` unpark and must not run on an audio callback.
-            pub fn wake(&self);
-            /// Publish a coalesced worker pass from an RT consumer without a
-            /// syscall or thread unpark. The scheduler consumes the level before
-            /// parking, or after its bounded park when it races with that park.
-            pub(crate) fn defer_wake(&self);
+    /// Remove one task without affecting any sibling registration.
+    pub fn unregister(&self, task_id: PcmTaskId) {
+        self.inner.unregister(task_id.0);
+        let decremented = self
+            .active
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |active| {
+                active.checked_sub(1)
+            });
+        debug_assert!(decremented.is_ok(), "PCM scheduler registration underflow");
+    }
+
+    /// Create the restricted wake capability passed into audio preparation.
+    #[must_use]
+    pub fn wake_handle(&self) -> PcmWake {
+        PcmWake {
+            inner: self.inner.clone(),
         }
+    }
+
+    fn shutdown(&self) {
+        self.inner.shutdown();
     }
 }
 
-/// Adapts an [`AudioWorkerHandle`] to the [`WorkerWake`](kithara_stream::WorkerWake)
-/// trait so kithara-hls (which does not depend on kithara-audio) can re-tick
-/// the worker on segment data arrival. Installed via `Stream::set_worker_wake`
-/// after the worker exists; the HLS readiness gate calls [`wake`](Self::wake)
-/// from its off-RT downloader write/settle path and immediately unparks the
-/// scheduler.
-pub(crate) struct WorkerWakeBridge(pub(crate) AudioWorkerHandle);
-
-impl kithara_stream::WorkerWake for WorkerWakeBridge {
-    fn wake(&self) {
-        self.0.wake();
+impl Drop for PcmScheduler {
+    fn drop(&mut self) {
+        self.shutdown();
     }
 }
 
@@ -205,6 +269,28 @@ mod tests {
         received
     }
 
+    fn test_scheduler() -> PcmScheduler {
+        PcmScheduler::start(
+            "kithara-play-worker-test".into(),
+            CancelToken::never(),
+            NonZeroUsize::new(8).expect("test capacity is non-zero"),
+        )
+    }
+
+    fn scheduler_with_capacity(capacity: usize) -> PcmScheduler {
+        PcmScheduler::start(
+            "kithara-play-worker-capacity-test".into(),
+            CancelToken::never(),
+            NonZeroUsize::new(capacity).expect("test capacity is non-zero"),
+        )
+    }
+
+    fn register(handle: &PcmScheduler, registration: TrackRegistration) -> PcmTaskId {
+        handle
+            .register(PcmTask::from(registration))
+            .expect("test PCM task must register")
+    }
+
     #[kithara::test]
     fn track_id_gen_produces_unique_ids() {
         let id_gen = TrackIdGen::new();
@@ -218,18 +304,42 @@ mod tests {
 
     #[kithara::test]
     fn worker_creates_and_drops_cleanly() {
-        let handle = AudioWorkerHandle::with_cancel(CancelToken::never());
+        let handle = test_scheduler();
         thread_sleep(Duration::from_millis(10));
         handle.shutdown();
         thread_sleep(Duration::from_millis(50));
     }
 
     #[kithara::test]
+    fn registration_reports_capacity_exhaustion() {
+        let handle = scheduler_with_capacity(1);
+        let (first, _, _) = make_registration(MockSource::new(1), 2, 1);
+        let (second, _, _) = make_registration(MockSource::new(1), 2, 1);
+
+        let first_id = register(&handle, first);
+        let result = handle.register(PcmTask::from(second));
+
+        assert_eq!(result, Err(PcmSchedulerError::Capacity { capacity: 1 }));
+        handle.unregister(first_id);
+    }
+
+    #[kithara::test]
+    fn registration_reports_stopped_scheduler() {
+        let handle = test_scheduler();
+        handle.shutdown();
+        let (registration, _, _) = make_registration(MockSource::new(1), 2, 1);
+
+        let result = handle.register(PcmTask::from(registration));
+
+        assert_eq!(result, Err(PcmSchedulerError::Stopped));
+    }
+
+    #[kithara::test]
     fn worker_delivers_chunks() {
-        let handle = AudioWorkerHandle::with_cancel(CancelToken::never());
+        let handle = test_scheduler();
         let (reg, mut data_rx, _preload_gate) = make_registration(MockSource::new(10), 32, 3);
 
-        let _id = handle.register_track(reg);
+        let _id = register(&handle, reg);
 
         let received = wait_for_chunks(&mut data_rx, 5, Duration::from_secs(5));
         assert!(received >= 5, "expected >=5 chunks, got {received}");
@@ -239,13 +349,13 @@ mod tests {
 
     #[kithara::test]
     fn worker_multi_track_round_robin() {
-        let handle = AudioWorkerHandle::with_cancel(CancelToken::never());
+        let handle = test_scheduler();
 
         let (reg_a, mut rx_a, _) = make_registration(MockSource::new(10), 32, 1);
         let (reg_b, mut rx_b, _) = make_registration(MockSource::new(10), 32, 1);
 
-        let _id_a = handle.register_track(reg_a);
-        let _id_b = handle.register_track(reg_b);
+        let _id_a = register(&handle, reg_a);
+        let _id_b = register(&handle, reg_b);
 
         let a = wait_for_chunks(&mut rx_a, 3, Duration::from_secs(5));
         let b = wait_for_chunks(&mut rx_b, 3, Duration::from_secs(5));
@@ -257,13 +367,13 @@ mod tests {
 
     #[kithara::test]
     fn worker_skips_not_ready_tracks() {
-        let handle = AudioWorkerHandle::with_cancel(CancelToken::never());
+        let handle = test_scheduler();
 
         let (reg_a, mut rx_a, _) = make_registration(MockSource::new(10), 32, 1);
         let (reg_b, mut rx_b, _) = make_registration(MockSource::not_ready(10), 32, 1);
 
-        let _id_a = handle.register_track(reg_a);
-        let _id_b = handle.register_track(reg_b);
+        let _id_a = register(&handle, reg_a);
+        let _id_b = register(&handle, reg_b);
 
         thread_sleep(Duration::from_millis(100));
 
@@ -277,11 +387,11 @@ mod tests {
 
     #[kithara::test]
     fn worker_overflow_on_full_ringbuf() {
-        let handle = AudioWorkerHandle::with_cancel(CancelToken::never());
+        let handle = test_scheduler();
 
         let (reg, mut rx, _) = make_registration(MockSource::new(5), 1, 1);
 
-        let _id = handle.register_track(reg);
+        let _id = register(&handle, reg);
 
         thread_sleep(Duration::from_millis(50));
 
@@ -298,13 +408,13 @@ mod tests {
 
     #[kithara::test]
     fn worker_panic_isolation() {
-        let handle = AudioWorkerHandle::with_cancel(CancelToken::never());
+        let handle = test_scheduler();
 
         let (reg_a, _, _) = make_registration(MockSource::panicking(), 32, 1);
         let (reg_b, mut rx_b, _) = make_registration(MockSource::new(10), 32, 1);
 
-        let _id_a = handle.register_track(reg_a);
-        let _id_b = handle.register_track(reg_b);
+        let _id_a = register(&handle, reg_a);
+        let _id_b = register(&handle, reg_b);
 
         let b = wait_for_chunks(&mut rx_b, 3, Duration::from_secs(5));
         assert!(
@@ -317,19 +427,19 @@ mod tests {
 
     #[kithara::test]
     fn worker_seek_enters_pending_reset() {
-        let handle = AudioWorkerHandle::with_cancel(CancelToken::never());
+        let handle = test_scheduler();
 
         let source = MockSource::new(100);
         let seek = Arc::clone(&source.seek);
         let (reg, mut rx, _) = make_registration(source, 32, 1);
 
-        let _id = handle.register_track(reg);
+        let _id = register(&handle, reg);
 
         let got = wait_for_chunks(&mut rx, 2, Duration::from_secs(5));
         assert!(got >= 2);
 
         let _ = seek.begin(Duration::from_secs(10));
-        handle.wake();
+        handle.wake_handle().wake();
 
         thread_sleep(Duration::from_millis(100));
 
@@ -341,11 +451,11 @@ mod tests {
 
     #[kithara::test(tokio)]
     async fn worker_preload_gate_fires_on_progress() {
-        let handle = AudioWorkerHandle::with_cancel(CancelToken::never());
+        let handle = test_scheduler();
 
         let (reg, _rx, preload_gate) = make_registration(MockSource::new(10), 32, 3);
 
-        let _id = handle.register_track(reg);
+        let _id = register(&handle, reg);
 
         platform_timeout(Duration::from_secs(1), preload_gate.wait())
             .await
@@ -357,11 +467,11 @@ mod tests {
 
     #[kithara::test(tokio)]
     async fn worker_preload_gate_fires_on_eof() {
-        let handle = AudioWorkerHandle::with_cancel(CancelToken::never());
+        let handle = test_scheduler();
 
         let (reg, _rx, preload_gate) = make_registration(MockSource::new(0), 32, 8);
 
-        let _id = handle.register_track(reg);
+        let _id = register(&handle, reg);
 
         platform_timeout(Duration::from_secs(1), preload_gate.wait())
             .await
@@ -373,11 +483,11 @@ mod tests {
 
     #[kithara::test(tokio)]
     async fn worker_preload_gate_fires_on_failure() {
-        let handle = AudioWorkerHandle::with_cancel(CancelToken::never());
+        let handle = test_scheduler();
 
         let (reg, _rx, preload_gate) = make_registration(FailingSource::default(), 32, 8);
 
-        let _id = handle.register_track(reg);
+        let _id = register(&handle, reg);
 
         platform_timeout(Duration::from_secs(1), preload_gate.wait())
             .await
@@ -389,12 +499,12 @@ mod tests {
 
     #[kithara::test(tokio)]
     async fn worker_preload_gate_reopens_after_seek() {
-        let handle = AudioWorkerHandle::with_cancel(CancelToken::never());
+        let handle = test_scheduler();
 
         let source = MockSource::new(10);
         let seek = Arc::clone(&source.seek);
         let (reg, _rx, preload_gate) = make_registration(source, 32, 1);
-        let _id = handle.register_track(reg);
+        let _id = register(&handle, reg);
 
         platform_timeout(Duration::from_secs(1), preload_gate.wait())
             .await
@@ -402,7 +512,7 @@ mod tests {
         assert!(preload_gate.is_ready());
 
         let epoch = seek.begin(Duration::from_secs(1));
-        handle.wake();
+        handle.wake_handle().wake();
 
         platform_timeout(Duration::from_secs(1), preload_gate.wait_for_epoch(epoch))
             .await
@@ -413,16 +523,16 @@ mod tests {
 
     #[kithara::test]
     fn worker_unregister_removes_track() {
-        let handle = AudioWorkerHandle::with_cancel(CancelToken::never());
+        let handle = test_scheduler();
 
         let (reg, mut rx, _) = make_registration(MockSource::new(100), 32, 1);
 
-        let id = handle.register_track(reg);
+        let id = register(&handle, reg);
 
         let got = wait_for_chunks(&mut rx, 2, Duration::from_secs(5));
         assert!(got >= 2);
 
-        handle.unregister_track(id);
+        handle.unregister(id);
         thread_sleep(Duration::from_millis(50));
 
         while rx.try_pop().is_some() {}
@@ -433,10 +543,41 @@ mod tests {
         handle.shutdown();
     }
 
+    #[kithara::test]
+    fn unregister_one_task_keeps_sibling_running_and_releases_capacity() {
+        let handle = scheduler_with_capacity(2);
+        let (reg_a, mut rx_a, _) = make_registration(MockSource::new(100), 1, 1);
+        let (reg_b, mut rx_b, _) = make_registration(MockSource::new(100), 1, 1);
+
+        let id_a = register(&handle, reg_a);
+        let id_b = register(&handle, reg_b);
+        assert_eq!(wait_for_chunks(&mut rx_a, 1, Duration::from_secs(1)), 1);
+        assert_eq!(wait_for_chunks(&mut rx_b, 1, Duration::from_secs(1)), 1);
+
+        handle.unregister(id_a);
+
+        let (reg_c, _rx_c, _) = make_registration(MockSource::new(1), 1, 1);
+        let id_c = handle
+            .register(PcmTask::from(reg_c))
+            .expect("unregister must release one capacity slot");
+
+        while rx_b.try_pop().is_some() {}
+        handle.wake_handle().wake();
+        assert_eq!(
+            wait_for_chunks(&mut rx_b, 1, Duration::from_secs(1)),
+            1,
+            "unregistering one task must not stop its sibling"
+        );
+
+        handle.unregister(id_b);
+        handle.unregister(id_c);
+        handle.shutdown();
+    }
+
     // Audible-before-Idle is a pure ordering property of the scheduler's slot
     // sequence, not of consumed-chunk counts; verifying it through a live ring
     // drain is structurally racy. It is locked deterministically in
-    // `runtime::scheduler::tests` instead — see
+    // `runtime::scheduler::tests` instead -- see
     // `refresh_reorders_live_when_atomic_service_class_changes`.
 
     /// A slow/blocked track must not starve a producing track.
@@ -473,10 +614,10 @@ mod tests {
             }
         }
 
-        let handle = AudioWorkerHandle::with_cancel(CancelToken::never());
+        let handle = test_scheduler();
 
         let (reg_a, mut rx_a, _) = make_registration(MockSource::new(100), 32, 0);
-        let _id_a = handle.register_track(reg_a);
+        let _id_a = register(&handle, reg_a);
 
         let blocking = Arc::new(AtomicBool::new(true));
         let blocking_source = BlockingSource {
@@ -484,7 +625,7 @@ mod tests {
             blocking: Arc::clone(&blocking),
         };
         let (reg_b, _rx_b, _) = make_registration(blocking_source, 32, 0);
-        let _id_b = handle.register_track(reg_b);
+        let _id_b = register(&handle, reg_b);
 
         thread_sleep(Duration::from_millis(500));
 
@@ -496,7 +637,7 @@ mod tests {
         assert!(
             got_a >= 11,
             "Producing track must not be starved by blocking track: \
-             got only {got_a} chunks in 1s (expected ≥11 for glitch-free)"
+             got only {got_a} chunks in 1s (expected >=11 for glitch-free)"
         );
 
         blocking.store(false, Ordering::Relaxed);
@@ -506,8 +647,8 @@ mod tests {
     /// A track whose `step_track()` blocks must not set the delivery rate of
     /// every other track on the shared worker.
     ///
-    /// The worker runs one pass over all slots and calls `tick()` — hence
-    /// `step_track()` — exactly once per slot per pass, so a slot that blocks
+    /// The worker runs one pass over all slots and calls `tick()` -- hence
+    /// `step_track()` -- exactly once per slot per pass, so a slot that blocks
     /// for `BLOCK_MS` caps the pass rate at `1000 / BLOCK_MS` per second. With
     /// one chunk produced per tick, every other track is capped at that same
     /// rate no matter how fast its own source is. In production the blocking
@@ -516,7 +657,7 @@ mod tests {
     ///
     /// The oracle counts chunks, not wall-clock gaps: a ready track must be
     /// able to drain its whole source within a bounded number of polls. A gap
-    /// oracle cannot see this defect — at `BLOCK_MS` the gap stays near
+    /// oracle cannot see this defect -- at `BLOCK_MS` the gap stays near
     /// `BLOCK_MS`, well inside any limit chosen for glitch-free playback,
     /// while the track still delivers an order of magnitude too few chunks.
     #[kithara::test]
@@ -545,18 +686,18 @@ mod tests {
             }
         }
 
-        let handle = AudioWorkerHandle::with_cancel(CancelToken::never());
+        let handle = test_scheduler();
 
         let (reg_a, mut rx_a, _) =
             make_registration(MockSource::new(SOURCE_CHUNKS as usize), 32, 0);
-        let _id_a = handle.register_track(reg_a);
+        let _id_a = register(&handle, reg_a);
 
         let slow_source = SlowDecodeSource {
             seek_obs: Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
             block_ms: BLOCK_MS,
         };
         let (reg_b, mut rx_b, _) = make_registration(slow_source, 32, 0);
-        let _id_b = handle.register_track(reg_b);
+        let _id_b = register(&handle, reg_b);
 
         let mut delivered = 0u32;
         let mut polls = 0u32;
@@ -574,7 +715,7 @@ mod tests {
             polls += 1;
             // The budget has to bound the pipeline, not the host. A real pause
             // makes these polls a window of real seconds, and how many chunks
-            // arrive inside it is a property of the machine — which is how this
+            // arrive inside it is a property of the machine -- which is how this
             // same budget passed on an idle host and failed on a loaded one.
             // `park_timeout` is on the macro's rewrite list, so the window is
             // virtual and advances only once the worker has parked.
@@ -589,7 +730,7 @@ mod tests {
             delivered >= SOURCE_CHUNKS,
             "fast track drained {delivered} of {SOURCE_CHUNKS} chunks in {polls} polls \
              (deepest single poll {deepest_poll}) while a co-scheduled track blocked \
-             {BLOCK_MS}ms per step — the blocking step sets the worker's pass rate and \
+             {BLOCK_MS}ms per step -- the blocking step sets the worker's pass rate and \
              every other track is capped at one chunk per pass"
         );
     }

@@ -9,6 +9,7 @@ use kithara::{
     audio::{Bucket, analysis::BeatAnalysisConfig},
     bufpool::{BytePool, PcmPool},
     platform::{CancelToken, time::Duration},
+    play::{PlayWorker, PlayWorkerConfig},
     prelude::ResourceConfig,
 };
 use kithara_app::waveform::{TrackAnalysis, TrackAnalysisRunner};
@@ -24,6 +25,10 @@ fn silence_wav_spec() -> SignalSpec {
         sample_rate: 44_100,
         bit_rate: None,
     }
+}
+
+fn worker() -> PlayWorker {
+    PlayWorker::new(PlayWorkerConfig::for_pools(BytePool::default(), PcmPool::default()).build())
 }
 
 /// Run one analysis through the production runner and await its result.
@@ -56,8 +61,7 @@ async fn runner_silent_wav_yields_all_zero_envelope() {
         ResourceConfig::parse_src(url.as_str()).expect("silence URL must build a ResourceConfig"),
     )
     .store(memory_asset_store())
-    .byte_pool(BytePool::default())
-    .pcm_pool(PcmPool::default())
+    .worker(worker())
     .build();
 
     // A silent 1s WAV must decode end to end and finalise to a native-resolution
@@ -91,8 +95,7 @@ async fn runner_returns_nothing_when_cancelled_upfront() {
         ResourceConfig::parse_src(url.as_str()).expect("silence URL must build a ResourceConfig"),
     )
     .store(memory_asset_store())
-    .byte_pool(BytePool::default())
-    .pcm_pool(PcmPool::default())
+    .worker(worker())
     .build();
 
     let master = CancelToken::never();

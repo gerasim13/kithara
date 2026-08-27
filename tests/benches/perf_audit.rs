@@ -7,11 +7,12 @@ use criterion::{
 };
 use kithara::{
     TimeStretchProcessor,
+    assets::{AssetStore, StorageBackend},
     audio::{
-        AnalysisParams, Audio, AudioConfig, AudioEffect, ReadOutcome, StretchControls,
+        AnalysisParams, AudioConfig, AudioEffect, PcmRead, ReadOutcome, StretchControls,
         WaveformAnalyzer,
     },
-    bufpool::{BytePool, PcmPool},
+    bufpool::{PcmPool, Region},
     decode::{PcmChunk, PcmMeta, PcmSpec},
     file::{File, FileConfig},
     platform::{
@@ -19,7 +20,7 @@ use kithara::{
         time::Duration,
         tokio::runtime::{Builder, Runtime},
     },
-    stream::Stream,
+    play::{PlayWorker, PlayWorkerConfig},
 };
 use kithara_stretch::{ElasticConfig, ElasticEngine, ElasticRequest, StretchKind, build_engine};
 use num_traits::ToPrimitive;
@@ -165,15 +166,25 @@ fn bench_gapless_trim(c: &mut Criterion) {
     group.bench_function("decode_mp3_to_eof", |b| {
         b.iter(|| {
             rt.block_on(async {
+                let region = Region::default();
+                let byte_pool = region.byte_pool();
                 let file_config = FileConfig::for_src(file_path.clone().into())
-                    .store(kithara_integration_tests::memory_asset_store())
+                    .store(
+                        AssetStore::builder()
+                            .backend(StorageBackend::Memory)
+                            .pool(byte_pool.clone())
+                            .build(),
+                    )
+                    .pool(byte_pool.clone())
                     .build();
                 let config = AudioConfig::<File>::for_stream(file_config)
                     .hint("mp3".to_string())
-                    .byte_pool(BytePool::default())
-                    .pcm_pool(PcmPool::default())
                     .build();
-                let mut audio = Audio::<Stream<File>>::new(config)
+                let worker = PlayWorker::new(
+                    PlayWorkerConfig::for_pools(byte_pool, region.pcm_pool()).build(),
+                );
+                let mut audio = worker
+                    .open(config)
                     .await
                     .unwrap_or_else(|e| panic!("audio init failed: {e}"));
                 let mut buf = [0.0_f32; 8_192];

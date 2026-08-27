@@ -21,7 +21,7 @@ use kithara::{
         time::{Duration, Instant, sleep},
         tokio::sync::broadcast::error::TryRecvError,
     },
-    play::{Resource, ResourceConfig},
+    play::{PlayWorker, PlayWorkerConfig, Resource, ResourceConfig},
     stream::AudioCodec,
 };
 use kithara_integration_tests::{
@@ -279,8 +279,13 @@ async fn prepare_player(
         ResourceConfig::parse_src(master_url.as_str()).expect("fixture master URL must be valid"),
     )
     .store(kithara_integration_tests::disk_asset_store(temp.path()))
-    .byte_pool(kithara::bufpool::BytePool::default())
-    .pcm_pool(kithara::bufpool::PcmPool::default())
+    .worker(PlayWorker::new(
+        PlayWorkerConfig::for_pools(
+            kithara::bufpool::BytePool::default(),
+            kithara::bufpool::PcmPool::default(),
+        )
+        .build(),
+    ))
     .decoder(
         kithara::audio::AudioDecoderConfig::builder()
             .backend(backend)

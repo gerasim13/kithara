@@ -1,9 +1,11 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 use kithara::{
-    audio::{Audio, AudioConfig, ReadOutcome},
+    audio::{AudioConfig, PcmControl, PcmRead, PcmSession, ReadOutcome},
+    bufpool::Region,
     events::{AudioEvent, Event, SeekEpoch, SeekLifecycleStage},
     platform::time::{self, Duration, Instant},
+    play::{PlayWorker, PlayWorkerConfig, RegisteredAudio},
     stream::Stream,
 };
 use kithara_integration_tests::{
@@ -20,16 +22,14 @@ fn wav_stream(samples: usize) -> AudioConfig<MemStream> {
         event_bus: None,
     };
     AudioConfig::<MemStream>::for_stream(stream)
-        .byte_pool(kithara::bufpool::BytePool::default())
-        .pcm_pool(kithara::bufpool::PcmPool::default())
         .hint("wav".to_string())
         .build()
 }
 
-async fn wait_for_frames<S>(mut audio: Audio<S>, budget: Duration) -> (Audio<S>, usize)
-where
-    Audio<S>: Send + 'static,
-{
+async fn wait_for_frames(
+    mut audio: RegisteredAudio<Stream<MemStream>>,
+    budget: Duration,
+) -> (RegisteredAudio<Stream<MemStream>>, usize) {
     let mut buf = [0.0f32; 256];
     let deadline = Instant::now() + budget;
     while Instant::now() < deadline {
@@ -55,10 +55,9 @@ where
 /// One read pass with no budget of its own — the caller owns the deadline.
 /// Unlike [`wait_for_frames`], a pass that yields no frames is a result, not a
 /// panic, so a caller can keep the output moving while it watches the bus.
-async fn pump_once<S>(audio: Audio<S>) -> (Audio<S>, ReadOutcome)
-where
-    Audio<S>: Send + 'static,
-{
+async fn pump_once(
+    audio: RegisteredAudio<Stream<MemStream>>,
+) -> (RegisteredAudio<Stream<MemStream>>, ReadOutcome) {
     let mut buf = [0.0f32; 256];
     let (audio, (_buf, outcome)) = blocking_audio(audio, move |audio| {
         let outcome = audio.read(&mut buf);
@@ -68,10 +67,10 @@ where
     (audio, outcome.expect("read"))
 }
 
-async fn drain_to_eof<S>(mut audio: Audio<S>, budget: Duration) -> (Audio<S>, usize)
-where
-    Audio<S>: Send + 'static,
-{
+async fn drain_to_eof(
+    mut audio: RegisteredAudio<Stream<MemStream>>,
+    budget: Duration,
+) -> (RegisteredAudio<Stream<MemStream>>, usize) {
     let mut buf = [0.0f32; 4096];
     let mut total = 0usize;
     let deadline = Instant::now() + budget;
@@ -97,10 +96,11 @@ where
 
 #[kithara::test(tokio, timeout(Duration::from_secs(10)))]
 async fn basic_decode_to_eof() {
+    let region = Region::default();
+    let worker =
+        PlayWorker::new(PlayWorkerConfig::for_pools(region.byte_pool(), region.pcm_pool()).build());
     let config = wav_stream(8_000);
-    let audio = Audio::<Stream<MemStream>>::new(config)
-        .await
-        .expect("audio construction");
+    let audio = worker.open(config).await.expect("audio construction");
 
     let (_audio, frames) = drain_to_eof(audio, Duration::from_secs(5)).await;
     assert!(
@@ -115,10 +115,11 @@ async fn basic_decode_to_eof() {
     tracing("kithara_audio=debug,kithara_decode=debug,kithara_stream=debug")
 )]
 async fn seek_during_active_decode_completes_without_hang() {
+    let region = Region::default();
+    let worker =
+        PlayWorker::new(PlayWorkerConfig::for_pools(region.byte_pool(), region.pcm_pool()).build());
     let config = wav_stream(44_100 * 3);
-    let audio = Audio::<Stream<MemStream>>::new(config)
-        .await
-        .expect("audio construction");
+    let audio = worker.open(config).await.expect("audio construction");
     let mut events = audio.event_bus().subscribe();
 
     let (audio, _initial_frames) = wait_for_frames(audio, Duration::from_secs(2)).await;
@@ -181,10 +182,11 @@ async fn seek_during_active_decode_completes_without_hang() {
 async fn rapid_seeks_via_timeline_all_complete() {
     const SEEK_COUNT: usize = 6;
 
+    let region = Region::default();
+    let worker =
+        PlayWorker::new(PlayWorkerConfig::for_pools(region.byte_pool(), region.pcm_pool()).build());
     let config = wav_stream(44_100 * 4);
-    let mut audio = Audio::<Stream<MemStream>>::new(config)
-        .await
-        .expect("audio construction");
+    let mut audio = worker.open(config).await.expect("audio construction");
     let mut events = audio.event_bus().subscribe();
 
     // Keep the settle reads inline so the flash rewriter retargets these
@@ -320,6 +322,9 @@ async fn rapid_seeks_via_timeline_all_complete() {
 
 #[kithara::test(tokio, timeout(Duration::from_secs(10)))]
 async fn truncated_wav_surfaces_decode_error_or_eof() {
+    let region = Region::default();
+    let worker =
+        PlayWorker::new(PlayWorkerConfig::for_pools(region.byte_pool(), region.pcm_pool()).build());
     let mut wav = create_test_wav(44_100, 44_100, 2);
     wav.truncate(wav.len() / 4);
     let source = MemorySource::new(wav);
@@ -327,14 +332,10 @@ async fn truncated_wav_surfaces_decode_error_or_eof() {
         source: Some(source),
         event_bus: None,
     })
-    .byte_pool(kithara::bufpool::BytePool::default())
-    .pcm_pool(kithara::bufpool::PcmPool::default())
     .hint("wav".to_string())
     .build();
 
-    let audio = Audio::<Stream<MemStream>>::new(config)
-        .await
-        .expect("audio construction");
+    let audio = worker.open(config).await.expect("audio construction");
 
     let (_audio, saw_terminal) = blocking_audio(audio, |audio| {
         let mut buf = [0.0f32; 4096];

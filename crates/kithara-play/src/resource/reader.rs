@@ -2,8 +2,7 @@ use std::num::NonZeroU32;
 
 use delegate::delegate;
 use kithara_audio::{
-    Audio, AudioConfig, ChunkOutcome, PcmReader, ReadOutcome, ResamplerBackend, SeekOutcome,
-    ServiceClass,
+    AudioConfig, ChunkOutcome, PcmReader, ReadOutcome, ResamplerBackend, SeekOutcome, ServiceClass,
 };
 use kithara_decode::{DecodeError, DecodeResult, PcmSpec, TrackMetadata};
 use kithara_events::EventBus;
@@ -12,6 +11,7 @@ use kithara_stream::{Stream, StreamType};
 use tracing::warn;
 
 use super::{ResourceConfig, SourceType};
+use crate::PlayWorker;
 
 /// Type-erased audio resource wrapping any `PcmReader`.
 ///
@@ -22,16 +22,20 @@ use super::{ResourceConfig, SourceType};
 ///
 /// ```ignore
 /// use kithara_assets::AssetStore;
-/// use kithara_bufpool::{BytePool, PcmPool};
-/// use kithara_play::{Resource, ResourceConfig};
+/// use kithara_bufpool::Region;
+/// use kithara_play::{PlayWorker, PlayWorkerConfig, Resource, ResourceConfig};
+///
+/// let region = Region::default();
+/// let worker = PlayWorker::new(
+///     PlayWorkerConfig::for_pools(region.byte_pool(), region.pcm_pool()).build(),
+/// );
 ///
 /// // Auto-detect: .m3u8 -> HLS, everything else -> progressive file
 /// let config: ResourceConfig = ResourceConfig::for_src(ResourceConfig::parse_src(
 ///     "https://example.com/song.mp3",
 /// )?)
-/// .store(AssetStore::builder().build())
-/// .byte_pool(BytePool::default())
-/// .pcm_pool(PcmPool::default())
+/// .store(AssetStore::builder().pool(region.byte_pool()).build())
+/// .worker(worker)
 /// .build();
 /// let mut resource = Resource::new(config).await?;
 ///
@@ -101,17 +105,20 @@ impl Resource {
     {
         let src: Arc<str> = Arc::from(config.src.to_string());
         let source_type = SourceType::detect(&config.src)?;
+        let worker = config.worker.clone().ok_or(DecodeError::InvalidData {
+            detail: "ResourceConfig requires an explicit PlayWorker",
+        })?;
         // Capture the per-track cancel before `build_*_config` consumes `config`
         // (it is cloned by identity into both the inner stream and the Audio).
         let cancel = config.cancel.clone();
         let mut resource = match source_type {
             SourceType::RemoteFile(_) | SourceType::LocalFile(_) => {
-                let audio_config = config.build_file_config();
-                Self::from_stream_audio(audio_config, src).await?
+                let audio_config = config.build_file_config(&worker);
+                Self::from_stream_audio(audio_config, src, &worker).await?
             }
             SourceType::HlsStream(_) => {
-                let audio_config = config.build_hls_config()?;
-                Self::from_stream_audio(audio_config, src).await?
+                let audio_config = config.build_hls_config(&worker)?;
+                Self::from_stream_audio(audio_config, src, &worker).await?
             }
         };
         resource.cancel = CancelGuard(cancel);
@@ -155,13 +162,14 @@ impl Resource {
     pub(crate) async fn from_stream_audio<T, B>(
         config: AudioConfig<T, B>,
         src: Arc<str>,
+        worker: &PlayWorker,
     ) -> DecodeResult<Self>
     where
         T: StreamType<Events = EventBus> + 'static,
         B: Default + ResamplerBackend,
-        Audio<Stream<T>>: PcmReader + 'static,
+        crate::RegisteredAudio<Stream<T>>: PcmReader + 'static,
     {
-        let audio = Audio::<Stream<T>>::new(config).await?;
+        let audio = worker.open(config).await?;
         Ok(Self::from_reader(audio, Some(src)))
     }
 

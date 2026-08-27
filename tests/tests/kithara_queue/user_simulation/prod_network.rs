@@ -21,7 +21,7 @@ use kithara::{
         time::{Duration, sleep},
         tokio,
     },
-    play::{PlayerConfig, PlayerImpl},
+    play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl},
     queue::{Queue, QueueConfig, TrackSource, Transition},
     stream::dl::{Downloader, DownloaderConfig},
 };
@@ -62,13 +62,16 @@ struct ProdCtx {
 }
 
 fn build_prod_ctx() -> ProdCtx {
-    let net = NetOptions::builder().is_insecure(true).build();
+    let byte_pool = BytePool::default();
+    let net = NetOptions::builder()
+        .byte_pool(byte_pool.clone())
+        .is_insecure(true)
+        .build();
     let downloader = Downloader::new(
         DownloaderConfig::for_client(HttpClient::new(net, CancelToken::never())).build(),
     );
     let flush_hub = FlushHub::new(CancelToken::never(), FlushPolicy::default());
     let shutdown = CancelToken::never();
-    let byte_pool = BytePool::default();
     let store = AssetStore::builder()
         .cancel(shutdown.child())
         .backend(StorageBackend::default())
@@ -76,11 +79,15 @@ fn build_prod_ctx() -> ProdCtx {
         .flush_hub(flush_hub)
         .layouts(baked::build_baked_asset_layouts())
         .build();
+    let worker = PlayWorker::new(
+        PlayWorkerConfig::for_pools(byte_pool, PcmPool::default())
+            .cancel(shutdown.child())
+            .build(),
+    );
     let config = AppConfig::builder()
         .downloader(downloader)
         .shutdown(shutdown)
-        .byte_pool(byte_pool)
-        .pcm_pool(PcmPool::default())
+        .worker(worker)
         .store(store)
         .build();
     ProdCtx {
@@ -93,8 +100,7 @@ async fn run_prod_drm_scenario(url: &str, actions: Vec<Action>) {
     let prod = build_prod_ctx();
     let player = Arc::new(PlayerImpl::new(
         PlayerConfig::builder()
-            .byte_pool(BytePool::default())
-            .pcm_pool(PcmPool::default())
+            .worker(prod.config.worker.clone())
             .session(OfflineSession::arc_auto())
             .build(),
     ));
@@ -352,8 +358,7 @@ async fn user_sim_prod_drm_rapid_scrub_no_warmup_no_advance() {
     let prod = build_prod_ctx();
     let player = Arc::new(PlayerImpl::new(
         PlayerConfig::builder()
-            .byte_pool(BytePool::default())
-            .pcm_pool(PcmPool::default())
+            .worker(prod.config.worker.clone())
             .session(OfflineSession::arc_auto())
             .build(),
     ));
@@ -416,8 +421,7 @@ async fn run_prod_drm_scenario_no_warmup(url: &str, ratio: f64) {
     let prod = build_prod_ctx();
     let player = Arc::new(PlayerImpl::new(
         PlayerConfig::builder()
-            .byte_pool(BytePool::default())
-            .pcm_pool(PcmPool::default())
+            .worker(prod.config.worker.clone())
             .session(OfflineSession::arc_auto())
             .build(),
     ));
@@ -703,8 +707,7 @@ async fn run_multi_track_select_seek_end_hang(urls: &[&str], label: &str) {
     let session = Arc::new(OfflineSession::new_manual());
     let player = Arc::new(PlayerImpl::new(
         PlayerConfig::builder()
-            .byte_pool(BytePool::default())
-            .pcm_pool(PcmPool::default())
+            .worker(prod.config.worker.clone())
             .session(Arc::clone(&session) as Arc<dyn SessionDispatcher>)
             .build(),
     ));

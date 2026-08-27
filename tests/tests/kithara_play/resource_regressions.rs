@@ -5,7 +5,8 @@ use std::{io::Read, num::NonZeroUsize};
 
 use kithara::{
     assets::{AssetStore, StorageBackend},
-    audio::{Audio, AudioConfig, AudioWorkerHandle, ReadOutcome},
+    audio::{AudioConfig, PcmControl, PcmRead, PcmSession, ReadOutcome},
+    bufpool::Region,
     decode::DecoderBackend,
     file::{File as FileSource, FileConfig, FileSrc},
     hls::{Hls, HlsConfig},
@@ -14,7 +15,10 @@ use kithara::{
         sync::Arc,
         time::{Duration, Instant, sleep, timeout},
     },
-    play::{PlayerConfig, PlayerImpl, Resource, ResourceConfig},
+    play::{
+        PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, RegisteredAudio, Resource,
+        ResourceConfig,
+    },
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
 use kithara_integration_tests::{
@@ -47,6 +51,18 @@ impl Consts {
     const HLS_CHANNELS: f64 = Shared::CHANNELS as f64;
     /// Expected duration of test.mp3 (ffprobe: 187.102041s).
     const EXPECTED_DURATION_SECS: f64 = Shared::TEST_MP3_DURATION_SECS;
+}
+
+fn play_worker(region: &Region) -> PlayWorker {
+    PlayWorker::new(PlayWorkerConfig::for_pools(region.byte_pool(), region.pcm_pool()).build())
+}
+
+fn play_worker_with_cancel(region: &Region, cancel: CancelToken) -> PlayWorker {
+    PlayWorker::new(
+        PlayWorkerConfig::for_pools(region.byte_pool(), region.pcm_pool())
+            .cancel(cancel)
+            .build(),
+    )
 }
 
 fn packaged_single_variant_builder(codec: AudioCodec) -> HlsFixtureBuilder {
@@ -84,15 +100,21 @@ async fn mp3_endpoints() -> (url::Url, url::Url) {
     (ok.child_url("ok.mp3"), gone.url())
 }
 
-fn asset_store(temp_dir: &TestTempDir, ephemeral: bool) -> AssetStore {
+fn asset_store(temp_dir: &TestTempDir, ephemeral: bool, region: &Region) -> AssetStore {
     if ephemeral {
         AssetStore::builder()
             .backend(StorageBackend::Memory)
+            .pool(region.byte_pool())
             .cache_capacity(NonZeroUsize::new(4).expect("nonzero"))
             .max_assets(8)
             .build()
     } else {
-        kithara_integration_tests::disk_asset_store(temp_dir.path())
+        AssetStore::builder()
+            .backend(StorageBackend::Disk {
+                root: temp_dir.path().to_path_buf(),
+            })
+            .pool(region.byte_pool())
+            .build()
     }
 }
 
@@ -104,19 +126,17 @@ fn resource_config(
     store: AssetStore,
     backend: DecoderBackend,
     hint: Option<&str>,
-    worker: Option<AudioWorkerHandle>,
+    worker: PlayWorker,
 ) -> ResourceConfig {
     ResourceConfig::for_src(ResourceConfig::parse_src(url.as_str()).unwrap())
         .store(store)
         .maybe_hint(hint)
-        .maybe_worker(worker)
+        .worker(worker)
         .decoder(
             kithara::audio::AudioDecoderConfig::builder()
                 .backend(backend)
                 .build(),
         )
-        .byte_pool(kithara::bufpool::BytePool::default())
-        .pcm_pool(kithara::bufpool::PcmPool::default())
         .build()
 }
 
@@ -126,41 +146,47 @@ async fn open_resource_full(
     store: AssetStore,
     backend: DecoderBackend,
     hint: Option<&str>,
-    worker: Option<AudioWorkerHandle>,
+    worker: PlayWorker,
 ) -> Resource {
     Resource::new(resource_config(url, store, backend, hint, worker))
         .await
         .unwrap_or_else(|err| panic!("resource should open for {}: {err}", url))
 }
 
-async fn open_resource(url: &url::Url, store: AssetStore, backend: DecoderBackend) -> Resource {
-    open_resource_full(url, store, backend, Some("mp3"), None).await
+async fn open_resource(
+    url: &url::Url,
+    store: AssetStore,
+    worker: PlayWorker,
+    backend: DecoderBackend,
+) -> Resource {
+    open_resource_full(url, store, backend, Some("mp3"), worker).await
 }
 
 async fn open_resource_with_worker(
     url: &url::Url,
     store: AssetStore,
-    worker: AudioWorkerHandle,
+    worker: PlayWorker,
     backend: DecoderBackend,
 ) -> Resource {
-    open_resource_full(url, store, backend, Some("mp3"), Some(worker)).await
+    open_resource_full(url, store, backend, Some("mp3"), worker).await
 }
 
 fn resource_config_with_worker(
     url: &url::Url,
     store: AssetStore,
-    worker: AudioWorkerHandle,
+    worker: PlayWorker,
     backend: DecoderBackend,
 ) -> ResourceConfig {
-    resource_config(url, store, backend, Some("mp3"), Some(worker))
+    resource_config(url, store, backend, Some("mp3"), worker)
 }
 
 fn resource_config_no_hint(
     url: &url::Url,
     store: AssetStore,
+    worker: PlayWorker,
     backend: DecoderBackend,
 ) -> ResourceConfig {
-    resource_config(url, store, backend, None, None)
+    resource_config(url, store, backend, None, worker)
 }
 
 // Keep this warmup nonblocking: under full-suite load a blocking underrun arms
@@ -170,7 +196,7 @@ fn resource_config_no_hint(
 async fn warm_hls_worker(
     url: &url::Url,
     store: AssetStore,
-    worker: AudioWorkerHandle,
+    worker: PlayWorker,
     backend: DecoderBackend,
 ) -> f64 {
     let wav_info = MediaInfo::builder()
@@ -179,17 +205,15 @@ async fn warm_hls_worker(
         .build();
     let hls_config = HlsConfig::for_url(url.clone()).store(store).build();
     let config = AudioConfig::<Hls>::for_stream(hls_config)
-        .byte_pool(kithara::bufpool::BytePool::default())
-        .pcm_pool(kithara::bufpool::PcmPool::default())
         .media_info(wav_info)
-        .worker(worker)
         .decoder(
             kithara::audio::AudioDecoderConfig::builder()
                 .backend(backend)
                 .build(),
         )
         .build();
-    let mut audio = Audio::<Stream<Hls>>::new(config)
+    let mut audio = worker
+        .open(config)
         .await
         .unwrap_or_else(|err| panic!("HLS audio should open for {}: {err}", url));
 
@@ -232,7 +256,7 @@ async fn warm_hls_worker(
 async fn warm_hls_worker_without_seek(
     url: &url::Url,
     store: AssetStore,
-    worker: AudioWorkerHandle,
+    worker: PlayWorker,
     backend: DecoderBackend,
 ) -> f64 {
     let wav_info = MediaInfo::builder()
@@ -241,17 +265,15 @@ async fn warm_hls_worker_without_seek(
         .build();
     let hls_config = HlsConfig::for_url(url.clone()).store(store).build();
     let config = AudioConfig::<Hls>::for_stream(hls_config)
-        .byte_pool(kithara::bufpool::BytePool::default())
-        .pcm_pool(kithara::bufpool::PcmPool::default())
         .media_info(wav_info)
-        .worker(worker)
         .decoder(
             kithara::audio::AudioDecoderConfig::builder()
                 .backend(backend)
                 .build(),
         )
         .build();
-    let mut audio = Audio::<Stream<Hls>>::new(config)
+    let mut audio = worker
+        .open(config)
         .await
         .unwrap_or_else(|err| panic!("HLS audio should open for {}: {err}", url));
 
@@ -319,27 +341,27 @@ async fn create_packaged_single_variant_fixture(codec: AudioCodec) -> (TestServe
 async fn open_packaged_hls_audio(
     url: &url::Url,
     store: AssetStore,
+    worker: PlayWorker,
     _codec: AudioCodec,
     backend: DecoderBackend,
-) -> Audio<Stream<Hls>> {
+) -> RegisteredAudio<Stream<Hls>> {
     let config =
         AudioConfig::<Hls>::for_stream(HlsConfig::for_url(url.clone()).store(store).build())
-            .byte_pool(kithara::bufpool::BytePool::default())
-            .pcm_pool(kithara::bufpool::PcmPool::default())
             .decoder(
                 kithara::audio::AudioDecoderConfig::builder()
                     .backend(backend)
                     .build(),
             )
             .build();
-    let mut audio = Audio::<Stream<Hls>>::new(config)
+    let mut audio = worker
+        .open(config)
         .await
         .unwrap_or_else(|err| panic!("packaged HLS audio should open for {url}: {err}"));
     audio.preload().expect("packaged HLS preload must succeed");
     audio
 }
 
-async fn read_audio_some(audio: &mut Audio<Stream<Hls>>, stage: &str) -> usize {
+async fn read_audio_some(audio: &mut RegisteredAudio<Stream<Hls>>, stage: &str) -> usize {
     let deadline = Instant::now() + Consts::READ_TIMEOUT;
     let mut buf = [0.0f32; 4096];
 
@@ -420,9 +442,10 @@ async fn player_resource_repeated_unavailable_mp3_does_not_panic(
     kithara_integration_tests::apple_warmup::warm_if_apple(backend);
 
     let (ok_url, bad_url) = mp3_endpoints().await;
-    let store = asset_store(&temp_dir, true);
+    let region = Region::default();
+    let store = asset_store(&temp_dir, true, &region);
 
-    let mut ok = open_resource(&ok_url, store.clone(), backend).await;
+    let mut ok = open_resource(&ok_url, store.clone(), play_worker(&region), backend).await;
     assert!(read_some(&mut ok, "initial_ok").await > 0);
     let forward_pos = seek_and_read(&mut ok, Duration::from_secs(2), "ok_seek_forward").await;
     assert!(
@@ -437,7 +460,7 @@ async fn player_resource_repeated_unavailable_mp3_does_not_panic(
             store.clone(),
             backend,
             Some("mp3"),
-            None,
+            play_worker(&region),
         ))
         .await;
         assert!(
@@ -446,7 +469,7 @@ async fn player_resource_repeated_unavailable_mp3_does_not_panic(
         );
     }
 
-    let mut ok_again = open_resource(&ok_url, store, backend).await;
+    let mut ok_again = open_resource(&ok_url, store, play_worker(&region), backend).await;
     let replay_pos = seek_and_read(
         &mut ok_again,
         Duration::from_secs(1),
@@ -490,9 +513,10 @@ async fn player_resource_mp3_reopen_same_cache_keeps_backward_seek(
     kithara_integration_tests::apple_warmup::warm_if_apple(backend);
 
     let (ok_url, _) = mp3_endpoints().await;
-    let store = asset_store(&temp_dir, ephemeral);
+    let region = Region::default();
+    let store = asset_store(&temp_dir, ephemeral, &region);
 
-    let mut first = open_resource(&ok_url, store.clone(), backend).await;
+    let mut first = open_resource(&ok_url, store.clone(), play_worker(&region), backend).await;
     assert!(read_some(&mut first, "first_initial").await > 0);
     let first_forward = seek_and_read(&mut first, Duration::from_secs(3), "first_forward").await;
     let first_backward =
@@ -503,7 +527,7 @@ async fn player_resource_mp3_reopen_same_cache_keeps_backward_seek(
     );
     drop(first);
 
-    let mut second = open_resource(&ok_url, store, backend).await;
+    let mut second = open_resource(&ok_url, store, play_worker(&region), backend).await;
     assert!(read_some(&mut second, "second_initial").await > 0);
     let second_forward = seek_and_read(&mut second, Duration::from_secs(3), "second_forward").await;
     let second_backward =
@@ -552,14 +576,10 @@ async fn player_worker_hls_then_unavailable_mp3_then_mp3_recovery(
 
     let hls_server = open_audio_hls_server().await;
     let (ok_url, bad_url) = mp3_endpoints().await;
-    let player = PlayerImpl::new(
-        PlayerConfig::builder()
-            .byte_pool(kithara::bufpool::BytePool::default())
-            .pcm_pool(kithara::bufpool::PcmPool::default())
-            .build(),
-    );
+    let region = Region::default();
+    let player = PlayerImpl::new(PlayerConfig::builder().worker(play_worker(&region)).build());
     let worker = player.worker().clone();
-    let store = asset_store(&temp_dir, ephemeral);
+    let store = asset_store(&temp_dir, ephemeral, &region);
     let hls_url = hls_server.url("/master.m3u8");
 
     let hls_pos = warm_hls_worker(&hls_url, store.clone(), worker.clone(), backend).await;
@@ -618,8 +638,9 @@ async fn shared_worker_hls_then_mp3_reopen_keeps_backward_seek_ephemeral(
 
     let hls_server = open_audio_hls_server().await;
     let (ok_url, _) = mp3_endpoints().await;
-    let worker = AudioWorkerHandle::with_cancel(CancelToken::never());
-    let store = asset_store(&temp_dir, true);
+    let region = Region::default();
+    let worker = play_worker(&region);
+    let store = asset_store(&temp_dir, true, &region);
     let hls_url = hls_server.url("/master.m3u8");
 
     let hls_seek = warm_hls_worker(&hls_url, store.clone(), worker.clone(), backend).await;
@@ -668,13 +689,14 @@ async fn shared_worker_hls_then_mp3_reopen_keeps_backward_seek_ephemeral(
         "reopened shared-worker mp3 session after HLS must keep backward seek (forward={second_forward}, backward={second_backward})"
     );
 
-    worker.shutdown();
+    drop(second);
+    drop(worker);
 }
 
 /// How the first warmup session ends before the second begins.
 #[derive(Debug, Clone, Copy)]
 enum WarmupTeardown {
-    /// Explicit `worker_a.shutdown()` call.
+    /// Explicit cancellation of the worker's parent token.
     Shutdown,
     /// Drop `worker_a` without shutdown.
     DropOnly,
@@ -723,10 +745,13 @@ async fn sequential_hls_warmup_does_not_poison_next_ephemeral_session(
     let server_b = open_audio_hls_server().await;
     let temp_a = TestTempDir::new();
     let temp_b = TestTempDir::new();
-    let worker_a = AudioWorkerHandle::with_cancel(CancelToken::never());
-    let worker_b = AudioWorkerHandle::with_cancel(CancelToken::never());
-    let store_a = asset_store(&temp_a, false);
-    let store_b = asset_store(&temp_b, true);
+    let region_a = Region::default();
+    let region_b = Region::default();
+    let worker_a_scope = CancelScope::new(None);
+    let worker_a = play_worker_with_cancel(&region_a, worker_a_scope.token());
+    let worker_b = play_worker(&region_b);
+    let store_a = asset_store(&temp_a, false, &region_a);
+    let store_b = asset_store(&temp_b, true, &region_b);
     let hls_url_a = server_a.url("/master.m3u8");
     let hls_url_b = server_b.url("/master.m3u8");
 
@@ -754,7 +779,10 @@ async fn sequential_hls_warmup_does_not_poison_next_ephemeral_session(
     }
 
     match teardown {
-        WarmupTeardown::Shutdown => worker_a.shutdown(),
+        WarmupTeardown::Shutdown => {
+            worker_a_scope.cancel();
+            drop(worker_a);
+        }
         WarmupTeardown::DropOnly | WarmupTeardown::ReadOnlyThenDrop => drop(worker_a),
     }
 
@@ -764,7 +792,7 @@ async fn sequential_hls_warmup_does_not_poison_next_ephemeral_session(
         "second HLS warmup after a prior session ({teardown:?}) must still \
          advance playback position, got {second_pos}",
     );
-    worker_b.shutdown();
+    drop(worker_b);
 }
 
 #[kithara::test(
@@ -779,8 +807,8 @@ async fn sequential_hls_stream_sessions_do_not_poison_next_ephemeral_session() {
     let server_b = open_audio_hls_server().await;
     let temp_a = TestTempDir::new();
     let temp_b = TestTempDir::new();
-    let store_a = asset_store(&temp_a, false);
-    let store_b = asset_store(&temp_b, true);
+    let store_a = asset_store(&temp_a, false, &Region::default());
+    let store_b = asset_store(&temp_b, true, &Region::default());
     let hls_url_a = server_a.url("/master.m3u8");
     let hls_url_b = server_b.url("/master.m3u8");
 
@@ -826,10 +854,12 @@ async fn packaged_hls_single_variant_continuity_is_stable(
     use kithara_integration_tests::offline::OfflinePlayer;
 
     let (_server, url) = create_packaged_single_variant_fixture(codec).await;
-    let store = kithara_integration_tests::disk_asset_store(temp_dir.path());
+    let region = Region::default();
+    let store = asset_store(&temp_dir, false, &region);
 
-    let mut progress_audio = open_packaged_hls_audio(&url, store.clone(), codec, backend).await;
-    let mut progress_rx = progress_audio.events();
+    let mut progress_audio =
+        open_packaged_hls_audio(&url, store.clone(), play_worker(&region), codec, backend).await;
+    let mut progress_rx = progress_audio.event_bus().subscribe();
     let mut progress_probe = PlaybackProgressProbe::default();
     let mut total_samples = 0u64;
     let mut buf = [0.0f32; 4096];
@@ -876,7 +906,8 @@ async fn packaged_hls_single_variant_continuity_is_stable(
         progress_probe.max_gap_between_events
     );
 
-    let decode_audio = open_packaged_hls_audio(&url, store, codec, backend).await;
+    let decode_audio =
+        open_packaged_hls_audio(&url, store, play_worker(&region), codec, backend).await;
     let mut resource = resource_from_reader(decode_audio);
     time::timeout(Consts::READ_TIMEOUT, resource.preload())
         .await
@@ -942,14 +973,10 @@ async fn player_worker_hls_then_mp3_reopen_keeps_backward_seek(
 
     let hls_server = open_audio_hls_server().await;
     let (ok_url, _) = mp3_endpoints().await;
-    let player = PlayerImpl::new(
-        PlayerConfig::builder()
-            .byte_pool(kithara::bufpool::BytePool::default())
-            .pcm_pool(kithara::bufpool::PcmPool::default())
-            .build(),
-    );
+    let region = Region::default();
+    let player = PlayerImpl::new(PlayerConfig::builder().worker(play_worker(&region)).build());
     let worker = player.worker().clone();
-    let store = asset_store(&temp_dir, ephemeral);
+    let store = asset_store(&temp_dir, ephemeral, &region);
     let hls_url = hls_server.url("/master.m3u8");
 
     let hls_seek = warm_hls_worker(&hls_url, store.clone(), worker.clone(), backend).await;
@@ -1020,17 +1047,18 @@ async fn stress_offline_crossfade_no_gaps() {
     let block_budget = Duration::from_secs_f64(BLOCK as f64 / f64::from(SR));
 
     let hls_server = open_audio_hls_server().await;
-    let store = asset_store(&temp_dir(), true);
+    let region = Region::default();
+    let store = asset_store(&temp_dir(), true, &region);
     let hls_url = hls_server.url("/master.m3u8");
 
     let master_scope = CancelScope::new(None);
     let master_cancel = master_scope.token();
-    let worker = AudioWorkerHandle::with_cancel(master_cancel.child());
+    let worker = play_worker_with_cancel(&region, master_cancel.child());
     let mut player = OfflinePlayer::new(SR);
 
     let local_mp3 = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../assets/test.mp3");
 
-    let make_mp3 = |w: AudioWorkerHandle, s: AssetStore, cancel: CancelToken| {
+    let make_mp3 = |w: PlayWorker, s: AssetStore, cancel: CancelToken| {
         let p = local_mp3.clone();
         async move {
             let file_cfg = FileConfig::for_src(FileSrc::Local(p))
@@ -1038,20 +1066,15 @@ async fn stress_offline_crossfade_no_gaps() {
                 .cancel(cancel.clone())
                 .build();
             let audio_cfg = AudioConfig::<FileSource>::for_stream(file_cfg)
-                .byte_pool(kithara::bufpool::BytePool::default())
-                .pcm_pool(kithara::bufpool::PcmPool::default())
                 .hint("mp3".to_string())
-                .worker(w)
                 .cancel(cancel)
                 .build();
-            let audio = Audio::<Stream<FileSource>>::new(audio_cfg)
-                .await
-                .expect("create local MP3 audio");
+            let audio = w.open(audio_cfg).await.expect("create local MP3 audio");
             resource_from_reader(audio)
         }
     };
 
-    let make_hls = |w: AudioWorkerHandle, s: AssetStore, cancel: CancelToken| {
+    let make_hls = |w: PlayWorker, s: AssetStore, cancel: CancelToken| {
         let u = hls_url.clone();
         async move {
             let wav_info = MediaInfo::builder()
@@ -1063,15 +1086,10 @@ async fn stress_offline_crossfade_no_gaps() {
                 .cancel(cancel.clone())
                 .build();
             let audio_config = AudioConfig::<Hls>::for_stream(cfg)
-                .byte_pool(kithara::bufpool::BytePool::default())
-                .pcm_pool(kithara::bufpool::PcmPool::default())
                 .media_info(wav_info)
-                .worker(w)
                 .cancel(cancel)
                 .build();
-            let audio = Audio::<Stream<Hls>>::new(audio_config)
-                .await
-                .expect("HLS audio");
+            let audio = w.open(audio_config).await.expect("HLS audio");
             let mut r = resource_from_reader(audio);
             time::timeout(Consts::READ_TIMEOUT, r.preload())
                 .await
@@ -1153,7 +1171,7 @@ async fn stress_offline_crossfade_no_gaps() {
     }
 
     master_scope.cancel();
-    worker.shutdown();
+    drop(worker);
 
     info!(
         "\n  Worst across 5 HLS→MP3: silence={worst_silence} slow={worst_slow} \
@@ -1237,10 +1255,11 @@ async fn resource_mp3_no_hint_decodes_with_duration(
         Some(s) => handle.child_url(s),
         None => handle.url(),
     };
-    let store = asset_store(&temp_dir, true);
+    let region = Region::default();
+    let store = asset_store(&temp_dir, true, &region);
     let path = url.as_str();
 
-    let config = resource_config_no_hint(&url, store, backend);
+    let config = resource_config_no_hint(&url, store, play_worker(&region), backend);
     let mut resource = Resource::new(config)
         .await
         .unwrap_or_else(|e| panic!("Resource::new failed for path={path}: {e}"));
@@ -1348,7 +1367,8 @@ async fn local_resource_decodes_with_duration(
                 .master_url()
         }
     };
-    let store = asset_store(&temp_dir, true);
+    let region = Region::default();
+    let store = asset_store(&temp_dir, true, &region);
     let config: ResourceConfig =
         ResourceConfig::for_src(ResourceConfig::parse_src(url.as_str()).expect("valid URL"))
             .store(store)
@@ -1357,8 +1377,7 @@ async fn local_resource_decodes_with_duration(
                     .backend(backend)
                     .build(),
             )
-            .byte_pool(kithara::bufpool::BytePool::default())
-            .pcm_pool(kithara::bufpool::PcmPool::default())
+            .worker(play_worker(&region))
             .build();
 
     let mut resource = Resource::new(config)

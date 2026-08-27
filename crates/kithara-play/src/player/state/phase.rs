@@ -349,9 +349,11 @@ impl PlayerImpl {
 
 #[cfg(test)]
 mod tests {
+    use kithara_bufpool::{BytePool, PcmPool};
     use kithara_test_utils::kithara;
 
     use super::*;
+    use crate::{PlayWorker, PlayWorkerConfig, player::PlayerConfig};
 
     #[kithara::test]
     fn pending_next_state_maps_activated_bool() {
@@ -412,7 +414,10 @@ mod tests {
 
     #[kithara::test]
     fn require_active_slot_errors_from_idle() {
-        let player = PlayerImpl::new(crate::player::PlayerConfig::test_builder().build());
+        let worker = PlayWorker::new(
+            PlayWorkerConfig::for_pools(BytePool::default(), PcmPool::default()).build(),
+        );
+        let player = PlayerImpl::new(PlayerConfig::builder().worker(worker).build());
         assert_eq!(
             player.require_active_slot(),
             Err(TransitionError::WrongPhase)

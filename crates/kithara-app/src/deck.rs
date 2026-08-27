@@ -93,10 +93,9 @@ impl Deck {
                 .cancel(config.shutdown.child())
                 .crossfade_duration(config.crossfade_seconds)
                 .eq_layout(generate_log_spaced_bands(config.eq_bands))
-                .byte_pool(config.byte_pool.clone())
-                .pcm_pool(config.pcm_pool.clone())
                 .session(session.dispatcher())
                 .timestretch(Arc::clone(&timestretch))
+                .worker(config.worker.clone())
                 .build(),
         ));
         let queue = Arc::new(Queue::new(
@@ -253,21 +252,20 @@ impl DeckSet {
 #[cfg(test)]
 mod tests {
     use kithara::{
-        bufpool::{BytePool, PcmPool},
-        play::PlayerConfig,
+        bufpool::Region,
+        play::{PlayWorker, PlayWorkerConfig, PlayerConfig},
     };
     use kithara_queue::QueueConfig;
 
     use super::*;
 
-    fn one_deck(id: DeckId, session: &SessionHandle) -> Deck {
+    fn one_deck(id: DeckId, session: &SessionHandle, worker: &PlayWorker) -> Deck {
         let timestretch = StretchControls::new(1.0);
         let player = Arc::new(PlayerImpl::new(
             PlayerConfig::builder()
-                .byte_pool(BytePool::default())
-                .pcm_pool(PcmPool::default())
                 .session(session.dispatcher())
                 .timestretch(Arc::clone(&timestretch))
+                .worker(worker.clone())
                 .build(),
         ));
         let queue = Arc::new(Queue::new(
@@ -282,9 +280,13 @@ mod tests {
     }
 
     fn deck_set_on(count: usize, session: &SessionHandle) -> DeckSet {
+        let region = Region::default();
+        let worker = PlayWorker::new(
+            PlayWorkerConfig::for_pools(region.byte_pool(), region.pcm_pool()).build(),
+        );
         DeckSet::new(
             (0..count)
-                .map(|index| one_deck(DeckId(index), session))
+                .map(|index| one_deck(DeckId(index), session, &worker))
                 .collect(),
         )
     }
@@ -372,7 +374,9 @@ mod tests {
         assert_eq!(set.mix().levels().unwrap(), vec![1.0], "lone deck bypasses");
 
         let id = set.next_id();
-        set.add(one_deck(id, &session)).expect("add a deck");
+        let worker = set.decks()[0].player.worker().clone();
+        set.add(one_deck(id, &session, &worker))
+            .expect("add a deck");
         set.set_crossfader(0.0).expect("crossfader to A");
 
         assert_eq!(set.decks().len(), 2);
