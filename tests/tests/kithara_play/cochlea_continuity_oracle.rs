@@ -29,15 +29,16 @@ fn render_no_switch_control() -> Vec<f32> {
             .build(),
         SAMPLE_RATE,
     );
-    harness.player().insert(
-        resource_from_reader(TestPcmReader::with_value(spec, 3.0, 0.5)),
-        None,
-        None,
-    );
-    harness
-        .player()
-        .select_item(0, true)
-        .expect("select no-switch control item");
+    harness.with_player(|player| {
+        player.insert(
+            resource_from_reader(TestPcmReader::with_value(spec, 3.0, 0.5)),
+            None,
+            None,
+        );
+        player
+            .select_item(0, true)
+            .expect("select no-switch control item");
+    });
 
     let mut rendered = Vec::with_capacity(CAPTURE_FRAMES * usize::from(CHANNELS));
     while rendered.len() / usize::from(CHANNELS) < CAPTURE_FRAMES {

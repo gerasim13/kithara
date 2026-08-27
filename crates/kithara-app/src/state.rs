@@ -11,7 +11,7 @@ use kithara_platform::{
     time::Duration,
     tokio::task,
 };
-use kithara_queue::{Queue, QueueEvent, TrackEntry};
+use kithara_queue::{QueueControl, QueueEvent, TrackEntry};
 use num_traits::{ToPrimitive, cast::AsPrimitive};
 
 use crate::{config::AppConfig, waveform::TrackAnalysis};
@@ -47,7 +47,7 @@ pub struct UiState {
 }
 
 impl UiState {
-    fn new(queue: &Queue) -> Self {
+    fn new(queue: &QueueControl) -> Self {
         let tracks = queue.tracks();
         let current_track_index = tracks.first().map(|_| 0usize);
         let track_name = tracks.first().map(|e| e.name.clone()).unwrap_or_default();
@@ -154,7 +154,7 @@ fn frames_to_fractions(frames: &[u64], total: u64) -> Arc<[f32]> {
 pub struct StateController {
     beat_clock: Arc<Mutex<BeatClockState>>,
     #[field(get, deref = false)]
-    queue: Arc<Queue>,
+    queue: QueueControl,
     state: Arc<Mutex<UiState>>,
     /// Per-deck time-stretch handle.
     #[field(get = stretch, deref = false)]
@@ -171,19 +171,14 @@ impl StateController {
     /// `config` supplies the shared stores for per-track source analysis.
     /// `timestretch` is the per-deck handle shared with the player.
     pub fn new(
-        queue: Arc<Queue>,
+        queue: QueueControl,
         timestretch: Arc<StretchControls>,
         config: AppConfig,
         cancel: CancelToken,
     ) -> Self {
         let state = Arc::new(Mutex::new(UiState::new(&queue)));
 
-        spawn_listener(
-            Arc::clone(&queue),
-            Arc::clone(&state),
-            config,
-            cancel.clone(),
-        );
+        spawn_listener(queue.clone(), Arc::clone(&state), config, cancel.clone());
 
         Self {
             queue,
@@ -345,7 +340,7 @@ impl Drop for StateController {
 }
 
 fn spawn_listener(
-    queue: Arc<Queue>,
+    queue: QueueControl,
     state: Arc<Mutex<UiState>>,
     config: AppConfig,
     cancel: CancelToken,
@@ -356,13 +351,13 @@ fn spawn_listener(
 
 /// Push the desired EQ gains down to the engine. Calls for bands with no
 /// active slot are no-ops; the master EQ persists once a slot accepts them.
-fn reapply_eq(queue: &Queue, eq_bands: &[GainDb]) {
+fn reapply_eq(queue: &QueueControl, eq_bands: &[GainDb]) {
     for (band, &gain) in eq_bands.iter().enumerate() {
         let _ = queue.set_eq_gain(band, f32::from(gain));
     }
 }
 
-pub(crate) fn apply_event(event: &Event, queue: &Queue, state: &Mutex<UiState>) {
+pub(crate) fn apply_event(event: &Event, queue: &QueueControl, state: &Mutex<UiState>) {
     match *event {
         Event::Queue(QueueEvent::CurrentTrackChanged { .. }) => {
             let current_index = queue.current_index();

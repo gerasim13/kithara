@@ -16,13 +16,20 @@
 mod access;
 mod engine_events;
 mod lifecycle;
+mod owner;
 mod passthrough;
 mod playback;
+mod player;
 mod selection;
 mod state;
+#[cfg(any(test, feature = "probe"))]
+pub mod test_utils;
 mod types;
 
+#[cfg(test)]
+pub(crate) use state::tests::test_session;
+
 pub use self::{
-    state::Queue,
+    state::{Queue, QueueControl},
     types::{PlaybackView, Transition},
 };

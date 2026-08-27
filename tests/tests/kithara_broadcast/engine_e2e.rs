@@ -49,11 +49,12 @@ fn playing_harness() -> OfflinePlayerHarness {
         OfflinePlayerOptions::builder().build(),
         SESSION_RATE,
     );
-    harness.player().insert(tone_resource(), None, None);
-    harness
-        .player()
-        .select_item(0, true)
-        .expect("select first queue item");
+    harness.with_player(|player| {
+        player.insert(tone_resource(), None, None);
+        player
+            .select_item(0, true)
+            .expect("select first queue item");
+    });
     harness.render(BLOCK_FRAMES);
     let _ = harness.tick_and_drain();
     harness

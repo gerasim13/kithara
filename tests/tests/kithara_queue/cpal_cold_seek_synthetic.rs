@@ -54,7 +54,7 @@ async fn cold_seek_far_segment_hls_offline(#[case] backend: DecoderBackend) {
             .build(),
     );
 
-    let player = Arc::new(PlayerImpl::new(
+    let player = PlayerImpl::new(
         PlayerConfig::builder()
             .worker(PlayWorker::new(
                 PlayWorkerConfig::for_pools(
@@ -65,7 +65,7 @@ async fn cold_seek_far_segment_hls_offline(#[case] backend: DecoderBackend) {
             ))
             .session(OfflineSession::arc_auto())
             .build(),
-    ));
+    );
     let queue = Arc::new(Queue::new(QueueConfig::builder().player(player).build()));
 
     let queue_for_tick = Arc::clone(&queue);
@@ -91,7 +91,7 @@ async fn cold_seek_far_segment_hls_offline(#[case] backend: DecoderBackend) {
     .build();
     let source = TrackSource::Config(Box::new(cfg));
 
-    let id = queue.append(source);
+    let id = queue.append(source).expect("append synthetic HLS track");
     wait_for_loader_done(&queue, id, Duration::from_secs(30))
         .await
         .unwrap_or_else(|e| panic!("load: {e}"));

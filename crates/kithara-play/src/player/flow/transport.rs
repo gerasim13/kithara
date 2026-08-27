@@ -4,7 +4,9 @@ use kithara_audio::SeekOutcome;
 use kithara_platform::{sync::Arc, time::Duration};
 use tracing::{debug, warn};
 
+#[cfg(test)]
 use super::super::core::PlayerImpl;
+use super::super::core::PlayerRuntime;
 use crate::{
     api::PlayerStatus,
     bridge::{PlayerCmd, TrackTransition},
@@ -20,7 +22,7 @@ pub struct SelectTransition {
     pub crossfade_seconds: f32,
 }
 
-impl PlayerImpl {
+impl PlayerRuntime {
     fn apply_autoplay(&self, autoplay: bool) {
         if autoplay {
             self.set_rate(self.default_rate());
@@ -252,13 +254,18 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::{PlayWorker, PlayWorkerConfig, player::PlayerConfig};
+    use crate::{PlayWorker, PlayWorkerConfig, player::PlayerConfig, session::testing};
 
     fn player() -> PlayerImpl {
         let worker = PlayWorker::new(
             PlayWorkerConfig::for_pools(BytePool::default(), PcmPool::default()).build(),
         );
-        PlayerImpl::new(PlayerConfig::builder().worker(worker).build())
+        PlayerImpl::new(
+            PlayerConfig::builder()
+                .worker(worker)
+                .session(testing::test_session())
+                .build(),
+        )
     }
 
     #[kithara::test]

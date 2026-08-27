@@ -649,7 +649,7 @@ checksum = "c9cf7a3ee41342dd7b5a5d82e200d0e8efb933169247fce853b4ad633d51e87d"
 dependencies = [
  "arrayvec",
  "bevy_ecs_macros",
- "bevy_platform 0.18.1",
+ "bevy_platform",
  "bevy_ptr",
  "bevy_reflect",
  "bevy_tasks",
@@ -713,27 +713,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "bevy_platform"
-version = "0.19.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3120670bb2308980f723477c9d82476fcda31f08be9b256c3f0acdee82a65094"
-dependencies = [
- "critical-section",
- "foldhash 0.2.0",
- "futures-channel",
- "hashbrown 0.16.1",
- "js-sys",
- "portable-atomic",
- "portable-atomic-util",
- "serde",
- "spin",
- "wasm-bindgen",
- "wasm-bindgen-futures",
- "web-time",
- "windows-sys 0.61.2",
-]
-
-[[package]]
 name = "bevy_ptr"
 version = "0.18.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -746,7 +725,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d1dfeb67a9fe4f59003a84f5f99ba6302141c70e926601cbc6abfd4a1eea9ca9"
 dependencies = [
  "assert_type_match",
- "bevy_platform 0.18.1",
+ "bevy_platform",
  "bevy_ptr",
  "bevy_reflect_derive",
  "bevy_utils",
@@ -789,7 +768,7 @@ dependencies = [
  "async-channel",
  "async-task",
  "atomic-waker",
- "bevy_platform 0.18.1",
+ "bevy_platform",
  "crossbeam-queue",
  "derive_more",
  "futures-lite",
@@ -803,7 +782,7 @@ version = "0.18.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2111910cd7a4b1e6ce07eaaeb6f68a2c0ea0ca609ed0d0d506e3eb161101435b"
 dependencies = [
- "bevy_platform 0.18.1",
+ "bevy_platform",
  "disqualified",
  "thread_local",
 ]
@@ -2662,7 +2641,7 @@ checksum = "114eb9461df56bcffd808e8375919381e3e95d2ba6723b3ef09c33ebdc70d0fd"
 dependencies = [
  "arrayvec",
  "bevy_ecs",
- "bevy_platform 0.18.1",
+ "bevy_platform",
  "bevy_reflect",
  "bitflags 2.13.0",
  "firewheel-macros",
@@ -2685,7 +2664,7 @@ version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "14b9dba0b996dd16da0282bf73db4123cf630c9f31ec42c8896361069ddb4c69"
 dependencies = [
- "bevy_platform 0.18.1",
+ "bevy_platform",
  "cpal 0.17.3",
  "fast-interleave",
  "firewheel-core",
@@ -2703,7 +2682,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5170837306fe74dc919ec5a7c27eb9bd7a732af7856fdd8ab1f47bb9c0625adc"
 dependencies = [
  "arrayvec",
- "bevy_platform 0.18.1",
+ "bevy_platform",
  "bevy_reflect",
  "firewheel-core",
  "num-traits",
@@ -2735,7 +2714,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "de13025a997cd839a2eb589fb21764b1918ea4992964e0e3beb48fec49ef14e2"
 dependencies = [
  "bevy_ecs",
- "bevy_platform 0.18.1",
+ "bevy_platform",
  "bevy_reflect",
  "firewheel-core",
  "num-traits",
@@ -2747,7 +2726,7 @@ version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e3012a67d43f3fbd837d52e56b5d82e1ad63970ec2005983e86b408f4659d1c0"
 dependencies = [
- "bevy_platform 0.18.1",
+ "bevy_platform",
  "firewheel-core",
  "firewheel-graph",
  "firewheel-nodes",
@@ -2762,7 +2741,7 @@ version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32644b6ded19a443dc85b6542a26212bbebef5dcc6b3fa7feb83e5aff2621a33"
 dependencies = [
- "bevy_platform 0.18.1",
+ "bevy_platform",
  "firewheel-core",
  "firewheel-graph",
  "ringbuf 0.4.8",
@@ -2776,7 +2755,7 @@ version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e4e69d91f25cc3f0997191c0af80f192a4d151806db235fbd1a80b58d01e61b6"
 dependencies = [
- "bevy_platform 0.18.1",
+ "bevy_platform",
  "firewheel-core",
  "symphonium",
 ]
@@ -4198,6 +4177,7 @@ dependencies = [
  "kithara-events",
  "kithara-file",
  "kithara-hls",
+ "kithara-host",
  "kithara-net",
  "kithara-platform",
  "kithara-play",
@@ -4561,6 +4541,7 @@ dependencies = [
  "kithara-drm",
  "kithara-events",
  "kithara-hls",
+ "kithara-host",
  "kithara-net",
  "kithara-platform",
  "kithara-play",
@@ -4667,6 +4648,30 @@ dependencies = [
  "tracing-subscriber",
  "url",
  "wasm-bindgen-test",
+]
+
+[[package]]
+name = "kithara-host"
+version = "0.0.1-alpha4"
+dependencies = [
+ "arc-swap",
+ "bon",
+ "delegate",
+ "fieldwork",
+ "firewheel",
+ "firewheel-web-audio",
+ "kithara-audio",
+ "kithara-bufpool",
+ "kithara-events",
+ "kithara-platform",
+ "kithara-play",
+ "kithara-test-utils",
+ "kithara-warp",
+ "kithara-workspace-hack",
+ "ringbuf 0.5.0",
+ "thiserror 2.0.18",
+ "tracing",
+ "triple_buffer",
 ]
 
 [[package]]
@@ -4812,7 +4817,6 @@ name = "kithara-play"
 version = "0.0.1-alpha4"
 dependencies = [
  "arc-swap",
- "bevy_platform 0.19.0",
  "biquad",
  "bon",
  "bytes",
@@ -4821,7 +4825,6 @@ dependencies = [
  "fieldwork",
  "firewheel",
  "firewheel-core",
- "firewheel-web-audio",
  "hex",
  "kithara-abr",
  "kithara-assets",
@@ -4851,7 +4854,6 @@ dependencies = [
  "triple_buffer",
  "unimock",
  "url",
- "wasm-bindgen-test",
 ]
 
 [[package]]
@@ -4864,6 +4866,7 @@ dependencies = [
  "fieldwork",
  "kithara-abr",
  "kithara-assets",
+ "kithara-audio",
  "kithara-bufpool",
  "kithara-events",
  "kithara-platform",
@@ -7447,7 +7450,7 @@ version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "91957a630a24c9d05d1a841d2a02d12ebf261f075fa204c5f3879a922b86db09"
 dependencies = [
- "bevy_platform 0.18.1",
+ "bevy_platform",
 ]
 
 [[package]]

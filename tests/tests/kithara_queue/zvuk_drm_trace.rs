@@ -17,7 +17,7 @@ use kithara::{
     stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_app::{baked, config::AppConfig, sources::build_source};
-use kithara_integration_tests::{TestTempDir, kithara};
+use kithara_integration_tests::{TestTempDir, kithara, offline::OfflineSession};
 use tracing_subscriber::EnvFilter;
 
 /// Real-network DRM trace harness. Loads a single zvq.me DRM master
@@ -41,7 +41,7 @@ async fn zvuk_drm_master_playlist_trace() {
     let source = build_source(url, &config);
 
     let mut rx = ctx.queue.subscribe();
-    let track_id = ctx.queue.append(source);
+    let track_id = ctx.queue.append(source).expect("append DRM trace track");
     tracing::info!(%url, ?track_id, "DRM trace: track appended");
 
     match wait_for_terminal(&mut rx, &ctx.queue, track_id, Duration::from_secs(20)).await {
@@ -87,9 +87,12 @@ async fn shared_ctx() -> &'static Ctx {
             .worker(worker.clone())
             .store(store)
             .build();
-        let player = Arc::new(PlayerImpl::new(
-            PlayerConfig::builder().worker(worker).build(),
-        ));
+        let player = PlayerImpl::new(
+            PlayerConfig::builder()
+                .session(OfflineSession::arc_auto())
+                .worker(worker)
+                .build(),
+        );
         let queue = Arc::new(Queue::new(QueueConfig::builder().player(player).build()));
 
         let q = Arc::clone(&queue);

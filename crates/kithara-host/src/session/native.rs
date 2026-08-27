@@ -1,0 +1,165 @@
+use std::num::NonZeroU32;
+
+use firewheel::{FirewheelCtx, backend::AudioBackend};
+use kithara_audio::ConsumerWakeMode;
+use kithara_platform::{
+    sync::{Arc, Mutex, mpsc},
+    thread::spawn_named,
+};
+use kithara_play::{GroupState, player::PlayerMember};
+use kithara_test_utils::kithara;
+use tracing::{debug, warn};
+
+use super::{
+    dispatch::run_host_cmd,
+    protocol::{
+        Cmd, HostCmd, HostCmdMsg, HostDispatchError, HostDispatcher, HostReply, Reply,
+        SessionDispatcher,
+    },
+    state::{RootView, SessionState},
+};
+use crate::error::PlayError;
+
+pub(crate) struct SessionClient {
+    cmd_tx: Mutex<mpsc::Sender<HostCmdMsg>>,
+}
+
+impl SessionClient {
+    /// `no_block`: sync command-reply bridge to the dedicated session thread for host/FFI dispatch.
+    #[kithara::allow_block]
+    fn call(&self, cmd: HostCmd) -> Result<HostReply, HostDispatchError> {
+        let (reply_tx, reply_rx) = mpsc::channel();
+        if let Err(error) = self.cmd_tx.lock().send(HostCmdMsg { cmd, reply_tx }) {
+            return Err(HostDispatchError::before_send(
+                PlayError::SessionGone {
+                    reason: "session thread stopped accepting commands",
+                },
+                error.0.cmd,
+            ));
+        }
+        let reply = reply_rx.recv().map_err(|_| {
+            HostDispatchError::after_send(PlayError::SessionGone {
+                reason: "session thread dropped the reply channel",
+            })
+        })?;
+        Ok(reply)
+    }
+}
+
+impl SessionDispatcher for SessionClient {
+    fn exec(&self, cmd: Cmd) -> Result<Reply, PlayError> {
+        match self.call(HostCmd::Play(cmd)).map_err(PlayError::from)? {
+            HostReply::Play(reply) => Ok(reply),
+            HostReply::Err(error) => Err(error),
+            _ => Err(PlayError::Internal(
+                "unexpected host reply for player session command".into(),
+            )),
+        }
+    }
+
+    fn consumer_wake_mode(&self) -> ConsumerWakeMode {
+        ConsumerWakeMode::RealtimeDeferred
+    }
+}
+
+impl HostDispatcher for SessionClient {
+    fn exec_host(&self, cmd: HostCmd) -> Result<HostReply, HostDispatchError> {
+        self.call(cmd)
+    }
+}
+
+fn complete_shutdown<B: AudioBackend>(
+    cmd_rx: mpsc::Receiver<HostCmdMsg>,
+    state: SessionState<B>,
+    reply_tx: &mpsc::Sender<HostReply>,
+) {
+    // Disconnect queued callers before PlayerRuntime::drop takes its
+    // admission gate; otherwise each side can wait on the other.
+    drop(cmd_rx);
+    drop(state);
+    if reply_tx.send(HostReply::Ok).is_err() {
+        warn!("[KITHARA-ROUTE] native shutdown reply receiver dropped");
+    }
+}
+
+fn engine_thread<B: AudioBackend>(
+    cmd_rx: mpsc::Receiver<HostCmdMsg>,
+    root: GroupState<PlayerMember>,
+    root_view: RootView,
+    sample_rate: NonZeroU32,
+    start_stream_fn: impl FnMut(&mut FirewheelCtx<B>, u32) -> Result<(), String> + Send + 'static,
+) {
+    let mut state = SessionState::<B>::new(root, root_view, sample_rate, start_stream_fn);
+    debug!("[KITHARA-ROUTE] native session worker started");
+    while let Ok(HostCmdMsg { cmd, reply_tx }) = cmd_rx.recv() {
+        if matches!(&cmd, HostCmd::Shutdown) {
+            complete_shutdown(cmd_rx, state, &reply_tx);
+            debug!("[KITHARA-ROUTE] native session worker stopped");
+            return;
+        }
+        let reply = run_host_cmd(&mut state, cmd);
+        if reply_tx.send(reply).is_err() {
+            warn!("[KITHARA-ROUTE] native session reply receiver dropped");
+        }
+    }
+    debug!("[KITHARA-ROUTE] native session worker stopped");
+}
+
+fn spawn_session_client<B: AudioBackend + Send + 'static>(
+    thread_name: &'static str,
+    root: GroupState<PlayerMember>,
+    root_view: RootView,
+    sample_rate: NonZeroU32,
+    start_stream_fn: impl FnMut(&mut FirewheelCtx<B>, u32) -> Result<(), String> + Send + 'static,
+) -> Arc<SessionClient> {
+    let (cmd_tx, cmd_rx) = mpsc::channel::<HostCmdMsg>();
+    spawn_named(thread_name, move || {
+        engine_thread::<B>(cmd_rx, root, root_view, sample_rate, start_stream_fn);
+    });
+    Arc::new(SessionClient {
+        cmd_tx: Mutex::new(cmd_tx),
+    })
+}
+
+fn start_stream_cpal(
+    ctx: &mut FirewheelCtx<firewheel::cpal::CpalBackend>,
+    sample_rate: u32,
+) -> Result<(), String> {
+    debug!(sample_rate, "[KITHARA-ROUTE] starting cpal stream");
+    let config = firewheel::cpal::CpalConfig {
+        output: firewheel::cpal::CpalOutputConfig {
+            desired_sample_rate: Some(sample_rate),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    match ctx.start_stream(config) {
+        Ok(()) => {
+            debug!(sample_rate, "[KITHARA-ROUTE] cpal stream started");
+            Ok(())
+        }
+        Err(err) => {
+            warn!(
+                sample_rate,
+                ?err,
+                "[KITHARA-ROUTE] cpal stream start failed"
+            );
+            Err(err.to_string())
+        }
+    }
+}
+
+pub(crate) fn spawn(
+    root: GroupState<PlayerMember>,
+    root_view: RootView,
+    sample_rate: NonZeroU32,
+) -> (Arc<dyn HostDispatcher>, Arc<dyn SessionDispatcher>) {
+    let client = spawn_session_client::<firewheel::cpal::CpalBackend>(
+        "kithara-engine",
+        root,
+        root_view,
+        sample_rate,
+        start_stream_cpal,
+    );
+    (client.clone(), client)
+}

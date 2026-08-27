@@ -114,14 +114,14 @@ async fn progressive_download_fills_the_buffer_bar(temp_dir: TestTempDir) {
         })
         .pool(byte_pool.clone())
         .build();
-    let player = Arc::new(PlayerImpl::new(
+    let player = PlayerImpl::new(
         PlayerConfig::builder()
             .worker(kithara::play::PlayWorker::new(
                 kithara::play::PlayWorkerConfig::for_pools(byte_pool, region.pcm_pool()).build(),
             ))
             .session(OfflineSession::arc_auto())
             .build(),
-    ));
+    );
     let queue = Arc::new(Queue::new(
         QueueConfig::builder()
             .player(player)
@@ -142,7 +142,9 @@ async fn progressive_download_fills_the_buffer_bar(temp_dir: TestTempDir) {
     // finish transferring before the pause — the completion must not be eaten
     // by the wait that precedes it.
     let mut transfer_rx = queue.subscribe();
-    let id = queue.append(TrackSource::Config(Box::new(cfg)));
+    let id = queue
+        .append(TrackSource::Config(Box::new(cfg)))
+        .expect("append progressive track");
     queue
         .select(id, Transition::None)
         .expect("select progressive track");

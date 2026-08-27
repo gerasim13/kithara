@@ -61,7 +61,6 @@ impl LimiterProcessor {
     }
 
     fn build_limiter(sample_rate: NonZeroU32) -> PeakLimiter {
-        // The session constants are const-asserted valid above, so construction
         PeakLimiter::new(sample_rate, Self::STEREO, Self::CEILING, Self::RELEASE_MS)
             .expect("invariant: session limiter constants are const-asserted valid")
     }

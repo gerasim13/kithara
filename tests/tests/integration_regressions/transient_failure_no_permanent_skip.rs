@@ -92,14 +92,14 @@ async fn transient_failure_does_not_kill_the_track(temp_dir: TestTempDir) {
         })
         .pool(byte_pool.clone())
         .build();
-    let player = Arc::new(PlayerImpl::new(
+    let player = PlayerImpl::new(
         PlayerConfig::builder()
             .worker(kithara::play::PlayWorker::new(
                 kithara::play::PlayWorkerConfig::for_pools(byte_pool, region.pcm_pool()).build(),
             ))
             .session(OfflineSession::arc_auto())
             .build(),
-    ));
+    );
     let queue = Arc::new(Queue::new(
         QueueConfig::builder()
             .player(player)
@@ -107,26 +107,30 @@ async fn transient_failure_does_not_kill_the_track(temp_dir: TestTempDir) {
             .build(),
     ));
 
-    let target = queue.append(TrackSource::Config(Box::new(
-        ResourceConfig::for_src(
-            ResourceConfig::parse_src(target_url.as_str()).expect("valid HLS URL"),
-        )
-        .downloader(downloader.clone())
-        .initial_abr_mode(AbrMode::manual(0))
-        .look_ahead_bytes(LOOK_AHEAD_BYTES)
-        .store(store.clone())
-        .build(),
-    )));
+    let target = queue
+        .append(TrackSource::Config(Box::new(
+            ResourceConfig::for_src(
+                ResourceConfig::parse_src(target_url.as_str()).expect("valid HLS URL"),
+            )
+            .downloader(downloader.clone())
+            .initial_abr_mode(AbrMode::manual(0))
+            .look_ahead_bytes(LOOK_AHEAD_BYTES)
+            .store(store.clone())
+            .build(),
+        )))
+        .expect("append target track");
     // A next track is what an auto-skip would move to. Without it the queue
     // has nowhere to go and the regression could not show itself.
-    let fallback = queue.append(TrackSource::Config(Box::new(
-        ResourceConfig::for_src(
-            ResourceConfig::parse_src(fallback_url.as_str()).expect("valid fallback URL"),
-        )
-        .downloader(downloader)
-        .store(store)
-        .build(),
-    )));
+    let fallback = queue
+        .append(TrackSource::Config(Box::new(
+            ResourceConfig::for_src(
+                ResourceConfig::parse_src(fallback_url.as_str()).expect("valid fallback URL"),
+            )
+            .downloader(downloader)
+            .store(store)
+            .build(),
+        )))
+        .expect("append fallback track");
 
     let ticker = spawn_ticker(Arc::clone(&queue));
     let mut rx = queue.subscribe();

@@ -171,12 +171,12 @@ async fn run_seek_scenario(url: &Url, backend: DecoderBackend, abr: AbrMode, tem
         .store(store)
         .build();
 
-    let player = Arc::new(PlayerImpl::new(
+    let player = PlayerImpl::new(
         PlayerConfig::builder()
             .worker(worker)
             .session(OfflineSession::arc_auto())
             .build(),
-    ));
+    );
     let queue = Arc::new(Queue::new(QueueConfig::builder().player(player).build()));
     let tick_handle = tokio::task::spawn(drive_queue_ticks(Arc::clone(&queue)));
 
@@ -190,7 +190,7 @@ async fn run_seek_scenario(url: &Url, backend: DecoderBackend, abr: AbrMode, tem
     );
 
     let mut rx = queue.subscribe();
-    let id = queue.append(source);
+    let id = queue.append(source).expect("append packaged DRM track");
     wait_for_status(
         &mut rx,
         &queue,

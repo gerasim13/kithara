@@ -8,8 +8,8 @@ use super::client::WASM_SESSION_STATE;
 use crate::{
     bridge::PlaybackShared,
     session::{
-        dispatch::run_cmd,
-        protocol::{CmdMsg, Reply},
+        dispatch::run_host_cmd,
+        protocol::{HostCmdMsg, HostReply, Reply},
         state::ensure_ctx,
     },
 };
@@ -19,10 +19,16 @@ thread_local! {
 }
 
 pub(super) fn init_bridge_state() {
-    BRIDGE_PLAYBACK.with(|_| {});
+    reset_bridge_state();
 }
 
-pub(crate) fn tick_and_poll_remote(rx: &mpsc::Receiver<CmdMsg>) {
+pub(super) fn reset_bridge_state() {
+    BRIDGE_PLAYBACK.with(|playback| {
+        playback.borrow_mut().take();
+    });
+}
+
+pub(crate) fn tick_and_poll_remote(rx: &mpsc::Receiver<HostCmdMsg>) {
     WASM_SESSION_STATE.with(|state_cell| {
         let mut state_opt = state_cell.borrow_mut();
         let Some(ref mut state) = *state_opt else {
@@ -30,8 +36,8 @@ pub(crate) fn tick_and_poll_remote(rx: &mpsc::Receiver<CmdMsg>) {
         };
 
         for msg in rx.try_iter() {
-            let reply = run_cmd(state, msg.cmd);
-            if let Reply::SlotAllocated(ref allocated) = reply {
+            let reply = run_host_cmd(state, msg.cmd);
+            if let HostReply::Play(Reply::SlotAllocated(ref allocated)) = reply {
                 BRIDGE_PLAYBACK.with(|ps| {
                     *ps.borrow_mut() = Some(Arc::clone(&allocated.control.playback));
                 });

@@ -1,15 +1,17 @@
 use std::num::NonZeroU32;
 
+use arc_swap::ArcSwap;
 use firewheel::{
     FirewheelConfig, FirewheelCtx, backend::AudioBackend, channel_config::ChannelCount, diff::Memo,
     node::NodeID, nodes::volume::VolumeNode,
 };
 use kithara_bufpool::PcmPool;
 use kithara_events::EventBus;
+use kithara_platform::sync::Arc;
+use kithara_play::{GroupState, player::PlayerMember};
 use kithara_warp::{
-    BeatGridId, BeatGridRevision, BeatGridSnapshot, SessionEpoch, SyncAdmission, SyncCapability,
-    SyncError, SyncGroup, SyncMember, SyncOperation, SyncOperationId, TopologyOperation,
-    TopologyRevision,
+    BeatGrid, BeatGridId, BeatGridRevision, SyncError, SyncGroup, SyncGroupSnapshot,
+    SyncStatusSnapshot,
 };
 use tracing::{debug, warn};
 
@@ -17,7 +19,6 @@ use super::{
     dispatch::{restart_stream, trace_stream_info},
     graph::{ducking_gain, tap},
     protocol::{PlayerId, SessionError, StartStreamFn},
-    sync::{Host, unavailable_grid},
     transport::{SessionGridGeneration, SessionTransportState, TransportControl, install},
 };
 use crate::{
@@ -43,11 +44,7 @@ pub(super) struct Deck {
     pub(super) master_volume_node_id: Option<NodeID>,
     pub(super) pcm_pool: PcmPool,
     pub(super) player_id: PlayerId,
-    pub(super) grid: BeatGridSnapshot,
-    pub(super) tracks: Vec<SyncMember<Self>>,
-    pub(super) next_operation: Option<SyncOperationId>,
-    pub(super) topology_revision: TopologyRevision,
-    pub(super) unavailable: Option<(SyncOperationId, SyncCapability)>,
+    pub(super) grid_id: BeatGridId,
     pub(super) shared_eq: SharedEq,
     pub(super) eq_layout: Vec<EqBandConfig>,
     pub(super) slots: Vec<SlotNodes>,
@@ -59,11 +56,10 @@ pub(super) struct Deck {
 impl Deck {
     pub(super) fn new(
         player_id: PlayerId,
-        id: BeatGridId,
+        grid_id: BeatGridId,
         bus: EventBus,
         eq_layout: Vec<EqBandConfig>,
         pcm_pool: PcmPool,
-        sample_rate: NonZeroU32,
     ) -> Self {
         let (eq_layout, gains) = prepare_eq_layout(eq_layout);
         let band_count = eq_layout.len();
@@ -74,11 +70,7 @@ impl Deck {
             eq_layout,
             pcm_pool,
             player_id,
-            grid: unavailable_grid(id, sample_rate, SessionEpoch::new(0)),
-            tracks: Vec::new(),
-            next_operation: Some(SyncOperationId::first()),
-            topology_revision: TopologyRevision::first(),
-            unavailable: None,
+            grid_id,
             master_eq_memo: None,
             master_eq_node_id: None,
             master_volume: 1.0,
@@ -92,6 +84,55 @@ impl Deck {
     }
 }
 
+#[derive(Default)]
+pub(super) struct GraphRegistry {
+    decks: Vec<Deck>,
+}
+
+impl GraphRegistry {
+    pub(super) fn insert(&mut self, deck: Deck) -> Result<(), SessionError> {
+        if self
+            .decks
+            .iter()
+            .any(|candidate| candidate.grid_id == deck.grid_id)
+        {
+            return Err(SessionError::Graph(
+                "player grid is already projected into the session graph".to_owned(),
+            ));
+        }
+        self.decks.push(deck);
+        Ok(())
+    }
+
+    pub(super) fn remove(&mut self, index: usize) -> Option<Deck> {
+        (index < self.decks.len()).then(|| self.decks.remove(index))
+    }
+
+    delegate::delegate! {
+        to self.decks {
+            #[call(get)]
+            pub(super) fn deck(&self, index: usize) -> Option<&Deck>;
+            #[call(get_mut)]
+            pub(super) fn deck_mut(&mut self, index: usize) -> Option<&mut Deck>;
+            #[call(iter)]
+            pub(super) fn decks(&self) -> impl Iterator<Item = &Deck>;
+            pub(super) fn len(&self) -> usize;
+        }
+    }
+
+    pub(super) fn index_by_grid(&self, grid_id: BeatGridId) -> Option<usize> {
+        self.decks
+            .iter()
+            .position(|candidate| candidate.grid_id == grid_id)
+    }
+
+    pub(super) fn index_by_player(&self, player_id: PlayerId) -> Option<usize> {
+        self.decks
+            .iter()
+            .position(|candidate| candidate.player_id == player_id)
+    }
+}
+
 pub(super) fn prepare_eq_layout(eq_layout: Vec<EqBandConfig>) -> (Vec<EqBandConfig>, Vec<GainDb>) {
     let gains = eq_layout.iter().map(EqBandConfig::gain_db).collect();
     (eq_layout, gains)
@@ -102,7 +143,46 @@ pub(super) enum MixTap {
     Installed(NodeID),
 }
 
-pub struct SessionState<B: AudioBackend> {
+struct RootSnapshot {
+    grid: kithara_warp::BeatGridSnapshot,
+    status: SyncStatusSnapshot,
+    topology: Result<SyncGroupSnapshot, SyncError>,
+}
+
+#[derive(Clone)]
+pub(crate) struct RootView(Arc<ArcSwap<RootSnapshot>>);
+
+impl RootView {
+    pub(crate) fn new(root: &GroupState<PlayerMember>) -> Self {
+        Self(Arc::new(ArcSwap::from_pointee(RootSnapshot {
+            grid: root.snapshot(),
+            status: root.status(),
+            topology: root.topology(),
+        })))
+    }
+
+    pub(crate) fn grid(&self) -> kithara_warp::BeatGridSnapshot {
+        self.0.load().grid.clone()
+    }
+
+    pub(crate) fn status(&self) -> SyncStatusSnapshot {
+        self.0.load().status
+    }
+
+    pub(crate) fn topology(&self) -> Result<SyncGroupSnapshot, SyncError> {
+        self.0.load().topology.clone()
+    }
+
+    fn publish(&self, root: &GroupState<PlayerMember>) {
+        self.0.store(Arc::new(RootSnapshot {
+            grid: root.snapshot(),
+            status: root.status(),
+            topology: root.topology(),
+        }));
+    }
+}
+
+pub(crate) struct SessionState<B: AudioBackend> {
     pub(super) ctx: Option<FirewheelCtx<B>>,
     pub(super) transport_control: Option<TransportControl>,
     pub(super) mix_tap: Option<MixTap>,
@@ -116,153 +196,92 @@ pub struct SessionState<B: AudioBackend> {
     pub(super) sample_rate_hint: u32,
     pub(super) transport: SessionTransportState,
     pub(super) reserved_session_grid: Option<SessionGridGeneration>,
-    pub(super) host: Option<Host>,
+    pub(super) root: GroupState<PlayerMember>,
+    pub(super) root_view: RootView,
+    pub(super) graph: GraphRegistry,
 }
 
 impl<B: AudioBackend> SessionState<B> {
-    pub const DEFAULT_SAMPLE_RATE: u32 = 44_100;
+    #[cfg(any(test, feature = "probe"))]
+    pub(crate) const DEFAULT_SAMPLE_RATE: u32 = 44_100;
 
     /// Creates session state with its own musical-grid topology.
     #[must_use]
-    pub fn new<F>(start_stream_fn: F) -> Self
+    pub(crate) fn new<F>(
+        root: GroupState<PlayerMember>,
+        root_view: RootView,
+        sample_rate: NonZeroU32,
+        start_stream_fn: F,
+    ) -> Self
     where
         F: FnMut(&mut FirewheelCtx<B>, u32) -> Result<(), String> + Send + 'static,
     {
+        let grid_id = root.id();
+        let mut generation = SessionGridGeneration::new(grid_id);
+        generation.commit_revision(BeatGridRevision::first());
         Self {
             start_stream_fn: Box::new(start_stream_fn),
             ctx: None,
             transport_control: None,
             mix_tap: None,
             next_player_id: 1,
-            sample_rate_hint: Self::DEFAULT_SAMPLE_RATE,
+            sample_rate_hint: sample_rate.get(),
             session_ducking: SessionDuckingMode::Off,
             session_output_memo: None,
             session_output_node_id: None,
             session_limiter_node_id: None,
             stream_needs_restart: false,
             transport: SessionTransportState::default(),
-            reserved_session_grid: None,
-            host: None,
+            reserved_session_grid: Some(generation),
+            root,
+            root_view,
+            graph: GraphRegistry::default(),
         }
     }
 
-    pub const fn ctx_mut(&mut self) -> Option<&mut FirewheelCtx<B>> {
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) const fn ctx_mut(&mut self) -> Option<&mut FirewheelCtx<B>> {
         self.ctx.as_mut()
+    }
+
+    pub(super) fn publish_root(&self) {
+        self.root_view.publish(&self.root);
     }
 }
 
 pub(super) fn register_player<B: AudioBackend>(
     state: &mut SessionState<B>,
+    grid_id: BeatGridId,
     bus: EventBus,
     eq_layout: Vec<EqBandConfig>,
     pcm_pool: PcmPool,
     sample_rate: u32,
 ) -> Result<PlayerId, SessionError> {
-    let sample_rate =
-        NonZeroU32::new(sample_rate).ok_or(SessionError::InvalidSampleRate(sample_rate))?;
+    NonZeroU32::new(sample_rate).ok_or(SessionError::InvalidSampleRate(sample_rate))?;
     let player_id = state.next_player_id;
     let next_player_id = player_id
         .checked_add(1)
         .ok_or(SessionError::PlayerIdExhausted)?;
-    let host_id = if state.host.is_none() {
-        Some(BeatGridId::allocate()?)
-    } else {
-        None
-    };
-    let deck_id = BeatGridId::allocate()?;
-    let deck = Deck::new(player_id, deck_id, bus, eq_layout, pcm_pool, sample_rate);
-    if let Some(host) = state.host.as_mut() {
-        attach_deck(host, deck)?;
-    } else {
-        let host_id = host_id
-            .ok_or_else(|| SessionError::Graph("session host identity is missing".to_owned()))?;
-        let mut host = Host::new(host_id, sample_rate);
-        attach_deck(&mut host, deck)?;
-        let mut generation = SessionGridGeneration::new(host_id);
-        generation.commit_revision(BeatGridRevision::first());
-        state.reserved_session_grid = Some(generation);
-        state.host = Some(host);
+    if state.root.with_group(grid_id, |_| ()).is_none() {
+        return Err(SessionError::Graph(
+            "player must be attached to the host before graph registration".to_owned(),
+        ));
     }
+    let deck = Deck::new(player_id, grid_id, bus, eq_layout, pcm_pool);
+    state.graph.insert(deck)?;
     state.next_player_id = next_player_id;
     debug!(
         player_id,
-        players = state.host.as_ref().map_or(0, Host::deck_count),
+        players = state.graph.len(),
         "[KITHARA-ROUTE] session player registered"
     );
     Ok(player_id)
-}
-
-fn attach_deck(host: &mut Host, deck: Deck) -> Result<(), SessionError> {
-    let base = host.topology()?.stamp();
-    let admission = host
-        .transact(SyncOperation::Topology {
-            base,
-            operations: Box::new([TopologyOperation::Attach {
-                member: SyncMember::Group {
-                    alignment: None,
-                    group: Box::new(deck),
-                },
-            }]),
-        })
-        .map_err(|rejected| <(SyncError, SyncOperation<Deck>)>::from(rejected).0)?;
-    if !matches!(admission, SyncAdmission::TopologyChanged { .. }) {
-        return Err(SessionError::Graph(
-            "session host did not publish the registered deck".to_owned(),
-        ));
-    }
-    Ok(())
-}
-
-pub(super) fn detach_deck<B: AudioBackend>(
-    state: &mut SessionState<B>,
-    deck_id: BeatGridId,
-) -> Result<(), SessionError> {
-    let host = state
-        .host
-        .as_mut()
-        .ok_or_else(|| SessionError::Graph("session host group is missing".to_owned()))?;
-    let base = host.topology()?.stamp();
-    let admission = host
-        .transact(SyncOperation::Topology {
-            base,
-            operations: Box::new([TopologyOperation::Detach { member: deck_id }]),
-        })
-        .map_err(|rejected| <(SyncError, SyncOperation<Deck>)>::from(rejected).0)?;
-    if matches!(admission, SyncAdmission::TopologyChanged { .. }) {
-        Ok(())
-    } else {
-        Err(SessionError::Graph(
-            "session host did not detach the unregistered deck".to_owned(),
-        ))
-    }
-}
-
-fn ensure_sync_root<B: AudioBackend>(
-    state: &mut SessionState<B>,
-    sample_rate: NonZeroU32,
-) -> Result<(), SessionError> {
-    if state.host.is_some() {
-        return Ok(());
-    }
-    let id = BeatGridId::allocate()?;
-    let host = Host::new(id, sample_rate);
-    let mut generation = SessionGridGeneration::new(id);
-    generation.commit_revision(BeatGridRevision::first());
-    state.reserved_session_grid = Some(generation);
-    state.host = Some(host);
-    Ok(())
 }
 
 pub(super) fn ensure_ctx<B: AudioBackend>(
     state: &mut SessionState<B>,
     sample_rate: u32,
 ) -> Result<(), SessionError> {
-    if state.host.is_none() {
-        let map_sample_rate = NonZeroU32::new(sample_rate)
-            .or_else(|| NonZeroU32::new(state.sample_rate_hint))
-            .ok_or(SessionError::InvalidSampleRate(sample_rate))?;
-        ensure_sync_root(state, map_sample_rate)?;
-    }
     ensure_stream_ready(state, sample_rate)?;
     ensure_session_output(state)
 }

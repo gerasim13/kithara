@@ -73,7 +73,7 @@ fn build_queue_with_tick(
     AssetStore,
     tokio::task::JoinHandle<()>,
 ) {
-    let player = Arc::new(PlayerImpl::new(
+    let player = PlayerImpl::new(
         PlayerConfig::builder()
             .worker(PlayWorker::new(
                 PlayWorkerConfig::for_pools(
@@ -84,7 +84,7 @@ fn build_queue_with_tick(
             ))
             .session(OfflineSession::arc_auto())
             .build(),
-    ));
+    );
     let queue = Arc::new(Queue::new(QueueConfig::builder().player(player).build()));
     let queue_for_tick = Arc::clone(&queue);
     let tick_handle = tokio::task::spawn(async move {
@@ -228,7 +228,7 @@ async fn run_seek_scenario(urls: &[&str], select_index: usize, temp: TestTempDir
             .build(),
     );
 
-    let player = Arc::new(PlayerImpl::new(
+    let player = PlayerImpl::new(
         PlayerConfig::builder()
             .worker(PlayWorker::new(
                 PlayWorkerConfig::for_pools(
@@ -239,7 +239,7 @@ async fn run_seek_scenario(urls: &[&str], select_index: usize, temp: TestTempDir
             ))
             .session(OfflineSession::arc_auto())
             .build(),
-    ));
+    );
     let queue = Arc::new(Queue::new(QueueConfig::builder().player(player).build()));
 
     let queue_for_tick = Arc::clone(&queue);
@@ -260,7 +260,9 @@ async fn run_seek_scenario(urls: &[&str], select_index: usize, temp: TestTempDir
                 .downloader(downloader.clone())
                 .store(store.clone())
                 .build();
-            queue.append(TrackSource::Config(Box::new(cfg)))
+            queue
+                .append(TrackSource::Config(Box::new(cfg)))
+                .expect("append cold-seek track")
         })
         .collect();
     let selected_id = ids[select_index];
@@ -401,7 +403,9 @@ async fn queue_seek_long_cold_cache_far_segment(temp_dir: TestTempDir) {
     };
 
     let mut rx = queue.subscribe();
-    let id = queue.append(track_source(master.as_str()));
+    let id = queue
+        .append(track_source(master.as_str()))
+        .expect("append long cold-seek track");
     wait_for_status(
         &mut rx,
         &queue,
@@ -489,7 +493,9 @@ async fn queue_seek_multi_variant_cold_far(temp_dir: TestTempDir) {
     };
 
     let mut rx = queue.subscribe();
-    let id = queue.append(track_source(master.as_str()));
+    let id = queue
+        .append(track_source(master.as_str()))
+        .expect("append multivariant cold-seek track");
     wait_for_status(
         &mut rx,
         &queue,

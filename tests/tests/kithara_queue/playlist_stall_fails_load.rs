@@ -98,7 +98,7 @@ async fn stalled_master_playlist_fails_load(temp_dir: TestTempDir) {
         DownloaderConfig::for_client(HttpClient::new(net, CancelToken::never())).build(),
     );
 
-    let player = Arc::new(PlayerImpl::new(
+    let player = PlayerImpl::new(
         PlayerConfig::builder()
             .worker(PlayWorker::new(
                 PlayWorkerConfig::for_pools(
@@ -109,7 +109,7 @@ async fn stalled_master_playlist_fails_load(temp_dir: TestTempDir) {
             ))
             .session(OfflineSession::arc_auto())
             .build(),
-    ));
+    );
     let queue = Arc::new(Queue::new(QueueConfig::builder().player(player).build()));
     let tick_handle = spawn_ticker(Arc::clone(&queue));
 
@@ -119,7 +119,9 @@ async fn stalled_master_playlist_fails_load(temp_dir: TestTempDir) {
         .build();
 
     let mut rx = queue.subscribe();
-    let id = queue.append(TrackSource::Config(Box::new(cfg)));
+    let id = queue
+        .append(TrackSource::Config(Box::new(cfg)))
+        .expect("append stalled playlist track");
     let _ = queue.select(id, Transition::None);
 
     let err = wait_for_failed(&mut rx, &queue, id, Duration::from_secs(30))

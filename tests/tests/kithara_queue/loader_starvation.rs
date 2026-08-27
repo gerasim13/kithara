@@ -92,7 +92,7 @@ fn build_queue_with_tick(
     tokio::task::JoinHandle<()>,
 ) {
     let store = kithara_integration_tests::disk_asset_store(temp_dir.path());
-    let player = Arc::new(PlayerImpl::new(
+    let player = PlayerImpl::new(
         PlayerConfig::builder()
             .worker(PlayWorker::new(
                 PlayWorkerConfig::for_pools(
@@ -103,7 +103,7 @@ fn build_queue_with_tick(
             ))
             .session(OfflineSession::arc_auto())
             .build(),
-    ));
+    );
     let cap = NonZeroUsize::new(cap).expect("BUG: cap must be > 0");
     let queue = Arc::new(Queue::new(
         QueueConfig::builder()
@@ -173,7 +173,11 @@ async fn hung_loads_must_not_starve_user_selected_track() {
     // Saturate every permit: each hung append parks in `Resource::new`.
     let mut hung_ids = Vec::new();
     for url in &hung_urls {
-        hung_ids.push(queue.append(TrackSource::Config(Box::new(mk_cfg(url)))));
+        hung_ids.push(
+            queue
+                .append(TrackSource::Config(Box::new(mk_cfg(url))))
+                .expect("append hung track"),
+        );
     }
 
     // Gate: select only after every hung track holds a permit (Loading).
@@ -184,7 +188,9 @@ async fn hung_loads_must_not_starve_user_selected_track() {
     }
 
     // Reachable track: its load queues behind the saturated semaphore.
-    let fast_id = queue.append(TrackSource::Config(Box::new(mk_cfg(&fast_url))));
+    let fast_id = queue
+        .append(TrackSource::Config(Box::new(mk_cfg(&fast_url))))
+        .expect("append fast track");
     queue
         .select(fast_id, Transition::None)
         .expect("select fast");

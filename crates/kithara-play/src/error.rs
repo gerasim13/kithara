@@ -5,6 +5,9 @@ use crate::{api::SlotId, session::SessionError};
 #[derive(Clone, Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum PlayError {
+    #[error("player is closed")]
+    Closed,
+
     #[error("player not ready")]
     NotReady,
 
@@ -82,6 +85,18 @@ pub enum PlayError {
 
     #[error("mix input player belongs to a different audio session")]
     MixForeignSession,
+
+    #[error("player belongs to a different audio session")]
+    ForeignSession,
+
+    #[error("player is not attached to an audio session")]
+    SessionUnbound,
+
+    #[error("player is already attached to an audio session")]
+    SessionAlreadyBound,
+
+    #[error("an audio session is already active on this thread")]
+    SessionAlreadyActive,
 
     #[error("mix input lists the same player more than once")]
     MixDuplicatePlayer,

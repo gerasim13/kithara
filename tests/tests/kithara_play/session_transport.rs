@@ -35,6 +35,7 @@ fn register_transport_events(session: &ManualRingSession) -> EventReceiver {
     let events = bus.subscribe();
     match session
         .exec(Cmd::RegisterPlayer {
+            grid_id: kithara::warp::BeatGridId::allocate().expect("fixture grid id"),
             bus,
             eq_layout: Vec::new(),
             pcm_pool: PcmPool::default(),

@@ -1,0 +1,69 @@
+# kithara-host context
+
+## Ownership
+
+The Host owns the session root sync group and its member values, the shared
+Firewheel graph, session transport, mix tap, output limiter, and native or web
+audio backend. The graph registry is only a projection of Host-owned members;
+it must not become a second mutable synchronization topology.
+
+`kithara-play` owns one player/deck, its render node, effects, fades, worker,
+and playback flow. `kithara-warp` owns synchronization and warp contracts. The
+dependency direction is `kithara-host -> kithara-play` and
+`kithara-host -> kithara-warp`; neither lower crate may depend on the Host.
+
+## Runtime boundary
+
+The existing `kithara-engine` session thread is the canonical Host owner and the
+lower PlayerSession actuator. It owns the root group, member values, Firewheel
+context, and graph commands. Closing a player remains a caller-side two-phase
+operation: close the runtime first, then detach the member. Calling close from
+the owner loop could dispatch back into that same loop and deadlock.
+
+Terminal shutdown first drops the command receiver, then drops session state,
+then acknowledges the Host. This order disconnects queued callers before
+Player destruction takes the per-player admission gate, so an admitted command
+cannot wait on the owner while the owner waits on that command's gate.
+
+A `HostOwned` endpoint contains the canonical member identity and the player's
+cloneable control capability. It does not expose the inner Player, retain
+players through `Arc` or `Weak`, keep a compatibility registry, or introduce a
+second command route. The immutable `RootView` publishes grid, topology, and
+status observations; it is a read-only projection, never another mutable root.
+
+`Host::insert` accepts one fully configured Player or decorator instance. The
+instance already owns its stable grid identity. Insertion attaches an opaque
+`SessionBinding` exactly once, then transfers the instance into the Host root;
+decorators only delegate that capability to their resident Player. Neither a
+config builder nor a raw `SessionDispatcher` crosses the insertion API.
+
+Native and web dispatch wrap lower Player commands and Host topology commands
+in one private envelope. On web, the main-thread Host and its Worker facade use
+that same envelope and shared `RootView`; the Worker is never given a raw
+`SessionHandle` with which to construct an unattached player.
+
+On web, one local Host is exclusive per JavaScript thread. It owns both the TLS
+session state and every remote command receiver; sender and receiver wrappers
+are capabilities, not owners. Host shutdown drops those receivers before the
+TLS state so queued reply channels disconnect and a Worker call cannot wait
+forever. A replacement Host starts with cleared bridge playback observations.
+
+If a command cannot be sent, ownership has not transferred and the original
+operation is rejected as owner-unavailable. If the sole owner thread stops
+after accepting an ownership-bearing command, commit state is unknowable. That
+single post-send boundary deliberately fails fast instead of fabricating a
+rejection or fallback state.
+
+## Route and sample-rate invariant
+
+Route changes keep the existing flow: the Host observes the device change and
+the Player receives the resulting sample-rate update through its current
+control path. Rebuilding the output graph is reserved for a physical route
+change. Decode resampling, the Stream-to-decode hook, worker scheduling, fades,
+and playback semantics are not redesigned by this extraction.
+
+## Migration rule
+
+Move existing session behavior mechanically and preserve command ordering,
+errors, stream restart behavior, and native/web threading. Do not add fallback
+routes or parallel synchronization state to bridge the move.

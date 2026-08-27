@@ -1,11 +1,28 @@
 use kithara::{
     self,
-    bufpool::PcmPool,
+    audio::ConsumerWakeMode,
+    bufpool::{BytePool, PcmPool},
     events::EventBus,
+    host::{Host, HostConfig, HostOwned, testing::HostProbe},
+    platform::sync::Arc,
     play::{
-        Cmd, EngineConfig, EngineImpl, PlayError, Reply, SessionDuckingMode, SessionHandle, SlotId,
+        Cmd, EngineConfig, EngineImpl, PlayError, PlayWorker, PlayWorkerConfig, PlayerConfig,
+        PlayerImpl, Reply, SessionDispatcher, SessionDuckingMode, SlotId,
     },
+    warp::{BeatGrid, BeatGridId},
 };
+
+struct FixtureSession;
+
+impl SessionDispatcher for FixtureSession {
+    fn exec(&self, _cmd: Cmd) -> Result<Reply, PlayError> {
+        Ok(Reply::Ok)
+    }
+
+    fn consumer_wake_mode(&self) -> ConsumerWakeMode {
+        ConsumerWakeMode::RealtimeDeferred
+    }
+}
 
 fn slot_id(value: u64) -> SlotId {
     SlotId::new(value)
@@ -13,9 +30,27 @@ fn slot_id(value: u64) -> SlotId {
 
 fn make_engine() -> EngineImpl {
     EngineImpl::new(
-        EngineConfig::builder().pcm_pool(PcmPool::default()).build(),
+        EngineConfig::builder()
+            .grid_id(BeatGridId::allocate().expect("fixture grid id"))
+            .session(Arc::new(FixtureSession))
+            .pcm_pool(PcmPool::default())
+            .build(),
         EventBus::default(),
     )
+}
+
+fn insert_player(host: &mut Host) -> HostOwned<PlayerImpl> {
+    let player = PlayerImpl::new(
+        PlayerConfig::builder()
+            .worker(PlayWorker::new(
+                PlayWorkerConfig::for_pools(BytePool::default(), PcmPool::default()).build(),
+            ))
+            .build(),
+    );
+    let instance_id = player.id();
+    let owner = host.insert(player).expect("insert fixture player instance");
+    assert_eq!(owner.id(), instance_id);
+    owner
 }
 
 #[derive(Clone, Copy)]
@@ -42,6 +77,8 @@ fn engine_config_defaults() {
 #[kithara::test]
 fn engine_config_builder() {
     let config = EngineConfig::builder()
+        .grid_id(BeatGridId::allocate().expect("fixture grid id"))
+        .session(Arc::new(FixtureSession))
         .max_slots(8)
         .sample_rate(48000)
         .channels(1)
@@ -98,6 +135,8 @@ fn engine_not_running_operations_return_error(#[case] scenario: NotRunningErrorS
 #[kithara::test]
 fn engine_master_sample_rate_returns_config_when_stopped() {
     let config = EngineConfig::builder()
+        .grid_id(BeatGridId::allocate().expect("fixture grid id"))
+        .session(Arc::new(FixtureSession))
         .sample_rate(48000)
         .pcm_pool(PcmPool::default())
         .build();
@@ -105,43 +144,83 @@ fn engine_master_sample_rate_returns_config_when_stopped() {
     assert_eq!(engine.master_sample_rate(), 48000);
 }
 
-fn set_ducking(session: &SessionHandle, mode: SessionDuckingMode) {
-    session
-        .exec_ok(Cmd::SetSessionDucking { mode })
-        .expect("set ducking");
-}
-
-fn ducking(session: &SessionHandle) -> SessionDuckingMode {
-    match session.exec_ok(Cmd::SessionDucking).expect("ducking") {
-        Reply::SessionDucking(mode) => mode,
-        _ => panic!("unexpected ducking reply"),
-    }
-}
-
 #[kithara::test]
 fn engine_session_ducking_roundtrip() {
-    let session = SessionHandle::spawn_native();
-    set_ducking(&session, SessionDuckingMode::Soft);
-    assert_eq!(ducking(&session), SessionDuckingMode::Soft);
-    set_ducking(&session, SessionDuckingMode::Hard);
-    assert_eq!(ducking(&session), SessionDuckingMode::Hard);
-    set_ducking(&session, SessionDuckingMode::Off);
-    assert_eq!(ducking(&session), SessionDuckingMode::Off);
+    let host = Host::new(HostConfig::builder().build()).expect("create fixture host");
+    host.set_ducking(SessionDuckingMode::Soft)
+        .expect("set soft ducking");
+    assert_eq!(
+        host.ducking().expect("read soft ducking"),
+        SessionDuckingMode::Soft
+    );
+    host.set_ducking(SessionDuckingMode::Hard)
+        .expect("set hard ducking");
+    assert_eq!(
+        host.ducking().expect("read hard ducking"),
+        SessionDuckingMode::Hard
+    );
+    host.set_ducking(SessionDuckingMode::Off)
+        .expect("disable ducking");
+    assert_eq!(
+        host.ducking().expect("read disabled ducking"),
+        SessionDuckingMode::Off
+    );
 }
 
 #[kithara::test]
 fn injected_engine_instances_share_session_ducking() {
-    let session = SessionHandle::spawn_native();
-    let config = EngineConfig::builder()
-        .session(session.dispatcher())
-        .pcm_pool(PcmPool::default())
-        .build();
-    let _a = EngineImpl::new(config.clone(), EventBus::default());
-    let _b = EngineImpl::new(config, EventBus::default());
+    let mut host = Host::new(HostConfig::builder().build()).expect("create fixture host");
+    let a = insert_player(&mut host);
+    let b = insert_player(&mut host);
 
-    set_ducking(&session, SessionDuckingMode::Soft);
-    assert_eq!(ducking(&session), SessionDuckingMode::Soft);
+    host.set_ducking(SessionDuckingMode::Soft)
+        .expect("set shared ducking");
+    assert_eq!(
+        host.ducking().expect("read shared ducking"),
+        SessionDuckingMode::Soft
+    );
 
-    set_ducking(&session, SessionDuckingMode::Off);
-    assert_eq!(ducking(&session), SessionDuckingMode::Off);
+    host.set_ducking(SessionDuckingMode::Off)
+        .expect("disable shared ducking");
+    assert_eq!(
+        host.ducking().expect("read disabled ducking"),
+        SessionDuckingMode::Off
+    );
+
+    host.remove(&a).expect("remove first fixture player");
+    host.remove(&b).expect("remove second fixture player");
+}
+
+#[kithara::test]
+fn foreign_host_cannot_close_owned_player() {
+    let mut owner_host = Host::new(HostConfig::builder().build()).expect("create owner host");
+    let mut foreign_host = Host::new(HostConfig::builder().build()).expect("create foreign host");
+    let player = insert_player(&mut owner_host);
+
+    let error = foreign_host
+        .remove(&player)
+        .expect_err("foreign host must reject the player before closing it");
+    assert!(matches!(error, PlayError::ForeignSession));
+    assert!(
+        !player.is_closed(),
+        "foreign remove must not close the player"
+    );
+
+    owner_host
+        .remove(&player)
+        .expect("owning host removes its player");
+    assert!(player.is_closed());
+}
+
+#[kithara::test]
+fn dropping_host_invalidates_retained_player_control() {
+    let player = {
+        let mut host = Host::new(HostConfig::builder().build()).expect("create fixture host");
+        insert_player(&mut host)
+    };
+
+    assert!(
+        player.is_closed(),
+        "dropping the canonical host must invalidate retained controls"
+    );
 }

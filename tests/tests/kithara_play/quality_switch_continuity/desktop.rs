@@ -191,7 +191,10 @@ async fn prepare_desktop_player(master_url: &url::Url, label: &str) -> DesktopPr
     .initial_abr_mode(AbrMode::manual(AAC_HIGH))
     .events(bus)
     .build();
-    let config = harness.player().prepare_config(config);
+    let config = harness
+        .player()
+        .prepare_config(config)
+        .unwrap_or_else(|error| panic!("prepare {label} Kithara App resource: {error}"));
     let resource = Resource::new(config)
         .await
         .unwrap_or_else(|error| panic!("open {label} Kithara App resource: {error:?}"));
@@ -203,14 +206,13 @@ async fn prepare_desktop_player(master_url: &url::Url, label: &str) -> DesktopPr
     let abr = resource
         .abr_handle()
         .unwrap_or_else(|| panic!("{label} HLS resource must expose an ABR handle"));
-    harness.player().reserve_slots(1);
-    harness
-        .player()
-        .replace_item_tagged(0, resource, Some(Arc::from(label.to_owned())));
-    harness
-        .player()
-        .select_item(0, true)
-        .unwrap_or_else(|error| panic!("select {label} Kithara App resource: {error}"));
+    harness.with_player(|player| {
+        player.reserve_slots(1);
+        player.replace_item_tagged(0, resource, Some(Arc::from(label.to_owned())));
+        player
+            .select_item(0, true)
+            .unwrap_or_else(|error| panic!("select {label} Kithara App resource: {error}"));
+    });
 
     let deadline = Instant::now() + Duration::from_secs(20);
     let mut active_blocks = 0usize;

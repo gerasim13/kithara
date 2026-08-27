@@ -1,11 +1,11 @@
-use std::fmt;
+use std::{fmt, num::NonZeroU32};
 
 use bon::Builder;
 use kithara_abr::AbrController;
 use kithara_decode::GaplessMode;
 use kithara_events::EventBus;
 use kithara_platform::{CancelToken, sync::Arc};
-use kithara_warp::StretchControls;
+use kithara_warp::{BeatGridId, StretchControls};
 
 use crate::{
     PlayWorker,
@@ -13,11 +13,26 @@ use crate::{
     session::SessionDispatcher,
 };
 
+const DEFAULT_SAMPLE_RATE: NonZeroU32 = match NonZeroU32::new(44_100) {
+    Some(sample_rate) => sample_rate,
+    None => unreachable!(),
+};
+
+fn allocate_grid_id() -> BeatGridId {
+    let Ok(id) = BeatGridId::allocate() else {
+        panic!("process-wide beat-grid identity space is exhausted");
+    };
+    id
+}
+
 /// Configuration for the player.
 #[derive(Clone, Builder)]
 #[builder(state_mod(vis = "pub"))]
 #[non_exhaustive]
 pub struct PlayerConfig {
+    /// Stable synchronization-group identity owned by this player.
+    #[builder(default = allocate_grid_id())]
+    pub(crate) grid_id: BeatGridId,
     /// Per-deck time-stretch control handle, shared with the UI and the
     /// worker Warp chain (see `kithara_warp::StretchControls`).
     #[builder(default = StretchControls::new(1.0))]
@@ -34,7 +49,8 @@ pub struct PlayerConfig {
     pub(crate) bus: Option<EventBus>,
     /// Master cancel token for this player.
     pub(crate) cancel: Option<CancelToken>,
-    /// Pre-built audio session dispatcher.
+    /// Optional pre-bound session for isolated harnesses. Production players
+    /// are constructed unbound and attached exactly once by their Host.
     pub(crate) session: Option<Arc<dyn SessionDispatcher>>,
     /// EQ band layout. Default: 10-band log-spaced.
     #[builder(default = generate_log_spaced_bands(10))]
@@ -54,8 +70,8 @@ pub struct PlayerConfig {
     /// Sample rate passed to the engine/runtime backend as a hint.
     /// Default: 44100. Offline/test harnesses set this to drive
     /// deterministic render at a known rate.
-    #[builder(default = 44_100)]
-    pub(crate) sample_rate: u32,
+    #[builder(default = DEFAULT_SAMPLE_RATE)]
+    pub(crate) sample_rate: NonZeroU32,
     /// Maximum concurrent slots in the engine. Default: 4.
     #[builder(default = 4)]
     pub(crate) max_slots: usize,

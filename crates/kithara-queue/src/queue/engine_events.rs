@@ -8,12 +8,12 @@ use kithara_platform::{sync::Arc, tokio::sync::broadcast::error::TryRecvError};
 use tracing::debug;
 
 use super::{
-    Queue,
+    QueueControl,
     types::{CachedPosition, CrossfadeArm, Transition},
 };
 use crate::track::TrackSource;
 
-impl Queue {
+impl QueueControl {
     pub(super) fn advance_loaded_successor(&self, current_id: TrackId, transition: Transition) {
         let Some(next) = self.next_selectable_entry() else {
             return;
@@ -66,7 +66,7 @@ impl Queue {
         const ITEM_END_POSITION_TOLERANCE_SECONDS: f64 = 1.0;
 
         if dur > 0.0 && pos >= dur - ITEM_END_POSITION_TOLERANCE_SECONDS {
-            let _ = self.advance_to_next(Transition::Crossfade, AdvanceReason::NaturalEof);
+            let _ = self.advance_to_next_inner(Transition::Crossfade, AdvanceReason::NaturalEof);
         } else {
             debug!(pos, dur, "filtered spurious ItemDidPlayToEnd");
         }
@@ -141,7 +141,7 @@ impl Queue {
                 auto_skipped: true,
             });
         }
-        let _ = self.advance_to_next(Transition::None, AdvanceReason::TrackFailed);
+        let _ = self.advance_to_next_inner(Transition::None, AdvanceReason::TrackFailed);
     }
 
     /// Decide whether `ItemDidPlayToEnd` advances the queue or is
@@ -177,7 +177,7 @@ impl Queue {
         if src.is_empty() {
             self.dispatch_real_or_spurious(pos, dur);
         } else {
-            let _ = self.advance_to_next(Transition::Crossfade, AdvanceReason::NaturalEof);
+            let _ = self.advance_to_next_inner(Transition::Crossfade, AdvanceReason::NaturalEof);
         }
     }
 
@@ -226,7 +226,7 @@ mod tests {
     #[kithara::test(tokio)]
     async fn lagged_player_events_resynchronize_current_track() {
         let queue = make_queue();
-        let id = queue.register_for_test();
+        let id = queue.probe_register();
 
         for _ in 0..=DEFAULT_EVENT_BUS_CAPACITY {
             queue

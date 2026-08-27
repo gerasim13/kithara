@@ -30,13 +30,13 @@ fn offline_harness_smoke() {
         OfflinePlayerOptions::builder().build(),
         SAMPLE_RATE,
     );
-    harness.player().insert(make_resource(0.1), None, None);
-    harness.player().insert(make_resource(0.1), None, None);
-
-    harness
-        .player()
-        .select_item(0, true)
-        .expect("select first queue item");
+    harness.with_player(|player| {
+        player.insert(make_resource(0.1), None, None);
+        player.insert(make_resource(0.1), None, None);
+        player
+            .select_item(0, true)
+            .expect("select first queue item");
+    });
 
     let mut rendered: Vec<f32> = Vec::new();
     let mut total_frames: usize = 0;

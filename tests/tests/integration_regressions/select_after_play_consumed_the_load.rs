@@ -23,7 +23,10 @@ use kithara::{
         time::{self, Duration},
         tokio,
     },
-    play::{Cmd, PlayError, PlayerConfig, PlayerImpl, Reply, ResourceConfig, SessionDispatcher},
+    play::{
+        Cmd, PlayError, PlayerConfig, PlayerImpl, Reply, ResourceConfig, SessionDispatcher,
+        player::PlayerControlSource,
+    },
     queue::{Queue, QueueConfig, TrackSource, Transition},
 };
 use kithara_integration_tests::{
@@ -115,17 +118,18 @@ async fn a_track_play_consumed_mid_load_can_be_selected_again(temp_dir: TestTemp
         })
         .pool(byte_pool.clone())
         .build();
-    let player = Arc::new(PlayerImpl::new(
+    let player = PlayerImpl::new(
         PlayerConfig::builder()
             .worker(kithara::play::PlayWorker::new(
                 kithara::play::PlayWorkerConfig::for_pools(byte_pool, region.pcm_pool()).build(),
             ))
             .session(session)
             .build(),
-    ));
+    );
+    let player_control = player.control();
     let queue = Arc::new(Queue::new(
         QueueConfig::builder()
-            .player(Arc::clone(&player))
+            .player(player)
             .store(store.clone())
             .build(),
     ));
@@ -138,7 +142,8 @@ async fn a_track_play_consumed_mid_load_can_be_selected_again(temp_dir: TestTemp
                 &temp_dir, &store, index,
             ))))
         })
-        .collect();
+        .collect::<Result<Vec<_>, _>>()
+        .expect("queue is open while fixtures are appended");
 
     // `play` is issued while every track is still loading, exactly as the iOS
     // surface does, and parks inside the engine start.
@@ -170,7 +175,7 @@ async fn a_track_play_consumed_mid_load_can_be_selected_again(temp_dir: TestTemp
     playing.await.expect("play must join");
 
     assert!(
-        !player.item_has_resource(0),
+        !player_control.item_has_resource(0),
         "precondition: play did not consume the load that landed inside the engine \
          start, so the reported window was never opened"
     );

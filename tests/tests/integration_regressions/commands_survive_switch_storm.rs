@@ -125,14 +125,14 @@ async fn commands_still_work_after_a_switch_storm(temp_dir: TestTempDir) {
         })
         .pool(byte_pool.clone())
         .build();
-    let player = Arc::new(PlayerImpl::new(
+    let player = PlayerImpl::new(
         PlayerConfig::builder()
             .worker(kithara::play::PlayWorker::new(
                 kithara::play::PlayWorkerConfig::for_pools(byte_pool, region.pcm_pool()).build(),
             ))
             .session(OfflineSession::arc_auto())
             .build(),
-    ));
+    );
     let queue = Arc::new(Queue::new(
         QueueConfig::builder()
             .player(player)
@@ -154,7 +154,8 @@ async fn commands_still_work_after_a_switch_storm(temp_dir: TestTempDir) {
                 index,
             ))))
         })
-        .collect();
+        .collect::<Result<Vec<_>, _>>()
+        .expect("queue is open while fixtures are appended");
     // Only the first track is awaited: the others must still be transferring
     // when the storm starts.
     wait_for_loader_done_event(&mut status_rx, &queue, ids[0], Duration::from_secs(60))

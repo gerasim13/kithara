@@ -33,7 +33,7 @@ async fn play_issued_before_the_load_lands_still_starts_the_track() {
 
     let temp = temp_dir();
     let store = kithara_integration_tests::disk_asset_store(temp.path());
-    let player = Arc::new(PlayerImpl::new(
+    let player = PlayerImpl::new(
         PlayerConfig::builder()
             .worker(PlayWorker::new(
                 PlayWorkerConfig::for_pools(
@@ -44,7 +44,7 @@ async fn play_issued_before_the_load_lands_still_starts_the_track() {
             ))
             .session(OfflineSession::arc_auto())
             .build(),
-    ));
+    );
     let queue = Arc::new(Queue::new(
         QueueConfig::builder()
             .player(player)
@@ -72,7 +72,9 @@ async fn play_issued_before_the_load_lands_still_starts_the_track() {
     .build();
 
     let mut rx = queue.subscribe();
-    queue.append(TrackSource::Config(Box::new(cfg)));
+    queue
+        .append(TrackSource::Config(Box::new(cfg)))
+        .expect("append play-before-load track");
     queue.play();
 
     let position = wait_for_position_event(&mut rx, &queue, 0.2, Duration::from_secs(60))

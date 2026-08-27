@@ -67,12 +67,12 @@ async fn shared_ctx() -> &'static Ctx {
             .worker(worker.clone())
             .store(store)
             .build();
-        let player = Arc::new(PlayerImpl::new(
+        let player = PlayerImpl::new(
             PlayerConfig::builder()
                 .worker(worker)
                 .session(OfflineSession::arc_auto())
                 .build(),
-        ));
+        );
         let queue = Arc::new(Queue::new(QueueConfig::builder().player(player).build()));
 
         let q = Arc::clone(&queue);
@@ -161,7 +161,7 @@ async fn zvuk_stage_drm_track_plays(#[case] backend: DecoderBackend) {
     let ctx = shared_ctx().await;
     let source = build_track_source(STAGE_TRACK, ctx, backend);
     let mut rx = ctx.queue.subscribe();
-    let track_id = ctx.queue.append(source);
+    let track_id = ctx.queue.append(source).expect("append stage DRM track");
 
     wait_for_loaded(&mut rx, &ctx.queue, track_id, Duration::from_secs(30))
         .await

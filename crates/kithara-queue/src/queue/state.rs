@@ -1,11 +1,17 @@
 #[cfg(any(test, feature = "probe"))]
 use std::collections::HashMap;
-use std::sync::{Mutex, PoisonError};
+use std::{
+    ops::Deref,
+    sync::{Mutex, PoisonError},
+};
 
 use kithara_assets::{AssetStore, StorageBackend};
 use kithara_events::{EventBus, EventReceiver, TrackId};
 use kithara_platform::{CancelScope, CancelToken, sync::Arc};
-use kithara_play::PlayerImpl;
+use kithara_play::{
+    PlayError, PlayerImpl,
+    player::{PlayerControl, PlayerControlSource},
+};
 
 use super::types::{
     AtomicCachedPosition, AtomicTrackId, CachedPosition, CrossfadeArm, SelectPhase,
@@ -25,12 +31,15 @@ pub(super) type TestResources = HashMap<TrackId, kithara_play::Resource>;
 
 /// AVQueuePlayer-analogue orchestration facade.
 ///
-/// Owns an `Arc<PlayerImpl>` and a private async track loader, plus
+/// Owns a [`PlayerImpl`] and a private async track loader, plus
 /// queue-level state (ordered tracks, navigation, pending-select).
 /// Publishes [`QueueEvent`](kithara_events::QueueEvent) on the shared
 /// [`EventBus`] alongside player / audio / hls / file events so
 /// [`Queue::subscribe`] returns a single unified stream.
-pub struct Queue {
+#[doc(hidden)]
+pub struct QueueRuntime {
+    /// Serializes every state-changing command against terminal close.
+    pub(super) admission: Mutex<()>,
     /// Authoritative playback position updated on every `tick`. Filters
     /// transient 0.0 blips the engine reports on pause/resume —
     /// downstream UIs should read from this field rather than polling
@@ -77,7 +86,6 @@ pub struct Queue {
     /// critical section — never across an `.await`. See the crate `CONTEXT.md`
     /// "Selection serialization".
     pub(super) select_apply: Arc<Mutex<()>>,
-    pub(super) player: Arc<PlayerImpl>,
     /// Test-only respawn resource cache. Populated by
     /// [`Queue::supply_test_resource_for_respawn`] and consumed by
     /// `select` when a `Consumed` / `Cancelled` / `Failed` track is
@@ -96,17 +104,47 @@ pub struct Queue {
     /// engine events into queue-level side-effects (auto-advance / current
     /// track change forwarding).
     pub(super) player_rx: Mutex<EventReceiver>,
-    /// Master cancel token for queue-owned loader work. The caller owns the
-    /// separately constructed [`PlayerImpl`] and its worker lifetime.
+    /// Master cancel token for queue-owned loader work.
     pub(super) shutdown: CancelToken,
+}
+
+/// Cloneable queue command capability without beat-grid identity or topology.
+#[derive(Clone)]
+pub struct QueueControl {
+    pub(super) player: PlayerControl,
+    runtime: Arc<QueueRuntime>,
+}
+
+/// AVQueuePlayer-analogue orchestration facade.
+///
+/// Owns the resident player and its canonical synchronization state. Runtime
+/// commands are exposed through a separate cloneable [`QueueControl`].
+pub struct Queue {
+    pub(super) control: QueueControl,
+    pub(super) player: PlayerImpl,
+}
+
+impl Deref for QueueControl {
+    type Target = QueueRuntime;
+
+    fn deref(&self) -> &Self::Target {
+        &self.runtime
+    }
+}
+
+impl Deref for Queue {
+    type Target = QueueControl;
+
+    fn deref(&self) -> &Self::Target {
+        &self.control
+    }
 }
 
 impl Queue {
     /// Build a queue from a [`QueueConfig`].
     ///
-    /// The caller retains ownership of the supplied [`PlayerImpl`] but must
-    /// not mutate its item list directly. Playback controls remain safe;
-    /// item-list operations are queue-owned.
+    /// The queue takes ownership of the supplied [`PlayerImpl`]; all access to
+    /// the decorated player then goes through this facade.
     #[must_use]
     pub fn new(config: QueueConfig) -> Self {
         let QueueConfig {
@@ -132,16 +170,17 @@ impl Queue {
         player.set_auto_advance_enabled(false);
         player.set_prefetch_duration(prefetch_duration);
         let bus = player.bus().clone();
+        let player_control = player.control();
         let tracks = Arc::new(Tracks::new(bus.clone()));
         let loader = Arc::new(Loader::new(
-            Arc::clone(&player),
+            player_control.clone(),
             store,
             max_concurrent_loads,
             Arc::clone(&tracks),
         ));
         let player_rx = player.subscribe();
-        Self {
-            player,
+        let runtime = Arc::new(QueueRuntime {
+            admission: Mutex::new(()),
             loader,
             tracks,
             bus,
@@ -158,7 +197,77 @@ impl Queue {
             #[cfg(any(test, feature = "probe"))]
             autoplay_target: AtomicTrackId::disarmed(),
             cached_position: AtomicCachedPosition::unknown(),
+        });
+        Self {
+            control: QueueControl {
+                player: player_control,
+                runtime,
+            },
+            player,
         }
+    }
+}
+
+impl QueueControl {
+    pub(crate) fn invalidate(&self) {
+        self.shutdown.cancel();
+    }
+
+    /// Close the resident player, then irreversibly cancel queue-owned work.
+    ///
+    /// # Errors
+    ///
+    /// Returns the player detach failure without cancelling the queue token;
+    /// the player control gate is reopened so the owner can retry.
+    pub fn close(&self) -> Result<(), PlayError> {
+        let _admission = self.lock_admission();
+        self.player.close()?;
+        self.shutdown.cancel();
+        Ok(())
+    }
+
+    fn ensure_open(&self) -> Result<(), PlayError> {
+        if self.is_closed() {
+            Err(PlayError::Closed)
+        } else {
+            Ok(())
+        }
+    }
+
+    pub(in crate::queue) fn with_open<T>(
+        &self,
+        operation: impl FnOnce(&Self) -> T,
+    ) -> Result<T, PlayError> {
+        let _admission = self.lock_admission();
+        self.ensure_open()?;
+        Ok(operation(self))
+    }
+
+    pub(in crate::queue) fn with_open_result<T, E>(
+        &self,
+        operation: impl FnOnce(&Self) -> Result<T, E>,
+    ) -> Result<T, E>
+    where
+        E: From<PlayError>,
+    {
+        let _admission = self.lock_admission();
+        self.ensure_open().map_err(E::from)?;
+        operation(self)
+    }
+
+    pub(in crate::queue) fn command(&self, operation: impl FnOnce(&Self)) {
+        let _ = self.with_open(operation);
+    }
+
+    #[must_use]
+    pub fn is_closed(&self) -> bool {
+        self.shutdown.is_cancelled() || self.player.is_closed()
+    }
+
+    pub(in crate::queue) fn lock_admission(&self) -> std::sync::MutexGuard<'_, ()> {
+        self.admission
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
     }
 
     pub(super) fn lock_navigation(&self) -> std::sync::MutexGuard<'_, NavigationState> {
@@ -218,16 +327,30 @@ impl Queue {
 
 impl Drop for Queue {
     fn drop(&mut self) {
-        self.shutdown.cancel();
+        self.control.invalidate();
     }
 }
 
 #[cfg(test)]
-pub(super) mod tests {
+pub(crate) mod tests {
+    use core::sync::atomic::{AtomicU64, Ordering};
+    use std::{
+        sync::mpsc::{self, RecvTimeoutError},
+        thread,
+    };
+
+    use kithara_audio::ConsumerWakeMode;
     use kithara_bufpool::Region;
     use kithara_events::{Envelope, Event, EventReceiver, QueueEvent};
-    use kithara_platform::time::{Duration, Instant, timeout};
-    use kithara_play::{PlayWorker, PlayWorkerConfig, PlayerConfig};
+    use kithara_platform::{
+        sync::{Arc, Mutex},
+        time::{Duration, Instant, timeout},
+    };
+    use kithara_play::{
+        AllocatedSlot, BeatGrid, Cmd, NodeInputs, PlayError, PlayWorker, PlayWorkerConfig,
+        PlayerConfig, Reply, SessionDispatcher, SessionDuckingMode, SessionSampleRate, SharedEq,
+        SlotId, bridge::slot_channels,
+    };
     use kithara_test_utils::kithara;
 
     use super::*;
@@ -236,18 +359,55 @@ pub(super) mod tests {
         Queue::new(queue_config())
     }
 
+    struct TestSession {
+        next_slot: AtomicU64,
+        nodes: Mutex<Vec<NodeInputs>>,
+    }
+
+    impl SessionDispatcher for TestSession {
+        fn exec(&self, cmd: Cmd) -> Result<Reply, PlayError> {
+            let reply = match cmd {
+                Cmd::RegisterPlayer { .. } => Reply::PlayerRegistered(1),
+                Cmd::AllocateSlot { .. } => {
+                    let slot = SlotId::new(self.next_slot.fetch_add(1, Ordering::Relaxed));
+                    let (inputs, control) = slot_channels(SharedEq::new(10));
+                    self.nodes.lock().push(inputs);
+                    Reply::SlotAllocated(AllocatedSlot::new(control, slot))
+                }
+                Cmd::QuerySampleRate => Reply::SampleRate(SessionSampleRate::new(None, 44_100)),
+                Cmd::SessionDucking => Reply::SessionDucking(SessionDuckingMode::Off),
+                _ => Reply::Ok,
+            };
+            Ok(reply)
+        }
+
+        fn consumer_wake_mode(&self) -> ConsumerWakeMode {
+            ConsumerWakeMode::RealtimeDeferred
+        }
+    }
+
+    pub(crate) fn test_session() -> Arc<dyn SessionDispatcher> {
+        Arc::new(TestSession {
+            next_slot: AtomicU64::new(0),
+            nodes: Mutex::default(),
+        })
+    }
+
     fn queue_config() -> QueueConfig {
         QueueConfig::builder().player(player()).build()
     }
 
-    fn player() -> Arc<PlayerImpl> {
+    fn player() -> PlayerImpl {
         let region = Region::default();
         let worker = PlayWorker::new(
             PlayWorkerConfig::for_pools(region.byte_pool(), region.pcm_pool()).build(),
         );
-        Arc::new(PlayerImpl::new(
-            PlayerConfig::builder().worker(worker).build(),
-        ))
+        PlayerImpl::new(
+            PlayerConfig::builder()
+                .worker(worker)
+                .session(test_session())
+                .build(),
+        )
     }
 
     pub(in crate::queue) async fn wait_for_queue_event<F>(
@@ -278,6 +438,80 @@ pub(super) mod tests {
     #[kithara::test]
     fn queue_new_constructs_without_panic() {
         let _queue = make_queue();
+    }
+
+    #[kithara::test]
+    fn queue_preserves_the_resident_players_canonical_grid() {
+        let player = player();
+        let grid_id = player.id();
+        let snapshot = player.snapshot();
+        let queue = Queue::new(QueueConfig::builder().player(player).build());
+
+        assert_eq!(queue.id(), grid_id);
+        assert_eq!(queue.snapshot(), snapshot);
+    }
+
+    #[kithara::test]
+    fn queue_control_rejects_mutation_after_close() {
+        let queue = make_queue();
+        let control = queue.control.clone();
+
+        control.close().expect("unstarted fixture must close");
+
+        assert!(matches!(
+            control.append("https://example.com/a.mp3"),
+            Err(crate::QueueError::Play(PlayError::Closed))
+        ));
+        assert!(queue.is_empty());
+    }
+
+    #[kithara::test]
+    fn close_waits_for_an_admitted_queue_mutation() {
+        let queue = make_queue();
+        let mutation_control = queue.control.clone();
+        let close_control = queue.control.clone();
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let (mutation_tx, mutation_rx) = mpsc::channel();
+        let mutation = thread::spawn(move || {
+            let result = mutation_control.with_open(|_| {
+                entered_tx.send(()).expect("test receiver remains alive");
+                release_rx.recv().expect("test sender releases mutation");
+            });
+            mutation_tx
+                .send(result)
+                .expect("test receiver remains alive");
+        });
+
+        entered_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("mutation must enter the queue admission gate");
+        let (close_tx, close_rx) = mpsc::channel();
+        let close = thread::spawn(move || {
+            close_tx
+                .send(close_control.close())
+                .expect("test receiver remains alive");
+        });
+
+        assert!(
+            matches!(
+                close_rx.recv_timeout(Duration::from_millis(50)),
+                Err(RecvTimeoutError::Timeout)
+            ),
+            "close must not overtake an admitted queue mutation"
+        );
+        release_tx.send(()).expect("mutation thread remains alive");
+        mutation_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("mutation must complete after release")
+            .expect("admitted mutation remains open");
+        close_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("close must complete after the mutation")
+            .expect("unstarted fixture must close");
+        mutation.join().expect("mutation thread must not panic");
+        close.join().expect("close thread must not panic");
+        assert!(queue.is_closed());
     }
 
     /// `PlayerImpl::set_prefetch_duration` names the queue as the canonical

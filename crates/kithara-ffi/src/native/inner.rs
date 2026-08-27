@@ -20,7 +20,9 @@ use kithara_platform::{
     sync::{Arc, Mutex},
 };
 use kithara_play::policy::{DomainKeyPolicy, DomainKeyRule};
-use kithara_queue::{Queue, QueueConfig, QueueError, RepeatMode, TrackSource, Transition};
+use kithara_queue::{
+    Queue, QueueConfig, QueueControl, QueueError, RepeatMode, TrackSource, Transition,
+};
 
 use super::salt;
 use crate::{
@@ -155,7 +157,8 @@ pub(crate) struct NativeInner {
     /// the same `AudioPlayerItem` instances that Swift handed in (preserves
     /// identity + active per-item observer wiring).
     items: Arc<Mutex<ItemRegistry>>,
-    queue: Arc<Queue>,
+    queue_owner: kithara::host::HostOwned<Queue>,
+    queue: QueueControl,
     /// Rust-owned asset store shared by the queue and every item resource.
     store: Arc<FfiAssetStore>,
     /// Cancellation root for player-owned work; the shared store owns a
@@ -197,17 +200,21 @@ impl NativeInner {
                 .cancel(cancel.child())
                 .build(),
         );
+        let player_cancel = cancel.clone();
+        let queue_store = store.handle().clone();
         let player_config = PlayerConfig::builder()
             .eq_layout(generate_log_spaced_bands(eq_band_count as usize))
-            .cancel(cancel.child())
-            .session(super::session::handle().dispatcher())
+            .cancel(player_cancel.child())
             .worker(worker)
             .build();
-        let player = Arc::new(PlayerImpl::new(player_config));
+        let player = PlayerImpl::new(player_config);
         let queue_config = QueueConfig::builder()
             .player(player)
-            .store(store.handle().clone())
+            .store(queue_store)
             .build();
+        let queue_owner = super::session::insert(Queue::new(queue_config))
+            .expect("INVARIANT: the process Host must accept a freshly allocated Queue");
+        let queue = queue_owner.control().clone();
         let net = default_net_options(region.byte_pool());
         let downloader = Downloader::new(
             DownloaderConfig::for_client(HttpClient::new(net, cancel.child()))
@@ -223,7 +230,8 @@ impl NativeInner {
             key_options: Mutex::new(key_options),
             player_headers: player_headers_map,
             peak_bitrate: Mutex::default(),
-            queue: Arc::new(Queue::new(queue_config)),
+            queue_owner,
+            queue,
             observer: Mutex::default(),
             event_bridge: Mutex::default(),
             items: Arc::new(Mutex::default()),
@@ -247,7 +255,11 @@ impl NativeInner {
         let _rt = crate::FFI_RUNTIME.enter();
         let source = build_source_for_item(self, item)?;
         let id = item.track_id();
-        self.queue.append_with_id(id, source);
+        self.queue
+            .append_with_id(id, source)
+            .map_err(|error| FfiError::Internal {
+                description: error.to_string(),
+            })?;
         *item.inserted.lock() = true;
         self.items.lock().insert(id, Arc::clone(item));
         item.restart_bridge();
@@ -442,7 +454,7 @@ impl NativeInner {
         let bridge = EventBridge::spawn(
             rx,
             Arc::clone(&observer),
-            Arc::clone(&self.queue),
+            self.queue.clone(),
             &self.items,
             CancelToken::never(),
         );
@@ -625,6 +637,9 @@ impl Drop for NativeInner {
     /// `AudioPlayer` is dropped. See `kithara-play/CONTEXT.md`
     /// "Cancel Hierarchy".
     fn drop(&mut self) {
+        if let Err(error) = super::session::remove(&self.queue_owner) {
+            tracing::error!(?error, "failed to remove FFI Queue from the process Host");
+        }
         self.shutdown.cancel();
     }
 }

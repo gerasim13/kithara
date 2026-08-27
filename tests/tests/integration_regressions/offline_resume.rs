@@ -183,14 +183,14 @@ async fn resumes_after_outage(
         })
         .pool(byte_pool.clone())
         .build();
-    let player = Arc::new(PlayerImpl::new(
+    let player = PlayerImpl::new(
         PlayerConfig::builder()
             .worker(kithara::play::PlayWorker::new(
                 kithara::play::PlayWorkerConfig::for_pools(byte_pool, region.pcm_pool()).build(),
             ))
             .session(OfflineSession::arc_auto())
             .build(),
-    ));
+    );
     let queue = Arc::new(Queue::new(
         QueueConfig::builder()
             .player(player)
@@ -207,7 +207,9 @@ async fn resumes_after_outage(
 
     let ticker = spawn_ticker(Arc::clone(&queue));
     let mut rx = queue.subscribe();
-    let id = queue.append(TrackSource::Config(Box::new(cfg)));
+    let id = queue
+        .append(TrackSource::Config(Box::new(cfg)))
+        .expect("append offline-resume track");
     queue
         .select(id, Transition::None)
         .expect("select HLS track");

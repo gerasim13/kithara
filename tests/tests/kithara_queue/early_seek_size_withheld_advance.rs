@@ -17,6 +17,8 @@
 //! Auto-advance is observed as a `Queue::current_index()` change against a
 //! multi-track queue.
 
+use std::num::NonZeroU32;
+
 use kithara::{
     assets::AssetStore,
     bufpool::Region,
@@ -28,7 +30,7 @@ use kithara::{
         PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, Resource, ResourceConfig,
         SessionDispatcher,
     },
-    queue::{Queue, QueueConfig, Transition},
+    queue::{Queue, QueueConfig, Transition, test_utils::QueueProbe},
     stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_integration_tests::{
@@ -71,7 +73,8 @@ struct GateMode {
 }
 
 struct Harness {
-    player: Arc<PlayerImpl>,
+    player: Option<PlayerImpl>,
+    worker: PlayWorker,
     session: Arc<OfflineSession>,
 }
 
@@ -79,16 +82,29 @@ impl Harness {
     fn new() -> Self {
         let session = Arc::new(OfflineSession::new_manual());
         let region = Region::default();
+        let worker = PlayWorker::new(
+            PlayWorkerConfig::for_pools(region.byte_pool(), region.pcm_pool()).build(),
+        );
         let config = PlayerConfig::builder()
             .crossfade_duration(0.0)
-            .sample_rate(SAMPLE_RATE)
-            .worker(PlayWorker::new(
-                PlayWorkerConfig::for_pools(region.byte_pool(), region.pcm_pool()).build(),
-            ))
+            .sample_rate(NonZeroU32::new(SAMPLE_RATE).expect("sample rate must be non-zero"))
+            .worker(worker.clone())
             .session(Arc::clone(&session) as Arc<dyn SessionDispatcher>)
             .build();
-        let player = Arc::new(PlayerImpl::new(config));
-        Self { player, session }
+        let player = Some(PlayerImpl::new(config));
+        Self {
+            player,
+            worker,
+            session,
+        }
+    }
+
+    fn player(&self) -> &PlayerImpl {
+        self.player.as_ref().expect("harness player is available")
+    }
+
+    fn take_player(&mut self) -> PlayerImpl {
+        self.player.take().expect("harness player was transferred")
     }
 
     fn render(&self, frames: usize) -> Vec<f32> {
@@ -100,7 +116,7 @@ async fn build_hls_resource(
     master: &url::Url,
     downloader: &Downloader,
     store: &AssetStore,
-    player: &PlayerImpl,
+    worker: &PlayWorker,
 ) -> Resource {
     let cfg: ResourceConfig = ResourceConfig::for_src(
         ResourceConfig::parse_src(master.as_str()).expect("valid master URL"),
@@ -113,7 +129,7 @@ async fn build_hls_resource(
             .build(),
     )
     .initial_abr_mode(AbrMode::manual(GATED_VARIANT))
-    .worker(player.worker().clone())
+    .worker(worker.clone())
     .build();
     Resource::new(cfg).await.expect("create HLS resource")
 }
@@ -194,21 +210,21 @@ async fn run_case(mode: GateMode) {
             .build(),
     );
 
-    let harness = Harness::new();
-    let queue = Queue::new(
-        QueueConfig::builder()
-            .should_autoplay(false)
-            .player(Arc::clone(&harness.player))
-            .build(),
-    );
-    let mut rx = harness.player.subscribe();
+    let mut harness = Harness::new();
+    let mut rx = harness.player().subscribe();
 
     // Track 0 = the gated HLS track. Track 1 = a second HLS track so a forward
     // auto-advance has somewhere to land (observable as current_index 0 -> 1).
-    let target = build_hls_resource(&master, &downloader, &store, &harness.player).await;
+    let target = build_hls_resource(&master, &downloader, &store, &harness.worker).await;
     let target_src = target.src().clone();
+    let next = build_hls_resource(&master, &downloader, &store, &harness.worker).await;
+    let queue = Queue::new(
+        QueueConfig::builder()
+            .should_autoplay(false)
+            .player(harness.take_player())
+            .build(),
+    );
     let id0 = queue.insert_loaded_for_test(target);
-    let next = build_hls_resource(&master, &downloader, &store, &harness.player).await;
     let _id1 = queue.insert_loaded_for_test(next);
 
     queue.select(id0, Transition::None).expect("select track 0");

@@ -100,7 +100,7 @@ fn build_queue_with_tick(
     tokio::task::JoinHandle<()>,
 ) {
     let store = kithara_integration_tests::disk_asset_store(temp_dir.path());
-    let player = Arc::new(PlayerImpl::new(
+    let player = PlayerImpl::new(
         PlayerConfig::builder()
             .worker(PlayWorker::new(
                 PlayWorkerConfig::for_pools(
@@ -111,7 +111,7 @@ fn build_queue_with_tick(
             ))
             .session(OfflineSession::arc_auto())
             .build(),
-    ));
+    );
     let cap = NonZeroUsize::new(cap).expect("BUG: cap must be > 0");
     let queue = Arc::new(Queue::new(
         QueueConfig::builder()
@@ -175,11 +175,13 @@ async fn select_pending_track_parked_behind_hung_load_promotes() {
     let temp = temp_dir();
     let (queue, downloader, store, tick_handle) = build_queue_with_tick(&temp, Consts::BG_CAP);
 
-    let hung_id = queue.append(TrackSource::Config(Box::new(mk_cfg(
-        &hung.url(),
-        &downloader,
-        &store,
-    ))));
+    let hung_id = queue
+        .append(TrackSource::Config(Box::new(mk_cfg(
+            &hung.url(),
+            &downloader,
+            &store,
+        ))))
+        .expect("append hung track");
     wait_for_status_matching(&queue, hung_id, Consts::GATE_DEADLINE, "Loading", |s| {
         matches!(s, TrackStatus::Loading)
     })
@@ -187,11 +189,13 @@ async fn select_pending_track_parked_behind_hung_load_promotes() {
     .unwrap_or_else(|e| panic!("hung track gate: {e}"));
 
     // Parked: the background lane is saturated by the hung load.
-    let fast_id = queue.append(TrackSource::Config(Box::new(mk_cfg(
-        &fast_url(&fast),
-        &downloader,
-        &store,
-    ))));
+    let fast_id = queue
+        .append(TrackSource::Config(Box::new(mk_cfg(
+            &fast_url(&fast),
+            &downloader,
+            &store,
+        ))))
+        .expect("append fast track");
 
     queue
         .select(fast_id, Transition::None)
@@ -228,22 +232,26 @@ async fn superseded_hung_selection_frees_lane_for_next_select() {
     let (queue, downloader, store, tick_handle) = build_queue_with_tick(&temp, Consts::BG_CAP);
     let mut events = queue.subscribe();
 
-    let hung_id = queue.append(TrackSource::Config(Box::new(mk_cfg(
-        &hung.url(),
-        &downloader,
-        &store,
-    ))));
+    let hung_id = queue
+        .append(TrackSource::Config(Box::new(mk_cfg(
+            &hung.url(),
+            &downloader,
+            &store,
+        ))))
+        .expect("append hung track");
     wait_for_status_matching(&queue, hung_id, Consts::GATE_DEADLINE, "Loading", |s| {
         matches!(s, TrackStatus::Loading)
     })
     .await
     .unwrap_or_else(|e| panic!("hung track gate: {e}"));
 
-    let fast_id = queue.append(TrackSource::Config(Box::new(mk_cfg(
-        &fast_url(&fast),
-        &downloader,
-        &store,
-    ))));
+    let fast_id = queue
+        .append(TrackSource::Config(Box::new(mk_cfg(
+            &fast_url(&fast),
+            &downloader,
+            &store,
+        ))))
+        .expect("append fast track");
 
     // The user clicks the stuck track, then gives up and clicks another.
     queue

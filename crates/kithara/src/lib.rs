@@ -52,6 +52,10 @@ pub mod events {
     pub use kithara_events::*;
 }
 
+pub mod host {
+    pub use kithara_host::*;
+}
+
 pub mod platform {
     pub use kithara_platform::*;
 }

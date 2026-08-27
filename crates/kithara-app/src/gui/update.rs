@@ -30,7 +30,7 @@ pub(crate) fn update(state: &mut Kithara, message: Message) -> Task<Message> {
     let task = match message {
         Message::BroadcastToggle => state
             .broadcast
-            .toggle()
+            .toggle(state.session.host())
             .map_or_else(Task::none, stop_broadcast),
         Message::BroadcastStopped(duration) => {
             state.broadcast.complete_stop();
@@ -258,7 +258,7 @@ fn handle_load(state: &mut Kithara, index: usize, id: DeckId) {
 /// Every deck advances on the same tick: a deck the user is not looking at
 /// still plays, streams and needs its continuous values pulled.
 fn handle_tick(state: &mut Kithara) {
-    state.broadcast.poll();
+    state.broadcast.poll(state.session.host());
     for deck in state.decks.iter() {
         let _ = deck.controller.queue().tick();
         deck.controller.refresh_continuous();

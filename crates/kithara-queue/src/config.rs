@@ -2,7 +2,7 @@ use std::{fmt, num::NonZeroUsize};
 
 use bon::Builder;
 use kithara_assets::AssetStore;
-use kithara_platform::{CancelToken, sync::Arc};
+use kithara_platform::CancelToken;
 use kithara_play::PlayerImpl;
 
 /// Default parallelism cap for async track loads.
@@ -18,13 +18,13 @@ pub(crate) const DEFAULT_PREFETCH_DURATION: f32 = 3.5;
 
 /// Configuration for a [`Queue`](crate::Queue).
 ///
-/// Holds queue-level defaults plus the externally-owned [`PlayerImpl`]
-/// instance whose item list the queue coordinates.
+/// Holds queue-level defaults plus the owned [`PlayerImpl`] instance whose
+/// item list the queue coordinates.
 ///
 /// [`TrackSource::Uri`](crate::TrackSource::Uri) resources share this queue's
 /// store. A caller-supplied [`ResourceConfig`](kithara_play::ResourceConfig)
 /// retains its own store.
-#[derive(Clone, Builder)]
+#[derive(Builder)]
 #[builder(state_mod(vis = "pub"))]
 #[non_exhaustive]
 pub struct QueueConfig {
@@ -38,8 +38,8 @@ pub struct QueueConfig {
     /// `None` on the production app path.
     pub cancel: Option<CancelToken>,
 
-    /// Externally-owned player coordinated by this queue.
-    pub player: Arc<PlayerImpl>,
+    /// Player owned and decorated by this queue.
+    pub player: PlayerImpl,
 
     /// Shared store used for bare URI track sources.
     pub store: Option<AssetStore>,
@@ -78,6 +78,7 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
+    use crate::queue::test_session;
 
     #[kithara::test]
     fn default_config_has_reasonable_loader_cap() {
@@ -85,9 +86,12 @@ mod tests {
         let worker = PlayWorker::new(
             PlayWorkerConfig::for_pools(region.byte_pool(), region.pcm_pool()).build(),
         );
-        let player = Arc::new(PlayerImpl::new(
-            PlayerConfig::builder().worker(worker).build(),
-        ));
+        let player = PlayerImpl::new(
+            PlayerConfig::builder()
+                .worker(worker)
+                .session(test_session())
+                .build(),
+        );
         let cfg = QueueConfig::builder().player(player).build();
         assert_eq!(cfg.max_concurrent_loads.get(), 3);
         assert!(cfg.store.is_none());

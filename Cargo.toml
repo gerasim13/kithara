@@ -18,6 +18,7 @@ members = [
     "crates/kithara-ffi",
     "crates/kithara-file",
     "crates/kithara-hls",
+    "crates/kithara-host",
     "crates/kithara-mpa",
     "crates/kithara-net",
     "crates/kithara-platform",
@@ -50,6 +51,7 @@ default-members = [
     "crates/kithara-events",
     "crates/kithara-file",
     "crates/kithara-hls",
+    "crates/kithara-host",
     "crates/kithara-mpa",
     "crates/kithara-net",
     "crates/kithara-platform",
@@ -203,6 +205,7 @@ kithara-events = { path = "crates/kithara-events", version = "0.0.1-alpha4" }
 kithara-ffi = { path = "crates/kithara-ffi" }
 kithara-file = { path = "crates/kithara-file", version = "0.0.1-alpha4", default-features = false }
 kithara-hls = { path = "crates/kithara-hls", version = "0.0.1-alpha4", default-features = false }
+kithara-host = { path = "crates/kithara-host", version = "0.0.1-alpha4", default-features = false }
 kithara-mpa = { path = "crates/kithara-mpa", version = "0.0.1-alpha4" }
 kithara-net = { path = "crates/kithara-net", version = "0.0.1-alpha4", default-features = false }
 kithara-platform = { path = "crates/kithara-platform", version = "0.0.1-alpha4" }

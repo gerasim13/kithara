@@ -14,7 +14,6 @@ ignored = ["unimock"]
 
 [features]
 default = [
-    "backend-cpal",
     "symphonia",
     "resample-rubato",
     "analysis-beat",
@@ -23,7 +22,6 @@ default = [
     "client-reqwest",
     "tls-rustls",
 ]
-backend-cpal = ["firewheel/cpal"]
 # HTTP backend forwarding to every kithara-net-reaching dep.
 client-reqwest = [
     "kithara-net/client-reqwest",
@@ -65,14 +63,12 @@ tls-native = [
     "kithara-events/tls-native",
     "kithara-abr/tls-native",
 ]
-backend-web-audio = ["dep:firewheel-web-audio", "symphonia"]
-wasm-bindgen = ["firewheel/wasm-bindgen"]
 apple = ["kithara-audio/apple", "kithara-decode/apple"]
 apple-fused-src = ["kithara-audio/apple-fused-src", "kithara-decode/apple"]
 # Software decoder pass-through. Required when not opting into a hardware
 # backend, since `kithara-decode`'s `DecoderBackend` enum needs at least
-# one variant available. `backend-web-audio` pulls it in transitively:
-# wasm has no hardware decoder (apple/android are native-only).
+# one variant available. WASM has no hardware decoder (apple/android are
+# native-only).
 symphonia = ["kithara-audio/symphonia", "kithara-decode/symphonia"]
 webcodecs = ["kithara-audio/webcodecs", "kithara-decode/webcodecs"]
 fdk-aac = ["kithara-audio/fdk-aac", "kithara-decode/fdk-aac"]
@@ -135,21 +131,13 @@ url = { workspace = true }
 [target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))'.dependencies]
 kithara-workspace-hack = { version = "0.0.1-alpha4", path = "../kithara-workspace-hack" }
 
-[target.'cfg(target_arch = "wasm32")'.dependencies]
-bevy_platform = { workspace = true }
-firewheel-web-audio = { workspace = true, optional = true }
-
 [dev-dependencies]
 kithara-audio = { workspace = true, features = ["mock", "probe"] }
-kithara-play = { path = ".", default-features = false, features = ["backend-cpal", "probe"] }
+kithara-play = { path = ".", default-features = false, features = ["probe"] }
 kithara-test-utils = { path = "../kithara-test-utils", features = ["mock", "probe", "hang"] }
 
 bytes = { workspace = true }
 unimock = { workspace = true }
-wasm-bindgen-test = { workspace = true }
-
-[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
-kithara-play = { path = ".", features = ["wasm-bindgen"] }
 
 [lints]
 workspace = true

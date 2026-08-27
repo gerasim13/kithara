@@ -31,11 +31,11 @@ type QueueView = Vec<(kithara_queue::TrackId, Arc<AudioPlayerItem>)>;
 /// inherent method set the [`AudioPlayer`](crate::player) facade delegates
 /// to, so the single facade body type-checks on both targets.
 ///
-/// The worker owns the `Arc<Queue>`; `WasmInner` owns the command channel
-/// into it plus the main-thread caller-facing state (cached scalar
-/// settings + the ordered queue view). Setters write through to both the
-/// worker and the local cache so the infallible facade getters can answer
-/// synchronously without a worker round-trip.
+/// The worker owns a canonical Host member and its queue control; `WasmInner`
+/// owns the command channel into it plus the main-thread caller-facing state
+/// (cached scalar settings + the ordered queue view). Setters write through to
+/// both the worker and the local cache so the infallible facade getters can
+/// answer synchronously without a worker round-trip.
 pub(crate) struct WasmInner {
     queue_view: Arc<Mutex<QueueView>>,
     crossfade_secs: AtomicU32,

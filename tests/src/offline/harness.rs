@@ -1,3 +1,5 @@
+use std::num::NonZeroU32;
+
 use kithara::{
     bufpool::Region,
     decode::GaplessMode,
@@ -9,6 +11,7 @@ use kithara::{
     play::{
         PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, SessionDispatcher,
         effects::eq::EqBandConfig,
+        player::{PlayerControl, PlayerControlSource},
     },
     warp::StretchControls,
 };
@@ -17,7 +20,8 @@ use super::OfflineSession;
 
 pub struct OfflinePlayerHarness {
     events: Mutex<EventReceiver>,
-    player: Arc<PlayerImpl>,
+    player: Mutex<Option<PlayerImpl>>,
+    player_control: PlayerControl,
     session: Arc<OfflineSession>,
 }
 
@@ -42,25 +46,45 @@ impl OfflinePlayerHarness {
         let player_config = PlayerConfig::builder()
             .crossfade_duration(options.crossfade_duration)
             .gapless_mode(options.gapless_mode)
-            .sample_rate(sample_rate)
+            .sample_rate(
+                NonZeroU32::new(sample_rate).expect("offline player sample rate must be non-zero"),
+            )
             .session(Arc::clone(&session_dispatcher))
             .worker(worker)
             .maybe_eq_layout(options.eq_layout)
             .maybe_timestretch(options.timestretch)
             .build();
 
-        let player = Arc::new(PlayerImpl::new(player_config));
+        let player = PlayerImpl::new(player_config);
+        let player_control = player.control();
         let events = player.subscribe();
 
         Self {
             events: Mutex::new(events),
-            player,
+            player: Mutex::new(Some(player)),
+            player_control,
             session,
         }
     }
 
-    pub fn player(&self) -> &Arc<PlayerImpl> {
-        &self.player
+    pub const fn player(&self) -> &PlayerControl {
+        &self.player_control
+    }
+
+    pub fn take_player(&self) -> PlayerImpl {
+        self.player
+            .lock()
+            .take()
+            .expect("offline harness player was already transferred")
+    }
+
+    pub fn with_player<R>(&self, use_player: impl FnOnce(&PlayerImpl) -> R) -> R {
+        let player = self.player.lock();
+        use_player(
+            player
+                .as_ref()
+                .expect("offline harness player was already transferred"),
+        )
     }
 
     pub fn session(&self) -> &Arc<OfflineSession> {
@@ -75,7 +99,7 @@ impl OfflinePlayerHarness {
     /// Pump the player's notification ringbuf and drain `PlayerEvent`s
     /// from the bus subscriber.
     pub fn tick_and_drain(&self) -> Vec<PlayerEvent> {
-        self.player.process_notifications();
+        self.player_control.process_notifications();
 
         let mut events = Vec::new();
         let mut rx = self.events.lock();

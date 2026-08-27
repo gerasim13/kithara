@@ -26,7 +26,7 @@ use kithara_integration_tests::{
     create_wav_exact_bytes,
     fixture_protocol::PackagedSignal,
     hls_server::{HlsTestServer, HlsTestServerConfig},
-    offline::resource_from_reader,
+    offline::{OfflineSession, resource_from_reader},
     signal_pcm::signal,
     temp_dir,
 };
@@ -577,7 +577,12 @@ async fn player_worker_hls_then_unavailable_mp3_then_mp3_recovery(
     let hls_server = open_audio_hls_server().await;
     let (ok_url, bad_url) = mp3_endpoints().await;
     let region = Region::default();
-    let player = PlayerImpl::new(PlayerConfig::builder().worker(play_worker(&region)).build());
+    let player = PlayerImpl::new(
+        PlayerConfig::builder()
+            .worker(play_worker(&region))
+            .session(OfflineSession::arc_manual())
+            .build(),
+    );
     let worker = player.worker().clone();
     let store = asset_store(&temp_dir, ephemeral, &region);
     let hls_url = hls_server.url("/master.m3u8");
@@ -974,7 +979,12 @@ async fn player_worker_hls_then_mp3_reopen_keeps_backward_seek(
     let hls_server = open_audio_hls_server().await;
     let (ok_url, _) = mp3_endpoints().await;
     let region = Region::default();
-    let player = PlayerImpl::new(PlayerConfig::builder().worker(play_worker(&region)).build());
+    let player = PlayerImpl::new(
+        PlayerConfig::builder()
+            .worker(play_worker(&region))
+            .session(OfflineSession::arc_manual())
+            .build(),
+    );
     let worker = player.worker().clone();
     let store = asset_store(&temp_dir, ephemeral, &region);
     let hls_url = hls_server.url("/master.m3u8");

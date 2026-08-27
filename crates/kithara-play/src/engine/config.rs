@@ -3,6 +3,7 @@ use std::fmt;
 use bon::Builder;
 use kithara_bufpool::PcmPool;
 use kithara_platform::{CancelToken, sync::Arc};
+use kithara_warp::BeatGridId;
 
 use crate::{
     effects::eq::{EqBandConfig, generate_log_spaced_bands},
@@ -14,11 +15,14 @@ use crate::{
 #[builder(state_mod(vis = "pub"))]
 #[non_exhaustive]
 pub struct EngineConfig {
+    /// Stable synchronization identity of the owning player.
+    pub(crate) grid_id: BeatGridId,
     /// Master cancel token for the engine. The worker scheduler derives a
     /// `child()` so its produce-core's lock-free `is_cancelled()` read
     /// observes a master cancel.
     pub(crate) cancel: Option<CancelToken>,
-    /// Pre-built audio session dispatcher.
+    /// Optional pre-bound dispatcher for isolated harnesses. Production
+    /// engines receive their session when the owning Player enters a Host.
     pub(crate) session: Option<Arc<dyn SessionDispatcher>>,
     /// PCM buffer pool for audio-thread scratch buffers.
     pub(crate) pcm_pool: PcmPool,

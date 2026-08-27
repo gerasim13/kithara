@@ -5,9 +5,9 @@ Contracts and invariants for the kithara-app crate; the README is the overview.
 ## Broadcast service
 
 The crate owns only the service wiring; the packaging and the origin belong to `kithara-broadcast`. A request
-stays `Requested` until the session exposes its measured output rate, which configures both the ring and the
-encoder and arms the single mix tap. App-root cancellation ends the origin and encoder; dropping the running
-phase releases the tap.
+stays `Requested` until the Host exposes its measured output rate, which configures both the ring and the
+encoder and arms the single Host mix tap. App-root cancellation ends the origin and encoder; stopping the
+running phase releases the tap before the encoder drains.
 
 Stopping blocks — it closes the feed, drains the encoder and joins the worker — so the toggle moves the handle
 into an iced task and marks the service `Stopping`; only that task's completion message makes it `Off`. The GUI

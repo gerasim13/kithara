@@ -33,7 +33,8 @@ impl Tempo {
         }
     }
 
-    pub(crate) fn beats_per_second(self) -> f64 {
+    #[must_use]
+    pub fn beats_per_second(self) -> f64 {
         self.0 / SECONDS_PER_MINUTE
     }
 }
@@ -87,7 +88,8 @@ pub struct SessionTransportSnapshot {
 }
 
 impl SessionTransportSnapshot {
-    pub(crate) const fn new(
+    #[must_use]
+    pub const fn new(
         position: SessionBeat,
         playing: bool,
         tempo: Tempo,
@@ -123,8 +125,10 @@ impl SessionTransportSnapshot {
         )
     }
 
-    #[cfg(test)]
-    pub(crate) const fn anchor(self) -> SessionAnchor {
+    /// Returns the exact session-clock anchor carried by this observation.
+    #[doc(hidden)]
+    #[must_use]
+    pub const fn anchor(self) -> SessionAnchor {
         self.anchor
     }
 }

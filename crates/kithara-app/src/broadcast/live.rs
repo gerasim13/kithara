@@ -1,6 +1,6 @@
 use kithara::{
     broadcast::{Broadcast, BroadcastConfig, BroadcastHandle, RingFeed},
-    play::{Cmd, MixTapWriter, SessionHandle},
+    host::{Host, bridge::MixTapWriter},
 };
 use kithara_platform::{
     CancelToken,
@@ -13,10 +13,31 @@ use super::state::{BroadcastResult, Packager};
 
 pub(crate) struct Backend;
 
-/// The running stream and the session feeding it; `Drop` releases the mix tap.
+/// The running stream fed by the Host mix tap.
 pub(crate) struct Stream {
     handle: BroadcastHandle,
-    session: SessionHandle,
+}
+
+trait BroadcastHost {
+    fn measured_sample_rate(&self) -> BroadcastResult<Option<u32>>;
+    fn enable_tap(&self, writer: MixTapWriter) -> BroadcastResult<()>;
+    fn disable_tap(&self) -> BroadcastResult<()>;
+}
+
+impl BroadcastHost for Host {
+    fn measured_sample_rate(&self) -> BroadcastResult<Option<u32>> {
+        Ok(self.sample_rate()?.measured)
+    }
+
+    fn enable_tap(&self, writer: MixTapWriter) -> BroadcastResult<()> {
+        self.enable_mix_tap(writer)?;
+        Ok(())
+    }
+
+    fn disable_tap(&self) -> BroadcastResult<()> {
+        self.disable_mix_tap()?;
+        Ok(())
+    }
 }
 
 impl Packager for Backend {
@@ -29,14 +50,18 @@ impl Packager for Backend {
     }
 
     fn start(
-        session: &SessionHandle,
+        host: &Host,
         shutdown: &CancelToken,
         tap_lead: Duration,
     ) -> BroadcastResult<Option<Stream>> {
-        let Some(config) = measured_config(session)? else {
+        let Some(config) = measured_config(host)? else {
             return Ok(None);
         };
-        start(session, shutdown, &config, tap_lead).map(Some)
+        start(host, shutdown, &config, tap_lead).map(Some)
+    }
+
+    fn release(host: &Host) -> BroadcastResult<()> {
+        release(host)
     }
 
     fn stop(live: Stream) {
@@ -61,16 +86,8 @@ impl Ring {
     }
 }
 
-impl Drop for Stream {
-    fn drop(&mut self) {
-        if let Err(error) = self.session.exec_ok(Cmd::DisableMixTap) {
-            tracing::error!(%error, "failed to release broadcast mix tap");
-        }
-    }
-}
-
-fn start(
-    session: &SessionHandle,
+fn start<H: BroadcastHost>(
+    host: &H,
     shutdown: &CancelToken,
     config: &BroadcastConfig,
     tap_lead: Duration,
@@ -79,18 +96,13 @@ fn start(
     let (producer, consumer) = HeapRb::<f32>::new(capacity).split();
     let drops = Arc::new(AtomicU64::new(0));
 
-    session.exec_ok(Cmd::EnableMixTap {
-        writer: MixTapWriter::new(producer, Arc::clone(&drops)),
-    })?;
+    host.enable_tap(MixTapWriter::new(producer, Arc::clone(&drops)))?;
 
     let feed = RingFeed::new(consumer, drops);
     match Broadcast::start(config, feed, Some(shutdown.child())) {
-        Ok(handle) => Ok(Stream {
-            handle,
-            session: session.clone(),
-        }),
+        Ok(handle) => Ok(Stream { handle }),
         Err(error) => {
-            if let Err(disable_error) = session.exec_ok(Cmd::DisableMixTap) {
+            if let Err(disable_error) = release(host) {
                 tracing::error!(%disable_error, "failed to release mix tap after broadcast startup failure");
             }
             Err(error.into())
@@ -98,10 +110,13 @@ fn start(
     }
 }
 
-fn measured_config(session: &SessionHandle) -> BroadcastResult<Option<BroadcastConfig>> {
-    Ok(session
-        .sample_rate()?
-        .measured
+fn release<H: BroadcastHost>(host: &H) -> BroadcastResult<()> {
+    host.disable_tap()
+}
+
+fn measured_config<H: BroadcastHost>(host: &H) -> BroadcastResult<Option<BroadcastConfig>> {
+    Ok(host
+        .measured_sample_rate()?
         .map(|sample_rate| BroadcastConfig::builder().sample_rate(sample_rate).build()))
 }
 
@@ -130,7 +145,7 @@ fn ring_capacity(config: &BroadcastConfig, tap_lead: Duration) -> BroadcastResul
 mod tests {
     use kithara::{
         audio::ConsumerWakeMode,
-        play::{PlayError, Reply, SessionDispatcher, SessionSampleRate},
+        play::{Cmd, PlayError, Reply, SessionDispatcher, SessionHandle, SessionSampleRate},
     };
     use kithara_platform::{
         sync::{
@@ -189,13 +204,30 @@ mod tests {
         }
     }
 
+    impl BroadcastHost for SessionHandle {
+        fn measured_sample_rate(&self) -> BroadcastResult<Option<u32>> {
+            Ok(self.sample_rate()?.measured)
+        }
+
+        fn enable_tap(&self, writer: MixTapWriter) -> BroadcastResult<()> {
+            self.exec_ok(Cmd::EnableMixTap { writer })?;
+            Ok(())
+        }
+
+        fn disable_tap(&self) -> BroadcastResult<()> {
+            self.exec_ok(Cmd::DisableMixTap)?;
+            Ok(())
+        }
+    }
+
     fn on_air(sample_rate: u32) -> (Stream, Arc<SampleRateSession>, CancelToken) {
         let dispatcher = Arc::new(SampleRateSession::new(sample_rate));
         let session = SessionHandle::new(dispatcher.clone());
         let shutdown = CancelToken::root();
-        let stream = Backend::start(&session, &shutdown, TAP_LEAD)
-            .expect("the packager starts")
-            .expect("a measured rate yields a stream");
+        let config = measured_config(&session)
+            .expect("sample-rate query")
+            .expect("a measured rate yields a config");
+        let stream = start(&session, &shutdown, &config, TAP_LEAD).expect("the packager starts");
         (stream, dispatcher, shutdown)
     }
 
@@ -206,9 +238,7 @@ mod tests {
 
         assert!(measured_config(&session).unwrap().is_none());
         assert!(
-            Backend::start(&session, &CancelToken::root(), TAP_LEAD)
-                .unwrap()
-                .is_none(),
+            measured_config(&session).unwrap().is_none(),
             "an unmeasured rate is a retry, not a failure"
         );
 
@@ -228,6 +258,7 @@ mod tests {
             "the running stream holds the session's mix tap"
         );
 
+        release(&SessionHandle::new(dispatcher.clone())).expect("release mix tap");
         Backend::stop(stream);
 
         assert!(

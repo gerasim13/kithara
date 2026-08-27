@@ -138,3 +138,9 @@ impl Kithara {
         "Kithara".to_string()
     }
 }
+
+impl Drop for Kithara {
+    fn drop(&mut self) {
+        self.broadcast.release(self.session.host());
+    }
+}

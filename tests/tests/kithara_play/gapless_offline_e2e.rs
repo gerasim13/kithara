@@ -732,7 +732,7 @@ async fn single_track_silence_trim_heuristic_fade_out_smooths_trailing_edge(temp
 }
 
 async fn create_resource(
-    player: &kithara::play::PlayerImpl,
+    player: &kithara::play::player::PlayerControl,
     server: &TestServerHelper,
     cache_dir: &std::path::Path,
     item_id: &'static str,
@@ -758,7 +758,7 @@ async fn create_resource(
     reason = "fixture builder: each parameter pins one HLS-fixture knob"
 )]
 async fn create_resource_with_encoding(
-    player: &kithara::play::PlayerImpl,
+    player: &kithara::play::player::PlayerControl,
     server: &TestServerHelper,
     cache_dir: &std::path::Path,
     item_id: &'static str,
@@ -799,7 +799,9 @@ async fn create_resource_with_encoding(
     )
     .store(store)
     .build();
-    config = player.prepare_config(config);
+    config = player
+        .prepare_config(config)
+        .expect("prepare gapless e2e HLS resource config");
     let mut resource = Resource::new(config)
         .await
         .expect("open HLS resource for gapless e2e fixture");
@@ -816,7 +818,7 @@ async fn create_resource_with_encoding(
     reason = "fixture builder: each parameter pins one HLS-fixture knob"
 )]
 async fn create_apple_fused_resource(
-    player: &kithara::play::PlayerImpl,
+    player: &kithara::play::player::PlayerControl,
     server: &TestServerHelper,
     cache_dir: &std::path::Path,
     item_id: &'static str,
@@ -869,7 +871,9 @@ async fn create_apple_fused_resource(
             .build(),
     )
     .build();
-    let config = player.prepare_config(config);
+    let config = player
+        .prepare_config(config)
+        .expect("prepare Apple fused HLS resource config");
     let mut resource = Resource::new(config)
         .await
         .expect("open HLS resource for Apple fused fixture");
@@ -900,8 +904,10 @@ async fn render_synthetic_fused_deficit_seam(tail_compensation: bool) -> Synthet
             .build(),
         FUSED_FIXTURE_DEVICE_RATE,
     );
-    apply_mix([(harness.player().as_ref(), FUSED_FIXTURE_MASTER_LEVEL)])
-        .expect("apply fused seam fixture headroom");
+    harness.with_player(|player| {
+        apply_mix([(player, FUSED_FIXTURE_MASTER_LEVEL)])
+            .expect("apply fused seam fixture headroom");
+    });
     let first_frames = synthetic_tail_trimmed_first_frames(tail_compensation);
     let first_frame_count = first_frames.len();
     let first = Resource::from_reader(
@@ -1006,16 +1012,15 @@ fn load_tagged_queue<const N: usize>(
     harness: &OfflinePlayerHarness,
     items: [(Resource, Arc<str>); N],
 ) {
-    harness.player().reserve_slots(items.len());
-    for (index, (resource, item_id)) in items.into_iter().enumerate() {
-        harness
-            .player()
-            .replace_item_tagged(index, resource, Some(item_id));
-    }
-    harness
-        .player()
-        .select_item(0, true)
-        .expect("select first queue item");
+    harness.with_player(|player| {
+        player.reserve_slots(items.len());
+        for (index, (resource, item_id)) in items.into_iter().enumerate() {
+            player.replace_item_tagged(index, resource, Some(item_id));
+        }
+        player
+            .select_item(0, true)
+            .expect("select first queue item");
+    });
 }
 
 struct SyntheticSeamRender {

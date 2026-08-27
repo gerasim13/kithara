@@ -414,13 +414,13 @@ async fn hls_rate_seek_stress_keeps_playback_live(#[case] backend: DecoderBacken
         ))
         .build(),
     );
-    let player = Arc::new(PlayerImpl::new(
+    let player = PlayerImpl::new(
         PlayerConfig::builder()
             .worker(worker)
             .session(OfflineSession::arc_auto())
             .cancel(shutdown_token.child())
             .build(),
-    ));
+    );
     let queue = Arc::new(Queue::new(
         QueueConfig::builder()
             .player(player)
@@ -445,7 +445,9 @@ async fn hls_rate_seek_stress_keeps_playback_live(#[case] backend: DecoderBacken
     .build();
 
     let mut rx = queue.subscribe();
-    let hls_id = queue.append(TrackSource::Config(Box::new(hls_config)));
+    let hls_id = queue
+        .append(TrackSource::Config(Box::new(hls_config)))
+        .expect("append packaged HLS track");
     wait_for_loader_done_event(&mut rx, &queue, hls_id, Duration::from_secs(20))
         .await
         .expect("packaged HLS track must load");

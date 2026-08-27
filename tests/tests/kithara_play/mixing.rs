@@ -100,7 +100,9 @@ impl MixHarness {
                         PlayWorkerConfig::for_pools(BytePool::default(), PcmPool::default())
                             .build(),
                     ))
-                    .sample_rate(SAMPLE_RATE)
+                    .sample_rate(
+                        NonZeroU32::new(SAMPLE_RATE).expect("fixture sample rate is non-zero"),
+                    )
                     .crossfade_duration(0.0)
                     .session(Arc::clone(&session) as Arc<dyn SessionDispatcher>)
                     .build();

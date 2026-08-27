@@ -1,6 +1,6 @@
 use kithara_events::RouteDescription;
 
-use super::super::core::PlayerImpl;
+use super::super::core::PlayerRuntime;
 use crate::{
     api::{RouteChangeReason, SessionEvent, SlotId},
     bridge::PlayerCmd,
@@ -9,7 +9,7 @@ use crate::{
     player::state::phase::PlayerPhaseKind,
 };
 
-impl PlayerImpl {
+impl PlayerRuntime {
     /// Ensure we have an active slot, allocating one if needed.
     pub fn ensure_slot(&self) -> Result<SlotId, PlayError> {
         if let Some(id) = self.slot() {

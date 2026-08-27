@@ -24,13 +24,14 @@ pub(crate) struct MasterEqBand {
 }
 
 #[derive(Diff, Patch, Debug, Clone, PartialEq)]
-pub(crate) struct MasterEqNode {
+pub struct MasterEqNode {
     pub(crate) bands: Vec<MasterEqBand>,
     pub(crate) enabled: bool,
 }
 
 impl MasterEqNode {
-    pub(crate) fn new(layout: &[EqBandConfig]) -> Self {
+    #[must_use]
+    pub fn new(layout: &[EqBandConfig]) -> Self {
         let bands = layout
             .iter()
             .map(|band| MasterEqBand {
@@ -47,10 +48,15 @@ impl MasterEqNode {
         }
     }
 
-    pub(crate) fn set_gain(&mut self, index: usize, gain_db: GainDb) {
+    pub fn set_gain(&mut self, index: usize, gain_db: GainDb) {
         if let Some(band) = self.bands.get_mut(index) {
             band.gain_db = f32::from(gain_db);
         }
+    }
+
+    #[must_use]
+    pub fn band_count(&self) -> usize {
+        self.bands.len()
     }
 }
 

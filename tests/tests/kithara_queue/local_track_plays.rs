@@ -183,7 +183,7 @@ fn build_queue_with_tick(
     tokio::task::JoinHandle<()>,
 ) {
     let store = kithara_integration_tests::disk_asset_store(temp_dir.path());
-    let player = Arc::new(PlayerImpl::new(
+    let player = PlayerImpl::new(
         PlayerConfig::builder()
             .worker(PlayWorker::new(
                 PlayWorkerConfig::for_pools(
@@ -194,7 +194,7 @@ fn build_queue_with_tick(
             ))
             .session(OfflineSession::arc_auto())
             .build(),
-    ));
+    );
     let queue = Arc::new(Queue::new(
         QueueConfig::builder()
             .player(player)
@@ -301,7 +301,7 @@ async fn local_track_plays_end_to_end(
     // so audio sink-truth events arrive here too.
     let mut rx = queue.subscribe();
 
-    let track_id = queue.append(source);
+    let track_id = queue.append(source).expect("append local track");
 
     wait_for_loader_done_event(&mut rx, &queue, track_id, Duration::from_secs(30))
         .await
@@ -506,7 +506,9 @@ async fn local_queue_playlist_behavior(#[case] backend: DecoderBackend) {
             )
             .initial_abr_mode(AbrMode::Auto(None))
             .build();
-            queue.append(TrackSource::Config(Box::new(cfg)))
+            queue
+                .append(TrackSource::Config(Box::new(cfg)))
+                .expect("append crossfade fixture track")
         })
         .collect();
 
@@ -562,7 +564,9 @@ async fn local_queue_playlist_behavior(#[case] backend: DecoderBackend) {
         .await
         .unwrap_or_else(|e| panic!("pre-crossfade: next track load [{}]: {e}", urls[1]));
     let xf_duration = queue.crossfade_duration();
-    queue.advance_to_next(Transition::Crossfade, AdvanceReason::UserNext);
+    queue
+        .advance_to_next(Transition::Crossfade, AdvanceReason::UserNext)
+        .expect("advance local-track crossfade");
     let started = wait_for_queue_event(
         &mut rx,
         |ev| matches!(ev, QueueEvent::CrossfadeStarted { .. }),

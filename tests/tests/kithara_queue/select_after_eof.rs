@@ -8,7 +8,7 @@ use kithara::{
     events::TrackStatus,
     platform::sync::Arc,
     play::Resource,
-    queue::{Queue, QueueConfig, Transition},
+    queue::{Queue, QueueConfig, Transition, test_utils::QueueProbe},
 };
 use kithara_integration_tests::{
     audio_mock::TestPcmReader,
@@ -63,7 +63,7 @@ fn make_fixture() -> (OfflinePlayerHarness, Queue) {
         SAMPLE_RATE,
     );
     let config = QueueConfig::builder()
-        .player(Arc::clone(harness.player()))
+        .player(harness.take_player())
         .should_autoplay(false)
         .build();
     let queue = Queue::new(config);

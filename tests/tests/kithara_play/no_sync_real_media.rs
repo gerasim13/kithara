@@ -775,7 +775,9 @@ async fn prepare_deck(
                 PlayWorkerConfig::for_pools(BytePool::default(), PcmPool::default()).build(),
             ))
             .bus(bus)
-            .sample_rate(case.host_rate)
+            .sample_rate(
+                NonZeroU32::new(case.host_rate).expect("host sample rate must be non-zero"),
+            )
             .crossfade_duration(0.0)
             .timestretch(Arc::clone(&controls))
             .session(dispatcher)

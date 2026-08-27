@@ -26,7 +26,7 @@ where
         return Ok(());
     };
     let session = first.session_handle();
-    let dispatcher = session.dispatcher();
+    let dispatcher = session.dispatcher()?;
 
     for &(_, level) in &inputs {
         if !level.is_finite() || !(0.0..=1.0).contains(&level) {
@@ -34,7 +34,7 @@ where
         }
     }
     for &(engine, _) in &inputs {
-        if !Arc::ptr_eq(&engine.session_handle().dispatcher(), &dispatcher) {
+        if !Arc::ptr_eq(&engine.session_handle().dispatcher()?, &dispatcher) {
             return Err(PlayError::MixForeignSession);
         }
     }

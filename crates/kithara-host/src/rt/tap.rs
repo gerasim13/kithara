@@ -1,6 +1,6 @@
 use core::{
     num::{NonZeroU32, NonZeroUsize},
-    sync::atomic::Ordering,
+    sync::atomic::{AtomicU64, Ordering},
 };
 
 use firewheel::{
@@ -12,9 +12,12 @@ use firewheel::{
         ProcBuffers, ProcExtra, ProcInfo, ProcStreamCtx, ProcessStatus,
     },
 };
-use kithara_platform::sync::Mutex;
+use kithara_platform::sync::{Arc, Mutex};
 use kithara_test_utils::kithara;
-use ringbuf::traits::{Observer, Producer};
+use ringbuf::{
+    HeapProd,
+    traits::{Observer, Producer},
+};
 
 use crate::bridge::MixTapWriter;
 
@@ -52,7 +55,7 @@ impl AudioNode for TapNode {
 }
 
 struct TapProcessor {
-    writer: Option<MixTapWriter>,
+    writer: Option<(HeapProd<f32>, Arc<AtomicU64>)>,
     sample_rate: NonZeroU32,
 }
 
@@ -61,7 +64,7 @@ impl TapProcessor {
 
     fn new(writer: Option<MixTapWriter>, sample_rate: NonZeroU32) -> Self {
         Self {
-            writer,
+            writer: writer.map(Into::into),
             sample_rate,
         }
     }
@@ -87,29 +90,27 @@ impl AudioNodeProcessor for TapProcessor {
         _events: &mut ProcEvents,
         _extra: &mut ProcExtra,
     ) -> ProcessStatus {
-        let Some(ref mut writer) = self.writer else {
+        let Some((pcm, drops)) = self.writer.as_mut() else {
             return ProcessStatus::ClearAllOutputs;
         };
         let stereo = Self::STEREO.get();
         let [left, right, ..] = buffers.inputs else {
-            writer
-                .drops
-                .fetch_add(dropped_samples(info.frames, 0, stereo), Ordering::Relaxed);
+            drops.fetch_add(dropped_samples(info.frames, 0, stereo), Ordering::Relaxed);
             return ProcessStatus::ClearAllOutputs;
         };
         let frames = info
             .frames
-            .min(writer.pcm.vacant_len() / stereo)
+            .min(pcm.vacant_len() / stereo)
             .min(left.len())
             .min(right.len());
         let interleaved = left[..frames]
             .iter()
             .zip(&right[..frames])
             .flat_map(|(&left, &right)| [left, right]);
-        let pushed = writer.pcm.push_iter(interleaved);
+        let pushed = pcm.push_iter(interleaved);
         let dropped = dropped_samples(info.frames, pushed, stereo);
         if dropped > 0 {
-            writer.drops.fetch_add(dropped, Ordering::Relaxed);
+            drops.fetch_add(dropped, Ordering::Relaxed);
         }
 
         ProcessStatus::ClearAllOutputs
@@ -124,7 +125,6 @@ fn dropped_samples(frames: usize, pushed: usize, stereo: usize) -> u64 {
 mod tests {
     use core::sync::atomic::AtomicU64;
 
-    use kithara_platform::sync::Arc;
     use ringbuf::{
         HeapRb,
         traits::{Observer, Split},

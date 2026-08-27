@@ -5,7 +5,7 @@ use std::env;
 use kithara::{
     assets::AssetStore,
     decode::DecoderBackend,
-    platform::{sync::Arc, time::Duration},
+    platform::time::Duration,
     play::ResourceConfig,
     queue::{Queue, QueueConfig, TrackSource, Transition},
     stream::dl::Downloader,
@@ -44,7 +44,7 @@ async fn queue_playback_architecture() {
     );
     let queue = Queue::new(
         QueueConfig::builder()
-            .player(Arc::clone(harness.player()))
+            .player(harness.take_player())
             .store(store.clone())
             .build(),
     );
@@ -52,7 +52,9 @@ async fn queue_playback_architecture() {
     let config = resource_config(url.as_str(), downloader, store);
     let mut events = queue.subscribe();
 
-    let track_id = queue.append(TrackSource::Config(Box::new(config)));
+    let track_id = queue
+        .append(TrackSource::Config(Box::new(config)))
+        .expect("append local MP3");
     wait_for_loader_done_event(&mut events, &queue, track_id, Duration::from_secs(30))
         .await
         .expect("local MP3 load");

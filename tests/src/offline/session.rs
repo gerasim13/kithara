@@ -5,12 +5,13 @@ use std::{
 
 use kithara::{
     audio::ConsumerWakeMode,
+    host::testing::GraphSession,
     platform::{
         sync::{Arc, Mutex, mpsc},
         thread::{JoinHandle, spawn_named},
         time::{Duration, Instant},
     },
-    play::{Cmd, MixTapWriter, PlayError, Reply, SessionDispatcher, SessionState, run_cmd},
+    play::{Cmd, MixTapWriter, PlayError, Reply, SessionDispatcher},
 };
 use ringbuf::{
     HeapCons, HeapRb,
@@ -44,7 +45,7 @@ const ENDPOINT_SLACK_SECS: f64 = 0.5;
 /// broken cadence (extra blocks per park) overshoots the ceiling anyway.
 #[must_use]
 pub fn offline_gain_window(window_secs: f64) -> RangeInclusive<f64> {
-    let default_rate = SessionState::<OfflineBackend>::DEFAULT_SAMPLE_RATE;
+    let default_rate = GraphSession::<OfflineBackend>::DEFAULT_SAMPLE_RATE;
     let block_frames = f64::from(u32::try_from(OFFLINE_BLOCK_FRAMES).unwrap_or(u32::MAX));
     let park_ms = f64::from(u32::try_from(OFFLINE_PARK_MS).unwrap_or(u32::MAX));
     let rate = (block_frames / f64::from(default_rate)) / (park_ms / 1_000.0);
@@ -214,7 +215,7 @@ fn start_stream_offline(
 }
 
 fn offline_session_thread(cmd_rx: &mpsc::Receiver<OfflineMsg>, auto_render: bool) {
-    let mut state = SessionState::<OfflineBackend>::new(start_stream_offline);
+    let mut state = GraphSession::<OfflineBackend>::new(start_stream_offline);
     if auto_render {
         run_auto(&mut state, cmd_rx);
     } else {
@@ -222,11 +223,11 @@ fn offline_session_thread(cmd_rx: &mpsc::Receiver<OfflineMsg>, auto_render: bool
     }
 }
 
-fn run_manual(state: &mut SessionState<OfflineBackend>, cmd_rx: &mpsc::Receiver<OfflineMsg>) {
+fn run_manual(state: &mut GraphSession<OfflineBackend>, cmd_rx: &mpsc::Receiver<OfflineMsg>) {
     for msg in cmd_rx.iter() {
         match msg {
             OfflineMsg::Cmd { cmd, reply_tx } => {
-                let reply = run_cmd(state, cmd);
+                let reply = state.exec(cmd);
                 let _ = reply_tx.send(reply);
             }
             OfflineMsg::Render { frames, reply_tx } => {
@@ -238,7 +239,7 @@ fn run_manual(state: &mut SessionState<OfflineBackend>, cmd_rx: &mpsc::Receiver<
     }
 }
 
-fn run_auto(state: &mut SessionState<OfflineBackend>, cmd_rx: &mpsc::Receiver<OfflineMsg>) {
+fn run_auto(state: &mut GraphSession<OfflineBackend>, cmd_rx: &mpsc::Receiver<OfflineMsg>) {
     loop {
         // Block on the next command, but no longer than one render budget: a
         // command (or `Shutdown`) wakes us at once through the engine-aware
@@ -248,7 +249,7 @@ fn run_auto(state: &mut SessionState<OfflineBackend>, cmd_rx: &mpsc::Receiver<Of
         let deadline = Instant::now() + Duration::from_millis(OFFLINE_PARK_MS);
         match cmd_rx.recv_timeout(deadline) {
             Ok(OfflineMsg::Cmd { cmd, reply_tx }) => {
-                let reply = run_cmd(state, cmd);
+                let reply = state.exec(cmd);
                 let _ = reply_tx.send(reply);
             }
             Ok(OfflineMsg::Render { frames, reply_tx }) => {
@@ -263,7 +264,7 @@ fn run_auto(state: &mut SessionState<OfflineBackend>, cmd_rx: &mpsc::Receiver<Of
     }
 }
 
-fn render_block(state: &mut SessionState<OfflineBackend>, frames: usize) -> Vec<f32> {
+fn render_block(state: &mut GraphSession<OfflineBackend>, frames: usize) -> Vec<f32> {
     let Some(ctx) = state.ctx_mut() else {
         return Vec::new();
     };

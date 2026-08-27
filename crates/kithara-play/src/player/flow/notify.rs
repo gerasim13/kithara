@@ -2,24 +2,24 @@ use std::{ops::Deref, sync::atomic::Ordering};
 
 use kithara_platform::sync::Arc;
 
-use super::super::core::PlayerImpl;
+use super::super::core::PlayerRuntime;
 use crate::{
     api::{EngineEvent, PlayerEvent, SlotId},
     bridge::{PlayerNotification, TrackPlaybackStopReason},
 };
 
 struct Notifier<'a> {
-    player: &'a PlayerImpl,
+    player: &'a PlayerRuntime,
 }
 
 impl<'a> Notifier<'a> {
-    const fn new(player: &'a PlayerImpl) -> Self {
+    const fn new(player: &'a PlayerRuntime) -> Self {
         Self { player }
     }
 }
 
 impl Deref for Notifier<'_> {
-    type Target = PlayerImpl;
+    type Target = PlayerRuntime;
 
     fn deref(&self) -> &Self::Target {
         self.player
@@ -184,7 +184,7 @@ impl Notifier<'_> {
     }
 }
 
-impl PlayerImpl {
+impl PlayerRuntime {
     pub fn process_notifications(&self) {
         Notifier::new(self).process_notifications();
     }
@@ -216,7 +216,7 @@ pub(crate) fn player_event_from_notification(
 }
 
 fn player_events_from_notification(
-    player: &PlayerImpl,
+    player: &PlayerRuntime,
     notification: &PlayerNotification,
 ) -> Vec<kithara_events::Event> {
     let mut events = Vec::new();

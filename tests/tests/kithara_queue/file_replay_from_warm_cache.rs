@@ -58,14 +58,14 @@ fn build_session(cache_path: &Path) -> Session {
         .pool(byte_pool.clone())
         .flush_hub(Arc::clone(&flush_hub))
         .build();
-    let player = Arc::new(PlayerImpl::new(
+    let player = PlayerImpl::new(
         PlayerConfig::builder()
             .worker(PlayWorker::new(
                 PlayWorkerConfig::for_pools(byte_pool.clone(), pcm_pool).build(),
             ))
             .session(OfflineSession::arc_auto())
             .build(),
-    ));
+    );
     let queue = Arc::new(Queue::new(
         QueueConfig::builder()
             .player(player)
@@ -107,7 +107,10 @@ fn track_source(url: &Url, session: &Session) -> TrackSource {
 
 async fn play_one_session(url: &Url, cache_path: &Path, min_play_secs: f64, label: &str) {
     let session = build_session(cache_path);
-    let id = session.queue.append(track_source(url, &session));
+    let id = session
+        .queue
+        .append(track_source(url, &session))
+        .expect("append replay track");
     wait_for_loader_done(&session.queue, id, Duration::from_secs(30))
         .await
         .unwrap_or_else(|e| panic!("[{label}] load: {e}"));

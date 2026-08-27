@@ -87,12 +87,12 @@ async fn build_ctx() -> Ctx {
         .worker(worker.clone())
         .store(store)
         .build();
-    let player = Arc::new(PlayerImpl::new(
+    let player = PlayerImpl::new(
         PlayerConfig::builder()
             .worker(worker)
             .session(OfflineSession::arc_auto())
             .build(),
-    ));
+    );
     let queue = Arc::new(Queue::new(QueueConfig::builder().player(player).build()));
 
     let q = Arc::clone(&queue);
@@ -400,13 +400,16 @@ async fn rapid_scrub_does_not_silently_advance(#[case] backend: DecoderBackend) 
 
     let _before_id = ctx
         .queue
-        .append(build_track_source(SENTINEL_BEFORE, &ctx, backend));
+        .append(build_track_source(SENTINEL_BEFORE, &ctx, backend))
+        .expect("append leading sentinel");
     let target_id = ctx
         .queue
-        .append(build_track_source(TARGET_TRACK, &ctx, backend));
+        .append(build_track_source(TARGET_TRACK, &ctx, backend))
+        .expect("append scrub target");
     let _after_id = ctx
         .queue
-        .append(build_track_source(SENTINEL_AFTER, &ctx, backend));
+        .append(build_track_source(SENTINEL_AFTER, &ctx, backend))
+        .expect("append trailing sentinel");
 
     wait_for_loaded(&mut rx, &ctx.queue, target_id, LOAD_BUDGET)
         .await

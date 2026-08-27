@@ -1,12 +1,12 @@
 use kithara_events::{EventReceiver, QueueEvent, QueueRepeatMode, TrackId};
 
-use super::Queue;
+use super::QueueControl;
 use crate::{
     navigation::RepeatMode,
     track::{TrackEntry, TrackRecord, TrackSource},
 };
 
-impl Queue {
+impl QueueControl {
     /// The currently playing track entry, if any.
     ///
     /// Sourced from the navigation cursor (not the player) so the queue
@@ -39,15 +39,19 @@ impl Queue {
 
     /// Set repeat mode.
     pub fn set_repeat(&self, mode: RepeatMode) {
-        self.lock_navigation_mut().set_repeat(mode);
-        self.bus.publish(QueueEvent::RepeatModeChanged {
-            mode: map_repeat_mode(mode),
+        self.command(|queue| {
+            queue.lock_navigation_mut().set_repeat(mode);
+            queue.bus.publish(QueueEvent::RepeatModeChanged {
+                mode: map_repeat_mode(mode),
+            });
         });
     }
 
     /// Enable or disable shuffle.
     pub fn set_shuffle(&self, on: bool) {
-        self.lock_navigation_mut().set_shuffle(on);
+        self.command(|queue| {
+            queue.lock_navigation_mut().set_shuffle(on);
+        });
     }
 
     /// Subscribe to the unified event stream:

@@ -172,11 +172,7 @@ pub(crate) fn prepare_route_restart<B: AudioBackend>(
         .as_ref()
         .ok_or(SessionError::NoContext)?
         .is_audio_stream_running();
-    let current = state
-        .host
-        .as_ref()
-        .ok_or_else(|| SessionError::Graph("session host group is missing".to_owned()))?
-        .snapshot();
+    let current = state.root.snapshot();
     let MapAxis::Session(axis) = current.axis() else {
         return Err(SessionError::Graph(
             "session host published a non-session grid axis".to_owned(),
@@ -220,10 +216,9 @@ pub(crate) fn prepare_route_restart<B: AudioBackend>(
         // Zero remains a backend-default request; the grid axis is always concrete.
         let sample_rate = NonZeroU32::new(sample_rate).unwrap_or_else(|| axis.sample_rate());
         state
-            .host
-            .as_mut()
-            .ok_or_else(|| SessionError::Graph("session host group is missing".to_owned()))?
+            .root
             .publish_unavailable_grid(stamp, sample_rate, target.epoch())?;
+        state.publish_root();
         state.reserved_session_grid = Some(target);
         target
     };
@@ -256,11 +251,7 @@ fn finish_route_restart<B: AudioBackend>(
         .promote(actual)
         .map_err(|error| SessionError::Graph(error.message().to_owned()))?;
     if promoted != target {
-        let published = state
-            .host
-            .as_ref()
-            .ok_or_else(|| SessionError::Graph("session host group is missing".to_owned()))?
-            .snapshot();
+        let published = state.root.snapshot();
         let MapAxis::Session(published_axis) = published.axis() else {
             return Err(SessionError::Graph(
                 "session host published a non-session grid axis".to_owned(),
@@ -269,11 +260,12 @@ fn finish_route_restart<B: AudioBackend>(
         let stamp = promoted
             .stamp()
             .map_err(|error| SessionError::Graph(error.message().to_owned()))?;
-        state
-            .host
-            .as_mut()
-            .ok_or_else(|| SessionError::Graph("session host group is missing".to_owned()))?
-            .publish_unavailable_grid(stamp, published_axis.sample_rate(), promoted.epoch())?;
+        state.root.publish_unavailable_grid(
+            stamp,
+            published_axis.sample_rate(),
+            promoted.epoch(),
+        )?;
+        state.publish_root();
         state.reserved_session_grid = Some(promoted);
     }
     let observed = state
@@ -446,14 +438,11 @@ fn refresh_observation<B: AudioBackend>(
         .as_mut()
         .ok_or_else(|| SessionError::Graph("session transport control is missing".to_owned()))?
         .observation();
-    if let Some(snapshot) = observation.snapshot() {
-        let host = state
-            .host
-            .as_mut()
-            .ok_or_else(|| SessionError::Graph("session host group is missing".to_owned()))?;
-        if host.snapshot().stamp() != snapshot.session_grid_stamp() {
-            host.publish_grid(snapshot.session_grid())?;
-        }
+    if let Some(snapshot) = observation.snapshot()
+        && state.root.snapshot().stamp() != snapshot.session_grid_stamp()
+    {
+        state.root.publish_grid(snapshot.session_grid())?;
+        state.publish_root();
     }
     if let Some(completion) = observation.completion() {
         apply_completion(state, completion);
@@ -566,9 +555,7 @@ fn transport_events(
 }
 
 fn publish_transport_event<B: AudioBackend>(state: &SessionState<B>, event: &TransportEvent) {
-    if let Some(host) = &state.host {
-        for deck in host.decks() {
-            deck.bus.publish(event.clone());
-        }
+    for deck in state.graph.decks() {
+        deck.bus.publish(event.clone());
     }
 }

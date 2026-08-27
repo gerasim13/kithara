@@ -56,11 +56,14 @@ impl SharedEq {
         Ok(())
     }
 
-    pub(crate) fn snapshot(&self) -> Vec<f32> {
+    /// Returns one control-plane copy of the current band gains.
+    #[must_use]
+    pub fn snapshot(&self) -> Vec<f32> {
         self.gains.load().iter().map(load_gain).collect()
     }
 
-    pub(crate) fn replace(&self, gains: &[GainDb]) {
+    /// Replaces the complete control-plane band layout atomically.
+    pub fn replace(&self, gains: &[GainDb]) {
         self.gains.store(Arc::new(band_array(gains)));
     }
 }

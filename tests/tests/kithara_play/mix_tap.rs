@@ -29,11 +29,12 @@ fn playing_harness() -> OfflinePlayerHarness {
         OfflinePlayerOptions::builder().build(),
         SAMPLE_RATE,
     );
-    harness.player().insert(make_resource(), None, None);
-    harness
-        .player()
-        .select_item(0, true)
-        .expect("select first queue item");
+    harness.with_player(|player| {
+        player.insert(make_resource(), None, None);
+        player
+            .select_item(0, true)
+            .expect("select first queue item");
+    });
     harness.render(BLOCK_FRAMES);
     let _ = harness.tick_and_drain();
     harness
@@ -106,11 +107,12 @@ fn a_tap_armed_before_playback_reaches_the_graph_it_waits_for() {
         .expect("arm the mix tap before a session output exists");
     assert!(tap.drain().is_empty(), "an idle session feeds nothing");
 
-    harness.player().insert(make_resource(), None, None);
-    harness
-        .player()
-        .select_item(0, true)
-        .expect("select first queue item");
+    harness.with_player(|player| {
+        player.insert(make_resource(), None, None);
+        player
+            .select_item(0, true)
+            .expect("select first queue item");
+    });
 
     let rendered = render_blocks(&harness, BLOCKS);
     assert_eq!(

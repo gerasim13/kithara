@@ -97,15 +97,18 @@ async fn run_case(helper: &TestServerHelper, temp_dir: &TestTempDir, target_kind
         .pool(byte_pool.clone())
         .build();
     let session = Arc::new(OfflineSession::new_manual());
-    let player = Arc::new(PlayerImpl::new(
+    let player = PlayerImpl::new(
         PlayerConfig::builder()
-            .sample_rate(SAMPLE_RATE)
+            .sample_rate(
+                std::num::NonZeroU32::new(SAMPLE_RATE)
+                    .expect("fixture sample rate must be non-zero"),
+            )
             .worker(kithara::play::PlayWorker::new(
                 kithara::play::PlayWorkerConfig::for_pools(byte_pool, region.pcm_pool()).build(),
             ))
             .session(Arc::clone(&session) as Arc<dyn SessionDispatcher>)
             .build(),
-    ));
+    );
     let queue = Queue::new(
         QueueConfig::builder()
             .player(player)
@@ -120,7 +123,9 @@ async fn run_case(helper: &TestServerHelper, temp_dir: &TestTempDir, target_kind
     .build();
 
     let mut rx = queue.subscribe();
-    let id = queue.append(TrackSource::Config(Box::new(cfg)));
+    let id = queue
+        .append(TrackSource::Config(Box::new(cfg)))
+        .expect("append HLS track");
     queue
         .select(id, Transition::None)
         .expect("select HLS track");

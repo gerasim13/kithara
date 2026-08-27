@@ -1,24 +1,23 @@
+mod lifecycle;
+mod player;
+
 use delegate::delegate;
-use kithara_abr::{AbrController, AbrSettings};
 use kithara_bufpool::{BytePool, PcmPool};
 use kithara_decode::GaplessMode;
-use kithara_platform::{
-    CancelScope,
-    sync::{Arc, Mutex},
-};
+use kithara_platform::sync::{Arc, Mutex};
 use kithara_warp::StretchControls;
 use tracing::debug;
 
-use super::{
-    config::PlayerConfig,
-    state::{ItemQueue, PlayerParams, PlayerPhase},
-};
+use self::lifecycle::{CloseAdmission, PlayerLifecycle};
+pub use self::player::PlayerImpl;
+use super::state::{ItemQueue, PlayerParams, PlayerPhase};
 use crate::{
     api::{PlayerEvent, PlayerStatus},
     bridge::PlayerCmd,
-    engine::{EngineConfig, EngineImpl},
+    engine::EngineImpl,
     error::PlayError,
     resource::Resource,
+    session::SessionBinding,
     worker::{EngineLoad, PlayWorker},
 };
 
@@ -34,8 +33,8 @@ pub(crate) struct PlayerCore {
     pub(crate) timestretch: Arc<StretchControls>,
     /// Undelivered resources unregister before the worker owner drops.
     pub(crate) items: ItemQueue,
-    /// The engine unregisters its session/player lanes before the worker owner
-    /// drops.
+    /// Host lifecycle explicitly detaches the engine session lane before the
+    /// worker owner drops.
     pub(crate) engine: EngineImpl,
     /// Explicit shared playback worker. Declared after both resource owners.
     pub(crate) worker: PlayWorker,
@@ -58,62 +57,26 @@ pub(crate) struct PlayerCore {
 /// `Mutex<PlayerPhase>` carrying the slot / ABR handle / armed-next, while
 /// `core` holds the phase-neutral fields. `phase` is declared first so it
 /// drops before `core.engine`.
-pub struct PlayerImpl {
+#[doc(hidden)]
+pub struct PlayerRuntime {
+    lifecycle: PlayerLifecycle,
+    operations: Mutex<()>,
     pub(crate) phase: Mutex<PlayerPhase>,
     pub(crate) core: PlayerCore,
 }
 
-impl PlayerImpl {
+impl PlayerRuntime {
     /// Minimum playback rate to prevent stalling.
     pub(crate) const MIN_PLAYBACK_RATE: f32 = PlayerParams::MIN_PLAYBACK_RATE;
 
-    /// Create a new player with the given configuration.
-    #[must_use]
-    pub fn new(mut config: PlayerConfig) -> Self {
-        let resolved_pool = config.worker.pcm_pool().clone();
-
-        let bus = config.bus.clone().unwrap_or_default();
-
-        // Composed/standalone seam: `Some(parent)` → the player's master is a
-        // child of it (so a passed cancel reaches the player but the player's
-        // Drop never cancels the passed token); `None` → own root.
-        let cancel = CancelScope::new(config.cancel.clone()).token();
-        config.cancel = Some(cancel.clone());
-
-        let engine_config = EngineConfig::builder()
-            .eq_layout(config.eq_layout.clone())
-            .max_slots(config.max_slots)
-            .sample_rate(config.sample_rate)
-            .pcm_pool(resolved_pool)
-            .maybe_session(config.session.clone())
-            .cancel(cancel.clone())
-            .build();
-        let engine = EngineImpl::new(engine_config, bus.clone());
-        if config.abr.is_none() {
-            let abr_settings = AbrSettings::builder().cancel(cancel.clone()).build();
-            config.abr = Some(AbrController::new(abr_settings));
-        }
-
-        // Seed the single speed source with the configured default rate.
-        config.timestretch.set_speed(config.default_rate);
-        let params = PlayerParams::from(&config);
-        let core = PlayerCore {
-            engine,
-            worker: config.worker,
-            engine_load: Arc::new(EngineLoad::default()),
-            params,
-            timestretch: config.timestretch,
-            gapless_mode: config.gapless_mode,
-            status: Mutex::default(),
-            items: ItemQueue::new(bus),
-        };
-        Self {
-            core,
-            phase: Mutex::new(PlayerPhase::Idle),
-        }
-    }
-
     delegate! {
+        to self.lifecycle {
+            fn begin_close(&self) -> Result<CloseAdmission, PlayError>;
+            fn finish_close(&self);
+            #[call(reopen)]
+            fn reopen_controls(&self);
+            pub(crate) fn is_closed(&self) -> bool;
+        }
         to self.core.items {
             /// Advance to the next item in the queue.
             ///
@@ -154,6 +117,45 @@ impl PlayerImpl {
             #[must_use]
             pub fn pcm_pool(&self) -> &PcmPool;
         }
+    }
+
+    pub(super) fn attach_session(&self, binding: SessionBinding) -> Result<(), PlayError> {
+        self.with_open_result(|runtime| runtime.core.engine.attach_session(binding))
+    }
+
+    pub(super) fn with_open<T>(&self, operation: impl FnOnce(&Self) -> T) -> Result<T, PlayError> {
+        let _admission = self.operations.lock();
+        if self.is_closed() {
+            return Err(PlayError::Closed);
+        }
+        Ok(operation(self))
+    }
+
+    pub(super) fn with_open_result<T>(
+        &self,
+        operation: impl FnOnce(&Self) -> Result<T, PlayError>,
+    ) -> Result<T, PlayError> {
+        self.with_open(operation)?
+    }
+
+    pub(super) fn close(&self) -> Result<(), PlayError> {
+        let _admission = self.operations.lock();
+        match self.begin_close()? {
+            CloseAdmission::AlreadyClosed => return Ok(()),
+            CloseAdmission::Begin => {}
+        }
+        if let Err(error) = self.core.engine.close() {
+            self.reopen_controls();
+            return Err(error);
+        }
+        self.finish_close();
+        Ok(())
+    }
+
+    fn invalidate(&self) {
+        let _admission = self.operations.lock();
+        self.finish_close();
+        self.core.engine.cancel();
     }
 
     pub(crate) fn enqueue_to_processor(&self, index: usize) -> Option<(Arc<str>, f64)> {
@@ -214,40 +216,27 @@ impl PlayerImpl {
     }
 }
 
-impl Drop for PlayerImpl {
-    fn drop(&mut self) {
-        self.core.engine.cancel();
-    }
-}
-
-impl crate::api::Equalizer for PlayerImpl {
-    delegate! {
-        to self {
-            #[call(eq_band_count)]
-            fn band_count(&self) -> usize;
-            #[call(eq_gain)]
-            fn gain(&self, band: usize) -> Option<f32>;
-            #[call(reset_eq)]
-            fn reset(&self) -> Result<(), PlayError>;
-            #[call(set_eq_gain)]
-            fn set_gain(&self, band: usize, gain_db: f32) -> Result<(), PlayError>;
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
+    use std::{
+        num::NonZeroU32,
+        sync::mpsc::{RecvTimeoutError, channel},
+    };
+
     use kithara_assets::AssetStore;
     use kithara_bufpool::{BytePool, PcmPool};
     use kithara_decode::GaplessMode;
     use kithara_events::{Envelope, Event};
-    use kithara_platform::CancelToken;
+    use kithara_platform::{CancelToken, time::Duration};
     use kithara_test_utils::kithara;
-    use kithara_warp::StretchControls;
+    use kithara_warp::{BeatGrid, StretchControls};
 
     use super::*;
     use crate::{
-        PlayWorkerConfig, bridge::PlayerCmd, effects::eq::generate_log_spaced_bands,
+        PlayWorkerConfig,
+        bridge::PlayerCmd,
+        effects::eq::generate_log_spaced_bands,
+        player::{PlayerConfig, PlayerMember},
         session::testing,
     };
 
@@ -275,7 +264,98 @@ mod tests {
     }
 
     fn player() -> PlayerImpl {
-        PlayerImpl::new(PlayerConfig::builder().worker(worker()).build())
+        PlayerImpl::new(
+            PlayerConfig::builder()
+                .worker(worker())
+                .session(testing::test_session())
+                .build(),
+        )
+    }
+
+    #[kithara::test]
+    fn close_waits_for_an_admitted_operation() {
+        let player = player();
+        let runtime = Arc::clone(&player.runtime);
+        let control = player.make_control();
+        let (entered_tx, entered_rx) = channel();
+        let (release_tx, release_rx) = channel();
+        let operation = std::thread::spawn(move || {
+            runtime
+                .with_open(|_| {
+                    entered_tx.send(()).expect("report admitted operation");
+                    release_rx.recv().expect("release admitted operation");
+                })
+                .expect("operation remains admitted");
+        });
+        entered_rx
+            .recv()
+            .expect("operation entered the admission gate");
+
+        let (attempting_tx, attempting_rx) = channel();
+        let (closing_tx, closing_rx) = channel();
+        let closer = std::thread::spawn(move || {
+            attempting_tx.send(()).expect("report close attempt");
+            closing_tx
+                .send(control.close())
+                .expect("report close result");
+        });
+        attempting_rx
+            .recv()
+            .expect("close reached the admission gate");
+        assert!(matches!(
+            closing_rx.recv_timeout(Duration::from_millis(50)),
+            Err(RecvTimeoutError::Timeout)
+        ));
+
+        release_tx.send(()).expect("release admitted operation");
+        operation.join().expect("operation thread completed");
+        closer.join().expect("close thread completed");
+        closing_rx
+            .recv()
+            .expect("close result returned after the operation")
+            .expect("close succeeds");
+        assert!(player.runtime.is_closed());
+        assert!(matches!(
+            player.make_control().tick(),
+            Err(PlayError::Closed)
+        ));
+        assert!(matches!(
+            player.runtime.with_open(|_| ()),
+            Err(PlayError::Closed)
+        ));
+    }
+
+    #[kithara::test]
+    fn player_lifecycle_admits_only_one_concurrent_close() {
+        let lifecycle = Arc::new(PlayerLifecycle::open());
+        assert!(
+            matches!(lifecycle.begin_close(), Ok(CloseAdmission::Begin)),
+            "first closer owns the transition"
+        );
+
+        let concurrent = Arc::clone(&lifecycle);
+        let result = std::thread::spawn(move || concurrent.begin_close())
+            .join()
+            .expect("BUG: lifecycle probe thread panicked");
+        assert!(matches!(result, Err(PlayError::Closed)));
+
+        lifecycle.reopen();
+        assert!(matches!(lifecycle.begin_close(), Ok(CloseAdmission::Begin)));
+        lifecycle.finish_close();
+        assert!(matches!(
+            lifecycle.begin_close(),
+            Ok(CloseAdmission::AlreadyClosed)
+        ));
+    }
+
+    #[kithara::test]
+    fn player_member_preserves_object_safe_identity_and_typed_access() {
+        let player = player();
+        let grid_id = player.id();
+        let member = PlayerMember::new(player);
+
+        assert_eq!(member.dispatch(BeatGrid::id), grid_id);
+        assert_eq!(member.with::<PlayerImpl, _, _>(BeatGrid::id), Some(grid_id));
     }
 
     #[kithara::test]
@@ -283,6 +363,7 @@ mod tests {
         let player = PlayerImpl::new(
             PlayerConfig::builder()
                 .worker(worker())
+                .session(testing::test_session())
                 .gapless_mode(GaplessMode::Disabled)
                 .build(),
         );
@@ -320,6 +401,7 @@ mod tests {
         let player = PlayerImpl::new(
             PlayerConfig::builder()
                 .worker(worker())
+                .session(testing::test_session())
                 .cancel(parent_master.clone())
                 .build(),
         );
@@ -419,13 +501,14 @@ mod tests {
     fn player_config_custom() {
         let config = PlayerConfig::builder()
             .worker(worker())
+            .session(testing::test_session())
             .crossfade_duration(2.0)
             .prefetch_duration(5.0)
             .default_rate(0.5)
             .eq_layout(generate_log_spaced_bands(5))
             .gapless_mode(GaplessMode::MediaOnly)
             .max_slots(2)
-            .sample_rate(44_100)
+            .sample_rate(NonZeroU32::new(44_100).expect("invariant: sample rate is non-zero"))
             .timestretch(StretchControls::new(1.0))
             .build();
         let player = PlayerImpl::new(config);
@@ -437,6 +520,7 @@ mod tests {
         let player = PlayerImpl::new(
             PlayerConfig::builder()
                 .worker(worker())
+                .session(testing::test_session())
                 .eq_layout(generate_log_spaced_bands(3))
                 .build(),
         );
@@ -450,6 +534,7 @@ mod tests {
     fn player_config_builder() {
         let config = PlayerConfig::builder()
             .worker(worker())
+            .session(testing::test_session())
             .max_slots(8)
             .default_rate(0.5)
             .crossfade_duration(2.5)
@@ -574,7 +659,12 @@ mod tests {
     #[kithara::test]
     fn player_keeps_explicit_worker_and_shared_pools() {
         let worker = worker();
-        let player = PlayerImpl::new(PlayerConfig::builder().worker(worker.clone()).build());
+        let player = PlayerImpl::new(
+            PlayerConfig::builder()
+                .worker(worker.clone())
+                .session(testing::test_session())
+                .build(),
+        );
         assert!(std::ptr::eq(
             player.worker().byte_pool(),
             worker.byte_pool()
@@ -597,6 +687,7 @@ mod tests {
         let player = PlayerImpl::new(
             PlayerConfig::builder()
                 .worker(worker())
+                .session(testing::test_session())
                 .auto_advance_enabled(false)
                 .build(),
         );

@@ -2,12 +2,12 @@ use delegate::delegate;
 use kithara_events::EventBus;
 use kithara_platform::tokio::runtime::Handle as RuntimeHandle;
 
-use super::super::core::PlayerImpl;
+use super::super::core::PlayerRuntime;
 use crate::{
     EngineLoadSnapshot, PlayWorker, api::PlayerStatus, bridge::PlaybackSnapshot, engine::EngineImpl,
 };
 
-impl PlayerImpl {
+impl PlayerRuntime {
     /// ABR handle of the currently loaded item, if any.
     ///
     /// Reads the stash populated by `enqueue_to_processor` — stays valid for

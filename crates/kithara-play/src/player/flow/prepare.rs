@@ -3,11 +3,13 @@ use std::num::NonZeroU32;
 use kithara_audio::AudioDecoderConfig;
 use kithara_platform::sync::Arc;
 
+#[cfg(test)]
 use super::super::core::PlayerImpl;
+use super::super::core::PlayerRuntime;
 use crate::resource::ResourceConfig;
 
 struct ConfigPrep<'a> {
-    player: &'a PlayerImpl,
+    player: &'a PlayerRuntime,
 }
 
 impl ConfigPrep<'_> {
@@ -41,7 +43,7 @@ impl ConfigPrep<'_> {
     }
 }
 
-impl PlayerImpl {
+impl PlayerRuntime {
     /// Apply shared worker, host sample rate, ABR, and bus to a resource
     /// config so the resource integrates with this player's engine.
     ///

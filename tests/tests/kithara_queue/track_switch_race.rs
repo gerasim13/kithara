@@ -117,7 +117,7 @@ fn build_queue_with_tick(
     tokio::task::JoinHandle<()>,
 ) {
     let store = kithara_integration_tests::disk_asset_store(temp_dir.path());
-    let player = Arc::new(PlayerImpl::new(
+    let player = PlayerImpl::new(
         PlayerConfig::builder()
             .worker(PlayWorker::new(
                 PlayWorkerConfig::for_pools(
@@ -128,7 +128,7 @@ fn build_queue_with_tick(
             ))
             .session(OfflineSession::arc_auto())
             .build(),
-    ));
+    );
     let queue = Arc::new(Queue::new(
         QueueConfig::builder()
             .player(player)
@@ -163,7 +163,7 @@ async fn run_tick_driver(queue: Arc<Queue>) {
 /// from the legitimate end-of-`fast` auto-advance to the next queue entry.
 fn build_queue_no_tick(temp_dir: &TestTempDir) -> (Arc<Queue>, Downloader, AssetStore) {
     let store = kithara_integration_tests::disk_asset_store(temp_dir.path());
-    let player = Arc::new(PlayerImpl::new(
+    let player = PlayerImpl::new(
         PlayerConfig::builder()
             .worker(PlayWorker::new(
                 PlayWorkerConfig::for_pools(
@@ -174,7 +174,7 @@ fn build_queue_no_tick(temp_dir: &TestTempDir) -> (Arc<Queue>, Downloader, Asset
             ))
             .session(OfflineSession::arc_auto())
             .build(),
-    ));
+    );
     let queue = Arc::new(Queue::new(
         QueueConfig::builder()
             .player(player)
@@ -411,16 +411,20 @@ async fn supersede_while_loading_cancels_slow_track() {
     let temp = temp_dir();
     let (queue, downloader, store, tick_handle) = build_queue_with_tick(&temp);
 
-    let fast_id = queue.append(TrackSource::Config(Box::new(mk_cfg(
-        &fast_url,
-        &downloader,
-        &store,
-    ))));
-    let slow_id = queue.append(TrackSource::Config(Box::new(mk_cfg(
-        &slow_url,
-        &downloader,
-        &store,
-    ))));
+    let fast_id = queue
+        .append(TrackSource::Config(Box::new(mk_cfg(
+            &fast_url,
+            &downloader,
+            &store,
+        ))))
+        .expect("append fast track");
+    let slow_id = queue
+        .append(TrackSource::Config(Box::new(mk_cfg(
+            &slow_url,
+            &downloader,
+            &store,
+        ))))
+        .expect("append slow track");
 
     // fast is undelayed and ungated → it reaches a terminal loaded state.
     wait_for_loader_done(&queue, fast_id, Consts::LOAD_DEADLINE)
@@ -554,16 +558,20 @@ async fn concurrent_completion_race_does_not_barge_in() {
         // via the loader-completion race we are probing.
         let (queue, downloader, store) = build_queue_no_tick(&temp);
 
-        let fast_id = queue.append(TrackSource::Config(Box::new(mk_cfg(
-            &fast_url,
-            &downloader,
-            &store,
-        ))));
-        let slow_id = queue.append(TrackSource::Config(Box::new(mk_cfg(
-            &slow_url,
-            &downloader,
-            &store,
-        ))));
+        let fast_id = queue
+            .append(TrackSource::Config(Box::new(mk_cfg(
+                &fast_url,
+                &downloader,
+                &store,
+            ))))
+            .unwrap_or_else(|error| panic!("[iter {iter}] append fast: {error}"));
+        let slow_id = queue
+            .append(TrackSource::Config(Box::new(mk_cfg(
+                &slow_url,
+                &downloader,
+                &store,
+            ))))
+            .unwrap_or_else(|error| panic!("[iter {iter}] append slow: {error}"));
 
         let mut rx = queue.subscribe();
         drain_event_backlog(&mut rx);

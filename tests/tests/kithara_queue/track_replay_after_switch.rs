@@ -132,7 +132,7 @@ fn build_queue_with_tick_cf(
     tokio::task::JoinHandle<()>,
 ) {
     let store = kithara_integration_tests::disk_asset_store(temp_dir.path());
-    let player = Arc::new(PlayerImpl::new(
+    let player = PlayerImpl::new(
         PlayerConfig::builder()
             .worker(PlayWorker::new(
                 PlayWorkerConfig::for_pools(
@@ -144,7 +144,7 @@ fn build_queue_with_tick_cf(
             .session(OfflineSession::arc_auto())
             .crossfade_duration(crossfade_seconds)
             .build(),
-    ));
+    );
     let queue = Arc::new(Queue::new(
         QueueConfig::builder()
             .player(player)
@@ -233,8 +233,12 @@ async fn replay_track_after_switch_does_not_hang_loader(#[case] mode: FixtureMod
             .build()
     };
 
-    let id_a = queue.append(TrackSource::Config(Box::new(mk_cfg(&url_a))));
-    let id_b = queue.append(TrackSource::Config(Box::new(mk_cfg(&url_b))));
+    let id_a = queue
+        .append(TrackSource::Config(Box::new(mk_cfg(&url_a))))
+        .expect("append track A");
+    let id_b = queue
+        .append(TrackSource::Config(Box::new(mk_cfg(&url_b))))
+        .expect("append track B");
 
     wait_for_loader_done(&queue, id_a, Consts::LOAD_DEADLINE)
         .await
@@ -339,8 +343,12 @@ async fn switch_back_to_mp3_restarts_audio_not_just_ui(
             .build()
     };
 
-    let id_a = queue.append(TrackSource::Config(Box::new(mk_cfg(&url_a))));
-    let id_b = queue.append(TrackSource::Config(Box::new(mk_cfg(&url_b))));
+    let id_a = queue
+        .append(TrackSource::Config(Box::new(mk_cfg(&url_a))))
+        .expect("append track A");
+    let id_b = queue
+        .append(TrackSource::Config(Box::new(mk_cfg(&url_b))))
+        .expect("append track B");
     wait_for_loader_done(&queue, id_a, Consts::LOAD_DEADLINE)
         .await
         .expect("initial load A");

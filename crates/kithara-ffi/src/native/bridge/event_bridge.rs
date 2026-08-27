@@ -8,7 +8,7 @@ use kithara_platform::{
     tokio,
     tokio::sync::broadcast,
 };
-use kithara_queue::Queue;
+use kithara_queue::QueueControl;
 
 use crate::{
     item::AudioPlayerItem,
@@ -34,7 +34,7 @@ impl EventBridge {
 
     fn dispatch(
         observer: &Arc<dyn PlayerObserver>,
-        queue: &Arc<Queue>,
+        queue: &QueueControl,
         items: &Arc<Mutex<ItemRegistry>>,
         last_current: &Mutex<Option<TrackId>>,
         event: &Event,
@@ -209,7 +209,7 @@ impl EventBridge {
     /// [`FfiItemEvent::DidStall`].
     fn route_player_event_to_item(
         items: &Arc<Mutex<ItemRegistry>>,
-        queue: &Arc<Queue>,
+        queue: &QueueControl,
         last_current: &Mutex<Option<TrackId>>,
         event: &PlayerEvent,
     ) {
@@ -277,7 +277,7 @@ impl EventBridge {
     pub(crate) fn spawn(
         rx: EventReceiver,
         observer: Arc<dyn PlayerObserver>,
-        queue: Arc<Queue>,
+        queue: QueueControl,
         items: &Arc<Mutex<ItemRegistry>>,
         cancel: CancelToken,
     ) -> Self {
@@ -285,7 +285,7 @@ impl EventBridge {
         Self::spawn_event_task(
             rx,
             Arc::clone(&observer),
-            Arc::clone(&queue),
+            queue.clone(),
             Arc::clone(items),
             Arc::clone(&last_current),
             cancel.clone(),
@@ -307,7 +307,7 @@ impl EventBridge {
     fn spawn_event_task(
         mut rx: EventReceiver,
         observer: Arc<dyn PlayerObserver>,
-        queue: Arc<Queue>,
+        queue: QueueControl,
         items: Arc<Mutex<ItemRegistry>>,
         last_current: Arc<Mutex<Option<TrackId>>>,
         cancel: CancelToken,
@@ -339,7 +339,7 @@ impl EventBridge {
     /// instead of an async task to avoid blocking the single-threaded
     /// tokio runtime with sync locks held inside the engine.
     fn spawn_time_thread(
-        queue: Arc<Queue>,
+        queue: QueueControl,
         observer: Arc<dyn PlayerObserver>,
         items: Arc<Mutex<ItemRegistry>>,
         last_current: Arc<Mutex<Option<TrackId>>>,
@@ -391,7 +391,7 @@ mod tests {
         QueueRepeatMode, TrackId, TrackStatus,
     };
     use kithara_platform::sync::{Arc, Mutex};
-    use kithara_queue::QueueConfig;
+    use kithara_queue::{Queue, QueueConfig, test_utils::QueueProbe};
 
     use super::*;
     use crate::{
@@ -756,10 +756,11 @@ mod tests {
         let worker = PlayWorker::new(
             PlayWorkerConfig::for_pools(region.byte_pool(), region.pcm_pool()).build(),
         );
-        let player = Arc::new(PlayerImpl::new(
-            PlayerConfig::builder().worker(worker).build(),
-        ));
-        let queue = Arc::new(Queue::new(QueueConfig::builder().player(player).build()));
+        let player = PlayerImpl::new(PlayerConfig::builder().worker(worker).build());
+        let queue = Queue::new(QueueConfig::builder().player(player).build());
+        let owner = crate::native::session::insert(queue)
+            .expect("INVARIANT: the FFI test Host accepts its allocated Queue");
+        let queue = owner.control().clone();
         let id = queue.register_for_test();
         queue.mark_played_for_test(id);
         queue.set_repeat(kithara_queue::RepeatMode::One);
@@ -776,7 +777,7 @@ mod tests {
         let cancel = CancelToken::root();
         let observer: Arc<dyn PlayerObserver> = Arc::new(CollectingPlayerObserver::default());
         let thread = EventBridge::spawn_time_thread(
-            Arc::clone(&queue),
+            queue.clone(),
             observer,
             Arc::new(Mutex::new(ItemRegistry::default())),
             Arc::new(Mutex::new(None)),
@@ -786,6 +787,8 @@ mod tests {
         let reload_started = wait_for_status(&mut events, id, TrackStatus::Pending, 2000).await;
         cancel.cancel();
         let joined = thread.join();
+        crate::native::session::remove(&owner)
+            .expect("INVARIANT: the FFI test Queue detaches from its Host");
 
         assert!(
             reload_started,

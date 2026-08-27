@@ -78,7 +78,8 @@ File and HLS pipelines are unconditional; cpal output is the default backend.
 Enable `mock` for `EqualizerMock`.
 
 The role-first source tree is organized as `api/`, `bridge/`, `engine/`,
-`effects/`, `player/{state,flow}/`, `resource/`, `rt/{track}/`,
-`session/{web}/`, and `worker/`, plus the target-gated `wasm` surface.
+`effects/`, `player/{state,flow}/`, `resource/`, `rt/{track}/`, `session/`, and
+`worker/`, plus the target-gated `wasm` surface. Concrete output-session state,
+graph dispatch, and platform clients live in `kithara-host`.
 
 See [CONTEXT.md](CONTEXT.md) for detailed contracts, invariants, and internals.

@@ -6,7 +6,7 @@ use kithara_events::TrackStatus;
 use kithara_events::{AdvanceReason, QueueEvent, TrackId};
 
 use super::{
-    Queue,
+    QueueControl,
     types::{Placement, Transition, extract_track_name},
 };
 use crate::{
@@ -15,13 +15,19 @@ use crate::{
     track::{TrackRecord, TrackSource},
 };
 
-impl Queue {
+impl QueueControl {
     /// Append a track. Loading starts immediately in the background.
     /// The id is allocated from the global counter via
     /// [`TrackId::allocate`]; use [`Self::append_with_id`] when the
     /// caller owns the id (FFI item pre-allocation).
-    pub fn append<S: Into<TrackSource>>(&self, source: S) -> TrackId {
-        self.insert_entry(TrackId::allocate(), source.into(), Placement::Append)
+    ///
+    /// # Errors
+    ///
+    /// Returns [`QueueError::Play`] after the resident player is closed.
+    pub fn append<S: Into<TrackSource>>(&self, source: S) -> Result<TrackId, QueueError> {
+        let source = source.into();
+        self.with_open(|queue| queue.insert_entry(TrackId::allocate(), source, Placement::Append))
+            .map_err(QueueError::from)
     }
 
     /// Append a track with a caller-supplied id. The id MUST come from
@@ -29,13 +35,27 @@ impl Queue {
     /// monotonic address space. Used by the FFI layer where the item
     /// reserves its id at construction and surfaces it as `audioId`
     /// before insert.
-    pub fn append_with_id<S: Into<TrackSource>>(&self, id: TrackId, source: S) -> TrackId {
-        self.insert_entry(id, source.into(), Placement::Append)
+    ///
+    /// # Errors
+    ///
+    /// Returns [`QueueError::Play`] after the resident player is closed.
+    pub fn append_with_id<S: Into<TrackSource>>(
+        &self,
+        id: TrackId,
+        source: S,
+    ) -> Result<TrackId, QueueError> {
+        let source = source.into();
+        self.with_open(|queue| queue.insert_entry(id, source, Placement::Append))
+            .map_err(QueueError::from)
     }
 
     /// Remove all tracks from the queue. Dropping the records aborts
     /// their in-flight loads.
     pub fn clear(&self) {
+        self.command(Self::clear_inner);
+    }
+
+    fn clear_inner(&self) {
         let ids: Vec<TrackId> = {
             let mut guard = self.lock_tracks_mut();
             let ids = guard.iter().map(|r| r.id).collect();
@@ -53,17 +73,30 @@ impl Queue {
     /// [`Self::register_for_test`]. Mirrors the synchronous portion of
     /// the loader's `apply_after_load` callback.
     #[cfg(any(test, feature = "probe"))]
-    pub fn complete_load_for_test(&self, id: TrackId, resource: kithara_play::Resource) {
+    pub(in crate::queue) fn probe_complete_load(
+        &self,
+        id: TrackId,
+        resource: kithara_play::Resource,
+    ) {
+        let _admission = self.lock_admission();
+        self.complete_load_for_test_inner(id, resource);
+    }
+
+    #[cfg(any(test, feature = "probe"))]
+    fn complete_load_for_test_inner(&self, id: TrackId, resource: kithara_play::Resource) {
         let index = {
             let guard = self.lock_tracks();
             guard.iter().position(|e| e.id == id)
         };
         if let Some(index) = index {
-            self.player.replace_item(index, resource);
+            let Ok(()) = self.player.replace_item(index, resource) else {
+                return;
+            };
             self.set_status(id, TrackStatus::Loaded);
             if self.should_autoplay
                 && self.autoplay_target.disarm_if_matches(id)
-                && let Err(err) = self.select(id, Transition::None)
+                && let Err(err) =
+                    self.select_with_reason(id, Transition::None, AdvanceReason::UserSelect)
             {
                 tracing::warn!(id = id.as_u64(), %err, "autoplay select failed");
             }
@@ -81,15 +114,13 @@ impl Queue {
         source: S,
         after: Option<TrackId>,
     ) -> Result<TrackId, QueueError> {
-        self.insert_with_id(TrackId::allocate(), source, after)
+        let source = source.into();
+        self.with_open_result(|queue| {
+            queue.insert_with_id_inner(TrackId::allocate(), source, after)
+        })
     }
 
-    /// Shared insertion path for [`Self::append`] and [`Self::insert`].
-    ///
-    /// Builds the [`TrackRecord`] with `id`, places it per `placement`,
-    /// then mirrors the track into the player, bus, and background
-    /// loader. Position resolution — including fallible `after_id`
-    /// lookup — happens in the caller, so this helper is infallible.
+    /// Inserts a resolved track placement into queue state and starts loading.
     pub(super) fn insert_entry(
         &self,
         id: TrackId,
@@ -121,9 +152,13 @@ impl Queue {
     /// matches register order. Equivalent to
     /// [`Self::register_for_test`] + [`Self::complete_load_for_test`].
     #[cfg(any(test, feature = "probe"))]
-    pub fn insert_loaded_for_test(&self, resource: kithara_play::Resource) -> TrackId {
-        let id = self.register_for_test();
-        self.complete_load_for_test(id, resource);
+    pub(in crate::queue) fn probe_insert_loaded(
+        &self,
+        resource: kithara_play::Resource,
+    ) -> TrackId {
+        let _admission = self.lock_admission();
+        let id = self.register_for_test_inner();
+        self.complete_load_for_test_inner(id, resource);
         id
     }
 
@@ -141,6 +176,15 @@ impl Queue {
         after: Option<TrackId>,
     ) -> Result<TrackId, QueueError> {
         let source = source.into();
+        self.with_open_result(|queue| queue.insert_with_id_inner(id, source, after))
+    }
+
+    fn insert_with_id_inner(
+        &self,
+        id: TrackId,
+        source: TrackSource,
+        after: Option<TrackId>,
+    ) -> Result<TrackId, QueueError> {
         let pos = {
             let guard = self.lock_tracks();
             match after {
@@ -159,7 +203,14 @@ impl Queue {
     /// a real loader. Pair with [`Self::complete_load_for_test`] to
     /// drive the loaded resource into the player on demand.
     #[cfg(any(test, feature = "probe"))]
-    pub fn register_for_test(&self) -> TrackId {
+    #[must_use]
+    pub(in crate::queue) fn probe_register(&self) -> TrackId {
+        let _admission = self.lock_admission();
+        self.register_for_test_inner()
+    }
+
+    #[cfg(any(test, feature = "probe"))]
+    fn register_for_test_inner(&self) -> TrackId {
         let id = TrackId::allocate();
         let url = format!("test://memory/{}", id.as_u64());
         let record = TrackRecord::new(id, format!("test-{}", id.as_u64()), TrackSource::Uri(url));
@@ -181,7 +232,8 @@ impl Queue {
     /// The next advance onto it must reload it (repeat-one) instead of
     /// picking a pre-loaded successor.
     #[cfg(any(test, feature = "probe"))]
-    pub fn mark_played_for_test(&self, id: TrackId) {
+    pub(in crate::queue) fn probe_mark_played(&self, id: TrackId) {
+        let _admission = self.lock_admission();
         let index = {
             let guard = self.lock_tracks();
             guard.iter().position(|e| e.id == id)
@@ -202,6 +254,10 @@ impl Queue {
     /// # Errors
     /// Returns [`QueueError::UnknownTrackId`] if `id` is not in the queue.
     pub fn remove(&self, id: TrackId) -> Result<(), QueueError> {
+        self.with_open_result(|queue| queue.remove_inner(id))
+    }
+
+    fn remove_inner(&self, id: TrackId) -> Result<(), QueueError> {
         let was_current = self.current().map(|e| e.id) == Some(id);
         let successor_id = if was_current {
             let guard = self.lock_tracks();
@@ -226,7 +282,7 @@ impl Queue {
             guard.remove(pos);
             pos
         };
-        let _ = self.player.remove_at(index);
+        let _ = self.player.remove_at(index)?;
         self.bus.publish(QueueEvent::TrackRemoved { id });
 
         if was_current {
@@ -246,10 +302,12 @@ impl Queue {
         I: IntoIterator<Item = S>,
         S: Into<TrackSource>,
     {
-        self.clear();
-        for s in sources {
-            let _ = self.append(s);
-        }
+        self.command(|queue| {
+            queue.clear_inner();
+            for source in sources {
+                queue.insert_entry(TrackId::allocate(), source.into(), Placement::Append);
+            }
+        });
     }
 
     /// Test helper: pre-supply a fresh [`kithara_play::Resource`] that
@@ -258,7 +316,12 @@ impl Queue {
     /// path the production code uses without dispatching the real
     /// loader, so harness tests can exercise replay-after-EOF.
     #[cfg(any(test, feature = "probe"))]
-    pub fn supply_test_resource_for_respawn(&self, id: TrackId, resource: kithara_play::Resource) {
+    pub(in crate::queue) fn probe_supply_respawn_resource(
+        &self,
+        id: TrackId,
+        resource: kithara_play::Resource,
+    ) {
+        let _admission = self.lock_admission();
         self.test_resources
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
@@ -274,12 +337,18 @@ mod tests {
     use super::*;
     use crate::queue::state::tests::{make_queue, wait_for_queue_event};
 
+    fn append(queue: &crate::Queue, source: &str) -> TrackId {
+        queue
+            .append(source)
+            .expect("BUG: open queue must accept a track")
+    }
+
     #[kithara::test(tokio)]
     async fn len_is_empty_reflect_append() {
         let queue = make_queue();
         assert!(queue.is_empty());
-        let _ = queue.append("https://example.com/a.mp3");
-        let _ = queue.append("https://example.com/b.mp3");
+        let _ = append(&queue, "https://example.com/a.mp3");
+        let _ = append(&queue, "https://example.com/b.mp3");
         assert_eq!(queue.len(), 2);
     }
 
@@ -287,8 +356,8 @@ mod tests {
     async fn append_returns_monotonic_ids_and_emits_track_added() {
         let queue = make_queue();
         let mut rx = queue.subscribe();
-        let a = queue.append("https://example.com/a.mp3");
-        let b = queue.append("https://example.com/b.mp3");
+        let a = append(&queue, "https://example.com/a.mp3");
+        let b = append(&queue, "https://example.com/b.mp3");
         assert_ne!(a, b);
         assert!(a.as_u64() < b.as_u64());
 
@@ -311,8 +380,8 @@ mod tests {
     #[kithara::test(tokio)]
     async fn remove_drops_from_queue_and_emits() {
         let queue = make_queue();
-        let a = queue.append("https://example.com/a.mp3");
-        let _b = queue.append("https://example.com/b.mp3");
+        let a = append(&queue, "https://example.com/a.mp3");
+        let _b = append(&queue, "https://example.com/b.mp3");
         let mut rx = queue.subscribe();
 
         queue
@@ -331,8 +400,8 @@ mod tests {
     #[kithara::test(tokio)]
     async fn clear_empties_queue() {
         let queue = make_queue();
-        let _a = queue.append("https://example.com/a.mp3");
-        let _b = queue.append("https://example.com/b.mp3");
+        let _a = append(&queue, "https://example.com/a.mp3");
+        let _b = append(&queue, "https://example.com/b.mp3");
         assert_eq!(queue.len(), 2);
         queue.clear();
         assert_eq!(queue.len(), 0);
@@ -341,7 +410,7 @@ mod tests {
     #[kithara::test(tokio)]
     async fn set_tracks_replaces_queue() {
         let queue = make_queue();
-        let _a = queue.append("https://example.com/a.mp3");
+        let _a = append(&queue, "https://example.com/a.mp3");
         queue.set_tracks([
             "https://example.com/1.mp3",
             "https://example.com/2.mp3",
@@ -353,8 +422,8 @@ mod tests {
     #[kithara::test(tokio)]
     async fn insert_after_id_places_next() {
         let queue = make_queue();
-        let a = queue.append("https://example.com/a.mp3");
-        let b = queue.append("https://example.com/b.mp3");
+        let a = append(&queue, "https://example.com/a.mp3");
+        let b = append(&queue, "https://example.com/b.mp3");
         let mid = queue
             .insert("https://example.com/mid.mp3", Some(a))
             .expect("BUG: insert relative to existing track");
@@ -366,8 +435,8 @@ mod tests {
     #[kithara::test(tokio)]
     async fn track_source_is_keyed_by_id_across_removal() {
         let queue = make_queue();
-        let a = queue.append("https://example.com/a.mp3");
-        let b = queue.append("https://example.com/b.mp3");
+        let a = append(&queue, "https://example.com/a.mp3");
+        let b = append(&queue, "https://example.com/b.mp3");
 
         assert_eq!(
             queue

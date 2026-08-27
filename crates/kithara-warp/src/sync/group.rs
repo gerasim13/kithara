@@ -49,6 +49,9 @@ pub enum SyncStatusSnapshot {
 #[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
 #[non_exhaustive]
 pub enum SyncError {
+    /// The canonical group owner stopped before accepting an operation.
+    #[error("canonical synchronization-group owner is unavailable")]
+    OwnerUnavailable,
     /// This group does not implement the requested operation yet.
     #[error("synchronization capability {capability:?} is unavailable")]
     CapabilityUnavailable { capability: SyncCapability },

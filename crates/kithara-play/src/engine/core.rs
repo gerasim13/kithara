@@ -11,15 +11,15 @@ use kithara_platform::{
 };
 use portable_atomic::AtomicF32;
 use ringbuf::traits::{Consumer, Producer};
-use tracing::{debug, info, warn};
+use tracing::{debug, info};
 
-use super::{config::EngineConfig, session::default_session_handle, slots::SlotTable};
+use super::{config::EngineConfig, slots::SlotTable};
 use crate::{
     api::{EngineEvent, SlotId},
     bridge::{PlaybackShared, PlayerCmd, PlayerNotification, SharedEq, SlotControl},
     effects::eq::EqBandConfig,
     error::PlayError,
-    session::{PlayerId, SessionHandle, SessionSampleRate},
+    session::{PlayerId, SessionBinding, SessionHandle, SessionSampleRate},
 };
 
 type SlotHandle = SlotControl;
@@ -35,12 +35,10 @@ pub struct EngineImpl {
     bus: EventBus,
     player_id: Mutex<Option<PlayerId>>,
     slots: Mutex<SlotTable>,
-    #[field(get, vis = "pub(super)")]
     start_lock: Mutex<()>,
     runtime: Option<RuntimeHandle>,
     #[field(get, vis = "pub(crate)")]
     pcm_pool: PcmPool,
-    #[field(get = session_handle, vis = "pub(super)")]
     session: SessionHandle,
 }
 
@@ -51,7 +49,7 @@ impl EngineImpl {
         let session = config
             .session
             .take()
-            .map_or_else(default_session_handle, SessionHandle::new);
+            .map_or_else(SessionHandle::pending, SessionHandle::new);
         let max_slots = config.max_slots;
         let resolved_pool = config.pcm_pool.clone();
         let eq_layout = Mutex::new(std::mem::take(&mut config.eq_layout));
@@ -74,6 +72,10 @@ impl EngineImpl {
         if let Some(cancel) = &self.config.cancel {
             cancel.cancel();
         }
+    }
+
+    pub(crate) fn attach_session(&self, binding: SessionBinding) -> Result<(), PlayError> {
+        self.session.bind(binding)
     }
 
     pub(crate) fn cancel_token(&self) -> Option<CancelToken> {
@@ -114,6 +116,7 @@ impl EngineImpl {
         }
 
         let id = self.session.register_player(
+            self.config.grid_id,
             self.bus.clone(),
             self.eq_layout.lock().clone(),
             self.pcm_pool.clone(),
@@ -216,25 +219,31 @@ impl EngineImpl {
     pub(crate) fn tick(&self) -> Result<(), PlayError> {
         self.session.tick()
     }
-}
-
-impl Drop for EngineImpl {
-    fn drop(&mut self) {
-        let player_id = *self.player_id.lock();
-        if let Some(player_id) = player_id
-            && let Err(err) = self.session.unregister_player(player_id)
-        {
-            warn!(
-                ?err,
-                player_id, "failed to unregister player from shared session"
-            );
-        }
-    }
-}
-
-impl EngineImpl {
     pub fn active_slots(&self) -> Vec<SlotId> {
         self.slots.lock().ids()
+    }
+
+    /// Explicitly detach this player from its session.
+    ///
+    /// A failed detach retains the registered identity so the owning Host can
+    /// retry or report the still-live member instead of losing lifecycle
+    /// ownership. Repeated successful calls are no-ops.
+    pub fn close(&self) -> Result<(), PlayError> {
+        let _start = self.start_lock.lock();
+        let Some(player_id) = *self.player_id.lock() else {
+            return Ok(());
+        };
+
+        if self.running.load(Ordering::Acquire) {
+            self.session.stop_player(player_id)?;
+            self.slots.lock().clear();
+            self.running.store(false, Ordering::Release);
+            self.emit(EngineEvent::Stopped);
+        }
+
+        self.session.unregister_player(player_id)?;
+        *self.player_id.lock() = None;
+        Ok(())
     }
 
     pub fn allocate_slot(&self) -> Result<SlotId, PlayError> {
@@ -262,7 +271,7 @@ impl EngineImpl {
 
     /// Store the desired gain without dispatching: the mixer batch already
     /// actuated the graph.
-    pub(super) fn commit_desired_master_volume(&self, level: f32) {
+    pub(crate) fn commit_desired_master_volume(&self, level: f32) {
         self.master_volume.store(level, Ordering::Relaxed);
     }
 
@@ -304,6 +313,17 @@ impl EngineImpl {
         self.config.max_slots
     }
 
+    #[cfg(any(test, feature = "probe"))]
+    pub(super) const fn start_lock(&self) -> &Mutex<()> {
+        &self.start_lock
+    }
+
+    #[cfg(any(test, feature = "probe"))]
+    pub(super) const fn session_handle(&self) -> &SessionHandle {
+        &self.session
+    }
+
+    #[cfg(any(test, feature = "probe"))]
     pub(super) fn registered_player_id(&self) -> Option<PlayerId> {
         *self.player_id.lock()
     }

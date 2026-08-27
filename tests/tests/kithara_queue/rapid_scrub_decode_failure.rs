@@ -252,7 +252,7 @@ impl Harness {
             .build(),
         );
         let store = kithara_integration_tests::disk_asset_store(temp_dir.path());
-        let player = Arc::new(PlayerImpl::new(
+        let player = PlayerImpl::new(
             PlayerConfig::builder()
                 .worker(PlayWorker::new(
                     PlayWorkerConfig::for_pools(
@@ -263,7 +263,7 @@ impl Harness {
                 ))
                 .session(OfflineSession::arc_auto())
                 .build(),
-        ));
+        );
         let queue = Arc::new(Queue::new(QueueConfig::builder().player(player).build()));
 
         let tick = tokio::task::spawn(drive_queue_ticks(Arc::clone(&queue)));
@@ -275,7 +275,9 @@ impl Harness {
                 .initial_abr_mode(AbrMode::Auto(None))
                 .build();
         let mut rx = queue.subscribe();
-        let id = queue.append(TrackSource::Config(Box::new(cfg)));
+        let id = queue
+            .append(TrackSource::Config(Box::new(cfg)))
+            .expect("append rapid-scrub track");
 
         wait_for_status(&mut rx, &queue, id, TrackStatus::Loaded, LOAD_BUDGET)
             .await

@@ -15,7 +15,7 @@ use kithara_platform::{
         sync::{broadcast::error::RecvError, watch},
     },
 };
-use kithara_queue::{Queue, QueueEvent, TrackSource};
+use kithara_queue::{QueueControl, QueueEvent, TrackSource};
 
 use crate::{
     config::AppConfig,
@@ -32,7 +32,7 @@ type AppResourceConfig = ResourceConfig<PlaybackResamplerBackend>;
 /// drives the background [`AnalysisController`]. Starts analysing the already
 /// loaded library immediately — independent of which UI is open.
 pub(crate) async fn listen(
-    queue: Arc<Queue>,
+    queue: QueueControl,
     state: Arc<Mutex<UiState>>,
     config: AppConfig,
     cancel: CancelToken,
@@ -152,7 +152,7 @@ impl AnalysisController {
     /// intermediate, or commit and pump on close. Parks when no run is active.
     pub(crate) async fn drive(
         &mut self,
-        queue: &Arc<Queue>,
+        queue: &QueueControl,
         state: &Mutex<UiState>,
         config: &AppConfig,
     ) {
@@ -173,7 +173,7 @@ impl AnalysisController {
     /// preempt an in-flight background run so the visible deck wins.
     pub(crate) fn on_track_changed(
         &mut self,
-        queue: &Arc<Queue>,
+        queue: &QueueControl,
         state: &Mutex<UiState>,
         config: &AppConfig,
     ) {
@@ -197,7 +197,7 @@ impl AnalysisController {
     /// keep the background pass going. Cached tracks are skipped cheaply.
     pub(crate) fn on_tracks_changed(
         &mut self,
-        queue: &Arc<Queue>,
+        queue: &QueueControl,
         state: &Mutex<UiState>,
         config: &AppConfig,
     ) {
@@ -229,7 +229,12 @@ impl AnalysisController {
     /// Start the next analysis worth running, if none is in flight: serve
     /// the current track from cache, skip background tracks that are cached
     /// or unkeyable, decode the first genuine miss.
-    pub(crate) fn pump(&mut self, queue: &Arc<Queue>, state: &Mutex<UiState>, config: &AppConfig) {
+    pub(crate) fn pump(
+        &mut self,
+        queue: &QueueControl,
+        state: &Mutex<UiState>,
+        config: &AppConfig,
+    ) {
         if self.current.is_some() {
             return;
         }
@@ -418,6 +423,7 @@ mod tests {
         bufpool::{PcmPool, Region},
         events::TrackId,
         file::File,
+        host::{Host, HostConfig},
         play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl},
         prelude::{PlaybackResamplerBackend, ResourceConfig},
     };
@@ -475,12 +481,14 @@ mod tests {
         let worker = PlayWorker::new(
             PlayWorkerConfig::for_pools(region.byte_pool(), region.pcm_pool()).build(),
         );
-        let player = Arc::new(PlayerImpl::new(
-            PlayerConfig::builder().worker(worker).build(),
-        ));
+        let mut host = Host::new(HostConfig::builder().build()).expect("test host");
+        let player = PlayerImpl::new(PlayerConfig::builder().worker(worker).build());
         let queue = Queue::new(QueueConfig::builder().player(player).build());
+        let queue = host.insert(queue).expect("host accepts queue");
         for id in ids {
-            queue.append_with_id(*id, format!("file:///tmp/track-{id}.mp3"));
+            queue
+                .append_with_id(*id, format!("file:///tmp/track-{id}.mp3"))
+                .expect("append test track");
         }
         let mut state = UiState::empty();
         state.tracks = queue.tracks();

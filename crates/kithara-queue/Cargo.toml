@@ -10,14 +10,12 @@ keywords = ["audio", "player", "playlist", "gapless", "dj"]
 categories = ["multimedia::audio"]
 
 [features]
-default = ["backend-cpal", "symphonia", "stretch-signalsmith", "client-reqwest", "tls-rustls"]
-backend-cpal = ["kithara-play/backend-cpal"]
+default = ["symphonia", "stretch-signalsmith", "client-reqwest", "tls-rustls"]
 # HTTP backend forwarding to every kithara-net-reaching dep.
 client-reqwest = ["kithara-play/client-reqwest", "kithara-abr/client-reqwest", "kithara-events/client-reqwest"]
 client-wreq = ["kithara-play/client-wreq", "kithara-abr/client-wreq", "kithara-events/client-wreq"]
 tls-rustls = ["kithara-play/tls-rustls", "kithara-abr/tls-rustls", "kithara-events/tls-rustls"]
 tls-native = ["kithara-play/tls-native", "kithara-abr/tls-native", "kithara-events/tls-native"]
-backend-web-audio = ["kithara-play/backend-web-audio", "kithara-play/wasm-bindgen"]
 # Software decoder pass-through (see kithara-play). Required unless an
 # explicit hardware backend feature is enabled.
 symphonia = ["kithara-play/symphonia"]
@@ -50,6 +48,7 @@ tracing = { workspace = true }
 kithara-workspace-hack = { version = "0.0.1-alpha4", path = "../kithara-workspace-hack" }
 
 [dev-dependencies]
+kithara-audio = { workspace = true }
 kithara-platform = { workspace = true }
 kithara-test-utils = { path = "../kithara-test-utils", features = ["mock", "probe", "hang"] }
 

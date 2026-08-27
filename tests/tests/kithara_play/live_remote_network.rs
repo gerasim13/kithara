@@ -15,12 +15,16 @@ use kithara::{
     audio::ReadOutcome,
     bufpool::{BytePool, PcmPool},
     decode::DecoderBackend,
+    host::{Host, HostConfig},
     net::{HttpClient, NetOptions},
     platform::{
         CancelToken,
         time::{Duration, Instant},
     },
-    play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, Resource, ResourceConfig},
+    play::{
+        PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, Resource, ResourceConfig,
+        SelectTransition,
+    },
     stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_integration_tests::{TestTempDir, temp_dir};
@@ -289,6 +293,7 @@ async fn player_mp3_duration_matches_app_flow(
     let pcm_pool = PcmPool::default();
     let store = asset_store(&temp_dir, true, byte_pool.clone());
 
+    let mut host = Host::new(HostConfig::builder().build()).expect("create playback host");
     let player = PlayerImpl::new(
         PlayerConfig::builder()
             .worker(PlayWorker::new(
@@ -296,6 +301,9 @@ async fn player_mp3_duration_matches_app_flow(
             ))
             .build(),
     );
+    let player = host
+        .insert(player)
+        .expect("insert player into playback host");
     player.reserve_slots(1);
 
     let mut config = ResourceConfig::for_src(ResourceConfig::parse_src(url).unwrap())
@@ -306,14 +314,26 @@ async fn player_mp3_duration_matches_app_flow(
                 .build(),
         )
         .build();
-    config = player.prepare_config(config);
+    config = player
+        .prepare_config(config)
+        .expect("prepare live remote resource config");
 
     let resource = Resource::new(config)
         .await
         .unwrap_or_else(|e| panic!("{url}: Resource::new failed: {e}"));
 
-    player.replace_item(0, resource);
-    let _ = player.select_item(0, true);
+    player
+        .replace_item(0, resource)
+        .expect("install live remote resource");
+    player
+        .select_item_with_crossfade(
+            0,
+            SelectTransition {
+                autoplay: true,
+                crossfade_seconds: player.crossfade_duration(),
+            },
+        )
+        .expect("select live remote resource");
 
     // Wait on the concrete state the assertion below reads: the selected
     // slot's duration committed into player shared state. The inner sleep is
@@ -331,4 +351,5 @@ async fn player_mp3_duration_matches_app_flow(
     );
     let dur_secs = dur.expect("checked");
     assert!(dur_secs > 30.0, "{url}: expected >30s, got {dur_secs:.1}s");
+    host.remove(&player).expect("remove live remote player");
 }

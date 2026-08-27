@@ -109,13 +109,12 @@ fn build_queue_with_tick(
     temp_dir: &TestTempDir,
 ) -> (
     Arc<Queue>,
-    Arc<PlayerImpl>,
     Downloader,
     AssetStore,
     tokio::task::JoinHandle<()>,
 ) {
     let store = kithara_integration_tests::disk_asset_store(temp_dir.path());
-    let player = Arc::new(PlayerImpl::new(
+    let player = PlayerImpl::new(
         PlayerConfig::builder()
             .worker(PlayWorker::new(
                 PlayWorkerConfig::for_pools(
@@ -126,10 +125,10 @@ fn build_queue_with_tick(
             ))
             .session(OfflineSession::arc_auto())
             .build(),
-    ));
+    );
     let queue = Arc::new(Queue::new(
         QueueConfig::builder()
-            .player(Arc::clone(&player))
+            .player(player)
             .store(store.clone())
             .build(),
     ));
@@ -139,7 +138,7 @@ fn build_queue_with_tick(
             .max_concurrent(Consts::MAX_CONCURRENT)
             .build(),
     );
-    (queue, player, downloader, store, tick_handle)
+    (queue, downloader, store, tick_handle)
 }
 
 #[derive(Debug, Default)]
@@ -189,9 +188,9 @@ async fn hls_seek_near_end_skips_prefix(#[case] backend: DecoderBackend) {
     let url = build_hls_with_delay(&helper).await;
 
     let temp = temp_dir();
-    let (queue, player, downloader, store, tick_handle) = build_queue_with_tick(&temp);
+    let (queue, downloader, store, tick_handle) = build_queue_with_tick(&temp);
 
-    let mut rx = player.bus().subscribe();
+    let mut rx = queue.subscribe();
 
     let cfg = ResourceConfig::for_src(
         ResourceConfig::parse_src(url.as_str()).expect("ResourceConfig::parse_src"),
@@ -206,7 +205,9 @@ async fn hls_seek_near_end_skips_prefix(#[case] backend: DecoderBackend) {
     )
     .build();
 
-    let track_id = queue.append(TrackSource::Config(Box::new(cfg)));
+    let track_id = queue
+        .append(TrackSource::Config(Box::new(cfg)))
+        .expect("append stale-fetch seek track");
     queue.select(track_id, Transition::None).expect("select");
 
     wait_for_loader_done(&queue, track_id, Consts::LOAD_DEADLINE)

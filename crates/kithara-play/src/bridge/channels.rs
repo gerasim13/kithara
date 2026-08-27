@@ -34,6 +34,12 @@ impl MixTapWriter {
     }
 }
 
+impl From<MixTapWriter> for (HeapProd<f32>, Arc<AtomicU64>) {
+    fn from(writer: MixTapWriter) -> Self {
+        (writer.pcm, writer.drops)
+    }
+}
+
 /// Control-owned channel halves and shared controls for one allocated slot.
 #[non_exhaustive]
 pub struct SlotControl {

@@ -95,12 +95,12 @@ async fn shared_test_ctx() -> &'static TestCtx {
                 .worker(worker.clone())
                 .store(store)
                 .build();
-            let player = Arc::new(PlayerImpl::new(
+            let player = PlayerImpl::new(
                 PlayerConfig::builder()
                     .worker(worker)
                     .session(OfflineSession::arc_auto())
                     .build(),
-            ));
+            );
             let queue = Arc::new(Queue::new(QueueConfig::builder().player(player).build()));
 
             let queue_for_tick = Arc::clone(&queue);
@@ -390,7 +390,10 @@ async fn track_plays_end_to_end(
     let ctx = shared_test_ctx().await;
     let source = build_track_source(url, ctx, backend, abr);
     let mut rx = ctx.queue.subscribe();
-    let track_id = ctx.queue.append(source);
+    let track_id = ctx
+        .queue
+        .append(source)
+        .expect("append real playlist track");
 
     wait_for_status(
         &mut rx,
@@ -501,6 +504,7 @@ async fn queue_playlist_behavior(#[case] backend: DecoderBackend) {
         .map(|u| {
             ctx.queue
                 .append(build_track_source(u, ctx, backend, AbrMode::Auto(None)))
+                .expect("append playlist track")
         })
         .collect();
 
@@ -563,7 +567,8 @@ async fn queue_playlist_behavior(#[case] backend: DecoderBackend) {
     .unwrap_or_else(|e| panic!("pre-crossfade: next track load [{}]: {e}", urls[1]));
     let xf_duration = ctx.queue.crossfade_duration();
     ctx.queue
-        .advance_to_next(Transition::Crossfade, AdvanceReason::UserNext);
+        .advance_to_next(Transition::Crossfade, AdvanceReason::UserNext)
+        .expect("advance real-playlist crossfade");
     let started = wait_for_queue_event(
         &mut rx,
         |ev| matches!(ev, QueueEvent::CrossfadeStarted { .. }),
@@ -729,7 +734,10 @@ async fn prod_tracks_sequential_startup_latency() {
         let mut rx = ctx.queue.subscribe();
         let source = build_track_source(url, ctx, DecoderBackend::Apple, AbrMode::Auto(None));
         let t0 = kithara::platform::time::Instant::now();
-        let track_id = ctx.queue.append(source);
+        let track_id = ctx
+            .queue
+            .append(source)
+            .expect("append Apple production track");
 
         let outcome: Result<(Duration, Duration), String> = async {
             wait_for_status(

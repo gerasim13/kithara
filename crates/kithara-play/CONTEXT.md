@@ -16,11 +16,12 @@ Contracts and invariants for the kithara-play crate; the README is the overview.
   primitives, and limiter primitives.
 - `engine/` - session registration, slot table, mix batch.
 - `rt/` - lock-free Firewheel nodes; per-track state under `rt/track/`.
-- `session/` - protocol, state, graph dispatch, platform clients.
+- `session/` - the lower object-safe protocol and Player-side binding handle;
+  concrete state, graph dispatch, and platform clients live in `kithara-host`.
 - `wasm` - target-gated browser binding surface.
 
-`player`, `engine`, and `session` are intentional orchestration planes (their entry files bind API
-state, RT controls, and session commands), so `.config/arch/thresholds.toml` raises
+`player`, `engine`, and the lower session protocol are intentional orchestration planes (their
+entry files bind API state, RT controls, and session commands), so `.config/arch/thresholds.toml` raises
 `module_fan_out` to 9 for this crate; do not add re-export hops solely to lower that count.
 
 ## Domain Policies
@@ -347,19 +348,20 @@ their harness allocates freely. `deep:nightly` runs all four through `just ci ru
 violation fails the job. `permit()` and the RT attribute macros live in `kithara-test-utils` /
 `kithara-test-macros`; there is no separate rtsan crate.
 
-## Session Hosting
+## Session Actuator
 
-Platform-asymmetric by necessity. Native (`session/native.rs`): a dedicated engine worker thread
-drains an `mpsc::Receiver<CmdMsg>` and replies per command; ring buffers live in session state /
-engine slots, not in the command host. Web (`session/web/{bridge,client}.rs`): `AudioContext` lives
-on the browser main thread and Worker-side clients proxy commands over an `mpsc` bridge. The
-cross-platform core (`session/{state,dispatch,protocol,graph}.rs`) carries zero `#[cfg]`; the
-structural gates are the cfg lines around `mod native`, `mod web`, and their re-exports in
-`session/mod.rs`.
+`kithara-play` owns the lower object-safe `SessionDispatcher` protocol used by
+one Player. `kithara-host` owns every concrete native/web session, the existing
+`kithara-engine` thread, the Firewheel graph, and the root synchronization
+group. A Player is constructed as an unbound instance and receives an opaque,
+one-shot `SessionBinding` only when that instance is transferred through
+`Host::insert`; decorators may only delegate the binding to their resident
+Player. There is no standalone concrete production session constructor in this
+crate.
 
 `kithara-warp` owns musical coordinates plus the `BeatGrid`, `WarpMap`, and
-`SyncGroup` protocols; `kithara-play` owns the live Host/session and Player
-instances that consume those contracts. `TrackBinding` captures an
+`SyncGroup` protocols; `kithara-play` owns one Player instance and
+`kithara-host` owns the live session that composes Players. `TrackBinding` captures an
 owner-published `BeatGridSnapshot`; it neither creates a grid identity nor
 converts analysis facts into a second representation. R7 session state may
 transact pure group operations, but the producer chain does not yet consume a
@@ -375,9 +377,9 @@ capability through an internal, builder-skipped `ResourceConfig` field into
 `AudioConfig`. There is no public resource setter and therefore no second
 source of session wake policy.
 
-### Session transport anchor
+### Host transport anchor
 
-`TransportCommitState` is the only owner of when the session beat-to-frame
+The Host's `TransportCommitState` is the only owner of when the session beat-to-frame
 relation changes. Every applied transport commit creates one `SessionAnchor`
 at that exact render boundary and stores it in `SessionTransportSnapshot`. A
 stream restart removes the snapshot because the session frame axis restarted;
@@ -404,24 +406,20 @@ that taper before it reaches the player's `VolumeNode`; feeding a level in direc
 equal-power pan attenuates both channels.
 Slot/content volume and session ducking keep their own taper; they are separate controls.
 
-`apply_mix` (`engine/mix.rs`) is a free function actuating the final levels of a set of players in
-one batch. The session is taken from the first input; it validates levels, same-session membership
-(`Arc::ptr_eq` on the dispatcher), and per-batch uniqueness, then takes every input engine's
-`start_lock` in stable address order - so a batch cannot interleave with a concurrent `start`, and
-two batches sharing players cannot deadlock. Only already-registered engines (those with a session
-`PlayerId`) enter the dispatched subset; a never-started engine has its desired level stored so its
-first `start` adopts it, without speculative registration. Desired levels are committed only after
-the dispatch succeeds. Committing publishes no event (`PlayerEvent::VolumeChanged` stays the only
-volume event actually published); the desired level is readable via `EngineImpl::master_volume`.
+`Host::apply_mix` actuates the final levels of Host-owned players in one batch.
+The Host validates every canonical grid identity, level, and duplicate before
+mutating the graph. Desired Player levels are committed only after dispatch
+succeeds; the probe-only `engine/mix.rs` seam remains solely for deterministic
+lower-level tests and is not a second production path.
 
-The crossfader is pure policy (`api/mix.rs::crossfader_gain`), not state: consumers fold
-`trim * mute * crossfader_gain * group_master` into each member level before calling `apply_mix`.
+The crossfader is pure Host policy (`kithara-host::crossfader_gain`), not state: consumers fold
+`trim * mute * crossfader_gain * group_master` into each member level before calling `Host::apply_mix`.
 `group_master` is folded per member, never stored as process-wide state, so one logical group
 cannot change another group's master. `crossfader_gain` rejects a non-finite or out-of-range
 position with `PlayError::MixPosition` and returns exact `0.0`/`1.0` at the endpoints.
 
-The session graph carries exactly one play-owned peak limiter
-(`rt/limiter.rs`, wrapping `crate::effects::PeakLimiter`) at the final sum,
+The session graph carries exactly one Host-owned peak limiter
+(`kithara-host/src/rt/limiter.rs`, wrapping `kithara_play::effects::PeakLimiter`) at the final sum,
 after session ducking and before the graph output.
 It is created once per session context in `create_session_output`; recreating the context (route
 change, idle teardown) rebuilds it with a fresh envelope. Player start/stop only connects or
@@ -436,7 +434,7 @@ the session has not measured an output yet. `sample_rate_hint` remains input to 
 restart, never an observed-rate reply. Consumers that require the device fact wait for `Some`;
 playback policy may explicitly choose its configured rate while no stream exists.
 
-`Cmd::EnableMixTap` hangs `rt/tap.rs`'s `TapNode` off the session limiter beside `graph_out`:
+`Cmd::EnableMixTap` hangs `kithara-host/src/rt/tap.rs`'s `TapNode` off the session limiter beside `graph_out`:
 stereo in, zero outputs, `ProcessStatus::ClearAllOutputs`. Firewheel's compiler sorts every node
 topologically and keeps a sink with no outgoing edges in the schedule, so the extra
 `limiter -> tap` edge is an addition to the terminal chain: the tap reads the limiter's output

@@ -1,6 +1,8 @@
 use kithara_platform::sync::Arc;
 
+#[cfg(test)]
 use super::super::core::PlayerImpl;
+use super::super::core::PlayerRuntime;
 use crate::{
     api::{PlayerEvent, SlotId, TimeControlStatus, WaitingReason},
     bridge::PlayerCmd,
@@ -286,7 +288,7 @@ impl PlayerPhase {
     }
 }
 
-impl PlayerImpl {
+impl PlayerRuntime {
     /// Promote the phase to `Loading` carrying `slot`, preserving any armed
     /// next / ABR handle the previous active phase held. A no-op transition
     /// when the phase already holds a slot keeps the existing payload.
@@ -359,7 +361,7 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::{PlayWorker, PlayWorkerConfig, player::PlayerConfig};
+    use crate::{PlayWorker, PlayWorkerConfig, player::PlayerConfig, session::testing};
 
     #[kithara::test]
     fn pending_next_state_maps_activated_bool() {
@@ -423,7 +425,12 @@ mod tests {
         let worker = PlayWorker::new(
             PlayWorkerConfig::for_pools(BytePool::default(), PcmPool::default()).build(),
         );
-        let player = PlayerImpl::new(PlayerConfig::builder().worker(worker).build());
+        let player = PlayerImpl::new(
+            PlayerConfig::builder()
+                .worker(worker)
+                .session(testing::test_session())
+                .build(),
+        );
         assert_eq!(
             player.require_active_slot(),
             Err(TransitionError::WrongPhase)

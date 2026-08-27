@@ -90,11 +90,12 @@ fn loaded_harness() -> OfflinePlayerHarness {
         OfflinePlayerOptions::builder().build(),
         SAMPLE_RATE,
     );
-    harness.player().insert(make_resource(1.0), None, None);
-    harness
-        .player()
-        .select_item(0, true)
-        .expect("select first queue item");
+    harness.with_player(|player| {
+        player.insert(make_resource(1.0), None, None);
+        player
+            .select_item(0, true)
+            .expect("select first queue item");
+    });
 
     for _ in 0..WARMUP_BLOCKS {
         let _ = harness.render(BLOCK_FRAMES);

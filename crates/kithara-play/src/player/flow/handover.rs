@@ -2,8 +2,10 @@ use std::ops::Deref;
 
 use kithara_platform::{sync::Arc, time::Duration};
 
+#[cfg(test)]
+use super::super::core::PlayerImpl;
 use super::super::{
-    core::PlayerImpl,
+    core::PlayerRuntime,
     state::{PendingNext, PendingNextState},
 };
 use crate::{api::EngineEvent, bridge::PlayerCmd, error::PlayError};
@@ -23,17 +25,17 @@ struct ActivatedPending {
 }
 
 struct Handover<'a> {
-    player: &'a PlayerImpl,
+    player: &'a PlayerRuntime,
 }
 
 impl<'a> Handover<'a> {
-    const fn new(player: &'a PlayerImpl) -> Self {
+    const fn new(player: &'a PlayerRuntime) -> Self {
         Self { player }
     }
 }
 
 impl Deref for Handover<'_> {
-    type Target = PlayerImpl;
+    type Target = PlayerRuntime;
 
     fn deref(&self) -> &Self::Target {
         self.player
@@ -205,7 +207,7 @@ impl Handover<'_> {
     }
 }
 
-impl PlayerImpl {
+impl PlayerRuntime {
     pub fn arm_next(&self, index: usize) -> Option<Arc<str>> {
         Handover::new(self).arm_next(index)
     }
@@ -245,7 +247,12 @@ mod tests {
 
     #[kithara::test]
     fn commit_next_without_arm_returns_not_ready() {
-        let player = PlayerImpl::new(PlayerConfig::builder().worker(worker()).build());
+        let player = PlayerImpl::new(
+            PlayerConfig::builder()
+                .worker(worker())
+                .session(testing::test_session())
+                .build(),
+        );
         let err = player.commit_next(1).expect_err("must error");
         assert!(matches!(err, PlayError::NotReady));
     }

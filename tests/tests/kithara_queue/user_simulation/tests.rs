@@ -418,12 +418,12 @@ async fn user_sim_seek_immediately_after_loaded(#[case] kind: TrackKind, #[case]
     )
     .initial_abr_mode(AbrMode::Auto(None))
     .build();
-    let player = Arc::new(PlayerImpl::new(
+    let player = PlayerImpl::new(
         PlayerConfig::builder()
             .worker(worker)
             .session(OfflineSession::arc_auto())
             .build(),
-    ));
+    );
     let queue = Arc::new(Queue::new(QueueConfig::builder().player(player).build()));
     let q_for_tick = Arc::clone(&queue);
     // Platform spawn chokepoint, NOT raw `tokio::spawn`: under flash
@@ -438,7 +438,9 @@ async fn user_sim_seek_immediately_after_loaded(#[case] kind: TrackKind, #[case]
             }
         }
     });
-    let track_id = queue.append(TrackSource::Config(Box::new(cfg)));
+    let track_id = queue
+        .append(TrackSource::Config(Box::new(cfg)))
+        .expect("append immediate-seek track");
 
     use super::harness::wait_for_loaded;
     wait_for_loaded(&queue, track_id, Duration::from_secs(30))

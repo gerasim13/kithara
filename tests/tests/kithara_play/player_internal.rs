@@ -79,6 +79,7 @@ fn default_player_config() -> PlayerConfig {
         .worker(PlayWorker::new(
             PlayWorkerConfig::for_pools(region.byte_pool(), region.pcm_pool()).build(),
         ))
+        .session(OfflineSession::arc_manual())
         .build()
 }
 

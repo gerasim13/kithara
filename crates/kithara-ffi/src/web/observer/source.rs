@@ -1,12 +1,10 @@
-use std::rc::Rc;
-
 use js_sys::Reflect;
 use kithara_events::{Envelope, Event, EventReceiver, QueueEvent};
 use kithara_platform::{
     time::{Duration, sleep},
     tokio::{sync::broadcast, task::spawn as task_spawn},
 };
-use kithara_queue::Queue;
+use kithara_queue::QueueControl;
 use wasm_bindgen::JsValue;
 use web_sys::BroadcastChannel;
 
@@ -21,7 +19,7 @@ pub(crate) const EVENT_CHANNEL: &str = "kithara-events";
 /// translated [`FfiPlayerEvent`] to the main thread over
 /// [`EVENT_CHANNEL`]. Spawned from
 /// [`worker_main`](crate::web::worker::worker_main).
-pub(crate) fn spawn(queue: &Rc<Queue>) {
+pub(crate) fn spawn(queue: &QueueControl) {
     let rx = queue.subscribe();
     task_spawn(async move {
         run(rx).await;
@@ -31,20 +29,23 @@ pub(crate) fn spawn(queue: &Rc<Queue>) {
 
 /// Emit [`FfiPlayerEvent::DurationChanged`] whenever the current track's
 /// duration changes. `DurationChanged` is not a raw bus event: the native
-/// bridge derives it by polling [`Queue::duration_seconds`], so the worker
-/// must do the same here. Without this the JS control surface never learns
-/// the track length and the seek slider has no range.
-fn spawn_duration_poll(queue: &Rc<Queue>) {
+/// bridge derives it by polling [`QueueControl::duration_seconds`], so the
+/// worker must do the same here. Without this the JS control surface never
+/// learns the track length and the seek slider has no range.
+fn spawn_duration_poll(queue: &QueueControl) {
     /// Poll cadence for the derived `DurationChanged` event, in milliseconds.
     const DURATION_POLL_MS: u64 = 250;
 
-    let queue = Rc::clone(queue);
+    let queue = queue.clone();
     task_spawn(async move {
         let Ok(channel) = BroadcastChannel::new(EVENT_CHANNEL) else {
             return;
         };
         let mut last: Option<f64> = None;
         loop {
+            if queue.is_closed() {
+                break;
+            }
             let current = queue.duration_seconds();
             if current != last
                 && let Some(seconds) = current

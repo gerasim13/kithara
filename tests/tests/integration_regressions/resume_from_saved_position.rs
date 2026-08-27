@@ -40,7 +40,7 @@ fn spawn_ticker(queue: Arc<Queue>) -> tokio::task::JoinHandle<()> {
 }
 
 fn new_queue(region: &Region, store: AssetStore) -> Arc<Queue> {
-    let player = Arc::new(PlayerImpl::new(
+    let player = PlayerImpl::new(
         PlayerConfig::builder()
             .worker(kithara::play::PlayWorker::new(
                 kithara::play::PlayWorkerConfig::for_pools(region.byte_pool(), region.pcm_pool())
@@ -48,7 +48,7 @@ fn new_queue(region: &Region, store: AssetStore) -> Arc<Queue> {
             ))
             .session(OfflineSession::arc_auto())
             .build(),
-    ));
+    );
     Arc::new(Queue::new(
         QueueConfig::builder().player(player).store(store).build(),
     ))
@@ -69,7 +69,9 @@ fn append_track(queue: &Queue, url: &str, downloader: &Downloader, store: &Asset
         .downloader(downloader.clone())
         .store(store.clone())
         .build();
-    queue.append(TrackSource::Config(Box::new(cfg)))
+    queue
+        .append(TrackSource::Config(Box::new(cfg)))
+        .expect("append resume track")
 }
 
 #[kithara::test(tokio, timeout(Duration::from_secs(90)))]

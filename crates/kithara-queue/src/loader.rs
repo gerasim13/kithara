@@ -13,7 +13,7 @@ use kithara_platform::{
         task::{JoinHandle, spawn},
     },
 };
-use kithara_play::{PlayerImpl, Resource, ResourceConfig};
+use kithara_play::{Resource, ResourceConfig, player::PlayerControl};
 
 use crate::{
     attempts::{LoadClass, Ticket},
@@ -26,7 +26,7 @@ use crate::{
 pub(crate) struct Loader {
     /// User-selection lane: one dedicated permit, isolated from prefetch.
     interactive_lane: Arc<Semaphore>,
-    player: Arc<PlayerImpl>,
+    player: PlayerControl,
     /// Background prefetch lane (`max_concurrent_loads` permits).
     prefetch_lane: Arc<Semaphore>,
     /// Same `Arc<Tracks>` as `Queue::tracks`: owns per-track status and the live attempt,
@@ -37,7 +37,7 @@ pub(crate) struct Loader {
 
 impl Loader {
     pub(crate) fn new(
-        player: Arc<PlayerImpl>,
+        player: PlayerControl,
         store: AssetStore,
         max_concurrent_loads: NonZeroUsize,
         tracks: Arc<Tracks>,
@@ -97,7 +97,7 @@ impl Loader {
                 ..ScopeLabel::default()
             }));
         }
-        Ok(self.player.prepare_config(config))
+        self.player.prepare_config(config).map_err(QueueError::from)
     }
 
     /// Load a [`Resource`] from a prepared config. Caller is responsible
@@ -239,7 +239,9 @@ mod tests {
     use kithara_bufpool::Region;
     use kithara_events::{EventBus, QueueEvent};
     use kithara_platform::time::Duration;
-    use kithara_play::{PlayWorker, PlayWorkerConfig, PlayerConfig};
+    use kithara_play::{
+        PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, player::PlayerControlSource,
+    };
     use kithara_test_utils::kithara;
 
     use super::*;
@@ -274,6 +276,7 @@ mod tests {
     /// [`EventBus`] (so tests can subscribe for assertions).
     struct LoaderFixture {
         loader: Arc<Loader>,
+        _player: PlayerImpl,
         tracks: Arc<Tracks>,
         bus: EventBus,
     }
@@ -284,17 +287,26 @@ mod tests {
             let worker = PlayWorker::new(
                 PlayWorkerConfig::for_pools(region.byte_pool(), region.pcm_pool()).build(),
             );
-            let player = Arc::new(PlayerImpl::new(
-                PlayerConfig::builder().worker(worker).build(),
-            ));
+            let player = PlayerImpl::new(
+                PlayerConfig::builder()
+                    .worker(worker)
+                    .session(crate::queue::test_session())
+                    .build(),
+            );
             let bus = player.bus().clone();
             let tracks = Arc::new(Tracks::new(bus.clone()));
             let store = AssetStore::builder()
                 .pool(player.byte_pool().clone())
                 .build();
-            let loader = Arc::new(Loader::new(player, store, self.cap, Arc::clone(&tracks)));
+            let loader = Arc::new(Loader::new(
+                player.control(),
+                store,
+                self.cap,
+                Arc::clone(&tracks),
+            ));
             LoaderFixture {
                 loader,
+                _player: player,
                 tracks,
                 bus,
             }
@@ -303,7 +315,8 @@ mod tests {
 
     #[kithara::test(tokio)]
     async fn build_config_preserves_caller_supplied_config() {
-        let loader = LoaderFixtureSpec::default().build().loader;
+        let fixture = LoaderFixtureSpec::default().build();
+        let loader = &fixture.loader;
         let supplied_store = AssetStore::builder()
             .backend(StorageBackend::Memory)
             .build();
@@ -349,7 +362,8 @@ mod tests {
 
     #[kithara::test(tokio)]
     async fn build_config_invalid_uri_errors() {
-        let loader = LoaderFixtureSpec::default().build().loader;
+        let fixture = LoaderFixtureSpec::default().build();
+        let loader = &fixture.loader;
         let Err(err) = loader.build_config(TrackId(1), TrackSource::Uri("not-a-url".into())) else {
             panic!("should reject relative path");
         };
@@ -359,7 +373,8 @@ mod tests {
     #[kithara::test(tokio, multi_thread)]
     async fn prefetch_lane_caps_concurrent_loads() {
         let cap = NonZeroUsize::new(2).expect("BUG: 2 > 0 is mathematically guaranteed");
-        let loader = LoaderFixtureSpec::default().with_cap(cap).build().loader;
+        let fixture = LoaderFixtureSpec::default().with_cap(cap).build();
+        let loader = &fixture.loader;
 
         let in_flight = Arc::new(AtomicUsize::new(0));
         let max_seen = Arc::new(AtomicUsize::new(0));

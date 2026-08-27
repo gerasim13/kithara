@@ -6,7 +6,7 @@ use kithara::{
     assets::{AssetStore, StorageBackend},
     events::PlayerEvent,
     platform::time::{self, Duration},
-    play::{PlayerImpl, Resource, ResourceConfig},
+    play::{Resource, ResourceConfig},
 };
 use kithara_integration_tests::{
     TestTempDir,
@@ -31,7 +31,8 @@ const DRAIN_BLOCK_BUDGET: usize = 4_000;
 const DRAIN_SHARE_NUM: usize = 3;
 const DRAIN_SHARE_DEN: usize = 4;
 
-async fn file_resource(player: &PlayerImpl, path: &Path, store_dir: &Path) -> Resource {
+async fn file_resource(harness: &OfflinePlayerHarness, path: &Path, store_dir: &Path) -> Resource {
+    let byte_pool = harness.with_player(|player| player.byte_pool().clone());
     let config = ResourceConfig::for_src(
         ResourceConfig::parse_src(path.to_str().expect("utf-8 fixture path"))
             .expect("local media path is a valid resource src"),
@@ -41,13 +42,15 @@ async fn file_resource(player: &PlayerImpl, path: &Path, store_dir: &Path) -> Re
             .backend(StorageBackend::Disk {
                 root: store_dir.into(),
             })
-            .pool(player.byte_pool().clone())
+            .pool(byte_pool)
             .build(),
     )
     .build();
-    Resource::new(player.prepare_config(config))
-        .await
-        .expect("open local resource")
+    let config = harness
+        .player()
+        .prepare_config(config)
+        .expect("offline player remains open");
+    Resource::new(config).await.expect("open local resource")
 }
 
 async fn render_blocks(harness: &OfflinePlayerHarness, blocks: usize) {
@@ -76,16 +79,17 @@ async fn blocks_until_end(temp_dir: &TestTempDir, rate: f32) -> usize {
     let frames = DRAIN_FIXTURE_SECS * SAMPLE_RATE as usize;
     std::fs::write(&path, create_test_wav(frames, SAMPLE_RATE, 2)).expect("write wav fixture");
     let resource = file_resource(
-        harness.player(),
+        &harness,
         &path,
         &temp_dir.path().join(format!("store-{tag}")),
     )
     .await;
-    harness.player().insert(resource, None, None);
-    harness
-        .player()
-        .select_item(0, true)
-        .expect("select first queue item");
+    harness.with_player(|player| {
+        player.insert(resource, None, None);
+        player
+            .select_item(0, true)
+            .expect("select first queue item");
+    });
     harness.player().set_default_rate(rate);
 
     let mut blocks = 0usize;
@@ -122,12 +126,13 @@ async fn media_time_advances_with_the_playing_rate(temp_dir: TestTempDir) {
     );
     let path = temp_dir.path().join("rate.mp3");
     std::fs::write(&path, EmbeddedAudio::TEST_MP3_BYTES).expect("write mp3 fixture");
-    let resource = file_resource(harness.player(), &path, &temp_dir.path().join("store")).await;
-    harness.player().insert(resource, None, None);
-    harness
-        .player()
-        .select_item(0, true)
-        .expect("select first queue item");
+    let resource = file_resource(&harness, &path, &temp_dir.path().join("store")).await;
+    harness.with_player(|player| {
+        player.insert(resource, None, None);
+        player
+            .select_item(0, true)
+            .expect("select first queue item");
+    });
 
     render_blocks(&harness, SETTLE_BLOCKS).await;
     let baseline = media_advance(&harness, MEASURE_BLOCKS).await;
