@@ -266,6 +266,7 @@ impl AppleAudioFileDemuxer {
     /// Attach the shared live byte-length handle so a size-less seek can
     /// report an estimated `landed_byte` (see the `byte_len` field).
     pub(crate) fn set_byte_len_handle(&mut self, handle: Option<Arc<AtomicU64>>) {
+        self.file.set_byte_len_handle(handle.clone());
         self.byte_len = handle;
     }
 
@@ -540,6 +541,36 @@ mod tests {
         ready: u64,
     }
 
+    struct TailLoopGuard {
+        inner: Cursor<Vec<u8>>,
+        last_short_read: Option<(u64, usize, usize)>,
+        tripped: Arc<AtomicBool>,
+    }
+
+    impl Read for TailLoopGuard {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            let start = self.inner.position();
+            let read = self.inner.read(buf)?;
+            if read > 0 && read < buf.len() {
+                let span = (start, buf.len(), read);
+                if self.last_short_read == Some(span) {
+                    self.tripped.store(true, Ordering::Release);
+                    return Err(Error::other("repeated short tail read"));
+                }
+                self.last_short_read = Some(span);
+            } else {
+                self.last_short_read = None;
+            }
+            Ok(read)
+        }
+    }
+
+    impl Seek for TailLoopGuard {
+        fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
+            self.inner.seek(pos)
+        }
+    }
+
     impl NotReadySource {
         fn new(bytes: Vec<u8>, ready: u64, notify_not_ready: Option<Arc<AtomicBool>>) -> Self {
             let inner = Cursor::new(bytes);
@@ -656,6 +687,50 @@ mod tests {
             DemuxOutcome::Pending(PendingReason::NotReady(_)) => {}
             other => panic!("unexpected first MP3 outcome: {other:?}"),
         }
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn size_less_mp3_with_id3v1_tail_reaches_eof() {
+        let mut bytes = read_asset("test.mp3");
+        let mut id3v1 = [0_u8; 128];
+        id3v1[..3].copy_from_slice(b"TAG");
+        bytes.extend_from_slice(&id3v1);
+        let byte_len = u64::try_from(bytes.len()).expect("fixture length fits u64");
+        let tripped = Arc::new(AtomicBool::new(false));
+        let mut dx = AppleAudioFileDemuxer::open_for_with_mode(
+            Box::new(TailLoopGuard {
+                inner: Cursor::new(bytes),
+                last_short_read: None,
+                tripped: Arc::clone(&tripped),
+            }),
+            AudioCodec::Mp3,
+            Some(ContainerFormat::MpegAudio),
+            SourceOpenMode::Streaming,
+            Some(Duration::from_secs(188)),
+        )
+        .expect("streaming MP3 open");
+        dx.set_byte_len_handle(Some(Arc::new(AtomicU64::new(byte_len))));
+
+        let mut packets = 0_u64;
+        loop {
+            match dx.next_frame() {
+                Ok(DemuxOutcome::Frame(_)) => {
+                    packets += 1;
+                    assert!(packets <= 7_163, "demuxer produced too many packets");
+                }
+                Ok(DemuxOutcome::Eof) => break,
+                Ok(DemuxOutcome::Pending(reason)) => {
+                    panic!("complete fixture must not become pending: {reason:?}")
+                }
+                Err(error) => panic!("complete fixture must reach EOF: {error}"),
+            }
+        }
+
+        assert!(
+            !tripped.load(Ordering::Acquire),
+            "AudioFileServices repeated the same short tail read"
+        );
+        assert_eq!(packets, 7_163, "the final MPEG packet must not be lost");
     }
 
     /// Seeks `dx` to three seconds and returns the reported `landed_byte`.
