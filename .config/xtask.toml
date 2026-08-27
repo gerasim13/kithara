@@ -86,8 +86,14 @@ crap_rows = 120
 top_contours = 10
 
 [health]
-# Crates excluded from `cargo hack --feature-powerset` (too many features).
-feature_powerset_exclude = ["kithara-play", "kithara-app", "kithara-fuzz"]
+# Crates excluded from the generic powerset need product-context checks in the
+# owning `just deps hack` recipe.
+feature_powerset_exclude = [
+  "kithara-play",
+  "kithara-app",
+  "kithara-fuzz",
+  "kithara-warp",
+]
 # The package whose public API is a contract outside this workspace: the facade
 # a consumer depends on. Internal crates are free to break (AGENTS.md says so)
 # and nothing here is published, so a workspace-wide comparison would report

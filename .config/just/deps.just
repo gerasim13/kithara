@@ -12,6 +12,10 @@ shear:
 
 hack:
     just _xtask powerset --no-dev-deps
+    cargo check -p kithara-warp --lib --no-default-features
+    cargo check -p kithara-warp --lib --no-default-features --features stretch-signalsmith,kithara-decode/symphonia,kithara-decode/client-reqwest,kithara-decode/tls-rustls
+    cargo check -p kithara-warp --lib --no-default-features --features stretch-bungee,kithara-decode/symphonia,kithara-decode/client-reqwest,kithara-decode/tls-rustls
+    cargo check -p kithara-warp --lib --no-default-features --features stretch-signalsmith,stretch-bungee,kithara-decode/symphonia,kithara-decode/client-reqwest,kithara-decode/tls-rustls
 
 # Baseline is a revision here, not crates.io: the workspace is unpublished.
 # Routed through xtask so the lane holds the shared target directory's job
