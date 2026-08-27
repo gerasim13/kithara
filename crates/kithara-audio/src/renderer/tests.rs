@@ -3,10 +3,12 @@ use kithara_decode::{PcmChunk, PcmMeta};
 use kithara_platform::sync::Arc;
 use kithara_stream::{SeekControl, SeekObserve, SeekState};
 
-use super::AudioWorkerSource;
-use crate::pipeline::{
-    fetch::Fetch,
-    track::{TrackStep, WaitingReason},
+use crate::{
+    pipeline::{
+        fetch::Fetch,
+        track::{TrackStep, WaitingReason},
+    },
+    traits::PcmSource,
 };
 
 fn empty_chunk() -> PcmChunk {
@@ -52,7 +54,7 @@ impl MockSource {
     }
 }
 
-impl AudioWorkerSource for MockSource {
+impl PcmSource for MockSource {
     type Chunk = PcmChunk;
 
     fn seek_observe(&self) -> Arc<dyn SeekObserve> {

@@ -38,13 +38,12 @@ pub use kithara_resampler::{
 pub use pipeline::{
     config::{AudioConfig, AudioDecoderConfig, ConsumerWakeMode, DecoderResamplerSettings},
     fetch::{EpochValidator, Fetch},
+    track::{TrackStep, WaitingReason},
 };
 pub use region::{ActiveRegion, RegionPlan, RegionPlanError};
-pub use renderer::{
-    AudioWorkerHandle, AudioWorkerSource, EngineLoad, EngineLoadSnapshot, PreloadGate, ServiceClass,
-};
+pub use renderer::{AudioWorkerHandle, EngineLoad, EngineLoadSnapshot, PreloadGate, ServiceClass};
 pub use traits::{
     AudioEffect, ChunkOutcome, DecodeError, DecodeResult, PcmControl, PcmRead, PcmReader,
-    PcmSession, PendingReason, ReadOutcome, SeekBegin, SeekOutcome,
+    PcmSession, PcmSource, PendingReason, ReadOutcome, SeekBegin, SeekOutcome,
 };
 pub use waveform::{AnalysisParams, BeatGrid, Bucket, GridSegment, bucket::Waveform};

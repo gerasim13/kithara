@@ -33,7 +33,7 @@ use crate::{
         stream::shared::SharedStream,
         track::{self, TrackStep},
     },
-    renderer::AudioWorkerSource,
+    traits::PcmSource,
 };
 
 fn produced_data(fetch: Fetch<PcmChunk>) -> PcmChunk {

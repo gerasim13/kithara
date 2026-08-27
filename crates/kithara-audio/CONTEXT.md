@@ -52,7 +52,7 @@ Transport (`runtime/ports.rs`): SPSC `ringbuf::HeapRb` plus a one-slot overflow
 - **Off-RT deferral.** Signals the forbid-blocking core must not make are armed
   on-core and flushed by the shell from `DecoderNode::recycle`. The outlet flush
   delivers the consumer output wake (`ReaderOutputWake`), while
-  `AudioWorkerSource::flush_deferred` owns FSM lifecycle events
+  `PcmSource::flush_deferred` owns FSM lifecycle events
   (`DeferredBus<Event>`), the reader→peer wake
   (`ReadinessGate::flush_peer_wake`), and retired state (`Retired::drain`).
   `StreamAudioSource::drop` keeps one teardown flush after the scheduler's final
@@ -251,7 +251,7 @@ it requests a seek (`Audio::seek` → `SeekControl::begin`); and the **producer
 decode epoch** (`SeekEngine::epoch`), advanced only when the worker applies a
 seek, so it lags across the requested-but-not-applied window. Decoded chunks
 *and* terminal markers (EOF / failure) are tagged with the decode epoch via
-`AudioWorkerSource::decode_epoch()`, never the live seek-state epoch: a genuine
+`PcmSource::decode_epoch()`, never the live seek-state epoch: a genuine
 EOF reached after a newer seek bumped the seek-state epoch would otherwise pass
 the consumer's `EpochValidator` as the new seek's terminal.
 

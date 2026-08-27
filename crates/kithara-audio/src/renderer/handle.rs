@@ -124,8 +124,9 @@ mod tests {
             fetch::Fetch,
             track::{TrackStep, WaitingReason},
         },
-        renderer::{AudioWorkerSource, MockSource, PreloadGate, ServiceClass, ThreadWake},
+        renderer::{MockSource, PreloadGate, ServiceClass, ThreadWake},
         runtime::{AtomicServiceClass, connect},
+        traits::PcmSource,
     };
 
     fn empty_chunk() -> PcmChunk {
@@ -144,7 +145,7 @@ mod tests {
         }
     }
 
-    impl AudioWorkerSource for FailingSource {
+    impl PcmSource for FailingSource {
         type Chunk = PcmChunk;
 
         fn seek_observe(&self) -> Arc<dyn SeekObserve> {
@@ -166,7 +167,7 @@ mod tests {
         Arc<PreloadGate>,
     )
     where
-        S: AudioWorkerSource<Chunk = PcmChunk> + 'static,
+        S: PcmSource<Chunk = PcmChunk> + 'static,
     {
         let wake = Arc::new(ThreadWake::default());
         let (outlet, inlet) = connect::<Fetch<PcmChunk>>(ringbuf_capacity, Some(wake));
@@ -455,7 +456,7 @@ mod tests {
             blocking: Arc<AtomicBool>,
         }
 
-        impl AudioWorkerSource for BlockingSource {
+        impl PcmSource for BlockingSource {
             type Chunk = PcmChunk;
 
             fn step_track(&mut self) -> TrackStep<PcmChunk> {
@@ -531,7 +532,7 @@ mod tests {
             block_ms: u64,
         }
 
-        impl AudioWorkerSource for SlowDecodeSource {
+        impl PcmSource for SlowDecodeSource {
             type Chunk = PcmChunk;
 
             fn step_track(&mut self) -> TrackStep<PcmChunk> {

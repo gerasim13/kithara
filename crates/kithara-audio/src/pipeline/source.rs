@@ -29,7 +29,7 @@ use crate::{
             self, CurrentFsm, Decoding, Track, TrackFailure, TrackStep, WaitContext, WaitingReason,
         },
     },
-    renderer::AudioWorkerSource,
+    traits::PcmSource,
 };
 
 /// Audio source for Stream with format change detection.
@@ -56,7 +56,7 @@ pub(crate) struct StreamAudioSource<T: StreamType> {
     pub(crate) decoder_backend: kithara_decode::DecoderBackend,
     /// Deferred sink for FSM lifecycle events ([`AudioEvent`]). The FSM runs on
     /// the produce core, so `emit_event` enqueues lock-free; the scheduler shell
-    /// flushes via [`flush_deferred`](AudioWorkerSource::flush_deferred) and on
+    /// flushes via [`flush_deferred`](PcmSource::flush_deferred) and on
     /// `Drop`, keeping the cross-thread `broadcast::send` (a `kevent`) off the
     /// forbid path. `None` for sources built without an event bus.
     #[field(with, option_set_some, vis = "pub(crate)")]
@@ -564,7 +564,7 @@ fn retire_completion(retired: &Retired, complete: DecoderBuildComplete) {
     }
 }
 
-impl<T: StreamType> AudioWorkerSource for StreamAudioSource<T> {
+impl<T: StreamType> PcmSource for StreamAudioSource<T> {
     type Chunk = PcmChunk;
 
     fn decode_epoch(&self) -> u64 {

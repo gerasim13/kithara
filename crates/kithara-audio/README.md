@@ -65,8 +65,8 @@ processed chunks to the caller through lock-free rings.
   seeks.
 - `AudioConfig<T>` — `bon` builder for stream config, decode backend,
   resampling, gapless mode, stretch controls, worker handle, and engine load.
-- `AudioWorkerHandle` / `AudioWorkerSource` — shared worker thread handle and
-  per-track source contract.
+- `AudioWorkerHandle` / `PcmSource` — shared worker thread handle and the
+  worker-independent per-track decoded PCM source contract.
 - `ResamplerQuality` / `ResamplerOptions` — sample-rate-conversion config
   threaded into the decoder-owned resampler plan.
 - `StretchControls` / `TimeStretchProcessor` — preserve-pitch tempo mode on

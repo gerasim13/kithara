@@ -6,13 +6,14 @@ use kithara_platform::{
 };
 use kithara_stream::{PlayheadRead, SeekObserve};
 
-use super::{AudioWorkerSource, EngineLoad, PreloadGate, ServiceClass};
+use super::{EngineLoad, PreloadGate, ServiceClass};
 use crate::{
     pipeline::{
         fetch::Fetch,
         track::{TrackStep, WaitingReason},
     },
     runtime::{AtomicServiceClass, Inlet, Node, Outlet, TickResult},
+    traits::PcmSource,
 };
 
 /// Everything needed to register a track with the shared worker.
@@ -23,7 +24,7 @@ pub(crate) struct TrackRegistration {
     /// Shared priority hint. The real-time consumer writes it wait-free
     /// (`Audio::set_service_class`); the worker scheduler reads it each pass.
     pub(crate) service_class: Arc<AtomicServiceClass>,
-    pub(crate) source: Box<dyn AudioWorkerSource<Chunk = PcmChunk>>,
+    pub(crate) source: Box<dyn PcmSource<Chunk = PcmChunk>>,
     /// Spent-chunk return ring: the real-time consumer ([`crate::Audio`])
     /// hands every consumed `PcmChunk` here instead of dropping it, so the
     /// pooled buffer is freed/recycled on the worker thread rather than on
@@ -66,7 +67,7 @@ pub(crate) struct DecoderNode {
     /// Shared priority hint written wait-free by the real-time consumer and
     /// read back here by the scheduler each pass — see [`AtomicServiceClass`].
     service_class: Arc<AtomicServiceClass>,
-    source: Box<dyn AudioWorkerSource<Chunk = PcmChunk>>,
+    source: Box<dyn PcmSource<Chunk = PcmChunk>>,
     runtime: DecoderRuntime,
     /// Spent chunks returned by the real-time consumer. Drained by
     /// [`recycle`](DecoderNode::recycle) in the scheduler's unchecked shell
@@ -323,8 +324,8 @@ mod tests {
 
     use super::*;
     use crate::{
-        renderer::MockAudioWorkerSource,
         runtime::{Inlet, Outlet, connect},
+        traits::PcmSourceMock,
     };
 
     fn empty_chunk() -> PcmChunk {
@@ -335,7 +336,7 @@ mod tests {
     /// suite (preload after one chunk, default service class, fresh
     /// runtime), so call sites only spell out what they vary.
     fn test_node(
-        source: Box<dyn AudioWorkerSource<Chunk = PcmChunk>>,
+        source: Box<dyn PcmSource<Chunk = PcmChunk>>,
         outlet: Outlet<Fetch<PcmChunk>>,
         preload_gate: Arc<PreloadGate>,
         seek_obs: Arc<dyn SeekObserve>,
@@ -366,10 +367,10 @@ mod tests {
         assert!(outlet.has_pending());
 
         let source = Box::new(Unimock::new((
-            MockAudioWorkerSource::step_track
+            PcmSourceMock::step_track
                 .next_call(matching!())
                 .returns(TrackStep::Eof),
-            MockAudioWorkerSource::decode_epoch.stub(|each| {
+            PcmSourceMock::decode_epoch.stub(|each| {
                 each.call(matching!()).returns(0u64);
             }),
         )));
@@ -413,7 +414,7 @@ mod tests {
             PcmPool::default().attach(vec![0.0f32; 4_410 * 2]),
         );
         let source = Box::new(Unimock::new(
-            MockAudioWorkerSource::step_track
+            PcmSourceMock::step_track
                 .next_call(matching!())
                 .returns(TrackStep::Produced(Fetch::data(chunk, 0))),
         ));
@@ -509,10 +510,10 @@ mod tests {
 
         let (eof_outlet, mut eof_inlet) = connect::<Fetch<PcmChunk>>(1, None);
         let eof_source = Box::new(Unimock::new((
-            MockAudioWorkerSource::step_track
+            PcmSourceMock::step_track
                 .next_call(matching!())
                 .returns(TrackStep::Eof),
-            MockAudioWorkerSource::decode_epoch.stub(|each| {
+            PcmSourceMock::decode_epoch.stub(|each| {
                 each.call(matching!()).returns(0u64);
             }),
         )));
@@ -527,10 +528,10 @@ mod tests {
 
         let (failed_outlet, mut failed_inlet) = connect::<Fetch<PcmChunk>>(1, None);
         let failed_source = Box::new(Unimock::new((
-            MockAudioWorkerSource::step_track
+            PcmSourceMock::step_track
                 .next_call(matching!())
                 .returns(TrackStep::Failed),
-            MockAudioWorkerSource::decode_epoch.stub(|each| {
+            PcmSourceMock::decode_epoch.stub(|each| {
                 each.call(matching!()).returns(0u64);
             }),
         )));
@@ -569,10 +570,10 @@ mod tests {
         let seek_obs = Arc::new(seek_state) as Arc<dyn SeekObserve>;
 
         let source = Box::new(Unimock::new((
-            MockAudioWorkerSource::step_track
+            PcmSourceMock::step_track
                 .next_call(matching!())
                 .returns(TrackStep::Eof),
-            MockAudioWorkerSource::decode_epoch
+            PcmSourceMock::decode_epoch
                 .next_call(matching!())
                 .returns(0u64),
         )));
@@ -599,10 +600,10 @@ mod tests {
         outlet.try_push(Fetch::data(empty_chunk(), 0)).unwrap();
 
         let source = Box::new(Unimock::new((
-            MockAudioWorkerSource::step_track
+            PcmSourceMock::step_track
                 .next_call(matching!())
                 .returns(TrackStep::Produced(Fetch::data(empty_chunk(), 0))),
-            MockAudioWorkerSource::step_track
+            PcmSourceMock::step_track
                 .next_call(matching!())
                 .returns(TrackStep::Blocked(WaitingReason::Waiting)),
         )));
@@ -636,7 +637,7 @@ mod tests {
         let (outlet, _inlet) = connect::<Fetch<PcmChunk>>(2, None);
 
         let source = Box::new(Unimock::new(
-            MockAudioWorkerSource::step_track
+            PcmSourceMock::step_track
                 .next_call(matching!())
                 .returns(TrackStep::Blocked(WaitingReason::WaitingDemand)),
         ));
@@ -658,13 +659,13 @@ mod tests {
 
         let seek_state = Arc::new(SeekState::new());
         let source = Box::new(Unimock::new((
-            MockAudioWorkerSource::step_track
+            PcmSourceMock::step_track
                 .next_call(matching!())
                 .returns(TrackStep::Produced(Fetch::data(empty_chunk(), 0))),
-            MockAudioWorkerSource::step_track
+            PcmSourceMock::step_track
                 .next_call(matching!())
                 .returns(TrackStep::StateChanged),
-            MockAudioWorkerSource::step_track
+            PcmSourceMock::step_track
                 .next_call(matching!())
                 .returns(TrackStep::Produced(Fetch::data(empty_chunk(), 0))),
         )));

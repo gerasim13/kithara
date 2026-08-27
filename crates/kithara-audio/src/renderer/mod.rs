@@ -13,9 +13,6 @@ pub use handle::AudioWorkerHandle;
 pub(crate) use handle::{TrackId, WorkerWakeBridge};
 pub use load::{EngineLoad, EngineLoadSnapshot};
 pub(crate) use node::{DecoderNode, TrackRegistration};
-pub use source::AudioWorkerSource;
-#[cfg(test)]
-pub(crate) use source::MockAudioWorkerSource;
 pub(crate) use source::{apply_effects, reset_effects};
 #[cfg(test)]
 pub(crate) use tests::MockSource;

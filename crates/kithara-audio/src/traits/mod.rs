@@ -1,6 +1,7 @@
 mod effect;
 mod outcome;
 mod reader;
+mod source;
 
 pub use effect::AudioEffect;
 #[cfg(any(test, feature = "mock"))]
@@ -10,3 +11,6 @@ pub use outcome::{ChunkOutcome, PendingReason, ReadOutcome, SeekOutcome};
 pub use reader::{PcmControl, PcmRead, PcmReader, PcmSession, SeekBegin};
 #[cfg(any(test, feature = "mock"))]
 pub use reader::{PcmControlMock, PcmReadMock, PcmSessionMock};
+pub use source::PcmSource;
+#[cfg(any(test, feature = "mock"))]
+pub use source::PcmSourceMock;

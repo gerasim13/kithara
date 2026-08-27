@@ -54,8 +54,7 @@ use crate::{
             self, CurrentFsm, RebuildingDecoder, Track, TrackFailure, TrackStep, WaitingReason,
         },
     },
-    renderer::AudioWorkerSource,
-    traits::AudioEffect,
+    traits::{AudioEffect, PcmSource},
 };
 
 pub(super) fn produced_data(fetch: Fetch<PcmChunk>) -> PcmChunk {

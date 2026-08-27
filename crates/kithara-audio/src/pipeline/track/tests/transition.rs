@@ -23,8 +23,7 @@ use crate::{
         rebuild::{DecoderBuildComplete, DecoderBuildPurpose, state::BuildId},
         track::{AtEof, CurrentFsm, Failed, Track, TrackFailure, TrackStep},
     },
-    renderer::AudioWorkerSource,
-    traits::AudioEffect,
+    traits::{AudioEffect, PcmSource},
 };
 
 struct BufferThenHalveFrames {
