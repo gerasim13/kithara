@@ -6,7 +6,7 @@
 use hotpath::HotpathGuardBuilder;
 use kithara::{
     assets::{AssetStore, StorageBackend},
-    audio::AudioConfig,
+    audio::{AudioConfig, PcmRead},
     bufpool::Region,
     hls::{Hls, HlsConfig},
     platform::{time::Duration, tokio::task::spawn_blocking},
@@ -214,29 +214,4 @@ async fn test_hls_playback_no_rss_leak(temp_dir: TestTempDir) {
         warmup_rss as f64 / Consts::MB as f64,
         final_rss as f64 / Consts::MB as f64,
     );
-}
-
-#[cfg(target_os = "macos")]
-fn live_thread_count() -> usize {
-    use std::process::Command;
-    let out = Command::new("ps")
-        .args(["-M", "-p", &std::process::id().to_string()])
-        .output()
-        .expect("ps -M succeeded");
-    String::from_utf8_lossy(&out.stdout)
-        .lines()
-        .count()
-        .saturating_sub(1)
-}
-
-#[cfg(target_os = "linux")]
-fn live_thread_count() -> usize {
-    std::fs::read_dir("/proc/self/task")
-        .map(|it| it.count())
-        .unwrap_or(0)
-}
-
-#[cfg(not(any(target_os = "macos", target_os = "linux")))]
-fn live_thread_count() -> usize {
-    0
 }
