@@ -12,10 +12,9 @@ pub use seek::SeekHandle;
 
 pub(crate) use crate::{
     AudioConfig, AudioDecoderConfig, ChunkOutcome, ConsumerWakeMode, DecodeError, Fetch,
-    PcmControl, PcmRead, PcmSession, PcmWake, PendingReason, PreloadGate, ReadOutcome, SeekOutcome,
-    ServiceClass, StretchControls,
+    PcmControl, PcmRead, PcmSession, PendingReason, PreloadGate, PreparedPcmLane, ReadOutcome,
+    SeekOutcome,
     pipeline::{
-        config::create_effects,
         consumer::{ConsumerPhase, FailureSource},
         fetch::EpochValidator,
         parts::SourceParts,
@@ -24,6 +23,6 @@ pub(crate) use crate::{
             DecodeInit, DecoderFactory as StreamDecoderFactory, SharedStream, StreamAudioSource,
         },
     },
-    renderer::{ThreadWake, TrackRegistration},
-    runtime::{AtomicServiceClass, Inlet, Outlet, PcmTask, WakeSignal, connect},
+    producer::PcmProducerPort,
+    runtime::{Inlet, Outlet, WakeSignal, connect, wake::ThreadWake},
 };

@@ -5,7 +5,7 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Audio pipeline: worker thread, effects chain, resampling."
+description = "Decoded PCM source pipeline: lifecycle, resampling, readiness, analysis."
 keywords = ["audio", "dsp", "resampling", "playback", "player"]
 categories = ["multimedia::audio"]
 
@@ -15,7 +15,6 @@ default = [
     "resample-rubato",
     "analysis-beat",
     "analysis-waveform",
-    "stretch-signalsmith",
     "client-reqwest",
     "tls-rustls",
 ]
@@ -68,11 +67,6 @@ resample-glide = ["kithara-decode/resample-glide", "kithara-resampler/resample-g
 resample-rubato = ["kithara-resampler/resample-rubato"]
 analysis-beat = []
 analysis-waveform = ["dep:realfft"]
-# Native-only C++ time-stretch backends. Default native builds use signalsmith;
-# bungee stays opt-in. Wasm builds pass `--no-default-features`, so they carry
-# no stretch DSP: speed control stays, key-lock is compiled out.
-stretch-signalsmith = ["kithara-stretch/stretch-signalsmith"]
-stretch-bungee = ["kithara-stretch/stretch-bungee"]
 # NN beat/downbeat detector (kithara-beat, embedded small model). Native-only
 # in practice: wasm builds simply do not enable it (rten on wasm unverified).
 beat-nn = ["analysis-beat", "dep:kithara-beat", "kithara-beat/embed-small-model"]
@@ -88,16 +82,15 @@ kithara-resampler = { workspace = true, default-features = false }
 kithara-stream = { workspace = true, default-features = false }
 kithara-test-macros = { workspace = true }
 kithara-test-utils = { workspace = true }
+kithara-warp = { workspace = true, default-features = false }
 
 arc-swap = { workspace = true }
-biquad = { workspace = true }
 bon = { workspace = true }
 crossbeam-queue = { workspace = true }
 delegate = { workspace = true }
 derive_more = { workspace = true }
 fast-interleave = { workspace = true }
 fieldwork = { workspace = true }
-firewheel-core = { workspace = true }
 num-traits = { workspace = true }
 portable-atomic = { workspace = true }
 realfft = { workspace = true, optional = true }
@@ -108,9 +101,6 @@ tracing = { workspace = true }
 unimock = { workspace = true, optional = true }
 [target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))'.dependencies]
 kithara-workspace-hack = { version = "0.0.1-alpha4", path = "../kithara-workspace-hack" }
-
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-kithara-stretch = { workspace = true, default-features = false }
 
 # hotpath (perf/memprof profiling) does not build on wasm32; keep it off the wasm closure.
 hotpath = { workspace = true, optional = true }
@@ -127,9 +117,7 @@ web-sys = { workspace = true, features = [
 ] }
 
 [dev-dependencies]
-# `stretch-signalsmith` keeps the stretch-slot contract tests in the default
-# `cargo test -p kithara-audio` run now that no pure-Rust backend exists.
-kithara-audio = { path = ".", default-features = false, features = ["mock", "probe", "symphonia", "stretch-signalsmith"] }
+kithara-audio = { path = ".", default-features = false, features = ["mock", "probe", "symphonia"] }
 kithara-bufpool = { workspace = true }
 kithara-decode = { workspace = true, features = ["mock", "probe", "symphonia"] }
 kithara-storage = { workspace = true }

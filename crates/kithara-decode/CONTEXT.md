@@ -314,7 +314,8 @@ denormals become silence. `ResampledDecoder::append_chunk` applies it while
 deinterleaving, so a backend only ever sees finite normal input — the adapter is
 the last owner of the samples by value, while `Resampler::process_into_buffer`
 takes them by shared reference. `kithara-audio` reuses the function at its own
-untrusted-input stages. Pinned by
+untrusted-input stages. `kithara-play` also reuses it in the play-owned EQ and
+limiter stages. Pinned by
 `resampler_never_sees_a_sample_the_file_poisoned`.
 
 ## Apple AAC input format (ESDS rationale)
@@ -361,8 +362,8 @@ synchronous factory takes the Symphonia path. Opening a WebCodecs codec before
 runtime initialization is a typed contract error.
 
 **A worker spawned by a blocked parent worker does not execute** — true for a
-parent blocked by spinning and by `Atomics.wait`. The decode scheduler worker is
-such a parked parent, so neither the codec nor the decode path may spawn the host;
+parent blocked by spinning and by `Atomics.wait`. The play-owned producer scheduler
+is such a parked parent, so neither the codec nor the decode path may spawn the host;
 only the main-thread bootstrap, whose event loop stays live, may. The host command
 loop uses `try_recv` plus a local timer; the synchronous per-decoder reply receiver
 uses the Atomics-backed `recv_timeout` path and needs no event loop. The singleton

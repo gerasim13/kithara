@@ -1,13 +1,12 @@
 use std::{num::NonZeroU32, ops::Range};
 
-use kithara_audio::ServiceClass;
 use kithara_bufpool::{PcmBuf, PcmPool};
 use kithara_decode::Frames;
 use kithara_platform::{maybe_send::WasmSend, sync::Arc};
 
 #[rustfmt::skip]
 use crate::resource::Resource;
-use crate::bridge::RtMetrics;
+use crate::{bridge::RtMetrics, worker::ServiceClass};
 
 /// RT-safe resource wrapper with internal scratch buffers.
 ///
@@ -268,11 +267,17 @@ impl PlayerResource {
             pub fn duration(&self) -> f64;
             /// Set the target sample rate of the audio host.
             pub(crate) fn set_host_sample_rate(&self, sample_rate: NonZeroU32);
-            /// Set the playback rate for the active stretch controls.
-            pub(crate) fn set_playback_rate(&self, rate: f32);
             /// Update the scheduling priority hint for the shared worker.
             pub(crate) fn set_service_class(&self, class: ServiceClass);
         }
+    }
+
+    pub(crate) fn apply_playback_rate(&self, rate: f32) -> f32 {
+        self.resource.get().apply_playback_rate(rate)
+    }
+
+    pub(crate) fn playback_rate(&self) -> f32 {
+        self.resource.get().playback_rate()
     }
 }
 

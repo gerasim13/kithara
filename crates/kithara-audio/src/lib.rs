@@ -1,4 +1,4 @@
-//! Audio pipeline library with decoding, effects, and resampling.
+//! Audio pipeline library with decoding and resampling.
 //!
 //! - [`Audio`] — generic PCM reader prepared for an external playback scheduler
 //! - [`AudioConfig`] — pipeline configuration
@@ -13,25 +13,20 @@
 pub mod analysis;
 mod audio;
 mod blob;
-pub mod effects;
-mod exports;
 #[cfg(any(test, feature = "mock"))]
 pub mod mock;
 mod pipeline;
-mod region;
-pub(crate) mod renderer;
+mod producer;
 mod runtime;
 mod traits;
 mod waveform;
 
 pub use audio::{Audio, PreparedAudio, SeekHandle};
 pub use blob::frame::BlobError;
-pub use effects::{
-    eq::{EqBandConfig, EqEffect, FilterKind, IsolatorEq, generate_log_spaced_bands},
-    limiter::{LimiterError, PeakLimiter},
-    timestretch::StretchControls,
-};
-pub use exports::*;
+#[cfg(feature = "resample-glide")]
+pub use kithara_resampler::glide::{GlideBackend, GlideConfig, GlideInterpolation};
+#[cfg(feature = "resample-rubato")]
+pub use kithara_resampler::rubato::{RubatoAlgorithm, RubatoBackend, RubatoConfig};
 pub use kithara_resampler::{
     NoResamplerBackend, ResamplerBackend, ResamplerOptions, ResamplerQuality,
 };
@@ -40,12 +35,14 @@ pub use pipeline::{
     fetch::{EpochValidator, Fetch},
     track::{TrackStep, WaitingReason},
 };
-pub use region::{ActiveRegion, RegionPlan, RegionPlanError};
-pub use renderer::{EngineLoad, EngineLoadSnapshot, PreloadGate, ServiceClass};
+pub use producer::PreloadGate;
 #[doc(hidden)]
-pub use runtime::{PcmScheduler, PcmSchedulerError, PcmTask, PcmTaskId, PcmWake};
+pub use producer::{PcmProducerPort, PreparedPcmLane};
 pub use traits::{
-    AudioEffect, ChunkOutcome, DecodeError, DecodeResult, PcmControl, PcmObserveError, PcmObserver,
-    PcmRead, PcmReader, PcmSession, PcmSource, PendingReason, ReadOutcome, SeekBegin, SeekOutcome,
+    ChunkOutcome, DecodeError, DecodeResult, PcmControl, PcmObserveError, PcmObserver, PcmRead,
+    PcmReader, PcmSession, PcmSource, PendingReason, ReadOutcome, SeekBegin, SeekOutcome,
+    SourceDiscontinuity,
 };
-pub use waveform::{AnalysisParams, BeatGrid, Bucket, GridSegment, bucket::Waveform};
+#[cfg(feature = "analysis-waveform")]
+pub use waveform::WaveformAnalyzer;
+pub use waveform::{AnalysisParams, BeatGrid, Bucket, bucket::Waveform};

@@ -68,6 +68,73 @@ fn render_loop(queue: &Queue, harness: &OfflinePlayerHarness, block_budget: usiz
     pcm
 }
 
+#[kithara::test]
+fn crossfade_started_requires_a_live_predecessor() {
+    const CROSSFADE_SECS: f32 = 0.2;
+
+    let harness = OfflinePlayerHarness::with_sample_rate(
+        OfflinePlayerOptions::builder()
+            .crossfade_duration(CROSSFADE_SECS)
+            .build(),
+        SAMPLE_RATE,
+    );
+    let queue = Queue::new(with_autoplay(
+        QueueConfig::builder()
+            .player(Arc::clone(harness.player()))
+            .build(),
+        false,
+    ));
+    let id = queue.insert_loaded_for_test(make_resource("initial", 0.2, 0.3));
+    let mut receiver = queue.subscribe();
+
+    queue
+        .select(id, Transition::Crossfade)
+        .expect("select initial track");
+
+    while let Ok(envelope) = receiver.try_recv() {
+        assert!(
+            !matches!(
+                envelope.event,
+                Event::Queue(QueueEvent::CrossfadeStarted { .. })
+            ),
+            "a cold select cannot crossfade from an idle player"
+        );
+    }
+
+    let mut saw_playing = false;
+    for _ in 0..MAX_BLOCKS {
+        let _ = queue.tick();
+        let _ = harness.render(BLOCK_FRAMES);
+        let is_playing = queue.is_playing();
+        saw_playing |= is_playing;
+        if saw_playing && !is_playing {
+            break;
+        }
+    }
+    assert!(
+        saw_playing,
+        "the predecessor must start before reaching EOF"
+    );
+    assert!(!queue.is_playing(), "the predecessor must reach EOF");
+    queue.tick().expect("process predecessor EOF");
+
+    let successor = queue.insert_loaded_for_test(make_resource("successor", 1.0, 0.3));
+    let mut receiver = queue.subscribe();
+    queue
+        .select(successor, Transition::Crossfade)
+        .expect("select successor after EOF");
+
+    while let Ok(envelope) = receiver.try_recv() {
+        assert!(
+            !matches!(
+                envelope.event,
+                Event::Queue(QueueEvent::CrossfadeStarted { .. })
+            ),
+            "a completed predecessor cannot start a crossfade"
+        );
+    }
+}
+
 #[kithara::test(tokio)]
 async fn repeat_one_natural_advance_keeps_current_track() {
     let harness = OfflinePlayerHarness::with_sample_rate(
@@ -491,12 +558,10 @@ async fn cf_zero_replay_after_full_playthrough_still_advances() {
     );
 }
 
-/// When the LAST track finishes via auto-advance, the queue must pause
-/// the player so the UI sees a stopped state — otherwise `rate` stays
-/// at the previous default and `is_playing()` keeps returning true on
-/// a ghost position past the last EOF.
+/// When the last track finishes, the live playback snapshot must become inactive
+/// so the UI sees a stopped state even though transport intent remains unchanged.
 #[kithara::test(tokio)]
-async fn queue_pauses_player_when_last_track_ends() {
+async fn queue_stops_live_playback_when_last_track_ends() {
     use kithara::{
         events::{Event, QueueEvent},
         platform::tokio::sync::broadcast::error::TryRecvError,
@@ -550,9 +615,7 @@ async fn queue_pauses_player_when_last_track_ends() {
     );
     assert!(
         !queue.is_playing(),
-        "player must be paused after the last track ends so UI shows a \
-         stopped state — otherwise rate stays at default and `is_playing` \
-         keeps returning true past the final EOF"
+        "live playback must stop after the last EOF"
     );
 }
 

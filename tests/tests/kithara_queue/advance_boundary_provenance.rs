@@ -3,7 +3,6 @@
 use std::path::Path;
 
 use kithara::{
-    audio::generate_log_spaced_bands,
     events::{AbrEvent, AdvanceReason, Event, EventReceiver},
     hls::AbrMode,
     platform::{
@@ -11,7 +10,10 @@ use kithara::{
         time::{self, Duration},
         tokio::sync::broadcast::error::TryRecvError,
     },
-    play::{PlayerImpl, Resource, ResourceConfig, StretchControls, apply_mix},
+    play::{
+        PlayerImpl, Resource, ResourceConfig, StretchControls, apply_mix,
+        effects::eq::generate_log_spaced_bands,
+    },
     queue::{Queue, QueueConfig, Transition},
 };
 use kithara_integration_tests::{

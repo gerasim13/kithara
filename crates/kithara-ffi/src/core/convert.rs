@@ -230,7 +230,6 @@ impl TryFrom<&AudioEvent> for FfiItemEvent {
                 source_sample_rate: *source_sample_rate,
                 active: *active,
             }),
-            AudioEvent::EndOfStream => Ok(Self::DidReachEnd),
             _ => Err(NotForwarded),
         }
     }
@@ -582,9 +581,10 @@ mod tests {
     use std::num::NonZeroU64;
 
     use kithara_events::{
-        AssetEvent, CancelReason, DownloaderEvent, DrmEvent, EngineEvent, Event, EvictReason,
-        FileEvent, KeyFailureStage, KeySource, MediaTime, QueueEvent, RequestId, RouteChangeReason,
-        RouteDescription, SessionEvent, StretchBackendKind, TotalBytesSource, TrackId,
+        AssetEvent, AudioEvent, CancelReason, DownloaderEvent, DrmEvent, EngineEvent, Event,
+        EvictReason, FileEvent, KeyFailureStage, KeySource, MediaTime, QueueEvent, RequestId,
+        RouteChangeReason, RouteDescription, SessionEvent, StretchBackendKind, TotalBytesSource,
+        TrackId,
     };
     use kithara_platform::time::Duration;
     use kithara_play::PlayerEvent;
@@ -653,6 +653,13 @@ mod tests {
             FfiItemEvent::try_from(&FileEvent::EndOfStream),
             Err(NotForwarded)
         ));
+    }
+
+    #[kithara::test]
+    fn decoder_end_of_stream_is_not_duplicated() {
+        let event = AudioEvent::EndOfStream { seek_epoch: 3 };
+
+        assert!(matches!(FfiItemEvent::try_from(&event), Err(NotForwarded)));
     }
 
     #[kithara::test]

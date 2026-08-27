@@ -4,10 +4,11 @@ Contracts and invariants for the kithara-stretch crate; the README is the overvi
 
 ## Ownership
 
-This crate owns pure time-stretch DSP only. Audio-graph glue (`StretchControls`,
-`TimeStretchProcessor`, `PcmChunk`, `PcmMeta`, resampler-rate routing) stays in `kithara-audio`,
-which passes its existing `PcmPool` through `ElasticConfig`; `kithara-stretch` must not create a
-default or global pool.
+This crate owns pure time-stretch DSP engines only. `kithara-warp` owns the
+synchronous `WarpRenderer`, `StretchControls`, and `RegionPlan`, passing the
+play-configured `PcmPool` through `ElasticConfig`; `kithara-decode` owns
+`PcmChunk` and `PcmMeta`. Decoder sample-rate conversion remains in the
+decode/audio seam. This crate must not create a default or global pool.
 
 - `ElasticEngine` is the sole backend contract. Exact source/output frame counts control time;
   `set_pitch` remains independent, and `prime` / `flush` / `reset` define stream lifecycle.
@@ -134,10 +135,10 @@ Do not declare `stretch-native` or add `backends/native.rs` until the pure-Rust 
 
 There is no "no backend" build here: `lib.rs` `compile_error!`s unless at least one `stretch-*`
 feature is set, and the machinery (kind, factory, config, backends) is unconditional. Native
-`kithara-audio` always links this crate and forwards its `stretch-signalsmith` / `stretch-bungee`
-features; its default selects Signalsmith. A native facade that disables default features must
-therefore forward at least one of those features explicitly. Wasm excludes the dependency at the
-target edge and keeps only the transport controls, because the C++ backends cannot build for
-`wasm32-unknown-unknown`. Domain types that wasm and non-stretch code need (`GridSegment`,
-`RegionPlan`) remain in `kithara-audio`; `kithara-bufpool` is an unconditional dependency of this
-crate and never enters the wasm closure.
+`kithara-play` selects and forwards its `stretch-signalsmith` / `stretch-bungee` backend feature
+through `kithara-warp`; its default selects Signalsmith. `kithara-warp` has no default backend and
+only compiles `WarpRenderer` when a native backend is selected. A native
+facade that disables default features must therefore forward one backend when it enables playback
+stretching. Wasm excludes the DSP dependency at the target edge because the C++ backends cannot
+build for `wasm32-unknown-unknown`; backend-independent `GridSegment`, `RegionPlan`, and controls
+remain in `kithara-warp`.

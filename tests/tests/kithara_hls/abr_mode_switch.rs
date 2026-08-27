@@ -227,7 +227,7 @@ impl EventCollector {
                         "DecoderReady(base_offset={base_offset}, variant={variant:?})"
                     ));
                 }
-                Event::Audio(AudioEvent::EndOfStream) => {
+                Event::Audio(AudioEvent::EndOfStream { .. }) => {
                     self.push_audio_trace("EndOfStream".to_owned());
                 }
                 _ => {}

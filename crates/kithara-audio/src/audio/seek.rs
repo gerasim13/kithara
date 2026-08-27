@@ -3,7 +3,7 @@ use kithara_platform::{sync::Arc, time::Duration};
 use kithara_stream::{DeferredWake, PlayheadWrite, SeekControl, SeekPrepare};
 use tracing::trace;
 
-use super::{PcmWake, PreloadGate, SeekOutcome};
+use super::{PreloadGate, SeekOutcome};
 use crate::traits::SeekBegin;
 
 /// The control-plane half of a seek: rebuilds the source's byte space, publishes a lifecycle event,
@@ -16,7 +16,7 @@ pub struct SeekHandle {
     preload_gate: Arc<PreloadGate>,
     seek: Arc<dyn SeekControl>,
     seek_prepare: Option<Arc<dyn SeekPrepare>>,
-    wake: PcmWake,
+    wake: Arc<dyn kithara_stream::WorkerWake>,
 }
 
 impl SeekHandle {
@@ -81,5 +81,5 @@ pub(super) struct SeekHandleParts {
     pub(super) preload_gate: Arc<PreloadGate>,
     pub(super) seek: Arc<dyn SeekControl>,
     pub(super) seek_prepare: Option<Arc<dyn SeekPrepare>>,
-    pub(super) wake: PcmWake,
+    pub(super) wake: Arc<dyn kithara_stream::WorkerWake>,
 }

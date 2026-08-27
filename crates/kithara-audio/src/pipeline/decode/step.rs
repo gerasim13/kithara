@@ -76,12 +76,6 @@ pub(crate) fn tick<T: StreamType>(
             {
                 return DecodeAction::StartRecreate(recreate);
             }
-            if let Some(chunk) = core.next_drain() {
-                return produced(chunk, epoch, &mut ctx);
-            }
-            if let Some(emit) = ctx.emit {
-                emit.enqueue(AudioEvent::EndOfStream.into());
-            }
             return DecodeAction::Eof;
         }
         match core.next_chunk(ctx.stream.position()) {
@@ -99,7 +93,7 @@ pub(crate) fn tick<T: StreamType>(
                     continue;
                 }
                 hang_reset!();
-                core.track(&chunk, ctx.playhead, ctx.emit);
+                core.track(&chunk, ctx.emit);
                 if let Err(error) = core.push(chunk) {
                     return decode_failed(core, error, &ctx);
                 }

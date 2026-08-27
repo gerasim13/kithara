@@ -5,8 +5,16 @@ use tracing::{debug, warn};
 use crate::{
     ChunkOutcome, PcmReader, Waveform,
     analysis::analyzer::{AnalyzerBuilder, Detector, TrackAnalysis, TrackAnalyzers},
-    runtime::TickResult,
 };
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum AnalysisStep {
+    Progress,
+    Waiting,
+    UpstreamPending,
+    Done,
+}
 
 pub(crate) struct Job {
     pub(crate) reader: Box<dyn PcmReader>,
@@ -53,35 +61,35 @@ where
         &mut self,
         builder: &AnalyzerBuilder<B>,
         detector: Option<&mut Detector>,
-    ) -> TickResult {
+    ) -> AnalysisStep {
         match self.reader.next_chunk() {
             Ok(ChunkOutcome::Chunk(chunk)) => {
                 self.analyzers
                     .get_or_insert_with(|| builder.build(chunk.spec()))
                     .push(&chunk, detector);
-                TickResult::Progress
+                AnalysisStep::Progress
             }
-            Ok(ChunkOutcome::Pending { .. }) => TickResult::UpstreamPending,
+            Ok(ChunkOutcome::Pending { .. }) => AnalysisStep::UpstreamPending,
             Ok(ChunkOutcome::Eof { .. }) => {
                 self.phase = if self.analyzers.is_some() {
                     TaskPhase::EmitWaveform
                 } else {
                     TaskPhase::Done
                 };
-                TickResult::Progress
+                AnalysisStep::Progress
             }
             Err(error) => {
                 warn!(?error, "analysis: decode error");
                 self.phase = TaskPhase::Done;
-                TickResult::Progress
+                AnalysisStep::Progress
             }
         }
     }
 
-    fn detect_beat(&mut self, detector: Option<&mut Detector>) -> TickResult {
+    fn detect_beat(&mut self, detector: Option<&mut Detector>) -> AnalysisStep {
         let Some(analyzers) = self.analyzers.take() else {
             self.phase = TaskPhase::Done;
-            return TickResult::Progress;
+            return AnalysisStep::Progress;
         };
         let source_frames = analyzers.source_frames();
         let source_sample_rate = analyzers.source_sample_rate();
@@ -95,13 +103,13 @@ where
             )))
             .ok();
         self.phase = TaskPhase::Done;
-        TickResult::Progress
+        AnalysisStep::Progress
     }
 
-    fn emit_waveform(&mut self) -> TickResult {
+    fn emit_waveform(&mut self) -> AnalysisStep {
         let Some(analyzers) = &mut self.analyzers else {
             self.phase = TaskPhase::Done;
-            return TickResult::Progress;
+            return AnalysisStep::Progress;
         };
         let source_frames = analyzers.source_frames();
         let source_sample_rate = analyzers.source_sample_rate();
@@ -119,7 +127,7 @@ where
         } else {
             TaskPhase::Done
         };
-        TickResult::Progress
+        AnalysisStep::Progress
     }
 
     pub(crate) fn is_done(&self) -> bool {
@@ -130,18 +138,18 @@ where
         &mut self,
         builder: &AnalyzerBuilder<B>,
         detector: Option<&mut Detector>,
-    ) -> TickResult {
+    ) -> AnalysisStep {
         if self.cancel.is_cancelled() {
             debug!("analysis cancelled");
             self.phase = TaskPhase::Done;
-            return TickResult::Progress;
+            return AnalysisStep::Progress;
         }
 
         match self.phase {
             TaskPhase::Decode => self.decode(builder, detector),
             TaskPhase::EmitWaveform => self.emit_waveform(),
             TaskPhase::DetectBeat => self.detect_beat(detector),
-            TaskPhase::Done => TickResult::Done,
+            TaskPhase::Done => AnalysisStep::Done,
         }
     }
 }

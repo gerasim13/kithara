@@ -9,13 +9,12 @@ use kithara_decode::{PcmSpec, TrackMetadata};
 use kithara_events::EventBus;
 use kithara_platform::{CancelToken, sync::Arc, time::Duration};
 use kithara_stream::{
-    ChunkPosition, DeferredWake, PlayheadWrite, SeekControl, SeekObserve, SeekPrepare,
+    ChunkPosition, DeferredWake, PlayheadWrite, SeekControl, SeekObserve, SeekPrepare, WorkerWake,
 };
-use portable_atomic::AtomicF32;
 
 use super::{
-    AtomicServiceClass, ChunkOutcome, DecodeError, PcmControl, PcmRead, PcmSession, PcmTask,
-    PcmWake, PendingReason, PreloadGate, ReadOutcome, SeekOutcome, ServiceClass, StretchControls,
+    ChunkOutcome, DecodeError, PcmControl, PcmRead, PcmSession, PendingReason, PreloadGate,
+    PreparedPcmLane, ReadOutcome, SeekOutcome,
     cursor::ChunkCursor,
     event::AudioEvents,
     ring::{RecvCtx, RingConsumer},
@@ -23,7 +22,7 @@ use super::{
 };
 use crate::traits::SeekBegin;
 
-/// Pull-based PCM facade backed by a shared renderer worker.
+/// Pull-based PCM facade over a bounded producer ring.
 pub struct Audio<S> {
     events: AudioEvents,
     cursor: ChunkCursor,
@@ -34,24 +33,35 @@ pub struct Audio<S> {
     session: Session,
 }
 
-/// Worker-independent audio reader and its opaque producer task.
+/// Worker-independent audio reader and its still-concrete producer lane.
 ///
 /// `kithara-play::PlayWorker` registers the task before exposing the reader.
 #[doc(hidden)]
-pub struct PreparedAudio<S> {
-    audio: Audio<S>,
-    task: PcmTask,
+pub struct PreparedAudio<R, P> {
+    reader: R,
+    lane: PreparedPcmLane<P>,
 }
 
-impl<S> PreparedAudio<S> {
-    pub(super) const fn new(audio: Audio<S>, task: PcmTask) -> Self {
-        Self { audio, task }
+impl<R, P> PreparedAudio<R, P> {
+    pub(super) const fn new(reader: R, lane: PreparedPcmLane<P>) -> Self {
+        Self { reader, lane }
+    }
+
+    /// Compose the reader facade and its still-concrete producer atomically.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn map<R2, P2, F>(self, map: F) -> PreparedAudio<R2, P2>
+    where
+        F: FnOnce(R, P) -> (R2, P2),
+    {
+        let (reader, lane) = self.lane.map_source_with(self.reader, map);
+        PreparedAudio { reader, lane }
     }
 }
 
-impl<S> From<PreparedAudio<S>> for (Audio<S>, PcmTask) {
-    fn from(prepared: PreparedAudio<S>) -> Self {
-        (prepared.audio, prepared.task)
+impl<R, P> From<PreparedAudio<R, P>> for (R, PreparedPcmLane<P>) {
+    fn from(prepared: PreparedAudio<R, P>) -> Self {
+        (prepared.reader, prepared.lane)
     }
 }
 
@@ -79,14 +89,11 @@ pub(super) struct Session {
 
 pub(super) struct Controls {
     pub(super) host_sample_rate: Arc<AtomicU32>,
-    pub(super) playback_rate: Arc<AtomicF32>,
-    pub(super) service_class: Arc<AtomicServiceClass>,
-    pub(super) stretch: Option<Arc<StretchControls>>,
 }
 
 pub(super) struct AudioRuntime {
     pub(super) cancel: CancelToken,
-    pub(super) wake: PcmWake,
+    pub(super) wake: Arc<dyn WorkerWake>,
 }
 
 impl Drop for AudioRuntime {
@@ -240,7 +247,7 @@ impl<S> Audio<S> {
         self.events.reset_underrun();
         let popped = self.ring.begin_seek_epoch(begun, &mut self.cursor);
         if popped {
-            self.ring.wake_worker(Some(&self.runtime.wake));
+            self.ring.wake_worker(Some(self.runtime.wake.as_ref()));
         }
     }
 
@@ -370,25 +377,12 @@ impl<S: kithara_platform::maybe_send::MaybeSend> PcmControl for Audio<S> {
             self.runtime.wake.defer();
         }
     }
-
-    fn set_playback_rate(&self, rate: f32) {
-        if let Some(controls) = &self.controls.stretch {
-            controls.set_speed(rate);
-        } else {
-            self.controls.playback_rate.store(rate, Ordering::Relaxed);
-        }
-    }
-
-    fn set_service_class(&self, class: ServiceClass) {
-        self.controls.service_class.store(class);
-        self.runtime.wake.defer();
-    }
 }
 
-const fn recv_ctx<'a>(session: &'a Session, runtime: &'a AudioRuntime) -> RecvCtx<'a> {
+fn recv_ctx<'a>(session: &'a Session, runtime: &'a AudioRuntime) -> RecvCtx<'a> {
     RecvCtx {
         cancel: Some(&runtime.cancel),
-        worker: Some(&runtime.wake),
+        worker: Some(runtime.wake.as_ref()),
         abr: session.abr_handle.as_ref(),
     }
 }
@@ -415,26 +409,30 @@ fn chunk_outcome(
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        num::NonZeroUsize,
-        sync::atomic::{AtomicU32, AtomicU64},
-    };
+    use std::sync::atomic::{AtomicU32, AtomicU64};
 
     use kithara_bufpool::PcmPool;
     use kithara_decode::{PcmChunk, PcmMeta};
     use kithara_platform::{CancelScope, sync::Arc};
-    use kithara_stream::{PlayheadState, SeekState};
+    use kithara_stream::{PlayheadState, SeekState, WorkerWake};
     use kithara_test_utils::kithara;
 
     use super::*;
     use crate::{
-        ConsumerWakeMode, PcmScheduler,
+        ConsumerWakeMode,
         audio::{Fetch, ThreadWake, connect, ring::RingParts},
     };
 
+    struct TestWorkerWake;
+
+    impl WorkerWake for TestWorkerWake {
+        fn wake(&self) {}
+
+        fn defer(&self) {}
+    }
+
     struct AudioFixture {
         audio: Audio<()>,
-        _scheduler: PcmScheduler,
     }
 
     impl Default for AudioFixture {
@@ -457,11 +455,6 @@ mod tests {
             let pcm_pool = PcmPool::default();
             let bus = EventBus::default();
             let emit = AudioEvents::deferred(&bus);
-            let scheduler = PcmScheduler::start(
-                "kithara-audio-fixture".into(),
-                CancelScope::new(None).token(),
-                NonZeroUsize::new(1).expect("fixture capacity is non-zero"),
-            );
             Self {
                 audio: Audio::from(AudioParts {
                     ring,
@@ -469,7 +462,7 @@ mod tests {
                     emit,
                     runtime: AudioRuntime {
                         cancel: CancelScope::new(None).token(),
-                        wake: scheduler.wake_handle(),
+                        wake: Arc::new(TestWorkerWake),
                     },
                     session: Session {
                         playhead,
@@ -483,14 +476,10 @@ mod tests {
                     },
                     controls: Controls {
                         host_sample_rate: Arc::new(AtomicU32::new(0)),
-                        playback_rate: Arc::new(AtomicF32::new(1.0)),
-                        stretch: None,
-                        service_class: Arc::new(AtomicServiceClass::new(ServiceClass::default())),
                     },
                     spec: PcmMeta::default().spec,
                     marker: PhantomData,
                 }),
-                _scheduler: scheduler,
             }
         }
     }

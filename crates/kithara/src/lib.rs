@@ -112,15 +112,22 @@ pub mod storage {
     pub use kithara_storage::*;
 }
 
-#[cfg(not(target_arch = "wasm32"))]
-pub use kithara_audio::{ElasticEngine, ElasticError, StretchKind, TimeStretchProcessor};
-pub use kithara_audio::{GridSegment, RegionPlan, RegionPlanError, StretchControls};
+#[cfg(all(
+    not(target_arch = "wasm32"),
+    any(feature = "stretch-signalsmith", feature = "stretch-bungee")
+))]
 pub use kithara_test_utils::{kithara::mock, no_block};
 #[cfg(feature = "probe")]
 pub use kithara_test_utils::{
     kithara::{fixture, test},
     kithara_facade::{allow_block, flash, no_block},
 };
+#[cfg(all(
+    not(target_arch = "wasm32"),
+    any(feature = "stretch-signalsmith", feature = "stretch-bungee")
+))]
+pub use kithara_warp::StretchKind;
+pub use kithara_warp::{GridSegment, RegionPlan, RegionPlanError, StretchControls};
 
 #[cfg(feature = "mock")]
 pub mod mock {
@@ -135,11 +142,8 @@ pub mod prelude {
     #[cfg(feature = "hls")]
     pub use kithara_abr::AbrMode;
     pub use kithara_audio::{
-        Audio, AudioConfig, EngineLoadSnapshot, GridSegment, PcmControl, PcmRead, PcmReader,
-        PcmSession, RegionPlan, RegionPlanError, ResamplerQuality, StretchControls,
+        Audio, AudioConfig, PcmControl, PcmRead, PcmReader, PcmSession, ResamplerQuality,
     };
-    #[cfg(not(target_arch = "wasm32"))]
-    pub use kithara_audio::{ElasticEngine, ElasticError, StretchKind, TimeStretchProcessor};
     pub use kithara_decode::{
         DecodeError, DecodeResult, DecoderTrackInfo, PcmMeta, PcmSpec, TrackMetadata,
     };
@@ -150,9 +154,20 @@ pub mod prelude {
     pub use kithara_file::{File, FileConfig};
     #[cfg(feature = "hls")]
     pub use kithara_hls::{Hls, HlsConfig};
+    #[cfg(all(
+        not(target_arch = "wasm32"),
+        any(feature = "stretch-signalsmith", feature = "stretch-bungee")
+    ))]
     pub use kithara_play::{
-        EngineConfig, EngineImpl, PlayWorker, PlayWorkerConfig, PlaybackResamplerBackend,
-        PlayerConfig, PlayerImpl, Resource, ResourceConfig, ResourceSrc, ServiceClass, SourceType,
+        EngineConfig, EngineImpl, EngineLoadSnapshot, PlayWorker, PlayWorkerConfig,
+        PlaybackResamplerBackend, PlayerConfig, PlayerImpl, Resource, ResourceConfig, ResourceSrc,
+        ServiceClass, SourceType,
     };
     pub use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo, Stream, StreamType};
+    #[cfg(all(
+        not(target_arch = "wasm32"),
+        any(feature = "stretch-signalsmith", feature = "stretch-bungee")
+    ))]
+    pub use kithara_warp::StretchKind;
+    pub use kithara_warp::{GridSegment, RegionPlan, RegionPlanError, StretchControls};
 }

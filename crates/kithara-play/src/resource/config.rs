@@ -3,17 +3,17 @@ use std::num::{NonZeroU32, NonZeroUsize};
 use bon::Builder;
 use kithara_abr::AbrMode;
 use kithara_assets::AssetStore;
-use kithara_audio::{AudioDecoderConfig, ConsumerWakeMode, EngineLoad, StretchControls};
+use kithara_audio::{AudioDecoderConfig, ConsumerWakeMode};
 use kithara_events::EventBus;
 use kithara_hls::{KeyOptions, SizeProbeMethod};
 use kithara_net::Headers;
 use kithara_platform::{CancelToken, sync::Arc};
 use kithara_stream::dl::Downloader;
-use portable_atomic::AtomicF32;
+use kithara_warp::StretchControls;
 use url::Url;
 
 use super::{ResourceSrc, resampler::PlaybackResamplerBackend};
-use crate::PlayWorker;
+use crate::{EngineLoad, PlayWorker};
 
 /// Default number of preload chunks.
 const DEFAULT_PRELOAD_CHUNKS: NonZeroUsize = NonZeroUsize::new(3).unwrap();
@@ -65,13 +65,9 @@ pub struct ResourceConfig<B: Default = PlaybackResamplerBackend> {
     pub(crate) host_sample_rate: Option<NonZeroU32>,
     /// Max bytes the downloader may be ahead of the reader before it pauses.
     pub(crate) look_ahead_bytes: Option<u64>,
-    /// Shared playback rate atomic for the audio pipeline resampler in the
-    /// non-tempo (no-`stretch`) chain.
-    pub(crate) playback_rate: Option<Arc<AtomicF32>>,
-    /// Live time-stretch controls (speed + key-lock + backend). `Some` selects
-    /// tempo mode; the same `Arc` must flow to every track so live changes
-    /// reach the running effect chain. `None` keeps the resampler-first chain.
-    pub(crate) stretch: Option<Arc<StretchControls>>,
+    /// Live time-stretch controls shared with the resident Warp chain.
+    #[builder(default = StretchControls::new(1.0))]
+    pub(crate) stretch: Arc<StretchControls>,
     /// Explicit playback worker. Player preparation fills this field; direct
     /// Resource callers must configure it themselves.
     pub(crate) worker: Option<PlayWorker>,
@@ -314,6 +310,12 @@ mod tests {
     fn config_worker_default_none() {
         let config = test_config("https://example.com/song.mp3").unwrap();
         assert!(config.worker.is_none());
+    }
+
+    #[kithara::test]
+    fn config_stretch_defaults_to_unity() {
+        let config = test_config("https://example.com/song.mp3").unwrap();
+        assert!((config.stretch.speed() - 1.0).abs() < f32::EPSILON);
     }
 
     #[kithara::test]

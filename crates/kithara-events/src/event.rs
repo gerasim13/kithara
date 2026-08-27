@@ -131,8 +131,11 @@ mod tests {
     #[cfg(feature = "audio")]
     #[kithara::test]
     fn audio_event_into_event() {
-        let event: Event = AudioEvent::EndOfStream.into();
-        assert!(matches!(event, Event::Audio(AudioEvent::EndOfStream)));
+        let event: Event = AudioEvent::EndOfStream { seek_epoch: 7 }.into();
+        assert!(matches!(
+            event,
+            Event::Audio(AudioEvent::EndOfStream { seek_epoch: 7 })
+        ));
     }
 
     #[cfg(feature = "decoder")]

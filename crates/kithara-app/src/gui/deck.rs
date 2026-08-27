@@ -1,4 +1,4 @@
-use kithara::{abr::AbrMode, audio::effects::eq::GainDb, events::AdvanceReason};
+use kithara::{abr::AbrMode, events::AdvanceReason, play::effects::eq::GainDb};
 use kithara_platform::sync::Arc;
 use kithara_queue::{TrackId, Transition};
 use tracing::{debug, error};

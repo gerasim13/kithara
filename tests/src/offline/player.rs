@@ -177,6 +177,7 @@ impl OfflinePlayer {
                 N::Changed { .. } => NotificationKind::Changed,
                 N::FadingIn { .. } => NotificationKind::FadingIn,
                 N::FadingOut { .. } => NotificationKind::FadingOut,
+                N::RateChanged { .. } => continue,
             });
         }
         self.drain_trash();

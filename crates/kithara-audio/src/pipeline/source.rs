@@ -56,7 +56,7 @@ pub(crate) struct StreamAudioSource<T: StreamType> {
     pub(crate) decoder_backend: kithara_decode::DecoderBackend,
     /// Deferred sink for FSM lifecycle events ([`AudioEvent`]). The FSM runs on
     /// the produce core, so `emit_event` enqueues lock-free; the scheduler shell
-    /// flushes via [`flush_deferred`](PcmSource::flush_deferred) and on
+    /// flushes via [`finish_deferred`](PcmSource::finish_deferred) and on
     /// `Drop`, keeping the cross-thread `broadcast::send` (a `kevent`) off the
     /// forbid path. `None` for sources built without an event bus.
     #[field(with, option_set_some, vis = "pub(crate)")]
@@ -89,7 +89,7 @@ pub(crate) struct StreamAudioSource<T: StreamType> {
     /// backward one) never resumes against a stale forward target. See
     /// `execute_recreation`.
     /// Decode generations displaced on the produce core. They are dropped
-    /// from `flush_deferred`, outside the forbid-blocking region.
+    /// from `finish_deferred`, outside the forbid-blocking region.
     pub(crate) retired: Retired,
     pub(crate) seek_engine: SeekEngine,
     pub(crate) shared_stream: SharedStream<T>,
@@ -580,14 +580,21 @@ impl<T: StreamType> PcmSource for StreamAudioSource<T> {
         self.seek_engine.epoch()
     }
 
-    fn flush_deferred(&mut self) {
+    fn discontinuity(&self) -> Option<crate::SourceDiscontinuity> {
+        Some(self.decode.discontinuity())
+    }
+
+    fn prepare_deferred(&mut self) -> Option<kithara_decode::PcmSpec> {
         self.decode.flush_reader_signals();
         if let Some(chunk) = self.decode.take_rejected_chunk() {
             ChunkRetire::retire(&self.retired, chunk);
         }
         self.route_build_completions();
         self.progress_variant_transition();
-        self.decode.service_effects_deferred();
+        Some(self.decode.active().blender_profile().spec())
+    }
+
+    fn finish_deferred(&mut self) {
         self.retired.drain();
         self.rebuild.submit();
         // Publish the FSM lifecycle events the produce core enqueued this pass,

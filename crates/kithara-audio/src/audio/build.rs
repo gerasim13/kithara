@@ -16,16 +16,14 @@ use kithara_platform::{
     tokio::{runtime::Handle as RuntimeHandle, task::spawn_blocking},
 };
 use kithara_resampler::ResamplerBackend;
-use kithara_stream::{MediaInfo, OpenedReader, PlayheadRead, Stream, StreamType, WorkerWake};
-use portable_atomic::AtomicF32;
+use kithara_stream::{MediaInfo, OpenedReader, PlayheadWrite, Stream, StreamType, WorkerWake};
 use tracing::{debug, info, warn};
 
 use super::{
-    AtomicServiceClass, AudioConfig, AudioDecoderConfig, ConsumerWakeMode, DecodeError, DecodeInit,
-    Fetch, PcmSession, PcmTask, PcmWake, RebuildRuntime, ServiceClass, SharedStream, SourceParts,
-    StreamAudioSource, StreamDecoderFactory, ThreadWake, TrackRegistration,
+    AudioConfig, AudioDecoderConfig, ConsumerWakeMode, DecodeError, DecodeInit, PcmProducerPort,
+    PcmSession, PreparedPcmLane, RebuildRuntime, SharedStream, SourceParts, StreamAudioSource,
+    StreamDecoderFactory, ThreadWake,
     core::{Audio, AudioParts, AudioRuntime, Controls, PreparedAudio, Session},
-    create_effects,
     event::{
         AudioEvents, DecoderChangedEventData, decoder_changed_event, decoder_gapless_event,
         decoder_resampler_event, playback_resampler_event,
@@ -77,7 +75,6 @@ where
         media_info: Option<MediaInfo>,
     ) -> DecodeInit {
         DecodeInit {
-            byte_pool: self.byte_pool.clone(),
             decoder,
             decoder_factory,
             decoder_backend: self.backend(),
@@ -170,25 +167,23 @@ where
     }
 }
 
-struct StreamSourceRegistration {
+struct StreamSourceRegistration<S> {
     preload_gate: Arc<super::PreloadGate>,
     ring: RingParts,
-    service_class: Arc<AtomicServiceClass>,
-    track: TrackRegistration,
+    lane: PreparedPcmLane<S>,
 }
 
-struct PreparedStreamSource {
+struct PreparedStreamSource<S> {
     preload_gate: Arc<super::PreloadGate>,
     ring: RingParts,
-    service_class: Arc<AtomicServiceClass>,
-    task: PcmTask,
+    lane: PreparedPcmLane<S>,
 }
 
 impl<T> Audio<Stream<T>>
 where
     T: StreamType<Events = EventBus>,
 {
-    /// Prepare a stream-backed audio reader and its opaque producer task.
+    /// Prepare a stream-backed audio reader and its concrete producer lane.
     ///
     /// # Errors
     ///
@@ -196,10 +191,10 @@ where
     #[doc(hidden)]
     pub async fn prepare<B>(
         config: AudioConfig<T, B>,
-        wake: PcmWake,
+        wake: Arc<dyn WorkerWake>,
         byte_pool: BytePool,
         pcm_pool: PcmPool,
-    ) -> Result<PreparedAudio<Stream<T>>, DecodeError>
+    ) -> Result<PreparedAudio<Self, impl crate::PcmSource<Chunk = PcmChunk>>, DecodeError>
     where
         B: Default + ResamplerBackend,
     {
@@ -209,16 +204,12 @@ where
             media_info: user_media_info,
             pcm_buffer_chunks,
             observer,
-            playback_rate: config_playback_rate,
-            stretch,
-            engine_load,
             decoder,
             preload_chunks,
             block_on_underrun,
             consumer_wake_mode,
             stream: stream_config,
             bus: config_bus,
-            effects: custom_effects,
             cancel: config_cancel,
         } = config;
         let cancel = CancelScope::new(config_cancel).token();
@@ -259,8 +250,6 @@ where
         playhead.set_duration(total_duration);
         let metadata = decoder.metadata();
         let epoch = Arc::new(AtomicU64::new(0));
-        let playback_rate = config_playback_rate.unwrap_or_else(|| Arc::new(AtomicF32::new(1.0)));
-        let effects = create_effects(initial_spec, stretch.as_ref(), &pcm_pool, custom_effects);
         log_pipeline_ready(initial_spec, &host_sample_rate);
 
         let abr_handle = shared_stream.abr_handle();
@@ -276,47 +265,41 @@ where
         );
         let wake_stream = shared_stream.clone();
         let preload_gate = Arc::new(super::PreloadGate::default());
-        let (data_tx, trash_inlet, ring) = prepare_pcm_ring(
+        let (port, ring) = prepare_pcm_ring(
             pcm_buffer_chunks,
             &emit,
             &epoch,
             block_on_underrun,
             consumer_wake_mode,
         );
-        let worker_wake: Arc<dyn WorkerWake> = Arc::new(wake.clone());
         let decode = deps
             .decode_init(
                 decoder,
                 create_decoder_factory(&deps, &epoch, user_media_info),
                 initial_media_info.clone(),
             )
-            .into_parts(effects, observer, shared_stream.seek_observe().epoch());
+            .into_parts(observer, shared_stream.seek_observe().epoch());
         let parts = SourceParts::new(
             &shared_stream,
             decode,
             Arc::clone(&epoch),
             RebuildRuntime {
                 handle: runtime_handle,
-                wake: Arc::clone(&worker_wake),
+                wake: Arc::clone(&wake),
             },
             variant_control,
         );
         let source = StreamAudioSource::new(shared_stream, parts).with_emit(Arc::clone(&emit));
-        let service_class = Arc::new(AtomicServiceClass::new(ServiceClass::default()));
-        let track = TrackRegistration {
-            trash_inlet,
-            source: Box::new(source),
-            outlet: data_tx,
+        let lane = PreparedPcmLane {
+            source,
+            port,
             preload_gate: Arc::clone(&preload_gate),
             preload_chunks: preload_chunks.get(),
-            playhead: Arc::clone(&playhead) as Arc<dyn PlayheadRead>,
+            playhead: Arc::clone(&playhead) as Arc<dyn PlayheadWrite>,
             emit: Arc::clone(&emit),
-            service_class: Arc::clone(&service_class),
-            engine_load,
         };
-        let registration =
-            prepare_stream_source_registration(track, ring, preload_gate, service_class);
-        let prepared = prepare_stream_audio_source(registration, &wake_stream, worker_wake);
+        let registration = prepare_stream_source_registration(lane, ring, preload_gate);
+        let prepared = prepare_stream_audio_source(registration, &wake_stream, Arc::clone(&wake));
 
         let audio = Self::from(AudioParts {
             ring: RingConsumer::new(prepared.ring),
@@ -333,16 +316,11 @@ where
                 seek_prepare,
                 preload_gate: prepared.preload_gate,
             },
-            controls: Controls {
-                playback_rate,
-                stretch,
-                host_sample_rate,
-                service_class: prepared.service_class,
-            },
+            controls: Controls { host_sample_rate },
             spec: initial_spec,
             marker: PhantomData,
         });
-        Ok(PreparedAudio::new(audio, prepared.task))
+        Ok(PreparedAudio::new(audio, prepared.lane))
     }
 
     #[must_use]
@@ -372,11 +350,7 @@ fn prepare_pcm_ring(
     epoch: &Arc<AtomicU64>,
     block_on_underrun: bool,
     consumer_wake_mode: ConsumerWakeMode,
-) -> (
-    super::Outlet<Fetch<PcmChunk>>,
-    super::Inlet<PcmChunk>,
-    RingParts,
-) {
+) -> (PcmProducerPort, RingParts) {
     let reader_wake = Arc::new(ThreadWake::default());
     let (data_tx, data_rx) = create_channels(pcm_buffer_chunks, Arc::clone(emit), &reader_wake);
     let (trash_tx, trash_inlet) = create_trash_channel(pcm_buffer_chunks);
@@ -388,28 +362,26 @@ fn prepare_pcm_ring(
         reader_wake,
         epoch: Arc::clone(epoch),
     };
-    (data_tx, trash_inlet, ring)
+    (PcmProducerPort::new(data_tx, trash_inlet), ring)
 }
 
-fn prepare_stream_source_registration(
-    track: TrackRegistration,
+fn prepare_stream_source_registration<S>(
+    lane: PreparedPcmLane<S>,
     ring: RingParts,
     preload_gate: Arc<super::PreloadGate>,
-    service_class: Arc<AtomicServiceClass>,
-) -> StreamSourceRegistration {
+) -> StreamSourceRegistration<S> {
     StreamSourceRegistration {
         preload_gate,
         ring,
-        service_class,
-        track,
+        lane,
     }
 }
 
-fn prepare_stream_audio_source<T>(
-    registration: StreamSourceRegistration,
+fn prepare_stream_audio_source<T, S>(
+    registration: StreamSourceRegistration<S>,
     shared_stream: &SharedStream<T>,
     worker_wake: Arc<dyn WorkerWake>,
-) -> PreparedStreamSource
+) -> PreparedStreamSource<S>
 where
     T: StreamType,
 {
@@ -418,8 +390,7 @@ where
     PreparedStreamSource {
         preload_gate: registration.preload_gate,
         ring: registration.ring,
-        service_class: registration.service_class,
-        task: PcmTask::from(registration.track),
+        lane: registration.lane,
     }
 }
 
@@ -622,7 +593,7 @@ const fn merge_user_and_stream_media_info(
 mod tests {
     use kithara_decode::PcmChunk;
     use kithara_events::DeferredBus;
-    use kithara_stream::{PlayheadRead, PlayheadState};
+    use kithara_stream::PlayheadState;
     use kithara_test_utils::kithara;
     use unimock::Unimock;
 
@@ -633,29 +604,21 @@ mod tests {
     fn prepares_source_registration_without_worker_activity() {
         let emit = Arc::new(DeferredBus::new(EventBus::new(8), 8));
         let epoch = Arc::new(AtomicU64::new(0));
-        let (outlet, trash_inlet, ring) =
+        let (port, ring) =
             prepare_pcm_ring(1, &emit, &epoch, false, ConsumerWakeMode::RealtimeDeferred);
         let preload_gate = Arc::new(super::super::PreloadGate::default());
-        let service_class = Arc::new(AtomicServiceClass::new(ServiceClass::default()));
         let source: Box<dyn PcmSource<Chunk = PcmChunk>> = Box::new(Unimock::new(()));
-        let track = TrackRegistration {
-            trash_inlet,
+        let lane = PreparedPcmLane {
             source,
-            outlet,
+            port,
             preload_gate: Arc::clone(&preload_gate),
             preload_chunks: 1,
-            playhead: Arc::new(PlayheadState::new()) as Arc<dyn PlayheadRead>,
+            playhead: Arc::new(PlayheadState::new()) as Arc<dyn PlayheadWrite>,
             emit,
-            service_class: Arc::clone(&service_class),
-            engine_load: None,
         };
 
-        let registration = prepare_stream_source_registration(
-            track,
-            ring,
-            Arc::clone(&preload_gate),
-            service_class,
-        );
+        let registration =
+            prepare_stream_source_registration(lane, ring, Arc::clone(&preload_gate));
 
         assert!(Arc::ptr_eq(&registration.preload_gate, &preload_gate));
     }

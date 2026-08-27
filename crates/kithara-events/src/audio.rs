@@ -143,8 +143,8 @@ pub enum AudioEvent {
         source_sample_rate: u32,
         active: bool,
     },
-    /// Decoding finished (EOF).
-    EndOfStream,
+    /// Decoding finished for one seek epoch.
+    EndOfStream { seek_epoch: SeekEpoch },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -1,5 +1,6 @@
 #[cfg(any(test, feature = "mock"))]
 use kithara_decode::PcmChunk;
+use kithara_decode::PcmSpec;
 use kithara_platform::sync::Arc;
 use kithara_stream::SeekObserve;
 
@@ -22,10 +23,22 @@ pub trait PcmSource: Send + 'static {
         self.seek_observe().epoch()
     }
 
-    /// Deliver off-core signals armed by previous source steps.
-    fn flush_deferred(&mut self) {}
+    /// Current explicit source discontinuity, when the source has one.
+    fn discontinuity(&self) -> Option<SourceDiscontinuity> {
+        None
+    }
 
-    /// Return a discarded pooled chunk for off-core reclamation.
+    /// Resolve the active output format before producer decorators are serviced.
+    /// Sources without a split shell keep the default no-op phases.
+    fn prepare_deferred(&mut self) -> Option<PcmSpec> {
+        None
+    }
+
+    /// Finish deferred source publication after decorators are serviced.
+    fn finish_deferred(&mut self) {}
+
+    /// Reclaim a discarded chunk from scheduler `recycle`, outside the checked
+    /// producer tick.
     fn retire_chunk(&self, chunk: Self::Chunk) {
         let _ = chunk;
     }
@@ -38,4 +51,33 @@ pub trait PcmSource: Send + 'static {
 
     /// One-time execution-thread warmup before the first checked source step.
     fn warm_up(&mut self) {}
+}
+
+#[cfg(test)]
+pub(crate) trait PcmSourceExt: PcmSource {
+    fn flush_deferred(&mut self) {
+        let _ = self.prepare_deferred();
+        self.finish_deferred();
+    }
+}
+
+#[cfg(test)]
+impl<S> PcmSourceExt for S where S: PcmSource + ?Sized {}
+/// Exact worker-side reset stamp for a decoded PCM lane.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, fieldwork::Fieldwork)]
+#[fieldwork(get, copy)]
+#[non_exhaustive]
+pub struct SourceDiscontinuity {
+    /// Monotonic lane-local reset revision.
+    revision: u64,
+    /// Output format active after the reset.
+    spec: PcmSpec,
+}
+
+impl SourceDiscontinuity {
+    /// Construct a reset stamp at the active decoded format.
+    #[must_use]
+    pub const fn new(revision: u64, spec: PcmSpec) -> Self {
+        Self { revision, spec }
+    }
 }

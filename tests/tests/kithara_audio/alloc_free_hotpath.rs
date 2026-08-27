@@ -3,13 +3,13 @@ use std::num::{NonZeroU32, NonZeroUsize};
 use assert_no_alloc::*;
 use kithara::{
     self,
-    audio::{AudioEffect, StretchControls, StretchKind, TimeStretchProcessor},
     bufpool::PcmPool,
     decode::{PcmChunk, PcmMeta, PcmSpec},
     resampler::{
         Resampler, ResamplerConfig, ResamplerMode, ResamplerOptions, ResamplerQuality,
         ResamplerSettings, create_resampler, rubato::RubatoBackend,
     },
+    warp::{StretchControls, StretchKind, Warp, WarpConfig, WarpRenderer},
 };
 
 #[cfg(debug_assertions)]
@@ -18,6 +18,15 @@ static A: AllocDisabler = AllocDisabler;
 
 fn make_pool() -> PcmPool {
     PcmPool::new(128, 200_000)
+}
+
+fn warp_renderer(
+    controls: kithara::platform::sync::Arc<StretchControls>,
+    spec: PcmSpec,
+    pool: PcmPool,
+) -> WarpRenderer {
+    let config = WarpConfig::builder().stretch(controls).build();
+    Warp::new((), &config).renderer(spec, pool)
 }
 
 fn make_chunk(pool: &PcmPool, frames: usize, channels: u16) -> PcmChunk {
@@ -259,8 +268,8 @@ fn timestretch_active_process_and_terminal_flush_are_allocation_free(#[case] kin
         let controls = StretchControls::new(0.5);
         controls.set_keylock(true);
         controls.set_backend(kind);
-        let mut effect = TimeStretchProcessor::new(controls, spec, pool.clone());
-        effect.service_deferred(spec);
+        let mut effect = warp_renderer(controls, spec, pool.clone());
+        effect.prepare(spec);
         let first = make_chunk(&pool, FRAMES, 2);
         let second = make_chunk(&pool, FRAMES, 2);
         (effect, first, second)
@@ -269,24 +278,24 @@ fn timestretch_active_process_and_terminal_flush_are_allocation_free(#[case] kin
     let misses = pool.stats().alloc_misses;
     let first_output = assert_no_alloc(|| {
         effect
-            .process(first)
+            .render(first)
             .unwrap_or_else(|| panic!("active stretch must render"))
     });
     assert_eq!(pool.stats().alloc_misses, misses);
     permit_alloc(|| {
-        effect.service_deferred(spec);
+        effect.prepare(spec);
         drop(first_output);
     });
 
     let misses = pool.stats().alloc_misses;
     let second_output = assert_no_alloc(|| {
         effect
-            .process(second)
+            .render(second)
             .unwrap_or_else(|| panic!("serviced stretch must render again"))
     });
     assert_eq!(pool.stats().alloc_misses, misses);
     permit_alloc(|| {
-        effect.service_deferred(spec);
+        effect.prepare(spec);
         drop(second_output);
     });
 
@@ -294,7 +303,7 @@ fn timestretch_active_process_and_terminal_flush_are_allocation_free(#[case] kin
     let terminal = assert_no_alloc(|| effect.flush());
     assert_eq!(pool.stats().alloc_misses, misses);
     permit_alloc(|| {
-        effect.service_deferred(spec);
+        effect.prepare(spec);
         drop(terminal);
     });
 }
@@ -313,21 +322,21 @@ fn timestretch_pending_and_maximum_output_are_allocation_free(#[case] kind: Stre
         let controls = StretchControls::new(0.05);
         controls.set_keylock(true);
         controls.set_backend(kind);
-        let mut maximum = TimeStretchProcessor::new(controls, spec, pool.clone());
-        maximum.service_deferred(spec);
+        let mut maximum = warp_renderer(controls, spec, pool.clone());
+        maximum.prepare(spec);
         let input = make_chunk(&pool, FRAMES, 2);
         (maximum, input)
     });
     let misses = pool.stats().alloc_misses;
     let maximum_output = assert_no_alloc(|| {
         maximum
-            .process(input)
+            .render(input)
             .unwrap_or_else(|| panic!("maximum prepared output must render"))
     });
     assert_eq!(maximum_output.frames(), 163_840);
     assert_eq!(pool.stats().alloc_misses, misses);
     permit_alloc(|| {
-        maximum.service_deferred(spec);
+        maximum.prepare(spec);
         drop(maximum_output);
     });
 
@@ -335,17 +344,17 @@ fn timestretch_pending_and_maximum_output_are_allocation_free(#[case] kind: Stre
         let controls = StretchControls::new(2.0);
         controls.set_keylock(true);
         controls.set_backend(kind);
-        let mut pending = TimeStretchProcessor::new(controls, spec, pool.clone());
-        pending.service_deferred(spec);
+        let mut pending = warp_renderer(controls, spec, pool.clone());
+        pending.prepare(spec);
         let input = make_chunk(&pool, 1, 2);
         (pending, input)
     });
     let misses = pool.stats().alloc_misses;
     assert_no_alloc(|| {
-        assert!(pending.process(input).is_none());
+        assert!(pending.render(input).is_none());
     });
     assert_eq!(pool.stats().alloc_misses, misses);
-    permit_alloc(|| pending.service_deferred(spec));
+    permit_alloc(|| pending.prepare(spec));
 
     let misses = pool.stats().alloc_misses;
     let terminal = assert_no_alloc(|| {
@@ -355,7 +364,7 @@ fn timestretch_pending_and_maximum_output_are_allocation_free(#[case] kind: Stre
     });
     assert_eq!(pool.stats().alloc_misses, misses);
     permit_alloc(|| {
-        pending.service_deferred(spec);
+        pending.prepare(spec);
         drop(terminal);
     });
 }

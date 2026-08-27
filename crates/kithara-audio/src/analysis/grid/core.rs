@@ -555,7 +555,7 @@ mod tests {
         let corrections: Vec<f64> = grid
             .segments()
             .iter()
-            .map(crate::region::GridSegment::ratio_correction)
+            .map(kithara_warp::GridSegment::ratio_correction)
             .collect();
         let min = corrections.iter().copied().fold(f64::INFINITY, f64::min);
         let max = corrections

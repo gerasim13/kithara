@@ -20,7 +20,6 @@ impl PlayerNodeProcessor {
     }
 
     fn apply_playback_rate(&mut self, rate: f32) {
-        self.playback_rate = rate;
         for (_, track) in self.tracks.iter_mut() {
             track.set_playback_rate(rate);
         }
@@ -185,7 +184,6 @@ impl PlayerNodeProcessor {
             .fade_duration(self.crossfade.duration)
             .prefetch_duration(self.prefetch_duration)
             .fade_curve(self.crossfade.fade_curve())
-            .playback_rate(self.playback_rate)
             .seek_epoch(self.playback.seek_epoch.load(Ordering::SeqCst))
             .build(resource);
 

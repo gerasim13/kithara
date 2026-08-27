@@ -210,6 +210,7 @@ pub(crate) fn player_event_from_notification(
             item_id,
             ..
         } => Some(PlayerEvent::ItemDidFail { src, item_id }),
+        PlayerNotification::RateChanged { rate } => Some(PlayerEvent::RateChanged { rate }),
         _ => None,
     }
 }

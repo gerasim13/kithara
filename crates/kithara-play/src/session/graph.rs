@@ -2,7 +2,6 @@ use firewheel::{
     FirewheelCtx, Volume, backend::AudioBackend, diff::Memo,
     dsp::volume::amp_to_linear_volume_clamped, node::NodeID, nodes::volume::VolumeNode,
 };
-use kithara_audio::{EqBandConfig, effects::eq::GainDb};
 use kithara_warp::{BeatGrid, MapAxis};
 use tracing::{debug, warn};
 
@@ -15,6 +14,7 @@ use super::{
 use crate::{
     api::{SessionDuckingMode, SlotId},
     bridge::{MixTapWriter, slot_channels},
+    effects::eq::{EqBandConfig, GainDb},
     rt::{MasterEqNode, PlayerNode, TapNode},
 };
 pub(super) const fn ducking_gain(mode: SessionDuckingMode) -> f32 {
@@ -652,7 +652,6 @@ mod tests {
     use firewheel::{
         StreamInfo, backend::BackendProcessInfo, node::StreamStatus, processor::FirewheelProcessor,
     };
-    use kithara_audio::generate_log_spaced_bands;
     use kithara_bufpool::PcmPool;
     use kithara_events::EventBus;
     use kithara_platform::time::{Duration, Instant};
@@ -665,6 +664,7 @@ mod tests {
     use super::*;
     use crate::{
         api::{SessionTransportSnapshot, Tempo},
+        effects::eq::generate_log_spaced_bands,
         session::{
             dispatch::{invalidate_audio_route, run_cmd},
             protocol::Cmd,

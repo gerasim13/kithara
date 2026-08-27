@@ -1,9 +1,10 @@
-use kithara_audio::{EqBandConfig, effects::eq::GainDb};
 use kithara_events::RouteDescription;
 
 use super::super::core::PlayerImpl;
 use crate::{
     api::{RouteChangeReason, SessionEvent, SlotId},
+    bridge::PlayerCmd,
+    effects::eq::{EqBandConfig, GainDb},
     error::PlayError,
     player::state::phase::PlayerPhaseKind,
 };
@@ -60,14 +61,15 @@ impl PlayerImpl {
     }
 
     /// Set the playback rate used by `play()` and `select_item()`, and apply it
-    /// to playback that is already running.
+    /// as a target to playback that is already running.
     ///
     /// While paused the live rate is 0.0 and must stay there — a rate change is
     /// not a resume. The new value takes effect on the next `play()`.
     pub fn set_default_rate(&self, rate: f32) {
-        self.core.params.set_default_rate(rate);
+        let target = self.core.params.set_default_rate(rate);
+        self.core.timestretch.set_speed(target);
         if self.phase_kind() == PlayerPhaseKind::Playing {
-            self.set_rate(rate);
+            self.set_rate(target);
         }
     }
 
@@ -123,18 +125,12 @@ impl PlayerImpl {
             .set_prefetch_duration(seconds, |cmd| self.send_to_slot(cmd));
     }
 
-    /// Set playback rate.
-    ///
-    /// Stores the speed in the shared time-stretch controls (the single source
-    /// of truth, read each chunk by the effect chain) and propagates it via
-    /// `PlayerCmd::SetPlaybackRate`. Values below 0.01 are clamped to 0.01.
+    /// Set the requested rate target, clamped to
+    /// [`kithara_warp::StretchControls::MIN_SPEED`].
     pub fn set_rate(&self, rate: f32) {
-        self.core.params.set_rate(
-            rate,
-            &self.core.timestretch,
-            |cmd| self.send_to_slot(cmd),
-            self.core.engine.bus(),
-        );
+        self.core.timestretch.set_speed(rate);
+        let target = self.core.timestretch.speed();
+        let _ = self.send_to_slot(PlayerCmd::SetPlaybackRate(target));
     }
 
     /// Set volume, clamped to `0.0..=1.0`.

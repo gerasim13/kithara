@@ -8,17 +8,21 @@ Architecture, contracts, and invariants for the kithara facade crate; the README
 %%{init: {"flowchart": {"curve": "linear"}} }%%
 flowchart LR
     RC[ResourceConfig] -->|auto-detect| R[Resource]
-    R -->|".m3u8"| AH["Audio‹Stream‹Hls››"]
-    R -->|other| AF["Audio‹Stream‹File››"]
+    R --> TC[TrackConfig]
+    TC --> PW[PlayWorker]
+    PW -->|".m3u8"| AH["identity Warp‹Audio‹Stream‹Hls››› + DecoderNode‹WarpSource›"]
+    PW -->|other| AF["identity Warp‹Audio‹Stream‹File››› + DecoderNode‹WarpSource›"]
     AH --> PR["Box‹dyn PcmReader›"]
     AF --> PR
     PR -->|"read / seek"| APP[Your audio callback]
 ```
 
-PCM flows straight from the decoder to your callback through `read()`. The
-optional `EventBus` (`resource.event_bus()`) is a side-channel for
-observability — decode progress, buffering, HLS variant switches — and never
-sits in the audio path.
+`kithara-audio` prepares the decoded source and reader seam. `kithara-play`
+owns the worker, per-track node, resident identity Warp controls, effects, and
+final output admission before `read()` reaches the callback. R7 does not yet
+drive `WarpMap` progress or presentation acknowledgement. The optional
+`EventBus` (`resource.event_bus()`) is a side-channel for observability — decode
+progress, buffering, HLS variant switches — and never sits in the audio path.
 
 ## Features
 
@@ -42,9 +46,9 @@ sits in the audio path.
 
 <tr><td><code>analysis-waveform</code></td><td>yes</td><td>RealFFT waveform analyzer in <code>kithara-audio</code>; waveform/blob types remain unconditional</td></tr>
 
-<tr><td><code>stretch-signalsmith</code></td><td>yes</td><td>Signalsmith time-stretch backend through <code>kithara-audio</code> / <code>kithara-stretch</code></td></tr>
+<tr><td><code>stretch-signalsmith</code></td><td>yes</td><td>Signalsmith time-stretch backend through <code>kithara-play</code> / <code>kithara-warp</code> / <code>kithara-stretch</code></td></tr>
 
-<tr><td><code>stretch-bungee</code></td><td>no</td><td>Bungee time-stretch backend through <code>kithara-audio</code> / <code>kithara-stretch</code></td></tr>
+<tr><td><code>stretch-bungee</code></td><td>no</td><td>Bungee time-stretch backend through <code>kithara-play</code> / <code>kithara-warp</code> / <code>kithara-stretch</code></td></tr>
 
 <tr><td><code>beat-nn</code></td><td>no</td><td>NN beat/downbeat detector through <code>kithara-audio</code> / <code>kithara-beat</code></td></tr>
 
@@ -105,6 +109,10 @@ sits in the audio path.
 <tr><td><code>ReadOutcome</code></td><td>Result of a read: <code>Frames { count, position }</code>, <code>Pending { reason, position }</code>, or <code>Eof { position }</code></td></tr>
 
 <tr><td><code>EventBus</code></td><td>Broadcast publisher for the unified <code>Event</code> stream (observability only)</td></tr>
+
+<tr><td><code>PlayWorker</code></td><td>Owner of the shared playback worker and registered per-track producer chains</td></tr>
+
+<tr><td><code>EngineLoadSnapshot</code></td><td>Copyable view of the play-owned producer-chain cost meter</td></tr>
 
 </table>
 

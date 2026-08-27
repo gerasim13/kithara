@@ -15,14 +15,11 @@ impl Queue {
 
     /// Whether the user has paused playback.
     ///
-    /// Reads the player's live rate: `pause()` (and a no-autoplay select)
-    /// stores `0.0`, while `play` / `set_rate` keep it `>= MIN_PLAYBACK_RATE`.
-    /// A natural end-of-track leaves the rate untouched, so this stays
-    /// distinct from `is_playing()` (which drops to `false` once the arena
-    /// drains at EOF). Auto-advance gates on this so a paused head freezes
-    /// without blocking the genuine end-of-track advance.
+    /// Reads the Player's explicit paused phase, not its effective rate or
+    /// live output state: both become inactive at natural EOF without turning
+    /// that EOF into a user pause.
     pub(super) fn is_paused(&self) -> bool {
-        self.player.rate() <= 0.0
+        self.player.is_paused()
     }
 
     /// Start the next-track crossfade ahead of end-of-track when the

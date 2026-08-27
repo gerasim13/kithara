@@ -1,7 +1,7 @@
+use kithara_warp::GridSegment;
 use num_traits::cast::{AsPrimitive, ToPrimitive};
 
 use super::core::GridParams;
-use crate::waveform::GridSegment;
 
 struct Consts;
 

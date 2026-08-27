@@ -1,7 +1,7 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 use kithara::{
-    audio::{AudioConfig, AudioEffect, PcmControl, PcmSession, StretchControls, StretchKind},
+    audio::{AudioConfig, NoResamplerBackend, PcmControl, PcmSession},
     bufpool::Region,
     decode::PcmChunk,
     platform::{
@@ -12,8 +12,9 @@ use kithara::{
         },
         time::{self, Duration, Instant},
     },
-    play::{PlayWorker, PlayWorkerConfig, RegisteredAudio},
+    play::{PlayWorker, PlayWorkerConfig, RegisteredAudio, TrackConfig, effects::AudioEffect},
     stream::Stream,
+    warp::{StretchControls, StretchKind, WarpConfig},
 };
 use kithara_integration_tests::{
     audio_artifact::write_audio_artifact,
@@ -273,22 +274,27 @@ fn audio_config(
     source: &[u8],
     stretch: Option<(StretchKind, f32)>,
     effects: Vec<Box<dyn AudioEffect>>,
-) -> AudioConfig<MemStream> {
+) -> TrackConfig<MemStream, NoResamplerBackend> {
     let stream = MemStreamConfig {
         source: Some(MemorySource::new(source.to_vec())),
         event_bus: None,
     };
-    let stretch = stretch.map(|(backend, speed)| {
-        let controls = StretchControls::new(speed);
-        controls.set_backend(backend);
-        controls.set_keylock(true);
-        controls
-    });
+    let stretch = stretch.map_or_else(
+        || StretchControls::new(1.0),
+        |(backend, speed)| {
+            let controls = StretchControls::new(speed);
+            controls.set_backend(backend);
+            controls.set_keylock(true);
+            controls
+        },
+    );
 
-    AudioConfig::<MemStream>::for_stream(stream)
-        .maybe_stretch(stretch)
-        .effects(effects)
+    let audio = AudioConfig::<MemStream>::for_stream(stream)
         .hint("wav".to_owned())
+        .build();
+    TrackConfig::for_audio(audio)
+        .warp(WarpConfig::builder().stretch(stretch).build())
+        .effects(effects)
         .build()
 }
 

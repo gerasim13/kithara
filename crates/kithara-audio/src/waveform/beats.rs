@@ -1,9 +1,8 @@
 use std::mem::size_of;
 
-use crate::{
-    blob::{self, Blob, BlobError, MAX_PREALLOC, Reader, Writer},
-    region::GridSegment,
-};
+use kithara_warp::GridSegment;
+
+use crate::blob::{self, Blob, BlobError, MAX_PREALLOC, Reader, Writer};
 
 struct Consts;
 
@@ -127,9 +126,9 @@ fn read_finite(r: &mut Reader<'_>) -> Result<f64, BlobError> {
 #[cfg(test)]
 mod bytes_tests {
     use kithara_test_utils::kithara;
+    use kithara_warp::GridSegment;
 
     use super::{BeatGrid, BlobError};
-    use crate::region::GridSegment;
 
     fn sample() -> BeatGrid {
         BeatGrid::new(

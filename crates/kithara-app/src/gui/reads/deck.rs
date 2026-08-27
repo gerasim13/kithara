@@ -1,4 +1,4 @@
-use kithara::audio::effects::eq::GainDb;
+use kithara::play::effects::eq::GainDb;
 use kithara_ui::render::{Node, ReadValue, Scope, WaveformView};
 use num_traits::cast::AsPrimitive;
 

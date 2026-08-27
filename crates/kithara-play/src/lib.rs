@@ -7,6 +7,7 @@ mod guard;
 
 pub mod api;
 pub mod bridge;
+pub mod effects;
 pub mod engine;
 pub mod player;
 pub mod policy;
@@ -34,14 +35,21 @@ pub use bridge::{
     SessionHandle, SessionSampleRate, SessionState, SharedEq, SlotControl, StartStreamFn,
     TrackPlaybackStopReason, TrackState, TrackTransition, run_cmd,
 };
+#[cfg(all(
+    not(target_arch = "wasm32"),
+    any(feature = "stretch-signalsmith", feature = "stretch-bungee")
+))]
+pub use effects::eq::EqBandConfig;
 pub use engine::{EngineConfig, EngineImpl, apply_mix};
 pub use error::PlayError;
 pub use kithara_assets::{AssetLayout, DefaultLayout};
-pub use kithara_audio::{
-    EngineLoadSnapshot, EqBandConfig, SeekOutcome, ServiceClass, StretchControls,
-};
+pub use kithara_audio::SeekOutcome;
 pub use kithara_net::Headers;
+pub use kithara_warp::StretchControls;
 pub use player::{PlayerConfig, PlayerImpl, SelectTransition};
 pub use resource::{PlaybackResamplerBackend, Resource, ResourceConfig, ResourceSrc, SourceType};
 pub use rt::PlayerNode;
-pub use worker::{PlayWorker, PlayWorkerConfig, RegisteredAudio};
+pub use worker::{
+    EngineLoad, EngineLoadSnapshot, PlayWorker, PlayWorkerConfig, RegisteredAudio, ServiceClass,
+    TrackConfig,
+};

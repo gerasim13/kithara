@@ -243,6 +243,10 @@ impl PlayerPhase {
         }
     }
 
+    const fn is_paused(&self) -> bool {
+        matches!(self, Self::Paused { .. })
+    }
+
     /// Replace the ABR handle on the active phase (no-op from `Idle`).
     pub(crate) fn set_abr_handle(&mut self, handle: Option<kithara_abr::AbrHandle>) {
         match self {
@@ -338,6 +342,8 @@ impl PlayerImpl {
             /// Discriminant of the current phase under a short lock.
             #[call(kind)]
             pub(crate) fn phase_kind(&self) -> PlayerPhaseKind;
+            /// Whether playback is explicitly held in the paused phase.
+            pub fn is_paused(&self) -> bool;
             /// Phase gate: the active slot, or [`TransitionError::WrongPhase`] when
             /// the player holds no slot (phases `Idle` / `Stopped`-without-slot).
             #[expr($.ok_or(TransitionError::WrongPhase))]

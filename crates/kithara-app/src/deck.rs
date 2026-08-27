@@ -1,8 +1,8 @@
 #[cfg(feature = "gui")]
-use kithara::audio::{EqBandConfig, effects::eq::GainDb};
-use kithara::{
-    audio::generate_log_spaced_bands,
-    play::{PlayError, PlayerConfig, PlayerImpl, SessionHandle, StretchControls, apply_mix},
+use kithara::play::effects::eq::{EqBandConfig, GainDb};
+use kithara::play::{
+    PlayError, PlayerConfig, PlayerImpl, SessionHandle, StretchControls, apply_mix,
+    effects::eq::generate_log_spaced_bands,
 };
 use kithara_platform::sync::Arc;
 use kithara_queue::{Queue, QueueConfig};

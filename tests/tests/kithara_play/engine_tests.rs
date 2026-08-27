@@ -45,7 +45,7 @@ fn engine_config_builder() {
         .max_slots(8)
         .sample_rate(48000)
         .channels(1)
-        .eq_layout(kithara::audio::generate_log_spaced_bands(5))
+        .eq_layout(kithara::play::effects::eq::generate_log_spaced_bands(5))
         .pcm_pool(PcmPool::default())
         .build();
     let engine = EngineImpl::new(config, EventBus::default());

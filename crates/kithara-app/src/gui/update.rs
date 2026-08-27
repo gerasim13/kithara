@@ -2,7 +2,7 @@ use iced::{
     Task, window,
     window::{Direction, Mode},
 };
-use kithara::audio::{EqBandConfig, effects::eq::GainDb};
+use kithara::play::effects::eq::{EqBandConfig, GainDb};
 use kithara_ui::render::{WindowCommand, WindowEdge};
 use tracing::{error, warn};
 

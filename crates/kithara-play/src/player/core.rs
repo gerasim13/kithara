@@ -1,12 +1,12 @@
 use delegate::delegate;
 use kithara_abr::{AbrController, AbrSettings};
-use kithara_audio::{EngineLoad, StretchControls};
 use kithara_bufpool::{BytePool, PcmPool};
 use kithara_decode::GaplessMode;
 use kithara_platform::{
     CancelScope,
     sync::{Arc, Mutex},
 };
+use kithara_warp::StretchControls;
 use tracing::debug;
 
 use super::{
@@ -19,7 +19,7 @@ use crate::{
     engine::{EngineConfig, EngineImpl},
     error::PlayError,
     resource::Resource,
-    worker::PlayWorker,
+    worker::{EngineLoad, PlayWorker},
 };
 
 /// Phase-neutral state shared across every player phase.
@@ -159,7 +159,6 @@ impl PlayerImpl {
     pub(crate) fn enqueue_to_processor(&self, index: usize) -> Option<(Arc<str>, f64)> {
         let item = self.core.items.take_for_load(
             index,
-            self.core.timestretch.speed(),
             self.core.engine.master_sample_rate(),
             self.core.engine.pcm_pool(),
         )?;
@@ -239,15 +238,18 @@ impl crate::api::Equalizer for PlayerImpl {
 #[cfg(test)]
 mod tests {
     use kithara_assets::AssetStore;
-    use kithara_audio::{StretchControls, generate_log_spaced_bands};
     use kithara_bufpool::{BytePool, PcmPool};
     use kithara_decode::GaplessMode;
     use kithara_events::{Envelope, Event};
     use kithara_platform::CancelToken;
     use kithara_test_utils::kithara;
+    use kithara_warp::StretchControls;
 
     use super::*;
-    use crate::{PlayWorkerConfig, bridge::PlayerCmd, session::testing};
+    use crate::{
+        PlayWorkerConfig, bridge::PlayerCmd, effects::eq::generate_log_spaced_bands,
+        session::testing,
+    };
 
     #[derive(Clone, Copy)]
     enum PlayerBasicScenario {
@@ -363,9 +365,8 @@ mod tests {
     }
 
     #[kithara::test]
-    fn player_pause_sets_rate_zero() {
+    fn player_pause_without_active_slot_keeps_rate_zero() {
         let player = player();
-        player.core.params.set_rate_value(1.0);
         player.pause();
         assert!((player.rate() - 0.0).abs() < f32::EPSILON);
     }
@@ -468,10 +469,12 @@ mod tests {
         assert!((player.default_rate() - 1.0).abs() < f32::EPSILON);
         player.set_default_rate(0.75);
         assert!((player.default_rate() - 0.75).abs() < f32::EPSILON);
+        assert!((player.core.timestretch.speed() - 0.75).abs() < f32::EPSILON);
+        assert_eq!(player.rate(), 0.0);
     }
 
     #[kithara::test(tokio)]
-    async fn player_multiple_events_in_order() {
+    async fn synchronous_player_events_remain_in_order() {
         let player = player();
         let mut rx = player.subscribe();
 
@@ -481,7 +484,6 @@ mod tests {
 
         let e1 = rx.try_recv();
         let e2 = rx.try_recv();
-        let e3 = rx.try_recv();
         assert!(matches!(
             e1,
             Ok(Envelope {
@@ -496,13 +498,10 @@ mod tests {
                 ..
             })
         ));
-        assert!(matches!(
-            e3,
-            Ok(Envelope {
-                event: Event::Player(PlayerEvent::RateChanged { .. }),
-                ..
-            })
-        ));
+        assert!(
+            rx.try_recv().is_err(),
+            "rate feedback must wait for the RT processor"
+        );
     }
 
     #[kithara::test(tokio)]
@@ -513,21 +512,11 @@ mod tests {
     }
 
     #[kithara::test]
-    fn set_rate_updates_shared_speed() {
+    fn set_rate_without_active_slot_updates_only_the_requested_target() {
         let player = player();
         player.set_rate(2.0);
+        assert!((player.rate() - 0.0).abs() < f32::EPSILON);
         assert!((player.core.timestretch.speed() - 2.0).abs() < f32::EPSILON);
-    }
-
-    #[kithara::test]
-    fn set_rate_clamps_invalid_values() {
-        let player = player();
-        player.set_rate(0.0);
-        assert!(player.rate() >= 0.01);
-        assert!(player.core.timestretch.speed() >= 0.01);
-
-        player.set_rate(-1.0);
-        assert!(player.rate() >= 0.01);
     }
 
     #[kithara::test]
@@ -575,18 +564,11 @@ mod tests {
     }
 
     #[kithara::test]
-    fn set_rate_emits_rate_changed() {
+    fn set_rate_without_rt_does_not_emit_rate_changed() {
         let player = player();
         let mut rx = player.subscribe();
         player.set_rate(2.0);
-        let e = rx.try_recv();
-        assert!(matches!(
-            e,
-            Ok(Envelope {
-                event: Event::Player(PlayerEvent::RateChanged { .. }),
-                ..
-            })
-        ));
+        assert!(rx.try_recv().is_err());
     }
 
     #[kithara::test]

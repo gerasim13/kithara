@@ -1,10 +1,11 @@
 use delegate::delegate;
-use kithara_audio::EngineLoadSnapshot;
 use kithara_events::EventBus;
 use kithara_platform::tokio::runtime::Handle as RuntimeHandle;
 
 use super::super::core::PlayerImpl;
-use crate::{PlayWorker, api::PlayerStatus, bridge::PlaybackSnapshot, engine::EngineImpl};
+use crate::{
+    EngineLoadSnapshot, PlayWorker, api::PlayerStatus, bridge::PlaybackSnapshot, engine::EngineImpl,
+};
 
 impl PlayerImpl {
     /// ABR handle of the currently loaded item, if any.
@@ -33,14 +34,12 @@ impl PlayerImpl {
             pub fn auto_advance_enabled(&self) -> bool;
             /// Get crossfade duration in seconds.
             pub fn crossfade_duration(&self) -> f32;
-            /// Default playback rate used by `play()` and `select_item()`.
+            /// Default playback-rate target used by `play()` and `select_item()`.
             pub fn default_rate(&self) -> f32;
             /// Returns `true` if the player is muted.
             pub fn is_muted(&self) -> bool;
             /// Get prefetch lead time in seconds.
             pub fn prefetch_duration(&self) -> f32;
-            /// Current playback rate (0.0 = paused).
-            pub fn rate(&self) -> f32;
             /// Get current volume (0.0..=1.0).
             pub fn volume(&self) -> f32;
         }
@@ -63,6 +62,10 @@ impl PlayerImpl {
             #[expr(Some($?.position))]
             #[call(playback_snapshot)]
             pub fn position_seconds(&self) -> Option<f64>;
+            /// Current effective playback rate (`0.0` while paused or without a slot).
+            #[expr($.map_or(0.0, |snapshot| snapshot.rate))]
+            #[call(playback_snapshot)]
+            pub fn rate(&self) -> f32;
         }
         to self.core.items {
             /// Current item index in the queue.

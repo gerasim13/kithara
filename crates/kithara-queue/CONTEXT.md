@@ -148,11 +148,14 @@ seeking — not from `PlayerImpl::current_index`.
   player's `current_index` actually moved; the later EOF for that track is then
   consumed (`consume_armed_advance`) instead of advancing twice. Cleared on
   `CurrentTrackChanged`.
-- Pause gate: every automatic path no-ops while `is_paused()`
-  (`PlayerImpl::rate() <= 0.0`). It reads the rate, not `is_playing()`, which a
-  natural end-of-track drops once the arena drains — that would wrongly block the
-  genuine advance, while the rate only reaches `0.0` on a deliberate `pause`. Explicit
+- Pause gate: every automatic path no-ops only while `PlayerImpl::is_paused()`
+  observes the explicit `Paused` phase. Effective rate and live output both become
+  inactive at natural EOF without turning that EOF into a user pause. Explicit
   `select` / `advance_to_next` / `return_to_previous` / `play` are never gated.
+- `CrossfadeStarted` is published only while the player's live playback snapshot
+  reports an active predecessor. This is independent of the pause gate: a transport
+  can retain playing intent after natural EOF, but completed audio cannot be the
+  audible predecessor of a crossfade.
 
 ## Position, playback view, and play()
 

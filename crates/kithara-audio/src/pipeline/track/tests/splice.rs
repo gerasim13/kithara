@@ -33,7 +33,7 @@ use crate::{
         stream::shared::SharedStream,
         track::{self, TrackStep},
     },
-    traits::PcmSource,
+    traits::{PcmSource, PcmSourceExt},
 };
 
 fn produced_data(fetch: Fetch<PcmChunk>) -> PcmChunk {
@@ -336,6 +336,8 @@ struct TestWake;
 
 impl WorkerWake for TestWake {
     fn wake(&self) {}
+
+    fn defer(&self) {}
 }
 
 fn asset_bytes(name: &str) -> Vec<u8> {
@@ -430,11 +432,7 @@ async fn splice_source(variants: Vec<VariantLayout>) -> SpliceFixture {
         decoder_config(&shared_stream, backend, initial_byte_len),
     )
     .expect("create initial slq fMP4 decoder");
-    let initial_spec = initial_decoder.spec();
     let host_sample_rate = Arc::new(AtomicU32::new(Consts::SAMPLE_RATE));
-    let pcm_pool = PcmPool::default();
-    let effects =
-        crate::pipeline::config::create_effects(initial_spec, None, &pcm_pool, Vec::new());
     let factory_byte_len = Arc::new(AtomicU64::new(0));
     let decoder_factory = DecoderFactory::new(
         move |mut reader, info| {
@@ -458,7 +456,6 @@ async fn splice_source(variants: Vec<VariantLayout>) -> SpliceFixture {
         None,
     );
     let decode = DecodeInit {
-        byte_pool: BytePool::default(),
         decoder_factory,
         host_sample_rate,
         decoder: initial_decoder,
@@ -469,7 +466,7 @@ async fn splice_source(variants: Vec<VariantLayout>) -> SpliceFixture {
         pcm_pool: PcmPool::default(),
         recreate_on_host_rate_change: false,
     }
-    .into_parts(effects, None, shared_stream.seek_observe().epoch());
+    .into_parts(None, shared_stream.seek_observe().epoch());
     let parts = SourceParts::new(
         &shared_stream,
         decode,

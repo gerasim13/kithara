@@ -6,12 +6,8 @@ use criterion::{
     BatchSize, BenchmarkId, Criterion, SamplingMode, Throughput, criterion_group, criterion_main,
 };
 use kithara::{
-    TimeStretchProcessor,
     assets::{AssetStore, StorageBackend},
-    audio::{
-        AnalysisParams, AudioConfig, AudioEffect, PcmRead, ReadOutcome, StretchControls,
-        WaveformAnalyzer,
-    },
+    audio::{AnalysisParams, AudioConfig, PcmRead, ReadOutcome, WaveformAnalyzer},
     bufpool::{PcmPool, Region},
     decode::{PcmChunk, PcmMeta, PcmSpec},
     file::{File, FileConfig},
@@ -21,6 +17,7 @@ use kithara::{
         tokio::runtime::{Builder, Runtime},
     },
     play::{PlayWorker, PlayWorkerConfig},
+    warp::{StretchControls, Warp, WarpConfig, WarpRenderer},
 };
 use kithara_stretch::{ElasticConfig, ElasticEngine, ElasticRequest, StretchKind, build_engine};
 use num_traits::ToPrimitive;
@@ -377,13 +374,14 @@ fn bench_stretch_process(c: &mut Criterion) {
         group.bench_function(format!("{backend_label}_ratio_1_25"), |b| {
             b.iter_batched(
                 || {
-                    let processor =
-                        TimeStretchProcessor::new(Arc::clone(&controls), spec, pool.clone());
+                    let config = WarpConfig::builder().stretch(Arc::clone(&controls)).build();
+                    let warp = Warp::new((), &config);
+                    let renderer = warp.renderer(spec, pool.clone());
                     let chunk = make_chunk(&pool, &pcm);
-                    (processor, chunk)
+                    (renderer, chunk)
                 },
-                |(mut processor, chunk): (TimeStretchProcessor, PcmChunk)| {
-                    black_box(processor.process(chunk));
+                |(mut renderer, chunk): (WarpRenderer, PcmChunk)| {
+                    black_box(renderer.render(chunk));
                 },
                 BatchSize::SmallInput,
             );

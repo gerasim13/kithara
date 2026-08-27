@@ -1,5 +1,4 @@
 use kithara::{
-    audio::{EqBandConfig, StretchControls},
     bufpool::Region,
     decode::GaplessMode,
     events::{Event, EventReceiver, PlayerEvent},
@@ -7,7 +6,11 @@ use kithara::{
         sync::{Arc, Mutex},
         tokio::sync::broadcast::error::TryRecvError,
     },
-    play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, SessionDispatcher},
+    play::{
+        PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, SessionDispatcher,
+        effects::eq::EqBandConfig,
+    },
+    warp::StretchControls,
 };
 
 use super::OfflineSession;

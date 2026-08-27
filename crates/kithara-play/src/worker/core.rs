@@ -3,14 +3,20 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
-use kithara_audio::{Audio, AudioConfig, PcmScheduler, PcmTaskId, PreparedAudio, ResamplerBackend};
+use kithara_audio::{Audio, PcmSource, PreparedAudio, ResamplerBackend};
 use kithara_bufpool::{BytePool, PcmPool};
 use kithara_decode::{DecodeError, DecodeResult};
 use kithara_events::EventBus;
 use kithara_platform::{CancelScope, sync::Arc};
 use kithara_stream::{Stream, StreamType};
+use kithara_warp::Warp;
 
-use super::{PlayWorkerConfig, RegisteredAudio, TrackLease};
+use super::{
+    DecoderNode, EngineLoad, PlayWorkerConfig, RegisteredAudio, TrackConfig, TrackLease,
+    WarpSource,
+    scheduler::{AtomicServiceClass, PcmScheduler, PcmTask, PcmTaskId, ServiceClass},
+};
+use crate::effects::EffectDrain;
 
 static WORKER_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -47,27 +53,66 @@ impl PlayWorker {
     /// # Errors
     ///
     /// Returns decode/setup errors or a typed worker registration failure.
-    pub async fn open<T, B>(
-        &self,
-        config: AudioConfig<T, B>,
-    ) -> DecodeResult<RegisteredAudio<Stream<T>>>
+    pub async fn open<T, B, C>(&self, config: C) -> DecodeResult<RegisteredAudio<Stream<T>>>
     where
         T: StreamType<Events = EventBus>,
         B: Default + ResamplerBackend,
+        C: Into<TrackConfig<T, B>>,
     {
+        let TrackConfig {
+            audio,
+            effects,
+            engine_load,
+            warp,
+        } = config.into();
         let wake = self.0.scheduler.wake_handle();
         let prepared = Audio::<Stream<T>>::prepare(
-            config,
-            wake,
+            audio,
+            Arc::new(wake),
             self.byte_pool().clone(),
             self.pcm_pool().clone(),
         )
         .await?;
-        self.register(prepared)
+        let prepared = prepared.map(|audio, source| {
+            let spec = audio.spec();
+            let warp = Warp::new(audio, &warp);
+            let drain = EffectDrain::new(effects.len(), self.byte_pool());
+            #[cfg(all(
+                not(target_arch = "wasm32"),
+                any(feature = "stretch-signalsmith", feature = "stretch-bungee")
+            ))]
+            let source = WarpSource::new(
+                source,
+                warp.renderer(spec, self.pcm_pool().clone()),
+                effects,
+                drain,
+                spec,
+            );
+            #[cfg(any(
+                target_arch = "wasm32",
+                not(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))
+            ))]
+            let source = WarpSource::new(source, effects, drain, spec);
+            (warp, source)
+        });
+        self.register(prepared, engine_load)
     }
 
-    fn register<S>(&self, prepared: PreparedAudio<S>) -> DecodeResult<RegisteredAudio<S>> {
-        let (audio, task) = prepared.into();
+    fn register<S, P>(
+        &self,
+        prepared: PreparedAudio<Warp<Audio<S>>, P>,
+        engine_load: Option<Arc<EngineLoad>>,
+    ) -> DecodeResult<RegisteredAudio<S>>
+    where
+        P: PcmSource<Chunk = kithara_decode::PcmChunk>,
+    {
+        let (audio, lane) = prepared.into();
+        let service_class = Arc::new(AtomicServiceClass::new(ServiceClass::default()));
+        let task = PcmTask::new(DecoderNode::new(
+            lane,
+            engine_load,
+            Arc::clone(&service_class),
+        ));
         let task_id = self
             .0
             .scheduler
@@ -75,7 +120,12 @@ impl PlayWorker {
             .map_err(|error| DecodeError::pcm_stream("play worker registration", error))?;
         Ok(RegisteredAudio::new(
             audio,
-            TrackLease::new(self.clone(), task_id),
+            TrackLease::new(
+                self.clone(),
+                task_id,
+                service_class,
+                self.0.scheduler.wake_handle(),
+            ),
         ))
     }
 

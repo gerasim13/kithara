@@ -194,7 +194,7 @@ impl Queue {
         match status {
             TrackStatus::Loaded => {
                 self.cancel_stale_pending(id);
-                let was_playing = !self.is_paused();
+                let was_playing = self.player.is_playing();
                 let crossfade = transition.crossfade_seconds(self.player.crossfade_duration());
                 if was_playing && crossfade > 0.0 {
                     self.bus.publish(QueueEvent::CrossfadeStarted {
@@ -265,7 +265,7 @@ impl Queue {
         let resource = cached?;
         self.player.replace_item(index, resource);
         self.set_status(id, TrackStatus::Loaded);
-        let was_playing = !self.is_paused();
+        let was_playing = self.player.is_playing();
         let crossfade = transition.crossfade_seconds(self.player.crossfade_duration());
         if was_playing && crossfade > 0.0 {
             self.bus.publish(QueueEvent::CrossfadeStarted {
@@ -379,7 +379,7 @@ impl Queue {
             };
 
             if let Some(transition) = pending_transition {
-                let was_playing = player.rate() > 0.0;
+                let was_playing = player.is_playing();
                 let crossfade = transition.crossfade_seconds(player.crossfade_duration());
                 if was_playing && crossfade > 0.0 {
                     bus.publish(QueueEvent::CrossfadeStarted {

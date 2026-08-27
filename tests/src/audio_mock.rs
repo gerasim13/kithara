@@ -23,17 +23,12 @@ use kithara::{
 
 use crate::signal_pcm::signal::SignalFn;
 
-/// A stateful `PcmReader` for testing facades that depend on audio playback.
-///
-/// Honours [`PcmControl::set_playback_rate`]: every rendered output frame
-/// consumes `rate` source frames, so the source drains faster above 1.0 and
-/// slower below it, exactly as a stretching reader does.
+/// A stateful fixed-rate `PcmReader` for testing playback facades.
 pub struct TestPcmReader {
     bus: EventBus,
     spec: PcmSpec,
     metadata: TrackMetadata,
     position_frames: u64,
-    rate_bits: AtomicU32,
     total_frames: u64,
     source: Source,
 }
@@ -47,9 +42,6 @@ enum Source {
 pub const TEST_PCM_DEFAULT_VALUE: f32 = 0.5;
 
 impl TestPcmReader {
-    /// Lowest rate the mock will consume the source at.
-    const MIN_RATE: f32 = 0.01;
-
     /// Create a new test reader with the given spec and duration.
     /// Emits [`TEST_PCM_DEFAULT_VALUE`] for every sample.
     #[must_use]
@@ -80,7 +72,6 @@ impl TestPcmReader {
                 ..TrackMetadata::default()
             },
             position_frames: 0,
-            rate_bits: AtomicU32::new(1.0f32.to_bits()),
             bus: EventBus::default(),
             source,
         }
@@ -90,7 +81,7 @@ impl TestPcmReader {
         match self.source {
             Source::Constant(value) => value,
             Source::Signal(ref signal) => {
-                let frame = start + (output_frame as f64 * self.rate()) as u64;
+                let frame = start.saturating_add(output_frame);
                 f32::from(signal.sample(frame as usize, self.spec.sample_rate.get()))
                     / f32::from(i16::MAX)
             }
@@ -101,23 +92,17 @@ impl TestPcmReader {
         self.position_frames >= self.total_frames
     }
 
-    fn rate(&self) -> f64 {
-        f64::from(f32::from_bits(self.rate_bits.load(Ordering::Relaxed)))
-    }
-
     /// Output frames still renderable before the source budget runs out.
     fn output_frames_left(&self) -> u64 {
-        let source_left = self.total_frames - self.position_frames;
-        (source_left as f64 / self.rate()).ceil() as u64
+        self.total_frames - self.position_frames
     }
 
     /// Advance the source cursor by the frames consumed to render
     /// `output_frames`, saturating at the total budget.
     fn consume(&mut self, output_frames: u64) {
-        let consumed = (output_frames as f64 * self.rate()).round() as u64;
         self.position_frames = self
             .position_frames
-            .saturating_add(consumed)
+            .saturating_add(output_frames)
             .min(self.total_frames);
     }
 
@@ -239,13 +224,6 @@ impl PcmRead for TestPcmReader {
 }
 
 impl PcmControl for TestPcmReader {
-    /// Mirrors the player's `MIN_PLAYBACK_RATE` clamp so a zero or negative
-    /// rate cannot stall the source forever.
-    fn set_playback_rate(&self, rate: f32) {
-        self.rate_bits
-            .store(rate.max(Self::MIN_RATE).to_bits(), Ordering::Relaxed);
-    }
-
     fn seek(&mut self, position: Duration) -> Result<SeekOutcome, DecodeError> {
         let target = position;
         let frame = (position.as_secs_f64() * f64::from(self.spec.sample_rate.get())) as u64;

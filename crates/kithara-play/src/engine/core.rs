@@ -1,6 +1,6 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use kithara_audio::{ConsumerWakeMode, EqBandConfig};
+use kithara_audio::ConsumerWakeMode;
 use kithara_bufpool::PcmPool;
 use kithara_events::EventBus;
 use kithara_platform::{
@@ -17,6 +17,7 @@ use super::{config::EngineConfig, session::default_session_handle, slots::SlotTa
 use crate::{
     api::{EngineEvent, SlotId},
     bridge::{PlaybackShared, PlayerCmd, PlayerNotification, SharedEq, SlotControl},
+    effects::eq::EqBandConfig,
     error::PlayError,
     session::{PlayerId, SessionHandle, SessionSampleRate},
 };

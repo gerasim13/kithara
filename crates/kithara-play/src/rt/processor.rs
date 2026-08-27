@@ -70,10 +70,9 @@ pub struct PlayerNodeProcessor {
     pub(super) sample_rate: NonZeroU32,
     pub(super) render: RenderPass,
     pub(super) tracks_transitions: VecDeque<TrackTransition>,
-    /// Media seconds consumed per output second, applied to every track the
-    /// processor owns and seeded into every track it loads.
-    pub(super) playback_rate: f32,
     pub(super) prefetch_duration: f32,
+    /// Last effective rate successfully delivered to the control thread.
+    last_notified_rate: f32,
     trash_tx: HeapProd<PlayerTrack>,
 }
 
@@ -94,6 +93,7 @@ impl PlayerNodeProcessor {
     /// Create a new processor with the given command receiver and shared state.
     #[must_use]
     pub fn new(inputs: NodeInputs, shape: StreamShape, pool: &PcmPool) -> Self {
+        let last_notified_rate = inputs.playback.rate.load(Ordering::Relaxed);
         Self {
             cmd_rx: inputs.cmd_rx,
             notif_tx: inputs.notif_tx,
@@ -103,7 +103,7 @@ impl PlayerNodeProcessor {
             render: RenderPass::new(pool, shape),
             crossfade: CrossfadeSettings::default(),
             prefetch_duration: 0.0,
-            playback_rate: 1.0,
+            last_notified_rate,
             tracks: TrackSlots::default(),
             tracks_transitions: VecDeque::with_capacity(Self::MAX_TRACKS),
         }
@@ -196,6 +196,33 @@ impl PlayerNodeProcessor {
             frames,
             is_playing,
         )
+    }
+
+    fn leading_effective_rate(&self) -> Option<f32> {
+        self.tracks
+            .iter()
+            .find_map(|(_, track)| track.state().is_leading().then(|| track.playback_rate()))
+    }
+
+    fn publish_effective_rate(&mut self, rate: f32) {
+        self.playback.rate.store(rate, Ordering::Relaxed);
+        if self.last_notified_rate != rate
+            && self
+                .notif_tx
+                .try_push(PlayerNotification::RateChanged { rate })
+                .is_ok()
+        {
+            self.last_notified_rate = rate;
+        }
+    }
+
+    pub(super) fn refresh_effective_rate(&mut self) {
+        let rate = if self.playback.playing.load(Ordering::SeqCst) {
+            self.leading_effective_rate().unwrap_or(0.0)
+        } else {
+            0.0
+        };
+        self.publish_effective_rate(rate);
     }
 
     fn set_tracks_host_sample_rate(&mut self, sample_rate: NonZeroU32) {
@@ -324,11 +351,64 @@ impl AudioNodeProcessor for PlayerNodeProcessor {
             self.render_audio(&mut buffers, info.frames, is_playing);
 
         self.update_position_duration(leading_outcome_pos_dur);
+        self.refresh_effective_rate();
 
         if playback_started {
             ProcessStatus::OutputsModified
         } else {
             ProcessStatus::ClearAllOutputs
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use ringbuf::traits::{Consumer, Producer};
+
+    use super::*;
+    use crate::bridge::{SharedEq, slot_channels};
+
+    fn processor() -> (PlayerNodeProcessor, crate::bridge::SlotControl) {
+        let (inputs, control) = slot_channels(SharedEq::new(0));
+        let shape = StreamShape {
+            sample_rate: NonZeroU32::new(44_100).expect("static sample rate"),
+            max_block_frames: NonZeroU32::new(512).expect("static block size"),
+        };
+        (
+            PlayerNodeProcessor::new(inputs, shape, &PcmPool::default()),
+            control,
+        )
+    }
+
+    #[kithara::test]
+    fn full_notification_ring_retries_latest_effective_rate_once() {
+        let (mut processor, mut control) = processor();
+        let filler = Arc::from("filler");
+        while processor
+            .notif_tx
+            .try_push(PlayerNotification::Loaded {
+                src: Arc::clone(&filler),
+            })
+            .is_ok()
+        {}
+
+        processor.publish_effective_rate(1.25);
+        processor.publish_effective_rate(1.5);
+        assert_eq!(processor.playback.rate.load(Ordering::Relaxed), 1.5);
+        assert_eq!(processor.last_notified_rate, 0.0);
+
+        assert!(control.notif_rx.try_pop().is_some());
+        processor.publish_effective_rate(1.5);
+
+        let mut delivered = Vec::new();
+        while let Some(notification) = control.notif_rx.try_pop() {
+            if let PlayerNotification::RateChanged { rate } = notification {
+                delivered.push(rate);
+            }
+        }
+        assert_eq!(delivered, [1.5]);
+
+        processor.publish_effective_rate(1.5);
+        assert!(control.notif_rx.try_pop().is_none());
     }
 }

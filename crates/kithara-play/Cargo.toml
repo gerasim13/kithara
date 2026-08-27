@@ -80,8 +80,8 @@ resample-glide = ["kithara-audio/resample-glide", "kithara-decode/resample-glide
 resample-rubato = ["kithara-audio/resample-rubato", "kithara-decode/resample-rubato"]
 analysis-beat = ["kithara-audio/analysis-beat"]
 analysis-waveform = ["kithara-audio/analysis-waveform"]
-stretch-signalsmith = ["kithara-audio/stretch-signalsmith"]
-stretch-bungee = ["kithara-audio/stretch-bungee"]
+stretch-signalsmith = ["kithara-warp/stretch-signalsmith"]
+stretch-bungee = ["kithara-warp/stretch-bungee"]
 # Re-export of testing helpers (engine module + macro mocks).
 # Offline backend lives in `kithara-integration-tests::offline` since 2026-05-07.
 probe = []
@@ -103,10 +103,11 @@ kithara-platform = { workspace = true }
 kithara-stream = { workspace = true, default-features = false }
 kithara-test-macros = { workspace = true }
 kithara-test-utils = { workspace = true }
-kithara-warp = { workspace = true }
+kithara-warp = { workspace = true, default-features = false }
 
 # Utilities
 arc-swap = { workspace = true }
+biquad = { workspace = true }
 bon = { workspace = true }
 delegate = { workspace = true }
 derive_more = { workspace = true }
@@ -114,12 +115,14 @@ fieldwork = { workspace = true }
 
 # Audio engine
 firewheel = { workspace = true }
+firewheel-core = { workspace = true }
 hex = { workspace = true }
 num-traits = { workspace = true }
 portable-atomic = { workspace = true }
 
 # Async & channels
 ringbuf = { workspace = true }
+serde = { workspace = true }
 sha2 = { workspace = true }
 smallvec = { workspace = true }
 thiserror = { workspace = true }
@@ -137,7 +140,7 @@ bevy_platform = { workspace = true }
 firewheel-web-audio = { workspace = true, optional = true }
 
 [dev-dependencies]
-kithara-audio = { workspace = true, features = ["probe"] }
+kithara-audio = { workspace = true, features = ["mock", "probe"] }
 kithara-play = { path = ".", default-features = false, features = ["backend-cpal", "probe"] }
 kithara-test-utils = { path = "../kithara-test-utils", features = ["mock", "probe", "hang"] }
 

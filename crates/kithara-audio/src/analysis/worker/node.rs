@@ -1,12 +1,9 @@
 use kithara_platform::sync::mpsc::{Receiver, TryRecvError};
 use kithara_resampler::ResamplerBackend;
 
-use super::AnalysisTask;
 pub(crate) use super::task::Job;
-use crate::{
-    analysis::analyzer::{AnalyzerBuilder, Detector},
-    runtime::{Node, RtPolicy, ServiceClass, TickResult},
-};
+use super::{AnalysisStep, AnalysisTask};
+use crate::analysis::analyzer::{AnalyzerBuilder, Detector};
 
 pub(crate) struct AnalysisNode<B>
 where
@@ -32,9 +29,9 @@ where
         }
     }
 
-    fn tick_current(&mut self) -> TickResult {
+    fn tick_current(&mut self) -> AnalysisStep {
         let Some(current) = &mut self.current else {
-            return TickResult::UpstreamPending;
+            return AnalysisStep::UpstreamPending;
         };
         let result = current.tick(&self.builder, self.detector.as_mut());
         if current.is_done() {
@@ -44,23 +41,15 @@ where
     }
 }
 
-impl<B> Node for AnalysisNode<B>
+impl<B> AnalysisNode<B>
 where
     B: ResamplerBackend,
 {
-    fn on_cancel(&mut self) {
+    pub(crate) fn cancel(&mut self) {
         self.current = None;
     }
 
-    fn rt_policy(&self) -> RtPolicy {
-        RtPolicy::Heavy
-    }
-
-    fn service_class(&self) -> ServiceClass {
-        ServiceClass::Idle
-    }
-
-    fn tick(&mut self) -> TickResult {
+    pub(crate) fn tick(&mut self) -> AnalysisStep {
         if self.current.is_some() {
             return self.tick_current();
         }
@@ -70,8 +59,8 @@ where
                 self.current = Some(AnalysisTask::new(job));
                 self.tick_current()
             }
-            Err(TryRecvError::Empty) => TickResult::UpstreamPending,
-            Err(TryRecvError::Disconnected) => TickResult::Done,
+            Err(TryRecvError::Empty) => AnalysisStep::UpstreamPending,
+            Err(TryRecvError::Disconnected) => AnalysisStep::Done,
         }
     }
 }

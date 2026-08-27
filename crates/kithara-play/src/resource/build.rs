@@ -73,9 +73,6 @@ where
             .maybe_host_sample_rate(self.host_sample_rate)
             .preload_chunks(self.preload_chunks)
             .decoder(self.decoder)
-            .maybe_playback_rate(self.playback_rate)
-            .maybe_stretch(self.stretch)
-            .maybe_engine_load(self.engine_load)
             .consumer_wake_mode(self.consumer_wake_mode)
             .build()
     }
@@ -114,9 +111,6 @@ where
             .maybe_host_sample_rate(self.host_sample_rate)
             .preload_chunks(self.preload_chunks)
             .decoder(self.decoder)
-            .maybe_playback_rate(self.playback_rate)
-            .maybe_stretch(self.stretch)
-            .maybe_engine_load(self.engine_load)
             .consumer_wake_mode(self.consumer_wake_mode)
             .build())
     }

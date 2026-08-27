@@ -215,7 +215,6 @@ pub(crate) enum WaitContext {
 
 /// Why the source is not ready, mirroring relevant `SourcePhase` variants.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[non_exhaustive]
 pub enum WaitingReason {
     Waiting,
     WaitingDemand,

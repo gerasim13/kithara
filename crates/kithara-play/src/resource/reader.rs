@@ -1,17 +1,20 @@
 use std::num::NonZeroU32;
 
 use delegate::delegate;
-use kithara_audio::{
-    AudioConfig, ChunkOutcome, PcmReader, ReadOutcome, ResamplerBackend, SeekOutcome, ServiceClass,
-};
+use kithara_audio::{ChunkOutcome, PcmReader, ReadOutcome, ResamplerBackend, SeekOutcome};
 use kithara_decode::{DecodeError, DecodeResult, PcmSpec, TrackMetadata};
 use kithara_events::EventBus;
 use kithara_platform::{CancelToken, sync::Arc, time::Duration};
 use kithara_stream::{Stream, StreamType};
+use kithara_warp::{StretchControls, WarpConfig};
 use tracing::warn;
 
 use super::{ResourceConfig, SourceType};
-use crate::PlayWorker;
+use crate::{
+    PlayWorker, TrackConfig,
+    effects::supports_playback_rate,
+    worker::{ServiceClass, TrackPriority},
+};
 
 /// Type-erased audio resource wrapping any `PcmReader`.
 ///
@@ -49,6 +52,9 @@ use crate::PlayWorker;
 #[fieldwork(opt_in, get)]
 pub struct Resource {
     pub(crate) inner: Box<dyn PcmReader>,
+    priority: Option<TrackPriority>,
+    #[field(with)]
+    playback_rate: PlaybackRate,
     #[field(get, deref = false)]
     src: Arc<str>,
     /// Drop guard for the per-track cancel — the token passed as
@@ -70,6 +76,37 @@ pub struct Resource {
 /// `inner` out of the wrapper after [`disarm`](CancelGuard::disarm)ing. Passive
 /// when `None`.
 struct CancelGuard(Option<CancelToken>);
+
+enum PlaybackRate {
+    Fixed,
+    Warp(Arc<StretchControls>),
+}
+
+impl PlaybackRate {
+    fn for_warp(controls: Arc<StretchControls>) -> Self {
+        if supports_playback_rate() {
+            Self::Warp(controls)
+        } else {
+            Self::Fixed
+        }
+    }
+
+    fn apply(&self, requested: f32) -> f32 {
+        if let Self::Warp(controls) = self {
+            controls.set_speed(requested);
+        }
+        self.into()
+    }
+}
+
+impl From<&PlaybackRate> for f32 {
+    fn from(rate: &PlaybackRate) -> Self {
+        match rate {
+            PlaybackRate::Fixed => 1.0,
+            PlaybackRate::Warp(controls) => controls.speed(),
+        }
+    }
+}
 
 impl CancelGuard {
     /// Disarm so dropping the guard cancels nothing — used when the live reader
@@ -108,17 +145,27 @@ impl Resource {
         let worker = config.worker.clone().ok_or(DecodeError::InvalidData {
             detail: "ResourceConfig requires an explicit PlayWorker",
         })?;
+        let stretch = Arc::clone(&config.stretch);
+        let engine_load = config.engine_load.clone();
         // Capture the per-track cancel before `build_*_config` consumes `config`
         // (it is cloned by identity into both the inner stream and the Audio).
         let cancel = config.cancel.clone();
         let mut resource = match source_type {
             SourceType::RemoteFile(_) | SourceType::LocalFile(_) => {
                 let audio_config = config.build_file_config(&worker);
-                Self::from_stream_audio(audio_config, src, &worker).await?
+                let track = TrackConfig::for_audio(audio_config)
+                    .maybe_engine_load(engine_load)
+                    .warp(WarpConfig::builder().stretch(Arc::clone(&stretch)).build())
+                    .build();
+                Self::from_stream_audio(track, src, &worker).await?
             }
             SourceType::HlsStream(_) => {
                 let audio_config = config.build_hls_config(&worker)?;
-                Self::from_stream_audio(audio_config, src, &worker).await?
+                let track = TrackConfig::for_audio(audio_config)
+                    .maybe_engine_load(engine_load)
+                    .warp(WarpConfig::builder().stretch(Arc::clone(&stretch)).build())
+                    .build();
+                Self::from_stream_audio(track, src, &worker).await?
             }
         };
         resource.cancel = CancelGuard(cancel);
@@ -127,11 +174,8 @@ impl Resource {
 
     /// Create a resource from any `PcmReader`.
     ///
-    /// This is the single construction primitive: the stream-backed
-    /// [`Resource::new`] / [`Resource::from_stream_audio`] paths build a
-    /// real `Audio<Stream<T>>` reader and then funnel through here, so the
-    /// reader-boxing, preload, and bus-sharing logic lives in one place.
-    /// Custom sources and offline render harnesses pass their own reader.
+    /// Custom sources are fixed-rate. Stream-backed resources reuse this
+    /// construction path and attach their resident Warp controls before return.
     ///
     /// The resource shares the reader's event bus directly.
     ///
@@ -148,6 +192,8 @@ impl Resource {
         }
         Self {
             inner,
+            priority: None,
+            playback_rate: PlaybackRate::Fixed,
             bus,
             src,
             cancel: CancelGuard(None),
@@ -160,7 +206,7 @@ impl Resource {
     /// `kithara_events::EventBus`. Callers wanting fine-grained control
     /// over `FileConfig` / `HlsConfig` (ABR, keys, etc.) use this path.
     pub(crate) async fn from_stream_audio<T, B>(
-        config: AudioConfig<T, B>,
+        config: TrackConfig<T, B>,
         src: Arc<str>,
         worker: &PlayWorker,
     ) -> DecodeResult<Self>
@@ -169,8 +215,27 @@ impl Resource {
         B: Default + ResamplerBackend,
         crate::RegisteredAudio<Stream<T>>: PcmReader + 'static,
     {
+        let warp_controls = Arc::clone(config.warp().stretch());
         let audio = worker.open(config).await?;
-        Ok(Self::from_reader(audio, Some(src)))
+        let priority = audio.priority();
+        let mut resource = Self::from_reader(audio, Some(src))
+            .with_playback_rate(PlaybackRate::for_warp(warp_controls));
+        resource.priority = Some(priority);
+        Ok(resource)
+    }
+
+    pub(crate) fn apply_playback_rate(&self, rate: f32) -> f32 {
+        self.playback_rate.apply(rate)
+    }
+
+    pub(crate) fn playback_rate(&self) -> f32 {
+        (&self.playback_rate).into()
+    }
+
+    pub(crate) fn set_service_class(&self, class: ServiceClass) {
+        if let Some(priority) = &self.priority {
+            priority.set(class);
+        }
     }
 
     /// Wait for first decoded chunk to be available, then move it to internal buffer.
@@ -239,10 +304,6 @@ impl Resource {
             pub fn sync_seek(&mut self);
             /// Set the target sample rate of the audio host.
             pub fn set_host_sample_rate(&self, sample_rate: NonZeroU32);
-            /// Set the playback rate for the active stretch controls.
-            pub fn set_playback_rate(&self, rate: f32);
-            /// Update the scheduling priority hint for the shared worker.
-            pub fn set_service_class(&self, class: ServiceClass);
             /// Get current PCM specification.
             #[must_use]
             pub fn spec(&self) -> PcmSpec;
@@ -268,21 +329,48 @@ impl From<Resource> for Box<dyn PcmReader> {
 
 #[cfg(test)]
 mod tests {
-    use std::num::NonZeroU32;
+    use std::{
+        num::{NonZeroU32, NonZeroUsize},
+        sync::atomic::Ordering,
+    };
 
+    use firewheel::{
+        clock::InstantSamples,
+        dsp::{buffer::ChannelBuffer, declick::DeclickValues},
+        event::{NodeEvent, ProcEvents, ProcEventsIndex, ScheduledEventEntry},
+        log::{RealtimeLoggerConfig, realtime_logger},
+        mask::{ConnectedMask, ConstantMask, SilenceMask},
+        node::{
+            AudioNodeProcessor, NUM_SCRATCH_BUFFERS, ProcBuffers, ProcExtra, ProcInfo, ProcStore,
+            StreamStatus,
+        },
+    };
     use kithara_audio::{PcmControl, PcmRead, PcmSession, ReadOutcome, SeekOutcome};
+    use kithara_bufpool::PcmPool;
     use kithara_decode::{PcmSpec, TrackMetadata};
-    use kithara_platform::CancelToken;
+    use kithara_platform::{CancelToken, sync::Arc};
     use kithara_test_utils::kithara;
+    use ringbuf::traits::{Consumer, Producer};
 
     use super::*;
+    use crate::{
+        bridge::{PlayerCmd, PlayerNotification, SharedEq, TrackTransition, slot_channels},
+        rt::{PlayerNodeProcessor, StreamShape, track::PlayerResource},
+    };
 
-    /// Minimal reader whose only job is to let us build a `Resource` and drop
-    /// it; reads report EOF immediately.
+    struct Consts;
+
+    impl Consts {
+        const BLOCK_FRAMES: usize = 512;
+        const SAMPLE_RATE: u32 = 44_100;
+    }
+
     struct EofReader {
         bus: EventBus,
         spec: PcmSpec,
         meta: TrackMetadata,
+        position_frames: usize,
+        total_frames: usize,
     }
 
     impl Default for EofReader {
@@ -290,14 +378,48 @@ mod tests {
             Self {
                 bus: EventBus::default(),
                 meta: TrackMetadata::default(),
-                spec: PcmSpec::new(2, NonZeroU32::new(44_100).expect("static rate")),
+                spec: PcmSpec::new(
+                    2,
+                    NonZeroU32::new(Consts::SAMPLE_RATE).expect("static rate"),
+                ),
+                position_frames: 0,
+                total_frames: 0,
             }
+        }
+    }
+
+    impl EofReader {
+        fn with_frames(total_frames: usize) -> Self {
+            Self {
+                total_frames,
+                ..Self::default()
+            }
+        }
+
+        fn position_duration(&self) -> Duration {
+            let frames = u32::try_from(self.position_frames).expect("test frame count fits u32");
+            Duration::from_secs_f64(f64::from(frames) / f64::from(Consts::SAMPLE_RATE))
+        }
+
+        fn eof(&self) -> ReadOutcome {
+            ReadOutcome::Eof {
+                position: self.position_duration(),
+            }
+        }
+
+        fn take_frames(&mut self, capacity: usize) -> Option<NonZeroUsize> {
+            let frames = capacity.min(self.total_frames - self.position_frames);
+            self.position_frames += frames;
+            NonZeroUsize::new(frames)
         }
     }
 
     impl PcmSession for EofReader {
         fn duration(&self) -> Option<Duration> {
-            None
+            let frames = u32::try_from(self.total_frames).expect("test frame count fits u32");
+            Some(Duration::from_secs_f64(
+                f64::from(frames) / f64::from(Consts::SAMPLE_RATE),
+            ))
         }
         fn event_bus(&self) -> &EventBus {
             &self.bus
@@ -309,19 +431,33 @@ mod tests {
 
     impl PcmRead for EofReader {
         fn position(&self) -> Duration {
-            Duration::ZERO
+            self.position_duration()
         }
-        fn read(&mut self, _buf: &mut [f32]) -> Result<ReadOutcome, DecodeError> {
-            Ok(ReadOutcome::Eof {
-                position: Duration::ZERO,
+        fn read(&mut self, buf: &mut [f32]) -> Result<ReadOutcome, DecodeError> {
+            let Some(frames) = self.take_frames(buf.len() / 2) else {
+                return Ok(self.eof());
+            };
+            let samples = frames.get() * 2;
+            buf[..samples].fill(0.5);
+            Ok(ReadOutcome::Frames {
+                count: NonZeroUsize::new(samples).expect("non-zero stereo sample count"),
+                position: self.position_duration(),
             })
         }
         fn read_planar<'a>(
             &mut self,
-            _output: &'a mut [&'a mut [f32]],
+            output: &'a mut [&'a mut [f32]],
         ) -> Result<ReadOutcome, DecodeError> {
-            Ok(ReadOutcome::Eof {
-                position: Duration::ZERO,
+            let capacity = output.first().map_or(0, |channel| channel.len());
+            let Some(frames) = self.take_frames(capacity) else {
+                return Ok(self.eof());
+            };
+            for channel in output {
+                channel[..frames.get()].fill(0.5);
+            }
+            Ok(ReadOutcome::Frames {
+                count: frames,
+                position: self.position_duration(),
             })
         }
 
@@ -337,6 +473,180 @@ mod tests {
                 landed_at: position,
             })
         }
+    }
+
+    fn warped_player_resource(controls: &Arc<StretchControls>, src: &str) -> Box<PlayerResource> {
+        let total_frames = usize::try_from(Consts::SAMPLE_RATE).expect("sample rate fits usize");
+        let resource = Resource::from_reader(EofReader::with_frames(total_frames), None)
+            .with_playback_rate(PlaybackRate::for_warp(Arc::clone(controls)));
+        Box::new(PlayerResource::new(
+            resource,
+            Arc::from(src),
+            &PcmPool::default(),
+        ))
+    }
+
+    fn process_block(processor: &mut PlayerNodeProcessor, extra: &mut ProcExtra) {
+        let info = ProcInfo {
+            sample_rate: NonZeroU32::new(Consts::SAMPLE_RATE).expect("static sample rate"),
+            frames: Consts::BLOCK_FRAMES,
+            in_silence_mask: SilenceMask::default(),
+            out_silence_mask: SilenceMask::default(),
+            in_constant_mask: ConstantMask::default(),
+            out_constant_mask: ConstantMask::default(),
+            in_connected_mask: ConnectedMask::default(),
+            out_connected_mask: ConnectedMask::default(),
+            prev_output_was_silent: false,
+            sample_rate_recip: f64::from(Consts::SAMPLE_RATE).recip(),
+            clock_samples: InstantSamples(0),
+            duration_since_stream_start: Duration::ZERO,
+            stream_status: StreamStatus::empty(),
+            dropped_frames: 0,
+        };
+        let inputs: [&[f32]; 0] = [];
+        let mut left = [0.0; Consts::BLOCK_FRAMES];
+        let mut right = [0.0; Consts::BLOCK_FRAMES];
+        let mut outputs = [&mut left[..], &mut right[..]];
+        let buffers = ProcBuffers {
+            inputs: &inputs,
+            outputs: &mut outputs,
+        };
+        let mut immediate: [Option<NodeEvent>; 0] = [];
+        let mut scheduled: [Option<ScheduledEventEntry>; 0] = [];
+        let mut indices: Vec<ProcEventsIndex> = Vec::new();
+        let mut events = ProcEvents::new(&mut immediate, &mut scheduled, &mut indices);
+        let _ = processor.process(&info, buffers, &mut events, extra);
+    }
+
+    fn rate_notifications(control: &mut crate::bridge::SlotControl) -> Vec<f32> {
+        let mut rates = Vec::new();
+        while let Some(notification) = control.notif_rx.try_pop() {
+            if let PlayerNotification::RateChanged { rate } = notification {
+                rates.push(rate);
+            }
+        }
+        rates
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn playback_rate_reports_only_a_real_warp_control() {
+        let fixed = Resource::from_reader(EofReader::default(), None);
+        assert_eq!(fixed.apply_playback_rate(1.5), 1.0);
+
+        let controls = StretchControls::new(1.0);
+        let warped = Resource::from_reader(EofReader::default(), None)
+            .with_playback_rate(PlaybackRate::for_warp(Arc::clone(&controls)));
+        if supports_playback_rate() {
+            assert_eq!(warped.apply_playback_rate(1.5), 1.5);
+            assert!((controls.speed() - 1.5).abs() < f32::EPSILON);
+            controls.set_speed(1.25);
+            assert_eq!(warped.playback_rate(), 1.25);
+        } else {
+            assert_eq!(warped.apply_playback_rate(1.5), 1.0);
+            assert!((controls.speed() - 1.0).abs() < f32::EPSILON);
+            controls.set_speed(1.25);
+            assert_eq!(warped.playback_rate(), 1.0);
+        }
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn loading_next_warp_resource_preserves_shared_target_and_effective_capability() {
+        let controls = StretchControls::new(1.0);
+        let effective_rate = if supports_playback_rate() { 1.5 } else { 1.0 };
+        let (inputs, mut control) = slot_channels(SharedEq::new(0));
+        let shape = StreamShape {
+            sample_rate: NonZeroU32::new(Consts::SAMPLE_RATE).expect("static sample rate"),
+            max_block_frames: NonZeroU32::new(
+                u32::try_from(Consts::BLOCK_FRAMES).expect("block size fits u32"),
+            )
+            .expect("static block size"),
+        };
+        let mut processor = PlayerNodeProcessor::new(inputs, shape, &PcmPool::default());
+        let (logger, _logger_rx) = realtime_logger(RealtimeLoggerConfig::default());
+        let mut extra = ProcExtra {
+            logger,
+            store: ProcStore::with_capacity(0),
+            scratch_buffers: ChannelBuffer::<f32, NUM_SCRATCH_BUFFERS>::new(Consts::BLOCK_FRAMES),
+            declick_values: DeclickValues::new(NonZeroU32::new(16).expect("static declick length")),
+        };
+        let first: Arc<str> = Arc::from("first");
+        control
+            .cmd_tx
+            .try_push(PlayerCmd::LoadTrack {
+                resource: warped_player_resource(&controls, &first),
+                item_id: None,
+            })
+            .expect("load first track");
+        control
+            .cmd_tx
+            .try_push(PlayerCmd::Transition(TrackTransition::FadeIn(Arc::clone(
+                &first,
+            ))))
+            .expect("fade in first track");
+        control
+            .cmd_tx
+            .try_push(PlayerCmd::SetPaused(false))
+            .expect("start playback");
+        process_block(&mut processor, &mut extra);
+        let _ = rate_notifications(&mut control);
+
+        controls.set_speed(1.5);
+        let first_position = processor
+            .track(&first)
+            .expect("first track loaded")
+            .position();
+        process_block(&mut processor, &mut extra);
+        let first_advance = processor
+            .track(&first)
+            .expect("first track loaded")
+            .position()
+            - first_position;
+        let block_frames = u32::try_from(Consts::BLOCK_FRAMES).expect("block size fits u32");
+        let expected_advance =
+            f64::from(block_frames) * f64::from(effective_rate) / f64::from(Consts::SAMPLE_RATE);
+        assert!((first_advance - expected_advance).abs() < f64::EPSILON);
+        assert_eq!(
+            processor.playback().rate.load(Ordering::Relaxed),
+            effective_rate
+        );
+        let notifications = rate_notifications(&mut control);
+        if supports_playback_rate() {
+            assert_eq!(notifications, [1.5]);
+        } else {
+            assert!(notifications.is_empty());
+        }
+
+        let next: Arc<str> = Arc::from("next");
+        control
+            .cmd_tx
+            .try_push(PlayerCmd::LoadTrack {
+                resource: warped_player_resource(&controls, &next),
+                item_id: None,
+            })
+            .expect("load next track");
+        control
+            .cmd_tx
+            .try_push(PlayerCmd::Transition(TrackTransition::FadeIn(Arc::clone(
+                &next,
+            ))))
+            .expect("fade in next track");
+        assert_eq!(controls.speed(), 1.5);
+
+        process_block(&mut processor, &mut extra);
+
+        assert_eq!(controls.speed(), 1.5);
+        assert_eq!(
+            processor.playback().rate.load(Ordering::Relaxed),
+            effective_rate
+        );
+        assert_eq!(
+            processor
+                .track(&next)
+                .expect("next track loaded")
+                .position(),
+            expected_advance
+        );
+        assert!(rate_notifications(&mut control).is_empty());
     }
 
     /// Pin (W3 Task 3.3 (b)): a mid-session unload — i.e. dropping the

@@ -57,7 +57,7 @@ fn drain_seek_events(rx: &mut kithara::events::EventReceiver, observation: &mut 
         match envelope.event {
             Event::Audio(AudioEvent::SeekComplete { .. }) => observation.seek_complete = true,
             Event::Audio(AudioEvent::SeekRejected { .. }) => observation.seek_rejected = true,
-            Event::Audio(AudioEvent::EndOfStream) => observation.end_of_stream = true,
+            Event::Audio(AudioEvent::EndOfStream { .. }) => observation.end_of_stream = true,
             Event::Player(PlayerEvent::ItemDidPlayToEnd { .. }) => observation.item_ended = true,
             _ => {}
         }

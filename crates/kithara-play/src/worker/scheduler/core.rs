@@ -1,0 +1,1181 @@
+use std::panic::{AssertUnwindSafe, catch_unwind};
+
+use kithara_platform::{
+    CancelToken,
+    sync::{
+        Arc,
+        mpsc::{self, TryRecvError},
+    },
+    thread::{spawn_named, yield_now},
+    time::{Duration, Instant},
+};
+use kithara_test_utils::kithara;
+use tracing::{debug, trace, warn};
+
+use super::{
+    Node, PassOutcome, PassReport, RtPolicy, SchedulerCmd, SchedulerEvent, SchedulerHandle,
+    SchedulerObserver, SchedulerWake, Slot, SlotId, TickResult,
+};
+
+/// The core scheduler.
+pub(crate) struct Scheduler<N, O> {
+    _phantom: std::marker::PhantomData<(N, O)>,
+}
+
+impl<N: Node, O: SchedulerObserver> Scheduler<N, O> {
+    /// Park budget used after `PassOutcome::Idle` — every slot is
+    /// terminal (or no slots at all), no work expected soon, so we
+    /// park longer to keep CPU idle.
+    const IDLE_TIMEOUT: Duration = Duration::from_millis(100);
+    /// Threshold for warning about slow `tick` calls.
+    const SLOW_TICK_THRESHOLD: Duration = Duration::from_millis(10);
+    /// Park budget used after `PassOutcome::Waiting` /
+    /// `PassOutcome::UpstreamPending` / `PassOutcome::Backpressured` —
+    /// at least one slot is alive and likely to make progress shortly
+    /// (source becomes ready, consumer drains the PCM ring), so re-check
+    /// more aggressively.
+    const WAITING_TIMEOUT: Duration = Duration::from_millis(10);
+
+    /// Consecutive `Produced` passes between cooperative `yield_now()` calls.
+    ///
+    /// The produce core never parks while it is making progress; a bare
+    /// per-pass `yield_now()` would still hand the scheduler off on every chunk.
+    /// Yielding only every Nth straight `Produced` pass keeps the worker hot
+    /// under sustained decode while still ceding the CPU often enough to stay
+    /// fair to other threads. The streak resets on any non-`Produced` outcome,
+    /// which already parks via `wait_timeout`.
+    const FAIRNESS_YIELD_EVERY: u32 = 16;
+
+    /// Consecutive `tick()` calls one slot may take within a single pass.
+    ///
+    /// A pass visits every slot once, so the pass rate is set by the slowest slot:
+    /// a step that blocks for 10 ms holds it near 100 passes/s, and a slot that
+    /// produces one chunk per tick is then capped at ~100 chunks/s however fast
+    /// its own source runs. Serving a slot ahead into its own ring removes that
+    /// coupling — the ring exists precisely to absorb a neighbour's slow step.
+    ///
+    /// Two bounds end a visit, and both are needed. This count stops a slot whose
+    /// consumer drains as fast as it produces: it never reports `Backpressured`,
+    /// so an unbounded burst would let it hold the worker forever. The elapsed
+    /// bound — [`SLOW_TICK_THRESHOLD`](Scheduler::SLOW_TICK_THRESHOLD), the same
+    /// span that already marks a tick as starving its neighbours — stops a slot
+    /// whose own ticks are expensive, so bursting a blocking slot cannot just move
+    /// the stall from the pass into the burst and leave the rate unchanged.
+    const SLOT_BURST: u32 = 32;
+
+    /// Spawn a new scheduler thread and return a handle.
+    ///
+    /// `cancel` is the externally-owned [`CancelToken`] that drives the run
+    /// loop's shutdown. The playback-owned worker derives it from its configured
+    /// parent, so shutdown participates in the unified cancel hierarchy and the
+    /// lock-free `is_cancelled()` read on the produce core observes a master
+    /// cancel.
+    #[must_use]
+    pub(crate) fn start(name: String, observer: O, cancel: CancelToken) -> SchedulerHandle<N> {
+        let (cmd_tx, cmd_rx) = mpsc::channel();
+        let wake = Arc::new(SchedulerWake::default());
+
+        let wake_clone = Arc::clone(&wake);
+        let cancel_clone = cancel.clone();
+
+        spawn_named(name, move || {
+            run_loop(&cmd_rx, &wake_clone, &cancel_clone, observer);
+        });
+
+        SchedulerHandle::new(wake, cancel, cmd_tx)
+    }
+}
+
+/// Unchecked scheduler shell.
+///
+/// Owns all intrinsically-blocking bookkeeping — cancel/command drain, slot
+/// reorder, the `slots` Vec lifecycle (grow on register, free
+/// on `retain`), deferred buffer recycle, and the idle park. Only the
+/// RT node ticks run through [`produce_tick_rt`], so the Vec `malloc`/`free`
+/// here never lands on the checked path.
+#[kithara::flash(true)]
+#[kithara::hang_watchdog(ctx = PassReport)]
+fn run_loop<N: Node, O: SchedulerObserver>(
+    cmd_rx: &mpsc::Receiver<SchedulerCmd<N>>,
+    wake: &SchedulerWake,
+    cancel: &CancelToken,
+    mut observer: O,
+) {
+    trace!("scheduler started");
+    let mut slots: Vec<Slot<N>> = Vec::new();
+    let mut needs_reorder = false;
+    let mut produced_streak: u32 = 0;
+
+    loop {
+        observer.on_event(SchedulerEvent::PassStart);
+
+        if cancel_and_drain(cancel, cmd_rx, &mut slots, &mut needs_reorder) {
+            return;
+        }
+
+        refresh_service_classes(&mut slots, &mut needs_reorder);
+
+        if needs_reorder {
+            reorder_slots(&mut slots);
+            needs_reorder = false;
+        }
+
+        recycle_all(&mut slots);
+
+        let report = produce_pass(&mut slots, &mut observer);
+        needs_reorder |= remove_terminal(&mut slots);
+
+        match report.outcome {
+            PassOutcome::Waiting => {
+                hang_tick!(report);
+            }
+            PassOutcome::Produced
+            | PassOutcome::UpstreamPending
+            | PassOutcome::Backpressured
+            | PassOutcome::Idle => {
+                hang_reset!(report);
+            }
+        }
+
+        report_outcome(&mut observer, report);
+        observer.on_event(SchedulerEvent::PassEnd);
+        park_after_outcome::<N, O>(wake, report.outcome, &mut produced_streak);
+    }
+}
+
+/// Reclaim deferred bookkeeping for every slot from the unchecked shell.
+///
+/// The scheduler calls this before the checked produce core and once more after
+/// the pass. The final recycle delivers work armed by the last tick before a
+/// terminal slot is removed or the worker parks.
+fn recycle_all<N: Node>(slots: &mut [Slot<N>]) {
+    for slot in slots {
+        slot.node.recycle();
+    }
+}
+
+fn remove_terminal<N: Node>(slots: &mut Vec<Slot<N>>) -> bool {
+    let before = slots.len();
+    slots.retain(|slot| !slot.is_terminal);
+    slots.len() < before
+}
+
+fn cancel_and_drain<N: Node>(
+    cancel: &CancelToken,
+    cmd_rx: &mpsc::Receiver<SchedulerCmd<N>>,
+    slots: &mut Vec<Slot<N>>,
+    needs_reorder: &mut bool,
+) -> bool {
+    if cancel.is_cancelled() {
+        trace!("scheduler cancelled");
+        cancel_all(slots);
+        return true;
+    }
+    drain_commands(cmd_rx, slots, needs_reorder)
+}
+
+fn report_outcome<O: SchedulerObserver>(observer: &mut O, report: PassReport) {
+    match report.outcome {
+        PassOutcome::Produced => observer.on_event(SchedulerEvent::Progress(report)),
+        PassOutcome::Waiting => observer.on_event(SchedulerEvent::Waiting(report)),
+        PassOutcome::UpstreamPending => observer.on_event(SchedulerEvent::UpstreamPending(report)),
+        PassOutcome::Backpressured => observer.on_event(SchedulerEvent::Backpressured(report)),
+        PassOutcome::Idle => observer.on_event(SchedulerEvent::Idle(report)),
+    }
+}
+
+fn park_after_outcome<N: Node, O: SchedulerObserver>(
+    wake: &SchedulerWake,
+    outcome: PassOutcome,
+    produced_streak: &mut u32,
+) {
+    match outcome {
+        PassOutcome::Produced => {
+            *produced_streak += 1;
+            if *produced_streak >= Scheduler::<N, O>::FAIRNESS_YIELD_EVERY {
+                *produced_streak = 0;
+                yield_now();
+            }
+        }
+        PassOutcome::Waiting | PassOutcome::UpstreamPending | PassOutcome::Backpressured => {
+            *produced_streak = 0;
+            wake.wait_timeout(Scheduler::<N, O>::WAITING_TIMEOUT);
+        }
+        PassOutcome::Idle => {
+            *produced_streak = 0;
+            wake.wait_timeout(Scheduler::<N, O>::IDLE_TIMEOUT);
+        }
+    }
+}
+
+fn reorder_slots<N: Node>(slots: &mut [Slot<N>]) {
+    for i in 1..slots.len() {
+        let mut position = i;
+        while position > 0 && slot_precedes(&slots[position], &slots[position - 1]) {
+            slots.swap(position - 1, position);
+            position -= 1;
+        }
+    }
+}
+
+fn slot_precedes<N>(left: &Slot<N>, right: &Slot<N>) -> bool {
+    left.service_class > right.service_class
+        || (left.service_class == right.service_class && left.id < right.id)
+}
+
+fn produce_pass<N: Node, O: SchedulerObserver>(
+    slots: &mut [Slot<N>],
+    observer: &mut O,
+) -> PassReport {
+    let mut report = PassReport::new(slots.len());
+    if slots.is_empty() {
+        return report;
+    }
+
+    let mut best = TickResult::Done;
+
+    for slot in slots.iter_mut() {
+        // Serve the slot ahead into its own ring instead of handing one chunk
+        // per pass, so a neighbour's blocking step cannot set this slot's rate.
+        // The visit ends as soon as it stops being free for the others: a slot
+        // whose own ticks are expensive gets exactly one, which is what keeps
+        // this from simply moving the stall from the pass to the burst.
+        let visit_start = Instant::now();
+        let mut last = TickResult::Progress;
+        let mut progressed = false;
+        for tick in 0..Scheduler::<N, O>::SLOT_BURST {
+            // The trash ring is sized for the chunks one visit puts in flight,
+            // and the consumer returns spent buffers as it drains them. A burst
+            // therefore has to reclaim between its own ticks, not once per pass,
+            // or the ring overflows and the free lands on the audio thread. This
+            // runs in the scheduler shell, outside `produce_tick_rt`, so the
+            // free still never reaches the forbid-blocking core.
+            if tick > 0 {
+                slot.node.recycle();
+            }
+            let start = Instant::now();
+            last = if let Ok(r) = catch_unwind(AssertUnwindSafe(|| {
+                if slot.rt_policy == RtPolicy::Heavy {
+                    produce_tick_heavy(&mut slot.node)
+                } else {
+                    produce_tick_rt(&mut slot.node)
+                }
+            })) {
+                r
+            } else {
+                warn!(slot_id = slot.id, "scheduler: node panicked");
+                slot.is_terminal = true;
+                slot.node.on_cancel();
+                TickResult::Done
+            };
+            let elapsed = start.elapsed();
+
+            if elapsed > Scheduler::<N, O>::SLOW_TICK_THRESHOLD {
+                observer.on_event(SchedulerEvent::SlowTick {
+                    elapsed,
+                    slot: slot.id,
+                });
+            }
+
+            if last != TickResult::Progress {
+                break;
+            }
+            progressed = true;
+            if visit_start.elapsed() >= Scheduler::<N, O>::SLOW_TICK_THRESHOLD {
+                break;
+            }
+        }
+
+        // Flush work armed by the visit's final checked tick before reporting
+        // its result. A terminal slot is removed below and gets no next pass;
+        // a live slot may park before its next pass. In both cases, deferring
+        // this recycle would strand signals the final tick already promised.
+        slot.node.recycle();
+
+        // A burst that produced and then hit its consumer's backpressure still
+        // made progress; only a terminal tick overrides that.
+        let result = match last {
+            TickResult::Done => TickResult::Done,
+            _ if progressed => TickResult::Progress,
+            other => other,
+        };
+
+        report.record(slot.id, slot.service_class, result);
+
+        if result == TickResult::Done {
+            slot.is_terminal = true;
+        }
+
+        best = match (best, result) {
+            (TickResult::Progress, _) | (_, TickResult::Progress) => TickResult::Progress,
+            (TickResult::Waiting, _) | (_, TickResult::Waiting) => TickResult::Waiting,
+            (TickResult::UpstreamPending, _) | (_, TickResult::UpstreamPending) => {
+                TickResult::UpstreamPending
+            }
+            (TickResult::Backpressured, _) | (_, TickResult::Backpressured) => {
+                TickResult::Backpressured
+            }
+            _ => TickResult::Done,
+        };
+    }
+
+    // Deliver work armed by the final tick in this pass from the unchecked
+    // shell. This is load-bearing for terminal ticks: run_loop removes those
+    // slots immediately after produce_pass returns, so there is no next-pass
+    // recycle in which to wake a blocked reader or flush terminal events.
+    recycle_all(slots);
+
+    report.outcome = match best {
+        TickResult::Progress => PassOutcome::Produced,
+        TickResult::Waiting => PassOutcome::Waiting,
+        TickResult::UpstreamPending => PassOutcome::UpstreamPending,
+        TickResult::Backpressured => PassOutcome::Backpressured,
+        TickResult::Done => PassOutcome::Idle,
+    };
+    report
+}
+
+#[kithara::rtsan_forbid_blocking]
+fn produce_tick_rt<N: Node>(node: &mut N) -> TickResult {
+    node.tick()
+}
+
+fn produce_tick_heavy<N: Node>(node: &mut N) -> TickResult {
+    node.tick()
+}
+
+/// Outcome of processing a single scheduler command.
+enum DrainStep {
+    /// Command applied; keep draining the queue.
+    Continue,
+    /// Queue is empty for now; bail out and resume the audio loop.
+    Empty,
+    /// Scheduler shutdown was requested (or all handles dropped); exit thread.
+    Shutdown,
+}
+
+fn drain_commands<N: Node>(
+    cmd_rx: &mpsc::Receiver<SchedulerCmd<N>>,
+    slots: &mut Vec<Slot<N>>,
+    needs_reorder: &mut bool,
+) -> bool {
+    loop {
+        match handle_drain_step(cmd_rx, slots, needs_reorder) {
+            DrainStep::Continue => {}
+            DrainStep::Empty => return false,
+            DrainStep::Shutdown => return true,
+        }
+    }
+}
+
+fn handle_drain_step<N: Node>(
+    cmd_rx: &mpsc::Receiver<SchedulerCmd<N>>,
+    slots: &mut Vec<Slot<N>>,
+    needs_reorder: &mut bool,
+) -> DrainStep {
+    match cmd_rx.try_recv() {
+        Ok(SchedulerCmd::Register(id, node)) => {
+            register_slot(slots, needs_reorder, id, node);
+            DrainStep::Continue
+        }
+        Ok(SchedulerCmd::Unregister(id)) => {
+            unregister_slot(slots, needs_reorder, id);
+            DrainStep::Continue
+        }
+        Ok(SchedulerCmd::Shutdown) => {
+            trace!("scheduler shutdown");
+            cancel_all(slots);
+            DrainStep::Shutdown
+        }
+        Err(TryRecvError::Disconnected) => {
+            trace!("scheduler: all handles dropped");
+            cancel_all(slots);
+            DrainStep::Shutdown
+        }
+        Err(_) => DrainStep::Empty,
+    }
+}
+
+fn register_slot<N: Node>(
+    slots: &mut Vec<Slot<N>>,
+    needs_reorder: &mut bool,
+    id: SlotId,
+    mut node: N,
+) {
+    debug!(slot_id = id, "scheduler: registering node");
+    // Shell-side, off the forbid-blocking produce core: let the node
+    // pre-allocate any lazy produce-core read-path thread-local (the
+    // `arc_swap` committed-read debt node) on this worker thread before its
+    // first checked `tick`.
+    node.warm_up();
+    let service_class = node.service_class();
+    let rt_policy = node.rt_policy();
+    slots.push(Slot {
+        id,
+        node,
+        service_class,
+        rt_policy,
+        is_terminal: false,
+    });
+    *needs_reorder = true;
+}
+
+fn unregister_slot<N: Node>(slots: &mut Vec<Slot<N>>, needs_reorder: &mut bool, id: SlotId) {
+    debug!(slot_id = id, "scheduler: unregistering node");
+    if let Some(slot) = slots.iter_mut().find(|s| s.id == id) {
+        slot.node.on_cancel();
+        slot.node.recycle();
+    }
+    let before = slots.len();
+    slots.retain(|s| s.id != id);
+    if slots.len() < before {
+        *needs_reorder = true;
+    }
+}
+
+/// Re-read each node's (atomic) service class and flag a reorder when one
+/// changed. The real-time consumer updates the shared atomic wait-free and
+/// wakes the worker; the scheduler picks the change up here on its next
+/// pass, so priority changes need no command-channel round-trip.
+fn refresh_service_classes<N: Node>(slots: &mut [Slot<N>], needs_reorder: &mut bool) {
+    for slot in slots.iter_mut() {
+        let current = slot.node.service_class();
+        if slot.service_class != current {
+            slot.service_class = current;
+            *needs_reorder = true;
+        }
+    }
+}
+
+fn cancel_all<N: Node>(slots: &mut [Slot<N>]) {
+    for slot in slots.iter_mut() {
+        slot.node.on_cancel();
+        slot.node.recycle();
+    }
+}
+
+/// Process CPU time in milliseconds (user + system).
+#[cfg(test)]
+pub(crate) fn cpu_time_ms() -> u64 {
+    let output = std::process::Command::new("ps")
+        .args(["-o", "cputime=", "-p", &std::process::id().to_string()])
+        .output()
+        .expect("ps failed");
+    let s = String::from_utf8_lossy(&output.stdout);
+    parse_cputime(s.trim())
+}
+
+/// Parse "H:MM:SS" or "M:SS" format from `ps -o cputime=` into milliseconds.
+#[cfg(test)]
+pub(crate) fn parse_cputime(s: &str) -> u64 {
+    const HMS_PARTS: usize = 3;
+    const MS_PARTS: usize = 2;
+    const SECS_PER_HOUR: u64 = 3600;
+    const SECS_PER_MIN: u64 = 60;
+    const MS_PER_SEC: u64 = 1000;
+    const SEC_IDX: usize = 2;
+
+    let parts: Vec<&str> = s.split(':').collect();
+    match parts.len() {
+        HMS_PARTS => {
+            let h: u64 = parts[0].trim().parse().unwrap_or(0);
+            let m: u64 = parts[1].trim().parse().unwrap_or(0);
+            let sec: u64 = parts[SEC_IDX].trim().parse().unwrap_or(0);
+            (h * SECS_PER_HOUR + m * SECS_PER_MIN + sec) * MS_PER_SEC
+        }
+        MS_PARTS => {
+            let m: u64 = parts[0].trim().parse().unwrap_or(0);
+            let sec: u64 = parts[1].trim().parse().unwrap_or(0);
+            (m * SECS_PER_MIN + sec) * MS_PER_SEC
+        }
+        _ => 0,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        cell::Cell,
+        mem,
+        sync::atomic::{AtomicBool, Ordering},
+    };
+
+    use kithara_platform::thread;
+    use kithara_test_utils::kithara;
+    use ringbuf::{
+        HeapCons, HeapProd, HeapRb,
+        traits::{Consumer, Producer, Split},
+    };
+
+    use super::{
+        super::{AtomicServiceClass, ServiceClass},
+        *,
+    };
+
+    struct TestObserver;
+
+    impl SchedulerObserver for TestObserver {
+        fn on_event(&mut self, _event: SchedulerEvent) {}
+    }
+
+    struct DummyNode {
+        panic_at: Option<usize>,
+        max_ticks: usize,
+        ticks: usize,
+    }
+
+    impl Node for DummyNode {
+        fn tick(&mut self) -> TickResult {
+            if let Some(p) = self.panic_at
+                && self.ticks == p
+            {
+                panic!("dummy panic");
+            }
+            if self.ticks >= self.max_ticks {
+                TickResult::Done
+            } else {
+                self.ticks += 1;
+                TickResult::Progress
+            }
+        }
+    }
+
+    struct ServiceClassNode {
+        service_class: ServiceClass,
+    }
+
+    impl Node for ServiceClassNode {
+        fn service_class(&self) -> ServiceClass {
+            self.service_class
+        }
+
+        fn tick(&mut self) -> TickResult {
+            TickResult::Done
+        }
+    }
+
+    /// Test node whose service class is backed by an `AtomicServiceClass`,
+    /// mirroring the production `DecoderNode` — the real-time consumer writes
+    /// the atomic wait-free and the scheduler reads it back each pass via
+    /// `service_class()`. Lets a test drive the live re-prioritisation path
+    /// (`refresh_service_classes` → `reorder_slots`) deterministically.
+    struct AtomicClassNode {
+        class: Arc<AtomicServiceClass>,
+    }
+
+    impl Node for AtomicClassNode {
+        fn service_class(&self) -> ServiceClass {
+            self.class.load()
+        }
+
+        fn tick(&mut self) -> TickResult {
+            TickResult::Done
+        }
+    }
+
+    struct FixedNode(TickResult);
+
+    impl Node for FixedNode {
+        fn tick(&mut self) -> TickResult {
+            self.0
+        }
+    }
+
+    struct LifecycleNode {
+        events: mpsc::Sender<&'static str>,
+    }
+
+    impl Node for LifecycleNode {
+        fn on_cancel(&mut self) {
+            self.events.send("cancel").ok();
+        }
+
+        fn recycle(&mut self) {
+            self.events.send("recycle").ok();
+        }
+
+        fn tick(&mut self) -> TickResult {
+            TickResult::Done
+        }
+    }
+
+    struct DeferredWaitingNode {
+        events: mpsc::Sender<&'static str>,
+        pending: bool,
+    }
+
+    impl Node for DeferredWaitingNode {
+        fn recycle(&mut self) {
+            if mem::take(&mut self.pending) {
+                self.events.send("recycle").ok();
+            }
+        }
+
+        fn tick(&mut self) -> TickResult {
+            self.pending = true;
+            TickResult::Waiting
+        }
+    }
+
+    struct PolicyNode {
+        policy_calls: Cell<usize>,
+        ticks: usize,
+    }
+
+    impl Node for PolicyNode {
+        fn rt_policy(&self) -> RtPolicy {
+            self.policy_calls.set(self.policy_calls.get() + 1);
+            RtPolicy::Heavy
+        }
+
+        fn tick(&mut self) -> TickResult {
+            self.ticks += 1;
+            TickResult::Progress
+        }
+    }
+
+    fn fixed_slot(id: SlotId, result: TickResult) -> Slot<FixedNode> {
+        Slot {
+            id,
+            node: FixedNode(result),
+            service_class: ServiceClass::Audible,
+            rt_policy: RtPolicy::Rt,
+            is_terminal: false,
+        }
+    }
+
+    #[kithara::test]
+    fn scheduler_panic_isolation() {
+        let handle = Scheduler::<DummyNode, TestObserver>::start(
+            "test-worker".into(),
+            TestObserver,
+            CancelToken::never(),
+        );
+
+        assert!(handle.register(
+            1,
+            DummyNode {
+                ticks: 0,
+                max_ticks: 10,
+                panic_at: Some(2),
+            },
+        ));
+
+        assert!(handle.register(
+            2,
+            DummyNode {
+                ticks: 0,
+                max_ticks: 10,
+                panic_at: None,
+            },
+        ));
+
+        thread::sleep(Duration::from_millis(100)); // M5: real pacing, replace with teardown signal
+        handle.shutdown();
+    }
+
+    struct BackpressureNode;
+
+    impl Node for BackpressureNode {
+        fn tick(&mut self) -> TickResult {
+            TickResult::Waiting
+        }
+    }
+
+    #[kithara::test]
+    fn scheduler_does_not_busy_spin_on_backpressure() {
+        let handle = Scheduler::<BackpressureNode, TestObserver>::start(
+            "test-worker".into(),
+            TestObserver,
+            CancelToken::never(),
+        );
+
+        assert!(handle.register(1, BackpressureNode));
+
+        thread::sleep(Duration::from_millis(50)); // M5: real pacing, replace with teardown signal
+
+        let cpu_before = cpu_time_ms();
+        thread::sleep(Duration::from_millis(500)); // real wall window for CPU sampling
+        let cpu_after = cpu_time_ms();
+
+        let cpu_used_ms = cpu_after.saturating_sub(cpu_before);
+
+        handle.shutdown();
+
+        assert!(
+            cpu_used_ms < 100,
+            "Worker should NOT busy-spin on backpressure: \
+             used {cpu_used_ms}ms CPU in 500ms wall time (expected <100ms)"
+        );
+    }
+
+    #[kithara::test]
+    fn scheduler_orders_service_classes_descending() {
+        let mut slots = vec![
+            Slot {
+                id: 1,
+                node: ServiceClassNode {
+                    service_class: ServiceClass::Idle,
+                },
+                service_class: ServiceClass::Idle,
+                rt_policy: RtPolicy::Rt,
+                is_terminal: false,
+            },
+            Slot {
+                id: 2,
+                node: ServiceClassNode {
+                    service_class: ServiceClass::Audible,
+                },
+                service_class: ServiceClass::Audible,
+                rt_policy: RtPolicy::Rt,
+                is_terminal: false,
+            },
+            Slot {
+                id: 3,
+                node: ServiceClassNode {
+                    service_class: ServiceClass::Warm,
+                },
+                service_class: ServiceClass::Warm,
+                rt_policy: RtPolicy::Rt,
+                is_terminal: false,
+            },
+        ];
+
+        reorder_slots(&mut slots);
+
+        assert_eq!(
+            slots.iter().map(|slot| slot.id).collect::<Vec<_>>(),
+            vec![2, 3, 1]
+        );
+    }
+
+    #[kithara::test]
+    fn refresh_reorders_live_when_atomic_service_class_changes() {
+        // End-to-end of the live re-prioritisation path the worker runs each
+        // pass: the real-time consumer writes a track's `AtomicServiceClass`
+        // wait-free; the scheduler's `refresh_service_classes` must observe the
+        // new value and flag a reorder, after which `reorder_slots`
+        // places the Audible track ahead of the Idle one. Deterministic by
+        // construction — no live worker thread, no rings, no concurrency, no
+        // timing: just the exact functions a pass calls, over a fixed in-memory
+        // slot set with distinct classes (a total order with a unique result).
+        // The strict in-pass tick ordering itself is locked separately by
+        // `scheduler_orders_service_classes_descending`.
+        let class_a = Arc::new(AtomicServiceClass::new(ServiceClass::Idle));
+        let class_b = Arc::new(AtomicServiceClass::new(ServiceClass::Audible));
+
+        // Slots start mislabeled (both `Idle`) so the assertion proves refresh
+        // actually re-reads the node and detects the change, not that the slot
+        // happened to be seeded correctly.
+        let mut slots = vec![
+            Slot {
+                id: 0,
+                node: AtomicClassNode {
+                    class: Arc::clone(&class_a),
+                },
+                service_class: ServiceClass::Idle,
+                rt_policy: RtPolicy::Rt,
+                is_terminal: false,
+            },
+            Slot {
+                id: 1,
+                node: AtomicClassNode {
+                    class: Arc::clone(&class_b),
+                },
+                service_class: ServiceClass::Idle,
+                rt_policy: RtPolicy::Rt,
+                is_terminal: false,
+            },
+        ];
+
+        let mut needs_reorder = false;
+        refresh_service_classes(&mut slots, &mut needs_reorder);
+        assert!(
+            needs_reorder,
+            "refresh must flag a reorder when a node's live class differs from its slot"
+        );
+        assert_eq!(slots[1].service_class, ServiceClass::Audible);
+
+        reorder_slots(&mut slots);
+        assert_eq!(
+            slots.iter().map(|slot| slot.id).collect::<Vec<_>>(),
+            vec![1, 0],
+            "Audible (slot 1) must be ordered before Idle (slot 0)"
+        );
+
+        // Dynamic swap: the consumer promotes A to Audible and demotes B to
+        // Idle. The next pass's refresh must pick this up and the reorder must
+        // flip — the property the flaky live-worker count test could never pin.
+        class_a.store(ServiceClass::Audible);
+        class_b.store(ServiceClass::Idle);
+        needs_reorder = false;
+        refresh_service_classes(&mut slots, &mut needs_reorder);
+        assert!(
+            needs_reorder,
+            "refresh must flag a reorder after the priority swap"
+        );
+        reorder_slots(&mut slots);
+        assert_eq!(
+            slots.iter().map(|slot| slot.id).collect::<Vec<_>>(),
+            vec![0, 1],
+            "after the swap, A (now Audible) must lead B (now Idle)"
+        );
+    }
+
+    #[kithara::test]
+    fn produce_pass_keeps_live_upstream_demand_out_of_hang_wait() {
+        let mut observer = TestObserver;
+        let mut pending = vec![fixed_slot(1, TickResult::UpstreamPending)];
+        assert_eq!(
+            produce_pass(&mut pending, &mut observer).outcome,
+            PassOutcome::UpstreamPending
+        );
+
+        let mut mixed = vec![
+            fixed_slot(1, TickResult::UpstreamPending),
+            fixed_slot(2, TickResult::Waiting),
+        ];
+        assert_eq!(
+            produce_pass(&mut mixed, &mut observer).outcome,
+            PassOutcome::Waiting,
+            "a real dead upstream wait must still tick the hang detector"
+        );
+    }
+
+    #[kithara::test]
+    fn terminal_visit_recycles_before_and_after_tick() {
+        let (events, received) = mpsc::channel();
+        let mut slots = vec![Slot {
+            id: 1,
+            node: LifecycleNode { events },
+            service_class: ServiceClass::Audible,
+            rt_policy: RtPolicy::Rt,
+            is_terminal: false,
+        }];
+        let mut observer = TestObserver;
+
+        let _ = produce_pass(&mut slots, &mut observer);
+        assert!(slots[0].is_terminal);
+        assert_eq!(received.try_recv(), Ok("recycle"));
+        assert_eq!(received.try_recv(), Ok("recycle"));
+
+        assert!(remove_terminal(&mut slots));
+
+        assert!(slots.is_empty());
+        assert!(received.try_recv().is_err());
+    }
+
+    #[kithara::test]
+    fn live_visit_flushes_deferred_work_before_reporting_wait() {
+        let (events, received) = mpsc::channel();
+        let mut slots = vec![Slot {
+            id: 1,
+            node: DeferredWaitingNode {
+                events,
+                pending: false,
+            },
+            service_class: ServiceClass::Audible,
+            rt_policy: RtPolicy::Rt,
+            is_terminal: false,
+        }];
+        let mut observer = TestObserver;
+
+        let report = produce_pass(&mut slots, &mut observer);
+
+        assert_eq!(report.outcome, PassOutcome::Waiting);
+        assert_eq!(received.try_recv(), Ok("recycle"));
+        assert!(received.try_recv().is_err());
+    }
+
+    #[kithara::test]
+    fn unregister_recycles_cancelled_node_before_removal() {
+        let (events, received) = mpsc::channel();
+        let mut slots = vec![Slot {
+            id: 1,
+            node: LifecycleNode { events },
+            service_class: ServiceClass::Audible,
+            rt_policy: RtPolicy::Rt,
+            is_terminal: false,
+        }];
+        let mut needs_reorder = false;
+
+        unregister_slot(&mut slots, &mut needs_reorder, 1);
+
+        assert!(slots.is_empty());
+        assert!(needs_reorder);
+        assert_eq!(received.try_recv(), Ok("cancel"));
+        assert_eq!(received.try_recv(), Ok("recycle"));
+    }
+
+    #[kithara::test]
+    fn shutdown_recycles_cancelled_nodes_before_drop() {
+        let (events, received) = mpsc::channel();
+        let mut slots = vec![Slot {
+            id: 1,
+            node: LifecycleNode { events },
+            service_class: ServiceClass::Audible,
+            rt_policy: RtPolicy::Rt,
+            is_terminal: false,
+        }];
+
+        cancel_all(&mut slots);
+
+        assert_eq!(received.try_recv(), Ok("cancel"));
+        assert_eq!(received.try_recv(), Ok("recycle"));
+    }
+
+    #[kithara::test]
+    fn registration_caches_rt_policy() {
+        let mut slots = Vec::new();
+        let mut needs_reorder = false;
+        register_slot(
+            &mut slots,
+            &mut needs_reorder,
+            1,
+            PolicyNode {
+                policy_calls: Cell::new(0),
+                ticks: 0,
+            },
+        );
+
+        assert_eq!(slots[0].rt_policy, RtPolicy::Heavy);
+        assert_eq!(slots[0].node.policy_calls.get(), 1);
+
+        let mut observer = TestObserver;
+        let _ = produce_pass(&mut slots, &mut observer);
+        let _ = produce_pass(&mut slots, &mut observer);
+
+        // The cached policy is read once at registration and never again, no
+        // matter how many ticks a visit runs — a pass serves a slot as a burst,
+        // so the tick count is not one per pass.
+        assert_eq!(slots[0].node.policy_calls.get(), 1);
+        assert!(slots[0].node.ticks >= 2);
+    }
+
+    #[kithara::test]
+    fn reorder_slots_restores_registration_order_within_a_service_class() {
+        let mut slots: Vec<Slot<ServiceClassNode>> = (0..8)
+            .map(|id| Slot {
+                id,
+                node: ServiceClassNode {
+                    service_class: ServiceClass::Warm,
+                },
+                service_class: ServiceClass::Warm,
+                rt_policy: RtPolicy::Rt,
+                is_terminal: false,
+            })
+            .collect();
+
+        slots.swap(2, 6);
+        slots.swap(0, 7);
+
+        for _ in 0..100 {
+            reorder_slots(&mut slots);
+        }
+
+        assert_eq!(
+            slots.iter().map(|slot| slot.id).collect::<Vec<_>>(),
+            (0..8).collect::<Vec<_>>(),
+            "equal service classes restore registration order"
+        );
+    }
+
+    /// A node that drains a spent-buffer inlet in `recycle` and pushes one
+    /// item per `tick` into a bounded PCM ring, recording the order of
+    /// recycle/produce calls and the high-water mark of un-recycled items
+    /// still queued in the trash inlet.
+    struct RecyclingNode {
+        trash: HeapCons<u32>,
+        pcm: HeapProd<usize>,
+        last_call_recycle: bool,
+        recycle_before_produce: bool,
+        max_produce: usize,
+        produced: usize,
+        recycled: usize,
+        trash_high_water: usize,
+    }
+
+    impl Node for RecyclingNode {
+        fn recycle(&mut self) {
+            let mut pending = 0usize;
+            while self.trash.try_pop().is_some() {
+                self.recycled += 1;
+                pending += 1;
+            }
+            self.trash_high_water = self.trash_high_water.max(pending);
+            self.last_call_recycle = true;
+        }
+
+        fn tick(&mut self) -> TickResult {
+            if self.last_call_recycle {
+                self.recycle_before_produce = true;
+            }
+            self.last_call_recycle = false;
+
+            if self.produced >= self.max_produce {
+                return TickResult::Done;
+            }
+            if self.pcm.try_push(self.produced).is_err() {
+                return TickResult::Backpressured;
+            }
+            self.produced += 1;
+            TickResult::Progress
+        }
+    }
+
+    #[kithara::test]
+    fn produce_pass_recycles_before_producing_and_never_backlogs_trash() {
+        const CAP: usize = 4;
+        let (mut trash_tx, trash_rx) = HeapRb::<u32>::new(CAP + 2).split();
+        let (pcm_tx, mut pcm_rx) = HeapRb::<usize>::new(CAP).split();
+
+        let node = RecyclingNode {
+            trash: trash_rx,
+            pcm: pcm_tx,
+            produced: 0,
+            max_produce: 64,
+            recycled: 0,
+            trash_high_water: 0,
+            last_call_recycle: false,
+            recycle_before_produce: false,
+        };
+
+        let mut slots = vec![Slot {
+            id: 1,
+            node,
+            service_class: ServiceClass::Audible,
+            rt_policy: RtPolicy::Rt,
+            is_terminal: false,
+        }];
+        let mut observer = TestObserver;
+
+        let mut total_spent = 0usize;
+        for _ in 0..32 {
+            for _ in 0..CAP {
+                if trash_tx.try_push(0).is_ok() {
+                    total_spent += 1;
+                }
+            }
+            recycle_all(&mut slots);
+            let _report = produce_pass(&mut slots, &mut observer);
+            while pcm_rx.try_pop().is_some() {}
+        }
+
+        // Simulate a seek-drain: the audio thread returns a whole ring's
+        // worth of spent buffers at once, with no produce-side consumer
+        // draining in between. The trash headroom (cap+2) must absorb the
+        // burst without dropping a buffer.
+        let mut burst_spent = 0usize;
+        while trash_tx.try_push(0).is_ok() {
+            burst_spent += 1;
+        }
+        total_spent += burst_spent;
+        assert!(
+            burst_spent >= CAP + 2,
+            "a full seek-drain burst must fit the trash headroom (cap+2): got {burst_spent}"
+        );
+
+        recycle_all(&mut slots);
+
+        let node = &slots[0].node;
+        assert!(
+            node.recycle_before_produce,
+            "recycle_all must run before produce_pass within a pass"
+        );
+        assert_eq!(
+            node.recycled, total_spent,
+            "every spent buffer must be recycled, none leaked across passes or the seek burst"
+        );
+        assert!(
+            node.trash_high_water >= CAP + 2,
+            "the seek-drain burst (cap+2) is absorbed and recycled: high water {}",
+            node.trash_high_water
+        );
+    }
+
+    struct TerminalDeferredNode {
+        flushed: Arc<AtomicBool>,
+        pending: bool,
+    }
+
+    impl Node for TerminalDeferredNode {
+        fn recycle(&mut self) {
+            if mem::take(&mut self.pending) {
+                self.flushed.store(true, Ordering::Release);
+            }
+        }
+
+        fn tick(&mut self) -> TickResult {
+            self.pending = true;
+            TickResult::Done
+        }
+    }
+
+    #[kithara::test]
+    fn terminal_tick_flushes_deferred_work_before_slot_removal() {
+        let flushed = Arc::new(AtomicBool::new(false));
+        let mut slots = vec![Slot {
+            id: 1,
+            node: TerminalDeferredNode {
+                flushed: Arc::clone(&flushed),
+                pending: false,
+            },
+            service_class: ServiceClass::Audible,
+            rt_policy: RtPolicy::Rt,
+            is_terminal: false,
+        }];
+        let mut observer = TestObserver;
+
+        let report = produce_pass(&mut slots, &mut observer);
+
+        assert_eq!(report.outcome, PassOutcome::Idle);
+        assert!(slots[0].is_terminal);
+        assert!(flushed.load(Ordering::Acquire));
+    }
+
+    #[kithara::test]
+    fn streak_yield_fires_only_every_n_produced_passes() {
+        let wake = SchedulerWake::default();
+        let mut streak = 0u32;
+
+        for _ in 0..Scheduler::<DummyNode, TestObserver>::FAIRNESS_YIELD_EVERY - 1 {
+            park_after_outcome::<DummyNode, TestObserver>(
+                &wake,
+                PassOutcome::Produced,
+                &mut streak,
+            );
+        }
+        assert_eq!(
+            streak,
+            Scheduler::<DummyNode, TestObserver>::FAIRNESS_YIELD_EVERY - 1,
+            "streak accumulates"
+        );
+
+        park_after_outcome::<DummyNode, TestObserver>(&wake, PassOutcome::Produced, &mut streak);
+        assert_eq!(streak, 0, "streak resets to zero after the Nth yield");
+    }
+
+    #[kithara::test]
+    fn non_produced_outcome_resets_streak_and_parks() {
+        let wake = SchedulerWake::default();
+        let mut streak = 5u32;
+
+        wake.wake();
+        park_after_outcome::<DummyNode, TestObserver>(&wake, PassOutcome::Waiting, &mut streak);
+        assert_eq!(streak, 0, "Waiting resets the produced streak");
+
+        streak = 9;
+        wake.wake();
+        park_after_outcome::<DummyNode, TestObserver>(
+            &wake,
+            PassOutcome::Backpressured,
+            &mut streak,
+        );
+        assert_eq!(streak, 0, "Backpressured resets the produced streak");
+
+        streak = 3;
+        wake.wake();
+        park_after_outcome::<DummyNode, TestObserver>(&wake, PassOutcome::Idle, &mut streak);
+        assert_eq!(streak, 0, "Idle resets the produced streak");
+    }
+}

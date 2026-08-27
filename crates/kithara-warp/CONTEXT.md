@@ -4,8 +4,10 @@
 
 This crate owns the pure protocol used to align one beat map with another and
 to compose maps through nested synchronization groups. It owns immutable
-snapshots, coordinates, topology operations, alignment plans, cursors, and
-typed results.
+snapshots, coordinates, `WarpMap`, `SyncGroup`, topology operations, alignment
+plans, cursors, and typed results. It also owns the resident identity `Warp<S>`
+decorator, `WarpConfig`, and synchronous `WarpRenderer`, which applies temporal
+plans through the backend-neutral `kithara-stretch::ElasticEngine` contract.
 
 Host-axis values describe an ephemeral musical clock; they do not make this
 crate the owner of the live Host, playback session, audio graph, or worker.
@@ -13,19 +15,29 @@ crate the owner of the live Host, playback session, audio graph, or worker.
 ## Boundaries
 
 - `kithara-beat` owns beat-analysis algorithms and analyzed beat output data.
-- `kithara-audio` owns decoded PCM sources, playback workers, and the resident render chain.
-- `kithara-stretch` owns temporal DSP execution.
-- `kithara-play` currently owns Players, session state, and the audio graph.
+- `kithara-audio` owns decoded PCM source lifecycle, decoder-side sample-rate
+  conversion, readiness, and the prepared producer seam.
+- `kithara-stretch` owns backend DSP engines and their exact-span contract.
+- `kithara-play` owns `PlayWorker`, `DecoderNode`, final output admission,
+  post-Warp playback effects, engine-load measurement, Players, session state,
+  and the audio graph.
 - `kithara-assets` is the only production persistence path.
 
 The crate must not depend on audio, play, host, assets, or analyzer runtime
-types. Runtime owners consume immutable plans produced through these contracts.
+types. `Warp<S>` is generic over its source, and `WarpRenderer` is a synchronous
+stage; neither makes this crate the owner of source lifecycle, playback
+scheduling, or worker threads.
+
+R7 keeps `Warp<S>` in identity mode. The production path shares live stretch
+controls through it, but does not yet evaluate `WarpMap`, advance a runtime map
+cursor, apply non-identity alignment, or turn render/presentation progress into
+a `SyncGroup::acknowledge` call. The map and acknowledgement APIs remain pure
+contracts for the later actuator integration.
 
 ## Configuration
 
-The current crate contains only pure contracts, so it must not expose an empty
-or unused runtime config. The first concrete Warp runtime consumer introduces a
-`WarpConfig` facade in the same change. That config is built with `bon`, uses
-`fieldwork` for read access, and contains only values consumed by that runtime.
-Decoded-source ownership, PCM format, shared pools, cancellation, and worker
-resources remain in their canonical configs and are not duplicated here.
+`WarpConfig` is built with `bon`, uses `fieldwork` for read access, and carries
+the shared `StretchControls` consumed by the resident identity `Warp<S>` and its
+renderer. The renderer receives the caller's configured `PcmPool`; it never
+creates a pool. Source ownership, cancellation, and worker resources remain in
+their canonical configs and are not duplicated here.

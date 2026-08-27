@@ -1,8 +1,7 @@
 use kithara::{
     abr::AbrHandle,
-    audio::effects::eq::GainDb,
     events::{AbrMode, BpmInfo, DjEvent, Event, MediaTime, PlayerEvent, SlotId, VariantInfo},
-    play::StretchControls,
+    play::{StretchControls, effects::eq::GainDb},
     prelude::EngineLoadSnapshot,
     stream::AudioCodec,
 };

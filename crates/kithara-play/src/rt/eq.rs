@@ -11,8 +11,9 @@ use firewheel::{
         ProcBuffers, ProcExtra, ProcInfo, ProcStreamCtx, ProcessStatus,
     },
 };
-use kithara_audio::{EqBandConfig, IsolatorEq, effects::eq::GainDb};
 use kithara_test_utils::kithara;
+
+use crate::effects::eq::{EqBandConfig, GainDb, IsolatorEq};
 
 #[derive(Diff, Patch, Debug, Clone, Copy, PartialEq)]
 pub(crate) struct MasterEqBand {

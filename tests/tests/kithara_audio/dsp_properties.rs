@@ -4,12 +4,12 @@ use std::{
 };
 
 use kithara::{
-    audio::{
-        AudioEffect, EqEffect, PeakLimiter,
-        effects::eq::{GainDb, generate_log_spaced_bands},
-    },
     bufpool::PcmPool,
     decode::{PcmChunk, PcmMeta, PcmSpec},
+    play::effects::{
+        AudioEffect, PeakLimiter,
+        eq::{EqEffect, GainDb, generate_log_spaced_bands},
+    },
     resampler::{
         Resampler, ResamplerConfig, ResamplerMode, ResamplerOptions, ResamplerQuality,
         ResamplerSettings, create_resampler, rubato::RubatoBackend,

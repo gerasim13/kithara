@@ -13,9 +13,8 @@ use kithara_test_utils::kithara;
 
 use super::rebuild::{
     Consts, RouteFixture, TestDecoder, media_info, produced_data, route_signal_source,
-    route_signal_source_with_effects, route_signal_source_with_finite_incoming,
-    route_signal_source_with_gapless, route_signal_source_with_gapless_eof,
-    route_signal_source_with_gaps,
+    route_signal_source_with_finite_incoming, route_signal_source_with_gapless,
+    route_signal_source_with_gapless_eof, route_signal_source_with_gaps,
 };
 use crate::{
     pipeline::{
@@ -23,40 +22,8 @@ use crate::{
         rebuild::{DecoderBuildComplete, DecoderBuildPurpose, state::BuildId},
         track::{AtEof, CurrentFsm, Failed, Track, TrackFailure, TrackStep},
     },
-    traits::{AudioEffect, PcmSource},
+    traits::{PcmSource, PcmSourceExt},
 };
-
-struct BufferThenHalveFrames {
-    buffered: bool,
-}
-
-impl AudioEffect for BufferThenHalveFrames {
-    fn flush(&mut self) -> Option<PcmChunk> {
-        None
-    }
-
-    fn process(&mut self, mut chunk: PcmChunk) -> Option<PcmChunk> {
-        if !self.buffered {
-            self.buffered = true;
-            return None;
-        }
-        let frames = chunk.meta.frames / 2;
-        let samples = usize::try_from(frames)
-            .ok()?
-            .checked_mul(usize::from(chunk.meta.spec.channels))?;
-        chunk.samples.truncate(samples);
-        chunk.meta.frames = frames;
-        chunk.meta.end_timestamp = duration_for_frames(
-            chunk.meta.spec.sample_rate.get(),
-            chunk.meta.frame_offset.saturating_add(u64::from(frames)),
-        );
-        Some(chunk)
-    }
-
-    fn reset(&mut self) {
-        self.buffered = false;
-    }
-}
 
 fn incoming_plan() -> VariantReaderPlan {
     let abr = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0))));
@@ -269,30 +236,38 @@ async fn exact_incoming_build_pending_keeps_outgoing_pcm_running() {
 }
 
 #[kithara::test(tokio)]
-async fn raw_decode_head_ignores_buffering_and_frame_changing_effect_output() {
-    let effect = BufferThenHalveFrames { buffered: false };
-    let mut fixture =
-        route_signal_source_with_effects(Consts::SAMPLE_RATE, vec![Box::new(effect)]).await;
+async fn raw_decode_head_is_independent_of_downstream_frame_shape() {
+    let mut fixture = route_signal_source(Consts::SAMPLE_RATE).await;
 
-    let TrackStep::Produced(fetch) = fixture.source.step_track() else {
-        panic!("the second raw chunk must pass the buffering effect");
+    let TrackStep::Produced(first) = fixture.source.step_track() else {
+        panic!("raw source must produce its first chunk");
     };
-    let output = produced_data(fetch);
+    let _ = produced_data(first);
+    let TrackStep::Produced(second) = fixture.source.step_track() else {
+        panic!("raw source must produce its second chunk");
+    };
+    let mut transformed = produced_data(second);
+    transformed.meta.frames /= 2;
+    let samples = usize::try_from(transformed.meta.frames)
+        .unwrap_or(usize::MAX)
+        .saturating_mul(usize::from(transformed.meta.spec.channels));
+    transformed.samples.truncate(samples);
+
     let epoch = fixture.source.seek_obs.epoch();
     let raw_head = fixture
         .source
         .resume
         .decode_head(epoch)
         .expect("raw decode must advance the sole resume cursor");
-    let effect_head = output
+    let transformed_end = transformed
         .meta
         .frame_offset
-        .saturating_add(u64::from(output.meta.frames));
+        .saturating_add(u64::from(transformed.meta.frames));
     let raw_frames =
         u64::try_from(Consts::ROUTE_CHUNK_FRAMES.saturating_mul(2)).unwrap_or(u64::MAX);
 
     assert_eq!(raw_head, (raw_frames, Consts::SAMPLE_RATE));
-    assert_ne!(raw_head.0, effect_head);
+    assert_ne!(raw_head.0, transformed_end);
     assert_eq!(
         fixture.source.decode.landing_for(OutgoingFrontier::Exact {
             frame: raw_head.0,

@@ -2,17 +2,11 @@ use std::num::{NonZeroU32, NonZeroUsize};
 
 use bon::Builder;
 use kithara_events::EventBus;
-use kithara_platform::{CancelToken, sync::Arc};
+use kithara_platform::CancelToken;
 use kithara_resampler::{NoResamplerBackend, ResamplerBackend};
 use kithara_stream::{MediaInfo, StreamType};
-use portable_atomic::AtomicF32;
 
-use crate::{
-    effects::timestretch::StretchControls,
-    pipeline::config::AudioDecoderConfig,
-    renderer::EngineLoad,
-    traits::{AudioEffect, PcmObserver},
-};
+use crate::{pipeline::config::AudioDecoderConfig, traits::PcmObserver};
 
 struct Consts;
 
@@ -64,9 +58,6 @@ pub struct AudioConfig<T: StreamType, B = NoResamplerBackend> {
     pub(crate) bus: Option<EventBus>,
     /// Master cancel token for the audio pipeline.
     pub(crate) cancel: Option<CancelToken>,
-    /// Live audio-engine cost meter (decode + effects). When set, the worker
-    /// publishes its per-chunk processing cost here.
-    pub(crate) engine_load: Option<Arc<EngineLoad>>,
     /// Optional format hint (file extension like "mp3", "wav")
     pub(crate) hint: Option<String>,
     /// Target sample rate of the audio host (for resampling).
@@ -74,24 +65,10 @@ pub struct AudioConfig<T: StreamType, B = NoResamplerBackend> {
     pub(crate) host_sample_rate: Option<NonZeroU32>,
     /// Media info hint for format detection
     pub(crate) media_info: Option<MediaInfo>,
-    /// Legacy shared playback-rate state for direct `Audio` callers. The
-    /// effect chain no longer consumes this value: speed lives in
-    /// [`StretchControls`] when a stretch backend is compiled in.
-    pub(crate) playback_rate: Option<Arc<AtomicF32>>,
-    /// Live playback-speed controls (plus key-lock + backend when a stretch
-    /// backend is compiled in). `Some` inserts a `TimeStretchProcessor` in the
-    /// source domain on native stretch builds. Without a compiled
-    /// backend, including wasm, no speed DSP is inserted and playback remains
-    /// at unity.
-    pub(crate) stretch: Option<Arc<StretchControls>>,
     /// Optional bounded, nonblocking observer of decoder-output PCM.
     /// [`kithara_decode::PcmChunk::meta`] describes its post-conversion format;
     /// it runs before playback effects and owns any asynchronous copy.
     pub(crate) observer: Option<Box<dyn PcmObserver>>,
-    /// Additional effects to append after decoder-domain processing.
-    #[builder(default)]
-    #[field(get)]
-    pub(crate) effects: Vec<Box<dyn AudioEffect>>,
     /// Make a producer-ring underrun block (engine-aware park) instead of
     /// surfacing an empty outcome. Offline (faster-than-real-time) consumers
     /// opt in so `read` / `next_chunk` wait for the decode worker instead of
@@ -132,12 +109,6 @@ where
         self.cancel.as_ref()
     }
 
-    /// Return the configured engine-load meter.
-    #[must_use]
-    pub const fn engine_load(&self) -> Option<&Arc<EngineLoad>> {
-        self.engine_load.as_ref()
-    }
-
     /// Return the optional format hint.
     #[must_use]
     pub fn hint(&self) -> Option<&str> {
@@ -148,17 +119,5 @@ where
     #[must_use]
     pub const fn media_info(&self) -> Option<&MediaInfo> {
         self.media_info.as_ref()
-    }
-
-    /// Return the legacy playback-rate state.
-    #[must_use]
-    pub const fn playback_rate(&self) -> Option<&Arc<AtomicF32>> {
-        self.playback_rate.as_ref()
-    }
-
-    /// Return the live stretch controls.
-    #[must_use]
-    pub const fn stretch(&self) -> Option<&Arc<StretchControls>> {
-        self.stretch.as_ref()
     }
 }

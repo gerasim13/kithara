@@ -317,9 +317,10 @@ mod tests {
             AssetLayout, AssetLayoutRegistry, AssetResource, AssetResourceState, AssetSource,
             AssetStore, StorageBackend,
         },
-        audio::{BeatGrid, GridSegment, Waveform},
+        audio::{BeatGrid, Waveform},
         file::File,
         prelude::ResourceConfig,
+        warp::GridSegment,
     };
     use kithara_platform::sync::Arc;
     use kithara_test_utils::kithara;

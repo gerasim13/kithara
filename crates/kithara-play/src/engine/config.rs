@@ -1,11 +1,13 @@
 use std::fmt;
 
 use bon::Builder;
-use kithara_audio::{EqBandConfig, generate_log_spaced_bands};
 use kithara_bufpool::PcmPool;
 use kithara_platform::{CancelToken, sync::Arc};
 
-use crate::session::SessionDispatcher;
+use crate::{
+    effects::eq::{EqBandConfig, generate_log_spaced_bands},
+    session::SessionDispatcher,
+};
 
 /// Configuration for the audio engine.
 #[derive(Clone, Builder)]

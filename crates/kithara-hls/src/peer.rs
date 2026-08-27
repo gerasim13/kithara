@@ -77,6 +77,12 @@ impl WorkerWake for PeerPollWake {
             peer.wake_poll();
         }
     }
+
+    fn defer(&self) {
+        if let Some(peer) = self.0.upgrade() {
+            peer.reader_advanced.arm();
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

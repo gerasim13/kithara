@@ -1,6 +1,5 @@
 mod wire {
     use firewheel::FirewheelCtx;
-    use kithara_audio::EqBandConfig;
     use kithara_bufpool::PcmPool;
     use kithara_events::EventBus;
     use kithara_platform::sync::mpsc;
@@ -9,6 +8,7 @@ mod wire {
     use crate::{
         api::{SessionBeat, SessionDuckingMode, SessionTransportSnapshot, SlotId, Tempo},
         bridge::{MixTapWriter, SlotControl},
+        effects::eq::EqBandConfig,
     };
 
     pub type PlayerId = u64;
@@ -200,13 +200,13 @@ mod wire {
 }
 
 mod handle {
-    use kithara_audio::{ConsumerWakeMode, EqBandConfig};
+    use kithara_audio::ConsumerWakeMode;
     use kithara_bufpool::PcmPool;
     use kithara_events::EventBus;
     use kithara_platform::sync::Arc;
 
     use super::wire::{AllocatedSlot, Cmd, PlayerId, PlayerLevel, Reply, SessionSampleRate};
-    use crate::{api::SlotId, error::PlayError};
+    use crate::{api::SlotId, effects::eq::EqBandConfig, error::PlayError};
 
     pub trait SessionDispatcher: Send + Sync + 'static {
         fn exec(&self, cmd: Cmd) -> Result<Reply, PlayError>;

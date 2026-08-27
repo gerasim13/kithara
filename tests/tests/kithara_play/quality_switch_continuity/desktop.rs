@@ -2,11 +2,8 @@
 
 use cochlea_features::{Audio as ProbeAudio, SegmentOpts, segment_timeline};
 use kithara::{
-    StretchKind,
-    audio::{DecoderResamplerSettings, StretchControls},
-    events::ResamplerKind,
-    platform::sync::Arc,
-    play::PlaybackResamplerBackend,
+    StretchKind, audio::DecoderResamplerSettings, events::ResamplerKind, platform::sync::Arc,
+    play::PlaybackResamplerBackend, warp::StretchControls,
 };
 use kithara_integration_tests::{
     TestServerHelper,

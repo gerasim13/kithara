@@ -81,7 +81,7 @@ impl<'a, 'b: 'a> Node<'a> for &'a ReadRoot<'b> {
 
 #[cfg(test)]
 mod tests {
-    use ::kithara::audio::effects::eq::GainDb;
+    use ::kithara::play::effects::eq::GainDb;
     use iced::Size;
     use kithara_test_utils::kithara;
     use kithara_ui::render::{ReadValue, Reads, Walk};

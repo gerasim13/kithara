@@ -4,10 +4,11 @@ use kithara_abr::AbrHandle;
 use kithara_decode::PcmChunk;
 use kithara_events::{DeferredBus, Event};
 use kithara_platform::{CancelToken, sync::Arc};
+use kithara_stream::WorkerWake;
 use kithara_test_utils::kithara;
 
 use super::{
-    ConsumerPhase, ConsumerWakeMode, EpochValidator, FailureSource, Fetch, Inlet, Outlet, PcmWake,
+    ConsumerPhase, ConsumerWakeMode, EpochValidator, FailureSource, Fetch, Inlet, Outlet,
     ThreadWake, WakeSignal, connect, cursor::ChunkCursor, event::ReaderOutputWake,
     park::receive_is_nonblocking,
 };
@@ -27,7 +28,7 @@ pub(super) enum RecvOutcome {
 pub(super) struct RecvCtx<'a> {
     pub(super) abr: Option<&'a AbrHandle>,
     pub(super) cancel: Option<&'a CancelToken>,
-    pub(super) worker: Option<&'a PcmWake>,
+    pub(super) worker: Option<&'a dyn WorkerWake>,
 }
 
 pub(super) struct RingConsumer {
@@ -97,7 +98,7 @@ impl RingConsumer {
         popped
     }
 
-    pub(super) fn wake_worker(&self, worker: Option<&PcmWake>) {
+    pub(super) fn wake_worker(&self, worker: Option<&dyn WorkerWake>) {
         wake_worker(worker, self.consumer_wake_mode);
     }
 
@@ -308,7 +309,7 @@ struct ConsumerHangCtx {
 
 fn try_pop_and_wake(
     pcm_rx: &mut Inlet<Fetch<PcmChunk>>,
-    worker: Option<&PcmWake>,
+    worker: Option<&dyn WorkerWake>,
     mode: ConsumerWakeMode,
 ) -> Option<Fetch<PcmChunk>> {
     let fetch = pcm_rx.try_pop()?;
@@ -316,7 +317,7 @@ fn try_pop_and_wake(
     Some(fetch)
 }
 
-fn wake_worker(worker: Option<&PcmWake>, mode: ConsumerWakeMode) {
+fn wake_worker(worker: Option<&dyn WorkerWake>, mode: ConsumerWakeMode) {
     let Some(worker) = worker else {
         return;
     };

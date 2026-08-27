@@ -31,7 +31,6 @@ pub(crate) enum CurrentFsm {
 }
 
 /// Result of a single track FSM step.
-#[non_exhaustive]
 pub enum TrackStep<C> {
     Produced(Fetch<C>),
     Blocked(WaitingReason),

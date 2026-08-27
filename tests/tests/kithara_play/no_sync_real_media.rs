@@ -11,7 +11,6 @@ mod runtime;
 use std::{num::NonZeroU32, path::PathBuf};
 
 use kithara::{
-    audio::{StretchControls, StretchKind},
     bufpool::{BytePool, PcmPool},
     events::EventBus,
     hls::AbrMode,
@@ -23,6 +22,7 @@ use kithara::{
         Cmd, PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, Reply, Resource,
         ResourceConfig, SeekOutcome, SelectTransition, SessionDispatcher, apply_mix,
     },
+    warp::{StretchControls, StretchKind},
 };
 use kithara_integration_tests::{
     TestServerHelper, audio_artifact::write_audio_artifact, cochlea::CochleaReport,

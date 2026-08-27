@@ -19,7 +19,7 @@ impl ConfigPrep<'_> {
             .cancel
             .or_else(|| self.player.core.engine.cancel_token())
             .map(|parent| parent.child());
-        let stretch = Some(Arc::clone(&self.player.core.timestretch));
+        let stretch = Arc::clone(&self.player.core.timestretch);
         let host_sample_rate = NonZeroU32::new(self.player.core.engine.master_sample_rate())
             .or_else(|| NonZeroU32::new(self.player.core.engine.configured_sample_rate()));
         let decoder = AudioDecoderConfig::builder()

@@ -176,16 +176,13 @@ mod node {
     use super::{
         super::{
             analyzer::{AnalyzerBuilder, TrackAnalysis},
-            worker::{AnalysisNode, Job},
+            worker::{AnalysisNode, AnalysisStep, Job},
         },
         FakeReader, SR, sine,
     };
+    use crate::traits::PcmReader;
     #[cfg(feature = "analysis-waveform")]
     use crate::waveform::{AnalysisParams, WaveformAnalyzer};
-    use crate::{
-        runtime::{Node, RtPolicy, ServiceClass, TickResult},
-        traits::PcmReader,
-    };
 
     #[cfg(feature = "analysis-waveform")]
     const BUCKETS: usize = 64;
@@ -197,13 +194,11 @@ mod node {
 
     #[cfg(feature = "analysis-waveform")]
     #[kithara::test]
-    fn idle_node_is_low_priority_heavy_and_cooperatively_pending() {
+    fn idle_node_is_cooperatively_pending() {
         let (_jobs, receiver) = mpsc::channel();
         let mut node = AnalysisNode::new(waveform_only(), receiver);
 
-        assert_eq!(node.rt_policy(), RtPolicy::Heavy);
-        assert_eq!(node.service_class(), ServiceClass::Idle);
-        assert_eq!(node.tick(), TickResult::UpstreamPending);
+        assert_eq!(node.tick(), AnalysisStep::UpstreamPending);
     }
 
     #[cfg(feature = "analysis-waveform")]
@@ -219,8 +214,8 @@ mod node {
         .expect("analysis node accepts the test job");
         let mut node = AnalysisNode::new(waveform_only(), receiver);
 
-        assert_eq!(node.tick(), TickResult::UpstreamPending);
-        assert_eq!(node.tick(), TickResult::Progress);
+        assert_eq!(node.tick(), AnalysisStep::UpstreamPending);
+        assert_eq!(node.tick(), AnalysisStep::Progress);
     }
 
     #[cfg(feature = "analysis-waveform")]
@@ -237,10 +232,10 @@ mod node {
         .expect("analysis node accepts the test job");
         let mut node = AnalysisNode::new(waveform_only(), receiver);
 
-        assert_eq!(node.tick(), TickResult::Progress, "decode one chunk");
-        assert_eq!(node.tick(), TickResult::Progress, "EOF arms finalize");
+        assert_eq!(node.tick(), AnalysisStep::Progress, "decode one chunk");
+        assert_eq!(node.tick(), AnalysisStep::Progress, "EOF arms finalize");
         cancel.cancel();
-        assert_eq!(node.tick(), TickResult::Progress, "cancel drops the task");
+        assert_eq!(node.tick(), AnalysisStep::Progress, "cancel drops the task");
         assert!(results.borrow().is_none());
         assert!(results.has_changed().is_err(), "task sender is dropped");
     }
@@ -264,7 +259,7 @@ mod node {
         let mut node = AnalysisNode::new(builder, receiver);
         let mut out = Vec::new();
         for _ in 0..128 {
-            let _ = Node::tick(&mut node);
+            let _ = node.tick();
             match results.has_changed() {
                 Ok(true) => {
                     if let Some(analysis) = results.borrow_and_update().clone() {

@@ -4,11 +4,13 @@ use bytes::Bytes;
 use dashmap::DashMap;
 use kithara::{
     abr::AbrMode,
-    audio::generate_log_spaced_bands,
     events::ScopeLabel,
     hls::{KeyOptions, KeyProcessorRegistry},
     net::{HttpClient, NetOptions},
-    play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig},
+    play::{
+        PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig,
+        effects::eq::generate_log_spaced_bands,
+    },
     stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_assets::BytePool;

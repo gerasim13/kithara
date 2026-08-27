@@ -5,7 +5,7 @@ use kithara_events::EventBus;
 use kithara_platform::{maybe_send::MaybeSend, sync::Arc, time::Duration};
 
 use super::{ChunkOutcome, ReadOutcome, SeekOutcome};
-use crate::{ServiceClass, renderer::PreloadGate};
+use crate::producer::PreloadGate;
 
 mod kithara {
     pub(crate) use kithara_test_macros::mock;
@@ -193,19 +193,6 @@ pub trait PcmControl {
     ///
     /// Used for dynamic updates when the host sample rate changes at runtime.
     fn set_host_sample_rate(&self, _sample_rate: NonZeroU32) {}
-
-    /// Set the playback rate for timeline scaling.
-    ///
-    /// Rate > 1.0 speeds up playback (position advances faster).
-    /// Rate < 1.0 slows down playback (position advances slower).
-    /// The actual pitch-shifting is done by the resampler.
-    fn set_playback_rate(&self, _rate: f32) {}
-
-    /// Update the scheduling priority hint for the shared worker.
-    ///
-    /// Maps track playback state to worker priority: `Audible` tracks
-    /// are decoded first, then `Warm`, then `Idle`.
-    fn set_service_class(&self, _class: ServiceClass) {}
 }
 
 /// Primary PCM interface for reading and controlling decoded audio.

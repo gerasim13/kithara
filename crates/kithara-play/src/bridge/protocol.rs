@@ -26,7 +26,7 @@ pub enum PlayerCmd {
     SetFadeDuration(f32),
     /// Update the prefetch lead time.
     SetPrefetchDuration(f32),
-    /// Update the playback rate for all active tracks.
+    /// Update the requested playback-rate target for all active tracks.
     SetPlaybackRate(f32),
 }
 
@@ -148,6 +148,8 @@ pub enum PlayerNotification {
     FadingIn { src: Arc<str> },
     /// A track started fading out.
     FadingOut { src: Arc<str> },
+    /// The processor applied a new effective live playback rate.
+    RateChanged { rate: f32 },
 }
 
 impl PlayerNotification {
@@ -165,7 +167,10 @@ impl PlayerNotification {
             | Self::FadingIn { src }
             | Self::FadingOut { src }
             | Self::PlaybackStopped { src, .. } => Some(src),
-            Self::PlaybackStarted { .. } | Self::Requested | Self::HandoverRequested => None,
+            Self::PlaybackStarted { .. }
+            | Self::Requested
+            | Self::HandoverRequested
+            | Self::RateChanged { .. } => None,
         }
     }
 }
@@ -182,6 +187,7 @@ mod tests {
     #[case(PlayerNotification::Requested, "Requested")]
     #[case(PlayerNotification::HandoverRequested, "HandoverRequested")]
     #[case(PlayerNotification::FadingIn { src: Arc::from("a.mp3") }, "FadingIn")]
+    #[case(PlayerNotification::RateChanged { rate: 1.25 }, "RateChanged")]
     #[case(
         PlayerNotification::PlaybackStopped {
             src: Arc::from("ended.mp3"),

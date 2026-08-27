@@ -2,12 +2,11 @@ use std::num::NonZeroU32;
 
 use bon::bon;
 use firewheel::dsp::fade::FadeCurve;
-use kithara_audio::ServiceClass;
 use kithara_platform::sync::Arc;
 use num_traits::cast::{AsPrimitive, ToPrimitive};
 
 use super::{PlayerResource, fade::TrackFade, triggers::TrackTriggers};
-use crate::bridge::TrackState;
+use crate::{bridge::TrackState, worker::ServiceClass};
 
 /// Per-track state in the processor arena.
 ///
@@ -30,12 +29,6 @@ pub struct PlayerTrack {
     #[field(get)]
     pub(super) ended_at_eof: bool,
     pub(super) state_dirty: bool,
-    /// Media seconds consumed per output second, mirroring the speed the
-    /// time-stretch slot runs the source at. The mix output is on the output
-    /// clock; `duration`, the near-end triggers and every position consumer
-    /// are on the media clock, so served output frames only become a position
-    /// once scaled by this.
-    pub(super) playback_rate: f32,
     /// Lead time before EOF at which the prefetch trigger fires.
     ///
     /// Effective preload threshold is
@@ -48,8 +41,8 @@ pub struct PlayerTrack {
     /// Mirrors `PlayerResource::duration()` (post-gapless-trim, visible
     /// duration) captured under the resource lock.
     pub(super) observed_duration: f64,
-    /// Cumulative *media* frames this track has served into the mix output:
-    /// output frames scaled by [`Self::playback_rate`].
+    /// Cumulative *media* frames this track has served into the mix output,
+    /// scaled by the resource's current effective playback rate.
     ///
     /// Used as the source of truth for near-end trigger position so the
     /// trigger reflects what has been rendered to the audio output, not the
@@ -81,7 +74,6 @@ impl PlayerTrack {
         item_id: Option<Arc<str>>,
         #[builder(default)] fade_duration: f32,
         #[builder(default = FadeCurve::SquareRoot)] fade_curve: FadeCurve,
-        #[builder(default = 1.0)] playback_rate: f32,
         #[builder(default)] prefetch_duration: f32,
         /// Slot seek epoch already published when this track loaded — a track
         /// planted after earlier seeks starts level with them, not behind.
@@ -92,7 +84,6 @@ impl PlayerTrack {
         let track = Self {
             resource,
             item_id,
-            playback_rate,
             observed_duration,
             seek_epoch,
             state: TrackState::Preloading,
@@ -126,6 +117,12 @@ impl PlayerTrack {
             /// Source identifier.
             #[must_use]
             pub fn src(&self) -> &Arc<str>;
+            /// Effective media seconds consumed per output second.
+            #[must_use]
+            pub(crate) fn playback_rate(&self) -> f32;
+            /// Apply a playback-rate target to this track's resource.
+            #[call(apply_playback_rate)]
+            pub fn set_playback_rate(&mut self, rate: f32);
             /// Propagate the host sample rate to the owned resource.
             pub fn set_host_sample_rate(&self, sample_rate: NonZeroU32);
         }
@@ -184,13 +181,6 @@ impl PlayerTrack {
         self.served_media_frames = AsPrimitive::as_(frames);
         self.triggers.reset();
         self.ended_at_eof = false;
-    }
-
-    /// Set the media seconds consumed per output second for this track,
-    /// pushing the same speed into the resource's stretch slot.
-    pub fn set_playback_rate(&mut self, rate: f32) {
-        self.playback_rate = rate;
-        self.resource.set_playback_rate(rate);
     }
 
     /// Update the prefetch lead time used for the preload trigger.

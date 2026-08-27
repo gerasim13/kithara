@@ -1,7 +1,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use kithara_audio::StretchControls;
 use kithara_events::EventBus;
+use kithara_warp::StretchControls;
 use portable_atomic::AtomicF32;
 use tracing::{debug, warn};
 
@@ -19,12 +19,11 @@ pub(crate) struct PlayerParams {
     crossfade_duration: AtomicF32,
     default_rate: AtomicF32,
     prefetch_duration: AtomicF32,
-    rate: AtomicF32,
     volume: AtomicF32,
 }
 
 impl PlayerParams {
-    pub(crate) const MIN_PLAYBACK_RATE: f32 = 0.01;
+    pub(crate) const MIN_PLAYBACK_RATE: f32 = StretchControls::MIN_SPEED;
 
     fn apply_effective_volume(
         volume: f32,
@@ -61,10 +60,6 @@ impl PlayerParams {
         self.prefetch_duration.load(Ordering::Relaxed)
     }
 
-    pub(crate) fn rate(&self) -> f32 {
-        self.rate.load(Ordering::Relaxed)
-    }
-
     pub(crate) fn set_auto_advance_enabled(&self, enabled: bool) {
         self.auto_advance_enabled.store(enabled, Ordering::Relaxed);
     }
@@ -79,8 +74,10 @@ impl PlayerParams {
         let _ = send(PlayerCmd::SetFadeDuration(clamped));
     }
 
-    pub(crate) fn set_default_rate(&self, rate: f32) {
-        self.default_rate.store(rate, Ordering::Relaxed);
+    pub(crate) fn set_default_rate(&self, rate: f32) -> f32 {
+        let clamped = rate.max(Self::MIN_PLAYBACK_RATE);
+        self.default_rate.store(clamped, Ordering::Relaxed);
+        clamped
     }
 
     pub(crate) fn set_muted(
@@ -96,10 +93,6 @@ impl PlayerParams {
         bus.publish(PlayerEvent::MuteChanged { muted });
     }
 
-    pub(crate) fn set_paused_rate(&self) {
-        self.rate.store(0.0, Ordering::Relaxed);
-    }
-
     pub(crate) fn set_prefetch_duration(
         &self,
         seconds: f32,
@@ -108,25 +101,6 @@ impl PlayerParams {
         let clamped = seconds.max(0.0);
         self.prefetch_duration.store(clamped, Ordering::Relaxed);
         let _ = send(PlayerCmd::SetPrefetchDuration(clamped));
-    }
-
-    pub(crate) fn set_rate(
-        &self,
-        rate: f32,
-        timestretch: &StretchControls,
-        send: impl FnOnce(PlayerCmd) -> Result<(), PlayError>,
-        bus: &EventBus,
-    ) {
-        let clamped = self.set_rate_value(rate);
-        timestretch.set_speed(clamped);
-        let _ = send(PlayerCmd::SetPlaybackRate(clamped));
-        bus.publish(PlayerEvent::RateChanged { rate: clamped });
-    }
-
-    pub(crate) fn set_rate_value(&self, rate: f32) -> f32 {
-        let clamped = rate.max(Self::MIN_PLAYBACK_RATE);
-        self.rate.store(clamped, Ordering::Relaxed);
-        clamped
     }
 
     pub(crate) fn set_volume(
@@ -154,10 +128,9 @@ impl From<&PlayerConfig> for PlayerParams {
         Self {
             auto_advance_enabled: AtomicBool::new(config.auto_advance_enabled),
             crossfade_duration: AtomicF32::new(config.crossfade_duration),
-            default_rate: AtomicF32::new(config.default_rate),
+            default_rate: AtomicF32::new(config.default_rate.max(Self::MIN_PLAYBACK_RATE)),
             muted: AtomicBool::new(false),
             prefetch_duration: AtomicF32::new(config.prefetch_duration.max(0.0)),
-            rate: AtomicF32::new(0.0),
             volume: AtomicF32::new(1.0),
         }
     }

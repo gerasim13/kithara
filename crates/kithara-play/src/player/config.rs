@@ -2,12 +2,16 @@ use std::fmt;
 
 use bon::Builder;
 use kithara_abr::AbrController;
-use kithara_audio::{EqBandConfig, StretchControls, generate_log_spaced_bands};
 use kithara_decode::GaplessMode;
 use kithara_events::EventBus;
 use kithara_platform::{CancelToken, sync::Arc};
+use kithara_warp::StretchControls;
 
-use crate::{PlayWorker, session::SessionDispatcher};
+use crate::{
+    PlayWorker,
+    effects::eq::{EqBandConfig, generate_log_spaced_bands},
+    session::SessionDispatcher,
+};
 
 /// Configuration for the player.
 #[derive(Clone, Builder)]
@@ -15,7 +19,7 @@ use crate::{PlayWorker, session::SessionDispatcher};
 #[non_exhaustive]
 pub struct PlayerConfig {
     /// Per-deck time-stretch control handle, shared with the UI and the
-    /// worker effect chain (see `kithara_audio::StretchControls`).
+    /// worker Warp chain (see `kithara_warp::StretchControls`).
     #[builder(default = StretchControls::new(1.0))]
     pub(crate) timestretch: Arc<StretchControls>,
     /// Explicit shared playback worker. Its pools and cancellation lifetime
@@ -41,7 +45,7 @@ pub struct PlayerConfig {
     /// Crossfade duration in seconds. Default: 1.0.
     #[builder(default = 1.0)]
     pub(crate) crossfade_duration: f32,
-    /// Default playback rate (1.0 = normal). Default: 1.0.
+    /// Default playback-rate target (1.0 = normal). Default: 1.0.
     #[builder(default = 1.0)]
     pub(crate) default_rate: f32,
     /// Secondary lead time before EOF at which the next queued item is loaded.

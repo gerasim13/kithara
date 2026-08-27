@@ -7,6 +7,8 @@ mod beat_grid;
 mod coordinate;
 mod segment;
 mod sync;
+mod temporal;
+mod warp;
 
 pub use anchor::{CoordinateError, SessionAnchor, SessionBeat, SessionFrame};
 pub use beat_grid::{
@@ -31,3 +33,15 @@ pub use sync::{
     SyncOperation, SyncOperationId, SyncRejected, SyncStatusSnapshot, TopologyOperation,
     TopologyRevision, TopologyStamp, TransportOperation, TransportRevision, WarpMapRevision,
 };
+#[cfg(all(
+    not(target_arch = "wasm32"),
+    any(feature = "stretch-signalsmith", feature = "stretch-bungee")
+))]
+pub use temporal::StretchKind;
+pub use temporal::{ActiveRegion, GridSegment, RegionPlan, RegionPlanError, StretchControls};
+#[cfg(all(
+    not(target_arch = "wasm32"),
+    any(feature = "stretch-signalsmith", feature = "stretch-bungee")
+))]
+pub use warp::WarpRenderer;
+pub use warp::{Warp, WarpConfig, WarpCursor, WarpMap, supports_playback_rate};

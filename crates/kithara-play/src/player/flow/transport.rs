@@ -6,7 +6,7 @@ use tracing::{debug, warn};
 
 use super::super::core::PlayerImpl;
 use crate::{
-    api::{PlayerEvent, PlayerStatus},
+    api::PlayerStatus,
     bridge::{PlayerCmd, TrackTransition},
     error::PlayError,
 };
@@ -21,13 +21,6 @@ pub struct SelectTransition {
 }
 
 impl PlayerImpl {
-    /// Apply autoplay: resume at the default rate (and move to `Playing`) or
-    /// hold at rate 0 (and move to `Paused`).
-    ///
-    /// Resuming goes through [`Self::set_rate`] rather than a bare value
-    /// store: the default rate has to reach the stretch slot and the
-    /// processor's media clock, or the player reports a rate it is not
-    /// playing at.
     fn apply_autoplay(&self, autoplay: bool) {
         if autoplay {
             self.set_rate(self.default_rate());
@@ -35,13 +28,8 @@ impl PlayerImpl {
             self.enter_playing();
             self.set_status(PlayerStatus::ReadyToPlay);
         } else {
-            self.core.params.set_paused_rate();
             let _ = self.send_to_slot(PlayerCmd::SetPaused(true));
             self.enter_paused();
-            self.core
-                .engine
-                .bus()
-                .publish(PlayerEvent::RateChanged { rate: 0.0 });
         }
     }
 
@@ -73,22 +61,16 @@ impl PlayerImpl {
         true
     }
 
-    /// Pause playback (sets rate to 0.0).
+    /// Pause playback. The effective rate becomes `0.0` when RT applies the command.
     pub fn pause(&self) {
-        self.core.params.set_paused_rate();
         let _ = self.send_to_slot(PlayerCmd::SetPaused(true));
         self.enter_paused();
-        self.core
-            .engine
-            .bus()
-            .publish(PlayerEvent::RateChanged { rate: 0.0 });
         debug!(phase = ?self.phase_kind(), "pause");
     }
 
-    /// Start playback at the configured default rate.
+    /// Start playback from the configured default-rate target.
     pub fn play(&self) {
         let rate = self.default_rate().max(Self::MIN_PLAYBACK_RATE);
-        self.core.params.set_rate_value(rate);
         self.core.timestretch.set_speed(rate);
 
         if let Err(e) = self.ensure_engine_started() {
@@ -116,10 +98,6 @@ impl PlayerImpl {
         if loaded {
             self.announce_current_item(self.current_index());
         }
-        self.core
-            .engine
-            .bus()
-            .publish(PlayerEvent::RateChanged { rate });
         debug!(rate, phase = ?self.phase_kind(), "play");
     }
 
@@ -238,6 +216,10 @@ impl PlayerImpl {
         // the UI cannot drift from the audio.
         if !armed_for_index && !reselecting_current && !has_resource {
             return Err(PlayError::ItemConsumed { index });
+        }
+
+        if autoplay {
+            self.core.timestretch.set_speed(self.default_rate());
         }
 
         self.ensure_engine_started()?;

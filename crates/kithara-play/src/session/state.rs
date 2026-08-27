@@ -4,7 +4,6 @@ use firewheel::{
     FirewheelConfig, FirewheelCtx, backend::AudioBackend, channel_config::ChannelCount, diff::Memo,
     node::NodeID, nodes::volume::VolumeNode,
 };
-use kithara_audio::{EqBandConfig, effects::eq::GainDb};
 use kithara_bufpool::PcmPool;
 use kithara_events::EventBus;
 use kithara_warp::{
@@ -24,6 +23,7 @@ use super::{
 use crate::{
     api::{SessionDuckingMode, SlotId},
     bridge::{MixTapWriter, SharedEq},
+    effects::eq::{EqBandConfig, GainDb},
     rt::{LimiterNode, MasterEqNode},
 };
 

@@ -1,26 +1,61 @@
 use std::num::NonZeroU32;
 
 use kithara_audio::{
-    Audio, ChunkOutcome, PcmControl, PcmRead, PcmSession, PcmTaskId, PreloadGate, ReadOutcome,
-    SeekBegin, SeekOutcome, ServiceClass,
+    Audio, ChunkOutcome, PcmControl, PcmRead, PcmSession, PreloadGate, ReadOutcome, SeekBegin,
+    SeekOutcome,
 };
 use kithara_decode::{DecodeError, PcmSpec, TrackMetadata};
 use kithara_events::EventBus;
 use kithara_platform::{maybe_send::MaybeSend, sync::Arc, time::Duration};
+use kithara_warp::Warp;
 
-use super::PlayWorker;
+use super::{
+    PlayWorker,
+    scheduler::{AtomicServiceClass, PcmTaskId, PcmWake, ServiceClass},
+};
+
+#[derive(Clone)]
+pub(crate) struct TrackPriority {
+    service_class: Arc<AtomicServiceClass>,
+    wake: PcmWake,
+}
+
+impl TrackPriority {
+    pub(super) const fn new(service_class: Arc<AtomicServiceClass>, wake: PcmWake) -> Self {
+        Self {
+            service_class,
+            wake,
+        }
+    }
+
+    pub(crate) fn set(&self, class: ServiceClass) {
+        self.service_class.store(class);
+        self.wake.defer();
+    }
+}
 
 pub(crate) struct TrackLease {
     task_id: Option<PcmTaskId>,
     worker: PlayWorker,
+    priority: TrackPriority,
 }
 
 impl TrackLease {
-    pub(crate) const fn new(worker: PlayWorker, task_id: PcmTaskId) -> Self {
+    pub(crate) const fn new(
+        worker: PlayWorker,
+        task_id: PcmTaskId,
+        service_class: Arc<AtomicServiceClass>,
+        wake: PcmWake,
+    ) -> Self {
         Self {
             task_id: Some(task_id),
             worker,
+            priority: TrackPriority::new(service_class, wake),
         }
+    }
+
+    pub(crate) fn priority(&self) -> TrackPriority {
+        self.priority.clone()
     }
 }
 
@@ -37,39 +72,45 @@ impl Drop for TrackLease {
 /// The reader drops before its registration lease, so its wake handles and
 /// buffers are released before the final worker owner can shut down.
 pub struct RegisteredAudio<S> {
-    audio: Audio<S>,
+    warp: Warp<Audio<S>>,
     _lease: TrackLease,
 }
 
 impl<S> RegisteredAudio<S> {
-    pub(super) const fn new(audio: Audio<S>, lease: TrackLease) -> Self {
+    pub(super) const fn new(warp: Warp<Audio<S>>, lease: TrackLease) -> Self {
         Self {
-            audio,
+            warp,
             _lease: lease,
         }
+    }
+
+    pub(crate) fn priority(&self) -> TrackPriority {
+        self._lease.priority()
     }
 }
 
 impl<S: MaybeSend> PcmRead for RegisteredAudio<S> {
     delegate::delegate! {
-        to self.audio {
+        to self.warp.source() {
             fn cached_span(&self) -> Duration;
             fn decoded_frontier(&self) -> Duration;
-            fn next_chunk(&mut self) -> Result<ChunkOutcome, DecodeError>;
             fn position(&self) -> Duration;
+            fn spec(&self) -> PcmSpec;
+        }
+        to self.warp.source_mut() {
+            fn next_chunk(&mut self) -> Result<ChunkOutcome, DecodeError>;
             fn read(&mut self, buf: &mut [f32]) -> Result<ReadOutcome, DecodeError>;
             fn read_planar<'a>(
                 &mut self,
                 output: &'a mut [&'a mut [f32]],
             ) -> Result<ReadOutcome, DecodeError>;
-            fn spec(&self) -> PcmSpec;
         }
     }
 }
 
 impl<S: MaybeSend> PcmSession for RegisteredAudio<S> {
     delegate::delegate! {
-        to self.audio {
+        to self.warp.source() {
             fn abr_handle(&self) -> Option<kithara_abr::AbrHandle>;
             fn duration(&self) -> Option<Duration>;
             fn event_bus(&self) -> &EventBus;
@@ -83,17 +124,17 @@ impl<S: MaybeSend> PcmSession for RegisteredAudio<S> {
 
 impl<S: MaybeSend> PcmControl for RegisteredAudio<S> {
     delegate::delegate! {
-        to self.audio {
+        to self.warp.source_mut() {
             fn preload(&mut self) -> Result<(), DecodeError>;
             fn seek(&mut self, position: Duration) -> Result<SeekOutcome, DecodeError>;
             fn sync_seek(&mut self);
+        }
+        to self.warp.source() {
             fn set_host_sample_rate(&self, sample_rate: NonZeroU32);
-            fn set_playback_rate(&self, rate: f32);
-            fn set_service_class(&self, class: ServiceClass);
         }
     }
 
     fn seek_handle(&self) -> Option<Arc<dyn SeekBegin>> {
-        PcmControl::seek_handle(&self.audio)
+        PcmControl::seek_handle(self.warp.source())
     }
 }

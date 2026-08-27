@@ -10,6 +10,10 @@ Contracts and invariants for the kithara-play crate; the README is the overview.
 - `policy/` - domain-aware cache identity and DRM key-request routing.
 - `resource/` - source detection, `ResourceConfig`, reader construction.
 - `player/` - playlist and parameter state in `state/`, transitions in `flow/`.
+- `worker/` - shared `PlayWorker`, generic scheduler, per-track `DecoderNode`,
+  final producer admission, registration leases, and `EngineLoad`.
+- `effects/` - the post-Warp per-track `AudioEffect` chain, terminal drain, EQ
+  primitives, and limiter primitives.
 - `engine/` - session registration, slot table, mix batch.
 - `rt/` - lock-free Firewheel nodes; per-track state under `rt/track/`.
 - `session/` - protocol, state, graph dispatch, platform clients.
@@ -41,17 +45,72 @@ ones. The opaque DRM registry exposes neither domain rules nor resource headers,
 also need playlist/segment headers keep the same immutable `Arc<DomainKeyPolicy>` and ask it via
 `resource_headers` - never a second policy source of truth.
 
+## Per-track producer chain
+
+`PlayWorker::open` is the sole supported production composition path in this
+workspace. It asks
+`kithara-audio` for `PreparedAudio` plus a still-concrete `PcmSource`, wraps the
+reader as resident identity `Warp<Audio<Stream<T>>>`, creates its synchronous
+`WarpRenderer`, builds the post-Warp track effects, and wraps the source in
+`WarpSource`.
+`DecoderNode` then owns final output admission, preload completion, decoded
+frontier publication, terminal event publication, and per-track load
+measurement before the task is registered on the shared worker.
+
+The generic scheduler kernel and concrete PCM scheduler are private to
+`kithara-play::PlayWorker`. `kithara-audio` exposes only the prepared source and
+wake contracts; its analysis worker uses a separate private single-node runner.
+No workspace production code can construct a second playback scheduler path.
+
+There is one chain and one final output path:
+
+`decoded source -> WarpRenderer -> custom effects -> final output ring`
+
+The Warp wrapper is resident even when synchronization is off, so passthrough
+does not select a second implementation. R7 does not yet evaluate `WarpMap`,
+advance a runtime map cursor, apply non-identity alignment, or call
+`SyncGroup::acknowledge`; final-ring admission is rendered readiness, not proof
+that a device callback presented those frames.
+
+`WarpRenderer::prepare` services format/backend changes and retired engine
+state between checked ticks. `AudioEffect::service_deferred` then prepares
+post-Warp effects. At true source EOF, `WarpSource` drains the Warp tail through
+the effect chain before `EffectDrain` flushes the effects themselves, preserving
+multi-pull tails before
+`DecoderNode` publishes the decode-epoch-tagged diagnostic
+`AudioEvent::EndOfStream`. That raw event is not a user-visible playback-end
+signal: `PlayerEvent::ItemDidPlayToEnd` is the sole path to FFI `DidReachEnd`
+after the player fences the terminal marker against the live seek epoch. Seek
+or source-discontinuity revision changes reset the chain before new-generation
+PCM is admitted.
+
+`sanitize_sample` from `kithara-decode` runs at the input of play-owned DSP
+stages that accept untrusted samples. `IsolatorEq` flushes denormal IIR state to
+exact zero only after both input and output fall below `f32::MIN_POSITIVE`;
+finite unity/bypass samples remain bit-exact.
+
 ## Tempo & Key-Lock
 
-`kithara_audio::StretchControls` (one `Arc` per deck, in `PlayerConfig.timestretch`) is the single
-source of truth for playback speed, shared between the UI and the worker effect chain, which reads
-it each chunk. It always carries `speed` + `region_plan`; with a stretch backend compiled in
-(`kithara-audio`'s `stretch-signalsmith` / `stretch-bungee`, native targets only) it also carries
-`keylock` and `backend`. Rate setters (`PlayerImpl::set_rate`, `play`) write this one handle - no
-second rate atomic, no manual mirror. `Queue` delegates `set_rate` to the player; key-lock and
-backend are set by the consumer directly on the shared handle. `prepare_config` always passes the
-shared controls into every track (`stretch = Some(..)`). With a backend compiled in the effect
-chain runs a source-domain `TimeStretchProcessor` at `ratio = 1/speed`, and:
+`kithara_warp::StretchControls` (one `Arc` per deck, in
+`PlayerConfig.timestretch`) owns the requested playback target.
+`prepare_config` carries that handle into `ResourceConfig`; `Resource` puts the
+same allocation in `TrackConfig::warp`, and resident `Warp<S>` keeps it beside
+the reader while its `kithara-warp::WarpRenderer` reads it each chunk. It always
+carries `speed` + `region_plan`; with a native backend compiled by
+`kithara-play` (`stretch-signalsmith` / `stretch-bungee`) it also carries
+`keylock` and `backend`. `Queue` delegates the target to the player; key-lock
+and backend are set directly on the same handle.
+
+The canonical controls are seeded before a track is loaded; the RT processor
+does not cache a second requested target. Each `PlayerTrack` reads the rate its
+resource currently applies on every render block, so a direct runtime change
+through the shared controls updates its media clock as well as its DSP. The
+leading track publishes the deck's effective rate through `PlaybackShared`.
+`Player::rate()` and `PlayerEvent::RateChanged` expose only that effective
+value: fixed/no-backend resources report `1.0`, while a paused deck or a deck
+without a leading track reports `0.0`. Target controls and the effective
+observation therefore cannot silently diverge in the public surface.
+With a backend compiled in, `WarpRenderer` runs at `ratio = 1/speed`, and:
 
 - **key-lock off** (the constructed default): `pitch = speed` - speed shifts pitch, vinyl-style.
 - **key-lock on**: `pitch = 1.0` - speed preserves pitch.
@@ -64,6 +123,22 @@ resets buffered stretch state.
 
 Fixed-ratio sample-rate conversion is a separate stage: Apple fused builds use the codec-embedded
 placement, other builds the standalone decode-adapter resampler.
+
+`RegionPlan` lives in `kithara-warp`. Its sorted, non-overlapping segments are
+expressed in source-frame space; the processor splits chunks at region
+boundaries and combines `1/speed` with each segment's finite positive ratio.
+A region boundary preserves backend history and is not a source
+discontinuity. Stretch changes output frame count, not `PcmSpec.sample_rate`,
+and carries source-time metadata forward.
+
+## Engine Load
+
+`EngineLoad` and `EngineLoadSnapshot` are play-owned. `PlayerCore` creates one
+address-stable meter, `ResourceConfig` passes the same optional `Arc` through
+`TrackConfig`, and `PlayWorker` injects it directly into `DecoderNode`; neither
+`AudioConfig` nor `PreparedPcmLane` carries it. A producing node records its
+`step_track` cost against emitted audio duration into lock-free EWMA atomics and
+publishes `AudioEvent::EngineLoad` at the existing telemetry interval.
 
 ## Live Equalizer Layout
 
@@ -135,7 +210,8 @@ session output node, and limiter are torn down and the next `start_player` build
 
 Drop order is load-bearing. `PlayerImpl` declares `phase` before `core`, and `PlayerCore` declares
 `items` before `engine`, so undelivered resources (which hold worker references) release before the
-engine's `Drop` shuts the worker down.
+engine and resource registrations. `worker` is declared after those owners, so the final
+`PlayWorker` reference cannot shut down its thread while a track still holds a lease.
 
 ## Cancel Hierarchy
 
@@ -144,9 +220,10 @@ Cancel is the typed propagate-down tree from `kithara-platform` (`common/cancel/
 `PlayerImpl` derives its token through `CancelScope::new(config.cancel)`: a passed `CancelToken`
 (consumer crates `Queue` / `App` / FFI mint their own root and pass a child through
 `PlayerConfig.cancel`) makes the token a child of it; `None` makes it a fresh root. The same token
-is handed to `EngineConfig.cancel`, which scopes the audio worker. `prepare_config` gives every
-track a `.child()` of it, and subsystems (Downloader, AssetStore, HlsPeer, epoch cancel) derive
-further children.
+is handed to `EngineConfig.cancel`, which scopes the session engine. The shared playback worker
+has its own explicit lifetime in `PlayWorkerConfig.cancel`. `prepare_config` gives every track a
+`.child()` of the player token, and subsystems (Downloader, AssetStore, HlsPeer, epoch cancel)
+derive further children.
 
 `CancelScope::Drop` is **passive**: dropping a scope cancels nothing. Teardown is explicit -
 `PlayerImpl::drop` calls `engine.cancel()`, cancelling the player's own subtree and never the
@@ -198,8 +275,8 @@ and `PlaybackSnapshot`'s scalars are independent readouts that need not agree ac
 
 ## Seek Ownership
 
-A seek is split in two, because beginning one publishes an event and wakes the decode worker - both
-lock-taking, both forbidden on the device callback.
+A seek is split in two, because beginning one publishes an event and wakes the playback worker -
+both lock-taking, both forbidden on the device callback.
 
 **Control thread begins.** `EngineImpl::begin_slot_seek` walks the slot's `SeekBindings` and calls
 `kithara_audio::SeekBegin::begin` on each. A handle is bound in `send_slot_cmd` when its resource
@@ -252,11 +329,13 @@ Withdrawal is a compare-exchange against the published value: a newer seek havin
 meantime makes it a no-op, because that seek carries its own command and rolling back over it would
 strand *it* instead.
 
-The shared decode worker's produce core lives in `kithara-audio`
-(`runtime/scheduler.rs::produce_tick_rt`) and carries the same attribute; off-core work
-(pooled-buffer free, event flush, parking, symphonia allocation) belongs to the scheduler shell.
-Cross-thread wakes reached on the core are *armed* lock-free (`kithara_stream::DeferredWake::arm`)
-and delivered by the shell (`flush`), never on the forbid path.
+`PlayWorker` owns the shared playback worker, its generic scheduler, and its
+registered `DecoderNode`s. The scheduler's `produce_tick_rt` carries the
+real-time attribute.
+Off-core work (pooled-buffer free, event flush, parking, symphonia allocation)
+belongs to the scheduler shell. Cross-thread wakes reached on the core are
+*armed* lock-free (`kithara_stream::DeferredWake::arm`) and delivered by the
+shell (`flush`), never on the forbid path.
 
 Verification is gated by `--cfg rtsan`, so stable/production builds are byte-identical. Lanes:
 `just test rtsan` (mock decoder), `rtsan-file` / `rtsan-hls` (real decoder, `suite_stress`), and
@@ -277,10 +356,13 @@ cross-platform core (`session/{state,dispatch,protocol,graph}.rs`) carries zero 
 structural gates are the cfg lines around `mod native`, `mod web`, and their re-exports in
 `session/mod.rs`.
 
-`kithara-warp` owns musical coordinates and the BeatMap/SyncGroup protocol;
-`kithara-play` owns the live Host, session, and Player instances that consume it.
-`TrackBinding` captures an owner-published `BeatMapSnapshot`; it neither creates
-a map identity nor converts analysis facts into a second map representation.
+`kithara-warp` owns musical coordinates plus the `BeatGrid`, `WarpMap`, and
+`SyncGroup` protocols; `kithara-play` owns the live Host/session and Player
+instances that consume those contracts. `TrackBinding` captures an
+owner-published `BeatGridSnapshot`; it neither creates a grid identity nor
+converts analysis facts into a second representation. R7 session state may
+transact pure group operations, but the producer chain does not yet consume a
+`WarpMap` or acknowledge rendered/presented application.
 
 `SessionDispatcher::consumer_wake_mode` is the session's required, object-safe
 consumer capability. Real-time session implementations explicitly return
@@ -337,8 +419,9 @@ The crossfader is pure policy (`api/mix.rs::crossfader_gain`), not state: consum
 cannot change another group's master. `crossfader_gain` rejects a non-finite or out-of-range
 position with `PlayError::MixPosition` and returns exact `0.0`/`1.0` at the endpoints.
 
-The session graph carries exactly one peak limiter (`rt/limiter.rs`, wrapping
-`kithara_audio::PeakLimiter`) at the final sum, after session ducking and before the graph output.
+The session graph carries exactly one play-owned peak limiter
+(`rt/limiter.rs`, wrapping `crate::effects::PeakLimiter`) at the final sum,
+after session ducking and before the graph output.
 It is created once per session context in `create_session_output`; recreating the context (route
 change, idle teardown) rebuilds it with a fresh envelope. Player start/stop only connects or
 disconnects player master nodes and never creates a per-player limiter. The session constants
@@ -420,6 +503,8 @@ resampler fields.
 | `apple-fused-src` | no | Apple fused decode+SRC via decoder-embedded resampler placement |
 | `resample-rubato` | yes | Default fixed-ratio Rubato backend |
 | `resample-glide` | no | Glide resampler backend for explicit config selection |
+| `stretch-signalsmith` | yes | Signalsmith backend for the play-owned time-stretch stage and resident Warp controls |
+| `stretch-bungee` | no | Bungee backend for the play-owned time-stretch stage and resident Warp controls |
 | `analysis-beat` | yes | Beat-analysis pass forwarding; absent from Apple FFI device sets |
 | `analysis-waveform` | yes | RealFFT waveform analyzer forwarding |
 | `client-reqwest` | yes | Forward the reqwest HTTP backend to network-reaching deps |

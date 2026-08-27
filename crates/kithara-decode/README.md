@@ -61,6 +61,9 @@ For HLS / cross-codec recreate paths, prefer `DecoderFactory::create_from_media_
 
 ## Integration
 
-`kithara-audio` owns threading, effects, and resampling; this crate stays a synchronous decoder over `R: Read + Seek + Send + Sync + 'static` inputs such as `Stream<File>`, `Stream<Hls>`, cursors, or plain files.
+`kithara-play` owns the playback worker and effects. Decoder sample-rate conversion is configured
+through `kithara-audio` and implemented with `kithara-resampler`; this crate stays a synchronous
+decoder over `R: Read + Seek + Send + Sync + 'static` inputs such as `Stream<File>`, `Stream<Hls>`,
+cursors, or plain files.
 
 See [CONTEXT.md](CONTEXT.md) for detailed contracts, invariants, and internals.

@@ -1,12 +1,8 @@
-mod effect;
 mod observer;
 mod outcome;
 mod reader;
 mod source;
 
-pub use effect::AudioEffect;
-#[cfg(any(test, feature = "mock"))]
-pub use effect::AudioEffectMock;
 pub use kithara_decode::{DecodeError, DecodeResult};
 #[cfg(any(test, feature = "mock"))]
 pub use observer::PcmObserverMock;
@@ -15,6 +11,8 @@ pub use outcome::{ChunkOutcome, PendingReason, ReadOutcome, SeekOutcome};
 pub use reader::{PcmControl, PcmRead, PcmReader, PcmSession, SeekBegin};
 #[cfg(any(test, feature = "mock"))]
 pub use reader::{PcmControlMock, PcmReadMock, PcmSessionMock};
-pub use source::PcmSource;
+#[cfg(test)]
+pub(crate) use source::PcmSourceExt;
 #[cfg(any(test, feature = "mock"))]
 pub use source::PcmSourceMock;
+pub use source::{PcmSource, SourceDiscontinuity};

@@ -10,8 +10,9 @@ use firewheel::{
         ProcBuffers, ProcExtra, ProcInfo, ProcStreamCtx, ProcessStatus,
     },
 };
-use kithara_audio::PeakLimiter;
 use kithara_test_utils::kithara;
+
+use crate::effects::PeakLimiter;
 
 const _: () = {
     assert!(LimiterProcessor::CEILING > 0.0 && LimiterProcessor::CEILING <= 1.0);
