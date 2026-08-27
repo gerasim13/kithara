@@ -3,7 +3,7 @@ use crate::{
     draw::{DrawListBuilder, Pt, Rect, Rgba, Transform},
     render::Skin,
     shaping::TextContext,
-    skin::{FontFamily, GlobalBarSkin, TextRoleSkin},
+    skin::{GlobalBarSkin, TextRoleSkin},
 };
 
 /// The wordmark at the head of the global bar, one letter at a time.
@@ -25,15 +25,9 @@ impl Brand {
         let metrics = skin.global_bar;
         Self {
             metrics,
-            panel: skin.palette.bg_panel,
-            role: TextRoleSkin {
-                color: crate::skin::ColorRole::Text,
-                font: FontFamily::Display,
-                size: metrics.brand_text.size,
-                spacing: 0.0,
-                weight: metrics.brand_text.weight,
-            },
-            text: skin.palette.text,
+            panel: skin.rgba(metrics.panel_fill),
+            role: metrics.brand_text,
+            text: skin.rgba(metrics.brand_text.color),
         }
     }
 

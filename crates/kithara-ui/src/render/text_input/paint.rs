@@ -9,7 +9,7 @@ use crate::{
     interact::TextInputLayout,
     render::Skin,
     shaping::{GlyphRun, TextContext},
-    skin::{ColorRole, FontFamily, TextRoleSkin},
+    skin::TextRoleSkin,
 };
 
 pub(super) struct TextInputPaint<'a> {
@@ -91,7 +91,7 @@ impl<'a> TextInputPaint<'a> {
                     x: start.min(end),
                     y: (bounds.h - self.layout.text_size()) / 2.0,
                 },
-                self.skin.rgba(ColorRole::AccentSoft),
+                self.skin.rgba(self.skin.tree.search_selection_fill),
             );
         }
 
@@ -104,7 +104,7 @@ impl<'a> TextInputPaint<'a> {
                 &mut content,
                 &self.query,
                 &self.query_run,
-                self.skin.rgba(ColorRole::Text),
+                self.skin.rgba(self.skin.tree.search_text.color),
                 bounds,
             );
         } else if !has_preedit {
@@ -112,7 +112,7 @@ impl<'a> TextInputPaint<'a> {
                 &mut content,
                 self.placeholder,
                 &self.placeholder_run,
-                self.skin.rgba(ColorRole::Muted),
+                self.skin.rgba(self.skin.tree.search_placeholder_color),
                 bounds,
             );
         }
@@ -125,7 +125,7 @@ impl<'a> TextInputPaint<'a> {
                     x: self.layout.x(snapshot.caret).floor(),
                     y: (bounds.h - self.layout.text_size()) / 2.0,
                 },
-                self.skin.rgba(ColorRole::Text),
+                self.skin.rgba(self.skin.tree.search_caret_color),
             );
         }
         list.clip(bounds, content.finish());
@@ -158,13 +158,7 @@ pub(crate) fn text_input_layout(query: &str, skin: &Skin) -> TextInputLayout {
 }
 
 fn text_role(skin: &Skin) -> TextRoleSkin {
-    TextRoleSkin {
-        color: ColorRole::Text,
-        font: FontFamily::Sans,
-        size: skin.tree.search_text.size,
-        spacing: 0.0,
-        weight: skin.tree.search_text.weight,
-    }
+    skin.tree.search_text
 }
 
 #[cfg(test)]

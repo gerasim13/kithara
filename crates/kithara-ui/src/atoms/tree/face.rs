@@ -3,10 +3,10 @@ use std::{f32::consts::PI, ops::Range};
 use num_traits::ToPrimitive;
 
 use crate::{
-    draw::{DrawList, DrawListBuilder, Pt, Rect, Rgba, Transform},
+    draw::{DrawList, DrawListBuilder, Pt, Rect, Rgba, TRANSPARENT, Transform},
     render::{Skin, TreeIcon, TreeRow, tree_icon},
     shaping::TextContext,
-    skin::{ColorRole, FontFamily, TextRoleSkin},
+    skin::TextRoleSkin,
 };
 
 #[derive(Clone, Debug, PartialEq, fieldwork::Fieldwork)]
@@ -116,18 +116,12 @@ impl Row {
         hovered: bool,
         skin: &Skin,
     ) {
-        let transparent = Rgba {
-            a: 0.0,
-            b: 0.0,
-            g: 0.0,
-            r: 0.0,
-        };
         let background = if self.selected {
-            skin.palette.bg_select
+            skin.rgba(skin.tree.row_selected_fill)
         } else if hovered {
-            skin.palette.bg_panel_2
+            skin.rgba(skin.tree.row_hovered_fill)
         } else {
-            transparent
+            TRANSPARENT
         };
         let marker = Rect {
             h: bounds.h,
@@ -139,18 +133,18 @@ impl Row {
         list.fill_rect(
             marker,
             if self.selected {
-                skin.palette.accent
+                skin.rgba(skin.tree.row_marker_color)
             } else {
-                transparent
+                TRANSPARENT
             },
         );
 
         let color = if self.selected {
-            skin.palette.text
+            skin.rgba(skin.tree.row_text_color)
         } else if self.muted {
-            skin.palette.muted
+            skin.rgba(skin.tree.row_muted_text_color)
         } else {
-            skin.palette.text_dim
+            skin.rgba(skin.tree.row_idle_text_color)
         };
         let indent = skin
             .tree
@@ -177,17 +171,12 @@ impl Row {
             Some(false) => "\u{203a}",
             None => return,
         };
-        let run = text.shape(
-            content,
-            TextRoleSkin {
-                color: ColorRole::Text,
-                font: FontFamily::Mono,
-                size: skin.tree.chevron_size,
-                spacing: 0.0,
-                weight: skin.tree.count_text.weight,
-            },
-            None,
-        );
+        let role = TextRoleSkin {
+            color: skin.tree.chevron_color,
+            size: skin.tree.chevron_size,
+            ..skin.tree.count_text
+        };
+        let run = text.shape(content, role, None);
         list.text(
             &run,
             content,
@@ -195,7 +184,7 @@ impl Row {
                 x: x + (skin.tree.chevron_width - run.width()) / 2.0,
                 y: bounds.y + (bounds.h - run.height()) / 2.0,
             }),
-            skin.palette.muted,
+            skin.rgba(role.color),
         );
     }
 
@@ -238,31 +227,16 @@ impl Row {
         skin: &Skin,
     ) {
         let right = bounds.x + bounds.w - skin.tree.row_padding_right;
-        let count_run = self.count.as_deref().map(|content| {
-            text.shape(
-                content,
-                TextRoleSkin {
-                    color: ColorRole::Text,
-                    font: FontFamily::Mono,
-                    size: skin.tree.count_text.size,
-                    spacing: 0.0,
-                    weight: skin.tree.count_text.weight,
-                },
-                None,
-            )
-        });
+        let count_run = self
+            .count
+            .as_deref()
+            .map(|content| text.shape(content, skin.tree.count_text, None));
         let label_right = count_run
             .as_ref()
             .map_or(right, |run| right - run.width() - skin.tree.content_gap);
         let label = text.shape(
             &self.label,
-            TextRoleSkin {
-                color: ColorRole::Text,
-                font: FontFamily::Sans,
-                size: skin.tree.label_text.size,
-                spacing: 0.0,
-                weight: skin.tree.label_text.weight,
-            },
+            skin.tree.label_text,
             Some((label_right - label_x).max(0.0)),
         );
         list.text(
@@ -282,7 +256,7 @@ impl Row {
                     x: right - run.width(),
                     y: bounds.y + (bounds.h - run.height()) / 2.0,
                 }),
-                skin.palette.muted,
+                skin.rgba(skin.tree.count_text.color),
             );
         }
     }

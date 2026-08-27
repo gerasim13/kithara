@@ -6,7 +6,6 @@ use crate::{
     engine::TextInputSnapshot,
     render::{Skin, TreeIcon, tree_icon},
     shaping::TextContext,
-    skin::{ColorRole, FontFamily, TextRoleSkin},
 };
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -130,7 +129,7 @@ fn paint_search_icon(
             x: bounds.x + (bounds.w - run.width()) / 2.0,
             y: bounds.y + (bounds.h - run.height()) / 2.0,
         }),
-        skin.palette.muted,
+        skin.rgba(skin.tree.search_icon_color),
     );
 }
 
@@ -142,13 +141,7 @@ fn paint_query(
     snapshot: &TextInputSnapshot,
     skin: &Skin,
 ) {
-    let role = TextRoleSkin {
-        color: ColorRole::Text,
-        font: FontFamily::Sans,
-        size: skin.tree.search_text.size,
-        spacing: 0.0,
-        weight: skin.tree.search_text.weight,
-    };
+    let role = skin.tree.search_text;
     let (query_run, carets) = text.shape_input(query, role);
     let layout = crate::interact::TextInputLayout::new(
         carets
@@ -169,7 +162,7 @@ fn paint_query(
                 x: bounds.x + start.min(end),
                 y: bounds.y + (bounds.h - layout.text_size()) / 2.0,
             },
-            skin.rgba(ColorRole::AccentSoft),
+            skin.rgba(skin.tree.search_selection_fill),
         );
     }
     let has_preedit = snapshot
@@ -182,7 +175,7 @@ fn paint_query(
             &query_run,
             query,
             bounds,
-            skin.palette.text,
+            skin.rgba(role.color),
             skin,
         );
     } else if !has_preedit {
@@ -193,7 +186,7 @@ fn paint_query(
             &run,
             placeholder,
             bounds,
-            skin.palette.muted,
+            skin.rgba(skin.tree.search_placeholder_color),
             skin,
         );
     }
@@ -205,7 +198,7 @@ fn paint_query(
                 x: bounds.x + layout.x(snapshot.caret).floor(),
                 y: bounds.y + (bounds.h - layout.text_size()) / 2.0,
             },
-            skin.rgba(ColorRole::Text),
+            skin.rgba(skin.tree.search_caret_color),
         );
     }
     list.clip(bounds, content.finish());

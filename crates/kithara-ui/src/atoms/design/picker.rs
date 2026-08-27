@@ -2,7 +2,7 @@ use crate::{
     draw::{DrawListBuilder, Pt, Rect, Rgba, Transform},
     render::Skin,
     shaping::TextContext,
-    skin::{FontFamily, FrameSkin, TextRoleSkin},
+    skin::{FrameSkin, TextRoleSkin},
 };
 
 /// The closed face of a scope picker: a framed box holding the picked word,
@@ -31,13 +31,7 @@ impl Picker {
             chevron_size: metrics.scope_chevron_size,
             frame: metrics.scope_frame,
             padding_x: metrics.scope_padding_x,
-            role: TextRoleSkin {
-                color: metrics.scope_text_color,
-                font: FontFamily::Mono,
-                size: metrics.scope_text.size,
-                spacing: 0.0,
-                weight: metrics.scope_text.weight,
-            },
+            role: metrics.scope_text,
             stroke: skin.rgba(metrics.scope_frame.border),
             text: skin.rgba(metrics.scope_text_color),
         }

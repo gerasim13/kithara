@@ -9,7 +9,7 @@ use crate::{
     draw::{DrawListBuilder, Pt, Rect, Rgba, Transform},
     render::Skin,
     shaping::TextContext,
-    skin::{ColorRole, FontFamily, GlobalBarSkin, TextRoleSkin},
+    skin::{GlobalBarSkin, TextRoleSkin},
     solve::{Length, Size},
 };
 
@@ -29,6 +29,7 @@ pub(crate) struct PresetData {
 pub(crate) struct Preset {
     active: Rgba,
     active_hovered: Rgba,
+    active_pressed: Rgba,
     active_text: Rgba,
     chip_stroke: Rgba,
     hovered: Rgba,
@@ -53,24 +54,19 @@ impl Preset {
     pub(crate) fn new(skin: &Skin) -> Self {
         let metrics = skin.global_bar;
         Self {
-            active: skin.palette.accent,
-            active_hovered: skin.palette.accent_strong,
-            active_text: skin.palette.bg,
+            active: skin.tint(metrics.chip_active_fill.idle),
+            active_hovered: skin.tint(metrics.chip_active_fill.hovered),
+            active_pressed: skin.tint(metrics.chip_active_fill.pressed),
+            active_text: skin.rgba(metrics.chip_active_text_color),
             chip_stroke: skin.rgba(metrics.chip_frame.border),
-            hovered: skin.palette.bg_panel_2,
-            idle: skin.palette.bg_panel,
-            inactive_text: skin.palette.text_dim,
+            hovered: skin.tint(metrics.chip_fill.hovered),
+            idle: skin.tint(metrics.chip_fill.idle),
+            inactive_text: skin.rgba(metrics.chip_text.color),
             metrics,
-            panel: skin.palette.bg_panel,
-            pressed: skin.palette.accent_soft,
-            role: TextRoleSkin {
-                color: ColorRole::TextDim,
-                font: FontFamily::Mono,
-                size: metrics.chip_text.size,
-                spacing: 0.0,
-                weight: metrics.chip_text.weight,
-            },
-            selector_fill: skin.palette.line,
+            panel: skin.rgba(metrics.panel_fill),
+            pressed: skin.tint(metrics.chip_fill.pressed),
+            role: metrics.chip_text,
+            selector_fill: skin.rgba(metrics.selector_fill),
             selector_stroke: skin.rgba(metrics.selector_frame.border),
         }
     }
@@ -170,9 +166,10 @@ impl Preset {
         let state = cell_state(face.visual, face.index);
         let fill = match (face.active, state) {
             (true, VisualState::Hovered) => self.active_hovered,
-            (_, VisualState::Pressed) => self.pressed,
+            (true, VisualState::Pressed) => self.active_pressed,
             (true, VisualState::Idle) => self.active,
             (false, VisualState::Hovered) => self.hovered,
+            (false, VisualState::Pressed) => self.pressed,
             (false, VisualState::Idle) => self.idle,
         };
         quad(

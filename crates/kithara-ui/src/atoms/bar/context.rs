@@ -6,7 +6,7 @@ use crate::{
     draw::{DrawListBuilder, Pt, Rect, Rgba, Transform},
     render::{Mark, Skin},
     shaping::TextContext,
-    skin::{FontFamily, TextRoleSkin},
+    skin::TextRoleSkin,
 };
 
 /// The chevron between the scope and the path it opens onto.
@@ -51,17 +51,10 @@ pub(crate) struct Scope {
 impl Context {
     pub(crate) fn new(skin: &Skin) -> Self {
         let metrics = &skin.tree;
-        let mono = |font: crate::skin::FontSkin, color| TextRoleSkin {
-            color,
-            font: FontFamily::Mono,
-            size: font.size,
-            spacing: 0.0,
-            weight: font.weight,
-        };
         Self {
             background: skin.rgba(metrics.context_background),
-            breadcrumb: skin.palette.text_dim,
-            breadcrumb_role: mono(metrics.context_text, metrics.scope_text_color),
+            breadcrumb: skin.rgba(metrics.context_text.color),
+            breadcrumb_role: metrics.context_text,
             content_height: metrics.context_height - metrics.context_divider_width,
             divider: skin.rgba(metrics.context_divider),
             divider_width: metrics.context_divider_width,
@@ -69,13 +62,16 @@ impl Context {
             // Decoration rather than content: the path is what this strip says,
             // and a mark that cannot be read leaves the words where they are.
             icon: crate::render::Icon::Zvuk.mark(),
-            icon_color: skin.palette.text,
+            icon_color: skin.rgba(metrics.context_icon_color),
             icon_size: metrics.context_icon_size,
             padding_x: metrics.context_padding_x,
             picker: Picker::new(skin),
             scope_gap: metrics.scope_gap,
             separator: skin.rgba(metrics.scope_chevron_color),
-            separator_role: mono(metrics.scope_text, metrics.scope_chevron_color),
+            separator_role: TextRoleSkin {
+                color: metrics.scope_chevron_color,
+                ..metrics.scope_text
+            },
         }
     }
 

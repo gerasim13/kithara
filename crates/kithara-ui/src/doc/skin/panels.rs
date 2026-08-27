@@ -110,8 +110,17 @@ skin_section! {
 
 skin_section! {
     pub struct GlobalBarSkin => GlobalBarPatch {
-        pub brand_text: FontSkin,
-        pub chip_text: FontSkin,
+        pub brand_text: TextRoleSkin,
+        pub chip_text: TextRoleSkin,
+        /// What a preset chip fills with when it is not the one in use, and
+        /// when it is.
+        pub chip_fill: StateColors,
+        pub chip_active_fill: StateColors,
+        pub chip_active_text_color: ColorRole,
+        pub settings_fill: StateColors,
+        pub settings_icon_color: ColorRole,
+        pub panel_fill: ColorRole,
+        pub selector_fill: ColorRole,
         pub chip_frame: FrameSkin,
         pub selector_frame: FrameSkin,
         pub settings_frame: FrameSkin,
@@ -194,6 +203,20 @@ skin_section! {
 skin_section! {
     pub struct TreeSkin => TreePatch {
         pub context_background: ColorRole,
+        pub context_icon_color: ColorRole,
+        /// What a row lays down behind itself, and the bar it carries on its
+        /// edge while it is the row in use. A row nobody is on lays nothing.
+        pub row_selected_fill: ColorRole,
+        pub row_hovered_fill: ColorRole,
+        pub row_marker_color: ColorRole,
+        pub row_text_color: ColorRole,
+        pub row_muted_text_color: ColorRole,
+        pub row_idle_text_color: ColorRole,
+        pub chevron_color: ColorRole,
+        pub search_caret_color: ColorRole,
+        pub search_icon_color: ColorRole,
+        pub search_placeholder_color: ColorRole,
+        pub search_selection_fill: ColorRole,
         pub context_divider: ColorRole,
         pub panel_background: ColorRole,
         pub scope_background: ColorRole,
@@ -207,11 +230,11 @@ skin_section! {
         pub scroller_color: ColorRole,
         pub search_background: ColorRole,
         pub search_divider: ColorRole,
-        pub context_text: FontSkin,
-        pub count_text: FontSkin,
-        pub label_text: FontSkin,
-        pub scope_text: FontSkin,
-        pub search_text: FontSkin,
+        pub context_text: TextRoleSkin,
+        pub count_text: TextRoleSkin,
+        pub label_text: TextRoleSkin,
+        pub scope_text: TextRoleSkin,
+        pub search_text: TextRoleSkin,
         pub scope_frame: FrameSkin,
         pub scope_menu_frame: FrameSkin,
         pub size: SizeSpec,

@@ -23,10 +23,10 @@ impl Settings {
         let metrics = skin.global_bar;
         Self {
             frame: metrics.settings_frame,
-            hovered: skin.palette.bg_panel_2,
-            icon: skin.palette.text_dim,
-            idle: skin.palette.bg_panel,
-            pressed: skin.palette.accent_soft,
+            hovered: skin.tint(metrics.settings_fill.hovered),
+            icon: skin.rgba(metrics.settings_icon_color),
+            idle: skin.tint(metrics.settings_fill.idle),
+            pressed: skin.tint(metrics.settings_fill.pressed),
             size: metrics.gear_size,
             stroke: skin.rgba(metrics.settings_frame.border),
         }
