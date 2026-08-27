@@ -2,7 +2,9 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use kithara_ui::{
     builtin,
-    render::{ControlAction, ReadValue, Reads, StereoLevels, TreeRow, WaveBucket, WaveformView},
+    render::{
+        ControlAction, ReadValue, Reads, Skin, StereoLevels, TreeRow, WaveBucket, WaveformView,
+    },
 };
 use num_traits::cast::AsPrimitive;
 
@@ -38,6 +40,11 @@ pub(crate) struct MockReads {
     library_query: String,
     #[field(get, vis = "pub(crate)", copy)]
     active_tab: Tab,
+    /// Which shipped skin the gallery wears, as an index into
+    /// [`builtin::skins`]. It lives beside the page rather than on it, so a
+    /// skin chosen here outlives every page turned afterwards.
+    #[field(get, vis = "pub(crate)", copy)]
+    active_skin: usize,
     tree_expanded: Vec<bool>,
     tree_rows: Vec<TreeRow<'static>>,
     tree_visible_indices: Vec<usize>,
@@ -92,6 +99,7 @@ impl Default for MockReads {
             tree_selected,
             active_module: ModuleDemo::Deck,
             active_tab: Tab::Atoms,
+            active_skin: 0,
             button_cue: false,
             button_play: false,
             button_sync: true,
@@ -195,6 +203,12 @@ impl MockReads {
             path if path.starts_with("table/column-") => {
                 self.toggle_table_column(&path["table/column-".len()..]);
             }
+            path if let Some(skin) = path
+                .strip_prefix("skins/")
+                .and_then(|rest| rest.strip_suffix("/item")) =>
+            {
+                self.select_skin(skin);
+            }
             path if path.ends_with("/transport/sync") => {
                 self.button_sync = !self.button_sync;
             }
@@ -263,6 +277,20 @@ impl MockReads {
         self.active_tab = tab;
         self.menu.set_open(tab == Tab::Menu);
         self.clock.set_open(tab == Tab::Clock);
+    }
+
+    /// The skin the gallery is dressed in, which every host asks for and no
+    /// page turn touches.
+    pub(crate) fn skin(&self) -> &'static Skin {
+        &builtin::skins()[self.active_skin]
+    }
+
+    /// Turns to the shipped skin of that name. A name no shipped skin answers
+    /// to leaves the gallery in the one it is wearing.
+    fn select_skin(&mut self, id: &str) {
+        if let Some(index) = builtin::skins().iter().position(|skin| skin.id() == id) {
+            self.active_skin = index;
+        }
     }
 
     pub(crate) const fn select_module(&mut self, module: ModuleDemo) {
@@ -392,11 +420,15 @@ impl MockReads {
             "gallery.tab.sprites" => self.active_tab == Tab::Sprites,
             "gallery.tab.lottie" => self.active_tab == Tab::Lottie,
             "gallery.tab.table_long" => self.active_tab == Tab::TableLong,
+            "gallery.tab.skins" => self.active_tab == Tab::Skins,
             "gallery.module.deck" => self.active_module == ModuleDemo::Deck,
             "gallery.module.deck_micro" => self.active_module == ModuleDemo::DeckMicro,
             "gallery.module.global_bar" => self.active_module == ModuleDemo::GlobalBar,
             "gallery.module.telemetry" => self.active_module == ModuleDemo::Telemetry,
             "gallery.module.layout" => self.active_module == ModuleDemo::Layout,
+            endpoint if let Some(skin) = endpoint.strip_prefix("gallery.skin.") => {
+                builtin::skins()[self.active_skin].id() == skin
+            }
             _ => return None,
         };
         Some(ReadValue::Bool(value))

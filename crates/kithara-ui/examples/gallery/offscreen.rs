@@ -68,7 +68,7 @@ fn capture(dir: &PathBuf) -> Result<usize, String> {
     let frame = frame(dir);
     write_frame(dir, frame)?;
     let mut gallery = super::Gallery::mounted();
-    let skin = gallery.skin;
+    let skin = gallery.skin();
     let theme = theme(skin);
     let mut renderer = renderer()?;
     let film = Film::requested()?.unwrap_or_else(Film::stills);

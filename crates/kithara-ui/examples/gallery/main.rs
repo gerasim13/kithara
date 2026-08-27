@@ -20,6 +20,7 @@ use kithara_ui::{
     builtin,
     compile::{CompiledUi, compile},
     render::{Clock, Skin, UiEvent, WindowCommand, custom::CustomKinds, fonts, tree},
+    skin::SkinDoc,
     source::MemResolver,
 };
 
@@ -44,7 +45,6 @@ enum Message {
 }
 
 struct Gallery {
-    skin: &'static Skin,
     window_id: window::Id,
     /// This host's own reading of time, advanced by the same step the tick
     /// subscription fires at, so a document bound to it moves with the page.
@@ -59,17 +59,23 @@ struct Gallery {
 }
 
 impl Gallery {
+    /// The skin the gallery is dressed in, read off the same state every page
+    /// is read from, so turning a page cannot undress it.
+    fn skin(&self) -> &'static Skin {
+        self.reads.skin()
+    }
+
     /// The gallery with no window of iced's: the offscreen capture rasterises
     /// the same documents itself, and never opens one.
     fn mounted() -> Self {
         let resolver = resolver();
         let endpoints = mock::registry();
+        let skin = builtin::skin().document();
         Self {
-            layouts: Tab::ALL.map(|tab| compiled(tab.entry(), &resolver, &endpoints)),
+            layouts: Tab::ALL.map(|tab| compiled(tab.entry(), &resolver, &endpoints, skin)),
             module_layouts: ModuleDemo::ALL
-                .map(|module| compiled(module.entry(), &resolver, &endpoints)),
+                .map(|module| compiled(module.entry(), &resolver, &endpoints, skin)),
             window_id: window::Id::unique(),
-            skin: builtin::skin(),
             clock: Clock::default(),
             reads: MockReads::default(),
             kinds: custom::kinds(),
@@ -103,38 +109,10 @@ impl Gallery {
     fn new() -> (Self, Task<Message>) {
         let resolver = resolver();
         let endpoints = mock::registry();
-        let layouts = Tab::ALL.map(|tab| {
-            compile(
-                tab.entry(),
-                &resolver,
-                &endpoints,
-                builtin::skin_doc(),
-                builtin::text_doc(),
-                custom::config(),
-            )
-            .unwrap_or_else(|error| {
-                panic!(
-                    "embedded gallery document {} must compile: {error}",
-                    tab.entry()
-                )
-            })
-        });
-        let module_layouts = ModuleDemo::ALL.map(|module| {
-            compile(
-                module.entry(),
-                &resolver,
-                &endpoints,
-                builtin::skin_doc(),
-                builtin::text_doc(),
-                custom::config(),
-            )
-            .unwrap_or_else(|error| {
-                panic!(
-                    "embedded gallery document {} must compile: {error}",
-                    module.entry()
-                )
-            })
-        });
+        let skin = builtin::skin().document();
+        let layouts = Tab::ALL.map(|tab| compiled(tab.entry(), &resolver, &endpoints, skin));
+        let module_layouts =
+            ModuleDemo::ALL.map(|module| compiled(module.entry(), &resolver, &endpoints, skin));
         let settings = Settings {
             size: Size::new(Consts::WIDTH, Consts::HEIGHT),
             min_size: Some(Size::new(Consts::MIN_WIDTH, Consts::MIN_HEIGHT)),
@@ -154,7 +132,6 @@ impl Gallery {
                 layouts,
                 module_layouts,
                 window_id,
-                skin: builtin::skin(),
                 clock: Clock::default(),
                 reads: MockReads::default(),
                 kinds: custom::kinds(),
@@ -172,8 +149,18 @@ impl Gallery {
         }
     }
 
-    fn select_tab(&mut self, tab: Tab) {
-        self.reads.select_tab(tab);
+    /// Compiles every page again against the skin the gallery has turned to.
+    ///
+    /// A document is compiled against a skin and not merely painted with one:
+    /// what a page measures comes from the skin's own numbers, so a skin
+    /// changed at runtime is a set of pages built again.
+    fn dress(&mut self) {
+        let resolver = resolver();
+        let endpoints = mock::registry();
+        let skin = self.skin().document();
+        self.layouts = Tab::ALL.map(|tab| compiled(tab.entry(), &resolver, &endpoints, skin));
+        self.module_layouts =
+            ModuleDemo::ALL.map(|module| compiled(module.entry(), &resolver, &endpoints, skin));
     }
 
     /// Selects the next page and lets one frame render before the shot.
@@ -218,7 +205,7 @@ fn main() -> iced::Result {
     }
     let daemon = iced::daemon(Gallery::new, update, view)
         .title(|_state: &Gallery, _window| "Kithara UI Gallery".to_owned())
-        .theme(|state: &Gallery, _window| theme(state.skin))
+        .theme(|state: &Gallery, _window| theme(state.skin()))
         .subscription(subscription)
         .default_font(fonts::SANS);
     fonts::FONT_BYTES
@@ -237,9 +224,13 @@ fn update(state: &mut Gallery, message: Message) -> Task<Message> {
         }
         Message::Ui(UiEvent::Control { path, action }) => {
             if let Ok(tab) = Tab::try_from(path.as_str()) {
-                state.select_tab(tab);
+                state.reads.select_tab(tab);
             } else {
+                let was = state.reads.active_skin();
                 state.reads.apply(&path, &action);
+                if state.reads.active_skin() != was {
+                    state.dress();
+                }
             }
             Task::none()
         }
@@ -272,7 +263,7 @@ fn view(state: &Gallery, _window: window::Id) -> Element<'_, Message> {
         &state.compiled().root,
         state.compiled(),
         &state.reads,
-        state.skin,
+        state.skin(),
         state.clock,
         Some(&state.kinds),
     )
@@ -310,12 +301,13 @@ fn compiled(
     entry: &str,
     resolver: &MemResolver,
     endpoints: &dyn kithara_ui::registry::EndpointRegistry,
+    skin: &SkinDoc,
 ) -> CompiledUi {
     compile(
         entry,
         resolver,
         endpoints,
-        builtin::skin_doc(),
+        skin,
         builtin::text_doc(),
         custom::config(),
     )
@@ -363,6 +355,27 @@ mod tests {
             panic!("{endpoint} answers a scalar")
         };
         value
+    }
+
+    /// A page is compiled against a skin, so a skin the gallery turns to is a
+    /// set of pages built again rather than repainted. The neon skin gives the
+    /// nav taller rows, which is a measurement the compiled page carries.
+    #[kithara::test]
+    fn turning_to_another_skin_compiles_the_pages_again() {
+        let mut gallery = Gallery::mounted();
+        gallery.reads.select_tab(Tab::Skins);
+        let dark = gallery.compiled().min;
+
+        drop(update(
+            &mut gallery,
+            Message::Ui(UiEvent::Control {
+                path: "skins/kithara-neon/item".to_owned(),
+                action: ControlAction::Activate,
+            }),
+        ));
+
+        assert_eq!(gallery.skin().id(), "kithara-neon");
+        assert_ne!(gallery.compiled().min, dark);
     }
 
     #[kithara::test]
@@ -693,6 +706,7 @@ mod tests {
                 ("gallery/shader/item", "activation"),
                 ("gallery/sprites/item", "activation"),
                 ("gallery/sizes/item", "activation"),
+                ("gallery/skins/item", "activation"),
                 ("gallery/stress/item", "activation"),
                 ("gallery/titlebars/item", "activation"),
                 ("gallery/tokens/item", "activation"),
@@ -907,6 +921,34 @@ mod tests {
             .map(|path| Tab::try_from(path.as_str()).unwrap_or_else(|()| panic!("{path}")))
             .collect();
         assert_eq!(selected, Tab::ALL);
+    }
+
+    /// The page offering a choice of skins and the skins the crate ships are
+    /// two hand-written lists. A skin added to one and not the other is either
+    /// a row nothing answers or a skin nobody can reach.
+    #[kithara::test]
+    fn the_skins_page_offers_every_shipped_skin() {
+        let ui = compile(
+            Tab::Skins.entry(),
+            &resolver(),
+            &mock::registry(),
+            builtin::skin_doc(),
+            builtin::text_doc(),
+            custom::config(),
+        )
+        .unwrap_or_else(|error| panic!("{} must compile: {error}", Tab::Skins.entry()));
+        let mut paths = Vec::new();
+        collect_nav_item_paths(&ui.root, &ui, &mut paths);
+
+        let offered: Vec<&str> = paths
+            .iter()
+            .filter_map(|path| {
+                path.strip_prefix("skins/")
+                    .and_then(|rest| rest.strip_suffix("/item"))
+            })
+            .collect();
+        let shipped: Vec<&str> = builtin::skins().iter().map(Skin::id).collect();
+        assert_eq!(offered, shipped);
     }
 
     fn collect_nav_item_paths(node: &CompiledNode, ui: &CompiledUi, paths: &mut Vec<String>) {

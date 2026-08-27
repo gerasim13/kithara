@@ -62,8 +62,11 @@ impl Gallery {
 }
 
 impl App for Gallery {
-    fn skin(&self) -> &Skin {
-        builtin::skin()
+    delegate::delegate! {
+        to self.reads {
+            fn skin(&self) -> &Skin;
+            fn tick(&mut self);
+        }
     }
 
     fn document(&self) -> &str {
@@ -95,10 +98,6 @@ impl App for Gallery {
             _ => {}
         }
     }
-
-    fn tick(&mut self) {
-        self.reads.tick();
-    }
 }
 
 #[cfg(test)]
@@ -109,9 +108,45 @@ mod tests {
         app::Ui,
         draw::Pt,
         interact::{Input, MOUSE, PointerInput, PointerPhase},
+        render::ControlAction,
     };
 
-    use super::{App, Config, Gallery, builtin, custom, mock, resolver};
+    use super::{App, Config, Gallery, Tab, UiEvent, builtin, custom, mock, resolver};
+
+    /// Pressing a row on the skins page dresses the gallery in that skin.
+    #[kithara::test]
+    fn choosing_a_skin_dresses_the_gallery_in_it() {
+        let mut gallery = Gallery::default();
+        assert_eq!(gallery.skin().id(), "kithara-dark");
+
+        gallery.update(pressing("skins/kithara-neon/item"));
+
+        assert_eq!(gallery.skin().id(), "kithara-neon");
+    }
+
+    /// The skin outlives the page it was chosen on, which is the whole point of
+    /// choosing one: every widget the gallery shows is looked at in it.
+    #[kithara::test]
+    fn turning_the_page_keeps_the_skin_it_was_chosen_in() {
+        let mut gallery = Gallery::default();
+        gallery.update(pressing("skins/kithara-light/item"));
+
+        for tab in Tab::ALL {
+            gallery.reads.select_tab(tab);
+            assert_eq!(
+                gallery.skin().id(),
+                "kithara-light",
+                "the gallery undressed itself on {tab:?}"
+            );
+        }
+    }
+
+    fn pressing(path: &str) -> UiEvent {
+        UiEvent::Control {
+            path: path.to_owned(),
+            action: ControlAction::Activate,
+        }
+    }
 
     /// Presses where the nav reads BUTTONS and expects the gallery to turn to
     /// that page. This is the whole chain the window depends on: pointer, leaf,

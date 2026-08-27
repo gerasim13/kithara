@@ -22,6 +22,10 @@ const ASSETS: &[(&str, &str)] = &[
         include_str!("assets/gallery-clock.klayout.ron"),
     ),
     (
+        "gallery-skins.klayout.ron",
+        include_str!("assets/gallery-skins.klayout.ron"),
+    ),
+    (
         "gallery-atoms.klayout.ron",
         include_str!("assets/gallery-atoms.klayout.ron"),
     ),
@@ -376,6 +380,10 @@ const ASSETS: &[(&str, &str)] = &[
     (
         "modules/tabs/tokens.kmodule.ron",
         include_str!("assets/modules/tabs/tokens.kmodule.ron"),
+    ),
+    (
+        "modules/tabs/skins.kmodule.ron",
+        include_str!("assets/modules/tabs/skins.kmodule.ron"),
     ),
     (
         "modules/tabs/table.kmodule.ron",

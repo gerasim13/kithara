@@ -4,6 +4,7 @@ use kithara_ui::{
     envelope::{DocKind, probe},
     error::UiDocError,
     ids::{DocId, SourceUri},
+    render::Skin,
     skin::parse_skin,
 };
 
@@ -20,6 +21,41 @@ fn builtin_skin_parses_every_required_section() {
     let document = parse_skin(builtin::DARK_SKIN, &origin()).unwrap();
 
     assert_eq!(document.id, DocId("kithara-dark".to_owned()));
+}
+
+/// Every skin the crate ships is loaded through whatever base chain it
+/// declares and resolved. A patch naming a field its base does not have, or a
+/// colour that does not parse, fails here rather than at the first frame worn
+/// in it.
+#[kithara::test]
+fn every_shipped_skin_resolves_under_its_own_name() {
+    let names: Vec<&str> = builtin::skins().iter().map(Skin::id).collect();
+
+    assert_eq!(names, ["kithara-dark", "kithara-light", "kithara-neon"]);
+}
+
+/// A skin written over another restates only what it changes, so the page
+/// colour moves and the room every control asks for does not.
+#[kithara::test]
+fn a_skin_written_over_the_dark_one_keeps_its_measurements() {
+    let [dark, light, ..] = builtin::skins() else {
+        panic!("the crate must ship a dark skin and a skin written over it")
+    };
+
+    assert_ne!(light.palette.bg, dark.palette.bg);
+    assert_eq!(light.chrome.header_height, dark.chrome.header_height);
+}
+
+/// A skin carries measurements as well as colour, and a patch may restate one
+/// field of a section without restating the section.
+#[kithara::test]
+fn a_skin_may_restate_one_measurement_of_a_section() {
+    let [dark, _, neon, ..] = builtin::skins() else {
+        panic!("the crate must ship a dark skin and a neon one written over it")
+    };
+
+    assert_ne!(neon.nav.item_height, dark.nav.item_height);
+    assert_eq!(neon.nav.icon_size, dark.nav.icon_size);
 }
 
 #[kithara::test]

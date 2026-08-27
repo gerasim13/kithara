@@ -28,6 +28,19 @@ an invalid embedded document or colour.
 
 ## Skin Ownership
 
+The skin belongs to the application, not to the host it is drawn by: `App::skin` is asked for one
+every frame, and the host follows a change of skin the way it follows a change of document. A
+document is *compiled* against a skin - `compile` reads the skin's own measurements for the room
+every node asks for - so a host turning to another skin builds its pages again rather than repainting
+them. `app::embed` does that by remounting when `App::skin().id()` changes; a host that owns its
+compiled pages, as the gallery's iced one does, compiles them again itself.
+
+`builtin::skins` is the ordered list of skins the crate ships, and `builtin::skin` is the first of
+them, which is the one worn by anything naming none. `kithara-light` and `kithara-neon` are written
+over `kithara-dark` with a `base:` line and restate only what they change: the light one only the
+palette, the neon one the palette plus a nav metric and a frame, so the patch chain is exercised
+across both kinds of field.
+
 `SkinDoc` owns every configurable rendering metric, including the intrinsic control sizes the
 toolkit-independent compiler reads. With `render`, `Skin::resolve` converts the document to iced
 colours and keeps it behind `Skin::document()` for layout sizing. Frequently read document sections,
@@ -60,10 +73,11 @@ like - select a role by the value it holds:
 | `LineDim` | `#242442` | none |
 | `AccentSoft` | `#bb94422e` | none - and no consumer |
 
-Two pins guard it: `palette_holds_exactly_the_declared_roles` in `doc/skin/document.rs` owns
-completeness and every hex against a whole-struct literal, and `tests/skin.rs::TOKENS` is the
-checked-in `(design token, hex, ColorRole)` table over the fields that carry one, its length assert
-pinned against the table rather than the struct, so a new field takes a token row by review.
+The role list is written once, in `color_roles!` (`doc/skin/palette.rs`), and expanded into the
+parsed `PaletteDoc`, its patch, and the resolved `RenderPalette` - so a role added or dropped reaches
+all three or none. Completeness of the shipped skins is a parse result rather than a second list:
+every role is required, and `tests/skin.rs::builtin_skin_parses_every_required_section` is the pin
+that says so.
 
 Menu typography resolves through `SkinDoc.text`, one entry per type spec, so a tone differing from
 the default is named on the node and mints no second entry. A `Dim` is a literal with no role

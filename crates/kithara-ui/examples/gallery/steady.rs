@@ -209,7 +209,7 @@ mod immediate {
     pub(super) fn pictures(page: Shot, draws: usize, between: Between) -> Vec<Picture> {
         let mut gallery = super::super::Gallery::mounted();
         gallery.select(page);
-        let theme = super::super::theme(gallery.skin);
+        let theme = super::super::theme(gallery.skin());
         let base = theme.base();
         let logical = super::super::window_size();
         let mut renderer = renderer();

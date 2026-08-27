@@ -13,6 +13,15 @@ pub const MICRO_PRESET: &str = "micro.klayout.ron";
 pub const PLAYER_PRESET: &str = "player.klayout.ron";
 pub const DARK_SKIN: &str = include_str!("../assets/kithara-dark.kskin.ron");
 pub const DARK_SKIN_PATH: &str = "kithara-dark.kskin.ron";
+/// Paper and neon: two skins written over the dark one, restating its palette
+/// and nothing else.
+pub const LIGHT_SKIN: &str = include_str!("../assets/kithara-light.kskin.ron");
+pub const LIGHT_SKIN_PATH: &str = "kithara-light.kskin.ron";
+pub const NEON_SKIN: &str = include_str!("../assets/kithara-neon.kskin.ron");
+pub const NEON_SKIN_PATH: &str = "kithara-neon.kskin.ron";
+/// Every skin this crate ships, in the order a picker offers them. The first
+/// is the one a host wears when it names none.
+pub const SKIN_PATHS: [&str; 3] = [DARK_SKIN_PATH, LIGHT_SKIN_PATH, NEON_SKIN_PATH];
 /// Eight frames of a growing arc, in one row, for the sprite page and its
 /// cross-host proof.
 pub const SPINNER_SHEET: &[u8] = include_bytes!("../assets/sprites/spinner.png");
@@ -22,6 +31,8 @@ pub const TEXT_EN: &str = include_str!("../assets/kithara-en.ktext.ron");
 pub fn resolver() -> MemResolver {
     const ASSETS: &[(&str, &str)] = &[
         (DARK_SKIN_PATH, DARK_SKIN),
+        (LIGHT_SKIN_PATH, LIGHT_SKIN),
+        (NEON_SKIN_PATH, NEON_SKIN),
         (MICRO_PRESET, include_str!("../assets/micro.klayout.ron")),
         (PLAYER_PRESET, include_str!("../assets/player.klayout.ron")),
         (
@@ -122,18 +133,31 @@ pub fn text_doc() -> &'static TextDoc {
     &TEXT_DOC
 }
 
+/// The skin a host wears when it names none.
 #[cfg(feature = "render")]
 #[must_use]
 pub fn skin() -> &'static Skin {
-    static SKIN: LazyLock<Skin> = LazyLock::new(|| {
-        Skin::resolve(skin_doc().clone(), text_doc(), &skin_origin())
-            .unwrap_or_else(|error| panic!("embedded kithara dark skin must resolve: {error}"))
-    });
-    &SKIN
+    &skins()[0]
 }
 
-fn skin_origin() -> SourceUri {
-    SourceUri(DARK_SKIN_PATH.to_owned())
+/// Every shipped skin, resolved, in the order [`SKIN_PATHS`] declares.
+#[cfg(feature = "render")]
+#[must_use]
+pub fn skins() -> &'static [Skin] {
+    static SKINS: LazyLock<Vec<Skin>> = LazyLock::new(|| {
+        let resolver = resolver();
+        SKIN_PATHS
+            .iter()
+            .map(|path| {
+                let origin = SourceUri((*path).to_owned());
+                let document = load_skin(&resolver, path, &Limits::default())
+                    .unwrap_or_else(|error| panic!("embedded skin {path} must be valid: {error}"));
+                Skin::resolve(document, text_doc(), &origin)
+                    .unwrap_or_else(|error| panic!("embedded skin {path} must resolve: {error}"))
+            })
+            .collect()
+    });
+    &SKINS
 }
 
 fn text_origin() -> SourceUri {

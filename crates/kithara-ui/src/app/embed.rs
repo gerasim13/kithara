@@ -343,14 +343,14 @@ where
             return;
         }
         let was_document = self.app.document().to_owned();
-        let was_skin = self.app.skin().document().id.clone();
+        let was_skin = self.app.skin().id().to_owned();
         for event in actions {
             if let UiEvent::Window(command) = event {
                 self.commands.push(command);
             }
             self.app.update(event);
         }
-        if self.app.document() == was_document && self.app.skin().document().id == was_skin {
+        if self.app.document() == was_document && self.app.skin().id() == was_skin {
             let Self {
                 app,
                 clock,

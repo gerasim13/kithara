@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 
 use kithara_ui::{
+    builtin,
     ids::EndpointId,
     registry::{EndpointCategory, EndpointDesc, EndpointRegistry, ValueKind},
 };
@@ -464,6 +465,7 @@ fn insert_page_endpoints(registry: &mut MockRegistry) {
         "gallery.tab.sprites",
         "gallery.tab.lottie",
         "gallery.tab.table_long",
+        "gallery.tab.skins",
         "gallery.module.deck",
         "gallery.module.deck_micro",
         "gallery.module.global_bar",
@@ -483,6 +485,15 @@ fn insert_page_endpoints(registry: &mut MockRegistry) {
         registry.insert(
             EndpointCategory::Model,
             id,
+            EndpointDesc::new(ValueKind::Bool),
+        );
+    }
+    // Named from the shipped skins themselves, so the page offering a choice
+    // and the endpoints answering it cannot come to differ.
+    for skin in builtin::skins() {
+        registry.insert(
+            EndpointCategory::Model,
+            &format!("gallery.skin.{}", skin.id()),
             EndpointDesc::new(ValueKind::Bool),
         );
     }

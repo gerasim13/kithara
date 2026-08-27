@@ -42,7 +42,10 @@ macro_rules! define_skin {
             $(pub $field: $section,)*
             #[field(get, vis = "pub(crate)")]
             text_resources: TextResources,
-            #[field(get, vis = "pub(crate)")]
+            /// The document this skin was resolved from, which is what a
+            /// host compiles its pages against: what a page measures comes
+            /// from the skin's own numbers, not only what it is painted with.
+            #[field(get)]
             document: SkinDoc,
         }
 
@@ -92,6 +95,13 @@ pub(crate) fn active_tone(
 }
 
 impl Skin {
+    /// What the skin's own document calls it, which is how anything offering a
+    /// choice of skins tells one from another.
+    #[must_use]
+    pub fn id(&self) -> &str {
+        &self.document.id.0
+    }
+
     /// The typography one document text style names, with the tone already
     /// selected.
     ///

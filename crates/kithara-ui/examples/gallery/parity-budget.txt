@@ -171,3 +171,9 @@
 # priced here is the caption text and the nav beside it, the edge-and-text noise
 # every page in this set carries.
 26-custom.png               1
+
+# The skin picker, 2026-08-27, at 0.7% of pixels and 0.3% of ink. The page is a
+# row of nav items and two rows of swatches: flat fills both hosts land on the
+# same pixels, so what is priced here is the label text on them and the nav
+# beside it, the edge-and-text noise every page in this set carries.
+27-skins.png                1

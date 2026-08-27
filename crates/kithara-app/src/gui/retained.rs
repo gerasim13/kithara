@@ -2,7 +2,7 @@ use iced::window;
 use kithara_ui::{
     app::{App, Config, RunError},
     builtin,
-    render::{Reads, UiEvent, Walk},
+    render::{Reads, Skin, UiEvent, Walk},
 };
 
 use super::{
@@ -111,7 +111,7 @@ mod tests {
         render::{ReadValue, Reads},
     };
 
-    use super::{App, Config, builtin, endpoints, ui};
+    use super::{App, Config, Skin, builtin, endpoints, ui};
 
     /// A studio with nothing loaded: every control falls back to what the
     /// document and the skin say, which is the hardest case for a host that
