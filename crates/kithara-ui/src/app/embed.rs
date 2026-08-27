@@ -37,7 +37,7 @@ use crate::{
     draw::{PoolStats, Rgba},
     interact::{Input, PointerPhase, ScrollAxis, masonry::masonry_text_event},
     render::{
-        Reads, UiEvent, WindowCommand,
+        Reads, Skin, UiEvent, WindowCommand,
         custom::CustomKinds,
         document,
         document::{Clock, Ctx},
@@ -108,7 +108,7 @@ where
     /// the target's: clearing to anything else shows through wherever a
     /// document does not reach, and the other host does not have that seam.
     pub fn background(&self) -> Rgba {
-        let skin = &self.config.skin;
+        let skin = self.app.skin();
         skin.rgba(skin.layout.page_background)
     }
 
@@ -249,7 +249,7 @@ where
             ..
         } = self;
         let clock = *clock;
-        app.reads(|reads| root.refresh(frame_ctx(ui, reads, config, clock)));
+        app.reads(|reads| root.refresh(frame_ctx(ui, reads, app.skin(), config, clock)));
         if let Err(error) = self
             .root
             .handle_window_event(WindowEvent::AnimFrame(elapsed))
@@ -333,23 +333,24 @@ where
     /// would replace the whole widget tree, which discards the gesture a control
     /// is in the middle of, the pointer capture that feeds it, and the run of
     /// clicks a double click is made of. The tree is only rebuilt when the
-    /// application turns to a different document, which is the one case where
-    /// its shape really did change — and only then is the document compiled
-    /// again. A hand on a knob publishes an action for every step it moves, and
+    /// application turns to another document or another skin, the two cases
+    /// where its shape really did change — and only then is the document
+    /// compiled again. A hand on a knob publishes an action for every step it moves, and
     /// compiling the page for each of them costs more than drawing it.
     fn settle(&mut self) {
         let actions = self.root.take_actions();
         if actions.is_empty() {
             return;
         }
-        let was = self.app.document().to_owned();
+        let was_document = self.app.document().to_owned();
+        let was_skin = self.app.skin().document().id.clone();
         for event in actions {
             if let UiEvent::Window(command) = event {
                 self.commands.push(command);
             }
             self.app.update(event);
         }
-        if self.app.document() == was {
+        if self.app.document() == was_document && self.app.skin().document().id == was_skin {
             let Self {
                 app,
                 clock,
@@ -359,15 +360,24 @@ where
                 ..
             } = self;
             let clock = *clock;
-            app.reads(|reads| root.refresh(frame_ctx(ui, reads, config, clock)));
+            app.reads(|reads| root.refresh(frame_ctx(ui, reads, app.skin(), config, clock)));
             return;
         }
-        let Ok(ui) = compile_document(&self.app, &self.config)
-            .inspect_err(|error| tracing::error!(%error, "document did not compile"))
-        else {
-            return;
-        };
-        let Ok(root) = mount(
+        if let Err(error) = self.remount() {
+            tracing::error!(%error, "document did not follow its application");
+        }
+    }
+
+    /// Compiles the application's document again and mounts what it produced,
+    /// in place of what this host is showing.
+    ///
+    /// The tree a host mounts is retained: its shape is settled where it is
+    /// built, so a document that now compiles to another shape - because the
+    /// application moved on, or because another skin measures it differently -
+    /// reaches the screen only by being built again.
+    fn remount(&mut self) -> Result<(), RunError> {
+        let ui = compile_document(&self.app, &self.config)?;
+        self.root = mount(
             &self.app,
             &self.config,
             &self.state,
@@ -375,18 +385,12 @@ where
             self.size,
             self.scale,
             self.clock,
-        )
-        .inspect_err(|error| tracing::error!(%error, "document did not mount")) else {
-            return;
-        };
-        self.root = root;
+        )?;
         self.ui = ui;
-        if let Err(error) = self
-            .root
+        self.root
             .handle_window_event(WindowEvent::Resize(self.size))
-        {
-            tracing::error!(%error, "masonry resize");
-        }
+            .map(|_| ())
+            .map_err(|error| RunError::Host(error.to_string()))
     }
 }
 
@@ -404,7 +408,7 @@ where
         app.document(),
         config.resolver,
         config.endpoints,
-        config.skin.document(),
+        app.skin().document(),
         config.text,
         &doc,
     )?)
@@ -415,10 +419,11 @@ where
 fn frame_ctx<'a, 'r>(
     ui: &'a CompiledUi,
     reads: &'r dyn Reads,
+    skin: &'a Skin,
     config: &Config<'a>,
     clock: Clock,
 ) -> Ctx<'a, 'r> {
-    let ctx = Ctx::new(ui, reads, config.skin.document(), clock);
+    let ctx = Ctx::new(ui, reads, skin.document(), clock);
     config.kinds.map_or(ctx, |kinds| ctx.with_kinds(kinds))
 }
 
@@ -436,9 +441,10 @@ where
 {
     #[cfg(test)]
     state.clear_paths();
+    let skin = app.skin();
     let node = app.reads(|reads| {
-        let ctx = frame_ctx(ui, reads, config, clock);
-        let host = MasonryHost::new(ctx, config.skin).with_state(state.clone());
+        let ctx = frame_ctx(ui, reads, skin, config, clock);
+        let host = MasonryHost::new(ctx, skin).with_state(state.clone());
         document::render(&ui.root, ctx, host)
     });
     MasonryRoot::new(

@@ -660,7 +660,6 @@ impl Fixture {
         Config::builder()
             .endpoints(&self.registry)
             .resolver(&self.resolver)
-            .skin(skin())
             .text(builtin::text_doc())
             .kinds(&self.kinds)
             .build()
@@ -963,6 +962,10 @@ struct CensusApp {
 }
 
 impl App for CensusApp {
+    fn skin(&self) -> &Skin {
+        builtin::skin()
+    }
+
     fn document(&self) -> &str {
         LAYOUT
     }

@@ -188,7 +188,7 @@ mod retained {
         app::{App, Config, Ui},
         builtin,
         compile::compile,
-        render::{Reads, UiEvent},
+        render::{Reads, Skin, UiEvent},
     };
 
     use super::{FRAMES, Shot, Walked};
@@ -210,6 +210,7 @@ mod retained {
         delegate::delegate! {
             to self.gallery {
                 fn document(&self) -> &str;
+                fn skin(&self) -> &Skin;
                 fn update(&mut self, event: UiEvent);
             }
         }
@@ -251,7 +252,6 @@ mod retained {
         let config = Config::builder()
             .endpoints(&endpoints)
             .resolver(&resolver)
-            .skin(builtin::skin())
             .text(builtin::text_doc())
             .kinds(&kinds)
             .build();

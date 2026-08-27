@@ -289,6 +289,10 @@ fn text(endpoint: &str) -> &'static str {
 }
 
 impl App for Fixture {
+    fn skin(&self) -> &Skin {
+        builtin::skin()
+    }
+
     fn document(&self) -> &str {
         ui::entry(self.layout)
     }
@@ -521,7 +525,6 @@ fn masonry(
         Config::builder()
             .endpoints(&endpoints)
             .resolver(&resolver)
-            .skin(builtin::skin())
             .text(&text)
             .build(),
         (geometry.width, geometry.height),

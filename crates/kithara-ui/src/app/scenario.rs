@@ -9,7 +9,7 @@ use super::{App, Config, Ui};
 use crate::{
     draw::{Pt, Rect, Rgba},
     interact::{Input, MOUSE, PointerInput, PointerPhase, Scroll},
-    render::{Reads, UiEvent},
+    render::{Reads, Skin, UiEvent},
 };
 
 /// Wraps an application, recording every event the document published to
@@ -35,6 +35,7 @@ impl<A: App> App for Recording<A> {
     delegate::delegate! {
         to self.inner {
             fn document(&self) -> &str;
+            fn skin(&self) -> &Skin;
             fn tick(&mut self);
         }
     }

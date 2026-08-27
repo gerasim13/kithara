@@ -315,7 +315,6 @@ mod retained {
         let config = Config::builder()
             .endpoints(&endpoints)
             .resolver(&resolver)
-            .skin(builtin::skin())
             .text(builtin::text_doc())
             .kinds(&kinds)
             .build();

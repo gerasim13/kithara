@@ -214,7 +214,6 @@ fn capture(dir: &PathBuf) -> Result<usize, String> {
     let config = Config::builder()
         .endpoints(&endpoints)
         .resolver(&resolver)
-        .skin(builtin::skin())
         .text(builtin::text_doc())
         .kinds(&kinds)
         .build();

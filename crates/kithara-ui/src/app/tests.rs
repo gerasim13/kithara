@@ -3,6 +3,7 @@ use std::{
     fs::{File, create_dir_all},
     io::BufWriter,
     path::{Path, PathBuf},
+    sync::LazyLock,
 };
 
 use kithara_platform::time::Duration;
@@ -13,7 +14,7 @@ use super::{App, Config, RunError, Ui, scenario::Scenario};
 use crate::{
     builtin,
     draw::{Pt, Rect, Rgba},
-    ids::{EndpointId, SourceUri},
+    ids::{DocId, EndpointId, SourceUri},
     interact::{Input, Key, MOUSE, Modifiers, PointerInput, PointerPhase},
     registry::{EndpointCategory, EndpointDesc, EndpointRegistry, ValueKind},
     render::{
@@ -48,12 +49,66 @@ impl Reads for Swapper {
 }
 
 impl App for Swapper {
+    fn skin(&self) -> &Skin {
+        skin()
+    }
+
     fn document(&self) -> &str {
         if self.lit {
             "lit.klayout.ron"
         } else {
             "dim.klayout.ron"
         }
+    }
+
+    fn reads<R>(&self, with: impl FnOnce(&dyn Reads) -> R) -> R {
+        with(self)
+    }
+
+    fn update(&mut self, event: UiEvent) {
+        if let UiEvent::Control { action, .. } = event
+            && action == ControlAction::Activate
+        {
+            self.lit = !self.lit;
+        }
+    }
+}
+
+/// An application that wears one of two skins and turns to the other whenever
+/// the document it is showing publishes an activation. Which skin a player
+/// wears is the player's to decide, so switching one at runtime is this and
+/// nothing more.
+struct Dresser<'a> {
+    lit: bool,
+    off: &'a Skin,
+    on: &'a Skin,
+}
+
+impl<'a> Dresser<'a> {
+    const fn wearing(off: &'a Skin, on: &'a Skin) -> Self {
+        Self {
+            lit: false,
+            off,
+            on,
+        }
+    }
+}
+
+impl Reads for Dresser<'_> {
+    fn get(&self, endpoint: &str) -> Option<ReadValue<'_>> {
+        let id = endpoint.split_once('@').map_or(endpoint, |(id, _)| id);
+        (id == "fixture.lit").then_some(ReadValue::Bool(self.lit))
+    }
+}
+
+impl App for Dresser<'_> {
+    /// The one document it shows either way: what changes here is the skin.
+    fn document(&self) -> &str {
+        "dim.klayout.ron"
+    }
+
+    fn skin(&self) -> &Skin {
+        if self.lit { self.on } else { self.off }
     }
 
     fn reads<R>(&self, with: impl FnOnce(&dyn Reads) -> R) -> R {
@@ -101,6 +156,10 @@ impl Reads for Dial {
 }
 
 impl App for Dial {
+    fn skin(&self) -> &Skin {
+        skin()
+    }
+
     fn document(&self) -> &str {
         "one.klayout.ron"
     }
@@ -130,6 +189,10 @@ impl Reads for TickingDial {
 }
 
 impl App for TickingDial {
+    fn skin(&self) -> &Skin {
+        skin()
+    }
+
     fn document(&self) -> &str {
         "one.klayout.ron"
     }
@@ -158,6 +221,10 @@ impl Reads for Typed {
 }
 
 impl App for Typed {
+    fn skin(&self) -> &Skin {
+        skin()
+    }
+
     fn document(&self) -> &str {
         "one.klayout.ron"
     }
@@ -183,6 +250,10 @@ impl Reads for Board {
 }
 
 impl App for Board {
+    fn skin(&self) -> &Skin {
+        skin()
+    }
+
     fn document(&self) -> &str {
         "board.klayout.ron"
     }
@@ -238,6 +309,10 @@ impl Reads for InteractionBoard {
 }
 
 impl App for InteractionBoard {
+    fn skin(&self) -> &Skin {
+        skin()
+    }
+
     fn document(&self) -> &str {
         "interactions.klayout.ron"
     }
@@ -282,15 +357,10 @@ fn one_control(control: &str) -> MemResolver {
     resolver
 }
 
-fn focused_search<'a>(
-    endpoints: &'a Registry,
-    resolver: &'a MemResolver,
-    skin: &'a Skin,
-) -> Ui<'a, Typed> {
+fn focused_search<'a>(endpoints: &'a Registry, resolver: &'a MemResolver) -> Ui<'a, Typed> {
     let config = Config::builder()
         .endpoints(endpoints)
         .resolver(resolver)
-        .skin(skin)
         .text(builtin::text_doc())
         .build();
     let mut ui = Ui::new(Typed::default(), config, (240, 120), 1.0)
@@ -299,8 +369,8 @@ fn focused_search<'a>(
     ui.scene()
         .unwrap_or_else(|error| panic!("the search box must draw: {error}"));
     let at = Pt {
-        x: skin.tree.search_icon_width + 10.0,
-        y: skin.tree.search_height / 2.0,
+        x: skin().tree.search_icon_width + 10.0,
+        y: skin().tree.search_height / 2.0,
     };
     ui.input(press(at, PointerPhase::Move));
     ui.input(press(at, PointerPhase::Down));
@@ -308,13 +378,12 @@ fn focused_search<'a>(
     ui
 }
 
-fn tree_fixture() -> (Registry, MemResolver, Skin) {
+fn tree_fixture() -> (Registry, MemResolver) {
     (
         Registry("fixture.tree", EndpointDesc::new(ValueKind::Tree)),
         one_control(
             r#"Tree(id: "control", size: (w: Fill, h: Fill), read: Model(id: "fixture.tree"))"#,
         ),
-        skin(),
     )
 }
 
@@ -375,11 +444,9 @@ fn drag(control: &Draggable) -> Dragged {
     };
     let endpoints = Registry("fixture.dial", EndpointDesc::new(kind));
     let resolver = one_control(control);
-    let skin = skin();
     let config = Config::builder()
         .endpoints(&endpoints)
         .resolver(&resolver)
-        .skin(&skin)
         .text(builtin::text_doc())
         .build();
     let mut ui = Ui::new(Dial::new(stereo), config, (240, 120), 1.0)
@@ -436,13 +503,11 @@ fn a_wheel_notch_over_a_knob_steps_it() {
     let resolver = one_control(
         r#"Knob(id: "dial", size: (w: Fixed(38.0), h: Fixed(49.0)), read: Model(id: "fixture.dial"))"#,
     );
-    let skin = skin();
     let mut scenario = Scenario::mount(
         Dial::new(false),
         Config::builder()
             .endpoints(&endpoints)
             .resolver(&resolver)
-            .skin(&skin)
             .text(builtin::text_doc())
             .build(),
         (240, 120),
@@ -462,8 +527,8 @@ fn a_wheel_notch_over_a_knob_steps_it() {
 
 #[kithara::test]
 fn a_typed_character_reaches_a_focused_retained_text_field() {
-    let (endpoints, resolver, skin) = tree_fixture();
-    let mut ui = focused_search(&endpoints, &resolver, &skin);
+    let (endpoints, resolver) = tree_fixture();
+    let mut ui = focused_search(&endpoints, &resolver);
 
     ui.input(Input::KeyPressed {
         key: Key::Character("a"),
@@ -476,8 +541,8 @@ fn a_typed_character_reaches_a_focused_retained_text_field() {
 
 #[kithara::test]
 fn a_modifier_change_alone_does_not_edit_the_focused_field() {
-    let (endpoints, resolver, skin) = tree_fixture();
-    let mut ui = focused_search(&endpoints, &resolver, &skin);
+    let (endpoints, resolver) = tree_fixture();
+    let mut ui = focused_search(&endpoints, &resolver);
     ui.input(Input::ModifiersChanged(Modifiers::new(
         false, false, false, true,
     )));
@@ -487,8 +552,8 @@ fn a_modifier_change_alone_does_not_edit_the_focused_field() {
 
 #[kithara::test]
 fn a_key_release_does_not_repeat_text_input() {
-    let (endpoints, resolver, skin) = tree_fixture();
-    let mut ui = focused_search(&endpoints, &resolver, &skin);
+    let (endpoints, resolver) = tree_fixture();
+    let mut ui = focused_search(&endpoints, &resolver);
     ui.input(Input::KeyPressed {
         key: Key::Character("a"),
         modifiers: Modifiers::default(),
@@ -506,13 +571,11 @@ fn a_key_release_does_not_repeat_text_input() {
 fn controls_on_one_page_publish_only_their_own_activation() {
     let endpoints = Registry("fixture.flag", EndpointDesc::new(ValueKind::Bool));
     let resolver = board();
-    let skin = skin();
     let mut scenario = Scenario::mount(
         Board,
         Config::builder()
             .endpoints(&endpoints)
             .resolver(&resolver)
-            .skin(&skin)
             .text(builtin::text_doc())
             .build(),
         (240, 120),
@@ -539,7 +602,6 @@ fn named_press_drag_and_wheel_publish_events_and_leave_a_picture() {
 
     let endpoints = InteractionRegistry::default();
     let resolver = interaction_board();
-    let skin = skin();
     let mut scenario = Scenario::mount(
         InteractionBoard {
             active: false,
@@ -548,7 +610,6 @@ fn named_press_drag_and_wheel_publish_events_and_leave_a_picture() {
         Config::builder()
             .endpoints(&endpoints)
             .resolver(&resolver)
-            .skin(&skin)
             .text(builtin::text_doc())
             .build(),
         SIZE,
@@ -621,22 +682,12 @@ fn named_press_drag_and_wheel_publish_events_and_leave_a_picture() {
 fn a_mounted_ui_takes_its_page_colour_from_the_skin_document() {
     let endpoints = Registry("fixture.lit", EndpointDesc::new(ValueKind::Bool));
     let resolver = resolver();
-    let mut doc = builtin::skin_doc().clone();
-    doc.palette.bg = "#123456".to_owned();
-    let origin = SourceUri("fixture:app-input".to_owned());
-    let skin = Skin::resolve_with_font_policy(
-        doc.clone(),
-        builtin::text_doc(),
-        &origin,
-        FontPolicy::Embedded,
-    )
-    .unwrap_or_else(|error| panic!("the fixture skin must resolve: {error}"));
+    let blue = page_skin("fixture-blue", "#123456");
     let ui = Ui::new(
-        Swapper::default(),
+        Dresser::wearing(&blue, skin()),
         Config::builder()
             .endpoints(&endpoints)
             .resolver(&resolver)
-            .skin(&skin)
             .text(builtin::text_doc())
             .build(),
         (240, 120),
@@ -644,14 +695,67 @@ fn a_mounted_ui_takes_its_page_colour_from_the_skin_document() {
     )
     .unwrap_or_else(|error| panic!("the fixture must mount: {error}"));
 
-    assert_eq!(
-        ui.background(),
-        Rgba {
-            a: 1.0,
-            b: f32::from(0x56_u8) / 255.0,
-            g: f32::from(0x34_u8) / 255.0,
-            r: f32::from(0x12_u8) / 255.0,
-        }
+    assert_eq!(ui.background(), BLUE_PAGE);
+}
+
+/// A player turns to another skin while it is running, which is the whole point
+/// of a skin being a document. The page colour is the cheapest thing to read
+/// back, and it is the host's own answer rather than anything the document
+/// painted.
+#[kithara::test]
+fn a_running_ui_follows_its_application_to_another_skin() {
+    let endpoints = Registry("fixture.lit", EndpointDesc::new(ValueKind::Bool));
+    let resolver = resolver();
+    let blue = page_skin("fixture-blue", "#123456");
+    let mut scenario = Scenario::mount(
+        Dresser::wearing(skin(), &blue),
+        Config::builder()
+            .endpoints(&endpoints)
+            .resolver(&resolver)
+            .text(builtin::text_doc())
+            .build(),
+        (240, 120),
+        1.0,
+    );
+    assert_ne!(
+        scenario.background(),
+        BLUE_PAGE,
+        "the fixture must open in the skin it was mounted in"
+    );
+
+    scenario.click("demo/swap");
+
+    assert_eq!(scenario.background(), BLUE_PAGE);
+}
+
+/// And the document is compiled again for it: a skin settles the room every
+/// control needs, so a tree built against the old one is the wrong shape.
+#[kithara::test]
+fn turning_to_another_skin_compiles_the_document_again() {
+    let endpoints = Registry("fixture.lit", EndpointDesc::new(ValueKind::Bool));
+    let inner = resolver();
+    let resolver = Counted {
+        inner: &inner,
+        loads: std::cell::Cell::new(0),
+    };
+    let blue = page_skin("fixture-blue", "#123456");
+    let mut scenario = Scenario::mount(
+        Dresser::wearing(skin(), &blue),
+        Config::builder()
+            .endpoints(&endpoints)
+            .resolver(&resolver)
+            .text(builtin::text_doc())
+            .build(),
+        (240, 120),
+        1.0,
+    );
+    let mounted = resolver.loads.get();
+
+    scenario.click("demo/swap");
+
+    assert!(
+        resolver.loads.get() > mounted,
+        "turning to another skin must read the document again"
     );
 }
 
@@ -668,13 +772,11 @@ fn moving_a_control_does_not_compile_the_document_again() {
         inner: &inner,
         loads: std::cell::Cell::new(0),
     };
-    let skin = skin();
     let mut ui = Ui::new(
         Dial::new(false),
         Config::builder()
             .endpoints(&endpoints)
             .resolver(&resolver)
-            .skin(&skin)
             .text(builtin::text_doc())
             .build(),
         (240, 120),
@@ -780,9 +882,39 @@ fn resolver() -> MemResolver {
     resolver
 }
 
-fn skin() -> Skin {
+/// The skin every fixture wears unless it is the skin itself under test.
+/// Shared rather than resolved per test: resolving one embeds the fonts, and
+/// the suite mounts hundreds of documents.
+fn skin() -> &'static Skin {
+    static SKIN: LazyLock<Skin> = LazyLock::new(|| {
+        Skin::resolve_with_font_policy(
+            builtin::skin_doc().clone(),
+            builtin::text_doc(),
+            &SourceUri("fixture:app-input".to_owned()),
+            FontPolicy::Embedded,
+        )
+        .unwrap_or_else(|error| panic!("the fixture skin must resolve: {error}"))
+    });
+    &SKIN
+}
+
+/// The page colour `page_skin` is asked for below, read back the way a host
+/// reads it.
+const BLUE_PAGE: Rgba = Rgba {
+    a: 1.0,
+    b: 0x56 as f32 / 255.0,
+    g: 0x34 as f32 / 255.0,
+    r: 0x12 as f32 / 255.0,
+};
+
+/// A skin of its own, told apart from the fixture one by the page colour it
+/// names and by the identity a host follows it on.
+fn page_skin(id: &str, bg: &str) -> Skin {
+    let mut doc = builtin::skin_doc().clone();
+    doc.id = DocId(id.to_owned());
+    doc.palette.bg = bg.to_owned();
     Skin::resolve_with_font_policy(
-        builtin::skin_doc().clone(),
+        doc,
         builtin::text_doc(),
         &SourceUri("fixture:app-input".to_owned()),
         FontPolicy::Embedded,
@@ -805,13 +937,11 @@ fn a_hover_hands_the_runner_the_cursor_under_the_pointer() {
     let resolver = one_control(
         r#"Knob(id: "dial", size: (w: Fixed(38.0), h: Fixed(49.0)), read: Model(id: "fixture.dial"))"#,
     );
-    let skin = skin();
     let mut ui = Ui::new(
         Dial::new(false),
         Config::builder()
             .endpoints(&endpoints)
             .resolver(&resolver)
-            .skin(&skin)
             .text(builtin::text_doc())
             .build(),
         (240, 120),
@@ -846,6 +976,10 @@ impl Reads for Menu {
 }
 
 impl App for Menu {
+    fn skin(&self) -> &Skin {
+        skin()
+    }
+
     fn document(&self) -> &str {
         "one.klayout.ron"
     }
@@ -910,13 +1044,11 @@ const NO_MENU: &str = r#"Pressable(id: "burger", press: Command(id: "fixture.tog
 fn with_document(control: &str, check: impl FnOnce(Ui<'_, Menu>)) {
     let endpoints = MenuEndpoints::default();
     let resolver = one_control(control);
-    let skin = skin();
     let ui = Ui::new(
         Menu::default(),
         Config::builder()
             .endpoints(&endpoints)
             .resolver(&resolver)
-            .skin(&skin)
             .text(builtin::text_doc())
             .build(),
         (240, 120),
@@ -1009,13 +1141,11 @@ fn banded_bars(bars: &[String]) -> MemResolver {
 fn with_bars(bars: &[String], check: impl FnOnce(Ui<'_, Menu>)) {
     let endpoints = MenuEndpoints::default();
     let resolver = banded_bars(bars);
-    let skin = skin();
     let mut ui = Ui::new(
         Menu::default(),
         Config::builder()
             .endpoints(&endpoints)
             .resolver(&resolver)
-            .skin(&skin)
             .text(builtin::text_doc())
             .build(),
         (400, 400),
@@ -1204,6 +1334,10 @@ impl Reads for Carry {
 }
 
 impl App for Carry {
+    fn skin(&self) -> &Skin {
+        skin()
+    }
+
     fn document(&self) -> &str {
         "carry.klayout.ron"
     }
@@ -1272,13 +1406,11 @@ fn carry_document() -> MemResolver {
 fn with_carry(check: impl FnOnce(Ui<'_, Carry>)) {
     let endpoints = CarryEndpoints::default();
     let resolver = carry_document();
-    let skin = skin();
     let ui = Ui::new(
         Carry::default(),
         Config::builder()
             .endpoints(&endpoints)
             .resolver(&resolver)
-            .skin(&skin)
             .text(builtin::text_doc())
             .build(),
         (240, 120),
@@ -1406,11 +1538,9 @@ fn a_track_the_pointer_puts_down_is_taken_out_of_the_picture_again() {
 fn scene_keeps_the_public_single_redraw_signature() {
     let endpoints = Registry("fixture.dial", EndpointDesc::new(ValueKind::Scalar));
     let resolver = one_control(r#"Spacer(id: "scene", size: Some((w: Fill, h: Fill)))"#);
-    let skin = skin();
     let config = Config::builder()
         .endpoints(&endpoints)
         .resolver(&resolver)
-        .skin(&skin)
         .text(builtin::text_doc())
         .build();
     let mut ui = Ui::new(Dial::new(false), config, (240, 120), 1.0)
@@ -1425,11 +1555,9 @@ fn scene_keeps_the_public_single_redraw_signature() {
 fn an_idle_ui_skips_its_following_frame() {
     let endpoints = Registry("fixture.dial", EndpointDesc::new(ValueKind::Scalar));
     let resolver = one_control(r#"Spacer(id: "idle", size: Some((w: Fill, h: Fill)))"#);
-    let skin = skin();
     let config = Config::builder()
         .endpoints(&endpoints)
         .resolver(&resolver)
-        .skin(&skin)
         .text(builtin::text_doc())
         .build();
     let mut ui = Ui::new(Dial::new(false), config, (240, 120), 1.0)
@@ -1461,11 +1589,9 @@ fn a_tick_refreshes_non_vis_reads_without_remounting() {
     let resolver = one_control(
         r#"Knob(id: "dial", size: (w: Fixed(38.0), h: Fixed(49.0)), read: Model(id: "fixture.dial"))"#,
     );
-    let skin = skin();
     let config = Config::builder()
         .endpoints(&endpoints)
         .resolver(&resolver)
-        .skin(&skin)
         .text(builtin::text_doc())
         .build();
     let mut ui = Ui::new(TickingDial { value: 0.25 }, config, (240, 120), 1.0)
@@ -1499,11 +1625,9 @@ fn a_tick_refreshes_non_vis_reads_without_remounting() {
 fn resize_from_one_to_two_x_keeps_layout_geometry_logical() {
     let endpoints = Registry("fixture.dial", EndpointDesc::new(ValueKind::Scalar));
     let resolver = one_control(r#"Spacer(id: "scaled", size: Some((w: Fill, h: Fill)))"#);
-    let skin = skin();
     let config = Config::builder()
         .endpoints(&endpoints)
         .resolver(&resolver)
-        .skin(&skin)
         .text(builtin::text_doc())
         .build();
     let mut ui = Ui::new(Dial::new(false), config, (240, 120), 1.0)
@@ -1533,11 +1657,9 @@ fn resize_from_one_to_two_x_keeps_layout_geometry_logical() {
 fn a_press_on_a_control_reaches_the_application_and_redraws_the_new_document() {
     let endpoints = Registry("fixture.lit", EndpointDesc::new(ValueKind::Bool));
     let resolver = resolver();
-    let skin = skin();
     let config = Config::builder()
         .endpoints(&endpoints)
         .resolver(&resolver)
-        .skin(&skin)
         .text(builtin::text_doc())
         .build();
     let mut scenario = Scenario::mount(Swapper::default(), config, (240, 120), 1.0);
@@ -1623,13 +1745,11 @@ fn dragging_a_knob_by_path_publishes_a_run_of_rising_values() {
     let resolver = one_control(
         r#"Knob(id: "dial", size: (w: Fixed(38.0), h: Fixed(49.0)), read: Model(id: "fixture.dial"))"#,
     );
-    let skin = skin();
     let mut scenario = Scenario::mount(
         Dial::new(false),
         Config::builder()
             .endpoints(&endpoints)
             .resolver(&resolver)
-            .skin(&skin)
             .text(builtin::text_doc())
             .build(),
         (240, 120),
@@ -1681,11 +1801,9 @@ fn controls_sharing_an_endpoint_move_together_during_the_gesture() {
         r#"Knob(id: "a", size: (w: Fixed(38.0), h: Fixed(49.0)), read: Model(id: "fixture.dial")),
            Knob(id: "b", size: (w: Fixed(38.0), h: Fixed(49.0)), read: Model(id: "fixture.dial"))"#,
     );
-    let skin = skin();
     let config = Config::builder()
         .endpoints(&endpoints)
         .resolver(&resolver)
-        .skin(&skin)
         .text(builtin::text_doc())
         .build();
     let mut ui = Ui::new(Dial::new(false), config, (240, 120), 1.0)
@@ -1734,11 +1852,9 @@ fn a_double_click_resets_the_knob_it_lands_on() {
     let resolver = one_control(
         r#"Knob(id: "dial", size: (w: Fixed(38.0), h: Fixed(49.0)), read: Model(id: "fixture.dial"))"#,
     );
-    let skin = skin();
     let config = Config::builder()
         .endpoints(&endpoints)
         .resolver(&resolver)
-        .skin(&skin)
         .text(builtin::text_doc())
         .build();
     let mut ui = Ui::new(Dial::new(false), config, (240, 120), 1.0)
@@ -1801,7 +1917,6 @@ fn the_masonry_root_under_the_app_layer_publishes_the_same_press() {
 
     let endpoints = Registry("fixture.lit", EndpointDesc::new(ValueKind::Bool));
     let resolver = resolver();
-    let skin = skin();
     let reads = Swapper::default();
     let ui = compile(
         "dim.klayout.ron",
@@ -1813,7 +1928,7 @@ fn the_masonry_root_under_the_app_layer_publishes_the_same_press() {
     )
     .unwrap_or_else(|error| panic!("fixture must compile: {error}"));
     let ctx = Ctx::new(&ui, &reads, builtin::skin_doc(), Clock::default());
-    let host = MasonryHost::new(ctx, &skin);
+    let host = MasonryHost::new(ctx, skin());
     let node = document::render(&ui.root, ctx, host);
     let mut root = crate::render::masonry::MasonryRoot::new(
         node,
@@ -1863,11 +1978,10 @@ fn the_masonry_root_under_the_app_layer_publishes_the_same_press() {
 /// reproducible, so the count has to be the host's and not a wall clock's.
 #[kithara::test]
 fn each_frame_advances_the_host_clock_by_one() {
-    let (registry, resolver, skin) = tree_fixture();
+    let (registry, resolver) = tree_fixture();
     let config = Config::builder()
         .endpoints(&registry)
         .resolver(&resolver)
-        .skin(&skin)
         .text(builtin::text_doc())
         .build();
     let mut ui = Ui::new(Typed::default(), config, (240, 120), 1.0)
@@ -1883,11 +1997,10 @@ fn each_frame_advances_the_host_clock_by_one() {
 /// hands the same steps twice gets the same reading twice.
 #[kithara::test]
 fn the_host_clock_accumulates_the_steps_it_was_driven_with() {
-    let (registry, resolver, skin) = tree_fixture();
+    let (registry, resolver) = tree_fixture();
     let config = Config::builder()
         .endpoints(&registry)
         .resolver(&resolver)
-        .skin(&skin)
         .text(builtin::text_doc())
         .build();
     let mut ui = Ui::new(Typed::default(), config, (240, 120), 1.0)
@@ -1927,6 +2040,10 @@ impl Reads for Pages {
 }
 
 impl App for Pages {
+    fn skin(&self) -> &Skin {
+        skin()
+    }
+
     fn document(&self) -> &str {
         "pages.klayout.ron"
     }
@@ -1991,13 +2108,11 @@ fn a_row_a_window_scrolled_into_view_answers_its_own_press() {
     let last = format!("pages/row{}/item", rows - 1);
     let endpoints = Tabs::default();
     let resolver = page_list(rows);
-    let skin = builtin::skin().clone();
     let mut scenario = Scenario::mount(
         Pages::default(),
         Config::builder()
             .endpoints(&endpoints)
             .resolver(&resolver)
-            .skin(&skin)
             .text(builtin::text_doc())
             .build(),
         (240, 400),
@@ -2040,6 +2155,10 @@ impl Reads for Reading {
 }
 
 impl App for Reading {
+    fn skin(&self) -> &Skin {
+        skin()
+    }
+
     fn document(&self) -> &str {
         "one.klayout.ron"
     }
@@ -2060,13 +2179,12 @@ impl App for Reading {
 }
 
 /// The parts a document holding one reading is mounted from.
-fn reading_fixture() -> (Registry, MemResolver, Skin) {
+fn reading_fixture() -> (Registry, MemResolver) {
     (
         Registry("fixture.reading", EndpointDesc::new(ValueKind::Text)),
         one_control(
             r#"Readout(id: "reading", label: Some("READING"), read: Model(id: "fixture.reading"))"#,
         ),
-        skin(),
     )
 }
 
@@ -2076,12 +2194,10 @@ fn reading_ui<'a>(
     moves: bool,
     endpoints: &'a Registry,
     resolver: &'a MemResolver,
-    skin: &'a Skin,
 ) -> Ui<'a, Reading> {
     let config = Config::builder()
         .endpoints(endpoints)
         .resolver(resolver)
-        .skin(skin)
         .text(builtin::text_doc())
         .build();
     let mut ui = Ui::new(Reading::new(moves), config, (240, 120), 1.0)
@@ -2097,8 +2213,8 @@ fn reading_ui<'a>(
 /// again on its own, instead of only when something unrelated wakes it.
 #[kithara::test]
 fn a_frame_that_moved_a_value_asks_for_the_frame_after_it() {
-    let (endpoints, resolver, skin) = reading_fixture();
-    let mut ui = reading_ui(true, &endpoints, &resolver, &skin);
+    let (endpoints, resolver) = reading_fixture();
+    let mut ui = reading_ui(true, &endpoints, &resolver);
 
     ui.frame(Duration::from_millis(16));
     ui.render()
@@ -2111,8 +2227,8 @@ fn a_frame_that_moved_a_value_asks_for_the_frame_after_it() {
 /// nothing new costs nothing.
 #[kithara::test]
 fn a_frame_that_moved_nothing_asks_for_no_frame_after_it() {
-    let (endpoints, resolver, skin) = reading_fixture();
-    let mut ui = reading_ui(false, &endpoints, &resolver, &skin);
+    let (endpoints, resolver) = reading_fixture();
+    let mut ui = reading_ui(false, &endpoints, &resolver);
 
     ui.frame(Duration::from_millis(16));
 

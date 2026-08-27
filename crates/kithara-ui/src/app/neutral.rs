@@ -16,6 +16,13 @@ pub trait App {
     /// The layout entry to compile for the state the application is in now.
     fn document(&self) -> &str;
 
+    /// The skin to paint the state the application is in now.
+    ///
+    /// A skin is the application's, not the host's: which one it wears is part
+    /// of what it is showing, and it can turn to another one whenever it likes.
+    /// The host follows that the same way it follows a change of document.
+    fn skin(&self) -> &Skin;
+
     /// Hands the host the values the document binds to, for as long as the
     /// call lasts.
     ///
@@ -40,8 +47,6 @@ pub struct Config<'a> {
     pub endpoints: &'a dyn EndpointRegistry,
     /// Where document sources are read from.
     pub resolver: &'a dyn SourceResolver,
-    /// The resolved skin the host paints with.
-    pub skin: &'a Skin,
     /// The caption catalog every `@key` in the document resolves against.
     pub text: &'a TextDoc,
     /// The extensions this application registers, which is what a `Custom`

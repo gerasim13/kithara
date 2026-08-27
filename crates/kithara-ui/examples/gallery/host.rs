@@ -9,7 +9,7 @@ use std::env;
 use kithara_ui::{
     app::{App, Config},
     builtin,
-    render::{Reads, UiEvent},
+    render::{Reads, Skin, UiEvent},
 };
 
 use super::{Consts, Tab, capture::Shot, custom, mock, resolver};
@@ -32,7 +32,6 @@ pub(super) fn run() -> bool {
     let config = Config::builder()
         .endpoints(&endpoints)
         .resolver(&resolver)
-        .skin(builtin::skin())
         .text(builtin::text_doc())
         .kinds(&kinds)
         .decorations(false)
@@ -63,6 +62,10 @@ impl Gallery {
 }
 
 impl App for Gallery {
+    fn skin(&self) -> &Skin {
+        builtin::skin()
+    }
+
     fn document(&self) -> &str {
         let tab = self.reads.active_tab();
         if tab == Tab::Modules {
@@ -129,7 +132,6 @@ mod tests {
         let config = Config::builder()
             .endpoints(&endpoints)
             .resolver(&resolver)
-            .skin(builtin::skin())
             .text(builtin::text_doc())
             .kinds(&kinds)
             .build();
@@ -189,7 +191,6 @@ mod fills {
             let config = Config::builder()
                 .endpoints(&endpoints)
                 .resolver(&resolver)
-                .skin(builtin::skin())
                 .text(builtin::text_doc())
                 .kinds(&kinds)
                 .build();

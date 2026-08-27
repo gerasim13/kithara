@@ -530,6 +530,10 @@ impl PageApp {
 }
 
 impl App for PageApp {
+    fn skin(&self) -> &Skin {
+        builtin::skin()
+    }
+
     fn document(&self) -> &str {
         self.entry
     }
@@ -1118,7 +1122,6 @@ impl Fixture {
         Config::builder()
             .endpoints(self.registry.as_ref())
             .resolver(&self.resolver)
-            .skin(builtin::skin())
             .text(builtin::text_doc())
             .build()
     }

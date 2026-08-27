@@ -48,6 +48,10 @@ impl Studio {
 }
 
 impl App for Studio {
+    fn skin(&self) -> &Skin {
+        builtin::skin()
+    }
+
     fn document(&self) -> &str {
         ui::entry(self.state.ui.cache.layout())
     }
@@ -90,7 +94,6 @@ pub(crate) fn run(app: Studio) -> Result<(), RunError> {
         Config::builder()
             .endpoints(&endpoints)
             .resolver(&resolver)
-            .skin(builtin::skin())
             .text(&text)
             .decorations(false)
             .min_size(min_size)
@@ -122,6 +125,10 @@ mod tests {
     }
 
     impl App for Empty {
+        fn skin(&self) -> &Skin {
+            builtin::skin()
+        }
+
         fn document(&self) -> &str {
             ui::entry(ui::cache::DeckLayout::Dual)
         }
@@ -146,7 +153,6 @@ mod tests {
             Config::builder()
                 .endpoints(&endpoints)
                 .resolver(&resolver)
-                .skin(builtin::skin())
                 .text(&text)
                 .build(),
             (1280, 760),
