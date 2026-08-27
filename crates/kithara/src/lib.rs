@@ -112,10 +112,6 @@ pub mod storage {
     pub use kithara_storage::*;
 }
 
-#[cfg(all(
-    not(target_arch = "wasm32"),
-    any(feature = "stretch-signalsmith", feature = "stretch-bungee")
-))]
 pub use kithara_test_utils::{kithara::mock, no_block};
 #[cfg(feature = "probe")]
 pub use kithara_test_utils::{
@@ -154,10 +150,6 @@ pub mod prelude {
     pub use kithara_file::{File, FileConfig};
     #[cfg(feature = "hls")]
     pub use kithara_hls::{Hls, HlsConfig};
-    #[cfg(all(
-        not(target_arch = "wasm32"),
-        any(feature = "stretch-signalsmith", feature = "stretch-bungee")
-    ))]
     pub use kithara_play::{
         EngineConfig, EngineImpl, EngineLoadSnapshot, PlayWorker, PlayWorkerConfig,
         PlaybackResamplerBackend, PlayerConfig, PlayerImpl, Resource, ResourceConfig, ResourceSrc,
