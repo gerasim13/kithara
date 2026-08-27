@@ -80,11 +80,14 @@ async fn waveform_and_player_share_one_get() {
         .backend(StorageBackend::Memory)
         .pool(byte_pool.clone())
         .build();
+    let worker =
+        PlayWorker::new(PlayWorkerConfig::for_pools(byte_pool.clone(), region.pcm_pool()).build());
 
     // Waveform analysis consumer (whole-file) of the shared store.
     let waveform_cfg =
         ResourceConfig::for_src(ResourceConfig::parse_src(url.as_str()).expect("waveform url"))
             .store(store.clone())
+            .worker(worker.clone())
             .build();
 
     // Player consumer of the same URL through the same shared store. Built
@@ -98,7 +101,6 @@ async fn waveform_and_player_share_one_get() {
     )
     .block_on_underrun(true)
     .build();
-    let worker = PlayWorker::new(PlayWorkerConfig::for_pools(byte_pool, region.pcm_pool()).build());
 
     // Run both concurrently so they cooperate on one download.
     let master = CancelToken::never();

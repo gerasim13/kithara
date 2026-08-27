@@ -129,10 +129,13 @@ impl OfflinePlayer {
     /// Panics if the graph update or backend access fails.
     pub fn render(&mut self, frames: usize) -> Vec<f32> {
         self.ctx.update().expect("BUG: graph update");
-        self.ctx
+        let output = self
+            .ctx
             .active_backend_mut()
             .expect("BUG: backend active")
-            .render(frames)
+            .render(frames);
+        self.drain_trash();
+        output
     }
 
     /// Send a seek command to the processor.
@@ -176,8 +179,14 @@ impl OfflinePlayer {
                 N::FadingOut { .. } => NotificationKind::FadingOut,
             });
         }
-        while self.control.trash_rx.try_pop().is_some() {}
+        self.drain_trash();
         out
+    }
+
+    fn drain_trash(&mut self) {
+        while let Some(track) = self.control.trash_rx.try_pop() {
+            self.control.unbind_seek(track.src());
+        }
     }
 }
 
