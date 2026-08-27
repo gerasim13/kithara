@@ -2,7 +2,7 @@ use crate::{
     draw::{DrawListBuilder, FillRule, Pt, Rect, Rgba, Transform, Verb},
     render::{PortalMapView, PortalTarget, Skin},
     shaping::TextContext,
-    skin::{ColorRole, FontFamily, PortalMapSkin, TextRoleSkin},
+    skin::{PortalMapSkin, TextRoleSkin},
 };
 
 /// A tempo axis with one arc from the master tempo to each target.
@@ -14,6 +14,7 @@ pub(crate) struct PortalMap {
     line_inner: Rgba,
     metrics: PortalMapSkin,
     muted: Rgba,
+    tick: Rgba,
     role: TextRoleSkin,
     selected: Rgba,
 }
@@ -46,20 +47,15 @@ impl PortalMap {
     pub(crate) fn new(skin: &Skin) -> Self {
         let metrics = skin.portal_map;
         Self {
-            accent: skin.palette.accent,
-            background: skin.palette.bg_inset,
-            line: skin.palette.line,
-            line_inner: skin.palette.line_inner,
+            accent: skin.rgba(metrics.master_color),
+            background: skin.rgba(metrics.background_color),
+            line: skin.rgba(metrics.axis_color),
+            line_inner: skin.rgba(metrics.arc_color),
             metrics,
-            muted: skin.palette.muted,
-            role: TextRoleSkin {
-                color: ColorRole::Muted,
-                font: FontFamily::Mono,
-                size: metrics.label.size,
-                spacing: 0.0,
-                weight: metrics.label.weight,
-            },
-            selected: skin.palette.wave_high,
+            muted: skin.rgba(metrics.label.color),
+            tick: skin.rgba(metrics.tick_color),
+            role: metrics.label,
+            selected: skin.rgba(metrics.target_color),
         }
     }
 
@@ -120,7 +116,7 @@ impl PortalMap {
                     x,
                     y: axis_y - self.metrics.tick_height,
                 },
-                self.line,
+                self.tick,
             );
             let label = format!("{bpm:.0}");
             let run = text.shape(&label, self.role, None);
@@ -220,7 +216,9 @@ mod tests {
     use super::*;
     use crate::{
         builtin,
-        draw::{DrawCmd, Geom},
+        draw::{DrawCmd, DrawList, Geom, Paint},
+        ids::SourceUri,
+        skin::parse_skin_over,
     };
 
     #[kithara::test]
@@ -241,6 +239,73 @@ mod tests {
         assert_eq!(scale.x(180.0), 288.0);
         assert_eq!(scale.x(60.0), 12.0);
         assert_eq!(scale.x(200.0), 288.0);
+    }
+
+    fn drawn(skin: &Skin) -> DrawList {
+        let mut text = TextContext::from(skin.text_resources());
+        let mut list = DrawListBuilder::default();
+        let data = PortalMapData {
+            master: 120.0,
+            min: 60.0,
+            max: 180.0,
+            targets: vec![PortalTarget {
+                bpm: 150.0,
+                is_selected: false,
+            }],
+        };
+        PortalMap::new(skin).paint(
+            &mut list,
+            &mut text,
+            &data,
+            Rect {
+                h: 80.0,
+                w: 300.0,
+                x: 0.0,
+                y: 0.0,
+            },
+        );
+        list.finish()
+    }
+
+    /// The square the map puts on the axis for the deck's own tempo: the only
+    /// mark drawn the marker's size square.
+    fn master_marker(skin: &Skin) -> Rgba {
+        let size = skin.portal_map.marker_size;
+        drawn(skin)
+            .commands()
+            .iter()
+            .find_map(|command| match command {
+                DrawCmd::Fill {
+                    geom: Geom::Rect(rect),
+                    paint: Paint::Solid(color),
+                } if rect.h == size && rect.w == size => Some(*color),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("the map must mark the master tempo"))
+    }
+
+    #[kithara::test]
+    fn the_master_marker_takes_the_colour_its_skin_role_names() {
+        let skin = builtin::skin();
+
+        assert_eq!(master_marker(skin), skin.rgba(skin.portal_map.master_color));
+    }
+
+    #[kithara::test]
+    fn the_master_marker_follows_a_skin_written_over_the_builtin_one() {
+        let origin = SourceUri("loud.kskin.ron".to_owned());
+        let text = r##"(
+            schema: "kithara.skin",
+            version: 1,
+            id: "kithara-loud",
+            portal_map: (master_color: Danger),
+        )"##;
+        let document =
+            parse_skin_over(builtin::skin_doc(), text, &origin).expect("the patch parses");
+        let skin = Skin::resolve(document, builtin::text_doc(), &origin)
+            .expect("the patched document resolves");
+
+        assert_eq!(master_marker(&skin), skin.palette.danger);
     }
 
     /// The arc is the map's whole claim: a target at another tempo is drawn as

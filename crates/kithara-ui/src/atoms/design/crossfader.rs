@@ -4,7 +4,7 @@ use crate::{
     draw::{DrawListBuilder, Pt, Rect, Rgba, Transform},
     render::{CrossfaderLabels, Skin},
     shaping::{GlyphRun, TextContext},
-    skin::{ColorRole, CrossfaderSkin, FontFamily, FontSkin, TextRoleSkin, TickSkin},
+    skin::{CrossfaderSkin, TextRoleSkin, TickSkin},
 };
 
 #[derive(Clone, PartialEq)]
@@ -34,10 +34,10 @@ impl Crossfader {
                 char::from(lucide_icons::Icon::ChevronsRight),
             ),
             captions: skin.crossfader_labels.clone(),
-            label_color: skin.rgba(metrics.label_color),
-            label_role: role(metrics.label_text),
-            letter_color: skin.rgba(metrics.letter_color),
-            letter_role: role(metrics.letter_text),
+            label_color: skin.rgba(metrics.label_text.color),
+            label_role: metrics.label_text,
+            letter_color: skin.rgba(metrics.letter_text.color),
+            letter_role: metrics.letter_text,
             rail_background: skin.rgba(metrics.rail_background),
             rail_border: skin.rgba(metrics.rail_frame.border),
             thumb_color: skin.rgba(metrics.thumb_color),
@@ -172,16 +172,6 @@ impl Crossfader {
             self.arrow_color,
         );
         place(&right, &self.captions.right, x, self.letter_color);
-    }
-}
-
-const fn role(font: FontSkin) -> TextRoleSkin {
-    TextRoleSkin {
-        color: ColorRole::Text,
-        font: FontFamily::Mono,
-        size: font.size,
-        spacing: 0.0,
-        weight: font.weight,
     }
 }
 

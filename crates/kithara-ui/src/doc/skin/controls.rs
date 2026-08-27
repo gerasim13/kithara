@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{
     palette::ColorRole,
-    primitives::{FaceSkin, FontSkin, FrameSkin, StateColors, TextRoleSkin, TickSkin},
+    primitives::{FaceSkin, FontSkin, FrameSkin, StateColors, TextRoleSkin, TickSkin, ToneColors},
     section::skin_section,
 };
 use crate::{
@@ -52,13 +52,11 @@ skin_section! {
 skin_section! {
     pub struct CrossfaderSkin => CrossfaderPatch {
         pub arrow_color: ColorRole,
-        pub label_color: ColorRole,
-        pub letter_color: ColorRole,
         pub rail_background: ColorRole,
         pub thumb_color: ColorRole,
         pub thumb_notch_color: ColorRole,
-        pub label_text: FontSkin,
-        pub letter_text: FontSkin,
+        pub label_text: TextRoleSkin,
+        pub letter_text: TextRoleSkin,
         pub rail_frame: FrameSkin,
         pub size: SizeSpec,
         pub ticks: TickSkin,
@@ -130,6 +128,13 @@ skin_section! {
 
 skin_section! {
     pub struct PortalMapSkin => PortalMapPatch {
+        pub arc_color: ColorRole,
+        pub arc_selected_color: ColorRole,
+        pub axis_color: ColorRole,
+        pub background_color: ColorRole,
+        pub master_color: ColorRole,
+        pub target_color: ColorRole,
+        pub tick_color: ColorRole,
         pub size: SizeSpec,
         pub axis_inset_x: f32,
         pub axis_offset_bottom: f32,
@@ -142,7 +147,7 @@ skin_section! {
         pub tick_step: f32,
         pub label_offset_x: f32,
         pub label_offset_y: f32,
-        pub label: FontSkin,
+        pub label: TextRoleSkin,
     }
 }
 
@@ -183,8 +188,9 @@ skin_section! {
 
 skin_section! {
     pub struct ReadoutSkin => ReadoutPatch {
-        pub label: FontSkin,
-        pub value: FontSkin,
+        pub tones: ToneColors,
+        pub label: TextRoleSkin,
+        pub value: TextRoleSkin,
         pub frame: FrameSkin,
         pub size: SizeSpec,
         pub padding_x: f32,
@@ -246,6 +252,7 @@ skin_section! {
 
 skin_section! {
     pub struct NavSkin => NavPatch {
+        pub header_icon_color: ColorRole,
         pub header_height: f32,
         pub header_icon_size: f32,
         pub header_text_size: f32,
@@ -302,6 +309,7 @@ text_roles!(define_text_skin);
 skin_section! {
     /// Menu icon sizes. Row geometry lives in the markup and menu typography in [`TextSkin`].
     pub struct MenuSkin => MenuPatch {
+        pub icon_color: ColorRole,
         pub burger_icon_size: f32,
         pub cell_icon_size: f32,
         pub icon_size: f32,
@@ -338,8 +346,8 @@ skin_section! {
 
 skin_section! {
     pub struct StatusDotSkin => StatusDotPatch {
-        pub text_color: ColorRole,
-        pub text: FontSkin,
+        pub tones: ToneColors,
+        pub text: TextRoleSkin,
         pub size: SizeSpec,
         pub dot_size: f32,
         pub gap: f32,
@@ -372,7 +380,14 @@ skin_section! {
 skin_section! {
     pub struct FaderSkin => FaderPatch {
         pub handle_color: ColorRole,
-        pub label: FontSkin,
+        pub icon_color: ColorRole,
+        pub panel_color: ColorRole,
+        pub rail_empty: ColorRole,
+        pub rail_filled: ColorRole,
+        pub segment_dim: ColorRole,
+        pub segment_lit: ColorRole,
+        pub tick_color: ColorRole,
+        pub label: TextRoleSkin,
         pub handle_frame: FrameSkin,
         pub rail_frame: FrameSkin,
         pub strip_frame: FrameSkin,
@@ -425,6 +440,7 @@ mod tests {
         assert_eq!(
             builtin::skin_doc().menu,
             MenuSkin {
+                icon_color: ColorRole::Text,
                 icon_size: 11.0,
                 burger_icon_size: 14.0,
                 small_icon_size: 10.0,

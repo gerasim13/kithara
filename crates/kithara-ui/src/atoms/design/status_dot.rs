@@ -4,7 +4,7 @@ use crate::{
     module::Tone,
     render::Skin,
     shaping::TextContext,
-    skin::{FontFamily, StatusDotSkin, TextRoleSkin},
+    skin::{StatusDotSkin, TextRoleSkin, tone_color},
 };
 
 /// A coloured dot with a word beside it.
@@ -34,18 +34,12 @@ impl StatusDot {
     ) -> Self {
         let metrics = skin.status_dot;
         Self {
-            active_dot: active_tone.map(|tone| color(tone, skin)),
-            dot: color(tone, skin),
+            active_dot: active_tone.map(|tone| skin.rgba(tone_color(tone, metrics.tones))),
+            dot: skin.rgba(tone_color(tone, metrics.tones)),
             dot_size: dot_size.unwrap_or(metrics.dot_size),
             metrics,
-            role: TextRoleSkin {
-                color: metrics.text_color,
-                font: FontFamily::Mono,
-                size: metrics.text.size,
-                spacing: 0.0,
-                weight: metrics.text.weight,
-            },
-            text: skin.rgba(metrics.text_color),
+            role: metrics.text,
+            text: skin.rgba(metrics.text.color),
         }
     }
 
@@ -92,15 +86,6 @@ impl StatusDot {
             }),
             self.text,
         );
-    }
-}
-
-fn color(tone: Tone, skin: &Skin) -> Rgba {
-    match tone {
-        Tone::Neutral => skin.palette.muted,
-        Tone::Accent => skin.palette.accent,
-        Tone::Success => skin.palette.success,
-        Tone::Danger => skin.palette.danger,
     }
 }
 

@@ -6,7 +6,7 @@ use crate::{
     module::FaderStyle,
     render::Skin,
     shaping::TextContext,
-    skin::{ColorRole, FaderSkin, FontFamily, TextRoleSkin},
+    skin::{FaderSkin, TextRoleSkin},
 };
 
 /// The horizontal fader in both of its looks: a captioned rail with a handle,
@@ -18,12 +18,14 @@ pub(crate) struct Fader {
     handle: Rgba,
     handle_border: Rgba,
     icon: char,
+    icon_color: Rgba,
     label_color: Rgba,
     label_role: TextRoleSkin,
     lit: Rgba,
     metrics: FaderSkin,
     panel: Rgba,
     rail_border: Rgba,
+    segment_dim: Rgba,
     strip_border: Rgba,
     style: FaderStyle,
     ticks: Rgba,
@@ -33,26 +35,22 @@ impl Fader {
     pub(crate) fn new(style: FaderStyle, skin: &Skin) -> Self {
         let metrics = skin.fader;
         Self {
-            accent: skin.palette.accent,
-            background: skin.palette.bg_deep,
+            accent: skin.rgba(metrics.rail_filled),
+            background: skin.rgba(metrics.rail_empty),
             handle: skin.rgba(metrics.handle_color),
             handle_border: skin.rgba(metrics.handle_frame.border),
             icon: char::from(lucide_icons::Icon::Volume2),
-            label_color: skin.palette.muted,
-            label_role: TextRoleSkin {
-                color: ColorRole::Muted,
-                font: FontFamily::Sans,
-                size: metrics.label.size,
-                spacing: 0.0,
-                weight: metrics.label.weight,
-            },
-            lit: skin.palette.success,
+            icon_color: skin.rgba(metrics.icon_color),
+            label_color: skin.rgba(metrics.label.color),
+            label_role: metrics.label,
+            lit: skin.rgba(metrics.segment_lit),
             metrics,
-            panel: skin.palette.bg_panel,
+            panel: skin.rgba(metrics.panel_color),
             rail_border: skin.rgba(metrics.rail_frame.border),
+            segment_dim: skin.rgba(metrics.segment_dim),
             strip_border: skin.rgba(metrics.strip_frame.border),
             style,
-            ticks: skin.palette.line_soft,
+            ticks: skin.rgba(metrics.tick_color),
         }
     }
 
@@ -114,7 +112,7 @@ impl Fader {
                 x: bounds.x + metrics.control_padding_x + (metrics.icon_width - run.width()) / 2.0,
                 y: bounds.y + (bounds.h - run.height()) / 2.0,
             }),
-            self.label_color,
+            self.icon_color,
         );
     }
 
@@ -212,7 +210,11 @@ impl Fader {
                     x: strip.x + metrics.strip_padding + ordinal * (width + metrics.segment_gap),
                     y,
                 },
-                if ordinal < lit { self.lit } else { self.panel },
+                if ordinal < lit {
+                    self.lit
+                } else {
+                    self.segment_dim
+                },
             );
         }
         border(list, strip, metrics.strip_frame, self.strip_border);
@@ -261,11 +263,13 @@ pub(crate) fn rail_bounds(
 mod tests {
     use kithara_test_utils::kithara;
 
-    use super::{Fader, FaderStyle, Rect, rail_bounds};
+    use super::{Fader, FaderStyle, Rect, Rgba, Skin, rail_bounds};
     use crate::{
         builtin,
         draw::{DrawCmd, DrawList, DrawListBuilder, Geom, Paint},
+        ids::SourceUri,
         shaping::TextContext,
+        skin::parse_skin_over,
     };
 
     const BOUNDS: Rect = Rect {
@@ -310,6 +314,55 @@ mod tests {
             .into_iter()
             .next_back()
             .unwrap_or_else(|| panic!("the fader must draw a handle at {value}"))
+    }
+
+    /// What the fader paints over the stretch it has already travelled: the
+    /// first rail-height rectangle, drawn before the empty half and the
+    /// handle over it.
+    fn filled_rail(skin: &Skin) -> Rgba {
+        let mut list = DrawListBuilder::default();
+        Fader::new(FaderStyle::Default, skin).paint(
+            &mut list,
+            &mut TextContext::new().unwrap(),
+            0.5,
+            None,
+            BOUNDS,
+        );
+        let list = list.finish();
+        list.commands()
+            .iter()
+            .find_map(|command| match command {
+                DrawCmd::Fill {
+                    geom: Geom::Rect(rect),
+                    paint: Paint::Solid(color),
+                } if rect.h == skin.fader.rail_width => Some(*color),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("the fader must draw its rail"))
+    }
+
+    #[kithara::test]
+    fn the_travelled_rail_takes_the_colour_its_skin_role_names() {
+        let skin = builtin::skin();
+
+        assert_eq!(filled_rail(skin), skin.rgba(skin.fader.rail_filled));
+    }
+
+    #[kithara::test]
+    fn the_travelled_rail_follows_a_skin_written_over_the_builtin_one() {
+        let origin = SourceUri("loud.kskin.ron".to_owned());
+        let text = r##"(
+            schema: "kithara.skin",
+            version: 1,
+            id: "kithara-loud",
+            fader: (rail_filled: Danger),
+        )"##;
+        let document =
+            parse_skin_over(builtin::skin_doc(), text, &origin).expect("the patch parses");
+        let skin = Skin::resolve(document, builtin::text_doc(), &origin)
+            .expect("the patched document resolves");
+
+        assert_eq!(filled_rail(&skin), skin.palette.danger);
     }
 
     /// The handle is the thing a hand grabs, so where it sits has to be the

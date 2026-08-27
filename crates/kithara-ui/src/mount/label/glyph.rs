@@ -53,7 +53,6 @@ mod host {
             controls::{Draws, Reading},
             document_icon,
         },
-        skin::ColorRole,
     };
 
     impl Draws for Glyph<'_> {
@@ -90,11 +89,11 @@ mod host {
     fn base(style: GlyphStyle, skin: &Skin) -> Rgba {
         match style {
             GlyphStyle::Vis => skin.rgba(skin.vis.icon_color),
-            GlyphStyle::Default
-            | GlyphStyle::Menu
+            GlyphStyle::Default => skin.rgba(skin.nav.header_icon_color),
+            GlyphStyle::Menu
             | GlyphStyle::MenuBurger
             | GlyphStyle::MenuSmall
-            | GlyphStyle::MenuCell => skin.rgba(ColorRole::Text),
+            | GlyphStyle::MenuCell => skin.rgba(skin.menu.icon_color),
         }
     }
 
@@ -113,13 +112,14 @@ mod host {
     mod tests {
         use kithara_test_utils::kithara;
 
-        use super::{ColorRole, Face, Glyph, GlyphData, GlyphStyle, base, size};
+        use super::{Face, Glyph, GlyphData, GlyphStyle, base, size};
         use crate::{
             builtin,
             draw::{DrawList, DrawListBuilder, Rect},
             module::IconName,
             render::{Icon, Skin, controls::Draws},
             shaping::TextContext,
+            skin::ColorRole,
         };
 
         const BOUNDS: Rect = Rect {

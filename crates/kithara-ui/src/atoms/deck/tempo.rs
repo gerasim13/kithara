@@ -3,7 +3,7 @@ use crate::{
     draw::{DrawListBuilder, Pt, Rect, Rgba, Transform},
     render::Skin,
     shaping::TextContext,
-    skin::{ColorRole, DeckSkin, FontFamily, TextRoleSkin},
+    skin::{DeckSkin, TextRoleSkin},
 };
 
 /// What the caption above a position reading says.
@@ -33,20 +33,13 @@ pub(crate) enum Reading {
 impl Tempo {
     pub(crate) fn new(skin: &Skin) -> Self {
         let metrics = skin.deck;
-        let role = |font: crate::skin::FontSkin, color| TextRoleSkin {
-            color,
-            font: FontFamily::Mono,
-            size: font.size,
-            spacing: 0.0,
-            weight: font.weight,
-        };
         Self {
-            caption: skin.palette.muted,
-            caption_role: role(metrics.readout_label, ColorRole::Muted),
+            caption: skin.rgba(metrics.readout_label.color),
+            caption_role: metrics.readout_label,
             metrics,
-            panel: skin.palette.bg_panel,
-            reading: skin.palette.accent_strong,
-            role: role(metrics.bpm_text, ColorRole::AccentStrong),
+            panel: skin.rgba(metrics.panel_color),
+            reading: skin.rgba(metrics.bpm_text.color),
+            role: metrics.bpm_text,
         }
     }
 

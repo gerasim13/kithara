@@ -5,7 +5,7 @@ use crate::{
     draw::{DrawListBuilder, Pt, Rect, Rgba, Transform},
     render::Skin,
     shaping::TextContext,
-    skin::{FontFamily, TextRoleSkin},
+    skin::TextRoleSkin,
 };
 
 const SECONDS_PER_MINUTE: u64 = 60;
@@ -28,15 +28,9 @@ pub(crate) struct Elapsed {
 impl Clock {
     pub(crate) fn new(skin: &Skin) -> Self {
         Self {
-            deep: skin.palette.bg_deep,
-            reading: skin.palette.accent_strong,
-            role: TextRoleSkin {
-                color: crate::skin::ColorRole::AccentStrong,
-                font: FontFamily::Mono,
-                size: skin.deck.time_text.size,
-                spacing: 0.0,
-                weight: skin.deck.time_text.weight,
-            },
+            deep: skin.rgba(skin.deck.clock_background),
+            reading: skin.rgba(skin.deck.time_text.color),
+            role: skin.deck.time_text,
         }
     }
 

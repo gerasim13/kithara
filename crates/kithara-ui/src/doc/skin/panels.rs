@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{
     palette::ColorRole,
-    primitives::{FontSkin, FrameSkin, ShadowSkin, StateColors, TextRoleSkin},
+    primitives::{FrameSkin, ShadowSkin, StateColors, TextRoleSkin},
     section::skin_section,
 };
 use crate::size::SizeSpec;
@@ -92,13 +92,15 @@ pub struct WaveOverlaySkin {
 
 skin_section! {
     pub struct DeckSkin => DeckPatch {
-        pub artist: FontSkin,
-        pub bpm_text: FontSkin,
+        pub clock_background: ColorRole,
+        pub panel_color: ColorRole,
+        pub artist: TextRoleSkin,
+        pub bpm_text: TextRoleSkin,
         pub micro_source: TextRoleSkin,
         pub micro_title: TextRoleSkin,
-        pub readout_label: FontSkin,
-        pub time_text: FontSkin,
-        pub title: FontSkin,
+        pub readout_label: TextRoleSkin,
+        pub time_text: TextRoleSkin,
+        pub title: TextRoleSkin,
         pub bpm_size: SizeSpec,
         pub summary_size: SizeSpec,
         pub time_size: SizeSpec,

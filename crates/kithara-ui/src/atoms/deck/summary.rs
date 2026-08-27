@@ -3,7 +3,7 @@ use crate::{
     module::DeckSummaryStyle,
     render::Skin,
     shaping::TextContext,
-    skin::{ColorRole, DeckSkin, FontFamily, FontSkin, TextRoleSkin},
+    skin::{DeckSkin, TextRoleSkin},
 };
 
 /// The deck's headline: what is loaded, and where it came from.
@@ -34,24 +34,14 @@ pub(crate) struct Loaded {
 impl Summary {
     pub(crate) fn new(style: DeckSummaryStyle, skin: &Skin) -> Self {
         let metrics = skin.deck;
-        let role = |font: FontSkin, family, color| TextRoleSkin {
-            color,
-            font: family,
-            size: font.size,
-            spacing: 0.0,
-            weight: font.weight,
-        };
         let (source_role, title_role) = if style == DeckSummaryStyle::Micro {
             (metrics.micro_source, metrics.micro_title)
         } else {
-            (
-                role(metrics.artist, FontFamily::Sans, ColorRole::TextDim),
-                role(metrics.title, FontFamily::Display, ColorRole::Text),
-            )
+            (metrics.artist, metrics.title)
         };
         Self {
             metrics,
-            panel: skin.palette.bg_panel,
+            panel: skin.rgba(metrics.panel_color),
             source: skin.rgba(source_role.color),
             source_role,
             style,

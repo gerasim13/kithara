@@ -4,7 +4,7 @@ use crate::{
     module::Tone,
     render::Skin,
     shaping::TextContext,
-    skin::{FontFamily, ReadoutSkin, TextRoleSkin},
+    skin::{ReadoutSkin, TextRoleSkin, tone_color},
 };
 
 /// A caption stacked over the value it names, framed or bare.
@@ -30,27 +30,14 @@ pub(crate) struct ReadoutData {
 impl Readout {
     pub(crate) fn new(tone: Tone, framed: bool, skin: &Skin) -> Self {
         let metrics = skin.readout;
-        let role = |font: crate::skin::FontSkin, color| TextRoleSkin {
-            color,
-            font: FontFamily::Mono,
-            size: font.size,
-            spacing: 0.0,
-            weight: font.weight,
-        };
-        let value_color = match tone {
-            Tone::Neutral => skin.palette.text,
-            Tone::Accent => skin.palette.accent,
-            Tone::Success => skin.palette.success,
-            Tone::Danger => skin.palette.danger,
-        };
         Self {
             framed,
-            label_color: skin.palette.muted,
-            label_role: role(metrics.label, crate::skin::ColorRole::Muted),
+            label_color: skin.rgba(metrics.label.color),
+            label_role: metrics.label,
             metrics,
             stroke: skin.rgba(metrics.frame.border),
-            value_color,
-            value_role: role(metrics.value, crate::skin::ColorRole::Text),
+            value_color: skin.rgba(tone_color(tone, metrics.tones)),
+            value_role: metrics.value,
         }
     }
 

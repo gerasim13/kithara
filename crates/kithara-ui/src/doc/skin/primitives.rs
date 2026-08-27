@@ -5,7 +5,7 @@ use super::{
     palette::ColorRole,
     section::skin_section,
 };
-use crate::module::WindowControlsStyle;
+use crate::module::{Tone, WindowControlsStyle};
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -36,6 +36,29 @@ pub struct StateColors {
     pub hovered: Option<ColorRole>,
     pub idle: Option<ColorRole>,
     pub pressed: Option<ColorRole>,
+}
+
+/// The colour each of a control's four tones names. A control the document
+/// hands a tone reads its colour here rather than from a palette role named
+/// in Rust.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+#[non_exhaustive]
+pub struct ToneColors {
+    pub accent: ColorRole,
+    pub danger: ColorRole,
+    pub neutral: ColorRole,
+    pub success: ColorRole,
+}
+
+/// The role one tone names in a control's own tone set.
+pub(crate) const fn tone_color(tone: Tone, tones: ToneColors) -> ColorRole {
+    match tone {
+        Tone::Accent => tones.accent,
+        Tone::Danger => tones.danger,
+        Tone::Neutral => tones.neutral,
+        Tone::Success => tones.success,
+    }
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
