@@ -55,11 +55,26 @@ macro_rules! define_palette {
             $(pub $field: String,)*
         }
 
+        /// What a skin restates of another skin's palette.
+        #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+        #[serde(default, deny_unknown_fields)]
+        #[non_exhaustive]
+        pub struct PalettePatch {
+            $(pub $field: Option<String>,)*
+        }
+
         impl PaletteDoc {
             /// Every role the document declares, paired with the value written
             /// for it.
             pub(crate) fn entries(&self) -> impl Iterator<Item = (ColorRole, &str)> {
                 [$((ColorRole::$role, self.$field.as_str()),)*].into_iter()
+            }
+
+            /// Takes every role the patch restates, keeping the rest.
+            pub(crate) fn patch(&mut self, patch: PalettePatch) {
+                $(if let Some(value) = patch.$field {
+                    self.$field = value;
+                })*
             }
         }
     };

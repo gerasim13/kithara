@@ -4,14 +4,15 @@ use std::sync::LazyLock;
 use crate::render::Skin;
 use crate::{
     ids::SourceUri,
-    skin::{SkinDoc, parse_skin},
-    source::MemResolver,
+    skin::{SkinDoc, load_skin},
+    source::{Limits, MemResolver},
     text::{TextDoc, parse_text},
 };
 
 pub const MICRO_PRESET: &str = "micro.klayout.ron";
 pub const PLAYER_PRESET: &str = "player.klayout.ron";
 pub const DARK_SKIN: &str = include_str!("../assets/kithara-dark.kskin.ron");
+pub const DARK_SKIN_PATH: &str = "kithara-dark.kskin.ron";
 /// Eight frames of a growing arc, in one row, for the sprite page and its
 /// cross-host proof.
 pub const SPINNER_SHEET: &[u8] = include_bytes!("../assets/sprites/spinner.png");
@@ -20,6 +21,7 @@ pub const TEXT_EN: &str = include_str!("../assets/kithara-en.ktext.ron");
 #[must_use]
 pub fn resolver() -> MemResolver {
     const ASSETS: &[(&str, &str)] = &[
+        (DARK_SKIN_PATH, DARK_SKIN),
         (MICRO_PRESET, include_str!("../assets/micro.klayout.ron")),
         (PLAYER_PRESET, include_str!("../assets/player.klayout.ron")),
         (
@@ -105,7 +107,7 @@ pub fn resolver() -> MemResolver {
 #[must_use]
 pub fn skin_doc() -> &'static SkinDoc {
     static SKIN_DOC: LazyLock<SkinDoc> = LazyLock::new(|| {
-        parse_skin(DARK_SKIN, &skin_origin())
+        load_skin(&resolver(), DARK_SKIN_PATH, &Limits::default())
             .unwrap_or_else(|error| panic!("embedded kithara dark skin must be valid: {error}"))
     });
     &SKIN_DOC
@@ -131,7 +133,7 @@ pub fn skin() -> &'static Skin {
 }
 
 fn skin_origin() -> SourceUri {
-    SourceUri("builtin:kithara-dark.kskin.ron".to_owned())
+    SourceUri(DARK_SKIN_PATH.to_owned())
 }
 
 fn text_origin() -> SourceUri {

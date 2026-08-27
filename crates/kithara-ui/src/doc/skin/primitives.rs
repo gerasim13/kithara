@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use super::{
     document::{FontFamily, FontWeight},
     palette::ColorRole,
+    section::skin_section,
 };
 use crate::module::WindowControlsStyle;
 
@@ -61,82 +62,78 @@ pub struct TickSkin {
     pub count: usize,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-#[non_exhaustive]
-pub struct LayoutSkin {
-    pub grid_gap: f32,
-    pub grid_pad: f32,
+skin_section! {
+    pub struct LayoutSkin => LayoutPatch {
+        pub grid_gap: f32,
+        pub grid_pad: f32,
+    }
 }
 
-/// The indicator a viewport draws over its own right edge. `min_length` keeps
-/// a window over very long content from showing a thumb too short to see.
-#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-#[non_exhaustive]
-pub struct ScrollSkin {
-    pub thumb: ColorRole,
-    pub track: ColorRole,
-    pub inset: f32,
-    pub min_length: f32,
-    pub width: f32,
+skin_section! {
+    /// The indicator a viewport draws over its own right edge. `min_length` keeps
+    /// a window over very long content from showing a thumb too short to see.
+    pub struct ScrollSkin => ScrollPatch {
+        pub thumb: ColorRole,
+        pub track: ColorRole,
+        pub inset: f32,
+        pub min_length: f32,
+        pub width: f32,
+    }
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-#[non_exhaustive]
-pub struct ChromeSkin {
-    pub chevron_color: ColorRole,
-    pub chip_background: ColorRole,
-    pub chip_text: ColorRole,
-    pub corner_color: ColorRole,
-    pub footer_background: ColorRole,
-    pub footer_text: ColorRole,
-    pub header_background: ColorRole,
-    pub inner_line: ColorRole,
-    pub panel_background: ColorRole,
-    pub title_background: ColorRole,
-    pub title_text: ColorRole,
-    pub chevron_frame: FrameSkin,
-    pub chip_frame: FrameSkin,
-    pub footer_frame: FrameSkin,
-    pub frame: FrameSkin,
-    pub header_frame: FrameSkin,
-    pub secondary_frame: FrameSkin,
-    pub title_frame: FrameSkin,
-    pub chevron_icon_size: f32,
-    pub chevron_size: f32,
-    pub chevron_stroke_width: f32,
-    pub chip_pad: f32,
-    pub chip_text_size: f32,
-    pub corner_offset: f32,
-    pub corner_size: f32,
-    pub corner_width: f32,
-    pub footer_height: f32,
-    pub footer_pad: f32,
-    pub footer_text_size: f32,
-    pub header_height: f32,
-    pub inner_line_width: f32,
-    pub title_text_size: f32,
+skin_section! {
+    pub struct ChromeSkin => ChromePatch {
+        pub chevron_color: ColorRole,
+        pub chip_background: ColorRole,
+        pub chip_text: ColorRole,
+        pub corner_color: ColorRole,
+        pub footer_background: ColorRole,
+        pub footer_text: ColorRole,
+        pub header_background: ColorRole,
+        pub inner_line: ColorRole,
+        pub panel_background: ColorRole,
+        pub title_background: ColorRole,
+        pub title_text: ColorRole,
+        pub chevron_frame: FrameSkin,
+        pub chip_frame: FrameSkin,
+        pub footer_frame: FrameSkin,
+        pub frame: FrameSkin,
+        pub header_frame: FrameSkin,
+        pub secondary_frame: FrameSkin,
+        pub title_frame: FrameSkin,
+        pub chevron_icon_size: f32,
+        pub chevron_size: f32,
+        pub chevron_stroke_width: f32,
+        pub chip_pad: f32,
+        pub chip_text_size: f32,
+        pub corner_offset: f32,
+        pub corner_size: f32,
+        pub corner_width: f32,
+        pub footer_height: f32,
+        pub footer_pad: f32,
+        pub footer_text_size: f32,
+        pub header_height: f32,
+        pub inner_line_width: f32,
+        pub title_text_size: f32,
+    }
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-#[non_exhaustive]
-pub struct WindowSkin {
-    pub icon_color: ColorRole,
-    pub icon_hover_color: ColorRole,
-    pub titlebar_text: TextRoleSkin,
-    pub standard: WindowControlSkin,
-    pub compact: WindowControlSkin,
-    pub close_wide: WindowControlSkin,
-    pub close_micro: WindowControlSkin,
-    pub close_framed: WindowControlSkin,
-    pub icon_stroke_width: f32,
-    /// Thickness of the drag zones framing a window that draws its own chrome.
-    pub resize_edge: f32,
-    pub titlebar_height: f32,
-    pub titlebar_padding_x: f32,
+skin_section! {
+    pub struct WindowSkin => WindowPatch {
+        pub icon_color: ColorRole,
+        pub icon_hover_color: ColorRole,
+        pub titlebar_text: TextRoleSkin,
+        pub standard: WindowControlSkin,
+        pub compact: WindowControlSkin,
+        pub close_wide: WindowControlSkin,
+        pub close_micro: WindowControlSkin,
+        pub close_framed: WindowControlSkin,
+        pub icon_stroke_width: f32,
+        /// Thickness of the drag zones framing a window that draws its own chrome.
+        pub resize_edge: f32,
+        pub titlebar_height: f32,
+        pub titlebar_padding_x: f32,
+    }
 }
 
 /// How one window-controls style draws: a row of buttons, or a single close
