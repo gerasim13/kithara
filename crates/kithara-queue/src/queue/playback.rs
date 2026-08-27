@@ -239,7 +239,7 @@ impl Queue {
 
 #[cfg(test)]
 mod tests {
-    use kithara_events::{Event, PlayerEvent, QueueEvent, StoppedTrack, TrackId};
+    use kithara_events::{Event, ItemRole, PlayerEvent, QueueEvent, TrackId};
     use kithara_platform::sync::Arc;
     use kithara_test_utils::kithara;
 
@@ -259,8 +259,7 @@ mod tests {
             .bus()
             .publish(Event::Player(PlayerEvent::ItemDidPlayToEnd {
                 src: Arc::from(""),
-                item_id: None,
-                track: StoppedTrack::Leading,
+                item: ItemRole::Leading { id: None },
             }));
 
         queue
@@ -285,8 +284,7 @@ mod tests {
             .bus()
             .publish(Event::Player(PlayerEvent::ItemDidPlayToEnd {
                 src: Arc::from(format!("test://memory/{}", b.as_u64())),
-                item_id: None,
-                track: StoppedTrack::Leading,
+                item: ItemRole::Leading { id: None },
             }));
 
         queue

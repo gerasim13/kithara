@@ -4,7 +4,7 @@ use kithara_platform::sync::Arc;
 
 use super::super::core::PlayerImpl;
 use crate::{
-    api::{EngineEvent, PlayerEvent, SlotId, StoppedTrack},
+    api::{EngineEvent, ItemRole, PlayerEvent, SlotId},
     bridge::{PlayerNotification, TrackPlaybackStopReason},
 };
 
@@ -35,7 +35,7 @@ impl Notifier<'_> {
             );
             return;
         }
-        let track = self.stopped_track(slot_id, &notification);
+        let item = self.item_role(slot_id, &notification);
         let emitted = player_events_from_notification(self, &notification);
         let emitted_any = !emitted.is_empty();
         for event in emitted {
@@ -53,10 +53,10 @@ impl Notifier<'_> {
                 reason: TrackPlaybackStopReason::Eof,
                 ..
             } => {
-                self.handle_track_playback_stopped(track, notification);
+                self.handle_track_playback_stopped(item, notification);
             }
             _ => {
-                if let Some(event) = player_event_from_notification(notification.clone(), track) {
+                if let Some(event) = player_event_from_notification(notification.clone(), item) {
                     self.core.engine.bus().publish(event);
                 } else if !emitted_any {
                     tracing::trace!(
@@ -97,17 +97,19 @@ impl Notifier<'_> {
             .is_some_and(|playback| playback.seek_epoch.load(Ordering::SeqCst) != *seek_epoch)
     }
 
-    /// Which track in the arena a stop describes.
+    /// Name the item a notification is about, together with its role in
+    /// the arena.
     ///
-    /// Slot identity answers only half of it: a slot is a processor holding
-    /// an arena, and `commit_next` promotes the successor *inside* the
-    /// current slot, leaving it in the phase as the activated `PendingNext`.
-    /// So an end from the held slot naming a src other than the promoted one
-    /// is the track promoted over — it ends inside the leading slot, but it
-    /// is not what the listener is hearing.
-    fn stopped_track(&self, slot_id: SlotId, notification: &PlayerNotification) -> StoppedTrack {
+    /// Slot identity answers only half of the role: a slot is a processor
+    /// holding an arena, and `commit_next` promotes the successor *inside*
+    /// the current slot, leaving it in the phase as the activated
+    /// `PendingNext`. So a stop from the held slot naming a src other than
+    /// the promoted one is the item promoted over — it ends inside the
+    /// leading slot, but it is not what the listener is hearing.
+    fn item_role(&self, slot_id: SlotId, notification: &PlayerNotification) -> ItemRole {
+        let id = notification.item_id().map(Arc::clone);
         if self.slot() != Some(slot_id) {
-            return StoppedTrack::Background;
+            return ItemRole::Background { id };
         }
         let promoted = self
             .phase
@@ -116,8 +118,8 @@ impl Notifier<'_> {
             .filter(|pending| pending.state.activated())
             .map(|pending| Arc::clone(&pending.src));
         match (promoted, notification.src()) {
-            (Some(promoted), Some(src)) if promoted != *src => StoppedTrack::Outgoing,
-            _ => StoppedTrack::Leading,
+            (Some(promoted), Some(src)) if promoted != *src => ItemRole::Outgoing { id },
+            _ => ItemRole::Leading { id },
         }
     }
 
@@ -157,8 +159,8 @@ impl Notifier<'_> {
 
     /// The role is read before `finalize_handover_if_armed` runs, so the
     /// phase still describes the arena as it was when the track stopped.
-    fn handle_track_playback_stopped(&self, track: StoppedTrack, notification: PlayerNotification) {
-        if let Some(event) = player_event_from_notification(notification, track) {
+    fn handle_track_playback_stopped(&self, item: ItemRole, notification: PlayerNotification) {
+        if let Some(event) = player_event_from_notification(notification, item) {
             self.core.engine.bus().publish(event);
         }
 
@@ -223,29 +225,19 @@ impl PlayerImpl {
 
 pub(crate) fn player_event_from_notification(
     notification: PlayerNotification,
-    track: StoppedTrack,
+    item: ItemRole,
 ) -> Option<PlayerEvent> {
     match notification {
         PlayerNotification::PlaybackStopped {
             reason: TrackPlaybackStopReason::Eof,
             src,
-            item_id,
             ..
-        } => Some(PlayerEvent::ItemDidPlayToEnd {
-            src,
-            item_id,
-            track,
-        }),
+        } => Some(PlayerEvent::ItemDidPlayToEnd { src, item }),
         PlayerNotification::PlaybackStopped {
             reason: TrackPlaybackStopReason::Failed,
             src,
-            item_id,
             ..
-        } => Some(PlayerEvent::ItemDidFail {
-            src,
-            item_id,
-            track,
-        }),
+        } => Some(PlayerEvent::ItemDidFail { src, item }),
         _ => None,
     }
 }
@@ -343,14 +335,18 @@ mod tests {
         }
     }
 
+    fn leading() -> ItemRole {
+        ItemRole::Leading { id: None }
+    }
+
     fn eof_notification() -> PlayerNotification {
         stop_notification("leading.mp3", TrackPlaybackStopReason::Eof)
     }
 
-    fn published_end_role(rx: &mut EventReceiver) -> Option<StoppedTrack> {
+    fn published_end_role(rx: &mut EventReceiver) -> Option<ItemRole> {
         while let Ok(Envelope { event, .. }) = rx.try_recv() {
-            if let Event::Player(PlayerEvent::ItemDidPlayToEnd { track, .. }) = event {
-                return Some(track);
+            if let Event::Player(PlayerEvent::ItemDidPlayToEnd { item, .. }) = event {
+                return Some(item);
             }
         }
         None
@@ -358,11 +354,11 @@ mod tests {
 
     #[kithara::test]
     fn eof_playback_stopped_notification_maps_to_item_end_event() {
-        let event = player_event_from_notification(eof_notification(), StoppedTrack::Leading);
+        let event = player_event_from_notification(eof_notification(), leading());
         assert!(matches!(
             event,
             Some(PlayerEvent::ItemDidPlayToEnd {
-                track: StoppedTrack::Leading,
+                item: ItemRole::Leading { .. },
                 ..
             })
         ));
@@ -372,12 +368,12 @@ mod tests {
     fn failed_playback_stopped_notification_carries_the_role() {
         let event = player_event_from_notification(
             stop_notification("leading.mp3", TrackPlaybackStopReason::Failed),
-            StoppedTrack::Background,
+            ItemRole::Background { id: None },
         );
         assert!(matches!(
             event,
             Some(PlayerEvent::ItemDidFail {
-                track: StoppedTrack::Background,
+                item: ItemRole::Background { .. },
                 ..
             })
         ));
@@ -387,7 +383,7 @@ mod tests {
     fn playback_stopped_notification_does_not_map_to_item_end_event() {
         let event = player_event_from_notification(
             stop_notification("leading.mp3", TrackPlaybackStopReason::Stop),
-            StoppedTrack::Leading,
+            leading(),
         );
         assert!(event.is_none());
     }
@@ -401,7 +397,7 @@ mod tests {
 
         assert_eq!(
             published_end_role(&mut rx),
-            Some(StoppedTrack::Leading),
+            Some(leading()),
             "with nothing promoted over it, the held slot's track is the one being heard"
         );
     }
@@ -419,7 +415,7 @@ mod tests {
 
         assert_eq!(
             published_end_role(&mut rx),
-            Some(StoppedTrack::Background),
+            Some(ItemRole::Background { id: None }),
             "an end from a slot the phase does not hold is not the track being heard"
         );
     }
@@ -442,7 +438,7 @@ mod tests {
 
         assert_eq!(
             published_end_role(&mut rx),
-            Some(StoppedTrack::Outgoing),
+            Some(ItemRole::Outgoing { id: None }),
             "the track promoted over is not the one the listener is hearing"
         );
     }
@@ -459,7 +455,7 @@ mod tests {
 
         assert_eq!(
             published_end_role(&mut rx),
-            Some(StoppedTrack::Leading),
+            Some(leading()),
             "the promoted track is the one being heard"
         );
     }

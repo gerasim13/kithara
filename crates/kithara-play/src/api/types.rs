@@ -1,6 +1,6 @@
 pub use kithara_events::{
-    DjEvent, EngineEvent, InterruptionKind, ItemEvent, ItemStatus, PlaybackDirection, PlayerEvent,
-    PlayerStatus, RouteChangeReason, SessionEvent, SlotId, StoppedTrack, TimeControlStatus,
+    DjEvent, EngineEvent, InterruptionKind, ItemEvent, ItemRole, ItemStatus, PlaybackDirection,
+    PlayerEvent, PlayerStatus, RouteChangeReason, SessionEvent, SlotId, TimeControlStatus,
     TimeRange, TransportEvent, WaitingReason,
 };
 

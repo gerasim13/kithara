@@ -519,9 +519,9 @@ impl TryFrom<&PlayerEvent> for FfiPlayerEvent {
             PlayerEvent::VolumeChanged { volume } => Self::VolumeChanged { volume: *volume },
             PlayerEvent::MuteChanged { muted } => Self::MuteChanged { muted: *muted },
             PlayerEvent::ItemDidPlayToEnd { .. } => Self::ItemDidPlayToEnd,
-            PlayerEvent::ItemDidFail { item_id, .. } => Self::ItemDidFail {
-                item_id: item_id
-                    .as_ref()
+            PlayerEvent::ItemDidFail { item, .. } => Self::ItemDidFail {
+                item_id: item
+                    .id()
                     .and_then(|s| s.parse::<u64>().ok())
                     .map(TrackId::from),
             },
@@ -832,8 +832,9 @@ mod tests {
     fn player_event_to_ffi_maps_item_did_fail_track_id() {
         let event = PlayerEvent::ItemDidFail {
             src: "src".into(),
-            item_id: Some("7".into()),
-            track: kithara_events::StoppedTrack::Leading,
+            item: kithara_events::ItemRole::Leading {
+                id: Some("7".into()),
+            },
         };
 
         assert!(matches!(

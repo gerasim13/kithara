@@ -93,23 +93,26 @@ The `PlayerEvent` / `ItemEvent` / `EngineEvent` / `SessionEvent` / `DjEvent` enu
 `SessionDuckingMode` is owned by this crate and maps `Off` / `Soft` / `Hard` to session-output
 gains `1.0` / `0.4` / `0.2`.
 
-**`ItemDidPlayToEnd` and `ItemDidFail` name which track in the arena stopped.**
+**`ItemDidPlayToEnd` and `ItemDidFail` name which item in the arena stopped.**
 `process_notifications` drains *every* active slot, and a slot is a processor holding an arena of
-tracks rather than one track — so a stop says nothing on its own, and only this crate can say what
-it was. Both events carry the answer as `track: StoppedTrack`:
+items rather than one item — so a stop says nothing on its own, and only this crate can say what it
+was. Both events carry the answer as `item: ItemRole`, which holds the caller's label *inside* the
+role so a consumer cannot reach the identity without first saying which item it has:
 
-- `Leading` — the track the listener is hearing. The only role that drives auto-advance.
-- `Outgoing` — the outgoing half of a crossfade. `commit_next` promotes the successor *inside* the
-  current slot (`CrossfadeStarted { from: slot, to: slot }`) and leaves it in the phase as the
-  activated `PendingNext`, so the faded-out track ends while its own slot is still the held one.
-  Slot identity alone would call it leading; the promoted `src` under it is what tells them apart.
-- `Background` — a slot the phase no longer holds: an orphan draining the last of its notifications
-  while a different track plays. A preloaded successor or a lingering predecessor decoding ahead
-  reaches its own end this way, seconds into the current track.
+- `Leading { id }` — the item the listener is hearing. The only role that drives auto-advance.
+- `Outgoing { id }` — the outgoing half of a crossfade. `commit_next` promotes the successor
+  *inside* the current slot (`CrossfadeStarted { from: slot, to: slot }`) and leaves it in the
+  phase as the activated `PendingNext`, so the faded-out item ends while its own slot is still the
+  held one. Slot identity alone would call it leading; the promoted `src` under it tells them apart.
+- `Background { id }` — a slot the phase no longer holds: an orphan draining the last of its
+  notifications while a different item plays. A preloaded successor or a lingering predecessor
+  decoding ahead reaches its own end this way, seconds into the current item.
 
-The role is taken in `dispatch_notification` before `finalize_handover_if_armed` can move the
-phase, so it describes the arena as it was when the track stopped. Consumers must key auto-advance
-on it, never on `src`: `src` identifies a rendered resource, not a queue entry.
+`Notifier::item_role` builds it in `dispatch_notification` before `finalize_handover_if_armed` can
+move the phase, so it describes the arena as it was when the item stopped. `id` rides in from
+`LoadTrack` and is `None` unless the caller used `replace_item_tagged` — only `kithara-ffi` does.
+Consumers must key auto-advance on the role, never on `src`: `src` identifies a rendered resource,
+not a queue entry.
 
 ## Queue Auto-Advance
 

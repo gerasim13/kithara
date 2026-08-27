@@ -137,7 +137,7 @@ seeking — not from `PlayerImpl::current_index`.
   slot holds more than one track, so the event names whichever track in the player's
   arena hit EOF — an orphaned slot decoding ahead, or the outgoing half of a crossfade,
   reaches its own end while the track being heard has minutes left. Advance
-  (`advance_to_next(Crossfade, NaturalEof)`) only on `track: StoppedTrack::Leading`.
+  (`advance_to_next(Crossfade, NaturalEof)`) only on `item: ItemRole::Leading`.
   That role is the player's own verdict (`kithara-play` owns it; see its `CONTEXT.md`),
   and it is the only trustworthy one: `src` is a rendered resource identifier, not a
   queue key — `file://` URLs arrive as bare paths and `track_id_for_src` returns the
@@ -145,7 +145,7 @@ seeking — not from `PlayerImpl::current_index`.
   sibling. A `Leading` event with an empty `src` falls back to the pos/dur heuristic
   (advance when `pos >= dur - 1.0s`, else log a spurious crossfade fade-out).
 - `ItemDidFail` → status `Failed`, `TrackLoadFailed { auto_skipped: true }`, then
-  `advance_to_next(Transition::None, TrackFailed)` — gated on `track` for the same
+  `advance_to_next(Transition::None, TrackFailed)` — gated on `item` for the same
   reason as `ItemDidPlayToEnd`. A non-leading failure is dropped outright rather than
   flagged against a queue entry: the event carries no track identity beyond `src`, so
   acting on it would take the wrong entry out of selection for the rest of the session.

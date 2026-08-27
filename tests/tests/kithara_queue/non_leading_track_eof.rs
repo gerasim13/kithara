@@ -6,14 +6,14 @@
 //! holds more than one track. An orphaned slot decoding ahead, or the
 //! outgoing half of a crossfade, reaches its own end while the current
 //! track has minutes left. The player names the role in `track`; only
-//! `StoppedTrack::Leading` may advance the queue.
+//! `ItemRole::Leading` may advance the queue.
 
 use std::num::NonZero;
 
 use kithara::{
     self,
     decode::PcmSpec,
-    events::{Event, PlayerEvent, StoppedTrack, TrackId},
+    events::{Event, ItemRole, PlayerEvent, TrackId},
     platform::sync::Arc,
     queue::{Queue, QueueConfig, Transition},
 };
@@ -109,8 +109,7 @@ async fn background_track_eof_does_not_advance_the_queue() {
         .bus()
         .publish(Event::Player(PlayerEvent::ItemDidPlayToEnd {
             src: stale_src,
-            item_id: None,
-            track: StoppedTrack::Background,
+            item: ItemRole::Background { id: None },
         }));
     let _ = render_loop(&queue, &harness, WARMUP_BLOCKS);
 
@@ -142,8 +141,7 @@ async fn background_track_eof_does_not_cut_the_current_track_audio() {
         .bus()
         .publish(Event::Player(PlayerEvent::ItemDidPlayToEnd {
             src: stale_src,
-            item_id: None,
-            track: StoppedTrack::Background,
+            item: ItemRole::Background { id: None },
         }));
     let after_pcm = render_loop(&queue, &harness, WARMUP_BLOCKS);
     let after = mean_abs(&after_pcm[after_pcm.len() / 2..]);
@@ -173,8 +171,7 @@ async fn outgoing_crossfade_half_eof_does_not_advance_the_queue() {
         .bus()
         .publish(Event::Player(PlayerEvent::ItemDidPlayToEnd {
             src: outgoing_src,
-            item_id: None,
-            track: StoppedTrack::Outgoing,
+            item: ItemRole::Outgoing { id: None },
         }));
     let _ = render_loop(&queue, &harness, WARMUP_BLOCKS);
 

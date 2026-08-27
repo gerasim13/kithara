@@ -13,7 +13,7 @@ use std::num::NonZero;
 use kithara::{
     self,
     decode::PcmSpec,
-    events::{Event, PlayerEvent, StoppedTrack, TrackId, TrackStatus},
+    events::{Event, ItemRole, PlayerEvent, TrackId, TrackStatus},
     platform::sync::Arc,
     queue::{Queue, QueueConfig, Transition},
 };
@@ -101,8 +101,7 @@ fn publish_background_failure(harness: &OfflinePlayerHarness, src: Arc<str>) {
         .bus()
         .publish(Event::Player(PlayerEvent::ItemDidFail {
             src,
-            item_id: None,
-            track: StoppedTrack::Background,
+            item: ItemRole::Background { id: None },
         }));
 }
 

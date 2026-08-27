@@ -62,8 +62,8 @@ async fn auto_advance_starts_next_track_without_explicit_play(temp_dir: TestTemp
             first_item_finished = events.iter().find_map(|timed| {
                 matches!(
                     &timed.event,
-                    PlayerEvent::ItemDidPlayToEnd { item_id: Some(id), .. }
-                        if id.as_ref() == first_id.as_ref()
+                    PlayerEvent::ItemDidPlayToEnd { item, .. }
+                        if item.id().is_some_and(|id| id.as_ref() == first_id.as_ref())
                 )
                 .then_some(timed.frame_end)
             });

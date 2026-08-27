@@ -168,6 +168,18 @@ impl PlayerNotification {
             Self::PlaybackStarted { .. } | Self::Requested | Self::HandoverRequested => None,
         }
     }
+
+    /// Returns the caller's label for the track that stopped.
+    ///
+    /// Only a stop carries one: it rides in from `LoadTrack` and is what
+    /// the player folds into `ItemRole` when it names the stopped item.
+    #[must_use]
+    pub const fn item_id(&self) -> Option<&Arc<str>> {
+        match self {
+            Self::PlaybackStopped { item_id, .. } => item_id.as_ref(),
+            _ => None,
+        }
+    }
 }
 
 #[cfg(test)]

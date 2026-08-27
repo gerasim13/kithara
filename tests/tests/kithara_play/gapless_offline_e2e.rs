@@ -129,8 +129,8 @@ async fn single_track_silence_trim_strips_leading_priming(temp_dir: TestTempDir)
     let _ = timed_event_frame_end(&events, |event| {
         matches!(
             event,
-            PlayerEvent::ItemDidPlayToEnd { item_id: Some(id), .. }
-                if id.as_ref() == "single-leading"
+            PlayerEvent::ItemDidPlayToEnd { item, .. }
+                if item.id().is_some_and(|id| id.as_ref() == "single-leading")
         )
     })
     .expect("ItemDidPlayToEnd must fire for the single-track fixture");
@@ -202,16 +202,16 @@ async fn two_tracks_gapless_no_click_with_silence_trim_zero_crossfade(temp_dir: 
     let item1_end = timed_event_frame_end(&events, |event| {
         matches!(
             event,
-            PlayerEvent::ItemDidPlayToEnd { item_id: Some(id), .. }
-                if id.as_ref() == "item-1"
+            PlayerEvent::ItemDidPlayToEnd { item, .. }
+                if item.id().is_some_and(|id| id.as_ref() == "item-1")
         )
     })
     .expect("first item must emit ItemDidPlayToEnd");
     let _ = timed_event_frame_end(&events, |event| {
         matches!(
             event,
-            PlayerEvent::ItemDidPlayToEnd { item_id: Some(id), .. }
-                if id.as_ref() == "item-2"
+            PlayerEvent::ItemDidPlayToEnd { item, .. }
+                if item.id().is_some_and(|id| id.as_ref() == "item-2")
         )
     })
     .expect("second item must emit ItemDidPlayToEnd");
@@ -457,8 +457,8 @@ async fn render_apple_fused_deficit_seam(
     let _ = timed_event_frame_end(&events, |event| {
         matches!(
             event,
-            PlayerEvent::ItemDidPlayToEnd { item_id: Some(id), .. }
-                if id.as_ref() == "apple-fused-1"
+            PlayerEvent::ItemDidPlayToEnd { item, .. }
+                if item.id().is_some_and(|id| id.as_ref() == "apple-fused-1")
         )
     })
     .expect("first fused item must emit ItemDidPlayToEnd");
@@ -515,8 +515,8 @@ async fn disabled_gapless_mode_keeps_full_decoded_length(temp_dir: TestTempDir) 
     let _ = timed_event_frame_end(&events, |event| {
         matches!(
             event,
-            PlayerEvent::ItemDidPlayToEnd { item_id: Some(id), .. }
-                if id.as_ref() == "disabled"
+            PlayerEvent::ItemDidPlayToEnd { item, .. }
+                if item.id().is_some_and(|id| id.as_ref() == "disabled")
         )
     })
     .expect("ItemDidPlayToEnd must fire");
@@ -617,8 +617,8 @@ async fn two_tracks_silence_trim_heuristic_no_click_when_no_gapless_metadata(
     let item1_end = timed_event_frame_end(&events, |event| {
         matches!(
             event,
-            PlayerEvent::ItemDidPlayToEnd { item_id: Some(id), .. }
-                if id.as_ref() == "item-1"
+            PlayerEvent::ItemDidPlayToEnd { item, .. }
+                if item.id().is_some_and(|id| id.as_ref() == "item-1")
         )
     })
     .expect("first item must emit ItemDidPlayToEnd");
@@ -696,8 +696,8 @@ async fn single_track_silence_trim_heuristic_fade_out_smooths_trailing_edge(temp
     let item_end = timed_event_frame_end(&events, |event| {
         matches!(
             event,
-            PlayerEvent::ItemDidPlayToEnd { item_id: Some(id), .. }
-                if id.as_ref() == "fade-out-edge"
+            PlayerEvent::ItemDidPlayToEnd { item, .. }
+                if item.id().is_some_and(|id| id.as_ref() == "fade-out-edge")
         )
     })
     .expect("ItemDidPlayToEnd must fire");
@@ -1246,8 +1246,8 @@ async fn render_until_item_end_with_post_roll(
         if events.iter().any(|event| {
             matches!(
                 &event.event,
-                PlayerEvent::ItemDidPlayToEnd { item_id: Some(id), .. }
-                    if id.as_ref() == terminal_item_id
+                PlayerEvent::ItemDidPlayToEnd { item, .. }
+                    if item.id().is_some_and(|id| id.as_ref() == terminal_item_id)
             )
         }) {
             for _ in 0..post_roll_blocks {
@@ -1317,8 +1317,8 @@ fn assert_prefetch_before_first_end(events: &[TimedPlayerEvent], first_item_id: 
         .position(|timed| {
             matches!(
                 &timed.event,
-                PlayerEvent::ItemDidPlayToEnd { item_id: Some(id), .. }
-                    if id.as_ref() == first_item_id
+                PlayerEvent::ItemDidPlayToEnd { item, .. }
+                    if item.id().is_some_and(|id| id.as_ref() == first_item_id)
             )
         })
         .expect("first item must emit ItemDidPlayToEnd");

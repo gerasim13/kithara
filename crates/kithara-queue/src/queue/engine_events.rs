@@ -1,7 +1,7 @@
 use std::sync::PoisonError;
 
 use kithara_events::{
-    AdvanceReason, AudioEvent, Envelope, Event, ItemEvent, PlayerEvent, QueueEvent, StoppedTrack,
+    AdvanceReason, AudioEvent, Envelope, Event, ItemEvent, ItemRole, PlayerEvent, QueueEvent,
     TrackId, TrackStatus,
 };
 use kithara_platform::{sync::Arc, tokio::sync::broadcast::error::TryRecvError};
@@ -113,14 +113,14 @@ impl Queue {
         self.advance_loaded_successor(entry.id, Transition::Crossfade);
     }
 
-    /// Gated on `track` for the same reason as
-    /// [`Self::handle_item_did_play_to_end`]: the player reports the track
-    /// that aborted, not the one being heard. Only a leading track's
+    /// Gated on `item` for the same reason as
+    /// [`Self::handle_item_did_play_to_end`]: the player reports the item
+    /// that aborted, not the one being heard. Only a leading item's
     /// failure may skip and flag — the event carries no identity the queue
     /// can resolve, and `track_id_for_src` returns the first entry with a
     /// matching source, so acting on any other role can take the wrong
     /// entry out of selection for the rest of the session.
-    pub(super) fn handle_item_did_fail(&self, src: &Arc<str>, track: StoppedTrack) {
+    pub(super) fn handle_item_did_fail(&self, src: &Arc<str>, item: &ItemRole) {
         let snap = self.player.playback_snapshot();
         let pos = snap.map_or(0.0, |s| s.position());
         let dur = snap.map_or(0.0, |s| s.duration());
@@ -137,8 +137,8 @@ impl Queue {
         if self.consume_armed_advance(ended_id, pos, dur) {
             return;
         }
-        if !track.is_leading() {
-            debug!(%src, pos, dur, ?track, "not the leading track: not failing the queue entry");
+        if !item.is_leading() {
+            debug!(%src, pos, dur, ?item, "not the leading item: not failing the queue entry");
             return;
         }
         if let Some(id) = ended_id {
@@ -155,12 +155,12 @@ impl Queue {
         let _ = self.advance_to_next(Transition::None, AdvanceReason::TrackFailed);
     }
 
-    /// `track` is the player's verdict on which track in its arena ended.
+    /// `item` is the player's verdict on which item in its arena ended.
     /// The player drains every active slot, and one slot holds more than
-    /// one track, so an end says nothing on its own: an orphaned slot or
+    /// one item, so an end says nothing on its own: an orphaned slot or
     /// the outgoing half of a crossfade reports its own end while the
-    /// track being heard has minutes left. Only `Leading` advances.
-    pub(super) fn handle_item_did_play_to_end(&self, src: &Arc<str>, track: StoppedTrack) {
+    /// item being heard has minutes left. Only `Leading` advances.
+    pub(super) fn handle_item_did_play_to_end(&self, src: &Arc<str>, item: &ItemRole) {
         let snap = self.player.playback_snapshot();
         let pos = snap.map_or(0.0, |s| s.position());
         let dur = snap.map_or(0.0, |s| s.duration());
@@ -177,8 +177,8 @@ impl Queue {
         if self.consume_armed_advance(ended_id, pos, dur) {
             return;
         }
-        if !track.is_leading() {
-            debug!(%src, pos, dur, ?track, "not the leading track: not advancing");
+        if !item.is_leading() {
+            debug!(%src, pos, dur, ?item, "not the leading item: not advancing");
             return;
         }
         if src.is_empty() {
@@ -190,11 +190,11 @@ impl Queue {
 
     pub(super) fn process_player_event(&self, ev: &Event) {
         match ev {
-            Event::Player(PlayerEvent::ItemDidPlayToEnd { src, track, .. }) => {
-                self.handle_item_did_play_to_end(src, *track);
+            Event::Player(PlayerEvent::ItemDidPlayToEnd { src, item }) => {
+                self.handle_item_did_play_to_end(src, item);
             }
-            Event::Player(PlayerEvent::ItemDidFail { src, track, .. }) => {
-                self.handle_item_did_fail(src, *track);
+            Event::Player(PlayerEvent::ItemDidFail { src, item }) => {
+                self.handle_item_did_fail(src, item);
             }
             Event::Player(PlayerEvent::CurrentItemChanged) => {
                 self.handle_current_item_changed();
