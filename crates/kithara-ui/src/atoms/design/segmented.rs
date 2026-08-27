@@ -5,7 +5,7 @@ use crate::{
     draw::{DrawListBuilder, Pt, Rect, Rgba, Transform},
     render::Skin,
     shaping::TextContext,
-    skin::{FontFamily, SegmentedSkin, TextRoleSkin},
+    skin::{SegmentedSkin, TextRoleSkin},
 };
 
 /// A row of equal cells, one of them picked out.
@@ -36,15 +36,9 @@ impl Segmented {
             active_text: skin.rgba(metrics.active_text),
             background: skin.rgba(metrics.background),
             frame: skin.rgba(metrics.frame.border),
-            inactive_text: skin.rgba(metrics.inactive_text),
+            inactive_text: skin.rgba(metrics.text.color),
             metrics,
-            role: TextRoleSkin {
-                color: metrics.inactive_text,
-                font: FontFamily::Mono,
-                size: metrics.text.size,
-                spacing: 0.0,
-                weight: metrics.text.weight,
-            },
+            role: metrics.text,
         }
     }
 

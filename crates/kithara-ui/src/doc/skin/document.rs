@@ -7,8 +7,8 @@ use super::{
         MenuPatch, MenuSkin, NavPatch, NavSkin, PortalMapPatch, PortalMapSkin, RangePatch,
         RangeSkin, ReadoutPatch, ReadoutSkin, SegmentedPatch, SegmentedSkin, SelectPatch,
         SelectSkin, StatusDotPatch, StatusDotSkin, SwatchPatch, SwatchSkin, TabLargePatch,
-        TabLargeSkin, TextInputPatch, TextInputSkin, TextPatch, TextSkin, TogglePatch, ToggleSkin,
-        VisPatch, VisSkin, VuStereoPatch, VuStereoSkin, VuVerticalPatch, VuVerticalSkin,
+        TabLargeSkin, TextPatch, TextSkin, TogglePatch, ToggleSkin, VisPatch, VisSkin,
+        VuStereoPatch, VuStereoSkin, VuVerticalPatch, VuVerticalSkin,
     },
     palette::{PaletteDoc, PalettePatch},
     panels::{
@@ -64,7 +64,6 @@ macro_rules! skin_sections {
             swatch: SwatchSkin => SwatchPatch,
             tab_large: TabLargeSkin => TabLargePatch,
             telemetry: TelemetrySkin => TelemetryPatch,
-            text_input: TextInputSkin => TextInputPatch,
             text: TextSkin => TextPatch,
             toggle: ToggleSkin => TogglePatch,
             table: TableSkin => TablePatch,

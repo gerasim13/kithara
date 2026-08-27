@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{
     palette::ColorRole,
-    primitives::{FaceSkin, FontSkin, FrameSkin, StateColors, TextRoleSkin, TickSkin, ToneColors},
+    primitives::{FaceSkin, FrameSkin, StateColors, TextRoleSkin, TickSkin, ToneColors},
     section::skin_section,
 };
 use crate::{
@@ -10,19 +10,6 @@ use crate::{
     module::{TextStyle, text_roles},
     size::SizeSpec,
 };
-
-skin_section! {
-    pub struct TextInputSkin => TextInputPatch {
-        pub border: ColorRole,
-        pub font: FontSkin,
-        pub border_width: f32,
-        pub height: f32,
-        pub idle_border_width: f32,
-        pub padding_x: f32,
-        pub padding_y: f32,
-        pub radius: f32,
-    }
-}
 
 skin_section! {
     pub struct KnobSkin => KnobPatch {
@@ -322,8 +309,7 @@ skin_section! {
         pub active_background: ColorRole,
         pub active_text: ColorRole,
         pub background: ColorRole,
-        pub inactive_text: ColorRole,
-        pub text: FontSkin,
+        pub text: TextRoleSkin,
         pub frame: FrameSkin,
         pub size: SizeSpec,
         pub padding_x: f32,
@@ -334,8 +320,7 @@ skin_section! {
     pub struct SelectSkin => SelectPatch {
         pub background: ColorRole,
         pub chevron_color: ColorRole,
-        pub text_color: ColorRole,
-        pub text: FontSkin,
+        pub text: TextRoleSkin,
         pub frame: FrameSkin,
         pub size: SizeSpec,
         pub chevron_size: f32,

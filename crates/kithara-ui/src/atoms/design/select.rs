@@ -3,7 +3,7 @@ use crate::{
     draw::{DrawListBuilder, Pt, Rect, Rgba, Transform},
     render::Skin,
     shaping::TextContext,
-    skin::{FontFamily, SelectSkin, TextRoleSkin},
+    skin::{SelectSkin, TextRoleSkin},
 };
 
 /// The chevron a select shows on its closing edge.
@@ -24,21 +24,17 @@ pub(crate) struct Select {
 impl Select {
     pub(crate) fn new(skin: &Skin) -> Self {
         let metrics = skin.select;
-        let role = |size| TextRoleSkin {
-            color: metrics.text_color,
-            font: FontFamily::Mono,
-            size,
-            spacing: 0.0,
-            weight: metrics.text.weight,
-        };
         Self {
             background: skin.rgba(metrics.background),
             chevron: skin.rgba(metrics.chevron_color),
-            chevron_role: role(metrics.chevron_size),
+            chevron_role: TextRoleSkin {
+                size: metrics.chevron_size,
+                ..metrics.text
+            },
             metrics,
-            role: role(metrics.text.size),
+            role: metrics.text,
             stroke: skin.rgba(metrics.frame.border),
-            text: skin.rgba(metrics.text_color),
+            text: skin.rgba(metrics.text.color),
         }
     }
 

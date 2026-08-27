@@ -7,14 +7,6 @@ use super::{
 };
 use crate::module::{Tone, WindowControlsStyle};
 
-#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-#[non_exhaustive]
-pub struct FontSkin {
-    pub weight: FontWeight,
-    pub size: f32,
-}
-
 /// One of the two looks a control switches between: what it paints under
 /// itself, and what it draws on top. A face naming no fill paints none, and
 /// sits on the surface it is mounted in.

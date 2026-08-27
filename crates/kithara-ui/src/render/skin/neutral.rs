@@ -10,8 +10,8 @@ use crate::{
         DeckSkin, DividerSkin, DragSkin, FaderSkin, GlobalBarSkin, KnobSkin, LayoutPreviewSkin,
         LayoutSkin, MenuSkin, MeterSkin, NavSkin, PopSkin, PortalMapSkin, RangeSkin, ReadoutSkin,
         ScrollSkin, SegmentedSkin, SelectSkin, SkinDoc, StatusDotSkin, SwatchSkin, TabLargeSkin,
-        TableSkin, TelemetrySkin, TextInputSkin, TextRoleSkin, TextSkin, ToggleSkin, TreeSkin,
-        VisSkin, VuStereoSkin, VuVerticalSkin, WaveSkin, WindowSkin,
+        TableSkin, TelemetrySkin, TextRoleSkin, TextSkin, ToggleSkin, TreeSkin, VisSkin,
+        VuStereoSkin, VuVerticalSkin, WaveSkin, WindowSkin,
     },
     text::TextDoc,
 };
@@ -59,7 +59,6 @@ pub struct Skin {
     pub swatch: SwatchSkin,
     pub tab_large: TabLargeSkin,
     pub telemetry: TelemetrySkin,
-    pub text_input: TextInputSkin,
     pub text: TextSkin,
     pub toggle: ToggleSkin,
     pub table: TableSkin,
@@ -156,7 +155,6 @@ impl Skin {
             layout: document.layout,
             chrome: document.chrome,
             window: document.window,
-            text_input: document.text_input,
             knob: document.knob,
             crossfader: document.crossfader,
             crossfader_labels: CrossfaderLabels {
