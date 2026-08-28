@@ -36,7 +36,7 @@ impl Notifier<'_> {
             return;
         }
         let item = self.item_role(slot_id, &notification);
-        let emitted = player_events_from_notification(self, &notification);
+        let emitted = player_events_from_notification(self, &notification, &item);
         let emitted_any = !emitted.is_empty();
         for event in emitted {
             self.core.engine.bus().publish(event);
@@ -97,8 +97,8 @@ impl Notifier<'_> {
             .is_some_and(|playback| playback.seek_epoch.load(Ordering::SeqCst) != *seek_epoch)
     }
 
-    /// Name the item a notification is about, together with its role in
-    /// the arena.
+    /// Name the item a start or stop notification is about, together with
+    /// its role in the arena.
     ///
     /// Slot identity answers only half of the role: a slot is a processor
     /// holding an arena, and `commit_next` promotes the successor *inside*
@@ -245,14 +245,15 @@ pub(crate) fn player_event_from_notification(
 fn player_events_from_notification(
     player: &PlayerImpl,
     notification: &PlayerNotification,
+    item: &ItemRole,
 ) -> Vec<kithara_events::Event> {
     let mut events = Vec::new();
     match notification {
-        PlayerNotification::PlaybackStarted { src, item_id } => {
+        PlayerNotification::PlaybackStarted { src, .. } => {
             events.push(
                 PlayerEvent::PlaybackStarted {
                     src: Arc::clone(src),
-                    item_id: item_id.clone(),
+                    item: item.clone(),
                 }
                 .into(),
             );
@@ -341,6 +342,15 @@ mod tests {
 
     fn eof_notification() -> PlayerNotification {
         stop_notification("leading.mp3", TrackPlaybackStopReason::Eof)
+    }
+
+    fn published_start_role(rx: &mut EventReceiver) -> Option<ItemRole> {
+        while let Ok(Envelope { event, .. }) = rx.try_recv() {
+            if let Event::Player(PlayerEvent::PlaybackStarted { item, .. }) = event {
+                return Some(item);
+            }
+        }
+        None
     }
 
     fn published_end_role(rx: &mut EventReceiver) -> Option<ItemRole> {
@@ -457,6 +467,32 @@ mod tests {
             published_end_role(&mut rx),
             Some(leading()),
             "the promoted track is the one being heard"
+        );
+    }
+
+    /// A start is drained from every active slot exactly as a stop is, so
+    /// it needs the same answer: an orphan whose item reaches `Playing`
+    /// would otherwise announce itself as the item being heard.
+    #[kithara::test]
+    fn start_of_a_slot_the_phase_does_not_hold_is_a_background_item() {
+        let (player, slot) = player_with_slot();
+        let background = SlotId::new(slot.value() + 1);
+        let mut rx = player.subscribe();
+
+        Notifier::new(&player).dispatch_notification(
+            background,
+            PlayerNotification::PlaybackStarted {
+                src: Arc::from("background.mp3"),
+                item_id: Some(Arc::from("bg-7")),
+            },
+        );
+
+        assert_eq!(
+            published_start_role(&mut rx),
+            Some(ItemRole::Background {
+                id: Some(Arc::from("bg-7"))
+            }),
+            "a start from a slot the phase does not hold is not the item being heard"
         );
     }
 }

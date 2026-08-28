@@ -93,11 +93,12 @@ The `PlayerEvent` / `ItemEvent` / `EngineEvent` / `SessionEvent` / `DjEvent` enu
 `SessionDuckingMode` is owned by this crate and maps `Off` / `Soft` / `Hard` to session-output
 gains `1.0` / `0.4` / `0.2`.
 
-**`ItemDidPlayToEnd` and `ItemDidFail` name which item in the arena stopped.**
-`process_notifications` drains *every* active slot, and a slot is a processor holding an arena of
-items rather than one item — so a stop says nothing on its own, and only this crate can say what it
-was. Both events carry the answer as `item: ItemRole`, which holds the caller's label *inside* the
-role so a consumer cannot reach the identity without first saying which item it has:
+**`PlaybackStarted`, `ItemDidPlayToEnd` and `ItemDidFail` name which item in the arena they are
+about.** `process_notifications` drains *every* active slot, and a slot is a processor holding an
+arena of items rather than one item — so a start or a stop says nothing on its own, and only this
+crate can say what it was. All three carry the answer as `item: ItemRole`, which holds the caller's
+label *inside* the role so a consumer cannot reach the identity without first saying which item it
+has:
 
 - `Leading { id }` — the item the listener is hearing. The only role that drives auto-advance.
 - `Outgoing { id }` — the outgoing half of a crossfade. `commit_next` promotes the successor
@@ -108,8 +109,9 @@ role so a consumer cannot reach the identity without first saying which item it 
   notifications while a different item plays. A preloaded successor or a lingering predecessor
   decoding ahead reaches its own end this way, seconds into the current item.
 
-`Notifier::item_role` builds it in `dispatch_notification` before `finalize_handover_if_armed` can
-move the phase, so it describes the arena as it was when the item stopped. `id` rides in from
+`Notifier::item_role` builds it once per notification in `dispatch_notification`, before
+`finalize_handover_if_armed` can move the phase, so it describes the arena as it was when the item
+started or stopped. `id` rides in from
 `LoadTrack` and is `None` unless the caller used `replace_item_tagged` — only `kithara-ffi` does.
 Consumers must key auto-advance on the role, never on `src`: `src` identifies a rendered resource,
 not a queue entry.

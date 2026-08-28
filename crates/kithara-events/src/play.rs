@@ -344,9 +344,14 @@ pub enum PlayerEvent {
     RateChanged {
         rate: f32,
     },
+    /// An item began rendering. Published for whichever slot's item
+    /// entered `Playing`, so it carries [`ItemRole`] for the same reason
+    /// [`ItemDidPlayToEnd`](Self::ItemDidPlayToEnd) does: a slot the phase
+    /// no longer holds can start its own item while a different one is
+    /// being heard.
     PlaybackStarted {
         src: Arc<str>,
-        item_id: Option<Arc<str>>,
+        item: ItemRole,
     },
     VolumeChanged {
         volume: f32,
@@ -358,13 +363,12 @@ pub enum PlayerEvent {
     PrerollCompleted {
         success: bool,
     },
-    /// A track reached natural end-of-stream. `src` is the underlying
-    /// audio source identifier of the track that ended. `item_id` is the
-    /// optional caller-side item identifier (FFI bindings tag tracks with
-    /// stable UUIDs; internal callers, the queue included, leave it
-    /// `None` — it is a caller's label, never an identity the player can
-    /// resolve). `track` is the player's own answer to which track this
-    /// was; auto-advance must key on it, and never on `src`.
+    /// An item reached natural end-of-stream. `src` is the underlying
+    /// audio source identifier of the item that ended — a rendered
+    /// resource, never an identity the player can resolve back to a queue
+    /// entry. [`ItemRole`] is the player's own answer to *which* item this
+    /// was, carrying the caller's label inside it; auto-advance must key on
+    /// the role, and never on `src`.
     ItemDidPlayToEnd {
         src: Arc<str>,
         item: ItemRole,
