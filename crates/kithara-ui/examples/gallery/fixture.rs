@@ -463,7 +463,7 @@ pub(crate) fn resolver() -> Resolver {
 /// Panics when the package answers for no such role.
 pub(crate) fn document(role: &str) -> &'static str {
     pages()
-        .get(&ScreenRole(role.to_owned()))
+        .get(role)
         .unwrap_or_else(|| panic!("the gallery package answers for no screen {role}"))
 }
 

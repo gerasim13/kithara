@@ -79,6 +79,11 @@ an allocation failure returns `UiDocError::ArenaFull`.
   which `ExpandedNode` cannot provide. `CompiledUi` does carry a `DrawPools` family cloned from
   `UiConfig.draw_pools`; its short-lived command, path, and paint-text buffers are not compiled
   document strings.
+- Layout scratch is not pooled and does not need to be: a retained widget keeps its own vectors
+  and refills them in place, and an immediate widget keeps them in the state its tree holds for it.
+  `perf.reuse-layout-scratch` enforces that for this crate and `kithara-app`, in place of the
+  `perf.prefer-primitive-pool` rule the streaming crates read - see
+  `docs/guides/performance/allocation.md`.
 - The pool family belongs to the host, not to the document. `UiConfig` carries it and every
   document compiled against that configuration shares it, because a `DrawPools` clone is an `Arc`
   clone. A host builds its configuration once - `app::Ui` in `new`, `kithara-app`'s `AppUi` for both

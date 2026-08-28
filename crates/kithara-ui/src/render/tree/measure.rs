@@ -40,10 +40,15 @@ struct ChildLayout {
     main_weight: Option<f32>,
 }
 
-/// Which children stood the last time the room was measured.
+/// The storage one flow keeps between layout passes: which children stood the
+/// last time the room was measured, and which slots the solver was given. Both
+/// are refilled in place, because a flow is laid out again for every frame that
+/// resizes it and its widget is rebuilt from the document each time.
 #[derive(Default)]
 struct State {
     shown: Vec<bool>,
+    /// Which child each item the solver asks about actually is.
+    slots: Vec<usize>,
 }
 
 impl<'a> Flex<'a> {
@@ -188,21 +193,43 @@ impl<'a> Flex<'a> {
         self.measure = axis;
         self
     }
+}
 
-    /// Which children stand in the room this flow turned out to have. A flow
-    /// that measures nothing stands all of them.
-    fn standing(&self, limits: &layout::Limits) -> Vec<bool> {
+/// What a flow remembers between passes, and how it reads it back. A flow is
+/// built afresh from the document for every view, so the storage below lives
+/// in the state its tree keeps for it rather than in the flow itself.
+impl<'a> Flex<'a> {
+    /// Records in `into` which children stand in the room this flow turned out
+    /// to have. A flow that measures nothing stands all of them.
+    fn stand(&self, limits: &layout::Limits, into: &mut Vec<bool>) {
+        into.clear();
         let Some(axis) = self.measure else {
-            return vec![true; self.children.len()];
+            into.resize(self.children.len(), true);
+            return;
         };
         let room = match axis {
             MeasureAxis::Width => limits.max().width,
             MeasureAxis::Height => limits.max().height,
         };
-        self.child_layouts
-            .iter()
-            .map(|child| child.band.stands(room))
-            .collect()
+        into.extend(
+            self.child_layouts
+                .iter()
+                .map(|child| child.band.stands(room)),
+        );
+    }
+
+    /// Refills what this flow keeps between passes: which children the room
+    /// reached, and which child each item the solver asks about is.
+    fn record(&self, limits: &layout::Limits, state: &mut State) {
+        self.stand(limits, &mut state.shown);
+        state.slots.clear();
+        state.slots.extend(
+            state
+                .shown
+                .iter()
+                .enumerate()
+                .filter_map(|(index, on)| on.then_some(index)),
+        );
     }
 
     /// The children that stood the last time this flow was laid out, beside
@@ -212,13 +239,15 @@ impl<'a> Flex<'a> {
         tree: &'t Tree,
         layout: Layout<'t>,
     ) -> impl Iterator<Item = (&'t Element<'a, UiEvent>, &'t Tree, Layout<'t>)> {
-        let shown = standing_state(tree, self.children.len());
+        let stood = stood(&tree.state, self.children.len());
         self.children
             .iter()
             .zip(&tree.children)
             .zip(layout.children())
-            .zip(shown)
-            .filter_map(|(((child, state), bounds), on)| on.then_some((child, state, bounds)))
+            .enumerate()
+            .filter_map(move |(index, ((child, state), bounds))| {
+                standing(stood, index).then_some((child, state, bounds))
+            })
     }
 
     fn shown_mut<'t>(
@@ -229,13 +258,15 @@ impl<'a> Flex<'a> {
         let Tree {
             state, children, ..
         } = tree;
-        let shown = standing_state_of(state, self.children.len());
+        let stood = stood(state, self.children.len());
         self.children
             .iter_mut()
             .zip(children)
             .zip(layout.children())
-            .zip(shown)
-            .filter_map(|(((child, state), bounds), on)| on.then_some((child, state, bounds)))
+            .enumerate()
+            .filter_map(move |(index, ((child, state), bounds))| {
+                standing(stood, index).then_some((child, state, bounds))
+            })
     }
 }
 
@@ -251,19 +282,16 @@ fn fitted_padding(padding: Padding, room: Size) -> Padding {
     }
 }
 
-/// A flow that has not been laid out yet stands all of its children, so a
-/// missing reading is every child rather than none.
-fn standing_state(tree: &Tree, count: usize) -> Vec<bool> {
-    standing_state_of(&tree.state, count)
+/// What the last layout recorded, or nothing when the recording does not
+/// describe this many children: a flow that has not been laid out yet stands
+/// all of them, so a missing reading is every child rather than none.
+fn stood(state: &widget::tree::State, count: usize) -> Option<&[bool]> {
+    let shown = &state.downcast_ref::<State>().shown;
+    (shown.len() == count).then_some(shown.as_slice())
 }
 
-fn standing_state_of(state: &widget::tree::State, count: usize) -> Vec<bool> {
-    let shown = &state.downcast_ref::<State>().shown;
-    if shown.len() == count {
-        shown.clone()
-    } else {
-        vec![true; count]
-    }
+fn standing(stood: Option<&[bool]>, index: usize) -> bool {
+    stood.is_none_or(|shown| shown[index])
 }
 
 impl IcedWidget<UiEvent, Theme, Renderer> for Flex<'_> {
@@ -285,12 +313,14 @@ impl IcedWidget<UiEvent, Theme, Renderer> for Flex<'_> {
             Axis::Horizontal => *limits,
             Axis::Vertical => limits.max_width(f32::INFINITY),
         };
-        let standing = self.standing(&limits);
-        let slots: Vec<usize> = standing
-            .iter()
-            .enumerate()
-            .filter_map(|(index, on)| on.then_some(index))
-            .collect();
+        let Tree {
+            state,
+            children: trees,
+            ..
+        } = tree;
+        let state = state.downcast_mut::<State>();
+        self.record(&limits, state);
+        let State { shown, slots } = &*state;
         // A box cannot give away more room than it has, so the padding this
         // flow spends is the padding its box can hold.
         // `render/masonry/flex.rs` fits its own the same way.
@@ -312,10 +342,10 @@ impl IcedWidget<UiEvent, Theme, Renderer> for Flex<'_> {
         let mut measure = IcedMeasure {
             children: &mut self.children,
             child_layouts: &self.child_layouts,
-            slots: &slots,
-            trees: &mut tree.children,
+            slots,
+            trees,
             renderer,
-            nodes: vec![layout::Node::default(); standing.len()],
+            nodes: vec![layout::Node::default(); shown.len()],
         };
         let Distribution {
             size,
@@ -340,7 +370,6 @@ impl IcedWidget<UiEvent, Theme, Renderer> for Flex<'_> {
         for (slot, placement) in slots.iter().zip(placements) {
             nodes[*slot].move_to_mut(placement.offset);
         }
-        tree.state.downcast_mut::<State>().shown = standing;
 
         layout::Node::with_children(size.into(), nodes)
     }

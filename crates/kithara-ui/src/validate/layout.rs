@@ -126,8 +126,7 @@ pub(super) fn check_layout_steps(
     path: &NodePath,
     origin: &SourceUri,
 ) -> Result<(), UiDocError> {
-    let thresholds: Vec<f32> = steps.iter().map(|step| step.from).collect();
-    check_thresholds(id, &thresholds, path, origin)
+    check_thresholds(id, steps.iter().map(|step| step.from), path, origin)
 }
 
 pub(crate) fn check_layout_block(

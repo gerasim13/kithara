@@ -1,3 +1,5 @@
+use std::borrow::Borrow;
+
 use derive_more::Display;
 use serde::{Deserialize, Serialize};
 
@@ -26,6 +28,14 @@ pub struct EndpointId(pub String);
 #[derive(Clone, Debug, Display, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct ScreenRole(pub String);
+
+/// A role is its own name, so a map keyed by one is looked up with a plain
+/// `&str` and no key is built to ask.
+impl Borrow<str> for ScreenRole {
+    fn borrow(&self) -> &str {
+        &self.0
+    }
+}
 
 #[derive(Clone, Debug, Display, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct SourceUri(pub String);

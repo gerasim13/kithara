@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, btree_map::Entry};
+use std::collections::BTreeMap;
 
 use crate::{
     error::UiDocError,
@@ -11,12 +11,15 @@ use crate::{
 #[derive(Debug, Default)]
 pub(crate) struct ModuleSet {
     pub(crate) defs: BTreeMap<SourceUri, ModuleDoc>,
-    shaders: BTreeMap<(SourceUri, String), LoadedSource>,
+    /// Every shader a module declares, under the document that declared it.
+    /// Nested rather than keyed by a pair so that a lookup borrows both halves
+    /// of the key instead of building one.
+    shaders: BTreeMap<SourceUri, BTreeMap<String, LoadedSource>>,
 }
 
 impl ModuleSet {
     pub(crate) fn shader(&self, origin: &SourceUri, source: &str) -> Option<&LoadedSource> {
-        self.shaders.get(&(origin.clone(), source.to_owned()))
+        self.shaders.get(origin)?.get(source)
     }
 }
 
@@ -143,10 +146,12 @@ fn walk_includes(
             Ok(())
         }
         ControlNode::Shader { source, .. } => {
-            let key = (origin.clone(), source.clone());
-            if let Entry::Vacant(slot) = set.shaders.entry(key) {
+            if set.shader(origin, source).is_none() {
                 let loaded = load_source(resolver, Some(origin), source, limits)?;
-                slot.insert(loaded);
+                set.shaders
+                    .entry(origin.clone())
+                    .or_default()
+                    .insert(source.clone(), loaded);
             }
             Ok(())
         }

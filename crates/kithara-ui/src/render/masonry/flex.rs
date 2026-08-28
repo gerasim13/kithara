@@ -24,6 +24,13 @@ pub(crate) struct Flex {
     alignment: solve::Alignment,
     main_alignment: solve::Alignment,
     children: Vec<ChildLayout>,
+    /// Which children the room reached, refilled at every layout. A retained
+    /// flow is laid out again for every frame that resizes it, so this is
+    /// storage the widget keeps rather than a list it builds each time.
+    stands: Vec<bool>,
+    /// Which child each item the solver asks about actually is, refilled
+    /// beside `stands`.
+    slots: Vec<usize>,
 }
 
 #[derive(Clone, Copy)]
@@ -90,6 +97,8 @@ impl Flex {
             alignment,
             main_alignment: solve::Alignment::Start,
             children,
+            stands: Vec::new(),
+            slots: Vec::new(),
         }
     }
 
@@ -99,19 +108,19 @@ impl Flex {
         self
     }
 
-    /// Which children stand in the room this flow turned out to have.
-    fn standing(&self, limits: solve::Limits) -> Vec<bool> {
+    /// Records which children stand in the room this flow turned out to have.
+    fn stand(&mut self, limits: solve::Limits) {
+        self.stands.clear();
         let Some(axis) = self.measure else {
-            return vec![true; self.children.len()];
+            self.stands.resize(self.children.len(), true);
+            return;
         };
         let room = match axis {
             MeasureAxis::Width => limits.max().width,
             MeasureAxis::Height => limits.max().height,
         };
-        self.children
-            .iter()
-            .map(|child| child.band.stands(room))
-            .collect()
+        self.stands
+            .extend(self.children.iter().map(|child| child.band.stands(room)));
     }
 
     pub(crate) const fn align_main(mut self, alignment: solve::Alignment) -> Self {
@@ -120,19 +129,22 @@ impl Flex {
     }
 
     pub(crate) fn layout(
-        &self,
+        &mut self,
         ctx: &mut LayoutCtx<'_>,
         children: &mut [WidgetPod<Node>],
         limits: solve::Limits,
     ) -> solve::Size {
         let outer_limits = limits.width(self.width).height(self.height);
         let inner_limits = outer_limits.shrink(self.padding).loose();
-        let standing = self.standing(outer_limits);
-        let slots: Vec<usize> = standing
-            .iter()
-            .enumerate()
-            .filter_map(|(index, on)| on.then_some(index))
-            .collect();
+        self.stand(outer_limits);
+        let Self { stands, slots, .. } = &mut *self;
+        slots.clear();
+        slots.extend(
+            stands
+                .iter()
+                .enumerate()
+                .filter_map(|(index, on)| on.then_some(index)),
+        );
         // A cell the room did not reach is stashed, not placed at an empty box:
         // an empty box still lets every leaf inside it draw at its own natural
         // size, and it drew them at the flow's own origin. Masonry skips a
@@ -142,10 +154,11 @@ impl Flex {
         // This stands before the solver, which measures a standing cell by
         // laying it out: a cell the room has just grown to reach has to be back
         // in the picture before anything asks it for a size.
-        for (index, on) in standing.iter().enumerate() {
+        for (index, on) in self.stands.iter().enumerate() {
             ctx.set_stashed(&mut children[index], !on);
         }
-        let items = slots
+        let items = self
+            .slots
             .iter()
             .map(|slot| {
                 let layout = &self.children[*slot];
@@ -159,8 +172,8 @@ impl Flex {
         let mut measure = MasonryMeasure {
             children,
             layouts: &self.children,
-            stood: vec![None; slots.len()],
-            slots: &slots,
+            stood: vec![None; self.slots.len()],
+            slots: &self.slots,
             ctx,
         };
         let Distribution { size, mut items } = solve::resolve(
@@ -197,7 +210,7 @@ impl Flex {
             }
         }
         let fitted = fit_padding(self.padding, size, outer_limits.max());
-        for (index, (slot, item)) in slots.iter().zip(items).enumerate() {
+        for (index, (slot, item)) in self.slots.iter().zip(items).enumerate() {
             let placed = match measure.stood[index] {
                 Some((limits, size)) if size == item.size => limits,
                 _ => solve::Limits::new(item.size, item.size),
