@@ -1,0 +1,68 @@
+name: Lane
+
+# One recipe run against a fresh checkout on the self-hosted fleet.
+#
+# Ten jobs in ci.yml were this file with one line changed: the same pinned
+# checkout, the same `runs-on`, the same single `just` command. Stating it once
+# means the pinned action SHAs, the runner labels, and the artifact upload have
+# one place to be wrong in, and a caller says only what it runs and for how
+# long.
+#
+# A caller that needs more than a recipe - several steps, an environment the
+# recipe cannot carry, `continue-on-error` - stays a job of its own. This is the
+# uniform case, not every case.
+on:
+  workflow_call:
+    inputs:
+      run:
+        description: The recipe this lane runs.
+        required: true
+        type: string
+      timeout-minutes:
+        description: How long the recipe may take before the job is killed.
+        required: true
+        type: number
+      fetch-depth:
+        description: >-
+          How much history the recipe reads. The tip alone is enough for
+          anything that does not compare against a revision; `0` is the whole
+          history, which a baseline comparison needs.
+        default: 1
+        type: number
+      artifact-name:
+        description: Name of the artifact to upload, when the recipe leaves one.
+        default: ''
+        type: string
+      artifact-path:
+        description: Path the artifact is collected from. Empty uploads nothing.
+        default: ''
+        type: string
+
+# Not inherited from the caller: a called workflow gets its own environment.
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  run:
+    runs-on: ${{ fromJSON(vars.KITHARA_RUNNER_LABELS) }}
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+
+    steps:
+      # The runner image carries the toolchain, so a lane installs no packages.
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: ${{ inputs.fetch-depth }}
+
+      - name: Run the lane
+        run: ${{ inputs.run }}
+
+      # Uploaded even when the recipe failed: a budget report is most worth
+      # reading on the run that broke the budget.
+      - name: Upload the lane's report
+        if: ${{ always() && inputs.artifact-path != '' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ inputs.artifact-name }}
+          path: ${{ inputs.artifact-path }}

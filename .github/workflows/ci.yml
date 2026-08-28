@@ -101,21 +101,80 @@ jobs:
       - name: Confirm the runner is reachable
         run: just --version
 
-  lint:
-    name: Lint
+  # Ten jobs that were the same ten lines with one recipe changed: the same
+  # pinned checkout, the same runner labels, the same single `just` command.
+  # `lane.yml` holds the ten lines and this list holds what differs. A lane that
+  # needs more than a recipe - the test lanes, the suite selection, the advisory
+  # browser - stays a job of its own below.
+  #
+  # The runner image carries the toolchain, so these jobs install no packages.
+  # The advisory browser lane below is the deliberate exception: it provisions a
+  # reviewed Chrome/ChromeDriver pair for each run.
+  checks:
+    name: ${{ matrix.name }}
     needs: gate
-    runs-on: ${{ fromJSON(vars.KITHARA_RUNNER_LABELS) }}
-    timeout-minutes: 60
-
-    steps:
-      # The runner image carries the toolchain, so regular jobs install no
-      # packages. The advisory browser lane below is the deliberate exception:
-      # it provisions a reviewed Chrome/ChromeDriver pair for each run.
-      - name: Checkout code
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: Run lint checks
-        run: just lint full
+    # Every lane's verdict, not the first one's: these answer independent
+    # questions and a run that stops at the first red hides the other nine.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Lint
+            run: just lint full
+            timeout: 60
+            depth: 1
+          # The image knows which toolchain is the minimum supported one, so the
+          # version stays owned by the reviewed pins rather than repeated here.
+          - name: MSRV
+            run: RUSTUP_TOOLCHAIN="${KITHARA_MSRV_TOOLCHAIN}" just check
+            timeout: 60
+            depth: 1
+          - name: cargo-deny
+            run: just deps deny
+            timeout: 30
+            depth: 1
+          - name: Architecture checks
+            run: just lint arch
+            timeout: 30
+            depth: 1
+          - name: WASM checks
+            run: just platform wasm
+            timeout: 60
+            depth: 1
+          - name: cargo-machete
+            run: just deps machete
+            timeout: 30
+            depth: 1
+          - name: WASM size budget
+            run: just platform wasm size-check
+            timeout: 60
+            depth: 1
+            artifact: wasm-slim-report
+            artifact_path: target/wasm-slim-result.json
+          - name: Feature powerset
+            run: just deps hack
+            timeout: 120
+            depth: 1
+          # The baseline is a revision, so the history holding it must be here.
+          - name: Semver checks
+            run: just deps semver
+            timeout: 60
+            depth: 0
+          # Memory is the other budget a player cannot overrun quietly: pool
+          # budgets, allocation regressions, a zero-allocation audio hot path,
+          # and the resident size of an HLS playback. `just perf memory` runs
+          # all four.
+          - name: Memory budgets
+            run: just perf memory
+            timeout: 60
+            depth: 1
+    uses: ./.github/workflows/lane.yml
+    with:
+      run: ${{ matrix.run }}
+      timeout-minutes: ${{ matrix.timeout }}
+      fetch-depth: ${{ matrix.depth }}
+      artifact-name: ${{ matrix.artifact || '' }}
+      artifact-path: ${{ matrix.artifact_path || '' }}
 
   test:
     name: Tests (simulated clock)
@@ -267,60 +326,6 @@ jobs:
           done
           exit "$status"
 
-  msrv:
-    name: MSRV
-    needs: gate
-    runs-on: ${{ fromJSON(vars.KITHARA_RUNNER_LABELS) }}
-    timeout-minutes: 60
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      # The image knows which toolchain is the minimum supported one, so the
-      # version stays owned by the reviewed pins rather than repeated here.
-      - name: Check the minimum supported toolchain
-        run: RUSTUP_TOOLCHAIN="${KITHARA_MSRV_TOOLCHAIN}" just check
-
-  deny:
-    name: cargo-deny
-    needs: gate
-    runs-on: ${{ fromJSON(vars.KITHARA_RUNNER_LABELS) }}
-    timeout-minutes: 30
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: Run cargo-deny
-        run: just deps deny
-
-  arch:
-    name: Architecture checks
-    needs: gate
-    runs-on: ${{ fromJSON(vars.KITHARA_RUNNER_LABELS) }}
-    timeout-minutes: 30
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: Run architecture checks
-        run: just lint arch
-
-  wasm:
-    name: WASM checks
-    needs: gate
-    runs-on: ${{ fromJSON(vars.KITHARA_RUNNER_LABELS) }}
-    timeout-minutes: 60
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: Run wasm checks
-        run: just platform wasm
-
   wasm-browser:
     name: Chromium WebCodecs (advisory)
     needs: gate
@@ -343,68 +348,6 @@ jobs:
       - name: Run the Chromium browser lane
         run: just test wasm chrome webcodecs
 
-  machete:
-    name: cargo-machete
-    needs: gate
-    runs-on: ${{ fromJSON(vars.KITHARA_RUNNER_LABELS) }}
-    timeout-minutes: 30
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: Run cargo-machete
-        run: just deps machete
-
-  wasm-size:
-    name: WASM size budget
-    needs: gate
-    runs-on: ${{ fromJSON(vars.KITHARA_RUNNER_LABELS) }}
-    timeout-minutes: 60
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: Run wasm-slim check
-        run: just platform wasm size-check
-
-      - name: Upload wasm-slim report
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: wasm-slim-report
-          path: target/wasm-slim-result.json
-
-  hack:
-    name: Feature powerset
-    needs: gate
-    runs-on: ${{ fromJSON(vars.KITHARA_RUNNER_LABELS) }}
-    timeout-minutes: 120
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: Run cargo-hack
-        run: just deps hack
-
-  semver:
-    name: Semver checks
-    needs: gate
-    runs-on: ${{ fromJSON(vars.KITHARA_RUNNER_LABELS) }}
-    timeout-minutes: 60
-
-    steps:
-      # The baseline is a revision, so the history holding it must be here.
-      - name: Checkout code
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
-
-      - name: Run semver checks
-        run: just deps semver
-
   # Real-time correctness is what this product is for: an allocation or a lock
   # on the audio thread is a dropout, not a slow path. It ran nightly, which
   # meant learning about it the morning after the push that caused it.
@@ -415,22 +358,6 @@ jobs:
     name: RealtimeSanitizer
     needs: gate
     uses: ./.github/workflows/rtsan.yml
-
-  # Memory is the other budget a player cannot overrun quietly: pool budgets,
-  # allocation regressions, a zero-allocation audio hot path, and the resident
-  # size of an HLS playback. `just perf memory` runs all four.
-  memory:
-    name: Memory budgets
-    needs: gate
-    runs-on: ${{ fromJSON(vars.KITHARA_RUNNER_LABELS) }}
-    timeout-minutes: 60
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: Run the memory budgets
-        run: just perf memory
 
   # This is the one stable required status. GitHub treats a skipped job as an
   # acceptable required check, so the aggregate must run unconditionally and
@@ -444,20 +371,11 @@ jobs:
     needs:
       - authorize
       - gate
-      - lint
+      - checks
       - test
       - test-real-clock
       - support
-      - msrv
-      - deny
-      - arch
-      - wasm
-      - machete
-      - wasm-size
-      - hack
-      - semver
       - rtsan
-      - memory
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
