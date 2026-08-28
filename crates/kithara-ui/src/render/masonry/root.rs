@@ -66,6 +66,12 @@ pub struct MasonryRoot<Action> {
     moved: bool,
     platform: Vec<RenderRootSignal>,
     engines: Vec<Rc<HostedEngine>>,
+    /// Whether the press the window last reported was a second one, so the
+    /// release that follows it is a double click rather than a plain one.
+    double_click: bool,
+    /// What the window last said its scale is, which is what turns a wheel's
+    /// physical delta into the distance a control scrolls.
+    scale: f64,
     boxes: Vec<NodeBox>,
     popovers: Vec<PopoverRegistration>,
     watched: Vec<Watched>,
@@ -105,6 +111,7 @@ where
     ) -> Result<Self, MasonryRootError> {
         let (base, layers, popovers, engines, boxes, native, window, watched) =
             RootParts::from(node);
+        let scale = options.scale_factor;
         let signals = Rc::new(RefCell::new(VecDeque::new()));
         let sink = Rc::clone(&signals);
         let root = RenderRoot::new(
@@ -118,6 +125,8 @@ where
             moved: false,
             platform: Vec::new(),
             engines,
+            double_click: false,
+            scale,
             boxes,
             popovers,
             watched,
@@ -197,6 +206,9 @@ where
     ///
     /// Returns [`MasonryRootError`] when a widget violates the typed action contract.
     pub fn handle_window_event(&mut self, event: WindowEvent) -> Result<Handled, MasonryRootError> {
+        if let WindowEvent::Rescale(scale) = &event {
+            self.scale = *scale;
+        }
         let handled = self.root.handle_window_event(event);
         self.sync_popovers();
         self.sync()?;
@@ -228,10 +240,10 @@ where
     ///
     /// Every cursor the tree resolves reaches a host this way: the shape a
     /// widget answers a hover with, the resize edge, the text caret, and the
-    /// carry [`Self::show_item_drag`] adds. A host that never reads them shows
-    /// one cursor for the life of its window and keeps them queued forever, so
-    /// a window runner takes them here. Only the last one is worth showing, and
-    /// every other platform signal is left where it stands.
+    /// shape [`Self::show_cursor`] takes from a router. A host that never reads
+    /// them shows one cursor for the life of its window and keeps them queued
+    /// forever, so a window runner takes them here. Only the last one is worth
+    /// showing, and every other platform signal is left where it stands.
     pub fn take_cursor(&mut self) -> Option<CursorIcon> {
         let mut cursor = None;
         self.platform.retain(|signal| {
@@ -360,12 +372,15 @@ where
     }
 }
 
-/// How a pointer event finds the widget that answers it.
+/// How a pointer event finds the control that answers it.
 ///
-/// The tree answers by hit-testing, which is enough for a control that owns
-/// the box under the hand. The rest lives here: the window chrome that
-/// answers before the tree, the menu and the drag that outlive the box they
-/// started in, and the popover a press outside dismisses.
+/// The tree delivers a pointer to the one widget whose box is under it, and
+/// that answer is wrong three times over: a menu is drawn in a layer no box
+/// covers, a gesture that has left its box is still the gesture the hand is
+/// making, and an item pulled out of a list has to be heard both by the list
+/// it came from and by whatever it is dropped on. So the routers the document
+/// mounted are asked first, and the tree hears the event only when none of
+/// them took it.
 impl<Action> MasonryRoot<Action>
 where
     Action: std::fmt::Debug + Send + 'static,
@@ -383,84 +398,88 @@ where
         if self.root.pointer_capture_target().is_some() || self.window_answers_first(&event) {
             return self.route_root_pointer(event);
         }
-        if self.routes_open_picker(&event)? {
-            self.sync()?;
+        // A standing popover swallows the press that lands outside it, unless
+        // a menu is up: the menu is drawn above the popover and is the thing
+        // the hand is aiming at.
+        let menu = self.engines.iter().any(|engine| engine.has_open_picker());
+        if !menu && self.dismisses_popover(&event)? {
             return Ok(Handled::Yes);
         }
-        if self.dismisses_popover(&event)? {
-            return Ok(Handled::Yes);
-        }
-        let at = picker::input(&event).map(|(_, point)| point);
-        self.routes_item_drag(&event)?;
         self.bank_pointer(&event);
-        let handled = self.route_root_pointer(event)?;
+        let at = picker::at(&event);
+        let handled = if self.route_engines(&event)? {
+            self.sync()?;
+            Handled::Yes
+        } else {
+            self.route_root_pointer(event)?
+        };
         if let Some(point) = at {
-            self.show_item_drag(point);
+            self.show_cursor(point);
         }
         Ok(handled)
     }
 
-    /// Says what the hand is doing while it carries an item.
+    /// Asks every router the document mounted, and says whether one took the
+    /// event outright.
+    ///
+    /// A router with nothing under the hand answers nothing, so the order only
+    /// decides who hears a point two of them could claim, and the one drawn on
+    /// top hears it.
+    ///
+    /// A router that holds the pointer, or takes it here, ends the walk — and
+    /// the event that lets go is still its own, which is what makes a double
+    /// click that ends a drag land on the control that was dragged. A router
+    /// that merely answers — a list that hears the item it is carrying move —
+    /// leaves the event for the routers below it and for the tree, which is
+    /// how the module the item is dropped on learns the hand is above it.
+    fn route_engines(&mut self, event: &PointerEvent) -> Result<bool, MasonryRootError> {
+        let Some((input, at)) = picker::pointing(event, &mut self.double_click, self.scale) else {
+            return Ok(false);
+        };
+        for engine in self.routers() {
+            let owner = engine.owner();
+            let held = engine.captures_pointer();
+            let routed = engine.route(input, at);
+            if routed.repaint {
+                self.root.edit_widget(owner, |mut widget| {
+                    widget.ctx.request_paint_only();
+                });
+            }
+            if matches!(event, PointerEvent::Down(_)) {
+                self.sync_picker_focus(owner, routed.focused);
+            }
+            let captured = routed.outcome.is_captured();
+            if let Some(action) = routed.outcome.value() {
+                self.push_action(Box::new(action))?;
+            }
+            if captured || held {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    /// The routers in the order they are asked: from the top of the document
+    /// down, which is the order they were stacked in, reversed.
+    fn routers(&self) -> Vec<Rc<HostedEngine>> {
+        self.engines.iter().rev().map(Rc::clone).collect()
+    }
+
+    /// Says what the hand is doing, from the router that owns it.
     ///
     /// The tree asks whatever sits under the pointer, and by the time a track
     /// is over the deck that is the deck, which knows nothing about the drag.
     /// The list that started it does, so its answer is the last word.
-    fn show_item_drag(&mut self, point: Pt) {
-        let Some(engine) = self.item_drag_engine() else {
-            return;
-        };
-        let shape = engine.cursor(point);
-        if shape == CursorShape::None {
-            return;
+    fn show_cursor(&mut self, point: Pt) {
+        let shape = self
+            .routers()
+            .into_iter()
+            .map(|engine| engine.cursor(point))
+            .find(|shape| *shape != CursorShape::None);
+        if let Some(shape) = shape {
+            self.platform
+                .push(RenderRootSignal::SetCursor(cursor_icon(shape)));
         }
-        self.platform
-            .push(RenderRootSignal::SetCursor(cursor_icon(shape)));
-    }
-
-    /// The list a hand is currently pulling an item out of, if any.
-    fn item_drag_engine(&self) -> Option<Rc<HostedEngine>> {
-        self.engines
-            .iter()
-            .find(|engine| engine.holds_item())
-            .map(Rc::clone)
-    }
-
-    /// Keeps feeding the pointer to the list a hand is pulling an item out of.
-    ///
-    /// The gesture never takes the pointer, so a tree that delivers events by
-    /// hit-testing loses the drag the moment the hand leaves the list, and the
-    /// release lands on whatever sits under it instead. The list is the one
-    /// place that knows the gesture is still running, so while it says so the
-    /// root hands it the event as well. Only while the hand is outside the box
-    /// the tree would have reached on its own: inside it, the list already
-    /// hears everything, and a second copy would be a second gesture.
-    ///
-    /// This does not answer the event. Whatever the hand is over still sees it,
-    /// which is how a module that takes drops learns the hand is above it.
-    fn routes_item_drag(&mut self, event: &PointerEvent) -> Result<(), MasonryRootError> {
-        let Some((input, point)) = picker::input(event) else {
-            return Ok(());
-        };
-        let Some(engine) = self.item_drag_engine() else {
-            return Ok(());
-        };
-        if self.owns_point(engine.owner(), point) {
-            return Ok(());
-        }
-        if let Some(action) = engine.route(input, Some(point)).outcome.value() {
-            self.push_action(Box::new(action))?;
-        }
-        Ok(())
-    }
-
-    /// Whether the tree would deliver a pointer at this point to that widget.
-    fn owns_point(&self, owner: WidgetId, point: Pt) -> bool {
-        self.root.get_widget(owner).is_some_and(|widget| {
-            widget
-                .ctx()
-                .bounding_rect()
-                .contains(Point::new(point.x.into(), point.y.into()))
-        })
     }
 
     fn route_root_pointer(&mut self, event: PointerEvent) -> Result<Handled, MasonryRootError> {
@@ -468,30 +487,6 @@ where
         self.sync_popovers();
         self.sync()?;
         Ok(handled)
-    }
-
-    fn routes_open_picker(&mut self, event: &PointerEvent) -> Result<bool, MasonryRootError> {
-        let Some((input, point)) = picker::input(event) else {
-            return Ok(false);
-        };
-        let Some(engine) = self
-            .engines
-            .iter()
-            .rev()
-            .find(|engine| engine.has_open_picker())
-            .map(Rc::clone)
-        else {
-            return Ok(false);
-        };
-        let owner = engine.owner();
-        let routed = engine.route(input, Some(point));
-        let (outcome, focused) = (routed.outcome, routed.focused);
-        self.sync_picker_focus(owner, focused);
-        let captured = outcome.is_captured();
-        if let Some(action) = outcome.value() {
-            self.push_action(Box::new(action))?;
-        }
-        Ok(captured)
     }
 
     fn sync_picker_focus(&mut self, owner: WidgetId, focused: bool) {

@@ -15,7 +15,8 @@ use crate::{
     draw::{Pt, Rect},
     engine::{Engine, PickerSnapshot, Target},
     interact::{
-        CursorShape, Input, MOUSE, Outcome, PointerInput, PointerPhase, masonry::pointer_button,
+        CursorShape, Input, MOUSE, Outcome, PointerInput, PointerPhase,
+        masonry::{pointer_button, portable_scroll},
     },
     render::{
         HostedControlPlan, UiEvent,
@@ -213,9 +214,16 @@ impl HostedEngine {
         self.open_picker().is_some()
     }
 
-    /// Whether a hand is pulling an item out of a list this engine drives.
-    pub(super) fn holds_item(&self) -> bool {
-        self.engine.borrow().holds_item()
+    /// Whether this engine holds the pointer, so the event is its alone.
+    ///
+    /// A gesture that took the pointer keeps it until it lets go, and the
+    /// event that lets go is still the gesture's: a double click ends a drag
+    /// and is answered by the control that was being dragged, not by whatever
+    /// the release happens to be over. An item being carried out of a list is
+    /// the other kind of gesture — it never takes the pointer, so what the
+    /// hand is over hears the event as well.
+    pub(super) fn captures_pointer(&self) -> bool {
+        self.engine.borrow().captures_pointer()
     }
 
     pub(super) fn set_menu_layer(&self, layer: WidgetId) {
@@ -399,34 +407,66 @@ pub(super) fn local_ime_area(engine: &HostedEngine, transform: Affine) -> Option
     })
 }
 
-pub(super) fn input(event: &PointerEvent) -> Option<(Input<'static>, Pt)> {
-    let (phase, button, state) = match event {
-        PointerEvent::Down(button) => (
-            PointerPhase::Down,
-            button.button.map(pointer_button),
-            &button.state,
-        ),
-        PointerEvent::Move(update) => (PointerPhase::Move, None, &update.current),
-        PointerEvent::Up(button) => (
-            PointerPhase::Up,
-            button.button.map(pointer_button),
-            &button.state,
-        ),
-        _ => return None,
+/// Where the window says the hand is, in the coordinates the document is laid
+/// out in.
+pub(super) fn at(event: &PointerEvent) -> Option<Pt> {
+    let position = match event {
+        PointerEvent::Down(button) | PointerEvent::Up(button) => button.state.logical_position(),
+        PointerEvent::Move(update) => update.current.logical_position(),
+        PointerEvent::Scroll(scroll) => scroll.state.logical_position(),
+        PointerEvent::Gesture(gesture) => gesture.state.logical_position(),
+        PointerEvent::Cancel(_) | PointerEvent::Enter(_) | PointerEvent::Leave(_) => return None,
     };
-    let position = state.logical_position();
-    let point = Pt {
+    Some(Pt {
         x: position.x.as_(),
         y: position.y.as_(),
+    })
+}
+
+/// One pointer event in the neutral vocabulary, and where the hand was when
+/// the window reported it.
+///
+/// The phases a control answers are not the phases the window reports: a
+/// second press inside the platform's interval arrives as another press, and
+/// is a double click only once the release that follows it is in hand. So the
+/// count is carried across the two events here, where the whole document is
+/// routed from, rather than inside any one control.
+pub(super) fn pointing(
+    event: &PointerEvent,
+    double_click: &mut bool,
+    scale: f64,
+) -> Option<(Input<'static>, Option<Pt>)> {
+    let pointer = match event {
+        PointerEvent::Down(button) => {
+            *double_click = button.state.count >= 2;
+            Some((
+                PointerPhase::Down,
+                button.button.map(pointer_button),
+                button.state.count,
+            ))
+        }
+        PointerEvent::Move(update) => Some((PointerPhase::Move, None, update.current.count)),
+        PointerEvent::Up(button) => {
+            let phase = if std::mem::take(double_click) {
+                PointerPhase::DoubleClick
+            } else {
+                PointerPhase::Up
+            };
+            Some((phase, button.button.map(pointer_button), button.state.count))
+        }
+        PointerEvent::Leave(_) => Some((PointerPhase::Leave, None, 0)),
+        PointerEvent::Cancel(_) => Some((PointerPhase::Cancel, None, 0)),
+        PointerEvent::Enter(_) | PointerEvent::Scroll(_) | PointerEvent::Gesture(_) => None,
     };
-    Some((
-        Input::Pointer(PointerInput::new(
-            MOUSE,
-            button,
-            phase,
-            Some(point),
-            state.count,
+    let at = at(event);
+    match (pointer, event) {
+        (Some((phase, button, clicks)), _) => Some((
+            Input::Pointer(PointerInput::new(MOUSE, button, phase, at, clicks)),
+            at,
         )),
-        point,
-    ))
+        (None, PointerEvent::Scroll(scroll)) => {
+            Some((Input::Wheel(portable_scroll(scroll.delta, scale)?), at))
+        }
+        (None, _) => None,
+    }
 }

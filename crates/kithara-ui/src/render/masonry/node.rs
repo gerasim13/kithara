@@ -38,12 +38,6 @@ use crate::{
     solve,
 };
 
-#[derive(Clone, Copy, Eq, PartialEq)]
-enum NodePointerOwner {
-    Leaf,
-    Engine,
-}
-
 pub(crate) struct Node {
     layout: NodeLayout,
     declared: solve::Size<solve::Length>,
@@ -57,7 +51,8 @@ pub(crate) struct Node {
     radius: f32,
     double_click: bool,
     pointer: Option<(Pt, Pt)>,
-    pointer_owner: Option<NodePointerOwner>,
+    /// Whether this node's leaf took the pointer and is still holding it.
+    leaf_holds: bool,
     engine: Option<Rc<HostedEngine>>,
     transform: Transform,
 }
@@ -83,7 +78,7 @@ impl Node {
             radius: 0.0,
             double_click: false,
             pointer: None,
-            pointer_owner: None,
+            leaf_holds: false,
             engine: None,
             transform: Transform::IDENTITY,
         }
@@ -126,7 +121,7 @@ impl Node {
         let Some(leaf) = self.layout.leaf() else {
             return false;
         };
-        let retained = self.pointer_owner == Some(NodePointerOwner::Leaf);
+        let retained = self.leaf_holds;
         let outcome = leaf.input(input, hit);
         if !matches!(leaf.repaint(), Repaint::None) {
             ctx.request_anim_frame();
@@ -139,11 +134,11 @@ impl Node {
         match outcome.ownership() {
             PointerOwnership::Claim if matches!(event, PointerEvent::Down(_)) => {
                 ctx.capture_pointer();
-                self.pointer_owner = Some(NodePointerOwner::Leaf);
+                self.leaf_holds = true;
             }
             PointerOwnership::Release if retained => {
                 ctx.release_pointer();
-                self.pointer_owner = None;
+                self.leaf_holds = false;
             }
             PointerOwnership::Unchanged | PointerOwnership::Claim | PointerOwnership::Release => {}
         }
@@ -152,11 +147,11 @@ impl Node {
         }
         let exclusive = captured || retained;
         if retained
-            && self.pointer_owner.is_some()
+            && self.leaf_holds
             && matches!(event, PointerEvent::Up(_) | PointerEvent::Cancel(_))
         {
             ctx.release_pointer();
-            self.pointer_owner = None;
+            self.leaf_holds = false;
         }
         if exclusive {
             ctx.set_handled();
@@ -201,60 +196,6 @@ impl Node {
             | NodeLayout::Stack
             | NodeLayout::Stage => None,
         }
-    }
-
-    fn engine_input(
-        &mut self,
-        ctx: &mut EventCtx<'_>,
-        event: &PointerEvent,
-        input: Input<'_>,
-        point: Option<Pt>,
-    ) -> bool {
-        let Some(engine) = self.engine.as_ref().map(Rc::clone) else {
-            return false;
-        };
-        let retained = self.pointer_owner == Some(NodePointerOwner::Engine);
-        let routed = engine.route(input, point);
-        let repaint = routed.repaint;
-        let (outcome, focused) = (routed.outcome, routed.focused);
-        if repaint {
-            ctx.request_paint_only();
-        }
-        if matches!(event, PointerEvent::Down(_)) {
-            if focused {
-                ctx.request_focus();
-            } else if ctx.has_focus_target() {
-                ctx.resign_focus();
-            }
-        }
-        sync_ime_area(ctx, &engine);
-        let captured = outcome.is_captured();
-        match outcome.ownership() {
-            PointerOwnership::Claim if matches!(event, PointerEvent::Down(_)) => {
-                ctx.capture_pointer();
-                self.pointer_owner = Some(NodePointerOwner::Engine);
-            }
-            PointerOwnership::Release if retained => {
-                ctx.release_pointer();
-                self.pointer_owner = None;
-            }
-            PointerOwnership::Unchanged | PointerOwnership::Claim | PointerOwnership::Release => {}
-        }
-        if let Some(action) = outcome.value() {
-            ctx.submit_action::<HostAction>(action);
-        }
-        let exclusive = captured || retained;
-        if retained
-            && self.pointer_owner.is_some()
-            && matches!(event, PointerEvent::Up(_) | PointerEvent::Cancel(_))
-        {
-            ctx.release_pointer();
-            self.pointer_owner = None;
-        }
-        if exclusive {
-            ctx.set_handled();
-        }
-        exclusive
     }
 
     fn leaf_text_input(&mut self, ctx: &mut EventCtx<'_>, input: Input<'_>) -> bool {
@@ -316,7 +257,7 @@ impl Node {
         &mut self,
         ctx: &EventCtx<'_>,
         event: &PointerEvent,
-    ) -> Option<(Input<'static>, Hit, Option<Pt>)> {
+    ) -> Option<(Input<'static>, Hit)> {
         if let Some(position) = pointer_position(event) {
             let scale = ctx.get_scale_factor();
             let local = ctx.local_position(position);
@@ -377,7 +318,7 @@ impl Node {
             }
             (None, _) => return None,
         };
-        Some((input, hit, window))
+        Some((input, hit))
     }
 
     fn paint_background(&self, bounds: Rect, list: &mut DrawListBuilder) {
@@ -508,7 +449,7 @@ impl Widget for Node {
         _props: &mut PropertiesMut<'_>,
         event: &PointerEvent,
     ) {
-        let Some((input, hit, point)) = self.pointer_input(ctx, event) else {
+        let Some((input, hit)) = self.pointer_input(ctx, event) else {
             self.queue_pointer(ctx, event);
             return;
         };
@@ -519,27 +460,11 @@ impl Widget for Node {
             ctx.request_layout();
             return;
         }
-        match self.pointer_owner {
-            Some(NodePointerOwner::Leaf) => {
-                self.leaf_input(ctx, event, input, hit);
-                return;
-            }
-            Some(NodePointerOwner::Engine) => {
-                self.engine_input(ctx, event, input, point);
-                return;
-            }
-            None => {}
-        }
-        if self.leaf_input(ctx, event, input, hit) {
+        if self.leaf_holds {
+            self.leaf_input(ctx, event, input, hit);
             return;
         }
-        if self.pointer_owner.is_some() {
-            return;
-        }
-        if self.engine_input(ctx, event, input, point) {
-            return;
-        }
-        if self.pointer_owner.is_some() {
+        if self.leaf_input(ctx, event, input, hit) || self.leaf_holds {
             return;
         }
         self.queue_pointer(ctx, event);
@@ -696,10 +621,7 @@ impl Widget for Node {
     }
 
     fn accepts_pointer_interaction(&self) -> bool {
-        self.primary.is_some()
-            || self.secondary.is_some()
-            || self.layout.accepts_input()
-            || self.engine.is_some()
+        self.primary.is_some() || self.secondary.is_some() || self.layout.accepts_input()
     }
 
     fn accepts_focus(&self) -> bool {
@@ -737,18 +659,7 @@ impl Widget for Node {
             | NodeLayout::Stack
             | NodeLayout::Stage => CursorShape::None,
         };
-        let engine = self.engine.as_ref().map_or(CursorShape::None, |engine| {
-            engine.cursor(Pt {
-                x: pos.x.as_(),
-                y: pos.y.as_(),
-            })
-        });
-        let shape = match self.pointer_owner {
-            Some(NodePointerOwner::Leaf) => leaf,
-            None if leaf != CursorShape::None => leaf,
-            Some(NodePointerOwner::Engine) | None => engine,
-        };
-        cursor_icon(shape)
+        cursor_icon(leaf)
     }
 
     fn make_trace_span(&self, id: WidgetId) -> Span {

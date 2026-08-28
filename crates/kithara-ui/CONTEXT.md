@@ -267,6 +267,21 @@ px west edge `x < 4` resizes while a press one logical pixel inside that boundar
 document control beneath it. The drag ghost owns no hit region, cursor, or event; pointer motion
 only requests the repaint that moves its retained drawing.
 
+Both hosts route the pointer the same way: the routers the document mounted are asked before the
+widget tree hit-tests, and the tree hears the event only when none of them took it. `MasonryRoot`
+owns that order for the retained host, which is why a `Node` declares an engine but never routes one
+— the root converts the window's `PointerEvent` into the neutral vocabulary once, including the
+click count a double click needs across two events and the scale a wheel delta needs, and walks its
+engines from the top of the document down. A router that holds the pointer, or takes it on this
+event, ends the walk and keeps the tree out; the event that releases it is still the router's, which
+is what makes a double click that ends a drag land on the control that was dragged. A router that
+merely answers — a list hearing the item it carries move — leaves the event for the routers below it
+and for the tree, which is how the module an item is dropped on learns the hand is above it. Focus,
+the IME area, and the cursor follow from the same walk: the root focuses the engine's owner, the
+owner's `compose` publishes the caret area, and the first router with a shape to show wins the
+cursor over whatever the tree would have answered. Keyboard is filtered by focus rather than by
+region, so it still descends through the tree to the focused owner.
+
 `TextContext::shape` takes a whole `TextRoleSkin` rather than a face, a weight and a size, and that
 signature is the contract. `TextRoleSkin::spacing` is letter tracking, and a signature that took
 the pieces loose let a caller shape text and drop it: `render::typography::styled_text` did exactly
@@ -440,7 +455,7 @@ Pointer input crosses the seam as one `PointerInput`: stable identity, optional 
 host-logical point, click count, and the raw or recognised phase. `Outcome<Action>` keeps three
 independent facts: an optional typed value, whether this event propagates, and whether retained
 pointer ownership is unchanged, claimed, or released. Claim is accepted on `Down`; while claimed,
-Masonry capture and the iced retained router keep delivering moves outside the original hit area.
+both hosts' routers keep delivering moves outside the original hit area.
 `Up`, `Cancel`, terminal `DoubleClick`, or an explicit `Release` returns routing to hit testing.
 `DoubleClick`, `LongPress`, and `MoveLongPress` are neutral recognised phases; a custom component
 resets its gesture on terminal `DoubleClick`, may otherwise retain its own recogniser state, and may
