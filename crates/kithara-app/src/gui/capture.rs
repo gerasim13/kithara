@@ -4,6 +4,7 @@ use std::{
     fs::{File, create_dir_all, write},
     io::BufWriter,
     path::{Path, PathBuf},
+    rc::Rc,
 };
 
 use futures::executor::block_on;
@@ -49,6 +50,7 @@ use super::{
         self,
         cache::DeckLayout,
         endpoints::{Registry, readable_kind},
+        package::Package,
     },
 };
 use crate::theme::Palette;
@@ -104,7 +106,7 @@ impl Geometry {
 struct Fixture {
     layout: DeckLayout,
     rows: Vec<TableRow<'static>>,
-    screens: ui::Screens,
+    package: Rc<Package>,
 }
 
 impl Fixture {
@@ -128,10 +130,10 @@ impl Fixture {
         }
     }
 
-    fn new(layout: DeckLayout, screens: ui::Screens) -> Self {
+    fn new(layout: DeckLayout, package: Rc<Package>) -> Self {
         Self {
             layout,
-            screens,
+            package,
             rows: vec![
                 TableRow::new(
                     vec![
@@ -292,11 +294,11 @@ fn text(endpoint: &str) -> &'static str {
 
 impl App for Fixture {
     fn skin(&self) -> &Skin {
-        builtin::skin()
+        self.package.skin()
     }
 
     fn document(&self) -> &str {
-        self.screens.document(self.layout)
+        self.package.document(self.layout)
     }
 
     fn reads<R>(&self, with: impl FnOnce(&dyn Reads) -> R) -> R {
@@ -457,11 +459,10 @@ fn iced(
     renderer: &mut iced::Renderer,
     geometry: Geometry,
 ) -> Result<(Vec<u8>, PoolSample), String> {
-    let resolver = ui::resolver();
-    let screens = ui::Screens::new(&resolver).map_err(|error| format!("package: {error}"))?;
+    let package = Package::load(None).map_err(|error| format!("package: {error}"))?;
     let compiled = ui::compile_ui(layout)
-        .map_err(|error| format!("compile {}: {error}", screens.document(layout)))?;
-    let reads = Fixture::new(layout, screens);
+        .map_err(|error| format!("compile {}: {error}", package.document(layout)))?;
+    let reads = Fixture::new(layout, package);
     let skin = builtin::skin();
     let theme = theme::kithara_theme(&Palette::default().into());
     let mut ui = UserInterface::build(
@@ -521,17 +522,15 @@ fn masonry(
     offscreen: &mut Offscreen,
     geometry: Geometry,
 ) -> Result<(Vec<u8>, PoolSample), String> {
-    let resolver = ui::resolver();
-    let screens = ui::Screens::new(&resolver).map_err(|error| format!("package: {error}"))?;
-    let entry = screens.document(layout).to_owned();
+    let package = Package::load(None).map_err(|error| format!("package: {error}"))?;
+    let entry = package.document(layout).to_owned();
     let endpoints = Registry::default();
-    let text = ui::text().map_err(|error| format!("catalog: {error}"))?;
     let mut ui = Ui::new(
-        Fixture::new(layout, screens),
+        Fixture::new(layout, Rc::clone(&package)),
         Config::builder()
             .endpoints(&endpoints)
-            .resolver(&resolver)
-            .text(&text)
+            .resolver(package.resolver())
+            .text(package.text())
             .build(),
         (geometry.width, geometry.height),
         f64::from(geometry.scale),

@@ -80,7 +80,7 @@ use kithara_ui::{
         tree,
         vis::VisPass,
     },
-    source::{MemResolver, UiConfig},
+    source::{MemResolver, OverlayResolver, UiConfig},
 };
 use masonry::vello::{
     AaConfig, AaSupport, RenderParams, Renderer as VelloRenderer, RendererOptions,
@@ -1105,16 +1105,16 @@ impl PageHost for Retained<'_> {
 /// endpoints they may bind to, and nothing that differs between the two.
 struct Fixture {
     registry: Box<dyn EndpointRegistry>,
-    resolver: MemResolver,
+    resolver: OverlayResolver<MemResolver, fixture::Resolver>,
 }
 
 impl Fixture {
     fn new() -> Self {
-        let mut resolver = fixture::resolver();
-        resolver.insert(SCROLL_VIS_LAYOUT, SCROLL_VIS_RON);
+        let mut extra = MemResolver::default();
+        extra.insert(SCROLL_VIS_LAYOUT, SCROLL_VIS_RON);
         Self {
             registry: Box::new(mock::registry()),
-            resolver,
+            resolver: OverlayResolver::new(extra, fixture::resolver()),
         }
     }
 

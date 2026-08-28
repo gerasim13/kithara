@@ -38,9 +38,16 @@ built-in one. This is the one place the application accepts a missing input as a
 user-facing default rather than a state-resolution fallback: the package is optional configuration, and its
 absence is not evidence of a broken contract.
 
-The application asks the package for `deck-single` and `deck-dual` by role; `Screens` resolves both once, when
-the package is read. `AppUi` keeps the resolved names only under `masonry`, because only the retained host has
-to name the document it draws.
+`gui::ui::package::Package` is the single owner of one loaded package: the resolver it is read through, the
+screens it answered for, and the skin and catalog it dresses them in. Both hosts read from that one value -
+the iced host paints with `Package::skin`, and the retained host builds its window `Config` from the same
+resolver and catalog rather than loading a second copy. Two packages drawing one application is the failure
+this shape exists to prevent.
+
+The application asks the package for `deck-single` and `deck-dual` by role, and `Package` resolves both once.
+A manifest may also name a skin document and a caption catalog; naming a skin is what lets a package change
+how the application looks without a rebuild. A manifest that names neither wears the built-in skin and the
+built-in words, which is a package carrying pages and nothing else - declared optionality, not a fallback.
 
 Reading the package from disk costs 1.7 ms once at start: 10.1 ms against 8.4 ms for the same documents
 embedded, 17 files and 62 KiB, measured on this laptop under `test-release`. Compilation dominates both, which

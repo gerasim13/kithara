@@ -1,7 +1,8 @@
+use std::rc::Rc;
+
 use iced::window;
 use kithara_ui::{
     app::{App, Config, RunError},
-    builtin,
     render::{Reads, Skin, UiEvent, Walk},
 };
 
@@ -49,11 +50,11 @@ impl Studio {
 
 impl App for Studio {
     fn skin(&self) -> &Skin {
-        builtin::skin()
+        self.state.ui.package.skin()
     }
 
     fn document(&self) -> &str {
-        self.state.ui.screens.document(self.state.ui.cache.layout())
+        self.state.ui.package.document(self.state.ui.cache.layout())
     }
 
     /// The studio answers its endpoints by walking its own state, so the walk
@@ -85,16 +86,15 @@ impl App for Studio {
 /// Returns [`RunError`] when the studio document does not compile, or when the
 /// window and its GPU surface cannot be brought up.
 pub(crate) fn run(app: Studio) -> Result<(), RunError> {
-    let resolver = ui::resolver();
+    let package = Rc::clone(&app.state.ui.package);
     let endpoints = endpoints::Registry::default();
-    let text = ui::text()?;
     let (size, min_size) = (window_size(), window_min(app.state.ui.window_min()));
     kithara_ui::app::run(
         app,
         Config::builder()
             .endpoints(&endpoints)
-            .resolver(&resolver)
-            .text(&text)
+            .resolver(package.resolver())
+            .text(package.text())
             .decorations(false)
             .min_size(min_size)
             .title("Kithara - DJ Studio")
@@ -111,13 +111,13 @@ mod tests {
         render::{ReadValue, Reads},
     };
 
-    use super::{App, Config, Skin, builtin, endpoints, ui};
+    use super::{App, Config, Rc, Skin, endpoints, ui, ui::package::Package};
 
     /// A studio with nothing loaded: every control falls back to what the
     /// document and the skin say, which is the hardest case for a host that
     /// only draws what it was told.
     struct Empty {
-        screens: ui::Screens,
+        package: Rc<Package>,
     }
 
     impl Reads for Empty {
@@ -128,11 +128,11 @@ mod tests {
 
     impl App for Empty {
         fn skin(&self) -> &Skin {
-            builtin::skin()
+            self.package.skin()
         }
 
         fn document(&self) -> &str {
-            self.screens.document(ui::cache::DeckLayout::Dual)
+            self.package.document(ui::cache::DeckLayout::Dual)
         }
 
         fn reads<R>(&self, with: impl FnOnce(&dyn Reads) -> R) -> R {
@@ -147,17 +147,16 @@ mod tests {
     /// application actually ships, mounted the way the window mounts it.
     #[kithara::test]
     fn the_studio_draws_under_the_retained_host() {
-        let resolver = ui::resolver();
+        let package = Package::load(None).expect("the app package must answer for both decks");
         let endpoints = endpoints::Registry::default();
-        let text = ui::text().expect("the app catalog must merge with the canon one");
-        let screens =
-            ui::Screens::new(&resolver).expect("the app package must answer for both decks");
         let mut ui = Ui::new(
-            Empty { screens },
+            Empty {
+                package: Rc::clone(&package),
+            },
             Config::builder()
                 .endpoints(&endpoints)
-                .resolver(&resolver)
-                .text(&text)
+                .resolver(package.resolver())
+                .text(package.text())
                 .build(),
             (1280, 760),
             1.0,

@@ -15,6 +15,7 @@ use super::{
     cache::DeckLayout,
     compile::{AppUi, compile_ui},
     events::route,
+    package::Package,
     scope::MICRO_DECK,
 };
 
@@ -1412,7 +1413,8 @@ fn each_deck_picks_its_own_stream_quality() {
 #[kithara::test]
 fn the_shipped_package_compiles_from_disk() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/ui");
-    drop(AppUi::new(Some(&root)).expect("the shipped package must compile from disk"));
+    let package = Package::load(Some(&root)).expect("the shipped package must load from disk");
+    drop(AppUi::new(package).expect("the shipped package must compile from disk"));
 }
 
 /// Nothing laid out is not a defect: the documents this build carries draw,
@@ -1420,7 +1422,65 @@ fn the_shipped_package_compiles_from_disk() {
 #[kithara::test]
 fn a_package_path_that_was_never_laid_out_leaves_the_built_in_documents_drawing() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/ui-that-was-never-laid-out");
-    drop(AppUi::new(Some(&root)).expect("a package nobody laid out must leave the build drawing"));
+    let package = Package::load(Some(&root)).expect("a package nobody laid out must load");
+    drop(AppUi::new(package).expect("a package nobody laid out must leave the build drawing"));
+}
+
+/// A package dresses the pages it ships: the skin its manifest names is the
+/// one every page is compiled and painted against, which is what lets a
+/// package change how the application looks without a rebuild.
+#[kithara::test]
+fn the_skin_the_manifest_names_is_the_one_the_pages_wear() {
+    let root = tempfile::tempdir().expect("a temporary package root");
+    std::fs::write(
+        root.path().join("package.kpackage.ron"),
+        r#"(
+    schema: "kithara.package",
+    version: 1,
+    id: "kithara-app",
+    contract: 1,
+    skin: "kithara-neon.kskin.ron",
+    text: "app-en.ktext.ron",
+    screens: {
+        "deck-dual": "app.klayout.ron",
+        "deck-single": "app-single.klayout.ron",
+    },
+)"#,
+    )
+    .expect("the manifest must be written");
+    let package = Package::load(Some(root.path())).expect("a package naming a skin must load");
+    assert_eq!(
+        package.skin().document().id.0,
+        "kithara-neon",
+        "the manifest names the neon skin"
+    );
+}
+
+/// A package that names no skin wears the built-in one rather than refusing to
+/// load, so a package may carry pages and nothing else.
+#[kithara::test]
+fn a_package_naming_no_skin_wears_the_built_in_one() {
+    let root = tempfile::tempdir().expect("a temporary package root");
+    std::fs::write(
+        root.path().join("package.kpackage.ron"),
+        r#"(
+    schema: "kithara.package",
+    version: 1,
+    id: "kithara-app",
+    contract: 1,
+    screens: {
+        "deck-dual": "app.klayout.ron",
+        "deck-single": "app-single.klayout.ron",
+    },
+)"#,
+    )
+    .expect("the manifest must be written");
+    let package = Package::load(Some(root.path())).expect("a package naming no skin must load");
+    assert_eq!(
+        package.skin().document().id,
+        builtin::skin().document().id,
+        "a package naming no skin wears the built-in one"
+    );
 }
 
 /// What the disk says about a role wins over what the build embeds: a manifest
@@ -1441,7 +1501,7 @@ fn a_manifest_on_disk_answers_before_the_one_this_build_embeds() {
 )"#,
     )
     .expect("the manifest must be written");
-    let Err(error) = AppUi::new(Some(root.path())) else {
+    let Err(error) = Package::load(Some(root.path())) else {
         panic!("the disk manifest names one role only, so this must not compile");
     };
     assert!(

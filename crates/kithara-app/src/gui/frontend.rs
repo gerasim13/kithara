@@ -11,7 +11,7 @@ use num_traits::cast::AsPrimitive;
 
 use super::{
     app::{Decks, Kithara},
-    ui::{AppUi, window::WINDOW_SIZE},
+    ui::{AppUi, package::Package, window::WINDOW_SIZE},
     update, view,
 };
 use crate::{
@@ -170,7 +170,7 @@ impl GuiFrontend {
     /// state is handed over exactly once by construction.
     pub fn run_loop(&mut self, session: DeckSet) -> Result<(), FrontendError> {
         let config = self.config.clone();
-        let ui = AppUi::new(config.ui_package.as_deref())?;
+        let ui = AppUi::new(Package::load(config.ui_package.as_deref())?)?;
 
         let rt = tokio::runtime::Runtime::new().map_err(FrontendError::from)?;
         let _guard = rt.enter();
