@@ -4,6 +4,7 @@ use std::{num::NonZeroU32, path::Path};
 
 use kithara::{
     decode::{GaplessMode, SilenceTrimParams},
+    events::TrackId,
     platform::time::{Duration, Instant},
     play::{Resource, ResourceConfig},
     stream::AudioCodec,
@@ -48,7 +49,7 @@ async fn gapless_modes_do_not_block_network_startup_until_full_cache(
     let resource =
         create_delayed_gapless_hls_resource(harness.player(), &server, temp_dir.path()).await;
 
-    harness.player().insert(resource, None, None);
+    harness.player().insert(resource, TrackId::allocate(), None);
 
     let started_at = Instant::now();
     harness.player().play();

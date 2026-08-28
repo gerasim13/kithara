@@ -12,5 +12,5 @@ pub use transport::{SessionTransportSnapshot, Tempo, TempoError, TransportRevisi
 pub use types::{
     DjEvent, EngineEvent, InterruptionKind, ItemEvent, ItemRole, ItemStatus, PlaybackDirection,
     PlayerEvent, PlayerStatus, RouteChangeReason, SessionDuckingMode, SessionEvent, SlotId,
-    TimeControlStatus, TimeRange, TransportEvent, WaitingReason,
+    TimeControlStatus, TimeRange, TrackId, TrackRef, TransportEvent, WaitingReason,
 };

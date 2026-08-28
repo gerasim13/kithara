@@ -17,6 +17,7 @@ use kithara::{
     self,
     bufpool::PcmPool,
     decode::PcmSpec,
+    events::TrackId,
     platform::{sync::Arc, time::Duration},
     play::{
         PlayerNotification, Resource, TrackPlaybackStopReason, TrackState,
@@ -49,29 +50,28 @@ fn mock_spec() -> PcmSpec {
     PcmSpec::new(2, NonZeroU32::new(44100).expect("test rate"))
 }
 
-fn make_track_with(duration_secs: f64, item_id: Option<Arc<str>>) -> PlayerTrack {
+/// The identity every tagged fixture track in this module carries.
+const ITEM: TrackId = TrackId(1);
+
+fn make_track_with(duration_secs: f64, item_id: TrackId) -> PlayerTrack {
     let src: Arc<str> = Arc::from("test.mp3");
     let resource = Resource::from_reader(TestPcmReader::new(mock_spec(), duration_secs), None);
     make_track_from_resource(resource, src, item_id)
 }
 
-fn make_track_from_resource(
-    resource: Resource,
-    src: Arc<str>,
-    item_id: Option<Arc<str>>,
-) -> PlayerTrack {
+fn make_track_from_resource(resource: Resource, src: Arc<str>, item_id: TrackId) -> PlayerTrack {
     let player_resource = PlayerResource::new(resource, src, &PcmPool::default());
     let sample_rate = NonZeroU32::new(44100).expect("BUG: non-zero sample rate");
     PlayerTrack::builder()
         .sample_rate(sample_rate)
-        .maybe_item_id(item_id)
+        .item_id(item_id)
         .fade_duration(1.0)
         .fade_curve(FadeCurve::SquareRoot)
         .build(Box::new(player_resource))
 }
 
 fn make_track() -> PlayerTrack {
-    make_track_with(60.0, None)
+    make_track_with(60.0, TrackId::allocate())
 }
 
 fn collect_notifications(
@@ -98,7 +98,7 @@ fn drain_eof_stop_notifications(
         } = notification
         {
             assert!(saw_partial, "EOF stop must not precede Partial");
-            assert!(matches!(item_id, Some(id) if id.as_ref() == "item-1"));
+            assert_eq!(item_id, ITEM);
             eof_stop_count += 1;
         }
     }
@@ -160,7 +160,7 @@ async fn track_seek_position_is_derived_from_the_media_clock() {
 
 #[kithara::test(tokio)]
 async fn eof_playback_stopped_notification_carries_item_id() {
-    let mut track = make_track_with(0.01, Some(Arc::from("item-1")));
+    let mut track = make_track_with(0.01, ITEM);
     let (tx, mut rx) = HeapRb::<PlayerNotification>::new(8).split();
     let mut notification_tx = tx;
     let mut scratch_l = [0.0; 512];
@@ -188,7 +188,7 @@ async fn eof_playback_stopped_notification_carries_item_id() {
                 ..
             } = notification
             {
-                saw_eof_stop = matches!(item_id, Some(id) if id.as_ref() == "item-1");
+                saw_eof_stop = item_id == ITEM;
             }
         }
 
@@ -249,7 +249,7 @@ fn read_past_the_end(
 /// the processor is about to apply — the track flips while the seek is settling.
 #[kithara::test(tokio)]
 async fn a_published_seek_holds_the_natural_end_report() {
-    let mut track = make_track_with(0.01, Some(Arc::from("item-1")));
+    let mut track = make_track_with(0.01, ITEM);
     let (mut notification_tx, mut rx) = HeapRb::<PlayerNotification>::new(16).split();
 
     track.play();
@@ -267,7 +267,7 @@ async fn a_published_seek_holds_the_natural_end_report() {
 /// epoch, the very same drained feeder reports the end.
 #[kithara::test(tokio)]
 async fn observing_the_seek_epoch_releases_the_held_end() {
-    let mut track = make_track_with(0.01, Some(Arc::from("item-1")));
+    let mut track = make_track_with(0.01, ITEM);
     let (mut notification_tx, mut rx) = HeapRb::<PlayerNotification>::new(16).split();
 
     track.play();
@@ -286,7 +286,7 @@ async fn observing_the_seek_epoch_releases_the_held_end() {
 
 #[kithara::test(tokio)]
 async fn read_outcome_full_on_normal_read() {
-    let mut track = make_track_with(60.0, None);
+    let mut track = make_track_with(60.0, TrackId::allocate());
     let (tx, _) = HeapRb::<PlayerNotification>::new(8).split();
     let mut notification_tx = tx;
     let mut scratch_l = [0.0; 512];
@@ -321,7 +321,7 @@ fn decoded_frontier_reads_live_resource_not_stale_render_cache() {
     let reader = LiveFrontierReader::new(mock_spec(), Arc::clone(&frontier_ns));
     let src: Arc<str> = Arc::from("frontier.flac");
     let resource = Resource::from_reader(reader, Some(Arc::clone(&src)));
-    let track = make_track_from_resource(resource, src, None);
+    let track = make_track_from_resource(resource, src, TrackId::allocate());
 
     assert_eq!(track.decoded_frontier(), 0.0);
 
@@ -339,7 +339,7 @@ fn decoded_frontier_reads_live_resource_not_stale_render_cache() {
 
 #[kithara::test(tokio)]
 async fn read_outcome_partial_then_eof() {
-    let mut track = make_track_with(0.01, Some(Arc::from("item-1")));
+    let mut track = make_track_with(0.01, ITEM);
     let (tx, mut rx) = HeapRb::<PlayerNotification>::new(16).split();
     let mut notification_tx = tx;
     let mut scratch_l = [0.0; 512];
@@ -394,7 +394,7 @@ async fn read_outcome_partial_then_eof() {
 
 #[kithara::test(tokio)]
 async fn handover_emits_once_when_position_crosses_fade_threshold() {
-    let mut track = make_track_with(10.0, None);
+    let mut track = make_track_with(10.0, TrackId::allocate());
     let sample_rate = NonZeroU32::new(44100).expect("BUG: non-zero sample rate");
     track.update_fade_duration(0.2, sample_rate);
     let (tx, mut rx) = HeapRb::<PlayerNotification>::new(32).split();
@@ -468,7 +468,7 @@ async fn handover_uses_buffered_eof_when_duration_is_overestimated() {
         MisreportedDurationReader::new(mock_spec(), 900),
         Some(Arc::clone(&src)),
     );
-    let mut track = make_track_from_resource(resource, src, None);
+    let mut track = make_track_from_resource(resource, src, TrackId::allocate());
     let sample_rate = NonZeroU32::new(44100).expect("BUG: non-zero sample rate");
     track.update_fade_duration(0.0, sample_rate);
     let (tx, mut rx) = HeapRb::<PlayerNotification>::new(16).split();
@@ -520,7 +520,7 @@ async fn handover_uses_buffered_eof_when_duration_is_overestimated() {
 
 #[kithara::test(tokio)]
 async fn handover_backstops_eof_when_threshold_was_not_reached_earlier() {
-    let mut track = make_track_with(0.01, Some(Arc::from("item-1")));
+    let mut track = make_track_with(0.01, ITEM);
     let sample_rate = NonZeroU32::new(44100).expect("BUG: non-zero sample rate");
     track.update_fade_duration(0.0, sample_rate);
     let (tx, mut rx) = HeapRb::<PlayerNotification>::new(32).split();
@@ -559,7 +559,7 @@ async fn handover_backstops_eof_when_threshold_was_not_reached_earlier() {
                     ..
                 }
                 if src.as_ref() == "test.mp3"
-                    && matches!(item_id, Some(id) if id.as_ref() == "item-1")
+                    && *item_id == ITEM
             )
         })
         .count();
@@ -570,7 +570,7 @@ async fn handover_backstops_eof_when_threshold_was_not_reached_earlier() {
 
 #[kithara::test(tokio)]
 async fn handover_is_not_duplicated_at_eof_after_early_trigger() {
-    let mut track = make_track_with(5.0, Some(Arc::from("item-1")));
+    let mut track = make_track_with(5.0, ITEM);
     let sample_rate = NonZeroU32::new(44100).expect("BUG: non-zero sample rate");
     track.update_fade_duration(0.2, sample_rate);
     let (tx, mut rx) = HeapRb::<PlayerNotification>::new(64).split();
@@ -605,9 +605,7 @@ async fn handover_is_not_duplicated_at_eof_after_early_trigger() {
                     item_id,
                     reason: TrackPlaybackStopReason::Eof,
                     ..
-                } if src.as_ref() == "test.mp3"
-                    && matches!(&item_id, Some(id) if id.as_ref() == "item-1") =>
-                {
+                } if src.as_ref() == "test.mp3" && item_id == ITEM => {
                     eof_stop_count += 1;
                 }
                 _ => {}
@@ -625,7 +623,7 @@ async fn handover_is_not_duplicated_at_eof_after_early_trigger() {
 
 #[kithara::test(tokio)]
 async fn prefetch_fires_before_handover_when_prefetch_exceeds_fade() {
-    let mut track = make_track_with(10.0, None);
+    let mut track = make_track_with(10.0, TrackId::allocate());
     let sample_rate = NonZeroU32::new(44100).expect("BUG: non-zero sample rate");
     track.update_fade_duration(0.0, sample_rate);
     track.set_prefetch_duration(2.0);
@@ -667,7 +665,7 @@ async fn prefetch_fires_before_handover_when_prefetch_exceeds_fade() {
 
 #[kithara::test(tokio)]
 async fn handover_fires_after_prefetch_when_position_reaches_fade_threshold() {
-    let mut track = make_track_with(10.0, None);
+    let mut track = make_track_with(10.0, TrackId::allocate());
     let sample_rate = NonZeroU32::new(44100).expect("BUG: non-zero sample rate");
     track.update_fade_duration(0.2, sample_rate);
     track.set_prefetch_duration(2.0);
@@ -728,7 +726,7 @@ async fn handover_fires_after_prefetch_when_position_reaches_fade_threshold() {
 
 #[kithara::test(tokio)]
 async fn prefetch_fires_immediately_when_track_shorter_than_prefetch_duration() {
-    let mut track = make_track_with(0.5, None);
+    let mut track = make_track_with(0.5, TrackId::allocate());
     let sample_rate = NonZeroU32::new(44100).expect("BUG: non-zero sample rate");
     track.update_fade_duration(0.0, sample_rate);
     track.set_prefetch_duration(5.0);
@@ -759,7 +757,7 @@ async fn prefetch_fires_immediately_when_track_shorter_than_prefetch_duration() 
 
 #[kithara::test(tokio)]
 async fn prefetch_and_handover_both_fire_when_thresholds_coincide() {
-    let mut track = make_track_with(10.0, None);
+    let mut track = make_track_with(10.0, TrackId::allocate());
     let sample_rate = NonZeroU32::new(44100).expect("BUG: non-zero sample rate");
     track.update_fade_duration(0.2, sample_rate);
     track.set_prefetch_duration(0.0);

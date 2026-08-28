@@ -76,7 +76,7 @@ impl PlayerTrack {
         notification_tx
             .try_push(PlayerNotification::PlaybackStopped {
                 src: Arc::clone(self.src()),
-                item_id: self.item_id.clone(),
+                item_id: self.item_id,
                 reason: TrackPlaybackStopReason::Failed,
                 seek_epoch: self.seek_epoch,
             })
@@ -162,7 +162,7 @@ impl PlayerTrack {
         notification_tx
             .try_push(PlayerNotification::PlaybackStopped {
                 src: Arc::clone(self.src()),
-                item_id: self.item_id.clone(),
+                item_id: self.item_id,
                 reason: TrackPlaybackStopReason::Eof,
                 seek_epoch: self.seek_epoch,
             })
@@ -224,11 +224,11 @@ impl PlayerTrack {
             },
             TrackState::Playing => PlayerNotification::PlaybackStarted {
                 src: Arc::clone(self.src()),
-                item_id: self.item_id.clone(),
+                item_id: self.item_id,
             },
             TrackState::Finished => PlayerNotification::PlaybackStopped {
                 src: Arc::clone(self.src()),
-                item_id: self.item_id.clone(),
+                item_id: self.item_id,
                 reason: TrackPlaybackStopReason::Stop,
                 seek_epoch: self.seek_epoch,
             },

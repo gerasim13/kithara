@@ -2,7 +2,7 @@
 
 use std::num::NonZeroU32;
 
-use kithara::{self, decode::PcmSpec, play::Resource};
+use kithara::{self, decode::PcmSpec, events::TrackId, play::Resource};
 use kithara_integration_tests::offline::{
     OfflinePlayerHarness, OfflinePlayerOptions, resource_from_reader,
 };
@@ -30,8 +30,12 @@ fn offline_harness_smoke() {
         OfflinePlayerOptions::builder().build(),
         SAMPLE_RATE,
     );
-    harness.player().insert(make_resource(0.1), None, None);
-    harness.player().insert(make_resource(0.1), None, None);
+    harness
+        .player()
+        .insert(make_resource(0.1), TrackId::allocate(), None);
+    harness
+        .player()
+        .insert(make_resource(0.1), TrackId::allocate(), None);
 
     harness
         .player()

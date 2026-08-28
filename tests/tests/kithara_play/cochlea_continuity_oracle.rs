@@ -3,7 +3,7 @@
 use std::num::NonZeroU32;
 
 use cochlea_features::{Audio as CochleaAudio, SegmentOpts, segment_timeline};
-use kithara::decode::PcmSpec;
+use kithara::{decode::PcmSpec, events::TrackId};
 use kithara_integration_tests::{
     audio_mock::TestPcmReader,
     offline::{OfflinePlayerHarness, OfflinePlayerOptions, resource_from_reader},
@@ -31,7 +31,7 @@ fn render_no_switch_control() -> Vec<f32> {
     );
     harness.player().insert(
         resource_from_reader(TestPcmReader::with_value(spec, 3.0, 0.5)),
-        None,
+        TrackId::allocate(),
         None,
     );
     harness

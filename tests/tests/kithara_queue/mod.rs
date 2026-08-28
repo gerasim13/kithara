@@ -8,6 +8,7 @@ mod architecture_flow;
 mod auto_advance;
 mod cold_seek_middle;
 mod cpal_cold_seek_synthetic;
+mod duplicate_src_in_queue;
 mod early_seek_size_withheld_advance;
 mod file_replay_from_warm_cache;
 mod flac_swallow_fixture;

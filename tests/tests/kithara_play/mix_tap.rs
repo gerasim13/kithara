@@ -5,6 +5,7 @@ use std::num::NonZeroU32;
 use kithara::{
     self,
     decode::PcmSpec,
+    events::TrackId,
     play::{Cmd, PlayError, Resource, SessionDispatcher, SessionError},
 };
 use kithara_integration_tests::offline::{
@@ -29,7 +30,9 @@ fn playing_harness() -> OfflinePlayerHarness {
         OfflinePlayerOptions::builder().build(),
         SAMPLE_RATE,
     );
-    harness.player().insert(make_resource(), None, None);
+    harness
+        .player()
+        .insert(make_resource(), TrackId::allocate(), None);
     harness
         .player()
         .select_item(0, true)
@@ -106,7 +109,9 @@ fn a_tap_armed_before_playback_reaches_the_graph_it_waits_for() {
         .expect("arm the mix tap before a session output exists");
     assert!(tap.drain().is_empty(), "an idle session feeds nothing");
 
-    harness.player().insert(make_resource(), None, None);
+    harness
+        .player()
+        .insert(make_resource(), TrackId::allocate(), None);
     harness
         .player()
         .select_item(0, true)

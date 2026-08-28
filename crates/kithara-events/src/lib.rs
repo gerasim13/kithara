@@ -72,7 +72,7 @@ pub use meta::{Envelope, EventMeta, ScopeLabel};
 pub use play::{
     BpmInfo, DjEvent, EngineEvent, InterruptionKind, ItemEvent, ItemRole, ItemStatus, MediaTime,
     PlaybackDirection, PlayerEvent, PlayerStatus, PortDescription, PortType, RouteChangeReason,
-    RouteDescription, SessionEvent, StretchBackendKind, TimeControlStatus, TimeRange,
+    RouteDescription, SessionEvent, StretchBackendKind, TimeControlStatus, TimeRange, TrackRef,
     TransportEvent, WaitingReason,
 };
 #[cfg(feature = "queue")]

@@ -6,6 +6,7 @@ use firewheel::node::ProcBuffers;
 use kithara::{
     bufpool::PcmPool,
     decode::PcmSpec,
+    events::TrackId,
     platform::{
         sync::Arc,
         time::{Duration, Instant},
@@ -92,7 +93,7 @@ fn load_tracks(
             control,
             PlayerCmd::LoadTrack {
                 resource: Box::new(PlayerResource::new(resource, Arc::clone(src), &pool)),
-                item_id: None,
+                item_id: TrackId::allocate(),
             },
         );
     }

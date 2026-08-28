@@ -2,7 +2,7 @@
 
 use std::num::NonZeroU32;
 
-use kithara::{decode::PcmSpec, play::Resource};
+use kithara::{decode::PcmSpec, events::TrackId, play::Resource};
 use kithara_integration_tests::offline::{
     OfflinePlayerHarness, OfflinePlayerOptions, resource_from_reader,
 };
@@ -51,7 +51,9 @@ fn blocks_until_silence(rate: Option<f32>) -> usize {
         OfflinePlayerOptions::builder().build(),
         SAMPLE_RATE,
     );
-    harness.player().insert(make_resource(1.0), None, None);
+    harness
+        .player()
+        .insert(make_resource(1.0), TrackId::allocate(), None);
     harness
         .player()
         .select_item(0, true)

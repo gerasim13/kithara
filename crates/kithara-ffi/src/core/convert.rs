@@ -1,6 +1,6 @@
 use kithara_events::{
     AssetEvent, AudioEvent, DecoderEvent, DjEvent, DownloaderEvent, DrmEvent, EngineEvent, Event,
-    FileEvent, HlsEvent, QueueEvent, SessionEvent, TrackId,
+    FileEvent, HlsEvent, QueueEvent, SessionEvent,
 };
 use kithara_play::PlayerEvent;
 
@@ -519,11 +519,8 @@ impl TryFrom<&PlayerEvent> for FfiPlayerEvent {
             PlayerEvent::VolumeChanged { volume } => Self::VolumeChanged { volume: *volume },
             PlayerEvent::MuteChanged { muted } => Self::MuteChanged { muted: *muted },
             PlayerEvent::ItemDidPlayToEnd { .. } => Self::ItemDidPlayToEnd,
-            PlayerEvent::ItemDidFail { item, .. } => Self::ItemDidFail {
-                item_id: item
-                    .id()
-                    .and_then(|s| s.parse::<u64>().ok())
-                    .map(TrackId::from),
+            PlayerEvent::ItemDidFail { item } => Self::ItemDidFail {
+                item_id: Some(item.id()),
             },
             _ => return Err(NotForwarded),
         })
@@ -831,10 +828,11 @@ mod tests {
     #[kithara::test]
     fn player_event_to_ffi_maps_item_did_fail_track_id() {
         let event = PlayerEvent::ItemDidFail {
-            src: "src".into(),
-            item: kithara_events::ItemRole::Leading {
-                id: Some("7".into()),
-            },
+            item: kithara_events::ItemRole::Leading(kithara_events::TrackRef::new(
+                TrackId::from(7_u64),
+                kithara_events::SlotId::new(0),
+                "src".into(),
+            )),
         };
 
         assert!(matches!(

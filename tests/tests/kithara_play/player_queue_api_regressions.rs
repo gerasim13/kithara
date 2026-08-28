@@ -3,7 +3,8 @@
 use std::path::Path;
 
 use kithara::{
-    platform::{sync::Arc, time::Duration},
+    events::TrackId,
+    platform::time::Duration,
     play::{PlayerEvent, PlayerImpl, Resource, ResourceConfig},
 };
 use kithara_integration_tests::{
@@ -25,17 +26,17 @@ async fn auto_advance_starts_next_track_without_explicit_play(temp_dir: TestTemp
             .build(),
         SAMPLE_RATE,
     );
-    let first_id = Arc::<str>::from("item-1");
-    let second_id = Arc::<str>::from("item-2");
+    let first_id = TrackId::allocate();
+    let second_id = TrackId::allocate();
 
     harness.player().insert(
         make_signal_resource(harness.player(), &server, temp_dir.path(), 440.0, 0.12).await,
-        Some(Arc::clone(&first_id)),
+        first_id,
         None,
     );
     harness.player().insert(
         make_signal_resource(harness.player(), &server, temp_dir.path(), 880.0, 0.24).await,
-        Some(Arc::clone(&second_id)),
+        second_id,
         None,
     );
 
@@ -62,8 +63,7 @@ async fn auto_advance_starts_next_track_without_explicit_play(temp_dir: TestTemp
             first_item_finished = events.iter().find_map(|timed| {
                 matches!(
                     &timed.event,
-                    PlayerEvent::ItemDidPlayToEnd { item, .. }
-                        if item.id().is_some_and(|id| id.as_ref() == first_id.as_ref())
+                    PlayerEvent::ItemDidPlayToEnd { item } if item.id() == first_id
                 )
                 .then_some(timed.frame_end)
             });

@@ -4,7 +4,7 @@ use cochlea_features::{Audio as ProbeAudio, SegmentOpts, segment_timeline};
 use kithara::{
     StretchKind,
     audio::{DecoderResamplerSettings, StretchControls},
-    events::ResamplerKind,
+    events::{ResamplerKind, TrackId},
     platform::sync::Arc,
     play::PlaybackResamplerBackend,
 };
@@ -211,7 +211,7 @@ async fn prepare_desktop_player(master_url: &url::Url, label: &str) -> DesktopPr
     harness.player().reserve_slots(1);
     harness
         .player()
-        .replace_item_tagged(0, resource, Some(Arc::from(label.to_owned())));
+        .replace_item(0, resource, TrackId::allocate());
     harness
         .player()
         .select_item(0, true)

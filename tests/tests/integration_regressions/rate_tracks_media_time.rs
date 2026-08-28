@@ -3,7 +3,7 @@
 use std::path::Path;
 
 use kithara::{
-    events::PlayerEvent,
+    events::{PlayerEvent, TrackId},
     platform::time::{self, Duration},
     play::{PlayerImpl, Resource, ResourceConfig},
 };
@@ -75,7 +75,7 @@ async fn blocks_until_end(temp_dir: &TestTempDir, rate: f32) -> usize {
         &temp_dir.path().join(format!("store-{tag}")),
     )
     .await;
-    harness.player().insert(resource, None, None);
+    harness.player().insert(resource, TrackId::allocate(), None);
     harness
         .player()
         .select_item(0, true)
@@ -117,7 +117,7 @@ async fn media_time_advances_with_the_playing_rate(temp_dir: TestTempDir) {
     let path = temp_dir.path().join("rate.mp3");
     std::fs::write(&path, EmbeddedAudio::TEST_MP3_BYTES).expect("write mp3 fixture");
     let resource = file_resource(harness.player(), &path, &temp_dir.path().join("store")).await;
-    harness.player().insert(resource, None, None);
+    harness.player().insert(resource, TrackId::allocate(), None);
     harness
         .player()
         .select_item(0, true)

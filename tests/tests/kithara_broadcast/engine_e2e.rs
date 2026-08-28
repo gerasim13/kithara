@@ -4,6 +4,7 @@ use kithara::{
     self,
     broadcast::{Broadcast, BroadcastConfig, BroadcastHandle, RingFeed},
     decode::PcmSpec,
+    events::TrackId,
     net::{HttpClient, NetOptions},
     platform::{
         CancelScope,
@@ -49,7 +50,9 @@ fn playing_harness() -> OfflinePlayerHarness {
         OfflinePlayerOptions::builder().build(),
         SESSION_RATE,
     );
-    harness.player().insert(tone_resource(), None, None);
+    harness
+        .player()
+        .insert(tone_resource(), TrackId::allocate(), None);
     harness
         .player()
         .select_item(0, true)

@@ -59,7 +59,7 @@ impl Queue {
             guard.iter().position(|e| e.id == id)
         };
         if let Some(index) = index {
-            self.player.replace_item(index, resource);
+            self.player.replace_item(index, resource, id);
             self.set_status(id, TrackStatus::Loaded);
             if self.should_autoplay
                 && self.autoplay_target.disarm_if_matches(id)
