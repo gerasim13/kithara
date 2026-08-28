@@ -5260,6 +5260,7 @@ dependencies = [
 name = "kithara-ui"
 version = "0.0.1-alpha4"
 dependencies = [
+ "bitflags 2.13.1",
  "bon",
  "criterion",
  "delegate",

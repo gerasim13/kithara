@@ -2669,37 +2669,18 @@ mod gesture_census {
         name: &'static str,
     }
 
-    const PRESS_KEYBOARD: Gestures = Gestures {
-        keyboard: true,
-        ..Gestures::PRESS
-    };
-    const DRAG_WHEEL: Gestures = Gestures {
-        wheel: true,
-        ..Gestures::DRAG
-    };
-    const DRAG_KEYBOARD_WHEEL: Gestures = Gestures {
-        keyboard: true,
-        wheel: true,
-        ..Gestures::DRAG
-    };
-    const KNOB: Gestures = Gestures {
-        double_click: true,
-        wheel: true,
-        ..Gestures::DRAG
-    };
-
     const ROWS: &[Row] = &[
         Row {
             name: "Brand",
-            gestures: Gestures::NONE,
+            gestures: Gestures::empty(),
         },
         Row {
             name: "Spacer",
-            gestures: Gestures::NONE,
+            gestures: Gestures::empty(),
         },
         Row {
             name: "Divider",
-            gestures: Gestures::NONE,
+            gestures: Gestures::empty(),
         },
         Row {
             name: "PresetSelector",
@@ -2711,7 +2692,7 @@ mod gesture_census {
         },
         Row {
             name: "DeckSummary",
-            gestures: Gestures::NONE,
+            gestures: Gestures::empty(),
         },
         Row {
             name: "WindowDrag",
@@ -2719,7 +2700,7 @@ mod gesture_census {
         },
         Row {
             name: "TitleBar",
-            gestures: Gestures::NONE,
+            gestures: Gestures::empty(),
         },
         Row {
             name: "WindowControls",
@@ -2727,15 +2708,15 @@ mod gesture_census {
         },
         Row {
             name: "Bpm",
-            gestures: Gestures::NONE,
+            gestures: Gestures::empty(),
         },
         Row {
             name: "Time",
-            gestures: Gestures::NONE,
+            gestures: Gestures::empty(),
         },
         Row {
             name: "Scalar",
-            gestures: Gestures::NONE,
+            gestures: Gestures::empty(),
         },
         Row {
             name: "Wave",
@@ -2743,46 +2724,50 @@ mod gesture_census {
         },
         Row {
             name: "Vis",
-            gestures: Gestures::NONE,
+            gestures: Gestures::empty(),
         },
         Row {
             name: "Sprite",
-            gestures: Gestures::NONE,
+            gestures: Gestures::empty(),
         },
         Row {
             name: "Lottie",
-            gestures: Gestures::NONE,
+            gestures: Gestures::empty(),
         },
         Row {
             name: "Shader",
-            gestures: Gestures::NONE,
+            gestures: Gestures::empty(),
         },
         Row {
             // The document binds a custom control to nothing, so the toolkit
             // recognises nothing over it: whatever it answers, it answers for
             // itself, through the registry it was mounted from.
             name: "Custom",
-            gestures: Gestures::NONE,
+            gestures: Gestures::empty(),
         },
         Row {
             name: "Table",
-            gestures: DRAG_WHEEL,
+            gestures: Gestures::DRAG.union(Gestures::WHEEL),
         },
         Row {
             name: "Tree",
-            gestures: DRAG_KEYBOARD_WHEEL,
+            gestures: Gestures::DRAG
+                .union(Gestures::KEYBOARD)
+                .union(Gestures::WHEEL),
         },
         Row {
             name: "ContextBar",
-            gestures: PRESS_KEYBOARD,
+            gestures: Gestures::PRESS.union(Gestures::KEYBOARD),
         },
         Row {
             name: "Text",
-            gestures: Gestures::NONE,
+            gestures: Gestures::empty(),
         },
         Row {
             name: "Knob",
-            gestures: KNOB,
+            gestures: Gestures::DRAG
+                .union(Gestures::DOUBLE_CLICK)
+                .union(Gestures::WHEEL),
         },
         Row {
             name: "Chip",
@@ -2798,7 +2783,7 @@ mod gesture_census {
         },
         Row {
             name: "Glyph",
-            gestures: Gestures::NONE,
+            gestures: Gestures::empty(),
         },
         Row {
             name: "TabLarge",
@@ -2818,27 +2803,27 @@ mod gesture_census {
         },
         Row {
             name: "Select",
-            gestures: Gestures::NONE,
+            gestures: Gestures::empty(),
         },
         Row {
             name: "StatusDot",
-            gestures: Gestures::NONE,
+            gestures: Gestures::empty(),
         },
         Row {
             name: "Swatch",
-            gestures: Gestures::NONE,
+            gestures: Gestures::empty(),
         },
         Row {
             name: "Cell",
-            gestures: Gestures::NONE,
+            gestures: Gestures::empty(),
         },
         Row {
             name: "Readout",
-            gestures: Gestures::NONE,
+            gestures: Gestures::empty(),
         },
         Row {
             name: "Meter",
-            gestures: Gestures::NONE,
+            gestures: Gestures::empty(),
         },
         Row {
             name: "VuVertical",
@@ -2858,7 +2843,7 @@ mod gesture_census {
         },
         Row {
             name: "PortalMap",
-            gestures: Gestures::NONE,
+            gestures: Gestures::empty(),
         },
         Row {
             name: "Range",
@@ -2888,7 +2873,7 @@ mod gesture_census {
         Control::Painter: Retained + 'static,
     {
         fn observe(&self, probe: Probe<'_>) -> Observed {
-            let immediate = self.data(probe.reading).map_or(Gestures::NONE, |data| {
+            let immediate = self.data(probe.reading).map_or(Gestures::empty(), |data| {
                 let grip = self.grip(probe.skin, &data);
                 Gesture::with_grip(
                     "control",
@@ -2896,9 +2881,9 @@ mod gesture_census {
                     grip,
                     self.index_event(),
                 )
-                .map_or_else(|_| Gestures::NONE, |gesture| gesture.gestures())
+                .map_or_else(|_| Gestures::empty(), |gesture| gesture.gestures())
             });
-            let retained = self.data(probe.reading).map_or(Gestures::NONE, |data| {
+            let retained = self.data(probe.reading).map_or(Gestures::empty(), |data| {
                 let grip = self.grip(probe.skin, &data);
                 Painted::new(self.painter(probe.skin), data, probe.skin)
                     .interactive(
@@ -2912,7 +2897,7 @@ mod gesture_census {
             Observed {
                 immediate,
                 retained,
-                special: Gestures::NONE,
+                special: Gestures::empty(),
             }
         }
     }
@@ -2988,7 +2973,7 @@ mod gesture_census {
             }
         );
         let engine = hosted_control_plan(path, spec, read, ctx, skin)
-            .map_or(Gestures::NONE, |plan| plan.gestures());
+            .map_or(Gestures::empty(), |plan| plan.gestures());
         (
             leaf.immediate.union(engine).union(leaf.special),
             leaf.retained.union(engine).union(leaf.special),
@@ -3158,9 +3143,9 @@ mod gesture_census {
     impl Named {
         fn declared_by(self, gestures: Gestures) -> bool {
             match self {
-                Self::Press => gestures.press,
-                Self::Drag => gestures.drag,
-                Self::Wheel => gestures.wheel,
+                Self::Press => gestures.contains(Gestures::PRESS),
+                Self::Drag => gestures.contains(Gestures::DRAG),
+                Self::Wheel => gestures.contains(Gestures::WHEEL),
             }
         }
     }

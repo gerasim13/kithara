@@ -115,13 +115,9 @@ impl Drag {
 
     #[cfg(test)]
     pub(crate) const fn gestures(self) -> Gestures {
-        Gestures {
-            double_click: self.reset.is_some(),
-            drag: true,
-            keyboard: false,
-            press: true,
-            wheel: self.wheel.is_some(),
-        }
+        Gestures::DRAG
+            .with(Gestures::DOUBLE_CLICK, self.reset.is_some())
+            .with(Gestures::WHEEL, self.wheel.is_some())
     }
 
     /// The same drag counting from the value the control now draws. Only a

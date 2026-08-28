@@ -228,7 +228,7 @@ where
             .as_ref()
             .map(|interaction| &interaction.recognize)
         {
-            None => Gestures::NONE,
+            None => Gestures::empty(),
             Some(Recognize::Press | Recognize::Command(_) | Recognize::Index { .. }) => {
                 Gestures::PRESS
             }

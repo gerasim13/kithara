@@ -390,7 +390,7 @@ impl HostedControlPlan {
     pub(crate) fn gestures(&self) -> Gestures {
         self.descriptors()
             .iter()
-            .fold(Gestures::NONE, |gestures, descriptor| {
+            .fold(Gestures::empty(), |gestures, descriptor| {
                 gestures.union(descriptor.gestures())
             })
     }
