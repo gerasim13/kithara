@@ -17,13 +17,13 @@ pub(crate) fn append_component_suffix(component: &str, suffix: &str, identity: &
     let mut encoded = String::with_capacity(component.len() + suffix.len());
     encoded.push_str(component);
     encoded.push_str(suffix);
-    finish_component(encoded, identity)
+    finish_component(encoded, || fingerprint(identity))
 }
 
 #[must_use]
 pub(crate) fn encode_component(value: &str) -> String {
     let encoded = encode_bytes(value, false);
-    finish_component(encoded, value.as_bytes())
+    finish_component(encoded, || fingerprint(value.as_bytes()))
 }
 
 #[must_use]
@@ -32,7 +32,7 @@ pub(crate) fn encode_url_component(value: &str) -> String {
         return "~e".to_string();
     }
     let encoded = encode_bytes(value, true);
-    finish_component(encoded, value.as_bytes())
+    finish_component(encoded, || fingerprint(value.as_bytes()))
 }
 
 #[must_use]
@@ -60,19 +60,23 @@ pub(crate) fn encode_url_leaf(leaf: &str, query: Option<&str>) -> String {
         encoded.push_str(&query_suffix);
     }
 
-    let mut identity =
-        Vec::with_capacity(leaf.len() + query.map_or(0, str::len) + usize::from(query.is_some()));
-    identity.extend_from_slice(leaf.as_bytes());
-    if let Some(query) = query {
-        identity.push(0);
-        identity.extend_from_slice(query.as_bytes());
-    }
-    finish_component(encoded, &identity)
+    finish_component(encoded, || fingerprint_url_leaf(leaf, query))
 }
 
 #[must_use]
 pub(crate) fn fingerprint(value: &[u8]) -> String {
     let digest = Sha256::digest(value);
+    hex::encode(&digest[..Consts::HASH_PREFIX_BYTES])
+}
+
+fn fingerprint_url_leaf(leaf: &str, query: Option<&str>) -> String {
+    let mut digest = Sha256::new();
+    digest.update(leaf.as_bytes());
+    if let Some(query) = query {
+        digest.update([0]);
+        digest.update(query.as_bytes());
+    }
+    let digest = digest.finalize();
     hex::encode(&digest[..Consts::HASH_PREFIX_BYTES])
 }
 
@@ -142,7 +146,10 @@ fn encode_bytes(value: &str, preserve_percent_triplets: bool) -> String {
     encoded
 }
 
-fn finish_component(mut encoded: String, identity: &[u8]) -> String {
+fn finish_component<F>(mut encoded: String, fingerprint: F) -> String
+where
+    F: FnOnce() -> String,
+{
     if encoded.is_empty() {
         return encoded;
     }
@@ -171,7 +178,7 @@ fn finish_component(mut encoded: String, identity: &[u8]) -> String {
         return encoded;
     }
 
-    let suffix = format!("~h{}", fingerprint(identity));
+    let suffix = format!("~h{}", fingerprint());
     encoded.truncate(MAX_COMPONENT_LEN - suffix.len());
     encoded.push_str(&suffix);
     encoded

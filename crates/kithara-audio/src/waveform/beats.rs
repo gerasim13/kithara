@@ -53,6 +53,11 @@ impl BeatGrid {
             bpm,
         }
     }
+
+    /// Append the versioned grid encoding to caller-owned storage.
+    pub fn write_to(&self, out: &mut Vec<u8>) {
+        blob::write_to(self, out);
+    }
 }
 
 /// Serialize to a versioned little-endian blob: `u32` version, `f64`
@@ -83,7 +88,7 @@ impl Blob for BeatGrid {
         let beats = r.read_frames()?;
         let downbeats = r.read_frames()?;
         let segment_count = r.read_len()?;
-        let mut segments = Vec::with_capacity(segment_count.min(MAX_PREALLOC));
+        let mut segments: Vec<GridSegment> = Vec::with_capacity(segment_count.min(MAX_PREALLOC));
         for _ in 0..segment_count {
             segments.push(GridSegment::new(
                 r.read_u64()?,

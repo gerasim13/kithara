@@ -1,4 +1,8 @@
-use super::{BlobError, MAX_PREALLOC};
+use std::mem::size_of;
+
+use kithara_platform::sync::Arc;
+
+use super::BlobError;
 
 /// Little-endian cursor reader over a byte slice.
 pub(crate) struct Reader<'a> {
@@ -37,14 +41,25 @@ impl<'a> Reader<'a> {
         Ok(f64::from_le_bytes(self.read_array::<8>()?))
     }
 
-    /// Read a length-prefixed `u64` list, capping preallocation.
-    pub(crate) fn read_frames(&mut self) -> Result<Vec<u64>, BlobError> {
+    /// Read a length-prefixed immutable source-frame list.
+    pub(crate) fn read_frames(&mut self) -> Result<Arc<[u64]>, BlobError> {
         let count = self.read_len()?;
-        let mut out = Vec::with_capacity(count.min(MAX_PREALLOC));
-        for _ in 0..count {
-            out.push(self.read_u64()?);
-        }
-        Ok(out)
+        let byte_len = count
+            .checked_mul(size_of::<u64>())
+            .ok_or(BlobError::Corrupt)?;
+        let end = self
+            .cursor
+            .checked_add(byte_len)
+            .ok_or(BlobError::Corrupt)?;
+        let bytes = self.bytes.get(self.cursor..end).ok_or(BlobError::Corrupt)?;
+        self.cursor = end;
+        Ok(Arc::from_iter(bytes.chunks_exact(size_of::<u64>()).map(
+            |chunk| {
+                let mut value = [0; size_of::<u64>()];
+                value.copy_from_slice(chunk);
+                u64::from_le_bytes(value)
+            },
+        )))
     }
 
     /// Read a `u64` length prefix as a `usize`.

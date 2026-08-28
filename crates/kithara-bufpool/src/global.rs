@@ -28,6 +28,9 @@ pub(crate) const SAMPLE_TRIM_CAPACITY: usize = 200_000;
 /// `BytePool::default()` itself — read the pool from injected config.
 pub type BytePool = SharedPool<32, Vec<u8>>;
 
+/// Byte buffer borrowed from a [`BytePool`] and recycled on drop.
+pub type ByteBuffer = PooledOwned<32, Vec<u8>>;
+
 /// Standard decoded-sample (`f32`) buffer pool for the entire workspace.
 ///
 /// Uses 8 shards (128 buffers / 8 = 16 per shard) for good single-thread

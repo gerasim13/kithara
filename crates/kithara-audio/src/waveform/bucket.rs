@@ -52,6 +52,11 @@ impl Waveform {
         &self.0
     }
 
+    /// Append the versioned waveform encoding to caller-owned storage.
+    pub fn write_to(&self, out: &mut Vec<u8>) {
+        blob::write_to(self, out);
+    }
+
     delegate::delegate! {
         to self.0 {
             #[must_use]
@@ -99,7 +104,7 @@ impl Blob for Waveform {
             return Err(BlobError::Corrupt);
         }
         let count = r.remaining() / BUCKET_BYTES;
-        let mut buckets = Vec::with_capacity(count);
+        let mut buckets: Vec<Bucket> = Vec::with_capacity(count);
         for _ in 0..count {
             let mut heights = [0.0; Band::COUNT];
             for height in &mut heights {

@@ -9,6 +9,7 @@ use kithara::{
         ResourceKey, WriteSide,
     },
     audio::{BeatGrid, Waveform},
+    bufpool::{ByteBuffer, BytePool},
     decode::DecodeError,
     prelude::ResourceConfig,
 };
@@ -61,6 +62,7 @@ struct MemoryEntry {
 /// track's storage lifecycle). Owned by the single listener task, so it needs
 /// no synchronization.
 pub(crate) struct TrackAnalysisCache {
+    byte_pool: BytePool,
     mem: HashMap<ResourceKey, Vec<MemoryEntry>>,
     /// Active analysis configuration; blobs carrying a different one are
     /// cache misses.
@@ -71,8 +73,9 @@ pub(crate) struct TrackAnalysisCache {
 }
 
 impl TrackAnalysisCache {
-    pub(crate) fn new(fingerprint: String) -> Self {
+    pub(crate) fn new(fingerprint: String, byte_pool: BytePool) -> Self {
         Self {
+            byte_pool,
             fingerprint,
             mem: HashMap::new(),
             order: VecDeque::new(),
@@ -103,7 +106,7 @@ impl TrackAnalysisCache {
             _ => return None,
         }
         let reader = target.store.open_resource(resource, None).ok()?;
-        let mut bytes = Vec::new();
+        let mut bytes = self.byte_pool.get();
         reader.read_into(&mut bytes).ok()?;
         match analysis_from_bytes(&bytes, &self.fingerprint) {
             Ok(analysis) => {
@@ -161,7 +164,7 @@ impl TrackAnalysisCache {
 
     fn store_disk(&self, target: &AnalysisTarget, analysis: &TrackAnalysis) {
         let resource = &target.key;
-        let bytes = match analysis_to_bytes(analysis, &self.fingerprint) {
+        let bytes = match analysis_to_bytes(analysis, &self.fingerprint, &self.byte_pool) {
             Ok(bytes) => bytes,
             Err(e) => {
                 warn!(%e, ?resource, "track analysis cache: encode failed");
@@ -210,18 +213,25 @@ enum AnalysisBytesError {
 fn analysis_to_bytes(
     analysis: &TrackAnalysis,
     fingerprint: &str,
-) -> Result<Vec<u8>, AnalysisBytesError> {
-    let waveform = analysis.waveform().map(Vec::<u8>::from).unwrap_or_default();
-    let beat = analysis.beat().map(Vec::<u8>::from).unwrap_or_default();
-    let mut out =
-        Vec::with_capacity(4 + 4 + fingerprint.len() + 8 + waveform.len() + 8 + beat.len() + 8);
+    byte_pool: &BytePool,
+) -> Result<ByteBuffer, AnalysisBytesError> {
+    let mut out = byte_pool.get();
+    out.reserve(4 + 4 + fingerprint.len() + 8 + 8 + 8);
     out.extend_from_slice(&Consts::ANALYSIS_BYTES_VERSION.to_le_bytes());
     let fingerprint_len =
         u32::try_from(fingerprint.len()).map_err(|_| AnalysisBytesError::TooLarge)?;
     out.extend_from_slice(&fingerprint_len.to_le_bytes());
     out.extend_from_slice(fingerprint.as_bytes());
-    write_section(&mut out, &waveform)?;
-    write_section(&mut out, &beat)?;
+    write_section(&mut out, |out| {
+        if let Some(waveform) = analysis.waveform() {
+            waveform.write_to(out);
+        }
+    })?;
+    write_section(&mut out, |out| {
+        if let Some(beat) = analysis.beat() {
+            beat.write_to(out);
+        }
+    })?;
     out.extend_from_slice(&analysis.source_frames().to_le_bytes());
     Ok(out)
 }
@@ -262,10 +272,17 @@ fn analysis_from_bytes(
     Ok(TrackAnalysis::new(beat, waveform, source_frames))
 }
 
-fn write_section(out: &mut Vec<u8>, section: &[u8]) -> Result<(), AnalysisBytesError> {
-    let len = u64::try_from(section.len()).map_err(|_| AnalysisBytesError::TooLarge)?;
-    out.extend_from_slice(&len.to_le_bytes());
-    out.extend_from_slice(section);
+fn write_section<F>(out: &mut Vec<u8>, write: F) -> Result<(), AnalysisBytesError>
+where
+    F: FnOnce(&mut Vec<u8>),
+{
+    let len_offset = out.len();
+    out.extend_from_slice(&0_u64.to_le_bytes());
+    let section_offset = out.len();
+    write(out);
+    let len =
+        u64::try_from(out.len() - section_offset).map_err(|_| AnalysisBytesError::TooLarge)?;
+    out[len_offset..section_offset].copy_from_slice(&len.to_le_bytes());
     Ok(())
 }
 
@@ -318,6 +335,7 @@ mod tests {
             AssetStore, StorageBackend,
         },
         audio::{BeatGrid, Waveform},
+        bufpool::BytePool,
         file::File,
         prelude::ResourceConfig,
         warp::GridSegment,
@@ -393,13 +411,13 @@ mod tests {
     }
 
     fn analysis_cache() -> TrackAnalysisCache {
-        TrackAnalysisCache::new(FP.to_string())
+        TrackAnalysisCache::new(FP.to_string(), BytePool::default())
     }
 
     #[kithara::test]
     fn codec_round_trips_waveform_and_beat() {
         let analysis = full_analysis();
-        let bytes = analysis_to_bytes(&analysis, FP).expect("encodes");
+        let bytes = analysis_to_bytes(&analysis, FP, &BytePool::default()).expect("encodes");
         let back = analysis_from_bytes(&bytes, FP).expect("decodes");
         assert_eq!(
             back.waveform().expect("waveform survives").buckets(),
@@ -415,7 +433,7 @@ mod tests {
 
     #[kithara::test]
     fn codec_round_trips_without_beat() {
-        let bytes = analysis_to_bytes(&wave_only(), FP).expect("encodes");
+        let bytes = analysis_to_bytes(&wave_only(), FP, &BytePool::default()).expect("encodes");
         let back = analysis_from_bytes(&bytes, FP).expect("decodes");
         assert!(back.waveform().is_some());
         assert!(back.beat().is_none(), "absent beat must stay absent");
@@ -424,7 +442,7 @@ mod tests {
     #[kithara::test]
     fn codec_round_trips_beat_only() {
         let analysis = TrackAnalysis::new(Some(grid()), None, 0);
-        let bytes = analysis_to_bytes(&analysis, FP).expect("encodes");
+        let bytes = analysis_to_bytes(&analysis, FP, &BytePool::default()).expect("encodes");
         let back = analysis_from_bytes(&bytes, FP).expect("decodes");
         assert!(back.waveform().is_none());
         assert_eq!(back.beat().expect("beat grid survives"), &grid());
@@ -432,7 +450,7 @@ mod tests {
 
     #[kithara::test]
     fn stale_fingerprint_is_a_miss() {
-        let bytes = analysis_to_bytes(&full_analysis(), FP).expect("encodes");
+        let bytes = analysis_to_bytes(&full_analysis(), FP, &BytePool::default()).expect("encodes");
         assert!(
             matches!(
                 analysis_from_bytes(&bytes, "buckets=1500;beat=other"),
@@ -644,7 +662,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let store = store_in(dir.path());
         let target = target(&store, "root_fp");
-        let mut old = TrackAnalysisCache::new("old-config".to_string());
+        let mut old = TrackAnalysisCache::new("old-config".to_string(), BytePool::default());
         old.put(target.clone(), full_analysis());
 
         let mut current = analysis_cache();

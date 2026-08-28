@@ -24,7 +24,7 @@ where
 
     pub(crate) fn set_resampler(_config: &mut Self, _resampler: BeatAnalysisConfig<B>) {}
 
-    pub(crate) fn take_detector(_config: &mut Self) -> Option<Detector> {
+    pub(crate) fn take_detector(_config: &mut Self, _sample_pool: &SamplePool) -> Option<Detector> {
         None
     }
 

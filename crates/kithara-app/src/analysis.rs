@@ -2,7 +2,7 @@ use std::collections::VecDeque;
 
 use kithara::{
     audio::analysis::BeatAnalysisConfig,
-    bufpool::SamplePool,
+    bufpool::{BytePool, SamplePool},
     decode::DecodeError,
     events::{Envelope, Event, EventReceiver, TrackId},
     prelude::{PlaybackResamplerBackend, ResourceConfig},
@@ -41,6 +41,7 @@ pub(crate) async fn listen(
     let mut driver = AnalysisController::new(
         &cancel,
         &config.beat_analysis,
+        config.worker.byte_pool(),
         config.worker.sample_pool(),
         config.waveform_max_buckets,
     );
@@ -110,6 +111,7 @@ impl AnalysisController {
     pub(crate) fn new(
         cancel: &CancelToken,
         beat_config: &AppBeatAnalysisConfig,
+        byte_pool: &BytePool,
         sample_pool: &SamplePool,
         waveform_max_buckets: usize,
     ) -> Self {
@@ -120,7 +122,10 @@ impl AnalysisController {
                 beat_config.clone(),
                 sample_pool.clone(),
             ),
-            cache: TrackAnalysisCache::new(analysis_fingerprint(beat_config, waveform_max_buckets)),
+            cache: TrackAnalysisCache::new(
+                analysis_fingerprint(beat_config, waveform_max_buckets),
+                byte_pool.clone(),
+            ),
             current: None,
             displayed: None,
             pending: VecDeque::new(),
@@ -420,7 +425,7 @@ mod tests {
             StorageBackend,
         },
         audio::{Waveform, analysis::BeatAnalysisConfig},
-        bufpool::{Region, SamplePool},
+        bufpool::{BytePool, Region, SamplePool},
         events::TrackId,
         file::File,
         host::{Host, HostConfig},
@@ -459,7 +464,7 @@ mod tests {
     }
 
     fn cache() -> TrackAnalysisCache {
-        TrackAnalysisCache::new("test".to_string())
+        TrackAnalysisCache::new("test".to_string(), BytePool::default())
     }
 
     fn target(discriminator: &str) -> AnalysisTarget {
@@ -505,6 +510,7 @@ mod tests {
         let mut controller = AnalysisController::new(
             &cancel,
             &BeatAnalysisConfig::<PlaybackResamplerBackend>::default(),
+            &BytePool::default(),
             &SamplePool::default(),
             MAX_BUCKETS,
         );
@@ -691,6 +697,7 @@ mod tests {
         let mut controller = AnalysisController::new(
             &cancel,
             &BeatAnalysisConfig::<PlaybackResamplerBackend>::default(),
+            &BytePool::default(),
             &SamplePool::default(),
             MAX_BUCKETS,
         );

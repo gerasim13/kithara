@@ -13,7 +13,7 @@ pub(crate) fn bucketize<T: Copy>(
     }
 
     let len = raw.len();
-    let mut out = Vec::with_capacity(buckets);
+    let mut out: Vec<T> = Vec::with_capacity(buckets);
     for b in 0..buckets {
         let start = b * len / buckets;
         let end = (b + 1) * len / buckets;
