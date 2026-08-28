@@ -3,6 +3,7 @@ use std::sync::{
     atomic::{AtomicU64, Ordering},
 };
 
+use kithara_audio::{AudioObserver, AudioObserverRelay, AudioObserverSlot};
 use kithara_events::{EventBus, QueueEvent, TrackId, TrackStatus};
 use kithara_platform::CancelToken;
 use kithara_play::{ResourceConfig, ResourceSrc};
@@ -87,6 +88,7 @@ pub(crate) struct TrackRecord {
     pub(crate) id: TrackId,
     pub(crate) source: TrackSource,
     pub(crate) status: TrackStatus,
+    observer: AudioObserverSlot,
 }
 
 impl TrackRecord {
@@ -98,6 +100,7 @@ impl TrackRecord {
             status: TrackStatus::Pending,
             source,
             load: None,
+            observer: AudioObserverSlot::default(),
         }
     }
 
@@ -131,6 +134,33 @@ impl Tracks {
             inner: Mutex::new(Vec::new()),
             next_generation: AtomicU64::new(0),
         }
+    }
+
+    /// Attach decoded-audio observation to this track's current resource, or
+    /// retain it for resource admission when loading has not started yet.
+    pub(crate) fn attach_observer(&self, id: TrackId, observer: Box<dyn AudioObserver>) {
+        let slot = self
+            .lock()
+            .iter()
+            .find(|record| record.id == id)
+            .map(|record| record.observer.clone());
+        let Some(slot) = slot else {
+            return;
+        };
+        slot.attach(observer);
+    }
+
+    /// Create the decoder half before resource opening and install its
+    /// control half in canonical per-track state. Any observer attached before
+    /// admission is transferred into the same bounded relay.
+    pub(crate) fn observer_relay(&self, id: TrackId) -> AudioObserverRelay {
+        let slot = self
+            .lock()
+            .iter()
+            .find(|record| record.id == id)
+            .map(|record| record.observer.clone())
+            .unwrap_or_default();
+        slot.relay()
     }
 
     /// Register a fresh attempt. Dedupes against a live attempt; replaces

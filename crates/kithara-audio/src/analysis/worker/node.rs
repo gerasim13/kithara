@@ -3,7 +3,7 @@ use kithara_resampler::ResamplerBackend;
 
 pub(crate) use super::task::Job;
 use super::{AnalysisStep, AnalysisTask};
-use crate::analysis::analyzer::{AnalyzerBuilder, Detector};
+use crate::analysis::analyzer::{AnalysisFingerprint, AnalyzerBuilder, Detector};
 
 pub(crate) struct AnalysisNode<B>
 where
@@ -27,6 +27,10 @@ where
             jobs,
             current: None,
         }
+    }
+
+    pub(crate) fn effective(&self) -> (AnalysisFingerprint, bool) {
+        (self.builder.fingerprint(), !self.builder.is_empty())
     }
 
     fn tick_current(&mut self) -> AnalysisStep {

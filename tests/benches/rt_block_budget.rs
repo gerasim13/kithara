@@ -78,11 +78,16 @@ fn send(control: &mut SlotControl, cmd: PlayerCmd) {
 
 fn load_tracks(processor: &mut PlayerNodeProcessor, control: &mut SlotControl, count: usize) {
     let pool = SamplePool::default();
-    let sources: Vec<Arc<str>> = (0..count)
-        .map(|idx| Arc::from(format!("bench-track-{idx}").as_str()))
+    let tracks: Vec<(TrackId, Arc<str>)> = (0..count)
+        .map(|idx| {
+            (
+                TrackId::allocate(),
+                Arc::from(format!("bench-track-{idx}").as_str()),
+            )
+        })
         .collect();
 
-    for src in &sources {
+    for (item_id, src) in &tracks {
         let resource = Resource::from_reader(
             TestPcmReader::new(spec(), Consts::TRACK_SECONDS),
             Some(Arc::clone(src)),
@@ -91,15 +96,15 @@ fn load_tracks(processor: &mut PlayerNodeProcessor, control: &mut SlotControl, c
             control,
             PlayerCmd::LoadTrack {
                 resource: Box::new(PlayerResource::new(resource, Arc::clone(src), &pool)),
-                item_id: TrackId::allocate(),
+                item_id: *item_id,
             },
         );
     }
     send(control, PlayerCmd::SetPaused(false));
     processor.drain_commands();
 
-    for src in &sources {
-        match processor.track_mut(src) {
+    for (item_id, src) in &tracks {
+        match processor.track_mut(*item_id) {
             Some(track) => track.play(),
             None => panic!("bench track {src} did not reach the arena"),
         }

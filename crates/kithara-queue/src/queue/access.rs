@@ -1,3 +1,4 @@
+use kithara_audio::AudioObserver;
 use kithara_events::{EventReceiver, QueueEvent, QueueRepeatMode, TrackId};
 
 use super::QueueControl;
@@ -19,15 +20,6 @@ impl QueueControl {
     pub fn current(&self) -> Option<TrackEntry> {
         let idx = self.lock_navigation().current_index()?;
         self.lock_tracks().get(idx).map(TrackRecord::entry)
-    }
-
-    /// ABR handle of the currently playing adaptive item, if any.
-    ///
-    /// Returned handle drives runtime variant/bandwidth control — FFI and
-    /// GUI use it for `set_abr_mode` / `set_preferred_peak_bitrate`.
-    #[must_use]
-    pub fn current_abr_handle(&self) -> Option<kithara_abr::AbrHandle> {
-        self.player.current_abr_handle()
     }
 
     /// The currently playing track's queue index (player-reported).
@@ -79,6 +71,25 @@ impl QueueControl {
     }
 
     delegate::delegate! {
+        to self.loader {
+            /// Attach a bounded decoded-audio observer to `id`'s decoder.
+            ///
+            /// Attachment is nonblocking and works before, during, or after resource
+            /// loading. Only one observer is active for a track at a time.
+            pub fn attach_observer<O: AudioObserver>(&self, id: TrackId, observer: O);
+        }
+        to self.player {
+            /// ABR handle of the currently playing adaptive item, if any.
+            ///
+            /// Returned handle drives runtime variant/bandwidth control — FFI and
+            /// GUI use it for `set_abr_mode` / `set_preferred_peak_bitrate`.
+            #[must_use]
+            pub fn current_abr_handle(&self) -> Option<kithara_abr::AbrHandle>;
+            /// Rate the player's master bus runs at, and therefore the frame axis used
+            /// by decoded-audio observers attached to this queue.
+            #[must_use]
+            pub fn sample_rate(&self) -> u32;
+        }
         to self {
             /// Live variant metadata of the currently playing adaptive item.
             /// Pulled from the player's stashed ABR handle on every call so a

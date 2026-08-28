@@ -25,7 +25,7 @@ use crate::{
         Widget,
         behavior::{HoverState, ScalarDrag, ScalarDragMode, ScalarDragState, scroll_y},
         wave::{
-            bars,
+            bars::{self, CoveragePalette},
             hero::{HeroPalette, HeroWave, draw as draw_hero_wave},
             zoom_math::{clamp_zoom, window_bounds, x_to_norm, zoom_for_wheel},
         },
@@ -64,6 +64,7 @@ impl<'a> Widget<'a> for MiniWave<'_, '_, '_, '_, '_, '_> {
             buckets: view.buckets.to_vec().into_boxed_slice(),
             beats: view.beats.to_vec().into_boxed_slice(),
             downbeats: view.downbeats.to_vec().into_boxed_slice(),
+            unready: view.unready.to_vec().into_boxed_slice(),
             loop_region: view.r#loop,
             cues: view.cues.to_vec().into_boxed_slice(),
         });
@@ -115,6 +116,10 @@ impl<'a> Widget<'a> for MiniWave<'_, '_, '_, '_, '_, '_> {
             overlay,
             overlay_palette: OverlayPalette::new(self.skin),
             palette: self.skin.palette,
+            coverage_palette: CoveragePalette {
+                mark: self.skin.color(self.skin.wave.coverage_mark_color),
+                edge: self.skin.color(self.skin.wave.coverage_edge_color),
+            },
             style: self.style,
             waveform,
             cached,
@@ -139,6 +144,7 @@ struct MiniWaveCanvas {
     waveform: Option<WaveformData>,
     overlay_palette: OverlayPalette,
     palette: RenderPalette,
+    coverage_palette: CoveragePalette,
     drag: ScalarDrag,
     metrics: WaveSkin,
     style: WaveStyle,
@@ -161,6 +167,7 @@ struct WaveformData {
     buckets: Box<[WaveBucket]>,
     cues: Box<[f32]>,
     downbeats: Box<[f32]>,
+    unready: Box<[[f32; 2]]>,
     loop_region: Option<[f32; 2]>,
 }
 
@@ -368,6 +375,14 @@ impl MiniWaveCanvas {
                 self.draw_zoom_wave(frame, bounds, waveform);
             } else {
                 draw_bars(frame, bounds, &waveform.buckets, self.metrics, self.palette);
+                bars::draw_coverage(
+                    frame,
+                    bounds,
+                    &waveform.unready,
+                    |norm| norm * bounds.width,
+                    self.metrics,
+                    self.coverage_palette,
+                );
                 if self.style == WaveStyle::Default {
                     bars::draw_played(
                         frame,
@@ -403,6 +418,7 @@ impl MiniWaveCanvas {
                 buckets: &data.buckets,
                 cues: &data.cues,
                 downbeats: &data.downbeats,
+                unready: &data.unready,
                 loop_region: data.loop_region,
                 position: self.progress,
                 zoom: self.zoom,
@@ -412,6 +428,7 @@ impl MiniWaveCanvas {
                 base: self.palette,
                 cue_badge: self.cue_badge_background,
                 cue_text: self.cue_badge_text_color,
+                coverage: self.coverage_palette,
             },
         );
     }
@@ -449,6 +466,10 @@ fn wave_revision(waveform: Option<&WaveformData>, progress: f32, zoom: f32) -> u
         }
         for cue in &waveform.cues {
             cue.to_bits().hash(&mut hasher);
+        }
+        for [start, end] in &waveform.unready {
+            start.to_bits().hash(&mut hasher);
+            end.to_bits().hash(&mut hasher);
         }
         if let Some([start, end]) = waveform.loop_region {
             start.to_bits().hash(&mut hasher);
@@ -872,6 +893,37 @@ mod tests {
         let below = Cursor::Available(Point::new(150.0, 50.0 + metrics.height + 40.0));
         assert!(inside.is_over(strip));
         assert!(!below.is_over(strip));
+    }
+
+    fn wave(unready: &[[f32; 2]]) -> WaveformData {
+        WaveformData {
+            beats: Box::from([0.25, 0.5]),
+            buckets: Box::from([WaveBucket::default(); 4]),
+            cues: Box::default(),
+            downbeats: Box::default(),
+            unready: Box::from(unready),
+            loop_region: None,
+        }
+    }
+
+    /// Coverage arriving between revisions must invalidate the cached layer,
+    /// or a growing analysis would keep showing the picture it was first drawn
+    /// with and nothing would report the staleness.
+    #[kithara::test]
+    fn coverage_that_grows_redraws_the_cached_layer() {
+        let revisions: Vec<u64> = [
+            &[[0.2, 0.4], [0.6, 0.9]][..],
+            &[[0.2, 0.4], [0.7, 0.9]][..],
+            &[[0.3, 0.4]][..],
+            &[][..],
+        ]
+        .into_iter()
+        .map(|unready| wave_revision(Some(&wave(unready)), 0.3, 0.12))
+        .collect();
+
+        for pair in revisions.windows(2) {
+            assert_ne!(pair[0], pair[1], "{revisions:?}");
+        }
     }
 
     struct CacheReads(Option<f64>);

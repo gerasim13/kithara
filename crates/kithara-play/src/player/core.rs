@@ -69,6 +69,13 @@ impl PlayerRuntime {
     /// Minimum playback rate to prevent stalling.
     pub(crate) const MIN_PLAYBACK_RATE: f32 = PlayerParams::MIN_PLAYBACK_RATE;
 
+    /// Rate the player's master bus runs at. Decoded frames handed to an
+    /// observer use this axis after decoder-side conversion.
+    #[must_use]
+    pub fn sample_rate(&self) -> u32 {
+        self.core.engine.master_sample_rate()
+    }
+
     delegate! {
         to self.lifecycle {
             fn begin_close(&self) -> Result<CloseAdmission, PlayError>;

@@ -127,7 +127,7 @@ impl Deck {
 #[derive(fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
 pub struct DeckSet {
-    #[field(get, vis = "pub(crate)")]
+    #[field(get)]
     host: Host,
     #[field(get)]
     mix: MixState,

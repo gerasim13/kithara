@@ -131,7 +131,7 @@ mod tests {
         let worker = worker();
         let config = test_config("https://example.com/audio/get-mp3/song.MP3?sign=test")
             .unwrap()
-            .build_file_config(&worker);
+            .build_file_config(&worker, None);
 
         assert_eq!(config.hint(), Some("mp3"));
     }
@@ -141,7 +141,7 @@ mod tests {
         let worker = worker();
         let config = test_config("https://example.com/get-mp3/42?sign=test")
             .unwrap()
-            .build_file_config(&worker);
+            .build_file_config(&worker, None);
 
         assert_eq!(config.hint(), None);
     }
@@ -183,7 +183,7 @@ mod tests {
                 .store(store())
                 .events(EventBus::new(32))
                 .build();
-        let audio_config = config.build_file_config(&worker);
+        let audio_config = config.build_file_config(&worker, None);
         assert!(audio_config.stream().bus.is_some());
     }
 
@@ -195,7 +195,7 @@ mod tests {
                 .store(store())
                 .events(EventBus::new(32))
                 .build();
-        let audio_config = config.build_hls_config(&worker).unwrap();
+        let audio_config = config.build_hls_config(&worker, None).unwrap();
         assert!(audio_config.stream().bus.is_some());
     }
 
@@ -215,7 +215,7 @@ mod tests {
                 .store(store())
                 .decoder(decoder)
                 .build();
-        let audio_config = config.build_file_config(&worker);
+        let audio_config = config.build_file_config(&worker, None);
 
         assert_eq!(
             audio_config
@@ -243,7 +243,7 @@ mod tests {
                 .store(store())
                 .decoder(decoder)
                 .build();
-        let audio_config = config.build_hls_config(&worker).unwrap();
+        let audio_config = config.build_hls_config(&worker, None).unwrap();
 
         assert_eq!(
             audio_config
@@ -303,7 +303,7 @@ mod tests {
                 .store(store())
                 .preferred_peak_bitrate(512_000.0)
                 .build();
-        let _audio_config = config.build_hls_config(&worker).unwrap();
+        let _audio_config = config.build_hls_config(&worker, None).unwrap();
     }
 
     #[kithara::test]
@@ -335,7 +335,7 @@ mod tests {
     fn file_hint_none_for_url_without_extension() {
         let worker = worker();
         let config = test_config("https://cdn-edge.zvq.me/track/streamhq?id=125475417").unwrap();
-        let audio_config = config.build_file_config(&worker);
+        let audio_config = config.build_file_config(&worker, None);
         assert_eq!(
             audio_config.hint(),
             None,
@@ -352,7 +352,7 @@ mod tests {
     fn file_hint_from_url_extension(#[case] url: &str, #[case] expected: Option<&str>) {
         let worker = worker();
         let config = test_config(url).unwrap();
-        let audio_config = config.build_file_config(&worker);
+        let audio_config = config.build_file_config(&worker, None);
         assert_eq!(
             audio_config.hint(),
             expected,

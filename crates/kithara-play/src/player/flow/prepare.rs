@@ -114,12 +114,12 @@ mod tests {
             prepared.consumer_wake_mode,
             ConsumerWakeMode::ImmediateOffRt
         );
-        let audio = prepared.build_file_config(player.worker());
+        let audio = prepared.build_file_config(player.worker(), None);
         assert_eq!(audio.consumer_wake_mode(), ConsumerWakeMode::ImmediateOffRt);
 
         let prepared = player.prepare_config(resource_config("https://example.com/live.m3u8"));
         let audio = prepared
-            .build_hls_config(player.worker())
+            .build_hls_config(player.worker(), None)
             .expect("valid HLS config");
         assert_eq!(audio.consumer_wake_mode(), ConsumerWakeMode::ImmediateOffRt);
     }

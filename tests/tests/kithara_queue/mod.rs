@@ -22,6 +22,7 @@ mod non_leading_track_eof;
 mod non_leading_track_failure;
 mod packaged_drm_seek;
 mod play_before_the_load_lands;
+mod playback_warms_its_own_analysis;
 mod playlist_stall_fails_load;
 mod rapid_scrub_decode_failure;
 mod select_after_eof;

@@ -347,7 +347,9 @@ rtsan-async FILTER="no_block": (_rtsan "suite_light" "no-block" FILTER ".config/
 
 # `rt_metrics` drives `process()` directly: decode error, underrun, eviction,
 # and the on-core seek re-base. `mix_tap` drives the post-limiter PCM sink.
-rtsan FILTER="offline_harness kithara_play::rt_metrics kithara_play::mix_tap": (_rtsan "suite_light" "apple-fused-src" FILTER)
+# `analysis_offer_is_realtime_safe` puts the analysis offer where a decode tick
+# makes it.
+rtsan FILTER="offline_harness kithara_play::rt_metrics kithara_play::mix_tap kithara_audio::analysis_offer_is_realtime_safe": (_rtsan "suite_light" "apple-fused-src" FILTER)
 
 rtsan-file FILTER="phase_continuity::file": (_rtsan "suite_stress" "apple-fused-src" FILTER)
 

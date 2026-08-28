@@ -119,6 +119,7 @@ impl<'a> Node<'a> for PlaybackNode<'a> {
                 buckets: &self.cache.wave,
                 beats: &self.ui.beat_marks,
                 downbeats: &self.ui.downbeat_marks,
+                unready: &self.ui.unready_ranges,
                 bpm: analysis_bpm(self.ui),
                 r#loop: None,
                 cues: &[],

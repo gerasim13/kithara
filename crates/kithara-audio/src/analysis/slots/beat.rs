@@ -1,12 +1,14 @@
+use std::num::NonZeroU32;
+
 use kithara_bufpool::SamplePool;
 use kithara_resampler::ResamplerBackend;
-use kithara_signal::{AudioChunk, AudioSpec};
 
 use crate::{
     analysis::{
         analyzer::{BeatAnalysisConfig, default_beat_detector},
         beat::{BeatDetector, BeatPass, BeatPassConfig, GridParams},
     },
+    coverage::FrameRange,
     waveform::BeatGrid,
 };
 
@@ -35,10 +37,10 @@ impl<B> Config<B>
 where
     B: ResamplerBackend,
 {
-    pub(crate) fn build(&self, spec: AudioSpec, sample_pool: &SamplePool) -> Slot<B> {
+    pub(crate) fn build(&self, rate: NonZeroU32, sample_pool: &SamplePool) -> Slot<B> {
         Slot(self.0.as_ref().map(|config| {
             let pass = BeatPassConfig::builder()
-                .source_rate(spec.sample_rate.get())
+                .source_rate(rate.get())
                 .params(config.params.clone())
                 .resampler(config.resampler.clone())
                 .sample_pool(sample_pool.clone())
@@ -47,11 +49,8 @@ where
         }))
     }
 
-    delegate::delegate! {
-        to self.0 {
-            #[call(is_none)]
-            pub(crate) const fn is_empty(&self) -> bool;
-        }
+    pub(crate) const fn is_empty(&self) -> bool {
+        self.0.is_none()
     }
 
     pub(crate) fn take_detector(&mut self, sample_pool: &SamplePool) -> Option<Detector> {
@@ -122,19 +121,25 @@ impl<B> Slot<B>
 where
     B: ResamplerBackend,
 {
-    pub(crate) fn finish(self, detector: Option<&mut Detector>) -> Option<BeatGrid> {
-        self.0
-            .zip(detector)
-            .and_then(|(analyzer, detector)| analyzer.finish(detector.as_mut()))
+    pub(crate) fn snapshot(
+        &mut self,
+        detector: Option<&mut Detector>,
+        ending: bool,
+        extent: Option<u64>,
+    ) -> Option<(BeatGrid, Vec<FrameRange>)> {
+        let (analyzer, detector) = (self.0.as_mut()?, detector?);
+        analyzer.snapshot(detector.as_mut(), ending, extent)
     }
 
-    pub(crate) const fn is_empty(&self) -> bool {
-        self.0.is_none()
-    }
-
-    pub(crate) fn push(&mut self, chunk: &AudioChunk, detector: Option<&mut Detector>) {
+    pub(crate) fn push(
+        &mut self,
+        pcm: &[f32],
+        channels: usize,
+        at: u64,
+        detector: Option<&mut Detector>,
+    ) {
         if let (Some(analyzer), Some(detector)) = (&mut self.0, detector) {
-            analyzer.push(chunk, detector.as_mut());
+            analyzer.push(pcm, channels, at, detector.as_mut());
         }
     }
 }

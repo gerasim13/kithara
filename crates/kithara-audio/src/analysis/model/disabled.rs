@@ -1,3 +1,4 @@
+#[cfg(feature = "analysis-beat")]
 use kithara_bufpool::SamplePool;
 use kithara_resampler::ResamplerBackend;
 

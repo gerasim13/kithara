@@ -1,3 +1,5 @@
+use std::num::NonZeroU32;
+
 use kithara_assets::{AssetResource, AssetSource, AssetStore, ResourceKey};
 use kithara_decode::DecodeError;
 use kithara_events::EventBus;
@@ -65,6 +67,11 @@ impl<B: Default> ResourceConfig<B> {
     /// Replace the parent cancel token for this resource.
     pub fn set_cancel(&mut self, cancel: CancelToken) {
         self.cancel = Some(cancel);
+    }
+
+    /// Replace the rate this resource's decoder resamples onto.
+    pub const fn set_host_sample_rate(&mut self, sample_rate: NonZeroU32) {
+        self.host_sample_rate = Some(sample_rate);
     }
 
     /// Source parsed for this resource.

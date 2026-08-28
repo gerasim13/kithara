@@ -1,4 +1,4 @@
-use kithara_audio::{AudioConfig, ResamplerBackend};
+use kithara_audio::{AudioConfig, AudioObserver, ResamplerBackend};
 use kithara_decode::DecodeError;
 use kithara_file::{FileConfig, FileSrc};
 use kithara_hls::HlsConfig;
@@ -32,6 +32,7 @@ where
     pub(crate) fn build_file_config(
         self,
         worker: &PlayWorker,
+        observer: Option<Box<dyn AudioObserver>>,
     ) -> AudioConfig<kithara_file::File, B> {
         let byte_pool = worker.byte_pool().clone();
         let (file_src, derived_hint) = match self.src {
@@ -71,6 +72,7 @@ where
             .maybe_cancel(self.cancel.clone())
             .maybe_hint(extension)
             .maybe_host_sample_rate(self.host_sample_rate)
+            .maybe_observer(observer)
             .preload_chunks(self.preload_chunks)
             .decoder(self.decoder)
             .consumer_wake_mode(self.consumer_wake_mode)
@@ -81,6 +83,7 @@ where
     pub(crate) fn build_hls_config(
         self,
         worker: &PlayWorker,
+        observer: Option<Box<dyn AudioObserver>>,
     ) -> Result<AudioConfig<kithara_hls::Hls, B>, DecodeError> {
         let byte_pool = worker.byte_pool().clone();
         let url = match self.src {
@@ -109,6 +112,7 @@ where
             .maybe_cancel(self.cancel.clone())
             .maybe_hint(self.hint)
             .maybe_host_sample_rate(self.host_sample_rate)
+            .maybe_observer(observer)
             .preload_chunks(self.preload_chunks)
             .decoder(self.decoder)
             .consumer_wake_mode(self.consumer_wake_mode)

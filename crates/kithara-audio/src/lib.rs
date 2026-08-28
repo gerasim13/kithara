@@ -13,6 +13,7 @@
 pub mod analysis;
 mod audio;
 mod blob;
+mod coverage;
 #[cfg(any(test, feature = "mock"))]
 pub mod mock;
 mod pipeline;
@@ -23,6 +24,7 @@ mod waveform;
 
 pub use audio::{Audio, PreparedAudio, SeekHandle};
 pub use blob::frame::BlobError;
+pub use coverage::{Coverage, FrameRange};
 #[cfg(feature = "resample-glide")]
 pub use kithara_resampler::glide::{GlideBackend, GlideConfig, GlideInterpolation};
 #[cfg(feature = "resample-rubato")]
@@ -39,9 +41,9 @@ pub use producer::PreloadGate;
 #[doc(hidden)]
 pub use producer::{PreparedAudioLane, ProducerPort};
 pub use traits::{
-    AudioControl, AudioObserveError, AudioObserver, AudioRead, AudioReader, AudioSession,
-    AudioSource, ChunkOutcome, DecodeError, DecodeResult, PendingReason, ReadOutcome, SeekBegin,
-    SeekOutcome, SourceDiscontinuity,
+    AudioControl, AudioObserveError, AudioObserver, AudioObserverRelay, AudioObserverSlot,
+    AudioRead, AudioReader, AudioSession, AudioSource, ChunkOutcome, DecodeError, DecodeResult,
+    PendingReason, ReadOutcome, SeekBegin, SeekOutcome, SourceDiscontinuity,
 };
 #[cfg(feature = "analysis-waveform")]
 pub use waveform::WaveformAnalyzer;

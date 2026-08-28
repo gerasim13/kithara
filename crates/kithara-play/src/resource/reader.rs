@@ -1,7 +1,9 @@
 use std::num::NonZeroU32;
 
 use delegate::delegate;
-use kithara_audio::{AudioReader, ChunkOutcome, ReadOutcome, ResamplerBackend, SeekOutcome};
+use kithara_audio::{
+    AudioObserver, AudioReader, ChunkOutcome, ReadOutcome, ResamplerBackend, SeekOutcome,
+};
 use kithara_decode::{DecodeError, DecodeResult, TrackMetadata};
 use kithara_events::EventBus;
 use kithara_platform::{CancelToken, sync::Arc, time::Duration};
@@ -141,6 +143,31 @@ impl Resource {
     where
         B: Default + ResamplerBackend,
     {
+        Self::open(config, None).await
+    }
+
+    /// Create a resource with a bounded observer of decoded audio attached.
+    ///
+    /// This is a narrow cross-crate composition seam used by queue-owned
+    /// orchestration. The ordinary resource API remains [`Self::new`].
+    #[doc(hidden)]
+    pub async fn new_observed<B>(
+        config: ResourceConfig<B>,
+        observer: Box<dyn AudioObserver>,
+    ) -> DecodeResult<Self>
+    where
+        B: Default + ResamplerBackend,
+    {
+        Self::open(config, Some(observer)).await
+    }
+
+    async fn open<B>(
+        config: ResourceConfig<B>,
+        observer: Option<Box<dyn AudioObserver>>,
+    ) -> DecodeResult<Self>
+    where
+        B: Default + ResamplerBackend,
+    {
         let src: Arc<str> = Arc::from(config.src.to_string());
         let source_type = SourceType::detect(&config.src)?;
         let worker = config.worker.clone().ok_or(DecodeError::InvalidData {
@@ -153,7 +180,7 @@ impl Resource {
         let cancel = config.cancel.clone();
         let mut resource = match source_type {
             SourceType::RemoteFile(_) | SourceType::LocalFile(_) => {
-                let audio_config = config.build_file_config(&worker);
+                let audio_config = config.build_file_config(&worker, observer);
                 let track = TrackConfig::for_audio(audio_config)
                     .maybe_engine_load(engine_load)
                     .warp(WarpConfig::builder().stretch(Arc::clone(&stretch)).build())
@@ -161,7 +188,7 @@ impl Resource {
                 Self::from_stream_audio(track, src, &worker).await?
             }
             SourceType::HlsStream(_) => {
-                let audio_config = config.build_hls_config(&worker)?;
+                let audio_config = config.build_hls_config(&worker, observer)?;
                 let track = TrackConfig::for_audio(audio_config)
                     .maybe_engine_load(engine_load)
                     .warp(WarpConfig::builder().stretch(Arc::clone(&stretch)).build())

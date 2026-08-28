@@ -149,6 +149,9 @@ impl PlayerControl {
             /// Current live playback rate.
             #[must_use]
             pub fn rate(&self) -> f32;
+            /// Rate the player's master bus runs at.
+            #[must_use]
+            pub fn sample_rate(&self) -> u32;
             /// Configured default playback rate.
             #[must_use]
             pub fn default_rate(&self) -> f32;

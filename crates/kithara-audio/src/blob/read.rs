@@ -1,7 +1,3 @@
-use std::mem::size_of;
-
-use kithara_platform::sync::Arc;
-
 use super::BlobError;
 
 /// Little-endian cursor reader over a byte slice.
@@ -39,27 +35,6 @@ impl<'a> Reader<'a> {
 
     pub(crate) fn read_f64(&mut self) -> Result<f64, BlobError> {
         Ok(f64::from_le_bytes(self.read_array::<8>()?))
-    }
-
-    /// Read a length-prefixed immutable source-frame list.
-    pub(crate) fn read_frames(&mut self) -> Result<Arc<[u64]>, BlobError> {
-        let count = self.read_len()?;
-        let byte_len = count
-            .checked_mul(size_of::<u64>())
-            .ok_or(BlobError::Corrupt)?;
-        let end = self
-            .cursor
-            .checked_add(byte_len)
-            .ok_or(BlobError::Corrupt)?;
-        let bytes = self.bytes.get(self.cursor..end).ok_or(BlobError::Corrupt)?;
-        self.cursor = end;
-        Ok(Arc::from_iter(bytes.chunks_exact(size_of::<u64>()).map(
-            |chunk| {
-                let mut value = [0; size_of::<u64>()];
-                value.copy_from_slice(chunk);
-                u64::from_le_bytes(value)
-            },
-        )))
     }
 
     /// Read a `u64` length prefix as a `usize`.

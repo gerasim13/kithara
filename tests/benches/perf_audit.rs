@@ -211,6 +211,7 @@ fn bench_beat_analysis(c: &mut Criterion) {
     let frames = usize::try_from(Consts::SAMPLE_RATE)
         .unwrap_or_else(|_| panic!("bench sample rate exceeds usize"))
         * Consts::ANALYSIS_SECONDS;
+    let extent = u64::try_from(frames).unwrap_or_else(|_| panic!("bench frame count exceeds u64"));
     let pcm = make_pcm(frames);
     let pool = SamplePool::default();
 
@@ -224,8 +225,8 @@ fn bench_beat_analysis(c: &mut Criterion) {
         b.iter(|| {
             let mut analyzer =
                 WaveformAnalyzer::new(Consts::SAMPLE_RATE, AnalysisParams::default(), &pool);
-            analyzer.push_interleaved(black_box(&pcm), Consts::CHANNELS);
-            black_box(analyzer.finalize(512));
+            analyzer.push(black_box(&pcm), Consts::CHANNELS, 0);
+            black_box(analyzer.snapshot(512, Some(extent)));
         });
     });
 

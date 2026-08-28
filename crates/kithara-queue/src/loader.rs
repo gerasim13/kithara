@@ -1,6 +1,7 @@
 use std::num::NonZeroUsize;
 
 use kithara_assets::AssetStore;
+use kithara_audio::AudioObserver;
 use kithara_events::{
     DownloaderEvent, Envelope, Event, EventBus, ScopeLabel, TrackId, TrackStatus,
 };
@@ -49,6 +50,11 @@ impl Loader {
             prefetch_lane: Arc::new(Semaphore::new(max_concurrent_loads.get())),
             interactive_lane: Arc::new(Semaphore::new(1)),
         }
+    }
+
+    /// Attach `observer` through `id`'s live-or-pending decoder relay.
+    pub(crate) fn attach_observer<O: AudioObserver>(&self, id: TrackId, observer: O) {
+        self.tracks.attach_observer(id, Box::new(observer));
     }
 
     fn attempt_config(
@@ -100,13 +106,15 @@ impl Loader {
         self.player.prepare_config(config).map_err(QueueError::from)
     }
 
-    /// Load a [`Resource`] from a prepared config. Caller is responsible
+    /// Load a [`Resource`] from a prepared config, attaching the observer
+    /// left for this track when there is one. Caller is responsible
     /// for applying it via `PlayerImpl::replace_item` and emitting [`TrackStatus::Loaded`].
     async fn load(&self, id: TrackId, config: ResourceConfig) -> Result<Resource, QueueError> {
         let slow_watcher =
             Self::watch_for_slow_status(id, config.bus().cloned(), Arc::clone(&self.tracks));
+        let observer = self.tracks.observer_relay(id);
         let resource_fut = async {
-            Resource::new(config)
+            Resource::new_observed(config, Box::new(observer))
                 .await
                 .map_err(|e| QueueError::Resource(format!("{e}")))
         };

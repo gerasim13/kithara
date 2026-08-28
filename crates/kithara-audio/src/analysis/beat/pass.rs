@@ -1,12 +1,12 @@
 use kithara_resampler::ResamplerBackend;
-use kithara_signal::AudioChunk;
 use tracing::warn;
 
 use super::{
     analyzer::{BeatAnalyzer, BeatPassConfig},
     detector::BeatDetector,
+    grid::extend_over,
 };
-use crate::waveform::BeatGrid;
+use crate::{coverage::FrameRange, waveform::BeatGrid};
 
 pub(crate) struct BeatPass<B>
 where
@@ -25,19 +25,35 @@ where
         }
     }
 
-    pub(crate) fn finish(self, detector: &mut dyn BeatDetector) -> Option<BeatGrid> {
-        match self.analyzer.finalize(detector) {
-            Ok(grid) => Some(grid),
+    pub(crate) fn push(
+        &mut self,
+        pcm: &[f32],
+        channels: usize,
+        at: u64,
+        detector: &mut dyn BeatDetector,
+    ) {
+        self.analyzer.push_interleaved(pcm, channels, at, detector);
+    }
+
+    pub(crate) fn snapshot(
+        &mut self,
+        detector: &mut dyn BeatDetector,
+        ending: bool,
+        extent: Option<u64>,
+    ) -> Option<(BeatGrid, Vec<FrameRange>)> {
+        match self.analyzer.snapshot(detector, ending) {
+            Ok(grid) => {
+                let rate = self.analyzer.source_rate();
+                let grid = match extent {
+                    Some(extent) => extend_over(grid, extent, rate),
+                    None => grid,
+                };
+                Some((grid, self.analyzer.unanalysed()))
+            }
             Err(e) => {
                 warn!(?e, "beat analysis failed; leaving the beat slot empty");
                 None
             }
         }
-    }
-
-    pub(crate) fn push(&mut self, chunk: &AudioChunk, detector: &mut dyn BeatDetector) {
-        let channels = usize::from(chunk.spec().channels.max(1));
-        self.analyzer
-            .push_interleaved(&chunk.samples[..], channels, detector);
     }
 }

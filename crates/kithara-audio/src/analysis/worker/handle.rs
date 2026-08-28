@@ -1,4 +1,7 @@
-use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::{
+    num::NonZeroU32,
+    panic::{AssertUnwindSafe, catch_unwind},
+};
 
 use kithara_platform::{
     CancelToken,
@@ -13,7 +16,10 @@ use tracing::warn;
 use super::{AnalysisNode, AnalysisObserver, AnalysisStep, Job};
 use crate::{
     AudioReader,
-    analysis::analyzer::{AnalyzerBuilder, TrackAnalysis},
+    analysis::{
+        analyzer::{AnalysisFingerprint, AnalysisToken, AnalyzerBuilder, TrackAnalysis},
+        producer::{AnalysisProducer, ring},
+    },
     runtime::{WakeSignal, wake::ThreadWake},
 };
 
@@ -21,10 +27,24 @@ pub struct AnalysisWorker<B>
 where
     B: ResamplerBackend,
 {
+    active: bool,
+    fingerprint: AnalysisFingerprint,
     job_scope: JobScope,
     runner: AnalysisRunner,
     jobs: mpsc::Sender<Job>,
     _backend: std::marker::PhantomData<B>,
+}
+
+/// An analysis pass opened before either decoder starts.
+///
+/// Opening creates the bounded producer transport synchronously. The app can
+/// therefore attach the producer to playback before it asynchronously opens
+/// the pass's fallback reader, then hand this value back to [`AnalysisWorker::start`].
+pub struct AnalysisPass {
+    ingest: ring::Reader,
+    rate: NonZeroU32,
+    token: AnalysisToken,
+    tx: watch::Sender<Option<TrackAnalysis>>,
 }
 
 struct JobScope(CancelToken);
@@ -112,8 +132,12 @@ where
         let cancel = parent.child();
         let job_scope = JobScope(cancel.child());
         let (jobs, receiver) = mpsc::channel();
-        let runner = AnalysisRunner::start(AnalysisNode::new(builder, receiver), cancel);
+        let node = AnalysisNode::new(builder, receiver);
+        let (fingerprint, active) = node.effective();
+        let runner = AnalysisRunner::start(node, cancel);
         Self {
+            active,
+            fingerprint,
             job_scope,
             runner,
             jobs,
@@ -121,18 +145,82 @@ where
         }
     }
 
+    /// Whether detector initialization left at least one effective analyzer.
+    #[must_use]
+    pub const fn is_active(&self) -> bool {
+        self.active
+    }
+
+    /// Identity of the analyzers that survived worker initialization.
+    #[must_use]
+    pub const fn fingerprint(&self) -> &AnalysisFingerprint {
+        &self.fingerprint
+    }
+
+    /// Open a pass and its bounded playback producer without waiting for the
+    /// fallback reader to open or preload.
+    #[must_use]
+    pub fn open(
+        &self,
+        token: AnalysisToken,
+        rate: NonZeroU32,
+    ) -> (
+        watch::Receiver<Option<TrackAnalysis>>,
+        AnalysisProducer,
+        AnalysisPass,
+    ) {
+        let (tx, rx) = watch::channel(None);
+        let (writer, ingest) = ring::open_for(rate);
+        let producer = AnalysisProducer::new(writer, rate, token.clone());
+        let pass = AnalysisPass {
+            ingest,
+            rate,
+            token,
+            tx,
+        };
+        (rx, producer, pass)
+    }
+
+    /// Start an already-open pass with its fallback reader.
+    pub fn start(&self, pass: AnalysisPass, reader: Box<dyn AudioReader>, cancel: CancelToken) {
+        let AnalysisPass {
+            ingest,
+            rate,
+            token,
+            tx,
+        } = pass;
+        self.submit(Job {
+            reader,
+            cancel,
+            ingest,
+            rate,
+            token,
+            tx,
+        });
+    }
+
+    /// Open a pass on `rate`, the axis its ranges are measured on; a chunk on
+    /// another axis is refused. Returns where its snapshots arrive and the
+    /// producer another component may contribute decoded ranges through.
+    #[must_use]
     pub fn analyze(
         &self,
         reader: Box<dyn AudioReader>,
         cancel: CancelToken,
-    ) -> watch::Receiver<Option<TrackAnalysis>> {
-        let (tx, rx) = watch::channel(None);
-        if self.jobs.send(Job { reader, cancel, tx }).is_err() {
+        token: AnalysisToken,
+        rate: NonZeroU32,
+    ) -> (watch::Receiver<Option<TrackAnalysis>>, AnalysisProducer) {
+        let (rx, producer, pass) = self.open(token, rate);
+        self.start(pass, reader, cancel);
+        (rx, producer)
+    }
+
+    fn submit(&self, job: Job) {
+        if self.jobs.send(job).is_err() {
             warn!("analysis worker stopped; job dropped");
         } else {
             self.runner.wake();
         }
-        rx
     }
 
     #[must_use]
@@ -147,5 +235,27 @@ where
 {
     fn drop(&mut self) {
         self.runner.shutdown();
+    }
+}
+
+#[cfg(all(test, feature = "analysis-beat", not(feature = "beat-nn")))]
+mod tests {
+    use kithara_platform::CancelToken;
+    use kithara_test_utils::kithara;
+
+    use super::AnalysisWorker;
+    use crate::{NoResamplerBackend, analysis::AnalyzerBuilder};
+
+    #[kithara::test(native, flash(false))]
+    fn beat_without_a_detector_is_not_an_effective_analyzer() {
+        let cancel = CancelToken::never();
+        let worker = AnalysisWorker::new(
+            &cancel,
+            AnalyzerBuilder::<NoResamplerBackend>::default().with_beat(),
+        );
+
+        assert!(!worker.is_active());
+        assert_eq!(worker.fingerprint().beat(), None);
+        assert_eq!(worker.fingerprint().waveform(), None);
     }
 }
