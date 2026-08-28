@@ -50,20 +50,8 @@ impl QueueControl {
             let nav = self.lock_navigation();
             (nav.current_index(), nav.repeat_mode())
         };
-        let mut indices = Vec::with_capacity(len);
-        match (current, repeat) {
-            (None, _) => indices.extend(0..len),
-            (Some(idx), RepeatMode::One) => indices.push(idx),
-            (Some(idx), RepeatMode::Off) => {
-                indices.extend(idx.saturating_add(1)..len);
-            }
-            (Some(idx), RepeatMode::All) => {
-                indices.extend(idx.saturating_add(1)..len);
-                indices.extend(0..=idx);
-            }
-        }
         let tracks = self.lock_tracks();
-        indices.into_iter().find_map(|idx| {
+        let selectable = |idx: usize| {
             let record = tracks.get(idx)?;
             if matches!(record.status, TrackStatus::Cancelled) {
                 debug!(
@@ -74,7 +62,15 @@ impl QueueControl {
             } else {
                 Some(record.entry())
             }
-        })
+        };
+        match (current, repeat) {
+            (None, _) => (0..len).find_map(selectable),
+            (Some(idx), RepeatMode::One) => std::iter::once(idx).find_map(selectable),
+            (Some(idx), RepeatMode::Off) => (idx.saturating_add(1)..len).find_map(selectable),
+            (Some(idx), RepeatMode::All) => (idx.saturating_add(1)..len)
+                .chain(0..=idx)
+                .find_map(selectable),
+        }
     }
 
     /// Go back to the previous track. Returns the newly selected id, or

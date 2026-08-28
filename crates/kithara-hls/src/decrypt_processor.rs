@@ -11,7 +11,7 @@ pub(crate) fn as_process_ctx(ctx: DecryptContext) -> ProcessCtx {
 
 /// AES-128-CBC [`ResourceProcessor`] over a [`DecryptContext`].
 pub(crate) struct DecryptProcessor {
-    identity: Box<[u8]>,
+    identity: [u8; 32],
     ctx: DecryptContext,
 }
 
@@ -27,13 +27,11 @@ impl fmt::Debug for DecryptProcessor {
 impl DecryptProcessor {
     /// Build a processor whose identity is the `key||iv` bytes of `ctx`.
     pub(crate) fn new(ctx: DecryptContext) -> Self {
-        let mut identity = Vec::with_capacity(ctx.key.len() + ctx.iv.len());
-        identity.extend_from_slice(&ctx.key);
-        identity.extend_from_slice(&ctx.iv);
-        Self {
-            ctx,
-            identity: identity.into_boxed_slice(),
-        }
+        let mut identity = [0; 32];
+        let (key, iv) = identity.split_at_mut(ctx.key.len());
+        key.copy_from_slice(&ctx.key);
+        iv.copy_from_slice(&ctx.iv);
+        Self { identity, ctx }
     }
 }
 
@@ -76,5 +74,15 @@ mod tests {
         assert!(dbg.contains("<redacted>"), "expected redaction, got: {dbg}");
         assert!(!dbg.contains("171"), "leaked key byte 0xAB (171): {dbg}");
         assert!(!dbg.contains("205"), "leaked iv byte 0xCD (205): {dbg}");
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn identity_is_key_followed_by_iv() {
+        let key = [0xAB; 16];
+        let iv = [0xCD; 16];
+        let processor = DecryptProcessor::new(DecryptContext::new(key, iv));
+
+        assert_eq!(&processor.identity()[..key.len()], &key);
+        assert_eq!(&processor.identity()[key.len()..], &iv);
     }
 }
