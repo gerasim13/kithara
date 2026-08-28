@@ -1,6 +1,46 @@
+# A suite is one production file and the unit tests that live in it.
+#
+# That shape is the whole point: pointed at the workspace, cargo-mutants spends
+# days running three thousand tests per mutant and reports nothing, because a
+# mutant that survives one file's own tests is drowned by the integration suite
+# that never exercised it. Each suite here names the file, the package, and a
+# nextest filterset over that file's `mod tests` - so a surviving mutant is a
+# statement about the tests written next to the code it mutated.
+#
+# What earns a suite: dense decision logic - arithmetic, ordering, state
+# transitions, thresholds - with its own unit tests. Plumbing and glue do not.
+
 [[suite]]
 name = "crossfader"
 package = "kithara-play"
 files = ["crates/kithara-play/src/api/mix.rs"]
 test_filters = ["test(/api::mix::tests::/)"]
+timeout_seconds = 120
+
+# Throughput estimation: sample windows, minimum durations, chunk filtering and
+# the cold-start seed are all thresholds, and a threshold is what mutation
+# testing is best at.
+[[suite]]
+name = "throughput-estimator"
+package = "kithara-abr"
+files = ["crates/kithara-abr/src/estimator.rs"]
+test_filters = ["test(/estimator::tests::/)"]
+timeout_seconds = 120
+
+# The seek epoch is the ordering contract the whole read path is judged by:
+# which reads are stale, which completion belongs to which seek, when a flush
+# has finished. An off-by-one here is a silent wrong answer, not a crash.
+[[suite]]
+name = "seek-state"
+package = "kithara-stream"
+files = ["crates/kithara-stream/src/seek_state.rs"]
+test_filters = ["test(/seek_state::tests::/)"]
+timeout_seconds = 180
+
+# Transition identity decides which of two sources a late event belongs to.
+[[suite]]
+name = "transition"
+package = "kithara-stream"
+files = ["crates/kithara-stream/src/transition.rs"]
+test_filters = ["test(/transition::tests::/)"]
 timeout_seconds = 120
