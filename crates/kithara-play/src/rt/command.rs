@@ -1,5 +1,6 @@
 use std::sync::atomic::Ordering;
 
+use kithara_events::TrackId;
 use kithara_platform::sync::Arc;
 use ringbuf::traits::{Consumer, Producer};
 use smallvec::SmallVec;
@@ -172,7 +173,7 @@ impl PlayerNodeProcessor {
         }
     }
 
-    fn load_track(&mut self, resource: Box<PlayerResource>, item_id: Option<Arc<str>>) {
+    fn load_track(&mut self, resource: Box<PlayerResource>, item_id: TrackId) {
         let src = Arc::clone(resource.src());
         self.unload_track(&src);
         self.evict_tracks_if_needed();
@@ -181,7 +182,7 @@ impl PlayerNodeProcessor {
 
         let track = PlayerTrack::builder()
             .sample_rate(self.sample_rate)
-            .maybe_item_id(item_id)
+            .item_id(item_id)
             .fade_duration(self.crossfade.duration)
             .prefetch_duration(self.prefetch_duration)
             .fade_curve(self.crossfade.fade_curve())

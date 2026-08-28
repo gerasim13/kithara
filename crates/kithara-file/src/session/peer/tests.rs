@@ -25,6 +25,7 @@ use crate::{
 mod completion;
 mod metadata;
 mod ownership;
+mod seek;
 
 fn test_key(store: &AssetStore) -> ResourceKey {
     let source = AssetSource::Remote {

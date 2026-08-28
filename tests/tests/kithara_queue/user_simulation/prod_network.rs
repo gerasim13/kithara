@@ -13,7 +13,7 @@ use kithara::{
     assets::{AssetStore, FlushHub, FlushPolicy, StorageBackend},
     bufpool::{BytePool, PcmPool},
     decode::DecoderBackend,
-    events::AbrMode,
+    events::{AbrMode, TrackId},
     net::{HttpClient, NetOptions},
     platform::{
         CancelToken,

@@ -176,7 +176,13 @@ independent of scheduling: runs are deterministic and every timed wait collapses
 - `thread::spawn`, `thread::spawn_named`, and platform `task::spawn_blocking` reset the credit on
   entry (a reused pool thread must not inherit a stale credit) and own the exit decrement via an
   RAII participant after the closure returns *or unwinds*. A consumer running a wrapped wait on a
-  blocking pool thread must spawn through platform `task::spawn_blocking`.
+  blocking pool thread must spawn through platform `task::spawn_blocking`. Both spawn forms
+  reserve the child's slot synchronously on the spawning thread, before the OS thread exists.
+- A test body that never runs a wrapped wait stays `None` — invisible to the engine. Every peer a
+  timed waiter depends on must therefore be spawned (its slot reserved) BEFORE the waiter can
+  park: a waiter parked in a spawn→spawn gap is the only credit, and the clock jumps its whole
+  backstop before the peer exists (`tests/tests/loom.rs`,
+  `thread_gate_refreshes_waiter_after_thread_handoff`).
 - A wrapped wait does register-deadline (or a deadline-less entry for an untimed condvar wait),
   wait accounting, and advance-rule evaluation in ONE critical section under the engine lock,
   closing the wake-to-re-register race. Lock order is always domain → engine; wakes fire only after

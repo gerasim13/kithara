@@ -263,7 +263,7 @@ impl Queue {
             .unwrap_or_else(PoisonError::into_inner)
             .remove(&id);
         let resource = cached?;
-        self.player.replace_item(index, resource);
+        self.player.replace_item(index, resource, id);
         self.set_status(id, TrackStatus::Loaded);
         let was_playing = !self.is_paused();
         let crossfade = transition.crossfade_seconds(self.player.crossfade_duration());
@@ -354,7 +354,7 @@ impl Queue {
                 return;
             };
 
-            player.replace_item(index, resource);
+            player.replace_item(index, resource, id);
             tracks.set_status(id, TrackStatus::Loaded);
             if tracks.lock().get(index).is_some_and(|entry| entry.id == id) {
                 bus.publish(QueueEvent::NextTrackReady { id, index });

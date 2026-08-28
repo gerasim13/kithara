@@ -4,6 +4,7 @@ use std::num::NonZeroU32;
 
 use kithara::{
     decode::{GaplessMode, SilenceTrimParams},
+    events::TrackId,
     platform::time::{self, Duration, Instant},
     play::{PlayerEvent, Resource, ResourceConfig},
 };
@@ -274,7 +275,9 @@ async fn create_gapless_hls_resource(
 fn load_queue<const N: usize>(harness: &OfflinePlayerHarness, items: [Resource; N]) {
     harness.player().reserve_slots(items.len());
     for (index, resource) in items.into_iter().enumerate() {
-        harness.player().replace_item(index, resource);
+        harness
+            .player()
+            .replace_item(index, resource, TrackId::allocate());
     }
     harness
         .player()

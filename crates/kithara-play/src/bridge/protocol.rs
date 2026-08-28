@@ -1,5 +1,6 @@
 use std::fmt;
 
+use kithara_events::TrackId;
 use kithara_platform::sync::Arc;
 
 use crate::rt::track::PlayerResource;
@@ -9,7 +10,7 @@ pub enum PlayerCmd {
     /// Load a track into the processor arena.
     LoadTrack {
         resource: Box<PlayerResource>,
-        item_id: Option<Arc<str>>,
+        item_id: TrackId,
     },
     /// Unload a track by its source identifier.
     UnloadTrack { src: Arc<str> },
@@ -115,15 +116,12 @@ pub enum PlayerNotification {
     /// A track was removed from the processor arena.
     Unloaded { src: Arc<str> },
     /// A track started audible playback (fade-in completed or `play()`).
-    PlaybackStarted {
-        src: Arc<str>,
-        item_id: Option<Arc<str>>,
-    },
+    PlaybackStarted { src: Arc<str>, item_id: TrackId },
     /// A track stopped playback. `src` and `item_id` are read by the
-    /// player to construct `PlayerEvent::ItemDidPlayToEnd`.
+    /// player to construct the `ItemRole` on `ItemDidPlayToEnd`.
     PlaybackStopped {
         src: Arc<str>,
-        item_id: Option<Arc<str>>,
+        item_id: TrackId,
         reason: TrackPlaybackStopReason,
         /// The slot seek epoch the track sat at when this stop was minted.
         /// An `Eof` stop is delivered only while this is still the published
@@ -185,7 +183,7 @@ mod tests {
     #[case(
         PlayerNotification::PlaybackStopped {
             src: Arc::from("ended.mp3"),
-            item_id: Some(Arc::from("item-1")),
+            item_id: TrackId::allocate(),
             reason: TrackPlaybackStopReason::Eof,
             seek_epoch: 0,
         },
@@ -200,7 +198,7 @@ mod tests {
     fn notification_clone() {
         let n = PlayerNotification::PlaybackStopped {
             src: Arc::from("ended.mp3"),
-            item_id: None,
+            item_id: TrackId::allocate(),
             reason: TrackPlaybackStopReason::Stop,
             seek_epoch: 0,
         };

@@ -32,6 +32,13 @@ pub type OnCompleteFn = Box<dyn FnOnce(u64, Option<&Headers>, Option<&NetError>)
 /// same point that publishes [`DownloaderEvent::LoadSlow`](kithara_events::DownloaderEvent::LoadSlow).
 pub type OnSlowFn = Box<dyn FnOnce() + Send>;
 
+/// Per-command live demand probe: does a reader currently block on this
+/// command's bytes? The scheduler re-polls it on every loop pass and
+/// treats `true` as [`RequestPriority::High`]. It runs on the download
+/// loop, so it must be a lock-free read and must not re-enter the
+/// downloader.
+pub type DemandFn = Box<dyn Fn() -> bool + Send>;
+
 /// Optional response-header validator for a single `FetchCmd`.
 ///
 /// Invoked with the response headers after a successful HTTP response.
@@ -69,6 +76,8 @@ pub struct FetchCmd {
     pub(crate) on_slow: Option<OnSlowFn>,
     /// Scheduling priority for proactive peer fetches.
     pub(crate) priority: Option<RequestPriority>,
+    /// Live demand probe; `None` when the peer cannot tell.
+    pub(crate) demand: Option<DemandFn>,
     /// Optional byte range (HTTP Range request).
     pub(crate) range: Option<RangeSpec>,
     /// Optional per-request response validator.
@@ -103,6 +112,12 @@ impl FetchCmd {
     #[must_use]
     pub const fn priority(&self) -> Option<RequestPriority> {
         self.priority
+    }
+
+    /// Whether a reader currently blocks on this command's bytes, per the
+    /// live [`DemandFn`] probe. `false` when no probe was attached.
+    pub(crate) fn is_demanded(&self) -> bool {
+        self.demand.as_ref().is_some_and(|probe| probe())
     }
 
     /// URL this command fetches.

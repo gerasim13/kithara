@@ -110,6 +110,17 @@ pub(super) struct InternalCmd {
     pub(super) response: ResponseTarget,
 }
 
+impl InternalCmd {
+    /// Scheduling priority as of *now*: the stamped priority, escalated to
+    /// `High` while the live demand probe reports a blocked reader.
+    pub(super) fn effective_priority(&self) -> RequestPriority {
+        if self.cmd.is_demanded() {
+            return RequestPriority::High;
+        }
+        self.priority
+    }
+}
+
 /// Shared per-peer state. Cancel fires when the last clone is dropped.
 #[derive(bon::Builder)]
 pub(super) struct PeerInner {

@@ -82,7 +82,7 @@ impl OfflinePlayer {
             .cmd_tx
             .try_push(PlayerCmd::LoadTrack {
                 resource: Box::new(pr),
-                item_id: None,
+                item_id: kithara::events::TrackId::allocate(),
             })
             .expect("BUG: send LoadTrack");
         self.control

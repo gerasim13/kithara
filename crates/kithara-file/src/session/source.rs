@@ -6,9 +6,10 @@ use kithara_events::{EventBus, TotalBytesSource};
 use kithara_platform::{CancelToken, sync::Arc, time::Duration};
 use kithara_storage::{ResourceStatus, StorageError, WaitOutcome};
 use kithara_stream::{
-    Activity, AudioCodec, MediaInfo, NotReadyCause, PendingReason, PlayheadRead, PlayheadWrite,
-    ReadOutcome, SeekControl, SeekObserve, SegmentDescriptor, SourceError as StreamSourceError,
-    SourcePhase, StreamError, StreamResult, WorkerWake, dl::PeerHandle,
+    Activity, AudioCodec, ByteMap, MediaInfo, NotReadyCause, PendingReason, PlayheadRead,
+    PlayheadWrite, ReadOutcome, SeekControl, SeekObserve, SegmentDescriptor,
+    SourceError as StreamSourceError, SourcePhase, SourceProbe, StreamError, StreamResult,
+    WorkerWake, dl::PeerHandle,
 };
 use tracing::trace;
 use url::Url;
@@ -82,12 +83,6 @@ impl FileSource {
         }
     }
 
-    fn known_len(&self) -> Option<u64> {
-        self.coord
-            .total_bytes()
-            .or_else(|| self.inner.asset.reader.len())
-    }
-
     /// Create a source for a local/cached file (no downloads needed).
     ///
     /// `cancel` is a child of the file config master so a track drop
@@ -132,16 +127,6 @@ impl FileSource {
             inner,
             peer_handle: None,
         }
-    }
-
-    fn readable_part(&self, range: Range<u64>) -> Option<Range<u64>> {
-        let Some(total) = self.known_len() else {
-            return Some(range);
-        };
-        if total > 0 && range.start >= total {
-            return None;
-        }
-        Some(range.start..range.end.min(total))
     }
 
     /// Pin the Downloader peer registration to this source's lifetime.
@@ -198,51 +183,109 @@ impl FileSource {
     }
 }
 
-impl kithara_stream::Source for FileSource {
-    fn byte_map(&self) -> Option<Arc<dyn kithara_stream::ByteMap>> {
-        self.inner.segment_index.get()?;
-        Some(Arc::new(FileByteMap {
-            inner: Arc::clone(&self.inner),
-        }))
+/// Phase snapshots live on the shared inner: it owns the terminal state and
+/// the cached-range view, and (per its own contract) is Mutex-free — so the
+/// narrow [`SourceProbe`] handle the forbid-blocking audio core polls without
+/// the stream's control-plane lock answers from here.
+impl FileInner {
+    pub(crate) fn phase(&self) -> SourcePhase {
+        let pos = self.source.coord.position();
+        self.phase_at(pos..pos.saturating_add(1))
     }
 
-    fn len(&self) -> Option<u64> {
-        self.known_len()
+    pub(crate) fn phase_at(&self, range: Range<u64>) -> SourcePhase {
+        if self.source.cancel.is_cancelled() {
+            return SourcePhase::Cancelled;
+        }
+        self.refresh_unmanaged_terminal();
+        if self.terminal_state() == FileTerminalState::Cancelled {
+            return SourcePhase::Cancelled;
+        }
+        let Some(readable) = self.readable_part(range) else {
+            return match self.terminal_state() {
+                FileTerminalState::Committed => SourcePhase::Eof,
+                FileTerminalState::Cancelled => SourcePhase::Cancelled,
+                FileTerminalState::Active | FileTerminalState::Failed => SourcePhase::Waiting,
+            };
+        };
+        let contains = readable.is_empty() || self.asset.reader.contains_range(readable);
+        if contains {
+            return SourcePhase::Ready;
+        }
+
+        if self.source.coord.seek_obs().is_flushing() {
+            return SourcePhase::Seeking;
+        }
+        SourcePhase::Waiting
+    }
+
+    pub(crate) fn known_len(&self) -> Option<u64> {
+        self.source
+            .coord
+            .total_bytes()
+            .or_else(|| self.asset.reader.len())
+    }
+
+    fn readable_part(&self, range: Range<u64>) -> Option<Range<u64>> {
+        let Some(total) = self.known_len() else {
+            return Some(range);
+        };
+        if total > 0 && range.start >= total {
+            return None;
+        }
+        Some(range.start..range.end.min(total))
+    }
+}
+
+/// Narrow byte-space handle over the shared inner. Wraps the `Arc` because
+/// vending the byte map needs an owning handle to the inner's lazy segment
+/// index; every answer comes from the inner's Mutex-free state.
+struct FileProbe {
+    inner: Arc<FileInner>,
+}
+
+/// Segment-map handle over the shared inner, vended once the lazy segment
+/// index exists — the one body behind `Source::byte_map` and
+/// `SourceProbe::byte_map`.
+fn file_byte_map(inner: &Arc<FileInner>) -> Option<Arc<dyn ByteMap>> {
+    inner.segment_index.get()?;
+    Some(Arc::new(FileByteMap {
+        inner: Arc::clone(inner),
+    }))
+}
+
+impl SourceProbe for FileProbe {
+    delegate::delegate! {
+        to self.inner {
+            fn phase(&self) -> SourcePhase;
+            fn phase_at(&self, range: Range<u64>) -> SourcePhase;
+            #[call(known_len)]
+            fn len(&self) -> Option<u64>;
+        }
+        to self.inner.source.coord {
+            fn position(&self) -> u64;
+            fn set_position(&self, pos: u64);
+        }
+    }
+
+    fn byte_map(&self) -> Option<Arc<dyn ByteMap>> {
+        file_byte_map(&self.inner)
+    }
+}
+
+impl kithara_stream::Source for FileSource {
+    fn byte_map(&self) -> Option<Arc<dyn ByteMap>> {
+        file_byte_map(&self.inner)
     }
 
     fn media_info(&self) -> Option<MediaInfo> {
         self.inner.content_type_info.get().cloned()
     }
 
-    fn phase(&self) -> SourcePhase {
-        let pos = self.coord.position();
-        self.phase_at(pos..pos.saturating_add(1))
-    }
-
-    fn phase_at(&self, range: Range<u64>) -> SourcePhase {
-        if self.inner.source.cancel.is_cancelled() {
-            return SourcePhase::Cancelled;
-        }
-        self.inner.refresh_unmanaged_terminal();
-        if self.inner.terminal_state() == FileTerminalState::Cancelled {
-            return SourcePhase::Cancelled;
-        }
-        let Some(readable) = self.readable_part(range) else {
-            return match self.inner.terminal_state() {
-                FileTerminalState::Committed => SourcePhase::Eof,
-                FileTerminalState::Cancelled => SourcePhase::Cancelled,
-                FileTerminalState::Active | FileTerminalState::Failed => SourcePhase::Waiting,
-            };
-        };
-        let contains = readable.is_empty() || self.inner.asset.reader.contains_range(readable);
-        if contains {
-            return SourcePhase::Ready;
-        }
-
-        if self.coord.seek_obs().is_flushing() {
-            return SourcePhase::Seeking;
-        }
-        SourcePhase::Waiting
+    fn probe(&self) -> Arc<dyn SourceProbe> {
+        Arc::new(FileProbe {
+            inner: Arc::clone(&self.inner),
+        })
     }
 
     #[cfg_attr(feature = "perf", hotpath::measure)]
@@ -325,6 +368,12 @@ impl kithara_stream::Source for FileSource {
             fn seek_observe(&self) -> Arc<dyn SeekObserve>;
             fn set_position(&self, pos: u64);
         }
+        to self.inner {
+            #[call(known_len)]
+            fn len(&self) -> Option<u64>;
+            fn phase(&self) -> SourcePhase;
+            fn phase_at(&self, range: Range<u64>) -> SourcePhase;
+        }
     }
 }
 
@@ -343,7 +392,7 @@ impl FileByteMap {
     }
 }
 
-impl kithara_stream::ByteMap for FileByteMap {
+impl ByteMap for FileByteMap {
     delegate::delegate! {
         to self {
             #[expr($.map_or(0..0, FileSegmentIndex::init_range))]

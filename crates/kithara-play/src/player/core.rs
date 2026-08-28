@@ -14,7 +14,7 @@ use super::{
     state::{ItemQueue, PlayerParams, PlayerPhase},
 };
 use crate::{
-    api::{PlayerEvent, PlayerStatus},
+    api::{PlayerEvent, PlayerStatus, TrackId},
     bridge::PlayerCmd,
     engine::{EngineConfig, EngineImpl},
     error::PlayError,
@@ -131,17 +131,13 @@ impl PlayerImpl {
             /// `TrackRequested` notification near EOF would arm it for
             /// handover, surfacing as a barge-in.
             pub fn clear_item(&self, index: usize);
-            /// Insert a resource with optional queue-item identity metadata at a
+            /// Insert a resource under the queue's identity for it at a
             /// specific position, or append to the end.
-            pub fn insert(
-                &self,
-                resource: Resource,
-                item_id: Option<Arc<str>>,
-                at_position: Option<usize>,
-            );
-            /// Replace a consumed (or existing) resource at the given index with item
-            /// identity metadata.
-            pub fn replace_item_tagged(&self, index: usize, resource: Resource, item_id: Option<Arc<str>>);
+            pub fn insert(&self, resource: Resource, item_id: TrackId, at_position: Option<usize>);
+            /// Replace a consumed (or existing) resource at the given index,
+            /// under the queue's identity for it. Every player event about
+            /// the item reports this id back.
+            pub fn replace_item(&self, index: usize, resource: Resource, item_id: TrackId);
             /// Pre-allocate empty slots so `replace_item` can fill them by index.
             pub fn reserve_slots(&self, count: usize);
         }
@@ -194,14 +190,6 @@ impl PlayerImpl {
             .items
             .remove_at(index)
             .map(|queued| queued.resource)
-    }
-
-    /// Replace a consumed (or existing) resource at the given index.
-    ///
-    /// Use this to re-load a track that was previously played and consumed
-    /// by `load_current_item`. Does nothing if `index` is out of bounds.
-    pub fn replace_item(&self, index: usize, resource: Resource) {
-        self.replace_item_tagged(index, resource, None);
     }
 
     /// Internal: set status and emit event if changed.

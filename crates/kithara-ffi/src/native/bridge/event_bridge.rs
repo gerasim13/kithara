@@ -757,8 +757,11 @@ mod tests {
         queue
             .bus()
             .publish(Event::Player(PlayerEvent::ItemDidPlayToEnd {
-                src: Arc::from(format!("test://memory/{}", id.as_u64())),
-                item_id: None,
+                item: kithara_events::ItemRole::Leading(kithara_events::TrackRef::new(
+                    id,
+                    kithara_events::SlotId::new(0),
+                    Arc::from(format!("test://memory/{}", id.as_u64())),
+                )),
             }));
 
         let cancel = CancelToken::root();

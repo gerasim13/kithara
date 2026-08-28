@@ -1,6 +1,7 @@
 use std::{
     collections::VecDeque,
     future::{Future, pending, poll_fn},
+    mem::take,
     sync::atomic::Ordering,
     task::Poll,
 };
@@ -16,6 +17,7 @@ use kithara_platform::{
 };
 use kithara_test_utils::kithara;
 use thunderdome::{Arena, Index};
+use tracing::trace;
 
 use super::{
     batch::BatchGroup,
@@ -177,7 +179,7 @@ impl Registry {
             }
             while let Poll::Ready(Some(mut cmd)) = entry.cmd_rx.poll_recv(cx) {
                 let peer_prio = entry.peer.priority();
-                let slot = slot_index(peer_prio, cmd.priority);
+                let slot = slot_index(peer_prio, cmd.effective_priority());
                 cmd.peer = Some(idx);
                 let entry_slot = SlotEntry {
                     cmd,
@@ -212,7 +214,6 @@ impl Registry {
                             None => CancelGroup::new(vec![entry.peer_cancel.child()]),
                         };
                         let cmd_prio = cmd.priority.unwrap_or(RequestPriority::Low);
-                        let slot = slot_index(peer_prio, cmd_prio);
                         let request_id = inner.next_request_id();
                         let enqueued_at = Instant::now();
                         let internal = InternalCmd {
@@ -226,6 +227,7 @@ impl Registry {
                             bus: bus.clone(),
                             peer_id: entry.peer_id,
                         };
+                        let slot = slot_index(peer_prio, internal.effective_priority());
                         let entry_slot = SlotEntry {
                             cmd: internal,
                             peer_cancel: entry.peer_cancel.clone(),
@@ -264,49 +266,63 @@ impl Registry {
                 .peer
                 .and_then(|peer| self.peers.get(peer))
                 .map_or(RequestPriority::Low, |peer| peer.peer.priority());
-            let slot = slot_index(peer_priority, entry.cmd.priority);
+            let slot = slot_index(peer_priority, entry.cmd.effective_priority());
             self.slots[slot].push_front(entry);
         }
     }
 
-    /// Check `peer.priority()` for each command in slots,
-    /// move to the correct slot if priority changed.
+    /// Re-ask `peer.priority()` and the command's live demand probe for
+    /// each queued command, and move it to the correct slot when either
+    /// answer changed. An escalation goes to the *front* of its new slot:
+    /// a reader now blocks on those bytes, and the point is overtaking the
+    /// queue that starved it. A demotion goes to the back.
+    ///
+    /// Each slot is rebuilt in one pass rather than patched by index: a
+    /// slot can be both a source and a destination in the same pass, and
+    /// a `push_front` shifts every index recorded before it.
     pub(super) fn reschedule(&mut self) {
-        let mut moves: Vec<(usize, usize, usize)> = Vec::new();
-        let mut cancels: Vec<(usize, usize)> = Vec::new();
+        let mut escalated: Vec<(usize, SlotEntry)> = Vec::new();
+        let mut demoted: Vec<(usize, SlotEntry)> = Vec::new();
 
         for slot_idx in 0..SLOT_COUNT {
-            for (i, slot_entry) in self.slots[slot_idx].iter().enumerate() {
+            for slot_entry in take(&mut self.slots[slot_idx]) {
                 let cmd = &slot_entry.cmd;
                 let Some(peer_idx) = cmd.peer else {
+                    self.slots[slot_idx].push_back(slot_entry);
                     continue;
                 };
                 let Some(entry) = self.peers.get(peer_idx) else {
-                    cancels.push((slot_idx, i));
+                    let SlotEntry { cmd, peer_cancel } = slot_entry;
+                    super::batch::deliver_cancelled_with_event(cmd, &peer_cancel);
                     continue;
                 };
-                let correct_slot = slot_index(entry.peer.priority(), cmd.priority);
-                if correct_slot != slot_idx {
-                    moves.push((slot_idx, i, correct_slot));
+                let correct_slot = slot_index(entry.peer.priority(), cmd.effective_priority());
+                if correct_slot == slot_idx {
+                    self.slots[slot_idx].push_back(slot_entry);
+                } else if correct_slot < slot_idx {
+                    trace!(
+                        request_id = ?cmd.request_id,
+                        url = %cmd.cmd.url,
+                        from_slot = slot_idx,
+                        to_slot = correct_slot,
+                        demanded = cmd.cmd.is_demanded(),
+                        "reschedule: queued fetch escalated"
+                    );
+                    escalated.push((correct_slot, slot_entry));
+                } else {
+                    demoted.push((correct_slot, slot_entry));
                 }
             }
         }
 
-        cancels.sort_by_key(|entry| std::cmp::Reverse(entry.1));
-        for (slot_idx, i) in cancels {
-            if let Some(slot_entry) = self.slots[slot_idx].remove(i) {
-                let SlotEntry { cmd, peer_cancel } = slot_entry;
-                super::batch::deliver_cancelled_with_event(cmd, &peer_cancel);
-            }
+        for (slot, slot_entry) in demoted {
+            self.slots[slot].push_back(slot_entry);
         }
-
-        moves.sort_by_key(|entry| std::cmp::Reverse(entry.1));
-        for (from_slot, i, to_slot) in moves {
-            if let Some(slot_entry) = self.slots[from_slot].remove(i) {
-                self.slots[to_slot].push_back(slot_entry);
-                if to_slot <= 1 {
-                    self.urgent_notify.notify_one();
-                }
+        // WHY: Reverse keeps scan order among entries escalated into one slot.
+        for (slot, slot_entry) in escalated.into_iter().rev() {
+            self.slots[slot].push_front(slot_entry);
+            if slot <= 1 {
+                self.urgent_notify.notify_one();
             }
         }
     }

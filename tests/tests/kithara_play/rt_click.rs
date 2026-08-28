@@ -10,6 +10,7 @@ use firewheel::node::ProcBuffers;
 use kithara::{
     bufpool::PcmPool,
     decode::PcmSpec,
+    events::TrackId,
     platform::sync::Arc,
     play::{
         Resource, SharedEq,
@@ -59,7 +60,7 @@ fn load(control: &mut SlotControl, src: &str, level: f32) {
         control,
         PlayerCmd::LoadTrack {
             resource: track(src, level),
-            item_id: None,
+            item_id: TrackId::allocate(),
         },
     );
 }

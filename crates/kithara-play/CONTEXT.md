@@ -93,6 +93,31 @@ The `PlayerEvent` / `ItemEvent` / `EngineEvent` / `SessionEvent` / `DjEvent` enu
 `SessionDuckingMode` is owned by this crate and maps `Off` / `Soft` / `Hard` to session-output
 gains `1.0` / `0.4` / `0.2`.
 
+**`PlaybackStarted`, `ItemDidPlayToEnd` and `ItemDidFail` name which item in the arena they are
+about.** `process_notifications` drains *every* active slot, and a slot is a processor holding an
+arena of items rather than one item — so a start or a stop says nothing on its own, and only this
+crate can say what it was. All three carry the answer as `item: ItemRole`, which holds a `TrackRef`
+*inside* the role so a consumer cannot reach the identity without first saying which item it has:
+
+- `Leading(TrackRef)` — the item the listener is hearing. The only role that drives auto-advance.
+- `Outgoing(TrackRef)` — the outgoing half of a crossfade. `commit_next` promotes the successor
+  *inside* the current slot (`CrossfadeStarted { from: slot, to: slot }`) and leaves it in the
+  phase as the activated `PendingNext`, so the faded-out item ends while its own slot is still the
+  held one. Slot identity alone would call it leading; the promoted `src` under it tells them apart.
+- `Background(TrackRef)` — a slot the phase no longer holds: an orphan draining the last of its
+  notifications while a different item plays. A preloaded successor or a lingering predecessor
+  decoding ahead reaches its own end this way, seconds into the current item.
+
+`TrackRef { id, slot, src }` is owned by `kithara-events`. Only `id` answers "which entry": `slot` is
+an arena, not an item, and `src` names a rendered resource two queue entries may share. The other two
+are carried so a log line reads `7@slot0 https://…` without a join. Consumers must key auto-advance
+on the role and identity on `id`, never on `src`.
+
+`Notifier::item_role` builds it once per notification in `dispatch_notification`, before
+`finalize_handover_if_armed` can move the phase, so it describes the arena as it was when the item
+started or stopped. `id` rides in from `LoadTrack`, which requires one — every insertion path
+allocates a `TrackId` and hands it to the bridge, so there is no untagged item to describe.
+
 ## Queue Auto-Advance
 
 `PlayerImpl` exposes a handover API for external orchestrators and internal tests:

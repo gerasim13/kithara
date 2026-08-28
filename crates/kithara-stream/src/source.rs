@@ -82,6 +82,46 @@ pub enum SourcePhase {
     WaitingMetadata,
 }
 
+/// Narrow view of the source's byte space, served off the control mutex.
+///
+/// Phase, cursor, length, and byte map are non-blocking `&self` snapshots
+/// on [`Source`], but reaching them through a `Mutex<Stream>` turns each
+/// query into a lock acquisition — off-limits on the forbid-blocking audio
+/// produce core, where any contended acquire (a construction read or a
+/// consumer query holding the control mutex) blocks the real-time tick.
+/// Callers on that core take this handle once at open and answer every
+/// byte-space question without touching the stream's control-plane mutex.
+/// Implementations answer from self-synchronizing state and must not take
+/// locks a reader wait can hold.
+pub trait SourceProbe: Send + Sync + 'static {
+    /// Overall source readiness at the current position.
+    fn phase(&self) -> SourcePhase;
+
+    /// Point-in-time readiness for a specific byte range.
+    fn phase_at(&self, range: Range<u64>) -> SourcePhase;
+
+    /// Current read position — the same atomic cursor as
+    /// [`Source::position`].
+    fn position(&self) -> u64;
+
+    /// Absolute byte-position set — the same atomic cursor as
+    /// [`Source::set_position`].
+    fn set_position(&self, pos: u64);
+
+    /// Total length if known — the same answer as [`Source::len`].
+    fn len(&self) -> Option<u64>;
+
+    /// Whether the source currently reports zero bytes — the same
+    /// convention as [`Source::is_empty`].
+    fn is_empty(&self) -> bool {
+        self.len().is_none_or(|n| n == 0)
+    }
+
+    /// Optional byte-map handle — the same answer as [`Source::byte_map`],
+    /// including its over-time `None` → `Some` transition.
+    fn byte_map(&self) -> Option<Arc<dyn ByteMap>>;
+}
+
 /// Reason a [`ReadOutcome::Pending`] was returned — i.e. why the source
 /// did not make progress this call. Each variant maps to a distinct
 /// caller action; there is no overlap and no string-matching required.
@@ -260,6 +300,13 @@ pub trait Source: MaybeSend + MaybeSync + 'static {
     /// Returns the current [`SourcePhase`] without blocking. Used internally
     /// by `wait_range()` implementations for fast-path dispatch.
     fn phase_at(&self, range: Range<u64>) -> SourcePhase;
+
+    /// Narrow byte-space handle serving the same snapshots as
+    /// [`Source::phase_at`], [`Source::position`], [`Source::len`], and
+    /// [`Source::byte_map`] without going through the stream's control-plane
+    /// lock. The forbid-blocking audio produce core answers every byte-space
+    /// question through this handle only.
+    fn probe(&self) -> Arc<dyn SourceProbe>;
 
     /// Narrow read-only handle to the playhead position and total duration.
     fn playhead_read(&self) -> Arc<dyn PlayheadRead>;
@@ -512,10 +559,41 @@ pub trait ByteMap: Send + Sync + 'static {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
     use kithara_test_utils::kithara;
 
     use super::*;
     use crate::{PlayheadState, SeekState};
+
+    /// Constant-phase probe for the minimal test sources below; shares the
+    /// source's cursor cell and mirrors its `len`.
+    struct FixedPhase {
+        phase: SourcePhase,
+        len: Option<u64>,
+        position: Arc<AtomicU64>,
+    }
+
+    impl SourceProbe for FixedPhase {
+        fn phase(&self) -> SourcePhase {
+            self.phase
+        }
+        fn phase_at(&self, _range: Range<u64>) -> SourcePhase {
+            self.phase
+        }
+        fn position(&self) -> u64 {
+            self.position.load(Ordering::Acquire)
+        }
+        fn set_position(&self, pos: u64) {
+            self.position.store(pos, Ordering::Release);
+        }
+        fn len(&self) -> Option<u64> {
+            self.len
+        }
+        fn byte_map(&self) -> Option<Arc<dyn ByteMap>> {
+            None
+        }
+    }
 
     #[kithara::test]
     fn test_source_trait_object_safety() {
@@ -529,8 +607,6 @@ mod tests {
 
     #[kithara::test]
     fn phase_default_delegates_to_phase_at() {
-        use std::sync::atomic::{AtomicU64, Ordering};
-
         struct ReadySource {
             seek: Arc<SeekState>,
             playhead: Arc<PlayheadState>,
@@ -565,6 +641,13 @@ mod tests {
             fn phase_at(&self, _range: Range<u64>) -> SourcePhase {
                 SourcePhase::Ready
             }
+            fn probe(&self) -> Arc<dyn SourceProbe> {
+                Arc::new(FixedPhase {
+                    phase: SourcePhase::Ready,
+                    len: Some(100),
+                    position: Arc::clone(&self.position),
+                })
+            }
             fn len(&self) -> Option<u64> {
                 Some(100)
             }
@@ -597,8 +680,6 @@ mod tests {
     /// - `activity().is_playing()` toggles correctly.
     #[kithara::test]
     fn narrow_source_accessors_seam() {
-        use std::sync::atomic::{AtomicU64, Ordering};
-
         struct MinimalSource {
             seek: Arc<SeekState>,
             playhead: Arc<PlayheadState>,
@@ -632,6 +713,13 @@ mod tests {
             }
             fn phase_at(&self, _range: Range<u64>) -> SourcePhase {
                 SourcePhase::Waiting
+            }
+            fn probe(&self) -> Arc<dyn SourceProbe> {
+                Arc::new(FixedPhase {
+                    phase: SourcePhase::Waiting,
+                    len: None,
+                    position: Arc::clone(&self.position),
+                })
             }
             fn len(&self) -> Option<u64> {
                 None

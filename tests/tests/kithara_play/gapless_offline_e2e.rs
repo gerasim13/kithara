@@ -18,7 +18,7 @@ use kithara::{
         DecodeError, GaplessInfo, GaplessMode, GaplessTailCompensation, GaplessTrimmer, PcmChunk,
         PcmMeta, PcmSpec, SilenceTrimParams, TrackMetadata,
     },
-    events::EventBus,
+    events::{EventBus, TrackId},
     platform::{
         sync::Arc,
         time::{self, Duration, Instant},
@@ -115,22 +115,20 @@ async fn single_track_silence_trim_strips_leading_priming(temp_dir: TestTempDir)
         harness.player(),
         &server,
         temp_dir.path(),
-        "single-leading",
         Some(AAC_GAPLESS_ENCODER_DELAY),
         None,
         0,
     )
     .await;
 
-    load_tagged_queue(&harness, [resource]);
+    let [single] = load_tagged_queue(&harness, [resource]);
 
-    let (rendered, events) = render_until_item_end(&harness, "single-leading").await;
+    let (rendered, events) = render_until_item_end(&harness, single).await;
     let left = deinterleave_left(&rendered, usize::from(GAPLESS_CHANNELS));
     let _ = timed_event_frame_end(&events, |event| {
         matches!(
             event,
-            PlayerEvent::ItemDidPlayToEnd { item_id: Some(id), .. }
-                if id.as_ref() == "single-leading"
+            PlayerEvent::ItemDidPlayToEnd { item } if item.id() == single
         )
     })
     .expect("ItemDidPlayToEnd must fire for the single-track fixture");
@@ -176,7 +174,6 @@ async fn two_tracks_gapless_no_click_with_silence_trim_zero_crossfade(temp_dir: 
         harness.player(),
         &server,
         temp_dir.path(),
-        "item-1",
         Some(AAC_GAPLESS_ENCODER_DELAY),
         Some(AAC_GAPLESS_TRAILING_DELAY),
         0,
@@ -186,32 +183,29 @@ async fn two_tracks_gapless_no_click_with_silence_trim_zero_crossfade(temp_dir: 
         harness.player(),
         &server,
         temp_dir.path(),
-        "item-2",
         Some(AAC_GAPLESS_ENCODER_DELAY),
         Some(AAC_GAPLESS_TRAILING_DELAY),
         u64::try_from(visible).expect("visible frames fit u64"),
     )
     .await;
 
-    load_tagged_queue(&harness, [first, second]);
+    let [first_id, second_id] = load_tagged_queue(&harness, [first, second]);
 
-    let (rendered, events) = render_until_item_end(&harness, "item-2").await;
+    let (rendered, events) = render_until_item_end(&harness, second_id).await;
     let left = deinterleave_left(&rendered, usize::from(GAPLESS_CHANNELS));
     let sample_rate = usize::try_from(GAPLESS_SAMPLE_RATE).expect("sample rate fits usize");
 
     let item1_end = timed_event_frame_end(&events, |event| {
         matches!(
             event,
-            PlayerEvent::ItemDidPlayToEnd { item_id: Some(id), .. }
-                if id.as_ref() == "item-1"
+            PlayerEvent::ItemDidPlayToEnd { item } if item.id() == first_id
         )
     })
     .expect("first item must emit ItemDidPlayToEnd");
     let _ = timed_event_frame_end(&events, |event| {
         matches!(
             event,
-            PlayerEvent::ItemDidPlayToEnd { item_id: Some(id), .. }
-                if id.as_ref() == "item-2"
+            PlayerEvent::ItemDidPlayToEnd { item } if item.id() == second_id
         )
     })
     .expect("second item must emit ItemDidPlayToEnd");
@@ -261,7 +255,6 @@ async fn two_tracks_gapless_stitch_continuity_metric(temp_dir: TestTempDir) {
         harness.player(),
         &server,
         temp_dir.path(),
-        "continuity-1",
         Some(AAC_GAPLESS_ENCODER_DELAY),
         Some(AAC_GAPLESS_TRAILING_DELAY),
         0,
@@ -271,16 +264,15 @@ async fn two_tracks_gapless_stitch_continuity_metric(temp_dir: TestTempDir) {
         harness.player(),
         &server,
         temp_dir.path(),
-        "continuity-2",
         Some(AAC_GAPLESS_ENCODER_DELAY),
         Some(AAC_GAPLESS_TRAILING_DELAY),
         u64::try_from(stitch_frame).expect("stitch frame fits u64"),
     )
     .await;
 
-    load_tagged_queue(&harness, [first, second]);
+    let [first_id, second_id] = load_tagged_queue(&harness, [first, second]);
 
-    let (rendered, events) = render_until_item_end(&harness, "continuity-2").await;
+    let (rendered, events) = render_until_item_end(&harness, second_id).await;
     let left = deinterleave_left(&rendered, usize::from(GAPLESS_CHANNELS));
 
     assert!(
@@ -288,7 +280,7 @@ async fn two_tracks_gapless_stitch_continuity_metric(temp_dir: TestTempDir) {
         "rendered PCM must cover the stitch window; left_frames={}, stitch_frame={stitch_frame}, events={events:?}",
         left.len()
     );
-    assert_prefetch_before_first_end(&events, "continuity-1");
+    assert_prefetch_before_first_end(&events, first_id);
 
     let switch_peak = peak_first_diff(&left, stitch_frame, ContinuityMetric::HALF_WINDOW_FRAMES);
     let (control_peak, control_count) = gapless_control_peak(&left, stitch_frame);
@@ -319,7 +311,7 @@ async fn fused_gapless_tail_compensation_restores_exact_length_at_stitch() {
         "FUSED_GAPLESS_DEFICIT compensated_db={compensated_db:.2} uncompensated_db={uncompensated_db:.2}"
     );
 
-    assert_prefetch_before_first_end(&compensated.events, "fused-deficit-1");
+    assert_prefetch_before_first_end(&compensated.events, compensated.first_id);
     assert_eq!(compensated.first_frames, FUSED_FIXTURE_IDEAL_DEVICE_FRAMES);
     assert_eq!(
         uncompensated.first_frames,
@@ -367,11 +359,10 @@ async fn apple_fused_gapless_fixture_keeps_device_rate_seam_metric(temp_dir: Tes
             .build(),
         FUSED_FIXTURE_DEVICE_RATE,
     );
-    let (probe, _) = create_apple_fused_resource(
+    let probe = create_apple_fused_resource(
         probe_harness.player(),
         &server,
         temp_dir.path(),
-        "apple-fused-probe",
         Some(AAC_GAPLESS_ENCODER_DELAY),
         None,
         0,
@@ -425,11 +416,10 @@ async fn render_apple_fused_deficit_seam(
         FUSED_FIXTURE_DEVICE_RATE,
     );
 
-    let (first, first_id) = create_apple_fused_resource(
+    let first = create_apple_fused_resource(
         harness.player(),
         server,
         cache_dir,
-        "apple-fused-1",
         Some(AAC_GAPLESS_ENCODER_DELAY),
         None,
         0,
@@ -439,31 +429,28 @@ async fn render_apple_fused_deficit_seam(
         harness.player(),
         server,
         cache_dir,
-        "apple-fused-2",
         Some(AAC_GAPLESS_ENCODER_DELAY),
         None,
         source_stitch_frame,
     )
     .await;
 
-    load_tagged_queue(&harness, [(first, first_id), second]);
+    let [first_id, _second_id] = load_tagged_queue(&harness, [first, second]);
 
     let control_post_roll_blocks =
         (ContinuityMetric::CONTROL_STRIDE_FRAMES / BLOCK_FRAMES) + POST_ROLL_BLOCKS;
     let (rendered, events) =
-        render_until_item_end_with_post_roll(&harness, "apple-fused-1", control_post_roll_blocks)
-            .await;
+        render_until_item_end_with_post_roll(&harness, first_id, control_post_roll_blocks).await;
     let left = deinterleave_left(&rendered, usize::from(GAPLESS_CHANNELS));
     let _ = timed_event_frame_end(&events, |event| {
         matches!(
             event,
-            PlayerEvent::ItemDidPlayToEnd { item_id: Some(id), .. }
-                if id.as_ref() == "apple-fused-1"
+            PlayerEvent::ItemDidPlayToEnd { item } if item.id() == first_id
         )
     })
     .expect("first fused item must emit ItemDidPlayToEnd");
 
-    assert_prefetch_before_first_end(&events, "apple-fused-1");
+    assert_prefetch_before_first_end(&events, first_id);
     assert!(
         stitch_frame < left.len(),
         "fused stitch frame must be inside rendered PCM; stitch_frame={stitch_frame}, left_frames={}, events={events:?}",
@@ -501,22 +488,20 @@ async fn disabled_gapless_mode_keeps_full_decoded_length(temp_dir: TestTempDir) 
         harness.player(),
         &server,
         temp_dir.path(),
-        "disabled",
         Some(AAC_GAPLESS_ENCODER_DELAY),
         Some(AAC_GAPLESS_TRAILING_DELAY),
         0,
     )
     .await;
 
-    load_tagged_queue(&harness, [resource]);
+    let [only] = load_tagged_queue(&harness, [resource]);
 
-    let (rendered, events) = render_until_item_end(&harness, "disabled").await;
+    let (rendered, events) = render_until_item_end(&harness, only).await;
     let left = deinterleave_left(&rendered, usize::from(GAPLESS_CHANNELS));
     let _ = timed_event_frame_end(&events, |event| {
         matches!(
             event,
-            PlayerEvent::ItemDidPlayToEnd { item_id: Some(id), .. }
-                if id.as_ref() == "disabled"
+            PlayerEvent::ItemDidPlayToEnd { item } if item.id() == only
         )
     })
     .expect("ItemDidPlayToEnd must fire");
@@ -550,7 +535,6 @@ async fn single_track_silence_trim_heuristic_strips_leading_when_no_gapless_meta
         harness.player(),
         &server,
         temp_dir.path(),
-        "heuristic-leading",
         Some(AAC_GAPLESS_ENCODER_DELAY),
         None,
         0,
@@ -558,9 +542,9 @@ async fn single_track_silence_trim_heuristic_strips_leading_when_no_gapless_meta
     )
     .await;
 
-    load_tagged_queue(&harness, [resource]);
+    let [only] = load_tagged_queue(&harness, [resource]);
 
-    let (rendered, events) = render_until_item_end(&harness, "heuristic-leading").await;
+    let (rendered, events) = render_until_item_end(&harness, only).await;
     let left = deinterleave_left(&rendered, usize::from(GAPLESS_CHANNELS));
 
     let head_rms = rms(&left, 0, AAC_FRAME_SAMPLES.min(left.len()));
@@ -590,7 +574,6 @@ async fn two_tracks_silence_trim_heuristic_no_click_when_no_gapless_metadata(
         harness.player(),
         &server,
         temp_dir.path(),
-        "item-1",
         Some(AAC_GAPLESS_ENCODER_DELAY),
         Some(AAC_GAPLESS_TRAILING_DELAY),
         0,
@@ -601,7 +584,6 @@ async fn two_tracks_silence_trim_heuristic_no_click_when_no_gapless_metadata(
         harness.player(),
         &server,
         temp_dir.path(),
-        "item-2",
         Some(AAC_GAPLESS_ENCODER_DELAY),
         Some(AAC_GAPLESS_TRAILING_DELAY),
         u64::try_from(visible).expect("visible frames fit u64"),
@@ -609,16 +591,15 @@ async fn two_tracks_silence_trim_heuristic_no_click_when_no_gapless_metadata(
     )
     .await;
 
-    load_tagged_queue(&harness, [first, second]);
+    let [first_id, second_id] = load_tagged_queue(&harness, [first, second]);
 
-    let (rendered, events) = render_until_item_end(&harness, "item-2").await;
+    let (rendered, events) = render_until_item_end(&harness, second_id).await;
     let left = deinterleave_left(&rendered, usize::from(GAPLESS_CHANNELS));
 
     let item1_end = timed_event_frame_end(&events, |event| {
         matches!(
             event,
-            PlayerEvent::ItemDidPlayToEnd { item_id: Some(id), .. }
-                if id.as_ref() == "item-1"
+            PlayerEvent::ItemDidPlayToEnd { item } if item.id() == first_id
         )
     })
     .expect("first item must emit ItemDidPlayToEnd");
@@ -681,23 +662,21 @@ async fn single_track_silence_trim_heuristic_fade_out_smooths_trailing_edge(temp
         harness.player(),
         &server,
         temp_dir.path(),
-        "fade-out-edge",
         Some(AAC_GAPLESS_ENCODER_DELAY),
         Some(AAC_GAPLESS_TRAILING_DELAY),
         0,
         GaplessEncoding::None,
     )
     .await;
-    load_tagged_queue(&harness, [resource]);
+    let [only] = load_tagged_queue(&harness, [resource]);
 
-    let (rendered, events) = render_until_item_end(&harness, "fade-out-edge").await;
+    let (rendered, events) = render_until_item_end(&harness, only).await;
     let left = deinterleave_left(&rendered, usize::from(GAPLESS_CHANNELS));
 
     let item_end = timed_event_frame_end(&events, |event| {
         matches!(
             event,
-            PlayerEvent::ItemDidPlayToEnd { item_id: Some(id), .. }
-                if id.as_ref() == "fade-out-edge"
+            PlayerEvent::ItemDidPlayToEnd { item } if item.id() == only
         )
     })
     .expect("ItemDidPlayToEnd must fire");
@@ -735,16 +714,14 @@ async fn create_resource(
     player: &kithara::play::PlayerImpl,
     server: &TestServerHelper,
     cache_dir: &std::path::Path,
-    item_id: &'static str,
     encoder_delay: Option<u32>,
     trailing_delay: Option<u32>,
     start_frame: u64,
-) -> (Resource, Arc<str>) {
+) -> Resource {
     create_resource_with_encoding(
         player,
         server,
         cache_dir,
-        item_id,
         encoder_delay,
         trailing_delay,
         start_frame,
@@ -761,12 +738,11 @@ async fn create_resource_with_encoding(
     player: &kithara::play::PlayerImpl,
     server: &TestServerHelper,
     cache_dir: &std::path::Path,
-    item_id: &'static str,
     encoder_delay: Option<u32>,
     trailing_delay: Option<u32>,
     start_frame: u64,
     gapless_encoding: GaplessEncoding,
-) -> (Resource, Arc<str>) {
+) -> Resource {
     let created = server
         .create_hls(
             HlsFixtureBuilder::new()
@@ -792,7 +768,6 @@ async fn create_resource_with_encoding(
         .await
         .expect("create gapless e2e HLS fixture");
 
-    let item_id = Arc::<str>::from(item_id);
     let store = kithara_integration_tests::disk_asset_store(cache_dir);
     let mut config = ResourceConfig::for_src(
         ResourceConfig::parse_src(created.master_url().as_str()).expect("valid HLS master URL"),
@@ -806,7 +781,7 @@ async fn create_resource_with_encoding(
         .await
         .expect("open HLS resource for gapless e2e fixture");
     let _ = resource.preload().await;
-    (resource, item_id)
+    resource
 }
 
 #[cfg(all(
@@ -821,11 +796,10 @@ async fn create_apple_fused_resource(
     player: &kithara::play::PlayerImpl,
     server: &TestServerHelper,
     cache_dir: &std::path::Path,
-    item_id: &'static str,
     encoder_delay: Option<u32>,
     trailing_delay: Option<u32>,
     start_frame: u64,
-) -> (Resource, Arc<str>) {
+) -> Resource {
     let created = server
         .create_hls(
             HlsFixtureBuilder::new()
@@ -851,7 +825,6 @@ async fn create_apple_fused_resource(
         .await
         .expect("create Apple fused gapless HLS fixture");
 
-    let item_id = Arc::<str>::from(item_id);
     let store = kithara_integration_tests::disk_asset_store(cache_dir);
     let decoder_defaults = AudioDecoderConfig::builder()
         .resampler(
@@ -883,7 +856,7 @@ async fn create_apple_fused_resource(
         FUSED_FIXTURE_DEVICE_RATE,
         "Apple fused decoder must emit the host/device rate"
     );
-    (resource, item_id)
+    resource
 }
 
 async fn render_synthetic_fused_deficit_seam(tail_compensation: bool) -> SyntheticSeamRender {
@@ -920,15 +893,9 @@ async fn render_synthetic_fused_deficit_seam(tail_compensation: bool) -> Synthet
         Some(Arc::from("fused-deficit-2")),
     );
 
-    load_tagged_queue(
-        &harness,
-        [
-            (first, Arc::from("fused-deficit-1")),
-            (second, Arc::from("fused-deficit-2")),
-        ],
-    );
+    let [first_id, second_id] = load_tagged_queue(&harness, [first, second]);
 
-    let (rendered, events) = render_until_item_end(&harness, "fused-deficit-2").await;
+    let (rendered, events) = render_until_item_end(&harness, second_id).await;
     let left = deinterleave_left(&rendered, usize::from(GAPLESS_CHANNELS));
     let peak = left.iter().map(|sample| sample.abs()).fold(0.0, f32::max);
     assert!(
@@ -939,6 +906,7 @@ async fn render_synthetic_fused_deficit_seam(tail_compensation: bool) -> Synthet
         left,
         events,
         first_frames: first_frame_count,
+        first_id,
     }
 }
 
@@ -1006,26 +974,29 @@ fn left_frames_from_chunks(chunks: impl IntoIterator<Item = PcmChunk>) -> Vec<f3
         .collect()
 }
 
+/// Loads the queue and returns the identity the player will report back
+/// for each item, in the order they were given.
 fn load_tagged_queue<const N: usize>(
     harness: &OfflinePlayerHarness,
-    items: [(Resource, Arc<str>); N],
-) {
+    items: [Resource; N],
+) -> [TrackId; N] {
     harness.player().reserve_slots(items.len());
-    for (index, (resource, item_id)) in items.into_iter().enumerate() {
-        harness
-            .player()
-            .replace_item_tagged(index, resource, Some(item_id));
+    let ids = [(); N].map(|()| TrackId::allocate());
+    for (index, (resource, id)) in items.into_iter().zip(ids).enumerate() {
+        harness.player().replace_item(index, resource, id);
     }
     harness
         .player()
         .select_item(0, true)
         .expect("select first queue item");
+    ids
 }
 
 struct SyntheticSeamRender {
     left: Vec<f32>,
     events: Vec<TimedPlayerEvent>,
     first_frames: usize,
+    first_id: TrackId,
 }
 
 #[cfg(all(
@@ -1214,14 +1185,14 @@ impl PcmControl for SyntheticPcmReader {
 
 async fn render_until_item_end(
     harness: &OfflinePlayerHarness,
-    terminal_item_id: &'static str,
+    terminal_item_id: TrackId,
 ) -> (Vec<f32>, Vec<TimedPlayerEvent>) {
     render_until_item_end_with_post_roll(harness, terminal_item_id, POST_ROLL_BLOCKS).await
 }
 
 async fn render_until_item_end_with_post_roll(
     harness: &OfflinePlayerHarness,
-    terminal_item_id: &'static str,
+    terminal_item_id: TrackId,
     post_roll_blocks: usize,
 ) -> (Vec<f32>, Vec<TimedPlayerEvent>) {
     let deadline = Instant::now() + Duration::from_secs(15);
@@ -1246,8 +1217,7 @@ async fn render_until_item_end_with_post_roll(
         if events.iter().any(|event| {
             matches!(
                 &event.event,
-                PlayerEvent::ItemDidPlayToEnd { item_id: Some(id), .. }
-                    if id.as_ref() == terminal_item_id
+                PlayerEvent::ItemDidPlayToEnd { item } if item.id() == terminal_item_id
             )
         }) {
             for _ in 0..post_roll_blocks {
@@ -1307,7 +1277,7 @@ where
         .map(|timed| timed.frame_end)
 }
 
-fn assert_prefetch_before_first_end(events: &[TimedPlayerEvent], first_item_id: &str) {
+fn assert_prefetch_before_first_end(events: &[TimedPlayerEvent], first_item_id: TrackId) {
     let prefetch = events
         .iter()
         .position(|timed| matches!(&timed.event, PlayerEvent::PrefetchRequested))
@@ -1317,8 +1287,8 @@ fn assert_prefetch_before_first_end(events: &[TimedPlayerEvent], first_item_id: 
         .position(|timed| {
             matches!(
                 &timed.event,
-                PlayerEvent::ItemDidPlayToEnd { item_id: Some(id), .. }
-                    if id.as_ref() == first_item_id
+                PlayerEvent::ItemDidPlayToEnd { item, .. }
+                    if item.id() == first_item_id
             )
         })
         .expect("first item must emit ItemDidPlayToEnd");

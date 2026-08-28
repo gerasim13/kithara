@@ -11,8 +11,9 @@ use kithara::{
     platform::{sync::Arc, time::Duration},
     storage::WaitOutcome,
     stream::{
-        Activity, PlayheadRead, PlayheadState, PlayheadWrite, ReadOutcome, SeekControl,
-        SeekObserve, SeekState, Source, SourceError, SourcePhase, Stream, StreamResult, StreamType,
+        Activity, ByteMap, PlayheadRead, PlayheadState, PlayheadWrite, ReadOutcome, SeekControl,
+        SeekObserve, SeekState, Source, SourceError, SourcePhase, SourceProbe, Stream,
+        StreamResult, StreamType,
     },
 };
 
@@ -20,6 +21,59 @@ use kithara::{
 #[derive(Debug, thiserror::Error)]
 #[error("memory source error")]
 pub struct MemorySourceError;
+
+/// Constant-length byte-space probe shared by the fixed-size test sources:
+/// `Eof` at or past the known total, `Ready` otherwise — mirroring each
+/// source's own `phase_at`. `None` total never reaches `Eof`. `reported`
+/// mirrors the source's `len()` answer, which may hide the actual total
+/// (`MemorySource::without_len`).
+pub struct LenPhaseProbe {
+    total: Option<u64>,
+    reported: Option<u64>,
+    position: Arc<AtomicU64>,
+}
+
+impl LenPhaseProbe {
+    #[must_use]
+    pub fn new(total: Option<u64>, reported: Option<u64>, position: Arc<AtomicU64>) -> Self {
+        Self {
+            total,
+            reported,
+            position,
+        }
+    }
+}
+
+impl SourceProbe for LenPhaseProbe {
+    fn phase(&self) -> SourcePhase {
+        let pos = self.position.load(Ordering::Acquire);
+        self.phase_at(pos..pos.saturating_add(1))
+    }
+
+    fn phase_at(&self, range: Range<u64>) -> SourcePhase {
+        if self.total.is_some_and(|total| range.start >= total) {
+            SourcePhase::Eof
+        } else {
+            SourcePhase::Ready
+        }
+    }
+
+    fn position(&self) -> u64 {
+        self.position.load(Ordering::Acquire)
+    }
+
+    fn set_position(&self, pos: u64) {
+        self.position.store(pos, Ordering::Release);
+    }
+
+    fn len(&self) -> Option<u64> {
+        self.reported
+    }
+
+    fn byte_map(&self) -> Option<Arc<dyn ByteMap>> {
+        None
+    }
+}
 
 /// In-memory source for testing Source-based readers.
 ///
@@ -74,6 +128,14 @@ impl Source for MemorySource {
         } else {
             SourcePhase::Ready
         }
+    }
+
+    fn probe(&self) -> Arc<dyn SourceProbe> {
+        Arc::new(LenPhaseProbe::new(
+            Some(self.data.len() as u64),
+            self.len(),
+            Arc::clone(&self.position),
+        ))
     }
 
     fn position(&self) -> u64 {

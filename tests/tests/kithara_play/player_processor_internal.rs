@@ -17,6 +17,7 @@ use kithara::{
     self,
     bufpool::PcmPool,
     decode::PcmSpec,
+    events::TrackId,
     platform::{sync::Arc, time::Duration},
     play::{
         PlayerNotification, Resource, SharedEq, TrackState, TrackTransition,
@@ -114,7 +115,7 @@ async fn load_track_propagates_host_sample_rate() {
         .cmd_tx
         .try_push(PlayerCmd::LoadTrack {
             resource: player_resource,
-            item_id: None,
+            item_id: TrackId::allocate(),
         })
         .ok();
     processor.drain_commands();
@@ -181,7 +182,7 @@ async fn processor_clear_unloads_tracks_and_resets_snapshot() {
         .cmd_tx
         .try_push(PlayerCmd::LoadTrack {
             resource: player_resource,
-            item_id: None,
+            item_id: TrackId::allocate(),
         })
         .ok();
     processor.drain_commands();
@@ -229,7 +230,7 @@ async fn fade_in_switches_public_snapshot_without_render() {
         .cmd_tx
         .try_push(PlayerCmd::LoadTrack {
             resource: create_duration_player_resource(&first_src, Duration::from_secs(64)),
-            item_id: None,
+            item_id: TrackId::allocate(),
         })
         .ok();
     control
@@ -249,7 +250,7 @@ async fn fade_in_switches_public_snapshot_without_render() {
         .cmd_tx
         .try_push(PlayerCmd::LoadTrack {
             resource: create_duration_player_resource(&second_src, Duration::from_secs(162)),
-            item_id: None,
+            item_id: TrackId::allocate(),
         })
         .ok();
     processor.drain_commands();
@@ -289,7 +290,7 @@ async fn processor_multiple_seek_epochs_only_last_applies() {
         .cmd_tx
         .try_push(PlayerCmd::LoadTrack {
             resource,
-            item_id: None,
+            item_id: TrackId::allocate(),
         })
         .ok();
     processor.drain_commands();
@@ -368,7 +369,7 @@ async fn processor_track_command_scenarios(
         .cmd_tx
         .try_push(PlayerCmd::LoadTrack {
             resource: create_mock_player_resource("track1.mp3"),
-            item_id: None,
+            item_id: TrackId::allocate(),
         })
         .ok();
 
@@ -379,7 +380,7 @@ async fn processor_track_command_scenarios(
                 .cmd_tx
                 .try_push(PlayerCmd::LoadTrack {
                     resource: create_mock_player_resource("track1.mp3"),
-                    item_id: None,
+                    item_id: TrackId::allocate(),
                 })
                 .ok();
         }
@@ -422,7 +423,7 @@ async fn processor_fade_in_restarts_track_from_zero() {
         .cmd_tx
         .try_push(PlayerCmd::LoadTrack {
             resource: create_mock_player_resource("track1.mp3"),
-            item_id: None,
+            item_id: TrackId::allocate(),
         })
         .ok();
     processor.drain_commands();
@@ -458,7 +459,7 @@ async fn processor_cleanup_finished_tracks() {
         .cmd_tx
         .try_push(PlayerCmd::LoadTrack {
             resource,
-            item_id: None,
+            item_id: TrackId::allocate(),
         })
         .ok();
     processor.drain_commands();
@@ -483,14 +484,14 @@ async fn render_audio_handover_fills_tail_from_next_playing_track() {
         .cmd_tx
         .try_push(PlayerCmd::LoadTrack {
             resource: create_mock_player_resource_with_duration("short.mp3", 0.01),
-            item_id: None,
+            item_id: TrackId::allocate(),
         })
         .ok();
     control
         .cmd_tx
         .try_push(PlayerCmd::LoadTrack {
             resource: create_mock_player_resource("long.mp3"),
-            item_id: None,
+            item_id: TrackId::allocate(),
         })
         .ok();
     processor.drain_commands();
@@ -538,14 +539,14 @@ async fn render_audio_handover_promotes_preloading_track_without_silence() {
         .cmd_tx
         .try_push(PlayerCmd::LoadTrack {
             resource: create_mock_player_resource_with_duration("short.mp3", 0.01),
-            item_id: None,
+            item_id: TrackId::allocate(),
         })
         .ok();
     control
         .cmd_tx
         .try_push(PlayerCmd::LoadTrack {
             resource: create_mock_player_resource("preload.mp3"),
-            item_id: None,
+            item_id: TrackId::allocate(),
         })
         .ok();
     processor.drain_commands();
@@ -597,21 +598,21 @@ async fn render_audio_handover_does_not_reuse_fading_out_track_tail() {
         .cmd_tx
         .try_push(PlayerCmd::LoadTrack {
             resource: create_mock_player_resource_with_duration("short.mp3", 0.01),
-            item_id: None,
+            item_id: TrackId::allocate(),
         })
         .ok();
     control
         .cmd_tx
         .try_push(PlayerCmd::LoadTrack {
             resource: create_mock_player_resource("fading.mp3"),
-            item_id: None,
+            item_id: TrackId::allocate(),
         })
         .ok();
     control
         .cmd_tx
         .try_push(PlayerCmd::LoadTrack {
             resource: create_mock_player_resource("preload.mp3"),
-            item_id: None,
+            item_id: TrackId::allocate(),
         })
         .ok();
     processor.drain_commands();

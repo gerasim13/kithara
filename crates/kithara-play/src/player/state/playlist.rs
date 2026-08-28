@@ -1,10 +1,10 @@
-use kithara_platform::sync::Arc;
+use kithara_events::TrackId;
 
 use crate::resource::Resource;
 
-/// A queued resource plus its optional queue-item identity.
+/// A queued resource plus the queue's identity for it.
 pub(crate) struct QueuedResource {
-    pub(crate) item_id: Option<Arc<str>>,
+    pub(crate) item_id: TrackId,
     pub(crate) resource: Resource,
 }
 
