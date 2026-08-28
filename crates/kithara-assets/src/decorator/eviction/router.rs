@@ -70,7 +70,12 @@ impl EvictionRouter {
             .lock()
             .subscribers
             .get(root)
-            .map(|subscribers| subscribers.values().cloned().collect::<Vec<_>>())
+            .map(|subscribers| {
+                subscribers
+                    .values()
+                    .cloned()
+                    .collect::<Vec<mpsc::UnboundedSender<ResourceKey>>>()
+            })
             .unwrap_or_default();
         for tx in subscribers {
             tx.send(key.clone()).ok();

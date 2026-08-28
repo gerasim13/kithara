@@ -41,7 +41,7 @@ pub(crate) async fn listen(
     let mut driver = AnalysisController::new(
         &cancel,
         &config.beat_analysis,
-        config.worker.sample_pool().clone(),
+        config.worker.sample_pool(),
         config.waveform_max_buckets,
     );
 
@@ -110,7 +110,7 @@ impl AnalysisController {
     pub(crate) fn new(
         cancel: &CancelToken,
         beat_config: &AppBeatAnalysisConfig,
-        sample_pool: SamplePool,
+        sample_pool: &SamplePool,
         waveform_max_buckets: usize,
     ) -> Self {
         Self {
@@ -118,7 +118,7 @@ impl AnalysisController {
                 cancel,
                 waveform_max_buckets,
                 beat_config.clone(),
-                sample_pool,
+                sample_pool.clone(),
             ),
             cache: TrackAnalysisCache::new(analysis_fingerprint(beat_config, waveform_max_buckets)),
             current: None,
@@ -505,7 +505,7 @@ mod tests {
         let mut controller = AnalysisController::new(
             &cancel,
             &BeatAnalysisConfig::<PlaybackResamplerBackend>::default(),
-            SamplePool::default(),
+            &SamplePool::default(),
             MAX_BUCKETS,
         );
         let (tx, rx) = watch::channel(value);
@@ -691,7 +691,7 @@ mod tests {
         let mut controller = AnalysisController::new(
             &cancel,
             &BeatAnalysisConfig::<PlaybackResamplerBackend>::default(),
-            SamplePool::default(),
+            &SamplePool::default(),
             MAX_BUCKETS,
         );
         controller.displayed = Some(target("previous"));

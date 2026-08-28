@@ -51,6 +51,8 @@ impl UiState {
         let tracks = queue.tracks();
         let current_track_index = tracks.first().map(|_| 0usize);
         let track_name = tracks.first().map(|e| e.name.clone()).unwrap_or_default();
+        let beat_marks = empty_marks();
+        let downbeat_marks = empty_marks();
 
         Self {
             tracks,
@@ -66,8 +68,8 @@ impl UiState {
             volume: queue.volume(),
             eq_bands: vec![GainDb::default(); queue.eq_band_count()],
             analysis: None,
-            beat_marks: Arc::from(Vec::new()),
-            downbeat_marks: Arc::from(Vec::new()),
+            beat_marks,
+            downbeat_marks,
             is_seeking: false,
             seek_position: 0.0,
             engine_load: EngineLoadSnapshot::default(),
@@ -77,6 +79,8 @@ impl UiState {
     /// Bare default state for unit tests.
     #[cfg(test)]
     pub(crate) fn empty() -> Self {
+        let beat_marks = empty_marks();
+        let downbeat_marks = empty_marks();
         Self {
             current_track_index: None,
             selected_variant: None,
@@ -86,8 +90,8 @@ impl UiState {
             eq_bands: Vec::new(),
             tracks: Vec::new(),
             analysis: None,
-            beat_marks: Arc::from(Vec::new()),
-            downbeat_marks: Arc::from(Vec::new()),
+            beat_marks,
+            downbeat_marks,
             abr_mode_is_auto: true,
             is_seeking: false,
             playing: false,
@@ -112,7 +116,7 @@ impl UiState {
                     )
                 })
             })
-            .unwrap_or_else(|| (Arc::from(Vec::new()), Arc::from(Vec::new())));
+            .unwrap_or_else(|| (empty_marks(), empty_marks()));
         self.beat_marks = beats;
         self.downbeat_marks = downbeats;
         self.analysis = analysis;
@@ -122,19 +126,19 @@ impl UiState {
 /// Map source-frame positions to track fractions in `[0, 1]`, clamping
 /// out-of-range frames to `1.0`. Empty input or `total == 0` yields empty.
 fn frames_to_fractions(frames: &[u64], total: u64) -> Arc<[f32]> {
-    if frames.is_empty() || total == 0 {
-        return Arc::from(Vec::new());
+    if total == 0 {
+        return empty_marks();
     }
     let total_f: f64 = total.as_();
-    let out: Vec<f32> = frames
-        .iter()
-        .map(|&frame| {
-            let frame_f: f64 = frame.as_();
-            let frac: f32 = (frame_f / total_f).clamp(0.0, 1.0).as_();
-            frac
-        })
-        .collect();
-    Arc::from(out)
+    Arc::from_iter(frames.iter().map(|&frame| {
+        let frame_f: f64 = frame.as_();
+        let frac: f32 = (frame_f / total_f).clamp(0.0, 1.0).as_();
+        frac
+    }))
+}
+
+fn empty_marks() -> Arc<[f32]> {
+    Arc::from([])
 }
 
 /// Owns the canonical [`UiState`] and bridges queue events to it.
