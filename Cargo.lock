@@ -5289,6 +5289,7 @@ dependencies = [
  "roxmltree",
  "serde",
  "skrifa 0.37.0",
+ "tempfile",
  "thiserror 2.0.19",
  "tracing",
  "unicode-segmentation",

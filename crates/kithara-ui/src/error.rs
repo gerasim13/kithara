@@ -141,6 +141,13 @@ pub enum UiDocError {
     NotFound { origin: SourceUri, rel: String },
     #[error("{origin}: source {rel:?} escapes configured root")]
     RootEscape { origin: SourceUri, rel: String },
+    #[error("{origin}: source {rel:?} could not be read: {source}")]
+    Unreadable {
+        origin: SourceUri,
+        rel: String,
+        #[source]
+        source: std::io::Error,
+    },
     #[error(
         "{origin}: control at {path} names custom kind {kind:?}, which no application registered"
     )]
