@@ -12,6 +12,7 @@ use crate::{
     layout::{Axis, FrameCorners, FrameSides, LayoutNode, SplitChild, parse_layout},
     module::{ChromeStyle, MeasureAxis},
     registry::{BuiltinEndpoints, EndpointRegistry},
+    require,
     resolve::load_module_graph,
     room,
     shader::ShaderCache,
@@ -74,6 +75,34 @@ impl CompiledUi {
             .iter()
             .filter(|include| include.owner == owner && include.address.as_ref() == address)
             .any(|include| self.resolve(include.module) == module)
+    }
+
+    /// Refuses a screen that answers on none of the paths an application binds
+    /// behaviour to.
+    ///
+    /// An application reaches its own interface by path: a press arrives
+    /// named, and the application decides what it means. A package free to lay
+    /// its screens out as it likes is therefore also free to lay out one that
+    /// answers nowhere, and nothing about drawing it would say so - the window
+    /// would open with no way to start playing. Naming the few paths without
+    /// which the application is not itself turns that into a refusal.
+    ///
+    /// Popover, pressable and control paths all count: they are what a host
+    /// addresses, and an application binds to whichever of them its documents
+    /// use.
+    ///
+    /// # Errors
+    /// Returns [`UiDocError::MissingPaths`] listing every required path the
+    /// screen does not answer on.
+    pub fn require_paths(&self, required: &[&str], origin: &SourceUri) -> Result<(), UiDocError> {
+        let missing = require::missing(self, required);
+        if missing.is_empty() {
+            return Ok(());
+        }
+        Err(UiDocError::MissingPaths {
+            origin: origin.clone(),
+            paths: missing,
+        })
     }
 
     delegate::delegate! {

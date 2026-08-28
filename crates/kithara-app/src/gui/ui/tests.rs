@@ -6,6 +6,7 @@ use kithara_ui::{
     compile::{CompiledNode, CompiledUi, compiled_min},
     error::UiDocError,
     expand::{ControlSpec, ExpandedNode},
+    ids::SourceUri,
     module::{ButtonStyle, IconName, MeasureAxis, TextAlign, TextStyle, WaveStyle},
     render::{Clock, ReadValue, Reads, tree},
     size::{Dim, SizeSpec, control_size},
@@ -1415,6 +1416,27 @@ fn the_shipped_package_compiles_from_disk() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/ui");
     let package = Package::load(Some(&root)).expect("the shipped package must load from disk");
     drop(AppUi::new(package).expect("the shipped package must compile from disk"));
+}
+
+/// A path the screen does not answer on is named, rather than left to be
+/// found by pressing where nothing is.
+///
+/// This is the check that stands between a package and a window that draws a
+/// player which cannot play: the screen compiles either way, and only the
+/// paths it answers on say whether the application can reach it.
+#[kithara::test]
+fn a_path_the_screen_does_not_answer_on_is_named() {
+    let ui = compile_ui(DeckLayout::Dual).expect("the shipped screen must compile");
+    let origin = SourceUri("app.klayout.ron".to_owned());
+
+    let error = ui
+        .require_paths(&["deck-a/play", "deck-a/eject"], &origin)
+        .expect_err("a screen answering on no eject path must be refused");
+
+    assert!(
+        matches!(&error, UiDocError::MissingPaths { paths, .. } if paths == &["deck-a/eject"]),
+        "the refusal must name the path the screen does not answer on, not {error}"
+    );
 }
 
 /// Nothing laid out is not a defect: the documents this build carries draw,

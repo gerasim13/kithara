@@ -5,6 +5,7 @@ use kithara_platform::time::Duration;
 use kithara_ui::{
     compile::{CompiledUi, compile},
     error::UiDocError,
+    ids::SourceUri,
     render::{Clock, Walk, tree},
     source::UiConfig,
 };
@@ -68,14 +69,17 @@ pub(in crate::gui) fn compile_ui(layout: DeckLayout) -> Result<CompiledUi, UiDoc
 }
 
 fn compile_screen(package: &Package, layout: DeckLayout) -> Result<CompiledUi, UiDocError> {
-    compile(
-        package.document(layout),
+    let document = package.document(layout);
+    let ui = compile(
+        document,
         package.resolver(),
         &Registry::default(),
         package.skin().document(),
         package.text(),
         &UiConfig::default(),
-    )
+    )?;
+    ui.require_paths(Package::REQUIRED, &SourceUri(document.to_owned()))?;
+    Ok(ui)
 }
 
 pub(crate) fn view(state: &Kithara) -> Element<'_, Message> {

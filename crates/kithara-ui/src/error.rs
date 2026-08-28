@@ -157,6 +157,11 @@ pub enum UiDocError {
     EmptyPackage { origin: SourceUri },
     #[error("{origin}: package role {role:?} names no file")]
     RoleWithoutFile { origin: SourceUri, role: String },
+    #[error("{origin}: screen answers on none of these paths: {paths:?}")]
+    MissingPaths {
+        origin: SourceUri,
+        paths: Vec<String>,
+    },
     #[error("{origin}: source {rel:?} escapes configured root")]
     RootEscape { origin: SourceUri, rel: String },
     #[error("{origin}: source {rel:?} could not be read: {source}")]

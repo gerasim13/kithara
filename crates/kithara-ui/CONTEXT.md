@@ -35,6 +35,13 @@ is part of this checkout, so it being unreadable is a broken checkout rather tha
 condition. A test walks every tab and asserts the resolver answers with the file on disk, which is
 what keeps the embedded copy from quietly becoming the one that draws.
 
+`CompiledUi::require_paths` names the other half of the package contract. A manifest says which file answers for which
+role; the paths a compiled screen answers on say whether an application can reach what it drew. The check is
+the application's to declare - this crate knows nothing of decks or transports - and runs after compilation
+rather than during it, because a screen missing a path is still a valid document. Popover, pressable and
+control paths all count: they are what a host addresses, and an application binds to whichever of them its
+documents use.
+
 The gallery is itself a package: `examples/gallery/assets/package.kpackage.ron` names a role per
 page, and the example holds roles only, never file names. A census asserts every role the manifest
 declares is a page some tab turns to, so a document added to the folder and left unreachable is

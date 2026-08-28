@@ -131,6 +131,15 @@ pub(crate) struct Package {
 impl Package {
     /// The manifest naming everything this application asks a package for.
     const MANIFEST: &'static str = "package.kpackage.ron";
+    /// The paths this application cannot be itself without.
+    ///
+    /// A package lays its screens out as it likes, and almost everything here
+    /// is free: which modules stand where, what they are called, what they are
+    /// dressed in. These two are not. `deck-a/play` is the only path that
+    /// starts and stops playback, and `deck-a/wave` the only one that moves the
+    /// position within a track; a screen offering neither draws a player that
+    /// cannot play, and nothing about drawing it would say so.
+    pub(crate) const REQUIRED: &'static [&'static str] = &["deck-a/play", "deck-a/wave"];
 
     /// Reads the package laid out at `root` over the documents this build
     /// carries, or only those documents when `root` names nothing.

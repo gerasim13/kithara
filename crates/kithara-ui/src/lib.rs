@@ -33,6 +33,7 @@ pub mod source;
 pub use doc::{envelope, layout, module, package, param, skin, text};
 
 mod doc;
+mod require;
 mod resolve;
 mod room;
 mod shader;

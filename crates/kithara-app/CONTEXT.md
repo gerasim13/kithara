@@ -49,6 +49,18 @@ A manifest may also name a skin document and a caption catalog; naming a skin is
 how the application looks without a rebuild. A manifest that names neither wears the built-in skin and the
 built-in words, which is a package carrying pages and nothing else - declared optionality, not a fallback.
 
+`Package::REQUIRED` is the whole of what a package must answer for, checked once each screen compiles:
+
+- `deck-a/play` - the only path that starts and stops playback. A screen without it draws a player that
+  cannot play.
+- `deck-a/wave` - the only path that moves the position within a track. A screen without it can start a
+  track and never move inside it.
+
+Everything else a screen offers is the package's own business. The minimum is checked rather than assumed
+because a screen missing a path still compiles and still draws; only the paths it answers on say whether the
+application can reach it, and a press that lands nowhere reads as a dead button rather than as a package
+defect.
+
 Reading the package from disk costs 1.7 ms once at start: 10.1 ms against 8.4 ms for the same documents
 embedded, 17 files and 62 KiB, measured on this laptop under `test-release`. Compilation dominates both, which
 is why the resolver caches what it read rather than indexing what it might read.
