@@ -209,7 +209,9 @@ jobs:
   # input rather than omitting the section.
   report:
     name: Quality report
-    needs: [architecture, coverage-risk, health]
+    # Every producer in the run, not three of the five: the assessment and the
+    # duplication report were archived and read by nobody.
+    needs: [assess, similarity, architecture, coverage-risk, health]
     if: always() && vars.KITHARA_RUNNER_LABELS != '' && github.actor == github.repository_owner
     runs-on: ${{ fromJSON(vars.KITHARA_RUNNER_LABELS) }}
     timeout-minutes: 30

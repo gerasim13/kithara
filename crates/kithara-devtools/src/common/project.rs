@@ -176,6 +176,10 @@ pub struct CiReportConfig {
     pub crap_rows: usize,
     /// Contours listed under the architecture complexity index, worst first.
     pub top_contours: usize,
+    /// Lines of the duplication report carried into the report. It leads with
+    /// the crate-level map and the explainable candidates, which is the part
+    /// worth reading without opening the artifact.
+    pub similarity_rows: usize,
 }
 
 impl Default for CiReportConfig {
@@ -183,6 +187,7 @@ impl Default for CiReportConfig {
         Self {
             crap_rows: 120,
             top_contours: 10,
+            similarity_rows: 80,
         }
     }
 }
