@@ -50,6 +50,9 @@ pub struct WarpRenderer {
     pub(super) pending_source: Option<PcmBuf>,
     /// Earliest metadata represented by `pending_source`.
     pub(super) pending_meta: Option<PcmMeta>,
+    /// Unity chunk retained while the active backend drains its tail.
+    /// Its samples occupy `pending_source` without a copy.
+    pub(super) pending_unity_meta: Option<PcmMeta>,
     /// Exact decoded-source boundary represented by the latest emitted chunk.
     pub(super) rendered_source_end: Option<(u64, NonZeroU32)>,
     /// Source frames admitted since the last renderer reset.
@@ -57,6 +60,9 @@ pub struct WarpRenderer {
     /// Reset requested by seek or a return to unity passthrough. The scheduler
     /// shell performs it outside the checked render core.
     pub(super) reset_pending: bool,
+    /// One scheduler-shell rebuild requested after a checked engine failure.
+    /// The intent is consumed even when preparation fails.
+    pub(super) rebuild_pending: bool,
 }
 
 impl WarpRenderer {
@@ -83,9 +89,11 @@ impl WarpRenderer {
             output_remainder: 0.0,
             pending_source: target.pending_source,
             pending_meta: None,
+            pending_unity_meta: None,
             rendered_source_end: None,
             source_frames_admitted: 0,
             reset_pending: false,
+            rebuild_pending: false,
             last_input_meta: None,
             output_start_meta: None,
             scratch: target.scratch,
@@ -114,11 +122,13 @@ impl WarpRenderer {
             source.clear();
         }
         self.pending_meta = None;
+        self.pending_unity_meta = None;
     }
 
     pub(super) fn retire_engine(&mut self) {
         debug_assert!(self.retired_engine.is_none());
         self.retired_engine = self.engine.take();
+        self.rebuild_pending = true;
     }
 
     pub(super) fn clear_render_state(&mut self) {
@@ -178,9 +188,30 @@ impl WarpRenderer {
     }
 
     pub(super) fn pending_frames(&self, channels: usize) -> usize {
+        if self.transition_pending() {
+            return 0;
+        }
         self.pending_source
             .as_deref()
             .map_or(0, |source| source.len() / channels)
+    }
+
+    /// Whether a live active-to-unity transition still owns queued PCM.
+    #[doc(hidden)]
+    #[must_use]
+    pub const fn transition_pending(&self) -> bool {
+        self.pending_unity_meta.is_some()
+    }
+
+    /// Whether the renderer can accept another source chunk without dropping it.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn accepts_input(&self) -> bool {
+        !self.transition_pending()
+            && (self.unity_passthrough(self.controls.speed())
+                || (self.engine.is_some()
+                    && self.pending_source.is_some()
+                    && self.scratch.is_some()))
     }
 
     pub(super) fn held_source_frames(&self) -> u64 {

@@ -10,6 +10,7 @@ use crate::effects::{
 #[derive(Clone, Copy)]
 enum DrainState {
     Open,
+    LiveWarp(u64),
     Warp(u64),
     Effects(u64),
     Exhausted(u64),
@@ -19,7 +20,10 @@ impl DrainState {
     const fn epoch(self) -> Option<u64> {
         match self {
             Self::Open => None,
-            Self::Warp(epoch) | Self::Effects(epoch) | Self::Exhausted(epoch) => Some(epoch),
+            Self::LiveWarp(epoch)
+            | Self::Warp(epoch)
+            | Self::Effects(epoch)
+            | Self::Exhausted(epoch) => Some(epoch),
         }
     }
 }
@@ -134,12 +138,30 @@ where
     }
 
     fn render(&mut self, chunk: PcmChunk, epoch: u64) -> Option<Fetch<PcmChunk>> {
-        let chunk = self.warp.render(chunk)?;
+        let chunk = self.warp.render(chunk);
+        if self.warp.transition_pending() {
+            self.drain_state = DrainState::LiveWarp(epoch);
+        }
+        let chunk = chunk?;
         let output = apply_effects(&mut self.effects, chunk)?;
         Some(self.fetch(output, epoch))
     }
 
     fn drain_step(&mut self) -> Option<TrackStep<PcmChunk>> {
+        if let DrainState::LiveWarp(epoch) = self.drain_state {
+            let chunk = self.warp.flush();
+            if !self.warp.transition_pending() {
+                self.drain_state = DrainState::Open;
+            }
+            return Some(
+                chunk
+                    .and_then(|chunk| apply_effects(&mut self.effects, chunk))
+                    .map_or(TrackStep::StateChanged, |output| {
+                        TrackStep::Produced(self.fetch(output, epoch))
+                    }),
+            );
+        }
+
         if let DrainState::Warp(epoch) = self.drain_state {
             if let Some(chunk) = self.warp.flush() {
                 return Some(
@@ -202,6 +224,9 @@ where
         if let Some(step) = self.drain_step() {
             return step;
         }
+        if !self.warp.accepts_input() {
+            return TrackStep::Failed;
+        }
 
         match self.source.step_track() {
             TrackStep::Produced(Fetch::Data { data, epoch, .. }) => self
@@ -234,7 +259,7 @@ mod tests {
     use std::{collections::VecDeque, num::NonZeroU32};
 
     use kithara_audio::{Fetch, TrackStep, WaitingReason};
-    use kithara_bufpool::{BytePool, PcmPool};
+    use kithara_bufpool::{ByteBudget, BytePool, PcmPool};
     use kithara_decode::{PcmMeta, duration_for_frames};
     use kithara_platform::sync::{
         Arc, Mutex,
@@ -242,6 +267,7 @@ mod tests {
     };
     use kithara_stream::{SeekControl, SeekObserve, SeekState};
     use kithara_test_utils::kithara;
+    use kithara_warp::{StretchControls, StretchKind};
 
     use super::*;
 
@@ -545,19 +571,39 @@ mod tests {
 
     fn chunk(pool: &PcmPool, spec: PcmSpec, frame_offset: u64) -> PcmChunk {
         const FRAMES: usize = 128;
+        chunk_with_frames(
+            pool,
+            spec,
+            frame_offset,
+            u32::try_from(FRAMES).expect("fixture frames fit u32"),
+            0.25,
+        )
+    }
+
+    fn chunk_with_frames(
+        pool: &PcmPool,
+        spec: PcmSpec,
+        frame_offset: u64,
+        frames: u32,
+        sample: f32,
+    ) -> PcmChunk {
+        let samples = usize::try_from(frames)
+            .expect("fixture frames fit usize")
+            .checked_mul(usize::from(spec.channels))
+            .expect("fixture sample count fits usize");
         PcmChunk::new(
             PcmMeta {
                 spec,
-                frames: 128,
+                frames,
                 frame_offset,
                 timestamp: duration_for_frames(spec.sample_rate.get(), frame_offset),
                 end_timestamp: duration_for_frames(
                     spec.sample_rate.get(),
-                    frame_offset.saturating_add(128),
+                    frame_offset.saturating_add(u64::from(frames)),
                 ),
                 ..Default::default()
             },
-            pool.attach(vec![0.25; FRAMES * usize::from(spec.channels)]),
+            pool.attach(vec![sample; samples]),
         )
     }
 
@@ -720,6 +766,176 @@ mod tests {
         };
         assert_eq!(data.meta, second_meta);
         assert_eq!(&data.samples[..], &second_samples);
+    }
+
+    #[kithara::test]
+    #[cfg_attr(
+        feature = "stretch-signalsmith",
+        case::signalsmith(StretchKind::Signalsmith)
+    )]
+    #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
+    fn live_warp_drain_holds_the_source_and_seek_discards_stale_unity(
+        #[case] backend: StretchKind,
+    ) {
+        const ACTIVE_FRAMES: u32 = 4096;
+        const UNITY_FRAMES: u32 = 1024;
+        const SENTINEL_FRAMES: u32 = 512;
+
+        let spec = PcmSpec::new(2, NonZeroU32::new(44_100).expect("test sample rate"));
+        let pool = PcmPool::default();
+        let first_active_end = u64::from(ACTIVE_FRAMES);
+        let first_unity_end = first_active_end.saturating_add(u64::from(UNITY_FRAMES));
+        let second_active_end = first_unity_end.saturating_add(u64::from(ACTIVE_FRAMES));
+        let second_unity_end = second_active_end.saturating_add(u64::from(UNITY_FRAMES));
+        let sentinel_end = second_unity_end.saturating_add(u64::from(SENTINEL_FRAMES));
+
+        let first_active = chunk_with_frames(&pool, spec, 0, ACTIVE_FRAMES, 0.25);
+        let first_unity = chunk_with_frames(&pool, spec, first_active_end, UNITY_FRAMES, 0.5);
+        let first_unity_ptr = first_unity.samples.as_ptr();
+        let first_unity_samples = first_unity.samples.to_vec();
+        let second_active = chunk_with_frames(&pool, spec, first_unity_end, ACTIVE_FRAMES, -0.25);
+        let second_unity = chunk_with_frames(&pool, spec, second_active_end, UNITY_FRAMES, -0.5);
+        let sentinel = chunk_with_frames(&pool, spec, second_unity_end, SENTINEL_FRAMES, 0.75);
+        let sentinel_ptr = sentinel.samples.as_ptr();
+        let sentinel_samples = sentinel.samples.to_vec();
+
+        let head = Arc::new(AtomicU64::new(0));
+        let seek = Arc::new(SeekState::new());
+        let raw = RawSource {
+            chunks: VecDeque::from([
+                first_active,
+                first_unity,
+                second_active,
+                second_unity,
+                sentinel,
+            ]),
+            head: Arc::clone(&head),
+            seek: Arc::clone(&seek),
+        };
+        let controls = StretchControls::new(0.5);
+        controls.set_keylock(true);
+        controls.set_backend(backend);
+        let config = kithara_warp::WarpConfig::builder()
+            .stretch(Arc::clone(&controls))
+            .build();
+        let renderer = kithara_warp::Warp::new((), &config).renderer(spec, pool);
+        let effects = Vec::new();
+        let drain = EffectDrain::new(effects.len(), &BytePool::default());
+        let mut source = WarpSource::new(raw, renderer, effects, drain, spec);
+
+        assert!(matches!(
+            source.step_track(),
+            TrackStep::Produced(_) | TrackStep::StateChanged
+        ));
+        assert_eq!(head.load(Ordering::Acquire), first_active_end);
+        flush_deferred(&mut source);
+
+        controls.set_speed(1.0);
+        let TrackStep::Produced(_) = source.step_track() else {
+            panic!("active-to-unity transition must emit its first tail quantum");
+        };
+        assert_eq!(head.load(Ordering::Acquire), first_unity_end);
+        assert!(source.warp.transition_pending());
+
+        let mut drain_steps = 0;
+        let emitted_unity = loop {
+            flush_deferred(&mut source);
+            let held_head = head.load(Ordering::Acquire);
+            let step = source.step_track();
+            assert_eq!(
+                head.load(Ordering::Acquire),
+                held_head,
+                "live Warp drain must not pull the next source chunk"
+            );
+            drain_steps += 1;
+            assert!(drain_steps < 64, "live Warp drain must converge");
+            if source.warp.transition_pending() {
+                assert!(matches!(
+                    step,
+                    TrackStep::Produced(_) | TrackStep::StateChanged
+                ));
+                continue;
+            }
+            let TrackStep::Produced(Fetch::Data { data, .. }) = step else {
+                panic!("the completed tail must release queued unity PCM");
+            };
+            break data;
+        };
+        assert!(drain_steps > 0);
+        assert_eq!(emitted_unity.samples.as_ptr(), first_unity_ptr);
+        assert_eq!(&emitted_unity.samples[..], &first_unity_samples);
+
+        controls.set_speed(0.5);
+        flush_deferred(&mut source);
+        assert!(matches!(
+            source.step_track(),
+            TrackStep::Produced(_) | TrackStep::StateChanged
+        ));
+        assert_eq!(head.load(Ordering::Acquire), second_active_end);
+
+        controls.set_speed(1.0);
+        flush_deferred(&mut source);
+        let TrackStep::Produced(_) = source.step_track() else {
+            panic!("the second transition must emit its first tail quantum");
+        };
+        assert_eq!(head.load(Ordering::Acquire), second_unity_end);
+        assert!(source.warp.transition_pending());
+        flush_deferred(&mut source);
+
+        assert_eq!(
+            seek.begin(kithara_platform::time::Duration::from_secs(1)),
+            1
+        );
+        assert!(matches!(source.step_track(), TrackStep::StateChanged));
+        assert_eq!(head.load(Ordering::Acquire), second_unity_end);
+        assert!(!source.warp.transition_pending());
+
+        flush_deferred(&mut source);
+        let TrackStep::Produced(Fetch::Data { data, .. }) = source.step_track() else {
+            panic!("playback must resume with the post-seek source chunk");
+        };
+        assert_eq!(head.load(Ordering::Acquire), sentinel_end);
+        assert_eq!(data.samples.as_ptr(), sentinel_ptr);
+        assert_eq!(&data.samples[..], &sentinel_samples);
+    }
+
+    #[kithara::test]
+    #[cfg_attr(
+        feature = "stretch-signalsmith",
+        case::signalsmith(StretchKind::Signalsmith)
+    )]
+    #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
+    fn unavailable_warp_target_fails_before_pulling_source(#[case] backend: StretchKind) {
+        let spec = PcmSpec::new(2, NonZeroU32::new(44_100).expect("test sample rate"));
+        let head = Arc::new(AtomicU64::new(0));
+        let raw = RawSource {
+            chunks: VecDeque::from([chunk(&PcmPool::default(), spec, 0)]),
+            head: Arc::clone(&head),
+            seek: Arc::new(SeekState::new()),
+        };
+        let controls = StretchControls::new(0.5);
+        controls.set_keylock(true);
+        controls.set_backend(backend);
+        let config = kithara_warp::WarpConfig::builder()
+            .stretch(controls)
+            .build();
+        let target_pool = PcmPool::with_byte_budget(8, 0, ByteBudget(0));
+        let renderer = kithara_warp::Warp::new((), &config).renderer(spec, target_pool.clone());
+        let failed_prepares = target_pool.stats().budget_overshoots;
+        let effects = Vec::new();
+        let drain = EffectDrain::new(effects.len(), &BytePool::default());
+        let mut source = WarpSource::new(raw, renderer, effects, drain, spec);
+
+        for _ in 0..3 {
+            flush_deferred(&mut source);
+            assert!(matches!(source.step_track(), TrackStep::Failed));
+            assert_eq!(head.load(Ordering::Acquire), 0);
+        }
+        assert_eq!(
+            target_pool.stats().budget_overshoots,
+            failed_prepares,
+            "a persistent target failure must not rebuild on every shell pass"
+        );
     }
 
     #[kithara::test]

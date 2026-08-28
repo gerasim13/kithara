@@ -99,3 +99,34 @@ fn target_rebuild_reuses_one_target_pool_budget(#[case] backend: StretchKind) {
     assert!(fx.scratch.is_some());
     assert_eq!(pool.stats().budget_overshoots, overshoots);
 }
+
+#[kithara::test]
+#[cfg_attr(
+    feature = "stretch-signalsmith",
+    case::signalsmith(StretchKind::Signalsmith)
+)]
+#[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
+fn failed_target_rebuild_is_not_retried_without_a_new_revision(#[case] backend: StretchKind) {
+    let pool = PcmPool::with_byte_budget(8, 0, ByteBudget(0));
+    let controls = StretchControls::new(0.5);
+    controls.set_keylock(true);
+    controls.set_backend(backend);
+    let mut fx = WarpRenderer::new(controls, spec(), pool.clone());
+    assert!(fx.engine.is_none());
+
+    let initial_stats = pool.stats();
+    fx.rebuild_pending = true;
+    fx.prepare(spec());
+    let rebuild_stats = pool.stats();
+    assert_ne!(rebuild_stats, initial_stats);
+    assert!(!fx.rebuild_pending);
+
+    for _ in 0..8 {
+        fx.prepare(spec());
+    }
+    assert_eq!(
+        pool.stats(),
+        rebuild_stats,
+        "a persistent preparation failure consumes one rebuild intent"
+    );
+}

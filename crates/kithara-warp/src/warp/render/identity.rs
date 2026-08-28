@@ -23,6 +23,16 @@ impl WarpRenderer {
     }
 
     #[doc(hidden)]
+    pub const fn transition_pending(&self) -> bool {
+        false
+    }
+
+    #[doc(hidden)]
+    pub const fn accepts_input(&self) -> bool {
+        true
+    }
+
+    #[doc(hidden)]
     pub const fn render(&mut self, chunk: PcmChunk) -> Option<PcmChunk> {
         Some(chunk)
     }

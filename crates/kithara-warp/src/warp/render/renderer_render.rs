@@ -172,35 +172,6 @@ impl WarpRenderer {
         Ok(())
     }
 
-    pub(super) fn append_scratch(
-        &mut self,
-        samples: &[f32],
-        channels: usize,
-    ) -> Result<(), ElasticError> {
-        let scratch = self
-            .scratch
-            .as_mut()
-            .ok_or(ElasticError::EnginePreparation(
-                "output scratch is unavailable",
-            ))?;
-        let end = scratch
-            .len()
-            .checked_add(samples.len())
-            .ok_or(ElasticError::SampleCountOverflow)?;
-        if end > scratch.capacity() {
-            return Err(ElasticError::OutputFrameLimit {
-                frames: end / channels,
-                limit: scratch.capacity() / channels,
-            });
-        }
-        let start = scratch.len();
-        scratch
-            .ensure_len(end)
-            .map_err(|_| ElasticError::PcmPoolBudgetExhausted)?;
-        scratch[start..end].copy_from_slice(samples);
-        Ok(())
-    }
-
     pub(super) fn render_active(
         &mut self,
         meta: PcmMeta,

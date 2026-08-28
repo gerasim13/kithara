@@ -1,5 +1,7 @@
+use std::mem;
+
 use kithara_bufpool::PcmBuf;
-use kithara_decode::{PcmChunk, PcmSpec};
+use kithara_decode::{PcmChunk, PcmMeta, PcmSpec};
 use kithara_stretch::ElasticError;
 use num_traits::ToPrimitive;
 use tracing::warn;
@@ -36,28 +38,221 @@ impl WarpRenderer {
         Some(PcmChunk::new(meta, pcm))
     }
 
-    fn reset_for_passthrough(&mut self) {
-        let has_pending = self
-            .pending_source
-            .as_deref()
-            .is_some_and(|source| !source.is_empty());
-        if !self.active && !has_pending {
-            return;
-        }
-        self.reset_pending = self.active;
-        self.clear_pending_source();
+    fn finish_transition_tail(&mut self) {
+        self.reset_pending |= self.active;
+        self.pending_meta = None;
         self.applied_pitch = f64::NAN;
         self.output_remainder = 0.0;
         self.source_frames_admitted = 0;
         self.active = false;
+        self.region = None;
+    }
+
+    fn retire_transition_tail(&mut self, replacement: Option<PcmBuf>) {
+        self.retire_engine();
+        if let Some(scratch) = self.scratch.as_mut() {
+            scratch.clear();
+        }
+        self.defer_scratch(replacement);
+        self.pending_meta = None;
+        self.output_start_meta = None;
+        self.applied_pitch = f64::NAN;
+        self.output_remainder = 0.0;
+        self.source_frames_admitted = 0;
+        self.reset_pending = false;
+        self.active = false;
+        self.region = None;
+    }
+
+    fn queue_unity(&mut self, meta: PcmMeta, samples: &mut PcmBuf) -> Result<(), ElasticError> {
+        let pending = self
+            .pending_source
+            .as_mut()
+            .ok_or(ElasticError::PcmPoolBudgetExhausted)?;
+        if !pending.is_empty() {
+            return Err(ElasticError::EnginePreparation(
+                "time-stretch pending source was not committed before unity",
+            ));
+        }
+        mem::swap(pending, samples);
+        self.pending_unity_meta = Some(meta);
+        Ok(())
+    }
+
+    fn begin_unity_transition(
+        &mut self,
+        meta: PcmMeta,
+        samples: &mut PcmBuf,
+        channels: usize,
+    ) -> Result<(), ElasticError> {
+        let tail_start_meta = self.last_input_meta;
+        self.output_start_meta = None;
+        if let Some(scratch) = self.scratch.as_mut() {
+            scratch.clear();
+        }
+        let rounded = self
+            .output_remainder
+            .round()
+            .max(0.0)
+            .to_usize()
+            .ok_or(ElasticError::SampleCountOverflow)?;
+        if rounded > 1 {
+            return Err(ElasticError::OutputFrameLimit {
+                frames: rounded,
+                limit: 1,
+            });
+        }
+        self.render_terminal_pending(channels)?;
+        if self.active && self.output_start_meta.is_none() {
+            self.output_start_meta = tail_start_meta;
+        }
+        self.queue_unity(meta, samples)
+    }
+
+    fn emit_pending_unity(&mut self, replacement: Option<PcmBuf>) -> Option<PcmChunk> {
+        let meta = self.pending_unity_meta?;
+        let replacement = replacement
+            .or_else(|| self.scratch.take())
+            .or_else(|| self.deferred_scratch.take());
+        let Some(mut replacement) = replacement else {
+            warn!("time-stretch queued unity has no reusable buffer");
+            return None;
+        };
+        replacement.clear();
+        let Some(samples) = self.pending_source.take() else {
+            self.pending_source = Some(replacement);
+            warn!("time-stretch queued unity buffer is unavailable");
+            return None;
+        };
+        self.pending_source = Some(replacement);
+        self.pending_unity_meta = None;
+        self.pending_meta = None;
+        self.last_input_meta = Some(meta);
+        self.output_start_meta = None;
+        self.record_rendered_source_end(meta, 0);
+        Some(PcmChunk::new(meta, samples))
+    }
+
+    fn drain_tail(&mut self, channels: usize) -> Result<bool, ElasticError> {
+        if !self.active {
+            return Ok(true);
+        }
+        let tail_frames = self
+            .engine
+            .as_ref()
+            .ok_or(ElasticError::EnginePreparation("engine is unavailable"))?
+            .capabilities()
+            .terminal_chunk_frames();
+        let tail_samples = tail_frames
+            .checked_mul(channels)
+            .ok_or(ElasticError::SampleCountOverflow)?;
+        let scratch = self
+            .scratch
+            .as_mut()
+            .ok_or(ElasticError::EnginePreparation(
+                "output scratch is unavailable",
+            ))?;
+        let start = scratch.len();
+        let end = start
+            .checked_add(tail_samples)
+            .ok_or(ElasticError::SampleCountOverflow)?;
+        if end > scratch.capacity() {
+            return Err(ElasticError::OutputFrameLimit {
+                frames: end / channels,
+                limit: scratch.capacity() / channels,
+            });
+        }
+        scratch
+            .ensure_len(end)
+            .map_err(|_| ElasticError::PcmPoolBudgetExhausted)?;
+        let drain = self
+            .engine
+            .as_mut()
+            .ok_or(ElasticError::EnginePreparation("engine is unavailable"))?
+            .flush(&mut scratch[start..end])?;
+        let rendered_frames = drain.frames();
+        if rendered_frames > tail_frames {
+            return Err(ElasticError::EngineOutputFrameCount {
+                actual: rendered_frames,
+                expected: tail_frames,
+            });
+        }
+        let rendered_samples = rendered_frames
+            .checked_mul(channels)
+            .ok_or(ElasticError::SampleCountOverflow)?;
+        scratch.truncate(start + rendered_samples);
+        if !drain.complete() && rendered_frames == 0 {
+            return Err(ElasticError::EnginePreparation(
+                "time-stretch terminal drain stopped advancing",
+            ));
+        }
+        Ok(drain.complete())
     }
 
     fn process_unity(&mut self, chunk: PcmChunk) -> Option<PcmChunk> {
         let channels = usize::from(self.spec.channels.max(1));
-        if self.pending_frames(channels) == 0 {
-            self.reset_for_passthrough();
+        if !self.active && self.pending_frames(channels) == 0 {
             self.record_rendered_source_end(chunk.meta, 0);
             return Some(chunk);
+        }
+
+        let PcmChunk { meta, mut samples } = chunk;
+        if let Err(error) = self.begin_unity_transition(meta, &mut samples, channels) {
+            warn!(%error, "time-stretch transition to passthrough failed; dropping chunk");
+            self.retire_engine();
+            self.clear_render_state();
+            self.defer_scratch(Some(samples));
+            return None;
+        }
+
+        self.advance_transition(channels, Some(samples))
+    }
+
+    fn advance_transition(
+        &mut self,
+        channels: usize,
+        replacement: Option<PcmBuf>,
+    ) -> Option<PcmChunk> {
+        if !self.active {
+            return self.emit_pending_unity(replacement);
+        }
+        let complete = match self.drain_tail(channels) {
+            Ok(complete) => complete,
+            Err(error) => {
+                warn!(%error, "time-stretch transition tail failed; preserving queued unity");
+                self.retire_transition_tail(replacement);
+                return None;
+            }
+        };
+        if complete {
+            self.finish_transition_tail();
+        }
+        let held_source_frames = if complete {
+            0
+        } else {
+            self.held_source_frames()
+        };
+        if self
+            .scratch
+            .as_deref()
+            .is_some_and(|scratch| !scratch.is_empty())
+        {
+            return self.emit(replacement, held_source_frames);
+        }
+        if complete {
+            return self.emit_pending_unity(replacement);
+        }
+
+        warn!("time-stretch transition tail stopped without output");
+        self.retire_transition_tail(replacement);
+        None
+    }
+
+    fn process_active(&mut self, chunk: PcmChunk, speed: f32) -> Option<PcmChunk> {
+        if self.engine.is_none() || self.scratch.is_none() {
+            warn!("time-stretch target was not prepared before rendering");
+            self.defer_scratch(Some(chunk.samples));
+            return None;
         }
 
         let PcmChunk { meta, samples } = chunk;
@@ -66,45 +261,30 @@ impl WarpRenderer {
         if let Some(scratch) = self.scratch.as_mut() {
             scratch.clear();
         }
-        let rounded = self.output_remainder.round().max(0.0).to_usize();
-        match rounded {
-            Some(0) => {
-                self.reset_for_passthrough();
-                self.record_rendered_source_end(meta, 0);
-                Some(PcmChunk::new(meta, samples))
-            }
-            Some(1) => {
-                let result = self
-                    .render_terminal_pending(channels)
-                    .and_then(|()| self.append_scratch(&samples, channels));
-                if let Err(error) = result {
-                    warn!(%error, "time-stretch transition to passthrough failed; dropping chunk");
-                    self.retire_engine();
-                    self.clear_render_state();
-                    self.defer_scratch(Some(samples));
-                    return None;
-                }
-                self.reset_for_passthrough();
-                self.emit(Some(samples), 0)
-            }
-            Some(frames) => {
-                warn!(
-                    frames,
-                    "time-stretch pending span rounded outside one-frame bound"
-                );
-                self.retire_engine();
-                self.clear_render_state();
-                self.defer_scratch(Some(samples));
-                None
-            }
-            None => {
-                warn!("time-stretch pending span could not be represented");
-                self.retire_engine();
-                self.clear_render_state();
-                self.defer_scratch(Some(samples));
-                None
-            }
+
+        let channels = usize::from(self.spec.channels.max(1));
+        let frames = samples.len() / channels;
+        if frames > Self::MAX_SOURCE_FRAMES {
+            let error = ElasticError::SourceFrameLimit {
+                frames,
+                limit: Self::MAX_SOURCE_FRAMES,
+            };
+            warn!(%error, "time-stretch rendering failed; dropping chunk");
+            self.defer_scratch(Some(samples));
+            return None;
         }
+        if let Err(error) = self.render_active(meta, &samples, speed, channels, frames) {
+            warn!(%error, "time-stretch rendering failed; dropping chunk");
+            self.retire_engine();
+            self.clear_render_state();
+            self.defer_scratch(Some(samples));
+            return None;
+        }
+        self.source_frames_admitted = self
+            .source_frames_admitted
+            .saturating_add(u64::try_from(frames).unwrap_or(u64::MAX));
+        let held_source_frames = self.held_source_frames();
+        self.emit(Some(samples), held_source_frames)
     }
 
     #[doc(hidden)]
@@ -122,56 +302,12 @@ impl WarpRenderer {
         }
         self.output_start_meta = None;
         let channels = usize::from(self.spec.channels.max(1));
-        let result = self.render_terminal_pending(channels).and_then(|()| {
-            if !self.active {
-                return Ok(true);
-            }
-            let tail_frames = self
-                .engine
-                .as_ref()
-                .ok_or(ElasticError::EnginePreparation("engine is unavailable"))?
-                .capabilities()
-                .terminal_chunk_frames();
-            let tail_samples = tail_frames
-                .checked_mul(channels)
-                .ok_or(ElasticError::SampleCountOverflow)?;
-            let scratch = self
-                .scratch
-                .as_mut()
-                .ok_or(ElasticError::EnginePreparation(
-                    "output scratch is unavailable",
-                ))?;
-            let start = scratch.len();
-            let end = start
-                .checked_add(tail_samples)
-                .ok_or(ElasticError::SampleCountOverflow)?;
-            if end > scratch.capacity() {
-                return Err(ElasticError::OutputFrameLimit {
-                    frames: end / channels,
-                    limit: scratch.capacity() / channels,
-                });
-            }
-            scratch
-                .ensure_len(end)
-                .map_err(|_| ElasticError::PcmPoolBudgetExhausted)?;
-            let drain = self
-                .engine
-                .as_mut()
-                .ok_or(ElasticError::EnginePreparation("engine is unavailable"))?
-                .flush(&mut scratch[start..end])?;
-            let rendered_frames = drain.frames();
-            if rendered_frames > tail_frames {
-                return Err(ElasticError::EngineOutputFrameCount {
-                    actual: rendered_frames,
-                    expected: tail_frames,
-                });
-            }
-            let rendered_samples = rendered_frames
-                .checked_mul(channels)
-                .ok_or(ElasticError::SampleCountOverflow)?;
-            scratch.truncate(start + rendered_samples);
-            Ok(drain.complete())
-        });
+        if self.transition_pending() {
+            return self.advance_transition(channels, None);
+        }
+        let result = self
+            .render_terminal_pending(channels)
+            .and_then(|()| self.drain_tail(channels));
         let complete = match result {
             Ok(complete) => complete,
             Err(error) => {
@@ -200,48 +336,17 @@ impl WarpRenderer {
             self.defer_scratch(Some(chunk.samples));
             return None;
         }
+        if self.transition_pending() {
+            warn!("time-stretch transition must drain before accepting new input");
+            self.defer_scratch(Some(chunk.samples));
+            return None;
+        }
 
         let speed = self.controls.speed();
         if self.unity_passthrough(speed) {
             return self.process_unity(chunk);
         }
-        if self.engine.is_none() || self.scratch.is_none() {
-            warn!("time-stretch target was not prepared before rendering");
-            self.defer_scratch(Some(chunk.samples));
-            return None;
-        }
-
-        let PcmChunk { meta, samples } = chunk;
-        self.last_input_meta = Some(meta);
-        self.output_start_meta = None;
-        if let Some(scratch) = self.scratch.as_mut() {
-            scratch.clear();
-        }
-
-        let channels = usize::from(self.spec.channels.max(1));
-        let frames = samples.len() / channels;
-        if frames > Self::MAX_SOURCE_FRAMES {
-            let error = ElasticError::SourceFrameLimit {
-                frames,
-                limit: Self::MAX_SOURCE_FRAMES,
-            };
-            warn!(%error, "time-stretch rendering failed; dropping chunk");
-            self.defer_scratch(Some(samples));
-            return None;
-        }
-        let rendered = self.render_active(meta, &samples, speed, channels, frames);
-        if let Err(error) = rendered {
-            warn!(%error, "time-stretch rendering failed; dropping chunk");
-            self.retire_engine();
-            self.clear_render_state();
-            self.defer_scratch(Some(samples));
-            return None;
-        }
-        self.source_frames_admitted = self
-            .source_frames_admitted
-            .saturating_add(u64::try_from(frames).unwrap_or(u64::MAX));
-        let held_source_frames = self.held_source_frames();
-        self.emit(Some(samples), held_source_frames)
+        self.process_active(chunk, speed)
     }
 
     #[doc(hidden)]
