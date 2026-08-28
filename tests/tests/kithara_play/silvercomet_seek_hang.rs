@@ -134,9 +134,9 @@ async fn build_resource(
     )
     .initial_abr_mode(abr)
     .build();
-    let mut resource = Resource::new(cfg)
+    let mut resource = Resource::new(cfg, None)
         .await
-        .unwrap_or_else(|e| panic!("Resource::new({url}): {e:?}"));
+        .unwrap_or_else(|e| panic!("Resource::new({url}, None): {e:?}"));
     timeout(Duration::from_secs(15), resource.preload())
         .await
         .unwrap_or_else(|_| panic!("Resource::preload({url}) timed out after 15s"))

@@ -200,6 +200,7 @@ const fn waveform_value(waveform: &[WaveBucket], revision: u64) -> ReadValue<'_>
         revision,
         beats: &[],
         downbeats: &[],
+        unready: &[],
         bpm: None,
         r#loop: None,
         cues: &[],

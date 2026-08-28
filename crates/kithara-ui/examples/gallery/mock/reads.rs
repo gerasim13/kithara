@@ -641,6 +641,7 @@ impl Reads for MockReads {
                 revision: 0,
                 beats: &self.wave_beats,
                 downbeats: &self.wave_downbeats,
+                unready: &Consts::WAVE_UNREADY,
                 bpm: Some(Consts::BPM_VALUE),
                 r#loop: self.transport.loop_region(),
                 cues: self.transport.cues(),
@@ -712,6 +713,13 @@ fn waveform() -> Vec<WaveBucket> {
             let phase = phase / total;
             let envelope =
                 (phase * 44.0).sin().mul_add(0.3, 0.62) * (phase * 5.0).cos().mul_add(0.18, 0.82);
+            if Consts::WAVE_UNREADY
+                .iter()
+                .any(|hole| phase >= hole[0] && phase < hole[1])
+            {
+                // Nothing decoded a hole, so its buckets carry no level.
+                return WaveBucket::default();
+            }
             WaveBucket {
                 low: ((0.25 + low / 100.0) * envelope).clamp(0.0, 1.0),
                 mid: ((0.18 + mid / 100.0) * envelope).clamp(0.0, 1.0),

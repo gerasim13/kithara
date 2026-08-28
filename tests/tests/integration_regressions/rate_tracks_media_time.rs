@@ -39,7 +39,7 @@ async fn file_resource(player: &PlayerImpl, path: &Path, store_dir: &Path) -> Re
     .byte_pool(player.byte_pool().clone())
     .pcm_pool(player.pcm_pool().clone())
     .build();
-    Resource::new(player.prepare_config(config))
+    Resource::new(player.prepare_config(config), None)
         .await
         .expect("open local resource")
 }

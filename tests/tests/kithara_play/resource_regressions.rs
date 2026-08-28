@@ -128,7 +128,7 @@ async fn open_resource_full(
     hint: Option<&str>,
     worker: Option<AudioWorkerHandle>,
 ) -> Resource {
-    Resource::new(resource_config(url, store, backend, hint, worker))
+    Resource::new(resource_config(url, store, backend, hint, worker), None)
         .await
         .unwrap_or_else(|err| panic!("resource should open for {}: {err}", url))
 }
@@ -432,13 +432,10 @@ async fn player_resource_repeated_unavailable_mp3_does_not_panic(
     drop(ok);
 
     for attempt in 0..2 {
-        let result = Resource::new(resource_config(
-            &bad_url,
-            store.clone(),
-            backend,
-            Some("mp3"),
+        let result = Resource::new(
+            resource_config(&bad_url, store.clone(), backend, Some("mp3"), None),
             None,
-        ))
+        )
         .await;
         assert!(
             result.is_err(),
@@ -569,12 +566,10 @@ async fn player_worker_hls_then_unavailable_mp3_then_mp3_recovery(
     );
 
     for attempt in 0..2 {
-        let result = Resource::new(resource_config_with_worker(
-            &bad_url,
-            store.clone(),
-            worker.clone(),
-            backend,
-        ))
+        let result = Resource::new(
+            resource_config_with_worker(&bad_url, store.clone(), worker.clone(), backend),
+            None,
+        )
         .await;
         assert!(
             result.is_err(),
@@ -1241,7 +1236,7 @@ async fn resource_mp3_no_hint_decodes_with_duration(
     let path = url.as_str();
 
     let config = resource_config_no_hint(&url, store, backend);
-    let mut resource = Resource::new(config)
+    let mut resource = Resource::new(config, None)
         .await
         .unwrap_or_else(|e| panic!("Resource::new failed for path={path}: {e}"));
 
@@ -1361,7 +1356,7 @@ async fn local_resource_decodes_with_duration(
             .pcm_pool(kithara::bufpool::PcmPool::default())
             .build();
 
-    let mut resource = Resource::new(config)
+    let mut resource = Resource::new(config, None)
         .await
         .unwrap_or_else(|e| panic!("{url}: Resource::new failed: {e}"));
 

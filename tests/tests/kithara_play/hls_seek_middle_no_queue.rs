@@ -218,7 +218,7 @@ async fn hls_seek_middle_lands_under_simulated_slow_connection(#[case] scenario:
         }
     };
 
-    let resource = Resource::new(cfg)
+    let resource = Resource::new(cfg, None)
         .await
         .unwrap_or_else(|e| panic!("Resource::new failed: {e:?}"));
 

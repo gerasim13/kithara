@@ -10,7 +10,7 @@ mod params;
 #[cfg(feature = "analysis-waveform")]
 pub use analyzer::WaveformAnalyzer;
 pub(crate) use band::Band;
-pub use beats::BeatGrid;
+pub use beats::{BeatGrid, MarkedBeat};
 pub use bucket::Bucket;
 pub use params::AnalysisParams;
 

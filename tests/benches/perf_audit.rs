@@ -131,10 +131,14 @@ fn bench_beat_analysis(c: &mut Criterion) {
 
     group.bench_function("waveform_30s_stereo", |b| {
         b.iter(|| {
-            let mut analyzer =
-                WaveformAnalyzer::new(Consts::SAMPLE_RATE, AnalysisParams::default());
-            analyzer.push_interleaved(black_box(&pcm), Consts::CHANNELS);
-            black_box(analyzer.finalize(512));
+            let mut analyzer = WaveformAnalyzer::new(
+                Consts::SAMPLE_RATE,
+                AnalysisParams::default(),
+                &PcmPool::default(),
+            );
+            analyzer.push(black_box(&pcm), Consts::CHANNELS, 0);
+            let frames = u64::try_from(pcm.len() / Consts::CHANNELS).unwrap_or(0);
+            black_box(analyzer.snapshot(512, Some(frames)));
         });
     });
 

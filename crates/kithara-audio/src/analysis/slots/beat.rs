@@ -1,5 +1,6 @@
+use std::num::NonZeroU32;
+
 use kithara_bufpool::PcmPool;
-use kithara_decode::{PcmChunk, PcmSpec};
 use kithara_resampler::ResamplerBackend;
 
 use crate::{
@@ -7,6 +8,7 @@ use crate::{
         analyzer::{BeatAnalysisConfig, default_beat_detector},
         beat::{BeatDetector, BeatPass, BeatPassConfig, GridParams},
     },
+    coverage::FrameRange,
     waveform::BeatGrid,
 };
 
@@ -29,10 +31,10 @@ impl<B> Config<B>
 where
     B: ResamplerBackend,
 {
-    pub(crate) fn build(&self, spec: PcmSpec, pcm_pool: &PcmPool) -> Slot<B> {
+    pub(crate) fn build(&self, rate: NonZeroU32, pcm_pool: &PcmPool) -> Slot<B> {
         Slot(self.0.as_ref().map(|config| {
             let pass = BeatPassConfig::builder()
-                .source_rate(spec.sample_rate.get())
+                .source_rate(rate.get())
                 .params(config.params.clone())
                 .resampler(config.resampler.clone())
                 .pcm_pool(pcm_pool.clone())
@@ -106,19 +108,25 @@ impl<B> Slot<B>
 where
     B: ResamplerBackend,
 {
-    pub(crate) fn finish(self, detector: Option<&mut Detector>) -> Option<BeatGrid> {
-        self.0
-            .zip(detector)
-            .and_then(|(analyzer, detector)| analyzer.finish(detector.as_mut()))
+    pub(crate) fn snapshot(
+        &mut self,
+        detector: Option<&mut Detector>,
+        ending: bool,
+        extent: Option<u64>,
+    ) -> Option<(BeatGrid, Vec<FrameRange>)> {
+        let (analyzer, detector) = (self.0.as_mut()?, detector?);
+        analyzer.snapshot(detector.as_mut(), ending, extent)
     }
 
-    pub(crate) const fn is_empty(&self) -> bool {
-        self.0.is_none()
-    }
-
-    pub(crate) fn push(&mut self, chunk: &PcmChunk, detector: Option<&mut Detector>) {
+    pub(crate) fn push(
+        &mut self,
+        pcm: &[f32],
+        channels: usize,
+        at: u64,
+        detector: Option<&mut Detector>,
+    ) {
         if let (Some(analyzer), Some(detector)) = (&mut self.0, detector) {
-            analyzer.push(chunk, detector.as_mut());
+            analyzer.push(pcm, channels, at, detector.as_mut());
         }
     }
 }

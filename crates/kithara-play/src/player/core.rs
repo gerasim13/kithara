@@ -113,6 +113,17 @@ impl PlayerImpl {
     }
 
     delegate! {
+        to self.core.engine {
+            /// PCM pool used by this player's audio engine.
+            #[must_use]
+            pub fn pcm_pool(&self) -> &PcmPool;
+            /// Rate the audio engine's master bus runs at. Every decoder this
+            /// player builds resamples onto it, so it is the axis a track's
+            /// frames are measured on downstream.
+            #[must_use]
+            #[call(master_sample_rate)]
+            pub fn sample_rate(&self) -> u32;
+        }
         to self.core.items {
             /// Advance to the next item in the queue.
             ///
@@ -163,12 +174,6 @@ impl PlayerImpl {
             resource: Box::new(item.player_resource),
         });
         Some((src, item.duration_seconds))
-    }
-
-    /// PCM pool used by this player's audio engine.
-    #[must_use]
-    pub fn pcm_pool(&self) -> &PcmPool {
-        self.core.engine.pcm_pool()
     }
 
     /// Remove all items from the queue.

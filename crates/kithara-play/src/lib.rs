@@ -38,7 +38,7 @@ pub use error::PlayError;
 pub use kithara_assets::{AssetLayout, DefaultLayout};
 pub use kithara_audio::{
     AudioWorkerHandle, CoordinateError, EngineLoadSnapshot, EqBandConfig, SeekOutcome,
-    ServiceClass, StretchControls,
+    ServiceClass, StretchControls, analysis::AnalysisProducer,
 };
 pub use kithara_net::Headers;
 pub use player::{PlayerConfig, PlayerImpl, SelectTransition};

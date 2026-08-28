@@ -169,7 +169,7 @@ async fn live_remote_resource_decodes_with_duration(
             )
             .build();
 
-    let mut resource = Resource::new(config)
+    let mut resource = Resource::new(config, None)
         .await
         .unwrap_or_else(|e| panic!("{url}: Resource::new failed: {e}"));
 
@@ -296,7 +296,7 @@ async fn player_mp3_duration_matches_app_flow(
         .build();
     config = player.prepare_config(config);
 
-    let resource = Resource::new(config)
+    let resource = Resource::new(config, None)
         .await
         .unwrap_or_else(|e| panic!("{url}: Resource::new failed: {e}"));
 

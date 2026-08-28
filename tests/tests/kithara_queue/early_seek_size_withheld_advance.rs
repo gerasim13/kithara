@@ -112,7 +112,7 @@ async fn build_hls_resource(
     .byte_pool(player.byte_pool().clone())
     .pcm_pool(player.pcm_pool().clone())
     .build();
-    Resource::new(cfg).await.expect("create HLS resource")
+    Resource::new(cfg, None).await.expect("create HLS resource")
 }
 
 /// What the queue did during the post-seek observation window.

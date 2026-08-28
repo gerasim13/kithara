@@ -1,0 +1,70 @@
+#![cfg(not(target_arch = "wasm32"))]
+
+use std::num::NonZeroU32;
+
+use kithara::{
+    audio::{
+        NoResamplerBackend,
+        analysis::{AnalysisProducer, AnalysisWorker, AnalyzerBuilder, Offer},
+    },
+    decode::PcmSpec,
+    platform::CancelToken,
+};
+use kithara_integration_tests::{analysis_pass::stalled_reader, kithara};
+use kithara_test_utils::kithara::rtsan_forbid_blocking;
+
+const RATE: u32 = 44_100;
+/// Interleaved stereo samples in one offered range, about a decoder chunk.
+const SAMPLES: usize = 2048;
+
+fn spec(rate: NonZeroU32) -> PcmSpec {
+    PcmSpec {
+        channels: 2,
+        sample_rate: rate,
+    }
+}
+
+/// The offer as the decode tick makes it, inside a region where blocking and
+/// allocation are forbidden.
+///
+/// Under `--cfg rtsan` this aborts the process on a malloc, a free, a lock, or
+/// a syscall, which is the whole assertion: the body is one downmix and one
+/// copy into a transport allocated when the pass opened.
+#[rtsan_forbid_blocking]
+fn offer_under_rt(producer: &mut AnalysisProducer, pcm: &[f32], spec: PcmSpec, at: u64) -> Offer {
+    producer.offer(pcm, spec, at)
+}
+
+/// A decoded range is offered from the decode tick, which forbids blocking.
+/// The taken path is the heaviest one - the refused and closed paths return
+/// before writing anything - so proving this one covers them.
+#[kithara::test]
+fn offering_a_decoded_range_neither_blocks_nor_allocates() {
+    let rate = NonZeroU32::new(RATE).expect("test rate is non-zero");
+    let cancel = CancelToken::never();
+    let worker = AnalysisWorker::new(
+        &cancel,
+        AnalyzerBuilder::<NoResamplerBackend>::default().with_waveform(64),
+    );
+    let (_analysis, mut producer) = worker.analyze(
+        stalled_reader(spec(rate)),
+        cancel.child(),
+        "rt-track".into(),
+        rate,
+    );
+
+    // Allocated before the realtime region opens, the way a decoded chunk is.
+    let pcm = vec![0.25_f32; SAMPLES];
+    let foreign = spec(NonZeroU32::new(48_000).expect("test rate is non-zero"));
+
+    assert_eq!(
+        offer_under_rt(&mut producer, &pcm, spec(rate), 0),
+        Offer::Taken,
+        "a range on the pass axis is taken"
+    );
+    assert_eq!(
+        offer_under_rt(&mut producer, &pcm, foreign, 0),
+        Offer::ForeignRate,
+        "and a range on another axis is refused, reported from the same region"
+    );
+}

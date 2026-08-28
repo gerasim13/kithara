@@ -13,9 +13,10 @@ use kithara_platform::{
         task::{JoinHandle, spawn},
     },
 };
-use kithara_play::{PlayerImpl, Resource, ResourceConfig};
+use kithara_play::{AnalysisProducer, PlayerImpl, Resource, ResourceConfig};
 
 use crate::{
+    analysis::Mailbox,
     attempts::{LoadClass, Ticket},
     error::QueueError,
     track::{TrackSource, Tracks},
@@ -24,6 +25,9 @@ use crate::{
 /// Async track loader: `ResourceConfig` -> `Resource`, run in two
 /// isolated permit lanes with one abortable attempt per track.
 pub(crate) struct Loader {
+    /// Analysis handles the app has left for tracks whose pass is open. A
+    /// load takes the one addressed to its own track, if there is one.
+    analysis: Mailbox<AnalysisProducer>,
     /// User-selection lane: one dedicated permit, isolated from prefetch.
     interactive_lane: Arc<Semaphore>,
     player: Arc<PlayerImpl>,
@@ -46,9 +50,15 @@ impl Loader {
             player,
             store,
             tracks,
+            analysis: Mailbox::default(),
             prefetch_lane: Arc::new(Semaphore::new(max_concurrent_loads.get())),
             interactive_lane: Arc::new(Semaphore::new(1)),
         }
+    }
+
+    /// Leave `producer` for `id`, to be attached when that track loads.
+    pub(crate) fn leave_analysis(&self, id: TrackId, producer: AnalysisProducer) {
+        self.analysis.leave(id, producer);
     }
 
     fn attempt_config(
@@ -102,13 +112,15 @@ impl Loader {
         Ok(self.player.prepare_config(config))
     }
 
-    /// Load a [`Resource`] from a prepared config. Caller is responsible
+    /// Load a [`Resource`] from a prepared config, attaching the analysis
+    /// handle left for this track when there is one. Caller is responsible
     /// for applying it via `PlayerImpl::replace_item` and emitting [`TrackStatus::Loaded`].
     async fn load(&self, id: TrackId, config: ResourceConfig) -> Result<Resource, QueueError> {
         let slow_watcher =
             Self::watch_for_slow_status(id, config.bus().cloned(), Arc::clone(&self.tracks));
+        let analysis = self.analysis.take(id);
         let resource_fut = async {
-            Resource::new(config)
+            Resource::new(config, analysis)
                 .await
                 .map_err(|e| QueueError::Resource(format!("{e}")))
         };

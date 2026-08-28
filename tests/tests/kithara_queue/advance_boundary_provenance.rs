@@ -1271,7 +1271,7 @@ async fn hls_resource_with_segments_and_duration(
     .pcm_pool(player.pcm_pool().clone())
     .build();
     config = player.prepare_config(config);
-    let mut resource = Resource::new(config)
+    let mut resource = Resource::new(config, None)
         .await
         .expect("open HLS resource for advance-boundary fixture");
     let _ = resource.preload().await;
@@ -1307,7 +1307,7 @@ async fn hls_multivariant_flac_resource(
     .pcm_pool(player.pcm_pool().clone())
     .build();
     config = player.prepare_config(config);
-    let mut resource = Resource::new(config)
+    let mut resource = Resource::new(config, None)
         .await
         .expect("open HLS multivariant FLAC resource for advance-boundary fixture");
     let _ = resource.preload().await;
@@ -1339,7 +1339,7 @@ async fn hls_sine_aac_resource(
     .pcm_pool(player.pcm_pool().clone())
     .build();
     config = player.prepare_config(config);
-    let mut resource = Resource::new(config)
+    let mut resource = Resource::new(config, None)
         .await
         .expect("open HLS sine AAC resource for advance-boundary fixture");
     let _ = resource.preload().await;

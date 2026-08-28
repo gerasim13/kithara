@@ -116,6 +116,7 @@ pub(super) fn decode_step<T: StreamType>(src: &mut StreamAudioSource<T>) -> Deco
             &mut src.decode,
             DecodeCtx {
                 resume,
+                analysis: &mut src.analysis,
                 emit: src.emit.as_deref(),
                 playhead: src.playhead.as_ref(),
                 cursor: &mut src.resume,

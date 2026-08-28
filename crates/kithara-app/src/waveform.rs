@@ -1,8 +1,13 @@
+use std::num::NonZeroU32;
+
 pub use kithara::audio::analysis::TrackAnalysis;
 use kithara::{
     audio::{
         PcmReader,
-        analysis::{AnalysisWorker, AnalyzerBuilder, BeatAnalysisConfig},
+        analysis::{
+            AnalysisFingerprint, AnalysisProducer, AnalysisToken, AnalysisWorker, AnalyzerBuilder,
+            BeatAnalysisConfig,
+        },
     },
     bufpool::PcmPool,
     prelude::{PlaybackResamplerBackend, Resource, ResourceConfig},
@@ -30,6 +35,8 @@ type AppResourceConfig = ResourceConfig<PlaybackResamplerBackend>;
 pub struct TrackAnalysisRunner {
     worker: Arc<AppAnalysisWorker>,
     current: Option<RunHandle>,
+    /// What this configuration produces, per artifact: the cache keys off it.
+    fingerprint: AnalysisFingerprint,
     /// Whether any analyzer is compiled in; without one a decode pass would
     /// produce nothing, so the driver skips analysis entirely.
     #[field(get = is_active)]
@@ -62,18 +69,41 @@ impl TrackAnalysisRunner {
         let builder = builder.with_waveform(_buckets);
         let builder = builder.with_beat();
         let active = !builder.is_empty();
+        let fingerprint = builder.fingerprint();
         let worker = Arc::new(AnalysisWorker::new(master, builder));
         Self {
+            fingerprint,
             worker,
             active,
             current: None,
         }
     }
 
-    /// Cancel any prior run and queue `config` for analysis.
+    /// What the active configuration produces, per artifact.
+    #[must_use]
+    pub const fn fingerprint(&self) -> &AnalysisFingerprint {
+        &self.fingerprint
+    }
+
+    /// Cancel any prior run and queue `config` for analysis on the `rate`
+    /// axis: the reader is opened onto it and the pass is measured in it, so
+    /// a producer feeding the same pass later shares one axis with it.
     /// Staged results arrive on the returned receiver,
     /// which closes when the run ends; nothing arrives on failure/cancel.
-    pub fn analyze(&mut self, config: AppResourceConfig) -> watch::Receiver<Option<TrackAnalysis>> {
+    /// `deliver` receives the producer half of the pass once it opens, which
+    /// is after the reader does and so cannot be returned from here. The
+    /// runner does not know what the handle is for; leaving it where the
+    /// track's load will find it is the caller's business.
+    pub fn analyze<D>(
+        &mut self,
+        config: AppResourceConfig,
+        token: AnalysisToken,
+        rate: NonZeroU32,
+        deliver: D,
+    ) -> watch::Receiver<Option<TrackAnalysis>>
+    where
+        D: FnOnce(AnalysisProducer) + Send + 'static,
+    {
         self.clear();
 
         let run = self.worker.child_token();
@@ -82,7 +112,10 @@ impl TrackAnalysisRunner {
             Arc::clone(&self.worker),
             config,
             run.clone(),
+            token,
+            rate,
             tx,
+            deliver,
         ));
         self.current = Some(RunHandle { task, cancel: run });
         rx
@@ -105,16 +138,22 @@ impl Drop for TrackAnalysisRunner {
 
 /// Open `config` and run it through the shared worker, forwarding every
 /// staged update to `tx`.
-async fn run_analysis(
+async fn run_analysis<D>(
     worker: Arc<AppAnalysisWorker>,
     config: AppResourceConfig,
     cancel: CancelToken,
+    token: AnalysisToken,
+    rate: NonZeroU32,
     tx: watch::Sender<Option<TrackAnalysis>>,
-) {
-    let Some(reader) = open_reader(config, &cancel).await else {
+    deliver: D,
+) where
+    D: FnOnce(AnalysisProducer) + Send + 'static,
+{
+    let Some(reader) = open_reader(config, &cancel, rate).await else {
         return;
     };
-    let mut rx = worker.analyze(reader, cancel);
+    let (mut rx, producer) = worker.analyze(reader, cancel, token, rate);
+    deliver(producer);
 
     while rx.changed().await.is_ok() {
         let analysis = rx.borrow().clone();
@@ -131,12 +170,14 @@ async fn run_analysis(
 async fn open_reader(
     mut config: AppResourceConfig,
     cancel: &CancelToken,
+    rate: NonZeroU32,
 ) -> Option<Box<dyn PcmReader>> {
     if cancel.is_cancelled() {
         return None;
     }
     config.set_cancel(cancel.child());
-    let mut resource = match Resource::new(config).await {
+    config.set_host_sample_rate(rate);
+    let mut resource = match Resource::new(config, None).await {
         Ok(r) => r,
         Err(e) => {
             warn!(?e, "analysis: resource open failed");

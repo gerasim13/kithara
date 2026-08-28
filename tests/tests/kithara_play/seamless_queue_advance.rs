@@ -265,7 +265,7 @@ async fn create_gapless_hls_resource(
     .pcm_pool(player.pcm_pool().clone())
     .build();
     config = player.prepare_config(config);
-    let mut resource = Resource::new(config)
+    let mut resource = Resource::new(config, None)
         .await
         .expect("open HLS resource for seamless queue fixture");
     let _ = resource.preload().await;

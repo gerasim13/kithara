@@ -81,7 +81,7 @@ async fn hls_seek_past_end_terminates_in_bounded_time() {
     .store(store)
     .build();
 
-    let resource = Resource::new(cfg)
+    let resource = Resource::new(cfg, None)
         .await
         .unwrap_or_else(|e| panic!("Resource::new failed: {e:?}"));
 

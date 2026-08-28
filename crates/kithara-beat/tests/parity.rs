@@ -62,8 +62,18 @@ fn python_parity_small_model() {
 
     let golden = load_golden(&fixture("golden_small.json"));
 
-    let beats = f_measure(&golden.beats, &raw.beats, WINDOW);
-    let downbeats = f_measure(&golden.downbeats, &raw.downbeats, WINDOW);
+    let detected: Vec<f32> = raw.beats.iter().map(|mark| mark.at).collect();
+    let detected_downbeats: Vec<f32> = raw.downbeats.iter().map(|mark| mark.at).collect();
+    assert!(
+        raw.beats
+            .iter()
+            .chain(raw.downbeats.iter())
+            .all(|mark| mark.confidence > 0.0 && mark.confidence < 1.0),
+        "every detected mark carries a probability, never a certainty"
+    );
+
+    let beats = f_measure(&golden.beats, &detected, WINDOW);
+    let downbeats = f_measure(&golden.downbeats, &detected_downbeats, WINDOW);
     report("beats", &beats);
     report("downbeats", &downbeats);
 

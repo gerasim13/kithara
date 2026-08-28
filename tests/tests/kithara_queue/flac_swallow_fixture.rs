@@ -149,7 +149,7 @@ async fn flac_swallow_fixture(#[case] backend: DecoderBackend) {
     .pcm_pool(PcmPool::default())
     .build();
 
-    let resource = Resource::new(cfg)
+    let resource = Resource::new(cfg, None)
         .await
         .unwrap_or_else(|e| panic!("Resource::new failed: {e:?}"));
 

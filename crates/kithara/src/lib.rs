@@ -21,7 +21,7 @@
 //! .byte_pool(BytePool::default())
 //! .pcm_pool(PcmPool::default())
 //! .build();
-//! let mut resource = Resource::new(config).await?;
+//! let mut resource = Resource::new(config, None).await?;
 //!
 //! // Read interleaved PCM
 //! let mut buf = [0.0f32; 1024];

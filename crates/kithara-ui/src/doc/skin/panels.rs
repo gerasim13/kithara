@@ -21,6 +21,10 @@ skin_section! {
         pub played_color: ColorRole,
         /// Extent cached ahead of the playhead; the played part takes the accent.
         pub cache_strip_color: ColorRole,
+        /// Rails and boundaries of a range the analysis has not covered.
+        pub coverage_edge_color: ColorRole,
+        /// The covered baseline and the stubs standing in for missing columns.
+        pub coverage_mark_color: ColorRole,
         pub cue_badge_background: ColorRole,
         pub cue_badge_text: TextRoleSkin,
         pub frame: FrameSkin,
@@ -37,6 +41,12 @@ skin_section! {
         pub cache_strip_alpha: f32,
         pub cache_strip_height: f32,
         pub content_inset: f32,
+        pub coverage_baseline_alpha: f32,
+        /// Height of the covered baseline and width of a region boundary.
+        pub coverage_hairline: f32,
+        pub coverage_rail_height: f32,
+        pub coverage_stub_alpha: f32,
+        pub coverage_stub_height: f32,
         pub cue_badge_size: f32,
         pub cue_line_width: f32,
         pub downbeat_alpha: f32,

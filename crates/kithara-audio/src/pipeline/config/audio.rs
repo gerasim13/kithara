@@ -9,6 +9,7 @@ use kithara_stream::{MediaInfo, StreamType};
 use portable_atomic::AtomicF32;
 
 use crate::{
+    analysis::AnalysisProducer,
     effects::timestretch::StretchControls,
     pipeline::config::AudioDecoderConfig,
     renderer::{AudioWorkerHandle, EngineLoad},
@@ -76,6 +77,10 @@ pub struct AudioConfig<T: StreamType, B = NoResamplerBackend> {
     /// Target sample rate of the audio host (for resampling).
     #[field(get, copy)]
     pub(crate) host_sample_rate: Option<NonZeroU32>,
+    /// Producer half of an open analysis pass for this track. When set, each
+    /// decoded chunk is offered to it before the effect chain runs, so a track
+    /// being played warms its own analysis instead of being decoded twice.
+    pub(crate) analysis: Option<AnalysisProducer>,
     /// Media info hint for format detection
     pub(crate) media_info: Option<MediaInfo>,
     /// Legacy shared playback-rate state for direct `Audio` callers. The

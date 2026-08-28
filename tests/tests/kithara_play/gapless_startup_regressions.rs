@@ -132,7 +132,7 @@ async fn create_delayed_gapless_hls_resource(
     .build();
     config = player.prepare_config(config);
 
-    Resource::new(config)
+    Resource::new(config, None)
         .await
         .expect("open delayed gapless HLS resource")
 }

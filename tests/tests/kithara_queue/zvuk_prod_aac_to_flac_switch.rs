@@ -213,7 +213,7 @@ async fn zvuk_prod_aac_to_flac_switch(#[case] backend: DecoderBackend) {
         panic!("expected an HLS config source for {PROD_TRACK}");
     };
 
-    let resource = Resource::new(*cfg)
+    let resource = Resource::new(*cfg, None)
         .await
         .unwrap_or_else(|e| panic!("Resource::new failed [{PROD_TRACK}]: {e:?}"));
     let abr = resource

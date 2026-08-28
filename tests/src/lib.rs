@@ -14,9 +14,10 @@
 pub mod abr_fixtures;
 pub use abr_fixtures::auto;
 pub mod alac_fixture;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod analysis_pass;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 pub mod apple_warmup;
-#[cfg(not(target_arch = "wasm32"))]
 pub mod architecture_trace;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod asset_fixture;

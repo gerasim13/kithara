@@ -22,6 +22,7 @@ use tracing::{debug, warn};
 #[cfg(test)]
 use crate::pipeline::decode::transition::OutgoingFrontier;
 use crate::{
+    analysis::AnalysisProducer,
     pipeline::{
         blend::PcmBlender,
         decode::{
@@ -183,6 +184,8 @@ pub(crate) struct DecodeCtx<'a, T: StreamType> {
     pub(crate) seek_observe: &'a dyn SeekObserve,
     pub(crate) emit: Option<&'a DeferredBus<Event>>,
     pub(crate) resume: Option<&'a mut ResumeState>,
+    /// Producer half of this track's analysis pass, when one is open.
+    pub(crate) analysis: &'a mut Option<AnalysisProducer>,
 }
 
 pub(crate) enum DecodeAction {

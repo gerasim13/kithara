@@ -848,7 +848,7 @@ async fn open_resource(
     role: &str,
     config: ResourceConfig,
 ) -> Resource {
-    let mut resource = time::timeout(PRELOAD_TIMEOUT, Resource::new(config))
+    let mut resource = time::timeout(PRELOAD_TIMEOUT, Resource::new(config, None))
         .await
         .unwrap_or_else(|_| {
             panic!(

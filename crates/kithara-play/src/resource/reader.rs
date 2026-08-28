@@ -3,7 +3,7 @@ use std::num::NonZeroU32;
 use delegate::delegate;
 use kithara_audio::{
     Audio, AudioConfig, ChunkOutcome, PcmReader, ReadOutcome, ResamplerBackend, SeekOutcome,
-    ServiceClass,
+    ServiceClass, analysis::AnalysisProducer,
 };
 use kithara_decode::{DecodeError, DecodeResult, PcmSpec, TrackMetadata};
 use kithara_events::EventBus;
@@ -33,7 +33,7 @@ use super::{ResourceConfig, SourceType};
 /// .byte_pool(BytePool::default())
 /// .pcm_pool(PcmPool::default())
 /// .build();
-/// let mut resource = Resource::new(config).await?;
+/// let mut resource = Resource::new(config, None).await?;
 ///
 /// let spec = resource.spec();
 /// let meta = resource.metadata();
@@ -95,7 +95,14 @@ impl Resource {
     ///
     /// Returns an error if source type detection fails, or if the underlying
     /// audio stream cannot be created (network failure, invalid format, etc.).
-    pub async fn new<B>(config: ResourceConfig<B>) -> DecodeResult<Self>
+    /// `analysis` is the producer half of an open analysis pass for this
+    /// track, when the caller holds one: the decode path then offers every
+    /// decoded chunk to it before effects, so a played track warms its own
+    /// analysis. `None` leaves playback exactly as it was.
+    pub async fn new<B>(
+        config: ResourceConfig<B>,
+        analysis: Option<AnalysisProducer>,
+    ) -> DecodeResult<Self>
     where
         B: Default + ResamplerBackend,
     {
@@ -106,11 +113,11 @@ impl Resource {
         let cancel = config.cancel.clone();
         let mut resource = match source_type {
             SourceType::RemoteFile(_) | SourceType::LocalFile(_) => {
-                let audio_config = config.build_file_config();
+                let audio_config = config.build_file_config(analysis);
                 Self::from_stream_audio(audio_config, src).await?
             }
             SourceType::HlsStream(_) => {
-                let audio_config = config.build_hls_config()?;
+                let audio_config = config.build_hls_config(analysis)?;
                 Self::from_stream_audio(audio_config, src).await?
             }
         };

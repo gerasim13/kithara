@@ -1,4 +1,4 @@
-use std::collections::VecDeque;
+use std::{collections::VecDeque, num::NonZeroU32};
 
 use kithara::{
     audio::analysis::BeatAnalysisConfig,
@@ -16,12 +16,13 @@ use kithara_platform::{
     },
 };
 use kithara_queue::{Queue, QueueEvent, TrackSource};
+use tracing::warn;
 
 use crate::{
     config::AppConfig,
     sources::build_resource_config,
     state::{UiState, apply_event},
-    wave_cache::{AnalysisTarget, TrackAnalysisCache},
+    wave_cache::{AnalysisTarget, TrackAnalysisCache, token_for},
     waveform::{TrackAnalysis, TrackAnalysisRunner},
 };
 
@@ -92,7 +93,15 @@ pub(crate) struct AnalysisController {
 /// key (`None` for an unkeyable source), and its result channel.
 struct Run {
     target: Option<AnalysisTarget>,
+    /// The rate axis this pass was opened on. A pass pins it, so a host rate
+    /// change means the pass has to end rather than keep measuring in frames
+    /// that would come to mean something else.
+    axis: NonZeroU32,
     rx: watch::Receiver<Option<TrackAnalysis>>,
+    /// Highest revision this run has published. Revisions are monotonic within
+    /// one pass and start over in the next, so the guard belongs to the run
+    /// rather than to what the UI happens to show.
+    shown_revision: Option<u64>,
     track_id: TrackId,
 }
 
@@ -113,14 +122,11 @@ impl AnalysisController {
         pcm_pool: PcmPool,
         waveform_max_buckets: usize,
     ) -> Self {
+        let runner =
+            TrackAnalysisRunner::new(cancel, waveform_max_buckets, beat_config.clone(), pcm_pool);
         Self {
-            runner: TrackAnalysisRunner::new(
-                cancel,
-                waveform_max_buckets,
-                beat_config.clone(),
-                pcm_pool,
-            ),
-            cache: TrackAnalysisCache::new(analysis_fingerprint(beat_config, waveform_max_buckets)),
+            cache: TrackAnalysisCache::new(runner.fingerprint().clone()),
+            runner,
             current: None,
             displayed: None,
             pending: VecDeque::new(),
@@ -212,16 +218,49 @@ impl AnalysisController {
         self.pump(queue, state, config);
     }
 
+    /// End a pass whose rate axis the engine has moved off, and put its track
+    /// back at the front of the queue so the next pump opens a fresh pass on
+    /// the new axis. Letting the old pass follow the device would leave one
+    /// snapshot series whose frames mean two different things.
+    fn retire_stale_axis(&mut self, queue: &Arc<Queue>) {
+        let Some(run) = &self.current else {
+            return;
+        };
+        let Some(rate) = NonZeroU32::new(queue.sample_rate()) else {
+            return;
+        };
+        if run.axis == rate {
+            return;
+        }
+        let track_id = run.track_id;
+        warn!(
+            from = run.axis.get(),
+            to = rate.get(),
+            "analysis: the host rate moved; the pass restarts on the new axis"
+        );
+        self.runner.clear();
+        self.current = None;
+        self.pending.retain(|pending| *pending != track_id);
+        self.pending.push_front(track_id);
+    }
+
     /// Publish the first part emit to the UI (no caching) when its
     /// track is still current; the beat overlay arrives on the closing commit.
-    fn publish_intermediate(&self, state: &Mutex<UiState>) {
-        let Some(run) = &self.current else {
+    fn publish_intermediate(&mut self, state: &Mutex<UiState>) {
+        let Some(run) = &mut self.current else {
             return;
         };
 
         let Some(analysis) = run.rx.borrow().clone() else {
             return;
         };
+        if run
+            .shown_revision
+            .is_some_and(|shown| analysis.revision() <= shown)
+        {
+            return;
+        }
+        run.shown_revision = Some(analysis.revision());
 
         publish_if_current(state, run.track_id, analysis);
     }
@@ -230,6 +269,7 @@ impl AnalysisController {
     /// the current track from cache, skip background tracks that are cached
     /// or unkeyable, decode the first genuine miss.
     pub(crate) fn pump(&mut self, queue: &Arc<Queue>, state: &Mutex<UiState>, config: &AppConfig) {
+        self.retire_stale_axis(queue);
         if self.current.is_some() {
             return;
         }
@@ -258,35 +298,63 @@ impl AnalysisController {
             };
             let is_current = current_track_id(state) == Some(track_id);
 
-            match plan_analysis(target.as_ref(), self.displayed.as_ref(), &mut self.cache) {
-                Plan::Skip => {}
-                Plan::Serve(analysis) => {
-                    if is_current {
-                        state.lock().set_analysis(Some(analysis));
-                        self.displayed = target;
+            let mut served = false;
+            let decode =
+                match plan_analysis(target.as_ref(), self.displayed.as_ref(), &mut self.cache) {
+                    Plan::Skip => false,
+                    Plan::Serve { analysis, refill } => {
+                        if is_current {
+                            state.lock().set_analysis(Some(*analysis));
+                            self.displayed = target.clone();
+                            served = true;
+                        }
+                        refill
                     }
-                }
-                Plan::Decode => {
-                    // An unkeyable source cannot be cached, so a background
-                    // decode would be thrown away; decode it only for display.
-                    if !is_current && target.is_none() {
-                        continue;
-                    }
-
-                    if is_current {
-                        state.lock().set_analysis(None);
-                        self.displayed = None;
-                    }
-
-                    let rx = self.runner.analyze(cfg);
-                    self.current = Some(Run {
-                        target,
-                        rx,
-                        track_id,
-                    });
-                    return;
-                }
+                    Plan::Decode => true,
+                };
+            if !decode {
+                continue;
             }
+
+            // An unkeyable source cannot be cached, so a background decode
+            // would be thrown away; decode it only for display.
+            if !is_current && target.is_none() {
+                continue;
+            }
+
+            // A refill keeps what it just served on screen: the pass produces
+            // the missing artifact, not a blank deck.
+            if is_current && !served {
+                state.lock().set_analysis(None);
+                self.displayed = None;
+            }
+
+            let token = target.as_ref().map_or_else(
+                || format!("track:{}", u64::from(track_id)).into(),
+                |target| token_for(target.key()),
+            );
+            // The pass and its reader share the engine's axis, so a producer
+            // feeding the same pass later measures its ranges in the same
+            // frames. Without a rate there is no axis and so no pass.
+            let Some(rate) = NonZeroU32::new(queue.sample_rate()) else {
+                warn!("analysis: the engine reports no sample rate; pass not opened");
+                continue;
+            };
+            // The handle waits where this track's load will find it. A track
+            // already loaded keeps it waiting until it loads again, so a pass
+            // opened mid-play warms nothing this time round.
+            let queue = Arc::clone(queue);
+            let rx = self.runner.analyze(cfg, token, rate, move |producer| {
+                queue.set_analysis(track_id, producer);
+            });
+            self.current = Some(Run {
+                target,
+                axis: rate,
+                rx,
+                shown_revision: None,
+                track_id,
+            });
+            return;
         }
     }
 
@@ -322,19 +390,19 @@ impl AnalysisController {
     }
 }
 
-/// Fingerprint of the active analysis configuration, stored inside each durable blob.
-/// A mismatch is a cache miss, so config changes re-analyse.
-fn analysis_fingerprint(beat_config: &AppBeatAnalysisConfig, max_buckets: usize) -> String {
-    let beat = beat_config.cache_tag().unwrap_or_else(|| "off".to_string());
-    format!("wave=native:max{max_buckets};beat={beat}")
-}
-
 /// What [`AnalysisController::pump`] should do for a track.
 enum Plan {
     /// Already shown for this content: leave the analysis as is.
     Skip,
-    /// Cached (memory or disk): publish it without re-decoding.
-    Serve(TrackAnalysis),
+    /// Cached (memory or disk): publish it. `refill` when the hit is missing
+    /// an artifact the active configuration expects, which happens when one
+    /// artifact's tag moved and the other's did not: the pass still has to run
+    /// to produce what was dropped. Boxed because a snapshot dwarfs the other
+    /// two variants.
+    Serve {
+        analysis: Box<TrackAnalysis>,
+        refill: bool,
+    },
     /// Not cached (or an unkeyable source): analyse.
     Decode,
 }
@@ -356,7 +424,13 @@ fn plan_analysis(
         return Plan::Skip;
     }
 
-    cache.get(target).map_or(Plan::Decode, Plan::Serve)
+    let Some(analysis) = cache.get(target) else {
+        return Plan::Decode;
+    };
+    Plan::Serve {
+        refill: !cache.is_sufficient(&analysis),
+        analysis: Box::new(analysis),
+    }
 }
 
 /// Library tracks in background-analysis order: the current track first,
@@ -409,16 +483,23 @@ fn resource_config_from_source(
 
 #[cfg(test)]
 mod tests {
+    use std::num::NonZeroU32;
+
     use ::kithara::{
         assets::{
             AssetLayout, AssetLayoutRegistry, AssetResource, AssetSource, AssetStore,
             StorageBackend,
         },
-        audio::{Waveform, analysis::BeatAnalysisConfig},
+        audio::{
+            Coverage, FrameRange, Waveform,
+            analysis::{AnalysisFingerprint, BeatAnalysisConfig},
+        },
         bufpool::{BytePool, PcmPool},
         events::TrackId,
         file::File,
+        net::{HttpClient, NetOptions},
         prelude::{PlaybackResamplerBackend, ResourceConfig},
+        stream::dl::{Downloader, DownloaderConfig},
     };
     use kithara_platform::{
         CancelToken,
@@ -428,17 +509,14 @@ mod tests {
     use kithara_queue::{Queue, QueueConfig};
     use kithara_test_utils::kithara;
 
-    use super::{
-        AnalysisController, Plan, Run, analysis_fingerprint, pending_order, plan_analysis,
-    };
+    use super::{AnalysisController, Plan, Run, pending_order, plan_analysis};
     use crate::{
         state::UiState,
         wave_cache::{AnalysisTarget, TrackAnalysisCache},
         waveform::TrackAnalysis,
     };
 
-    /// Bucket cap the controller tests run with; small so the value is
-    /// obviously the test's own and not a default leaking back in.
+    /// Bucket cap the controller tests run with; not a default.
     const MAX_BUCKETS: usize = 1_024;
 
     fn one_bucket_wave() -> Waveform {
@@ -448,11 +526,39 @@ mod tests {
     }
 
     fn analysis() -> TrackAnalysis {
-        TrackAnalysis::new(None, Some(one_bucket_wave()), 0)
+        let mut coverage = Coverage::default();
+        coverage.insert(FrameRange::new(0, 1_000));
+        TrackAnalysis::builder()
+            .token("test-track".into())
+            .revision(1)
+            .source_sample_rate(NonZeroU32::new(44_100).expect("fixture rate is non-zero"))
+            .extent(1_000)
+            .settled(true)
+            .coverage(coverage)
+            .waveform(one_bucket_wave())
+            .build()
+    }
+
+    fn revision_of(revision: u64) -> TrackAnalysis {
+        let mut coverage = Coverage::default();
+        coverage.insert(FrameRange::new(0, 1_000));
+        TrackAnalysis::builder()
+            .token("test-track".into())
+            .revision(revision)
+            .source_sample_rate(NonZeroU32::new(44_100).expect("fixture rate is non-zero"))
+            .extent(1_000)
+            .settled(true)
+            .coverage(coverage)
+            .waveform(one_bucket_wave())
+            .build()
+    }
+
+    fn shown_revision(state: &Mutex<UiState>) -> Option<u64> {
+        state.lock().analysis.as_ref().map(TrackAnalysis::revision)
     }
 
     fn cache() -> TrackAnalysisCache {
-        TrackAnalysisCache::new("test".to_string())
+        TrackAnalysisCache::new(AnalysisFingerprint::default())
     }
 
     fn target(discriminator: &str) -> AnalysisTarget {
@@ -496,6 +602,8 @@ mod tests {
         );
         let (tx, rx) = watch::channel(value);
         controller.current = Some(Run {
+            shown_revision: None,
+            axis: NonZeroU32::new(44_100).expect("fixture rate is non-zero"),
             track_id,
             rx,
             target: Some(target),
@@ -519,12 +627,10 @@ mod tests {
         let a = target("root_a");
         let b = target("root_b");
         let mut cache = cache();
-        // A different shown track does not block a fresh decode.
         assert!(matches!(
             plan_analysis(Some(&a), Some(&b), &mut cache),
             Plan::Decode
         ));
-        // An unkeyable source cannot be memoized.
         assert!(matches!(
             plan_analysis(None, None, &mut cache),
             Plan::Decode
@@ -538,8 +644,137 @@ mod tests {
         cache.put(a.clone(), analysis());
         assert!(matches!(
             plan_analysis(Some(&a), None, &mut cache),
-            Plan::Serve(_)
+            Plan::Serve { .. }
         ));
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn plan_refills_a_hit_that_lost_an_artifact() {
+        let a = target("root_refill");
+        let stored = TrackAnalysisCache::new(AnalysisFingerprint::new(None, Some("wave:v1")));
+        let mut stored = stored;
+        stored.put(a.clone(), analysis());
+
+        let mut current = TrackAnalysisCache::new(AnalysisFingerprint::new(None, Some("wave:v2")));
+        assert!(
+            matches!(
+                plan_analysis(Some(&a), None, &mut current),
+                Plan::Decode | Plan::Serve { refill: true, .. }
+            ),
+            "a hit missing an expected artifact must still reach the decoder"
+        );
+    }
+
+    #[kithara::test(native, tokio)]
+    fn a_stale_revision_from_the_run_is_not_published() {
+        let ids = [TrackId::from(1u64)];
+        let state = state_with_current(&ids, 0);
+        let track_id = TrackId::from(1u64);
+        let (mut controller, tx) = controller_with_run(track_id, target("root_rev"), None);
+
+        tx.send(Some(revision_of(5))).expect("receiver is alive");
+        controller.publish_intermediate(&state);
+        assert_eq!(shown_revision(&state), Some(5));
+
+        tx.send(Some(revision_of(3))).expect("receiver is alive");
+        controller.publish_intermediate(&state);
+        assert_eq!(
+            shown_revision(&state),
+            Some(5),
+            "an older revision of the same pass must not replace it"
+        );
+
+        tx.send(Some(revision_of(6))).expect("receiver is alive");
+        controller.publish_intermediate(&state);
+        assert_eq!(shown_revision(&state), Some(6), "a newer one wins");
+    }
+
+    fn app_config(cancel: &CancelToken) -> crate::config::AppConfig {
+        crate::config::AppConfig::builder()
+            .downloader(Downloader::new(
+                DownloaderConfig::for_client(HttpClient::new(
+                    NetOptions::builder().build(),
+                    cancel.child(),
+                ))
+                .build(),
+            ))
+            .shutdown(cancel.child())
+            .byte_pool(BytePool::default())
+            .pcm_pool(PcmPool::default())
+            .store(
+                AssetStore::builder()
+                    .backend(StorageBackend::Memory)
+                    .build(),
+            )
+            .build()
+    }
+
+    #[kithara::test(native, tokio)]
+    async fn a_pass_is_opened_on_the_engine_axis() {
+        let queue = Arc::new(Queue::new(QueueConfig::default()));
+        queue.append_with_id(TrackId::from(1), "file:///tmp/track-1.mp3".to_owned());
+        let state = state_with_current(&[TrackId::from(1)], 0);
+        let cancel = CancelToken::root();
+        let config = app_config(&cancel);
+        let mut controller = AnalysisController::new(
+            &cancel,
+            &BeatAnalysisConfig::<PlaybackResamplerBackend>::default(),
+            PcmPool::default(),
+            MAX_BUCKETS,
+        );
+
+        controller.on_tracks_changed(&queue, &state, &config);
+
+        let run = controller.current.as_ref().expect("a pass is opened");
+        assert_eq!(
+            run.axis.get(),
+            queue.sample_rate(),
+            "the pass is measured on the axis the engine plays at, not the source's native one"
+        );
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn a_pass_ends_when_the_engine_leaves_its_axis() {
+        let queue = Arc::new(Queue::new(QueueConfig::default()));
+        let (mut controller, _tx) = controller_with_run(TrackId::from(1), target("root_a"), None);
+
+        // The fixture run is pinned to 44.1 kHz.
+        let engine = queue.sample_rate();
+        if engine == 44_100 {
+            controller.current = controller.current.take().map(|run| Run {
+                axis: NonZeroU32::new(48_000).expect("test rate is non-zero"),
+                ..run
+            });
+        }
+
+        controller.retire_stale_axis(&queue);
+
+        assert!(
+            controller.current.is_none(),
+            "a pass whose axis the engine left does not keep publishing on it"
+        );
+        assert_eq!(
+            controller.pending.front(),
+            Some(&TrackId::from(1)),
+            "its track goes back to the front for a reopen"
+        );
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn a_pass_on_the_engine_axis_is_left_alone() {
+        let queue = Arc::new(Queue::new(QueueConfig::default()));
+        let (mut controller, _tx) = controller_with_run(TrackId::from(1), target("root_a"), None);
+        controller.current = controller.current.take().map(|run| Run {
+            axis: NonZeroU32::new(queue.sample_rate()).expect("engine rate is non-zero"),
+            ..run
+        });
+
+        controller.retire_stale_axis(&queue);
+
+        assert!(
+            controller.current.is_some(),
+            "a pass still on the engine's axis keeps running"
+        );
     }
 
     #[kithara::test(native, flash(false))]
@@ -559,8 +794,7 @@ mod tests {
         assert_eq!(order, vec![10, 11, 12], "no current: plain list order");
     }
 
-    /// Drive `commit` with a run whose result channel already holds `value`,
-    /// returning whether the run's key landed in the cache.
+    /// Commits a run holding `value`; true when its key landed in the cache.
     fn commit_caches(value: Option<TrackAnalysis>) -> bool {
         let target = target("root");
         let (mut controller, tx) = controller_with_run(TrackId::allocate(), target.clone(), value);
@@ -688,19 +922,5 @@ mod tests {
 
         assert!(state.lock().analysis.is_none());
         assert!(controller.displayed.is_none());
-    }
-
-    /// The bucket cap shapes the waveform that lands in the durable blob, so
-    /// it belongs in the fingerprint that decides whether a blob may be
-    /// reused. Two apps configured with different caps must not read each
-    /// other's cached analysis.
-    #[kithara::test]
-    fn a_different_bucket_cap_is_a_different_fingerprint() {
-        let beat = BeatAnalysisConfig::<PlaybackResamplerBackend>::default();
-
-        assert_ne!(
-            analysis_fingerprint(&beat, MAX_BUCKETS),
-            analysis_fingerprint(&beat, MAX_BUCKETS * 2)
-        );
     }
 }

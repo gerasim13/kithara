@@ -8,16 +8,12 @@ use crate::{analysis::TrackAnalysis, waveform::BeatGrid};
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
 #[non_exhaustive]
 pub enum CoordinateError {
-    /// The supplied coordinate is `NaN` or infinite.
     #[error("coordinate must be finite")]
     NonFinite,
-    /// A coordinate rate cannot define an invertible frame relation.
     #[error("coordinate rate must advance by a finite, positive amount per frame")]
     NonInvertibleRate,
-    /// A source-frame coordinate was below the start of the source.
     #[error("source-frame coordinate must not be negative")]
     NegativeSourceFrame,
-    /// An integer source index cannot be converted to the continuous axis exactly.
     #[error("source-frame index {index} cannot be represented exactly")]
     InexactSourceIndex { index: u64 },
 }
@@ -78,42 +74,30 @@ impl TrackBeat {
 #[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
 #[non_exhaustive]
 pub enum BeatMapError {
-    /// The analysis snapshot contains no beat grid.
     #[error("track analysis has no beat grid")]
     Missing,
-    /// The analysis snapshot does not define the sample-rate axis of its markers.
-    #[error("track analysis does not identify its source sample rate")]
-    SourceRateMissing,
-    /// Piecewise interpolation cannot be defined from fewer than two markers.
     #[error("beat map requires at least two markers, got {count}")]
     InsufficientMarkers { count: usize },
-    /// A beat marker repeats or precedes its predecessor.
     #[error("beat marker {index} is not strictly after its predecessor")]
     NonIncreasingMarker { index: usize },
-    /// A beat marker lies beyond the decoded source extent.
     #[error("beat marker {index} at source frame {frame} exceeds source extent {source_frames}")]
     MarkerPastSourceEnd {
         index: usize,
         frame: u64,
         source_frames: u64,
     },
-    /// A downbeat does not coincide with an analysed beat marker.
     #[error("downbeat {index} at source frame {frame} is not a beat marker")]
     DownbeatNotOnBeat { index: usize, frame: u64 },
-    /// A downbeat repeats or precedes its predecessor.
     #[error("downbeat {index} is not strictly after its predecessor")]
     NonIncreasingDownbeat { index: usize },
-    /// A beat marker cannot be represented on the source-frame axis.
     #[error("beat marker {index} has an invalid source coordinate: {source}")]
     SourceCoordinate {
         index: usize,
         #[source]
         source: CoordinateError,
     },
-    /// Marker ordinals cannot be represented exactly as continuous beats.
     #[error("beat map contains too many markers for an exact beat coordinate")]
     MarkerCountTooLarge,
-    /// The decoded source extent cannot be represented on the host-rate axis.
     #[error(
         "source extent {source_frames} at {source_sample_rate} Hz is out of range at {host_sample_rate} Hz"
     )]
@@ -129,17 +113,12 @@ pub enum BeatMapError {
 #[fieldwork(get)]
 #[non_exhaustive]
 pub struct TrackBeatMap {
-    /// Returns the consistently observed number of beats per bar, when
-    /// available.
     #[field(get, copy)]
     beats_per_bar: Option<u16>,
-    /// Returns analysed downbeats on the track-beat axis.
     #[field(get)]
     downbeats: Vec<TrackBeat>,
-    /// Returns the host sample rate defining the source-frame axis.
     #[field(get, copy)]
     host_sample_rate: NonZeroU32,
-    /// Returns the exclusive host-rate source bound for the range `0..count`.
     #[field(get, copy)]
     source_frame_count: u64,
     #[field(skip)]
@@ -160,11 +139,9 @@ impl TrackBeatMap {
         host_sample_rate: NonZeroU32,
     ) -> Result<Self, BeatMapError> {
         let grid = analysis.beat().ok_or(BeatMapError::Missing)?;
-        let source_rate = analysis
-            .source_sample_rate()
-            .ok_or(BeatMapError::SourceRateMissing)?;
+        let source_rate = analysis.source_sample_rate();
         Self::build(
-            grid,
+            grid.grid(),
             analysis.source_frames(),
             source_rate,
             host_sample_rate,
@@ -328,29 +305,43 @@ mod tests {
     use num_traits::cast::ToPrimitive;
 
     use super::{BeatMapError, CoordinateError, SourceFrame, TrackBeat, TrackBeatMap};
-    use crate::{analysis::TrackAnalysis, waveform::BeatGrid};
+    use crate::{
+        analysis::{BeatSnapshot, GridState, TrackAnalysis},
+        waveform::BeatGrid,
+    };
 
     fn sample_rate(value: u32) -> NonZeroU32 {
         NonZeroU32::new(value).expect("invariant: test sample rate is non-zero")
     }
 
     fn grid(beats: Vec<u64>) -> BeatGrid {
-        let downbeats = beats.first().copied().into_iter().collect();
+        let downbeats = beats
+            .first()
+            .copied()
+            .into_iter()
+            .map(|frame| (frame, Some(0.9)))
+            .collect();
+        let beats = beats.into_iter().map(|frame| (frame, Some(0.9))).collect();
         BeatGrid::new(120.0, beats, downbeats, Vec::new())
     }
 
+    fn analysis(beat: Option<BeatGrid>, source_frames: u64, source_rate: u32) -> TrackAnalysis {
+        TrackAnalysis::builder()
+            .token("test-track".into())
+            .revision(1)
+            .source_sample_rate(sample_rate(source_rate))
+            .extent(source_frames)
+            .maybe_beat(beat.map(|grid| BeatSnapshot::new(grid, GridState::Final, Vec::new())))
+            .build()
+    }
+
     fn analysis_with_grid(beats: Vec<u64>, source_frames: u64, source_rate: u32) -> TrackAnalysis {
-        TrackAnalysis::with_source_rate(
-            Some(grid(beats)),
-            None,
-            source_frames,
-            sample_rate(source_rate),
-        )
+        analysis(Some(grid(beats)), source_frames, source_rate)
     }
 
     #[kithara::test]
     fn rejects_missing_beat_grid() {
-        let analysis = TrackAnalysis::with_source_rate(None, None, 1_000, sample_rate(48_000));
+        let analysis = analysis(None, 1_000, 48_000);
 
         assert_eq!(
             TrackBeatMap::new(&analysis, sample_rate(48_000)),
@@ -375,16 +366,6 @@ mod tests {
         assert_eq!(
             TrackBeatMap::new(&analysis, sample_rate(48_000)),
             Err(BeatMapError::NonIncreasingMarker { index: 2 })
-        );
-    }
-
-    #[kithara::test]
-    fn rejects_missing_source_sample_rate() {
-        let analysis = TrackAnalysis::new(Some(grid(vec![0, 480])), None, 1_000);
-
-        assert_eq!(
-            TrackBeatMap::new(&analysis, sample_rate(48_000)),
-            Err(BeatMapError::SourceRateMissing)
         );
     }
 

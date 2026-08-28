@@ -352,7 +352,7 @@ fn loaded_deck_letters(entry: &CatalogEntry, decks: &Decks) -> String {
 }
 
 pub(in crate::gui) fn analysis_bpm(ui: &UiState) -> Option<f32> {
-    let bpm = ui.analysis.as_ref()?.beat()?.bpm();
+    let bpm = ui.analysis.as_ref()?.beat()?.grid().bpm();
     bpm.is_finite().then(|| bpm.as_())
 }
 
@@ -397,6 +397,8 @@ fn waveform_buckets(wave: &Waveform) -> impl Iterator<Item = WaveBucket> + '_ {
 
 #[cfg(test)]
 mod tests {
+    use std::num::NonZeroU32;
+
     use kithara_test_utils::kithara;
 
     use super::*;
@@ -408,7 +410,12 @@ mod tests {
             1, 0, 0, 0, 0, 0, 0, height, 0, 0, 0, height, 0, 0, 0, height,
         ];
         let wave = Waveform::try_from(blob.as_slice()).expect("hand-built blob is valid");
-        TrackAnalysis::new(None, Some(wave), 0)
+        TrackAnalysis::builder()
+            .token("fixture".into())
+            .revision(0)
+            .source_sample_rate(NonZeroU32::new(44_100).expect("fixture rate is non-zero"))
+            .waveform(wave)
+            .build()
     }
 
     #[kithara::test]

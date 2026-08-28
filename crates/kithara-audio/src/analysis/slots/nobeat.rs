@@ -1,10 +1,9 @@
-use std::marker::PhantomData;
+use std::{marker::PhantomData, num::NonZeroU32};
 
 use kithara_bufpool::PcmPool;
-use kithara_decode::{PcmChunk, PcmSpec};
 use kithara_resampler::ResamplerBackend;
 
-use crate::{analysis::BeatAnalysisConfig, waveform::BeatGrid};
+use crate::{analysis::BeatAnalysisConfig, coverage::FrameRange, waveform::BeatGrid};
 
 pub(crate) type Detector = ();
 
@@ -14,7 +13,7 @@ impl<B> Config<B>
 where
     B: ResamplerBackend,
 {
-    pub(crate) fn build(_config: &Self, _spec: PcmSpec, _pcm_pool: &PcmPool) -> Slot<B> {
+    pub(crate) fn build(_config: &Self, _rate: NonZeroU32, _pcm_pool: &PcmPool) -> Slot<B> {
         Slot(PhantomData)
     }
 
@@ -49,13 +48,21 @@ impl<B> Slot<B>
 where
     B: ResamplerBackend,
 {
-    pub(crate) fn finish(_slot: Self, _detector: Option<&mut Detector>) -> Option<BeatGrid> {
+    pub(crate) fn snapshot(
+        _slot: &mut Self,
+        _detector: Option<&mut Detector>,
+        _ending: bool,
+        _extent: Option<u64>,
+    ) -> Option<(BeatGrid, Vec<FrameRange>)> {
         None
     }
 
-    pub(crate) const fn is_empty(_slot: &Self) -> bool {
-        true
+    pub(crate) fn push(
+        _slot: &mut Self,
+        _pcm: &[f32],
+        _channels: usize,
+        _at: u64,
+        _detector: Option<&mut Detector>,
+    ) {
     }
-
-    pub(crate) fn push(_slot: &mut Self, _chunk: &PcmChunk, _detector: Option<&mut Detector>) {}
 }

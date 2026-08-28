@@ -257,6 +257,7 @@ impl Reads for Fixture {
                 beats: &[],
                 cues: &[],
                 downbeats: &[],
+                unready: &[],
                 bpm: Some(Self::BPM),
                 r#loop: None,
             }),

@@ -1,4 +1,4 @@
-use super::{BlobError, MAX_PREALLOC};
+use super::BlobError;
 
 /// Little-endian cursor reader over a byte slice.
 pub(crate) struct Reader<'a> {
@@ -35,16 +35,6 @@ impl<'a> Reader<'a> {
 
     pub(crate) fn read_f64(&mut self) -> Result<f64, BlobError> {
         Ok(f64::from_le_bytes(self.read_array::<8>()?))
-    }
-
-    /// Read a length-prefixed `u64` list, capping preallocation.
-    pub(crate) fn read_frames(&mut self) -> Result<Vec<u64>, BlobError> {
-        let count = self.read_len()?;
-        let mut out = Vec::with_capacity(count.min(MAX_PREALLOC));
-        for _ in 0..count {
-            out.push(self.read_u64()?);
-        }
-        Ok(out)
     }
 
     /// Read a `u64` length prefix as a `usize`.

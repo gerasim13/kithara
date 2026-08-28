@@ -1,6 +1,7 @@
 mod handle;
 mod node;
 mod observer;
+mod schedule;
 mod task;
 
 pub use handle::AnalysisWorker;

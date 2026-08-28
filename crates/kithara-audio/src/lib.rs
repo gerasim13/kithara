@@ -13,6 +13,7 @@
 pub mod analysis;
 mod audio;
 mod blob;
+mod coverage;
 pub mod effects;
 mod exports;
 #[cfg(any(test, feature = "mock"))]
@@ -27,6 +28,7 @@ mod waveform;
 
 pub use audio::{Audio, SeekHandle};
 pub use blob::frame::BlobError;
+pub use coverage::{Coverage, FrameRange};
 pub use effects::{
     eq::{EqBandConfig, EqEffect, FilterKind, IsolatorEq, generate_log_spaced_bands},
     limiter::{LimiterError, PeakLimiter},
@@ -52,4 +54,4 @@ pub use traits::{
     AudioEffect, ChunkOutcome, DecodeError, DecodeResult, PcmControl, PcmRead, PcmReader,
     PcmSession, PendingReason, ReadOutcome, SeekBegin, SeekOutcome,
 };
-pub use waveform::{AnalysisParams, BeatGrid, Bucket, GridSegment, bucket::Waveform};
+pub use waveform::{AnalysisParams, BeatGrid, Bucket, GridSegment, MarkedBeat, bucket::Waveform};

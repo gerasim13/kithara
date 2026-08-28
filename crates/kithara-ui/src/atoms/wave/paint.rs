@@ -16,6 +16,7 @@ use crate::{
 
 #[derive(Clone, Copy, PartialEq)]
 pub(crate) struct WavePalette {
+    pub(crate) coverage: bars::CoveragePalette,
     pub(crate) trough: Rgba,
     pub(crate) grid: Rgba,
     pub(crate) label: Rgba,
@@ -81,6 +82,7 @@ impl WavePaint<'_> {
                         buckets: waveform.buckets,
                         cues: waveform.cues,
                         downbeats: waveform.downbeats,
+                        unready: waveform.unready,
                         loop_region: waveform.r#loop,
                         position: self.progress,
                         zoom: self.zoom,
@@ -107,6 +109,14 @@ impl WavePaint<'_> {
                     self.metrics,
                     self.palette,
                     played,
+                );
+                bars::draw_coverage(
+                    list,
+                    bounds,
+                    waveform.unready,
+                    |norm| norm * bounds.w,
+                    self.metrics,
+                    self.palette.coverage,
                 );
             }
         }
@@ -252,6 +262,7 @@ mod tests {
         let downbeats = [0.5];
         let cues = [0.75];
         let palette = WavePalette {
+            coverage: coverage_palette(),
             trough: color(0.1),
             grid: color(0.2),
             label: color(0.3),
@@ -289,6 +300,7 @@ mod tests {
                 revision: 0,
                 beats: &beats,
                 downbeats: &downbeats,
+                unready: &[],
                 bpm: Some(120.0),
                 r#loop: Some([0.3, 0.7]),
                 cues: &cues,
@@ -390,6 +402,7 @@ mod tests {
             high: 0.4,
         }];
         let palette = WavePalette {
+            coverage: coverage_palette(),
             trough: color(0.1),
             grid: color(0.2),
             label: color(0.3),
@@ -424,6 +437,7 @@ mod tests {
                     revision: 0,
                     beats: &[],
                     downbeats: &[],
+                    unready: &[],
                     bpm: None,
                     r#loop: None,
                     cues: &[],
@@ -491,6 +505,7 @@ mod tests {
             metrics: builtin::skin().wave,
             overlay: None,
             palette: WavePalette {
+                coverage: coverage_palette(),
                 trough: color(0.1),
                 grid: color(0.2),
                 label: color(0.3),
@@ -621,6 +636,13 @@ mod tests {
             badge_background: color(0.24),
             badge_border: color(0.25),
             badge_text: color(0.26),
+        }
+    }
+
+    const fn coverage_palette() -> bars::CoveragePalette {
+        bars::CoveragePalette {
+            edge: color(0.11),
+            mark: color(0.12),
         }
     }
 

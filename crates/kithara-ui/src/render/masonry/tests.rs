@@ -210,6 +210,7 @@ impl Reads for FixtureReads {
                 revision: 0,
                 cues: &[],
                 downbeats: &[],
+                unready: &[],
                 bpm: None,
                 r#loop: None,
             })),
@@ -4756,6 +4757,7 @@ impl Reads for DeckReads {
                     revision: 0,
                     cues: &[],
                     downbeats: &[],
+                    unready: &[],
                     bpm: None,
                     r#loop: None,
                 }));

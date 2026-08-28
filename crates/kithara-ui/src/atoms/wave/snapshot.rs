@@ -6,6 +6,8 @@ pub(crate) struct WaveformData {
     pub(crate) revision: u64,
     pub(crate) beats: Box<[f32]>,
     pub(crate) downbeats: Box<[f32]>,
+    /// Track fractions the analysis has not covered.
+    pub(crate) unready: Box<[[f32; 2]]>,
     pub(crate) loop_region: Option<[f32; 2]>,
     pub(crate) cues: Box<[f32]>,
 }
@@ -17,6 +19,7 @@ impl From<WaveformView<'_>> for WaveformData {
             revision: view.revision,
             beats: view.beats.to_vec().into_boxed_slice(),
             downbeats: view.downbeats.to_vec().into_boxed_slice(),
+            unready: view.unready.to_vec().into_boxed_slice(),
             loop_region: view.r#loop,
             cues: view.cues.to_vec().into_boxed_slice(),
         }
@@ -35,6 +38,7 @@ impl WaveformData {
         self.revision == view.revision
             && self.beats.as_ref() == view.beats
             && self.downbeats.as_ref() == view.downbeats
+            && self.unready.as_ref() == view.unready
             && self.loop_region == view.r#loop
             && self.cues.as_ref() == view.cues
     }
@@ -62,6 +66,7 @@ mod tests {
             beats,
             cues: &[],
             downbeats: &[],
+            unready: &[],
             bpm: None,
             r#loop: None,
         }
@@ -86,6 +91,22 @@ mod tests {
         let held = WaveformData::from(view(&[bucket(0.9)], 7, &[0.25]));
 
         assert!(!held.matches(view(&[bucket(0.9)], 7, &[0.25, 0.5])));
+    }
+
+    /// Coverage arriving under an unmoved name must still reach the retained
+    /// host: a growing analysis would otherwise keep the picture it was first
+    /// drawn with, and nothing else reports the staleness.
+    #[kithara::test]
+    fn coverage_that_grows_is_a_waveform_the_copy_does_not_match() {
+        let held = WaveformData::from(WaveformView {
+            unready: &[[0.2, 0.4]],
+            ..view(&[bucket(0.9)], 7, &[])
+        });
+
+        assert!(!held.matches(WaveformView {
+            unready: &[[0.3, 0.4]],
+            ..view(&[bucket(0.9)], 7, &[])
+        }));
     }
 }
 

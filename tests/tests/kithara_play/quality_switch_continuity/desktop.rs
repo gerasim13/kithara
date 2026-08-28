@@ -197,7 +197,7 @@ async fn prepare_desktop_player(master_url: &url::Url, label: &str) -> DesktopPr
     .events(bus)
     .build();
     let config = harness.player().prepare_config(config);
-    let resource = Resource::new(config)
+    let resource = Resource::new(config, None)
         .await
         .unwrap_or_else(|error| panic!("open {label} Kithara App resource: {error:?}"));
     assert_eq!(

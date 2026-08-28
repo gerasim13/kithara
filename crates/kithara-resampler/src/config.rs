@@ -21,26 +21,6 @@ pub struct RatioGlide {
     pub target_ratio: f64,
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-#[non_exhaustive]
-pub struct Unit<B>(pub B);
-
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-#[non_exhaustive]
-pub struct Decode<B>(pub B);
-
-#[derive(Clone, Debug, PartialEq, Builder)]
-#[builder(state_mod(vis = "pub"))]
-#[non_exhaustive]
-pub struct Resample<S> {
-    pub target_sample_rate: NonZeroU32,
-    #[builder(default)]
-    pub options: ResamplerOptions,
-    #[builder(default)]
-    pub quality: ResamplerQuality,
-    pub scope: S,
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Builder)]
 #[builder(const, state_mod(vis = "pub"))]
 #[non_exhaustive]
@@ -262,16 +242,6 @@ mod tests {
         assert_eq!(options.chunk_size, 1_024);
         assert_eq!(options.passthrough_tolerance, 0.0001);
         assert_eq!(options.max_ratio_adjustment, 8.0);
-    }
-
-    #[kithara::test(native, flash(false))]
-    fn resample_scope_keeps_backend_in_the_type() {
-        let resample = crate::Resample::builder()
-            .target_sample_rate(sample_rate(48_000))
-            .scope(crate::Unit(TestBackend::fixed()))
-            .build();
-
-        assert_eq!(resample.scope.0.name(), "test");
     }
 
     #[kithara::test(native, flash(false))]

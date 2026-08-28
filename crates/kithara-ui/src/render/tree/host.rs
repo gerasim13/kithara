@@ -922,6 +922,7 @@ mod tests {
                     revision: 0,
                     beats: &[],
                     downbeats: &[],
+                    unready: &[],
                     bpm: None,
                     r#loop: None,
                     cues: &[],

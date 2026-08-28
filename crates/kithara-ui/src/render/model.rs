@@ -28,6 +28,8 @@ pub struct WaveformView<'a> {
     pub beats: &'a [f32],
     pub cues: &'a [f32],
     pub downbeats: &'a [f32],
+    /// Track fractions the analysis has not covered, as `[start, end]` pairs.
+    pub unready: &'a [[f32; 2]],
     pub bpm: Option<f32>,
     pub r#loop: Option<[f32; 2]>,
 }

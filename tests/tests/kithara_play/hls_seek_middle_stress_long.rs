@@ -145,7 +145,7 @@ async fn hls_seek_middle_repeated_seeks_long_stress(#[case] backend: DecoderBack
     .pcm_pool(PcmPool::default())
     .build();
 
-    let resource = Resource::new(cfg)
+    let resource = Resource::new(cfg, None)
         .await
         .unwrap_or_else(|e| panic!("Resource::new failed: {e:?}"));
 

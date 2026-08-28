@@ -289,7 +289,7 @@ async fn prepare_player(
     .initial_abr_mode(AbrMode::manual(initial_variant))
     .events(bus)
     .build();
-    let resource = Resource::new(config)
+    let resource = Resource::new(config, None)
         .await
         .unwrap_or_else(|error| panic!("open {label} resource: {error:?}"));
     let abr = resource

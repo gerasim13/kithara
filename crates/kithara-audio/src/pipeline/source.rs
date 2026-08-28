@@ -16,6 +16,7 @@ pub(crate) use crate::pipeline::{
     stream::shared::SharedStream,
 };
 use crate::{
+    analysis::AnalysisProducer,
     pipeline::{
         decode::{
             gate::ReadinessGate,
@@ -61,6 +62,13 @@ pub(crate) struct StreamAudioSource<T: StreamType> {
     /// forbid path. `None` for sources built without an event bus.
     #[field(with, option_set_some, vis = "pub(crate)")]
     pub(crate) emit: Option<Arc<DeferredBus<Event>>>,
+    /// Producer half of this track's analysis pass, when one is open.
+    ///
+    /// Ranges are offered before the effect chain runs, so a pass is fed the
+    /// decoded audio rather than the played audio. Absent by default: playback
+    /// with no open pass carries no handle and does no work for one.
+    #[field(with, option_set_some, vis = "pub(crate)")]
+    pub(crate) analysis: Option<AnalysisProducer>,
     pub(crate) variant_control: Option<Arc<dyn VariantControl>>,
     pub(crate) readiness: ReadinessGate,
     pub(crate) rebuild: RebuildPort<T>,
@@ -151,6 +159,7 @@ impl<T: StreamType> StreamAudioSource<T> {
             resume,
             variant_control,
             state: Track::<Decoding>::new(()).erase(),
+            analysis: None,
             emit: None,
             retired: Retired::new(
                 Self::GENERATION_RETIRE_CAPACITY,

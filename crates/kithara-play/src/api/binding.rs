@@ -88,7 +88,10 @@ impl TrackBinding {
 mod tests {
     use std::num::NonZeroU32;
 
-    use kithara_audio::{BeatGrid, BeatMapError, TrackBeat, analysis::TrackAnalysis};
+    use kithara_audio::{
+        BeatGrid, BeatMapError, TrackBeat,
+        analysis::{BeatSnapshot, GridState, TrackAnalysis},
+    };
     use kithara_events::PlaybackDirection;
     use kithara_test_utils::kithara;
 
@@ -98,17 +101,25 @@ mod tests {
         NonZeroU32::new(48_000).expect("invariant: fixture sample rate is non-zero")
     }
 
+    fn analysis(beat: Option<BeatGrid>, source_frames: u64) -> TrackAnalysis {
+        TrackAnalysis::builder()
+            .token("test-track".into())
+            .revision(1)
+            .source_sample_rate(sample_rate())
+            .extent(source_frames)
+            .maybe_beat(beat.map(|grid| BeatSnapshot::new(grid, GridState::Final, Vec::new())))
+            .build()
+    }
+
     fn analysis_with_grid() -> TrackAnalysis {
-        TrackAnalysis::with_source_rate(
+        analysis(
             Some(BeatGrid::new(
                 120.0,
-                vec![0, 48_000, 96_000],
-                vec![0],
+                vec![(0, Some(0.9)), (48_000, Some(0.9)), (96_000, Some(0.9))],
+                vec![(0, Some(0.9))],
                 Vec::new(),
             )),
-            None,
             144_000,
-            sample_rate(),
         )
     }
 
@@ -169,7 +180,7 @@ mod tests {
 
     #[kithara::test]
     fn missing_beat_grid_is_unavailable() {
-        let analysis = TrackAnalysis::with_source_rate(None, None, 0, sample_rate());
+        let analysis = analysis(None, 0);
 
         assert!(matches!(
             TrackBinding::new(

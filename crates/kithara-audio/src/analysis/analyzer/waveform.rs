@@ -1,8 +1,6 @@
 use kithara_bufpool::PcmPool;
-use kithara_decode::PcmChunk;
 
-use super::track::Analyzer;
-use crate::waveform::{AnalysisParams, WaveformAnalyzer};
+use crate::waveform::{AnalysisParams, WaveformAnalyzer, bucket::Waveform};
 
 pub(crate) struct WaveformPass {
     inner: WaveformAnalyzer,
@@ -16,17 +14,12 @@ impl WaveformPass {
             inner: WaveformAnalyzer::new(sample_rate, AnalysisParams::default(), pcm_pool),
         }
     }
-}
 
-impl Analyzer for WaveformPass {
-    type Output = crate::waveform::bucket::Waveform;
-
-    fn finish(self) -> Self::Output {
-        self.inner.finalize(self.buckets)
+    pub(crate) fn push(&mut self, pcm: &[f32], channels: usize, at: u64) {
+        self.inner.push(pcm, channels, at);
     }
 
-    fn push(&mut self, chunk: &PcmChunk) {
-        let channels = usize::from(chunk.spec().channels.max(1));
-        self.inner.push_interleaved(&chunk.samples[..], channels);
+    pub(crate) fn snapshot(&mut self, extent: Option<u64>) -> Waveform {
+        self.inner.snapshot(self.buckets, extent)
     }
 }

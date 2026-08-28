@@ -1,4 +1,5 @@
 use kithara_events::{EventReceiver, QueueEvent, QueueRepeatMode, TrackId};
+use kithara_play::AnalysisProducer;
 
 use super::Queue;
 use crate::{
@@ -7,6 +8,16 @@ use crate::{
 };
 
 impl Queue {
+    /// Leave the producer half of an open analysis pass for `id`.
+    ///
+    /// The load for that track attaches it, so a track played while its pass
+    /// is open warms its own analysis instead of being decoded a second time.
+    /// A track that is already loaded keeps the handle waiting until it loads
+    /// again; only one handle waits at a time, matching the one open pass.
+    pub fn set_analysis(&self, id: TrackId, producer: AnalysisProducer) {
+        self.loader.leave_analysis(id, producer);
+    }
+
     /// The currently playing track entry, if any.
     ///
     /// Sourced from the navigation cursor (not the player) so the queue
@@ -19,15 +30,6 @@ impl Queue {
     pub fn current(&self) -> Option<TrackEntry> {
         let idx = self.lock_navigation().current_index()?;
         self.lock_tracks().get(idx).map(TrackRecord::entry)
-    }
-
-    /// ABR handle of the currently playing adaptive item, if any.
-    ///
-    /// Returned handle drives runtime variant/bandwidth control — FFI and
-    /// GUI use it for `set_abr_mode` / `set_preferred_peak_bitrate`.
-    #[must_use]
-    pub fn current_abr_handle(&self) -> Option<kithara_abr::AbrHandle> {
-        self.player.current_abr_handle()
     }
 
     /// The currently playing track's queue index (player-reported).
@@ -75,6 +77,19 @@ impl Queue {
     }
 
     delegate::delegate! {
+        to self.player {
+            /// ABR handle of the currently playing adaptive item, if any.
+            ///
+            /// Returned handle drives runtime variant/bandwidth control — FFI
+            /// and GUI use it for `set_abr_mode` /
+            /// `set_preferred_peak_bitrate`.
+            #[must_use]
+            pub fn current_abr_handle(&self) -> Option<kithara_abr::AbrHandle>;
+            /// Rate the player's audio engine runs at, and so the axis every
+            /// track decoded for this queue is measured on.
+            #[must_use]
+            pub fn sample_rate(&self) -> u32;
+        }
         to self {
             /// Live variant metadata of the currently playing adaptive item.
             /// Pulled from the player's stashed ABR handle on every call so a

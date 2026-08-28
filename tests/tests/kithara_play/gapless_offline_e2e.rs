@@ -777,7 +777,7 @@ async fn create_resource_with_encoding(
     .pcm_pool(player.pcm_pool().clone())
     .build();
     config = player.prepare_config(config);
-    let mut resource = Resource::new(config)
+    let mut resource = Resource::new(config, None)
         .await
         .expect("open HLS resource for gapless e2e fixture");
     let _ = resource.preload().await;
@@ -847,7 +847,7 @@ async fn create_apple_fused_resource(
     .pcm_pool(player.pcm_pool().clone())
     .build();
     let config = player.prepare_config(config);
-    let mut resource = Resource::new(config)
+    let mut resource = Resource::new(config, None)
         .await
         .expect("open HLS resource for Apple fused fixture");
     let _ = resource.preload().await;

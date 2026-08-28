@@ -1,3 +1,5 @@
+use std::iter;
+
 use num_traits::cast::AsPrimitive;
 
 use crate::{
@@ -115,11 +117,183 @@ pub(crate) fn draw_column(
     }
 }
 
+/// Colors the coverage layer resolves from the skin once per frame.
+#[derive(Clone, Copy, PartialEq)]
+pub(crate) struct CoveragePalette {
+    /// Baseline and comb stubs.
+    pub(crate) mark: Rgba,
+    /// Rails and region boundaries.
+    pub(crate) edge: Rgba,
+}
+
+/// One stretch of the lane, in canvas pixels measured from the box's left edge.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum CoverageSpan {
+    Covered([f32; 2]),
+    /// An unready stretch, with the sides that meet covered audio.
+    Unready([f32; 2], [bool; 2]),
+}
+
+/// Partition the lane into what the analysis covered and what it did not.
+///
+/// `to_x` maps a track fraction to a canvas pixel, so each caller keeps its own
+/// window mapping. `unready` is in ascending track order. Every unready stretch
+/// rounds outward, so a pixel column that is part covered reads unready: the
+/// picture may understate what is known by under a pixel, never overstate it.
+pub(crate) fn coverage_spans<F>(unready: &[[f32; 2]], to_x: F, width: f32) -> Vec<CoverageSpan>
+where
+    F: Fn(f32) -> f32,
+{
+    let mut out = Vec::with_capacity(unready.len() * 2 + 1);
+    let mut covered_from = 0.0;
+    for &[start, end] in unready {
+        let x0 = to_x(start).floor().clamp(0.0, width);
+        let x1 = to_x(end).ceil().clamp(0.0, width);
+        if x1 <= x0 {
+            continue;
+        }
+        if x0 > covered_from {
+            out.push(CoverageSpan::Covered([covered_from, x0]));
+        }
+        out.push(CoverageSpan::Unready([x0, x1], [start > 0.0, end < 1.0]));
+        covered_from = x1;
+    }
+    if width > covered_from {
+        out.push(CoverageSpan::Covered([covered_from, width]));
+    }
+    out
+}
+
+/// Draw what the analysis has covered and what it has not.
+///
+/// A covered stretch keeps a continuous baseline, so an unbroken axis with no
+/// bars reads as analysed silence. An unready stretch gets rails, stubs at the
+/// bar pitch, and a boundary only where it meets covered audio. Every part is
+/// its own rectangle, so nothing is clipped and no gradient mesh is cut.
+pub(crate) fn draw_coverage<F>(
+    list: &mut DrawListBuilder,
+    bounds: Rect,
+    unready: &[[f32; 2]],
+    to_x: F,
+    metrics: WaveSkin,
+    palette: CoveragePalette,
+) where
+    F: Fn(f32) -> f32,
+{
+    for span in coverage_spans(unready, to_x, bounds.w) {
+        match span {
+            CoverageSpan::Covered(span) => draw_baseline(list, bounds, span, metrics, palette),
+            CoverageSpan::Unready(span, boundaries) => {
+                draw_unready(list, bounds, span, boundaries, metrics, palette);
+            }
+        }
+    }
+}
+
+/// The axis of a covered stretch, drawn whatever the bands read.
+fn draw_baseline(
+    list: &mut DrawListBuilder,
+    bounds: Rect,
+    span: [f32; 2],
+    metrics: WaveSkin,
+    palette: CoveragePalette,
+) {
+    let height = metrics.coverage_hairline;
+    list.fill_rect(
+        Rect {
+            h: height,
+            w: span[1] - span[0],
+            x: bounds.x + span[0],
+            y: bounds.y + (bounds.h - height) / 2.0,
+        },
+        Rgba {
+            a: metrics.coverage_baseline_alpha,
+            ..palette.mark
+        },
+    );
+}
+
+/// One unready region: edge rails, a stub per column, and a boundary on each
+/// side that meets covered audio.
+fn draw_unready(
+    list: &mut DrawListBuilder,
+    bounds: Rect,
+    span: [f32; 2],
+    boundaries: [bool; 2],
+    metrics: WaveSkin,
+    palette: CoveragePalette,
+) {
+    let width = span[1] - span[0];
+    let rail = metrics.coverage_rail_height;
+    for y in [bounds.y, bounds.y + bounds.h - rail] {
+        list.fill_rect(
+            Rect {
+                h: rail,
+                w: width,
+                x: bounds.x + span[0],
+                y,
+            },
+            palette.edge,
+        );
+    }
+
+    let stub = metrics.coverage_stub_height;
+    let stub_color = Rgba {
+        a: metrics.coverage_stub_alpha,
+        ..palette.mark
+    };
+    let top = bounds.y + (bounds.h - stub) / 2.0;
+    for x in stub_positions(span, step(metrics)) {
+        list.fill_rect(
+            Rect {
+                h: stub,
+                w: metrics.bar_width.min(span[1] - x),
+                x: bounds.x + x,
+                y: top,
+            },
+            stub_color,
+        );
+    }
+
+    let edge = metrics.coverage_hairline;
+    for (present, x) in boundaries.into_iter().zip([span[0], span[1] - edge]) {
+        if present {
+            list.fill_rect(
+                Rect {
+                    h: bounds.h,
+                    w: edge,
+                    x: bounds.x + x,
+                    y: bounds.y,
+                },
+                palette.edge,
+            );
+        }
+    }
+}
+
+/// Stub columns standing in for the bars a region has no data for, on the same
+/// grid the real columns sit on so the two read as one lane.
+fn stub_positions(span: [f32; 2], pitch: f32) -> impl Iterator<Item = f32> {
+    let mut x = if pitch > 0.0 {
+        (span[0] / pitch).ceil() * pitch
+    } else {
+        span[1]
+    };
+    iter::from_fn(move || {
+        let at = (x < span[1]).then_some(x)?;
+        x += pitch;
+        Some(at)
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use kithara_test_utils::kithara;
 
-    use super::*;
+    use super::{
+        super::zoom_math::{MAX_ZOOM, norm_to_x, window_bounds, x_to_norm},
+        *,
+    };
     use crate::{
         builtin,
         draw::{DrawCmd, Geom},
@@ -269,5 +443,127 @@ mod tests {
                 r: 0.15,
             }; 3]
         );
+    }
+
+    /// The single unready stretch a partition holds.
+    fn marked(spans: &[CoverageSpan]) -> [f32; 2] {
+        let marked: Vec<[f32; 2]> = spans
+            .iter()
+            .filter_map(|span| match *span {
+                CoverageSpan::Unready(span, _) => Some(span),
+                CoverageSpan::Covered(_) => None,
+            })
+            .collect();
+        match marked[..] {
+            [span] => span,
+            _ => panic!("one hole is marked: {spans:?}"),
+        }
+    }
+
+    fn assert_within(actual: [f32; 2], expected: [f32; 2], tolerance: f32) {
+        let off = [
+            (actual[0] - expected[0]).abs(),
+            (actual[1] - expected[1]).abs(),
+        ];
+        assert!(
+            off[0] <= tolerance && off[1] <= tolerance,
+            "{actual:?} is not {expected:?} within {tolerance}"
+        );
+    }
+
+    /// Nothing uncovered leaves one unbroken covered stretch: an axis with no
+    /// bars is analysed silence, which is what keeps silence from reading as
+    /// absence.
+    #[kithara::test]
+    fn a_fully_covered_lane_is_one_covered_span() {
+        assert_eq!(
+            coverage_spans(&[], |norm| norm * 100.0, 100.0),
+            [CoverageSpan::Covered([0.0, 100.0])]
+        );
+    }
+
+    /// A hole between two covered runs breaks the baseline exactly where the
+    /// data stops, and takes a boundary on both sides it meets.
+    #[kithara::test]
+    fn a_hole_breaks_the_baseline_and_takes_both_boundaries() {
+        assert_eq!(
+            coverage_spans(&[[0.25, 0.5]], |norm| norm * 100.0, 100.0),
+            [
+                CoverageSpan::Covered([0.0, 25.0]),
+                CoverageSpan::Unready([25.0, 50.0], [true, true]),
+                CoverageSpan::Covered([50.0, 100.0]),
+            ]
+        );
+    }
+
+    /// A region that runs to an end of the track has no covered audio to meet
+    /// there, so that side takes no boundary.
+    #[kithara::test]
+    fn a_region_at_the_edge_drops_the_boundary_it_does_not_meet() {
+        assert_eq!(
+            coverage_spans(&[[0.0, 0.25], [0.75, 1.0]], |norm| norm * 100.0, 100.0),
+            [
+                CoverageSpan::Unready([0.0, 25.0], [false, true]),
+                CoverageSpan::Covered([25.0, 75.0]),
+                CoverageSpan::Unready([75.0, 100.0], [true, false]),
+            ]
+        );
+    }
+
+    /// A gap that lands between pixels rounds outward, so a column that is
+    /// part covered reads unready rather than claiming audio nothing decoded.
+    #[kithara::test]
+    fn a_gap_off_the_pixel_grid_rounds_outward() {
+        assert_eq!(
+            coverage_spans(&[[0.404, 0.606]], |norm| norm * 100.0, 100.0),
+            [
+                CoverageSpan::Covered([0.0, 40.0]),
+                CoverageSpan::Unready([40.0, 61.0], [true, true]),
+                CoverageSpan::Covered([61.0, 100.0]),
+            ]
+        );
+    }
+
+    /// A region outside the window contributes nothing, so a zoomed view is
+    /// not told about track it cannot show.
+    #[kithara::test]
+    fn a_region_outside_the_view_is_dropped() {
+        assert_eq!(
+            coverage_spans(&[[0.0, 0.1]], |norm| (norm - 0.5) * 100.0, 100.0),
+            [CoverageSpan::Covered([0.0, 100.0])]
+        );
+    }
+
+    /// The deck window and the overview place a region on the same audio: each
+    /// pixel span maps back to the fractions it was drawn from, outward by at
+    /// most the pixel each side was rounded by.
+    #[kithara::test]
+    fn the_deck_and_the_overview_mark_the_same_track_positions() {
+        const WIDTH: f32 = 400.0;
+        let hole = [0.25, 0.5];
+        let window = window_bounds(0.375, MAX_ZOOM);
+
+        let deck = marked(&coverage_spans(
+            &[hole],
+            |norm| norm_to_x(norm, &window, WIDTH),
+            WIDTH,
+        ));
+        let overview = marked(&coverage_spans(&[hole], |norm| norm * WIDTH, WIDTH));
+
+        assert_within(
+            deck.map(|x| x_to_norm(x, &window, WIDTH).expect("a positive width")),
+            hole,
+            MAX_ZOOM / WIDTH,
+        );
+        assert_within(overview.map(|x| x / WIDTH), hole, 1.0 / WIDTH);
+    }
+
+    /// Stubs sit on the grid the real columns tile from, not on the region's
+    /// own origin, so the two read as one lane.
+    #[kithara::test]
+    fn stubs_land_on_the_column_grid() {
+        let stubs: Vec<f32> = stub_positions([5.0, 20.0], 4.0).collect();
+
+        assert_eq!(stubs, [8.0, 12.0, 16.0]);
     }
 }

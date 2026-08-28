@@ -1,6 +1,7 @@
 use num_traits::cast::AsPrimitive;
 
 use super::{
+    bars::CoveragePalette,
     overlay::{Overlay, OverlayPalette},
     paint::{WavePaint, WavePalette},
     snapshot::{OverlayData, WaveformData},
@@ -54,6 +55,10 @@ impl Wave {
             metrics: skin.wave,
             overlay_palette: overlay_palette(skin),
             palette: WavePalette {
+                coverage: CoveragePalette {
+                    edge: skin.rgba(skin.wave.coverage_edge_color),
+                    mark: skin.rgba(skin.wave.coverage_mark_color),
+                },
                 trough: skin.rgba(skin.wave.trough_color),
                 grid: skin.rgba(skin.wave.grid_color),
                 label: skin.rgba(skin.wave.label_color),
@@ -113,6 +118,7 @@ impl Wave {
                 revision: waveform.revision,
                 beats: &waveform.beats,
                 downbeats: &waveform.downbeats,
+                unready: &waveform.unready,
                 bpm: None,
                 r#loop: waveform.loop_region,
                 cues: &waveform.cues,
@@ -349,6 +355,7 @@ mod tests {
                     revision: 0,
                     beats: &[0.25],
                     downbeats: &[0.5],
+                    unready: &[],
                     bpm: Some(128.0),
                     r#loop: Some([0.2, 0.6]),
                     cues: &[0.4],

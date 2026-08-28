@@ -168,6 +168,7 @@ impl Reads for FixtureReads {
                 revision: 0,
                 beats: &self.beats,
                 downbeats: &self.downbeats,
+                unready: &[],
                 bpm: Some(128.0),
                 r#loop: Some([0.25, 0.5]),
                 cues: &self.cues,

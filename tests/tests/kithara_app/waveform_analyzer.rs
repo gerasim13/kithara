@@ -5,6 +5,8 @@
 
 #![cfg(not(target_arch = "wasm32"))]
 
+use std::num::NonZeroU32;
+
 use kithara::{
     audio::{Bucket, analysis::BeatAnalysisConfig},
     bufpool::{BytePool, PcmPool},
@@ -15,6 +17,10 @@ use kithara_app::waveform::{TrackAnalysis, TrackAnalysisRunner};
 use kithara_integration_tests::{
     SignalFormat, SignalSpec, SignalSpecLength, TestServerHelper, memory_asset_store,
 };
+
+/// The fixtures decode at 44.1 kHz; the pass is opened on the same axis so
+/// nothing is resampled on the way in.
+const RATE: NonZeroU32 = NonZeroU32::new(44_100).expect("fixture rate is non-zero");
 
 fn silence_wav_spec() -> SignalSpec {
     SignalSpec {
@@ -38,7 +44,7 @@ async fn run_analysis(
         BeatAnalysisConfig::default(),
         PcmPool::default(),
     );
-    let mut rx = runner.analyze(config);
+    let mut rx = runner.analyze(config, "waveform-track".into(), RATE, drop);
 
     // Staged analysis can emit twice (waveform, then waveform+beat).
     let mut last = None;

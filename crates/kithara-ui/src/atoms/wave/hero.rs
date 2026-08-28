@@ -31,6 +31,7 @@ pub(crate) struct HeroWave<'a> {
     pub(crate) beats: &'a [f32],
     pub(crate) cues: &'a [f32],
     pub(crate) downbeats: &'a [f32],
+    pub(crate) unready: &'a [[f32; 2]],
     pub(crate) loop_region: Option<[f32; 2]>,
     pub(crate) position: f32,
     pub(crate) zoom: f32,
@@ -46,6 +47,14 @@ pub(crate) fn draw(
 ) {
     let window = window_bounds(data.position, data.zoom);
     draw_bars(list, bounds, data, &window, metrics, palette.base);
+    bars::draw_coverage(
+        list,
+        bounds,
+        data.unready,
+        |norm| norm_to_x(norm, &window, bounds.w),
+        metrics,
+        palette.base.coverage,
+    );
     draw_grid(list, bounds, data, &window, metrics, palette.base);
     if let Some(region) = data.loop_region {
         draw_loop(list, bounds, region, &window, metrics, palette.base);
@@ -270,6 +279,10 @@ mod tests {
             r: 1.0,
         };
         WavePalette {
+            coverage: bars::CoveragePalette {
+                edge: ink,
+                mark: ink,
+            },
             trough: ink,
             grid: ink,
             label: ink,
@@ -298,6 +311,7 @@ mod tests {
             beats: &[],
             cues: &[],
             downbeats: &[],
+            unready: &[],
             loop_region: None,
             position: 0.5,
             zoom,

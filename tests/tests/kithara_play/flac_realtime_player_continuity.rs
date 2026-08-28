@@ -147,7 +147,7 @@ async fn run_case(
     .initial_abr_mode(initial_mode)
     .build();
 
-    let resource = Resource::new(cfg)
+    let resource = Resource::new(cfg, None)
         .await
         .unwrap_or_else(|e| panic!("Resource::new failed: {e:?}"));
     let abr = resource.abr_handle();

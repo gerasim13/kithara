@@ -7,7 +7,10 @@
 #![cfg(not(target_arch = "wasm32"))]
 #![forbid(unsafe_code)]
 
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::{
+    num::NonZeroU32,
+    sync::atomic::{AtomicUsize, Ordering},
+};
 
 use axum::{Router, body::Body, extract::State, http::header, response::Response, routing::get};
 use bytes::Bytes;
@@ -22,6 +25,10 @@ use kithara::{
 };
 use kithara_app::waveform::TrackAnalysisRunner;
 use kithara_integration_tests::{TestHttpServer, create_test_wav};
+
+/// The fixtures decode at 44.1 kHz; the pass is opened on the same axis so
+/// nothing is resampled on the way in.
+const RATE: NonZeroU32 = NonZeroU32::new(44_100).expect("fixture rate is non-zero");
 
 const WAVEFORM_BUCKETS: usize = 100;
 
@@ -106,7 +113,7 @@ async fn waveform_and_player_share_one_get() {
         BeatAnalysisConfig::default(),
         PcmPool::default(),
     );
-    let mut analysis_rx = runner.analyze(waveform_cfg);
+    let mut analysis_rx = runner.analyze(waveform_cfg, "shared-download-track".into(), RATE, drop);
 
     let player = Audio::<Stream<File>>::new(player_cfg)
         .await

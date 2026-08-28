@@ -135,7 +135,7 @@ async fn make_signal_resource(
     .build();
     config = player.prepare_config(config);
 
-    Resource::new(config)
+    Resource::new(config, None)
         .await
         .expect("open queue regression resource")
 }

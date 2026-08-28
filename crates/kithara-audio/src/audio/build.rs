@@ -35,6 +35,7 @@ use super::{
     },
     ring::{RingConsumer, RingParts, create_channels, create_trash_channel},
 };
+use crate::analysis::AnalysisProducer;
 
 const WARM_DECODE_FRAMES: usize = 4608;
 
@@ -108,6 +109,7 @@ where
 }
 
 struct StreamSourceRegistration<'a, T: StreamType> {
+    analysis: Option<AnalysisProducer>,
     byte_pool: BytePool,
     cancel: &'a CancelToken,
     playback_resampler_backend: &'static str,
@@ -158,6 +160,7 @@ where
         B: Default + ResamplerBackend,
     {
         let AudioConfig {
+            analysis,
             byte_pool,
             hint,
             host_sample_rate: config_host_sr,
@@ -242,6 +245,7 @@ where
             total_duration,
         );
         let registered = register_stream_audio_source(StreamSourceRegistration {
+            analysis,
             byte_pool: byte_pool.clone(),
             decoder,
             effects,
@@ -420,8 +424,11 @@ where
         },
         registration.variant_control,
     );
-    let source = StreamAudioSource::new(registration.shared_stream, parts)
+    let mut source = StreamAudioSource::new(registration.shared_stream, parts)
         .with_emit(Arc::clone(&registration.emit));
+    if let Some(producer) = registration.analysis {
+        source = source.with_analysis(producer);
+    }
 
     let service_class = Arc::new(AtomicServiceClass::new(ServiceClass::default()));
     let track_id = worker.register_track(TrackRegistration {
