@@ -587,9 +587,22 @@ default_features = ["kithara/loom"]
 default_flash = false
 suffix_args = ["-E", "test(/(^|::)loom_model_/)"]
 
+# `test-release` is the profile every other lane builds in, and this one ran in
+# `test`. `just test all` therefore built the whole workspace a second time to
+# reach the doc-tests: 1m15s on a warm runner and 3m26s on a cold one, on every
+# push, for a second set of artefacts nothing else reads. Naming the same
+# profile makes the doc lane reuse what the suite before it just built.
 [test.lanes.doc]
 program = "cargo"
-prefix_args = ["test", "--doc", "--workspace", "--exclude", "kithara-fuzz"]
+prefix_args = [
+  "test",
+  "--doc",
+  "--workspace",
+  "--exclude",
+  "kithara-fuzz",
+  "--profile",
+  "test-release",
+]
 default_flash = false
 
 # Resampler-backend axis: each e2e lane pins one SRC shape. `e2e` is the

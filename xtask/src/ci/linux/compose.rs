@@ -92,7 +92,7 @@ fn project(host: &LinuxHost, pins: &CiPins, cores: usize) -> Result<String> {
             env_file = unit.env_file,
         )?;
         writeln!(yaml, "    environment:")?;
-        for entry in Container::ENVIRONMENT {
+        for entry in Container::environment() {
             writeln!(yaml, "      - {entry}")?;
         }
         writeln!(yaml, "    volumes:")?;
@@ -154,7 +154,7 @@ mod tests {
     #[test]
     fn a_runner_is_told_to_use_the_compiler_cache() {
         let yaml = project(&host_fixture(), &fixture().pins, 32).expect("the project must render");
-        for entry in Container::ENVIRONMENT {
+        for entry in Container::environment() {
             assert!(
                 yaml.contains(&format!("      - {entry}")),
                 "{entry}:\n{yaml}"
