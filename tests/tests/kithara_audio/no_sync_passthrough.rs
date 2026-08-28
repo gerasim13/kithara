@@ -13,6 +13,7 @@ use kithara::{
         time::{self, Duration, Instant},
     },
     play::{PlayWorker, PlayWorkerConfig, RegisteredAudio, TrackConfig, effects::AudioEffect},
+    queue::{Queue, QueueConfig, Transition, test_utils::QueueProbe},
     stream::Stream,
     warp::{StretchControls, StretchKind, WarpConfig},
 };
@@ -24,7 +25,7 @@ use kithara_integration_tests::{
     goertzel::goertzel_magnitude,
     kithara,
     memory_source::{MemStream, MemStreamConfig, MemorySource},
-    offline::{OfflinePlayer, resource_from_reader},
+    offline::{OfflinePlayer, OfflinePlayerHarness, OfflinePlayerOptions, resource_from_reader},
     wav::{prepare_marked_sine_wav, prepare_sine_wav},
 };
 use num_traits::ToPrimitive;
@@ -270,16 +271,8 @@ fn measure_quiet_sine(samples: &[f32]) -> SineFit {
     }
 }
 
-fn audio_config(
-    source: &[u8],
-    stretch: Option<(StretchKind, f32)>,
-    effects: Vec<Box<dyn AudioEffect>>,
-) -> TrackConfig<MemStream, NoResamplerBackend> {
-    let stream = MemStreamConfig {
-        source: Some(MemorySource::new(source.to_vec())),
-        event_bus: None,
-    };
-    let stretch = stretch.map_or_else(
+fn stretch_controls(stretch: Option<(StretchKind, f32)>) -> Arc<StretchControls> {
+    stretch.map_or_else(
         || StretchControls::new(1.0),
         |(backend, speed)| {
             let controls = StretchControls::new(speed);
@@ -287,7 +280,18 @@ fn audio_config(
             controls.set_keylock(true);
             controls
         },
-    );
+    )
+}
+
+fn audio_config(
+    source: &[u8],
+    stretch: Arc<StretchControls>,
+    effects: Vec<Box<dyn AudioEffect>>,
+) -> TrackConfig<MemStream, NoResamplerBackend> {
+    let stream = MemStreamConfig {
+        source: Some(MemorySource::new(source.to_vec())),
+        event_bus: None,
+    };
 
     let audio = AudioConfig::<MemStream>::for_stream(stream)
         .hint("wav".to_owned())
@@ -322,8 +326,9 @@ async fn render_passthrough(
             .cancel(CancelToken::never())
             .build(),
     );
+    let target_stretch = stretch_controls(stretch);
     let mut target_audio = worker
-        .open(audio_config(source, stretch, Vec::new()))
+        .open(audio_config(source, target_stretch, Vec::new()))
         .await
         .expect("target audio construction");
     wait_for_preload(&target_audio).await;
@@ -333,7 +338,7 @@ async fn render_passthrough(
         let mut audio = worker
             .open(audio_config(
                 source,
-                None,
+                stretch_controls(None),
                 vec![Box::new(BurstLoadEffect::new(Arc::clone(&load_probe)))],
             ))
             .await
@@ -400,6 +405,55 @@ async fn render_passthrough(
             .saturating_sub(metrics_before_capture.underruns()),
         load_observed_during_capture,
     }
+}
+
+async fn render_queue_passthrough(source: &[u8], stretch: Option<(StretchKind, f32)>) -> Vec<f32> {
+    let stretch = stretch_controls(stretch);
+    let harness = OfflinePlayerHarness::with_sample_rate(
+        OfflinePlayerOptions::builder()
+            .crossfade_duration(0.0)
+            .timestretch(Arc::clone(&stretch))
+            .build(),
+        SAMPLE_RATE,
+    );
+    let worker = harness.with_player(|player| player.worker().clone());
+    let mut audio = worker
+        .open(audio_config(source, stretch, Vec::new()))
+        .await
+        .expect("queue audio construction");
+    wait_for_preload(&audio).await;
+    audio.preload().expect("queue audio preload");
+
+    let queue = Queue::new(
+        QueueConfig::builder()
+            .player(harness.take_player())
+            .should_autoplay(false)
+            .build(),
+    );
+    let id = queue.insert_loaded_for_test(resource_from_reader(audio));
+    queue
+        .select(id, Transition::None)
+        .expect("select queue passthrough track");
+
+    let block_period = Duration::from_secs_f64(
+        f64::from(u32::try_from(BLOCK_FRAMES).expect("block size fits u32"))
+            / f64::from(SAMPLE_RATE),
+    );
+    for _ in 0..WARMUP_BLOCKS {
+        let started = Instant::now();
+        queue.tick().expect("tick queue during warmup");
+        let _ = harness.render(BLOCK_FRAMES);
+        time::sleep(block_period.saturating_sub(started.elapsed())).await;
+    }
+
+    let mut pcm = Vec::with_capacity(CAPTURE_BLOCKS * BLOCK_FRAMES * usize::from(CHANNELS));
+    for _ in 0..CAPTURE_BLOCKS {
+        let started = Instant::now();
+        queue.tick().expect("tick queue during capture");
+        pcm.extend(harness.render(BLOCK_FRAMES));
+        time::sleep(block_period.saturating_sub(started.elapsed())).await;
+    }
+    pcm
 }
 
 fn first_sample_mismatch(candidate: &[f32], control: &[f32]) -> Option<usize> {
@@ -669,7 +723,7 @@ fn assert_frame_oracle_load_bearing(control: &[f32]) {
     not(all(target_os = "windows", target_env = "msvc")),
     case(StretchKind::Bungee)
 )]
-async fn no_sync_unity_playback_is_bit_exact_and_cochlea_clean_under_load(
+async fn no_sync_unity_player_and_queue_playback_is_bit_exact_and_cochlea_clean(
     #[case] backend: StretchKind,
 ) {
     run_no_sync_passthrough(backend, false).await;
@@ -741,7 +795,20 @@ async fn run_no_sync_passthrough(backend: StretchKind, record_artifacts: bool) {
     let unity_report = CochleaReport::measure(&unity.pcm, CHANNELS, SAMPLE_RATE);
     let loaded = render_passthrough(&source, Some((backend, 1.0)), true).await;
     let loaded_report = CochleaReport::measure(&loaded.pcm, CHANNELS, SAMPLE_RATE);
+    let queue_baseline = render_queue_passthrough(&source, None).await;
+    let queue_unity = render_queue_passthrough(&source, Some((backend, 1.0))).await;
     let mut failures = Vec::new();
+    for (label, pcm) in [
+        ("queue effect-free", queue_baseline.as_slice()),
+        ("queue unity", queue_unity.as_slice()),
+    ] {
+        if let Some(sample) = first_sample_mismatch(pcm, &baseline.pcm) {
+            failures.push(format!(
+                "{label}: PCM differs from direct playback at sample {sample} (frame {})",
+                sample / channels,
+            ));
+        }
+    }
     if !baseline.pcm.iter().any(|sample| sample.abs() > 0.25) {
         failures.push("effect-free control contains no audible PCM".to_owned());
     }
