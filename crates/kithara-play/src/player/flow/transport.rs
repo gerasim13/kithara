@@ -1,14 +1,14 @@
 use std::sync::atomic::Ordering;
 
 use kithara_audio::SeekOutcome;
-use kithara_platform::{sync::Arc, time::Duration};
+use kithara_platform::time::Duration;
 use tracing::{debug, warn};
 
 #[cfg(test)]
 use super::super::core::PlayerImpl;
 use super::super::core::PlayerRuntime;
 use crate::{
-    api::PlayerStatus,
+    api::{PlayerStatus, TrackId},
     bridge::{PlayerCmd, TrackTransition},
     error::PlayError,
 };
@@ -55,11 +55,11 @@ impl PlayerRuntime {
     /// processor and the item is not current.
     fn load_current_item(&self) -> bool {
         let index = self.current_index();
-        let Some((src, duration_seconds)) = self.enqueue_to_processor(index) else {
+        let Some((item_id, _src, duration_seconds)) = self.enqueue_to_processor(index) else {
             return false;
         };
         self.publish_current_track_snapshot(duration_seconds);
-        self.start_playback(src);
+        self.start_playback(item_id);
         true
     }
 
@@ -243,8 +243,8 @@ impl PlayerRuntime {
         Ok(())
     }
 
-    pub(crate) fn start_playback(&self, src: Arc<str>) {
-        let _ = self.send_to_slot(PlayerCmd::Transition(TrackTransition::FadeIn(src)));
+    pub(crate) fn start_playback(&self, item_id: TrackId) {
+        let _ = self.send_to_slot(PlayerCmd::Transition(TrackTransition::FadeIn(item_id)));
     }
 }
 

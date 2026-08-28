@@ -75,19 +75,21 @@ impl OfflinePlayer {
         // Keep the control half of the track's seek path, exactly as `EngineImpl::send_slot_cmd`
         // does when a resource crosses to the audio thread. Without it a later `seek` would move
         // the media clock while the source stayed put.
-        if let Some(handle) = pr.seek_handle() {
-            self.control.bind_seek(Arc::clone(&src), handle);
-        }
+        let item_id = kithara::events::TrackId::allocate();
+        let seek = pr.seek_handle();
         self.control
             .cmd_tx
             .try_push(PlayerCmd::LoadTrack {
                 resource: Box::new(pr),
-                item_id: None,
+                item_id,
             })
             .expect("BUG: send LoadTrack");
+        if let Some(handle) = seek {
+            self.control.bind_seek(item_id, handle);
+        }
         self.control
             .cmd_tx
-            .try_push(PlayerCmd::Transition(TrackTransition::FadeIn(src)))
+            .try_push(PlayerCmd::Transition(TrackTransition::FadeIn(item_id)))
             .expect("BUG: send FadeIn");
         self.control
             .cmd_tx
@@ -186,7 +188,9 @@ impl OfflinePlayer {
 
     fn drain_trash(&mut self) {
         while let Some(track) = self.control.trash_rx.try_pop() {
-            self.control.unbind_seek(track.src());
+            if let Some(seek) = track.seek_handle() {
+                self.control.unbind_seek(track.item_id(), &seek);
+            }
         }
     }
 }

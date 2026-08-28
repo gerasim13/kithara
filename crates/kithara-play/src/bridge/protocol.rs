@@ -1,5 +1,6 @@
 use std::fmt;
 
+use kithara_events::TrackId;
 use kithara_platform::sync::Arc;
 
 use crate::rt::track::PlayerResource;
@@ -9,10 +10,10 @@ pub enum PlayerCmd {
     /// Load a track into the processor arena.
     LoadTrack {
         resource: Box<PlayerResource>,
-        item_id: Option<Arc<str>>,
+        item_id: TrackId,
     },
-    /// Unload a track by its source identifier.
-    UnloadTrack { src: Arc<str> },
+    /// Unload a track by its queue-item identity.
+    UnloadTrack { item_id: TrackId },
     /// Unload every track from the arena and reset the position/duration
     /// snapshot to zero. Sent when the queue is explicitly cleared.
     Clear,
@@ -38,7 +39,10 @@ impl fmt::Debug for PlayerCmd {
                 .field("item_id", item_id)
                 .field("src", resource.src())
                 .finish_non_exhaustive(),
-            Self::UnloadTrack { src } => f.debug_struct("UnloadTrack").field("src", src).finish(),
+            Self::UnloadTrack { item_id } => f
+                .debug_struct("UnloadTrack")
+                .field("item_id", item_id)
+                .finish(),
             Self::Clear => f.write_str("Clear"),
             Self::Transition(t) => f.debug_tuple("Transition").field(t).finish(),
             Self::Seek {
@@ -88,10 +92,10 @@ impl TrackState {
 /// Transition command for a track.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TrackTransition {
-    /// Start fading in the track with the given source identifier.
-    FadeIn(Arc<str>),
-    /// Start fading out the track with the given source identifier.
-    FadeOut(Arc<str>),
+    /// Start fading in the track with the given queue-item identity.
+    FadeIn(TrackId),
+    /// Start fading out the track with the given queue-item identity.
+    FadeOut(TrackId),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -113,17 +117,14 @@ pub enum PlayerNotification {
     /// A track was successfully loaded into the processor arena.
     Loaded { src: Arc<str> },
     /// A track was removed from the processor arena.
-    Unloaded { src: Arc<str> },
+    Unloaded { src: Arc<str>, item_id: TrackId },
     /// A track started audible playback (fade-in completed or `play()`).
-    PlaybackStarted {
-        src: Arc<str>,
-        item_id: Option<Arc<str>>,
-    },
+    PlaybackStarted { src: Arc<str>, item_id: TrackId },
     /// A track stopped playback. `src` and `item_id` are read by the
-    /// player to construct `PlayerEvent::ItemDidPlayToEnd`.
+    /// player to construct the `ItemRole` on `ItemDidPlayToEnd`.
     PlaybackStopped {
         src: Arc<str>,
-        item_id: Option<Arc<str>>,
+        item_id: TrackId,
         reason: TrackPlaybackStopReason,
         /// The slot seek epoch the track sat at when this stop was minted.
         /// An `Eof` stop is delivered only while this is still the published
@@ -162,7 +163,7 @@ impl PlayerNotification {
     pub const fn src(&self) -> Option<&Arc<str>> {
         match self {
             Self::Loaded { src }
-            | Self::Unloaded { src }
+            | Self::Unloaded { src, .. }
             | Self::Changed { src }
             | Self::FadingIn { src }
             | Self::FadingOut { src }
@@ -191,7 +192,7 @@ mod tests {
     #[case(
         PlayerNotification::PlaybackStopped {
             src: Arc::from("ended.mp3"),
-            item_id: Some(Arc::from("item-1")),
+            item_id: TrackId::allocate(),
             reason: TrackPlaybackStopReason::Eof,
             seek_epoch: 0,
         },
@@ -206,7 +207,7 @@ mod tests {
     fn notification_clone() {
         let n = PlayerNotification::PlaybackStopped {
             src: Arc::from("ended.mp3"),
-            item_id: None,
+            item_id: TrackId::allocate(),
             reason: TrackPlaybackStopReason::Stop,
             seek_epoch: 0,
         };

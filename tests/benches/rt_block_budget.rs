@@ -5,6 +5,7 @@ use std::{hint::black_box, num::NonZeroU32, sync::atomic::Ordering};
 use firewheel::node::ProcBuffers;
 use kithara::{
     bufpool::SamplePool,
+    events::TrackId,
     platform::{
         sync::Arc,
         time::{Duration, Instant},
@@ -90,7 +91,7 @@ fn load_tracks(processor: &mut PlayerNodeProcessor, control: &mut SlotControl, c
             control,
             PlayerCmd::LoadTrack {
                 resource: Box::new(PlayerResource::new(resource, Arc::clone(src), &pool)),
-                item_id: None,
+                item_id: TrackId::allocate(),
             },
         );
     }

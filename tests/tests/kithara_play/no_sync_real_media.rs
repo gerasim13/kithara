@@ -12,7 +12,7 @@ use std::{num::NonZeroU32, path::PathBuf};
 
 use kithara::{
     bufpool::{BytePool, SamplePool},
-    events::EventBus,
+    events::{EventBus, TrackId},
     hls::AbrMode,
     platform::{
         sync::Arc,
@@ -820,11 +820,7 @@ async fn prepare_deck(
         .build();
     let reference = open_resource(case, deck_index, "reference", reference_config).await;
     let reference_events = reference.subscribe();
-    player.insert(
-        resource,
-        Some(Arc::from(format!("{}-deck-{deck_index}", case.label))),
-        None,
-    );
+    player.insert(resource, TrackId::allocate(), None);
 
     Deck {
         player,

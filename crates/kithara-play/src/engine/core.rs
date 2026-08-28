@@ -98,7 +98,11 @@ impl EngineImpl {
     }
 
     fn drain_slot_trash_handle(handle: &mut SlotHandle) {
-        while handle.trash_rx.try_pop().is_some() {}
+        while let Some(track) = handle.trash_rx.try_pop() {
+            if let Some(seek) = track.seek_handle() {
+                handle.unbind_seek(track.item_id(), &seek);
+            }
+        }
     }
 
     pub(crate) fn eq_band_count(&self) -> usize {
@@ -150,17 +154,24 @@ impl EngineImpl {
         let result = match slots.get_mut(slot) {
             Some(handle) => {
                 // A resource crossing to the audio thread leaves its seek handle behind: beginning
-                // a seek takes locks, so it stays on this side. Released on the matching
-                // `Unloaded`.
-                if let PlayerCmd::LoadTrack { resource, .. } = &cmd
-                    && let Some(seek) = resource.seek_handle()
-                {
-                    handle.bind_seek(Arc::clone(resource.src()), seek);
-                }
-                handle
+                // a seek takes locks, so it stays on this side. Bind only after the command is
+                // accepted; the exact resource generation is released when it returns as trash.
+                let seek = match &cmd {
+                    PlayerCmd::LoadTrack { resource, item_id } => {
+                        resource.seek_handle().map(|handle| (*item_id, handle))
+                    }
+                    _ => None,
+                };
+                let result = handle
                     .cmd_tx
                     .try_push(cmd)
-                    .map_err(|_| PlayError::SlotChannelFull { slot })
+                    .map_err(|_| PlayError::SlotChannelFull { slot });
+                if result.is_ok()
+                    && let Some((item_id, seek)) = seek
+                {
+                    handle.bind_seek(item_id, seek);
+                }
+                result
             }
             None => Err(PlayError::SlotNotFound(slot)),
         };
@@ -172,14 +183,6 @@ impl EngineImpl {
         let slots = self.slots.lock();
         if let Some(handle) = slots.get(slot) {
             handle.begin_seek(position);
-        }
-        drop(slots);
-    }
-
-    pub(crate) fn unbind_slot_seek(&self, slot: SlotId, src: &str) {
-        let mut slots = self.slots.lock();
-        if let Some(handle) = slots.get_mut(slot) {
-            handle.unbind_seek(src);
         }
         drop(slots);
     }

@@ -1,18 +1,18 @@
 #![cfg(not(target_arch = "wasm32"))]
 
-//! The failure twin of [`background_track_eof`]: `ItemDidFail` is
-//! published for whichever slot aborted, and `PlayerImpl::
-//! process_notifications` walks every active slot. A background slot
-//! whose decoder gives up must not skip the track being heard, and must
+//! The failure twin of [`non_leading_track_eof`]: `ItemDidFail` names
+//! whichever track in the player's arena aborted, and
+//! `PlayerImpl::process_notifications` walks every active slot. A track
+//! the listener is not hearing must not skip the one they are, and must
 //! not mark a queue entry failed on its behalf.
 //!
-//! [`background_track_eof`]: super::background_track_eof
+//! [`non_leading_track_eof`]: super::non_leading_track_eof
 
 use std::num::NonZero;
 
 use kithara::{
     self,
-    events::{Event, PlayerEvent, TrackId, TrackStatus},
+    events::{Event, ItemRole, PlayerEvent, SlotId, TrackId, TrackRef, TrackStatus},
     platform::sync::Arc,
     queue::{Queue, QueueConfig, Transition, test_utils::QueueProbe},
     signal::AudioSpec,
@@ -81,7 +81,7 @@ fn render_loop(queue: &Queue, harness: &OfflinePlayerHarness, block_budget: usiz
 /// Three loaded tracks, the middle one playing and warmed up. The first
 /// — never selected, standing in for the background slot — is the one
 /// that will report the failure.
-fn fixture_playing_the_middle_track() -> (OfflinePlayerHarness, Queue, TrackId, Arc<str>) {
+fn fixture_playing_the_middle_track() -> (OfflinePlayerHarness, Queue, TrackRef) {
     let (harness, queue) = make_fixture();
     let (stale, stale_src) = loaded_track(&queue, QUIET);
     let (current, _) = loaded_track(&queue, LOUD);
@@ -92,25 +92,27 @@ fn fixture_playing_the_middle_track() -> (OfflinePlayerHarness, Queue, TrackId, 
         .expect("select the current track");
     let _ = render_loop(&queue, &harness, WARMUP_BLOCKS);
 
-    (harness, queue, stale, stale_src)
+    (
+        harness,
+        queue,
+        TrackRef::new(stale, SlotId::new(0), stale_src),
+    )
 }
 
-fn publish_background_failure(harness: &OfflinePlayerHarness, src: Arc<str>) {
+fn publish_background_failure(harness: &OfflinePlayerHarness, stale: TrackRef) {
     harness
         .player()
         .bus()
         .publish(Event::Player(PlayerEvent::ItemDidFail {
-            src,
-            item_id: None,
-            from_current_item: false,
+            item: ItemRole::Background(stale),
         }));
 }
 
 #[kithara::test(tokio)]
 async fn background_track_failure_does_not_advance_the_queue() {
-    let (harness, queue, _stale, stale_src) = fixture_playing_the_middle_track();
+    let (harness, queue, stale) = fixture_playing_the_middle_track();
 
-    publish_background_failure(&harness, stale_src);
+    publish_background_failure(&harness, stale.clone());
     let _ = render_loop(&queue, &harness, WARMUP_BLOCKS);
 
     assert_eq!(
@@ -123,7 +125,7 @@ async fn background_track_failure_does_not_advance_the_queue() {
 #[kithara::test(tokio)]
 async fn background_track_failure_does_not_cut_the_current_track_audio() {
     let (harness, queue) = make_fixture();
-    let (_stale, stale_src) = loaded_track(&queue, QUIET);
+    let (stale_id, stale_src) = loaded_track(&queue, QUIET);
     let (current, _) = loaded_track(&queue, LOUD);
     let (_next, _) = loaded_track(&queue, QUIET);
 
@@ -137,7 +139,7 @@ async fn background_track_failure_does_not_cut_the_current_track_audio() {
         "the current track must be audible before the background failure: mean={before}"
     );
 
-    publish_background_failure(&harness, stale_src);
+    publish_background_failure(&harness, TrackRef::new(stale_id, SlotId::new(0), stale_src));
     let after_pcm = render_loop(&queue, &harness, WARMUP_BLOCKS);
     let after = mean_abs(&after_pcm[after_pcm.len() / 2..]);
 
@@ -153,15 +155,15 @@ async fn background_track_failure_does_not_cut_the_current_track_audio() {
 /// nobody is listening to.
 #[kithara::test(tokio)]
 async fn background_track_failure_does_not_flag_a_queue_entry() {
-    let (harness, queue, stale, stale_src) = fixture_playing_the_middle_track();
+    let (harness, queue, stale) = fixture_playing_the_middle_track();
 
-    publish_background_failure(&harness, stale_src);
+    publish_background_failure(&harness, stale.clone());
     let _ = render_loop(&queue, &harness, WARMUP_BLOCKS);
 
     let status = queue
         .tracks()
         .into_iter()
-        .find(|entry| entry.id == stale)
+        .find(|entry| entry.id == stale.id)
         .map(|entry| entry.status)
         .expect("the background entry must still be in the queue");
     assert!(

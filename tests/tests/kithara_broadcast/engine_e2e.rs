@@ -3,6 +3,7 @@ use std::num::NonZeroU32;
 use kithara::{
     self,
     broadcast::{Broadcast, BroadcastConfig, BroadcastHandle, RingFeed},
+    events::TrackId,
     net::{HttpClient, NetOptions},
     platform::{
         CancelScope,
@@ -50,7 +51,7 @@ fn playing_harness() -> OfflinePlayerHarness {
         SESSION_RATE,
     );
     harness.with_player(|player| {
-        player.insert(tone_resource(), None, None);
+        player.insert(tone_resource(), TrackId::allocate(), None);
         player
             .select_item(0, true)
             .expect("select first queue item");

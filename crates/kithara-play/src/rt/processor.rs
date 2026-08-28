@@ -8,6 +8,7 @@ use firewheel::{
     node::{AudioNodeProcessor, ProcBuffers, ProcExtra, ProcInfo, ProcStreamCtx, ProcessStatus},
 };
 use kithara_bufpool::SamplePool;
+use kithara_events::TrackId;
 use kithara_platform::sync::Arc;
 use kithara_test_utils::kithara;
 use num_traits::cast::AsPrimitive;
@@ -134,10 +135,11 @@ impl PlayerNodeProcessor {
 
         for (slot, _) in finished.iter().filter(|(slot, _)| Some(*slot) != retain) {
             if let Some(track) = self.tracks.remove_at(*slot) {
+                let item_id = track.item_id();
                 let src = Arc::clone(track.src());
                 self.discard_track(track);
                 self.notif_tx
-                    .try_push(PlayerNotification::Unloaded { src })
+                    .try_push(PlayerNotification::Unloaded { src, item_id })
                     .ok();
             }
         }
@@ -170,10 +172,11 @@ impl PlayerNodeProcessor {
                 self.playback.metrics().record_evicted_playing();
             }
             if let Some(track) = self.tracks.remove_at(slot) {
+                let item_id = track.item_id();
                 let src = Arc::clone(track.src());
                 self.discard_track(track);
                 self.notif_tx
-                    .try_push(PlayerNotification::Unloaded { src })
+                    .try_push(PlayerNotification::Unloaded { src, item_id })
                     .ok();
             }
         }
@@ -231,12 +234,6 @@ impl PlayerNodeProcessor {
             .for_each(|(_, track)| track.set_host_sample_rate(sample_rate));
     }
 
-    pub(super) fn unload_track(&mut self, src: &str) {
-        if let Some(track) = self.tracks.remove(src) {
-            self.retire(track);
-        }
-    }
-
     pub(super) fn unload_slot(&mut self, slot: TrackSlot) {
         if let Some(track) = self.tracks.remove_at(slot) {
             self.retire(track);
@@ -244,10 +241,11 @@ impl PlayerNodeProcessor {
     }
 
     fn retire(&mut self, track: PlayerTrack) {
+        let item_id = track.item_id();
         let src = Arc::clone(track.src());
         self.discard_track(track);
         self.notif_tx
-            .try_push(PlayerNotification::Unloaded { src })
+            .try_push(PlayerNotification::Unloaded { src, item_id })
             .ok();
     }
 
@@ -310,17 +308,17 @@ impl PlayerNodeProcessor {
 
     delegate::delegate! {
         to self.tracks {
-            /// Look up a track by its source identifier.
+            /// Look up a track by its queue-item identity.
             #[must_use]
             #[call(get)]
-            pub fn track(&self, src: &Arc<str>) -> Option<&PlayerTrack>;
+            pub fn track(&self, item_id: TrackId) -> Option<&PlayerTrack>;
             /// Number of tracks currently held in the processor arena.
             #[must_use]
             #[call(len)]
             pub fn track_count(&self) -> usize;
-            /// Look up a track by its source identifier (mutable).
+            /// Look up a track by its queue-item identity (mutable).
             #[call(get_mut)]
-            pub fn track_mut(&mut self, src: &Arc<str>) -> Option<&mut PlayerTrack>;
+            pub fn track_mut(&mut self, item_id: TrackId) -> Option<&mut PlayerTrack>;
         }
     }
 }

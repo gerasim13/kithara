@@ -5,6 +5,7 @@ use std::{hint::black_box, num::NonZeroU32, sync::atomic::Ordering};
 use firewheel::node::ProcBuffers;
 use kithara::{
     bufpool::SamplePool,
+    events::TrackId,
     platform::{
         sync::Arc,
         time::{Duration, Instant},
@@ -76,12 +77,17 @@ fn load_tracks(
     count: usize,
 ) -> f32 {
     let pool = SamplePool::default();
-    let sources: Vec<Arc<str>> = (0..count)
-        .map(|idx| Arc::from(format!("no-sync-deadline-track-{idx}").as_str()))
+    let tracks: Vec<(Arc<str>, TrackId)> = (0..count)
+        .map(|idx| {
+            (
+                Arc::from(format!("no-sync-deadline-track-{idx}").as_str()),
+                TrackId::allocate(),
+            )
+        })
         .collect();
     let mut expected_sample = 0.0;
 
-    for (idx, src) in sources.iter().enumerate() {
+    for (idx, (src, item_id)) in tracks.iter().enumerate() {
         let value = f32::from(u16::try_from(idx + 1).expect("track index fits u16")) * 0.02;
         expected_sample += value;
         let resource = Resource::from_reader(
@@ -92,15 +98,15 @@ fn load_tracks(
             control,
             PlayerCmd::LoadTrack {
                 resource: Box::new(PlayerResource::new(resource, Arc::clone(src), &pool)),
-                item_id: None,
+                item_id: *item_id,
             },
         );
     }
     send(control, PlayerCmd::SetPaused(false));
     processor.drain_commands();
 
-    for src in &sources {
-        match processor.track_mut(src) {
+    for (src, item_id) in &tracks {
+        match processor.track_mut(*item_id) {
             Some(track) => track.play(),
             None => panic!("no-SYNC deadline track {src} did not reach the processor"),
         }

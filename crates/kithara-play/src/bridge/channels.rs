@@ -1,6 +1,7 @@
 use core::sync::atomic::AtomicU64;
 
 use kithara_audio::SeekBegin;
+use kithara_events::TrackId;
 use kithara_platform::{sync::Arc, time::Duration};
 use ringbuf::{HeapCons, HeapProd, HeapRb, traits::Split};
 use smallvec::SmallVec;
@@ -54,15 +55,14 @@ pub struct SlotControl {
 #[derive(Default)]
 struct SeekBindings(SmallVec<[SeekBinding; SLOT_TRACKS]>);
 
-type SeekBinding = (Arc<str>, Arc<dyn SeekBegin>);
+type SeekBinding = (TrackId, Arc<dyn SeekBegin>);
 
 const SLOT_TRACKS: usize = PlayerNodeProcessor::MAX_TRACKS;
 
 impl SlotControl {
     /// Record the control half of a track's seek path.
-    pub fn bind_seek(&mut self, src: Arc<str>, handle: Arc<dyn SeekBegin>) {
-        self.unbind_seek(&src);
-        self.seek.0.push((src, handle));
+    pub fn bind_seek(&mut self, item_id: TrackId, handle: Arc<dyn SeekBegin>) {
+        self.seek.0.push((item_id, handle));
     }
 
     /// Begin a seek on every track this slot holds, off the audio thread.
@@ -72,9 +72,11 @@ impl SlotControl {
         }
     }
 
-    /// Forget a track's seek path once the processor reports it unloaded.
-    pub fn unbind_seek(&mut self, src: &str) {
-        self.seek.0.retain(|(bound, _)| &**bound != src);
+    /// Forget the exact resource generation returned by the processor.
+    pub fn unbind_seek(&mut self, item_id: TrackId, handle: &Arc<dyn SeekBegin>) {
+        self.seek.0.retain(|(bound_id, bound_handle)| {
+            *bound_id != item_id || !Arc::ptr_eq(bound_handle, handle)
+        });
     }
 }
 

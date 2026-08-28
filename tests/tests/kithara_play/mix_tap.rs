@@ -4,6 +4,7 @@ use std::num::NonZeroU32;
 
 use kithara::{
     self,
+    events::TrackId,
     play::{Cmd, PlayError, Resource, SessionDispatcher, SessionError},
     signal::AudioSpec,
 };
@@ -30,7 +31,7 @@ fn playing_harness() -> OfflinePlayerHarness {
         SAMPLE_RATE,
     );
     harness.with_player(|player| {
-        player.insert(make_resource(), None, None);
+        player.insert(make_resource(), TrackId::allocate(), None);
         player
             .select_item(0, true)
             .expect("select first queue item");
@@ -108,7 +109,7 @@ fn a_tap_armed_before_playback_reaches_the_graph_it_waits_for() {
     assert!(tap.drain().is_empty(), "an idle session feeds nothing");
 
     harness.with_player(|player| {
-        player.insert(make_resource(), None, None);
+        player.insert(make_resource(), TrackId::allocate(), None);
         player
             .select_item(0, true)
             .expect("select first queue item");

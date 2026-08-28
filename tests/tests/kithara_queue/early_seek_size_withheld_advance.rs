@@ -258,10 +258,12 @@ async fn run_case(mode: GateMode) {
         while let Ok(ev) = rx.try_recv().map(|env| env.event) {
             if let kithara::events::Event::Player(pe) = ev {
                 match pe {
-                    PlayerEvent::ItemDidFail { ref src, .. } if *src == target_src => {
+                    PlayerEvent::ItemDidFail { ref item } if item.track().src == target_src => {
                         trigger = Trigger::DidFail;
                     }
-                    PlayerEvent::ItemDidPlayToEnd { ref src, .. } if *src == target_src => {
+                    PlayerEvent::ItemDidPlayToEnd { ref item }
+                        if item.track().src == target_src =>
+                    {
                         trigger = Trigger::DidPlayToEnd;
                     }
                     _ => {}

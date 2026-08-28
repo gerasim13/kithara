@@ -8,6 +8,7 @@ use std::{
 use kithara::{
     audio::ConsumerWakeMode,
     bufpool::{BytePool, SamplePool},
+    events::TrackId,
     platform::{
         sync::Arc,
         time::{self, Duration},
@@ -117,7 +118,7 @@ impl MixHarness {
         for (player, &value) in self.players.iter().zip(values) {
             player.insert(
                 resource_from_reader(TestPcmReader::with_value(spec, TRACK_SECS, value)),
-                None,
+                TrackId::allocate(),
                 None,
             );
             player

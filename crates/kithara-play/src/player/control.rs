@@ -1,7 +1,7 @@
 use delegate::delegate;
 use kithara_abr::AbrHandle;
 use kithara_audio::SeekOutcome;
-use kithara_events::EventBus;
+use kithara_events::{EventBus, TrackId};
 use kithara_platform::sync::Arc;
 
 use super::{PlayerRuntime, SelectTransition};
@@ -42,9 +42,14 @@ impl PlayerControl {
     }
 
     /// Plant a completed resource into an existing player slot.
-    pub fn replace_item(&self, index: usize, resource: Resource) -> Result<(), PlayError> {
+    pub fn replace_item(
+        &self,
+        index: usize,
+        resource: Resource,
+        item_id: TrackId,
+    ) -> Result<(), PlayError> {
         self.runtime
-            .with_open(|runtime| runtime.replace_item(index, resource))
+            .with_open(|runtime| runtime.replace_item(index, resource, item_id))
     }
 
     /// Remove every queued player resource.

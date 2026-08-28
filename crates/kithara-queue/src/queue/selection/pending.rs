@@ -112,7 +112,7 @@ impl QueueControl {
             .unwrap_or_else(PoisonError::into_inner)
             .remove(&id);
         let resource = cached?;
-        if let Err(error) = self.player.replace_item(index, resource) {
+        if let Err(error) = self.player.replace_item(index, resource, id) {
             return Some(Err(error.into()));
         }
         self.set_status(id, TrackStatus::Loaded);

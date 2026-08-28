@@ -4,7 +4,7 @@ use kithara_platform::sync::Arc;
 use super::super::core::PlayerImpl;
 use super::super::core::PlayerRuntime;
 use crate::{
-    api::{PlayerEvent, SlotId, TimeControlStatus, WaitingReason},
+    api::{PlayerEvent, SlotId, TimeControlStatus, TrackId, WaitingReason},
     bridge::PlayerCmd,
     error::PlayError,
 };
@@ -38,6 +38,7 @@ impl PendingNextState {
 /// `Playlist` owns the current index; `PendingNext` only tracks the
 /// already-enqueued successor and whether it has been activated.
 pub(crate) struct PendingNext {
+    pub(crate) item_id: TrackId,
     pub(crate) src: Arc<str>,
     pub(crate) state: PendingNextState,
     pub(crate) duration_seconds: f64,

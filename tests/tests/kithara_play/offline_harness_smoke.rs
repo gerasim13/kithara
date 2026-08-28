@@ -2,7 +2,7 @@
 
 use std::num::NonZeroU32;
 
-use kithara::{self, play::Resource, signal::AudioSpec};
+use kithara::{self, events::TrackId, play::Resource, signal::AudioSpec};
 use kithara_integration_tests::offline::{
     OfflinePlayerHarness, OfflinePlayerOptions, resource_from_reader,
 };
@@ -31,8 +31,8 @@ fn offline_harness_smoke() {
         SAMPLE_RATE,
     );
     harness.with_player(|player| {
-        player.insert(make_resource(0.1), None, None);
-        player.insert(make_resource(0.1), None, None);
+        player.insert(make_resource(0.1), TrackId::allocate(), None);
+        player.insert(make_resource(0.1), TrackId::allocate(), None);
         player
             .select_item(0, true)
             .expect("select first queue item");

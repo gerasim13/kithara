@@ -34,13 +34,12 @@ impl EventBridge {
 
     fn dispatch(
         observer: &Arc<dyn PlayerObserver>,
-        queue: &QueueControl,
         items: &Arc<Mutex<ItemRegistry>>,
         last_current: &Mutex<Option<TrackId>>,
         event: &Event,
     ) {
         if let Event::Player(pe) = event {
-            Self::route_player_event_to_item(items, queue, last_current, pe);
+            Self::route_player_event_to_item(items, last_current, pe);
             let Some(ffi_event) = FfiPlayerEvent::try_from(pe).ok() else {
                 return;
             };
@@ -209,18 +208,17 @@ impl EventBridge {
     /// [`FfiItemEvent::DidStall`].
     fn route_player_event_to_item(
         items: &Arc<Mutex<ItemRegistry>>,
-        queue: &QueueControl,
         last_current: &Mutex<Option<TrackId>>,
         event: &PlayerEvent,
     ) {
         let target = match event {
-            PlayerEvent::ItemDidPlayToEnd { .. } | PlayerEvent::ItemDidFail { .. } => {
-                *last_current.lock()
+            PlayerEvent::ItemDidPlayToEnd { item } | PlayerEvent::ItemDidFail { item } => {
+                Some(item.id())
             }
             PlayerEvent::TimeControlStatusChanged {
                 status: TimeControlStatus::WaitingToPlay,
                 ..
-            } => queue.current().map(|entry| entry.id),
+            } => *last_current.lock(),
             _ => return,
         };
         let Some(track_id) = target else { return };
@@ -285,7 +283,6 @@ impl EventBridge {
         Self::spawn_event_task(
             rx,
             Arc::clone(&observer),
-            queue.clone(),
             Arc::clone(items),
             Arc::clone(&last_current),
             cancel.clone(),
@@ -307,7 +304,6 @@ impl EventBridge {
     fn spawn_event_task(
         mut rx: EventReceiver,
         observer: Arc<dyn PlayerObserver>,
-        queue: QueueControl,
         items: Arc<Mutex<ItemRegistry>>,
         last_current: Arc<Mutex<Option<TrackId>>>,
         cancel: CancelToken,
@@ -320,7 +316,6 @@ impl EventBridge {
                         match event {
                             Ok(Envelope { event: ev, .. }) => Self::dispatch(
                                 &observer,
-                                &queue,
                                 &items,
                                 &last_current,
                                 &ev,
@@ -387,8 +382,8 @@ mod tests {
         play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl},
     };
     use kithara_events::{
-        AdvanceReason, Event, EventBus, FileError, FileEvent, HlsError, HlsEvent, QueueEvent,
-        QueueRepeatMode, TrackId, TrackStatus,
+        AdvanceReason, Event, EventBus, FileError, FileEvent, HlsError, HlsEvent, ItemRole,
+        QueueEvent, QueueRepeatMode, SlotId, TrackId, TrackRef, TrackStatus,
     };
     use kithara_platform::sync::{Arc, Mutex};
     use kithara_queue::{Queue, QueueConfig, test_utils::QueueProbe};
@@ -467,6 +462,17 @@ mod tests {
             preferred_peak_bitrate: 0.0,
             preferred_peak_bitrate_expensive: 0.0,
         }
+    }
+
+    fn register_observed_item(
+        items: &Arc<Mutex<ItemRegistry>>,
+    ) -> (Arc<AudioPlayerItem>, Arc<CollectingItemObserver>) {
+        let item = AudioPlayerItem::new(item_config());
+        let observer = Arc::new(CollectingItemObserver::default());
+        let item_observer: Arc<dyn ItemObserver> = observer.clone();
+        item.set_observer(item_observer);
+        items.lock().insert(item.track_id(), item.clone());
+        (item, observer)
     }
 
     fn assert_protocol_failure_is_not_duplicated(event: Event, expected_error: &str) {
@@ -584,6 +590,81 @@ mod tests {
                 },
                 FfiItemEvent::Error { error },
             ] if error == "decoder refused the stream"
+        ));
+    }
+
+    #[kithara::test]
+    fn terminal_events_route_to_their_exact_item_when_sources_repeat() {
+        let items = Arc::new(Mutex::new(ItemRegistry::default()));
+        let (delayed, delayed_observer) = register_observed_item(&items);
+        let (current, current_observer) = register_observed_item(&items);
+        assert_ne!(delayed.track_id(), current.track_id());
+
+        let last_current = Mutex::new(Some(current.track_id()));
+        let shared_src: Arc<str> = Arc::from("https://example.com/quiet-intro.flac");
+        EventBridge::route_player_event_to_item(
+            &items,
+            &last_current,
+            &PlayerEvent::ItemDidPlayToEnd {
+                item: ItemRole::Background(TrackRef::new(
+                    delayed.track_id(),
+                    SlotId::new(1),
+                    Arc::clone(&shared_src),
+                )),
+            },
+        );
+
+        assert!(matches!(
+            delayed_observer.take_events().as_slice(),
+            [FfiItemEvent::DidReachEnd]
+        ));
+        assert!(
+            current_observer.take_events().is_empty(),
+            "a delayed background EOF must not be delivered to the current item"
+        );
+
+        EventBridge::route_player_event_to_item(
+            &items,
+            &last_current,
+            &PlayerEvent::ItemDidFail {
+                item: ItemRole::Outgoing(TrackRef::new(
+                    delayed.track_id(),
+                    SlotId::new(0),
+                    shared_src,
+                )),
+            },
+        );
+
+        assert!(matches!(
+            delayed_observer.take_events().as_slice(),
+            [FfiItemEvent::DidFail]
+        ));
+        assert!(
+            current_observer.take_events().is_empty(),
+            "an outgoing failure must not be delivered to another item with the same source"
+        );
+    }
+
+    #[kithara::test]
+    fn event_without_item_identity_routes_to_last_current() {
+        let items = Arc::new(Mutex::new(ItemRegistry::default()));
+        let (_previous, previous_observer) = register_observed_item(&items);
+        let (current, current_observer) = register_observed_item(&items);
+        let last_current = Mutex::new(Some(current.track_id()));
+
+        EventBridge::route_player_event_to_item(
+            &items,
+            &last_current,
+            &PlayerEvent::TimeControlStatusChanged {
+                status: TimeControlStatus::WaitingToPlay,
+                reason: None,
+            },
+        );
+
+        assert!(previous_observer.take_events().is_empty());
+        assert!(matches!(
+            current_observer.take_events().as_slice(),
+            [FfiItemEvent::DidStall]
         ));
     }
 
@@ -770,9 +851,11 @@ mod tests {
         queue
             .bus()
             .publish(Event::Player(PlayerEvent::ItemDidPlayToEnd {
-                src: Arc::from(format!("test://memory/{}", id.as_u64())),
-                item_id: None,
-                from_current_item: true,
+                item: ItemRole::Leading(TrackRef::new(
+                    id,
+                    SlotId::new(0),
+                    Arc::from(format!("test://memory/{}", id.as_u64())),
+                )),
             }));
 
         let cancel = CancelToken::root();

@@ -5,7 +5,7 @@ use std::{cmp, hash, ops};
 use kithara_platform::{sync::Arc, time::Duration};
 use num_traits::cast::{AsPrimitive, ToPrimitive};
 
-use crate::SlotId;
+use crate::{SlotId, TrackId};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 #[non_exhaustive]
@@ -14,6 +14,87 @@ pub enum PlayerStatus {
     Unknown,
     ReadyToPlay,
     Failed,
+}
+
+/// Where an item sits in the player's arena and what it renders,
+/// alongside the identity the queue gave it.
+///
+/// A slot is a processor holding an arena of items, not a single item:
+/// arming the successor loads it into the *current* slot, and a crossfade
+/// promotes it there (`CrossfadeStarted { from: slot, to: slot }`). So
+/// `slot` alone does not say which item this is, and `src` names a
+/// rendered resource that two queue entries may share. `id` is the only
+/// part that answers "which entry"; the other two are what makes a log
+/// line readable.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, derive_more::Display)]
+#[display("{id}@slot{} {src}", slot.value())]
+#[non_exhaustive]
+pub struct TrackRef {
+    /// The queue's identity for this item, set when it was handed to the
+    /// player. The same value the FFI reports as `audioId`.
+    pub id: TrackId,
+    /// The processor slot the item is loaded into.
+    pub slot: SlotId,
+    /// The rendered resource behind the item. Not an identity: a playlist
+    /// may repeat one URL.
+    pub src: Arc<str>,
+}
+
+impl TrackRef {
+    #[must_use]
+    pub const fn new(id: TrackId, slot: SlotId, src: Arc<str>) -> Self {
+        Self { id, slot, src }
+    }
+}
+
+/// An item in the player's arena, named together with the role it holds
+/// there. Only the player can fill this in.
+///
+/// The subject of a player event is placed by two answers — which slot it
+/// came from, and which item inside that slot — and `src` answers neither:
+/// it names a rendered resource, not a queue entry.
+///
+/// [`TrackRef`] lives *inside* the role rather than beside it, so a
+/// consumer has to say which item it is holding before it can use its
+/// identity — the omission that once let a background slot's end advance
+/// the queue.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum ItemRole {
+    /// The item the listener is hearing. The only role that drives
+    /// auto-advance.
+    Leading(TrackRef),
+    /// The outgoing half of a crossfade: still inside the current slot,
+    /// but the incoming item has already been promoted over it. Its end
+    /// is expected and carries no instruction.
+    Outgoing(TrackRef),
+    /// An item in a slot the phase no longer holds — an orphan draining
+    /// the last of its notifications until it is unregistered, while a
+    /// different item plays. Acting on it cuts an item still going.
+    Background(TrackRef),
+}
+
+impl ItemRole {
+    /// The item this role is about.
+    #[must_use]
+    pub const fn track(&self) -> &TrackRef {
+        match self {
+            Self::Leading(track) | Self::Outgoing(track) | Self::Background(track) => track,
+        }
+    }
+
+    /// The queue's identity for this item.
+    #[must_use]
+    pub const fn id(&self) -> TrackId {
+        self.track().id
+    }
+
+    /// Whether this is the item being heard, and so the one that should
+    /// drive auto-advance.
+    #[must_use]
+    pub const fn is_leading(&self) -> bool {
+        matches!(self, Self::Leading(_))
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -296,9 +377,13 @@ pub enum PlayerEvent {
     RateChanged {
         rate: f32,
     },
+    /// An item began rendering. Published for whichever slot's item
+    /// entered `Playing`, so it carries [`ItemRole`] for the same reason
+    /// [`ItemDidPlayToEnd`](Self::ItemDidPlayToEnd) does: a slot the phase
+    /// no longer holds can start its own item while a different one is
+    /// being heard.
     PlaybackStarted {
-        src: Arc<str>,
-        item_id: Option<Arc<str>>,
+        item: ItemRole,
     },
     VolumeChanged {
         volume: f32,
@@ -310,25 +395,11 @@ pub enum PlayerEvent {
     PrerollCompleted {
         success: bool,
     },
-    /// A track reached natural end-of-stream. `src` is the underlying
-    /// audio source identifier of the track that ended — necessary so
-    /// consumers can distinguish a genuine final-track EOF from a stale
-    /// outgoing-track EOF that fires after a crossfade has already
-    /// promoted the next track. `item_id` is the optional caller-side
-    /// item identifier (FFI bindings tag tracks with stable UUIDs;
-    /// internal callers may leave it `None`).
-    ///
-    /// `from_current_item` is the player's own answer to "was this the
-    /// track the listener was hearing?". The player walks every active
-    /// slot, so a preloaded successor or a lingering predecessor that
-    /// decodes ahead publishes its own end while the current track is
-    /// seconds old; only the player knows which slot is current, and
-    /// `src` alone cannot be compared against a queue entry reliably.
-    /// Auto-advance must key on this flag, not on `src`.
+    /// An item reached natural end-of-stream. [`ItemRole`] is the
+    /// player's own answer to *which* item this was; auto-advance must key
+    /// on the role, and never on the [`TrackRef::src`] inside it.
     ItemDidPlayToEnd {
-        src: Arc<str>,
-        item_id: Option<Arc<str>>,
-        from_current_item: bool,
+        item: ItemRole,
     },
     /// A track aborted mid-stream because the underlying decoder /
     /// source reported a non-recoverable error. Distinct from
@@ -337,9 +408,7 @@ pub enum PlayerEvent {
     /// as a track-failure signal (skip-and-flag) rather than a
     /// normal auto-advance.
     ItemDidFail {
-        src: Arc<str>,
-        item_id: Option<Arc<str>>,
-        from_current_item: bool,
+        item: ItemRole,
     },
     /// Leading track entered the prefetch window — arm the next slot.
     PrefetchRequested,

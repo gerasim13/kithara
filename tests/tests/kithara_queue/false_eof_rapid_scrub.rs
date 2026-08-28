@@ -318,13 +318,13 @@ async fn observe_scrub_outcome(obs: ScrubObservation<'_>) -> ScrubOutcome {
             .map(|r| r.map(|env| env.event))
         {
             Ok(Ok(ev)) => {
-                if let Event::Player(PlayerEvent::ItemDidFail { src, .. }) = &ev
-                    && src.as_ref() == target_src
+                if let Event::Player(PlayerEvent::ItemDidFail { item }) = &ev
+                    && item.track().src.as_ref() == target_src
                 {
                     last_terminal_for_target = Some(AdvanceTrigger::DidFail);
                 }
-                if let Event::Player(PlayerEvent::ItemDidPlayToEnd { src, .. }) = &ev
-                    && src.as_ref() == target_src
+                if let Event::Player(PlayerEvent::ItemDidPlayToEnd { item }) = &ev
+                    && item.track().src.as_ref() == target_src
                 {
                     last_terminal_for_target = Some(AdvanceTrigger::DidPlayToEnd);
                 }

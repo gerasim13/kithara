@@ -2,6 +2,7 @@ use std::num::NonZeroU32;
 
 use bon::bon;
 use firewheel::dsp::fade::FadeCurve;
+use kithara_events::TrackId;
 use kithara_platform::sync::Arc;
 use num_traits::cast::{AsPrimitive, ToPrimitive};
 
@@ -16,7 +17,8 @@ use crate::{bridge::TrackState, worker::ServiceClass};
 #[fieldwork(opt_in, get)]
 pub struct PlayerTrack {
     pub(super) resource: Box<PlayerResource>,
-    pub(super) item_id: Option<Arc<str>>,
+    #[field(get, copy)]
+    pub(super) item_id: TrackId,
     pub(super) fade: TrackFade,
     #[field(get, copy)]
     pub(super) state: TrackState,
@@ -71,7 +73,7 @@ impl PlayerTrack {
     pub fn new(
         #[builder(finish_fn)] resource: Box<PlayerResource>,
         sample_rate: NonZeroU32,
-        item_id: Option<Arc<str>>,
+        item_id: TrackId,
         #[builder(default)] fade_duration: f32,
         #[builder(default = FadeCurve::SquareRoot)] fade_curve: FadeCurve,
         #[builder(default)] prefetch_duration: f32,

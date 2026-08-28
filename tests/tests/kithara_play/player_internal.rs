@@ -12,7 +12,7 @@ use std::num::NonZeroU32;
 use kithara::{
     self,
     bufpool::Region,
-    events::{Event, EventBus, EventReceiver},
+    events::{Event, EventBus, EventReceiver, TrackId},
     platform::sync::Arc,
     play::{
         PlayError, PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerEvent, PlayerImpl,
@@ -46,14 +46,12 @@ fn make_resource(duration_secs: f64) -> Resource {
     )
 }
 
-fn make_tagged_resource(item_id: &'static str, duration_secs: f64) -> (Resource, Arc<str>) {
-    let item_id = Arc::<str>::from(item_id);
-    (
-        Resource::from_reader(
-            TestPcmReader::new(mock_spec(), duration_secs),
-            Some(Arc::from(format!("memory://{item_id}"))),
-        ),
-        item_id,
+/// A resource whose src carries `label`, so concurrent items in one test
+/// stay distinguishable in failure output.
+fn make_tagged_resource(label: &'static str, duration_secs: f64) -> Resource {
+    Resource::from_reader(
+        TestPcmReader::new(mock_spec(), duration_secs),
+        Some(Arc::from(format!("memory://{label}"))),
     )
 }
 
@@ -122,10 +120,10 @@ fn render_until_events(
 #[case(InsertScenario::InsertAtPosition, 3)]
 async fn player_insert_scenarios(#[case] scenario: InsertScenario, #[case] expected_count: usize) {
     let player = PlayerImpl::new(default_player_config());
-    player.insert(make_resource(1.0), None, None);
-    player.insert(make_resource(2.0), None, None);
+    player.insert(make_resource(1.0), TrackId::allocate(), None);
+    player.insert(make_resource(2.0), TrackId::allocate(), None);
     if matches!(scenario, InsertScenario::InsertAtPosition) {
-        player.insert(make_resource(3.0), None, Some(0));
+        player.insert(make_resource(3.0), TrackId::allocate(), Some(0));
     }
     assert_eq!(player.item_count(), expected_count);
 }
@@ -138,21 +136,21 @@ async fn player_remove_at_scenarios(#[case] scenario: RemoveAtScenario) {
     let player = PlayerImpl::new(default_player_config());
     match scenario {
         RemoveAtScenario::ExistingItem => {
-            player.insert(make_resource(1.0), None, None);
-            player.insert(make_resource(2.0), None, None);
+            player.insert(make_resource(1.0), TrackId::allocate(), None);
+            player.insert(make_resource(2.0), TrackId::allocate(), None);
             let removed = player.remove_at(0);
             assert!(removed.is_some());
             assert_eq!(player.item_count(), 1);
         }
         RemoveAtScenario::OutOfBounds => {
-            player.insert(make_resource(1.0), None, None);
+            player.insert(make_resource(1.0), TrackId::allocate(), None);
             assert!(player.remove_at(5).is_none());
             assert_eq!(player.item_count(), 1);
         }
         RemoveAtScenario::ShiftCurrentIndex => {
-            player.insert(make_resource(1.0), None, None);
-            player.insert(make_resource(2.0), None, None);
-            player.insert(make_resource(3.0), None, None);
+            player.insert(make_resource(1.0), TrackId::allocate(), None);
+            player.insert(make_resource(2.0), TrackId::allocate(), None);
+            player.insert(make_resource(3.0), TrackId::allocate(), None);
             player.advance_to_next_item();
             player.advance_to_next_item();
             assert_eq!(player.current_index(), 2);
@@ -169,9 +167,9 @@ async fn player_remove_at_scenarios(#[case] scenario: RemoveAtScenario) {
 async fn player_remove_all_resets_state(#[case] with_resources: bool) {
     let player = PlayerImpl::new(default_player_config());
     if with_resources {
-        player.insert(make_resource(1.0), None, None);
-        player.insert(make_resource(2.0), None, None);
-        player.insert(make_resource(3.0), None, None);
+        player.insert(make_resource(1.0), TrackId::allocate(), None);
+        player.insert(make_resource(2.0), TrackId::allocate(), None);
+        player.insert(make_resource(3.0), TrackId::allocate(), None);
         assert_eq!(player.item_count(), 3);
     }
     player.remove_all_items();
@@ -183,9 +181,9 @@ async fn player_remove_all_resets_state(#[case] with_resources: bool) {
 #[kithara::test(tokio)]
 async fn player_advance_through_queue() {
     let player = PlayerImpl::new(default_player_config());
-    player.insert(make_resource(1.0), None, None);
-    player.insert(make_resource(2.0), None, None);
-    player.insert(make_resource(3.0), None, None);
+    player.insert(make_resource(1.0), TrackId::allocate(), None);
+    player.insert(make_resource(2.0), TrackId::allocate(), None);
+    player.insert(make_resource(3.0), TrackId::allocate(), None);
     assert_eq!(player.current_index(), 0);
     player.advance_to_next_item();
     assert_eq!(player.current_index(), 1);
@@ -198,8 +196,8 @@ async fn player_advance_through_queue() {
 #[kithara::test(tokio)]
 async fn player_advance_emits_event() {
     let player = PlayerImpl::new(default_player_config());
-    player.insert(make_resource(1.0), None, None);
-    player.insert(make_resource(2.0), None, None);
+    player.insert(make_resource(1.0), TrackId::allocate(), None);
+    player.insert(make_resource(2.0), TrackId::allocate(), None);
     let mut rx = player.subscribe();
     player.advance_to_next_item();
     let event = rx.try_recv().map(|env| env.event);
@@ -212,8 +210,8 @@ async fn player_advance_emits_event() {
 #[kithara::test]
 fn replay_same_item_does_not_re_emit_current_item_changed() {
     let (player, _session) = make_offline_player(0.0);
-    let (item, id) = make_tagged_resource("item-1", 0.05);
-    player.insert(item, Some(id), None);
+    let item = make_tagged_resource("item-1", 0.05);
+    player.insert(item, TrackId::allocate(), None);
     let mut rx = player.subscribe();
 
     player.play();
@@ -244,8 +242,8 @@ fn re_selecting_the_current_item_does_not_re_announce() {
     // Centralization delta: re-selecting the already-current index (e.g. while
     // paused) must not re-announce — announce gates on identity, not on calls.
     let (player, _session) = make_offline_player(0.0);
-    let (item, id) = make_tagged_resource("item-1", 0.05);
-    player.insert(item, Some(id), None);
+    let item = make_tagged_resource("item-1", 0.05);
+    player.insert(item, TrackId::allocate(), None);
     let mut rx = player.subscribe();
 
     player.play();
@@ -270,15 +268,15 @@ fn replacing_current_item_re_announces_on_next_play() {
     // Dual of suppression: replacing the audio under the current index must
     // re-announce on the next play — index equality must not mask a change.
     let (player, _session) = make_offline_player(0.0);
-    let (item, id) = make_tagged_resource("item-1", 0.05);
-    player.insert(item, Some(id), None);
+    let item = make_tagged_resource("item-1", 0.05);
+    player.insert(item, TrackId::allocate(), None);
     let mut rx = player.subscribe();
 
     player.play();
     let _ = drain_player_events(&player, &mut rx);
 
-    let (replacement, _) = make_tagged_resource("item-2", 0.05);
-    player.replace_item_tagged(0, replacement, Some(Arc::from("item-2")));
+    let replacement = make_tagged_resource("item-2", 0.05);
+    player.replace_item(0, replacement, TrackId::allocate());
     player.play();
     let after = drain_player_events(&player, &mut rx);
     let announces = after
@@ -302,7 +300,7 @@ async fn player_play_without_audio_hardware_logs_warning() {
             .session(OfflineSession::arc_auto())
             .build(),
     );
-    player.insert(make_resource(1.0), None, None);
+    player.insert(make_resource(1.0), TrackId::allocate(), None);
     player.play();
 }
 
@@ -310,10 +308,10 @@ async fn player_play_without_audio_hardware_logs_warning() {
 fn queue_auto_advance_cf_zero_emits_terminal_before_current_changed() {
     let (player, session) = make_offline_player(0.0);
     let mut rx = player.subscribe();
-    let (first, first_id) = make_tagged_resource("item-1", 0.05);
-    let (second, _) = make_tagged_resource("item-2", 0.05);
-    player.insert(first, Some(Arc::clone(&first_id)), None);
-    player.insert(second, Some(Arc::from("item-2")), None);
+    let first = make_tagged_resource("item-1", 0.05);
+    let second = make_tagged_resource("item-2", 0.05);
+    player.insert(first, TrackId::allocate(), None);
+    player.insert(second, TrackId::allocate(), None);
 
     player.play();
     let _ = drain_player_events(&player, &mut rx);
@@ -353,10 +351,10 @@ fn queue_auto_advance_cf_zero_emits_terminal_before_current_changed() {
 fn queue_auto_advance_cf_one_activates_before_first_terminal_event() {
     let (player, session) = make_offline_player(1.0);
     let mut rx = player.subscribe();
-    let (first, _) = make_tagged_resource("item-1", 1.5);
-    let (second, _) = make_tagged_resource("item-2", 1.5);
-    player.insert(first, Some(Arc::from("item-1")), None);
-    player.insert(second, Some(Arc::from("item-2")), None);
+    let first = make_tagged_resource("item-1", 1.5);
+    let second = make_tagged_resource("item-2", 1.5);
+    player.insert(first, TrackId::allocate(), None);
+    player.insert(second, TrackId::allocate(), None);
 
     player.play();
     let _ = drain_player_events(&player, &mut rx);
@@ -383,10 +381,10 @@ fn queue_auto_advance_cf_one_activates_before_first_terminal_event() {
 fn queue_auto_advance_cf_ge_prefetch_still_advances() {
     let (player, session) = make_offline_player(4.0);
     let mut rx = player.subscribe();
-    let (first, _) = make_tagged_resource("item-1", 5.0);
-    let (second, _) = make_tagged_resource("item-2", 5.0);
-    player.insert(first, Some(Arc::from("item-1")), None);
-    player.insert(second, Some(Arc::from("item-2")), None);
+    let first = make_tagged_resource("item-1", 5.0);
+    let second = make_tagged_resource("item-2", 5.0);
+    player.insert(first, TrackId::allocate(), None);
+    player.insert(second, TrackId::allocate(), None);
 
     player.play();
     let _ = drain_player_events(&player, &mut rx);
@@ -419,10 +417,10 @@ fn queue_auto_advance_cf_ge_prefetch_still_advances() {
 fn arm_next_loads_item_and_returns_src() {
     let (player, session) = make_offline_player(0.0);
     player.set_auto_advance_enabled(false);
-    let (first, _) = make_tagged_resource("item-1", 0.05);
-    let (second, _) = make_tagged_resource("item-2", 0.05);
-    player.insert(first, Some(Arc::from("item-1")), None);
-    player.insert(second, Some(Arc::from("item-2")), None);
+    let first = make_tagged_resource("item-1", 0.05);
+    let second = make_tagged_resource("item-2", 0.05);
+    player.insert(first, TrackId::allocate(), None);
+    player.insert(second, TrackId::allocate(), None);
     player.ensure_engine_started().unwrap();
     player.ensure_slot().unwrap();
 
@@ -456,8 +454,8 @@ fn seek_seconds_updates_position_optimistically() {
 fn an_end_minted_before_a_published_seek_is_not_delivered() {
     let (player, session) = make_offline_player(0.0);
     let mut rx = player.subscribe();
-    let (item, item_id) = make_tagged_resource("item-1", 0.05);
-    player.insert(item, Some(item_id), None);
+    let item = make_tagged_resource("item-1", 0.05);
+    player.insert(item, TrackId::allocate(), None);
 
     player.play();
     let _ = drain_player_events(&player, &mut rx);
@@ -486,8 +484,8 @@ fn an_end_minted_before_a_published_seek_is_not_delivered() {
 fn a_revived_track_delivers_the_end_it_reaches_again() {
     let (player, session) = make_offline_player(0.0);
     let mut rx = player.subscribe();
-    let (item, item_id) = make_tagged_resource("item-1", 0.05);
-    player.insert(item, Some(item_id), None);
+    let item = make_tagged_resource("item-1", 0.05);
+    player.insert(item, TrackId::allocate(), None);
 
     player.play();
     let _ = drain_player_events(&player, &mut rx);
@@ -515,8 +513,8 @@ fn arm_next_returns_none_for_empty_slot() {
     let (player, _session) = make_offline_player(0.0);
     player.set_auto_advance_enabled(false);
     player.reserve_slots(2);
-    let (first, _) = make_tagged_resource("item-1", 0.05);
-    player.replace_item_tagged(0, first, Some(Arc::from("item-1")));
+    let first = make_tagged_resource("item-1", 0.05);
+    player.replace_item(0, first, TrackId::allocate());
     player.ensure_engine_started().unwrap();
     player.ensure_slot().unwrap();
 
@@ -528,10 +526,10 @@ fn arm_next_returns_none_for_empty_slot() {
 fn arm_next_idempotent_for_same_index() {
     let (player, _session) = make_offline_player(0.0);
     player.set_auto_advance_enabled(false);
-    let (first, _) = make_tagged_resource("item-1", 0.05);
-    let (second, _) = make_tagged_resource("item-2", 0.05);
-    player.insert(first, Some(Arc::from("item-1")), None);
-    player.insert(second, Some(Arc::from("item-2")), None);
+    let first = make_tagged_resource("item-1", 0.05);
+    let second = make_tagged_resource("item-2", 0.05);
+    player.insert(first, TrackId::allocate(), None);
+    player.insert(second, TrackId::allocate(), None);
     player.ensure_engine_started().unwrap();
     player.ensure_slot().unwrap();
 
@@ -545,12 +543,12 @@ fn arm_next_idempotent_for_same_index() {
 fn arm_next_replaces_previously_armed_slot() {
     let (player, session) = make_offline_player(0.0);
     player.set_auto_advance_enabled(false);
-    let (a, _) = make_tagged_resource("a", 0.05);
-    let (b, _) = make_tagged_resource("b", 0.05);
-    let (c, _) = make_tagged_resource("c", 0.05);
-    player.insert(a, Some(Arc::from("a")), None);
-    player.insert(b, Some(Arc::from("b")), None);
-    player.insert(c, Some(Arc::from("c")), None);
+    let a = make_tagged_resource("a", 0.05);
+    let b = make_tagged_resource("b", 0.05);
+    let c = make_tagged_resource("c", 0.05);
+    player.insert(a, TrackId::allocate(), None);
+    player.insert(b, TrackId::allocate(), None);
+    player.insert(c, TrackId::allocate(), None);
     player.ensure_engine_started().unwrap();
     player.ensure_slot().unwrap();
 
@@ -569,10 +567,10 @@ fn arm_next_replaces_previously_armed_slot() {
 fn commit_next_index_mismatch_returns_typed_error() {
     let (player, _session) = make_offline_player(1.0);
     player.set_auto_advance_enabled(false);
-    let (first, _) = make_tagged_resource("a", 0.05);
-    let (second, _) = make_tagged_resource("b", 0.05);
-    player.insert(first, Some(Arc::from("a")), None);
-    player.insert(second, Some(Arc::from("b")), None);
+    let first = make_tagged_resource("a", 0.05);
+    let second = make_tagged_resource("b", 0.05);
+    player.insert(first, TrackId::allocate(), None);
+    player.insert(second, TrackId::allocate(), None);
     player.ensure_engine_started().unwrap();
     player.ensure_slot().unwrap();
     player.arm_next(1).unwrap();
@@ -591,10 +589,10 @@ fn commit_next_index_mismatch_returns_typed_error() {
 fn commit_next_advances_index_and_publishes_event() {
     let (player, _session) = make_offline_player(1.0);
     player.set_auto_advance_enabled(false);
-    let (first, _) = make_tagged_resource("a", 0.05);
-    let (second, _) = make_tagged_resource("b", 0.05);
-    player.insert(first, Some(Arc::from("a")), None);
-    player.insert(second, Some(Arc::from("b")), None);
+    let first = make_tagged_resource("a", 0.05);
+    let second = make_tagged_resource("b", 0.05);
+    player.insert(first, TrackId::allocate(), None);
+    player.insert(second, TrackId::allocate(), None);
     player.ensure_engine_started().unwrap();
     player.ensure_slot().unwrap();
     player.arm_next(1).unwrap();
@@ -619,10 +617,10 @@ fn commit_next_advances_index_and_publishes_event() {
 fn commit_next_idempotent_when_already_activated() {
     let (player, _session) = make_offline_player(1.0);
     player.set_auto_advance_enabled(false);
-    let (first, _) = make_tagged_resource("a", 0.05);
-    let (second, _) = make_tagged_resource("b", 0.05);
-    player.insert(first, Some(Arc::from("a")), None);
-    player.insert(second, Some(Arc::from("b")), None);
+    let first = make_tagged_resource("a", 0.05);
+    let second = make_tagged_resource("b", 0.05);
+    player.insert(first, TrackId::allocate(), None);
+    player.insert(second, TrackId::allocate(), None);
     player.ensure_engine_started().unwrap();
     player.ensure_slot().unwrap();
     player.arm_next(1).unwrap();
@@ -636,10 +634,10 @@ fn commit_next_idempotent_when_already_activated() {
 fn unarm_next_clears_when_not_activated_and_unloads() {
     let (player, session) = make_offline_player(0.0);
     player.set_auto_advance_enabled(false);
-    let (first, _) = make_tagged_resource("a", 0.05);
-    let (second, _) = make_tagged_resource("b", 0.05);
-    player.insert(first, Some(Arc::from("a")), None);
-    player.insert(second, Some(Arc::from("b")), None);
+    let first = make_tagged_resource("a", 0.05);
+    let second = make_tagged_resource("b", 0.05);
+    player.insert(first, TrackId::allocate(), None);
+    player.insert(second, TrackId::allocate(), None);
     player.ensure_engine_started().unwrap();
     player.ensure_slot().unwrap();
     let src = player.arm_next(1).unwrap();
@@ -657,10 +655,10 @@ fn unarm_next_clears_when_not_activated_and_unloads() {
 fn unarm_next_preserves_activated_current() {
     let (player, _session) = make_offline_player(1.0);
     player.set_auto_advance_enabled(false);
-    let (first, _) = make_tagged_resource("a", 0.05);
-    let (second, _) = make_tagged_resource("b", 0.05);
-    player.insert(first, Some(Arc::from("a")), None);
-    player.insert(second, Some(Arc::from("b")), None);
+    let first = make_tagged_resource("a", 0.05);
+    let second = make_tagged_resource("b", 0.05);
+    player.insert(first, TrackId::allocate(), None);
+    player.insert(second, TrackId::allocate(), None);
     player.ensure_engine_started().unwrap();
     player.ensure_slot().unwrap();
     player.arm_next(1).unwrap();
@@ -674,12 +672,12 @@ fn unarm_next_preserves_activated_current() {
 fn select_item_clears_pending_next_and_unloads_preloaded_track() {
     let (player, session) = make_offline_player(1.0);
     player.set_auto_advance_enabled(false);
-    let (first, _) = make_tagged_resource("item-1", 0.05);
-    let (second, _) = make_tagged_resource("item-2", 0.05);
-    let (third, _) = make_tagged_resource("item-3", 0.05);
-    player.insert(first, Some(Arc::from("item-1")), None);
-    player.insert(second, Some(Arc::from("item-2")), None);
-    player.insert(third, Some(Arc::from("item-3")), None);
+    let first = make_tagged_resource("item-1", 0.05);
+    let second = make_tagged_resource("item-2", 0.05);
+    let third = make_tagged_resource("item-3", 0.05);
+    player.insert(first, TrackId::allocate(), None);
+    player.insert(second, TrackId::allocate(), None);
+    player.insert(third, TrackId::allocate(), None);
 
     player.ensure_engine_started().unwrap();
     player.ensure_slot().unwrap();
@@ -703,10 +701,10 @@ fn select_item_clears_pending_next_and_unloads_preloaded_track() {
 fn select_item_on_armed_index_promotes_armed_slot() {
     let (player, session) = make_offline_player(1.0);
     player.set_auto_advance_enabled(false);
-    let (first, _) = make_tagged_resource("item-1", 0.05);
-    let (second, _) = make_tagged_resource("item-2", 0.05);
-    player.insert(first, Some(Arc::from("item-1")), None);
-    player.insert(second, Some(Arc::from("item-2")), None);
+    let first = make_tagged_resource("item-1", 0.05);
+    let second = make_tagged_resource("item-2", 0.05);
+    player.insert(first, TrackId::allocate(), None);
+    player.insert(second, TrackId::allocate(), None);
 
     player.ensure_engine_started().unwrap();
     player.ensure_slot().unwrap();

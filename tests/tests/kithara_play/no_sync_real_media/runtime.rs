@@ -190,13 +190,14 @@ pub(super) fn drain_all_events(
                         "deck {deck_index} ({}) decode error {class:?}/{kind:?} ({detail}) during {phase}",
                         deck.observation.label,
                     )),
-                    Event::Player(PlayerEvent::ItemDidPlayToEnd { src, .. }) => {
+                    Event::Player(PlayerEvent::ItemDidPlayToEnd { item }) => {
                         deck.seek_terminal = true;
                         failures.push(format!(
-                            "deck {deck_index} ({src}) reached player EOF during {phase}",
+                            "deck {deck_index} ({}) reached player EOF during {phase}",
+                            item.track(),
                         ));
                     }
-                    Event::Player(PlayerEvent::ItemDidFail { src: _, .. }) => {
+                    Event::Player(PlayerEvent::ItemDidFail { .. }) => {
                         deck.seek_terminal = true;
                         failures.push(format!(
                             "deck {deck_index} ({}) reported player track failure during {phase}",

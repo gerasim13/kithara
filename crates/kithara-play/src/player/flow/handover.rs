@@ -8,19 +8,23 @@ use super::super::{
     core::PlayerRuntime,
     state::{PendingNext, PendingNextState},
 };
-use crate::{api::EngineEvent, bridge::PlayerCmd, error::PlayError};
+use crate::{
+    api::{EngineEvent, TrackId},
+    bridge::PlayerCmd,
+    error::PlayError,
+};
 
 /// Outcome of resolving an arm request under the short phase lock, acted on
 /// outside the lock to avoid holding it across `send_to_slot`.
 enum ArmDecision {
     /// The same index is already armed; return its src verbatim.
     AlreadyArmed(Arc<str>),
-    /// The slot was cleared; optionally unload the previous src.
-    Clear(Option<Arc<str>>),
+    /// The slot was cleared; optionally unload the previous item.
+    Clear(Option<TrackId>),
 }
 
 struct ActivatedPending {
-    src: Arc<str>,
+    item_id: TrackId,
     duration_seconds: f64,
 }
 
@@ -60,11 +64,11 @@ impl Handover<'_> {
         let outcome = if pending.state.activated() {
             None
         } else {
-            let src = Arc::clone(&pending.src);
+            let item_id = pending.item_id;
             let duration_seconds = pending.duration_seconds;
             pending.state = PendingNextState::ActivatedReady;
             Some(ActivatedPending {
-                src,
+                item_id,
                 duration_seconds,
             })
         };
@@ -97,7 +101,7 @@ impl Handover<'_> {
             }
             Some(existing) => {
                 let unload = (!(existing.state.activated() && existing.index == current_index))
-                    .then(|| existing.src.clone());
+                    .then_some(existing.item_id);
                 if let Some(slot) = phase.pending_mut() {
                     *slot = None;
                 }
@@ -111,13 +115,14 @@ impl Handover<'_> {
             ArmDecision::AlreadyArmed(src) => return Some(src),
             ArmDecision::Clear(unload) => unload,
         };
-        if let Some(prev_src) = to_unload {
-            let _ = self.send_to_slot(PlayerCmd::UnloadTrack { src: prev_src });
+        if let Some(item_id) = to_unload {
+            let _ = self.send_to_slot(PlayerCmd::UnloadTrack { item_id });
         }
 
-        let (src, duration_seconds) = self.enqueue_to_processor(index)?;
+        let (item_id, src, duration_seconds) = self.enqueue_to_processor(index)?;
         if let Some(pending_slot) = self.phase.lock().pending_mut() {
             *pending_slot = Some(PendingNext {
+                item_id,
                 index,
                 duration_seconds,
                 src: src.clone(),
@@ -153,7 +158,7 @@ impl Handover<'_> {
             return Ok(());
         };
 
-        self.start_playback(Arc::clone(&activated.src));
+        self.start_playback(activated.item_id);
         self.publish_crossfade_started();
         self.publish_current_track_snapshot(activated.duration_seconds);
         let current_index = self.current_index();
@@ -180,7 +185,7 @@ impl Handover<'_> {
 
     /// Drop the armed next slot without committing.
     ///
-    /// Sends `UnloadTrack` to the audio thread for the armed src and
+    /// Sends `UnloadTrack` to the audio thread for the armed item and
     /// clears the pending slot. Skips the unload if the armed slot has
     /// already been activated for the current index (the activated track
     /// is now the leading one — unloading would silence playback).
@@ -202,7 +207,9 @@ impl Handover<'_> {
                     .bus()
                     .publish(EngineEvent::CrossfadeCancelled);
             }
-            let _ = self.send_to_slot(PlayerCmd::UnloadTrack { src: pending.src });
+            let _ = self.send_to_slot(PlayerCmd::UnloadTrack {
+                item_id: pending.item_id,
+            });
         }
     }
 }
@@ -273,6 +280,7 @@ mod tests {
 
         if let Some(pending_slot) = player.phase.lock().pending_mut() {
             *pending_slot = Some(PendingNext {
+                item_id: TrackId::allocate(),
                 src: Arc::from("next.mp3"),
                 state: PendingNextState::Armed,
                 index: 1,

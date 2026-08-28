@@ -1,18 +1,18 @@
 #![cfg(not(target_arch = "wasm32"))]
 
-//! `ItemDidPlayToEnd` is published for whichever slot hit EOF, not for
-//! the current one: `PlayerImpl::process_notifications` walks every
-//! active slot. A preloaded successor or a lingering predecessor that
-//! decodes ahead reaches its own end while the current track is seconds
-//! old, and the event names that background track — not the one the
-//! listener is hearing. The player answers which it was in
-//! `from_current_item`; the queue must key auto-advance on that answer.
+//! `ItemDidPlayToEnd` is published for whichever track in the player's
+//! arena hit EOF, not for the one being heard:
+//! `PlayerImpl::process_notifications` walks every active slot, and a slot
+//! holds more than one track. An orphaned slot decoding ahead, or the
+//! outgoing half of a crossfade, reaches its own end while the current
+//! track has minutes left. The player names the role in `item`; only
+//! `ItemRole::Leading` may advance the queue.
 
 use std::num::NonZero;
 
 use kithara::{
     self,
-    events::{Event, PlayerEvent, TrackId},
+    events::{Event, ItemRole, PlayerEvent, SlotId, TrackId, TrackRef},
     platform::sync::Arc,
     queue::{Queue, QueueConfig, Transition, test_utils::QueueProbe},
     signal::AudioSpec,
@@ -46,8 +46,7 @@ fn make_fixture() -> (OfflinePlayerHarness, Queue) {
 }
 
 /// Load a track whose player-side `src` is its queue URI, the way a real
-/// source arrives: `Queue::track_id_for_src` resolves the EOF back to a
-/// queue entry through that string.
+/// source arrives.
 fn loaded_track(queue: &Queue, value: f32) -> (TrackId, Arc<str>) {
     let id = queue.register_for_test();
     let src: Arc<str> = Arc::from(format!("test://memory/{}", id.as_u64()));
@@ -83,12 +82,17 @@ fn render_loop(queue: &Queue, harness: &OfflinePlayerHarness, block_budget: usiz
 
 /// Three loaded tracks, the middle one playing. The first track — never
 /// selected, standing in for the background slot — reports natural EOF.
-fn fixture_with_background_eof() -> (OfflinePlayerHarness, Queue, Arc<str>, TrackId) {
+fn fixture_with_background_eof() -> (OfflinePlayerHarness, Queue, TrackRef, TrackId) {
     let (harness, queue) = make_fixture();
-    let (_stale, stale_src) = loaded_track(&queue, QUIET);
+    let (stale, stale_src) = loaded_track(&queue, QUIET);
     let (current, _) = loaded_track(&queue, LOUD);
     let (_next, _) = loaded_track(&queue, QUIET);
-    (harness, queue, stale_src, current)
+    (
+        harness,
+        queue,
+        TrackRef::new(stale, SlotId::new(0), stale_src),
+        current,
+    )
 }
 
 /// Field log, 2026-08-26: a background HLS slot hit EOF 5 s after the
@@ -97,7 +101,7 @@ fn fixture_with_background_eof() -> (OfflinePlayerHarness, Queue, Arc<str>, Trac
 /// ended being the current one.
 #[kithara::test(tokio)]
 async fn background_track_eof_does_not_advance_the_queue() {
-    let (harness, queue, stale_src, current) = fixture_with_background_eof();
+    let (harness, queue, stale, current) = fixture_with_background_eof();
 
     queue
         .select(current, Transition::None)
@@ -108,9 +112,7 @@ async fn background_track_eof_does_not_advance_the_queue() {
         .player()
         .bus()
         .publish(Event::Player(PlayerEvent::ItemDidPlayToEnd {
-            src: stale_src,
-            item_id: None,
-            from_current_item: false,
+            item: ItemRole::Background(stale),
         }));
     let _ = render_loop(&queue, &harness, WARMUP_BLOCKS);
 
@@ -125,7 +127,7 @@ async fn background_track_eof_does_not_advance_the_queue() {
 /// track handed over to the successor while it is still playing.
 #[kithara::test(tokio)]
 async fn background_track_eof_does_not_cut_the_current_track_audio() {
-    let (harness, queue, stale_src, current) = fixture_with_background_eof();
+    let (harness, queue, stale, current) = fixture_with_background_eof();
 
     queue
         .select(current, Transition::None)
@@ -141,9 +143,7 @@ async fn background_track_eof_does_not_cut_the_current_track_audio() {
         .player()
         .bus()
         .publish(Event::Player(PlayerEvent::ItemDidPlayToEnd {
-            src: stale_src,
-            item_id: None,
-            from_current_item: false,
+            item: ItemRole::Background(stale),
         }));
     let after_pcm = render_loop(&queue, &harness, WARMUP_BLOCKS);
     let after = mean_abs(&after_pcm[after_pcm.len() / 2..]);
@@ -152,5 +152,33 @@ async fn background_track_eof_does_not_cut_the_current_track_audio() {
         after > before / 2.0,
         "the current track must keep sounding through a background track's EOF — \
          the quieter successor took over instead: before={before}, after={after}"
+    );
+}
+
+/// The other non-leading role: `commit_next` promotes the successor inside
+/// the *current* slot, so the faded-out track ends there — its own slot is
+/// still the held one. The queue has already moved on with the pre-arm;
+/// answering that end again would skip a track the listener just started.
+#[kithara::test(tokio)]
+async fn outgoing_crossfade_half_eof_does_not_advance_the_queue() {
+    let (harness, queue, outgoing, current) = fixture_with_background_eof();
+
+    queue
+        .select(current, Transition::None)
+        .expect("select the current track");
+    let _ = render_loop(&queue, &harness, WARMUP_BLOCKS);
+
+    harness
+        .player()
+        .bus()
+        .publish(Event::Player(PlayerEvent::ItemDidPlayToEnd {
+            item: ItemRole::Outgoing(outgoing),
+        }));
+    let _ = render_loop(&queue, &harness, WARMUP_BLOCKS);
+
+    assert_eq!(
+        queue.current_index(),
+        Some(1),
+        "the end of a crossfade's outgoing half must leave the promoted track selected"
     );
 }

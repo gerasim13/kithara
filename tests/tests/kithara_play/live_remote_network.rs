@@ -15,6 +15,7 @@ use kithara::{
     audio::ReadOutcome,
     bufpool::{BytePool, SamplePool},
     decode::DecoderBackend,
+    events::TrackId,
     host::{Host, HostConfig},
     net::{HttpClient, NetOptions},
     platform::{
@@ -323,7 +324,7 @@ async fn player_mp3_duration_matches_app_flow(
         .unwrap_or_else(|e| panic!("{url}: Resource::new failed: {e}"));
 
     player
-        .replace_item(0, resource)
+        .replace_item(0, resource, TrackId::allocate())
         .expect("install live remote resource");
     player
         .select_item_with_crossfade(

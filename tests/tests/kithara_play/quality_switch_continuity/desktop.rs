@@ -2,8 +2,12 @@
 
 use cochlea_features::{Audio as ProbeAudio, SegmentOpts, segment_timeline};
 use kithara::{
-    StretchKind, audio::DecoderResamplerSettings, events::ResamplerKind, platform::sync::Arc,
-    play::PlaybackResamplerBackend, warp::StretchControls,
+    StretchKind,
+    audio::DecoderResamplerSettings,
+    events::{ResamplerKind, TrackId},
+    platform::sync::Arc,
+    play::PlaybackResamplerBackend,
+    warp::StretchControls,
 };
 use kithara_integration_tests::{
     TestServerHelper,
@@ -208,7 +212,7 @@ async fn prepare_desktop_player(master_url: &url::Url, label: &str) -> DesktopPr
         .unwrap_or_else(|| panic!("{label} HLS resource must expose an ABR handle"));
     harness.with_player(|player| {
         player.reserve_slots(1);
-        player.replace_item_tagged(0, resource, Some(Arc::from(label.to_owned())));
+        player.replace_item(0, resource, TrackId::allocate());
         player
             .select_item(0, true)
             .unwrap_or_else(|error| panic!("select {label} Kithara App resource: {error}"));

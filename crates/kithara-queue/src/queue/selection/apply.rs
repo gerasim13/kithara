@@ -77,7 +77,7 @@ impl QueueControl {
                 return;
             };
 
-            if let Err(error) = player.replace_item(index, resource) {
+            if let Err(error) = player.replace_item(index, resource, id) {
                 debug!(id = id.as_u64(), %error, "player closed before load could be applied");
                 return;
             }

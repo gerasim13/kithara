@@ -349,6 +349,7 @@ mod tests {
     use kithara_audio::{AudioControl, AudioRead, AudioSession, ReadOutcome, SeekOutcome};
     use kithara_bufpool::SamplePool;
     use kithara_decode::TrackMetadata;
+    use kithara_events::TrackId;
     use kithara_platform::{CancelToken, sync::Arc};
     use kithara_signal::AudioSpec;
     use kithara_test_utils::kithara;
@@ -572,18 +573,17 @@ mod tests {
             declick_values: DeclickValues::new(NonZeroU32::new(16).expect("static declick length")),
         };
         let first: Arc<str> = Arc::from("first");
+        let first_id = TrackId::allocate();
         control
             .cmd_tx
             .try_push(PlayerCmd::LoadTrack {
                 resource: warped_player_resource(&controls, &first),
-                item_id: None,
+                item_id: first_id,
             })
             .expect("load first track");
         control
             .cmd_tx
-            .try_push(PlayerCmd::Transition(TrackTransition::FadeIn(Arc::clone(
-                &first,
-            ))))
+            .try_push(PlayerCmd::Transition(TrackTransition::FadeIn(first_id)))
             .expect("fade in first track");
         control
             .cmd_tx
@@ -594,12 +594,12 @@ mod tests {
 
         controls.set_speed(1.5);
         let first_position = processor
-            .track(&first)
+            .track(first_id)
             .expect("first track loaded")
             .position();
         process_block(&mut processor, &mut extra);
         let first_advance = processor
-            .track(&first)
+            .track(first_id)
             .expect("first track loaded")
             .position()
             - first_position;
@@ -619,18 +619,17 @@ mod tests {
         }
 
         let next: Arc<str> = Arc::from("next");
+        let next_id = TrackId::allocate();
         control
             .cmd_tx
             .try_push(PlayerCmd::LoadTrack {
                 resource: warped_player_resource(&controls, &next),
-                item_id: None,
+                item_id: next_id,
             })
             .expect("load next track");
         control
             .cmd_tx
-            .try_push(PlayerCmd::Transition(TrackTransition::FadeIn(Arc::clone(
-                &next,
-            ))))
+            .try_push(PlayerCmd::Transition(TrackTransition::FadeIn(next_id)))
             .expect("fade in next track");
         assert_eq!(controls.speed(), 1.5);
 
@@ -643,7 +642,7 @@ mod tests {
         );
         assert_eq!(
             processor
-                .track(&next)
+                .track(next_id)
                 .expect("next track loaded")
                 .position(),
             expected_advance

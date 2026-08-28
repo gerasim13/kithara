@@ -1,5 +1,6 @@
 use std::sync::atomic::Ordering;
 
+use kithara_events::TrackId;
 use kithara_platform::sync::Arc;
 use ringbuf::traits::{Consumer, Producer};
 use smallvec::SmallVec;
@@ -84,8 +85,10 @@ impl PlayerNodeProcessor {
                 PlayerCmd::LoadTrack { resource, item_id } => {
                     self.load_track(resource, item_id);
                 }
-                PlayerCmd::UnloadTrack { src } => {
-                    self.unload_track(&src);
+                PlayerCmd::UnloadTrack { item_id } => {
+                    if let Some(slot) = self.tracks.slot_of(item_id) {
+                        self.unload_slot(slot);
+                    }
                 }
                 PlayerCmd::Clear => {
                     self.clear_all_tracks();
@@ -117,35 +120,36 @@ impl PlayerNodeProcessor {
     }
 
     fn handle_transition(&mut self, transition: TrackTransition) {
-        let (mut old_track, mut new_track) = (None, None);
+        let mut leading_changed = false;
 
-        if let TrackTransition::FadeIn(ref nt) = transition {
-            new_track = Some(nt.clone());
+        if let TrackTransition::FadeIn(item_id) = &transition {
             self.tracks_transitions.clear();
 
             let maybe_old = self
                 .tracks
                 .iter()
-                .find_map(|(_, track)| track.state().is_leading().then(|| Arc::clone(track.src())));
+                .find_map(|(_, track)| track.state().is_leading().then(|| track.item_id()));
 
-            if let Some(ref ot) = maybe_old
-                && ot != nt
+            if let Some(old_id) = maybe_old
+                && old_id != *item_id
             {
-                old_track = Some(ot.clone());
+                leading_changed = true;
                 self.tracks_transitions
-                    .push_back(TrackTransition::FadeOut(ot.clone()));
+                    .push_back(TrackTransition::FadeOut(old_id));
             }
         }
 
         self.tracks_transitions.push_back(transition);
         let playback = Arc::clone(&self.playback);
+        let mut changed_src = None;
         self.tracks_transitions.retain(|transition| {
-            let track_src = match transition {
-                TrackTransition::FadeIn(src) | TrackTransition::FadeOut(src) => src.clone(),
+            let item_id = match transition {
+                TrackTransition::FadeIn(item_id) | TrackTransition::FadeOut(item_id) => *item_id,
             };
-            if let Some(track) = self.tracks.get_mut(&track_src) {
+            if let Some(track) = self.tracks.get_mut(item_id) {
                 match transition {
                     TrackTransition::FadeIn(_) => {
+                        changed_src = Some(Arc::clone(track.src()));
                         if track.position() > Self::FADE_IN_SEEK_THRESHOLD {
                             track.seek(0.0);
                         }
@@ -162,25 +166,25 @@ impl PlayerNodeProcessor {
             true
         });
 
-        if old_track.is_some()
-            && let Some(new_src) = new_track
-        {
+        if leading_changed && let Some(new_src) = changed_src {
             self.notif_tx
                 .try_push(PlayerNotification::Changed { src: new_src })
                 .ok();
         }
     }
 
-    fn load_track(&mut self, resource: Box<PlayerResource>, item_id: Option<Arc<str>>) {
+    fn load_track(&mut self, resource: Box<PlayerResource>, item_id: TrackId) {
         let src = Arc::clone(resource.src());
-        self.unload_track(&src);
+        if let Some(slot) = self.tracks.slot_of(item_id) {
+            self.unload_slot(slot);
+        }
         self.evict_tracks_if_needed();
 
         resource.set_host_sample_rate(self.sample_rate);
 
         let track = PlayerTrack::builder()
             .sample_rate(self.sample_rate)
-            .maybe_item_id(item_id)
+            .item_id(item_id)
             .fade_duration(self.crossfade.duration)
             .prefetch_duration(self.prefetch_duration)
             .fade_curve(self.crossfade.fade_curve())

@@ -1,7 +1,7 @@
 use std::num::NonZeroU32;
 
 use kithara_bufpool::SamplePool;
-use kithara_events::EventBus;
+use kithara_events::{EventBus, TrackId};
 use kithara_platform::sync::{Arc, Mutex};
 use tracing::debug;
 
@@ -10,7 +10,7 @@ use crate::{api::PlayerEvent, resource::Resource, rt::track::PlayerResource};
 
 pub(crate) struct TakenItem {
     pub(crate) abr_handle: Option<kithara_abr::AbrHandle>,
-    pub(crate) item_id: Option<Arc<str>>,
+    pub(crate) item_id: TrackId,
     pub(crate) player_resource: PlayerResource,
     pub(crate) duration_seconds: f64,
 }
@@ -69,12 +69,7 @@ impl ItemQueue {
         }
     }
 
-    pub(crate) fn insert(
-        &self,
-        resource: Resource,
-        item_id: Option<Arc<str>>,
-        at_position: Option<usize>,
-    ) {
+    pub(crate) fn insert(&self, resource: Resource, item_id: TrackId, at_position: Option<usize>) {
         let (count, pos) = {
             let mut playlist = self.playlist.lock();
             let pos = playlist.insert(QueuedResource { item_id, resource }, at_position);
@@ -92,12 +87,7 @@ impl ItemQueue {
         removed
     }
 
-    pub(crate) fn replace_item_tagged(
-        &self,
-        index: usize,
-        resource: Resource,
-        item_id: Option<Arc<str>>,
-    ) {
+    pub(crate) fn replace_item(&self, index: usize, resource: Resource, item_id: TrackId) {
         let mut playlist = self.playlist.lock();
         if index < playlist.len() {
             playlist.replace(index, QueuedResource { item_id, resource });
@@ -228,7 +218,7 @@ mod tests {
     #[kithara::test(native, flash(false))]
     fn insert_and_remove_preserve_resource() {
         let queue = ItemQueue::new(EventBus::default());
-        queue.insert(resource("first"), None, None);
+        queue.insert(resource("first"), TrackId::allocate(), None);
 
         let removed = queue.remove_at(0).expect("inserted resource");
 

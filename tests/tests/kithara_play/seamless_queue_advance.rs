@@ -4,6 +4,7 @@ use std::num::NonZeroU32;
 
 use kithara::{
     decode::{GaplessMode, SilenceTrimParams},
+    events::TrackId,
     platform::time::{self, Duration, Instant},
     play::{PlayerEvent, Resource, ResourceConfig},
 };
@@ -275,7 +276,7 @@ fn load_queue<const N: usize>(harness: &OfflinePlayerHarness, items: [Resource; 
     harness.with_player(|player| {
         player.reserve_slots(items.len());
         for (index, resource) in items.into_iter().enumerate() {
-            player.replace_item(index, resource);
+            player.replace_item(index, resource, TrackId::allocate());
         }
         player
             .select_item(0, true)

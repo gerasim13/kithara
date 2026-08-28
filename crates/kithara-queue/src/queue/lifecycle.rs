@@ -89,7 +89,7 @@ impl QueueControl {
             guard.iter().position(|e| e.id == id)
         };
         if let Some(index) = index {
-            let Ok(()) = self.player.replace_item(index, resource) else {
+            let Ok(()) = self.player.replace_item(index, resource, id) else {
                 return;
             };
             self.set_status(id, TrackStatus::Loaded);
