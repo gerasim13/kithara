@@ -36,6 +36,7 @@ mod stress_run;
 #[cfg(feature = "lint")]
 pub mod style;
 pub mod test;
+mod touched;
 pub mod typos;
 pub mod util;
 pub mod verdict;

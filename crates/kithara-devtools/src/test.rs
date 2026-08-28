@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     common::project::{ProjectConfig, TestCommandConfig, TestLaneConfig},
-    sccache,
+    sccache, touched,
     verdict::ChildFailure,
 };
 
@@ -18,7 +18,7 @@ use crate::{
 #[command(trailing_var_arg = true)]
 pub struct TestArgs {
     /// Arguments for the configured test command. Recipe-level flags accepted anywhere:
-    /// `--lane=<configured-name>`, `--flash=true|false|on|off`, `--no-flash`,
+    /// `--lane=<configured-name>`, `--touched`, `--flash=true|false|on|off`, `--no-flash`,
     /// `--loom=true|false|on|off`, `--no-loom`, `--no-block=true|false|on|off`, and
     /// `--net-backend=<configured-name>`.
     #[arg(value_name = "ARGS", allow_hyphen_values = true)]
@@ -33,6 +33,7 @@ struct TestRequest {
     net_backend: Option<String>,
     no_block: Option<bool>,
     passthrough: Vec<String>,
+    touched: bool,
 }
 
 impl TestRequest {
@@ -44,6 +45,7 @@ impl TestRequest {
             net_backend: None,
             passthrough: Vec::new(),
             flash: None,
+            touched: false,
         };
         let mut iter = args.iter();
         while let Some(arg) = iter.next() {
@@ -64,6 +66,7 @@ impl TestRequest {
                         .ok_or_else(|| anyhow::anyhow!("--no-block requires a value"))?;
                     request.no_block = Some(parse_toggle("no-block", value)?);
                 }
+                "--touched" => request.touched = true,
                 "--loom=off" | "--loom=false" | "--no-loom" => request.loom = Some(false),
                 "--loom=on" | "--loom=true" => request.loom = Some(true),
                 "--loom" => {
@@ -117,8 +120,49 @@ pub(crate) fn run(args: &TestArgs) -> Result<()> {
     let test = &project.test;
     validate_config(test)?;
 
+    if request.touched {
+        return run_touched(&project, &request);
+    }
     let (lane_name, lane) = select_lane(test, &request)?;
-    let mut cmd = lane_command(&project, lane_name, lane, &request)?;
+    run_lane(&project, lane_name, lane, &request)
+}
+
+/// Run every lane the branch touched, serially, without letting the first
+/// failure hide the rest: this exists to name which lane broke.
+fn run_touched(project: &ProjectConfig, request: &TestRequest) -> Result<()> {
+    if request.lane.is_some() {
+        bail!("--touched selects its own lanes and conflicts with --lane");
+    }
+    let test = &project.test;
+    let selected = touched::lanes(test)?;
+    if selected.is_empty() {
+        println!("no owned path touched; the nightly sweep covers these lanes");
+        return Ok(());
+    }
+    let mut failed = Vec::new();
+    for lane_name in &selected {
+        let lane = test
+            .lanes
+            .get(lane_name)
+            .with_context(|| format!("test lane `{lane_name}` is not configured"))?;
+        println!("=== {lane_name} ===");
+        if run_lane(project, lane_name, lane, request).is_err() {
+            failed.push(lane_name.clone());
+        }
+    }
+    if !failed.is_empty() {
+        bail!("touched test lanes failed: {}", failed.join(", "));
+    }
+    Ok(())
+}
+
+fn run_lane(
+    project: &ProjectConfig,
+    lane_name: &str,
+    lane: &TestLaneConfig,
+    request: &TestRequest,
+) -> Result<()> {
+    let mut cmd = lane_command(project, lane_name, lane, request)?;
 
     let status = cmd
         .status()
@@ -583,6 +627,7 @@ mod tests {
                 default_no_block: None,
                 passthrough: String::new(),
                 env: BTreeMap::new(),
+                owns: Vec::new(),
             },
         );
         lanes.insert(
@@ -600,6 +645,7 @@ mod tests {
                 default_no_block: None,
                 passthrough: String::new(),
                 env: BTreeMap::new(),
+                owns: Vec::new(),
             },
         );
         lanes.insert(
@@ -613,6 +659,7 @@ mod tests {
                 default_no_block: Some(true),
                 passthrough: String::new(),
                 env: BTreeMap::new(),
+                owns: Vec::new(),
             },
         );
         lanes.insert(
@@ -626,6 +673,7 @@ mod tests {
                 default_no_block: None,
                 passthrough: "after-suffix".to_owned(),
                 env: BTreeMap::from([("DEMO_BROWSER".to_owned(), "firefox".to_owned())]),
+                owns: Vec::new(),
             },
         );
         let mut net_backends = BTreeMap::new();
@@ -651,6 +699,7 @@ mod tests {
             health: HealthConfig::default(),
             test: TestCommandConfig {
                 lanes,
+                shared_paths: Vec::new(),
                 net_backends,
                 default_lane: "workspace".to_owned(),
                 default_backend: "http".to_owned(),

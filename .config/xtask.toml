@@ -431,6 +431,14 @@ feature_arg = "--features"
 loom_lane = "loom"
 # Base features applied to every test lane, including `--flash=off`.
 features = []
+# Paths no single lane owns: the routing itself. A change here runs every lane
+# that declares `owns`, because a change to what belongs where has to be tested
+# by the routes it moves.
+shared_paths = [
+  ".config/xtask.toml",
+  ".config/nextest.toml",
+  "tests/Cargo.toml",
+]
 
 [test.flash]
 default = true
@@ -484,6 +492,7 @@ prefix_args = [
 # and the generators that write the CI pipelines. None of it ships.
 [test.lanes.tooling]
 program = "cargo"
+owns = ["xtask/", "crates/kithara-devtools/"]
 prefix_args = [
   "nextest",
   "run",
@@ -510,6 +519,11 @@ default_flash = false
 # them empty and report a green suite that ran none of its seven tests.
 [test.lanes.harness]
 program = "cargo"
+owns = [
+  "crates/kithara-test-utils/",
+  "crates/kithara-test-macros/",
+  "crates/kithara-platform/tests/flash_",
+]
 # `kithara-net` refuses to compile without an HTTP backend, and the backend in
 # turn refuses to compile without a TLS one; nothing in this package selection
 # turns either on, because in the product suite both arrive from `kithara`,
@@ -542,6 +556,12 @@ prefix_args = [
 # dropped.
 [test.lanes.fixtures]
 program = "cargo"
+owns = [
+  "tests/src/",
+  "tests/tests/suite_harness.rs",
+  "tests/tests/flash_lexical.rs",
+  "tests/tests/timeout_guard.rs",
+]
 default_features = ["harness"]
 prefix_args = [
   "nextest",

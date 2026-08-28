@@ -362,6 +362,9 @@ fn default_perf_nextest_profile() -> String {
 #[serde(default, deny_unknown_fields)]
 pub struct TestCommandConfig {
     pub lanes: BTreeMap<String, TestLaneConfig>,
+    /// Paths that belong to no single lane: a change to one of them runs every
+    /// lane that declares `owns`, because the routing itself moved.
+    pub shared_paths: Vec<String>,
     pub net_backends: BTreeMap<String, TestNetBackendConfig>,
     pub default_backend: String,
     pub default_lane: String,
@@ -405,6 +408,10 @@ pub struct TestNetBackendConfig {
 #[serde(default, deny_unknown_fields)]
 pub struct TestLaneConfig {
     pub default_flash: Option<bool>,
+    /// Source prefixes this lane is the test for. `just test run --touched`
+    /// runs the lane when the branch changed a path under one of them; a lane
+    /// that owns nothing is never selected that way.
+    pub owns: Vec<String>,
     /// Poll-blocking detector default for this lane, so two schedulers cannot
     /// run the same lane under different rules.
     pub default_no_block: Option<bool>,
