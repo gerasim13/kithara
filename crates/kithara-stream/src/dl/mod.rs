@@ -11,7 +11,11 @@ mod downloader;
 mod peer;
 mod registry;
 mod response;
-#[cfg(test)]
+// This module tests the HTTP download layer, and Miri can reach neither half of
+// it: the shared client initialises `aws-lc` — a C library Miri cannot enter —
+// and the tests that reach a server bind a real socket on 127.0.0.1, which
+// `fcntl(F_SETFD)` refuses under Miri. A transport double would test the double.
+#[cfg(all(test, not(miri)))]
 mod tests;
 
 pub use cmd::{FetchCmd, OnCompleteFn, OnResponseFn, OnSlowFn, WriterFn, reject_html_response};
