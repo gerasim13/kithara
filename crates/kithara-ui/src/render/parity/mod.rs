@@ -8,6 +8,8 @@
 //! two placed are compared.
 
 mod bars;
+mod blocks;
 mod extension;
 mod run;
 mod shared;
+mod stepper;

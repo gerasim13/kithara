@@ -1,6 +1,6 @@
 use std::rc::Rc;
 
-use kithara_platform::time::Duration;
+use kithara_platform::time::{Duration, Instant};
 use masonry::{
     accesskit::{Node as AccessNode, Role},
     core::{
@@ -32,11 +32,47 @@ use crate::{
             pointer_button, pointer_position, portable_modifiers, portable_scroll,
             portable_text_input,
         },
+        recognizers::{StepEvent, Stepper},
     },
     layout::{FrameCorners, FrameSides},
-    render::{ReadValue, document::Ctx, shader::ShaderDeclaration, vis::VisFrame},
+    render::{
+        ControlAction, ReadValue, UiEvent, document::Ctx, shader::ShaderDeclaration, vis::VisFrame,
+    },
     solve,
 };
+
+/// The stepping surface a flow declares over itself: a detent anywhere on it
+/// moves the value the document named, and so does a held drag.
+///
+/// The gesture is the one the immediate host puts over the same flow, so the
+/// two hosts step alike; only the way it is mounted differs.
+pub(crate) struct Detent {
+    stepper: Stepper,
+    path: String,
+    map_event: Rc<dyn Fn(UiEvent) -> HostAction>,
+}
+
+impl Detent {
+    pub(super) fn new(path: String, map_event: Rc<dyn Fn(UiEvent) -> HostAction>) -> Self {
+        Self {
+            stepper: Stepper::default(),
+            path,
+            map_event,
+        }
+    }
+
+    /// What this surface makes of one input, as the action it publishes.
+    fn step(&mut self, input: Input<'_>, hit: &Hit) -> Option<HostAction> {
+        let event = self.stepper.on_input(input, hit, Instant::now()).value()?;
+        let action = match event {
+            StepEvent::By(steps) => ControlAction::StepScalar(steps),
+            StepEvent::Activate => ControlAction::Activate,
+        };
+        Some((self.map_event)(crate::render::control_event(
+            &self.path, action,
+        )))
+    }
+}
 
 pub(crate) struct Node {
     layout: NodeLayout,
@@ -54,6 +90,9 @@ pub(crate) struct Node {
     /// Whether this node's leaf took the pointer and is still holding it.
     leaf_holds: bool,
     engine: Option<Rc<HostedEngine>>,
+    /// The stepping surface this flow declares over itself, where it declares
+    /// one.
+    detent: Option<Detent>,
     transform: Transform,
 }
 
@@ -80,6 +119,7 @@ impl Node {
             pointer: None,
             leaf_holds: false,
             engine: None,
+            detent: None,
             transform: Transform::IDENTITY,
         }
     }
@@ -109,6 +149,20 @@ impl Node {
             ctx.submit_action::<HostAction>(action());
             ctx.set_handled();
         }
+    }
+
+    /// Offers the input to the stepping surface this flow declares, answering
+    /// whether the surface took it.
+    fn step_surface(&mut self, ctx: &mut EventCtx<'_>, input: Input<'_>, hit: &Hit) -> bool {
+        let Some(detent) = &mut self.detent else {
+            return false;
+        };
+        let Some(action) = detent.step(input, hit) else {
+            return false;
+        };
+        ctx.submit_action::<HostAction>(action);
+        ctx.set_handled();
+        true
     }
 
     fn leaf_input(
@@ -422,6 +476,11 @@ impl Node {
         self.engine = Some(engine);
     }
 
+    /// The stepping surface this flow is asked to carry over itself.
+    pub(super) fn set_detent(&mut self, detent: Detent) {
+        self.detent = Some(detent);
+    }
+
     /// Whether this node draws through a pass of its own rather than into the
     /// scene, which is what makes it something the host has to declare.
     pub(super) const fn is_native(&self) -> bool {
@@ -458,6 +517,9 @@ impl Widget for Node {
         if self.layout.wheel(input) {
             ctx.set_handled();
             ctx.request_layout();
+            return;
+        }
+        if self.step_surface(ctx, input, &hit) {
             return;
         }
         if self.leaf_holds {
@@ -620,8 +682,15 @@ impl Widget for Node {
         self.children.iter().map(WidgetPod::id).collect()
     }
 
+    /// A leaf whose picture answers the hand is asked for too, even when the
+    /// gesture over it belongs to the engine: the hover edge only reaches a
+    /// widget Masonry counts as taking the pointer.
     fn accepts_pointer_interaction(&self) -> bool {
-        self.primary.is_some() || self.secondary.is_some() || self.layout.accepts_input()
+        self.primary.is_some()
+            || self.secondary.is_some()
+            || self.detent.is_some()
+            || self.layout.accepts_input()
+            || self.layout.reads_pointer()
     }
 
     fn accepts_focus(&self) -> bool {

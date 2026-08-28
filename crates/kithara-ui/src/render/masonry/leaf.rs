@@ -261,6 +261,11 @@ impl Leaf {
         matches!(self, Self::Custom { .. })
     }
 
+    /// Whether this leaf draws differently while the pointer rests on it.
+    pub(crate) fn reads_pointer(&self) -> bool {
+        matches!(self, Self::Control(control) if control.reads_pointer())
+    }
+
     pub(crate) fn accepts_text_input(&self) -> bool {
         matches!(self, Self::Custom { widget, .. } if widget.accepts_text_input())
     }

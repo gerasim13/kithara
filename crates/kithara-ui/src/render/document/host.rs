@@ -18,6 +18,17 @@ pub trait Host {
     /// Complete host output produced for one document node.
     type Output;
 
+    /// Whether a block the document hides is mounted anyway.
+    ///
+    /// The reason is the one a shut popover is mounted for: a host that
+    /// rebuilds its tree every frame leaves a hidden block out and pays
+    /// nothing, while one that mounts a tree and keeps it has to mount the
+    /// block while it is hidden, because a block missing from the tree could
+    /// never come back without rebuilding everything around it. A flow tells
+    /// such a host which of its children are blocks, and it hides them the way
+    /// it hides a child the room did not reach.
+    const MOUNTS_HIDDEN: bool = false;
+
     /// Mounts a weighted layout split.
     ///
     /// A split that names a `measure` shows only the cells whose band holds the

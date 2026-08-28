@@ -9,7 +9,7 @@ use masonry::core::WidgetId;
 
 use super::{
     CustomWidget, MasonryNode, Painted,
-    built::LayerParts,
+    built::{BlockState, LayerParts},
     custom::{HostAction, MappedCustom, MountedCustom},
     flex::{ChildLayout, Flex},
     leaf::{Leaf, WindowLeafLayer},
@@ -17,6 +17,7 @@ use super::{
         Cx, NodeControl, NodeLayout, Viewport, activates, alignment, control_declared, declared,
         main_length, pointer_owner,
     },
+    node::Detent,
     popover::{PopoverLayer, PopoverState},
     root::WindowLayer,
     shader::ShaderLeaf,
@@ -297,6 +298,69 @@ where
         }
     }
 
+    /// The weighted flow one split lays its cells out in.
+    fn mount_split(
+        &self,
+        axis: Axis,
+        measure: Option<MeasureAxis>,
+        children: Vec<SplitMount<MasonryNode<Action>>>,
+    ) -> MasonryNode<Action> {
+        let mut layouts = Vec::with_capacity(children.len());
+        let mut nodes = Vec::with_capacity(children.len());
+        let mut blocks = Vec::new();
+        for cell in children {
+            let split_size = match axis {
+                Axis::Horizontal => solve::Size::new(main_length(cell.size.w), solve::Length::Fill),
+                Axis::Vertical => solve::Size::new(solve::Length::Fill, main_length(cell.size.h)),
+            };
+            let block = self.block(cell.block, &mut blocks);
+            layouts.push(
+                ChildLayout::weighted(cell.output.declared(), split_size, cell.weight)
+                    .within(cell.band)
+                    .blocked(block),
+            );
+            nodes.push(cell.output);
+        }
+        let mut output = MasonryNode::document(
+            NodeLayout::Flex(
+                Flex::new(
+                    axis,
+                    solve::Length::Fill,
+                    solve::Length::Fill,
+                    solve::Padding::default(),
+                    0.0,
+                    solve::Alignment::Start,
+                    layouts,
+                )
+                .measure(measure),
+            ),
+            solve::Size::new(solve::Length::Fill, solve::Length::Fill),
+            nodes,
+            true,
+            None,
+            None,
+        );
+        output.hides(blocks);
+        output
+    }
+
+    /// The state one child of a flow is hidden by, read once for the tree it
+    /// is mounted into and kept for the root to read again.
+    ///
+    /// The child is mounted whether the document hides it or not, so the flow
+    /// above it can show it again without anything being rebuilt.
+    fn block(
+        &self,
+        binding: Option<Binding>,
+        blocks: &mut Vec<(Binding, Rc<BlockState>)>,
+    ) -> Option<Rc<BlockState>> {
+        let binding = binding?;
+        let state = Rc::new(BlockState::default());
+        state.latch(self.ctx.flag(Some(&binding)));
+        blocks.push((binding, Rc::clone(&state)));
+        Some(state)
+    }
+
     /// The bar across the top of a module: what it is called, what it is
     /// assigned to, and the chevron that folds it away.
     fn module_header(&self, module: &Module<'_>) -> MasonryNode<Action> {
@@ -525,44 +589,18 @@ where
 {
     type Output = MasonryNode<Action>;
 
+    /// A retained tree mounts a hidden block and hides it in the flow above
+    /// it, because a block left out of the tree could never come back without
+    /// the tree being rebuilt around it.
+    const MOUNTS_HIDDEN: bool = true;
+
     fn split(
         &mut self,
         axis: Axis,
         measure: Option<MeasureAxis>,
         children: Vec<SplitMount<Self::Output>>,
     ) -> Self::Output {
-        let mut layouts = Vec::with_capacity(children.len());
-        let mut nodes = Vec::with_capacity(children.len());
-        for cell in children {
-            let split_size = match axis {
-                Axis::Horizontal => solve::Size::new(main_length(cell.size.w), solve::Length::Fill),
-                Axis::Vertical => solve::Size::new(solve::Length::Fill, main_length(cell.size.h)),
-            };
-            layouts.push(
-                ChildLayout::weighted(cell.output.declared(), split_size, cell.weight)
-                    .within(cell.band),
-            );
-            nodes.push(cell.output);
-        }
-        MasonryNode::document(
-            NodeLayout::Flex(
-                Flex::new(
-                    axis,
-                    solve::Length::Fill,
-                    solve::Length::Fill,
-                    solve::Padding::default(),
-                    0.0,
-                    solve::Alignment::Start,
-                    layouts,
-                )
-                .measure(measure),
-            ),
-            solve::Size::new(solve::Length::Fill, solve::Length::Fill),
-            nodes,
-            true,
-            None,
-            None,
-        )
+        self.mount_split(axis, measure, children)
     }
 
     fn measured(&mut self, plan: Measured, branches: Vec<Self::Output>) -> Self::Output {
@@ -590,9 +628,13 @@ where
         let size = group.size().unwrap_or(SizeSpec::FILL);
         let mut layouts = Vec::with_capacity(children.len());
         let mut nodes = Vec::with_capacity(children.len());
+        let mut blocks = Vec::new();
         for child in children {
+            let block = self.block(child.block, &mut blocks);
             layouts.push(
-                ChildLayout::natural(child.output.declared(), child.minimum).within(child.band),
+                ChildLayout::natural(child.output.declared(), child.minimum)
+                    .within(child.band)
+                    .blocked(block),
             );
             nodes.push(child.output);
         }
@@ -608,7 +650,7 @@ where
                 group.frame_width(),
             )
         });
-        MasonryNode::document(
+        let mut output = MasonryNode::document(
             NodeLayout::Flex(
                 Flex::new(
                     group.axis(),
@@ -632,7 +674,15 @@ where
             background,
             frame,
         )
-        .rounded(group.round(), self.skin.chrome.frame.radius)
+        .rounded(group.round(), self.skin.chrome.frame.radius);
+        if let Some(surface) = group.surface() {
+            output.set_detent(Detent::new(
+                self.ctx.ui.resolve(surface.path).to_owned(),
+                Rc::clone(&self.map_event),
+            ));
+        }
+        output.hides(blocks);
+        output
     }
 
     fn popover(
@@ -656,6 +706,7 @@ where
             declared,
             layers,
             popovers,
+            blocks,
             engine_targets,
             engines,
             boxes,
@@ -675,6 +726,7 @@ where
         output.add_popover(layer.id(), popover.flag(), state, Rc::clone(&dismiss));
         output.append_layers(layers);
         output.append_popovers(popovers);
+        output.append_blocks(blocks);
         output.append_engine_targets(engine_targets);
         output.append_engines(engines);
         output.append_boxes(boxes);

@@ -2,7 +2,7 @@ use num_traits::cast::AsPrimitive;
 
 use super::{Band, Ctx, Group, GroupMount, Host, Measured, Module, Popover, SplitMount};
 use crate::{
-    compile::{CompiledNode, CompiledUi},
+    compile::{CompiledNode, CompiledUi, SplitCell},
     draw::Transform,
     expand::{Binding, ExpandedNode, MeasureSpec, SurfaceSpec},
     ids::InternId,
@@ -10,8 +10,8 @@ use crate::{
     module::{ChromeStyle, MeasureAxis, Motion, PopoverAlign, PopoverAt, Pose, TextAlign},
     render::{InputOwner, ReadValue},
     size::{
-        Dim, SizeSpec, Snapshot, branch as adaptive_branch, compiled_node_size_with_hidden,
-        effective_size, is_hidden, visible_compiled_children,
+        BlockNode, Dim, SizeSpec, Snapshot, branch as adaptive_branch,
+        compiled_node_size_with_hidden, effective_size, is_hidden, visible_compiled_children,
     },
     skin::{ColorRole, SkinDoc},
 };
@@ -119,11 +119,12 @@ where
             ..
         } => {
             let mut mounted = Vec::with_capacity(children.len());
-            for cell in visible_compiled_children(children, snapshot) {
+            for cell in split_cells::<H>(children, snapshot) {
                 let size = compiled_node_size_with_hidden(&cell.node, ctx.skin, snapshot);
                 let output = compiled(&cell.node, ctx, host);
                 mounted.push(SplitMount {
                     band: Band::new(cell.from, cell.until),
+                    block: block_of(&cell.node),
                     weight: cell.weight,
                     size,
                     output,
@@ -699,9 +700,10 @@ where
     children
         .iter()
         .enumerate()
-        .filter(|(_, child)| !is_hidden(*child, snapshot))
+        .filter(|(_, child)| H::MOUNTS_HIDDEN || !is_hidden(*child, snapshot))
         .map(|(index, child)| GroupMount {
             band: band_of(child),
+            block: block_of(child),
             minimum: main_minimum(child, axis, ctx.skin, snapshot),
             output: expanded(
                 child,
@@ -715,6 +717,29 @@ where
             ),
         })
         .collect()
+}
+
+/// The cells of a split, in the order the host mounts them: every cell for a
+/// host that hides a block itself, and only the standing ones for a host that
+/// leaves a hidden cell out of the tree.
+fn split_cells<'a, H>(
+    children: &'a [SplitCell],
+    snapshot: &'a dyn Snapshot,
+) -> Box<dyn Iterator<Item = &'a SplitCell> + 'a>
+where
+    H: Host,
+{
+    if H::MOUNTS_HIDDEN {
+        Box::new(children.iter())
+    } else {
+        Box::new(visible_compiled_children(children, snapshot))
+    }
+}
+
+/// What the document reads to know one child of a flow is hidden, when the
+/// child is a block at all.
+fn block_of<N: BlockNode>(node: &N) -> Option<Binding> {
+    node.block().map(|block| block.hidden.clone())
 }
 
 /// The band of room one child of a flow stands in.

@@ -372,6 +372,10 @@ where
         self.interaction.is_some()
     }
 
+    fn reads_pointer(&self) -> bool {
+        Painter::READS_POINTER
+    }
+
     fn set_read(&mut self, value: &ReadValue<'_>) -> bool {
         self.repaint |= Painter::set_read(&mut self.data, value);
         self.moved_to(value);

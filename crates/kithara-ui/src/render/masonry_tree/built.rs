@@ -9,7 +9,7 @@ use super::{
     custom::HostAction,
     menu::PickerLayer,
     mount::NodeLayout,
-    node::Node,
+    node::{Detent, Node},
     picker::{EngineTarget, HostedEngine},
     popover::PopoverState,
 };
@@ -21,6 +21,44 @@ use crate::{
     render::{HostedControlPlan, Skin, UiEvent},
     solve,
 };
+
+/// Whether the document hides one block right now.
+///
+/// The flow that holds the block reads this at layout, and the root writes it
+/// when the document says otherwise: the block itself is mounted either way, so
+/// nothing below it is rebuilt when it comes and goes.
+#[derive(Default)]
+pub(crate) struct BlockState {
+    hidden: Cell<bool>,
+}
+
+impl BlockState {
+    delegate::delegate! {
+        to self.hidden {
+            /// Whether the document hides the block right now.
+            #[call(get)]
+            pub(crate) fn is_hidden(&self) -> bool;
+        }
+    }
+
+    /// Records what the document says now, answering whether that is news.
+    pub(crate) fn latch(&self, hidden: bool) -> bool {
+        let changed = self.hidden.get() != hidden;
+        self.hidden.set(hidden);
+        changed
+    }
+}
+
+/// One block the tree mounted, and what a root needs to keep it in step with
+/// the document it came from.
+pub(crate) struct BlockRegistration {
+    /// What the document reads to know the block is hidden.
+    pub(crate) hidden: Binding,
+    pub(crate) state: Rc<BlockState>,
+    /// The flow that hides it, which is the node whose layout has to run again
+    /// once the answer changes.
+    pub(crate) flow: WidgetId,
+}
 
 /// One popover the tree mounted, and what a root needs to keep it in step with
 /// the document it came from.
@@ -84,6 +122,7 @@ pub(super) type LayerParts = (
     solve::Size<solve::Length>,
     Vec<NewWidget<dyn Widget>>,
     Vec<PopoverRegistration>,
+    Vec<BlockRegistration>,
     Vec<EngineTarget>,
     Vec<Rc<HostedEngine>>,
     Vec<NodeBox>,
@@ -95,6 +134,7 @@ pub(super) type RootParts = (
     NewWidget<dyn Widget>,
     Vec<NewWidget<dyn Widget>>,
     Vec<PopoverRegistration>,
+    Vec<BlockRegistration>,
     Vec<Rc<HostedEngine>>,
     Vec<NodeBox>,
     Vec<WidgetId>,
@@ -112,6 +152,7 @@ pub struct MasonryNode<Action> {
     action: PhantomData<fn() -> Action>,
     layers: Vec<NewWidget<dyn Widget>>,
     popovers: Vec<PopoverRegistration>,
+    blocks: Vec<BlockRegistration>,
     engine_targets: Vec<EngineTarget>,
     engines: Vec<Rc<HostedEngine>>,
     /// The cell this node's own box is read into, made on first ask. Only a
@@ -139,6 +180,7 @@ impl<Action> MasonryNode<Action> {
         let mut child_widgets = Vec::with_capacity(children.len());
         let mut layers = Vec::new();
         let mut popovers = Vec::new();
+        let mut blocks = Vec::new();
         let mut engine_targets = Vec::new();
         let mut engines = Vec::new();
         let mut boxes = Vec::new();
@@ -150,6 +192,7 @@ impl<Action> MasonryNode<Action> {
         for child in children {
             layers.extend(child.layers);
             popovers.extend(child.popovers);
+            blocks.extend(child.blocks);
             engine_targets.extend(child.engine_targets);
             engines.extend(child.engines);
             boxes.extend(child.boxes);
@@ -185,6 +228,7 @@ impl<Action> MasonryNode<Action> {
             action: PhantomData,
             layers,
             popovers,
+            blocks,
             engine_targets,
             engines,
             geometry: None,
@@ -240,6 +284,7 @@ impl<Action> MasonryNode<Action> {
             action: PhantomData,
             layers: Vec::new(),
             popovers: Vec::new(),
+            blocks: Vec::new(),
             engine_targets: Vec::new(),
             engines: Vec::new(),
             geometry: None,
@@ -264,6 +309,8 @@ impl<Action> MasonryNode<Action> {
             /// box the layout gave it or the region that answers the pointer.
             /// Nothing is standing yet at mount, so the answer is discarded.
             pub(crate) fn place(&mut self, transform: Transform) -> bool;
+            /// The stepping surface this flow carries over itself.
+            pub(crate) fn set_detent(&mut self, detent: Detent);
         }
         to self.layers {
             #[call(push)]
@@ -274,6 +321,10 @@ impl<Action> MasonryNode<Action> {
         to self.popovers {
             #[call(extend)]
             pub(crate) fn append_popovers(&mut self, popovers: Vec<PopoverRegistration>);
+        }
+        to self.blocks {
+            #[call(extend)]
+            pub(crate) fn append_blocks(&mut self, blocks: Vec<BlockRegistration>);
         }
         to self.engine_targets {
             #[call(extend)]
@@ -311,6 +362,18 @@ impl<Action> MasonryNode<Action> {
             state,
             dismiss,
         });
+    }
+
+    /// Remembers that this node hides the blocks among its own children, so
+    /// the root can read them again and lay this node out when one changes.
+    pub(crate) fn hides(&mut self, blocks: Vec<(Binding, Rc<BlockState>)>) {
+        let flow = self.widget.id();
+        self.blocks
+            .extend(blocks.into_iter().map(|(hidden, state)| BlockRegistration {
+                hidden,
+                state,
+                flow,
+            }));
     }
 
     /// The cell the root fills with the box this node stands in.
@@ -438,6 +501,7 @@ impl<Action> From<MasonryNode<Action>> for LayerParts {
             node.declared,
             node.layers,
             node.popovers,
+            node.blocks,
             node.engine_targets,
             node.engines,
             node.boxes,
@@ -454,6 +518,7 @@ impl<Action> From<MasonryNode<Action>> for RootParts {
             node.widget.erased(),
             node.layers,
             node.popovers,
+            node.blocks,
             node.engines,
             node.boxes,
             node.native,

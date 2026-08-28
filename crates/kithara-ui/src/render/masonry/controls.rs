@@ -79,6 +79,15 @@ pub(crate) trait MasonryControl {
         false
     }
 
+    /// Whether the pointer resting on this control changes what it draws.
+    ///
+    /// A control whose gesture belongs to the engine still answers the hand
+    /// with its picture, and the host has to ask Masonry for the hover edge on
+    /// its behalf: nothing else in the tree would.
+    fn reads_pointer(&self) -> bool {
+        false
+    }
+
     fn repaint(&self) -> Repaint {
         Repaint::None
     }

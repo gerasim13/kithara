@@ -9,6 +9,8 @@ use crate::{
 };
 
 pub(super) struct Endpoints {
+    hidden: EndpointDesc,
+    rate: EndpointDesc,
     open: EndpointDesc,
     press: EndpointDesc,
 }
@@ -16,6 +18,8 @@ pub(super) struct Endpoints {
 impl Default for Endpoints {
     fn default() -> Self {
         Self {
+            hidden: EndpointDesc::new(ValueKind::Bool),
+            rate: EndpointDesc::new(ValueKind::Scalar),
             open: EndpointDesc::new(ValueKind::Bool),
             press: EndpointDesc::new(ValueKind::Trigger),
         }
@@ -25,8 +29,10 @@ impl Default for Endpoints {
 impl EndpointRegistry for Endpoints {
     fn endpoint(&self, category: EndpointCategory, id: &EndpointId) -> Option<&EndpointDesc> {
         match (category, id.0.as_str()) {
+            (EndpointCategory::Model, "fixture.hidden") => Some(&self.hidden),
             (EndpointCategory::Model, "fixture.menu") => Some(&self.open),
             (EndpointCategory::Command, "fixture.toggle") => Some(&self.press),
+            (EndpointCategory::Parameter, "fixture.rate") => Some(&self.rate),
             _ => None,
         }
     }

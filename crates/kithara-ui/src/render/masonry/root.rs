@@ -21,7 +21,10 @@ use thiserror::Error;
 use tracing::{Span, trace_span};
 
 use super::{
-    built::{MasonryNode, NodeBox, PopoverRegistration, RootParts, Watched, WindowTracker},
+    built::{
+        BlockRegistration, MasonryNode, NodeBox, PopoverRegistration, RootParts, Watched,
+        WindowTracker,
+    },
     custom::HostAction,
     leaf::cursor_icon,
     node::Node,
@@ -74,6 +77,7 @@ pub struct MasonryRoot<Action> {
     scale: f64,
     boxes: Vec<NodeBox>,
     popovers: Vec<PopoverRegistration>,
+    blocks: Vec<BlockRegistration>,
     watched: Vec<Watched>,
     native: Vec<WidgetId>,
     window: Option<WindowTracker>,
@@ -109,7 +113,7 @@ where
         node: MasonryNode<Action>,
         options: RenderRootOptions,
     ) -> Result<Self, MasonryRootError> {
-        let (base, layers, popovers, engines, boxes, native, window, watched) =
+        let (base, layers, popovers, blocks, engines, boxes, native, window, watched) =
             RootParts::from(node);
         let scale = options.scale_factor;
         let signals = Rc::new(RefCell::new(VecDeque::new()));
@@ -129,6 +133,7 @@ where
             scale,
             boxes,
             popovers,
+            blocks,
             watched,
             native,
             window,
@@ -612,6 +617,7 @@ where
         self.reread_plans(ctx);
         let placed = self.place_objects(ctx);
         self.open_surfaces(ctx);
+        self.stand_blocks(ctx);
         let carried = self.carry_ghost(ctx);
         self.moved = shown || placed || carried;
     }
@@ -660,6 +666,27 @@ where
         for layer in changed {
             self.root.edit_widget(layer, |mut layer| {
                 layer.ctx.request_layout();
+            });
+        }
+    }
+
+    /// Shows the blocks the document now shows, and hides the rest.
+    ///
+    /// A block is the same kind of thing as a surface opening: re-reading a
+    /// leaf changes what that leaf shows, while a block changes whether a
+    /// whole subtree stands in the picture at all. The flow above it hides it
+    /// the way it hides a child the room did not reach, so all this does is
+    /// tell the flow to lay itself out again once the answer has changed.
+    fn stand_blocks(&mut self, ctx: Ctx<'_, '_>) {
+        let changed: Vec<WidgetId> = self
+            .blocks
+            .iter()
+            .filter(|block| block.state.latch(ctx.flag(Some(&block.hidden))))
+            .map(|block| block.flow)
+            .collect();
+        for flow in changed {
+            self.root.edit_widget(flow, |mut flow| {
+                flow.ctx.request_layout();
             });
         }
     }

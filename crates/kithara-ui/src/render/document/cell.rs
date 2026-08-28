@@ -1,4 +1,5 @@
 use crate::{
+    expand::Binding,
     module::MeasureAxis,
     size::{SizeSpec, stands},
 };
@@ -36,6 +37,10 @@ impl Band {
 pub struct SplitMount<T> {
     /// The room this cell stands in.
     pub band: Band,
+    /// What the document reads to know this cell is hidden, when the cell is a
+    /// block at all. A host that mounts a hidden cell keeps the binding and
+    /// reads it again; one that leaves it out never sees the cell.
+    pub block: Option<Binding>,
     /// Its share of the room among the cells standing beside it.
     pub weight: f32,
     /// The box it composes to.
@@ -48,6 +53,9 @@ pub struct SplitMount<T> {
 pub struct GroupMount<T> {
     /// The room this child stands in.
     pub band: Band,
+    /// What the document reads to know this child is hidden, when the child is
+    /// a block at all.
+    pub block: Option<Binding>,
     /// What it needs on the flow's own axis, when it names a floor.
     pub minimum: Option<f32>,
     pub output: T,

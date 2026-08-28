@@ -15,7 +15,7 @@ use crate::{
     builtin,
     draw::{Pt, Rect, Rgba},
     ids::{DocId, EndpointId, SourceUri},
-    interact::{Input, Key, MOUSE, Modifiers, PointerInput, PointerPhase},
+    interact::{Input, Key, MOUSE, Modifiers, PointerInput, PointerPhase, Scroll},
     registry::{EndpointCategory, EndpointDesc, EndpointRegistry, ValueKind},
     render::{
         ControlAction, ReadValue, Reads, Skin, StereoLevels, UiEvent,
@@ -977,12 +977,17 @@ fn a_hover_hands_the_runner_the_cursor_under_the_pointer() {
 struct Menu {
     open: bool,
     picked: bool,
+    group: bool,
 }
 
 impl Reads for Menu {
     fn get(&self, endpoint: &str) -> Option<ReadValue<'_>> {
         let id = endpoint.split_once('@').map_or(endpoint, |(id, _)| id);
-        (id == "fixture.menu").then_some(ReadValue::Bool(self.open))
+        match id {
+            "fixture.menu" => Some(ReadValue::Bool(self.open)),
+            "fixture.group_hidden" => Some(ReadValue::Bool(!self.group)),
+            _ => None,
+        }
     }
 }
 
@@ -1008,6 +1013,9 @@ impl App for Menu {
         }
         if path.ends_with("inside") {
             self.picked = true;
+        } else if path.ends_with("head") {
+            self.picked = true;
+            self.group = !self.group;
         } else {
             self.open = !self.open;
         }
@@ -1019,6 +1027,7 @@ impl App for Menu {
 struct MenuEndpoints {
     open: EndpointDesc,
     press: EndpointDesc,
+    rate: EndpointDesc,
 }
 
 impl Default for MenuEndpoints {
@@ -1026,6 +1035,7 @@ impl Default for MenuEndpoints {
         Self {
             open: EndpointDesc::new(ValueKind::Bool),
             press: EndpointDesc::new(ValueKind::Trigger),
+            rate: EndpointDesc::new(ValueKind::Scalar),
         }
     }
 }
@@ -1033,8 +1043,9 @@ impl Default for MenuEndpoints {
 impl EndpointRegistry for MenuEndpoints {
     fn endpoint(&self, category: EndpointCategory, id: &EndpointId) -> Option<&EndpointDesc> {
         match (category, id.0.as_str()) {
-            (EndpointCategory::Model, "fixture.menu") => Some(&self.open),
+            (EndpointCategory::Model, "fixture.menu" | "fixture.group_hidden") => Some(&self.open),
             (EndpointCategory::Command, "fixture.toggle" | "fixture.pick") => Some(&self.press),
+            (EndpointCategory::Parameter, "fixture.rate") => Some(&self.rate),
             _ => None,
         }
     }
@@ -1046,6 +1057,26 @@ const MENU: &str = r#"Popover(id: "menu", open: Model(id: "fixture.menu"), align
         child: Spacer(id: "anchor", size: Some((w: Fixed(40.0), h: Fixed(20.0))))),
     content: Pressable(id: "inside", press: Command(id: "fixture.pick"),
         child: Spacer(id: "content", size: Some((w: Fixed(100.0), h: Fixed(60.0))))))"#;
+
+/// The burger the shipped app bar carries: a menu whose surface is a column of
+/// rows, one of them a group heading that opens the block under it.
+const GROUPED_MENU: &str = r#"Popover(id: "menu", open: Model(id: "fixture.menu"), align: Start,
+    anchor: Pressable(id: "burger", press: Command(id: "fixture.toggle"),
+        child: Spacer(id: "anchor", size: Some((w: Fixed(40.0), h: Fixed(20.0))))),
+    content: Column(id: "surface", size: (w: Fixed(140.0), h: Shrink), gap: 0.0, children: [
+        Pressable(id: "head", press: Command(id: "fixture.pick"),
+            child: Row(size: (w: Fill, h: Fixed(26.0)), pad_x: 10.0, gap: 8.0, children: [
+                Text(id: "head-caret", style: MicroLabel, label: ">"),
+                Text(id: "head-label", size: (w: Fill, h: Fill), style: MicroLabel,
+                    label: "MODULES"),
+            ])),
+        Optional(id: "block", hidden: Model(id: "fixture.group_hidden"),
+            child: Spacer(id: "body", size: Some((w: Fill, h: Fixed(40.0))))),
+        Row(id: "tail", size: (w: Fill, h: Fixed(26.0)), pad_x: 10.0, gap: 8.0, children: [
+            Text(id: "tail-label", size: (w: Fill, h: Fill), style: MicroLabel,
+                label: "SAVED"),
+        ]),
+    ]))"#;
 
 /// The same burger with no menu on it, which is the picture a shut menu owes.
 const NO_MENU: &str = r#"Pressable(id: "burger", press: Command(id: "fixture.toggle"),
@@ -1328,6 +1359,275 @@ fn a_shut_menu_takes_no_press_over_the_room_its_surface_filled() {
              while it was open"
         );
     });
+}
+
+/// A press on a control an open menu holds reaches the application.
+///
+/// The shut-menu test beside this one says a surface that is gone takes no
+/// press; on its own that passes just as well when the surface takes no press
+/// while it stands, which is a menu whose items cannot be picked at all.
+#[kithara::test]
+fn a_press_inside_an_open_menu_reaches_the_application() {
+    with_document(MENU, |mut ui| {
+        press_the_anchor(&mut ui);
+        assert!(ui.app().open, "the press on the anchor must open the menu");
+        let surface = ui
+            .rect_of("demo/content")
+            .unwrap_or_else(|| panic!("an open menu must lay its content out"));
+
+        press_at(
+            &mut ui,
+            Pt {
+                x: surface.x + surface.w / 2.0,
+                y: surface.y + surface.h / 2.0,
+            },
+        );
+
+        assert!(
+            ui.app().picked,
+            "a press on the control an open menu holds must reach the application"
+        );
+    });
+}
+
+/// Mounts the grouped menu in a window with room for the whole surface and
+/// opens it, so the check starts from a menu a person is looking at.
+fn with_grouped_menu(check: impl FnOnce(Ui<'_, Menu>)) {
+    let endpoints = MenuEndpoints::default();
+    let resolver = one_control(GROUPED_MENU);
+    let mut ui = Ui::new(
+        Menu::default(),
+        Config::builder()
+            .endpoints(&endpoints)
+            .resolver(&resolver)
+            .text(builtin::text_doc())
+            .build(),
+        (320, 260),
+        1.0,
+    )
+    .unwrap_or_else(|error| panic!("the grouped menu fixture must mount: {error}"));
+    press_the_anchor(&mut ui);
+    assert!(
+        ui.app().open,
+        "the press on the anchor must open the grouped menu"
+    );
+    check(ui);
+}
+
+/// Presses the group heading the open menu holds, wherever the layout put it.
+fn press_the_heading(ui: &mut Ui<'_, Menu>) {
+    let head = ui
+        .rect_of("demo/head-label")
+        .unwrap_or_else(|| panic!("the open menu must lay its group heading out"));
+    press_at(
+        ui,
+        Pt {
+            x: head.x + head.w / 2.0,
+            y: head.y + head.h / 2.0,
+        },
+    );
+}
+
+/// A press on the heading of a group an open menu holds reaches the
+/// application.
+#[kithara::test]
+fn a_press_on_a_group_heading_reaches_the_application() {
+    with_grouped_menu(|mut ui| {
+        press_the_heading(&mut ui);
+
+        assert!(
+            ui.app().picked,
+            "a press on the heading of a group the open menu holds must reach the application"
+        );
+    });
+}
+
+/// How tall the block under the menu's group heading is.
+const BLOCK_HEIGHT: f32 = 40.0;
+
+/// Where the row below the group's block starts, which is what moves when the
+/// block joins the picture.
+fn tail_top(ui: &Ui<'_, Menu>) -> f32 {
+    ui.rect_of("demo/tail-label")
+        .unwrap_or_else(|| panic!("the row below the group must stand in the open menu"))
+        .y
+}
+
+/// The block a group heading opens joins the picture the menu already stands
+/// in.
+///
+/// The press reaching the application is one half; the surface the host mounted
+/// while the block was hidden taking the block in is the other, and a menu that
+/// never grows is a menu whose groups do not open.
+#[kithara::test]
+fn opening_a_group_puts_its_block_in_the_open_menu() {
+    with_grouped_menu(|mut ui| {
+        let shut = tail_top(&ui);
+
+        press_the_heading(&mut ui);
+
+        assert_eq!(
+            tail_top(&ui) - shut,
+            BLOCK_HEIGHT,
+            "the block the press opened must take its own height inside the open menu"
+        );
+    });
+}
+
+/// A deck's hero wave, which carries the strip of track information across its
+/// top the way the shipped decks do.
+const HERO_WAVE: &str = r#"Wave(id: "wave", style: Hero, badge: Some("A"),
+    size: Some((w: Fill, h: Fill)))"#;
+
+/// An application with nothing loaded, for the documents that read nothing.
+#[derive(Default)]
+struct Bare;
+
+impl Reads for Bare {
+    fn get(&self, _endpoint: &str) -> Option<ReadValue<'_>> {
+        None
+    }
+}
+
+impl App for Bare {
+    fn skin(&self) -> &Skin {
+        skin()
+    }
+
+    fn document(&self) -> &str {
+        "one.klayout.ron"
+    }
+
+    fn reads<R>(&self, with: impl FnOnce(&dyn Reads) -> R) -> R {
+        with(self)
+    }
+
+    fn update(&mut self, _event: UiEvent) {}
+}
+
+/// The strip of track information a hero wave draws across its top steps aside
+/// for the hand.
+///
+/// The strip covers the very start of the wave, which is where a person reaches
+/// to set a cue; the painter takes the pointer resting on the control as the
+/// word to leave the wave uncovered, and a host that never tells it about the
+/// hand leaves the strip standing over what the hand came for.
+#[kithara::test]
+fn a_hand_over_the_hero_wave_takes_its_information_strip_out_of_the_picture() {
+    let endpoints = MenuEndpoints::default();
+    let resolver = one_control(HERO_WAVE);
+    let mut ui = Ui::new(
+        Bare,
+        Config::builder()
+            .endpoints(&endpoints)
+            .resolver(&resolver)
+            .text(builtin::text_doc())
+            .build(),
+        (400, 200),
+        1.0,
+    )
+    .unwrap_or_else(|error| panic!("the hero wave fixture must mount: {error}"));
+    let idle = drawn_shapes(&mut ui);
+    let wave = ui
+        .rect_of("demo/wave")
+        .unwrap_or_else(|| panic!("the hero wave must be laid out"));
+
+    ui.input(press(
+        Pt {
+            x: wave.x + wave.w / 2.0,
+            y: wave.y + 4.0,
+        },
+        PointerPhase::Move,
+    ));
+
+    assert_ne!(
+        drawn_shapes(&mut ui),
+        idle,
+        "a hand resting on the hero wave must take its information strip out of the picture"
+    );
+}
+
+/// The tempo block of a deck: a row of readings that is itself the surface a
+/// wheel detent steps the tempo on.
+const WHEEL_ROW: &str = r#"Row(id: "tempo", gap: 7.0, pad_x: 11.0,
+    size: (w: Fill, h: Fill), write: Parameter(id: "fixture.rate"), children: [
+        Text(id: "tempo-label", style: MicroLabel, label: "TEMPO"),
+    ])"#;
+
+/// An application that remembers every step a wheel published.
+#[derive(Default)]
+struct Stepped {
+    steps: Vec<f32>,
+}
+
+impl Reads for Stepped {
+    fn get(&self, _endpoint: &str) -> Option<ReadValue<'_>> {
+        None
+    }
+}
+
+impl App for Stepped {
+    fn skin(&self) -> &Skin {
+        skin()
+    }
+
+    fn document(&self) -> &str {
+        "one.klayout.ron"
+    }
+
+    fn reads<R>(&self, with: impl FnOnce(&dyn Reads) -> R) -> R {
+        with(self)
+    }
+
+    fn update(&mut self, event: UiEvent) {
+        if let UiEvent::Control {
+            action: ControlAction::StepScalar(step),
+            ..
+        } = event
+        {
+            self.steps.push(step);
+        }
+    }
+}
+
+/// A wheel over a row that names what it writes steps that value.
+///
+/// A deck's tempo has no control of its own: the block of readings is the
+/// surface, and a detent anywhere on it moves the tempo. A host that mounts the
+/// readings and not the surface draws a tempo nobody can change.
+#[kithara::test]
+fn a_wheel_over_a_writing_row_steps_the_value_it_names() {
+    let endpoints = MenuEndpoints::default();
+    let resolver = one_control(WHEEL_ROW);
+    let mut ui = Ui::new(
+        Stepped::default(),
+        Config::builder()
+            .endpoints(&endpoints)
+            .resolver(&resolver)
+            .text(builtin::text_doc())
+            .build(),
+        (300, 60),
+        1.0,
+    )
+    .unwrap_or_else(|error| panic!("the wheel surface fixture must mount: {error}"));
+    let row = ui
+        .rect_of("demo/tempo-label")
+        .unwrap_or_else(|| panic!("the tempo row must be laid out"));
+    ui.input(press(
+        Pt {
+            x: row.x + row.w / 2.0,
+            y: row.y + row.h / 2.0,
+        },
+        PointerPhase::Move,
+    ));
+
+    ui.input(Input::Wheel(Scroll::Lines { x: 0.0, y: -1.0 }));
+
+    assert_eq!(
+        ui.app().steps,
+        [1.0],
+        "a detent on the row that names what it writes must reach the application as one step"
+    );
 }
 
 /// An application that picks a track up when its one control is pressed and

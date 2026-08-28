@@ -1,10 +1,12 @@
+use std::rc::Rc;
+
 use masonry::{
     core::{BoxConstraints, LayoutCtx, WidgetPod},
     kurbo::{Point, Size as MasonrySize},
 };
 use num_traits::cast::AsPrimitive;
 
-use super::node::Node;
+use super::{built::BlockState, node::Node};
 use crate::{
     layout::Axis,
     module::MeasureAxis,
@@ -33,9 +35,14 @@ pub(crate) struct Flex {
     slots: Vec<usize>,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub(crate) struct ChildLayout {
     band: Band,
+    /// Whether the document hides this child, when the child is a block at
+    /// all. A block stands here beside the band because both answer the same
+    /// question - whether this child is in the picture - and neither of them
+    /// rebuilds the flow to answer it.
+    block: Option<Rc<BlockState>>,
     natural: solve::Size<solve::Length>,
     declared: Option<solve::Size<solve::Length>>,
     main_minimum: Option<f32>,
@@ -49,6 +56,7 @@ impl ChildLayout {
     ) -> Self {
         Self {
             band: Band::ALWAYS,
+            block: None,
             natural,
             declared: None,
             main_minimum,
@@ -63,6 +71,7 @@ impl ChildLayout {
     ) -> Self {
         Self {
             band: Band::ALWAYS,
+            block: None,
             natural,
             declared: Some(declared),
             main_minimum: None,
@@ -73,6 +82,12 @@ impl ChildLayout {
     /// The band of room this child stands in.
     pub(crate) const fn within(mut self, band: Band) -> Self {
         self.band = band;
+        self
+    }
+
+    /// The block that says whether the document shows this child at all.
+    pub(crate) fn blocked(mut self, block: Option<Rc<BlockState>>) -> Self {
+        self.block = block;
         self
     }
 }
@@ -108,19 +123,19 @@ impl Flex {
         self
     }
 
-    /// Records which children stand in the room this flow turned out to have.
+    /// Records which children stand: the ones the room reached and the
+    /// document did not hide.
     fn stand(&mut self, limits: solve::Limits) {
         self.stands.clear();
-        let Some(axis) = self.measure else {
-            self.stands.resize(self.children.len(), true);
-            return;
-        };
-        let room = match axis {
+        let room = self.measure.map(|axis| match axis {
             MeasureAxis::Width => limits.max().width,
             MeasureAxis::Height => limits.max().height,
-        };
-        self.stands
-            .extend(self.children.iter().map(|child| child.band.stands(room)));
+        });
+        self.stands.extend(self.children.iter().map(|child| {
+            let reached = room.is_none_or(|room| child.band.stands(room));
+            let shown = !child.block.as_ref().is_some_and(|block| block.is_hidden());
+            reached && shown
+        }));
     }
 
     pub(crate) const fn align_main(mut self, alignment: solve::Alignment) -> Self {

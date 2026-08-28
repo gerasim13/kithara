@@ -620,6 +620,11 @@ impl NodeLayout {
     pub(super) fn accepts_text_input(&self) -> bool {
         matches!(self, Self::Leaf(leaf) if leaf.accepts_text_input())
     }
+
+    /// Whether the leaf this node holds draws differently under the pointer.
+    pub(super) fn reads_pointer(&self) -> bool {
+        matches!(self, Self::Leaf(leaf) if leaf.reads_pointer())
+    }
 }
 
 /// A stage sizes itself off its first child, like a stack, and then offers
