@@ -1,9 +1,10 @@
 use std::{
     num::NonZeroUsize,
-    sync::atomic::{AtomicU64, AtomicUsize, Ordering},
+    sync::atomic::{AtomicU64, Ordering},
 };
 
 use kithara_platform::CancelToken;
+use portable_atomic::AtomicUsize;
 
 use super::{Node, PlaybackObserver, Scheduler, SchedulerHandle};
 
