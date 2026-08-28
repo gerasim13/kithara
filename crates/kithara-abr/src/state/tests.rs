@@ -1014,16 +1014,22 @@ async fn auto_mode_without_seed_stays_on_initial_variant_on_cold_start() {
     drop(handle);
 }
 
-// The anti-oscillation window these six tests state is tens of milliseconds of
-// real time, and `poll_ticks` reads `std::time::Instant` rather than the
-// runtime's clock, so no test-side pause can move it. Miri interprets rather
-// than executes - seventy-seven tests of this crate take twenty-eight minutes -
-// so a twenty-millisecond window has long expired by the time the interpreter
-// reaches the assertion, which then reads a deadline already consumed. The lane
-// is there for memory ordering and undefined behaviour in crates that hold
-// atomics; a wall-clock interval is not a question it can be asked.
+// The anti-oscillation window these six tests state is tens of milliseconds,
+// and `poll_ticks` reads `kithara_platform::time::Instant`, which `flash` does
+// virtualize - with the feature on they pass natively in 0.18s. The Miri lane
+// runs flashless deliberately: under `flash` the platform's `Mutex`, `RwLock`
+// and `Condvar` are flash's own, and the lane is there to interpret the
+// production primitives' memory ordering, not the harness's. Flashless, Miri
+// interprets rather than executes - this crate takes twenty-eight minutes - so
+// a twenty-millisecond window is long gone before the assertion is reached.
+// Forcing `flash` on under Miri was measured and does not rescue them either:
+// the engine anchors its pacing to a real instant, and six of these fail there
+// too, the other way round - the clock collapses past the window.
 #[kithara::test(tokio, timeout(Duration::from_secs(1)))]
-#[cfg_attr(miri, ignore = "the tick interval is real time, and Miri is not")]
+#[cfg_attr(
+    miri,
+    ignore = "the interval needs flash, and the Miri lane runs flashless"
+)]
 async fn min_interval_ticks_without_another_bandwidth_sample() {
     let settings = AbrSettings::builder()
         .min_switch_interval(Duration::from_millis(20))
@@ -1053,7 +1059,10 @@ async fn min_interval_ticks_without_another_bandwidth_sample() {
 }
 
 #[kithara::test(tokio, timeout(Duration::from_secs(1)))]
-#[cfg_attr(miri, ignore = "the tick interval is real time, and Miri is not")]
+#[cfg_attr(
+    miri,
+    ignore = "the interval needs flash, and the Miri lane runs flashless"
+)]
 async fn peer_cancel_stops_the_scheduled_min_interval_tick() {
     let settings = AbrSettings::builder()
         .min_switch_interval(Duration::from_millis(100))
@@ -1089,7 +1098,10 @@ async fn peer_cancel_stops_the_scheduled_min_interval_tick() {
 }
 
 #[kithara::test(tokio, timeout(Duration::from_secs(1)))]
-#[cfg_attr(miri, ignore = "the tick interval is real time, and Miri is not")]
+#[cfg_attr(
+    miri,
+    ignore = "the interval needs flash, and the Miri lane runs flashless"
+)]
 async fn controller_cancel_stops_the_scheduled_min_interval_tick() {
     let controller_cancel = CancelToken::never();
     let settings = AbrSettings::builder()
@@ -1128,7 +1140,10 @@ async fn controller_cancel_stops_the_scheduled_min_interval_tick() {
 }
 
 #[kithara::test(tokio, timeout(Duration::from_secs(1)))]
-#[cfg_attr(miri, ignore = "the tick interval is real time, and Miri is not")]
+#[cfg_attr(
+    miri,
+    ignore = "the interval needs flash, and the Miri lane runs flashless"
+)]
 async fn peer_cancel_does_not_stop_a_sibling_tick() {
     let settings = AbrSettings::builder()
         .min_switch_interval(Duration::from_millis(100))
@@ -1173,7 +1188,10 @@ async fn peer_cancel_does_not_stop_a_sibling_tick() {
 }
 
 #[kithara::test(tokio, timeout(Duration::from_secs(1)))]
-#[cfg_attr(miri, ignore = "the tick interval is real time, and Miri is not")]
+#[cfg_attr(
+    miri,
+    ignore = "the interval needs flash, and the Miri lane runs flashless"
+)]
 async fn dropping_handle_stops_only_its_scheduled_tick() {
     let settings = AbrSettings::builder()
         .min_switch_interval(Duration::from_millis(100))
@@ -1209,7 +1227,10 @@ async fn dropping_handle_stops_only_its_scheduled_tick() {
 }
 
 #[kithara::test(tokio, timeout(Duration::from_secs(1)))]
-#[cfg_attr(miri, ignore = "the tick interval is real time, and Miri is not")]
+#[cfg_attr(
+    miri,
+    ignore = "the interval needs flash, and the Miri lane runs flashless"
+)]
 async fn dropped_peer_does_not_leave_a_due_tick_deadline_spinning() {
     let settings = AbrSettings::builder()
         .min_switch_interval(Duration::from_millis(20))

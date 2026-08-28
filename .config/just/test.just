@@ -230,6 +230,11 @@ loom-debug FILE *ARGS:
 # an FFI call into one, so the selection is the crates that hold atomics and
 # forbid `unsafe` themselves. What it can still answer is whether their memory
 # ordering is sound and whether a dependency reaches undefined behaviour.
+#
+# Flashless on purpose. Under `flash` the platform's `Mutex`, `RwLock` and
+# `Condvar` are flash's own, so the lane would interpret the harness instead of
+# the primitives it is here to check. The cost is the handful of tests whose
+# assertion is a wall-clock interval; they say so at their own `cfg_attr`.
 [positional-arguments]
 miri *ARGS:
     #!/usr/bin/env bash
