@@ -176,7 +176,7 @@ fn set_eq_mode(state: &mut Kithara, mode: EqMode) {
         return;
     }
 
-    let mut changes = Vec::new();
+    let mut changes: Vec<EqModeChange<'_>> = Vec::new();
     for deck in state.decks.iter() {
         let current = deck
             .controller

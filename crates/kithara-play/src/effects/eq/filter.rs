@@ -78,7 +78,7 @@ impl CrossoverFilters {
             .iter()
             .map(|&freq| Lr4::new(biquad_coeffs(Type::HighPass, freq, sample_rate)))
             .collect();
-        let mut allpass = Vec::new();
+        let mut allpass: Vec<Section> = Vec::new();
         for start in 1..crossover_freqs.len() {
             allpass.extend(
                 crossover_freqs[start..]

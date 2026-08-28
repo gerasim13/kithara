@@ -85,7 +85,7 @@ fn build_initial_key_state(
     }
     let mut registry = KeyProcessorRegistry::new();
     let mut player_headers: HashMap<String, String> = HashMap::new();
-    let mut rules = Vec::with_capacity(ffi.rules.len());
+    let mut rules: Vec<DomainKeyRule> = Vec::with_capacity(ffi.rules.len());
     for r in ffi.rules {
         if let Some(headers) = r.headers.as_ref() {
             for (k, v) in headers {

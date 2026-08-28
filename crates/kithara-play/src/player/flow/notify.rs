@@ -1,5 +1,6 @@
 use std::{ops::Deref, sync::atomic::Ordering};
 
+use kithara_events::Event;
 use kithara_platform::sync::Arc;
 
 use super::super::core::PlayerRuntime;
@@ -264,8 +265,8 @@ fn player_events_from_notification(
     player: &PlayerRuntime,
     notification: &PlayerNotification,
     item: &ItemRole,
-) -> Vec<kithara_events::Event> {
-    let mut events = Vec::new();
+) -> Vec<Event> {
+    let mut events: Vec<Event> = Vec::new();
     match notification {
         PlayerNotification::PlaybackStarted { .. } => {
             events.push(PlayerEvent::PlaybackStarted { item: item.clone() }.into());

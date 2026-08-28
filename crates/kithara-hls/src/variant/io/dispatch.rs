@@ -82,7 +82,7 @@ impl HlsVariant {
             fetch: cancel,
             lookahead,
         } = tokens;
-        let mut out = Vec::new();
+        let mut out: Vec<FetchCmd> = Vec::new();
         let mut deferred: Vec<(PlannedFetch, PlanRevision)> = Vec::new();
         let owed_through = audible
             .then(|| self.find_at_offset(position).map(|(seg_idx, _, _)| seg_idx))

@@ -252,7 +252,7 @@ fn apply_mix<B: AudioBackend>(
     state: &mut SessionState<B>,
     levels: &[HostLevel],
 ) -> Result<(), PlayError> {
-    let mut projected = Vec::with_capacity(levels.len());
+    let mut projected: Vec<PlayerLevel> = Vec::with_capacity(levels.len());
     for (index, &HostLevel { grid_id, level }) in levels.iter().enumerate() {
         if !level.is_finite() || !(0.0..=1.0).contains(&level) {
             return Err(PlayError::MixLevel { level });
